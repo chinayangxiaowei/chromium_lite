@@ -13,11 +13,13 @@
 
 namespace base {
 class Value;
+class DictionaryValue;
 }
 
 namespace chromeos {
 
 class DeviceState;
+class FavoriteState;
 class NetworkState;
 
 // Base class for states managed by NetworkStateManger which are associated
@@ -26,12 +28,13 @@ class ManagedState {
  public:
   enum ManagedType {
     MANAGED_TYPE_NETWORK,
+    MANAGED_TYPE_FAVORITE,
     MANAGED_TYPE_DEVICE
   };
 
   virtual ~ManagedState();
 
-  // This will construct and return a new instance of the approprate class
+  // This will construct and return a new instance of the appropriate class
   // based on |type|.
   static ManagedState* Create(ManagedType type, const std::string& path);
 
@@ -39,18 +42,37 @@ class ManagedState {
   // NULL if it is not.
   NetworkState* AsNetworkState();
   DeviceState* AsDeviceState();
+  FavoriteState* AsFavoriteState();
 
-  // Called by NetworkStateHandler when a property changes. Returns true if
-  // the property was recognized and parsed successfully.
+  // Called by NetworkStateHandler when a property was received. The return
+  // value indicates if the state changed and is used to reduce the number of
+  // notifications. The only guarantee however is: If the return value is false
+  // then the state wasn't modified. This might happen because of
+  // * |key| was not recognized.
+  // * |value| was not parsed successfully.
+  // * |value| is equal to the cached property value.
+  // If the return value is true, the state might or might not be modified.
   virtual bool PropertyChanged(const std::string& key,
                                const base::Value& value) = 0;
+
+  // Called by NetworkStateHandler after all calls to PropertyChanged for the
+  // initial set of properties. Used to update state requiring multiple
+  // properties, e.g. name from hex_ssid in NetworkState.
+  // |properties| contains the complete set of initial properties.
+  // Returns true if any additional properties are updated.
+  virtual bool InitialPropertiesReceived(
+      const base::DictionaryValue& properties);
 
   const ManagedType managed_type() const { return managed_type_; }
   const std::string& path() const { return path_; }
   const std::string& name() const { return name_; }
   const std::string& type() const { return type_; }
-  bool is_observed() const { return is_observed_; }
-  void set_is_observed(bool is_observed) { is_observed_ = is_observed; }
+  bool update_received() const { return update_received_; }
+  void set_update_received() { update_received_ = true; }
+  bool update_requested() const { return update_requested_; }
+  void set_update_requested(bool update_requested) {
+    update_requested_ = update_requested;
+  }
 
  protected:
   ManagedState(ManagedType type, const std::string& path);
@@ -59,7 +81,8 @@ class ManagedState {
   bool ManagedStatePropertyChanged(const std::string& key,
                                    const base::Value& value);
 
-  // Helper methods that log warnings and return false if parsing failed.
+  // Helper methods that log warnings and return true if parsing succeeded and
+  // the new value does not match the existing output value.
   bool GetBooleanValue(const std::string& key,
                        const base::Value& value,
                        bool* out_value);
@@ -69,6 +92,11 @@ class ManagedState {
   bool GetStringValue(const std::string& key,
                       const base::Value& value,
                       std::string* out_value);
+  bool GetUInt32Value(const std::string& key,
+                      const base::Value& value,
+                      uint32* out_value);
+
+  void set_name(const std::string& name) { name_ = name; }
 
  private:
   friend class NetworkChangeNotifierChromeosUpdateTest;
@@ -82,8 +110,11 @@ class ManagedState {
   std::string name_;  // flimflam::kNameProperty
   std::string type_;  // flimflam::kTypeProperty
 
-  // Tracks when the state is being observed.
-  bool is_observed_;
+  // Set to true when the an update has been received.
+  bool update_received_;
+
+  // Tracks when an update has been requested.
+  bool update_requested_;
 
   DISALLOW_COPY_AND_ASSIGN(ManagedState);
 };

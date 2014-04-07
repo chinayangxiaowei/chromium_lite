@@ -8,11 +8,10 @@
 #include "base/environment.h"
 #include "base/logging.h"
 #include "base/nix/xdg_util.h"
-#include "base/process_util.h"
 #include "base/stl_util.h"
 #include "media/audio/audio_util.h"
 #include "media/audio/cras/cras_input.h"
-#include "media/audio/cras/cras_output.h"
+#include "media/audio/cras/cras_unified.h"
 #include "media/base/channel_layout.h"
 
 namespace media {
@@ -23,8 +22,7 @@ static const int kMaxOutputStreams = 50;
 // Default sample rate for input and output streams.
 static const int kDefaultSampleRate = 48000;
 
-static const char kCrasAutomaticDeviceName[] = "Automatic";
-static const char kCrasAutomaticDeviceId[] = "automatic";
+const char AudioManagerCras::kLoopbackDeviceId[] = "loopback";
 
 bool AudioManagerCras::HasAudioOutputDevices() {
   return true;
@@ -56,7 +54,8 @@ void AudioManagerCras::GetAudioInputDeviceNames(
 AudioParameters AudioManagerCras::GetInputStreamParameters(
     const std::string& device_id) {
   static const int kDefaultInputBufferSize = 1024;
-
+  // TODO(hshi): Fine-tune audio parameters based on |device_id|. The optimal
+  // parameters for the loopback stream may differ from the default.
   return AudioParameters(
       AudioParameters::AUDIO_PCM_LOW_LATENCY, CHANNEL_LAYOUT_STEREO,
       kDefaultSampleRate, 16, kDefaultInputBufferSize);
@@ -65,8 +64,9 @@ AudioParameters AudioManagerCras::GetInputStreamParameters(
 void AudioManagerCras::GetCrasAudioInputDevices(
     media::AudioDeviceNames* device_names) {
   // Cras will route audio from a proper physical device automatically.
-  device_names->push_back(media::AudioDeviceName(
-      kCrasAutomaticDeviceName, kCrasAutomaticDeviceId));
+  device_names->push_back(
+      AudioDeviceName(AudioManagerBase::kDefaultDeviceName,
+                      AudioManagerBase::kDefaultDeviceId));
 }
 
 AudioOutputStream* AudioManagerCras::MakeLinearOutputStream(
@@ -76,8 +76,9 @@ AudioOutputStream* AudioManagerCras::MakeLinearOutputStream(
 }
 
 AudioOutputStream* AudioManagerCras::MakeLowLatencyOutputStream(
-    const AudioParameters& params) {
+    const AudioParameters& params, const std::string& input_device_id) {
   DCHECK_EQ(AudioParameters::AUDIO_PCM_LOW_LATENCY, params.format());
+  // TODO(dgreid): Open the correct input device for unified IO.
   return MakeOutputStream(params);
 }
 
@@ -121,12 +122,12 @@ AudioParameters AudioManagerCras::GetPreferredOutputStreamParameters(
 
 AudioOutputStream* AudioManagerCras::MakeOutputStream(
     const AudioParameters& params) {
-  return new CrasOutputStream(params, this);
+  return new CrasUnifiedStream(params, this);
 }
 
 AudioInputStream* AudioManagerCras::MakeInputStream(
     const AudioParameters& params, const std::string& device_id) {
-  return new CrasInputStream(params, this);
+  return new CrasInputStream(params, this, device_id);
 }
 
 }  // namespace media

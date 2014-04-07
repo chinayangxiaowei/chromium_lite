@@ -9,7 +9,7 @@
 #include "ash/wm/workspace/maximize_bubble_frame_state.h"
 #include "ash/wm/workspace/snap_types.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/timer.h"
+#include "base/timer/timer.h"
 #include "ui/aura/window_observer.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/widget/widget_observer.h"
@@ -73,6 +73,9 @@ class ASH_EXPORT FrameMaximizeButton : public views::ImageButton,
 
   // ui::EventHandler overrides:
   virtual void OnGestureEvent(ui::GestureEvent* event) OVERRIDE;
+
+  // views::View overwrite:
+  virtual void SetVisible(bool visible) OVERRIDE;
 
   // Unit test overwrite: Change the UI delay used for the bubble show up.
   void set_bubble_appearance_delay_ms(int bubble_appearance_delay_ms) {

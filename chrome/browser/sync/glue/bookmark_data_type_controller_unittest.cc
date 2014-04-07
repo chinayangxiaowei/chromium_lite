@@ -8,22 +8,22 @@
 #include "base/bind_helpers.h"
 #include "base/callback.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/history/history_service.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/refcounted_profile_keyed_service.h"
 #include "chrome/browser/sync/glue/change_processor_mock.h"
 #include "chrome/browser/sync/glue/data_type_controller_mock.h"
 #include "chrome/browser/sync/glue/model_associator_mock.h"
 #include "chrome/browser/sync/profile_sync_components_factory_mock.h"
 #include "chrome/browser/sync/profile_sync_service_mock.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/test/base/profile_mock.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/browser_context_keyed_service/refcounted_browser_context_keyed_service.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/test/test_browser_thread.h"
 #include "sync/api/sync_error.h"
@@ -54,18 +54,22 @@ class HistoryMock : public HistoryService {
   virtual ~HistoryMock() {}
 };
 
-ProfileKeyedService* BuildBookmarkModel(Profile* profile) {
+BrowserContextKeyedService* BuildBookmarkModel(
+    content::BrowserContext* context) {
+  Profile* profile = static_cast<Profile*>(context);
   BookmarkModel* bookmark_model = new BookmarkModel(profile);
-  bookmark_model->Load();
+  bookmark_model->Load(profile->GetIOTaskRunner());
   return bookmark_model;
 }
 
-ProfileKeyedService* BuildBookmarkModelWithoutLoading(Profile* profile) {
-  return new BookmarkModel(profile);
+BrowserContextKeyedService* BuildBookmarkModelWithoutLoading(
+    content::BrowserContext* profile) {
+  return new BookmarkModel(static_cast<Profile*>(profile));
 }
 
-ProfileKeyedService* BuildHistoryService(Profile* profile) {
-  return new HistoryMock(profile);
+BrowserContextKeyedService* BuildHistoryService(
+    content::BrowserContext* profile) {
+  return new HistoryMock(static_cast<Profile*>(profile));
 }
 
 }  // namespace
@@ -140,7 +144,7 @@ class SyncBookmarkDataTypeControllerTest : public testing::Test {
                    base::Unretained(&start_callback_)));
   }
 
-  MessageLoopForUI message_loop_;
+  base::MessageLoopForUI message_loop_;
   content::TestBrowserThread ui_thread_;
   scoped_refptr<BookmarkDataTypeController> bookmark_dtc_;
   scoped_ptr<ProfileSyncComponentsFactoryMock> profile_sync_factory_;
@@ -177,7 +181,7 @@ TEST_F(SyncBookmarkDataTypeControllerTest, StartBookmarkModelNotReady) {
                  base::Unretained(&model_load_callback_)));
   EXPECT_EQ(DataTypeController::MODEL_STARTING, bookmark_dtc_->state());
 
-  bookmark_model_->Load();
+  bookmark_model_->Load(profile_.GetIOTaskRunner());
   ui_test_utils::WaitForBookmarkModelToLoad(bookmark_model_);
   EXPECT_EQ(DataTypeController::MODEL_LOADED, bookmark_dtc_->state());
 
@@ -255,8 +259,9 @@ TEST_F(SyncBookmarkDataTypeControllerTest, StartAssociationFailed) {
       WillRepeatedly(DoAll(SetArgumentPointee<0>(true), Return(true)));
   EXPECT_CALL(*model_associator_, AssociateModels(_, _)).
       WillRepeatedly(Return(syncer::SyncError(FROM_HERE,
-                                     "error",
-                                     syncer::BOOKMARKS)));
+                                              syncer::SyncError::DATATYPE_ERROR,
+                                              "error",
+                                              syncer::BOOKMARKS)));
 
   EXPECT_CALL(start_callback_,
               Run(DataTypeController::ASSOCIATION_FAILED, _, _));

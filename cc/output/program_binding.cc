@@ -7,7 +7,7 @@
 #include "base/debug/trace_event.h"
 #include "cc/output/geometry_binding.h"
 #include "cc/output/gl_renderer.h"  // For the GLC() macro.
-#include "third_party/WebKit/Source/Platform/chromium/public/WebGraphicsContext3D.h"
+#include "third_party/WebKit/public/platform/WebGraphicsContext3D.h"
 #include "third_party/khronos/GLES2/gl2.h"
 
 using WebKit::WebGraphicsContext3D;
@@ -123,6 +123,11 @@ unsigned ProgramBindingBase::CreateShaderProgram(WebGraphicsContext3D* context,
       context->bindAttribLocation(program_object,
                                   GeometryBinding::TexCoordAttribLocation(),
                                   "a_texCoord"));
+  GLC(context,
+      context->bindAttribLocation(
+          program_object,
+          GeometryBinding::TriangleIndexAttribLocation(),
+          "a_index"));
 
   return program_object;
 }

@@ -8,7 +8,7 @@
 
 #include "base/location.h"
 #include "base/logging.h"
-#include "base/string_number_conversions.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/values.h"
 #include "sync/js/js_event_details.h"
 #include "sync/js/js_event_handler.h"
@@ -16,7 +16,7 @@
 namespace syncer {
 
 JsMutationEventObserver::JsMutationEventObserver()
-    : weak_ptr_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {}
+    : weak_ptr_factory_(this) {}
 
 JsMutationEventObserver::~JsMutationEventObserver() {
   DCHECK(CalledOnValidThread());

@@ -10,12 +10,9 @@
 #include "base/basictypes.h"
 #include "content/common/content_export.h"
 #include "content/common/drag_event_source_info.h"
-#include "content/public/common/context_menu_source_type.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebDragOperation.h"
+#include "third_party/WebKit/public/web/WebDragOperation.h"
 
 class SkBitmap;
-struct WebDropData;
-struct WebMenuItem;
 
 namespace gfx {
 class ImageSkia;
@@ -24,8 +21,9 @@ class Vector2d;
 }
 
 namespace content {
-
 struct ContextMenuParams;
+struct DropData;
+struct MenuItem;
 
 // This class provides a way for the RenderViewHost to reach out to its
 // delegate's view. It only needs to be implemented by embedders if they don't
@@ -34,8 +32,7 @@ class CONTENT_EXPORT RenderViewHostDelegateView {
  public:
   // A context menu should be shown, to be built using the context information
   // provided in the supplied params.
-  virtual void ShowContextMenu(const ContextMenuParams& params,
-                               ContextMenuSourceType type) {}
+  virtual void ShowContextMenu(const ContextMenuParams& params) {}
 
   // Shows a popup menu with the specified items.
   // This method should call RenderViewHost::DidSelectPopupMenuItem[s]() or
@@ -44,14 +41,16 @@ class CONTENT_EXPORT RenderViewHostDelegateView {
                              int item_height,
                              double item_font_size,
                              int selected_item,
-                             const std::vector<WebMenuItem>& items,
+                             const std::vector<MenuItem>& items,
                              bool right_aligned,
                              bool allow_multiple_selection) = 0;
 
   // The user started dragging content of the specified type within the
   // RenderView. Contextual information about the dragged content is supplied
-  // by WebDropData.
-  virtual void StartDragging(const WebDropData& drop_data,
+  // by DropData. If the delegate's view cannot start the drag for /any/
+  // reason, it must inform the renderer that the drag has ended; otherwise,
+  // this results in bugs like http://crbug.com/157134.
+  virtual void StartDragging(const DropData& drop_data,
                              WebKit::WebDragOperationsMask allowed_ops,
                              const gfx::ImageSkia& image,
                              const gfx::Vector2d& image_offset,

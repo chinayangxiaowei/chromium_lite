@@ -7,35 +7,30 @@
 
 #include <string>
 
-#include "base/hash_tables.h"
+#include "base/containers/hash_tables.h"
 #include "base/memory/ref_counted.h"
 #if defined(OS_MACOSX)
 #include "base/mac/scoped_cftyperef.h"
 #endif
 #include "base/memory/scoped_handle.h"
 #include "base/memory/scoped_ptr.h"
+#include "base/memory/shared_memory.h"
 #include "base/memory/weak_ptr.h"
-#include "base/shared_memory.h"
-#include "base/timer.h"
-#include "googleurl/src/gurl.h"
+#include "base/timer/timer.h"
+#include "content/child/npapi/webplugin.h"
 #include "ipc/ipc_message.h"
 #include "skia/ext/refptr.h"
 #include "third_party/skia/include/core/SkCanvas.h"
+#include "url/gurl.h"
 #if defined(USE_X11)
 #include "ui/base/x/x11_util.h"
 #endif
 #include "ui/gl/gpu_preference.h"
 #include "ui/surface/transport_dib.h"
-#include "webkit/plugins/npapi/webplugin.h"
-
-namespace webkit {
-namespace npapi {
-class WebPluginDelegateImpl;
-}
-}
 
 namespace content {
 class PluginChannel;
+class WebPluginDelegateImpl;
 
 #if defined(OS_MACOSX)
 class WebPluginAcceleratedSurfaceProxy;
@@ -43,7 +38,7 @@ class WebPluginAcceleratedSurfaceProxy;
 
 // This is an implementation of WebPlugin that proxies all calls to the
 // renderer.
-class WebPluginProxy : public webkit::npapi::WebPlugin {
+class WebPluginProxy : public WebPlugin {
  public:
   // Creates a new proxy for WebPlugin, using the given sender to send the
   // marshalled WebPlugin calls.
@@ -53,7 +48,7 @@ class WebPluginProxy : public webkit::npapi::WebPlugin {
                  int host_render_view_routing_id);
   virtual ~WebPluginProxy();
 
-  void set_delegate(webkit::npapi::WebPluginDelegateImpl* d) { delegate_ = d; }
+  void set_delegate(WebPluginDelegateImpl* d) { delegate_ = d; }
 
   // WebPlugin overrides
   virtual void SetWindow(gfx::PluginWindowHandle window) OVERRIDE;
@@ -84,7 +79,7 @@ class WebPluginProxy : public webkit::npapi::WebPlugin {
 
   // Returns a WebPluginResourceClient object given its id, or NULL if no
   // object with that id exists.
-  webkit::npapi::WebPluginResourceClient* GetResourceClient(int id);
+  WebPluginResourceClient* GetResourceClient(int id);
 
   // Returns the id of the renderer that contains this plugin.
   int GetRendererId();
@@ -101,8 +96,7 @@ class WebPluginProxy : public webkit::npapi::WebPlugin {
   void DidPaint();
 
   // Notification received on a plugin issued resource request creation.
-  void OnResourceCreated(int resource_id,
-                         webkit::npapi::WebPluginResourceClient* client);
+  void OnResourceCreated(int resource_id, WebPluginResourceClient* client);
 
   virtual void HandleURLRequest(const char* url,
                                 const char* method,
@@ -124,14 +118,12 @@ class WebPluginProxy : public webkit::npapi::WebPlugin {
                                        bool defer) OVERRIDE;
   virtual bool IsOffTheRecord() OVERRIDE;
   virtual void ResourceClientDeleted(
-      webkit::npapi::WebPluginResourceClient* resource_client) OVERRIDE;
+      WebPluginResourceClient* resource_client) OVERRIDE;
 
 #if defined(OS_MACOSX)
   virtual void FocusChanged(bool focused) OVERRIDE;
-
   virtual void StartIme() OVERRIDE;
-
-  virtual webkit::npapi::WebPluginAcceleratedSurface*
+  virtual WebPluginAcceleratedSurface*
       GetAcceleratedSurface(gfx::GpuPreference gpu_preference) OVERRIDE;
 
   //----------------------------------------------------------------------
@@ -185,7 +177,7 @@ class WebPluginProxy : public webkit::npapi::WebPlugin {
       const TransportDIB::Handle& dib_handle,
       const gfx::Rect& window_rect,
       scoped_ptr<TransportDIB>* dib_out,
-      base::mac::ScopedCFTypeRef<CGContextRef>* cg_context_out);
+      base::ScopedCFTypeRef<CGContextRef>* cg_context_out);
 #elif defined(USE_X11)
   static void CreateDIBAndCanvasFromHandle(
       const TransportDIB::Handle& dib_handle,
@@ -221,15 +213,14 @@ class WebPluginProxy : public webkit::npapi::WebPlugin {
 
 #endif
 
-  typedef base::hash_map<int, webkit::npapi::WebPluginResourceClient*>
-      ResourceClientMap;
+  typedef base::hash_map<int, WebPluginResourceClient*> ResourceClientMap;
   ResourceClientMap resource_clients_;
 
   scoped_refptr<PluginChannel> channel_;
   int route_id_;
   NPObject* window_npobject_;
   NPObject* plugin_element_;
-  webkit::npapi::WebPluginDelegateImpl* delegate_;
+  WebPluginDelegateImpl* delegate_;
   gfx::Rect damaged_rect_;
   bool waiting_for_paint_;
   // The url of the main frame hosting the plugin.
@@ -243,7 +234,7 @@ class WebPluginProxy : public webkit::npapi::WebPlugin {
   int windowless_buffer_index_;
 #if defined(OS_MACOSX)
   scoped_ptr<TransportDIB> windowless_dibs_[2];
-  base::mac::ScopedCFTypeRef<CGContextRef> windowless_contexts_[2];
+  base::ScopedCFTypeRef<CGContextRef> windowless_contexts_[2];
   scoped_ptr<WebPluginAcceleratedSurfaceProxy> accelerated_surface_;
 #else
   skia::RefPtr<SkCanvas> windowless_canvases_[2];

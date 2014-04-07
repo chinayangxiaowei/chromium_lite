@@ -8,47 +8,71 @@
 #include "chrome/browser/notifications/desktop_notification_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/extensions/extension_process_manager.h"
+#include "chrome/browser/extensions/lazy_background_page_test_util.h"
+#include "chrome/common/chrome_switches.h"
+#include "chrome/common/extensions/extension.h"
+#include "ui/message_center/message_center_switches.h"
+#include "ui/message_center/message_center_util.h"
 
-// TODO(kbr): remove: http://crbug.com/222296
-#if defined(OS_MACOSX)
-#import "base/mac/mac_util.h"
-#endif
+class NotificationIdleTest : public ExtensionApiTest {
+ protected:
+  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+    ExtensionApiTest::SetUpCommandLine(command_line);
+
+    command_line->AppendSwitchASCII(switches::kEventPageIdleTime, "1");
+    command_line->AppendSwitchASCII(switches::kEventPageSuspendingTime, "1");
+  }
+
+  const extensions::Extension* LoadExtensionAndWait(
+      const std::string& test_name) {
+    LazyBackgroundObserver page_complete;
+    base::FilePath extdir = test_data_dir_.AppendASCII(test_name);
+    const extensions::Extension* extension = LoadExtension(extdir);
+    if (extension)
+      page_complete.Wait();
+    return extension;
+  }
+};
 
 IN_PROC_BROWSER_TEST_F(ExtensionApiTest, NotificationsNoPermission) {
-#if defined(OS_LINUX) && defined(TOOLKIT_VIEWS)
-  // Notifications not supported on linux/views yet.
-#else
   ASSERT_TRUE(RunExtensionTest("notifications/has_not_permission")) << message_;
-#endif
 }
 
-// Disabled after createHTMLNotification removal
-// (http://trac.webkit.org/changeset/140983)
-IN_PROC_BROWSER_TEST_F(ExtensionApiTest,
-                       DISABLED_NotificationsHasPermissionManifest) {
-#if defined(OS_LINUX) && defined(TOOLKIT_VIEWS)
-  // Notifications not supported on linux/views yet.
+// This test verifies that on RichNotification-enabled platforms HTML
+// notificaitons are disabled.
+#if defined(RUN_MESSAGE_CENTER_TESTS)
+#define MAYBE_NoHTMLNotifications NoHTMLNotifications
 #else
-  ASSERT_TRUE(RunExtensionTest("notifications/has_permission_manifest"))
-      << message_;
+#define MAYBE_NoHTMLNotifications DISABLED_NoHTMLNotifications
 #endif
+IN_PROC_BROWSER_TEST_F(ExtensionApiTest, MAYBE_NoHTMLNotifications) {
+  ASSERT_TRUE(message_center::IsRichNotificationEnabled());
+  ASSERT_TRUE(RunExtensionTest("notifications/no_html")) << message_;
 }
 
 IN_PROC_BROWSER_TEST_F(ExtensionApiTest, NotificationsHasPermission) {
-#if defined(OS_LINUX) && defined(TOOLKIT_VIEWS)
-  // Notifications not supported on linux/views yet.
-#else
-
-#if defined(OS_MACOSX)
-  // TODO(kbr): re-enable: http://crbug.com/222296
-  if (base::mac::IsOSMountainLionOrLater())
-    return;
-#endif
-
   DesktopNotificationServiceFactory::GetForProfile(browser()->profile())
       ->GrantPermission(GURL(
           "chrome-extension://peoadpeiejnhkmpaakpnompolbglelel"));
   ASSERT_TRUE(RunExtensionTest("notifications/has_permission_prefs"))
       << message_;
+}
+
+  // MessaceCenter-specific test.
+#if defined(RUN_MESSAGE_CENTER_TESTS)
+#define MAYBE_NotificationsAllowUnload NotificationsAllowUnload
+#else
+#define MAYBE_NotificationsAllowUnload DISABLED_NotificationsAllowUnload
 #endif
+
+IN_PROC_BROWSER_TEST_F(NotificationIdleTest, MAYBE_NotificationsAllowUnload) {
+  const extensions::Extension* extension =
+      LoadExtensionAndWait("notifications/api/unload");
+  ASSERT_TRUE(extension) << message_;
+
+  // Lazy Background Page has been shut down.
+  ExtensionProcessManager* pm =
+      extensions::ExtensionSystem::Get(profile())->process_manager();
+  EXPECT_FALSE(pm->GetBackgroundHostForExtension(last_loaded_extension_id_));
 }

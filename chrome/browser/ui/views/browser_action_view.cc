@@ -4,16 +4,18 @@
 
 #include "chrome/browser/ui/views/browser_action_view.h"
 
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/api/commands/command_service.h"
 #include "chrome/browser/extensions/extension_action.h"
 #include "chrome/browser/extensions/extension_action_manager.h"
 #include "chrome/browser/extensions/extension_context_menu_model.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/themes/theme_service.h"
+#include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/views/browser_actions_container.h"
 #include "chrome/browser/ui/views/toolbar_view.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_manifest_constants.h"
 #include "grit/generated_resources.h"
@@ -25,7 +27,6 @@
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/image/image_skia_operations.h"
 #include "ui/gfx/image/image_skia_source.h"
-#include "ui/views/controls/menu/menu_model_adapter.h"
 #include "ui/views/controls/menu/menu_runner.h"
 
 using extensions::Extension;
@@ -110,15 +111,13 @@ void BrowserActionView::PaintChildren(gfx::Canvas* canvas) {
 BrowserActionButton::BrowserActionButton(const Extension* extension,
                                          Browser* browser,
                                          BrowserActionView::Delegate* delegate)
-    : ALLOW_THIS_IN_INITIALIZER_LIST(
-          MenuButton(this, string16(), NULL, false)),
+    : MenuButton(this, string16(), NULL, false),
       browser_(browser),
       browser_action_(
           extensions::ExtensionActionManager::Get(browser->profile())->
           GetBrowserAction(*extension)),
       extension_(extension),
-      ALLOW_THIS_IN_INITIALIZER_LIST(
-          icon_factory_(browser->profile(), extension, browser_action_, this)),
+      icon_factory_(browser->profile(), extension, browser_action_, this),
       delegate_(delegate),
       context_menu_(NULL),
       called_registered_extension_command_(false) {
@@ -137,6 +136,14 @@ BrowserActionButton::BrowserActionButton(const Extension* extension,
                  notification_source);
   registrar_.Add(this, chrome::NOTIFICATION_EXTENSION_COMMAND_REMOVED,
                  notification_source);
+
+  // We also listen for browser theme changes on linux because a switch from or
+  // to GTK requires that we regrab our browser action images.
+  registrar_.Add(
+      this,
+      chrome::NOTIFICATION_BROWSER_THEME_CHANGED,
+      content::Source<ThemeService>(
+          ThemeServiceFactory::GetForProfile(browser->profile())));
 }
 
 void BrowserActionButton::Destroy() {
@@ -144,21 +151,21 @@ void BrowserActionButton::Destroy() {
 
   if (context_menu_) {
     context_menu_->Cancel();
-    MessageLoop::current()->DeleteSoon(FROM_HERE, this);
+    base::MessageLoop::current()->DeleteSoon(FROM_HERE, this);
   } else {
     delete this;
   }
 }
 
 void BrowserActionButton::ViewHierarchyChanged(
-    bool is_add, View* parent, View* child) {
-
-  if (is_add && !called_registered_extension_command_ && GetFocusManager()) {
+    const ViewHierarchyChangedDetails& details) {
+  if (details.is_add && !called_registered_extension_command_ &&
+      GetFocusManager()) {
     MaybeRegisterExtensionCommand();
     called_registered_extension_command_ = true;
   }
 
-  MenuButton::ViewHierarchyChanged(is_add, parent, child);
+  MenuButton::ViewHierarchyChanged(details);
 }
 
 bool BrowserActionButton::CanHandleAccelerators() const {
@@ -178,8 +185,10 @@ void BrowserActionButton::ButtonPressed(views::Button* sender,
   delegate_->OnBrowserActionExecuted(this);
 }
 
-void BrowserActionButton::ShowContextMenuForView(View* source,
-                                                 const gfx::Point& point) {
+void BrowserActionButton::ShowContextMenuForView(
+    View* source,
+    const gfx::Point& point,
+    ui::MenuSourceType source_type) {
   if (!extension()->ShowConfigureContextMenus())
     return;
 
@@ -188,15 +197,14 @@ void BrowserActionButton::ShowContextMenuForView(View* source,
   // Reconstructs the menu every time because the menu's contents are dynamic.
   scoped_refptr<ExtensionContextMenuModel> context_menu_contents_(
       new ExtensionContextMenuModel(extension(), browser_, delegate_));
-  views::MenuModelAdapter menu_model_adapter(context_menu_contents_.get());
-  menu_runner_.reset(new views::MenuRunner(menu_model_adapter.CreateMenu()));
+  menu_runner_.reset(new views::MenuRunner(context_menu_contents_.get()));
 
   context_menu_ = menu_runner_->GetMenu();
   gfx::Point screen_loc;
   views::View::ConvertPointToScreen(this, &screen_loc);
   if (menu_runner_->RunMenuAt(GetWidget(), NULL, gfx::Rect(screen_loc, size()),
-          views::MenuItemView::TOPLEFT, views::MenuRunner::HAS_MNEMONICS |
-          views::MenuRunner::CONTEXT_MENU) ==
+          views::MenuItemView::TOPLEFT, source_type,
+          views::MenuRunner::HAS_MNEMONICS | views::MenuRunner::CONTEXT_MENU) ==
       views::MenuRunner::MENU_DELETED) {
     return;
   }
@@ -227,15 +235,16 @@ void BrowserActionButton::UpdateState() {
     if (!browser_action()->GetIsVisible(tab_id))
       icon = gfx::ImageSkiaOperations::CreateTransparentImage(icon, .25);
 
-    ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
+    ThemeService* theme =
+        ThemeServiceFactory::GetForProfile(browser_->profile());
 
-    gfx::ImageSkia bg = *rb.GetImageSkiaNamed(IDR_BROWSER_ACTION);
+    gfx::ImageSkia bg = *theme->GetImageSkiaNamed(IDR_BROWSER_ACTION);
     SetIcon(gfx::ImageSkiaOperations::CreateSuperimposedImage(bg, icon));
 
-    gfx::ImageSkia bg_h = *rb.GetImageSkiaNamed(IDR_BROWSER_ACTION_H);
+    gfx::ImageSkia bg_h = *theme->GetImageSkiaNamed(IDR_BROWSER_ACTION_H);
     SetHoverIcon(gfx::ImageSkiaOperations::CreateSuperimposedImage(bg_h, icon));
 
-    gfx::ImageSkia bg_p = *rb.GetImageSkiaNamed(IDR_BROWSER_ACTION_P);
+    gfx::ImageSkia bg_p = *theme->GetImageSkiaNamed(IDR_BROWSER_ACTION_P);
     SetPushedIcon(
         gfx::ImageSkiaOperations::CreateSuperimposedImage(bg_p, icon));
   }
@@ -284,6 +293,9 @@ void BrowserActionButton::Observe(int type,
       }
       break;
     }
+    case chrome::NOTIFICATION_BROWSER_THEME_CHANGED:
+      UpdateState();
+      break;
     default:
       NOTREACHED();
       break;
@@ -316,10 +328,12 @@ bool BrowserActionButton::OnMousePressed(const ui::MouseEvent& event) {
                        TextButton::OnMousePressed(event);
   }
 
-  // See comments in MenuButton::Activate() as to why this is needed.
-  SetMouseHandler(NULL);
+  if (!views::View::ShouldShowContextMenuOnMousePress()) {
+    // See comments in MenuButton::Activate() as to why this is needed.
+    SetMouseHandler(NULL);
 
-  ShowContextMenu(gfx::Point(), true);
+    ShowContextMenu(gfx::Point(), ui::MENU_SOURCE_MOUSE);
+  }
   return false;
 }
 
@@ -409,5 +423,6 @@ void BrowserActionButton::MaybeUnregisterExtensionCommand(bool only_if_active) {
           &browser_action_command,
           NULL)) {
     GetFocusManager()->UnregisterAccelerator(*keybinding_.get(), this);
+    keybinding_.reset(NULL);
   }
 }

@@ -4,17 +4,20 @@
 
 #include <string>
 
+#include "base/command_line.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/common/extensions/api/icons/icons_handler.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_icon_set.h"
+#include "chrome/common/extensions/manifest_handlers/app_launch_info.h"
+#include "chrome/common/extensions/manifest_handlers/icons_handler.h"
 #include "chrome/common/extensions/permissions/permission_set.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "chrome/test/base/test_switches.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/notification_details.h"
 #include "content/public/browser/notification_observer.h"
@@ -41,10 +44,10 @@ class ExtensionFromWebAppTest
                        const content::NotificationDetails& details) OVERRIDE {
     if (type == chrome::NOTIFICATION_EXTENSION_INSTALLED) {
       const Extension* extension =
-          content::Details<const Extension>(details).ptr();
+          content::Details<const InstalledExtensionInfo>(details)->extension;
       if (extension->id() == expected_extension_id_) {
         installed_extension_ = extension;
-        MessageLoopForUI::current()->Quit();
+        base::MessageLoopForUI::current()->Quit();
       }
     }
   }
@@ -58,6 +61,12 @@ class ExtensionFromWebAppTest
 #endif
 
 IN_PROC_BROWSER_TEST_F(ExtensionFromWebAppTest, MAYBE_Basic) {
+#if defined(OS_WIN) && defined(USE_ASH)
+  // Disable this test in Metro+Ash for now (http://crbug.com/262796).
+  if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kAshBrowserTests))
+    return;
+#endif
+
   browser()->profile()->GetExtensionService()->set_show_extensions_prompts(
       false);
 
@@ -81,9 +90,10 @@ IN_PROC_BROWSER_TEST_F(ExtensionFromWebAppTest, MAYBE_Basic) {
   EXPECT_TRUE(installed_extension_->is_hosted_app());
   EXPECT_EQ("Test application", installed_extension_->name());
   EXPECT_EQ("", installed_extension_->description());
-  EXPECT_EQ("http://www.example.com/", installed_extension_->launch_web_url());
+  EXPECT_EQ(GURL("http://www.example.com/"),
+            AppLaunchInfo::GetLaunchWebURL(installed_extension_));
   EXPECT_EQ(extension_misc::LAUNCH_TAB,
-            installed_extension_->launch_container());
+            AppLaunchInfo::GetLaunchContainer(installed_extension_));
   EXPECT_EQ(0u, installed_extension_->GetActivePermissions()->apis().size());
   EXPECT_EQ(0u, IconsInfo::GetIcons(installed_extension_).map().size());
 }

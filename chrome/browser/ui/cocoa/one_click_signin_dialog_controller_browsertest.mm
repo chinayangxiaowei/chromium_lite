@@ -14,8 +14,7 @@
 class OneClickSigninDialogControllerTest : public InProcessBrowserTest {
  public:
   OneClickSigninDialogControllerTest()
-    : InProcessBrowserTest(),
-      controller_(NULL),
+    : controller_(NULL),
       sync_mode_(OneClickSigninSyncStarter::SYNC_WITH_DEFAULT_SETTINGS),
       callback_count_(0) {
   }
@@ -27,7 +26,8 @@ class OneClickSigninDialogControllerTest : public InProcessBrowserTest {
     BrowserWindow::StartSyncCallback callback = base::Bind(
         &OneClickSigninDialogControllerTest::OnStartSyncCallback,
         base::Unretained(this));
-    controller_ = new OneClickSigninDialogController(web_contents, callback);
+    controller_ = new OneClickSigninDialogController(
+        web_contents, callback, string16());
     EXPECT_NSEQ(@"OneClickSigninDialog",
                 [controller_->view_controller() nibName]);
   }

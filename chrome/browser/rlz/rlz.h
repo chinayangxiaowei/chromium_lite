@@ -14,9 +14,9 @@
 
 #include "base/basictypes.h"
 #include "base/memory/singleton.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "base/threading/sequenced_worker_pool.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 #include "rlz/lib/rlz_lib.h"

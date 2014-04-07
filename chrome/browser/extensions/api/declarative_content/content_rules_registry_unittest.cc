@@ -9,6 +9,7 @@
 #include "base/test/values_test_util.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/extensions/test_extension_environment.h"
+#include "chrome/test/base/testing_profile.h"
 #include "content/public/browser/navigation_details.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/frame_navigate_params.h"
@@ -37,15 +38,15 @@ TEST_F(DeclarativeContentRulesRegistryTest, ActiveRulesDoesntGrow) {
   TestExtensionEnvironment env;
 
   scoped_refptr<ContentRulesRegistry> registry(
-      new ContentRulesRegistry(env.profile(), NULL));
+      new ContentRulesRegistry(env.profile(), NULL /*ui_part*/));
 
-  EXPECT_EQ(0u, active_rules(*registry).size());
+  EXPECT_EQ(0u, active_rules(*registry.get()).size());
 
   content::LoadCommittedDetails load_details;
   content::FrameNavigateParams navigate_params;
   scoped_ptr<WebContents> tab = env.MakeTab();
   registry->DidNavigateMainFrame(tab.get(), load_details, navigate_params);
-  EXPECT_EQ(0u, active_rules(*registry).size());
+  EXPECT_EQ(0u, active_rules(*registry.get()).size());
 
   // Add a rule.
   linked_ptr<RulesRegistry::Rule> rule(new RulesRegistry::Rule);
@@ -72,24 +73,24 @@ TEST_F(DeclarativeContentRulesRegistryTest, ActiveRulesDoesntGrow) {
   registry->AddRulesImpl(extension->id(), rules);
 
   registry->DidNavigateMainFrame(tab.get(), load_details, navigate_params);
-  EXPECT_EQ(0u, active_rules(*registry).size());
+  EXPECT_EQ(0u, active_rules(*registry.get()).size());
 
   std::vector<std::string> css_selectors;
   css_selectors.push_back("input");
   registry->Apply(tab.get(), css_selectors);
-  EXPECT_EQ(1u, active_rules(*registry).size());
+  EXPECT_EQ(1u, active_rules(*registry.get()).size());
 
   // Closing the tab should erase its entry from active_rules_.
   tab.reset();
-  EXPECT_EQ(0u, active_rules(*registry).size());
+  EXPECT_EQ(0u, active_rules(*registry.get()).size());
 
   tab = env.MakeTab();
   registry->Apply(tab.get(), css_selectors);
-  EXPECT_EQ(1u, active_rules(*registry).size());
+  EXPECT_EQ(1u, active_rules(*registry.get()).size());
   // Navigating the tab should erase its entry from active_rules_ if
   // it no longer matches.
   registry->DidNavigateMainFrame(tab.get(), load_details, navigate_params);
-  EXPECT_EQ(0u, active_rules(*registry).size());
+  EXPECT_EQ(0u, active_rules(*registry.get()).size());
 }
 
 }  // namespace

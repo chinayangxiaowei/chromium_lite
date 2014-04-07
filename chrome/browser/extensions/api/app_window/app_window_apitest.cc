@@ -2,34 +2,36 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "apps/native_app_window.h"
+#include "apps/shell_window.h"
+#include "apps/shell_window_registry.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "chrome/browser/extensions/extension_test_message_listener.h"
 #include "chrome/browser/extensions/platform_app_browsertest_util.h"
-#include "chrome/browser/extensions/shell_window_registry.h"
-#include "chrome/browser/ui/base_window.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/extensions/native_app_window.h"
-#include "chrome/browser/ui/extensions/shell_window.h"
 #include "chrome/test/base/testing_profile.h"
+#include "ui/base/base_window.h"
 #include "ui/gfx/rect.h"
 
 #ifdef TOOLKIT_GTK
 #include "content/public/test/test_utils.h"
 #endif
 
+using apps::ShellWindow;
+
 namespace {
 
 class TestShellWindowRegistryObserver
-    : public extensions::ShellWindowRegistry::Observer {
+    : public apps::ShellWindowRegistry::Observer {
  public:
   explicit TestShellWindowRegistryObserver(Profile* profile)
       : profile_(profile),
         icon_updates_(0) {
-    extensions::ShellWindowRegistry::Get(profile_)->AddObserver(this);
+    apps::ShellWindowRegistry::Get(profile_)->AddObserver(this);
   }
   virtual ~TestShellWindowRegistryObserver() {
-    extensions::ShellWindowRegistry::Get(profile_)->RemoveObserver(this);
+    apps::ShellWindowRegistry::Get(profile_)->RemoveObserver(this);
   }
 
   // Overridden from ShellWindowRegistry::Observer:
@@ -125,7 +127,8 @@ IN_PROC_BROWSER_TEST_F(ExperimentalPlatformAppBrowserTest, WindowsApiSetIcon) {
 // don't work under ubuntu unity.
 // (crbug.com/162794 and https://bugs.launchpad.net/unity/+bug/998073).
 // TODO(linux_aura) http://crbug.com/163931
-#if (defined(TOOLKIT_VIEWS) || defined(OS_MACOSX)) && !(defined(OS_LINUX) && !defined(OS_CHROMEOS) && defined(USE_AURA))
+// Flaky on Mac, http://crbug.com/232330
+#if defined(TOOLKIT_VIEWS) && !(defined(OS_LINUX) && !defined(OS_CHROMEOS) && defined(USE_AURA))
 
 IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest, WindowsApiProperties) {
   EXPECT_TRUE(

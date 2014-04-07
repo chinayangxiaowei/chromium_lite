@@ -7,32 +7,32 @@
 #include "base/debug/debugger.h"
 #include "base/debug/stack_trace.h"
 #include "base/debug/trace_event.h"
-#include "base/hi_res_timer_manager.h"
 #include "base/i18n/rtl.h"
 #include "base/memory/ref_counted.h"
+#include "base/message_loop/message_loop.h"
 #include "base/metrics/field_trial.h"
-#include "base/message_loop.h"
 #include "base/metrics/histogram.h"
 #include "base/metrics/statistics_recorder.h"
 #include "base/metrics/stats_counters.h"
 #include "base/path_service.h"
 #include "base/pending_task.h"
-#include "base/process_util.h"
-#include "base/string_util.h"
-#include "base/system_monitor/system_monitor.h"
+#include "base/strings/string_util.h"
 #include "base/threading/platform_thread.h"
-#include "base/time.h"
-#include "content/common/pepper_plugin_registry.h"
+#include "base/time/time.h"
+#include "base/timer/hi_res_timer_manager.h"
+#include "content/child/child_process.h"
+#include "content/common/content_constants_internal.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/main_function_params.h"
 #include "content/public/renderer/content_renderer_client.h"
 #include "content/renderer/browser_plugin/browser_plugin_manager_impl.h"
+#include "content/renderer/pepper/pepper_plugin_registry.h"
 #include "content/renderer/render_process_impl.h"
 #include "content/renderer/render_thread_impl.h"
 #include "content/renderer/renderer_main_platform_delegate.h"
 #include "ui/base/ui_base_switches.h"
+#include "webkit/child/webkit_child_helpers.h"
 #include "webkit/glue/webkit_glue.h"
-#include "webkit/plugins/ppapi/ppapi_interface_factory.h"
 
 #if defined(OS_MACOSX)
 #include <Carbon/Carbon.h>
@@ -41,11 +41,15 @@
 
 #include "base/mac/mac_util.h"
 #include "base/mac/scoped_nsautorelease_pool.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebView.h"
+#include "third_party/WebKit/public/web/WebView.h"
 #endif  // OS_MACOSX
 
-namespace content {
+#if defined(ENABLE_WEBRTC)
+#include "third_party/libjingle/overrides/init_webrtc.h"
+#endif
 
+namespace content {
+namespace {
 // This function provides some ways to test crash and assertion handling
 // behavior of the renderer.
 static void HandleRendererErrorTestParameters(const CommandLine& command_line) {
@@ -63,7 +67,7 @@ static void HandleRendererErrorTestParameters(const CommandLine& command_line) {
 
 // This is a simplified version of the browser Jankometer, which measures
 // the processing time of tasks on the render thread.
-class RendererMessageLoopObserver : public MessageLoop::TaskObserver {
+class RendererMessageLoopObserver : public base::MessageLoop::TaskObserver {
  public:
   RendererMessageLoopObserver()
       : process_times_(base::Histogram::FactoryGet(
@@ -87,7 +91,7 @@ class RendererMessageLoopObserver : public MessageLoop::TaskObserver {
 };
 
 // For measuring memory usage after each task. Behind a command line flag.
-class MemoryObserver : public MessageLoop::TaskObserver {
+class MemoryObserver : public base::MessageLoop::TaskObserver {
  public:
   MemoryObserver() {}
   virtual ~MemoryObserver() {}
@@ -102,9 +106,14 @@ class MemoryObserver : public MessageLoop::TaskObserver {
   DISALLOW_COPY_AND_ASSIGN(MemoryObserver);
 };
 
+}  // namespace
+
 // mainline routine for running as the Renderer process
 int RendererMain(const MainFunctionParams& parameters) {
   TRACE_EVENT_BEGIN_ETW("RendererMain", 0, "");
+  base::debug::TraceLog::GetInstance()->SetProcessName("Renderer");
+  base::debug::TraceLog::GetInstance()->SetProcessSortIndex(
+      kTraceEventRendererProcessSortIndex);
 
   const CommandLine& parsed_command_line = parameters.command_line;
 
@@ -132,10 +141,6 @@ int RendererMain(const MainFunctionParams& parameters) {
 
   RendererMainPlatformDelegate platform(parameters);
 
-  webkit::ppapi::PpapiInterfaceFactoryManager* factory_manager =
-      webkit::ppapi::PpapiInterfaceFactoryManager::GetInstance();
-  GetContentClient()->renderer()->RegisterPPAPIInterfaceFactories(
-      factory_manager);
 
   base::StatsCounterTimer stats_counter_timer("Content.RendererInit");
   base::StatsScope<base::StatsCounterTimer> startup_timer(stats_counter_timer);
@@ -144,12 +149,13 @@ int RendererMain(const MainFunctionParams& parameters) {
 #if defined(OS_MACOSX)
   // As long as we use Cocoa in the renderer (for the forseeable future as of
   // now; see http://crbug.com/13890 for info) we need to have a UI loop.
-  MessageLoop main_message_loop(MessageLoop::TYPE_UI);
+  base::MessageLoop main_message_loop(base::MessageLoop::TYPE_UI);
 #else
   // The main message loop of the renderer services doesn't have IO or UI tasks,
   // unless in-process-plugins is used.
-  MessageLoop main_message_loop(RenderProcessImpl::InProcessPlugins() ?
-              MessageLoop::TYPE_UI : MessageLoop::TYPE_DEFAULT);
+  base::MessageLoop main_message_loop(RenderProcessImpl::InProcessPlugins()
+                                          ? base::MessageLoop::TYPE_UI
+                                          : base::MessageLoop::TYPE_DEFAULT);
 #endif
   main_message_loop.AddTaskObserver(&task_observer);
 
@@ -160,9 +166,6 @@ int RendererMain(const MainFunctionParams& parameters) {
   }
 
   base::PlatformThread::SetName("CrRendererMain");
-
-  base::SystemMonitor system_monitor;
-  HighResolutionTimerManager hi_res_timer_manager;
 
   platform.PlatformInitialize();
 
@@ -180,13 +183,24 @@ int RendererMain(const MainFunctionParams& parameters) {
   if (parsed_command_line.HasSwitch(switches::kForceFieldTrials)) {
     std::string persistent = parsed_command_line.GetSwitchValueASCII(
         switches::kForceFieldTrials);
-    bool ret = base::FieldTrialList::CreateTrialsFromString(persistent);
-    DCHECK(ret);
+    // Field trials are created in an "activated" state to ensure they get
+    // reported in crash reports.
+    bool result = base::FieldTrialList::CreateTrialsFromString(
+        parsed_command_line.GetSwitchValueASCII(switches::kForceFieldTrials),
+        base::FieldTrialList::ACTIVATE_TRIALS);
+    DCHECK(result);
   }
 
 #if defined(ENABLE_PLUGINS)
   // Load pepper plugins before engaging the sandbox.
   PepperPluginRegistry::GetInstance();
+#endif
+#if defined(ENABLE_WEBRTC)
+  // Initialize WebRTC before engaging the sandbox.
+  // NOTE: On linux, this call could already have been made from
+  // zygote_main_linux.cc.  However, calling multiple times from the same thread
+  // is OK.
+  InitializeWebRtcModule();
 #endif
 
   {
@@ -213,6 +227,8 @@ int RendererMain(const MainFunctionParams& parameters) {
     new RenderThreadImpl();
 #endif
 
+    base::HighResolutionTimerManager hi_res_timer_manager;
+
     platform.RunSandboxTests(no_sandbox);
 
     startup_timer.Stop();  // End of Startup Time Measurement.
@@ -223,7 +239,7 @@ int RendererMain(const MainFunctionParams& parameters) {
         pool->Recycle();
 #endif
       TRACE_EVENT_BEGIN_ETW("RendererMain.START_MSG_LOOP", 0, 0);
-      MessageLoop::current()->Run();
+      base::MessageLoop::current()->Run();
       TRACE_EVENT_END_ETW("RendererMain.START_MSG_LOOP", 0, 0);
     }
   }

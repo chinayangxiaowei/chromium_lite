@@ -9,9 +9,8 @@
 
 #include "base/command_line.h"
 #include "base/logging.h"
-#include "base/process.h"
-#include "base/process_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/process/process.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/win/windows_version.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/result_codes.h"

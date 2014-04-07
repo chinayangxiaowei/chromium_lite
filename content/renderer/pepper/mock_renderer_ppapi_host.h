@@ -11,14 +11,8 @@
 #include "ppapi/host/ppapi_host.h"
 #include "ppapi/proxy/resource_message_test_sink.h"
 
-namespace webkit {
-namespace ppapi {
-class PluginInstance;
-class PluginModule;
-}
-}
-
 namespace content {
+class PluginModule;
 
 // A mock RendererPpapiHost for testing resource hosts. Messages sent by
 // resources through this will get added to the test sink.
@@ -39,14 +33,13 @@ class MockRendererPpapiHost : public RendererPpapiHost {
   // RendererPpapiHost.
   virtual ppapi::host::PpapiHost* GetPpapiHost() OVERRIDE;
   virtual bool IsValidInstance(PP_Instance instance) const OVERRIDE;
-  virtual webkit::ppapi::PluginInstance* GetPluginInstance(
+  virtual PepperPluginInstance* GetPluginInstance(
       PP_Instance instance) const OVERRIDE;
   virtual RenderView* GetRenderViewForInstance(
       PP_Instance instance) const OVERRIDE;
   virtual WebKit::WebPluginContainer* GetContainerForInstance(
       PP_Instance instance) const OVERRIDE;
-  virtual webkit::ppapi::PluginDelegate::PlatformGraphics2D*
-      GetPlatformGraphics2D(PP_Resource resource) OVERRIDE;
+  virtual base::ProcessId GetPluginPID() const OVERRIDE;
   virtual bool HasUserGesture(PP_Instance instance) const OVERRIDE;
   virtual int GetRoutingIDForWidget(PP_Instance instance) const OVERRIDE;
   virtual gfx::Point PluginPointToRenderView(
@@ -56,6 +49,10 @@ class MockRendererPpapiHost : public RendererPpapiHost {
       base::PlatformFile handle,
       bool should_close_source) OVERRIDE;
   virtual bool IsRunningInProcess() const OVERRIDE;
+  virtual void CreateBrowserResourceHost(
+      PP_Instance instance,
+      const IPC::Message& nested_msg,
+      const base::Callback<void(int)>& callback) const OVERRIDE;
 
  private:
   ppapi::proxy::ResourceMessageTestSink sink_;

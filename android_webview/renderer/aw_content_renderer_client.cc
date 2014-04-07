@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,26 +7,23 @@
 #include "android_webview/common/aw_resource.h"
 #include "android_webview/common/url_constants.h"
 #include "android_webview/renderer/aw_render_view_ext.h"
-#include "android_webview/renderer/view_renderer.h"
-#include "base/message_loop.h"
-#include "base/utf_string_conversions.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/utf_string_conversions.h"
+#include "components/autofill/content/renderer/autofill_agent.h"
+#include "components/autofill/content/renderer/password_autofill_agent.h"
 #include "components/visitedlink/renderer/visitedlink_slave.h"
 #include "content/public/renderer/render_thread.h"
-#include "googleurl/src/gurl.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebString.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebURL.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebURLError.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebURLRequest.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebSecurityPolicy.h"
+#include "net/base/net_errors.h"
+#include "third_party/WebKit/public/platform/WebString.h"
+#include "third_party/WebKit/public/platform/WebURL.h"
+#include "third_party/WebKit/public/platform/WebURLError.h"
+#include "third_party/WebKit/public/platform/WebURLRequest.h"
+#include "third_party/WebKit/public/web/WebSecurityPolicy.h"
+#include "url/gurl.h"
 
 namespace android_webview {
 
-AwContentRendererClient::AwContentRendererClient(
-    CompositorMessageLoopGetter* compositor_message_loop_getter,
-    bool should_create_compositor_input_handler)
-    : compositor_message_loop_getter_(compositor_message_loop_getter),
-      should_create_compositor_input_handler_(
-          should_create_compositor_input_handler) {
+AwContentRendererClient::AwContentRendererClient() {
 }
 
 AwContentRendererClient::~AwContentRendererClient() {
@@ -42,14 +39,19 @@ void AwContentRendererClient::RenderThreadStarted() {
   aw_render_process_observer_.reset(new AwRenderProcessObserver);
   thread->AddObserver(aw_render_process_observer_.get());
 
-  visited_link_slave_.reset(new components::VisitedLinkSlave);
+  visited_link_slave_.reset(new visitedlink::VisitedLinkSlave);
   thread->AddObserver(visited_link_slave_.get());
 }
 
 void AwContentRendererClient::RenderViewCreated(
     content::RenderView* render_view) {
   AwRenderViewExt::RenderViewCreated(render_view);
-  ViewRenderer::RenderViewCreated(render_view);
+
+  // TODO(sgurun) do not create a password autofill agent (change
+  // autofill agent to store a weakptr).
+  autofill::PasswordAutofillAgent* password_autofill_agent =
+      new autofill::PasswordAutofillAgent(render_view);
+  new autofill::AutofillAgent(render_view, password_autofill_agent);
 }
 
 std::string AwContentRendererClient::GetDefaultEncoding() {
@@ -62,6 +64,7 @@ bool AwContentRendererClient::HasErrorPage(int http_status_code,
 }
 
 void AwContentRendererClient::GetNavigationErrorStrings(
+    WebKit::WebFrame* /* frame */,
     const WebKit::WebURLRequest& failed_request,
     const WebKit::WebURLError& error,
     std::string* error_html,
@@ -81,6 +84,12 @@ void AwContentRendererClient::GetNavigationErrorStrings(
                                  error_url.possibly_invalid_spec());
     *error_html = contents;
   }
+  if (error_description) {
+    if (error.localizedDescription.isEmpty())
+      *error_description = ASCIIToUTF16(net::ErrorToString(error.reason));
+    else
+      *error_description = error.localizedDescription;
+  }
 }
 
 unsigned long long AwContentRendererClient::VisitedLinkHash(
@@ -91,20 +100,6 @@ unsigned long long AwContentRendererClient::VisitedLinkHash(
 
 bool AwContentRendererClient::IsLinkVisited(unsigned long long link_hash) {
   return visited_link_slave_->IsVisited(link_hash);
-}
-
-void AwContentRendererClient::PrefetchHostName(const char* hostname,
-                                               size_t length) {
-  // TODO(boliu): Implement hostname prefetch for Android WebView.
-  // Perhaps componentize chrome implementation or move to content/?
-}
-
-MessageLoop* AwContentRendererClient::OverrideCompositorMessageLoop() const {
-  return (*compositor_message_loop_getter_)();
-}
-
-bool AwContentRendererClient::ShouldCreateCompositorInputHandler() const {
-  return should_create_compositor_input_handler_;
 }
 
 }  // namespace android_webview

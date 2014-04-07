@@ -11,8 +11,6 @@
 #include "content/public/browser/notification_types.h"
 #include "content/public/browser/render_process_host.h"
 
-using base::DictionaryValue;
-using base::ListValue;
 using base::ProcessId;
 using std::string;
 
@@ -20,10 +18,10 @@ namespace content {
 
 namespace {
 // Makes sure that |dict| has a ListValue under path "log".
-static ListValue* EnsureLogList(DictionaryValue* dict) {
-  ListValue* log = NULL;
+static base::ListValue* EnsureLogList(base::DictionaryValue* dict) {
+  base::ListValue* log = NULL;
   if (!dict->GetList("log", &log)) {
-    log = new ListValue();
+    log = new base::ListValue();
     if (log)
       dict->Set("log", log);
   }
@@ -32,7 +30,7 @@ static ListValue* EnsureLogList(DictionaryValue* dict) {
 
 }  // namespace
 
-WebRTCInternals::WebRTCInternals() {
+WebRTCInternals::WebRTCInternals() : is_recording_rtp_(false) {
   registrar_.Add(this, NOTIFICATION_RENDERER_PROCESS_TERMINATED,
                  NotificationService::AllBrowserContextsAndSources());
 
@@ -47,15 +45,15 @@ WebRTCInternals* WebRTCInternals::GetInstance() {
   return Singleton<WebRTCInternals>::get();
 }
 
-void WebRTCInternals::AddPeerConnection(int render_process_id,
-                                        ProcessId pid,
-                                        int lid,
-                                        const string& url,
-                                        const string& servers,
-                                        const string& constraints) {
+void WebRTCInternals::OnAddPeerConnection(int render_process_id,
+                                          ProcessId pid,
+                                          int lid,
+                                          const string& url,
+                                          const string& servers,
+                                          const string& constraints) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
-  DictionaryValue* dict = new DictionaryValue();
+  base::DictionaryValue* dict = new base::DictionaryValue();
   if (!dict)
     return;
 
@@ -71,10 +69,10 @@ void WebRTCInternals::AddPeerConnection(int render_process_id,
     SendUpdate("addPeerConnection", dict);
 }
 
-void WebRTCInternals::RemovePeerConnection(ProcessId pid, int lid) {
+void WebRTCInternals::OnRemovePeerConnection(ProcessId pid, int lid) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   for (size_t i = 0; i < peer_connection_data_.GetSize(); ++i) {
-    DictionaryValue* dict = NULL;
+    base::DictionaryValue* dict = NULL;
     peer_connection_data_.GetDictionary(i, &dict);
 
     int this_pid = 0;
@@ -88,7 +86,7 @@ void WebRTCInternals::RemovePeerConnection(ProcessId pid, int lid) {
     peer_connection_data_.Remove(i, NULL);
 
     if (observers_.size() > 0) {
-      DictionaryValue id;
+      base::DictionaryValue id;
       id.SetInteger("pid", static_cast<int>(pid));
       id.SetInteger("lid", lid);
       SendUpdate("removePeerConnection", &id);
@@ -97,12 +95,12 @@ void WebRTCInternals::RemovePeerConnection(ProcessId pid, int lid) {
   }
 }
 
-void WebRTCInternals::UpdatePeerConnection(
+void WebRTCInternals::OnUpdatePeerConnection(
     ProcessId pid, int lid, const string& type, const string& value) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
   for (size_t i = 0; i < peer_connection_data_.GetSize(); ++i) {
-    DictionaryValue* record = NULL;
+    base::DictionaryValue* record = NULL;
     peer_connection_data_.GetDictionary(i, &record);
 
     int this_pid = 0, this_lid = 0;
@@ -113,11 +111,11 @@ void WebRTCInternals::UpdatePeerConnection(
       continue;
 
     // Append the update to the end of the log.
-    ListValue* log = EnsureLogList(record);
+    base::ListValue* log = EnsureLogList(record);
     if (!log)
       return;
 
-    DictionaryValue* log_entry = new DictionaryValue();
+    base::DictionaryValue* log_entry = new base::DictionaryValue();
     if (!log_entry)
       return;
 
@@ -126,7 +124,7 @@ void WebRTCInternals::UpdatePeerConnection(
     log->Append(log_entry);
 
     if (observers_.size() > 0) {
-      DictionaryValue update;
+      base::DictionaryValue update;
       update.SetInteger("pid", static_cast<int>(pid));
       update.SetInteger("lid", lid);
       update.SetString("type", type);
@@ -138,16 +136,16 @@ void WebRTCInternals::UpdatePeerConnection(
   }
 }
 
-void WebRTCInternals::AddStats(base::ProcessId pid, int lid,
-                               const base::ListValue& value) {
+void WebRTCInternals::OnAddStats(base::ProcessId pid, int lid,
+                                 const base::ListValue& value) {
   if (observers_.size() == 0)
     return;
 
-  DictionaryValue dict;
+  base::DictionaryValue dict;
   dict.SetInteger("pid", static_cast<int>(pid));
   dict.SetInteger("lid", lid);
 
-  ListValue* list = value.DeepCopy();
+  base::ListValue* list = value.DeepCopy();
   if (!list)
     return;
 
@@ -171,7 +169,21 @@ void WebRTCInternals::SendAllUpdates() {
     SendUpdate("updateAllPeerConnections", &peer_connection_data_);
 }
 
-void WebRTCInternals::SendUpdate(const string& command, Value* value) {
+void WebRTCInternals::StartRtpRecording() {
+  if (!is_recording_rtp_) {
+    is_recording_rtp_ = true;
+    // TODO(justinlin): start RTP recording.
+  }
+}
+
+void WebRTCInternals::StopRtpRecording() {
+  if (is_recording_rtp_) {
+    is_recording_rtp_ = false;
+    // TODO(justinlin): stop RTP recording.
+  }
+}
+
+void WebRTCInternals::SendUpdate(const string& command, base::Value* value) {
   DCHECK_GT(observers_.size(), (size_t)0);
 
   FOR_EACH_OBSERVER(WebRTCInternalsUIObserver,
@@ -197,7 +209,7 @@ void WebRTCInternals::OnRendererExit(int render_process_id) {
   // Iterates from the end of the list to remove the PeerConnections created
   // by the exitting renderer.
   for (int i = peer_connection_data_.GetSize() - 1; i >= 0; --i) {
-    DictionaryValue* record = NULL;
+    base::DictionaryValue* record = NULL;
     peer_connection_data_.GetDictionary(i, &record);
 
     int this_rid = 0;
@@ -209,7 +221,7 @@ void WebRTCInternals::OnRendererExit(int render_process_id) {
         record->GetInteger("lid", &lid);
         record->GetInteger("pid", &pid);
 
-        DictionaryValue update;
+        base::DictionaryValue update;
         update.SetInteger("lid", lid);
         update.SetInteger("pid", pid);
         SendUpdate("removePeerConnection", &update);
@@ -217,6 +229,15 @@ void WebRTCInternals::OnRendererExit(int render_process_id) {
       peer_connection_data_.Remove(i, NULL);
     }
   }
+}
+
+// TODO(justlin): Calls this method as necessary to update the recording status
+// UI.
+void WebRTCInternals::SendRtpRecordingUpdate() {
+  DCHECK(is_recording_rtp_);
+  base::DictionaryValue update;
+  // TODO(justinlin): Fill in |update| with values as appropriate.
+  SendUpdate("updateDumpStatus", &update);
 }
 
 }  // namespace content

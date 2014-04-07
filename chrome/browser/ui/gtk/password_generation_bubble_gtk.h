@@ -9,7 +9,7 @@
 
 #include "base/basictypes.h"
 #include "chrome/browser/ui/gtk/bubble/bubble_gtk.h"
-#include "components/autofill/common/password_generation_util.h"
+#include "components/autofill/core/common/password_generation_util.h"
 #include "content/public/common/password_form.h"
 #include "ui/base/gtk/gtk_signal.h"
 #include "ui/gfx/rect.h"
@@ -61,7 +61,7 @@ class PasswordGenerationBubbleGtk : public BubbleDelegateGtk {
   autofill::PasswordGenerator* password_generator_;
 
   // Store various status of the current living bubble.
-  password_generation::PasswordGenerationActions actions_;
+  autofill::password_generation::PasswordGenerationActions actions_;
 
   DISALLOW_COPY_AND_ASSIGN(PasswordGenerationBubbleGtk);
 };

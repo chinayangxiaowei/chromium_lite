@@ -15,29 +15,29 @@ class DictionariesInnerType extends ChromeObject {
    * Public constructor
    */
   DictionariesInnerType({String s, int b, int i, int l, double d, FileEntry f, String os, int ob, int oi, int ol, double od, FileEntry of}) {
-    if (?s)
+    if (s != null)
       this.s = s;
-    if (?b)
+    if (b != null)
       this.b = b;
-    if (?i)
+    if (i != null)
       this.i = i;
-    if (?l)
+    if (l != null)
       this.l = l;
-    if (?d)
+    if (d != null)
       this.d = d;
-    if (?f)
+    if (f != null)
       this.f = f;
-    if (?os)
+    if (os != null)
       this.os = os;
-    if (?ob)
+    if (ob != null)
       this.ob = ob;
-    if (?oi)
+    if (oi != null)
       this.oi = oi;
-    if (?ol)
+    if (ol != null)
       this.ol = ol;
-    if (?od)
+    if (od != null)
       this.od = od;
-    if (?of)
+    if (of != null)
       this.of = of;
   }
 
@@ -140,9 +140,9 @@ class DictionariesOuterType extends ChromeObject {
    * Public constructor
    */
   DictionariesOuterType({List<DictionariesInnerType> items, List<DictionariesInnerType> oitems}) {
-    if (?items)
+    if (items != null)
       this.items = items;
-    if (?oitems)
+    if (oitems != null)
       this.oitems = oitems;
   }
 
@@ -157,8 +157,10 @@ class DictionariesOuterType extends ChromeObject {
   /// Documentation for the array of InnerTypes items.
   List<DictionariesInnerType> get items {
     List<DictionariesInnerType> __proxy_items = new List<DictionariesInnerType>();
-    for (var o in JS('List', '#.items', this._jsObject)) {
-      __proxy_items.add(new DictionariesInnerType._proxy(o));
+    int count = JS('int', '#.items.length', this._jsObject);
+    for (int i = 0; i < count; i++) {
+      var item = JS('', '#.items[#]', this._jsObject, i);
+      __proxy_items.add(new DictionariesInnerType._proxy(item));
     }
     return __proxy_items;
   }
@@ -170,8 +172,10 @@ class DictionariesOuterType extends ChromeObject {
   /// Documentation for the optional array of Inner Types oitems.
   List<DictionariesInnerType> get oitems {
     List<DictionariesInnerType> __proxy_oitems = new List<DictionariesInnerType>();
-    for (var o in JS('List', '#.oitems', this._jsObject)) {
-      __proxy_oitems.add(new DictionariesInnerType._proxy(o));
+    int count = JS('int', '#.oitems.length', this._jsObject);
+    for (int i = 0; i < count; i++) {
+      var item = JS('', '#.oitems[#]', this._jsObject, i);
+      __proxy_oitems.add(new DictionariesInnerType._proxy(item));
     }
     return __proxy_oitems;
   }
@@ -187,9 +191,9 @@ class DictionariesComplexType extends ChromeObject {
    * Public constructor
    */
   DictionariesComplexType({int i, DictionariesComplexType c}) {
-    if (?i)
+    if (i != null)
       this.i = i;
-    if (?c)
+    if (c != null)
       this.c = c;
   }
 

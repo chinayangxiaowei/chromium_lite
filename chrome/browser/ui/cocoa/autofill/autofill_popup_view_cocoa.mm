@@ -4,17 +4,18 @@
 
 #import "chrome/browser/ui/cocoa/autofill/autofill_popup_view_cocoa.h"
 
-#include "base/i18n/rtl.h"
 #include "base/logging.h"
-#include "base/sys_string_conversions.h"
+#include "base/strings/sys_string_conversions.h"
 #include "chrome/browser/ui/autofill/autofill_popup_controller.h"
 #include "chrome/browser/ui/cocoa/autofill/autofill_popup_view_bridge.h"
 #include "grit/ui_resources.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebAutofillClient.h"
+#include "third_party/WebKit/public/web/WebAutofillClient.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/point.h"
 #include "ui/gfx/rect.h"
+
+using autofill::AutofillPopupView;
 
 namespace {
 
@@ -34,11 +35,15 @@ NSColor* NameColor() {
   return [NSColor blackColor];
 }
 
+NSColor* WarningColor() {
+  return [NSColor grayColor];
+}
+
 NSColor* SubtextColor() {
   return [NSColor grayColor];
 }
 
-}  // anonymous namespace
+}  // namespace
 
 #pragma mark -
 #pragma mark Private methods
@@ -74,7 +79,7 @@ NSColor* SubtextColor() {
   return [self initWithController:NULL frame:frame];
 }
 
-- (id)initWithController:(AutofillPopupController*)controller
+- (id)initWithController:(autofill::AutofillPopupController*)controller
                    frame:(NSRect)frame {
   self = [super initWithFrame:frame];
   if (self)
@@ -194,17 +199,19 @@ NSColor* SubtextColor() {
     [NSBezierPath fillRect:bounds];
   }
 
-  BOOL isRTL = base::i18n::IsRTL();
+  BOOL isRTL = controller_->IsRTL();
 
+  NSColor* nameColor =
+      controller_->IsWarning(index) ? WarningColor() : NameColor();
   NSDictionary* nameAttributes =
       [NSDictionary dictionaryWithObjectsAndKeys:
            controller_->GetNameFontForRow(index).GetNativeFont(),
-           NSFontAttributeName, NameColor(), NSForegroundColorAttributeName,
+           NSFontAttributeName, nameColor, NSForegroundColorAttributeName,
            nil];
   NSSize nameSize = [name sizeWithAttributes:nameAttributes];
   CGFloat x = bounds.origin.x +
       (isRTL ?
-       bounds.size.width - AutofillPopupView::kEndPadding - nameSize.width:
+       bounds.size.width - AutofillPopupView::kEndPadding - nameSize.width :
        AutofillPopupView::kEndPadding);
   CGFloat y = bounds.origin.y + (bounds.size.height - nameSize.height) / 2;
 

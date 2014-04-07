@@ -103,16 +103,19 @@ void LocalTranslator::TranslateOpenVPN() {
   // Copy only the first entry if existing.
   const base::ListValue* certKUs = NULL;
   std::string certKU;
-  if (onc_object_->GetListWithoutPathExpansion(vpn::kRemoteCertKU, &certKUs) &&
+  if (onc_object_->GetListWithoutPathExpansion(openvpn::kRemoteCertKU,
+                                               &certKUs) &&
       certKUs->GetString(0, &certKU)) {
     shill_dictionary_->SetStringWithoutPathExpansion(
         flimflam::kOpenVPNRemoteCertKUProperty, certKU);
   }
 
-  for (base::DictionaryValue::Iterator it(*onc_object_); it.HasNext();
+  for (base::DictionaryValue::Iterator it(*onc_object_); !it.IsAtEnd();
        it.Advance()) {
     scoped_ptr<base::Value> translated;
-    if (it.key() == vpn::kSaveCredentials || it.key() == vpn::kRemoteCertKU) {
+    if (it.key() == vpn::kSaveCredentials ||
+        it.key() == openvpn::kRemoteCertKU ||
+        it.key() == openvpn::kServerCAPEMs) {
       translated.reset(it.value().DeepCopy());
     } else {
       // Shill wants all Provider/VPN fields to be strings.
@@ -182,7 +185,7 @@ void LocalTranslator::TranslateNetworkConfiguration() {
 }
 
 void LocalTranslator::CopyFieldsAccordingToSignature() {
-  for (base::DictionaryValue::Iterator it(*onc_object_); it.HasNext();
+  for (base::DictionaryValue::Iterator it(*onc_object_); !it.IsAtEnd();
        it.Advance()) {
     AddValueAccordingToSignature(it.key(),
                                  make_scoped_ptr(it.value().DeepCopy()));
@@ -234,7 +237,7 @@ void TranslateONCHierarchy(const OncValueSignature& signature,
   translator.TranslateFields();
 
   // Recurse into nested objects.
-  for (base::DictionaryValue::Iterator it(onc_object); it.HasNext();
+  for (base::DictionaryValue::Iterator it(onc_object); !it.IsAtEnd();
        it.Advance()) {
     const base::DictionaryValue* inner_object = NULL;
     if (!it.value().GetAsDictionary(&inner_object))

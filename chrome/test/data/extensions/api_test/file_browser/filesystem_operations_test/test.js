@@ -14,35 +14,37 @@
  *
  * The test files on file systems should be created before running the test
  * extension. The test extension expects following hierarchy:
- *   mount_point_root - test_dir - - subdir
- *                                |
- *                                 - empty_test_dir
- *                                |
- *                                 - test_file.xul
- *                                |
- *                                 - test_file.xul.foo
- *                                |
- *                                 - test_file.tiff
- *                                |
- *                                 - test_file.tiff.foo
+ *   mount_point_root - (root) - test_dir - - subdir
+ *                                         |
+ *                                          - empty_test_dir
+ *                                         |
+ *                                          - test_file.xul
+ *                                         |
+ *                                          - test_file.xul.foo
+ *                                         |
+ *                                          - test_file.tiff
+ *                                         |
+ *                                          - test_file.tiff.foo
  *
- * mount_point_root/test_dir/subdir/ will be used as destination dir for copy
- * and move operations.
- * mount_point_root/test_dir/empty_test_dir/ should be empty and will stay empty
- * until the end of the test.
- * mount_point_root/test_dir/test_file.xul will not change during the test.
+ * mount_point_root/root exists only for Drive.
+ * mount_point_root/(root/)test_dir/subdir/ will be used as destination dir for
+ * copy and move operations.
+ * mount_point_root/(root/)test_dir/empty_test_dir/ should be empty and will
+ * stay empty until the end of the test.
+ * mount_point_root/(root/)test_dir/test_file.xul will not change during the
+ * test.
  *
  * All files should initially have content: kInitialFileContent.
  */
 
-var kInitialFileContent = 'xxxxxxxxxxxxx';
-var kWriteOffset = 13;
-var kWriteData = '!!!';
-var kFileContentAfterWrite = 'xxxxxxxxxxxxx!!!';
-var kTruncateShortLength = 5;
-var kFileContentAfterTruncateShort = 'xxxxx';
-var kTruncateLongLength = 7;
-var kFileContentAfterTruncateLong = 'xxxxx\0\0';
+var kInitialFileContent = 'This is some test content.';
+var kWriteOffset = 26;
+var kWriteData = ' Yay!';
+var kFileContentAfterWrite = 'This is some test content. Yay!';
+var kTruncateShortLength = 4;
+var kFileContentAfterTruncateShort = 'This';
+var kTruncateLongLength = 6;
+var kFileContentAfterTruncateLong = 'This\0\0';
 
 function assertEqAndRunCallback(expectedValue, value, errorMessage,
                                 callback, callbackArg) {
@@ -60,13 +62,20 @@ function assertEqAndRunCallback(expectedValue, value, errorMessage,
  * as an argument. For Other methods, the callback argument should be ignored.
  */
 
+// Gets the path for operations. The path is relative to the mount point for
+// local entries and relative to the "My Drive" root for Drive entries.
+function getPath(relativePath, isOnDrive) {
+  return (isOnDrive ? 'root/' : '') + relativePath;
+}
+
 // Gets the directory mountPoint/path
 function getDirectory(mountPoint, path, shouldCreate, expectSuccess, callback) {
   var messagePrefix = shouldCreate ? 'Creating ' : 'Getting ';
   var message = messagePrefix + 'directory: \'' + path +'\'.';
+  var isOnDrive = mountPoint.fullPath == '/drive';
 
   mountPoint.getDirectory(
-      path, {create: shouldCreate},
+      getPath(path, isOnDrive), {create: shouldCreate},
       assertEqAndRunCallback.bind(null, expectSuccess, true, message, callback),
       assertEqAndRunCallback.bind(null, expectSuccess, false, message,
                                   callback, null));
@@ -76,9 +85,10 @@ function getDirectory(mountPoint, path, shouldCreate, expectSuccess, callback) {
 function getFile(mountPoint, path, shouldCreate, expectSuccess, callback) {
   var messagePrefix = shouldCreate ? 'Creating ' : 'Getting ';
   var message = messagePrefix + 'file: \'' + path +'\'.';
+  var isOnDrive = mountPoint.fullPath == '/drive';
 
   mountPoint.getFile(
-      path, {create: shouldCreate},
+      getPath(path, isOnDrive), {create: shouldCreate},
       assertEqAndRunCallback.bind(null, expectSuccess, true, message, callback),
       assertEqAndRunCallback.bind(null, expectSuccess, false, message,
                                   callback, null));
@@ -88,7 +98,6 @@ function getFile(mountPoint, path, shouldCreate, expectSuccess, callback) {
 // should always succeed.
 function readFileAndExpectContent(mountPoint, path, expectedContent, callback) {
   var message = 'Content of the file \'' + path + '\'.';
-
   getFile(mountPoint, path, false, true, function(entry) {
     var reader = new FileReader();
     reader.onload = function() {
@@ -147,7 +156,6 @@ function abortWriteFile(mountPoint, path, callback) {
 // Truncates file mountPoint/path to lenght |lenght|.
 function truncateFile(mountPoint, path, length, expectSuccess, callback) {
   var message = 'Truncating file: \'' + path + '\' to length ' + length + '.';
-
   getFile(mountPoint, path, false, true, function(entry) {
     entry.createWriter(function(writer) {
       writer.onwrite = assertEqAndRunCallback.bind(null,
@@ -428,14 +436,13 @@ function collectTestsForMountPoint(mountPointName, mountPoint) {
   });
 
   testsToRun.push(function deleteDirectoryTest() {
-    // The directory exists if and only if the file system is not drive.
+    // Verify that the directory still exists after the operation.
     var callback = getDirectory.bind(null, mountPoint, 'test_dir', false,
-        !isOnDrive, chrome.test.succeed);
+        true, chrome.test.succeed);
 
     // The directory should still contain some files, so non-recursive delete
-    // should fail. The drive file system does not respect is_recursive flag, so
-    // the operation succeeds.
-    deleteDirectory(mountPoint, 'test_dir', isOnDrive, callback);
+    // should fail.
+    deleteDirectory(mountPoint, 'test_dir', false, callback);
   });
 
   // On drive, the directory was deleted in the previous test.
@@ -463,7 +470,7 @@ function collectTestsForMountPoint(mountPointName, mountPoint) {
  *     to run will be null.
  */
 function initTests(callback) {
-  chrome.fileBrowserPrivate.requestLocalFileSystem(function(fileSystem) {
+  chrome.fileBrowserPrivate.requestFileSystem(function(fileSystem) {
     if(!fileSystem) {
       callback(null, 'Failed to get file system.');
       return;

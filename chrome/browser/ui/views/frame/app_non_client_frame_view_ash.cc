@@ -4,9 +4,11 @@
 
 #include "chrome/browser/ui/views/frame/app_non_client_frame_view_ash.h"
 
+#include "ash/shell_delegate.h"
 #include "ash/wm/workspace/frame_maximize_button.h"
 #include "base/debug/stack_trace.h"
 #include "base/i18n/rtl.h"
+#include "chrome/browser/ui/ash/chrome_shell_delegate.h"
 #include "chrome/browser/ui/views/frame/browser_frame.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "grit/ash_resources.h"
@@ -40,6 +42,8 @@ const int kShadowHeightStretch = -1;
 class AppNonClientFrameViewAsh::ControlView
     : public views::View, public views::ButtonListener {
  public:
+  // TODO(skuhne): If we keep the "always maximized" experiment we might want to
+  // make this function be able to work with a |restore_button_| which is NULL.
   explicit ControlView(AppNonClientFrameViewAsh* owner) :
       owner_(owner),
       close_button_(new views::ImageButton(this)),
@@ -67,14 +71,25 @@ class AppNonClientFrameViewAsh::ControlView
   virtual ~ControlView() {}
 
   virtual void Layout() OVERRIDE {
+    if (ash::Shell::IsForcedMaximizeMode()) {
+      // TODO(skuhne): If this experiment would get persued, it would be better
+      // to check here the |restore_button_|'s visibility. Furthermore we
+      // should change |shadow_| to a new bitmap which can host only a single
+      // button.
+      gfx::Size size = restore_button_->bounds().size();
+      if (size.width()) {
+        size.set_width(0);
+        restore_button_->SetSize(size);
+      }
+    }
     restore_button_->SetPosition(gfx::Point(kShadowStart, 0));
     close_button_->SetPosition(gfx::Point(kShadowStart +
         restore_button_->width() - kButtonOverlap, 0));
   }
 
-  virtual void ViewHierarchyChanged(bool is_add, View* parent,
-                                    View* child) OVERRIDE {
-    if (is_add && child == this) {
+  virtual void ViewHierarchyChanged(
+      const ViewHierarchyChangedDetails& details) OVERRIDE {
+    if (details.is_add && details.child == this) {
       SetButtonImages(restore_button_,
                       IDR_AURA_WINDOW_FULLSCREEN_RESTORE,
                       IDR_AURA_WINDOW_FULLSCREEN_RESTORE_H,
@@ -90,7 +105,10 @@ class AppNonClientFrameViewAsh::ControlView
   }
 
   virtual gfx::Size GetPreferredSize() OVERRIDE {
-    return gfx::Size(shadow_->width(),
+    int maximize_button_deduction = ash::Shell::IsForcedMaximizeMode() ?
+        restore_button_->GetPreferredSize().width() : 0;
+
+    return gfx::Size(shadow_->width() - maximize_button_deduction,
                      shadow_->height() + kShadowHeightStretch);
   }
 
@@ -108,12 +126,17 @@ class AppNonClientFrameViewAsh::ControlView
 
   virtual void ButtonPressed(views::Button* sender,
                              const ui::Event& event) OVERRIDE {
+    ash::UserMetricsAction action = ash::UMA_WINDOW_APP_CLOSE_BUTTON_CLICK;
     if (sender == close_button_) {
       owner_->frame()->Close();
     } else if (sender == restore_button_) {
+      action = ash::UMA_WINDOW_MAXIMIZE_BUTTON_CLICK_RESTORE;
       restore_button_->SetState(views::CustomButton::STATE_NORMAL);
       owner_->frame()->Restore();
+    } else {
+      return;
     }
+    ChromeShellDelegate::instance()->RecordUserMetricsAction(action);
   }
 
   // Returns the insets of the control which are only covered by the shadow.
@@ -191,13 +214,14 @@ AppNonClientFrameViewAsh::AppNonClientFrameViewAsh(
   control_widget_ = new views::Widget;
   views::Widget::InitParams params(views::Widget::InitParams::TYPE_CONTROL);
   params.parent = browser_view->GetNativeWindow();
-  params.transparent = true;
+  params.opacity = views::Widget::InitParams::TRANSLUCENT_WINDOW;
   control_widget_->Init(params);
   control_widget_->SetContentsView(control_view_);
   aura::Window* window = control_widget_->GetNativeView();
   window->SetName(kControlWindowName);
   // Need to exclude the shadow from the active control area.
-  window->SetHitTestBoundsOverrideOuter(control_view_->GetShadowInsets(), 1);
+  window->SetHitTestBoundsOverrideOuter(control_view_->GetShadowInsets(),
+                                        control_view_->GetShadowInsets());
   gfx::Rect control_bounds = GetControlBounds();
   window->SetBounds(control_bounds);
   control_widget_->Show();
@@ -254,7 +278,7 @@ int AppNonClientFrameViewAsh::GetThemeBackgroundXInset() const {
 void AppNonClientFrameViewAsh::UpdateThrobber(bool running) {
 }
 
-std::string AppNonClientFrameViewAsh::GetClassName() const {
+const char* AppNonClientFrameViewAsh::GetClassName() const {
   return kViewClassName;
 }
 

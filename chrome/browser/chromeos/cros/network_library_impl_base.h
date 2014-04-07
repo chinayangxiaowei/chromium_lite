@@ -13,8 +13,6 @@
 
 namespace chromeos {
 
-class NetworkLoginObserver;
-
 class NetworkLibraryImplBase : public NetworkLibrary {
  public:
   NetworkLibraryImplBase();
@@ -86,18 +84,10 @@ class NetworkLibraryImplBase : public NetworkLibrary {
       const std::string& device_path,
       NetworkDeviceObserver* observer) OVERRIDE;
 
-  virtual void Lock() OVERRIDE;
-  virtual void Unlock() OVERRIDE;
-  virtual bool IsLocked() OVERRIDE;
-
   virtual void AddPinOperationObserver(
       PinOperationObserver* observer) OVERRIDE;
   virtual void RemovePinOperationObserver(
       PinOperationObserver* observer) OVERRIDE;
-  virtual void AddUserActionObserver(
-      UserActionObserver* observer) OVERRIDE;
-  virtual void RemoveUserActionObserver(
-      UserActionObserver* observer) OVERRIDE;
 
   virtual const EthernetNetwork* ethernet_network() const OVERRIDE;
   virtual bool ethernet_connecting() const OVERRIDE;
@@ -111,9 +101,6 @@ class NetworkLibraryImplBase : public NetworkLibrary {
   virtual const WimaxNetwork* wimax_network() const OVERRIDE;
   virtual bool wimax_connecting() const OVERRIDE;
   virtual bool wimax_connected() const OVERRIDE;
-  virtual const Network* mobile_network() const OVERRIDE;
-  virtual bool mobile_connecting() const OVERRIDE;
-  virtual bool mobile_connected() const OVERRIDE;
   virtual const VirtualNetwork* virtual_network() const OVERRIDE;
   virtual bool virtual_network_connecting() const OVERRIDE;
   virtual bool virtual_network_connected() const OVERRIDE;
@@ -134,33 +121,18 @@ class NetworkLibraryImplBase : public NetworkLibrary {
   virtual bool wifi_available() const OVERRIDE;
   virtual bool wimax_available() const OVERRIDE;
   virtual bool cellular_available() const OVERRIDE;
-  virtual bool mobile_available() const OVERRIDE;
   virtual bool ethernet_enabled() const OVERRIDE;
   virtual bool wifi_enabled() const OVERRIDE;
   virtual bool wimax_enabled() const OVERRIDE;
   virtual bool cellular_enabled() const OVERRIDE;
-  virtual bool mobile_enabled() const OVERRIDE;
-  virtual bool ethernet_busy() const OVERRIDE;
-  virtual bool wifi_busy() const OVERRIDE;
-  virtual bool wimax_busy() const OVERRIDE;
-  virtual bool cellular_busy() const OVERRIDE;
-  virtual bool mobile_busy() const OVERRIDE;
   virtual bool wifi_scanning() const OVERRIDE;
   virtual bool cellular_initializing() const OVERRIDE;
-  virtual bool offline_mode() const OVERRIDE;
-  virtual std::string GetCheckPortalList() const OVERRIDE;
-  // virtual SetCheckPortalList implemented in derived classes.
-  // virtual SetDefaultCheckPortalList implemented in derived classes.
-  virtual const std::string& IPAddress() const OVERRIDE;
 
   virtual const NetworkDevice* FindNetworkDeviceByPath(
       const std::string& path) const OVERRIDE;
   NetworkDevice* FindNetworkDeviceByPath(const std::string& path);
   virtual const NetworkDevice* FindMobileDevice() const OVERRIDE;
-  virtual const NetworkDevice* FindWimaxDevice() const OVERRIDE;
   virtual const NetworkDevice* FindCellularDevice() const OVERRIDE;
-  virtual const NetworkDevice* FindEthernetDevice() const OVERRIDE;
-  virtual const NetworkDevice* FindWifiDevice() const OVERRIDE;
   virtual Network* FindNetworkByPath(const std::string& path) const OVERRIDE;
   virtual Network* FindNetworkByUniqueId(
       const std::string& unique_id) const OVERRIDE;
@@ -183,6 +155,7 @@ class NetworkLibraryImplBase : public NetworkLibrary {
   virtual void SignalCellularPlanPayment() OVERRIDE;
   virtual bool HasRecentCellularPlanPayment() OVERRIDE;
   virtual const std::string& GetCellularHomeCarrierId() const OVERRIDE;
+  virtual bool CellularDeviceUsesDirectActivation() const OVERRIDE;
 
   // virtual ChangePin implemented in derived classes.
   // virtual ChangeRequiredPin implemented in derived classes.
@@ -193,11 +166,9 @@ class NetworkLibraryImplBase : public NetworkLibrary {
   // virtual RequestCellularRegister implemented in derived classes.
   // virtual SetCellularDataRoamingAllowed implemented in derived classes.
   // virtual SetCarrier implemented in derived classes.
-  // virtual ResetModem implemented in derived classes.
   // virtual IsCellularAlwaysInRoaming implemented in derived classes.
   // virtual RequestNetworkScan implemented in derived classes.
 
-  virtual bool HasProfileType(NetworkProfileType type) const OVERRIDE;
   virtual bool CanConnectToNetwork(const Network* network) const OVERRIDE;
 
   // Connect to an existing network.
@@ -227,17 +198,12 @@ class NetworkLibraryImplBase : public NetworkLibrary {
   virtual void ForgetNetwork(const std::string& service_path) OVERRIDE;
   virtual void EnableEthernetNetworkDevice(bool enable) OVERRIDE;
   virtual void EnableWifiNetworkDevice(bool enable) OVERRIDE;
-  virtual void EnableMobileNetworkDevice(bool enable) OVERRIDE;
   virtual void EnableWimaxNetworkDevice(bool enable) OVERRIDE;
   virtual void EnableCellularNetworkDevice(bool enable) OVERRIDE;
-  // virtual EnableOfflineMode implemented in derived classes.
   // virtual GetIPConfigs implemented in derived classes.
   // virtual SetIPConfig implemented in derived classes.
-  virtual void SwitchToPreferredNetwork() OVERRIDE;
-  virtual bool LoadOncNetworks(const std::string& onc_blob,
-                               const std::string& passphrase,
-                               onc::ONCSource source,
-                               bool allow_web_trust_from_policy) OVERRIDE;
+  virtual void LoadOncNetworks(const base::ListValue& network_configs,
+                               onc::ONCSource source) OVERRIDE;
   virtual bool SetActiveNetwork(ConnectionType type,
                                 const std::string& service_path) OVERRIDE;
 
@@ -276,7 +242,7 @@ class NetworkLibraryImplBase : public NetworkLibrary {
     std::string otp;
     std::string group_name;
     std::string server_hostname;
-    std::string server_ca_cert_nss_nickname;
+    std::string server_ca_cert_pem;
     std::string client_cert_pkcs11_id;
     EAPMethod eap_method;
     EAPPhase2Auth eap_auth;
@@ -293,6 +259,14 @@ class NetworkLibraryImplBase : public NetworkLibrary {
     CONNECT_BAD_PASSPHRASE,
     CONNECT_FAILED
   };
+
+  // Return true if a profile matching |type| is loaded.
+  bool HasProfileType(NetworkProfileType type) const;
+
+  // This will connect to a preferred network if the currently connected
+  // network is not preferred. This should be called when the active profile
+  // changes.
+  void SwitchToPreferredNetwork();
 
   // Finds device by connection type.
   const NetworkDevice* FindDeviceByType(ConnectionType type) const;
@@ -354,7 +328,6 @@ class NetworkLibraryImplBase : public NetworkLibrary {
   void NotifyNetworkChanged(const Network* network);
   void NotifyNetworkDeviceChanged(NetworkDevice* device, PropertyIndex index);
   void NotifyPinOperationCompleted(PinOperationError error);
-  void NotifyUserConnectionInitiated(const Network* network);
 
   // TPM related functions.
   void GetTpmInfo();
@@ -370,17 +343,11 @@ class NetworkLibraryImplBase : public NetworkLibrary {
   // PIN operation observer list.
   ObserverList<PinOperationObserver> pin_operation_observers_;
 
-  // User action observer list.
-  ObserverList<UserActionObserver> user_action_observers_;
-
   // Network observer map.
   NetworkObserverMap network_observers_;
 
   // Network device observer map.
   NetworkDeviceObserverMap network_device_observers_;
-
-  // Network login observer.
-  scoped_ptr<NetworkLoginObserver> network_login_observer_;
 
   // List of profiles.
   NetworkProfileList profile_list_;
@@ -451,9 +418,6 @@ class NetworkLibraryImplBase : public NetworkLibrary {
 
   // True if we are currently scanning for wifi networks.
   bool wifi_scanning_;
-
-  // Currently not implemented. TODO(stevenjb): implement or eliminate.
-  bool offline_mode_;
 
   // List of interfaces for which portal check is enabled.
   std::string check_portal_list_;

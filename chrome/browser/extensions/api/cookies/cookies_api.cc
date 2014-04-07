@@ -13,8 +13,9 @@
 #include "base/lazy_instance.h"
 #include "base/memory/linked_ptr.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "base/values.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/api/cookies/cookies_api_constants.h"
 #include "chrome/browser/extensions/api/cookies/cookies_helpers.h"
 #include "chrome/browser/extensions/event_router.h"
@@ -22,13 +23,14 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_iterator.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/extensions/api/cookies.h"
 #include "chrome/common/extensions/extension.h"
+#include "chrome/common/extensions/permissions/permissions_data.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_service.h"
 #include "extensions/common/error_utils.h"
 #include "net/cookies/canonical_cookie.h"
+#include "net/cookies/cookie_constants.h"
 #include "net/cookies/cookie_monster.h"
 #include "net/url_request/url_request_context.h"
 #include "net/url_request/url_request_context_getter.h"
@@ -80,8 +82,8 @@ void CookiesEventRouter::Observe(
 void CookiesEventRouter::CookieChanged(
     Profile* profile,
     ChromeCookieDetails* details) {
-  scoped_ptr<ListValue> args(new ListValue());
-  DictionaryValue* dict = new DictionaryValue();
+  scoped_ptr<base::ListValue> args(new base::ListValue());
+  base::DictionaryValue* dict = new base::DictionaryValue();
   dict->SetBoolean(keys::kRemovedKey, details->removed);
 
   scoped_ptr<Cookie> cookie(
@@ -127,7 +129,7 @@ void CookiesEventRouter::CookieChanged(
 void CookiesEventRouter::DispatchEvent(
     Profile* profile,
     const std::string& event_name,
-    scoped_ptr<ListValue> event_args,
+    scoped_ptr<base::ListValue> event_args,
     GURL& cookie_domain) {
   EventRouter* router = profile ?
       extensions::ExtensionSystem::Get(profile)->event_router() : NULL;
@@ -148,7 +150,8 @@ bool CookiesFunction::ParseUrl(const std::string& url_string, GURL* url,
     return false;
   }
   // Check against host permissions if needed.
-  if (check_host_permissions && !GetExtension()->HasHostPermission(*url)) {
+  if (check_host_permissions &&
+      !PermissionsData::HasHostPermission(GetExtension(), *url)) {
     error_ = ErrorUtils::FormatErrorMessage(
         keys::kNoHostPermissionsError, url->spec());
     return false;
@@ -203,8 +206,9 @@ bool CookiesGetFunction::RunImpl() {
   if (!ParseUrl(parsed_args_->details.url, &url_, true))
     return false;
 
-  std::string store_id = parsed_args_->details.store_id.get() ?
-      *parsed_args_->details.store_id : "";
+  std::string store_id =
+      parsed_args_->details.store_id.get() ? *parsed_args_->details.store_id
+                                           : std::string();
   net::URLRequestContextGetter* store_context = NULL;
   if (!ParseStoreContext(&store_id, &store_context))
     return false;
@@ -276,8 +280,9 @@ bool CookiesGetAllFunction::RunImpl() {
     return false;
   }
 
-  std::string store_id = parsed_args_->details.store_id.get() ?
-      *parsed_args_->details.store_id : "";
+  std::string store_id =
+      parsed_args_->details.store_id.get() ? *parsed_args_->details.store_id
+                                           : std::string();
   net::URLRequestContextGetter* store_context = NULL;
   if (!ParseStoreContext(&store_id, &store_context))
     return false;
@@ -339,8 +344,9 @@ bool CookiesSetFunction::RunImpl() {
   if (!ParseUrl(parsed_args_->details.url, &url_, true))
       return false;
 
-  std::string store_id = parsed_args_->details.store_id.get() ?
-      *parsed_args_->details.store_id : "";
+  std::string store_id =
+      parsed_args_->details.store_id.get() ? *parsed_args_->details.store_id
+                                           : std::string();
   net::URLRequestContextGetter* store_context = NULL;
   if (!ParseStoreContext(&store_id, &store_context))
     return false;
@@ -374,17 +380,20 @@ void CookiesSetFunction::SetCookieOnIOThread() {
 
   cookie_monster->SetCookieWithDetailsAsync(
       url_,
-      parsed_args_->details.name.get() ? *parsed_args_->details.name : "",
-      parsed_args_->details.value.get() ? *parsed_args_->details.value : "",
-      parsed_args_->details.domain.get() ? *parsed_args_->details.domain : "",
-      parsed_args_->details.path.get() ? *parsed_args_->details.path : "",
+      parsed_args_->details.name.get() ? *parsed_args_->details.name
+                                       : std::string(),
+      parsed_args_->details.value.get() ? *parsed_args_->details.value
+                                        : std::string(),
+      parsed_args_->details.domain.get() ? *parsed_args_->details.domain
+                                         : std::string(),
+      parsed_args_->details.path.get() ? *parsed_args_->details.path
+                                       : std::string(),
       expiration_time,
-      parsed_args_->details.secure.get() ?
-          *parsed_args_->details.secure.get() :
-          false,
-      parsed_args_->details.http_only.get() ?
-          *parsed_args_->details.http_only :
-          false,
+      parsed_args_->details.secure.get() ? *parsed_args_->details.secure.get()
+                                         : false,
+      parsed_args_->details.http_only.get() ? *parsed_args_->details.http_only
+                                            : false,
+      net::COOKIE_PRIORITY_DEFAULT,
       base::Bind(&CookiesSetFunction::PullCookie, this));
 }
 
@@ -406,8 +415,9 @@ void CookiesSetFunction::PullCookieCallback(
     // Return the first matching cookie. Relies on the fact that the
     // CookieMonster returns them in canonical order (longest path, then
     // earliest creation time).
-    std::string name = parsed_args_->details.name.get() ?
-        *parsed_args_->details.name : "";
+    std::string name =
+        parsed_args_->details.name.get() ? *parsed_args_->details.name
+                                         : std::string();
     if (it->Name() == name) {
       scoped_ptr<Cookie> cookie(
           cookies_helpers::CreateCookie(*it, *parsed_args_->details.store_id));
@@ -425,10 +435,10 @@ void CookiesSetFunction::PullCookieCallback(
 void CookiesSetFunction::RespondOnUIThread() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   if (!success_) {
-    std::string name = parsed_args_->details.name.get() ?
-        *parsed_args_->details.name : "";
-    error_ = ErrorUtils::FormatErrorMessage(
-        keys::kCookieSetFailedError, name);
+    std::string name =
+        parsed_args_->details.name.get() ? *parsed_args_->details.name
+                                         : std::string();
+    error_ = ErrorUtils::FormatErrorMessage(keys::kCookieSetFailedError, name);
   }
   SendResponse(success_);
 }
@@ -447,8 +457,9 @@ bool CookiesRemoveFunction::RunImpl() {
   if (!ParseUrl(parsed_args_->details.url, &url_, true))
     return false;
 
-  std::string store_id = parsed_args_->details.store_id.get() ?
-      *parsed_args_->details.store_id : "";
+  std::string store_id =
+      parsed_args_->details.store_id.get() ? *parsed_args_->details.store_id
+                                           : std::string();
   net::URLRequestContextGetter* store_context = NULL;
   if (!ParseStoreContext(&store_id, &store_context))
     return false;
@@ -500,13 +511,13 @@ void CookiesRemoveFunction::RespondOnUIThread() {
 bool CookiesGetAllCookieStoresFunction::RunImpl() {
   Profile* original_profile = profile();
   DCHECK(original_profile);
-  scoped_ptr<ListValue> original_tab_ids(new ListValue());
+  scoped_ptr<base::ListValue> original_tab_ids(new base::ListValue());
   Profile* incognito_profile = NULL;
-  scoped_ptr<ListValue> incognito_tab_ids;
+  scoped_ptr<base::ListValue> incognito_tab_ids;
   if (include_incognito() && profile()->HasOffTheRecordProfile()) {
     incognito_profile = profile()->GetOffTheRecordProfile();
     if (incognito_profile)
-      incognito_tab_ids.reset(new ListValue());
+      incognito_tab_ids.reset(new base::ListValue());
   }
   DCHECK(original_profile != incognito_profile);
 

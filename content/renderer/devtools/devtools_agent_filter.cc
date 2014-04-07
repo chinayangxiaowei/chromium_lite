@@ -5,12 +5,11 @@
 #include "content/renderer/devtools/devtools_agent_filter.h"
 
 #include "base/bind.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "content/common/devtools_messages.h"
 #include "content/renderer/devtools/devtools_agent.h"
-#include "content/renderer/plugin_channel_host.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebString.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebDevToolsAgent.h"
+#include "third_party/WebKit/public/platform/WebString.h"
+#include "third_party/WebKit/public/web/WebDevToolsAgent.h"
 
 using WebKit::WebDevToolsAgent;
 using WebKit::WebString;
@@ -42,9 +41,8 @@ class MessageImpl : public WebDevToolsAgent::MessageDescriptor {
 
 DevToolsAgentFilter::DevToolsAgentFilter()
     : message_handled_(false),
-      render_thread_loop_(MessageLoop::current()),
-      current_routing_id_(0) {
-}
+      render_thread_loop_(base::MessageLoop::current()),
+      current_routing_id_(0) {}
 
 bool DevToolsAgentFilter::OnMessageReceived(const IPC::Message& message) {
   // Dispatch debugger commands directly from IO.

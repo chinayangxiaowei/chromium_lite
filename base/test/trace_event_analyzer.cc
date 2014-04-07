@@ -140,7 +140,7 @@ std::string TraceEvent::GetKnownArgAsString(const std::string& name) const {
   if (GetArgAsString(name, &arg_string))
     return arg_string;
   NOTREACHED();
-  return "";
+  return std::string();
 }
 
 double TraceEvent::GetKnownArgAsDouble(const std::string& name) const {
@@ -643,12 +643,12 @@ bool ParseEventsFromJson(const std::string& json,
   scoped_ptr<base::Value> root;
   root.reset(base::JSONReader::Read(json));
 
-  ListValue* root_list = NULL;
+  base::ListValue* root_list = NULL;
   if (!root.get() || !root->GetAsList(&root_list))
     return false;
 
   for (size_t i = 0; i < root_list->GetSize(); ++i) {
-    Value* item = NULL;
+    base::Value* item = NULL;
     if (root_list->Get(i, &item)) {
       TraceEvent event;
       if (event.SetFromJSON(item))

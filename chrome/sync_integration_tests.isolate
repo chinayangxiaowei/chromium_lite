@@ -2,21 +2,13 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 {
-  'variables': {
-    'isolate_dependency_tracked': [
-    ],
-    'isolate_dependency_untracked': [
-      '../tools/swarm_client/',
-      '<(PRODUCT_DIR)/pyproto/',
-    ],
-  },
   'conditions': [
     ['OS=="linux"', {
       'variables': {
         'command': [
           '../testing/xvfb.py',
           '<(PRODUCT_DIR)',
-          '../tools/swarm_client/run_test_cases.py',
+          '../tools/swarm_client/googletest/run_test_cases.py',
           '<(PRODUCT_DIR)/sync_integration_tests<(EXECUTABLE_SUFFIX)',
         ],
         'isolate_dependency_tracked': [
@@ -37,25 +29,7 @@
         ],
       },
     }],
-    ['OS=="mac"', {
-      'variables': {
-        'command': [
-          '../tools/swarm_client/run_test_cases.py',
-          '<(PRODUCT_DIR)/sync_integration_tests<(EXECUTABLE_SUFFIX)',
-        ],
-        'isolate_dependency_tracked': [
-          '<(PRODUCT_DIR)/ffmpegsumo.so',
-        ],
-        'isolate_dependency_untracked': [
-          '<(PRODUCT_DIR)/Chromium Framework.framework/',
-          '<(PRODUCT_DIR)/Chromium.app/',
-        ],
-      },
-    }],
-    ['OS=="win"', {
-      'variables': {
-      },
-    }, {
+    ['OS=="linux" or OS=="mac"', {
       'variables': {
         'isolate_dependency_tracked': [
           '<(PRODUCT_DIR)/resources.pak',
@@ -65,6 +39,32 @@
           '../third_party/pyftpdlib/',
           '../third_party/pywebsocket/',
           '../third_party/tlslite/',
+        ],
+      },
+    }],
+    ['OS=="linux" or OS=="mac" or OS=="win"', {
+      'variables': {
+        'isolate_dependency_tracked': [
+          '../tools/swarm_client/run_isolated.py',
+          '../tools/swarm_client/googletest/run_test_cases.py',
+        ],
+        'isolate_dependency_untracked': [
+          '<(PRODUCT_DIR)/pyproto/',
+        ],
+      },
+    }],
+    ['OS=="mac"', {
+      'variables': {
+        'command': [
+          '../tools/swarm_client/googletest/run_test_cases.py',
+          '<(PRODUCT_DIR)/sync_integration_tests<(EXECUTABLE_SUFFIX)',
+        ],
+        'isolate_dependency_tracked': [
+          '<(PRODUCT_DIR)/ffmpegsumo.so',
+        ],
+        'isolate_dependency_untracked': [
+          '<(PRODUCT_DIR)/Chromium Framework.framework/',
+          '<(PRODUCT_DIR)/Chromium.app/',
         ],
       },
     }],

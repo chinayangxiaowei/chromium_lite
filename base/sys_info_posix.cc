@@ -13,8 +13,8 @@
 #include "base/basictypes.h"
 #include "base/file_util.h"
 #include "base/logging.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread_restrictions.h"
-#include "base/utf_string_conversions.h"
 
 #if defined(OS_ANDROID)
 #include <sys/vfs.h>
@@ -55,19 +55,19 @@ std::string SysInfo::OperatingSystemName() {
   struct utsname info;
   if (uname(&info) < 0) {
     NOTREACHED();
-    return "";
+    return std::string();
   }
   return std::string(info.sysname);
 }
 #endif
 
-#if !defined(OS_MACOSX)
+#if !defined(OS_MACOSX) && !defined(OS_ANDROID)
 // static
 std::string SysInfo::OperatingSystemVersion() {
   struct utsname info;
   if (uname(&info) < 0) {
     NOTREACHED();
-    return "";
+    return std::string();
   }
   return std::string(info.release);
 }
@@ -78,7 +78,7 @@ std::string SysInfo::OperatingSystemArchitecture() {
   struct utsname info;
   if (uname(&info) < 0) {
     NOTREACHED();
-    return "";
+    return std::string();
   }
   std::string arch(info.machine);
   if (arch == "i386" || arch == "i486" || arch == "i586" || arch == "i686") {

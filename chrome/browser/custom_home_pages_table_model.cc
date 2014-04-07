@@ -8,7 +8,7 @@
 #include "base/bind_helpers.h"
 #include "base/i18n/rtl.h"
 #include "base/prefs/pref_service.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
@@ -18,13 +18,13 @@
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/browser/web_contents.h"
-#include "googleurl/src/gurl.h"
 #include "grit/generated_resources.h"
 #include "grit/ui_resources.h"
 #include "net/base/net_util.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/table_model_observer.h"
 #include "ui/gfx/codec/png_codec.h"
+#include "url/gurl.h"
 
 namespace {
 

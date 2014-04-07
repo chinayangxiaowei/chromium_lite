@@ -31,7 +31,6 @@ FixRateSender::~FixRateSender() {
 void FixRateSender::OnIncomingQuicCongestionFeedbackFrame(
     const QuicCongestionFeedbackFrame& feedback,
     QuicTime feedback_receive_time,
-    QuicBandwidth /*sent_bandwidth*/,
     const SentPacketsMap& /*sent_packets*/) {
   DCHECK(feedback.type == kFixRate) <<
       "Invalid incoming CongestionFeedbackType:" << feedback.type;
@@ -47,8 +46,14 @@ void FixRateSender::OnIncomingAck(
     QuicPacketSequenceNumber /*acked_sequence_number*/,
     QuicByteCount bytes_acked,
     QuicTime::Delta rtt) {
-  latest_rtt_ = rtt;
+  // RTT can't be negative.
+  DCHECK_LE(0, rtt.ToMicroseconds());
+
   data_in_flight_ -= bytes_acked;
+  if (rtt.IsInfinite()) {
+    return;
+  }
+  latest_rtt_ = rtt;
 }
 
 void FixRateSender::OnIncomingLoss(QuicTime /*ack_receive_time*/) {
@@ -58,10 +63,10 @@ void FixRateSender::OnIncomingLoss(QuicTime /*ack_receive_time*/) {
 void FixRateSender::SentPacket(QuicTime sent_time,
                                QuicPacketSequenceNumber /*sequence_number*/,
                                QuicByteCount bytes,
-                               bool is_retransmission) {
+                               Retransmission is_retransmission) {
   fix_rate_leaky_bucket_.Add(sent_time, bytes);
   paced_sender_.SentPacket(sent_time, bytes);
-  if (!is_retransmission) {
+  if (is_retransmission == NOT_RETRANSMISSION) {
     data_in_flight_ += bytes;
   }
 }
@@ -73,8 +78,9 @@ void FixRateSender::AbandoningPacket(
 
 QuicTime::Delta FixRateSender::TimeUntilSend(
     QuicTime now,
-    bool /*is_retransmission*/,
-    bool /*has_retransmittable_data*/) {
+    Retransmission /*is_retransmission*/,
+    HasRetransmittableData /*has_retransmittable_data*/,
+    IsHandshake /* handshake */) {
   if (CongestionWindow() > fix_rate_leaky_bucket_.BytesPending(now)) {
     if (CongestionWindow() <= data_in_flight_) {
       // We need an ack before we send more.
@@ -104,6 +110,12 @@ QuicBandwidth FixRateSender::BandwidthEstimate() {
 QuicTime::Delta FixRateSender::SmoothedRtt() {
   // TODO(satyamshekhar): Calculate and return smoothed rtt.
   return latest_rtt_;
+}
+
+QuicTime::Delta FixRateSender::RetransmissionDelay() {
+  // TODO(pwestin): Calculate and return retransmission delay.
+  // Use 2 * the latest RTT for now.
+  return latest_rtt_.Add(latest_rtt_);
 }
 
 }  // namespace net

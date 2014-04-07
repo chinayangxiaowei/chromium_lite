@@ -47,18 +47,16 @@ class ASH_EXPORT WorkspaceWindowResizer : public WindowResizer {
       aura::Window* window,
       const gfx::Point& location_in_parent,
       int window_component,
+      aura::client::WindowMoveSource source,
       const std::vector<aura::Window*>& attached_windows);
 
-  // Overridden from WindowResizer:
+  // WindowResizer:
   virtual void Drag(const gfx::Point& location_in_parent,
                     int event_flags) OVERRIDE;
   virtual void CompleteDrag(int event_flags) OVERRIDE;
   virtual void RevertDrag() OVERRIDE;
   virtual aura::Window* GetTarget() OVERRIDE;
-
-  const gfx::Point& GetInitialLocationInParentForTest() const {
-    return details_.initial_location_in_parent;
-  }
+  virtual const gfx::Point& GetInitialLocation() const OVERRIDE;
 
  private:
   WorkspaceWindowResizer(const Details& details,
@@ -134,16 +132,15 @@ class ASH_EXPORT WorkspaceWindowResizer : public WindowResizer {
   // snapping.
   void AdjustBoundsForMainWindow(int snap_size, gfx::Rect* bounds);
 
-  // Snaps the window bounds to the work area edges if necessary.
-  void SnapToWorkAreaEdges(
-      const gfx::Rect& work_area,
-      int snap_size,
-      gfx::Rect* bounds) const;
+  // Stick the window bounds to the work area during a move.
+  bool StickToWorkAreaOnMove(const gfx::Rect& work_area,
+                             int sticky_size,
+                             gfx::Rect* bounds) const;
 
-  // Snaps the window bounds to the work area during a resize.
-  void SnapResizeToWorkAreaBounds(const gfx::Rect& work_area,
-                                  int snap_size,
-                                  gfx::Rect* bounds) const;
+  // Stick the window bounds to the work area during a resize.
+  void StickToWorkAreaOnResize(const gfx::Rect& work_area,
+                               int sticky_size,
+                               gfx::Rect* bounds) const;
 
   // Returns a coordinate along the primary axis. Used to share code for
   // left/right multi window resize and top/bottom resize.

@@ -5,7 +5,7 @@
 #include "chrome/browser/renderer_host/pepper/pepper_flash_clipboard_message_filter.h"
 
 #include "base/pickle.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "content/public/browser/browser_thread.h"
 #include "ipc/ipc_message.h"
 #include "ipc/ipc_message_macros.h"
@@ -316,7 +316,7 @@ int32_t PepperFlashClipboardMessageFilter::OnMsgWriteData(
         scw.WriteText(UTF8ToUTF16(data[i]));
         break;
       case PP_FLASH_CLIPBOARD_FORMAT_HTML:
-        scw.WriteHTML(UTF8ToUTF16(data[i]), "");
+        scw.WriteHTML(UTF8ToUTF16(data[i]), std::string());
         break;
       case PP_FLASH_CLIPBOARD_FORMAT_RTF:
         scw.WriteRTF(data[i]);

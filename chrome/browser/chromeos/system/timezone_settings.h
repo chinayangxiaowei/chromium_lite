@@ -7,8 +7,8 @@
 
 #include <vector>
 
-#include "base/string16.h"
-#include "third_party/icu/public/i18n/unicode/timezone.h"
+#include "base/strings/string16.h"
+#include "third_party/icu/source/i18n/unicode/timezone.h"
 
 namespace chromeos {
 namespace system {

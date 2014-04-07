@@ -4,10 +4,13 @@
 
 #include "chrome/browser/ui/gtk/gtk_util.h"
 #include "chrome/browser/ui/gtk/tab_contents/chrome_web_contents_view_delegate_gtk.h"
-#include "chrome/browser/ui/native_web_contents_modal_dialog_manager.h"
-#include "chrome/browser/ui/web_contents_modal_dialog_manager.h"
+#include "components/web_modal/native_web_contents_modal_dialog_manager.h"
+#include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/browser/browser_thread.h"
 #include "ui/base/gtk/focus_store_gtk.h"
+
+using web_modal::NativeWebContentsModalDialog;
+using web_modal::NativeWebContentsModalDialogManagerDelegate;
 
 namespace {
 
@@ -15,7 +18,7 @@ namespace {
 // Win32 system, ConstrainedWindowGtk doesn't draw draggable fake windows and
 // instead just centers the dialog. It is thus an order of magnitude simpler.
 class NativeWebContentsModalDialogManagerGtk
-    : public NativeWebContentsModalDialogManager {
+    : public web_modal::NativeWebContentsModalDialogManager {
  public:
   NativeWebContentsModalDialogManagerGtk(
       NativeWebContentsModalDialogManagerDelegate* native_delegate)
@@ -40,17 +43,24 @@ class NativeWebContentsModalDialogManagerGtk
   }
 
   virtual void ShowDialog(NativeWebContentsModalDialog dialog) OVERRIDE {
+    GtkWidget* widget = GetGtkWidget(dialog);
+
     // Any previously-shown widget should be destroyed before showing a new
     // widget.
-    DCHECK(shown_widget_ == NULL);
-
-    GtkWidget* widget = GetGtkWidget(dialog);
+    DCHECK(shown_widget_ == widget || shown_widget_ == NULL);
     gtk_widget_show_all(widget);
-    shown_widget_ = widget;
 
-    // We collaborate with WebContentsView and stick ourselves in the
-    // WebContentsView's floating container.
-    ContainingView()->AttachWebContentsModalDialog(widget);
+    if (!shown_widget_) {
+      // We collaborate with WebContentsView and stick ourselves in the
+      // WebContentsView's floating container.
+      ContainingView()->AttachWebContentsModalDialog(widget);
+    }
+
+    shown_widget_ = widget;
+  }
+
+  virtual void HideDialog(NativeWebContentsModalDialog dialog) OVERRIDE {
+    gtk_widget_hide(GetGtkWidget(dialog));
   }
 
   virtual void CloseDialog(NativeWebContentsModalDialog dialog) OVERRIDE {
@@ -135,8 +145,12 @@ void NativeWebContentsModalDialogManagerGtk::OnDestroy(
 
 }  // namespace
 
+namespace web_modal {
+
 NativeWebContentsModalDialogManager*
     WebContentsModalDialogManager::CreateNativeManager(
         NativeWebContentsModalDialogManagerDelegate* native_delegate) {
   return new NativeWebContentsModalDialogManagerGtk(native_delegate);
 }
+
+}  // namespace web_modal

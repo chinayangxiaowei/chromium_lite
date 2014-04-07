@@ -8,12 +8,11 @@
 
 #include "base/basictypes.h"
 #include "base/bind.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
 #include "base/files/file_path_watcher.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/metrics/histogram.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "net/base/ip_endpoint.h"
 #include "net/base/net_util.h"
 #include "net/dns/dns_hosts.h"
@@ -141,7 +140,7 @@ class DnsConfigServicePosix::Watcher {
   void OnConfigChanged(bool succeeded) {
     // Ignore transient flutter of resolv.conf by delaying the signal a bit.
     const base::TimeDelta kDelay = base::TimeDelta::FromMilliseconds(50);
-    MessageLoop::current()->PostDelayedTask(
+    base::MessageLoop::current()->PostDelayedTask(
         FROM_HERE,
         base::Bind(&Watcher::OnConfigChangedDelayed,
                    weak_factory_.GetWeakPtr(),

@@ -11,14 +11,14 @@ include_rules = [
   "+cc",
   "+grit",  # For generated headers
   "+skia",
-  "+third_party/angle",
+  "+third_party/angle_dx11",
   "+third_party/hyphen",
   "+third_party/leveldatabase",
   "+third_party/skia",
   "+third_party/sqlite",
   "+third_party/tcmalloc",
-  "+third_party/WebKit/Source/Platform/chromium",
-  "+third_party/WebKit/Source/WebKit/chromium",
+  "+third_party/WebKit/public/platform",
+  "+third_party/WebKit/public/web",
   "+v8",
 
   # For databases/
@@ -37,18 +37,10 @@ include_rules = [
   "+ui/base/keycodes",
 
   # TODO(brettw) - review these; move up if it's ok, or remove the dependency
-  "+crypto",
-  "+net/base",
-  "+net/cookies",
-  "+net/dns",
-  "+net/ftp",
-  "+net/http",
-  "+net/proxy",
-  "+net/ssl",
-  "+net/socket",
-  "+net/socket_stream",
-  "+net/test",
-  "+net/url_request",
-  "+net/websockets",
+  "+net",
   "+third_party/npapi/bindings",
+
+  # webkit/support is only test support code, nothing outside of webkit/support
+  # should pull it in.
+  "-webkit/support",
 ]

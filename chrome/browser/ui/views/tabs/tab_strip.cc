@@ -16,7 +16,7 @@
 #include "base/compiler_specific.h"
 #include "base/metrics/histogram.h"
 #include "base/stl_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/defaults.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/view_ids.h"
@@ -25,12 +25,14 @@
 #include "chrome/browser/ui/views/tabs/tab_drag_controller.h"
 #include "chrome/browser/ui/views/tabs/tab_strip_controller.h"
 #include "chrome/browser/ui/views/tabs/tab_strip_observer.h"
+#include "chrome/browser/ui/views/touch_uma/touch_uma.h"
 #include "content/public/browser/user_metrics.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/accessibility/accessible_view_state.h"
 #include "ui/base/animation/animation_container.h"
 #include "ui/base/animation/throb_animation.h"
+#include "ui/base/default_theme_provider.h"
 #include "ui/base/dragdrop/drag_drop_types.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/layout.h"
@@ -45,7 +47,6 @@
 #include "ui/views/controls/image_view.h"
 #include "ui/views/mouse_watcher_view_host.h"
 #include "ui/views/view_model_utils.h"
-#include "ui/views/widget/default_theme_provider.h"
 #include "ui/views/widget/root_view.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/non_client_view.h"
@@ -148,7 +149,7 @@ int tab_h_offset() {
         value = -26;
         break;
       case ui::LAYOUT_TOUCH:
-        value = -39;
+        value = -34;
         break;
       default:
         NOTREACHED();
@@ -265,6 +266,17 @@ views::View* ConvertPointToViewAndGetEventHandler(
       dest->GetEventHandlerForPoint(dest_point) : NULL;
 }
 
+// Gets a tooltip handler for |point_in_source| from |dest|. Note that |dest|
+// should return NULL if it does not contain the point.
+views::View* ConvertPointToViewAndGetTooltipHandler(
+    views::View* source,
+    views::View* dest,
+    const gfx::Point& point_in_source) {
+  gfx::Point dest_point(point_in_source);
+  views::View::ConvertPointToTarget(source, dest, &dest_point);
+  return dest->GetTooltipHandlerForPoint(dest_point);
+}
+
 TabDragController::EventSource EventSourceFromEvent(
     const ui::LocatedEvent& event) {
   return event.IsGestureEvent() ? TabDragController::EVENT_SOURCE_TOUCH :
@@ -316,15 +328,21 @@ class NewTabButton : public views::ImageButton {
   // The offset used to paint the background image.
   gfx::Point background_offset_;
 
+  // were we destroyed?
+  bool* destroyed_;
+
   DISALLOW_COPY_AND_ASSIGN(NewTabButton);
 };
 
 NewTabButton::NewTabButton(TabStrip* tab_strip, views::ButtonListener* listener)
     : views::ImageButton(listener),
-      tab_strip_(tab_strip) {
+      tab_strip_(tab_strip),
+      destroyed_(NULL) {
 }
 
 NewTabButton::~NewTabButton() {
+  if (destroyed_)
+    *destroyed_ = true;
 }
 
 bool NewTabButton::HasHitTestMask() const {
@@ -358,9 +376,15 @@ void NewTabButton::GetHitTestMask(gfx::Path* path) const {
 #if defined(OS_WIN) && !defined(USE_AURA)
 void NewTabButton::OnMouseReleased(const ui::MouseEvent& event) {
   if (event.IsOnlyRightMouseButton()) {
-    gfx::Point point(event.x(), event.y());
+    gfx::Point point = event.location();
     views::View::ConvertPointToScreen(this, &point);
-    ui::ShowSystemMenu(GetWidget()->GetNativeView(), point.x(), point.y());
+    bool destroyed = false;
+    destroyed_ = &destroyed;
+    ui::ShowSystemMenuAtPoint(GetWidget()->GetNativeView(), point);
+    if (destroyed)
+      return;
+
+    destroyed_ = NULL;
     SetState(views::CustomButton::STATE_NORMAL);
     return;
   }
@@ -555,15 +579,7 @@ void TabStrip::RemoveTabDelegate::HighlightCloseButton() {
   if (!widget)
     return;
 
-  widget->ResetLastMouseMoveFlag();
-  gfx::Point position = gfx::Screen::GetScreenFor(
-      widget->GetNativeView())->GetCursorScreenPoint();
-  views::View* root_view = widget->GetRootView();
-  views::View::ConvertPointFromScreen(root_view, &position);
-  ui::MouseEvent mouse_event(ui::ET_MOUSE_MOVED,
-                             position, position,
-                             ui::EF_IS_SYNTHESIZED);
-  root_view->OnMouseMoved(mouse_event);
+  widget->SynthesizeMouseMoveEvent();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -583,7 +599,7 @@ TabStrip::TabStrip(TabStripController* controller)
       available_width_for_tabs_(-1),
       in_tab_close_(false),
       animation_container_(new ui::AnimationContainer()),
-      ALLOW_THIS_IN_INITIALIZER_LIST(bounds_animator_(this)),
+      bounds_animator_(this),
       layout_type_(TAB_STRIP_LAYOUT_SHRINK),
       adjust_layout_(false),
       reset_to_shrink_on_exit_(false),
@@ -1006,8 +1022,10 @@ void TabStrip::CloseTab(Tab* tab, CloseTabSource source) {
     controller_->CloseTab(model_index, source);
 }
 
-void TabStrip::ShowContextMenuForTab(Tab* tab, const gfx::Point& p) {
-  controller_->ShowContextMenuForTab(tab, p);
+void TabStrip::ShowContextMenuForTab(Tab* tab,
+                                     const gfx::Point& p,
+                                     ui::MenuSourceType source_type) {
+  controller_->ShowContextMenuForTab(tab, p, source_type);
 }
 
 bool TabStrip::IsActiveTab(const Tab* tab) const {
@@ -1043,6 +1061,11 @@ void TabStrip::MaybeStartDrag(
       controller_->HasAvailableDragActions() == 0) {
     return;
   }
+
+  // Do not do any dragging of tabs when using the super short immersive style.
+  if (IsImmersiveStyle())
+    return;
+
   int model_index = GetModelIndexOfTab(tab);
   if (!IsValidModelIndex(model_index)) {
     CHECK(false);
@@ -1096,13 +1119,14 @@ void TabStrip::MaybeStartDrag(
 
   views::Widget* widget = GetWidget();
 
-  // Don't allow detaching from maximized windows (in ash) when all the tabs are
-  // selected and only one display. Since the window is maximized we know there
-  // are no other tabbed browsers the user can drag to.
+  // Don't allow detaching from maximized or fullscreen windows (in ash) when
+  // all the tabs are selected and there is only one display. Since the window
+  // is maximized or fullscreen, we know there are no other tabbed browsers the
+  // user can drag to.
   const chrome::HostDesktopType host_desktop_type =
       chrome::GetHostDesktopTypeForNativeView(widget->GetNativeView());
   if (host_desktop_type == chrome::HOST_DESKTOP_TYPE_ASH &&
-      widget->IsMaximized() &&
+      (widget->IsMaximized() || widget->IsFullscreen()) &&
       static_cast<int>(tabs.size()) == tab_count() &&
       gfx::Screen::GetScreenFor(widget->GetNativeView())->GetNumDisplays() == 1)
     detach_behavior = TabDragController::NOT_DETACHABLE;
@@ -1335,7 +1359,7 @@ void TabStrip::PaintChildren(gfx::Canvas* canvas) {
     active_tab->Paint(canvas);
 }
 
-std::string TabStrip::GetClassName() const {
+const char* TabStrip::GetClassName() const {
   return kViewClassName;
 }
 
@@ -1403,20 +1427,12 @@ views::View* TabStrip::GetEventHandlerForPoint(const gfx::Point& point) {
     // Return any view that isn't a Tab or this TabStrip immediately. We don't
     // want to interfere.
     views::View* v = View::GetEventHandlerForPoint(point);
-    if (v && v != this && v->GetClassName() != Tab::kViewClassName)
+    if (v && v != this && strcmp(v->GetClassName(), Tab::kViewClassName))
       return v;
 
-    // The display order doesn't necessarily match the child list order, so we
-    // walk the display list hit-testing Tabs. Since the active tab always
-    // renders on top of adjacent tabs, it needs to be hit-tested before any
-    // left-adjacent Tab, so we look ahead for it as we walk.
-    for (int i = 0; i < tab_count(); ++i) {
-      Tab* next_tab = i < (tab_count() - 1) ? tab_at(i + 1) : NULL;
-      if (next_tab && next_tab->IsActive() && IsPointInTab(next_tab, point))
-        return next_tab;
-      if (IsPointInTab(tab_at(i), point))
-        return tab_at(i);
-    }
+    views::View* tab = FindTabHitByPoint(point);
+    if (tab)
+      return tab;
   } else {
     if (newtab_button_->visible()) {
       views::View* view =
@@ -1427,6 +1443,34 @@ views::View* TabStrip::GetEventHandlerForPoint(const gfx::Point& point) {
     Tab* tab = FindTabForEvent(point);
     if (tab)
       return ConvertPointToViewAndGetEventHandler(this, tab, point);
+  }
+  return this;
+}
+
+views::View* TabStrip::GetTooltipHandlerForPoint(const gfx::Point& point) {
+  if (!HitTestPoint(point))
+    return NULL;
+
+  if (!touch_layout_.get()) {
+    // Return any view that isn't a Tab or this TabStrip immediately. We don't
+    // want to interfere.
+    views::View* v = View::GetTooltipHandlerForPoint(point);
+    if (v && v != this && strcmp(v->GetClassName(), Tab::kViewClassName))
+      return v;
+
+    views::View* tab = FindTabHitByPoint(point);
+    if (tab)
+      return tab;
+  } else {
+    if (newtab_button_->visible()) {
+      views::View* view =
+          ConvertPointToViewAndGetTooltipHandler(this, newtab_button_, point);
+      if (view)
+        return view;
+    }
+    Tab* tab = FindTabForEvent(point);
+    if (tab)
+      return ConvertPointToViewAndGetTooltipHandler(this, tab, point);
   }
   return this;
 }
@@ -1452,6 +1496,8 @@ void TabStrip::ButtonPressed(views::Button* sender, const ui::Event& event) {
     UMA_HISTOGRAM_ENUMERATION("Tab.NewTab", TabStripModel::NEW_TAB_BUTTON,
                               TabStripModel::NEW_TAB_ENUM_COUNT);
     controller()->CreateNewTab();
+    if (event.type() == ui::ET_GESTURE_TAP)
+      TouchUMA::RecordGestureAction(TouchUMA::GESTURE_NEWTAB_TAP);
   }
 }
 
@@ -1527,7 +1573,7 @@ void TabStrip::OnGestureEvent(ui::GestureEvent* event) {
       Tab* tab = FindTabForEvent(local_point);
       if (tab) {
         ConvertPointToScreen(this, &local_point);
-        ShowContextMenuForTab(tab, local_point);
+        ShowContextMenuForTab(tab, local_point, ui::MENU_SOURCE_TOUCH);
       }
       break;
     }
@@ -1539,6 +1585,17 @@ void TabStrip::OnGestureEvent(ui::GestureEvent* event) {
     case ui::ET_GESTURE_BEGIN:
       EndDrag(END_DRAG_CANCEL);
       break;
+
+    case ui::ET_GESTURE_TAP: {
+      const int active_index = controller_->GetActiveIndex();
+      DCHECK_NE(-1, active_index);
+      Tab* active_tab = tab_at(active_index);
+      TouchUMA::GestureActionType action = TouchUMA::GESTURE_TABNOSWITCH_TAP;
+      if (active_tab->tab_activated_with_last_gesture_begin())
+        action = TouchUMA::GESTURE_TABSWITCH_TAP;
+      TouchUMA::RecordGestureAction(action);
+      break;
+    }
 
     default:
       break;
@@ -1887,6 +1944,9 @@ void TabStrip::UpdateTabsClosingMap(int index, int delta) {
 }
 
 void TabStrip::StartedDraggingTabs(const std::vector<Tab*>& tabs) {
+  // Let the controller know that the user started dragging tabs.
+  controller()->OnStartedDraggingTabs();
+
   // Hide the new tab button immediately if we didn't originate the drag.
   if (!drag_controller_.get())
     newtab_button_->SetVisible(false);
@@ -1915,6 +1975,9 @@ void TabStrip::StartedDraggingTabs(const std::vector<Tab*>& tabs) {
 }
 
 void TabStrip::DraggedTabsDetached() {
+  // Let the controller know that the user is not dragging this tabstrip's tabs
+  // anymore.
+  controller()->OnStoppedDraggingTabs();
   newtab_button_->SetVisible(true);
 }
 
@@ -1922,6 +1985,9 @@ void TabStrip::StoppedDraggingTabs(const std::vector<Tab*>& tabs,
                                    const std::vector<int>& initial_positions,
                                    bool move_only,
                                    bool completed) {
+  // Let the controller know that the user stopped dragging tabs.
+  controller()->OnStoppedDraggingTabs();
+
   newtab_button_->SetVisible(true);
   if (move_only && touch_layout_.get()) {
     if (completed) {
@@ -2349,7 +2415,7 @@ TabStrip::DropInfo::DropInfo(int drop_index,
   arrow_window = new views::Widget;
   views::Widget::InitParams params(views::Widget::InitParams::TYPE_POPUP);
   params.keep_on_top = true;
-  params.transparent = true;
+  params.opacity = views::Widget::InitParams::TRANSLUCENT_WINDOW;
   params.accept_events = false;
   params.can_activate = false;
   params.bounds = gfx::Rect(drop_indicator_width, drop_indicator_height);
@@ -2439,8 +2505,18 @@ int TabStrip::GenerateIdealBoundsForMiniTabs(int* first_non_mini_index) {
   return next_x;
 }
 
-int TabStrip::new_tab_button_width() const {
+// static
+int TabStrip::new_tab_button_width() {
   return newtab_button_asset_width() + newtab_button_h_offset();
+}
+
+// static
+int TabStrip::button_v_offset() {
+  return newtab_button_v_offset();
+}
+
+int TabStrip::tab_area_width() const {
+  return width() - new_tab_button_width();
 }
 
 void TabStrip::StartResizeLayoutAnimation() {
@@ -2547,6 +2623,22 @@ Tab* TabStrip::FindTabForEventFrom(const gfx::Point& point,
     if (IsPointInTab(tab_at(i), point))
       return tab_at(i);
   }
+  return NULL;
+}
+
+views::View* TabStrip::FindTabHitByPoint(const gfx::Point& point) {
+  // The display order doesn't necessarily match the child list order, so we
+  // walk the display list hit-testing Tabs. Since the active tab always
+  // renders on top of adjacent tabs, it needs to be hit-tested before any
+  // left-adjacent Tab, so we look ahead for it as we walk.
+  for (int i = 0; i < tab_count(); ++i) {
+    Tab* next_tab = i < (tab_count() - 1) ? tab_at(i + 1) : NULL;
+    if (next_tab && next_tab->IsActive() && IsPointInTab(next_tab, point))
+      return next_tab;
+    if (IsPointInTab(tab_at(i), point))
+      return tab_at(i);
+  }
+
   return NULL;
 }
 

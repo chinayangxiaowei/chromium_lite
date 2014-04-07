@@ -6,7 +6,7 @@
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/prefs/pref_service.h"
 #include "chrome/browser/policy/cloud/cloud_policy_client.h"
 #include "chrome/browser/policy/cloud/cloud_policy_refresh_scheduler.h"
@@ -46,7 +46,7 @@ void CloudPolicyCore::StartRefreshScheduler() {
     refresh_scheduler_.reset(
         new CloudPolicyRefreshScheduler(
             client_.get(), store_,
-            MessageLoop::current()->message_loop_proxy()));
+            base::MessageLoop::current()->message_loop_proxy()));
     UpdateRefreshDelayFromPref();
   }
 }

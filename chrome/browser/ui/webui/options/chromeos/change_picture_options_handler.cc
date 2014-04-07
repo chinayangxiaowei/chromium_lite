@@ -9,9 +9,10 @@
 #include "base/command_line.h"
 #include "base/metrics/histogram.h"
 #include "base/path_service.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/chromeos/camera_detector.h"
 #include "chrome/browser/chromeos/login/default_user_images.h"
 #include "chrome/browser/chromeos/login/user_image.h"
@@ -20,7 +21,6 @@
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/chrome_select_file_policy.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/url_constants.h"
@@ -28,7 +28,6 @@
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/common/url_constants.h"
-#include "googleurl/src/gurl.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "net/base/data_url.h"
@@ -36,6 +35,7 @@
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/views/widget/widget.h"
 #include "ui/webui/web_ui_util.h"
+#include "url/gurl.h"
 
 using content::BrowserThread;
 
@@ -63,7 +63,6 @@ ui::SelectFileDialog::FileTypeInfo GetUserImageFileTypeInfo() {
   file_type_info.extension_description_overrides[0] =
       l10n_util::GetStringUTF16(IDS_IMAGE_FILES);
 
-  file_type_info.support_drive = true;
   return file_type_info;
 }
 
@@ -73,9 +72,9 @@ const char kProfileDownloadReason[] = "Preferences";
 }  // namespace
 
 ChangePictureOptionsHandler::ChangePictureOptionsHandler()
-    : previous_image_url_(chrome::kAboutBlankURL),
+    : previous_image_url_(content::kAboutBlankURL),
       previous_image_index_(User::kInvalidImageIndex),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {
+      weak_factory_(this) {
   registrar_.Add(this, chrome::NOTIFICATION_PROFILE_IMAGE_UPDATED,
       content::NotificationService::AllSources());
   registrar_.Add(this, chrome::NOTIFICATION_PROFILE_IMAGE_UPDATE_FAILED,

@@ -7,10 +7,10 @@
 #include "base/file_util.h"
 #include "base/format_macros.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
 #include "base/strings/string_split.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/test/webdriver/commands/response.h"
 #include "chrome/test/webdriver/webdriver_basic_types.h"
@@ -561,7 +561,7 @@ Error* ElementValueCommand::DragAndDropFilePaths() const {
 
   // Check the files exist.
   for (size_t i = 0; i < paths.size(); ++i) {
-    if (!file_util::PathExists(base::FilePath(paths[i]))) {
+    if (!base::PathExists(base::FilePath(paths[i]))) {
       return new Error(
           kBadRequest,
           base::StringPrintf("'%s' does not exist on the file system",

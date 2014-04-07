@@ -28,6 +28,27 @@ void RunTask(const tracked_objects::Location& from_here,
   task.Run();
 }
 
+// Pops a string-to-string dictionary from the reader.
+base::DictionaryValue* PopStringToStringDictionary(
+    dbus::MessageReader* reader) {
+  dbus::MessageReader array_reader(NULL);
+  if (!reader->PopArray(&array_reader))
+    return NULL;
+  scoped_ptr<base::DictionaryValue> result(new base::DictionaryValue);
+  while (array_reader.HasMoreData()) {
+    dbus::MessageReader entry_reader(NULL);
+    std::string key;
+    std::string value;
+    if (!array_reader.PopDictEntry(&entry_reader) ||
+        !entry_reader.PopString(&key) ||
+        !entry_reader.PopString(&value))
+      return NULL;
+    result->SetWithoutPathExpansion(key,
+                                    base::Value::CreateStringValue(value));
+  }
+  return result.release();
+}
+
 }  // namespace
 
 ValueMatcher::ValueMatcher(const base::Value& value)
@@ -115,42 +136,41 @@ void ShillClientUnittestBase::SetUp() {
 
   // Set an expectation so mock_proxy's CallMethodAndBlock() will use
   // OnCallMethodAndBlock() to return responses.
-  EXPECT_CALL(*mock_proxy_, MockCallMethodAndBlock(_, _))
-      .WillRepeatedly(Invoke(
-          this, &ShillClientUnittestBase::OnCallMethodAndBlock));
+  EXPECT_CALL(*mock_proxy_.get(), MockCallMethodAndBlock(_, _)).WillRepeatedly(
+      Invoke(this, &ShillClientUnittestBase::OnCallMethodAndBlock));
 
   // Set an expectation so mock_proxy's CallMethod() will use OnCallMethod()
   // to return responses.
-  EXPECT_CALL(*mock_proxy_, CallMethod(_, _, _))
+  EXPECT_CALL(*mock_proxy_.get(), CallMethod(_, _, _))
       .WillRepeatedly(Invoke(this, &ShillClientUnittestBase::OnCallMethod));
 
   // Set an expectation so mock_proxy's CallMethodWithErrorCallback() will use
   // OnCallMethodWithErrorCallback() to return responses.
-  EXPECT_CALL(*mock_proxy_, CallMethodWithErrorCallback(_, _, _, _))
+  EXPECT_CALL(*mock_proxy_.get(), CallMethodWithErrorCallback(_, _, _, _))
       .WillRepeatedly(Invoke(
-          this, &ShillClientUnittestBase::OnCallMethodWithErrorCallback));
+           this, &ShillClientUnittestBase::OnCallMethodWithErrorCallback));
 
   // Set an expectation so mock_proxy's ConnectToSignal() will use
   // OnConnectToSignal() to run the callback.
-  EXPECT_CALL(*mock_proxy_, ConnectToSignal(
-      interface_name_,
-      flimflam::kMonitorPropertyChanged, _, _))
-      .WillRepeatedly(Invoke(this,
-                             &ShillClientUnittestBase::OnConnectToSignal));
+  EXPECT_CALL(
+      *mock_proxy_.get(),
+      ConnectToSignal(interface_name_, flimflam::kMonitorPropertyChanged, _, _))
+      .WillRepeatedly(
+           Invoke(this, &ShillClientUnittestBase::OnConnectToSignal));
 
   // Set an expectation so mock_bus's GetObjectProxy() for the given
   // service name and the object path will return mock_proxy_.
-  EXPECT_CALL(*mock_bus_, GetObjectProxy(flimflam::kFlimflamServiceName,
-                                         object_path_))
+  EXPECT_CALL(*mock_bus_.get(),
+              GetObjectProxy(flimflam::kFlimflamServiceName, object_path_))
       .WillOnce(Return(mock_proxy_.get()));
 
   // Set an expectation so mock_bus's PostTaskToDBusThread() will run the
   // given task.
-  EXPECT_CALL(*mock_bus_, PostTaskToDBusThread(_, _))
+  EXPECT_CALL(*mock_bus_.get(), PostTaskToDBusThread(_, _))
       .WillRepeatedly(Invoke(&RunTask));
 
   // ShutdownAndBlock() will be called in TearDown().
-  EXPECT_CALL(*mock_bus_, ShutdownAndBlock()).WillOnce(Return());
+  EXPECT_CALL(*mock_bus_.get(), ShutdownAndBlock()).WillOnce(Return());
 }
 
 void ShillClientUnittestBase::TearDown() {
@@ -230,6 +250,65 @@ void ShillClientUnittestBase::ExpectStringAndValueArguments(
   EXPECT_TRUE(value->Equals(expected_value));
   EXPECT_FALSE(reader->HasMoreData());
 }
+
+// static
+void ShillClientUnittestBase::ExpectDictionaryValueArgument(
+    const base::DictionaryValue* expected_dictionary,
+    dbus::MessageReader* reader) {
+  dbus::MessageReader array_reader(NULL);
+  ASSERT_TRUE(reader->PopArray(&array_reader));
+  while (array_reader.HasMoreData()) {
+    dbus::MessageReader entry_reader(NULL);
+    ASSERT_TRUE(array_reader.PopDictEntry(&entry_reader));
+    std::string key;
+    ASSERT_TRUE(entry_reader.PopString(&key));
+    dbus::MessageReader variant_reader(NULL);
+    ASSERT_TRUE(entry_reader.PopVariant(&variant_reader));
+    scoped_ptr<base::Value> value;
+    // Variants in the dictionary can be basic types or string-to-string
+    // dictinoary.
+    switch (variant_reader.GetDataType()) {
+      case dbus::Message::ARRAY:
+        value.reset(PopStringToStringDictionary(&variant_reader));
+        break;
+      case dbus::Message::BOOL:
+      case dbus::Message::INT32:
+      case dbus::Message::STRING:
+        value.reset(dbus::PopDataAsValue(&variant_reader));
+        break;
+      default:
+        NOTREACHED();
+    }
+    ASSERT_TRUE(value.get());
+    const base::Value* expected_value = NULL;
+    EXPECT_TRUE(expected_dictionary->GetWithoutPathExpansion(key,
+                                                             &expected_value));
+    EXPECT_TRUE(value->Equals(expected_value));
+  }
+}
+
+// static
+base::DictionaryValue*
+ShillClientUnittestBase::CreateExampleServiceProperties() {
+  base::DictionaryValue* properties = new base::DictionaryValue;
+  properties->SetWithoutPathExpansion(
+      flimflam::kGuidProperty,
+      base::Value::CreateStringValue("00000000-0000-0000-0000-000000000000"));
+  properties->SetWithoutPathExpansion(
+      flimflam::kModeProperty,
+      base::Value::CreateStringValue(flimflam::kModeManaged));
+  properties->SetWithoutPathExpansion(
+      flimflam::kTypeProperty,
+      base::Value::CreateStringValue(flimflam::kTypeWifi));
+  properties->SetWithoutPathExpansion(
+      flimflam::kSSIDProperty,
+      base::Value::CreateStringValue("testssid"));
+  properties->SetWithoutPathExpansion(
+      flimflam::kSecurityProperty,
+      base::Value::CreateStringValue(flimflam::kSecurityPsk));
+  return properties;
+}
+
 
 // static
 void ShillClientUnittestBase::ExpectNoResultValue(

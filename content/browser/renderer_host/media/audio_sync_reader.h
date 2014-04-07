@@ -6,10 +6,10 @@
 #define CONTENT_BROWSER_RENDERER_HOST_MEDIA_AUDIO_SYNC_READER_H_
 
 #include "base/file_descriptor_posix.h"
-#include "base/process.h"
+#include "base/process/process.h"
 #include "base/sync_socket.h"
 #include "base/synchronization/lock.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "media/audio/audio_output_controller.h"
 #include "media/base/audio_bus.h"
 
@@ -33,9 +33,10 @@ class AudioSyncReader : public media::AudioOutputController::SyncReader {
 
   // media::AudioOutputController::SyncReader implementations.
   virtual void UpdatePendingBytes(uint32 bytes) OVERRIDE;
-  virtual int Read(media::AudioBus* source, media::AudioBus* dest) OVERRIDE;
+  virtual int Read(bool block,
+                   const media::AudioBus* source,
+                   media::AudioBus* dest) OVERRIDE;
   virtual void Close() OVERRIDE;
-  virtual bool DataReady() OVERRIDE;
 
   bool Init();
   bool PrepareForeignSocketHandle(base::ProcessHandle process_handle,
@@ -46,10 +47,20 @@ class AudioSyncReader : public media::AudioOutputController::SyncReader {
 #endif
 
  private:
+  // Indicates whether the renderer has data available for reading.
+  bool DataReady();
+
+  // Blocks until DataReady() is true or a timeout expires.
+  void WaitTillDataReady();
+
   base::SharedMemory* shared_memory_;
 
   // Number of input channels for synchronized I/O.
   int input_channels_;
+
+  // Mutes all incoming samples. This is used to prevent audible sound
+  // during automated testing.
+  bool mute_audio_;
 
   // Socket for transmitting audio data.
   scoped_ptr<base::CancelableSyncSocket> socket_;

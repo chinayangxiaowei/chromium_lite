@@ -6,23 +6,27 @@
 
 #include "base/bind.h"
 #include "base/command_line.h"
-#include "base/process_util.h"
-#include "base/string_util.h"
+#include "base/process/process_handle.h"
+#include "base/strings/string_util.h"
 #include "base/synchronization/lock.h"
 #include "base/synchronization/waitable_event.h"
 #include "build/build_config.h"
-#include "content/common/child_process.h"
-#include "content/common/plugin_messages.h"
-#include "content/public/common/content_switches.h"
+#include "content/child/child_process.h"
+#include "content/child/npapi/plugin_instance.h"
+#include "content/child/plugin_messages.h"
+#include "content/common/plugin_process_messages.h"
 #include "content/plugin/plugin_thread.h"
 #include "content/plugin/webplugin_delegate_stub.h"
 #include "content/plugin/webplugin_proxy.h"
-#include "webkit/plugins/npapi/plugin_instance.h"
+#include "content/public/common/content_switches.h"
+#include "third_party/WebKit/public/web/WebBindings.h"
 
 #if defined(OS_POSIX)
 #include "base/posix/eintr_wrapper.h"
 #include "ipc/ipc_channel_posix.h"
 #endif
+
+using WebKit::WebBindings;
 
 namespace content {
 
@@ -67,7 +71,7 @@ class PluginChannel::MessageFilter : public IPC::ChannelProxy::MessageFilter {
       return;
 
     // Delete the event when the stack unwinds as it could be in use now.
-    MessageLoop::current()->DeleteSoon(
+    base::MessageLoop::current()->DeleteSoon(
         FROM_HERE, modal_dialog_event_map_[render_view_id].event);
     modal_dialog_event_map_.erase(render_view_id);
   }
@@ -200,7 +204,7 @@ base::WaitableEvent* PluginChannel::GetModalDialogEvent(int render_view_id) {
 }
 
 PluginChannel::~PluginChannel() {
-  MessageLoop::current()->PostDelayedTask(
+  base::MessageLoop::current()->PostDelayedTask(
       FROM_HERE,
       base::Bind(&PluginReleaseCallback),
       base::TimeDelta::FromMinutes(kPluginReleaseTimeMinutes));
@@ -236,11 +240,17 @@ PluginChannel::PluginChannel()
     : renderer_id_(-1),
       in_send_(0),
       incognito_(false),
-      filter_(new MessageFilter()) {
+      filter_(new MessageFilter()),
+      npp_(new struct _NPP) {
   set_send_unblocking_only_during_unblock_dispatch();
   ChildProcess::current()->AddRefProcess();
   const CommandLine* command_line = CommandLine::ForCurrentProcess();
   log_messages_ = command_line->HasSwitch(switches::kLogPluginMessages);
+
+  // Register |npp_| as the default owner for any object we receive via IPC,
+  // and register it with WebBindings as a valid owner.
+  SetDefaultNPObjectOwner(npp_.get());
+  WebBindings::registerObjectOwner(npp_.get());
 }
 
 bool PluginChannel::OnControlMessageReceived(const IPC::Message& msg) {
@@ -250,7 +260,7 @@ bool PluginChannel::OnControlMessageReceived(const IPC::Message& msg) {
     IPC_MESSAGE_HANDLER_DELAY_REPLY(PluginMsg_DestroyInstance,
                                     OnDestroyInstance)
     IPC_MESSAGE_HANDLER(PluginMsg_GenerateRouteID, OnGenerateRouteID)
-    IPC_MESSAGE_HANDLER(PluginMsg_ClearSiteData, OnClearSiteData)
+    IPC_MESSAGE_HANDLER(PluginProcessMsg_ClearSiteData, OnClearSiteData)
     IPC_MESSAGE_UNHANDLED(handled = false)
   IPC_END_MESSAGE_MAP()
   DCHECK(handled);
@@ -262,7 +272,7 @@ void PluginChannel::OnCreateInstance(const std::string& mime_type,
   *instance_id = GenerateRouteID();
   scoped_refptr<WebPluginDelegateStub> stub(new WebPluginDelegateStub(
       mime_type, *instance_id, this));
-  AddRoute(*instance_id, stub, NULL);
+  AddRoute(*instance_id, stub.get(), NULL);
   plugin_stubs_.push_back(stub);
 }
 
@@ -280,9 +290,11 @@ void PluginChannel::OnDestroyInstance(int instance_id,
       // Don't release the modal dialog event right away, but do it after the
       // stack unwinds since the plugin can be destroyed later if it's in use
       // right now.
-      MessageLoop::current()->PostNonNestableTask(FROM_HERE, base::Bind(
-          &MessageFilter::ReleaseModalDialogEvent, filter.get(),
-          render_view_id));
+      base::MessageLoop::current()->PostNonNestableTask(
+          FROM_HERE,
+          base::Bind(&MessageFilter::ReleaseModalDialogEvent,
+                     filter.get(),
+                     render_view_id));
       return;
     }
   }
@@ -300,8 +312,7 @@ void PluginChannel::OnClearSiteData(const std::string& site,
   bool success = false;
   CommandLine* command_line = CommandLine::ForCurrentProcess();
   base::FilePath path = command_line->GetSwitchValuePath(switches::kPluginPath);
-  scoped_refptr<webkit::npapi::PluginLib> plugin_lib(
-      webkit::npapi::PluginLib::CreatePluginLib(path));
+  scoped_refptr<PluginLib> plugin_lib(PluginLib::CreatePluginLib(path));
   if (plugin_lib.get()) {
     NPError err = plugin_lib->NP_Initialize();
     if (err == NPERR_NO_ERROR) {
@@ -315,7 +326,7 @@ void PluginChannel::OnClearSiteData(const std::string& site,
       success = (err == NPERR_NO_ERROR);
     }
   }
-  Send(new PluginHostMsg_ClearSiteDataResult(success));
+  Send(new PluginProcessHostMsg_ClearSiteDataResult(success));
 }
 
 }  // namespace content

@@ -16,15 +16,17 @@
  * @param {string=} opt_mediaType Media type.
  * @param {ThumbnailLoader.UseEmbedded=} opt_useEmbedded If to use embedded
  *     jpeg thumbnail if available. Default: USE_EMBEDDED.
+ * @param {number=} opt_priority Priority, the highest is 0. default: 2.
  * @constructor
  */
-function ThumbnailLoader(
-    url, opt_loaderType, opt_metadata, opt_mediaType, opt_useEmbedded) {
+function ThumbnailLoader(url, opt_loaderType, opt_metadata, opt_mediaType,
+    opt_useEmbedded, opt_priority) {
   opt_useEmbedded = opt_useEmbedded || ThumbnailLoader.UseEmbedded.USE_EMBEDDED;
 
   this.mediaType_ = opt_mediaType || FileType.getMediaType(url);
   this.loaderType_ = opt_loaderType || ThumbnailLoader.LoaderType.IMAGE;
   this.metadata_ = opt_metadata;
+  this.priority_ = (opt_priority !== undefined) ? opt_priority : 2;
 
   if (!opt_metadata) {
     this.thumbnailUrl_ = url;  // Use the URL directly.
@@ -72,7 +74,8 @@ ThumbnailLoader.AUTO_FILL_THRESHOLD = 0.3;
 ThumbnailLoader.FillMode = {
   FILL: 0,  // Fill whole box. Image may be cropped.
   FIT: 1,   // Keep aspect ratio, do not crop.
-  AUTO: 2   // Try to fill, but if incompatible aspect ratio, then fit.
+  OVER_FILL: 2,  // Fill whole box with possible stretching.
+  AUTO: 3   // Try to fill, but if incompatible aspect ratio, then fit.
 };
 
 /**
@@ -124,7 +127,7 @@ ThumbnailLoader.THUMBNAIL_MAX_HEIGHT = 500;
  * @param {ThumbnailLoader.FillMode} fillMode Fill mode.
  * @param {ThumbnailLoader.OptimizationMode=} opt_optimizationMode Optimization
  *     for downloading thumbnails. By default optimizations are disabled.
- * @param {function(Image, object} opt_onSuccess Success callback,
+ * @param {function(Image, Object)} opt_onSuccess Success callback,
  *     accepts the image and the transform.
  * @param {function} opt_onError Error callback.
  * @param {function} opt_onGeneric Callback for generic image used.
@@ -155,8 +158,10 @@ ThumbnailLoader.prototype.load = function(box, fillMode, opt_optimizationMode,
     if (this.fallbackUrl_) {
       new ThumbnailLoader(this.fallbackUrl_,
                           this.loaderType_,
-                          null,
-                          this.mediaType_).
+                          null,  // No metadata.
+                          this.mediaType_,
+                          undefined,  // Default value for use-embedded.
+                          this.priority_).
           load(box, fillMode, opt_onSuccess);
     } else {
       box.setAttribute('generic-thumbnail', this.mediaType_);
@@ -180,6 +185,7 @@ ThumbnailLoader.prototype.load = function(box, fillMode, opt_optimizationMode,
       { maxWidth: ThumbnailLoader.THUMBNAIL_MAX_WIDTH,
         maxHeight: ThumbnailLoader.THUMBNAIL_MAX_HEIGHT,
         cache: true,
+        priority: this.priority_,
         timestamp: modificationTime },
       function() {
         if (opt_optimizationMode ==
@@ -200,6 +206,7 @@ ThumbnailLoader.prototype.cancel = function() {
     this.image_.onload = function() {};
     this.image_.onerror = function() {};
     util.cancelLoadImage(this.taskId_);
+    this.taskId_ = null;
   }
 };
 
@@ -261,6 +268,7 @@ ThumbnailLoader.prototype.loadDetachedImage = function(callback) {
       { maxWidth: ThumbnailLoader.THUMBNAIL_MAX_WIDTH,
         maxHeight: ThumbnailLoader.THUMBNAIL_MAX_HEIGHT,
         cache: true,
+        priority: this.priority_,
         timestamp: modificationTime });
 };
 
@@ -334,6 +342,7 @@ ThumbnailLoader.centerImage_ = function(box, img, fillMode, rotate) {
   var fill;
   switch (fillMode) {
     case ThumbnailLoader.FillMode.FILL:
+    case ThumbnailLoader.FillMode.OVER_FILL:
       fill = true;
       break;
     case ThumbnailLoader.FillMode.FIT:
@@ -361,7 +370,8 @@ ThumbnailLoader.centerImage_ = function(box, img, fillMode, rotate) {
         Math.max(fitScaleX, fitScaleY) :
         Math.min(fitScaleX, fitScaleY);
 
-    scale = Math.min(scale, 1);  // Never overscale.
+    if (fillMode != ThumbnailLoader.FillMode.OVER_FILL)
+        scale = Math.min(scale, 1);  // Never overscale.
 
     fractionX = imageWidth * scale / boxWidth;
     fractionY = imageHeight * scale / boxHeight;

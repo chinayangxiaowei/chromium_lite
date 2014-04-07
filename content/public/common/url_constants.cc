@@ -4,9 +4,6 @@
 
 #include "content/public/common/url_constants.h"
 
-#include "content/common/savable_url_schemes.h"
-#include "googleurl/src/gurl.h"
-
 namespace chrome {
 
 const char kAboutScheme[] = "about";
@@ -25,6 +22,10 @@ const char kGuestScheme[] = "chrome-guest";
 const char kHttpScheme[] = "http";
 const char kHttpsScheme[] = "https";
 const char kJavaScriptScheme[] = "javascript";
+}  // namespace chrome
+
+namespace content {
+
 const char kMailToScheme[] = "mailto";
 const char kMetadataScheme[] = "metadata";
 const char kSwappedOutScheme[] = "swappedout";
@@ -32,11 +33,12 @@ const char kViewSourceScheme[] = "view-source";
 
 const char kAboutBlankURL[] = "about:blank";
 const char kAboutSrcDocURL[] = "about:srcdoc";
+
 const char kChromeUIAppCacheInternalsHost[] = "appcache-internals";
+const char kChromeUIIndexedDBInternalsHost[] = "indexeddb-internals";
 const char kChromeUIAccessibilityHost[] = "accessibility";
 const char kChromeUIBlobInternalsHost[] = "blob-internals";
 const char kChromeUIBrowserCrashHost[] = "inducebrowsercrashforrealz";
-const char kChromeUIDevToolsHost[] = "devtools";
 const char kChromeUIGpuHost[] = "gpu";
 const char kChromeUIHistogramHost[] = "histograms";
 const char kChromeUIMediaInternalsHost[] = "media-internals";
@@ -45,10 +47,6 @@ const char kChromeUIResourcesHost[] = "resources";
 const char kChromeUITcmallocHost[] = "tcmalloc";
 const char kChromeUITracingHost[] = "tracing";
 const char kChromeUIWebRTCInternalsHost[] = "webrtc-internals";
-
-}  // namespace chrome
-
-namespace content {
 
 const char kChromeUICrashURL[] = "chrome://crash";
 const char kChromeUIGpuCleanURL[] = "chrome://gpuclean";
@@ -72,18 +70,5 @@ const char kChromeUIShorthangURL[] = "chrome://shorthang";
 // different renderer process.  It must have a unique origin that cannot be
 // scripted by other pages in the process.
 const char kSwappedOutURL[] = "swappedout://";
-
-const char* const* GetSavableSchemes() {
-  return GetSavableSchemesInternal();
-}
-
-bool HasWebUIScheme(const GURL& url) {
-  return
-#if !defined(OS_IOS)
-         url.SchemeIs(chrome::kChromeDevToolsScheme) ||
-         url.SchemeIs(chrome::kChromeInternalScheme) ||
-#endif
-         url.SchemeIs(chrome::kChromeUIScheme);
-}
 
 }  // namespace content

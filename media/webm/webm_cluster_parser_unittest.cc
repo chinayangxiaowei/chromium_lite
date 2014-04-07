@@ -117,13 +117,13 @@ static bool VerifyBuffers(const WebMClusterParser::BufferQueue& audio_buffers,
     scoped_refptr<StreamParserBuffer> buffer = (*buffers)[(*offset)++];
 
 
-    EXPECT_EQ(buffer->GetTimestamp().InMilliseconds(), block_info[i].timestamp);
+    EXPECT_EQ(buffer->timestamp().InMilliseconds(), block_info[i].timestamp);
 
     if (!block_info[i].use_simple_block)
-      EXPECT_NE(buffer->GetDuration(), kNoTimestamp());
+      EXPECT_NE(buffer->duration(), kNoTimestamp());
 
-    if (buffer->GetDuration() != kNoTimestamp())
-      EXPECT_EQ(buffer->GetDuration().InMilliseconds(), block_info[i].duration);
+    if (buffer->duration() != kNoTimestamp())
+      EXPECT_EQ(buffer->duration().InMilliseconds(), block_info[i].duration);
   }
 
   return true;
@@ -175,8 +175,8 @@ static bool VerifyTextBuffers(
     EXPECT_FALSE(buffer_iter == buffer_end);
 
     const scoped_refptr<StreamParserBuffer> buffer = *buffer_iter++;
-    EXPECT_EQ(buffer->GetTimestamp().InMilliseconds(), block_info.timestamp);
-    EXPECT_EQ(buffer->GetDuration().InMilliseconds(), block_info.duration);
+    EXPECT_EQ(buffer->timestamp().InMilliseconds(), block_info.timestamp);
+    EXPECT_EQ(buffer->duration().InMilliseconds(), block_info.duration);
   }
 
   EXPECT_TRUE(buffer_iter == buffer_end);
@@ -185,10 +185,10 @@ static bool VerifyTextBuffers(
 
 static bool VerifyEncryptedBuffer(
     scoped_refptr<StreamParserBuffer> buffer) {
-  EXPECT_TRUE(buffer->GetDecryptConfig());
+  EXPECT_TRUE(buffer->decrypt_config());
   EXPECT_EQ(static_cast<unsigned long>(DecryptConfig::kDecryptionKeySize),
-            buffer->GetDecryptConfig()->iv().length());
-  const uint8* data = buffer->GetData();
+            buffer->decrypt_config()->iv().length());
+  const uint8* data = buffer->data();
   return data[0] & kWebMFlagEncryptedFrame;
 }
 
@@ -203,19 +203,20 @@ static void AppendToEnd(const WebMClusterParser::BufferQueue& src,
 class WebMClusterParserTest : public testing::Test {
  public:
   WebMClusterParserTest()
-      : parser_(new WebMClusterParser(
-          kTimecodeScale, kAudioTrackNum, kVideoTrackNum,
-          std::set<int>(),
-          std::set<int64>(),
-          "", "",
-          LogCB())) {
-  }
+      : parser_(new WebMClusterParser(kTimecodeScale,
+                                      kAudioTrackNum,
+                                      kVideoTrackNum,
+                                      WebMTracksParser::TextTracks(),
+                                      std::set<int64>(),
+                                      std::string(),
+                                      std::string(),
+                                      LogCB())) {}
 
  protected:
   scoped_ptr<WebMClusterParser> parser_;
 };
 
-TEST_F(WebMClusterParserTest, TestReset) {
+TEST_F(WebMClusterParserTest, Reset) {
   InSequence s;
 
   int block_count = arraysize(kDefaultBlockInfo);
@@ -334,11 +335,14 @@ TEST_F(WebMClusterParserTest, IgnoredTracks) {
   std::set<int64> ignored_tracks;
   ignored_tracks.insert(kTextTrackNum);
 
-  parser_.reset(new WebMClusterParser(
-      kTimecodeScale, kAudioTrackNum, kVideoTrackNum,
-      std::set<int>(),
-      ignored_tracks, "", "",
-      LogCB()));
+  parser_.reset(new WebMClusterParser(kTimecodeScale,
+                                      kAudioTrackNum,
+                                      kVideoTrackNum,
+                                      WebMTracksParser::TextTracks(),
+                                      ignored_tracks,
+                                      std::string(),
+                                      std::string(),
+                                      LogCB()));
 
   const BlockInfo kInputBlockInfo[] = {
     { kAudioTrackNum, 0,  23, true },
@@ -368,14 +372,22 @@ TEST_F(WebMClusterParserTest, IgnoredTracks) {
 }
 
 TEST_F(WebMClusterParserTest, ParseTextTracks) {
-  std::set<int> text_tracks;
-  text_tracks.insert(kTextTrackNum);
+  typedef WebMTracksParser::TextTracks TextTracks;
+  TextTracks text_tracks;
+  WebMTracksParser::TextTrackInfo text_track_info;
 
-  parser_.reset(new WebMClusterParser(
-      kTimecodeScale, kAudioTrackNum, kVideoTrackNum,
-      text_tracks,
-      std::set<int64>(), "", "",
-      LogCB()));
+  text_track_info.kind = kTextSubtitles;
+  text_tracks.insert(std::make_pair(TextTracks::key_type(kTextTrackNum),
+                                    text_track_info));
+
+  parser_.reset(new WebMClusterParser(kTimecodeScale,
+                                      kAudioTrackNum,
+                                      kVideoTrackNum,
+                                      text_tracks,
+                                      std::set<int64>(),
+                                      std::string(),
+                                      std::string(),
+                                      LogCB()));
 
   const BlockInfo kInputBlockInfo[] = {
     { kAudioTrackNum, 0,  23, true },
@@ -397,14 +409,22 @@ TEST_F(WebMClusterParserTest, ParseTextTracks) {
 }
 
 TEST_F(WebMClusterParserTest, TextTracksSimpleBlock) {
-  std::set<int> text_tracks;
-  text_tracks.insert(kTextTrackNum);
+  typedef WebMTracksParser::TextTracks TextTracks;
+  TextTracks text_tracks;
+  WebMTracksParser::TextTrackInfo text_track_info;
 
-  parser_.reset(new WebMClusterParser(
-      kTimecodeScale, kAudioTrackNum, kVideoTrackNum,
-      text_tracks,
-      std::set<int64>(), "", "",
-      LogCB()));
+  text_track_info.kind = kTextSubtitles;
+  text_tracks.insert(std::make_pair(TextTracks::key_type(kTextTrackNum),
+                                    text_track_info));
+
+  parser_.reset(new WebMClusterParser(kTimecodeScale,
+                                      kAudioTrackNum,
+                                      kVideoTrackNum,
+                                      text_tracks,
+                                      std::set<int64>(),
+                                      std::string(),
+                                      std::string(),
+                                      LogCB()));
 
   const BlockInfo kInputBlockInfo[] = {
     { kTextTrackNum,  33, 42, true },
@@ -419,20 +439,29 @@ TEST_F(WebMClusterParserTest, TextTracksSimpleBlock) {
 }
 
 TEST_F(WebMClusterParserTest, ParseMultipleTextTracks) {
-  typedef std::set<int> TextTrackSet;
-  TextTrackSet text_tracks;
+  typedef WebMTracksParser::TextTracks TextTracks;
+  TextTracks text_tracks;
+  WebMTracksParser::TextTrackInfo text_track_info;
 
   const int kSubtitleTextTrackNum = kTextTrackNum;
   const int kCaptionTextTrackNum = kTextTrackNum + 1;
 
-  text_tracks.insert(kSubtitleTextTrackNum);
-  text_tracks.insert(kCaptionTextTrackNum);
+  text_track_info.kind = kTextSubtitles;
+  text_tracks.insert(std::make_pair(TextTracks::key_type(kSubtitleTextTrackNum),
+                                    text_track_info));
 
-  parser_.reset(new WebMClusterParser(
-      kTimecodeScale, kAudioTrackNum, kVideoTrackNum,
-      text_tracks,
-      std::set<int64>(), "", "",
-      LogCB()));
+  text_track_info.kind = kTextCaptions;
+  text_tracks.insert(std::make_pair(TextTracks::key_type(kCaptionTextTrackNum),
+                                    text_track_info));
+
+  parser_.reset(new WebMClusterParser(kTimecodeScale,
+                                      kAudioTrackNum,
+                                      kVideoTrackNum,
+                                      text_tracks,
+                                      std::set<int64>(),
+                                      std::string(),
+                                      std::string(),
+                                      LogCB()));
 
   const BlockInfo kInputBlockInfo[] = {
     { kAudioTrackNum, 0,  23, true },
@@ -459,7 +488,7 @@ TEST_F(WebMClusterParserTest, ParseMultipleTextTracks) {
   const WebMClusterParser::BufferQueue* text_buffers;
 
   while (text_it(&text_track_num, &text_buffers)) {
-    const TextTrackSet::const_iterator find_result =
+    const WebMTracksParser::TextTracks::const_iterator find_result =
         text_tracks.find(text_track_num);
     ASSERT_TRUE(find_result != text_tracks.end());
     ASSERT_TRUE(VerifyTextBuffers(parser_, kInputBlockInfo, input_block_count,
@@ -470,11 +499,14 @@ TEST_F(WebMClusterParserTest, ParseMultipleTextTracks) {
 TEST_F(WebMClusterParserTest, ParseEncryptedBlock) {
   scoped_ptr<Cluster> cluster(CreateEncryptedCluster(sizeof(kEncryptedFrame)));
 
-  parser_.reset(new WebMClusterParser(
-      kTimecodeScale, kAudioTrackNum, kVideoTrackNum,
-      std::set<int>(),
-      std::set<int64>(), "", "video_key_id",
-      LogCB()));
+  parser_.reset(new WebMClusterParser(kTimecodeScale,
+                                      kAudioTrackNum,
+                                      kVideoTrackNum,
+                                      WebMTracksParser::TextTracks(),
+                                      std::set<int64>(),
+                                      std::string(),
+                                      "video_key_id",
+                                      LogCB()));
   int result = parser_->Parse(cluster->data(), cluster->size());
   EXPECT_EQ(cluster->size(), result);
   ASSERT_EQ(1UL, parser_->video_buffers().size());
@@ -486,11 +518,14 @@ TEST_F(WebMClusterParserTest, ParseBadEncryptedBlock) {
   scoped_ptr<Cluster> cluster(
       CreateEncryptedCluster(sizeof(kEncryptedFrame) - 1));
 
-  parser_.reset(new WebMClusterParser(
-      kTimecodeScale, kAudioTrackNum, kVideoTrackNum,
-      std::set<int>(),
-      std::set<int64>(), "", "video_key_id",
-      LogCB()));
+  parser_.reset(new WebMClusterParser(kTimecodeScale,
+                                      kAudioTrackNum,
+                                      kVideoTrackNum,
+                                      WebMTracksParser::TextTracks(),
+                                      std::set<int64>(),
+                                      std::string(),
+                                      "video_key_id",
+                                      LogCB()));
   int result = parser_->Parse(cluster->data(), cluster->size());
   EXPECT_EQ(-1, result);
 }

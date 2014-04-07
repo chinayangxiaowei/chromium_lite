@@ -8,17 +8,17 @@
 #include <cpu-features.h>
 
 #include "base/android/jni_array.h"
+#include "base/android/memory_pressure_listener_android.h"
 #include "base/logging.h"
 #include "base/posix/global_descriptors.h"
-#include "content/common/android/scoped_java_surface.h"
+#include "content/child/child_thread.h"
 #include "content/common/android/surface_texture_peer.h"
-#include "content/common/child_process.h"
-#include "content/common/child_thread.h"
 #include "content/common/gpu/gpu_surface_lookup.h"
 #include "content/public/app/android_library_loader_hooks.h"
 #include "content/public/common/content_descriptors.h"
 #include "ipc/ipc_descriptors.h"
 #include "jni/ChildProcessService_jni.h"
+#include "ui/gl/android/scoped_java_surface.h"
 
 using base::android::AttachCurrentThread;
 using base::android::CheckException;
@@ -45,9 +45,9 @@ class SurfaceTexturePeerChildImpl : public content::SurfaceTexturePeer,
 
   virtual void EstablishSurfaceTexturePeer(
       base::ProcessHandle pid,
-      scoped_refptr<content::SurfaceTextureBridge> surface_texture_bridge,
+      scoped_refptr<gfx::SurfaceTextureBridge> surface_texture_bridge,
       int primary_id,
-      int secondary_id) {
+      int secondary_id) OVERRIDE {
     JNIEnv* env = base::android::AttachCurrentThread();
     content::Java_ChildProcessService_establishSurfaceTexturePeer(
         env, service_.obj(), pid,
@@ -58,7 +58,7 @@ class SurfaceTexturePeerChildImpl : public content::SurfaceTexturePeer,
 
   virtual gfx::AcceleratedWidget AcquireNativeWidget(int surface_id) OVERRIDE {
     JNIEnv* env = base::android::AttachCurrentThread();
-    ScopedJavaSurface surface(
+    gfx::ScopedJavaSurface surface(
         content::Java_ChildProcessService_getViewSurface(
         env, service_.obj(), surface_id));
 
@@ -81,13 +81,13 @@ class SurfaceTexturePeerChildImpl : public content::SurfaceTexturePeer,
 // Chrome actually uses the renderer code path for all of its child
 // processes such as renderers, plugins, etc.
 void InternalInitChildProcess(const std::vector<int>& file_ids,
-                                  const std::vector<int>& file_fds,
-                                  JNIEnv* env,
-                                  jclass clazz,
-                                  jobject context,
-                                  jobject service_in,
-                                  jint cpu_count,
-                                  jlong cpu_features) {
+                              const std::vector<int>& file_fds,
+                              JNIEnv* env,
+                              jclass clazz,
+                              jobject context,
+                              jobject service_in,
+                              jint cpu_count,
+                              jlong cpu_features) {
   base::android::ScopedJavaLocalRef<jobject> service(env, service_in);
 
   // Set the CPU properties.
@@ -102,22 +102,19 @@ void InternalInitChildProcess(const std::vector<int>& file_ids,
   content::SurfaceTexturePeer::InitInstance(
       new SurfaceTexturePeerChildImpl(service));
 
-}
-
-void QuitMainThreadMessageLoop() {
-  MessageLoop::current()->Quit();
+  base::android::MemoryPressureListenerAndroid::RegisterSystemCallback(env);
 }
 
 }  // namespace <anonymous>
 
 void InitChildProcess(JNIEnv* env,
-                          jclass clazz,
-                          jobject context,
-                          jobject service,
-                          jintArray j_file_ids,
-                          jintArray j_file_fds,
-                          jint cpu_count,
-                          jlong cpu_features) {
+                      jclass clazz,
+                      jobject context,
+                      jobject service,
+                      jintArray j_file_ids,
+                      jintArray j_file_fds,
+                      jint cpu_count,
+                      jlong cpu_features) {
   std::vector<int> file_ids;
   std::vector<int> file_fds;
   JavaIntArrayToIntVector(env, j_file_ids, &file_ids);
@@ -139,13 +136,7 @@ bool RegisterChildProcessService(JNIEnv* env) {
 }
 
 void ShutdownMainThread(JNIEnv* env, jobject obj) {
-  ChildProcess* current_process = ChildProcess::current();
-  if (!current_process)
-    return;
-  ChildThread* main_child_thread = current_process->main_thread();
-  if (main_child_thread && main_child_thread->message_loop())
-    main_child_thread->message_loop()->PostTask(FROM_HERE,
-        base::Bind(&QuitMainThreadMessageLoop));
+  ChildThread::ShutdownThread();
 }
 
 }  // namespace content

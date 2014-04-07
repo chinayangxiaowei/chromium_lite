@@ -13,7 +13,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/single_thread_task_runner.h"
 #include "base/synchronization/waitable_event.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "remoting/host/dns_blackhole_checker.h"
 
@@ -39,7 +39,7 @@ scoped_ptr<base::DictionaryValue> CopyGoodValuesAndAddDefaults(
     const base::DictionaryValue* bad_type_values) {
   scoped_ptr<base::DictionaryValue> to(default_values->DeepCopy());
   for (base::DictionaryValue::Iterator i(*default_values);
-       i.HasNext(); i.Advance()) {
+       !i.IsAtEnd(); i.Advance()) {
 
     const base::Value* value = NULL;
 
@@ -92,6 +92,15 @@ const char PolicyWatcher::kHostTalkGadgetPrefixPolicyName[] =
 const char PolicyWatcher::kHostRequireCurtainPolicyName[] =
     "RemoteAccessHostRequireCurtain";
 
+const char PolicyWatcher::kHostTokenUrlPolicyName[] =
+    "RemoteAccessHostTokenUrl";
+
+const char PolicyWatcher::kHostTokenValidationUrlPolicyName[] =
+    "RemoteAccessHostTokenValidationUrl";
+
+const char PolicyWatcher::kHostAllowClientPairing[] =
+    "RemoteAccessHostAllowClientPairing";
+
 const char PolicyWatcher::kHostDebugOverridePoliciesName[] =
     "RemoteAccessHostDebugOverridePolicies";
 
@@ -100,17 +109,20 @@ PolicyWatcher::PolicyWatcher(
     : task_runner_(task_runner),
       old_policies_(new base::DictionaryValue()),
       default_values_(new base::DictionaryValue()),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {
+      weak_factory_(this) {
   // Initialize the default values for each policy.
   default_values_->SetBoolean(kNatPolicyName, true);
   default_values_->SetBoolean(kHostRequireTwoFactorPolicyName, false);
   default_values_->SetBoolean(kHostRequireCurtainPolicyName, false);
   default_values_->SetBoolean(kHostMatchUsernamePolicyName, false);
-  default_values_->SetString(kHostDomainPolicyName, "");
+  default_values_->SetString(kHostDomainPolicyName, std::string());
   default_values_->SetString(kHostTalkGadgetPrefixPolicyName,
                                kDefaultHostTalkGadgetPrefix);
+  default_values_->SetString(kHostTokenUrlPolicyName, std::string());
+  default_values_->SetString(kHostTokenValidationUrlPolicyName, std::string());
+  default_values_->SetBoolean(kHostAllowClientPairing, true);
 #if !defined(NDEBUG)
-  default_values_->SetString(kHostDebugOverridePoliciesName, "");
+  default_values_->SetString(kHostDebugOverridePoliciesName, std::string());
 #endif
 
   // Initialize the fall-back values to use for unreadable policies.
@@ -185,7 +197,7 @@ void PolicyWatcher::UpdatePolicies(
   scoped_ptr<base::DictionaryValue> changed_policies(
       new base::DictionaryValue());
   base::DictionaryValue::Iterator iter(*new_policies);
-  while (iter.HasNext()) {
+  while (!iter.IsAtEnd()) {
     base::Value* old_policy;
     if (!(old_policies_->Get(iter.key(), &old_policy) &&
           old_policy->Equals(&iter.value()))) {

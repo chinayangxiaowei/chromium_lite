@@ -5,7 +5,7 @@
 #include "base/command_line.h"
 #include "base/file_util.h"
 #include "base/path_service.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_paths.h"
 #include "content/public/common/content_switches.h"
@@ -13,8 +13,8 @@
 #include "content/shell/shell.h"
 #include "content/test/content_browser_test.h"
 #include "content/test/content_browser_test_utils.h"
-#include "content/test/gpu/gpu_test_config.h"
-#include "content/test/gpu/gpu_test_expectations_parser.h"
+#include "gpu/config/gpu_test_config.h"
+#include "gpu/config/gpu_test_expectations_parser.h"
 #include "net/base/net_util.h"
 
 namespace content {
@@ -26,6 +26,10 @@ class WebGLConformanceTest : public ContentBrowserTest {
   virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
     // Allow privileged WebGL extensions.
     command_line->AppendSwitch(switches::kEnablePrivilegedWebGLExtensions);
+#if defined(OS_ANDROID)
+    command_line->AppendSwitch(
+        switches::kDisableGestureRequirementForMediaPlayback);
+#endif
   }
 
   virtual void SetUpInProcessBrowserTestFixture() OVERRIDE {
@@ -35,7 +39,7 @@ class WebGLConformanceTest : public ContentBrowserTest {
         FILE_PATH_LITERAL("third_party"));
     webgl_conformance_path = webgl_conformance_path.Append(
         FILE_PATH_LITERAL("webgl_conformance"));
-    ASSERT_TRUE(file_util::DirectoryExists(webgl_conformance_path))
+    ASSERT_TRUE(base::DirectoryExists(webgl_conformance_path))
         << "Missing conformance tests: " << webgl_conformance_path.value();
 
     PathService::Get(DIR_TEST_DATA, &test_path_);
@@ -47,14 +51,18 @@ class WebGLConformanceTest : public ContentBrowserTest {
     ASSERT_TRUE(bot_config_.IsValid())
         << "Invalid bot configuration";
 
-    ASSERT_TRUE(test_expectations_.LoadTestExpectations(
-        GPUTestExpectationsParser::kWebGLConformanceTest));
+    base::FilePath path;
+    ASSERT_TRUE(PathService::Get(DIR_TEST_DATA, &path));
+    path = path.Append(FILE_PATH_LITERAL("gpu"))
+        .Append(FILE_PATH_LITERAL("webgl_conformance_test_expectations.txt"));
+    ASSERT_TRUE(base::PathExists(path));
+    ASSERT_TRUE(test_expectations_.LoadTestExpectations(path));
   }
 
   void RunTest(std::string url, std::string test_name) {
     int32 expectation =
         test_expectations_.GetTestExpectation(test_name, bot_config_);
-    if (expectation != GPUTestExpectationsParser::kGpuTestPass) {
+    if (expectation != gpu::GPUTestExpectationsParser::kGpuTestPass) {
       LOG(WARNING) << "Test " << test_name << " is bypassed";
       return;
     }
@@ -71,8 +79,8 @@ class WebGLConformanceTest : public ContentBrowserTest {
 
  private:
   base::FilePath test_path_;
-  GPUTestBotConfig bot_config_;
-  GPUTestExpectationsParser test_expectations_;
+  gpu::GPUTestBotConfig bot_config_;
+  gpu::GPUTestExpectationsParser test_expectations_;
 };
 
 #define CONFORMANCE_TEST(name, url) \

@@ -5,14 +5,21 @@
 #ifndef CONTENT_PUBLIC_TEST_BROWSER_TEST_BASE_H_
 #define CONTENT_PUBLIC_TEST_BROWSER_TEST_BASE_H_
 
+#include "base/callback.h"
 #include "base/compiler_specific.h"
+#include "net/test/spawned_test_server/spawned_test_server.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "net/test/test_server.h"
 
 class CommandLine;
 
 namespace base {
 class FilePath;
+}
+
+namespace net {
+namespace test_server {
+class EmbeddedTestServer;
+}
 }
 
 namespace content {
@@ -37,6 +44,10 @@ class BrowserTestBase : public testing::Test {
   // main thread after the browser is created and just before calling
   // RunTestOnMainThread().
   virtual void SetUpOnMainThread() {}
+
+  // Override this to add any custom teardown code that needs to be done on the
+  // main thread right after RunTestOnMainThread().
+  virtual void TearDownOnMainThread() {}
 
   // Override this to add command line flags specific to your test.
   virtual void SetUpCommandLine(CommandLine* command_line) {}
@@ -63,8 +74,19 @@ class BrowserTestBase : public testing::Test {
   virtual void RunTestOnMainThreadLoop() = 0;
 
   // Returns the testing server. Guaranteed to be non-NULL.
-  const net::TestServer* test_server() const { return test_server_.get(); }
-  net::TestServer* test_server() { return test_server_.get(); }
+  // TODO(phajdan.jr): Remove test_server accessor (http://crbug.com/96594).
+  const net::SpawnedTestServer* test_server() const {
+    return test_server_.get();
+  }
+  net::SpawnedTestServer* test_server() { return test_server_.get(); }
+
+  // Returns the embedded test server. Guaranteed to be non-NULL.
+  const net::test_server::EmbeddedTestServer* embedded_test_server() const {
+    return embedded_test_server_.get();
+  }
+  net::test_server::EmbeddedTestServer* embedded_test_server() {
+    return embedded_test_server_.get();
+  }
 
 #if defined(OS_POSIX)
   // This is only needed by a test that raises SIGTERM to ensure that a specific
@@ -82,11 +104,35 @@ class BrowserTestBase : public testing::Test {
   // server.
   void CreateTestServer(const base::FilePath& test_server_base);
 
+  // When the test is running in --single-process mode, runs the given task on
+  // the in-process renderer thread. A nested message loop is run until it
+  // returns.
+  void PostTaskToInProcessRendererAndWait(const base::Closure& task);
+
+  // Call this before SetUp() to use real GL contexts in Compositor for the
+  // test.
+  void UseRealGLContexts() { allow_test_contexts_ = false; }
+
+  // Call this before SetUp() to use real GL drivers instead of OSMesa for the
+  // test.
+  void UseRealGLBindings() { allow_osmesa_ = false; }
+
  private:
   void ProxyRunTestOnMainThreadLoop();
 
   // Testing server, started on demand.
-  scoped_ptr<net::TestServer> test_server_;
+  scoped_ptr<net::SpawnedTestServer> test_server_;
+
+  // Embedded test server, cheap to create, started on demand.
+  scoped_ptr<net::test_server::EmbeddedTestServer> embedded_test_server_;
+
+  // When false, the ui::Compositor will be forced to use real GL contexts for
+  // the test, so that it produces real pixel output.
+  bool allow_test_contexts_;
+
+  // When false, the GL backend will use a real GPU. When true, it uses OSMesa
+  // to run GL on the CPU in a way that works across all platforms.
+  bool allow_osmesa_;
 
 #if defined(OS_POSIX)
   bool handle_sigterm_;

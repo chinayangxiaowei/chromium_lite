@@ -21,13 +21,21 @@
 #include "chrome/browser/metrics/perf_provider_chromeos.h"
 #endif
 
-struct AutocompleteLog;
 class MetricsNetworkObserver;
+struct OmniboxLog;
 class PrefService;
 class PrefRegistrySimple;
 
 namespace base {
 class DictionaryValue;
+}
+
+namespace content {
+struct WebPluginInfo;
+}
+
+namespace device {
+class BluetoothAdapter;
 }
 
 namespace tracked_objects {
@@ -36,10 +44,6 @@ struct ProcessDataSnapshot;
 
 namespace chrome_variations {
 struct ActiveGroupId;
-}
-
-namespace webkit {
-struct WebPluginInfo;
 }
 
 // This is a small helper struct to pass Google Update metrics in a single
@@ -90,9 +94,8 @@ class MetricsLog : public MetricsLogBase {
   // that are to be recorded. Each value in profile_metrics should be a
   // dictionary giving the metrics for the profile.
   void RecordEnvironment(
-      const std::vector<webkit::WebPluginInfo>& plugin_list,
-      const GoogleUpdateMetrics& google_update_metrics,
-      const base::DictionaryValue* profile_metrics);
+      const std::vector<content::WebPluginInfo>& plugin_list,
+      const GoogleUpdateMetrics& google_update_metrics);
 
   // Records the current operating environment.  Takes the list of installed
   // plugins and Google Update statistics as parameters because those can't be
@@ -101,12 +104,12 @@ class MetricsLog : public MetricsLogBase {
   // environment with *each* protobuf upload, but only with the initial XML
   // upload.
   void RecordEnvironmentProto(
-      const std::vector<webkit::WebPluginInfo>& plugin_list,
+      const std::vector<content::WebPluginInfo>& plugin_list,
       const GoogleUpdateMetrics& google_update_metrics);
 
   // Records the input text, available choices, and selected entry when the
   // user uses the Omnibox to open a URL.
-  void RecordOmniboxOpenedURL(const AutocompleteLog& log);
+  void RecordOmniboxOpenedURL(const OmniboxLog& log);
 
   // Records the passed profiled data, which should be a snapshot of the
   // browser's profiled performance during startup for a single process.
@@ -121,7 +124,7 @@ class MetricsLog : public MetricsLogBase {
   // installed plugins as a parameter because that can't be obtained
   // synchronously from the UI thread.
   void RecordIncrementalStabilityElements(
-      const std::vector<webkit::WebPluginInfo>& plugin_list);
+      const std::vector<content::WebPluginInfo>& plugin_list);
 
  protected:
   // Exposed for the sake of mocking in test code.
@@ -149,12 +152,12 @@ class MetricsLog : public MetricsLogBase {
   // Writes application stability metrics (as part of the profile log).
   // NOTE: Has the side-effect of clearing those counts.
   void WriteStabilityElement(
-      const std::vector<webkit::WebPluginInfo>& plugin_list,
+      const std::vector<content::WebPluginInfo>& plugin_list,
       PrefService* pref);
 
   // Within stability group, write plugin crash stats.
   void WritePluginStabilityElements(
-      const std::vector<webkit::WebPluginInfo>& plugin_list,
+      const std::vector<content::WebPluginInfo>& plugin_list,
       PrefService* pref);
 
   // Within the stability group, write required attributes.
@@ -166,28 +169,20 @@ class MetricsLog : public MetricsLogBase {
   // chromium processes (ones that don't crash, and keep on running).
   void WriteRealtimeStabilityAttributes(PrefService* pref);
 
-  // Writes the list of installed plugins.  If |write_as_xml| is true, writes
-  // the XML version.  Otherwise, writes the protobuf version.
-  void WritePluginList(
-      const std::vector<webkit::WebPluginInfo>& plugin_list,
-      bool write_as_xml);
-
-  // Within the profile group, write basic install info including appversion.
-  void WriteInstallElement();
-
-  // Writes all profile metrics. This invokes WriteProfileMetrics for each key
-  // in all_profiles_metrics that starts with kProfilePrefix.
-  void WriteAllProfilesMetrics(
-      const base::DictionaryValue& all_profiles_metrics);
-
-  // Writes metrics for the profile identified by key. This writes all
-  // key/value pairs in profile_metrics.
-  void WriteProfileMetrics(const std::string& key,
-                           const base::DictionaryValue& profile_metrics);
+  // Writes the list of installed plugins.
+  void WritePluginList(const std::vector<content::WebPluginInfo>& plugin_list);
 
   // Writes info about the Google Update install that is managing this client.
   // This is a no-op if called on a non-Windows platform.
   void WriteGoogleUpdateProto(const GoogleUpdateMetrics& google_update_metrics);
+
+  // Sets the Bluetooth Adapter instance used for the WriteBluetoothProto()
+  // call.
+  void SetBluetoothAdapter(scoped_refptr<device::BluetoothAdapter> adapter);
+
+  // Writes info about paired Bluetooth devices on this system.
+  // This is a no-op if called on a non-Chrome OS platform.
+  void WriteBluetoothProto(metrics::SystemProfileProto::Hardware* hardware);
 
   // Observes network state to provide values for SystemProfile::Network.
   MetricsNetworkObserver network_observer_;
@@ -195,6 +190,9 @@ class MetricsLog : public MetricsLogBase {
 #if defined(OS_CHROMEOS)
   metrics::PerfProvider perf_provider_;
 #endif
+
+  // Bluetooth Adapter instance for collecting information about paired devices.
+  scoped_refptr<device::BluetoothAdapter> adapter_;
 
   DISALLOW_COPY_AND_ASSIGN(MetricsLog);
 };

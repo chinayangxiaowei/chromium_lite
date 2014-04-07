@@ -9,21 +9,23 @@
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/compiler_specific.h"
 #include "base/gtest_prod_util.h"
-#include "base/process.h"
-#include "base/shared_memory.h"
-#include "base/string16.h"
-#include "base/threading/thread_checker.h"
+#include "base/memory/scoped_ptr.h"
+#include "base/memory/shared_memory.h"
+#include "base/process/process.h"
+#include "base/strings/string16.h"
 #include "base/threading/platform_thread.h"
+#include "base/threading/thread_checker.h"
 #include "ui/base/ui_export.h"
 
 #if defined(TOOLKIT_GTK)
 #include <gdk/gdk.h>
 #endif
 
-#if defined(OS_ANDROID)
+#if defined(OS_WIN)
+#include <objidl.h>
+#elif defined(OS_ANDROID)
 #include <jni.h>
 
 #include "base/android/jni_android.h"
@@ -36,7 +38,11 @@
 
 namespace base {
 class FilePath;
-}
+
+namespace win {
+class MessageWindow;
+}  // namespace win
+}  // namespace base
 
 namespace gfx {
 class Size;
@@ -49,10 +55,8 @@ typedef struct _GtkClipboard GtkClipboard;
 #endif
 
 #ifdef __OBJC__
-@class NSPasteboard;
 @class NSString;
 #else
-class NSPasteboard;
 class NSString;
 #endif
 
@@ -74,14 +78,23 @@ class UI_EXPORT Clipboard : NON_EXPORTED_BASE(public base::ThreadChecker) {
     FormatType();
     ~FormatType();
 
+    // Serializes and deserializes a FormatType for use in IPC messages.
     std::string Serialize() const;
     static FormatType Deserialize(const std::string& serialization);
 
-    // FormatType can be used as the key in a map on some platforms.
 #if defined(OS_WIN) || defined(USE_AURA)
-    bool operator<(const FormatType& other) const {
-      return data_ < other.data_;
-    }
+    // FormatType can be used in a set on some platforms.
+    bool operator<(const FormatType& other) const;
+#endif
+
+#if defined(OS_WIN)
+    const FORMATETC& ToFormatEtc() const { return data_; }
+#elif defined(OS_MACOSX)
+    // Custom copy and assignment constructor to handle NSString.
+    FormatType(const FormatType& other);
+    FormatType& operator=(const FormatType& other);
+#elif defined(USE_AURA)
+    const std::string& ToString() const { return data_; }
 #endif
 
    private:
@@ -89,23 +102,25 @@ class UI_EXPORT Clipboard : NON_EXPORTED_BASE(public base::ThreadChecker) {
 
     bool Equals(const FormatType& other) const;
 
+    // Platform-specific glue used internally by the Clipboard class. Each
+    // plaform should define,at least one of each of the following:
+    // 1. A constructor that wraps that native clipboard format descriptor.
+    // 2. An accessor to retrieve the wrapped descriptor.
+    // 3. A data member to hold the wrapped descriptor.
+    //
+    // Note that in some cases, the accessor for the wrapped descriptor may be
+    // public, as these format types can be used by drag and drop code as well.
 #if defined(OS_WIN)
     explicit FormatType(UINT native_format);
-    UINT ToUINT() const { return data_; }
-    UINT data_;
+    FormatType(UINT native_format, LONG index);
+    UINT ToUINT() const { return data_.cfFormat; }
+    FORMATETC data_;
 #elif defined(OS_MACOSX)
-   public:
-    FormatType(const FormatType& other);
-    FormatType& operator=(const FormatType& other);
-   private:
     explicit FormatType(NSString* native_format);
     NSString* ToNSString() const { return data_; }
     NSString* data_;
 #elif defined(USE_AURA)
     explicit FormatType(const std::string& native_format);
-   public:
-    const std::string& ToString() const { return data_; }
-   private:
     std::string data_;
 #elif defined(TOOLKIT_GTK)
     explicit FormatType(const std::string& native_format);
@@ -115,11 +130,12 @@ class UI_EXPORT Clipboard : NON_EXPORTED_BASE(public base::ThreadChecker) {
 #elif defined(OS_ANDROID)
     explicit FormatType(const std::string& native_format);
     const std::string& data() const { return data_; }
-    int compare(const std::string& str) const { return data_.compare(str); }
     std::string data_;
 #else
 #error No FormatType definition.
 #endif
+
+    // Copyable and assignable, since this is essentially an opaque value type.
   };
 
   // ObjectType designates the type of data to be stored in the clipboard. This
@@ -172,14 +188,6 @@ class UI_EXPORT Clipboard : NON_EXPORTED_BASE(public base::ThreadChecker) {
   typedef std::vector<ObjectMapParam> ObjectMapParams;
   typedef std::map<int /* ObjectType */, ObjectMapParams> ObjectMap;
 
-  // WriteObject() caller can use the SourceTag that will be stored in the
-  // clipboard. NULL value means "no tag".
-  typedef void* SourceTag;
-  // kInvalidSourceTag is not NULL but a special value != any pointer.
-  static const SourceTag kInvalidSourceTag;
-  static ObjectMapParam SourceTag2Binary(SourceTag tag);
-  static SourceTag Binary2SourceTag(const std::string& serialization);
-
   // Buffer designates which clipboard the action should be applied to.
   // Only platforms that use the X Window System support the selection
   // buffer.
@@ -187,13 +195,6 @@ class UI_EXPORT Clipboard : NON_EXPORTED_BASE(public base::ThreadChecker) {
     BUFFER_STANDARD,
     BUFFER_SELECTION,
   };
-
-  // The callback is called after Clipboard::WriteObjects().
-  // Don't use it for notification about changed OS clipboard.
-  void set_write_objects_callback_for_testing(
-      const base::Callback<void(Buffer)>& cb) {
-    write_objects_callback_ = cb;
-  }
 
   static bool IsValidBuffer(int32 buffer) {
     switch (buffer) {
@@ -232,9 +233,7 @@ class UI_EXPORT Clipboard : NON_EXPORTED_BASE(public base::ThreadChecker) {
   // contents of |objects|. On Windows they are copied to the system clipboard.
   // On linux they are copied into a structure owned by the Clipboard object and
   // kept until the system clipboard is set again.
-  // SourceTag is optional value to be stored in the clipboard, NULL won't be
-  // stored.
-  void WriteObjects(Buffer buffer, const ObjectMap& objects, SourceTag tag);
+  void WriteObjects(Buffer buffer, const ObjectMap& objects);
 
   // Returns a sequence number which uniquely identifies clipboard state.
   // This can be used to version the data on the clipboard and determine
@@ -281,9 +280,6 @@ class UI_EXPORT Clipboard : NON_EXPORTED_BASE(public base::ThreadChecker) {
   // as a byte vector.
   void ReadData(const FormatType& format, std::string* result) const;
 
-  // Reads Source tag from the clipboard, if available.
-  SourceTag ReadSourceTag(Buffer buffer) const;
-
   // Gets the FormatType corresponding to an arbitrary format string,
   // registering it with the system if needed. Due to Windows/Linux
   // limitiations, |format_string| must never be controlled by the user.
@@ -306,7 +302,6 @@ class UI_EXPORT Clipboard : NON_EXPORTED_BASE(public base::ThreadChecker) {
   // crbug.com/158399.
   static const FormatType& GetWebCustomDataFormatType();
   static const FormatType& GetPepperCustomDataFormatType();
-  static const FormatType& GetSourceTagFormatType();
 
   // Embeds a pointer to a SharedMemory object pointed to by |bitmap_handle|
   // belonging to |process| into a shared bitmap [CBF_SMBITMAP] slot in
@@ -321,13 +316,8 @@ class UI_EXPORT Clipboard : NON_EXPORTED_BASE(public base::ThreadChecker) {
   static const FormatType& GetTextHtmlFormatType();
   static const FormatType& GetCFHDropFormatType();
   static const FormatType& GetFileDescriptorFormatType();
-  static const FormatType& GetFileContentFormatZeroType();
-#endif
-
-#if defined(OS_MACOSX)
-  // Allows code that directly manipulates the clipboard and doesn't use this
-  // class to write a SourceTag.
-  static void WriteSourceTag(NSPasteboard* pb, SourceTag tag);
+  static const FormatType& GetFileContentZeroFormatType();
+  static const FormatType& GetIDListFormatType();
 #endif
 
  private:
@@ -339,8 +329,6 @@ class UI_EXPORT Clipboard : NON_EXPORTED_BASE(public base::ThreadChecker) {
   ~Clipboard();
 
   void DispatchObject(ObjectType type, const ObjectMapParams& params);
-
-  void WriteObjectsImpl(Buffer buffer, const ObjectMap& objects, SourceTag tag);
 
   void WriteText(const char* text_data, size_t text_len);
 
@@ -363,17 +351,6 @@ class UI_EXPORT Clipboard : NON_EXPORTED_BASE(public base::ThreadChecker) {
   void WriteData(const FormatType& format,
                  const char* data_data,
                  size_t data_len);
-
-  void WriteSourceTag(SourceTag tag);
-
-  enum TrackedAction {
-    WRITE_CLIPBOARD_NO_SOURCE_TAG,
-    WRITE_CLIPBOARD_SOURCE_TAG,
-    READ_TEXT,
-    MAX_TRACKED_ACTION,
-  };
-
-  void ReportAction(Buffer buffer, TrackedAction action) const;
 #if defined(OS_WIN)
   void WriteBitmapFromHandle(HBITMAP source_hbitmap,
                              const gfx::Size& size);
@@ -393,10 +370,8 @@ class UI_EXPORT Clipboard : NON_EXPORTED_BASE(public base::ThreadChecker) {
   HWND GetClipboardWindow() const;
 
   // Mark this as mutable so const methods can still do lazy initialization.
-  mutable HWND clipboard_owner_;
+  mutable scoped_ptr<base::win::MessageWindow> clipboard_owner_;
 
-  // True if we can create a window.
-  bool create_window_;
 #elif defined(TOOLKIT_GTK)
   // The public API is via WriteObjects() which dispatches to multiple
   // Write*() calls, but on GTK we must write all the clipboard types
@@ -417,26 +392,17 @@ class UI_EXPORT Clipboard : NON_EXPORTED_BASE(public base::ThreadChecker) {
 
   // Find the gtk clipboard for the passed buffer enum.
   GtkClipboard* LookupBackingClipboard(Buffer clipboard) const;
-  // Reads raw data from the specified clipboard with the given format type.
-  void ReadDataImpl(Buffer buffer,
-                    const FormatType& format,
-                    std::string* result) const;
 
   TargetMap* clipboard_data_;
   GtkClipboard* clipboard_;
   GtkClipboard* primary_selection_;
 #elif defined(USE_AURA) && defined(USE_X11) && !defined(OS_CHROMEOS)
  private:
-  // Reads raw data from the specified clipboard with the given format type.
-  void ReadDataImpl(Buffer buffer,
-                    const FormatType& format,
-                    std::string* result) const;
   // We keep our implementation details private because otherwise we bring in
   // the X11 headers and break chrome compile.
   class AuraX11Details;
   scoped_ptr<AuraX11Details> aurax11_details_;
 #endif
-  base::Callback<void(Buffer)> write_objects_callback_;
 
   DISALLOW_COPY_AND_ASSIGN(Clipboard);
 };

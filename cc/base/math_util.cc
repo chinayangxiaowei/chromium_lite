@@ -29,63 +29,24 @@ static HomogeneousCoordinate ProjectHomogeneousPoint(
   // happens when the layer is rotated so that it is infinitesimally thin, or
   // when it is co-planar with the camera origin -- i.e. when the layer is
   // invisible anyway.
-  if (!transform.matrix().getDouble(2, 2))
+  if (!transform.matrix().get(2, 2))
     return HomogeneousCoordinate(0.0, 0.0, 0.0, 1.0);
 
-  double x = p.x();
-  double y = p.y();
-  double z = -(transform.matrix().getDouble(2, 0) * x +
-               transform.matrix().getDouble(2, 1) * y +
-               transform.matrix().getDouble(2, 3)) /
-             transform.matrix().getDouble(2, 2);
-  // implicit definition of w = 1;
-
-  double out_x = x * transform.matrix().getDouble(0, 0) +
-                 y * transform.matrix().getDouble(0, 1) +
-                 z * transform.matrix().getDouble(0, 2) +
-                 transform.matrix().getDouble(0, 3);
-  double out_y = x * transform.matrix().getDouble(1, 0) +
-                 y * transform.matrix().getDouble(1, 1) +
-                 z * transform.matrix().getDouble(1, 2) +
-                 transform.matrix().getDouble(1, 3);
-  double out_z = x * transform.matrix().getDouble(2, 0) +
-                 y * transform.matrix().getDouble(2, 1) +
-                 z * transform.matrix().getDouble(2, 2) +
-                 transform.matrix().getDouble(2, 3);
-  double out_w = x * transform.matrix().getDouble(3, 0) +
-                 y * transform.matrix().getDouble(3, 1) +
-                 z * transform.matrix().getDouble(3, 2) +
-                 transform.matrix().getDouble(3, 3);
-
-  return HomogeneousCoordinate(out_x, out_y, out_z, out_w);
+  SkMScalar z = -(transform.matrix().get(2, 0) * p.x() +
+             transform.matrix().get(2, 1) * p.y() +
+             transform.matrix().get(2, 3)) /
+             transform.matrix().get(2, 2);
+  HomogeneousCoordinate result(p.x(), p.y(), z, 1.0);
+  transform.matrix().mapMScalars(result.vec, result.vec);
+  return result;
 }
 
 static HomogeneousCoordinate MapHomogeneousPoint(
     const gfx::Transform& transform,
     const gfx::Point3F& p) {
-  double x = p.x();
-  double y = p.y();
-  double z = p.z();
-  // implicit definition of w = 1;
-
-  double out_x = x * transform.matrix().getDouble(0, 0) +
-                 y * transform.matrix().getDouble(0, 1) +
-                 z * transform.matrix().getDouble(0, 2) +
-                 transform.matrix().getDouble(0, 3);
-  double out_y = x * transform.matrix().getDouble(1, 0) +
-                 y * transform.matrix().getDouble(1, 1) +
-                 z * transform.matrix().getDouble(1, 2) +
-                 transform.matrix().getDouble(1, 3);
-  double out_z = x * transform.matrix().getDouble(2, 0) +
-                 y * transform.matrix().getDouble(2, 1) +
-                 z * transform.matrix().getDouble(2, 2) +
-                 transform.matrix().getDouble(2, 3);
-  double out_w = x * transform.matrix().getDouble(3, 0) +
-                 y * transform.matrix().getDouble(3, 1) +
-                 z * transform.matrix().getDouble(3, 2) +
-                 transform.matrix().getDouble(3, 3);
-
-  return HomogeneousCoordinate(out_x, out_y, out_z, out_w);
+  HomogeneousCoordinate result(p.x(), p.y(), p.z(), 1.0);
+  transform.matrix().mapMScalars(result.vec, result.vec);
+  return result;
 }
 
 static HomogeneousCoordinate ComputeClippedPointForEdge(
@@ -106,18 +67,18 @@ static HomogeneousCoordinate ComputeClippedPointForEdge(
 
   // Technically this is a special case of the following assertion, but its a
   // good idea to keep it an explicit sanity check here.
-  DCHECK_NE(h2.w, h1.w);
+  DCHECK_NE(h2.w(), h1.w());
   // Exactly one of h1 or h2 (but not both) must be on the negative side of the
   // w plane when this is called.
   DCHECK(h1.ShouldBeClipped() ^ h2.ShouldBeClipped());
 
-  double w = 0.00001;  // or any positive non-zero small epsilon
+  SkMScalar w = 0.00001;  // or any positive non-zero small epsilon
 
-  double t = (w - h1.w) / (h2.w - h1.w);
+  SkMScalar t = (w - h1.w()) / (h2.w() - h1.w());
 
-  double x = (1 - t) * h1.x + t * h2.x;
-  double y = (1 - t) * h1.y + t * h2.y;
-  double z = (1 - t) * h1.z + t * h2.z;
+  SkMScalar x = (1 - t) * h1.x() + t * h2.x();
+  SkMScalar y = (1 - t) * h1.y() + t * h2.y();
+  SkMScalar z = (1 - t) * h1.z() + t * h2.z();
 
   return HomogeneousCoordinate(x, y, z, w);
 }
@@ -135,9 +96,9 @@ static inline void ExpandBoundsToIncludePoint(float* xmin,
 
 static inline void AddVertexToClippedQuad(gfx::PointF new_vertex,
                                           gfx::PointF clipped_quad[8],
-                                          int& num_vertices_in_clipped_quad) {
-  clipped_quad[num_vertices_in_clipped_quad] = new_vertex;
-  num_vertices_in_clipped_quad++;
+                                          int* num_vertices_in_clipped_quad) {
+  clipped_quad[*num_vertices_in_clipped_quad] = new_vertex;
+  (*num_vertices_in_clipped_quad)++;
 }
 
 gfx::Rect MathUtil::MapClippedRect(const gfx::Transform& transform,
@@ -197,7 +158,7 @@ gfx::RectF MathUtil::ProjectClippedRect(const gfx::Transform& transform,
 void MathUtil::MapClippedQuad(const gfx::Transform& transform,
                               const gfx::QuadF& src_quad,
                               gfx::PointF clipped_quad[8],
-                              int& num_vertices_in_clipped_quad) {
+                              int* num_vertices_in_clipped_quad) {
   HomogeneousCoordinate h1 =
       MapHomogeneousPoint(transform, gfx::Point3F(src_quad.p1()));
   HomogeneousCoordinate h2 =
@@ -210,7 +171,7 @@ void MathUtil::MapClippedQuad(const gfx::Transform& transform,
   // The order of adding the vertices to the array is chosen so that
   // clockwise / counter-clockwise orientation is retained.
 
-  num_vertices_in_clipped_quad = 0;
+  *num_vertices_in_clipped_quad = 0;
 
   if (!h1.ShouldBeClipped()) {
     AddVertexToClippedQuad(
@@ -260,7 +221,7 @@ void MathUtil::MapClippedQuad(const gfx::Transform& transform,
         num_vertices_in_clipped_quad);
   }
 
-  DCHECK_LE(num_vertices_in_clipped_quad, 8);
+  DCHECK_LE(*num_vertices_in_clipped_quad, 8);
 }
 
 gfx::RectF MathUtil::ComputeEnclosingRectOfVertices(gfx::PointF vertices[],
@@ -400,7 +361,7 @@ gfx::PointF MathUtil::MapPoint(const gfx::Transform& transform,
                                bool* clipped) {
   HomogeneousCoordinate h = MapHomogeneousPoint(transform, gfx::Point3F(p));
 
-  if (h.w > 0) {
+  if (h.w() > 0) {
     *clipped = false;
     return h.CartesianPoint2d();
   }
@@ -409,7 +370,7 @@ gfx::PointF MathUtil::MapPoint(const gfx::Transform& transform,
   *clipped = true;
 
   // Avoid dividing by w if w == 0.
-  if (!h.w)
+  if (!h.w())
     return gfx::PointF();
 
   // This return value will be invalid because clipped == true, but (1) users of
@@ -424,7 +385,7 @@ gfx::Point3F MathUtil::MapPoint(const gfx::Transform& transform,
                                 bool* clipped) {
   HomogeneousCoordinate h = MapHomogeneousPoint(transform, p);
 
-  if (h.w > 0) {
+  if (h.w() > 0) {
     *clipped = false;
     return h.CartesianPoint3d();
   }
@@ -433,7 +394,7 @@ gfx::Point3F MathUtil::MapPoint(const gfx::Transform& transform,
   *clipped = true;
 
   // Avoid dividing by w if w == 0.
-  if (!h.w)
+  if (!h.w())
     return gfx::Point3F();
 
   // This return value will be invalid because clipped == true, but (1) users of
@@ -465,7 +426,7 @@ gfx::PointF MathUtil::ProjectPoint(const gfx::Transform& transform,
                                    bool* clipped) {
   HomogeneousCoordinate h = ProjectHomogeneousPoint(transform, p);
 
-  if (h.w > 0) {
+  if (h.w() > 0) {
     // The cartesian coordinates will be valid in this case.
     *clipped = false;
     return h.CartesianPoint2d();
@@ -475,7 +436,7 @@ gfx::PointF MathUtil::ProjectPoint(const gfx::Transform& transform,
   *clipped = true;
 
   // Avoid dividing by w if w == 0.
-  if (!h.w)
+  if (!h.w())
     return gfx::PointF();
 
   // This return value will be invalid because clipped == true, but (1) users of
@@ -526,19 +487,79 @@ scoped_ptr<base::Value> MathUtil::AsValue(gfx::Size s) {
   return res.PassAs<base::Value>();
 }
 
-scoped_ptr<base::Value> MathUtil::AsValue(gfx::PointF pt) {
+scoped_ptr<base::Value> MathUtil::AsValue(gfx::SizeF s) {
   scoped_ptr<base::DictionaryValue> res(new base::DictionaryValue());
-  res->SetDouble("x", pt.x());
-  res->SetDouble("y", pt.y());
+  res->SetDouble("width", s.width());
+  res->SetDouble("height", s.height());
   return res.PassAs<base::Value>();
 }
 
-scoped_ptr<base::Value> MathUtil::AsValue(gfx::QuadF q) {
-  scoped_ptr<base::DictionaryValue> res(new base::DictionaryValue());
-  res->Set("p1", AsValue(q.p1()).release());
-  res->Set("p2", AsValue(q.p2()).release());
-  res->Set("p3", AsValue(q.p3()).release());
-  res->Set("p4", AsValue(q.p4()).release());
+scoped_ptr<base::Value> MathUtil::AsValue(gfx::Rect r) {
+  scoped_ptr<base::ListValue> res(new base::ListValue());
+  res->AppendInteger(r.x());
+  res->AppendInteger(r.y());
+  res->AppendInteger(r.width());
+  res->AppendInteger(r.height());
+  return res.PassAs<base::Value>();
+}
+
+bool MathUtil::FromValue(const base::Value* raw_value, gfx::Rect* out_rect) {
+  const base::ListValue* value = NULL;
+  if (!raw_value->GetAsList(&value))
+    return false;
+
+  if (value->GetSize() != 4)
+    return false;
+
+  int x, y, w, h;
+  bool ok = true;
+  ok &= value->GetInteger(0, &x);
+  ok &= value->GetInteger(1, &y);
+  ok &= value->GetInteger(2, &w);
+  ok &= value->GetInteger(3, &h);
+  if (!ok)
+    return false;
+
+  *out_rect = gfx::Rect(x, y, w, h);
+  return true;
+}
+
+scoped_ptr<base::Value> MathUtil::AsValue(gfx::PointF pt) {
+  scoped_ptr<base::ListValue> res(new base::ListValue());
+  res->AppendDouble(pt.x());
+  res->AppendDouble(pt.y());
+  return res.PassAs<base::Value>();
+}
+
+scoped_ptr<base::Value> MathUtil::AsValue(const gfx::QuadF& q) {
+  scoped_ptr<base::ListValue> res(new base::ListValue());
+  res->AppendDouble(q.p1().x());
+  res->AppendDouble(q.p1().y());
+  res->AppendDouble(q.p2().x());
+  res->AppendDouble(q.p2().y());
+  res->AppendDouble(q.p3().x());
+  res->AppendDouble(q.p3().y());
+  res->AppendDouble(q.p4().x());
+  res->AppendDouble(q.p4().y());
+  return res.PassAs<base::Value>();
+}
+
+scoped_ptr<base::Value> MathUtil::AsValue(const gfx::RectF& rect) {
+  scoped_ptr<base::ListValue> res(new base::ListValue());
+  res->AppendDouble(rect.x());
+  res->AppendDouble(rect.y());
+  res->AppendDouble(rect.width());
+  res->AppendDouble(rect.height());
+  return res.PassAs<base::Value>();
+}
+
+scoped_ptr<base::Value> MathUtil::AsValue(const gfx::Transform& transform) {
+  scoped_ptr<base::ListValue> res(new base::ListValue());
+  const SkMatrix44& m = transform.matrix();
+  for (int row = 0; row < 4; ++row) {
+    for (int col = 0; col < 4; ++col)
+      res->AppendDouble(m.getDouble(row, col));
+  }
   return res.PassAs<base::Value>();
 }
 

@@ -7,7 +7,6 @@
 #include <pulse/pulseaudio.h>
 
 #include "base/logging.h"
-#include "base/message_loop.h"
 #include "media/audio/pulse/audio_manager_pulse.h"
 #include "media/audio/pulse/pulse_util.h"
 #include "media/base/seekable_buffer.h"
@@ -33,7 +32,6 @@ PulseAudioInputStream::PulseAudioInputStream(AudioManagerPulse* audio_manager,
       pa_context_(context),
       handle_(NULL),
       context_state_changed_(false) {
-  DCHECK(audio_manager_->GetMessageLoop()->BelongsToCurrentThread());
   DCHECK(mainloop);
   DCHECK(context);
 }
@@ -45,9 +43,8 @@ PulseAudioInputStream::~PulseAudioInputStream() {
 }
 
 bool PulseAudioInputStream::Open() {
-  DCHECK(audio_manager_->GetMessageLoop()->BelongsToCurrentThread());
+  DCHECK(thread_checker_.CalledOnValidThread());
   AutoPulseLock auto_lock(pa_mainloop_);
-
   if (!pulse::CreateInputStream(pa_mainloop_, pa_context_, &handle_, params_,
                                 device_name_, &StreamNotifyCallback, this)) {
     return false;
@@ -61,9 +58,13 @@ bool PulseAudioInputStream::Open() {
 }
 
 void PulseAudioInputStream::Start(AudioInputCallback* callback) {
-  DCHECK(audio_manager_->GetMessageLoop()->BelongsToCurrentThread());
+  DCHECK(thread_checker_.CalledOnValidThread());
   DCHECK(callback);
   DCHECK(handle_);
+
+  // AGC needs to be started out of the lock.
+  StartAgc();
+
   AutoPulseLock auto_lock(pa_mainloop_);
 
   if (stream_started_)
@@ -84,16 +85,19 @@ void PulseAudioInputStream::Start(AudioInputCallback* callback) {
 }
 
 void PulseAudioInputStream::Stop() {
-  DCHECK(audio_manager_->GetMessageLoop()->BelongsToCurrentThread());
+  DCHECK(thread_checker_.CalledOnValidThread());
   AutoPulseLock auto_lock(pa_mainloop_);
   if (!stream_started_)
     return;
 
+  StopAgc();
+
   // Set the flag to false to stop filling new data to soundcard.
   stream_started_ = false;
 
-  pa_operation* operation = pa_stream_flush(
-      handle_, &pulse::StreamSuccessCallback, pa_mainloop_);
+  pa_operation* operation = pa_stream_flush(handle_,
+                                            &pulse::StreamSuccessCallback,
+                                            pa_mainloop_);
   WaitForOperationCompletion(pa_mainloop_, operation);
 
   // Stop the stream.
@@ -104,7 +108,7 @@ void PulseAudioInputStream::Stop() {
 }
 
 void PulseAudioInputStream::Close() {
-  DCHECK(audio_manager_->GetMessageLoop()->BelongsToCurrentThread());
+  DCHECK(thread_checker_.CalledOnValidThread());
   {
     AutoPulseLock auto_lock(pa_mainloop_);
     if (handle_) {
@@ -216,7 +220,7 @@ void PulseAudioInputStream::VolumeCallback(pa_context* context,
   if (stream->channels_ != info->channel_map.channels)
     stream->channels_ = info->channel_map.channels;
 
-  pa_volume_t volume = PA_VOLUME_MUTED; // Minimum possible value.
+  pa_volume_t volume = PA_VOLUME_MUTED;  // Minimum possible value.
   // Use the max volume of any channel as the volume.
   for (int i = 0; i < stream->channels_; ++i) {
     if (volume < info->volume.values[i])
@@ -248,11 +252,10 @@ void PulseAudioInputStream::ReadData() {
   // Update the AGC volume level once every second. Note that,
   // |volume| is also updated each time SetVolume() is called
   // through IPC by the render-side AGC.
-  // QueryAgcVolume() will trigger a callback to asynchronously update the
-  // |volume_|, we disregard the |normalized_volume| from QueryAgcVolume()
+  // We disregard the |normalized_volume| from GetAgcVolume()
   // and use the value calculated by |volume_|.
   double normalized_volume = 0.0;
-  QueryAgcVolume(&normalized_volume);
+  GetAgcVolume(&normalized_volume);
   normalized_volume = volume_ / GetMaxVolume();
 
   do {
@@ -271,18 +274,16 @@ void PulseAudioInputStream::ReadData() {
   int packet_size = params_.GetBytesPerBuffer();
   while (buffer_->forward_bytes() >= packet_size) {
     buffer_->Read(audio_data_buffer_.get(), packet_size);
-    callback_->OnData(this, audio_data_buffer_.get(),  packet_size,
+    callback_->OnData(this, audio_data_buffer_.get(), packet_size,
                       hardware_delay, normalized_volume);
 
     if (buffer_->forward_bytes() < packet_size)
       break;
 
-    // TODO(xians): improve the code by implementing a WaitTillDataReady on the
-    // input side.
+    // TODO(xians): Remove once PPAPI is using circular buffers.
     DVLOG(1) << "OnData is being called consecutively, sleep 5ms to "
              << "wait until render consumes the data";
-    base::PlatformThread::Sleep(
-        base::TimeDelta::FromMilliseconds(5));
+    base::PlatformThread::Sleep(base::TimeDelta::FromMilliseconds(5));
   }
 
   pa_threaded_mainloop_signal(pa_mainloop_, 0);

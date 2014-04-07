@@ -16,7 +16,7 @@ class FakeBaseTabStripController : public TabStripController {
   FakeBaseTabStripController();
   virtual ~FakeBaseTabStripController();
 
-  void AddTab(int index);
+  void AddTab(int index, bool is_active);
   void RemoveTab(int index);
 
   void set_tab_strip(TabStrip* tab_strip) { tab_strip_ = tab_strip; }
@@ -36,7 +36,8 @@ class FakeBaseTabStripController : public TabStripController {
   virtual void AddSelectionFromAnchorTo(int index) OVERRIDE;
   virtual void CloseTab(int index, CloseTabSource source) OVERRIDE;
   virtual void ShowContextMenuForTab(Tab* tab,
-                                     const gfx::Point& p) OVERRIDE;
+                                     const gfx::Point& p,
+                                     ui::MenuSourceType source_type) OVERRIDE;
   virtual void UpdateLoadingAnimations() OVERRIDE;
   virtual int HasAvailableDragActions() const OVERRIDE;
   virtual void OnDropIndexUpdate(int index, bool drop_before) OVERRIDE;
@@ -47,11 +48,14 @@ class FakeBaseTabStripController : public TabStripController {
   virtual void CreateNewTab() OVERRIDE;
   virtual bool IsIncognito() OVERRIDE;
   virtual void LayoutTypeMaybeChanged() OVERRIDE;
+  virtual void OnStartedDraggingTabs() OVERRIDE;
+  virtual void OnStoppedDraggingTabs() OVERRIDE;
 
  private:
   TabStrip* tab_strip_;
 
   int num_tabs_;
+  int active_index_;
 
   ui::ListSelectionModel selection_model_;
 

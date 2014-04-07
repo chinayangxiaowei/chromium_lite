@@ -4,7 +4,8 @@
 
 #include "sync/internal_api/public/write_node.h"
 
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "sync/internal_api/public/base_transaction.h"
 #include "sync/internal_api/public/write_transaction.h"
@@ -57,6 +58,7 @@ void WriteNode::SetTitle(const std::wstring& title) {
     new_legal_title = kEncryptedString;
   } else {
     SyncAPINameToServerName(WideToUTF8(title), &new_legal_title);
+    TruncateUTF8ToByteSize(new_legal_title, 255, &new_legal_title);
   }
 
   std::string current_legal_title;
@@ -184,6 +186,20 @@ void WriteNode::SetSessionSpecifics(
   SetEntitySpecifics(entity_specifics);
 }
 
+void WriteNode::SetManagedUserSettingSpecifics(
+    const sync_pb::ManagedUserSettingSpecifics& new_value) {
+  sync_pb::EntitySpecifics entity_specifics;
+  entity_specifics.mutable_managed_user_setting()->CopyFrom(new_value);
+  SetEntitySpecifics(entity_specifics);
+}
+
+void WriteNode::SetManagedUserSpecifics(
+    const sync_pb::ManagedUserSpecifics& new_value) {
+  sync_pb::EntitySpecifics entity_specifics;
+  entity_specifics.mutable_managed_user()->CopyFrom(new_value);
+  SetEntitySpecifics(entity_specifics);
+}
+
 void WriteNode::SetDeviceInfoSpecifics(
     const sync_pb::DeviceInfoSpecifics& new_value) {
   sync_pb::EntitySpecifics entity_specifics;
@@ -209,6 +225,7 @@ void WriteNode::SetEntitySpecifics(
     const sync_pb::EntitySpecifics& new_value) {
   ModelType new_specifics_type =
       GetModelTypeFromSpecifics(new_value);
+  CHECK(!new_value.password().has_client_only_encrypted_data());
   DCHECK_NE(new_specifics_type, UNSPECIFIED);
   DVLOG(1) << "Writing entity specifics of type "
            << ModelTypeToString(new_specifics_type);

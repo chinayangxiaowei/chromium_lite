@@ -4,9 +4,11 @@
 
 #include "chrome/browser/ui/tabs/tab_audio_indicator.h"
 
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
+#include "grit/theme_resources.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/animation/linear_animation.h"
+#include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/rect.h"
 
@@ -20,7 +22,7 @@ class TabAudioIndicatorTest : public TabAudioIndicator::Delegate,
   }
 
   int schedule_paint_count_;
-  MessageLoopForUI message_loop_;  // Needed for ui::LinearAnimation.
+  base::MessageLoopForUI message_loop_;  // Needed for ui::LinearAnimation.
 
  private:
   DISALLOW_COPY_AND_ASSIGN(TabAudioIndicatorTest);
@@ -53,6 +55,11 @@ TEST_F(TabAudioIndicatorTest, Paint) {
 
   // Nothing to test here. Just exercise the paint code to verify that nothing
   // leaks or crashes.
+  indicator.Paint(&canvas, rect);
+
+  // Paint with a favicon.
+  ui::ResourceBundle& rb = ResourceBundle::GetSharedInstance();
+  indicator.set_favicon(*rb.GetImageSkiaNamed(IDR_PRODUCT_LOGO_16));
   indicator.Paint(&canvas, rect);
 }
 

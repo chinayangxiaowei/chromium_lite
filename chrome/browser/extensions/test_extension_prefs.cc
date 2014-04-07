@@ -8,8 +8,8 @@
 #include "base/bind_helpers.h"
 #include "base/file_util.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
-#include "base/message_loop_proxy.h"
+#include "base/message_loop/message_loop.h"
+#include "base/message_loop/message_loop_proxy.h"
 #include "base/prefs/json_pref_store.h"
 #include "base/prefs/pref_value_store.h"
 #include "base/run_loop.h"
@@ -58,9 +58,7 @@ class IncrementalTimeProvider : public ExtensionPrefs::TimeProvider {
 }  // namespace
 
 TestExtensionPrefs::TestExtensionPrefs(base::SequencedTaskRunner* task_runner)
-    : pref_service_(NULL),
-      task_runner_(task_runner),
-      extensions_disabled_(false) {
+    : task_runner_(task_runner), extensions_disabled_(false) {
   EXPECT_TRUE(temp_dir_.CreateUniqueTempDir());
   preferences_file_ = temp_dir_.path().AppendASCII("Preferences");
   extensions_dir_ = temp_dir_.path().AppendASCII("Extensions");
@@ -77,20 +75,21 @@ PrefService* TestExtensionPrefs::pref_service() {
   return pref_service_.get();
 }
 
-const scoped_refptr<PrefRegistrySyncable>& TestExtensionPrefs::pref_registry() {
+const scoped_refptr<user_prefs::PrefRegistrySyncable>&
+TestExtensionPrefs::pref_registry() {
   return pref_registry_;
 }
 
 void TestExtensionPrefs::ResetPrefRegistry() {
-  pref_registry_ = new PrefRegistrySyncable;
-  ExtensionPrefs::RegisterUserPrefs(pref_registry_);
+  pref_registry_ = new user_prefs::PrefRegistrySyncable;
+  ExtensionPrefs::RegisterProfilePrefs(pref_registry_.get());
 }
 
 void TestExtensionPrefs::RecreateExtensionPrefs() {
   // We persist and reload the PrefService's PrefStores because this process
   // deletes all empty dictionaries. The ExtensionPrefs implementation
   // needs to be able to handle this situation.
-  if (pref_service_.get()) {
+  if (pref_service_) {
     // Commit a pending write (which posts a task to task_runner_) and wait for
     // it to finish.
     pref_service_->CommitPendingWrite();
@@ -105,12 +104,12 @@ void TestExtensionPrefs::RecreateExtensionPrefs() {
 
   extension_pref_value_map_.reset(new ExtensionPrefValueMap);
   PrefServiceMockBuilder builder;
-  builder.WithUserFilePrefs(preferences_file_, task_runner_);
+  builder.WithUserFilePrefs(preferences_file_, task_runner_.get());
   builder.WithExtensionPrefs(
       new ExtensionPrefStore(extension_pref_value_map_.get(), false));
-  pref_service_.reset(builder.CreateSyncable(pref_registry_));
+  pref_service_.reset(builder.CreateSyncable(pref_registry_.get()));
 
-  prefs_ = ExtensionPrefs::Create(
+  prefs_.reset(ExtensionPrefs::Create(
       pref_service_.get(),
       temp_dir_.path(),
       extension_pref_value_map_.get(),
@@ -118,7 +117,7 @@ void TestExtensionPrefs::RecreateExtensionPrefs() {
       // Guarantee that no two extensions get the same installation time
       // stamp and we can reliably assert the installation order in the tests.
       scoped_ptr<ExtensionPrefs::TimeProvider>(
-          new IncrementalTimeProvider()));
+          new IncrementalTimeProvider())));
 }
 
 scoped_refptr<Extension> TestExtensionPrefs::AddExtension(std::string name) {
@@ -155,12 +154,14 @@ scoped_refptr<Extension> TestExtensionPrefs::AddExtensionWithManifestAndFlags(
   std::string errors;
   scoped_refptr<Extension> extension = Extension::Create(
       path, location, manifest, extra_flags, &errors);
-  EXPECT_TRUE(extension) << errors;
-  if (!extension)
+  EXPECT_TRUE(extension.get()) << errors;
+  if (!extension.get())
     return NULL;
 
   EXPECT_TRUE(Extension::IdIsValid(extension->id()));
-  prefs_->OnExtensionInstalled(extension, Extension::ENABLED,
+  prefs_->OnExtensionInstalled(extension.get(),
+                               Extension::ENABLED,
+                               Blacklist::NOT_BLACKLISTED,
                                syncer::StringOrdinal::CreateInitialOrdinal());
   return extension;
 }

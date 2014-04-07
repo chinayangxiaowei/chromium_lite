@@ -4,35 +4,25 @@
 
 #include "chrome/browser/chromeos/drive/file_write_helper.h"
 
+#include "base/bind.h"
+#include "base/callback.h"
 #include "base/threading/sequenced_worker_pool.h"
+#include "chrome/browser/chromeos/drive/file_system_interface.h"
 #include "content/public/browser/browser_thread.h"
 
 using content::BrowserThread;
 
 namespace drive {
 
-namespace {
-
-// Emits debug log when DriveFileSystem::CloseFile() is complete.
-void EmitDebugLogForCloseFile(const base::FilePath& file_path,
-                              DriveFileError file_error) {
-  if (file_error != DRIVE_FILE_OK) {
-    LOG(WARNING) << "CloseFile failed: " << file_path.AsUTF8Unsafe() << ": "
-                 << file_error;
-  }
-}
-
-}  // namespace
-
-FileWriteHelper::FileWriteHelper(DriveFileSystemInterface* file_system)
+FileWriteHelper::FileWriteHelper(FileSystemInterface* file_system)
     : file_system_(file_system),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_ptr_factory_(this)) {
-  // Must be created in DriveSystemService.
+      weak_ptr_factory_(this) {
+  // Must be created in DriveIntegrationService.
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 }
 
 FileWriteHelper::~FileWriteHelper() {
-  // Must be destroyed in DriveSystemService.
+  // Must be destroyed in DriveIntegrationService.
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 }
 
@@ -42,45 +32,22 @@ void FileWriteHelper::PrepareWritableFileAndRun(
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   DCHECK(!callback.is_null());
 
-  file_system_->CreateFile(
-      file_path,
-      false,  // it is not an error, even if the path already exists.
-      base::Bind(&FileWriteHelper::PrepareWritableFileAndRunAfterCreateFile,
-                 weak_ptr_factory_.GetWeakPtr(),
-                 file_path,
-                 callback));
-}
-
-void FileWriteHelper::PrepareWritableFileAndRunAfterCreateFile(
-    const base::FilePath& file_path,
-    const OpenFileCallback& callback,
-    DriveFileError error) {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  DCHECK(!callback.is_null());
-
-  if (error != DRIVE_FILE_OK) {
-    content::BrowserThread::GetBlockingPool()->PostTask(
-        FROM_HERE,
-        base::Bind(callback, error, base::FilePath()));
-    return;
-  }
   file_system_->OpenFile(
-      file_path,
+      file_path, OPEN_OR_CREATE_FILE,
       base::Bind(&FileWriteHelper::PrepareWritableFileAndRunAfterOpenFile,
-                 weak_ptr_factory_.GetWeakPtr(),
-                 file_path,
-                 callback));
+                 weak_ptr_factory_.GetWeakPtr(), file_path, callback));
 }
 
 void FileWriteHelper::PrepareWritableFileAndRunAfterOpenFile(
     const base::FilePath& file_path,
     const OpenFileCallback& callback,
-    DriveFileError error,
-    const base::FilePath& local_cache_path) {
+    FileError error,
+    const base::FilePath& local_cache_path,
+    const base::Closure& close_callback) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   DCHECK(!callback.is_null());
 
-  if (error != DRIVE_FILE_OK) {
+  if (error != FILE_ERROR_OK) {
     content::BrowserThread::GetBlockingPool()->PostTask(
         FROM_HERE,
         base::Bind(callback, error, base::FilePath()));
@@ -89,17 +56,8 @@ void FileWriteHelper::PrepareWritableFileAndRunAfterOpenFile(
 
   content::BrowserThread::GetBlockingPool()->PostTaskAndReply(
       FROM_HERE,
-      base::Bind(callback, DRIVE_FILE_OK, local_cache_path),
-      base::Bind(&FileWriteHelper::PrepareWritableFileAndRunAfterCallback,
-                 weak_ptr_factory_.GetWeakPtr(),
-                 file_path));
-}
-
-void FileWriteHelper::PrepareWritableFileAndRunAfterCallback(
-    const base::FilePath& file_path) {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  file_system_->CloseFile(file_path,
-                          base::Bind(&EmitDebugLogForCloseFile, file_path));
+      base::Bind(callback, FILE_ERROR_OK, local_cache_path),
+      close_callback);
 }
 
 }  // namespace drive

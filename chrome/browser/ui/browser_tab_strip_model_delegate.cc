@@ -5,7 +5,7 @@
 #include "chrome/browser/ui/browser_tab_strip_model_delegate.h"
 
 #include "base/bind.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sessions/tab_restore_service.h"
 #include "chrome/browser/sessions/tab_restore_service_factory.h"
@@ -30,7 +30,7 @@ namespace chrome {
 
 BrowserTabStripModelDelegate::BrowserTabStripModelDelegate(Browser* browser)
     : browser_(browser),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {
+      weak_factory_(this) {
 }
 
 BrowserTabStripModelDelegate::~BrowserTabStripModelDelegate() {
@@ -107,7 +107,7 @@ void BrowserTabStripModelDelegate::CloseFrameAfterDragSession() {
   // This is scheduled to run after we return to the message loop because
   // otherwise the frame will think the drag session is still active and ignore
   // the request.
-  MessageLoop::current()->PostTask(
+  base::MessageLoop::current()->PostTask(
       FROM_HERE,
       base::Bind(&BrowserTabStripModelDelegate::CloseFrame,
                  weak_factory_.GetWeakPtr()));

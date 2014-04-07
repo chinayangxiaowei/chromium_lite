@@ -6,8 +6,9 @@
 
 #include "base/i18n/rtl.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/certificate_viewer.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/infobars/infobar_service.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_list.h"
@@ -22,12 +23,10 @@
 #include "chrome/browser/ui/gtk/website_settings/permission_selector.h"
 #include "chrome/browser/ui/website_settings/website_settings.h"
 #include "chrome/browser/ui/website_settings/website_settings_utils.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/browser/cert_store.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/user_metrics.h"
-#include "googleurl/src/gurl.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "grit/locale_settings.h"
@@ -38,6 +37,7 @@
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/image/cairo_cached_surface.h"
 #include "ui/gfx/image/image.h"
+#include "url/gurl.h"
 
 using content::OpenURLParams;
 
@@ -75,10 +75,10 @@ GtkWidget* CreateTextLabel(const std::string& text,
 
 void ClearContainer(GtkWidget* container) {
   GList* child = gtk_container_get_children(GTK_CONTAINER(container));
-  while (child) {
-    gtk_container_remove(GTK_CONTAINER(container), GTK_WIDGET(child->data));
-    child = child->next;
-  }
+  for (GList* item = child; item; item = g_list_next(item))
+    gtk_container_remove(GTK_CONTAINER(container), GTK_WIDGET(item->data));
+
+  g_list_free(child);
 }
 
 void SetConnectionSection(GtkWidget* section_box,
@@ -158,9 +158,6 @@ InternalPageInfoPopupGtk::InternalPageInfoPopupGtk(
   GtkThemeService* theme_service = GtkThemeService::GetFrom(profile);
   GtkWidget* label = theme_service->BuildLabel(
       l10n_util::GetStringUTF8(IDS_PAGE_INFO_INTERNAL_PAGE), ui::kGdkBlack);
-  PangoAttrList* attributes = pango_attr_list_new();
-  pango_attr_list_insert(attributes,
-                         pango_attr_weight_new(PANGO_WEIGHT_BOLD));
   gtk_box_pack_start(GTK_BOX(contents), label, FALSE, FALSE, 0);
 
   gtk_widget_show_all(contents);
@@ -223,8 +220,7 @@ WebsiteSettingsPopupGtk::WebsiteSettingsPopupGtk(
       identity_contents_(NULL),
       connection_contents_(NULL),
       first_visit_contents_(NULL),
-      notebook_(NULL),
-      presenter_(NULL) {
+      notebook_(NULL) {
   BrowserWindowGtk* browser_window =
       BrowserWindowGtk::GetBrowserWindowForNativeWindow(parent);
   browser_ = browser_window->browser();
@@ -250,15 +246,10 @@ WebsiteSettingsPopupGtk::WebsiteSettingsPopupGtk(
     return;
   }
 
-  TabSpecificContentSettings* content_settings =
-      TabSpecificContentSettings::FromWebContents(web_contents);
-  InfoBarService* infobar_service =
-      InfoBarService::FromWebContents(web_contents);
-  presenter_.reset(new WebsiteSettings(this, profile,
-                                       content_settings,
-                                       infobar_service,
-                                       url, ssl,
-                                       content::CertStore::GetInstance()));
+  presenter_.reset(new WebsiteSettings(
+      this, profile, TabSpecificContentSettings::FromWebContents(web_contents),
+      InfoBarService::FromWebContents(web_contents), url, ssl,
+      content::CertStore::GetInstance()));
 }
 
 WebsiteSettingsPopupGtk::~WebsiteSettingsPopupGtk() {
@@ -273,7 +264,7 @@ void WebsiteSettingsPopupGtk::BubbleClosing(BubbleGtk* bubble,
 
   // Slightly delay destruction to allow the event stack to unwind and release
   // references to owned widgets.
-  MessageLoop::current()->DeleteSoon(FROM_HERE, this);
+  base::MessageLoop::current()->DeleteSoon(FROM_HERE, this);
 }
 
 void WebsiteSettingsPopupGtk::InitContents() {
@@ -489,7 +480,7 @@ void WebsiteSettingsPopupGtk::SetIdentityInfo(
   gtk_label_set_attributes(GTK_LABEL(identity_label), attributes);
   pango_attr_list_unref(attributes);
   gtk_box_pack_start(GTK_BOX(hbox), identity_label, FALSE, FALSE, 0);
-  close_button_.reset(CustomDrawButton::CloseButton(theme_service_));
+  close_button_.reset(CustomDrawButton::CloseButtonBubble(theme_service_));
   g_signal_connect(close_button_->widget(), "clicked",
                    G_CALLBACK(OnCloseButtonClickedThunk), this);
   gtk_box_pack_start(GTK_BOX(hbox), close_button_->widget(), FALSE, FALSE, 0);
@@ -506,6 +497,10 @@ void WebsiteSettingsPopupGtk::SetIdentityInfo(
       identity_status_text =
           l10n_util::GetStringUTF8(IDS_WEBSITE_SETTINGS_IDENTITY_VERIFIED);
       color = &kGdkGreen;
+      break;
+    case WebsiteSettings::SITE_IDENTITY_STATUS_ADMIN_PROVIDED_CERT:
+      identity_status_text =
+          l10n_util::GetStringUTF8(IDS_CERT_POLICY_PROVIDED_CERT_HEADER);
       break;
     default:
       identity_status_text =

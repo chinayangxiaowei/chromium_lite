@@ -12,30 +12,38 @@
 #include "base/bind_helpers.h"
 #include "base/command_line.h"
 #include "base/memory/singleton.h"
+#include "base/metrics/field_trial.h"
+#include "base/metrics/histogram.h"
 #include "base/path_service.h"
 #include "base/prefs/pref_service.h"
 #include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/value_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/auto_launch_trial.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/chrome_page_zoom.h"
 #include "chrome/browser/custom_home_pages_table_model.h"
 #include "chrome/browser/download/download_prefs.h"
 #include "chrome/browser/gpu/gpu_mode_manager.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
-#include "chrome/browser/net/url_fixer_upper.h"
+#include "chrome/browser/managed_mode/managed_user_registration_utility.h"
+#include "chrome/browser/managed_mode/managed_user_service.h"
+#include "chrome/browser/managed_mode/managed_user_service_factory.h"
+#include "chrome/browser/prefs/scoped_user_pref_update.h"
 #include "chrome/browser/prefs/session_startup_pref.h"
 #include "chrome/browser/printing/cloud_print/cloud_print_proxy_service.h"
 #include "chrome/browser/printing/cloud_print/cloud_print_proxy_service_factory.h"
-#include "chrome/browser/printing/cloud_print/cloud_print_setup_flow.h"
 #include "chrome/browser/printing/cloud_print/cloud_print_url.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_info_cache.h"
 #include "chrome/browser/profiles/profile_info_util.h"
-#include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/profiles/profile_metrics.h"
 #include "chrome/browser/profiles/profile_shortcut_manager.h"
+#include "chrome/browser/profiles/profile_window.h"
+#include "chrome/browser/profiles/profiles_state.h"
 #include "chrome/browser/search/search.h"
 #include "chrome/browser/search_engines/template_url.h"
 #include "chrome/browser/search_engines/template_url_service.h"
@@ -54,11 +62,12 @@
 #include "chrome/browser/ui/options/options_util.h"
 #include "chrome/browser/ui/webui/favicon_source.h"
 #include "chrome/common/chrome_constants.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
+#include "chrome/common/net/url_fixer_upper.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
+#include "chromeos/chromeos_switches.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/download_manager.h"
 #include "content/public/browser/navigation_controller.h"
@@ -76,24 +85,16 @@
 #include "grit/generated_resources.h"
 #include "grit/locale_settings.h"
 #include "grit/theme_resources.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebView.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/webui/web_ui_util.h"
 
-#if defined(ENABLE_MANAGED_USERS)
-#include "chrome/browser/managed_mode/managed_user_service.h"
-#include "chrome/browser/managed_mode/managed_user_service_factory.h"
-#endif
-
 #if !defined(OS_CHROMEOS)
-#include "chrome/browser/printing/cloud_print/cloud_print_setup_handler.h"
 #include "chrome/browser/ui/webui/options/advanced_options_utils.h"
 #endif
 
 #if defined(OS_CHROMEOS)
 #include "ash/magnifier/magnifier_constants.h"
-#include "base/chromeos/chromeos_version.h"
 #include "chrome/browser/chromeos/accessibility/accessibility_util.h"
 #include "chrome/browser/chromeos/extensions/wallpaper_manager_util.h"
 #include "chrome/browser/chromeos/login/user_manager.h"
@@ -110,10 +111,6 @@
 #include "chrome/installer/util/auto_launch_util.h"
 #endif  // defined(OS_WIN)
 
-#if defined(TOOLKIT_GTK)
-#include "chrome/browser/ui/gtk/gtk_theme_service.h"
-#endif  // defined(TOOLKIT_GTK)
-
 using content::BrowserContext;
 using content::BrowserThread;
 using content::DownloadManager;
@@ -125,13 +122,52 @@ namespace options {
 
 namespace {
 
-bool ShouldShowMultiProfilesUserList() {
+// Constants for the new tab button field trial.
+const char kProfileResetTrialName[] = "ManualResetProfile";
+const char kProfileResetTrialEnableGroupName[] = "Enable";
+
+bool ShouldShowMultiProfilesUserList(chrome::HostDesktopType desktop_type) {
 #if defined(OS_CHROMEOS)
   // On Chrome OS we use different UI for multi-profiles.
   return false;
 #else
-  return ProfileManager::IsMultipleProfilesEnabled();
+  if (desktop_type != chrome::HOST_DESKTOP_TYPE_NATIVE)
+    return false;
+  return profiles::IsMultipleProfilesEnabled();
 #endif
+}
+
+void CreateDesktopShortcutForProfile(Profile* profile,
+                                     Profile::CreateStatus status) {
+  ProfileShortcutManager* shortcut_manager =
+      g_browser_process->profile_manager()->profile_shortcut_manager();
+  if (shortcut_manager)
+    shortcut_manager->CreateProfileShortcut(profile->GetPath());
+}
+
+void RunProfileCreationCallbacks(
+    const std::vector<ProfileManager::CreateCallback>& callbacks,
+    Profile* profile,
+    Profile::CreateStatus status) {
+  std::vector<ProfileManager::CreateCallback>::const_iterator it;
+  for (it = callbacks.begin(); it != callbacks.end(); ++it) {
+    it->Run(profile, status);
+  }
+}
+
+void OpenNewWindowForProfile(
+    chrome::HostDesktopType desktop_type,
+    Profile* profile,
+    Profile::CreateStatus status) {
+  if (status != Profile::CREATE_STATUS_INITIALIZED)
+    return;
+
+  profiles::FindOrCreateNewWindowForProfile(
+    profile,
+    chrome::startup::IS_PROCESS_STARTUP,
+    chrome::startup::IS_FIRST_RUN,
+    desktop_type,
+    false);
 }
 
 }  // namespace
@@ -139,25 +175,29 @@ bool ShouldShowMultiProfilesUserList() {
 BrowserOptionsHandler::BrowserOptionsHandler()
     : page_initialized_(false),
       template_url_service_(NULL),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_ptr_factory_(this)) {
+      weak_ptr_factory_(this) {
 #if !defined(OS_MACOSX)
   default_browser_worker_ = new ShellIntegration::DefaultBrowserWorker(this);
 #endif
-#if(!defined(GOOGLE_CHROME_BUILD) && defined(OS_WIN))
+
+#if defined(ENABLE_FULL_PRINTING)
+#if !defined(GOOGLE_CHROME_BUILD) && defined(OS_WIN)
   // On Windows, we need the PDF plugin which is only guaranteed to exist on
   // Google Chrome builds. Use a command-line switch for Windows non-Google
   //  Chrome builds.
   cloud_print_connector_ui_enabled_ =
       CommandLine::ForCurrentProcess()->HasSwitch(
       switches::kEnableCloudPrintProxy);
-#elif(!defined(OS_CHROMEOS))
+#elif !defined(OS_CHROMEOS)
   // Always enabled for Mac, Linux and Google Chrome Windows builds.
   // Never enabled for Chrome OS, we don't even need to indicate it.
   cloud_print_connector_ui_enabled_ = true;
 #endif
+#endif  // defined(ENABLE_FULL_PRINTING)
 }
 
 BrowserOptionsHandler::~BrowserOptionsHandler() {
+  CancelProfileRegistration(false);
   ProfileSyncService* sync_service(ProfileSyncServiceFactory::
       GetInstance()->GetForProfile(Profile::FromWebUI(web_ui())));
   if (sync_service)
@@ -235,15 +275,14 @@ void BrowserOptionsHandler::GetLocalizedValues(DictionaryValue* values) {
     { "homePageShowHomeButton", IDS_OPTIONS_TOOLBAR_SHOW_HOME_BUTTON },
     { "homePageUseNewTab", IDS_OPTIONS_HOMEPAGE_USE_NEWTAB },
     { "homePageUseURL", IDS_OPTIONS_HOMEPAGE_USE_URL },
-    { "instantConfirmMessage", IDS_INSTANT_OPT_IN_MESSAGE },
     { "importData", IDS_OPTIONS_IMPORT_DATA_BUTTON },
     { "improveBrowsingExperience", IDS_OPTIONS_IMPROVE_BROWSING_EXPERIENCE },
     { "languageAndSpellCheckSettingsButton",
       IDS_OPTIONS_SETTINGS_LANGUAGE_AND_INPUT_SETTINGS },
     { "linkDoctorPref", IDS_OPTIONS_LINKDOCTOR_PREF },
     { "manageAutofillSettings", IDS_OPTIONS_MANAGE_AUTOFILL_SETTINGS_LINK },
+    { "manageLanguages", IDS_OPTIONS_TRANSLATE_MANAGE_LANGUAGES },
     { "managePasswords", IDS_OPTIONS_PASSWORDS_MANAGE_PASSWORDS_LINK },
-    { "managedUsersSectionTitle", IDS_OPTIONS_MANAGED_USERS_SECTION_TITLE },
     { "networkPredictionEnabledDescription",
       IDS_NETWORK_PREDICTION_ENABLED_DESCRIPTION },
     { "passwordsAndAutofillGroupName",
@@ -265,6 +304,11 @@ void BrowserOptionsHandler::GetLocalizedValues(DictionaryValue* values) {
     { "proxiesLabelExtension", IDS_OPTIONS_EXTENSION_PROXIES_LABEL },
     { "proxiesLabelSystem", IDS_OPTIONS_SYSTEM_PROXIES_LABEL,
       IDS_PRODUCT_NAME },
+    { "resetProfileSettings", IDS_RESET_PROFILE_SETTINGS_BUTTON },
+    { "resetProfileSettingsDescription",
+      IDS_RESET_PROFILE_SETTINGS_DESCRIPTION },
+    { "resetProfileSettingsSectionTitle",
+      IDS_RESET_PROFILE_SETTINGS_SECTION_TITLE },
     { "safeBrowsingEnableProtection",
       IDS_OPTIONS_SAFEBROWSING_ENABLEPROTECTION },
     { "sectionTitleAppearance", IDS_APPEARANCE_GROUP_NAME },
@@ -294,14 +338,14 @@ void BrowserOptionsHandler::GetLocalizedValues(DictionaryValue* values) {
     { "toolbarShowHomeButton", IDS_OPTIONS_TOOLBAR_SHOW_HOME_BUTTON },
     { "translateEnableTranslate",
       IDS_OPTIONS_TRANSLATE_ENABLE_TRANSLATE },
-#if defined(TOOLKIT_GTK)
+#if defined(OS_LINUX) && !defined(OS_CHROMEOS)
     { "showWindowDecorations", IDS_SHOW_WINDOW_DECORATIONS },
-    { "themesGTKButton", IDS_THEMES_GTK_BUTTON },
+    { "themesNativeButton", IDS_THEMES_GTK_BUTTON },
     { "themesSetClassic", IDS_THEMES_SET_CLASSIC },
 #else
     { "themes", IDS_THEMES_GROUP_NAME },
-    { "themesReset", IDS_THEMES_RESET_BUTTON },
 #endif
+    { "themesReset", IDS_THEMES_RESET_BUTTON },
 #if defined(OS_CHROMEOS)
     { "accessibilityExplanation",
       IDS_OPTIONS_SETTINGS_ACCESSIBILITY_EXPLANATION },
@@ -317,6 +361,10 @@ void BrowserOptionsHandler::GetLocalizedValues(DictionaryValue* values) {
       IDS_OPTIONS_SETTINGS_ACCESSIBILITY_SCREEN_MAGNIFIER_FULL },
     { "accessibilityScreenMagnifierPartial",
       IDS_OPTIONS_SETTINGS_ACCESSIBILITY_SCREEN_MAGNIFIER_PARTIAL },
+    { "accessibilityLargeCursor",
+      IDS_OPTIONS_SETTINGS_ACCESSIBILITY_LARGE_CURSOR_DESCRIPTION },
+    { "accessibilityStickyKeys",
+      IDS_OPTIONS_SETTINGS_ACCESSIBILITY_STICKY_KEYS_DESCRIPTION },
     { "accessibilitySpokenFeedback",
       IDS_OPTIONS_SETTINGS_ACCESSIBILITY_SPOKEN_FEEDBACK_DESCRIPTION },
     { "accessibilityTitle",
@@ -325,7 +373,6 @@ void BrowserOptionsHandler::GetLocalizedValues(DictionaryValue* values) {
       IDS_OPTIONS_SETTINGS_ACCESSIBILITY_VIRTUAL_KEYBOARD_DESCRIPTION },
     { "accessibilityAlwaysShowMenu",
       IDS_OPTIONS_SETTINGS_ACCESSIBILITY_SHOULD_ALWAYS_SHOW_MENU },
-    { "advancedSectionTitleKiosk", IDS_OPTIONS_KIOSK },
     { "factoryResetHeading", IDS_OPTIONS_FACTORY_RESET_HEADING },
     { "factoryResetTitle", IDS_OPTIONS_FACTORY_RESET },
     { "factoryResetRestart", IDS_OPTIONS_FACTORY_RESET_BUTTON },
@@ -343,7 +390,6 @@ void BrowserOptionsHandler::GetLocalizedValues(DictionaryValue* values) {
     { "keyboardSettingsButtonTitle",
       IDS_OPTIONS_DEVICE_GROUP_KEYBOARD_SETTINGS_BUTTON_TITLE },
     { "manageAccountsButtonTitle", IDS_OPTIONS_ACCOUNTS_BUTTON_TITLE },
-    { "manageKioskAppsButton", IDS_OPTIONS_KIOSK_MANAGE_BUTTON },
     { "noPointingDevices", IDS_OPTIONS_NO_POINTING_DEVICES },
     { "sectionTitleDevice", IDS_OPTIONS_DEVICE_GROUP_NAME },
     { "sectionTitleInternet", IDS_OPTIONS_INTERNET_OPTIONS_GROUP_LABEL },
@@ -373,9 +419,10 @@ void BrowserOptionsHandler::GetLocalizedValues(DictionaryValue* values) {
       IDS_OPTIONS_SYSTEM_ENABLE_HARDWARE_ACCELERATION_MODE_RESTART },
     // Strings with product-name substitutions.
     { "syncOverview", IDS_SYNC_OVERVIEW, IDS_PRODUCT_NAME },
-    { "syncButtonTextStart", IDS_SYNC_START_SYNC_BUTTON_LABEL,
-      IDS_SHORT_PRODUCT_NAME },
+    { "syncButtonTextStart", IDS_SYNC_SETUP_BUTTON_LABEL },
 #endif
+    { "syncButtonTextSignIn", IDS_SYNC_START_SYNC_BUTTON_LABEL,
+      IDS_SHORT_PRODUCT_NAME },
     { "profilesSingleUser", IDS_PROFILES_SINGLE_USER_MESSAGE,
       IDS_PRODUCT_NAME },
     { "defaultBrowserUnknown", IDS_OPTIONS_DEFAULTBROWSER_UNKNOWN,
@@ -409,28 +456,19 @@ void BrowserOptionsHandler::GetLocalizedValues(DictionaryValue* values) {
 #endif
 
   RegisterStrings(values, resources, arraysize(resources));
-  RegisterTitle(values, "instantConfirmOverlay", IDS_INSTANT_OPT_IN_TITLE);
   RegisterTitle(values, "doNotTrackConfirmOverlay",
                 IDS_OPTIONS_ENABLE_DO_NOT_TRACK_BUBBLE_TITLE);
   RegisterTitle(values, "spellingConfirmOverlay",
                 IDS_CONTENT_CONTEXT_SPELLING_ASK_GOOGLE);
+#if defined(ENABLE_FULL_PRINTING)
   RegisterCloudPrintValues(values);
+#endif
 
   values->SetString("syncLearnMoreURL", chrome::kSyncLearnMoreURL);
   string16 omnibox_url = ASCIIToUTF16(chrome::kOmniboxLearnMoreURL);
   values->SetString(
       "defaultSearchGroupLabel",
       l10n_util::GetStringFUTF16(IDS_SEARCH_PREF_EXPLANATION, omnibox_url));
-
-  std::string instant_pref_name = chrome::search::GetInstantPrefName();
-  int instant_message_id = instant_pref_name == prefs::kInstantEnabled ?
-      IDS_INSTANT_PREF_WITH_WARNING : IDS_INSTANT_EXTENDED_PREF_WITH_WARNING;
-  string16 instant_learn_more_url = ASCIIToUTF16(chrome::kInstantLearnMoreURL);
-  values->SetString("instant_enabled", instant_pref_name);
-  values->SetString(
-      "instantPrefAndWarning",
-      l10n_util::GetStringFUTF16(instant_message_id, instant_learn_more_url));
-  values->SetString("instantLearnMoreLink", instant_learn_more_url);
 
 #if defined(OS_CHROMEOS)
   const chromeos::User* user = chromeos::UserManager::Get()->GetLoggedInUser();
@@ -470,12 +508,9 @@ void BrowserOptionsHandler::GetLocalizedValues(DictionaryValue* values) {
 
   values->Set("magnifierList", magnifier_list.release());
 
-  // Sets flag of whether kiosk section should be enabled.
-  values->SetBoolean(
-      "enableKioskSection",
-      !CommandLine::ForCurrentProcess()->HasSwitch(switches::kDisableAppMode) &&
-      (chromeos::UserManager::Get()->IsCurrentUserOwner() ||
-       !base::chromeos::IsRunningOnChromeOS()));
+  const CommandLine& command_line = *CommandLine::ForCurrentProcess();
+  values->SetBoolean("enableStickyKeys",
+                     command_line.HasSwitch(switches::kEnableStickyKeys));
 #endif
 
 #if defined(OS_MACOSX)
@@ -485,22 +520,28 @@ void BrowserOptionsHandler::GetLocalizedValues(DictionaryValue* values) {
       g_browser_process->profile_manager()->GetNumberOfProfiles() > 1);
 #endif
 
-  if (ShouldShowMultiProfilesUserList())
+  if (ShouldShowMultiProfilesUserList(GetDesktopType()))
     values->Set("profilesInfo", GetProfilesInfoList().release());
 
-#if defined(ENABLE_MANAGED_USERS)
-  ManagedUserService* service =
-      ManagedUserServiceFactory::GetForProfile(Profile::FromWebUI(web_ui()));
-  values->SetBoolean("profileIsManaged", service->ProfileIsManaged());
-#endif
+  values->SetBoolean("profileIsManaged",
+                     Profile::FromWebUI(web_ui())->IsManaged());
 
 #if !defined(OS_CHROMEOS)
   values->SetBoolean(
       "gpuEnabledAtStart",
       g_browser_process->gpu_mode_manager()->initial_gpu_mode_pref());
 #endif
+
+  bool finch_allows_button =
+      base::FieldTrialList::FindFullName(kProfileResetTrialName) ==
+      kProfileResetTrialEnableGroupName;
+  values->SetBoolean("enableResetProfileSettingsSection",
+                     finch_allows_button ||
+                     CommandLine::ForCurrentProcess()->HasSwitch(
+                         switches::kEnableResetProfileSettings));
 }
 
+#if defined(ENABLE_FULL_PRINTING)
 void BrowserOptionsHandler::RegisterCloudPrintValues(DictionaryValue* values) {
 #if defined(OS_CHROMEOS)
   values->SetString("cloudPrintChromeosOptionLabel",
@@ -524,6 +565,7 @@ void BrowserOptionsHandler::RegisterCloudPrintValues(DictionaryValue* values) {
       IDS_OPTIONS_CLOUD_PRINT_CONNECTOR_ENABLED_BUTTON));
 #endif
 }
+#endif  // defined(ENABLE_FULL_PRINTING)
 
 void BrowserOptionsHandler::RegisterMessages() {
   web_ui()->RegisterMessageCallback(
@@ -539,13 +581,25 @@ void BrowserOptionsHandler::RegisterMessages() {
       base::Bind(&BrowserOptionsHandler::CreateProfile,
                  base::Unretained(this)));
   web_ui()->RegisterMessageCallback(
+      "deleteProfile",
+      base::Bind(&BrowserOptionsHandler::DeleteProfile,
+                 base::Unretained(this)));
+  web_ui()->RegisterMessageCallback(
+      "cancelCreateProfile",
+      base::Bind(&BrowserOptionsHandler::HandleCancelProfileCreation,
+                 base::Unretained(this)));
+  web_ui()->RegisterMessageCallback(
       "themesReset",
       base::Bind(&BrowserOptionsHandler::ThemesReset,
                  base::Unretained(this)));
-#if defined(TOOLKIT_GTK)
   web_ui()->RegisterMessageCallback(
-      "themesSetGTK",
-      base::Bind(&BrowserOptionsHandler::ThemesSetGTK,
+      "requestProfilesInfo",
+      base::Bind(&BrowserOptionsHandler::HandleRequestProfilesInfo,
+                 base::Unretained(this)));
+#if defined(OS_LINUX) && !defined(OS_CHROMEOS)
+  web_ui()->RegisterMessageCallback(
+      "themesSetNative",
+      base::Bind(&BrowserOptionsHandler::ThemesSetNative,
                  base::Unretained(this)));
 #endif
   web_ui()->RegisterMessageCallback(
@@ -570,38 +624,16 @@ void BrowserOptionsHandler::RegisterMessages() {
       base::Bind(&BrowserOptionsHandler::ShowManageSSLCertificates,
                  base::Unretained(this)));
 #endif
+#if defined(ENABLE_FULL_PRINTING)
   web_ui()->RegisterMessageCallback(
       "showCloudPrintManagePage",
       base::Bind(&BrowserOptionsHandler::ShowCloudPrintManagePage,
-                 base::Unretained(this)));
-#if !defined(OS_CHROMEOS)
-  if (cloud_print_connector_ui_enabled_) {
-    web_ui()->RegisterMessageCallback(
-        "showCloudPrintSetupDialog",
-        base::Bind(&BrowserOptionsHandler::ShowCloudPrintSetupDialog,
-                   base::Unretained(this)));
-    web_ui()->RegisterMessageCallback(
-        "disableCloudPrintConnector",
-        base::Bind(&BrowserOptionsHandler::HandleDisableCloudPrintConnector,
-                   base::Unretained(this)));
-  }
-  web_ui()->RegisterMessageCallback(
-      "showNetworkProxySettings",
-      base::Bind(&BrowserOptionsHandler::ShowNetworkProxySettings,
                  base::Unretained(this)));
 #endif
 #if defined(OS_CHROMEOS)
   web_ui()->RegisterMessageCallback(
       "openWallpaperManager",
       base::Bind(&BrowserOptionsHandler::HandleOpenWallpaperManager,
-                 base::Unretained(this)));
-  web_ui()->RegisterMessageCallback(
-      "spokenFeedbackChange",
-      base::Bind(&BrowserOptionsHandler::SpokenFeedbackChangeCallback,
-                 base::Unretained(this)));
-  web_ui()->RegisterMessageCallback(
-      "highContrastChange",
-      base::Bind(&BrowserOptionsHandler::HighContrastChangeCallback,
                  base::Unretained(this)));
   web_ui()->RegisterMessageCallback(
       "virtualKeyboardChange",
@@ -616,21 +648,27 @@ void BrowserOptionsHandler::RegisterMessages() {
       "restartBrowser",
       base::Bind(&BrowserOptionsHandler::HandleRestartBrowser,
                  base::Unretained(this)));
-#endif
+#if defined(ENABLE_FULL_PRINTING)
+  if (cloud_print_connector_ui_enabled_) {
+    web_ui()->RegisterMessageCallback(
+        "showCloudPrintSetupDialog",
+        base::Bind(&BrowserOptionsHandler::ShowCloudPrintSetupDialog,
+                   base::Unretained(this)));
+    web_ui()->RegisterMessageCallback(
+        "disableCloudPrintConnector",
+        base::Bind(&BrowserOptionsHandler::HandleDisableCloudPrintConnector,
+                   base::Unretained(this)));
+  }
+#endif  // defined(ENABLE_FULL_PRINTING)
+  web_ui()->RegisterMessageCallback(
+      "showNetworkProxySettings",
+      base::Bind(&BrowserOptionsHandler::ShowNetworkProxySettings,
+                 base::Unretained(this)));
+#endif  // defined(OS_CHROMEOS)
 }
 
 void BrowserOptionsHandler::OnStateChanged() {
-  web_ui()->CallJavascriptFunction("BrowserOptions.updateSyncState",
-                                   *GetSyncStateDictionary());
-
-  SendProfilesInfo();
-}
-
-void BrowserOptionsHandler::OnSigninAllowedPrefChange() {
-  web_ui()->CallJavascriptFunction("BrowserOptions.updateSyncState",
-                                   *GetSyncStateDictionary());
-
-  SendProfilesInfo();
+  UpdateSyncState();
 }
 
 void BrowserOptionsHandler::PageLoadStarted() {
@@ -682,7 +720,7 @@ void BrowserOptionsHandler::InitializeHandler() {
   }
 #endif
 
-#if !defined(OS_CHROMEOS)
+#if defined(ENABLE_FULL_PRINTING) && !defined(OS_CHROMEOS)
   base::Closure cloud_print_callback = base::Bind(
       &BrowserOptionsHandler::OnCloudPrintPrefsChanged, base::Unretained(this));
   cloud_print_connector_email_.Init(
@@ -695,19 +733,24 @@ void BrowserOptionsHandler::InitializeHandler() {
       prefs::kDownloadExtensionsToOpen, prefs,
       base::Bind(&BrowserOptionsHandler::SetupAutoOpenFileTypes,
                  base::Unretained(this)));
-  default_font_size_.Init(
-      prefs::kWebKitDefaultFontSize, prefs,
-      base::Bind(&BrowserOptionsHandler::SetupFontSizeSelector,
-                 base::Unretained(this)));
   default_zoom_level_.Init(
       prefs::kDefaultZoomLevel, prefs,
       base::Bind(&BrowserOptionsHandler::SetupPageZoomSelector,
                  base::Unretained(this)));
   profile_pref_registrar_.Init(prefs);
   profile_pref_registrar_.Add(
+      prefs::kWebKitDefaultFontSize,
+      base::Bind(&BrowserOptionsHandler::SetupFontSizeSelector,
+                 base::Unretained(this)));
+  profile_pref_registrar_.Add(
+      prefs::kWebKitDefaultFixedFontSize,
+      base::Bind(&BrowserOptionsHandler::SetupFontSizeSelector,
+                 base::Unretained(this)));
+  profile_pref_registrar_.Add(
       prefs::kSigninAllowed,
       base::Bind(&BrowserOptionsHandler::OnSigninAllowedPrefChange,
                  base::Unretained(this)));
+
 #if !defined(OS_CHROMEOS)
   profile_pref_registrar_.Add(
       prefs::kProxy,
@@ -718,7 +761,9 @@ void BrowserOptionsHandler::InitializeHandler() {
 
 void BrowserOptionsHandler::InitializePage() {
   page_initialized_ = true;
+
   OnTemplateURLServiceChanged();
+
   ObserveThemeChanged();
   OnStateChanged();
   UpdateDefaultBrowserState();
@@ -729,7 +774,8 @@ void BrowserOptionsHandler::InitializePage() {
   SetupPageZoomSelector();
   SetupAutoOpenFileTypes();
   SetupProxySettingsSection();
-#if !defined(OS_CHROMEOS)
+
+#if defined(ENABLE_FULL_PRINTING) && !defined(OS_CHROMEOS)
   if (cloud_print_connector_ui_enabled_) {
     SetupCloudPrintConnectorSection();
     RefreshCloudPrintStatusFromService();
@@ -737,10 +783,12 @@ void BrowserOptionsHandler::InitializePage() {
     RemoveCloudPrintConnectorSection();
   }
 #endif
+
 #if defined(OS_CHROMEOS)
   SetupAccessibilityFeatures();
   if (!g_browser_process->browser_policy_connector()->IsEnterpriseManaged() &&
-      !chromeos::UserManager::Get()->IsLoggedInAsGuest()) {
+      !chromeos::UserManager::Get()->IsLoggedInAsGuest() &&
+      !chromeos::UserManager::Get()->IsLoggedInAsLocallyManagedUser()) {
     web_ui()->CallJavascriptFunction(
         "BrowserOptions.enableFactoryResetSection");
   }
@@ -912,15 +960,6 @@ void BrowserOptionsHandler::OnTemplateURLServiceChanged() {
           template_url_service_->is_default_search_managed()));
 }
 
-// static
-void BrowserOptionsHandler::CreateDesktopShortcutForProfile(
-     Profile* profile, Profile::CreateStatus status) {
-  ProfileShortcutManager* shortcut_manager =
-      g_browser_process->profile_manager()->profile_shortcut_manager();
-  if (shortcut_manager)
-    shortcut_manager->CreateProfileShortcut(profile->GetPath());
-}
-
 void BrowserOptionsHandler::SetDefaultSearchEngine(const ListValue* args) {
   int selected_index = -1;
   if (!ExtractIntegerValue(args, &selected_index)) {
@@ -967,8 +1006,13 @@ void BrowserOptionsHandler::Observe(
       break;
 #endif
     case chrome::NOTIFICATION_PROFILE_CACHED_INFO_CHANGED:
-      if (ShouldShowMultiProfilesUserList())
-        SendProfilesInfo();
+      // If the browser shuts down during supervised-profile creation, deleting
+      // the unregistered supervised-user profile triggers this notification,
+      // but the RenderViewHost the profile info would be sent to has already
+      // been destroyed.
+      if (!web_ui()->GetWebContents()->GetRenderViewHost())
+        return;
+      SendProfilesInfo();
       break;
     case chrome::NOTIFICATION_GOOGLE_SIGNIN_SUCCESSFUL:
     case chrome::NOTIFICATION_GOOGLE_SIGNED_OUT:
@@ -980,12 +1024,12 @@ void BrowserOptionsHandler::Observe(
   }
 }
 
+#if defined(ENABLE_FULL_PRINTING) && !defined(OS_CHROMEOS)
 void BrowserOptionsHandler::OnCloudPrintPrefsChanged() {
-#if !defined(OS_CHROMEOS)
   if (cloud_print_connector_ui_enabled_)
     SetupCloudPrintConnectorSection();
-#endif
 }
+#endif
 
 void BrowserOptionsHandler::ToggleAutoLaunch(const ListValue* args) {
 #if defined(OS_WIN)
@@ -996,8 +1040,6 @@ void BrowserOptionsHandler::ToggleAutoLaunch(const ListValue* args) {
   CHECK_EQ(args->GetSize(), 1U);
   CHECK(args->GetBoolean(0, &enable));
 
-  // Make sure we keep track of how many disable and how many enable.
-  auto_launch_trial::UpdateToggleAutoLaunchMetric(enable);
   Profile* profile = Profile::FromWebUI(web_ui());
   content::BrowserThread::PostTask(
       content::BrowserThread::FILE, FROM_HERE,
@@ -1046,75 +1088,265 @@ scoped_ptr<ListValue> BrowserOptionsHandler::GetProfilesInfoList() {
 }
 
 void BrowserOptionsHandler::SendProfilesInfo() {
+  if (!ShouldShowMultiProfilesUserList(GetDesktopType()))
+    return;
   web_ui()->CallJavascriptFunction("BrowserOptions.setProfilesInfo",
                                    *GetProfilesInfoList());
 }
 
-void BrowserOptionsHandler::CreateProfile(const ListValue* args) {
-#if defined(ENABLE_MANAGED_USERS)
-  // This handler could have been called in managed mode, for example because
-  // the user fiddled with the web inspector. Silently return in this case.
-  ManagedUserService* service =
-      ManagedUserServiceFactory::GetForProfile(Profile::FromWebUI(web_ui()));
-  if (service->ProfileIsManaged())
-    return;
-#endif
-
-  if (!ProfileManager::IsMultipleProfilesEnabled())
-    return;
-
+chrome::HostDesktopType BrowserOptionsHandler::GetDesktopType() {
   Browser* browser =
       chrome::FindBrowserWithWebContents(web_ui()->GetWebContents());
   chrome::HostDesktopType desktop_type = chrome::HOST_DESKTOP_TYPE_NATIVE;
   if (browser)
     desktop_type = browser->host_desktop_type();
+  return desktop_type;
+}
+
+void BrowserOptionsHandler::CreateProfile(const ListValue* args) {
+  // This handler could have been called in managed mode, for example because
+  // the user fiddled with the web inspector. Silently return in this case.
+  Profile* current_profile = Profile::FromWebUI(web_ui());
+  if (current_profile->IsManaged())
+    return;
+
+  if (!profiles::IsMultipleProfilesEnabled())
+    return;
+
+  DCHECK(profile_path_being_created_.empty());
+  profile_creation_start_time_ = base::TimeTicks::Now();
 
   string16 name;
   string16 icon;
-  ProfileManager::CreateCallback callback;
+  std::string managed_user_id;
+  bool create_shortcut = false;
   bool managed_user = false;
   if (args->GetString(0, &name) && args->GetString(1, &icon)) {
-    bool create_box_checked = false;
-    if (args->GetBoolean(2, &create_box_checked)) {
-      if (create_box_checked)
-        callback = base::Bind(&CreateDesktopShortcutForProfile);
-
+    if (args->GetBoolean(2, &create_shortcut)) {
       bool success = args->GetBoolean(3, &managed_user);
+      DCHECK(success);
+      success = args->GetString(4, &managed_user_id);
       DCHECK(success);
     }
   }
 
-  ProfileManager::CreateMultiProfileAsync(name, icon, callback, desktop_type,
-                                          managed_user);
+  std::vector<ProfileManager::CreateCallback> callbacks;
+  if (create_shortcut)
+    callbacks.push_back(base::Bind(&CreateDesktopShortcutForProfile));
+
+  ProfileManager::CreateCallback show_user_feedback =
+      base::Bind(&BrowserOptionsHandler::ShowProfileCreationFeedback,
+                 weak_ptr_factory_.GetWeakPtr(), GetDesktopType(),
+                 managed_user);
+
+  if (managed_user && ManagedUserService::AreManagedUsersEnabled()) {
+    if (!IsValidExistingManagedUserId(managed_user_id))
+      return;
+
+    if (managed_user_id.empty()) {
+      managed_user_id =
+          ManagedUserRegistrationUtility::GenerateNewManagedUserId();
+    }
+    callbacks.push_back(
+        base::Bind(&BrowserOptionsHandler::RegisterManagedUser,
+                   weak_ptr_factory_.GetWeakPtr(),
+                   show_user_feedback,
+                   managed_user_id));
+  } else {
+    callbacks.push_back(show_user_feedback);
+  }
+
+  ProfileMetrics::LogProfileAddNewUser(ProfileMetrics::ADD_NEW_USER_DIALOG);
+
+  profile_path_being_created_ = ProfileManager::CreateMultiProfileAsync(
+      name, icon, base::Bind(&RunProfileCreationCallbacks, callbacks),
+      managed_user_id);
+}
+
+void BrowserOptionsHandler::RegisterManagedUser(
+    const ProfileManager::CreateCallback& callback,
+    const std::string& managed_user_id,
+    Profile* new_profile,
+    Profile::CreateStatus status) {
+  DCHECK(profile_path_being_created_ == new_profile->GetPath());
+  if (status != Profile::CREATE_STATUS_INITIALIZED)
+    return;
+
+  ManagedUserService* managed_user_service =
+      ManagedUserServiceFactory::GetForProfile(new_profile);
+
+  // Register the managed user using the profile of the custodian.
+  managed_user_registration_utility_ =
+      ManagedUserRegistrationUtility::Create(Profile::FromWebUI(web_ui()));
+  managed_user_service->RegisterAndInitSync(
+      managed_user_registration_utility_.get(),
+      Profile::FromWebUI(web_ui()),
+      managed_user_id,
+      callback);
+}
+
+void BrowserOptionsHandler::RecordProfileCreationMetrics(
+    Profile::CreateStatus status) {
+  UMA_HISTOGRAM_ENUMERATION("Profile.CreateResult",
+                            status,
+                            Profile::MAX_CREATE_STATUS);
+  UMA_HISTOGRAM_MEDIUM_TIMES(
+      "Profile.CreateTimeNoTimeout",
+      base::TimeTicks::Now() - profile_creation_start_time_);
+}
+
+void BrowserOptionsHandler::ShowProfileCreationFeedback(
+    chrome::HostDesktopType desktop_type,
+    bool is_managed,
+    Profile* profile,
+    Profile::CreateStatus status) {
+  DCHECK(profile_path_being_created_ == profile->GetPath());
+  if (status != Profile::CREATE_STATUS_CREATED)
+    RecordProfileCreationMetrics(status);
+
+  switch (status) {
+    case Profile::CREATE_STATUS_LOCAL_FAIL: {
+      profile_path_being_created_.clear();
+      web_ui()->CallJavascriptFunction(
+          "BrowserOptions.showCreateProfileLocalError");
+      DeleteProfileAtPath(profile->GetPath());
+      break;
+    }
+    case Profile::CREATE_STATUS_REMOTE_FAIL: {
+      profile_path_being_created_.clear();
+      web_ui()->CallJavascriptFunction(
+          "BrowserOptions.showCreateProfileRemoteError");
+      DeleteProfileAtPath(profile->GetPath());
+      break;
+    }
+    case Profile::CREATE_STATUS_CREATED: {
+      // Do nothing for an intermediate status.
+      break;
+    }
+    case Profile::CREATE_STATUS_INITIALIZED: {
+      profile_path_being_created_.clear();
+      DictionaryValue dict;
+      dict.SetString("name",
+                     profile->GetPrefs()->GetString(prefs::kProfileName));
+      dict.Set("filePath", base::CreateFilePathValue(profile->GetPath()));
+      dict.SetBoolean("isManaged", is_managed);
+      web_ui()->CallJavascriptFunction(
+          "BrowserOptions.showCreateProfileSuccess", dict);
+
+      // If the new profile is a managed user, instead of opening a new window
+      // right away, a confirmation overlay will be shown from the creation
+      // dialog.
+      if (!is_managed) {
+        // Opening the new window must be the last action, after all callbacks
+        // have been run, to give them a chance to initialize the profile.
+        OpenNewWindowForProfile(desktop_type,
+                                profile,
+                                Profile::CREATE_STATUS_INITIALIZED);
+      }
+      break;
+    }
+    // User-initiated cancellation is handled in CancelProfileRegistration and
+    // does not call this callback.
+    case Profile::CREATE_STATUS_CANCELED:
+    case Profile::MAX_CREATE_STATUS: {
+      NOTREACHED();
+      break;
+    }
+  }
+}
+
+void BrowserOptionsHandler::DeleteProfile(const ListValue* args) {
+  DCHECK(args);
+  const Value* file_path_value;
+  if (!args->Get(0, &file_path_value))
+    return;
+
+  base::FilePath file_path;
+  if (!base::GetValueAsFilePath(*file_path_value, &file_path))
+    return;
+  DeleteProfileAtPath(file_path);
+}
+
+void BrowserOptionsHandler::DeleteProfileAtPath(base::FilePath file_path) {
+  // This handler could have been called in managed mode, for example because
+  // the user fiddled with the web inspector. Silently return in this case.
+  if (Profile::FromWebUI(web_ui())->IsManaged())
+    return;
+
+  if (!profiles::IsMultipleProfilesEnabled())
+    return;
+
+  ProfileMetrics::LogProfileDeleteUser(ProfileMetrics::PROFILE_DELETED);
+
+  g_browser_process->profile_manager()->ScheduleProfileForDeletion(
+      file_path,
+      base::Bind(&OpenNewWindowForProfile, GetDesktopType()));
+}
+
+void BrowserOptionsHandler::HandleCancelProfileCreation(const ListValue* args) {
+  CancelProfileRegistration(true);
+}
+
+void BrowserOptionsHandler::CancelProfileRegistration(bool user_initiated) {
+  if (profile_path_being_created_.empty())
+    return;
+
+  ProfileManager* manager = g_browser_process->profile_manager();
+  Profile* new_profile = manager->GetProfileByPath(profile_path_being_created_);
+  if (!new_profile)
+    return;
+
+  // Non-managed user creation cannot be canceled. (Creating a non-managed
+  // profile shouldn't take significant time, and it can easily be deleted
+  // afterward.)
+  if (!new_profile->IsManaged())
+    return;
+
+  if (user_initiated) {
+    UMA_HISTOGRAM_MEDIUM_TIMES(
+        "Profile.CreateTimeCanceledNoTimeout",
+        base::TimeTicks::Now() - profile_creation_start_time_);
+    RecordProfileCreationMetrics(Profile::CREATE_STATUS_CANCELED);
+  }
+
+  DCHECK(managed_user_registration_utility_.get());
+  managed_user_registration_utility_.reset();
+
+  // Cancelling registration means the callback passed into
+  // RegisterAndInitSync() won't be called, so the cleanup must be done here.
+  profile_path_being_created_.clear();
+  DeleteProfileAtPath(new_profile->GetPath());
 }
 
 void BrowserOptionsHandler::ObserveThemeChanged() {
   Profile* profile = Profile::FromWebUI(web_ui());
-#if defined(TOOLKIT_GTK)
-  GtkThemeService* theme_service = GtkThemeService::GetFrom(profile);
-  bool is_gtk_theme = theme_service->UsingNativeTheme();
-  base::FundamentalValue gtk_enabled(!is_gtk_theme);
-  web_ui()->CallJavascriptFunction("BrowserOptions.setGtkThemeButtonEnabled",
-                                   gtk_enabled);
-#else
   ThemeService* theme_service = ThemeServiceFactory::GetForProfile(profile);
-  bool is_gtk_theme = false;
+  bool is_native_theme = false;
+
+#if defined(OS_LINUX) && !defined(OS_CHROMEOS)
+  bool profile_is_managed = profile->IsManaged();
+  is_native_theme = theme_service->UsingNativeTheme();
+  base::FundamentalValue native_theme_enabled(!is_native_theme &&
+                                              !profile_is_managed);
+  web_ui()->CallJavascriptFunction("BrowserOptions.setNativeThemeButtonEnabled",
+                                   native_theme_enabled);
 #endif
 
-  bool is_classic_theme = !is_gtk_theme && theme_service->UsingDefaultTheme();
+  bool is_classic_theme = !is_native_theme &&
+                          theme_service->UsingDefaultTheme();
   base::FundamentalValue enabled(!is_classic_theme);
   web_ui()->CallJavascriptFunction("BrowserOptions.setThemesResetButtonEnabled",
                                    enabled);
 }
 
 void BrowserOptionsHandler::ThemesReset(const ListValue* args) {
-  content::RecordAction(UserMetricsAction("Options_ThemesReset"));
   Profile* profile = Profile::FromWebUI(web_ui());
+  content::RecordAction(UserMetricsAction("Options_ThemesReset"));
   ThemeServiceFactory::GetForProfile(profile)->UseDefaultTheme();
 }
 
-#if defined(TOOLKIT_GTK)
-void BrowserOptionsHandler::ThemesSetGTK(const ListValue* args) {
+#if defined(OS_LINUX) && !defined(OS_CHROMEOS)
+void BrowserOptionsHandler::ThemesSetNative(const ListValue* args) {
   content::RecordAction(UserMetricsAction("Options_GtkThemeSet"));
   Profile* profile = Profile::FromWebUI(web_ui());
   ThemeServiceFactory::GetForProfile(profile)->SetNativeTheme();
@@ -1136,19 +1368,31 @@ void BrowserOptionsHandler::UpdateAccountPicture() {
 scoped_ptr<DictionaryValue> BrowserOptionsHandler::GetSyncStateDictionary() {
   scoped_ptr<DictionaryValue> sync_status(new DictionaryValue);
   Profile* profile = Profile::FromWebUI(web_ui());
+  if (profile->IsManaged()) {
+    sync_status->SetBoolean("supervisedUser", true);
+    sync_status->SetBoolean("signinAllowed", false);
+    return sync_status.Pass();
+  }
   if (profile->IsGuestSession()) {
     // Cannot display signin status when running in guest mode on chromeos
     // because there is no SigninManager.
     sync_status->SetBoolean("signinAllowed", false);
     return sync_status.Pass();
   }
+  sync_status->SetBoolean("supervisedUser", false);
 
+  bool signout_prohibited = false;
+#if !defined(OS_CHROMEOS)
   // Signout is not allowed if the user has policy (crbug.com/172204).
-  SigninManager* signin = SigninManagerFactory::GetForProfile(profile);
+  signout_prohibited =
+      SigninManagerFactory::GetForProfile(profile)->IsSignoutProhibited();
+#endif
+
+  ProfileSyncService* service =
+      ProfileSyncServiceFactory::GetInstance()->GetForProfile(profile);
+  SigninManagerBase* signin = SigninManagerFactory::GetForProfile(profile);
   DCHECK(signin);
-  sync_status->SetBoolean("signoutAllowed", !signin->IsSignoutProhibited());
-  ProfileSyncService* service(
-      ProfileSyncServiceFactory::GetInstance()->GetForProfile(profile));
+  sync_status->SetBoolean("signoutAllowed", !signout_prohibited);
   sync_status->SetBoolean("signinAllowed", signin->IsSigninAllowed());
   sync_status->SetBoolean("syncSystemEnabled", !!service);
   sync_status->SetBoolean("setupCompleted",
@@ -1158,7 +1402,6 @@ scoped_ptr<DictionaryValue> BrowserOptionsHandler::GetSyncStateDictionary() {
 
   string16 status_label;
   string16 link_label;
-  DCHECK(signin);
   bool status_has_error = sync_ui_util::GetStatusLabels(
       service, *signin, sync_ui_util::WITH_HTML, &status_label, &link_label) ==
           sync_ui_util::SYNC_ERROR;
@@ -1175,7 +1418,7 @@ scoped_ptr<DictionaryValue> BrowserOptionsHandler::GetSyncStateDictionary() {
       "autoLoginVisible",
       CommandLine::ForCurrentProcess()->HasSwitch(switches::kEnableAutologin) &&
       service && service->IsSyncEnabledAndLoggedIn() &&
-      service->IsSyncTokenAvailable());
+      service->IsOAuthRefreshTokenAvailable());
 
   return sync_status.Pass();
 }
@@ -1191,8 +1434,11 @@ void BrowserOptionsHandler::HandleSelectDownloadLocation(
       ui::SelectFileDialog::SELECT_FOLDER,
       l10n_util::GetStringUTF16(IDS_OPTIONS_DOWNLOADLOCATION_BROWSE_TITLE),
       pref_service->GetFilePath(prefs::kDownloadDefaultDirectory),
-      &info, 0, FILE_PATH_LITERAL(""),
-      web_ui()->GetWebContents()->GetView()->GetTopLevelNativeWindow(), NULL);
+      &info,
+      0,
+      base::FilePath::StringType(),
+      web_ui()->GetWebContents()->GetView()->GetTopLevelNativeWindow(),
+      NULL);
 }
 
 void BrowserOptionsHandler::FileSelected(const base::FilePath& path, int index,
@@ -1200,13 +1446,7 @@ void BrowserOptionsHandler::FileSelected(const base::FilePath& path, int index,
   content::RecordAction(UserMetricsAction("Options_SetDownloadDirectory"));
   PrefService* pref_service = Profile::FromWebUI(web_ui())->GetPrefs();
   pref_service->SetFilePath(prefs::kDownloadDefaultDirectory, path);
-}
-
-void BrowserOptionsHandler::OnCloudPrintSetupClosed() {
-#if !defined(OS_CHROMEOS)
-  if (cloud_print_connector_ui_enabled_)
-    SetupCloudPrintConnectorSection();
-#endif
+  pref_service->SetFilePath(prefs::kSaveFileDefaultDirectory, path);
 }
 
 #if defined(OS_CHROMEOS)
@@ -1221,6 +1461,15 @@ void BrowserOptionsHandler::MouseExists(bool exists) {
 }
 #endif
 
+void BrowserOptionsHandler::UpdateSyncState() {
+  web_ui()->CallJavascriptFunction("BrowserOptions.updateSyncState",
+                                   *GetSyncStateDictionary());
+}
+
+void BrowserOptionsHandler::OnSigninAllowedPrefChange() {
+  UpdateSyncState();
+}
+
 void BrowserOptionsHandler::HandleAutoOpenButton(const ListValue* args) {
   content::RecordAction(UserMetricsAction("Options_ResetAutoOpenFiles"));
   DownloadManager* manager = BrowserContext::GetDownloadManager(
@@ -1233,7 +1482,8 @@ void BrowserOptionsHandler::HandleDefaultFontSize(const ListValue* args) {
   int font_size;
   if (ExtractIntegerValue(args, &font_size)) {
     if (font_size > 0) {
-      default_font_size_.SetValue(font_size);
+      PrefService* pref_service = Profile::FromWebUI(web_ui())->GetPrefs();
+      pref_service->SetInteger(prefs::kWebKitDefaultFontSize, font_size);
       SetupFontSizeSelector();
     }
   }
@@ -1242,13 +1492,16 @@ void BrowserOptionsHandler::HandleDefaultFontSize(const ListValue* args) {
 void BrowserOptionsHandler::HandleDefaultZoomFactor(const ListValue* args) {
   double zoom_factor;
   if (ExtractDoubleValue(args, &zoom_factor)) {
-    default_zoom_level_.SetValue(
-        WebKit::WebView::zoomFactorToZoomLevel(zoom_factor));
+    default_zoom_level_.SetValue(content::ZoomFactorToZoomLevel(zoom_factor));
   }
 }
 
 void BrowserOptionsHandler::HandleRestartBrowser(const ListValue* args) {
   chrome::AttemptRestart();
+}
+
+void BrowserOptionsHandler::HandleRequestProfilesInfo(const ListValue* args) {
+  SendProfilesInfo();
 }
 
 #if !defined(OS_CHROMEOS)
@@ -1267,6 +1520,7 @@ void BrowserOptionsHandler::ShowManageSSLCertificates(const ListValue* args) {
 }
 #endif
 
+#if defined(ENABLE_FULL_PRINTING)
 void BrowserOptionsHandler::ShowCloudPrintManagePage(const ListValue* args) {
   content::RecordAction(UserMetricsAction("Options_ManageCloudPrinters"));
   // Open a new tab in the current window for the management page.
@@ -1345,28 +1599,13 @@ void BrowserOptionsHandler::RemoveCloudPrintConnectorSection() {
   web_ui()->CallJavascriptFunction(
       "BrowserOptions.removeCloudPrintConnectorSection");
 }
-#endif
+#endif  // defined(OS_CHROMEOS)
+#endif  // defined(ENABLE_FULL_PRINTING)
 
 #if defined(OS_CHROMEOS)
 void BrowserOptionsHandler::HandleOpenWallpaperManager(
     const ListValue* args) {
   wallpaper_manager_util::OpenWallpaperManager();
-}
-
-void BrowserOptionsHandler::SpokenFeedbackChangeCallback(
-    const ListValue* args) {
-  bool enabled = false;
-  args->GetBoolean(0, &enabled);
-
-  chromeos::accessibility::EnableSpokenFeedback(
-      enabled, NULL, ash::A11Y_NOTIFICATION_NONE);
-}
-
-void BrowserOptionsHandler::HighContrastChangeCallback(const ListValue* args) {
-  bool enabled = false;
-  args->GetBoolean(0, &enabled);
-
-  chromeos::accessibility::EnableHighContrast(enabled);
 }
 
 void BrowserOptionsHandler::VirtualKeyboardChangeCallback(
@@ -1396,16 +1635,6 @@ void BrowserOptionsHandler::PerformFactoryResetRestart(const ListValue* args) {
 
 void BrowserOptionsHandler::SetupAccessibilityFeatures() {
   PrefService* pref_service = g_browser_process->local_state();
-  base::FundamentalValue spoken_feedback_enabled(
-      pref_service->GetBoolean(prefs::kSpokenFeedbackEnabled));
-  web_ui()->CallJavascriptFunction(
-      "BrowserOptions.setSpokenFeedbackCheckboxState",
-      spoken_feedback_enabled);
-  base::FundamentalValue high_contrast_enabled(
-      pref_service->GetBoolean(prefs::kHighContrastEnabled));
-  web_ui()->CallJavascriptFunction(
-      "BrowserOptions.setHighContrastCheckboxState",
-      high_contrast_enabled);
   base::FundamentalValue virtual_keyboard_enabled(
       pref_service->GetBoolean(prefs::kVirtualKeyboardEnabled));
   web_ui()->CallJavascriptFunction(
@@ -1417,7 +1646,8 @@ void BrowserOptionsHandler::SetupAccessibilityFeatures() {
 void BrowserOptionsHandler::SetupMetricsReportingSettingVisibility() {
 #if defined(GOOGLE_CHROME_BUILD) && defined(OS_CHROMEOS)
   // Don't show the reporting setting if we are in the guest mode.
-  if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kGuestSession)) {
+  if (CommandLine::ForCurrentProcess()->HasSwitch(
+          chromeos::switches::kGuestSession)) {
     base::FundamentalValue visible(false);
     web_ui()->CallJavascriptFunction(
         "BrowserOptions.setMetricsReportingSettingVisibility", visible);
@@ -1434,16 +1664,42 @@ void BrowserOptionsHandler::SetupPasswordGenerationSettingVisibility() {
 }
 
 void BrowserOptionsHandler::SetupFontSizeSelector() {
-  // We're only interested in integer values, so convert to int.
-  base::FundamentalValue font_size(default_font_size_.GetValue());
-  web_ui()->CallJavascriptFunction("BrowserOptions.setFontSize", font_size);
+  PrefService* pref_service = Profile::FromWebUI(web_ui())->GetPrefs();
+  const PrefService::Preference* default_font_size =
+      pref_service->FindPreference(prefs::kWebKitDefaultFontSize);
+  const PrefService::Preference* default_fixed_font_size =
+      pref_service->FindPreference(prefs::kWebKitDefaultFixedFontSize);
+
+  DictionaryValue dict;
+  dict.SetInteger("value",
+                  pref_service->GetInteger(prefs::kWebKitDefaultFontSize));
+
+  // The font size control displays the value of the default font size, but
+  // setting it alters both the default font size and the default fixed font
+  // size. So it must be disabled when either of those prefs is not user
+  // modifiable.
+  dict.SetBoolean("disabled",
+      !default_font_size->IsUserModifiable() ||
+      !default_fixed_font_size->IsUserModifiable());
+
+  // This is a poor man's version of CoreOptionsHandler::CreateValueForPref,
+  // adapted to consider two prefs. It may be better to refactor
+  // CreateValueForPref so it can be called from here.
+  if (default_font_size->IsManaged() || default_fixed_font_size->IsManaged()) {
+      dict.SetString("controlledBy", "policy");
+  } else if (default_font_size->IsExtensionControlled() ||
+             default_fixed_font_size->IsExtensionControlled()) {
+      dict.SetString("controlledBy", "extension");
+  }
+
+  web_ui()->CallJavascriptFunction("BrowserOptions.setFontSize", dict);
 }
 
 void BrowserOptionsHandler::SetupPageZoomSelector() {
   PrefService* pref_service = Profile::FromWebUI(web_ui())->GetPrefs();
   double default_zoom_level = pref_service->GetDouble(prefs::kDefaultZoomLevel);
   double default_zoom_factor =
-      WebKit::WebView::zoomLevelToZoomFactor(default_zoom_level);
+      content::ZoomLevelToZoomFactor(default_zoom_level);
 
   // Generate a vector of zoom factors from an array of known presets along with
   // the default factor added if necessary.
@@ -1496,13 +1752,39 @@ void BrowserOptionsHandler::SetupProxySettingsSection() {
   bool is_extension_controlled = (proxy_config &&
                                   proxy_config->IsExtensionControlled());
 
-  base::FundamentalValue disabled(profile_pref_registrar_.IsManaged() ||
-                                  is_extension_controlled);
+  base::FundamentalValue disabled(proxy_config &&
+                                  !proxy_config->IsUserModifiable());
   base::FundamentalValue extension_controlled(is_extension_controlled);
   web_ui()->CallJavascriptFunction("BrowserOptions.setupProxySettingsSection",
                                    disabled, extension_controlled);
 
 #endif  // !defined(OS_CHROMEOS)
+}
+
+bool BrowserOptionsHandler::IsValidExistingManagedUserId(
+    const std::string& existing_managed_user_id) const {
+  if (existing_managed_user_id.empty())
+    return true;
+
+  if (!CommandLine::ForCurrentProcess()->HasSwitch(
+      switches::kAllowCreateExistingManagedUsers)) {
+    return false;
+  }
+
+  DictionaryPrefUpdate update(Profile::FromWebUI(web_ui())->GetPrefs(),
+                              prefs::kManagedUsers);
+  DictionaryValue* dict = update.Get();
+  if (!dict->HasKey(existing_managed_user_id))
+    return false;
+
+  // Check if this managed user already exists on this machine.
+  const ProfileInfoCache& cache =
+      g_browser_process->profile_manager()->GetProfileInfoCache();
+  for (size_t i = 0; i < cache.GetNumberOfProfiles(); ++i) {
+    if (existing_managed_user_id == cache.GetManagedUserIdOfProfileAtIndex(i))
+      return false;
+  }
+  return true;
 }
 
 }  // namespace options

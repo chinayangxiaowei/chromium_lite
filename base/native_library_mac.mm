@@ -11,9 +11,9 @@
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/mac/scoped_cftyperef.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread_restrictions.h"
-#include "base/utf_string_conversions.h"
 
 namespace base {
 
@@ -45,8 +45,7 @@ static NativeLibraryObjCStatus GetObjCStatusForImage(
 NativeLibrary LoadNativeLibrary(const base::FilePath& library_path,
                                 std::string* error) {
   // dlopen() etc. open the file off disk.
-  if (library_path.Extension() == "dylib" ||
-      !file_util::DirectoryExists(library_path)) {
+  if (library_path.Extension() == "dylib" || !DirectoryExists(library_path)) {
     void* dylib = dlopen(library_path.value().c_str(), RTLD_LAZY);
     if (!dylib)
       return NULL;
@@ -56,12 +55,11 @@ NativeLibrary LoadNativeLibrary(const base::FilePath& library_path,
     native_lib->objc_status = OBJC_UNKNOWN;
     return native_lib;
   }
-  base::mac::ScopedCFTypeRef<CFURLRef> url(
-      CFURLCreateFromFileSystemRepresentation(
-          kCFAllocatorDefault,
-          (const UInt8*)library_path.value().c_str(),
-          library_path.value().length(),
-          true));
+  base::ScopedCFTypeRef<CFURLRef> url(CFURLCreateFromFileSystemRepresentation(
+      kCFAllocatorDefault,
+      (const UInt8*)library_path.value().c_str(),
+      library_path.value().length(),
+      true));
   if (!url)
     return NULL;
   CFBundleRef bundle = CFBundleCreate(kCFAllocatorDefault, url.get());
@@ -103,9 +101,8 @@ void* GetFunctionPointerFromNativeLibrary(NativeLibrary library,
 
   // Get the function pointer using the right API for the type.
   if (library->type == BUNDLE) {
-    base::mac::ScopedCFTypeRef<CFStringRef> symbol_name(
-        CFStringCreateWithCString(kCFAllocatorDefault, name,
-                                  kCFStringEncodingUTF8));
+    base::ScopedCFTypeRef<CFStringRef> symbol_name(CFStringCreateWithCString(
+        kCFAllocatorDefault, name, kCFStringEncodingUTF8));
     function_pointer = CFBundleGetFunctionPointerForName(library->bundle,
                                                          symbol_name);
   } else {

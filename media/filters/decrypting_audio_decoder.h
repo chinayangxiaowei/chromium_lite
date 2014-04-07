@@ -7,7 +7,9 @@
 
 #include "base/callback.h"
 #include "base/memory/ref_counted.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/time/time.h"
 #include "media/base/audio_decoder.h"
 #include "media/base/decryptor.h"
 #include "media/base/demuxer_stream.h"
@@ -18,6 +20,7 @@ class MessageLoopProxy;
 
 namespace media {
 
+class AudioTimestampHelper;
 class DecoderBuffer;
 class Decryptor;
 
@@ -40,7 +43,7 @@ class MEDIA_EXPORT DecryptingAudioDecoder : public AudioDecoder {
   virtual ~DecryptingAudioDecoder();
 
   // AudioDecoder implementation.
-  virtual void Initialize(const scoped_refptr<DemuxerStream>& stream,
+  virtual void Initialize(DemuxerStream* stream,
                           const PipelineStatusCB& status_cb,
                           const StatisticsCB& statistics_cb) OVERRIDE;
   virtual void Read(const ReadCB& read_cb) OVERRIDE;
@@ -102,9 +105,6 @@ class MEDIA_EXPORT DecryptingAudioDecoder : public AudioDecoder {
   // renderer always receives continuous frames without gaps and overlaps.
   void EnqueueFrames(const Decryptor::AudioBuffers& frames);
 
-  // Converts number of samples to duration.
-  base::TimeDelta NumberOfSamplesToDuration(int number_of_samples) const;
-
   scoped_refptr<base::MessageLoopProxy> message_loop_;
   base::WeakPtrFactory<DecryptingAudioDecoder> weak_factory_;
   base::WeakPtr<DecryptingAudioDecoder> weak_this_;
@@ -117,7 +117,7 @@ class MEDIA_EXPORT DecryptingAudioDecoder : public AudioDecoder {
   base::Closure reset_cb_;
 
   // Pointer to the demuxer stream that will feed us compressed buffers.
-  scoped_refptr<DemuxerStream> demuxer_stream_;
+  DemuxerStream* demuxer_stream_;
 
   // Callback to request/cancel decryptor creation notification.
   SetDecryptorReadyCB set_decryptor_ready_cb_;
@@ -141,10 +141,7 @@ class MEDIA_EXPORT DecryptingAudioDecoder : public AudioDecoder {
   ChannelLayout channel_layout_;
   int samples_per_second_;
 
-  int bytes_per_sample_;
-
-  base::TimeDelta output_timestamp_base_;
-  int total_samples_decoded_;
+  scoped_ptr<AudioTimestampHelper> timestamp_helper_;
 
   DISALLOW_COPY_AND_ASSIGN(DecryptingAudioDecoder);
 };

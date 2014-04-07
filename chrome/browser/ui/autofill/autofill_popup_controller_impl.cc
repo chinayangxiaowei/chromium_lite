@@ -8,12 +8,12 @@
 #include <utility>
 
 #include "base/logging.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/autofill/autofill_popup_view.h"
-#include "components/autofill/browser/autofill_popup_delegate.h"
+#include "components/autofill/core/browser/autofill_popup_delegate.h"
 #include "content/public/browser/native_web_keyboard_event.h"
 #include "grit/webkit_resources.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebAutofillClient.h"
+#include "third_party/WebKit/public/web/WebAutofillClient.h"
 #include "ui/base/events/event.h"
 #include "ui/base/text/text_elider.h"
 #include "ui/gfx/display.h"
@@ -24,6 +24,7 @@
 using base::WeakPtr;
 using WebKit::WebAutofillClient;
 
+namespace autofill {
 namespace {
 
 // Used to indicate that no line is currently selected by the user.
@@ -38,14 +39,11 @@ const size_t kRowHeight = 24;
 // The vertical height of a separator in pixels.
 const size_t kSeparatorHeight = 1;
 
-// The amount of minimum padding between the Autofill name and subtext in
-// pixels.
-const size_t kNamePadding = 15;
-
 // The maximum amount of characters to display from either the name or subtext.
 const size_t kMaxTextLength = 15;
 
 #if !defined(OS_ANDROID)
+const size_t kNamePadding = AutofillPopupView::kNamePadding;
 const size_t kIconPadding = AutofillPopupView::kIconPadding;
 const size_t kEndPadding = AutofillPopupView::kEndPadding;
 const size_t kAutofillIconWidth = AutofillPopupView::kAutofillIconWidth;
@@ -63,44 +61,47 @@ const DataResource kDataResources[] = {
   { "genericCC", IDR_AUTOFILL_CC_GENERIC },
   { "jcbCC", IDR_AUTOFILL_CC_JCB },
   { "masterCardCC", IDR_AUTOFILL_CC_MASTERCARD },
-  { "soloCC", IDR_AUTOFILL_CC_SOLO },
   { "visaCC", IDR_AUTOFILL_CC_VISA },
 };
 
-}  // end namespace
+}  // namespace
 
 // static
 WeakPtr<AutofillPopupControllerImpl> AutofillPopupControllerImpl::GetOrCreate(
     WeakPtr<AutofillPopupControllerImpl> previous,
-    AutofillPopupDelegate* delegate,
+    WeakPtr<AutofillPopupDelegate> delegate,
     gfx::NativeView container_view,
-    const gfx::RectF& element_bounds) {
-  DCHECK(!previous || previous->delegate_ == delegate);
+    const gfx::RectF& element_bounds,
+    base::i18n::TextDirection text_direction) {
+  DCHECK(!previous.get() || previous->delegate_.get() == delegate.get());
 
-  if (previous &&
-      previous->container_view() == container_view &&
+  if (previous.get() && previous->container_view() == container_view &&
       previous->element_bounds() == element_bounds) {
+    previous->ClearState();
     return previous;
   }
 
-  if (previous)
+  if (previous.get())
     previous->Hide();
 
   AutofillPopupControllerImpl* controller =
-      new AutofillPopupControllerImpl(delegate, container_view, element_bounds);
+      new AutofillPopupControllerImpl(
+          delegate, container_view, element_bounds, text_direction);
   return controller->GetWeakPtr();
 }
 
 AutofillPopupControllerImpl::AutofillPopupControllerImpl(
-    AutofillPopupDelegate* delegate,
+    base::WeakPtr<AutofillPopupDelegate> delegate,
     gfx::NativeView container_view,
-    const gfx::RectF& element_bounds)
+    const gfx::RectF& element_bounds,
+    base::i18n::TextDirection text_direction)
     : view_(NULL),
       delegate_(delegate),
       container_view_(container_view),
       element_bounds_(element_bounds),
-      selected_line_(kNoSelection),
+      text_direction_(text_direction),
       weak_ptr_factory_(this) {
+  ClearState();
 #if !defined(OS_ANDROID)
   subtext_font_ = name_font_.DeriveFont(kLabelFontSizeDelta);
   warning_font_ = name_font_.DeriveFont(0, gfx::Font::ITALIC);
@@ -114,11 +115,7 @@ void AutofillPopupControllerImpl::Show(
     const std::vector<string16>& subtexts,
     const std::vector<string16>& icons,
     const std::vector<int>& identifiers) {
-  names_ = names;
-  full_names_ = names;
-  subtexts_ = subtexts;
-  icons_ = icons;
-  identifiers_ = identifiers;
+  SetValues(names, subtexts, icons, identifiers);
 
 #if !defined(OS_ANDROID)
   // Android displays the long text with ellipsis using the view attributes.
@@ -157,6 +154,14 @@ void AutofillPopupControllerImpl::Show(
 
   if (!view_) {
     view_ = AutofillPopupView::Create(this);
+
+    // It is possible to fail to create the popup, in this case
+    // treat the popup as hiding right away.
+    if (!view_) {
+      Hide();
+      return;
+    }
+
     ShowView();
   } else {
     UpdateBoundsAndRedrawPopup();
@@ -165,10 +170,65 @@ void AutofillPopupControllerImpl::Show(
   delegate_->OnPopupShown(this);
 }
 
-void AutofillPopupControllerImpl::Hide() {
-  SetSelectedLine(kNoSelection);
+void AutofillPopupControllerImpl::UpdateDataListValues(
+    const std::vector<base::string16>& values,
+    const std::vector<base::string16>& labels) {
+  // Remove all the old data list values, which should always be at the top of
+  // the list if they are present.
+  while (!identifiers_.empty() &&
+         identifiers_[0] == WebAutofillClient::MenuItemIDDataListEntry) {
+    names_.erase(names_.begin());
+    subtexts_.erase(subtexts_.begin());
+    icons_.erase(icons_.begin());
+    identifiers_.erase(identifiers_.begin());
+  }
 
-  delegate_->OnPopupHidden(this);
+  // If there are no new data list values, exit (clearing the separator if there
+  // is one).
+  if (values.empty()) {
+    if (!identifiers_.empty() &&
+        identifiers_[0] == WebAutofillClient::MenuItemIDSeparator) {
+      names_.erase(names_.begin());
+      subtexts_.erase(subtexts_.begin());
+      icons_.erase(icons_.begin());
+      identifiers_.erase(identifiers_.begin());
+    }
+
+     // The popup contents have changed, so either update the bounds or hide it.
+    if (HasSuggestions())
+      UpdateBoundsAndRedrawPopup();
+    else
+      Hide();
+
+    return;
+  }
+
+  // Add a separator if there are any other values.
+  if (!identifiers_.empty() &&
+      identifiers_[0] != WebAutofillClient::MenuItemIDSeparator) {
+    names_.insert(names_.begin(), string16());
+    subtexts_.insert(subtexts_.begin(), string16());
+    icons_.insert(icons_.begin(), string16());
+    identifiers_.insert(identifiers_.begin(),
+                        WebAutofillClient::MenuItemIDSeparator);
+  }
+
+
+  names_.insert(names_.begin(), values.begin(), values.end());
+  subtexts_.insert(subtexts_.begin(), labels.begin(), labels.end());
+
+  // Add the values that are the same for all data list elements.
+  icons_.insert(icons_.begin(), values.size(), base::string16());
+  identifiers_.insert(identifiers_.begin(),
+                      values.size(),
+                      WebAutofillClient::MenuItemIDDataListEntry);
+
+  UpdateBoundsAndRedrawPopup();
+}
+
+void AutofillPopupControllerImpl::Hide() {
+  if (delegate_.get())
+    delegate_->OnPopupHidden(this);
 
   if (view_)
     view_->Hide();
@@ -204,6 +264,12 @@ bool AutofillPopupControllerImpl::HandleKeyPressEvent(
     case ui::VKEY_DELETE:
       return (event.modifiers & content::NativeWebKeyboardEvent::ShiftKey) &&
              RemoveSelectedLine();
+    case ui::VKEY_TAB:
+      // A tab press should cause the highlighted line to be selected, but still
+      // return false so the tab key press propagates and changes the cursor
+      // location.
+      AcceptSelectedLine();
+      return false;
     case ui::VKEY_RETURN:
       return AcceptSelectedLine();
     default:
@@ -259,6 +325,10 @@ bool AutofillPopupControllerImpl::CanDelete(size_t index) const {
       id == WebAutofillClient::MenuItemIDPasswordEntry;
 }
 
+bool AutofillPopupControllerImpl::IsWarning(size_t index) const {
+  return identifiers_[index] == WebAutofillClient::MenuItemIDWarningMessage;
+}
+
 gfx::Rect AutofillPopupControllerImpl::GetRowBounds(size_t index) {
   int top = 0;
   for (size_t i = 0; i < index; ++i) {
@@ -287,6 +357,10 @@ gfx::NativeView AutofillPopupControllerImpl::container_view() const {
 
 const gfx::RectF& AutofillPopupControllerImpl::element_bounds() const {
   return element_bounds_;
+}
+
+bool AutofillPopupControllerImpl::IsRTL() const {
+  return text_direction_ == base::i18n::RIGHT_TO_LEFT;
 }
 
 const std::vector<string16>& AutofillPopupControllerImpl::names() const {
@@ -327,7 +401,8 @@ void AutofillPopupControllerImpl::SetSelectedLine(int selected_line) {
   if (selected_line_ == selected_line)
     return;
 
-  if (selected_line_ != kNoSelection)
+  if (selected_line_ != kNoSelection &&
+      static_cast<size_t>(selected_line_) < identifiers_.size())
     InvalidateRow(selected_line_);
 
   if (selected_line != kNoSelection)
@@ -350,7 +425,7 @@ void AutofillPopupControllerImpl::SelectNextLine() {
     ++new_selected_line;
   }
 
-  if (new_selected_line == static_cast<int>(names_.size()))
+  if (new_selected_line >= static_cast<int>(names_.size()))
     new_selected_line = 0;
 
   SetSelectedLine(new_selected_line);
@@ -452,11 +527,25 @@ bool AutofillPopupControllerImpl::HasSuggestions() {
        identifiers_[0] == WebAutofillClient::MenuItemIDDataListEntry);
 }
 
+void AutofillPopupControllerImpl::SetValues(
+    const std::vector<string16>& names,
+    const std::vector<string16>& subtexts,
+    const std::vector<string16>& icons,
+    const std::vector<int>& identifiers) {
+  names_ = names;
+  full_names_ = names;
+  subtexts_ = subtexts;
+  icons_ = icons;
+  identifiers_ = identifiers;
+}
+
 void AutofillPopupControllerImpl::ShowView() {
   view_->Show();
 }
 
 void AutofillPopupControllerImpl::InvalidateRow(size_t row) {
+  DCHECK(0 <= row);
+  DCHECK(row < identifiers_.size());
   view_->InvalidateRow(row);
 }
 
@@ -492,7 +581,10 @@ int AutofillPopupControllerImpl::GetDesiredPopupHeight() const {
 }
 
 int AutofillPopupControllerImpl::RowWidthWithoutText(int row) const {
-  int row_size = kEndPadding + kNamePadding;
+  int row_size = kEndPadding;
+
+  if (!subtexts_[row].empty())
+    row_size += kNamePadding;
 
   // Add the Autofill icon size, if required.
   if (!icons_[row].empty())
@@ -542,6 +634,21 @@ WeakPtr<AutofillPopupControllerImpl> AutofillPopupControllerImpl::GetWeakPtr() {
   return weak_ptr_factory_.GetWeakPtr();
 }
 
+void AutofillPopupControllerImpl::ClearState() {
+  // Don't clear view_, because otherwise the popup will have to get regenerated
+  // and this will cause flickering.
+
+  popup_bounds_ = gfx::Rect();
+
+  names_.clear();
+  subtexts_.clear();
+  icons_.clear();
+  identifiers_.clear();
+  full_names_.clear();
+
+  selected_line_ = kNoSelection;
+}
+
 const gfx::Rect AutofillPopupControllerImpl::RoundedElementBounds() const {
   return gfx::ToEnclosingRect(element_bounds_);
 }
@@ -556,10 +663,9 @@ std::pair<int, int> AutofillPopupControllerImpl::CalculatePopupXAndWidth(
     const gfx::Display& left_display,
     const gfx::Display& right_display,
     int popup_required_width) const {
-  int leftmost_display_x = left_display.bounds().x() *
-      left_display.device_scale_factor();
-  int rightmost_display_x = right_display.GetSizeInPixel().width() +
-      right_display.bounds().x() * right_display.device_scale_factor();
+  int leftmost_display_x = left_display.bounds().x();
+  int rightmost_display_x =
+      right_display.GetSizeInPixel().width() + right_display.bounds().x();
 
   // Calculate the start coordinates for the popup if it is growing right or
   // the end position if it is growing to the left, capped to screen space.
@@ -588,11 +694,9 @@ std::pair<int,int> AutofillPopupControllerImpl::CalculatePopupYAndHeight(
     const gfx::Display& top_display,
     const gfx::Display& bottom_display,
     int popup_required_height) const {
-  int topmost_display_y = top_display.bounds().y() *
-      top_display.device_scale_factor();
-  int bottommost_display_y = bottom_display.GetSizeInPixel().height() +
-      (bottom_display.bounds().y() *
-       bottom_display.device_scale_factor());
+  int topmost_display_y = top_display.bounds().y();
+  int bottommost_display_y =
+      bottom_display.GetSizeInPixel().height() + bottom_display.bounds().y();
 
   // Calculate the start coordinates for the popup if it is growing down or
   // the end position if it is growing up, capped to screen space.
@@ -616,3 +720,5 @@ std::pair<int,int> AutofillPopupControllerImpl::CalculatePopupYAndHeight(
                           popup_required_height);
   }
 }
+
+}  // namespace autofill

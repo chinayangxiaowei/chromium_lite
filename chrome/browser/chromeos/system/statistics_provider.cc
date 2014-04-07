@@ -7,18 +7,23 @@
 #include "base/bind.h"
 #include "base/chromeos/chromeos_version.h"
 #include "base/command_line.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/memory/singleton.h"
+#include "base/path_service.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/threading/thread_restrictions.h"
-#include "base/time.h"
-#include "chrome/browser/chromeos/system/name_value_pairs_parser.h"
-#include "chrome/common/child_process_logging.h"
-#include "chrome/common/chrome_version_info.h"
+#include "base/time/time.h"
+#include "chromeos/app_mode/kiosk_oem_manifest_parser.h"
+#include "chromeos/chromeos_constants.h"
 #include "chromeos/chromeos_switches.h"
+#include "chromeos/system/name_value_pairs_parser.h"
 #include "content/public/browser/browser_thread.h"
+
+#if defined(GOOGLE_CHROME_BUILD)
+// TODO(phajdan.jr): Drop that dependency, http://crbug.com/180711 .
+#include "chrome/common/chrome_version_info.h"
+#endif
 
 using content::BrowserThread;
 
@@ -64,7 +69,27 @@ const char kVpdDelim[] = "\n";
 // Timeout that we should wait for statistics to get loaded
 const int kTimeoutSecs = 3;
 
+// The location of OEM manifest file used to trigger OOBE flow for kiosk mode.
+const CommandLine::CharType kOemManifestFilePath[] =
+    FILE_PATH_LITERAL("/usr/share/oem/oobe/manifest.json");
+
 }  // namespace
+
+// Key values for GetMachineStatistic()/GetMachineFlag() calls.
+const char kDevSwitchBootMode[] = "devsw_boot";
+const char kHardwareClass[] = "hardware_class";
+const char kMachineInfoBoard[] =
+    "CHROMEOS_RELEASE_BOARD";
+const char kOffersCouponCodeKey[] = "ubind_attribute";
+const char kOffersGroupCodeKey[] = "gbind_attribute";
+const char kOemCanExitEnterpriseEnrollmentKey[] =
+    "oem_can_exit_enrollment";
+const char kOemDeviceRequisitionKey[] =
+    "oem_device_requisition";
+const char kOemIsEnterpriseManagedKey[] =
+    "oem_enterprise_managed";
+const char kOemKeyboardDrivenOobeKey[] =
+    "oem_keyboard_driven_oobe";
 
 // The StatisticsProvider implementation used in production.
 class StatisticsProviderImpl : public StatisticsProvider {
@@ -74,13 +99,19 @@ class StatisticsProviderImpl : public StatisticsProvider {
   virtual void StartLoadingMachineStatistics() OVERRIDE;
   virtual bool GetMachineStatistic(const std::string& name,
                                    std::string* result) OVERRIDE;
+  virtual bool GetMachineFlag(const std::string& name,
+                              bool* result) OVERRIDE;
+  virtual void LoadOemManifest() OVERRIDE;
 
   static StatisticsProviderImpl* GetInstance();
 
- private:
-  friend struct DefaultSingletonTraits<StatisticsProviderImpl>;
-
+ protected:
   StatisticsProviderImpl();
+  void LoadOemManifestFromFile(const base::FilePath& file);
+
+ private:
+  typedef std::map<std::string, bool> MachineFlags;
+  friend struct DefaultSingletonTraits<StatisticsProviderImpl>;
 
   // Loads the machine info file, which is necessary to get the Chrome channel.
   // Treat MachineOSInfoFile specially, as distribution channel information
@@ -95,6 +126,7 @@ class StatisticsProviderImpl : public StatisticsProvider {
   bool initialized_;
   bool load_statistics_started_;
   NameValuePairsParser::NameValueMap machine_info_;
+  MachineFlags machine_flags_;
   base::WaitableEvent on_statistics_loaded_;
 
   DISALLOW_COPY_AND_ASSIGN(StatisticsProviderImpl);
@@ -144,6 +176,21 @@ bool StatisticsProviderImpl::GetMachineStatistic(
     return true;
   }
   return false;
+}
+
+bool StatisticsProviderImpl::GetMachineFlag(
+    const std::string& name, bool* result) {
+  MachineFlags::const_iterator iter = machine_flags_.find(name);
+  if (iter != machine_flags_.end()) {
+    *result = iter->second;
+    return true;
+  }
+
+  return false;
+}
+
+void StatisticsProviderImpl::LoadOemManifest() {
+  LoadOemManifestFromFile(base::FilePath(kOemManifestFilePath));
 }
 
 // manual_reset needs to be true, as we want to keep the signaled state.
@@ -213,13 +260,29 @@ void StatisticsProviderImpl::LoadMachineStatistics() {
   VLOG(1) << "Finished loading statistics";
 }
 
+void StatisticsProviderImpl::LoadOemManifestFromFile(
+    const base::FilePath& file) {
+  KioskOemManifestParser::Manifest oem_manifest;
+  if (!KioskOemManifestParser::Load(file, &oem_manifest))
+    return;
+
+  machine_info_[kOemDeviceRequisitionKey] =
+      oem_manifest.device_requisition;
+  machine_flags_[kOemIsEnterpriseManagedKey] =
+      oem_manifest.enterprise_managed;
+  machine_flags_[kOemCanExitEnterpriseEnrollmentKey] =
+      oem_manifest.can_exit_enrollment;
+  machine_flags_[kOemKeyboardDrivenOobeKey] =
+      oem_manifest.keyboard_driven_oobe;
+}
+
 StatisticsProviderImpl* StatisticsProviderImpl::GetInstance() {
   return Singleton<StatisticsProviderImpl,
                    DefaultSingletonTraits<StatisticsProviderImpl> >::get();
 }
 
 // The stub StatisticsProvider implementation used on Linux desktop.
-class StatisticsProviderStubImpl : public StatisticsProvider {
+class StatisticsProviderStubImpl : public StatisticsProviderImpl {
  public:
   // StatisticsProvider implementation:
   virtual void Init() OVERRIDE {}
@@ -243,6 +306,15 @@ class StatisticsProviderStubImpl : public StatisticsProvider {
       }
     }
     return false;
+  }
+
+  virtual void LoadOemManifest() OVERRIDE {
+    CommandLine* command_line = CommandLine::ForCurrentProcess();
+    if (!command_line->HasSwitch(switches::kAppOemManifestFile))
+      return;
+
+    LoadOemManifestFromFile(
+        command_line->GetSwitchValuePath(switches::kAppOemManifestFile));
   }
 
   static StatisticsProviderStubImpl* GetInstance() {

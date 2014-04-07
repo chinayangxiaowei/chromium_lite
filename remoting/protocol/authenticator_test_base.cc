@@ -9,7 +9,7 @@
 #include "base/files/file_path.h"
 #include "base/path_service.h"
 #include "base/test/test_timeouts.h"
-#include "base/timer.h"
+#include "base/timer/timer.h"
 #include "net/base/test_data_directory.h"
 #include "remoting/base/rsa_key_pair.h"
 #include "remoting/protocol/authenticator.h"
@@ -30,7 +30,7 @@ ACTION_P(QuitThreadOnCounter, counter) {
   --(*counter);
   EXPECT_GE(*counter, 0);
   if (*counter == 0)
-    MessageLoop::current()->Quit();
+    base::MessageLoop::current()->Quit();
 }
 
 }  // namespace
@@ -55,7 +55,7 @@ void AuthenticatorTestBase::SetUp() {
   std::string key_base64;
   ASSERT_TRUE(base::Base64Encode(key_string, &key_base64));
   key_pair_ = RsaKeyPair::FromString(key_base64);
-  ASSERT_TRUE(key_pair_);
+  ASSERT_TRUE(key_pair_.get());
   host_public_key_ = key_pair_->GetPublicKey();
 }
 
@@ -119,8 +119,9 @@ void AuthenticatorTestBase::RunChannelAuth(bool expected_fail) {
   // Ensure that .Run() does not run unbounded if the callbacks are never
   // called.
   base::Timer shutdown_timer(false, false);
-  shutdown_timer.Start(FROM_HERE, TestTimeouts::action_timeout(),
-                       MessageLoop::QuitClosure());
+  shutdown_timer.Start(FROM_HERE,
+                       TestTimeouts::action_timeout(),
+                       base::MessageLoop::QuitClosure());
   message_loop_.Run();
   shutdown_timer.Stop();
 

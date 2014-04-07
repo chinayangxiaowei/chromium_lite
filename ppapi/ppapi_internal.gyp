@@ -42,24 +42,21 @@
         'ppapi_shared_target': 1,
       },
       'dependencies': [
-        'ppapi.gyp:ppapi_c',
         '../base/base.gyp:base',
         '../base/base.gyp:base_i18n',
         '../base/third_party/dynamic_annotations/dynamic_annotations.gyp:dynamic_annotations',
-        '../build/temp_gyp/googleurl.gyp:googleurl',
         '../gpu/command_buffer/command_buffer.gyp:gles2_utils',
         '../gpu/gpu.gyp:command_buffer_client',
         '../gpu/gpu.gyp:gles2_implementation',
         '../media/media.gyp:shared_memory_support',
         '../skia/skia.gyp:skia',
         '../third_party/icu/icu.gyp:icuuc',
-        # TODO(ananta) : The WebKit dependency needs to move to a new target for NACL.
-        '<(webkit_src_dir)/Source/WebKit/chromium/WebKit.gyp:webkit',
         '../ui/surface/surface.gyp:surface',
+        '../url/url.gyp:url_lib',
+        'ppapi.gyp:ppapi_c',
       ],
       'export_dependent_settings': [
         '../base/base.gyp:base',
-        '<(webkit_src_dir)/Source/WebKit/chromium/WebKit.gyp:webkit',
       ],
       'conditions': [
         ['OS=="mac"', {
@@ -68,6 +65,21 @@
               '$(SDKROOT)/System/Library/Frameworks/QuartzCore.framework',
             ],
           },
+        }],
+        ['chrome_multiple_dll==1', {
+          'dependencies': [
+            '../third_party/WebKit/public/blink.gyp:blink_minimal',
+          ],
+          'export_dependent_settings': [
+            '../third_party/WebKit/public/blink.gyp:blink_minimal',
+          ],
+        }, {
+          'dependencies': [
+            '../third_party/WebKit/public/blink.gyp:blink',
+          ],
+          'export_dependent_settings': [
+            '../third_party/WebKit/public/blink.gyp:blink',
+          ],
         }],
       ],
       # Disable c4267 warnings until we fix size_t to int truncations.
@@ -113,8 +125,7 @@
             '../ipc/ipc.gyp:ipc',
             '../skia/skia.gyp:skia',
             '../third_party/icu/icu.gyp:icuuc',
-            # TODO(ananta) : The WebKit dependency needs to move to a new target for NACL.
-            '<(webkit_src_dir)/Source/WebKit/chromium/WebKit.gyp:webkit',
+            '../third_party/icu/icu.gyp:icui18n',
             '../ui/surface/surface.gyp:surface',
             'ppapi.gyp:ppapi_c',
             'ppapi_shared',
@@ -127,6 +138,17 @@
           },
           # Disable c4267 warnings until we fix size_t to int truncations.
           'msvs_disabled_warnings': [ 4267, ],
+          'conditions': [
+            ['chrome_multiple_dll==1', {
+              'dependencies': [
+                '../third_party/WebKit/public/blink.gyp:blink_minimal',
+              ],
+            }, {
+              'dependencies': [
+                '../third_party/WebKit/public/blink.gyp:blink',
+              ],
+            }],
+          ],
         },
       ],
     },
@@ -151,8 +173,7 @@
             '../ipc/ipc.gyp:ipc',
             '../skia/skia.gyp:skia',
             '../third_party/icu/icu.gyp:icuuc',
-            # TODO(ananta) : The WebKit dependency needs to move to a new target for NACL.
-            '<(webkit_src_dir)/Source/WebKit/chromium/WebKit.gyp:webkit',
+            '../third_party/icu/icu.gyp:icui18n',
             '../ui/surface/surface.gyp:surface',
             'ppapi.gyp:ppapi_c',
             'ppapi_shared',
@@ -164,6 +185,17 @@
           },
           # Disable c4267 warnings until we fix size_t to int truncations.
           'msvs_disabled_warnings': [ 4267, ],
+          'conditions': [
+            ['chrome_multiple_dll==1', {
+              'dependencies': [
+                '../third_party/WebKit/public/blink.gyp:blink_minimal',
+              ],
+            }, {
+              'dependencies': [
+                '../third_party/WebKit/public/blink.gyp:blink',
+              ],
+            }],
+          ],
         },
         {
           # In component build, this is just a phony target that makes sure

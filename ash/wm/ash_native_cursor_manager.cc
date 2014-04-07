@@ -4,6 +4,8 @@
 
 #include "ash/wm/ash_native_cursor_manager.h"
 
+#include "ash/display/display_controller.h"
+#include "ash/display/mirror_window_controller.h"
 #include "ash/shell.h"
 #include "ash/wm/image_cursors.h"
 #include "base/logging.h"
@@ -11,39 +13,43 @@
 #include "ui/aura/root_window.h"
 #include "ui/base/cursor/cursor.h"
 
+namespace ash {
 namespace  {
 
-// The coordinate of the cursor used when the mouse events are disabled.
-const int kDisabledCursorLocationX = -10000;
-const int kDisabledCursorLocationY = -10000;
-
 void SetCursorOnAllRootWindows(gfx::NativeCursor cursor) {
-  ash::Shell::RootWindowList root_windows =
-      ash::Shell::GetInstance()->GetAllRootWindows();
-  for (ash::Shell::RootWindowList::iterator iter = root_windows.begin();
+  Shell::RootWindowList root_windows =
+      Shell::GetInstance()->GetAllRootWindows();
+  for (Shell::RootWindowList::iterator iter = root_windows.begin();
        iter != root_windows.end(); ++iter)
     (*iter)->SetCursor(cursor);
+#if defined(OS_CHROMEOS)
+  Shell::GetInstance()->display_controller()->
+      mirror_window_controller()->SetMirroredCursor(cursor);
+#endif
 }
 
 void NotifyCursorVisibilityChange(bool visible) {
-  ash::Shell::RootWindowList root_windows =
-      ash::Shell::GetInstance()->GetAllRootWindows();
-  for (ash::Shell::RootWindowList::iterator iter = root_windows.begin();
+  Shell::RootWindowList root_windows =
+      Shell::GetInstance()->GetAllRootWindows();
+  for (Shell::RootWindowList::iterator iter = root_windows.begin();
        iter != root_windows.end(); ++iter)
     (*iter)->OnCursorVisibilityChanged(visible);
+#if defined(OS_CHROMEOS)
+  Shell::GetInstance()->display_controller()->mirror_window_controller()->
+      SetMirroredCursorVisibility(visible);
+#endif
 }
 
 void NotifyMouseEventsEnableStateChange(bool enabled) {
-  ash::Shell::RootWindowList root_windows =
-      ash::Shell::GetInstance()->GetAllRootWindows();
-  for (ash::Shell::RootWindowList::iterator iter = root_windows.begin();
+  Shell::RootWindowList root_windows =
+      Shell::GetInstance()->GetAllRootWindows();
+  for (Shell::RootWindowList::iterator iter = root_windows.begin();
        iter != root_windows.end(); ++iter)
     (*iter)->OnMouseEventsEnableStateChanged(enabled);
+  // Mirror window never process events.
 }
 
 }  // namespace
-
-namespace ash {
 
 AshNativeCursorManager::AshNativeCursorManager()
     : image_cursors_(new ImageCursors) {
@@ -73,6 +79,16 @@ void AshNativeCursorManager::SetCursor(
     SetCursorOnAllRootWindows(new_cursor);
 }
 
+void AshNativeCursorManager::SetScale(
+    float scale,
+    views::corewm::NativeCursorManagerDelegate* delegate) {
+  image_cursors_->SetScale(scale);
+  delegate->CommitScale(scale);
+
+  // Sets the cursor to refrect the scale change imidiately.
+  SetCursor(delegate->GetCurrentCursor(), delegate);
+}
+
 void AshNativeCursorManager::SetVisibility(
     bool visible,
     views::corewm::NativeCursorManagerDelegate* delegate) {
@@ -99,18 +115,10 @@ void AshNativeCursorManager::SetMouseEventsEnabled(
         disabled_cursor_location_);
   } else {
     disabled_cursor_location_ = aura::Env::GetInstance()->last_mouse_location();
-    aura::Env::GetInstance()->set_last_mouse_location(
-        gfx::Point(kDisabledCursorLocationX, kDisabledCursorLocationY));
   }
 
   SetVisibility(delegate->GetCurrentVisibility(), delegate);
   NotifyMouseEventsEnableStateChange(enabled);
 }
-
-void AshNativeCursorManager::SetCursorResourceModule(
-    const string16& module_name) {
-  image_cursors_->SetCursorResourceModule(module_name);
-}
-
 
 }  // namespace ash

@@ -108,7 +108,7 @@ def Copy(args):
   Copies multiple sources to a single destination using the normal cp
   semantics.  In addition, it support inclusion and exclusion filters which
   allows the copy to skip certain types of files."""
-  parser = optparse.OptionParser(usage='usage: cp [Options] souces... dest')
+  parser = optparse.OptionParser(usage='usage: cp [Options] sources... dest')
   parser.add_option(
       '-R', '-r', '--recursive', dest='recursive', action='store_true',
       default=False,
@@ -172,7 +172,7 @@ def Mkdir(args):
       if os.path.isdir(dst):
         if options.parents:
           continue
-        raise OSError('mkdir: Already exsists: ' + dst)
+        raise OSError('mkdir: Already exists: ' + dst)
       else:
         raise OSError('mkdir: Failed to create: ' + dst)
   return 0
@@ -209,7 +209,7 @@ def MovePath(options, src, dst):
 
 
 def Move(args):
-  parser = optparse.OptionParser(usage='usage: mv [Options] souces... dest')
+  parser = optparse.OptionParser(usage='usage: mv [Options] sources... dest')
   parser.add_option(
       '-v', '--verbose', dest='verbose', action='store_true',
       default=False,
@@ -525,12 +525,17 @@ def main(args):
     print 'No command specified'
     print 'Available commands: %s' % ' '.join(FuncMap)
     return 1
-  func = FuncMap.get(args[0])
+  func_name = args[0]
+  func = FuncMap.get(func_name)
   if not func:
-    print 'Do not recognize command: ' + args[0]
+    print 'Do not recognize command: %s' % func_name
     print 'Available commands: %s' % ' '.join(FuncMap)
     return 1
-  return func(args[1:])
+  try:
+    return func(args[1:])
+  except KeyboardInterrupt:
+    print '%s: interrupted' % func_name
+    return 1
 
 if __name__ == '__main__':
   sys.exit(main(sys.argv[1:]))

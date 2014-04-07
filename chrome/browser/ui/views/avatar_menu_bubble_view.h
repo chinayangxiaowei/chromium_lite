@@ -9,6 +9,7 @@
 
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
+#include "base/gtest_prod_util.h"
 #include "chrome/browser/profiles/avatar_menu_model_observer.h"
 #include "ui/views/bubble/bubble_delegate.h"
 #include "ui/views/controls/button/button.h"
@@ -18,8 +19,14 @@ class AvatarMenuModel;
 class Browser;
 class ProfileItemView;
 
+namespace content {
+class WebContents;
+}
+
 namespace views {
 class CustomButton;
+class ImageView;
+class Label;
 class Link;
 class Separator;
 }
@@ -42,7 +49,7 @@ class AvatarMenuBubbleView : public views::BubbleDelegateView,
   // is already showing and do nothing. This means that (1) will do nothing
   // and (2) will correctly hide the old bubble instance.
   static void ShowBubble(views::View* anchor_view,
-                         views::BubbleBorder::ArrowLocation arrow_location,
+                         views::BubbleBorder::Arrow arrow,
                          views::BubbleBorder::BubbleAlignment border_alignment,
                          const gfx::Rect& anchor_rect,
                          Browser* browser);
@@ -72,9 +79,16 @@ class AvatarMenuBubbleView : public views::BubbleDelegateView,
   virtual void OnAvatarMenuModelChanged(
       AvatarMenuModel* avatar_menu_model) OVERRIDE;
 
+  // We normally close the bubble any time it becomes inactive but this can lead
+  // to flaky tests where unexpected UI events are triggering this behavior.
+  // Tests should call this with "false" for more consistent operation.
+  static void set_close_on_deactivate(bool close) {
+    close_on_deactivate_ = close;
+  }
+
  private:
   AvatarMenuBubbleView(views::View* anchor_view,
-                       views::BubbleBorder::ArrowLocation arrow_location,
+                       views::BubbleBorder::Arrow arrow,
                        const gfx::Rect& anchor_rect,
                        Browser* browser);
 
@@ -83,20 +97,41 @@ class AvatarMenuBubbleView : public views::BubbleDelegateView,
   // NativeTheme.
   void SetBackgroundColors();
 
+  // Create the menu contents for a normal profile.
+  void InitMenuContents(AvatarMenuModel* avatar_menu_model);
+
+  // Create the managed user specific contents of the menu.
+  void InitManagedUserContents(AvatarMenuModel* avatar_menu_model);
+
   scoped_ptr<AvatarMenuModel> avatar_menu_model_;
   gfx::Rect anchor_rect_;
   Browser* browser_;
   std::vector<ProfileItemView*> item_views_;
 
-  // These will be non-NULL iff
+  // Used to separate the link entry in the avatar menu from the other entries.
+  views::Separator* separator_;
+
+  // This will be non-NULL if and only if
   // avatar_menu_model_->ShouldShowAddNewProfileLink() returns true.  See
   // OnAvatarMenuModelChanged().
-  views::Separator* separator_;
-  views::Link* add_profile_link_;
+  views::View* buttons_view_;
+
+  // This will be non-NULL if and only if |expanded_| is false and
+  // avatar_menu_model_->GetManagedUserInformation() returns a non-empty string.
+  // See OnAvatarMenuModelChanged().
+  views::Label* managed_user_info_;
+  views::ImageView* icon_view_;
+  views::Separator* separator_switch_users_;
+  views::Link* switch_profile_link_;
 
   static AvatarMenuBubbleView* avatar_bubble_;
+  static bool close_on_deactivate_;
+
+  // Is set to true if the managed user has clicked on Switch Users.
+  bool expanded_;
 
   DISALLOW_COPY_AND_ASSIGN(AvatarMenuBubbleView);
+  FRIEND_TEST_ALL_PREFIXES(AvatarMenuButtonTest, SignOut);
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_AVATAR_MENU_BUBBLE_VIEW_H_

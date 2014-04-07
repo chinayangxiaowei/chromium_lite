@@ -27,6 +27,8 @@ class ShellDevToolsFrontend : public WebContentsObserver,
   void Focus();
   void Close();
 
+  Shell* frontend_shell() const { return frontend_shell_; }
+
  private:
   ShellDevToolsFrontend(Shell* frontend_shell, DevToolsAgentHost* agent_host);
   virtual ~ShellDevToolsFrontend();
@@ -50,6 +52,13 @@ class ShellDevToolsFrontend : public WebContentsObserver,
   virtual void RequestFileSystems() OVERRIDE {}
   virtual void AddFileSystem() OVERRIDE {}
   virtual void RemoveFileSystem(const std::string& file_system_path) OVERRIDE {}
+  virtual void IndexPath(int request_id,
+                         const std::string& file_system_path) OVERRIDE {}
+  virtual void StopIndexing(int request_id) OVERRIDE {}
+  virtual void SearchInPath(int request_id,
+                            const std::string& file_system_path,
+                            const std::string& query) OVERRIDE {}
+
   virtual void InspectedContentsClosing() OVERRIDE;
 
   Shell* frontend_shell_;

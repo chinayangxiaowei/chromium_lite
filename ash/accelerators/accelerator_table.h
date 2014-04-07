@@ -15,20 +15,34 @@ namespace ash {
 // Please put if/def sections at the end of the bare section and keep the list
 // within each section in alphabetical order.
 enum AcceleratorAction {
+  ACCESSIBLE_FOCUS_NEXT,
+  ACCESSIBLE_FOCUS_PREVIOUS,
   BRIGHTNESS_DOWN,
   BRIGHTNESS_UP,
   CYCLE_BACKWARD_LINEAR,
   CYCLE_BACKWARD_MRU,
   CYCLE_FORWARD_LINEAR,
   CYCLE_FORWARD_MRU,
+  DEBUG_TOGGLE_DEVICE_SCALE_FACTOR,
+  DEBUG_TOGGLE_SHOW_DEBUG_BORDERS,
+  DEBUG_TOGGLE_SHOW_FPS_COUNTER,
+  DEBUG_TOGGLE_SHOW_PAINT_RECTS,
   DISABLE_CAPS_LOCK,
-  DISPLAY_TOGGLE_SCALE,
   EXIT,
   FOCUS_LAUNCHER,
   FOCUS_NEXT_PANE,
   FOCUS_PREVIOUS_PANE,
   KEYBOARD_BRIGHTNESS_DOWN,
   KEYBOARD_BRIGHTNESS_UP,
+  LAUNCH_APP_0,
+  LAUNCH_APP_1,
+  LAUNCH_APP_2,
+  LAUNCH_APP_3,
+  LAUNCH_APP_4,
+  LAUNCH_APP_5,
+  LAUNCH_APP_6,
+  LAUNCH_APP_7,
+  LAUNCH_LAST_APP,
   LOCK_PRESSED,
   LOCK_RELEASED,
   MAGNIFY_SCREEN_ZOOM_IN,
@@ -41,30 +55,25 @@ enum AcceleratorAction {
   NEW_WINDOW,
   NEXT_IME,
   OPEN_FEEDBACK_PAGE,
-  PREVIOUS_IME,
   POWER_PRESSED,
   POWER_RELEASED,
+  PREVIOUS_IME,
+  PRINT_LAYER_HIERARCHY,
   PRINT_UI_HIERARCHIES,
+  PRINT_VIEW_HIERARCHY,
+  PRINT_WINDOW_HIERARCHY,
   RESTORE_TAB,
   ROTATE_SCREEN,
   ROTATE_WINDOW,
   SCALE_UI_DOWN,
   SCALE_UI_RESET,
   SCALE_UI_UP,
-  SELECT_LAST_WIN,
-  SELECT_WIN_0,
-  SELECT_WIN_1,
-  SELECT_WIN_2,
-  SELECT_WIN_3,
-  SELECT_WIN_4,
-  SELECT_WIN_5,
-  SELECT_WIN_6,
-  SELECT_WIN_7,
   SHOW_KEYBOARD_OVERLAY,
   SHOW_MESSAGE_CENTER_BUBBLE,
   SHOW_OAK,
   SHOW_SYSTEM_TRAY_BUBBLE,
   SHOW_TASK_MANAGER,
+  SILENCE_SPOKEN_FEEDBACK,
   SWAP_PRIMARY_DISPLAY,
   SWITCH_IME,  // Switch to another IME depending on the accelerator.
   TAKE_PARTIAL_SCREENSHOT,
@@ -73,12 +82,14 @@ enum AcceleratorAction {
   TOGGLE_CAPS_LOCK,
   TOGGLE_CAPS_LOCK_BY_ALT_LWIN,
   TOGGLE_DESKTOP_BACKGROUND_MODE,
+  TOGGLE_FULLSCREEN,
   TOGGLE_MAXIMIZED,
   TOGGLE_ROOT_WINDOW_FULL_SCREEN,
   TOGGLE_SPOKEN_FEEDBACK,
   TOGGLE_WIFI,
   TOUCH_HUD_CLEAR,
   TOUCH_HUD_MODE_CHANGE,
+  TOUCH_HUD_PROJECTION_TOGGLE,
   VOLUME_DOWN,
   VOLUME_MUTE,
   VOLUME_UP,
@@ -87,17 +98,13 @@ enum AcceleratorAction {
   WINDOW_SNAP_LEFT,
   WINDOW_SNAP_RIGHT,
 #if defined(OS_CHROMEOS)
-  CYCLE_DISPLAY_MODE,
+  ADD_REMOVE_DISPLAY,
+  TOGGLE_MIRROR_MODE,
+  DISABLE_GPU_WATCHDOG,
   LOCK_SCREEN,
   OPEN_CROSH,
   OPEN_FILE_DIALOG,  // Open 'Open file' dialog.
   OPEN_FILE_MANAGER,
-  DISABLE_GPU_WATCHDOG,
-#endif
-#if !defined(NDEBUG)
-  PRINT_LAYER_HIERARCHY,
-  PRINT_VIEW_HIERARCHY,
-  PRINT_WINDOW_HIERARCHY,
 #endif
 };
 
@@ -114,6 +121,14 @@ ASH_EXPORT extern const AcceleratorData kAcceleratorData[];
 // The number of elements in kAcceleratorData.
 ASH_EXPORT extern const size_t kAcceleratorDataLength;
 
+#if !defined(NDEBUG)
+// Accelerators useful when running on desktop. Debug build only.
+ASH_EXPORT extern const AcceleratorData kDesktopAcceleratorData[];
+
+// The number of elements in kDesktopAcceleratorData.
+ASH_EXPORT extern const size_t kDesktopAcceleratorDataLength;
+#endif
+
 // Debug accelerators enabled only when "Debugging keyboard shortcuts" flag
 // (--ash-debug-shortcuts) is enabled.
 ASH_EXPORT extern const AcceleratorData kDebugAcceleratorData[];
@@ -127,6 +142,14 @@ ASH_EXPORT extern const AcceleratorAction kReservedActions[];
 
 // The number of elements in kReservedActions.
 ASH_EXPORT extern const size_t kReservedActionsLength;
+
+// Actions that should be handled very early in Ash unless the current target
+// window is full-screen, these actions are only handled if
+// DebugShortcutsEnabled is true (command line switch 'ash-debug-shortcuts').
+ASH_EXPORT extern const AcceleratorAction kReservedDebugActions[];
+
+// The number of elements in kReservedDebugActions.
+ASH_EXPORT extern const size_t kReservedDebugActionsLength;
 
 // Actions allowed while user is not signed in or screen is locked.
 ASH_EXPORT extern const AcceleratorAction kActionsAllowedAtLoginOrLockScreen[];

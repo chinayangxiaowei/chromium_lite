@@ -6,13 +6,13 @@
 
 #include <string>
 
+#include "apps/launcher.h"
 #include "base/command_line.h"
 #include "base/metrics/histogram.h"
 #include "chrome/browser/app_mode/app_mode_utils.h"
 #include "chrome/browser/extensions/extension_prefs.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_system.h"
-#include "chrome/browser/extensions/platform_app_launcher.h"
 #include "chrome/browser/extensions/tab_helper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
@@ -26,6 +26,7 @@
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_constants.h"
+#include "chrome/common/extensions/manifest_handlers/app_launch_info.h"
 #include "chrome/common/extensions/manifest_url_handler.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/browser/render_view_host.h"
@@ -63,7 +64,7 @@ GURL UrlForExtension(const Extension* extension,
            override_url.GetOrigin() == extension->url());
     url = override_url;
   } else {
-    url = extension->GetFullLaunchURL();
+    url = extensions::AppLaunchInfo::GetFullLaunchURL(extension);
   }
 
   // For extensions lacking launch urls, determine a reasonable fallback.
@@ -85,7 +86,7 @@ ui::WindowShowState DetermineWindowShowState(
     return ui::SHOW_STATE_DEFAULT;
   }
 
-  if (chrome::ShouldForceFullscreenApp())
+  if (chrome::IsRunningInForcedAppMode())
     return ui::SHOW_STATE_FULLSCREEN;
 
 #if defined(USE_ASH)
@@ -124,8 +125,10 @@ WebContents* OpenApplicationWindow(
 
   gfx::Rect window_bounds;
   if (extension) {
-    window_bounds.set_width(extension->launch_width());
-    window_bounds.set_height(extension->launch_height());
+    window_bounds.set_width(
+        extensions::AppLaunchInfo::GetLaunchWidth(extension));
+    window_bounds.set_height(
+        extensions::AppLaunchInfo::GetLaunchHeight(extension));
   }
   if (!override_bounds.IsEmpty())
     window_bounds = override_bounds;
@@ -339,8 +342,8 @@ WebContents* OpenApplication(const AppLaunchParams& params) {
   UMA_HISTOGRAM_ENUMERATION("Extensions.AppLaunchContainer", container, 100);
 
   if (extension->is_platform_app()) {
-    extensions::LaunchPlatformApp(profile, extension, params.command_line,
-                                  params.current_directory);
+    apps::LaunchPlatformAppWithCommandLine(
+        profile, extension, params.command_line, params.current_directory);
     return NULL;
   }
 

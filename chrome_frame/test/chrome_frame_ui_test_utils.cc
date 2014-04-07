@@ -11,11 +11,11 @@
 
 #include "base/bind.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/path_service.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/win/scoped_bstr.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome_frame/test/win_event_receiver.h"
@@ -272,7 +272,7 @@ bool AccObject::GetChildren(RefCountedAccObjectVector* client_objects) {
 
   RefCountedAccObjectVector objects;
   // Find children using |AccessibleChildren|.
-  scoped_array<VARIANT> children(new VARIANT[child_count]);
+  scoped_ptr<VARIANT[]> children(new VARIANT[child_count]);
   long found_child_count;  // NOLINT
   if (FAILED(AccessibleChildren(accessible_, 0L, child_count,
                                 children.get(),
@@ -638,7 +638,7 @@ std::wstring AccObjectMatcher::GetDescription() const {
 
 // AccEventObserver methods
 AccEventObserver::AccEventObserver()
-    : ALLOW_THIS_IN_INITIALIZER_LIST(event_handler_(new EventHandler(this))),
+    : event_handler_(new EventHandler(this)),
       is_watching_(false) {
   event_receiver_.SetListenerForEvents(this, EVENT_SYSTEM_MENUPOPUPSTART,
                                        EVENT_OBJECT_VALUECHANGE);
@@ -658,8 +658,8 @@ void AccEventObserver::OnEventReceived(DWORD event,
                                        LONG object_id,
                                        LONG child_id) {
   // Process events in a separate task to stop reentrancy problems.
-  DCHECK(MessageLoop::current());
-  MessageLoop::current()->PostTask(
+  DCHECK(base::MessageLoop::current());
+  base::MessageLoop::current()->PostTask(
       FROM_HERE,  base::Bind(&EventHandler::Handle, event_handler_.get(), event,
                              hwnd, object_id, child_id));
 }

@@ -9,7 +9,7 @@
 
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "chromeos/dbus/dbus_method_call_status.h"
 #include "chromeos/dbus/shill_client_helper.h"
 #include "chromeos/dbus/shill_property_changed_observer.h"
@@ -143,6 +143,15 @@ class ShillClientUnittestBase : public testing::Test {
                                             const base::Value* expected_value,
                                             dbus::MessageReader* reader);
 
+  // Expects the reader to have a string-to-variant dictionary.
+  static void ExpectDictionaryValueArgument(
+      const base::DictionaryValue* expected_dictionary,
+      dbus::MessageReader* reader);
+
+  // Creates a DictionaryValue with example Service properties. The caller owns
+  // the result.
+  static base::DictionaryValue* CreateExampleServiceProperties();
+
   // Expects the call status to be SUCCESS.
   static void ExpectNoResultValue(DBusMethodCallStatus call_status);
 
@@ -175,7 +184,7 @@ class ShillClientUnittestBase : public testing::Test {
       const base::DictionaryValue& result);
 
   // A message loop to emulate asynchronous behavior.
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
   // The mock bus.
   scoped_refptr<dbus::MockBus> mock_bus_;
 

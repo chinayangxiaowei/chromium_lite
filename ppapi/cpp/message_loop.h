@@ -7,6 +7,9 @@
 
 #include "ppapi/cpp/resource.h"
 
+/// @file
+/// This file defines the PPB_MessageLoop API.
+
 namespace pp {
 
 class CompletionCallback;
@@ -24,7 +27,8 @@ class InstanceHandle;
 /// suddenly see their PP_Resource handles become invalid. In this case, calls
 /// will fail with PP_ERROR_BADRESOURCE. If you need to access data associated
 /// with your instance, you will probably want to create some kind of threadsafe
-/// proxy object that can handle asynchonous destruction of the instance object.
+/// proxy object that can handle asynchronous destruction of the instance
+/// object.
 ///
 /// Typical usage:
 ///   On the main thread:
@@ -37,14 +41,16 @@ class InstanceHandle;
 ///    - Call AttachToCurrentThread() with the message loop resource.
 ///    - Call Run() with the message loop resource.
 ///
-///   Your callacks should look like this:
-///      void DoMyWork(void* user_data, int32_t status) {
-///        if (status != PP_OK) {
-///          Cleanup();  // e.g. free user_data.
-///          return;
-///        }
-///        ... do your work...
-///      }
+///   Your callbacks should look like this:
+///   @code
+///   void DoMyWork(void* user_data, int32_t status) {
+///     if (status != PP_OK) {
+///       Cleanup();  // e.g. free user_data.
+///       return;
+///     }
+///     ... do your work...
+///   }
+///   @endcode
 /// For a C++ example, see ppapi/utility/threading/simple_thread.h
 ///
 /// (You can also create the message loop resource on the background thread,
@@ -115,12 +121,12 @@ class InstanceHandle;
 /// Therefore, you should check for errors from PostWork and destroy any
 /// associated memory to avoid leaks. If you're using the C++
 /// CompletionCallbackFactory, use the following pattern:
-///
-///   pp::CompletionCallback callback = factory_.NewOptionalCallback(...);
-///   int32_t result = message_loop.PostWork(callback);
-///   if (result != PP_OK)
-///     callback.Run(result);
-///
+/// @code
+/// pp::CompletionCallback callback = factory_.NewOptionalCallback(...);
+/// int32_t result = message_loop.PostWork(callback);
+/// if (result != PP_OK)
+///   callback.Run(result);
+/// @endcode
 /// This will run the callback with an error value, and assumes that the
 /// implementation of your callback checks the "result" argument and returns
 /// immediately on error.
@@ -199,7 +205,7 @@ class MessageLoop : public Resource {
   /// @param callback A pointer to the completion callback to execute from the
   /// message loop.
   ///
-  /// @param delay_ms The number of millseconds to delay execution of the given
+  /// @param delay_ms The number of milliseconds to delay execution of the given
   /// completion callback. Passing 0 means it will get queued normally and
   /// executed in order.
   ///

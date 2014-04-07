@@ -44,10 +44,10 @@
 
 #include "base/lazy_instance.h"
 #include "base/logging.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "crypto/nss_util_internal.h"
 #include "net/base/net_errors.h"
-#include "net/base/x509_certificate.h"
+#include "net/cert/x509_certificate.h"
 
 namespace mozilla_security_manager {
 
@@ -148,7 +148,7 @@ pip_ucs2_ascii_conversion_fn(PRBool toUnicode,
 int
 nsPKCS12Blob_ImportHelper(const char* pkcs12_data,
                           size_t pkcs12_len,
-                          const string16& password,
+                          const base::string16& password,
                           bool is_extractable,
                           bool try_zero_length_secitem,
                           PK11SlotInfo *slot,
@@ -353,7 +353,7 @@ void EnsurePKCS12Init() {
 int nsPKCS12Blob_Import(PK11SlotInfo* slot,
                         const char* pkcs12_data,
                         size_t pkcs12_len,
-                        const string16& password,
+                        const base::string16& password,
                         bool is_extractable,
                         net::CertificateList* imported_certs) {
 
@@ -388,7 +388,7 @@ int nsPKCS12Blob_Import(PK11SlotInfo* slot,
 int
 nsPKCS12Blob_Export(std::string* output,
                     const net::CertificateList& certs,
-                    const string16& password)
+                    const base::string16& password)
 {
   int return_count = 0;
   SECStatus srv = SECSuccess;
@@ -416,7 +416,7 @@ nsPKCS12Blob_Export(std::string* output,
   if (srv) goto finish;
 
   for (size_t i=0; i<certs.size(); i++) {
-    DCHECK(certs[i]);
+    DCHECK(certs[i].get());
     CERTCertificate* nssCert = certs[i]->os_cert_handle();
     DCHECK(nssCert);
 

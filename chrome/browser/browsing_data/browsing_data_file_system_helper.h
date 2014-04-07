@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_BROWSING_DATA_BROWSING_DATA_FILE_SYSTEM_HELPER_H_
 
 #include <list>
+#include <map>
 #include <string>
 
 #include "base/callback.h"
@@ -14,8 +15,8 @@
 #include "base/memory/ref_counted.h"
 #include "base/synchronization/lock.h"
 #include "chrome/common/url_constants.h"
-#include "googleurl/src/gurl.h"
-#include "webkit/fileapi/file_system_types.h"
+#include "url/gurl.h"
+#include "webkit/common/fileapi/file_system_types.h"
 
 namespace fileapi {
 class FileSystemContext;
@@ -43,27 +44,15 @@ class BrowsingDataFileSystemHelper
     : public base::RefCountedThreadSafe<BrowsingDataFileSystemHelper> {
  public:
   // Detailed information about a file system, including it's origin GURL,
-  // the presence or absence of persistent and temporary storage, and the
-  // amount of data (in bytes) each contains.
+  // the amount of data (in bytes) for each sandboxed filesystem type.
   struct FileSystemInfo {
-    FileSystemInfo(
-        const GURL& origin,
-        bool has_persistent,
-        bool has_temporary,
-        int64 usage_persistent,
-        int64 usage_temporary);
+    FileSystemInfo(const GURL& origin);
     ~FileSystemInfo();
 
     // The origin for which the information is relevant.
     GURL origin;
-    // True if the origin has a persistent file system.
-    bool has_persistent;
-    // True if the origin has a temporary file system.
-    bool has_temporary;
-    // Persistent file system usage, in bytes.
-    int64 usage_persistent;
-    // Temporary file system usage, in bytes.
-    int64 usage_temporary;
+    // FileSystemType to usage (in bytes) map.
+    std::map<fileapi::FileSystemType, int64> usage_map;
   };
 
   // Creates a BrowsingDataFileSystemHelper instance for the file systems

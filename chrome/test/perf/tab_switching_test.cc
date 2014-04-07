@@ -8,10 +8,10 @@
 #include "base/files/file_path.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/path_service.h"
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/threading/platform_thread.h"
-#include "base/time.h"
-#include "base/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
@@ -21,8 +21,8 @@
 #include "chrome/test/automation/tab_proxy.h"
 #include "chrome/test/perf/perf_test.h"
 #include "chrome/test/ui/ui_perf_test.h"
-#include "googleurl/src/gurl.h"
 #include "net/base/net_util.h"
+#include "url/gurl.h"
 
 using base::TimeDelta;
 
@@ -69,7 +69,8 @@ class TabSwitchingUITest : public UIPerfTest {
       std::string times;
       for (int i = 0; i < kNumCycles; ++i)
         base::StringAppendF(&times, "%.2f,", timings[i].InMillisecondsF());
-      perf_test::PrintResultList("times", "", label, times, "ms", important);
+      perf_test::PrintResultList(
+          "times", std::string(), label, times, "ms", important);
   }
 
   void RunTabSwitchingUITest(const char* label, bool important) {
@@ -179,7 +180,6 @@ class TabSwitchingUITest : public UIPerfTest {
  private:
   void AddLaunchArguments() {
     launch_arguments_.AppendSwitch(switches::kEnableLogging);
-    launch_arguments_.AppendSwitch(switches::kDumpHistogramsOnExit);
     launch_arguments_.AppendSwitchASCII(switches::kLoggingLevel, "0");
   }
 

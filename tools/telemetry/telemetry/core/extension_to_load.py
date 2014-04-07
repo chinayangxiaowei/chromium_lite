@@ -12,7 +12,7 @@ class MissingPublicKeyException(Exception):
   pass
 
 class ExtensionToLoad(object):
-  def __init__(self, path, is_component=False):
+  def __init__(self, path, browser_type, is_component=False):
     if not os.path.isdir(path):
       raise ExtensionPathNonExistentException(
           'Extension path not a directory %s' % path)
@@ -23,16 +23,26 @@ class ExtensionToLoad(object):
       raise MissingPublicKeyException(
          'Component extension %s must have a public key' % path)
 
+    # It is possible that we are running telemetry on Windows targeting
+    # a remote CrOS or Android device. In this case, we need the
+    # browser_type argument to determine how we should encode
+    # the extension path.
+    self._is_win = (os.name == 'nt'
+        and not (browser_type.startswith('android')
+                 or browser_type.startswith('cros')))
+
   @property
   def extension_id(self):
     """Unique extension id of this extension."""
     if crx_id.HasPublicKey(self._path):
       # Calculate extension id from the public key.
-      return crx_id.GetCRXAppID(os.path.abspath(self._path))
+      return crx_id.GetCRXAppID(os.path.realpath(self._path))
     else:
       # Calculate extension id based on the path on the device.
-      return crx_id.GetCRXAppID(os.path.abspath(self._local_path),
-                                from_file_path=True)
+      return crx_id.GetCRXAppID(
+          os.path.realpath(self._local_path),
+          from_file_path=True,
+          is_win_path=self._is_win)
 
   @property
   def path(self):

@@ -12,25 +12,27 @@
 #include <utility>
 #include <vector>
 
-#include "base/memory/scoped_nsobject.h"
+#include "base/mac/scoped_nsobject.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "content/browser/accessibility/browser_accessibility_delegate_mac.h"
 #include "content/browser/renderer_host/render_widget_host_view_base.h"
 #include "content/common/edit_command.h"
 #import "content/public/browser/render_widget_host_view_mac_base.h"
 #include "ipc/ipc_sender.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebCompositionUnderline.h"
+#include "third_party/WebKit/public/web/WebCompositionUnderline.h"
 #include "ui/base/cocoa/base_view.h"
-#include "webkit/glue/webcursor.h"
+#include "webkit/common/cursors/webcursor.h"
 
 namespace content {
 class CompositingIOSurfaceMac;
+class CompositingIOSurfaceContext;
 class RenderWidgetHostViewMac;
 class RenderWidgetHostViewMacEditCommandHelper;
 }
 
+@class CompositingIOSurfaceLayer;
 @class FullscreenWindowManager;
 @protocol RenderWidgetHostViewMacDelegate;
 @class ToolTip;
@@ -61,7 +63,7 @@ class RenderWidgetHostViewMacEditCommandHelper;
   id trackingRectOwner_;              // (not retained)
   void* trackingRectUserData_;
   NSTrackingRectTag lastToolTipTag_;
-  scoped_nsobject<NSString> toolTip_;
+  base::scoped_nsobject<NSString> toolTip_;
 
   // Is YES if there was a mouse-down as yet unbalanced with a mouse-up.
   BOOL hasOpenMouseDown_;
@@ -69,7 +71,7 @@ class RenderWidgetHostViewMacEditCommandHelper;
   NSWindow* lastWindow_;  // weak
 
   // The cursor for the page. This is passed up from the renderer.
-  scoped_nsobject<NSCursor> currentCursor_;
+  base::scoped_nsobject<NSCursor> currentCursor_;
 
   // Variables used by our implementaion of the NSTextInput protocol.
   // An input method of Mac calls the methods of this protocol not only to
@@ -83,7 +85,7 @@ class RenderWidgetHostViewMacEditCommandHelper;
   // handler which receives input-method events from the renderer.
 
   // Represents the input-method attributes supported by this object.
-  scoped_nsobject<NSArray> validAttributesForMarkedText_;
+  base::scoped_nsobject<NSArray> validAttributesForMarkedText_;
 
   // Indicates if we are currently handling a key down event.
   BOOL handlingKeyDown_;
@@ -170,6 +172,8 @@ class RenderWidgetHostViewMacEditCommandHelper;
 // Returns YES if the event was handled.
 - (BOOL)postProcessEventForPluginIme:(NSEvent*)event;
 - (void)updateCursor:(NSCursor*)cursor;
+- (NSRect)firstViewRectForCharacterRange:(NSRange)theRange
+                             actualRange:(NSRangePointer)actualRange;
 @end
 
 namespace content {
@@ -198,7 +202,8 @@ class RenderWidgetHostViewMac : public RenderWidgetHostViewBase,
 
   RenderWidgetHostViewCocoa* cocoa_view() const { return cocoa_view_; }
 
-  void SetDelegate(NSObject<RenderWidgetHostViewMacDelegate>* delegate);
+  CONTENT_EXPORT void SetDelegate(
+    NSObject<RenderWidgetHostViewMacDelegate>* delegate);
   void SetAllowOverlappingViews(bool overlapping);
 
   // RenderWidgetHostView implementation.
@@ -237,13 +242,14 @@ class RenderWidgetHostViewMac : public RenderWidgetHostViewBase,
   virtual void WasHidden() OVERRIDE;
   virtual void MovePluginWindows(
       const gfx::Vector2d& scroll_offset,
-      const std::vector<webkit::npapi::WebPluginGeometry>& moves) OVERRIDE;
+      const std::vector<WebPluginGeometry>& moves) OVERRIDE;
   virtual void Focus() OVERRIDE;
   virtual void Blur() OVERRIDE;
   virtual void UpdateCursor(const WebCursor& cursor) OVERRIDE;
   virtual void SetIsLoading(bool is_loading) OVERRIDE;
-  virtual void TextInputStateChanged(
-      const ViewHostMsg_TextInputState_Params& params) OVERRIDE;
+  virtual void TextInputTypeChanged(ui::TextInputType type,
+                                    bool can_compose_inline,
+                                    ui::TextInputMode input_mode) OVERRIDE;
   virtual void ImeCancelComposition() OVERRIDE;
   virtual void ImeCompositionRangeChanged(
       const ui::Range& range,
@@ -251,9 +257,10 @@ class RenderWidgetHostViewMac : public RenderWidgetHostViewBase,
   virtual void DidUpdateBackingStore(
       const gfx::Rect& scroll_rect,
       const gfx::Vector2d& scroll_delta,
-      const std::vector<gfx::Rect>& copy_rects) OVERRIDE;
-  virtual void RenderViewGone(base::TerminationStatus status,
-                              int error_code) OVERRIDE;
+      const std::vector<gfx::Rect>& copy_rects,
+      const ui::LatencyInfo& latency_info) OVERRIDE;
+  virtual void RenderProcessGone(base::TerminationStatus status,
+                                 int error_code) OVERRIDE;
   virtual void Destroy() OVERRIDE;
   virtual void SetTooltipText(const string16& tooltip_text) OVERRIDE;
   virtual void SelectionChanged(const string16& text,
@@ -316,18 +323,26 @@ class RenderWidgetHostViewMac : public RenderWidgetHostViewBase,
 
   void SetTextInputActive(bool active);
 
+  // Change this view to use CoreAnimation to draw.
+  void EnableCoreAnimation();
+
   // Sends completed plugin IME notification and text back to the renderer.
   void PluginImeCompositionCompleted(const string16& text, int plugin_id);
 
   const std::string& selected_text() const { return selected_text_; }
 
-  // Call setNeedsDisplay on the cocoa_view_. The IOSurface will be drawn during
-  // the next drawRect. Return true if the Ack should be sent, false if it
-  // should be deferred until drawRect.
-  bool CompositorSwapBuffers(uint64 surface_handle, const gfx::Size& size);
-  // Ack pending SwapBuffers requests, if any, to unblock the GPU process. Has
-  // no effect if there are no pending requests.
-  void AckPendingSwapBuffers();
+  // Update the IOSurface to be drawn and call setNeedsDisplay on
+  // |cocoa_view_|.
+  void CompositorSwapBuffers(uint64 surface_handle,
+                             const gfx::Size& size,
+                             float scale_factor,
+                             const ui::LatencyInfo& latency_info);
+
+  // Draw the IOSurface by making its context current to this view.
+  bool DrawIOSurfaceWithoutCoreAnimation();
+
+  // Called when a GPU error is detected. Deletes all compositing state.
+  void GotAcceleratedCompositingError();
 
   // Returns true and stores first rectangle for character range if the
   // requested |range| is already cached, otherwise returns false.
@@ -389,10 +404,21 @@ class RenderWidgetHostViewMac : public RenderWidgetHostViewBase,
   ui::TextInputType text_input_type_;
   bool can_compose_inline_;
 
+  base::scoped_nsobject<CALayer> software_layer_;
+
+  // Accelerated compositing structures. These may be dynamically created and
+  // destroyed together in Create/DestroyCompositedIOSurfaceAndLayer.
+  base::scoped_nsobject<CompositingIOSurfaceLayer> compositing_iosurface_layer_;
   scoped_ptr<CompositingIOSurfaceMac> compositing_iosurface_;
+  scoped_refptr<CompositingIOSurfaceContext> compositing_iosurface_context_;
 
   // Whether to allow overlapping views.
   bool allow_overlapping_views_;
+
+  // Whether to use the CoreAnimation path to draw content.
+  bool use_core_animation_;
+
+  ui::LatencyInfo software_latency_info_;
 
   NSWindow* pepper_fullscreen_window() const {
     return pepper_fullscreen_window_;
@@ -408,9 +434,20 @@ class RenderWidgetHostViewMac : public RenderWidgetHostViewBase,
     return frame_subscriber_.get();
   }
 
+  int window_number() const;
+
+  float scale_factor() const;
+
+  bool is_hidden() const { return is_hidden_; }
+
+  void FrameSwapped();
+
  private:
   friend class RenderWidgetHostView;
   friend class RenderWidgetHostViewMacTest;
+
+  void GetVSyncParameters(
+      base::TimeTicks* timebase, base::TimeDelta* interval);
 
   // The view will associate itself with the given widget. The native view must
   // be hooked up immediately to the view hierarchy, or else when it is
@@ -424,10 +461,31 @@ class RenderWidgetHostViewMac : public RenderWidgetHostViewBase,
   // invoke it from the message loop.
   void ShutdownHost();
 
+  bool CreateCompositedIOSurface();
+  bool CreateCompositedIOSurfaceLayer();
+  enum DestroyContextBehavior {
+    kLeaveContextBoundToView,
+    kDestroyContext,
+  };
+  void DestroyCompositedIOSurfaceAndLayer(DestroyContextBehavior
+      destroy_context_behavior);
+
+  // Unbind the GL context (if any) that is bound to |cocoa_view_|.
+  void ClearBoundContextDrawable();
+
   // Called when a GPU SwapBuffers is received.
   void GotAcceleratedFrame();
+
   // Called when a software DIB is received.
   void GotSoftwareFrame();
+
+  // Ack pending SwapBuffers requests, if any, to unblock the GPU process. Has
+  // no effect if there are no pending requests.
+  void AckPendingSwapBuffers();
+
+  // Ack pending SwapBuffers requests, but no more frequently than the vsync
+  // rate if the renderer is not throttling the swap rate.
+  void ThrottledAckPendingSwapBuffers();
 
   void OnPluginFocusChanged(bool focused, int plugin_id);
   void OnStartPluginIme();
@@ -448,7 +506,8 @@ class RenderWidgetHostViewMac : public RenderWidgetHostViewBase,
   gfx::Rect GetScaledOpenGLPixelRect(const gfx::Rect& rect);
 
   // The associated view. This is weak and is inserted into the view hierarchy
-  // to own this RenderWidgetHostViewMac object.
+  // to own this RenderWidgetHostViewMac object. Set to nil at the start of the
+  // destructor.
   RenderWidgetHostViewCocoa* cocoa_view_;
 
   // Indicates if the page is loading.
@@ -467,17 +526,26 @@ class RenderWidgetHostViewMac : public RenderWidgetHostViewBase,
   std::string selected_text_;
 
   // The window used for popup widgets.
-  scoped_nsobject<NSWindow> popup_window_;
+  base::scoped_nsobject<NSWindow> popup_window_;
 
   // The fullscreen window used for pepper flash.
-  scoped_nsobject<NSWindow> pepper_fullscreen_window_;
-  scoped_nsobject<FullscreenWindowManager> fullscreen_window_manager_;
+  base::scoped_nsobject<NSWindow> pepper_fullscreen_window_;
+  base::scoped_nsobject<FullscreenWindowManager> fullscreen_window_manager_;
   // Our parent host view, if this is fullscreen.  NULL otherwise.
   RenderWidgetHostViewMac* fullscreen_parent_host_view_;
 
   // List of pending swaps for deferred acking:
   //   pairs of (route_id, gpu_host_id).
   std::list<std::pair<int32, int32> > pending_swap_buffers_acks_;
+
+  // Factory used to cancel outstanding throttled AckPendingSwapBuffers calls.
+  base::WeakPtrFactory<RenderWidgetHostViewMac>
+      pending_swap_buffers_acks_weak_factory_;
+
+  // The earliest time at which the next swap ack may be sent. Only relevant
+  // when swaps are not being throttled by the renderer (when threaded
+  // compositing is off).
+  base::Time next_swap_ack_time_;
 
   // The current composition character range and its bounds.
   ui::Range composition_range_;

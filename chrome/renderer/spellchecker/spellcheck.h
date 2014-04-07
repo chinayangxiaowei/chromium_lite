@@ -12,12 +12,12 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/platform_file.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "chrome/renderer/spellchecker/custom_dictionary_engine.h"
 #include "chrome/renderer/spellchecker/spellcheck_language.h"
 #include "content/public/renderer/render_process_observer.h"
 #include "ipc/ipc_platform_file.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebVector.h"
+#include "third_party/WebKit/public/platform/WebVector.h"
 
 struct SpellCheckResult;
 
@@ -45,7 +45,7 @@ class SpellCheck : public content::RenderProcessObserver,
 
   // TODO: Try to move that all to SpellcheckLanguage.
   void Init(base::PlatformFile file,
-            const std::vector<std::string>& custom_words,
+            const std::set<std::string>& custom_words,
             const std::string& language);
 
   // If there is no dictionary file, then this requests one from the browser
@@ -92,7 +92,6 @@ class SpellCheck : public content::RenderProcessObserver,
   // posts a background task and calls SpellCheckParagraph() in the task.
 #if !defined (OS_MACOSX)
   void RequestTextChecking(const string16& text,
-                           int offset,
                            WebKit::WebTextCheckingCompletion* completion);
 #endif
 
@@ -120,7 +119,7 @@ class SpellCheck : public content::RenderProcessObserver,
 
   // Message handlers.
   void OnInit(IPC::PlatformFileForTransit bdict_file,
-              const std::vector<std::string>& custom_words,
+              const std::set<std::string>& custom_words,
               const std::string& language,
               bool auto_spell_correct);
   void OnCustomDictionaryChanged(
@@ -128,7 +127,7 @@ class SpellCheck : public content::RenderProcessObserver,
       const std::vector<std::string>& words_removed);
   void OnEnableAutoSpellCorrect(bool enable);
   void OnEnableSpellCheck(bool enable);
-
+  void OnRequestDocumentMarkers();
 
 #if !defined (OS_MACOSX)
   // Posts delayed spellcheck task and clear it if any.

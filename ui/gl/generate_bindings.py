@@ -230,6 +230,16 @@ GL_FUNCTIONS = [
       'GLenum target, GLenum attachment, GLenum textarget, GLuint texture, '
       'GLint level', },
 { 'return_type': 'void',
+  'names': ['glFramebufferTexture2DMultisampleEXT'],
+  'arguments':
+      'GLenum target, GLenum attachment, GLenum textarget, GLuint texture, '
+      'GLint level, GLsizei samples', },
+{ 'return_type': 'void',
+  'names': ['glFramebufferTexture2DMultisampleIMG'],
+  'arguments':
+      'GLenum target, GLenum attachment, GLenum textarget, GLuint texture, '
+      'GLint level, GLsizei samples', },
+{ 'return_type': 'void',
   'names': ['glFrontFace'],
   'arguments': 'GLenum mode', },
 { 'return_type': 'void',
@@ -466,6 +476,10 @@ GL_FUNCTIONS = [
   'arguments': 'GLenum target, GLsizei samples, GLenum internalformat, '
                'GLsizei width, GLsizei height', },
 { 'return_type': 'void',
+  'names': ['glRenderbufferStorageMultisampleIMG'],
+  'arguments': 'GLenum target, GLsizei samples, GLenum internalformat, '
+               'GLsizei width, GLsizei height', },
+{ 'return_type': 'void',
   'names': ['glRenderbufferStorageEXT', 'glRenderbufferStorage'],
   'arguments':
       'GLenum target, GLenum internalformat, GLsizei width, GLsizei height', },
@@ -677,6 +691,10 @@ GL_FUNCTIONS = [
   'arguments':
     'GLsync sync, GLenum pname, GLsizei bufSize, GLsizei* length,'
     'GLint* values', },
+{ 'return_type': 'GLenum',
+  'names': ['glClientWaitSync'],
+  'arguments':
+    'GLsync sync, GLbitfield flags, GLuint64 timeout', },
 { 'return_type': 'void',
   'names': ['glDrawArraysInstancedANGLE', 'glDrawArraysInstancedARB'],
   'arguments': 'GLenum mode, GLint first, GLsizei count, GLsizei primcount', },
@@ -1215,22 +1233,6 @@ class GLContext;
   file.write("struct Procs%s {\n" % set_name.upper())
   for func in functions:
     file.write('  %sProc %sFn;\n' % (func['names'][0], func['names'][0]))
-  file.write('};\n')
-  file.write('\n')
-
-  # Write Driver struct.
-  file.write(
-"""struct GL_EXPORT Driver%(name)s {
-  void InitializeBindings();
-  void InitializeExtensionBindings(GLContext* context);
-  void InitializeDebugBindings();
-  void ClearBindings();
-  void UpdateDebugExtensionBindings();
-
-  Procs%(name)s fn;
-  Procs%(name)s debug_fn;
-  Extensions%(name)s ext;
-""" % {'name': set_name.upper()})
   file.write('};\n')
   file.write('\n')
 

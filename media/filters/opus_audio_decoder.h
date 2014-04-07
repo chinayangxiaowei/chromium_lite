@@ -7,6 +7,7 @@
 
 #include "base/callback.h"
 #include "base/memory/weak_ptr.h"
+#include "base/time/time.h"
 #include "media/base/audio_decoder.h"
 #include "media/base/demuxer_stream.h"
 
@@ -18,8 +19,8 @@ class MessageLoopProxy;
 
 namespace media {
 
+class AudioBuffer;
 class AudioTimestampHelper;
-class DataBuffer;
 class DecoderBuffer;
 struct QueuedAudioBuffer;
 
@@ -30,7 +31,7 @@ class MEDIA_EXPORT OpusAudioDecoder : public AudioDecoder {
   virtual ~OpusAudioDecoder();
 
   // AudioDecoder implementation.
-  virtual void Initialize(const scoped_refptr<DemuxerStream>& stream,
+  virtual void Initialize(DemuxerStream* stream,
                           const PipelineStatusCB& status_cb,
                           const StatisticsCB& statistics_cb) OVERRIDE;
   virtual void Read(const ReadCB& read_cb) OVERRIDE;
@@ -50,13 +51,13 @@ class MEDIA_EXPORT OpusAudioDecoder : public AudioDecoder {
   void CloseDecoder();
   void ResetTimestampState();
   bool Decode(const scoped_refptr<DecoderBuffer>& input,
-              scoped_refptr<DataBuffer>* output_buffer);
+              scoped_refptr<AudioBuffer>* output_buffer);
 
   scoped_refptr<base::MessageLoopProxy> message_loop_;
   base::WeakPtrFactory<OpusAudioDecoder> weak_factory_;
   base::WeakPtr<OpusAudioDecoder> weak_this_;
 
-  scoped_refptr<DemuxerStream> demuxer_stream_;
+  DemuxerStream* demuxer_stream_;
   StatisticsCB statistics_cb_;
   OpusMSDecoder* opus_decoder_;
 
@@ -78,7 +79,7 @@ class MEDIA_EXPORT OpusAudioDecoder : public AudioDecoder {
   int skip_samples_;
 
   // Buffer for output from libopus.
-  scoped_array<int16> output_buffer_;
+  scoped_ptr<int16[]> output_buffer_;
 
   DISALLOW_IMPLICIT_CONSTRUCTORS(OpusAudioDecoder);
 };

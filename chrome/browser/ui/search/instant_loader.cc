@@ -7,8 +7,8 @@
 #include "chrome/browser/content_settings/tab_specific_content_settings.h"
 #include "chrome/browser/extensions/api/web_navigation/web_navigation_api.h"
 #include "chrome/browser/favicon/favicon_tab_helper.h"
-#include "chrome/browser/history/history_tab_helper.h"
 #include "chrome/browser/safe_browsing/safe_browsing_tab_observer.h"
+#include "chrome/browser/search/search.h"
 #include "chrome/browser/tab_contents/tab_util.h"
 #include "chrome/browser/ui/blocked_content/blocked_content_tab_helper.h"
 #include "chrome/browser/ui/bookmarks/bookmark_tab_helper.h"
@@ -17,13 +17,16 @@
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/notification_source.h"
 #include "content/public/browser/notification_types.h"
-#include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/web_contents_view.h"
+#include "grit/generated_resources.h"
+#include "ui/base/l10n/l10n_util.h"
+
+#if !defined(OS_ANDROID)
+#include "chrome/browser/ui/blocked_content/popup_blocker_tab_helper.h"
+#endif
 
 namespace {
-
-const int kStalePageTimeoutMS = 3 * 3600 * 1000;  // 3 hours
 
 // This HTTP header and value are set on loads that originate from Instant.
 const char kInstantHeader[] = "X-Purpose: Instant";
@@ -34,17 +37,13 @@ InstantLoader::Delegate::~Delegate() {
 }
 
 InstantLoader::InstantLoader(Delegate* delegate)
-  : delegate_(delegate),
-    contents_(NULL),
-    stale_page_timer_(false, false) {
-}
+    : delegate_(delegate), stale_page_timer_(false, false) {}
 
 InstantLoader::~InstantLoader() {
 }
 
 void InstantLoader::Init(const GURL& instant_url,
                          Profile* profile,
-                         const content::WebContents* active_tab,
                          const base::Closure& on_stale_callback) {
   content::WebContents::CreateParams create_params(profile);
   create_params.site_instance = content::SiteInstance::CreateForURL(
@@ -60,11 +59,27 @@ void InstantLoader::Load() {
   contents_->GetController().LoadURL(
       instant_url_, content::Referrer(),
       content::PAGE_TRANSITION_GENERATED, kInstantHeader);
+
+  // Explicitly set the new tab title and virtual URL.
+  //
+  // This ensures that the title is set even before we get a title from the
+  // page, preventing a potential flicker of the URL, and also ensures that
+  // (unless overridden by the page) the new tab title matches the browser UI
+  // locale.
+  content::NavigationEntry* entry = contents_->GetController().GetActiveEntry();
+  if (entry)
+    entry->SetTitle(l10n_util::GetStringUTF16(IDS_NEW_TAB_TITLE));
+
   contents_->WasHidden();
-  stale_page_timer_.Start(
-      FROM_HERE,
-      base::TimeDelta::FromMilliseconds(kStalePageTimeoutMS),
-      on_stale_callback_);
+
+  int staleness_timeout_ms = chrome::GetInstantLoaderStalenessTimeoutSec() *
+      1000;
+  if (staleness_timeout_ms > 0) {
+    stale_page_timer_.Start(
+        FROM_HERE,
+        base::TimeDelta::FromMilliseconds(staleness_timeout_ms),
+        on_stale_callback_);
+  }
 }
 
 void InstantLoader::SetContents(scoped_ptr<content::WebContents> new_contents) {
@@ -90,29 +105,18 @@ void InstantLoader::SetContents(scoped_ptr<content::WebContents> new_contents) {
   CoreTabHelper::CreateForWebContents(contents());
   CoreTabHelper::FromWebContents(contents())->set_delegate(this);
 
-  // Tab helpers used when committing an overlay.
-  chrome::search::SearchTabHelper::CreateForWebContents(contents());
-  HistoryTabHelper::CreateForWebContents(contents());
+  SearchTabHelper::CreateForWebContents(contents());
 
+#if !defined(OS_ANDROID)
   // Observers.
   extensions::WebNavigationTabObserver::CreateForWebContents(contents());
+#endif  // OS_ANDROID
 
   // Favicons, required by the Task Manager.
   FaviconTabHelper::CreateForWebContents(contents());
 
   // And some flat-out paranoia.
   safe_browsing::SafeBrowsingTabObserver::CreateForWebContents(contents());
-
-#if defined(OS_MACOSX)
-  // If |contents_| doesn't yet have a RWHV, SetTakesFocusOnlyOnMouseDown() will
-  // be called later, when NOTIFICATION_RENDER_VIEW_HOST_CHANGED is received.
-  if (content::RenderWidgetHostView* rwhv =
-          contents_->GetRenderWidgetHostView())
-    rwhv->SetTakesFocusOnlyOnMouseDown(true);
-  registrar_.Add(this, content::NOTIFICATION_RENDER_VIEW_HOST_CHANGED,
-                 content::Source<content::NavigationController>(
-                     &contents_->GetController()));
-#endif
 
   // When the WebContents finishes loading it should be checked to ensure that
   // it is in the instant process.
@@ -130,43 +134,30 @@ scoped_ptr<content::WebContents> InstantLoader::ReleaseContents() {
       SetAllContentsBlocked(false);
   TabSpecificContentSettings::FromWebContents(contents())->
       SetPopupsBlocked(false);
+#if !defined(OS_ANDROID)
+  PopupBlockerTabHelper* popup_helper =
+      PopupBlockerTabHelper::FromWebContents(contents());
+  if (popup_helper) {
+    TabSpecificContentSettings::FromWebContents(contents())
+        ->SetPopupsBlocked(!!popup_helper->GetBlockedPopupsCount());
+  }
+#endif
 
   CoreTabHelper::FromWebContents(contents())->set_delegate(NULL);
 
-#if defined(OS_MACOSX)
-  if (content::RenderWidgetHostView* rwhv =
-          contents_->GetRenderWidgetHostView())
-    rwhv->SetTakesFocusOnlyOnMouseDown(false);
-  registrar_.Remove(this, content::NOTIFICATION_RENDER_VIEW_HOST_CHANGED,
-                    content::Source<content::NavigationController>(
-                        &contents_->GetController()));
-#endif
   registrar_.Remove(this, content::NOTIFICATION_LOAD_COMPLETED_MAIN_FRAME,
                     content::Source<content::WebContents>(contents_.get()));
-
   return contents_.Pass();
 }
 
 void InstantLoader::Observe(int type,
                             const content::NotificationSource& source,
                             const content::NotificationDetails& details) {
-  if (type == content::NOTIFICATION_LOAD_COMPLETED_MAIN_FRAME) {
-    const content::WebContents* web_contents =
-        content::Source<content::WebContents>(source).ptr();
-    DCHECK_EQ(contents_.get(), web_contents);
-    delegate_->LoadCompletedMainFrame();
-    return;
-  }
-
-#if defined(OS_MACOSX)
-  if (type == content::NOTIFICATION_RENDER_VIEW_HOST_CHANGED) {
-    if (content::RenderWidgetHostView* rwhv =
-            contents_->GetRenderWidgetHostView())
-      rwhv->SetTakesFocusOnlyOnMouseDown(true);
-    return;
-  }
-#endif
-  NOTREACHED();
+  DCHECK_EQ(type, content::NOTIFICATION_LOAD_COMPLETED_MAIN_FRAME);
+  const content::WebContents* web_contents =
+      content::Source<content::WebContents>(source).ptr();
+  DCHECK_EQ(contents_.get(), web_contents);
+  delegate_->LoadCompletedMainFrame();
 }
 
 void InstantLoader::SwapTabContents(content::WebContents* old_contents,
@@ -188,42 +179,12 @@ bool InstantLoader::ShouldFocusPageAfterCrash() {
   return false;
 }
 
-void InstantLoader::LostCapture() {
-  delegate_->OnMouseUp();
-}
-
-void InstantLoader::WebContentsFocused(content::WebContents* /* contents */) {
-  delegate_->OnFocus();
-}
-
-bool InstantLoader::CanDownload(content::RenderViewHost* /* render_view_host */,
+void InstantLoader::CanDownload(content::RenderViewHost* /* render_view_host */,
                                 int /* request_id */,
-                                const std::string& /* request_method */) {
+                                const std::string& /* request_method */,
+                                const base::Callback<void(bool)>& callback) {
   // Downloads are disabled.
-  return false;
-}
-
-void InstantLoader::HandleMouseDown() {
-  delegate_->OnMouseDown();
-}
-
-void InstantLoader::HandleMouseUp() {
-  delegate_->OnMouseUp();
-}
-
-void InstantLoader::HandlePointerActivate() {
-  delegate_->OnMouseDown();
-}
-
-void InstantLoader::HandleGestureEnd() {
-  delegate_->OnMouseUp();
-}
-
-void InstantLoader::DragEnded() {
-  // If the user drags, we won't get a mouse up (at least on Linux). Commit
-  // the Instant result when the drag ends, so that during the drag the page
-  // won't move around.
-  delegate_->OnMouseUp();
+  callback.Run(false);
 }
 
 bool InstantLoader::OnGoToEntryOffset(int /* offset */) {

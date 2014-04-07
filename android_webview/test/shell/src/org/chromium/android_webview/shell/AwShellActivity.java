@@ -29,6 +29,7 @@ import org.chromium.android_webview.AwBrowserProcess;
 import org.chromium.android_webview.AwBrowserContext;
 import org.chromium.android_webview.AwContents;
 import org.chromium.android_webview.AwContentsClient;
+import org.chromium.android_webview.AwLayoutSizer;
 import org.chromium.android_webview.test.AwTestContainerView;
 import org.chromium.android_webview.test.NullContentsClient;
 import org.chromium.content.browser.LoadUrlParams;
@@ -39,6 +40,7 @@ import org.chromium.content.browser.LoadUrlParams;
 public class AwShellActivity extends Activity {
     private final static String PREFERENCES_NAME = "AwShellPrefs";
     private final static String INITIAL_URL = "about:blank";
+    private AwBrowserContext mBrowserContext;
     private AwTestContainerView mAwTestContainerView;
     private EditText mUrlTextView;
     private ImageButton mPrevButton;
@@ -83,12 +85,13 @@ public class AwShellActivity extends Activity {
 
         SharedPreferences sharedPreferences =
             getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE);
-        AwBrowserContext browserContext = new AwBrowserContext(sharedPreferences);
-
-        testContainerView.initialize(new AwContents(browserContext, testContainerView,
+        if (mBrowserContext == null) {
+            mBrowserContext = new AwBrowserContext(sharedPreferences);
+        }
+        testContainerView.initialize(new AwContents(mBrowserContext, testContainerView,
                 testContainerView.getInternalAccessDelegate(),
-                awContentsClient, false));
-        testContainerView.getContentViewCore().getContentSettings().setJavaScriptEnabled(true);
+                awContentsClient, false, new AwLayoutSizer(), true));
+        testContainerView.getAwContents().getSettings().setJavaScriptEnabled(true);
         return testContainerView;
     }
 

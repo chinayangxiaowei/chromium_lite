@@ -137,7 +137,6 @@ class TestCase {
   // Run the given test method on a background thread and return the result.
   template <class T>
   std::string RunOnThread(std::string(T::*test_to_run)()) {
-#ifdef ENABLE_PEPPER_THREADING
     if (!testing_interface_) {
       return "Testing blocking callbacks requires the testing interface. In "
              "Chrome, use the --enable-pepper-testing flag.";
@@ -152,10 +151,6 @@ class TestCase {
     RunOnThreadInternal(&ThreadedTestRunner<T>::ThreadFunction, &runner,
                         testing_interface_);
     return runner.result();
-#else
-    // If threading's not enabled, just treat it as success.
-    return std::string();
-#endif
   }
 
   // Pointer to the instance that owns us.
@@ -164,14 +159,8 @@ class TestCase {
   // NULL unless InitTestingInterface is called.
   const PPB_Testing_Dev* testing_interface_;
 
-  // TODO(dmichael): Remove this, it's for temporary backwards compatibility so
-  // I don't have to change all the tests at once.
-  bool force_async_;
-
   void set_callback_type(CallbackType callback_type) {
     callback_type_ = callback_type;
-    // TODO(dmichael): Remove this; see comment on force_async_.
-    force_async_ = (callback_type_ == PP_REQUIRED);
   }
   CallbackType callback_type() const {
     return callback_type_;
@@ -198,7 +187,9 @@ class TestCase {
 
    private:
     void Run() {
-      PP_DCHECK(PP_OK == loop_.AttachToCurrentThread());
+      int32_t result = loop_.AttachToCurrentThread();
+      static_cast<void>(result); // result is not used in the RELEASE build.
+      PP_DCHECK(PP_OK == result);
       result_ = (test_case_->*test_to_run_)();
       // Now give the loop a chance to clean up.
       loop_.PostQuit(true /* should_destroy */);
@@ -233,18 +224,21 @@ class TestCase {
   // Var ids that should be ignored when checking for leaks on shutdown.
   std::set<int64_t> ignored_leaked_vars_;
 
-  // The tests that were found in test_filter but have not yet been run. The
-  // bool indicates whether the test should be run (i.e., it will be false if
-  // the test name was prefixed in the test_filter string).
+  // The tests that were found in test_filter. The bool indicates whether the
+  // test should be run (i.e., it will be false if the test name was prefixed in
+  // the test_filter string).
   //
-  // This is initialized lazily the first time that ShouldRunTest is called by
-  // RunTests. When RunTests is finished, this should be empty. Any remaining
-  // tests are tests that were listed in the test_filter but didn't match
-  // any calls to ShouldRunTest, meaning it was probably a typo. TestingInstance
-  // should log this and consider it a failure.
+  // This is initialized lazily the first time that ShouldRunTest is called.
+  std::map<std::string, bool> filter_tests_;
+  // Flag indicating whether we have populated filter_tests_ yet.
+  bool have_populated_filter_tests_;
+  // This is initialized with the contents of filter_tests_. As each test is
+  // run, it is removed from remaining_tests_. When RunTests is finished,
+  // remaining_tests_ should be empty. Any remaining tests are tests that were
+  // listed in the test_filter but didn't match any calls to ShouldRunTest,
+  // meaning it was probably a typo. TestingInstance should log this and
+  // consider it a failure.
   std::map<std::string, bool> remaining_tests_;
-  // Flag indicating whether we have populated remaining_tests_ yet.
-  bool have_populated_remaining_tests_;
 
   // If ShouldRunTest is called but the given test name doesn't match anything
   // in the test_filter, the test name will be added here. This allows
@@ -374,12 +368,17 @@ class TestCaseFactory {
 // Helper macros for checking values in tests, and returning a location
 // description of the test fails.
 #define ASSERT_TRUE(cmd) \
-  if (!(cmd)) { \
-    return MakeFailureMessage(__FILE__, __LINE__, #cmd); \
-  }
+  do { \
+    if (!(cmd)) \
+      return MakeFailureMessage(__FILE__, __LINE__, #cmd); \
+  } while (false)
 #define ASSERT_FALSE(cmd) ASSERT_TRUE(!(cmd))
 #define ASSERT_EQ(a, b) ASSERT_TRUE((a) == (b))
 #define ASSERT_NE(a, b) ASSERT_TRUE((a) != (b))
+#define ASSERT_LT(a, b) ASSERT_TRUE((a) < (b))
+#define ASSERT_LE(a, b) ASSERT_TRUE((a) <= (b))
+#define ASSERT_GT(a, b) ASSERT_TRUE((a) > (b))
+#define ASSERT_GE(a, b) ASSERT_TRUE((a) >= (b))
 
 #define ASSERT_DOUBLE_EQ(a, b) ASSERT_TRUE( \
     std::fabs((a)-(b)) <= std::numeric_limits<double>::epsilon())

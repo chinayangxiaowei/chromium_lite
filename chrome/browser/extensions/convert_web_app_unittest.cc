@@ -11,22 +11,22 @@
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/path_service.h"
-#include "base/stringprintf.h"
-#include "base/time.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "base/version.h"
 #include "chrome/common/chrome_paths.h"
-#include "chrome/common/extensions/api/icons/icons_handler.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_icon_set.h"
+#include "chrome/common/extensions/manifest_handlers/app_launch_info.h"
+#include "chrome/common/extensions/manifest_handlers/icons_handler.h"
 #include "chrome/common/extensions/permissions/permission_set.h"
-#include "chrome/common/web_apps.h"
+#include "chrome/common/web_application_info.h"
 #include "extensions/common/extension_resource.h"
 #include "extensions/common/url_pattern.h"
-#include "googleurl/src/gurl.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gfx/codec/png_codec.h"
-#include "webkit/glue/image_decoder.h"
+#include "url/gurl.h"
 
 namespace extensions {
 
@@ -56,11 +56,12 @@ WebApplicationInfo::IconInfo GetIconInfo(const GURL& url, int size) {
     return result;
   }
 
-  webkit_glue::ImageDecoder decoder;
-  result.data = decoder.Decode(
-      reinterpret_cast<const unsigned char*>(icon_data.c_str()),
-      icon_data.size());
-  EXPECT_FALSE(result.data.isNull()) << "Could not decode test icon.";
+  if (!gfx::PNGCodec::Decode(
+        reinterpret_cast<const unsigned char*>(icon_data.c_str()),
+        icon_data.size(), &result.data)) {
+    ADD_FAILURE() << "Could not decode test icon.";
+    return result;
+  }
 
   return result;
 }
@@ -80,20 +81,7 @@ base::Time GetTestTime(int year, int month, int day, int hour, int minute,
 
 }  // namespace
 
-class ExtensionFromWebApp : public ::testing::Test {
- public:
-  virtual void SetUp() OVERRIDE {
-    testing::Test::SetUp();
-    (new IconsHandler)->Register();
-  }
-
-  virtual void TearDown() OVERRIDE {
-    ManifestHandler::ClearRegistryForTesting();
-    testing::Test::TearDown();
-  }
-};
-
-TEST_F(ExtensionFromWebApp, GenerateVersion) {
+TEST(ExtensionFromWebApp, GenerateVersion) {
   EXPECT_EQ("2010.1.1.0",
             ConvertTimeToExtensionVersion(
                 GetTestTime(2010, 1, 1, 0, 0, 0, 0)));
@@ -105,7 +93,7 @@ TEST_F(ExtensionFromWebApp, GenerateVersion) {
                 GetTestTime(2010, 10, 1, 23, 59, 59, 999)));
 }
 
-TEST_F(ExtensionFromWebApp, Basic) {
+TEST(ExtensionFromWebApp, Basic) {
   base::ScopedTempDir extensions_dir;
   ASSERT_TRUE(extensions_dir.CreateUniqueTempDir());
 
@@ -143,7 +131,7 @@ TEST_F(ExtensionFromWebApp, Basic) {
   EXPECT_EQ("1978.12.11.0", extension->version()->GetString());
   EXPECT_EQ(UTF16ToUTF8(web_app.title), extension->name());
   EXPECT_EQ(UTF16ToUTF8(web_app.description), extension->description());
-  EXPECT_EQ(web_app.app_url, extension->GetFullLaunchURL());
+  EXPECT_EQ(web_app.app_url, AppLaunchInfo::GetFullLaunchURL(extension.get()));
   EXPECT_EQ(2u, extension->GetActivePermissions()->apis().size());
   EXPECT_TRUE(extension->HasAPIPermission("geolocation"));
   EXPECT_TRUE(extension->HasAPIPermission("notifications"));
@@ -151,19 +139,22 @@ TEST_F(ExtensionFromWebApp, Basic) {
   EXPECT_EQ("http://aaronboodman.com/gearpad/*",
             extension->web_extent().patterns().begin()->GetAsString());
 
-  EXPECT_EQ(web_app.icons.size(), IconsInfo::GetIcons(extension).map().size());
+  EXPECT_EQ(web_app.icons.size(),
+            IconsInfo::GetIcons(extension.get()).map().size());
   for (size_t i = 0; i < web_app.icons.size(); ++i) {
     EXPECT_EQ(base::StringPrintf("icons/%i.png", web_app.icons[i].width),
-              IconsInfo::GetIcons(extension).Get(
+              IconsInfo::GetIcons(extension.get()).Get(
                   web_app.icons[i].width, ExtensionIconSet::MATCH_EXACTLY));
-    ExtensionResource resource = IconsInfo::GetIconResource(
-        extension, web_app.icons[i].width, ExtensionIconSet::MATCH_EXACTLY);
+    ExtensionResource resource =
+        IconsInfo::GetIconResource(extension.get(),
+                                   web_app.icons[i].width,
+                                   ExtensionIconSet::MATCH_EXACTLY);
     ASSERT_TRUE(!resource.empty());
-    EXPECT_TRUE(file_util::PathExists(resource.GetFilePath()));
+    EXPECT_TRUE(base::PathExists(resource.GetFilePath()));
   }
 }
 
-TEST_F(ExtensionFromWebApp, Minimal) {
+TEST(ExtensionFromWebApp, Minimal) {
   base::ScopedTempDir extensions_dir;
   ASSERT_TRUE(extensions_dir.CreateUniqueTempDir());
 
@@ -190,8 +181,8 @@ TEST_F(ExtensionFromWebApp, Minimal) {
   EXPECT_EQ("1978.12.11.0", extension->version()->GetString());
   EXPECT_EQ(UTF16ToUTF8(web_app.title), extension->name());
   EXPECT_EQ("", extension->description());
-  EXPECT_EQ(web_app.app_url, extension->GetFullLaunchURL());
-  EXPECT_EQ(0u, IconsInfo::GetIcons(extension).map().size());
+  EXPECT_EQ(web_app.app_url, AppLaunchInfo::GetFullLaunchURL(extension.get()));
+  EXPECT_EQ(0u, IconsInfo::GetIcons(extension.get()).map().size());
   EXPECT_EQ(0u, extension->GetActivePermissions()->apis().size());
   ASSERT_EQ(1u, extension->web_extent().patterns().size());
   EXPECT_EQ("*://aaronboodman.com/*",

@@ -7,18 +7,26 @@
 
 #include "base/memory/singleton.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_keyed_service_factory.h"
+#include "components/browser_context_keyed_service/browser_context_keyed_service_factory.h"
+
+class CommandLine;
 
 namespace notifier {
 
 class ChromeNotifierService;
 
-class ChromeNotifierServiceFactory : public ProfileKeyedServiceFactory {
+class ChromeNotifierServiceFactory : public BrowserContextKeyedServiceFactory {
  public:
   static ChromeNotifierService* GetForProfile(
       Profile* profile, Profile::ServiceAccessType sat);
 
   static ChromeNotifierServiceFactory* GetInstance();
+
+  // Based on command line switches, make the call to use SyncedNotifications or
+  // not.
+  // TODO(petewil): Remove this when the SyncedNotifications feature is ready
+  // to be turned on by default, and just use a disable switch instead then.
+  static bool UseSyncedNotifications(CommandLine* command_line);
 
  private:
   friend struct DefaultSingletonTraits<ChromeNotifierServiceFactory>;
@@ -26,9 +34,9 @@ class ChromeNotifierServiceFactory : public ProfileKeyedServiceFactory {
   ChromeNotifierServiceFactory();
   virtual ~ChromeNotifierServiceFactory();
 
-  // ProfileKeyedServiceFactory:
-  virtual ProfileKeyedService* BuildServiceInstanceFor(
-      Profile* profile) const OVERRIDE;
+  // BrowserContextKeyedServiceFactory:
+  virtual BrowserContextKeyedService* BuildServiceInstanceFor(
+      content::BrowserContext* profile) const OVERRIDE;
 };
 
 }  // namespace notifier

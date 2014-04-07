@@ -7,8 +7,8 @@
 #include "ui/aura/env.h"
 #include "ui/aura/root_window.h"
 
-#if defined(OS_LINUX)
-#include "ui/views/widget/desktop_aura/desktop_root_window_host_linux.h"
+#if defined(USE_X11)
+#include "ui/views/widget/desktop_aura/desktop_root_window_host_x11.h"
 #elif defined(OS_WIN)
 #include "ui/views/widget/desktop_aura/desktop_root_window_host_win.h"
 #endif
@@ -16,8 +16,9 @@
 // static
 ActiveDesktopMonitor* ActiveDesktopMonitor::g_instance_ = NULL;
 
-ActiveDesktopMonitor::ActiveDesktopMonitor()
-    : last_activated_desktop_(chrome::HOST_DESKTOP_TYPE_NATIVE) {
+ActiveDesktopMonitor::ActiveDesktopMonitor(
+    chrome::HostDesktopType initial_desktop)
+    : last_activated_desktop_(initial_desktop) {
   DCHECK(!g_instance_);
   g_instance_ = this;
   aura::Env::GetInstance()->AddObserver(this);
@@ -44,8 +45,8 @@ bool ActiveDesktopMonitor::IsDesktopWindow(aura::RootWindow* root_window) {
 #if defined(OS_WIN)
   return views::DesktopRootWindowHostWin::GetContentWindowForHWND(
       root_window->GetAcceleratedWidget()) != NULL;
-#elif defined(OS_LINUX)
-  return views::DesktopRootWindowHostLinux::GetContentWindowForXID(
+#elif defined(USE_X11)
+  return views::DesktopRootWindowHostX11::GetContentWindowForXID(
       root_window->GetAcceleratedWidget()) != NULL;
 #else
   NOTREACHED();

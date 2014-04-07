@@ -9,10 +9,10 @@
 #include "base/environment.h"
 #include "base/file_util.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
-#include "base/test/test_timeouts.h"
-#include "base/time.h"
+#include "base/message_loop/message_loop.h"
 #include "base/path_service.h"
+#include "base/test/test_timeouts.h"
+#include "base/time/time.h"
 #include "base/win/scoped_com_initializer.h"
 #include "media/audio/audio_io.h"
 #include "media/audio/audio_manager.h"
@@ -22,8 +22,8 @@
 #include "media/base/decoder_buffer.h"
 #include "media/base/seekable_buffer.h"
 #include "media/base/test_data_util.h"
-#include "testing/gmock_mutant.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "testing/gmock_mutant.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using ::testing::_;
@@ -58,7 +58,7 @@ MATCHER_P(HasValidDelay, value, "") {
 // Used to terminate a loop from a different thread than the loop belongs to.
 // |loop| should be a MessageLoopProxy.
 ACTION_P(QuitLoop, loop) {
-  loop->PostTask(FROM_HERE, MessageLoop::QuitClosure());
+  loop->PostTask(FROM_HERE, base::MessageLoop::QuitClosure());
 }
 
 class MockAudioSourceCallback : public AudioOutputStream::AudioSourceCallback {
@@ -77,7 +77,7 @@ class ReadFromFileAudioSource : public AudioOutputStream::AudioSourceCallback {
  public:
   explicit ReadFromFileAudioSource(const std::string& name)
     : pos_(0),
-      previous_call_time_(base::Time::Now()),
+      previous_call_time_(base::TimeTicks::Now()),
       text_file_(NULL),
       elements_to_write_(0) {
     // Reads a test file from media/test/data directory.
@@ -116,8 +116,9 @@ class ReadFromFileAudioSource : public AudioOutputStream::AudioSourceCallback {
                          AudioBuffersState buffers_state) {
     // Store time difference between two successive callbacks in an array.
     // These values will be written to a file in the destructor.
-    int diff = (base::Time::Now() - previous_call_time_).InMilliseconds();
-    previous_call_time_ = base::Time::Now();
+    const base::TimeTicks now_time = base::TimeTicks::Now();
+    const int diff = (now_time - previous_call_time_).InMilliseconds();
+    previous_call_time_ = now_time;
     if (elements_to_write_ < kMaxDeltaSamples) {
       delta_times_[elements_to_write_] = diff;
       ++elements_to_write_;
@@ -133,7 +134,7 @@ class ReadFromFileAudioSource : public AudioOutputStream::AudioSourceCallback {
     int frames = max_size / (audio_bus->channels() * kBitsPerSample / 8);
     if (max_size) {
       audio_bus->FromInterleaved(
-          file_->GetData() + pos_, frames, kBitsPerSample / 8);
+          file_->data() + pos_, frames, kBitsPerSample / 8);
       pos_ += max_size;
     }
     return frames;
@@ -148,13 +149,13 @@ class ReadFromFileAudioSource : public AudioOutputStream::AudioSourceCallback {
 
   virtual void OnError(AudioOutputStream* stream) {}
 
-  int file_size() { return file_->GetDataSize(); }
+  int file_size() { return file_->data_size(); }
 
  private:
   scoped_refptr<DecoderBuffer> file_;
-  scoped_array<int> delta_times_;
+  scoped_ptr<int[]> delta_times_;
   int pos_;
-  base::Time previous_call_time_;
+  base::TimeTicks previous_call_time_;
   FILE* text_file_;
   size_t elements_to_write_;
 };
@@ -232,7 +233,8 @@ class AudioOutputStreamWrapper {
   AudioOutputStream* CreateOutputStream() {
     AudioOutputStream* aos = audio_man_->MakeAudioOutputStream(
         AudioParameters(format_, channel_layout_, sample_rate_,
-                        bits_per_sample_, samples_per_packet_));
+                        bits_per_sample_, samples_per_packet_),
+        std::string());
     EXPECT_TRUE(aos);
     return aos;
   }
@@ -401,7 +403,7 @@ TEST(WASAPIAudioOutputStreamTest, ValidPacketSize) {
   if (!CanRunAudioTests(audio_manager.get()))
     return;
 
-  MessageLoopForUI loop;
+  base::MessageLoopForUI loop;
   MockAudioSourceCallback source;
 
   // Create default WASAPI output stream which plays out in stereo using
@@ -424,7 +426,7 @@ TEST(WASAPIAudioOutputStreamTest, ValidPacketSize) {
           Return(aosw.samples_per_packet())));
 
   aos->Start(&source);
-  loop.PostDelayedTask(FROM_HERE, MessageLoop::QuitClosure(),
+  loop.PostDelayedTask(FROM_HERE, base::MessageLoop::QuitClosure(),
                        TestTimeouts::action_timeout());
   loop.Run();
   aos->Stop();
@@ -626,7 +628,7 @@ TEST(WASAPIAudioOutputStreamTest, ExclusiveModeMinBufferSizeAt48kHz) {
   if (!CanRunAudioTests(audio_manager.get()))
     return;
 
-  MessageLoopForUI loop;
+  base::MessageLoopForUI loop;
   MockAudioSourceCallback source;
 
   // Create exclusive-mode WASAPI output stream which plays out in stereo
@@ -650,7 +652,7 @@ TEST(WASAPIAudioOutputStreamTest, ExclusiveModeMinBufferSizeAt48kHz) {
       .WillRepeatedly(Return(aosw.samples_per_packet()));
 
   aos->Start(&source);
-  loop.PostDelayedTask(FROM_HERE, MessageLoop::QuitClosure(),
+  loop.PostDelayedTask(FROM_HERE, base::MessageLoop::QuitClosure(),
                        TestTimeouts::action_timeout());
   loop.Run();
   aos->Stop();
@@ -667,7 +669,7 @@ TEST(WASAPIAudioOutputStreamTest, ExclusiveModeMinBufferSizeAt44kHz) {
   if (!CanRunAudioTests(audio_manager.get()))
     return;
 
-  MessageLoopForUI loop;
+  base::MessageLoopForUI loop;
   MockAudioSourceCallback source;
 
   // Create exclusive-mode WASAPI output stream which plays out in stereo
@@ -691,7 +693,7 @@ TEST(WASAPIAudioOutputStreamTest, ExclusiveModeMinBufferSizeAt44kHz) {
     .WillRepeatedly(Return(aosw.samples_per_packet()));
 
   aos->Start(&source);
-  loop.PostDelayedTask(FROM_HERE, MessageLoop::QuitClosure(),
+  loop.PostDelayedTask(FROM_HERE, base::MessageLoop::QuitClosure(),
                         TestTimeouts::action_timeout());
   loop.Run();
   aos->Stop();

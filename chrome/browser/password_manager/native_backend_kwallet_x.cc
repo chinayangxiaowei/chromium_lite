@@ -10,7 +10,7 @@
 #include "base/logging.h"
 #include "base/pickle.h"
 #include "base/stl_util.h"
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/threading/thread_restrictions.h"
 #include "content/public/browser/browser_thread.h"
@@ -186,7 +186,7 @@ bool NativeBackendKWallet::StartKWalletd() {
   builder.AppendString("kwalletd");     // serviceName
   builder.AppendArrayOfStrings(empty);  // urls
   builder.AppendArrayOfStrings(empty);  // envs
-  builder.AppendString("");             // startup_id
+  builder.AppendString(std::string());  // startup_id
   builder.AppendBool(false);            // blind
   scoped_ptr<dbus::Response> response(
       klauncher->CallMethodAndBlock(

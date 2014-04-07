@@ -13,21 +13,29 @@ class Profile;
 
 namespace extensions {
 
-// Note that this experimental API is currently only available for
-// TOOLKIT_VIEWS (see chrome/chrome_browser.gypi).
-//
-// We may eventually support other platforms by adding the necessary
-// synthetic event distribution code to this Function.
-class SendKeyboardEventInputFunction : public SyncExtensionFunction {
+class InsertTextInputFunction : public SyncExtensionFunction {
  public:
   DECLARE_EXTENSION_FUNCTION(
-      "experimental.input.virtualKeyboard.sendKeyboardEvent",
-      EXPERIMENTAL_INPUT_VIRTUALKEYBOARD_SENDKEYBOARDEVENT);
+      "experimental.input.virtualKeyboard.insertText",
+      EXPERIMENTAL_INPUT_VIRTUALKEYBOARD_INSERTTEXT);
 
  protected:
-  virtual ~SendKeyboardEventInputFunction() {}
+  virtual ~InsertTextInputFunction() {}
 
   // ExtensionFunction:
+  virtual bool RunImpl() OVERRIDE;
+};
+
+class  MoveCursorFunction : public SyncExtensionFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION(
+      "experimental.input.virtualKeyboard.moveCursor",
+      EXPERIMENTAL_INPUT_VIRTUALKEYBOARD_MOVECURSOR);
+
+ protected:
+  virtual ~MoveCursorFunction() {}
+
+  // ExtensionFunction.
   virtual bool RunImpl() OVERRIDE;
 };
 

@@ -9,8 +9,7 @@
 #include "base/bind.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
-#include "base/process_util.h"
+#include "base/message_loop/message_loop.h"
 #include "content/browser/browser_thread_impl.h"
 #include "content/browser/renderer_host/media/media_stream_provider.h"
 #include "content/browser/renderer_host/media/video_capture_controller.h"
@@ -36,21 +35,21 @@ ACTION_P4(StopCapture, controller, controller_id, controller_handler,
   message_loop->PostTask(FROM_HERE,
       base::Bind(&VideoCaptureController::StopCapture,
                  controller, controller_id, controller_handler));
-  message_loop->PostTask(FROM_HERE, MessageLoop::QuitClosure());
+  message_loop->PostTask(FROM_HERE, base::MessageLoop::QuitClosure());
 }
 
 ACTION_P3(StopSession, controller, session_id, message_loop) {
   message_loop->PostTask(FROM_HERE,
       base::Bind(&VideoCaptureController::StopSession,
                  controller, session_id));
-  message_loop->PostTask(FROM_HERE, MessageLoop::QuitClosure());
+  message_loop->PostTask(FROM_HERE, base::MessageLoop::QuitClosure());
 }
 
 class MockVideoCaptureControllerEventHandler
     : public VideoCaptureControllerEventHandler {
  public:
   MockVideoCaptureControllerEventHandler(VideoCaptureController* controller,
-                                         MessageLoop* message_loop)
+                                         base::MessageLoop* message_loop)
       : controller_(controller),
         message_loop_(message_loop),
         controller_id_(kDeviceId),
@@ -61,7 +60,7 @@ class MockVideoCaptureControllerEventHandler
   MOCK_METHOD1(DoBufferCreated, void(const VideoCaptureControllerID&));
   MOCK_METHOD1(DoBufferReady, void(const VideoCaptureControllerID&));
   MOCK_METHOD1(DoFrameInfo, void(const VideoCaptureControllerID&));
-  MOCK_METHOD1(DoPaused, void(const VideoCaptureControllerID&));
+  MOCK_METHOD1(DoEnded, void(const VideoCaptureControllerID&));
 
   virtual void OnError(const VideoCaptureControllerID& id) OVERRIDE {}
   virtual void OnBufferCreated(const VideoCaptureControllerID& id,
@@ -79,20 +78,19 @@ class MockVideoCaptureControllerEventHandler
         base::Bind(&VideoCaptureController::ReturnBuffer,
                    controller_, controller_id_, this, buffer_id));
   }
-  virtual void OnFrameInfo(const VideoCaptureControllerID& id,
-                           int width,
-                           int height,
-                           int frame_per_second) OVERRIDE {
+  virtual void OnFrameInfo(
+      const VideoCaptureControllerID& id,
+      const media::VideoCaptureCapability& format) OVERRIDE {
     EXPECT_EQ(id, controller_id_);
     DoFrameInfo(id);
   }
-  virtual void OnPaused(const VideoCaptureControllerID& id) OVERRIDE {
+  virtual void OnEnded(const VideoCaptureControllerID& id) OVERRIDE {
     EXPECT_EQ(id, controller_id_);
-    DoPaused(id);
+    DoEnded(id);
   }
 
   scoped_refptr<VideoCaptureController> controller_;
-  MessageLoop* message_loop_;
+  base::MessageLoop* message_loop_;
   VideoCaptureControllerID controller_id_;
   base::ProcessHandle process_handle_;
 };
@@ -100,12 +98,10 @@ class MockVideoCaptureControllerEventHandler
 class MockVideoCaptureManager : public VideoCaptureManager {
  public:
   MockVideoCaptureManager()
-      : video_session_id_(kStartOpenSessionId) {}
+      : video_session_id_(kStartOpenSessionId),
+        device_name_("fake_device_0", "/dev/video0") {}
 
   void Init() {
-    device_name_.unique_id = "/dev/video0";
-    device_name_.device_name = "fake_device_0";
-
     video_capture_device_.reset(
         media::FakeVideoCaptureDevice::Create(device_name_));
     ASSERT_TRUE(video_capture_device_.get() != NULL);
@@ -118,9 +114,17 @@ class MockVideoCaptureManager : public VideoCaptureManager {
   void Start(const media::VideoCaptureParams& capture_params,
              media::VideoCaptureDevice::EventHandler* vc_receiver) OVERRIDE {
     StartCapture(capture_params.width, capture_params.height, vc_receiver);
-    video_capture_device_->Allocate(capture_params.width, capture_params.height,
-                                    capture_params.frame_per_second,
-                                    vc_receiver);
+    // TODO(mcasas): Add testing for variable resolution video capture devices,
+    // supported by FakeVideoCaptureDevice. See crbug.com/261410, second part.
+    media::VideoCaptureCapability capture_format(
+        capture_params.width,
+        capture_params.height,
+        capture_params.frame_per_second,
+        media::VideoCaptureCapability::kI420,
+        0,
+        false,
+        media::ConstantResolutionVideoCaptureDevice);
+    video_capture_device_->Allocate(capture_format, vc_receiver);
     video_capture_device_->Start();
   }
 
@@ -148,7 +152,7 @@ class VideoCaptureControllerTest : public testing::Test {
 
  protected:
   virtual void SetUp() OVERRIDE {
-    message_loop_.reset(new MessageLoop(MessageLoop::TYPE_IO));
+    message_loop_.reset(new base::MessageLoop(base::MessageLoop::TYPE_IO));
     file_thread_.reset(new BrowserThreadImpl(BrowserThread::FILE,
                                              message_loop_.get()));
     io_thread_.reset(new BrowserThreadImpl(BrowserThread::IO,
@@ -156,15 +160,14 @@ class VideoCaptureControllerTest : public testing::Test {
 
     vcm_ = new MockVideoCaptureManager();
     vcm_->Init();
-    controller_ = new VideoCaptureController(vcm_);
-    controller_handler_.reset(
-        new MockVideoCaptureControllerEventHandler(controller_.get(),
-                                                   message_loop_.get()));
+    controller_ = new VideoCaptureController(vcm_.get());
+    controller_handler_.reset(new MockVideoCaptureControllerEventHandler(
+        controller_.get(), message_loop_.get()));
   }
 
   virtual void TearDown() OVERRIDE {}
 
-  scoped_ptr<MessageLoop> message_loop_;
+  scoped_ptr<base::MessageLoop> message_loop_;
   scoped_ptr<BrowserThreadImpl> file_thread_;
   scoped_ptr<BrowserThreadImpl> io_thread_;
   scoped_refptr<MockVideoCaptureManager> vcm_;
@@ -184,11 +187,10 @@ TEST_F(VideoCaptureControllerTest, StartAndStop) {
   capture_params.frame_per_second = 30;
 
   InSequence s;
-  EXPECT_CALL(*vcm_,
+  EXPECT_CALL(*vcm_.get(),
               StartCapture(capture_params.width,
                            capture_params.height,
-                           controller_.get()))
-      .Times(1);
+                           controller_.get())).Times(1);
   EXPECT_CALL(*controller_handler_,
               DoFrameInfo(controller_handler_->controller_id_))
       .Times(AtLeast(1));
@@ -202,9 +204,7 @@ TEST_F(VideoCaptureControllerTest, StartAndStop) {
                             controller_handler_->controller_id_,
                             controller_handler_.get(),
                             message_loop_.get()));
-  EXPECT_CALL(*vcm_,
-              StopCapture(vcm_->video_session_id_))
-      .Times(1);
+  EXPECT_CALL(*vcm_.get(), StopCapture(vcm_->video_session_id_)).Times(1);
 
   controller_->StartCapture(controller_handler_->controller_id_,
                             controller_handler_.get(),
@@ -222,11 +222,10 @@ TEST_F(VideoCaptureControllerTest, StopSession) {
   capture_params.frame_per_second = 30;
 
   InSequence s;
-  EXPECT_CALL(*vcm_,
+  EXPECT_CALL(*vcm_.get(),
               StartCapture(capture_params.width,
                            capture_params.height,
-                           controller_.get()))
-      .Times(1);
+                           controller_.get())).Times(1);
   EXPECT_CALL(*controller_handler_,
               DoFrameInfo(controller_handler_->controller_id_))
       .Times(AtLeast(1));
@@ -240,7 +239,7 @@ TEST_F(VideoCaptureControllerTest, StopSession) {
                             vcm_->video_session_id_,
                             message_loop_.get()));
   EXPECT_CALL(*controller_handler_,
-              DoPaused(controller_handler_->controller_id_))
+              DoEnded(controller_handler_->controller_id_))
       .Times(1);
 
   controller_->StartCapture(controller_handler_->controller_id_,
@@ -254,13 +253,11 @@ TEST_F(VideoCaptureControllerTest, StopSession) {
   EXPECT_CALL(*controller_handler_,
               DoBufferReady(controller_handler_->controller_id_))
       .Times(0);
-  message_loop_->PostDelayedTask(
-      FROM_HERE, MessageLoop::QuitClosure(), base::TimeDelta::FromSeconds(1));
+  message_loop_->PostDelayedTask(FROM_HERE,
+      base::MessageLoop::QuitClosure(), base::TimeDelta::FromSeconds(1));
   message_loop_->Run();
 
-  EXPECT_CALL(*vcm_,
-              StopCapture(vcm_->video_session_id_))
-      .Times(1);
+  EXPECT_CALL(*vcm_.get(), StopCapture(vcm_->video_session_id_)).Times(1);
   controller_->StopCapture(controller_handler_->controller_id_,
                            controller_handler_.get());
 }

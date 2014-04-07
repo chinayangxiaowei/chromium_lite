@@ -5,7 +5,7 @@ import unittest
 
 from telemetry.core import browser_options
 from telemetry.core.chrome import android_browser_finder
-from telemetry.test import system_stub
+from telemetry.unittest import system_stub
 
 class LoggingStub(object):
   def __init__(self):
@@ -21,6 +21,7 @@ class AndroidBrowserFinderTest(unittest.TestCase):
   def setUp(self):
     self._stubs = system_stub.Override(android_browser_finder,
                                        ['adb_commands', 'subprocess'])
+    android_browser_finder.adb_works = None  # Blow cache between runs.
 
   def tearDown(self):
     self._stubs.Restore()

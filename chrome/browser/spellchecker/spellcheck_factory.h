@@ -7,18 +7,24 @@
 
 #include "base/basictypes.h"
 #include "base/memory/singleton.h"
-#include "chrome/browser/profiles/profile_keyed_service_factory.h"
+#include "components/browser_context_keyed_service/browser_context_keyed_service_factory.h"
 
-class PrefRegistrySyncable;
 class SpellcheckService;
+class Profile;
 
 // Entry into the SpellCheck system.
 //
 // Internally, this owns all SpellcheckService objects.
-class SpellcheckServiceFactory : public ProfileKeyedServiceFactory {
+class SpellcheckServiceFactory : public BrowserContextKeyedServiceFactory {
  public:
-  // Returns the spell check host. This may be NULL.
+  // Returns the spell check host. This will create the SpellcheckService if it
+  // does not already exist.
   static SpellcheckService* GetForProfile(Profile* profile);
+
+  static SpellcheckService* GetForRenderProcessId(int render_process_id);
+
+  // Returns the spell check host. This can return NULL.
+  static SpellcheckService* GetForProfileWithoutCreating(Profile* profile);
 
   static SpellcheckServiceFactory* GetInstance();
 
@@ -28,11 +34,13 @@ class SpellcheckServiceFactory : public ProfileKeyedServiceFactory {
   SpellcheckServiceFactory();
   virtual ~SpellcheckServiceFactory();
 
-  // ProfileKeyedServiceFactory:
-  virtual ProfileKeyedService* BuildServiceInstanceFor(
-      Profile* profile) const OVERRIDE;
-  virtual void RegisterUserPrefs(PrefRegistrySyncable* registry) OVERRIDE;
-  virtual bool ServiceRedirectedInIncognito() const OVERRIDE;
+  // BrowserContextKeyedServiceFactory:
+  virtual BrowserContextKeyedService* BuildServiceInstanceFor(
+      content::BrowserContext* context) const OVERRIDE;
+  virtual void RegisterProfilePrefs(
+      user_prefs::PrefRegistrySyncable* registry) OVERRIDE;
+  virtual content::BrowserContext* GetBrowserContextToUse(
+      content::BrowserContext* context) const OVERRIDE;
   virtual bool ServiceIsNULLWhileTesting() const OVERRIDE;
 
   DISALLOW_COPY_AND_ASSIGN(SpellcheckServiceFactory);

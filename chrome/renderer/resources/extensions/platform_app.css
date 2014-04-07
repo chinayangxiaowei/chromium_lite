@@ -11,6 +11,8 @@
 body {
   -webkit-user-select: none;
   cursor: default;
+  font-family: $FONTFAMILY;
+  font-size: $FONTSIZE;
 }
 
 webview, adview {
@@ -26,3 +28,8 @@ html, body {
 img, a {
   -webkit-user-drag: none;
 }
+
+[contenteditable], input {
+  -webkit-user-select: auto;
+}
+

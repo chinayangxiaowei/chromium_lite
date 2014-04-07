@@ -3,8 +3,8 @@
 // found in the LICENSE file.
 
 #include "base/file_util.h"
-#include "base/message_loop.h"
-#include "base/string_number_conversions.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/test/test_file_util.h"
 #include "content/browser/browser_thread_impl.h"
 #include "content/browser/byte_stream.h"
@@ -41,7 +41,7 @@ class MockByteStreamReader : public ByteStreamReader {
   // ByteStream functions
   MOCK_METHOD2(Read, ByteStreamReader::StreamState(
       scoped_refptr<net::IOBuffer>*, size_t*));
-  MOCK_CONST_METHOD0(GetStatus, DownloadInterruptReason());
+  MOCK_CONST_METHOD0(GetStatus, int());
   MOCK_METHOD1(RegisterCallback, void(const base::Closure&));
 };
 
@@ -62,8 +62,6 @@ MATCHER(IsNullCallback, "") { return (arg.is_null()); }
 
 }  // namespace
 
-DownloadId::Domain kValidIdDomain = "valid DownloadId::Domain";
-
 class DownloadFileTest : public testing::Test {
  public:
 
@@ -71,13 +69,13 @@ class DownloadFileTest : public testing::Test {
   static const char* kTestData2;
   static const char* kTestData3;
   static const char* kDataHash;
-  static const int32 kDummyDownloadId;
+  static const uint32 kDummyDownloadId;
   static const int kDummyChildId;
   static const int kDummyRequestId;
 
   DownloadFileTest() :
       observer_(new StrictMock<MockDownloadDestinationObserver>),
-      observer_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(observer_.get())),
+      observer_factory_(observer_.get()),
       bytes_(-1),
       bytes_per_sec_(-1),
       hash_state_("xyzzy"),
@@ -131,16 +129,17 @@ class DownloadFileTest : public testing::Test {
 
     scoped_ptr<DownloadSaveInfo> save_info(new DownloadSaveInfo());
     download_file_.reset(
-        new DownloadFileImpl(
-            save_info.Pass(),
-            base::FilePath(),
-            GURL(),                     // Source
-            GURL(),                     // Referrer
-            calculate_hash,
-            scoped_ptr<ByteStreamReader>(input_stream_),
-            net::BoundNetLog(),
-            scoped_ptr<PowerSaveBlocker>(NULL).Pass(),
-            observer_factory_.GetWeakPtr()));
+        new DownloadFileImpl(save_info.Pass(),
+                             base::FilePath(),
+                             GURL(),  // Source
+                             GURL(),  // Referrer
+                             calculate_hash,
+                             scoped_ptr<ByteStreamReader>(input_stream_),
+                             net::BoundNetLog(),
+                             scoped_ptr<PowerSaveBlocker>().Pass(),
+                             observer_factory_.GetWeakPtr()));
+    download_file_->SetClientGuid(
+        "12345678-ABCD-1234-DCBA-123456789ABC");
 
     EXPECT_CALL(*input_stream_, Read(_, _))
         .WillOnce(Return(ByteStreamReader::STREAM_EMPTY))
@@ -161,8 +160,6 @@ class DownloadFileTest : public testing::Test {
 
   virtual void DestroyDownloadFile(int offset) {
     EXPECT_FALSE(download_file_->InProgress());
-    EXPECT_EQ(static_cast<int64>(expected_data_.size()),
-              download_file_->BytesSoFar());
 
     // Make sure the data has been properly written to disk.
     std::string disk_data;
@@ -302,7 +299,7 @@ class DownloadFileTest : public testing::Test {
   int64 bytes_per_sec_;
   std::string hash_state_;
 
-  MessageLoop loop_;
+  base::MessageLoop loop_;
 
  private:
   void SetRenameResult(bool* called_p,
@@ -334,7 +331,7 @@ const char* DownloadFileTest::kTestData3 = "Final line.";
 const char* DownloadFileTest::kDataHash =
     "CBF68BF10F8003DB86B31343AFAC8C7175BD03FB5FC905650F8C80AF087443A8";
 
-const int32 DownloadFileTest::kDummyDownloadId = 23;
+const uint32 DownloadFileTest::kDummyDownloadId = 23;
 const int DownloadFileTest::kDummyChildId = 3;
 const int DownloadFileTest::kDummyRequestId = 67;
 
@@ -343,7 +340,7 @@ const int DownloadFileTest::kDummyRequestId = 67;
 TEST_F(DownloadFileTest, RenameFileFinal) {
   ASSERT_TRUE(CreateDownloadFile(0, true));
   base::FilePath initial_path(download_file_->FullPath());
-  EXPECT_TRUE(file_util::PathExists(initial_path));
+  EXPECT_TRUE(base::PathExists(initial_path));
   base::FilePath path_1(initial_path.InsertBeforeExtensionASCII("_1"));
   base::FilePath path_2(initial_path.InsertBeforeExtensionASCII("_2"));
   base::FilePath path_3(initial_path.InsertBeforeExtensionASCII("_3"));
@@ -359,8 +356,8 @@ TEST_F(DownloadFileTest, RenameFileFinal) {
   EXPECT_EQ(path_1, output_path);
 
   // Check the files.
-  EXPECT_FALSE(file_util::PathExists(initial_path));
-  EXPECT_TRUE(file_util::PathExists(path_1));
+  EXPECT_FALSE(base::PathExists(initial_path));
+  EXPECT_TRUE(base::PathExists(path_1));
 
   // Download the data.
   const char* chunks1[] = { kTestData1, kTestData2 };
@@ -374,8 +371,8 @@ TEST_F(DownloadFileTest, RenameFileFinal) {
   EXPECT_EQ(path_2, output_path);
 
   // Check the files.
-  EXPECT_FALSE(file_util::PathExists(path_1));
-  EXPECT_TRUE(file_util::PathExists(path_2));
+  EXPECT_FALSE(base::PathExists(path_1));
+  EXPECT_TRUE(base::PathExists(path_2));
 
   const char* chunks2[] = { kTestData3 };
   AppendDataToFile(chunks2, 1);
@@ -388,8 +385,8 @@ TEST_F(DownloadFileTest, RenameFileFinal) {
   EXPECT_EQ(path_3, output_path);
 
   // Check the files.
-  EXPECT_FALSE(file_util::PathExists(path_2));
-  EXPECT_TRUE(file_util::PathExists(path_3));
+  EXPECT_FALSE(base::PathExists(path_2));
+  EXPECT_TRUE(base::PathExists(path_3));
 
   // Should not be able to get the hash until the file is closed.
   std::string hash;
@@ -405,8 +402,8 @@ TEST_F(DownloadFileTest, RenameFileFinal) {
   EXPECT_EQ(path_4, output_path);
 
   // Check the files.
-  EXPECT_FALSE(file_util::PathExists(path_3));
-  EXPECT_TRUE(file_util::PathExists(path_4));
+  EXPECT_FALSE(base::PathExists(path_3));
+  EXPECT_TRUE(base::PathExists(path_4));
 
   // Check the hash.
   EXPECT_TRUE(download_file_->GetHash(&hash));
@@ -414,11 +411,11 @@ TEST_F(DownloadFileTest, RenameFileFinal) {
 
   // Check that a rename with overwrite to an existing file succeeds.
   std::string file_contents;
-  ASSERT_FALSE(file_util::PathExists(path_5));
+  ASSERT_FALSE(base::PathExists(path_5));
   static const char file_data[] = "xyzzy";
   ASSERT_EQ(static_cast<int>(sizeof(file_data) - 1),
             file_util::WriteFile(path_5, file_data, sizeof(file_data) - 1));
-  ASSERT_TRUE(file_util::PathExists(path_5));
+  ASSERT_TRUE(base::PathExists(path_5));
   EXPECT_TRUE(file_util::ReadFileToString(path_5, &file_contents));
   EXPECT_EQ(std::string(file_data), file_contents);
 
@@ -438,18 +435,18 @@ TEST_F(DownloadFileTest, RenameFileFinal) {
 TEST_F(DownloadFileTest, RenameUniquifies) {
   ASSERT_TRUE(CreateDownloadFile(0, true));
   base::FilePath initial_path(download_file_->FullPath());
-  EXPECT_TRUE(file_util::PathExists(initial_path));
+  EXPECT_TRUE(base::PathExists(initial_path));
   base::FilePath path_1(initial_path.InsertBeforeExtensionASCII("_1"));
   base::FilePath path_1_suffixed(path_1.InsertBeforeExtensionASCII(" (1)"));
 
-  ASSERT_FALSE(file_util::PathExists(path_1));
+  ASSERT_FALSE(base::PathExists(path_1));
   static const char file_data[] = "xyzzy";
   ASSERT_EQ(static_cast<int>(sizeof(file_data)),
             file_util::WriteFile(path_1, file_data, sizeof(file_data)));
-  ASSERT_TRUE(file_util::PathExists(path_1));
+  ASSERT_TRUE(base::PathExists(path_1));
 
   EXPECT_EQ(DOWNLOAD_INTERRUPT_REASON_NONE, RenameAndUniquify(path_1, NULL));
-  EXPECT_TRUE(file_util::PathExists(path_1_suffixed));
+  EXPECT_TRUE(base::PathExists(path_1_suffixed));
 
   FinishStream(DOWNLOAD_INTERRUPT_REASON_NONE, true);
   loop_.RunUntilIdle();
@@ -470,8 +467,8 @@ TEST_F(DownloadFileTest, RenameError) {
   // Targets
   base::FilePath target_path_suffixed(
       target_path.InsertBeforeExtensionASCII(" (1)"));
-  ASSERT_FALSE(file_util::PathExists(target_path));
-  ASSERT_FALSE(file_util::PathExists(target_path_suffixed));
+  ASSERT_FALSE(base::PathExists(target_path));
+  ASSERT_FALSE(base::PathExists(target_path_suffixed));
 
   // Make the directory unwritable and try to rename within it.
   {
@@ -482,7 +479,7 @@ TEST_F(DownloadFileTest, RenameError) {
     EXPECT_CALL(*input_stream_, RegisterCallback(IsNullCallback()));
     EXPECT_EQ(DOWNLOAD_INTERRUPT_REASON_FILE_ACCESS_DENIED,
               RenameAndAnnotate(target_path, NULL));
-    EXPECT_FALSE(file_util::PathExists(target_path_suffixed));
+    EXPECT_FALSE(base::PathExists(target_path_suffixed));
   }
 
   FinishStream(DOWNLOAD_INTERRUPT_REASON_NONE, true);
@@ -494,7 +491,7 @@ TEST_F(DownloadFileTest, RenameError) {
 TEST_F(DownloadFileTest, StreamEmptySuccess) {
   ASSERT_TRUE(CreateDownloadFile(0, true));
   base::FilePath initial_path(download_file_->FullPath());
-  EXPECT_TRUE(file_util::PathExists(initial_path));
+  EXPECT_TRUE(base::PathExists(initial_path));
 
   // Test that calling the sink_callback_ on an empty stream shouldn't
   // do anything.
@@ -512,7 +509,7 @@ TEST_F(DownloadFileTest, StreamEmptySuccess) {
 TEST_F(DownloadFileTest, StreamEmptyError) {
   ASSERT_TRUE(CreateDownloadFile(0, true));
   base::FilePath initial_path(download_file_->FullPath());
-  EXPECT_TRUE(file_util::PathExists(initial_path));
+  EXPECT_TRUE(base::PathExists(initial_path));
 
   // Finish the download in error and make sure we see it on the
   // observer.
@@ -539,7 +536,7 @@ TEST_F(DownloadFileTest, StreamEmptyError) {
 TEST_F(DownloadFileTest, StreamNonEmptySuccess) {
   ASSERT_TRUE(CreateDownloadFile(0, true));
   base::FilePath initial_path(download_file_->FullPath());
-  EXPECT_TRUE(file_util::PathExists(initial_path));
+  EXPECT_TRUE(base::PathExists(initial_path));
 
   const char* chunks1[] = { kTestData1, kTestData2 };
   ::testing::Sequence s1;
@@ -555,7 +552,7 @@ TEST_F(DownloadFileTest, StreamNonEmptySuccess) {
 TEST_F(DownloadFileTest, StreamNonEmptyError) {
   ASSERT_TRUE(CreateDownloadFile(0, true));
   base::FilePath initial_path(download_file_->FullPath());
-  EXPECT_TRUE(file_util::PathExists(initial_path));
+  EXPECT_TRUE(base::PathExists(initial_path));
 
   const char* chunks1[] = { kTestData1, kTestData2 };
   ::testing::Sequence s1;
@@ -592,8 +589,9 @@ TEST_F(DownloadFileTest, ConfirmUpdate) {
   AppendDataToFile(chunks1, 2);
 
   // Run the message loops for 750ms and check for results.
-  loop_.PostDelayedTask(FROM_HERE, MessageLoop::QuitClosure(),
-                         base::TimeDelta::FromMilliseconds(750));
+  loop_.PostDelayedTask(FROM_HERE,
+                        base::MessageLoop::QuitClosure(),
+                        base::TimeDelta::FromMilliseconds(750));
   loop_.Run();
 
   EXPECT_EQ(static_cast<int64>(strlen(kTestData1) + strlen(kTestData2)),

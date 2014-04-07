@@ -1,40 +1,46 @@
-/* Copyright (c) 2012 The Chromium Authors. All rights reserved.
- * Use of this source code is governed by a BSD-style license that can be
- * found in the LICENSE file.
- */
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
 #include "nacl_io/mount_node.h"
 
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <string.h>
 #include <sys/stat.h>
+
+#include <algorithm>
 #include <string>
 
 #include "nacl_io/kernel_wrap_real.h"
 #include "nacl_io/mount.h"
 #include "nacl_io/osmman.h"
-#include "utils/auto_lock.h"
+#include "sdk_util/auto_lock.h"
+
+namespace nacl_io {
 
 static const int USR_ID = 1001;
 static const int GRP_ID = 1002;
 
-MountNode::MountNode(Mount* mount)
-    : mount_(mount) {
+MountNode::MountNode(Mount* mount) : mount_(mount) {
   memset(&stat_, 0, sizeof(stat_));
   stat_.st_gid = GRP_ID;
   stat_.st_uid = USR_ID;
 
   // Mount should normally never be NULL, but may be null in tests.
+  // If NULL, at least set the inode to a valid (nonzero) value.
   if (mount_)
     mount_->OnNodeCreated(this);
+  else
+    stat_.st_ino = 1;
 }
 
-MountNode::~MountNode() {
-}
+MountNode::~MountNode() {}
 
-bool MountNode::Init(int perm) {
+Error MountNode::Init(int perm) {
   stat_.st_mode |= perm;
-  return true;
+  return 0;
 }
 
 void MountNode::Destroy() {
@@ -43,123 +49,129 @@ void MountNode::Destroy() {
   }
 }
 
-int MountNode::FSync() {
-  return 0;
+// Declared in EventEmitter, default to regular files which always return
+// a ready of TRUE for read, write, or error.
+uint32_t MountNode::GetEventStatus() {
+  uint32_t val = POLLIN | POLLOUT | POLLERR;
+  return val;
 }
 
-int MountNode::GetDents(size_t offs, struct dirent* pdir, size_t count) {
-  errno = ENOTDIR;
-  return -1;
+
+Error MountNode::FSync() { return 0; }
+
+Error MountNode::FTruncate(off_t length) { return EINVAL; }
+
+Error MountNode::GetDents(size_t offs,
+                          struct dirent* pdir,
+                          size_t count,
+                          int* out_bytes) {
+  *out_bytes = 0;
+  return ENOTDIR;
 }
 
-int MountNode::GetStat(struct stat* pstat) {
-  AutoLock lock(&lock_);
+Error MountNode::GetStat(struct stat* pstat) {
+  AUTO_LOCK(node_lock_);
   memcpy(pstat, &stat_, sizeof(stat_));
   return 0;
 }
 
-int MountNode::Ioctl(int request, char* arg) {
-  errno = EINVAL;
-  return -1;
+Error MountNode::Ioctl(int request, char* arg) { return EINVAL; }
+
+Error MountNode::Read(size_t offs, void* buf, size_t count, int* out_bytes) {
+  *out_bytes = 0;
+  return EINVAL;
 }
 
-int MountNode::Read(size_t offs, void* buf, size_t count) {
-  errno = EINVAL;
-  return -1;
+Error MountNode::Write(size_t offs,
+                       const void* buf,
+                       size_t count,
+                       int* out_bytes) {
+  *out_bytes = 0;
+  return EINVAL;
 }
 
-int MountNode::Truncate(size_t size) {
-  errno = EINVAL;
-  return -1;
-}
+Error MountNode::MMap(void* addr,
+                      size_t length,
+                      int prot,
+                      int flags,
+                      size_t offset,
+                      void** out_addr) {
+  *out_addr = NULL;
 
-int MountNode::Write(size_t offs, const void* buf, size_t count) {
-  errno = EINVAL;
-  return -1;
-}
+  // Never allow mmap'ing PROT_EXEC. The passthrough node supports this, but we
+  // don't. Fortunately, glibc will fallback if this fails, so dlopen will
+  // continue to work.
+  if (prot & PROT_EXEC)
+    return EPERM;
 
-void* MountNode::MMap(void* addr, size_t length, int prot, int flags,
-                      size_t offset) {
   // This default mmap support is just enough to make dlopen work.
   // This implementation just reads from the mount into the mmap'd memory area.
   void* new_addr = addr;
-  int err = _real_mmap(&new_addr, length, prot | PROT_WRITE, flags |
-                       MAP_ANONYMOUS, -1, 0);
-  if (addr == MAP_FAILED) {
-    _real_munmap(addr, length);
-    errno = err;
-    return MAP_FAILED;
+  int mmap_error = _real_mmap(
+      &new_addr, length, prot | PROT_WRITE, flags | MAP_ANONYMOUS, -1, 0);
+  if (new_addr == MAP_FAILED) {
+    _real_munmap(new_addr, length);
+    return mmap_error;
   }
 
-  ssize_t cnt = Read(offset, addr, length);
-  if (cnt == -1) {
-    _real_munmap(addr, length);
-    errno = ENOSYS;
-    return MAP_FAILED;
+  int bytes_read;
+  Error read_error = Read(offset, new_addr, length, &bytes_read);
+  if (read_error) {
+    _real_munmap(new_addr, length);
+    return read_error;
   }
 
-  return new_addr;
+  *out_addr = new_addr;
+  return 0;
 }
 
-int MountNode::Munmap(void* addr, size_t length) {
-  return _real_munmap(addr, length);
+Error MountNode::Tcflush(int queue_selector) {
+  return EINVAL;
 }
 
-int MountNode::GetLinks() {
-  return stat_.st_nlink;
+Error MountNode::Tcgetattr(struct termios* termios_p) {
+  return EINVAL;
 }
 
-int MountNode::GetMode() {
-  return stat_.st_mode & ~S_IFMT;
+Error MountNode::Tcsetattr(int optional_actions,
+                           const struct termios *termios_p) {
+  return EINVAL;
 }
 
-size_t MountNode::GetSize() {
-  return stat_.st_size;
+int MountNode::GetLinks() { return stat_.st_nlink; }
+
+int MountNode::GetMode() { return stat_.st_mode & ~S_IFMT; }
+
+Error MountNode::GetSize(size_t* out_size) {
+  *out_size = stat_.st_size;
+  return 0;
 }
 
-int MountNode::GetType() {
-  return stat_.st_mode & S_IFMT;
+int MountNode::GetType() { return stat_.st_mode & S_IFMT; }
+
+bool MountNode::IsaDir() { return (stat_.st_mode & S_IFDIR) != 0; }
+
+bool MountNode::IsaFile() { return (stat_.st_mode & S_IFREG) != 0; }
+
+bool MountNode::IsaTTY() { return (stat_.st_mode & S_IFCHR) != 0; }
+
+Error MountNode::AddChild(const std::string& name,
+                          const ScopedMountNode& node) {
+  return ENOTDIR;
 }
 
-bool MountNode::IsaDir() {
-  return (stat_.st_mode & S_IFDIR) != 0;
+Error MountNode::RemoveChild(const std::string& name) { return ENOTDIR; }
+
+Error MountNode::FindChild(const std::string& name, ScopedMountNode* out_node) {
+  out_node->reset(NULL);
+  return ENOTDIR;
 }
 
-bool MountNode::IsaFile() {
-  return (stat_.st_mode & S_IFREG) != 0;
-}
+int MountNode::ChildCount() { return 0; }
 
-bool MountNode::IsaTTY() {
-  return (stat_.st_mode & S_IFCHR) != 0;
-}
+void MountNode::Link() { stat_.st_nlink++; }
 
+void MountNode::Unlink() { stat_.st_nlink--; }
 
-int MountNode:: AddChild(const std::string& name, MountNode* node) {
-  errno = ENOTDIR;
-  return -1;
-}
+}  // namespace nacl_io
 
-int MountNode::RemoveChild(const std::string& name) {
-  errno = ENOTDIR;
-  return -1;
-}
-
-MountNode* MountNode::FindChild(const std::string& name) {
-  errno = ENOTDIR;
-  return NULL;
-}
-
-int MountNode::ChildCount() {
-  errno = ENOTDIR;
-  return -1;
-}
-
-void MountNode::Link() {
-  Acquire();
-  stat_.st_nlink++;
-}
-
-void MountNode::Unlink() {
-  stat_.st_nlink--;
-  Release();
-}

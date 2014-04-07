@@ -6,11 +6,11 @@
 
 #include "base/command_line.h"
 #include "base/logging.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_view.h"
+#include "content/shell/common/shell_switches.h"
 #include "content/shell/shell_javascript_dialog.h"
-#include "content/shell/shell_switches.h"
 #include "content/shell/webkit_test_controller.h"
 #include "net/base/net_util.h"
 
@@ -46,7 +46,7 @@ void ShellJavaScriptDialogManager::RunJavaScriptDialog(
 #if defined(OS_MACOSX) || defined(OS_WIN) || defined(TOOLKIT_GTK)
   *did_suppress_message = false;
 
-  if (dialog_.get()) {
+  if (dialog_) {
     // One dialog at a time, please.
     *did_suppress_message = true;
     return;
@@ -89,7 +89,7 @@ void ShellJavaScriptDialogManager::RunBeforeUnloadDialog(
   }
 
 #if defined(OS_MACOSX) || defined(OS_WIN) || defined(TOOLKIT_GTK)
-  if (dialog_.get()) {
+  if (dialog_) {
     // Seriously!?
     callback.Run(true, string16());
     return;
@@ -115,16 +115,20 @@ void ShellJavaScriptDialogManager::RunBeforeUnloadDialog(
 #endif
 }
 
-void ShellJavaScriptDialogManager::ResetJavaScriptState(
+void ShellJavaScriptDialogManager::CancelActiveAndPendingDialogs(
     WebContents* web_contents) {
 #if defined(OS_MACOSX) || defined(OS_WIN) || defined(TOOLKIT_GTK)
-  if (dialog_.get()) {
+  if (dialog_) {
     dialog_->Cancel();
     dialog_.reset();
   }
 #else
   // TODO: implement ShellJavaScriptDialog for other platforms, drop this #if
 #endif
+}
+
+void ShellJavaScriptDialogManager::WebContentsDestroyed(
+    WebContents* web_contents) {
 }
 
 void ShellJavaScriptDialogManager::DialogClosed(ShellJavaScriptDialog* dialog) {

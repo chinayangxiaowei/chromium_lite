@@ -8,7 +8,7 @@
 // included file but that's all right since any javascript file should start
 // with a copyright comment anyway.
 
-//<include src="../../image_loader/client.js"/>
+//<include src="../../image_loader/image_loader_client.js"/>
 
 //<include src="../../../../../ui/webui/resources/js/load_time_data.js"/>
 //<include src="../../../../../ui/webui/resources/js/util.js"/>
@@ -37,6 +37,7 @@
 //<include src="metrics.js"/>
 //<include src="image_editor/image_util.js"/>
 //<include src="media/media_util.js"/>
+//<include src="action_choice_util.js"/>
 
 //<include src="action_choice.js"/>
 

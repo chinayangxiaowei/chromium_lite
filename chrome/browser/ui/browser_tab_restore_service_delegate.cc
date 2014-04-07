@@ -50,7 +50,7 @@ bool BrowserTabRestoreServiceDelegate::IsTabPinned(int index) const {
 }
 
 WebContents* BrowserTabRestoreServiceDelegate::AddRestoredTab(
-      const std::vector<TabNavigation>& navigations,
+      const std::vector<sessions::SerializedNavigationEntry>& navigations,
       int tab_index,
       int selected_navigation,
       const std::string& extension_app_id,
@@ -65,14 +65,14 @@ WebContents* BrowserTabRestoreServiceDelegate::AddRestoredTab(
                                 user_agent_override);
 }
 
-void BrowserTabRestoreServiceDelegate::ReplaceRestoredTab(
-      const std::vector<TabNavigation>& navigations,
+WebContents* BrowserTabRestoreServiceDelegate::ReplaceRestoredTab(
+      const std::vector<sessions::SerializedNavigationEntry>& navigations,
       int selected_navigation,
       bool from_last_session,
       const std::string& extension_app_id,
       SessionStorageNamespace* session_storage_namespace,
       const std::string& user_agent_override) {
-  chrome::ReplaceRestoredTab(browser_, navigations, selected_navigation,
+  return chrome::ReplaceRestoredTab(browser_, navigations, selected_navigation,
                              from_last_session, extension_app_id,
                              session_storage_namespace, user_agent_override);
 }

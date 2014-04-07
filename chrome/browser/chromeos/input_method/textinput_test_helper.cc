@@ -3,9 +3,9 @@
 // found in the LICENSE file.
 
 #include "ash/shell.h"
-#include "base/string_util.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/chromeos/input_method/textinput_test_helper.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/interactive_test_utils.h"
@@ -28,7 +28,7 @@ ui::MockInputMethod* GetInputMethod() {
 }  // namespace
 
 void TextInputTestBase::SetUpInProcessBrowserTestFixture() {
-  ui::SetUpInputMethodFacotryForTesting();
+  ui::SetUpInputMethodFactoryForTesting();
 }
 
 TextInputTestHelper::TextInputTestHelper()
@@ -75,19 +75,27 @@ void TextInputTestHelper::OnTextInputTypeChanged(
     const ui::TextInputClient* client) {
   latest_text_input_type_ = client->GetTextInputType();
   if (waiting_type_ == WAIT_ON_TEXT_INPUT_TYPE_CHANGED)
-    MessageLoop::current()->Quit();
+    base::MessageLoop::current()->Quit();
+}
+
+void TextInputTestHelper::OnInputMethodDestroyed(
+    const ui::InputMethod* input_method) {
 }
 
 void TextInputTestHelper::OnFocus() {
   focus_state_ = true;
   if (waiting_type_ == WAIT_ON_FOCUS)
-    MessageLoop::current()->Quit();
+    base::MessageLoop::current()->Quit();
 }
 
 void TextInputTestHelper::OnBlur() {
   focus_state_ = false;
   if (waiting_type_ == WAIT_ON_BLUR)
-    MessageLoop::current()->Quit();
+    base::MessageLoop::current()->Quit();
+}
+
+void TextInputTestHelper::OnUntranslatedIMEMessage(
+  const base::NativeEvent& event) {
 }
 
 void TextInputTestHelper::OnCaretBoundsChanged(
@@ -98,7 +106,14 @@ void TextInputTestHelper::OnCaretBoundsChanged(
       !GetTextInputClient()->GetSelectionRange(&selection_range_))
       return;
   if (waiting_type_ == WAIT_ON_CARET_BOUNDS_CHANGED)
-    MessageLoop::current()->Quit();
+    base::MessageLoop::current()->Quit();
+}
+
+void TextInputTestHelper::OnInputLocaleChanged() {
+}
+
+void TextInputTestHelper::OnTextInputStateChanged(
+    const ui::TextInputClient* client) {
 }
 
 void TextInputTestHelper::WaitForTextInputStateChanged(

@@ -12,7 +12,7 @@
 #include <cstring>
 
 #include "base/metrics/histogram.h"
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "ui/base/events/event_utils.h"
 #include "ui/base/keycodes/keyboard_code_conversion.h"
 #include "ui/gfx/point3_f.h"
@@ -34,6 +34,8 @@ base::NativeEvent CopyNativeEvent(const base::NativeEvent& event) {
   *copy = *event;
   return copy;
 #elif defined(OS_WIN)
+  return event;
+#elif defined(USE_OZONE)
   return event;
 #else
   NOTREACHED() <<
@@ -95,6 +97,7 @@ std::string EventTypeName(ui::EventType type) {
     CASE_TYPE(ET_SCROLL_FLING_START);
     CASE_TYPE(ET_SCROLL_FLING_CANCEL);
     CASE_TYPE(ET_CANCEL_MODE);
+    CASE_TYPE(ET_UMA_DATA);
     case ui::ET_LAST: NOTREACHED(); return std::string();
     // Don't include default, so that we get an error when new type is added.
   }
@@ -153,6 +156,9 @@ Event::Event(EventType type, base::TimeDelta time_stamp, int flags)
       time_stamp_(time_stamp),
       flags_(flags),
       dispatch_to_hidden_targets_(false),
+#if defined(USE_X11)
+      native_event_(NULL),
+#endif
       delete_native_event_(false),
       cancelable_(true),
       target_(NULL),
@@ -194,11 +200,12 @@ Event::Event(const base::NativeEvent& native_event,
 }
 
 Event::Event(const Event& copy)
-    : native_event_(::CopyNativeEvent(copy.native_event_)),
-      type_(copy.type_),
+    : type_(copy.type_),
       time_stamp_(copy.time_stamp_),
+      latency_(copy.latency_),
       flags_(copy.flags_),
       dispatch_to_hidden_targets_(false),
+      native_event_(::CopyNativeEvent(copy.native_event_)),
       delete_native_event_(false),
       cancelable_(true),
       target_(NULL),
@@ -228,6 +235,16 @@ void Event::InitWithNativeEvent(const base::NativeEvent& native_event) {
   native_event_ = native_event;
 }
 
+void Event::InitLatencyInfo() {
+  latency_.AddLatencyNumberWithTimestamp(INPUT_EVENT_LATENCY_ORIGINAL_COMPONENT,
+                                         0,
+                                         0,
+                                         base::TimeTicks::FromInternalValue(
+                                             time_stamp_.ToInternalValue()),
+                                         1);
+  latency_.AddLatencyNumber(INPUT_EVENT_LATENCY_UI_COMPONENT, 0, 0);
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // CancelModeEvent
 
@@ -250,9 +267,7 @@ LocatedEvent::LocatedEvent(const base::NativeEvent& native_event)
             EventTypeFromNative(native_event),
             EventFlagsFromNative(native_event)),
       location_(EventLocationFromNative(native_event)),
-      root_location_(location_),
-      valid_system_location_(true),
-      system_location_(EventSystemLocationFromNative(native_event)) {
+      root_location_(location_) {
 }
 
 LocatedEvent::LocatedEvent(EventType type,
@@ -262,19 +277,14 @@ LocatedEvent::LocatedEvent(EventType type,
                            int flags)
     : Event(type, time_stamp, flags),
       location_(location),
-      root_location_(root_location),
-      valid_system_location_(false),
-      system_location_(0, 0) {
+      root_location_(root_location) {
 }
 
 void LocatedEvent::UpdateForRootTransform(
-    const gfx::Transform& root_transform) {
+    const gfx::Transform& reversed_root_transform) {
   // Transform has to be done at root level.
   gfx::Point3F p(location_);
-  root_transform.TransformPointReverse(p);
-  // TODO(oshima): Translating a point using reversed matrix can
-  // results in small error like 0 -> -0.01, whose floored value
-  // is -1 instead of 0. crbug.com/222483.
+  reversed_root_transform.TransformPoint(p);
   root_location_ = location_ = gfx::ToFlooredPoint(p.AsPointF());
 }
 
@@ -398,12 +408,20 @@ MouseWheelEvent::MouseWheelEvent(const base::NativeEvent& native_event)
 
 MouseWheelEvent::MouseWheelEvent(const ScrollEvent& scroll_event)
     : MouseEvent(scroll_event),
-      offset_(scroll_event.y_offset()) {
+      offset_(scroll_event.x_offset(), scroll_event.y_offset()){
   SetType(ET_MOUSEWHEEL);
 }
 
-MouseWheelEvent::MouseWheelEvent(const MouseEvent& mouse_event, int offset)
-    : MouseEvent(mouse_event), offset_(offset) {
+MouseWheelEvent::MouseWheelEvent(const MouseEvent& mouse_event,
+                                 int x_offset,
+                                 int y_offset)
+    : MouseEvent(mouse_event), offset_(x_offset, y_offset) {
+  DCHECK(type() == ET_MOUSEWHEEL);
+}
+
+MouseWheelEvent::MouseWheelEvent(const MouseWheelEvent& mouse_wheel_event)
+    : MouseEvent(mouse_wheel_event),
+      offset_(mouse_wheel_event.offset()) {
   DCHECK(type() == ET_MOUSEWHEEL);
 }
 
@@ -416,6 +434,18 @@ const int MouseWheelEvent::kWheelDelta = 120;
 const int MouseWheelEvent::kWheelDelta = 53;
 #endif
 
+void MouseWheelEvent::UpdateForRootTransform(
+    const gfx::Transform& inverted_root_transform) {
+  LocatedEvent::UpdateForRootTransform(inverted_root_transform);
+  gfx::DecomposedTransform decomp;
+  bool success = gfx::DecomposeTransform(&decomp, inverted_root_transform);
+  DCHECK(success);
+  if (decomp.scale[0])
+    offset_.set_x(offset_.x() * decomp.scale[0]);
+  if (decomp.scale[1])
+    offset_.set_y(offset_.y() * decomp.scale[1]);
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // TouchEvent
 
@@ -426,6 +456,7 @@ TouchEvent::TouchEvent(const base::NativeEvent& native_event)
       radius_y_(GetTouchRadiusY(native_event)),
       rotation_angle_(GetTouchAngle(native_event)),
       force_(GetTouchForce(native_event)) {
+  InitLatencyInfo();
 }
 
 TouchEvent::TouchEvent(EventType type,
@@ -438,6 +469,7 @@ TouchEvent::TouchEvent(EventType type,
       radius_y_(0.0f),
       rotation_angle_(0.0f),
       force_(0.0f) {
+  InitLatencyInfo();
 }
 
 TouchEvent::TouchEvent(EventType type,
@@ -455,9 +487,15 @@ TouchEvent::TouchEvent(EventType type,
       radius_y_(radius_y),
       rotation_angle_(angle),
       force_(force) {
+  InitLatencyInfo();
 }
 
 TouchEvent::~TouchEvent() {
+  // In ctor TouchEvent(native_event) we call GetTouchId() which in X11
+  // platform setups the tracking_id to slot mapping. So in dtor here,
+  // if this touch event is a release event, we clear the mapping accordingly.
+  if (HasNativeEvent())
+    ClearTouchIdIfReleased(native_event());
 }
 
 void TouchEvent::Relocate(const gfx::Point& origin) {
@@ -465,15 +503,16 @@ void TouchEvent::Relocate(const gfx::Point& origin) {
   root_location_ -= origin.OffsetFromOrigin();
 }
 
-void TouchEvent::UpdateForRootTransform(const gfx::Transform& root_transform) {
-  LocatedEvent::UpdateForRootTransform(root_transform);
+void TouchEvent::UpdateForRootTransform(
+    const gfx::Transform& inverted_root_transform) {
+  LocatedEvent::UpdateForRootTransform(inverted_root_transform);
   gfx::DecomposedTransform decomp;
-  bool success = gfx::DecomposeTransform(&decomp, root_transform);
+  bool success = gfx::DecomposeTransform(&decomp, inverted_root_transform);
   DCHECK(success);
   if (decomp.scale[0])
-    radius_x_ /= decomp.scale[0];
+    radius_x_ *= decomp.scale[0];
   if (decomp.scale[1])
-    radius_y_ /= decomp.scale[1];
+    radius_y_ *= decomp.scale[1];
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -551,6 +590,9 @@ uint16 KeyEvent::GetUnmodifiedCharacter() const {
   copy.state &= ~kIgnoredModifiers;
   uint16 ch = GetCharacterFromXEvent(reinterpret_cast<XEvent*>(&copy));
   return ch ? ch : GetCharacterFromKeyCode(key_code_, flags() & EF_SHIFT_DOWN);
+#elif defined(USE_OZONE)
+  return is_char() ? key_code_ : GetCharacterFromKeyCode(
+                                     key_code_, flags() & EF_SHIFT_DOWN);
 #else
   NOTIMPLEMENTED();
   return 0;
@@ -693,15 +735,16 @@ void ScrollEvent::Scale(const float factor) {
   y_offset_ordinal_ *= factor;
 }
 
-void ScrollEvent::UpdateForRootTransform(const gfx::Transform& root_transform) {
-  LocatedEvent::UpdateForRootTransform(root_transform);
+void ScrollEvent::UpdateForRootTransform(
+    const gfx::Transform& inverted_root_transform) {
+  LocatedEvent::UpdateForRootTransform(inverted_root_transform);
   gfx::DecomposedTransform decomp;
-  bool success = gfx::DecomposeTransform(&decomp, root_transform);
+  bool success = gfx::DecomposeTransform(&decomp, inverted_root_transform);
   DCHECK(success);
   if (decomp.scale[0])
-    x_offset_ordinal_ /= decomp.scale[0];
+    x_offset_ordinal_ *= decomp.scale[0];
   if (decomp.scale[1])
-    y_offset_ordinal_ /= decomp.scale[1];
+    y_offset_ordinal_ *= decomp.scale[1];
 }
 
 ////////////////////////////////////////////////////////////////////////////////

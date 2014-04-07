@@ -4,13 +4,11 @@
 
 #import "chrome/browser/ui/cocoa/hover_close_button.h"
 
-#include "base/memory/scoped_nsobject.h"
-#include "base/memory/scoped_ptr.h"
-#import "chrome/browser/ui/cocoa/animation_utils.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "grit/ui_resources.h"
 #import "third_party/GTM/AppKit/GTMKeyValueAnimation.h"
+#include "ui/base/cocoa/animation_utils.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 
@@ -80,22 +78,6 @@ NSString* const kFadeOutValueKeyPath = @"fadeOutValue";
   [self animationDidStop:animation];
 }
 
-// Override to only accept clicks within the bounds of the defined path, not
-// the entire bounding box. |aPoint| is in the superview's coordinate system.
-- (NSView*)hitTest:(NSPoint)point {
-  NSPoint localPoint = [self convertPoint:point fromView:[self superview]];
-  NSRect pointRect = NSMakeRect(localPoint.x, localPoint.y, 1, 1);
-
-  NSImage* hoverImage = [self imageForHoverState:kHoverStateMouseOver];
-  if ([hoverImage hitTestRect:pointRect
-      withImageDestinationRect:[self bounds]
-                       context:nil
-                         hints:nil
-                       flipped:YES])
-    return [super hitTest:point];
-  return nil;
-}
-
 - (void)drawRect:(NSRect)dirtyRect {
   NSImage* image = [self imageForHoverState:[self hoverState]];
 
@@ -160,16 +142,16 @@ NSString* const kFadeOutValueKeyPath = @"fadeOutValue";
 }
 
 - (NSImage*)imageForHoverState:(HoverState)hoverState {
-  int imageID = IDR_TAB_CLOSE;
+  int imageID = IDR_CLOSE_1;
   switch (hoverState) {
     case kHoverStateNone:
-      imageID = IDR_TAB_CLOSE;
+      imageID = IDR_CLOSE_1;
       break;
     case kHoverStateMouseOver:
-      imageID = IDR_TAB_CLOSE_H;
+      imageID = IDR_CLOSE_1_H;
       break;
     case kHoverStateMouseDown:
-      imageID = IDR_TAB_CLOSE_P;
+      imageID = IDR_CLOSE_1_P;
       break;
   }
   ui::ResourceBundle& bundle = ui::ResourceBundle::GetSharedInstance();

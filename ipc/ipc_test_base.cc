@@ -8,8 +8,9 @@
 
 #include "base/command_line.h"
 #include "base/debug/debug_on_start_win.h"
+#include "base/process/kill.h"
 #include "base/threading/thread.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "ipc/ipc_descriptors.h"
 #include "ipc/ipc_switches.h"
 
@@ -31,7 +32,7 @@ void IPCTestBase::SetUp() {
 
   // Construct a fresh IO Message loop for the duration of each test.
   DCHECK(!message_loop_.get());
-  message_loop_.reset(new MessageLoopForIO());
+  message_loop_.reset(new base::MessageLoopForIO());
 }
 
 void IPCTestBase::TearDown() {

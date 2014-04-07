@@ -6,8 +6,10 @@
 #define CHROME_BROWSER_EXTENSIONS_API_MEDIA_GALLERIES_PRIVATE_MEDIA_GALLERIES_PRIVATE_API_H_
 
 #include <string>
+#include <vector>
 
 #include "base/memory/scoped_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "chrome/browser/extensions/api/media_galleries_private/gallery_watch_state_tracker.h"
 #include "chrome/browser/extensions/api/profile_keyed_api_factory.h"
 #include "chrome/browser/extensions/event_router.h"
@@ -23,14 +25,14 @@ namespace extensions {
 class MediaGalleriesPrivateEventRouter;
 
 // The profile-keyed service that manages the media galleries private extension
-// API.
+// API. Created at the same time as the Profile.
 class MediaGalleriesPrivateAPI : public ProfileKeyedAPI,
                                  public EventRouter::Observer {
  public:
   explicit MediaGalleriesPrivateAPI(Profile* profile);
   virtual ~MediaGalleriesPrivateAPI();
 
-  // ProfileKeyedService implementation.
+  // BrowserContextKeyedService implementation.
   virtual void Shutdown() OVERRIDE;
 
   // ProfileKeyedAPI implementation.
@@ -48,7 +50,7 @@ class MediaGalleriesPrivateAPI : public ProfileKeyedAPI,
  private:
   friend class ProfileKeyedAPIFactory<MediaGalleriesPrivateAPI>;
 
-  void MaybeInitializeEventRouter();
+  void MaybeInitializeEventRouterAndTracker();
 
   // ProfileKeyedAPI implementation.
   static const char* service_name() {
@@ -59,11 +61,14 @@ class MediaGalleriesPrivateAPI : public ProfileKeyedAPI,
   // Current profile.
   Profile* profile_;
 
-  GalleryWatchStateTracker tracker_;
+  // Created lazily on first access.
+  scoped_ptr<GalleryWatchStateTracker> tracker_;
 
   // Created lazily on first access.
   scoped_ptr<MediaGalleriesPrivateEventRouter>
       media_galleries_private_event_router_;
+
+  base::WeakPtrFactory<MediaGalleriesPrivateAPI> weak_ptr_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(MediaGalleriesPrivateAPI);
 };
@@ -82,6 +87,8 @@ class MediaGalleriesPrivateAddGalleryWatchFunction
   virtual bool RunImpl() OVERRIDE;
 
  private:
+  void OnStorageMonitorInit(const std::string& pref_id);
+
   // Gallery watch request handler.
   void HandleResponse(chrome::MediaGalleryPrefId gallery_id,
                       bool success);
@@ -89,7 +96,7 @@ class MediaGalleriesPrivateAddGalleryWatchFunction
 
 // Implements the chrome.mediaGalleriesPrivate.removeGalleryWatch method.
 class MediaGalleriesPrivateRemoveGalleryWatchFunction
-    : public SyncExtensionFunction {
+    : public AsyncExtensionFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("mediaGalleriesPrivate.removeGalleryWatch",
                              MEDIAGALLERIESPRIVATE_REMOVEGALLERYWATCH);
@@ -99,11 +106,14 @@ class MediaGalleriesPrivateRemoveGalleryWatchFunction
 
   // SyncExtensionFunction overrides.
   virtual bool RunImpl() OVERRIDE;
+
+ private:
+  void OnStorageMonitorInit(const std::string& pref_id);
 };
 
 // Implements the chrome.mediaGalleriesPrivate.getAllGalleryWatch method.
 class MediaGalleriesPrivateGetAllGalleryWatchFunction
-    : public SyncExtensionFunction {
+    : public AsyncExtensionFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("mediaGalleriesPrivate.getAllGalleryWatch",
                              MEDIAGALLERIESPRIVATE_GETALLGALLERYWATCH);
@@ -112,11 +122,14 @@ class MediaGalleriesPrivateGetAllGalleryWatchFunction
 
   // SyncExtensionFunction overrides.
   virtual bool RunImpl() OVERRIDE;
+
+ private:
+  void OnStorageMonitorInit();
 };
 
 // Implements the chrome.mediaGalleriesPrivate.removeAllGalleryWatch method.
 class MediaGalleriesPrivateRemoveAllGalleryWatchFunction
-    : public SyncExtensionFunction {
+    : public AsyncExtensionFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("mediaGalleriesPrivate.removeAllGalleryWatch",
                              MEDIAGALLERIESPRIVATE_REMOVEALLGALLERYWATCH);
@@ -125,6 +138,9 @@ class MediaGalleriesPrivateRemoveAllGalleryWatchFunction
 
   // SyncExtensionFunction overrides.
   virtual bool RunImpl() OVERRIDE;
+
+ private:
+  void OnStorageMonitorInit();
 };
 
 // Implements the chrome.mediaGalleriesPrivate.ejectDevice method.
@@ -141,6 +157,8 @@ class MediaGalleriesPrivateEjectDeviceFunction
   virtual bool RunImpl() OVERRIDE;
 
  private:
+  void OnStorageMonitorInit(const std::string& transient_device_id);
+
   // Eject device request handler.
   void HandleResponse(chrome::StorageMonitor::EjectStatus status);
 };

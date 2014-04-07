@@ -14,13 +14,13 @@
 #include "ppapi/host/host_message_context.h"
 #include "ppapi/host/ppapi_host.h"
 #include "ppapi/proxy/ppapi_messages.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebString.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebURL.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebArrayBuffer.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebDocument.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebElement.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebPluginContainer.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebSocket.h"
+#include "third_party/WebKit/public/platform/WebArrayBuffer.h"
+#include "third_party/WebKit/public/platform/WebString.h"
+#include "third_party/WebKit/public/platform/WebURL.h"
+#include "third_party/WebKit/public/web/WebDocument.h"
+#include "third_party/WebKit/public/web/WebElement.h"
+#include "third_party/WebKit/public/web/WebPluginContainer.h"
+#include "third_party/WebKit/public/web/WebSocket.h"
 
 using WebKit::WebArrayBuffer;
 using WebKit::WebDocument;
@@ -43,7 +43,7 @@ PepperWebSocketHost::PepperWebSocketHost(
 }
 
 PepperWebSocketHost::~PepperWebSocketHost() {
-  if (websocket_.get())
+  if (websocket_)
     websocket_->disconnect();
 }
 
@@ -67,7 +67,7 @@ int32_t PepperWebSocketHost::OnResourceMessageReceived(
 
 void PepperWebSocketHost::didConnect() {
   std::string protocol;
-  if (websocket_.get())
+  if (websocket_)
     protocol = websocket_->subprotocol().utf8();
   connecting_ = false;
   connect_reply_.params.set_result(PP_OK);
@@ -169,7 +169,7 @@ void PepperWebSocketHost::didClose(unsigned long unhandled_buffered_amount,
   }
 
   // Disconnect.
-  if (websocket_.get())
+  if (websocket_)
     websocket_->disconnect();
 }
 
@@ -233,7 +233,7 @@ int32_t PepperWebSocketHost::OnHostMsgConnect(
   WebDocument document = container->element().document();
   websocket_.reset(WebSocket::create(document, this));
   DCHECK(websocket_.get());
-  if (!websocket_.get())
+  if (!websocket_)
     return PP_ERROR_NOTSUPPORTED;
 
   // Set receiving binary object type.
@@ -249,7 +249,7 @@ int32_t PepperWebSocketHost::OnHostMsgClose(
     ppapi::host::HostMessageContext* context,
     int32_t code,
     const std::string& reason) {
-  if (!websocket_.get())
+  if (!websocket_)
     return PP_ERROR_FAILED;
   close_reply_ = context->MakeReplyMessageContext();
   initiating_close_ = true;
@@ -261,7 +261,7 @@ int32_t PepperWebSocketHost::OnHostMsgClose(
 int32_t PepperWebSocketHost::OnHostMsgSendText(
     ppapi::host::HostMessageContext* context,
     const std::string& message) {
-  if (websocket_.get()) {
+  if (websocket_) {
     WebString web_message = WebString::fromUTF8(message);
     websocket_->sendText(web_message);
   }
@@ -282,7 +282,7 @@ int32_t PepperWebSocketHost::OnHostMsgSendBinary(
 int32_t PepperWebSocketHost::OnHostMsgFail(
     ppapi::host::HostMessageContext* context,
     const std::string& message) {
-  if (websocket_.get())
+  if (websocket_)
     websocket_->fail(WebString::fromUTF8(message));
   return PP_OK;
 }

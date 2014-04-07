@@ -5,7 +5,7 @@
 #include "chrome/browser/extensions/api/declarative/rules_registry_service.h"
 
 #include "base/bind.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "chrome/browser/extensions/api/declarative/test_rules_registry.h"
 #include "content/public/test/test_browser_thread.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -36,34 +36,34 @@ namespace extensions {
 class RulesRegistryServiceTest : public testing::Test {
  public:
   RulesRegistryServiceTest()
-      : ui(content::BrowserThread::UI, &message_loop),
-        io(content::BrowserThread::IO, &message_loop) {}
+      : ui_(content::BrowserThread::UI, &message_loop_),
+        io_(content::BrowserThread::IO, &message_loop_) {}
 
   virtual ~RulesRegistryServiceTest() {}
 
   virtual void TearDown() OVERRIDE {
     // Make sure that deletion traits of all registries are executed.
-    message_loop.RunUntilIdle();
+    message_loop_.RunUntilIdle();
   }
 
  protected:
-  MessageLoop message_loop;
-  content::TestBrowserThread ui;
-  content::TestBrowserThread io;
+  base::MessageLoop message_loop_;
+  content::TestBrowserThread ui_;
+  content::TestBrowserThread io_;
 };
 
 TEST_F(RulesRegistryServiceTest, TestConstructionAndMultiThreading) {
-  TestRulesRegistry* ui_registry = new TestRulesRegistry;
-  ui_registry->SetOwnerThread(content::BrowserThread::UI);
+  TestRulesRegistry* ui_registry =
+      new TestRulesRegistry(content::BrowserThread::UI, "ui");
 
-  TestRulesRegistry* io_registry = new TestRulesRegistry;
-  io_registry->SetOwnerThread(content::BrowserThread::IO);
+  TestRulesRegistry* io_registry =
+      new TestRulesRegistry(content::BrowserThread::IO, "io");
 
   // Test registration.
 
   RulesRegistryService registry_service(NULL);
-  registry_service.RegisterRulesRegistry("ui", make_scoped_refptr(ui_registry));
-  registry_service.RegisterRulesRegistry("io", make_scoped_refptr(io_registry));
+  registry_service.RegisterRulesRegistry(make_scoped_refptr(ui_registry));
+  registry_service.RegisterRulesRegistry(make_scoped_refptr(io_registry));
 
   EXPECT_TRUE(registry_service.GetRulesRegistry("ui").get());
   EXPECT_TRUE(registry_service.GetRulesRegistry("io").get());
@@ -89,7 +89,7 @@ TEST_F(RulesRegistryServiceTest, TestConstructionAndMultiThreading) {
         base::Bind(&VerifyNumberOfRules,
                    registry_service.GetRulesRegistry("io"), 1));
 
-  message_loop.RunUntilIdle();
+  message_loop_.RunUntilIdle();
 
   // Test extension unloading.
 
@@ -105,7 +105,7 @@ TEST_F(RulesRegistryServiceTest, TestConstructionAndMultiThreading) {
         base::Bind(&VerifyNumberOfRules,
                    registry_service.GetRulesRegistry("io"), 0));
 
-  message_loop.RunUntilIdle();
+  message_loop_.RunUntilIdle();
 }
 
 }  // namespace extensions

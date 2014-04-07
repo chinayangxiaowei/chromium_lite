@@ -9,11 +9,11 @@
 #include <string>
 
 #include "base/basictypes.h"
-#include "base/memory/ref_counted.h"
+#include "base/files/scoped_temp_dir.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/synchronization/lock.h"
-#include "base/threading/thread.h"
+#include "base/memory/scoped_vector.h"
 #include "chrome/test/chromedriver/basic_types.h"
+#include "chrome/test/chromedriver/chrome/geoposition.h"
 
 namespace base {
 class DictionaryValue;
@@ -21,6 +21,7 @@ class DictionaryValue;
 
 class Chrome;
 class Status;
+class WebDriverLog;
 class WebView;
 
 struct FrameInfo {
@@ -34,6 +35,8 @@ struct FrameInfo {
 };
 
 struct Session {
+  static const int kDefaultPageLoadTimeoutMs;
+
   explicit Session(const std::string& id);
   Session(const std::string& id, scoped_ptr<Chrome> chrome);
   ~Session();
@@ -46,9 +49,11 @@ struct Session {
   std::string GetCurrentFrameId() const;
 
   const std::string id;
-  base::Thread thread;
+  bool quit;
+  bool detach;
   scoped_ptr<Chrome> chrome;
   std::string window;
+  int sticky_modifiers;
   // List of |FrameInfo|s for each frame to the current target frame from the
   // first frame element in the root document. If target frame is window.top,
   // this list will be empty.
@@ -57,39 +62,15 @@ struct Session {
   int implicit_wait;
   int page_load_timeout;
   int script_timeout;
-  std::string prompt_text;
+  scoped_ptr<std::string> prompt_text;
+  scoped_ptr<Geoposition> overridden_geoposition;
+  // Logs that populate from DevTools events.
+  ScopedVector<WebDriverLog> devtools_logs;
+  base::ScopedTempDir temp_dir;
   const scoped_ptr<base::DictionaryValue> capabilities;
 
  private:
   scoped_ptr<base::DictionaryValue> CreateCapabilities();
-};
-
-class SessionAccessor : public base::RefCountedThreadSafe<SessionAccessor> {
- public:
-  virtual Session* Access(scoped_ptr<base::AutoLock>* lock) = 0;
-
-  // The session should be accessed before its deletion.
-  virtual void DeleteSession() = 0;
-
- protected:
-  friend class base::RefCountedThreadSafe<SessionAccessor>;
-  virtual ~SessionAccessor() {}
-};
-
-class SessionAccessorImpl : public SessionAccessor {
- public:
-  explicit SessionAccessorImpl(scoped_ptr<Session> session);
-
-  virtual Session* Access(scoped_ptr<base::AutoLock>* lock) OVERRIDE;
-  virtual void DeleteSession() OVERRIDE;
-
- private:
-  virtual ~SessionAccessorImpl();
-
-  base::Lock session_lock_;
-  scoped_ptr<Session> session_;
-
-  DISALLOW_COPY_AND_ASSIGN(SessionAccessorImpl);
 };
 
 #endif  // CHROME_TEST_CHROMEDRIVER_SESSION_H_

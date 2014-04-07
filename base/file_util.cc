@@ -11,14 +11,15 @@
 
 #include <fstream>
 
+#include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
-#include "base/string_piece.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_piece.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 
-using base::FilePath;
+namespace base {
 
 namespace {
 
@@ -33,62 +34,26 @@ static const int kMaxUniqueFiles = 100;
 
 }  // namespace
 
-namespace file_util {
-
 bool g_bug108724_debug = false;
 
-bool EndsWithSeparator(const FilePath& path) {
-  FilePath::StringType value = path.value();
-  if (value.empty())
-    return false;
-
-  return FilePath::IsSeparator(value[value.size() - 1]);
-}
-
-bool EnsureEndsWithSeparator(FilePath* path) {
-  if (!DirectoryExists(*path))
-    return false;
-
-  if (EndsWithSeparator(*path))
-    return true;
-
-  FilePath::StringType& path_str =
-      const_cast<FilePath::StringType&>(path->value());
-  path_str.append(&FilePath::kSeparators[0], 1);
-
-  return true;
-}
-
-void InsertBeforeExtension(FilePath* path, const FilePath::StringType& suffix) {
-  FilePath::StringType& value =
-      const_cast<FilePath::StringType&>(path->value());
-
-  const FilePath::StringType::size_type last_dot =
-      value.rfind(kExtensionSeparator);
-  const FilePath::StringType::size_type last_separator =
-      value.find_last_of(FilePath::StringType(FilePath::kSeparators));
-
-  if (last_dot == FilePath::StringType::npos ||
-      (last_separator != std::wstring::npos && last_dot < last_separator)) {
-    // The path looks something like "C:\pics.old\jojo" or "C:\pics\jojo".
-    // We should just append the suffix to the entire path.
-    value.append(suffix);
-    return;
-  }
-
-  value.insert(last_dot, suffix);
+int64 ComputeDirectorySize(const FilePath& root_path) {
+  int64 running_size = 0;
+  FileEnumerator file_iter(root_path, true, FileEnumerator::FILES);
+  while (!file_iter.Next().empty())
+    running_size += file_iter.GetInfo().GetSize();
+  return running_size;
 }
 
 bool Move(const FilePath& from_path, const FilePath& to_path) {
   if (from_path.ReferencesParent() || to_path.ReferencesParent())
     return false;
-  return MoveUnsafe(from_path, to_path);
+  return internal::MoveUnsafe(from_path, to_path);
 }
 
 bool CopyFile(const FilePath& from_path, const FilePath& to_path) {
   if (from_path.ReferencesParent() || to_path.ReferencesParent())
     return false;
-  return CopyFileUnsafe(from_path, to_path);
+  return internal::CopyFileUnsafe(from_path, to_path);
 }
 
 bool ContentsEqual(const FilePath& filename1, const FilePath& filename2) {
@@ -165,6 +130,17 @@ bool TextContentsEqual(const FilePath& filename1, const FilePath& filename2) {
   return true;
 }
 
+}  // namespace base
+
+// -----------------------------------------------------------------------------
+
+namespace file_util {
+
+using base::FileEnumerator;
+using base::FilePath;
+using base::kExtensionSeparator;
+using base::kMaxUniqueFiles;
+
 bool ReadFileToString(const FilePath& path, std::string* contents) {
   if (path.ReferencesParent())
     return false;
@@ -187,7 +163,7 @@ bool ReadFileToString(const FilePath& path, std::string* contents) {
 bool IsDirectoryEmpty(const FilePath& dir_path) {
   FileEnumerator files(dir_path, false,
       FileEnumerator::FILES | FileEnumerator::DIRECTORIES);
-  if (files.Next().value().empty())
+  if (files.Next().empty())
     return true;
   return false;
 }
@@ -200,20 +176,16 @@ FILE* CreateAndOpenTemporaryFile(FilePath* path) {
   return CreateAndOpenTemporaryFileInDir(directory, path);
 }
 
+bool CreateDirectory(const base::FilePath& full_path) {
+  return CreateDirectoryAndGetError(full_path, NULL);
+}
+
 bool GetFileSize(const FilePath& file_path, int64* file_size) {
   base::PlatformFileInfo info;
   if (!GetFileInfo(file_path, &info))
     return false;
   *file_size = info.size;
   return true;
-}
-
-bool IsDot(const FilePath& path) {
-  return FILE_PATH_LITERAL(".") == path.BaseName().value();
-}
-
-bool IsDotDot(const FilePath& path) {
-  return FILE_PATH_LITERAL("..") == path.BaseName().value();
 }
 
 bool TouchFile(const FilePath& path,
@@ -289,76 +261,4 @@ int GetUniquePathNumber(
   return -1;
 }
 
-bool ContainsPath(const FilePath &parent, const FilePath& child) {
-  FilePath abs_parent = FilePath(parent);
-  FilePath abs_child = FilePath(child);
-
-  if (!file_util::AbsolutePath(&abs_parent) ||
-      !file_util::AbsolutePath(&abs_child))
-    return false;
-
-#if defined(OS_WIN)
-  // file_util::AbsolutePath() does not flatten case on Windows, so we must do
-  // a case-insensitive compare.
-  if (!StartsWith(abs_child.value(), abs_parent.value(), false))
-#else
-  if (!StartsWithASCII(abs_child.value(), abs_parent.value(), true))
-#endif
-    return false;
-
-  // file_util::AbsolutePath() normalizes '/' to '\' on Windows, so we only need
-  // to check kSeparators[0].
-  if (abs_child.value().length() <= abs_parent.value().length() ||
-      abs_child.value()[abs_parent.value().length()] !=
-          FilePath::kSeparators[0])
-    return false;
-
-  return true;
-}
-
-int64 ComputeDirectorySize(const FilePath& root_path) {
-  int64 running_size = 0;
-  FileEnumerator file_iter(root_path, true, FileEnumerator::FILES);
-  for (FilePath current = file_iter.Next(); !current.empty();
-       current = file_iter.Next()) {
-    FileEnumerator::FindInfo info;
-    file_iter.GetFindInfo(&info);
-#if defined(OS_WIN)
-    LARGE_INTEGER li = { info.nFileSizeLow, info.nFileSizeHigh };
-    running_size += li.QuadPart;
-#else
-    running_size += info.stat.st_size;
-#endif
-  }
-  return running_size;
-}
-
-int64 ComputeFilesSize(const FilePath& directory,
-                       const FilePath::StringType& pattern) {
-  int64 running_size = 0;
-  FileEnumerator file_iter(directory, false, FileEnumerator::FILES, pattern);
-  for (FilePath current = file_iter.Next(); !current.empty();
-       current = file_iter.Next()) {
-    FileEnumerator::FindInfo info;
-    file_iter.GetFindInfo(&info);
-#if defined(OS_WIN)
-    LARGE_INTEGER li = { info.nFileSizeLow, info.nFileSizeHigh };
-    running_size += li.QuadPart;
-#else
-    running_size += info.stat.st_size;
-#endif
-  }
-  return running_size;
-}
-
-///////////////////////////////////////////////
-// FileEnumerator
-//
-// Note: the main logic is in file_util_<platform>.cc
-
-bool FileEnumerator::ShouldSkip(const FilePath& path) {
-  FilePath::StringType basename = path.BaseName().value();
-  return IsDot(path) || (IsDotDot(path) && !(INCLUDE_DOT_DOT & file_type_));
-}
-
-}  // namespace
+}  // namespace file_util

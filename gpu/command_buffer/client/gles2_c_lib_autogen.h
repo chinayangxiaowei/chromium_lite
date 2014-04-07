@@ -167,9 +167,6 @@ void GLES2Finish() {
 void GLES2Flush() {
   gles2::GetGLContext()->Flush();
 }
-void GLES2ShallowFlushCHROMIUM() {
-  gles2::GetGLContext()->ShallowFlushCHROMIUM();
-}
 void GLES2FramebufferRenderbuffer(
     GLenum target, GLenum attachment, GLenum renderbuffertarget,
     GLuint renderbuffer) {
@@ -359,6 +356,12 @@ void GLES2ShaderSource(
     const GLint* length) {
   gles2::GetGLContext()->ShaderSource(shader, count, str, length);
 }
+void GLES2ShallowFinishCHROMIUM() {
+  gles2::GetGLContext()->ShallowFinishCHROMIUM();
+}
+void GLES2ShallowFlushCHROMIUM() {
+  gles2::GetGLContext()->ShallowFlushCHROMIUM();
+}
 void GLES2StencilFunc(GLenum func, GLint ref, GLuint mask) {
   gles2::GetGLContext()->StencilFunc(func, ref, mask);
 }
@@ -518,6 +521,12 @@ void GLES2RenderbufferStorageMultisampleEXT(
   gles2::GetGLContext()->RenderbufferStorageMultisampleEXT(
       target, samples, internalformat, width, height);
 }
+void GLES2FramebufferTexture2DMultisampleEXT(
+    GLenum target, GLenum attachment, GLenum textarget, GLuint texture,
+    GLint level, GLsizei samples) {
+  gles2::GetGLContext()->FramebufferTexture2DMultisampleEXT(
+      target, attachment, textarget, texture, level, samples);
+}
 void GLES2TexStorage2DEXT(
     GLenum target, GLsizei levels, GLenum internalFormat, GLsizei width,
     GLsizei height) {
@@ -595,6 +604,12 @@ void* GLES2MapBufferCHROMIUM(GLuint target, GLenum access) {
 GLboolean GLES2UnmapBufferCHROMIUM(GLuint target) {
   return gles2::GetGLContext()->UnmapBufferCHROMIUM(target);
 }
+void* GLES2MapImageCHROMIUM(GLuint image_id, GLenum access) {
+  return gles2::GetGLContext()->MapImageCHROMIUM(image_id, access);
+}
+void GLES2UnmapImageCHROMIUM(GLuint image_id) {
+  gles2::GetGLContext()->UnmapImageCHROMIUM(image_id);
+}
 void* GLES2MapBufferSubDataCHROMIUM(
     GLuint target, GLintptr offset, GLsizeiptr size, GLenum access) {
   return gles2::GetGLContext()->MapBufferSubDataCHROMIUM(
@@ -612,8 +627,8 @@ void* GLES2MapTexSubImage2DCHROMIUM(
 void GLES2UnmapTexSubImage2DCHROMIUM(const void* mem) {
   gles2::GetGLContext()->UnmapTexSubImage2DCHROMIUM(mem);
 }
-void GLES2ResizeCHROMIUM(GLuint width, GLuint height) {
-  gles2::GetGLContext()->ResizeCHROMIUM(width, height);
+void GLES2ResizeCHROMIUM(GLuint width, GLuint height, GLfloat scale_factor) {
+  gles2::GetGLContext()->ResizeCHROMIUM(width, height, scale_factor);
 }
 const GLchar* GLES2GetRequestableExtensionsCHROMIUM() {
   return gles2::GetGLContext()->GetRequestableExtensionsCHROMIUM();
@@ -639,6 +654,18 @@ GLuint GLES2CreateStreamTextureCHROMIUM(GLuint texture) {
 void GLES2DestroyStreamTextureCHROMIUM(GLuint texture) {
   gles2::GetGLContext()->DestroyStreamTextureCHROMIUM(texture);
 }
+GLuint GLES2CreateImageCHROMIUM(
+    GLsizei width, GLsizei height, GLenum internalformat) {
+  return gles2::GetGLContext()->CreateImageCHROMIUM(
+      width, height, internalformat);
+}
+void GLES2DestroyImageCHROMIUM(GLuint image_id) {
+  gles2::GetGLContext()->DestroyImageCHROMIUM(image_id);
+}
+void GLES2GetImageParameterivCHROMIUM(
+    GLuint image_id, GLenum pname, GLint* params) {
+  gles2::GetGLContext()->GetImageParameterivCHROMIUM(image_id, pname, params);
+}
 void GLES2GetTranslatedShaderSourceANGLE(
     GLuint shader, GLsizei bufsize, GLsizei* length, char* source) {
   gles2::GetGLContext()->GetTranslatedShaderSourceANGLE(
@@ -655,9 +682,9 @@ void GLES2TexImageIOSurface2DCHROMIUM(
 }
 void GLES2CopyTextureCHROMIUM(
     GLenum target, GLenum source_id, GLenum dest_id, GLint level,
-    GLint internalformat) {
+    GLint internalformat, GLenum dest_type) {
   gles2::GetGLContext()->CopyTextureCHROMIUM(
-      target, source_id, dest_id, level, internalformat);
+      target, source_id, dest_id, level, internalformat, dest_type);
 }
 void GLES2DrawArraysInstancedANGLE(
     GLenum mode, GLint first, GLsizei count, GLsizei primcount) {
@@ -734,7 +761,7 @@ void GLES2DrawBuffersEXT(GLsizei count, const GLenum* bufs) {
 
 namespace gles2 {
 
-NameToFunc g_gles2_function_table[] = {
+extern const NameToFunc g_gles2_function_table[] = {
   { "glActiveTexture", reinterpret_cast<GLES2FunctionPointer>(
       glActiveTexture), },
   { "glAttachShader", reinterpret_cast<GLES2FunctionPointer>(
@@ -809,8 +836,6 @@ NameToFunc g_gles2_function_table[] = {
       glEnableVertexAttribArray), },
   { "glFinish", reinterpret_cast<GLES2FunctionPointer>(glFinish), },
   { "glFlush", reinterpret_cast<GLES2FunctionPointer>(glFlush), },
-  { "glShallowFlushCHROMIUM", reinterpret_cast<GLES2FunctionPointer>(
-      glShallowFlushCHROMIUM), },
   { "glFramebufferRenderbuffer", reinterpret_cast<GLES2FunctionPointer>(
       glFramebufferRenderbuffer), },
   { "glFramebufferTexture2D", reinterpret_cast<GLES2FunctionPointer>(
@@ -896,6 +921,10 @@ NameToFunc g_gles2_function_table[] = {
       glShaderBinary), },
   { "glShaderSource", reinterpret_cast<GLES2FunctionPointer>(
       glShaderSource), },
+  { "glShallowFinishCHROMIUM", reinterpret_cast<GLES2FunctionPointer>(
+      glShallowFinishCHROMIUM), },
+  { "glShallowFlushCHROMIUM", reinterpret_cast<GLES2FunctionPointer>(
+      glShallowFlushCHROMIUM), },
   { "glStencilFunc", reinterpret_cast<GLES2FunctionPointer>(glStencilFunc), },
   { "glStencilFuncSeparate", reinterpret_cast<GLES2FunctionPointer>(
       glStencilFuncSeparate), },
@@ -963,6 +992,7 @@ NameToFunc g_gles2_function_table[] = {
   { "glBlitFramebufferEXT", reinterpret_cast<GLES2FunctionPointer>(
       glBlitFramebufferEXT), },
   { "glRenderbufferStorageMultisampleEXT", reinterpret_cast<GLES2FunctionPointer>(glRenderbufferStorageMultisampleEXT), },  // NOLINT
+  { "glFramebufferTexture2DMultisampleEXT", reinterpret_cast<GLES2FunctionPointer>(glFramebufferTexture2DMultisampleEXT), },  // NOLINT
   { "glTexStorage2DEXT", reinterpret_cast<GLES2FunctionPointer>(
       glTexStorage2DEXT), },
   { "glGenQueriesEXT", reinterpret_cast<GLES2FunctionPointer>(
@@ -1006,6 +1036,10 @@ NameToFunc g_gles2_function_table[] = {
       glMapBufferCHROMIUM), },
   { "glUnmapBufferCHROMIUM", reinterpret_cast<GLES2FunctionPointer>(
       glUnmapBufferCHROMIUM), },
+  { "glMapImageCHROMIUM", reinterpret_cast<GLES2FunctionPointer>(
+      glMapImageCHROMIUM), },
+  { "glUnmapImageCHROMIUM", reinterpret_cast<GLES2FunctionPointer>(
+      glUnmapImageCHROMIUM), },
   { "glMapBufferSubDataCHROMIUM", reinterpret_cast<GLES2FunctionPointer>(
       glMapBufferSubDataCHROMIUM), },
   { "glUnmapBufferSubDataCHROMIUM", reinterpret_cast<GLES2FunctionPointer>(
@@ -1028,6 +1062,12 @@ NameToFunc g_gles2_function_table[] = {
       glCreateStreamTextureCHROMIUM), },
   { "glDestroyStreamTextureCHROMIUM", reinterpret_cast<GLES2FunctionPointer>(
       glDestroyStreamTextureCHROMIUM), },
+  { "glCreateImageCHROMIUM", reinterpret_cast<GLES2FunctionPointer>(
+      glCreateImageCHROMIUM), },
+  { "glDestroyImageCHROMIUM", reinterpret_cast<GLES2FunctionPointer>(
+      glDestroyImageCHROMIUM), },
+  { "glGetImageParameterivCHROMIUM", reinterpret_cast<GLES2FunctionPointer>(
+      glGetImageParameterivCHROMIUM), },
   { "glGetTranslatedShaderSourceANGLE", reinterpret_cast<GLES2FunctionPointer>(
       glGetTranslatedShaderSourceANGLE), },
   { "glPostSubBufferCHROMIUM", reinterpret_cast<GLES2FunctionPointer>(

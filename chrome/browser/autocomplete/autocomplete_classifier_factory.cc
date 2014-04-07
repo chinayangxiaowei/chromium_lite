@@ -7,15 +7,17 @@
 #include "chrome/browser/autocomplete/autocomplete_classifier.h"
 #include "chrome/browser/extensions/extension_system_factory.h"
 #include "chrome/browser/history/shortcuts_backend_factory.h"
-#include "chrome/browser/profiles/profile_dependency_manager.h"
+#include "chrome/browser/profiles/incognito_helpers.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
+#include "components/browser_context_keyed_service/browser_context_dependency_manager.h"
 
 
 // static
 AutocompleteClassifier* AutocompleteClassifierFactory::GetForProfile(
     Profile* profile) {
   return static_cast<AutocompleteClassifier*>(
-      GetInstance()->GetServiceForProfile(profile, true));
+      GetInstance()->GetServiceForBrowserContext(profile, true));
 }
 
 // static
@@ -24,14 +26,15 @@ AutocompleteClassifierFactory* AutocompleteClassifierFactory::GetInstance() {
 }
 
 // static
-ProfileKeyedService* AutocompleteClassifierFactory::BuildInstanceFor(
-    Profile* profile) {
-  return new AutocompleteClassifier(profile);
+BrowserContextKeyedService* AutocompleteClassifierFactory::BuildInstanceFor(
+    content::BrowserContext* profile) {
+  return new AutocompleteClassifier(static_cast<Profile*>(profile));
 }
 
 AutocompleteClassifierFactory::AutocompleteClassifierFactory()
-    : ProfileKeyedServiceFactory("AutocompleteClassifier",
-                                 ProfileDependencyManager::GetInstance()) {
+    : BrowserContextKeyedServiceFactory(
+        "AutocompleteClassifier",
+        BrowserContextDependencyManager::GetInstance()) {
   DependsOn(extensions::ExtensionSystemFactory::GetInstance());
   DependsOn(TemplateURLServiceFactory::GetInstance());
   // TODO(pkasting): Uncomment these once they exist.
@@ -42,15 +45,17 @@ AutocompleteClassifierFactory::AutocompleteClassifierFactory()
 AutocompleteClassifierFactory::~AutocompleteClassifierFactory() {
 }
 
-bool AutocompleteClassifierFactory::ServiceRedirectedInIncognito() const {
-  return true;
+content::BrowserContext* AutocompleteClassifierFactory::GetBrowserContextToUse(
+    content::BrowserContext* context) const {
+  return chrome::GetBrowserContextRedirectedInIncognito(context);
 }
 
 bool AutocompleteClassifierFactory::ServiceIsNULLWhileTesting() const {
   return true;
 }
 
-ProfileKeyedService* AutocompleteClassifierFactory::BuildServiceInstanceFor(
-    Profile* profile) const {
-  return BuildInstanceFor(profile);
+BrowserContextKeyedService*
+AutocompleteClassifierFactory::BuildServiceInstanceFor(
+    content::BrowserContext* profile) const {
+  return BuildInstanceFor(static_cast<Profile*>(profile));
 }

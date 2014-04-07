@@ -10,7 +10,7 @@
 #include "base/callback.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "base/thread_task_runner_handle.h"
 #include "base/threading/thread_checker.h"
@@ -99,7 +99,7 @@ OpenWithDialogController::Context::Context()
       open_as_info_flags_(),
       open_with_result_(E_FAIL),
       automation_result_(E_FAIL),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_ptr_factory_(this)) {}
+      weak_ptr_factory_(this) {}
 
 OpenWithDialogController::Context::~Context() {
   DCHECK(thread_checker_.CalledOnValidThread());
@@ -247,7 +247,7 @@ void OpenWithDialogController::Begin(
     const string16& url_protocol,
     const string16& program,
     const SetDefaultCallback& callback) {
-  DCHECK_EQ(context_, static_cast<Context*>(NULL));
+  DCHECK_EQ(context_.get(), static_cast<Context*>(NULL));
   if (base::win::GetVersion() < base::win::VERSION_WIN8) {
     NOTREACHED() << "Windows 8 is required.";
     // The callback may not properly handle being run from Begin, so post a task
@@ -267,14 +267,15 @@ HRESULT OpenWithDialogController::RunSynchronously(
     const string16& protocol,
     const string16& program,
     std::vector<string16>* choices) {
-  DCHECK_EQ(MessageLoop::current(), static_cast<MessageLoop*>(NULL));
+  DCHECK_EQ(base::MessageLoop::current(),
+            static_cast<base::MessageLoop*>(NULL));
   if (base::win::GetVersion() < base::win::VERSION_WIN8) {
     NOTREACHED() << "Windows 8 is required.";
     return E_FAIL;
   }
 
   HRESULT result = S_OK;
-  MessageLoop message_loop;
+  base::MessageLoop message_loop;
   base::RunLoop run_loop;
 
   message_loop.PostTask(

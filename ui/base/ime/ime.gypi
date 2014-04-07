@@ -18,6 +18,12 @@
       'input_method_factory.h',
       'input_method_ibus.cc',
       'input_method_ibus.h',
+      'input_method_imm32.cc',
+      'input_method_imm32.h',
+      'input_method_initializer.h',
+      'input_method_initializer.cc',
+      'input_method_tsf.cc',
+      'input_method_tsf.h',
       'input_method_win.cc',
       'input_method_win.h',
       'mock_input_method.cc',
@@ -28,7 +34,9 @@
       'text_input_client.h',
       'text_input_type.h',
     ],
-    'tsf_files': [
+    'win_ime_files': [
+      'win/imm32_manager.cc',
+      'win/imm32_manager.h',
       'win/tsf_bridge.cc',
       'win/tsf_bridge.h',
       'win/tsf_event_router.cc',
@@ -41,35 +49,42 @@
   },
   'sources': [
     '<@(ime_files)',
-    '<@(tsf_files)',
+    '<@(win_ime_files)',
   ],
   'conditions': [
-    ['use_aura==0', {
+    ['use_aura==0 and OS!="win"', {
       'sources!': [
         '<@(ime_files)',
       ],
       'sources/': [
         # gtk_im_context_util* use ui::CompositionText.
         ['include', 'composition_text\\.(cc|h)$'],
+        # Initializer code is platform neutral.
+        ['include', 'input_method_initializer\\.(cc|h)$'],
         # native_textfield_views* use ui::TextInputClient.
         ['include', 'text_input_client\\.(cc|h)$'],
       ],
     }],
-    ['chromeos==0', {
+    ['chromeos==0 or use_x11==0', {
       'sources!': [
         'character_composer.cc',
         'character_composer.h',
         'input_method_ibus.cc',
         'input_method_ibus.h',
       ],
-    }, {
+    }],
+    ['chromeos==1', {
       'dependencies': [
         '<(DEPTH)/chromeos/chromeos.gyp:chromeos',
       ],
     }],
     ['OS!="win"', {
       'sources!': [
-        '<@(tsf_files)',
+        '<@(win_ime_files)',
+        'input_method_imm32.cc',
+        'input_method_imm32.h',
+        'input_method_tsf.cc',
+        'input_method_tsf.h',
       ],
     }],
   ],

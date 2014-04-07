@@ -4,7 +4,12 @@
 
 #include "cc/test/cc_test_suite.h"
 
-#include "base/message_loop.h"
+#include <string>
+
+#include "base/command_line.h"
+#include "base/message_loop/message_loop.h"
+#include "base/threading/thread_id_name_manager.h"
+#include "cc/base/switches.h"
 #include "cc/test/paths.h"
 
 namespace cc {
@@ -17,7 +22,12 @@ CCTestSuite::~CCTestSuite() {}
 void CCTestSuite::Initialize() {
   base::TestSuite::Initialize();
   RegisterPathProvider();
-  message_loop_.reset(new MessageLoop);
+
+  message_loop_.reset(new base::MessageLoop);
+
+  base::ThreadIdNameManager::GetInstance()->SetName(
+      base::PlatformThread::CurrentId(),
+      "Main");
 }
 
 void CCTestSuite::Shutdown() {

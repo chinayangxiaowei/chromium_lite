@@ -15,6 +15,10 @@ namespace media {
 
 class MEDIA_EXPORT AudioManagerCras : public AudioManagerBase {
  public:
+  // Unique ID of the "loopback" input device. This device captures post-mix,
+  // pre-DSP system audio.
+  static const char kLoopbackDeviceId[];
+
   AudioManagerCras();
 
   // AudioManager implementation.
@@ -30,7 +34,8 @@ class MEDIA_EXPORT AudioManagerCras : public AudioManagerBase {
   virtual AudioOutputStream* MakeLinearOutputStream(
       const AudioParameters& params) OVERRIDE;
   virtual AudioOutputStream* MakeLowLatencyOutputStream(
-      const AudioParameters& params) OVERRIDE;
+      const AudioParameters& params,
+      const std::string& input_device_id) OVERRIDE;
   virtual AudioInputStream* MakeLinearInputStream(
       const AudioParameters& params, const std::string& device_id) OVERRIDE;
   virtual AudioInputStream* MakeLowLatencyInputStream(

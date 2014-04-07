@@ -151,6 +151,10 @@ bool BrowserDesktopRootWindowHostWin::GetClientAreaInsets(
 }
 
 void BrowserDesktopRootWindowHostWin::HandleFrameChanged() {
+  // Reinitialize the status bubble, since it needs to be initialized
+  // differently depending on whether or not DWM composition is enabled
+  browser_view_->InitStatusBubble();
+
   // We need to update the glass region on or off before the base class adjusts
   // the window region.
   UpdateDWMFrame();
@@ -208,10 +212,6 @@ void BrowserDesktopRootWindowHostWin::PostHandleMSG(UINT message,
 }
 
 bool BrowserDesktopRootWindowHostWin::IsUsingCustomFrame() const {
-  // App panel windows draw their own frame.
-  if (browser_view_->IsPanel())
-    return true;
-
   // We don't theme popup or app windows, so regardless of whether or not a
   // theme is active for normal browser windows, we don't want to use the custom
   // frame for popups/apps.

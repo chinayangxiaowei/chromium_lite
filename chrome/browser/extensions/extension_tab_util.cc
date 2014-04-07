@@ -4,33 +4,36 @@
 
 #include "chrome/browser/extensions/extension_tab_util.h"
 
+#include "apps/shell_window.h"
+#include "apps/shell_window_registry.h"
 #include "chrome/browser/extensions/api/tabs/tabs_constants.h"
-#include "chrome/browser/extensions/shell_window_registry.h"
 #include "chrome/browser/extensions/tab_helper.h"
 #include "chrome/browser/extensions/window_controller.h"
 #include "chrome/browser/extensions/window_controller_list.h"
-#include "chrome/browser/net/url_fixer_upper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sessions/session_id.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_iterator.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/browser/ui/extensions/shell_window.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_iterator.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_manifest_constants.h"
+#include "chrome/common/extensions/manifest_url_handler.h"
 #include "chrome/common/extensions/permissions/api_permission.h"
+#include "chrome/common/extensions/permissions/permissions_data.h"
+#include "chrome/common/net/url_fixer_upper.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/browser/favicon_status.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
-#include "googleurl/src/gurl.h"
+#include "url/gurl.h"
 
 namespace keys = extensions::tabs_constants;
 namespace tabs = extensions::api::tabs;
 
+using apps::ShellWindow;
 using content::NavigationEntry;
 using content::WebContents;
 using extensions::APIPermission;
@@ -41,8 +44,8 @@ namespace {
 extensions::WindowController* GetShellWindowController(
     const WebContents* contents) {
   Profile* profile = Profile::FromBrowserContext(contents->GetBrowserContext());
-  extensions::ShellWindowRegistry* registry =
-      extensions::ShellWindowRegistry::Get(profile);
+  apps::ShellWindowRegistry* registry =
+      apps::ShellWindowRegistry::Get(profile);
   if (!registry)
     return NULL;
   ShellWindow* shell_window =
@@ -97,10 +100,10 @@ DictionaryValue* ExtensionTabUtil::CreateTabValue(
   return result;
 }
 
-ListValue* ExtensionTabUtil::CreateTabList(
+base::ListValue* ExtensionTabUtil::CreateTabList(
     const Browser* browser,
     const Extension* extension) {
-  ListValue* tab_list = new ListValue();
+  base::ListValue* tab_list = new base::ListValue();
   TabStripModel* tab_strip = browser->tab_strip_model();
   for (int i = 0; i < tab_strip->count(); ++i) {
     tab_list->Append(CreateTabValue(tab_strip->GetWebContentsAt(i),
@@ -164,8 +167,10 @@ DictionaryValue* ExtensionTabUtil::CreateTabValue(
 void ExtensionTabUtil::ScrubTabValueForExtension(const WebContents* contents,
                                                  const Extension* extension,
                                                  DictionaryValue* tab_info) {
-  bool has_permission = extension && extension->HasAPIPermissionForTab(
-      GetTabId(contents), APIPermission::kTab);
+  bool has_permission =
+      extension &&
+      extensions::PermissionsData::HasAPIPermissionForTab(
+          extension, GetTabId(contents), APIPermission::kTab);
 
   if (!has_permission) {
     tab_info->Remove(keys::kUrlKey, NULL);
@@ -270,7 +275,7 @@ bool ExtensionTabUtil::IsCrashURL(const GURL& url) {
   GURL fixed_url =
       URLFixerUpper::FixupURL(url.possibly_invalid_spec(), std::string());
   return (fixed_url.SchemeIs(chrome::kChromeUIScheme) &&
-          (fixed_url.host() == chrome::kChromeUIBrowserCrashHost ||
+          (fixed_url.host() == content::kChromeUIBrowserCrashHost ||
            fixed_url.host() == chrome::kChromeUICrashHost));
 }
 
@@ -322,4 +327,26 @@ extensions::WindowController* ExtensionTabUtil::GetWindowControllerOfTab(
     return browser->extension_window_controller();
 
   return NULL;
+}
+
+void ExtensionTabUtil::OpenOptionsPage(const Extension* extension,
+                                       Browser* browser) {
+  DCHECK(!extensions::ManifestURL::GetOptionsPage(extension).is_empty());
+
+  // Force the options page to open in non-OTR window, because it won't be
+  // able to save settings from OTR.
+  if (browser->profile()->IsOffTheRecord()) {
+    browser = chrome::FindOrCreateTabbedBrowser(
+        browser->profile()->GetOriginalProfile(), browser->host_desktop_type());
+  }
+
+  content::OpenURLParams params(
+      extensions::ManifestURL::GetOptionsPage(extension),
+      content::Referrer(), SINGLETON_TAB,
+      content::PAGE_TRANSITION_LINK, false);
+  browser->OpenURL(params);
+  browser->window()->Show();
+  WebContents* web_contents =
+      browser->tab_strip_model()->GetActiveWebContents();
+  web_contents->GetDelegate()->ActivateContents(web_contents);
 }

@@ -26,6 +26,7 @@ TEST_F('NetInternalsTest', 'netInternalsTourTabs', function() {
     import: true,
     proxy: true,
     events: true,
+    waterfall: true,
     timeline: true,
     dns: true,
     sockets: true,
@@ -33,13 +34,14 @@ TEST_F('NetInternalsTest', 'netInternalsTourTabs', function() {
     quic: true,
     httpPipeline: true,
     httpCache: true,
-    serviceProviders: cr.isWindows,
+    modules: true,
     tests: true,
     hsts: true,
     logs: cr.isChromeOS,
     prerender: true,
     bandwidth: true,
-    chromeos: cr.isChromeOS
+    chromeos: cr.isChromeOS,
+    analyzer: cr.isChromeOS
   };
 
   NetInternalsTest.checkTabHandleVisibility(tabVisibilityState, true);

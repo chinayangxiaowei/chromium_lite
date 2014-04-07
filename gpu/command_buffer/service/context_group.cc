@@ -8,7 +8,7 @@
 #include <string>
 
 #include "base/command_line.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "base/sys_info.h"
 #include "gpu/command_buffer/common/id_allocator.h"
 #include "gpu/command_buffer/service/buffer_manager.h"
@@ -32,10 +32,12 @@ ContextGroup::ContextGroup(
     MailboxManager* mailbox_manager,
     ImageManager* image_manager,
     MemoryTracker* memory_tracker,
+    StreamTextureManager* stream_texture_manager,
     bool bind_generates_resource)
     : mailbox_manager_(mailbox_manager ? mailbox_manager : new MailboxManager),
       image_manager_(image_manager ? image_manager : new ImageManager),
       memory_tracker_(memory_tracker),
+      stream_texture_manager_(stream_texture_manager),
       enforce_gl_minimums_(CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kEnforceGLMinimums)),
       bind_generates_resource_(bind_generates_resource),
@@ -65,6 +67,7 @@ ContextGroup::ContextGroup(
   id_namespaces_[id_namespaces::kTextures].reset(new IdAllocator);
   id_namespaces_[id_namespaces::kQueries].reset(new IdAllocator);
   id_namespaces_[id_namespaces::kVertexArrays].reset(new IdAllocator);
+  id_namespaces_[id_namespaces::kImages].reset(new IdAllocator);
 }
 
 static void GetIntegerv(GLenum pname, uint32* var) {
@@ -99,8 +102,14 @@ bool ContextGroup::Initialize(
     return false;
   }
   GLint max_samples = 0;
-  if (feature_info_->feature_flags().chromium_framebuffer_multisample) {
-    glGetIntegerv(GL_MAX_SAMPLES, &max_samples);
+  if (feature_info_->feature_flags().chromium_framebuffer_multisample ||
+      feature_info_->feature_flags().multisampled_render_to_texture) {
+    if (feature_info_->feature_flags(
+            ).use_img_for_multisampled_render_to_texture) {
+      glGetIntegerv(GL_MAX_SAMPLES_IMG, &max_samples);
+    } else {
+      glGetIntegerv(GL_MAX_SAMPLES, &max_samples);
+    }
   }
 
   if (feature_info_->feature_flags().ext_draw_buffers) {
@@ -113,13 +122,12 @@ bool ContextGroup::Initialize(
     draw_buffer_ = GL_BACK;
   }
 
-  buffer_manager_.reset(new BufferManager(
-      memory_tracker_, feature_info_.get()));
+  buffer_manager_.reset(
+      new BufferManager(memory_tracker_.get(), feature_info_.get()));
   framebuffer_manager_.reset(
       new FramebufferManager(max_draw_buffers_, max_color_attachments_));
-  renderbuffer_manager_.reset(new RenderbufferManager(memory_tracker_,
-                                                      max_renderbuffer_size,
-                                                      max_samples));
+  renderbuffer_manager_.reset(new RenderbufferManager(
+      memory_tracker_.get(), max_renderbuffer_size, max_samples));
   shader_manager_.reset(new ShaderManager());
   program_manager_.reset(new ProgramManager(program_cache_));
 
@@ -166,10 +174,12 @@ bool ContextGroup::Initialize(
         feature_info_->workarounds().max_cube_map_texture_size);
   }
 
-  texture_manager_.reset(new TextureManager(memory_tracker_,
+  texture_manager_.reset(new TextureManager(memory_tracker_.get(),
                                             feature_info_.get(),
                                             max_texture_size,
                                             max_cube_map_texture_size));
+  texture_manager_->set_framebuffer_manager(framebuffer_manager_.get());
+  texture_manager_->set_stream_texture_manager(stream_texture_manager_);
 
   const GLint kMinTextureImageUnits = 8;
   const GLint kMinVertexTextureImageUnits = 0;
@@ -212,6 +222,20 @@ bool ContextGroup::Initialize(
     return false;
   }
 
+  // TODO(gman): Use workarounds similar to max_texture_size above to implement.
+  if (gfx::GetGLImplementation() == gfx::kGLImplementationOSMesaGL) {
+    // Some shaders in Skia needed more than the min.
+    max_fragment_uniform_vectors_ =
+       std::min(static_cast<uint32>(kMinFragmentUniformVectors * 2),
+                max_fragment_uniform_vectors_);
+    max_varying_vectors_ =
+       std::min(static_cast<uint32>(kMinVaryingVectors * 2),
+                max_varying_vectors_);
+    max_vertex_uniform_vectors_ =
+       std::min(static_cast<uint32>(kMinVertexUniformVectors * 2),
+                max_vertex_uniform_vectors_);
+  }
+
   if (!texture_manager_->Initialize()) {
     LOG(ERROR) << "Context::Group::Initialize failed because texture manager "
                << "failed to initialize.";
@@ -225,8 +249,21 @@ bool ContextGroup::Initialize(
 namespace {
 
 bool IsNull(const base::WeakPtr<gles2::GLES2Decoder>& decoder) {
-  return !decoder;
+  return !decoder.get();
 }
+
+template <typename T>
+class WeakPtrEquals {
+ public:
+  explicit WeakPtrEquals(T* t) : t_(t) {}
+
+  bool operator()(const base::WeakPtr<T>& t) {
+    return t.get() == t_;
+  }
+
+ private:
+  T* const t_;
+};
 
 }  // namespace anonymous
 
@@ -237,7 +274,8 @@ bool ContextGroup::HaveContexts() {
 }
 
 void ContextGroup::Destroy(GLES2Decoder* decoder, bool have_context) {
-  decoders_.erase(std::remove(decoders_.begin(), decoders_.end(), decoder),
+  decoders_.erase(std::remove_if(decoders_.begin(), decoders_.end(),
+                                 WeakPtrEquals<gles2::GLES2Decoder>(decoder)),
                   decoders_.end());
   // If we still have contexts do nothing.
   if (HaveContexts()) {
@@ -251,6 +289,8 @@ void ContextGroup::Destroy(GLES2Decoder* decoder, bool have_context) {
 
   if (framebuffer_manager_ != NULL) {
     framebuffer_manager_->Destroy(have_context);
+    if (texture_manager_)
+      texture_manager_->set_framebuffer_manager(NULL);
     framebuffer_manager_.reset();
   }
 
@@ -260,8 +300,6 @@ void ContextGroup::Destroy(GLES2Decoder* decoder, bool have_context) {
   }
 
   if (texture_manager_ != NULL) {
-    mailbox_manager_->DestroyOwnedTextures(texture_manager_.get(),
-                                           have_context);
     texture_manager_->Destroy(have_context);
     texture_manager_.reset();
   }
@@ -277,6 +315,7 @@ void ContextGroup::Destroy(GLES2Decoder* decoder, bool have_context) {
   }
 
   memory_tracker_ = NULL;
+  stream_texture_manager_ = NULL;
 }
 
 IdAllocatorInterface* ContextGroup::GetIdAllocator(unsigned namespace_id) {
@@ -299,7 +338,7 @@ uint32 ContextGroup::GetMemRepresented() const {
 
 void ContextGroup::LoseContexts(GLenum reset_status) {
   for (size_t ii = 0; ii < decoders_.size(); ++ii) {
-    if (decoders_[ii]) {
+    if (decoders_[ii].get()) {
       decoders_[ii]->LoseContext(reset_status);
     }
   }

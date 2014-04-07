@@ -9,9 +9,10 @@
 
 #include "base/compiler_specific.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/process.h"
+#include "base/process/process.h"
 #include "base/synchronization/waitable_event_watcher.h"
 #include "content/browser/child_process_launcher.h"
+#include "content/browser/power_monitor_message_broadcaster.h"
 #include "content/public/browser/browser_child_process_host.h"
 #include "content/public/browser/child_process_data.h"
 #include "content/public/common/child_process_host_delegate.h"
@@ -61,6 +62,9 @@ class CONTENT_EXPORT BrowserChildProcessHostImpl
   // Removes this host from the host list. Calls ChildProcessHost::ForceShutdown
   void ForceShutdown();
 
+  // Callers can reduce the BrowserChildProcess' priority.
+  void SetBackgrounded(bool backgrounded);
+
   // Controls whether the child process should be terminated on browser
   // shutdown. Default is to always terminate.
   void SetTerminateChildOnShutdown(bool terminate_on_shutdown);
@@ -100,6 +104,8 @@ class CONTENT_EXPORT BrowserChildProcessHostImpl
   scoped_ptr<ChildProcessHost> child_process_host_;
 
   scoped_ptr<ChildProcessLauncher> child_process_;
+
+  PowerMonitorMessageBroadcaster power_monitor_message_broadcaster_;
 
 #if defined(OS_WIN)
   // Watches to see if the child process exits before the IPC channel has

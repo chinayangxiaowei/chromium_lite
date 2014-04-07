@@ -12,15 +12,14 @@
 
 #include <string>
 
-#include "base/file_util.h"
 #include "base/files/file_path.h"
 #include "base/files/memory_mapped_file.h"
 #include "base/logging.h"
 #include "base/path_service.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "base/strings/sys_string_conversions.h"
-#include "third_party/icu/public/common/unicode/putil.h"
-#include "third_party/icu/public/common/unicode/udata.h"
+#include "third_party/icu/source/common/unicode/putil.h"
+#include "third_party/icu/source/common/unicode/udata.h"
 
 #if defined(OS_MACOSX)
 #include "base/mac/foundation_util.h"
@@ -112,7 +111,7 @@ bool Initialize() {
 
   // Chrome doesn't normally shut down ICU, so the mapped data shouldn't ever
   // be released.
-  static base::MemoryMappedFile mapped_file;
+  CR_DEFINE_STATIC_LOCAL(base::MemoryMappedFile, mapped_file, ());
   if (!mapped_file.IsValid()) {
     // Assume it is in the framework bundle's Resources directory.
     FilePath data_path =

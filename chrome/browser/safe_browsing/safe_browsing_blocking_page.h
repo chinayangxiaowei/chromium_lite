@@ -33,17 +33,17 @@
 #include <vector>
 
 #include "base/gtest_prod_util.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "chrome/browser/safe_browsing/ui_manager.h"
 #include "content/public/browser/interstitial_page_delegate.h"
-#include "googleurl/src/gurl.h"
+#include "url/gurl.h"
 
 class MalwareDetails;
-class MessageLoop;
 class SafeBrowsingBlockingPageFactory;
 
 namespace base {
 class DictionaryValue;
+class MessageLoop;
 }
 
 namespace content {
@@ -111,6 +111,7 @@ class SafeBrowsingBlockingPage : public content::InterstitialPageDelegate {
     SHOW,
     PROCEED,
     DONT_PROCEED,
+    SHOW_ADVANCED,
   };
 
   // Records a user action for this interstitial, using the form
@@ -156,7 +157,7 @@ class SafeBrowsingBlockingPage : public content::InterstitialPageDelegate {
 
   // For reporting back user actions.
   SafeBrowsingUIManager* ui_manager_;
-  MessageLoop* report_loop_;
+  base::MessageLoop* report_loop_;
 
   // True if the interstitial is blocking the main page because it is on one
   // of our lists.  False if a subresource is being blocked, or in the case of
@@ -261,6 +262,9 @@ class SafeBrowsingBlockingPageV2 : public SafeBrowsingBlockingPage {
                                 const string16& description1,
                                 const string16& description2,
                                 const string16& description3);
+
+  // For the FieldTrial: this contains the name of the condition.
+  std::string trialCondition_;
 
   DISALLOW_COPY_AND_ASSIGN(SafeBrowsingBlockingPageV2);
 };

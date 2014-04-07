@@ -6,7 +6,7 @@
 #define PPAPI_SHARED_IMPL_PPB_AUDIO_SHARED_H_
 
 #include "base/memory/scoped_ptr.h"
-#include "base/shared_memory.h"
+#include "base/memory/shared_memory.h"
 #include "base/sync_socket.h"
 #include "base/threading/simple_thread.h"
 #include "media/base/audio_bus.h"
@@ -109,7 +109,7 @@ class PPAPI_SHARED_EXPORT PPB_Audio_Shared
 
   // Internal buffer for client's integer audio data.
   int client_buffer_size_bytes_;
-  scoped_array<uint8_t> client_buffer_;
+  scoped_ptr<uint8_t[]> client_buffer_;
 
   DISALLOW_COPY_AND_ASSIGN(PPB_Audio_Shared);
 };

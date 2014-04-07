@@ -11,6 +11,7 @@
 #include "content/public/browser/favicon_status.h"
 #include "content/public/browser/global_request_id.h"
 #include "content/public/browser/navigation_entry.h"
+#include "content/public/common/page_state.h"
 #include "content/public/common/ssl_status.h"
 
 namespace content {
@@ -46,8 +47,8 @@ class CONTENT_EXPORT NavigationEntryImpl
   virtual const GURL& GetVirtualURL() const OVERRIDE;
   virtual void SetTitle(const string16& title) OVERRIDE;
   virtual const string16& GetTitle() const OVERRIDE;
-  virtual void SetContentState(const std::string& state) OVERRIDE;
-  virtual const std::string& GetContentState() const OVERRIDE;
+  virtual void SetPageState(const PageState& state) OVERRIDE;
+  virtual const PageState& GetPageState() const OVERRIDE;
   virtual void SetPageID(int page_id) OVERRIDE;
   virtual int32 GetPageID() const OVERRIDE;
   virtual const string16& GetTitleForDisplay(
@@ -185,9 +186,18 @@ class CONTENT_EXPORT NavigationEntryImpl
     should_replace_entry_ = should_replace_entry;
   }
 
-  void SetScreenshotPNGData(const std::vector<unsigned char>& png_data);
+  void SetScreenshotPNGData(scoped_refptr<base::RefCountedBytes> png_data);
   const scoped_refptr<base::RefCountedBytes> screenshot() const {
     return screenshot_;
+  }
+
+  // Whether this (pending) navigation should clear the session history. Resets
+  // to false after commit.
+  bool should_clear_history_list() const {
+    return should_clear_history_list_;
+  }
+  void set_should_clear_history_list(bool should_clear_history_list) {
+    should_clear_history_list_ = should_clear_history_list;
   }
 
  private:
@@ -210,7 +220,7 @@ class CONTENT_EXPORT NavigationEntryImpl
   bool update_virtual_url_with_url_;
   string16 title_;
   FaviconStatus favicon_;
-  std::string content_state_;
+  PageState page_state_;
   int32 page_id_;
   SSLStatus ssl_;
   PageTransition transition_type_;
@@ -274,6 +284,13 @@ class CONTENT_EXPORT NavigationEntryImpl
   // browser will replace the current navigation entry (which is the page
   // doing the redirect).
   bool should_replace_entry_;
+
+  // This is set to true when this entry's navigation should clear the session
+  // history both on the renderer and browser side. The browser side history
+  // won't be cleared until the renderer has committed this navigation. This
+  // entry is not persisted by the session restore system, as it is always
+  // reset to false after commit.
+  bool should_clear_history_list_;
 
   // Set when this entry should be able to access local file:// resources. This
   // value is not needed after the entry commits and is not persisted.

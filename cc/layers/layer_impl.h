@@ -16,13 +16,16 @@
 #include "cc/base/region.h"
 #include "cc/base/scoped_ptr_vector.h"
 #include "cc/input/input_handler.h"
+#include "cc/layers/compositing_reasons.h"
 #include "cc/layers/draw_properties.h"
+#include "cc/layers/layer_lists.h"
+#include "cc/layers/layer_position_constraint.h"
 #include "cc/layers/render_surface_impl.h"
+#include "cc/output/filter_operations.h"
 #include "cc/quads/render_pass.h"
 #include "cc/quads/shared_quad_state.h"
 #include "cc/resources/resource_provider.h"
 #include "skia/ext/refptr.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebFilterOperations.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "third_party/skia/include/core/SkImageFilter.h"
 #include "third_party/skia/include/core/SkPicture.h"
@@ -46,10 +49,15 @@ class Layer;
 
 struct AppendQuadsData;
 
+enum DrawMode {
+  DRAW_MODE_NONE,
+  DRAW_MODE_HARDWARE,
+  DRAW_MODE_SOFTWARE,
+  DRAW_MODE_RESOURCELESS_SOFTWARE
+};
+
 class CC_EXPORT LayerImpl : LayerAnimationValueObserver {
  public:
-  typedef ScopedPtrVector<LayerImpl> LayerList;
-
   static scoped_ptr<LayerImpl> Create(LayerTreeImpl* tree_impl, int id) {
     return make_scoped_ptr(new LayerImpl(tree_impl, id));
   }
@@ -66,14 +74,19 @@ class CC_EXPORT LayerImpl : LayerAnimationValueObserver {
   // Tree structure.
   LayerImpl* parent() { return parent_; }
   const LayerImpl* parent() const { return parent_; }
-  const LayerList& children() const { return children_; }
-  LayerList& children() { return children_; }
+  const OwnedLayerImplList& children() const { return children_; }
+  OwnedLayerImplList& children() { return children_; }
   LayerImpl* child_at(size_t index) const { return children_[index]; }
   void AddChild(scoped_ptr<LayerImpl> child);
   scoped_ptr<LayerImpl> RemoveChild(LayerImpl* child);
   void set_parent(LayerImpl* parent) { parent_ = parent; }
   // Warning: This does not preserve tree structure invariants.
   void ClearChildList();
+
+  void PassCopyRequests(ScopedPtrVector<CopyOutputRequest>* requests);
+  void TakeCopyRequestsAndTransformToTarget(
+      ScopedPtrVector<CopyOutputRequest>* request);
+  bool HasCopyRequest() const { return !copy_requests_.empty(); }
 
   void SetMaskLayer(scoped_ptr<LayerImpl> mask_layer);
   LayerImpl* mask_layer() { return mask_layer_.get(); }
@@ -94,11 +107,14 @@ class CC_EXPORT LayerImpl : LayerAnimationValueObserver {
   LayerTreeImpl* layer_tree_impl() const { return layer_tree_impl_; }
 
   scoped_ptr<SharedQuadState> CreateSharedQuadState() const;
-  // WillDraw must be called before AppendQuads. If WillDraw is called,
+  // WillDraw must be called before AppendQuads. If WillDraw returns false,
+  // AppendQuads and DidDraw will not be called. If WillDraw returns true,
   // DidDraw is guaranteed to be called before another WillDraw or before
   // the layer is destroyed. To enforce this, any class that overrides
-  // WillDraw/DqidDraw must call the base class version.
-  virtual void WillDraw(ResourceProvider* resource_provider);
+  // WillDraw/DidDraw must call the base class version only if WillDraw
+  // returns true.
+  virtual bool WillDraw(DrawMode draw_mode,
+                        ResourceProvider* resource_provider);
   virtual void AppendQuads(QuadSink* quad_sink,
                            AppendQuadsData* append_quads_data) {}
   virtual void DidDraw(ResourceProvider* resource_provider);
@@ -118,6 +134,9 @@ class CC_EXPORT LayerImpl : LayerAnimationValueObserver {
   void SetDrawsContent(bool draws_content);
   bool DrawsContent() const { return draws_content_; }
 
+  void SetHideLayerAndSubtree(bool hide);
+  bool hide_layer_and_subtree() const { return hide_layer_and_subtree_; }
+
   bool force_render_surface() const { return force_render_surface_; }
   void SetForceRenderSurface(bool force) { force_render_surface_ = force; }
 
@@ -129,12 +148,15 @@ class CC_EXPORT LayerImpl : LayerAnimationValueObserver {
 
   void SetBackgroundColor(SkColor background_color);
   SkColor background_color() const { return background_color_; }
+  // If contents_opaque(), return an opaque color else return a
+  // non-opaque color.  Tries to return background_color(), if possible.
+  SkColor SafeOpaqueBackgroundColor() const;
 
-  void SetFilters(const WebKit::WebFilterOperations& filters);
-  const WebKit::WebFilterOperations& filters() const { return filters_; }
+  void SetFilters(const FilterOperations& filters);
+  const FilterOperations& filters() const { return filters_; }
 
-  void SetBackgroundFilters(const WebKit::WebFilterOperations& filters);
-  const WebKit::WebFilterOperations& background_filters() const {
+  void SetBackgroundFilters(const FilterOperations& filters);
+  const FilterOperations& background_filters() const {
     return background_filters_;
   }
 
@@ -158,14 +180,24 @@ class CC_EXPORT LayerImpl : LayerAnimationValueObserver {
   void SetIsContainerForFixedPositionLayers(bool container) {
     is_container_for_fixed_position_layers_ = container;
   }
-  bool is_container_for_fixed_position_layers() const {
+  // This is a non-trivial function in Layer.
+  bool IsContainerForFixedPositionLayers() const {
     return is_container_for_fixed_position_layers_;
   }
 
-  void SetFixedToContainerLayer(bool fixed) {
-    fixed_to_container_layer_ = fixed;
+  void SetFixedContainerSizeDelta(gfx::Vector2dF delta) {
+    fixed_container_size_delta_ = delta;
   }
-  bool fixed_to_container_layer() const { return fixed_to_container_layer_; }
+  gfx::Vector2dF fixed_container_size_delta() const {
+    return fixed_container_size_delta_;
+  }
+
+  void SetPositionConstraint(const LayerPositionConstraint& constraint) {
+    position_constraint_ = constraint;
+  }
+  const LayerPositionConstraint& position_constraint() const {
+    return position_constraint_;
+  }
 
   void SetPreserves3d(bool preserves_3d);
   bool preserves_3d() const { return preserves_3d_; }
@@ -186,13 +218,21 @@ class CC_EXPORT LayerImpl : LayerAnimationValueObserver {
   void SetDebugName(const std::string& debug_name) { debug_name_ = debug_name; }
   std::string debug_name() const { return debug_name_; }
 
+  void SetCompositingReasons(CompositingReasons reasons) {
+      compositing_reasons_ = reasons;
+  }
+
+  CompositingReasons compositing_reasons() const {
+      return compositing_reasons_;
+  }
+
   bool ShowDebugBorders() const;
 
   // These invalidate the host's render surface layer list.  The caller
   // is responsible for calling set_needs_update_draw_properties on the tree
   // so that its list can be recreated.
   void CreateRenderSurface();
-  void ClearRenderSurface() { draw_properties_.render_surface.reset(); }
+  void ClearRenderSurface();
 
   DrawProperties<LayerImpl, RenderSurfaceImpl>& draw_properties() {
     return draw_properties_;
@@ -242,7 +282,7 @@ class CC_EXPORT LayerImpl : LayerAnimationValueObserver {
     return draw_properties_.render_target;
   }
   RenderSurfaceImpl* render_surface() const {
- return draw_properties_.render_surface.get();
+    return draw_properties_.render_surface.get();
   }
 
   // The client should be responsible for setting bounds, content bounds and
@@ -260,11 +300,15 @@ class CC_EXPORT LayerImpl : LayerAnimationValueObserver {
   void SetContentsScale(float contents_scale_x, float contents_scale_y);
 
   virtual void CalculateContentsScale(float ideal_contents_scale,
+                                      float device_scale_factor,
+                                      float page_scale_factor,
                                       bool animating_transform_to_screen,
                                       float* contents_scale_x,
                                       float* contents_scale_y,
                                       gfx::Size* content_bounds);
 
+  void SetScrollOffsetDelegate(
+      LayerScrollOffsetDelegate* scroll_offset_delegate);
   void SetScrollOffset(gfx::Vector2d scroll_offset);
   gfx::Vector2d scroll_offset() const { return scroll_offset_; }
 
@@ -272,12 +316,9 @@ class CC_EXPORT LayerImpl : LayerAnimationValueObserver {
   gfx::Vector2d max_scroll_offset() const { return max_scroll_offset_; }
 
   void SetScrollDelta(gfx::Vector2dF scroll_delta);
-  gfx::Vector2dF scroll_delta() const { return scroll_delta_; }
+  gfx::Vector2dF ScrollDelta() const;
 
   gfx::Vector2dF TotalScrollOffset() const;
-
-  void SetImplTransform(const gfx::Transform& transform);
-  const gfx::Transform& impl_transform() const { return impl_transform_; }
 
   void SetSentScrollDelta(gfx::Vector2d sent_scroll_delta);
   gfx::Vector2d sent_scroll_delta() const { return sent_scroll_delta_; }
@@ -288,6 +329,8 @@ class CC_EXPORT LayerImpl : LayerAnimationValueObserver {
 
   void SetScrollable(bool scrollable) { scrollable_ = scrollable; }
   bool scrollable() const { return scrollable_; }
+
+  void ApplySentScrollDeltas();
 
   void SetShouldScrollOnMainThread(bool should_scroll_on_main_thread) {
     should_scroll_on_main_thread_ = should_scroll_on_main_thread;
@@ -320,9 +363,9 @@ class CC_EXPORT LayerImpl : LayerAnimationValueObserver {
   }
   bool DrawCheckerboardForMissingTiles() const;
 
-  InputHandlerClient::ScrollStatus TryScroll(
+  InputHandler::ScrollStatus TryScroll(
       gfx::PointF screen_space_point,
-      InputHandlerClient::ScrollInputType type) const;
+      InputHandler::ScrollInputType type) const;
 
   void SetDoubleSided(bool double_sided);
   bool double_sided() const { return double_sided_; }
@@ -332,12 +375,12 @@ class CC_EXPORT LayerImpl : LayerAnimationValueObserver {
   bool TransformIsAnimating() const;
   bool TransformIsAnimatingOnImplOnly() const;
 
+  // Note this rect is in layer space (not content space).
   void set_update_rect(const gfx::RectF& update_rect) {
     update_rect_ = update_rect;
   }
   const gfx::RectF& update_rect() const { return update_rect_; }
 
-  std::string LayerTreeAsText() const;
   virtual base::DictionaryValue* LayerTreeAsJson() const;
 
   void SetStackingOrderChanged(bool stacking_order_changed);
@@ -358,6 +401,8 @@ class CC_EXPORT LayerImpl : LayerAnimationValueObserver {
   virtual Region VisibleContentOpaqueRegion() const;
 
   virtual void DidBecomeActive();
+
+  virtual void DidBeginTracing();
 
   // Indicates that the surface previously used to render this layer
   // was lost and that a new one has been created. Won't be called
@@ -391,7 +436,12 @@ class CC_EXPORT LayerImpl : LayerAnimationValueObserver {
   virtual scoped_ptr<LayerImpl> CreateLayerImpl(LayerTreeImpl* tree_impl);
   virtual void PushPropertiesTo(LayerImpl* layer);
 
-  virtual scoped_ptr<base::Value> AsValue() const;
+  scoped_ptr<base::Value> AsValue() const;
+  virtual size_t GPUMemoryUsageInBytes() const;
+
+  // TODO(danakj): Be true only if needed. crbug.com/259511
+  bool needs_push_properties() const { return true; }
+  bool descendant_needs_push_properties() const { return true; }
 
  protected:
   LayerImpl(LayerTreeImpl* layer_impl, int id);
@@ -402,11 +452,13 @@ class CC_EXPORT LayerImpl : LayerAnimationValueObserver {
   void AppendDebugBorderQuad(QuadSink* quad_sink,
                              const SharedQuadState* shared_quad_state,
                              AppendQuadsData* append_quads_data) const;
+  void AppendDebugBorderQuad(QuadSink* quad_sink,
+                             const SharedQuadState* shared_quad_state,
+                             AppendQuadsData* append_quads_data,
+                             SkColor color,
+                             float width) const;
 
-  virtual void DumpLayerProperties(std::string* str, int indent) const;
-  static std::string IndentString(int indent);
-
-  void AsValueInto(base::DictionaryValue* dict) const;
+  virtual void AsValueInto(base::DictionaryValue* dict) const;
 
   void NoteLayerSurfacePropertyChanged();
   void NoteLayerPropertyChanged();
@@ -420,11 +472,9 @@ class CC_EXPORT LayerImpl : LayerAnimationValueObserver {
 
   virtual const char* LayerTypeAsString() const;
 
-  void DumpLayer(std::string* str, int indent) const;
-
   // Properties internal to LayerImpl
   LayerImpl* parent_;
-  LayerList children_;
+  OwnedLayerImplList children_;
   // mask_layer_ can be temporarily stolen during tree sync, we need this ID to
   // confirm newly assigned layer is still the previous one
   int mask_layer_id_;
@@ -439,6 +489,7 @@ class CC_EXPORT LayerImpl : LayerAnimationValueObserver {
   float anchor_point_z_;
   gfx::Size bounds_;
   gfx::Vector2d scroll_offset_;
+  LayerScrollOffsetDelegate* scroll_offset_delegate_;
   bool scrollable_;
   bool should_scroll_on_main_thread_;
   bool have_wheel_event_handlers_;
@@ -471,18 +522,20 @@ class CC_EXPORT LayerImpl : LayerAnimationValueObserver {
   gfx::Transform transform_;
 
   bool draws_content_;
+  bool hide_layer_and_subtree_;
   bool force_render_surface_;
 
   // Set for the layer that other layers are fixed to.
   bool is_container_for_fixed_position_layers_;
-  // This is true if the layer should be fixed to the closest ancestor
-  // container.
-  bool fixed_to_container_layer_;
+  // This property is effective when
+  // is_container_for_fixed_position_layers_ == true,
+  gfx::Vector2dF fixed_container_size_delta_;
+
+  LayerPositionConstraint position_constraint_;
 
   gfx::Vector2dF scroll_delta_;
   gfx::Vector2d sent_scroll_delta_;
   gfx::Vector2d max_scroll_offset_;
-  gfx::Transform impl_transform_;
   gfx::Vector2dF last_scroll_offset_;
 
   // The global depth value of the center of the layer. This value is used
@@ -491,15 +544,16 @@ class CC_EXPORT LayerImpl : LayerAnimationValueObserver {
 
   // Debug layer name.
   std::string debug_name_;
+  CompositingReasons compositing_reasons_;
 
-  WebKit::WebFilterOperations filters_;
-  WebKit::WebFilterOperations background_filters_;
+  FilterOperations filters_;
+  FilterOperations background_filters_;
   skia::RefPtr<SkImageFilter> filter_;
 
-#ifndef NDEBUG
-  bool between_will_draw_and_did_draw_;
-#endif
+ protected:
+  DrawMode current_draw_mode_;
 
+ private:
   // Rect indicating what was repainted/updated during update.
   // Note that plugin layers bypass this and leave it empty.
   // Uses layer's content space.
@@ -516,6 +570,8 @@ class CC_EXPORT LayerImpl : LayerAnimationValueObserver {
   ScrollbarLayerImpl* horizontal_scrollbar_layer_;
   ScrollbarLayerImpl* vertical_scrollbar_layer_;
 
+  ScopedPtrVector<CopyOutputRequest> copy_requests_;
+
   // Group of properties that need to be computed based on the layer tree
   // hierarchy before layers can be drawn.
   DrawProperties<LayerImpl, RenderSurfaceImpl> draw_properties_;
@@ -523,6 +579,6 @@ class CC_EXPORT LayerImpl : LayerAnimationValueObserver {
   DISALLOW_COPY_AND_ASSIGN(LayerImpl);
 };
 
-}
+}  // namespace cc
 
 #endif  // CC_LAYERS_LAYER_IMPL_H_

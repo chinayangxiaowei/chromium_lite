@@ -6,8 +6,9 @@
 
 #include "base/bind.h"
 #include "base/stl_util.h"
-#include "content/common/child_process.h"
+#include "content/child/child_process.h"
 #include "content/common/media/video_capture_messages.h"
+#include "media/base/limits.h"
 
 namespace content {
 
@@ -34,15 +35,15 @@ bool VideoCaptureImpl::CaptureStarted() {
 }
 
 int VideoCaptureImpl::CaptureWidth() {
-  return current_params_.width;
+  return capture_format_.width;
 }
 
 int VideoCaptureImpl::CaptureHeight() {
-  return current_params_.height;
+  return capture_format_.height;
 }
 
 int VideoCaptureImpl::CaptureFrameRate() {
-  return current_params_.frame_per_second;
+  return capture_format_.frame_rate;
 }
 
 VideoCaptureImpl::VideoCaptureImpl(
@@ -56,11 +57,10 @@ VideoCaptureImpl::VideoCaptureImpl(
       device_id_(0),
       video_type_(media::VideoCaptureCapability::kI420),
       device_info_available_(false),
+      suspended_(false),
       state_(VIDEO_CAPTURE_STATE_STOPPED) {
   DCHECK(filter);
-  memset(&current_params_, 0, sizeof(current_params_));
-  memset(&device_info_, 0, sizeof(device_info_));
-  current_params_.session_id = id;
+  capture_format_.session_id = id;
 }
 
 VideoCaptureImpl::~VideoCaptureImpl() {
@@ -132,10 +132,23 @@ void VideoCaptureImpl::OnDeviceInfoReceived(
                  base::Unretained(this), device_info));
 }
 
+void VideoCaptureImpl::OnDeviceInfoChanged(
+    const media::VideoCaptureParams& device_info) {
+  capture_message_loop_proxy_->PostTask(FROM_HERE,
+      base::Bind(&VideoCaptureImpl::DoDeviceInfoChangedOnCaptureThread,
+                 base::Unretained(this), device_info));
+}
+
 void VideoCaptureImpl::OnDelegateAdded(int32 device_id) {
   capture_message_loop_proxy_->PostTask(FROM_HERE,
       base::Bind(&VideoCaptureImpl::DoDelegateAddedOnCaptureThread,
                  base::Unretained(this), device_id));
+}
+
+void VideoCaptureImpl::SuspendCapture(bool suspend) {
+  capture_message_loop_proxy_->PostTask(FROM_HERE,
+      base::Bind(&VideoCaptureImpl::DoSuspendCaptureOnCaptureThread,
+                 base::Unretained(this), suspend));
 }
 
 void VideoCaptureImpl::DoDeInitOnCaptureThread(base::Closure task) {
@@ -169,8 +182,8 @@ void VideoCaptureImpl::DoStartCaptureOnCaptureThread(
       // TODO(wjia): Temporarily disable restarting till client supports
       // resampling.
 #if 0
-      if (capability.width > current_params_.width ||
-          capability.height > current_params_.height) {
+      if (capability.width > capture_format_.width ||
+          capability.height > capture_format_.height) {
         StopDevice();
         DVLOG(1) << "StartCapture: Got client with higher resolution ("
                  << capability.width << ", " << capability.height << ") "
@@ -194,11 +207,14 @@ void VideoCaptureImpl::DoStartCaptureOnCaptureThread(
       clients_[handler] = capability;
       DCHECK_EQ(1ul, clients_.size());
       video_type_ = capability.color;
-      current_params_.width = capability.width;
-      current_params_.height = capability.height;
-      current_params_.frame_per_second = capability.frame_rate;
+      int session_id = capture_format_.session_id;
+      DCHECK_EQ(capability.session_id, 0);
+      capture_format_ = capability;
+      capture_format_.session_id = session_id;
+      if (capture_format_.frame_rate > media::limits::kMaxFramesPerSecond)
+        capture_format_.frame_rate = media::limits::kMaxFramesPerSecond;
       DVLOG(1) << "StartCapture: starting with first resolution ("
-               << current_params_.width << "," << current_params_.height << ")";
+               << capture_format_.width << "," << capture_format_.height << ")";
 
       StartCaptureInternal();
     }
@@ -228,7 +244,7 @@ void VideoCaptureImpl::DoFeedBufferOnCaptureThread(
 
   CachedDIB::iterator it;
   for (it = cached_dibs_.begin(); it != cached_dibs_.end(); ++it) {
-    if (buffer == it->second->mapped_memory)
+    if (buffer.get() == it->second->mapped_memory.get())
       break;
   }
 
@@ -275,14 +291,14 @@ void VideoCaptureImpl::DoBufferReceivedOnCaptureThread(
     int buffer_id, base::Time timestamp) {
   DCHECK(capture_message_loop_proxy_->BelongsToCurrentThread());
 
-  if (state_ != VIDEO_CAPTURE_STATE_STARTED) {
+  if (state_ != VIDEO_CAPTURE_STATE_STARTED || suspended_) {
     Send(new VideoCaptureHostMsg_BufferReady(device_id_, buffer_id));
     return;
   }
 
   media::VideoCapture::VideoFrameBuffer* buffer;
   DCHECK(cached_dibs_.find(buffer_id) != cached_dibs_.end());
-  buffer = cached_dibs_[buffer_id]->mapped_memory;
+  buffer = cached_dibs_[buffer_id]->mapped_memory.get();
   buffer->timestamp = timestamp;
 
   for (ClientInfo::iterator it = clients_.begin(); it != clients_.end(); ++it) {
@@ -321,6 +337,15 @@ void VideoCaptureImpl::DoStateChangedOnCaptureThread(VideoCaptureState state) {
       clients_.clear();
       state_ = VIDEO_CAPTURE_STATE_ERROR;
       break;
+    case VIDEO_CAPTURE_STATE_ENDED:
+      DVLOG(1) << "OnStateChanged: ended!, device_id = " << device_id_;
+      for (ClientInfo::iterator it = clients_.begin();
+          it != clients_.end(); ++it) {
+        it->first->OnRemoved(this);
+      }
+      clients_.clear();
+      state_ = VIDEO_CAPTURE_STATE_ENDED;
+      break;
     default:
       break;
   }
@@ -340,6 +365,15 @@ void VideoCaptureImpl::DoDeviceInfoReceivedOnCaptureThread(
   }
 }
 
+void VideoCaptureImpl::DoDeviceInfoChangedOnCaptureThread(
+    const media::VideoCaptureParams& device_info) {
+  DCHECK(capture_message_loop_proxy_->BelongsToCurrentThread());
+
+  for (ClientInfo::iterator it = clients_.begin(); it != clients_.end(); ++it) {
+    it->first->OnDeviceInfoChanged(this, device_info);
+  }
+}
+
 void VideoCaptureImpl::DoDelegateAddedOnCaptureThread(int32 device_id) {
   DVLOG(1) << "DoDelegateAdded: device_id " << device_id;
   DCHECK(capture_message_loop_proxy_->BelongsToCurrentThread());
@@ -354,6 +388,13 @@ void VideoCaptureImpl::DoDelegateAddedOnCaptureThread(int32 device_id) {
   }
 }
 
+void VideoCaptureImpl::DoSuspendCaptureOnCaptureThread(bool suspend) {
+  DVLOG(1) << "DoSuspendCapture: suspend " << (suspend ? "yes" : "no");
+  DCHECK(capture_message_loop_proxy_->BelongsToCurrentThread());
+
+  suspended_ = suspend;
+}
+
 void VideoCaptureImpl::StopDevice() {
   DCHECK(capture_message_loop_proxy_->BelongsToCurrentThread());
 
@@ -361,7 +402,7 @@ void VideoCaptureImpl::StopDevice() {
   if (state_ == VIDEO_CAPTURE_STATE_STARTED) {
     state_ = VIDEO_CAPTURE_STATE_STOPPING;
     Send(new VideoCaptureHostMsg_Stop(device_id_));
-    current_params_.width = current_params_.height = 0;
+    capture_format_.width = capture_format_.height = 0;
   }
 }
 
@@ -383,10 +424,10 @@ void VideoCaptureImpl::RestartCapture() {
     clients_[it->first] = it->second;
     clients_pending_on_restart_.erase(it++);
   }
-  current_params_.width = width;
-  current_params_.height = height;
-  DVLOG(1) << "RestartCapture, " << current_params_.width << ", "
-           << current_params_.height;
+  capture_format_.width = width;
+  capture_format_.height = height;
+  DVLOG(1) << "RestartCapture, " << capture_format_.width << ", "
+           << capture_format_.height;
   StartCaptureInternal();
 }
 
@@ -394,7 +435,13 @@ void VideoCaptureImpl::StartCaptureInternal() {
   DCHECK(capture_message_loop_proxy_->BelongsToCurrentThread());
   DCHECK(device_id_);
 
-  Send(new VideoCaptureHostMsg_Start(device_id_, current_params_));
+  media::VideoCaptureParams capability_as_params_copy;
+  capability_as_params_copy.width = capture_format_.width;
+  capability_as_params_copy.height = capture_format_.height;
+  capability_as_params_copy.frame_per_second = capture_format_.frame_rate;
+  capability_as_params_copy.session_id = capture_format_.session_id;
+  capability_as_params_copy.frame_size_type = capture_format_.frame_size_type;
+  Send(new VideoCaptureHostMsg_Start(device_id_, capability_as_params_copy));
   state_ = VIDEO_CAPTURE_STATE_STARTED;
 }
 

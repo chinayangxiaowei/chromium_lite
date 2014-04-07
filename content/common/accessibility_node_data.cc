@@ -6,10 +6,10 @@
 
 #include <set>
 
-#include "base/hash_tables.h"
-#include "base/string_number_conversions.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/containers/hash_tables.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 
 using base::DoubleToString;
 using base::IntToString;
@@ -336,16 +336,31 @@ std::string AccessibilityNodeData::DebugString(bool recursive) const {
       case ATTR_TABLE_CELL_ROW_SPAN:
         result += " rowspan=" + value;
         break;
-    case ATTR_TITLE_UI_ELEMENT:
+      case ATTR_TABLE_COLUMN_HEADER_ID:
+        result += " column_header_id=" + value;
+        break;
+      case ATTR_TABLE_COLUMN_INDEX:
+        result += " column_index=" + value;
+        break;
+      case ATTR_TABLE_HEADER_ID:
+        result += " header_id=" + value;
+        break;
+      case ATTR_TABLE_ROW_HEADER_ID:
+        result += " row_header_id=" + value;
+        break;
+      case ATTR_TABLE_ROW_INDEX:
+        result += " row_index=" + value;
+        break;
+      case ATTR_TITLE_UI_ELEMENT:
         result += " title_elem=" + value;
         break;
-    case ATTR_COLOR_VALUE_RED:
+      case ATTR_COLOR_VALUE_RED:
         result += " color_value_red=" + value;
         break;
-    case ATTR_COLOR_VALUE_GREEN:
+      case ATTR_COLOR_VALUE_GREEN:
         result += " color_value_green=" + value;
         break;
-    case ATTR_COLOR_VALUE_BLUE:
+      case ATTR_COLOR_VALUE_BLUE:
         result += " color_value_blue=" + value;
         break;
     }
@@ -459,8 +474,11 @@ std::string AccessibilityNodeData::DebugString(bool recursive) const {
       case ATTR_ARIA_READONLY:
         result += " aria_readonly=" + value;
         break;
-    case ATTR_CAN_SET_VALUE:
+      case ATTR_CAN_SET_VALUE:
         result += " can_set_value=" + value;
+        break;
+      case ATTR_UPDATE_LOCATION_ONLY:
+        result += " update_location_only=" + value;
         break;
     }
   }

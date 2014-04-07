@@ -3,18 +3,18 @@
 // found in the LICENSE file.
 #include "content/renderer/media/peer_connection_tracker.h"
 
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "content/common/media/peer_connection_tracker_messages.h"
 #include "content/renderer/media/rtc_media_constraints.h"
 #include "content/renderer/media/rtc_peer_connection_handler.h"
 #include "content/renderer/render_thread_impl.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebMediaStream.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebMediaStreamSource.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebMediaStreamTrack.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebRTCICECandidate.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebRTCPeerConnectionHandlerClient.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebDocument.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebFrame.h"
+#include "third_party/WebKit/public/platform/WebMediaStream.h"
+#include "third_party/WebKit/public/platform/WebMediaStreamSource.h"
+#include "third_party/WebKit/public/platform/WebMediaStreamTrack.h"
+#include "third_party/WebKit/public/platform/WebRTCICECandidate.h"
+#include "third_party/WebKit/public/platform/WebRTCPeerConnectionHandlerClient.h"
+#include "third_party/WebKit/public/web/WebDocument.h"
+#include "third_party/WebKit/public/web/WebFrame.h"
 
 using std::string;
 using webrtc::MediaConstraintsInterface;
@@ -70,25 +70,25 @@ static string SerializeMediaStreamComponent(
 
 static string SerializeMediaDescriptor(
     const WebKit::WebMediaStream& stream) {
-  string label = UTF16ToUTF8(stream.label());
+  string label = UTF16ToUTF8(stream.id());
   string result = "label: " + label;
-  WebKit::WebVector<WebKit::WebMediaStreamTrack> sources;
-  stream.audioSources(sources);
-  if (!sources.isEmpty()) {
+  WebKit::WebVector<WebKit::WebMediaStreamTrack> tracks;
+  stream.audioTracks(tracks);
+  if (!tracks.isEmpty()) {
     result += ", audio: [";
-    for (size_t i = 0; i < sources.size(); ++i) {
-      result += SerializeMediaStreamComponent(sources[i]);
-      if (i != sources.size() - 1)
+    for (size_t i = 0; i < tracks.size(); ++i) {
+      result += SerializeMediaStreamComponent(tracks[i]);
+      if (i != tracks.size() - 1)
         result += ", ";
     }
     result += "]";
   }
-  stream.videoSources(sources);
-  if (!sources.isEmpty()) {
+  stream.videoTracks(tracks);
+  if (!tracks.isEmpty()) {
     result += ", video: [";
-    for (size_t i = 0; i < sources.size(); ++i) {
-      result += SerializeMediaStreamComponent(sources[i]);
-      if (i != sources.size() - 1)
+    for (size_t i = 0; i < tracks.size(); ++i) {
+      result += SerializeMediaStreamComponent(tracks[i]);
+      if (i != tracks.size() - 1)
         result += ", ";
     }
     result += "]";
@@ -150,49 +150,53 @@ static string GetIceGatheringStateString(
   return result;
 }
 
-// Builds a DictionaryValue from the StatsElement.
+// Builds a DictionaryValue from the StatsReport.
 // The caller takes the ownership of the returned value.
-static DictionaryValue* GetDictValue(const webrtc::StatsElement& elem) {
-  if (elem.values.empty())
+// Note:
+// The format must be consistent with what webrtc_internals.js expects.
+// If you change it here, you must change webrtc_internals.js as well.
+static base::DictionaryValue* GetDictValueStats(
+    const webrtc::StatsReport& report) {
+  if (report.values.empty())
     return NULL;
 
-  DictionaryValue* dict = new DictionaryValue();
+  DictionaryValue* dict = new base::DictionaryValue();
   if (!dict)
     return NULL;
-  dict->SetDouble("timestamp", elem.timestamp);
+  dict->SetDouble("timestamp", report.timestamp);
 
-  ListValue* values = new ListValue();
+  base::ListValue* values = new base::ListValue();
   if (!values) {
     delete dict;
     return NULL;
   }
   dict->Set("values", values);
 
-  for (size_t i = 0; i < elem.values.size(); ++i) {
-    values->AppendString(elem.values[i].name);
-    values->AppendString(elem.values[i].value);
+  for (size_t i = 0; i < report.values.size(); ++i) {
+    values->AppendString(report.values[i].name);
+    values->AppendString(report.values[i].value);
   }
   return dict;
 }
 
 // Builds a DictionaryValue from the StatsReport.
 // The caller takes the ownership of the returned value.
-static DictionaryValue* GetDictValue(const webrtc::StatsReport& report) {
-  scoped_ptr<DictionaryValue> local, remote, result;
+static base::DictionaryValue* GetDictValue(const webrtc::StatsReport& report) {
+  scoped_ptr<base::DictionaryValue> stats, result;
 
-  local.reset(GetDictValue(report.local));
-  remote.reset(GetDictValue(report.remote));
-  if (!local.get() && !remote.get())
+  stats.reset(GetDictValueStats(report));
+  if (!stats)
     return NULL;
 
-  result.reset(new DictionaryValue());
-  if (!result.get())
+  result.reset(new base::DictionaryValue());
+  if (!result)
     return NULL;
 
-  if (local.get())
-    result->Set("local", local.release());
-  if (remote.get())
-    result->Set("remote", remote.release());
+  // Note:
+  // The format must be consistent with what webrtc_internals.js expects.
+  // If you change it here, you must change webrtc_internals.js as well.
+  if (stats)
+    result->Set("stats", stats.release());
   result->SetString("id", report.id);
   result->SetString("type", report.type);
 
@@ -206,10 +210,10 @@ class InternalStatsObserver : public webrtc::StatsObserver {
 
   virtual void OnComplete(
       const std::vector<webrtc::StatsReport>& reports) OVERRIDE {
-    ListValue list;
+    base::ListValue list;
 
     for (size_t i = 0; i < reports.size(); ++i) {
-      DictionaryValue* report = GetDictValue(reports[i]);
+      base::DictionaryValue* report = GetDictValue(reports[i]);
       if (report)
         list.Append(report);
     }
@@ -310,12 +314,12 @@ void PeerConnectionTracker::TrackCreateAnswer(
 
 void PeerConnectionTracker::TrackSetSessionDescription(
     RTCPeerConnectionHandler* pc_handler,
-    const webrtc::SessionDescriptionInterface* desc,
+    const WebKit::WebRTCSessionDescription& desc,
     Source source) {
-  string sdp;
-  desc->ToString(&sdp);
+  string sdp = UTF16ToUTF8(desc.sdp());
+  string type = UTF16ToUTF8(desc.type());
 
-  string value = "type: " + desc->type() + ", sdp: " + sdp;
+  string value = "type: " + type + ", sdp: " + sdp;
   SendPeerConnectionUpdate(
       pc_handler,
       source == SOURCE_LOCAL ? "setLocalDescription" : "setRemoteDescription",
@@ -376,7 +380,7 @@ void PeerConnectionTracker::TrackCreateDataChannel(
 }
 
 void PeerConnectionTracker::TrackStop(RTCPeerConnectionHandler* pc_handler) {
-  SendPeerConnectionUpdate(pc_handler, "stop", "");
+  SendPeerConnectionUpdate(pc_handler, "stop", std::string());
 }
 
 void PeerConnectionTracker::TrackSignalingStateChange(
@@ -430,7 +434,7 @@ void PeerConnectionTracker::TrackSessionDescriptionCallback(
 
 void PeerConnectionTracker::TrackOnRenegotiationNeeded(
     RTCPeerConnectionHandler* pc_handler) {
-  SendPeerConnectionUpdate(pc_handler, "onRenegotiationNeeded", "");
+  SendPeerConnectionUpdate(pc_handler, "onRenegotiationNeeded", std::string());
 }
 
 void PeerConnectionTracker::TrackCreateDTMFSender(

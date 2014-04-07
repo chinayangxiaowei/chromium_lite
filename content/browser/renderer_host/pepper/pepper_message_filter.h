@@ -14,16 +14,18 @@
 #include "base/files/file_path.h"
 #include "base/memory/linked_ptr.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/process.h"
+#include "base/process/process.h"
 #include "content/public/browser/browser_message_filter.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/common/process_type.h"
 #include "net/base/net_util.h"
 #include "net/base/network_change_notifier.h"
+#include "net/http/transport_security_state.h"
 #include "net/socket/stream_socket.h"
 #include "net/ssl/ssl_config_service.h"
 #include "ppapi/c/pp_resource.h"
 #include "ppapi/c/pp_stdint.h"
+#include "ppapi/c/ppb_tcp_socket.h"
 #include "ppapi/c/private/ppb_flash.h"
 #include "ppapi/host/ppapi_host.h"
 #include "ppapi/shared_impl/ppapi_permissions.h"
@@ -41,11 +43,11 @@ class HostResolver;
 
 namespace ppapi {
 class PPB_X509Certificate_Fields;
+class SocketOptionData;
 }
 
 namespace content {
 class BrowserContext;
-class PepperTCPServerSocket;
 class PepperTCPSocket;
 class ResourceContext;
 
@@ -74,9 +76,6 @@ class PepperMessageFilter
                       int render_view_id);
 
   // BrowserMessageFilter methods.
-  virtual void OverrideThreadForMessage(
-      const IPC::Message& message,
-      BrowserThread::ID* thread) OVERRIDE;
   virtual bool OnMessageReceived(const IPC::Message& message,
                                  bool* message_was_ok) OVERRIDE;
 
@@ -88,6 +87,7 @@ class PepperMessageFilter
   net::HostResolver* GetHostResolver();
 
   net::CertVerifier* GetCertVerifier();
+  net::TransportSecurityState* GetTransportSecurityState();
 
   // Adds already accepted socket to the internal TCP sockets table. Takes
   // ownership over |socket|. In the case of failure (full socket table)
@@ -96,7 +96,6 @@ class PepperMessageFilter
   uint32 AddAcceptedTCPSocket(int32 routing_id,
                               uint32 plugin_dispatcher_id,
                               net::StreamSocket* socket);
-  void RemoveTCPServerSocket(uint32 socket_id);
 
   const net::SSLConfig& ssl_config() { return ssl_config_; }
 
@@ -111,8 +110,6 @@ class PepperMessageFilter
 
   // Containers for sockets keyed by socked_id.
   typedef std::map<uint32, linked_ptr<PepperTCPSocket> > TCPSocketMap;
-  typedef std::map<uint32,
-                   linked_ptr<PepperTCPServerSocket> > TCPServerSocketMap;
 
   // Set of disptachers ID's that have subscribed for NetworkMonitor
   // notifications.
@@ -123,6 +120,9 @@ class PepperMessageFilter
   void OnTCPCreate(int32 routing_id,
                    uint32 plugin_dispatcher_id,
                    uint32* socket_id);
+  void OnTCPCreatePrivate(int32 routing_id,
+                          uint32 plugin_dispatcher_id,
+                          uint32* socket_id);
   void OnTCPConnect(int32 routing_id,
                     uint32 socket_id,
                     const std::string& host,
@@ -139,33 +139,22 @@ class PepperMessageFilter
   void OnTCPRead(uint32 socket_id, int32_t bytes_to_read);
   void OnTCPWrite(uint32 socket_id, const std::string& data);
   void OnTCPDisconnect(uint32 socket_id);
-  void OnTCPSetBoolOption(uint32 socket_id, uint32_t name, bool value);
-  void OnTCPServerListen(int32 routing_id,
-                         uint32 plugin_dispatcher_id,
-                         PP_Resource socket_resource,
-                         const PP_NetAddress_Private& addr,
-                         int32_t backlog);
-  void OnTCPServerAccept(int32 tcp_client_socket_routing_id,
-                         uint32 server_socket_id);
+  void OnTCPSetOption(uint32 socket_id,
+                      PP_TCPSocket_Option name,
+                      const ppapi::SocketOptionData& value);
 
   void OnNetworkMonitorStart(uint32 plugin_dispatcher_id);
   void OnNetworkMonitorStop(uint32 plugin_dispatcher_id);
 
-  void DoTCPConnect(bool allowed,
-                    int32 routing_id,
+  void DoTCPConnect(int32 routing_id,
                     uint32 socket_id,
                     const std::string& host,
-                    uint16_t port);
-  void DoTCPConnectWithNetAddress(bool allowed,
-                                  int32 routing_id,
+                    uint16_t port,
+                    bool allowed);
+  void DoTCPConnectWithNetAddress(int32 routing_id,
                                   uint32 socket_id,
-                                  const PP_NetAddress_Private& net_addr);
-  void DoTCPServerListen(bool allowed,
-                         int32 routing_id,
-                         uint32 plugin_dispatcher_id,
-                         PP_Resource socket_resource,
-                         const PP_NetAddress_Private& addr,
-                         int32_t backlog);
+                                  const PP_NetAddress_Private& net_addr,
+                                  bool allowed);
   void OnX509CertificateParseDER(const std::vector<char>& der,
                                  bool* succeeded,
                                  ppapi::PPB_X509Certificate_Fields* result);
@@ -175,12 +164,16 @@ class PepperMessageFilter
 
   // Return true if render with given ID can use socket APIs.
   bool CanUseSocketAPIs(int32 render_id,
-      const content::SocketPermissionRequest& params);
+                        const content::SocketPermissionRequest& params,
+                        bool private_api);
 
   void GetAndSendNetworkList();
   void DoGetNetworkList();
   void SendNetworkList(scoped_ptr<net::NetworkInterfaceList> list);
-
+  void CreateTCPSocket(int32 routing_id,
+                       uint32 plugin_dispatcher_id,
+                       bool private_api,
+                       uint32* socket_id);
   enum PluginType {
     PLUGIN_TYPE_IN_PROCESS,
     PLUGIN_TYPE_OUT_OF_PROCESS,
@@ -217,11 +210,13 @@ class PepperMessageFilter
   net::SSLConfig ssl_config_;
   // This is lazily created. Users should use GetCertVerifier to retrieve it.
   scoped_ptr<net::CertVerifier> cert_verifier_;
+  // This is lazily created. Users should use GetTransportSecurityState to
+  // retrieve it.
+  scoped_ptr<net::TransportSecurityState> transport_security_state_;
 
   uint32 next_socket_id_;
 
   TCPSocketMap tcp_sockets_;
-  TCPServerSocketMap tcp_server_sockets_;
 
   NetworkMonitorIdSet network_monitor_ids_;
 

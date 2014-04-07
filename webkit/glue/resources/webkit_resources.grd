@@ -52,7 +52,7 @@
       <structure type="chrome_scaled_image" name="IDR_MEDIAPLAYER_FULLSCREEN_BUTTON_HOVER" file="mediaplayer_fullscreen_hover.png" />
       <structure type="chrome_scaled_image" name="IDR_MEDIAPLAYER_FULLSCREEN_BUTTON_DOWN" file="mediaplayer_fullscreen_down.png" />
       <structure type="chrome_scaled_image" name="IDR_MEDIAPLAYER_FULLSCREEN_BUTTON_DISABLED" file="mediaplayer_fullscreen_disabled.png" />
-      <if expr="pp_ifdef('android')">
+      <if expr="is_android">
         <structure type="chrome_scaled_image" name="IDR_MEDIAPLAYER_OVERLAY_PLAY_BUTTON" file="mediaplayer_overlay_play.png" />
       </if>
       <if expr="is_macosx">
@@ -70,7 +70,6 @@
       <structure type="chrome_scaled_image" name="IDR_AUTOFILL_CC_GENERIC" file="cc-generic.png" />
       <structure type="chrome_scaled_image" name="IDR_AUTOFILL_CC_JCB" file="jcb.png" />
       <structure type="chrome_scaled_image" name="IDR_AUTOFILL_CC_MASTERCARD" file="mastercard.png" />
-      <structure type="chrome_scaled_image" name="IDR_AUTOFILL_CC_SOLO" file="solo.png" />
       <structure type="chrome_scaled_image" name="IDR_AUTOFILL_CC_VISA" file="visa.png" />
       <structure type="chrome_scaled_image" name="IDR_PDF_BUTTON_FTP" file="pdf_button_ftp.png" />
       <structure type="chrome_scaled_image" name="IDR_PDF_BUTTON_FTP_HOVER" file="pdf_button_ftp_hover.png" />
@@ -93,6 +92,7 @@
       <structure type="chrome_scaled_image" name="IDR_PDF_BUTTON_PRINT" file="pdf_button_print.png" />
       <structure type="chrome_scaled_image" name="IDR_PDF_BUTTON_PRINT_HOVER" file="pdf_button_print_hover.png" />
       <structure type="chrome_scaled_image" name="IDR_PDF_BUTTON_PRINT_PRESSED" file="pdf_button_print_pressed.png" />
+      <structure type="chrome_scaled_image" name="IDR_PDF_BUTTON_PRINT_DISABLED" file="pdf_button_print_disabled.png" />
       <structure type="chrome_scaled_image" name="IDR_PDF_THUMBNAIL_0" file="pdf_thumbnail_0.png" />
       <structure type="chrome_scaled_image" name="IDR_PDF_THUMBNAIL_1" file="pdf_thumbnail_1.png" />
       <structure type="chrome_scaled_image" name="IDR_PDF_THUMBNAIL_2" file="pdf_thumbnail_2.png" />
@@ -118,6 +118,7 @@
       <structure type="chrome_scaled_image" name="IDR_PDF_PAGE_DROPSHADOW" file="pdf_dropshadow.png" />
       <structure type="chrome_scaled_image" name="IDR_PASSWORD_GENERATION_ICON" file="password_generation.png" />
       <structure type="chrome_scaled_image" name="IDR_PASSWORD_GENERATION_ICON_HOVER" file="password_generation_hover.png" />
+      <structure type="chrome_scaled_image" name="IDR_SYNTHETIC_TOUCH_CURSOR" file="synthetic_touch_cursor.png" />
     </structures>
   </release>
 </grit>

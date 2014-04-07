@@ -48,6 +48,7 @@ enum Status {
   C_DISASSEMBLY_FAILED = 25,      //
   C_ASSEMBLY_FAILED = 26,         //
   C_ADJUSTMENT_FAILED = 27,       //
+  C_TRIM_FAILED = 28,             // TrimLabels failed
 };
 
 // What type of executable is something
@@ -56,6 +57,7 @@ enum ExecutableType {
   EXE_UNKNOWN = 0,
   EXE_WIN_32_X86 = 1,
   EXE_ELF_32_X86 = 2,
+  EXE_ELF_32_ARM = 3,
 };
 
 class SinkStream;
@@ -105,6 +107,10 @@ Status DetectExecutableType(const void* buffer, size_t length,
 // |*output| to NULL.
 Status ParseDetectedExecutable(const void* buffer, size_t length,
                                AssemblyProgram** output);
+
+// Trims labels used fewer than a given number of times from an
+// assembly program in-place.
+Status TrimLabels(AssemblyProgram* program);
 
 // Converts |program| into encoded form, returning it as |*output|.
 // Returns C_OK if succeeded, otherwise returns an error status and

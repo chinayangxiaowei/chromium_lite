@@ -6,7 +6,7 @@
 
 #include "base/bind.h"
 #include "base/command_line.h"
-#include "content/common/child_thread.h"
+#include "content/child/child_thread.h"
 #include "content/common/gpu/gpu_channel.h"
 #include "content/common/gpu/gpu_memory_manager.h"
 #include "content/common/gpu/gpu_messages.h"
@@ -33,16 +33,15 @@ GpuChannelManager::GpuChannelManager(ChildThread* gpu_child_thread,
                                      GpuWatchdog* watchdog,
                                      base::MessageLoopProxy* io_message_loop,
                                      base::WaitableEvent* shutdown_event)
-    : ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)),
+    : weak_factory_(this),
       io_message_loop_(io_message_loop),
       shutdown_event_(shutdown_event),
       gpu_child_thread_(gpu_child_thread),
-      ALLOW_THIS_IN_INITIALIZER_LIST(gpu_memory_manager_(
+      gpu_memory_manager_(
           this,
-          GpuMemoryManager::kDefaultMaxSurfacesWithFrontbufferSoftLimit)),
+          GpuMemoryManager::kDefaultMaxSurfacesWithFrontbufferSoftLimit),
       watchdog_(watchdog),
-      sync_point_manager_(new SyncPointManager),
-      program_cache_(NULL) {
+      sync_point_manager_(new SyncPointManager) {
   DCHECK(gpu_child_thread);
   DCHECK(io_message_loop);
   DCHECK(shutdown_event);
@@ -91,7 +90,7 @@ GpuChannel* GpuChannelManager::LookupChannel(int32 client_id) {
   if (iter == gpu_channels_.end())
     return NULL;
   else
-    return iter->second;
+    return iter->second.get();
 }
 
 bool GpuChannelManager::OnMessageReceived(const IPC::Message& msg) {
@@ -120,13 +119,13 @@ void GpuChannelManager::OnEstablishChannel(int client_id, bool share_context) {
   gfx::GLShareGroup* share_group = NULL;
   gpu::gles2::MailboxManager* mailbox_manager = NULL;
   if (share_context) {
-    if (!share_group_) {
+    if (!share_group_.get()) {
       share_group_ = new gfx::GLShareGroup;
-      DCHECK(!mailbox_manager_);
+      DCHECK(!mailbox_manager_.get());
       mailbox_manager_ = new gpu::gles2::MailboxManager;
     }
-    share_group = share_group_;
-    mailbox_manager = mailbox_manager_;
+    share_group = share_group_.get();
+    mailbox_manager = mailbox_manager_.get();
   }
 
   scoped_refptr<GpuChannel> channel = new GpuChannel(this,
@@ -135,7 +134,7 @@ void GpuChannelManager::OnEstablishChannel(int client_id, bool share_context) {
                                                      mailbox_manager,
                                                      client_id,
                                                      false);
-  if (channel->Init(io_message_loop_, shutdown_event_)) {
+  if (channel->Init(io_message_loop_.get(), shutdown_event_)) {
     gpu_channels_[client_id] = channel;
     channel_handle.name = channel->GetChannelName();
 
@@ -279,7 +278,11 @@ uint64 GpuChannelManager::MessagesProcessed() {
 }
 
 void GpuChannelManager::LoseAllContexts() {
-  MessageLoop::current()->PostTask(
+  for (GpuChannelMap::iterator iter = gpu_channels_.begin();
+       iter != gpu_channels_.end(); ++iter) {
+    iter->second->MarkAllContextsLost();
+  }
+  base::MessageLoop::current()->PostTask(
       FROM_HERE,
       base::Bind(&GpuChannelManager::OnLoseAllContexts,
                  weak_factory_.GetWeakPtr()));
@@ -291,8 +294,8 @@ void GpuChannelManager::OnLoseAllContexts() {
 
 gfx::GLSurface* GpuChannelManager::GetDefaultOffscreenSurface() {
   if (!default_offscreen_surface_.get()) {
-    default_offscreen_surface_ = gfx::GLSurface::CreateOffscreenGLSurface(
-        false, gfx::Size(1, 1));
+    default_offscreen_surface_ =
+        gfx::GLSurface::CreateOffscreenGLSurface(gfx::Size(1, 1));
   }
   return default_offscreen_surface_.get();
 }

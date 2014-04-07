@@ -7,7 +7,7 @@
 #include <gtk/gtk.h>
 
 #include "base/logging.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/confirm_bubble.h"
 #include "chrome/browser/ui/confirm_bubble_model.h"
@@ -81,7 +81,7 @@ void ConfirmBubbleGtk::Show() {
   gtk_box_pack_start(GTK_BOX(row), title_label, FALSE, FALSE, 0);
   gtk_box_pack_start(GTK_BOX(row), gtk_label_new(NULL), TRUE, TRUE, 0);
 
-  close_button_.reset(CustomDrawButton::CloseButton(theme_service));
+  close_button_.reset(CustomDrawButton::CloseButtonBubble(theme_service));
   g_signal_connect(close_button_->widget(), "clicked",
                    G_CALLBACK(OnCloseButtonThunk), this);
   gtk_box_pack_end(GTK_BOX(row), close_button_->widget(), FALSE, FALSE, 0);

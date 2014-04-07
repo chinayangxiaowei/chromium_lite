@@ -6,6 +6,7 @@
 
 #include "base/command_line.h"
 #include "base/prefs/pref_service.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/prefs/incognito_mode_prefs.h"
 #include "chrome/browser/profiles/profile.h"
@@ -16,6 +17,7 @@
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/chrome_pages.h"
+#include "chrome/browser/ui/singleton_tabs.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
@@ -30,6 +32,9 @@
 using content::WebContents;
 
 namespace {
+
+const char kExpectedTitle[] = "PASSED!";
+const char kEchoTitleCommand[] = "echotitle";
 
 GURL GetGoogleURL() {
   return GURL("http://www.google.com/");
@@ -61,7 +66,7 @@ GURL ShortenUberURL(const GURL& url) {
   return GURL(url_string);
 }
 
-} // namespace
+}  // namespace
 
 chrome::NavigateParams BrowserNavigatorTest::MakeNavigateParams() const {
   return MakeNavigateParams(browser());
@@ -75,10 +80,38 @@ chrome::NavigateParams BrowserNavigatorTest::MakeNavigateParams(
   return params;
 }
 
+bool BrowserNavigatorTest::OpenPOSTURLInNewForegroundTabAndGetTitle(
+    const GURL& url, const std::string& post_data, bool is_browser_initiated,
+    base::string16* title) {
+  chrome::NavigateParams param(MakeNavigateParams());
+  param.disposition = NEW_FOREGROUND_TAB;
+  param.url = url;
+  param.is_renderer_initiated = !is_browser_initiated;
+  param.uses_post = true;
+  param.browser_initiated_post_data = new base::RefCountedStaticMemory(
+      reinterpret_cast<const uint8*>(post_data.data()), post_data.size());
+
+  ui_test_utils::NavigateToURL(&param);
+  if (!param.target_contents)
+    return false;
+
+  // Navigate() should have opened the contents in new foreground tab in the
+  // current Browser.
+  EXPECT_EQ(browser(), param.browser);
+  EXPECT_EQ(browser()->tab_strip_model()->GetActiveWebContents(),
+            param.target_contents);
+  // We should have one window, with one tab.
+  EXPECT_EQ(1u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(2, browser()->tab_strip_model()->count());
+
+  *title = param.target_contents->GetTitle();
+  return true;
+}
+
 Browser* BrowserNavigatorTest::CreateEmptyBrowserForType(Browser::Type type,
                                                          Profile* profile) {
   Browser* browser = new Browser(
-      Browser::CreateParams(type, profile, chrome::HOST_DESKTOP_TYPE_NATIVE));
+      Browser::CreateParams(type, profile, chrome::GetActiveDesktop()));
   chrome::AddBlankTabAt(browser, -1, true);
   return browser;
 }
@@ -88,7 +121,7 @@ Browser* BrowserNavigatorTest::CreateEmptyBrowserForApp(Browser::Type type,
   Browser* browser = new Browser(
       Browser::CreateParams::CreateForApp(
           Browser::TYPE_POPUP, "Test", gfx::Rect(), profile,
-          chrome::HOST_DESKTOP_TYPE_NATIVE));
+          chrome::GetActiveDesktop()));
   chrome::AddBlankTabAt(browser, -1, true);
   return browser;
 }
@@ -161,7 +194,7 @@ void BrowserNavigatorTest::RunDoNothingIfIncognitoIsForcedTest(
   // The page should not be opened.
   EXPECT_EQ(browser, p.browser);
   EXPECT_EQ(1, browser->tab_strip_model()->count());
-  EXPECT_EQ(GURL(chrome::kAboutBlankURL),
+  EXPECT_EQ(GURL(content::kAboutBlankURL),
             browser->tab_strip_model()->GetActiveWebContents()->GetURL());
 }
 
@@ -184,6 +217,8 @@ namespace {
 
 // This test verifies that when a navigation occurs within a tab, the tab count
 // of the Browser remains the same and the current tab bears the loaded URL.
+// Note that network URLs are not actually loaded in tests, so this also tests
+// that error pages leave the intended URL in the address bar.
 IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest, Disposition_CurrentTab) {
   ui_test_utils::NavigateToURL(browser(), GetGoogleURL());
   EXPECT_EQ(GetGoogleURL(),
@@ -920,6 +955,28 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
   RunUseNonIncognitoWindowTest(GetSettingsURL());
 }
 
+// This test verifies that the view-source settings page isn't opened in the
+// incognito window.
+IN_PROC_BROWSER_TEST_F(
+    BrowserNavigatorTest,
+    Disposition_ViewSource_Settings_DoNothingIfIncognitoForced) {
+  std::string view_source(content::kViewSourceScheme);
+  view_source.append(":");
+  view_source.append(chrome::kChromeUISettingsURL);
+  RunDoNothingIfIncognitoIsForcedTest(GURL(view_source));
+}
+
+// This test verifies that the view-source settings page isn't opened in the
+// incognito window even if incognito mode is forced (does nothing in that
+// case).
+IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
+                       Disposition_ViewSource_Settings_UseNonIncognitoWindow) {
+  std::string view_source(content::kViewSourceScheme);
+  view_source.append(":");
+  view_source.append(chrome::kChromeUISettingsURL);
+  RunUseNonIncognitoWindowTest(GURL(view_source));
+}
+
 // This test verifies that the settings page isn't opened in the incognito
 // window from a non-incognito window (bookmark open-in-incognito trigger).
 // Disabled until fixed for uber settings: http://crbug.com/111243
@@ -968,22 +1025,6 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
   RunDoNothingIfIncognitoIsForcedTest(GURL(chrome::kChromeUIBookmarksURL));
 }
 
-// This test verifies that the sync promo page isn't opened in the incognito
-// window.
-IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
-                       Disposition_SyncPromo_UseNonIncognitoWindow) {
-  RunUseNonIncognitoWindowTest(GURL(chrome::kChromeUISyncPromoURL));
-}
-
-// The Sync promo page is expected to always open in normal mode regardless of
-// whether the user is trying to open it in incognito mode or not.  This test
-// verifies that if incognito mode is forced (by policy), the sync promo page
-// doesn't open at all.
-IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
-                       Disposition_SyncPromo_DoNothingIfIncognitoIsForced) {
-  RunDoNothingIfIncognitoIsForcedTest(GURL(chrome::kChromeUISyncPromoURL));
-}
-
 // This test makes sure a crashed singleton tab reloads from a new navigation.
 IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
                        NavigateToCrashedSingletonTab) {
@@ -1029,7 +1070,7 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
 IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
                        NavigateFromBlankToOptionsInSameTab) {
   chrome::NavigateParams p(MakeNavigateParams());
-  p.url = GURL(chrome::kAboutBlankURL);
+  p.url = GURL(content::kAboutBlankURL);
   ui_test_utils::NavigateToURL(&p);
 
   {
@@ -1265,4 +1306,53 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
   EXPECT_EQ(2u, chrome::GetTotalBrowserCount());
 }
 
-} // namespace
+IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest, ViewSourceIsntSingleton) {
+  const std::string viewsource_ntp_url =
+      std::string(content::kViewSourceScheme) + ":" +
+      chrome::kChromeUIVersionURL;
+
+  chrome::NavigateParams viewsource_params(browser(),
+                                           GURL(viewsource_ntp_url),
+                                           content::PAGE_TRANSITION_LINK);
+  ui_test_utils::NavigateToURL(&viewsource_params);
+
+  chrome::NavigateParams singleton_params(browser(),
+                                          GURL(chrome::kChromeUIVersionURL),
+                                          content::PAGE_TRANSITION_LINK);
+  singleton_params.disposition = SINGLETON_TAB;
+  EXPECT_EQ(-1, chrome::GetIndexOfSingletonTab(&singleton_params));
+}
+
+// This test verifies that browser initiated navigations can send requests
+// using POST.
+IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
+                       SendBrowserInitiatedRequestUsingPOST) {
+  // Uses a test sever to verify POST request.
+  ASSERT_TRUE(test_server()->Start());
+
+  // Open a browser initiated POST request in new foreground tab.
+  string16 expected_title(base::ASCIIToUTF16(kExpectedTitle));
+  std::string post_data = kExpectedTitle;
+  string16 title;
+  ASSERT_TRUE(OpenPOSTURLInNewForegroundTabAndGetTitle(
+      test_server()->GetURL(kEchoTitleCommand), post_data, true, &title));
+  EXPECT_EQ(expected_title, title);
+}
+
+// This test verifies that renderer initiated navigations can NOT send requests
+// using POST.
+IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
+                       SendRendererInitiatedRequestUsingPOST) {
+  // Uses a test sever to verify POST request.
+  ASSERT_TRUE(test_server()->Start());
+
+  // Open a renderer initiated POST request in new foreground tab.
+  string16 expected_title(base::ASCIIToUTF16(kExpectedTitle));
+  std::string post_data = kExpectedTitle;
+  string16 title;
+  ASSERT_TRUE(OpenPOSTURLInNewForegroundTabAndGetTitle(
+      test_server()->GetURL(kEchoTitleCommand), post_data, false, &title));
+  EXPECT_NE(expected_title, title);
+}
+
+}  // namespace

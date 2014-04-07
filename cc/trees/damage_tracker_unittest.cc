@@ -6,41 +6,31 @@
 
 #include "cc/base/math_util.h"
 #include "cc/layers/layer_impl.h"
+#include "cc/output/filter_operation.h"
+#include "cc/output/filter_operations.h"
 #include "cc/test/fake_impl_proxy.h"
 #include "cc/test/fake_layer_tree_host_impl.h"
 #include "cc/test/geometry_test_utils.h"
 #include "cc/trees/layer_tree_host_common.h"
 #include "cc/trees/single_thread_proxy.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebFilterOperation.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebFilterOperations.h"
 #include "third_party/skia/include/effects/SkBlurImageFilter.h"
 #include "ui/gfx/quad_f.h"
-
-using namespace WebKit;
 
 namespace cc {
 namespace {
 
-void ExecuteCalculateDrawProperties(
-    LayerImpl* root,
-    std::vector<LayerImpl*>& render_surface_layer_list) {
-  int dummy_max_texture_size = 512;
-
+void ExecuteCalculateDrawProperties(LayerImpl* root,
+                                    LayerImplList& render_surface_layer_list) {
   // Sanity check: The test itself should create the root layer's render
   //               surface, so that the surface (and its damage tracker) can
   //               persist across multiple calls to this function.
   ASSERT_TRUE(root->render_surface());
   ASSERT_FALSE(render_surface_layer_list.size());
 
-  LayerTreeHostCommon::CalculateDrawProperties(root,
-                                               root->bounds(),
-                                               1.f,
-                                               1.f,
-                                               dummy_max_texture_size,
-                                               false,
-                                               &render_surface_layer_list,
-                                               false);
+  LayerTreeHostCommon::CalcDrawPropsImplInputsForTesting inputs(
+      root, root->bounds(), &render_surface_layer_list);
+  LayerTreeHostCommon::CalculateDrawProperties(&inputs);
 }
 
 void ClearDamageForAllSurfaces(LayerImpl* layer) {
@@ -59,7 +49,7 @@ void EmulateDrawingOneFrame(LayerImpl* root) {
   //   3. resetting all update_rects and property_changed flags for all layers
   //      and surfaces.
 
-  std::vector<LayerImpl*> render_surface_layer_list;
+  LayerImplList render_surface_layer_list;
   ExecuteCalculateDrawProperties(root, render_surface_layer_list);
 
   // Iterate back-to-front, so that damage correctly propagates from descendant
@@ -190,7 +180,7 @@ class DamageTrackerTest : public testing::Test {
     return root.Pass();
   }
 
-protected:
+ protected:
   FakeImplProxy proxy_;
   FakeLayerTreeHostImpl host_impl_;
 };
@@ -413,31 +403,32 @@ TEST_F(DamageTrackerTest, VerifyDamageForPerspectiveClippedLayer) {
 }
 
 TEST_F(DamageTrackerTest, VerifyDamageForBlurredSurface) {
-  scoped_ptr<LayerImpl> root = CreateAndSetUpTestTreeWithOneSurface();
-  LayerImpl* child = root->children()[0];
+  scoped_ptr<LayerImpl> root = CreateAndSetUpTestTreeWithTwoSurfaces();
+  LayerImpl* surface = root->children()[0];
+  LayerImpl* child = surface->children()[0];
 
-  WebFilterOperations filters;
-  filters.append(WebFilterOperation::createBlurFilter(5));
+  FilterOperations filters;
+  filters.Append(FilterOperation::CreateBlurFilter(5.f));
   int outset_top, outset_right, outset_bottom, outset_left;
-  filters.getOutsets(outset_top, outset_right, outset_bottom, outset_left);
+  filters.GetOutsets(&outset_top, &outset_right, &outset_bottom, &outset_left);
 
   // Setting the filter will damage the whole surface.
   ClearDamageForAllSurfaces(root.get());
-  root->SetFilters(filters);
+  surface->SetFilters(filters);
   EmulateDrawingOneFrame(root.get());
 
   // Setting the update rect should cause the corresponding damage to the
   // surface, blurred based on the size of the blur filter.
   ClearDamageForAllSurfaces(root.get());
-  child->set_update_rect(gfx::RectF(10.f, 11.f, 12.f, 13.f));
+  child->set_update_rect(gfx::RectF(1.f, 2.f, 3.f, 4.f));
   EmulateDrawingOneFrame(root.get());
 
-  // Damage position on the surface should be: position of update_rect (10, 11)
-  // relative to the child (100, 100), but expanded by the blur outsets.
+  // Damage position on the surface should be: position of update_rect (1, 2)
+  // relative to the child (300, 300), but expanded by the blur outsets.
   gfx::RectF root_damage_rect =
           root->render_surface()->damage_tracker()->current_damage_rect();
   gfx::RectF expected_damage_rect =
-          gfx::RectF(110.f, 111.f, 12.f, 13.f);
+          gfx::RectF(301.f, 302.f, 3.f, 4.f);
 
   expected_damage_rect.Inset(-outset_left,
                              -outset_top,
@@ -490,10 +481,10 @@ TEST_F(DamageTrackerTest, VerifyDamageForBackgroundBlurredChild) {
   // Allow us to set damage on child1 too.
   child1->SetDrawsContent(true);
 
-  WebFilterOperations filters;
-  filters.append(WebFilterOperation::createBlurFilter(2));
+  FilterOperations filters;
+  filters.Append(FilterOperation::CreateBlurFilter(2.f));
   int outset_top, outset_right, outset_bottom, outset_left;
-  filters.getOutsets(outset_top, outset_right, outset_bottom, outset_left);
+  filters.GetOutsets(&outset_top, &outset_right, &outset_bottom, &outset_left);
 
   // Setting the filter will damage the whole surface.
   ClearDamageForAllSurfaces(root.get());
@@ -808,11 +799,10 @@ TEST_F(DamageTrackerTest, VerifyDamageForSurfaceChangeFromAncestorLayer) {
   // the entire child1 surface, but the damage tracker still needs the correct
   // logic to compute the exposed region on the root surface.
 
-  // FIXME: the expectations of this test case should change when we add
-  //        support for a unique scissor_rect per RenderSurface. In that case,
-  //        the child1 surface should be completely unchanged, since we are
-  //        only transforming it, while the root surface would be damaged
-  //        appropriately.
+  // TODO(shawnsingh): the expectations of this test case should change when we
+  // add support for a unique scissor_rect per RenderSurface. In that case, the
+  // child1 surface should be completely unchanged, since we are only
+  // transforming it, while the root surface would be damaged appropriately.
 
   scoped_ptr<LayerImpl> root = CreateAndSetUpTestTreeWithTwoSurfaces();
   LayerImpl* child1 = root->children()[0];
@@ -1261,30 +1251,35 @@ TEST_F(DamageTrackerTest, VerifyDamageForReplicaMaskWithAnchor) {
   EXPECT_FLOAT_RECT_EQ(gfx::RectF(206.f, 200.f, 6.f, 8.f), child_damage_rect);
 }
 
-TEST_F(DamageTrackerTest, VerifyDamageWhenForcedFullDamage) {
+TEST_F(DamageTrackerTest, DamageWhenAddedExternally) {
   scoped_ptr<LayerImpl> root = CreateAndSetUpTestTreeWithOneSurface();
   LayerImpl* child = root->children()[0];
 
-  // Case 1: This test ensures that when the tracker is forced to have full
-  //         damage, that it takes priority over any other partial damage.
+  // Case 1: This test ensures that when the tracker is given damage, that
+  //         it is included with any other partial damage.
   //
   ClearDamageForAllSurfaces(root.get());
-  child->set_update_rect(gfx::RectF(10.f, 11.f, 12.f, 13.f));
-  root->render_surface()->damage_tracker()->ForceFullDamageNextUpdate();
+  child->set_update_rect(gfx::RectF(10, 11, 12, 13));
+  root->render_surface()->damage_tracker()->AddDamageNextUpdate(
+      gfx::RectF(15, 16, 32, 33));
   EmulateDrawingOneFrame(root.get());
   gfx::RectF root_damage_rect =
-          root->render_surface()->damage_tracker()->current_damage_rect();
-  EXPECT_FLOAT_RECT_EQ(gfx::RectF(0.f, 0.f, 500.f, 500.f), root_damage_rect);
+      root->render_surface()->damage_tracker()->current_damage_rect();
+  EXPECT_FLOAT_RECT_EQ(
+      gfx::UnionRects(gfx::RectF(15, 16, 32, 33),
+                      gfx::RectF(100+10, 100+11, 12, 13)),
+      root_damage_rect);
 
-  // Case 2: An additional sanity check that forcing full damage works even
-  //         when nothing on the layer tree changed.
+  // Case 2: An additional sanity check that adding damage works even when
+  //         nothing on the layer tree changed.
   //
   ClearDamageForAllSurfaces(root.get());
-  root->render_surface()->damage_tracker()->ForceFullDamageNextUpdate();
+  root->render_surface()->damage_tracker()->AddDamageNextUpdate(
+      gfx::RectF(30, 31, 14, 15));
   EmulateDrawingOneFrame(root.get());
   root_damage_rect =
-          root->render_surface()->damage_tracker()->current_damage_rect();
-  EXPECT_FLOAT_RECT_EQ(gfx::RectF(0.f, 0.f, 500.f, 500.f), root_damage_rect);
+      root->render_surface()->damage_tracker()->current_damage_rect();
+  EXPECT_FLOAT_RECT_EQ(gfx::RectF(30, 31, 14, 15), root_damage_rect);
 }
 
 TEST_F(DamageTrackerTest, VerifyDamageForEmptyLayerList) {
@@ -1296,14 +1291,15 @@ TEST_F(DamageTrackerTest, VerifyDamageForEmptyLayerList) {
 
   ASSERT_TRUE(root == root->render_target());
   RenderSurfaceImpl* target_surface = root->render_surface();
-  target_surface->ClearLayerLists();
+
+  LayerImplList empty_list;
   target_surface->damage_tracker()->UpdateDamageTrackingState(
-      target_surface->layer_list(),
+      empty_list,
       target_surface->OwningLayerId(),
       false,
       gfx::Rect(),
       NULL,
-      WebFilterOperations(),
+      FilterOperations(),
       NULL);
 
   gfx::RectF damage_rect =

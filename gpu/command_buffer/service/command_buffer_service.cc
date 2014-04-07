@@ -6,7 +6,7 @@
 
 #include <limits>
 
-#include "base/process_util.h"
+#include "base/logging.h"
 #include "base/debug/trace_event.h"
 #include "gpu/command_buffer/common/cmd_buffer_common.h"
 #include "gpu/command_buffer/common/command_buffer_shared.h"
@@ -137,8 +137,10 @@ Buffer CommandBufferService::CreateTransferBuffer(size_t size,
   static int32 next_id = 1;
   *id = next_id++;
 
-  if (!RegisterTransferBuffer(*id, &buffer, size))
+  if (!RegisterTransferBuffer(*id, &buffer, size)) {
+    *id = -1;
     return Buffer();
+  }
 
   return GetTransferBuffer(*id);
 }

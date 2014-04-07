@@ -5,10 +5,8 @@
 #include "apps/switches.h"
 
 namespace apps {
-namespace switches {
 
-// If true an app list shortcut will be shown in the taskbar.
-const char kShowAppListShortcut[] = "show-app-list-shortcut";
+// Loads an app from the specified directory and launches it.
+const char kLoadAndLaunchApp[] = "load-and-launch-app";
 
-}  // namespace switches
 }  // namespace apps

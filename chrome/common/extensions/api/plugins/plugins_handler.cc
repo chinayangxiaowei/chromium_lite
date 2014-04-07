@@ -5,11 +5,14 @@
 #include "chrome/common/extensions/api/plugins/plugins_handler.h"
 
 #include "base/file_util.h"
-#include "base/string_number_conversions.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/common/extensions/extension_manifest_constants.h"
 #include "chrome/common/extensions/manifest.h"
+#include "chrome/common/extensions/permissions/api_permission.h"
+#include "chrome/common/extensions/permissions/api_permission_set.h"
+#include "chrome/common/extensions/permissions/permissions_data.h"
 #include "extensions/common/error_utils.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -64,7 +67,7 @@ const std::vector<std::string> PluginsHandler::Keys() const {
 }
 
 bool PluginsHandler::Parse(Extension* extension, string16* error) {
-  const ListValue* list_value = NULL;
+  const base::ListValue* list_value = NULL;
   if (!extension->manifest()->GetList(keys::kPlugins, &list_value)) {
     *error = ASCIIToUTF16(extension_manifest_errors::kInvalidPlugins);
     return false;
@@ -73,7 +76,7 @@ bool PluginsHandler::Parse(Extension* extension, string16* error) {
   scoped_ptr<PluginManifestData> plugins_data(new PluginManifestData);
 
   for (size_t i = 0; i < list_value->GetSize(); ++i) {
-    const DictionaryValue* plugin_value = NULL;
+    const base::DictionaryValue* plugin_value = NULL;
     if (!list_value->GetDictionary(i, &plugin_value)) {
       *error = ASCIIToUTF16(extension_manifest_errors::kInvalidPlugins);
       return false;
@@ -113,8 +116,11 @@ bool PluginsHandler::Parse(Extension* extension, string16* error) {
         is_public));
   }
 
-  if (!plugins_data->plugins.empty())
+  if (!plugins_data->plugins.empty()) {
     extension->SetManifestData(keys::kPlugins, plugins_data.release());
+    PermissionsData::GetInitialAPIPermissions(extension)->insert(
+        APIPermission::kPlugin);
+  }
 
   return true;
 }
@@ -130,7 +136,7 @@ bool PluginsHandler::Validate(const Extension* extension,
     for (std::vector<extensions::PluginInfo>::const_iterator plugin =
              plugins->begin();
          plugin != plugins->end(); ++plugin) {
-      if (!file_util::PathExists(plugin->path)) {
+      if (!base::PathExists(plugin->path)) {
         *error = l10n_util::GetStringFUTF8(
             IDS_EXTENSION_LOAD_PLUGIN_PATH_FAILED,
             plugin->path.LossyDisplayName());

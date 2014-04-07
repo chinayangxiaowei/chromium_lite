@@ -8,9 +8,10 @@
 #include <dinputd.h>
 
 #include "base/debug/trace_event.h"
-#include "base/stringprintf.h"
-#include "content/common/gamepad_messages.h"
+#include "base/strings/stringprintf.h"
+#include "base/win/windows_version.h"
 #include "content/common/gamepad_hardware_buffer.h"
+#include "content/common/gamepad_messages.h"
 
 // This was removed from the Windows 8 SDK for some reason.
 // We need it so we can get state for axes without worrying if they
@@ -211,12 +212,17 @@ BOOL CALLBACK DirectInputEnumDevicesCallback(const DIDEVICEINSTANCE* instance,
 GamepadPlatformDataFetcherWin::GamepadPlatformDataFetcherWin()
     : xinput_dll_(base::FilePath(FILE_PATH_LITERAL("xinput1_3.dll"))),
       xinput_available_(GetXInputDllFunctions()) {
-  directinput_available_ = SUCCEEDED(DirectInput8Create(
-      GetModuleHandle(NULL),
-      DIRECTINPUT_VERSION,
-      IID_IDirectInput8,
-      reinterpret_cast<void**>(&directinput_interface_),
-      NULL));
+  // TODO(teravest): http://crbug.com/260187
+  if (base::win::GetVersion() > base::win::VERSION_XP) {
+    directinput_available_ = SUCCEEDED(DirectInput8Create(
+        GetModuleHandle(NULL),
+        DIRECTINPUT_VERSION,
+        IID_IDirectInput8,
+        reinterpret_cast<void**>(&directinput_interface_),
+        NULL));
+  } else {
+    directinput_available_ = false;
+  }
   for (size_t i = 0; i < WebGamepads::itemsLengthCap; ++i)
     pad_state_[i].status = DISCONNECTED;
 }
@@ -473,15 +479,15 @@ void GamepadPlatformDataFetcherWin::GetDirectInputPadData(
 bool GamepadPlatformDataFetcherWin::GetXInputDllFunctions() {
   xinput_get_capabilities_ = NULL;
   xinput_get_state_ = NULL;
-  xinput_enable_ = static_cast<XInputEnableFunc>(
+  xinput_enable_ = reinterpret_cast<XInputEnableFunc>(
       xinput_dll_.GetFunctionPointer("XInputEnable"));
   if (!xinput_enable_)
     return false;
-  xinput_get_capabilities_ = static_cast<XInputGetCapabilitiesFunc>(
+  xinput_get_capabilities_ = reinterpret_cast<XInputGetCapabilitiesFunc>(
       xinput_dll_.GetFunctionPointer("XInputGetCapabilities"));
   if (!xinput_get_capabilities_)
     return false;
-  xinput_get_state_ = static_cast<XInputGetStateFunc>(
+  xinput_get_state_ = reinterpret_cast<XInputGetStateFunc>(
       xinput_dll_.GetFunctionPointer("XInputGetState"));
   if (!xinput_get_state_)
     return false;

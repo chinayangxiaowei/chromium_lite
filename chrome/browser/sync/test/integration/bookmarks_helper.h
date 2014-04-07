@@ -11,9 +11,9 @@
 
 #include "base/compiler_specific.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
-#include "googleurl/src/gurl.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkBitmap.h"
+#include "url/gurl.h"
 
 class GURL;
 
@@ -120,6 +120,9 @@ void Move(
 // Removes the node in the bookmark model of profile |profile| under the node
 // |parent| at position |index|.
 void Remove(int profile, const BookmarkNode* parent, int index);
+
+// Removes all non-permanent nodes in the bookmark model of profile |profile|.
+void RemoveAll(int profile);
 
 // Sorts the children of the node |parent| in the bookmark model of profile
 // |profile|.

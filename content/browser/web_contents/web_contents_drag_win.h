@@ -11,13 +11,12 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/threading/platform_thread.h"
 #include "content/common/content_export.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebDragOperation.h"
+#include "third_party/WebKit/public/web/WebDragOperation.h"
 #include "ui/base/dragdrop/os_exchange_data_provider_win.h"
 #include "ui/gfx/native_widget_types.h"
 #include "ui/gfx/point.h"
 
 class SkBitmap;
-struct WebDropData;
 
 namespace gfx {
 class ImageSkia;
@@ -28,6 +27,7 @@ class DragDropThread;
 class WebContents;
 class WebDragDest;
 class WebDragSource;
+struct DropData;
 
 // Windows-specific drag-and-drop handling in WebContentsView.
 // If we are dragging a virtual file out of the browser, we use a background
@@ -45,7 +45,7 @@ class CONTENT_EXPORT WebContentsDragWin
   virtual ~WebContentsDragWin();
 
   // Called on UI thread.
-  void StartDragging(const WebDropData& drop_data,
+  void StartDragging(const DropData& drop_data,
                      WebKit::WebDragOperationsMask ops,
                      const gfx::ImageSkia& image,
                      const gfx::Vector2d& image_offset);
@@ -56,21 +56,24 @@ class CONTENT_EXPORT WebContentsDragWin
   virtual void OnWaitForData();
   virtual void OnDataObjectDisposed();
 
+  // Don't invoke OLE DoDragDrop during tests.
+  static void DisableDragDropForTesting();
+
  private:
   // Called on either UI thread or drag-and-drop thread.
-  void PrepareDragForDownload(const WebDropData& drop_data,
+  void PrepareDragForDownload(const DropData& drop_data,
                               ui::OSExchangeData* data,
                               const GURL& page_url,
                               const std::string& page_encoding);
-  void PrepareDragForFileContents(const WebDropData& drop_data,
+  void PrepareDragForFileContents(const DropData& drop_data,
                                   ui::OSExchangeData* data);
-  void PrepareDragForUrl(const WebDropData& drop_data,
+  void PrepareDragForUrl(const DropData& drop_data,
                          ui::OSExchangeData* data);
   // Returns false if the source window becomes invalid when the drag ends.
   // This could happen when the window gets destroyed when the drag is still in
   // progress. No further processing should be done beyond this return point
   // because the instance has been destroyed.
-  bool DoDragging(const WebDropData& drop_data,
+  bool DoDragging(const DropData& drop_data,
                   WebKit::WebDragOperationsMask ops,
                   const GURL& page_url,
                   const std::string& page_encoding,
@@ -78,7 +81,7 @@ class CONTENT_EXPORT WebContentsDragWin
                   const gfx::Vector2d& image_offset);
 
   // Called on drag-and-drop thread.
-  void StartBackgroundDragging(const WebDropData& drop_data,
+  void StartBackgroundDragging(const DropData& drop_data,
                                WebKit::WebDragOperationsMask ops,
                                const GURL& page_url,
                                const std::string& page_encoding,

@@ -46,6 +46,7 @@ class BrowserTestBase;
 class GLHelper;
 class GpuChannelHost;
 class RenderWidgetHelper;
+class ScopedAllowWaitForAndroidLayoutTests;
 class TextInputClientMac;
 }
 namespace dbus {
@@ -71,6 +72,10 @@ class AutoThread;
 }
 
 namespace base {
+
+namespace android {
+class JavaHandlerThread;
+}
 
 class SequencedWorkerPool;
 class SimpleThread;
@@ -172,6 +177,7 @@ class BASE_EXPORT ThreadRestrictions {
   // BEGIN ALLOWED USAGE.
   friend class content::BrowserTestBase;
   friend class content::RenderWidgetHelper;
+  friend class content::ScopedAllowWaitForAndroidLayoutTests;
   friend class ::HistogramSynchronizer;
   friend class ::ScopedAllowWaitForLegacyWebViewApi;
   friend class ::TestingAutomationProvider;
@@ -182,6 +188,8 @@ class BASE_EXPORT ThreadRestrictions {
   friend class SimpleThread;
   friend class Thread;
   friend class ThreadTestHelper;
+  friend class PlatformThread;
+  friend class android::JavaHandlerThread;
 
   // END ALLOWED USAGE.
   // BEGIN USAGE THAT NEEDS TO BE FIXED.

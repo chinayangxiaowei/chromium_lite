@@ -4,17 +4,17 @@
 
 #include "remoting/host/setup/oauth_helper.h"
 
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "google_apis/google_api_keys.h"
-#include "googleurl/src/url_parse.h"
 #include "net/base/escape.h"
+#include "url/url_parse.h"
 
 namespace {
 
 std::string GetComponent(const std::string& url,
                          const url_parse::Component component) {
   if (component.len < 0) {
-    return "";
+    return std::string();
   }
   return url.substr(component.begin, component.len);
 }
@@ -60,11 +60,11 @@ std::string GetOauthCodeInUrl(const std::string& url,
                    &redirect_url_parsed);
   if (GetComponent(url, url_parsed.scheme) !=
       GetComponent(redirect_url, redirect_url_parsed.scheme)) {
-    return "";
+    return std::string();
   }
   if (GetComponent(url, url_parsed.host) !=
       GetComponent(redirect_url, redirect_url_parsed.host)) {
-    return "";
+    return std::string();
   }
   url_parse::Component query = url_parsed.query;
   url_parse::Component key;
@@ -74,7 +74,7 @@ std::string GetOauthCodeInUrl(const std::string& url,
       return GetComponent(url, value);
     }
   }
-  return "";
+  return std::string();
 }
 
 }  // namespace remoting

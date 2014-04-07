@@ -5,9 +5,13 @@
 #ifndef CC_LAYERS_RENDER_SURFACE_IMPL_H_
 #define CC_LAYERS_RENDER_SURFACE_IMPL_H_
 
+#include <string>
+#include <vector>
+
 #include "base/basictypes.h"
 #include "base/memory/scoped_ptr.h"
 #include "cc/base/cc_export.h"
+#include "cc/layers/layer_lists.h"
 #include "cc/quads/render_pass.h"
 #include "cc/quads/shared_quad_state.h"
 #include "ui/gfx/rect.h"
@@ -30,7 +34,6 @@ class CC_EXPORT RenderSurfaceImpl {
   virtual ~RenderSurfaceImpl();
 
   std::string Name() const;
-  void DumpSurface(std::string* str, int indent) const;
 
   gfx::PointF ContentRectCenter() const {
     return gfx::RectF(content_rect_).CenterPoint();
@@ -101,12 +104,23 @@ class CC_EXPORT RenderSurfaceImpl {
   void SetClipRect(gfx::Rect clip_rect);
   gfx::Rect clip_rect() const { return clip_rect_; }
 
+  // When false, the RenderSurface does not contribute to another target
+  // RenderSurface that is being drawn for the current frame. It could still be
+  // drawn to as a target, but its output will not be a part of any other
+  // surface.
+  bool contributes_to_drawn_surface() const {
+    return contributes_to_drawn_surface_;
+  }
+  void set_contributes_to_drawn_surface(bool contributes_to_drawn_surface) {
+    contributes_to_drawn_surface_ = contributes_to_drawn_surface;
+  }
+
   bool ContentsChanged() const;
 
   void SetContentRect(gfx::Rect content_rect);
   gfx::Rect content_rect() const { return content_rect_; }
 
-  std::vector<LayerImpl*>& layer_list() { return layer_list_; }
+  LayerImplList& layer_list() { return layer_list_; }
   void AddContributingDelegatedRenderPassLayer(LayerImpl* layer);
   void ClearLayerLists();
 
@@ -143,11 +157,12 @@ class CC_EXPORT RenderSurfaceImpl {
   bool screen_space_transforms_are_animating_;
 
   bool is_clipped_;
+  bool contributes_to_drawn_surface_;
 
   // Uses the space of the surface's target surface.
   gfx::Rect clip_rect_;
 
-  std::vector<LayerImpl*> layer_list_;
+  LayerImplList layer_list_;
   std::vector<DelegatedRendererLayerImpl*>
       contributing_delegated_render_pass_layer_list_;
 
@@ -167,5 +182,5 @@ class CC_EXPORT RenderSurfaceImpl {
   DISALLOW_COPY_AND_ASSIGN(RenderSurfaceImpl);
 };
 
-}
+}  // namespace cc
 #endif  // CC_LAYERS_RENDER_SURFACE_IMPL_H_

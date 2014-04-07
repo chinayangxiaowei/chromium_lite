@@ -45,13 +45,18 @@
 #include "content/public/browser/browser_message_filter.h"
 #include "ipc/ipc_message.h"
 
+namespace media {
+struct VideoCaptureCapability;
+}
+
 namespace content {
+class MediaStreamManager;
 
 class CONTENT_EXPORT VideoCaptureHost
     : public BrowserMessageFilter,
       public VideoCaptureControllerEventHandler {
  public:
-  VideoCaptureHost();
+  explicit VideoCaptureHost(MediaStreamManager* media_stream_manager);
 
   // BrowserMessageFilter implementation.
   virtual void OnChannelClosing() OVERRIDE;
@@ -67,11 +72,14 @@ class CONTENT_EXPORT VideoCaptureHost
   virtual void OnBufferReady(const VideoCaptureControllerID& id,
                              int buffer_id,
                              base::Time timestamp) OVERRIDE;
-  virtual void OnFrameInfo(const VideoCaptureControllerID& id,
-                           int width,
-                           int height,
-                           int frame_per_second) OVERRIDE;
-  virtual void OnPaused(const VideoCaptureControllerID& id) OVERRIDE;
+  virtual void OnFrameInfo(
+      const VideoCaptureControllerID& id,
+      const media::VideoCaptureCapability& format) OVERRIDE;
+  virtual void OnFrameInfoChanged(const VideoCaptureControllerID& id,
+                                  int width,
+                                  int height,
+                                  int frame_per_second) OVERRIDE;
+  virtual void OnEnded(const VideoCaptureControllerID& id) OVERRIDE;
 
  private:
   friend class BrowserThread;
@@ -117,9 +125,14 @@ class CONTENT_EXPORT VideoCaptureHost
       int buffer_id,
       base::Time timestamp);
 
-  // Send information about frame resolution and frame rate
+  // Send information about the capture parameters (resolution, frame rate etc)
   // to the VideoCaptureMessageFilter.
-  void DoSendFrameInfoOnIOThread(
+  void DoSendFrameInfoOnIOThread(const VideoCaptureControllerID& controller_id,
+                                 const media::VideoCaptureCapability& format);
+
+  // Send newly changed information about frame resolution and frame rate
+  // to the VideoCaptureMessageFilter.
+  void DoSendFrameInfoChangedOnIOThread(
       const VideoCaptureControllerID& controller_id,
       int width,
       int height,
@@ -128,14 +141,12 @@ class CONTENT_EXPORT VideoCaptureHost
   // Handle error coming from VideoCaptureDevice.
   void DoHandleErrorOnIOThread(const VideoCaptureControllerID& controller_id);
 
-  void DoPausedOnIOThread(const VideoCaptureControllerID& controller_id);
+  void DoEndedOnIOThread(const VideoCaptureControllerID& controller_id);
 
   void DeleteVideoCaptureControllerOnIOThread(
       const VideoCaptureControllerID& controller_id);
 
-  // Returns the video capture manager. This is a virtual function so that
-  // the unit tests can inject their own MediaStreamManager.
-  virtual VideoCaptureManager* GetVideoCaptureManager();
+  MediaStreamManager* media_stream_manager_;
 
   struct Entry;
   typedef std::map<VideoCaptureControllerID, Entry*> EntryMap;

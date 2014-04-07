@@ -4,11 +4,11 @@
 
 #include "chrome/browser/sync/backend_migrator.h"
 
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/tracked_objects.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/sync/glue/data_type_manager_mock.h"
 #include "chrome/browser/sync/profile_sync_service_mock.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "sync/internal_api/public/base/model_type_test_util.h"
 #include "sync/internal_api/public/test/test_user_share.h"
 #include "sync/internal_api/public/write_transaction.h"
@@ -77,11 +77,12 @@ class SyncBackendMigratorTest : public testing::Test {
       DataTypeManager::ConfigureResult result(status, requested_types);
       migrator_->OnConfigureDone(result);
     } else {
-      std::list<syncer::SyncError> errors;
+      std::map<syncer::ModelType, syncer::SyncError> errors;
       DataTypeManager::ConfigureResult result(
           status,
           requested_types,
           errors,
+          syncer::ModelTypeSet(),
           syncer::ModelTypeSet());
       migrator_->OnConfigureDone(result);
     }
@@ -101,7 +102,7 @@ class SyncBackendMigratorTest : public testing::Test {
 
  private:
   scoped_ptr<SyncSessionSnapshot> snap_;
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
   syncer::ModelTypeSet preferred_types_;
   NiceMock<ProfileSyncServiceMock> service_;
   NiceMock<DataTypeManagerMock> manager_;

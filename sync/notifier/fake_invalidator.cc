@@ -19,21 +19,12 @@ ObjectIdSet FakeInvalidator::GetRegisteredIds(
   return registrar_.GetRegisteredIds(handler);
 }
 
-const std::string& FakeInvalidator::GetUniqueId() const {
-  return unique_id_;
-}
-
 const std::string& FakeInvalidator::GetCredentialsEmail() const {
   return email_;
 }
 
 const std::string& FakeInvalidator::GetCredentialsToken() const {
   return token_;
-}
-
-const ObjectIdInvalidationMap&
-FakeInvalidator::GetLastSentInvalidationMap() const {
-  return last_sent_invalidation_map_;
 }
 
 void FakeInvalidator::EmitOnInvalidatorStateChange(InvalidatorState state) {
@@ -67,19 +58,10 @@ InvalidatorState FakeInvalidator::GetInvalidatorState() const {
   return registrar_.GetInvalidatorState();
 }
 
-void FakeInvalidator::SetUniqueId(const std::string& unique_id) {
-  unique_id_ = unique_id;
-}
-
 void FakeInvalidator::UpdateCredentials(
     const std::string& email, const std::string& token) {
   email_ = email;
   token_ = token;
-}
-
-void FakeInvalidator::SendInvalidation(
-    const ObjectIdInvalidationMap& invalidation_map) {
-  last_sent_invalidation_map_ = invalidation_map;
 }
 
 }  // namespace syncer

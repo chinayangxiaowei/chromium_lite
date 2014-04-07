@@ -3,10 +3,10 @@
 // found in the LICENSE file.
 //
 
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "base/test/test_simple_task_runner.h"
 #include "base/thread_task_runner_handle.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "chrome/browser/safe_browsing/protocol_manager.h"
 #include "google_apis/google_api_keys.h"
 #include "net/base/escape.h"
@@ -298,7 +298,7 @@ void HandleAddChunks(
   delete chunks;
   scoped_refptr<base::SingleThreadTaskRunner> task_runner(
       base::ThreadTaskRunnerHandle::Get());
-  if (!task_runner)
+  if (!task_runner.get())
     return;
   task_runner->PostTask(FROM_HERE, callback);
 }
@@ -378,7 +378,7 @@ TEST_F(SafeBrowsingProtocolManagerTest, ExistingDatabase) {
 
   url_fetcher->set_status(net::URLRequestStatus());
   url_fetcher->set_response_code(200);
-  url_fetcher->SetResponseString("");
+  url_fetcher->SetResponseString(std::string());
   url_fetcher->delegate()->OnURLFetchComplete(url_fetcher);
 
   EXPECT_TRUE(pm->IsUpdateScheduled());
@@ -424,7 +424,7 @@ TEST_F(SafeBrowsingProtocolManagerTest, UpdateResponseBadBodyBackupSuccess) {
   // Respond to the backup successfully.
   backup_url_fetcher->set_status(net::URLRequestStatus());
   backup_url_fetcher->set_response_code(200);
-  backup_url_fetcher->SetResponseString("");
+  backup_url_fetcher->SetResponseString(std::string());
   backup_url_fetcher->delegate()->OnURLFetchComplete(backup_url_fetcher);
 
   EXPECT_TRUE(pm->IsUpdateScheduled());
@@ -460,7 +460,7 @@ TEST_F(SafeBrowsingProtocolManagerTest, UpdateResponseHttpErrorBackupError) {
   // Go ahead and respond to it.
   url_fetcher->set_status(net::URLRequestStatus());
   url_fetcher->set_response_code(404);
-  url_fetcher->SetResponseString("");
+  url_fetcher->SetResponseString(std::string());
   url_fetcher->delegate()->OnURLFetchComplete(url_fetcher);
 
   // There should now be a backup request.
@@ -471,7 +471,7 @@ TEST_F(SafeBrowsingProtocolManagerTest, UpdateResponseHttpErrorBackupError) {
   // Respond to the backup unsuccessfully.
   backup_url_fetcher->set_status(net::URLRequestStatus());
   backup_url_fetcher->set_response_code(404);
-  backup_url_fetcher->SetResponseString("");
+  backup_url_fetcher->SetResponseString(std::string());
   backup_url_fetcher->delegate()->OnURLFetchComplete(backup_url_fetcher);
 
   EXPECT_TRUE(pm->IsUpdateScheduled());
@@ -507,7 +507,7 @@ TEST_F(SafeBrowsingProtocolManagerTest, UpdateResponseHttpErrorBackupSuccess) {
   // Go ahead and respond to it.
   url_fetcher->set_status(net::URLRequestStatus());
   url_fetcher->set_response_code(404);
-  url_fetcher->SetResponseString("");
+  url_fetcher->SetResponseString(std::string());
   url_fetcher->delegate()->OnURLFetchComplete(url_fetcher);
 
   // There should now be a backup request.
@@ -519,7 +519,7 @@ TEST_F(SafeBrowsingProtocolManagerTest, UpdateResponseHttpErrorBackupSuccess) {
   // Respond to the backup successfully.
   backup_url_fetcher->set_status(net::URLRequestStatus());
   backup_url_fetcher->set_response_code(200);
-  backup_url_fetcher->SetResponseString("");
+  backup_url_fetcher->SetResponseString(std::string());
   backup_url_fetcher->delegate()->OnURLFetchComplete(backup_url_fetcher);
 
   EXPECT_TRUE(pm->IsUpdateScheduled());
@@ -555,7 +555,7 @@ TEST_F(SafeBrowsingProtocolManagerTest, UpdateResponseHttpErrorBackupTimeout) {
   // Go ahead and respond to it.
   url_fetcher->set_status(net::URLRequestStatus());
   url_fetcher->set_response_code(404);
-  url_fetcher->SetResponseString("");
+  url_fetcher->SetResponseString(std::string());
   url_fetcher->delegate()->OnURLFetchComplete(url_fetcher);
 
   // There should now be a backup request.
@@ -617,7 +617,7 @@ TEST_F(SafeBrowsingProtocolManagerTest,
   // Respond to the backup unsuccessfully.
   backup_url_fetcher->set_status(net::URLRequestStatus());
   backup_url_fetcher->set_response_code(404);
-  backup_url_fetcher->SetResponseString("");
+  backup_url_fetcher->SetResponseString(std::string());
   backup_url_fetcher->delegate()->OnURLFetchComplete(backup_url_fetcher);
 
   EXPECT_TRUE(pm->IsUpdateScheduled());
@@ -665,7 +665,7 @@ TEST_F(SafeBrowsingProtocolManagerTest,
   // Respond to the backup unsuccessfully.
   backup_url_fetcher->set_status(net::URLRequestStatus());
   backup_url_fetcher->set_response_code(200);
-  backup_url_fetcher->SetResponseString("");
+  backup_url_fetcher->SetResponseString(std::string());
   backup_url_fetcher->delegate()->OnURLFetchComplete(backup_url_fetcher);
 
   EXPECT_TRUE(pm->IsUpdateScheduled());
@@ -713,7 +713,7 @@ TEST_F(SafeBrowsingProtocolManagerTest,
   // Respond to the backup unsuccessfully.
   backup_url_fetcher->set_status(net::URLRequestStatus());
   backup_url_fetcher->set_response_code(404);
-  backup_url_fetcher->SetResponseString("");
+  backup_url_fetcher->SetResponseString(std::string());
   backup_url_fetcher->delegate()->OnURLFetchComplete(backup_url_fetcher);
 
   EXPECT_TRUE(pm->IsUpdateScheduled());
@@ -762,7 +762,7 @@ TEST_F(SafeBrowsingProtocolManagerTest,
   // Respond to the backup unsuccessfully.
   backup_url_fetcher->set_status(net::URLRequestStatus());
   backup_url_fetcher->set_response_code(200);
-  backup_url_fetcher->SetResponseString("");
+  backup_url_fetcher->SetResponseString(std::string());
   backup_url_fetcher->delegate()->OnURLFetchComplete(backup_url_fetcher);
 
   EXPECT_TRUE(pm->IsUpdateScheduled());
@@ -807,7 +807,7 @@ TEST_F(SafeBrowsingProtocolManagerTest, UpdateResponseTimeoutBackupSuccess) {
   // Respond to the backup unsuccessfully.
   backup_url_fetcher->set_status(net::URLRequestStatus());
   backup_url_fetcher->set_response_code(200);
-  backup_url_fetcher->SetResponseString("");
+  backup_url_fetcher->SetResponseString(std::string());
   backup_url_fetcher->delegate()->OnURLFetchComplete(backup_url_fetcher);
 
   EXPECT_TRUE(pm->IsUpdateScheduled());
@@ -888,7 +888,7 @@ TEST_F(SafeBrowsingProtocolManagerTest, EmptyRedirectResponse) {
       chunk_url_fetcher, "https://redirect-server.example.com/path");
   chunk_url_fetcher->set_status(net::URLRequestStatus());
   chunk_url_fetcher->set_response_code(200);
-  chunk_url_fetcher->SetResponseString("");
+  chunk_url_fetcher->SetResponseString(std::string());
   chunk_url_fetcher->delegate()->OnURLFetchComplete(chunk_url_fetcher);
 
   EXPECT_TRUE(pm->IsUpdateScheduled());

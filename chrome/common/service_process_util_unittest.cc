@@ -8,16 +8,17 @@
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
-#include "base/process_util.h"
+#include "base/process/kill.h"
+#include "base/process/launch.h"
 
 #if !defined(OS_MACOSX)
 #include "base/at_exit.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/test/multiprocess_test.h"
 #include "base/test/test_timeouts.h"
 #include "base/threading/thread.h"
-#include "base/utf_string_conversions.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/chrome_version_info.h"
 #include "testing/multiprocess_func_list.h"
@@ -47,11 +48,11 @@ namespace {
 
 bool g_good_shutdown = false;
 
-void ShutdownTask(MessageLoop* loop) {
+void ShutdownTask(base::MessageLoop* loop) {
   // Quit the main message loop.
   ASSERT_FALSE(g_good_shutdown);
   g_good_shutdown = true;
-  loop->PostTask(FROM_HERE, MessageLoop::QuitClosure());
+  loop->PostTask(FROM_HERE, base::MessageLoop::QuitClosure());
 }
 
 }  // namespace
@@ -71,7 +72,7 @@ class ServiceProcessStateTest : public base::MultiProcessTest {
   virtual ~ServiceProcessStateTest();
   virtual void SetUp();
   base::MessageLoopProxy* IOMessageLoopProxy() {
-    return io_thread_.message_loop_proxy();
+    return io_thread_.message_loop_proxy().get();
   }
   void LaunchAndWait(const std::string& name);
 
@@ -89,7 +90,7 @@ ServiceProcessStateTest::~ServiceProcessStateTest() {
 }
 
 void ServiceProcessStateTest::SetUp() {
-  base::Thread::Options options(MessageLoop::TYPE_IO, 0);
+  base::Thread::Options options(base::MessageLoop::TYPE_IO, 0);
   ASSERT_TRUE(io_thread_.StartWithOptions(options));
 }
 
@@ -216,18 +217,18 @@ MULTIPROCESS_TEST_MAIN(ServiceProcessStateTestReadyFalse) {
 }
 
 MULTIPROCESS_TEST_MAIN(ServiceProcessStateTestShutdown) {
-  MessageLoop message_loop;
+  base::MessageLoop message_loop;
   message_loop.set_thread_name("ServiceProcessStateTestShutdownMainThread");
   base::Thread io_thread_("ServiceProcessStateTestShutdownIOThread");
-  base::Thread::Options options(MessageLoop::TYPE_IO, 0);
+  base::Thread::Options options(base::MessageLoop::TYPE_IO, 0);
   EXPECT_TRUE(io_thread_.StartWithOptions(options));
   ServiceProcessState state;
   EXPECT_TRUE(state.Initialize());
-  EXPECT_TRUE(state.SignalReady(io_thread_.message_loop_proxy(),
-                                base::Bind(&ShutdownTask,
-                                           MessageLoop::current())));
+  EXPECT_TRUE(state.SignalReady(
+      io_thread_.message_loop_proxy().get(),
+      base::Bind(&ShutdownTask, base::MessageLoop::current())));
   message_loop.PostDelayedTask(FROM_HERE,
-                               MessageLoop::QuitClosure(),
+                               base::MessageLoop::QuitClosure(),
                                TestTimeouts::action_max_timeout());
   EXPECT_FALSE(g_good_shutdown);
   message_loop.Run();
@@ -258,7 +259,7 @@ class ServiceProcessStateFileManipulationTest : public ::testing::Test {
 
   virtual void SetUp() {
     base::Thread::Options options;
-    options.message_loop_type = MessageLoop::TYPE_IO;
+    options.message_loop_type = base::MessageLoop::TYPE_IO;
     ASSERT_TRUE(io_thread_.StartWithOptions(options));
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
     ASSERT_TRUE(MockLaunchd::MakeABundle(GetTempDirPath(),
@@ -271,10 +272,9 @@ class ServiceProcessStateFileManipulationTest : public ::testing::Test {
         new Launchd::ScopedInstance(mock_launchd_.get()));
     ASSERT_TRUE(service_process_state_.Initialize());
     ASSERT_TRUE(service_process_state_.SignalReady(
-        io_thread_.message_loop_proxy(),
-        base::Closure()));
+        io_thread_.message_loop_proxy().get(), base::Closure()));
     loop_.PostDelayedTask(FROM_HERE,
-                          MessageLoop::QuitClosure(),
+                          base::MessageLoop::QuitClosure(),
                           TestTimeouts::action_max_timeout());
   }
 
@@ -290,7 +290,7 @@ class ServiceProcessStateFileManipulationTest : public ::testing::Test {
 
  private:
   base::ScopedTempDir temp_dir_;
-  MessageLoopForUI loop_;
+  base::MessageLoopForUI loop_;
   base::Thread io_thread_;
   base::FilePath executable_path_, bundle_path_;
   scoped_ptr<MockLaunchd> mock_launchd_;
@@ -299,11 +299,11 @@ class ServiceProcessStateFileManipulationTest : public ::testing::Test {
 };
 
 void DeleteFunc(const base::FilePath& file) {
-  EXPECT_TRUE(file_util::Delete(file, true));
+  EXPECT_TRUE(base::DeleteFile(file, true));
 }
 
 void MoveFunc(const base::FilePath& from, const base::FilePath& to) {
-  EXPECT_TRUE(file_util::Move(from, to));
+  EXPECT_TRUE(base::Move(from, to));
 }
 
 void ChangeAttr(const base::FilePath& from, int mode) {
@@ -402,7 +402,7 @@ TEST_F(ServiceProcessStateFileManipulationTest, TrashBundle) {
   ASSERT_TRUE(mock_launchd()->delete_called());
   std::string path(base::mac::PathFromFSRef(bundle_ref));
   base::FilePath file_path(path);
-  ASSERT_TRUE(file_util::Delete(file_path, true));
+  ASSERT_TRUE(base::DeleteFile(file_path, true));
 }
 
 TEST_F(ServiceProcessStateFileManipulationTest, ChangeAttr) {

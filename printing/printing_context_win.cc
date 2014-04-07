@@ -10,10 +10,10 @@
 
 #include "base/i18n/file_util_icu.h"
 #include "base/i18n/time_formatting.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/metrics/histogram.h"
-#include "base/time.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "base/win/metro.h"
 #include "printing/backend/print_backend.h"
@@ -25,6 +25,12 @@
 #include "printing/units.h"
 #include "skia/ext/platform_device.h"
 #include "win8/util/win8_util.h"
+
+#if defined(USE_AURA)
+#include "ui/aura/remote_root_window_host_win.h"
+#include "ui/aura/root_window.h"
+#include "ui/aura/window.h"
+#endif
 
 using base::Time;
 
@@ -44,6 +50,23 @@ const int kPDFA4Height = 11.69 * kPDFDpi;
 // A3: 11.69 x 16.54 inches
 const int kPDFA3Width = 11.69 * kPDFDpi;
 const int kPDFA3Height = 16.54 * kPDFDpi;
+
+HWND GetRootWindow(gfx::NativeView view) {
+  HWND window = NULL;
+#if defined(USE_AURA)
+  if (view)
+    window = view->GetRootWindow()->GetAcceleratedWidget();
+#else
+  if (view && IsWindow(view)) {
+    window = GetAncestor(view, GA_ROOTOWNER);
+  }
+#endif
+  if (!window) {
+    // TODO(maruel):  bug 1214347 Get the right browser window instead.
+    return GetDesktopWindow();
+  }
+  return window;
+}
 
 }  // anonymous namespace
 
@@ -166,12 +189,11 @@ PrintingContextWin::~PrintingContextWin() {
   ReleaseContext();
 }
 
+// TODO(vitalybuka): Implement as ui::BaseShellDialog crbug.com/180997.
 void PrintingContextWin::AskUserForSettings(
     gfx::NativeView view, int max_pages, bool has_selection,
     const PrintSettingsCallback& callback) {
-#if !defined(USE_AURA)
   DCHECK(!in_print_job_);
-
   if (win8::IsSingleWindowMetroMode()) {
     // The system dialog can not be opened while running in Metro.
     // But we can programatically launch the Metro print device charm though.
@@ -192,13 +214,7 @@ void PrintingContextWin::AskUserForSettings(
   }
   dialog_box_dismissed_ = false;
 
-  HWND window;
-  if (!view || !IsWindow(view)) {
-    // TODO(maruel):  bug 1214347 Get the right browser window instead.
-    window = GetDesktopWindow();
-  } else {
-    window = GetAncestor(view, GA_ROOTOWNER);
-  }
+  HWND window = GetRootWindow(view);
   DCHECK(window);
 
   // Show the OS-dependent dialog box.
@@ -236,14 +252,14 @@ void PrintingContextWin::AskUserForSettings(
     dialog_options.Flags |= PD_NOPAGENUMS;
   }
 
-  if ((*print_dialog_func_)(&dialog_options) != S_OK) {
+  HRESULT hr = (*print_dialog_func_)(&dialog_options);
+  if (hr != S_OK) {
     ResetSettings();
     callback.Run(FAILED);
   }
 
   // TODO(maruel):  Support PD_PRINTTOFILE.
   callback.Run(ParseDialogResultEx(dialog_options));
-#endif
 }
 
 PrintingContext::Result PrintingContextWin::UseDefaultSettings() {
@@ -261,7 +277,7 @@ PrintingContext::Result PrintingContextWin::UseDefaultSettings() {
                        NULL, 2, NULL, 0, &bytes_needed, &count_returned);
   if (bytes_needed) {
     DCHECK(bytes_needed >= count_returned * sizeof(PRINTER_INFO_2));
-    scoped_array<BYTE> printer_info_buffer(new BYTE[bytes_needed]);
+    scoped_ptr<BYTE[]> printer_info_buffer(new BYTE[bytes_needed]);
     BOOL ret = ::EnumPrinters(PRINTER_ENUM_LOCAL|PRINTER_ENUM_CONNECTIONS,
                               NULL, 2, printer_info_buffer.get(),
                               bytes_needed, &bytes_needed,
@@ -355,12 +371,12 @@ PrintingContext::Result PrintingContextWin::UpdatePrinterSettings(
 
   ScopedPrinterHandle printer;
   LPWSTR device_name_wide = const_cast<wchar_t*>(device_name.c_str());
-  if (!OpenPrinter(device_name_wide, printer.Receive(), NULL))
+  if (!printer.OpenPrinter(device_name_wide))
     return OnError();
 
   // Make printer changes local to Chrome.
   // See MSDN documentation regarding DocumentProperties.
-  scoped_array<uint8> buffer;
+  scoped_ptr<uint8[]> buffer;
   DEVMODE* dev_mode = NULL;
   LONG buffer_size = DocumentProperties(NULL, printer, device_name_wide,
                                         NULL, NULL, 0);
@@ -425,9 +441,9 @@ PrintingContext::Result PrintingContextWin::InitWithSettings(
 
   // TODO(maruel): settings_.ToDEVMODE()
   ScopedPrinterHandle printer;
-  if (!OpenPrinter(const_cast<wchar_t*>(settings_.device_name().c_str()),
-                   printer.Receive(), NULL))
+  if (!printer.OpenPrinter(settings_.device_name().c_str())) {
     return FAILED;
+  }
 
   Result status = OK;
 
@@ -478,8 +494,8 @@ PrintingContext::Result PrintingContextWin::NewDocument(
   }
 
   // No message loop running in unit tests.
-  DCHECK(!MessageLoop::current() ? true :
-      !MessageLoop::current()->NestableTasksAllowed());
+  DCHECK(!base::MessageLoop::current() ||
+         !base::MessageLoop::current()->NestableTasksAllowed());
 
   // Begin a print job by calling the StartDoc function.
   // NOTE: StartDoc() starts a message loop. That causes a lot of problems with

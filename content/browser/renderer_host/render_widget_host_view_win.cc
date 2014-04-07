@@ -5,12 +5,12 @@
 #include "content/browser/renderer_host/render_widget_host_view_win.h"
 
 #include <InputScope.h>
+#include <wtsapi32.h>
+#pragma comment(lib, "wtsapi32.lib")
 
 #include <algorithm>
 #include <map>
 #include <stack>
-#include <wtsapi32.h>
-#pragma comment(lib, "wtsapi32.lib")
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
@@ -18,7 +18,6 @@
 #include "base/debug/trace_event.h"
 #include "base/i18n/rtl.h"
 #include "base/metrics/histogram.h"
-#include "base/process_util.h"
 #include "base/threading/thread.h"
 #include "base/win/metro.h"
 #include "base/win/scoped_comptr.h"
@@ -34,35 +33,38 @@
 #include "content/browser/gpu/gpu_process_host_ui_shim.h"
 #include "content/browser/renderer_host/backing_store.h"
 #include "content/browser/renderer_host/backing_store_win.h"
+#include "content/browser/renderer_host/input/web_input_event_builders_win.h"
 #include "content/browser/renderer_host/render_process_host_impl.h"
 #include "content/browser/renderer_host/render_widget_host_impl.h"
 #include "content/browser/renderer_host/ui_events_helper.h"
 #include "content/common/accessibility_messages.h"
 #include "content/common/gpu/gpu_messages.h"
-#include "content/common/plugin_messages.h"
+#include "content/common/plugin_constants_win.h"
 #include "content/common/view_messages.h"
+#include "content/common/webplugin_geometry.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/child_process_data.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/native_web_keyboard_event.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/notification_types.h"
+#include "content/public/browser/render_view_host.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/page_zoom.h"
 #include "content/public/common/process_type.h"
 #include "skia/ext/skia_utils_win.h"
+#include "third_party/WebKit/public/web/WebCompositionUnderline.h"
+#include "third_party/WebKit/public/web/WebInputEvent.h"
 #include "third_party/skia/include/core/SkRegion.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebCompositionUnderline.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebInputEvent.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/win/WebInputEventFactory.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/win/WebScreenInfoFactory.h"
 #include "ui/base/events/event.h"
 #include "ui/base/events/event_utils.h"
 #include "ui/base/ime/composition_text.h"
+#include "ui/base/ime/win/imm32_manager.h"
 #include "ui/base/ime/win/tsf_input_scope.h"
 #include "ui/base/l10n/l10n_util_win.h"
 #include "ui/base/text/text_elider.h"
 #include "ui/base/touch/touch_device.h"
+#include "ui/base/touch/touch_enabled.h"
 #include "ui/base/ui_base_switches.h"
 #include "ui/base/view_prop.h"
 #include "ui/base/win/dpi.h"
@@ -73,17 +75,13 @@
 #include "ui/gfx/rect.h"
 #include "ui/gfx/rect_conversions.h"
 #include "ui/gfx/screen.h"
-#include "webkit/glue/webcursor.h"
-#include "webkit/plugins/npapi/plugin_constants_win.h"
-#include "webkit/plugins/npapi/webplugin.h"
-#include "webkit/plugins/npapi/webplugin_delegate_impl.h"
+#include "webkit/common/cursors/webcursor.h"
 #include "win8/util/win8_util.h"
 
 using base::TimeDelta;
 using base::TimeTicks;
 using ui::ViewProp;
 using WebKit::WebInputEvent;
-using WebKit::WebInputEventFactory;
 using WebKit::WebMouseEvent;
 using WebKit::WebTextDirection;
 
@@ -262,7 +260,6 @@ WebKit::WebGestureEvent CreateWebGestureEvent(HWND hwnd,
 
   POINT client_point = gesture.location().ToPOINT();
   POINT screen_point = gesture.location().ToPOINT();
-  MapWindowPoints(::GetParent(hwnd), hwnd, &client_point, 1);
   MapWindowPoints(hwnd, HWND_DESKTOP, &screen_point, 1);
 
   gesture_event.x = client_point.x;
@@ -307,11 +304,31 @@ bool ShouldSendPinchGesture() {
   return pinch_allowed;
 }
 
-void GetScreenInfoForWindow(WebKit::WebScreenInfo* results,
-                            gfx::NativeViewId id) {
-  *results = WebKit::WebScreenInfoFactory::screenInfo(
-      gfx::NativeViewFromId(id));
-  results->deviceScaleFactor = ui::win::GetDeviceScaleFactor();
+void GetScreenInfoForWindow(gfx::NativeViewId id,
+                            WebKit::WebScreenInfo* results) {
+  HWND window = gfx::NativeViewFromId(id);
+
+  HMONITOR monitor = MonitorFromWindow(window, MONITOR_DEFAULTTOPRIMARY);
+
+  MONITORINFOEX monitor_info;
+  monitor_info.cbSize = sizeof(MONITORINFOEX);
+  if (!GetMonitorInfo(monitor, &monitor_info))
+    return;
+
+  DEVMODE dev_mode;
+  dev_mode.dmSize = sizeof(dev_mode);
+  dev_mode.dmDriverExtra = 0;
+  EnumDisplaySettings(monitor_info.szDevice, ENUM_CURRENT_SETTINGS, &dev_mode);
+
+  WebKit::WebScreenInfo screen_info;
+  screen_info.depth = dev_mode.dmBitsPerPel;
+  screen_info.depthPerComponent = dev_mode.dmBitsPerPel / 3;  // Assumes RGB
+  screen_info.deviceScaleFactor = ui::win::GetDeviceScaleFactor();
+  screen_info.isMonochrome = dev_mode.dmColor == DMCOLOR_MONOCHROME;
+  screen_info.rect = gfx::Rect(monitor_info.rcMonitor);
+  screen_info.availableRect = gfx::Rect(monitor_info.rcWork);
+
+  *results = screen_info;
 }
 
 }  // namespace
@@ -375,6 +392,7 @@ RenderWidgetHostViewWin::RenderWidgetHostViewWin(RenderWidgetHost* widget)
       compositor_host_window_(NULL),
       hide_compositor_window_at_next_paint_(false),
       track_mouse_leave_(false),
+      imm32_manager_(new ui::IMM32Manager),
       ime_notification_(false),
       capture_enter_key_(false),
       is_hidden_(false),
@@ -386,17 +404,16 @@ RenderWidgetHostViewWin::RenderWidgetHostViewWin(RenderWidgetHost* widget)
       weak_factory_(this),
       is_loading_(false),
       text_input_type_(ui::TEXT_INPUT_TYPE_NONE),
+      text_input_mode_(ui::TEXT_INPUT_MODE_DEFAULT),
       can_compose_inline_(true),
       is_fullscreen_(false),
       ignore_mouse_movement_(true),
       composition_range_(ui::Range::InvalidRange()),
-      ALLOW_THIS_IN_INITIALIZER_LIST(
-          touch_state_(new WebTouchState(this))),
+      touch_state_(new WebTouchState(this)),
       pointer_down_context_(false),
       last_touch_location_(-1, -1),
-      touch_events_enabled_(false),
-      ALLOW_THIS_IN_INITIALIZER_LIST(
-          gesture_recognizer_(ui::GestureRecognizer::Create(this))) {
+      touch_events_enabled_(ui::AreTouchEventsEnabled()),
+      gesture_recognizer_(ui::GestureRecognizer::Create(this)) {
   render_widget_host_->SetView(this);
   registrar_.Add(this,
                  NOTIFICATION_RENDERER_PROCESS_TERMINATED,
@@ -470,11 +487,13 @@ void RenderWidgetHostViewWin::WasHidden() {
   if (render_widget_host_)
     render_widget_host_->WasHidden();
 
-  if (accelerated_surface_.get())
+  if (accelerated_surface_)
     accelerated_surface_->WasHidden();
 
   if (GetBrowserAccessibilityManager())
     GetBrowserAccessibilityManager()->WasHidden();
+
+  web_contents_switch_paint_time_ = base::TimeTicks();
 }
 
 void RenderWidgetHostViewWin::SetSize(const gfx::Size& size) {
@@ -541,7 +560,7 @@ void RenderWidgetHostViewWin::CreateBrowserAccessibilityManagerIfNeeded() {
 
 void RenderWidgetHostViewWin::MovePluginWindows(
     const gfx::Vector2d& scroll_offset,
-    const std::vector<webkit::npapi::WebPluginGeometry>& plugin_window_moves) {
+    const std::vector<WebPluginGeometry>& plugin_window_moves) {
   MovePluginWindowsHelper(m_hWnd, plugin_window_moves);
 }
 
@@ -554,6 +573,8 @@ static BOOL CALLBACK AddChildWindowToVector(HWND hwnd, LPARAM lparam) {
 void RenderWidgetHostViewWin::CleanupCompositorWindow() {
   if (!compositor_host_window_)
     return;
+
+  ui::SetWindowUserData(compositor_host_window_, NULL);
 
   // Hide the compositor and parent it to the desktop rather than destroying
   // it immediately. The GPU process has a grace period to stop accessing the
@@ -592,8 +613,10 @@ bool RenderWidgetHostViewWin::HasFocus() const {
 }
 
 bool RenderWidgetHostViewWin::IsSurfaceAvailableForCopy() const {
-  return !!render_widget_host_->GetBackingStore(false) ||
-      !!accelerated_surface_.get();
+  if (render_widget_host_->is_accelerated_compositing_active())
+    return accelerated_surface_.get() && accelerated_surface_->IsReadyForCopy();
+  else
+    return !!render_widget_host_->GetBackingStore(false);
 }
 
 void RenderWidgetHostViewWin::Show() {
@@ -665,13 +688,18 @@ void RenderWidgetHostViewWin::SetIsLoading(bool is_loading) {
   UpdateCursorIfOverSelf();
 }
 
-void RenderWidgetHostViewWin::TextInputStateChanged(
-    const ViewHostMsg_TextInputState_Params& params) {
-  if (text_input_type_ != params.type ||
-      can_compose_inline_ != params.can_compose_inline) {
-    const bool text_input_type_changed = (text_input_type_ != params.type);
-    text_input_type_ = params.type;
-    can_compose_inline_ = params.can_compose_inline;
+void RenderWidgetHostViewWin::TextInputTypeChanged(
+    ui::TextInputType type,
+    bool can_compose_inline,
+    ui::TextInputMode input_mode) {
+  if (text_input_type_ != type ||
+      text_input_mode_ != input_mode ||
+      can_compose_inline_ != can_compose_inline) {
+    const bool text_input_type_changed = (text_input_type_ != type) ||
+                                         (text_input_mode_ != input_mode);
+    text_input_type_ = type;
+    text_input_mode_ = input_mode;
+    can_compose_inline_ = can_compose_inline;
     UpdateIMEState();
     if (text_input_type_changed)
       UpdateInputScopeIfNecessary(text_input_type_);
@@ -685,7 +713,7 @@ void RenderWidgetHostViewWin::SelectionBoundsChanged(
   // Only update caret position if the input method is enabled.
   if (is_enabled) {
     caret_rect_ = gfx::UnionRects(params.anchor_rect, params.focus_rect);
-    ime_input_.UpdateCaretRect(m_hWnd, caret_rect_);
+    imm32_manager_->UpdateCaretRect(m_hWnd, caret_rect_);
   }
 }
 
@@ -693,7 +721,7 @@ void RenderWidgetHostViewWin::ScrollOffsetChanged() {
 }
 
 void RenderWidgetHostViewWin::ImeCancelComposition() {
-  ime_input_.CancelIME(m_hWnd);
+  imm32_manager_->CancelIME(m_hWnd);
 }
 
 void RenderWidgetHostViewWin::ImeCompositionRangeChanged(
@@ -732,7 +760,9 @@ void RenderWidgetHostViewWin::Redraw() {
 void RenderWidgetHostViewWin::DidUpdateBackingStore(
     const gfx::Rect& scroll_rect,
     const gfx::Vector2d& scroll_delta,
-    const std::vector<gfx::Rect>& copy_rects) {
+    const std::vector<gfx::Rect>& copy_rects,
+    const ui::LatencyInfo& latency_info) {
+  software_latency_info_.MergeWith(latency_info);
   if (is_hidden_)
     return;
 
@@ -764,8 +794,8 @@ void RenderWidgetHostViewWin::DidUpdateBackingStore(
     Redraw();
 }
 
-void RenderWidgetHostViewWin::RenderViewGone(base::TerminationStatus status,
-                                             int error_code) {
+void RenderWidgetHostViewWin::RenderProcessGone(base::TerminationStatus status,
+                                                int error_code) {
   UpdateCursorIfOverSelf();
   Destroy();
 }
@@ -776,6 +806,8 @@ bool RenderWidgetHostViewWin::CanSubscribeFrame() const {
 
 void RenderWidgetHostViewWin::WillWmDestroy() {
   CleanupCompositorWindow();
+  if (base::win::IsTSFAwareRequired() && GetFocus() == m_hWnd)
+    ui::TSFBridge::GetInstance()->RemoveFocusedClient(this);
 }
 
 void RenderWidgetHostViewWin::Destroy() {
@@ -845,7 +877,7 @@ void RenderWidgetHostViewWin::CopyFromCompositingSurface(
     const base::Callback<void(bool, const SkBitmap&)>& callback) {
   base::ScopedClosureRunner scoped_callback_runner(
       base::Bind(callback, false, SkBitmap()));
-  if (!accelerated_surface_.get())
+  if (!accelerated_surface_)
     return;
 
   if (dst_size.IsEmpty() || src_subrect.IsEmpty())
@@ -860,10 +892,11 @@ void RenderWidgetHostViewWin::CopyFromCompositingSurfaceToVideoFrame(
     const scoped_refptr<media::VideoFrame>& target,
     const base::Callback<void(bool)>& callback) {
   base::ScopedClosureRunner scoped_callback_runner(base::Bind(callback, false));
-  if (!accelerated_surface_.get())
+  if (!accelerated_surface_)
     return;
 
-  if (!target || target->format() != media::VideoFrame::YV12)
+  if (!target || (target->format() != media::VideoFrame::YV12 &&
+                  target->format() != media::VideoFrame::I420))
     return;
 
   if (src_subrect.IsEmpty())
@@ -884,7 +917,7 @@ void RenderWidgetHostViewWin::SetBackground(const SkBitmap& background) {
 }
 
 void RenderWidgetHostViewWin::ProcessAckedTouchEvent(
-    const WebKit::WebTouchEvent& touch, InputEventAckState ack_result) {
+    const TouchEventWithLatencyInfo& touch, InputEventAckState ack_result) {
   DCHECK(touch_events_enabled_);
 
   ScopedVector<ui::TouchEvent> events;
@@ -904,35 +937,10 @@ void RenderWidgetHostViewWin::ProcessAckedTouchEvent(
 
 void RenderWidgetHostViewWin::UpdateDesiredTouchMode() {
   // Make sure that touch events even make sense.
-  CommandLine* cmdline = CommandLine::ForCurrentProcess();
-  static bool touch_mode = base::win::GetVersion() >= base::win::VERSION_WIN7 &&
-      ui::IsTouchDevicePresent() && (
-          !cmdline->HasSwitch(switches::kTouchEvents) ||
-          cmdline->GetSwitchValueASCII(switches::kTouchEvents) !=
-              switches::kTouchEventsDisabled);
-
-  if (!touch_mode)
+  if (base::win::GetVersion() < base::win::VERSION_WIN7)
     return;
-
-  // Now we know that the window's current state doesn't match the desired
-  // state. If we want touch mode, then we attempt to register for touch
-  // events, and otherwise to unregister.
-  touch_events_enabled_ = RegisterTouchWindow(m_hWnd, TWF_WANTPALM) == TRUE;
-
-  if (!touch_events_enabled_) {
-    UnregisterTouchWindow(m_hWnd);
-    // Single finger panning is consistent with other windows applications.
-    const DWORD gesture_allow = GC_PAN_WITH_SINGLE_FINGER_VERTICALLY |
-                                GC_PAN_WITH_SINGLE_FINGER_HORIZONTALLY;
-    const DWORD gesture_block = GC_PAN_WITH_GUTTER;
-    GESTURECONFIG gc[] = {
-        { GID_ZOOM, GC_ZOOM, 0 },
-        { GID_PAN, gesture_allow , gesture_block},
-        { GID_TWOFINGERTAP, GC_TWOFINGERTAP , 0},
-        { GID_PRESSANDTAP, GC_PRESSANDTAP , 0}
-    };
-    if (!SetGestureConfig(m_hWnd, 0, arraysize(gc), gc, sizeof(GESTURECONFIG)))
-      NOTREACHED();
+  if (touch_events_enabled_) {
+    CHECK(RegisterTouchWindow(m_hWnd, TWF_WANTPALM));
   }
 }
 
@@ -951,7 +959,8 @@ bool RenderWidgetHostViewWin::DispatchCancelTouchEvent(
   WebKit::WebTouchEvent cancel_event;
   cancel_event.type = WebKit::WebInputEvent::TouchCancel;
   cancel_event.timeStampSeconds = event->time_stamp().InSecondsF();
-  render_widget_host_->ForwardTouchEvent(cancel_event);
+  render_widget_host_->ForwardTouchEventWithLatencyInfo(
+      cancel_event, *event->latency());
   return true;
 }
 
@@ -1008,7 +1017,9 @@ void RenderWidgetHostViewWin::InsertText(const string16& text) {
     return;
   }
   if (render_widget_host_)
-    render_widget_host_->ImeConfirmComposition(text);
+    render_widget_host_->ImeConfirmComposition(text,
+                                               ui::Range::InvalidRange(),
+                                               false);
 }
 
 void RenderWidgetHostViewWin::InsertChar(char16 ch, int flags) {
@@ -1020,12 +1031,24 @@ void RenderWidgetHostViewWin::InsertChar(char16 ch, int flags) {
   NOTIMPLEMENTED();
 }
 
+gfx::NativeWindow RenderWidgetHostViewWin::GetAttachedWindow() const {
+  return m_hWnd;
+}
+
 ui::TextInputType RenderWidgetHostViewWin::GetTextInputType() const {
   if (!base::win::IsTSFAwareRequired()) {
     NOTREACHED();
     return ui::TEXT_INPUT_TYPE_NONE;
   }
   return text_input_type_;
+}
+
+ui::TextInputMode RenderWidgetHostViewWin::GetTextInputMode() const {
+  if (!base::win::IsTSFAwareRequired()) {
+    NOTREACHED();
+    return ui::TEXT_INPUT_MODE_DEFAULT;
+  }
+  return ui::TEXT_INPUT_MODE_DEFAULT;
 }
 
 bool RenderWidgetHostViewWin::CanComposeInline() const {
@@ -1177,6 +1200,11 @@ void RenderWidgetHostViewWin::ExtendSelectionAndDelete(
   render_widget_host_->ExtendSelectionAndDelete(before, after);
 }
 
+void RenderWidgetHostViewWin::EnsureCaretInRect(const gfx::Rect& rect) {
+  // TODO(nona): Implement this function.
+  NOTIMPLEMENTED();
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // RenderWidgetHostViewWin, private:
 
@@ -1293,7 +1321,7 @@ void RenderWidgetHostViewWin::OnPaint(HDC unused_dc) {
 
     // Blit only the damaged regions from the backing store.
     DWORD data_size = GetRegionData(damage_region, 0, NULL);
-    scoped_array<char> region_data_buf;
+    scoped_ptr<char[]> region_data_buf;
     RGNDATA* region_data = NULL;
     RECT* region_rects = NULL;
 
@@ -1367,6 +1395,10 @@ void RenderWidgetHostViewWin::OnPaint(HDC unused_dc) {
       // recorded.
       web_contents_switch_paint_time_ = TimeTicks();
     }
+
+    software_latency_info_.swap_timestamp = TimeTicks::HighResNow();
+    render_widget_host_->FrameSwapped(software_latency_info_);
+    software_latency_info_.Clear();
   } else {
     DrawBackground(paint_dc.m_ps.rcPaint, &paint_dc);
     if (whiteout_start_time_.is_null())
@@ -1479,7 +1511,8 @@ void RenderWidgetHostViewWin::OnCancelMode() {
     SetWindowPos(NULL, 0, 0, 0, 0,
                  SWP_HIDEWINDOW | SWP_NOACTIVATE | SWP_NOMOVE |
                  SWP_NOREPOSITION | SWP_NOSIZE | SWP_NOZORDER);
-    MessageLoop::current()->PostTask(FROM_HERE,
+    base::MessageLoop::current()->PostTask(
+        FROM_HERE,
         base::Bind(&RenderWidgetHostViewWin::ShutdownHost,
                    weak_factory_.GetWeakPtr()));
   }
@@ -1488,7 +1521,7 @@ void RenderWidgetHostViewWin::OnCancelMode() {
 void RenderWidgetHostViewWin::OnInputLangChange(DWORD character_set,
                                                 HKL input_language_id) {
   TRACE_EVENT0("browser", "RenderWidgetHostViewWin::OnInputLangChange");
-  // Send the given Locale ID to the ImeInput object and retrieves whether
+  // Send the given Locale ID to the IMM32Manager object and retrieves whether
   // or not the current input context has IMEs.
   // If the current input context has IMEs, a browser process has to send a
   // request to a renderer process that it needs status messages about
@@ -1517,7 +1550,7 @@ void RenderWidgetHostViewWin::OnInputLangChange(DWORD character_set,
   // 1 Sending a request only if ime_status_ != ime_notification_, and;
   // 2 Copying ime_status to ime_notification_ if it sends the request
   //   successfully (because Action 1 shows ime_status = !ime_notification_.)
-  bool ime_status = ime_input_.SetInputLanguage();
+  bool ime_status = imm32_manager_->SetInputLanguage();
   if (ime_status != ime_notification_) {
     if (render_widget_host_) {
       render_widget_host_->SetInputMethodActive(ime_status);
@@ -1589,10 +1622,10 @@ LRESULT RenderWidgetHostViewWin::OnImeSetContext(
   }
 
   if (ime_notification_)
-    ime_input_.CreateImeWindow(m_hWnd);
+    imm32_manager_->CreateImeWindow(m_hWnd);
 
-  ime_input_.CleanupComposition(m_hWnd);
-  return ime_input_.SetImeWindowStyle(
+  imm32_manager_->CleanupComposition(m_hWnd);
+  return imm32_manager_->SetImeWindowStyle(
       m_hWnd, message, wparam, lparam, &handled);
 }
 
@@ -1603,8 +1636,8 @@ LRESULT RenderWidgetHostViewWin::OnImeStartComposition(
     return 0;
 
   // Reset the composition status and create IME windows.
-  ime_input_.CreateImeWindow(m_hWnd);
-  ime_input_.ResetComposition(m_hWnd);
+  imm32_manager_->CreateImeWindow(m_hWnd);
+  imm32_manager_->ResetComposition(m_hWnd);
   // When the focus is on an element that does not draw composition by itself
   // (i.e., PPAPI plugin not handling IME), let IME to draw the text. Otherwise
   // we have to prevent WTL from calling ::DefWindowProc() because the function
@@ -1621,7 +1654,7 @@ LRESULT RenderWidgetHostViewWin::OnImeComposition(
     return 0;
 
   // At first, update the position of the IME window.
-  ime_input_.UpdateImeWindow(m_hWnd);
+  imm32_manager_->UpdateImeWindow(m_hWnd);
 
   // ui::CompositionUnderline should be identical to
   // WebKit::WebCompositionUnderline, so that we can do reinterpret_cast safely.
@@ -1632,9 +1665,10 @@ LRESULT RenderWidgetHostViewWin::OnImeComposition(
   // Retrieve the result string and its attributes of the ongoing composition
   // and send it to a renderer process.
   ui::CompositionText composition;
-  if (ime_input_.GetResult(m_hWnd, lparam, &composition.text)) {
-    render_widget_host_->ImeConfirmComposition(composition.text);
-    ime_input_.ResetComposition(m_hWnd);
+  if (imm32_manager_->GetResult(m_hWnd, lparam, &composition.text)) {
+    render_widget_host_->ImeConfirmComposition(
+        composition.text, ui::Range::InvalidRange(), false);
+    imm32_manager_->ResetComposition(m_hWnd);
     // Fall though and try reading the composition string.
     // Japanese IMEs send a message containing both GCS_RESULTSTR and
     // GCS_COMPSTR, which means an ongoing composition has been finished
@@ -1642,7 +1676,7 @@ LRESULT RenderWidgetHostViewWin::OnImeComposition(
   }
   // Retrieve the composition string and its attributes of the ongoing
   // composition and send it to a renderer process.
-  if (ime_input_.GetComposition(m_hWnd, lparam, &composition)) {
+  if (imm32_manager_->GetComposition(m_hWnd, lparam, &composition)) {
     // TODO(suzhe): due to a bug of webkit, we can't use selection range with
     // composition string. See: https://bugs.webkit.org/show_bug.cgi?id=37788
     composition.selection = ui::Range(composition.selection.end());
@@ -1676,15 +1710,15 @@ LRESULT RenderWidgetHostViewWin::OnImeEndComposition(
   if (!render_widget_host_)
     return 0;
 
-  if (ime_input_.is_composing()) {
+  if (imm32_manager_->is_composing()) {
     // A composition has been ended while there is an ongoing composition,
     // i.e. the ongoing composition has been canceled.
-    // We need to reset the composition status both of the ImeInput object and
-    // of the renderer process.
+    // We need to reset the composition status both of the IMM32Manager object
+    // and of the renderer process.
     render_widget_host_->ImeCancelComposition();
-    ime_input_.ResetComposition(m_hWnd);
+    imm32_manager_->ResetComposition(m_hWnd);
   }
-  ime_input_.DestroyImeWindow(m_hWnd);
+  imm32_manager_->DestroyImeWindow(m_hWnd);
   // Let WTL call ::DefWindowProc() and release its resources.
   handled = FALSE;
   return 0;
@@ -1743,6 +1777,44 @@ LRESULT RenderWidgetHostViewWin::OnMouseEvent(UINT message, WPARAM wparam,
                 reinterpret_cast<LPARAM>(&msg));
   }
 
+  // Due to a bug in Windows, the simulated mouse events for a touch event
+  // outside our bounds are delivered to us if we were previously focused
+  // causing crbug.com/159982. As a workaround, we check if this event is a
+  // simulated mouse event outside our bounds, and if so, we send it to the
+  // right window.
+  if ((message == WM_LBUTTONDOWN || message == WM_LBUTTONUP) &&
+      ui::IsMouseEventFromTouch(message)) {
+    CPoint cursor_pos(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam));
+    ClientToScreen(&cursor_pos);
+    if (!GetPixelBounds().Contains(cursor_pos.x, cursor_pos.y)) {
+      HWND window = WindowFromPoint(cursor_pos);
+      if (window) {
+        LRESULT nc_hit_result = SendMessage(window, WM_NCHITTEST, 0,
+            MAKELPARAM(cursor_pos.x, cursor_pos.y));
+        const bool in_client_area = (nc_hit_result == HTCLIENT);
+        int event_type;
+        if (message == WM_LBUTTONDOWN)
+          event_type = in_client_area ? WM_LBUTTONDOWN : WM_NCLBUTTONDOWN;
+        else
+          event_type = in_client_area ? WM_LBUTTONUP : WM_NCLBUTTONUP;
+
+        // Convert the coordinates to the target window.
+        RECT window_bounds;
+        ::GetWindowRect(window, &window_bounds);
+        int window_x = cursor_pos.x - window_bounds.left;
+        int window_y = cursor_pos.y - window_bounds.top;
+        if (in_client_area) {
+          ::PostMessage(window, event_type, wparam,
+              MAKELPARAM(window_x, window_y));
+        } else {
+          ::PostMessage(window, event_type, nc_hit_result,
+              MAKELPARAM(cursor_pos.x, cursor_pos.y));
+        }
+        return 0;
+      }
+    }
+  }
+
   // TODO(jcampan): I am not sure if we should forward the message to the
   // WebContentsImpl first in the case of popups.  If we do, we would need to
   // convert the click from the popup window coordinates to the WebContentsImpl'
@@ -1765,7 +1837,7 @@ LRESULT RenderWidgetHostViewWin::OnMouseEvent(UINT message, WPARAM wparam,
         if (base::win::IsTSFAwareRequired()) {
           ui::TSFBridge::GetInstance()->CancelComposition();
         } else {
-          ime_input_.CleanupComposition(m_hWnd);
+          imm32_manager_->CleanupComposition(m_hWnd);
         }
         // Fall through.
       case WM_MOUSEMOVE:
@@ -1842,11 +1914,11 @@ LRESULT RenderWidgetHostViewWin::OnKeyEvent(UINT message, WPARAM wparam,
   // Bug 9718: http://crbug.com/9718 To investigate IE and notepad, this
   // shortcut is enabled only on a PC having RTL keyboard layouts installed.
   // We should emulate them.
-  if (ui::ImeInput::IsRTLKeyboardLayoutInstalled()) {
+  if (ui::IMM32Manager::IsRTLKeyboardLayoutInstalled()) {
     if (message == WM_KEYDOWN) {
       if (wparam == VK_SHIFT) {
         base::i18n::TextDirection dir;
-        if (ui::ImeInput::IsCtrlShiftPressed(&dir)) {
+        if (ui::IMM32Manager::IsCtrlShiftPressed(&dir)) {
           render_widget_host_->UpdateTextDirection(
               dir == base::i18n::RIGHT_TO_LEFT ?
               WebKit::WebTextDirectionRightToLeft :
@@ -1927,9 +1999,15 @@ LRESULT RenderWidgetHostViewWin::OnWheelEvent(UINT message, WPARAM wparam,
   }
 
   if (render_widget_host_) {
-    render_widget_host_->ForwardWheelEvent(
-        WebInputEventFactory::mouseWheelEvent(m_hWnd, message, wparam,
-                                              lparam));
+    WebKit::WebMouseWheelEvent wheel_event =
+        WebMouseWheelEventBuilder::Build(m_hWnd, message, wparam, lparam);
+    float scale = ui::win::GetDeviceScaleFactor();
+    wheel_event.x /= scale;
+    wheel_event.y /= scale;
+    wheel_event.deltaX /= scale;
+    wheel_event.deltaY /= scale;
+
+    render_widget_host_->ForwardWheelEvent(wheel_event);
   }
   handled = TRUE;
   return 0;
@@ -2096,9 +2174,11 @@ bool WebTouchState::UpdateTouchPoint(
   if (touch_input->dwMask & TOUCHINPUTMASKF_CONTACTAREA) {
     // Some touch drivers send a contact area of "-1", yet flag it as valid.
     radius_x = std::max(1,
-        static_cast<int>(TOUCH_COORD_TO_PIXEL(touch_input->cxContact)));
+        static_cast<int>(TOUCH_COORD_TO_PIXEL(touch_input->cxContact) /
+                         ui::win::GetUndocumentedDPIScale()));
     radius_y = std::max(1,
-        static_cast<int>(TOUCH_COORD_TO_PIXEL(touch_input->cyContact)));
+        static_cast<int>(TOUCH_COORD_TO_PIXEL(touch_input->cyContact) /
+                         ui::win::GetUndocumentedDPIScale()));
   }
 
   // Detect and exclude stationary moves.
@@ -2113,9 +2193,10 @@ bool WebTouchState::UpdateTouchPoint(
 
   touch_point->screenPosition.x = coordinates.x;
   touch_point->screenPosition.y = coordinates.y;
-  window_->GetParent().ScreenToClient(&coordinates);
-  touch_point->position.x = coordinates.x;
-  touch_point->position.y = coordinates.y;
+  window_->ScreenToClient(&coordinates);
+  static float scale = ui::win::GetDeviceScaleFactor();
+  touch_point->position.x = coordinates.x / scale;
+  touch_point->position.y = coordinates.y / scale;
   touch_point->radiusX = radius_x;
   touch_point->radiusY = radius_y;
   touch_point->force = 0;
@@ -2143,7 +2224,7 @@ LRESULT RenderWidgetHostViewWin::OnTouchEvent(UINT message, WPARAM wparam,
   if (base::win::IsTSFAwareRequired()) {
     ui::TSFBridge::GetInstance()->CancelComposition();
   } else {
-    ime_input_.CleanupComposition(m_hWnd);
+    imm32_manager_->CleanupComposition(m_hWnd);
   }
 
   // TODO(jschuh): Add support for an arbitrary number of touchpoints.
@@ -2172,7 +2253,8 @@ LRESULT RenderWidgetHostViewWin::OnTouchEvent(UINT message, WPARAM wparam,
     start += touch_state_->UpdateTouchPoints(points + start, total - start);
     if (should_forward) {
       if (touch_state_->is_changed())
-        render_widget_host_->ForwardTouchEvent(touch_state_->touch_event());
+        render_widget_host_->ForwardTouchEventWithLatencyInfo(
+            touch_state_->touch_event(), ui::LatencyInfo());
     } else {
       const WebKit::WebTouchEvent& touch_event = touch_state_->touch_event();
       base::TimeDelta timestamp = base::TimeDelta::FromMilliseconds(
@@ -2229,8 +2311,7 @@ LRESULT RenderWidgetHostViewWin::OnMouseActivate(UINT message,
     ::ScreenToClient(m_hWnd, &cursor_pos);
     HWND child_window = ::RealChildWindowFromPoint(m_hWnd, cursor_pos);
     if (::IsWindow(child_window) && child_window != m_hWnd) {
-      if (ui::GetClassName(child_window) ==
-              webkit::npapi::kWrapperNativeWindowClassName)
+      if (ui::GetClassName(child_window) == kWrapperNativeWindowClassName)
         child_window = ::GetWindow(child_window, GW_CHILD);
 
       ::SetFocus(child_window);
@@ -2246,8 +2327,6 @@ LRESULT RenderWidgetHostViewWin::OnGestureEvent(
       UINT message, WPARAM wparam, LPARAM lparam, BOOL& handled) {
   TRACE_EVENT0("browser", "RenderWidgetHostViewWin::OnGestureEvent");
 
-  // Note that as of M22, touch events are enabled by default on Windows.
-  // This code should not be reachable.
   DCHECK(!touch_events_enabled_);
   handled = FALSE;
 
@@ -2393,9 +2472,6 @@ static LRESULT CALLBACK CompositorHostWindowProc(HWND hWnd, UINT message,
   switch (message) {
   case WM_ERASEBKGND:
     return 0;
-  case WM_DESTROY:
-    ui::SetWindowUserData(hWnd, NULL);
-    return 0;
   case WM_PAINT:
     PaintCompositorHostWindow(hWnd);
     return 0;
@@ -2407,12 +2483,12 @@ static LRESULT CALLBACK CompositorHostWindowProc(HWND hWnd, UINT message,
 void RenderWidgetHostViewWin::AcceleratedPaint(HDC dc) {
   if (render_widget_host_)
     render_widget_host_->ScheduleComposite();
-  if (accelerated_surface_.get())
+  if (accelerated_surface_)
     accelerated_surface_->Present(dc);
 }
 
 void RenderWidgetHostViewWin::GetScreenInfo(WebKit::WebScreenInfo* results) {
-  GetScreenInfoForWindow(results, GetNativeViewId());
+  GetScreenInfoForWindow(GetNativeViewId(), results);
 }
 
 gfx::Rect RenderWidgetHostViewWin::GetBoundsInRootWindow() {
@@ -2444,7 +2520,7 @@ gfx::GLSurfaceHandle RenderWidgetHostViewWin::GetCompositingSurface() {
   // On Vista and later we present directly to the view window rather than a
   // child window.
   if (GpuDataManagerImpl::GetInstance()->IsUsingAcceleratedSurface()) {
-    if (!accelerated_surface_.get())
+    if (!accelerated_surface_)
       accelerated_surface_.reset(new AcceleratedSurface(m_hWnd));
     return gfx::GLSurfaceHandle(m_hWnd, gfx::NATIVE_TRANSPORT);
   }
@@ -2476,17 +2552,16 @@ gfx::GLSurfaceHandle RenderWidgetHostViewWin::GetCompositingSurface() {
       static_cast<int>(currentRect.bottom - currentRect.top));
 
   compositor_host_window_ = CreateWindowEx(
-    WS_EX_LEFT | WS_EX_LTRREADING | WS_EX_RIGHTSCROLLBAR,
-    MAKEINTATOM(atom), 0,
-    WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | WS_DISABLED,
-    0, 0, width, height, m_hWnd, 0, instance, 0);
+      WS_EX_LEFT | WS_EX_LTRREADING | WS_EX_RIGHTSCROLLBAR,
+      MAKEINTATOM(atom), 0,
+      WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | WS_DISABLED,
+      0, 0, width, height, m_hWnd, 0, instance, 0);
   ui::CheckWindowCreated(compositor_host_window_);
 
   ui::SetWindowUserData(compositor_host_window_, this);
 
   gfx::GLSurfaceHandle surface_handle(compositor_host_window_,
                                       gfx::NATIVE_TRANSPORT);
-
   return surface_handle;
 }
 
@@ -2532,7 +2607,7 @@ void RenderWidgetHostViewWin::OnAcceleratedCompositingStateChange() {
     // Drop the backing store for the accelerated surface when the accelerated
     // compositor is disabled. Otherwise, a flash of the last presented frame
     // could appear when it is next enabled.
-    if (accelerated_surface_.get())
+    if (accelerated_surface_)
       accelerated_surface_->Suspend();
     hide_compositor_window_at_next_paint_ = true;
   }
@@ -2551,7 +2626,7 @@ void RenderWidgetHostViewWin::AcceleratedSurfacePostSubBuffer(
 }
 
 void RenderWidgetHostViewWin::AcceleratedSurfaceSuspend() {
-    if (!accelerated_surface_.get())
+    if (!accelerated_surface_)
       return;
 
     accelerated_surface_->Suspend();
@@ -2624,7 +2699,7 @@ LRESULT RenderWidgetHostViewWin::OnGetObject(UINT message, WPARAM wparam,
     // active windows screen reader.
     BrowserAccessibilityState::GetInstance()->OnScreenReaderDetected();
     render_widget_host_->SetAccessibilityMode(
-        BrowserAccessibilityStateImpl::GetInstance()->GetAccessibilityMode());
+        BrowserAccessibilityStateImpl::GetInstance()->accessibility_mode());
 
     // Return with failure.
     return static_cast<LRESULT>(0L);
@@ -2689,7 +2764,7 @@ LRESULT RenderWidgetHostViewWin::OnSessionChange(UINT message,
   handled = FALSE;
   TRACE_EVENT0("browser", "RenderWidgetHostViewWin::OnSessionChange");
 
-  if (!accelerated_surface_.get())
+  if (!accelerated_surface_)
     return 0;
 
   switch (wparam) {
@@ -2797,7 +2872,8 @@ bool RenderWidgetHostViewWin::ForwardGestureEventToRenderer(
     render_widget_host_->ForwardGestureEvent(
         CreateFlingCancelEvent(gesture->time_stamp().InSecondsF()));
   }
-  render_widget_host_->ForwardGestureEvent(web_gesture);
+  render_widget_host_->ForwardGestureEventWithLatencyInfo(web_gesture,
+                                                          *gesture->latency());
   return true;
 }
 
@@ -2814,10 +2890,10 @@ void RenderWidgetHostViewWin::ForwardMouseEventToRenderer(UINT message,
   gfx::Point point = ui::win::ScreenToDIPPoint(
       gfx::Point(static_cast<short>(LOWORD(lparam)),
                  static_cast<short>(HIWORD(lparam))));
-  lparam = (point.y() << 16) + point.x();
+  lparam = MAKELPARAM(point.x(), point.y());
 
   WebMouseEvent event(
-      WebInputEventFactory::mouseEvent(m_hWnd, message, wparam, lparam));
+      WebMouseEventBuilder::Build(m_hWnd, message, wparam, lparam));
 
   if (mouse_locked_) {
     event.movementX = event.globalX - last_mouse_position_.locked_global.x();
@@ -3005,7 +3081,7 @@ LRESULT RenderWidgetHostViewWin::OnDocumentFeed(RECONVERTSTRING* reconv) {
 
 LRESULT RenderWidgetHostViewWin::OnReconvertString(RECONVERTSTRING* reconv) {
   // If there is a composition string already, we don't allow reconversion.
-  if (ime_input_.is_composing())
+  if (imm32_manager_->is_composing())
     return 0;
 
   if (selection_range_.is_empty())
@@ -3055,7 +3131,7 @@ LRESULT RenderWidgetHostViewWin::OnQueryCharPosition(
     return 0;
 
   RECT target_rect = {};
-  if (ime_input_.is_composing() && !composition_range_.is_empty() &&
+  if (imm32_manager_->is_composing() && !composition_range_.is_empty() &&
       position->dwCharPos < composition_character_bounds_.size()) {
     target_rect =
         composition_character_bounds_[position->dwCharPos].ToRECT();
@@ -3087,11 +3163,13 @@ void RenderWidgetHostViewWin::UpdateIMEState() {
   }
   if (text_input_type_ != ui::TEXT_INPUT_TYPE_NONE &&
       text_input_type_ != ui::TEXT_INPUT_TYPE_PASSWORD) {
-    ime_input_.EnableIME(m_hWnd);
-    ime_input_.SetUseCompositionWindow(!can_compose_inline_);
+    imm32_manager_->EnableIME(m_hWnd);
+    imm32_manager_->SetUseCompositionWindow(!can_compose_inline_);
   } else {
-    ime_input_.DisableIME(m_hWnd);
+    imm32_manager_->DisableIME(m_hWnd);
   }
+
+  imm32_manager_->SetTextInputMode(m_hWnd, text_input_mode_);
 }
 
 void RenderWidgetHostViewWin::UpdateInputScopeIfNecessary(
@@ -3101,8 +3179,8 @@ void RenderWidgetHostViewWin::UpdateInputScopeIfNecessary(
   if (base::win::IsTSFAwareRequired())
     return;
 
-  ui::tsf_inputscope::SetInputScopeForTsfUnawareWindow(m_hWnd,
-                                                       text_input_type);
+  ui::tsf_inputscope::SetInputScopeForTsfUnawareWindow(
+      m_hWnd, text_input_type, ui::TEXT_INPUT_MODE_DEFAULT);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -3117,7 +3195,7 @@ RenderWidgetHostView* RenderWidgetHostView::CreateViewForWidget(
 // static
 void RenderWidgetHostViewPort::GetDefaultScreenInfo(
       WebKit::WebScreenInfo* results) {
-  GetScreenInfoForWindow(results, 0);
+  GetScreenInfoForWindow(0, results);
 }
 
 }  // namespace content

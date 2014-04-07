@@ -5,12 +5,18 @@
 #ifndef CHROME_BROWSER_EXTENSIONS_API_RUNTIME_RUNTIME_API_H_
 #define CHROME_BROWSER_EXTENSIONS_API_RUNTIME_RUNTIME_API_H_
 
+#include <string>
+
 #include "chrome/browser/extensions/extension_function.h"
+#include "chrome/common/extensions/api/runtime.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 
 class Profile;
+
+namespace base {
 class Version;
+}
 
 namespace extensions {
 class Extension;
@@ -25,7 +31,7 @@ class RuntimeEventRouter {
   // Dispatches the onInstalled event to the given extension.
   static void DispatchOnInstalledEvent(Profile* profile,
                                        const std::string& extension_id,
-                                       const Version& old_version,
+                                       const base::Version& old_version,
                                        bool chrome_updated);
 
   // Dispatches the onUpdateAvailable event to the given extension.
@@ -36,6 +42,16 @@ class RuntimeEventRouter {
 
   // Dispatches the onBrowserUpdateAvailable event to all extensions.
   static void DispatchOnBrowserUpdateAvailableEvent(Profile* profile);
+
+  // Dispatches the onRestartRequired event to the given app.
+  static void DispatchOnRestartRequiredEvent(
+      Profile* profile,
+      const std::string& app_id,
+      api::runtime::OnRestartRequired::Reason reason);
+
+  // Does any work needed at extension uninstall (e.g. load uninstall url).
+  static void OnExtensionUninstalled(Profile* profile,
+                                     const std::string& extension_id);
 };
 
 class RuntimeGetBackgroundPageFunction : public AsyncExtensionFunction {
@@ -49,6 +65,16 @@ class RuntimeGetBackgroundPageFunction : public AsyncExtensionFunction {
 
  private:
   void OnPageLoaded(ExtensionHost*);
+};
+
+class RuntimeSetUninstallUrlFunction : public SyncExtensionFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION("runtime.setUninstallUrl",
+                             RUNTIME_SETUNINSTALLURL)
+
+ protected:
+  virtual ~RuntimeSetUninstallUrlFunction() {}
+  virtual bool RunImpl() OVERRIDE;
 };
 
 class RuntimeReloadFunction : public SyncExtensionFunction {
@@ -81,6 +107,25 @@ class RuntimeRequestUpdateCheckFunction : public AsyncExtensionFunction,
 
   content::NotificationRegistrar registrar_;
   bool did_reply_;
+};
+
+class RuntimeGetPlatformInfoFunction : public SyncExtensionFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION("runtime.getPlatformInfo",
+                             RUNTIME_GETPLATFORMINFO);
+ protected:
+  virtual ~RuntimeGetPlatformInfoFunction() {}
+  virtual bool RunImpl() OVERRIDE;
+};
+
+class RuntimeGetPackageDirectoryEntryFunction : public SyncExtensionFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION("runtime.getPackageDirectoryEntry",
+                             RUNTIME_GETPACKAGEDIRECTORYENTRY)
+
+ protected:
+  virtual ~RuntimeGetPackageDirectoryEntryFunction() {}
+  virtual bool RunImpl() OVERRIDE;
 };
 
 }  // namespace extensions

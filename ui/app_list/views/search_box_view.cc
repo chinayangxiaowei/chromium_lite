@@ -7,8 +7,10 @@
 #include <algorithm>
 
 #include "grit/ui_resources.h"
+#include "ui/app_list/app_list_model.h"
 #include "ui/app_list/search_box_model.h"
 #include "ui/app_list/search_box_view_delegate.h"
+#include "ui/app_list/views/app_list_menu_views.h"
 #include "ui/base/events/event.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/views/controls/button/menu_button.h"
@@ -23,27 +25,32 @@ const int kPadding = 14;
 const int kIconDimension = 32;
 const int kPreferredWidth = 360;
 const int kPreferredHeight = 48;
-const int kEditHeight = 19;
 const int kMenuButtonDimension = 29;
 
 const SkColor kHintTextColor = SkColorSetRGB(0xA0, 0xA0, 0xA0);
 
+// Menu offset relative to the bottom-right corner of the menu button.
+const int kMenuYOffsetFromButton = -4;
+const int kMenuXOffsetFromButton = -7;
+
 }  // namespace
 
 SearchBoxView::SearchBoxView(SearchBoxViewDelegate* delegate,
-                             AppListViewDelegate* view_delegate)
+                             AppListViewDelegate* view_delegate,
+                             AppListModel* model)
     : delegate_(delegate),
-      model_(NULL),
-      menu_(view_delegate),
+      view_delegate_(view_delegate),
+      model_(model->search_box()),
       icon_view_(new views::ImageView),
       search_box_(new views::Textfield),
       contents_view_(NULL) {
+  DCHECK(model_);
   AddChildView(icon_view_);
 
   ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
 
 #if !defined(OS_CHROMEOS)
-  menu_button_ = new views::MenuButton(NULL, string16(), this, false);
+  menu_button_ = new views::MenuButton(NULL, base::string16(), this, false);
   menu_button_->set_border(NULL);
   menu_button_->SetIcon(*rb.GetImageSkiaNamed(IDR_APP_LIST_TOOLS_NORMAL));
   menu_button_->SetHoverIcon(*rb.GetImageSkiaNamed(IDR_APP_LIST_TOOLS_HOVER));
@@ -57,26 +64,30 @@ SearchBoxView::SearchBoxView(SearchBoxViewDelegate* delegate,
   search_box_->set_placeholder_text_color(kHintTextColor);
   search_box_->SetController(this);
   AddChildView(search_box_);
+
+  model_->AddObserver(this);
+  IconChanged();
+  HintTextChanged();
 }
 
 SearchBoxView::~SearchBoxView() {
-  if (model_)
-    model_->RemoveObserver(this);
+  model_->RemoveObserver(this);
 }
 
-void SearchBoxView::SetModel(SearchBoxModel* model) {
-  if (model_ == model)
-    return;
+bool SearchBoxView::HasSearch() const {
+  return !search_box_->text().empty();
+}
 
-  if (model_)
-    model_->RemoveObserver(this);
+void SearchBoxView::ClearSearch() {
+  search_box_->SetText(base::string16());
+  // Updates model and fires query changed manually because SetText() above
+  // does not generate ContentsChanged() notification.
+  UpdateModel();
+  NotifyQueryChanged();
+}
 
-  model_ = model;
-  if (model_) {
-    model_->AddObserver(this);
-    IconChanged();
-    HintTextChanged();
-  }
+void SearchBoxView::InvalidateMenu() {
+  menu_.reset();
 }
 
 gfx::Size SearchBoxView::GetPreferredSize() {
@@ -107,7 +118,8 @@ void SearchBoxView::Layout() {
   edit_frame.set_x(icon_frame.right());
   edit_frame.set_width(
       rect.width() - icon_frame.width() - kPadding - menu_button_frame.width());
-  edit_frame.ClampToCenteredSize(gfx::Size(edit_frame.width(), kEditHeight));
+  edit_frame.ClampToCenteredSize(
+      gfx::Size(edit_frame.width(), search_box_->GetPreferredSize().height()));
   search_box_->SetBoundsRect(edit_frame);
 }
 
@@ -132,25 +144,13 @@ void SearchBoxView::NotifyQueryChanged() {
 }
 
 void SearchBoxView::ContentsChanged(views::Textfield* sender,
-                                    const string16& new_contents) {
+                                    const base::string16& new_contents) {
   UpdateModel();
   NotifyQueryChanged();
 }
 
 bool SearchBoxView::HandleKeyEvent(views::Textfield* sender,
                                    const ui::KeyEvent& key_event) {
-  bool has_query = !search_box_->text().empty();
-
-  // Escape with non-empty query text clears the search box.
-  if (has_query && key_event.key_code() == ui::VKEY_ESCAPE) {
-    search_box_->SetText(string16());
-    // Updates model and fires query changed manually because SetText above
-    // does not generate ContentsChanged notification.
-    UpdateModel();
-    NotifyQueryChanged();
-    return true;
-  }
-
   bool handled = false;
   if (contents_view_ && contents_view_->visible())
     handled = contents_view_->OnKeyPressed(key_event);
@@ -159,8 +159,13 @@ bool SearchBoxView::HandleKeyEvent(views::Textfield* sender,
 }
 
 void SearchBoxView::OnMenuButtonClicked(View* source, const gfx::Point& point) {
-  menu_.RunMenuAt(menu_button_,
-                  menu_button_->GetBoundsInScreen().bottom_right());
+  if (!menu_)
+    menu_.reset(new AppListMenuViews(view_delegate_));
+
+  const gfx::Point menu_location =
+      menu_button_->GetBoundsInScreen().bottom_right() +
+      gfx::Vector2d(kMenuXOffsetFromButton, kMenuYOffsetFromButton);
+  menu_->RunMenuAt(menu_button_, menu_location);
 }
 
 void SearchBoxView::IconChanged() {

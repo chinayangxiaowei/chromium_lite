@@ -5,7 +5,7 @@
 #include "net/http/http_pipelined_stream.h"
 
 #include "base/logging.h"
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "net/base/net_errors.h"
 #include "net/http/http_pipelined_connection_impl.h"
 #include "net/http/http_request_headers.h"
@@ -115,10 +115,6 @@ void HttpPipelinedStream::GetSSLCertRequestInfo(
 
 bool HttpPipelinedStream::IsSpdyHttpStream() const {
   return false;
-}
-
-void HttpPipelinedStream::LogNumRttVsBytesMetrics() const {
-  // TODO(simonjam): I don't want to copy & paste this from http_basic_stream.
 }
 
 void HttpPipelinedStream::Drain(HttpNetworkSession* session) {

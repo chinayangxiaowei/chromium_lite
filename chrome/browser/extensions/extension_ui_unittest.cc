@@ -4,49 +4,47 @@
 
 #include "base/command_line.h"
 #include "base/json/json_file_value_serializer.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/path_service.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/management_policy.h"
 #include "chrome/browser/extensions/test_extension_system.h"
 #include "chrome/browser/ui/webui/extensions/extension_settings_handler.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/extensions/extension.h"
-#include "chrome/common/extensions/manifest_handler.h"
-#include "chrome/common/extensions/manifest_handlers/content_scripts_handler.h"
 #include "chrome/test/base/testing_profile.h"
 #include "content/public/test/test_browser_thread.h"
 #include "extensions/common/constants.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-using extensions::Extension;
-using extensions::Manifest;
+#if defined(OS_CHROMEOS)
+#include "chrome/browser/chromeos/login/user_manager.h"
+#include "chrome/browser/chromeos/settings/cros_settings.h"
+#include "chrome/browser/chromeos/settings/device_settings_service.h"
+#endif
+
+namespace extensions {
 
 class ExtensionUITest : public testing::Test {
  public:
   ExtensionUITest()
       : ui_thread_(content::BrowserThread::UI, &message_loop_),
-        file_thread_(content::BrowserThread::FILE, &message_loop_) {}
+        file_thread_(content::BrowserThread::FILE, &message_loop_)  {}
 
  protected:
   virtual void SetUp() OVERRIDE {
-    testing::Test::SetUp();
-
     // Create an ExtensionService and ManagementPolicy to inject into the
     // ExtensionSettingsHandler.
     profile_.reset(new TestingProfile());
-    extensions::TestExtensionSystem* system =
-        static_cast<extensions::TestExtensionSystem*>(
-            extensions::ExtensionSystem::Get(profile_.get()));
+    TestExtensionSystem* system =
+        static_cast<TestExtensionSystem*>(ExtensionSystem::Get(profile_.get()));
     extension_service_ = system->CreateExtensionService(
         CommandLine::ForCurrentProcess(), base::FilePath(), false);
     management_policy_ = system->management_policy();
 
     handler_.reset(new ExtensionSettingsHandler(extension_service_,
                                                 management_policy_));
-
-    (new extensions::ContentScriptsHandler)->Register();
   }
 
   virtual void TearDown() OVERRIDE {
@@ -54,8 +52,6 @@ class ExtensionUITest : public testing::Test {
     profile_.reset();
     // Execute any pending deletion tasks.
     message_loop_.RunUntilIdle();
-    extensions::ManifestHandler::ClearRegistryForTesting();
-    testing::Test::TearDown();
   }
 
   static DictionaryValue* DeserializeJSONTestData(const base::FilePath& path,
@@ -74,8 +70,7 @@ class ExtensionUITest : public testing::Test {
       Manifest::Location location) {
     std::string error;
 
-    base::FilePath manifest_path = extension_path.Append(
-        extensions::kManifestFilename);
+    base::FilePath manifest_path = extension_path.Append(kManifestFilename);
     scoped_ptr<DictionaryValue> extension_data(DeserializeJSONTestData(
         manifest_path, &error));
     EXPECT_EQ("", error);
@@ -120,13 +115,19 @@ class ExtensionUITest : public testing::Test {
     }
   }
 
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
   content::TestBrowserThread ui_thread_;
   content::TestBrowserThread file_thread_;
   scoped_ptr<TestingProfile> profile_;
   ExtensionService* extension_service_;
-  extensions::ManagementPolicy* management_policy_;
+  ManagementPolicy* management_policy_;
   scoped_ptr<ExtensionSettingsHandler> handler_;
+
+#if defined OS_CHROMEOS
+  chromeos::ScopedTestDeviceSettingsService test_device_settings_service_;
+  chromeos::ScopedTestCrosSettings test_cros_settings_;
+  chromeos::ScopedTestUserManager test_user_manager_;
+#endif
 };
 
 TEST_F(ExtensionUITest, GenerateExtensionsJSONData) {
@@ -275,3 +276,5 @@ TEST_F(ExtensionUITest, PathPropagation) {
   EXPECT_TRUE(extension_details->GetString("path", &ui_path));
   EXPECT_EQ(extension_path, base::FilePath(ui_path));
 }
+
+}  // namespace extensions

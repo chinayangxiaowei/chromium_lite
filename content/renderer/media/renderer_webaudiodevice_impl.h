@@ -9,19 +9,22 @@
 #include "base/threading/thread_checker.h"
 #include "media/audio/audio_parameters.h"
 #include "media/base/audio_renderer_sink.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebAudioDevice.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebVector.h"
+#include "third_party/WebKit/public/platform/WebAudioDevice.h"
+#include "third_party/WebKit/public/platform/WebVector.h"
+
+namespace media {
+class AudioOutputDevice;
+}
 
 namespace content {
-
-class RendererAudioOutputDevice;
 
 class RendererWebAudioDeviceImpl
     : public WebKit::WebAudioDevice,
       public media::AudioRendererSink::RenderCallback {
  public:
   RendererWebAudioDeviceImpl(const media::AudioParameters& params,
-                             WebKit::WebAudioDevice::RenderCallback* callback);
+                             WebKit::WebAudioDevice::RenderCallback* callback,
+                             int session_id);
   virtual ~RendererWebAudioDeviceImpl();
 
   // WebKit::WebAudioDevice implementation.
@@ -50,7 +53,10 @@ class RendererWebAudioDeviceImpl
   base::ThreadChecker thread_checker_;
 
   // When non-NULL, we are started.  When NULL, we are stopped.
-  scoped_refptr<RendererAudioOutputDevice> output_device_;
+  scoped_refptr<media::AudioOutputDevice> output_device_;
+
+  // ID to allow browser to select the correct input device for unified IO.
+  int session_id_;
 
   DISALLOW_COPY_AND_ASSIGN(RendererWebAudioDeviceImpl);
 };

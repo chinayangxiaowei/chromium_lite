@@ -10,9 +10,9 @@
 #include "base/files/file_path.h"
 #include "base/json/json_file_value_serializer.h"
 #include "base/path_service.h"
-#include "base/time.h"
-#include "chrome/common/chrome_paths.h"
+#include "base/time/time.h"
 #include "chrome/common/extensions/extension_constants.h"
+#include "chromeos/chromeos_paths.h"
 #include "content/public/browser/browser_thread.h"
 
 namespace chromeos {
@@ -27,7 +27,7 @@ ExternalLoader* loader_instance = NULL;
 // if the file does not exist or could not be parsed properly. Caller takes
 // ownership of the returned value.
 base::ListValue* ReadExternalOrdinalFile(const base::FilePath& path) {
-  if (!file_util::PathExists(path))
+  if (!base::PathExists(path))
     return NULL;
 
   JSONFileValueSerializer serializer(path);
@@ -54,21 +54,21 @@ void GetDefault(std::vector<std::string>* app_ids) {
   const char* kDefaultAppOrder[] = {
     extension_misc::kChromeAppId,
     extension_misc::kWebStoreAppId,
-    "coobgpohoikkiipiblmjeljniedjpjpf",  // Search
-    "blpcfgokakmgnkcojhhkbfbldkacnbeo",  // Youtube
-    "pjkljhegncpnkpknbcohdijeoejaedia",  // Gmail
+    extension_misc::kGoogleSearchAppId,
+    extension_misc::kYoutubeAppId,
+    extension_misc::kGmailAppId,
     "ejjicmeblgpmajnghnpcppodonldlgfn",  // Calendar
     "kjebfhglflhjjjiceimfkgicifkhjlnm",  // Scratchpad
     "lneaknkopdijkpnocmklfnjbeapigfbh",  // Google Maps
     "apdfllckaahabafndbhieahigkjlhalf",  // Drive
-    "aohghmighlieiainnegkcijnfilokake",  // Docs
-    "felcaaldnbdncclmgdcncolpebgiejap",  // Sheets
-    "aapocclcgogkmnckokdopfmhonfmgoek",  // Slides
+    extension_misc::kGoogleDocAppId,
+    extension_misc::kGoogleSheetsAppId,
+    extension_misc::kGoogleSlidesAppId,
     "dlppkpafhbajpcmmoheippocdidnckmm",  // Google+
     "kbpgddbgniojgndnhlkjbkpknjhppkbk",  // Google+ Hangouts
     "hhaomjibdihmijegdhdafkllkbggdgoj",  // Files
     "hkhhlkdconhgemhegnplaldnmnmkaemd",  // Tips & Tricks
-    "icppfcnhkcmnfdhfhphakoifcfokfdhg",  // Play Music
+    extension_misc::kGooglePlayMusicAppId,
     "mmimngoggfoobjdlefbcabngfnmieonb",  // Play Books
     "fppdphmgcddhjeddoeghpjefkdlccljb",  // Play Movies
     "fobcpibfeplaikcclojfdhfdmbbeofai",  // Games
@@ -103,13 +103,14 @@ ExternalLoader::~ExternalLoader() {
 }
 
 const std::vector<std::string>& ExternalLoader::GetAppIds() {
-  CHECK(loaded_.IsSignaled());
+  if (!loaded_.IsSignaled())
+    LOG(ERROR) << "GetAppIds() called before loaded.";
   return app_ids_;
 }
 
 void ExternalLoader::Load() {
   base::FilePath ordinals_file;
-  CHECK(PathService::Get(chrome::FILE_DEFAULT_APP_ORDER, &ordinals_file));
+  CHECK(PathService::Get(chromeos::FILE_DEFAULT_APP_ORDER, &ordinals_file));
 
   scoped_ptr<base::ListValue> ordinals_value(
       ReadExternalOrdinalFile(ordinals_file));

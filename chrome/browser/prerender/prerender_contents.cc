@@ -8,10 +8,12 @@
 #include <functional>
 #include <utility>
 
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/favicon/favicon_tab_helper.h"
 #include "chrome/browser/history/history_tab_helper.h"
 #include "chrome/browser/history/history_types.h"
+#include "chrome/browser/prerender/prerender_field_trial.h"
 #include "chrome/browser/prerender/prerender_final_status.h"
 #include "chrome/browser/prerender/prerender_handle.h"
 #include "chrome/browser/prerender/prerender_manager.h"
@@ -20,7 +22,6 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tab_contents.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/prerender_messages.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/browser/browser_child_process_host.h"
@@ -78,12 +79,14 @@ class PrerenderContents::WebContentsDelegateImpl
     return NULL;
   }
 
-  virtual bool CanDownload(RenderViewHost* render_view_host,
-                           int request_id,
-                           const std::string& request_method) OVERRIDE {
+  virtual void CanDownload(
+      RenderViewHost* render_view_host,
+      int request_id,
+      const std::string& request_method,
+      const base::Callback<void(bool)>& callback) OVERRIDE {
     prerender_contents_->Destroy(FINAL_STATUS_DOWNLOAD);
     // Cancel the download.
-    return false;
+    callback.Run(false);
   }
 
   virtual bool ShouldCreateWebContents(
@@ -91,7 +94,12 @@ class PrerenderContents::WebContentsDelegateImpl
       int route_id,
       WindowContainerType window_container_type,
       const string16& frame_name,
-      const GURL& target_url) OVERRIDE {
+      const GURL& target_url,
+      const content::Referrer& referrer,
+      WindowOpenDisposition disposition,
+      const WebKit::WebWindowFeatures& features,
+      bool user_gesture,
+      bool opener_suppressed) OVERRIDE {
     // Since we don't want to permit child windows that would have a
     // window.opener property, terminate prerendering.
     prerender_contents_->Destroy(FINAL_STATUS_CREATE_NEW_WINDOW);
@@ -137,11 +145,6 @@ class PrerenderContents::WebContentsDelegateImpl
 
 void PrerenderContents::Observer::OnPrerenderStopLoading(
     PrerenderContents* contents) {
-}
-
-void PrerenderContents::Observer::OnPrerenderAddAlias(
-    PrerenderContents* contents,
-    const GURL& alias_url) {
 }
 
 void PrerenderContents::Observer::OnPrerenderCreatedMatchCompleteReplacement(
@@ -270,6 +273,11 @@ void PrerenderContents::StartPrerendering(
   if (prerender_manager_->IsControlGroup(experiment_id()))
     return;
 
+  if (origin_ == ORIGIN_LOCAL_PREDICTOR &&
+      IsLocalPredictorPrerenderAlwaysControlEnabled()) {
+    return;
+  }
+
   prerendering_has_started_ = true;
 
   prerender_contents_.reset(CreateWebContents(session_storage_namespace));
@@ -368,6 +376,15 @@ PrerenderContents::~PrerenderContents() {
   prerender_manager_->RecordFinalStatusWithMatchCompleteStatus(
       origin(), experiment_id(), match_complete_status(), final_status());
 
+  // Broadcast the removal of aliases.
+  for (content::RenderProcessHost::iterator host_iterator =
+           content::RenderProcessHost::AllHostsIterator();
+       !host_iterator.IsAtEnd();
+       host_iterator.Advance()) {
+    content::RenderProcessHost* host = host_iterator.GetCurrentValue();
+    host->Send(new PrerenderMsg_OnPrerenderRemoveAliases(alias_urls_));
+  }
+
   // If we still have a WebContents, clean up anything we need to and then
   // destroy it.
   if (prerender_contents_.get())
@@ -463,8 +480,8 @@ WebContents* PrerenderContents::CreateWebContents(
   // TODO(ajwong): Remove the temporary map once prerendering is aware of
   // multiple session storage namespaces per tab.
   content::SessionStorageNamespaceMap session_storage_namespace_map;
-  session_storage_namespace_map[""] = session_storage_namespace;
-  return  WebContents::CreateWithSessionStorage(
+  session_storage_namespace_map[std::string()] = session_storage_namespace;
+  return WebContents::CreateWithSessionStorage(
       WebContents::CreateParams(profile_), session_storage_namespace_map);
 }
 
@@ -481,11 +498,6 @@ void PrerenderContents::NotifyPrerenderStop() {
   DCHECK_NE(FINAL_STATUS_MAX, final_status_);
   FOR_EACH_OBSERVER(Observer, observer_list_, OnPrerenderStop(this));
   observer_list_.Clear();
-}
-
-void PrerenderContents::NotifyPrerenderAddAlias(const GURL& alias_url) {
-  FOR_EACH_OBSERVER(Observer, observer_list_, OnPrerenderAddAlias(this,
-                                                                  alias_url));
 }
 
 void PrerenderContents::NotifyPrerenderCreatedMatchCompleteReplacement(
@@ -529,14 +541,21 @@ bool PrerenderContents::AddAliasURL(const GURL& url) {
   }
 
   alias_urls_.push_back(url);
-  NotifyPrerenderAddAlias(url);
+
+  for (content::RenderProcessHost::iterator host_iterator =
+           content::RenderProcessHost::AllHostsIterator();
+       !host_iterator.IsAtEnd();
+       host_iterator.Advance()) {
+    content::RenderProcessHost* host = host_iterator.GetCurrentValue();
+    host->Send(new PrerenderMsg_OnPrerenderAddAlias(url));
+  }
+
   return true;
 }
 
 bool PrerenderContents::Matches(
     const GURL& url,
     const SessionStorageNamespace* session_storage_namespace) const {
-  DCHECK(child_id_ == -1 || session_storage_namespace);
   if (session_storage_namespace &&
       session_storage_namespace_id_ != session_storage_namespace->id()) {
     return false;
@@ -545,7 +564,7 @@ bool PrerenderContents::Matches(
                        std::bind2nd(std::equal_to<GURL>(), url)) != 0;
 }
 
-void PrerenderContents::RenderViewGone(base::TerminationStatus status) {
+void PrerenderContents::RenderProcessGone(base::TerminationStatus status) {
   Destroy(FINAL_STATUS_RENDERER_CRASHED);
 }
 
@@ -694,6 +713,8 @@ Value* PrerenderContents::GetAsValue() const {
   base::TimeTicks current_time = base::TimeTicks::Now();
   base::TimeDelta duration = current_time - load_start_time_;
   dict_value->SetInteger("duration", duration.InSeconds());
+  dict_value->SetBoolean("is_loaded", prerender_contents_ &&
+                                      !prerender_contents_->IsLoading());
   return dict_value;
 }
 

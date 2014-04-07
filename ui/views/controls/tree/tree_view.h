@@ -9,9 +9,11 @@
 
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
+#include "base/memory/scoped_ptr.h"
 #include "ui/base/models/tree_node_model.h"
 #include "ui/gfx/font.h"
 #include "ui/gfx/image/image_skia.h"
+#include "ui/views/controls/prefix_delegate.h"
 #include "ui/views/controls/textfield/textfield_controller.h"
 #include "ui/views/focus/focus_manager.h"
 #include "ui/views/view.h"
@@ -20,6 +22,7 @@ namespace views {
 
 class Textfield;
 class TreeViewController;
+class PrefixSelector;
 
 // TreeView displays hierarchical data as returned from a TreeModel. The user
 // can expand, collapse and edit the items. A Controller may be attached to
@@ -28,10 +31,10 @@ class TreeViewController;
 // Note on implementation. This implementation doesn't scale well. In particular
 // it does not store any row information, but instead calculates it as
 // necessary. But it's more than adequate for current uses.
-class VIEWS_EXPORT TreeView : public View,
-                              public ui::TreeModelObserver,
+class VIEWS_EXPORT TreeView : public ui::TreeModelObserver,
                               public TextfieldController,
-                              public FocusChangeListener {
+                              public FocusChangeListener,
+                              public PrefixDelegate {
  public:
   TreeView();
   virtual ~TreeView();
@@ -101,6 +104,12 @@ class VIEWS_EXPORT TreeView : public View,
     controller_ = controller;
   }
 
+  // Returns the node for the specified row, or NULL for an invalid row index.
+  ui::TreeModelNode* GetNodeForRow(int row);
+
+  // Maps a node to a row, returns -1 if node is not valid.
+  int GetRowForNode(ui::TreeModelNode* node);
+
   views::Textfield* editor() { return editor_; }
 
   // View overrides:
@@ -108,9 +117,10 @@ class VIEWS_EXPORT TreeView : public View,
   virtual gfx::Size GetPreferredSize() OVERRIDE;
   virtual bool AcceleratorPressed(const ui::Accelerator& accelerator) OVERRIDE;
   virtual bool OnMousePressed(const ui::MouseEvent& event) OVERRIDE;
+  virtual ui::TextInputClient* GetTextInputClient() OVERRIDE;
   virtual void OnGestureEvent(ui::GestureEvent* event) OVERRIDE;
   virtual void ShowContextMenu(const gfx::Point& p,
-                               bool is_mouse_gesture) OVERRIDE;
+                               ui::MenuSourceType source_type) OVERRIDE;
   virtual void GetAccessibleState(ui::AccessibleViewState* state) OVERRIDE;
 
   // TreeModelObserver overrides:
@@ -137,6 +147,12 @@ class VIEWS_EXPORT TreeView : public View,
   virtual void OnDidChangeFocus(View* focused_before,
                                 View* focused_now) OVERRIDE;
 
+  // PrefixDelegate overrides:
+  virtual int GetRowCount() OVERRIDE;
+  virtual int GetSelectedRow() OVERRIDE;
+  virtual void SetSelectedRow(int row) OVERRIDE;
+  virtual string16 GetTextForRow(int row) OVERRIDE;
+
  protected:
   // View overrides:
   virtual gfx::Point GetKeyboardContextMenuLocation() OVERRIDE;
@@ -146,7 +162,7 @@ class VIEWS_EXPORT TreeView : public View,
   virtual void OnBlur() OVERRIDE;
 
  private:
-  friend class TreeViewViewsTest;
+  friend class TreeViewTest;
 
   // Selects, expands or collapses nodes in the tree.  Consistent behavior for
   // tap gesture and click events.
@@ -178,7 +194,7 @@ class VIEWS_EXPORT TreeView : public View,
     int text_width() const { return text_width_; }
 
     // Returns the total number of descendants (including this node).
-    int NumExpandedNodes();
+    int NumExpandedNodes() const;
 
     // Returns the max width of all descendants (including this node). |indent|
     // is how many pixels each child is indented and |depth| is the depth of
@@ -280,11 +296,8 @@ class VIEWS_EXPORT TreeView : public View,
   // know the row/depth.
   gfx::Rect GetBoundsForNodeImpl(InternalNode* node, int row, int depth);
 
-  // Returns the number of rows.
-  int GetRowCount();
-
   // Returns the row and depth of a node.
-  int GetRowForNode(InternalNode* node, int* depth);
+  int GetRowForInternalNode(InternalNode* node, int* depth);
 
   // Returns the row and depth of the specified node.
   InternalNode* GetNodeByRow(int row, int* depth);
@@ -368,6 +381,8 @@ class VIEWS_EXPORT TreeView : public View,
   // Offset the text is drawn at. This accounts for the size of the expand
   // control, icon and offsets.
   int text_offset_;
+
+  scoped_ptr<PrefixSelector> selector_;
 
   DISALLOW_COPY_AND_ASSIGN(TreeView);
 };

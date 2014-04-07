@@ -4,7 +4,7 @@
 
 #include "chrome/browser/ui/views/website_settings/permission_selector_view.h"
 
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/website_settings/website_settings_ui.h"
 #include "grit/generated_resources.h"
 #include "ui/base/accessibility/accessible_view_state.h"
@@ -14,7 +14,6 @@
 #include "ui/views/controls/button/menu_button.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
-#include "ui/views/controls/menu/menu_model_adapter.h"
 #include "ui/views/controls/menu/menu_runner.h"
 #include "ui/views/layout/grid_layout.h"
 #include "ui/views/view.h"
@@ -87,8 +86,7 @@ class PermissionMenuButton : public views::MenuButton,
 PermissionMenuButton::PermissionMenuButton(const string16& text,
                                            PermissionMenuModel* model,
                                            bool show_menu_marker)
-    : ALLOW_THIS_IN_INITIALIZER_LIST(MenuButton(NULL, text, this,
-                                                show_menu_marker)),
+    : MenuButton(NULL, text, this, show_menu_marker),
       menu_model_(model) {
   SetEnabledColor(GetNativeTheme()->GetSystemColor(
       ui::NativeTheme::kColorId_LabelEnabledColor));
@@ -129,8 +127,7 @@ void PermissionMenuButton::GetAccessibleState(ui::AccessibleViewState* state) {
 
 void PermissionMenuButton::OnMenuButtonClicked(View* source,
                                                const gfx::Point& point) {
-  views::MenuModelAdapter menu_model_adapter(menu_model_);
-  menu_runner_.reset(new views::MenuRunner(menu_model_adapter.CreateMenu()));
+  menu_runner_.reset(new views::MenuRunner(menu_model_));
 
   gfx::Point p(point);
   p.Offset(-source->width(), 0);
@@ -139,6 +136,7 @@ void PermissionMenuButton::OnMenuButtonClicked(View* source,
           this,
           gfx::Rect(p, gfx::Size()),
           views::MenuItemView::TOPLEFT,
+          ui::MENU_SOURCE_NONE,
           views::MenuRunner::HAS_MNEMONICS) == views::MenuRunner::MENU_DELETED)
     return;
 }

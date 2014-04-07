@@ -14,10 +14,10 @@
 #include "chrome/common/extensions/manifest.h"
 
 class Profile;
-class Version;
 
 namespace base {
 class DictionaryValue;
+class Version;
 }
 
 namespace extensions {
@@ -38,6 +38,7 @@ class ExternalProviderImpl : public ExternalProviderInterface {
   // be initialized as Manifest::INVALID_LOCATION.
   ExternalProviderImpl(VisitorInterface* service,
                        ExternalLoader* loader,
+                       Profile* profile,
                        Manifest::Location crx_location,
                        Manifest::Location download_location,
                        int creation_flags);
@@ -58,9 +59,10 @@ class ExternalProviderImpl : public ExternalProviderInterface {
   virtual void ServiceShutdown() OVERRIDE;
   virtual void VisitRegisteredExtension() OVERRIDE;
   virtual bool HasExtension(const std::string& id) const OVERRIDE;
-  virtual bool GetExtensionDetails(const std::string& id,
-                                   Manifest::Location* location,
-                                   scoped_ptr<Version>* version) const OVERRIDE;
+  virtual bool GetExtensionDetails(
+      const std::string& id,
+      Manifest::Location* location,
+      scoped_ptr<base::Version>* version) const OVERRIDE;
 
   virtual bool IsReady() const OVERRIDE;
 
@@ -70,6 +72,7 @@ class ExternalProviderImpl : public ExternalProviderInterface {
   static const char kSupportedLocales[];
   static const char kIsBookmarkApp[];
   static const char kIsFromWebstore[];
+  static const char kKeepIfPresent[];
 
   void set_auto_acknowledge(bool auto_acknowledge) {
     auto_acknowledge_ = auto_acknowledge;
@@ -98,6 +101,9 @@ class ExternalProviderImpl : public ExternalProviderInterface {
   // The loader that loads the list of external extensions and reports them
   // via |SetPrefs|.
   scoped_refptr<ExternalLoader> loader_;
+
+  // The profile that will be used to install external extensions.
+  Profile* profile_;
 
   // Creation flags to use for the extension.  These flags will be used
   // when calling Extension::Create() by the crx installer.

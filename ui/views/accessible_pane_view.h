@@ -5,7 +5,7 @@
 #ifndef UI_VIEWS_ACCESSIBLE_PANE_VIEW_H_
 #define UI_VIEWS_ACCESSIBLE_PANE_VIEW_H_
 
-#include "base/hash_tables.h"
+#include "base/containers/hash_tables.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "ui/base/accelerators/accelerator.h"
@@ -45,6 +45,7 @@ class VIEWS_EXPORT AccessiblePaneView : public View,
       OVERRIDE;
   virtual void SetVisible(bool flag) OVERRIDE;
   virtual void GetAccessibleState(ui::AccessibleViewState* state) OVERRIDE;
+  virtual void RequestFocus() OVERRIDE;
 
   // Overridden from FocusChangeListener:
   virtual void OnWillChangeFocus(View* focused_before,
@@ -80,8 +81,6 @@ class VIEWS_EXPORT AccessiblePaneView : public View,
 
   // Remove pane focus.
   virtual void RemovePaneFocus();
-
-  void RestoreLastFocusedView();
 
   View* GetFirstFocusableChild();
   View* GetLastFocusableChild();
@@ -119,6 +118,9 @@ class VIEWS_EXPORT AccessiblePaneView : public View,
   ui::Accelerator escape_key_;
   ui::Accelerator left_key_;
   ui::Accelerator right_key_;
+
+  // View storage id for the last focused view that's not within this pane.
+  int last_focused_view_storage_id_;
 
   friend class AccessiblePaneViewFocusSearch;
 

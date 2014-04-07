@@ -8,7 +8,7 @@
 #import <Cocoa/Cocoa.h>
 
 #include "base/gtest_prod_util.h"
-#include "base/memory/scoped_nsobject.h"
+#include "base/mac/scoped_nsobject.h"
 #include "chrome/browser/ui/cocoa/location_bar/location_bar_decoration.h"
 
 // Draws an outlined rounded rect, with an optional image to the left
@@ -16,8 +16,7 @@
 
 class BubbleDecoration : public LocationBarDecoration {
  public:
-  // |font| will be used when drawing the label, and cannot be |nil|.
-  BubbleDecoration(NSFont* font);
+  BubbleDecoration();
   virtual ~BubbleDecoration();
 
   // Setup the drawing parameters.
@@ -30,7 +29,7 @@ class BubbleDecoration : public LocationBarDecoration {
 
   // Implement |LocationBarDecoration|.
   virtual void DrawInFrame(NSRect frame, NSView* control_view) OVERRIDE;
-  virtual CGFloat GetWidthForSpace(CGFloat width, CGFloat text_width) OVERRIDE;
+  virtual CGFloat GetWidthForSpace(CGFloat width) OVERRIDE;
 
  protected:
   // Helper returning bubble width for the given |image| and |label|
@@ -41,24 +40,24 @@ class BubbleDecoration : public LocationBarDecoration {
   // from.  |frame| is the decoration's frame in the containing cell.
   NSRect GetImageRectInFrame(NSRect frame);
 
-  // Contains font and color attribute for drawing |label_|.
-  scoped_nsobject<NSDictionary> attributes_;
-
  private:
   friend class SelectedKeywordDecorationTest;
   FRIEND_TEST_ALL_PREFIXES(SelectedKeywordDecorationTest,
                            UsesPartialKeywordIfNarrow);
 
   // Image drawn in the left side of the bubble.
-  scoped_nsobject<NSImage> image_;
+  base::scoped_nsobject<NSImage> image_;
 
   // Label to draw to right of image.  Can be |nil|.
-  scoped_nsobject<NSString> label_;
+  base::scoped_nsobject<NSString> label_;
+
+  // Contains attribute for drawing |label_|.
+  base::scoped_nsobject<NSMutableDictionary> attributes_;
 
   // Colors used to draw the bubble, should be set by the subclass
   // constructor.
-  scoped_nsobject<NSColor> background_color_;
-  scoped_nsobject<NSColor> border_color_;
+  base::scoped_nsobject<NSColor> background_color_;
+  base::scoped_nsobject<NSColor> border_color_;
 
   DISALLOW_COPY_AND_ASSIGN(BubbleDecoration);
 };

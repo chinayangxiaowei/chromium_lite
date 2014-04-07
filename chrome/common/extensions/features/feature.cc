@@ -8,18 +8,8 @@
 
 #include "base/command_line.h"
 #include "base/lazy_instance.h"
-#include "base/stringprintf.h"
-#include "base/string_util.h"
-#include "chrome/common/chrome_switches.h"
-
-using chrome::VersionInfo;
-
-namespace {
-
-const VersionInfo::Channel kDefaultChannel = VersionInfo::CHANNEL_STABLE;
-VersionInfo::Channel g_current_channel = kDefaultChannel;
-
-}  // namespace
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 
 namespace extensions {
 
@@ -41,25 +31,12 @@ Feature::Location Feature::ConvertLocation(Manifest::Location location) {
 }
 
 // static
-chrome::VersionInfo::Channel Feature::GetCurrentChannel() {
-  return g_current_channel;
-}
-
-// static
-void Feature::SetCurrentChannel(VersionInfo::Channel channel) {
-  g_current_channel = channel;
-}
-
-// static
-chrome::VersionInfo::Channel Feature::GetDefaultChannel() {
-  return kDefaultChannel;
-}
-
-// static
 Feature::Availability Feature::CreateAvailability(AvailabilityResult result,
                                                   const std::string& message) {
   return Availability(result, message);
 }
+
+Feature::Feature() : no_parent_(false) {}
 
 Feature::~Feature() {}
 

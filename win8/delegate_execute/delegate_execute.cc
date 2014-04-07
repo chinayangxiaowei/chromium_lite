@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "build/intsafe_workaround.h"
+
 #include <atlbase.h>
 #include <atlcom.h>
 #include <atlctl.h>
@@ -12,8 +14,8 @@
 #include "base/command_line.h"
 #include "base/file_util.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/process_util.h"
-#include "base/string16.h"
+#include "base/process/kill.h"
+#include "base/strings/string16.h"
 #include "base/win/scoped_com_initializer.h"
 #include "base/win/scoped_handle.h"
 #include "breakpad/src/client/windows/handler/exception_handler.h"

@@ -40,7 +40,7 @@ SpdySM::SpdySM(SMConnection* connection,
                EpollServer* epoll_server,
                MemoryCache* memory_cache,
                FlipAcceptor* acceptor)
-    : buffered_spdy_framer_(new BufferedSpdyFramer(2, true)),
+    : buffered_spdy_framer_(new BufferedSpdyFramer(SPDY2, true)),
       valid_spdy_session_(false),
       connection_(connection),
       client_output_list_(connection->output_list()),
@@ -112,9 +112,14 @@ SMInterface* SpdySM::FindOrMakeNewSMConnectionInterface(
   }
 
   sm_http_interface->InitSMInterface(this, server_idx);
-  sm_http_interface->InitSMConnection(NULL, sm_http_interface,
-                                      epoll_server_, -1,
-                                      server_ip, server_port, "", false);
+  sm_http_interface->InitSMConnection(NULL,
+                                      sm_http_interface,
+                                      epoll_server_,
+                                      -1,
+                                      server_ip,
+                                      server_port,
+                                      std::string(),
+                                      false);
 
   return sm_http_interface;
 }
@@ -292,7 +297,7 @@ void SpdySM::ResetForNewInterface(int32 server_idx) {
 void SpdySM::ResetForNewConnection() {
   // seq_num is not cleared, intentionally.
   delete buffered_spdy_framer_;
-  buffered_spdy_framer_ = new BufferedSpdyFramer(2, true);
+  buffered_spdy_framer_ = new BufferedSpdyFramer(SPDY2, true);
   buffered_spdy_framer_->set_visitor(this);
   valid_spdy_session_ = false;
   client_output_ordering_.Reset();
@@ -516,43 +521,43 @@ void SpdySM::GetOutput() {
         // this is a server initiated stream.
         // Ideally, we'd do a 'syn-push' here, instead of a syn-reply.
         BalsaHeaders headers;
-        headers.CopyFrom(*(mci->file_data->headers));
+        headers.CopyFrom(*(mci->file_data->headers()));
         headers.ReplaceOrAppendHeader("status", "200");
         headers.ReplaceOrAppendHeader("version", "http/1.1");
         headers.SetRequestFirstlineFromStringPieces("PUSH",
-                                                    mci->file_data->filename,
+                                                    mci->file_data->filename(),
                                                     "");
         mci->bytes_sent = SendSynStream(mci->stream_id, headers);
       } else {
         BalsaHeaders headers;
-        headers.CopyFrom(*(mci->file_data->headers));
+        headers.CopyFrom(*(mci->file_data->headers()));
         mci->bytes_sent = SendSynReply(mci->stream_id, headers);
       }
       return;
     }
-    if (mci->body_bytes_consumed >= mci->file_data->body.size()) {
+    if (mci->body_bytes_consumed >= mci->file_data->body().size()) {
       VLOG(2) << ACCEPTOR_CLIENT_IDENT << "SpdySM: GetOutput "
               << "remove_stream_id: [" << mci->stream_id << "]";
       SendEOF(mci->stream_id);
       return;
     }
     size_t num_to_write =
-      mci->file_data->body.size() - mci->body_bytes_consumed;
+        mci->file_data->body().size() - mci->body_bytes_consumed;
     if (num_to_write > mci->max_segment_size)
       num_to_write = mci->max_segment_size;
 
     bool should_compress = false;
-    if (!mci->file_data->headers->HasHeader("content-encoding")) {
-      if (mci->file_data->headers->HasHeader("content-type")) {
+    if (!mci->file_data->headers()->HasHeader("content-encoding")) {
+      if (mci->file_data->headers()->HasHeader("content-type")) {
         std::string content_type =
-            mci->file_data->headers->GetHeader("content-type").as_string();
+            mci->file_data->headers()->GetHeader("content-type").as_string();
         if (content_type.find("image") == content_type.npos)
           should_compress = true;
       }
     }
 
     SendDataFrame(mci->stream_id,
-                  mci->file_data->body.data() + mci->body_bytes_consumed,
+                  mci->file_data->body().data() + mci->body_bytes_consumed,
                   num_to_write, 0, should_compress);
     VLOG(2) << ACCEPTOR_CLIENT_IDENT << "SpdySM: GetOutput SendDataFrame["
             << mci->stream_id << "]: " << num_to_write;

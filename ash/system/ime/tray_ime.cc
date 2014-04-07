@@ -17,23 +17,32 @@
 #include "ash/system/tray/tray_details_view.h"
 #include "ash/system/tray/tray_item_more.h"
 #include "ash/system/tray/tray_item_view.h"
-#include "ash/system/tray/tray_notification_view.h"
+#include "ash/system/tray/tray_utils.h"
 #include "base/logging.h"
-#include "base/timer.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "grit/ash_resources.h"
 #include "grit/ash_strings.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/font.h"
 #include "ui/gfx/image/image.h"
+#include "ui/message_center/message_center.h"
+#include "ui/message_center/notification.h"
+#include "ui/message_center/notification_delegate.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/widget/widget.h"
 
+using message_center::Notification;
+
+namespace {
+
+const char kIMENotificationId[] = "chrome://settings/ime";
+
+}  // namespace
+
 namespace ash {
 namespace internal {
-
 namespace tray {
 
 class IMEDefaultView : public TrayItemMore {
@@ -168,71 +177,6 @@ class IMEDetailedView : public TrayDetailsView,
   DISALLOW_COPY_AND_ASSIGN(IMEDetailedView);
 };
 
-class IMENotificationView : public TrayNotificationView {
- public:
-  explicit IMENotificationView(TrayIME* owner)
-      : TrayNotificationView(owner, IDR_AURA_UBER_TRAY_IME) {
-    InitView(GetLabel());
-  }
-
-  void UpdateLabel() {
-    RestartAutoCloseTimer();
-    UpdateView(GetLabel());
-  }
-
-  void StartAutoCloseTimer(int seconds) {
-    autoclose_.Stop();
-    autoclose_delay_ = seconds;
-    if (autoclose_delay_) {
-      autoclose_.Start(FROM_HERE,
-                       base::TimeDelta::FromSeconds(autoclose_delay_),
-                       this, &IMENotificationView::Close);
-    }
-  }
-
-  void StopAutoCloseTimer() {
-    autoclose_.Stop();
-  }
-
-  void RestartAutoCloseTimer() {
-    if (autoclose_delay_)
-      StartAutoCloseTimer(autoclose_delay_);
-  }
-
-  // Overridden from TrayNotificationView.
-  virtual void OnClickAction() OVERRIDE {
-    owner()->PopupDetailedView(0, true);
-  }
-
- private:
-  void Close() {
-    owner()->HideNotificationView();
-  }
-
-  views::Label* GetLabel() {
-    SystemTrayDelegate* delegate = Shell::GetInstance()->system_tray_delegate();
-    IMEInfo current;
-    delegate->GetCurrentIME(&current);
-
-    // TODO(zork): Use IDS_ASH_STATUS_TRAY_THIRD_PARTY_IME_TURNED_ON_BUBBLE for
-    // third party IMEs
-    views::Label* label = new views::Label(
-        l10n_util::GetStringFUTF16(
-            IDS_ASH_STATUS_TRAY_IME_TURNED_ON_BUBBLE,
-            current.medium_name));
-    label->SetMultiLine(true);
-    label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
-    return label;
-  }
-
-
-  int autoclose_delay_;
-  base::OneShotTimer<IMENotificationView> autoclose_;
-
-  DISALLOW_COPY_AND_ASSIGN(IMENotificationView);
-};
-
-
 }  // namespace tray
 
 TrayIME::TrayIME(SystemTray* system_tray)
@@ -240,13 +184,14 @@ TrayIME::TrayIME(SystemTray* system_tray)
       tray_label_(NULL),
       default_(NULL),
       detailed_(NULL),
-      notification_(NULL),
       message_shown_(false) {
   Shell::GetInstance()->system_tray_notifier()->AddIMEObserver(this);
 }
 
 TrayIME::~TrayIME() {
   Shell::GetInstance()->system_tray_notifier()->RemoveIMEObserver(this);
+  message_center::MessageCenter::Get()->RemoveNotification(
+      kIMENotificationId, false /* by_user */);
 }
 
 void TrayIME::UpdateTrayLabel(const IMEInfo& current, size_t count) {
@@ -262,11 +207,45 @@ void TrayIME::UpdateTrayLabel(const IMEInfo& current, size_t count) {
   }
 }
 
+void TrayIME::UpdateOrCreateNotification() {
+  message_center::MessageCenter* message_center =
+      message_center::MessageCenter::Get();
+
+  if (!message_center->HasNotification(kIMENotificationId) && message_shown_)
+    return;
+
+  SystemTrayDelegate* delegate = Shell::GetInstance()->system_tray_delegate();
+  IMEInfo current;
+  delegate->GetCurrentIME(&current);
+
+  scoped_ptr<Notification> notification(new Notification(
+      message_center::NOTIFICATION_TYPE_SIMPLE,
+      kIMENotificationId,
+      // TODO(zork): Use IDS_ASH_STATUS_TRAY_THIRD_PARTY_IME_TURNED_ON_BUBBLE
+      // for third party IMEs
+      l10n_util::GetStringFUTF16(
+          IDS_ASH_STATUS_TRAY_IME_TURNED_ON_BUBBLE,
+          current.medium_name),
+      base::string16(),  // message
+      gfx::Image(),  // icon
+      base::string16(),  // display_source
+      "",  // extension_id
+      message_center::RichNotificationData(),
+      new message_center::HandleNotificationClickedDelegate(
+          base::Bind(&TrayIME::PopupDetailedView,
+                     base::Unretained(this), 0, true))));
+  message_center->AddNotification(notification.Pass());
+  message_shown_ = true;
+}
+
 views::View* TrayIME::CreateTrayView(user::LoginStatus status) {
   CHECK(tray_label_ == NULL);
   tray_label_ = new TrayItemView(this);
   tray_label_->CreateLabel();
   SetupLabelForTray(tray_label_->label());
+  // Hide IME tray when it is created, it will be updated when it is notified
+  // for IME refresh event.
+  tray_label_->SetVisible(false);
   return tray_label_;
 }
 
@@ -289,13 +268,6 @@ views::View* TrayIME::CreateDetailedView(user::LoginStatus status) {
   return detailed_;
 }
 
-views::View* TrayIME::CreateNotificationView(user::LoginStatus status) {
-  DCHECK(notification_ == NULL);
-  notification_ = new tray::IMENotificationView(this);
-  notification_->StartAutoCloseTimer(kTrayPopupAutoCloseDelayForTextInSeconds);
-  return notification_;
-}
-
 void TrayIME::DestroyTrayView() {
   tray_label_ = NULL;
 }
@@ -306,10 +278,6 @@ void TrayIME::DestroyDefaultView() {
 
 void TrayIME::DestroyDetailedView() {
   detailed_ = NULL;
-}
-
-void TrayIME::DestroyNotificationView() {
-  notification_ = NULL;
 }
 
 void TrayIME::UpdateAfterLoginStatusChange(user::LoginStatus status) {
@@ -335,17 +303,8 @@ void TrayIME::OnIMERefresh(bool show_message) {
   if (detailed_)
     detailed_->Update(list, property_list);
 
-  if (list.size() > 1 && show_message) {
-    // If the notification is still visible, hide it and clear the flag so it is
-    // refreshed.
-    if (notification_) {
-      notification_->UpdateLabel();
-    } else if (!Shell::GetPrimaryRootWindowController()->shelf()->IsVisible() ||
-               !message_shown_) {
-      ShowNotificationView();
-      message_shown_ = true;
-    }
-  }
+  if (list.size() > 1 && show_message)
+    UpdateOrCreateNotification();
 }
 
 }  // namespace internal

@@ -10,8 +10,11 @@
 #include "base/callback.h"
 #include "base/compiler_specific.h"
 #include "base/memory/weak_ptr.h"
+#include "chrome/browser/invalidation/invalidator_storage.h"
+#include "chrome/browser/signin/oauth2_token_service.h"
+#include "chrome/browser/signin/profile_oauth2_token_service.h"
+#include "chrome/browser/signin/profile_oauth2_token_service_factory.h"
 #include "chrome/browser/sync/glue/data_type_manager_impl.h"
-#include "chrome/browser/sync/invalidations/invalidator_storage.h"
 #include "chrome/browser/sync/profile_sync_components_factory_mock.h"
 #include "chrome/browser/sync/profile_sync_service.h"
 #include "chrome/browser/sync/sync_prefs.h"
@@ -25,7 +28,12 @@ class Task;
 class TestProfileSyncService;
 
 ACTION(ReturnNewDataTypeManager) {
-  return new browser_sync::DataTypeManagerImpl(arg0, arg1, arg2, arg3, arg4);
+  return new browser_sync::DataTypeManagerImpl(arg0,
+                                               arg1,
+                                               arg2,
+                                               arg3,
+                                               arg4,
+                                               arg5);
 }
 
 namespace browser_sync {
@@ -38,7 +46,6 @@ class SyncBackendHostForProfileSyncTest : public SyncBackendHost {
   SyncBackendHostForProfileSyncTest(
       Profile* profile,
       const base::WeakPtr<SyncPrefs>& sync_prefs,
-      const base::WeakPtr<InvalidatorStorage>& invalidator_storage,
       syncer::TestIdFactory& id_factory,
       base::Closure& callback,
       bool set_initial_sync_ended_on_init,
@@ -54,10 +61,14 @@ class SyncBackendHostForProfileSyncTest : public SyncBackendHost {
 
   virtual void RequestConfigureSyncer(
       syncer::ConfigureReason reason,
-      syncer::ModelTypeSet types_to_config,
-      syncer::ModelTypeSet failed_types,
+      syncer::ModelTypeSet to_download,
+      syncer::ModelTypeSet to_purge,
+      syncer::ModelTypeSet to_journal,
+      syncer::ModelTypeSet to_unapply,
+      syncer::ModelTypeSet to_ignore,
       const syncer::ModelSafeRoutingInfo& routing_info,
-      const base::Callback<void(syncer::ModelTypeSet)>& ready_task,
+      const base::Callback<void(syncer::ModelTypeSet,
+                                syncer::ModelTypeSet)>& ready_task,
       const base::Closure& retry_callback) OVERRIDE;
 
   virtual void HandleSyncManagerInitializationOnFrontendLoop(
@@ -68,12 +79,8 @@ class SyncBackendHostForProfileSyncTest : public SyncBackendHost {
 
   static void SetHistoryServiceExpectations(ProfileMock* profile);
 
-  void EmitOnInvalidatorStateChange(syncer::InvalidatorState state);
-  void EmitOnIncomingInvalidation(
-      const syncer::ObjectIdInvalidationMap& invalidation_map);
-
  protected:
-  virtual void InitCore(const DoInitializeOptions& options) OVERRIDE;
+  virtual void InitCore(scoped_ptr<DoInitializeOptions> options) OVERRIDE;
 
  private:
   void ContinueInitialization(
@@ -113,11 +120,15 @@ class TestProfileSyncService : public ProfileSyncService {
   TestProfileSyncService(
       ProfileSyncComponentsFactory* factory,
       Profile* profile,
-      SigninManager* signin,
+      SigninManagerBase* signin,
       ProfileSyncService::StartBehavior behavior,
       bool synchronous_backend_initialization);
 
   virtual ~TestProfileSyncService();
+
+  virtual void RequestAccessToken() OVERRIDE;
+  virtual void OnGetTokenFailure(const OAuth2TokenService::Request* request,
+      const GoogleServiceAuthError& error) OVERRIDE;
 
   virtual void OnBackendInitialized(
       const syncer::WeakHandle<syncer::JsBackend>& backend,
@@ -131,7 +142,8 @@ class TestProfileSyncService : public ProfileSyncService {
   // We implement our own version to avoid some DCHECKs.
   virtual syncer::UserShare* GetUserShare() const OVERRIDE;
 
-  static ProfileKeyedService* BuildAutoStartAsyncInit(Profile* profile);
+  static BrowserContextKeyedService* BuildAutoStartAsyncInit(
+      content::BrowserContext* profile);
 
   ProfileSyncComponentsFactoryMock* components_factory_mock();
 
@@ -162,6 +174,12 @@ class TestProfileSyncService : public ProfileSyncService {
  protected:
   virtual void CreateBackend() OVERRIDE;
 
+  // Return NULL handle to use in backend initialization to avoid receiving
+  // js messages on UI loop when it's being destroyed, which are not deleted
+  // and cause memory leak in test.
+  virtual syncer::WeakHandle<syncer::JsEventHandler> GetJsEventHandler()
+      OVERRIDE;
+
  private:
   syncer::TestIdFactory id_factory_;
 
@@ -176,6 +194,17 @@ class TestProfileSyncService : public ProfileSyncService {
 
   bool fail_initial_download_;
   syncer::StorageOption storage_option_;
+};
+
+
+class FakeOAuth2TokenService : public ProfileOAuth2TokenService {
+ public:
+  virtual scoped_ptr<OAuth2TokenService::Request> StartRequest(
+      const OAuth2TokenService::ScopeSet& scopes,
+      OAuth2TokenService::Consumer* consumer) OVERRIDE;
+
+  static BrowserContextKeyedService* BuildTokenService(
+      content::BrowserContext* context);
 };
 
 #endif  // CHROME_BROWSER_SYNC_TEST_PROFILE_SYNC_SERVICE_H_

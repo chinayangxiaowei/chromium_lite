@@ -7,12 +7,12 @@
 #include <gdk/gdkkeysyms.h>
 
 #include "base/bind.h"
-#include "base/message_loop.h"
-#include "base/utf_string_conversions.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/ui/gtk/gtk_chrome_link_button.h"
 #include "chrome/browser/ui/gtk/gtk_theme_service.h"
 #include "chrome/browser/ui/gtk/gtk_util.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "content/public/browser/notification_source.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
@@ -238,6 +238,7 @@ void AvatarMenuItemGtk::Init(GtkThemeService* theme_service) {
     char* markup = g_markup_printf_escaped(
         "<span weight='bold'>%s</span>", UTF16ToUTF8(elided_name).c_str());
     gtk_label_set_markup(GTK_LABEL(name_label), markup);
+    g_free(markup);
   }
 
   gtk_misc_set_alignment(GTK_MISC(name_label), 0, 0);

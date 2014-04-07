@@ -739,6 +739,8 @@ error::Error GLES2DecoderImpl::HandleEnableVertexAttribArray(
 
 error::Error GLES2DecoderImpl::HandleFinish(
     uint32 immediate_data_size, const gles2::cmds::Finish& c) {
+  if (ShouldDeferReads())
+    return error::kDeferCommandUntilLater;
   DoFinish();
   return error::kNoError;
 }
@@ -1046,7 +1048,7 @@ error::Error GLES2DecoderImpl::HandleGetError(
   if (!result_dst) {
     return error::kOutOfBounds;
   }
-  *result_dst = GetGLError();
+  *result_dst = GetErrorState()->GetGLError();
   return error::kNoError;
 }
 
@@ -1405,7 +1407,22 @@ error::Error GLES2DecoderImpl::HandleHint(
     LOCAL_SET_GL_ERROR_INVALID_ENUM("glHint", mode, "mode");
     return error::kNoError;
   }
-  DoHint(target, mode);
+  switch (target) {
+    case GL_GENERATE_MIPMAP_HINT:
+      if (state_.hint_generate_mipmap != mode) {
+        state_.hint_generate_mipmap = mode;
+        glHint(target, mode);
+      }
+      break;
+    case GL_FRAGMENT_SHADER_DERIVATIVE_HINT_OES:
+      if (state_.hint_fragment_shader_derivative != mode) {
+        state_.hint_fragment_shader_derivative = mode;
+        glHint(target, mode);
+      }
+      break;
+    default:
+      NOTREACHED();
+  }
   return error::kNoError;
 }
 
@@ -2740,6 +2757,42 @@ error::Error GLES2DecoderImpl::HandleRenderbufferStorageMultisampleEXT(
   return error::kNoError;
 }
 
+error::Error GLES2DecoderImpl::HandleFramebufferTexture2DMultisampleEXT(
+    uint32 immediate_data_size,
+    const gles2::cmds::FramebufferTexture2DMultisampleEXT& c) {
+  GLenum target = static_cast<GLenum>(c.target);
+  GLenum attachment = static_cast<GLenum>(c.attachment);
+  GLenum textarget = static_cast<GLenum>(c.textarget);
+  GLuint texture = c.texture;
+  GLint level = static_cast<GLint>(c.level);
+  GLsizei samples = static_cast<GLsizei>(c.samples);
+  if (!validators_->frame_buffer_target.IsValid(target)) {
+    LOCAL_SET_GL_ERROR_INVALID_ENUM("glFramebufferTexture2DMultisampleEXT", target, "target");  // NOLINT
+    return error::kNoError;
+  }
+  if (!validators_->attachment.IsValid(attachment)) {
+    LOCAL_SET_GL_ERROR_INVALID_ENUM("glFramebufferTexture2DMultisampleEXT", attachment, "attachment");  // NOLINT
+    return error::kNoError;
+  }
+  if (!validators_->texture_target.IsValid(textarget)) {
+    LOCAL_SET_GL_ERROR_INVALID_ENUM("glFramebufferTexture2DMultisampleEXT", textarget, "textarget");  // NOLINT
+    return error::kNoError;
+  }
+  if (!validators_->zero_only.IsValid(level)) {
+    LOCAL_SET_GL_ERROR(
+        GL_INVALID_VALUE, "glFramebufferTexture2DMultisampleEXT", "level GL_INVALID_VALUE");  // NOLINT
+    return error::kNoError;
+  }
+  if (samples < 0) {
+    LOCAL_SET_GL_ERROR(
+        GL_INVALID_VALUE, "glFramebufferTexture2DMultisampleEXT", "samples < 0");  // NOLINT
+    return error::kNoError;
+  }
+  DoFramebufferTexture2DMultisample(
+      target, attachment, textarget, texture, level, samples);
+  return error::kNoError;
+}
+
 error::Error GLES2DecoderImpl::HandleTexStorage2DEXT(
     uint32 immediate_data_size, const gles2::cmds::TexStorage2DEXT& c) {
   GLenum target = static_cast<GLenum>(c.target);
@@ -2967,6 +3020,12 @@ error::Error GLES2DecoderImpl::HandleBindVertexArrayOES(
   return error::kNoError;
 }
 
+error::Error GLES2DecoderImpl::HandleSwapBuffers(
+    uint32 immediate_data_size, const gles2::cmds::SwapBuffers& c) {
+  DoSwapBuffers();
+  return error::kNoError;
+}
+
 error::Error GLES2DecoderImpl::HandleGetMaxValueInBufferCHROMIUM(
     uint32 immediate_data_size,
     const gles2::cmds::GetMaxValueInBufferCHROMIUM& c) {
@@ -3028,12 +3087,19 @@ error::Error GLES2DecoderImpl::HandleCopyTextureCHROMIUM(
   GLenum dest_id = static_cast<GLenum>(c.dest_id);
   GLint level = static_cast<GLint>(c.level);
   GLint internalformat = static_cast<GLint>(c.internalformat);
+  GLenum dest_type = static_cast<GLenum>(c.dest_type);
   if (!validators_->texture_internal_format.IsValid(internalformat)) {
     LOCAL_SET_GL_ERROR(
         GL_INVALID_VALUE, "glCopyTextureCHROMIUM", "internalformat GL_INVALID_VALUE");  // NOLINT
     return error::kNoError;
   }
-  DoCopyTextureCHROMIUM(target, source_id, dest_id, level, internalformat);
+  if (!validators_->pixel_type.IsValid(dest_type)) {
+    LOCAL_SET_GL_ERROR_INVALID_ENUM("glCopyTextureCHROMIUM", dest_type,
+    "dest_type");
+    return error::kNoError;
+  }
+  DoCopyTextureCHROMIUM(
+      target, source_id, dest_id, level, internalformat, dest_type);
   return error::kNoError;
 }
 
@@ -3046,7 +3112,7 @@ error::Error GLES2DecoderImpl::HandleProduceTextureCHROMIUM(
   }
   const GLbyte* mailbox = GetSharedMemoryAs<const GLbyte*>(
       c.mailbox_shm_id, c.mailbox_shm_offset, data_size);
-  if (!validators_->texture_target.IsValid(target)) {
+  if (!validators_->texture_bind_target.IsValid(target)) {
     LOCAL_SET_GL_ERROR_INVALID_ENUM("glProduceTextureCHROMIUM", target,
     "target");
     return error::kNoError;
@@ -3071,7 +3137,7 @@ error::Error GLES2DecoderImpl::HandleProduceTextureCHROMIUMImmediate(
   }
   const GLbyte* mailbox = GetImmediateDataAs<const GLbyte*>(
       c, data_size, immediate_data_size);
-  if (!validators_->texture_target.IsValid(target)) {
+  if (!validators_->texture_bind_target.IsValid(target)) {
     LOCAL_SET_GL_ERROR_INVALID_ENUM("glProduceTextureCHROMIUM", target,
     "target");
     return error::kNoError;
@@ -3092,7 +3158,7 @@ error::Error GLES2DecoderImpl::HandleConsumeTextureCHROMIUM(
   }
   const GLbyte* mailbox = GetSharedMemoryAs<const GLbyte*>(
       c.mailbox_shm_id, c.mailbox_shm_offset, data_size);
-  if (!validators_->texture_target.IsValid(target)) {
+  if (!validators_->texture_bind_target.IsValid(target)) {
     LOCAL_SET_GL_ERROR_INVALID_ENUM("glConsumeTextureCHROMIUM", target,
     "target");
     return error::kNoError;
@@ -3117,7 +3183,7 @@ error::Error GLES2DecoderImpl::HandleConsumeTextureCHROMIUMImmediate(
   }
   const GLbyte* mailbox = GetImmediateDataAs<const GLbyte*>(
       c, data_size, immediate_data_size);
-  if (!validators_->texture_target.IsValid(target)) {
+  if (!validators_->texture_bind_target.IsValid(target)) {
     LOCAL_SET_GL_ERROR_INVALID_ENUM("glConsumeTextureCHROMIUM", target,
     "target");
     return error::kNoError;

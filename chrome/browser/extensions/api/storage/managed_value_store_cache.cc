@@ -4,33 +4,47 @@
 
 #include "chrome/browser/extensions/api/storage/managed_value_store_cache.h"
 
-#include <set>
-
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/callback.h"
 #include "base/file_util.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted.h"
-#include "base/message_loop_proxy.h"
+#include "base/message_loop/message_loop_proxy.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/api/storage/policy_value_store.h"
 #include "chrome/browser/extensions/api/storage/settings_storage_factory.h"
 #include "chrome/browser/extensions/event_names.h"
 #include "chrome/browser/extensions/extension_prefs.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_system.h"
+#include "chrome/browser/policy/policy_domain_descriptor.h"
+#include "chrome/browser/policy/profile_policy_connector.h"
+#include "chrome/browser/policy/profile_policy_connector_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/value_store/value_store_change.h"
+#include "chrome/common/extensions/api/storage/storage_schema_manifest_handler.h"
 #include "chrome/common/extensions/extension.h"
+#include "chrome/common/extensions/extension_manifest_constants.h"
 #include "chrome/common/extensions/extension_set.h"
+#include "chrome/common/extensions/manifest.h"
 #include "chrome/common/extensions/permissions/api_permission.h"
+#include "chrome/common/policy/policy_schema.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
+#include "content/public/browser/notification_source.h"
 
 using content::BrowserThread;
 
 namespace extensions {
+
+namespace {
+
+const char kLoadSchemasBackgroundTaskTokenName[] =
+    "load_managed_storage_schemas_token";
+
+}  // namespace
 
 // This helper observes initialization of all the installed extensions and
 // subsequent loads and unloads, and keeps the PolicyService of the Profile
@@ -49,16 +63,23 @@ class ManagedValueStoreCache::ExtensionTracker
                        const content::NotificationDetails& details) OVERRIDE;
 
  private:
+  // Loads the schemas of the |extensions| and passes a PolicyDomainDescriptor
+  // to RegisterDomain().
+  static void LoadSchemas(scoped_ptr<ExtensionSet> extensions,
+                          base::WeakPtr<ExtensionTracker> self);
+  void RegisterDomain(
+      scoped_refptr<const policy::PolicyDomainDescriptor> descriptor);
+
   Profile* profile_;
-  bool is_ready_;
   content::NotificationRegistrar registrar_;
+  base::WeakPtrFactory<ExtensionTracker> weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(ExtensionTracker);
 };
 
 ManagedValueStoreCache::ExtensionTracker::ExtensionTracker(Profile* profile)
     : profile_(profile),
-      is_ready_(false) {
+      weak_factory_(this) {
   registrar_.Add(this,
                  chrome::NOTIFICATION_EXTENSIONS_READY,
                  content::Source<Profile>(profile_));
@@ -74,36 +95,82 @@ void ManagedValueStoreCache::ExtensionTracker::Observe(
     int type,
     const content::NotificationSource& source,
     const content::NotificationDetails& details) {
-  if (type == chrome::NOTIFICATION_EXTENSIONS_READY)
-    is_ready_ = true;
-
-  if (!is_ready_)
+  if (!ExtensionSystem::Get(profile_)->ready().is_signaled())
     return;
 
-  // TODO(joaodasilva): this currently only registers extensions that use
-  // the storage API, but that still includes a lot of extensions that don't
-  // use the storage.managed namespace. Use the presence of a schema for the
-  // managed namespace in the manifest as a better signal, once available.
-
+  scoped_refptr<policy::PolicyDomainDescriptor> descriptor(
+      new policy::PolicyDomainDescriptor(policy::POLICY_DOMAIN_EXTENSIONS));
   const ExtensionSet* set =
       ExtensionSystem::Get(profile_)->extension_service()->extensions();
-  std::set<std::string> use_storage_set;
-  for (ExtensionSet::const_iterator it = set->begin();
-       it != set->end(); ++it) {
+  scoped_ptr<ExtensionSet> managed_extensions(new ExtensionSet());
+  for (ExtensionSet::const_iterator it = set->begin(); it != set->end(); ++it) {
+    if ((*it)->manifest()->HasPath(
+            extension_manifest_keys::kStorageManagedSchema)) {
+      managed_extensions->Insert(*it);
+    }
+
+    // TODO(joaodasilva): also load extensions that use the storage API for now,
+    // to support the Legacy Browser Support extension. Remove this for M30.
+    // http://crbug.com/240704
     if ((*it)->HasAPIPermission(APIPermission::kStorage))
-      use_storage_set.insert((*it)->id());
+      managed_extensions->Insert(*it);
   }
 
-  profile_->GetPolicyService()->RegisterPolicyDomain(
-      policy::POLICY_DOMAIN_EXTENSIONS,
-      use_storage_set);
+  // Load the schema files in a background thread.
+  BrowserThread::PostBlockingPoolSequencedTask(
+      kLoadSchemasBackgroundTaskTokenName, FROM_HERE,
+      base::Bind(&ExtensionTracker::LoadSchemas,
+                 base::Passed(&managed_extensions),
+                 weak_factory_.GetWeakPtr()));
+}
+
+// static
+void ManagedValueStoreCache::ExtensionTracker::LoadSchemas(
+    scoped_ptr<ExtensionSet> extensions,
+    base::WeakPtr<ExtensionTracker> self) {
+  scoped_refptr<policy::PolicyDomainDescriptor> descriptor =
+      new policy::PolicyDomainDescriptor(policy::POLICY_DOMAIN_EXTENSIONS);
+
+  for (ExtensionSet::const_iterator it = extensions->begin();
+       it != extensions->end(); ++it) {
+    std::string schema_file;
+    if (!(*it)->manifest()->GetString(
+            extension_manifest_keys::kStorageManagedSchema, &schema_file)) {
+      // TODO(joaodasilva): Remove this for M30. http://crbug.com/240704
+      if ((*it)->HasAPIPermission(APIPermission::kStorage)) {
+        descriptor->RegisterComponent((*it)->id(),
+                                      scoped_ptr<policy::PolicySchema>());
+      } else {
+        NOTREACHED();
+      }
+      continue;
+    }
+    // The extension should have been validated, so assume the schema exists
+    // and is valid.
+    std::string error;
+    scoped_ptr<policy::PolicySchema> schema =
+        StorageSchemaManifestHandler::GetSchema(it->get(), &error);
+    CHECK(schema) << error;
+    descriptor->RegisterComponent((*it)->id(), schema.Pass());
+  }
+
+  BrowserThread::PostTask(
+      BrowserThread::UI, FROM_HERE,
+      base::Bind(&ExtensionTracker::RegisterDomain, self, descriptor));
+}
+
+void ManagedValueStoreCache::ExtensionTracker::RegisterDomain(
+    scoped_refptr<const policy::PolicyDomainDescriptor> descriptor) {
+  policy::ProfilePolicyConnector* connector =
+      policy::ProfilePolicyConnectorFactory::GetForProfile(profile_);
+  connector->policy_service()->RegisterPolicyDomain(descriptor);
 }
 
 ManagedValueStoreCache::ManagedValueStoreCache(
     Profile* profile,
     const scoped_refptr<SettingsStorageFactory>& factory,
     const scoped_refptr<SettingsObserverList>& observers)
-    : ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)),
+    : weak_factory_(this),
       weak_this_on_ui_(weak_factory_.GetWeakPtr()),
       profile_(profile),
       event_router_(ExtensionSystem::Get(profile)->event_router()),
@@ -116,8 +183,7 @@ ManagedValueStoreCache::ManagedValueStoreCache(
   if (event_router_)
     event_router_->RegisterObserver(this, event_names::kOnSettingsChanged);
 
-  profile_->GetPolicyService()->AddObserver(
-      policy::POLICY_DOMAIN_EXTENSIONS, this);
+  GetPolicyService()->AddObserver(policy::POLICY_DOMAIN_EXTENSIONS, this);
 
   extension_tracker_.reset(new ExtensionTracker(profile_));
 }
@@ -131,8 +197,7 @@ ManagedValueStoreCache::~ManagedValueStoreCache() {
 
 void ManagedValueStoreCache::ShutdownOnUI() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  profile_->GetPolicyService()->RemoveObserver(
-      policy::POLICY_DOMAIN_EXTENSIONS, this);
+  GetPolicyService()->RemoveObserver(policy::POLICY_DOMAIN_EXTENSIONS, this);
   if (event_router_)
     event_router_->UnregisterObserver(this);
   event_router_ = NULL;
@@ -170,7 +235,7 @@ void ManagedValueStoreCache::DeleteStorageSoon(
     // (because the extension is unloaded, for example). Open the database to
     // clear it if it exists.
     // TODO(joaodasilva): move this check to a ValueStore method.
-    if (file_util::DirectoryExists(base_path_.AppendASCII(extension_id))) {
+    if (base::DirectoryExists(base_path_.AppendASCII(extension_id))) {
       CreateStoreFor(
           extension_id,
           false,
@@ -277,7 +342,7 @@ void ManagedValueStoreCache::GetInitialPolicy(
     const base::Closure& continuation) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
-  policy::PolicyService* policy_service = profile_->GetPolicyService();
+  policy::PolicyService* policy_service = GetPolicyService();
 
   // If initialization of POLICY_DOMAIN_EXTENSIONS isn't complete then all the
   // policies served are empty; let the extension see what's cached in LevelDB
@@ -318,7 +383,7 @@ void ManagedValueStoreCache::CreateStoreWithInitialPolicy(
     // If the database doesn't exist yet then this is the initial install,
     // and no notifications should be issued in that case.
     // TODO(joaodasilva): move this check to a ValueStore method.
-    if (!file_util::DirectoryExists(base_path_.AppendASCII(extension_id)))
+    if (!base::DirectoryExists(base_path_.AppendASCII(extension_id)))
       notify_if_changed = false;
 
     store = new PolicyValueStore(
@@ -335,6 +400,12 @@ void ManagedValueStoreCache::CreateStoreWithInitialPolicy(
   // And finally resume from where this process started.
   if (!continuation.is_null())
     continuation.Run();
+}
+
+policy::PolicyService* ManagedValueStoreCache::GetPolicyService() {
+  policy::ProfilePolicyConnector* connector =
+      policy::ProfilePolicyConnectorFactory::GetForProfile(profile_);
+  return connector->policy_service();
 }
 
 }  // namespace extensions

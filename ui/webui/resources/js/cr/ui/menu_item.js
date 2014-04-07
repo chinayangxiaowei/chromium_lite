@@ -40,7 +40,10 @@ cr.define('cr.ui', function() {
       // the appearance of this element.
       this.classList.add('custom-appearance');
 
-      this.setAttribute('role', 'menuitem');
+      // Enable Text to Speech on the menu. Additionaly, ID has to be set, since
+      // it is used in element's aria-activedescendant attribute.
+      if (!this.isSeparator())
+        this.setAttribute('role', 'menuitem');
 
       var iconUrl;
       if ((iconUrl = this.getAttribute('icon')))
@@ -75,7 +78,8 @@ cr.define('cr.ui', function() {
         if (command.id)
           this.setAttribute('command', '#' + command.id);
 
-        this.label = command.label;
+        if (typeof command.label === 'string')
+          this.label = command.label;
         this.disabled = command.disabled;
         this.hidden = command.hidden;
 

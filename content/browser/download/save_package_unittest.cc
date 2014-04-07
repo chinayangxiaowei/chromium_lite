@@ -7,15 +7,14 @@
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/path_service.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
-#include "content/browser/browser_thread_impl.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "content/browser/download/save_package.h"
 #include "content/browser/renderer_host/test_render_view_host.h"
 #include "content/test/net/url_request_mock_http_job.h"
 #include "content/test/test_web_contents.h"
-#include "googleurl/src/gurl.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/gurl.h"
 
 namespace content {
 
@@ -68,9 +67,6 @@ bool HasOrdinalNumber(const base::FilePath::StringType& filename) {
 
 class SavePackageTest : public RenderViewHostImplTestHarness {
  public:
-  SavePackageTest() : browser_thread_(BrowserThread::UI, &message_loop_) {
-  }
-
   bool GetGeneratedFilename(bool need_success_generate_filename,
                             const std::string& disposition,
                             const std::string& url,
@@ -123,16 +119,12 @@ class SavePackageTest : public RenderViewHostImplTestHarness {
   }
 
  private:
-  BrowserThreadImpl browser_thread_;
-
   // SavePackage for successfully generating file name.
   scoped_refptr<SavePackage> save_package_success_;
   // SavePackage for failed generating file name.
   scoped_refptr<SavePackage> save_package_fail_;
 
   base::ScopedTempDir temp_dir_;
-
-  DISALLOW_COPY_AND_ASSIGN(SavePackageTest);
 };
 
 static const struct {
@@ -221,20 +213,21 @@ TEST_F(SavePackageTest, MAYBE_TestLongSavePackageFilename) {
 
   base::FilePath::StringType filename;
   // Test that the filename is successfully shortened to fit.
-  ASSERT_TRUE(GetGeneratedFilename(true, "", url, false, &filename));
+  ASSERT_TRUE(GetGeneratedFilename(true, std::string(), url, false, &filename));
   EXPECT_TRUE(filename.length() < long_file.length());
   EXPECT_FALSE(HasOrdinalNumber(filename));
 
   // Test that the filename is successfully shortened to fit, and gets an
   // an ordinal appended.
-  ASSERT_TRUE(GetGeneratedFilename(true, "", url, false, &filename));
+  ASSERT_TRUE(GetGeneratedFilename(true, std::string(), url, false, &filename));
   EXPECT_TRUE(filename.length() < long_file.length());
   EXPECT_TRUE(HasOrdinalNumber(filename));
 
   // Test that the filename is successfully shortened to fit, and gets a
   // different ordinal appended.
   base::FilePath::StringType filename2;
-  ASSERT_TRUE(GetGeneratedFilename(true, "", url, false, &filename2));
+  ASSERT_TRUE(
+      GetGeneratedFilename(true, std::string(), url, false, &filename2));
   EXPECT_TRUE(filename2.length() < long_file.length());
   EXPECT_TRUE(HasOrdinalNumber(filename2));
   EXPECT_NE(filename, filename2);

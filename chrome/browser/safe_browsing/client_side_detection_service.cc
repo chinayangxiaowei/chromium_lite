@@ -8,14 +8,15 @@
 #include "base/command_line.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/metrics/histogram.h"
 #include "base/prefs/pref_service.h"
 #include "base/stl_util.h"
-#include "base/string_util.h"
-#include "base/time.h"
+#include "base/strings/string_util.h"
+#include "base/time/time.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/safe_browsing/client_model.pb.h"
 #include "chrome/common/safe_browsing/csd.pb.h"
@@ -26,7 +27,6 @@
 #include "content/public/browser/render_process_host.h"
 #include "crypto/sha2.h"
 #include "google_apis/google_api_keys.h"
-#include "googleurl/src/gurl.h"
 #include "net/base/escape.h"
 #include "net/base/load_flags.h"
 #include "net/http/http_response_headers.h"
@@ -34,10 +34,31 @@
 #include "net/url_request/url_fetcher.h"
 #include "net/url_request/url_request_context_getter.h"
 #include "net/url_request/url_request_status.h"
+#include "url/gurl.h"
 
 using content::BrowserThread;
 
 namespace safe_browsing {
+
+namespace {
+
+  // malware report type for UMA histogram counting.
+  enum MalwareReportTypes {
+    REPORT_SENT,
+    REPORT_HIT_LIMIT,
+    REPORT_FAILED_SERIALIZATION,
+
+    // Always at the end
+    REPORT_RESULT_MAX
+  };
+
+  void UpdateEnumUMAHistogram(MalwareReportTypes report_type) {
+    DCHECK(report_type >= 0 && report_type < REPORT_RESULT_MAX);
+    UMA_HISTOGRAM_ENUMERATION("SBClientMalware.SentReports",
+                              report_type, REPORT_RESULT_MAX);
+  }
+
+}  // namespace
 
 const size_t ClientSideDetectionService::kMaxModelSizeBytes = 90 * 1024;
 const int ClientSideDetectionService::kMaxReportsPerInterval = 3;
@@ -69,7 +90,7 @@ ClientSideDetectionService::CacheState::CacheState(bool phish, base::Time time)
 ClientSideDetectionService::ClientSideDetectionService(
     net::URLRequestContextGetter* request_context_getter)
     : enabled_(false),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)),
+      weak_factory_(this),
       request_context_getter_(request_context_getter) {
   registrar_.Add(this, content::NOTIFICATION_RENDERER_PROCESS_CREATED,
                  content::NotificationService::AllBrowserContextsAndSources());
@@ -143,7 +164,7 @@ void ClientSideDetectionService::SendClientReportPhishingRequest(
     ClientPhishingRequest* verdict,
     const ClientReportPhishingRequestCallback& callback) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  MessageLoop::current()->PostTask(
+  base::MessageLoop::current()->PostTask(
       FROM_HERE,
       base::Bind(&ClientSideDetectionService::StartClientReportPhishingRequest,
                  weak_factory_.GetWeakPtr(), verdict, callback));
@@ -153,7 +174,7 @@ void ClientSideDetectionService::SendClientReportMalwareRequest(
     ClientMalwareRequest* verdict,
     const ClientReportMalwareRequestCallback& callback) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  MessageLoop::current()->PostTask(
+  base::MessageLoop::current()->PostTask(
       FROM_HERE,
       base::Bind(&ClientSideDetectionService::StartClientReportMalwareRequest,
                  weak_factory_.GetWeakPtr(), verdict, callback));
@@ -270,7 +291,10 @@ void ClientSideDetectionService::SendModelToRenderers() {
 }
 
 void ClientSideDetectionService::ScheduleFetchModel(int64 delay_ms) {
-  MessageLoop::current()->PostDelayedTask(
+  if (CommandLine::ForCurrentProcess()->HasSwitch(
+      switches::kSbDisableAutoUpdate))
+    return;
+  base::MessageLoop::current()->PostDelayedTask(
       FROM_HERE,
       base::Bind(&ClientSideDetectionService::StartFetchModel,
                  weak_factory_.GetWeakPtr()),
@@ -366,10 +390,19 @@ void ClientSideDetectionService::StartClientReportMalwareRequest(
     return;
   }
 
+  if (OverMalwareReportLimit()) {
+    UpdateEnumUMAHistogram(REPORT_HIT_LIMIT);
+    DVLOG(1) << "Too many malware report requests sent recently."
+             << "Skip sending malware report for " << GURL(request->url());
+    if (!callback.is_null())
+      callback.Run(GURL(request->url()), false);
+    return;
+  }
+
   std::string request_data;
   if (!request->SerializeToString(&request_data)) {
-    UMA_HISTOGRAM_COUNTS("SBClientMalware.RequestNotSerialized", 1);
-    VLOG(1) << "Unable to serialize the CSD request. Proto file changed?";
+    UpdateEnumUMAHistogram(REPORT_FAILED_SERIALIZATION);
+    DVLOG(1) << "Unable to serialize the CSD request. Proto file changed?";
     if (!callback.is_null())
       callback.Run(GURL(request->url()), false);
     return;
@@ -391,6 +424,12 @@ void ClientSideDetectionService::StartClientReportMalwareRequest(
   fetcher->SetRequestContext(request_context_getter_.get());
   fetcher->SetUploadData("application/octet-stream", request_data);
   fetcher->Start();
+
+  UMA_HISTOGRAM_ENUMERATION("SBClientMalware.SentReports",
+                            REPORT_SENT, REPORT_RESULT_MAX);
+
+  // Record that we made a malware request
+  malware_report_times_.push(base::Time::Now());
 }
 
 void ClientSideDetectionService::HandleModelResponse(
@@ -538,22 +577,35 @@ void ClientSideDetectionService::UpdateCache() {
   }
 }
 
-bool ClientSideDetectionService::OverReportLimit() {
-  return GetNumReports() > kMaxReportsPerInterval;
+bool ClientSideDetectionService::OverMalwareReportLimit() {
+  return GetMalwareNumReports() > kMaxReportsPerInterval;
 }
 
-int ClientSideDetectionService::GetNumReports() {
+bool ClientSideDetectionService::OverPhishingReportLimit() {
+  return GetPhishingNumReports() > kMaxReportsPerInterval;
+}
+
+int ClientSideDetectionService::GetMalwareNumReports() {
+  return GetNumReports(&malware_report_times_);
+}
+
+int ClientSideDetectionService::GetPhishingNumReports() {
+  return GetNumReports(&phishing_report_times_);
+}
+
+int ClientSideDetectionService::GetNumReports(
+    std::queue<base::Time>* report_times) {
   base::Time cutoff =
       base::Time::Now() - base::TimeDelta::FromDays(kReportsIntervalDays);
 
   // Erase items older than cutoff because we will never care about them again.
-  while (!phishing_report_times_.empty() &&
-         phishing_report_times_.front() < cutoff) {
-    phishing_report_times_.pop();
+  while (!report_times->empty() &&
+         report_times->front() < cutoff) {
+    report_times->pop();
   }
 
   // Return the number of elements that are above the cutoff.
-  return phishing_report_times_.size();
+  return report_times->size();
 }
 
 bool ClientSideDetectionService::InitializePrivateNetworks() {

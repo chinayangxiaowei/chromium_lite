@@ -17,22 +17,6 @@
 #include "google_apis/internal/google_chrome_api_keys.h"
 #endif
 
-// TODO(joi): Can we enable this warning without having it treated as
-// an error? We don't want to fail builds, just warn, but all warnings
-// from the preprocessor are currently treated as errors, at least in
-// Linux builds.
-#if 0
-#if !defined(GOOGLE_API_KEY) && (                      \
-  (!defined(GOOGLE_DEFAULT_CLIENT_ID) &&               \
-   !defined(GOOGLE_DEFAULT_CLIENT_SECRET))             \
-  ||                                                   \
-  (!defined(GOOGLE_CLIENT_ID_MAIN) &&                  \
-   !defined(GOOGLE_CLIENT_SECRET_MAIN)))
-#warning You have not specified API keys; some features may not work.
-#warning See www.chromium.org/developers/how-tos/api-keys for details.
-#endif  // (API keys unset)
-#endif  // 0
-
 // Used to indicate an unset key/id/secret.  This works better with
 // various unit tests than leaving the token empty.
 #define DUMMY_API_TOKEN "dummytoken"
@@ -98,22 +82,25 @@ class APIKeyCache {
 
     api_key_ = CalculateKeyValue(GOOGLE_API_KEY,
                                  STRINGIZE_NO_EXPANSION(GOOGLE_API_KEY),
-                                 NULL, "",
+                                 NULL,
+                                 std::string(),
                                  environment.get(),
                                  command_line);
 
-    std::string default_client_id = CalculateKeyValue(
-        GOOGLE_DEFAULT_CLIENT_ID,
-        STRINGIZE_NO_EXPANSION(GOOGLE_DEFAULT_CLIENT_ID),
-        NULL, "",
-        environment.get(),
-        command_line);
-    std::string default_client_secret = CalculateKeyValue(
-        GOOGLE_DEFAULT_CLIENT_SECRET,
-        STRINGIZE_NO_EXPANSION(GOOGLE_DEFAULT_CLIENT_SECRET),
-        NULL, "",
-        environment.get(),
-        command_line);
+    std::string default_client_id =
+        CalculateKeyValue(GOOGLE_DEFAULT_CLIENT_ID,
+                          STRINGIZE_NO_EXPANSION(GOOGLE_DEFAULT_CLIENT_ID),
+                          NULL,
+                          std::string(),
+                          environment.get(),
+                          command_line);
+    std::string default_client_secret =
+        CalculateKeyValue(GOOGLE_DEFAULT_CLIENT_SECRET,
+                          STRINGIZE_NO_EXPANSION(GOOGLE_DEFAULT_CLIENT_SECRET),
+                          NULL,
+                          std::string(),
+                          environment.get(),
+                          command_line);
 
     // We currently only allow overriding the baked-in values for the
     // default OAuth2 client ID and secret using a command-line
@@ -231,6 +218,21 @@ class APIKeyCache {
 
 static base::LazyInstance<APIKeyCache> g_api_key_cache =
     LAZY_INSTANCE_INITIALIZER;
+
+bool HasKeysConfigured() {
+  if (GetAPIKey() == DUMMY_API_TOKEN)
+    return false;
+
+  for (size_t client_id = 0; client_id < CLIENT_NUM_ITEMS; ++client_id) {
+    OAuth2Client client = static_cast<OAuth2Client>(client_id);
+    if (GetOAuth2ClientID(client) == DUMMY_API_TOKEN ||
+        GetOAuth2ClientSecret(client) == DUMMY_API_TOKEN) {
+      return false;
+    }
+  }
+
+  return true;
+}
 
 std::string GetAPIKey() {
   return g_api_key_cache.Get().api_key();

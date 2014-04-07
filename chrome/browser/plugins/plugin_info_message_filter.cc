@@ -8,7 +8,7 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/metrics/histogram.h"
 #include "base/prefs/pref_service.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/content_settings/content_settings_utils.h"
 #include "chrome/browser/content_settings/host_content_settings_map.h"
 #include "chrome/browser/plugins/chrome_plugin_service_filter.h"
@@ -22,8 +22,7 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/plugin_service.h"
 #include "content/public/browser/plugin_service_filter.h"
-#include "googleurl/src/gurl.h"
-#include "webkit/plugins/npapi/plugin_list.h"
+#include "url/gurl.h"
 
 #include "widevine_cdm_version.h"  // In SHARED_INTERMEDIATE_DIR.
 
@@ -32,7 +31,7 @@
 #endif
 
 using content::PluginService;
-using webkit::WebPluginInfo;
+using content::WebPluginInfo;
 
 namespace {
 
@@ -47,13 +46,13 @@ bool ShouldUseJavaScriptSettingForPlugin(const WebPluginInfo& plugin) {
   if (plugin.name == ASCIIToUTF16(chrome::ChromeContentClient::kNaClPluginName))
     return true;
 
-#if defined(WIDEVINE_CDM_AVAILABLE)
+#if defined(WIDEVINE_CDM_AVAILABLE) && defined(ENABLE_PEPPER_CDMS)
   // Treat CDM invocations like JavaScript.
-  if (plugin.name == ASCIIToUTF16(kWidevineCdmPluginName)) {
+  if (plugin.name == ASCIIToUTF16(kWidevineCdmDisplayName)) {
     DCHECK(plugin.type == WebPluginInfo::PLUGIN_TYPE_PEPPER_OUT_OF_PROCESS);
     return true;
   }
-#endif  // WIDEVINE_CDM_AVAILABLE
+#endif  // defined(WIDEVINE_CDM_AVAILABLE) && defined(ENABLE_PEPPER_CDMS)
 
   return false;
 }
@@ -90,7 +89,7 @@ PluginInfoMessageFilter::PluginInfoMessageFilter(
     int render_process_id,
     Profile* profile)
     : context_(render_process_id, profile),
-      weak_ptr_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {
+      weak_ptr_factory_(this) {
 }
 
 bool PluginInfoMessageFilter::OnMessageReceived(const IPC::Message& message,
@@ -104,8 +103,6 @@ bool PluginInfoMessageFilter::OnMessageReceived(const IPC::Message& message,
 }
 
 void PluginInfoMessageFilter::OnDestruct() const {
-  const_cast<PluginInfoMessageFilter*>(this)->
-      weak_ptr_factory_.DetachFromThread();
   const_cast<PluginInfoMessageFilter*>(this)->
       weak_ptr_factory_.InvalidateWeakPtrs();
 

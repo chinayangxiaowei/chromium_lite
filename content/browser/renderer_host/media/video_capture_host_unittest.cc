@@ -8,16 +8,17 @@
 #include "base/bind.h"
 #include "base/file_util.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
-#include "base/process_util.h"
+#include "base/message_loop/message_loop.h"
+#include "base/run_loop.h"
 #include "base/stl_util.h"
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "content/browser/browser_thread_impl.h"
 #include "content/browser/renderer_host/media/media_stream_manager.h"
 #include "content/browser/renderer_host/media/video_capture_host.h"
 #include "content/browser/renderer_host/media/video_capture_manager.h"
 #include "content/common/media/video_capture_messages.h"
 #include "content/public/test/mock_resource_context.h"
+#include "content/public/test/test_browser_thread_bundle.h"
 #include "media/audio/audio_manager.h"
 #include "media/video/capture/video_capture_types.h"
 #include "net/url_request/url_request_context.h"
@@ -72,10 +73,9 @@ class DumpVideo {
 class MockVideoCaptureHost : public VideoCaptureHost {
  public:
   MockVideoCaptureHost(MediaStreamManager* manager)
-      : VideoCaptureHost(),
+      : VideoCaptureHost(manager),
         return_buffers_(false),
-        dump_video_(false),
-        manager_(manager) {}
+        dump_video_(false) {}
 
   // A list of mock methods.
   MOCK_METHOD4(OnNewBufferCreated,
@@ -143,10 +143,6 @@ class MockVideoCaptureHost : public VideoCaptureHost {
     return true;
   }
 
-  virtual VideoCaptureManager* GetVideoCaptureManager() OVERRIDE {
-    return manager_->video_capture_manager();
-  }
-
   // These handler methods do minimal things and delegate to the mock methods.
   void OnNewBufferCreatedDispatch(int device_id,
                                   base::SharedMemoryHandle handle,
@@ -187,26 +183,17 @@ class MockVideoCaptureHost : public VideoCaptureHost {
   bool return_buffers_;
   bool dump_video_;
   DumpVideo dumper_;
-  MediaStreamManager* manager_;
 };
 
-ACTION_P(ExitMessageLoop, message_loop) {
-  message_loop->PostTask(FROM_HERE, MessageLoop::QuitClosure());
+ACTION_P2(ExitMessageLoop, message_loop, quit_closure) {
+  message_loop->PostTask(FROM_HERE, quit_closure);
 }
 
 class VideoCaptureHostTest : public testing::Test {
  public:
-  VideoCaptureHostTest() {}
-
- protected:
-  virtual void SetUp() OVERRIDE {
-    // Create a message loop so VideoCaptureHostTest can use it.
-    message_loop_.reset(new MessageLoop(MessageLoop::TYPE_IO));
-
-    // MediaStreamManager must be created on the IO thread.
-    io_thread_.reset(new BrowserThreadImpl(BrowserThread::IO,
-                                           message_loop_.get()));
-
+  VideoCaptureHostTest()
+      : thread_bundle_(content::TestBrowserThreadBundle::IO_MAINLOOP),
+        message_loop_(base::MessageLoopProxy::current()) {
     // Create our own MediaStreamManager.
     audio_manager_.reset(media::AudioManager::Create());
     media_stream_manager_.reset(new MediaStreamManager(audio_manager_.get()));
@@ -220,48 +207,44 @@ class VideoCaptureHostTest : public testing::Test {
     host_->OnChannelConnected(base::GetCurrentProcId());
   }
 
-  virtual void TearDown() OVERRIDE {
+  virtual ~VideoCaptureHostTest() {
     // Verifies and removes the expectations on host_ and
     // returns true iff successful.
-    Mock::VerifyAndClearExpectations(host_);
+    Mock::VerifyAndClearExpectations(host_.get());
 
-    EXPECT_CALL(*host_, OnStateChanged(kDeviceId,
-                                       VIDEO_CAPTURE_STATE_STOPPED))
+    EXPECT_CALL(*host_.get(),
+                OnStateChanged(kDeviceId, VIDEO_CAPTURE_STATE_STOPPED))
         .Times(AnyNumber());
 
     // Simulate closing the IPC channel.
     host_->OnChannelClosing();
 
     // Release the reference to the mock object. The object will be destructed
-    // on message_loop_.
+    // on the current message loop.
     host_ = NULL;
 
-    // We need to continue running message_loop_ to complete all destructions.
-    message_loop_->RunUntilIdle();
-
-    // Delete the IO message loop.  This will cause the MediaStreamManager to be
-    // notified so it will stop its device thread and device managers.
-    message_loop_.reset();
+    media_stream_manager_->WillDestroyCurrentMessageLoop();
   }
 
+ protected:
   void StartCapture() {
     InSequence s;
     // 1. First - get info about the new resolution
-    EXPECT_CALL(*host_, OnDeviceInfo(kDeviceId));
+    EXPECT_CALL(*host_.get(), OnDeviceInfo(kDeviceId));
 
     // 2. Change state to started
-    EXPECT_CALL(*host_, OnStateChanged(kDeviceId,
-                                       VIDEO_CAPTURE_STATE_STARTED));
+    EXPECT_CALL(*host_.get(),
+                OnStateChanged(kDeviceId, VIDEO_CAPTURE_STATE_STARTED));
 
     // 3. Newly created buffers will arrive.
-    EXPECT_CALL(*host_, OnNewBufferCreated(kDeviceId, _, _, _))
-        .Times(AnyNumber())
-        .WillRepeatedly(Return());
+    EXPECT_CALL(*host_.get(), OnNewBufferCreated(kDeviceId, _, _, _))
+        .Times(AnyNumber()).WillRepeatedly(Return());
 
     // 4. First filled buffer will arrive.
-    EXPECT_CALL(*host_, OnBufferFilled(kDeviceId, _, _))
-        .Times(AnyNumber())
-        .WillOnce(ExitMessageLoop(message_loop_.get()));
+    base::RunLoop run_loop;
+    EXPECT_CALL(*host_.get(), OnBufferFilled(kDeviceId, _, _))
+        .Times(AnyNumber()).WillOnce(ExitMessageLoop(
+            message_loop_, run_loop.QuitClosure()));
 
     media::VideoCaptureParams params;
     params.width = 352;
@@ -269,7 +252,7 @@ class VideoCaptureHostTest : public testing::Test {
     params.frame_per_second = 30;
     params.session_id = kTestFakeDeviceId;
     host_->OnStartCapture(kDeviceId, params);
-    message_loop_->Run();
+    run_loop.Run();
   }
 
 #ifdef DUMP_VIDEO
@@ -282,9 +265,10 @@ class VideoCaptureHostTest : public testing::Test {
     EXPECT_CALL(*host_, OnStateChanged(kDeviceId, VIDEO_CAPTURE_STATE_STARTED));
 
     // 3. First filled buffer will arrive.
+    base::RunLoop run_loop;
     EXPECT_CALL(*host_, OnBufferFilled(kDeviceId, _, _))
         .Times(AnyNumber())
-        .WillOnce(ExitMessageLoop(message_loop_.get()));
+        .WillOnce(ExitMessageLoop(message_loop_, run_loop.QuitClosure()));
 
     media::VideoCaptureParams params;
     params.width = width;
@@ -293,20 +277,21 @@ class VideoCaptureHostTest : public testing::Test {
     params.session_id = kTestFakeDeviceId;
     host_->SetDumpVideo(true);
     host_->OnStartCapture(kDeviceId, params);
-    message_loop_->Run();
+    run_loop.Run();
   }
 #endif
 
   void StopCapture() {
-    EXPECT_CALL(*host_, OnStateChanged(kDeviceId,
-                                       VIDEO_CAPTURE_STATE_STOPPED))
-        .WillOnce(ExitMessageLoop(message_loop_.get()));
+    base::RunLoop run_loop;
+    EXPECT_CALL(*host_.get(),
+                OnStateChanged(kDeviceId, VIDEO_CAPTURE_STATE_STOPPED))
+        .WillOnce(ExitMessageLoop(message_loop_, run_loop.QuitClosure()));
 
     host_->OnStopCapture(kDeviceId);
     host_->SetReturnReceviedDibs(true);
     host_->ReturnReceivedDibs(kDeviceId);
 
-    message_loop_->Run();
+    run_loop.Run();
 
     host_->SetReturnReceviedDibs(false);
     // Expect the VideoCaptureDevice has been stopped
@@ -314,11 +299,12 @@ class VideoCaptureHostTest : public testing::Test {
   }
 
   void NotifyPacketReady() {
-    EXPECT_CALL(*host_, OnBufferFilled(kDeviceId, _, _))
-        .Times(AnyNumber())
-        .WillOnce(ExitMessageLoop(message_loop_.get()))
+    base::RunLoop run_loop;
+    EXPECT_CALL(*host_.get(), OnBufferFilled(kDeviceId, _, _))
+        .Times(AnyNumber()).WillOnce(ExitMessageLoop(
+            message_loop_, run_loop.QuitClosure()))
         .RetiresOnSaturation();
-    message_loop_->Run();
+    run_loop.Run();
   }
 
   void ReturnReceivedPackets() {
@@ -327,21 +313,21 @@ class VideoCaptureHostTest : public testing::Test {
 
   void SimulateError() {
     // Expect a change state to error state  sent through IPC.
-    EXPECT_CALL(*host_, OnStateChanged(kDeviceId, VIDEO_CAPTURE_STATE_ERROR))
-        .Times(1);
+    EXPECT_CALL(*host_.get(),
+                OnStateChanged(kDeviceId, VIDEO_CAPTURE_STATE_ERROR)).Times(1);
     VideoCaptureControllerID id(kDeviceId);
     host_->OnError(id);
     // Wait for the error callback.
-    message_loop_->RunUntilIdle();
+    base::RunLoop().RunUntilIdle();
   }
 
   scoped_refptr<MockVideoCaptureHost> host_;
 
  private:
-  scoped_ptr<MessageLoop> message_loop_;
-  scoped_ptr<BrowserThreadImpl> io_thread_;
   scoped_ptr<media::AudioManager> audio_manager_;
   scoped_ptr<MediaStreamManager> media_stream_manager_;
+  content::TestBrowserThreadBundle thread_bundle_;
+  scoped_refptr<base::MessageLoopProxy> message_loop_;
 
   DISALLOW_COPY_AND_ASSIGN(VideoCaptureHostTest);
 };
@@ -365,9 +351,8 @@ TEST_F(VideoCaptureHostTest, StartCaptureErrorStop) {
 }
 
 TEST_F(VideoCaptureHostTest, StartCaptureError) {
-  EXPECT_CALL(*host_, OnStateChanged(kDeviceId,
-                                     VIDEO_CAPTURE_STATE_STOPPED))
-      .Times(0);
+  EXPECT_CALL(*host_.get(),
+              OnStateChanged(kDeviceId, VIDEO_CAPTURE_STATE_STOPPED)).Times(0);
   StartCapture();
   NotifyPacketReady();
   SimulateError();

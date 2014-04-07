@@ -7,7 +7,7 @@
 
 #include <vector>
 
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "ui/views/view.h"
 
 namespace gfx {
@@ -19,6 +19,8 @@ namespace views {
 class Checkbox;
 class ImageView;
 class Label;
+class Link;
+class LinkListener;
 class Textfield;
 
 // This class displays the contents of a message box. It is intended for use
@@ -47,10 +49,6 @@ class VIEWS_EXPORT MessageBoxView : public View {
     string16 message;
     string16 default_prompt;
     int message_width;
-    int top_inset;
-    int bottom_inset;
-    int left_inset;
-    int right_inset;
     int inter_row_vertical_spacing;
   };
 
@@ -80,14 +78,17 @@ class VIEWS_EXPORT MessageBoxView : public View {
   // Sets the state of the check-box.
   void SetCheckBoxSelected(bool selected);
 
+  // Sets the text and the listener of the link. If |text| is empty, the link
+  // is removed.
+  void SetLink(const string16& text, LinkListener* listener);
+
   // View:
   virtual void GetAccessibleState(ui::AccessibleViewState* state) OVERRIDE;
 
  protected:
   // View:
-  virtual void ViewHierarchyChanged(bool is_add,
-                                    views::View* parent,
-                                    views::View* child) OVERRIDE;
+  virtual void ViewHierarchyChanged(
+      const ViewHierarchyChangedDetails& details) OVERRIDE;
   // Handles Ctrl-C and writes the message in the system clipboard.
   virtual bool AcceleratorPressed(const ui::Accelerator& accelerator) OVERRIDE;
 
@@ -112,14 +113,11 @@ class VIEWS_EXPORT MessageBoxView : public View {
   // Checkbox for the message box.
   Checkbox* checkbox_;
 
+  // Link displayed at the bottom of the view.
+  Link* link_;
+
   // Maximum width of the message label.
   int message_width_;
-
-  // Insets for the grid layout.
-  int top_inset_;
-  int bottom_inset_;
-  int left_inset_;
-  int right_inset_;
 
   // Spacing between rows in the grid layout.
   int inter_row_vertical_spacing_;

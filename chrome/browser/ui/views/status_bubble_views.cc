@@ -8,11 +8,10 @@
 
 #include "base/bind.h"
 #include "base/i18n/rtl.h"
-#include "base/message_loop.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/themes/theme_properties.h"
-#include "googleurl/src/gurl.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "net/base/net_util.h"
@@ -33,6 +32,7 @@
 #include "ui/views/controls/scrollbar/native_scroll_bar.h"
 #include "ui/views/widget/root_view.h"
 #include "ui/views/widget/widget.h"
+#include "url/gurl.h"
 
 #if defined(USE_ASH)
 #include "ash/wm/property_util.h"
@@ -80,10 +80,10 @@ class StatusBubbleViews::StatusView : public views::Label,
   StatusView(StatusBubble* status_bubble,
              views::Widget* popup,
              ui::ThemeProvider* theme_provider)
-      : ALLOW_THIS_IN_INITIALIZER_LIST(ui::LinearAnimation(kFramerate, this)),
+      : ui::LinearAnimation(kFramerate, this),
         stage_(BUBBLE_HIDDEN),
         style_(STYLE_STANDARD),
-        ALLOW_THIS_IN_INITIALIZER_LIST(timer_factory_(this)),
+        timer_factory_(this),
         status_bubble_(status_bubble),
         popup_(popup),
         opacity_start_(0),
@@ -221,10 +221,10 @@ void StatusBubbleViews::StatusView::StartTimer(base::TimeDelta time) {
   if (timer_factory_.HasWeakPtrs())
     timer_factory_.InvalidateWeakPtrs();
 
-  MessageLoop::current()->PostDelayedTask(
+  base::MessageLoop::current()->PostDelayedTask(
       FROM_HERE,
       base::Bind(&StatusBubbleViews::StatusView::OnTimer,
-                timer_factory_.GetWeakPtr()),
+                 timer_factory_.GetWeakPtr()),
       time);
 }
 
@@ -470,7 +470,7 @@ class StatusBubbleViews::StatusViewExpander : public ui::LinearAnimation,
  public:
   StatusViewExpander(StatusBubbleViews* status_bubble,
                      StatusView* status_view)
-      : ALLOW_THIS_IN_INITIALIZER_LIST(ui::LinearAnimation(kFramerate, this)),
+      : ui::LinearAnimation(kFramerate, this),
         status_bubble_(status_bubble),
         status_view_(status_view),
         expansion_start_(0),
@@ -548,13 +548,12 @@ const int StatusBubbleViews::kShadowThickness = 1;
 StatusBubbleViews::StatusBubbleViews(views::View* base_view)
     : contains_mouse_(false),
       offset_(0),
-      popup_(NULL),
       opacity_(0),
       base_view_(base_view),
       view_(NULL),
       download_shelf_is_visible_(false),
       is_expanded_(false),
-      ALLOW_THIS_IN_INITIALIZER_LIST(expand_timer_factory_(this)) {
+      expand_timer_factory_(this) {
   expand_view_.reset();
 }
 
@@ -573,7 +572,7 @@ void StatusBubbleViews::Init() {
     if (!expand_view_.get())
       expand_view_.reset(new StatusViewExpander(this, view_));
     views::Widget::InitParams params(views::Widget::InitParams::TYPE_POPUP);
-    params.transparent = true;
+    params.opacity = views::Widget::InitParams::TRANSLUCENT_WINDOW;
     params.accept_events = false;
     params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
     params.parent = frame->GetNativeView();
@@ -681,7 +680,7 @@ void StatusBubbleViews::SetURL(const GURL& url, const std::string& languages) {
     if (is_expanded_ && !url.is_empty()) {
       ExpandBubble();
     } else if (net::FormatUrl(url, languages).length() > url_text_.length()) {
-      MessageLoop::current()->PostDelayedTask(
+      base::MessageLoop::current()->PostDelayedTask(
           FROM_HERE,
           base::Bind(&StatusBubbleViews::ExpandBubble,
                      expand_timer_factory_.GetWeakPtr()),
@@ -700,8 +699,10 @@ void StatusBubbleViews::Hide() {
 void StatusBubbleViews::MouseMoved(const gfx::Point& location,
                                    bool left_content) {
   contains_mouse_ = !left_content;
-  if (left_content)
+  if (left_content) {
+    Reposition();
     return;
+  }
   last_mouse_moved_location_ = location;
 
   if (view_) {

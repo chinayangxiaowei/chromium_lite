@@ -6,17 +6,9 @@
   'dependencies': [
     '../base/base.gyp:base',
     '../skia/skia.gyp:skia',
-    '../third_party/re2/re2.gyp:re2',
     '../ui/gl/gl.gyp:gl',
   ],
   'sources': [
-    'gpu/gpu_dx_diagnostics_win.cc',
-    'gpu/gpu_info_collector_android.cc',
-    'gpu/gpu_info_collector_linux.cc',
-    'gpu/gpu_info_collector_mac.mm',
-    'gpu/gpu_info_collector_win.cc',
-    'gpu/gpu_info_collector.cc',
-    'gpu/gpu_info_collector.h',
     'gpu/gpu_main.cc',
     'gpu/gpu_process.cc',
     'gpu/gpu_process.h',
@@ -31,14 +23,13 @@
   'conditions': [
     ['OS=="win"', {
       'include_dirs': [
-        '<(DEPTH)/third_party/angle/include',
-        '<(DEPTH)/third_party/angle/src',
+        '<(DEPTH)/third_party/khronos',
+        '<(DEPTH)/third_party/angle_dx11/src',
         '<(DEPTH)/third_party/wtl/include',
       ],
       'dependencies': [
-        '../third_party/angle/src/build_angle.gyp:libEGL',
-        '../third_party/angle/src/build_angle.gyp:libGLESv2',
-        '../third_party/libxml/libxml.gyp:libxml',
+        '../third_party/angle_dx11/src/build_angle.gyp:libEGL',
+        '../third_party/angle_dx11/src/build_angle.gyp:libGLESv2',
       ],
       'link_settings': {
         'libraries': [
@@ -49,12 +40,14 @@
         {
           'destination': '<(PRODUCT_DIR)',
           'files': [
-            '<(windows_sdk_path)/Redist/D3D/x86/d3dcompiler_46.dll',
+            '<(windows_sdk_path)/Redist/D3D/<(winsdk_arch)/d3dcompiler_46.dll',
           ],
         },
       ],
     }],
-    ['OS=="win" and directxsdk_exists=="True"', {
+    ['OS=="win" and target_arch=="ia32" and directxsdk_exists=="True"', {
+      # We don't support x64 prior to Win7 and D3DCompiler_43.dll is
+      # not needed on Vista+.
       'actions': [
         {
           'action_name': 'extract_d3dcompiler',
@@ -77,23 +70,6 @@
           ],
           'msvs_cygwin_shell': 1,
         },
-      ],
-    }],
-    ['OS=="win" and branding=="Chrome"', {
-      'sources': [
-        '../third_party/amd/AmdCfxPxExt.h',
-        '../third_party/amd/amd_videocard_info_win.cc',
-      ],
-    }],
-    ['OS=="linux"', {
-      'dependencies': [
-        '../build/linux/system.gyp:libpci',
-        '../third_party/libXNVCtrl/libXNVCtrl.gyp:libXNVCtrl',
-      ],
-    }],
-    ['target_arch=="arm" and chromeos == 1', {
-      'include_dirs': [
-        '<(DEPTH)/third_party/openmax/il',
       ],
     }],
     ['target_arch!="arm" and chromeos == 1', {

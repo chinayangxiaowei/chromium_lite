@@ -10,14 +10,15 @@
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/files/file_path.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/path_service.h"
 #include "base/prefs/pref_service.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/captive_portal/captive_portal_service.h"
 #include "chrome/browser/captive_portal/captive_portal_service_factory.h"
 #include "chrome/browser/captive_portal/captive_portal_tab_helper.h"
 #include "chrome/browser/captive_portal/captive_portal_tab_reloader.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/net/url_request_mock_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
@@ -26,7 +27,6 @@
 #include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_iterator.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
@@ -290,7 +290,7 @@ void URLRequestTimeoutOnDemandJob::MaybeStopWaitingForJobsOnIOThread() {
     last_num_jobs_to_wait_for_ = num_jobs_to_wait_for_;
     num_jobs_to_wait_for_ = 0;
     BrowserThread::PostTask(BrowserThread::UI, FROM_HERE,
-                            MessageLoop::QuitClosure());
+                            base::MessageLoop::QuitClosure());
   }
 }
 
@@ -579,7 +579,7 @@ void MultiNavigationObserver::Observe(
   if (waiting_for_navigation_ &&
       num_navigations_to_wait_for_ == num_navigations_) {
     waiting_for_navigation_ = false;
-    MessageLoopForUI::current()->Quit();
+    base::MessageLoopForUI::current()->Quit();
   }
 }
 
@@ -668,7 +668,7 @@ void FailLoadsAfterLoginObserver::Observe(
       tabs_needing_navigation_.size() ==
           tabs_navigated_to_final_destination_.size()) {
     waiting_for_navigation_ = false;
-    MessageLoopForUI::current()->Quit();
+    base::MessageLoopForUI::current()->Quit();
   }
 }
 
@@ -762,7 +762,7 @@ void CaptivePortalObserver::Observe(
   if (waiting_for_result_ &&
       num_results_to_wait_for_ == num_results_received_) {
     waiting_for_result_ = false;
-    MessageLoop::current()->Quit();
+    base::MessageLoop::current()->Quit();
   }
 }
 
@@ -1557,8 +1557,8 @@ IN_PROC_BROWSER_TEST_F(CaptivePortalBrowserTest, HttpsNonTimeoutError) {
 // Make sure no captive portal test triggers on HTTPS timeouts of iframes.
 IN_PROC_BROWSER_TEST_F(CaptivePortalBrowserTest, HttpsIframeTimeout) {
   // Use an HTTPS server for the top level page.
-  net::TestServer https_server(
-      net::TestServer::TYPE_HTTPS, net::TestServer::kLocalhost,
+  net::SpawnedTestServer https_server(
+      net::SpawnedTestServer::TYPE_HTTPS, net::SpawnedTestServer::kLocalhost,
       base::FilePath(FILE_PATH_LITERAL("chrome/test/data")));
   ASSERT_TRUE(https_server.Start());
 
@@ -1609,11 +1609,11 @@ IN_PROC_BROWSER_TEST_F(CaptivePortalBrowserTest, RedirectSSLCertError) {
   // Need an HTTP TestServer to handle a dynamically created server redirect.
   ASSERT_TRUE(test_server()->Start());
 
-  net::TestServer::SSLOptions ssl_options;
+  net::SpawnedTestServer::SSLOptions ssl_options;
   ssl_options.server_certificate =
-      net::TestServer::SSLOptions::CERT_MISMATCHED_NAME;
-  net::TestServer https_server(
-      net::TestServer::TYPE_HTTPS, ssl_options,
+      net::SpawnedTestServer::SSLOptions::CERT_MISMATCHED_NAME;
+  net::SpawnedTestServer https_server(
+      net::SpawnedTestServer::TYPE_HTTPS, ssl_options,
       base::FilePath(FILE_PATH_LITERAL("chrome/test/data")));
   ASSERT_TRUE(https_server.Start());
 
@@ -1697,11 +1697,11 @@ IN_PROC_BROWSER_TEST_F(CaptivePortalBrowserTest, SSLCertErrorLogin) {
   // Need an HTTP TestServer to handle a dynamically created server redirect.
   ASSERT_TRUE(test_server()->Start());
 
-  net::TestServer::SSLOptions https_options;
+  net::SpawnedTestServer::SSLOptions https_options;
   https_options.server_certificate =
-      net::TestServer::SSLOptions::CERT_MISMATCHED_NAME;
-  net::TestServer https_server(
-      net::TestServer::TYPE_HTTPS, https_options,
+      net::SpawnedTestServer::SSLOptions::CERT_MISMATCHED_NAME;
+  net::SpawnedTestServer https_server(
+      net::SpawnedTestServer::TYPE_HTTPS, https_options,
       base::FilePath(FILE_PATH_LITERAL("chrome/test/data")));
   ASSERT_TRUE(https_server.Start());
 
@@ -2065,7 +2065,7 @@ IN_PROC_BROWSER_TEST_F(CaptivePortalBrowserTest, DISABLED_TwoWindows) {
                                         browser()->host_desktop_type()));
   // Navigate the new browser window so it'll be shown and we can pick the
   // active window.
-  ui_test_utils::NavigateToURL(browser2, GURL(chrome::kAboutBlankURL));
+  ui_test_utils::NavigateToURL(browser2, GURL(content::kAboutBlankURL));
 
   // Generally, |browser2| will be the active window.  However, if the
   // original browser window lost focus before creating the new one, such as
@@ -2158,8 +2158,8 @@ IN_PROC_BROWSER_TEST_F(CaptivePortalBrowserTest, HttpToHttpsRedirectLogin) {
 // An HTTPS page redirects to an HTTP page.
 IN_PROC_BROWSER_TEST_F(CaptivePortalBrowserTest, HttpsToHttpRedirect) {
   // Use an HTTPS server for the top level page.
-  net::TestServer https_server(
-      net::TestServer::TYPE_HTTPS, net::TestServer::kLocalhost,
+  net::SpawnedTestServer https_server(
+      net::SpawnedTestServer::TYPE_HTTPS, net::SpawnedTestServer::kLocalhost,
       base::FilePath(FILE_PATH_LITERAL("chrome/test/data")));
   ASSERT_TRUE(https_server.Start());
 

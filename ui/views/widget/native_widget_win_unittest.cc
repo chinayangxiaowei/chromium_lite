@@ -6,7 +6,7 @@
 
 #include "base/basictypes.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/win/scoped_ole_initializer.h"
 
@@ -33,7 +33,7 @@ class NativeWidgetWinTest : public testing::Test {
   }
 
  private:
-  MessageLoopForUI message_loop_;
+  base::MessageLoopForUI message_loop_;
   ui::ScopedOleInitializer ole_initializer_;
 
   DISALLOW_COPY_AND_ASSIGN(NativeWidgetWinTest);

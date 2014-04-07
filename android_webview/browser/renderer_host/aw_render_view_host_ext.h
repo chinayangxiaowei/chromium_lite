@@ -10,6 +10,7 @@
 #include "android_webview/common/aw_hit_test_data.h"
 #include "base/callback_forward.h"
 #include "base/threading/non_thread_safe.h"
+#include "third_party/skia/include/core/SkColor.h"
 
 class GURL;
 
@@ -20,14 +21,25 @@ struct LoadCommittedDetails;
 
 namespace android_webview {
 
+class AwRenderViewHostExtClient {
+ public:
+  // Called when the RenderView page scale changes.
+  virtual void OnWebLayoutPageScaleFactorChanged(float page_scale_factor) = 0;
+
+ protected:
+  virtual ~AwRenderViewHostExtClient() {}
+};
+
 // Provides RenderViewHost wrapper functionality for sending WebView-specific
 // IPC messages to the renderer and from there to WebKit.
 class AwRenderViewHostExt : public content::WebContentsObserver,
                             public base::NonThreadSafe {
  public:
+
   // To send receive messages to a RenderView we take the WebContents instance,
   // as it internally handles RenderViewHost instances changing underneath us.
-  AwRenderViewHostExt(content::WebContents* contents);
+  AwRenderViewHostExt(
+      AwRenderViewHostExtClient* client, content::WebContents* contents);
   virtual ~AwRenderViewHostExt();
 
   // |result| will be invoked with the outcome of the request.
@@ -50,12 +62,6 @@ class AwRenderViewHostExt : public content::WebContentsObserver,
   // the corresponding public WebView API is as well.
   const AwHitTestData& GetLastHitTestData() const;
 
-  // Set whether fixed layout mode is enabled. Must be updated together
-  // with WebSettings.viewport_enabled.
-  // TODO(mnaganov): Leave only one setting. See the comments on
-  //   https://bugs.webkit.org/show_bug.cgi?id=109946
-  void SetEnableFixedLayoutMode(bool enable);
-
   // Sets the zoom level for text only. Used in layout modes other than
   // Text Autosizing.
   void SetTextZoomLevel(double level);
@@ -65,10 +71,13 @@ class AwRenderViewHostExt : public content::WebContentsObserver,
   // Sets the initial page scale. This overrides initial scale set by
   // the meta viewport tag.
   void SetInitialPageScale(double page_scale_factor);
+  void SetBackgroundColor(SkColor c);
+  void SetJsOnlineProperty(bool network_up);
 
  private:
   // content::WebContentsObserver implementation.
-  virtual void RenderViewGone(base::TerminationStatus status) OVERRIDE;
+  virtual void RenderViewCreated(content::RenderViewHost* view_host) OVERRIDE;
+  virtual void RenderProcessGone(base::TerminationStatus status) OVERRIDE;
   virtual void DidNavigateAnyFrame(
       const content::LoadCommittedDetails& details,
       const content::FrameNavigateParams& params) OVERRIDE;
@@ -76,9 +85,13 @@ class AwRenderViewHostExt : public content::WebContentsObserver,
 
   void OnDocumentHasImagesResponse(int msg_id, bool has_images);
   void OnUpdateHitTestData(const AwHitTestData& hit_test_data);
-  void OnPictureUpdated();
+  void OnPageScaleFactorChanged(float page_scale_factor);
 
   bool IsRenderViewReady() const;
+
+  AwRenderViewHostExtClient* client_;
+
+  SkColor background_color_;
 
   std::map<int, DocumentHasImagesResult> pending_document_has_images_requests_;
 

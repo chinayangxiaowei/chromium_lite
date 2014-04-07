@@ -12,11 +12,11 @@
 #include "base/auto_reset.h"
 #include "base/bind.h"
 #include "base/logging.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/ui/panels/panel_drag_controller.h"
 #include "chrome/browser/ui/panels/panel_manager.h"
 #include "chrome/browser/ui/panels/panel_mouse_watcher.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/notification_source.h"
 
@@ -421,6 +421,10 @@ bool DockedPanelCollection::IsPanelMinimized(const Panel* panel) const {
   return panel->expansion_state() != Panel::EXPANDED;
 }
 
+bool DockedPanelCollection::UsesAlwaysOnTopPanels() const {
+  return true;
+}
+
 void DockedPanelCollection::UpdateMinimizedPanelCount() {
   int prev_minimized_panel_count = minimized_panel_count_;
   minimized_panel_count_ = 0;
@@ -554,7 +558,7 @@ void DockedPanelCollection::BringUpOrDownTitlebars(bool bring_up) {
   // should always 'reset' the delays so cancel any tasks that haven't run yet
   // and post a new one.
   titlebar_action_factory_.InvalidateWeakPtrs();
-  MessageLoop::current()->PostDelayedTask(
+  base::MessageLoop::current()->PostDelayedTask(
       FROM_HERE,
       base::Bind(&DockedPanelCollection::DelayedBringUpOrDownTitlebarsCheck,
                  titlebar_action_factory_.GetWeakPtr()),
@@ -760,7 +764,7 @@ void DockedPanelCollection::CloseAll() {
 
 void DockedPanelCollection::UpdatePanelOnCollectionChange(Panel* panel) {
   panel->set_attention_mode(Panel::USE_PANEL_ATTENTION);
-  panel->SetAlwaysOnTop(true);
+  panel->ShowShadow(true);
   panel->EnableResizeByMouse(true);
   panel->UpdateMinimizeRestoreButtonVisibility();
   panel->SetWindowCornerStyle(panel::TOP_ROUNDED);
@@ -768,7 +772,8 @@ void DockedPanelCollection::UpdatePanelOnCollectionChange(Panel* panel) {
 
 void DockedPanelCollection::ScheduleLayoutRefresh() {
   refresh_action_factory_.InvalidateWeakPtrs();
-  MessageLoop::current()->PostDelayedTask(FROM_HERE,
+  base::MessageLoop::current()->PostDelayedTask(
+      FROM_HERE,
       base::Bind(&DockedPanelCollection::RefreshLayout,
                  refresh_action_factory_.GetWeakPtr()),
       base::TimeDelta::FromMilliseconds(PanelManager::AdjustTimeInterval(
@@ -780,6 +785,14 @@ void DockedPanelCollection::OnPanelActiveStateChanged(Panel* panel) {
   // This lets us avoid refreshing too many times when one panel loses
   // focus and another gains it.
   ScheduleLayoutRefresh();
+}
+
+gfx::Rect DockedPanelCollection::GetInitialPanelBounds(
+      const gfx::Rect& requested_bounds) const {
+  gfx::Rect initial_bounds = requested_bounds;
+  initial_bounds.set_origin(
+      GetDefaultPositionForPanel(requested_bounds.size()));
+  return initial_bounds;
 }
 
 bool DockedPanelCollection::HasPanel(Panel* panel) const {

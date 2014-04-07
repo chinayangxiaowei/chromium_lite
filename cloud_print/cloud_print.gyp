@@ -43,6 +43,8 @@
       },
       'sources': [
         'service/win/cloud_print_service_exe.ver',
+        'service/win/cloud_print_service_config_exe.ver',
+        'service/win/cloud_print_service_setup_exe.ver',
         'virtual_driver/win/gcp_portmon64_dll.ver',
         'virtual_driver/win/gcp_portmon_dll.ver',
         'virtual_driver/win/install/virtual_driver_setup_exe.ver',
@@ -56,6 +58,7 @@
       'type': 'none',
       'dependencies': [
         'service/service.gyp:*',
+        'gcp20/prototype/gcp20_device.gyp:*',
       ],
       'conditions': [
         ['OS=="win"', {
@@ -93,6 +96,12 @@
           ],
           'dependencies': [
             'virtual_driver/win/virtual_driver.gyp:gcp_portmon_lib',
+          ],
+        }],
+        # See http://crbug.com/162998#c4 for why this is needed.
+        ['OS=="linux" and linux_use_tcmalloc==1', {
+          'dependencies': [
+            '../base/allocator/allocator.gyp:allocator',
           ],
         }],
       ],

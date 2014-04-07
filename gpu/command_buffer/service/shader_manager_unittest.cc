@@ -88,13 +88,13 @@ TEST_F(ShaderManagerTest, DeleteBug) {
       manager_.CreateShader(kClient1Id, kService1Id, kShaderType));
   scoped_refptr<Shader> shader2(
       manager_.CreateShader(kClient2Id, kService2Id, kShaderType));
-  ASSERT_TRUE(shader1);
-  ASSERT_TRUE(shader2);
-  manager_.UseShader(shader1);
-  manager_.MarkAsDeleted(shader1);
-  manager_.MarkAsDeleted(shader2);
-  EXPECT_TRUE(manager_.IsOwned(shader1));
-  EXPECT_FALSE(manager_.IsOwned(shader2));
+  ASSERT_TRUE(shader1.get());
+  ASSERT_TRUE(shader2.get());
+  manager_.UseShader(shader1.get());
+  manager_.MarkAsDeleted(shader1.get());
+  manager_.MarkAsDeleted(shader2.get());
+  EXPECT_TRUE(manager_.IsOwned(shader1.get()));
+  EXPECT_FALSE(manager_.IsOwned(shader2.get()));
 }
 
 TEST_F(ShaderManagerTest, Shader) {
@@ -246,46 +246,6 @@ TEST_F(ShaderManagerTest, ShaderInfoUseCount) {
   manager_.MarkAsDeleted(shader1);  // this should delete the shader.
   shader2 = manager_.GetShader(kClient1Id);
   EXPECT_TRUE(shader2 == NULL);
-}
-
-TEST_F(ShaderManagerTest, ShaderInfoStoreCompilationStatus) {
-  const GLuint kClientId = 1;
-  const GLuint kServiceId = 11;
-  const GLenum kShaderType = GL_VERTEX_SHADER;
-  Shader* shader = manager_.CreateShader(
-      kClientId, kServiceId, kShaderType);
-  ASSERT_TRUE(shader != NULL);
-
-  EXPECT_EQ(Shader::NOT_COMPILED,
-            shader->compilation_status());
-  shader->UpdateSource("original source");
-  EXPECT_EQ(Shader::NOT_COMPILED,
-            shader->compilation_status());
-  shader->FlagSourceAsCompiled(false);
-  EXPECT_EQ(Shader::PENDING_DEFERRED_COMPILE,
-            shader->compilation_status());
-  shader->FlagSourceAsCompiled(true);
-  EXPECT_EQ(Shader::COMPILED,
-            shader->compilation_status());
-}
-
-TEST_F(ShaderManagerTest, ShaderInfoStoreDeferredSource) {
-  const GLuint kClientId = 1;
-  const GLuint kServiceId = 11;
-  const GLenum kShaderType = GL_VERTEX_SHADER;
-  Shader* shader = manager_.CreateShader(
-      kClientId, kServiceId, kShaderType);
-  ASSERT_TRUE(shader != NULL);
-
-  shader->UpdateSource("original source");
-  shader->FlagSourceAsCompiled(false);
-
-  EXPECT_EQ("original source", *shader->deferred_compilation_source());
-  shader->UpdateSource("different!");
-  EXPECT_EQ("original source", *shader->deferred_compilation_source());
-
-  shader->FlagSourceAsCompiled(true);
-  EXPECT_EQ("different!", *shader->deferred_compilation_source());
 }
 
 }  // namespace gles2

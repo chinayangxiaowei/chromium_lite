@@ -33,7 +33,7 @@ class FakeFloatAnimationCurve : public FloatAnimationCurve {
 
 class FakeTransformTransition : public TransformAnimationCurve {
  public:
-  FakeTransformTransition(double duration);
+  explicit FakeTransformTransition(double duration);
   virtual ~FakeTransformTransition();
 
   virtual double Duration() const OVERRIDE;
@@ -77,6 +77,12 @@ class FakeLayerAnimationValueObserver : public LayerAnimationValueObserver {
  private:
   float opacity_;
   gfx::Transform transform_;
+};
+
+class FakeInactiveLayerAnimationValueObserver
+    : public FakeLayerAnimationValueObserver {
+ public:
+  virtual bool IsActive() const OVERRIDE;
 };
 
 int AddOpacityTransitionToController(LayerAnimationController* controller,

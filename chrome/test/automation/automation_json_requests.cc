@@ -11,9 +11,9 @@
 #include "base/json/json_string_value_serializer.h"
 #include "base/json/json_writer.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "base/test/test_timeouts.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "chrome/common/automation_messages.h"
 #include "chrome/test/automation/automation_proxy.h"
@@ -284,7 +284,7 @@ bool SendExecuteJavascriptJSONRequest(
     const WebViewLocator& locator,
     const std::string& frame_xpath,
     const std::string& javascript,
-    Value** result,
+    scoped_ptr<Value>* result,
     Error* error) {
   DictionaryValue dict;
   dict.SetString("command", "ExecuteJavascript");
@@ -348,7 +348,7 @@ bool SendReloadJSONRequest(
   return SendAutomationJSONRequest(sender, dict, &reply_dict, error);
 }
 
-bool SendCaptureEntirePageJSONRequest(
+bool SendCaptureEntirePageJSONRequestDeprecated(
     AutomationMessageSender* sender,
     const WebViewLocator& locator,
     const base::FilePath& path,
@@ -363,7 +363,7 @@ bool SendCaptureEntirePageJSONRequest(
 }
 
 #if !defined(NO_TCMALLOC) && (defined(OS_LINUX) || defined(OS_CHROMEOS))
-bool SendHeapProfilerDumpJSONRequest(
+bool SendHeapProfilerDumpJSONRequestDeprecated(
     AutomationMessageSender* sender,
     const WebViewLocator& locator,
     const std::string& reason,
@@ -382,7 +382,7 @@ bool SendHeapProfilerDumpJSONRequest(
 bool SendGetCookiesJSONRequest(
     AutomationMessageSender* sender,
     const std::string& url,
-    ListValue** cookies,
+    scoped_ptr<ListValue>* cookies,
     Error* error) {
   DictionaryValue dict;
   dict.SetString("command", "GetCookies");
@@ -390,13 +390,12 @@ bool SendGetCookiesJSONRequest(
   DictionaryValue reply_dict;
   if (!SendAutomationJSONRequest(sender, dict, &reply_dict, error))
     return false;
-  Value* cookies_unscoped_value;
-  if (!reply_dict.Remove("cookies", &cookies_unscoped_value))
+  scoped_ptr<Value> cookies_value;
+  if (!reply_dict.Remove("cookies", &cookies_value))
     return false;
-  scoped_ptr<Value> cookies_value(cookies_unscoped_value);
   if (!cookies_value->IsType(Value::TYPE_LIST))
     return false;
-  *cookies = static_cast<ListValue*>(cookies_value.release());
+  cookies->reset(static_cast<ListValue*>(cookies_value.release()));
   return true;
 }
 
@@ -654,7 +653,7 @@ bool SendNativeKeyEventJSONRequest(
   return SendAutomationJSONRequest(sender, dict, &reply_dict, error);
 }
 
-bool SendWebMouseEventJSONRequest(
+bool SendWebMouseEventJSONRequestDeprecated(
     AutomationMessageSender* sender,
     const WebViewLocator& locator,
     const WebMouseEvent& mouse_event,
@@ -762,7 +761,7 @@ bool SendAcceptPromptAppModalDialogJSONRequest(
   return SendAutomationJSONRequest(sender, dict, &reply_dict, error);
 }
 
-bool SendWaitForAllViewsToStopLoadingJSONRequest(
+bool SendWaitForAllViewsToStopLoadingJSONRequestDeprecated(
     AutomationMessageSender* sender,
     Error* error) {
   DictionaryValue dict;

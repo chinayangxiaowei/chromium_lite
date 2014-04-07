@@ -10,12 +10,18 @@
 
 #include "base/memory/ref_counted.h"
 #include "chrome/browser/ui/webui/screenshot_source.h"
+#include "url/gurl.h"
 
 #if defined(OS_CHROMEOS)
-#include "chrome/browser/chromeos/system_logs/system_logs_fetcher.h"
+#include "chrome/browser/chromeos/system_logs/scrubbed_system_logs_fetcher.h"
 #endif
 
 class Profile;
+#if defined(OS_CHROMEOS)
+namespace base {
+class RefCountedString;
+}
+#endif
 
 class FeedbackData : public base::RefCountedThreadSafe<FeedbackData> {
  public:
@@ -60,13 +66,16 @@ class FeedbackData : public base::RefCountedThreadSafe<FeedbackData> {
   const std::string& description() const { return description_; }
   const std::string& user_email() const { return user_email_; }
   ScreenshotDataPtr image() const { return image_; }
+  const std::string attached_filename() const { return attached_filename_; }
+  const GURL attached_file_url() const { return attached_file_url_; }
+  std::string* attached_filedata() const { return attached_filedata_.get(); }
+  const GURL screenshot_url() const { return screenshot_url_; }
 #if defined(OS_CHROMEOS)
   chromeos::SystemLogsResponse* sys_info() const {
     return send_sys_info_ ? sys_info_.get() : NULL;
   }
+  const int trace_id() const { return trace_id_; }
   const std::string timestamp() const { return timestamp_; }
-  const std::string attached_filename() const { return attached_filename_; }
-  std::string* attached_filedata() const { return attached_filedata_.get(); }
   std::string* compressed_logs() const { return compressed_logs_.get(); }
 #endif
 
@@ -83,16 +92,20 @@ class FeedbackData : public base::RefCountedThreadSafe<FeedbackData> {
     user_email_ = user_email;
   }
   void set_image(ScreenshotDataPtr image) { image_ = image; }
-#if defined(OS_CHROMEOS)
-  void set_send_sys_info(bool send_sys_info) { send_sys_info_ = send_sys_info; }
-  void set_timestamp(const std::string& timestamp) {
-    timestamp_ = timestamp;
-  }
   void set_attached_filename(const std::string& attached_filename) {
     attached_filename_ = attached_filename;
   }
   void set_attached_filedata(scoped_ptr<std::string> attached_filedata) {
     attached_filedata_ = attached_filedata.Pass();
+  }
+  void set_attached_file_url(const GURL& url) { attached_file_url_ = url; }
+  void set_screenshot_url(const GURL& url) { screenshot_url_ = url; }
+#if defined(OS_CHROMEOS)
+  void set_sys_info(scoped_ptr<chromeos::SystemLogsResponse> sys_info);
+  void set_trace_id(int trace_id) { trace_id_ = trace_id; }
+  void set_send_sys_info(bool send_sys_info) { send_sys_info_ = send_sys_info; }
+  void set_timestamp(const std::string& timestamp) {
+    timestamp_ = timestamp;
   }
 #endif
 
@@ -103,6 +116,7 @@ class FeedbackData : public base::RefCountedThreadSafe<FeedbackData> {
 
 #if defined(OS_CHROMEOS)
   void ReadAttachedFile(const base::FilePath& from);
+  void OnGetTraceData(scoped_refptr<base::RefCountedString> trace_data);
 #endif
 
   Profile* profile_;
@@ -112,6 +126,11 @@ class FeedbackData : public base::RefCountedThreadSafe<FeedbackData> {
   std::string description_;
   std::string user_email_;
   ScreenshotDataPtr image_;
+  std::string attached_filename_;
+  scoped_ptr<std::string> attached_filedata_;
+
+  GURL attached_file_url_;
+  GURL screenshot_url_;
 
 #if defined(OS_CHROMEOS)
   // Chromeos specific values for SendReport. Will be deleted in
@@ -119,9 +138,8 @@ class FeedbackData : public base::RefCountedThreadSafe<FeedbackData> {
   // we don't send the logs with the report.
   scoped_ptr<chromeos::SystemLogsResponse> sys_info_;
 
+  int trace_id_;
   std::string timestamp_;
-  std::string attached_filename_;
-  scoped_ptr<std::string> attached_filedata_;
   scoped_ptr<std::string> compressed_logs_;
 
   // Flag to indicate whether or not we should send the system information

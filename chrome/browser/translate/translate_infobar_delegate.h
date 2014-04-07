@@ -14,9 +14,16 @@
 #include "chrome/browser/infobars/infobar_delegate.h"
 #include "chrome/browser/translate/translate_prefs.h"
 #include "chrome/common/chrome_constants.h"
-#include "chrome/common/translate_errors.h"
+#include "chrome/common/translate/translate_errors.h"
 
 class PrefService;
+
+// The defaults after which extra shortcuts for options
+// can be shown.
+struct ShortcutConfiguration {
+  int always_translate_min_count;
+  int never_translate_min_count;
+};
 
 class TranslateInfoBarDelegate : public InfoBarDelegate {
  public:
@@ -52,13 +59,14 @@ class TranslateInfoBarDelegate : public InfoBarDelegate {
   // |infobar_service|, replacing any other translate infobar already present
   // there.  Otherwise, the infobar will only be added if there is no other
   // translate infobar already present.
-  static void Create(InfoBarService* infobar_service,
-                     bool replace_existing_infobar,
+  static void Create(bool replace_existing_infobar,
+                     InfoBarService* infobar_service,
                      Type infobar_type,
+                     const std::string& original_language,
+                     const std::string& target_language,
                      TranslateErrors::Type error_type,
                      PrefService* prefs,
-                     const std::string& original_language,
-                     const std::string& target_language);
+                     const ShortcutConfiguration& shortcut_config);
 
   // Returns the number of languages supported.
   size_t num_languages() const { return languages_.size(); }
@@ -71,6 +79,8 @@ class TranslateInfoBarDelegate : public InfoBarDelegate {
 
   // Returns the displayable name for the language at |index|.
   string16 language_name_at(size_t index) const {
+    if (index == kNoIndex)
+      return string16();
     DCHECK_LT(index, num_languages());
     return languages_[index].second;
   }
@@ -102,7 +112,7 @@ class TranslateInfoBarDelegate : public InfoBarDelegate {
 
   // Returns true if the current infobar indicates an error (in which case it
   // should get a yellow background instead of a blue one).
-  bool IsError() const { return infobar_type_ == TRANSLATION_ERROR; }
+  bool is_error() const { return infobar_type_ == TRANSLATION_ERROR; }
 
   // Returns what kind of background fading effect the infobar should use when
   // its is shown.
@@ -119,8 +129,8 @@ class TranslateInfoBarDelegate : public InfoBarDelegate {
   virtual void TranslationDeclined();
 
   // Methods called by the Options menu delegate.
-  virtual bool IsLanguageBlacklisted();
-  virtual void ToggleLanguageBlacklist();
+  virtual bool IsTranslatableLanguageByPrefs();
+  virtual void ToggleTranslatableLanguageByPrefs();
   virtual bool IsSiteBlacklisted();
   virtual void ToggleSiteBlacklist();
   virtual bool ShouldAlwaysTranslate();
@@ -140,39 +150,42 @@ class TranslateInfoBarDelegate : public InfoBarDelegate {
   bool ShouldShowMessageInfoBarButton();
 
   // Called by the before translate infobar to figure-out if it should show
-  // an extra button to let the user black-list/white-list that language (based
-  // on how many times the user accepted/declined translation).
-  bool ShouldShowNeverTranslateButton();
-  bool ShouldShowAlwaysTranslateButton();
-
-  // Sets this infobar background animation based on the previous infobar shown.
-  // A fading background effect is used when transitioning from a normal state
-  // to an error state (and vice-versa).
-  void UpdateBackgroundAnimation(TranslateInfoBarDelegate* previous_infobar);
+  // an extra shortcut to let the user black-list/white-list that language
+  // (based on how many times the user accepted/declined translation).
+  // The shortcut itself is platform specific, it can be a button or a new bar
+  // for example.
+  bool ShouldShowNeverTranslateShortcut();
+  bool ShouldShowAlwaysTranslateShortcut();
 
   // Convenience method that returns the displayable language name for
   // |language_code| in the current application locale.
   static string16 GetLanguageDisplayableName(const std::string& language_code);
 
   // Adds the strings that should be displayed in the after translate infobar to
-  // |strings|. The text in that infobar is:
+  // |strings|. If |autodetermined_source_language| is false, the text in that
+  // infobar is:
   // "The page has been translated from <lang1> to <lang2>."
-  // Because <lang1> and <lang2> are displayed in menu buttons, the text is
-  // split in 3 chunks.  |swap_languages| is set to true if <lang1> and <lang2>
+  // Otherwise:
+  // "The page has been translated to <lang1>."
+  // Because <lang1>, or <lang1> and <lang2> are displayed in menu buttons, the
+  // text is split in 2 or 3 chunks. |swap_languages| is set to true if
+  // |autodetermined_source_language| is false, and <lang1> and <lang2>
   // should be inverted (some languages express the sentense as "The page has
-  // been translate to <lang2> from <lang1>.").
+  // been translate to <lang2> from <lang1>."). It is ignored if
+  // |autodetermined_source_language| is true.
   static void GetAfterTranslateStrings(std::vector<string16>* strings,
-                                       bool* swap_languages);
+                                       bool* swap_languages,
+                                       bool autodetermined_source_language);
 
  protected:
-  // For testing.
-  TranslateInfoBarDelegate(Type infobar_type,
-                           TranslateErrors::Type error_type,
-                           InfoBarService* infobar_service,
-                           PrefService* prefs,
+  TranslateInfoBarDelegate(InfoBarService* infobar_service,
+                           Type infobar_type,
+                           TranslateInfoBarDelegate* old_delegate,
                            const std::string& original_language,
-                           const std::string& target_language);
-  Type infobar_type_;
+                           const std::string& target_language,
+                           TranslateErrors::Type error_type,
+                           PrefService* prefs,
+                           ShortcutConfiguration shortcut_config);
 
  private:
   typedef std::pair<std::string, string16> LanguageNamePair;
@@ -180,7 +193,7 @@ class TranslateInfoBarDelegate : public InfoBarDelegate {
   // InfoBarDelegate:
   virtual InfoBar* CreateInfoBar(InfoBarService* infobar_service) OVERRIDE;
   virtual void InfoBarDismissed() OVERRIDE;
-  virtual gfx::Image* GetIcon() const OVERRIDE;
+  virtual int GetIconID() const OVERRIDE;
   virtual InfoBarDelegate::Type GetInfoBarType() const OVERRIDE;
   virtual bool ShouldExpire(
        const content::LoadCommittedDetails& details) const OVERRIDE;
@@ -189,6 +202,8 @@ class TranslateInfoBarDelegate : public InfoBarDelegate {
   // Gets the host of the page being translated, or an empty string if no URL is
   // associated with the current page.
   std::string GetPageHost();
+
+  Type infobar_type_;
 
   // The type of fading animation if any that should be used when showing this
   // infobar.
@@ -219,6 +234,8 @@ class TranslateInfoBarDelegate : public InfoBarDelegate {
   // The translation related preferences.
   TranslatePrefs prefs_;
 
+  // Translation shortcut configuration
+  ShortcutConfiguration shortcut_config_;
   DISALLOW_COPY_AND_ASSIGN(TranslateInfoBarDelegate);
 };
 

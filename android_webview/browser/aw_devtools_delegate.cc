@@ -4,19 +4,22 @@
 
 #include "android_webview/browser/aw_devtools_delegate.h"
 
-#include "android_webview/browser/browser_view_renderer_impl.h"
+#include "android_webview/browser/in_process_view_renderer.h"
 #include "base/bind.h"
 #include "base/json/json_writer.h"
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "base/values.h"
 #include "content/public/browser/android/devtools_auth.h"
 #include "content/public/browser/devtools_http_handler.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/url_constants.h"
-#include "net/base/unix_domain_socket_posix.h"
+#include "net/socket/unix_domain_socket_posix.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "webkit/common/user_agent/user_agent_util.h"
 
 namespace {
+const char kFrontEndURL[] =
+    "http://chrome-devtools-frontend.appspot.com/serve_rev/%s/devtools.html";
 const char kSocketNameFormat[] = "webview_devtools_remote_%d";
 }
 
@@ -27,8 +30,10 @@ AwDevToolsDelegate::AwDevToolsDelegate(content::BrowserContext* browser_context)
   devtools_http_handler_ = content::DevToolsHttpHandler::Start(
       new net::UnixDomainSocketWithAbstractNamespaceFactory(
           base::StringPrintf(kSocketNameFormat, getpid()),
+          "",
           base::Bind(&content::CanUserConnectToDevTools)),
-      "",
+      base::StringPrintf(kFrontEndURL,
+                         webkit_glue::GetWebKitRevision().c_str()),
       this);
 }
 
@@ -188,7 +193,7 @@ std::string AwDevToolsDelegate::GetDiscoveryPageHTML() {
 }
 
 bool AwDevToolsDelegate::BundlesFrontendResources() {
-  return true;
+  return false;
 }
 
 base::FilePath AwDevToolsDelegate::GetDebugFrontendDir() {
@@ -213,12 +218,13 @@ std::string AwDevToolsDelegate::GetViewDescription(
   content::WebContents* web_contents =
       content::WebContents::FromRenderViewHost(rvh);
   if (!web_contents) return "";
-  BrowserViewRenderer* bvr =
-      BrowserViewRendererImpl::FromWebContents(web_contents);
+
+  BrowserViewRenderer* bvr
+      = InProcessViewRenderer::FromWebContents(web_contents);
   if (!bvr) return "";
   base::DictionaryValue description;
   description.SetBoolean("attached", bvr->IsAttachedToWindow());
-  description.SetBoolean("visible", bvr->IsViewVisible());
+  description.SetBoolean("visible", bvr->IsVisible());
   gfx::Rect screen_rect = bvr->GetScreenRect();
   description.SetInteger("screenX", screen_rect.x());
   description.SetInteger("screenY", screen_rect.y());
@@ -230,6 +236,13 @@ std::string AwDevToolsDelegate::GetViewDescription(
   std::string json;
   base::JSONWriter::Write(&description, &json);
   return json;
+}
+
+scoped_refptr<net::StreamListenSocket>
+AwDevToolsDelegate::CreateSocketForTethering(
+    net::StreamListenSocket::Delegate* delegate,
+    std::string* name) {
+  return NULL;
 }
 
 }  // namespace android_webview

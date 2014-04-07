@@ -9,14 +9,16 @@
 #include "chrome/browser/extensions/extension_system.h"
 #include "chrome/browser/extensions/extension_system_factory.h"
 #include "chrome/browser/extensions/install_tracker.h"
-#include "chrome/browser/profiles/profile_dependency_manager.h"
+#include "chrome/browser/profiles/incognito_helpers.h"
+#include "chrome/browser/profiles/profile.h"
+#include "components/browser_context_keyed_service/browser_context_dependency_manager.h"
 
 namespace extensions {
 
 // static
 InstallTracker* InstallTrackerFactory::GetForProfile(Profile* profile) {
   return static_cast<InstallTracker*>(
-      GetInstance()->GetServiceForProfile(profile, true));
+      GetInstance()->GetServiceForBrowserContext(profile, true));
 }
 
 InstallTrackerFactory* InstallTrackerFactory::GetInstance() {
@@ -24,25 +26,28 @@ InstallTrackerFactory* InstallTrackerFactory::GetInstance() {
 }
 
 InstallTrackerFactory::InstallTrackerFactory()
-    : ProfileKeyedServiceFactory("InstallTracker",
-                                 ProfileDependencyManager::GetInstance()) {
+    : BrowserContextKeyedServiceFactory(
+        "InstallTracker",
+        BrowserContextDependencyManager::GetInstance()) {
   DependsOn(ExtensionSystemFactory::GetInstance());
 }
 
 InstallTrackerFactory::~InstallTrackerFactory() {
 }
 
-ProfileKeyedService* InstallTrackerFactory::BuildServiceInstanceFor(
-    Profile* profile) const {
+BrowserContextKeyedService* InstallTrackerFactory::BuildServiceInstanceFor(
+    content::BrowserContext* context) const {
+  Profile* profile = static_cast<Profile*>(context);
   ExtensionService* service =
       extensions::ExtensionSystem::Get(profile)->extension_service();
   return new InstallTracker(profile, service->extension_prefs());
 }
 
-bool InstallTrackerFactory::ServiceRedirectedInIncognito() const {
+content::BrowserContext* InstallTrackerFactory::GetBrowserContextToUse(
+    content::BrowserContext* context) const {
   // The installs themselves are routed to the non-incognito profile and so
   // should the install progress.
-  return true;
+  return chrome::GetBrowserContextRedirectedInIncognito(context);
 }
 
 }  // namespace extensions

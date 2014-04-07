@@ -7,8 +7,8 @@
 
 #include "base/logging.h"
 #include "base/memory/ref_counted.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebGraphicsContext3D.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebString.h"
+#include "third_party/WebKit/public/platform/WebGraphicsContext3D.h"
+#include "third_party/WebKit/public/platform/WebString.h"
 #include "ui/compositor/compositor_export.h"
 
 namespace gfx {
@@ -30,13 +30,6 @@ class COMPOSITOR_EXPORT TestWebGraphicsContext3D :
   virtual int width();
   virtual int height();
   virtual void reshape(int width, int height) {}
-  virtual bool isGLES2Compliant();
-  virtual bool readBackFramebuffer(unsigned char* pixels,
-                                   size_t bufferSize,
-                                   WebKit::WebGLId framebuffer,
-                                   int width,
-                                   int height);
-  virtual WebKit::WebGLId getPlatformTextureId();
   virtual void prepareTexture() {}
   virtual void postSubBufferCHROMIUM(int x, int y, int width, int height) {}
   virtual void synthesizeGLError(WebKit::WGC3Denum value) {}
@@ -60,7 +53,6 @@ class COMPOSITOR_EXPORT TestWebGraphicsContext3D :
   virtual void discardFramebufferEXT(WebKit::WGC3Denum target,
                                      WebKit::WGC3Dsizei numAttachments,
                                      const WebKit::WGC3Denum* attachments) {}
-  virtual void ensureFramebufferCHROMIUM() {}
   virtual void setMemoryAllocationChangedCallbackCHROMIUM(
       WebGraphicsMemoryAllocationChangedCallbackCHROMIUM*) { }
   virtual WebKit::WebString getRequestableExtensionsCHROMIUM();

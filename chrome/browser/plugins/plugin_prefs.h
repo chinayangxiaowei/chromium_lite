@@ -15,7 +15,7 @@
 #include "base/prefs/pref_service.h"
 #include "base/synchronization/lock.h"
 #include "chrome/browser/plugins/plugin_finder.h"
-#include "chrome/browser/profiles/refcounted_profile_keyed_service.h"
+#include "components/browser_context_keyed_service/refcounted_browser_context_keyed_service.h"
 
 class Profile;
 
@@ -23,17 +23,14 @@ namespace base {
 class ListValue;
 }
 
-namespace webkit {
+namespace content {
 struct WebPluginInfo;
-namespace npapi {
-class PluginList;
-}
 }
 
 // This class stores information about whether a plug-in or a plug-in group is
 // enabled or disabled.
 // Except where otherwise noted, it can be used on every thread.
-class PluginPrefs : public RefcountedProfileKeyedService {
+class PluginPrefs : public RefcountedBrowserContextKeyedService {
  public:
   enum PolicyStatus {
     NO_POLICY = 0,  // Neither enabled or disabled by policy.
@@ -48,9 +45,6 @@ class PluginPrefs : public RefcountedProfileKeyedService {
   // This method overrides that for a given TestingProfile, returning the newly
   // created PluginPrefs object.
   static scoped_refptr<PluginPrefs> GetForTestingProfile(Profile* profile);
-
-  // Sets the plug-in list for tests.
-  void SetPluginListForTesting(webkit::npapi::PluginList* plugin_list);
 
   // Creates a new instance. This method should only be used for testing.
   PluginPrefs();
@@ -76,7 +70,7 @@ class PluginPrefs : public RefcountedProfileKeyedService {
   PolicyStatus PolicyStatusForPlugin(const string16& name) const;
 
   // Returns whether the plugin is enabled or not.
-  bool IsPluginEnabled(const webkit::WebPluginInfo& plugin) const;
+  bool IsPluginEnabled(const content::WebPluginInfo& plugin) const;
 
   void set_profile(Profile* profile) { profile_ = profile; }
 
@@ -119,27 +113,20 @@ class PluginPrefs : public RefcountedProfileKeyedService {
       const std::set<string16>& disabled_exception_patterns,
       const std::set<string16>& enabled_patterns);
 
-  // Returns the plugin list to use, either the singleton or the override.
-  webkit::npapi::PluginList* GetPluginList() const;
-
   // Callback for after the plugin groups have been loaded.
   void EnablePluginGroupInternal(
       bool enabled,
       const string16& group_name,
-      const std::vector<webkit::WebPluginInfo>& plugins);
+      const std::vector<content::WebPluginInfo>& plugins);
   void EnablePluginInternal(
       bool enabled,
       const base::FilePath& path,
       PluginFinder* plugin_finder,
       const base::Callback<void(bool)>& callback,
-      const std::vector<webkit::WebPluginInfo>& plugins);
-
-  // Called on the file thread to get the data necessary to update the saved
-  // preferences.
-  void GetPreferencesDataOnFileThread();
+      const std::vector<content::WebPluginInfo>& plugins);
 
   // Called on the UI thread with the plugin data to save the preferences.
-  void OnUpdatePreferences(const std::vector<webkit::WebPluginInfo>& plugins);
+  void OnUpdatePreferences(const std::vector<content::WebPluginInfo>& plugins);
 
   // Sends the notification that plugin data has changed.
   void NotifyPluginStatusChanged();
@@ -166,10 +153,6 @@ class PluginPrefs : public RefcountedProfileKeyedService {
 
   // Weak pointer, owned by the profile.
   PrefService* prefs_;
-
-  // PluginList to use for testing. If this is NULL, defaults to the global
-  // singleton.
-  webkit::npapi::PluginList* plugin_list_;
 
   PrefChangeRegistrar registrar_;
 

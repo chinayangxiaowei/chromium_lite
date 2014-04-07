@@ -5,9 +5,9 @@
 #ifndef GPU_COMMAND_BUFFER_CLIENT_ATOMICOPS_H_
 #define GPU_COMMAND_BUFFER_CLIENT_ATOMICOPS_H_
 
-#include "../../gpu_export.h"
-#include "../common/scoped_ptr.h"
-#include "../common/types.h"
+#include "base/memory/scoped_ptr.h"
+#include "gpu/command_buffer/common/types.h"
+#include "gpu/gpu_export.h"
 
 namespace gpu {
 

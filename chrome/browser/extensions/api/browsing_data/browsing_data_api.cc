@@ -10,7 +10,7 @@
 
 #include <string>
 
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "base/values.h"
 #include "chrome/browser/browsing_data/browsing_data_helper.h"
 #include "chrome/browser/browsing_data/browsing_data_remover.h"
@@ -121,7 +121,7 @@ bool BrowsingDataSettingsFunction::RunImpl() {
   // REMOVE_SITE_DATA in browsing_data_remover.h, the former for the unprotected
   // web, the latter for  protected web data. There is no UI control for
   // extension data.
-  scoped_ptr<DictionaryValue> origin_types(new DictionaryValue);
+  scoped_ptr<base::DictionaryValue> origin_types(new base::DictionaryValue);
   origin_types->SetBoolean(
       extension_browsing_data_api_constants::kUnprotectedWebKey,
       prefs->GetBoolean(prefs::kDeleteCookies));
@@ -141,14 +141,14 @@ bool BrowsingDataSettingsFunction::RunImpl() {
     since = time.ToJsTime();
   }
 
-  scoped_ptr<DictionaryValue> options(new DictionaryValue);
+  scoped_ptr<base::DictionaryValue> options(new base::DictionaryValue);
   options->Set(extension_browsing_data_api_constants::kOriginTypesKey,
                origin_types.release());
   options->SetDouble(extension_browsing_data_api_constants::kSinceKey, since);
 
   // Fill dataToRemove and dataRemovalPermitted.
-  scoped_ptr<DictionaryValue> selected(new DictionaryValue);
-  scoped_ptr<DictionaryValue> permitted(new DictionaryValue);
+  scoped_ptr<base::DictionaryValue> selected(new base::DictionaryValue);
+  scoped_ptr<base::DictionaryValue> permitted(new base::DictionaryValue);
 
   bool delete_site_data = prefs->GetBoolean(prefs::kDeleteCookies) ||
                           prefs->GetBoolean(prefs::kDeleteHostedAppsData);
@@ -195,7 +195,7 @@ bool BrowsingDataSettingsFunction::RunImpl() {
              extension_browsing_data_api_constants::kPasswordsKey,
              prefs->GetBoolean(prefs::kDeletePasswords));
 
-  scoped_ptr<DictionaryValue> result(new DictionaryValue);
+  scoped_ptr<base::DictionaryValue> result(new base::DictionaryValue);
   result->Set(extension_browsing_data_api_constants::kOptionsKey,
               options.release());
   result->Set(extension_browsing_data_api_constants::kDataToRemoveKey,
@@ -206,29 +206,30 @@ bool BrowsingDataSettingsFunction::RunImpl() {
   return true;
 }
 
-void BrowsingDataSettingsFunction::SetDetails(DictionaryValue* selected_dict,
-                                              DictionaryValue* permitted_dict,
-                                              const char* data_type,
-                                              bool is_selected) {
+void BrowsingDataSettingsFunction::SetDetails(
+    base::DictionaryValue* selected_dict,
+    base::DictionaryValue* permitted_dict,
+    const char* data_type,
+    bool is_selected) {
   bool is_permitted = IsRemovalPermitted(MaskForKey(data_type),
                                          profile()->GetPrefs());
   selected_dict->SetBoolean(data_type, is_selected && is_permitted);
   permitted_dict->SetBoolean(data_type, is_permitted);
 }
 
-void BrowsingDataRemoveFunction::OnBrowsingDataRemoverDone() {
+void BrowsingDataRemoverFunction::OnBrowsingDataRemoverDone() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   this->SendResponse(true);
 
   Release();  // Balanced in RunImpl.
 }
 
-bool BrowsingDataRemoveFunction::RunImpl() {
+bool BrowsingDataRemoverFunction::RunImpl() {
   // If we don't have a profile, something's pretty wrong.
   DCHECK(profile());
 
   // Grab the initial |options| parameter, and parse out the arguments.
-  DictionaryValue* options;
+  base::DictionaryValue* options;
   EXTENSION_FUNCTION_VALIDATE(args_->GetDictionary(0, &options));
   DCHECK(options);
 
@@ -264,7 +265,7 @@ bool BrowsingDataRemoveFunction::RunImpl() {
     BrowserThread::PostTask(
         BrowserThread::FILE, FROM_HERE,
         base::Bind(
-            &BrowsingDataRemoveFunction::CheckRemovingPluginDataSupported,
+            &BrowsingDataRemoverFunction::CheckRemovingPluginDataSupported,
             this,
             PluginPrefs::GetForProfile(profile())));
   } else {
@@ -275,17 +276,17 @@ bool BrowsingDataRemoveFunction::RunImpl() {
   return true;
 }
 
-void BrowsingDataRemoveFunction::CheckRemovingPluginDataSupported(
+void BrowsingDataRemoverFunction::CheckRemovingPluginDataSupported(
     scoped_refptr<PluginPrefs> plugin_prefs) {
-  if (!PluginDataRemoverHelper::IsSupported(plugin_prefs))
+  if (!PluginDataRemoverHelper::IsSupported(plugin_prefs.get()))
     removal_mask_ &= ~BrowsingDataRemover::REMOVE_PLUGIN_DATA;
 
   BrowserThread::PostTask(
       BrowserThread::UI, FROM_HERE,
-      base::Bind(&BrowsingDataRemoveFunction::StartRemoving, this));
+      base::Bind(&BrowsingDataRemoverFunction::StartRemoving, this));
 }
 
-void BrowsingDataRemoveFunction::StartRemoving() {
+void BrowsingDataRemoverFunction::StartRemoving() {
   if (BrowsingDataRemover::is_removing()) {
     error_ = extension_browsing_data_api_constants::kOneAtATimeError;
     SendResponse(false);
@@ -305,13 +306,13 @@ void BrowsingDataRemoveFunction::StartRemoving() {
   remover->Remove(removal_mask_, origin_set_mask_);
 }
 
-int BrowsingDataRemoveFunction::ParseOriginSetMask(
+int BrowsingDataRemoverFunction::ParseOriginSetMask(
     const base::DictionaryValue& options) {
   // Parse the |options| dictionary to generate the origin set mask. Default to
   // UNPROTECTED_WEB if the developer doesn't specify anything.
   int mask = BrowsingDataHelper::UNPROTECTED_WEB;
 
-  const DictionaryValue* d = NULL;
+  const base::DictionaryValue* d = NULL;
   if (options.HasKey(extension_browsing_data_api_constants::kOriginTypesKey)) {
     EXTENSION_FUNCTION_VALIDATE(options.GetDictionary(
         extension_browsing_data_api_constants::kOriginTypesKey, &d));
@@ -349,7 +350,7 @@ int BrowsingDataRemoveFunction::ParseOriginSetMask(
 // |bad_message_| (like EXTENSION_FUNCTION_VALIDATE would if this were a bool
 // method) if 'dataToRemove' is not present or any data-type keys don't have
 // supported (boolean) values.
-int RemoveBrowsingDataFunction::GetRemovalMask() {
+int BrowsingDataRemoveFunction::GetRemovalMask() {
   base::DictionaryValue* data_to_remove;
   if (!args_->GetDictionary(1, &data_to_remove)) {
     bad_message_ = true;
@@ -358,7 +359,7 @@ int RemoveBrowsingDataFunction::GetRemovalMask() {
 
   int removal_mask = 0;
 
-  for (DictionaryValue::Iterator i(*data_to_remove);
+  for (base::DictionaryValue::Iterator i(*data_to_remove);
        !i.IsAtEnd();
        i.Advance()) {
     bool selected = false;
@@ -373,51 +374,51 @@ int RemoveBrowsingDataFunction::GetRemovalMask() {
   return removal_mask;
 }
 
-int RemoveAppCacheFunction::GetRemovalMask() {
+int BrowsingDataRemoveAppcacheFunction::GetRemovalMask() {
   return BrowsingDataRemover::REMOVE_APPCACHE;
 }
 
-int RemoveCacheFunction::GetRemovalMask() {
+int BrowsingDataRemoveCacheFunction::GetRemovalMask() {
   return BrowsingDataRemover::REMOVE_CACHE;
 }
 
-int RemoveCookiesFunction::GetRemovalMask() {
+int BrowsingDataRemoveCookiesFunction::GetRemovalMask() {
   return BrowsingDataRemover::REMOVE_COOKIES |
          BrowsingDataRemover::REMOVE_SERVER_BOUND_CERTS;
 }
 
-int RemoveDownloadsFunction::GetRemovalMask() {
+int BrowsingDataRemoveDownloadsFunction::GetRemovalMask() {
   return BrowsingDataRemover::REMOVE_DOWNLOADS;
 }
 
-int RemoveFileSystemsFunction::GetRemovalMask() {
+int BrowsingDataRemoveFileSystemsFunction::GetRemovalMask() {
   return BrowsingDataRemover::REMOVE_FILE_SYSTEMS;
 }
 
-int RemoveFormDataFunction::GetRemovalMask() {
+int BrowsingDataRemoveFormDataFunction::GetRemovalMask() {
   return BrowsingDataRemover::REMOVE_FORM_DATA;
 }
 
-int RemoveHistoryFunction::GetRemovalMask() {
+int BrowsingDataRemoveHistoryFunction::GetRemovalMask() {
   return BrowsingDataRemover::REMOVE_HISTORY;
 }
 
-int RemoveIndexedDBFunction::GetRemovalMask() {
+int BrowsingDataRemoveIndexedDBFunction::GetRemovalMask() {
   return BrowsingDataRemover::REMOVE_INDEXEDDB;
 }
 
-int RemoveLocalStorageFunction::GetRemovalMask() {
+int BrowsingDataRemoveLocalStorageFunction::GetRemovalMask() {
   return BrowsingDataRemover::REMOVE_LOCAL_STORAGE;
 }
 
-int RemovePluginDataFunction::GetRemovalMask() {
+int BrowsingDataRemovePluginDataFunction::GetRemovalMask() {
   return BrowsingDataRemover::REMOVE_PLUGIN_DATA;
 }
 
-int RemovePasswordsFunction::GetRemovalMask() {
+int BrowsingDataRemovePasswordsFunction::GetRemovalMask() {
   return BrowsingDataRemover::REMOVE_PASSWORDS;
 }
 
-int RemoveWebSQLFunction::GetRemovalMask() {
+int BrowsingDataRemoveWebSQLFunction::GetRemovalMask() {
   return BrowsingDataRemover::REMOVE_WEBSQL;
 }

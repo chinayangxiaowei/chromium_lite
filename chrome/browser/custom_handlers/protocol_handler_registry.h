@@ -15,23 +15,25 @@
 #include "base/sequenced_task_runner_helpers.h"
 #include "base/values.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_keyed_service.h"
 #include "chrome/browser/shell_integration.h"
 #include "chrome/common/custom_handlers/protocol_handler.h"
+#include "components/browser_context_keyed_service/browser_context_keyed_service.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_service.h"
 #include "net/url_request/url_request.h"
 #include "net/url_request/url_request_job.h"
 #include "net/url_request/url_request_job_factory.h"
 
+namespace user_prefs {
 class PrefRegistrySyncable;
+}
 
 // This is where handlers for protocols registered with
 // navigator.registerProtocolHandler() are registered. Each Profile owns an
 // instance of this class, which is initialized on browser start through
 // Profile::InitRegisteredProtocolHandlers(), and they should be the only
 // instances of this class.
-class ProtocolHandlerRegistry : public ProfileKeyedService {
+class ProtocolHandlerRegistry : public BrowserContextKeyedService {
 
  public:
   // Provides notification of when the OS level user agent settings
@@ -112,6 +114,7 @@ class ProtocolHandlerRegistry : public ProfileKeyedService {
         net::NetworkDelegate* network_delegate) const OVERRIDE;
     virtual bool IsHandledProtocol(const std::string& scheme) const OVERRIDE;
     virtual bool IsHandledURL(const GURL& url) const OVERRIDE;
+    virtual bool IsSafeRedirectTarget(const GURL& location) const OVERRIDE;
 
    private:
     // When JobInterceptorFactory decides to pass on particular requests,
@@ -232,7 +235,7 @@ class ProtocolHandlerRegistry : public ProfileKeyedService {
   virtual void Shutdown() OVERRIDE;
 
   // Registers the preferences that we store registered protocol handlers in.
-  static void RegisterUserPrefs(PrefRegistrySyncable* registry);
+  static void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
 
   bool enabled() const { return enabled_; }
 

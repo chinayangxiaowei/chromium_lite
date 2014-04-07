@@ -136,7 +136,6 @@ def main():
     grd_files = [
       os.path.join(ash_base_dir, 'ash_strings.grd'),
       os.path.join(ash_base_dir, 'resources', 'ash_resources.grd'),
-      os.path.join(ash_base_dir, 'resources', 'ash_wallpaper_resources.grd'),
       os.path.join(chrome_app_dir, 'chromium_strings.grd'),
       os.path.join(chrome_app_dir, 'generated_resources.grd'),
       os.path.join(chrome_app_dir, 'google_chrome_strings.grd'),
@@ -151,7 +150,7 @@ def main():
       os.path.join(chrome_dir, 'common', 'common_resources.grd'),
       os.path.join(chrome_dir, 'renderer', 'resources',
                    'renderer_resources.grd'),
-      os.path.join(device_base_dir, 'device_bluetooth_strings.grd'),
+      os.path.join(device_base_dir, 'bluetooth', 'bluetooth_strings.grd'),
       os.path.join(src_dir, 'ui', 'resources', 'ui_resources.grd'),
       os.path.join(src_dir, 'ui', 'webui', 'resources', 'webui_resources.grd'),
       os.path.join(ui_base_strings_dir, 'app_locale_settings.grd'),

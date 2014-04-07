@@ -20,10 +20,12 @@ class Status;
 
 class StubDevToolsClient : public DevToolsClient {
  public:
+  explicit StubDevToolsClient(const std::string id);
   StubDevToolsClient();
   virtual ~StubDevToolsClient();
 
   // Overridden from DevToolsClient:
+  virtual const std::string& GetId() OVERRIDE;
   virtual Status ConnectIfNecessary() OVERRIDE;
   virtual Status SendCommand(const std::string& method,
                              const base::DictionaryValue& params) OVERRIDE;
@@ -32,10 +34,12 @@ class StubDevToolsClient : public DevToolsClient {
       const base::DictionaryValue& params,
       scoped_ptr<base::DictionaryValue>* result) OVERRIDE;
   virtual void AddListener(DevToolsEventListener* listener) OVERRIDE;
-  virtual Status HandleEventsUntil(
-      const ConditionalFunc& conditional_func) OVERRIDE;
+  virtual Status HandleEventsUntil(const ConditionalFunc& conditional_func,
+                                   const base::TimeDelta& timeout) OVERRIDE;
+  virtual Status HandleReceivedEvents() OVERRIDE;
 
  protected:
+  const std::string id_;
   std::list<DevToolsEventListener*> listeners_;
 };
 

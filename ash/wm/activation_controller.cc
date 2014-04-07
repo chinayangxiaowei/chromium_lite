@@ -10,7 +10,6 @@
 #include "ash/wm/activation_controller_delegate.h"
 #include "ash/wm/property_util.h"
 #include "ash/wm/window_util.h"
-#include "ash/wm/workspace_controller.h"
 #include "base/auto_reset.h"
 #include "ui/aura/client/activation_change_observer.h"
 #include "ui/aura/client/activation_delegate.h"
@@ -39,9 +38,10 @@ const int kWindowContainerIds[] = {
     kShellWindowId_AppListContainer,
     kShellWindowId_DefaultContainer,
 
-    // Panel, launcher and status are intentionally checked after other
+    // Docked, panel, launcher and status are intentionally checked after other
     // containers even though these layers are higher. The user expects their
     // windows to be focused before these elements.
+    kShellWindowId_DockedContainer,
     kShellWindowId_PanelContainer,
     kShellWindowId_ShelfContainer,
     kShellWindowId_StatusContainer,
@@ -59,14 +59,9 @@ bool BelongsToContainerWithEqualOrGreaterId(const aura::Window* window,
 // Returns true if children of |window| can be activated.
 // These are the only containers in which windows can receive focus.
 bool SupportsChildActivation(aura::Window* window) {
-  if (window->id() == kShellWindowId_WorkspaceContainer)
-    return true;
-
   for (size_t i = 0; i < arraysize(kWindowContainerIds); i++) {
-    if (window->id() == kWindowContainerIds[i] &&
-        window->id() != kShellWindowId_DefaultContainer) {
+    if (window->id() == kWindowContainerIds[i])
       return true;
-    }
   }
   return false;
 }
@@ -98,7 +93,7 @@ bool VisibilityMatches(aura::Window* window, ActivateVisibilityType type) {
       window->TargetVisibility();
   return visible || wm::IsWindowMinimized(window) ||
       (window->TargetVisibility() &&
-        (window->parent()->id() == kShellWindowId_WorkspaceContainer ||
+        (window->parent()->id() == kShellWindowId_DefaultContainer ||
          window->parent()->id() == kShellWindowId_LockScreenContainer));
 }
 
@@ -149,7 +144,7 @@ ActivationController::ActivationController(
     : focus_client_(focus_client),
       updating_activation_(false),
       active_window_(NULL),
-      ALLOW_THIS_IN_INITIALIZER_LIST(observer_manager_(this)),
+      observer_manager_(this),
       delegate_(delegate) {
   aura::Env::GetInstance()->AddObserver(this);
   focus_client_->AddObserver(this);
@@ -393,20 +388,6 @@ aura::Window* ActivationController::GetTopmostWindowToActivate(
 aura::Window* ActivationController::GetTopmostWindowToActivateInContainer(
     aura::Window* container,
     aura::Window* ignore) const {
-  // Workspace has an extra level of windows that needs to be special cased.
-  if (container->id() == kShellWindowId_DefaultContainer) {
-    for (aura::Window::Windows::const_reverse_iterator i =
-             container->children().rbegin();
-         i != container->children().rend(); ++i) {
-      if ((*i)->IsVisible()) {
-        aura::Window* window = GetTopmostWindowToActivateInContainer(
-            *i, ignore);
-        if (window)
-          return window;
-      }
-    }
-    return NULL;
-  }
   for (aura::Window::Windows::const_reverse_iterator i =
            container->children().rbegin();
        i != container->children().rend();

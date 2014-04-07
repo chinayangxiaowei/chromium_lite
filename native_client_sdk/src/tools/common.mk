@@ -6,7 +6,6 @@
 # GNU Make based build file.  For details on GNU Make see:
 #   http://www.gnu.org/software/make/manual/make.html
 #
-#
 
 #
 # Toolchain
@@ -15,24 +14,87 @@
 # project only builds in one or the other then this should be overridden
 # accordingly.
 #
-VALID_TOOLCHAINS?=newlib glibc
-TOOLCHAIN?=$(word 1,$(VALID_TOOLCHAINS))
+VALID_TOOLCHAINS ?= newlib glibc
+TOOLCHAIN ?= $(word 1,$(VALID_TOOLCHAINS))
 
 
 #
 # Top Make file, which we want to trigger a rebuild on if it changes
 #
-TOP_MAKE:=$(word 1,$(MAKEFILE_LIST))
+TOP_MAKE := $(word 1,$(MAKEFILE_LIST))
 
+
+#
+# Figure out which OS we are running on.
+#
+GETOS := python $(NACL_SDK_ROOT)/tools/getos.py
+FIXDEPS := python $(NACL_SDK_ROOT)/tools/fix_deps.py -c
+OSNAME := $(shell $(GETOS))
+
+
+#
+# TOOLCHAIN=all recursively calls this Makefile for all VALID_TOOLCHAINS.
+#
+ifeq ($(TOOLCHAIN),all)
+
+# Define the default target
+all:
+
+#
+# Generate a new MAKE command for each TOOLCHAIN.
+#
+# Note: We use targets for each toolchain (instead of an explicit recipe) so
+# each toolchain can be built in parallel.
+#
+# $1 = Toolchain Name
+#
+define TOOLCHAIN_RULE
+TOOLCHAIN_TARGETS += $(1)_TARGET
+.PHONY: $(1)_TARGET
+$(1)_TARGET:
+	+$(MAKE) TOOLCHAIN=$(1) $(MAKECMDGOALS)
+endef
+
+#
+# The target for all versions
+#
+USABLE_TOOLCHAINS=$(filter $(OSNAME) newlib glibc pnacl,$(VALID_TOOLCHAINS))
+
+ifeq ($(NO_HOST_BUILDS),1)
+USABLE_TOOLCHAINS:=$(filter-out $(OSNAME),$(USABLE_TOOLCHAINS))
+endif
+
+# Define the toolchain targets for all usable toolchains via the macro.
+$(foreach tool,$(USABLE_TOOLCHAINS),$(eval $(call TOOLCHAIN_RULE,$(tool))))
+
+.PHONY: all clean install
+all: $(TOOLCHAIN_TARGETS)
+clean: $(TOOLCHAIN_TARGETS)
+install: $(TOOLCHAIN_TARGETS)
+
+else  # TOOLCHAIN=all
 
 #
 # Verify we selected a valid toolchain for this example
 #
 ifeq (,$(findstring $(TOOLCHAIN),$(VALID_TOOLCHAINS)))
+
+# Only fail to build if this is a top-level make. When building recursively, we
+# don't care if an example can't build with this toolchain.
+ifeq ($(MAKELEVEL),0)
   $(warning Availbile choices are: $(VALID_TOOLCHAINS))
   $(error Can not use TOOLCHAIN=$(TOOLCHAIN) on this example.)
+else
+
+# Dummy targets for recursive make with unsupported toolchain...
+.PHONY: all clean install
+all:
+clean:
+install:
+
 endif
 
+else  # TOOLCHAIN is valid...
 
 #
 # Build Configuration
@@ -41,9 +103,10 @@ endif
 # are compiled without optimizations to make debugging easier.  By default
 # this will build a Debug configuration.
 #
-CONFIG?=Debug
+CONFIG ?= Debug
 
 
+#
 # Note for Windows:
 #   The GCC and LLVM toolchains (include the version of Make.exe that comes
 # with the SDK) expect and are capable of dealing with the '/' seperator.
@@ -66,8 +129,8 @@ endif
 #
 # If NACL_SDK_ROOT is not already set, then set it relative to this makefile.
 #
-THIS_MAKEFILE:=$(CURDIR)/$(lastword $(MAKEFILE_LIST))
-NACL_SDK_ROOT?=$(realpath $(dir $(THIS_MAKEFILE))/..)
+THIS_MAKEFILE := $(CURDIR)/$(lastword $(MAKEFILE_LIST))
+NACL_SDK_ROOT ?= $(realpath $(dir $(THIS_MAKEFILE))/..)
 
 
 #
@@ -85,7 +148,7 @@ endif
 # to a different location this is almost certainly a local configuration
 # error.
 #
-LOCAL_ROOT:=$(realpath $(dir $(THIS_MAKEFILE))/..)
+LOCAL_ROOT := $(realpath $(dir $(THIS_MAKEFILE))/..)
 ifneq (,$(wildcard $(LOCAL_ROOT)/tools/oshelpers.py))
   ifneq ($(realpath $(NACL_SDK_ROOT)), $(realpath $(LOCAL_ROOT)))
     $(error common.mk included from an SDK that does not match the current NACL_SDK_ROOT)
@@ -96,18 +159,18 @@ endif
 #
 # Alias for standard POSIX file system commands
 #
-OSHELPERS=python $(NACL_SDK_ROOT)/tools/oshelpers.py
-WHICH:=$(OSHELPERS) which
+OSHELPERS = python $(NACL_SDK_ROOT)/tools/oshelpers.py
+WHICH := $(OSHELPERS) which
 ifdef V
-RM:=$(OSHELPERS) rm
-CP:=$(OSHELPERS) cp
-MKDIR:=$(OSHELPERS) mkdir
-MV:=$(OSHELPERS) mv
+RM := $(OSHELPERS) rm
+CP := $(OSHELPERS) cp
+MKDIR := $(OSHELPERS) mkdir
+MV := $(OSHELPERS) mv
 else
-RM:=@$(OSHELPERS) rm
-CP:=@$(OSHELPERS) cp
-MKDIR:=@$(OSHELPERS) mkdir
-MV:=@$(OSHELPERS) mv
+RM := @$(OSHELPERS) rm
+CP := @$(OSHELPERS) cp
+MKDIR := @$(OSHELPERS) mkdir
+MV := @$(OSHELPERS) mv
 endif
 
 
@@ -115,9 +178,7 @@ endif
 #
 # Compute path to requested NaCl Toolchain
 #
-GETOS=python $(NACL_SDK_ROOT)/tools/getos.py
-OSNAME:=$(shell $(GETOS))
-TC_PATH:=$(abspath $(NACL_SDK_ROOT)/toolchain)
+TC_PATH := $(abspath $(NACL_SDK_ROOT)/toolchain)
 
 
 #
@@ -139,39 +200,25 @@ endif
 # the 'all' target.  Here we leave it blank to be first, but define it later
 #
 all:
+.PHONY: all
 
 
 #
-# Target a toolchain
+# The install target is used to install built libraries to thier final destination.
+# By default this is the NaCl SDK 'lib' folder.
 #
-# $1 = Toolchain Name
-#
-define TOOLCHAIN_RULE
-.PHONY: all_$(1)
-all_$(1):
-	+$(MAKE) TOOLCHAIN=$(1)
-TOOLCHAIN_LIST+=all_$(1)
-endef
+install:
+.PHONY: install
 
 
-#
-# The target for all versions
-#
-USABLE_TOOLCHAINS=$(filter $(OSNAME) newlib glibc pnacl,$(VALID_TOOLCHAINS))
-
-ifeq ($(NO_HOST_BUILDS),1)
-USABLE_TOOLCHAINS:=$(filter-out $(OSNAME),$(USABLE_TOOLCHAINS))
+OUTBASE ?= .
+ifdef SEL_LDR
+OUTDIR := $(OUTBASE)/$(TOOLCHAIN)/sel_ldr_$(CONFIG)
+else
+OUTDIR := $(OUTBASE)/$(TOOLCHAIN)/$(CONFIG)
 endif
-
-$(foreach tool,$(USABLE_TOOLCHAINS),$(eval $(call TOOLCHAIN_RULE,$(tool),$(dep))))
-
-.PHONY: all_versions
-all_versions: $(TOOLCHAIN_LIST)
-
-
-OUTBASE?=.
-OUTDIR:=$(OUTBASE)/$(TOOLCHAIN)/$(CONFIG)
-STAMPDIR?=$(OUTDIR)
+STAMPDIR ?= $(OUTDIR)
+LIBDIR ?= $(NACL_SDK_ROOT)/lib
 
 
 #
@@ -180,7 +227,8 @@ STAMPDIR?=$(OUTDIR)
 .PHONY: clean
 clean:
 	$(RM) -f $(TARGET).nmf
-	$(RM) -fr $(OUTDIR)
+	$(RM) -rf $(OUTDIR)
+	$(RM) -rf user-data-dir
 
 
 #
@@ -204,8 +252,8 @@ clean:
 # $3 = Extra Settings
 #
 define DEPEND_RULE
-ifndef $(IGNORE_DEPS)
-.PHONY : rebuild_$(1)
+ifndef IGNORE_DEPS
+.PHONY: rebuild_$(1)
 
 rebuild_$(1) :| $(STAMPDIR)/dir.stamp
 ifeq (,$(2))
@@ -215,21 +263,21 @@ else
 endif
 
 all: rebuild_$(1)
-$(STAMPDIR)/$(1).stamp : rebuild_$(1)
+$(STAMPDIR)/$(1).stamp: rebuild_$(1)
 
 else
 
-.PHONY : $(STAMPDIR)/$(1).stamp
-$(STAMPDIR)/$(1).stamp :
+.PHONY: $(STAMPDIR)/$(1).stamp
+$(STAMPDIR)/$(1).stamp:
 	@echo Ignore $(1)
 endif
 endef
 
 
 ifeq ($(TOOLCHAIN),win)
-HOST_EXT=.dll
+HOST_EXT = .dll
 else
-HOST_EXT=.so
+HOST_EXT = .so
 endif
 
 
@@ -237,25 +285,29 @@ endif
 # Common Compile Options
 #
 ifeq ($(CONFIG),Release)
-POSIX_FLAGS?=-g -O2 -pthread -MMD
+POSIX_FLAGS ?= -g -O2 -pthread -MMD
 else
-POSIX_FLAGS?=-g -O0 -pthread -MMD
+POSIX_FLAGS ?= -g -O0 -pthread -MMD -DNACL_SDK_DEBUG
 endif
 
-NACL_CFLAGS?=-Wno-long-long -Werror
-NACL_CXXFLAGS?=-Wno-long-long -Werror
-NACL_LDFLAGS?=-Wl,-as-needed
+ifdef SEL_LDR
+POSIX_FLAGS += -DSEL_LDR=1
+endif
+
+NACL_CFLAGS ?= -Wno-long-long -Werror
+NACL_CXXFLAGS ?= -Wno-long-long -Werror
+NACL_LDFLAGS ?= -Wl,-as-needed
 
 #
 # Default Paths
 #
 ifeq (,$(findstring $(TOOLCHAIN),linux mac win))
-INC_PATHS?=$(NACL_SDK_ROOT)/include $(EXTRA_INC_PATHS)
+INC_PATHS ?= $(NACL_SDK_ROOT)/include $(NACL_SDK_ROOT)/include/$(TOOLCHAIN) $(EXTRA_INC_PATHS)
 else
-INC_PATHS?=$(NACL_SDK_ROOT)/include/$(OSNAME) $(NACL_SDK_ROOT)/include $(EXTRA_INC_PATHS)
+INC_PATHS ?= $(NACL_SDK_ROOT)/include/$(OSNAME) $(NACL_SDK_ROOT)/include $(EXTRA_INC_PATHS)
 endif
 
-LIB_PATHS?=$(NACL_SDK_ROOT)/lib $(EXTRA_LIB_PATHS)
+LIB_PATHS ?= $(NACL_SDK_ROOT)/lib $(EXTRA_LIB_PATHS)
 
 #
 # Define a LOG macro that allow a command to be run in quiet mode where
@@ -298,11 +350,23 @@ endef
 
 #
 # Convert a source path to a dependency file path.
+# We use the .deps extension for dependencies.  These files are generated by
+# fix_deps.py based on the .d files which gcc generates.  We don't reference
+# the .d files directly so that we can avoid the the case where the compile
+# failed but still generated a .d file (in that case the .d file would not
+# be processed by fix_deps.py)
 #
 # $1 = Source Name
 # $2 = Arch suffix
 #
 define SRC_TO_DEP
+$(patsubst %.o,%.deps,$(call SRC_TO_OBJ,$(1),$(2)))
+endef
+
+#
+# The gcc-generated deps files end in .d
+#
+define SRC_TO_DEP_PRE_FIXUP
 $(patsubst %.o,%.d,$(call SRC_TO_OBJ,$(1),$(2)))
 endef
 
@@ -332,20 +396,21 @@ endif
 # File to redirect to to in order to hide output.
 #
 ifeq ($(OSNAME),win)
-DEV_NULL=nul
+DEV_NULL = nul
 else
-DEV_NULL=/dev/null
+DEV_NULL = /dev/null
 endif
 
 #
 # Assign a sensible default to CHROME_PATH.
 #
-CHROME_PATH?=$(shell python $(NACL_SDK_ROOT)/tools/getos.py --chrome 2> $(DEV_NULL))
+CHROME_PATH ?= $(shell $(GETOS) --chrome 2> $(DEV_NULL))
 
 #
 # Verify we can find the Chrome executable if we need to launch it.
 #
-CHECK_FOR_CHROME:
+.PHONY: check_for_chrome
+check_for_chrome:
 ifeq (,$(wildcard $(CHROME_PATH)))
 	$(warning No valid Chrome found at CHROME_PATH=$(CHROME_PATH))
 	$(error Set CHROME_PATH via an environment variable, or command-line.)
@@ -357,45 +422,81 @@ endif
 #
 # Variables for running examples with Chrome.
 #
-RUN_PY:=python $(NACL_SDK_ROOT)/tools/run.py
+RUN_PY := python $(NACL_SDK_ROOT)/tools/run.py
 
 # Add this to launch Chrome with additional environment variables defined.
 # Each element should be specified as KEY=VALUE, with whitespace separating
 # key-value pairs. e.g.
 # CHROME_ENV=FOO=1 BAR=2 BAZ=3
-CHROME_ENV?=
+CHROME_ENV ?=
 
 # Additional arguments to pass to Chrome.
-CHROME_ARGS+=--enable-nacl --enable-pnacl --incognito --ppapi-out-of-process
+CHROME_ARGS += --enable-nacl --enable-pnacl --no-first-run
+CHROME_ARGS += --user-data-dir=$(CURDIR)/user-data-dir
 
 
 # Paths to Debug and Release versions of the Host Pepper plugins
-PPAPI_DEBUG=$(abspath $(OSNAME)/Debug/$(TARGET)$(HOST_EXT));application/x-ppapi-debug
-PPAPI_RELEASE=$(abspath $(OSNAME)/Release/$(TARGET)$(HOST_EXT));application/x-ppapi-release
+PPAPI_DEBUG = $(abspath $(OSNAME)/Debug/$(TARGET)$(HOST_EXT));application/x-ppapi-debug
+PPAPI_RELEASE = $(abspath $(OSNAME)/Release/$(TARGET)$(HOST_EXT));application/x-ppapi-release
 
 
-PAGE?=index.html
-PAGE_TC_CONFIG="$(PAGE)?tc=$(TOOLCHAIN)&config=$(CONFIG)"
+SYSARCH := $(shell $(GETOS) --nacl-arch)
+SEL_LDR_PATH := python $(NACL_SDK_ROOT)/tools/sel_ldr.py
 
-RUN: LAUNCH
-LAUNCH: CHECK_FOR_CHROME all
-ifeq (,$(wildcard $(PAGE)))
-	$(error No valid HTML page found at $(PAGE))
+#
+# Common Compile Options
+#
+ifeq ($(CONFIG),Debug)
+SEL_LDR_ARGS += --debug-libs
 endif
+
+ifdef SEL_LDR
+run: all
+ifndef NACL_ARCH
+	$(error Cannot run in sel_ldr unless $$NACL_ARCH is set)
+endif
+	$(SEL_LDR_PATH) $(SEL_LDR_ARGS) $(OUTDIR)/$(TARGET)_$(NACL_ARCH).nexe
+
+debug: all
+ifndef NACL_ARCH
+	$(error Cannot run in sel_ldr unless $$NACL_ARCH is set)
+endif
+	$(SEL_LDR_PATH) -d $(SEL_LDR_ARGS) $(OUTDIR)/$(TARGET)_$(NACL_ARCH).nexe
+else
+PAGE ?= index.html
+PAGE_TC_CONFIG ?= "$(PAGE)?tc=$(TOOLCHAIN)&config=$(CONFIG)"
+
+.PHONY: run
+run: check_for_chrome all $(PAGE)
 	$(RUN_PY) -C $(CURDIR) -P $(PAGE_TC_CONFIG) \
 	    $(addprefix -E ,$(CHROME_ENV)) -- $(CHROME_PATH) $(CHROME_ARGS) \
 	    --register-pepper-plugins="$(PPAPI_DEBUG),$(PPAPI_RELEASE)"
 
+.PHONY: run_package
+run_package: check_for_chrome all
+	$(CHROME_PATH) --load-and-launch-app=$(CURDIR) $(CHROME_ARGS)
 
-SYSARCH=$(shell python $(NACL_SDK_ROOT)/tools/getos.py --nacl-arch)
-GDB_ARGS+=-D $(TC_PATH)/$(OSNAME)_x86_$(TOOLCHAIN)/bin/$(SYSARCH)-nacl-gdb
-GDB_ARGS+=-D $(abspath $(OUTDIR))/$(TARGET)_$(SYSARCH).nexe
+GDB_ARGS += -D $(TC_PATH)/$(OSNAME)_x86_newlib/bin/$(SYSARCH)-nacl-gdb
+GDB_ARGS += -D --eval-command="nacl-manifest $(abspath $(OUTDIR))/$(TARGET).nmf"
+GDB_ARGS += -D $(GDB_DEBUG_TARGET)
 
-DEBUG: CHECK_FOR_CHROME all
+.PHONY: debug
+debug: check_for_chrome all $(PAGE)
 	$(RUN_PY) $(GDB_ARGS) \
 	    -C $(CURDIR) -P $(PAGE_TC_CONFIG) \
 	    $(addprefix -E ,$(CHROME_ENV)) -- $(CHROME_PATH) $(CHROME_ARGS) \
 	    --enable-nacl-debug \
 	    --register-pepper-plugins="$(PPAPI_DEBUG),$(PPAPI_RELEASE)"
+endif
 
-.PHONY: CHECK_FOR_CHROME RUN LAUNCH
+
+# uppercase aliases (for backward compatibility)
+.PHONY: CHECK_FOR_CHROME DEBUG LAUNCH RUN
+CHECK_FOR_CHROME: check_for_chrome
+DEBUG: debug
+LAUNCH: run
+RUN: run
+
+endif  # TOOLCHAIN is valid...
+
+endif  # TOOLCHAIN=all

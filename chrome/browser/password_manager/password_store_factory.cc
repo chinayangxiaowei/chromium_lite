@@ -10,12 +10,13 @@
 #include "chrome/browser/password_manager/login_database.h"
 #include "chrome/browser/password_manager/password_store.h"
 #include "chrome/browser/password_manager/password_store_default.h"
-#include "chrome/browser/profiles/profile_dependency_manager.h"
+#include "chrome/browser/profiles/incognito_helpers.h"
 #include "chrome/browser/webdata/web_data_service.h"
 #include "chrome/browser/webdata/web_data_service_factory.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
+#include "components/browser_context_keyed_service/browser_context_dependency_manager.h"
 #include "components/user_prefs/pref_registry_syncable.h"
 
 #if defined(OS_WIN)
@@ -26,7 +27,7 @@
 #include "crypto/mock_apple_keychain.h"
 #elif defined(OS_CHROMEOS) || defined(OS_ANDROID)
 // Don't do anything. We're going to use the default store.
-#elif defined(OS_POSIX)
+#elif defined(USE_X11)
 #include "base/nix/xdg_util.h"
 #if defined(USE_GNOME_KEYRING)
 #include "chrome/browser/password_manager/native_backend_gnome_x.h"
@@ -35,8 +36,7 @@
 #include "chrome/browser/password_manager/password_store_x.h"
 #endif
 
-#if !defined(OS_MACOSX) && !defined(OS_CHROMEOS) && !defined(OS_ANDROID) && \
-    defined(OS_POSIX)
+#if !defined(OS_CHROMEOS) && defined(USE_X11)
 namespace {
 
 const LocalProfileId kInvalidLocalProfileId =
@@ -54,7 +54,7 @@ scoped_refptr<PasswordStore> PasswordStoreFactory::GetForProfile(
   }
 
   return static_cast<PasswordStore*>(
-      GetInstance()->GetServiceForProfile(profile, true).get());
+      GetInstance()->GetServiceForBrowserContext(profile, true).get());
 }
 
 // static
@@ -63,16 +63,15 @@ PasswordStoreFactory* PasswordStoreFactory::GetInstance() {
 }
 
 PasswordStoreFactory::PasswordStoreFactory()
-    : RefcountedProfileKeyedServiceFactory(
+    : RefcountedBrowserContextKeyedServiceFactory(
         "PasswordStore",
-        ProfileDependencyManager::GetInstance()) {
+        BrowserContextDependencyManager::GetInstance()) {
   DependsOn(WebDataServiceFactory::GetInstance());
 }
 
 PasswordStoreFactory::~PasswordStoreFactory() {}
 
-#if !defined(OS_MACOSX) && !defined(OS_CHROMEOS) && !defined(OS_ANDROID) && \
-    defined(OS_POSIX)
+#if !defined(OS_CHROMEOS) && defined(USE_X11)
 LocalProfileId PasswordStoreFactory::GetLocalProfileId(
     PrefService* prefs) const {
   LocalProfileId id = prefs->GetInteger(prefs::kLocalProfileId);
@@ -94,8 +93,11 @@ LocalProfileId PasswordStoreFactory::GetLocalProfileId(
 }
 #endif
 
-scoped_refptr<RefcountedProfileKeyedService>
-PasswordStoreFactory::BuildServiceInstanceFor(Profile* profile) const {
+scoped_refptr<RefcountedBrowserContextKeyedService>
+PasswordStoreFactory::BuildServiceInstanceFor(
+    content::BrowserContext* context) const {
+  Profile* profile = static_cast<Profile*>(context);
+
   scoped_refptr<PasswordStore> ps;
   base::FilePath login_db_file_path = profile->GetPath();
   login_db_file_path = login_db_file_path.Append(chrome::kLoginDataFileName);
@@ -124,7 +126,7 @@ PasswordStoreFactory::BuildServiceInstanceFor(Profile* profile) const {
   // For now, we use PasswordStoreDefault. We might want to make a native
   // backend for PasswordStoreX (see below) in the future though.
   ps = new PasswordStoreDefault(login_db, profile);
-#elif defined(OS_POSIX)
+#elif defined(USE_X11)
   // On POSIX systems, we try to use the "native" password management system of
   // the desktop environment currently running, allowing GNOME Keyring in XFCE.
   // (In all cases we fall back on the basic store in case of failure.)
@@ -182,10 +184,10 @@ PasswordStoreFactory::BuildServiceInstanceFor(Profile* profile) const {
 #else
   NOTIMPLEMENTED();
 #endif
-  if (!ps)
+  if (!ps.get())
     delete login_db;
 
-  if (!ps || !ps->Init()) {
+  if (!ps.get() || !ps->Init()) {
     NOTREACHED() << "Could not initialize password manager.";
     return NULL;
   }
@@ -193,21 +195,23 @@ PasswordStoreFactory::BuildServiceInstanceFor(Profile* profile) const {
   return ps;
 }
 
-void PasswordStoreFactory::RegisterUserPrefs(PrefRegistrySyncable* registry) {
-#if !defined(OS_MACOSX) && !defined(OS_CHROMEOS) && !defined(OS_ANDROID) \
-  && defined(OS_POSIX)
-  registry->RegisterIntegerPref(prefs::kLocalProfileId,
-                                kInvalidLocalProfileId,
-                                PrefRegistrySyncable::UNSYNCABLE_PREF);
+void PasswordStoreFactory::RegisterProfilePrefs(
+    user_prefs::PrefRegistrySyncable* registry) {
+#if !defined(OS_CHROMEOS) && defined(USE_X11)
+  registry->RegisterIntegerPref(
+      prefs::kLocalProfileId,
+      kInvalidLocalProfileId,
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
 
   // Notice that the preprocessor conditions above are exactly those that will
   // result in using PasswordStoreX in CreatePasswordStore() below.
-  PasswordStoreX::RegisterUserPrefs(registry);
+  PasswordStoreX::RegisterProfilePrefs(registry);
 #endif
 }
 
-bool PasswordStoreFactory::ServiceRedirectedInIncognito() const {
-  return true;
+content::BrowserContext* PasswordStoreFactory::GetBrowserContextToUse(
+    content::BrowserContext* context) const {
+  return chrome::GetBrowserContextRedirectedInIncognito(context);
 }
 
 bool PasswordStoreFactory::ServiceIsNULLWhileTesting() const {

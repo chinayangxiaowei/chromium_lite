@@ -10,16 +10,17 @@
 
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/string_util.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/search_engines/search_terms_data.h"
 #include "chrome/browser/search_engines/template_url.h"
 #include "chrome/browser/search_engines/template_url_service.h"
 #include "chrome/common/url_constants.h"
-#include "googleurl/src/gurl.h"
 #include "libxml/parser.h"
 #include "libxml/xmlwriter.h"
 #include "ui/gfx/favicon_size.h"
+#include "url/gurl.h"
 
 namespace {
 
@@ -309,10 +310,15 @@ TemplateURL* TemplateURLParsingContext::GetTemplateURL(
 
   // Bail if the search URL is empty or if either TemplateURLRef is invalid.
   scoped_ptr<TemplateURL> template_url(new TemplateURL(profile, data_));
-  if (template_url->url().empty() || !template_url->url_ref().IsValid() ||
+  scoped_ptr<SearchTermsData> search_terms_data(profile ?
+      new UIThreadSearchTermsData(profile) : new SearchTermsData());
+  if (template_url->url().empty() ||
+      !template_url->url_ref().IsValidUsingTermsData(*search_terms_data) ||
       (!template_url->suggestions_url().empty() &&
-       !template_url->suggestions_url_ref().IsValid()))
+       !template_url->suggestions_url_ref().
+           IsValidUsingTermsData(*search_terms_data))) {
     return NULL;
+  }
 
   return template_url.release();
 }

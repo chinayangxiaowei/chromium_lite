@@ -18,7 +18,7 @@
 #include "base/logging.h"
 #include "base/mac/foundation_util.h"
 #include "base/mac/scoped_nsautorelease_pool.h"
-#include "base/sys_string_conversions.h"
+#include "base/strings/sys_string_conversions.h"
 #import "chrome/common/mac/app_mode_chrome_locator.h"
 #include "chrome/common/mac/app_mode_common.h"
 
@@ -51,7 +51,7 @@ void LoadFramework(void** cr_dylib, app_mode::ChromeAppModeInfo* info) {
           NSToCFCast(cr_bundle_id)))) autorelease];
   cr_bundle_path = base::mac::NSStringToFilePath(cr_bundle_path_ns);
   bool found_bundle =
-      !cr_bundle_path.empty() && file_util::DirectoryExists(cr_bundle_path);
+      !cr_bundle_path.empty() && base::DirectoryExists(cr_bundle_path);
 
   if (!found_bundle) {
     // If no such bundle path exists, try to search by bundle ID.

@@ -36,19 +36,20 @@ scoped_ptr<sessions::SyncSessionContext>
 InternalComponentsFactoryImpl::BuildContext(
     ServerConnectionManager* connection_manager,
     syncable::Directory* directory,
-    const std::vector<ModelSafeWorker*> workers,
-    ExtensionsActivityMonitor* monitor,
-    ThrottledDataTypeTracker* throttled_data_type_tracker,
+    const std::vector<ModelSafeWorker*>& workers,
+    ExtensionsActivity* extensions_activity,
     const std::vector<SyncEngineEventListener*>& listeners,
     sessions::DebugInfoGetter* debug_info_getter,
     TrafficRecorder* traffic_recorder,
     const std::string& invalidation_client_id) {
   return scoped_ptr<sessions::SyncSessionContext>(
       new sessions::SyncSessionContext(
-          connection_manager, directory, workers, monitor,
-          throttled_data_type_tracker, listeners, debug_info_getter,
+          connection_manager, directory, workers, extensions_activity,
+          listeners, debug_info_getter,
           traffic_recorder,
           switches_.encryption_method == ENCRYPTION_KEYSTORE,
+          switches_.pre_commit_updates_policy ==
+              FORCE_ENABLE_PRE_COMMIT_UPDATE_AVOIDANCE,
           invalidation_client_id));
 }
 

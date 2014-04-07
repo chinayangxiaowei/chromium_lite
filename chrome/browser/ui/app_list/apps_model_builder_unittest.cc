@@ -9,6 +9,7 @@
 #include "base/files/file_path.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/prefs/pref_service.h"
+#include "base/run_loop.h"
 #include "base/values.h"
 #include "chrome/browser/extensions/extension_function_test_utils.h"
 #include "chrome/browser/extensions/extension_service_unittest.h"
@@ -66,6 +67,8 @@ class AppsModelBuilderTest : public ExtensionServiceTestBase {
   virtual ~AppsModelBuilderTest() {}
 
   virtual void SetUp() OVERRIDE {
+    ExtensionServiceTestBase::SetUp();
+
     // Load "app_list" extensions test profile.
     // The test profile has 4 extensions:
     // 1 dummy extension, 2 packaged extension apps and 1 hosted extension app.
@@ -102,7 +105,7 @@ TEST_F(AppsModelBuilderTest, HideWebStore) {
               "0.0",
               "http://google.com",
               std::string(extension_misc::kWebStoreAppId));
-  service_->AddExtension(store);
+  service_->AddExtension(store.get());
 
   // Install an "enterprise web store" app.
   scoped_refptr<extensions::Extension> enterprise_store =
@@ -110,7 +113,7 @@ TEST_F(AppsModelBuilderTest, HideWebStore) {
               "0.0",
               "http://google.com",
               std::string(extension_misc::kEnterpriseWebStoreAppId));
-  service_->AddExtension(enterprise_store);
+  service_->AddExtension(enterprise_store.get());
 
   // Web stores should be present in the AppListModel.
   app_list::AppListModel::Apps model1;
@@ -158,7 +161,27 @@ TEST_F(AppsModelBuilderTest, Uninstall) {
   EXPECT_EQ(std::string("Packaged App 1,Hosted App"),
             GetModelContent(model.get()));
 
-  loop_.RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
+}
+
+TEST_F(AppsModelBuilderTest, UninstallTerminatedApp) {
+  scoped_ptr<app_list::AppListModel::Apps> model(
+      new app_list::AppListModel::Apps);
+  AppsModelBuilder builder(profile_.get(), model.get(), NULL);
+  builder.Build();
+
+  const extensions::Extension* app =
+      service_->GetInstalledExtension(kPackagedApp2Id);
+  ASSERT_TRUE(app != NULL);
+
+  // Simulate an app termination.
+  service_->TrackTerminatedExtensionForTest(app);
+
+  service_->UninstallExtension(kPackagedApp2Id, false, NULL);
+  EXPECT_EQ(std::string("Packaged App 1,Hosted App"),
+            GetModelContent(model.get()));
+
+  base::RunLoop().RunUntilIdle();
 }
 
 TEST_F(AppsModelBuilderTest, OrdinalPrefsChange) {

@@ -10,12 +10,12 @@
 #include <vector>
 
 #include "base/memory/ref_counted.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/global_request_id.h"
 #include "content/public/common/page_transition_types.h"
 #include "content/public/common/referrer.h"
-#include "googleurl/src/gurl.h"
+#include "url/gurl.h"
 
 namespace base {
 
@@ -151,13 +151,21 @@ class NavigationController {
     // True if this URL should be able to access local resources.
     bool can_load_local_resources;
 
-    // Indicates whether this navigation involves a cross-process redirect,
-    // in which case it should replace the current navigation entry.
-    bool is_cross_site_redirect;
+    // Indicates whether this navigation should replace the current
+    // navigation entry.
+    bool should_replace_current_entry;
 
     // Used to specify which frame to navigate. If empty, the main frame is
     // navigated. This is currently only used in tests.
     std::string frame_name;
+
+    // Indicates that during this navigation, the session history should be
+    // cleared such that the resulting page is the first and only entry of the
+    // session history.
+    //
+    // The clearing is done asynchronously, and completes when this navigation
+    // commits.
+    bool should_clear_history_list;
 
     explicit LoadURLParams(const GURL& url);
     ~LoadURLParams();
@@ -327,10 +335,10 @@ class NavigationController {
 
   // Removing of entries -------------------------------------------------------
 
-  // Removes the entry at the specified |index|.  This call dicards any pending
-  // and transient entries.  If the index is the last committed index, this does
-  // nothing and returns false.
-  virtual void RemoveEntryAtIndex(int index) = 0;
+  // Removes the entry at the specified |index|.  This call discards any
+  // transient entries.  If the index is the last committed index or the pending
+  // entry, this does nothing and returns false.
+  virtual bool RemoveEntryAtIndex(int index) = 0;
 
   // Random --------------------------------------------------------------------
 
@@ -368,9 +376,9 @@ class NavigationController {
   // Returns false after the initial navigation has committed.
   virtual bool IsInitialNavigation() const = 0;
 
-  // Broadcasts the NOTIFY_NAV_ENTRY_CHANGED notification for the given entry
-  // (which must be at the given index). This will keep things in sync like
-  // the saved session.
+  // Broadcasts the NOTIFICATION_NAV_ENTRY_CHANGED notification for the given
+  // entry (which must be at the given index). This will keep things in sync
+  // like the saved session.
   virtual void NotifyEntryChanged(const NavigationEntry* entry, int index) = 0;
 
   // Copies the navigation state from the given controller to this one. This
@@ -378,18 +386,39 @@ class NavigationController {
   virtual void CopyStateFrom(const NavigationController& source) = 0;
 
   // A variant of CopyStateFrom. Removes all entries from this except the last
-  // entry, inserts all entries from |source| before and including the active
-  // entry. This method is intended for use when the last entry of |this| is the
-  // active entry. For example:
+  // committed entry, and inserts all entries from |source| before and including
+  // its last committed entry. For example:
   // source: A B *C* D
-  // this:   E F *G*   (last must be active or pending)
+  // this:   E F *G*
   // result: A B C *G*
-  // This ignores the transient index of the source and honors that of 'this'.
+  // If there is a pending entry after *G* in |this|, it is also preserved.
+  // This ignores any pending or transient entries in |source|.  Callers must
+  // ensure that |CanPruneAllButVisible| returns true before calling this, or it
+  // will crash.
   virtual void CopyStateFromAndPrune(NavigationController* source) = 0;
 
-  // Removes all the entries except the active entry. If there is a new pending
-  // navigation it is preserved.
-  virtual void PruneAllButActive() = 0;
+  // Returns whether it is safe to call PruneAllButVisible or
+  // CopyStateFromAndPrune.  There must be a last committed entry, no transient
+  // entry, and if there is a pending entry, it must be new and not an existing
+  // entry.
+  //
+  // If there were no last committed entry, the pending entry might not commit,
+  // leaving us with a blank page.  This is unsafe when used with
+  // |CopyStateFromAndPrune|, which would show an existing entry above the blank
+  // page.
+  // If there were a transient entry, we would not want to prune the other
+  // entries, which the transient entry could be referring to.
+  // If there were an existing pending entry, we could not prune the last
+  // committed entry, in case it did not commit.  That would leave us with no
+  // sensible place to put the pending entry when it did commit, after all other
+  // entries are pruned.  For example, it could be going back several entries.
+  // (New pending entries are safe, because they can always commit to the end.)
+  virtual bool CanPruneAllButVisible() = 0;
+
+  // Removes all the entries except the last committed entry. If there is a new
+  // pending navigation it is preserved.  Callers must ensure
+  // |CanPruneAllButVisible| returns true before calling this, or it will crash.
+  virtual void PruneAllButVisible() = 0;
 
   // Clears all screenshots associated with navigation entries in this
   // controller. Useful to reduce memory consumption in low-memory situations.

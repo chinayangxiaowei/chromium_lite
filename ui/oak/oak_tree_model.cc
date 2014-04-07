@@ -4,7 +4,7 @@
 
 #include "ui/oak/oak_tree_model.h"
 
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "ui/aura/root_window.h"
 #include "ui/aura/window.h"
 #include "ui/base/models/tree_node_model.h"
@@ -12,7 +12,7 @@
 namespace oak {
 namespace internal {
 
-string16 GetNodeTitleForWindow(aura::Window* window) {
+base::string16 GetNodeTitleForWindow(aura::Window* window) {
   std::string window_name = window->name();
   if (window_name.empty())
     window_name.append("Unnamed window");

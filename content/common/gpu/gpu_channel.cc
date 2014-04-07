@@ -14,12 +14,10 @@
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/debug/trace_event.h"
-#include "base/message_loop_proxy.h"
-#include "base/process_util.h"
+#include "base/message_loop/message_loop_proxy.h"
 #include "base/rand_util.h"
-#include "base/string_util.h"
-#include "base/timer.h"
-#include "content/common/child_process.h"
+#include "base/strings/string_util.h"
+#include "base/timer/timer.h"
 #include "content/common/gpu/gpu_channel_manager.h"
 #include "content/common/gpu/gpu_messages.h"
 #include "content/common/gpu/sync_point_manager.h"
@@ -448,7 +446,7 @@ GpuChannel::GpuChannel(GpuChannelManager* gpu_channel_manager,
       handle_messages_scheduled_(false),
       processed_get_state_fast_(false),
       currently_processing_message_(NULL),
-      weak_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)),
+      weak_factory_(this),
       num_stubs_descheduled_(0) {
   DCHECK(gpu_channel_manager);
   DCHECK(client_id);
@@ -486,7 +484,7 @@ bool GpuChannel::Init(base::MessageLoopProxy* io_message_loop,
       gpu_channel_manager_->sync_point_manager(),
       base::MessageLoopProxy::current());
   io_message_loop_ = io_message_loop;
-  channel_->AddFilter(filter_);
+  channel_->AddFilter(filter_.get());
 
   return true;
 }
@@ -497,7 +495,7 @@ std::string GpuChannel::GetChannelName() {
 
 #if defined(OS_POSIX)
 int GpuChannel::TakeRendererFileDescriptor() {
-  if (!channel_.get()) {
+  if (!channel_) {
     NOTREACHED();
     return -1;
   }
@@ -506,7 +504,6 @@ int GpuChannel::TakeRendererFileDescriptor() {
 #endif  // defined(OS_POSIX)
 
 bool GpuChannel::OnMessageReceived(const IPC::Message& message) {
-  bool message_processed = true;
   if (log_messages_) {
     DVLOG(1) << "received message @" << &message << " on channel @" << this
              << " with type " << message.type();
@@ -528,20 +525,14 @@ bool GpuChannel::OnMessageReceived(const IPC::Message& message) {
       }
 
       deferred_messages_.insert(point, new IPC::Message(message));
-      message_processed = false;
     } else {
       // Move GetStateFast commands to the head of the queue, so the renderer
       // doesn't have to wait any longer than necessary.
       deferred_messages_.push_front(new IPC::Message(message));
-      message_processed = false;
     }
   } else {
     deferred_messages_.push_back(new IPC::Message(message));
-    message_processed = false;
   }
-
-  if (message_processed)
-    MessageProcessed();
 
   OnScheduled();
 
@@ -561,7 +552,7 @@ bool GpuChannel::Send(IPC::Message* message) {
              << " with type " << message->type();
   }
 
-  if (!channel_.get()) {
+  if (!channel_) {
     delete message;
     return false;
   }
@@ -585,7 +576,7 @@ void GpuChannel::OnScheduled() {
   // defer newly received messages until the ones in the queue have all been
   // handled by HandleMessage. HandleMessage is invoked as a
   // task to prevent reentrancy.
-  MessageLoop::current()->PostTask(
+  base::MessageLoop::current()->PostTask(
       FROM_HERE,
       base::Bind(&GpuChannel::HandleMessage, weak_factory_.GetWeakPtr()));
   handle_messages_scheduled_ = true;
@@ -607,7 +598,8 @@ void GpuChannel::StubSchedulingChanged(bool scheduled) {
       io_message_loop_->PostTask(
           FROM_HERE,
           base::Bind(&GpuChannelMessageFilter::UpdateStubSchedulingState,
-                     filter_, a_stub_is_descheduled));
+                     filter_,
+                     a_stub_is_descheduled));
     }
   }
 }
@@ -628,23 +620,32 @@ void GpuChannel::CreateViewCommandBuffer(
 
   GpuCommandBufferStub* share_group = stubs_.Lookup(init_params.share_group_id);
 
+  // Virtualize compositor contexts on OS X to prevent performance regressions
+  // when enabling FCM.
+  // http://crbug.com/180463
+  bool use_virtualized_gl_context = false;
+#if defined(OS_MACOSX)
+  use_virtualized_gl_context = true;
+#endif
+
   *route_id = GenerateRouteID();
-  scoped_ptr<GpuCommandBufferStub> stub(new GpuCommandBufferStub(
-      this,
-      share_group,
-      window,
-      mailbox_manager_,
-      image_manager_,
-      gfx::Size(),
-      disallowed_features_,
-      init_params.allowed_extensions,
-      init_params.attribs,
-      init_params.gpu_preference,
-      *route_id,
-      surface_id,
-      watchdog_,
-      software_,
-      init_params.active_url));
+  scoped_ptr<GpuCommandBufferStub> stub(
+      new GpuCommandBufferStub(this,
+                               share_group,
+                               window,
+                               mailbox_manager_.get(),
+                               image_manager_.get(),
+                               gfx::Size(),
+                               disallowed_features_,
+                               init_params.allowed_extensions,
+                               init_params.attribs,
+                               init_params.gpu_preference,
+                               use_virtualized_gl_context,
+                               *route_id,
+                               surface_id,
+                               watchdog_,
+                               software_,
+                               init_params.active_url));
   if (preempted_flag_.get())
     stub->SetPreemptByFlag(preempted_flag_);
   router_.AddRoute(*route_id, stub.get());
@@ -673,7 +674,7 @@ void GpuChannel::CreateImage(
   }
 
   scoped_refptr<gfx::GLImage> image = gfx::GLImage::CreateGLImage(window);
-  if (!image)
+  if (!image.get())
     return;
 
   image_manager_->AddImage(image.get(), image_id);
@@ -693,8 +694,15 @@ void GpuChannel::LoseAllContexts() {
   gpu_channel_manager_->LoseAllContexts();
 }
 
+void GpuChannel::MarkAllContextsLost() {
+  for (StubMap::Iterator<GpuCommandBufferStub> it(&stubs_);
+       !it.IsAtEnd(); it.Advance()) {
+    it.GetCurrentValue()->MarkContextLost();
+  }
+}
+
 void GpuChannel::DestroySoon() {
-  MessageLoop::current()->PostTask(
+  base::MessageLoop::current()->PostTask(
       FROM_HERE, base::Bind(&GpuChannel::OnDestroy, this));
 }
 
@@ -754,6 +762,8 @@ bool GpuChannel::OnControlMessageReceived(const IPC::Message& msg) {
                         OnRegisterStreamTextureProxy)
     IPC_MESSAGE_HANDLER(GpuChannelMsg_EstablishStreamTexture,
                         OnEstablishStreamTexture)
+    IPC_MESSAGE_HANDLER(GpuChannelMsg_SetStreamTextureSize,
+                        OnSetStreamTextureSize)
 #endif
     IPC_MESSAGE_HANDLER(
         GpuChannelMsg_CollectRenderingStatsForSurface,
@@ -857,8 +867,10 @@ void GpuChannel::OnCreateOffscreenCommandBuffer(
       init_params.allowed_extensions,
       init_params.attribs,
       init_params.gpu_preference,
+      false,
       *route_id,
-      0, watchdog_,
+      0,
+      watchdog_,
       software_,
       init_params.active_url));
   if (preempted_flag_.get())
@@ -873,36 +885,39 @@ void GpuChannel::OnDestroyCommandBuffer(int32 route_id) {
   TRACE_EVENT1("gpu", "GpuChannel::OnDestroyCommandBuffer",
                "route_id", route_id);
 
-  if (router_.ResolveRoute(route_id)) {
-    GpuCommandBufferStub* stub = stubs_.Lookup(route_id);
-    bool need_reschedule = (stub && !stub->IsScheduled());
-    router_.RemoveRoute(route_id);
-    stubs_.Remove(route_id);
-    // In case the renderer is currently blocked waiting for a sync reply from
-    // the stub, we need to make sure to reschedule the GpuChannel here.
-    if (need_reschedule) {
-      // This stub won't get a chance to reschedule, so update the count
-      // now.
-      StubSchedulingChanged(true);
-    }
+  GpuCommandBufferStub* stub = stubs_.Lookup(route_id);
+  if (!stub)
+    return;
+  bool need_reschedule = (stub && !stub->IsScheduled());
+  router_.RemoveRoute(route_id);
+  stubs_.Remove(route_id);
+  // In case the renderer is currently blocked waiting for a sync reply from the
+  // stub, we need to make sure to reschedule the GpuChannel here.
+  if (need_reschedule) {
+    // This stub won't get a chance to reschedule, so update the count now.
+    StubSchedulingChanged(true);
   }
 }
 
 #if defined(OS_ANDROID)
 void GpuChannel::OnRegisterStreamTextureProxy(
-    int32 stream_id,  const gfx::Size& initial_size, int32* route_id) {
+    int32 stream_id, int32* route_id) {
   // Note that route_id is only used for notifications sent out from here.
   // StreamTextureManager owns all texture objects and for incoming messages
   // it finds the correct object based on stream_id.
   *route_id = GenerateRouteID();
-  stream_texture_manager_->RegisterStreamTextureProxy(
-      stream_id, initial_size, *route_id);
+  stream_texture_manager_->RegisterStreamTextureProxy(stream_id, *route_id);
 }
 
 void GpuChannel::OnEstablishStreamTexture(
     int32 stream_id, int32 primary_id, int32 secondary_id) {
   stream_texture_manager_->EstablishStreamTexture(
       stream_id, primary_id, secondary_id);
+}
+
+void GpuChannel::OnSetStreamTextureSize(
+    int32 stream_id, const gfx::Size& size) {
+  stream_texture_manager_->SetStreamTextureSize(stream_id, size);
 }
 #endif
 
@@ -935,7 +950,8 @@ void GpuChannel::MessageProcessed() {
     io_message_loop_->PostTask(
         FROM_HERE,
         base::Bind(&GpuChannelMessageFilter::MessageProcessed,
-                   filter_, messages_processed_));
+                   filter_,
+                   messages_processed_));
   }
 }
 

@@ -24,10 +24,8 @@ class VideoCaptureDeviceLinux : public VideoCaptureDevice {
   virtual ~VideoCaptureDeviceLinux();
 
   // VideoCaptureDevice implementation.
-  virtual void Allocate(int width,
-                        int height,
-                        int frame_rate,
-                        EventHandler* observer) OVERRIDE;
+  virtual void Allocate(const VideoCaptureCapability& capture_format,
+                         EventHandler* observer) OVERRIDE;
   virtual void Start() OVERRIDE;
   virtual void Stop() OVERRIDE;
   virtual void DeAllocate() OVERRIDE;
@@ -70,6 +68,7 @@ class VideoCaptureDeviceLinux : public VideoCaptureDevice {
   base::Thread v4l2_thread_;  // Thread used for reading data from the device.
   Buffer* buffer_pool_;
   int buffer_pool_size_;  // Number of allocated buffers.
+  int timeout_count_;
 
   DISALLOW_IMPLICIT_CONSTRUCTORS(VideoCaptureDeviceLinux);
 };

@@ -4,7 +4,9 @@
 
 #include "chrome/test/nacl/nacl_browsertest_util.h"
 
+#include <stdlib.h>
 #include "base/command_line.h"
+#include "base/environment.h"
 #include "base/json/json_reader.h"
 #include "base/path_service.h"
 #include "base/values.h"
@@ -15,9 +17,8 @@
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/plugin_service.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/webplugininfo.h"
 #include "net/base/net_util.h"
-#include "webkit/plugins/webplugininfo.h"
-
 
 typedef TestMessageHandler::MessageResponse MessageResponse;
 
@@ -177,6 +178,15 @@ static bool GetNaClVariantRoot(const base::FilePath::StringType& variant,
   return true;
 }
 
+static void AddPnaclParm(const base::FilePath::StringType& url,
+                         base::FilePath::StringType* url_with_parm) {
+  if (url.find(FILE_PATH_LITERAL("?")) == base::FilePath::StringType::npos) {
+    *url_with_parm = url + FILE_PATH_LITERAL("?pnacl=1");
+  } else {
+    *url_with_parm = url + FILE_PATH_LITERAL("&pnacl=1");
+  }
+}
+
 NaClBrowserTestBase::NaClBrowserTestBase() {
 }
 
@@ -184,7 +194,6 @@ NaClBrowserTestBase::~NaClBrowserTestBase() {
 }
 
 void NaClBrowserTestBase::SetUpCommandLine(CommandLine* command_line) {
-  command_line->AppendSwitch(switches::kNoFirstRun);
   command_line->AppendSwitch(switches::kEnableNaCl);
 }
 
@@ -192,7 +201,7 @@ void NaClBrowserTestBase::SetUpInProcessBrowserTestFixture() {
   // Sanity check.
   base::FilePath plugin_lib;
   ASSERT_TRUE(PathService::Get(chrome::FILE_NACL_PLUGIN, &plugin_lib));
-  ASSERT_TRUE(file_util::PathExists(plugin_lib)) << plugin_lib.value();
+  ASSERT_TRUE(base::PathExists(plugin_lib)) << plugin_lib.value();
 
   ASSERT_TRUE(StartTestServer()) << "Cannot start test server.";
 }
@@ -224,7 +233,11 @@ bool NaClBrowserTestBase::RunJavascriptTest(const GURL& url,
 void NaClBrowserTestBase::RunLoadTest(
     const base::FilePath::StringType& test_file) {
   LoadTestMessageHandler handler;
-  bool ok = RunJavascriptTest(TestURL(test_file), &handler);
+  base::FilePath::StringType test_file_with_parm = test_file;
+  if (IsPnacl()) {
+    AddPnaclParm(test_file, &test_file_with_parm);
+  }
+  bool ok = RunJavascriptTest(TestURL(test_file_with_parm), &handler);
   ASSERT_TRUE(ok) << handler.error_message();
   ASSERT_TRUE(handler.test_passed()) << "Test failed.";
 }
@@ -232,7 +245,11 @@ void NaClBrowserTestBase::RunLoadTest(
 void NaClBrowserTestBase::RunNaClIntegrationTest(
     const base::FilePath::StringType& url_fragment) {
   NaClIntegrationMessageHandler handler;
-  bool ok = RunJavascriptTest(TestURL(url_fragment), &handler);
+  base::FilePath::StringType url_fragment_with_parm = url_fragment;
+  if (IsPnacl()) {
+    AddPnaclParm(url_fragment, &url_fragment_with_parm);
+  }
+  bool ok = RunJavascriptTest(TestURL(url_fragment_with_parm), &handler);
   ASSERT_TRUE(ok) << handler.error_message();
   ASSERT_TRUE(handler.test_passed()) << "Test failed.";
 }
@@ -242,9 +259,10 @@ bool NaClBrowserTestBase::StartTestServer() {
   base::FilePath document_root;
   if (!GetDocumentRoot(&document_root))
     return false;
-  test_server_.reset(new net::TestServer(net::TestServer::TYPE_HTTP,
-                                         net::TestServer::kLocalhost,
-                                         document_root));
+  test_server_.reset(new net::SpawnedTestServer(
+                         net::SpawnedTestServer::TYPE_HTTP,
+                         net::SpawnedTestServer::kLocalhost,
+                         document_root));
   return test_server_->Start();
 }
 
@@ -267,6 +285,11 @@ bool NaClBrowserTestPnacl::IsPnacl() {
 void NaClBrowserTestPnacl::SetUpCommandLine(CommandLine* command_line) {
   NaClBrowserTestBase::SetUpCommandLine(command_line);
   command_line->AppendSwitch(switches::kEnablePnacl);
+}
+
+NaClBrowserTestPnaclWithOldCache::NaClBrowserTestPnaclWithOldCache() {
+  scoped_ptr<base::Environment> env(base::Environment::Create());
+  env->SetVar("PNACL_USE_OLD_CACHE", "true");
 }
 
 base::FilePath::StringType NaClBrowserTestStatic::Variant() {

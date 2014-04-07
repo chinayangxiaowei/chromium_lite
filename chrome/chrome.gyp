@@ -10,10 +10,13 @@
     # the link of the actual chrome (or chromium) executable on
     # Linux or Mac, and into chrome.dll on Windows.
     # NOTE: Most new includes should go in the OS!="ios" condition below.
-    'chromium_dependencies': [
+    'chromium_browser_dependencies': [
       'common',
       'browser',
-      '../content/content.gyp:content_app',
+      '../sync/sync.gyp:sync',
+    ],
+    'chromium_child_dependencies': [
+      'common',
       '../sync/sync.gyp:sync',
     ],
     'allocator_target': '../base/allocator/allocator.gyp:allocator',
@@ -24,7 +27,11 @@
     'apply_locales_cmd': ['python', '<(DEPTH)/build/apply_locales.py'],
     'conditions': [
       ['OS!="ios"', {
-        'chromium_dependencies': [
+        'chromium_browser_dependencies': [
+          '../printing/printing.gyp:printing',
+          '../ppapi/ppapi_internal.gyp:ppapi_host',
+        ],
+        'chromium_child_dependencies': [
           'debugger',
           'plugin',
           'renderer',
@@ -32,31 +39,19 @@
           '../content/content.gyp:content_gpu',
           '../content/content.gyp:content_ppapi_plugin',
           '../content/content.gyp:content_worker',
-          '../printing/printing.gyp:printing',
-          '../third_party/WebKit/Source/WebKit/chromium/WebKit.gyp:inspector_resources',
+          '../third_party/WebKit/Source/devtools/devtools.gyp:devtools_frontend_resources',
         ],
       }],
       ['OS=="win"', {
-        'nacl_defines': [
-          'NACL_WINDOWS=1',
-          'NACL_LINUX=0',
-          'NACL_OSX=0',
-        ],
         'platform_locale_settings_grd':
             'app/resources/locale_settings_win.grd',
       },],
-      ['OS!="android" and OS!="ios"', {
-        'chromium_dependencies': [
-          # Android doesn't use the service process (only needed for print).
+      ['enable_printing==1', {
+        'chromium_browser_dependencies': [
           'service',
         ],
       }],
       ['OS=="linux"', {
-        'nacl_defines': [
-          'NACL_WINDOWS=0',
-          'NACL_LINUX=1',
-          'NACL_OSX=0',
-        ],
         'conditions': [
           ['chromeos==1', {
             'conditions': [
@@ -80,11 +75,6 @@
       },],
       ['OS=="mac"', {
         'tweak_info_plist_path': '../build/mac/tweak_info_plist.py',
-        'nacl_defines': [
-          'NACL_WINDOWS=0',
-          'NACL_LINUX=0',
-          'NACL_OSX=1',
-        ],
         'platform_locale_settings_grd':
             'app/resources/locale_settings_mac.grd',
         'conditions': [
@@ -101,32 +91,6 @@
           }],  # branding
         ],  # conditions
       }],  # OS=="mac"
-      # TODO(mcgrathr): This duplicates native_client/build/common.gypi;
-      # we should figure out a way to unify the settings.
-      ['target_arch=="ia32"', {
-        'nacl_defines': [
-          'NACL_TARGET_SUBARCH=32',
-          'NACL_TARGET_ARCH=x86',
-          'NACL_BUILD_SUBARCH=32',
-          'NACL_BUILD_ARCH=x86',
-        ],
-      }],
-      ['target_arch=="x64"', {
-        'nacl_defines': [
-          'NACL_TARGET_SUBARCH=64',
-          'NACL_TARGET_ARCH=x86',
-          'NACL_BUILD_SUBARCH=64',
-          'NACL_BUILD_ARCH=x86',
-        ],
-      }],
-      ['target_arch=="arm"', {
-        'nacl_defines': [
-          'NACL_BUILD_ARCH=arm',
-          'NACL_BUILD_SUBARCH=32',
-          'NACL_TARGET_ARCH=arm',
-          'NACL_TARGET_SUBARCH=32',
-        ],
-      }],
     ],  # conditions
   },  # variables
   'includes': [
@@ -143,6 +107,7 @@
     'chrome_installer_util.gypi',
     'chrome_tests_unit.gypi',
     'version.gypi',
+    '../components/nacl/nacl_defines.gypi',
   ],
   'conditions': [
     ['OS!="ios"', {
@@ -202,26 +167,39 @@
             '../third_party/icu/icu.gyp:icui18n',
             '../third_party/icu/icu.gyp:icuuc',
             '../third_party/leveldatabase/leveldatabase.gyp:leveldatabase',
+            '../third_party/libusb/libusb.gyp:libusb',
           ],
           'include_dirs': [
             '..',
           ],
           'sources': [
+            'browser/devtools/adb/android_rsa.cc',
+            'browser/devtools/adb/android_rsa.h',
+            'browser/devtools/adb/android_usb_device.cc',
+            'browser/devtools/adb/android_usb_device.h',
+            'browser/devtools/adb/android_usb_socket.cc',
+            'browser/devtools/adb/android_usb_socket.h',
             'browser/devtools/adb_client_socket.cc',
             'browser/devtools/adb_client_socket.h',
+            'browser/devtools/adb_web_socket.cc',
+            'browser/devtools/adb_web_socket.h',
             'browser/devtools/browser_list_tabcontents_provider.cc',
             'browser/devtools/browser_list_tabcontents_provider.h',
             'browser/devtools/devtools_adb_bridge.cc',
             'browser/devtools/devtools_adb_bridge.h',
             'browser/devtools/devtools_file_helper.cc',
             'browser/devtools/devtools_file_helper.h',
+            'browser/devtools/devtools_file_system_indexer.cc',
+            'browser/devtools/devtools_file_system_indexer.h',
+            'browser/devtools/devtools_protocol.cc',
+            'browser/devtools/devtools_protocol.h',
             'browser/devtools/devtools_toggle_action.h',
             'browser/devtools/devtools_window.cc',
             'browser/devtools/devtools_window.h',
-            'browser/devtools/protocol_http_request.cc',
-            'browser/devtools/protocol_http_request.h',
             'browser/devtools/remote_debugging_server.cc',
             'browser/devtools/remote_debugging_server.h',
+            'browser/devtools/tethering_adb_filter.cc',
+            'browser/devtools/tethering_adb_filter.h',
           ],
           'conditions': [
             ['toolkit_uses_gtk == 1', {
@@ -230,6 +208,9 @@
               ],
             }],
             ['OS=="android"', {
+              'dependencies!': [
+                '../third_party/libusb/libusb.gyp:libusb',
+              ],
               'sources!': [
                 'browser/devtools/browser_list_tabcontents_provider.cc',
                 'browser/devtools/devtools_window.cc',
@@ -270,16 +251,56 @@
           'dependencies': [
             '../base/base.gyp:base',
             '../content/content.gyp:content_utility',
+            '../media/media.gyp:media',
             '../skia/skia.gyp:skia',
+            '../third_party/libxml/libxml.gyp:libxml',
+            'common',
+            '<(DEPTH)/chrome/chrome_resources.gyp:chrome_resources',
+            '<(DEPTH)/chrome/chrome_resources.gyp:chrome_strings',
           ],
           'sources': [
             'utility/chrome_content_utility_client.cc',
             'utility/chrome_content_utility_client.h',
+            'utility/extensions/unpacker.cc',
+            'utility/extensions/unpacker.h',
+            'utility/importer/bookmark_html_reader.cc',
+            'utility/importer/bookmark_html_reader.h',
+            'utility/importer/bookmarks_file_importer.cc',
+            'utility/importer/bookmarks_file_importer.h',
+            'utility/importer/external_process_importer_bridge.cc',
+            'utility/importer/external_process_importer_bridge.h',
+            'utility/importer/favicon_reencode.cc',
+            'utility/importer/favicon_reencode.h',
+            'utility/importer/firefox_importer.cc',
+            'utility/importer/firefox_importer.h',
+            'utility/importer/firefox_importer_unittest_messages_internal.h',
+            'utility/importer/firefox_importer_unittest_utils.h',
+            'utility/importer/firefox_importer_unittest_utils_mac.cc',
+            'utility/importer/ie_importer_win.cc',
+            'utility/importer/ie_importer_win.h',
+            'utility/importer/importer.cc',
+            'utility/importer/importer.h',
+            'utility/importer/importer_creator.cc',
+            'utility/importer/importer_creator.h',
+            'utility/importer/nss_decryptor.cc',
+            'utility/importer/nss_decryptor.h',
+            'utility/importer/nss_decryptor_mac.h',
+            'utility/importer/nss_decryptor_mac.mm',
+            'utility/importer/nss_decryptor_win.cc',
+            'utility/importer/nss_decryptor_win.h',
+            'utility/importer/safari_importer.h',
+            'utility/importer/safari_importer.mm',
+            'utility/media_galleries/itunes_pref_parser_win.cc',
+            'utility/media_galleries/itunes_pref_parser_win.h',
             'utility/profile_import_handler.cc',
             'utility/profile_import_handler.h',
+            'utility/utility_message_handler.h',
+            'utility/web_resource_unpacker.cc',
+            'utility/web_resource_unpacker.h',
           ],
           'include_dirs': [
             '..',
+            '<(grit_out_dir)',
           ],
           'conditions': [
             ['toolkit_uses_gtk == 1', {
@@ -287,108 +308,49 @@
                 '../build/linux/system.gyp:gtk',
               ],
             }],
-            ['OS=="android"', {
-              'sources!': [
-                'utility/profile_import_handler.cc',
+            ['OS=="win" or OS=="mac"', {
+              'sources': [
+                'utility/media_galleries/itunes_library_parser.cc',
+                'utility/media_galleries/itunes_library_parser.h',
+                'utility/media_galleries/picasa_album_table_reader.cc',
+                'utility/media_galleries/picasa_album_table_reader.h',
+                'utility/media_galleries/picasa_albums_indexer.cc',
+                'utility/media_galleries/picasa_albums_indexer.h',
+                'utility/media_galleries/pmp_column_reader.cc',
+                'utility/media_galleries/pmp_column_reader.h',
               ],
+            }],
+            ['use_openssl==1', {
+              'sources!': [
+                'utility/importer/nss_decryptor.cc',
+              ]
+            }],
+            ['OS!="win" and OS!="mac" and use_openssl==0', {
+              'dependencies': [
+                '../crypto/crypto.gyp:crypto',
+              ],
+              'sources': [
+                'utility/importer/nss_decryptor_system_nss.cc',
+                'utility/importer/nss_decryptor_system_nss.h',
+              ],
+            }],
+            ['OS=="android"', {
+              'sources/': [
+                ['exclude', '^utility/importer/'],
+                ['exclude', '^utility/profile_import_handler\.cc'],
+              ],
+            }],
+            ['enable_mdns == 1', {
+              'sources': [
+                'utility/local_discovery/service_discovery_client_impl.cc',
+                'utility/local_discovery/service_discovery_client_impl.h',
+                'utility/local_discovery/service_discovery_message_handler.cc',
+                'utility/local_discovery/service_discovery_message_handler.h',
+              ]
             }],
           ],
           # TODO(jschuh): crbug.com/167187 fix size_t to int truncations.
           'msvs_disabled_warnings': [ 4267, ],
-        },
-        {
-          'target_name': 'service',
-          'type': 'static_library',
-          'variables': { 'enable_wexit_time_destructors': 1, },
-          'dependencies': [
-            'chrome_resources.gyp:chrome_strings',
-            'common',
-            'common_net',
-            '../base/base.gyp:base',
-            '../google_apis/google_apis.gyp:google_apis',
-            '../jingle/jingle.gyp:notifier',
-            '../net/net.gyp:net',
-            '../printing/printing.gyp:printing',
-            '../skia/skia.gyp:skia',
-            '../third_party/libjingle/libjingle.gyp:libjingle',
-          ],
-          'sources': [
-            'service/chrome_service_application_mac.h',
-            'service/chrome_service_application_mac.mm',
-            'service/service_ipc_server.cc',
-            'service/service_ipc_server.h',
-            'service/service_main.cc',
-            'service/service_process.cc',
-            'service/service_process.h',
-            'service/service_process_prefs.cc',
-            'service/service_process_prefs.h',
-            'service/service_utility_process_host.cc',
-            'service/service_utility_process_host.h',
-            'service/cloud_print/cloud_print_auth.cc',
-            'service/cloud_print/cloud_print_auth.h',
-            'service/cloud_print/cloud_print_connector.cc',
-            'service/cloud_print/cloud_print_connector.h',
-            'service/cloud_print/cloud_print_helpers.cc',
-            'service/cloud_print/cloud_print_helpers.h',
-            'service/cloud_print/cloud_print_proxy.cc',
-            'service/cloud_print/cloud_print_proxy.h',
-            'service/cloud_print/cloud_print_proxy_backend.cc',
-            'service/cloud_print/cloud_print_proxy_backend.h',
-            'service/cloud_print/cloud_print_token_store.cc',
-            'service/cloud_print/cloud_print_token_store.h',
-            'service/cloud_print/cloud_print_url_fetcher.cc',
-            'service/cloud_print/cloud_print_url_fetcher.h',
-            'service/cloud_print/cloud_print_wipeout.cc',
-            'service/cloud_print/cloud_print_wipeout.h',
-            'service/cloud_print/connector_settings.cc',
-            'service/cloud_print/connector_settings.h',
-            'service/cloud_print/job_status_updater.cc',
-            'service/cloud_print/job_status_updater.h',
-            'service/cloud_print/print_system_dummy.cc',
-            'service/cloud_print/print_system.cc',
-            'service/cloud_print/print_system.h',
-            'service/cloud_print/printer_job_handler.cc',
-            'service/cloud_print/printer_job_handler.h',
-            'service/cloud_print/printer_job_queue_handler.cc',
-            'service/cloud_print/printer_job_queue_handler.h',
-            'service/gaia/service_gaia_authenticator.cc',
-            'service/gaia/service_gaia_authenticator.h',
-            'service/net/service_url_request_context.cc',
-            'service/net/service_url_request_context.h',
-          ],
-          'include_dirs': [
-            '..',
-          ],
-          'conditions': [
-            ['OS=="win"', {
-              'defines': [
-                # CP_PRINT_SYSTEM_AVAILABLE disables default dummy implementation
-                # of cloud print system, and allows to use custom implementaiton.
-                'CP_PRINT_SYSTEM_AVAILABLE',
-              ],
-              'sources': [
-                'service/cloud_print/print_system_win.cc',
-              ],
-            }],
-            ['toolkit_uses_gtk == 1', {
-              'dependencies': [
-                '../build/linux/system.gyp:gtk',
-              ],
-            }],
-            ['use_cups==1', {
-              'dependencies': [
-                '../printing/printing.gyp:cups',
-              ],
-              'defines': [
-                # CP_PRINT_SYSTEM_AVAILABLE disables default dummy implementation
-                # of cloud print system, and allows to use custom implementaiton.
-                'CP_PRINT_SYSTEM_AVAILABLE',
-              ],
-              'sources': [
-                'service/cloud_print/print_system_cups.cc',
-              ],
-            }],
-          ],
         },
         {
           'target_name': 'ipclist',
@@ -863,7 +825,7 @@
           ],
         },
       ],
-    },],  # OS=="linux"
+    }],  # OS=="linux"
     ['OS=="win"',
       { 'targets': [
         {
@@ -1035,10 +997,35 @@
             'tools/safe_browsing/sb_sigutil.cc',
           ],
         },
-      ]},  # 'targets'
-    ],  # OS=="win"
+      ],  # 'targets'
+      'includes': [
+        'chrome_process_finder.gypi',
+        'metro_utils.gypi',
+      ],
+    }],  # OS=="win"
     ['OS=="win" and target_arch=="ia32"',
       { 'targets': [
+        {
+          'target_name': 'chrome_user32_delay_imports',
+          'type': 'none',
+          'variables': {
+            'lib_dir': '<(INTERMEDIATE_DIR)',
+          },
+          'sources': [
+              'chrome.user32.delay.imports'
+          ],
+          'includes': [
+              '../build/win/importlibs/create_import_lib.gypi',
+          ],
+          'direct_dependent_settings': {
+            'msvs_settings': {
+              'VCLinkerTool': {
+                'AdditionalLibraryDirectories': ['<(lib_dir)', ],
+                'AdditionalDependencies': ['chrome.user32.delay.lib', ],
+              },
+            },
+          },
+        },
         {
           'target_name': 'crash_service_win64',
           'type': 'executable',
@@ -1085,10 +1072,14 @@
           'target_name': 'chrome_java',
           'type': 'none',
           'dependencies': [
+            'chrome_resources.gyp:chrome_strings',
             'profile_sync_service_model_type_selection_java',
+            'resource_id_java',
             'toolbar_model_security_levels_java',
             '../base/base.gyp:base',
+            '../components/components.gyp:autofill_java',
             '../components/components.gyp:navigation_interception_java',
+            '../components/components.gyp:sessions',
             '../components/components.gyp:web_contents_delegate_android_java',
             '../content/content.gyp:content_java',
             '../sync/sync.gyp:sync_java',
@@ -1101,6 +1092,9 @@
             'R_package': 'org.chromium.chrome',
             'R_package_relpath': 'org/chromium/chrome',
             'java_strings_grd': 'android_chrome_strings.grd',
+            # Include xml string files generated from generated_resources.grd
+            'res_extra_dirs': ['<(SHARED_INTERMEDIATE_DIR)/chrome/java/res'],
+            'res_extra_files': ['<!@pymod_do_main(grit_info <@(grit_defines) --outputs "<(SHARED_INTERMEDIATE_DIR)/chrome" app/generated_resources.grd)'],
           },
           'includes': [
             '../build/java.gypi',
@@ -1111,5 +1105,104 @@
         'chrome_android.gypi',
       ]}, # 'includes'
     ],  # OS=="android"
+    ['configuration_policy==1 and OS!="android"', {
+      'includes': [ 'policy.gypi', ],
+    }],
+    ['enable_printing==1', {
+      'targets': [
+        {
+          'target_name': 'service',
+          'type': 'static_library',
+          'variables': { 'enable_wexit_time_destructors': 1, },
+          'dependencies': [
+            'chrome_resources.gyp:chrome_strings',
+            'common',
+            'common_net',
+            '../base/base.gyp:base',
+            '../google_apis/google_apis.gyp:google_apis',
+            '../jingle/jingle.gyp:notifier',
+            '../net/net.gyp:net',
+            '../printing/printing.gyp:printing',
+            '../skia/skia.gyp:skia',
+            '../third_party/libjingle/libjingle.gyp:libjingle',
+          ],
+          'sources': [
+            'service/chrome_service_application_mac.h',
+            'service/chrome_service_application_mac.mm',
+            'service/service_ipc_server.cc',
+            'service/service_ipc_server.h',
+            'service/service_main.cc',
+            'service/service_process.cc',
+            'service/service_process.h',
+            'service/service_process_prefs.cc',
+            'service/service_process_prefs.h',
+            'service/service_utility_process_host.cc',
+            'service/service_utility_process_host.h',
+            'service/cloud_print/cloud_print_auth.cc',
+            'service/cloud_print/cloud_print_auth.h',
+            'service/cloud_print/cloud_print_connector.cc',
+            'service/cloud_print/cloud_print_connector.h',
+            'service/cloud_print/cloud_print_helpers.cc',
+            'service/cloud_print/cloud_print_helpers.h',
+            'service/cloud_print/cloud_print_proxy.cc',
+            'service/cloud_print/cloud_print_proxy.h',
+            'service/cloud_print/cloud_print_proxy_backend.cc',
+            'service/cloud_print/cloud_print_proxy_backend.h',
+            'service/cloud_print/cloud_print_token_store.cc',
+            'service/cloud_print/cloud_print_token_store.h',
+            'service/cloud_print/cloud_print_url_fetcher.cc',
+            'service/cloud_print/cloud_print_url_fetcher.h',
+            'service/cloud_print/cloud_print_wipeout.cc',
+            'service/cloud_print/cloud_print_wipeout.h',
+            'service/cloud_print/connector_settings.cc',
+            'service/cloud_print/connector_settings.h',
+            'service/cloud_print/job_status_updater.cc',
+            'service/cloud_print/job_status_updater.h',
+            'service/cloud_print/print_system_dummy.cc',
+            'service/cloud_print/print_system.cc',
+            'service/cloud_print/print_system.h',
+            'service/cloud_print/printer_job_handler.cc',
+            'service/cloud_print/printer_job_handler.h',
+            'service/cloud_print/printer_job_queue_handler.cc',
+            'service/cloud_print/printer_job_queue_handler.h',
+            'service/net/service_url_request_context.cc',
+            'service/net/service_url_request_context.h',
+          ],
+          'include_dirs': [
+            '..',
+          ],
+          'conditions': [
+            ['OS=="win"', {
+              'defines': [
+                # CP_PRINT_SYSTEM_AVAILABLE disables default dummy implementation
+                # of cloud print system, and allows to use custom implementaiton.
+                'CP_PRINT_SYSTEM_AVAILABLE',
+              ],
+              'sources': [
+                'service/cloud_print/print_system_win.cc',
+              ],
+            }],
+            ['toolkit_uses_gtk == 1', {
+              'dependencies': [
+                '../build/linux/system.gyp:gtk',
+              ],
+            }],
+            ['use_cups==1', {
+              'dependencies': [
+                '../printing/printing.gyp:cups',
+              ],
+              'defines': [
+                # CP_PRINT_SYSTEM_AVAILABLE disables default dummy implementation
+                # of cloud print system, and allows to use custom implementaiton.
+                'CP_PRINT_SYSTEM_AVAILABLE',
+              ],
+              'sources': [
+                'service/cloud_print/print_system_cups.cc',
+              ],
+            }],
+          ],
+        },
+      ],
+    }],
   ],  # 'conditions'
 }

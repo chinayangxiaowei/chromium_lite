@@ -4,7 +4,7 @@
 
 #include "chrome/browser/ui/views/reload_button.h"
 
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/command_updater.h"
 #include "chrome/browser/search/search.h"
@@ -19,8 +19,8 @@
 #include "ui/views/metrics.h"
 #include "ui/views/widget/widget.h"
 
-// static
-const char ReloadButton::kViewClassName[] = "browser/ui/views/ReloadButton";
+
+namespace {
 
 const int kReloadImages[] =
     { IDR_RELOAD, IDR_RELOAD_H, IDR_RELOAD_P, IDR_RELOAD_D };
@@ -34,12 +34,17 @@ const int kReloadMenuItems[]  = {
   IDS_RELOAD_MENU_EMPTY_AND_HARD_RELOAD_ITEM,
 };
 
-////////////////////////////////////////////////////////////////////////////////
-// ReloadButton, public:
+}  // namespace
+
+
+// ReloadButton ---------------------------------------------------------------
+
+// static
+const char ReloadButton::kViewClassName[] = "ReloadButton";
 
 ReloadButton::ReloadButton(LocationBarView* location_bar,
                            CommandUpdater* command_updater)
-    : ALLOW_THIS_IN_INITIALIZER_LIST(ButtonDropDown(this, CreateMenuModel())),
+    : ButtonDropDown(this, CreateMenuModel()),
       location_bar_(location_bar),
       command_updater_(command_updater),
       intended_mode_(MODE_RELOAD),
@@ -104,8 +109,41 @@ void ReloadButton::LoadImages(ui::ThemeProvider* tp) {
   PreferredSizeChanged();
 }
 
-////////////////////////////////////////////////////////////////////////////////
-// ReloadButton, views::ButtonListener implementation:
+void ReloadButton::OnMouseExited(const ui::MouseEvent& event) {
+  ButtonDropDown::OnMouseExited(event);
+  if (!IsMenuShowing())
+    ChangeMode(intended_mode_, true);
+}
+
+bool ReloadButton::GetTooltipText(const gfx::Point& p,
+                                  string16* tooltip) const {
+  int reload_tooltip = menu_enabled_ ?
+      IDS_TOOLTIP_RELOAD_WITH_MENU : IDS_TOOLTIP_RELOAD;
+  int text_id = (visible_mode_ == MODE_RELOAD) ?
+      reload_tooltip : IDS_TOOLTIP_STOP;
+  tooltip->assign(l10n_util::GetStringUTF16(text_id));
+  return true;
+}
+
+const char* ReloadButton::GetClassName() const {
+  return kViewClassName;
+}
+
+void ReloadButton::GetAccessibleState(ui::AccessibleViewState* state) {
+  if (menu_enabled_)
+    ButtonDropDown::GetAccessibleState(state);
+  else
+    CustomButton::GetAccessibleState(state);
+}
+
+bool ReloadButton::ShouldShowMenu() {
+  return menu_enabled_ && (visible_mode_ == MODE_RELOAD);
+}
+
+void ReloadButton::ShowDropDownMenu(ui::MenuSourceType source_type) {
+  ButtonDropDown::ShowDropDownMenu(source_type);  // Blocks.
+  ChangeMode(intended_mode_, true);
+}
 
 void ReloadButton::ButtonPressed(views::Button* /* button */,
                                  const ui::Event& event) {
@@ -142,41 +180,6 @@ void ReloadButton::ButtonPressed(views::Button* /* button */,
     ++testing_reload_count_;
   }
 }
-
-////////////////////////////////////////////////////////////////////////////////
-// ReloadButton, View overrides:
-
-void ReloadButton::OnMouseExited(const ui::MouseEvent& event) {
-  ButtonDropDown::OnMouseExited(event);
-  if (!IsMenuShowing())
-    ChangeMode(intended_mode_, true);
-}
-
-bool ReloadButton::GetTooltipText(const gfx::Point& p,
-                                  string16* tooltip) const {
-  int reload_tooltip = menu_enabled_ ?
-      IDS_TOOLTIP_RELOAD_WITH_MENU : IDS_TOOLTIP_RELOAD;
-  int text_id = (visible_mode_ == MODE_RELOAD) ?
-      reload_tooltip : IDS_TOOLTIP_STOP;
-  tooltip->assign(l10n_util::GetStringUTF16(text_id));
-  return true;
-}
-
-std::string ReloadButton::GetClassName() const {
-  return kViewClassName;
-}
-
-bool ReloadButton::ShouldShowMenu() {
-  return menu_enabled_ && (visible_mode_ == MODE_RELOAD);
-}
-
-void ReloadButton::ShowDropDownMenu() {
-  ButtonDropDown::ShowDropDownMenu();  // Blocks.
-  ChangeMode(intended_mode_, true);
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// ReloadButton, ui::SimpleMenuModel::Delegate overrides:
 
 bool ReloadButton::IsCommandIdChecked(int command_id) const {
   return false;
@@ -220,9 +223,6 @@ void ReloadButton::ExecuteCommand(int command_id, int event_flags) {
   }
   ExecuteBrowserCommand(browser_command, event_flags);
 }
-
-////////////////////////////////////////////////////////////////////////////////
-// ReloadButton, private:
 
 ui::SimpleMenuModel* ReloadButton::CreateMenuModel() {
   ui::SimpleMenuModel* menu_model = new ui::SimpleMenuModel(this);

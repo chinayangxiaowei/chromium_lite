@@ -8,14 +8,11 @@
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/permissions/permission_set.h"
+#include "extensions/common/switches.h"
 #include "net/dns/mock_host_resolver.h"
 
-using extensions::APIPermission;
-using extensions::APIPermissionSet;
-using extensions::PermissionSet;
-using extensions::URLPatternSet;
+namespace extensions {
 
 namespace {
 
@@ -80,14 +77,14 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, OptionalPermissionsGranted) {
   scoped_refptr<PermissionSet> granted_permissions =
       new PermissionSet(apis, explicit_hosts, URLPatternSet());
 
-  extensions::ExtensionPrefs* prefs =
+  ExtensionPrefs* prefs =
       browser()->profile()->GetExtensionService()->extension_prefs();
   prefs->AddGrantedPermissions("kjmkgkdkpedkejedfhmfcenooemhbpbo",
-                               granted_permissions);
+                               granted_permissions.get());
 
   PermissionsRequestFunction::SetIgnoreUserGestureForTests(true);
   host_resolver()->AddRule("*.com", "127.0.0.1");
-  ASSERT_TRUE(StartTestServer());
+  ASSERT_TRUE(StartEmbeddedTestServer());
   EXPECT_TRUE(RunExtensionTest("permissions/optional")) << message_;
 }
 
@@ -98,18 +95,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, OptionalPermissionsAutoConfirm) {
   PermissionsRequestFunction::SetAutoConfirmForTests(true);
   PermissionsRequestFunction::SetIgnoreUserGestureForTests(true);
   host_resolver()->AddRule("*.com", "127.0.0.1");
-  ASSERT_TRUE(StartTestServer());
+  ASSERT_TRUE(StartEmbeddedTestServer());
   EXPECT_TRUE(RunExtensionTest("permissions/optional")) << message_;
-}
-
-// Tests that the optional permissions API works correctly with complex
-// permissions.
-IN_PROC_BROWSER_TEST_F(ExtensionApiTest, ComplexOptionalPermissions) {
-  // Rather than setting the granted permissions, set the UI autoconfirm flag
-  // and run the same tests.
-  PermissionsRequestFunction::SetAutoConfirmForTests(true);
-  PermissionsRequestFunction::SetIgnoreUserGestureForTests(true);
-  EXPECT_TRUE(RunExtensionTest("permissions/complex_optional")) << message_;
 }
 
 // Test that denying the optional permissions confirmation dialog works.
@@ -117,7 +104,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, OptionalPermissionsDeny) {
   PermissionsRequestFunction::SetAutoConfirmForTests(false);
   PermissionsRequestFunction::SetIgnoreUserGestureForTests(true);
   host_resolver()->AddRule("*.com", "127.0.0.1");
-  ASSERT_TRUE(StartTestServer());
+  ASSERT_TRUE(StartEmbeddedTestServer());
   EXPECT_TRUE(RunExtensionTest("permissions/optional_deny")) << message_;
 }
 
@@ -126,7 +113,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, OptionalPermissionsDeny) {
 IN_PROC_BROWSER_TEST_F(ExtensionApiTest, OptionalPermissionsGesture) {
   PermissionsRequestFunction::SetIgnoreUserGestureForTests(false);
   host_resolver()->AddRule("*.com", "127.0.0.1");
-  ASSERT_TRUE(StartTestServer());
+  ASSERT_TRUE(StartEmbeddedTestServer());
   EXPECT_TRUE(RunExtensionTest("permissions/optional_gesture")) << message_;
 }
 
@@ -137,7 +124,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, OptionalPermissionsFileAccess) {
   PermissionsRequestFunction::SetAutoConfirmForTests(false);
   PermissionsRequestFunction::SetIgnoreUserGestureForTests(true);
 
-  extensions::ExtensionPrefs* prefs =
+  ExtensionPrefs* prefs =
       browser()->profile()->GetExtensionService()->extension_prefs();
 
   EXPECT_TRUE(
@@ -163,3 +150,5 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, HostSubsets) {
   PermissionsRequestFunction::SetIgnoreUserGestureForTests(true);
   EXPECT_TRUE(RunExtensionTest("permissions/host_subsets")) << message_;
 }
+
+}  // namespace extensions

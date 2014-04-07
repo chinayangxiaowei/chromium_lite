@@ -7,15 +7,18 @@
 #include <UIAutomationClient.h>
 #include <UIAutomationCoreApi.h>
 
-#include "base/string_number_conversions.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/win/enum_variant.h"
 #include "base/win/scoped_comptr.h"
 #include "base/win/windows_version.h"
 #include "content/browser/accessibility/browser_accessibility_manager_win.h"
 #include "content/common/accessibility_messages.h"
+#include "content/public/common/content_client.h"
 #include "ui/base/accessibility/accessible_text_utils.h"
+#include "ui/base/win/accessibility_ids_win.h"
 #include "ui/base/win/accessibility_misc_utils.h"
 
 namespace content {
@@ -31,6 +34,10 @@ const GUID GUID_IAccessibleContentDocument = {
     0x95, 0x21, 0x07, 0xed, 0x28, 0xfb, 0x07, 0x2e};
 
 const char16 BrowserAccessibilityWin::kEmbeddedCharacter[] = L"\xfffc";
+
+// static
+LONG BrowserAccessibilityWin::next_unique_id_win_ =
+    base::win::kFirstBrowserAccessibilityManagerAccessibilityId;
 
 //
 // BrowserAccessibilityRelation
@@ -188,6 +195,16 @@ BrowserAccessibilityWin::BrowserAccessibilityWin()
       ia2_state_(0),
       first_time_(true),
       old_ia_state_(0) {
+  // Start unique IDs at -1 and decrement each time, because get_accChild
+  // uses positive IDs to enumerate children, so we use negative IDs to
+  // clearly distinguish between indices and unique IDs.
+  unique_id_win_ = next_unique_id_win_;
+  if (next_unique_id_win_ ==
+          base::win::kLastBrowserAccessibilityManagerAccessibilityId) {
+    next_unique_id_win_ =
+        base::win::kFirstBrowserAccessibilityManagerAccessibilityId;
+  }
+  next_unique_id_win_--;
 }
 
 BrowserAccessibilityWin::~BrowserAccessibilityWin() {
@@ -475,6 +492,10 @@ STDMETHODIMP BrowserAccessibilityWin::get_accParent(IDispatch** disp_parent) {
     // This happens if we're the root of the tree;
     // return the IAccessible for the window.
     parent = manager_->ToBrowserAccessibilityManagerWin()->parent_iaccessible();
+    // |parent| can only be NULL if the manager was created before the parent
+    // IAccessible was known and it wasn't subsequently set before a client
+    // requested it. Crash hard if this happens so that we get crash reports.
+    CHECK(parent);
   }
 
   parent->AddRef();
@@ -668,7 +689,7 @@ STDMETHODIMP BrowserAccessibilityWin::get_uniqueID(LONG* unique_id) {
   if (!unique_id)
     return E_INVALIDARG;
 
-  *unique_id = child_id_;
+  *unique_id = unique_id_win_;
   return S_OK;
 }
 
@@ -834,6 +855,77 @@ STDMETHODIMP BrowserAccessibilityWin::get_groupPosition(
   }
 
   return E_NOTIMPL;
+}
+
+//
+// IAccessibleApplication methods.
+//
+
+STDMETHODIMP BrowserAccessibilityWin::get_appName(BSTR* app_name) {
+  // No need to check |instance_active_| because this interface is
+  // global, and doesn't depend on any local state.
+
+  if (!app_name)
+    return E_INVALIDARG;
+
+  // GetProduct() returns a string like "Chrome/aa.bb.cc.dd", split out
+  // the part before the "/".
+  std::vector<std::string> product_components;
+  base::SplitString(GetContentClient()->GetProduct(), '/', &product_components);
+  DCHECK_EQ(2U, product_components.size());
+  if (product_components.size() != 2)
+    return E_FAIL;
+  *app_name = SysAllocString(UTF8ToUTF16(product_components[0]).c_str());
+  DCHECK(*app_name);
+  return *app_name ? S_OK : E_FAIL;
+}
+
+STDMETHODIMP BrowserAccessibilityWin::get_appVersion(BSTR* app_version) {
+  // No need to check |instance_active_| because this interface is
+  // global, and doesn't depend on any local state.
+
+  if (!app_version)
+    return E_INVALIDARG;
+
+  // GetProduct() returns a string like "Chrome/aa.bb.cc.dd", split out
+  // the part after the "/".
+  std::vector<std::string> product_components;
+  base::SplitString(GetContentClient()->GetProduct(), '/', &product_components);
+  DCHECK_EQ(2U, product_components.size());
+  if (product_components.size() != 2)
+    return E_FAIL;
+  *app_version = SysAllocString(UTF8ToUTF16(product_components[1]).c_str());
+  DCHECK(*app_version);
+  return *app_version ? S_OK : E_FAIL;
+}
+
+STDMETHODIMP BrowserAccessibilityWin::get_toolkitName(BSTR* toolkit_name) {
+  // No need to check |instance_active_| because this interface is
+  // global, and doesn't depend on any local state.
+
+  if (!toolkit_name)
+    return E_INVALIDARG;
+
+  // This is hard-coded; all products based on the Chromium engine
+  // will have the same toolkit name, so that assistive technology can
+  // detect any Chrome-based product.
+  *toolkit_name = SysAllocString(L"Chrome");
+  DCHECK(*toolkit_name);
+  return *toolkit_name ? S_OK : E_FAIL;
+}
+
+STDMETHODIMP BrowserAccessibilityWin::get_toolkitVersion(
+    BSTR* toolkit_version) {
+  // No need to check |instance_active_| because this interface is
+  // global, and doesn't depend on any local state.
+
+  if (!toolkit_version)
+    return E_INVALIDARG;
+
+  std::string user_agent = GetContentClient()->GetUserAgent();
+  *toolkit_version = SysAllocString(UTF8ToUTF16(user_agent).c_str());
+  DCHECK(*toolkit_version);
+  return *toolkit_version ? S_OK : E_FAIL;
 }
 
 //
@@ -2250,7 +2342,7 @@ STDMETHODIMP BrowserAccessibilityWin::get_nodeInfo(
   *name_space_id = 0;
   *node_value = SysAllocString(value_.c_str());
   *num_children = children_.size();
-  *unique_id = child_id_;
+  *unique_id = unique_id_win_;
 
   if (ia_role_ == ROLE_SYSTEM_DOCUMENT) {
     *node_type = NODETYPE_DOCUMENT;
@@ -2516,6 +2608,7 @@ STDMETHODIMP BrowserAccessibilityWin::QueryService(REFGUID guidService,
   if (guidService == IID_IAccessible ||
       guidService == IID_IAccessible2 ||
       guidService == IID_IAccessibleAction ||
+      guidService == IID_IAccessibleApplication ||
       guidService == IID_IAccessibleHyperlink ||
       guidService == IID_IAccessibleHypertext ||
       guidService == IID_IAccessibleImage ||
@@ -2865,10 +2958,11 @@ void BrowserAccessibilityWin::PostInitialize() {
     previous_text_ = text;
   }
 
-  HWND hwnd = manager_->ToBrowserAccessibilityManagerWin()->parent_hwnd();
-
   // Fire events if the state has changed.
   if (!first_time_ && ia_state_ != old_ia_state_) {
+    BrowserAccessibilityManagerWin* manager =
+        manager_->ToBrowserAccessibilityManagerWin();
+
     // Normally focus events are handled elsewhere, however
     // focus for managed descendants is platform-specific.
     // Fire a focus event if the focused descendant in a multi-select
@@ -2878,18 +2972,17 @@ void BrowserAccessibilityWin::PostInitialize() {
         (ia_state_ & STATE_SYSTEM_SELECTABLE) &&
         (ia_state_ & STATE_SYSTEM_FOCUSED) &&
         !(old_ia_state_ & STATE_SYSTEM_FOCUSED)) {
-      ::NotifyWinEvent(EVENT_OBJECT_FOCUS, hwnd,
-                       OBJID_CLIENT, child_id());
+      manager->MaybeCallNotifyWinEvent(EVENT_OBJECT_FOCUS, unique_id_win());
     }
 
     if ((ia_state_ & STATE_SYSTEM_SELECTED) &&
         !(old_ia_state_ & STATE_SYSTEM_SELECTED)) {
-      ::NotifyWinEvent(EVENT_OBJECT_SELECTIONADD, hwnd,
-                       OBJID_CLIENT, child_id());
+      manager->MaybeCallNotifyWinEvent(EVENT_OBJECT_SELECTIONADD,
+                                       unique_id_win());
     } else if (!(ia_state_ & STATE_SYSTEM_SELECTED) &&
                (old_ia_state_ & STATE_SYSTEM_SELECTED)) {
-      ::NotifyWinEvent(EVENT_OBJECT_SELECTIONREMOVE, hwnd,
-                       OBJID_CLIENT, child_id());
+      manager->MaybeCallNotifyWinEvent(EVENT_OBJECT_SELECTIONREMOVE,
+                                       unique_id_win());
     }
 
     old_ia_state_ = ia_state_;
@@ -2910,6 +3003,12 @@ bool BrowserAccessibilityWin::IsNative() const {
   return true;
 }
 
+void BrowserAccessibilityWin::SetLocation(const gfx::Rect& new_location) {
+  BrowserAccessibility::SetLocation(new_location);
+  manager_->ToBrowserAccessibilityManagerWin()->MaybeCallNotifyWinEvent(
+      EVENT_OBJECT_LOCATIONCHANGE, unique_id_win());
+}
+
 BrowserAccessibilityWin* BrowserAccessibilityWin::NewReference() {
   AddRef();
   return this;
@@ -2927,7 +3026,8 @@ BrowserAccessibilityWin* BrowserAccessibilityWin::GetTargetFromChildID(
   if (child_id >= 1 && child_id <= static_cast<LONG>(children_.size()))
     return children_[child_id - 1]->ToBrowserAccessibilityWin();
 
-  return manager_->GetFromChildID(child_id)->ToBrowserAccessibilityWin();
+  return manager_->ToBrowserAccessibilityManagerWin()->
+      GetFromUniqueIdWin(child_id);
 }
 
 HRESULT BrowserAccessibilityWin::GetStringAttributeAsBstr(

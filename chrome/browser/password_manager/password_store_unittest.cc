@@ -5,13 +5,13 @@
 #include "base/basictypes.h"
 #include "base/bind.h"
 #include "base/stl_util.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "base/synchronization/waitable_event.h"
-#include "base/time.h"
+#include "base/time/time.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/password_manager/password_form_data.h"
 #include "chrome/browser/password_manager/password_store_consumer.h"
 #include "chrome/browser/password_manager/password_store_default.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/test/base/testing_profile.h"
 #include "content/public/browser/notification_details.h"
 #include "content/public/browser/notification_registrar.h"
@@ -106,11 +106,12 @@ class PasswordStoreTest : public testing::Test {
 
   virtual void TearDown() {
     db_thread_.Stop();
-    MessageLoop::current()->PostTask(FROM_HERE, MessageLoop::QuitClosure());
-    MessageLoop::current()->Run();
+    base::MessageLoop::current()->PostTask(FROM_HERE,
+                                           base::MessageLoop::QuitClosure());
+    base::MessageLoop::current()->Run();
   }
 
-  MessageLoopForUI message_loop_;
+  base::MessageLoopForUI message_loop_;
   content::TestBrowserThread ui_thread_;
   // PasswordStore schedules work on this thread.
   content::TestBrowserThread db_thread_;
@@ -125,7 +126,7 @@ ACTION(STLDeleteElements0) {
 
 ACTION(QuitUIMessageLoop) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  MessageLoop::current()->Quit();
+  base::MessageLoop::current()->Quit();
 }
 
 TEST_F(PasswordStoreTest, IgnoreOldWwwGoogleLogins) {
@@ -151,7 +152,7 @@ TEST_F(PasswordStoreTest, IgnoreOldWwwGoogleLogins) {
       true, true, cutoff - 1 },
     // A form on https://www.google.com/ older than the cutoff. Will be ignored.
     { PasswordForm::SCHEME_HTML,
-      "https://www.google.com/",
+      "https://www.google.com",
       "https://www.google.com/origin",
       "https://www.google.com/action",
       L"submit_element",
@@ -262,7 +263,7 @@ TEST_F(PasswordStoreTest, IgnoreOldWwwGoogleLogins) {
   store->GetLogins(accounts_google, &consumer);
   store->GetLogins(bar_example, &consumer);
 
-  MessageLoop::current()->Run();
+  base::MessageLoop::current()->Run();
 
   STLDeleteElements(&all_forms);
 }

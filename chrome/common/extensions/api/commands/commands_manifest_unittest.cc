@@ -5,7 +5,7 @@
 #include "chrome/common/extensions/manifest_tests/extension_manifest_test.h"
 
 #include "base/command_line.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/api/commands/commands_handler.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -15,16 +15,9 @@ namespace errors = extension_manifest_errors;
 namespace extensions {
 
 class CommandsManifestTest : public ExtensionManifestTest {
- protected:
-  virtual void SetUp() OVERRIDE {
-    (new CommandsHandler)->Register();
-  }
 };
 
 TEST_F(CommandsManifestTest, CommandManifestSimple) {
-  CommandLine::ForCurrentProcess()->AppendSwitch(
-      switches::kEnableExperimentalExtensionApis);
-
 #if defined(OS_MACOSX)
   int ctrl = ui::EF_COMMAND_DOWN;
 #else
@@ -39,9 +32,9 @@ TEST_F(CommandsManifestTest, CommandManifestSimple) {
 
   scoped_refptr<Extension> extension =
       LoadAndExpectSuccess("command_simple.json");
-  ASSERT_TRUE(extension);
+  ASSERT_TRUE(extension.get());
 
-  const CommandMap* commands = CommandsInfo::GetNamedCommands(extension);
+  const CommandMap* commands = CommandsInfo::GetNamedCommands(extension.get());
   ASSERT_TRUE(commands);
   ASSERT_EQ(1u, commands->size());
   CommandMap::const_iterator iter = commands->begin();
@@ -52,14 +45,15 @@ TEST_F(CommandsManifestTest, CommandManifestSimple) {
   ASSERT_EQ(ctrl_shift_f, named_command->accelerator());
 
   const Command* browser_action =
-      CommandsInfo::GetBrowserActionCommand(extension);
+      CommandsInfo::GetBrowserActionCommand(extension.get());
   ASSERT_TRUE(NULL != browser_action);
   ASSERT_STREQ("_execute_browser_action",
                browser_action->command_name().c_str());
   ASSERT_STREQ("", UTF16ToASCII(browser_action->description()).c_str());
   ASSERT_EQ(alt_shift_f, browser_action->accelerator());
 
-  const Command* page_action = CommandsInfo::GetPageActionCommand(extension);
+  const Command* page_action =
+      CommandsInfo::GetPageActionCommand(extension.get());
   ASSERT_TRUE(NULL != page_action);
   ASSERT_STREQ("_execute_page_action",
       page_action->command_name().c_str());
@@ -67,28 +61,35 @@ TEST_F(CommandsManifestTest, CommandManifestSimple) {
   ASSERT_EQ(ctrl_f, page_action->accelerator());
 }
 
-TEST_F(CommandsManifestTest, CommandManifestTooMany) {
-  CommandLine::ForCurrentProcess()->AppendSwitch(
-      switches::kEnableExperimentalExtensionApis);
-
+TEST_F(CommandsManifestTest, CommandManifestShortcutsTooMany) {
   LoadAndExpectError("command_too_many.json",
                      errors::kInvalidKeyBindingTooMany);
 }
 
-TEST_F(CommandsManifestTest, CommandManifestAllowNumbers) {
-  CommandLine::ForCurrentProcess()->AppendSwitch(
-      switches::kEnableExperimentalExtensionApis);
+TEST_F(CommandsManifestTest, CommandManifestManyButWithinBounds) {
+  scoped_refptr<Extension> extension =
+      LoadAndExpectSuccess("command_many_but_shortcuts_under_limit.json");
+}
 
+TEST_F(CommandsManifestTest, CommandManifestAllowNumbers) {
   scoped_refptr<Extension> extension =
       LoadAndExpectSuccess("command_allow_numbers.json");
 }
 
 TEST_F(CommandsManifestTest, CommandManifestRejectJustShift) {
-  CommandLine::ForCurrentProcess()->AppendSwitch(
-      switches::kEnableExperimentalExtensionApis);
-
   LoadAndExpectError("command_reject_just_shift.json",
       errors::kInvalidKeyBinding);
+}
+
+TEST_F(CommandsManifestTest, BrowserActionSynthesizesCommand) {
+  scoped_refptr<Extension> extension =
+      LoadAndExpectSuccess("browser_action_synthesizes_command.json");
+  // An extension with a browser action but no extension command specified
+  // should get a command assigned to it.
+  const extensions::Command* command =
+      CommandsInfo::GetBrowserActionCommand(extension.get());
+  ASSERT_TRUE(command != NULL);
+  ASSERT_EQ(ui::VKEY_UNKNOWN, command->accelerator().key_code());
 }
 
 }  // namespace extensions

@@ -80,12 +80,16 @@ enum InstallStatus {
   INVALID_STATE_FOR_OPTION,    // 47. A non-install option was called with an
                                // invalid installer state.
   WAIT_FOR_EXISTING_FAILED,    // 48. OS error waiting for existing setup.exe.
+  PATCH_INVALID_ARGUMENTS,     // 49. The arguments of --patch were missing or
+                               // they were invalid for any reason.
+  DIFF_PATCH_SOURCE_MISSING,   // 50. No previous version archive found for
+                               // differential update.
   // Friendly reminder: note the COMPILE_ASSERT below.
 };
 
 
 // Existing InstallStatus values must not change.  Always add to the end.
-COMPILE_ASSERT(installer::WAIT_FOR_EXISTING_FAILED == 48,
+COMPILE_ASSERT(installer::DIFF_PATCH_SOURCE_MISSING == 50,
                dont_change_enum);
 
 // The type of an update archive.
@@ -128,6 +132,7 @@ COMPILE_ASSERT(DEFERRING_TO_HIGHER_VERSION == 18,
                never_ever_ever_change_InstallerStage_values_bang);
 
 namespace switches {
+
 extern const char kAutoLaunchChrome[];
 extern const char kChrome[];
 extern const char kChromeAppHostDeprecated[];  // TODO(huangs): Remove by M27.
@@ -154,6 +159,7 @@ extern const char kInstallArchive[];
 extern const char kInstallerData[];
 extern const char kLogFile[];
 extern const char kMakeChromeDefault[];
+extern const char kMigrateChromeFrame[];
 extern const char kMsi[];
 extern const char kMultiInstall[];
 extern const char kNewSetupExe[];
@@ -170,6 +176,7 @@ extern const char kSelfDestruct[];
 extern const char kSystemLevel[];
 extern const char kUninstall[];
 extern const char kUpdateSetupExe[];
+extern const char kUncompressedArchive[];
 extern const char kVerboseLogging[];
 extern const char kShowEula[];
 extern const char kShowEulaForMetro[];
@@ -177,11 +184,17 @@ extern const char kInactiveUserToast[];
 extern const char kSystemLevelToast[];
 extern const char kExperimentGroup[];
 extern const char kToastResultsKey[];
+extern const char kPatch[];
+extern const char kInputFile[];
+extern const char kPatchFile[];
+extern const char kOutputFile[];
+
 }  // namespace switches
 
 extern const wchar_t kActiveSetupExe[];
 extern const wchar_t kChromeAppHostExe[];
 extern const wchar_t kChromeDll[];
+extern const wchar_t kChromeChildDll[];
 extern const wchar_t kChromeExe[];
 extern const wchar_t kChromeFrameDll[];
 extern const wchar_t kChromeFrameHelperExe[];
@@ -236,6 +249,16 @@ extern const wchar_t kChromeChannelBeta[];
 extern const wchar_t kChromeChannelStable[];
 
 extern const size_t kMaxAppModelIdLength;
+
+// The range of error values for the installer, Courgette, and bsdiff is
+// overlapping. These offset values disambiguate between different sets
+// of errors by shifting the values up with the specified offset.
+const int kCourgetteErrorOffset = 300;
+const int kBsdiffErrorOffset = 600;
+
+// Arguments to --patch switch
+extern const char kCourgette[];
+extern const char kBsdiff[];
 
 }  // namespace installer
 

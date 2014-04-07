@@ -5,8 +5,8 @@
 #include "content/browser/geolocation/network_location_provider.h"
 
 #include "base/bind.h"
-#include "base/time.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "content/public/browser/access_token_store.h"
 
 namespace content {
@@ -114,7 +114,7 @@ NetworkLocationProvider::NetworkLocationProvider(
       access_token_(access_token),
       is_permission_granted_(false),
       is_new_data_available_(false),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {
+      weak_factory_(this) {
   // Create the position cache.
   position_cache_.reset(new PositionCache());
 
@@ -125,13 +125,13 @@ NetworkLocationProvider::~NetworkLocationProvider() {
   StopProvider();
 }
 
-// LocationProviderBase implementation
+// LocationProvider implementation
 void NetworkLocationProvider::GetPosition(Geoposition *position) {
   DCHECK(position);
   *position = position_;
 }
 
-void NetworkLocationProvider::UpdatePosition() {
+void NetworkLocationProvider::RequestRefresh() {
   // TODO(joth): When called via the public (base class) interface, this should
   // poke each data provider to get them to expedite their next scan.
   // Whilst in the delayed start, only send request if all data is ready.
@@ -144,7 +144,7 @@ void NetworkLocationProvider::OnPermissionGranted() {
   const bool was_permission_granted = is_permission_granted_;
   is_permission_granted_ = true;
   if (!was_permission_granted && IsStarted()) {
-    UpdatePosition();
+    RequestRefresh();
   }
 }
 
@@ -176,7 +176,7 @@ void NetworkLocationProvider::LocationResponseAvailable(
   }
 
   // Let listeners know that we now have a position available.
-  UpdateListeners();
+  NotifyCallback(position_);
 }
 
 bool NetworkLocationProvider::StartProvider(bool high_accuracy) {
@@ -194,7 +194,7 @@ bool NetworkLocationProvider::StartProvider(bool high_accuracy) {
   // provider and it will be deleted by ref counting.
   wifi_data_provider_ = WifiDataProvider::Register(this);
 
-  MessageLoop::current()->PostDelayedTask(
+  base::MessageLoop::current()->PostDelayedTask(
       FROM_HERE,
       base::Bind(&NetworkLocationProvider::RequestPosition,
                  weak_factory_.GetWeakPtr()),
@@ -235,7 +235,7 @@ void NetworkLocationProvider::RequestPosition() {
     position_.timestamp = device_data_updated_timestamp_;
     is_new_data_available_ = false;
     // Let listeners know that we now have a position available.
-    UpdateListeners();
+    NotifyCallback(position_);
     return;
   }
   // Don't send network requests until authorized. http://crbug.com/39171
@@ -261,7 +261,7 @@ void NetworkLocationProvider::OnDeviceDataUpdated() {
   device_data_updated_timestamp_ = base::Time::Now();
 
   is_new_data_available_ = is_wifi_data_complete_;
-  UpdatePosition();
+  RequestRefresh();
 }
 
 bool NetworkLocationProvider::IsStarted() const {

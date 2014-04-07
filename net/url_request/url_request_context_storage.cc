@@ -5,9 +5,9 @@
 #include "net/url_request/url_request_context_storage.h"
 
 #include "base/logging.h"
-#include "net/base/cert_verifier.h"
 #include "net/base/net_log.h"
 #include "net/base/network_delegate.h"
+#include "net/cert/cert_verifier.h"
 #include "net/cookies/cookie_store.h"
 #include "net/dns/host_resolver.h"
 #include "net/ftp/ftp_transaction_factory.h"
@@ -84,9 +84,9 @@ void URLRequestContextStorage::set_network_delegate(
 }
 
 void URLRequestContextStorage::set_http_server_properties(
-    HttpServerProperties* http_server_properties) {
-  context_->set_http_server_properties(http_server_properties);
-  http_server_properties_.reset(http_server_properties);
+    scoped_ptr<HttpServerProperties> http_server_properties) {
+  http_server_properties_ = http_server_properties.Pass();
+  context_->set_http_server_properties(http_server_properties_->GetWeakPtr());
 }
 
 void URLRequestContextStorage::set_cookie_store(CookieStore* cookie_store) {
@@ -104,12 +104,6 @@ void URLRequestContextStorage::set_http_transaction_factory(
     HttpTransactionFactory* http_transaction_factory) {
   context_->set_http_transaction_factory(http_transaction_factory);
   http_transaction_factory_.reset(http_transaction_factory);
-}
-
-void URLRequestContextStorage::set_ftp_transaction_factory(
-    FtpTransactionFactory* ftp_transaction_factory) {
-  context_->set_ftp_transaction_factory(ftp_transaction_factory);
-  ftp_transaction_factory_.reset(ftp_transaction_factory);
 }
 
 void URLRequestContextStorage::set_job_factory(

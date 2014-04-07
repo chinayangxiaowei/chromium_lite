@@ -6,13 +6,15 @@
 
 #include "base/file_util.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
+#include "base/prefs/pref_service.h"
 #include "base/run_loop.h"
 #include "chrome/browser/policy/cloud/mock_cloud_policy_store.h"
 #include "chrome/browser/policy/cloud/policy_builder.h"
+#include "chrome/browser/signin/fake_signin_manager.h"
 #include "chrome/browser/signin/signin_manager.h"
 #include "chrome/browser/signin/signin_manager_factory.h"
-#include "chrome/browser/signin/signin_manager_fake.h"
+#include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_profile.h"
 #include "content/public/test/test_browser_thread.h"
 #include "policy/policy_constants.h"
@@ -35,7 +37,7 @@ void RunUntilIdle() {
 class UserCloudPolicyStoreTest : public testing::Test {
  public:
   UserCloudPolicyStoreTest()
-      : loop_(MessageLoop::TYPE_UI),
+      : loop_(base::MessageLoop::TYPE_UI),
         ui_thread_(content::BrowserThread::UI, &loop_),
         file_thread_(content::BrowserThread::FILE, &loop_),
         profile_(new TestingProfile()) {}
@@ -45,12 +47,16 @@ class UserCloudPolicyStoreTest : public testing::Test {
     SigninManager* signin = static_cast<SigninManager*>(
       SigninManagerFactory::GetInstance()->SetTestingFactoryAndUse(
           profile_.get(), FakeSigninManager::Build));
-    signin->SetAuthenticatedUsername(PolicyBuilder::kFakeUsername);
+    profile_->GetPrefs()->SetString(prefs::kGoogleServicesUsername,
+                                    PolicyBuilder::kFakeUsername);
+    signin->Initialize(profile_.get(), NULL);
     store_.reset(new UserCloudPolicyStore(profile_.get(), policy_file()));
     store_->AddObserver(&observer_);
 
-    policy_.payload().mutable_showhomebutton()->set_value(true);
-    policy_.payload().mutable_syncdisabled()->set_value(true);
+    policy_.payload().mutable_passwordmanagerenabled()->set_value(true);
+    policy_.payload().mutable_urlblacklist()->mutable_value()->add_entries(
+        "chromium.org");
+
     policy_.Build();
   }
 
@@ -68,10 +74,10 @@ class UserCloudPolicyStoreTest : public testing::Test {
   void VerifyPolicyMap(CloudPolicyStore* store) {
     EXPECT_EQ(2U, store->policy_map().size());
     const PolicyMap::Entry* entry =
-        store->policy_map().Get(key::kShowHomeButton);
+        store->policy_map().Get(key::kPasswordManagerEnabled);
     ASSERT_TRUE(entry);
     EXPECT_TRUE(base::FundamentalValue(true).Equals(entry->value));
-    ASSERT_TRUE(store->policy_map().Get(key::kSyncDisabled));
+    ASSERT_TRUE(store->policy_map().Get(key::kURLBlacklist));
   }
 
   // Install an expectation on |observer_| for an error code.
@@ -89,7 +95,7 @@ class UserCloudPolicyStoreTest : public testing::Test {
   // CloudPolicyValidator() requires a FILE thread so declare one here. Both
   // |ui_thread_| and |file_thread_| share the same MessageLoop |loop_| so
   // callers can use RunLoop to manage both virtual threads.
-  MessageLoop loop_;
+  base::MessageLoop loop_;
   content::TestBrowserThread ui_thread_;
   content::TestBrowserThread file_thread_;
 
@@ -109,6 +115,7 @@ TEST_F(UserCloudPolicyStoreTest, LoadWithNoFile) {
 
   EXPECT_FALSE(store_->policy());
   EXPECT_TRUE(store_->policy_map().empty());
+  EXPECT_FALSE(store_->policy_changed());
 }
 
 TEST_F(UserCloudPolicyStoreTest, LoadWithInvalidFile) {
@@ -129,6 +136,7 @@ TEST_F(UserCloudPolicyStoreTest, LoadWithInvalidFile) {
 
   EXPECT_FALSE(store_->policy());
   EXPECT_TRUE(store_->policy_map().empty());
+  EXPECT_FALSE(store_->policy_changed());
 }
 
 TEST_F(UserCloudPolicyStoreTest, LoadImmediatelyWithNoFile) {
@@ -140,6 +148,7 @@ TEST_F(UserCloudPolicyStoreTest, LoadImmediatelyWithNoFile) {
 
   EXPECT_FALSE(store_->policy());
   EXPECT_TRUE(store_->policy_map().empty());
+  EXPECT_FALSE(store_->policy_changed());
 }
 
 TEST_F(UserCloudPolicyStoreTest, LoadImmediatelyWithInvalidFile) {
@@ -159,6 +168,7 @@ TEST_F(UserCloudPolicyStoreTest, LoadImmediatelyWithInvalidFile) {
 
   EXPECT_FALSE(store_->policy());
   EXPECT_TRUE(store_->policy_map().empty());
+  EXPECT_FALSE(store_->policy_changed());
 }
 
 TEST_F(UserCloudPolicyStoreTest, Store) {
@@ -193,14 +203,14 @@ TEST_F(UserCloudPolicyStoreTest, StoreThenClear) {
   EXPECT_FALSE(store_->policy_map().empty());
 
   // Policy file should exist.
-  ASSERT_TRUE(file_util::PathExists(policy_file()));
+  ASSERT_TRUE(base::PathExists(policy_file()));
 
   EXPECT_CALL(observer_, OnStoreLoaded(store_.get()));
   store_->Clear();
   RunUntilIdle();
 
   // Policy file should not exist.
-  ASSERT_TRUE(!file_util::PathExists(policy_file()));
+  ASSERT_TRUE(!base::PathExists(policy_file()));
 
   // Policy should be gone.
   EXPECT_FALSE(store_->policy());
@@ -218,7 +228,7 @@ TEST_F(UserCloudPolicyStoreTest, StoreTwoTimes) {
   EXPECT_CALL(observer_, OnStoreLoaded(store_.get())).Times(2);
 
   UserPolicyBuilder first_policy;
-  first_policy.payload().mutable_showhomebutton()->set_value(false);
+  first_policy.payload().mutable_passwordmanagerenabled()->set_value(false);
   first_policy.Build();
   store_->Store(first_policy.policy());
   RunUntilIdle();
@@ -277,6 +287,7 @@ TEST_F(UserCloudPolicyStoreTest, StoreThenLoadImmediately) {
   VerifyPolicyMap(store2.get());
   EXPECT_EQ(CloudPolicyStore::STATUS_OK, store2->status());
   store2->RemoveObserver(&observer_);
+  EXPECT_TRUE(store2->policy_changed());
 }
 
 TEST_F(UserCloudPolicyStoreTest, StoreValidationError) {
@@ -289,6 +300,7 @@ TEST_F(UserCloudPolicyStoreTest, StoreValidationError) {
   store_->Store(policy_.policy());
   RunUntilIdle();
   ASSERT_FALSE(store_->policy());
+  EXPECT_FALSE(store_->policy_changed());
 }
 
 TEST_F(UserCloudPolicyStoreTest, LoadValidationError) {
@@ -312,6 +324,74 @@ TEST_F(UserCloudPolicyStoreTest, LoadValidationError) {
 
   ASSERT_FALSE(store2->policy());
   store2->RemoveObserver(&observer_);
+
+  // Sign out - we should be able to load the policy (don't check usernames
+  // when signed out).
+  SigninManagerFactory::GetForProfile(profile_.get())->SignOut();
+  scoped_ptr<UserCloudPolicyStore> store3(
+      new UserCloudPolicyStore(profile_.get(), policy_file()));
+  store3->AddObserver(&observer_);
+  EXPECT_CALL(observer_, OnStoreLoaded(store3.get()));
+  store3->Load();
+  RunUntilIdle();
+
+  ASSERT_TRUE(store3->policy());
+  store3->RemoveObserver(&observer_);
+
+  // Now start a signin as a different user - this should fail validation.
+  FakeSigninManager* signin = static_cast<FakeSigninManager*>(
+      SigninManagerFactory::GetForProfile(profile_.get()));
+  signin->set_auth_in_progress("foobar@foobar.com");
+
+  scoped_ptr<UserCloudPolicyStore> store4(
+      new UserCloudPolicyStore(profile_.get(), policy_file()));
+  store4->AddObserver(&observer_);
+  ExpectError(store4.get(), CloudPolicyStore::STATUS_VALIDATION_ERROR);
+  store4->Load();
+  RunUntilIdle();
+
+  ASSERT_FALSE(store4->policy());
+  store4->RemoveObserver(&observer_);
+}
+
+TEST_F(UserCloudPolicyStoreTest, PolicyChanged) {
+  EXPECT_CALL(observer_, OnStoreLoaded(store_.get())).Times(7);
+  EXPECT_FALSE(store_->policy_changed());
+
+  // Clearing before storing should not result in a change.
+  store_->Clear();
+  EXPECT_FALSE(store_->policy_changed());
+
+  // Storing an initial policy should result in a change.
+  store_->Store(policy_.policy());
+  RunUntilIdle();
+  EXPECT_TRUE(store_->policy_changed());
+
+  // Storing the same policy should not result in a change.
+  store_->Store(policy_.policy());
+  RunUntilIdle();
+  EXPECT_FALSE(store_->policy_changed());
+
+  // Storing a modified policy should result in a change.
+  policy_.payload().mutable_urlblacklist()->mutable_value()->add_entries(
+      "build.chromium.org");
+  policy_.Build();
+  store_->Store(policy_.policy());
+  RunUntilIdle();
+  EXPECT_TRUE(store_->policy_changed());
+
+  // Storing the same policy should not result in a change.
+  store_->Store(policy_.policy());
+  RunUntilIdle();
+  EXPECT_FALSE(store_->policy_changed());
+
+  // Clearing the policy should result in a change.
+  store_->Clear();
+  EXPECT_TRUE(store_->policy_changed());
+
+  // Clearing the policy again shouldn't result in a change.
+  store_->Clear();
+  EXPECT_FALSE(store_->policy_changed());
 }
 
 }  // namespace

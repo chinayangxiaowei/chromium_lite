@@ -4,18 +4,18 @@
 
 #include <Cocoa/Cocoa.h>
 
-#include "base/memory/scoped_nsobject.h"
+#include "base/mac/scoped_nsobject.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
-#include "base/utf_string_conversions.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/utf_string_conversions.h"
 #import "chrome/browser/ui/cocoa/bubble_view.h"
 #import "chrome/browser/ui/cocoa/cocoa_test_helper.h"
 #import "chrome/browser/ui/cocoa/status_bubble_mac.h"
-#include "googleurl/src/gurl.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #import "testing/gtest_mac.h"
 #include "testing/platform_test.h"
 #include "ui/gfx/point.h"
+#include "url/gurl.h"
 
 // The test delegate records all of the status bubble object's state
 // transitions.
@@ -34,7 +34,7 @@
 - (id)initWithWindow:(NSWindow*)window {
   if ((self = [super init])) {
     window_ = window;
-    baseFrameOffset_ = NSMakePoint(0, 0);
+    baseFrameOffset_ = NSZeroPoint;
   }
   return self;
 }
@@ -174,8 +174,8 @@ class StatusBubbleMacTest : public CocoaTest {
     return !IsPointInBubble(relative_x, relative_y);
   }
 
-  MessageLoop message_loop_;
-  scoped_nsobject<StatusBubbleMacTestDelegate> delegate_;
+  base::MessageLoop message_loop_;
+  base::scoped_nsobject<StatusBubbleMacTestDelegate> delegate_;
   StatusBubbleMac* bubble_;  // Strong.
 };
 

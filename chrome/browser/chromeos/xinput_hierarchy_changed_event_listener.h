@@ -6,7 +6,7 @@
 #define CHROME_BROWSER_CHROMEOS_XINPUT_HIERARCHY_CHANGED_EVENT_LISTENER_H_
 
 #include "base/memory/singleton.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/observer_list.h"
 #include "chrome/browser/chromeos/device_hierarchy_observer.h"
 
@@ -18,7 +18,8 @@ namespace chromeos {
 // which is sent to Chrome when X detects a system or USB keyboard (or mouse),
 // then tells X to change the current XKB keyboard layout. Start by just calling
 // instance() to get it going.
-class XInputHierarchyChangedEventListener : public MessageLoopForUI::Observer {
+class XInputHierarchyChangedEventListener
+    : public base::MessageLoopForUI::Observer {
  public:
   static XInputHierarchyChangedEventListener* GetInstance();
 

@@ -4,12 +4,13 @@
 
 #import <Cocoa/Cocoa.h>
 
-#import "base/memory/scoped_nsobject.h"
-#import "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#import "base/mac/scoped_nsobject.h"
+#import "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #import "chrome/app/chrome_command_ids.h"  // For translate menu command ids.
 #include "chrome/browser/infobars/infobar_service.h"
 #import "chrome/browser/translate/translate_infobar_delegate.h"
+#include "chrome/browser/translate/translate_language_list.h"
 #include "chrome/browser/ui/cocoa/cocoa_profile_test.h"
 #import "chrome/browser/ui/cocoa/infobars/before_translate_infobar_controller.h"
 #import "chrome/browser/ui/cocoa/infobars/infobar.h"
@@ -34,12 +35,13 @@ TranslateInfoBarDelegate::Type kTranslateToolbarStates[] = {
 
 class MockTranslateInfoBarDelegate : public TranslateInfoBarDelegate {
  public:
-  MockTranslateInfoBarDelegate(TranslateInfoBarDelegate::Type type,
+  MockTranslateInfoBarDelegate(InfoBarService* infobar_service,
+                               TranslateInfoBarDelegate::Type type,
                                TranslateErrors::Type error,
-                               InfoBarService* infobar_service,
-                               PrefService* prefs)
-      : TranslateInfoBarDelegate(type, error, infobar_service, prefs,
-                                 "en", "es") {
+                               PrefService* prefs,
+                               ShortcutConfiguration config)
+      : TranslateInfoBarDelegate(infobar_service, type, NULL, "en", "es", error,
+                                 prefs, config) {
   }
 
   MOCK_METHOD0(Translate, void());
@@ -47,8 +49,8 @@ class MockTranslateInfoBarDelegate : public TranslateInfoBarDelegate {
 
   MOCK_METHOD0(TranslationDeclined, void());
 
-  virtual bool IsLanguageBlacklisted() OVERRIDE { return false; }
-  MOCK_METHOD0(ToggleLanguageBlacklist, void());
+  virtual bool IsTranslatableLanguageByPrefs() OVERRIDE { return true; }
+  MOCK_METHOD0(ToggleTranslatableLanguageByPrefs, void());
   virtual bool IsSiteBlacklisted() OVERRIDE { return false; }
   MOCK_METHOD0(ToggleSiteBlacklist, void());
   virtual bool ShouldAlwaysTranslate() OVERRIDE { return false; }
@@ -60,6 +62,7 @@ class TranslationInfoBarTest : public CocoaProfileTest {
   // Each test gets a single Mock translate delegate for the lifetime of
   // the test.
   virtual void SetUp() {
+    TranslateLanguageList::DisableUpdate();
     CocoaProfileTest::SetUp();
     web_contents_.reset(
         WebContents::Create(WebContents::CreateParams(profile())));
@@ -79,18 +82,16 @@ class TranslationInfoBarTest : public CocoaProfileTest {
         InfoBarService::FromWebContents(web_contents_.get());
     Profile* profile =
         Profile::FromBrowserContext(web_contents_->GetBrowserContext());
+    ShortcutConfiguration config;
+    config.never_translate_min_count = 3;
+    config.always_translate_min_count = 3;
     infobar_delegate_.reset(new MockTranslateInfoBarDelegate(
-        type,
-        error,
-        infobar_service,
-        profile->GetPrefs()));
+        infobar_service, type, error, profile->GetPrefs(), config));
     [[infobar_controller_ view] removeFromSuperview];
-    scoped_ptr<InfoBar> infobar(
-        static_cast<InfoBarDelegate*>(infobar_delegate_.get())->
-            CreateInfoBar(infobar_service));
-    infobar_controller_.reset(
-        reinterpret_cast<TranslateInfoBarControllerBase*>(
-            infobar->controller()));
+    scoped_ptr<InfoBar> infobar(static_cast<InfoBarDelegate*>(
+        infobar_delegate_.get())->CreateInfoBar(infobar_service));
+    infobar_controller_.reset(reinterpret_cast<TranslateInfoBarControllerBase*>(
+        infobar->controller()));
     // We need to set the window to be wide so that the options button
     // doesn't overlap the other buttons.
     [test_window() setContentSize:NSMakeSize(2000, 500)];
@@ -100,7 +101,7 @@ class TranslationInfoBarTest : public CocoaProfileTest {
 
   scoped_ptr<WebContents> web_contents_;
   scoped_ptr<MockTranslateInfoBarDelegate> infobar_delegate_;
-  scoped_nsobject<TranslateInfoBarControllerBase> infobar_controller_;
+  base::scoped_nsobject<TranslateInfoBarControllerBase> infobar_controller_;
 };
 
 // Check that we can instantiate a Translate Infobar correctly.
@@ -167,7 +168,7 @@ TEST_F(TranslationInfoBarTest, OptionsMenuItemsHookedUp) {
   }
 
   {
-    EXPECT_CALL(*infobar_delegate_, ToggleLanguageBlacklist())
+    EXPECT_CALL(*infobar_delegate_, ToggleTranslatableLanguageByPrefs())
     .Times(1);
     [infobar_controller_ optionsMenuChanged:neverTranslateLanguateItem];
   }

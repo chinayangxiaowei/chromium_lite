@@ -4,8 +4,8 @@
 
 #include "content/browser/renderer_host/render_view_host_delegate.h"
 
-#include "googleurl/src/gurl.h"
-#include "webkit/glue/webpreferences.h"
+#include "url/gurl.h"
+#include "webkit/common/webpreferences.h"
 
 namespace content {
 
@@ -37,12 +37,17 @@ WebContents* RenderViewHostDelegate::GetAsWebContents() {
   return NULL;
 }
 
-webkit_glue::WebPreferences RenderViewHostDelegate::GetWebkitPrefs() {
-  return webkit_glue::WebPreferences();
+WebPreferences RenderViewHostDelegate::GetWebkitPrefs() {
+  return WebPreferences();
 }
 
 bool RenderViewHostDelegate::IsFullscreenForCurrentTab() const {
   return false;
+}
+
+SessionStorageNamespace* RenderViewHostDelegate::GetSessionStorageNamespace(
+    SiteInstance* instance) {
+  return NULL;
 }
 
 }  // namespace content

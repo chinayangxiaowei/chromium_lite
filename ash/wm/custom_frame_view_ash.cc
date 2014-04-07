@@ -4,6 +4,7 @@
 
 #include "ash/wm/custom_frame_view_ash.h"
 
+#include "ash/shell_delegate.h"
 #include "ash/wm/frame_painter.h"
 #include "ash/wm/workspace/frame_maximize_button.h"
 #include "grit/ash_resources.h"
@@ -36,7 +37,7 @@ const gfx::Font& GetTitleFont() {
 namespace ash {
 
 // static
-const char CustomFrameViewAsh::kViewClassName[] = "ash/wm/CustomFrameViewAsh";
+const char CustomFrameViewAsh::kViewClassName[] = "CustomFrameViewAsh";
 
 ////////////////////////////////////////////////////////////////////////////////
 // CustomFrameViewAsh, public:
@@ -108,7 +109,7 @@ void CustomFrameViewAsh::UpdateWindowIcon() {
 }
 
 void CustomFrameViewAsh::UpdateWindowTitle() {
-  frame_painter_->SchedulePaintForTitle(this, GetTitleFont());
+  frame_painter_->SchedulePaintForTitle(GetTitleFont());
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -136,20 +137,26 @@ void CustomFrameViewAsh::OnPaint(gfx::Canvas* canvas) {
   canvas->ClipRect(gfx::Rect(0, 0, width(), NonClientTopBorderHeight()));
 
   bool paint_as_active = ShouldPaintAsActive();
-  int theme_image_id = paint_as_active ? IDR_AURA_WINDOW_HEADER_BASE_ACTIVE :
-      IDR_AURA_WINDOW_HEADER_BASE_INACTIVE;
+  int theme_image_id = 0;
+  if (frame_painter_->ShouldUseMinimalHeaderStyle(FramePainter::THEMED_NO))
+    theme_image_id = IDR_AURA_WINDOW_HEADER_BASE_MINIMAL;
+  else if (paint_as_active)
+    theme_image_id = IDR_AURA_WINDOW_HEADER_BASE_ACTIVE;
+  else
+    theme_image_id = IDR_AURA_WINDOW_HEADER_BASE_INACTIVE;
+
   frame_painter_->PaintHeader(
       this,
       canvas,
       paint_as_active ? FramePainter::ACTIVE : FramePainter::INACTIVE,
       theme_image_id,
-      NULL);
+      0);
   frame_painter_->PaintTitleBar(this, canvas, GetTitleFont());
   frame_painter_->PaintHeaderContentSeparator(this, canvas);
   canvas->Restore();
 }
 
-std::string CustomFrameViewAsh::GetClassName() const {
+const char* CustomFrameViewAsh::GetClassName() const {
   return kViewClassName;
 }
 
@@ -170,17 +177,28 @@ void CustomFrameViewAsh::ButtonPressed(views::Button* sender,
     slow_duration_mode.reset(new ui::ScopedAnimationDurationScaleMode(
         ui::ScopedAnimationDurationScaleMode::SLOW_DURATION));
   }
+
+  ash::UserMetricsAction action =
+      ash::UMA_WINDOW_MAXIMIZE_BUTTON_CLICK_MAXIMIZE;
+
   if (sender == maximize_button_) {
     // The maximize button may move out from under the cursor.
     ResetWindowControls();
-    if (frame_->IsMaximized())
+    if (frame_->IsMaximized()) {
+      action = ash::UMA_WINDOW_MAXIMIZE_BUTTON_CLICK_RESTORE;
       frame_->Restore();
-    else
+    } else {
       frame_->Maximize();
+    }
     // |this| may be deleted - some windows delete their frames on maximize.
   } else if (sender == close_button_) {
+    action = ash::UMA_WINDOW_CLOSE_BUTTON_CLICK;
     frame_->Close();
+  } else {
+    return;
   }
+
+  ash::Shell::GetInstance()->delegate()->RecordUserMetricsAction(action);
 }
 
 ////////////////////////////////////////////////////////////////////////////////

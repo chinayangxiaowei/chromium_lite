@@ -4,8 +4,12 @@
 
 #include "ui/app_list/views/search_result_view.h"
 
+#include <algorithm>
+
 #include "ui/app_list/app_list_constants.h"
 #include "ui/app_list/search_result.h"
+#include "ui/app_list/views/progress_bar_view.h"
+#include "ui/app_list/views/search_result_actions_view.h"
 #include "ui/app_list/views/search_result_list_view.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/font.h"
@@ -13,6 +17,8 @@
 #include "ui/gfx/render_text.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/image_view.h"
+#include "ui/views/controls/menu/menu_item_view.h"
+#include "ui/views/controls/menu/menu_runner.h"
 
 namespace {
 
@@ -24,47 +30,16 @@ const int kIconViewWidth = kIconDimension + 2 * kIconPadding;
 const int kTextTrailPadding = kIconPadding;
 const int kBorderSize = 1;
 
-// Maximum dimensions of a search result's action icons.
-const int kActionIconDimension = 24;
-
-// Total space (including padding) used for each action icon's button.
-const int kActionButtonWidth = 32;
-
 // Extra margin at the right of the rightmost action icon.
 const int kActionButtonRightMargin = 8;
 
-const SkColor kBorderColor = SkColorSetRGB(0xE5, 0xE5, 0xE5);
-
-const SkColor kDefaultTextColor = SkColorSetRGB(0x33, 0x33, 0x33);
-const SkColor kDimmedTextColor = SkColorSetRGB(0x96, 0x96, 0x96);
-const SkColor kURLTextColor = SkColorSetRGB(0x00, 0x99, 0x33);
-
-const SkColor kSelectedBackgroundColor = SkColorSetRGB(0xEC, 0xEC, 0xEC);
-// 6% black on top of kSelectedBackgroundColor
-const SkColor kHoverSelectedColor = SkColorSetRGB(0xE6, 0xE6, 0xE6);
-
-// A non-interactive image view to display result icon.
-class IconView : public views::ImageView {
- public:
-  IconView() : ImageView() {}
-  virtual ~IconView() {}
-
- private:
-  // views::View overrides:
-  virtual bool HitTestRect(const gfx::Rect& rect) const OVERRIDE {
-    return false;
-  }
-
-  DISALLOW_COPY_AND_ASSIGN(IconView);
-};
-
 // Creates a RenderText of given |text| and |styles|. Caller takes ownership
 // of returned RenderText.
-gfx::RenderText* CreateRenderText(const string16& text,
+gfx::RenderText* CreateRenderText(const base::string16& text,
                                   const app_list::SearchResult::Tags& tags) {
   gfx::RenderText* render_text = gfx::RenderText::CreateInstance();
   render_text->SetText(text);
-  render_text->SetColor(kDefaultTextColor);
+  render_text->SetColor(app_list::kResultDefaultTextColor);
 
   for (app_list::SearchResult::Tags::const_iterator it = tags.begin();
        it != tags.end();
@@ -76,9 +51,9 @@ gfx::RenderText* CreateRenderText(const string16& text,
     if (it->styles & app_list::SearchResult::Tag::MATCH)
       render_text->ApplyStyle(gfx::BOLD, true, it->range);
     if (it->styles & app_list::SearchResult::Tag::DIM)
-      render_text->ApplyColor(kDimmedTextColor, it->range);
+      render_text->ApplyColor(app_list::kResultDimmedTextColor, it->range);
     else if (it->styles & app_list::SearchResult::Tag::URL)
-      render_text->ApplyColor(kURLTextColor, it->range);
+      render_text->ApplyColor(app_list::kResultURLTextColor, it->range);
   }
 
   return render_text;
@@ -97,8 +72,15 @@ SearchResultView::SearchResultView(SearchResultListView* list_view,
       result_(NULL),
       list_view_(list_view),
       delegate_(delegate),
-      icon_(new IconView) {
+      icon_(new views::ImageView),
+      actions_view_(new SearchResultActionsView(this)),
+      progress_bar_(new ProgressBarView) {
+  icon_->set_interactive(false);
+
   AddChildView(icon_);
+  AddChildView(actions_view_);
+  AddChildView(progress_bar_);
+  set_context_menu_controller(this);
 }
 
 SearchResultView::~SearchResultView() {
@@ -113,9 +95,10 @@ void SearchResultView::SetResult(SearchResult* result) {
     result_->AddObserver(this);
 
   OnIconChanged();
-  OnActionIconsChanged();
+  OnActionsChanged();
   UpdateTitleText();
   UpdateDetailsText();
+  OnIsInstallingChanged();
   SchedulePaint();
 }
 
@@ -143,7 +126,7 @@ void SearchResultView::UpdateDetailsText() {
   }
 }
 
-std::string SearchResultView::GetClassName() const {
+const char* SearchResultView::GetClassName() const {
   return kViewClassName;
 }
 
@@ -162,16 +145,28 @@ void SearchResultView::Layout() {
   icon_bounds.Intersect(rect);
   icon_->SetBoundsRect(icon_bounds);
 
-  size_t num_buttons = action_buttons_.size();
-  for (size_t i = 0; i < num_buttons; ++i) {
-    views::ImageButton* button = action_buttons_[i];
-    gfx::Rect button_bounds(
-        rect.right() - kActionButtonRightMargin -
-            (num_buttons - i) * kActionButtonWidth,
-        (rect.y() + rect.height() - kActionIconDimension) / 2,
-        kActionButtonWidth, kActionIconDimension);
-    button->SetBoundsRect(button_bounds);
-  }
+  const int max_actions_width =
+      (rect.right() - kActionButtonRightMargin - icon_bounds.right()) / 2;
+  int actions_width = std::min(max_actions_width,
+                               actions_view_->GetPreferredSize().width());
+
+  gfx::Rect actions_bounds(rect);
+  actions_bounds.set_x(rect.right() - kActionButtonRightMargin - actions_width);
+  actions_bounds.set_width(actions_width);
+  actions_view_->SetBoundsRect(actions_bounds);
+
+  const int progress_width = rect.width() / 5;
+  const int progress_height = progress_bar_->GetPreferredSize().height();
+  const gfx::Rect progress_bounds(
+      rect.right() - kActionButtonRightMargin - progress_width,
+      rect.y() + (rect.height() - progress_height) / 2,
+      progress_width,
+      progress_height);
+  progress_bar_->SetBoundsRect(progress_bounds);
+}
+
+void SearchResultView::ChildPreferredSizeChanged(views::View* child) {
+  Layout();
 }
 
 void SearchResultView::OnPaint(gfx::Canvas* canvas) {
@@ -184,26 +179,32 @@ void SearchResultView::OnPaint(gfx::Canvas* canvas) {
 
   const bool selected = list_view_->IsResultViewSelected(this);
   const bool hover = state() == STATE_HOVERED || state() == STATE_PRESSED;
-  if (hover && selected)
-    canvas->FillRect(content_rect, kHoverSelectedColor);
-  else if (selected || hover)
-    canvas->FillRect(content_rect, kSelectedBackgroundColor);
+  if (selected)
+    canvas->FillRect(content_rect, kSelectedColor);
+  else if (hover)
+    canvas->FillRect(content_rect, kHighlightedColor);
   else
     canvas->FillRect(content_rect, kContentsBackgroundColor);
 
   gfx::Rect border_bottom = gfx::SubtractRects(rect, content_rect);
-  canvas->FillRect(border_bottom, kBorderColor);
+  canvas->FillRect(border_bottom, kResultBorderColor);
 
   gfx::Rect text_bounds(rect);
   text_bounds.set_x(kIconViewWidth);
-  text_bounds.set_width(
-      rect.width() - kIconViewWidth - kTextTrailPadding -
-      action_buttons_.size() * kActionButtonWidth -
-      (!action_buttons_.empty() ? kActionButtonRightMargin : 0));
+  if (actions_view_->visible()) {
+    text_bounds.set_width(
+        rect.width() - kIconViewWidth - kTextTrailPadding -
+        actions_view_->bounds().width() -
+        (actions_view_->has_children() ? kActionButtonRightMargin : 0));
+  } else {
+    text_bounds.set_width(
+        rect.width() - kIconViewWidth - kTextTrailPadding -
+        progress_bar_->bounds().width() - kActionButtonRightMargin);
+  }
   text_bounds.set_x(GetMirroredXWithWidthInView(text_bounds.x(),
                                                 text_bounds.width()));
 
-  if (title_text_.get() && details_text_.get()) {
+  if (title_text_ && details_text_) {
     gfx::Size title_size(text_bounds.width(),
                          title_text_->GetStringSize().height());
     gfx::Size details_size(text_bounds.width(),
@@ -219,7 +220,7 @@ void SearchResultView::OnPaint(gfx::Canvas* canvas) {
     details_text_->SetDisplayRect(gfx::Rect(gfx::Point(text_bounds.x(), y),
                                             details_size));
     details_text_->Draw(canvas);
-  } else if (title_text_.get()) {
+  } else if (title_text_) {
     gfx::Size title_size(text_bounds.width(),
                          title_text_->GetStringSize().height());
     gfx::Rect centered_title_rect(text_bounds);
@@ -231,18 +232,9 @@ void SearchResultView::OnPaint(gfx::Canvas* canvas) {
 
 void SearchResultView::ButtonPressed(views::Button* sender,
                                      const ui::Event& event) {
-  if (sender == this) {
-    delegate_->SearchResultActivated(this, event);
-    return;
-  }
+  DCHECK(sender == this);
 
-  for (size_t i = 0; i < action_buttons_.size(); ++i) {
-    if (sender == action_buttons_[i]) {
-      delegate_->SearchResultActionActivated(this, i, event);
-      return;
-    }
-  }
-  NOTREACHED() << "Got unexpected button press on " << sender;
+  delegate_->SearchResultActivated(this, event.flags());
 }
 
 void SearchResultView::OnIconChanged() {
@@ -268,32 +260,51 @@ void SearchResultView::OnIconChanged() {
   icon_->SetImage(image);
 }
 
-void SearchResultView::OnActionIconsChanged() {
-  while (action_buttons_.size() >
-         (result_ ? result_->action_icons().size() : 0)) {
-    RemoveChildView(action_buttons_.back());
-    action_buttons_.pop_back();
-  }
+void SearchResultView::OnActionsChanged() {
+  actions_view_->SetActions(result_ ? result_->actions()
+                                    : SearchResult::Actions());
+}
 
-  if (result_) {
-    while (action_buttons_.size() < result_->action_icons().size()) {
-      views::ImageButton* button = new views::ImageButton(this);
-      button->SetImageAlignment(views::ImageButton::ALIGN_CENTER,
-                                views::ImageButton::ALIGN_MIDDLE);
-      AddChildView(button);
-      action_buttons_.push_back(button);
-    }
+void SearchResultView::OnIsInstallingChanged() {
+  const bool is_installing = result_ && result_->is_installing();
+  actions_view_->SetVisible(!is_installing);
+  progress_bar_->SetVisible(is_installing);
+}
 
-    const SearchResult::ActionIconSets& icons = result_->action_icons();
-    for (size_t i = 0; i < icons.size(); ++i) {
-      const SearchResult::ActionIconSet& icon = icons.at(i);
-      views::ImageButton* button = action_buttons_[i];
-      button->SetImage(views::CustomButton::STATE_NORMAL, &icon.base_image);
-      button->SetImage(views::CustomButton::STATE_HOVERED, &icon.hover_image);
-      button->SetImage(views::CustomButton::STATE_PRESSED, &icon.pressed_image);
-      button->SetTooltipText(icon.tooltip_text);
-    }
-  }
+void SearchResultView::OnPercentDownloadedChanged() {
+  progress_bar_->SetValue(result_->percent_downloaded() / 100.0);
+}
+
+void SearchResultView::OnItemInstalled() {
+  delegate_->OnSearchResultInstalled(this);
+}
+
+void SearchResultView::OnItemUninstalled() {
+  delegate_->OnSearchResultUninstalled(this);
+}
+
+void SearchResultView::OnSearchResultActionActivated(size_t index,
+                                                     int event_flags) {
+  DCHECK(result_);
+  DCHECK_LT(index, result_->actions().size());
+
+  delegate_->SearchResultActionActivated(this, index, event_flags);
+}
+
+void SearchResultView::ShowContextMenuForView(views::View* source,
+                                              const gfx::Point& point,
+                                              ui::MenuSourceType source_type) {
+  ui::MenuModel* menu_model = result_->GetContextMenuModel();
+  if (!menu_model)
+    return;
+
+  context_menu_runner_.reset(new views::MenuRunner(menu_model));
+  if (context_menu_runner_->RunMenuAt(
+          GetWidget(), NULL, gfx::Rect(point, gfx::Size()),
+          views::MenuItemView::TOPLEFT, source_type,
+          views::MenuRunner::HAS_MNEMONICS) ==
+      views::MenuRunner::MENU_DELETED)
+    return;
 }
 
 }  // namespace app_list

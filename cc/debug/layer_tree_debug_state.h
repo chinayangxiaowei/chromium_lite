@@ -16,7 +16,6 @@ class CC_EXPORT LayerTreeDebugState {
   ~LayerTreeDebugState();
 
   bool show_fps_counter;
-  bool show_platform_layer_tree;
   bool show_debug_borders;
   bool continuous_painting;
 
@@ -27,13 +26,16 @@ class CC_EXPORT LayerTreeDebugState {
   bool show_replica_screen_space_rects;
   bool show_occluding_rects;
   bool show_non_occluding_rects;
+  bool show_touch_event_handler_rects;
+  bool show_wheel_event_handler_rects;
+  bool show_non_fast_scrollable_rects;
 
   int slow_down_raster_scale_factor;
+  bool rasterize_only_visible_content;
+  bool show_picture_borders;
 
   void SetRecordRenderingStats(bool enabled);
   bool RecordRenderingStats() const;
-
-  bool trace_all_rendered_frames;
 
   bool ShowHudInfo() const;
   bool ShowHudRects() const;

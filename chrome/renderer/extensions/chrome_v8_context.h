@@ -8,8 +8,11 @@
 #include <string>
 
 #include "base/basictypes.h"
+#include "base/compiler_specific.h"
 #include "chrome/common/extensions/features/feature.h"
 #include "chrome/renderer/extensions/module_system.h"
+#include "chrome/renderer/extensions/request_sender.h"
+#include "chrome/renderer/extensions/safe_builtins.h"
 #include "chrome/renderer/extensions/scoped_persistent.h"
 #include "v8/include/v8.h"
 
@@ -25,21 +28,23 @@ namespace extensions {
 class Extension;
 
 // Chrome's wrapper for a v8 context.
-//
-// TODO(aa): Consider converting this back to a set of bindings_utils. It would
-// require adding WebFrame::GetIsolatedWorldIdByV8Context() to WebCore, but then
-// we won't need this object and it's a bit less state to keep track of.
-class ChromeV8Context {
+class ChromeV8Context : public RequestSender::Source {
  public:
   ChromeV8Context(v8::Handle<v8::Context> context,
                   WebKit::WebFrame* frame,
                   const Extension* extension,
                   Feature::Context context_type);
-  ~ChromeV8Context();
+  virtual ~ChromeV8Context();
 
   // Clears the WebFrame for this contexts and invalidates the associated
   // ModuleSystem.
   void Invalidate();
+
+  // Returns true if this context is still valid, false if it isn't.
+  // A context becomes invalid via Invalidate().
+  bool is_valid() const {
+    return !v8_context_.get().IsEmpty();
+  }
 
   v8::Handle<v8::Context> v8_context() const {
     return v8_context_.get();
@@ -63,46 +68,53 @@ class ChromeV8Context {
 
   ModuleSystem* module_system() { return module_system_.get(); }
 
+  SafeBuiltins* safe_builtins() {
+    return &safe_builtins_;
+  }
+  const SafeBuiltins* safe_builtins() const {
+    return &safe_builtins_;
+  }
+
   // Returns the ID of the extension associated with this context, or empty
   // string if there is no such extension.
-  std::string GetExtensionID();
-
-  // Returns a special Chrome-specific hidden object that is associated with a
-  // context, but not reachable from the JavaScript in that context. This is
-  // used by our v8::Extension implementations as a way to share code and as a
-  // bridge between C++ and JavaScript.
-  static v8::Handle<v8::Value> GetOrCreateChromeHidden(
-      v8::Handle<v8::Context> context);
-
-  // Return the chromeHidden object associated with this context, or an empty
-  // handle if no chrome hidden has been created (by GetOrCreateChromeHidden)
-  // yet for this context.
-  v8::Handle<v8::Value> GetChromeHidden() const;
+  std::string GetExtensionID() const;
 
   // Returns the RenderView associated with this context. Can return NULL if the
   // context is in the process of being destroyed.
   content::RenderView* GetRenderView() const;
 
-  // Fires the onload and onunload events on the chromeHidden object.
-  // TODO(aa): Move this to EventBindings.
-  void DispatchOnLoadEvent(bool is_incognito_process, int manifest_version);
-  void DispatchOnUnloadEvent();
+  // Get the URL of this context's web frame.
+  GURL GetURL() const;
 
-  // Call the named method of the chromeHidden object in this context.
-  // The function can be a sub-property like "Port.dispatchOnMessage". Returns
-  // the result of the function call in |result| if |result| is non-NULL. If the
-  // named method does not exist, returns false.
-  bool CallChromeHiddenMethod(
-      const std::string& function_name,
-      int argc,
-      v8::Handle<v8::Value>* argv,
-      v8::Handle<v8::Value>* result) const;
+  // Runs |function| with appropriate scopes. Doesn't catch exceptions, callers
+  // must do that if they want.
+  //
+  // USE THIS METHOD RATHER THAN v8::Function::Call WHEREVER POSSIBLE.
+  v8::Local<v8::Value> CallFunction(v8::Handle<v8::Function> function,
+                                    int argc,
+                                    v8::Handle<v8::Value> argv[]) const;
+
+  // Fires the onunload event on the unload_event module.
+  void DispatchOnUnloadEvent();
 
   // Returns the availability of the API |api_name|.
   Feature::Availability GetAvailability(const std::string& api_name);
 
+  // Returns whether the API |api_name| or any part of the API could be
+  // available in this context without taking into account the context's
+  // extension.
+  bool IsAnyFeatureAvailableToContext(const std::string& api_name);
+
   // Returns a string description of the type of context this is.
   std::string GetContextTypeDescription();
+
+  // RequestSender::Source implementation.
+  virtual ChromeV8Context* GetContext() OVERRIDE;
+  virtual void OnResponseReceived(const std::string& name,
+                                  int request_id,
+                                  bool success,
+                                  const base::ListValue& response,
+                                  const std::string& error) OVERRIDE;
 
  private:
   // The v8 context the bindings are accessible to.
@@ -121,6 +133,9 @@ class ChromeV8Context {
 
   // Owns and structures the JS that is injected to set up extension bindings.
   scoped_ptr<ModuleSystem> module_system_;
+
+  // Contains safe copies of builtin objects like Function.prototype.
+  SafeBuiltins safe_builtins_;
 
   DISALLOW_COPY_AND_ASSIGN(ChromeV8Context);
 };

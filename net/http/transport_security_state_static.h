@@ -38,6 +38,10 @@ static const char kSPKIHash_GoogleBackup2048[] =
     "\xbe\xae\xce\xca\x34\xa7\xa8\xe7\x28\xf6"
     "\x7c\x8c\x08\x31\x9d\xcb\xbe\xde\x8a\x33";
 
+static const char kSPKIHash_GoogleG2[] =
+    "\x43\xda\xd6\x30\xee\x53\xf8\xa9\x80\xca"
+    "\x6e\xfd\x85\xf4\x6a\xa3\x79\x90\xe0\xea";
+
 static const char kSPKIHash_EquifaxSecureCA[] =
     "\x48\xe6\x68\xf9\x2b\xd2\xb2\x95\xd7\x47"
     "\xd8\x23\x20\x10\x4f\x33\x98\x90\x9f\xd4";
@@ -250,6 +254,7 @@ static const char* const kGoogleAcceptableCerts[] = {
   kSPKIHash_Google2048,
   kSPKIHash_GoogleBackup1024,
   kSPKIHash_GoogleBackup2048,
+  kSPKIHash_GoogleG2,
   kSPKIHash_EquifaxSecureCA,
   kSPKIHash_GeoTrustGlobal,
   NULL,
@@ -395,6 +400,7 @@ static const struct HSTSPreload kPreloadedSTS[] = {
   {25, true, "\004plus\007sandbox\006google\003com", true, kGooglePins, DOMAIN_GOOGLE_COM },
   {19, true, "\006script\006google\003com", true, kGooglePins, DOMAIN_GOOGLE_COM },
   {20, true, "\007history\006google\003com", true, kGooglePins, DOMAIN_GOOGLE_COM },
+  {21, true, "\010security\006google\003com", true, kGooglePins, DOMAIN_GOOGLE_COM },
   {20, true, "\006market\007android\003com", true, kGooglePins, DOMAIN_ANDROID_COM },
   {26, true, "\003ssl\020google-analytics\003com", true, kGooglePins, DOMAIN_GOOGLE_ANALYTICS_COM },
   {18, true, "\005drive\006google\003com", true, kGooglePins, DOMAIN_GOOGLE_COM },
@@ -402,6 +408,7 @@ static const struct HSTSPreload kPreloadedSTS[] = {
   {19, true, "\006groups\006google\003com", true, kGooglePins, DOMAIN_GOOGLE_COM },
   {17, true, "\004apis\006google\003com", true, kGooglePins, DOMAIN_GOOGLE_COM },
   {32, true, "\022chromiumcodereview\007appspot\003com", true, kGooglePins, DOMAIN_APPSPOT_COM },
+  {38, true, "\030chrome-devtools-frontend\007appspot\003com", true, kGooglePins, DOMAIN_APPSPOT_COM },
   {24, true, "\012codereview\007appspot\003com", true, kGooglePins, DOMAIN_APPSPOT_COM },
   {25, true, "\012codereview\010chromium\003org", true, kGooglePins, DOMAIN_CHROMIUM_ORG },
   {17, true, "\004code\006google\003com", true, kGooglePins, DOMAIN_GOOGLE_COM },
@@ -642,6 +649,7 @@ static const struct HSTSPreload kPreloadedSTS[] = {
   {11, true, "\006google\002ws", false, kGooglePins, DOMAIN_GOOGLE_WS },
   {23, true, "\005learn\013doubleclick\003net", false, kNoPins, DOMAIN_NOT_PINNED },
   {16, false, "\003www\006paypal\003com", true, kNoPins, DOMAIN_NOT_PINNED },
+  {12, false, "\006paypal\003com", true, kNoPins, DOMAIN_NOT_PINNED },
   {16, false, "\003www\006elanex\003biz", true, kNoPins, DOMAIN_NOT_PINNED },
   {12, true, "\006jottit\003com", true, kNoPins, DOMAIN_NOT_PINNED },
   {19, true, "\015sunshinepress\003org", true, kNoPins, DOMAIN_NOT_PINNED },
@@ -673,6 +681,7 @@ static const struct HSTSPreload kPreloadedSTS[] = {
   {11, true, "\006betnet\002fr", true, kNoPins, DOMAIN_NOT_PINNED },
   {13, true, "\010uprotect\002it", true, kNoPins, DOMAIN_NOT_PINNED },
   {14, false, "\010squareup\003com", true, kNoPins, DOMAIN_NOT_PINNED },
+  {12, true, "\006square\003com", true, kNoPins, DOMAIN_NOT_PINNED },
   {9, true, "\004cert\002se", true, kNoPins, DOMAIN_NOT_PINNED },
   {11, true, "\006crypto\002is", true, kNoPins, DOMAIN_NOT_PINNED },
   {20, true, "\005simon\007butcher\004name", true, kNoPins, DOMAIN_NOT_PINNED },
@@ -791,6 +800,40 @@ static const struct HSTSPreload kPreloadedSTS[] = {
   {16, false, "\003www\006simple\003com", true, kNoPins, DOMAIN_NOT_PINNED },
   {15, false, "\002fj\006simple\003com", true, kNoPins, DOMAIN_NOT_PINNED },
   {16, false, "\003api\006simple\003com", true, kNoPins, DOMAIN_NOT_PINNED },
+  {17, true, "\004bank\006simple\003com", true, kNoPins, DOMAIN_NOT_PINNED },
+  {11, true, "\005bassh\003net", true, kNoPins, DOMAIN_NOT_PINNED },
+  {10, true, "\004sah3\003net", true, kNoPins, DOMAIN_NOT_PINNED },
+  {9, false, "\003grc\003com", true, kNoPins, DOMAIN_NOT_PINNED },
+  {13, false, "\003www\003grc\003com", true, kNoPins, DOMAIN_NOT_PINNED },
+  {12, false, "\006linode\003com", true, kNoPins, DOMAIN_NOT_PINNED },
+  {16, false, "\003www\006linode\003com", true, kNoPins, DOMAIN_NOT_PINNED },
+  {20, false, "\007manager\006linode\003com", true, kNoPins, DOMAIN_NOT_PINNED },
+  {17, false, "\004blog\006linode\003com", true, kNoPins, DOMAIN_NOT_PINNED },
+  {20, false, "\007library\006linode\003com", true, kNoPins, DOMAIN_NOT_PINNED },
+  {18, false, "\005forum\006linode\003com", true, kNoPins, DOMAIN_NOT_PINNED },
+  {14, false, "\001p\006linode\003com", true, kNoPins, DOMAIN_NOT_PINNED },
+  {18, false, "\005paste\006linode\003com", true, kNoPins, DOMAIN_NOT_PINNED },
+  {21, false, "\010pastebin\006linode\003com", true, kNoPins, DOMAIN_NOT_PINNED },
+  {21, true, "\017inertianetworks\003com", true, kNoPins, DOMAIN_NOT_PINNED },
+  {14, false, "\010carezone\003com", true, kNoPins, DOMAIN_NOT_PINNED },
+  {15, true, "\011conformal\003com", true, kNoPins, DOMAIN_NOT_PINNED },
+  {16, true, "\012cyphertite\003com", true, kNoPins, DOMAIN_NOT_PINNED },
+  {13, true, "\010logotype\002se", true, kNoPins, DOMAIN_NOT_PINNED },
+  {10, true, "\004bccx\003com", true, kNoPins, DOMAIN_NOT_PINNED },
+  {15, true, "\011launchkey\003com", true, kNoPins, DOMAIN_NOT_PINNED },
+  {16, true, "\010carlolly\002co\002uk", true, kNoPins, DOMAIN_NOT_PINNED },
+  {21, true, "\003www\013cyveillance\003com", true, kNoPins, DOMAIN_NOT_PINNED },
+  {22, true, "\004blog\013cyveillance\003com", true, kNoPins, DOMAIN_NOT_PINNED },
+  {12, true, "\006whonix\003org", true, kNoPins, DOMAIN_NOT_PINNED },
+  {13, true, "\010blueseed\002co", true, kNoPins, DOMAIN_NOT_PINNED },
+  {26, true, "\005forum\016quantifiedself\003com", true, kNoPins, DOMAIN_NOT_PINNED },
+  {11, true, "\006shodan\002io", true, kNoPins, DOMAIN_NOT_PINNED },
+  {18, true, "\015rapidresearch\002me", true, kNoPins, DOMAIN_NOT_PINNED },
+  {14, true, "\010surkatty\003org", true, kNoPins, DOMAIN_NOT_PINNED },
+  {21, true, "\017securityheaders\003com", true, kNoPins, DOMAIN_NOT_PINNED },
+  {10, true, "\005haste\002ch", true, kNoPins, DOMAIN_NOT_PINNED },
+  {12, true, "\007mudcrab\002us", true, kNoPins, DOMAIN_NOT_PINNED },
+  {13, true, "\010mediacru\002sh", true, kNoPins, DOMAIN_NOT_PINNED },
 };
 static const size_t kNumPreloadedSTS = ARRAYSIZE_UNSAFE(kPreloadedSTS);
 

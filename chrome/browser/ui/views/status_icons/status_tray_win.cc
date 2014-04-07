@@ -4,6 +4,8 @@
 
 #include "chrome/browser/ui/views/status_icons/status_tray_win.h"
 
+#include <commctrl.h>
+
 #include "base/win/wrapped_window_proc.h"
 #include "chrome/browser/ui/views/status_icons/status_icon_win.h"
 #include "chrome/common/chrome_constants.h"
@@ -12,6 +14,15 @@
 #include "win8/util/win8_util.h"
 
 static const UINT kStatusIconMessage = WM_APP + 1;
+
+namespace {
+// |kBaseIconId| is 2 to avoid conflicts with plugins that hard-code id 1.
+const UINT kBaseIconId = 2;
+
+UINT ReservedIconId(StatusTray::StatusIconType type) {
+  return kBaseIconId + static_cast<UINT>(type);
+}
+}  // namespace
 
 StatusTrayWin::StatusTrayWin()
     : next_icon_id_(1),
@@ -68,22 +79,38 @@ LRESULT CALLBACK StatusTrayWin::WndProc(HWND hwnd,
     }
     return TRUE;
   } else if (message == kStatusIconMessage) {
+    StatusIconWin* win_icon = NULL;
+
+    // Find the selected status icon.
+    for (StatusIcons::const_iterator i(status_icons().begin());
+         i != status_icons().end();
+         ++i) {
+      StatusIconWin* current_win_icon = static_cast<StatusIconWin*>(*i);
+      if (current_win_icon->icon_id() == wparam) {
+        win_icon = current_win_icon;
+        break;
+      }
+    }
+
+    // It is possible for this procedure to be called with an obsolete icon
+    // id.  In that case we should just return early before handling any
+    // actions.
+    if (!win_icon)
+      return TRUE;
+
     switch (lparam) {
+      case TB_INDETERMINATE:
+        win_icon->HandleBalloonClickEvent();
+        return TRUE;
+
       case WM_LBUTTONDOWN:
       case WM_RBUTTONDOWN:
       case WM_CONTEXTMENU:
         // Walk our icons, find which one was clicked on, and invoke its
         // HandleClickEvent() method.
-        for (StatusIcons::const_iterator i(status_icons().begin());
-             i != status_icons().end(); ++i) {
-          StatusIconWin* win_icon = static_cast<StatusIconWin*>(*i);
-          if (win_icon->icon_id() == wparam) {
-            gfx::Point cursor_pos(
-                gfx::Screen::GetNativeScreen()->GetCursorScreenPoint());
-            win_icon->HandleClickEvent(cursor_pos, lparam == WM_LBUTTONDOWN);
-            break;
-          }
-        }
+        gfx::Point cursor_pos(
+            gfx::Screen::GetNativeScreen()->GetCursorScreenPoint());
+        win_icon->HandleClickEvent(cursor_pos, lparam == WM_LBUTTONDOWN);
         return TRUE;
     }
   }
@@ -98,12 +125,30 @@ StatusTrayWin::~StatusTrayWin() {
     UnregisterClass(MAKEINTATOM(atom_), instance_);
 }
 
-StatusIcon* StatusTrayWin::CreatePlatformStatusIcon() {
-  if (win8::IsSingleWindowMetroMode()) {
-    return new StatusIconMetro(next_icon_id_++);
-  } else {
-    return new StatusIconWin(next_icon_id_++, window_, kStatusIconMessage);
-  }
+StatusIcon* StatusTrayWin::CreatePlatformStatusIcon(
+    StatusTray::StatusIconType type,
+    const gfx::ImageSkia& image,
+    const string16& tool_tip) {
+  UINT next_icon_id;
+  if (type == StatusTray::OTHER_ICON)
+    next_icon_id = NextIconId();
+  else
+    next_icon_id = ReservedIconId(type);
+
+  StatusIcon* icon = NULL;
+  if (win8::IsSingleWindowMetroMode())
+    icon = new StatusIconMetro(next_icon_id);
+  else
+    icon = new StatusIconWin(next_icon_id, window_, kStatusIconMessage);
+
+  icon->SetImage(image);
+  icon->SetToolTip(tool_tip);
+  return icon;
+}
+
+UINT StatusTrayWin::NextIconId() {
+  UINT icon_id = next_icon_id_++;
+  return kBaseIconId + static_cast<UINT>(NAMED_STATUS_ICON_COUNT) + icon_id;
 }
 
 StatusTray* StatusTray::Create() {

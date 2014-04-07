@@ -6,13 +6,13 @@
 
 #include <set>
 
-#include "apps/app_launcher.h"
 #include "base/i18n/rtl.h"
 #include "base/lazy_instance.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/metrics/histogram.h"
 #include "base/prefs/pref_service.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/metrics_handler.h"
 #include "chrome/browser/ui/webui/ntp/favicon_webui_handler.h"
@@ -20,13 +20,14 @@
 #include "chrome/browser/ui/webui/ntp/most_visited_handler.h"
 #include "chrome/browser/ui/webui/ntp/ntp_resource_cache.h"
 #include "chrome/browser/ui/webui/ntp/ntp_resource_cache_factory.h"
+#include "chrome/browser/ui/webui/ntp/ntp_user_data_logger.h"
 #include "chrome/browser/ui/webui/ntp/recently_closed_tabs_handler.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
 #include "components/user_prefs/pref_registry_syncable.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_service.h"
+#include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_contents.h"
@@ -37,6 +38,7 @@
 
 #if !defined(OS_ANDROID)
 #include "chrome/browser/ui/webui/ntp/app_launcher_handler.h"
+#include "chrome/browser/ui/webui/ntp/core_app_launcher_handler.h"
 #include "chrome/browser/ui/webui/ntp/new_tab_page_handler.h"
 #include "chrome/browser/ui/webui/ntp/new_tab_page_sync_handler.h"
 #include "chrome/browser/ui/webui/ntp/ntp_login_handler.h"
@@ -44,12 +46,17 @@
 #else
 #include "chrome/browser/ui/webui/ntp/android/bookmarks_handler.h"
 #include "chrome/browser/ui/webui/ntp/android/context_menu_handler.h"
+#include "chrome/browser/ui/webui/ntp/android/navigation_handler.h"
 #include "chrome/browser/ui/webui/ntp/android/new_tab_page_ready_handler.h"
 #include "chrome/browser/ui/webui/ntp/android/promo_handler.h"
 #endif
 
 #if defined(ENABLE_THEMES)
 #include "chrome/browser/ui/webui/theme_handler.h"
+#endif
+
+#if defined(USE_ASH)
+#include "chrome/browser/ui/host_desktop.h"
 #endif
 
 using content::BrowserThread;
@@ -78,12 +85,17 @@ NewTabUI::NewTabUI(content::WebUI* web_ui)
     : WebUIController(web_ui),
       showing_sync_bubble_(false) {
   g_live_new_tabs.Pointer()->insert(this);
-  // Override some options on the Web UI.
-  web_ui->HideFavicon();
-
-  web_ui->FocusLocationBarByDefault();
-  web_ui->HideURL();
   web_ui->OverrideTitle(l10n_util::GetStringUTF16(IDS_NEW_TAB_TITLE));
+
+  content::WebContents* web_contents = web_ui->GetWebContents();
+  NTPUserDataLogger::CreateForWebContents(web_contents);
+  NTPUserDataLogger::FromWebContents(web_contents)->set_ntp_url(
+      GURL(chrome::kChromeUINewTabURL));
+
+  registrar_.Add(
+      this,
+      content::NOTIFICATION_WEB_CONTENTS_VISIBILITY_CHANGED,
+      content::Source<content::WebContents>(web_contents));
 
   // We count all link clicks as AUTO_BOOKMARK, so that site can be ranked more
   // highly. Note this means we're including clicks on not only most visited
@@ -94,9 +106,11 @@ NewTabUI::NewTabUI(content::WebUI* web_ui)
     web_ui->AddMessageHandler(new browser_sync::ForeignSessionHandler());
     web_ui->AddMessageHandler(new MostVisitedHandler());
     web_ui->AddMessageHandler(new RecentlyClosedTabsHandler());
-    web_ui->AddMessageHandler(new MetricsHandler());
 #if !defined(OS_ANDROID)
+    web_ui->AddMessageHandler(new FaviconWebUIHandler());
+    web_ui->AddMessageHandler(new MetricsHandler());
     web_ui->AddMessageHandler(new NewTabPageHandler());
+    web_ui->AddMessageHandler(new CoreAppLauncherHandler());
     if (NewTabUI::IsDiscoveryInNTPEnabled())
       web_ui->AddMessageHandler(new SuggestionsHandler());
     // Android doesn't have a sync promo/username on NTP.
@@ -110,14 +124,14 @@ NewTabUI::NewTabUI(content::WebUI* web_ui)
         web_ui->AddMessageHandler(new AppLauncherHandler(service));
     }
 #endif
-
-    web_ui->AddMessageHandler(new FaviconWebUIHandler());
   }
 
 #if defined(OS_ANDROID)
   // These handlers are specific to the Android NTP page.
   web_ui->AddMessageHandler(new BookmarksHandler());
   web_ui->AddMessageHandler(new ContextMenuHandler());
+  web_ui->AddMessageHandler(new FaviconWebUIHandler());
+  web_ui->AddMessageHandler(new NavigationHandler());
   web_ui->AddMessageHandler(new NewTabPageReadyHandler());
   if (!GetProfile()->IsOffTheRecord())
     web_ui->AddMessageHandler(new PromoHandler());
@@ -216,9 +230,22 @@ void NewTabUI::Observe(int type,
       last_paint_ = base::TimeTicks::Now();
       break;
     }
+    case content::NOTIFICATION_WEB_CONTENTS_VISIBILITY_CHANGED: {
+      if (!*content::Details<bool>(details).ptr()) {
+        EmitMouseoverCount(
+            content::Source<content::WebContents>(source).ptr());
+      }
+      break;
+    }
     default:
       CHECK(false) << "Unexpected notification: " << type;
   }
+}
+
+void NewTabUI::EmitMouseoverCount(content::WebContents* web_contents) {
+  NTPUserDataLogger* data = NTPUserDataLogger::FromWebContents(web_contents);
+  if (data->ntp_url() == GURL(chrome::kChromeUINewTabURL))
+    data->EmitMouseoverCount();
 }
 
 void NewTabUI::OnShowBookmarkBarChanged() {
@@ -229,27 +256,28 @@ void NewTabUI::OnShowBookmarkBarChanged() {
 }
 
 // static
-void NewTabUI::RegisterUserPrefs(PrefRegistrySyncable* registry) {
+void NewTabUI::RegisterProfilePrefs(
+    user_prefs::PrefRegistrySyncable* registry) {
 #if !defined(OS_ANDROID)
-  AppLauncherHandler::RegisterUserPrefs(registry);
-  NewTabPageHandler::RegisterUserPrefs(registry);
+  CoreAppLauncherHandler::RegisterProfilePrefs(registry);
+  NewTabPageHandler::RegisterProfilePrefs(registry);
   if (NewTabUI::IsDiscoveryInNTPEnabled())
-    SuggestionsHandler::RegisterUserPrefs(registry);
+    SuggestionsHandler::RegisterProfilePrefs(registry);
 #endif
-  MostVisitedHandler::RegisterUserPrefs(registry);
-  browser_sync::ForeignSessionHandler::RegisterUserPrefs(registry);
+  MostVisitedHandler::RegisterProfilePrefs(registry);
+  browser_sync::ForeignSessionHandler::RegisterProfilePrefs(registry);
 }
 
 // static
 bool NewTabUI::ShouldShowApps() {
+// Ash shows apps in app list thus should not show apps page in NTP4.
+// Android does not have apps.
 #if defined(OS_ANDROID)
-  // Ash shows apps in app list thus should not show apps page in NTP4.
-  // Android does not have apps.
   return false;
+#elif defined(USE_ASH)
+  return chrome::GetActiveDesktop() != chrome::HOST_DESKTOP_TYPE_ASH;
 #else
-  // This needs to be synchronous, so we use the value the last time it
-  // was checked.
-  return !apps::WasAppLauncherEnabled();
+  return true;
 #endif
 }
 
@@ -314,13 +342,14 @@ NewTabUI::NewTabHTMLSource::NewTabHTMLSource(Profile* profile)
     : profile_(profile) {
 }
 
-std::string NewTabUI::NewTabHTMLSource::GetSource() {
+std::string NewTabUI::NewTabHTMLSource::GetSource() const {
   return chrome::kChromeUINewTabHost;
 }
 
 void NewTabUI::NewTabHTMLSource::StartDataRequest(
     const std::string& path,
-    bool is_incognito,
+    int render_process_id,
+    int render_view_id,
     const content::URLDataSource::GotDataCallback& callback) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
@@ -332,7 +361,7 @@ void NewTabUI::NewTabHTMLSource::StartDataRequest(
             ResourceBundle::GetSharedInstance().LoadDataResourceBytes(
                 it->second.second) :
             new base::RefCountedStaticMemory);
-    callback.Run(resource_bytes);
+    callback.Run(resource_bytes.get());
     return;
   }
 
@@ -347,14 +376,18 @@ void NewTabUI::NewTabHTMLSource::StartDataRequest(
 #if !defined(OS_ANDROID)
     NOTREACHED() << path << " should not have been requested on the NTP";
 #endif
+    callback.Run(NULL);
     return;
   }
 
+  content::RenderProcessHost* render_host =
+      content::RenderProcessHost::FromID(render_process_id);
+  bool is_incognito = render_host->GetBrowserContext()->IsOffTheRecord();
   scoped_refptr<base::RefCountedMemory> html_bytes(
       NTPResourceCacheFactory::GetForProfile(profile_)->
       GetNewTabHTML(is_incognito));
 
-  callback.Run(html_bytes);
+  callback.Run(html_bytes.get());
 }
 
 std::string NewTabUI::NewTabHTMLSource::GetMimeType(const std::string& resource)

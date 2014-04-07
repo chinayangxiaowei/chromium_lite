@@ -52,31 +52,30 @@ remoting.HostSetupFlow.prototype.getState = function() {
   return this.state_;
 };
 
-/**
- * @param {remoting.HostController.AsyncResult} result Result of the
- * current step.
- * @return {remoting.HostSetupFlow.State} New state.
- */
-remoting.HostSetupFlow.prototype.switchToNextStep = function(result) {
+remoting.HostSetupFlow.prototype.switchToNextStep = function() {
   if (this.state_ == remoting.HostSetupFlow.State.NONE) {
-    return this.state_;
+    return;
   }
-  if (result == remoting.HostController.AsyncResult.OK) {
-    // If the current step was successful then switch to the next
-    // step in the sequence.
-    if (this.currentStep_ < this.sequence_.length - 1) {
-      this.currentStep_ += 1;
-      this.state_ = this.sequence_[this.currentStep_];
-    } else {
-      this.state_ = remoting.HostSetupFlow.State.NONE;
-    }
-  } else if (result == remoting.HostController.AsyncResult.CANCELLED) {
+
+  if (this.currentStep_ < this.sequence_.length - 1) {
+    this.currentStep_ += 1;
+    this.state_ = this.sequence_[this.currentStep_];
+  } else {
+    this.state_ = remoting.HostSetupFlow.State.NONE;
+  }
+};
+
+/**
+ * @param {remoting.Error} error
+ */
+remoting.HostSetupFlow.prototype.switchToErrorState = function(error) {
+  if (error == remoting.Error.CANCELLED) {
     // Stop the setup flow if user rejected one of the actions.
     this.state_ = remoting.HostSetupFlow.State.NONE;
   } else {
     // Current step failed, so switch to corresponding error state.
     if (this.state_ == remoting.HostSetupFlow.State.STARTING_HOST) {
-      if (result == remoting.HostController.AsyncResult.FAILED_DIRECTORY) {
+      if (error == remoting.Error.REGISTRATION_FAILED) {
         this.state_ = remoting.HostSetupFlow.State.REGISTRATION_FAILED;
       } else {
         this.state_ = remoting.HostSetupFlow.State.START_HOST_FAILED;
@@ -90,7 +89,6 @@ remoting.HostSetupFlow.prototype.switchToNextStep = function(result) {
       this.state_ = remoting.HostSetupFlow.State.START_HOST_FAILED;
     }
   }
-  return this.state_;
 };
 
 /**
@@ -104,6 +102,19 @@ remoting.HostSetupDialog = function(hostController) {
   this.pinConfirm_ = document.getElementById('daemon-pin-confirm');
   this.pinErrorDiv_ = document.getElementById('daemon-pin-error-div');
   this.pinErrorMessage_ = document.getElementById('daemon-pin-error-message');
+  this.continueInstallButton_ = document.getElementById(
+      'host-config-install-continue');
+  this.cancelInstallButton_ = document.getElementById(
+      'host-config-install-dismiss');
+  this.retryInstallButton_ = document.getElementById(
+      'host-config-install-retry');
+
+  this.continueInstallButton_.addEventListener(
+      'click', this.onInstallDialogOk.bind(this), false);
+  this.cancelInstallButton_.addEventListener(
+      'click', this.hide.bind(this), false);
+  this.retryInstallButton_.addEventListener(
+      'click', this.onInstallDialogRetry.bind(this), false);
 
   /** @type {remoting.HostSetupFlow} */
   this.flow_ = new remoting.HostSetupFlow([remoting.HostSetupFlow.State.NONE]);
@@ -155,18 +166,32 @@ remoting.HostSetupDialog = function(hostController) {
  * @return {void} Nothing.
  */
 remoting.HostSetupDialog.prototype.showForStart = function() {
-  // Although we don't need an access token in order to start the host,
-  // using callWithToken here ensures consistent error handling in the
-  // case where the refresh token is invalid.
-  remoting.identity.callWithToken(this.showForStartWithToken_.bind(this),
-                                  remoting.showErrorMessage);
+  /** @type {remoting.HostSetupDialog} */
+  var that = this;
+
+  /**
+   * @param {remoting.HostController.State} state
+   */
+  var onState = function(state) {
+    // Although we don't need an access token in order to start the host,
+    // using callWithToken here ensures consistent error handling in the
+    // case where the refresh token is invalid.
+    remoting.identity.callWithToken(
+        that.showForStartWithToken_.bind(that, state),
+        remoting.showErrorMessage);
+  };
+
+  this.hostController_.getLocalHostState(onState);
 };
 
 /**
+ * @param {remoting.HostController.State} state The current state of the local
+ *     host.
  * @param {string} token The OAuth2 token.
  * @private
  */
-remoting.HostSetupDialog.prototype.showForStartWithToken_ = function(token) {
+remoting.HostSetupDialog.prototype.showForStartWithToken_ =
+    function(state, token) {
   /** @type {remoting.HostSetupDialog} */
   var that = this;
 
@@ -177,22 +202,36 @@ remoting.HostSetupDialog.prototype.showForStartWithToken_ = function(token) {
    * @param {boolean} set_by_policy True if crash dump reporting is controlled
    *     by policy.
    */
-  var onGetConsent = function(supported, allowed, set_by_policy) {
+  function onGetConsent(supported, allowed, set_by_policy) {
     that.usageStats_.hidden = !supported;
     that.usageStatsCheckbox_.checked = allowed;
     that.usageStatsCheckbox_.disabled = set_by_policy;
-  };
+  }
+
+  /** @param {remoting.Error} error */
+  function onError(error) {
+    console.error('Error getting consent status: ' + error);
+  }
+
   this.usageStats_.hidden = false;
   this.usageStatsCheckbox_.checked = false;
-  this.hostController_.getConsent(onGetConsent);
+
+  // Prevent user from ticking the box until the current consent status is
+  // known.
+  this.usageStatsCheckbox_.disabled = true;
+
+  this.hostController_.getConsent(onGetConsent, onError);
 
   var flow = [
       remoting.HostSetupFlow.State.ASK_PIN,
       remoting.HostSetupFlow.State.STARTING_HOST,
       remoting.HostSetupFlow.State.HOST_STARTED];
 
-  if (navigator.platform.indexOf('Mac') != -1 &&
-      !this.hostController_.isInstalled()) {
+  var installed =
+      state != remoting.HostController.State.NOT_INSTALLED &&
+      state != remoting.HostController.State.INSTALLING;
+
+  if (navigator.platform.indexOf('Mac') != -1 && !installed) {
     flow.unshift(remoting.HostSetupFlow.State.INSTALL_HOST);
   }
 
@@ -307,7 +346,7 @@ remoting.HostSetupDialog.prototype.updateState_ = function() {
   } else if (state == remoting.HostSetupFlow.State.HOST_STOPPED) {
     showDoneMessage(/*i18n-content*/'HOST_SETUP_STOPPED');
   } else if (state == remoting.HostSetupFlow.State.REGISTRATION_FAILED) {
-    showErrorMessage(/*i18n-content*/'HOST_SETUP_REGISTRATION_FAILED');
+    showErrorMessage(/*i18n-content*/'ERROR_HOST_REGISTRATION_FAILED');
   } else if (state == remoting.HostSetupFlow.State.START_HOST_FAILED) {
     showErrorMessage(/*i18n-content*/'HOST_SETUP_HOST_FAILED');
   } else if (state == remoting.HostSetupFlow.State.UPDATE_PIN_FAILED) {
@@ -326,18 +365,33 @@ remoting.HostSetupDialog.prototype.startHost_ = function() {
   /** @type {remoting.HostSetupFlow} */
   var flow = this.flow_;
 
-  /** @param {remoting.HostController.AsyncResult} result */
-  function onHostStarted(result) {
+  /** @return {boolean} */
+  function isFlowActive() {
     if (flow !== that.flow_ ||
         flow.getState() != remoting.HostSetupFlow.State.STARTING_HOST) {
       console.error('Host setup was interrupted when starting the host');
-      return;
+      return false;
     }
-
-    flow.switchToNextStep(result);
-    that.updateState_();
+    return true;
   }
-  this.hostController_.start(this.flow_.pin, this.flow_.consent, onHostStarted);
+
+  function onHostStarted() {
+    if (isFlowActive()) {
+      flow.switchToNextStep();
+      that.updateState_();
+    }
+  }
+
+  /** @param {remoting.Error} error */
+  function onError(error) {
+    if (isFlowActive()) {
+      flow.switchToErrorState(error);
+      that.updateState_();
+    }
+  }
+
+  this.hostController_.start(this.flow_.pin, this.flow_.consent, onHostStarted,
+                             onError);
 };
 
 remoting.HostSetupDialog.prototype.updatePin_ = function() {
@@ -346,20 +400,33 @@ remoting.HostSetupDialog.prototype.updatePin_ = function() {
   /** @type {remoting.HostSetupFlow} */
   var flow = this.flow_;
 
-  /** @param {remoting.HostController.AsyncResult} result */
-  function onPinUpdated(result) {
+  /** @return {boolean} */
+  function isFlowActive() {
     if (flow !== that.flow_ ||
         flow.getState() != remoting.HostSetupFlow.State.UPDATING_PIN) {
       console.error('Host setup was interrupted when updating PIN');
-      return;
+      return false;
     }
-
-    flow.switchToNextStep(result);
-    that.updateState_();
+    return true;
   }
 
-  this.hostController_.updatePin(flow.pin, onPinUpdated);
-}
+  function onPinUpdated() {
+    if (isFlowActive()) {
+      flow.switchToNextStep();
+      that.updateState_();
+    }
+  }
+
+  /** @param {remoting.Error} error */
+  function onError(error) {
+    if (isFlowActive()) {
+      flow.switchToErrorState(error);
+      that.updateState_();
+    }
+  }
+
+  this.hostController_.updatePin(flow.pin, onPinUpdated, onError);
+};
 
 /**
  * Stops the host.
@@ -370,18 +437,32 @@ remoting.HostSetupDialog.prototype.stopHost_ = function() {
   /** @type {remoting.HostSetupFlow} */
   var flow = this.flow_;
 
-  /** @param {remoting.HostController.AsyncResult} result */
-  function onHostStopped(result) {
+  /** @return {boolean} */
+  function isFlowActive() {
     if (flow !== that.flow_ ||
         flow.getState() != remoting.HostSetupFlow.State.STOPPING_HOST) {
       console.error('Host setup was interrupted when stopping the host');
-      return;
+      return false;
     }
-
-    flow.switchToNextStep(result);
-    that.updateState_();
+    return true;
   }
-  this.hostController_.stop(onHostStopped);
+
+  function onHostStopped() {
+    if (isFlowActive()) {
+      flow.switchToNextStep();
+      that.updateState_();
+    }
+  }
+
+  /** @param {remoting.Error} error */
+  function onError(error) {
+    if (isFlowActive()) {
+      flow.switchToErrorState(error);
+      that.updateState_();
+    }
+  }
+
+  this.hostController_.stop(onHostStopped, onError);
 };
 
 /**
@@ -422,7 +503,7 @@ remoting.HostSetupDialog.prototype.onPinSubmit_ = function() {
   this.flow_.pin = pin1;
   this.flow_.consent = !this.usageStats_.hidden &&
       this.usageStatsCheckbox_.checked;
-  this.flow_.switchToNextStep(remoting.HostController.AsyncResult.OK);
+  this.flow_.switchToNextStep();
   this.updateState_();
 };
 
@@ -457,12 +538,28 @@ remoting.HostSetupDialog.validPin_ = function(pin) {
  * @return {void} Nothing.
  */
 remoting.HostSetupDialog.prototype.onInstallDialogOk = function() {
-  if (this.hostController_.isInstalled()) {
-    this.flow_.switchToNextStep(remoting.HostController.AsyncResult.OK);
-    this.updateState_();
-  } else {
-    remoting.setMode(remoting.AppMode.HOST_SETUP_INSTALL_PENDING);
-  }
+  this.continueInstallButton_.disabled = true;
+  this.cancelInstallButton_.disabled = true;
+
+  /** @type {remoting.HostSetupDialog} */
+  var that = this;
+
+  /** @param {remoting.HostController.State} state */
+  var onHostState = function(state) {
+    that.continueInstallButton_.disabled = false;
+    that.cancelInstallButton_.disabled = false;
+    var installed =
+        state != remoting.HostController.State.NOT_INSTALLED &&
+        state != remoting.HostController.State.INSTALLING;
+    if (installed) {
+      that.flow_.switchToNextStep();
+      that.updateState_();
+    } else {
+      remoting.setMode(remoting.AppMode.HOST_SETUP_INSTALL_PENDING);
+    }
+  };
+
+  this.hostController_.getLocalHostState(onHostState);
 };
 
 /**

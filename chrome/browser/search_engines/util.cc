@@ -12,7 +12,7 @@
 #include "base/logging.h"
 #include "base/memory/scoped_vector.h"
 #include "base/prefs/pref_service.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url.h"
 #include "chrome/browser/search_engines/template_url_prepopulate_data.h"
@@ -37,6 +37,21 @@ string16 GetDefaultSearchEngineName(Profile* profile) {
     return string16();
   }
   return default_provider->short_name();
+}
+
+GURL GetDefaultSearchURLForSearchTerms(Profile* profile,
+                                       const string16& terms) {
+  DCHECK(profile);
+  const TemplateURL* default_provider =
+      TemplateURLServiceFactory::GetForProfile(profile)->
+      GetDefaultSearchProvider();
+  if (!default_provider)
+    return GURL();
+  const TemplateURLRef& search_url = default_provider->url_ref();
+  DCHECK(search_url.SupportsReplacement());
+  TemplateURLRef::SearchTermsArgs search_terms_args(terms);
+  search_terms_args.append_extra_query_params = true;
+  return GURL(search_url.ReplaceSearchTerms(search_terms_args));
 }
 
 void RemoveDuplicatePrepopulateIDs(
@@ -149,8 +164,8 @@ void MergeIntoPrepopulatedEngineData(TemplateURLData* prepopulated_url,
   prepopulated_url->last_modified = original_turl->last_modified();
 }
 
-// Loads engines from prepopulate data and merges them in with the existing
-// engines.  This is invoked when the version of the prepopulate data changes.
+// Merges the provided prepopulated engines with the provided existing engines.
+// This is invoked when the version of the prepopulate data changes.
 // If |removed_keyword_guids| is not NULL, the Sync GUID of each item removed
 // from the DB will be added to it.  Note that this function will take
 // ownership of |prepopulated_urls| and will clear the vector.
@@ -262,7 +277,6 @@ void GetSearchProvidersUsingKeywordResult(
   DCHECK_EQ(KEYWORDS_RESULT, result.GetType());
   DCHECK(new_resource_keyword_version);
 
-  *new_resource_keyword_version = 0;
   WDKeywordsResult keyword_result = reinterpret_cast<
       const WDResult<WDKeywordsResult>*>(&result)->GetValue();
 
@@ -288,6 +302,25 @@ void GetSearchProvidersUsingKeywordResult(
         GetTemplateURLByID(*template_urls, default_search_provider_id);
   }
 
+  *new_resource_keyword_version = keyword_result.builtin_keyword_version;
+  GetSearchProvidersUsingLoadedEngines(service, profile, template_urls,
+                                       default_search_provider,
+                                       new_resource_keyword_version,
+                                       removed_keyword_guids);
+}
+
+void GetSearchProvidersUsingLoadedEngines(
+    WebDataService* service,
+    Profile* profile,
+    TemplateURLService::TemplateURLVector* template_urls,
+    TemplateURL** default_search_provider,
+    int* resource_keyword_version,
+    std::set<std::string>* removed_keyword_guids) {
+  DCHECK(service == NULL || BrowserThread::CurrentlyOn(BrowserThread::UI));
+  DCHECK(template_urls);
+  DCHECK(default_search_provider);
+  DCHECK(resource_keyword_version);
+
   ScopedVector<TemplateURL> prepopulated_urls;
   size_t default_search_index;
   TemplateURLPrepopulateData::GetPrepopulatedEngines(profile,
@@ -296,14 +329,16 @@ void GetSearchProvidersUsingKeywordResult(
                                 *default_search_provider, template_urls,
                                 removed_keyword_guids);
 
-  const int resource_keyword_version =
+  const int prepopulate_resource_keyword_version =
       TemplateURLPrepopulateData::GetDataVersion(
           profile ? profile->GetPrefs() : NULL);
-  if (keyword_result.builtin_keyword_version != resource_keyword_version) {
+  if (*resource_keyword_version < prepopulate_resource_keyword_version) {
     MergeEnginesFromPrepopulateData(profile, service, &prepopulated_urls,
         default_search_index, template_urls, default_search_provider,
         removed_keyword_guids);
-    *new_resource_keyword_version = resource_keyword_version;
+    *resource_keyword_version = prepopulate_resource_keyword_version;
+  } else {
+    *resource_keyword_version = 0;
   }
 }
 

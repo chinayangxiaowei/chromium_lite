@@ -8,28 +8,29 @@
 #include "base/bind_helpers.h"
 #include "base/location.h"
 #include "base/memory/ref_counted.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
 #include "ipc/ipc_channel.h"
 #include "ipc/ipc_channel_proxy.h"
 #include "ipc/ipc_listener.h"
 #include "ipc/ipc_message.h"
-#include "media/video/capture/screen/screen_capturer_fake.h"
 #include "remoting/base/auto_thread.h"
 #include "remoting/base/auto_thread_task_runner.h"
 #include "remoting/host/chromoting_messages.h"
 #include "remoting/host/desktop_process.h"
 #include "remoting/host/host_exit_codes.h"
 #include "remoting/host/host_mock_objects.h"
+#include "remoting/host/screen_capturer_fake.h"
 #include "remoting/host/screen_resolution.h"
 #include "remoting/protocol/protocol_mock_objects.h"
-#include "testing/gmock_mutant.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "testing/gmock_mutant.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using testing::_;
 using testing::AnyNumber;
+using testing::AtMost;
 using testing::InSequence;
 using testing::Return;
 
@@ -104,7 +105,7 @@ class DesktopProcessTest : public testing::Test {
   void ConnectNetworkChannel(IPC::PlatformFileForTransit desktop_process);
   void OnDesktopAttached(IPC::PlatformFileForTransit desktop_process);
 
-  // Creates a DesktopEnvironment with a fake media::ScreenCapturer, to mock
+  // Creates a DesktopEnvironment with a fake webrtc::ScreenCapturer, to mock
   // DesktopEnvironmentFactory::Create().
   DesktopEnvironment* CreateDesktopEnvironment();
 
@@ -112,9 +113,9 @@ class DesktopProcessTest : public testing::Test {
   // DesktopEnvironment::CreateInputInjector().
   InputInjector* CreateInputInjector();
 
-  // Creates a fake media::ScreenCapturer, to mock
+  // Creates a fake webrtc::ScreenCapturer, to mock
   // DesktopEnvironment::CreateVideoCapturer().
-  media::ScreenCapturer* CreateVideoCapturer();
+  webrtc::ScreenCapturer* CreateVideoCapturer();
 
   // Disconnects the daemon-to-desktop channel causing the desktop process to
   // exit.
@@ -143,7 +144,7 @@ class DesktopProcessTest : public testing::Test {
   MockDaemonListener daemon_listener_;
 
   // Runs the daemon's end of the channel.
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
 
   scoped_refptr<AutoThreadTaskRunner> io_task_runner_;
 
@@ -154,10 +155,8 @@ class DesktopProcessTest : public testing::Test {
   MockNetworkListener network_listener_;
 };
 
-
 DesktopProcessTest::DesktopProcessTest()
-    : message_loop_(MessageLoop::TYPE_UI) {
-}
+    : message_loop_(base::MessageLoop::TYPE_UI) {}
 
 DesktopProcessTest::~DesktopProcessTest() {
 }
@@ -172,16 +171,15 @@ void DesktopProcessTest::ConnectNetworkChannel(
     IPC::PlatformFileForTransit desktop_process) {
 
 #if defined(OS_POSIX)
-  IPC::ChannelHandle channel_handle("", desktop_process);
+  IPC::ChannelHandle channel_handle(std::string(), desktop_process);
 #elif defined(OS_WIN)
   IPC::ChannelHandle channel_handle(desktop_process);
 #endif  // defined(OS_WIN)
 
-  network_channel_.reset(new IPC::ChannelProxy(
-      channel_handle,
-      IPC::Channel::MODE_CLIENT,
-      &network_listener_,
-      io_task_runner_));
+  network_channel_.reset(new IPC::ChannelProxy(channel_handle,
+                                               IPC::Channel::MODE_CLIENT,
+                                               &network_listener_,
+                                               io_task_runner_.get()));
 }
 
 void DesktopProcessTest::OnDesktopAttached(
@@ -198,13 +196,17 @@ DesktopEnvironment* DesktopProcessTest::CreateDesktopEnvironment() {
   EXPECT_CALL(*desktop_environment, CreateAudioCapturerPtr())
       .Times(0);
   EXPECT_CALL(*desktop_environment, CreateInputInjectorPtr())
-      .Times(AnyNumber())
-      .WillRepeatedly(Invoke(this, &DesktopProcessTest::CreateInputInjector));
+      .Times(AtMost(1))
+      .WillOnce(Invoke(this, &DesktopProcessTest::CreateInputInjector));
   EXPECT_CALL(*desktop_environment, CreateScreenControlsPtr())
-      .Times(AnyNumber());
+      .Times(AtMost(1));
   EXPECT_CALL(*desktop_environment, CreateVideoCapturerPtr())
-      .Times(AnyNumber())
-      .WillRepeatedly(Invoke(this, &DesktopProcessTest::CreateVideoCapturer));
+      .Times(AtMost(1))
+      .WillOnce(Invoke(this, &DesktopProcessTest::CreateVideoCapturer));
+  EXPECT_CALL(*desktop_environment, GetCapabilities())
+      .Times(AtMost(1));
+  EXPECT_CALL(*desktop_environment, SetCapabilities(_))
+      .Times(AtMost(1));
 
   // Notify the test that the desktop environment has been created.
   network_listener_.OnDesktopEnvironmentCreated();
@@ -217,8 +219,8 @@ InputInjector* DesktopProcessTest::CreateInputInjector() {
   return input_injector;
 }
 
-media::ScreenCapturer* DesktopProcessTest::CreateVideoCapturer() {
-  return new media::ScreenCapturerFake();
+webrtc::ScreenCapturer* DesktopProcessTest::CreateVideoCapturer() {
+  return new ScreenCapturerFake();
 }
 
 void DesktopProcessTest::DisconnectChannels() {
@@ -241,15 +243,14 @@ void DesktopProcessTest::RunDesktopProcess() {
   scoped_refptr<AutoThreadTaskRunner> ui_task_runner = new AutoThreadTaskRunner(
       message_loop_.message_loop_proxy(), quit_ui_task_runner);
 
-  io_task_runner_ = AutoThread::CreateWithType("IPC thread", ui_task_runner,
-                                               MessageLoop::TYPE_IO);
+  io_task_runner_ = AutoThread::CreateWithType(
+      "IPC thread", ui_task_runner, base::MessageLoop::TYPE_IO);
 
   std::string channel_name = IPC::Channel::GenerateUniqueRandomChannelID();
-  daemon_channel_.reset(new IPC::ChannelProxy(
-      IPC::ChannelHandle(channel_name),
-      IPC::Channel::MODE_SERVER,
-      &daemon_listener_,
-      io_task_runner_));
+  daemon_channel_.reset(new IPC::ChannelProxy(IPC::ChannelHandle(channel_name),
+                                              IPC::Channel::MODE_SERVER,
+                                              &daemon_listener_,
+                                              io_task_runner_.get()));
 
   scoped_ptr<MockDesktopEnvironmentFactory> desktop_environment_factory(
       new MockDesktopEnvironmentFactory());
@@ -287,13 +288,8 @@ void DesktopProcessTest::SendCrashRequest() {
 }
 
 void DesktopProcessTest::SendStartSessionAgent() {
-  // TODO(alexeypa): Fix DesktopProcess to use the desktop environment
-  // to create the disconnect window instead of directly calling
-  // DisconnectWindow::Create(). This will take care of "Uninteresting mock
-  // function call" warnings printed when DisconnectWindow::Show() and
-  // DisconnectWindow::Hide() are called.
   network_channel_->Send(new ChromotingNetworkDesktopMsg_StartSessionAgent(
-      "user@domain/rest-of-jid", ScreenResolution()));
+      "user@domain/rest-of-jid", ScreenResolution(), false));
 }
 
 // Launches the desktop process and waits when it connects back.

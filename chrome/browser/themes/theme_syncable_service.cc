@@ -4,13 +4,14 @@
 
 #include "chrome/browser/themes/theme_syncable_service.h"
 
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_system.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/manifest_url_handler.h"
+#include "chrome/common/extensions/sync_helper.h"
 #include "sync/protocol/sync.pb.h"
 #include "sync/protocol/theme_specifics.pb.h"
 
@@ -18,8 +19,8 @@ using std::string;
 
 namespace {
 
-bool IsTheme(const extensions::Extension& extension) {
-  return extension.is_theme();
+bool IsTheme(const extensions::Extension* extension) {
+  return extension->is_theme();
 }
 
 // TODO(akalin): Remove this.
@@ -134,6 +135,7 @@ syncer::SyncError ThemeSyncableService::ProcessSyncChanges(
 
   if (!sync_processor_.get()) {
     return syncer::SyncError(FROM_HERE,
+                             syncer::SyncError::DATATYPE_ERROR,
                              "Theme syncable service is not started.",
                              syncer::THEMES);
   }
@@ -179,8 +181,8 @@ syncer::SyncError ThemeSyncableService::ProcessSyncChanges(
   }
 
   return syncer::SyncError(FROM_HERE,
-                           base::StringPrintf(
-                               "Didn't find valid theme specifics."),
+                           syncer::SyncError::DATATYPE_ERROR,
+                           "Didn't find valid theme specifics",
                            syncer::THEMES);
 }
 
@@ -251,7 +253,7 @@ bool ThemeSyncableService::GetThemeSpecificsFromCurrentTheme(
           NULL :
           extensions::ExtensionSystem::Get(profile_)->extension_service()->
               GetExtensionById(theme_service_->GetThemeID(), false);
-  if (current_theme && !current_theme->IsSyncable()) {
+  if (current_theme && !extensions::sync_helper::IsSyncable(current_theme)) {
     DVLOG(1) << "Ignoring extension from external source: " <<
         current_theme->location();
     return false;

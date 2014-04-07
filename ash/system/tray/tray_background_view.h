@@ -26,6 +26,8 @@ class TrayBackground;
 class ASH_EXPORT TrayBackgroundView : public ActionableView,
                                       public BackgroundAnimatorDelegate {
  public:
+  static const char kViewClassName[];
+
   // Base class for tray containers. Sets the border and layout. The container
   // auto-resizes the widget when necessary.
   class TrayContainer : public views::View {
@@ -44,9 +46,8 @@ class ASH_EXPORT TrayBackgroundView : public ActionableView,
     // Overridden from views::View.
     virtual void ChildPreferredSizeChanged(views::View* child) OVERRIDE;
     virtual void ChildVisibilityChanged(View* child) OVERRIDE;
-    virtual void ViewHierarchyChanged(bool is_add,
-                                      View* parent,
-                                      View* child) OVERRIDE;
+    virtual void ViewHierarchyChanged(
+        const ViewHierarchyChangedDetails& details) OVERRIDE;
 
    private:
     void UpdateLayout();
@@ -64,6 +65,7 @@ class ASH_EXPORT TrayBackgroundView : public ActionableView,
   virtual void Initialize();
 
   // Overridden from views::View.
+  virtual const char* GetClassName() const OVERRIDE;
   virtual void OnMouseEntered(const ui::MouseEvent& event) OVERRIDE;
   virtual void OnMouseExited(const ui::MouseEvent& event) OVERRIDE;
   virtual void ChildPreferredSizeChanged(views::View* child) OVERRIDE;
@@ -84,7 +86,7 @@ class ASH_EXPORT TrayBackgroundView : public ActionableView,
   virtual void AnchorUpdated() {}
 
   // Called from GetAccessibleState, must return a valid accessible name.
-  virtual string16 GetAccessibleNameForTray() = 0;
+  virtual base::string16 GetAccessibleNameForTray() = 0;
 
   // Hides the bubble associated with |bubble_view|. Called when the widget
   // is closed.
@@ -121,6 +123,9 @@ class ASH_EXPORT TrayBackgroundView : public ActionableView,
   // Returns the bubble anchor alignment based on |shelf_alignment_|.
   views::TrayBubbleView::AnchorAlignment GetAnchorAlignment() const;
 
+  // Updates the view visual based on the visibility of the bubble.
+  void SetBubbleVisible(bool visible);
+
   StatusAreaWidget* status_area_widget() {
     return status_area_widget_;
   }
@@ -135,6 +140,9 @@ class ASH_EXPORT TrayBackgroundView : public ActionableView,
 
   // Updates the arrow visibilty based on the launcher visibilty.
   void UpdateBubbleViewArrow(views::TrayBubbleView* bubble_view);
+
+  // Provides the background with a function to query for pressed state.
+  virtual bool IsPressed();
 
  private:
   class TrayWidgetObserver;
@@ -157,6 +165,8 @@ class ASH_EXPORT TrayBackgroundView : public ActionableView,
 
   internal::BackgroundAnimator hide_background_animator_;
   internal::BackgroundAnimator hover_background_animator_;
+  bool hovered_;
+  bool pressed_;
   scoped_ptr<TrayWidgetObserver> widget_observer_;
   scoped_ptr<TrayEventFilter> tray_event_filter_;
 

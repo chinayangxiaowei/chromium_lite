@@ -54,6 +54,7 @@ class BookmarkChangeProcessor : public BookmarkModelObserver,
                                    const BookmarkNode* parent,
                                    int index,
                                    const BookmarkNode* node) OVERRIDE;
+  virtual void BookmarkAllNodesRemoved(BookmarkModel* model) OVERRIDE;
   virtual void BookmarkNodeChanged(BookmarkModel* model,
                                    const BookmarkNode* node) OVERRIDE;
   virtual void BookmarkNodeFaviconChanged(BookmarkModel* model,
@@ -68,30 +69,35 @@ class BookmarkChangeProcessor : public BookmarkModelObserver,
       int64 model_version,
       const syncer::ImmutableChangeRecordList& changes) OVERRIDE;
 
-  // Create a bookmark node corresponding to |src| if one is not already
-  // associated with |src|.  Returns the node that was created or updated.
-  static const BookmarkNode* CreateOrUpdateBookmarkNode(
-      syncer::BaseNode* src,
-      BookmarkModel* model,
-      BookmarkModelAssociator* model_associator);
+  // The following methods are static and hence may be invoked at any time, and
+  // do not depend on having a running ChangeProcessor.
 
-  // The following methods are static and hence may be invoked at any time,
-  // and do not depend on having a running ChangeProcessor.
+  // Updates the title, URL, creation time and favicon of the bookmark |node|
+  // with data taken from the |sync_node| sync node.
+  static void UpdateBookmarkWithSyncData(
+      const syncer::BaseNode& sync_node,
+      BookmarkModel* model,
+      const BookmarkNode* node,
+      Profile* profile);
+
   // Creates a bookmark node under the given parent node from the given sync
-  // node. Returns the newly created node.
+  // node. Returns the newly created node.  The created node is placed at the
+  // specified index among the parent's children.
   static const BookmarkNode* CreateBookmarkNode(
       syncer::BaseNode* sync_node,
       const BookmarkNode* parent,
       BookmarkModel* model,
+      Profile* profile,
       int index);
 
   // Sets the favicon of the given bookmark node from the given sync node.
   // Returns whether the favicon was set in the bookmark node.
   // |profile| is the profile that contains the HistoryService and BookmarkModel
   // for the bookmark in question.
-  static bool SetBookmarkFavicon(syncer::BaseNode* sync_node,
+  static bool SetBookmarkFavicon(const syncer::BaseNode* sync_node,
                                  const BookmarkNode* bookmark_node,
-                                 BookmarkModel* model);
+                                 BookmarkModel* model,
+                                 Profile* profile);
 
   // Applies the 1x favicon |bitmap_data| and |icon_url| to |bookmark_node|.
   // |profile| is the profile that contains the HistoryService and BookmarkModel
@@ -135,16 +141,6 @@ class BookmarkChangeProcessor : public BookmarkModelObserver,
     CREATE,
   };
 
-  // Helper function to determine the appropriate insertion index of sync node
-  // |node| under the Bookmark model node |parent|, to make the positions
-  // match up between the two models. This presumes that the predecessor of the
-  // item (in the bookmark model) has already been moved into its appropriate
-  // position.
-  static int CalculateBookmarkModelInsertionIndex(
-      const BookmarkNode* parent,
-      const syncer::BaseNode* node,
-      BookmarkModelAssociator* model_associator);
-
   // Helper function used to fix the position of a sync node so that it matches
   // the position of a corresponding bookmark model node. |parent| and
   // |index| identify the bookmark model position.  |dst| is the node whose
@@ -170,10 +166,16 @@ class BookmarkChangeProcessor : public BookmarkModelObserver,
                             BookmarkModel* model,
                             scoped_refptr<base::RefCountedMemory>* dst);
 
-  // Remove the sync node corresponding to |node|.  It shouldn't have
-  // any children.
-  void RemoveOneSyncNode(syncer::WriteTransaction* trans,
-                         const BookmarkNode* node);
+  // Remove |sync_node|. It should not have any children
+  void RemoveOneSyncNode(syncer::WriteNode* sync_node);
+
+  // Remove all sync nodes, except the permanent nodes.
+  void RemoveAllSyncNodes();
+
+  // Remove all children of the bookmark node with bookmark node id:
+  // |topmost_node_id|.
+  void RemoveAllChildNodes(syncer::WriteTransaction* trans,
+                           const int64& topmost_node_id);
 
   // Remove all the sync nodes associated with |node| and its children.
   void RemoveSyncNodeHierarchy(const BookmarkNode* node);
@@ -181,6 +183,8 @@ class BookmarkChangeProcessor : public BookmarkModelObserver,
   // The bookmark model we are processing changes from.  Non-NULL when
   // |running_| is true.
   BookmarkModel* bookmark_model_;
+
+  Profile* profile_;
 
   // The two models should be associated according to this ModelAssociator.
   BookmarkModelAssociator* model_associator_;

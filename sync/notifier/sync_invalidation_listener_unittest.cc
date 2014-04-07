@@ -7,10 +7,10 @@
 #include <string>
 
 #include "base/compiler_specific.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/stl_util.h"
-#include "base/time.h"
 #include "base/time/tick_clock.h"
+#include "base/time/time.h"
 #include "google/cacheinvalidation/include/invalidation-client.h"
 #include "google/cacheinvalidation/include/types.h"
 #include "jingle/notifier/listener/fake_push_client.h"
@@ -146,9 +146,14 @@ class FakeDelegate : public SyncInvalidationListener::Delegate {
     return (it == invalidation_counts_.end()) ? 0 : it->second;
   }
 
+  int64 GetVersion(const ObjectId& id) const {
+    ObjectIdInvalidationMap::const_iterator it = invalidations_.find(id);
+    return (it == invalidations_.end()) ? 0 : it->second.version;
+  }
+
   std::string GetPayload(const ObjectId& id) const {
     ObjectIdInvalidationMap::const_iterator it = invalidations_.find(id);
-    return (it == invalidations_.end()) ? "" : it->second.payload;
+    return (it == invalidations_.end()) ? std::string() : it->second.payload;
   }
 
   InvalidatorState GetInvalidatorState() const {
@@ -277,11 +282,6 @@ class SyncInvalidationListenerTest : public testing::Test {
                     MakeWeakHandle(fake_tracker_.AsWeakPtr()),
                     &fake_delegate_);
     DCHECK(fake_invalidation_client_);
-
-    // TODO(rlarocque): This is necessary for the deferred write of the client
-    // ID to take place.  We can remove this statement when we remove the
-    // WriteInvalidatorClientId test.  See crbug.com/124142.
-    message_loop_.RunUntilIdle();
   }
 
   void StopClient() {
@@ -298,6 +298,10 @@ class SyncInvalidationListenerTest : public testing::Test {
 
   int GetInvalidationCount(const ObjectId& id) const {
     return fake_delegate_.GetInvalidationCount(id);
+  }
+
+  int64 GetVersion(const ObjectId& id) const {
+    return fake_delegate_.GetVersion(id);
   }
 
   std::string GetPayload(const ObjectId& id) const {
@@ -410,7 +414,7 @@ class SyncInvalidationListenerTest : public testing::Test {
   ObjectIdSet registered_ids_;
 
  private:
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
   FakeInvalidationStateTracker fake_tracker_;
   notifier::FakePushClient* const fake_push_client_;
 
@@ -423,14 +427,6 @@ class SyncInvalidationListenerTest : public testing::Test {
  private:
   FakeDelegate fake_delegate_;
 };
-
-// Verify the client ID is written to the state tracker on client start.
-// TODO(rlarocque): Remove this test when migration code is removed.
-// See crbug.com/124142.
-TEST_F(SyncInvalidationListenerTest, WriteInvalidatorClientId) {
-  // The client is started by the harness, so we don't have to do anything here.
-  EXPECT_EQ(kClientId, GetInvalidatorClientId());
-}
 
 // Write a new state to the client.  It should propagate to the
 // tracker.
@@ -450,6 +446,7 @@ TEST_F(SyncInvalidationListenerTest, InvalidateNoPayload) {
   FireInvalidate(id, kVersion1, NULL);
 
   EXPECT_EQ(1, GetInvalidationCount(id));
+  EXPECT_EQ(kVersion1, GetVersion(id));
   EXPECT_EQ("", GetPayload(id));
   EXPECT_EQ(kVersion1, GetMaxVersion(id));
   AcknowledgeAndVerify(id);
@@ -464,6 +461,7 @@ TEST_F(SyncInvalidationListenerTest, InvalidateEmptyPayload) {
   FireInvalidate(id, kVersion1, "");
 
   EXPECT_EQ(1, GetInvalidationCount(id));
+  EXPECT_EQ(kVersion1, GetVersion(id));
   EXPECT_EQ("", GetPayload(id));
   EXPECT_EQ(kVersion1, GetMaxVersion(id));
   AcknowledgeAndVerify(id);
@@ -477,6 +475,7 @@ TEST_F(SyncInvalidationListenerTest, InvalidateWithPayload) {
   FireInvalidate(id, kVersion1, kPayload1);
 
   EXPECT_EQ(1, GetInvalidationCount(id));
+  EXPECT_EQ(kVersion1, GetVersion(id));
   EXPECT_EQ(kPayload1, GetPayload(id));
   EXPECT_EQ(kVersion1, GetMaxVersion(id));
   AcknowledgeAndVerify(id);
@@ -496,6 +495,7 @@ TEST_F(SyncInvalidationListenerTest, InvalidateUnregisteredWithPayload) {
   FireInvalidate(id, kVersion1, "unregistered payload");
 
   EXPECT_EQ(1, GetInvalidationCount(id));
+  EXPECT_EQ(kVersion1, GetVersion(id));
   EXPECT_EQ("unregistered payload", GetPayload(id));
   EXPECT_EQ(kVersion1, GetMaxVersion(id));
   AcknowledgeAndVerify(id);
@@ -510,6 +510,7 @@ TEST_F(SyncInvalidationListenerTest, InvalidateVersion) {
   FireInvalidate(id, kVersion2, kPayload2);
 
   EXPECT_EQ(1, GetInvalidationCount(id));
+  EXPECT_EQ(kVersion2, GetVersion(id));
   EXPECT_EQ(kPayload2, GetPayload(id));
   EXPECT_EQ(kVersion2, GetMaxVersion(id));
   AcknowledgeAndVerify(id);
@@ -517,6 +518,7 @@ TEST_F(SyncInvalidationListenerTest, InvalidateVersion) {
   FireInvalidate(id, kVersion1, kPayload1);
 
   EXPECT_EQ(1, GetInvalidationCount(id));
+  EXPECT_EQ(kVersion2, GetVersion(id));
   EXPECT_EQ(kPayload2, GetPayload(id));
   EXPECT_EQ(kVersion2, GetMaxVersion(id));
   VerifyAcknowledged(id);
@@ -531,6 +533,7 @@ TEST_F(SyncInvalidationListenerTest, InvalidateUnknownVersion) {
   FireInvalidateUnknownVersion(id);
 
   EXPECT_EQ(1, GetInvalidationCount(id));
+  EXPECT_EQ(Invalidation::kUnknownVersion, GetVersion(id));
   EXPECT_EQ("", GetPayload(id));
   EXPECT_EQ(kMinVersion, GetMaxVersion(id));
   AcknowledgeAndVerify(id);
@@ -538,6 +541,7 @@ TEST_F(SyncInvalidationListenerTest, InvalidateUnknownVersion) {
   FireInvalidateUnknownVersion(id);
 
   EXPECT_EQ(2, GetInvalidationCount(id));
+  EXPECT_EQ(Invalidation::kUnknownVersion, GetVersion(id));
   EXPECT_EQ("", GetPayload(id));
   EXPECT_EQ(kMinVersion, GetMaxVersion(id));
   AcknowledgeAndVerify(id);
@@ -551,6 +555,7 @@ TEST_F(SyncInvalidationListenerTest, InvalidateAll) {
   for (ObjectIdSet::const_iterator it = registered_ids_.begin();
        it != registered_ids_.end(); ++it) {
     EXPECT_EQ(1, GetInvalidationCount(*it));
+    EXPECT_EQ(Invalidation::kUnknownVersion, GetVersion(*it));
     EXPECT_EQ("", GetPayload(*it));
     EXPECT_EQ(kMinVersion, GetMaxVersion(*it));
     AcknowledgeAndVerify(*it);
@@ -562,6 +567,7 @@ TEST_F(SyncInvalidationListenerTest, InvalidateMultipleIds) {
   FireInvalidate(kBookmarksId_, 3, NULL);
 
   EXPECT_EQ(1, GetInvalidationCount(kBookmarksId_));
+  EXPECT_EQ(3, GetVersion(kBookmarksId_));
   EXPECT_EQ("", GetPayload(kBookmarksId_));
   EXPECT_EQ(3, GetMaxVersion(kBookmarksId_));
   AcknowledgeAndVerify(kBookmarksId_);
@@ -569,6 +575,7 @@ TEST_F(SyncInvalidationListenerTest, InvalidateMultipleIds) {
   FireInvalidate(kExtensionsId_, 2, NULL);
 
   EXPECT_EQ(1, GetInvalidationCount(kExtensionsId_));
+  EXPECT_EQ(2, GetVersion(kExtensionsId_));
   EXPECT_EQ("", GetPayload(kExtensionsId_));
   EXPECT_EQ(2, GetMaxVersion(kExtensionsId_));
   AcknowledgeAndVerify(kExtensionsId_);
@@ -578,12 +585,14 @@ TEST_F(SyncInvalidationListenerTest, InvalidateMultipleIds) {
   FireInvalidate(kBookmarksId_, 1, NULL);
 
   EXPECT_EQ(1, GetInvalidationCount(kBookmarksId_));
+  EXPECT_EQ(3, GetVersion(kBookmarksId_));
   EXPECT_EQ("", GetPayload(kBookmarksId_));
   EXPECT_EQ(3, GetMaxVersion(kBookmarksId_));
 
   FireInvalidate(kExtensionsId_, 1, NULL);
 
   EXPECT_EQ(1, GetInvalidationCount(kExtensionsId_));
+  EXPECT_EQ(2, GetVersion(kExtensionsId_));
   EXPECT_EQ("", GetPayload(kExtensionsId_));
   EXPECT_EQ(2, GetMaxVersion(kExtensionsId_));
 
@@ -592,11 +601,13 @@ TEST_F(SyncInvalidationListenerTest, InvalidateMultipleIds) {
   FireInvalidateAll();
 
   EXPECT_EQ(2, GetInvalidationCount(kBookmarksId_));
+  EXPECT_EQ(Invalidation::kUnknownVersion, GetVersion(kBookmarksId_));
   EXPECT_EQ("", GetPayload(kBookmarksId_));
   EXPECT_EQ(3, GetMaxVersion(kBookmarksId_));
   AcknowledgeAndVerify(kBookmarksId_);
 
   EXPECT_EQ(1, GetInvalidationCount(kPreferencesId_));
+  EXPECT_EQ(Invalidation::kUnknownVersion, GetVersion(kPreferencesId_));
   EXPECT_EQ("", GetPayload(kPreferencesId_));
   EXPECT_EQ(kMinVersion, GetMaxVersion(kPreferencesId_));
   AcknowledgeAndVerify(kPreferencesId_);
@@ -604,6 +615,7 @@ TEST_F(SyncInvalidationListenerTest, InvalidateMultipleIds) {
   // Note that kExtensionsId_ is not registered, so InvalidateAll() shouldn't
   // affect it.
   EXPECT_EQ(1, GetInvalidationCount(kExtensionsId_));
+  EXPECT_EQ(2, GetVersion(kExtensionsId_));
   EXPECT_EQ("", GetPayload(kExtensionsId_));
   EXPECT_EQ(2, GetMaxVersion(kExtensionsId_));
   VerifyAcknowledged(kExtensionsId_);
@@ -612,18 +624,21 @@ TEST_F(SyncInvalidationListenerTest, InvalidateMultipleIds) {
 
   FireInvalidate(kPreferencesId_, 5, NULL);
   EXPECT_EQ(2, GetInvalidationCount(kPreferencesId_));
+  EXPECT_EQ(5, GetVersion(kPreferencesId_));
   EXPECT_EQ("", GetPayload(kPreferencesId_));
   EXPECT_EQ(5, GetMaxVersion(kPreferencesId_));
   AcknowledgeAndVerify(kPreferencesId_);
 
   FireInvalidate(kExtensionsId_, 3, NULL);
   EXPECT_EQ(2, GetInvalidationCount(kExtensionsId_));
+  EXPECT_EQ(3, GetVersion(kExtensionsId_));
   EXPECT_EQ("", GetPayload(kExtensionsId_));
   EXPECT_EQ(3, GetMaxVersion(kExtensionsId_));
   AcknowledgeAndVerify(kExtensionsId_);
 
   FireInvalidate(kBookmarksId_, 4, NULL);
   EXPECT_EQ(3, GetInvalidationCount(kBookmarksId_));
+  EXPECT_EQ(4, GetVersion(kBookmarksId_));
   EXPECT_EQ("", GetPayload(kBookmarksId_));
   EXPECT_EQ(4, GetMaxVersion(kBookmarksId_));
   AcknowledgeAndVerify(kBookmarksId_);
@@ -641,6 +656,7 @@ TEST_F(SyncInvalidationListenerTest, InvalidateOneTimeout) {
   // Trigger the initial invalidation.
   FireInvalidate(kBookmarksId_, 3, NULL);
   EXPECT_EQ(1, GetInvalidationCount(kBookmarksId_));
+  EXPECT_EQ(3, GetVersion(kBookmarksId_));
   EXPECT_EQ("", GetPayload(kBookmarksId_));
   EXPECT_EQ(3, GetMaxVersion(kBookmarksId_));
   VerifyUnacknowledged(kBookmarksId_);
@@ -651,6 +667,7 @@ TEST_F(SyncInvalidationListenerTest, InvalidateOneTimeout) {
       tick_clock_.NowTicks()));
   EXPECT_EQ(2, GetInvalidationCount(kBookmarksId_));
   // Other properties should remain the same.
+  EXPECT_EQ(3, GetVersion(kBookmarksId_));
   EXPECT_EQ("", GetPayload(kBookmarksId_));
   EXPECT_EQ(3, GetMaxVersion(kBookmarksId_));
 
@@ -668,6 +685,7 @@ TEST_F(SyncInvalidationListenerTest, InvalidationTimeoutRestart) {
 
   FireInvalidate(kBookmarksId_, 3, NULL);
   EXPECT_EQ(1, GetInvalidationCount(kBookmarksId_));
+  EXPECT_EQ(3, GetVersion(kBookmarksId_));
   EXPECT_EQ("", GetPayload(kBookmarksId_));
   EXPECT_EQ(3, GetMaxVersion(kBookmarksId_));
 
@@ -677,6 +695,7 @@ TEST_F(SyncInvalidationListenerTest, InvalidationTimeoutRestart) {
       tick_clock_.NowTicks()));
   EXPECT_EQ(2, GetInvalidationCount(kBookmarksId_));
   // Other properties should remain the same.
+  EXPECT_EQ(3, GetVersion(kBookmarksId_));
   EXPECT_EQ("", GetPayload(kBookmarksId_));
   EXPECT_EQ(3, GetMaxVersion(kBookmarksId_));
 
@@ -689,6 +708,7 @@ TEST_F(SyncInvalidationListenerTest, InvalidationTimeoutRestart) {
 
   // The bookmark invalidation state should not have changed.
   EXPECT_EQ(2, GetInvalidationCount(kBookmarksId_));
+  EXPECT_EQ(3, GetVersion(kBookmarksId_));
   EXPECT_EQ("", GetPayload(kBookmarksId_));
   EXPECT_EQ(3, GetMaxVersion(kBookmarksId_));
 
@@ -698,6 +718,7 @@ TEST_F(SyncInvalidationListenerTest, InvalidationTimeoutRestart) {
       tick_clock_.NowTicks()));
   EXPECT_EQ(3, GetInvalidationCount(kBookmarksId_));
   // Other properties should remain the same.
+  EXPECT_EQ(3, GetVersion(kBookmarksId_));
   EXPECT_EQ("", GetPayload(kBookmarksId_));
   EXPECT_EQ(3, GetMaxVersion(kBookmarksId_));
 

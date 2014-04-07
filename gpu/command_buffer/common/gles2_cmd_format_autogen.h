@@ -4887,7 +4887,7 @@ struct ReadPixels {
   void Init(
       GLint _x, GLint _y, GLsizei _width, GLsizei _height, GLenum _format,
       GLenum _type, uint32 _pixels_shm_id, uint32 _pixels_shm_offset,
-      uint32 _result_shm_id, uint32 _result_shm_offset) {
+      uint32 _result_shm_id, uint32 _result_shm_offset, GLboolean _async) {
     SetHeader();
     x = _x;
     y = _y;
@@ -4899,17 +4899,18 @@ struct ReadPixels {
     pixels_shm_offset = _pixels_shm_offset;
     result_shm_id = _result_shm_id;
     result_shm_offset = _result_shm_offset;
+    async = _async;
   }
 
   void* Set(
       void* cmd, GLint _x, GLint _y, GLsizei _width, GLsizei _height,
       GLenum _format, GLenum _type, uint32 _pixels_shm_id,
       uint32 _pixels_shm_offset, uint32 _result_shm_id,
-      uint32 _result_shm_offset) {
+      uint32 _result_shm_offset, GLboolean _async) {
     static_cast<ValueType*>(
         cmd)->Init(
             _x, _y, _width, _height, _format, _type, _pixels_shm_id,
-            _pixels_shm_offset, _result_shm_id, _result_shm_offset);
+            _pixels_shm_offset, _result_shm_id, _result_shm_offset, _async);
     return NextCmdAddress<ValueType>(cmd);
   }
 
@@ -4924,10 +4925,11 @@ struct ReadPixels {
   uint32 pixels_shm_offset;
   uint32 result_shm_id;
   uint32 result_shm_offset;
+  uint32 async;
 };
 
-COMPILE_ASSERT(sizeof(ReadPixels) == 44,
-               Sizeof_ReadPixels_is_not_44);
+COMPILE_ASSERT(sizeof(ReadPixels) == 48,
+               Sizeof_ReadPixels_is_not_48);
 COMPILE_ASSERT(offsetof(ReadPixels, header) == 0,
                OffsetOf_ReadPixels_header_not_0);
 COMPILE_ASSERT(offsetof(ReadPixels, x) == 4,
@@ -4950,6 +4952,8 @@ COMPILE_ASSERT(offsetof(ReadPixels, result_shm_id) == 36,
                OffsetOf_ReadPixels_result_shm_id_not_36);
 COMPILE_ASSERT(offsetof(ReadPixels, result_shm_offset) == 40,
                OffsetOf_ReadPixels_result_shm_offset_not_40);
+COMPILE_ASSERT(offsetof(ReadPixels, async) == 44,
+               OffsetOf_ReadPixels_async_not_44);
 
 struct ReleaseShaderCompiler {
   typedef ReleaseShaderCompiler ValueType;
@@ -8468,6 +8472,66 @@ COMPILE_ASSERT(offsetof(RenderbufferStorageMultisampleEXT, width) == 16,
 COMPILE_ASSERT(offsetof(RenderbufferStorageMultisampleEXT, height) == 20,
                OffsetOf_RenderbufferStorageMultisampleEXT_height_not_20);
 
+struct FramebufferTexture2DMultisampleEXT {
+  typedef FramebufferTexture2DMultisampleEXT ValueType;
+  static const CommandId kCmdId = kFramebufferTexture2DMultisampleEXT;
+  static const cmd::ArgFlags kArgFlags = cmd::kFixed;
+
+  static uint32 ComputeSize() {
+    return static_cast<uint32>(sizeof(ValueType));  // NOLINT
+  }
+
+  void SetHeader() {
+    header.SetCmd<ValueType>();
+  }
+
+  void Init(
+      GLenum _target, GLenum _attachment, GLenum _textarget, GLuint _texture,
+      GLint _level, GLsizei _samples) {
+    SetHeader();
+    target = _target;
+    attachment = _attachment;
+    textarget = _textarget;
+    texture = _texture;
+    level = _level;
+    samples = _samples;
+  }
+
+  void* Set(
+      void* cmd, GLenum _target, GLenum _attachment, GLenum _textarget,
+      GLuint _texture, GLint _level, GLsizei _samples) {
+    static_cast<ValueType*>(
+        cmd)->Init(
+            _target, _attachment, _textarget, _texture, _level, _samples);
+    return NextCmdAddress<ValueType>(cmd);
+  }
+
+  gpu::CommandHeader header;
+  uint32 target;
+  uint32 attachment;
+  uint32 textarget;
+  uint32 texture;
+  int32 level;
+  int32 samples;
+};
+
+COMPILE_ASSERT(sizeof(FramebufferTexture2DMultisampleEXT) == 28,
+               Sizeof_FramebufferTexture2DMultisampleEXT_is_not_28);
+COMPILE_ASSERT(offsetof(FramebufferTexture2DMultisampleEXT, header) == 0,
+               OffsetOf_FramebufferTexture2DMultisampleEXT_header_not_0);
+COMPILE_ASSERT(offsetof(FramebufferTexture2DMultisampleEXT, target) == 4,
+               OffsetOf_FramebufferTexture2DMultisampleEXT_target_not_4);
+COMPILE_ASSERT(offsetof(FramebufferTexture2DMultisampleEXT, attachment) == 8,
+               OffsetOf_FramebufferTexture2DMultisampleEXT_attachment_not_8);
+COMPILE_ASSERT(offsetof(FramebufferTexture2DMultisampleEXT, textarget) == 12,
+               OffsetOf_FramebufferTexture2DMultisampleEXT_textarget_not_12);
+COMPILE_ASSERT(offsetof(FramebufferTexture2DMultisampleEXT, texture) == 16,
+               OffsetOf_FramebufferTexture2DMultisampleEXT_texture_not_16);
+COMPILE_ASSERT(offsetof(FramebufferTexture2DMultisampleEXT, level) == 20,
+               OffsetOf_FramebufferTexture2DMultisampleEXT_level_not_20);
+COMPILE_ASSERT(offsetof(FramebufferTexture2DMultisampleEXT, samples) == 24,
+               OffsetOf_FramebufferTexture2DMultisampleEXT_samples_not_24);
+
 struct TexStorage2DEXT {
   typedef TexStorage2DEXT ValueType;
   static const CommandId kCmdId = kTexStorage2DEXT;
@@ -9449,30 +9513,34 @@ struct ResizeCHROMIUM {
     header.SetCmd<ValueType>();
   }
 
-  void Init(GLuint _width, GLuint _height) {
+  void Init(GLuint _width, GLuint _height, GLfloat _scale_factor) {
     SetHeader();
     width = _width;
     height = _height;
+    scale_factor = _scale_factor;
   }
 
-  void* Set(void* cmd, GLuint _width, GLuint _height) {
-    static_cast<ValueType*>(cmd)->Init(_width, _height);
+  void* Set(void* cmd, GLuint _width, GLuint _height, GLfloat _scale_factor) {
+    static_cast<ValueType*>(cmd)->Init(_width, _height, _scale_factor);
     return NextCmdAddress<ValueType>(cmd);
   }
 
   gpu::CommandHeader header;
   uint32 width;
   uint32 height;
+  float scale_factor;
 };
 
-COMPILE_ASSERT(sizeof(ResizeCHROMIUM) == 12,
-               Sizeof_ResizeCHROMIUM_is_not_12);
+COMPILE_ASSERT(sizeof(ResizeCHROMIUM) == 16,
+               Sizeof_ResizeCHROMIUM_is_not_16);
 COMPILE_ASSERT(offsetof(ResizeCHROMIUM, header) == 0,
                OffsetOf_ResizeCHROMIUM_header_not_0);
 COMPILE_ASSERT(offsetof(ResizeCHROMIUM, width) == 4,
                OffsetOf_ResizeCHROMIUM_width_not_4);
 COMPILE_ASSERT(offsetof(ResizeCHROMIUM, height) == 8,
                OffsetOf_ResizeCHROMIUM_height_not_8);
+COMPILE_ASSERT(offsetof(ResizeCHROMIUM, scale_factor) == 12,
+               OffsetOf_ResizeCHROMIUM_scale_factor_not_12);
 
 struct GetRequestableExtensionsCHROMIUM {
   typedef GetRequestableExtensionsCHROMIUM ValueType;
@@ -9890,20 +9958,23 @@ struct CopyTextureCHROMIUM {
 
   void Init(
       GLenum _target, GLenum _source_id, GLenum _dest_id, GLint _level,
-      GLint _internalformat) {
+      GLint _internalformat, GLenum _dest_type) {
     SetHeader();
     target = _target;
     source_id = _source_id;
     dest_id = _dest_id;
     level = _level;
     internalformat = _internalformat;
+    dest_type = _dest_type;
   }
 
   void* Set(
       void* cmd, GLenum _target, GLenum _source_id, GLenum _dest_id,
-      GLint _level, GLint _internalformat) {
+      GLint _level, GLint _internalformat, GLenum _dest_type) {
     static_cast<ValueType*>(
-        cmd)->Init(_target, _source_id, _dest_id, _level, _internalformat);
+        cmd)->Init(
+            _target, _source_id, _dest_id, _level, _internalformat,
+            _dest_type);
     return NextCmdAddress<ValueType>(cmd);
   }
 
@@ -9913,10 +9984,11 @@ struct CopyTextureCHROMIUM {
   uint32 dest_id;
   int32 level;
   int32 internalformat;
+  uint32 dest_type;
 };
 
-COMPILE_ASSERT(sizeof(CopyTextureCHROMIUM) == 24,
-               Sizeof_CopyTextureCHROMIUM_is_not_24);
+COMPILE_ASSERT(sizeof(CopyTextureCHROMIUM) == 28,
+               Sizeof_CopyTextureCHROMIUM_is_not_28);
 COMPILE_ASSERT(offsetof(CopyTextureCHROMIUM, header) == 0,
                OffsetOf_CopyTextureCHROMIUM_header_not_0);
 COMPILE_ASSERT(offsetof(CopyTextureCHROMIUM, target) == 4,
@@ -9929,6 +10001,8 @@ COMPILE_ASSERT(offsetof(CopyTextureCHROMIUM, level) == 16,
                OffsetOf_CopyTextureCHROMIUM_level_not_16);
 COMPILE_ASSERT(offsetof(CopyTextureCHROMIUM, internalformat) == 20,
                OffsetOf_CopyTextureCHROMIUM_internalformat_not_20);
+COMPILE_ASSERT(offsetof(CopyTextureCHROMIUM, dest_type) == 24,
+               OffsetOf_CopyTextureCHROMIUM_dest_type_not_24);
 
 struct DrawArraysInstancedANGLE {
   typedef DrawArraysInstancedANGLE ValueType;

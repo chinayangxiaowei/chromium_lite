@@ -11,7 +11,7 @@
 
 #include <set>
 
-#include "base/string_piece.h"
+#include "base/strings/string_piece.h"
 #include "net/quic/quic_protocol.h"
 
 namespace net {
@@ -29,8 +29,9 @@ class NET_EXPORT_PRIVATE QuicFecGroup {
   // Updates the FEC group based on the delivery of an FEC packet.
   // Returns false if this packet has already been seen or if it does
   // not claim to protect all the packets previously seen in this group.
+  //   |fec_packet_entropy|: XOR of entropy of all packets in the fec group.
   bool UpdateFec(QuicPacketSequenceNumber fec_packet_sequence_number,
-                 bool fec_entropy_flag,
+                 bool fec_packet_entropy,
                  const QuicFecData& fec);
 
   // Returns true if a packet can be revived from this FEC group.

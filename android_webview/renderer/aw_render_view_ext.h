@@ -8,7 +8,8 @@
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
 #include "content/public/renderer/render_view_observer.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebPermissionClient.h"
+#include "third_party/WebKit/public/web/WebPermissionClient.h"
+#include "third_party/skia/include/core/SkColor.h"
 
 namespace WebKit {
 
@@ -36,25 +37,37 @@ class AwRenderViewExt : public content::RenderViewObserver,
   virtual void DidCommitProvisionalLoad(WebKit::WebFrame* frame,
                                         bool is_new_navigation) OVERRIDE;
   virtual void FocusedNodeChanged(const WebKit::WebNode& node) OVERRIDE;
+  virtual void DidCommitCompositorFrame() OVERRIDE;
+  virtual void Navigate(const GURL& url) OVERRIDE;
 
   void OnDocumentHasImagesRequest(int id);
 
   void OnDoHitTest(int view_x, int view_y);
-
-  void OnSetEnableFixedLayoutMode(bool enabled);
 
   void OnSetTextZoomLevel(double zoom_level);
 
   void OnResetScrollAndScaleState();
 
   void OnSetInitialPageScale(double page_scale_factor);
+  void OnSetBackgroundColor(SkColor c);
+
+  void UpdatePageScaleFactor();
 
   // WebKit::WebPermissionClient implementation.
-  virtual bool allowImage(WebKit::WebFrame* frame,
-                          bool enabledPerSettings,
-                          const WebKit::WebURL& imageURL) OVERRIDE;
+  virtual bool allowDisplayingInsecureContent(
+      WebKit::WebFrame* frame,
+      bool enabled_per_settings,
+      const WebKit::WebSecurityOrigin& origin,
+      const WebKit::WebURL& url) OVERRIDE;
+  virtual bool allowRunningInsecureContent(
+      WebKit::WebFrame* frame,
+      bool enabled_per_settings,
+      const WebKit::WebSecurityOrigin& origin,
+      const WebKit::WebURL& url) OVERRIDE;
 
   bool capture_picture_enabled_;
+
+  float page_scale_factor_;
 
   DISALLOW_COPY_AND_ASSIGN(AwRenderViewExt);
 };

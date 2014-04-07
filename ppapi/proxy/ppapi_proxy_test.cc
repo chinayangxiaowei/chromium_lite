@@ -8,9 +8,8 @@
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
-#include "base/message_loop_proxy.h"
+#include "base/message_loop/message_loop_proxy.h"
 #include "base/observer_list.h"
-#include "base/process_util.h"
 #include "base/run_loop.h"
 #include "ipc/ipc_sync_channel.h"
 #include "ppapi/c/pp_errors.h"
@@ -41,11 +40,6 @@ void SetReserveInstanceIDCallback(PP_Module module,
   // worry about Instance uniqueness in tests, so we can ignore the call.
 }
 
-int32_t GetURLLoaderBufferedBytes(PP_Resource url_loader) {
-  NOTREACHED();
-  return 0;
-}
-
 void AddRefModule(PP_Module module) {}
 void ReleaseModule(PP_Module module) {}
 PP_Bool IsInModuleDestructor(PP_Module module) { return PP_FALSE; }
@@ -54,7 +48,6 @@ PPB_Proxy_Private ppb_proxy_private = {
   &PluginCrashed,
   &GetInstanceForResource,
   &SetReserveInstanceIDCallback,
-  &GetURLLoaderBufferedBytes,
   &AddRefModule,
   &ReleaseModule,
   &IsInModuleDestructor
@@ -171,6 +164,8 @@ Dispatcher* PluginProxyTestHarness::GetDispatcher() {
 void PluginProxyTestHarness::SetUpHarness() {
   // These must be first since the dispatcher set-up uses them.
   CreatePluginGlobals();
+  // Some of the methods called during set-up check that the lock is held.
+  ProxyAutoLock lock;
 
   resource_tracker().DidCreateInstance(pp_instance());
 
@@ -196,6 +191,8 @@ void PluginProxyTestHarness::SetUpHarnessWithChannel(
     bool is_client) {
   // These must be first since the dispatcher set-up uses them.
   CreatePluginGlobals();
+  // Some of the methods called during set-up check that the lock is held.
+  ProxyAutoLock lock;
 
   resource_tracker().DidCreateInstance(pp_instance());
   plugin_delegate_mock_.Init(ipc_message_loop, shutdown_event);
@@ -214,10 +211,15 @@ void PluginProxyTestHarness::SetUpHarnessWithChannel(
 }
 
 void PluginProxyTestHarness::TearDownHarness() {
-  plugin_dispatcher_->DidDestroyInstance(pp_instance());
-  plugin_dispatcher_.reset();
+  {
+    // Some of the methods called during tear-down check that the lock is held.
+    ProxyAutoLock lock;
 
-  resource_tracker().DidDeleteInstance(pp_instance());
+    plugin_dispatcher_->DidDestroyInstance(pp_instance());
+    plugin_dispatcher_.reset();
+
+    resource_tracker().DidDeleteInstance(pp_instance());
+  }
   plugin_globals_.reset();
 }
 
@@ -278,6 +280,14 @@ void PluginProxyTestHarness::PluginDelegateMock::PreCacheFont(
 
 void PluginProxyTestHarness::PluginDelegateMock::SetActiveURL(
     const std::string& url) {
+}
+
+PP_Resource PluginProxyTestHarness::PluginDelegateMock::CreateBrowserFont(
+    Connection connection,
+    PP_Instance instance,
+    const PP_BrowserFont_Trusted_Description& desc,
+    const Preferences& prefs) {
+  return 0;
 }
 
 // PluginProxyTest -------------------------------------------------------------
@@ -373,6 +383,7 @@ void PluginProxyMultiThreadTest::Run() {
   ProxyAutoLock auto_lock;
   ASSERT_EQ(PP_OK, secondary_thread_message_loop_->AttachToCurrentThread());
   ASSERT_EQ(PP_OK, secondary_thread_message_loop_->Run());
+  secondary_thread_message_loop_->DetachFromThread();
 }
 
 void PluginProxyMultiThreadTest::QuitNestedLoop() {
@@ -528,7 +539,7 @@ TwoWayTest::~TwoWayTest() {
 
 void TwoWayTest::SetUp() {
   base::Thread::Options options;
-  options.message_loop_type = MessageLoop::TYPE_IO;
+  options.message_loop_type = base::MessageLoop::TYPE_IO;
   io_thread_.StartWithOptions(options);
   plugin_thread_.Start();
 
@@ -548,7 +559,7 @@ void TwoWayTest::SetUp() {
                  &remote_harness_set_up));
   remote_harness_set_up.Wait();
   local_harness_->SetUpHarnessWithChannel(handle,
-                                          io_thread_.message_loop_proxy(),
+                                          io_thread_.message_loop_proxy().get(),
                                           &shutdown_event_,
                                           true);  // is_client
 }

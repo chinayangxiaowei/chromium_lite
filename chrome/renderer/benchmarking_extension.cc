@@ -6,7 +6,7 @@
 
 #include "base/command_line.h"
 #include "base/metrics/stats_table.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/renderer/render_thread.h"
 #include "v8/include/v8.h"
@@ -68,27 +68,27 @@ class BenchmarkingWrapper : public v8::Extension {
     return v8::Handle<v8::FunctionTemplate>();
   }
 
-  static v8::Handle<v8::Value> GetCounter(const v8::Arguments& args) {
+  static void GetCounter(const v8::FunctionCallbackInfo<v8::Value>& args) {
     if (!args.Length() || !args[0]->IsString() || !base::StatsTable::current())
-      return v8::Undefined();
+      return;
 
     // Extract the name argument
     char name[256];
     name[0] = 'c';
     name[1] = ':';
-    args[0]->ToString()->WriteAscii(&name[2], 0, sizeof(name) - 3);
+    args[0]->ToString()->WriteUtf8(&name[2], sizeof(name) - 3);
 
     int counter = base::StatsTable::current()->GetCounterValue(name);
-    return v8::Integer::New(counter);
+    args.GetReturnValue().Set(static_cast<int32_t>(counter));
   }
 
-  static v8::Handle<v8::Value> IsSingleProcess(const v8::Arguments& args) {
-    return v8::Boolean::New(
+  static void IsSingleProcess(const v8::FunctionCallbackInfo<v8::Value>& args) {
+    args.GetReturnValue().Set(
        CommandLine::ForCurrentProcess()->HasSwitch(switches::kSingleProcess));
   }
 
-  static v8::Handle<v8::Value> HiResTime(const v8::Arguments& args) {
-    return v8::Number::New(
+  static void HiResTime(const v8::FunctionCallbackInfo<v8::Value>& args) {
+    args.GetReturnValue().Set(
         static_cast<double>(base::TimeTicks::HighResNow().ToInternalValue()));
   }
 };

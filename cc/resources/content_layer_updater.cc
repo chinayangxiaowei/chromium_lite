@@ -5,8 +5,8 @@
 #include "cc/resources/content_layer_updater.h"
 
 #include "base/debug/trace_event.h"
-#include "base/time.h"
-#include "cc/debug/rendering_stats.h"
+#include "base/time/time.h"
+#include "cc/debug/rendering_stats_instrumentation.h"
 #include "cc/resources/layer_painter.h"
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "third_party/skia/include/core/SkPaint.h"
@@ -17,17 +17,26 @@
 
 namespace cc {
 
-ContentLayerUpdater::ContentLayerUpdater(scoped_ptr<LayerPainter> painter)
-    : painter_(painter.Pass()) {}
+ContentLayerUpdater::ContentLayerUpdater(
+    scoped_ptr<LayerPainter> painter,
+    RenderingStatsInstrumentation* stats_instrumentation,
+    int layer_id)
+    : rendering_stats_instrumentation_(stats_instrumentation),
+      layer_id_(layer_id),
+      painter_(painter.Pass()) {}
 
 ContentLayerUpdater::~ContentLayerUpdater() {}
+
+void ContentLayerUpdater::set_rendering_stats_instrumentation(
+    RenderingStatsInstrumentation* rsi) {
+  rendering_stats_instrumentation_ = rsi;
+}
 
 void ContentLayerUpdater::PaintContents(SkCanvas* canvas,
                                         gfx::Rect content_rect,
                                         float contents_width_scale,
                                         float contents_height_scale,
-                                        gfx::Rect* resulting_opaque_rect,
-                                        RenderingStats* stats) {
+                                        gfx::Rect* resulting_opaque_rect) {
   TRACE_EVENT0("cc", "ContentLayerUpdater::PaintContents");
   canvas->save();
   canvas->translate(SkFloatToScalar(-content_rect.x()),
@@ -39,9 +48,8 @@ void ContentLayerUpdater::PaintContents(SkCanvas* canvas,
     canvas->scale(SkFloatToScalar(contents_width_scale),
                   SkFloatToScalar(contents_height_scale));
 
-    gfx::RectF rect = gfx::ScaleRect(
+    layer_rect = gfx::ScaleToEnclosingRect(
         content_rect, 1.f / contents_width_scale, 1.f / contents_height_scale);
-    layer_rect = gfx::ToEnclosingRect(rect);
   }
 
   SkPaint paint;
@@ -53,19 +61,12 @@ void ContentLayerUpdater::PaintContents(SkCanvas* canvas,
   canvas->clipRect(layer_sk_rect);
 
   gfx::RectF opaque_layer_rect;
-  base::TimeTicks paint_begin_time;
-  if (stats)
-    paint_begin_time = base::TimeTicks::Now();
   painter_->Paint(canvas, layer_rect, &opaque_layer_rect);
-  if (stats) {
-    stats->total_paint_time += base::TimeTicks::Now() - paint_begin_time;
-    stats->total_pixels_painted += content_rect.width() * content_rect.height();
-  }
   canvas->restore();
 
-  gfx::RectF opaque_content_rect = gfx::ScaleRect(
-      opaque_layer_rect, contents_width_scale, contents_height_scale);
-  *resulting_opaque_rect = gfx::ToEnclosedRect(opaque_content_rect);
+  gfx::Rect opaque_content_rect = gfx::ToEnclosedRect(gfx::ScaleRect(
+      opaque_layer_rect, contents_width_scale, contents_height_scale));
+  *resulting_opaque_rect = opaque_content_rect;
 
   content_rect_ = content_rect;
 }

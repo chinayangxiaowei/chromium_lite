@@ -41,6 +41,14 @@ def main():
   parser.add_option('--output_buildbot_annotations',
                     action="store_true",
                     help='Add extra annotation output for buildbot.')
+  parser.add_option('--target_platform',
+                    type='choice',
+                    choices=['chromium', 'cros', 'android'],
+                    default='chromium',
+                    help='The target platform. Choices are "chromium" (current '
+                    'platform), "cros", or "android". If you specify something '
+                    'other than "chromium", you must be properly set up to '
+                    'build that platform.')
   (opts, args) = parser.parse_args()
 
   if not opts.working_directory:
@@ -49,7 +57,7 @@ def main():
     parser.print_help()
     return 1
 
-  return bisect_utils.CreateBisectDirectoryAndSetupDepot(opts, True)
+  return bisect_utils.CreateBisectDirectoryAndSetupDepot(opts)
 
 
 if __name__ == '__main__':

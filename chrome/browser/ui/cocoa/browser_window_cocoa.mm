@@ -8,12 +8,14 @@
 #include "base/command_line.h"
 #include "base/logging.h"
 #include "base/mac/mac_util.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/prefs/pref_service.h"
-#include "base/sys_string_conversions.h"
+#include "base/strings/sys_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/download/download_shelf.h"
 #include "chrome/browser/extensions/tab_helper.h"
+#include "chrome/browser/fullscreen.h"
 #include "chrome/browser/password_manager/password_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/shell_integration.h"
@@ -45,7 +47,7 @@
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/web_app_ui.h"
 #include "chrome/browser/web_applications/web_app.h"
-#include "chrome/common/chrome_notification_types.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "content/public/browser/native_web_keyboard_event.h"
 #include "content/public/browser/notification_details.h"
@@ -106,7 +108,8 @@ NSPoint GetPointForBubble(content::WebContents* web_contents,
 void CreateShortcuts(const ShellIntegration::ShortcutInfo& shortcut_info) {
   // creation_locations will be ignored by CreatePlatformShortcuts on Mac.
   ShellIntegration::ShortcutLocations creation_locations;
-  web_app::CreateShortcuts(shortcut_info, creation_locations);
+  web_app::CreateShortcuts(shortcut_info, creation_locations,
+                           web_app::SHORTCUT_CREATION_BY_USER);
 }
 
 }  // namespace
@@ -316,6 +319,14 @@ gfx::Rect BrowserWindowCocoa::GetRestoredBounds() const {
   return bounds;
 }
 
+ui::WindowShowState BrowserWindowCocoa::GetRestoredState() const {
+  if (IsMaximized())
+    return ui::SHOW_STATE_MAXIMIZED;
+  if (IsMinimized())
+    return ui::SHOW_STATE_MINIMIZED;
+  return ui::SHOW_STATE_NORMAL;
+}
+
 gfx::Rect BrowserWindowCocoa::GetBounds() const {
   return GetRestoredBounds();
 }
@@ -347,6 +358,16 @@ void BrowserWindowCocoa::Restore() {
 
 void BrowserWindowCocoa::EnterFullscreen(
       const GURL& url, FullscreenExitBubbleType bubble_type) {
+  // When simplified fullscreen is enabled, always enter normal fullscreen.
+  const CommandLine* command_line = CommandLine::ForCurrentProcess();
+  if (command_line->HasSwitch(switches::kEnableSimplifiedFullscreen)) {
+    if (url.is_empty())
+      [controller_ enterFullscreen];
+    else
+      [controller_ enterFullscreenForURL:url bubbleType:bubble_type];
+    return;
+  }
+
   [controller_ enterPresentationModeForURL:url
                                 bubbleType:bubble_type];
 }
@@ -425,6 +446,10 @@ void BrowserWindowCocoa::FocusBookmarksToolbar() {
   // Not needed on the Mac.
 }
 
+void BrowserWindowCocoa::FocusInfobars() {
+  // Not needed on the Mac.
+}
+
 bool BrowserWindowCocoa::IsBookmarkBarVisible() const {
   return browser_->profile()->GetPrefs()->GetBoolean(prefs::kShowBookmarkBar);
 }
@@ -447,10 +472,6 @@ gfx::Rect BrowserWindowCocoa::GetRootWindowResizerRect() const {
     return gfx::Rect();
   NSRect tabRect = [controller_ selectedTabGrowBoxRect];
   return gfx::Rect(NSRectToCGRect(tabRect));
-}
-
-bool BrowserWindowCocoa::IsPanel() const {
-  return false;
 }
 
 // This is called from Browser, which in turn is called directly from
@@ -476,25 +497,26 @@ void BrowserWindowCocoa::ShowBookmarkBubble(const GURL& url,
                       alreadyBookmarked:(already_bookmarked ? YES : NO)];
 }
 
-void BrowserWindowCocoa::ShowChromeToMobileBubble() {
-  [controller_ showChromeToMobileBubble];
-}
-
 #if defined(ENABLE_ONE_CLICK_SIGNIN)
 void BrowserWindowCocoa::ShowOneClickSigninBubble(
     OneClickSigninBubbleType type,
+    const string16& email,
+    const string16& error_message,
     const StartSyncCallback& start_sync_callback) {
+  WebContents* web_contents =
+        browser_->tab_strip_model()->GetActiveWebContents();
   if (type == ONE_CLICK_SIGNIN_BUBBLE_TYPE_BUBBLE) {
-    scoped_nsobject<OneClickSigninBubbleController> bubble_controller(
-        [[OneClickSigninBubbleController alloc]
-            initWithBrowserWindowController:cocoa_controller()
-                                   callback:start_sync_callback]);
+    base::scoped_nsobject<OneClickSigninBubbleController> bubble_controller([
+            [OneClickSigninBubbleController alloc]
+        initWithBrowserWindowController:cocoa_controller()
+                            webContents:web_contents
+                           errorMessage:base::SysUTF16ToNSString(error_message)
+                               callback:start_sync_callback]);
     [bubble_controller showWindow:nil];
   } else {
-    WebContents* web_contents =
-        browser_->tab_strip_model()->GetActiveWebContents();
     // Deletes itself when the dialog closes.
-    new OneClickSigninDialogController(web_contents, start_sync_callback);
+    new OneClickSigninDialogController(
+        web_contents, start_sync_callback, email);
   }
 }
 #endif
@@ -513,7 +535,7 @@ DownloadShelf* BrowserWindowCocoa::GetDownloadShelf() {
 void BrowserWindowCocoa::ConfirmBrowserCloseWithPendingDownloads() {
   // Call InProgressDownloadResponse asynchronously to avoid a crash when the
   // browser window is closed here (http://crbug.com/44454).
-  MessageLoop::current()->PostTask(FROM_HERE,
+  base::MessageLoop::current()->PostTask(FROM_HERE,
       base::Bind(&Browser::InProgressDownloadResponse,
                  confirm_close_factory_.GetWeakPtr(), true));
 }
@@ -535,10 +557,8 @@ void BrowserWindowCocoa::ShowWebsiteSettings(
     Profile* profile,
     content::WebContents* web_contents,
     const GURL& url,
-    const content::SSLStatus& ssl,
-    bool show_history) {
-  WebsiteSettingsUIBridge::Show(
-      window(), profile, web_contents, url, ssl);
+    const content::SSLStatus& ssl) {
+  WebsiteSettingsUIBridge::Show(window(), profile, web_contents, url, ssl);
 }
 
 void BrowserWindowCocoa::ShowAppMenu() {
@@ -599,7 +619,11 @@ void BrowserWindowCocoa::OpenTabpose() {
 }
 
 void BrowserWindowCocoa::EnterFullscreenWithChrome() {
-  CHECK(base::mac::IsOSLionOrLater());
+  // This method cannot be called if simplified fullscreen is enabled.
+  const CommandLine* command_line = CommandLine::ForCurrentProcess();
+  DCHECK(!command_line->HasSwitch(switches::kEnableSimplifiedFullscreen));
+
+  CHECK(chrome::mac::SupportsSystemFullscreen());
   if ([controller_ inPresentationMode])
     [controller_ exitPresentationMode];
   else
@@ -607,27 +631,27 @@ void BrowserWindowCocoa::EnterFullscreenWithChrome() {
 }
 
 bool BrowserWindowCocoa::IsFullscreenWithChrome() {
+  // The WithChrome mode does not exist when simplified fullscreen is enabled.
+  const CommandLine* command_line = CommandLine::ForCurrentProcess();
+  if (command_line->HasSwitch(switches::kEnableSimplifiedFullscreen))
+    return false;
   return IsFullscreen() && ![controller_ inPresentationMode];
 }
 
 bool BrowserWindowCocoa::IsFullscreenWithoutChrome() {
-  return IsFullscreen() && [controller_ inPresentationMode];
-}
+  // Presentation mode does not exist if simplified fullscreen is enabled.  The
+  // WithoutChrome mode simply maps to whether or not the window is fullscreen.
+  const CommandLine* command_line = CommandLine::ForCurrentProcess();
+  if (command_line->HasSwitch(switches::kEnableSimplifiedFullscreen))
+    return IsFullscreen();
 
-gfx::Rect BrowserWindowCocoa::GetInstantBounds() {
-  // Flip coordinates based on the primary screen.
-  NSScreen* screen = [[NSScreen screens] objectAtIndex:0];
-  NSRect monitorFrame = [screen frame];
-  NSRect frame = [controller_ instantFrame];
-  gfx::Rect bounds(NSRectToCGRect(frame));
-  bounds.set_y(NSHeight(monitorFrame) - bounds.y() - bounds.height());
-  return bounds;
+  return IsFullscreen() && [controller_ inPresentationMode];
 }
 
 WindowOpenDisposition BrowserWindowCocoa::GetDispositionForPopupBounds(
     const gfx::Rect& bounds) {
   // In Lion fullscreen mode, convert popups into tabs.
-  if (base::mac::IsOSLionOrLater() && IsFullscreen())
+  if (chrome::mac::SupportsSystemFullscreen() && IsFullscreen())
     return NEW_FOREGROUND_TAB;
   return NEW_POPUP;
 }
@@ -642,8 +666,9 @@ FindBar* BrowserWindowCocoa::CreateFindBar() {
   return bridge;
 }
 
-bool BrowserWindowCocoa::GetConstrainedWindowTopY(int* top_y) {
-  return false;
+web_modal::WebContentsModalDialogHost*
+    BrowserWindowCocoa::GetWebContentsModalDialogHost() {
+  return NULL;
 }
 
 extensions::ActiveTabPermissionGranter*
@@ -657,10 +682,8 @@ extensions::ActiveTabPermissionGranter*
   return tab_helper ? tab_helper->active_tab_permission_granter() : NULL;
 }
 
-void BrowserWindowCocoa::ModelChanged(
-    const chrome::search::SearchModel::State& old_state,
-    const chrome::search::SearchModel::State& new_state) {
-  [controller_ updateBookmarkBarStateForInstantOverlay];
+void BrowserWindowCocoa::ModelChanged(const SearchModel::State& old_state,
+                                      const SearchModel::State& new_state) {
 }
 
 void BrowserWindowCocoa::DestroyBrowser() {
@@ -687,7 +710,8 @@ void BrowserWindowCocoa::ShowAvatarBubble(WebContents* web_contents,
 }
 
 void BrowserWindowCocoa::ShowAvatarBubbleFromAvatarButton() {
-  [[controller_ avatarButtonController] showAvatarBubble];
+  AvatarButtonController* controller = [controller_ avatarButtonController];
+  [controller showAvatarBubble:[controller buttonView]];
 }
 
 void BrowserWindowCocoa::ShowPasswordGenerationBubble(

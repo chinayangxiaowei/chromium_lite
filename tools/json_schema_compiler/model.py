@@ -2,11 +2,10 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import copy
 import os.path
-import re
 
 from json_parse import OrderedDict
+from memoize import memoize
 
 class ParseException(Exception):
   """Thrown when data in the model is invalid.
@@ -40,6 +39,7 @@ class Namespace(object):
 
   Properties:
   - |name| the name of the namespace
+  - |description| the description of the namespace
   - |unix_name| the unix_name of the namespace
   - |source_file| the file that contained the namespace definition
   - |source_file_dir| the directory component of |source_file|
@@ -50,11 +50,17 @@ class Namespace(object):
   - |functions| a map of function names to their model.Function
   - |events| a map of event names to their model.Function
   - |properties| a map of property names to their model.Property
-  - |compiler_options| the compiler_options dict, only present if
+  - |compiler_options| the compiler_options dict, only not empty if
                        |include_compiler_options| is True
   """
   def __init__(self, json, source_file, include_compiler_options=False):
     self.name = json['namespace']
+    if 'description' not in json:
+      # TODO(kalman): Go back to throwing an error here.
+      print('%s must have a "description" field. This will appear '
+                       'on the API summary page.' % self.name)
+      json['description'] = ''
+    self.description = json['description']
     self.unix_name = UnixName(self.name)
     self.source_file = source_file
     self.source_file_dir, self.source_file_filename = os.path.split(source_file)
@@ -65,8 +71,8 @@ class Namespace(object):
     self.functions = _GetFunctions(self, json, self)
     self.events = _GetEvents(self, json, self)
     self.properties = _GetProperties(self, json, self, toplevel_origin)
-    if include_compiler_options:
-      self.compiler_options = json.get('compiler_options', {})
+    self.compiler_options = (json.get('compiler_options', {})
+        if include_compiler_options else {})
 
 class Origin(object):
   """Stores the possible origin of model object as a pair of bools. These are:
@@ -150,14 +156,21 @@ class Type(object):
       self.property_type = PropertyType.STRING
     elif 'choices' in json:
       self.property_type = PropertyType.CHOICES
-      self.choices = [Type(self,
-                           # The name of the choice type - there had better be
-                           # either a type or a $ref specified for the choice.
-                           json.get('type', json.get('$ref')),
-                           json,
-                           namespace,
-                           origin)
-                      for json in json['choices']]
+      def generate_type_name(type_json):
+        if 'items' in type_json:
+          return '%ss' % generate_type_name(type_json['items'])
+        if '$ref' in type_json:
+          return type_json['$ref']
+        if 'type' in type_json:
+          return type_json['type']
+        return None
+      self.choices = [
+          Type(self,
+               generate_type_name(choice) or 'choice%s' % i,
+               choice,
+               namespace,
+               origin)
+          for i, choice in enumerate(json['choices'])]
     elif json_type == 'object':
       if not (
           'properties' in json or
@@ -329,7 +342,6 @@ class _Enum(object):
   """Superclass for enum types with a "name" field, setting up repr/eq/ne.
   Enums need to do this so that equality/non-equality work over pickling.
   """
-
   @staticmethod
   def GetAll(cls):
     """Yields all _Enum objects declared in |cls|.
@@ -342,14 +354,16 @@ class _Enum(object):
   def __init__(self, name):
     self.name = name
 
-  def __repr(self):
-    return self.name
-
   def __eq__(self, other):
     return type(other) == type(self) and other.name == self.name
-
   def __ne__(self, other):
     return not (self == other)
+
+  def __repr__(self):
+    return self.name
+
+  def __str__(self):
+    return repr(self)
 
 class _PropertyTypeInfo(_Enum):
   def __init__(self, is_fundamental, name):
@@ -359,29 +373,40 @@ class _PropertyTypeInfo(_Enum):
 class PropertyType(object):
   """Enum of different types of properties/parameters.
   """
-  INTEGER = _PropertyTypeInfo(True, "integer")
-  INT64 = _PropertyTypeInfo(True, "int64")
-  DOUBLE = _PropertyTypeInfo(True, "double")
-  BOOLEAN = _PropertyTypeInfo(True, "boolean")
-  STRING = _PropertyTypeInfo(True, "string")
-  ENUM = _PropertyTypeInfo(False, "enum")
-  ARRAY = _PropertyTypeInfo(False, "array")
-  REF = _PropertyTypeInfo(False, "ref")
-  CHOICES = _PropertyTypeInfo(False, "choices")
-  OBJECT = _PropertyTypeInfo(False, "object")
-  FUNCTION = _PropertyTypeInfo(False, "function")
-  BINARY = _PropertyTypeInfo(False, "binary")
   ANY = _PropertyTypeInfo(False, "any")
+  ARRAY = _PropertyTypeInfo(False, "array")
+  BINARY = _PropertyTypeInfo(False, "binary")
+  BOOLEAN = _PropertyTypeInfo(True, "boolean")
+  CHOICES = _PropertyTypeInfo(False, "choices")
+  DOUBLE = _PropertyTypeInfo(True, "double")
+  ENUM = _PropertyTypeInfo(False, "enum")
+  FUNCTION = _PropertyTypeInfo(False, "function")
+  INT64 = _PropertyTypeInfo(True, "int64")
+  INTEGER = _PropertyTypeInfo(True, "integer")
+  OBJECT = _PropertyTypeInfo(False, "object")
+  REF = _PropertyTypeInfo(False, "ref")
+  STRING = _PropertyTypeInfo(True, "string")
 
+@memoize
 def UnixName(name):
-  """Returns the unix_style name for a given lowerCamelCase string.
-  """
-  # First replace any lowerUpper patterns with lower_Upper.
-  s1 = re.sub('([a-z])([A-Z])', r'\1_\2', name)
-  # Now replace any ACMEWidgets patterns with ACME_Widgets
-  s2 = re.sub('([A-Z]+)([A-Z][a-z])', r'\1_\2', s1)
-  # Finally, replace any remaining periods, and make lowercase.
-  return s2.replace('.', '_').lower()
+  '''Returns the unix_style name for a given lowerCamelCase string.
+  '''
+  unix_name = []
+  for i, c in enumerate(name):
+    if c.isupper() and i > 0 and name[i - 1] != '_':
+      # Replace lowerUpper with lower_Upper.
+      if name[i - 1].islower():
+        unix_name.append('_')
+      # Replace ACMEWidgets with ACME_Widgets
+      elif i + 1 < len(name) and name[i + 1].islower():
+        unix_name.append('_')
+    if c == '.':
+      # Replace hello.world with hello_world.
+      unix_name.append('_')
+    else:
+      # Everything is lowercase.
+      unix_name.append(c.lower())
+  return ''.join(unix_name)
 
 def _StripNamespace(name, namespace):
   if name.startswith(namespace.name + '.'):

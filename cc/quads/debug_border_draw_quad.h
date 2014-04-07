@@ -36,10 +36,12 @@ class CC_EXPORT DebugBorderDrawQuad : public DrawQuad {
       OVERRIDE;
 
   static const DebugBorderDrawQuad* MaterialCast(const DrawQuad*);
+
  private:
   DebugBorderDrawQuad();
+  virtual void ExtendValue(base::DictionaryValue* value) const OVERRIDE;
 };
 
-}
+}  // namespace cc
 
 #endif  // CC_QUADS_DEBUG_BORDER_DRAW_QUAD_H_

@@ -5,6 +5,8 @@
 #ifndef CC_LAYERS_TILED_LAYER_IMPL_H_
 #define CC_LAYERS_TILED_LAYER_IMPL_H_
 
+#include <string>
+
 #include "cc/base/cc_export.h"
 #include "cc/layers/layer_impl.h"
 
@@ -24,12 +26,12 @@ class CC_EXPORT TiledLayerImpl : public LayerImpl {
       OVERRIDE;
   virtual void PushPropertiesTo(LayerImpl* layer) OVERRIDE;
 
+  virtual bool WillDraw(DrawMode draw_mode,
+                        ResourceProvider* resource_provider) OVERRIDE;
   virtual void AppendQuads(QuadSink* quad_sink,
                            AppendQuadsData* append_quads_data) OVERRIDE;
 
   virtual ResourceProvider::ResourceId ContentsResourceId() const OVERRIDE;
-
-  virtual void DumpLayerProperties(std::string* str, int indent) const OVERRIDE;
 
   void set_skips_draw(bool skips_draw) { skips_draw_ = skips_draw; }
   void SetTilingData(const LayerTilingData& tiler);
@@ -43,6 +45,10 @@ class CC_EXPORT TiledLayerImpl : public LayerImpl {
   virtual Region VisibleContentOpaqueRegion() const OVERRIDE;
   virtual void DidLoseOutputSurface() OVERRIDE;
 
+  const LayerTilingData* TilingForTesting() const { return tiler_.get(); }
+
+  virtual size_t GPUMemoryUsageInBytes() const OVERRIDE;
+
  protected:
   TiledLayerImpl(LayerTreeImpl* tree_impl, int id);
   // Exposed for testing.
@@ -51,6 +57,7 @@ class CC_EXPORT TiledLayerImpl : public LayerImpl {
 
   virtual void GetDebugBorderProperties(SkColor* color, float* width) const
       OVERRIDE;
+  virtual void AsValueInto(base::DictionaryValue* state) const OVERRIDE;
 
  private:
   virtual const char* LayerTypeAsString() const OVERRIDE;

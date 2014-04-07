@@ -35,20 +35,6 @@
 }
 
 {
-  bug_146724_benign_a
-  ThreadSanitizer:Race
-  fun:_lock_file
-  fun:vprintf_helper
-  fun:vprintf
-}
-{
-  bug_146724_benign_b
-  ThreadSanitizer:Race
-  fun:_getstream
-  fun:_wfsopen
-}
-
-{
   bug_158099_mmdevice_endpoint_shutdown_too_fast
   ThreadSanitizer:Race
   fun:GetLocalIdFromEndpointId
@@ -91,8 +77,8 @@
   bug_81793b
   ThreadSanitizer:Race
   ...
-  fun:MessageLoop::CalculateDelayedRuntime
-  fun:MessageLoop::Post*Task
+  fun:base::MessageLoop::CalculateDelayedRuntime
+  fun:base::MessageLoop::Post*Task
 }
 {
   bug_93932a
@@ -225,4 +211,15 @@
    ThreadSanitizer:Race
    ...
    fun:net::NetworkChangeNotifierWinTest::~NetworkChangeNotifierWinTest
+}
+
+{
+  bug_239350
+  ThreadSanitizer:Race
+  ...
+  fun:av_freep
+  fun:av_buffer_unref
+  fun:av_frame_unref
+  ...
+  fun:media::FFmpegVideoDecoder::Decode
 }

@@ -5,6 +5,8 @@
 #include "chrome/browser/extensions/extension_toolbar_model.h"
 
 #include "base/prefs/pref_service.h"
+#include "chrome/browser/chrome_notification_types.h"
+#include "chrome/browser/extensions/api/extension_action/extension_action_api.h"
 #include "chrome/browser/extensions/browser_event_router.h"
 #include "chrome/browser/extensions/extension_action.h"
 #include "chrome/browser/extensions/extension_action_manager.h"
@@ -15,7 +17,6 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/feature_switch.h"
 #include "chrome/common/pref_names.h"
@@ -44,7 +45,8 @@ bool IsInExtensionList(const Extension* extension,
 ExtensionToolbarModel::ExtensionToolbarModel(ExtensionService* service)
     : service_(service),
       prefs_(service->profile()->GetPrefs()),
-      extensions_initialized_(false) {
+      extensions_initialized_(false),
+      weak_ptr_factory_(this) {
   DCHECK(service_);
 
   registrar_.Add(this, chrome::NOTIFICATION_EXTENSION_LOADED,
@@ -60,6 +62,12 @@ ExtensionToolbarModel::ExtensionToolbarModel(ExtensionService* service)
       content::Source<extensions::ExtensionPrefs>(service_->extension_prefs()));
 
   visible_icon_count_ = prefs_->GetInteger(prefs::kExtensionToolbarSize);
+
+  pref_change_registrar_.Init(prefs_);
+  pref_change_callback_ =
+      base::Bind(&ExtensionToolbarModel::OnExtensionToolbarPrefChange,
+                 base::Unretained(this));
+  pref_change_registrar_.Add(prefs::kExtensionToolbar, pref_change_callback_);
 }
 
 ExtensionToolbarModel::~ExtensionToolbarModel() {
@@ -175,6 +183,10 @@ void ExtensionToolbarModel::Observe(
   if (type == chrome::NOTIFICATION_EXTENSION_UNLOADED) {
     extension = content::Details<extensions::UnloadedExtensionInfo>(
         details)->extension;
+  } else if (type ==
+      chrome::NOTIFICATION_EXTENSION_BROWSER_ACTION_VISIBILITY_CHANGED) {
+    extension = service_->GetExtensionById(
+        *content::Details<const std::string>(details).ptr(), true);
   } else {
     extension = content::Details<const Extension>(details).ptr();
   }
@@ -186,18 +198,22 @@ void ExtensionToolbarModel::Observe(
       if (toolbar_items_[i].get() == extension)
         return;  // Already exists.
     }
-    if (service_->extension_prefs()->GetBrowserActionVisibility(extension))
+    if (extensions::ExtensionActionAPI::GetBrowserActionVisibility(
+            service_->extension_prefs(), extension->id())) {
       AddExtension(extension);
+    }
   } else if (type == chrome::NOTIFICATION_EXTENSION_UNLOADED) {
     RemoveExtension(extension);
   } else if (type == chrome::NOTIFICATION_EXTENSION_UNINSTALLED) {
     UninstalledExtension(extension);
   } else if (type ==
       chrome::NOTIFICATION_EXTENSION_BROWSER_ACTION_VISIBILITY_CHANGED) {
-    if (service_->extension_prefs()->GetBrowserActionVisibility(extension))
+    if (extensions::ExtensionActionAPI::GetBrowserActionVisibility(
+            service_->extension_prefs(), extension->id())) {
       AddExtension(extension);
-    else
+    } else {
       RemoveExtension(extension);
+    }
   } else {
     NOTREACHED() << "Received unexpected notification";
   }
@@ -297,22 +313,19 @@ void ExtensionToolbarModel::UninstalledExtension(const Extension* extension) {
 void ExtensionToolbarModel::InitializeExtensionList() {
   DCHECK(service_->is_ready());
 
-  Populate();
-  UpdatePrefs();
+  last_known_positions_ = service_->extension_prefs()->GetToolbarOrder();
+  Populate(last_known_positions_);
 
   extensions_initialized_ = true;
   FOR_EACH_OBSERVER(Observer, observers_, ModelLoaded());
 }
 
-void ExtensionToolbarModel::Populate() {
-  const extensions::ExtensionIdList pref_order =
-      service_->extension_prefs()->GetToolbarOrder();
-  last_known_positions_ = pref_order;
-
-  // Items that have a pref for their position.
+void ExtensionToolbarModel::Populate(
+    const extensions::ExtensionIdList& positions) {
+  // Items that have explicit positions.
   ExtensionList sorted;
-  sorted.resize(pref_order.size(), NULL);
-  // The items that don't have a pref for their position.
+  sorted.resize(positions.size(), NULL);
+  // The items that don't have explicit positions.
   ExtensionList unsorted;
 
   extensions::ExtensionActionManager* extension_action_manager =
@@ -321,22 +334,30 @@ void ExtensionToolbarModel::Populate() {
   // Create the lists.
   for (ExtensionSet::const_iterator it = service_->extensions()->begin();
        it != service_->extensions()->end(); ++it) {
-    const Extension* extension = *it;
+    const Extension* extension = it->get();
     if (!extension_action_manager->GetBrowserAction(*extension))
       continue;
-    if (!service_->extension_prefs()->GetBrowserActionVisibility(extension))
+    if (!extensions::ExtensionActionAPI::GetBrowserActionVisibility(
+            service_->extension_prefs(), extension->id())) {
       continue;
+    }
 
     extensions::ExtensionIdList::const_iterator pos =
-        std::find(pref_order.begin(), pref_order.end(), extension->id());
-    if (pos != pref_order.end())
-      sorted[pos - pref_order.begin()] = extension;
+        std::find(positions.begin(), positions.end(), extension->id());
+    if (pos != positions.end())
+      sorted[pos - positions.begin()] = extension;
     else
       unsorted.push_back(make_scoped_refptr(extension));
   }
 
-  // Merge the lists.
+  // Erase current icons.
+  for (size_t i = 0; i < toolbar_items_.size(); i++) {
+    FOR_EACH_OBSERVER(
+        Observer, observers_, BrowserActionRemoved(toolbar_items_[i].get()));
+  }
   toolbar_items_.clear();
+
+  // Merge the lists.
   toolbar_items_.reserve(sorted.size() + unsorted.size());
   for (ExtensionList::const_iterator iter = sorted.begin();
        iter != sorted.end(); ++iter) {
@@ -346,7 +367,7 @@ void ExtensionToolbarModel::Populate() {
     // syncing NPAPI-containing extensions, so if one of those is not actually
     // synced, we'll get a NULL in the list.  This sort of case can also happen
     // if some error prevents an extension from loading.
-    if (*iter != NULL)
+    if (iter->get() != NULL)
       toolbar_items_.push_back(*iter);
   }
   toolbar_items_.insert(toolbar_items_.end(), unsorted.begin(),
@@ -354,8 +375,8 @@ void ExtensionToolbarModel::Populate() {
 
   // Inform observers.
   for (size_t i = 0; i < toolbar_items_.size(); i++) {
-    FOR_EACH_OBSERVER(Observer, observers_,
-                      BrowserActionAdded(toolbar_items_[i], i));
+    FOR_EACH_OBSERVER(
+        Observer, observers_, BrowserActionAdded(toolbar_items_[i].get(), i));
   }
 }
 
@@ -375,7 +396,10 @@ void ExtensionToolbarModel::UpdatePrefs() {
   if (!service_->extension_prefs())
     return;
 
+  // Don't observe change caused by self.
+  pref_change_registrar_.Remove(prefs::kExtensionToolbar);
   service_->extension_prefs()->SetToolbarOrder(last_known_positions_);
+  pref_change_registrar_.Add(prefs::kExtensionToolbar, pref_change_callback_);
 }
 
 int ExtensionToolbarModel::IncognitoIndexToOriginal(int incognito_index) {
@@ -403,4 +427,35 @@ int ExtensionToolbarModel::OriginalIndexToIncognito(int original_index) {
       ++incognito_index;
   }
   return incognito_index;
+}
+
+void ExtensionToolbarModel::OnExtensionToolbarPrefChange() {
+  // If extensions are not ready, defer to later Populate() call.
+  if (!extensions_initialized_)
+    return;
+
+  // Recalculate |last_known_positions_| to be |pref_positions| followed by
+  // ones that are only in |last_known_positions_|.
+  extensions::ExtensionIdList pref_positions =
+      service_->extension_prefs()->GetToolbarOrder();
+  size_t pref_position_size = pref_positions.size();
+  for (size_t i = 0; i < last_known_positions_.size(); ++i) {
+    if (std::find(pref_positions.begin(), pref_positions.end(),
+                  last_known_positions_[i]) == pref_positions.end()) {
+      pref_positions.push_back(last_known_positions_[i]);
+    }
+  }
+  last_known_positions_.swap(pref_positions);
+
+  // Re-populate.
+  Populate(last_known_positions_);
+
+  if (last_known_positions_.size() > pref_position_size) {
+    // Need to update pref because we have extra icons. But can't call
+    // UpdatePrefs() directly within observation closure.
+    base::MessageLoop::current()->PostTask(
+        FROM_HERE,
+        base::Bind(&ExtensionToolbarModel::UpdatePrefs,
+                   weak_ptr_factory_.GetWeakPtr()));
+  }
 }

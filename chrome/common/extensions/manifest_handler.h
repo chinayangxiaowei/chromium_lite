@@ -9,12 +9,16 @@
 #include <string>
 #include <vector>
 
-#include "base/string16.h"
+#include "base/lazy_instance.h"
+#include "base/memory/linked_ptr.h"
+#include "base/strings/string16.h"
 #include "chrome/common/extensions/manifest.h"
 
 namespace extensions {
 class Extension;
 
+// An interface for clients that recognize and parse keys in extension
+// manifests.
 class ManifestHandler {
  public:
   ManifestHandler();
@@ -55,12 +59,16 @@ class ManifestHandler {
   // Associate us with our keys() in the manifest. A handler can register
   // for multiple keys. The global registry takes ownership of this;
   // if it has an existing handler for |key|, it replaces it with this.
-  // Typical usage:
+  // Manifest handlers must be registered at process startup in
+  // chrome_manifest_handlers.cc:
   // (new MyManifestHandler)->Register();
-  //
-  // WARNING: Manifest handlers registered only in the browser process
-  // are not available to renderers or utility processes.
   void Register();
+
+  // Calling FinalizeRegistration indicates that there are no more
+  // manifest handlers to be registered.
+  static void FinalizeRegistration();
+
+  static bool IsRegistrationFinalized();
 
   // Call Parse on all registered manifest handlers that should parse
   // this extension.
@@ -71,10 +79,6 @@ class ManifestHandler {
                                 std::string* error,
                                 std::vector<InstallWarning>* warnings);
 
-  // Reset the manifest handler registry to an empty state. Useful for
-  // unit tests.
-  static void ClearRegistryForTesting();
-
  protected:
   // A convenience method for handlers that only register for 1 key,
   // so that they can define keys() { return SingleKey(kKey); }
@@ -83,6 +87,50 @@ class ManifestHandler {
  private:
   // The keys to register us for (in Register).
   virtual const std::vector<std::string> Keys() const = 0;
+};
+
+// The global registry for manifest handlers.
+class ManifestHandlerRegistry {
+ private:
+  friend class ManifestHandler;
+  friend class ScopedTestingManifestHandlerRegistry;
+  friend struct base::DefaultLazyInstanceTraits<ManifestHandlerRegistry>;
+
+  ManifestHandlerRegistry();
+  ~ManifestHandlerRegistry();
+
+  void Finalize();
+
+  void RegisterManifestHandler(const std::string& key,
+                               linked_ptr<ManifestHandler> handler);
+  bool ParseExtension(Extension* extension, string16* error);
+  bool ValidateExtension(const Extension* extension,
+                         std::string* error,
+                         std::vector<InstallWarning>* warnings);
+
+  // Overrides the current global ManifestHandlerRegistry with
+  // |registry|, returning the current one.
+  static ManifestHandlerRegistry* SetForTesting(
+      ManifestHandlerRegistry* new_registry);
+
+  typedef std::map<std::string, linked_ptr<ManifestHandler> >
+      ManifestHandlerMap;
+  typedef std::map<ManifestHandler*, int> ManifestHandlerPriorityMap;
+
+  // Puts the manifest handlers in order such that each handler comes after
+  // any handlers for their PrerequisiteKeys. If there is no handler for
+  // a prerequisite key, that dependency is simply ignored.
+  // CHECKs that there are no manifest handlers with circular dependencies.
+  void SortManifestHandlers();
+
+  // All registered manifest handlers.
+  ManifestHandlerMap handlers_;
+
+  // The priority for each manifest handler. Handlers with lower priority
+  // values are evaluated first.
+  ManifestHandlerPriorityMap priority_map_;
+
+  bool is_finalized_;
 };
 
 }  // namespace extensions

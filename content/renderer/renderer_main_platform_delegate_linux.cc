@@ -14,6 +14,10 @@
 #include "content/public/common/content_switches.h"
 #include "content/public/common/sandbox_init.h"
 
+#ifdef ENABLE_VTUNE_JIT_INTERFACE
+#include "v8/src/third_party/vtune/v8-vtune.h"
+#endif
+
 namespace content {
 
 RendererMainPlatformDelegate::RendererMainPlatformDelegate(
@@ -25,6 +29,11 @@ RendererMainPlatformDelegate::~RendererMainPlatformDelegate() {
 }
 
 void RendererMainPlatformDelegate::PlatformInitialize() {
+#ifdef ENABLE_VTUNE_JIT_INTERFACE
+  const CommandLine& command_line = parameters_.command_line;
+  if (command_line.HasSwitch(switches::kEnableVtune))
+    vTune::InitializeVtuneForV8();
+#endif
 }
 
 void RendererMainPlatformDelegate::PlatformUninitialize() {
@@ -40,9 +49,8 @@ bool RendererMainPlatformDelegate::EnableSandbox() {
   // The setuid sandbox is started in the zygote process: zygote_main_linux.cc
   // http://code.google.com/p/chromium/wiki/LinuxSUIDSandbox
   //
-  // The seccomp sandbox mode 1 (sandbox/linux/seccomp-legacy) and mode 2
-  // (sandbox/linux/seccomp-bpf) are started in InitializeSandbox().
-  InitializeSandbox();
+  // Anything else is started in InitializeSandbox().
+  LinuxSandbox::InitializeSandbox();
   return true;
 }
 
@@ -68,7 +76,7 @@ void RendererMainPlatformDelegate::RunSandboxTests(bool no_sandbox) {
   // Under the setuid sandbox, we should not be able to open any file via the
   // filesystem.
   if (linux_sandbox->GetStatus() & kSandboxLinuxSUID) {
-    CHECK(!file_util::PathExists(base::FilePath("/proc/cpuinfo")));
+    CHECK(!base::PathExists(base::FilePath("/proc/cpuinfo")));
   }
 
 #if defined(__x86_64__)

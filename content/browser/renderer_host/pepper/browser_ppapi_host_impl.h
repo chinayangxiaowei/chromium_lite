@@ -11,7 +11,9 @@
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
 #include "base/files/file_path.h"
+#include "base/memory/ref_counted.h"
 #include "content/browser/renderer_host/pepper/content_browser_pepper_host_factory.h"
+#include "content/browser/renderer_host/pepper/pepper_message_filter.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/browser_ppapi_host.h"
 #include "content/public/common/process_type.h"
@@ -29,11 +31,16 @@ class CONTENT_EXPORT BrowserPpapiHostImpl : public BrowserPpapiHost {
   // when this object is created).
   // |external_plugin| signfies that this is a proxy created for an embedder's
   // plugin, i.e. using BrowserPpapiHost::CreateExternalPluginProcess.
-  BrowserPpapiHostImpl(IPC::Sender* sender,
-                       const ppapi::PpapiPermissions& permissions,
-                       const std::string& plugin_name,
-                       const base::FilePath& profile_data_directory,
-                       bool external_plugin);
+  BrowserPpapiHostImpl(
+      IPC::Sender* sender,
+      const ppapi::PpapiPermissions& permissions,
+      const std::string& plugin_name,
+      const base::FilePath& plugin_path,
+      const base::FilePath& profile_data_directory,
+      bool external_plugin,
+      // TODO (ygorshenin@): remove this once TCP sockets are
+      // converted to the new design.
+      const scoped_refptr<PepperMessageFilter>& pepper_message_filter);
   virtual ~BrowserPpapiHostImpl();
 
   // BrowserPpapiHost.
@@ -44,6 +51,7 @@ class CONTENT_EXPORT BrowserPpapiHostImpl : public BrowserPpapiHost {
                                            int* render_process_id,
                                            int* render_view_id) const OVERRIDE;
   virtual const std::string& GetPluginName() OVERRIDE;
+  virtual const base::FilePath& GetPluginPath() OVERRIDE;
   virtual const base::FilePath& GetProfileDataDirectory() OVERRIDE;
   virtual GURL GetDocumentURLForInstance(PP_Instance instance) OVERRIDE;
   virtual GURL GetPluginURLForInstance(PP_Instance instance) OVERRIDE;
@@ -89,6 +97,7 @@ class CONTENT_EXPORT BrowserPpapiHostImpl : public BrowserPpapiHost {
   scoped_ptr<ppapi::host::PpapiHost> ppapi_host_;
   base::ProcessHandle plugin_process_handle_;
   std::string plugin_name_;
+  base::FilePath plugin_path_;
   base::FilePath profile_data_directory_;
 
   // If true, this is an external plugin, i.e. created by the embedder using

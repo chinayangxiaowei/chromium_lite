@@ -13,14 +13,13 @@
 #include "base/prefs/pref_member.h"
 #include "base/sequenced_task_runner_helpers.h"
 #include "base/synchronization/waitable_event_watcher.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "chrome/browser/pepper_flash_settings_manager.h"
 #include "chrome/common/cancelable_task_tracker.h"
-#include "content/public/browser/dom_storage_context.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
-#include "googleurl/src/gurl.h"
-#include "webkit/quota/quota_types.h"
+#include "url/gurl.h"
+#include "webkit/common/quota/quota_types.h"
 
 class ExtensionSpecialStoragePolicy;
 class IOThread;
@@ -42,7 +41,8 @@ namespace quota {
 class QuotaManager;
 }
 
-namespace dom_storage {
+namespace content {
+class DOMStorageContext;
 struct LocalStorageUsageInfo;
 struct SessionStorageUsageInfo;
 }
@@ -92,7 +92,16 @@ class BrowsingDataRemover : public content::NotificationObserver
     REMOVE_SITE_DATA = REMOVE_APPCACHE | REMOVE_COOKIES | REMOVE_FILE_SYSTEMS |
                        REMOVE_INDEXEDDB | REMOVE_LOCAL_STORAGE |
                        REMOVE_PLUGIN_DATA | REMOVE_WEBSQL |
-                       REMOVE_SERVER_BOUND_CERTS
+                       REMOVE_SERVER_BOUND_CERTS,
+
+    // Includes all the available remove options. Meant to be used by clients
+    // that wish to wipe as much data as possible from a Profile, to make it
+    // look like a new Profile.
+    REMOVE_ALL = REMOVE_APPCACHE | REMOVE_CACHE | REMOVE_COOKIES |
+                 REMOVE_DOWNLOADS | REMOVE_FILE_SYSTEMS | REMOVE_FORM_DATA |
+                 REMOVE_HISTORY | REMOVE_INDEXEDDB | REMOVE_LOCAL_STORAGE |
+                 REMOVE_PLUGIN_DATA | REMOVE_PASSWORDS | REMOVE_WEBSQL |
+                 REMOVE_SERVER_BOUND_CERTS | REMOVE_CONTENT_LICENSES,
   };
 
   // When BrowsingDataRemover successfully removes data, a notification of type
@@ -186,7 +195,6 @@ class BrowsingDataRemover : public content::NotificationObserver
     STATE_CREATE_MEDIA,
     STATE_DELETE_MAIN,
     STATE_DELETE_MEDIA,
-    STATE_DELETE_EXPERIMENT,
     STATE_DONE
   };
 
@@ -242,6 +250,13 @@ class BrowsingDataRemover : public content::NotificationObserver
   // Invoked on the IO thread to clear the hostname resolution cache.
   void ClearHostnameResolutionCacheOnIOThread(IOThread* io_thread);
 
+  // Callback when the LoggedIn Predictor has been cleared.
+  // Clears the respective waiting flag and invokes NotifyAndDeleteIfDone.
+  void OnClearedLoggedInPredictor();
+
+  // Clears the LoggedIn Predictor.
+  void ClearLoggedInPredictor();
+
   // Callback when speculative data in the network Predictor has been cleared.
   // Clears the respective waiting flag and invokes NotifyAndDeleteIfDone.
   void OnClearedNetworkPredictor();
@@ -273,6 +288,16 @@ class BrowsingDataRemover : public content::NotificationObserver
 
   // Invoked on the IO thread to delete the NaCl cache.
   void ClearNaClCacheOnIOThread();
+
+  // Callback for when the PNaCl translation cache has been deleted. Invokes
+  // NotifyAndDeleteIfDone.
+  void ClearedPnaclCache();
+
+  // Invokes ClearedPnaclCacheOn on the UI thread.
+  void ClearedPnaclCacheOnIOThread();
+
+  // Invoked on the IO thread to delete entries in the PNaCl translation cache.
+  void ClearPnaclCacheOnIOThread(base::Time begin, base::Time end);
 #endif
 
   // Invoked on the UI thread to delete local storage.
@@ -280,14 +305,14 @@ class BrowsingDataRemover : public content::NotificationObserver
 
   // Callback to deal with the list gathered in ClearLocalStorageOnUIThread.
   void OnGotLocalStorageUsageInfo(
-      const std::vector<dom_storage::LocalStorageUsageInfo>& infos);
+      const std::vector<content::LocalStorageUsageInfo>& infos);
 
   // Invoked on the UI thread to delete session storage.
   void ClearSessionStorageOnUIThread();
 
   // Callback to deal with the list gathered in ClearSessionStorageOnUIThread.
   void OnGotSessionStorageUsageInfo(
-      const std::vector<dom_storage::SessionStorageUsageInfo>& infos);
+      const std::vector<content::SessionStorageUsageInfo>& infos);
 
   // Invoked on the IO thread to delete all storage types managed by the quota
   // system: AppCache, Databases, FileSystems.
@@ -332,12 +357,22 @@ class BrowsingDataRemover : public content::NotificationObserver
   // NotifyAndDeleteIfDone.
   void OnClearedServerBoundCerts();
 
-  // Callback on the DB thread so that we can wait for the form data to be
-  // cleared.
-  void FormDataDBThreadHop();
-
   // Callback from the above method.
   void OnClearedFormData();
+
+  // Callback when the Autofill profile and credit card origin URLs have been
+  // deleted.
+  void OnClearedAutofillOriginURLs();
+
+  // Callback when the shader cache has been deleted.
+  // Invokes NotifyAndDeleteIfDone.
+  void ClearedShaderCache();
+
+  // Invoked on the IO thread to delete from the shader cache.
+  void ClearShaderCacheOnUIThread();
+
+  // Callback on UI thread when the WebRTC identities are cleared.
+  void OnClearWebRTCIdentityStore();
 
   // Returns true if we're all done.
   bool AllDone();
@@ -385,6 +420,7 @@ class BrowsingDataRemover : public content::NotificationObserver
   uint32 deauthorize_content_licenses_request_id_;
   // True if we're waiting for various data to be deleted.
   // These may only be accessed from UI thread in order to avoid races!
+  bool waiting_for_clear_autofill_origin_urls_;
   bool waiting_for_clear_cache_;
   bool waiting_for_clear_content_licenses_;
   // Non-zero if waiting for cookies to be cleared.
@@ -393,13 +429,17 @@ class BrowsingDataRemover : public content::NotificationObserver
   bool waiting_for_clear_history_;
   bool waiting_for_clear_hostname_resolution_cache_;
   bool waiting_for_clear_local_storage_;
+  bool waiting_for_clear_logged_in_predictor_;
   bool waiting_for_clear_nacl_cache_;
   bool waiting_for_clear_network_predictor_;
   bool waiting_for_clear_networking_history_;
   bool waiting_for_clear_plugin_data_;
+  bool waiting_for_clear_pnacl_cache_;
   bool waiting_for_clear_quota_managed_data_;
   bool waiting_for_clear_server_bound_certs_;
   bool waiting_for_clear_session_storage_;
+  bool waiting_for_clear_shader_cache_;
+  bool waiting_for_clear_webrtc_identity_store_;
 
   // Tracking how many origins need to be deleted, and whether we're finished
   // gathering origins.

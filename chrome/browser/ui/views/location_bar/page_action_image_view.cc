@@ -4,7 +4,7 @@
 
 #include "chrome/browser/ui/views/location_bar/page_action_image_view.h"
 
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/extensions/api/commands/command_service.h"
 #include "chrome/browser/extensions/extension_action.h"
 #include "chrome/browser/extensions/extension_action_icon_factory.h"
@@ -28,7 +28,6 @@
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/image/image.h"
 #include "ui/views/controls/menu/menu_item_view.h"
-#include "ui/views/controls/menu/menu_model_adapter.h"
 #include "ui/views/controls/menu/menu_runner.h"
 
 using content::WebContents;
@@ -44,10 +43,10 @@ PageActionImageView::PageActionImageView(LocationBarView* owner,
       current_tab_id_(-1),
       preview_enabled_(false),
       popup_(NULL),
-      ALLOW_THIS_IN_INITIALIZER_LIST(scoped_icon_animation_observer_(
+      scoped_icon_animation_observer_(
           page_action->GetIconAnimation(
               SessionID::IdForTab(owner->GetWebContents())),
-          this)) {
+          this) {
   const Extension* extension = owner_->profile()->GetExtensionService()->
       GetExtensionById(page_action->extension_id(), false);
   DCHECK(extension);
@@ -136,8 +135,9 @@ void PageActionImageView::ExecuteAction(
       break;
 
     case LocationBarController::ACTION_SHOW_SCRIPT_POPUP:
-      ShowPopupWithURL(ExtensionInfoUI::GetURL(page_action_->extension_id()),
-                       show_action);
+      ShowPopupWithURL(
+          extensions::ExtensionInfoUI::GetURL(page_action_->extension_id()),
+          show_action);
       break;
   }
 }
@@ -176,8 +176,10 @@ bool PageActionImageView::OnKeyPressed(const ui::KeyEvent& event) {
   return false;
 }
 
-void PageActionImageView::ShowContextMenuForView(View* source,
-                                                 const gfx::Point& point) {
+void PageActionImageView::ShowContextMenuForView(
+    View* source,
+    const gfx::Point& point,
+    ui::MenuSourceType source_type) {
   const Extension* extension = owner_->profile()->GetExtensionService()->
       GetExtensionById(page_action()->extension_id(), false);
   if (!extension->ShowConfigureContextMenus())
@@ -185,13 +187,12 @@ void PageActionImageView::ShowContextMenuForView(View* source,
 
   scoped_refptr<ExtensionContextMenuModel> context_menu_model(
       new ExtensionContextMenuModel(extension, browser_, this));
-  views::MenuModelAdapter menu_model_adapter(context_menu_model.get());
-  menu_runner_.reset(new views::MenuRunner(menu_model_adapter.CreateMenu()));
+  menu_runner_.reset(new views::MenuRunner(context_menu_model.get()));
   gfx::Point screen_loc;
   views::View::ConvertPointToScreen(this, &screen_loc);
   if (menu_runner_->RunMenuAt(GetWidget(), NULL, gfx::Rect(screen_loc, size()),
-          views::MenuItemView::TOPLEFT, views::MenuRunner::HAS_MNEMONICS |
-          views::MenuRunner::CONTEXT_MENU) ==
+          views::MenuItemView::TOPLEFT, source_type,
+          views::MenuRunner::HAS_MNEMONICS | views::MenuRunner::CONTEXT_MENU) ==
       views::MenuRunner::MENU_DELETED)
     return;
 }
@@ -273,10 +274,10 @@ void PageActionImageView::ShowPopupWithURL(
   if (popup_showing)
     return;
 
-  views::BubbleBorder::ArrowLocation arrow_location = base::i18n::IsRTL() ?
+  views::BubbleBorder::Arrow arrow = base::i18n::IsRTL() ?
       views::BubbleBorder::TOP_LEFT : views::BubbleBorder::TOP_RIGHT;
 
-  popup_ = ExtensionPopup::ShowPopup(popup_url, browser_, this, arrow_location,
+  popup_ = ExtensionPopup::ShowPopup(popup_url, browser_, this, arrow,
                                      show_action);
   popup_->GetWidget()->AddObserver(this);
 }

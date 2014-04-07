@@ -23,9 +23,8 @@ class CC_EXPORT NinePatchLayer : public Layer {
   virtual bool DrawsContent() const OVERRIDE;
   virtual void SetTexturePriorities(const PriorityCalculator& priority_calc)
       OVERRIDE;
-  virtual void Update(ResourceUpdateQueue* queue,
-                      const OcclusionTracker* occlusion,
-                      RenderingStats* stats) OVERRIDE;
+  virtual bool Update(ResourceUpdateQueue* queue,
+                      const OcclusionTracker* occlusion) OVERRIDE;
   virtual void PushPropertiesTo(LayerImpl* layer) OVERRIDE;
 
   // aperture is in the pixel space of the bitmap resource and refers to
@@ -54,6 +53,8 @@ class CC_EXPORT NinePatchLayer : public Layer {
   // The transparent center region that shows the parent layer's contents in
   // image space.
   gfx::Rect image_aperture_;
+
+  DISALLOW_COPY_AND_ASSIGN(NinePatchLayer);
 };
 
 }  // namespace cc

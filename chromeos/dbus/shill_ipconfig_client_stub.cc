@@ -5,7 +5,7 @@
 #include "chromeos/dbus/shill_ipconfig_client_stub.h"
 
 #include "base/bind.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/stl_util.h"
 #include "base/values.h"
 #include "chromeos/dbus/shill_property_changed_observer.h"
@@ -41,12 +41,15 @@ void ShillIPConfigClientStub::Refresh(const dbus::ObjectPath& ipconfig_path,
 void ShillIPConfigClientStub::GetProperties(
     const dbus::ObjectPath& ipconfig_path,
     const DictionaryValueCallback& callback) {
-  if (callback.is_null())
+  const base::DictionaryValue* dict = NULL;
+  if (!ipconfigs_.GetDictionaryWithoutPathExpansion(ipconfig_path.value(),
+                                                    &dict))
     return;
-  MessageLoop::current()->PostTask(
-      FROM_HERE, base::Bind(&ShillIPConfigClientStub::PassProperties,
-                            weak_ptr_factory_.GetWeakPtr(),
-                            callback));
+  base::MessageLoop::current()->PostTask(
+        FROM_HERE, base::Bind(&ShillIPConfigClientStub::PassProperties,
+                              weak_ptr_factory_.GetWeakPtr(),
+                              dict,
+                              callback));
 }
 
 base::DictionaryValue* ShillIPConfigClientStub::CallGetPropertiesAndBlock(
@@ -59,9 +62,19 @@ void ShillIPConfigClientStub::SetProperty(
     const std::string& name,
     const base::Value& value,
     const VoidDBusMethodCallback& callback) {
-  if (callback.is_null())
-    return;
-  MessageLoop::current()->PostTask(
+  base::DictionaryValue* dict = NULL;
+  if (ipconfigs_.GetDictionaryWithoutPathExpansion(ipconfig_path.value(),
+                                                   &dict)) {
+    // Update existing ip config stub object's properties.
+    dict->SetWithoutPathExpansion(name, value.DeepCopy());
+  } else {
+    // Create a new stub ipconfig object, and update its properties.
+    base::DictionaryValue* dvalue = new base::DictionaryValue;
+    dvalue->SetWithoutPathExpansion(name, value.DeepCopy());
+    ipconfigs_.SetWithoutPathExpansion(ipconfig_path.value(),
+                                       dvalue);
+  }
+  base::MessageLoop::current()->PostTask(
       FROM_HERE, base::Bind(callback, DBUS_METHOD_CALL_SUCCESS));
 }
 
@@ -69,23 +82,20 @@ void ShillIPConfigClientStub::ClearProperty(
     const dbus::ObjectPath& ipconfig_path,
     const std::string& name,
     const VoidDBusMethodCallback& callback) {
-  if (callback.is_null())
-    return;
-  MessageLoop::current()->PostTask(
+  base::MessageLoop::current()->PostTask(
       FROM_HERE, base::Bind(callback, DBUS_METHOD_CALL_SUCCESS));
 }
 
 void ShillIPConfigClientStub::Remove(const dbus::ObjectPath& ipconfig_path,
                                      const VoidDBusMethodCallback& callback) {
-  if (callback.is_null())
-    return;
-  MessageLoop::current()->PostTask(
+  base::MessageLoop::current()->PostTask(
       FROM_HERE, base::Bind(callback, DBUS_METHOD_CALL_SUCCESS));
 }
 
 void ShillIPConfigClientStub::PassProperties(
+    const base::DictionaryValue* values,
     const DictionaryValueCallback& callback) const {
-  callback.Run(DBUS_METHOD_CALL_SUCCESS, properties_);
+  callback.Run(DBUS_METHOD_CALL_SUCCESS, *values);
 }
 
 }  // namespace chromeos

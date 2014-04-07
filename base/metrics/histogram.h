@@ -77,7 +77,7 @@
 #include "base/metrics/bucket_ranges.h"
 #include "base/metrics/histogram_base.h"
 #include "base/metrics/histogram_samples.h"
-#include "base/time.h"
+#include "base/time/time.h"
 
 class Pickle;
 class PickleIterator;
@@ -396,7 +396,6 @@ class BASE_EXPORT Histogram : public HistogramBase {
 
   static void InitializeBucketRanges(Sample minimum,
                                      Sample maximum,
-                                     size_t bucket_count,
                                      BucketRanges* ranges);
 
   // This constant if for FindCorruption. Since snapshots of histograms are
@@ -437,9 +436,10 @@ class BASE_EXPORT Histogram : public HistogramBase {
 
   // HistogramBase implementation:
   virtual HistogramType GetHistogramType() const OVERRIDE;
-  virtual bool HasConstructionArguments(Sample minimum,
-                                        Sample maximum,
-                                        size_t bucket_count) const OVERRIDE;
+  virtual bool HasConstructionArguments(
+      Sample expected_minimum,
+      Sample expected_maximum,
+      size_t expected_bucket_count) const OVERRIDE;
   virtual void Add(Sample value) OVERRIDE;
   virtual scoped_ptr<HistogramSamples> SnapshotSamples() const OVERRIDE;
   virtual void AddSamples(const HistogramSamples& samples) OVERRIDE;
@@ -448,12 +448,11 @@ class BASE_EXPORT Histogram : public HistogramBase {
   virtual void WriteAscii(std::string* output) const OVERRIDE;
 
  protected:
-  // |bucket_count| and |ranges| should contain the underflow and overflow
-  // buckets. See top comments for example.
+  // |ranges| should contain the underflow and overflow buckets. See top
+  // comments for example.
   Histogram(const std::string& name,
             Sample minimum,
             Sample maximum,
-            size_t bucket_count,
             const BucketRanges* ranges);
 
   virtual ~Histogram();
@@ -511,27 +510,18 @@ class BASE_EXPORT Histogram : public HistogramBase {
                                const int64 remaining, const size_t i,
                                std::string* output) const;
 
-  // Write textual description of the bucket contents (relative to histogram).
-  // Output is the count in the buckets, as well as the percentage.
-  void WriteAsciiBucketValue(Count current, double scaled_sum,
-                             std::string* output) const;
-
-  // Produce actual graph (set of blank vs non blank char's) for a bucket.
-  void WriteAsciiBucketGraph(double current_size, double max_size,
-                             std::string* output) const;
-
   // WriteJSON calls these.
   virtual void GetParameters(DictionaryValue* params) const OVERRIDE;
 
   virtual void GetCountAndBucketData(Count* count,
+                                     int64* sum,
                                      ListValue* buckets) const OVERRIDE;
 
   // Does not own this object. Should get from StatisticsRecorder.
   const BucketRanges* bucket_ranges_;
 
-  Sample declared_min_;  // Less than this goes into counts_[0]
-  Sample declared_max_;  // Over this goes into counts_[bucket_count_ - 1].
-  size_t bucket_count_;  // Dimension of counts_[].
+  Sample declared_min_;  // Less than this goes into the first bucket.
+  Sample declared_max_;  // Over this goes into the last bucket.
 
   // Finally, provide the state that changes with the addition of each new
   // sample.
@@ -581,7 +571,6 @@ class BASE_EXPORT LinearHistogram : public Histogram {
 
   static void InitializeBucketRanges(Sample minimum,
                                      Sample maximum,
-                                     size_t bucket_count,
                                      BucketRanges* ranges);
 
   // Overridden from Histogram:
@@ -591,7 +580,6 @@ class BASE_EXPORT LinearHistogram : public Histogram {
   LinearHistogram(const std::string& name,
                   Sample minimum,
                   Sample maximum,
-                  size_t bucket_count,
                   const BucketRanges* ranges);
 
   virtual double GetBucketSize(Count current, size_t i) const OVERRIDE;

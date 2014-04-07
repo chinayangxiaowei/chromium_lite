@@ -24,22 +24,22 @@ namespace content {
 class MailboxOutputSurface : public CompositorOutputSurface {
  public:
   MailboxOutputSurface(int32 routing_id,
-                       WebKit::WebGraphicsContext3D* context3d,
+                       uint32 output_surface_id,
+                       WebGraphicsContext3DCommandBufferImpl* context3d,
                        cc::SoftwareOutputDevice* software);
   virtual ~MailboxOutputSurface();
 
   // cc::OutputSurface implementation.
-  virtual void SendFrameToParentCompositor(cc::CompositorFrame* frame) OVERRIDE;
   virtual void EnsureBackbuffer() OVERRIDE;
   virtual void DiscardBackbuffer() OVERRIDE;
-  virtual void Reshape(gfx::Size size) OVERRIDE;
+  virtual void Reshape(gfx::Size size, float scale_factor) OVERRIDE;
   virtual void BindFramebuffer() OVERRIDE;
-  virtual void PostSubBuffer(gfx::Rect rect) OVERRIDE;
-  virtual void SwapBuffers() OVERRIDE;
+  virtual void SwapBuffers(cc::CompositorFrame* frame) OVERRIDE;
 
  private:
   // CompositorOutputSurface overrides.
-  virtual void OnSwapAck(const cc::CompositorFrameAck& ack) OVERRIDE;
+  virtual void OnSwapAck(uint32 output_surface_id,
+                         const cc::CompositorFrameAck& ack) OVERRIDE;
 
   size_t GetNumAcksPending();
 
@@ -57,13 +57,10 @@ class MailboxOutputSurface : public CompositorOutputSurface {
     uint32 sync_point;
   };
 
-  void ConsumeTexture(const TransferableFrame& frame);
-
   TransferableFrame current_backing_;
   std::deque<TransferableFrame> pending_textures_;
   std::queue<TransferableFrame> returned_textures_;
 
-  gfx::Size size_;
   uint32 fbo_;
   bool is_backbuffer_discarded_;
 };

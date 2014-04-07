@@ -19,6 +19,7 @@
 #include "base/observer_list.h"
 #include "ui/aura/client/activation_change_observer.h"
 #include "ui/base/events/event_target.h"
+#include "ui/base/ui_base_types.h"
 #include "ui/gfx/insets.h"
 #include "ui/gfx/screen.h"
 #include "ui/gfx/size.h"
@@ -76,12 +77,14 @@ class Launcher;
 class LauncherDelegate;
 class LauncherModel;
 class MagnificationController;
+class MruWindowTracker;
 class NestedDispatcherController;
 class PartialMagnificationController;
 class PowerButtonController;
 class RootWindowHostFactory;
 class ScreenAsh;
-class SessionStateController;
+class LockStateController;
+class SessionStateDelegate;
 class ShellDelegate;
 class ShellObserver;
 class SystemTray;
@@ -92,6 +95,7 @@ class UserWallpaperDelegate;
 class VideoDetector;
 class WebNotificationTray;
 class WindowCycleController;
+class WindowSelectorController;
 
 namespace internal {
 class AcceleratorFilter;
@@ -106,19 +110,21 @@ class EventClientImpl;
 class EventRewriterEventFilter;
 class EventTransformationHandler;
 class FocusCycler;
+class LocaleNotificationController;
 class MouseCursorEventFilter;
 class OutputConfiguratorAnimation;
 class OverlayEventFilter;
 class ResizeShadowController;
+class ResolutionNotificationController;
 class RootWindowController;
 class RootWindowLayoutManager;
+class ScopedTargetRootWindow;
 class ScreenPositionController;
 class SlowAnimationEventFilter;
 class StatusAreaWidget;
 class SystemGestureEventFilter;
 class SystemModalContainerEventFilter;
 class TouchObserverHUD;
-class WorkspaceController;
 }
 
 namespace shell {
@@ -149,6 +155,7 @@ class ASH_EXPORT Shell
 
   // A shell must be explicitly created so that it can call |Init()| with the
   // delegate set. |delegate| can be NULL (if not required for initialization).
+  // Takes ownership of |delegate|.
   static Shell* CreateInstance(ShellDelegate* delegate);
 
   // Should never be called before |CreateInstance()|.
@@ -171,10 +178,12 @@ class ASH_EXPORT Shell
   // that has a launcher.
   static aura::RootWindow* GetPrimaryRootWindow();
 
-  // Returns the active RootWindow. The active RootWindow is the one that
-  // contains the current active window as a decendant child. The active
-  // RootWindow remains the same even when the active window becomes NULL,
-  // until the another window who has a different root window becomes active.
+  // Returns a RootWindow when used as a target when creating a new window.
+  // The root window of the active window is used in most cases, but can
+  // be overridden by using ScopedTargetRootWindow().
+  // If you want to get a RootWindow of the active window, just use
+  // |wm::GetActiveWindow()->GetRootWindow()|.
+  // TODO(oshima): Rename to GetTargetRootWindow() crbug.com/266378.
   static aura::RootWindow* GetActiveRootWindow();
 
   // Returns the global Screen object that's always active in ash.
@@ -195,16 +204,18 @@ class ASH_EXPORT Shell
       int container_id,
       aura::RootWindow* priority_root);
 
-  // True if "launcher per display" feature  is enabled.
-  static bool IsLauncherPerDisplayEnabled();
+  // True if an experimental maximize mode is enabled which forces browser and
+  // application windows to be maximized only.
+  static bool IsForcedMaximizeMode();
 
-  void set_active_root_window(aura::RootWindow* active_root_window) {
-    active_root_window_ = active_root_window;
+  void set_active_root_window(aura::RootWindow* target_root_window) {
+    target_root_window_ = target_root_window;
   }
 
   // Shows the context menu for the background and launcher at
   // |location_in_screen| (in screen coordinates).
-  void ShowContextMenu(const gfx::Point& location_in_screen);
+  void ShowContextMenu(const gfx::Point& location_in_screen,
+                       ui::MenuSourceType source_type);
 
   // Toggles the app list. |window| specifies in which display the app
   // list should be shown. If this is NULL, the active root window
@@ -216,13 +227,6 @@ class ASH_EXPORT Shell
 
   // Returns app list window or NULL if it is not visible.
   aura::Window* GetAppListWindow();
-
-  // Returns true if a user is logged in whose session can be locked (i.e. the
-  // user has a password with which to unlock the session).
-  bool CanLockScreen();
-
-  // Returns true if the screen is locked.
-  bool IsScreenLocked() const;
 
   // Returns true if a system-modal dialog window is currently open.
   bool IsSystemModalWindowOpen() const;
@@ -280,14 +284,14 @@ class ASH_EXPORT Shell
   internal::DisplayManager* display_manager() {
     return display_manager_.get();
   }
+  views::corewm::InputMethodEventFilter* input_method_filter() {
+    return input_method_filter_.get();
+  }
   views::corewm::CompoundEventFilter* env_filter() {
     return env_filter_.get();
   }
   views::corewm::TooltipController* tooltip_controller() {
     return tooltip_controller_.get();
-  }
-  internal::TouchObserverHUD* touch_observer_hud() {
-    return touch_observer_hud_.get();
   }
   internal::EventRewriterEventFilter* event_rewriter_filter() {
     return event_rewriter_filter_.get();
@@ -301,8 +305,11 @@ class ASH_EXPORT Shell
   PowerButtonController* power_button_controller() {
     return power_button_controller_.get();
   }
-  SessionStateController* session_state_controller() {
-    return session_state_controller_.get();
+  LockStateController* lock_state_controller() {
+    return lock_state_controller_.get();
+  }
+  MruWindowTracker* mru_window_tracker() {
+    return mru_window_tracker_.get();
   }
   UserActivityDetector* user_activity_detector() {
     return user_activity_detector_.get();
@@ -312,6 +319,9 @@ class ASH_EXPORT Shell
   }
   WindowCycleController* window_cycle_controller() {
     return window_cycle_controller_.get();
+  }
+  WindowSelectorController* window_selector_controller() {
+    return window_selector_controller_.get();
   }
   internal::FocusCycler* focus_cycler() {
     return focus_cycler_.get();
@@ -335,6 +345,10 @@ class ASH_EXPORT Shell
 
   CapsLockDelegate* caps_lock_delegate() {
     return caps_lock_delegate_.get();
+  }
+
+  SessionStateDelegate* session_state_delegate() {
+    return session_state_delegate_.get();
   }
 
   HighContrastController* high_contrast_controller() {
@@ -424,7 +438,7 @@ class ASH_EXPORT Shell
   // Starts the animation that occurs on first login.
   void DoInitialWorkspaceAnimation();
 
-#if defined(OS_CHROMEOS)
+#if defined(OS_CHROMEOS) && defined(USE_X11)
   // TODO(oshima): Move these objects to DisplayController.
   chromeos::OutputConfigurator* output_configurator() {
     return output_configurator_.get();
@@ -435,7 +449,12 @@ class ASH_EXPORT Shell
   internal::DisplayErrorObserver* display_error_observer() {
     return display_error_observer_.get();
   }
-#endif  // defined(OS_CHROMEOS)
+#endif  // defined(OS_CHROMEOS) && defined(USE_X11)
+
+  internal::ResolutionNotificationController*
+      resolution_notification_controller() {
+    return resolution_notification_controller_.get();
+  }
 
   RootWindowHostFactory* root_window_host_factory() {
     return root_window_host_factory_.get();
@@ -448,24 +467,34 @@ class ASH_EXPORT Shell
   // Returns the launcher delegate, creating if necesary.
   LauncherDelegate* GetLauncherDelegate();
 
+  void SetTouchHudProjectionEnabled(bool enabled);
+
+  bool is_touch_hud_projection_enabled() const {
+    return is_touch_hud_projection_enabled_;
+  }
+
  private:
   FRIEND_TEST_ALL_PREFIXES(ExtendedDesktopTest, TestCursor);
   FRIEND_TEST_ALL_PREFIXES(WindowManagerTest, MouseEventCursors);
   FRIEND_TEST_ALL_PREFIXES(WindowManagerTest, TransformActivate);
   friend class internal::RootWindowController;
+  friend class internal::ScopedTargetRootWindow;
   friend class test::ShellTestApi;
   friend class shell::WindowWatcher;
 
   typedef std::pair<aura::Window*, gfx::Rect> WindowAndBoundsPair;
 
+  // Takes ownership of |delegate|.
   explicit Shell(ShellDelegate* delegate);
   virtual ~Shell();
 
   void Init();
 
   // Initializes the root window and root window controller so that it
-  // can host browser windows.
-  void InitRootWindowController(internal::RootWindowController* root);
+  // can host browser windows. |first_run_after_boot| is true for the
+  // primary display only first time after boot.
+  void InitRootWindowController(internal::RootWindowController* root,
+                                bool first_run_after_boot);
 
   // ash::internal::SystemModalContainerEventFilterDelegate overrides:
   virtual bool CanWindowReceiveEvents(aura::Window* window) OVERRIDE;
@@ -487,8 +516,12 @@ class ASH_EXPORT Shell
 
   ScreenAsh* screen_;
 
-  // Active root window. Never becomes NULL during the session.
-  aura::RootWindow* active_root_window_;
+  // When no explicit target display/RootWindow is given, new windows are
+  // created on |scoped_target_root_window_| , unless NULL in
+  // which case they are created on |target_root_window_|.
+  // |target_root_window_| never becomes NULL during the session.
+  aura::RootWindow* target_root_window_;
+  aura::RootWindow* scoped_target_root_window_;
 
   // The CompoundEventFilter owned by aura::Env object.
   scoped_ptr<views::corewm::CompoundEventFilter> env_filter_;
@@ -506,6 +539,7 @@ class ASH_EXPORT Shell
   scoped_ptr<SystemTrayNotifier> system_tray_notifier_;
   scoped_ptr<UserWallpaperDelegate> user_wallpaper_delegate_;
   scoped_ptr<CapsLockDelegate> caps_lock_delegate_;
+  scoped_ptr<SessionStateDelegate> session_state_delegate_;
   scoped_ptr<LauncherDelegate> launcher_delegate_;
 
   scoped_ptr<LauncherModel> launcher_model_;
@@ -523,10 +557,12 @@ class ASH_EXPORT Shell
   scoped_ptr<views::corewm::TooltipController> tooltip_controller_;
   scoped_ptr<DesktopBackgroundController> desktop_background_controller_;
   scoped_ptr<PowerButtonController> power_button_controller_;
-  scoped_ptr<SessionStateController> session_state_controller_;
+  scoped_ptr<LockStateController> lock_state_controller_;
+  scoped_ptr<MruWindowTracker> mru_window_tracker_;
   scoped_ptr<UserActivityDetector> user_activity_detector_;
   scoped_ptr<VideoDetector> video_detector_;
   scoped_ptr<WindowCycleController> window_cycle_controller_;
+  scoped_ptr<WindowSelectorController> window_selector_controller_;
   scoped_ptr<internal::FocusCycler> focus_cycler_;
   scoped_ptr<DisplayController> display_controller_;
   scoped_ptr<HighContrastController> high_contrast_controller_;
@@ -561,13 +597,12 @@ class ASH_EXPORT Shell
   // An event filter that pre-handles all key events to send them to an IME.
   scoped_ptr<views::corewm::InputMethodEventFilter> input_method_filter_;
 
-  // An event filter that silently keeps track of all touch events and controls
-  // a heads-up display. This is enabled only if --ash-touch-hud flag is used.
-  scoped_ptr<internal::TouchObserverHUD> touch_observer_hud_;
-
   scoped_ptr<internal::DisplayManager> display_manager_;
 
-#if defined(OS_CHROMEOS)
+  scoped_ptr<internal::LocaleNotificationController>
+      locale_notification_controller_;
+
+#if defined(OS_CHROMEOS) && defined(USE_X11)
   // Controls video output device state.
   scoped_ptr<chromeos::OutputConfigurator> output_configurator_;
   scoped_ptr<internal::OutputConfiguratorAnimation>
@@ -576,7 +611,10 @@ class ASH_EXPORT Shell
 
   // Receives output change events and udpates the display manager.
   scoped_ptr<internal::DisplayChangeObserverX11> display_change_observer_;
-#endif  // defined(OS_CHROMEOS)
+#endif  // defined(OS_CHROMEOS) && defined(USE_X11)
+
+  scoped_ptr<internal::ResolutionNotificationController>
+      resolution_notification_controller_;
 
   // |native_cursor_manager_| is owned by |cursor_manager_|, but we keep a
   // pointer to vend to test code.
@@ -590,6 +628,8 @@ class ASH_EXPORT Shell
 
   // For testing only: simulate that a modal window is open
   bool simulate_modal_window_open_for_testing_;
+
+  bool is_touch_hud_projection_enabled_;
 
   DISALLOW_COPY_AND_ASSIGN(Shell);
 };

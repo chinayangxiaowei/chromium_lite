@@ -16,7 +16,7 @@
 #include "base/metrics/histogram.h"
 #include "base/path_service.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/win/metro.h"
 #include "chrome/browser/favicon/favicon_tab_helper.h"
 #include "chrome/browser/favicon/favicon_util.h"
@@ -57,7 +57,7 @@ base::FilePath GetTileImagesDir() {
     return base::FilePath();
 
   tile_images_dir = tile_images_dir.Append(L"TileImages");
-  if (!file_util::DirectoryExists(tile_images_dir) &&
+  if (!base::DirectoryExists(tile_images_dir) &&
       !file_util::CreateDirectory(tile_images_dir))
     return base::FilePath();
 
@@ -124,7 +124,7 @@ bool GetPathToBackupLogo(const base::FilePath& logo_dir,
                          base::FilePath* logo_path) {
   const wchar_t kDefaultLogoFileName[] = L"SecondaryTile.png";
   *logo_path = logo_dir.Append(kDefaultLogoFileName);
-  if (file_util::PathExists(*logo_path))
+  if (base::PathExists(*logo_path))
     return true;
 
   base::FilePath default_logo_path;
@@ -132,7 +132,7 @@ bool GetPathToBackupLogo(const base::FilePath& logo_dir,
     return false;
 
   default_logo_path = default_logo_path.Append(kDefaultLogoFileName);
-  return file_util::CopyFile(default_logo_path, *logo_path);
+  return base::CopyFile(default_logo_path, *logo_path);
 }
 
 // UMA reporting callback for site-specific secondary tile creation.
@@ -394,15 +394,17 @@ void MetroPinTabHelper::TogglePinnedToStartScreen() {
   }
 
   // Request all the candidates.
-  int image_size = 0; // Request the full sized image.
+  int preferred_image_size = 0;  // Request the first image.
+  int max_image_size = 0;  // Do not resize images.
   for (std::vector<content::FaviconURL>::const_iterator iter =
            favicon_url_candidates_.begin();
        iter != favicon_url_candidates_.end();
        ++iter) {
     favicon_chooser_->AddPendingRequest(
-        web_contents()->DownloadFavicon(iter->icon_url,
+        web_contents()->DownloadImage(iter->icon_url,
             true,
-            image_size,
+            preferred_image_size,
+            max_image_size,
             base::Bind(&MetroPinTabHelper::DidDownloadFavicon,
                        base::Unretained(this))));
   }
@@ -428,6 +430,7 @@ void MetroPinTabHelper::DidUpdateFaviconURL(
 
 void MetroPinTabHelper::DidDownloadFavicon(
     int id,
+    int http_status_code,
     const GURL& image_url,
     int requested_size,
     const std::vector<SkBitmap>& bitmaps) {

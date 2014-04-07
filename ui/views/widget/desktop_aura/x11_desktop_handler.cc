@@ -4,7 +4,7 @@
 
 #include "ui/views/widget/desktop_aura/x11_desktop_handler.h"
 
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "ui/aura/env.h"
 #include "ui/aura/focus_manager.h"
 #include "ui/aura/root_window.h"
@@ -13,7 +13,7 @@
 
 #if !defined(OS_CHROMEOS)
 #include "ui/views/ime/input_method.h"
-#include "ui/views/widget/desktop_aura/desktop_root_window_host_linux.h"
+#include "ui/views/widget/desktop_aura/desktop_root_window_host_x11.h"
 #endif
 
 namespace {
@@ -112,13 +112,13 @@ void X11DesktopHandler::OnWillDestroyEnv() {
 }
 
 void X11DesktopHandler::OnActiveWindowChanged(::Window xid) {
-  DesktopRootWindowHostLinux* old_host =
-      views::DesktopRootWindowHostLinux::GetHostForXID(current_window_);
+  DesktopRootWindowHostX11* old_host =
+      views::DesktopRootWindowHostX11::GetHostForXID(current_window_);
   if (old_host)
     old_host->HandleNativeWidgetActivationChanged(false);
 
-  DesktopRootWindowHostLinux* new_host =
-      views::DesktopRootWindowHostLinux::GetHostForXID(xid);
+  DesktopRootWindowHostX11* new_host =
+      views::DesktopRootWindowHostX11::GetHostForXID(xid);
   if (new_host)
     new_host->HandleNativeWidgetActivationChanged(true);
 

@@ -4,35 +4,28 @@
 
 #include "chrome/browser/ui/ash/chrome_shell_delegate.h"
 
+#include "base/command_line.h"
 #include "ash/magnifier/magnifier_constants.h"
+#include "chrome/browser/chrome_notification_types.h"
+#include "chrome/browser/prefs/session_startup_pref.h"
+#include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/ash/caps_lock_delegate_views.h"
+#include "chrome/browser/ui/ash/session_state_delegate_views.h"
 #include "chrome/browser/ui/ash/window_positioner.h"
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/host_desktop.h"
+#include "chrome/browser/ui/startup/startup_browser_creator_impl.h"
+#include "chrome/common/chrome_switches.h"
+#include "content/public/browser/notification_service.h"
 
-bool ChromeShellDelegate::IsUserLoggedIn() const {
-  return true;
-}
-
-// Returns true if we're logged in and browser has been started
-bool ChromeShellDelegate::IsSessionStarted() const {
-  return true;
-}
-
-bool ChromeShellDelegate::IsGuestSession() const {
-  return false;
-}
+#if defined(OS_WIN)
+#include "chrome/browser/ui/ash/user_wallpaper_delegate_win.h"
+#endif
 
 bool ChromeShellDelegate::IsFirstRunAfterBoot() const {
-  return false;
-}
-
-bool ChromeShellDelegate::CanLockScreen() const {
-  return false;
-}
-
-void ChromeShellDelegate::LockScreen() {
-}
-
-bool ChromeShellDelegate::IsScreenLocked() const {
   return false;
 }
 
@@ -48,9 +41,6 @@ void ChromeShellDelegate::OpenFileManager(bool as_dialog) {
 void ChromeShellDelegate::OpenCrosh() {
 }
 
-void ChromeShellDelegate::OpenMobileSetup(const std::string& service_path) {
-}
-
 void ChromeShellDelegate::ShowKeyboardOverlay() {
 }
 
@@ -63,6 +53,13 @@ bool ChromeShellDelegate::IsSpokenFeedbackEnabled() const {
 
 void ChromeShellDelegate::ToggleSpokenFeedback(
     ash::AccessibilityNotificationVisibility notify) {
+}
+
+void ChromeShellDelegate::SetLargeCursorEnabled(bool enalbed) {
+}
+
+bool ChromeShellDelegate::IsLargeCursorEnabled() const {
+  return false;
 }
 
 bool ChromeShellDelegate::IsHighContrastEnabled() const {
@@ -87,6 +84,10 @@ ash::CapsLockDelegate* ChromeShellDelegate::CreateCapsLockDelegate() {
   return new CapsLockDelegate();
 }
 
+ash::SessionStateDelegate* ChromeShellDelegate::CreateSessionStateDelegate() {
+  return new SessionStateDelegate;
+}
+
 void ChromeShellDelegate::SaveScreenMagnifierScale(double scale) {
 }
 
@@ -98,12 +99,19 @@ bool ChromeShellDelegate::ShouldAlwaysShowAccessibilityMenu() const {
   return false;
 }
 
+void ChromeShellDelegate::SilenceSpokenFeedback() const {
+}
+
 ash::SystemTrayDelegate* ChromeShellDelegate::CreateSystemTrayDelegate() {
   return NULL;
 }
 
 ash::UserWallpaperDelegate* ChromeShellDelegate::CreateUserWallpaperDelegate() {
+#if defined(OS_WIN)
+  return ::CreateUserWallpaperDelegate();
+#else
   return NULL;
+#endif
 }
 
 void ChromeShellDelegate::HandleMediaNextTrack() {
@@ -118,9 +126,55 @@ void ChromeShellDelegate::HandleMediaPrevTrack() {
 void ChromeShellDelegate::Observe(int type,
                                   const content::NotificationSource& source,
                                   const content::NotificationDetails& details) {
-  // MSVC++ warns about switch statements without any cases.
-  NOTREACHED() << "Unexpected notification " << type;
+  switch (type) {
+    case chrome::NOTIFICATION_ASH_SESSION_STARTED: {
+      // If we are launched to service a windows 8 search request then let the
+      // IPC which carries the search string create the browser and initiate
+      // the navigation.
+      if (CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kWindows8Search))
+        break;
+      // If Chrome ASH is launched when no browser is open in the desktop,
+      // we should execute the startup code.
+      // If there are browsers open in the desktop, we create a browser window
+      // and open a new tab page, if session restore is not on.
+      BrowserList* desktop_list = BrowserList::GetInstance(
+          chrome::HOST_DESKTOP_TYPE_NATIVE);
+      if (desktop_list->empty()) {
+        // We pass a dummy command line here, because the browser is launched in
+        // silent-mode by the metro viewer process, which causes the
+        // StartupBrowserCreatorImpl class to not create any browsers which is
+        // not the behavior we want.
+        CommandLine dummy(CommandLine::NO_PROGRAM);
+        StartupBrowserCreatorImpl startup_impl(
+            base::FilePath(),
+            dummy,
+            chrome::startup::IS_NOT_FIRST_RUN);
+        startup_impl.Launch(ProfileManager::GetDefaultProfileOrOffTheRecord(),
+                            std::vector<GURL>(),
+                            true,
+                            chrome::HOST_DESKTOP_TYPE_ASH);
+      } else {
+        Browser* browser = GetTargetBrowser();
+        chrome::AddBlankTabAt(browser, -1, true);
+        browser->window()->Show();
+      }
+      break;
+    }
+    case chrome::NOTIFICATION_ASH_SESSION_ENDED:
+      break;
+    default:
+      NOTREACHED() << "Unexpected notification " << type;
+  }
 }
 
 void ChromeShellDelegate::PlatformInit() {
+#if defined(OS_WIN)
+  registrar_.Add(this,
+                 chrome::NOTIFICATION_ASH_SESSION_STARTED,
+                 content::NotificationService::AllSources());
+  registrar_.Add(this,
+                 chrome::NOTIFICATION_ASH_SESSION_ENDED,
+                 content::NotificationService::AllSources());
+#endif
 }

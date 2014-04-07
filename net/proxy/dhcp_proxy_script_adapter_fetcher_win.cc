@@ -7,11 +7,11 @@
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/logging.h"
-#include "base/message_loop_proxy.h"
+#include "base/message_loop/message_loop_proxy.h"
 #include "base/metrics/histogram.h"
-#include "base/sys_string_conversions.h"
+#include "base/strings/sys_string_conversions.h"
 #include "base/threading/worker_pool.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "net/base/net_errors.h"
 #include "net/proxy/dhcpcsvc_init_win.h"
 #include "net/proxy/proxy_script_fetcher_impl.h"
@@ -41,11 +41,6 @@ DhcpProxyScriptAdapterFetcher::DhcpProxyScriptAdapterFetcher(
 
 DhcpProxyScriptAdapterFetcher::~DhcpProxyScriptAdapterFetcher() {
   Cancel();
-
-  // The WeakPtr we passed to the worker thread may be destroyed on the
-  // worker thread.  This detaches any outstanding WeakPtr state from
-  // the current thread.
-  base::SupportsWeakPtr<DhcpProxyScriptAdapterFetcher>::DetachFromThread();
 }
 
 void DhcpProxyScriptAdapterFetcher::Fetch(
@@ -53,7 +48,7 @@ void DhcpProxyScriptAdapterFetcher::Fetch(
   DCHECK(CalledOnValidThread());
   DCHECK_EQ(state_, STATE_START);
   result_ = ERR_IO_PENDING;
-  pac_script_ = string16();
+  pac_script_ = base::string16();
   state_ = STATE_WAIT_DHCP;
   callback_ = callback;
 
@@ -108,7 +103,7 @@ int DhcpProxyScriptAdapterFetcher::GetResult() const {
   return result_;
 }
 
-string16 DhcpProxyScriptAdapterFetcher::GetPacScript() const {
+base::string16 DhcpProxyScriptAdapterFetcher::GetPacScript() const {
   DCHECK(CalledOnValidThread());
   return pac_script_;
 }

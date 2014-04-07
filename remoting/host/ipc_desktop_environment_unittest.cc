@@ -7,17 +7,15 @@
 #include "base/callback.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
-#include "base/process.h"
-#include "base/process_util.h"
+#include "base/message_loop/message_loop.h"
+#include "base/process/process.h"
+#include "base/process/process_handle.h"
 #include "base/run_loop.h"
 #include "ipc/ipc_channel.h"
 #include "ipc/ipc_channel_proxy.h"
 #include "ipc/ipc_listener.h"
 #include "ipc/ipc_message.h"
 #include "ipc/ipc_platform_file.h"
-#include "media/video/capture/screen/screen_capturer_fake.h"
-#include "media/video/capture/screen/screen_capturer_mock_objects.h"
 #include "remoting/base/auto_thread.h"
 #include "remoting/base/auto_thread_task_runner.h"
 #include "remoting/base/constants.h"
@@ -28,14 +26,21 @@
 #include "remoting/host/desktop_session_proxy.h"
 #include "remoting/host/host_mock_objects.h"
 #include "remoting/host/ipc_desktop_environment.h"
+#include "remoting/host/screen_capturer_fake.h"
 #include "remoting/protocol/protocol_mock_objects.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkRegion.h"
+#include "third_party/webrtc/modules/desktop_capture/desktop_geometry.h"
+#include "third_party/webrtc/modules/desktop_capture/desktop_region.h"
+#include "third_party/webrtc/modules/desktop_capture/screen_capturer_mock_objects.h"
 
 using testing::_;
 using testing::AnyNumber;
 using testing::AtLeast;
+using testing::AtMost;
+using testing::DeleteArg;
+using testing::DoAll;
 using testing::Return;
 using testing::ReturnRef;
 
@@ -54,6 +59,7 @@ class FakeDaemonSender : public IPC::Sender {
 
   MOCK_METHOD3(ConnectTerminal, void(int, const ScreenResolution&, bool));
   MOCK_METHOD1(DisconnectTerminal, void(int));
+  MOCK_METHOD2(SetScreenResolution, void(int, const ScreenResolution&));
 
  private:
   void OnMessageReceived(const IPC::Message& message);
@@ -90,6 +96,8 @@ void FakeDaemonSender::OnMessageReceived(const IPC::Message& message) {
                         ConnectTerminal)
     IPC_MESSAGE_HANDLER(ChromotingNetworkHostMsg_DisconnectTerminal,
                         DisconnectTerminal)
+    IPC_MESSAGE_HANDLER(ChromotingNetworkDaemonMsg_SetScreenResolution,
+                        SetScreenResolution)
     IPC_MESSAGE_UNHANDLED(handled = false)
   IPC_END_MESSAGE_MAP()
 
@@ -122,7 +130,7 @@ class IpcDesktopEnvironmentTest : public testing::Test {
                        bool virtual_terminal);
   void DisconnectTerminal(int terminal_id);
 
-  // Creates a DesktopEnvironment with a fake media::ScreenCapturer, to mock
+  // Creates a DesktopEnvironment with a fake webrtc::ScreenCapturer, to mock
   // DesktopEnvironmentFactory::Create().
   DesktopEnvironment* CreateDesktopEnvironment();
 
@@ -130,9 +138,9 @@ class IpcDesktopEnvironmentTest : public testing::Test {
   // DesktopEnvironment::CreateInputInjector().
   InputInjector* CreateInputInjector();
 
-  // Creates a fake media::ScreenCapturer, to mock
+  // Creates a fake webrtc::ScreenCapturer, to mock
   // DesktopEnvironment::CreateVideoCapturer().
-  media::ScreenCapturer* CreateVideoCapturer();
+  webrtc::ScreenCapturer* CreateVideoCapturer();
 
   void DeleteDesktopEnvironment();
 
@@ -153,7 +161,7 @@ class IpcDesktopEnvironmentTest : public testing::Test {
   void OnDesktopAttached(IPC::PlatformFileForTransit desktop_pipe);
 
   // The main message loop.
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
 
   // Runs until |desktop_session_proxy_| is connected to the desktop.
   scoped_ptr<base::RunLoop> setup_run_loop_;
@@ -186,8 +194,11 @@ class IpcDesktopEnvironmentTest : public testing::Test {
   // The IPC input injector.
   scoped_ptr<InputInjector> input_injector_;
 
+  // The IPC screen controls.
+  scoped_ptr<ScreenControls> screen_controls_;
+
   // The IPC screen capturer.
-  scoped_ptr<media::ScreenCapturer> video_capturer_;
+  scoped_ptr<webrtc::ScreenCapturer> video_capturer_;
 
   // Represents the desktop process running in a user session.
   scoped_ptr<DesktopProcess> desktop_process_;
@@ -198,14 +209,14 @@ class IpcDesktopEnvironmentTest : public testing::Test {
   // The last |terminal_id| passed to ConnectTermina();
   int terminal_id_;
 
-  media::MockScreenCapturerDelegate screen_capturer_delegate_;
+  webrtc::MockScreenCapturerCallback screen_capturer_callback_;
 
   MockClientSessionControl client_session_control_;
   base::WeakPtrFactory<ClientSessionControl> client_session_control_factory_;
 };
 
 IpcDesktopEnvironmentTest::IpcDesktopEnvironmentTest()
-    : message_loop_(MessageLoop::TYPE_UI),
+    : message_loop_(base::MessageLoop::TYPE_UI),
       client_jid_("user@domain/rest-of-jid"),
       clipboard_stub_(NULL),
       remote_input_injector_(NULL),
@@ -221,8 +232,8 @@ void IpcDesktopEnvironmentTest::SetUp() {
   task_runner_ = new AutoThreadTaskRunner(
       message_loop_.message_loop_proxy(), main_run_loop_.QuitClosure());
 
-  io_task_runner_ = AutoThread::CreateWithType("IPC thread", task_runner_,
-                                               MessageLoop::TYPE_IO);
+  io_task_runner_ = AutoThread::CreateWithType(
+      "IPC thread", task_runner_, base::MessageLoop::TYPE_IO);
 
   setup_run_loop_.reset(new base::RunLoop());
 
@@ -271,12 +282,16 @@ void IpcDesktopEnvironmentTest::SetUp() {
   desktop_environment_ = desktop_environment_factory_->Create(
       client_session_control_factory_.GetWeakPtr());
 
+  screen_controls_ = desktop_environment_->CreateScreenControls();
+
   // Create the input injector.
   input_injector_ = desktop_environment_->CreateInputInjector();
 
   // Create the screen capturer.
   video_capturer_ =
       desktop_environment_->CreateVideoCapturer();
+
+  desktop_environment_->SetCapabilities(std::string());
 }
 
 void IpcDesktopEnvironmentTest::ConnectTerminal(
@@ -302,15 +317,19 @@ DesktopEnvironment* IpcDesktopEnvironmentTest::CreateDesktopEnvironment() {
   EXPECT_CALL(*desktop_environment, CreateAudioCapturerPtr())
       .Times(0);
   EXPECT_CALL(*desktop_environment, CreateInputInjectorPtr())
-      .Times(AnyNumber())
-      .WillRepeatedly(Invoke(
+      .Times(AtMost(1))
+      .WillOnce(Invoke(
           this, &IpcDesktopEnvironmentTest::CreateInputInjector));
   EXPECT_CALL(*desktop_environment, CreateScreenControlsPtr())
-      .Times(AnyNumber());
+      .Times(AtMost(1));
   EXPECT_CALL(*desktop_environment, CreateVideoCapturerPtr())
-      .Times(AnyNumber())
-      .WillRepeatedly(Invoke(
+      .Times(AtMost(1))
+      .WillOnce(Invoke(
           this, &IpcDesktopEnvironmentTest::CreateVideoCapturer));
+  EXPECT_CALL(*desktop_environment, GetCapabilities())
+      .Times(AtMost(1));
+  EXPECT_CALL(*desktop_environment, SetCapabilities(_))
+      .Times(AtMost(1));
 
   // Let tests know that the remote desktop environment is created.
   message_loop_.PostTask(FROM_HERE, setup_run_loop_->QuitClosure());
@@ -326,12 +345,13 @@ InputInjector* IpcDesktopEnvironmentTest::CreateInputInjector() {
   return remote_input_injector_;
 }
 
-media::ScreenCapturer* IpcDesktopEnvironmentTest::CreateVideoCapturer() {
-  return new media::ScreenCapturerFake();
+webrtc::ScreenCapturer* IpcDesktopEnvironmentTest::CreateVideoCapturer() {
+  return new ScreenCapturerFake();
 }
 
 void IpcDesktopEnvironmentTest::DeleteDesktopEnvironment() {
   input_injector_.reset();
+  screen_controls_.reset();
   video_capturer_.reset();
 
   // Trigger DisconnectTerminal().
@@ -344,16 +364,16 @@ void IpcDesktopEnvironmentTest::ReflectClipboardEvent(
 }
 
 void IpcDesktopEnvironmentTest::CreateDesktopProcess() {
-  EXPECT_TRUE(task_runner_);
-  EXPECT_TRUE(io_task_runner_);
+  EXPECT_TRUE(task_runner_.get());
+  EXPECT_TRUE(io_task_runner_.get());
 
   // Create the daemon end of the daemon-to-desktop channel.
   desktop_channel_name_ = IPC::Channel::GenerateUniqueRandomChannelID();
-  desktop_channel_.reset(new IPC::ChannelProxy(
-      IPC::ChannelHandle(desktop_channel_name_),
-      IPC::Channel::MODE_SERVER,
-      &desktop_listener_,
-      io_task_runner_));
+  desktop_channel_.reset(
+      new IPC::ChannelProxy(IPC::ChannelHandle(desktop_channel_name_),
+                            IPC::Channel::MODE_SERVER,
+                            &desktop_listener_,
+                            io_task_runner_.get()));
 
   // Create and start the desktop process.
   desktop_process_.reset(new DesktopProcess(task_runner_,
@@ -370,11 +390,6 @@ void IpcDesktopEnvironmentTest::CreateDesktopProcess() {
       .Times(AnyNumber())
       .WillRepeatedly(Return(false));
 
-  // TODO(alexeypa): Fix DesktopProcess to use the desktop environment
-  // to create the disconnect window instead of directly calling
-  // DisconnectWindow::Create(). This will take care of "Uninteresting mock
-  // function call" warnings printed when DisconnectWindow::Show() and
-  // DisconnectWindow::Hide() are called.
   EXPECT_TRUE(desktop_process_->Start(
       desktop_environment_factory.PassAs<DesktopEnvironmentFactory>()));
 }
@@ -438,7 +453,7 @@ TEST_F(IpcDesktopEnvironmentTest, CaptureFrame) {
 
   // Start the input injector and screen capturer.
   input_injector_->Start(clipboard_stub.PassAs<protocol::ClipboardStub>());
-  video_capturer_->Start(&screen_capturer_delegate_);
+  video_capturer_->Start(&screen_capturer_callback_);
 
   // Run the message loop until the desktop is attached.
   setup_run_loop_->Run();
@@ -452,12 +467,14 @@ TEST_F(IpcDesktopEnvironmentTest, CaptureFrame) {
       .Times(0);
 
   // Stop the test when the first frame is captured.
-  EXPECT_CALL(screen_capturer_delegate_, OnCaptureCompleted(_))
-      .WillOnce(InvokeWithoutArgs(
-          this, &IpcDesktopEnvironmentTest::DeleteDesktopEnvironment));
+  EXPECT_CALL(screen_capturer_callback_, OnCaptureCompleted(_))
+      .WillOnce(DoAll(
+          DeleteArg<0>(),
+          InvokeWithoutArgs(
+              this, &IpcDesktopEnvironmentTest::DeleteDesktopEnvironment)));
 
   // Capture a single frame.
-  video_capturer_->CaptureFrame();
+  video_capturer_->Capture(webrtc::DesktopRegion());
 
   task_runner_ = NULL;
   io_task_runner_ = NULL;
@@ -473,7 +490,7 @@ TEST_F(IpcDesktopEnvironmentTest, Reattach) {
 
   // Start the input injector and screen capturer.
   input_injector_->Start(clipboard_stub.PassAs<protocol::ClipboardStub>());
-  video_capturer_->Start(&screen_capturer_delegate_);
+  video_capturer_->Start(&screen_capturer_callback_);
 
   // Run the message loop until the desktop is attached.
   setup_run_loop_->Run();
@@ -500,58 +517,6 @@ TEST_F(IpcDesktopEnvironmentTest, Reattach) {
   main_run_loop_.Run();
 }
 
-// Tests InvalidateRegion().
-TEST_F(IpcDesktopEnvironmentTest, InvalidateRegion) {
-  scoped_ptr<protocol::MockClipboardStub> clipboard_stub(
-      new protocol::MockClipboardStub());
-  EXPECT_CALL(*clipboard_stub, InjectClipboardEvent(_))
-      .Times(0);
-
-  // Start the input injector and screen capturer.
-  input_injector_->Start(clipboard_stub.PassAs<protocol::ClipboardStub>());
-  video_capturer_->Start(&screen_capturer_delegate_);
-
-  // Run the message loop until the desktop is attached.
-  setup_run_loop_->Run();
-
-  // Input injector should receive no events.
-  EXPECT_CALL(*remote_input_injector_, InjectClipboardEvent(_))
-      .Times(0);
-  EXPECT_CALL(*remote_input_injector_, InjectKeyEvent(_))
-      .Times(0);
-  EXPECT_CALL(*remote_input_injector_, InjectMouseEvent(_))
-      .Times(0);
-
-  // Stop the test when the first frame is captured.
-  EXPECT_CALL(screen_capturer_delegate_, OnCaptureCompleted(_))
-      .WillOnce(InvokeWithoutArgs(
-          this, &IpcDesktopEnvironmentTest::DeleteDesktopEnvironment));
-
-  // Invalidate a region that is larger than the screen.
-  SkIRect horizontal_rect = SkIRect::MakeXYWH(
-      -100,
-      media::ScreenCapturerFake::kHeight / 4,
-      media::ScreenCapturerFake::kWidth + 200,
-      media::ScreenCapturerFake::kHeight / 2);
-  SkIRect vertical_rect = SkIRect::MakeXYWH(
-      media::ScreenCapturerFake::kWidth / 4,
-      -100,
-      media::ScreenCapturerFake::kWidth / 2,
-      media::ScreenCapturerFake::kHeight + 200);
-
-  SkRegion invalid_region;
-  invalid_region.op(horizontal_rect, SkRegion::kUnion_Op);
-  invalid_region.op(vertical_rect, SkRegion::kUnion_Op);
-  video_capturer_->InvalidateRegion(invalid_region);
-
-  // Capture a single frame.
-  video_capturer_->CaptureFrame();
-
-  task_runner_ = NULL;
-  io_task_runner_ = NULL;
-  main_run_loop_.Run();
-}
-
 // Tests injection of clipboard events.
 TEST_F(IpcDesktopEnvironmentTest, InjectClipboardEvent) {
   scoped_ptr<protocol::MockClipboardStub> clipboard_stub(
@@ -566,7 +531,7 @@ TEST_F(IpcDesktopEnvironmentTest, InjectClipboardEvent) {
 
   // Start the input injector and screen capturer.
   input_injector_->Start(clipboard_stub.PassAs<protocol::ClipboardStub>());
-  video_capturer_->Start(&screen_capturer_delegate_);
+  video_capturer_->Start(&screen_capturer_callback_);
 
   // Run the message loop until the desktop is attached.
   setup_run_loop_->Run();
@@ -601,7 +566,7 @@ TEST_F(IpcDesktopEnvironmentTest, InjectKeyEvent) {
 
   // Start the input injector and screen capturer.
   input_injector_->Start(clipboard_stub.PassAs<protocol::ClipboardStub>());
-  video_capturer_->Start(&screen_capturer_delegate_);
+  video_capturer_->Start(&screen_capturer_callback_);
 
   // Run the message loop until the desktop is attached.
   setup_run_loop_->Run();
@@ -636,7 +601,7 @@ TEST_F(IpcDesktopEnvironmentTest, InjectMouseEvent) {
 
   // Start the input injector and screen capturer.
   input_injector_->Start(clipboard_stub.PassAs<protocol::ClipboardStub>());
-  video_capturer_->Start(&screen_capturer_delegate_);
+  video_capturer_->Start(&screen_capturer_callback_);
 
   // Run the message loop until the desktop is attached.
   setup_run_loop_->Run();
@@ -656,6 +621,35 @@ TEST_F(IpcDesktopEnvironmentTest, InjectMouseEvent) {
   event.set_x(0);
   event.set_y(0);
   input_injector_->InjectMouseEvent(event);
+
+  task_runner_ = NULL;
+  io_task_runner_ = NULL;
+  main_run_loop_.Run();
+}
+
+// Tests that setting the desktop resolution works.
+TEST_F(IpcDesktopEnvironmentTest, SetScreenResolution) {
+  scoped_ptr<protocol::MockClipboardStub> clipboard_stub(
+      new protocol::MockClipboardStub());
+  EXPECT_CALL(*clipboard_stub, InjectClipboardEvent(_))
+      .Times(0);
+
+  // Start the input injector and screen capturer.
+  input_injector_->Start(clipboard_stub.PassAs<protocol::ClipboardStub>());
+  video_capturer_->Start(&screen_capturer_callback_);
+
+  // Run the message loop until the desktop is attached.
+  setup_run_loop_->Run();
+
+  EXPECT_CALL(daemon_channel_, SetScreenResolution(_, _))
+      .Times(1)
+      .WillOnce(InvokeWithoutArgs(
+          this, &IpcDesktopEnvironmentTest::DeleteDesktopEnvironment));
+
+  // Change the desktop resolution.
+  screen_controls_->SetScreenResolution(ScreenResolution(
+      webrtc::DesktopSize(100, 100),
+      webrtc::DesktopVector(96, 96)));
 
   task_runner_ = NULL;
   io_task_runner_ = NULL;

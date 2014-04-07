@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 #include "ash/shell.h"
-#include "base/utf_string_conversions.h"  // ASCIIToUTF16
+#include "base/strings/utf_string_conversions.h"  // ASCIIToUTF16
 #include "ui/aura/root_window.h"
 #include "ui/aura/window.h"
 #include "ui/gfx/canvas.h"
@@ -36,7 +36,7 @@ class WidgetsWindow : public views::WidgetDelegateView {
 
   // Overridden from views::WidgetDelegate:
   virtual views::View* GetContentsView() OVERRIDE;
-  virtual string16 GetWindowTitle() const OVERRIDE;
+  virtual base::string16 GetWindowTitle() const OVERRIDE;
   virtual bool CanResize() const OVERRIDE;
 
  private:
@@ -119,7 +119,7 @@ views::View* WidgetsWindow::GetContentsView() {
   return this;
 }
 
-string16 WidgetsWindow::GetWindowTitle() const {
+base::string16 WidgetsWindow::GetWindowTitle() const {
   return ASCIIToUTF16("Examples: Widgets");
 }
 

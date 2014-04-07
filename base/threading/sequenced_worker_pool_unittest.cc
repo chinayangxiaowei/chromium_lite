@@ -10,16 +10,16 @@
 #include "base/compiler_specific.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
-#include "base/message_loop_proxy.h"
+#include "base/message_loop/message_loop.h"
+#include "base/message_loop/message_loop_proxy.h"
 #include "base/synchronization/condition_variable.h"
 #include "base/synchronization/lock.h"
-#include "base/test/sequenced_worker_pool_owner.h"
 #include "base/test/sequenced_task_runner_test_template.h"
+#include "base/test/sequenced_worker_pool_owner.h"
 #include "base/test/task_runner_test_template.h"
 #include "base/test/test_timeouts.h"
 #include "base/threading/platform_thread.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "base/tracked_objects.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -28,7 +28,7 @@ namespace base {
 // IMPORTANT NOTE:
 //
 // Many of these tests have failure modes where they'll hang forever. These
-// tests should not be flaky, and hangling indicates a type of failure. Do not
+// tests should not be flaky, and hanging indicates a type of failure. Do not
 // mark as flaky if they're hanging, it's likely an actual bug.
 
 namespace {
@@ -728,8 +728,6 @@ TEST_F(SequencedWorkerPoolTest, IsRunningOnCurrentThread) {
 
   scoped_refptr<SequencedWorkerPool> unused_pool =
       new SequencedWorkerPool(2, "unused_pool");
-  EXPECT_TRUE(token1.Equals(unused_pool->GetSequenceToken()));
-  EXPECT_TRUE(token2.Equals(unused_pool->GetSequenceToken()));
 
   EXPECT_FALSE(pool()->RunsTasksOnCurrentThread());
   EXPECT_FALSE(pool()->IsRunningSequenceOnCurrentThread(token1));
@@ -781,7 +779,7 @@ TEST_F(SequencedWorkerPoolTest, FlushForTesting) {
                  true));
 
   // We expect all except the delayed task to have been run. We verify all
-  // closures have been deleted deleted by looking at the refcount of the
+  // closures have been deleted by looking at the refcount of the
   // tracker.
   EXPECT_FALSE(tracker()->HasOneRef());
   pool()->FlushForTesting();
@@ -796,6 +794,18 @@ TEST_F(SequencedWorkerPoolTest, FlushForTesting) {
   // Should be fine to call after shutdown too.
   pool()->Shutdown();
   pool()->FlushForTesting();
+}
+
+TEST(SequencedWorkerPoolRefPtrTest, ShutsDownCleanWithContinueOnShutdown) {
+  MessageLoop loop;
+  scoped_refptr<SequencedWorkerPool> pool(new SequencedWorkerPool(3, "Pool"));
+  scoped_refptr<SequencedTaskRunner> task_runner =
+      pool->GetSequencedTaskRunnerWithShutdownBehavior(
+          pool->GetSequenceToken(),
+          base::SequencedWorkerPool::CONTINUE_ON_SHUTDOWN);
+
+  // Upon test exit, should shut down without hanging.
+  pool->Shutdown();
 }
 
 class SequencedWorkerPoolTaskRunnerTestDelegate {

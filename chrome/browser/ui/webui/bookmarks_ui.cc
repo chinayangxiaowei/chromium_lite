@@ -5,7 +5,7 @@
 #include "chrome/browser/ui/webui/bookmarks_ui.h"
 
 #include "base/memory/ref_counted_memory.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/browser/url_data_source.h"
@@ -22,13 +22,14 @@
 BookmarksUIHTMLSource::BookmarksUIHTMLSource() {
 }
 
-std::string BookmarksUIHTMLSource::GetSource() {
+std::string BookmarksUIHTMLSource::GetSource() const {
   return chrome::kChromeUIBookmarksHost;
 }
 
 void BookmarksUIHTMLSource::StartDataRequest(
     const std::string& path,
-    bool is_incognito,
+    int render_process_id,
+    int render_view_id,
     const content::URLDataSource::GotDataCallback& callback) {
   NOTREACHED() << "We should never get here since the extension should have"
                << "been triggered";

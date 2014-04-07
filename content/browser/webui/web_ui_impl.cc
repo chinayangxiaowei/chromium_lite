@@ -5,8 +5,7 @@
 #include "content/browser/webui/web_ui_impl.h"
 
 #include "base/json/json_writer.h"
-#include "base/stl_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "content/browser/child_process_security_policy_impl.h"
 #include "content/browser/renderer_host/dip_util.h"
@@ -45,10 +44,7 @@ string16 WebUI::GetJavascriptCall(
 }
 
 WebUIImpl::WebUIImpl(WebContents* contents)
-    : hide_favicon_(false),
-      focus_location_bar_by_default_(false),
-      should_hide_url_(false),
-      link_transition_type_(PAGE_TRANSITION_LINK),
+    : link_transition_type_(PAGE_TRANSITION_LINK),
       bindings_(BINDINGS_POLICY_WEB_UI),
       web_contents_(contents) {
   DCHECK(contents);
@@ -58,7 +54,6 @@ WebUIImpl::~WebUIImpl() {
   // Delete the controller first, since it may also be keeping a pointer to some
   // of the handlers and can call them at destruction.
   controller_.reset();
-  STLDeleteContainerPointers(handlers_.begin(), handlers_.end());
 }
 
 // WebUIImpl, public: ----------------------------------------------------------
@@ -109,30 +104,6 @@ WebContents* WebUIImpl::GetWebContents() const {
 
 ui::ScaleFactor WebUIImpl::GetDeviceScaleFactor() const {
   return GetScaleFactorForView(web_contents_->GetRenderWidgetHostView());
-}
-
-bool WebUIImpl::ShouldHideFavicon() const {
-  return hide_favicon_;
-}
-
-void WebUIImpl::HideFavicon() {
-  hide_favicon_ = true;
-}
-
-bool WebUIImpl::ShouldFocusLocationBarByDefault() const {
-  return focus_location_bar_by_default_;
-}
-
-void WebUIImpl::FocusLocationBarByDefault() {
-  focus_location_bar_by_default_ = true;
-}
-
-bool WebUIImpl::ShouldHideURL() const {
-  return should_hide_url_;
-}
-
-void WebUIImpl::HideURL() {
-  should_hide_url_ = true;
 }
 
 const string16& WebUIImpl::GetOverriddenTitle() const {
@@ -245,6 +216,8 @@ void WebUIImpl::ProcessWebUIMessage(const GURL& source_url,
   if (callback != message_callbacks_.end()) {
     // Forward this message and content on.
     callback->second.Run(&args);
+  } else {
+    NOTREACHED() << "Unhandled chrome.send(\"" << message << "\");";
   }
 }
 

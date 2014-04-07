@@ -4,7 +4,8 @@
 
 #import "chrome/browser/ui/cocoa/profile_menu_controller.h"
 
-#include "base/sys_string_conversions.h"
+#include "base/mac/scoped_nsobject.h"
+#include "base/strings/sys_string_conversions.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/avatar_menu_model.h"
 #include "chrome/browser/profiles/avatar_menu_model_observer.h"
@@ -17,7 +18,6 @@
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_list_observer.h"
 #include "chrome/browser/ui/cocoa/last_active_browser_cocoa.h"
-#import "chrome/browser/ui/cocoa/menu_controller.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util_mac.h"
 #include "ui/gfx/image/image.h"
@@ -67,8 +67,7 @@ class Observer : public chrome::BrowserListObserver,
   if ((self = [super init])) {
     mainMenuItem_ = item;
 
-    scoped_nsobject<NSMenu> menu(
-        [[NSMenu alloc] initWithTitle:
+    base::scoped_nsobject<NSMenu> menu([[NSMenu alloc] initWithTitle:
             l10n_util::GetNSStringWithFixup(IDS_PROFILES_OPTIONS_GROUP_NAME)]);
     [mainMenuItem_ setSubmenu:menu];
 
@@ -111,7 +110,7 @@ class Observer : public chrome::BrowserListObserver,
   if (dock) {
     NSString* headerName =
         l10n_util::GetNSStringWithFixup(IDS_PROFILES_OPTIONS_GROUP_NAME);
-    scoped_nsobject<NSMenuItem> header(
+    base::scoped_nsobject<NSMenuItem> header(
         [[NSMenuItem alloc] initWithTitle:headerName
                                    action:NULL
                             keyEquivalent:@""]);
@@ -139,6 +138,25 @@ class Observer : public chrome::BrowserListObserver,
   return YES;
 }
 
+- (BOOL)validateMenuItem:(NSMenuItem*)menuItem {
+  size_t activeProfileIndex = model_->GetActiveProfileIndex();
+  ProfileInfoCache* cache =
+      &g_browser_process->profile_manager()->GetProfileInfoCache();
+  BOOL profileIsManaged = cache->ProfileIsManagedAtIndex(activeProfileIndex);
+  if ([menuItem action] == @selector(switchToProfileFromDock:) ||
+      [menuItem action] == @selector(switchToProfileFromMenu:)) {
+    if (!profileIsManaged)
+      return YES;
+
+    return [menuItem tag] == static_cast<NSInteger>(activeProfileIndex);
+  }
+
+  if ([menuItem action] == @selector(newProfile:))
+    return !profileIsManaged;
+
+  return YES;
+}
+
 // Private /////////////////////////////////////////////////////////////////////
 
 - (NSMenu*)menu {
@@ -154,10 +172,9 @@ class Observer : public chrome::BrowserListObserver,
 
   [[self menu] addItem:[NSMenuItem separatorItem]];
 
-  NSMenuItem* item =
-      [self createItemWithTitle:l10n_util::GetNSStringWithFixup(
-                                    IDS_PROFILES_CUSTOMIZE_PROFILE)
-                         action:@selector(editProfile:)];
+  NSMenuItem* item = [self createItemWithTitle:
+          l10n_util::GetNSStringWithFixup(IDS_PROFILES_CUSTOMIZE_PROFILE)
+                                        action:@selector(editProfile:)];
   [[self menu] addItem:item];
 
   [[self menu] addItem:[NSMenuItem separatorItem]];
@@ -214,7 +231,7 @@ class Observer : public chrome::BrowserListObserver,
 }
 
 - (NSMenuItem*)createItemWithTitle:(NSString*)title action:(SEL)sel {
-  scoped_nsobject<NSMenuItem> item(
+  base::scoped_nsobject<NSMenuItem> item(
       [[NSMenuItem alloc] initWithTitle:title action:sel keyEquivalent:@""]);
   [item setTarget:self];
   return [item.release() autorelease];

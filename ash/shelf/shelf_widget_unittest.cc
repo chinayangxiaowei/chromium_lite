@@ -8,6 +8,7 @@
 #include "ash/launcher/launcher_button.h"
 #include "ash/launcher/launcher_model.h"
 #include "ash/launcher/launcher_view.h"
+#include "ash/root_window_controller.h"
 #include "ash/shelf/shelf_layout_manager.h"
 #include "ash/shell.h"
 #include "ash/test/ash_test_base.h"
@@ -23,6 +24,7 @@
 namespace ash {
 
 namespace {
+
 ShelfWidget* GetShelfWidget() {
   return Launcher::ForPrimaryDisplay()->shelf_widget();
 }
@@ -76,14 +78,17 @@ TEST_F(ShelfWidgetTest, TestAlignment) {
     SCOPED_TRACE("Single Right");
     TestLauncherAlignment(Shell::GetPrimaryRootWindow(),
                           SHELF_ALIGNMENT_RIGHT,
-                          "0,0 348x400");
+                          "0,0 352x400");
   }
   {
     SCOPED_TRACE("Single Left");
     TestLauncherAlignment(Shell::GetPrimaryRootWindow(),
                           SHELF_ALIGNMENT_LEFT,
-                          "52,0 348x400");
+                          "48,0 352x400");
   }
+  if (!SupportsMultipleDisplays())
+    return;
+
   UpdateDisplay("300x300,500x500");
   Shell::RootWindowList root_windows = Shell::GetAllRootWindows();
   {
@@ -96,33 +101,31 @@ TEST_F(ShelfWidgetTest, TestAlignment) {
     SCOPED_TRACE("Primary Right");
     TestLauncherAlignment(root_windows[0],
                           SHELF_ALIGNMENT_RIGHT,
-                          "0,0 248x300");
+                          "0,0 252x300");
   }
   {
     SCOPED_TRACE("Primary Left");
     TestLauncherAlignment(root_windows[0],
                           SHELF_ALIGNMENT_LEFT,
-                          "52,0 248x300");
+                          "48,0 252x300");
   }
-  if (Shell::IsLauncherPerDisplayEnabled()) {
-    {
-      SCOPED_TRACE("Secondary Bottom");
-      TestLauncherAlignment(root_windows[1],
-                            SHELF_ALIGNMENT_BOTTOM,
-                            "300,0 500x452");
-    }
-    {
-      SCOPED_TRACE("Secondary Right");
-      TestLauncherAlignment(root_windows[1],
-                            SHELF_ALIGNMENT_RIGHT,
-                            "300,0 448x500");
-    }
-    {
-      SCOPED_TRACE("Secondary Left");
-      TestLauncherAlignment(root_windows[1],
-                            SHELF_ALIGNMENT_LEFT,
-                            "352,0 448x500");
-    }
+  {
+    SCOPED_TRACE("Secondary Bottom");
+    TestLauncherAlignment(root_windows[1],
+                          SHELF_ALIGNMENT_BOTTOM,
+                          "300,0 500x452");
+  }
+  {
+    SCOPED_TRACE("Secondary Right");
+    TestLauncherAlignment(root_windows[1],
+                          SHELF_ALIGNMENT_RIGHT,
+                          "300,0 452x500");
+  }
+  {
+    SCOPED_TRACE("Secondary Left");
+    TestLauncherAlignment(root_windows[1],
+                          SHELF_ALIGNMENT_LEFT,
+                          "348,0 452x500");
   }
 }
 
@@ -152,5 +155,41 @@ TEST_F(ShelfWidgetTest, DontReferenceLauncherAfterDeletion) {
   widget->Init(params);
   widget->SetFullscreen(true);
 }
+
+#if defined(OS_CHROMEOS)
+// Verifies launcher is created with correct size after user login and when its
+// container and status widget has finished sizing.
+// See http://crbug.com/252533
+TEST_F(ShelfWidgetTest, LauncherInitiallySizedAfterLogin) {
+  SetUserLoggedIn(false);
+  UpdateDisplay("300x200,400x300");
+
+  ShelfWidget* shelf = NULL;
+  Shell::RootWindowControllerList controllers(
+      Shell::GetAllRootWindowControllers());
+  for (Shell::RootWindowControllerList::const_iterator i = controllers.begin();
+       i != controllers.end();
+       ++i) {
+    if (!(*i)->shelf()->launcher()) {
+      shelf = (*i)->shelf();
+      break;
+    }
+  }
+  ASSERT_TRUE(shelf != NULL);
+
+  SetUserLoggedIn(true);
+  Shell::GetInstance()->CreateLauncher();
+
+  Launcher* launcher = shelf->launcher();
+  ASSERT_TRUE(launcher != NULL);
+
+  const int status_width =
+      shelf->status_area_widget()->GetWindowBoundsInScreen().width();
+  EXPECT_GT(status_width, 0);
+  EXPECT_EQ(status_width,
+            shelf->GetContentsView()->width() -
+                launcher->GetLauncherViewForTest()->width());
+}
+#endif
 
 }  // namespace ash

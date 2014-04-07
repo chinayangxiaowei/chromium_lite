@@ -17,28 +17,28 @@
 #include "base/command_line.h"
 #include "base/environment.h"
 #include "base/file_util.h"
+#include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/json/json_file_value_serializer.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/path_service.h"
-#include "base/process_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/test/test_file_util.h"
 #include "base/test/test_timeouts.h"
 #include "base/threading/platform_thread.h"
-#include "base/time.h"
-#include "base/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "chrome/app/chrome_command_ids.h"
-#include "chrome/browser/net/url_fixer_upper.h"
 #include "chrome/browser/profiles/profile_impl.h"
 #include "chrome/common/automation_messages.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/logging_chrome.h"
+#include "chrome/common/net/url_fixer_upper.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/automation/automation_proxy.h"
@@ -50,16 +50,12 @@
 #include "chrome/test/base/test_launcher_utils.h"
 #include "chrome/test/base/test_switches.h"
 #include "chrome/test/base/testing_profile.h"
-#include "googleurl/src/gurl.h"
 #include "net/base/net_util.h"
 #include "ui/gl/gl_implementation.h"
+#include "url/gurl.h"
 
 #if defined(OS_WIN)
 #include "base/win/windows_version.h"
-#endif
-
-#if defined(USE_AURA)
-#include "ui/compositor/compositor_switches.h"
 #endif
 
 using base::Time;
@@ -82,29 +78,29 @@ UITestBase::UITestBase()
     : launch_arguments_(CommandLine::NO_PROGRAM),
       expected_errors_(0),
       expected_crashes_(0),
-      homepage_(chrome::kAboutBlankURL),
+      homepage_(content::kAboutBlankURL),
       wait_for_initial_loads_(true),
       dom_automation_enabled_(false),
+      stats_collection_controller_enabled_(false),
       show_window_(false),
       clear_profile_(true),
       include_testing_id_(true),
-      enable_file_cookies_(true),
-      profile_type_(UITestBase::DEFAULT_THEME) {
+      enable_file_cookies_(true) {
   PathService::Get(chrome::DIR_APP, &browser_directory_);
   PathService::Get(chrome::DIR_TEST_DATA, &test_data_directory_);
 }
 
-UITestBase::UITestBase(MessageLoop::Type msg_loop_type)
+UITestBase::UITestBase(base::MessageLoop::Type msg_loop_type)
     : launch_arguments_(CommandLine::NO_PROGRAM),
       expected_errors_(0),
       expected_crashes_(0),
       wait_for_initial_loads_(true),
       dom_automation_enabled_(false),
+      stats_collection_controller_enabled_(false),
       show_window_(false),
       clear_profile_(true),
       include_testing_id_(true),
-      enable_file_cookies_(true),
-      profile_type_(UITestBase::DEFAULT_THEME) {
+      enable_file_cookies_(true) {
   PathService::Get(chrome::DIR_APP, &browser_directory_);
   PathService::Get(chrome::DIR_TEST_DATA, &test_data_directory_);
 }
@@ -189,6 +185,8 @@ void UITestBase::SetLaunchSwitches() {
     launch_arguments_.AppendSwitch(switches::kEnableFileCookies);
   if (dom_automation_enabled_)
     launch_arguments_.AppendSwitch(switches::kDomAutomationController);
+  if (stats_collection_controller_enabled_)
+    launch_arguments_.AppendSwitch(switches::kStatsCollectionController);
   // Allow off-store extension installs.
   launch_arguments_.AppendSwitchASCII(
       switches::kEasyOffStoreExtensionInstall, "1");
@@ -206,12 +204,6 @@ void UITestBase::SetLaunchSwitches() {
   }
   if (!test_name_.empty())
     launch_arguments_.AppendSwitchASCII(switches::kTestName, test_name_);
-#if defined(USE_AURA)
-  if (!CommandLine::ForCurrentProcess()->HasSwitch(
-      switches::kDisableTestCompositor)) {
-    launch_arguments_.AppendSwitch(switches::kTestCompositor);
-  }
-#endif
 }
 
 void UITestBase::SetUpProfile() {
@@ -398,6 +390,9 @@ bool UITestBase::CloseBrowser(BrowserProxy* browser,
 
   bool result = true;
 
+  ChromeProcessList processes = GetRunningChromeProcesses(
+      browser_process_id());
+
   bool succeeded = automation()->Send(new AutomationMsg_CloseBrowser(
       browser->handle(), &result, application_closed));
 
@@ -409,46 +404,30 @@ bool UITestBase::CloseBrowser(BrowserProxy* browser,
     EXPECT_TRUE(launcher_->WaitForBrowserProcessToQuit(
         TestTimeouts::action_max_timeout(), &exit_code));
     EXPECT_EQ(0, exit_code);  // Expect a clean shutown.
+    // Ensure no child processes are left dangling.
+    TerminateAllChromeProcesses(processes);
   }
 
   return result;
 }
 
-// static
-base::FilePath UITestBase::ComputeTypicalUserDataSource(
-    UITestBase::ProfileType profile_type) {
-  base::FilePath source_history_file;
-  EXPECT_TRUE(PathService::Get(chrome::DIR_TEST_DATA,
-                               &source_history_file));
-  source_history_file = source_history_file.AppendASCII("profiles");
-  switch (profile_type) {
-    case UITestBase::DEFAULT_THEME:
-      source_history_file = source_history_file.AppendASCII(
-          "profile_with_default_theme");
-      break;
-    case UITestBase::COMPLEX_THEME:
-      source_history_file = source_history_file.AppendASCII(
-          "profile_with_complex_theme");
-      break;
-    default:
-      NOTREACHED();
-  }
-
-  return source_history_file;
-}
-
 int UITestBase::GetCrashCount() const {
   base::FilePath crash_dump_path;
   PathService::Get(chrome::DIR_CRASH_DUMPS, &crash_dump_path);
-  int actual_crashes = file_util::CountFilesCreatedAfter(
-      crash_dump_path, test_start_time_);
+
+  int files_found = 0;
+  base::FileEnumerator en(crash_dump_path, false, base::FileEnumerator::FILES);
+  while (!en.Next().empty()) {
+    if (en.GetInfo().GetLastModifiedTime() > test_start_time_)
+      files_found++;
+  }
 
 #if defined(OS_WIN)
-  // Each crash creates two dump files, so we divide by two here.
-  actual_crashes /= 2;
+  // Each crash creates two dump files on Windows.
+  return files_found / 2;
+#else
+  return files_found;
 #endif
-
-  return actual_crashes;
 }
 
 std::string UITestBase::CheckErrorsAndCrashes() const {
@@ -502,14 +481,14 @@ void UITestBase::AppendBrowserLaunchSwitch(const char* name,
   launch_arguments_.AppendSwitchASCII(name, value);
 }
 
-bool UITestBase::BeginTracing(const std::string& categories) {
-  return automation()->BeginTracing(categories);
+bool UITestBase::BeginTracing(const std::string& category_patterns) {
+  return automation()->BeginTracing(category_patterns);
 }
 
 std::string UITestBase::EndTracing() {
   std::string json_trace_output;
   if (!automation()->EndTracing(&json_trace_output))
-    return "";
+    return std::string();
   return json_trace_output;
 }
 
@@ -598,17 +577,6 @@ void UITest::WaitForFinish(const std::string &name,
                                                      cookie_name.c_str(),
                                                      wait_time);
   EXPECT_EQ(expected_cookie_value, cookie_value);
-}
-
-bool UITest::EvictFileFromSystemCacheWrapper(const base::FilePath& path) {
-  const int kCycles = 10;
-  const TimeDelta kDelay = TestTimeouts::action_timeout() / kCycles;
-  for (int i = 0; i < kCycles; i++) {
-    if (file_util::EvictFileFromSystemCache(path))
-      return true;
-    base::PlatformThread::Sleep(kDelay);
-  }
-  return false;
 }
 
 bool UITest::WaitUntilJavaScriptCondition(TabProxy* tab,

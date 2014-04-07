@@ -7,11 +7,17 @@
 
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
+#include "base/memory/scoped_ptr.h"
 #include "ui/views/controls/menu/menu_item_view.h"
+
+namespace ui {
+class MenuModel;
+}
 
 namespace views {
 
 class MenuButton;
+class MenuModelAdapter;
 class Widget;
 
 namespace internal {
@@ -66,7 +72,8 @@ class VIEWS_EXPORT MenuRunner {
     NORMAL_EXIT
   };
 
-  // Creates a new MenuRunner. MenuRunner owns the supplied menu.
+  // Creates a new MenuRunner.
+  explicit MenuRunner(ui::MenuModel* menu_model);
   explicit MenuRunner(MenuItemView* menu);
   ~MenuRunner();
 
@@ -88,6 +95,7 @@ class VIEWS_EXPORT MenuRunner {
                       MenuButton* button,
                       const gfx::Rect& bounds,
                       MenuItemView::AnchorPosition anchor,
+                      ui::MenuSourceType source_type,
                       int32 types) WARN_UNUSED_RESULT;
 
   // Returns true if we're in a nested message loop running the menu.
@@ -100,6 +108,8 @@ class VIEWS_EXPORT MenuRunner {
   base::TimeDelta closing_event_time() const;
 
  private:
+  scoped_ptr<MenuModelAdapter> menu_model_adapter_;
+
   internal::MenuRunnerImpl* holder_;
 
   scoped_ptr<internal::DisplayChangeListener> display_change_listener_;

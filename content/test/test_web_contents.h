@@ -8,7 +8,7 @@
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/common/page_transition_types.h"
 #include "content/public/test/web_contents_tester.h"
-#include "webkit/glue/webpreferences.h"
+#include "webkit/common/webpreferences.h"
 
 class SiteInstanceImpl;
 
@@ -42,7 +42,7 @@ class TestWebContents : public WebContentsImpl, public WebContentsTester {
                                            const GURL& url,
                                            const Referrer& referrer,
                                            PageTransition transition) OVERRIDE;
-  virtual webkit_glue::WebPreferences TestGetWebkitPrefs() OVERRIDE;
+  virtual WebPreferences TestGetWebkitPrefs() OVERRIDE;
 
   TestRenderViewHost* pending_test_rvh() const;
 
@@ -107,6 +107,7 @@ class TestWebContents : public WebContentsImpl, public WebContentsTester {
   // WebContentsImpl overrides
   virtual void CreateNewWindow(
       int route_id,
+      int main_frame_route_id,
       const ViewHostMsg_CreateWindow_Params& params,
       SessionStorageNamespace* session_storage_namespace) OVERRIDE;
   virtual void CreateNewWidget(int route_id,

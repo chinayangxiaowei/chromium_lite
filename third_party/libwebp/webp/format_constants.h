@@ -1,8 +1,10 @@
 // Copyright 2012 Google Inc. All Rights Reserved.
 //
-// This code is licensed under the same terms as WebM:
-//  Software License Agreement:  http://www.webmproject.org/license/software/
-//  Additional IP Rights Grant:  http://www.webmproject.org/license/additional/
+// Use of this source code is governed by a BSD-style license
+// that can be found in the COPYING file in the root of the source
+// tree. An additional intellectual property rights grant can be found
+// in the file PATENTS. All contributing project authors may
+// be found in the AUTHORS file in the root of the source tree.
 // -----------------------------------------------------------------------------
 //
 //  Internal header for constants related to WebP file format.
@@ -73,11 +75,11 @@ typedef enum {
 #define FRGM_CHUNK_SIZE    6     // Size of a FRGM chunk.
 #define VP8X_CHUNK_SIZE    10    // Size of a VP8X chunk.
 
-#define MAX_CANVAS_SIZE     (1 << 24)    // 24-bit max for VP8X width/height.
-#define MAX_IMAGE_AREA      (1ULL << 32) // 32-bit max for width x height.
-#define MAX_LOOP_COUNT      (1 << 16)    // maximum value for loop-count
-#define MAX_DURATION        (1 << 24)    // maximum duration
-#define MAX_POSITION_OFFSET (1 << 24)    // maximum frame/fragment x/y offset
+#define MAX_CANVAS_SIZE     (1 << 24)     // 24-bit max for VP8X width/height.
+#define MAX_IMAGE_AREA      (1ULL << 32)  // 32-bit max for width x height.
+#define MAX_LOOP_COUNT      (1 << 16)     // maximum value for loop-count
+#define MAX_DURATION        (1 << 24)     // maximum duration
+#define MAX_POSITION_OFFSET (1 << 24)     // maximum frame/fragment x/y offset
 
 // Maximum chunk payload is such that adding the header and padding won't
 // overflow a uint32_t.

@@ -8,11 +8,10 @@
 
 #include "base/bind.h"
 #include "base/logging.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "chrome/common/badge_util.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/icon_with_badge_image_source.h"
-#include "googleurl/src/gurl.h"
 #include "grit/theme_resources.h"
 #include "grit/ui_resources.h"
 #include "third_party/skia/include/core/SkBitmap.h"
@@ -30,6 +29,7 @@
 #include "ui/gfx/rect.h"
 #include "ui/gfx/size.h"
 #include "ui/gfx/skbitmap_operations.h"
+#include "url/gurl.h"
 
 namespace {
 
@@ -70,7 +70,7 @@ class AnimatedIconImageSource : public gfx::ImageSkiaSource {
 
   virtual gfx::ImageSkiaRep GetImageForScale(ui::ScaleFactor scale) OVERRIDE {
     gfx::ImageSkiaRep original_rep = image_.GetRepresentation(scale);
-    if (!animation_)
+    if (!animation_.get())
       return original_rep;
 
     // Original representation's scale factor may be different from scale
@@ -196,7 +196,7 @@ scoped_ptr<ExtensionAction> ExtensionAction::CopyForTest() const {
   copy->icon_animation_ = icon_animation_;
   copy->id_ = id_;
 
-  if (default_icon_.get())
+  if (default_icon_)
     copy->default_icon_.reset(new ExtensionIconSet(*default_icon_));
 
   return copy.Pass();
@@ -339,7 +339,7 @@ int ExtensionAction::GetIconWidth(int tab_id) const {
     return icon.width();
   // If there is a default icon, the icon width will be set depending on our
   // action type.
-  if (default_icon_.get())
+  if (default_icon_)
     return GetIconSizeForType(action_type());
 
   // If no icon has been set and there is no default icon, we need favicon
@@ -354,14 +354,14 @@ base::WeakPtr<ExtensionAction::IconAnimation> ExtensionAction::GetIconAnimation(
       icon_animation_.find(tab_id);
   if (it == icon_animation_.end())
     return base::WeakPtr<ExtensionAction::IconAnimation>();
-  if (it->second)
+  if (it->second.get())
     return it->second;
 
   // Take this opportunity to remove all the NULL IconAnimations from
   // icon_animation_.
   icon_animation_.erase(it);
   for (it = icon_animation_.begin(); it != icon_animation_.end();) {
-    if (it->second) {
+    if (it->second.get()) {
       ++it;
     } else {
       // The WeakPtr is null; remove it from the map.
@@ -375,7 +375,7 @@ gfx::ImageSkia ExtensionAction::ApplyIconAnimation(
     int tab_id,
     const gfx::ImageSkia& icon) const {
   base::WeakPtr<IconAnimation> animation = GetIconAnimation(tab_id);
-  if (animation == NULL)
+  if (animation.get() == NULL)
     return icon;
 
   return gfx::ImageSkia(new AnimatedIconImageSource(icon, animation),
@@ -394,7 +394,7 @@ void ExtensionAction::RunIconAnimation(int tab_id) {
   // timer delays), destroy it. We use a delayed task so that the Animation is
   // deleted even if it hasn't finished by the time the MessageLoop is
   // destroyed.
-  MessageLoop::current()->PostDelayedTask(
+  base::MessageLoop::current()->PostDelayedTask(
       FROM_HERE,
       base::Bind(&DestroyIconAnimation, base::Passed(&icon_animation)),
       base::TimeDelta::FromMilliseconds(kIconFadeInDurationMs * 2));

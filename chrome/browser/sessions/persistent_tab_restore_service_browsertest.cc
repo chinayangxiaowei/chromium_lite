@@ -5,20 +5,24 @@
 #include "chrome/browser/sessions/persistent_tab_restore_service.h"
 
 #include "base/compiler_specific.h"
-#include "base/stringprintf.h"
-#include "base/utf_string_conversions.h"
+#include "base/run_loop.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/threading/sequenced_worker_pool.h"
+#include "chrome/browser/chrome_notification_types.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sessions/session_service.h"
 #include "chrome/browser/sessions/session_service_factory.h"
 #include "chrome/browser/sessions/session_types.h"
-#include "chrome/browser/sessions/session_types_test_helper.h"
 #include "chrome/browser/sessions/tab_restore_service_factory.h"
+#include "chrome/browser/sessions/tab_restore_service_observer.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "chrome/test/base/chrome_render_view_test.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/testing_profile.h"
+#include "components/sessions/serialized_navigation_entry_test_helper.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
@@ -26,17 +30,17 @@
 #include "content/public/browser/notification_types.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/render_view_test.h"
-#include "content/public/test/test_browser_thread.h"
 #include "content/public/test/test_utils.h"
 #include "content/public/test/web_contents_tester.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebKit.h"
 
 typedef TabRestoreService::Tab Tab;
 typedef TabRestoreService::Window Window;
-using content::WebContentsTester;
 
 using content::NavigationEntry;
+using content::WebContentsTester;
+using sessions::SerializedNavigationEntry;
+using sessions::SerializedNavigationEntryTestHelper;
 
 // Create subclass that overrides TimeNow so that we can control the time used
 // for closed tabs and windows.
@@ -57,12 +61,12 @@ class PersistentTabRestoreTimeFactory : public TabRestoreService::TimeFactory {
 class PersistentTabRestoreServiceTest : public ChromeRenderViewHostTestHarness {
  public:
   PersistentTabRestoreServiceTest()
-      : ui_thread_(content::BrowserThread::UI, &message_loop_) {
-    url1_ = GURL("http://1");
-    url2_ = GURL("http://2");
-    url3_ = GURL("http://3");
-    user_agent_override_ = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/535.19"
-        " (KHTML, like Gecko) Chrome/18.0.1025.45 Safari/535.19";
+    : url1_("http://1"),
+      url2_("http://2"),
+      url3_("http://3"),
+      user_agent_override_(
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/535.19"
+          " (KHTML, like Gecko) Chrome/18.0.1025.45 Safari/535.19") {
   }
 
   virtual ~PersistentTabRestoreServiceTest() {
@@ -75,7 +79,6 @@ class PersistentTabRestoreServiceTest : public ChromeRenderViewHostTestHarness {
 
   // testing::Test:
   virtual void SetUp() OVERRIDE {
-    WebKit::initialize(webkit_platform_support_.Get());
     ChromeRenderViewHostTestHarness::SetUp();
     time_factory_ = new PersistentTabRestoreTimeFactory();
     service_.reset(new PersistentTabRestoreService(profile(), time_factory_));
@@ -86,7 +89,6 @@ class PersistentTabRestoreServiceTest : public ChromeRenderViewHostTestHarness {
     service_.reset();
     delete time_factory_;
     ChromeRenderViewHostTestHarness::TearDown();
-    WebKit::shutdown();
   }
 
   TabRestoreService::Entries* mutable_entries() {
@@ -115,9 +117,10 @@ class PersistentTabRestoreServiceTest : public ChromeRenderViewHostTestHarness {
     // Must set service to null first so that it is destroyed before the new
     // one is created.
     service_->Shutdown();
+    content::BrowserThread::GetBlockingPool()->FlushForTesting();
     service_.reset();
     service_.reset(new PersistentTabRestoreService(profile(), time_factory_));
-    service_->LoadTabsFromLastSession();
+    SynchronousLoadTabsFromLastSession();
   }
 
   // Adds a window with one tab and url to the profile's session service.
@@ -136,7 +139,8 @@ class PersistentTabRestoreServiceTest : public ChromeRenderViewHostTestHarness {
       session_service->SetPinnedState(window_id, tab_id, true);
     session_service->UpdateTabNavigation(
         window_id, tab_id,
-        SessionTypesTestHelper::CreateNavigation(url1_.spec(), "title"));
+        SerializedNavigationEntryTestHelper::CreateNavigation(
+            url1_.spec(), "title"));
   }
 
   // Creates a SessionService and assigns it to the Profile. The SessionService
@@ -154,16 +158,48 @@ class PersistentTabRestoreServiceTest : public ChromeRenderViewHostTestHarness {
     profile()->set_last_session_exited_cleanly(false);
   }
 
+  void SynchronousLoadTabsFromLastSession() {
+    // Ensures that the load is complete before continuing.
+    service_->LoadTabsFromLastSession();
+    content::BrowserThread::GetBlockingPool()->FlushForTesting();
+    base::RunLoop().RunUntilIdle();
+    content::BrowserThread::GetBlockingPool()->FlushForTesting();
+  }
+
   GURL url1_;
   GURL url2_;
   GURL url3_;
   std::string user_agent_override_;
   scoped_ptr<PersistentTabRestoreService> service_;
   PersistentTabRestoreTimeFactory* time_factory_;
-  content::RenderViewTest::RendererWebKitPlatformSupportImplNoSandbox
-      webkit_platform_support_;
-  content::TestBrowserThread ui_thread_;
 };
+
+namespace {
+
+class TestTabRestoreServiceObserver : public TabRestoreServiceObserver {
+ public:
+  TestTabRestoreServiceObserver() : got_loaded_(false) {}
+
+  void clear_got_loaded() { got_loaded_ = false; }
+  bool got_loaded() const { return got_loaded_; }
+
+  // TabRestoreServiceObserver:
+  virtual void TabRestoreServiceChanged(TabRestoreService* service) OVERRIDE {
+  }
+  virtual void TabRestoreServiceDestroyed(TabRestoreService* service) OVERRIDE {
+  }
+  virtual void TabRestoreServiceLoaded(TabRestoreService* service) OVERRIDE {
+    got_loaded_ = true;
+  }
+
+ private:
+  // Was TabRestoreServiceLoaded() invoked?
+  bool got_loaded_;
+
+  DISALLOW_COPY_AND_ASSIGN(TestTabRestoreServiceObserver);
+};
+
+}  // namespace
 
 TEST_F(PersistentTabRestoreServiceTest, Basic) {
   AddThreeNavigations();
@@ -355,7 +391,7 @@ TEST_F(PersistentTabRestoreServiceTest, DontLoadTwice) {
   // Recreate the service and have it load the tabs.
   RecreateService();
 
-  service_->LoadTabsFromLastSession();
+  SynchronousLoadTabsFromLastSession();
 
   // There should only be one entry.
   ASSERT_EQ(1U, service_->entries().size());
@@ -368,7 +404,13 @@ TEST_F(PersistentTabRestoreServiceTest, LoadPreviousSession) {
   SessionServiceFactory::GetForProfile(profile())->
       MoveCurrentSessionToLastSession();
 
-  service_->LoadTabsFromLastSession();
+  EXPECT_FALSE(service_->IsLoaded());
+
+  TestTabRestoreServiceObserver observer;
+  service_->AddObserver(&observer);
+  SynchronousLoadTabsFromLastSession();
+  EXPECT_TRUE(observer.got_loaded());
+  service_->RemoveObserver(&observer);
 
   // Make sure we get back one entry with one tab whose url is url1.
   ASSERT_EQ(1U, service_->entries().size());
@@ -394,7 +436,7 @@ TEST_F(PersistentTabRestoreServiceTest, DontLoadAfterRestore) {
 
   profile()->set_restored_last_session(true);
 
-  service_->LoadTabsFromLastSession();
+  SynchronousLoadTabsFromLastSession();
 
   // Because we restored a session PersistentTabRestoreService shouldn't load
   // the tabs.
@@ -410,7 +452,7 @@ TEST_F(PersistentTabRestoreServiceTest, DontLoadAfterCleanExit) {
 
   profile()->set_last_session_exited_cleanly(true);
 
-  service_->LoadTabsFromLastSession();
+  SynchronousLoadTabsFromLastSession();
 
   ASSERT_EQ(0U, service_->entries().size());
 }
@@ -545,7 +587,7 @@ TEST_F(PersistentTabRestoreServiceTest, TimestampSurvivesRestore) {
   ASSERT_EQ(1U, service_->entries().size());
 
   // Make sure the entry matches.
-  std::vector<TabNavigation> old_navigations;
+  std::vector<SerializedNavigationEntry> old_navigations;
   {
     // |entry|/|tab| doesn't survive after RecreateService().
     TabRestoreService::Entry* entry = service_->entries().front();
@@ -557,8 +599,7 @@ TEST_F(PersistentTabRestoreServiceTest, TimestampSurvivesRestore) {
 
   EXPECT_EQ(3U, old_navigations.size());
   for (size_t i = 0; i < old_navigations.size(); ++i) {
-    EXPECT_FALSE(
-        SessionTypesTestHelper::GetTimestamp(old_navigations[i]).is_null());
+    EXPECT_FALSE(old_navigations[i].timestamp().is_null());
   }
 
   // Set this, otherwise previous session won't be loaded.
@@ -578,9 +619,8 @@ TEST_F(PersistentTabRestoreServiceTest, TimestampSurvivesRestore) {
             restored_tab->timestamp.ToInternalValue());
   ASSERT_EQ(old_navigations.size(), restored_tab->navigations.size());
   for (size_t i = 0; i < restored_tab->navigations.size(); ++i) {
-    EXPECT_EQ(
-        SessionTypesTestHelper::GetTimestamp(old_navigations[i]),
-        SessionTypesTestHelper::GetTimestamp(restored_tab->navigations[i]));
+    EXPECT_EQ(old_navigations[i].timestamp(),
+              restored_tab->navigations[i].timestamp());
   }
 }
 
@@ -590,8 +630,8 @@ TEST_F(PersistentTabRestoreServiceTest, PruneEntries) {
 
   const size_t max_entries = kMaxEntries;
   for (size_t i = 0; i < max_entries + 5; i++) {
-    TabNavigation navigation =
-        SessionTypesTestHelper::CreateNavigation(
+    SerializedNavigationEntry navigation =
+        SerializedNavigationEntryTestHelper::CreateNavigation(
             base::StringPrintf("http://%d", static_cast<int>(i)),
             base::StringPrintf("%d", static_cast<int>(i)));
 
@@ -612,8 +652,9 @@ TEST_F(PersistentTabRestoreServiceTest, PruneEntries) {
 
   // Prune older first.
   const char kRecentUrl[] = "http://recent";
-  TabNavigation navigation =
-      SessionTypesTestHelper::CreateNavigation(kRecentUrl, "Most recent");
+  SerializedNavigationEntry navigation =
+      SerializedNavigationEntryTestHelper::CreateNavigation(kRecentUrl,
+                                                            "Most recent");
   Tab* tab = new Tab();
   tab->navigations.push_back(navigation);
   tab->current_navigation_index = 0;
@@ -626,9 +667,8 @@ TEST_F(PersistentTabRestoreServiceTest, PruneEntries) {
           navigations[0].virtual_url());
 
   // Ignore NTPs.
-  navigation =
-      SessionTypesTestHelper::CreateNavigation(
-          chrome::kChromeUINewTabURL, "New tab");
+  navigation = SerializedNavigationEntryTestHelper::CreateNavigation(
+      chrome::kChromeUINewTabURL, "New tab");
 
   tab = new Tab();
   tab->navigations.push_back(navigation);
@@ -690,6 +730,26 @@ TEST_F(PersistentTabRestoreServiceTest, PruneIsCalled) {
 
   EXPECT_EQ(max_entries, service_->entries().size());
   // This should not crash.
-  service_->LoadTabsFromLastSession();
+  SynchronousLoadTabsFromLastSession();
   EXPECT_EQ(max_entries, service_->entries().size());
+}
+
+// Makes sure invoking LoadTabsFromLastSession() when the max number of entries
+// have been added results in IsLoaded() returning true and notifies observers.
+TEST_F(PersistentTabRestoreServiceTest, GoToLoadedWhenHaveMaxEntries) {
+  const size_t max_entries = kMaxEntries;
+  for (size_t i = 0; i < max_entries + 5; i++) {
+    NavigateAndCommit(
+        GURL(base::StringPrintf("http://%d", static_cast<int>(i))));
+    service_->CreateHistoricalTab(web_contents(), -1);
+  }
+
+  EXPECT_FALSE(service_->IsLoaded());
+  TestTabRestoreServiceObserver observer;
+  service_->AddObserver(&observer);
+  EXPECT_EQ(max_entries, service_->entries().size());
+  SynchronousLoadTabsFromLastSession();
+  EXPECT_TRUE(observer.got_loaded());
+  EXPECT_TRUE(service_->IsLoaded());
+  service_->RemoveObserver(&observer);
 }

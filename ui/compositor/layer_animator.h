@@ -12,7 +12,7 @@
 #include "base/memory/linked_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/observer_list.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "ui/base/animation/animation_container_element.h"
 #include "ui/base/animation/tween.h"
 #include "ui/compositor/compositor_export.h"
@@ -209,7 +209,7 @@ class COMPOSITOR_EXPORT LayerAnimator
     RunningAnimation(const base::WeakPtr<LayerAnimationSequence>& sequence);
     ~RunningAnimation();
 
-    bool is_sequence_alive() const { return !!sequence_; }
+    bool is_sequence_alive() const { return !!sequence_.get(); }
     LayerAnimationSequence* sequence() const { return sequence_.get(); }
 
    private:

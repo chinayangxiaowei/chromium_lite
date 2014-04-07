@@ -5,7 +5,7 @@
 #include "base/format_macros.h"
 #include "base/location.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "sync/engine/apply_control_data_updates.h"
 #include "sync/engine/syncer.h"
 #include "sync/engine/syncer_util.h"
@@ -133,14 +133,14 @@ TEST_F(ApplyControlDataUpdatesTest, EncryptUnsyncedChanges) {
   size_t batch_s = 5;
   for (i = 0; i < batch_s; ++i) {
     entry_factory_->CreateUnsyncedItem(id_factory_.NewLocalId(), folder_id,
-                                       base::StringPrintf("Item %"PRIuS"", i),
+                                       base::StringPrintf("Item %" PRIuS "", i),
                                        false, BOOKMARKS, NULL);
   }
   // Next five items are children of the root.
   for (; i < 2*batch_s; ++i) {
     entry_factory_->CreateUnsyncedItem(
         id_factory_.NewLocalId(), id_factory_.root(),
-        base::StringPrintf("Item %"PRIuS"", i), false,
+        base::StringPrintf("Item %" PRIuS "", i), false,
         BOOKMARKS, NULL);
   }
 
@@ -247,14 +247,14 @@ TEST_F(ApplyControlDataUpdatesTest, CannotEncryptUnsyncedChanges) {
   size_t batch_s = 5;
   for (i = 0; i < batch_s; ++i) {
     entry_factory_->CreateUnsyncedItem(id_factory_.NewLocalId(), folder_id,
-                                       base::StringPrintf("Item %"PRIuS"", i),
+                                       base::StringPrintf("Item %" PRIuS "", i),
                                        false, BOOKMARKS, NULL);
   }
   // Next five items are children of the root.
   for (; i < 2*batch_s; ++i) {
     entry_factory_->CreateUnsyncedItem(
         id_factory_.NewLocalId(), id_factory_.root(),
-        base::StringPrintf("Item %"PRIuS"", i), false,
+        base::StringPrintf("Item %" PRIuS "", i), false,
         BOOKMARKS, NULL);
   }
 

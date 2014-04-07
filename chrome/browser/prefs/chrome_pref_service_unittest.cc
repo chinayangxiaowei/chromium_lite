@@ -8,7 +8,7 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/path_service.h"
 #include "base/prefs/pref_registry_simple.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/policy/configuration_policy_pref_store.h"
 #include "chrome/browser/policy/mock_configuration_policy_provider.h"
@@ -23,12 +23,10 @@
 #include "chrome/test/base/testing_pref_service_syncable.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/user_prefs/pref_registry_syncable.h"
-#include "content/public/test/test_browser_thread.h"
 #include "content/public/test/web_contents_tester.h"
 #include "ui/base/test/data/resource.h"
-#include "webkit/glue/webpreferences.h"
+#include "webkit/common/webpreferences.h"
 
-using content::BrowserThread;
 using content::WebContentsTester;
 
 TEST(ChromePrefServiceTest, UpdateCommandLinePrefStore) {
@@ -69,7 +67,7 @@ class ChromePrefServiceUserFilePrefsTest : public testing::Test {
 
     ASSERT_TRUE(PathService::Get(chrome::DIR_TEST_DATA, &data_dir_));
     data_dir_ = data_dir_.AppendASCII("pref_service");
-    ASSERT_TRUE(file_util::PathExists(data_dir_));
+    ASSERT_TRUE(base::PathExists(data_dir_));
   }
 
   void ClearListValue(PrefService* prefs, const char* key) {
@@ -87,7 +85,7 @@ class ChromePrefServiceUserFilePrefsTest : public testing::Test {
   // The path to the directory where the test data is stored.
   base::FilePath data_dir_;
   // A message loop that we can use as the file thread message loop.
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
 };
 
 // Verifies that ListValue and DictionaryValue pref with non emtpy default
@@ -95,32 +93,36 @@ class ChromePrefServiceUserFilePrefsTest : public testing::Test {
 TEST_F(ChromePrefServiceUserFilePrefsTest, PreserveEmptyValue) {
   base::FilePath pref_file = temp_dir_.path().AppendASCII("write.json");
 
-  ASSERT_TRUE(file_util::CopyFile(
+  ASSERT_TRUE(base::CopyFile(
       data_dir_.AppendASCII("read.need_empty_value.json"),
       pref_file));
 
   PrefServiceMockBuilder builder;
-  builder.WithUserFilePrefs(pref_file, message_loop_.message_loop_proxy());
-  scoped_refptr<PrefRegistrySyncable> registry(new PrefRegistrySyncable);
-  scoped_ptr<PrefServiceSyncable> prefs(builder.CreateSyncable(registry));
+  builder.WithUserFilePrefs(pref_file,
+                            message_loop_.message_loop_proxy().get());
+  scoped_refptr<user_prefs::PrefRegistrySyncable> registry(
+      new user_prefs::PrefRegistrySyncable);
+  scoped_ptr<PrefServiceSyncable> prefs(builder.CreateSyncable(registry.get()));
 
   // Register testing prefs.
   registry->RegisterListPref("list",
-                             PrefRegistrySyncable::UNSYNCABLE_PREF);
-  registry->RegisterDictionaryPref("dict",
-                                   PrefRegistrySyncable::UNSYNCABLE_PREF);
+                             user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
+  registry->RegisterDictionaryPref(
+      "dict",
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
 
   base::ListValue* non_empty_list = new base::ListValue;
   non_empty_list->Append(base::Value::CreateStringValue("test"));
   registry->RegisterListPref("list_needs_empty_value",
                              non_empty_list,
-                             PrefRegistrySyncable::UNSYNCABLE_PREF);
+                             user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
 
   base::DictionaryValue* non_empty_dict = new base::DictionaryValue;
   non_empty_dict->SetString("dummy", "whatever");
-  registry->RegisterDictionaryPref("dict_needs_empty_value",
-                                   non_empty_dict,
-                                   PrefRegistrySyncable::UNSYNCABLE_PREF);
+  registry->RegisterDictionaryPref(
+      "dict_needs_empty_value",
+      non_empty_dict,
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
 
   // Set all testing prefs to empty.
   ClearListValue(prefs.get(), "list");
@@ -135,16 +137,12 @@ TEST_F(ChromePrefServiceUserFilePrefsTest, PreserveEmptyValue) {
   // Compare to expected output.
   base::FilePath golden_output_file =
       data_dir_.AppendASCII("write.golden.need_empty_value.json");
-  ASSERT_TRUE(file_util::PathExists(golden_output_file));
-  EXPECT_TRUE(file_util::TextContentsEqual(golden_output_file, pref_file));
+  ASSERT_TRUE(base::PathExists(golden_output_file));
+  EXPECT_TRUE(base::TextContentsEqual(golden_output_file, pref_file));
 }
 
 class ChromePrefServiceWebKitPrefs : public ChromeRenderViewHostTestHarness {
  protected:
-  ChromePrefServiceWebKitPrefs()
-      : ui_thread_(BrowserThread::UI, &message_loop_) {
-  }
-
   virtual void SetUp() {
     ChromeRenderViewHostTestHarness::SetUp();
 
@@ -169,15 +167,12 @@ class ChromePrefServiceWebKitPrefs : public ChromeRenderViewHostTestHarness {
     pref_services->SetUserPref("webkit.webprefs.foo",
                                Value::CreateStringValue("bar"));
   }
-
- private:
-  content::TestBrowserThread ui_thread_;
 };
 
 // Tests to see that webkit preferences are properly loaded and copied over
 // to a WebPreferences object.
 TEST_F(ChromePrefServiceWebKitPrefs, PrefsCopied) {
-  webkit_glue::WebPreferences webkit_prefs =
+  WebPreferences webkit_prefs =
       WebContentsTester::For(web_contents())->TestGetWebkitPrefs();
 
   // These values have been overridden by the profile preferences.

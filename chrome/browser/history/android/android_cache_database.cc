@@ -92,7 +92,8 @@ bool AndroidCacheDatabase::MarkURLsAsBookmarked(
   return true;
 }
 
-bool AndroidCacheDatabase::SetFaviconID(URLID url_id, FaviconID favicon_id) {
+bool AndroidCacheDatabase::SetFaviconID(URLID url_id,
+                                        chrome::FaviconID favicon_id) {
   sql::Statement update_statement(GetDB().GetCachedStatement(SQL_FROM_HERE,
       "UPDATE android_cache_db.bookmark_cache "
       "SET favicon_id = ? WHERE url_id = ? "));
@@ -173,8 +174,7 @@ bool AndroidCacheDatabase::DeleteUnusedSearchTerms() {
 
 bool AndroidCacheDatabase::CreateDatabase(const base::FilePath& db_name) {
   db_name_ = db_name;
-  if (file_util::PathExists(db_name_))
-    file_util::Delete(db_name_, false);
+  sql::Connection::Delete(db_name_);
 
   // Using a new connection, otherwise we can not create the database.
   sql::Connection connection;

@@ -8,7 +8,7 @@
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/prefs/pref_service.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "base/task_runner_util.h"
 #include "base/threading/worker_pool.h"
 #include "chrome/browser/browser_process.h"
@@ -46,16 +46,16 @@ bool g_brand_empty = false;
 }  // namespace
 
 void ClearBrandForCurrentSession() {
-  DCHECK(
-      !content::BrowserThread::IsWellKnownThread(content::BrowserThread::UI) ||
-      content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
+  DCHECK(!content::BrowserThread::IsThreadInitialized(
+             content::BrowserThread::UI) ||
+         content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
   g_brand_empty = true;
 }
 
 std::string GetBrand() {
-  DCHECK(
-      !content::BrowserThread::IsWellKnownThread(content::BrowserThread::UI) ||
-      content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
+  DCHECK(!content::BrowserThread::IsThreadInitialized(
+             content::BrowserThread::UI) ||
+         content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
   if (g_brand_empty)
     return std::string();
   DCHECK(g_browser_process->local_state());
@@ -64,7 +64,7 @@ std::string GetBrand() {
 
 void SetBrandFromFile(const base::Closure& callback) {
   base::PostTaskAndReplyWithResult(
-      base::WorkerPool::GetTaskRunner(false /* task_is_slow */),
+      base::WorkerPool::GetTaskRunner(false /* task_is_slow */).get(),
       FROM_HERE,
       base::Bind(&ReadBrandFromFile),
       base::Bind(&SetBrand, callback));

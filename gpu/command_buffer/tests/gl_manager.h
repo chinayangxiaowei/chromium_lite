@@ -7,6 +7,7 @@
 
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
+#include "gpu/command_buffer/service/feature_info.h"
 #include "ui/gfx/size.h"
 
 namespace gfx {
@@ -30,6 +31,8 @@ class MailboxManager;
 class GLES2Decoder;
 class GLES2CmdHelper;
 class GLES2Implementation;
+class ImageFactory;
+class ImageManager;
 class ShareGroup;
 
 };
@@ -50,6 +53,10 @@ class GLManager {
     bool bind_generates_resource;
     // Whether or not it's ok to lose the context.
     bool context_lost_allowed;
+    // Image manager to be used.
+    gles2::ImageManager* image_manager;
+    // Image factory to be used.
+    gles2::ImageFactory* image_factory;
   };
   GLManager();
   ~GLManager();
@@ -58,6 +65,12 @@ class GLManager {
   void Destroy();
 
   void MakeCurrent();
+
+  void SetSurface(gfx::GLSurface* surface);
+
+  gles2::GLES2Decoder* decoder() const {
+    return decoder_.get();
+  }
 
   gles2::MailboxManager* mailbox_manager() const {
     return mailbox_manager_.get();
@@ -74,6 +87,8 @@ class GLManager {
   gfx::GLContext* context() {
     return context_.get();
   }
+
+  const gpu::gles2::FeatureInfo::Workarounds& workarounds() const;
 
  private:
   void PumpCommands();

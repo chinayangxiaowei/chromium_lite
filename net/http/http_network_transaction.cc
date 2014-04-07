@@ -16,12 +16,11 @@
 #include "base/metrics/histogram.h"
 #include "base/metrics/stats_counters.h"
 #include "base/stl_util.h"
-#include "base/string_number_conversions.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "googleurl/src/gurl.h"
 #include "net/base/auth.h"
 #include "net/base/host_port_pair.h"
 #include "net/base/io_buffer.h"
@@ -47,6 +46,7 @@
 #include "net/http/http_stream_base.h"
 #include "net/http/http_stream_factory.h"
 #include "net/http/http_util.h"
+#include "net/http/transport_security_state.h"
 #include "net/http/url_security_manager.h"
 #include "net/socket/client_socket_factory.h"
 #include "net/socket/socks_client_socket_pool.h"
@@ -58,6 +58,7 @@
 #include "net/spdy/spdy_session_pool.h"
 #include "net/ssl/ssl_cert_request_info.h"
 #include "net/ssl/ssl_connection_status_flags.h"
+#include "url/gurl.h"
 
 using base::Time;
 
@@ -65,10 +66,11 @@ namespace net {
 
 namespace {
 
-void ProcessAlternateProtocol(HttpStreamFactory* factory,
-                              HttpServerProperties* http_server_properties,
-                              const HttpResponseHeaders& headers,
-                              const HostPortPair& http_host_port_pair) {
+void ProcessAlternateProtocol(
+    HttpStreamFactory* factory,
+    const base::WeakPtr<HttpServerProperties>& http_server_properties,
+    const HttpResponseHeaders& headers,
+    const HostPortPair& http_host_port_pair) {
   std::string alternate_protocol_str;
 
   if (!headers.EnumerateHeader(NULL, kAlternateProtocolHeader,
@@ -95,12 +97,13 @@ bool IsClientCertificateError(int error) {
   }
 }
 
-Value* NetLogSSLVersionFallbackCallback(const GURL* url,
-                                        int net_error,
-                                        uint16 version_before,
-                                        uint16 version_after,
-                                        NetLog::LogLevel /* log_level */) {
-  DictionaryValue* dict = new DictionaryValue();
+base::Value* NetLogSSLVersionFallbackCallback(
+    const GURL* url,
+    int net_error,
+    uint16 version_before,
+    uint16 version_after,
+    NetLog::LogLevel /* log_level */) {
+  base::DictionaryValue* dict = new base::DictionaryValue();
   dict->SetString("host_and_port", GetHostAndPort(*url));
   dict->SetInteger("net_error", net_error);
   dict->SetInteger("version_before", version_before);
@@ -115,9 +118,8 @@ Value* NetLogSSLVersionFallbackCallback(const GURL* url,
 HttpNetworkTransaction::HttpNetworkTransaction(RequestPriority priority,
                                                HttpNetworkSession* session)
     : pending_auth_target_(HttpAuth::AUTH_NONE),
-      ALLOW_THIS_IN_INITIALIZER_LIST(io_callback_(
-          base::Bind(&HttpNetworkTransaction::OnIOComplete,
-                     base::Unretained(this)))),
+      io_callback_(base::Bind(&HttpNetworkTransaction::OnIOComplete,
+                              base::Unretained(this))),
       session_(session),
       request_(NULL),
       priority_(priority),
@@ -157,7 +159,7 @@ HttpNetworkTransaction::~HttpNetworkTransaction() {
       } else {
         // Otherwise, we try to drain the response body.
         HttpStreamBase* stream = stream_.release();
-        stream->Drain(session_);
+        stream->Drain(session_.get());
       }
     }
   }
@@ -176,6 +178,12 @@ int HttpNetworkTransaction::Start(const HttpRequestInfo* request_info,
     server_ssl_config_.rev_checking_enabled = false;
     proxy_ssl_config_.rev_checking_enabled = false;
   }
+
+  // Channel ID is enabled unless --disable-tls-channel-id flag is set,
+  // or if privacy mode is enabled.
+  bool channel_id_enabled = server_ssl_config_.channel_id_enabled &&
+      (request_->privacy_mode == kPrivacyModeDisabled);
+  server_ssl_config_.channel_id_enabled = channel_id_enabled;
 
   next_state_ = STATE_CREATE_STREAM;
   int rv = DoLoop(OK);
@@ -355,9 +363,18 @@ int HttpNetworkTransaction::Read(IOBuffer* buf, int buf_len,
   return rv;
 }
 
+bool HttpNetworkTransaction::GetFullRequestHeaders(
+    HttpRequestHeaders* headers) const {
+  // TODO(ttuttle): Make sure we've populated request_headers_.
+  *headers = request_headers_;
+  return true;
+}
+
 const HttpResponseInfo* HttpNetworkTransaction::GetResponseInfo() const {
-  return ((headers_valid_ && response_.headers) || response_.ssl_info.cert ||
-          response_.cert_request_info) ? &response_ : NULL;
+  return ((headers_valid_ && response_.headers.get()) ||
+          response_.ssl_info.cert.get() || response_.cert_request_info.get())
+             ? &response_
+             : NULL;
 }
 
 LoadState HttpNetworkTransaction::GetLoadState() const {
@@ -397,7 +414,6 @@ bool HttpNetworkTransaction::GetLoadTimingInfo(
   load_timing_info->proxy_resolve_end = proxy_info_.proxy_resolve_end_time();
   load_timing_info->send_start = send_start_time_;
   load_timing_info->send_end = send_end_time_;
-  load_timing_info->receive_headers_end = receive_headers_end_;
   return true;
 }
 
@@ -423,6 +439,13 @@ void HttpNetworkTransaction::OnStreamReady(const SSLConfig& used_ssl_config,
   response_.was_fetched_via_proxy = !proxy_info_.is_direct();
 
   OnIOComplete(OK);
+}
+
+void HttpNetworkTransaction::OnWebSocketStreamReady(
+    const SSLConfig& used_ssl_config,
+    const ProxyInfo& used_proxy_info,
+    WebSocketStreamBase* stream) {
+  NOTREACHED() << "This function should never be called.";
 }
 
 void HttpNetworkTransaction::OnStreamFailed(int result,
@@ -774,6 +797,9 @@ void HttpNetworkTransaction::BuildRequestHeaders(bool using_proxy) {
         &request_headers_);
 
   request_headers_.MergeFrom(request_->extra_headers);
+  response_.did_use_http_auth =
+      request_headers_.HasHeader(HttpRequestHeaders::kAuthorization) ||
+      request_headers_.HasHeader(HttpRequestHeaders::kProxyAuthorization);
 }
 
 int HttpNetworkTransaction::DoInitRequestBody() {
@@ -822,6 +848,7 @@ int HttpNetworkTransaction::DoSendRequestComplete(int result) {
   send_end_time_ = base::TimeTicks::Now();
   if (result < 0)
     return HandleIOError(result);
+  response_.network_accessed = true;
   next_state_ = STATE_READ_HEADERS;
   return OK;
 }
@@ -832,7 +859,7 @@ int HttpNetworkTransaction::DoReadHeaders() {
 }
 
 int HttpNetworkTransaction::HandleConnectionClosedBeforeEndOfHeaders() {
-  if (!response_.headers && !stream_->IsConnectionReused()) {
+  if (!response_.headers.get() && !stream_->IsConnectionReused()) {
     // The connection was closed before any data was sent. Likely an error
     // rather than empty HTTP/0.9 response.
     return ERR_EMPTY_RESPONSE;
@@ -842,8 +869,6 @@ int HttpNetworkTransaction::HandleConnectionClosedBeforeEndOfHeaders() {
 }
 
 int HttpNetworkTransaction::DoReadHeadersComplete(int result) {
-  receive_headers_end_ = base::TimeTicks::Now();
-
   // We can get a certificate error or ERR_SSL_CLIENT_AUTH_CERT_NEEDED here
   // due to SSL renegotiation.
   if (IsCertificateError(result)) {
@@ -858,7 +883,7 @@ int HttpNetworkTransaction::DoReadHeadersComplete(int result) {
     DCHECK(stream_.get());
     DCHECK(is_https_request());
     response_.cert_request_info = new SSLCertRequestInfo;
-    stream_->GetSSLCertRequestInfo(response_.cert_request_info);
+    stream_->GetSSLCertRequestInfo(response_.cert_request_info.get());
     result = HandleCertificateRequest(result);
     if (result == OK)
       return result;
@@ -885,13 +910,26 @@ int HttpNetworkTransaction::DoReadHeadersComplete(int result) {
     if (rv != OK)
       return rv;
   }
-  DCHECK(response_.headers);
+  DCHECK(response_.headers.get());
 
   // Server-induced fallback is supported only if this is a PAC configured
   // proxy. See: http://crbug.com/143712
-  if (response_.was_fetched_via_proxy && proxy_info_.did_use_pac_script()) {
-    if (response_.headers != NULL &&
-        response_.headers->HasHeaderValue("connection", "proxy-bypass")) {
+  if (response_.was_fetched_via_proxy && proxy_info_.did_use_pac_script() &&
+      response_.headers.get() != NULL) {
+    bool should_fallback =
+        response_.headers->HasHeaderValue("connection", "proxy-bypass");
+    // Additionally, fallback if a 500 is returned via the data reduction proxy.
+    // This is conservative, as the 500 might have been generated by the origin,
+    // and not the proxy.
+#if defined(SPDY_PROXY_AUTH_ORIGIN)
+    if (!should_fallback) {
+      should_fallback =
+          response_.headers->response_code() == HTTP_INTERNAL_SERVER_ERROR &&
+          proxy_info_.proxy_server().host_port_pair().Equals(
+              HostPortPair::FromURL(GURL(SPDY_PROXY_AUTH_ORIGIN)));
+    }
+#endif
+    if (should_fallback) {
       ProxyService* proxy_service = session_->proxy_service();
       if (proxy_service->MarkProxyAsBad(proxy_info_, net_log_)) {
         // Only retry in the case of GETs. We don't want to resubmit a POST
@@ -929,7 +967,7 @@ int HttpNetworkTransaction::DoReadHeadersComplete(int result) {
   // We treat any other 1xx in this same way (although in practice getting
   // a 1xx that isn't a 100 is rare).
   if (response_.headers->response_code() / 100 == 1) {
-    response_.headers = new HttpResponseHeaders("");
+    response_.headers = new HttpResponseHeaders(std::string());
     next_state_ = STATE_READ_HEADERS;
     return OK;
   }
@@ -938,7 +976,7 @@ int HttpNetworkTransaction::DoReadHeadersComplete(int result) {
                                        request_->url.EffectiveIntPort());
   ProcessAlternateProtocol(session_->http_stream_factory(),
                            session_->http_server_properties(),
-                           *response_.headers,
+                           *response_.headers.get(),
                            endpoint);
 
   int rv = HandleAuthChallenge();
@@ -953,12 +991,13 @@ int HttpNetworkTransaction::DoReadHeadersComplete(int result) {
 }
 
 int HttpNetworkTransaction::DoReadBody() {
-  DCHECK(read_buf_);
+  DCHECK(read_buf_.get());
   DCHECK_GT(read_buf_len_, 0);
   DCHECK(stream_ != NULL);
 
   next_state_ = STATE_READ_BODY_COMPLETE;
-  return stream_->ReadResponseBody(read_buf_, read_buf_len_, io_callback_);
+  return stream_->ReadResponseBody(
+      read_buf_.get(), read_buf_len_, io_callback_);
 }
 
 int HttpNetworkTransaction::DoReadBodyComplete(int result) {
@@ -990,8 +1029,6 @@ int HttpNetworkTransaction::DoReadBodyComplete(int result) {
   // Clean up connection if we are done.
   if (done) {
     LogTransactionMetrics();
-    // TODO(bashi): This cast is temporary. Remove later.
-    static_cast<HttpStream*>(stream_.get())->LogNumRttVsBytesMetrics();
     stream_->Close(!keep_alive);
     // Note: we don't reset the stream here.  We've closed it, but we still
     // need it around so that callers can call methods such as
@@ -1066,24 +1103,6 @@ void HttpNetworkTransaction::LogTransactionConnectedMetrics() {
         100);
   }
 
-  static const bool use_spdy_histogram =
-      base::FieldTrialList::TrialExists("SpdyImpact");
-  if (use_spdy_histogram && response_.was_npn_negotiated) {
-    UMA_HISTOGRAM_CUSTOM_TIMES(
-      base::FieldTrial::MakeName("Net.Transaction_Connected",
-                                 "SpdyImpact"),
-        total_duration, base::TimeDelta::FromMilliseconds(1),
-        base::TimeDelta::FromMinutes(10), 100);
-
-    if (!reused_socket) {
-      UMA_HISTOGRAM_CUSTOM_TIMES(
-          base::FieldTrial::MakeName("Net.Transaction_Connected_New_b",
-                                     "SpdyImpact"),
-          total_duration, base::TimeDelta::FromMilliseconds(1),
-          base::TimeDelta::FromMinutes(10), 100);
-    }
-  }
-
   // Currently, non-HIGHEST priority requests are frame or sub-frame resource
   // types.  This will change when we also prioritize certain subresources like
   // css, js, etc.
@@ -1118,24 +1137,6 @@ void HttpNetworkTransaction::LogTransactionMetrics() const {
                              total_duration,
                              base::TimeDelta::FromMilliseconds(1),
                              base::TimeDelta::FromMinutes(10), 100);
-
-  static const bool use_warm_socket_impact_histogram =
-      base::FieldTrialList::TrialExists("WarmSocketImpact");
-  if (use_warm_socket_impact_histogram) {
-    UMA_HISTOGRAM_CUSTOM_TIMES(
-        base::FieldTrial::MakeName("Net.Transaction_Latency_b",
-                                   "WarmSocketImpact"),
-        duration,
-        base::TimeDelta::FromMilliseconds(1),
-        base::TimeDelta::FromMinutes(10),
-        100);
-    UMA_HISTOGRAM_CUSTOM_TIMES(
-        base::FieldTrial::MakeName("Net.Transaction_Latency_Total",
-                                   "WarmSocketImpact"),
-        total_duration,
-        base::TimeDelta::FromMilliseconds(1),
-        base::TimeDelta::FromMinutes(10), 100);
-  }
 
   if (!stream_->IsConnectionReused()) {
     UMA_HISTOGRAM_CUSTOM_TIMES(
@@ -1182,7 +1183,7 @@ int HttpNetworkTransaction::HandleCertificateRequest(int error) {
   // Check that the certificate selected is still a certificate the server
   // is likely to accept, based on the criteria supplied in the
   // CertificateRequest message.
-  if (client_cert) {
+  if (client_cert.get()) {
     const std::vector<std::string>& cert_authorities =
         response_.cert_request_info->cert_authorities;
 
@@ -1218,11 +1219,14 @@ int HttpNetworkTransaction::HandleSSLHandshakeError(int error) {
         GetHostAndPort(request_->url));
   }
 
+  bool should_fallback = false;
+  uint16 version_max = server_ssl_config_.version_max;
+
   switch (error) {
     case ERR_SSL_PROTOCOL_ERROR:
     case ERR_SSL_VERSION_OR_CIPHER_MISMATCH:
-      if (server_ssl_config_.version_max >= SSL_PROTOCOL_VERSION_TLS1 &&
-          server_ssl_config_.version_max > server_ssl_config_.version_min) {
+      if (version_max >= SSL_PROTOCOL_VERSION_TLS1 &&
+          version_max > server_ssl_config_.version_min) {
         // This could be a TLS-intolerant server or a server that chose a
         // cipher suite defined only for higher protocol versions (such as
         // an SSL 3.0 server that chose a TLS-only cipher suite).  Fall
@@ -1233,38 +1237,49 @@ int HttpNetworkTransaction::HandleSSLHandshakeError(int error) {
         // repeat the TLS 1.0 handshake. To avoid this problem, the default
         // version_max should match the maximum protocol version supported
         // by the SSLClientSocket class.
-        uint16 version_before = server_ssl_config_.version_max;
-        server_ssl_config_.version_max--;
-        net_log_.AddEvent(
-            NetLog::TYPE_SSL_VERSION_FALLBACK,
-            base::Bind(&NetLogSSLVersionFallbackCallback,
-                       &request_->url, error, version_before,
-                       server_ssl_config_.version_max));
-        server_ssl_config_.version_fallback = true;
-        ResetConnectionAndRequestForResend();
-        error = OK;
+        version_max--;
+
+        // Fallback to the lower SSL version.
+        // While SSL 3.0 fallback should be eliminated because of security
+        // reasons, there is a high risk of breaking the servers if this is
+        // done in general.
+        // For now SSL 3.0 fallback is disabled for Google servers first,
+        // and will be expanded to other servers after enough experiences
+        // have been gained showing that this experiment works well with
+        // today's Internet.
+        if (version_max > SSL_PROTOCOL_VERSION_SSL3 ||
+            (server_ssl_config_.unrestricted_ssl3_fallback_enabled ||
+             !TransportSecurityState::IsGooglePinnedProperty(
+                 request_->url.host(), true /* include SNI */))) {
+          should_fallback = true;
+        }
       }
       break;
-    case ERR_SSL_DECOMPRESSION_FAILURE_ALERT:
     case ERR_SSL_BAD_RECORD_MAC_ALERT:
-      if (server_ssl_config_.version_max >= SSL_PROTOCOL_VERSION_TLS1 &&
-          server_ssl_config_.version_min == SSL_PROTOCOL_VERSION_SSL3) {
-        // This could be a server with buggy DEFLATE support. Turn off TLS,
-        // DEFLATE support and retry.
-        // TODO(wtc): turn off DEFLATE support only. Do not tie it to TLS.
-        uint16 version_before = server_ssl_config_.version_max;
-        server_ssl_config_.version_max = SSL_PROTOCOL_VERSION_SSL3;
-        net_log_.AddEvent(
-            NetLog::TYPE_SSL_VERSION_FALLBACK,
-            base::Bind(&NetLogSSLVersionFallbackCallback,
-                       &request_->url, error, version_before,
-                       server_ssl_config_.version_max));
-        server_ssl_config_.version_fallback = true;
-        ResetConnectionAndRequestForResend();
-        error = OK;
+      if (version_max >= SSL_PROTOCOL_VERSION_TLS1_1 &&
+          version_max > server_ssl_config_.version_min) {
+        // Some broken SSL devices negotiate TLS 1.0 when sent a TLS 1.1 or
+        // 1.2 ClientHello, but then return a bad_record_mac alert. See
+        // crbug.com/260358. In order to make the fallback as minimal as
+        // possible, this fallback is only triggered for >= TLS 1.1.
+        version_max--;
+        should_fallback = true;
       }
       break;
   }
+
+  if (should_fallback) {
+    net_log_.AddEvent(
+        NetLog::TYPE_SSL_VERSION_FALLBACK,
+        base::Bind(&NetLogSSLVersionFallbackCallback,
+                   &request_->url, error, server_ssl_config_.version_max,
+                   version_max));
+    server_ssl_config_.version_max = version_max;
+    server_ssl_config_.version_fallback = true;
+    ResetConnectionAndRequestForResend();
+    error = OK;
+  }
+
   return error;
 }
 
@@ -1331,7 +1346,6 @@ void HttpNetworkTransaction::ResetStateForRestart() {
 void HttpNetworkTransaction::ResetStateForAuthRestart() {
   send_start_time_ = base::TimeTicks();
   send_end_time_ = base::TimeTicks();
-  receive_headers_end_ = base::TimeTicks();
 
   pending_auth_target_ = HttpAuth::AUTH_NONE;
   read_buf_ = NULL;
@@ -1343,7 +1357,7 @@ void HttpNetworkTransaction::ResetStateForAuthRestart() {
 }
 
 HttpResponseHeaders* HttpNetworkTransaction::GetResponseHeaders() const {
-  return response_.headers;
+  return response_.headers.get();
 }
 
 bool HttpNetworkTransaction::ShouldResendRequest(int error) const {
@@ -1382,7 +1396,7 @@ bool HttpNetworkTransaction::ShouldApplyServerAuth() const {
 
 int HttpNetworkTransaction::HandleAuthChallenge() {
   scoped_refptr<HttpResponseHeaders> headers(GetResponseHeaders());
-  DCHECK(headers);
+  DCHECK(headers.get());
 
   int status = headers->response_code();
   if (status != HTTP_UNAUTHORIZED &&

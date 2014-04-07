@@ -69,8 +69,8 @@ BrowserActionsContainer::BrowserActionsContainer(Browser* browser,
       resize_amount_(0),
       animation_target_size_(0),
       drop_indicator_position_(-1),
-      ALLOW_THIS_IN_INITIALIZER_LIST(task_factory_(this)),
-      ALLOW_THIS_IN_INITIALIZER_LIST(show_menu_task_factory_(this)) {
+      task_factory_(this),
+      show_menu_task_factory_(this) {
   set_id(VIEW_ID_BROWSER_ACTION_TOOLBAR);
 
   ExtensionService* service =
@@ -100,6 +100,8 @@ BrowserActionsContainer::BrowserActionsContainer(Browser* browser,
 }
 
 BrowserActionsContainer::~BrowserActionsContainer() {
+  if (overflow_menu_)
+    overflow_menu_->set_observer(NULL);
   if (model_)
     model_->RemoveObserver(this);
   StopShowFolderDropMenuTimer();
@@ -150,10 +152,10 @@ void BrowserActionsContainer::CreateBrowserActionViews() {
   const extensions::ExtensionList& toolbar_items = model_->toolbar_items();
   for (extensions::ExtensionList::const_iterator i(toolbar_items.begin());
        i != toolbar_items.end(); ++i) {
-    if (!ShouldDisplayBrowserAction(*i))
+    if (!ShouldDisplayBrowserAction(i->get()))
       continue;
 
-    BrowserActionView* view = new BrowserActionView(*i, browser_, this);
+    BrowserActionView* view = new BrowserActionView(i->get(), browser_, this);
     browser_action_views_.push_back(view);
     AddChildView(view);
   }
@@ -552,14 +554,13 @@ void BrowserActionsContainer::OnThemeChanged() {
   LoadImages();
 }
 
-void BrowserActionsContainer::ViewHierarchyChanged(bool is_add,
-                                                   views::View* parent,
-                                                   views::View* child) {
+void BrowserActionsContainer::ViewHierarchyChanged(
+    const ViewHierarchyChangedDetails& details) {
   // No extensions (e.g., incognito).
   if (!model_)
     return;
 
-  if (is_add && child == this) {
+  if (details.is_add && details.child == this) {
     // Initial toolbar button creation and placement in the widget hierarchy.
     // We do this here instead of in the constructor because AddBrowserAction
     // calls Layout on the Toolbar, which needs this object to be constructed
@@ -717,7 +718,7 @@ void BrowserActionsContainer::StopShowFolderDropMenuTimer() {
 }
 
 void BrowserActionsContainer::StartShowFolderDropMenuTimer() {
-  MessageLoop::current()->PostDelayedTask(
+  base::MessageLoop::current()->PostDelayedTask(
       FROM_HERE,
       base::Bind(&BrowserActionsContainer::ShowDropFolder,
                  show_menu_task_factory_.GetWeakPtr()),
@@ -835,12 +836,12 @@ void BrowserActionsContainer::ShowPopup(
   // since buttons can be activated from the overflow menu (chevron). In that
   // case we show the popup as originating from the chevron.
   View* reference_view = button->parent()->visible() ? button : chevron_;
-  views::BubbleBorder::ArrowLocation arrow_location = base::i18n::IsRTL() ?
+  views::BubbleBorder::Arrow arrow = base::i18n::IsRTL() ?
       views::BubbleBorder::TOP_LEFT : views::BubbleBorder::TOP_RIGHT;
   popup_ = ExtensionPopup::ShowPopup(popup_url,
                                      browser_,
                                      reference_view,
-                                     arrow_location,
+                                     arrow,
                                      show_action);
   popup_->GetWidget()->AddObserver(this);
   popup_button_ = button;

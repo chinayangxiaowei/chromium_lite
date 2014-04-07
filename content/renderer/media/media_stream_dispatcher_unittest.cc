@@ -6,13 +6,13 @@
 
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "content/common/media/media_stream_messages.h"
 #include "content/public/common/media_stream_request.h"
 #include "content/renderer/media/media_stream_dispatcher.h"
 #include "content/renderer/media/media_stream_dispatcher_eventhandler.h"
-#include "googleurl/src/gurl.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/gurl.h"
 
 namespace content {
 namespace {
@@ -50,6 +50,10 @@ class MockMediaStreamDispatcherEventHandler
     request_id_ = request_id;
   }
 
+  virtual void OnStopGeneratedStream(const std::string& label) OVERRIDE {
+    label_ = label;
+  }
+
   virtual void OnDevicesEnumerated(
       int request_id,
       const StreamDeviceInfoArray& device_array) OVERRIDE {
@@ -81,7 +85,7 @@ class MockMediaStreamDispatcherEventHandler
 }  // namespace
 
 TEST(MediaStreamDispatcherTest, BasicStream) {
-  scoped_ptr<MessageLoop> message_loop(new MessageLoop());
+  scoped_ptr<base::MessageLoop> message_loop(new base::MessageLoop());
   scoped_ptr<MediaStreamDispatcher> dispatcher(new MediaStreamDispatcher(NULL));
   scoped_ptr<MockMediaStreamDispatcherEventHandler>
       handler(new MockMediaStreamDispatcherEventHandler);
@@ -157,7 +161,7 @@ TEST(MediaStreamDispatcherTest, BasicStream) {
 TEST(MediaStreamDispatcherTest, BasicStreamForDevice) {
   static const char kDeviceId[] = "/dev/video0";
 
-  scoped_ptr<MessageLoop> message_loop(new MessageLoop());
+  scoped_ptr<base::MessageLoop> message_loop(new base::MessageLoop());
   scoped_ptr<MediaStreamDispatcher> dispatcher(new MediaStreamDispatcher(NULL));
   scoped_ptr<MockMediaStreamDispatcherEventHandler>
       handler(new MockMediaStreamDispatcherEventHandler);
@@ -228,7 +232,7 @@ TEST(MediaStreamDispatcherTest, BasicStreamForDevice) {
 }
 
 TEST(MediaStreamDispatcherTest, BasicVideoDevice) {
-  scoped_ptr<MessageLoop> message_loop(new MessageLoop());
+  scoped_ptr<base::MessageLoop> message_loop(new base::MessageLoop());
   scoped_ptr<MediaStreamDispatcher> dispatcher(new MediaStreamDispatcher(NULL));
   scoped_ptr<MockMediaStreamDispatcherEventHandler>
       handler1(new MockMediaStreamDispatcherEventHandler);
@@ -315,7 +319,7 @@ TEST(MediaStreamDispatcherTest, BasicVideoDevice) {
 }
 
 TEST(MediaStreamDispatcherTest, TestFailure) {
-  scoped_ptr<MessageLoop> message_loop(new MessageLoop());
+  scoped_ptr<base::MessageLoop> message_loop(new base::MessageLoop());
   scoped_ptr<MediaStreamDispatcher> dispatcher(new MediaStreamDispatcher(NULL));
   scoped_ptr<MockMediaStreamDispatcherEventHandler>
       handler(new MockMediaStreamDispatcherEventHandler);
@@ -367,7 +371,7 @@ TEST(MediaStreamDispatcherTest, TestFailure) {
 }
 
 TEST(MediaStreamDispatcherTest, CancelGenerateStream) {
-  scoped_ptr<MessageLoop> message_loop(new MessageLoop());
+  scoped_ptr<base::MessageLoop> message_loop(new base::MessageLoop());
   scoped_ptr<MediaStreamDispatcher> dispatcher(new MediaStreamDispatcher(NULL));
   scoped_ptr<MockMediaStreamDispatcherEventHandler>
       handler(new MockMediaStreamDispatcherEventHandler);
@@ -380,7 +384,7 @@ TEST(MediaStreamDispatcherTest, CancelGenerateStream) {
                              components, GURL());
 
   EXPECT_EQ(2u, dispatcher->requests_.size());
-  dispatcher->CancelGenerateStream(kRequestId2);
+  dispatcher->CancelGenerateStream(kRequestId2, handler.get()->AsWeakPtr());
   EXPECT_EQ(1u, dispatcher->requests_.size());
 
   // Complete the creation of stream1.

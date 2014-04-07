@@ -29,8 +29,6 @@ class ShillDeviceClientStub : public ShillDeviceClient,
       ShillPropertyChangedObserver* observer) OVERRIDE;
   virtual void GetProperties(const dbus::ObjectPath& device_path,
                              const DictionaryValueCallback& callback) OVERRIDE;
-  virtual base::DictionaryValue* CallGetPropertiesAndBlock(
-      const dbus::ObjectPath& device_path) OVERRIDE;
   virtual void ProposeScan(const dbus::ObjectPath& device_path,
                            const VoidDBusMethodCallback& callback) OVERRIDE;
 
@@ -87,6 +85,7 @@ class ShillDeviceClientStub : public ShillDeviceClient,
   virtual void SetDeviceProperty(const std::string& device_path,
                                  const std::string& name,
                                  const base::Value& value) OVERRIDE;
+  virtual std::string GetDevicePathForType(const std::string& type) OVERRIDE;
 
  private:
   typedef ObserverList<ShillPropertyChangedObserver> PropertyObserverList;

@@ -13,8 +13,8 @@
 #include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
-#include "base/stringprintf.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/stringprintf.h"
 #include "content/public/common/geoposition.h"
 
 namespace content {
@@ -216,7 +216,7 @@ GpsLocationProviderLinux::GpsLocationProviderLinux(LibGpsFactory libgps_factory)
       poll_period_moving_millis_(kPollPeriodMovingMillis),
       poll_period_stationary_millis_(kPollPeriodStationaryMillis),
       libgps_factory_(libgps_factory),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {
+      weak_factory_(this) {
   DCHECK(libgps_factory_);
 }
 
@@ -254,8 +254,11 @@ void GpsLocationProviderLinux::GetPosition(Geoposition* position) {
          position->error_code != Geoposition::ERROR_CODE_NONE);
 }
 
-void GpsLocationProviderLinux::UpdatePosition() {
+void GpsLocationProviderLinux::RequestRefresh() {
   ScheduleNextGpsPoll(0);
+}
+
+void GpsLocationProviderLinux::OnPermissionGranted() {
 }
 
 void GpsLocationProviderLinux::DoGpsPollTask() {
@@ -279,20 +282,20 @@ void GpsLocationProviderLinux::DoGpsPollTask() {
   if (differ || new_position.error_code != Geoposition::ERROR_CODE_NONE) {
     // Update if the new location is interesting or we have an error to report.
     position_ = new_position;
-    UpdateListeners();
+    NotifyCallback(position_);
   }
 }
 
 void GpsLocationProviderLinux::ScheduleNextGpsPoll(int interval) {
   weak_factory_.InvalidateWeakPtrs();
-  MessageLoop::current()->PostDelayedTask(
+  base::MessageLoop::current()->PostDelayedTask(
       FROM_HERE,
       base::Bind(&GpsLocationProviderLinux::DoGpsPollTask,
                  weak_factory_.GetWeakPtr()),
       base::TimeDelta::FromMilliseconds(interval));
 }
 
-LocationProviderBase* NewSystemLocationProvider() {
+LocationProvider* NewSystemLocationProvider() {
   return new GpsLocationProviderLinux(LibGps::New);
 }
 

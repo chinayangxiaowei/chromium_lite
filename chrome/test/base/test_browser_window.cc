@@ -38,6 +38,10 @@ gfx::Rect TestBrowserWindow::GetRestoredBounds() const {
   return gfx::Rect();
 }
 
+ui::WindowShowState TestBrowserWindow::GetRestoredState() const {
+  return ui::SHOW_STATE_DEFAULT;
+}
+
 gfx::Rect TestBrowserWindow::GetBounds() const {
   return gfx::Rect();
 }
@@ -98,10 +102,6 @@ gfx::Rect TestBrowserWindow::GetRootWindowResizerRect() const {
   return gfx::Rect();
 }
 
-bool TestBrowserWindow::IsPanel() const {
-  return false;
-}
-
 bool TestBrowserWindow::IsDownloadShelfVisible() const {
   return false;
 }
@@ -124,10 +124,6 @@ bool TestBrowserWindow::IsFullscreenWithoutChrome() {
 }
 #endif
 
-gfx::Rect TestBrowserWindow::GetInstantBounds() {
-  return gfx::Rect();
-}
-
 WindowOpenDisposition TestBrowserWindow::GetDispositionForPopupBounds(
     const gfx::Rect& bounds) {
   return NEW_POPUP;
@@ -137,8 +133,9 @@ FindBar* TestBrowserWindow::CreateFindBar() {
   return NULL;
 }
 
-bool TestBrowserWindow::GetConstrainedWindowTopY(int* top_y) {
-  return false;
+web_modal::WebContentsModalDialogHost*
+    TestBrowserWindow::GetWebContentsModalDialogHost() {
+  return NULL;
 }
 
 namespace chrome {

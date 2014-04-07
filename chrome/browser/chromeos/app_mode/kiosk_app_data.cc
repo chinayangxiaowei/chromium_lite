@@ -20,6 +20,8 @@
 #include "chrome/browser/image_decoder.h"
 #include "chrome/browser/prefs/scoped_user_pref_update.h"
 #include "chrome/common/extensions/extension_constants.h"
+#include "chrome/common/extensions/extension_manifest_constants.h"
+#include "chrome/common/extensions/manifest.h"
 #include "content/public/browser/browser_thread.h"
 #include "ui/gfx/codec/png_codec.h"
 
@@ -50,12 +52,23 @@ void SaveIconToLocalOnBlockingPool(
   DCHECK(BrowserThread::GetBlockingPool()->RunsTasksOnCurrentThread());
 
   base::FilePath dir = icon_path.DirName();
-  if (!file_util::PathExists(dir))
+  if (!base::PathExists(dir))
     CHECK(file_util::CreateDirectory(dir));
 
   CHECK_EQ(static_cast<int>(raw_icon->size()),
            file_util::WriteFile(icon_path,
                                 raw_icon->data().c_str(), raw_icon->size()));
+}
+
+// Returns true for valid kiosk app manifest.
+bool IsValidKioskAppManifest(const extensions::Manifest& manifest) {
+  bool kiosk_enabled;
+  if (manifest.GetBoolean(extension_manifest_keys::kKioskEnabled,
+                          &kiosk_enabled)) {
+    return kiosk_enabled;
+  }
+
+  return false;
 }
 
 }  // namespace
@@ -191,25 +204,37 @@ class KioskAppData::WebstoreDataParser
 
   virtual ~WebstoreDataParser() {}
 
+  void ReportFailure() {
+    if (client_)
+      client_->OnWebstoreParseFailure();
+
+    delete this;
+  }
+
   // WebstoreInstallHelper::Delegate overrides:
   virtual void OnWebstoreParseSuccess(
       const std::string& id,
       const SkBitmap& icon,
       base::DictionaryValue* parsed_manifest) OVERRIDE {
     // Takes ownership of |parsed_manifest|.
-    scoped_ptr<base::DictionaryValue> manifest(parsed_manifest);
+    extensions::Manifest manifest(
+        extensions::Manifest::INVALID_LOCATION,
+        scoped_ptr<base::DictionaryValue>(parsed_manifest));
+
+    if (!IsValidKioskAppManifest(manifest)) {
+      ReportFailure();
+      return;
+    }
 
     if (client_)
-      client_->OnWebstoreParseSuccess(icon, manifest.release());
+      client_->OnWebstoreParseSuccess(icon);
     delete this;
   }
   virtual void OnWebstoreParseFailure(
       const std::string& id,
       InstallHelperResultCode result_code,
       const std::string& error_message) OVERRIDE {
-    if (client_)
-      client_->OnWebstoreParseFailure();
-    delete this;
+    ReportFailure();
   }
 
   base::WeakPtr<KioskAppData> client_;
@@ -221,10 +246,12 @@ class KioskAppData::WebstoreDataParser
 // KioskAppData
 
 KioskAppData::KioskAppData(KioskAppDataDelegate* delegate,
-                           const std::string& app_id)
+                           const std::string& app_id,
+                           const std::string& user_id)
     : delegate_(delegate),
       status_(STATUS_INIT),
-      id_(app_id) {
+      app_id_(app_id),
+      user_id_(user_id) {
 }
 
 KioskAppData::~KioskAppData() {}
@@ -244,13 +271,13 @@ void KioskAppData::ClearCache() {
   DictionaryPrefUpdate dict_update(local_state,
                                    KioskAppManager::kKioskDictionaryName);
 
-  std::string app_key = std::string(KioskAppManager::kKeyApps) + '.' + id_;
+  std::string app_key = std::string(KioskAppManager::kKeyApps) + '.' + app_id_;
   dict_update->Remove(app_key, NULL);
 
   if (!icon_path_.empty()) {
     BrowserThread::PostBlockingPoolTask(
         FROM_HERE,
-        base::Bind(base::IgnoreResult(&file_util::Delete), icon_path_, false));
+        base::Bind(base::IgnoreResult(&base::DeleteFile), icon_path_, false));
   }
 }
 
@@ -272,10 +299,10 @@ void KioskAppData::SetStatus(Status status) {
       break;
     case STATUS_LOADING:
     case STATUS_LOADED:
-      delegate_->OnKioskAppDataChanged(id_);
+      delegate_->OnKioskAppDataChanged(app_id_);
       break;
     case STATUS_ERROR:
-      delegate_->OnKioskAppDataLoadFailure(id_);
+      delegate_->OnKioskAppDataLoadFailure(app_id_);
       break;
   };
 }
@@ -285,7 +312,7 @@ net::URLRequestContextGetter* KioskAppData::GetRequestContextGetter() {
 }
 
 bool KioskAppData::LoadFromCache() {
-  std::string app_key = std::string(KioskAppManager::kKeyApps) + '.' + id_;
+  std::string app_key = std::string(KioskAppManager::kKeyApps) + '.' + app_id_;
   std::string name_key = app_key + '.' + kKeyName;
   std::string icon_path_key = app_key + '.' + kKeyIcon;
 
@@ -308,7 +335,7 @@ bool KioskAppData::LoadFromCache() {
 
 void KioskAppData::SetCache(const std::string& name,
                             const base::FilePath& icon_path) {
-  std::string app_key = std::string(KioskAppManager::kKeyApps) + '.' + id_;
+  std::string app_key = std::string(KioskAppManager::kKeyApps) + '.' + app_id_;
   std::string name_key = app_key + '.' + kKeyName;
   std::string icon_path_key = app_key + '.' + kKeyIcon;
 
@@ -334,12 +361,7 @@ void KioskAppData::OnIconLoadFailure() {
   StartFetch();
 }
 
-void KioskAppData::OnWebstoreParseSuccess(
-    const SkBitmap& icon,
-    base::DictionaryValue* parsed_manifest) {
-  // Takes ownership of |parsed_manifest|.
-  scoped_ptr<base::DictionaryValue> manifest(parsed_manifest);
-
+void KioskAppData::OnWebstoreParseSuccess(const SkBitmap& icon) {
   icon_ = gfx::ImageSkia::CreateFrom1xBitmap(icon);
   icon_.MakeThreadSafe();
 
@@ -353,7 +375,7 @@ void KioskAppData::OnWebstoreParseSuccess(
     delegate_->GetKioskAppIconCacheDir(&cache_dir);
 
   base::FilePath icon_path =
-      cache_dir.AppendASCII(id_).AddExtension(kIconFileExtension);
+      cache_dir.AppendASCII(app_id_).AddExtension(kIconFileExtension);
   BrowserThread::GetBlockingPool()->PostTask(
       FROM_HERE,
       base::Bind(&SaveIconToLocalOnBlockingPool, icon_path, raw_icon_));
@@ -371,7 +393,7 @@ void KioskAppData::StartFetch() {
       this,
       GetRequestContextGetter(),
       GURL(),
-      id_));
+      app_id_));
   webstore_fetcher_->Start();
 }
 
@@ -410,7 +432,7 @@ void KioskAppData::OnWebstoreResponseParseSuccess(
   }
 
   // WebstoreDataParser deletes itself when done.
-  (new WebstoreDataParser(AsWeakPtr()))->Start(id_,
+  (new WebstoreDataParser(AsWeakPtr()))->Start(app_id_,
                                                manifest,
                                                icon_url,
                                                GetRequestContextGetter());

@@ -10,12 +10,12 @@
 
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/string_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
 #include "chrome/common/extensions/permissions/api_permission.h"
 #include "chrome/common/extensions/permissions/socket_permission.h"
-#include "googleurl/src/url_canon.h"
+#include "url/url_canon.h"
 
 namespace {
 
@@ -30,6 +30,9 @@ const char kTCPConnect[] = "tcp-connect";
 const char kTCPListen[] = "tcp-listen";
 const char kUDPBind[] = "udp-bind";
 const char kUDPSendTo[] = "udp-send-to";
+const char kUDPMulticastMembership[] = "udp-multicast-membership";
+const char kResolveHost[] = "resolve-host";
+const char kResolveProxy[] = "resolve-proxy";
 const int kWildcardPortNumber = 0;
 const int kInvalidPort = -1;
 
@@ -42,6 +45,12 @@ SocketPermissionRequest::OperationType StringToType(const std::string& s) {
     return SocketPermissionRequest::UDP_BIND;
   if (s == kUDPSendTo)
     return SocketPermissionRequest::UDP_SEND_TO;
+  if (s == kUDPMulticastMembership)
+    return SocketPermissionRequest::UDP_MULTICAST_MEMBERSHIP;
+  if (s == kResolveHost)
+    return SocketPermissionRequest::RESOLVE_HOST;
+  if (s == kResolveProxy)
+    return SocketPermissionRequest::RESOLVE_PROXY;
   return SocketPermissionRequest::NONE;
 }
 
@@ -55,6 +64,12 @@ const char* TypeToString(SocketPermissionRequest::OperationType type) {
       return kUDPBind;
     case SocketPermissionRequest::UDP_SEND_TO:
       return kUDPSendTo;
+    case SocketPermissionRequest::UDP_MULTICAST_MEMBERSHIP:
+      return kUDPMulticastMembership;
+    case SocketPermissionRequest::RESOLVE_HOST:
+      return kResolveHost;
+    case SocketPermissionRequest::RESOLVE_PROXY:
+      return kResolveProxy;
     default:
       return kInvalid;
   }
@@ -187,6 +202,7 @@ bool& SocketPermissionData::match_subdomains() {
   return match_subdomains_;
 }
 
+// TODO(ikarienator): Rewrite this method to support IPv6.
 bool SocketPermissionData::Parse(const std::string& permission) {
   do {
     pattern_.host.clear();
@@ -206,6 +222,13 @@ bool SocketPermissionData::Parse(const std::string& permission) {
 
     if (tokens.size() == 1)
       return true;
+
+    // Multicast membership, resolve proxy and resolve host permission strings
+    // do not carry an address.
+    if (pattern_.type == SocketPermissionRequest::UDP_MULTICAST_MEMBERSHIP ||
+        pattern_.type == SocketPermissionRequest::RESOLVE_PROXY ||
+        pattern_.type == SocketPermissionRequest::RESOLVE_HOST)
+      break;
 
     pattern_.host = tokens[1];
     if (!pattern_.host.empty()) {
@@ -249,6 +272,11 @@ const std::string& SocketPermissionData::GetAsString() const {
 
   spec_.reserve(64);
   spec_.append(TypeToString(pattern_.type));
+
+  if (pattern_.type == SocketPermissionRequest::UDP_MULTICAST_MEMBERSHIP ||
+      pattern_.type == SocketPermissionRequest::RESOLVE_PROXY ||
+      pattern_.type == SocketPermissionRequest::RESOLVE_HOST)
+    return spec_;
 
   if (match_subdomains_) {
     spec_.append(1, kColon).append(kWildcard);

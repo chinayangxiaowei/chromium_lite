@@ -7,11 +7,12 @@
 #include "base/basictypes.h"
 #include "base/debug/trace_event.h"
 #include "base/logging.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/ui/gtk/gtk_chrome_button.h"
 #include "chrome/browser/ui/gtk/gtk_theme_service.h"
 #include "chrome/browser/ui/gtk/gtk_util.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "content/public/browser/notification_source.h"
+#include "grit/theme_resources.h"
 #include "grit/ui_resources.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -36,8 +37,7 @@ CustomDrawButtonBase::CustomDrawButtonBase(GtkThemeService* theme_provider,
                                            int pressed_id,
                                            int hover_id,
                                            int disabled_id)
-    : background_image_(NULL),
-      paint_override_(-1),
+    : paint_override_(-1),
       normal_id_(normal_id),
       pressed_id_(pressed_id),
       hover_id_(hover_id),
@@ -355,10 +355,20 @@ gboolean CustomDrawButton::OnCustomExpose(GtkWidget* sender,
 }
 
 // static
-CustomDrawButton* CustomDrawButton::CloseButton(
+CustomDrawButton* CustomDrawButton::CloseButtonBar(
     GtkThemeService* theme_provider) {
-  CustomDrawButton* button = new CustomDrawButton(theme_provider, IDR_CLOSE_BAR,
-      IDR_CLOSE_BAR_P, IDR_CLOSE_BAR_H, 0, GTK_STOCK_CLOSE, GTK_ICON_SIZE_MENU);
+  CustomDrawButton* button = new CustomDrawButton(theme_provider,
+      IDR_CLOSE_1, IDR_CLOSE_1_P, IDR_CLOSE_1_H, 0,
+      GTK_STOCK_CLOSE, GTK_ICON_SIZE_MENU);
+  return button;
+}
+
+// static
+CustomDrawButton* CustomDrawButton::CloseButtonBubble(
+    GtkThemeService* theme_provider) {
+  CustomDrawButton* button = new CustomDrawButton(theme_provider,
+      IDR_CLOSE_2, IDR_CLOSE_2_P, IDR_CLOSE_2_H, 0,
+      GTK_STOCK_CLOSE, GTK_ICON_SIZE_MENU);
   return button;
 }
 

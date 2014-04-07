@@ -6,7 +6,7 @@
 
 #include "base/bind.h"
 #include "base/logging.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "build/build_config.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/shell_dialogs/select_file_dialog_factory.h"
@@ -101,7 +101,7 @@ scoped_refptr<SelectFileDialog> SelectFileDialog::Create(
 
 void SelectFileDialog::SelectFile(
     Type type,
-    const string16& title,
+    const base::string16& title,
     const base::FilePath& default_path,
     const FileTypeInfo* file_types,
     int file_type_index,
@@ -117,9 +117,9 @@ void SelectFileDialog::SelectFile(
     // Inform the listener that no file was selected.
     // Post a task rather than calling FileSelectionCanceled directly to ensure
     // that the listener is called asynchronously.
-    MessageLoop::current()->PostTask(
-        FROM_HERE, base::Bind(&SelectFileDialog::CancelFileSelection, this,
-                              params));
+    base::MessageLoop::current()->PostTask(
+        FROM_HERE,
+        base::Bind(&SelectFileDialog::CancelFileSelection, this, params));
     return;
   }
 

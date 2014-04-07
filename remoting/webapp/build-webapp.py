@@ -56,7 +56,7 @@ def createZip(zip_path, directory):
 
 
 def replaceUrl(destination, url_name, url_value):
-  """Updates a URL in both plugin_settings.json and manifest.js."""
+  """Updates a URL in both plugin_settings.js and manifest.json."""
   findAndReplace(os.path.join(destination, 'plugin_settings.js'),
                  "'" + url_name + "'", "'" + url_value + "'")
   findAndReplace(os.path.join(destination, 'manifest.json'),
@@ -124,21 +124,23 @@ def buildWebApp(buildtype, version, mimetype, destination, zip_path, plugin,
   # Copy all the locales, preserving directory structure
   destination_locales = os.path.join(destination, "_locales")
   os.mkdir(destination_locales , 0775)
-  locale_dir = "/_locales/"
+  remoting_locales = os.path.join(destination, "remoting_locales")
+  os.mkdir(remoting_locales , 0775)
   for current_locale in locales:
-    pos = current_locale.find(locale_dir)
-    if (pos == -1):
-      raise Exception("Missing locales directory in " + current_locale)
-    subtree = current_locale[pos + len(locale_dir):]
-    pos = subtree.find("/")
-    if (pos == -1):
-      raise Exception("Malformed locale: " + current_locale)
-    locale_id = subtree[:pos]
-    messages = subtree[pos+1:]
-    destination_dir = os.path.join(destination_locales, locale_id)
-    destination_file = os.path.join(destination_dir, messages)
-    os.mkdir(destination_dir, 0775)
-    shutil.copy2(current_locale, destination_file)
+    extension = os.path.splitext(current_locale)[1]
+    if extension == '.json':
+      locale_id = os.path.split(os.path.split(current_locale)[0])[1]
+      destination_dir = os.path.join(destination_locales, locale_id)
+      destination_file = os.path.join(destination_dir,
+                                      os.path.split(current_locale)[1])
+      os.mkdir(destination_dir, 0775)
+      shutil.copy2(current_locale, destination_file)
+    elif extension == '.pak':
+      destination_file = os.path.join(remoting_locales,
+                                      os.path.split(current_locale)[1])
+      shutil.copy2(current_locale, destination_file)
+    else:
+      raise Exception("Unknown extension: " + current_locale);
 
   # Create fake plugin files to appease the manifest checker.
   # It requires that if there is a plugin listed in the manifest that
@@ -168,16 +170,16 @@ def buildWebApp(buildtype, version, mimetype, destination, zip_path, plugin,
     else:
       shutil.copy2(plugin, newPluginPath)
 
-  # Strip the linux build.
-  if ((platform.system() == 'Linux') and (buildtype == 'Official')):
-    subprocess.call(["strip", newPluginPath])
+    # Strip the linux build.
+    if ((platform.system() == 'Linux') and (buildtype == 'Official')):
+      subprocess.call(["strip", newPluginPath])
 
   # Patch the files, if necessary. Do this before updating any placeholders
   # in case any of the diff contexts refer to the placeholders.
   for patch in patches:
     patchfile = os.path.join(os.getcwd(), patch)
     if subprocess.call(['patch', '-d', destination, '-i', patchfile,
-                        '-p1']) != 0:
+                        '-p1', '-F0', '-s']) != 0:
       print 'Patch ' + patch + ' failed to apply.'
       return 1
 
@@ -242,6 +244,8 @@ def buildWebApp(buildtype, version, mimetype, destination, zip_path, plugin,
   else:
     oauth2RedirectUrlJs = "'" + oauth2RedirectBaseUrlJs + "/dev'"
     oauth2RedirectUrlJson = oauth2RedirectBaseUrlJson + '/dev*'
+  thirdPartyAuthUrlJs = "'" + oauth2RedirectBaseUrlJs + "/thirdpartyauth'"
+  thirdPartyAuthUrlJson = oauth2RedirectBaseUrlJson + '/thirdpartyauth*'
   findAndReplace(os.path.join(destination, 'plugin_settings.js'),
                  "'TALK_GADGET_URL'", "'" + talkGadgetBaseUrl + "'")
   findAndReplace(os.path.join(destination, 'plugin_settings.js'),
@@ -264,6 +268,12 @@ def buildWebApp(buildtype, version, mimetype, destination, zip_path, plugin,
                  "Boolean('XMPP_SERVER_USE_TLS')", xmppServerUseTls)
   findAndReplace(os.path.join(destination, 'plugin_settings.js'),
                  "'DIRECTORY_BOT_JID'", "'" + directoryBotJid + "'")
+  findAndReplace(os.path.join(destination, 'plugin_settings.js'),
+                 "'THIRD_PARTY_AUTH_REDIRECT_URL'",
+                 thirdPartyAuthUrlJs)
+  findAndReplace(os.path.join(destination, 'manifest.json'),
+                 "THIRD_PARTY_AUTH_REDIRECT_URL",
+                 thirdPartyAuthUrlJson)
 
   # Set the correct API keys.
   # For overriding the client ID/secret via env vars, see google_api_keys.py.
@@ -276,6 +286,14 @@ def buildWebApp(buildtype, version, mimetype, destination, zip_path, plugin,
   findAndReplace(os.path.join(destination, 'plugin_settings.js'),
                  "'API_CLIENT_SECRET'",
                  "'" + apiClientSecret + "'")
+
+  # Use a consistent extension id for unofficial builds.
+  if buildtype != 'Official':
+    manifestKey = '"key": "remotingdevbuild",'
+  else:
+    manifestKey = ''
+  findAndReplace(os.path.join(destination, 'manifest.json'),
+                 'MANIFEST_KEY_FOR_UNOFFICIAL_BUILD', manifestKey)
 
   # Make the zipfile.
   createZip(zip_path, destination)

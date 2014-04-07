@@ -5,9 +5,9 @@
 #include "content/public/test/test_utils.h"
 
 #include "base/bind.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/render_view_host.h"
@@ -34,7 +34,8 @@ static void DeferredQuitRunLoop(const base::Closure& quit_task,
   if (num_quit_deferrals <= 0) {
     quit_task.Run();
   } else {
-    MessageLoop::current()->PostTask(FROM_HERE,
+    base::MessageLoop::current()->PostTask(
+        FROM_HERE,
         base::Bind(&DeferredQuitRunLoop, quit_task, num_quit_deferrals - 1));
   }
 }
@@ -63,7 +64,7 @@ class ScriptCallback {
 void ScriptCallback::ResultCallback(const base::Value* result) {
   if (result)
     result_.reset(result->DeepCopy());
-  MessageLoop::current()->Quit();
+  base::MessageLoop::current()->Quit();
 }
 
 }  // namespace
@@ -74,7 +75,8 @@ void RunMessageLoop() {
 }
 
 void RunThisRunLoop(base::RunLoop* run_loop) {
-  MessageLoop::ScopedNestableTaskAllower allow(MessageLoop::current());
+  base::MessageLoop::ScopedNestableTaskAllower allow(
+      base::MessageLoop::current());
 
   // If we're running inside a browser test, we might need to allow the test
   // launcher to do extra work before/after running a nested message loop.
@@ -90,8 +92,8 @@ void RunThisRunLoop(base::RunLoop* run_loop) {
 }
 
 void RunAllPendingInMessageLoop() {
-  MessageLoop::current()->PostTask(FROM_HERE,
-                                   MessageLoop::QuitWhenIdleClosure());
+  base::MessageLoop::current()->PostTask(
+      FROM_HERE, base::MessageLoop::QuitWhenIdleClosure());
   RunMessageLoop();
 }
 
@@ -127,7 +129,7 @@ scoped_ptr<base::Value> ExecuteScriptAndGetValue(
       string16(),  // frame_xpath,
       UTF8ToUTF16(script),
       base::Bind(&ScriptCallback::ResultCallback, base::Unretained(&observer)));
-  MessageLoop* loop = MessageLoop::current();
+  base::MessageLoop* loop = base::MessageLoop::current();
   loop->Run();
   return observer.result().Pass();
 }
@@ -174,6 +176,16 @@ WindowedNotificationObserver::WindowedNotificationObserver(
   registrar_.Add(this, notification_type, source);
 }
 
+WindowedNotificationObserver::WindowedNotificationObserver(
+    int notification_type,
+    const ConditionTestCallback& callback)
+    : seen_(false),
+      running_(false),
+      callback_(callback),
+      source_(NotificationService::AllSources()) {
+  registrar_.Add(this, notification_type, source_);
+}
+
 WindowedNotificationObserver::~WindowedNotificationObserver() {}
 
 void WindowedNotificationObserver::Wait() {
@@ -192,6 +204,9 @@ void WindowedNotificationObserver::Observe(
     const NotificationDetails& details) {
   source_ = source;
   details_ = details;
+  if (!callback_.is_null() && !callback_.Run())
+    return;
+
   seen_ = true;
   if (!running_)
     return;

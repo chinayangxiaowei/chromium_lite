@@ -5,9 +5,9 @@
 #ifndef CHROME_BROWSER_CHROMEOS_INPUT_METHOD_INPUT_METHOD_ENGINE_IBUS_H_
 #define CHROME_BROWSER_CHROMEOS_INPUT_METHOD_INPUT_METHOD_ENGINE_IBUS_H_
 
+#include <map>
 #include <string>
 #include <vector>
-#include <map>
 #include "chrome/browser/chromeos/input_method/input_method_engine.h"
 #include "chromeos/dbus/ibus/ibus_engine_factory_service.h"
 #include "chromeos/dbus/ibus/ibus_engine_service.h"
@@ -37,11 +37,13 @@ class InputMethodEngineIBus : public InputMethodEngine,
       const char* extension_id,
       const char* engine_id,
       const char* description,
-      const char* language,
+      const std::vector<std::string>& languages,
       const std::vector<std::string>& layouts,
+      const GURL& options_page,
       std::string* error);
 
   // InputMethodEngine overrides.
+  virtual void StartIme() OVERRIDE;
   virtual bool SetComposition(int context_id,
                               const char* text,
                               int selection_start,
@@ -59,6 +61,8 @@ class InputMethodEngineIBus : public InputMethodEngine,
   virtual void SetCandidateWindowPageSize(int size) OVERRIDE;
   virtual void SetCandidateWindowAuxText(const char* text) OVERRIDE;
   virtual void SetCandidateWindowAuxTextVisible(bool visible) OVERRIDE;
+  virtual void SetCandidateWindowPosition(
+      CandidateWindowPosition position) OVERRIDE;
   virtual bool SetCandidates(int context_id,
                              const std::vector<Candidate>& candidates,
                              std::string* error) OVERRIDE;
@@ -142,9 +146,8 @@ class InputMethodEngineIBus : public InputMethodEngine,
   // This IME ID in ibus.
   std::string ibus_id_;
 
-  // The current object path and it's numerical id.
+  // The current object path.
   dbus::ObjectPath object_path_;
-  int current_object_path_;
 
   // The current auxialy text and it's visiblity.
   scoped_ptr<IBusText> aux_text_;

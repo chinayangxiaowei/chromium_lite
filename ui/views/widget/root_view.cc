@@ -7,7 +7,7 @@
 #include <algorithm>
 
 #include "base/logging.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "ui/base/accessibility/accessible_view_state.h"
 #include "ui/base/dragdrop/drag_drop_types.h"
 #include "ui/base/events/event.h"
@@ -18,6 +18,7 @@
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
+#include "ui/views/widget/widget_deletion_observer.h"
 
 namespace views {
 namespace internal {
@@ -46,7 +47,7 @@ class MouseEnterExitEvent : public ui::MouseEvent {
 }  // namespace
 
 // static
-const char RootView::kViewClassName[] = "views/RootView";
+const char RootView::kViewClassName[] = "RootView";
 
 ////////////////////////////////////////////////////////////////////////////////
 // RootView, public:
@@ -65,7 +66,7 @@ RootView::RootView(Widget* widget)
       touch_pressed_handler_(NULL),
       gesture_handler_(NULL),
       scroll_gesture_handler_(NULL),
-      ALLOW_THIS_IN_INITIALIZER_LIST(focus_search_(this, false, false)),
+      focus_search_(this, false, false),
       focus_traversable_parent_(NULL),
       focus_traversable_parent_view_(NULL),
       event_dispatch_target_(NULL) {
@@ -116,7 +117,8 @@ void RootView::DispatchKeyEvent(ui::KeyEvent* event) {
   // keyboard.
   if (v && v->enabled() && ((event->key_code() == ui::VKEY_APPS) ||
      (event->key_code() == ui::VKEY_F10 && event->IsShiftDown()))) {
-    v->ShowContextMenu(v->GetKeyboardContextMenuLocation(), false);
+    v->ShowContextMenu(v->GetKeyboardContextMenuLocation(),
+                       ui::MENU_SOURCE_KEYBOARD);
     event->StopPropagation();
     return;
   }
@@ -134,27 +136,10 @@ void RootView::DispatchScrollEvent(ui::ScrollEvent* event) {
   if (event->handled() || event->type() != ui::ET_SCROLL)
     return;
 
-  // Convert unprocessed scroll events into mouse-wheel events. Note that
-  // wheel events are normally sent to the focused view. However, if the focused
-  // view does not process these wheel events, then dispatch them to the view
-  // under the cursor.
+  // Convert unprocessed scroll events into mouse-wheel events.
   ui::MouseWheelEvent wheel(*event);
-  if (OnMouseWheel(wheel)) {
+  if (OnMouseWheel(wheel))
     event->SetHandled();
-  } else {
-    View* focused_view =
-        GetFocusManager() ? GetFocusManager()->GetFocusedView() : NULL;
-    View* v = GetEventHandlerForPoint(wheel.location());
-    if (v != focused_view) {
-      for (; v && v != this; v = v->parent()) {
-        DispatchEventToTarget(v, &wheel);
-        if (wheel.handled()) {
-          event->SetHandled();
-          break;
-        }
-      }
-    }
-  }
 }
 
 void RootView::DispatchTouchEvent(ui::TouchEvent* event) {
@@ -379,7 +364,7 @@ bool RootView::IsDrawn() const {
   return visible();
 }
 
-std::string RootView::GetClassName() const {
+const char* RootView::GetClassName() const {
   return kViewClassName;
 }
 
@@ -433,7 +418,12 @@ bool RootView::OnMousePressed(const ui::MouseEvent& event) {
       mouse_pressed_event.set_flags(event.flags() & ~ui::EF_IS_DOUBLE_CLICK);
 
     drag_info_.Reset();
-    DispatchEventToTarget(mouse_pressed_handler_, &mouse_pressed_event);
+    {
+      WidgetDeletionObserver widget_deletion_observer(widget_);
+      DispatchEventToTarget(mouse_pressed_handler_, &mouse_pressed_event);
+      if (!widget_deletion_observer.IsWidgetAlive())
+        return mouse_pressed_event.handled();
+    }
 
     // The view could have removed itself from the tree when handling
     // OnMousePressed().  In this case, the removal notification will have
@@ -581,7 +571,7 @@ void RootView::OnMouseExited(const ui::MouseEvent& event) {
 }
 
 bool RootView::OnMouseWheel(const ui::MouseWheelEvent& event) {
-  for (View* v = GetFocusManager() ? GetFocusManager()->GetFocusedView() : NULL;
+  for (View* v = GetEventHandlerForPoint(event.location());
        v && v != this && !event.handled(); v = v->parent())
     DispatchEventToTarget(v, const_cast<ui::MouseWheelEvent*>(&event));
   return event.handled();
@@ -601,29 +591,45 @@ void RootView::GetAccessibleState(ui::AccessibleViewState* state) {
   state->role = widget_->widget_delegate()->GetAccessibleWindowRole();
 }
 
-void RootView::ReorderChildLayers(ui::Layer* parent_layer) {
-  View::ReorderChildLayers(parent_layer);
+void RootView::UpdateParentLayer() {
+  if (layer())
+    ReparentLayer(gfx::Vector2d(GetMirroredX(), y()), widget_->GetLayer());
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 // RootView, protected:
 
-void RootView::ViewHierarchyChanged(bool is_add, View* parent, View* child) {
-  widget_->ViewHierarchyChanged(is_add, parent, child);
+void RootView::ViewHierarchyChanged(
+    const ViewHierarchyChangedDetails& details) {
+  widget_->ViewHierarchyChanged(details);
 
-  if (!is_add) {
-    if (!explicit_mouse_handler_ && mouse_pressed_handler_ == child)
+  if (!details.is_add) {
+    if (!explicit_mouse_handler_ && mouse_pressed_handler_ == details.child)
       mouse_pressed_handler_ = NULL;
-    if (mouse_move_handler_ == child)
+    if (mouse_move_handler_ == details.child)
       mouse_move_handler_ = NULL;
-    if (touch_pressed_handler_ == child)
+    if (touch_pressed_handler_ == details.child)
       touch_pressed_handler_ = NULL;
-    if (gesture_handler_ == child)
+    if (gesture_handler_ == details.child)
       gesture_handler_ = NULL;
-    if (scroll_gesture_handler_ == child)
+    if (scroll_gesture_handler_ == details.child)
       scroll_gesture_handler_ = NULL;
-    if (event_dispatch_target_ == child)
+    if (event_dispatch_target_ == details.child)
       event_dispatch_target_ = NULL;
+  }
+}
+
+void RootView::VisibilityChanged(View* /*starting_from*/, bool is_visible) {
+  if (!is_visible) {
+    // When the root view is being hidden (e.g. when widget is minimized)
+    // handlers are reset, so that after it is reshown, events are not captured
+    // by old handlers.
+    mouse_pressed_handler_ = NULL;
+    mouse_move_handler_ = NULL;
+    touch_pressed_handler_ = NULL;
+    gesture_handler_ = NULL;
+    scroll_gesture_handler_ = NULL;
+    event_dispatch_target_ = NULL;
   }
 }
 
@@ -641,8 +647,8 @@ void RootView::OnPaint(gfx::Canvas* canvas) {
 gfx::Vector2d RootView::CalculateOffsetToAncestorWithLayer(
     ui::Layer** layer_parent) {
   gfx::Vector2d offset(View::CalculateOffsetToAncestorWithLayer(layer_parent));
-  if (!layer())
-    offset += widget_->CalculateOffsetToAncestorWithLayer(layer_parent);
+  if (!layer() && layer_parent)
+    *layer_parent = widget_->GetLayer();
   return offset;
 }
 

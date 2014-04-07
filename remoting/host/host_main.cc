@@ -13,12 +13,15 @@
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
-#include "base/stringprintf.h"
+#include "base/strings/string_util.h"
 #include "base/strings/stringize_macros.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "remoting/base/breakpad.h"
+#include "remoting/base/resources.h"
 #include "remoting/host/host_exit_codes.h"
 #include "remoting/host/logging.h"
+#include "remoting/host/setup/native_messaging_host.h"
 #include "remoting/host/usage_stats_consent.h"
 
 #if defined(OS_MACOSX)
@@ -33,32 +36,23 @@
 namespace remoting {
 
 // Known entry points.
-int HostProcessMain();
-
-#if defined(REMOTING_MULTI_PROCESS)
 int DaemonProcessMain();
 int DesktopProcessMain();
-#endif  // defined(REMOTING_MULTI_PROCESS)
-
-#if defined(OS_WIN)
 int ElevatedControllerMain();
+int HostProcessMain();
 int RdpDesktopSessionMain();
-#endif  // defined(OS_WIN)
 
 const char kElevateSwitchName[] = "elevate";
 const char kProcessTypeSwitchName[] = "type";
 
-const char kProcessTypeHost[] = "host";
-
-#if defined(REMOTING_MULTI_PROCESS)
+const char kProcessTypeController[] = "controller";
 const char kProcessTypeDaemon[] = "daemon";
 const char kProcessTypeDesktop[] = "desktop";
-#endif  // defined(REMOTING_MULTI_PROCESS)
-
-#if defined(OS_WIN)
-const char kProcessTypeController[] = "controller";
+const char kProcessTypeHost[] = "host";
+const char kProcessTypeNativeMessagingHost[] = "native_messaging_host";
 const char kProcessTypeRdpDesktopSession[] = "rdp_desktop_session";
-#endif  // defined(OS_WIN)
+
+const char kExtensionOriginPrefix[] = "chrome-extension://";
 
 namespace {
 
@@ -94,8 +88,7 @@ void Usage(const base::FilePath& program_name) {
 int RunElevated() {
   const CommandLine::SwitchMap& switches =
       CommandLine::ForCurrentProcess()->GetSwitches();
-  const CommandLine::StringVector& args =
-      CommandLine::ForCurrentProcess()->GetArgs();
+  CommandLine::StringVector args = CommandLine::ForCurrentProcess()->GetArgs();
 
   // Create the child process command line by copying switches from the current
   // command line.
@@ -125,36 +118,55 @@ int RunElevated() {
   info.nShow = SW_SHOWNORMAL;
 
   if (!ShellExecuteEx(&info)) {
-    return GetLastError();
+    DWORD exit_code = GetLastError();
+    LOG_GETLASTERROR(ERROR) << "Unable to launch '" << binary.value() << "'";
+    return exit_code;
   }
 
   return kSuccessExitCode;
 }
 
-#endif  // defined(OS_WIN)
+#else  // !defined(OS_WIN)
+
+// Fake entry points that exist only on Windows.
+int DaemonProcessMain() {
+  NOTREACHED();
+  return kInitializationFailed;
+}
+
+int DesktopProcessMain() {
+  NOTREACHED();
+  return kInitializationFailed;
+}
+
+int ElevatedControllerMain() {
+  NOTREACHED();
+  return kInitializationFailed;
+}
+
+int RdpDesktopSessionMain() {
+  NOTREACHED();
+  return kInitializationFailed;
+}
+
+#endif  // !defined(OS_WIN)
 
 // Select the entry point corresponding to the process type.
 MainRoutineFn SelectMainRoutine(const std::string& process_type) {
   MainRoutineFn main_routine = NULL;
 
-#if defined(REMOTING_MULTI_PROCESS)
   if (process_type == kProcessTypeDaemon) {
     main_routine = &DaemonProcessMain;
   } else if (process_type == kProcessTypeDesktop) {
     main_routine = &DesktopProcessMain;
-  }
-#endif  // defined(REMOTING_MULTI_PROCESS)
-
-#if defined(OS_WIN)
-  if (process_type == kProcessTypeController) {
+  } else if (process_type == kProcessTypeController) {
     main_routine = &ElevatedControllerMain;
   } else if (process_type == kProcessTypeRdpDesktopSession) {
     main_routine = &RdpDesktopSessionMain;
-  }
-#endif  // defined(OS_WIN)
-
-  if (process_type == kProcessTypeHost) {
+  } else if (process_type == kProcessTypeHost) {
     main_routine = &HostProcessMain;
+  } else if (process_type == kProcessTypeNativeMessagingHost) {
+    main_routine = &NativeMessagingHostMain;
   }
 
   return main_routine;
@@ -217,6 +229,21 @@ int HostMain(int argc, char** argv) {
   std::string process_type = kProcessTypeHost;
   if (command_line->HasSwitch(kProcessTypeSwitchName)) {
     process_type = command_line->GetSwitchValueASCII(kProcessTypeSwitchName);
+  } else {
+    // Assume that it is the native messaging host starting if "--type" is
+    // missing and the first argument looks like an origin that represents
+    // an extension.
+    CommandLine::StringVector args = command_line->GetArgs();
+    if (!args.empty()) {
+#if defined(OS_WIN)
+      std::string origin = UTF16ToUTF8(args[0]);
+#else
+      std::string origin = args[0];
+#endif
+      if (StartsWithASCII(origin, kExtensionOriginPrefix, true)) {
+        process_type = kProcessTypeNativeMessagingHost;
+      }
+    }
   }
 
   MainRoutineFn main_routine = SelectMainRoutine(process_type);
@@ -227,11 +254,16 @@ int HostMain(int argc, char** argv) {
     return kUsageExitCode;
   }
 
+  remoting::LoadResources("");
+
   // Invoke the entry point.
   int exit_code = main_routine();
   if (exit_code == kUsageExitCode) {
     Usage(command_line->GetProgram());
   }
+
+  remoting::UnloadResources();
+
   return exit_code;
 }
 

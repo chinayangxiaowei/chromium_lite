@@ -4,8 +4,7 @@
 
 #include "chrome/browser/ui/views/infobars/translate_infobar_base.h"
 
-#include "base/utf_string_conversions.h"
-#include "chrome/browser/infobars/infobar.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/translate/translate_infobar_delegate.h"
 #include "chrome/browser/ui/views/infobars/after_translate_infobar.h"
 #include "chrome/browser/ui/views/infobars/before_translate_infobar.h"
@@ -17,6 +16,7 @@
 #include "ui/views/controls/button/menu_button.h"
 #include "ui/views/controls/label.h"
 
+
 // TranslateInfoBarDelegate ---------------------------------------------------
 
 InfoBar* TranslateInfoBarDelegate::CreateInfoBar(InfoBarService* owner) {
@@ -27,20 +27,11 @@ InfoBar* TranslateInfoBarDelegate::CreateInfoBar(InfoBarService* owner) {
   return new TranslateMessageInfoBar(owner, this);
 }
 
+
 // TranslateInfoBarBase -------------------------------------------------------
 
 // static
 const int TranslateInfoBarBase::kButtonInLabelSpacing = 5;
-
-TranslateInfoBarBase::TranslateInfoBarBase(InfoBarService* owner,
-                                           TranslateInfoBarDelegate* delegate)
-    : InfoBarView(owner, delegate),
-      error_background_(GetInfoBarTopColor(InfoBarDelegate::WARNING_TYPE),
-                        GetInfoBarBottomColor(InfoBarDelegate::WARNING_TYPE)) {
-}
-
-TranslateInfoBarBase::~TranslateInfoBarBase() {
-}
 
 void TranslateInfoBarBase::UpdateLanguageButtonText(views::MenuButton* button,
                                                     const string16& text) {
@@ -51,10 +42,19 @@ void TranslateInfoBarBase::UpdateLanguageButtonText(views::MenuButton* button,
   SchedulePaint();
 }
 
-void TranslateInfoBarBase::ViewHierarchyChanged(bool is_add,
-                                                View* parent,
-                                                View* child) {
-  if (is_add && (child == this) && (background_color_animation_ == NULL)) {
+TranslateInfoBarBase::TranslateInfoBarBase(InfoBarService* owner,
+                                           TranslateInfoBarDelegate* delegate)
+    : InfoBarView(owner, delegate),
+      error_background_(InfoBarDelegate::WARNING_TYPE) {
+}
+
+TranslateInfoBarBase::~TranslateInfoBarBase() {
+}
+
+void TranslateInfoBarBase::ViewHierarchyChanged(
+    const ViewHierarchyChangedDetails& details) {
+  if (details.is_add && (details.child == this) &&
+      (background_color_animation_ == NULL)) {
     background_color_animation_.reset(new ui::SlideAnimation(this));
     background_color_animation_->SetTweenType(ui::Tween::LINEAR);
     background_color_animation_->SetSlideDuration(500);
@@ -71,7 +71,7 @@ void TranslateInfoBarBase::ViewHierarchyChanged(bool is_add,
 
   // This must happen after adding all other children so InfoBarView can ensure
   // the close button is the last child.
-  InfoBarView::ViewHierarchyChanged(is_add, parent, child);
+  InfoBarView::ViewHierarchyChanged(details);
 }
 
 TranslateInfoBarDelegate* TranslateInfoBarBase::GetDelegate() {
@@ -105,7 +105,7 @@ void TranslateInfoBarBase::AnimationProgressed(const ui::Animation* animation) {
 }
 
 const views::Background& TranslateInfoBarBase::GetBackground() {
-  return GetDelegate()->IsError() ? error_background_ : *background();
+  return GetDelegate()->is_error() ? error_background_ : *background();
 }
 
 void TranslateInfoBarBase::FadeBackground(gfx::Canvas* canvas,

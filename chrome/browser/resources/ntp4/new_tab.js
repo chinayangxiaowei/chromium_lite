@@ -110,25 +110,22 @@ cr.define('ntp', function() {
     }
   };
 
-  function gotShouldShowApps(shouldShowApps) {
-    if (shouldShowApps != loadTimeData.getBoolean('showApps')) {
-      // TODO(jeremya): update the UI in-place instead of reloading.
-      window.location.reload();
-      return;
-    }
-  }
-
   /**
    * Invoked at startup once the DOM is available to initialize the app.
    */
   function onLoad() {
-    // This will end up calling ntp.gotShouldShowApps.
-    chrome.send('getShouldShowApps');
     sectionsToWaitFor = 0;
     if (loadTimeData.getBoolean('showMostvisited'))
       sectionsToWaitFor++;
-    if (loadTimeData.getBoolean('showApps'))
+    if (loadTimeData.getBoolean('showApps')) {
       sectionsToWaitFor++;
+      if (loadTimeData.getBoolean('showAppLauncherPromo')) {
+        $('app-launcher-promo-close-button').addEventListener('click',
+            function() { chrome.send('stopShowingAppLauncherPromo'); });
+        $('apps-promo-learn-more').addEventListener('click',
+            function() { chrome.send('onLearnMore'); });
+      }
+    }
     if (loadTimeData.getBoolean('isDiscoveryInNTPEnabled'))
       sectionsToWaitFor++;
     measureNavDots();
@@ -188,7 +185,7 @@ cr.define('ntp', function() {
       var webStoreIcon = $('chrome-web-store-link');
       // Not all versions of the NTP have a footer, so this may not exist.
       if (webStoreIcon)
-        webStoreIcon.classList.add('invisible');
+        webStoreIcon.hidden = true;
     } else {
       var webStoreLink = loadTimeData.getString('webStoreLink');
       var url = appendParam(webStoreLink, 'utm_source', 'chrome-ntp-launcher');
@@ -249,7 +246,8 @@ cr.define('ntp', function() {
 
     var loginContainer = getRequiredElement('login-container');
     loginContainer.addEventListener('click', showSyncLoginUI);
-    chrome.send('initializeSyncLogin');
+    if (loadTimeData.getBoolean('shouldShowSyncLogin'))
+      chrome.send('initializeSyncLogin');
 
     doWhenAllSectionsReady(function() {
       // Tell the slider about the pages.
@@ -289,6 +287,7 @@ cr.define('ntp', function() {
     });
 
     preventDefaultOnPoundLinkClicks();  // From webui/js/util.js.
+    cr.ui.FocusManager.disableMouseFocusOnButtons();
   }
 
   /**
@@ -368,9 +367,9 @@ cr.define('ntp', function() {
     var menu = $('footer-menu-container');
     var logo = $('logo-img');
     if (menu.clientWidth > logo.clientWidth)
-      logo.style.width = menu.clientWidth + 'px';
+      logo.style.WebkitFlex = '0 1 ' + menu.clientWidth + 'px';
     else
-      menu.style.width = logo.clientWidth + 'px';
+      menu.style.WebkitFlex = '0 1 ' + logo.clientWidth + 'px';
   }
 
   function themeChanged(opt_hasAttribution) {
@@ -394,8 +393,6 @@ cr.define('ntp', function() {
   function updateAttribution() {
     var attribution = $('attribution');
     if (document.documentElement.getAttribute('hasattribution') == 'true') {
-      $('attribution-img').src =
-          'chrome://theme/IDR_THEME_NTP_ATTRIBUTION?' + Date.now();
       attribution.hidden = false;
     } else {
       attribution.hidden = true;
@@ -525,6 +522,7 @@ cr.define('ntp', function() {
 
   function setRecentlyClosedTabs(dataItems) {
     $('recently-closed-menu-button').dataItems = dataItems;
+    layoutFooter();
   }
 
   function setMostVisitedPages(data, hasBlacklistedUrls) {
@@ -584,8 +582,10 @@ cr.define('ntp', function() {
     } else if (loginBubble) {
       loginBubble.reposition();
     }
-    if (otherSessionsButton)
+    if (otherSessionsButton) {
       otherSessionsButton.updateSignInState(isUserSignedIn);
+      layoutFooter();
+    }
   }
 
   /**
@@ -627,6 +627,11 @@ cr.define('ntp', function() {
     return newTabView.appsPrefChangedCallback.apply(newTabView, arguments);
   }
 
+  function appLauncherPromoPrefChangeCallback() {
+    return newTabView.appLauncherPromoPrefChangeCallback.apply(newTabView,
+                                                               arguments);
+  }
+
   function appsReordered() {
     return newTabView.appsReordered.apply(newTabView, arguments);
   }
@@ -636,8 +641,10 @@ cr.define('ntp', function() {
   }
 
   function setForeignSessions(sessionList, isTabSyncEnabled) {
-    if (otherSessionsButton)
+    if (otherSessionsButton) {
       otherSessionsButton.setForeignSessions(sessionList, isTabSyncEnabled);
+      layoutFooter();
+    }
   }
 
   function getAppsCallback() {
@@ -670,12 +677,12 @@ cr.define('ntp', function() {
     appMoved: appMoved,
     appRemoved: appRemoved,
     appsPrefChangeCallback: appsPrefChangeCallback,
+    appLauncherPromoPrefChangeCallback: appLauncherPromoPrefChangeCallback,
     enterRearrangeMode: enterRearrangeMode,
     getAppsCallback: getAppsCallback,
     getAppsPageIndex: getAppsPageIndex,
     getCardSlider: getCardSlider,
     onLoad: onLoad,
-    gotShouldShowApps: gotShouldShowApps,
     leaveRearrangeMode: leaveRearrangeMode,
     logTimeToClick: logTimeToClick,
     NtpFollowAction: NtpFollowAction,

@@ -13,10 +13,10 @@
 #include "base/basictypes.h"
 #include "base/gtest_prod_util.h"
 #include "base/threading/non_thread_safe.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "net/base/net_export.h"
-#include "net/base/x509_certificate.h"
-#include "net/base/x509_cert_types.h"
+#include "net/cert/x509_cert_types.h"
+#include "net/cert/x509_certificate.h"
 
 namespace net {
 
@@ -93,8 +93,6 @@ class NET_EXPORT TransportSecurityState
     // hard-fail behavior (e.g. if HSTS is set for the domain)
     bool ShouldSSLErrorsBeFatal() const;
 
-    bool Equals(const DomainState& other) const;
-
     UpgradeMode upgrade_mode;
 
     // The absolute time (UTC) when this DomainState was first created.
@@ -106,13 +104,13 @@ class NET_EXPORT TransportSecurityState
     // UPGRADE_ALWAYS, downgrades to UPGRADE_NEVER.
     base::Time upgrade_expiry;
 
-    // Are subdomains subject to this DomainState?
-    //
-    // TODO(palmer): Decide if we should have separate |pin_subdomains| and
-    // |upgrade_subdomains|. Alternately, and perhaps better, is to separate
-    // DomainState into UpgradeState and PinState (requiring also changing the
-    // serialization format?).
-    bool include_subdomains;
+    // Are subdomains subject to this DomainState, for the purposes of
+    // upgrading to HTTPS?
+    bool sts_include_subdomains;
+
+    // Are subdomains subject to this DomainState, for the purposes of
+    // Pin Validation?
+    bool pkp_include_subdomains;
 
     // Optional; hashes of static pinned SubjectPublicKeyInfos. Unless both
     // are empty, at least one of |static_spki_hashes| and
@@ -138,7 +136,8 @@ class NET_EXPORT TransportSecurityState
     // The following members are not valid when stored in |enabled_hosts_|:
 
     // The domain which matched during a search for this DomainState entry.
-    // Updated by |GetDomainState| and |GetStaticDomainState|.
+    // Updated by |GetDomainState|, |GetDynamicDomainState|, and
+    // |GetStaticDomainState|.
     std::string domain;
   };
 
@@ -179,14 +178,6 @@ class NET_EXPORT TransportSecurityState
   // TransportSecurityState.
   void AddOrUpdateEnabledHosts(const std::string& hashed_host,
                                const DomainState& state);
-
-  // Inserts |state| into |forced_hosts_| under the key |hashed_host|.
-  // |hashed_host| is already in the internal representation
-  // HashHost(CanonicalizeHost(host)).
-  // Note: This is only used for serializing/deserializing the
-  // TransportSecurityState.
-  void AddOrUpdateForcedHosts(const std::string& hashed_host,
-                              const DomainState& state);
 
   // Deletes all dynamic data (e.g. HSTS or HPKP data) created since a given
   // time.
@@ -271,6 +262,8 @@ class NET_EXPORT TransportSecurityState
 
  private:
   friend class TransportSecurityStateTest;
+  FRIEND_TEST_ALL_PREFIXES(HttpSecurityHeadersTest,
+                           UpdateDynamicPKPOnly);
 
   typedef std::map<std::string, DomainState> DomainStateMap;
 
@@ -308,12 +301,22 @@ class NET_EXPORT TransportSecurityState
                             bool sni_enabled,
                             DomainState* result);
 
+  // Returns true and updates |*result| iff there is a dynamic DomainState for
+  // |host|.
+  //
+  // |GetDynamicDomainState| is identical to |GetDomainState| except that it
+  // searches only the dynamically-added transport security state, ignoring
+  // all statically-defined DomainStates.
+  //
+  // If |host| matches both an exact entry and is a subdomain of another
+  // entry, the exact match determines the return value.
+  //
+  // Note that this method is not const because it opportunistically removes
+  // entries that have expired.
+  bool GetDynamicDomainState(const std::string& host, DomainState* result);
+
   // The set of hosts that have enabled TransportSecurity.
   DomainStateMap enabled_hosts_;
-
-  // Extra entries, provided by the user at run-time, to treat as if they
-  // were static.
-  DomainStateMap forced_hosts_;
 
   Delegate* delegate_;
 

@@ -15,11 +15,11 @@
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/path_service.h"
-#include "base/process_util.h"
-#include "base/string_number_conversions.h"
-#include "base/string_util.h"
+#include "base/process/launch.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
 #include "media/audio/audio_parameters.h"
 #include "media/audio/audio_util.h"
 #include "media/audio/win/audio_device_listener_win.h"
@@ -201,7 +201,7 @@ string16 AudioManagerWin::GetAudioInputDeviceModel() {
     if (!interface_detail_size)
       continue;
 
-    scoped_array<char> interface_detail_buffer(new char[interface_detail_size]);
+    scoped_ptr<char[]> interface_detail_buffer(new char[interface_detail_size]);
     SP_DEVICE_INTERFACE_DETAIL_DATA* interface_detail =
         reinterpret_cast<SP_DEVICE_INTERFACE_DETAIL_DATA*>(
             interface_detail_buffer.get());
@@ -301,7 +301,7 @@ AudioOutputStream* AudioManagerWin::MakeLinearOutputStream(
 // - PCMWaveOutAudioOutputStream: Based on the waveOut API.
 // - WASAPIAudioOutputStream: Based on Core Audio (WASAPI) API.
 AudioOutputStream* AudioManagerWin::MakeLowLatencyOutputStream(
-    const AudioParameters& params) {
+    const AudioParameters& params, const std::string& input_device_id) {
   DCHECK_EQ(AudioParameters::AUDIO_PCM_LOW_LATENCY, params.format());
   if (params.channels() > kWinMaxChannels)
     return NULL;
@@ -314,12 +314,9 @@ AudioOutputStream* AudioManagerWin::MakeLowLatencyOutputStream(
   }
 
   // TODO(crogers): support more than stereo input.
-  if (params.input_channels() == 2) {
-    if (WASAPIUnifiedStream::HasUnifiedDefaultIO()) {
-      DVLOG(1) << "WASAPIUnifiedStream is created.";
-      return new WASAPIUnifiedStream(this, params);
-    }
-    LOG(WARNING) << "Unified audio I/O is not supported.";
+  if (params.input_channels() > 0) {
+    DVLOG(1) << "WASAPIUnifiedStream is created.";
+    return new WASAPIUnifiedStream(this, params, input_device_id);
   }
 
   return new WASAPIAudioOutputStream(this, params, eConsole);
@@ -367,6 +364,8 @@ AudioParameters AudioManagerWin::GetPreferredOutputStreamParameters(
     // which corresponds to an output delay of ~5.33ms.
     sample_rate = 48000;
     buffer_size = 256;
+    if (input_params.IsValid())
+      channel_layout = input_params.channel_layout();
   } else if (!use_input_params) {
     // Hardware sample-rate on Windows can be configured, so we must query.
     // TODO(henrika): improve possibility to specify an audio endpoint.
@@ -390,6 +389,23 @@ AudioParameters AudioManagerWin::GetPreferredOutputStreamParameters(
   }
 
   if (input_params.IsValid()) {
+    if (cmd_line->HasSwitch(switches::kTrySupportedChannelLayouts) &&
+        CoreAudioUtil::IsSupported()) {
+      // Check if it is possible to open up at the specified input channel
+      // layout but avoid checking if the specified layout is the same as the
+      // hardware (preferred) layout. We do this extra check to avoid the
+      // CoreAudioUtil::IsChannelLayoutSupported() overhead in most cases.
+      if (input_params.channel_layout() != channel_layout) {
+        if (CoreAudioUtil::IsChannelLayoutSupported(
+                eRender, eConsole, input_params.channel_layout())) {
+          // Open up using the same channel layout as the source if it is
+          // supported by the hardware.
+          channel_layout = input_params.channel_layout();
+          VLOG(1) << "Hardware channel layout is not used; using same layout"
+                  << " as the source instead (" << channel_layout << ")";
+        }
+      }
+    }
     input_channels = input_params.input_channels();
     if (use_input_params) {
       // If WASAPI isn't supported we'll fallback to WaveOut, which will take

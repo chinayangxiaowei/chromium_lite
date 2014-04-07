@@ -62,5 +62,8 @@ UserCloudPolicyStoreTest.StoreThenLoad
 UserCloudPolicyStoreTest.StoreTwoTimes
 UserCloudPolicyStoreTest.StoreValidationError
 
-# Crashes on the bot. http://crbug.com/179391
-BrowserCommandControllerTest.IncognitoModeOnSigninAllowedPrefChange
+# Tests are timing out on the bot. crbug.com/248373.
+PnaclTranslationCacheTest.*
+
+# Failing on the bot. crbug.com/266972
+OneClickSigninBubbleViewTest.ShowBubble

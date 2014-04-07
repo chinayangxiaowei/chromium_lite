@@ -8,13 +8,15 @@
 #include <map>
 #include <set>
 #include <string>
+#include <vector>
 
 #include "base/basictypes.h"
+#include "base/callback.h"
 #include "base/compiler_specific.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/threading/thread_restrictions.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "sql/sql_export.h"
 
 struct sqlite3;
@@ -26,6 +28,7 @@ class FilePath;
 
 namespace sql {
 
+class Recovery;
 class Statement;
 
 // Uniquely identifies a statement. There are two modes of operation:
@@ -76,30 +79,6 @@ class StatementID {
 
 class Connection;
 
-// ErrorDelegate defines the interface to implement error handling and recovery
-// for sqlite operations. This allows the rest of the classes to return true or
-// false while the actual error code and causing statement are delivered using
-// the OnError() callback.
-// The tipical usage is to centralize the code designed to handle database
-// corruption, low-level IO errors or locking violations.
-class SQL_EXPORT ErrorDelegate {
- public:
-  virtual ~ErrorDelegate();
-
-  // |error| is an sqlite result code as seen in sqlite3.h. |connection| is the
-  // db connection where the error happened and |stmt| is our best guess at the
-  // statement that triggered the error. Do not store these pointers.
-  //
-  // |stmt| MAY BE NULL if there is no statement causing the problem (i.e. on
-  // initialization).
-  //
-  // If the error condition has been fixed and the original statement succesfuly
-  // re-tried then returning SQLITE_OK is appropriate; otherwise it is
-  // recommended that you return the original |error| or the appropriate error
-  // code.
-  virtual int OnError(int error, Connection* connection, Statement* stmt) = 0;
-};
-
 class SQL_EXPORT Connection {
  private:
   class StatementRef;  // Forward declaration, see real one below.
@@ -138,20 +117,44 @@ class SQL_EXPORT Connection {
   // This must be called before Open() to have an effect.
   void set_exclusive_locking() { exclusive_locking_ = true; }
 
-  // Sets the object that will handle errors. Recomended that it should be set
-  // before calling Open(). If not set, the default is to ignore errors on
-  // release and assert on debug builds.
-  // Takes ownership of |delegate|.
-  void set_error_delegate(ErrorDelegate* delegate) {
-    error_delegate_.reset(delegate);
+  // Call to cause Open() to restrict access permissions of the
+  // database file to only the owner.
+  // TODO(shess): Currently only supported on OS_POSIX, is a noop on
+  // other platforms.
+  void set_restrict_to_user() { restrict_to_user_ = true; }
+
+  // Set an error-handling callback.  On errors, the error number (and
+  // statement, if available) will be passed to the callback.
+  //
+  // If no callback is set, the default action is to crash in debug
+  // mode or return failure in release mode.
+  typedef base::Callback<void(int, Statement*)> ErrorCallback;
+  void set_error_callback(const ErrorCallback& callback) {
+    error_callback_ = callback;
+  }
+  bool has_error_callback() const {
+    return !error_callback_.is_null();
+  }
+  void reset_error_callback() {
+    error_callback_.Reset();
   }
 
-  // SQLite error codes for errors on all connections are logged to
-  // enum histogram "Sqlite.Error".  Setting this additionally logs
-  // errors to the histogram |name|.
-  void set_error_histogram_name(const std::string& name) {
-    error_histogram_name_ = name;
+  // Set this tag to enable additional connection-type histogramming
+  // for SQLite error codes and database version numbers.
+  void set_histogram_tag(const std::string& tag) {
+    histogram_tag_ = tag;
   }
+
+  // Record a sparse UMA histogram sample under
+  // |name|+"."+|histogram_tag_|.  If |histogram_tag_| is empty, no
+  // histogram is recorded.
+  void AddTaggedHistogram(const std::string& name, size_t sample) const;
+
+  // Run "PRAGMA integrity_check" and post each line of results into
+  // |messages|.  Returns the success of running the statement - per
+  // the SQLite documentation, if no errors are found the call should
+  // succeed, and a single value "ok" should be in messages.
+  bool IntegrityCheck(std::vector<std::string>* messages);
 
   // Initialization ------------------------------------------------------------
 
@@ -163,6 +166,12 @@ class SQL_EXPORT Connection {
   // will be no associated file on disk, and the initial database will be
   // empty. You can call this or Open.
   bool OpenInMemory() WARN_UNUSED_RESULT;
+
+  // Create a temporary on-disk database.  The database will be
+  // deleted after close.  This kind of database is similar to
+  // OpenInMemory() for small databases, but can page to disk if the
+  // database becomes large.
+  bool OpenTemporary() WARN_UNUSED_RESULT;
 
   // Returns true if the database has been successfully opened.
   bool is_open() const { return !!db_; }
@@ -187,6 +196,12 @@ class SQL_EXPORT Connection {
   // database if it exists, and if it doesn't exist, the database won't
   // generally exist either.
   void Preload();
+
+  // Try to trim the cache memory used by the database.  If |aggressively| is
+  // true, this function will try to free all of the cache memory it can. If
+  // |aggressively| is false, this function will try to cut cache memory
+  // usage by half.
+  void TrimMemory(bool aggressively);
 
   // Raze the database to the ground.  This approximates creating a
   // fresh database from scratch, within the constraints of SQLite's
@@ -222,14 +237,30 @@ class SQL_EXPORT Connection {
   bool RazeWithTimout(base::TimeDelta timeout);
 
   // Breaks all outstanding transactions (as initiated by
-  // BeginTransaction()), calls Raze() to destroy the database, then
-  // closes the database.  After this is called, any operations
-  // against the connections (or statements prepared by the
-  // connection) should fail safely.
+  // BeginTransaction()), closes the SQLite database, and poisons the
+  // object so that all future operations against the Connection (or
+  // its Statements) fail safely, without side effects.
   //
-  // The value from Raze() is returned, with Close() called in all
-  // cases.
+  // This is intended as an alternative to Close() in error callbacks.
+  // Close() should still be called at some point.
+  void Poison();
+
+  // Raze() the database and Poison() the handle.  Returns the return
+  // value from Raze().
+  // TODO(shess): Rename to RazeAndPoison().
   bool RazeAndClose();
+
+  // Delete the underlying database files associated with |path|.
+  // This should be used on a database which has no existing
+  // connections.  If any other connections are open to the same
+  // database, this could cause odd results or corruption (for
+  // instance if a hot journal is deleted but the associated database
+  // is not).
+  //
+  // Returns true if the database file and associated journals no
+  // longer exist, false otherwise.  If the database has never
+  // existed, this will return true.
+  static bool Delete(const base::FilePath& path);
 
   // Transactions --------------------------------------------------------------
 
@@ -246,9 +277,26 @@ class SQL_EXPORT Connection {
   void RollbackTransaction();
   bool CommitTransaction();
 
+  // Rollback all outstanding transactions.  Use with care, there may
+  // be scoped transactions on the stack.
+  void RollbackAllTransactions();
+
   // Returns the current transaction nesting, which will be 0 if there are
   // no open transactions.
   int transaction_nesting() const { return transaction_nesting_; }
+
+  // Attached databases---------------------------------------------------------
+
+  // SQLite supports attaching multiple database files to a single
+  // handle.  Attach the database in |other_db_path| to the current
+  // handle under |attachment_point|.  |attachment_point| should only
+  // contain characters from [a-zA-Z0-9_].
+  //
+  // Note that calling attach or detach with an open transaction is an
+  // error.
+  bool AttachDatabase(const base::FilePath& other_db_path,
+                      const char* attachment_point);
+  bool DetachDatabase(const char* attachment_point);
 
   // Statements ----------------------------------------------------------------
 
@@ -342,6 +390,12 @@ class SQL_EXPORT Connection {
   const char* GetErrorMessage() const;
 
  private:
+  // For recovery module.
+  friend class Recovery;
+
+  // Allow test-support code to set/reset error ignorer.
+  friend class ScopedErrorIgnorer;
+
   // Statement accesses StatementRef which we don't want to expose to everybody
   // (they should go through Statement).
   friend class Statement;
@@ -349,7 +403,14 @@ class SQL_EXPORT Connection {
   // Internal initialize function used by both Init and InitInMemory. The file
   // name is always 8 bits since we want to use the 8-bit version of
   // sqlite3_open. The string can also be sqlite's special ":memory:" string.
-  bool OpenInternal(const std::string& file_name);
+  //
+  // |retry_flag| controls retrying the open if the error callback
+  // addressed errors using RazeAndClose().
+  enum Retry {
+    NO_RETRY = 0,
+    RETRY_ON_POISON
+  };
+  bool OpenInternal(const std::string& file_name, Retry retry_flag);
 
   // Internal close function used by Close() and RazeAndClose().
   // |forced| indicates that orderly-shutdown checks should not apply.
@@ -365,6 +426,14 @@ class SQL_EXPORT Connection {
 
   // Internal helper for DoesTableExist and DoesIndexExist.
   bool DoesTableOrIndexExist(const char* name, const char* type) const;
+
+  // Accessors for global error-ignorer, for injecting behavior during tests.
+  // See test/scoped_error_ignorer.h.
+  typedef base::Callback<bool(int)> ErrorIgnorerCallback;
+  static ErrorIgnorerCallback* current_ignorer_cb_;
+  static bool ShouldIgnore(int error);
+  static void SetErrorIgnorer(ErrorIgnorerCallback* ignorer);
+  static void ResetErrorIgnorer();
 
   // A StatementRef is a refcounted wrapper around a sqlite statement pointer.
   // Refcounting allows us to give these statements out to sql::Statement
@@ -462,6 +531,7 @@ class SQL_EXPORT Connection {
   int page_size_;
   int cache_size_;
   bool exclusive_locking_;
+  bool restrict_to_user_;
 
   // All cached statements. Keeping a reference to these statements means that
   // they'll remain active.
@@ -493,12 +563,10 @@ class SQL_EXPORT Connection {
   // databases.
   bool poisoned_;
 
-  // This object handles errors resulting from all forms of executing sqlite
-  // commands or statements. It can be null which means default handling.
-  scoped_ptr<ErrorDelegate> error_delegate_;
+  ErrorCallback error_callback_;
 
-  // Auxiliary error-code histogram.
-  std::string error_histogram_name_;
+  // Tag for auxiliary histograms.
+  std::string histogram_tag_;
 
   DISALLOW_COPY_AND_ASSIGN(Connection);
 };

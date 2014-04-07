@@ -9,7 +9,7 @@
 #include "ash/shell_window_ids.h"
 #include "ash/wm/window_animations.h"
 #include "ash/wm/workspace/frame_maximize_button.h"
-#include "base/timer.h"
+#include "base/timer/timer.h"
 #include "grit/ash_resources.h"
 #include "grit/ash_strings.h"
 #include "third_party/skia/include/core/SkPath.h"
@@ -429,7 +429,7 @@ MaximizeBubbleController::Bubble::Bubble(
     StartFade(true);
 
   ash::Shell::GetInstance()->delegate()->RecordUserMetricsAction(
-      ash::UMA_MAXIMIZE_BUTTON_SHOW_BUBBLE);
+      ash::UMA_WINDOW_MAXIMIZE_BUTTON_SHOW_BUBBLE);
 
   mouse_watcher_.reset(new views::MouseWatcher(
       new BubbleMouseWatcherHost(this),
@@ -798,7 +798,7 @@ views::CustomButton* MaximizeBubbleController::GetButtonForUnitTest(
 
 void MaximizeBubbleController::RequestDestructionThroughOwner() {
   // Tell the parent to destroy us (if this didn't happen yet).
-  if (timer_.get()) {
+  if (timer_) {
     timer_.reset(NULL);
     // Informs the owner that the menu is gone and requests |this| destruction.
     frame_maximize_button_->DestroyMaximizeMenu();

@@ -5,13 +5,12 @@
 #include "chrome/browser/storage_monitor/storage_monitor.h"
 
 #include "base/stl_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/storage_monitor/removable_storage_observer.h"
 #include "chrome/browser/storage_monitor/transient_device_ids.h"
 
 namespace chrome {
-
-static StorageMonitor* g_storage_monitor = NULL;
 
 StorageMonitor::Receiver::~Receiver() {
 }
@@ -27,6 +26,8 @@ class StorageMonitor::ReceiverImpl : public StorageMonitor::Receiver {
 
   virtual void ProcessDetach(const std::string& id) OVERRIDE;
 
+  virtual void MarkInitialized() OVERRIDE;
+
  private:
   StorageMonitor* notifications_;
 };
@@ -39,20 +40,50 @@ void StorageMonitor::ReceiverImpl::ProcessDetach(const std::string& id) {
   notifications_->ProcessDetach(id);
 }
 
-StorageMonitor* StorageMonitor::GetInstance() {
-  return g_storage_monitor;
+void StorageMonitor::ReceiverImpl::MarkInitialized() {
+  notifications_->MarkInitialized();
 }
 
-std::vector<StorageInfo> StorageMonitor::GetAttachedStorage() const {
+StorageMonitor* StorageMonitor::GetInstance() {
+  if (g_browser_process)
+    return g_browser_process->storage_monitor();
+
+  return NULL;
+}
+
+std::vector<StorageInfo> StorageMonitor::GetAllAvailableStorages() const {
   std::vector<StorageInfo> results;
 
   base::AutoLock lock(storage_lock_);
-  for (RemovableStorageMap::const_iterator it = storage_map_.begin();
+  for (StorageMap::const_iterator it = storage_map_.begin();
        it != storage_map_.end();
        ++it) {
     results.push_back(it->second);
   }
   return results;
+}
+
+void StorageMonitor::EnsureInitialized(base::Closure callback) {
+  DCHECK(thread_checker_.CalledOnValidThread());
+  if (initialized_) {
+    if (!callback.is_null())
+      callback.Run();
+    return;
+  }
+
+  if (!callback.is_null()) {
+    on_initialize_callbacks_.push_back(callback);
+  }
+
+  if (initializing_)
+    return;
+
+  initializing_ = true;
+  Init();
+}
+
+bool StorageMonitor::IsInitialized() {
+  return initialized_;
 }
 
 void StorageMonitor::AddObserver(RemovableStorageObserver* obs) {
@@ -84,57 +115,64 @@ void StorageMonitor::EjectDevice(
 
 StorageMonitor::StorageMonitor()
     : observer_list_(new ObserverListThreadSafe<RemovableStorageObserver>()),
+      initializing_(false),
+      initialized_(false),
       transient_device_ids_(new TransientDeviceIds) {
   receiver_.reset(new ReceiverImpl(this));
-
-  DCHECK(!g_storage_monitor);
-  g_storage_monitor = this;
 }
 
 StorageMonitor::~StorageMonitor() {
-  g_storage_monitor = NULL;
-}
-
-// static
-void StorageMonitor::RemoveSingletonForTesting() {
-  g_storage_monitor = NULL;
 }
 
 StorageMonitor::Receiver* StorageMonitor::receiver() const {
   return receiver_.get();
 }
 
+void StorageMonitor::MarkInitialized() {
+  initialized_ = true;
+  for (std::vector<base::Closure>::iterator iter =
+           on_initialize_callbacks_.begin();
+       iter != on_initialize_callbacks_.end(); ++iter) {
+    iter->Run();
+  }
+  on_initialize_callbacks_.clear();
+}
+
 void StorageMonitor::ProcessAttach(const StorageInfo& info) {
   {
     base::AutoLock lock(storage_lock_);
-    if (ContainsKey(storage_map_, info.device_id)) {
+    if (ContainsKey(storage_map_, info.device_id())) {
       // This can happen if our unique id scheme fails. Ignore the incoming
       // non-unique attachment.
       return;
     }
-    storage_map_.insert(std::make_pair(info.device_id, info));
+    storage_map_.insert(std::make_pair(info.device_id(), info));
   }
 
-  DVLOG(1) << "RemovableStorageAttached with name " << UTF16ToUTF8(info.name)
-           << " and id " << info.device_id;
-  observer_list_->Notify(
-      &RemovableStorageObserver::OnRemovableStorageAttached, info);
+  DVLOG(1) << "StorageAttached with name " << UTF16ToUTF8(info.name())
+           << " and id " << info.device_id();
+  if (StorageInfo::IsRemovableDevice(info.device_id())) {
+    observer_list_->Notify(
+        &RemovableStorageObserver::OnRemovableStorageAttached, info);
+  }
 }
 
 void StorageMonitor::ProcessDetach(const std::string& id) {
   StorageInfo info;
   {
     base::AutoLock lock(storage_lock_);
-    RemovableStorageMap::iterator it = storage_map_.find(id);
+    StorageMap::iterator it = storage_map_.find(id);
     if (it == storage_map_.end())
       return;
     info = it->second;
     storage_map_.erase(it);
   }
 
-  DVLOG(1) << "RemovableStorageDetached for id " << id;
-  observer_list_->Notify(
-      &RemovableStorageObserver::OnRemovableStorageDetached, info);
+  DVLOG(1) << "StorageDetached for id " << id;
+  if (StorageInfo::IsRemovableDevice(info.device_id())) {
+    observer_list_->Notify(
+        &RemovableStorageObserver::OnRemovableStorageDetached, info);
+  }
 }
 
 }  // namespace chrome

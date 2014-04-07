@@ -9,13 +9,12 @@
 #include "base/base64.h"
 #include "base/bind.h"
 #include "base/callback.h"
-#include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/json/json_writer.h"
 #include "base/memory/ref_counted.h"
 #include "base/metrics/histogram.h"
 #include "base/observer_list.h"
-#include "base/string_number_conversions.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/values.h"
 #include "sync/engine/sync_scheduler.h"
 #include "sync/engine/syncer_types.h"
@@ -56,6 +55,7 @@ namespace syncer {
 using sessions::SyncSessionContext;
 using syncable::ImmutableWriteTransactionInfo;
 using syncable::SPECIFICS;
+using syncable::UNIQUE_POSITION;
 
 namespace {
 
@@ -79,6 +79,7 @@ GetUpdatesCallerInfo::GetUpdatesSource GetSourceFromReason(
     case CONFIGURE_REASON_NEW_CLIENT:
       return GetUpdatesCallerInfo::NEW_CLIENT;
     case CONFIGURE_REASON_NEWLY_ENABLED_DATA_TYPE:
+    case CONFIGURE_REASON_CRYPTO:
       return GetUpdatesCallerInfo::NEWLY_SUPPORTED_DATATYPE;
     default:
       NOTREACHED();
@@ -167,15 +168,13 @@ class NudgeStrategy {
 
 SyncManagerImpl::SyncManagerImpl(const std::string& name)
     : name_(name),
-      weak_ptr_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)),
+      weak_ptr_factory_(this),
       change_delegate_(NULL),
       initialized_(false),
       observing_network_connectivity_changes_(false),
       invalidator_state_(DEFAULT_INVALIDATION_ERROR),
-      throttled_data_type_tracker_(&allstatus_),
       traffic_recorder_(kMaxMessagesToRecord, kMaxMessageSizeToRecord),
       encryptor_(NULL),
-      unrecoverable_error_handler_(NULL),
       report_unrecoverable_error_function_(NULL) {
   // Pre-fill |notification_info_map_|.
   for (int i = FIRST_REAL_MODEL_TYPE; i < MODEL_TYPE_COUNT; ++i) {
@@ -229,12 +228,9 @@ bool SyncManagerImpl::VisiblePositionsDiffer(
     const syncable::EntryKernelMutation& mutation) const {
   const syncable::EntryKernel& a = mutation.original;
   const syncable::EntryKernel& b = mutation.mutated;
-  // If the datatype isn't one where the browser model cares about position,
-  // don't bother notifying that data model of position-only changes.
-  if (!ShouldMaintainPosition(GetModelTypeFromSpecifics(b.ref(SPECIFICS)))) {
+  if (!b.ShouldMaintainPosition())
     return false;
-  }
-  if (a.ref(syncable::NEXT_ID) != b.ref(syncable::NEXT_ID))
+  if (!a.ref(UNIQUE_POSITION).Equals(b.ref(UNIQUE_POSITION)))
     return true;
   if (a.ref(syncable::PARENT_ID) != b.ref(syncable::PARENT_ID))
     return true;
@@ -299,8 +295,10 @@ ModelTypeSet SyncManagerImpl::GetTypesWithEmptyProgressMarkerToken(
 
 void SyncManagerImpl::ConfigureSyncer(
     ConfigureReason reason,
-    ModelTypeSet types_to_config,
-    ModelTypeSet failed_types,
+    ModelTypeSet to_download,
+    ModelTypeSet to_purge,
+    ModelTypeSet to_journal,
+    ModelTypeSet to_unapply,
     const ModelSafeRoutingInfo& new_routing_info,
     const base::Closure& ready_task,
     const base::Closure& retry_task) {
@@ -308,13 +306,20 @@ void SyncManagerImpl::ConfigureSyncer(
   DCHECK(!ready_task.is_null());
   DCHECK(!retry_task.is_null());
 
-  // Cleanup any types that might have just been disabled.
-  ModelTypeSet previous_types = ModelTypeSet::All();
-  if (!session_context_->routing_info().empty())
-    previous_types = GetRoutingInfoTypes(session_context_->routing_info());
-  if (!PurgeDisabledTypes(previous_types,
-                          GetRoutingInfoTypes(new_routing_info),
-                          failed_types)) {
+  DVLOG(1) << "Configuring -"
+           << "\n\t" << "current types: "
+           << ModelTypeSetToString(GetRoutingInfoTypes(new_routing_info))
+           << "\n\t" << "types to download: "
+           << ModelTypeSetToString(to_download)
+           << "\n\t" << "types to purge: "
+           << ModelTypeSetToString(to_purge)
+           << "\n\t" << "types to journal: "
+           << ModelTypeSetToString(to_journal)
+           << "\n\t" << "types to unapply: "
+           << ModelTypeSetToString(to_unapply);
+  if (!PurgeDisabledTypes(to_purge,
+                          to_journal,
+                          to_unapply)) {
     // We failed to cleanup the types. Invoke the ready task without actually
     // configuring any types. The caller should detect this as a configuration
     // failure and act appropriately.
@@ -323,7 +328,7 @@ void SyncManagerImpl::ConfigureSyncer(
   }
 
   ConfigurationParams params(GetSourceFromReason(reason),
-                             types_to_config,
+                             to_download,
                              new_routing_info,
                              ready_task);
 
@@ -340,16 +345,17 @@ void SyncManagerImpl::Init(
     bool use_ssl,
     scoped_ptr<HttpPostProviderFactory> post_factory,
     const std::vector<ModelSafeWorker*>& workers,
-    ExtensionsActivityMonitor* extensions_activity_monitor,
+    ExtensionsActivity* extensions_activity,
     SyncManager::ChangeDelegate* change_delegate,
     const SyncCredentials& credentials,
-    scoped_ptr<Invalidator> invalidator,
+    const std::string& invalidator_client_id,
     const std::string& restored_key_for_bootstrapping,
     const std::string& restored_keystore_key_for_bootstrapping,
-    scoped_ptr<InternalComponentsFactory> internal_components_factory,
+    InternalComponentsFactory* internal_components_factory,
     Encryptor* encryptor,
-    UnrecoverableErrorHandler* unrecoverable_error_handler,
-    ReportUnrecoverableErrorFunction report_unrecoverable_error_function) {
+    scoped_ptr<UnrecoverableErrorHandler> unrecoverable_error_handler,
+    ReportUnrecoverableErrorFunction report_unrecoverable_error_function,
+    bool use_oauth2_token) {
   CHECK(!initialized_);
   DCHECK(thread_checker_.CalledOnValidThread());
   DCHECK(post_factory.get());
@@ -361,9 +367,6 @@ void SyncManagerImpl::Init(
 
   change_delegate_ = change_delegate;
 
-  invalidator_ = invalidator.Pass();
-  invalidator_->RegisterHandler(this);
-
   AddObserver(&js_sync_manager_observer_);
   SetJsEventHandler(event_handler);
 
@@ -372,7 +375,7 @@ void SyncManagerImpl::Init(
   database_path_ = database_location.Append(
       syncable::Directory::kSyncDatabaseFilename);
   encryptor_ = encryptor;
-  unrecoverable_error_handler_ = unrecoverable_error_handler;
+  unrecoverable_error_handler_ = unrecoverable_error_handler.Pass();
   report_unrecoverable_error_function_ = report_unrecoverable_error_function;
 
   allstatus_.SetHasKeystoreKey(
@@ -386,8 +389,9 @@ void SyncManagerImpl::Init(
   sync_encryption_handler_->AddObserver(&debug_info_event_listener_);
   sync_encryption_handler_->AddObserver(&js_sync_encryption_handler_observer_);
 
-  base::FilePath absolute_db_path(database_path_);
-  file_util::AbsolutePath(&absolute_db_path);
+  base::FilePath absolute_db_path = database_path_;
+  DCHECK(absolute_db_path.IsAbsolute());
+
   scoped_ptr<syncable::DirectoryBackingStore> backing_store =
       internal_components_factory->BuildDirectoryBackingStore(
           credentials.email, absolute_db_path).Pass();
@@ -397,7 +401,7 @@ void SyncManagerImpl::Init(
   share_.directory.reset(
       new syncable::Directory(
           backing_store.release(),
-          unrecoverable_error_handler_,
+          unrecoverable_error_handler_.get(),
           report_unrecoverable_error_function_,
           sync_encryption_handler_.get(),
           sync_encryption_handler_->GetCryptographerUnsafe()));
@@ -415,22 +419,18 @@ void SyncManagerImpl::Init(
   }
 
   connection_manager_.reset(new SyncAPIServerConnectionManager(
-      sync_server_and_path, port, use_ssl, post_factory.release()));
+      sync_server_and_path, port, use_ssl, use_oauth2_token,
+      post_factory.release()));
   connection_manager_->set_client_id(directory()->cache_guid());
   connection_manager_->AddListener(this);
 
   std::string sync_id = directory()->cache_guid();
-
-  // TODO(rlarocque): The invalidator client ID should be independent from the
-  // sync client ID.  See crbug.com/124142.
-  const std::string invalidator_client_id = sync_id;
 
   allstatus_.SetSyncId(sync_id);
   allstatus_.SetInvalidatorClientId(invalidator_client_id);
 
   DVLOG(1) << "Setting sync client ID: " << sync_id;
   DVLOG(1) << "Setting invalidator client ID: " << invalidator_client_id;
-  invalidator_->SetUniqueId(invalidator_client_id);
 
   // Build a SyncSessionContext and store the worker in it.
   DVLOG(1) << "Sync is bringing up SyncSessionContext.";
@@ -441,8 +441,7 @@ void SyncManagerImpl::Init(
       connection_manager_.get(),
       directory(),
       workers,
-      extensions_activity_monitor,
-      &throttled_data_type_tracker_,
+      extensions_activity,
       listeners,
       &debug_info_event_listener_,
       &traffic_recorder_,
@@ -579,21 +578,20 @@ bool SyncManagerImpl::PurgePartiallySyncedTypes() {
   if (partially_synced_types.Empty())
     return true;
   return directory()->PurgeEntriesWithTypeIn(partially_synced_types,
+                                             ModelTypeSet(),
                                              ModelTypeSet());
 }
 
 bool SyncManagerImpl::PurgeDisabledTypes(
-    ModelTypeSet previously_enabled_types,
-    ModelTypeSet currently_enabled_types,
-    ModelTypeSet failed_types) {
-  ModelTypeSet disabled_types = Difference(previously_enabled_types,
-                                           currently_enabled_types);
-  if (disabled_types.Empty())
+    ModelTypeSet to_purge,
+    ModelTypeSet to_journal,
+    ModelTypeSet to_unapply) {
+  if (to_purge.Empty())
     return true;
-
-  DVLOG(1) << "Purging disabled types "
-           << ModelTypeSetToString(disabled_types);
-  return directory()->PurgeEntriesWithTypeIn(disabled_types, failed_types);
+  DVLOG(1) << "Purging disabled types " << ModelTypeSetToString(to_purge);
+  DCHECK(to_purge.HasAll(to_journal));
+  DCHECK(to_purge.HasAll(to_unapply));
+  return directory()->PurgeEntriesWithTypeIn(to_purge, to_journal, to_unapply);
 }
 
 void SyncManagerImpl::UpdateCredentials(const SyncCredentials& credentials) {
@@ -603,48 +601,12 @@ void SyncManagerImpl::UpdateCredentials(const SyncCredentials& credentials) {
   DCHECK(!credentials.sync_token.empty());
 
   observing_network_connectivity_changes_ = true;
-  if (!connection_manager_->set_auth_token(credentials.sync_token))
+  if (!connection_manager_->SetAuthToken(credentials.sync_token))
     return;  // Auth token is known to be invalid, so exit early.
 
-  invalidator_->UpdateCredentials(credentials.email, credentials.sync_token);
   scheduler_->OnCredentialsUpdated();
-}
 
-void SyncManagerImpl::UpdateEnabledTypes(ModelTypeSet enabled_types) {
-  DCHECK(thread_checker_.CalledOnValidThread());
-  DCHECK(initialized_);
-  invalidator_->UpdateRegisteredIds(
-      this,
-      ModelTypeSetToObjectIdSet(enabled_types));
-}
-
-void SyncManagerImpl::RegisterInvalidationHandler(
-    InvalidationHandler* handler) {
-  DCHECK(thread_checker_.CalledOnValidThread());
-  DCHECK(initialized_);
-  invalidator_->RegisterHandler(handler);
-}
-
-void SyncManagerImpl::UpdateRegisteredInvalidationIds(
-    InvalidationHandler* handler,
-    const ObjectIdSet& ids) {
-  DCHECK(thread_checker_.CalledOnValidThread());
-  DCHECK(initialized_);
-  invalidator_->UpdateRegisteredIds(handler, ids);
-}
-
-void SyncManagerImpl::UnregisterInvalidationHandler(
-    InvalidationHandler* handler) {
-  DCHECK(thread_checker_.CalledOnValidThread());
-  DCHECK(initialized_);
-  invalidator_->UnregisterHandler(handler);
-}
-
-void SyncManagerImpl::AcknowledgeInvalidation(
-    const invalidation::ObjectId& id, const syncer::AckHandle& ack_handle) {
-  DCHECK(thread_checker_.CalledOnValidThread());
-  DCHECK(initialized_);
-  invalidator_->Acknowledge(id, ack_handle);
+  // TODO(zea): pass the credential age to the debug info event listener.
 }
 
 void SyncManagerImpl::AddObserver(SyncManager::Observer* observer) {
@@ -657,10 +619,10 @@ void SyncManagerImpl::RemoveObserver(SyncManager::Observer* observer) {
   observers_.RemoveObserver(observer);
 }
 
-void SyncManagerImpl::StopSyncingForShutdown(const base::Closure& callback) {
+void SyncManagerImpl::StopSyncingForShutdown() {
   DVLOG(2) << "StopSyncingForShutdown";
-  scheduler_->RequestStop(callback);
-  if (connection_manager_.get())
+  scheduler_->RequestStop();
+  if (connection_manager_)
     connection_manager_->TerminateAllIO();
 }
 
@@ -675,7 +637,7 @@ void SyncManagerImpl::ShutdownOnSyncThread() {
   scheduler_.reset();
   session_context_.reset();
 
-  if (sync_encryption_handler_.get()) {
+  if (sync_encryption_handler_) {
     sync_encryption_handler_->RemoveObserver(&debug_info_event_listener_);
     sync_encryption_handler_->RemoveObserver(this);
   }
@@ -685,16 +647,11 @@ void SyncManagerImpl::ShutdownOnSyncThread() {
 
   RemoveObserver(&debug_info_event_listener_);
 
-  // |invalidator_| and |connection_manager_| may end up being NULL here in
-  // tests (in synchronous initialization mode).
+  // |connection_manager_| may end up being NULL here in tests (in synchronous
+  // initialization mode).
   //
   // TODO(akalin): Fix this behavior.
-
-  if (invalidator_.get())
-    invalidator_->UnregisterHandler(this);
-  invalidator_.reset();
-
-  if (connection_manager_.get())
+  if (connection_manager_)
     connection_manager_->RemoveListener(this);
   connection_manager_.reset();
 
@@ -873,7 +830,7 @@ void SyncManagerImpl::SetExtraChangeRecordData(int64 id,
       // Passwords must use their own legacy ExtraPasswordChangeRecordData.
       scoped_ptr<sync_pb::PasswordSpecificsData> data(
           DecryptPasswordSpecifics(original_specifics, cryptographer));
-      if (!data.get()) {
+      if (!data) {
         NOTREACHED();
         return;
       }
@@ -923,8 +880,7 @@ void SyncManagerImpl::HandleCalculateChangesChangeEventFromSyncer(
       change_buffers[type].PushDeletedItem(handle);
     else if (exists_now && existed_before &&
              VisiblePropertiesDiffer(it->second, crypto)) {
-      change_buffers[type].PushUpdatedItem(
-          handle, VisiblePositionsDiffer(it->second));
+      change_buffers[type].PushUpdatedItem(handle);
     }
 
     SetExtraChangeRecordData(handle, type, &change_buffers[type], crypto,
@@ -960,8 +916,7 @@ void SyncManagerImpl::RequestNudgeForDataTypes(
       types.First().Get(),
       this);
   allstatus_.IncrementNudgeCounter(NUDGE_SOURCE_LOCAL);
-  scheduler_->ScheduleNudgeAsync(nudge_delay,
-                                 NUDGE_SOURCE_LOCAL,
+  scheduler_->ScheduleLocalNudge(nudge_delay,
                                  types,
                                  nudge_location);
 }
@@ -985,20 +940,6 @@ void SyncManagerImpl::OnSyncEngineEvent(const SyncEngineEvent& event) {
     DVLOG(1) << "Sending OnSyncCycleCompleted";
     FOR_EACH_OBSERVER(SyncManager::Observer, observers_,
                       OnSyncCycleCompleted(event.snapshot));
-
-    // This is here for tests, which are still using p2p notifications.
-    bool is_notifiable_commit =
-        (event.snapshot.model_neutral_state().num_successful_commits > 0);
-    if (is_notifiable_commit) {
-      if (invalidator_.get()) {
-        const ObjectIdInvalidationMap& invalidation_map =
-            ModelTypeInvalidationMapToObjectIdInvalidationMap(
-                event.snapshot.source().types);
-        invalidator_->SendInvalidation(invalidation_map);
-      } else {
-        DVLOG(1) << "Not sending invalidation: invalidator_ is NULL";
-      }
-    }
   }
 
   if (event.what_happened == SyncEngineEvent::STOP_SYNCING_PERMANENTLY) {
@@ -1199,10 +1140,10 @@ JsArgList SyncManagerImpl::GetChildNodeIds(const JsArgList& args) {
   int64 id = GetId(args.Get(), 0);
   if (id != kInvalidId) {
     ReadTransaction trans(FROM_HERE, GetUserShare());
-    syncable::Directory::ChildHandles child_handles;
+    syncable::Directory::Metahandles child_handles;
     trans.GetDirectory()->GetChildHandlesByHandle(trans.GetWrappedTrans(),
                                                   id, &child_handles);
-    for (syncable::Directory::ChildHandles::const_iterator it =
+    for (syncable::Directory::Metahandles::const_iterator it =
              child_handles.begin(); it != child_handles.end(); ++it) {
       child_ids->Append(new base::StringValue(base::Int64ToString(*it)));
     }
@@ -1221,6 +1162,8 @@ void SyncManagerImpl::UpdateNotificationInfo(
 }
 
 void SyncManagerImpl::OnInvalidatorStateChange(InvalidatorState state) {
+  DCHECK(thread_checker_.CalledOnValidThread());
+
   const std::string& state_str = InvalidatorStateToString(state);
   invalidator_state_ = state;
   DVLOG(1) << "Invalidator state changed to: " << state_str;
@@ -1228,12 +1171,6 @@ void SyncManagerImpl::OnInvalidatorStateChange(InvalidatorState state) {
       (invalidator_state_ == INVALIDATIONS_ENABLED);
   allstatus_.SetNotificationsEnabled(notifications_enabled);
   scheduler_->SetNotificationsEnabled(notifications_enabled);
-
-  if (invalidator_state_ == syncer::INVALIDATION_CREDENTIALS_REJECTED) {
-    // If the invalidator's credentials were rejected, that means that
-    // our sync credentials are also bad, so invalidate those.
-    connection_manager_->OnInvalidationCredentialsRejected();
-  }
 
   if (js_event_handler_.IsInitialized()) {
     base::DictionaryValue details;
@@ -1249,24 +1186,14 @@ void SyncManagerImpl::OnIncomingInvalidation(
     const ObjectIdInvalidationMap& invalidation_map) {
   DCHECK(thread_checker_.CalledOnValidThread());
 
-  // TODO(dcheng): Acknowledge immediately for now. Fix this once the
-  // invalidator doesn't repeatedly ping for unacknowledged invaliations, since
-  // it conflicts with the sync scheduler's internal backoff algorithm.
-  // See http://crbug.com/124149 for more information.
-  for (ObjectIdInvalidationMap::const_iterator it = invalidation_map.begin();
-       it != invalidation_map.end(); ++it) {
-    invalidator_->Acknowledge(it->first, it->second.ack_handle);
-  }
-
   const ModelTypeInvalidationMap& type_invalidation_map =
       ObjectIdInvalidationMapToModelTypeInvalidationMap(invalidation_map);
   if (type_invalidation_map.empty()) {
     LOG(WARNING) << "Sync received invalidation without any type information.";
   } else {
     allstatus_.IncrementNudgeCounter(NUDGE_SOURCE_NOTIFICATION);
-    scheduler_->ScheduleNudgeWithStatesAsync(
+    scheduler_->ScheduleInvalidationNudge(
         TimeDelta::FromMilliseconds(kSyncSchedulerDelayMsec),
-        NUDGE_SOURCE_NOTIFICATION,
         type_invalidation_map, FROM_HERE);
     allstatus_.IncrementNotificationsReceived();
     UpdateNotificationInfo(type_invalidation_map);
@@ -1294,27 +1221,22 @@ void SyncManagerImpl::OnIncomingInvalidation(
 
 void SyncManagerImpl::RefreshTypes(ModelTypeSet types) {
   DCHECK(thread_checker_.CalledOnValidThread());
-  const ModelTypeInvalidationMap& type_invalidation_map =
-      ModelTypeSetToInvalidationMap(types, "");
-  if (type_invalidation_map.empty()) {
+  if (types.Empty()) {
     LOG(WARNING) << "Sync received refresh request with no types specified.";
   } else {
     allstatus_.IncrementNudgeCounter(NUDGE_SOURCE_LOCAL_REFRESH);
-    scheduler_->ScheduleNudgeWithStatesAsync(
+    scheduler_->ScheduleLocalRefreshRequest(
         TimeDelta::FromMilliseconds(kSyncRefreshDelayMsec),
-        NUDGE_SOURCE_LOCAL_REFRESH,
-        type_invalidation_map, FROM_HERE);
+        types, FROM_HERE);
   }
 
   if (js_event_handler_.IsInitialized()) {
     base::DictionaryValue details;
     base::ListValue* changed_types = new base::ListValue();
     details.Set("changedTypes", changed_types);
-    for (ModelTypeInvalidationMap::const_iterator it =
-             type_invalidation_map.begin(); it != type_invalidation_map.end();
-         ++it) {
+    for (ModelTypeSet::Iterator it = types.First(); it.Good(); it.Inc()) {
       const std::string& model_type_str =
-          ModelTypeToString(it->first);
+          ModelTypeToString(it.Get());
       changed_types->Append(new base::StringValue(model_type_str));
     }
     details.SetString("source", "LOCAL_INVALIDATION");
@@ -1352,15 +1274,6 @@ bool SyncManagerImpl::ReceivedExperiment(Experiments* experiments) {
   }
   bool found_experiment = false;
 
-  ReadNode keystore_node(&trans);
-  if (keystore_node.InitByClientTagLookup(
-          syncer::EXPERIMENTS,
-          syncer::kKeystoreEncryptionTag) == BaseNode::INIT_OK &&
-      keystore_node.GetExperimentsSpecifics().keystore_encryption().enabled()) {
-    experiments->keystore_encryption = true;
-    found_experiment = true;
-  }
-
   ReadNode autofill_culling_node(&trans);
   if (autofill_culling_node.InitByClientTagLookup(
           syncer::EXPERIMENTS,
@@ -1371,23 +1284,25 @@ bool SyncManagerImpl::ReceivedExperiment(Experiments* experiments) {
     found_experiment = true;
   }
 
-  ReadNode full_history_sync_node(&trans);
-  if (full_history_sync_node.InitByClientTagLookup(
-          syncer::EXPERIMENTS,
-          syncer::kFullHistorySyncTag) == BaseNode::INIT_OK &&
-      full_history_sync_node.GetExperimentsSpecifics().
-          history_delete_directives().enabled()) {
-    experiments->full_history_sync = true;
-    found_experiment = true;
-  }
-
   ReadNode favicon_sync_node(&trans);
   if (favicon_sync_node.InitByClientTagLookup(
           syncer::EXPERIMENTS,
-          syncer::kFaviconSyncTag) == BaseNode::INIT_OK &&
-      favicon_sync_node.GetExperimentsSpecifics().favicon_sync().enabled()) {
-    experiments->favicon_sync = true;
+          syncer::kFaviconSyncTag) == BaseNode::INIT_OK) {
+    experiments->favicon_sync_limit =
+        favicon_sync_node.GetExperimentsSpecifics().favicon_sync().
+            favicon_sync_limit();
     found_experiment = true;
+  }
+
+  ReadNode pre_commit_update_avoidance_node(&trans);
+  if (pre_commit_update_avoidance_node.InitByClientTagLookup(
+          syncer::EXPERIMENTS,
+          syncer::kPreCommitUpdateAvoidanceTag) == BaseNode::INIT_OK) {
+    session_context_->set_server_enabled_pre_commit_update_avoidance(
+        pre_commit_update_avoidance_node.GetExperimentsSpecifics().
+            pre_commit_update_avoidance().enabled());
+    // We don't bother setting found_experiment.  The frontend doesn't need to
+    // know about this.
   }
 
   return found_experiment;

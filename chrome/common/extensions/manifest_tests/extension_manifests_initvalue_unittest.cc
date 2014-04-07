@@ -4,15 +4,10 @@
 
 #include "base/i18n/rtl.h"
 #include "base/path_service.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/common/chrome_paths.h"
-#include "chrome/common/extensions/api/extension_action/page_action_handler.h"
-#include "chrome/common/extensions/api/i18n/default_locale_handler.h"
-#include "chrome/common/extensions/api/icons/icons_handler.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_manifest_constants.h"
-#include "chrome/common/extensions/manifest_handler.h"
-#include "chrome/common/extensions/manifest_handlers/content_scripts_handler.h"
 #include "chrome/common/extensions/manifest_tests/extension_manifest_test.h"
 #include "chrome/common/extensions/manifest_url_handler.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -28,15 +23,6 @@ namespace keys = extension_manifest_keys;
 namespace extensions {
 
 class InitValueManifestTest : public ExtensionManifestTest {
- protected:
-  virtual void SetUp() OVERRIDE {
-    ExtensionManifestTest::SetUp();
-    (new extensions::DefaultLocaleHandler)->Register();
-    (new extensions::IconsHandler)->Register();
-    (new extensions::OptionsPageHandler)->Register();
-    (new extensions::PageActionHandler)->Register();
-    (new extensions::ContentScriptsHandler)->Register();
-  }
 };
 
 TEST_F(InitValueManifestTest, InitFromValueInvalid) {
@@ -114,9 +100,9 @@ TEST_F(InitValueManifestTest, InitFromValueValid) {
   // Test with an options page.
   extension = LoadAndExpectSuccess("init_valid_options.json");
   EXPECT_EQ("chrome-extension",
-            ManifestURL::GetOptionsPage(extension).scheme());
+            ManifestURL::GetOptionsPage(extension.get()).scheme());
   EXPECT_EQ("/options.html",
-            ManifestURL::GetOptionsPage(extension).path());
+            ManifestURL::GetOptionsPage(extension.get()).path());
 
   Testcase testcases[] = {
     // Test that an empty list of page actions does not stop a browser action
@@ -164,7 +150,7 @@ TEST_F(InitValueManifestTest, InitFromValueValidNameInRTL) {
   // Strong RTL characters in name.
   extension = LoadAndExpectSuccess("init_valid_name_strong_rtl.json");
 
-  localized_name = WideToUTF16(L"Dictionary (\x05D1\x05D2"L" Google)");
+  localized_name = WideToUTF16(L"Dictionary (\x05D1\x05D2" L" Google)");
   base::i18n::AdjustStringForLocaleDirection(&localized_name);
   EXPECT_EQ(localized_name, UTF8ToUTF16(extension->name()));
 

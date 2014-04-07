@@ -12,9 +12,9 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
-#include "googleurl/src/gurl.h"
 #include "jni/InterceptNavigationDelegate_jni.h"
 #include "net/url_request/url_request.h"
+#include "url/gurl.h"
 
 using base::android::ConvertUTF8ToJavaString;
 using base::android::ScopedJavaLocalRef;
@@ -23,7 +23,7 @@ using content::PageTransition;
 using content::RenderViewHost;
 using content::WebContents;
 
-namespace components {
+namespace navigation_interception {
 
 namespace {
 
@@ -104,4 +104,4 @@ bool RegisterInterceptNavigationDelegate(JNIEnv* env) {
   return RegisterNativesImpl(env);
 }
 
-}  // namespace components
+}  // namespace navigation_interception

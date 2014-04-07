@@ -2,12 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/string_util.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
+#include "base/strings/string_util.h"
 #include "content/public/browser/native_web_keyboard_event.h"
 #include "content/public/test/render_view_test.h"
 #include "content/renderer/render_view_impl.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "webkit/common/webpreferences.h"
 
 #include <Cocoa/Cocoa.h>
 #include <Carbon/Carbon.h>  // for the kVK_* constants.
@@ -29,7 +30,7 @@ NSEvent* CmdDeadKeyEvent(NSEventType type, unsigned short code) {
   NSString* s = [NSString stringWithFormat:@"%C", uniChar];
 
   return [NSEvent keyEventWithType:type
-                          location:NSMakePoint(0, 0)
+                          location:NSZeroPoint
                      modifierFlags:NSCommandKeyMask
                          timestamp:0.0
                       windowNumber:0
@@ -83,7 +84,7 @@ TEST_F(RenderViewTest, MacTestCmdUp) {
   );
   #undef HTML
 
-  webkit_glue::WebPreferences prefs;
+  WebPreferences prefs;
   prefs.enable_scroll_animator = false;
 
   RenderViewImpl* view = static_cast<RenderViewImpl*>(view_);

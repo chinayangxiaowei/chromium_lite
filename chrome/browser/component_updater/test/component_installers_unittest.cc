@@ -8,7 +8,7 @@
 #include "base/files/file_path.h"
 #include "base/json/json_file_value_serializer.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/path_service.h"
 #include "base/version.h"
 #include "build/build_config.h"
@@ -38,8 +38,13 @@ const base::FilePath::CharType kDataPath[] =
 #endif
 }
 
-// TODO(jschuh): Get Pepper Flash supported on Win64 build. crbug.com/179716
+// TODO(jschuh): Get Pepper Flash supported on Win64 build.
+// http://crbug.com/179716
 #if defined(OS_WIN) && defined(ARCH_CPU_X86_64)
+#define MAYBE_PepperFlashCheck DISABLED_PepperFlashCheck
+// TODO(avi): Get Pepper Flash supported on the Mac 64 bit build.
+// http://crbug.com/225777
+#elif defined(OS_MACOSX) && defined(ARCH_CPU_X86_64)
 #define MAYBE_PepperFlashCheck DISABLED_PepperFlashCheck
 #else
 #define MAYBE_PepperFlashCheck PepperFlashCheck
@@ -47,7 +52,7 @@ const base::FilePath::CharType kDataPath[] =
 
 // TODO(viettrungluu): Separate out into two separate tests; use a test fixture.
 TEST(ComponentInstallerTest, MAYBE_PepperFlashCheck) {
-  MessageLoop message_loop;
+  base::MessageLoop message_loop;
   content::TestBrowserThread ui_thread(BrowserThread::UI, &message_loop);
 
   ppapi::PpapiGlobals::PerThreadForTest per_thread_for_test;
@@ -60,20 +65,20 @@ TEST(ComponentInstallerTest, MAYBE_PepperFlashCheck) {
   manifest = manifest.Append(kDataPath);
   manifest = manifest.AppendASCII("manifest.json");
 
-  if (!file_util::PathExists(manifest)) {
+  if (!base::PathExists(manifest)) {
     LOG(WARNING) << "No test manifest available. Skipping.";
     return;
   }
 
   JSONFileValueSerializer serializer(manifest);
   std::string error;
-  scoped_ptr<base::Value> root(serializer.Deserialize(NULL, &error));
-  ASSERT_TRUE(root.get() != NULL);
+  scoped_ptr<base::DictionaryValue> root(static_cast<base::DictionaryValue*>(
+      serializer.Deserialize(NULL, &error)));
+  ASSERT_TRUE(root);
   ASSERT_TRUE(root->IsType(base::Value::TYPE_DICTIONARY));
 
   // This checks that the whole manifest is compatible.
   Version version;
-  EXPECT_TRUE(CheckPepperFlashManifest(
-      static_cast<base::DictionaryValue*>(root.get()), &version));
+  EXPECT_TRUE(CheckPepperFlashManifest(*root, &version));
   EXPECT_TRUE(version.IsValid());
 }

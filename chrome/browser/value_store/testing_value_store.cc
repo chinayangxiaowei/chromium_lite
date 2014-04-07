@@ -99,7 +99,7 @@ ValueStore::WriteResult TestingValueStore::Set(
   }
 
   scoped_ptr<ValueStoreChangeList> changes(new ValueStoreChangeList());
-  for (DictionaryValue::Iterator it(settings); it.HasNext(); it.Advance()) {
+  for (DictionaryValue::Iterator it(settings); !it.IsAtEnd(); it.Advance()) {
     Value* old_value = NULL;
     if (!storage_.GetWithoutPathExpansion(it.key(), &old_value) ||
         !old_value->Equals(&it.value())) {
@@ -125,13 +125,12 @@ ValueStore::WriteResult TestingValueStore::Remove(
     return WriteResultError();
   }
 
-  scoped_ptr<ValueStoreChangeList> changes(
-      new ValueStoreChangeList());
+  scoped_ptr<ValueStoreChangeList> changes(new ValueStoreChangeList());
   for (std::vector<std::string>::const_iterator it = keys.begin();
       it != keys.end(); ++it) {
-    Value* old_value = NULL;
+    scoped_ptr<Value> old_value;
     if (storage_.RemoveWithoutPathExpansion(*it, &old_value)) {
-      changes->push_back(ValueStoreChange(*it, old_value, NULL));
+      changes->push_back(ValueStoreChange(*it, old_value.release(), NULL));
     }
   }
   return MakeWriteResult(changes.release());
@@ -139,7 +138,7 @@ ValueStore::WriteResult TestingValueStore::Remove(
 
 ValueStore::WriteResult TestingValueStore::Clear() {
   std::vector<std::string> keys;
-  for (DictionaryValue::Iterator it(storage_); it.HasNext(); it.Advance()) {
+  for (DictionaryValue::Iterator it(storage_); !it.IsAtEnd(); it.Advance()) {
     keys.push_back(it.key());
   }
   return Remove(keys);

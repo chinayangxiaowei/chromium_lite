@@ -8,10 +8,10 @@
 #include "base/bind.h"
 #include "base/file_util.h"
 #include "base/files/file_path.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/path_service.h"
 #include "base/test/test_timeouts.h"
-#include "base/timer.h"
+#include "base/timer/timer.h"
 #include "crypto/rsa_private_key.h"
 #include "net/base/net_errors.h"
 #include "net/base/test_data_directory.h"
@@ -43,7 +43,7 @@ ACTION_P(QuitThreadOnCounter, counter) {
   --(*counter);
   EXPECT_GE(*counter, 0);
   if (*counter == 0)
-    MessageLoop::current()->Quit();
+    base::MessageLoop::current()->Quit();
 }
 
 }  // namespace
@@ -66,7 +66,7 @@ class SslHmacChannelAuthenticatorTest : public testing::Test {
     std::string key_base64;
     base::Base64Encode(key_string, &key_base64);
     key_pair_ = RsaKeyPair::FromString(key_base64);
-    ASSERT_TRUE(key_pair_);
+    ASSERT_TRUE(key_pair_.get());
   }
 
   void RunChannelAuth(bool expected_fail) {
@@ -103,8 +103,9 @@ class SslHmacChannelAuthenticatorTest : public testing::Test {
     // Ensure that .Run() does not run unbounded if the callbacks are never
     // called.
     base::Timer shutdown_timer(false, false);
-    shutdown_timer.Start(FROM_HERE, TestTimeouts::action_timeout(),
-                         MessageLoop::QuitClosure());
+    shutdown_timer.Start(FROM_HERE,
+                         TestTimeouts::action_timeout(),
+                         base::MessageLoop::QuitClosure());
     message_loop_.Run();
   }
 
@@ -120,7 +121,7 @@ class SslHmacChannelAuthenticatorTest : public testing::Test {
     client_socket_ = socket.Pass();
   }
 
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
 
   scoped_refptr<RsaKeyPair> key_pair_;
   std::string host_cert_;

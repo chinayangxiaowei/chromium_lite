@@ -22,6 +22,7 @@
 #include "ui/base/dragdrop/os_exchange_data.h"
 #include "ui/base/events/event.h"
 #include "ui/base/events/event_target.h"
+#include "ui/base/ui_base_types.h"
 #include "ui/compositor/layer_delegate.h"
 #include "ui/compositor/layer_owner.h"
 #include "ui/gfx/native_widget_types.h"
@@ -105,6 +106,38 @@ class VIEWS_EXPORT View : public ui::LayerDelegate,
                           public ui::EventTarget {
  public:
   typedef std::vector<View*> Views;
+
+  struct ViewHierarchyChangedDetails {
+    ViewHierarchyChangedDetails()
+        : is_add(false),
+          parent(NULL),
+          child(NULL),
+          move_view(NULL) {}
+
+    ViewHierarchyChangedDetails(bool is_add,
+                                View* parent,
+                                View* child,
+                                View* move_view)
+        : is_add(is_add),
+          parent(parent),
+          child(child),
+          move_view(move_view) {}
+
+    bool is_add;
+    // New parent if |is_add| is true, old parent if |is_add| is false.
+    View* parent;
+    // The view being added or removed.
+    View* child;
+    // If this is a move (reparent), meaning AddChildViewAt() is invoked with an
+    // existing parent, then a notification for the remove is sent first,
+    // followed by one for the add.  This case can be distinguished by a
+    // non-NULL |move_view|.
+    // For the remove part of move, |move_view| is the new parent of the View
+    // being removed.
+    // For the add part of move, |move_view| is the old parent of the View being
+    // added.
+    View* move_view;
+  };
 
   // Creation and lifetime -----------------------------------------------------
 
@@ -360,7 +393,7 @@ class VIEWS_EXPORT View : public ui::LayerDelegate,
   // uniquely identifies the view class. It is intended to be used as a way to
   // find out during run time if a view can be safely casted to a specific view
   // subclass. The default implementation returns kViewClassName.
-  virtual std::string GetClassName() const;
+  virtual const char* GetClassName() const;
 
   // Returns the first ancestor, starting at this, whose class name is |name|.
   // Returns null if no ancestor has the class name |name|.
@@ -518,8 +551,14 @@ class VIEWS_EXPORT View : public ui::LayerDelegate,
   // The points (and mouse locations) in the following functions are in the
   // view's coordinates, except for a RootView.
 
-  // Returns the deepest visible descendant that contains the specified point.
+  // Returns the deepest visible descendant that contains the specified point
+  // and supports event handling.
   virtual View* GetEventHandlerForPoint(const gfx::Point& point);
+
+  // Returns the deepest visible descendant that contains the specified point
+  // and supports tooltips. If the view does not contain the point, returns
+  // NULL.
+  virtual View* GetTooltipHandlerForPoint(const gfx::Point& point);
 
   // Return the cursor that should be used for this view or the default cursor.
   // The event location is in the receiver's coordinate system. The caller is
@@ -534,6 +573,10 @@ class VIEWS_EXPORT View : public ui::LayerDelegate,
 
   // Tests whether |rect| intersects this view's bounds.
   virtual bool HitTestRect(const gfx::Rect& rect) const;
+
+  // Returns true if the mouse cursor is over |view| and mouse events are
+  // enabled.
+  bool IsMouseHovered();
 
   // This method is invoked when the user clicks on this view.
   // The provided event is in the receiver's coordinate system.
@@ -643,6 +686,7 @@ class VIEWS_EXPORT View : public ui::LayerDelegate,
   // Widget that contains this view. Returns NULL if this view is not part of a
   // view hierarchy with a Widget.
   virtual InputMethod* GetInputMethod();
+  virtual const InputMethod* GetInputMethod() const;
 
   // Overridden from ui::EventTarget:
   virtual bool CanAcceptEvent(const ui::Event& event) OVERRIDE;
@@ -725,8 +769,7 @@ class VIEWS_EXPORT View : public ui::LayerDelegate,
   virtual FocusManager* GetFocusManager();
   virtual const FocusManager* GetFocusManager() const;
 
-  // Request the keyboard focus. The receiving view will become the
-  // focused view.
+  // Request keyboard focus. The receiving view will become the focused view.
   virtual void RequestFocus();
 
   // Invoked when a view is about to be requested for focus due to the focus
@@ -789,7 +832,12 @@ class VIEWS_EXPORT View : public ui::LayerDelegate,
   // to provide right-click menu display triggerd by the keyboard (i.e. for the
   // Chrome toolbar Back and Forward buttons). No source needs to be specified,
   // as it is always equal to the current View.
-  virtual void ShowContextMenu(const gfx::Point& p, bool is_mouse_gesture);
+  virtual void ShowContextMenu(const gfx::Point& p,
+                               ui::MenuSourceType source_type);
+
+  // On some platforms, we show context menu on mouse press instead of release.
+  // This method returns true for those platforms.
+  static bool ShouldShowContextMenuOnMousePress();
 
   // Drag and drop -------------------------------------------------------------
 
@@ -977,10 +1025,8 @@ class VIEWS_EXPORT View : public ui::LayerDelegate,
   // Default implementation does nothing. Override to perform operations
   // required when a view is added or removed from a view hierarchy
   //
-  // parent is the new or old parent. Child is the view being added or
-  // removed.
-  //
-  virtual void ViewHierarchyChanged(bool is_add, View* parent, View* child);
+  // Refer to comments in struct |ViewHierarchyChangedDetails| for |details|.
+  virtual void ViewHierarchyChanged(const ViewHierarchyChangedDetails& details);
 
   // When SetVisible() changes the visibility of a view, this method is
   // invoked for that view as well as all the children recursively.
@@ -1037,6 +1083,11 @@ class VIEWS_EXPORT View : public ui::LayerDelegate,
   virtual gfx::Vector2d CalculateOffsetToAncestorWithLayer(
       ui::Layer** layer_parent);
 
+  // Updates the view's layer's parent. Called when a view is added to a view
+  // hierarchy, responsible for parenting the view's layer to the enclosing
+  // layer in the hierarchy.
+  virtual void UpdateParentLayer();
+
   // If this view has a layer, the layer is reparented to |parent_layer| and its
   // bounds is set based on |point|. If this view does not have a layer, then
   // recurses through all children. This is used when adding a layer to an
@@ -1060,7 +1111,11 @@ class VIEWS_EXPORT View : public ui::LayerDelegate,
   virtual void ReorderLayers();
 
   // This reorders the immediate children of |*parent_layer| to match the
-  // order of the view tree.
+  // order of the view tree. Child layers which are owned by a view are
+  // reordered so that they are below any child layers not owned by a view.
+  // Widget::ReorderNativeViews() should be called to reorder any child layers
+  // with an associated view. Widget::ReorderNativeViews() may reorder layers
+  // below layers owned by a view.
   virtual void ReorderChildLayers(ui::Layer* parent_layer);
 
   // Input ---------------------------------------------------------------------
@@ -1185,17 +1240,23 @@ class VIEWS_EXPORT View : public ui::LayerDelegate,
   // the next and previous focusable views of views pointing to this view are
   // updated.  If |update_tool_tip| is true, the tooltip is updated.  If
   // |delete_removed_view| is true, the view is also deleted (if it is parent
-  // owned).
+  // owned).  If |new_parent| is not NULL, the remove is the result of
+  // AddChildView() to a new parent.  For this case, |new_parent| is the View
+  // that |view| is going to be added to after the remove completes.
   void DoRemoveChildView(View* view,
                          bool update_focus_cycle,
                          bool update_tool_tip,
-                         bool delete_removed_view);
+                         bool delete_removed_view,
+                         View* new_parent);
 
-  // Call ViewHierarchyChanged for all child views on all parents
-  void PropagateRemoveNotifications(View* parent);
+  // Call ViewHierarchyChanged() for all child views and all parents.
+  // |old_parent| is the original parent of the View that was removed.
+  // If |new_parent| is not NULL, the View that was removed will be reparented
+  // to |new_parent| after the remove operation.
+  void PropagateRemoveNotifications(View* old_parent, View* new_parent);
 
-  // Call ViewHierarchyChanged for all children
-  void PropagateAddNotifications(View* parent, View* child);
+  // Call ViewHierarchyChanged() for all children.
+  void PropagateAddNotifications(const ViewHierarchyChangedDetails& details);
 
   // Propagates NativeViewHierarchyChanged() notification through all the
   // children.
@@ -1206,9 +1267,7 @@ class VIEWS_EXPORT View : public ui::LayerDelegate,
   // Takes care of registering/unregistering accelerators if
   // |register_accelerators| true and calls ViewHierarchyChanged().
   void ViewHierarchyChangedImpl(bool register_accelerators,
-                                bool is_add,
-                                View* parent,
-                                View* child);
+                                const ViewHierarchyChangedDetails& details);
 
   // Invokes OnNativeThemeChanged() on this and all descendants.
   void PropagateNativeThemeChanged(const ui::NativeTheme* theme);
@@ -1273,11 +1332,6 @@ class VIEWS_EXPORT View : public ui::LayerDelegate,
   // Parents all un-parented layers within this view's hierarchy to this view's
   // layer.
   void UpdateParentLayers();
-
-  // Updates the view's layer's parent. Called when a view is added to a view
-  // hierarchy, responsible for parenting the view's layer to the enclosing
-  // layer in the hierarchy.
-  void UpdateParentLayer();
 
   // Parents this view's layer to |parent_layer|, and sets its bounds and other
   // properties in accordance to |offset|, the view's offset from the

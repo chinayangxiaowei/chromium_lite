@@ -5,8 +5,9 @@
 #include "content/browser/loader/resource_loader.h"
 
 #include "base/command_line.h"
-#include "base/message_loop.h"
-#include "base/time.h"
+#include "base/message_loop/message_loop.h"
+#include "base/metrics/histogram.h"
+#include "base/time/time.h"
 #include "content/browser/child_process_security_policy_impl.h"
 #include "content/browser/loader/doomed_resource_handler.h"
 #include "content/browser/loader/resource_loader_delegate.h"
@@ -26,7 +27,7 @@
 #include "net/http/http_response_headers.h"
 #include "net/ssl/client_cert_store.h"
 #include "net/ssl/client_cert_store_impl.h"
-#include "webkit/appcache/appcache_interceptor.h"
+#include "webkit/browser/appcache/appcache_interceptor.h"
 
 using base::TimeDelta;
 using base::TimeTicks;
@@ -48,12 +49,16 @@ void PopulateResourceResponse(net::URLRequest* request,
   response->head.was_npn_negotiated = response_info.was_npn_negotiated;
   response->head.npn_negotiated_protocol =
       response_info.npn_negotiated_protocol;
+  response->head.connection_info = response_info.connection_info;
   response->head.was_fetched_via_proxy = request->was_fetched_via_proxy();
   response->head.socket_address = request->GetSocketAddress();
   appcache::AppCacheInterceptor::GetExtraResponseInfo(
       request,
       &response->head.appcache_id,
       &response->head.appcache_manifest_url);
+  // TODO(mmenke):  Figure out if LOAD_ENABLE_LOAD_TIMING is safe to remove.
+  if (request->load_flags() & net::LOAD_ENABLE_LOAD_TIMING)
+    request->GetLoadTimingInfo(&response->head.load_timing);
 }
 
 }  // namespace
@@ -70,9 +75,9 @@ ResourceLoader::ResourceLoader(scoped_ptr<net::URLRequest> request,
 }
 
 ResourceLoader::~ResourceLoader() {
-  if (login_delegate_)
+  if (login_delegate_.get())
     login_delegate_->OnRequestCancelled();
-  if (ssl_client_auth_handler_)
+  if (ssl_client_auth_handler_.get())
     ssl_client_auth_handler_->OnRequestCancelled();
 
   // Run ResourceHandler destructor before we tear-down the rest of our state
@@ -150,8 +155,14 @@ void ResourceLoader::ReportUploadProgress() {
   }
 }
 
-void ResourceLoader::MarkAsTransferring() {
+void ResourceLoader::MarkAsTransferring(const GURL& target_url) {
+  CHECK_EQ(GetRequestInfo()->GetResourceType(), ResourceType::MAIN_FRAME)
+      << "Cannot transfer non-main frame navigations";
   is_transferring_ = true;
+
+  // When transferring a request to another process, the renderer doesn't get
+  // a chance to update the cookie policy URL. Do it here instead.
+  request()->set_first_party_for_cookies(target_url);
 
   // When an URLRequest is transferred to a new RenderViewHost, its
   // ResourceHandler should not receive any notifications because it may depend
@@ -250,10 +261,10 @@ void ResourceLoader::OnReceivedRedirect(net::URLRequest* unused,
   }
 
   scoped_refptr<ResourceResponse> response(new ResourceResponse());
-  PopulateResourceResponse(request_.get(), response);
+  PopulateResourceResponse(request_.get(), response.get());
 
-  if (!handler_->OnRequestRedirected(info->GetRequestID(), new_url, response,
-                                     defer)) {
+  if (!handler_->OnRequestRedirected(
+          info->GetRequestID(), new_url, response.get(), defer)) {
     Cancel();
   } else if (*defer) {
     deferred_stage_ = DEFERRED_REDIRECT;  // Follow redirect when resumed.
@@ -277,10 +288,10 @@ void ResourceLoader::OnAuthRequired(net::URLRequest* unused,
   // Create a login dialog on the UI thread to get authentication data, or pull
   // from cache and continue on the IO thread.
 
-  DCHECK(!login_delegate_) <<
-      "OnAuthRequired called with login_delegate pending";
+  DCHECK(!login_delegate_.get())
+      << "OnAuthRequired called with login_delegate pending";
   login_delegate_ = delegate_->CreateLoginDelegate(this, auth_info);
-  if (!login_delegate_)
+  if (!login_delegate_.get())
     request_->CancelAuth();
 }
 
@@ -303,8 +314,8 @@ void ResourceLoader::OnCertificateRequested(
   }
 #endif
 
-  DCHECK(!ssl_client_auth_handler_) <<
-      "OnCertificateRequested called with ssl_client_auth_handler pending";
+  DCHECK(!ssl_client_auth_handler_.get())
+      << "OnCertificateRequested called with ssl_client_auth_handler pending";
   ssl_client_auth_handler_ = new SSLClientAuthHandler(request_.get(),
                                                       cert_info);
   ssl_client_auth_handler_->SelectCertificate();
@@ -437,14 +448,14 @@ void ResourceLoader::Resume() {
       request_->FollowDeferredRedirect();
       break;
     case DEFERRED_READ:
-      MessageLoop::current()->PostTask(
+      base::MessageLoop::current()->PostTask(
           FROM_HERE,
           base::Bind(&ResourceLoader::ResumeReading,
                      weak_ptr_factory_.GetWeakPtr()));
       break;
     case DEFERRED_FINISH:
       // Delay self-destruction since we don't know how we were reached.
-      MessageLoop::current()->PostTask(
+      base::MessageLoop::current()->PostTask(
           FROM_HERE,
           base::Bind(&ResourceLoader::CallDidFinishLoading,
                      weak_ptr_factory_.GetWeakPtr()));
@@ -478,11 +489,11 @@ void ResourceLoader::CancelRequestInternal(int error, bool from_renderer) {
   // IO_PENDING?
   bool was_pending = request_->is_pending();
 
-  if (login_delegate_) {
+  if (login_delegate_.get()) {
     login_delegate_->OnRequestCancelled();
     login_delegate_ = NULL;
   }
-  if (ssl_client_auth_handler_) {
+  if (ssl_client_auth_handler_.get()) {
     ssl_client_auth_handler_->OnRequestCancelled();
     ssl_client_auth_handler_ = NULL;
   }
@@ -493,9 +504,10 @@ void ResourceLoader::CancelRequestInternal(int error, bool from_renderer) {
     // If the request isn't in flight, then we won't get an asynchronous
     // notification from the request, so we have to signal ourselves to finish
     // this request.
-    MessageLoop::current()->PostTask(
-        FROM_HERE, base::Bind(&ResourceLoader::ResponseCompleted,
-                              weak_ptr_factory_.GetWeakPtr()));
+    base::MessageLoop::current()->PostTask(
+        FROM_HERE,
+        base::Bind(&ResourceLoader::ResponseCompleted,
+                   weak_ptr_factory_.GetWeakPtr()));
   }
 }
 
@@ -503,7 +515,7 @@ void ResourceLoader::CompleteResponseStarted() {
   ResourceRequestInfoImpl* info = GetRequestInfo();
 
   scoped_refptr<ResourceResponse> response(new ResourceResponse());
-  PopulateResourceResponse(request_.get(), response);
+  PopulateResourceResponse(request_.get(), response.get());
 
   // The --site-per-process flag enables an out-of-process iframes
   // prototype. It works by changing the MIME type of cross-site subframe
@@ -529,14 +541,13 @@ void ResourceLoader::CompleteResponseStarted() {
       response->head.mime_type == "text/html" &&
       !request_->url().SchemeIs(chrome::kChromeUIScheme) &&
       !SiteInstance::IsSameWebSite(NULL, request_->url(),
-          request_->GetSanitizedReferrer())) {
+                                   GURL(request_->referrer()))) {
     response->head.mime_type = "application/browser-plugin";
   }
 
-  if (request_->ssl_info().cert) {
-    int cert_id =
-        CertStore::GetInstance()->StoreCert(request_->ssl_info().cert,
-                                            info->GetChildID());
+  if (request_->ssl_info().cert.get()) {
+    int cert_id = CertStore::GetInstance()->StoreCert(
+        request_->ssl_info().cert.get(), info->GetChildID());
     response->head.security_info = SerializeSecurityInfo(
         cert_id,
         request_->ssl_info().cert_status,
@@ -552,9 +563,11 @@ void ResourceLoader::CompleteResponseStarted() {
   delegate_->DidReceiveResponse(this);
 
   bool defer = false;
-  if (!handler_->OnResponseStarted(info->GetRequestID(), response, &defer)) {
+  if (!handler_->OnResponseStarted(
+          info->GetRequestID(), response.get(), &defer)) {
     Cancel();
   } else if (defer) {
+    read_deferral_start_time_ = base::TimeTicks::Now();
     deferred_stage_ = DEFERRED_READ;  // Read first chunk when resumed.
   }
 }
@@ -572,17 +585,23 @@ void ResourceLoader::StartReading(bool is_continuation) {
   } else {
     // Else, trigger OnReadCompleted asynchronously to avoid starving the IO
     // thread in case the URLRequest can provide data synchronously.
-    MessageLoop::current()->PostTask(
+    base::MessageLoop::current()->PostTask(
         FROM_HERE,
         base::Bind(&ResourceLoader::OnReadCompleted,
                    weak_ptr_factory_.GetWeakPtr(),
-                   request_.get(), bytes_read));
+                   request_.get(),
+                   bytes_read));
   }
 }
 
 void ResourceLoader::ResumeReading() {
   DCHECK(!is_deferred());
 
+  if (!read_deferral_start_time_.is_null()) {
+    UMA_HISTOGRAM_TIMES("Net.ResourceLoader.ReadDeferral",
+                        base::TimeTicks::Now() - read_deferral_start_time_);
+    read_deferral_start_time_ = base::TimeTicks();
+  }
   if (request_->status().is_success()) {
     StartReading(false);  // Read the next chunk (OK to complete synchronously).
   } else {
@@ -630,8 +649,8 @@ void ResourceLoader::ResponseCompleted() {
 
   std::string security_info;
   const net::SSLInfo& ssl_info = request_->ssl_info();
-  if (ssl_info.cert != NULL) {
-    int cert_id = CertStore::GetInstance()->StoreCert(ssl_info.cert,
+  if (ssl_info.cert.get() != NULL) {
+    int cert_id = CertStore::GetInstance()->StoreCert(ssl_info.cert.get(),
                                                       info->GetChildID());
     security_info = SerializeSecurityInfo(
         cert_id, ssl_info.cert_status, ssl_info.security_bits,

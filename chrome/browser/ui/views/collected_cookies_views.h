@@ -65,9 +65,8 @@ class CollectedCookiesViews : public views::DialogDelegateView,
   virtual void OnTreeViewSelectionChanged(views::TreeView* tree_view) OVERRIDE;
 
   // views::View:
-  virtual void ViewHierarchyChanged(bool is_add,
-                                    views::View* parent,
-                                    views::View* child) OVERRIDE;
+  virtual void ViewHierarchyChanged(
+      const ViewHierarchyChangedDetails& details) OVERRIDE;
 
  private:
   virtual ~CollectedCookiesViews();
@@ -77,6 +76,9 @@ class CollectedCookiesViews : public views::DialogDelegateView,
   views::View* CreateAllowedPane();
 
   views::View* CreateBlockedPane();
+
+  // Creates and returns a containing ScrollView around the given tree view.
+  views::View* CreateScrollView(views::TreeView* pane);
 
   void EnableControls();
 

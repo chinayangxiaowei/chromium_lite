@@ -5,11 +5,13 @@
 #ifndef CHROME_BROWSER_SIGNIN_SIGNIN_UI_UTIL_H_
 #define CHROME_BROWSER_SIGNIN_SIGNIN_UI_UTIL_H_
 
-#include "base/string16.h"
+#include <vector>
+
+#include "base/strings/string16.h"
 
 class GlobalError;
 class Profile;
-class SigninManager;
+class SigninManagerBase;
 
 // Utility functions to gather status information from the various signed in
 // services and construct messages suitable for showing in UI.
@@ -19,11 +21,15 @@ namespace signin_ui_util {
 // object associated with that service, or NULL if no errors are reported.
 GlobalError* GetSignedInServiceError(Profile* profile);
 
+// Returns all errors reported by signed in services.
+std::vector<GlobalError*> GetSignedInServiceErrors(Profile* profile);
+
 // Return the label that should be displayed in the signin menu (i.e.
 // "Sign in to Chromium", "Signin Error...", etc).
 string16 GetSigninMenuLabel(Profile* profile);
 
-void GetStatusLabelsForAuthError(const SigninManager& signin_manager,
+void GetStatusLabelsForAuthError(Profile* profile,
+                                 const SigninManagerBase& signin_manager,
                                  string16* status_label,
                                  string16* link_label);
 

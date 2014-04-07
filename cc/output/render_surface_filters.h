@@ -6,6 +6,7 @@
 #ifndef CC_OUTPUT_RENDER_SURFACE_FILTERS_H_
 #define CC_OUTPUT_RENDER_SURFACE_FILTERS_H_
 
+#include "base/basictypes.h"
 #include "cc/base/cc_export.h"
 
 class GrContext;
@@ -15,24 +16,22 @@ namespace gfx {
 class SizeF;
 }
 
-namespace WebKit {
-class WebFilterOperations;
-}
-
 namespace cc {
+
+class FilterOperations;
 
 class CC_EXPORT RenderSurfaceFilters {
  public:
-  static SkBitmap Apply(const WebKit::WebFilterOperations& filters,
+  static SkBitmap Apply(const FilterOperations& filters,
                         unsigned texture_id,
                         gfx::SizeF size,
                         GrContext* gr_context);
-  static WebKit::WebFilterOperations Optimize(
-      const WebKit::WebFilterOperations& filters);
+  static FilterOperations Optimize(const FilterOperations& filters);
 
  private:
-  RenderSurfaceFilters();
+  DISALLOW_IMPLICIT_CONSTRUCTORS(RenderSurfaceFilters);
 };
 
-}
+}  // namespace cc
+
 #endif  // CC_OUTPUT_RENDER_SURFACE_FILTERS_H_

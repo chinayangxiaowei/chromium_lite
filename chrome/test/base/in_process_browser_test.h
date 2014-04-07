@@ -15,16 +15,22 @@
 #include "testing/gtest/include/gtest/gtest.h"
 
 #if defined(OS_CHROMEOS)
-#include "chrome/browser/chromeos/cros/cros_library.h"
+#include "chrome/browser/chromeos/cros/network_library.h"
 #endif  // defined(OS_CHROMEOS)
 
-#if defined(OS_MACOSX)
 namespace base {
+#if defined(OS_MACOSX)
 namespace mac {
 class ScopedNSAutoreleasePool;
 }  // namespace mac
+#endif  // defined(OS_MACOSX)
+
+#if defined(OS_WIN) && defined(USE_AURA)
+namespace win {
+class ScopedCOMInitializer;
+}
+#endif  // defined(OS_WIN) && defined(USE_AURA)
 }  // namespace base
-#endif  // OS_MACOSX
 
 class Browser;
 class CommandLine;
@@ -173,6 +179,15 @@ class InProcessBrowserTest : public content::BrowserTestBase {
   }
 #endif  // OS_MACOSX
 
+  void set_exit_when_last_browser_closes(bool value) {
+    exit_when_last_browser_closes_ = value;
+  }
+
+  // This must be called before RunTestOnMainThreadLoop() to have any effect.
+  void set_multi_desktop_test(bool multi_desktop_test) {
+    multi_desktop_test_ = multi_desktop_test;
+  }
+
  private:
   // Creates a user data directory for the test if one is needed. Returns true
   // if successful.
@@ -195,13 +210,24 @@ class InProcessBrowserTest : public content::BrowserTestBase {
   // specified in the command line.
   base::ScopedTempDir temp_user_data_dir_;
 
+  // True if we should exit the tests after the last browser instance closes.
+  bool exit_when_last_browser_closes_;
+
+  // True if this is a multi-desktop test (in which case this browser test will
+  // not ensure that Browsers are only created on the tested desktop).
+  bool multi_desktop_test_;
+
 #if defined(OS_CHROMEOS)
-  chromeos::ScopedStubCrosEnabler stub_cros_enabler_;
+  chromeos::ScopedStubNetworkLibraryEnabler stub_network_library_enabler_;
 #endif  // defined(OS_CHROMEOS)
 
 #if defined(OS_MACOSX)
   base::mac::ScopedNSAutoreleasePool* autorelease_pool_;
 #endif  // OS_MACOSX
+
+#if defined(OS_WIN) && defined(USE_AURA)
+  scoped_ptr<base::win::ScopedCOMInitializer> com_initializer_;
+#endif
 };
 
 #endif  // CHROME_TEST_BASE_IN_PROCESS_BROWSER_TEST_H_

@@ -5,7 +5,7 @@
 #include "chrome/browser/sync/sync_global_error.h"
 
 #include "base/basictypes.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/signin/signin_manager.h"
 #include "chrome/browser/signin/signin_manager_factory.h"
@@ -62,7 +62,8 @@ class FakeLoginUI : public LoginUIService::LoginUI {
   int focus_ui_call_count_;
 };
 
-ProfileKeyedService* BuildMockLoginUIService(Profile* profile) {
+BrowserContextKeyedService* BuildMockLoginUIService(
+    content::BrowserContext* profile) {
   return new FakeLoginUIService();
 }
 
@@ -110,10 +111,8 @@ void VerifySyncGlobalErrorResult(NiceMock<ProfileSyncServiceMock>* service,
 
   error->OnStateChanged();
 
-  // If there is an error then a wrench button badge, menu item, and bubble view
-  // should be shown.
-  EXPECT_EQ(error->HasBadge(), is_error);
-  EXPECT_EQ(error->HasMenuItem() || error->HasBadge(), is_error);
+  // If there is an error then a menu item and bubble view should be shown.
+  EXPECT_EQ(error->HasMenuItem(), is_error);
   EXPECT_EQ(error->HasBubbleView(), is_error);
 
   // If there is an error then labels should not be empty.
@@ -161,7 +160,8 @@ TEST_F(SyncGlobalErrorTest, PassphraseGlobalError) {
   scoped_ptr<Profile> profile(
       ProfileSyncServiceMock::MakeSignedInTestingProfile());
   NiceMock<ProfileSyncServiceMock> service(profile.get());
-  SigninManager* signin = SigninManagerFactory::GetForProfile(profile.get());
+  SigninManagerBase* signin =
+      SigninManagerFactory::GetForProfile(profile.get());
   FakeLoginUIService* login_ui_service = static_cast<FakeLoginUIService*>(
       LoginUIServiceFactory::GetInstance()->SetTestingFactoryAndUse(
           profile.get(), BuildMockLoginUIService));

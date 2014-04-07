@@ -9,9 +9,9 @@
 #include "base/prefs/pref_service.h"
 #include "base/values.h"
 #include "base/version.h"
-#include "chrome/browser/net/url_fixer_upper.h"
 #include "chrome/browser/prefs/scoped_user_pref_update.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/common/net/url_fixer_upper.h"
 #include "chrome/common/pref_names.h"
 #include "components/user_prefs/pref_registry_syncable.h"
 
@@ -45,7 +45,7 @@ void URLListToPref(const base::ListValue* url_list, SessionStartupPref* pref) {
   for (size_t i = 0; i < url_list->GetSize(); ++i) {
     std::string url_text;
     if (url_list->GetString(i, &url_text)) {
-      GURL fixed_url = URLFixerUpper::FixupURL(url_text, "");
+      GURL fixed_url = URLFixerUpper::FixupURL(url_text, std::string());
       pref->urls.push_back(fixed_url);
     }
   }
@@ -54,15 +54,18 @@ void URLListToPref(const base::ListValue* url_list, SessionStartupPref* pref) {
 }  // namespace
 
 // static
-void SessionStartupPref::RegisterUserPrefs(PrefRegistrySyncable* registry) {
-  registry->RegisterIntegerPref(prefs::kRestoreOnStartup,
-                                TypeToPrefValue(GetDefaultStartupType()),
-                                PrefRegistrySyncable::SYNCABLE_PREF);
+void SessionStartupPref::RegisterProfilePrefs(
+    user_prefs::PrefRegistrySyncable* registry) {
+  registry->RegisterIntegerPref(
+      prefs::kRestoreOnStartup,
+      TypeToPrefValue(GetDefaultStartupType()),
+      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
   registry->RegisterListPref(prefs::kURLsToRestoreOnStartup,
-                             PrefRegistrySyncable::SYNCABLE_PREF);
-  registry->RegisterBooleanPref(prefs::kRestoreOnStartupMigrated,
-                                false,
-                                PrefRegistrySyncable::UNSYNCABLE_PREF);
+                             user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+  registry->RegisterBooleanPref(
+      prefs::kRestoreOnStartupMigrated,
+      false,
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
 }
 
 // static

@@ -9,21 +9,31 @@
 
 #include "content/public/browser/web_contents_delegate.h"
 
-class PrefRegistrySyncable;
 class Profile;
 class TabSpecificContentSettings;
 
+namespace content {
+class WebContents;
+}
+
+namespace user_prefs {
+class PrefRegistrySyncable;
+}
+
 class MediaStreamDevicesController {
  public:
-  MediaStreamDevicesController(Profile* profile,
-                               TabSpecificContentSettings* content_settings,
+  MediaStreamDevicesController(content::WebContents* web_contents,
                                const content::MediaStreamRequest& request,
                                const content::MediaResponseCallback& callback);
 
   virtual ~MediaStreamDevicesController();
 
+  // TODO(tommi): Clean up all the policy code and integrate with
+  // HostContentSettingsMap instead.  This will make creating the UI simpler
+  // and the code cleaner.  crbug.com/244389.
+
   // Registers the prefs backing the audio and video policies.
-  static void RegisterUserPrefs(PrefRegistrySyncable* registry);
+  static void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
 
   // Public method to be called before creating the MediaStreamInfoBarDelegate.
   // This function will check the content settings exceptions and take the
@@ -46,22 +56,23 @@ class MediaStreamDevicesController {
 
   // Called by GetAudioDevicePolicy and GetVideoDevicePolicy to check
   // the currently set capture device policy.
-  DevicePolicy GetDevicePolicy(const char* policy_name) const;
+  DevicePolicy GetDevicePolicy(const char* policy_name,
+                               const char* whitelist_policy_name) const;
 
   // Returns true if the origin of the request has been granted the media
   // access before, otherwise returns false.
   bool IsRequestAllowedByDefault() const;
 
-  // Returns true if the media access for the origin of the request has been
-  // blocked before. Otherwise returns false.
-  bool IsRequestBlockedByDefault() const;
+  // Check if any device of the request has been blocked for the origin of the
+  // request and clears |microphone_requested_| or |webcam_requested_| flags if
+  // they are not allowed anymore. Returns the number of devices that are
+  // allowed after this step. If the count reaches zero the request can be
+  // denied completely, else it still has to be partially fullfilled.
+  int FilterBlockedByDefaultDevices();
 
   // Returns true if the media section in content settings is set to
   // |CONTENT_SETTING_BLOCK|, otherwise returns false.
   bool IsDefaultMediaAccessBlocked() const;
-
-  // Handles Tab Capture media request.
-  void HandleTabMediaRequest();
 
   // Returns true if the origin is a secure scheme, otherwise returns false.
   bool IsSchemeSecure() const;
@@ -73,6 +84,16 @@ class MediaStreamDevicesController {
   // Sets the permission of the origin of the request. This is triggered when
   // the users deny the request or allow the request for https sites.
   void SetPermission(bool allowed) const;
+
+  // Notifies the content setting UI that the media stream access request or
+  // part of the request is accepted.
+  void NotifyUIRequestAccepted() const;
+
+  // Notifies the content setting UI that the media stream access request or
+  // part of the request is denied.
+  void NotifyUIRequestDenied() const;
+
+  content::WebContents* web_contents_;
 
   // The owner of this class needs to make sure it does not outlive the profile.
   Profile* profile_;

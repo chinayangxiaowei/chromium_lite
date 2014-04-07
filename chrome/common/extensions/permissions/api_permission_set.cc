@@ -15,24 +15,35 @@ namespace errors = extension_manifest_errors;
 
 namespace {
 
-using extensions::PermissionsInfo;
 using extensions::APIPermission;
 using extensions::APIPermissionInfo;
 using extensions::APIPermissionSet;
 using extensions::ErrorUtils;
+using extensions::PermissionsInfo;
 
 bool CreateAPIPermission(
     const std::string& permission_str,
     const base::Value* permission_value,
+    APIPermissionSet::ParseSource source,
     APIPermissionSet* api_permissions,
     string16* error,
     std::vector<std::string>* unhandled_permissions) {
-  PermissionsInfo* info = PermissionsInfo::GetInstance();
 
-  const APIPermissionInfo* permission_info = info->GetByName(permission_str);
+  const APIPermissionInfo* permission_info =
+      PermissionsInfo::GetInstance()->GetByName(permission_str);
   if (permission_info) {
     scoped_ptr<APIPermission> permission(
         permission_info->CreateAPIPermission());
+    if (source != APIPermissionSet::kAllowInternalPermissions &&
+        permission_info->is_internal()) {
+      // An internal permission specified in permissions list is an error.
+      if (error) {
+        *error = ErrorUtils::FormatErrorMessageUTF16(
+            errors::kPermissionNotAllowedInManifest, permission_str);
+      }
+      return false;
+    }
+
     if (!permission->FromValue(permission_value)) {
       if (error) {
         *error = ErrorUtils::FormatErrorMessageUTF16(
@@ -55,12 +66,13 @@ bool CreateAPIPermission(
 }
 
 bool ParseChildPermissions(const std::string& base_name,
-                          const Value* permission_value,
-                          APIPermissionSet* api_permissions,
-                          string16* error,
-                          std::vector<std::string>* unhandled_permissions) {
+                           const base::Value* permission_value,
+                           APIPermissionSet::ParseSource source,
+                           APIPermissionSet* api_permissions,
+                           string16* error,
+                           std::vector<std::string>* unhandled_permissions) {
   if (permission_value) {
-    const ListValue* permissions;
+    const base::ListValue* permissions;
     if (!permission_value->GetAsList(&permissions)) {
       if (error) {
         *error = ErrorUtils::FormatErrorMessageUTF16(
@@ -87,13 +99,15 @@ bool ParseChildPermissions(const std::string& base_name,
         continue;
       }
 
-      if (!CreateAPIPermission(base_name + '.' + permission_str, NULL,
-          api_permissions, error, unhandled_permissions))
+      if (!CreateAPIPermission(
+              base_name + '.' + permission_str, NULL, source,
+              api_permissions, error, unhandled_permissions))
         return false;
     }
   }
 
-  return CreateAPIPermission(base_name, NULL, api_permissions, error, NULL);
+  return CreateAPIPermission(base_name, NULL, source,
+                             api_permissions, error, NULL);
 }
 
 }  // namespace
@@ -147,12 +161,11 @@ bool APIPermissionSet::operator==(const APIPermissionSet& rhs) const {
 
 void APIPermissionSet::insert(APIPermission::ID id) {
   const APIPermissionInfo* permission_info =
-    PermissionsInfo::GetInstance()->GetByID(id);
+      PermissionsInfo::GetInstance()->GetByID(id);
   insert(permission_info->CreateAPIPermission());
 }
 
-void APIPermissionSet::insert(
-    APIPermission* permission) {
+void APIPermissionSet::insert(APIPermission* permission) {
   map_[permission->id()].reset(permission);
 }
 
@@ -281,11 +294,11 @@ void APIPermissionSet::Union(
 
 // static
 bool APIPermissionSet::ParseFromJSON(
-    const ListValue* permissions,
+    const base::ListValue* permissions,
+    APIPermissionSet::ParseSource source,
     APIPermissionSet* api_permissions,
     string16* error,
     std::vector<std::string>* unhandled_permissions) {
-  PermissionsInfo* info = PermissionsInfo::GetInstance();
   for (size_t i = 0; i < permissions->GetSize(); ++i) {
     std::string permission_str;
     const base::Value* permission_value = NULL;
@@ -308,15 +321,15 @@ bool APIPermissionSet::ParseFromJSON(
 
     // Check if this permission is a special case where its value should
     // be treated as a list of child permissions.
-    if (info->HasChildPermissions(permission_str)) {
-      if (!ParseChildPermissions(permission_str, permission_value,
+    if (PermissionsInfo::GetInstance()->HasChildPermissions(permission_str)) {
+      if (!ParseChildPermissions(permission_str, permission_value, source,
                                  api_permissions, error, unhandled_permissions))
         return false;
       continue;
     }
 
-    if (!CreateAPIPermission(permission_str, permission_value,
-        api_permissions, error, unhandled_permissions))
+    if (!CreateAPIPermission(permission_str, permission_value, source,
+                             api_permissions, error, unhandled_permissions))
       return false;
   }
   return true;

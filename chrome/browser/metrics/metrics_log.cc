@@ -9,30 +9,30 @@
 #include <vector>
 
 #include "base/basictypes.h"
-#include "base/file_util.h"
+#include "base/bind.h"
+#include "base/cpu.h"
 #include "base/lazy_instance.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/perftimer.h"
 #include "base/prefs/pref_registry_simple.h"
 #include "base/prefs/pref_service.h"
 #include "base/profiler/alternate_timer.h"
-#include "base/string_util.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/sys_info.h"
 #include "base/third_party/nspr/prtime.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "base/tracked_objects.h"
-#include "base/utf_string_conversions.h"
 #include "chrome/browser/autocomplete/autocomplete_input.h"
-#include "chrome/browser/autocomplete/autocomplete_log.h"
 #include "chrome/browser/autocomplete/autocomplete_match.h"
 #include "chrome/browser/autocomplete/autocomplete_provider.h"
 #include "chrome/browser/autocomplete/autocomplete_result.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/google/google_util.h"
+#include "chrome/browser/omnibox/omnibox_log.h"
 #include "chrome/browser/plugins/plugin_prefs.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/common/chrome_process_type.h"
 #include "chrome/common/chrome_version_info.h"
 #include "chrome/common/logging_chrome.h"
 #include "chrome/common/metrics/proto/omnibox_event.pb.h"
@@ -41,22 +41,24 @@
 #include "chrome/common/metrics/variations/variations_util.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/installer/util/google_update_settings.h"
-#include "content/public/browser/content_browser_client.h"
+#include "components/nacl/common/nacl_process_type.h"
 #include "content/public/browser/gpu_data_manager.h"
 #include "content/public/common/content_client.h"
-#include "content/public/common/gpu_info.h"
-#include "googleurl/src/gurl.h"
+#include "content/public/common/webplugininfo.h"
+#include "device/bluetooth/bluetooth_adapter.h"
+#include "device/bluetooth/bluetooth_adapter_factory.h"
+#include "device/bluetooth/bluetooth_device.h"
+#include "gpu/config/gpu_info.h"
 #include "ui/gfx/screen.h"
-#include "webkit/plugins/webplugininfo.h"
+#include "url/gurl.h"
 
 #if defined(OS_ANDROID)
 #include "base/android/build_info.h"
 #endif
 
-#define OPEN_ELEMENT_FOR_SCOPE(name) ScopedElement scoped_element(this, name)
-
 #if defined(OS_WIN)
 #include "base/win/metro.h"
+#include "ui/base/win/dpi.h"
 
 // http://blogs.msdn.com/oldnewthing/archive/2004/10/25/247180.aspx
 extern "C" IMAGE_DOS_HEADER __ImageBase;
@@ -70,6 +72,7 @@ using metrics::SystemProfileProto;
 using tracked_objects::ProcessDataSnapshot;
 typedef chrome_variations::ActiveGroupId ActiveGroupId;
 typedef SystemProfileProto::GoogleUpdate::ProductInfo ProductInfo;
+typedef SystemProfileProto::Hardware::Bluetooth::PairedDevice PairedDevice;
 
 namespace {
 
@@ -106,36 +109,65 @@ OmniboxEventProto::InputType AsOmniboxEventInputType(
 OmniboxEventProto::Suggestion::ResultType AsOmniboxEventResultType(
     AutocompleteMatch::Type type) {
   switch (type) {
-    case AutocompleteMatch::URL_WHAT_YOU_TYPED:
+    case AutocompleteMatchType::URL_WHAT_YOU_TYPED:
       return OmniboxEventProto::Suggestion::URL_WHAT_YOU_TYPED;
-    case AutocompleteMatch::HISTORY_URL:
+    case AutocompleteMatchType::HISTORY_URL:
       return OmniboxEventProto::Suggestion::HISTORY_URL;
-    case AutocompleteMatch::HISTORY_TITLE:
+    case AutocompleteMatchType::HISTORY_TITLE:
       return OmniboxEventProto::Suggestion::HISTORY_TITLE;
-    case AutocompleteMatch::HISTORY_BODY:
+    case AutocompleteMatchType::HISTORY_BODY:
       return OmniboxEventProto::Suggestion::HISTORY_BODY;
-    case AutocompleteMatch::HISTORY_KEYWORD:
+    case AutocompleteMatchType::HISTORY_KEYWORD:
       return OmniboxEventProto::Suggestion::HISTORY_KEYWORD;
-    case AutocompleteMatch::NAVSUGGEST:
+    case AutocompleteMatchType::NAVSUGGEST:
       return OmniboxEventProto::Suggestion::NAVSUGGEST;
-    case AutocompleteMatch::SEARCH_WHAT_YOU_TYPED:
+    case AutocompleteMatchType::SEARCH_WHAT_YOU_TYPED:
       return OmniboxEventProto::Suggestion::SEARCH_WHAT_YOU_TYPED;
-    case AutocompleteMatch::SEARCH_HISTORY:
+    case AutocompleteMatchType::SEARCH_HISTORY:
       return OmniboxEventProto::Suggestion::SEARCH_HISTORY;
-    case AutocompleteMatch::SEARCH_SUGGEST:
+    case AutocompleteMatchType::SEARCH_SUGGEST:
       return OmniboxEventProto::Suggestion::SEARCH_SUGGEST;
-    case AutocompleteMatch::SEARCH_OTHER_ENGINE:
+    case AutocompleteMatchType::SEARCH_OTHER_ENGINE:
       return OmniboxEventProto::Suggestion::SEARCH_OTHER_ENGINE;
-    case AutocompleteMatch::EXTENSION_APP:
+    case AutocompleteMatchType::EXTENSION_APP:
       return OmniboxEventProto::Suggestion::EXTENSION_APP;
-    case AutocompleteMatch::CONTACT:
+    case AutocompleteMatchType::CONTACT:
       return OmniboxEventProto::Suggestion::CONTACT;
-    case AutocompleteMatch::BOOKMARK_TITLE:
+    case AutocompleteMatchType::BOOKMARK_TITLE:
       return OmniboxEventProto::Suggestion::BOOKMARK_TITLE;
     default:
       NOTREACHED();
       return OmniboxEventProto::Suggestion::UNKNOWN_RESULT_TYPE;
   }
+}
+
+OmniboxEventProto::PageClassification AsOmniboxEventPageClassification(
+    AutocompleteInput::PageClassification page_classification) {
+  switch (page_classification) {
+    case AutocompleteInput::INVALID_SPEC:
+      return OmniboxEventProto::INVALID_SPEC;
+    case AutocompleteInput::NEW_TAB_PAGE:
+      return OmniboxEventProto::NEW_TAB_PAGE;
+    case AutocompleteInput::BLANK:
+      return OmniboxEventProto::BLANK;
+    case AutocompleteInput::HOMEPAGE:
+      return OmniboxEventProto::HOMEPAGE;
+    case AutocompleteInput::OTHER:
+      return OmniboxEventProto::OTHER;
+    case AutocompleteInput::SEARCH_RESULT_PAGE_DOING_SEARCH_TERM_REPLACEMENT:
+      return OmniboxEventProto::
+          SEARCH_RESULT_PAGE_DOING_SEARCH_TERM_REPLACEMENT;
+    case AutocompleteInput::INSTANT_NEW_TAB_PAGE_WITH_OMNIBOX_AS_STARTING_FOCUS:
+      return OmniboxEventProto::
+          INSTANT_NEW_TAB_PAGE_WITH_OMNIBOX_AS_STARTING_FOCUS;
+    case AutocompleteInput::INSTANT_NEW_TAB_PAGE_WITH_FAKEBOX_AS_STARTING_FOCUS:
+      return OmniboxEventProto::
+          INSTANT_NEW_TAB_PAGE_WITH_FAKEBOX_AS_STARTING_FOCUS;
+    case AutocompleteInput::SEARCH_RESULT_PAGE_NO_SEARCH_TERM_REPLACEMENT:
+      return OmniboxEventProto::
+          SEARCH_RESULT_PAGE_NO_SEARCH_TERM_REPLACEMENT;
+  }
+  return OmniboxEventProto::INVALID_SPEC;
 }
 
 ProfilerEventProto::TrackedObject::ProcessType AsProtobufProcessType(
@@ -161,8 +193,6 @@ ProfilerEventProto::TrackedObject::ProcessType AsProtobufProcessType(
       return ProfilerEventProto::TrackedObject::PPAPI_PLUGIN;
     case content::PROCESS_TYPE_PPAPI_BROKER:
       return ProfilerEventProto::TrackedObject::PPAPI_BROKER;
-    case PROCESS_TYPE_PROFILE_IMPORT:
-      return ProfilerEventProto::TrackedObject::PROFILE_IMPORT;
     case PROCESS_TYPE_NACL_LOADER:
       return ProfilerEventProto::TrackedObject::NACL_LOADER;
     case PROCESS_TYPE_NACL_BROKER:
@@ -188,11 +218,11 @@ PluginPrefs* GetPluginPrefs() {
   if (profiles.empty())
     return NULL;
 
-  return PluginPrefs::GetForProfile(profiles.front());
+  return PluginPrefs::GetForProfile(profiles.front()).get();
 }
 
 // Fills |plugin| with the info contained in |plugin_info| and |plugin_prefs|.
-void SetPluginInfo(const webkit::WebPluginInfo& plugin_info,
+void SetPluginInfo(const content::WebPluginInfo& plugin_info,
                    const PluginPrefs* plugin_prefs,
                    SystemProfileProto::Plugin* plugin) {
   plugin->set_name(UTF16ToUTF8(plugin_info.name));
@@ -219,27 +249,17 @@ void WriteProfilerData(const ProcessDataSnapshot& profiler_data,
   for (std::vector<tracked_objects::TaskSnapshot>::const_iterator it =
            profiler_data.tasks.begin();
        it != profiler_data.tasks.end(); ++it) {
-    std::string ignored;
-    uint64 birth_thread_name_hash;
-    uint64 exec_thread_name_hash;
-    uint64 source_file_name_hash;
-    uint64 source_function_name_hash;
-    MetricsLogBase::CreateHashes(it->birth.thread_name,
-                                 &ignored, &birth_thread_name_hash);
-    MetricsLogBase::CreateHashes(it->death_thread_name,
-                                 &ignored, &exec_thread_name_hash);
-    MetricsLogBase::CreateHashes(it->birth.location.file_name,
-                                 &ignored, &source_file_name_hash);
-    MetricsLogBase::CreateHashes(it->birth.location.function_name,
-                                 &ignored, &source_function_name_hash);
-
     const tracked_objects::DeathDataSnapshot& death_data = it->death_data;
     ProfilerEventProto::TrackedObject* tracked_object =
         performance_profile->add_tracked_object();
-    tracked_object->set_birth_thread_name_hash(birth_thread_name_hash);
-    tracked_object->set_exec_thread_name_hash(exec_thread_name_hash);
-    tracked_object->set_source_file_name_hash(source_file_name_hash);
-    tracked_object->set_source_function_name_hash(source_function_name_hash);
+    tracked_object->set_birth_thread_name_hash(
+        MetricsLogBase::Hash(it->birth.thread_name));
+    tracked_object->set_exec_thread_name_hash(
+        MetricsLogBase::Hash(it->death_thread_name));
+    tracked_object->set_source_file_name_hash(
+        MetricsLogBase::Hash(it->birth.location.file_name));
+    tracked_object->set_source_function_name_hash(
+        MetricsLogBase::Hash(it->birth.location.function_name));
     tracked_object->set_source_line_number(it->birth.location.line_number);
     tracked_object->set_exec_count(death_data.count);
     tracked_object->set_exec_time_total(death_data.run_duration_sum);
@@ -267,7 +287,7 @@ void ProductDataToProto(const GoogleUpdateSettings::ProductData& product_data,
 #endif
 
 #if defined(OS_WIN)
-struct ScreenDPIInformation{
+struct ScreenDPIInformation {
   double max_dpi_x;
   double max_dpi_y;
 };
@@ -284,6 +304,8 @@ BOOL CALLBACK GetMonitorDPICallback(HMONITOR, HDC hdc, LPRECT, LPARAM dwData) {
       GetDeviceCaps(hdc, HORZRES) / (size_x / kMillimetersPerInch) : 0;
   double dpi_y = (size_y > 0) ?
       GetDeviceCaps(hdc, VERTRES) / (size_y / kMillimetersPerInch) : 0;
+  dpi_x *= ui::win::GetUndocumentedDPIScale();
+  dpi_y *= ui::win::GetUndocumentedDPIScale();
   screen_info->max_dpi_x = std::max(dpi_x, screen_info->max_dpi_x);
   screen_info->max_dpi_y = std::max(dpi_y, screen_info->max_dpi_y);
   return TRUE;
@@ -292,7 +314,7 @@ BOOL CALLBACK GetMonitorDPICallback(HMONITOR, HDC hdc, LPRECT, LPARAM dwData) {
 void WriteScreenDPIInformationProto(SystemProfileProto::Hardware* hardware) {
   HDC desktop_dc = GetDC(NULL);
   if (desktop_dc) {
-    ScreenDPIInformation si = {0,0};
+    ScreenDPIInformation si = {0, 0};
     if (EnumDisplayMonitors(desktop_dc, NULL, GetMonitorDPICallback,
             reinterpret_cast<LPARAM>(&si))) {
       hardware->set_max_dpi_x(si.max_dpi_x);
@@ -303,6 +325,52 @@ void WriteScreenDPIInformationProto(SystemProfileProto::Hardware* hardware) {
 }
 
 #endif  // defined(OS_WIN)
+
+#if defined(OS_CHROMEOS)
+PairedDevice::Type AsBluetoothDeviceType(
+    enum device::BluetoothDevice::DeviceType device_type) {
+  switch (device_type) {
+    case device::BluetoothDevice::DEVICE_UNKNOWN:
+      return PairedDevice::DEVICE_UNKNOWN;
+    case device::BluetoothDevice::DEVICE_COMPUTER:
+      return PairedDevice::DEVICE_COMPUTER;
+    case device::BluetoothDevice::DEVICE_PHONE:
+      return PairedDevice::DEVICE_PHONE;
+    case device::BluetoothDevice::DEVICE_MODEM:
+      return PairedDevice::DEVICE_MODEM;
+    case device::BluetoothDevice::DEVICE_AUDIO:
+      return PairedDevice::DEVICE_AUDIO;
+    case device::BluetoothDevice::DEVICE_CAR_AUDIO:
+      return PairedDevice::DEVICE_CAR_AUDIO;
+    case device::BluetoothDevice::DEVICE_VIDEO:
+      return PairedDevice::DEVICE_VIDEO;
+    case device::BluetoothDevice::DEVICE_PERIPHERAL:
+      return PairedDevice::DEVICE_PERIPHERAL;
+    case device::BluetoothDevice::DEVICE_JOYSTICK:
+      return PairedDevice::DEVICE_JOYSTICK;
+    case device::BluetoothDevice::DEVICE_GAMEPAD:
+      return PairedDevice::DEVICE_GAMEPAD;
+    case device::BluetoothDevice::DEVICE_KEYBOARD:
+      return PairedDevice::DEVICE_KEYBOARD;
+    case device::BluetoothDevice::DEVICE_MOUSE:
+      return PairedDevice::DEVICE_MOUSE;
+    case device::BluetoothDevice::DEVICE_TABLET:
+      return PairedDevice::DEVICE_TABLET;
+    case device::BluetoothDevice::DEVICE_KEYBOARD_MOUSE_COMBO:
+      return PairedDevice::DEVICE_KEYBOARD_MOUSE_COMBO;
+  }
+
+  NOTREACHED();
+  return PairedDevice::DEVICE_UNKNOWN;
+}
+#endif  // defined(OS_CHROMEOS)
+
+// Round a timestamp measured in seconds since epoch to one with a granularity
+// of an hour. This can be used before uploaded potentially sensitive
+// timestamps.
+int64 RoundSecondsToHour(int64 time_in_seconds) {
+  return 3600 * (time_in_seconds / 3600);
+}
 
 }  // namespace
 
@@ -366,23 +434,15 @@ const std::string& MetricsLog::version_extension() {
 }
 
 void MetricsLog::RecordIncrementalStabilityElements(
-    const std::vector<webkit::WebPluginInfo>& plugin_list) {
+    const std::vector<content::WebPluginInfo>& plugin_list) {
   DCHECK(!locked());
 
   PrefService* pref = GetPrefService();
   DCHECK(pref);
 
-  OPEN_ELEMENT_FOR_SCOPE("profile");
-  WriteCommonEventAttributes();
-
-  WriteInstallElement();
-
-  {
-    OPEN_ELEMENT_FOR_SCOPE("stability");  // Minimal set of stability elements.
-    WriteRequiredStabilityAttributes(pref);
-    WriteRealtimeStabilityAttributes(pref);
-    WritePluginStabilityElements(plugin_list, pref);
-  }
+  WriteRequiredStabilityAttributes(pref);
+  WriteRealtimeStabilityAttributes(pref);
+  WritePluginStabilityElements(plugin_list, pref);
 }
 
 PrefService* MetricsLog::GetPrefService() {
@@ -409,7 +469,7 @@ void MetricsLog::GetFieldTrialIds(
 }
 
 void MetricsLog::WriteStabilityElement(
-    const std::vector<webkit::WebPluginInfo>& plugin_list,
+    const std::vector<content::WebPluginInfo>& plugin_list,
     PrefService* pref) {
   DCHECK(!locked());
 
@@ -417,7 +477,6 @@ void MetricsLog::WriteStabilityElement(
   // NOTE: This could lead to some data loss if this report isn't successfully
   //       sent, but that's true for all the metrics.
 
-  OPEN_ELEMENT_FOR_SCOPE("stability");
   WriteRequiredStabilityAttributes(pref);
   WriteRealtimeStabilityAttributes(pref);
 
@@ -439,17 +498,6 @@ void MetricsLog::WriteStabilityElement(
 
   // TODO(jar): The following are all optional, so we *could* optimize them for
   // values of zero (and not include them).
-
-  // Write the XML version.
-  WriteIntAttribute("incompleteshutdowncount", incomplete_shutdown_count);
-  WriteIntAttribute("breakpadregistrationok",
-                    breakpad_registration_success_count);
-  WriteIntAttribute("breakpadregistrationfail",
-                    breakpad_registration_failure_count);
-  WriteIntAttribute("debuggerpresent", debugger_present_count);
-  WriteIntAttribute("debuggernotpresent", debugger_not_present_count);
-
-  // Write the protobuf version.
   SystemProfileProto::Stability* stability =
       uma_proto()->mutable_system_profile()->mutable_stability();
   stability->set_incomplete_shutdown_count(incomplete_shutdown_count);
@@ -464,15 +512,13 @@ void MetricsLog::WriteStabilityElement(
 }
 
 void MetricsLog::WritePluginStabilityElements(
-    const std::vector<webkit::WebPluginInfo>& plugin_list,
+    const std::vector<content::WebPluginInfo>& plugin_list,
     PrefService* pref) {
   // Now log plugin stability info.
   const ListValue* plugin_stats_list = pref->GetList(
       prefs::kStabilityPluginStats);
   if (!plugin_stats_list)
     return;
-
-  OPEN_ELEMENT_FOR_SCOPE("plugins");
 
 #if defined(ENABLE_PLUGINS)
   SystemProfileProto::Stability* stability =
@@ -486,40 +532,17 @@ void MetricsLog::WritePluginStabilityElements(
     }
     DictionaryValue* plugin_dict = static_cast<DictionaryValue*>(*iter);
 
-    std::string plugin_name;
-    plugin_dict->GetString(prefs::kStabilityPluginName, &plugin_name);
-
-    std::string base64_name_hash;
-    uint64 numeric_name_hash_ignored;
-    CreateHashes(plugin_name, &base64_name_hash, &numeric_name_hash_ignored);
-
-    // Write the XML verison.
-    OPEN_ELEMENT_FOR_SCOPE("pluginstability");
-    // Use "filename" instead of "name", otherwise we need to update the
-    // UMA servers.
-    WriteAttribute("filename", base64_name_hash);
-
-    int launches = 0;
-    plugin_dict->GetInteger(prefs::kStabilityPluginLaunches, &launches);
-    WriteIntAttribute("launchcount", launches);
-
-    int instances = 0;
-    plugin_dict->GetInteger(prefs::kStabilityPluginInstances, &instances);
-    WriteIntAttribute("instancecount", instances);
-
-    int crashes = 0;
-    plugin_dict->GetInteger(prefs::kStabilityPluginCrashes, &crashes);
-    WriteIntAttribute("crashcount", crashes);
-
     // Write the protobuf version.
     // Note that this search is potentially a quadratic operation, but given the
     // low number of plugins installed on a "reasonable" setup, this should be
     // fine.
     // TODO(isherman): Verify that this does not show up as a hotspot in
     // profiler runs.
-    const webkit::WebPluginInfo* plugin_info = NULL;
+    const content::WebPluginInfo* plugin_info = NULL;
+    std::string plugin_name;
+    plugin_dict->GetString(prefs::kStabilityPluginName, &plugin_name);
     const string16 plugin_name_utf16 = UTF8ToUTF16(plugin_name);
-    for (std::vector<webkit::WebPluginInfo>::const_iterator iter =
+    for (std::vector<content::WebPluginInfo>::const_iterator iter =
              plugin_list.begin();
          iter != plugin_list.end(); ++iter) {
       if (iter->name == plugin_name_utf16) {
@@ -532,20 +555,32 @@ void MetricsLog::WritePluginStabilityElements(
       NOTREACHED();
       continue;
     }
-    int loading_errors = 0;
-    plugin_dict->GetInteger(prefs::kStabilityPluginLoadingErrors,
-                            &loading_errors);
-    WriteIntAttribute("loadingerrorcount", loading_errors);
 
-    // Write the protobuf version.
     SystemProfileProto::Stability::PluginStability* plugin_stability =
         stability->add_plugin_stability();
     SetPluginInfo(*plugin_info, plugin_prefs,
                   plugin_stability->mutable_plugin());
-    plugin_stability->set_launch_count(launches);
-    plugin_stability->set_instance_count(instances);
-    plugin_stability->set_crash_count(crashes);
-    plugin_stability->set_loading_error_count(loading_errors);
+
+    int launches = 0;
+    plugin_dict->GetInteger(prefs::kStabilityPluginLaunches, &launches);
+    if (launches > 0)
+      plugin_stability->set_launch_count(launches);
+
+    int instances = 0;
+    plugin_dict->GetInteger(prefs::kStabilityPluginInstances, &instances);
+    if (instances > 0)
+      plugin_stability->set_instance_count(instances);
+
+    int crashes = 0;
+    plugin_dict->GetInteger(prefs::kStabilityPluginCrashes, &crashes);
+    if (crashes > 0)
+      plugin_stability->set_crash_count(crashes);
+
+    int loading_errors = 0;
+    plugin_dict->GetInteger(prefs::kStabilityPluginLoadingErrors,
+                            &loading_errors);
+    if (loading_errors > 0)
+      plugin_stability->set_loading_error_count(loading_errors);
   }
 #endif  // defined(ENABLE_PLUGINS)
 
@@ -562,11 +597,6 @@ void MetricsLog::WriteRequiredStabilityAttributes(PrefService* pref) {
   int crash_count = pref->GetInteger(prefs::kStabilityCrashCount);
   pref->SetInteger(prefs::kStabilityCrashCount, 0);
 
-  // Write the XML version.
-  WriteIntAttribute("launchcount", launch_count);
-  WriteIntAttribute("crashcount", crash_count);
-
-  // Write the protobuf version.
   SystemProfileProto::Stability* stability =
       uma_proto()->mutable_system_profile()->mutable_stability();
   stability->set_launch_count(launch_count);
@@ -582,35 +612,30 @@ void MetricsLog::WriteRealtimeStabilityAttributes(PrefService* pref) {
       uma_proto()->mutable_system_profile()->mutable_stability();
   int count = pref->GetInteger(prefs::kStabilityPageLoadCount);
   if (count) {
-    WriteIntAttribute("pageloadcount", count);
     stability->set_page_load_count(count);
     pref->SetInteger(prefs::kStabilityPageLoadCount, 0);
   }
 
   count = pref->GetInteger(prefs::kStabilityRendererCrashCount);
   if (count) {
-    WriteIntAttribute("renderercrashcount", count);
     stability->set_renderer_crash_count(count);
     pref->SetInteger(prefs::kStabilityRendererCrashCount, 0);
   }
 
   count = pref->GetInteger(prefs::kStabilityExtensionRendererCrashCount);
   if (count) {
-    WriteIntAttribute("extensionrenderercrashcount", count);
     stability->set_extension_renderer_crash_count(count);
     pref->SetInteger(prefs::kStabilityExtensionRendererCrashCount, 0);
   }
 
   count = pref->GetInteger(prefs::kStabilityRendererHangCount);
   if (count) {
-    WriteIntAttribute("rendererhangcount", count);
     stability->set_renderer_hang_count(count);
     pref->SetInteger(prefs::kStabilityRendererHangCount, 0);
   }
 
   count = pref->GetInteger(prefs::kStabilityChildProcessCrashCount);
   if (count) {
-    WriteIntAttribute("childprocesscrashcount", count);
     stability->set_child_process_crash_count(count);
     pref->SetInteger(prefs::kStabilityChildProcessCrashCount, 0);
   }
@@ -636,159 +661,39 @@ void MetricsLog::WriteRealtimeStabilityAttributes(PrefService* pref) {
 #endif  // OS_CHROMEOS
 
   int64 recent_duration = GetIncrementalUptime(pref);
-  if (recent_duration) {
-    WriteInt64Attribute("uptimesec", recent_duration);
+  if (recent_duration)
     stability->set_uptime_sec(recent_duration);
-  }
 }
 
 void MetricsLog::WritePluginList(
-    const std::vector<webkit::WebPluginInfo>& plugin_list,
-    bool write_as_xml) {
+    const std::vector<content::WebPluginInfo>& plugin_list) {
   DCHECK(!locked());
-
-  OPEN_ELEMENT_FOR_SCOPE("plugins");
 
 #if defined(ENABLE_PLUGINS)
   PluginPrefs* plugin_prefs = GetPluginPrefs();
   SystemProfileProto* system_profile = uma_proto()->mutable_system_profile();
-  for (std::vector<webkit::WebPluginInfo>::const_iterator iter =
+  for (std::vector<content::WebPluginInfo>::const_iterator iter =
            plugin_list.begin();
        iter != plugin_list.end(); ++iter) {
-    if (write_as_xml) {
-      std::string base64_name_hash;
-      uint64 numeric_hash_ignored;
-      CreateHashes(UTF16ToUTF8(iter->name), &base64_name_hash,
-                   &numeric_hash_ignored);
-
-      std::string filename_bytes = iter->path.BaseName().AsUTF8Unsafe();
-      std::string base64_filename_hash;
-      CreateHashes(filename_bytes, &base64_filename_hash,
-                   &numeric_hash_ignored);
-
-      // Write the XML version.
-      OPEN_ELEMENT_FOR_SCOPE("plugin");
-
-      // Plugin name and filename are hashed for the privacy of those
-      // testing unreleased new extensions.
-      WriteAttribute("name", base64_name_hash);
-      WriteAttribute("filename", base64_filename_hash);
-      WriteAttribute("version", UTF16ToUTF8(iter->version));
-      if (plugin_prefs)
-        WriteIntAttribute("disabled", !plugin_prefs->IsPluginEnabled(*iter));
-    } else {
-      // Write the protobuf version.
-      SystemProfileProto::Plugin* plugin = system_profile->add_plugin();
-      SetPluginInfo(*iter, plugin_prefs, plugin);
-    }
+    SystemProfileProto::Plugin* plugin = system_profile->add_plugin();
+    SetPluginInfo(*iter, plugin_prefs, plugin);
   }
 #endif  // defined(ENABLE_PLUGINS)
 }
 
-void MetricsLog::WriteInstallElement() {
-  // Write the XML version.
-  // We'll write the protobuf version in RecordEnvironmentProto().
-  OPEN_ELEMENT_FOR_SCOPE("install");
-  WriteAttribute("installdate", GetMetricsEnabledDate(GetPrefService()));
-  WriteIntAttribute("buildid", 0);  // We're using appversion instead.
-}
-
 void MetricsLog::RecordEnvironment(
-         const std::vector<webkit::WebPluginInfo>& plugin_list,
-         const GoogleUpdateMetrics& google_update_metrics,
-         const DictionaryValue* profile_metrics) {
+         const std::vector<content::WebPluginInfo>& plugin_list,
+         const GoogleUpdateMetrics& google_update_metrics) {
   DCHECK(!locked());
 
   PrefService* pref = GetPrefService();
-
-  OPEN_ELEMENT_FOR_SCOPE("profile");
-  WriteCommonEventAttributes();
-
-  WriteInstallElement();
-
-  // Write the XML version.
-  // We'll write the protobuf version in RecordEnvironmentProto().
-  bool write_as_xml = true;
-  WritePluginList(plugin_list, write_as_xml);
-
   WriteStabilityElement(plugin_list, pref);
-
-  {
-    // Write the XML version.
-    // We'll write the protobuf version in RecordEnvironmentProto().
-    OPEN_ELEMENT_FOR_SCOPE("cpu");
-    WriteAttribute("arch", base::SysInfo::OperatingSystemArchitecture());
-  }
-
-  {
-    // Write the XML version.
-    // We'll write the protobuf version in RecordEnvironmentProto().
-    OPEN_ELEMENT_FOR_SCOPE("memory");
-    WriteIntAttribute("mb", base::SysInfo::AmountOfPhysicalMemoryMB());
-#if defined(OS_WIN)
-    WriteIntAttribute("dllbase", reinterpret_cast<int>(&__ImageBase));
-#endif
-  }
-
-  {
-    // Write the XML version.
-    // We'll write the protobuf version in RecordEnvironmentProto().
-    OPEN_ELEMENT_FOR_SCOPE("os");
-    WriteAttribute("name", base::SysInfo::OperatingSystemName());
-    WriteAttribute("version", base::SysInfo::OperatingSystemVersion());
-  }
-
-  {
-    OPEN_ELEMENT_FOR_SCOPE("gpu");
-    const content::GPUInfo& gpu_info =
-        GpuDataManager::GetInstance()->GetGPUInfo();
-
-    // Write the XML version.
-    // We'll write the protobuf version in RecordEnvironmentProto().
-    WriteIntAttribute("vendorid", gpu_info.gpu.vendor_id);
-    WriteIntAttribute("deviceid", gpu_info.gpu.device_id);
-  }
-
-  {
-    const gfx::Size display_size = GetScreenSize();
-
-    // Write the XML version.
-    // We'll write the protobuf version in RecordEnvironmentProto().
-    OPEN_ELEMENT_FOR_SCOPE("display");
-    WriteIntAttribute("xsize", display_size.width());
-    WriteIntAttribute("ysize", display_size.height());
-    WriteIntAttribute("screens", GetScreenCount());
-  }
-
-  {
-    OPEN_ELEMENT_FOR_SCOPE("bookmarks");
-    {
-      OPEN_ELEMENT_FOR_SCOPE("bookmarklocation");
-      WriteAttribute("name", "full-tree");
-      WriteIntAttribute("foldercount", 0);
-      WriteIntAttribute("itemcount", 0);
-    }
-    {
-      OPEN_ELEMENT_FOR_SCOPE("bookmarklocation");
-      WriteAttribute("name", "toolbar");
-      WriteIntAttribute("foldercount", 0);
-      WriteIntAttribute("itemcount", 0);
-    }
-  }
-
-  {
-    OPEN_ELEMENT_FOR_SCOPE("keywords");
-    WriteIntAttribute("count", pref->GetInteger(prefs::kNumKeywords));
-  }
-
-  if (profile_metrics)
-    WriteAllProfilesMetrics(*profile_metrics);
 
   RecordEnvironmentProto(plugin_list, google_update_metrics);
 }
 
 void MetricsLog::RecordEnvironmentProto(
-    const std::vector<webkit::WebPluginInfo>& plugin_list,
+    const std::vector<content::WebPluginInfo>& plugin_list,
     const GoogleUpdateMetrics& google_update_metrics) {
   SystemProfileProto* system_profile = uma_proto()->mutable_system_profile();
 
@@ -800,10 +705,17 @@ void MetricsLog::RecordEnvironmentProto(
   bool success = base::StringToInt(GetMetricsEnabledDate(GetPrefService()),
                                    &enabled_date);
   DCHECK(success);
-  system_profile->set_uma_enabled_date(enabled_date);
+
+  // Reduce granularity of the enabled_date field to nearest hour.
+  system_profile->set_uma_enabled_date(RoundSecondsToHour(enabled_date));
+
+  int64 install_date = GetPrefService()->GetInt64(prefs::kInstallDate);
+
+  // Reduce granularity of the install_date field to nearest hour.
+  system_profile->set_install_date(RoundSecondsToHour(install_date));
 
   system_profile->set_application_locale(
-      content::GetContentClient()->browser()->GetApplicationLocale());
+      g_browser_process->GetApplicationLocale());
 
   SystemProfileProto::Hardware* hardware = system_profile->mutable_hardware();
   hardware->set_cpu_architecture(base::SysInfo::OperatingSystemArchitecture());
@@ -840,7 +752,12 @@ void MetricsLog::RecordEnvironmentProto(
       base::android::BuildInfo::GetInstance()->android_build_fp());
 #endif
 
-  const content::GPUInfo& gpu_info =
+  base::CPU cpu_info;
+  SystemProfileProto::Hardware::CPU* cpu = hardware->mutable_cpu();
+  cpu->set_vendor_name(cpu_info.vendor_name());
+  cpu->set_signature(cpu_info.signature());
+
+  const gpu::GPUInfo& gpu_info =
       GpuDataManager::GetInstance()->GetGPUInfo();
   SystemProfileProto::Hardware::Graphics* gpu = hardware->mutable_gpu();
   gpu->set_vendor_id(gpu_info.gpu.vendor_id);
@@ -867,8 +784,7 @@ void MetricsLog::RecordEnvironmentProto(
 
   WriteGoogleUpdateProto(google_update_metrics);
 
-  bool write_as_xml = false;
-  WritePluginList(plugin_list, write_as_xml);
+  WritePluginList(plugin_list);
 
   std::vector<ActiveGroupId> field_trial_ids;
   GetFieldTrialIds(&field_trial_ids);
@@ -878,6 +794,14 @@ void MetricsLog::RecordEnvironmentProto(
   PerfDataProto perf_data_proto;
   if (perf_provider_.GetPerfData(&perf_data_proto))
     uma_proto()->add_perf_data()->Swap(&perf_data_proto);
+
+  // BluetoothAdapterFactory::GetAdapter is synchronous on Chrome OS; if that
+  // changes this will fail at the DCHECK().
+  device::BluetoothAdapterFactory::GetAdapter(
+      base::Bind(&MetricsLog::SetBluetoothAdapter,
+                 base::Unretained(this)));
+  DCHECK(adapter_.get());
+  WriteBluetoothProto(hardware);
 #endif
 }
 
@@ -906,116 +830,13 @@ void MetricsLog::RecordProfilerData(
   WriteProfilerData(process_data, process_type, profile);
 }
 
-void MetricsLog::WriteAllProfilesMetrics(
-    const DictionaryValue& all_profiles_metrics) {
-  const std::string profile_prefix(prefs::kProfilePrefix);
-  for (DictionaryValue::Iterator i(all_profiles_metrics); !i.IsAtEnd();
-       i.Advance()) {
-    if (i.key().compare(0, profile_prefix.size(), profile_prefix) == 0) {
-      const DictionaryValue* profile;
-      if (i.value().GetAsDictionary(&profile))
-        WriteProfileMetrics(i.key().substr(profile_prefix.size()), *profile);
-    }
-  }
-}
-
-void MetricsLog::WriteProfileMetrics(const std::string& profileidhash,
-                                     const DictionaryValue& profile_metrics) {
-  OPEN_ELEMENT_FOR_SCOPE("userprofile");
-  WriteAttribute("profileidhash", profileidhash);
-  for (DictionaryValue::Iterator i(profile_metrics); !i.IsAtEnd();
-       i.Advance()) {
-    DCHECK_NE(i.key(), "id");
-    switch (i.value().GetType()) {
-      case Value::TYPE_STRING: {
-        std::string string_value;
-        if (i.value().GetAsString(&string_value)) {
-          OPEN_ELEMENT_FOR_SCOPE("profileparam");
-          WriteAttribute("name", i.key());
-          WriteAttribute("value", string_value);
-        }
-        break;
-      }
-
-      case Value::TYPE_BOOLEAN: {
-        bool bool_value;
-        if (i.value().GetAsBoolean(&bool_value)) {
-          OPEN_ELEMENT_FOR_SCOPE("profileparam");
-          WriteAttribute("name", i.key());
-          WriteIntAttribute("value", bool_value ? 1 : 0);
-        }
-        break;
-      }
-
-      case Value::TYPE_INTEGER: {
-        int int_value;
-        if (i.value().GetAsInteger(&int_value)) {
-          OPEN_ELEMENT_FOR_SCOPE("profileparam");
-          WriteAttribute("name", i.key());
-          WriteIntAttribute("value", int_value);
-        }
-        break;
-      }
-
-      default:
-        NOTREACHED();
-        break;
-    }
-  }
-}
-
-void MetricsLog::RecordOmniboxOpenedURL(const AutocompleteLog& log) {
+void MetricsLog::RecordOmniboxOpenedURL(const OmniboxLog& log) {
   DCHECK(!locked());
-
-  // Write the XML version.
-  OPEN_ELEMENT_FOR_SCOPE("uielement");
-  WriteAttribute("action", "autocomplete");
-  WriteAttribute("targetidhash", "");
-  // TODO(kochi): Properly track windows.
-  WriteIntAttribute("window", 0);
-  if (log.tab_id != -1) {
-    // If we know what tab the autocomplete URL was opened in, log it.
-    WriteIntAttribute("tab", static_cast<int>(log.tab_id));
-  }
-  WriteCommonEventAttributes();
 
   std::vector<string16> terms;
   const int num_terms =
       static_cast<int>(Tokenize(log.text, kWhitespaceUTF16, &terms));
-  {
-    OPEN_ELEMENT_FOR_SCOPE("autocomplete");
 
-    WriteIntAttribute("typedlength", static_cast<int>(log.text.length()));
-    WriteIntAttribute("numterms", num_terms);
-    WriteIntAttribute("selectedindex", static_cast<int>(log.selected_index));
-    WriteIntAttribute("completedlength",
-                      log.completed_length != string16::npos ?
-                      static_cast<int>(log.completed_length) : 0);
-    if (log.elapsed_time_since_user_first_modified_omnibox !=
-        base::TimeDelta::FromMilliseconds(-1)) {
-      // Only upload the typing duration if it is set/valid.
-      WriteInt64Attribute("typingduration",
-          log.elapsed_time_since_user_first_modified_omnibox.InMilliseconds());
-    }
-    const std::string input_type(
-        AutocompleteInput::TypeToString(log.input_type));
-    if (!input_type.empty())
-      WriteAttribute("inputtype", input_type);
-
-    for (AutocompleteResult::const_iterator i(log.result.begin());
-         i != log.result.end(); ++i) {
-      OPEN_ELEMENT_FOR_SCOPE("autocompleteitem");
-      if (i->provider)
-        WriteAttribute("provider", i->provider->GetName());
-      const std::string result_type(AutocompleteMatch::TypeToString(i->type));
-      if (!result_type.empty())
-        WriteAttribute("resulttype", result_type);
-      WriteIntAttribute("relevance", i->relevance);
-      WriteIntAttribute("isstarred", i->starred ? 1 : 0);
-    }
-  }
-
-  // Write the protobuf version.
   OmniboxEventProto* omnibox_event = uma_proto()->add_omnibox_event();
   omnibox_event->set_time(MetricsLogBase::GetCurrentTime());
   if (log.tab_id != -1) {
@@ -1037,8 +858,16 @@ void MetricsLog::RecordOmniboxOpenedURL(const AutocompleteLog& log) {
   omnibox_event->set_duration_since_last_default_match_update_ms(
       log.elapsed_time_since_last_change_to_default_match.InMilliseconds());
   omnibox_event->set_current_page_classification(
-      log.current_page_classification);
+      AsOmniboxEventPageClassification(log.current_page_classification));
   omnibox_event->set_input_type(AsOmniboxEventInputType(log.input_type));
+
+  // The view code to hide the top result is currently only implemented on the
+  // Mac and for views.
+#if defined(OS_MACOSX) || defined(TOOLKIT_VIEWS)
+  omnibox_event->set_is_top_result_hidden_in_dropdown(
+      log.result.ShouldHideTopMatch());
+#endif  // defined(OS_MACOSX) || defined(TOOLKIT_VIEWS)
+
   for (AutocompleteResult::const_iterator i(log.result.begin());
        i != log.result.end(); ++i) {
     OmniboxEventProto::Suggestion* suggestion = omnibox_event->add_suggestion();
@@ -1087,4 +916,49 @@ void MetricsLog::WriteGoogleUpdateProto(
                        google_update->mutable_client_status());
   }
 #endif  // defined(GOOGLE_CHROME_BUILD) && defined(OS_WIN)
+}
+
+void MetricsLog::SetBluetoothAdapter(
+    scoped_refptr<device::BluetoothAdapter> adapter) {
+  adapter_ = adapter;
+}
+
+void MetricsLog::WriteBluetoothProto(
+    SystemProfileProto::Hardware* hardware) {
+#if defined(OS_CHROMEOS)
+  SystemProfileProto::Hardware::Bluetooth* bluetooth =
+      hardware->mutable_bluetooth();
+
+  bluetooth->set_is_present(adapter_->IsPresent());
+  bluetooth->set_is_enabled(adapter_->IsPowered());
+
+  device::BluetoothAdapter::DeviceList devices = adapter_->GetDevices();
+  for (device::BluetoothAdapter::DeviceList::iterator iter =
+           devices.begin(); iter != devices.end(); ++iter) {
+    PairedDevice* paired_device = bluetooth->add_paired_device();
+
+    device::BluetoothDevice* device = *iter;
+    paired_device->set_bluetooth_class(device->GetBluetoothClass());
+    paired_device->set_type(AsBluetoothDeviceType(device->GetDeviceType()));
+
+    // address is xx:xx:xx:xx:xx:xx, extract the first three components and
+    // pack into a uint32
+    std::string address = device->GetAddress();
+    if (address.size() > 9 &&
+        address[2] == ':' && address[5] == ':' && address[8] == ':') {
+      std::string vendor_prefix_str;
+      uint64 vendor_prefix;
+
+      RemoveChars(address.substr(0, 9), ":", &vendor_prefix_str);
+      DCHECK_EQ(6U, vendor_prefix_str.size());
+      base::HexStringToUInt64(vendor_prefix_str, &vendor_prefix);
+
+      paired_device->set_vendor_prefix(vendor_prefix);
+    }
+
+    paired_device->set_vendor_id(device->GetVendorID());
+    paired_device->set_product_id(device->GetProductID());
+    paired_device->set_device_id(device->GetDeviceID());
+  }
+#endif  // defined(OS_CHROMEOS)
 }

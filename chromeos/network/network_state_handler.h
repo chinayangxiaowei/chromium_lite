@@ -10,11 +10,13 @@
 #include <string>
 #include <vector>
 
+#include "base/callback_forward.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/observer_list.h"
 #include "chromeos/chromeos_export.h"
 #include "chromeos/network/managed_state.h"
+#include "chromeos/network/network_handler.h"
 #include "chromeos/network/network_handler_callbacks.h"
 #include "chromeos/network/shill_property_handler.h"
 
@@ -22,6 +24,10 @@ namespace base {
 class DictionaryValue;
 class ListValue;
 class Value;
+}
+
+namespace tracked_objects {
+class Location;
 }
 
 namespace chromeos {
@@ -55,30 +61,39 @@ class CHROMEOS_EXPORT NetworkStateHandler
  public:
   typedef std::vector<ManagedState*> ManagedStateList;
   typedef std::vector<const NetworkState*> NetworkStateList;
+  typedef std::vector<const DeviceState*> DeviceStateList;
+  typedef std::vector<const FavoriteState*> FavoriteStateList;
+
+  enum TechnologyState {
+    TECHNOLOGY_UNAVAILABLE,
+    TECHNOLOGY_AVAILABLE,
+    TECHNOLOGY_UNINITIALIZED,
+    TECHNOLOGY_ENABLING,
+    TECHNOLOGY_ENABLED
+  };
 
   virtual ~NetworkStateHandler();
 
-  // Sets the global instance. Must be called before any calls to Get().
-  static void Initialize();
-
-  // Returns true if the global instance has been initialized.
-  static bool IsInitialized();
-
-  // Destroys the global instance.
-  static void Shutdown();
-
-  // Gets the global instance. Initialize() must be called first.
-  static NetworkStateHandler* Get();
-
   // Add/remove observers.
-  void AddObserver(NetworkStateHandlerObserver* observer);
-  void RemoveObserver(NetworkStateHandlerObserver* observer);
+  void AddObserver(NetworkStateHandlerObserver* observer,
+                   const tracked_objects::Location& from_here);
+  void RemoveObserver(NetworkStateHandlerObserver* observer,
+                      const tracked_objects::Location& from_here);
 
-  // Returns true if technology for |type| is available/ enabled/uninitialized.
-  // kMatchTypeMobile (only) is also supported.
-  bool TechnologyAvailable(const std::string& type) const;
-  bool TechnologyEnabled(const std::string& type) const;
-  bool TechnologyUninitialized(const std::string& type) const;
+  // Requests all Manager properties, specifically to update the complete
+  // list of services which determines the list of Favorites. This should be
+  // called any time a new service is configured or a Profile is loaded.
+  void UpdateManagerProperties();
+
+  // Returns the state for technology |type|. kMatchTypeMobile (only) is
+  // also supported.
+  TechnologyState GetTechnologyState(const std::string& type) const;
+  bool IsTechnologyAvailable(const std::string& type) const {
+    return GetTechnologyState(type) != TECHNOLOGY_UNAVAILABLE;
+  }
+  bool IsTechnologyEnabled(const std::string& type) const {
+    return GetTechnologyState(type) == TECHNOLOGY_ENABLED;
+  }
 
   // Asynchronously sets the technology enabled property for |type|.
   // kMatchTypeMobile (only) is also supported.
@@ -135,26 +150,71 @@ class CHROMEOS_EXPORT NetworkStateHandler
   // only on the UI thread).
   void GetNetworkList(NetworkStateList* list) const;
 
+  // Sets |list| to contain the list of devices.  The returned list contains
+  // a copy of DeviceState pointers which should not be stored or used beyond
+  // the scope of the calling function (i.e. they may later become invalid, but
+  // only on the UI thread).
+  void GetDeviceList(DeviceStateList* list) const;
+
+  // Sets |list| to contain the list of favorite (aka "preferred") networks.
+  // See GetNetworkList() for usage, and notes for |favorite_list_|.
+  // Favorites that are visible have the same path() as the entries in
+  // GetNetworkList(), so GetNetworkState() can be used to determine if a
+  // favorite is visible and retrieve the complete properties (and vice-versa).
+  void GetFavoriteList(FavoriteStateList* list) const;
+
+  // Finds and returns a favorite state by |service_path| or NULL if not found.
+  const FavoriteState* GetFavoriteState(const std::string& service_path) const;
+
   // Requests a network scan. This may trigger updates to the network
   // list, which will trigger the appropriate observer calls.
   void RequestScan() const;
 
-  // Set the user initiated connecting network.
-  void SetConnectingNetwork(const std::string& service_path);
+  // Request a scan if not scanning and run |callback| when the Scanning state
+  // for any Device matching |type| completes.
+  void WaitForScan(const std::string& type, const base::Closure& callback);
 
-  const std::string& connecting_network() const { return connecting_network_; }
+  // Request a network scan then signal Shill to connect to the best available
+  // networks when completed.
+  void ConnectToBestWifiNetwork();
+
+  // Request an update for an existing NetworkState, e.g. after configuring
+  // a network. This is a no-op if an update request is already pending.
+  // Returns true if the network exists and an update is requested or pending.
+  // When the properties are received, NetworkPropertiesUpdated will be
+  // signaled for each member of |observers_|, regardless of whether any
+  // properties actually changed.
+  bool RequestUpdateForNetwork(const std::string& service_path);
+
+  // Request an update for all existing NetworkState entries, e.g. after
+  // loading an ONC configuration file that may have updated one or more
+  // existing networks.
+  void RequestUpdateForAllNetworks();
+
+  // Set the list of devices on which portal check is enabled.
+  void SetCheckPortalList(const std::string& check_portal_list);
+
+  const std::string& check_portal_list() const { return check_portal_list_; }
 
   // Generates a DictionaryValue of all NetworkState properties. Currently
   // provided for debugging purposes only.
   void GetNetworkStatePropertiesForTest(
       base::DictionaryValue* dictionary) const;
 
+  // Construct and initialize an instance for testing.
+  static NetworkStateHandler* InitializeForTest();
+
   static const char kMatchTypeDefault[];
   static const char kMatchTypeWireless[];
   static const char kMatchTypeMobile[];
   static const char kMatchTypeNonVirtual[];
 
+  // Default set of comma separated interfaces on which to enable
+  // portal checking.
+  static const char kDefaultCheckPortalList[];
+
  protected:
+  friend class NetworkHandler;
   NetworkStateHandler();
 
   // ShillPropertyHandler::Listener overrides.
@@ -163,6 +223,10 @@ class CHROMEOS_EXPORT NetworkStateHandler
   // any entries that are no longer in the list.
   virtual void UpdateManagedList(ManagedState::ManagedType type,
                                  const base::ListValue& entries) OVERRIDE;
+
+  // The list of profiles changed (i.e. a user has logged in). Re-request
+  // properties for all services since they may have changed.
+  virtual void ProfileListChanged() OVERRIDE;
 
   // Parses the properties for the network service or device. Mostly calls
   // managed->PropertyChanged(key, value) for each dictionary entry.
@@ -177,19 +241,19 @@ class CHROMEOS_EXPORT NetworkStateHandler
       const std::string& key,
       const base::Value& value) OVERRIDE;
 
-  // Sets the IP Address for the network associated with |service_path|.
-  virtual void UpdateNetworkServiceIPAddress(
-      const std::string& service_path,
-      const std::string& ip_address) OVERRIDE;
-
   // Called by ShillPropertyHandler when a watched device property changes.
   virtual void UpdateDeviceProperty(
       const std::string& device_path,
       const std::string& key,
       const base::Value& value) OVERRIDE;
 
-  // Sends NetworkManagerChanged() to observers.
-  virtual void ManagerPropertyChanged() OVERRIDE;
+  // Called by ShillPropertyHandler when the portal check list manager property
+  // changes.
+  virtual void CheckPortalListChanged(
+      const std::string& check_portal_list) OVERRIDE;
+
+  // Sends NetworkManagerChanged() to observers and logs an event.
+  virtual void NotifyManagerPropertyChanged() OVERRIDE;
 
   // Called by |shill_property_handler_| when the service or device list has
   // changed and all entries have been updated. This updates the list and
@@ -198,13 +262,20 @@ class CHROMEOS_EXPORT NetworkStateHandler
   virtual void ManagedStateListChanged(
       ManagedState::ManagedType type) OVERRIDE;
 
-  // Called in Initialize(). Called explicitly by tests after adding
+  // Called after construction. Called explicitly by tests after adding
   // test observers.
   void InitShillPropertyHandler();
 
  private:
+  typedef std::list<base::Closure> ScanCallbackList;
+  typedef std::map<std::string, ScanCallbackList> ScanCompleteCallbackMap;
   friend class NetworkStateHandlerTest;
   FRIEND_TEST_ALL_PREFIXES(NetworkStateHandlerTest, NetworkStateHandlerStub);
+
+  // NetworkState specific method for UpdateManagedStateProperties which
+  // notifies observers.
+  void UpdateNetworkStateProperties(NetworkState* network,
+                                    const base::DictionaryValue& properties);
 
   // Non-const getters for managed entries. These are const so that they can
   // be called by Get[Network|Device]State, even though they return non-const
@@ -231,24 +302,37 @@ class CHROMEOS_EXPORT NetworkStateHandler
   // Notifies observers and updates connecting_network_.
   void NetworkPropertiesUpdated(const NetworkState* network);
 
+  // Called whenever Device.Scanning state transitions to false.
+  void ScanCompleted(const std::string& type);
+
+  // Returns the technology type for |type|.
+  std::string GetTechnologyForType(const std::string& type) const;
+
   // Shill property handler instance, owned by this class.
   scoped_ptr<internal::ShillPropertyHandler> shill_property_handler_;
 
   // Observer list
   ObserverList<NetworkStateHandlerObserver> observers_;
 
-  // Lists of managed states
+  // List of managed network states
   ManagedStateList network_list_;
+
+  // List of managed favorite states; this list includes all entries in
+  // Manager.ServiceCompleteList, but only entries with a non-empty Profile
+  // property are returned in GetFavoriteList().
+  ManagedStateList favorite_list_;
+
+  // List of managed device states
   ManagedStateList device_list_;
 
   // Keeps track of the default network for notifying observers when it changes.
   std::string default_network_path_;
 
-  // Convenience member to track the user initiated connecting network. Set
-  // externally when a connection is requested and cleared here when the state
-  // changes to something other than Connecting (after observers are notified).
-  // TODO(stevenjb): Move this to NetworkConfigurationHandler.
-  std::string connecting_network_;
+  // List of interfaces on which portal check is enabled.
+  std::string check_portal_list_;
+
+  // Callbacks to run when a scan for the technology type completes.
+  ScanCompleteCallbackMap scan_complete_callbacks_;
 
   DISALLOW_COPY_AND_ASSIGN(NetworkStateHandler);
 };

@@ -8,7 +8,6 @@ namespace ash {
 namespace internal {
 
 FixedSizedScrollView::FixedSizedScrollView() {
-  set_focusable(true);
   set_notify_enter_exit_on_child(true);
 }
 
@@ -46,13 +45,6 @@ void FixedSizedScrollView::Layout() {
     bounds.set_width(bounds.width() + GetScrollBarWidth());
     contents()->SetBoundsRect(bounds);
   }
-}
-
-void FixedSizedScrollView::OnMouseEntered(const ui::MouseEvent& event) {
-  // TODO(sad): This is done to make sure that the scroll view scrolls on
-  // mouse-wheel events. This is ugly, and Ben thinks this is weird. There
-  // should be a better fix for this.
-  RequestFocus();
 }
 
 void FixedSizedScrollView::OnBoundsChanged(const gfx::Rect& previous_bounds) {

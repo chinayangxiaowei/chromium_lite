@@ -17,34 +17,38 @@
 #include "base/file_util.h"
 #include "base/files/file_path.h"
 #include "base/memory/weak_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/platform_file.h"
 #include "base/prefs/pref_member.h"
 #include "base/sequenced_task_runner_helpers.h"
-#include "base/string_piece.h"
-#include "base/string_util.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/threading/worker_pool.h"
-#include "base/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browsing_data/browsing_data_helper.h"
 #include "chrome/browser/browsing_data/browsing_data_remover.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/download/download_util.h"
+#include "chrome/browser/extensions/extension_service.h"
+#include "chrome/browser/extensions/extension_system.h"
 #include "chrome/browser/io_thread.h"
 #include "chrome/browser/net/chrome_net_log.h"
 #include "chrome/browser/net/chrome_network_delegate.h"
 #include "chrome/browser/net/connection_tester.h"
-#include "chrome/browser/net/url_fixer_upper.h"
 #include "chrome/browser/prerender/prerender_manager.h"
 #include "chrome/browser/prerender/prerender_manager_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/webui/extensions/extension_basic_info.h"
 #include "chrome/common/cancelable_task_tracker.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_version_info.h"
+#include "chrome/common/extensions/extension_set.h"
 #include "chrome/common/logging_chrome.h"
+#include "chrome/common/net/url_fixer_upper.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/browser/browser_thread.h"
@@ -56,10 +60,11 @@
 #include "content/public/browser/web_ui_message_handler.h"
 #include "grit/generated_resources.h"
 #include "grit/net_internals_resources.h"
-#include "net/base/host_cache.h"
 #include "net/base/net_errors.h"
+#include "net/base/net_log_logger.h"
 #include "net/base/net_util.h"
 #include "net/disk_cache/disk_cache.h"
+#include "net/dns/host_cache.h"
 #include "net/dns/host_resolver.h"
 #include "net/http/http_cache.h"
 #include "net/http/http_network_layer.h"
@@ -73,12 +78,13 @@
 #include "ui/base/resource/resource_bundle.h"
 
 #if defined(OS_CHROMEOS)
-#include "chrome/browser/chromeos/cros/cros_library.h"
 #include "chrome/browser/chromeos/cros/network_library.h"
 #include "chrome/browser/chromeos/system/syslogs_provider.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
 #include "chromeos/dbus/debug_daemon_client.h"
+#include "chromeos/network/onc/onc_certificate_importer_impl.h"
 #include "chromeos/network/onc/onc_constants.h"
+#include "chromeos/network/onc/onc_utils.h"
 #endif
 #if defined(OS_WIN)
 #include "chrome/browser/net/service_providers_win.h"
@@ -97,11 +103,6 @@ namespace {
 // page.  All events that occur during this period are grouped together and
 // sent to the page at once, which reduces context switching and CPU usage.
 const int kNetLogEventDelayMilliseconds = 100;
-
-// about:net-internals will not even attempt to load a log dump when it
-// encounters a new version.  This should be incremented when significant
-// changes are made that will invalidate the old loading code.
-const int kLogFormatVersion = 1;
 
 // Returns the HostCache for |context|'s primary HostResolver, or NULL if
 // there is none.
@@ -171,6 +172,26 @@ Value* RequestStateToValue(const net::URLRequest* request,
   dict->SetString("method", request->method());
   dict->SetBoolean("has_upload", request->has_upload());
   dict->SetBoolean("is_pending", request->is_pending());
+
+  // Add the status of the request.  The status should always be IO_PENDING, and
+  // the error should always be OK, unless something is holding onto a request
+  // that has finished or a request was leaked.  Neither of these should happen.
+  switch (request->status().status()) {
+    case net::URLRequestStatus::SUCCESS:
+      dict->SetString("status", "SUCCESS");
+      break;
+    case net::URLRequestStatus::IO_PENDING:
+      dict->SetString("status", "IO_PENDING");
+      break;
+    case net::URLRequestStatus::CANCELED:
+      dict->SetString("status", "CANCELED");
+      break;
+    case net::URLRequestStatus::FAILED:
+      dict->SetString("status", "FAILED");
+      break;
+  }
+  if (request->status().error() != net::OK)
+    dict->SetInteger("net_error", request->status().error());
   return dict;
 }
 
@@ -222,8 +243,6 @@ content::WebUIDataSource* CreateNetInternalsHTMLSource() {
       content::WebUIDataSource::Create(chrome::kChromeUINetInternalsHost);
 
   source->SetDefaultResource(IDR_NET_INTERNALS_INDEX_HTML);
-  source->AddResourcePath("help.html", IDR_NET_INTERNALS_HELP_HTML);
-  source->AddResourcePath("help.js", IDR_NET_INTERNALS_HELP_JS);
   source->AddResourcePath("index.js", IDR_NET_INTERNALS_INDEX_JS);
   source->SetJsonPath("strings.js");
   return source;
@@ -303,7 +322,7 @@ void CloseDebugLogFile(PassPlatformFile pass_platform_file) {
 void CloseAndDeleteDebugLogFile(PassPlatformFile pass_platform_file,
                                 const base::FilePath& file_path) {
   CloseDebugLogFile(pass_platform_file);
-  file_util::Delete(file_path, false);
+  base::DeleteFile(file_path, false);
 }
 
 // Called upon completion of |WriteDebugLogToFile|. Closes file
@@ -399,6 +418,7 @@ class NetInternalsMessageHandler
   void OnClearBrowserCache(const ListValue* list);
   void OnGetPrerenderInfo(const ListValue* list);
   void OnGetHistoricNetworkStats(const ListValue* list);
+  void OnGetExtensionInfo(const ListValue* list);
 #if defined(OS_CHROMEOS)
   void OnRefreshSystemLogs(const ListValue* list);
   void OnGetSystemLog(const ListValue* list);
@@ -535,7 +555,6 @@ class NetInternalsMessageHandler::IOThreadImpl
   void OnGetBadProxies(const ListValue* list);
   void OnClearBadProxies(const ListValue* list);
   void OnGetHostResolverInfo(const ListValue* list);
-  void OnRunIPv6Probe(const ListValue* list);
   void OnClearHostResolverCache(const ListValue* list);
   void OnEnableIPv6(const ListValue* list);
   void OnStartConnectionTests(const ListValue* list);
@@ -645,7 +664,7 @@ class NetInternalsMessageHandler::IOThreadImpl
 NetInternalsMessageHandler::NetInternalsMessageHandler() {}
 
 NetInternalsMessageHandler::~NetInternalsMessageHandler() {
-  if (proxy_) {
+  if (proxy_.get()) {
     proxy_.get()->OnWebUIDeleted();
     // Notify the handler on the IO thread that the renderer is gone.
     BrowserThread::PostTask(BrowserThread::IO, FROM_HERE,
@@ -699,10 +718,6 @@ void NetInternalsMessageHandler::RegisterMessages() {
       "getHostResolverInfo",
       base::Bind(&IOThreadImpl::CallbackHelper,
                  &IOThreadImpl::OnGetHostResolverInfo, proxy_));
-  web_ui()->RegisterMessageCallback(
-      "onRunIPv6Probe",
-      base::Bind(&IOThreadImpl::CallbackHelper,
-                 &IOThreadImpl::OnRunIPv6Probe, proxy_));
   web_ui()->RegisterMessageCallback(
       "clearHostResolverCache",
       base::Bind(&IOThreadImpl::CallbackHelper,
@@ -790,6 +805,10 @@ void NetInternalsMessageHandler::RegisterMessages() {
       "getHistoricNetworkStats",
       base::Bind(&NetInternalsMessageHandler::OnGetHistoricNetworkStats,
                  base::Unretained(this)));
+  web_ui()->RegisterMessageCallback(
+      "getExtensionInfo",
+      base::Bind(&NetInternalsMessageHandler::OnGetExtensionInfo,
+                 base::Unretained(this)));
 #if defined(OS_CHROMEOS)
   web_ui()->RegisterMessageCallback(
       "refreshSystemLogs",
@@ -865,6 +884,29 @@ void NetInternalsMessageHandler::OnGetHistoricNetworkStats(
   SendJavascriptCommand("receivedHistoricNetworkStats", historic_network_info);
 }
 
+void NetInternalsMessageHandler::OnGetExtensionInfo(const ListValue* list) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  ListValue* extension_list = new ListValue();
+  Profile* profile = Profile::FromWebUI(web_ui());
+  extensions::ExtensionSystem* extension_system =
+      extensions::ExtensionSystem::Get(profile);
+  if (extension_system) {
+    ExtensionService* extension_service = extension_system->extension_service();
+    if (extension_service) {
+      scoped_ptr<const ExtensionSet> extensions(
+          extension_service->GenerateInstalledExtensionsSet());
+      for (ExtensionSet::const_iterator it = extensions->begin();
+           it != extensions->end(); ++it) {
+        DictionaryValue* extension_info = new DictionaryValue();
+        bool enabled = extension_service->IsExtensionEnabled((*it)->id());
+        extensions::GetExtensionBasicInfo(it->get(), enabled, extension_info);
+        extension_list->Append(extension_info);
+      }
+    }
+  }
+  SendJavascriptCommand("receivedExtensionInfo", extension_list);
+}
+
 #if defined(OS_CHROMEOS)
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -877,7 +919,6 @@ NetInternalsMessageHandler::SystemLogsGetter::SystemLogsGetter(
     chromeos::system::SyslogsProvider* syslogs_provider)
     : handler_(handler),
       syslogs_provider_(syslogs_provider),
-      logs_(NULL),
       logs_received_(false),
       logs_requested_(false) {
   if (!syslogs_provider_)
@@ -1146,8 +1187,7 @@ void NetInternalsMessageHandler::IOThreadImpl::OnGetHostResolverInfo(
       // Append all of the resolved addresses.
       ListValue* address_list = new ListValue();
       for (size_t i = 0; i < entry.addrlist.size(); ++i) {
-        address_list->Append(
-            Value::CreateStringValue(entry.addrlist[i].ToStringWithoutPort()));
+        address_list->AppendString(entry.addrlist[i].ToStringWithoutPort());
       }
       entry_dict->Set("addresses", address_list);
     }
@@ -1159,17 +1199,6 @@ void NetInternalsMessageHandler::IOThreadImpl::OnGetHostResolverInfo(
   dict->Set("cache", cache_info_dict);
 
   SendJavascriptCommand("receivedHostResolverInfo", dict);
-}
-
-void NetInternalsMessageHandler::IOThreadImpl::OnRunIPv6Probe(
-    const ListValue* list) {
-  DCHECK(!list);
-  net::HostResolver* resolver = GetMainContext()->host_resolver();
-
-  // Have to set the default address family manually before calling
-  // ProbeIPv6Support.
-  resolver->SetDefaultAddressFamily(net::ADDRESS_FAMILY_UNSPECIFIED);
-  resolver->ProbeIPv6Support();
 }
 
 void NetInternalsMessageHandler::IOThreadImpl::OnClearHostResolverCache(
@@ -1234,7 +1263,8 @@ void NetInternalsMessageHandler::IOThreadImpl::OnHSTSQuery(
       result->SetBoolean("result", found);
       if (found) {
         result->SetInteger("mode", static_cast<int>(state.upgrade_mode));
-        result->SetBoolean("subdomains", state.include_subdomains);
+        result->SetBoolean("sts_subdomains", state.sts_include_subdomains);
+        result->SetBoolean("pkp_subdomains", state.pkp_include_subdomains);
         result->SetString("domain", state.domain);
         result->SetDouble("expiry", state.upgrade_expiry.ToDoubleT());
         result->SetDouble("dynamic_spki_hashes_expiry",
@@ -1253,7 +1283,8 @@ void NetInternalsMessageHandler::IOThreadImpl::OnHSTSQuery(
 
 void NetInternalsMessageHandler::IOThreadImpl::OnHSTSAdd(
     const ListValue* list) {
-  // |list| should be: [<domain to query>, <include subdomains>, <cert pins>].
+  // |list| should be: [<domain to query>, <STS include subdomains>, <PKP
+  // include subdomains>, <key pins>].
   std::string domain;
   CHECK(list->GetString(0, &domain));
   if (!IsStringASCII(domain)) {
@@ -1261,10 +1292,12 @@ void NetInternalsMessageHandler::IOThreadImpl::OnHSTSAdd(
     // name.
     return;
   }
-  bool include_subdomains;
-  CHECK(list->GetBoolean(1, &include_subdomains));
+  bool sts_include_subdomains;
+  CHECK(list->GetBoolean(1, &sts_include_subdomains));
+  bool pkp_include_subdomains;
+  CHECK(list->GetBoolean(2, &pkp_include_subdomains));
   std::string hashes_str;
-  CHECK(list->GetString(2, &hashes_str));
+  CHECK(list->GetString(3, &hashes_str));
 
   net::TransportSecurityState* transport_security_state =
       GetMainContext()->transport_security_state();
@@ -1278,8 +1311,8 @@ void NetInternalsMessageHandler::IOThreadImpl::OnHSTSAdd(
       return;
   }
 
-  transport_security_state->AddHSTS(domain, expiry, include_subdomains);
-  transport_security_state->AddHPKP(domain, expiry, include_subdomains,
+  transport_security_state->AddHSTS(domain, expiry, sts_include_subdomains);
+  transport_security_state->AddHPKP(domain, expiry, pkp_include_subdomains,
                                     hashes);
 }
 
@@ -1313,8 +1346,8 @@ void NetInternalsMessageHandler::IOThreadImpl::OnGetHttpCacheInfo(
     std::vector<std::pair<std::string, std::string> > stats;
     disk_cache->GetStats(&stats);
     for (size_t i = 0; i < stats.size(); ++i) {
-      stats_dict->Set(stats[i].first,
-                      Value::CreateStringValue(stats[i].second));
+      stats_dict->SetStringWithoutPathExpansion(
+          stats[i].first, stats[i].second);
     }
   }
 
@@ -1404,14 +1437,11 @@ void NetInternalsMessageHandler::IOThreadImpl::OnGetSpdyStatus(
                        net::HttpStreamFactory::force_spdy_always()));
 
   // The next_protos may not be specified for certain configurations of SPDY.
-  Value* next_protos_value;
+  std::string next_protos_string;
   if (net::HttpStreamFactory::has_next_protos()) {
-    next_protos_value = Value::CreateStringValue(
-        JoinString(net::HttpStreamFactory::next_protos(), ','));
-  } else {
-    next_protos_value = Value::CreateStringValue("");
+    next_protos_string = JoinString(net::HttpStreamFactory::next_protos(), ',');
   }
-  status_dict->Set("next_protos", next_protos_value);
+  status_dict->SetString("next_protos", next_protos_string);
 
   SendJavascriptCommand("receivedSpdyStatus", status_dict);
 }
@@ -1514,19 +1544,30 @@ void NetInternalsMessageHandler::OnImportONCFile(const ListValue* list) {
     NOTREACHED();
   }
 
+  chromeos::onc::ONCSource onc_source = chromeos::onc::ONC_SOURCE_USER_IMPORT;
+
+  base::ListValue network_configs;
+  base::ListValue certificates;
   std::string error;
-  chromeos::NetworkLibrary* cros_network =
-      chromeos::CrosLibrary::Get()->GetNetworkLibrary();
-  if (!cros_network->LoadOncNetworks(onc_blob, passcode,
-                                     chromeos::onc::ONC_SOURCE_USER_IMPORT,
-                                     false)) {  // allow web trust from policy
-    error = "Errors occurred during the ONC import.";
+  if (!chromeos::onc::ParseAndValidateOncForImport(
+          onc_blob, onc_source, passcode, &network_configs, &certificates)) {
+    error = "Errors occurred during the ONC parsing. ";
     LOG(ERROR) << error;
   }
 
+  chromeos::onc::CertificateImporterImpl cert_importer;
+  if (!cert_importer.ImportCertificates(certificates, onc_source, NULL)) {
+    error += "Some certificates couldn't be imported. ";
+    LOG(ERROR) << error;
+  }
+
+  chromeos::NetworkLibrary* network_library =
+      chromeos::NetworkLibrary::Get();
+  network_library->LoadOncNetworks(network_configs, onc_source);
+
   // Now that we've added the networks, we need to rescan them so they'll be
   // available from the menu more immediately.
-  cros_network->RequestNetworkScan();
+  network_library->RequestNetworkScan();
 
   SendJavascriptCommand("receivedONCFileParse",
                         Value::CreateStringValue(error));
@@ -1694,7 +1735,7 @@ void NetInternalsMessageHandler::IOThreadImpl::SendJavascriptCommand(
     const std::string& command,
     Value* arg) {
   if (BrowserThread::CurrentlyOn(BrowserThread::UI)) {
-    if (handler_ && !was_webui_deleted_) {
+    if (handler_.get() && !was_webui_deleted_) {
       // We check |handler_| in case it was deleted on the UI thread earlier
       // while we were running on the IO thread.
       handler_->SendJavascriptCommand(command, arg);
@@ -1793,14 +1834,8 @@ void NetInternalsMessageHandler::IOThreadImpl::PrePopulateEventList() {
 
 // static
 Value* NetInternalsUI::GetConstants() {
-  DictionaryValue* constants_dict = new DictionaryValue();
-
-  // Version of the file format.
-  constants_dict->SetInteger("logFormatVersion", kLogFormatVersion);
-
-  // Add a dictionary with information on the relationship between event type
-  // enums and their symbolic names.
-  constants_dict->Set("logEventTypes", net::NetLog::GetEventTypesAsValue());
+  DictionaryValue* constants_dict = net::NetLogLogger::GetConstants();
+  DCHECK(constants_dict);
 
   // Add a dictionary with the version of the client and its command line
   // arguments.
@@ -1829,111 +1864,6 @@ Value* NetInternalsUI::GetConstants() {
     constants_dict->Set("clientInfo", dict);
   }
 
-  // Add a dictionary with information about the relationship between load flag
-  // enums and their symbolic names.
-  {
-    DictionaryValue* dict = new DictionaryValue();
-
-#define LOAD_FLAG(label, value) \
-    dict->SetInteger(# label, static_cast<int>(value));
-#include "net/base/load_flags_list.h"
-#undef LOAD_FLAG
-
-    constants_dict->Set("loadFlag", dict);
-  }
-
-  // Add a dictionary with information about the relationship between load state
-  // enums and their symbolic names.
-  {
-    DictionaryValue* dict = new DictionaryValue();
-
-#define LOAD_STATE(label) \
-    dict->SetInteger(# label, net::LOAD_STATE_ ## label);
-#include "net/base/load_states_list.h"
-#undef LOAD_STATE
-
-    constants_dict->Set("loadState", dict);
-  }
-
-  // Add information on the relationship between net error codes and their
-  // symbolic names.
-  {
-    DictionaryValue* dict = new DictionaryValue();
-
-#define NET_ERROR(label, value) \
-    dict->SetInteger(# label, static_cast<int>(value));
-#include "net/base/net_error_list.h"
-#undef NET_ERROR
-
-    constants_dict->Set("netError", dict);
-  }
-
-  // Information about the relationship between event phase enums and their
-  // symbolic names.
-  {
-    DictionaryValue* dict = new DictionaryValue();
-
-    dict->SetInteger("PHASE_BEGIN", net::NetLog::PHASE_BEGIN);
-    dict->SetInteger("PHASE_END", net::NetLog::PHASE_END);
-    dict->SetInteger("PHASE_NONE", net::NetLog::PHASE_NONE);
-
-    constants_dict->Set("logEventPhase", dict);
-  }
-
-  // Information about the relationship between source type enums and
-  // their symbolic names.
-  constants_dict->Set("logSourceType", net::NetLog::GetSourceTypesAsValue());
-
-  // Information about the relationship between LogLevel enums and their
-  // symbolic names.
-  {
-    DictionaryValue* dict = new DictionaryValue();
-
-    dict->SetInteger("LOG_ALL", net::NetLog::LOG_ALL);
-    dict->SetInteger("LOG_ALL_BUT_BYTES", net::NetLog::LOG_ALL_BUT_BYTES);
-    dict->SetInteger("LOG_BASIC", net::NetLog::LOG_BASIC);
-
-    constants_dict->Set("logLevelType", dict);
-  }
-
-  // Information about the relationship between address family enums and
-  // their symbolic names.
-  {
-    DictionaryValue* dict = new DictionaryValue();
-
-    dict->SetInteger("ADDRESS_FAMILY_UNSPECIFIED",
-                     net::ADDRESS_FAMILY_UNSPECIFIED);
-    dict->SetInteger("ADDRESS_FAMILY_IPV4",
-                     net::ADDRESS_FAMILY_IPV4);
-    dict->SetInteger("ADDRESS_FAMILY_IPV6",
-                     net::ADDRESS_FAMILY_IPV6);
-
-    constants_dict->Set("addressFamily", dict);
-  }
-
-  // Information about how the "time ticks" values we have given it relate to
-  // actual system times. (We used time ticks throughout since they are stable
-  // across system clock changes).
-  {
-    int64 cur_time_ms = (base::Time::Now() - base::Time()).InMilliseconds();
-
-    int64 cur_time_ticks_ms =
-        (base::TimeTicks::Now() - base::TimeTicks()).InMilliseconds();
-
-    // If we add this number to a time tick value, it gives the timestamp.
-    int64 tick_to_time_ms = cur_time_ms - cur_time_ticks_ms;
-
-    // Chrome on all platforms stores times using the Windows epoch
-    // (Jan 1 1601), but the javascript wants a unix epoch.
-    // TODO(eroman): Getting the timestamp relative to the unix epoch should
-    //               be part of the time library.
-    const int64 kUnixEpochMs = 11644473600000LL;
-    int64 tick_to_unix_time_ms = tick_to_time_ms - kUnixEpochMs;
-
-    // Pass it as a string, since it may be too large to fit in an integer.
-    constants_dict->SetString("timeTickOffset",
-                              base::Int64ToString(tick_to_unix_time_ms));
-  }
   return constants_dict;
 }
 

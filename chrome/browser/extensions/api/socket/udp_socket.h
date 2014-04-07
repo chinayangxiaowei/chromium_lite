@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_EXTENSIONS_API_SOCKET_UDP_SOCKET_H_
 
 #include <string>
+#include <vector>
 
 #include "chrome/browser/extensions/api/socket/socket.h"
 #include "net/udp/udp_socket.h"
@@ -31,9 +32,20 @@ class UDPSocket : public Socket {
                       const std::string& address,
                       int port,
                       const CompletionCallback& callback) OVERRIDE;
+
+  virtual bool IsConnected() OVERRIDE;
+
   virtual bool GetPeerAddress(net::IPEndPoint* address) OVERRIDE;
   virtual bool GetLocalAddress(net::IPEndPoint* address) OVERRIDE;
   virtual Socket::SocketType GetSocketType() const OVERRIDE;
+
+  int JoinGroup(const std::string& address);
+  int LeaveGroup(const std::string& address);
+
+  int SetMulticastTimeToLive(int ttl);
+  int SetMulticastLoopbackMode(bool loopback);
+
+  const std::vector<std::string>& GetJoinedGroups() const;
 
  protected:
   virtual int WriteImpl(net::IOBuffer* io_buffer,
@@ -58,6 +70,8 @@ class UDPSocket : public Socket {
   RecvFromCompletionCallback recv_from_callback_;
 
   CompletionCallback send_to_callback_;
+
+  std::vector<std::string> multicast_groups_;
 };
 
 }  //  namespace extensions

@@ -9,21 +9,23 @@
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/nix/xdg_util.h"
-#include "base/process_util.h"
 #include "base/stl_util.h"
 #include "media/audio/audio_parameters.h"
 #include "media/audio/audio_util.h"
 #include "media/audio/linux/audio_manager_linux.h"
 #include "media/audio/pulse/pulse_input.h"
 #include "media/audio/pulse/pulse_output.h"
-#include "media/audio/pulse/pulse_stubs.h"
 #include "media/audio/pulse/pulse_unified.h"
 #include "media/audio/pulse/pulse_util.h"
 #include "media/base/channel_layout.h"
 
+#if defined(DLOPEN_PULSEAUDIO)
+#include "media/audio/pulse/pulse_stubs.h"
+
 using media_audio_pulse::kModulePulse;
 using media_audio_pulse::InitializeStubs;
 using media_audio_pulse::StubPathMap;
+#endif  // defined(DLOPEN_PULSEAUDIO)
 
 namespace media {
 
@@ -64,13 +66,21 @@ AudioManagerPulse::~AudioManagerPulse() {
 
 // Implementation of AudioManager.
 bool AudioManagerPulse::HasAudioOutputDevices() {
-  // TODO(xians): implement this function.
-  return true;
+  DCHECK(input_mainloop_);
+  DCHECK(input_context_);
+  media::AudioDeviceNames devices;
+  AutoPulseLock auto_lock(input_mainloop_);
+  devices_ = &devices;
+  pa_operation* operation = pa_context_get_sink_info_list(
+      input_context_, OutputDevicesInfoCallback, this);
+  WaitForOperationCompletion(input_mainloop_, operation);
+  return !devices.empty();
 }
 
 bool AudioManagerPulse::HasAudioInputDevices() {
-  // TODO(xians): implement this function.
-  return true;
+  media::AudioDeviceNames devices;
+  GetAudioInputDeviceNames(&devices);
+  return !devices.empty();
 }
 
 void AudioManagerPulse::ShowAudioInputSettings() {
@@ -82,10 +92,10 @@ void AudioManagerPulse::GetAudioInputDeviceNames(
   DCHECK(device_names->empty());
   DCHECK(input_mainloop_);
   DCHECK(input_context_);
-  devices_ = device_names;
   AutoPulseLock auto_lock(input_mainloop_);
+  devices_ = device_names;
   pa_operation* operation = pa_context_get_source_info_list(
-      input_context_, DevicesInfoCallback, this);
+      input_context_, InputDevicesInfoCallback, this);
   WaitForOperationCompletion(input_mainloop_, operation);
 
   // Append the default device on the top of the list if the list is not empty.
@@ -109,13 +119,13 @@ AudioParameters AudioManagerPulse::GetInputStreamParameters(
 AudioOutputStream* AudioManagerPulse::MakeLinearOutputStream(
     const AudioParameters& params) {
   DCHECK_EQ(AudioParameters::AUDIO_PCM_LINEAR, params.format());
-  return MakeOutputStream(params);
+  return MakeOutputStream(params, std::string());
 }
 
 AudioOutputStream* AudioManagerPulse::MakeLowLatencyOutputStream(
-    const AudioParameters& params) {
+    const AudioParameters& params, const std::string& input_device_id) {
   DCHECK_EQ(AudioParameters::AUDIO_PCM_LOW_LATENCY, params.format());
-  return MakeOutputStream(params);
+  return MakeOutputStream(params, input_device_id);
 }
 
 AudioInputStream* AudioManagerPulse::MakeLinearInputStream(
@@ -138,11 +148,15 @@ AudioParameters AudioManagerPulse::GetPreferredOutputStreamParameters(
   int buffer_size = kDefaultOutputBufferSize;
   int bits_per_sample = 16;
   int input_channels = 0;
+  int sample_rate;
   if (input_params.IsValid()) {
     bits_per_sample = input_params.bits_per_sample();
     channel_layout = input_params.channel_layout();
     input_channels = input_params.input_channels();
     buffer_size = std::min(buffer_size, input_params.frames_per_buffer());
+    sample_rate = input_params.sample_rate();
+  } else {
+    sample_rate = GetNativeSampleRate();
   }
 
   int user_buffer_size = GetUserBufferSize();
@@ -151,13 +165,13 @@ AudioParameters AudioManagerPulse::GetPreferredOutputStreamParameters(
 
   return AudioParameters(
       AudioParameters::AUDIO_PCM_LOW_LATENCY, channel_layout, input_channels,
-      GetNativeSampleRate(), bits_per_sample, buffer_size);
+      sample_rate, bits_per_sample, buffer_size);
 }
 
 AudioOutputStream* AudioManagerPulse::MakeOutputStream(
-    const AudioParameters& params) {
+    const AudioParameters& params, const std::string& input_device_id) {
   if (params.input_channels()) {
-    return new PulseAudioUnifiedStream(params, this);
+    return new PulseAudioUnifiedStream(params, input_device_id, this);
   }
 
   return new PulseAudioOutputStream(params, this);
@@ -183,6 +197,7 @@ int AudioManagerPulse::GetNativeSampleRate() {
 bool AudioManagerPulse::Init() {
   DCHECK(!input_mainloop_);
 
+#if defined(DLOPEN_PULSEAUDIO)
   StubPathMap paths;
 
   // Check if the pulse library is avialbale.
@@ -191,6 +206,7 @@ bool AudioManagerPulse::Init() {
     DLOG(WARNING) << "Failed on loading the Pulse library and symbols";
     return false;
   }
+#endif  // defined(DLOPEN_PULSEAUDIO)
 
   // Create a mainloop API and connect to the default server.
   // The mainloop is the internal asynchronous API event loop.
@@ -199,9 +215,8 @@ bool AudioManagerPulse::Init() {
     return false;
 
   // Start the threaded mainloop.
-  if (pa_threaded_mainloop_start(input_mainloop_)) {
+  if (pa_threaded_mainloop_start(input_mainloop_))
     return false;
-  }
 
   // Lock the event loop object, effectively blocking the event loop thread
   // from processing events. This is necessary.
@@ -210,15 +225,14 @@ bool AudioManagerPulse::Init() {
   pa_mainloop_api* pa_mainloop_api =
       pa_threaded_mainloop_get_api(input_mainloop_);
   input_context_ = pa_context_new(pa_mainloop_api, "Chrome input");
-  DCHECK(input_context_) << "Failed to create PA context";
-  if (!input_context_) {
+  if (!input_context_)
     return false;
-  }
 
   pa_context_set_state_callback(input_context_, &pulse::ContextStateCallback,
                                 input_mainloop_);
   if (pa_context_connect(input_context_, NULL, PA_CONTEXT_NOAUTOSPAWN, NULL)) {
-    DLOG(ERROR) << "Failed to connect to the context";
+    DLOG(ERROR) << "Failed to connect to the context.  Error: "
+                << pa_strerror(pa_context_errno(input_context_));
     return false;
   }
 
@@ -227,9 +241,8 @@ bool AudioManagerPulse::Init() {
   // otherwise pa_threaded_mainloop_wait() will hang indefinitely.
   while (true) {
     pa_context_state_t context_state = pa_context_get_state(input_context_);
-    if (!PA_CONTEXT_IS_GOOD(context_state)) {
+    if (!PA_CONTEXT_IS_GOOD(context_state))
       return false;
-    }
     if (context_state == PA_CONTEXT_READY)
       break;
     pa_threaded_mainloop_wait(input_mainloop_);
@@ -260,9 +273,9 @@ void AudioManagerPulse::DestroyPulse() {
   input_mainloop_ = NULL;
 }
 
-void AudioManagerPulse::DevicesInfoCallback(pa_context* context,
-                                            const pa_source_info* info,
-                                            int error, void *user_data) {
+void AudioManagerPulse::InputDevicesInfoCallback(pa_context* context,
+                                                 const pa_source_info* info,
+                                                 int error, void *user_data) {
   AudioManagerPulse* manager = reinterpret_cast<AudioManagerPulse*>(user_data);
 
   if (error) {
@@ -276,6 +289,21 @@ void AudioManagerPulse::DevicesInfoCallback(pa_context* context,
     manager->devices_->push_back(media::AudioDeviceName(info->description,
                                                         info->name));
   }
+}
+
+void AudioManagerPulse::OutputDevicesInfoCallback(pa_context* context,
+                                                  const pa_sink_info* info,
+                                                  int error, void *user_data) {
+  AudioManagerPulse* manager = reinterpret_cast<AudioManagerPulse*>(user_data);
+
+  if (error) {
+    // Signal the pulse object that it is done.
+    pa_threaded_mainloop_signal(manager->input_mainloop_, 0);
+    return;
+  }
+
+  manager->devices_->push_back(media::AudioDeviceName(info->description,
+                                                      info->name));
 }
 
 void AudioManagerPulse::SampleRateInfoCallback(pa_context* context,

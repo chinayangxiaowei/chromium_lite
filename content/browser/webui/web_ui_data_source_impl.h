@@ -33,7 +33,7 @@ class CONTENT_EXPORT WebUIDataSourceImpl
                          const std::string& value) OVERRIDE;
   virtual void AddLocalizedString(const std::string& name, int ids) OVERRIDE;
   virtual void AddLocalizedStrings(
-      const DictionaryValue& localized_strings) OVERRIDE;
+      const base::DictionaryValue& localized_strings) OVERRIDE;
   virtual void AddBoolean(const std::string& name, bool value) OVERRIDE;
   virtual void SetJsonPath(const std::string& path) OVERRIDE;
   virtual void SetUseJsonJSFormatV2() OVERRIDE;
@@ -70,11 +70,12 @@ class CONTENT_EXPORT WebUIDataSourceImpl
 
   // Methods that match URLDataSource which are called by
   // InternalDataSource.
-  std::string GetSource();
+  std::string GetSource() const;
   std::string GetMimeType(const std::string& path) const;
   void StartDataRequest(
       const std::string& path,
-      bool is_incognito,
+      int render_process_id,
+      int render_view_id,
       const URLDataSource::GotDataCallback& callback);
 
   void disable_set_font_strings_for_testing() {
@@ -89,7 +90,7 @@ class CONTENT_EXPORT WebUIDataSourceImpl
   bool json_js_format_v2_;
   std::string json_path_;
   std::map<std::string, int> path_to_idr_map_;
-  DictionaryValue localized_strings_;
+  base::DictionaryValue localized_strings_;
   WebUIDataSource::HandleRequestCallback filter_callback_;
   bool add_csp_;
   bool object_src_set_;

@@ -27,12 +27,12 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
-#include "googleurl/src/gurl.h"
 #include "net/base/net_util.h"
 #include "net/url_request/url_fetcher_delegate.h"
+#include "url/gurl.h"
 
 class SafeBrowsingService;
 
@@ -132,9 +132,13 @@ class ClientSideDetectionService : public net::URLFetcherDelegate,
   // Returns true if the url is in the cache.
   virtual bool IsInCache(const GURL& url);
 
-  // Returns true if we have sent more than kMaxReportsPerInterval in the last
-  // kReportsInterval.
-  virtual bool OverReportLimit();
+  // Returns true if we have sent more than kMaxReportsPerInterval phishing
+  // reports in the last kReportsInterval.
+  virtual bool OverPhishingReportLimit();
+
+  // Returns true if we have sent more than kMaxReportsPerInterval malware
+  // reports in the last kReportsInterval.
+  virtual bool OverMalwareReportLimit();
 
  protected:
   // Use Create() method to create an instance of this object.
@@ -248,8 +252,15 @@ class ClientSideDetectionService : public net::URLFetcherDelegate,
   // Invalidate cache results which are no longer useful.
   void UpdateCache();
 
-  // Get the number of phishing reports that we have sent over kReportsInterval
-  int GetNumReports();
+  // Get the number of malware reports that we have sent over kReportsInterval.
+  int GetMalwareNumReports();
+
+  // Get the number of phishing reports that we have sent over kReportsInterval.
+  int GetPhishingNumReports();
+
+  // Get the number of reports that we have sent over kReportsInterval, and
+  // trims off the old elements.
+  int GetNumReports(std::queue<base::Time>* report_times);
 
   // Initializes the |private_networks_| vector with the network blocks
   // that we consider non-public IP addresses.  Returns true on success.
@@ -304,6 +315,10 @@ class ClientSideDetectionService : public net::URLFetcherDelegate,
   // of phishing requests that we send in a day.
   // TODO(gcasto): Serialize this so that it doesn't reset on browser restart.
   std::queue<base::Time> phishing_report_times_;
+
+  // Timestamp of when we sent a malware request. Used to limit the number
+  // of malware requests that we send in a day.
+  std::queue<base::Time> malware_report_times_;
 
   // Used to asynchronously call the callbacks for
   // SendClientReportPhishingRequest.

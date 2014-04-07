@@ -8,13 +8,13 @@
 #include <string>
 #include <vector>
 
+class GURL;
+
 namespace chromeos {
 
 namespace input_method {
 struct KeyEventHandle;
 }  // namespace input_method
-
-extern const char* kExtensionImePrefix;
 
 // InputMethodEngine is used to translate from the Chrome IME API to the native
 // API.
@@ -30,6 +30,7 @@ class InputMethodEngine {
     bool alt_key;
     bool ctrl_key;
     bool shift_key;
+    bool caps_lock;
   };
 
   enum {
@@ -57,6 +58,11 @@ class InputMethodEngine {
   enum SegmentStyle {
     SEGMENT_STYLE_UNDERLINE,
     SEGMENT_STYLE_DOUBLE_UNDERLINE,
+  };
+
+  enum CandidateWindowPosition {
+    WINDOW_POS_CURSOR,
+    WINDOW_POS_COMPOSITTION,
   };
 
   struct MenuItem {
@@ -140,9 +146,17 @@ class InputMethodEngine {
                                           const std::string& text,
                                           int cursor_pos,
                                           int anchor_pos) = 0;
+
+    // Called when Chrome terminates on-going text input session.
+    virtual void OnReset(const std::string& engine_id) = 0;
   };
 
   virtual ~InputMethodEngine() {}
+
+  // Called when the input metho initialization is done.
+  // This function is called from private API.
+  // TODO(nona): Remove this function.
+  virtual void StartIme() = 0;
 
   // Set the current composition and associated properties.
   virtual bool SetComposition(int context_id,
@@ -178,6 +192,9 @@ class InputMethodEngine {
 
   // Show or hide the extra text in the candidate window.
   virtual void SetCandidateWindowAuxTextVisible(bool visible) = 0;
+
+  // Sets the candidate window position.
+  virtual void SetCandidateWindowPosition(CandidateWindowPosition position) = 0;
 
   // Set the list of entries displayed in the candidate window.
   virtual bool SetCandidates(int context_id,
@@ -221,8 +238,9 @@ class InputMethodEngine {
       const char* extension_id,
       const char* engine_id,
       const char* description,
-      const char* language,
+      const std::vector<std::string>& language,
       const std::vector<std::string>& layouts,
+      const GURL& options_page,
       std::string* error);
 };
 

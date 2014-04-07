@@ -11,7 +11,7 @@
 #include "base/compiler_specific.h"
 #include "chrome/browser/chromeos/login/user_manager.h"
 #include "content/public/browser/interstitial_page_delegate.h"
-#include "googleurl/src/gurl.h"
+#include "url/gurl.h"
 
 namespace base {
 class DictionaryValue;
@@ -65,7 +65,6 @@ class MergeSessionLoadPage
   // UserManager::Observer overrides.
   virtual void MergeSessionStateChanged(
       UserManager::MergeSessionState state) OVERRIDE;
-  virtual void LocalStateChanged(UserManager* user_manager) OVERRIDE {}
 
   void NotifyBlockingPageComplete();
 

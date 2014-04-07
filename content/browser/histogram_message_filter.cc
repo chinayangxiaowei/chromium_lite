@@ -7,7 +7,6 @@
 #include "base/command_line.h"
 #include "base/metrics/histogram.h"
 #include "base/metrics/statistics_recorder.h"
-#include "base/process_util.h"
 #include "content/browser/histogram_controller.h"
 #include "content/browser/tcmalloc_internals_request_job.h"
 #include "content/common/child_process_messages.h"
@@ -49,18 +48,12 @@ void HistogramMessageFilter::OnGetBrowserHistogram(
   DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::IO));
   // Security: Only allow access to browser histograms when running in the
   // context of a test.
-  bool using_dom_controller =
+  bool using_stats_collection_controller =
       CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kDomAutomationController);
-  bool reduced_security =
-      CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kReduceSecurityForDomAutomationTests);
-
-  if (!using_dom_controller || !reduced_security) {
+          switches::kStatsCollectionController);
+  if (!using_stats_collection_controller) {
     LOG(ERROR) << "Attempt at reading browser histogram without specifying "
-               << "--" << switches::kDomAutomationController << " and "
-               << "--" << switches::kReduceSecurityForDomAutomationTests
-               << " switches.";
+               << "--" << switches::kStatsCollectionController << " switch.";
     return;
   }
   base::HistogramBase* histogram =

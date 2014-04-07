@@ -6,8 +6,9 @@
 
 #include "base/callback.h"
 #include "base/logging.h"
+#include "base/rand_util.h"
 #include "base/strings/string_tokenizer.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "net/proxy/proxy_server.h"
 
@@ -193,11 +194,13 @@ bool ProxyList::Fallback(ProxyRetryInfoMap* proxy_retry_info,
 
 void ProxyList::UpdateRetryInfoOnFallback(
     ProxyRetryInfoMap* proxy_retry_info, const BoundNetLog& net_log) const {
-  // Number of minutes to wait before retrying a bad proxy server.
-#if defined(OS_ANDROID)
-  const TimeDelta kProxyRetryDelay = TimeDelta::FromMinutes(1);
+  // Time to wait before retrying a bad proxy server.
+#if defined(OS_ANDROID) || defined(OS_IOS)
+  // Randomize the timeout over a range from one to five minutes.
+  const TimeDelta proxy_retry_delay =
+      TimeDelta::FromMilliseconds(base::RandInt(1 * 60 * 1000, 5 * 60 * 1000));
 #else
-  const TimeDelta kProxyRetryDelay = TimeDelta::FromMinutes(5);
+  const TimeDelta proxy_retry_delay = TimeDelta::FromMinutes(5);
 #endif
 
   if (proxies_.empty()) {
@@ -215,7 +218,7 @@ void ProxyList::UpdateRetryInfoOnFallback(
       iter->second.bad_until = TimeTicks::Now() + iter->second.current_delay;
     } else {
       ProxyRetryInfo retry_info;
-      retry_info.current_delay = kProxyRetryDelay;
+      retry_info.current_delay = proxy_retry_delay;
       retry_info.bad_until = TimeTicks().Now() + retry_info.current_delay;
       (*proxy_retry_info)[key] = retry_info;
     }

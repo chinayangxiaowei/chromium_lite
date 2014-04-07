@@ -8,7 +8,7 @@
 
 #include "base/command_line.h"
 #include "base/debug/alias.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/defaults.h"
 #include "chrome/browser/themes/theme_properties.h"
 #include "chrome/browser/ui/browser.h"
@@ -17,6 +17,7 @@
 #include "chrome/browser/ui/view_ids.h"
 #include "chrome/browser/ui/views/tabs/tab_controller.h"
 #include "chrome/browser/ui/views/theme_image_mapper.h"
+#include "chrome/browser/ui/views/touch_uma/touch_uma.h"
 #include "chrome/common/chrome_switches.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
@@ -237,6 +238,10 @@ const int kImmersiveBarHeight = 2;
 const SkColor kImmersiveActiveTabColor = SkColorSetRGB(235, 235, 235);
 const SkColor kImmersiveInactiveTabColor = SkColorSetRGB(190, 190, 190);
 
+// The minimum opacity (out of 1) when a tab (either active or inactive) is
+// throbbing in the immersive mode light strip.
+const double kImmersiveTabMinThrobOpacity = 0.66;
+
 // Number of steps in the immersive mode loading animation.
 const int kImmersiveLoadingStepCount = 32;
 
@@ -313,7 +318,7 @@ class Tab::FaviconCrashAnimation : public ui::LinearAnimation,
                                    public ui::AnimationDelegate {
  public:
   explicit FaviconCrashAnimation(Tab* target)
-      : ALLOW_THIS_IN_INITIALIZER_LIST(ui::LinearAnimation(1000, 25, this)),
+      : ui::LinearAnimation(1000, 25, this),
         target_(target) {
   }
   virtual ~FaviconCrashAnimation() {}
@@ -372,6 +377,17 @@ class Tab::TabCloseButton : public views::ImageButton {
     return rect.Contains(point) ? this : parent();
   }
 
+  // Overridden from views::View.
+  virtual View* GetTooltipHandlerForPoint(const gfx::Point& point) OVERRIDE {
+    // Tab close button has no children, so tooltip handler should be the same
+    // as the event handler.
+    // In addition, a hit test has to be performed for the point (as
+    // GetTooltipHandlerForPoint() is responsible for it).
+    if (!HitTestPoint(point))
+      return NULL;
+    return GetEventHandlerForPoint(point);
+  }
+
   virtual bool OnMousePressed(const ui::MouseEvent& event) OVERRIDE {
     if (tab_->controller())
       tab_->controller()->OnMouseEventInTab(this, event);
@@ -421,7 +437,8 @@ Tab::ImageCacheEntry::~ImageCacheEntry() {}
 // Tab, statics:
 
 // static
-const char Tab::kViewClassName[] = "BrowserTab";
+const char Tab::kViewClassName[] = "Tab";
+
 // static
 Tab::TabImage Tab::tab_alpha_ = {0};
 Tab::TabImage Tab::tab_active_ = {0};
@@ -445,7 +462,8 @@ Tab::Tab(TabController* controller)
       immersive_loading_step_(0),
       should_display_crashed_favicon_(false),
       theme_provider_(NULL),
-      ALLOW_THIS_IN_INITIALIZER_LIST(hover_controller_(this)),
+      tab_activated_with_last_gesture_begin_(false),
+      hover_controller_(this),
       showing_icon_(false),
       showing_close_button_(false),
       close_button_color_(0) {
@@ -461,11 +479,11 @@ Tab::Tab(TabController* controller)
   close_button_ = new TabCloseButton(this);
   ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
   close_button_->SetImage(views::CustomButton::STATE_NORMAL,
-                          rb.GetImageSkiaNamed(IDR_TAB_CLOSE));
+                          rb.GetImageSkiaNamed(IDR_CLOSE_1));
   close_button_->SetImage(views::CustomButton::STATE_HOVERED,
-                          rb.GetImageSkiaNamed(IDR_TAB_CLOSE_H));
+                          rb.GetImageSkiaNamed(IDR_CLOSE_1_H));
   close_button_->SetImage(views::CustomButton::STATE_PRESSED,
-                          rb.GetImageSkiaNamed(IDR_TAB_CLOSE_P));
+                          rb.GetImageSkiaNamed(IDR_CLOSE_1_P));
   close_button_->SetAccessibleName(
       l10n_util::GetStringUTF16(IDS_ACCNAME_CLOSE));
   // Disable animation so that the red danger sign shows up immediately
@@ -699,15 +717,18 @@ void Tab::ButtonPressed(views::Button* sender, const ui::Event& event) {
       CLOSE_TAB_FROM_TOUCH;
   DCHECK_EQ(close_button_, sender);
   controller()->CloseTab(this, source);
+  if (event.type() == ui::ET_GESTURE_TAP)
+    TouchUMA::RecordGestureAction(TouchUMA::GESTURE_TABCLOSE_TAP);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 // Tab, views::ContextMenuController overrides:
 
 void Tab::ShowContextMenuForView(views::View* source,
-                                     const gfx::Point& point) {
+                                 const gfx::Point& point,
+                                 ui::MenuSourceType source_type) {
   if (controller() && !closing())
-    controller()->ShowContextMenuForTab(this, point);
+    controller()->ShowContextMenuForTab(this, point, source_type);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -748,6 +769,7 @@ void Tab::Layout() {
   // The height of the content of the Tab is the largest of the favicon,
   // the title text and the close button graphic.
   int content_height = std::max(tab_icon_size(), font_height_);
+  close_button_->set_border(NULL);
   gfx::Size close_button_size(close_button_->GetPreferredSize());
   content_height = std::max(content_height, close_button_size.height());
 
@@ -801,9 +823,8 @@ void Tab::Layout() {
         left_border);
     close_button_->set_border(views::Border::CreateEmptyBorder(top_border,
         left_border, bottom_border, right_border));
-    close_button_->SetBounds(lb.width(), 0,
-        close_button_size.width() + left_border + right_border,
-        close_button_size.height() + top_border + bottom_border);
+    close_button_->SetPosition(gfx::Point(lb.width(), 0));
+    close_button_->SizeToPreferredSize();
     close_button_->SetVisible(true);
   } else {
     close_button_->SetBounds(0, 0, 0, 0);
@@ -855,7 +876,7 @@ void Tab::OnThemeChanged() {
   LoadTabImages();
 }
 
-std::string Tab::GetClassName() const {
+const char* Tab::GetClassName() const {
   return kViewClassName;
 }
 
@@ -1015,6 +1036,7 @@ void Tab::OnGestureEvent(ui::GestureEvent* event) {
                                        parent());
       ui::ListSelectionModel original_selection;
       original_selection.Copy(controller()->GetSelectionModel());
+      tab_activated_with_last_gesture_begin_ = !IsActive();
       if (!IsSelected())
         controller()->SelectTab(this);
       gfx::Point loc(event->location());
@@ -1090,24 +1112,33 @@ void Tab::PaintTab(gfx::Canvas* canvas) {
     close_button_color_ = title_color;
     ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
     close_button_->SetBackground(close_button_color_,
-        rb.GetImageSkiaNamed(IDR_TAB_CLOSE),
-        rb.GetImageSkiaNamed(IDR_TAB_CLOSE_MASK));
+        rb.GetImageSkiaNamed(IDR_CLOSE_1),
+        rb.GetImageSkiaNamed(IDR_CLOSE_1_MASK));
   }
 }
 
 void Tab::PaintImmersiveTab(gfx::Canvas* canvas) {
+  // Use transparency for the draw-attention animation.
+  int alpha = 255;
+  if (tab_animation_ &&
+      tab_animation_->is_animating() &&
+      !data().mini) {
+    alpha = tab_animation_->CurrentValueBetween(
+        255, static_cast<int>(255 * kImmersiveTabMinThrobOpacity));
+  }
+
   // Draw a gray rectangle to represent the tab. This works for mini-tabs as
   // well as regular ones. The active tab has a brigher bar.
   SkColor color =
       IsActive() ? kImmersiveActiveTabColor : kImmersiveInactiveTabColor;
   gfx::Rect bar_rect = GetImmersiveBarRect();
-  canvas->FillRect(bar_rect, color);
+  canvas->FillRect(bar_rect, SkColorSetA(color, alpha));
 
   // Paint network activity indicator.
   // TODO(jamescook): Replace this placeholder animation with a real one.
   // For now, let's go with a Cylon eye effect, but in blue.
   if (data().network_state != TabRendererData::NETWORK_STATE_NONE) {
-    const SkColor kEyeColor = SkColorSetRGB(71, 138, 217);
+    const SkColor kEyeColor = SkColorSetARGB(alpha, 71, 138, 217);
     int eye_width = bar_rect.width() / 3;
     int eye_offset = bar_rect.width() * immersive_loading_step_ /
         kImmersiveLoadingStepCount;
@@ -1297,11 +1328,11 @@ void Tab::PaintInactiveTabBackgroundUsingResourceId(gfx::Canvas* canvas,
   // rectangle. And again, don't draw over the toolbar.
   background_canvas.TileImageInt(*tab_bg,
      offset + tab_image->l_width,
-     bg_offset_y + drop_shadow_height() + tab_image->y_offset,
+     bg_offset_y + drop_shadow_height(),
      tab_image->l_width,
-     drop_shadow_height() + tab_image->y_offset,
+     drop_shadow_height(),
      width() - tab_image->l_width - tab_image->r_width,
-     height() - drop_shadow_height() - kToolbarOverlap - tab_image->y_offset);
+     height() - drop_shadow_height() - kToolbarOverlap);
 
   canvas->DrawImageInt(
       gfx::ImageSkia(background_canvas.ExtractImageRep()), 0, 0);
@@ -1350,11 +1381,11 @@ void Tab::PaintActiveTabBackground(gfx::Canvas* canvas) {
   // by incrementing by GetDropShadowHeight(), since it's a simple rectangle.
   canvas->TileImageInt(*tab_background,
      offset + tab_image->l_width,
-     drop_shadow_height() + tab_image->y_offset,
+     drop_shadow_height(),
      tab_image->l_width,
-     drop_shadow_height() + tab_image->y_offset,
+     drop_shadow_height(),
      width() - tab_image->l_width - tab_image->r_width,
-     height() - drop_shadow_height() - tab_image->y_offset);
+     height() - drop_shadow_height());
 
   // Now draw the highlights/shadows around the tab edge.
   canvas->DrawImageInt(*tab_image->image_l, 0, 0);
@@ -1426,16 +1457,18 @@ void Tab::PaintIcon(gfx::Canvas* canvas) {
                        data().favicon.width(),
                        data().favicon.height(),
                        bounds, true, SkPaint());
+      } else if (!icon_animation_ && tab_audio_indicator_->IsAnimating()) {
+        // Draw the audio indicator UI only if no other icon animation is
+        // active.
+        if (!icon_animation_ && tab_audio_indicator_->IsAnimating()) {
+          tab_audio_indicator_->set_favicon(data().favicon);
+          tab_audio_indicator_->Paint(canvas, bounds);
+        }
       } else {
         DrawIconCenter(canvas, data().favicon, 0,
                        data().favicon.width(),
                        data().favicon.height(),
                        bounds, true, SkPaint());
-
-        // Draw the audio indicator UI only if no other icon animation is
-        // active.
-        if (!icon_animation_ && tab_audio_indicator_->IsAnimating())
-          tab_audio_indicator_->Paint(canvas, bounds);
       }
     }
   }

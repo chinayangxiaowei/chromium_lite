@@ -7,9 +7,15 @@
 #include "base/values.h"
 #include "chrome/test/chromedriver/chrome/status.h"
 
-StubDevToolsClient::StubDevToolsClient() {}
+StubDevToolsClient::StubDevToolsClient() : id_("stub-id") {}
+
+StubDevToolsClient::StubDevToolsClient(const std::string id) : id_(id) {}
 
 StubDevToolsClient::~StubDevToolsClient() {}
+
+const std::string& StubDevToolsClient::GetId() {
+  return id_;
+}
 
 Status StubDevToolsClient::ConnectIfNecessary() {
   return Status(kOk);
@@ -34,6 +40,11 @@ void StubDevToolsClient::AddListener(DevToolsEventListener* listener) {
 }
 
 Status StubDevToolsClient::HandleEventsUntil(
-      const ConditionalFunc& conditional_func) {
+    const ConditionalFunc& conditional_func,
+    const base::TimeDelta& timeout) {
+  return Status(kOk);
+}
+
+Status StubDevToolsClient::HandleReceivedEvents() {
   return Status(kOk);
 }

@@ -11,8 +11,8 @@
 #include "base/prefs/pref_change_registrar.h"
 #include "chrome/browser/background/background_application_list_model.h"
 #include "chrome/browser/profiles/profile_info_cache_observer.h"
-#include "chrome/browser/profiles/profile_keyed_service.h"
 #include "chrome/browser/status_icons/status_icon.h"
+#include "components/browser_context_keyed_service/browser_context_keyed_service.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 #include "ui/base/models/simple_menu_model.h"
@@ -85,6 +85,8 @@ class BackgroundModeManager
                            ProfileInfoCacheStorage);
   FRIEND_TEST_ALL_PREFIXES(BackgroundModeManagerTest,
                            ProfileInfoCacheObserver);
+  FRIEND_TEST_ALL_PREFIXES(BackgroundAppBrowserTest,
+                           ReloadBackgroundApp);
 
   class BackgroundModeData : public ui::SimpleMenuModel::Delegate {
    public:
@@ -170,12 +172,8 @@ class BackgroundModeManager
   virtual void OnProfileAdded(const base::FilePath& profile_path) OVERRIDE;
   virtual void OnProfileWillBeRemoved(
       const base::FilePath& profile_path) OVERRIDE;
-  virtual void OnProfileWasRemoved(const base::FilePath& profile_path,
-                                   const string16& profile_name) OVERRIDE;
   virtual void OnProfileNameChanged(const base::FilePath& profile_path,
                                     const string16& old_profile_name) OVERRIDE;
-  virtual void OnProfileAvatarChanged(
-      const base::FilePath& profile_path) OVERRIDE;
 
   // Overrides from SimpleMenuModel::Delegate implementation.
   virtual bool IsCommandIdChecked(int command_id) const OVERRIDE;
@@ -188,7 +186,15 @@ class BackgroundModeManager
   // Invoked when an extension is installed so we can ensure that
   // launch-on-startup is enabled if appropriate. |extension| can be NULL when
   // called from unit tests.
-  void OnBackgroundAppInstalled(const extensions::Extension* extension);
+  void OnBackgroundAppInstalled(
+      const extensions::Extension* extension);
+
+  // Walk the list of profiles and see if an extension or app is being
+  // currently upgraded or reloaded by any profile.  If so, update the
+  // output variables appropriately.
+  void CheckReloadStatus(
+      const extensions::Extension* extension,
+      bool* is_being_reloaded);
 
   // Called to make sure that our launch-on-startup mode is properly set.
   // (virtual so we can override for tests).
@@ -196,7 +202,8 @@ class BackgroundModeManager
 
   // Invoked when a background app is installed so we can display a
   // platform-specific notification to the user.
-  void DisplayAppInstalledNotification(const extensions::Extension* extension);
+  virtual void DisplayAppInstalledNotification(
+      const extensions::Extension* extension);
 
   // Invoked to put Chrome in KeepAlive mode - chrome runs in the background
   // and has a status bar icon.

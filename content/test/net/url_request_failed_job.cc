@@ -6,8 +6,8 @@
 
 #include "base/bind.h"
 #include "base/logging.h"
-#include "base/message_loop.h"
-#include "base/string_number_conversions.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/string_number_conversions.h"
 #include "net/base/net_errors.h"
 #include "net/url_request/url_request.h"
 #include "net/url_request/url_request_filter.h"
@@ -46,15 +46,14 @@ URLRequestFailedJob::URLRequestFailedJob(net::URLRequest* request,
                                          int net_error)
     : net::URLRequestJob(request, network_delegate),
       net_error_(net_error),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {}
+      weak_factory_(this) {}
 
 URLRequestFailedJob::~URLRequestFailedJob() {}
 
 void URLRequestFailedJob::Start() {
-  MessageLoop::current()->PostTask(
+  base::MessageLoop::current()->PostTask(
       FROM_HERE,
-      base::Bind(&URLRequestFailedJob::StartAsync,
-                 weak_factory_.GetWeakPtr()));
+      base::Bind(&URLRequestFailedJob::StartAsync, weak_factory_.GetWeakPtr()));
 }
 
 // static

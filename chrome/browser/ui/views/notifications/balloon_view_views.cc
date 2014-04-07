@@ -8,13 +8,13 @@
 #include <vector>
 
 #include "base/bind.h"
-#include "base/message_loop.h"
-#include "base/utf_string_conversions.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/notifications/balloon_collection.h"
 #include "chrome/browser/notifications/desktop_notification_service.h"
 #include "chrome/browser/notifications/notification.h"
 #include "chrome/browser/notifications/notification_options_menu_model.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "content/public/browser/notification_details.h"
 #include "content/public/browser/notification_source.h"
 #include "content/public/browser/notification_types.h"
@@ -35,7 +35,6 @@
 #include "ui/views/controls/button/text_button.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/menu/menu_item_view.h"
-#include "ui/views/controls/menu/menu_model_adapter.h"
 #include "ui/views/controls/menu/menu_runner.h"
 #include "ui/views/controls/native/native_view_host.h"
 #include "ui/views/widget/widget.h"
@@ -95,10 +94,7 @@ BalloonViewImpl::BalloonViewImpl(BalloonCollection* collection)
       collection_(collection),
       frame_container_(NULL),
       html_container_(NULL),
-      html_contents_(NULL),
       close_button_(NULL),
-      animation_(NULL),
-      options_menu_model_(NULL),
       options_menu_button_(NULL),
       enable_web_ui_(false),
       closed_by_user_(false) {
@@ -144,8 +140,7 @@ void BalloonViewImpl::OnMenuButtonClicked(views::View* source,
                                           const gfx::Point& point) {
   CreateOptionsMenu();
 
-  views::MenuModelAdapter menu_model_adapter(options_menu_model_.get());
-  menu_runner_.reset(new views::MenuRunner(menu_model_adapter.CreateMenu()));
+  menu_runner_.reset(new views::MenuRunner(options_menu_model_.get()));
 
   gfx::Point screen_location;
   views::View::ConvertPointToScreen(options_menu_button_, &screen_location);
@@ -154,6 +149,7 @@ void BalloonViewImpl::OnMenuButtonClicked(views::View* source,
           options_menu_button_,
           gfx::Rect(screen_location, options_menu_button_->size()),
           views::MenuItemView::TOPRIGHT,
+          ui::MENU_SOURCE_NONE,
           views::MenuRunner::HAS_MNEMONICS) == views::MenuRunner::MENU_DELETED)
     return;
 }
@@ -340,7 +336,7 @@ void BalloonViewImpl::Show(Balloon* balloon) {
 
   frame_container_ = new views::Widget;
   params.delegate = this;
-  params.transparent = true;
+  params.opacity = views::Widget::InitParams::TRANSLUCENT_WINDOW;
   params.bounds = GetBoundsForFrameContainer();
   frame_container_->Init(params);
   frame_container_->SetContentsView(this);
@@ -357,15 +353,15 @@ void BalloonViewImpl::Show(Balloon* balloon) {
   frame_container_->SetAlwaysOnTop(true);
 
   close_button_->SetImage(views::CustomButton::STATE_NORMAL,
-                          rb.GetImageSkiaNamed(IDR_TAB_CLOSE));
+                          rb.GetImageSkiaNamed(IDR_CLOSE_1));
   close_button_->SetImage(views::CustomButton::STATE_HOVERED,
-                          rb.GetImageSkiaNamed(IDR_TAB_CLOSE_H));
+                          rb.GetImageSkiaNamed(IDR_CLOSE_1_H));
   close_button_->SetImage(views::CustomButton::STATE_PRESSED,
-                          rb.GetImageSkiaNamed(IDR_TAB_CLOSE_P));
+                          rb.GetImageSkiaNamed(IDR_CLOSE_1_P));
   close_button_->SetBoundsRect(GetCloseButtonBounds());
   close_button_->SetBackground(SK_ColorBLACK,
-                               rb.GetImageSkiaNamed(IDR_TAB_CLOSE),
-                               rb.GetImageSkiaNamed(IDR_TAB_CLOSE_MASK));
+                               rb.GetImageSkiaNamed(IDR_CLOSE_1),
+                               rb.GetImageSkiaNamed(IDR_CLOSE_1_MASK));
 
   options_menu_button_->SetIcon(*rb.GetImageSkiaNamed(IDR_BALLOON_WRENCH));
   options_menu_button_->SetHoverIcon(
@@ -380,7 +376,6 @@ void BalloonViewImpl::Show(Balloon* balloon) {
   source_label_->SetBackgroundColor(kControlBarBackgroundColor);
   source_label_->SetEnabledColor(kControlBarTextColor);
   source_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
-  source_label_->SetElideBehavior(views::Label::ELIDE_AT_END);
   source_label_->SetBoundsRect(GetLabelBounds());
 
   SizeContentsWindow();

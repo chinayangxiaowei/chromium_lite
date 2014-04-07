@@ -10,11 +10,11 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
-#include "base/string_util.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/threading/sequenced_worker_pool.h"
 #include "base/threading/thread.h"
-#include "base/utf_string_conversions.h"
 #include "base/values.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -42,14 +42,9 @@ class JsonPrefStoreTest : public testing::Test {
   virtual void SetUp() OVERRIDE {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
 
-    ASSERT_TRUE(PathService::Get(base::DIR_SOURCE_ROOT, &data_dir_));
-    data_dir_ = data_dir_.AppendASCII("base");
+    ASSERT_TRUE(PathService::Get(base::DIR_TEST_DATA, &data_dir_));
     data_dir_ = data_dir_.AppendASCII("prefs");
-    data_dir_ = data_dir_.AppendASCII("test");
-    data_dir_ = data_dir_.AppendASCII("data");
-    data_dir_ = data_dir_.AppendASCII("pref_service");
-    LOG(WARNING) << data_dir_.value().c_str();
-    ASSERT_TRUE(file_util::PathExists(data_dir_));
+    ASSERT_TRUE(PathExists(data_dir_));
   }
 
   // The path to temporary directory used to contain the test operations.
@@ -63,10 +58,9 @@ class JsonPrefStoreTest : public testing::Test {
 // Test fallback behavior for a nonexistent file.
 TEST_F(JsonPrefStoreTest, NonExistentFile) {
   base::FilePath bogus_input_file = data_dir_.AppendASCII("read.txt");
-  ASSERT_FALSE(file_util::PathExists(bogus_input_file));
-  scoped_refptr<JsonPrefStore> pref_store =
-      new JsonPrefStore(
-          bogus_input_file, message_loop_.message_loop_proxy());
+  ASSERT_FALSE(PathExists(bogus_input_file));
+  scoped_refptr<JsonPrefStore> pref_store = new JsonPrefStore(
+      bogus_input_file, message_loop_.message_loop_proxy().get());
   EXPECT_EQ(PersistentPrefStore::PREF_READ_ERROR_NO_FILE,
             pref_store->ReadPrefs());
   EXPECT_FALSE(pref_store->ReadOnly());
@@ -76,20 +70,18 @@ TEST_F(JsonPrefStoreTest, NonExistentFile) {
 TEST_F(JsonPrefStoreTest, InvalidFile) {
   base::FilePath invalid_file_original = data_dir_.AppendASCII("invalid.json");
   base::FilePath invalid_file = temp_dir_.path().AppendASCII("invalid.json");
-  ASSERT_TRUE(file_util::CopyFile(invalid_file_original, invalid_file));
+  ASSERT_TRUE(base::CopyFile(invalid_file_original, invalid_file));
   scoped_refptr<JsonPrefStore> pref_store =
-      new JsonPrefStore(
-          invalid_file, message_loop_.message_loop_proxy());
+      new JsonPrefStore(invalid_file, message_loop_.message_loop_proxy().get());
   EXPECT_EQ(PersistentPrefStore::PREF_READ_ERROR_JSON_PARSE,
             pref_store->ReadPrefs());
   EXPECT_FALSE(pref_store->ReadOnly());
 
   // The file should have been moved aside.
-  EXPECT_FALSE(file_util::PathExists(invalid_file));
+  EXPECT_FALSE(PathExists(invalid_file));
   base::FilePath moved_aside = temp_dir_.path().AppendASCII("invalid.bad");
-  EXPECT_TRUE(file_util::PathExists(moved_aside));
-  EXPECT_TRUE(file_util::TextContentsEqual(invalid_file_original,
-                                           moved_aside));
+  EXPECT_TRUE(PathExists(moved_aside));
+  EXPECT_TRUE(TextContentsEqual(invalid_file_original, moved_aside));
 }
 
 // This function is used to avoid code duplication while testing synchronous and
@@ -151,23 +143,22 @@ void RunBasicJsonPrefStoreTest(JsonPrefStore* pref_store,
   EXPECT_EQ(214748364842LL, value);
 
   // Serialize and compare to expected output.
-  ASSERT_TRUE(file_util::PathExists(golden_output_file));
+  ASSERT_TRUE(PathExists(golden_output_file));
   pref_store->CommitPendingWrite();
   RunLoop().RunUntilIdle();
-  EXPECT_TRUE(file_util::TextContentsEqual(golden_output_file, output_file));
-  ASSERT_TRUE(file_util::Delete(output_file, false));
+  EXPECT_TRUE(TextContentsEqual(golden_output_file, output_file));
+  ASSERT_TRUE(base::DeleteFile(output_file, false));
 }
 
 TEST_F(JsonPrefStoreTest, Basic) {
-  ASSERT_TRUE(file_util::CopyFile(data_dir_.AppendASCII("read.json"),
+  ASSERT_TRUE(base::CopyFile(data_dir_.AppendASCII("read.json"),
                                   temp_dir_.path().AppendASCII("write.json")));
 
   // Test that the persistent value can be loaded.
   base::FilePath input_file = temp_dir_.path().AppendASCII("write.json");
-  ASSERT_TRUE(file_util::PathExists(input_file));
+  ASSERT_TRUE(PathExists(input_file));
   scoped_refptr<JsonPrefStore> pref_store =
-      new JsonPrefStore(
-          input_file, message_loop_.message_loop_proxy());
+      new JsonPrefStore(input_file, message_loop_.message_loop_proxy().get());
   ASSERT_EQ(PersistentPrefStore::PREF_READ_ERROR_NONE, pref_store->ReadPrefs());
   ASSERT_FALSE(pref_store->ReadOnly());
 
@@ -181,21 +172,19 @@ TEST_F(JsonPrefStoreTest, Basic) {
   //   }
   // }
 
-  RunBasicJsonPrefStoreTest(pref_store,
-                            input_file,
-                            data_dir_.AppendASCII("write.golden.json"));
+  RunBasicJsonPrefStoreTest(
+      pref_store.get(), input_file, data_dir_.AppendASCII("write.golden.json"));
 }
 
 TEST_F(JsonPrefStoreTest, BasicAsync) {
-  ASSERT_TRUE(file_util::CopyFile(data_dir_.AppendASCII("read.json"),
+  ASSERT_TRUE(base::CopyFile(data_dir_.AppendASCII("read.json"),
                                   temp_dir_.path().AppendASCII("write.json")));
 
   // Test that the persistent value can be loaded.
   base::FilePath input_file = temp_dir_.path().AppendASCII("write.json");
-  ASSERT_TRUE(file_util::PathExists(input_file));
+  ASSERT_TRUE(PathExists(input_file));
   scoped_refptr<JsonPrefStore> pref_store =
-      new JsonPrefStore(
-          input_file, message_loop_.message_loop_proxy());
+      new JsonPrefStore(input_file, message_loop_.message_loop_proxy().get());
 
   {
     MockPrefStoreObserver mock_observer;
@@ -223,18 +212,16 @@ TEST_F(JsonPrefStoreTest, BasicAsync) {
   //   }
   // }
 
-  RunBasicJsonPrefStoreTest(pref_store,
-                            input_file,
-                            data_dir_.AppendASCII("write.golden.json"));
+  RunBasicJsonPrefStoreTest(
+      pref_store.get(), input_file, data_dir_.AppendASCII("write.golden.json"));
 }
 
 // Tests asynchronous reading of the file when there is no file.
 TEST_F(JsonPrefStoreTest, AsyncNonExistingFile) {
   base::FilePath bogus_input_file = data_dir_.AppendASCII("read.txt");
-  ASSERT_FALSE(file_util::PathExists(bogus_input_file));
-  scoped_refptr<JsonPrefStore> pref_store =
-      new JsonPrefStore(
-          bogus_input_file, message_loop_.message_loop_proxy());
+  ASSERT_FALSE(PathExists(bogus_input_file));
+  scoped_refptr<JsonPrefStore> pref_store = new JsonPrefStore(
+      bogus_input_file, message_loop_.message_loop_proxy().get());
   MockPrefStoreObserver mock_observer;
   pref_store->AddObserver(&mock_observer);
 
@@ -253,15 +240,14 @@ TEST_F(JsonPrefStoreTest, AsyncNonExistingFile) {
 TEST_F(JsonPrefStoreTest, NeedsEmptyValue) {
   base::FilePath pref_file = temp_dir_.path().AppendASCII("write.json");
 
-  ASSERT_TRUE(file_util::CopyFile(
+  ASSERT_TRUE(base::CopyFile(
       data_dir_.AppendASCII("read.need_empty_value.json"),
       pref_file));
 
   // Test that the persistent value can be loaded.
-  ASSERT_TRUE(file_util::PathExists(pref_file));
+  ASSERT_TRUE(PathExists(pref_file));
   scoped_refptr<JsonPrefStore> pref_store =
-      new JsonPrefStore(
-          pref_file, message_loop_.message_loop_proxy());
+      new JsonPrefStore(pref_file, message_loop_.message_loop_proxy().get());
   ASSERT_EQ(PersistentPrefStore::PREF_READ_ERROR_NONE, pref_store->ReadPrefs());
   ASSERT_FALSE(pref_store->ReadOnly());
 
@@ -294,8 +280,8 @@ TEST_F(JsonPrefStoreTest, NeedsEmptyValue) {
   // Compare to expected output.
   base::FilePath golden_output_file =
       data_dir_.AppendASCII("write.golden.need_empty_value.json");
-  ASSERT_TRUE(file_util::PathExists(golden_output_file));
-  EXPECT_TRUE(file_util::TextContentsEqual(golden_output_file, pref_file));
+  ASSERT_TRUE(PathExists(golden_output_file));
+  EXPECT_TRUE(TextContentsEqual(golden_output_file, pref_file));
 }
 
 }  // namespace base

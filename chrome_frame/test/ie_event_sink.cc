@@ -11,10 +11,13 @@
 #include <utility>
 
 #include "base/lazy_instance.h"
-#include "base/string_number_conversions.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/string_piece.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/test/test_timeouts.h"
+#include "base/time/time.h"
 #include "base/win/scoped_bstr.h"
 #include "base/win/scoped_handle.h"
 #include "base/win/scoped_variant.h"
@@ -201,12 +204,9 @@ _ATL_FUNC_INFO IEEventSink::kFileDownloadInfo = {
 bool IEEventSink::abnormal_shutdown_ = false;
 
 IEEventSink::IEEventSink()
-    : ALLOW_THIS_IN_INITIALIZER_LIST(
-          onmessage_(this, &IEEventSink::OnMessage)),
-      ALLOW_THIS_IN_INITIALIZER_LIST(
-          onloaderror_(this, &IEEventSink::OnLoadError)),
-      ALLOW_THIS_IN_INITIALIZER_LIST(
-          onload_(this, &IEEventSink::OnLoad)),
+    : onmessage_(this, &IEEventSink::OnMessage),
+      onloaderror_(this, &IEEventSink::OnLoadError),
+      onload_(this, &IEEventSink::OnLoad),
       listener_(NULL),
       ie_process_id_(0),
       did_receive_on_quit_(false) {
@@ -316,9 +316,38 @@ void IEEventSink::SetFocusToRenderer() {
   simulate_input::SetKeyboardFocusToWindow(GetRendererWindow());
 }
 
-void IEEventSink::SendKeys(const wchar_t* input_string) {
-  SetFocusToRenderer();
-  simulate_input::SendStringW(input_string);
+void IEEventSink::SendKeys(const char* input_string) {
+  HWND window = GetRendererWindow();
+  simulate_input::SetKeyboardFocusToWindow(window);
+  const base::TimeDelta kMessageSleep = TestTimeouts::tiny_timeout();
+  const base::StringPiece codes(input_string);
+  for (size_t i = 0; i < codes.length(); ++i) {
+    char character = codes[i];
+    UINT virtual_key = 0;
+
+    if (character >= 'a' && character <= 'z') {
+      // VK_A - VK_Z are ASCII 'A' - 'Z'.
+      virtual_key = 'A' + (character - 'a');
+    } else if (character >= '0' && character <= '9') {
+      // VK_0 - VK_9 are ASCII '0' - '9'.
+      virtual_key = character;
+    } else {
+      FAIL() << "Character value out of range at position " << i
+             << " of string \"" << input_string << "\"";
+    }
+
+    UINT scan_code = MapVirtualKey(virtual_key, MAPVK_VK_TO_VSC);
+    EXPECT_NE(0U, scan_code) << "No translation for virtual key "
+                             << virtual_key << " for character at position "
+                             << i << " of string \"" << input_string << "\"";
+
+    ::PostMessage(window, WM_KEYDOWN,
+                  virtual_key, MAKELPARAM(1, scan_code));
+    base::PlatformThread::Sleep(kMessageSleep);
+    ::PostMessage(window, WM_KEYUP,
+                  virtual_key, MAKELPARAM(1, scan_code | KF_UP | KF_REPEAT));
+    base::PlatformThread::Sleep(kMessageSleep);
+  }
 }
 
 void IEEventSink::SendMouseClick(int x, int y,
@@ -337,7 +366,7 @@ void IEEventSink::ExpectRendererWindowHasFocus() {
 
   ASSERT_TRUE(AttachThreadInput(GetCurrentThreadId(), renderer_thread, TRUE));
   HWND focus_window = GetFocus();
-  EXPECT_TRUE(focus_window == renderer_window);
+  EXPECT_EQ(renderer_window, focus_window);
   EXPECT_TRUE(AttachThreadInput(GetCurrentThreadId(), renderer_thread, FALSE));
 }
 
@@ -389,7 +418,12 @@ HWND IEEventSink::GetRendererWindow() {
            first_child = ::GetWindow(first_child, GW_CHILD)) {
         child_window = first_child;
         GetClassName(child_window, class_name, arraysize(class_name));
-        if (!_wcsicmp(class_name, L"Chrome_RenderWidgetHostHWND")) {
+#if defined(USE_AURA)
+        static const wchar_t kWndClassPrefix[] = L"Chrome_WidgetWin_";
+#else
+        static const wchar_t kWndClassPrefix[] = L"Chrome_RenderWidgetHostHWND";
+#endif
+        if (!_wcsnicmp(class_name, kWndClassPrefix, wcslen(kWndClassPrefix))) {
           renderer_window = child_window;
           break;
         }

@@ -4,8 +4,9 @@
 
 #include "chrome/browser/ui/views/javascript_app_modal_dialog_views.h"
 
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/app_modal_dialogs/javascript_app_modal_dialog.h"
+#include "chrome/browser/ui/views/constrained_window_views.h"
 #include "grit/generated_resources.h"
 #include "ui/base/keycodes/keyboard_codes.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -107,7 +108,7 @@ bool JavaScriptAppModalDialogViews::Accept() {
   return true;
 }
 
-void JavaScriptAppModalDialogViews::OnClose() {
+void JavaScriptAppModalDialogViews::OnClosed() {
   parent_->OnClose();
 }
 
@@ -162,9 +163,6 @@ NativeAppModalDialog* NativeAppModalDialog::CreateNativeJavaScriptPrompt(
     JavaScriptAppModalDialog* dialog,
     gfx::NativeWindow parent_window) {
   JavaScriptAppModalDialogViews* d = new JavaScriptAppModalDialogViews(dialog);
-  if (parent_window)
-    views::Widget::CreateWindowWithParent(d, parent_window);
-  else
-    views::Widget::CreateWindow(d);
+  CreateBrowserModalDialogViews(d, parent_window);
   return d;
 }

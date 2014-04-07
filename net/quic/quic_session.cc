@@ -5,14 +5,21 @@
 #include "net/quic/quic_session.h"
 
 #include "base/stl_util.h"
+#include "net/quic/crypto/proof_verifier.h"
 #include "net/quic/quic_connection.h"
+#include "net/ssl/ssl_info.h"
 
 using base::StringPiece;
 using base::hash_map;
 using base::hash_set;
+using std::make_pair;
 using std::vector;
 
 namespace net {
+
+const size_t kMaxPrematurelyClosedStreamsTracked = 20;
+
+#define ENDPOINT (is_server_ ? "Server: " : " Client: ")
 
 // We want to make sure we delete any closed streams in a safe manner.
 // To avoid deleting a stream in mid-operation, we have a simple shim between
@@ -64,16 +71,27 @@ class VisitorShim : public QuicConnectionVisitorInterface {
   QuicSession* session_;
 };
 
-QuicSession::QuicSession(QuicConnection* connection, bool is_server)
+QuicSession::QuicSession(QuicConnection* connection,
+                         const QuicConfig& config,
+                         bool is_server)
     : connection_(connection),
       visitor_shim_(new VisitorShim(this)),
-      max_open_streams_(kDefaultMaxStreamsPerConnection),
+      config_(config),
+      max_open_streams_(config_.max_streams_per_connection()),
       next_stream_id_(is_server ? 2 : 3),
       is_server_(is_server),
       largest_peer_created_stream_id_(0),
+      error_(QUIC_NO_ERROR),
       goaway_received_(false),
       goaway_sent_(false) {
-  connection->set_visitor(visitor_shim_.get());
+
+  connection_->set_visitor(visitor_shim_.get());
+  connection_->SetIdleNetworkTimeout(config_.idle_connection_state_lifetime());
+  if (connection_->connected()) {
+    connection_->SetOverallConnectionTimeout(
+        config_.max_time_before_crypto_handshake());
+  }
+  // TODO(satyamshekhar): Set congestion control and ICSL also.
 }
 
 QuicSession::~QuicSession() {
@@ -86,13 +104,25 @@ bool QuicSession::OnPacket(const IPEndPoint& self_address,
                            const QuicPacketHeader& header,
                            const vector<QuicStreamFrame>& frames) {
   if (header.public_header.guid != connection()->guid()) {
-    DLOG(INFO) << "Got packet header for invalid GUID: "
+    DLOG(INFO) << ENDPOINT << "Got packet header for invalid GUID: "
                << header.public_header.guid;
     return false;
   }
+
   for (size_t i = 0; i < frames.size(); ++i) {
     // TODO(rch) deal with the error case of stream id 0
-    if (IsClosedStream(frames[i].stream_id)) continue;
+    if (IsClosedStream(frames[i].stream_id)) {
+      // If we get additional frames for a stream where we didn't process
+      // headers, it's highly likely our compression context will end up
+      // permanently out of sync with the peer's, so we give up and close the
+      // connection.
+      if (ContainsKey(prematurely_closed_streams_, frames[i].stream_id)) {
+        connection()->SendConnectionClose(
+            QUIC_STREAM_RST_BEFORE_HEADERS_DECOMPRESSED);
+        return false;
+      }
+      continue;
+    }
 
     ReliableQuicStream* stream = GetStream(frames[i].stream_id);
     if (stream == NULL) return false;
@@ -107,6 +137,22 @@ bool QuicSession::OnPacket(const IPEndPoint& self_address,
     if (stream) {
       stream->OnStreamFrame(frames[i]);
     }
+  }
+
+  while (!decompression_blocked_streams_.empty()) {
+    QuicHeaderId header_id = decompression_blocked_streams_.begin()->first;
+    if (header_id != decompressor_.current_header_id()) {
+      break;
+    }
+    QuicStreamId stream_id = decompression_blocked_streams_.begin()->second;
+    decompression_blocked_streams_.erase(header_id);
+    ReliableQuicStream* stream = GetStream(stream_id);
+    if (!stream) {
+      connection()->SendConnectionClose(
+          QUIC_STREAM_RST_BEFORE_HEADERS_DECOMPRESSED);
+      return false;
+    }
+    stream->OnDecompressorAvailable();
   }
   return true;
 }
@@ -125,13 +171,17 @@ void QuicSession::OnGoAway(const QuicGoAwayFrame& frame) {
 }
 
 void QuicSession::ConnectionClose(QuicErrorCode error, bool from_peer) {
+  if (error_ == QUIC_NO_ERROR) {
+    error_ = error;
+  }
+
   while (stream_map_.size() != 0) {
     ReliableStreamMap::iterator it = stream_map_.begin();
     QuicStreamId id = it->first;
     it->second->ConnectionClose(error, from_peer);
     // The stream should call CloseStream as part of ConnectionClose.
     if (stream_map_.find(id) != stream_map_.end()) {
-      LOG(DFATAL) << "Stream failed to close under ConnectionClose";
+      LOG(DFATAL) << ENDPOINT << "Stream failed to close under ConnectionClose";
       CloseStream(id);
     }
   }
@@ -166,7 +216,7 @@ QuicConsumedData QuicSession::WriteData(QuicStreamId id,
 }
 
 void QuicSession::SendRstStream(QuicStreamId id,
-                                QuicErrorCode error) {
+                                QuicRstStreamErrorCode error) {
   connection_->SendRstStream(id, error);
   CloseStream(id);
 }
@@ -177,29 +227,69 @@ void QuicSession::SendGoAway(QuicErrorCode error_code, const string& reason) {
 }
 
 void QuicSession::CloseStream(QuicStreamId stream_id) {
-  DLOG(INFO) << "Closing stream " << stream_id;
+  DLOG(INFO) << ENDPOINT << "Closing stream " << stream_id;
 
   ReliableStreamMap::iterator it = stream_map_.find(stream_id);
   if (it == stream_map_.end()) {
-    DLOG(INFO) << "Stream is already closed: " << stream_id;
+    DLOG(INFO) << ENDPOINT << "Stream is already closed: " << stream_id;
     return;
   }
-  it->second->OnClose();
+  ReliableQuicStream* stream = it->second;
+  if (!stream->headers_decompressed()) {
+    if (prematurely_closed_streams_.size() ==
+        kMaxPrematurelyClosedStreamsTracked) {
+      prematurely_closed_streams_.erase(prematurely_closed_streams_.begin());
+    }
+    prematurely_closed_streams_.insert(make_pair(stream->id(), true));
+  }
   closed_streams_.push_back(it->second);
   stream_map_.erase(it);
+  stream->OnClose();
 }
 
-bool QuicSession::IsCryptoHandshakeComplete() {
-  return GetCryptoStream()->handshake_complete();
+bool QuicSession::IsEncryptionEstablished() {
+  return GetCryptoStream()->encryption_established();
 }
 
-void QuicSession::OnCryptoHandshakeComplete(QuicErrorCode error) {
-  // TODO(rch): tear down the connection if error != QUIC_NO_ERROR.
+bool QuicSession::IsCryptoHandshakeConfirmed() {
+  return GetCryptoStream()->handshake_confirmed();
+}
+
+void QuicSession::OnCryptoHandshakeEvent(CryptoHandshakeEvent event) {
+  switch (event) {
+    // TODO(satyamshekhar): Move the logic of setting the encrypter/decrypter
+    // to QuicSession since it is the glue.
+    case ENCRYPTION_FIRST_ESTABLISHED:
+      break;
+
+    case ENCRYPTION_REESTABLISHED:
+      // Retransmit originally packets that were sent, since they can't be
+      // decrypted by the peer.
+      connection_->RetransmitUnackedPackets(
+          QuicConnection::INITIAL_ENCRYPTION_ONLY);
+      break;
+
+    case HANDSHAKE_CONFIRMED:
+      LOG_IF(DFATAL, !config_.negotiated()) << ENDPOINT
+          << "Handshake confirmed without parameter negotiation.";
+      connection_->SetIdleNetworkTimeout(
+          config_.idle_connection_state_lifetime());
+      connection_->SetOverallConnectionTimeout(QuicTime::Delta::Infinite());
+      max_open_streams_ = config_.max_streams_per_connection();
+      break;
+
+    default:
+      LOG(ERROR) << ENDPOINT << "Got unknown handshake event: " << event;
+  }
+}
+
+QuicConfig* QuicSession::config() {
+  return &config_;
 }
 
 void QuicSession::ActivateStream(ReliableQuicStream* stream) {
-  DLOG(INFO) << "num_streams: " << stream_map_.size()
-            << ". activating " << stream->id();
+  DLOG(INFO) << ENDPOINT << "num_streams: " << stream_map_.size()
+             << ". activating " << stream->id();
   DCHECK(stream_map_.count(stream->id()) == 0);
   stream_map_[stream->id()] = stream;
 }
@@ -242,7 +332,7 @@ ReliableQuicStream* QuicSession::GetIncomingReliableStream(
 
   if (goaway_sent_) {
     // We've already sent a GoAway
-    connection()->SendRstStream(stream_id, QUIC_PEER_GOING_AWAY);
+    SendRstStream(stream_id, QUIC_STREAM_PEER_GOING_AWAY);
     return NULL;
   }
 
@@ -296,6 +386,16 @@ size_t QuicSession::GetNumOpenStreams() const {
 
 void QuicSession::MarkWriteBlocked(QuicStreamId id) {
   write_blocked_streams_.AddBlockedObject(id);
+}
+
+void QuicSession::MarkDecompressionBlocked(QuicHeaderId header_id,
+                                           QuicStreamId stream_id) {
+  decompression_blocked_streams_[header_id] = stream_id;
+}
+
+bool QuicSession::GetSSLInfo(SSLInfo* ssl_info) {
+  NOTIMPLEMENTED();
+  return false;
 }
 
 void QuicSession::PostProcessAfterData() {

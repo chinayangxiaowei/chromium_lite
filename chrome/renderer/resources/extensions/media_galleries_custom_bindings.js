@@ -23,13 +23,10 @@ binding.registerCustomHook(function(bindingsAPI, extensionId) {
       result = [];
       for (var i = 0; i < response.length; i++) {
         var filesystem = mediaGalleriesNatives.GetMediaFileSystemObject(
-            response[i].fsid, response[i].name);
-        result.push(filesystem);
+            response[i].fsid);
+        $Array.push(result, filesystem);
         var metadata = response[i];
         delete metadata.fsid;
-        // TODO(vandebo) Until we remove the JSON name string (one release), we
-        // need to pull out the real name part for metadata.
-        metadata.name = JSON.parse(metadata.name).name;
         mediaGalleriesMetadata[filesystem.name] = metadata;
       }
     }

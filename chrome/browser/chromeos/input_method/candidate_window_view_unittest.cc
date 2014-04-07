@@ -6,8 +6,8 @@
 
 #include <string>
 
-#include "base/stringprintf.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/chromeos/input_method/candidate_view.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/views/test/views_test_base.h"
@@ -63,15 +63,48 @@ void InitIBusLookupTableWithCandidatesFilled(size_t page_size,
 
 class CandidateWindowViewTest : public views::ViewsTestBase {
  protected:
-  void ExpectLabels(const std::string shortcut,
-                    const std::string candidate,
-                    const std::string annotation,
+  void ExpectLabels(const std::string& shortcut,
+                    const std::string& candidate,
+                    const std::string& annotation,
                     const CandidateView* row) {
     EXPECT_EQ(shortcut, UTF16ToUTF8(row->shortcut_label_->text()));
     EXPECT_EQ(candidate, UTF16ToUTF8(row->candidate_label_->text()));
     EXPECT_EQ(annotation, UTF16ToUTF8(row->annotation_label_->text()));
   }
 };
+
+TEST_F(CandidateWindowViewTest, UpdateCandidatesTest_CursorVisibility) {
+  views::Widget* widget = new views::Widget;
+  views::Widget::InitParams params =
+      CreateParams(views::Widget::InitParams::TYPE_WINDOW);
+  widget->Init(params);
+
+  CandidateWindowView candidate_window_view(widget);
+  candidate_window_view.Init();
+
+  // Visible (by default) cursor.
+  IBusLookupTable table;
+  const int table_size = 9;
+  InitIBusLookupTableWithCandidatesFilled(table_size, &table);
+  candidate_window_view.UpdateCandidates(table);
+  EXPECT_EQ(0, candidate_window_view.selected_candidate_index_in_page_);
+
+  // Invisible cursor.
+  table.set_is_cursor_visible(false);
+  candidate_window_view.UpdateCandidates(table);
+  EXPECT_EQ(-1, candidate_window_view.selected_candidate_index_in_page_);
+
+  // Move the cursor to the end.
+  table.set_cursor_position(table_size - 1);
+  candidate_window_view.UpdateCandidates(table);
+  EXPECT_EQ(-1, candidate_window_view.selected_candidate_index_in_page_);
+
+  // Change the cursor to visible.  The cursor must be at the end.
+  table.set_is_cursor_visible(true);
+  candidate_window_view.UpdateCandidates(table);
+  EXPECT_EQ(table_size - 1,
+            candidate_window_view.selected_candidate_index_in_page_);
+}
 
 TEST_F(CandidateWindowViewTest, SelectCandidateAtTest) {
   views::Widget* widget = new views::Widget;

@@ -4,41 +4,50 @@
 
 #include "chrome/browser/android/dev_tools_server.h"
 
-#include <cstring>
 #include <pwd.h>
+#include <cstring>
 
 #include "base/android/jni_string.h"
 #include "base/basictypes.h"
 #include "base/bind.h"
 #include "base/callback.h"
+#include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/logging.h"
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/devtools/devtools_adb_bridge.h"
 #include "chrome/browser/history/top_sites.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/common/chrome_version_info.h"
+#include "chrome/browser/ui/android/tab_model/tab_model.h"
+#include "chrome/browser/ui/android/tab_model/tab_model_list.h"
 #include "content/public/browser/android/devtools_auth.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/devtools_http_handler.h"
 #include "content/public/browser/devtools_http_handler_delegate.h"
-#include "jni/DevToolsServer_jni.h"
+#include "content/public/browser/web_contents.h"
+#include "content/public/common/content_switches.h"
+#include "content/public/common/url_constants.h"
 #include "grit/devtools_discovery_page_resources.h"
-#include "net/base/unix_domain_socket_posix.h"
+#include "jni/DevToolsServer_jni.h"
+#include "net/socket/unix_domain_socket_posix.h"
 #include "net/url_request/url_request_context_getter.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "webkit/common/user_agent/user_agent_util.h"
 
 namespace {
 
 const char kFrontEndURL[] =
-    "http://chrome-devtools-frontend.appspot.com/static/%s/devtools.html";
-const char kSocketName[] = "chrome_devtools_remote";
+    "http://chrome-devtools-frontend.appspot.com/serve_rev/%s/devtools.html";
+const char kDefaultSocketNamePrefix[] = "chrome";
+const char kTetheringSocketName[] = "chrome_devtools_tethering_%d_%d";
 
 // Delegate implementation for the devtools http handler on android. A new
 // instance of this gets created each time devtools is enabled.
 class DevToolsServerDelegate : public content::DevToolsHttpHandlerDelegate {
  public:
-  explicit DevToolsServerDelegate(bool use_bundled_frontend_resources)
-      : use_bundled_frontend_resources_(use_bundled_frontend_resources) {
+  DevToolsServerDelegate()
+      : last_tethering_socket_(0) {
   }
 
   virtual std::string GetDiscoveryPageHTML() OVERRIDE {
@@ -53,7 +62,7 @@ class DevToolsServerDelegate : public content::DevToolsHttpHandlerDelegate {
   }
 
   virtual bool BundlesFrontendResources() OVERRIDE {
-    return use_bundled_frontend_resources_;
+    return false;
   }
 
   virtual base::FilePath GetDebugFrontendDir() OVERRIDE {
@@ -74,7 +83,16 @@ class DevToolsServerDelegate : public content::DevToolsHttpHandlerDelegate {
   }
 
   virtual content::RenderViewHost* CreateNewTarget() OVERRIDE {
-    return NULL;
+    Profile* profile =
+        g_browser_process->profile_manager()->GetDefaultProfile();
+    TabModel* tab_model = TabModelList::GetTabModelWithProfile(profile);
+    if (!tab_model)
+      return NULL;
+    content::WebContents* web_contents =
+        tab_model->CreateTabForTesting(GURL(content::kAboutBlankURL));
+    if (!web_contents)
+      return NULL;
+    return web_contents->GetRenderViewHost();
   }
 
   virtual TargetType GetTargetType(content::RenderViewHost*) OVERRIDE {
@@ -83,6 +101,18 @@ class DevToolsServerDelegate : public content::DevToolsHttpHandlerDelegate {
 
   virtual std::string GetViewDescription(content::RenderViewHost*) OVERRIDE {
     return "";
+  }
+
+  virtual scoped_refptr<net::StreamListenSocket> CreateSocketForTethering(
+      net::StreamListenSocket::Delegate* delegate,
+      std::string* name) OVERRIDE {
+    *name = base::StringPrintf(
+        kTetheringSocketName, getpid(), ++last_tethering_socket_);
+    return net::UnixDomainSocket::CreateAndListenWithAbstractNamespace(
+        *name,
+        "",
+        delegate,
+        base::Bind(&content::CanUserConnectToDevTools));
   }
 
  private:
@@ -94,7 +124,7 @@ class DevToolsServerDelegate : public content::DevToolsHttpHandlerDelegate {
       top_sites->SyncWithHistory();
   }
 
-  bool use_bundled_frontend_resources_;
+  int last_tethering_socket_;
 
   DISALLOW_COPY_AND_ASSIGN(DevToolsServerDelegate);
 };
@@ -102,15 +132,20 @@ class DevToolsServerDelegate : public content::DevToolsHttpHandlerDelegate {
 }  // namespace
 
 DevToolsServer::DevToolsServer()
-    : use_bundled_frontend_resources_(false),
-      socket_name_(kSocketName),
+    : socket_name_(base::StringPrintf(kDevToolsChannelNameFormat,
+                                      kDefaultSocketNamePrefix)),
       protocol_handler_(NULL) {
+  // Override the default socket name if one is specified on the command line.
+  const CommandLine& command_line = *CommandLine::ForCurrentProcess();
+  if (command_line.HasSwitch(switches::kRemoteDebuggingSocketName)) {
+    socket_name_ = command_line.GetSwitchValueASCII(
+        switches::kRemoteDebuggingSocketName);
+  }
 }
 
-DevToolsServer::DevToolsServer(bool use_bundled_frontend_resources,
-                               const std::string& socket_name)
-    : use_bundled_frontend_resources_(use_bundled_frontend_resources),
-      socket_name_(socket_name),
+DevToolsServer::DevToolsServer(const std::string& socket_name_prefix)
+    : socket_name_(base::StringPrintf(kDevToolsChannelNameFormat,
+                                      socket_name_prefix.c_str())),
       protocol_handler_(NULL) {
 }
 
@@ -122,16 +157,14 @@ void DevToolsServer::Start() {
   if (protocol_handler_)
     return;
 
-  chrome::VersionInfo version_info;
-
   protocol_handler_ = content::DevToolsHttpHandler::Start(
       new net::UnixDomainSocketWithAbstractNamespaceFactory(
           socket_name_,
+          base::StringPrintf("%s_%d", socket_name_.c_str(), getpid()),
           base::Bind(&content::CanUserConnectToDevTools)),
-      use_bundled_frontend_resources_ ?
-          "" :
-          base::StringPrintf(kFrontEndURL, version_info.Version().c_str()),
-      new DevToolsServerDelegate(use_bundled_frontend_resources_));
+      base::StringPrintf(kFrontEndURL,
+                         webkit_glue::GetWebKitRevision().c_str()),
+      new DevToolsServerDelegate());
 }
 
 void DevToolsServer::Stop() {
@@ -153,11 +186,9 @@ bool RegisterDevToolsServer(JNIEnv* env) {
 
 static jint InitRemoteDebugging(JNIEnv* env,
                                 jobject obj,
-                                jboolean use_bundled_frontend_resources,
-                                jstring socketName) {
+                                jstring socket_name_prefix) {
   DevToolsServer* server = new DevToolsServer(
-      use_bundled_frontend_resources,
-      base::android::ConvertJavaStringToUTF8(env, socketName));
+      base::android::ConvertJavaStringToUTF8(env, socket_name_prefix));
   return reinterpret_cast<jint>(server);
 }
 

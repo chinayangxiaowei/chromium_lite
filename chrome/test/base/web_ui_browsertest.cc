@@ -12,9 +12,8 @@
 #include "base/lazy_instance.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/path_service.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
-#include "chrome/browser/printing/print_preview_dialog_controller.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
@@ -41,6 +40,10 @@
 #include "testing/gtest/include/gtest/gtest-spi.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/resource/resource_handle.h"
+
+#if defined(ENABLE_FULL_PRINTING)
+#include "chrome/browser/printing/print_preview_dialog_controller.h"
+#endif
 
 using content::NavigationController;
 using content::RenderViewHost;
@@ -95,32 +98,32 @@ class RenderViewHostInitializedObserver
   DISALLOW_COPY_AND_ASSIGN(RenderViewHostInitializedObserver);
 };
 
-class WebUIJsInjectionReadyObserver : public content::NotificationObserver {
+class WebUIJsInjectionReadyObserver {
  public:
   explicit WebUIJsInjectionReadyObserver(
       content::JsInjectionReadyObserver* observer)
-      : injection_observer_(observer) {
-    registrar_.Add(this, content::NOTIFICATION_RENDER_VIEW_HOST_CREATED,
-                   content::NotificationService::AllSources());
+      : injection_observer_(observer),
+        rvh_callback_(
+            base::Bind(&WebUIJsInjectionReadyObserver::RenderViewHostCreated,
+                       base::Unretained(this))) {
+    content::RenderViewHost::AddCreatedCallback(rvh_callback_);
   }
 
-  // content::NotificationObserver:
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE {
-    DCHECK_EQ(content::NOTIFICATION_RENDER_VIEW_HOST_CREATED, type);
-
-    rvh_observer_.reset(new RenderViewHostInitializedObserver(
-        content::Source<content::RenderViewHost>(source).ptr(),
-        injection_observer_));
+  ~WebUIJsInjectionReadyObserver() {
+    content::RenderViewHost::RemoveCreatedCallback(rvh_callback_);
   }
 
  private:
+  void RenderViewHostCreated(content::RenderViewHost* rvh) {
+    rvh_observer_.reset(
+        new RenderViewHostInitializedObserver(rvh, injection_observer_));
+  }
+
   content::JsInjectionReadyObserver* injection_observer_;
 
   scoped_ptr<RenderViewHostInitializedObserver> rvh_observer_;
 
-  content::NotificationRegistrar registrar_;
+  content::RenderViewHost::CreatedCallback rvh_callback_;
 
   DISALLOW_COPY_AND_ASSIGN(WebUIJsInjectionReadyObserver);
 };
@@ -267,21 +270,19 @@ void WebUIBrowserTest::PreLoadJavascriptLibraries(
 void WebUIBrowserTest::BrowsePreload(const GURL& browse_to) {
   WebUIJsInjectionReadyObserver injection_observer(this);
   content::TestNavigationObserver navigation_observer(
-      content::Source<NavigationController>(
-          &browser()->tab_strip_model()->
-              GetActiveWebContents()->GetController()),
-      1);
+      browser()->tab_strip_model()->GetActiveWebContents());
   chrome::NavigateParams params(browser(), GURL(browse_to),
                                 content::PAGE_TRANSITION_TYPED);
   params.disposition = CURRENT_TAB;
   chrome::Navigate(&params);
   navigation_observer.WaitForObservation(
       base::Bind(&content::RunMessageLoop),
-      base::Bind(&MessageLoop::Quit,
-                 base::Unretained(MessageLoopForUI::current())));
+      base::Bind(&base::MessageLoop::Quit,
+                 base::Unretained(base::MessageLoopForUI::current())));
 }
 
 void WebUIBrowserTest::BrowsePrintPreload(const GURL& browse_to) {
+#if defined(ENABLE_FULL_PRINTING)
   ui_test_utils::NavigateToURL(browser(), browse_to);
 
   TestTabStripModelObserver tabstrip_observer(
@@ -289,8 +290,8 @@ void WebUIBrowserTest::BrowsePrintPreload(const GURL& browse_to) {
   chrome::Print(browser());
   tabstrip_observer.WaitForObservation(
       base::Bind(&content::RunMessageLoop),
-      base::Bind(&MessageLoop::Quit,
-                 base::Unretained(MessageLoopForUI::current())));
+      base::Bind(&base::MessageLoop::Quit,
+                 base::Unretained(base::MessageLoopForUI::current())));
 
   printing::PrintPreviewDialogController* tab_controller =
       printing::PrintPreviewDialogController::GetInstance();
@@ -299,6 +300,9 @@ void WebUIBrowserTest::BrowsePrintPreload(const GURL& browse_to) {
       browser()->tab_strip_model()->GetActiveWebContents());
   ASSERT_TRUE(preview_dialog);
   SetWebUIInstance(preview_dialog->GetWebUI());
+#else
+  NOTREACHED();
+#endif
 }
 
 const char WebUIBrowserTest::kDummyURL[] = "chrome://DummyURL";
@@ -331,18 +335,19 @@ class MockWebUIDataSource : public content::URLDataSource {
  private:
   virtual ~MockWebUIDataSource() {}
 
-  virtual std::string GetSource() OVERRIDE {
+  virtual std::string GetSource() const OVERRIDE {
     return "dummyurl";
   }
 
   virtual void StartDataRequest(
       const std::string& path,
-      bool is_incognito,
+      int render_process_id,
+      int render_view_id,
       const content::URLDataSource::GotDataCallback& callback) OVERRIDE {
     std::string dummy_html = "<html><body>Dummy</body></html>";
     scoped_refptr<base::RefCountedString> response =
         base::RefCountedString::TakeString(&dummy_html);
-    callback.Run(response);
+    callback.Run(response.get());
   }
 
   virtual std::string GetMimeType(const std::string& path) const OVERRIDE {
@@ -434,7 +439,7 @@ GURL WebUIBrowserTest::WebUITestDataPathToURL(
   base::FilePath dir_test_data;
   EXPECT_TRUE(PathService::Get(chrome::DIR_TEST_DATA, &dir_test_data));
   base::FilePath test_path(dir_test_data.Append(kWebUITestFolder).Append(path));
-  EXPECT_TRUE(file_util::PathExists(test_path));
+  EXPECT_TRUE(base::PathExists(test_path));
   return net::FilePathToFileURL(test_path);
 }
 

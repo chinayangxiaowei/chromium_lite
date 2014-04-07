@@ -12,17 +12,19 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "base/version.h"
+#include "chrome/browser/extensions/blacklist.h"
 #include "chrome/browser/extensions/extension_install_prompt.h"
+#include "chrome/browser/extensions/extension_installer.h"
 #include "chrome/browser/extensions/sandboxed_unpacker.h"
 #include "chrome/browser/extensions/webstore_installer.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/manifest.h"
-#include "chrome/common/web_apps.h"
 #include "sync/api/string_ordinal.h"
 
 class ExtensionService;
 class ExtensionServiceTest;
 class SkBitmap;
+struct WebApplicationInfo;
 
 namespace base {
 class SequencedTaskRunner;
@@ -74,18 +76,21 @@ class CrxInstaller
     NumOffStoreInstallAllowReasons
   };
 
-  // Extensions will be installed into frontend->install_directory(),
-  // then registered with |frontend|. Any install UI will be displayed
-  // using |client|. Pass NULL for |client| for silent install
+  // Extensions will be installed into service->install_directory(), then
+  // registered with |service|. This does a silent install - see below for
+  // other options.
+  static scoped_refptr<CrxInstaller> CreateSilent(ExtensionService* service);
+
+  // Same as above, but use |client| to generate a confirmation prompt.
   static scoped_refptr<CrxInstaller> Create(
-      ExtensionService* frontend,
-      ExtensionInstallPrompt* client);
+      ExtensionService* service,
+      scoped_ptr<ExtensionInstallPrompt> client);
 
   // Same as the previous method, except use the |approval| to bypass the
   // prompt. Note that the caller retains ownership of |approval|.
   static scoped_refptr<CrxInstaller> Create(
-      ExtensionService* frontend,
-      ExtensionInstallPrompt* client,
+      ExtensionService* service,
+      scoped_ptr<ExtensionInstallPrompt> client,
       const WebstoreInstaller::Approval* approval);
 
   // Install the crx in |source_file|.
@@ -129,10 +134,6 @@ class CrxInstaller
 
   bool allow_silent_install() const { return allow_silent_install_; }
   void set_allow_silent_install(bool val) { allow_silent_install_ = val; }
-
-  void set_bypass_blacklist_for_test(bool val) {
-    bypass_blacklist_for_test_ = val;
-  }
 
   bool is_gallery_install() const {
     return (creation_flags_ & Extension::FROM_WEBSTORE) > 0;
@@ -191,15 +192,17 @@ class CrxInstaller
 
   bool did_handle_successfully() const { return did_handle_successfully_; }
 
-  Profile* profile() { return profile_; }
+  Profile* profile() { return installer_.profile(); }
+
+  const Extension* extension() { return installer_.extension().get(); }
 
  private:
   friend class ::ExtensionServiceTest;
   friend class ExtensionUpdaterTest;
   friend class ExtensionCrxInstallerTest;
 
-  CrxInstaller(base::WeakPtr<ExtensionService> frontend_weak,
-               ExtensionInstallPrompt* client,
+  CrxInstaller(base::WeakPtr<ExtensionService> service_weak,
+               scoped_ptr<ExtensionInstallPrompt> client,
                const WebstoreInstaller::Approval* approval);
   virtual ~CrxInstaller();
 
@@ -219,21 +222,20 @@ class CrxInstaller
   virtual void OnUnpackSuccess(const base::FilePath& temp_dir,
                                const base::FilePath& extension_dir,
                                const base::DictionaryValue* original_manifest,
-                               const Extension* extension) OVERRIDE;
+                               const Extension* extension,
+                               const SkBitmap& install_icon) OVERRIDE;
 
   // Called on the UI thread to start the requirements check on the extension.
-  void CheckRequirements();
+  void CheckImportsAndRequirements();
 
   // Runs on the UI thread. Callback from RequirementsChecker.
   void OnRequirementsChecked(std::vector<std::string> requirement_errors);
 
-#if defined(ENABLE_MANAGED_USERS)
-  // Runs on the UI thread. Callback from the managed user passphrase dialog.
-  void OnAuthorizationResult(bool success);
-#endif
+  // Runs on the UI thread. Callback from Blacklist.
+  void OnBlacklistChecked(
+      extensions::Blacklist::BlacklistState blacklist_state);
 
-  // Runs on the UI thread. Confirms with the user (via ExtensionInstallPrompt)
-  // that it is OK to install this extension.
+  // Runs on the UI thread. Confirms the installation to the ExtensionService.
   void ConfirmInstall();
 
   // Runs on File thread. Install the unpacked extension into the profile and
@@ -245,8 +247,6 @@ class CrxInstaller
   void ReportFailureFromUIThread(const CrxInstallerError& error);
   void ReportSuccessFromFileThread();
   void ReportSuccessFromUIThread();
-  void HandleIsBlacklistedResponse(const base::Closure& on_success,
-                                   bool success);
   void NotifyCrxInstallComplete(bool success);
 
   // Deletes temporary directory and crx file if needed.
@@ -311,10 +311,6 @@ class CrxInstaller
   // apps.
   bool create_app_shortcut_;
 
-  // The extension we're installing. We own this and either pass it off to
-  // ExtensionService on success, or delete it on failure.
-  scoped_refptr<const Extension> extension_;
-
   // The ordinal of the NTP apps page |extension_| will be shown on.
   syncer::StringOrdinal page_ordinal_;
 
@@ -334,10 +330,7 @@ class CrxInstaller
   base::FilePath temp_dir_;
 
   // The frontend we will report results back to.
-  base::WeakPtr<ExtensionService> frontend_weak_;
-
-  // The Profile where the extension is being installed in.
-  Profile* profile_;
+  base::WeakPtr<ExtensionService> service_weak_;
 
   // The client we will work with to do the installation. This can be NULL, in
   // which case the install is silent.
@@ -357,9 +350,6 @@ class CrxInstaller
   // is provided in the ctor) to procede without showing the permissions prompt
   // dialog.
   bool allow_silent_install_;
-
-  // Allows for bypassing the blacklist check. Only use for tests.
-  bool bypass_blacklist_for_test_;
 
   // The value of the content type header sent with the CRX.
   // Ignorred unless |require_extension_mime_type_| is true.
@@ -388,9 +378,9 @@ class CrxInstaller
   // will continue but the extension will be distabled.
   bool error_on_unsupported_requirements_;
 
-  scoped_ptr<RequirementsChecker> requirements_checker_;
-
   bool has_requirement_errors_;
+
+  extensions::Blacklist::BlacklistState blacklist_state_;
 
   bool install_wait_for_idle_;
 
@@ -403,6 +393,9 @@ class CrxInstaller
   // Whether the update is initiated by the user from the extension settings
   // page.
   bool update_from_settings_page_;
+
+  // Gives access to common methods and data of an extension installer.
+  ExtensionInstaller installer_;
 
   DISALLOW_COPY_AND_ASSIGN(CrxInstaller);
 };

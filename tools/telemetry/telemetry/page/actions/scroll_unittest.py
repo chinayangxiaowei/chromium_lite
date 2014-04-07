@@ -5,7 +5,7 @@ import os
 
 from telemetry.page import page as page_module
 from telemetry.page.actions import scroll
-from telemetry.test import tab_test_case
+from telemetry.unittest import tab_test_case
 
 class ScrollActionTest(tab_test_case.TabTestCase):
   def CreateAndNavigateToPageFromUnittestDataDir(
@@ -66,26 +66,33 @@ class ScrollActionTest(tab_test_case.TabTestCase):
       js = f.read()
       self._tab.ExecuteJavaScript(js)
 
-    # Verify that the rect returned by getBoundingVisibleRect() in
-    # scroll.js is completely contained within the viewport. Scroll
-    # events dispatched by the benchmarks use the center of this rect
-    # as their location, and this location needs to be within the
-    # viewport bounds to correctly decide between main-thread and
-    # impl-thread scroll. If the scrollable area were not clipped
-    # to the viewport bounds, then the instance used here (the scrollable
-    # area being more than twice as tall as the viewport) would
+    # Verify that the rect returned by getBoundingVisibleRect() in scroll.js is
+    # completely contained within the viewport. Scroll events dispatched by the
+    # scrolling API use the center of this rect as their location, and this
+    # location needs to be within the viewport bounds to correctly decide
+    # between main-thread and impl-thread scroll. If the scrollable area were
+    # not clipped to the viewport bounds, then the instance used here (the
+    # scrollable area being more than twice as tall as the viewport) would
     # result in a scroll location outside of the viewport bounds.
     self._tab.ExecuteJavaScript("""document.body.style.height =
                            (2 * window.innerHeight + 1) + 'px';""")
 
-    rect_bottom = int(self._tab.EvaluateJavaScript("""
-        __ScrollAction_GetBoundingVisibleRect(document.body).top +
-        __ScrollAction_GetBoundingVisibleRect(document.body).height"""))
-    rect_right = int(self._tab.EvaluateJavaScript("""
-        __ScrollAction_GetBoundingVisibleRect(document.body).left +
-        __ScrollAction_GetBoundingVisibleRect(document.body).width"""))
-    viewport_width = int(self._tab.EvaluateJavaScript('window.innerWidth'))
-    viewport_height = int(self._tab.EvaluateJavaScript('window.innerHeight'))
+    rect_top = int(self._tab.EvaluateJavaScript(
+        '__ScrollAction_GetBoundingVisibleRect(document.body).top'))
+    rect_height = int(self._tab.EvaluateJavaScript(
+        '__ScrollAction_GetBoundingVisibleRect(document.body).height'))
+    rect_bottom = rect_top + rect_height
 
-    self.assertTrue(rect_bottom <= viewport_height)
-    self.assertTrue(rect_right <= viewport_width)
+    rect_left = int(self._tab.EvaluateJavaScript(
+        '__ScrollAction_GetBoundingVisibleRect(document.body).left'))
+    rect_width = int(self._tab.EvaluateJavaScript(
+        '__ScrollAction_GetBoundingVisibleRect(document.body).width'))
+    rect_right = rect_left + rect_width
+
+    viewport_height = int(self._tab.EvaluateJavaScript('window.innerHeight'))
+    viewport_width = int(self._tab.EvaluateJavaScript('window.innerWidth'))
+
+    self.assertTrue(rect_bottom <= viewport_height,
+        msg='%s + %s <= %s' % (rect_top, rect_height, viewport_height))
+    self.assertTrue(rect_right <= viewport_width,
+        msg='%s + %s <= %s' % (rect_left, rect_width, viewport_width))

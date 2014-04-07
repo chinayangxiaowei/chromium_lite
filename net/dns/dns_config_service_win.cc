@@ -15,22 +15,22 @@
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/metrics/histogram.h"
-#include "base/string_util.h"
 #include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/lock.h"
 #include "base/threading/non_thread_safe.h"
 #include "base/threading/thread_restrictions.h"
-#include "base/time.h"
-#include "base/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "base/win/object_watcher.h"
 #include "base/win/registry.h"
 #include "base/win/windows_version.h"
-#include "googleurl/src/url_canon.h"
 #include "net/base/net_util.h"
 #include "net/base/network_change_notifier.h"
 #include "net/dns/dns_hosts.h"
 #include "net/dns/dns_protocol.h"
 #include "net/dns/serial_worker.h"
+#include "url/url_canon.h"
 
 #pragma comment(lib, "iphlpapi.lib")
 
@@ -119,10 +119,10 @@ scoped_ptr_malloc<IP_ADAPTER_ADDRESSES> ReadIpHelper(ULONG flags) {
   return out.Pass();
 }
 
-// Converts a string16 domain name to ASCII, possibly using punycode.
+// Converts a base::string16 domain name to ASCII, possibly using punycode.
 // Returns true if the conversion succeeds and output is not empty. In case of
 // failure, |domain| might become dirty.
-bool ParseDomainASCII(const string16& widestr, std::string* domain) {
+bool ParseDomainASCII(const base::string16& widestr, std::string* domain) {
   DCHECK(domain);
   if (widestr.empty())
     return false;
@@ -340,7 +340,8 @@ base::FilePath GetHostsPath() {
       FILE_PATH_LITERAL("drivers\\etc\\hosts"));
 }
 
-bool ParseSearchList(const string16& value, std::vector<std::string>* output) {
+bool ParseSearchList(const base::string16& value,
+                     std::vector<std::string>* output) {
   DCHECK(output);
   if (value.empty())
     return false;
@@ -351,12 +352,12 @@ bool ParseSearchList(const string16& value, std::vector<std::string>* output) {
   // Although nslookup and network connection property tab ignore such
   // fragments ("a,b,,c" becomes ["a", "b", "c"]), our reference is getaddrinfo
   // (which sees ["a", "b"]). WMI queries also return a matching search list.
-  std::vector<string16> woutput;
+  std::vector<base::string16> woutput;
   base::SplitString(value, ',', &woutput);
   for (size_t i = 0; i < woutput.size(); ++i) {
     // Convert non-ASCII to punycode, although getaddrinfo does not properly
     // handle such suffixes.
-    const string16& t = woutput[i];
+    const base::string16& t = woutput[i];
     std::string parsed;
     if (!ParseDomainASCII(t, &parsed))
       break;
@@ -621,7 +622,7 @@ class DnsConfigServiceWin::ConfigReader : public SerialWorker {
     } else {
       LOG(WARNING) << "Failed to read DnsConfig.";
       // Try again in a while in case DnsConfigWatcher missed the signal.
-      MessageLoop::current()->PostDelayedTask(
+      base::MessageLoop::current()->PostDelayedTask(
           FROM_HERE,
           base::Bind(&ConfigReader::WorkNow, this),
           base::TimeDelta::FromSeconds(kRetryIntervalSeconds));

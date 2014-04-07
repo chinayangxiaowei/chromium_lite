@@ -5,11 +5,11 @@
 #include "cc/output/software_frame_data.h"
 
 namespace cc {
- 
+
 SoftwareFrameData::SoftwareFrameData()
-    : content_dib(TransportDIB::DefaultHandleValue()) {
-}
-   
+    : id(0),
+      handle(base::SharedMemory::NULLHandle()) {}
+
 SoftwareFrameData::~SoftwareFrameData() {}
-    
+
 }  // namespace cc

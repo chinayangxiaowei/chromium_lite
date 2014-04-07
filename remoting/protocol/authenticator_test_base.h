@@ -8,7 +8,7 @@
 #include <string>
 
 #include "base/memory/ref_counted.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "net/base/net_errors.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -52,7 +52,7 @@ class AuthenticatorTestBase : public testing::Test {
   void OnClientConnected(net::Error error,
                          scoped_ptr<net::StreamSocket> socket);
 
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
 
   scoped_refptr<RsaKeyPair> key_pair_;
   std::string host_public_key_;

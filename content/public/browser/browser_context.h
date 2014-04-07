@@ -6,11 +6,10 @@
 #define CONTENT_PUBLIC_BROWSER_BROWSER_CONTEXT_H_
 
 #include "base/callback_forward.h"
-#include "base/hash_tables.h"
+#include "base/containers/hash_tables.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/supports_user_data.h"
 #include "content/common/content_export.h"
-#include "ui/base/clipboard/clipboard.h"
 
 class GURL;
 
@@ -38,7 +37,6 @@ class GeolocationPermissionContext;
 class IndexedDBContext;
 class ResourceContext;
 class SiteInstance;
-class SpeechRecognitionPreferences;
 class StoragePartition;
 
 // This class holds the context needed for a browsing session.
@@ -46,10 +44,6 @@ class StoragePartition;
 // thread.
 class CONTENT_EXPORT BrowserContext : public base::SupportsUserData {
  public:
-  // Used in ForEachStoragePartition(). The first argument is the partition id.
-  // The second argument is the StoragePartition object for that partition id.
-  typedef base::Callback<void(StoragePartition*)> StoragePartitionCallback;
-
   static DownloadManager* GetDownloadManager(BrowserContext* browser_context);
 
   // Returns BrowserContext specific external mount points. It may return NULL
@@ -61,6 +55,7 @@ class CONTENT_EXPORT BrowserContext : public base::SupportsUserData {
       BrowserContext* browser_context, SiteInstance* site_instance);
   static content::StoragePartition* GetStoragePartitionForSite(
       BrowserContext* browser_context, const GURL& site);
+  typedef base::Callback<void(StoragePartition*)> StoragePartitionCallback;
   static void ForEachStoragePartition(
       BrowserContext* browser_context,
       const StoragePartitionCallback& callback);
@@ -95,19 +90,12 @@ class CONTENT_EXPORT BrowserContext : public base::SupportsUserData {
   // Tells the HTML5 objects on this context to purge any uneeded memory.
   static void PurgeMemory(BrowserContext* browser_context);
 
-  // Returns a Clipboard::SourceTag (pointer) if |context| is OffTheRecord
-  // context. Otherwise, NULL. If the clipboard contains that SourceTag at the
-  // time of |context| destruction it will be flushed.
-  static ui::Clipboard::SourceTag GetMarkerForOffTheRecordContext(
-      BrowserContext* context);
-
   virtual ~BrowserContext();
 
   // Returns the path of the directory where this context's data is stored.
-  virtual base::FilePath GetPath() = 0;
+  virtual base::FilePath GetPath() const = 0;
 
   // Return whether this context is incognito. Default is false.
-  // This doesn't belong here; http://crbug.com/89628
   virtual bool IsOffTheRecord() const = 0;
 
   // Returns the request context information associated with this context.  Call
@@ -118,8 +106,8 @@ class CONTENT_EXPORT BrowserContext : public base::SupportsUserData {
 
   // Returns the request context appropriate for the given renderer. If the
   // renderer process doesn't have an associated installed app, or if the
-  // installed app's is_storage_isolated() returns false, this is equivalent to
-  // calling GetRequestContext().
+  // installed app doesn't have isolated storage, this is equivalent to calling
+  // GetRequestContext().
   virtual net::URLRequestContextGetter* GetRequestContextForRenderProcess(
       int renderer_child_id) = 0;
 
@@ -137,6 +125,16 @@ class CONTENT_EXPORT BrowserContext : public base::SupportsUserData {
           const base::FilePath& partition_path,
           bool in_memory) = 0;
 
+  typedef base::Callback<void(bool)> MIDISysExPermissionCallback;
+
+  // Requests a permission to use system exclusive messages in MIDI events.
+  // |callback| will be invoked when the request is resolved.
+  virtual void RequestMIDISysExPermission(
+      int render_process_id,
+      int render_view_id,
+      const GURL& requesting_frame,
+      const MIDISysExPermissionCallback& callback) = 0;
+
   // Returns the resource context.
   virtual ResourceContext* GetResourceContext() = 0;
 
@@ -148,11 +146,6 @@ class CONTENT_EXPORT BrowserContext : public base::SupportsUserData {
   // Returns the geolocation permission context for this context. It's valid to
   // return NULL, in which case geolocation requests will always be allowed.
   virtual GeolocationPermissionContext* GetGeolocationPermissionContext() = 0;
-
-  // Returns the speech input preferences. SpeechRecognitionPreferences is a
-  // ref counted class, so callers should take a reference if needed. It's valid
-  // to return NULL.
-  virtual SpeechRecognitionPreferences* GetSpeechRecognitionPreferences() = 0;
 
   // Returns a special storage policy implementation, or NULL.
   virtual quota::SpecialStoragePolicy* GetSpecialStoragePolicy() = 0;

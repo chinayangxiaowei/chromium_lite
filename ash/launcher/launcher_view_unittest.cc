@@ -7,11 +7,13 @@
 #include <algorithm>
 #include <vector>
 
+#include "ash/ash_switches.h"
 #include "ash/launcher/launcher.h"
 #include "ash/launcher/launcher_button.h"
 #include "ash/launcher/launcher_icon_observer.h"
 #include "ash/launcher/launcher_model.h"
 #include "ash/launcher/launcher_tooltip_manager.h"
+#include "ash/launcher/launcher_types.h"
 #include "ash/root_window_controller.h"
 #include "ash/shelf/shelf_layout_manager.h"
 #include "ash/shelf/shelf_widget.h"
@@ -22,21 +24,21 @@
 #include "ash/test/shell_test_api.h"
 #include "ash/test/test_launcher_delegate.h"
 #include "base/basictypes.h"
+#include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/memory/scoped_ptr.h"
 #include "grit/ash_resources.h"
 #include "ui/aura/root_window.h"
 #include "ui/aura/test/aura_test_base.h"
+#include "ui/aura/test/event_generator.h"
 #include "ui/aura/window.h"
 #include "ui/base/events/event.h"
 #include "ui/base/events/event_constants.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/compositor/layer.h"
+#include "ui/views/view_model.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
-
-namespace {
-const int kExpectedAppIndex = 1;
-}
 
 namespace ash {
 namespace test {
@@ -208,7 +210,10 @@ class LauncherViewTest : public AshTestBase {
 
     test_api_.reset(new LauncherViewTestAPI(launcher_view_));
     test_api_->SetAnimationDuration(1);  // Speeds up animation for test.
-  }
+
+    // Add browser shortcut launcher item at index 0 for test.
+    AddBrowserShortcut();
+ }
 
   virtual void TearDown() OVERRIDE {
     test_api_.reset();
@@ -216,6 +221,17 @@ class LauncherViewTest : public AshTestBase {
   }
 
  protected:
+  LauncherID AddBrowserShortcut() {
+    LauncherItem browser_shortcut;
+    browser_shortcut.type = TYPE_BROWSER_SHORTCUT;
+    browser_shortcut.is_incognito = false;
+
+    LauncherID id = model_->next_id();
+    model_->AddAt(0, browser_shortcut);
+    test_api_->RunMessageLoopUntilAnimationsDone();
+    return id;
+  }
+
   LauncherID AddAppShortcut() {
     LauncherItem item;
     item.type = TYPE_APP_SHORTCUT;
@@ -318,23 +334,36 @@ class LauncherViewTest : public AshTestBase {
     }
   }
 
-  views::View* SimulateDrag(internal::LauncherButtonHost::Pointer pointer,
-                            int button_index,
-                            int destination_index) {
-    // Add kExpectedAppIndex to each button index to allow default icons.
+  views::View* SimulateButtonPressed(
+      internal::LauncherButtonHost::Pointer pointer,
+      int button_index) {
     internal::LauncherButtonHost* button_host = launcher_view_;
-
-    // Mouse down.
-    views::View* button =
-        test_api_->GetButton(kExpectedAppIndex + button_index);
+    views::View* button = test_api_->GetButton(button_index);
     ui::MouseEvent click_event(ui::ET_MOUSE_PRESSED,
                                button->bounds().origin(),
                                button->bounds().origin(), 0);
     button_host->PointerPressedOnButton(button, pointer, click_event);
+    return button;
+  }
+
+  views::View* SimulateClick(internal::LauncherButtonHost::Pointer pointer,
+                             int button_index) {
+    internal::LauncherButtonHost* button_host = launcher_view_;
+    views::View* button = SimulateButtonPressed(pointer, button_index);
+    button_host->PointerReleasedOnButton(button,
+                                         internal::LauncherButtonHost::MOUSE,
+                                         false);
+    return button;
+  }
+
+  views::View* SimulateDrag(internal::LauncherButtonHost::Pointer pointer,
+                            int button_index,
+                            int destination_index) {
+    internal::LauncherButtonHost* button_host = launcher_view_;
+    views::View* button = SimulateButtonPressed(pointer, button_index);
 
     // Drag.
-    views::View* destination =
-        test_api_->GetButton(kExpectedAppIndex + destination_index);
+    views::View* destination = test_api_->GetButton(destination_index);
     ui::MouseEvent drag_event(ui::ET_MOUSE_DRAGGED,
                               destination->bounds().origin(),
                               destination->bounds().origin(), 0);
@@ -354,7 +383,9 @@ class LauncherViewTest : public AshTestBase {
     // Add 5 app launcher buttons for testing.
     for (int i = 0; i < 5; ++i) {
       LauncherID id = AddAppShortcut();
-      id_map->insert(id_map->begin() + (kExpectedAppIndex + i),
+      // browser shortcut is located at index 0. So we should start to add app
+      // shortcut at index 1.
+      id_map->insert(id_map->begin() + (i + 1),
                      std::make_pair(id, GetButtonByID(id)));
     }
     ASSERT_NO_FATAL_FAILURE(CheckModelIDs(*id_map));
@@ -377,16 +408,91 @@ class LauncherViewTest : public AshTestBase {
   DISALLOW_COPY_AND_ASSIGN(LauncherViewTest);
 };
 
-// Checks that the icon positions do not shift with a state change.
-TEST_F(LauncherViewTest, NoStateChangeIconMovement) {
-  LauncherID last_added = AddAppShortcut();
-  internal::LauncherButton* button = GetButtonByID(last_added);
-  EXPECT_EQ(button->state(), ash::internal::LauncherButton::STATE_NORMAL);
-  gfx::Rect old_bounds = button->GetIconBounds();
+class LauncherViewTextDirectionTest
+    : public LauncherViewTest,
+      public testing::WithParamInterface<bool> {
+ public:
+  LauncherViewTextDirectionTest() : is_rtl_(GetParam()) {}
+  virtual ~LauncherViewTextDirectionTest() {}
 
-  button->AddState(ash::internal::LauncherButton::STATE_HOVERED);
-  gfx::Rect hovered_bounds = button->GetIconBounds();
-  EXPECT_EQ(old_bounds.ToString(), hovered_bounds.ToString());
+  virtual void SetUp() OVERRIDE {
+    LauncherViewTest::SetUp();
+    original_locale_ = l10n_util::GetApplicationLocale(std::string());
+    if (is_rtl_)
+      base::i18n::SetICUDefaultLocale("he");
+    ASSERT_EQ(is_rtl_, base::i18n::IsRTL());
+  }
+
+  virtual void TearDown() OVERRIDE {
+    if (is_rtl_)
+      base::i18n::SetICUDefaultLocale(original_locale_);
+    LauncherViewTest::TearDown();
+  }
+
+ private:
+  bool is_rtl_;
+  std::string original_locale_;
+
+  DISALLOW_COPY_AND_ASSIGN(LauncherViewTextDirectionTest);
+};
+
+// Checks that the ideal item icon bounds match the view's bounds in the screen
+// in both LTR and RTL.
+TEST_P(LauncherViewTextDirectionTest, IdealBoundsOfItemIcon) {
+  LauncherID id = AddTabbedBrowser();
+  internal::LauncherButton* button = GetButtonByID(id);
+  gfx::Rect item_bounds = button->GetBoundsInScreen();
+  gfx::Point icon_offset = button->GetIconBounds().origin();
+  item_bounds.Offset(icon_offset.OffsetFromOrigin());
+  gfx::Rect ideal_bounds = launcher_view_->GetIdealBoundsOfItemIcon(id);
+  gfx::Point screen_origin;
+  views::View::ConvertPointToScreen(launcher_view_, &screen_origin);
+  ideal_bounds.Offset(screen_origin.x(), screen_origin.y());
+  EXPECT_EQ(item_bounds.x(), ideal_bounds.x());
+  EXPECT_EQ(item_bounds.y(), ideal_bounds.y());
+}
+
+// Checks that launcher view contents are considered in the correct drag group.
+TEST_F(LauncherViewTest, EnforceDragType) {
+  EXPECT_TRUE(test_api_->SameDragType(TYPE_TABBED, TYPE_TABBED));
+  EXPECT_TRUE(test_api_->SameDragType(TYPE_TABBED, TYPE_PLATFORM_APP));
+  EXPECT_FALSE(test_api_->SameDragType(TYPE_TABBED, TYPE_APP_SHORTCUT));
+  EXPECT_FALSE(test_api_->SameDragType(TYPE_TABBED, TYPE_BROWSER_SHORTCUT));
+  EXPECT_FALSE(test_api_->SameDragType(TYPE_TABBED, TYPE_WINDOWED_APP));
+  EXPECT_FALSE(test_api_->SameDragType(TYPE_TABBED, TYPE_APP_LIST));
+  EXPECT_FALSE(test_api_->SameDragType(TYPE_TABBED, TYPE_APP_PANEL));
+
+  EXPECT_TRUE(test_api_->SameDragType(TYPE_PLATFORM_APP, TYPE_PLATFORM_APP));
+  EXPECT_FALSE(test_api_->SameDragType(TYPE_PLATFORM_APP, TYPE_APP_SHORTCUT));
+  EXPECT_FALSE(test_api_->SameDragType(TYPE_PLATFORM_APP,
+                                       TYPE_BROWSER_SHORTCUT));
+  EXPECT_FALSE(test_api_->SameDragType(TYPE_PLATFORM_APP, TYPE_WINDOWED_APP));
+  EXPECT_FALSE(test_api_->SameDragType(TYPE_PLATFORM_APP, TYPE_APP_LIST));
+  EXPECT_FALSE(test_api_->SameDragType(TYPE_PLATFORM_APP, TYPE_APP_PANEL));
+
+  EXPECT_TRUE(test_api_->SameDragType(TYPE_APP_SHORTCUT, TYPE_APP_SHORTCUT));
+  EXPECT_TRUE(test_api_->SameDragType(TYPE_APP_SHORTCUT,
+                                      TYPE_BROWSER_SHORTCUT));
+  EXPECT_FALSE(test_api_->SameDragType(TYPE_APP_SHORTCUT,
+                                       TYPE_WINDOWED_APP));
+  EXPECT_FALSE(test_api_->SameDragType(TYPE_APP_SHORTCUT, TYPE_APP_LIST));
+  EXPECT_FALSE(test_api_->SameDragType(TYPE_APP_SHORTCUT, TYPE_APP_PANEL));
+
+  EXPECT_TRUE(test_api_->SameDragType(TYPE_BROWSER_SHORTCUT,
+                                      TYPE_BROWSER_SHORTCUT));
+  EXPECT_FALSE(test_api_->SameDragType(TYPE_BROWSER_SHORTCUT,
+                                       TYPE_WINDOWED_APP));
+  EXPECT_FALSE(test_api_->SameDragType(TYPE_BROWSER_SHORTCUT, TYPE_APP_LIST));
+  EXPECT_FALSE(test_api_->SameDragType(TYPE_BROWSER_SHORTCUT, TYPE_APP_PANEL));
+
+  EXPECT_TRUE(test_api_->SameDragType(TYPE_WINDOWED_APP, TYPE_WINDOWED_APP));
+  EXPECT_FALSE(test_api_->SameDragType(TYPE_WINDOWED_APP, TYPE_APP_LIST));
+  EXPECT_FALSE(test_api_->SameDragType(TYPE_WINDOWED_APP, TYPE_APP_PANEL));
+
+  EXPECT_TRUE(test_api_->SameDragType(TYPE_APP_LIST, TYPE_APP_LIST));
+  EXPECT_FALSE(test_api_->SameDragType(TYPE_APP_LIST, TYPE_APP_PANEL));
+
+  EXPECT_TRUE(test_api_->SameDragType(TYPE_APP_PANEL, TYPE_APP_PANEL));
 }
 
 // Adds browser button until overflow and verifies that the last added browser
@@ -598,27 +704,40 @@ TEST_F(LauncherViewTest, ModelChangesWhileDragging) {
   std::vector<std::pair<LauncherID, views::View*> > id_map;
   SetupForDragTest(&id_map);
 
-  // Dragging changes model order.
+  // Dragging browser shortcut at index 0.
+  EXPECT_TRUE(model_->items()[0].type == TYPE_BROWSER_SHORTCUT);
   views::View* dragged_button = SimulateDrag(
       internal::LauncherButtonHost::MOUSE, 0, 2);
-  std::rotate(id_map.begin() + kExpectedAppIndex,
-              id_map.begin() + kExpectedAppIndex + 1,
-              id_map.begin() + kExpectedAppIndex + 3);
+  std::rotate(id_map.begin(),
+              id_map.begin() + 1,
+              id_map.begin() + 3);
+  ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
+  button_host->PointerReleasedOnButton(dragged_button,
+                                       internal::LauncherButtonHost::MOUSE,
+                                       false);
+  EXPECT_TRUE(model_->items()[2].type == TYPE_BROWSER_SHORTCUT);
+
+  // Dragging changes model order.
+  dragged_button = SimulateDrag(
+      internal::LauncherButtonHost::MOUSE, 0, 2);
+  std::rotate(id_map.begin(),
+              id_map.begin() + 1,
+              id_map.begin() + 3);
   ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
 
   // Cancelling the drag operation restores previous order.
   button_host->PointerReleasedOnButton(dragged_button,
                                        internal::LauncherButtonHost::MOUSE,
                                        true);
-  std::rotate(id_map.begin() + kExpectedAppIndex,
-              id_map.begin() + kExpectedAppIndex + 2,
-              id_map.begin() + kExpectedAppIndex + 3);
+  std::rotate(id_map.begin(),
+              id_map.begin() + 2,
+              id_map.begin() + 3);
   ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
 
   // Deleting an item keeps the remaining intact.
   dragged_button = SimulateDrag(internal::LauncherButtonHost::MOUSE, 0, 2);
-  model_->RemoveItemAt(kExpectedAppIndex + 1);
-  id_map.erase(id_map.begin() + kExpectedAppIndex + 1);
+  model_->RemoveItemAt(1);
+  id_map.erase(id_map.begin() + 1);
   ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
   button_host->PointerReleasedOnButton(dragged_button,
                                        internal::LauncherButtonHost::MOUSE,
@@ -627,7 +746,7 @@ TEST_F(LauncherViewTest, ModelChangesWhileDragging) {
   // Adding a launcher item cancels the drag and respects the order.
   dragged_button = SimulateDrag(internal::LauncherButtonHost::MOUSE, 0, 2);
   LauncherID new_id = AddAppShortcut();
-  id_map.insert(id_map.begin() + kExpectedAppIndex + 4,
+  id_map.insert(id_map.begin() + 5,
                 std::make_pair(new_id, GetButtonByID(new_id)));
   ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
   button_host->PointerReleasedOnButton(dragged_button,
@@ -638,7 +757,7 @@ TEST_F(LauncherViewTest, ModelChangesWhileDragging) {
   // the order.
   dragged_button = SimulateDrag(internal::LauncherButtonHost::MOUSE, 0, 2);
   new_id = AddPanel();
-  id_map.insert(id_map.begin() + kExpectedAppIndex + 6,
+  id_map.insert(id_map.begin() + 7,
                 std::make_pair(new_id, GetButtonByID(new_id)));
   ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
   button_host->PointerReleasedOnButton(dragged_button,
@@ -656,9 +775,9 @@ TEST_F(LauncherViewTest, SimultaneousDrag) {
   // Start a mouse drag.
   views::View* dragged_button_mouse = SimulateDrag(
       internal::LauncherButtonHost::MOUSE, 0, 2);
-  std::rotate(id_map.begin() + kExpectedAppIndex,
-              id_map.begin() + kExpectedAppIndex + 1,
-              id_map.begin() + kExpectedAppIndex + 3);
+  std::rotate(id_map.begin(),
+              id_map.begin() + 1,
+              id_map.begin() + 3);
   ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
   // Attempt a touch drag before the mouse drag finishes.
   views::View* dragged_button_touch = SimulateDrag(
@@ -676,9 +795,9 @@ TEST_F(LauncherViewTest, SimultaneousDrag) {
   // Now start a touch drag.
   dragged_button_touch = SimulateDrag(
       internal::LauncherButtonHost::TOUCH, 3, 1);
-  std::rotate(id_map.begin() + kExpectedAppIndex + 2,
-              id_map.begin() + kExpectedAppIndex + 3,
-              id_map.begin() + kExpectedAppIndex + 4);
+  std::rotate(id_map.begin() + 2,
+              id_map.begin() + 3,
+              id_map.begin() + 4);
   ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
 
   // And attempt a mouse drag before the touch drag finishes.
@@ -692,6 +811,31 @@ TEST_F(LauncherViewTest, SimultaneousDrag) {
                                        internal::LauncherButtonHost::TOUCH,
                                        false);
   ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
+}
+
+// Check that clicking first on one item and then dragging another works as
+// expected.
+TEST_F(LauncherViewTest, ClickOneDragAnother) {
+  internal::LauncherButtonHost* button_host = launcher_view_;
+
+  std::vector<std::pair<LauncherID, views::View*> > id_map;
+  SetupForDragTest(&id_map);
+
+  // A click on item 1 is simulated.
+  SimulateClick(internal::LauncherButtonHost::MOUSE, 1);
+
+  // Dragging browser index at 0 should change the model order correctly.
+  EXPECT_TRUE(model_->items()[0].type == TYPE_BROWSER_SHORTCUT);
+  views::View* dragged_button = SimulateDrag(
+      internal::LauncherButtonHost::MOUSE, 0, 2);
+  std::rotate(id_map.begin(),
+              id_map.begin() + 1,
+              id_map.begin() + 3);
+  ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
+  button_host->PointerReleasedOnButton(dragged_button,
+                                       internal::LauncherButtonHost::MOUSE,
+                                       false);
+  EXPECT_TRUE(model_->items()[2].type == TYPE_BROWSER_SHORTCUT);
 }
 
 // Confirm that item status changes are reflected in the buttons.
@@ -711,6 +855,51 @@ TEST_F(LauncherViewTest, LauncherItemStatus) {
   item.status = ash::STATUS_ATTENTION;
   model_->Set(index, item);
   ASSERT_EQ(internal::LauncherButton::STATE_ATTENTION, button->state());
+}
+
+TEST_F(LauncherViewTest, LauncherItemPositionReflectedOnStateChanged) {
+  ASSERT_EQ(test_api_->GetLastVisibleIndex() + 1,
+            test_api_->GetButtonCount());
+
+  // Add 2 items to the launcher.
+  LauncherID item1_id = AddTabbedBrowser();
+  LauncherID item2_id = AddPlatformAppNoWait();
+  internal::LauncherButton* item1_button = GetButtonByID(item1_id);
+  internal::LauncherButton* item2_button = GetButtonByID(item2_id);
+
+  internal::LauncherButton::State state_mask =
+      static_cast<internal::LauncherButton::State>
+          (internal::LauncherButton::STATE_NORMAL |
+          internal::LauncherButton::STATE_HOVERED |
+          internal::LauncherButton::STATE_RUNNING |
+          internal::LauncherButton::STATE_ACTIVE |
+          internal::LauncherButton::STATE_ATTENTION |
+          internal::LauncherButton::STATE_FOCUSED);
+
+  // Clear the button states.
+  item1_button->ClearState(state_mask);
+  item2_button->ClearState(state_mask);
+
+  // Since default alignment in tests is bottom, state is reflected in y-axis.
+  ASSERT_EQ(item1_button->GetIconBounds().y(),
+            item2_button->GetIconBounds().y());
+  item1_button->AddState(internal::LauncherButton::STATE_HOVERED);
+  ASSERT_NE(item1_button->GetIconBounds().y(),
+            item2_button->GetIconBounds().y());
+  item1_button->ClearState(internal::LauncherButton::STATE_HOVERED);
+
+  // Enable the alternate shelf layout.
+  CommandLine::ForCurrentProcess()->AppendSwitch(
+      ash::switches::kAshUseAlternateShelfLayout);
+  launcher_view_->Layout();
+
+  // Since default alignment in tests is bottom, state is reflected in y-axis.
+  // In alternate shelf layout there is no visible hovered state.
+  ASSERT_EQ(item1_button->GetIconBounds().y(),
+            item2_button->GetIconBounds().y());
+  item1_button->AddState(internal::LauncherButton::STATE_HOVERED);
+  ASSERT_EQ(item1_button->GetIconBounds().y(),
+            item2_button->GetIconBounds().y());
 }
 
 // Confirm that item status changes are reflected in the buttons
@@ -863,6 +1052,47 @@ TEST_F(LauncherViewTest, ShouldHideTooltipWithAppListWindowTest) {
       app_list_button->GetMirroredBounds().CenterPoint()));
 }
 
+// Test that by moving the mouse cursor off the button onto the bubble it closes
+// the bubble.
+TEST_F(LauncherViewTest, ShouldHideTooltipWhenHoveringOnTooltip) {
+  internal::LauncherTooltipManager* tooltip_manager =
+      launcher_view_->tooltip_manager();
+  tooltip_manager->CreateZeroDelayTimerForTest();
+  aura::test::EventGenerator generator(Shell::GetPrimaryRootWindow());
+
+  // Move the mouse off any item and check that no tooltip is shown.
+  generator.MoveMouseTo(gfx::Point(0, 0));
+  EXPECT_FALSE(tooltip_manager->IsVisible());
+
+  // Move the mouse over the button and check that it is visible.
+  views::View* app_list_button = launcher_view_->GetAppListButtonView();
+  gfx::Rect bounds = app_list_button->GetBoundsInScreen();
+  generator.MoveMouseTo(bounds.CenterPoint());
+  // Wait for the timer to go off.
+  RunAllPendingInMessageLoop();
+  EXPECT_TRUE(tooltip_manager->IsVisible());
+
+  // Move the mouse cursor slightly to the right of the item. The tooltip should
+  // stay open.
+  generator.MoveMouseBy(-(bounds.width() / 2 + 5), 0);
+  // Make sure there is no delayed close.
+  RunAllPendingInMessageLoop();
+  EXPECT_TRUE(tooltip_manager->IsVisible());
+
+  // Move back - it should still stay open.
+  generator.MoveMouseBy(bounds.width() / 2 + 5, 0);
+  // Make sure there is no delayed close.
+  RunAllPendingInMessageLoop();
+  EXPECT_TRUE(tooltip_manager->IsVisible());
+
+  // Now move the mouse cursor slightly above the item - so that it is over the
+  // tooltip bubble. Now it should disappear.
+  generator.MoveMouseBy(0, -(bounds.height() / 2 + 5));
+  // Wait until the delayed close kicked in.
+  RunAllPendingInMessageLoop();
+  EXPECT_FALSE(tooltip_manager->IsVisible());
+}
+
 // Resizing launcher view while an add animation without fade-in is running,
 // which happens when overflow happens. App list button should end up in its
 // new ideal bounds.
@@ -910,6 +1140,8 @@ TEST_F(LauncherViewTest, CheckFittsLaw) {
   gfx::Rect ideal_bounds_1 = test_api_->GetIdealBoundsByIndex(1);
   EXPECT_GT(ideal_bounds_0.width(), ideal_bounds_1.width());
 }
+
+INSTANTIATE_TEST_CASE_P(LtrRtl, LauncherViewTextDirectionTest, testing::Bool());
 
 }  // namespace test
 }  // namespace ash

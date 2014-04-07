@@ -7,7 +7,7 @@ import os
 
 from telemetry.core.chrome import facebook_credentials_backend
 from telemetry.core.chrome import google_credentials_backend
-from telemetry.test import options_for_unittests
+from telemetry.unittest import options_for_unittests
 
 class BrowserCredentials(object):
   def __init__(self, backends = None):
@@ -133,7 +133,7 @@ class BrowserCredentials(object):
             '..', 'examples', 'credentials_example.json')))
 
       logging.warning("""
-        Credentials for %s were not found. %i pages will not be benchmarked.
+        Credentials for %s were not found. %i pages will not be tested.
 
         To fix this, either add svn-internal to your .gclient using
         http://goto/read-src-internal, or add your own credentials to:

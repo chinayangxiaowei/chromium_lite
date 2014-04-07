@@ -9,9 +9,9 @@
 
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "chrome/browser/ui/toolbar/toolbar_model.h"
-#include "googleurl/src/gurl.h"
+#include "url/gurl.h"
 
 class Profile;
 class ToolbarModelDelegate;
@@ -41,8 +41,9 @@ class ToolbarModelImpl : public ToolbarModel {
       bool display_search_urls_as_search_terms) const OVERRIDE;
   virtual string16 GetCorpusNameForMobile() const OVERRIDE;
   virtual GURL GetURL() const OVERRIDE;
-  virtual bool WouldReplaceSearchURLWithSearchTerms() const OVERRIDE;
-  virtual SecurityLevel GetSecurityLevel() const OVERRIDE;
+  virtual bool WouldReplaceSearchURLWithSearchTerms(
+      bool ignore_editing) const OVERRIDE;
+  virtual SecurityLevel GetSecurityLevel(bool ignore_editing) const OVERRIDE;
   virtual int GetIcon() const OVERRIDE;
   virtual string16 GetEVCertName() const OVERRIDE;
   virtual bool ShouldDisplayURL() const OVERRIDE;
@@ -61,9 +62,11 @@ class ToolbarModelImpl : public ToolbarModel {
   // Helper method to extract the profile from the navigation controller.
   Profile* GetProfile() const;
 
-  // Returns search terms as in chrome::search::GetSearchTerms unless those
-  // terms would be treated by the omnibox as a navigation.
-  string16 GetSearchTerms() const;
+  // Returns search terms as in chrome::GetSearchTerms() unless the page is
+  // insufficiently secure.  If |ignore_editing| is true, the result reflects
+  // the underlying state of the page without regard to any user edits that
+  // may be in progress in the omnibox.
+  string16 GetSearchTerms(bool ignore_editing) const;
 
   ToolbarModelDelegate* delegate_;
 

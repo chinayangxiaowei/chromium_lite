@@ -59,7 +59,7 @@
         '<(SHARED_INTERMEDIATE_DIR)/chrome_version/other_version.rc',
         '<(SHARED_INTERMEDIATE_DIR)/content/content_resources.rc',
         '<(SHARED_INTERMEDIATE_DIR)/net/net_resources.rc',
-        '<(SHARED_INTERMEDIATE_DIR)/webkit/webkit_chromium_resources.rc',
+        '<(SHARED_INTERMEDIATE_DIR)/webkit/blink_resources.rc',
       ],
       'conditions': [
         ['win_use_allocator_shim==1', {
@@ -102,7 +102,9 @@
         'chrome',
       ],
       'dependencies': [
-        '<@(chromium_dependencies)',
+        '<@(chromium_browser_dependencies)',
+        '<@(chromium_child_dependencies)',
+        '../content/content.gyp:content_app_both',
         'chrome_resources.gyp:packed_resources',
         'chrome_resources.gyp:packed_extra_resources',
       ],

@@ -5,16 +5,16 @@
 #include "remoting/host/video_scheduler.h"
 
 #include "base/bind.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
-#include "media/video/capture/screen/screen_capture_data.h"
-#include "media/video/capture/screen/screen_capturer_mock_objects.h"
 #include "remoting/base/auto_thread_task_runner.h"
 #include "remoting/codec/video_encoder.h"
 #include "remoting/proto/video.pb.h"
 #include "remoting/protocol/protocol_mock_objects.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/webrtc/modules/desktop_capture/desktop_frame.h"
+#include "third_party/webrtc/modules/desktop_capture/screen_capturer_mock_objects.h"
 
 using ::remoting::protocol::MockClientStub;
 using ::remoting::protocol::MockVideoStub;
@@ -38,7 +38,7 @@ namespace {
 ACTION(FinishEncode) {
   scoped_ptr<VideoPacket> packet(new VideoPacket());
   packet->set_flags(VideoPacket::LAST_PACKET | VideoPacket::LAST_PARTITION);
-  arg2.Run(packet.Pass());
+  arg1.Run(packet.Pass());
 }
 
 ACTION(FinishSend) {
@@ -55,9 +55,8 @@ class MockVideoEncoder : public VideoEncoder {
   MockVideoEncoder();
   virtual ~MockVideoEncoder();
 
-  MOCK_METHOD3(Encode, void(
-      scoped_refptr<media::ScreenCaptureData> capture_data,
-      bool key_frame,
+  MOCK_METHOD2(Encode, void(
+      const webrtc::DesktopFrame* frame,
       const DataAvailableCallback& data_available_callback));
 
  private:
@@ -74,16 +73,15 @@ class VideoSchedulerTest : public testing::Test {
 
   virtual void SetUp() OVERRIDE;
 
-  void StartVideoScheduler(scoped_ptr<media::ScreenCapturer> capturer);
+  void StartVideoScheduler(scoped_ptr<webrtc::ScreenCapturer> capturer);
   void StopVideoScheduler();
 
-  // media::ScreenCapturer mocks.
-  void OnCapturerStart(media::ScreenCapturer::Delegate* delegate);
-  void OnCapturerStop();
-  void OnCaptureFrame();
+  // webrtc::ScreenCapturer mocks.
+  void OnCapturerStart(webrtc::ScreenCapturer::Callback* callback);
+  void OnCaptureFrame(const webrtc::DesktopRegion& region);
 
  protected:
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
   base::RunLoop run_loop_;
   scoped_refptr<AutoThreadTaskRunner> task_runner_;
   scoped_refptr<VideoScheduler> scheduler_;
@@ -94,10 +92,10 @@ class VideoSchedulerTest : public testing::Test {
   // The following mock objects are owned by VideoScheduler.
   MockVideoEncoder* encoder_;
 
-  scoped_refptr<media::ScreenCaptureData> data_;
+  scoped_ptr<webrtc::DesktopFrame> frame_;
 
-  // Points to the delegate passed to media::ScreenCapturer::Start().
-  media::ScreenCapturer::Delegate* capturer_delegate_;
+  // Points to the callback passed to webrtc::ScreenCapturer::Start().
+  webrtc::ScreenCapturer::Callback* capturer_callback_;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(VideoSchedulerTest);
@@ -105,7 +103,7 @@ class VideoSchedulerTest : public testing::Test {
 
 VideoSchedulerTest::VideoSchedulerTest()
     : encoder_(NULL),
-      capturer_delegate_(NULL) {
+      capturer_callback_(NULL) {
 }
 
 void VideoSchedulerTest::SetUp() {
@@ -116,8 +114,8 @@ void VideoSchedulerTest::SetUp() {
 }
 
 void VideoSchedulerTest::StartVideoScheduler(
-    scoped_ptr<media::ScreenCapturer> capturer) {
-  scheduler_ = VideoScheduler::Create(
+    scoped_ptr<webrtc::ScreenCapturer> capturer) {
+  scheduler_ = new VideoScheduler(
       task_runner_, // Capture
       task_runner_, // Encode
       task_runner_, // Network
@@ -125,6 +123,7 @@ void VideoSchedulerTest::StartVideoScheduler(
       scoped_ptr<VideoEncoder>(encoder_),
       &client_stub_,
       &video_stub_);
+  scheduler_->Start();
 }
 
 void VideoSchedulerTest::StopVideoScheduler() {
@@ -133,22 +132,17 @@ void VideoSchedulerTest::StopVideoScheduler() {
 }
 
 void VideoSchedulerTest::OnCapturerStart(
-    media::ScreenCapturer::Delegate* delegate) {
-  EXPECT_FALSE(capturer_delegate_);
-  EXPECT_TRUE(delegate);
+    webrtc::ScreenCapturer::Callback* callback) {
+  EXPECT_FALSE(capturer_callback_);
+  EXPECT_TRUE(callback);
 
-  capturer_delegate_ = delegate;
+  capturer_callback_ = callback;
 }
 
-void VideoSchedulerTest::OnCapturerStop() {
-  capturer_delegate_ = NULL;
-}
-
-void VideoSchedulerTest::OnCaptureFrame() {
-  SkRegion update_region(SkIRect::MakeXYWH(0, 0, 10, 10));
-  data_->mutable_dirty_region().op(update_region, SkRegion::kUnion_Op);
-
-  capturer_delegate_->OnCaptureCompleted(data_);
+void VideoSchedulerTest::OnCaptureFrame(const webrtc::DesktopRegion& region) {
+  frame_->mutable_updated_region()->SetRect(
+      webrtc::DesktopRect::MakeXYWH(0, 0, 10, 10));
+  capturer_callback_->OnCaptureCompleted(frame_.release());
 }
 
 // This test mocks capturer, encoder and network layer to simulate one capture
@@ -156,23 +150,23 @@ void VideoSchedulerTest::OnCaptureFrame() {
 // VideoScheduler is instructed to come to a complete stop. We expect the stop
 // sequence to be executed successfully.
 TEST_F(VideoSchedulerTest, StartAndStop) {
-  scoped_ptr<media::MockScreenCapturer> capturer(
-      new media::MockScreenCapturer());
+  scoped_ptr<webrtc::MockScreenCapturer> capturer(
+      new webrtc::MockScreenCapturer());
   Expectation capturer_start =
       EXPECT_CALL(*capturer, Start(_))
           .WillOnce(Invoke(this, &VideoSchedulerTest::OnCapturerStart));
 
-  data_ = new media::ScreenCaptureData(
-      NULL, kWidth * media::ScreenCaptureData::kBytesPerPixel,
-      SkISize::Make(kWidth, kHeight));
+  frame_.reset(new webrtc::BasicDesktopFrame(
+      webrtc::DesktopSize(kWidth, kHeight)));
+  webrtc::DesktopFrame* frame_ptr = frame_.get();
 
   // First the capturer is called.
-  Expectation capturer_capture = EXPECT_CALL(*capturer, CaptureFrame())
+  Expectation capturer_capture = EXPECT_CALL(*capturer, Capture(_))
       .After(capturer_start)
       .WillRepeatedly(Invoke(this, &VideoSchedulerTest::OnCaptureFrame));
 
   // Expect the encoder be called.
-  EXPECT_CALL(*encoder_, Encode(data_, false, _))
+  EXPECT_CALL(*encoder_, Encode(frame_ptr, _))
       .WillRepeatedly(FinishEncode());
 
   // By default delete the arguments when ProcessVideoPacket is received.
@@ -187,12 +181,8 @@ TEST_F(VideoSchedulerTest, StartAndStop) {
           InvokeWithoutArgs(this, &VideoSchedulerTest::StopVideoScheduler)))
       .RetiresOnSaturation();
 
-  EXPECT_CALL(*capturer, Stop())
-      .After(capturer_capture)
-      .WillOnce(Invoke(this, &VideoSchedulerTest::OnCapturerStop));
-
   // Start video frame capture.
-  StartVideoScheduler(capturer.PassAs<media::ScreenCapturer>());
+  StartVideoScheduler(capturer.PassAs<webrtc::ScreenCapturer>());
 
   task_runner_ = NULL;
   run_loop_.Run();

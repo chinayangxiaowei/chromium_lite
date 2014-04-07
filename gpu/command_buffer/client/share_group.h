@@ -6,10 +6,10 @@
 #define GPU_COMMAND_BUFFER_CLIENT_SHARE_GROUP_H_
 
 #include <GLES2/gl2.h>
-#include "../client/ref_counted.h"
-#include "../common/gles2_cmd_format.h"
-#include "../common/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "gles2_impl_export.h"
+#include "gpu/command_buffer/client/ref_counted.h"
+#include "gpu/command_buffer/common/gles2_cmd_format.h"
 
 namespace gpu {
 namespace gles2 {
@@ -25,9 +25,6 @@ class IdHandlerInterface {
  public:
   IdHandlerInterface() { }
   virtual ~IdHandlerInterface() { }
-
-  // Free everything.
-  virtual void Destroy(GLES2Implementation* gl_impl) = 0;
 
   // Makes some ids at or above id_offset.
   virtual void MakeIds(
@@ -47,13 +44,7 @@ class IdHandlerInterface {
 class GLES2_IMPL_EXPORT ShareGroup
     : public gpu::RefCountedThreadSafe<ShareGroup> {
  public:
-  ShareGroup(bool share_resources, bool bind_generates_resource);
-
-  void SetGLES2ImplementationForDestruction(GLES2Implementation* gl_impl);
-
-  bool sharing_resources() const {
-    return sharing_resources_;
-  }
+  ShareGroup(bool bind_generates_resource);
 
   bool bind_generates_resource() const {
     return bind_generates_resource_;
@@ -80,11 +71,7 @@ class GLES2_IMPL_EXPORT ShareGroup
   scoped_ptr<IdHandlerInterface> id_handlers_[id_namespaces::kNumIdNamespaces];
   scoped_ptr<ProgramInfoManager> program_info_manager_;
 
-  // Whether or not this context is sharing resources.
-  bool sharing_resources_;
   bool bind_generates_resource_;
-
-  GLES2Implementation* gles2_;
 
   DISALLOW_COPY_AND_ASSIGN(ShareGroup);
 };

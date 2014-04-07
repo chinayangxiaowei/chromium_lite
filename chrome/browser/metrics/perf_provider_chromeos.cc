@@ -10,8 +10,8 @@
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/metrics/histogram.h"
-#include "base/process_util.h"
-#include "base/string_number_conversions.h"
+#include "base/rand_util.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/threading/sequenced_worker_pool.h"
 #include "chrome/browser/metrics/perf_provider_chromeos.h"
 #include "chrome/browser/profiles/profile.h"
@@ -26,12 +26,52 @@
 namespace {
 
 // Default time in seconds between invocations of perf.
-// This is chosen to be relatively prime with the number of seconds in a day
-// (86400). This period is roughly 13 hours.
-const unsigned kPerfCommandIntervalDefaultSeconds = 47221;
+// This period is roughly 6.5 hours.
+// This is chosen to be relatively prime with the number of seconds in:
+// - one minute (60)
+// - one hour (3600)
+// - one day (86400)
+const size_t kPerfCommandIntervalDefaultSeconds = 23093;
+
+// The first collection interval is different from the interval above. This is
+// because we want to collect the first profile quickly after Chrome is started.
+// If this period is too long, the user will log off and Chrome will be killed
+// before it is triggered. The following 2 variables determine the upper and
+// lower bound on the interval.
+// The reason we do not always want to collect the initial profile after a fixed
+// period is to not over-represent task X in the profile where task X always
+// runs at a fixed period after start-up. By selecting a period randomly between
+// a lower and upper bound, we will hopefully collect a more fair profile.
+const size_t kPerfCommandStartIntervalLowerBoundMinutes = 10;
+
+const size_t kPerfCommandStartIntervalUpperBoundMinutes = 20;
+
+const size_t kNumberOfSecondsInAMinute = 60;
 
 // Default time in seconds perf is run for.
-const unsigned kPerfCommandDurationDefaultSeconds = 2;
+const size_t kPerfCommandDurationDefaultSeconds = 2;
+
+// Enumeration representing success and various failure modes for collecting and
+// sending perf data.
+enum GetPerfDataOutcome {
+  SUCCESS,
+  NOT_READY_TO_UPLOAD,
+  NOT_READY_TO_COLLECT,
+  INCOGNITO_ACTIVE,
+  INCOGNITO_LAUNCHED,
+  PROTOBUF_NOT_PARSED,
+  NUM_OUTCOMES
+};
+
+// Name of the histogram that represents the success and various failure modes
+// for collecting and sending perf data.
+const char kGetPerfDataOutcomeHistogram[] = "UMA.Perf.GetData";
+
+void AddToPerfHistogram(GetPerfDataOutcome outcome) {
+  UMA_HISTOGRAM_ENUMERATION(kGetPerfDataOutcomeHistogram,
+                            outcome,
+                            NUM_OUTCOMES);
+}
 
 } // namespace
 
@@ -69,43 +109,51 @@ class WindowedIncognitoObserver : public chrome::BrowserListObserver {
 
 PerfProvider::PerfProvider()
       : state_(READY_TO_COLLECT),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {
-  ScheduleCollection();
+      weak_factory_(this) {
+  size_t collection_interval_minutes = base::RandInt(
+      kPerfCommandStartIntervalLowerBoundMinutes,
+      kPerfCommandStartIntervalUpperBoundMinutes);
+  ScheduleCollection(base::TimeDelta::FromMinutes(collection_interval_minutes));
 }
 
 PerfProvider::~PerfProvider() {}
 
 bool PerfProvider::GetPerfData(PerfDataProto* perf_data_proto) {
   DCHECK(CalledOnValidThread());
-  if (state_ != READY_TO_UPLOAD)
+  if (state_ != READY_TO_UPLOAD) {
+    AddToPerfHistogram(NOT_READY_TO_UPLOAD);
     return false;
+  }
 
   *perf_data_proto = perf_data_proto_;
   state_ = READY_TO_COLLECT;
+
+  AddToPerfHistogram(SUCCESS);
   return true;
 }
 
-void PerfProvider::ScheduleCollection() {
+void PerfProvider::ScheduleCollection(const base::TimeDelta& interval) {
   DCHECK(CalledOnValidThread());
   if (timer_.IsRunning())
     return;
 
-  base::TimeDelta collection_interval = base::TimeDelta::FromSeconds(
-      kPerfCommandIntervalDefaultSeconds);
-
-  timer_.Start(FROM_HERE, collection_interval, this,
-               &PerfProvider::CollectIfNecessary);
+  timer_.Start(FROM_HERE, interval, this,
+               &PerfProvider::CollectIfNecessaryAndReschedule);
 }
 
 void PerfProvider::CollectIfNecessary() {
   DCHECK(CalledOnValidThread());
-  if (state_ != READY_TO_COLLECT)
+  if (state_ != READY_TO_COLLECT) {
+    AddToPerfHistogram(NOT_READY_TO_COLLECT);
     return;
+  }
 
   // For privacy reasons, Chrome should only collect perf data if there is no
   // incognito session active (or gets spawned during the collection).
-  if (BrowserList::IsOffTheRecordSessionActive())
+  if (BrowserList::IsOffTheRecordSessionActive()) {
+    AddToPerfHistogram(INCOGNITO_ACTIVE);
     return;
+  }
 
   scoped_ptr<WindowedIncognitoObserver> incognito_observer(
       new WindowedIncognitoObserver);
@@ -122,16 +170,24 @@ void PerfProvider::CollectIfNecessary() {
                                  base::Passed(&incognito_observer)));
 }
 
+void PerfProvider::CollectIfNecessaryAndReschedule() {
+  CollectIfNecessary();
+  ScheduleCollection(
+      base::TimeDelta::FromSeconds(kPerfCommandIntervalDefaultSeconds));
+}
 
 void PerfProvider::ParseProtoIfValid(
     scoped_ptr<WindowedIncognitoObserver> incognito_observer,
     const std::vector<uint8>& data) {
   DCHECK(CalledOnValidThread());
 
-  if (incognito_observer->incognito_launched())
+  if (incognito_observer->incognito_launched()) {
+    AddToPerfHistogram(INCOGNITO_LAUNCHED);
     return;
+  }
 
   if (!perf_data_proto_.ParseFromArray(data.data(), data.size())) {
+    AddToPerfHistogram(PROTOBUF_NOT_PARSED);
     perf_data_proto_.Clear();
     return;
   }

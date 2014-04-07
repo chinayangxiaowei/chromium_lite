@@ -5,6 +5,7 @@
 #include "chrome/renderer/spellchecker/spellcheck_provider_test.h"
 
 #include "base/stl_util.h"
+#include "chrome/common/spellcheck_marker.h"
 #include "chrome/common/spellcheck_messages.h"
 #include "chrome/renderer/spellchecker/spellcheck.h"
 #include "ipc/ipc_message_macros.h"
@@ -31,12 +32,10 @@ void FakeTextCheckingCompletion::didCancelCheckingText() {
 
 TestingSpellCheckProvider::TestingSpellCheckProvider()
       : SpellCheckProvider(NULL, new MockSpellcheck),
-        offset_(-1),
         spelling_service_call_count_(0) {
 }
 
 TestingSpellCheckProvider::~TestingSpellCheckProvider() {
-  STLDeleteContainerPointers(messages_.begin(), messages_.end());
   delete spellcheck_;
 }
 
@@ -62,8 +61,8 @@ bool TestingSpellCheckProvider::Send(IPC::Message* message)  {
 
 void TestingSpellCheckProvider::OnCallSpellingService(int route_id,
                            int identifier,
-                           int offset,
-                           const string16& text) {
+                           const string16& text,
+                           const std::vector<SpellCheckMarker>& markers) {
 #if defined (OS_MACOSX)
   NOTREACHED();
 #else
@@ -74,7 +73,6 @@ void TestingSpellCheckProvider::OnCallSpellingService(int route_id,
     ResetResult();
     return;
   }
-  offset_ = offset;
   text_.assign(text);
   text_check_completions_.Remove(identifier);
   std::vector<WebKit::WebTextCheckingResult> results;
@@ -88,7 +86,6 @@ void TestingSpellCheckProvider::OnCallSpellingService(int route_id,
 }
 
 void TestingSpellCheckProvider::ResetResult() {
-  offset_ = -1;
   text_.clear();
 }
 

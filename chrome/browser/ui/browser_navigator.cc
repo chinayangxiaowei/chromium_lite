@@ -8,9 +8,10 @@
 
 #include "base/command_line.h"
 #include "base/prefs/pref_service.h"
-#include "base/stringprintf.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/browser_about_handler.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/tab_helper.h"
 #include "chrome/browser/google/google_url_tracker.h"
@@ -30,7 +31,6 @@
 #include "chrome/browser/ui/status_bubble.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/web_applications/web_app.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
@@ -45,6 +45,7 @@
 #endif
 
 using content::GlobalRequestID;
+using content::NavigationController;
 using content::WebContents;
 
 class BrowserNavigatorWebContentsAdoption {
@@ -147,7 +148,7 @@ Browser* GetBrowserForDisposition(chrome::NavigateParams* params) {
       if (!params->extension_app_id.empty()) {
         app_name = web_app::GenerateApplicationNameFromExtensionId(
             params->extension_app_id);
-      } else if (!params->browser->app_name().empty()) {
+      } else if (params->browser && !params->browser->app_name().empty()) {
         app_name = params->browser->app_name();
       } else if (params->source_contents) {
         extensions::TabHelper* extensions_tab_helper =
@@ -243,11 +244,12 @@ Profile* GetSourceProfile(chrome::NavigateParams* params) {
 void LoadURLInContents(WebContents* target_contents,
                        const GURL& url,
                        chrome::NavigateParams* params) {
-  content::NavigationController::LoadURLParams load_url_params(url);
+  NavigationController::LoadURLParams load_url_params(url);
   load_url_params.referrer = params->referrer;
   load_url_params.transition_type = params->transition;
   load_url_params.extra_headers = params->extra_headers;
-  load_url_params.is_cross_site_redirect = params->is_cross_site_redirect;
+  load_url_params.should_replace_current_entry =
+      params->should_replace_current_entry;
 
   if (params->transferred_global_request_id != GlobalRequestID()) {
     load_url_params.is_renderer_initiated = params->is_renderer_initiated;
@@ -255,6 +257,14 @@ void LoadURLInContents(WebContents* target_contents,
         params->transferred_global_request_id;
   } else if (params->is_renderer_initiated) {
     load_url_params.is_renderer_initiated = true;
+  }
+
+  // Only allows the browser-initiated navigation to use POST.
+  if (params->uses_post && !params->is_renderer_initiated) {
+    load_url_params.load_type =
+        NavigationController::LOAD_TYPE_BROWSER_INITIATED_HTTP_POST;
+    load_url_params.browser_initiated_post_data =
+        params->browser_initiated_post_data;
   }
   target_contents->GetController().LoadURLWithParams(load_url_params);
 }
@@ -319,6 +329,8 @@ content::WebContents* CreateTargetContents(const chrome::NavigateParams& params,
   if (params.source_contents) {
     create_params.initial_size =
         params.source_contents->GetView()->GetContainerSize();
+    if (params.should_set_opener)
+      create_params.opener = params.source_contents;
   }
 #if defined(USE_AURA)
   if (params.browser->window() &&
@@ -328,7 +340,8 @@ content::WebContents* CreateTargetContents(const chrome::NavigateParams& params,
   }
 #endif
 
-  content::WebContents* target_contents = WebContents::Create(create_params);
+  WebContents* target_contents = WebContents::Create(create_params);
+
   // New tabs can have WebUI URLs that will make calls back to arbitrary
   // tab helpers, so the entire set of tab helpers needs to be set up
   // immediately.
@@ -359,10 +372,15 @@ bool SwapInPrerender(WebContents* target_contents, const GURL& url) {
 bool SwapInInstantNTP(chrome::NavigateParams* params,
                       const GURL& url,
                       content::WebContents* source_contents) {
-  chrome::BrowserInstantController* instant =
-      params->browser->instant_controller();
+  BrowserInstantController* instant = params->browser->instant_controller();
   return instant && instant->MaybeSwapInInstantNTPContents(
       url, source_contents, &params->target_contents);
+}
+
+chrome::HostDesktopType GetHostDesktop(Browser* browser) {
+  if (browser)
+    return browser->host_desktop_type();
+  return chrome::GetActiveDesktop();
 }
 
 }  // namespace
@@ -373,6 +391,7 @@ NavigateParams::NavigateParams(Browser* a_browser,
                                const GURL& a_url,
                                content::PageTransition a_transition)
     : url(a_url),
+      uses_post(false),
       target_contents(NULL),
       source_contents(NULL),
       disposition(CURRENT_TAB),
@@ -386,16 +405,15 @@ NavigateParams::NavigateParams(Browser* a_browser,
       ref_behavior(IGNORE_REF),
       browser(a_browser),
       initiating_profile(NULL),
-      is_cross_site_redirect(false) {
-        if (a_browser)
-          host_desktop_type = a_browser->host_desktop_type();
-        else
-          host_desktop_type = chrome::HOST_DESKTOP_TYPE_NATIVE;
-      }
+      host_desktop_type(GetHostDesktop(a_browser)),
+      should_replace_current_entry(false),
+      should_set_opener(false) {
+}
 
 NavigateParams::NavigateParams(Browser* a_browser,
                                WebContents* a_target_contents)
-    : target_contents(a_target_contents),
+    : uses_post(false),
+      target_contents(a_target_contents),
       source_contents(NULL),
       disposition(CURRENT_TAB),
       transition(content::PAGE_TRANSITION_LINK),
@@ -408,17 +426,16 @@ NavigateParams::NavigateParams(Browser* a_browser,
       ref_behavior(IGNORE_REF),
       browser(a_browser),
       initiating_profile(NULL),
-      is_cross_site_redirect(false) {
-        if (a_browser)
-          host_desktop_type = a_browser->host_desktop_type();
-        else
-          host_desktop_type = chrome::HOST_DESKTOP_TYPE_NATIVE;
-      }
+      host_desktop_type(GetHostDesktop(a_browser)),
+      should_replace_current_entry(false),
+      should_set_opener(false) {
+}
 
 NavigateParams::NavigateParams(Profile* a_profile,
                                const GURL& a_url,
                                content::PageTransition a_transition)
     : url(a_url),
+      uses_post(false),
       target_contents(NULL),
       source_contents(NULL),
       disposition(NEW_FOREGROUND_TAB),
@@ -432,8 +449,10 @@ NavigateParams::NavigateParams(Profile* a_profile,
       ref_behavior(IGNORE_REF),
       browser(NULL),
       initiating_profile(a_profile),
-      host_desktop_type(chrome::HOST_DESKTOP_TYPE_NATIVE),
-      is_cross_site_redirect(false) {}
+      host_desktop_type(chrome::GetActiveDesktop()),
+      should_replace_current_entry(false),
+      should_set_opener(false) {
+}
 
 NavigateParams::~NavigateParams() {}
 
@@ -446,7 +465,10 @@ void FillNavigateParamsFromOpenURLParams(chrome::NavigateParams* nav_params,
   nav_params->is_renderer_initiated = params.is_renderer_initiated;
   nav_params->transferred_global_request_id =
       params.transferred_global_request_id;
-  nav_params->is_cross_site_redirect = params.is_cross_site_redirect;
+  nav_params->should_replace_current_entry =
+      params.should_replace_current_entry;
+  nav_params->uses_post = params.uses_post;
+  nav_params->browser_initiated_post_data = params.browser_initiated_post_data;
 }
 
 void Navigate(NavigateParams* params) {
@@ -641,6 +663,17 @@ void Navigate(NavigateParams* params) {
 
 bool IsURLAllowedInIncognito(const GURL& url,
                              content::BrowserContext* browser_context) {
+  if (url.scheme() == content::kViewSourceScheme) {
+    // A view-source URL is allowed in incognito mode only if the URL itself
+    // is allowed in incognito mode. Remove the "view-source:" from the start
+    // of the URL and validate the rest.
+    std::string stripped_spec = url.spec();
+    DCHECK_GT(stripped_spec.size(), strlen(content::kViewSourceScheme));
+    stripped_spec.erase(0, strlen(content::kViewSourceScheme) + 1);
+    GURL stripped_url(stripped_spec);
+    return stripped_url.is_valid() &&
+        IsURLAllowedInIncognito(stripped_url, browser_context);
+  }
   // Most URLs are allowed in incognito; the following are exceptions.
   // chrome://extensions is on the list because it redirects to
   // chrome://settings.
@@ -649,7 +682,6 @@ bool IsURLAllowedInIncognito(const GURL& url,
        url.host() == chrome::kChromeUISettingsFrameHost ||
        url.host() == chrome::kChromeUIExtensionsHost ||
        url.host() == chrome::kChromeUIBookmarksHost ||
-       url.host() == chrome::kChromeUISyncPromoHost ||
        url.host() == chrome::kChromeUIUberHost)) {
     return false;
   }

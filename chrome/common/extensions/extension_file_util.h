@@ -82,8 +82,16 @@ bool ValidateExtension(const extensions::Extension* extension,
                        std::string* error,
                        std::vector<extensions::InstallWarning>* warnings);
 
+// Returns a list of paths (relative to the extension dir) for images that
+// the browser might load (like themes and page action icons) for the given
+// extension.
+std::set<base::FilePath> GetBrowserImagePaths(
+    const extensions::Extension* extension);
+
+
 // Returns a list of files that contain private keys inside |extension_dir|.
-std::vector<base::FilePath> FindPrivateKeyFiles(const base::FilePath& extension_dir);
+std::vector<base::FilePath> FindPrivateKeyFiles(
+    const base::FilePath& extension_dir);
 
 // Cleans up the extension install directory. It can end up with garbage in it
 // if extensions can't initially be removed when they are uninstalled (eg if a
@@ -135,7 +143,7 @@ base::FilePath ExtensionResourceURLToFilePath(const GURL& url,
 base::FilePath GetInstallTempDir(const base::FilePath& extensions_dir);
 
 // Helper function to delete files. This is used to avoid ugly casts which
-// would be necessary with PostMessage since file_util::Delete is overloaded.
+// would be necessary with PostMessage since base::Delete is overloaded.
 // TODO(skerner): Make a version of Delete that is not overloaded in file_util.
 void DeleteFile(const base::FilePath& path, bool recursive);
 

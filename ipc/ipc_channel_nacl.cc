@@ -6,22 +6,20 @@
 
 #include <errno.h>
 #include <stddef.h>
-#include <sys/nacl_imc_api.h>
-#include <sys/nacl_syscalls.h>
 #include <sys/types.h>
 
 #include <algorithm>
 
 #include "base/bind.h"
-#include "base/file_util.h"
 #include "base/logging.h"
-#include "base/message_loop_proxy.h"
-#include "base/process_util.h"
+#include "base/message_loop/message_loop_proxy.h"
 #include "base/synchronization/lock.h"
 #include "base/task_runner_util.h"
 #include "base/threading/simple_thread.h"
 #include "ipc/file_descriptor_set_posix.h"
 #include "ipc/ipc_logging.h"
+#include "native_client/src/public/imc_syscalls.h"
+#include "native_client/src/public/imc_types.h"
 
 namespace IPC {
 
@@ -40,8 +38,10 @@ bool ReadDataOnReaderThread(int pipe, MessageContents* contents) {
   contents->data.resize(Channel::kReadBufferSize);
   contents->fds.resize(FileDescriptorSet::kMaxDescriptorsPerMessage);
 
-  NaClImcMsgIoVec iov = { &contents->data[0], contents->data.size() };
-  NaClImcMsgHdr msg = { &iov, 1, &contents->fds[0], contents->fds.size() };
+  NaClAbiNaClImcMsgIoVec iov = { &contents->data[0], contents->data.size() };
+  NaClAbiNaClImcMsgHdr msg = {
+    &iov, 1, &contents->fds[0], contents->fds.size()
+  };
 
   int bytes_read = imc_recvmsg(pipe, &msg, 0);
 
@@ -125,7 +125,7 @@ Channel::ChannelImpl::ChannelImpl(const IPC::ChannelHandle& channel_handle,
       waiting_connect_(true),
       pipe_(-1),
       pipe_name_(channel_handle.name),
-      weak_ptr_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {
+      weak_ptr_factory_(this) {
   if (!CreatePipe(channel_handle)) {
     // The pipe may have been closed already.
     const char *modestr = (mode_ & MODE_SERVER_FLAG) ? "server" : "client";
@@ -265,8 +265,10 @@ bool Channel::ChannelImpl::ProcessOutgoingMessages() {
     DCHECK(num_fds <= FileDescriptorSet::kMaxDescriptorsPerMessage);
     msg->file_descriptor_set()->GetDescriptors(fds);
 
-    NaClImcMsgIoVec iov = { const_cast<void*>(msg->data()), msg->size() };
-    NaClImcMsgHdr msgh = { &iov, 1, fds, num_fds };
+    NaClAbiNaClImcMsgIoVec iov = {
+      const_cast<void*>(msg->data()), msg->size()
+    };
+    NaClAbiNaClImcMsgHdr msgh = { &iov, 1, fds, num_fds };
     ssize_t bytes_written = imc_sendmsg(pipe_, &msgh, 0);
 
     DCHECK(bytes_written);  // The trusted side shouldn't return 0.

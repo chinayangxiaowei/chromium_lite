@@ -6,13 +6,11 @@
 #define APPS_SWITCHES_H_
 
 namespace apps {
-namespace switches {
 
-// Alphabetical list of switches specific to Apps component.
-// Keep alphabetized and document each one in the source file.
-extern const char kShowAppListShortcut[];
+// All switches in alphabetical order. The switches should be documented
+// alongside the definition of their values in the .cc file.
+extern const char kLoadAndLaunchApp[];
 
-}  // namespace switches
 }  // namespace apps
 
 #endif  // APPS_SWITCHES_H_

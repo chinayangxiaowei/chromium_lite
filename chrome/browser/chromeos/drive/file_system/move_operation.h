@@ -8,21 +8,17 @@
 #include "base/basictypes.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "chrome/browser/chromeos/drive/drive_resource_metadata.h"
+#include "chrome/browser/chromeos/drive/resource_metadata.h"
 #include "chrome/browser/google_apis/gdata_errorcode.h"
-
-class GURL;
 
 namespace base {
 class FilePath;
-}
+}  // namespace base
 
 namespace drive {
 
-class DriveCache;
-class DriveEntryProto;
-class DriveResourceMetadata;
-class DriveScheduler;
+class JobScheduler;
+class ResourceEntry;
 
 namespace file_system {
 
@@ -33,30 +29,31 @@ class OperationObserver;
 // metadata to reflect the new state.
 class MoveOperation {
  public:
-  MoveOperation(DriveScheduler* drive_scheduler,
-                DriveResourceMetadata* metadata,
-                OperationObserver* observer);
-  virtual ~MoveOperation();
+  MoveOperation(OperationObserver* observer,
+                JobScheduler* scheduler,
+                internal::ResourceMetadata* metadata);
+  ~MoveOperation();
 
   // Performs the move operation on the file at drive path |src_file_path|
   // with a target of |dest_file_path|.  Invokes |callback| when finished with
   // the result of the operation. |callback| must not be null.
-  virtual void Move(const base::FilePath& src_file_path,
-                    const base::FilePath& dest_file_path,
-                    const FileOperationCallback& callback);
+  void Move(const base::FilePath& src_file_path,
+            const base::FilePath& dest_file_path,
+            const FileOperationCallback& callback);
  private:
-  // Step 1 of Move(), called after the entry info of the source resource and
-  // the destination directory is obtained. It renames the resource in the
-  // source directory, before moving between directories.
-  void MoveAfterGetEntryInfoPair(const base::FilePath& dest_file_path,
-                                 const FileOperationCallback& callback,
-                                 scoped_ptr<EntryInfoPairResult> src_dest_info);
+  // Step 1 of Move(), called after the resource entry of the source and the
+  // destination directory is obtained. It renames the resource in the source
+  // directory, before moving between directories.
+  void MoveAfterGetResourceEntryPair(
+      const base::FilePath& dest_file_path,
+      const FileOperationCallback& callback,
+      scoped_ptr<EntryInfoPairResult> src_dest_info);
 
   // Step 2 of Move(), called after renaming is completed. It adds the resource
   // to the destination directory.
   void MoveAfterRename(const FileOperationCallback& callback,
                        scoped_ptr<EntryInfoPairResult> src_dest_info,
-                       DriveFileError error,
+                       FileError error,
                        const base::FilePath& src_path);
 
   // Step 3 of Move(), called after the resource is added to the new directory.
@@ -66,7 +63,7 @@ class MoveOperation {
   // resource is contained in both the new and the old directories.
   void MoveAfterAddToDirectory(const FileOperationCallback& callback,
                                scoped_ptr<EntryInfoPairResult> src_dest_info,
-                               DriveFileError error,
+                               FileError error,
                                const base::FilePath& src_path);
 
   // Step 4 of Move(), called after the resource is removed from the old
@@ -89,7 +86,7 @@ class MoveOperation {
 
   // Called in Rename() to reflect the rename on the local metadata.
   void RenameLocally(const base::FilePath& src_path,
-                     const base::FilePath& new_name,
+                     const std::string& new_title,
                      const FileMoveCallback& callback,
                      google_apis::GDataErrorCode status);
 
@@ -118,11 +115,10 @@ class MoveOperation {
   void RemoveFromDirectoryCompleted(const FileOperationCallback& callback,
                                     google_apis::GDataErrorCode status);
 
-  DriveScheduler* drive_scheduler_;
-  DriveResourceMetadata* metadata_;
   OperationObserver* observer_;
+  JobScheduler* scheduler_;
+  internal::ResourceMetadata* metadata_;
 
-  // WeakPtrFactory bound to the UI thread.
   // Note: This should remain the last member so it'll be destroyed and
   // invalidate the weak pointers before any other members are destroyed.
   base::WeakPtrFactory<MoveOperation> weak_ptr_factory_;

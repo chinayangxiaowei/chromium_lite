@@ -70,7 +70,7 @@ LayerSorter::LayerSorter()
 
 LayerSorter::~LayerSorter() {}
 
-static float const CheckFloatingPointNumericAccuracy(float a, float b) {
+static float CheckFloatingPointNumericAccuracy(float a, float b) {
   float abs_dif = std::abs(b - a);
   float abs_max = std::max(std::abs(b), std::abs(a));
   // Check to see if we've got a result with a reasonable amount of error.
@@ -159,7 +159,8 @@ LayerSorter::ABCompareResult LayerSorter::CheckOverlap(LayerShape* a,
     return ABeforeB;
 
   float max_diff =
-      fabsf(max_positive) > fabsf(max_negative) ? max_positive : max_negative;
+      std::abs(max_positive) > std::abs(max_negative) ?
+          max_positive : max_negative;
 
   // If the results are inconsistent (and the z difference substantial to rule
   // out numerical errors) then the layers are intersecting. We will still
@@ -169,7 +170,7 @@ LayerSorter::ABCompareResult LayerSorter::CheckOverlap(LayerShape* a,
   if (max_positive > z_threshold && max_negative < -z_threshold)
     *weight = 0.f;
   else
-    *weight = fabsf(max_diff);
+    *weight = std::abs(max_diff);
 
   // Maintain relative order if the layers have the same depth at all
   // intersection points.
@@ -193,7 +194,7 @@ LayerShape::LayerShape(float width,
   MathUtil::MapClippedQuad(draw_transform,
                            layer_quad,
                            clipped_quad,
-                           num_vertices_in_clipped_quad);
+                           &num_vertices_in_clipped_quad);
 
   if (num_vertices_in_clipped_quad < 3) {
     projected_bounds = gfx::RectF();
@@ -227,7 +228,7 @@ LayerShape::LayerShape(float width,
       MathUtil::MapPoint(draw_transform, gfx::Point3F(0.f, 1.f, 0.f), &clipped);
   gfx::Point3F c3 =
       MathUtil::MapPoint(draw_transform, gfx::Point3F(1.f, 0.f, 0.f), &clipped);
-  // FIXME: Deal with clipping.
+  // TODO(shawnsingh): Deal with clipping.
   gfx::Vector3dF c12 = c2 - c1;
   gfx::Vector3dF c13 = c3 - c1;
   layer_normal = gfx::CrossProduct(c13, c12);
@@ -254,17 +255,17 @@ float LayerShape::LayerZFromProjectedPoint(gfx::PointF p) const {
     return 0.f;
 
   // The intersection point would be given by:
-  // p + (n / d) * u  but since we are only interested in the 
+  // p + (n / d) * u  but since we are only interested in the
   // z coordinate and p's z coord is zero, all we need is the value of n/d.
   return n / d;
 }
 
-void LayerSorter::CreateGraphNodes(LayerList::iterator first,
-                                   LayerList::iterator last) {
+void LayerSorter::CreateGraphNodes(LayerImplList::iterator first,
+                                   LayerImplList::iterator last) {
   DVLOG(2) << "Creating graph nodes:";
   float min_z = FLT_MAX;
   float max_z = -FLT_MAX;
-  for (LayerList::const_iterator it = first; it < last; it++) {
+  for (LayerImplList::const_iterator it = first; it < last; it++) {
     nodes_.push_back(GraphNode(*it));
     GraphNode& node = nodes_.at(nodes_.size() - 1);
     RenderSurfaceImpl* render_surface = node.layer->render_surface();
@@ -293,7 +294,7 @@ void LayerSorter::CreateGraphNodes(LayerList::iterator first,
     min_z = std::min(min_z, node.shape.transform_origin.z());
   }
 
-  z_range_ = fabsf(max_z - min_z);
+  z_range_ = std::abs(max_z - min_z);
 }
 
 void LayerSorter::CreateGraphEdges() {
@@ -373,7 +374,8 @@ void LayerSorter::RemoveEdgeFromList(GraphEdge* edge,
 // preserve the ordering of the original list of layers, since that list should
 // already have proper z-index ordering of layers.
 //
-void LayerSorter::Sort(LayerList::iterator first, LayerList::iterator last) {
+void LayerSorter::Sort(LayerImplList::iterator first,
+                       LayerImplList::iterator last) {
   DVLOG(2) << "Sorting start ----";
   CreateGraphNodes(first, last);
 
@@ -391,7 +393,6 @@ void LayerSorter::Sort(LayerList::iterator first, LayerList::iterator last) {
   DVLOG(2) << "Sorted list: ";
   while (active_edges_.size() || no_incoming_edge_node_list.size()) {
     while (no_incoming_edge_node_list.size()) {
-
       // It is necessary to preserve the existing ordering of layers, when there
       // are no explicit dependencies (because this existing ordering has
       // correct z-index/layout ordering). To preserve this ordering, we process
@@ -455,7 +456,7 @@ void LayerSorter::Sort(LayerList::iterator first, LayerList::iterator last) {
   // ref count go to zero here as they are all nodes of the layer hierarchy and
   // are kept alive by their parent nodes.
   int count = 0;
-  for (LayerList::iterator it = first; it < last; it++)
+  for (LayerImplList::iterator it = first; it < last; it++)
     *it = sorted_list[count++]->layer;
 
   DVLOG(2) << "Sorting end ----";

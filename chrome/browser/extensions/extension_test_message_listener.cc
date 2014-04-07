@@ -5,8 +5,9 @@
 #include "chrome/browser/extensions/extension_test_message_listener.h"
 
 #include "base/strings/string_number_conversions.h"
+#include "chrome/browser/chrome_notification_types.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/api/test/test_api.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/notification_service.h"
 
@@ -17,7 +18,6 @@ ExtensionTestMessageListener::ExtensionTestMessageListener(
       satisfied_(false),
       waiting_(false),
       will_reply_(will_reply),
-      failure_message_(""),
       failed_(false) {
   registrar_.Add(this, chrome::NOTIFICATION_EXTENSION_TEST_MESSAGE,
                  content::NotificationService::AllSources());
@@ -59,12 +59,12 @@ void ExtensionTestMessageListener::Observe(
     satisfied_ = true;
     registrar_.RemoveAll();  // Stop listening for more messages.
     if (!will_reply_) {
-      function_->Reply("");
+      function_->Reply(std::string());
       function_ = NULL;
     }
     if (waiting_) {
       waiting_ = false;
-      MessageLoopForUI::current()->Quit();
+      base::MessageLoopForUI::current()->Quit();
     }
   }
 }

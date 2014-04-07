@@ -42,11 +42,10 @@ cr.define('login', function() {
           this.handleGuestClick_);
       $('sign-out-user-button').addEventListener('click',
           this.handleSignoutClick_);
-
-      if (loadTimeData.getBoolean('enableAppMode') &&
-          loadTimeData.getString('screenType') == 'login') {
+      $('cancel-multiple-sign-in-button').addEventListener('click',
+          this.handleCancelMultipleSignInClick_);
+      if (document.documentElement.getAttribute('screen') == 'login')
         login.AppsMenuButton.decorate($('show-apps-button'));
-      }
     },
 
     /**
@@ -131,6 +130,15 @@ cr.define('login', function() {
     },
 
     /**
+     * Cancel user adding button handler.
+     * @private
+     */
+    handleCancelMultipleSignInClick_: function(e) {
+      chrome.send('cancelUserAdding');
+      e.stopPropagation();
+    },
+
+    /**
      * If true then "Browse as Guest" button is shown.
      * @type {boolean}
      */
@@ -176,22 +184,26 @@ cr.define('login', function() {
       var accountPickerIsActive =
           (this.signinUIState_ == SIGNIN_UI_STATE.ACCOUNT_PICKER);
       var managedUserCreationDialogIsActive =
-          (this.signinUIState_ == SIGNIN_UI_STATE.MANAGED_USER_CREATION_DIALOG);
+          (this.signinUIState_ == SIGNIN_UI_STATE.MANAGED_USER_CREATION_FLOW);
       var wrongHWIDWarningIsActive =
           (this.signinUIState_ == SIGNIN_UI_STATE.WRONG_HWID_WARNING);
+      var isMultiProfilesUI = Oobe.getInstance().isSignInToAddScreen();
 
-      $('add-user-button').hidden = !accountPickerIsActive;
+      $('add-user-button').hidden = !accountPickerIsActive || isMultiProfilesUI;
       $('cancel-add-user-button').hidden = accountPickerIsActive ||
           !this.allowCancel_ ||
-          wrongHWIDWarningIsActive;
+          wrongHWIDWarningIsActive ||
+          isMultiProfilesUI;
       $('guest-user-header-bar-item').hidden = gaiaIsActive ||
           managedUserCreationDialogIsActive ||
           !this.showGuest_ ||
-          wrongHWIDWarningIsActive;
+          wrongHWIDWarningIsActive ||
+          isMultiProfilesUI;
       $('add-user-header-bar-item').hidden =
           $('add-user-button').hidden && $('cancel-add-user-button').hidden;
       $('apps-header-bar-item').hidden = !this.hasApps_ ||
           (!gaiaIsActive && !accountPickerIsActive);
+      $('cancel-multiple-sign-in-item').hidden = !isMultiProfilesUI;
 
       if (!$('apps-header-bar-item').hidden)
         $('show-apps-button').didShow();
@@ -222,6 +234,20 @@ cr.define('login', function() {
       this.classList.remove('login-header-bar-hidden');
     },
   };
+
+  /**
+   * Convenience wrapper of animateOut.
+   */
+  HeaderBar.animateOut = function(callback) {
+    $('login-header-bar').animateOut(callback);
+  };
+
+  /**
+   * Convenience wrapper of animateIn.
+   */
+  HeaderBar.animateIn = function() {
+    $('login-header-bar').animateIn();
+  }
 
   return {
     HeaderBar: HeaderBar

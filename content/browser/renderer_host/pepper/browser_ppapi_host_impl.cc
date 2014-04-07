@@ -4,7 +4,6 @@
 
 #include "content/browser/renderer_host/pepper/browser_ppapi_host_impl.h"
 
-#include "content/browser/renderer_host/pepper/pepper_message_filter.h"
 #include "content/browser/tracing/trace_message_filter.h"
 #include "content/common/pepper_renderer_instance_data.h"
 #include "content/public/browser/render_view_host.h"
@@ -21,24 +20,23 @@ BrowserPpapiHost* BrowserPpapiHost::CreateExternalPluginProcess(
     IPC::ChannelProxy* channel,
     net::HostResolver* host_resolver,
     int render_process_id,
-    int render_view_id) {
-  // TODO(raymes): Figure out how to plumb plugin_name and
-  // profile_data_directory through for NaCl. They are currently only needed for
-  // PPB_Flash_File interfaces so it doesn't matter.
-  std::string plugin_name;
-  base::FilePath profile_data_directory;
-  BrowserPpapiHostImpl* browser_ppapi_host =
-      new BrowserPpapiHostImpl(sender, permissions, plugin_name,
-                               profile_data_directory,
-                               true);
-  browser_ppapi_host->set_plugin_process_handle(plugin_child_process);
-
-  channel->AddFilter(
+    int render_view_id,
+    const base::FilePath& profile_directory) {
+  scoped_refptr<PepperMessageFilter> pepper_message_filter(
       new PepperMessageFilter(permissions,
                               host_resolver,
                               render_process_id,
                               render_view_id));
-  channel->AddFilter(browser_ppapi_host->message_filter());
+
+  // The plugin name and path shouldn't be needed for external plugins.
+  BrowserPpapiHostImpl* browser_ppapi_host =
+      new BrowserPpapiHostImpl(sender, permissions, std::string(),
+                               base::FilePath(), profile_directory, true,
+                               pepper_message_filter);
+  browser_ppapi_host->set_plugin_process_handle(plugin_child_process);
+
+  channel->AddFilter(pepper_message_filter);
+  channel->AddFilter(browser_ppapi_host->message_filter().get());
   channel->AddFilter(new TraceMessageFilter());
 
   return browser_ppapi_host;
@@ -48,16 +46,19 @@ BrowserPpapiHostImpl::BrowserPpapiHostImpl(
     IPC::Sender* sender,
     const ppapi::PpapiPermissions& permissions,
     const std::string& plugin_name,
+    const base::FilePath& plugin_path,
     const base::FilePath& profile_data_directory,
-    bool external_plugin)
+    bool external_plugin,
+    const scoped_refptr<PepperMessageFilter>& pepper_message_filter)
     : ppapi_host_(new ppapi::host::PpapiHost(sender, permissions)),
       plugin_process_handle_(base::kNullProcessHandle),
       plugin_name_(plugin_name),
+      plugin_path_(plugin_path),
       profile_data_directory_(profile_data_directory),
       external_plugin_(external_plugin) {
   message_filter_ = new HostMessageFilter(ppapi_host_.get());
   ppapi_host_->AddHostFactoryFilter(scoped_ptr<ppapi::host::HostFactory>(
-      new ContentBrowserPepperHostFactory(this)));
+      new ContentBrowserPepperHostFactory(this, pepper_message_filter)));
 }
 
 BrowserPpapiHostImpl::~BrowserPpapiHostImpl() {
@@ -102,6 +103,10 @@ bool BrowserPpapiHostImpl::GetRenderViewIDsForInstance(
 
 const std::string& BrowserPpapiHostImpl::GetPluginName() {
   return plugin_name_;
+}
+
+const base::FilePath& BrowserPpapiHostImpl::GetPluginPath() {
+  return plugin_path_;
 }
 
 const base::FilePath& BrowserPpapiHostImpl::GetProfileDataDirectory() {

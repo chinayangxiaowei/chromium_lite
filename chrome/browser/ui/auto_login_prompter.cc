@@ -11,21 +11,18 @@
 #include "chrome/browser/google/google_url_tracker.h"
 #include "chrome/browser/infobars/infobar_service.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/signin/profile_oauth2_token_service.h"
+#include "chrome/browser/signin/profile_oauth2_token_service_factory.h"
 #include "chrome/browser/signin/signin_manager.h"
 #include "chrome/browser/signin/signin_manager_factory.h"
-#include "chrome/browser/signin/token_service.h"
-#include "chrome/browser/signin/token_service_factory.h"
-#include "chrome/browser/sync/profile_sync_service.h"
-#include "chrome/browser/sync/profile_sync_service_factory.h"
 #include "chrome/browser/tab_contents/tab_util.h"
-#include "chrome/browser/ui/auto_login_info_bar_delegate.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "components/auto_login_parser/auto_login_parser.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
-#include "googleurl/src/gurl.h"
 #include "net/url_request/url_request.h"
+#include "url/gurl.h"
 
 using content::BrowserThread;
 using content::WebContents;
@@ -33,17 +30,13 @@ using content::WebContents;
 namespace {
 
 bool FetchUsernameThroughSigninManager(Profile* profile, std::string* output) {
-  // In an incognito window, there may not be a profile sync service and/or
-  // signin manager.
-  if (!ProfileSyncServiceFactory::GetInstance()->HasProfileSyncService(
-      profile)) {
-    return false;
-  }
-
-  if (!TokenServiceFactory::GetForProfile(profile)->AreCredentialsValid())
+  // In an incognito window these services are not available.
+  ProfileOAuth2TokenService* token_service =
+      ProfileOAuth2TokenServiceFactory::GetForProfile(profile);
+  if (!token_service || !token_service->RefreshTokenIsAvailable())
     return false;
 
-  SigninManager* signin_manager =
+  SigninManagerBase* signin_manager =
       SigninManagerFactory::GetInstance()->GetForProfile(profile);
   if (!signin_manager)
     return false;
@@ -83,12 +76,9 @@ void AutoLoginPrompter::ShowInfoBarIfPossible(net::URLRequest* request,
   // suggest auto-login, if available.
   Params params;
   // Currently we only accept GAIA credentials in Chrome.
-  if (!components::auto_login::ParserHeaderInResponse(
-          request,
-          components::auto_login::ONLY_GOOGLE_COM,
-          &params.header)) {
+  if (!auto_login_parser::ParserHeaderInResponse(
+          request, auto_login_parser::ONLY_GOOGLE_COM, &params.header))
     return;
-  }
 
   BrowserThread::PostTask(
       BrowserThread::UI, FROM_HERE,
@@ -146,12 +136,6 @@ void AutoLoginPrompter::WebContentsDestroyed(WebContents* web_contents) {
 void AutoLoginPrompter::AddInfoBarToWebContents() {
   if (infobar_shown_)
     return;
-
-  // Make sure the infobar will appear for the URL that the WebContents finished
-  // loading on.  Otherwise, the infobar will incorrectly redirect the user.
-  if (web_contents()->GetURL() != url_) {
-    return;
-  }
 
   InfoBarService* infobar_service =
       InfoBarService::FromWebContents(web_contents());

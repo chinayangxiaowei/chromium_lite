@@ -8,7 +8,7 @@
 #include <vector>
 
 #include "base/compiler_specific.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "ui/gfx/native_widget_types.h"
 
 namespace gfx {
@@ -17,6 +17,8 @@ class Point;
 class Rect;
 class RectF;
 }
+
+namespace autofill {
 
 // This interface provides data to an AutofillPopupView.
 class AutofillPopupController {
@@ -49,6 +51,10 @@ class AutofillPopupController {
   // Returns true if the given index refers to an element that can be deleted.
   virtual bool CanDelete(size_t index) const = 0;
 
+  // Returns true if the given index refers to an element that is a warning
+  // rather than an Autofill suggestion.
+  virtual bool IsWarning(size_t index) const = 0;
+
   // Updates the bounds of the popup and initiates a redraw.
   virtual void SetPopupBounds(const gfx::Rect& bounds) = 0;
 
@@ -64,6 +70,9 @@ class AutofillPopupController {
 
   // The bounds of the form field element (screen coordinates).
   virtual const gfx::RectF& element_bounds() const = 0;
+
+  // If the current popup should be displayed in RTL mode.
+  virtual bool IsRTL() const = 0;
 
   // TODO(csharp): The names, subtexts and icon getters can probably be adjusted
   // to take in the row index and return a single element, instead of the
@@ -94,5 +103,7 @@ class AutofillPopupController {
  protected:
   virtual ~AutofillPopupController() {}
 };
+
+}  // namespace autofill
 
 #endif  // CHROME_BROWSER_UI_AUTOFILL_AUTOFILL_POPUP_CONTROLLER_H_

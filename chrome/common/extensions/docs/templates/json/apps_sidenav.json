@@ -46,6 +46,48 @@
         ]
       },
       {
+        "title": "Learn with a Codelab",
+        "toggleable": true,
+        "items": [
+          {
+            "title": "About this Codelab",
+            "href": "/apps/app_codelab.html"
+          },
+          {
+            "title": "1 - Set Up Development Environment",
+            "href": "/apps/app_codelab1_setup.html"
+          },
+          {
+            "title": "2 -  Create Basic App",
+            "href": "/apps/app_codelab2_basic.html"
+          },
+          {
+            "title": "3 - Create MVC",
+            "href": "/apps/app_codelab3_mvc.html"
+          },
+          {
+            "title": "4 - Save and Fetch Data",
+            "href": "/apps/app_codelab5_data.html"
+          },
+          {
+            "title": "5 - Manage App Lifecycle",
+            "href": "/apps/app_codelab6_lifecycle.html"
+          },
+          {
+            "title": "6 - Access User's Data",
+            "href": "/apps/app_codelab7_useridentification.html"
+          },
+          {
+            "title": "7 - Access Web Resources",
+            "href": "/apps/app_codelab8_webresources.html"
+          },
+          {
+            "title": "8 - Publish App",
+            "href": "/apps/app_codelab_10_publishing.html"
+          }
+        ]
+      },
+      {
         "title": "Security & Privacy",
         "toggleable": true,
         "items": [
@@ -55,7 +97,7 @@
           },
           {
             "title": "Comply with CSP",
-            "href": "/apps/app_csp.html"
+            "href": "/apps/contentSecurityPolicy.html"
           }
         ]
       },
@@ -131,6 +173,19 @@
       {
         "title": "Publish",
         "href": "/apps/publish_app.html"
+      }
+    ]
+  },
+  {
+    "title": "Google Services",
+    "items": [
+      {
+        "title": "Analytics",
+        "href": "/apps/analytics.html"
+      },
+      {
+        "title": "In-App Payments",
+        "href": "/apps/in_app_payments.html"
       }
     ]
   },

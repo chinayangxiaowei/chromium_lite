@@ -5,7 +5,8 @@
 #ifndef CC_RESOURCES_PLATFORM_COLOR_H_
 #define CC_RESOURCES_PLATFORM_COLOR_H_
 
-#include "third_party/WebKit/Source/Platform/chromium/public/WebGraphicsContext3D.h"
+#include "base/basictypes.h"
+#include "base/logging.h"
 #include "third_party/khronos/GLES2/gl2.h"
 #include "third_party/khronos/GLES2/gl2ext.h"
 #include "third_party/skia/include/core/SkTypes.h"
@@ -24,8 +25,7 @@ class PlatformColor {
   }
 
   // Returns the most efficient texture format for this platform.
-  static GLenum BestTextureFormat(WebKit::WebGraphicsContext3D* context,
-                                  bool supports_bgra8888) {
+  static GLenum BestTextureFormat(bool supports_bgra8888) {
     GLenum texture_format = GL_RGBA;
     switch (Format()) {
       case SOURCE_FORMAT_RGBA8:
@@ -54,6 +54,9 @@ class PlatformColor {
         return false;
     }
   }
+
+ private:
+  DISALLOW_IMPLICIT_CONSTRUCTORS(PlatformColor);
 };
 
 }  // namespace cc

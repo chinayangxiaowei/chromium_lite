@@ -128,6 +128,8 @@ class PanelCollection {
 
   virtual bool IsPanelMinimized(const Panel* panel) const = 0;
 
+  virtual bool UsesAlwaysOnTopPanels() const = 0;
+
   // Saves/restores/discards the placement information of |panel|. This is
   // useful in bringing back the dragging panel to its original positioning
   // when the drag is cancelled. After the placement information is saved,
@@ -141,6 +143,10 @@ class PanelCollection {
   // style or underlying implementation may be in order. Each collection decides
   // what properties should be applied to a newly-added panel.
   virtual void UpdatePanelOnCollectionChange(Panel* panel) = 0;
+
+  // Returns the initial bounds to show the panel based on the requested bounds.
+  virtual gfx::Rect GetInitialPanelBounds(
+      const gfx::Rect& requested_bounds) const = 0;
 
  protected:
   explicit PanelCollection(Type type);

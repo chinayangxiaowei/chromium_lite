@@ -8,7 +8,7 @@
 #include <string>
 
 #include "base/memory/ref_counted.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/synchronization/waitable_event.h"
 #include "chrome/browser/sync/profile_sync_service_observer.h"
 #include "content/public/browser/browser_thread.h"
@@ -30,7 +30,7 @@ ACTION_P(Notify, type) {
 
 ACTION(QuitUIMessageLoop) {
   DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
-  MessageLoop::current()->Quit();
+  base::MessageLoop::current()->Quit();
 }
 
 class ProfileSyncServiceObserverMock : public ProfileSyncServiceObserver {

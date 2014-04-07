@@ -4,20 +4,22 @@
 
 #include "chrome/renderer/content_settings_observer.h"
 
+#include "base/command_line.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/common/render_messages.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/renderer/document_state.h"
 #include "content/public/renderer/navigation_state.h"
 #include "content/public/renderer/render_view.h"
 #include "extensions/common/constants.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebURL.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebDataSource.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebDocument.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebFrame.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebFrameClient.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebSecurityOrigin.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebView.h"
-#include "webkit/glue/weburlresponse_extradata_impl.h"
+#include "third_party/WebKit/public/platform/WebURL.h"
+#include "third_party/WebKit/public/web/WebDataSource.h"
+#include "third_party/WebKit/public/web/WebDocument.h"
+#include "third_party/WebKit/public/web/WebFrame.h"
+#include "third_party/WebKit/public/web/WebFrameClient.h"
+#include "third_party/WebKit/public/web/WebSecurityOrigin.h"
+#include "third_party/WebKit/public/web/WebView.h"
+#include "webkit/child/weburlresponse_extradata_impl.h"
 
 using WebKit::WebDataSource;
 using WebKit::WebFrame;
@@ -70,7 +72,8 @@ ContentSettingsObserver::ContentSettingsObserver(
     : content::RenderViewObserver(render_view),
       content::RenderViewObserverTracker<ContentSettingsObserver>(render_view),
       content_setting_rules_(NULL),
-      is_interstitial_page_(false) {
+      is_interstitial_page_(false),
+      npapi_plugins_blocked_(false) {
   ClearBlockedContentSettings();
 }
 
@@ -301,6 +304,14 @@ void ContentSettingsObserver::DidNotAllowMixedScript() {
   DidBlockContentType(CONTENT_SETTINGS_TYPE_MIXEDSCRIPT, std::string());
 }
 
+void ContentSettingsObserver::BlockNPAPIPlugins() {
+  npapi_plugins_blocked_ = true;
+}
+
+bool ContentSettingsObserver::AreNPAPIPluginsBlocked() const {
+  return npapi_plugins_blocked_;
+}
+
 void ContentSettingsObserver::OnLoadBlockedPlugins(
     const std::string& identifier) {
   temporarily_allowed_plugins_.insert(identifier);
@@ -318,6 +329,10 @@ void ContentSettingsObserver::ClearBlockedContentSettings() {
 }
 
 bool ContentSettingsObserver::IsWhitelistedForContentSettings(WebFrame* frame) {
+  // Whitelist Instant processes.
+  if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kInstantProcess))
+    return true;
+
   // Whitelist ftp directory listings, as they require JavaScript to function
   // properly.
   webkit_glue::WebURLResponseExtraDataImpl* extra_data =

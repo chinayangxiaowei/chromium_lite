@@ -6,10 +6,11 @@
 #include "base/callback.h"
 #include "base/memory/scoped_ptr.h"
 #include "chrome/browser/ui/autofill/autocheckout_bubble_controller.h"
-#include "components/autofill/browser/autofill_metrics.h"
+#include "components/autofill/core/browser/autofill_metrics.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gfx/rect.h"
 
+namespace autofill {
 namespace {
 
 class TestAutofillMetrics : public AutofillMetrics {
@@ -34,8 +35,8 @@ class TestCallback {
   TestCallback() : accepted_count_(0), dismissed_count_(0) {}
   ~TestCallback() {}
 
-  void Run(bool accepted) {
-    if (accepted)
+  void Run(AutocheckoutBubbleState state) {
+    if (state == AUTOCHECKOUT_BUBBLE_ACCEPTED)
       accepted_count_++;
     else
       dismissed_count_++;
@@ -49,7 +50,7 @@ class TestCallback {
     return dismissed_count_;
   }
 
-  base::Callback<void(bool)> GetCallback() {
+  base::Callback<void(AutocheckoutBubbleState)> GetCallback() {
     return base::Bind(&TestCallback::Run, base::Unretained(this));
   }
 
@@ -62,9 +63,10 @@ class TestAutocheckoutBubbleController :
   public autofill::AutocheckoutBubbleController {
  public:
   explicit TestAutocheckoutBubbleController(
-      const base::Callback<void(bool)>& callback)
+      const base::Callback<void(AutocheckoutBubbleState)>& callback)
       : AutocheckoutBubbleController(gfx::RectF(),
-                                     gfx::NativeView(),
+                                     gfx::NativeWindow(),
+                                     true /* is_google_user */,
                                      callback) {
     set_metric_logger(new TestAutofillMetrics);
   }
@@ -77,8 +79,6 @@ class TestAutocheckoutBubbleController :
 };
 
 }  // namespace
-
-namespace autofill {
 
 TEST(AutocheckoutBubbleControllerTest, BubbleCreationAndDestructionMetrics) {
   // Test bubble created metric.

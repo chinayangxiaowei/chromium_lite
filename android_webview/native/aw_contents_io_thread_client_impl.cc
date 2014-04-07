@@ -20,10 +20,9 @@
 #include "content/public/browser/resource_request_info.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
-#include "googleurl/src/gurl.h"
-#include "net/url_request/url_request.h"
-
 #include "jni/AwContentsIoThreadClient_jni.h"
+#include "net/url_request/url_request.h"
+#include "url/gurl.h"
 
 using base::android::AttachCurrentThread;
 using base::android::ConvertUTF8ToJavaString;
@@ -104,7 +103,7 @@ class ClientMapEntryUpdater : public content::WebContentsObserver {
   virtual void RenderViewForInterstitialPageCreated(
       RenderViewHost* render_view_host) OVERRIDE;
   virtual void RenderViewDeleted(RenderViewHost* render_view_host) OVERRIDE;
-  virtual void WebContentsDestroyed(WebContents* web_contents);
+  virtual void WebContentsDestroyed(WebContents* web_contents) OVERRIDE;
 
  private:
   JavaObjectWeakGlobalRef jdelegate_;
@@ -198,7 +197,8 @@ AwContentsIoThreadClientImpl::ShouldInterceptRequest(
     return scoped_ptr<InterceptedRequestData>();
   const content::ResourceRequestInfo* info =
       content::ResourceRequestInfo::ForRequest(request);
-  bool is_main_frame = info && info->IsMainFrame();
+  bool is_main_frame = info &&
+      info->GetResourceType() == ResourceType::MAIN_FRAME;
 
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jstring> jstring_url =

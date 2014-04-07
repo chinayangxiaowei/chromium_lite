@@ -7,23 +7,31 @@
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
-#include "base/message_loop.h"
-#include "base/string_number_conversions.h"
+#include "base/message_loop/message_loop.h"
 #include "base/threading/thread.h"
 #include "base/threading/thread_restrictions.h"
 #include "cc/base/switches.h"
+#include "content/public/browser/browser_thread.h"
+#include "content/public/browser/storage_partition.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/main_function_params.h"
 #include "content/public/common/url_constants.h"
+#include "content/shell/common/shell_switches.h"
 #include "content/shell/shell.h"
 #include "content/shell/shell_browser_context.h"
 #include "content/shell/shell_devtools_delegate.h"
-#include "content/shell/shell_switches.h"
-#include "googleurl/src/gurl.h"
+#include "content/shell/shell_net_log.h"
 #include "grit/net_resources.h"
 #include "net/base/net_module.h"
 #include "net/base/net_util.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "url/gurl.h"
+#include "webkit/browser/quota/quota_manager.h"
+
+#if defined(ENABLE_PLUGINS)
+#include "content/public/browser/plugin_service.h"
+#include "content/shell/shell_plugin_service_filter.h"
+#endif
 
 #if defined(OS_ANDROID)
 #include "net/android/network_change_notifier_factory_android.h"
@@ -31,14 +39,17 @@
 #endif
 
 #if defined(USE_AURA) && defined(USE_X11)
-#include "ui/base/touch/touch_factory.h"
+#include "ui/base/touch/touch_factory_x11.h"
 #endif
 
 namespace content {
 
 namespace {
 
-static GURL GetStartupURL() {
+// Default quota for each origin is 5MB.
+const int kDefaultLayoutTestQuotaBytes = 5 * 1024 * 1024;
+
+GURL GetStartupURL() {
   CommandLine* command_line = CommandLine::ForCurrentProcess();
   if (command_line->HasSwitch(switches::kContentBrowserTest))
     return GURL();
@@ -73,11 +84,7 @@ base::StringPiece PlatformResourceProvider(int key) {
 
 ShellBrowserMainParts::ShellBrowserMainParts(
     const MainFunctionParams& parameters)
-    : BrowserMainParts(),
-      parameters_(parameters),
-      run_message_loop_(true),
-      devtools_delegate_(NULL) {
-}
+    : BrowserMainParts(), parameters_(parameters), run_message_loop_(true) {}
 
 ShellBrowserMainParts::~ShellBrowserMainParts() {
 }
@@ -92,7 +99,7 @@ void ShellBrowserMainParts::PreMainMessageLoopStart() {
 
 void ShellBrowserMainParts::PostMainMessageLoopStart() {
 #if defined(OS_ANDROID)
-  MessageLoopForUI::current()->Start();
+  base::MessageLoopForUI::current()->Start();
 #endif
 }
 
@@ -107,31 +114,15 @@ void ShellBrowserMainParts::PreEarlyInitialization() {
 }
 
 void ShellBrowserMainParts::PreMainMessageLoopRun() {
-  browser_context_.reset(new ShellBrowserContext(false));
-  off_the_record_browser_context_.reset(new ShellBrowserContext(true));
+  net_log_.reset(new ShellNetLog());
+  browser_context_.reset(new ShellBrowserContext(false, net_log_.get()));
+  off_the_record_browser_context_.reset(
+      new ShellBrowserContext(true, net_log_.get()));
 
   Shell::Initialize();
   net::NetModule::SetResourceProvider(PlatformResourceProvider);
 
-  int port = 0;
-// On android the port number isn't used.
-#if !defined(OS_ANDROID)
-  // See if the user specified a port on the command line (useful for
-  // automation). If not, use an ephemeral port by specifying 0.
-  const CommandLine& command_line = *CommandLine::ForCurrentProcess();
-  if (command_line.HasSwitch(switches::kRemoteDebuggingPort)) {
-    int temp_port;
-    std::string port_str =
-        command_line.GetSwitchValueASCII(switches::kRemoteDebuggingPort);
-    if (base::StringToInt(port_str, &temp_port) &&
-        temp_port > 0 && temp_port < 65535) {
-      port = temp_port;
-    } else {
-      DLOG(WARNING) << "Invalid http debugger port number " << temp_port;
-    }
-  }
-#endif
-  devtools_delegate_ = new ShellDevToolsDelegate(browser_context_.get(), port);
+  devtools_delegate_.reset(new ShellDevToolsDelegate(browser_context_.get()));
 
   if (!CommandLine::ForCurrentProcess()->HasSwitch(switches::kDumpRenderTree)) {
     Shell::CreateNewWindow(browser_context_.get(),
@@ -139,6 +130,25 @@ void ShellBrowserMainParts::PreMainMessageLoopRun() {
                            NULL,
                            MSG_ROUTING_NONE,
                            gfx::Size());
+  }
+
+  if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kDumpRenderTree)) {
+    quota::QuotaManager* quota_manager =
+        BrowserContext::GetDefaultStoragePartition(browser_context())
+            ->GetQuotaManager();
+    BrowserThread::PostTask(
+        BrowserThread::IO,
+        FROM_HERE,
+        base::Bind(&quota::QuotaManager::SetTemporaryGlobalOverrideQuota,
+                   quota_manager,
+                   kDefaultLayoutTestQuotaBytes *
+                       quota::QuotaManager::kPerHostTemporaryPortion,
+                   quota::QuotaCallback()));
+#if defined(ENABLE_PLUGINS)
+    PluginService* plugin_service = PluginService::GetInstance();
+    plugin_service_filter_.reset(new ShellPluginServiceFilter);
+    plugin_service->SetFilter(plugin_service_filter_.get());
+#endif
   }
 
   if (parameters_.ui_task) {

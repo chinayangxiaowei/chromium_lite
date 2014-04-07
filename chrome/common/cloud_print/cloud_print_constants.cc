@@ -8,14 +8,14 @@ namespace cloud_print {
 
 const char kCloudPrintUserAgent[] = "GoogleCloudPrintProxy";
 const char kChromeCloudPrintProxyHeader[] = "X-CloudPrint-Proxy: Chrome";
-const char kCloudPrintGaiaServiceId[] = "cloudprint";
-const char kProxyAuthUserAgent[] = "ChromiumBrowser";
 const char kCloudPrintPushNotificationsSource[] = "cloudprint.google.com";
+const char kCloudPrintAuth[] = "https://www.googleapis.com/auth/cloudprint";
 
 const char kProxyIdValue[] = "proxy";
 const char kPrinterNameValue[] = "printer";
 const char kPrinterDescValue[] = "description";
 const char kPrinterCapsValue[] = "capabilities";
+const char kPrinterDisplayNameValue[] = "default_display_name";
 const char kPrinterDefaultsValue[] = "defaults";
 const char kPrinterStatusValue[] = "status";
 const char kPrinterTagValue[] = "tag";
@@ -58,4 +58,3 @@ const char kJobFetchReasonFailure[] = "failure";
 const char kJobFetchReasonRetry[] = "retry";
 
 }  // namespace cloud_print
-

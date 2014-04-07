@@ -6,15 +6,11 @@
 #define CONTENT_BROWSER_GAMEPAD_GAMEPAD_TEST_HELPERS_H_
 
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/synchronization/lock.h"
 #include "base/synchronization/waitable_event.h"
 #include "content/browser/gamepad/gamepad_data_fetcher.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebGamepads.h"
-
-namespace base {
-class SystemMonitor;
-}
+#include "third_party/WebKit/public/platform/WebGamepads.h"
 
 namespace content {
 
@@ -54,13 +50,11 @@ class GamepadTestHelper {
   GamepadTestHelper();
   virtual ~GamepadTestHelper();
 
-  MessageLoop& message_loop() { return message_loop_; }
+  base::MessageLoop& message_loop() { return message_loop_; }
 
  private:
   // This must be constructed before the system monitor.
-  MessageLoop message_loop_;
-
-  scoped_ptr<base::SystemMonitor> system_monitor_;
+  base::MessageLoop message_loop_;
 
   DISALLOW_COPY_AND_ASSIGN(GamepadTestHelper);
 };

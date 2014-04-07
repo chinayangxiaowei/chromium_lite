@@ -20,8 +20,8 @@
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test_utils.h"
-#include "googleurl/src/gurl.h"
 #include "net/dns/mock_host_resolver.h"
+#include "url/gurl.h"
 
 using extensions::Extension;
 
@@ -79,7 +79,13 @@ class ChromeAppAPITest : public ExtensionBrowserTest {
   }
 };
 
-IN_PROC_BROWSER_TEST_F(ChromeAppAPITest, IsInstalled) {
+// Flaky http://crbug.com/238674
+#if defined(OS_WIN)
+#define MAYBE_IsInstalled DISABLED_IsInstalled
+#else
+#define MAYBE_IsInstalled IsInstalled
+#endif
+IN_PROC_BROWSER_TEST_F(ChromeAppAPITest, MAYBE_IsInstalled) {
   std::string app_host("app.com");
   std::string nonapp_host("nonapp.com");
 

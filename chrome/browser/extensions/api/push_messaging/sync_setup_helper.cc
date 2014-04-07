@@ -7,7 +7,7 @@
 #include <vector>
 
 #include "base/file_util.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/history/history_service_factory.h"
@@ -29,7 +29,8 @@ SyncSetupHelper::~SyncSetupHelper() {}
 
 bool SyncSetupHelper::InitializeSync(Profile* profile) {
   profile_ = profile;
-  client_.reset(new ProfileSyncServiceHarness(profile_, username_, password_));
+  client_.reset(
+      ProfileSyncServiceHarness::Create(profile_, username_, password_));
 
   if (client_->service()->IsSyncEnabledAndLoggedIn())
     return true;

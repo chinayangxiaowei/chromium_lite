@@ -36,6 +36,7 @@ class MessageLoopProxy;
 
 namespace media {
 
+class AudioBus;
 class AudioDecoderSelector;
 class AudioSplicer;
 class DecryptingDemuxerStream;
@@ -52,14 +53,18 @@ class MEDIA_EXPORT AudioRendererImpl
   //
   // |set_decryptor_ready_cb| is fired when the audio decryptor is available
   // (only applicable if the stream is encrypted and we have a decryptor).
+  //
+  // |increase_preroll_on_underflow| Set to true if the preroll duration
+  // should be increased when ResumeAfterUnderflow() is called.
   AudioRendererImpl(const scoped_refptr<base::MessageLoopProxy>& message_loop,
                     AudioRendererSink* sink,
                     ScopedVector<AudioDecoder> decoders,
-                    const SetDecryptorReadyCB& set_decryptor_ready_cb);
+                    const SetDecryptorReadyCB& set_decryptor_ready_cb,
+                    bool increase_preroll_on_underflow);
   virtual ~AudioRendererImpl();
 
   // AudioRenderer implementation.
-  virtual void Initialize(const scoped_refptr<DemuxerStream>& stream,
+  virtual void Initialize(DemuxerStream* stream,
                           const PipelineStatusCB& init_cb,
                           const StatisticsCB& statistics_cb,
                           const base::Closure& underflow_cb,
@@ -74,7 +79,7 @@ class MEDIA_EXPORT AudioRendererImpl
   virtual void SetPlaybackRate(float rate) OVERRIDE;
   virtual void Preroll(base::TimeDelta time,
                        const PipelineStatusCB& cb) OVERRIDE;
-  virtual void ResumeAfterUnderflow(bool buffer_more_audio) OVERRIDE;
+  virtual void ResumeAfterUnderflow() OVERRIDE;
   virtual void SetVolume(float volume) OVERRIDE;
 
   // Disables underflow support.  When used, |state_| will never transition to
@@ -84,7 +89,7 @@ class MEDIA_EXPORT AudioRendererImpl
   void DisableUnderflowForTesting();
 
   // Allows injection of a custom time callback for non-realtime testing.
-  typedef base::Callback<base::Time()> NowCB;
+  typedef base::Callback<base::TimeTicks()> NowCB;
   void set_now_cb_for_testing(const NowCB& now_cb) {
     now_cb_ = now_cb;
   }
@@ -94,11 +99,11 @@ class MEDIA_EXPORT AudioRendererImpl
 
   // Callback from the audio decoder delivering decoded audio samples.
   void DecodedAudioReady(AudioDecoder::Status status,
-                         const scoped_refptr<DataBuffer>& buffer);
+                         const scoped_refptr<AudioBuffer>& buffer);
 
   // Handles buffers that come out of |splicer_|.
   // Returns true if more buffers are needed.
-  bool HandleSplicerBuffer(const scoped_refptr<DataBuffer>& buffer);
+  bool HandleSplicerBuffer(const scoped_refptr<AudioBuffer>& buffer);
 
   // Helper functions for AudioDecoder::Status values passed to
   // DecodedAudioReady().
@@ -121,14 +126,14 @@ class MEDIA_EXPORT AudioRendererImpl
   // should the filled buffer be played.
   //
   // Safe to call on any thread.
-  uint32 FillBuffer(uint8* dest,
+  uint32 FillBuffer(AudioBus* dest,
                     uint32 requested_frames,
                     int audio_delay_milliseconds);
 
   // Estimate earliest time when current buffer can stop playing.
   void UpdateEarliestEndTime_Locked(int frames_filled,
-                                    base::TimeDelta playback_delay,
-                                    base::Time time_now);
+                                    const base::TimeDelta& playback_delay,
+                                    const base::TimeTicks& time_now);
 
   void DoPlay();
   void DoPause();
@@ -151,7 +156,7 @@ class MEDIA_EXPORT AudioRendererImpl
   // Returns true if the data in the buffer is all before
   // |preroll_timestamp_|. This can only return true while
   // in the kPrerolling state.
-  bool IsBeforePrerollTime(const scoped_refptr<DataBuffer>& buffer);
+  bool IsBeforePrerollTime(const scoped_refptr<AudioBuffer>& buffer);
 
   // Called when |decoder_selector_| has selected |decoder| or is null if no
   // decoder could be selected.
@@ -160,7 +165,7 @@ class MEDIA_EXPORT AudioRendererImpl
   // created to help decrypt the encrypted stream.
   void OnDecoderSelected(
       scoped_ptr<AudioDecoder> decoder,
-      const scoped_refptr<DecryptingDemuxerStream>& decrypting_demuxer_stream);
+      scoped_ptr<DecryptingDemuxerStream> decrypting_demuxer_stream);
 
   void ResetDecoder(const base::Closure& callback);
 
@@ -179,7 +184,7 @@ class MEDIA_EXPORT AudioRendererImpl
 
   // These two will be set by AudioDecoderSelector::SelectAudioDecoder().
   scoped_ptr<AudioDecoder> decoder_;
-  scoped_refptr<DecryptingDemuxerStream> decrypting_demuxer_stream_;
+  scoped_ptr<DecryptingDemuxerStream> decrypting_demuxer_stream_;
 
   // AudioParameters constructed during Initialize() based on |decoder_|.
   AudioParameters audio_parameters_;
@@ -199,7 +204,7 @@ class MEDIA_EXPORT AudioRendererImpl
   // Callback provided to Preroll().
   PipelineStatusCB preroll_cb_;
 
-  // Typically calls base::Time::Now() but can be overridden by a test.
+  // Typically calls base::TimeTicks::Now() but can be overridden by a test.
   NowCB now_cb_;
 
   // After Initialize() has completed, all variables below must be accessed
@@ -220,6 +225,9 @@ class MEDIA_EXPORT AudioRendererImpl
     kRebuffering,
   };
   State state_;
+
+  // Keep track of whether or not the sink is playing.
+  bool sink_playing_;
 
   // Keep track of our outstanding read to |decoder_|.
   bool pending_read_;
@@ -249,20 +257,17 @@ class MEDIA_EXPORT AudioRendererImpl
   // empty till that time. Workaround is not bulletproof, as we don't exactly
   // know when that particular data would start playing, but it is much better
   // than nothing.
-  base::Time earliest_end_time_;
+  base::TimeTicks earliest_end_time_;
   size_t total_frames_filled_;
 
   bool underflow_disabled_;
+  bool increase_preroll_on_underflow_;
 
   // True if the renderer receives a buffer with kAborted status during preroll,
   // false otherwise. This flag is cleared on the next Preroll() call.
   bool preroll_aborted_;
 
   // End variables which must be accessed under |lock_|. ----------------------
-
-  // Variables used only on the audio thread. ---------------------------------
-  int actual_frames_per_buffer_;
-  scoped_array<uint8> audio_buffer_;
 
   DISALLOW_COPY_AND_ASSIGN(AudioRendererImpl);
 };

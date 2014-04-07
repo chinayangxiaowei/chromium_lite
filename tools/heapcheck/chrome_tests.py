@@ -78,11 +78,14 @@ class ChromeTests(object):
     # The known list of tests.
     # Recognise the original abbreviations as well as full executable names.
     self._test_list = {
+      "app_list": self.TestAppList,     "app_list_unittests": self.TestAppList,
       "ash": self.TestAsh,              "ash_unittests": self.TestAsh,
       "aura": self.TestAura,            "aura_unittests": self.TestAura,
       "base": self.TestBase,            "base_unittests": self.TestBase,
       "browser": self.TestBrowser,      "browser_tests": self.TestBrowser,
       "chromeos": self.TestChromeOS,    "chromeos_unittests": self.TestChromeOS,
+      "components": self.TestComponents,
+      "components_unittests": self.TestComponents,
       "compositor": self.TestCompositor,
       "compositor_unittests": self.TestCompositor,
       "content": self.TestContent,      "content_unittests": self.TestContent,
@@ -91,19 +94,23 @@ class ChromeTests(object):
       "courgette_unittests": self.TestCourgette,
       "crypto": self.TestCrypto,        "crypto_unittests": self.TestCrypto,
       "device": self.TestDevice,        "device_unittests": self.TestDevice,
-      "googleurl": self.TestGURL,       "googleurl_unittests": self.TestGURL,
+      "gpu": self.TestGPU,              "gpu_unittests": self.TestGPU,
       "ipc": self.TestIpc,              "ipc_tests": self.TestIpc,
+      "jingle": self.TestJingle,        "jingle_unittests": self.TestJingle,
       "layout": self.TestLayout,        "layout_tests": self.TestLayout,
       "media": self.TestMedia,          "media_unittests": self.TestMedia,
+      "message_center": self.TestMessageCenter,
+      "message_center_unittests" : self.TestMessageCenter,
       "net": self.TestNet,              "net_unittests": self.TestNet,
+      "ppapi": self.TestPPAPI,          "ppapi_unittests": self.TestPPAPI,
       "printing": self.TestPrinting,    "printing_unittests": self.TestPrinting,
       "remoting": self.TestRemoting,    "remoting_unittests": self.TestRemoting,
       "sql": self.TestSql,              "sql_unittests": self.TestSql,
       "startup": self.TestStartup,      "startup_tests": self.TestStartup,
       "sync": self.TestSync,            "sync_unit_tests": self.TestSync,
-      "test_shell": self.TestTestShell, "test_shell_tests": self.TestTestShell,
       "ui_unit": self.TestUIUnit,       "ui_unittests": self.TestUIUnit,
       "unit": self.TestUnit,            "unit_tests": self.TestUnit,
+      "url": self.TestURL,              "url_unittests": self.TestURL,
       "views": self.TestViews,          "views_unittests": self.TestViews,
     }
 
@@ -247,6 +254,10 @@ class ChromeTests(object):
       os.putenv("LD_LIBRARY_PATH", self._options.build_dir)
     return heapcheck_test.RunTool(cmd, supp, module)
 
+  # TODO(glider): it's an overkill to define a method for each simple test.
+  def TestAppList(self):
+    return self.SimpleTest("app_list", "app_list_unittests")
+
   def TestAsh(self):
     return self.SimpleTest("ash", "ash_unittests")
 
@@ -261,6 +272,9 @@ class ChromeTests(object):
 
   def TestChromeOS(self):
     return self.SimpleTest("chromeos", "chromeos_unittests")
+
+  def TestComponents(self):
+    return self.SimpleTest("components", "components_unittests")
 
   def TestCompositor(self):
     return self.SimpleTest("compositor", "compositor_unittests")
@@ -280,17 +294,26 @@ class ChromeTests(object):
   def TestDevice(self):
     return self.SimpleTest("device", "device_unittests")
 
-  def TestGURL(self):
-    return self.SimpleTest("chrome", "googleurl_unittests")
+  def TestGPU(self):
+    return self.SimpleTest("gpu", "gpu_unittests")
 
   def TestIpc(self):
     return self.SimpleTest("ipc", "ipc_tests")
 
+  def TestJingle(self):
+    return self.SimpleTest("chrome", "jingle_unittests")
+
   def TestMedia(self):
     return self.SimpleTest("chrome", "media_unittests")
 
+  def TestMessageCenter(self):
+    return self.SimpleTest("message_center", "message_center_unittests")
+
   def TestNet(self):
     return self.SimpleTest("net", "net_unittests")
+
+  def TestPPAPI(self):
+    return self.SimpleTest("chrome", "ppapi_unittests")
 
   def TestPrinting(self):
     return self.SimpleTest("chrome", "printing_unittests")
@@ -308,14 +331,14 @@ class ChromeTests(object):
     logging.info("export STARTUP_TESTS_NUMCYCLES=1");
     return self.SimpleTest("chrome", "startup_tests")
 
-  def TestTestShell(self):
-    return self.SimpleTest("webkit", "test_shell_tests")
-
   def TestUIUnit(self):
     return self.SimpleTest("chrome", "ui_unittests")
 
   def TestUnit(self):
     return self.SimpleTest("chrome", "unit_tests")
+
+  def TestURL(self):
+    return self.SimpleTest("chrome", "url_unittests")
 
   def TestSql(self):
     return self.SimpleTest("chrome", "sql_unittests")
@@ -341,7 +364,6 @@ class ChromeTests(object):
     # Now build script_cmd, the run_webkits_tests.py commandline
     # Store each chunk in its own directory so that we can find the data later
     chunk_dir = os.path.join("layout", "chunk_%05d" % chunk_num)
-    test_shell = os.path.join(self._options.build_dir, "test_shell")
     out_dir = os.path.join(path_utils.ScriptDir(), "latest")
     out_dir = os.path.join(out_dir, chunk_dir)
     if os.path.exists(out_dir):

@@ -15,7 +15,7 @@
 #include "content/browser/loader/resource_dispatcher_host_impl.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/power_save_blocker.h"
-#include "googleurl/src/gurl.h"
+#include "url/gurl.h"
 
 namespace content {
 class ByteStreamReader;
@@ -123,10 +123,20 @@ DownloadFileWithErrors::DownloadFileWithErrors(
           source_url_(url),
           error_info_(error_info),
           destruction_callback_(dtor_callback) {
-  ctor_callback.Run(source_url_);
+  // DownloadFiles are created on the UI thread and are destroyed on the FILE
+  // thread. Schedule the ConstructionCallback on the FILE thread so that if a
+  // DownloadItem schedules a DownloadFile to be destroyed and creates another
+  // one (as happens during download resumption), then the DestructionCallback
+  // for the old DownloadFile is run before the ConstructionCallback for the
+  // next DownloadFile.
+  BrowserThread::PostTask(
+      BrowserThread::FILE,
+      FROM_HERE,
+      base::Bind(ctor_callback, source_url_));
 }
 
 DownloadFileWithErrors::~DownloadFileWithErrors() {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
   destruction_callback_.Run(source_url_);
 }
 
@@ -338,12 +348,11 @@ void DownloadFileWithErrorsFactory::ClearErrors() {
 }
 
 TestFileErrorInjector::TestFileErrorInjector(
-    scoped_refptr<DownloadManager> download_manager)
+    DownloadManager* download_manager)
     : created_factory_(NULL),
       // This code is only used for browser_tests, so a
       // DownloadManager is always a DownloadManagerImpl.
-      download_manager_(
-          static_cast<DownloadManagerImpl*>(download_manager.get())) {
+      download_manager_(static_cast<DownloadManagerImpl*>(download_manager)) {
   // Record the value of the pointer, for later validation.
   created_factory_ =
       new DownloadFileWithErrorsFactory(
@@ -446,7 +455,7 @@ void TestFileErrorInjector::RecordDownloadFileDestruction(const GURL& url) {
 
 // static
 scoped_refptr<TestFileErrorInjector> TestFileErrorInjector::Create(
-    scoped_refptr<DownloadManager> download_manager) {
+    DownloadManager* download_manager) {
   static bool visited = false;
   DCHECK(!visited);  // Only allowed to be called once.
   visited = true;

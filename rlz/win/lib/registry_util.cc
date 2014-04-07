@@ -7,8 +7,8 @@
 
 #include "rlz/win/lib/registry_util.h"
 
-#include "base/process_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/process/process_handle.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/win/registry.h"
 #include "base/win/windows_version.h"
 #include "rlz/lib/assert.h"

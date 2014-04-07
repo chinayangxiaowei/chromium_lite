@@ -4,7 +4,7 @@
 
 #include "ui/views/touchui/touch_editing_menu.h"
 
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "grit/ui_strings.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -24,9 +24,11 @@ namespace {
 const int kMenuCommands[] = {IDS_APP_CUT,
                              IDS_APP_COPY,
                              IDS_APP_PASTE};
-const int kSpacingBetweenButtons = 0;
+const int kSpacingBetweenButtons = 2;
 const int kButtonSeparatorColor = SkColorSetARGB(13, 0, 0, 0);
-const int kMenuButtonBorderThickness = 10;
+const int kMenuButtonHeight = 38;
+const int kMenuButtonWidth = 63;
+const int kMenuMargin = 1;
 const SkColor kMenuButtonColorNormal = SkColorSetARGB(102, 255, 255, 255);
 const SkColor kMenuButtonColorHover = SkColorSetARGB(13, 0, 0, 0);
 
@@ -38,8 +40,10 @@ namespace views {
 
 class TouchEditingMenuButtonBorder : public LabelButtonBorder {
  public:
-  explicit TouchEditingMenuButtonBorder(Button::ButtonStyle style)
-      : LabelButtonBorder(style) {
+  TouchEditingMenuButtonBorder(Button::ButtonStyle style,
+                               const gfx::Insets& insets)
+      : LabelButtonBorder(style),
+        insets_(insets) {
   }
 
   virtual ~TouchEditingMenuButtonBorder() {
@@ -48,9 +52,10 @@ class TouchEditingMenuButtonBorder : public LabelButtonBorder {
  private:
   // Overridden from LabelButtonBorder
   virtual gfx::Insets GetInsets() const OVERRIDE {
-    return gfx::Insets(kMenuButtonBorderThickness, kMenuButtonBorderThickness,
-                       kMenuButtonBorderThickness, kMenuButtonBorderThickness);
+    return insets_;
   }
+
+  gfx::Insets insets_;
 
   DISALLOW_COPY_AND_ASSIGN(TouchEditingMenuButtonBorder);
 };
@@ -61,14 +66,10 @@ TouchEditingMenuView::TouchEditingMenuView(
     gfx::NativeView context)
     : BubbleDelegateView(NULL, views::BubbleBorder::BOTTOM_CENTER),
       controller_(controller) {
-  set_anchor_point(anchor_rect.CenterPoint());
-  set_anchor_insets(gfx::Insets(-anchor_rect.height() / 2,
-                                -anchor_rect.width() / 2,
-                                -anchor_rect.height() / 2,
-                                -anchor_rect.width() / 2));
+  set_anchor_rect(anchor_rect);
   set_shadow(views::BubbleBorder::SMALL_SHADOW);
   set_parent_window(context);
-  set_margins(gfx::Insets());
+  set_margins(gfx::Insets(kMenuMargin, kMenuMargin, kMenuMargin, kMenuMargin));
   set_use_focusless(true);
   set_adjust_if_offscreen(true);
 
@@ -76,11 +77,24 @@ TouchEditingMenuView::TouchEditingMenuView(
       kSpacingBetweenButtons));
   CreateButtons();
   views::BubbleDelegateView::CreateBubble(this);
-  GetBubbleFrameView()->set_background(NULL);
   GetWidget()->Show();
 }
 
 TouchEditingMenuView::~TouchEditingMenuView() {
+}
+
+// static
+TouchEditingMenuView* TouchEditingMenuView::Create(
+    TouchEditingMenuController* controller,
+    gfx::Rect anchor_rect,
+    gfx::NativeView context) {
+  if (controller) {
+    for (size_t i = 0; i < arraysize(kMenuCommands); i++) {
+      if (controller->IsCommandIdEnabled(kMenuCommands[i]))
+        return new TouchEditingMenuView(controller, anchor_rect, context);
+    }
+  }
+  return NULL;
 }
 
 void TouchEditingMenuView::Close() {
@@ -110,10 +124,9 @@ void TouchEditingMenuView::OnPaint(gfx::Canvas* canvas) {
   BubbleDelegateView::OnPaint(canvas);
 
   // Draw separator bars.
-  int x = 0;
   for (int i = 0; i < child_count() - 1; ++i) {
     View* child = child_at(i);
-    x += child->width();
+    int x = child->bounds().right() + kSpacingBetweenButtons / 2;
     canvas->FillRect(gfx::Rect(x, 0, 1, child->height()),
         kButtonSeparatorColor);
   }
@@ -137,13 +150,17 @@ void TouchEditingMenuView::CreateButtons() {
 }
 
 Button* TouchEditingMenuView::CreateButton(const string16& title, int tag) {
-  LabelButton* button = new LabelButton(this, gfx::RemoveAcceleratorChar(
-      title, '&', NULL, NULL));
+  string16 label = gfx::RemoveAcceleratorChar(title, '&', NULL, NULL);
+  LabelButton* button = new LabelButton(this, label);
   button->set_focusable(true);
   button->set_request_focus_on_press(false);
-  button->set_border(new TouchEditingMenuButtonBorder(button->style()));
-  button->SetFont(ui::ResourceBundle::GetSharedInstance().GetFont(
-      ui::ResourceBundle::SmallFont));
+  gfx::Font font = ui::ResourceBundle::GetSharedInstance().GetFont(
+      ui::ResourceBundle::SmallFont);
+  int v_border = (kMenuButtonHeight - font.GetHeight()) / 2;
+  int h_border = (kMenuButtonWidth - font.GetStringWidth(label)) / 2;
+  button->set_border(new TouchEditingMenuButtonBorder(button->style(),
+      gfx::Insets(v_border, h_border, v_border, h_border)));
+  button->SetFont(font);
   button->set_tag(tag);
   return button;
 }

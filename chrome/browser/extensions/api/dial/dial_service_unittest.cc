@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 #include "base/memory/ref_counted.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "chrome/browser/extensions/api/dial/dial_device_data.h"
 #include "chrome/browser/extensions/api/dial/dial_service.h"
 #include "net/base/capturing_net_log.h"
@@ -53,7 +53,7 @@ class DialServiceTest : public testing::Test {
 };
 
 TEST_F(DialServiceTest, TestSendMultipleRequests) {
-  MessageLoop loop(MessageLoop::TYPE_IO);
+  base::MessageLoop loop(base::MessageLoop::TYPE_IO);
   // Setting the finish delay to zero disables the timer that invokes
   // FinishDiscovery().
   dial_service_.finish_delay_ = TimeDelta::FromSeconds(0);
@@ -116,9 +116,7 @@ TEST_F(DialServiceTest, TestResponseParsing) {
   DialDeviceData not_parsed;
 
   // Empty, garbage
-  EXPECT_FALSE(DialServiceImpl::ParseResponse(
-    "",
-    now, &not_parsed));
+  EXPECT_FALSE(DialServiceImpl::ParseResponse(std::string(), now, &not_parsed));
   EXPECT_FALSE(DialServiceImpl::ParseResponse(
     "\r\n\r\n",
     now, &not_parsed));

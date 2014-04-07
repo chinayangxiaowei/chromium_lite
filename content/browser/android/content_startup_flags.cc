@@ -6,11 +6,12 @@
 
 #include "base/command_line.h"
 #include "base/logging.h"
-#include "base/string_number_conversions.h"
+#include "base/strings/string_number_conversions.h"
 #include "cc/base/switches.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/common/content_constants.h"
 #include "content/public/common/content_switches.h"
+#include "gpu/command_buffer/service/gpu_switches.h"
 #include "ui/base/ui_base_switches.h"
 
 namespace content {
@@ -56,20 +57,27 @@ void SetContentCommandLineFlags(int max_render_process_count,
       switches::kEnableAcceleratedScrollableFrames);
   parsed_command_line->AppendSwitch(
       switches::kEnableCompositedScrollingForFrames);
+  parsed_command_line->AppendSwitch(switches::kEnableBeginFrameScheduling);
 
   parsed_command_line->AppendSwitch(switches::kEnableGestureTapHighlight);
   parsed_command_line->AppendSwitch(switches::kEnablePinch);
+  parsed_command_line->AppendSwitch(switches::kEnableOverscrollNotifications);
 
   // Run the GPU service as a thread in the browser instead of as a
   // standalone process.
   parsed_command_line->AppendSwitch(switches::kInProcessGPU);
+  parsed_command_line->AppendSwitch(switches::kDisableGpuShaderDiskCache);
 
   // Always use fixed layout and viewport tag.
   parsed_command_line->AppendSwitch(switches::kEnableFixedLayout);
   parsed_command_line->AppendSwitch(switches::kEnableViewport);
 
+  // Disable <canvas> path antialiasing.
+  parsed_command_line->AppendSwitch(switches::kDisable2dCanvasAntialiasing);
+
+  // Disable anti-aliasing.
   parsed_command_line->AppendSwitch(
-      cc::switches::kEnableCompositorFrameMessage);
+      cc::switches::kDisableCompositedAntialiasing);
 
   if (!plugin_descriptor.empty()) {
     parsed_command_line->AppendSwitchNative(

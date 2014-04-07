@@ -17,12 +17,13 @@
 #include "base/command_line.h"
 #include "base/file_util.h"
 #include "base/path_service.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread.h"
-#include "base/utf_string_conversions.h"
 #include "base/win/scoped_comptr.h"
 #include "base/win/scoped_propvariant.h"
 #include "base/win/windows_version.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/favicon/favicon_service.h"
 #include "chrome/browser/favicon/favicon_service_factory.h"
 #include "chrome/browser/history/history_service.h"
@@ -34,12 +35,11 @@
 #include "chrome/browser/sessions/tab_restore_service_factory.h"
 #include "chrome/browser/shell_integration.h"
 #include "chrome/common/chrome_constants.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_switches.h"
+#include "chrome/common/favicon/favicon_types.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_source.h"
-#include "googleurl/src/gurl.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "third_party/skia/include/core/SkBitmap.h"
@@ -47,6 +47,8 @@
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/gfx/favicon_size.h"
 #include "ui/gfx/icon_util.h"
+#include "ui/gfx/image/image_family.h"
+#include "url/gurl.h"
 
 using content::BrowserThread;
 
@@ -236,7 +238,9 @@ bool CreateIconFile(const SkBitmap& bitmap,
 
   // Create an icon file from the favicon attached to the given |page|, and
   // save it as the temporary file.
-  if (!IconUtil::CreateIconFileFromSkBitmap(bitmap, SkBitmap(), path))
+  gfx::ImageFamily image_family;
+  image_family.Add(gfx::Image::CreateFrom1xBitmap(bitmap));
+  if (!IconUtil::CreateIconFileFromImageFamily(image_family, path))
     return false;
 
   // Add this icon file to the list and return its absolute path.
@@ -459,7 +463,7 @@ bool UpdateJumpList(const wchar_t* app_id,
 }  // namespace
 
 JumpList::JumpList()
-    : ALLOW_THIS_IN_INITIALIZER_LIST(weak_ptr_factory_(this)),
+    : weak_ptr_factory_(this),
       profile_(NULL),
       task_id_(CancelableTaskTracker::kBadTaskId) {
 }
@@ -638,7 +642,7 @@ bool JumpList::AddTab(const TabRestoreService::Tab* tab,
     return false;
 
   scoped_refptr<ShellLinkItem> link(new ShellLinkItem);
-  const TabNavigation& current_navigation =
+  const sessions::SerializedNavigationEntry& current_navigation =
       tab->navigations.at(tab->current_navigation_index);
   std::string url = current_navigation.virtual_url().spec();
   link->SetArguments(UTF8ToWide(url));
@@ -682,7 +686,7 @@ void JumpList::StartLoadingFavicon() {
   task_id_ = favicon_service->GetFaviconImageForURL(
       FaviconService::FaviconForURLParams(profile_,
                                           url,
-                                          history::FAVICON,
+                                          chrome::FAVICON,
                                           gfx::kFaviconSize),
       base::Bind(&JumpList::OnFaviconDataAvailable,
                  base::Unretained(this)),
@@ -690,7 +694,7 @@ void JumpList::StartLoadingFavicon() {
 }
 
 void JumpList::OnFaviconDataAvailable(
-    const history::FaviconImageResult& image_result) {
+    const chrome::FaviconImageResult& image_result) {
   // If there is currently a favicon request in progress, it is now outdated,
   // as we have received another, so nullify the handle from the old request.
   task_id_ = CancelableTaskTracker::kBadTaskId;
@@ -731,9 +735,9 @@ void JumpList::RunUpdate() {
   // icon directory, and create a new directory which contains new JumpList
   // icon files.
   base::FilePath icon_dir_old(icon_dir_.value() + L"Old");
-  if (file_util::PathExists(icon_dir_old))
-    file_util::Delete(icon_dir_old, true);
-  file_util::Move(icon_dir_, icon_dir_old);
+  if (base::PathExists(icon_dir_old))
+    base::DeleteFile(icon_dir_old, true);
+  base::Move(icon_dir_, icon_dir_old);
   file_util::CreateDirectory(icon_dir_);
 
   // Create temporary icon files for shortcuts in the "Most Visited" category.

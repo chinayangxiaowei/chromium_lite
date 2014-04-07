@@ -8,19 +8,20 @@
 #include <string>
 #include <vector>
 #include "base/basictypes.h"
-#include "base/hash_tables.h"
+#include "base/containers/hash_tables.h"
 #include "base/memory/linked_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "gpu/command_buffer/common/gles2_cmd_format.h"
-#include "gpu/command_buffer/service/gles2_cmd_validation.h"
 #include "gpu/command_buffer/service/feature_info.h"
+#include "gpu/command_buffer/service/gles2_cmd_validation.h"
 #include "gpu/gpu_export.h"
 
 namespace gpu {
 
 class IdAllocatorInterface;
+class StreamTextureManager;
 class TransferBufferManagerInterface;
 
 namespace gles2 {
@@ -46,6 +47,7 @@ class GPU_EXPORT ContextGroup : public base::RefCounted<ContextGroup> {
       MailboxManager* mailbox_manager,
       ImageManager* image_manager,
       MemoryTracker* memory_tracker,
+      StreamTextureManager* stream_texture_manager,
       bool bind_generates_resource);
 
   // This should only be called by GLES2Decoder. This must be paired with a
@@ -69,6 +71,10 @@ class GPU_EXPORT ContextGroup : public base::RefCounted<ContextGroup> {
 
   MemoryTracker* memory_tracker() const {
     return memory_tracker_.get();
+  }
+
+  StreamTextureManager* stream_texture_manager() const {
+    return stream_texture_manager_;
   }
 
   bool bind_generates_resource() {
@@ -179,6 +185,7 @@ class GPU_EXPORT ContextGroup : public base::RefCounted<ContextGroup> {
   scoped_refptr<MailboxManager> mailbox_manager_;
   scoped_refptr<ImageManager> image_manager_;
   scoped_refptr<MemoryTracker> memory_tracker_;
+  StreamTextureManager* stream_texture_manager_;
   scoped_ptr<TransferBufferManagerInterface> transfer_buffer_manager_;
 
   bool enforce_gl_minimums_;

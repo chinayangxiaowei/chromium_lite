@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "chrome/browser/ui/views/reload_button.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -24,7 +24,7 @@ class ReloadButtonTest : public testing::Test {
 
  protected:
   // We need a message loop for the timers to post events.
-  MessageLoop loop_;
+  base::MessageLoop loop_;
 
   ReloadButton reload_;
 };

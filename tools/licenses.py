@@ -52,6 +52,7 @@ PRUNE_PATHS = set([
     os.path.join('third_party','python_26'),
     os.path.join('third_party','pywebsocket'),
     os.path.join('third_party','syzygy'),
+    os.path.join('tools','gn'),
 
     # Chromium code in third_party.
     os.path.join('third_party','fuzzymatch'),
@@ -71,16 +72,16 @@ PRUNE_PATHS = set([
 ])
 
 # Directories we don't scan through.
-PRUNE_DIRS = ('.svn', '.git',             # VCS metadata
-              'out', 'Debug', 'Release',  # build files
-              'layout_tests')             # lots of subdirs
+VCS_METADATA_DIRS = ('.svn', '.git')
+PRUNE_DIRS = (VCS_METADATA_DIRS +
+              ('out', 'Debug', 'Release',  # build files
+               'layout_tests'))            # lots of subdirs
 
 ADDITIONAL_PATHS = (
     os.path.join('breakpad'),
     os.path.join('chrome', 'common', 'extensions', 'docs', 'examples'),
     os.path.join('chrome', 'test', 'chromeos', 'autotest'),
     os.path.join('chrome', 'test', 'data'),
-    os.path.join('googleurl'),
     os.path.join('native_client'),
     os.path.join('native_client_sdk'),
     os.path.join('net', 'tools', 'spdyshark'),
@@ -95,6 +96,7 @@ ADDITIONAL_PATHS = (
     os.path.join('tools', 'grit'),
     os.path.join('tools', 'gyp'),
     os.path.join('tools', 'page_cycler', 'acid3'),
+    os.path.join('url', 'third_party', 'mozilla'),
     os.path.join('v8'),
     # Fake directory so we can include the strongtalk license.
     os.path.join('v8', 'strongtalk'),
@@ -105,12 +107,6 @@ ADDITIONAL_PATHS = (
 # can't provide a README.chromium.  Please prefer a README.chromium
 # wherever possible.
 SPECIAL_CASES = {
-    os.path.join('googleurl'): {
-        "Name": "google-url",
-        "URL": "http://code.google.com/p/google-url/",
-        "License": "BSD and MPL 1.1/GPL 2.0/LGPL 2.1",
-        "License File": "LICENSE.txt",
-    },
     os.path.join('native_client'): {
         "Name": "native client",
         "URL": "http://code.google.com/p/nativeclient",
@@ -328,9 +324,12 @@ def ParseDir(path, root, require_license_file=True):
 def ContainsFiles(path, root):
     """Determines whether any files exist in a directory or in any of its
     subdirectories."""
-    for _, _, files in os.walk(os.path.join(root, path)):
+    for _, dirs, files in os.walk(os.path.join(root, path)):
         if files:
             return True
+        for vcs_metadata in VCS_METADATA_DIRS:
+            if vcs_metadata in dirs:
+                dirs.remove(vcs_metadata)
     return False
 
 

@@ -8,7 +8,6 @@
 #include "base/basictypes.h"
 #include "cc/base/cc_export.h"
 #include "cc/quads/render_pass.h"
-#include "cc/resources/managed_memory_policy.h"
 #include "cc/trees/layer_tree_host.h"
 
 namespace cc {
@@ -19,17 +18,19 @@ class ScopedResource;
 
 class CC_EXPORT RendererClient {
  public:
-  virtual gfx::Size DeviceViewportSize() const = 0;
+  // Draw viewport in non-y-flipped window space. Note that while a draw is in
+  // progress, this is guaranteed to be contained within the output surface
+  // size.
+  virtual gfx::Rect DeviceViewport() const = 0;
+
+  virtual float DeviceScaleFactor() const = 0;
   virtual const LayerTreeSettings& Settings() const = 0;
-  virtual void DidLoseOutputSurface() = 0;
-  virtual void OnSwapBuffersComplete() = 0;
   virtual void SetFullRootLayerDamage() = 0;
-  virtual void SetManagedMemoryPolicy(const ManagedMemoryPolicy& policy) = 0;
-  virtual void EnforceManagedMemoryPolicy(
-      const ManagedMemoryPolicy& policy) = 0;
   virtual bool HasImplThread() const = 0;
   virtual bool ShouldClearRootRenderPass() const = 0;
   virtual CompositorFrameMetadata MakeCompositorFrameMetadata() const = 0;
+  virtual bool AllowPartialSwap() const = 0;
+  virtual bool ExternalStencilTestEnabled() const = 0;
 
  protected:
   virtual ~RendererClient() {}
@@ -43,12 +44,9 @@ class CC_EXPORT Renderer {
 
   const LayerTreeSettings& Settings() const { return client_->Settings(); }
 
-  gfx::Size ViewportSize() const { return client_->DeviceViewportSize(); }
-  int ViewportWidth() const { return ViewportSize().width(); }
-  int ViewportHeight() const { return ViewportSize().height(); }
-
   virtual void ViewportChanged() {}
-  virtual void ReceiveCompositorFrameAck(const CompositorFrameAck& ack) {}
+
+  virtual bool CanReadPixels() const = 0;
 
   virtual void DecideRenderPassAllocationsForFrame(
       const RenderPassList& render_passes_in_draw_order) {}
@@ -56,7 +54,7 @@ class CC_EXPORT Renderer {
 
   // This passes ownership of the render passes to the renderer. It should
   // consume them, and empty the list.
-  virtual void DrawFrame(RenderPassList& render_passes_in_draw_order) = 0;
+  virtual void DrawFrame(RenderPassList* render_passes_in_draw_order) = 0;
 
   // Waits for rendering to finish.
   virtual void Finish() = 0;
@@ -64,7 +62,8 @@ class CC_EXPORT Renderer {
   virtual void DoNoOp() {}
 
   // Puts backbuffer onscreen.
-  virtual bool SwapBuffers() = 0;
+  virtual void SwapBuffers() = 0;
+  virtual void ReceiveSwapBuffersAck(const CompositorFrameAck& ack) {}
 
   virtual void GetFramebufferPixels(void* pixels, gfx::Rect rect) = 0;
 
@@ -76,15 +75,18 @@ class CC_EXPORT Renderer {
                                       size_t bytes_visible_and_nearby,
                                       size_t bytes_allocated) = 0;
 
+  virtual void SetDiscardBackBufferWhenNotVisible(bool discard) = 0;
+
  protected:
   explicit Renderer(RendererClient* client)
       : client_(client) {}
 
   RendererClient* client_;
 
+ private:
   DISALLOW_COPY_AND_ASSIGN(Renderer);
 };
 
-}
+}  // namespace cc
 
 #endif  // CC_OUTPUT_RENDERER_H_

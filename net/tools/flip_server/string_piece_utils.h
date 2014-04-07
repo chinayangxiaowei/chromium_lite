@@ -8,7 +8,7 @@
 #include <ctype.h>
 
 #include "base/port.h"
-#include "base/string_piece.h"
+#include "base/strings/string_piece.h"
 
 namespace net {
 
@@ -34,9 +34,11 @@ struct StringPieceUtils {
     } else if (piece1.size() != piece2.size()) {
       return false;
     }
-    while (p1i != piece1.end() && p2i != piece2.begin()) {
+    while (p1i != piece1.end() && p2i != piece2.end()) {
       if (tolower(*p1i) != tolower(*p2i))
         return false;
+      ++p1i;
+      ++p2i;
     }
     return true;
   }

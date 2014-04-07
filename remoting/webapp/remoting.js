@@ -10,6 +10,11 @@ var remoting = remoting || {};
 /** @type {remoting.HostSession} */ remoting.hostSession = null;
 
 /**
+ * @type {boolean} True if this is a v2 app; false if it is a legacy app.
+ */
+remoting.isAppsV2 = false;
+
+/**
  * Show the authorization consent UI and register a one-shot event handler to
  * continue the authorization process.
  *
@@ -34,21 +39,34 @@ function consentRequired_(authContinue) {
  * Entry point for app initialization.
  */
 remoting.init = function() {
-  migrateLocalToChromeStorage_();
+  // Determine whether or not this is a V2 web-app. In order to keep the apps
+  // v2 patch as small as possible, all JS changes needed for apps v2 are done
+  // at run-time. Only the manifest is patched.
+  var manifest = chrome.runtime.getManifest();
+  if (manifest && manifest.app && manifest.app.background) {
+    remoting.isAppsV2 = true;
+    var htmlNode = /** @type {HTMLElement} */ (document.body.parentNode);
+    htmlNode.classList.add('apps-v2');
+  }
 
-  // TODO(jamiewalch): Remove this when we migrate to apps v2
-  // (http://crbug.com/ 134213).
-  remoting.initMockStorage();
+  if (!remoting.isAppsV2) {
+    migrateLocalToChromeStorage_();
+  }
 
   remoting.logExtensionInfo_();
   l10n.localize();
+
   // Create global objects.
   remoting.settings = new remoting.Settings();
-  remoting.oauth2 = new remoting.OAuth2();
-  // TODO(jamiewalch): Reinstate this when we migrate to apps v2
-  // (http://crbug.com/ 134213).
-  // remoting.identity = new remoting.Identity(consentRequired_);
-  remoting.identity = remoting.oauth2;
+  if (remoting.isAppsV2) {
+    remoting.identity = new remoting.Identity(consentRequired_);
+  } else {
+    remoting.oauth2 = new remoting.OAuth2();
+    if (!remoting.oauth2.isAuthenticated()) {
+      document.getElementById('auth-dialog').hidden = false;
+    }
+    remoting.identity = remoting.oauth2;
+  }
   remoting.stats = new remoting.ConnectionStats(
       document.getElementById('statistics'));
   remoting.formatIq = new remoting.FormatIq();
@@ -64,7 +82,15 @@ remoting.init = function() {
       document.getElementById('wcs-sandbox');
   remoting.wcsSandbox = new remoting.WcsSandboxContainer(sandbox.contentWindow);
 
-  remoting.identity.getEmail(remoting.onEmail, remoting.showErrorMessage);
+  /** @param {remoting.Error} error */
+  var onGetEmailError = function(error) {
+    // No need to show the error message for NOT_AUTHENTICATED
+    // because we will show "auth-dialog".
+    if (error != remoting.Error.NOT_AUTHENTICATED) {
+      remoting.showErrorMessage(error);
+    }
+  }
+  remoting.identity.getEmail(remoting.onEmail, onGetEmailError);
 
   remoting.showOrHideIT2MeUi();
   remoting.showOrHideMe2MeUi();
@@ -125,38 +151,93 @@ remoting.onEmail = function(email) {
 };
 
 /**
+ * Returns whether or not IT2Me is supported via the host NPAPI plugin.
+ *
+ * @return {boolean}
+ */
+function isIT2MeSupported_() {
+  var container = document.getElementById('host-plugin-container');
+  /** @type {remoting.HostPlugin} */
+  var plugin = remoting.HostSession.createPlugin();
+  container.appendChild(plugin);
+  var result = plugin.hasOwnProperty('REQUESTED_ACCESS_CODE');
+  container.removeChild(plugin);
+  return result;
+}
+
+/**
  * initHomeScreenUi is called if the app is not starting up in session mode,
  * and also if the user cancels pin entry or the connection in session mode.
  */
 remoting.initHomeScreenUi = function() {
   remoting.hostController = new remoting.HostController();
-  document.getElementById('share-button').disabled =
-      !remoting.hostController.isPluginSupported();
+  document.getElementById('share-button').disabled = !isIT2MeSupported_();
   remoting.setMode(remoting.AppMode.HOME);
-  if (!remoting.oauth2.isAuthenticated()) {
-    document.getElementById('auth-dialog').hidden = false;
-  }
   remoting.hostSetupDialog =
       new remoting.HostSetupDialog(remoting.hostController);
+  var dialog = document.getElementById('paired-clients-list');
+  var message = document.getElementById('paired-client-manager-message');
+  var deleteAll = document.getElementById('delete-all-paired-clients');
+  var close = document.getElementById('close-paired-client-manager-dialog');
+  var working = document.getElementById('paired-client-manager-dialog-working');
+  var error = document.getElementById('paired-client-manager-dialog-error');
+  var noPairedClients = document.getElementById('no-paired-clients');
+  remoting.pairedClientManager =
+      new remoting.PairedClientManager(remoting.hostController, dialog, message,
+                                       deleteAll, close, noPairedClients,
+                                       working, error);
   // Display the cached host list, then asynchronously update and re-display it.
   remoting.updateLocalHostState();
   remoting.hostList.refresh(remoting.updateLocalHostState);
-  remoting.initSurvey();
+  remoting.butterBar = new remoting.ButterBar();
 };
 
 /**
- * Fetches local host state and updates host list accordingly.
+ * Fetches local host state and updates the DOM accordingly.
  */
 remoting.updateLocalHostState = function() {
   /**
-   * @param {remoting.HostController.State} state Host state.
-   * @param {string?} localHostId
+   * @param {string?} hostId Host id.
    */
-  var onHostState = function(state, localHostId) {
-    remoting.hostList.setLocalHostStateAndId(state, localHostId);
+  var onHostId = function(hostId) {
+    remoting.hostController.getLocalHostState(onHostState.bind(null, hostId));
+  };
+
+  /**
+   * @param {string?} hostId Host id.
+   * @param {remoting.HostController.State} state Host state.
+   */
+  var onHostState = function(hostId, state) {
+    remoting.hostList.setLocalHostStateAndId(state, hostId);
     remoting.hostList.display();
   };
-  remoting.hostController.getLocalHostStateAndId(onHostState);
+
+  /**
+   * @param {boolean} response True if the feature is present.
+   */
+  var onHasFeatureResponse = function(response) {
+    /**
+     * @param {remoting.Error} error
+     */
+    var onError = function(error) {
+      console.error('Failed to get pairing status: ' + error);
+      remoting.pairedClientManager.setPairedClients([]);
+    };
+
+    if (response) {
+      remoting.hostController.getPairedClients(
+          remoting.pairedClientManager.setPairedClients.bind(
+              remoting.pairedClientManager),
+          onError);
+    } else {
+      console.log('Pairing registry not supported by host.');
+      remoting.pairedClientManager.setPairedClients([]);
+    }
+  };
+
+  remoting.hostController.hasFeature(
+      remoting.HostController.Feature.PAIRING_REGISTRY, onHasFeatureResponse);
+  remoting.hostController.getLocalHostId(onHostId);
 };
 
 /**
@@ -164,10 +245,11 @@ remoting.updateLocalHostState = function() {
  * The extension manifest is parsed to extract this info.
  */
 remoting.logExtensionInfo_ = function() {
+  var v2OrLegacy = remoting.isAppsV2 ? " (v2)" : " (legacy)";
   var manifest = chrome.runtime.getManifest();
   if (manifest && manifest.version) {
     var name = chrome.i18n.getMessage('PRODUCT_NAME');
-    console.log(name + ' version: ' + manifest.version);
+    console.log(name + ' version: ' + manifest.version + v2OrLegacy);
   } else {
     console.error('Failed to get product version. Corrupt manifest?');
   }
@@ -177,8 +259,6 @@ remoting.logExtensionInfo_ = function() {
  * If an IT2Me client or host is active then prompt the user before closing.
  * If a Me2Me client is active then don't bother, since closing the window is
  * the more intuitive way to end a Me2Me session, and re-connecting is easy.
- *
- * @return {?string} The prompt string if a connection is active.
  */
 remoting.promptClose = function() {
   if (!remoting.clientSession ||
@@ -205,7 +285,7 @@ remoting.promptClose = function() {
  */
 remoting.signOut = function() {
   remoting.oauth2.clear();
-  remoting.storage.local.clear();
+  chrome.storage.local.clear();
   remoting.setMode(remoting.AppMode.HOME);
   document.getElementById('auth-dialog').hidden = false;
 };
@@ -374,3 +454,14 @@ function migrateLocalToChromeStorage_() {
     }
   }
 }
+
+/**
+ * Generate a nonce, to be used as an xsrf protection token.
+ *
+ * @return {string} A URL-Safe Base64-encoded 128-bit random value. */
+remoting.generateXsrfToken = function() {
+  var random = new Uint8Array(16);
+  window.crypto.getRandomValues(random);
+  var base64Token = window.btoa(String.fromCharCode.apply(null, random));
+  return base64Token.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+};

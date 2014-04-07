@@ -7,7 +7,7 @@
 
 #include <map>
 #include "base/basictypes.h"
-#include "base/hash_tables.h"
+#include "base/containers/hash_tables.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
@@ -19,8 +19,10 @@ namespace gpu {
 namespace gles2 {
 
 class BufferManager;
+struct ContextState;
+class ErrorState;
 class FeatureInfo;
-class GLES2Decoder;
+class TestHelper;
 
 // Info about Buffers currently in the system.
 class GPU_EXPORT Buffer : public base::RefCounted<Buffer> {
@@ -159,7 +161,7 @@ class GPU_EXPORT Buffer : public base::RefCounted<Buffer> {
 
   // A copy of the data in the buffer. This data is only kept if the target
   // is backed_ = true.
-  scoped_array<int8> shadow_;
+  scoped_ptr<int8[]> shadow_;
 
   // A map of ranges to the highest value in that range of a certain type.
   typedef std::map<Range, GLuint, Range::Less> RangeToMaxValueMap;
@@ -191,22 +193,22 @@ class GPU_EXPORT BufferManager {
   // Gets a client id for a given service id.
   bool GetClientId(GLuint service_id, GLuint* client_id) const;
 
-  // Does a glBufferData and updates the approprate accounting. Currently
-  // assume the values have already been validated.
-  void DoBufferData(
-      GLES2Decoder* decoder,
-      Buffer* buffer,
-      GLsizeiptr size,
-      GLenum usage,
-      const GLvoid* data);
+  // Validates a glBufferSubData, and then calls DoBufferData if validation was
+  // successful.
+  void ValidateAndDoBufferSubData(
+      ContextState* context_state, GLenum target, GLintptr offset,
+      GLsizeiptr size, const GLvoid * data);
 
-  // Does a glBufferSubData and updates the approrate accounting.
-  void DoBufferSubData(
-      GLES2Decoder* decoder,
-      Buffer* buffer,
-      GLintptr offset,
-      GLsizeiptr size,
-      const GLvoid* data);
+  // Validates a glBufferData, and then calls DoBufferData if validation was
+  // successful.
+  void ValidateAndDoBufferData(
+    ContextState* context_state, GLenum target, GLsizeiptr size,
+    const GLvoid * data, GLenum usage);
+
+  // Validates a glGetBufferParameteriv, and then calls GetBufferParameteriv if
+  // validation was successful.
+  void ValidateAndDoGetBufferParameteriv(
+    ContextState* context_state, GLenum target, GLenum pname, GLint* params);
 
   // Sets the target of a buffer. Returns false if the target can not be set.
   bool SetTarget(Buffer* buffer, GLenum target);
@@ -219,13 +221,39 @@ class GPU_EXPORT BufferManager {
     return memory_tracker_->GetMemRepresented();
   }
 
-  // Tell's for a given usage if this would be a client side array.
+  // Tells for a given usage if this would be a client side array.
   bool IsUsageClientSideArray(GLenum usage);
+
+  // Tells whether a buffer that is emulated using client-side arrays should be
+  // set to a non-zero size.
+  bool UseNonZeroSizeForClientSideArrayBuffer();
 
  private:
   friend class Buffer;
+  friend class TestHelper;  // Needs access to DoBufferData.
+  friend class BufferManagerTestBase;  // Needs access to DoBufferSubData.
   void StartTracking(Buffer* buffer);
   void StopTracking(Buffer* buffer);
+
+  Buffer* GetBufferInfoForTarget(ContextState* state, GLenum target);
+
+  // Does a glBufferSubData and updates the approriate accounting.
+  // Assumes the values have already been validated.
+  void DoBufferSubData(
+      ErrorState* error_state,
+      Buffer* buffer,
+      GLintptr offset,
+      GLsizeiptr size,
+      const GLvoid* data);
+
+  // Does a glBufferData and updates the approprate accounting. Currently
+  // Assumes the values have already been validated.
+  void DoBufferData(
+      ErrorState* error_state,
+      Buffer* buffer,
+      GLsizeiptr size,
+      GLenum usage,
+      const GLvoid* data);
 
   // Sets the size, usage and initial data of a buffer.
   // If data is NULL buffer will be initialized to 0 if shadowed.

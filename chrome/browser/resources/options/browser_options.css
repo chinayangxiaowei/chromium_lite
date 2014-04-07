@@ -11,6 +11,7 @@
   max-width: 400px;
   overflow: hidden;
   text-overflow: ellipsis;
+  vertical-align: top;
 }
 
 #default-browser-state {
@@ -159,6 +160,7 @@ input[type='range'] {
 .network-group {
   -webkit-box-orient: horizontal;
   height: 42px;
+  overflow: visible;
 }
 
 list:not([disabled]) > .network-group:hover,

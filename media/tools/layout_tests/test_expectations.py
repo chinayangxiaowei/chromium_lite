@@ -8,11 +8,10 @@ import urllib2
 
 from webkitpy.layout_tests.models.test_expectations import *
 
-# Default Webkit SVN location for chromium test expectation file.
+# Default location for chromium test expectation file.
 # TODO(imasaki): support multiple test expectations files.
-DEFAULT_TEST_EXPECTATION_LOCATION = (
-    'http://svn.webkit.org/repository/webkit/trunk/'
-    'LayoutTests/platform/chromium/TestExpectations')
+DEFAULT_TEST_EXPECTATIONS_LOCATION = (
+    'http://src.chromium.org/blink/trunk/LayoutTests/TestExpectations')
 
 # The following is from test expectation syntax. The detail can be found in
 # http://www.chromium.org/developers/testing/webkit-layout-tests#TOC-Test-Expectations
@@ -51,7 +50,7 @@ class TestExpectations(object):
    'Platforms': ['SNOWLEOPARD', 'ANDROID'], 'TIMEOUT': True, 'PASS': True}]}
   """
 
-  def __init__(self, url=DEFAULT_TEST_EXPECTATION_LOCATION):
+  def __init__(self, url=DEFAULT_TEST_EXPECTATIONS_LOCATION):
     """Read the test expectation file from the specified URL and parse it.
 
     Args:
@@ -103,7 +102,10 @@ class TestExpectations(object):
     remaining_modifiers = list(parsed.modifiers)
     test_expectation_info['Bugs'] = []
     for m in parsed.modifiers:
-      if m.startswith('BUG'):
+      if (m.startswith(WEBKIT_BUG_PREFIX) or
+          m.startswith(CHROMIUM_BUG_PREFIX) or
+          m.startswith(V8_BUG_PREFIX) or
+          m.startswith(NAMED_BUG_PREFIX)):
         test_expectation_info['Bugs'].append(m)
         remaining_modifiers.remove(m)
       elif m in KNOWN_TE_KEYWORDS:

@@ -11,6 +11,7 @@
 #include "base/compiler_specific.h"
 #include "base/memory/scoped_ptr.h"
 #include "chrome/browser/policy/cloud/cloud_policy_manager.h"
+#include "components/browser_context_keyed_service/browser_context_keyed_service.h"
 
 class PrefService;
 class Profile;
@@ -22,7 +23,8 @@ class UserCloudPolicyStore;
 
 // UserCloudPolicyManager handles initialization of user policy for Chrome
 // Profiles on the desktop platforms.
-class UserCloudPolicyManager : public CloudPolicyManager {
+class UserCloudPolicyManager : public CloudPolicyManager,
+                               public BrowserContextKeyedService {
  public:
   UserCloudPolicyManager(Profile* profile,
                          scoped_ptr<UserCloudPolicyStore> store);
@@ -43,10 +45,6 @@ class UserCloudPolicyManager : public CloudPolicyManager {
   // Returns true if the underlying CloudPolicyClient is already registered.
   // Virtual for mocking.
   virtual bool IsClientRegistered() const;
-
-  // Register the CloudPolicyClient using the passed OAuth token. This contacts
-  // the DMServer to mint a new DMToken.
-  void RegisterClient(const std::string& access_token);
 
   // Creates a CloudPolicyClient for this client. Used in situations where
   // callers want to create a DMToken without actually initializing the

@@ -16,15 +16,16 @@ class CC_EXPORT ContentsScalingLayer : public Layer {
  public:
   virtual void CalculateContentsScale(
       float ideal_contents_scale,
+      float device_scale_factor,
+      float page_scale_factor,
       bool animating_transform_to_screen,
       float* contents_scale_x,
       float* contents_scale_y,
       gfx::Size* content_bounds) OVERRIDE;
 
-  virtual void Update(
+  virtual bool Update(
     ResourceUpdateQueue* queue,
-    const OcclusionTracker* occlusion,
-    RenderingStats* stats) OVERRIDE;
+    const OcclusionTracker* occlusion) OVERRIDE;
 
  protected:
   ContentsScalingLayer();
@@ -35,6 +36,8 @@ class CC_EXPORT ContentsScalingLayer : public Layer {
  private:
   float last_update_contents_scale_x_;
   float last_update_contents_scale_y_;
+
+  DISALLOW_COPY_AND_ASSIGN(ContentsScalingLayer);
 };
 
 }  // namespace cc

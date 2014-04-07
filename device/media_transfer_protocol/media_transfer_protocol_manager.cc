@@ -11,19 +11,20 @@
 
 #include "base/bind.h"
 #include "base/command_line.h"
+#include "base/location.h"
 #include "base/memory/weak_ptr.h"
-#include "base/message_loop_proxy.h"
 #include "base/observer_list.h"
+#include "base/sequenced_task_runner.h"
 #include "base/stl_util.h"
 #include "base/threading/thread_checker.h"
+#include "dbus/bus.h"
 #include "device/media_transfer_protocol/media_transfer_protocol_daemon_client.h"
 #include "device/media_transfer_protocol/mtp_file_entry.pb.h"
 #include "device/media_transfer_protocol/mtp_storage_info.pb.h"
+#include "third_party/cros_system_api/dbus/service_constants.h"
 
 #if defined(OS_CHROMEOS)
 #include "chromeos/dbus/dbus_thread_manager.h"
-#else
-#include "dbus/bus.h"
 #endif
 
 namespace device {
@@ -35,42 +36,44 @@ MediaTransferProtocolManager* g_media_transfer_protocol_manager = NULL;
 // The MediaTransferProtocolManager implementation.
 class MediaTransferProtocolManagerImpl : public MediaTransferProtocolManager {
  public:
-  MediaTransferProtocolManagerImpl(
-      scoped_refptr<base::MessageLoopProxy> loop_proxy)
+  explicit MediaTransferProtocolManagerImpl(
+      scoped_refptr<base::SequencedTaskRunner> task_runner)
       : weak_ptr_factory_(this) {
-    dbus::Bus* bus = NULL;
 #if defined(OS_CHROMEOS)
-    DCHECK(!loop_proxy.get());
-    chromeos::DBusThreadManager* dbus_thread_manager =
-        chromeos::DBusThreadManager::Get();
-    bus = dbus_thread_manager->GetSystemBus();
-    if (!bus)
-      return;
+    DCHECK(!task_runner.get());
 #else
-    DCHECK(loop_proxy.get());
+    DCHECK(task_runner.get());
     dbus::Bus::Options options;
     options.bus_type = dbus::Bus::SYSTEM;
     options.connection_type = dbus::Bus::PRIVATE;
-    options.dbus_task_runner = loop_proxy;
+    options.dbus_task_runner = task_runner;
     session_bus_ = new dbus::Bus(options);
-    bus = session_bus_.get();
 #endif
 
-    DCHECK(bus);
-    mtp_client_.reset(
-        MediaTransferProtocolDaemonClient::Create(bus, false /* not stub */));
-
-    // Set up signals and start initializing |storage_info_map_|.
-    mtp_client_->SetUpConnections(
-        base::Bind(&MediaTransferProtocolManagerImpl::OnStorageChanged,
-                   weak_ptr_factory_.GetWeakPtr()));
-    mtp_client_->EnumerateStorages(
-        base::Bind(&MediaTransferProtocolManagerImpl::OnEnumerateStorages,
-                   weak_ptr_factory_.GetWeakPtr()),
-        base::Bind(&base::DoNothing));
+    // Listen for future mtpd service owner changes, in case it is not
+    // available right now. There is no guarantee on Linux or ChromeOS that
+    // mtpd is running already.
+    mtpd_owner_changed_callback_ =
+        base::Bind(&MediaTransferProtocolManagerImpl::FinishSetupOnOriginThread,
+                   weak_ptr_factory_.GetWeakPtr());
+    GetBus()->ListenForServiceOwnerChange(mtpd::kMtpdServiceName,
+                                          mtpd_owner_changed_callback_);
+    GetBus()->GetServiceOwner(mtpd::kMtpdServiceName,
+                              mtpd_owner_changed_callback_);
   }
 
   virtual ~MediaTransferProtocolManagerImpl() {
+    DCHECK(g_media_transfer_protocol_manager);
+    g_media_transfer_protocol_manager = NULL;
+    GetBus()->UnlistenForServiceOwnerChange(mtpd::kMtpdServiceName,
+                                            mtpd_owner_changed_callback_);
+
+#if !defined(OS_CHROMEOS)
+      session_bus_->PostTaskToDBusThread(
+          FROM_HERE, base::Bind(&dbus::Bus::ShutdownAndBlock, session_bus_));
+#endif
+
+    VLOG(1) << "MediaTransferProtocolManager Shutdown completed";
   }
 
   // MediaTransferProtocolManager override.
@@ -100,9 +103,7 @@ class MediaTransferProtocolManagerImpl : public MediaTransferProtocolManager {
       const std::string& storage_name) const OVERRIDE {
     DCHECK(thread_checker_.CalledOnValidThread());
     StorageInfoMap::const_iterator it = storage_info_map_.find(storage_name);
-    if (it == storage_info_map_.end())
-      return NULL;
-    return &it->second;
+    return it != storage_info_map_.end() ? &it->second : NULL;
   }
 
   // MediaTransferProtocolManager override.
@@ -110,8 +111,8 @@ class MediaTransferProtocolManagerImpl : public MediaTransferProtocolManager {
                            const std::string& mode,
                            const OpenStorageCallback& callback) OVERRIDE {
     DCHECK(thread_checker_.CalledOnValidThread());
-    if (!ContainsKey(storage_info_map_, storage_name)) {
-      callback.Run("", true);
+    if (!ContainsKey(storage_info_map_, storage_name) || !mtp_client_) {
+      callback.Run(std::string(), true);
       return;
     }
     open_storage_callbacks_.push(callback);
@@ -128,7 +129,7 @@ class MediaTransferProtocolManagerImpl : public MediaTransferProtocolManager {
   virtual void CloseStorage(const std::string& storage_handle,
                             const CloseStorageCallback& callback) OVERRIDE {
     DCHECK(thread_checker_.CalledOnValidThread());
-    if (!ContainsKey(handles_, storage_handle)) {
+    if (!ContainsKey(handles_, storage_handle) || !mtp_client_) {
       callback.Run(true);
       return;
     }
@@ -147,7 +148,7 @@ class MediaTransferProtocolManagerImpl : public MediaTransferProtocolManager {
       const std::string& path,
       const ReadDirectoryCallback& callback) OVERRIDE {
     DCHECK(thread_checker_.CalledOnValidThread());
-    if (!ContainsKey(handles_, storage_handle)) {
+    if (!ContainsKey(handles_, storage_handle) || !mtp_client_) {
       callback.Run(std::vector<MtpFileEntry>(), true);
       return;
     }
@@ -167,7 +168,7 @@ class MediaTransferProtocolManagerImpl : public MediaTransferProtocolManager {
       uint32 file_id,
       const ReadDirectoryCallback& callback) OVERRIDE {
     DCHECK(thread_checker_.CalledOnValidThread());
-    if (!ContainsKey(handles_, storage_handle)) {
+    if (!ContainsKey(handles_, storage_handle) || !mtp_client_) {
       callback.Run(std::vector<MtpFileEntry>(), true);
       return;
     }
@@ -188,7 +189,7 @@ class MediaTransferProtocolManagerImpl : public MediaTransferProtocolManager {
                                    uint32 count,
                                    const ReadFileCallback& callback) OVERRIDE {
     DCHECK(thread_checker_.CalledOnValidThread());
-    if (!ContainsKey(handles_, storage_handle)) {
+    if (!ContainsKey(handles_, storage_handle) || !mtp_client_) {
       callback.Run(std::string(), true);
       return;
     }
@@ -208,7 +209,7 @@ class MediaTransferProtocolManagerImpl : public MediaTransferProtocolManager {
                                  uint32 count,
                                  const ReadFileCallback& callback) OVERRIDE {
     DCHECK(thread_checker_.CalledOnValidThread());
-    if (!ContainsKey(handles_, storage_handle)) {
+    if (!ContainsKey(handles_, storage_handle) || !mtp_client_) {
       callback.Run(std::string(), true);
       return;
     }
@@ -225,7 +226,7 @@ class MediaTransferProtocolManagerImpl : public MediaTransferProtocolManager {
                                  const std::string& path,
                                  const GetFileInfoCallback& callback) OVERRIDE {
     DCHECK(thread_checker_.CalledOnValidThread());
-    if (!ContainsKey(handles_, storage_handle)) {
+    if (!ContainsKey(handles_, storage_handle) || !mtp_client_) {
       callback.Run(MtpFileEntry(), true);
       return;
     }
@@ -243,7 +244,7 @@ class MediaTransferProtocolManagerImpl : public MediaTransferProtocolManager {
                                uint32 file_id,
                                const GetFileInfoCallback& callback) OVERRIDE {
     DCHECK(thread_checker_.CalledOnValidThread());
-    if (!ContainsKey(handles_, storage_handle)) {
+    if (!ContainsKey(handles_, storage_handle) || !mtp_client_) {
       callback.Run(MtpFileEntry(), true);
       return;
     }
@@ -272,6 +273,7 @@ class MediaTransferProtocolManagerImpl : public MediaTransferProtocolManager {
 
   void OnStorageChanged(bool is_attach, const std::string& storage_name) {
     DCHECK(thread_checker_.CalledOnValidThread());
+    DCHECK(mtp_client_);
     if (is_attach) {
       mtp_client_->GetStorageInfo(
           storage_name,
@@ -296,6 +298,7 @@ class MediaTransferProtocolManagerImpl : public MediaTransferProtocolManager {
 
   void OnEnumerateStorages(const std::vector<std::string>& storage_names) {
     DCHECK(thread_checker_.CalledOnValidThread());
+    DCHECK(mtp_client_);
     for (size_t i = 0; i < storage_names.size(); ++i) {
       mtp_client_->GetStorageInfo(
           storage_names[i],
@@ -333,13 +336,13 @@ class MediaTransferProtocolManagerImpl : public MediaTransferProtocolManager {
       open_storage_callbacks_.front().Run(handle, false);
     } else {
       NOTREACHED();
-      open_storage_callbacks_.front().Run("", true);
+      open_storage_callbacks_.front().Run(std::string(), true);
     }
     open_storage_callbacks_.pop();
   }
 
   void OnOpenStorageError() {
-    open_storage_callbacks_.front().Run("", true);
+    open_storage_callbacks_.front().Run(std::string(), true);
     open_storage_callbacks_.pop();
   }
 
@@ -398,6 +401,47 @@ class MediaTransferProtocolManagerImpl : public MediaTransferProtocolManager {
     get_file_info_callbacks_.pop();
   }
 
+  // Get the Bus object used to communicate with mtpd.
+  dbus::Bus* GetBus() {
+    DCHECK(thread_checker_.CalledOnValidThread());
+#if defined(OS_CHROMEOS)
+    return chromeos::DBusThreadManager::Get()->GetSystemBus();
+#else
+    return session_bus_.get();
+#endif
+  }
+
+  // Callback to finish initialization after figuring out if the mtp service
+  // has an owner, or if the service owner has changed.
+  // |mtpd_service_owner| contains the name of the current owner, if any.
+  void FinishSetupOnOriginThread(const std::string& mtpd_service_owner) {
+    DCHECK(thread_checker_.CalledOnValidThread());
+
+    if (mtpd_service_owner == current_mtpd_owner_)
+      return;
+
+    if (mtpd_service_owner.empty()) {
+      current_mtpd_owner_.clear();
+      mtp_client_.reset();
+      return;
+    }
+
+    current_mtpd_owner_ = mtpd_service_owner;
+
+    mtp_client_.reset(
+        MediaTransferProtocolDaemonClient::Create(GetBus(),
+                                                  false /* not stub */));
+
+    // Set up signals and start initializing |storage_info_map_|.
+    mtp_client_->SetUpConnections(
+        base::Bind(&MediaTransferProtocolManagerImpl::OnStorageChanged,
+                   weak_ptr_factory_.GetWeakPtr()));
+    mtp_client_->EnumerateStorages(
+        base::Bind(&MediaTransferProtocolManagerImpl::OnEnumerateStorages,
+                   weak_ptr_factory_.GetWeakPtr()),
+        base::Bind(&base::DoNothing));
+  }
+
   // Mtpd DBus client.
   scoped_ptr<MediaTransferProtocolDaemonClient> mtp_client_;
 
@@ -419,6 +463,10 @@ class MediaTransferProtocolManagerImpl : public MediaTransferProtocolManager {
   // Set of open storage handles.
   std::set<std::string> handles_;
 
+  dbus::Bus::GetServiceOwnerCallback mtpd_owner_changed_callback_;
+
+  std::string current_mtpd_owner_;
+
   // Queued callbacks.
   OpenStorageCallbackQueue open_storage_callbacks_;
   CloseStorageCallbackQueue close_storage_callbacks_;
@@ -434,31 +482,14 @@ class MediaTransferProtocolManagerImpl : public MediaTransferProtocolManager {
 }  // namespace
 
 // static
-void MediaTransferProtocolManager::Initialize(
-    scoped_refptr<base::MessageLoopProxy> loop_proxy) {
-  if (g_media_transfer_protocol_manager) {
-    LOG(WARNING) << "MediaTransferProtocolManager was already initialized";
-    return;
-  }
+MediaTransferProtocolManager* MediaTransferProtocolManager::Initialize(
+    scoped_refptr<base::SequencedTaskRunner> task_runner) {
+  DCHECK(!g_media_transfer_protocol_manager);
+
   g_media_transfer_protocol_manager =
-      new MediaTransferProtocolManagerImpl(loop_proxy);
+      new MediaTransferProtocolManagerImpl(task_runner);
   VLOG(1) << "MediaTransferProtocolManager initialized";
-}
 
-// static
-void MediaTransferProtocolManager::Shutdown() {
-  if (!g_media_transfer_protocol_manager) {
-    LOG(WARNING) << "MediaTransferProtocolManager::Shutdown() called with "
-                 << "NULL manager";
-    return;
-  }
-  delete g_media_transfer_protocol_manager;
-  g_media_transfer_protocol_manager = NULL;
-  VLOG(1) << "MediaTransferProtocolManager Shutdown completed";
-}
-
-// static
-MediaTransferProtocolManager* MediaTransferProtocolManager::GetInstance() {
   return g_media_transfer_protocol_manager;
 }
 

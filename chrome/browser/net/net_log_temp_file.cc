@@ -7,8 +7,9 @@
 #include "base/file_util.h"
 #include "base/values.h"
 #include "chrome/browser/net/chrome_net_log.h"
-#include "chrome/browser/net/net_log_logger.h"
+#include "chrome/browser/ui/webui/net_internals/net_internals_ui.h"
 #include "content/public/browser/browser_thread.h"
+#include "net/base/net_log_logger.h"
 
 using content::BrowserThread;
 
@@ -95,12 +96,12 @@ void NetLogTempFile::StartNetLog() {
   // Try to make sure we can create the file.
   // TODO(rtenneti): Find a better for doing the following. Surface some error
   // to the user if we couldn't create the file.
-  FILE* fp = file_util::OpenFile(log_path_, "w");
-  if (!fp)
+  FILE* file = file_util::OpenFile(log_path_, "w");
+  if (file == NULL)
     return;
-  file_util::CloseFile(fp);
 
-  net_log_logger_.reset(new NetLogLogger(log_path_));
+  scoped_ptr<base::Value> constants(NetInternalsUI::GetConstants());
+  net_log_logger_.reset(new net::NetLogLogger(file, *constants));
   net_log_logger_->StartObserving(chrome_net_log_);
   state_ = STATE_ALLOW_STOP;
 }
@@ -152,5 +153,5 @@ bool NetLogTempFile::GetNetExportLogDirectory(base::FilePath* path) {
 bool NetLogTempFile::NetExportLogExists() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE_USER_BLOCKING));
   DCHECK(!log_path_.empty());
-  return file_util::PathExists(log_path_);
+  return base::PathExists(log_path_);
 }

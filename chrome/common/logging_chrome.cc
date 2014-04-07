@@ -38,18 +38,22 @@
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/path_service.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread_restrictions.h"
-#include "base/time.h"
-#include "base/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/dump_without_crashing.h"
 #include "chrome/common/env_vars.h"
 #include "ipc/ipc_logging.h"
+
+#if defined(OS_CHROMEOS)
+#include "chromeos/chromeos_switches.h"
+#endif
 
 #if defined(OS_WIN)
 #include <initguid.h>
@@ -128,13 +132,11 @@ LoggingDestination DetermineLogMode(const CommandLine& command_line) {
 #ifdef NDEBUG
   bool enable_logging = false;
   const char *kInvertLoggingSwitch = switches::kEnableLogging;
-  const logging::LoggingDestination kDefaultLoggingMode =
-      logging::LOG_ONLY_TO_FILE;
+  const logging::LoggingDestination kDefaultLoggingMode = logging::LOG_TO_FILE;
 #else
   bool enable_logging = true;
   const char *kInvertLoggingSwitch = switches::kDisableLogging;
-  const logging::LoggingDestination kDefaultLoggingMode =
-      logging::LOG_TO_BOTH_FILE_AND_SYSTEM_DEBUG_LOG;
+  const logging::LoggingDestination kDefaultLoggingMode = logging::LOG_TO_ALL;
 #endif
 
   if (command_line.HasSwitch(kInvertLoggingSwitch))
@@ -145,7 +147,7 @@ LoggingDestination DetermineLogMode(const CommandLine& command_line) {
     // Let --enable-logging=stderr force only stderr, particularly useful for
     // non-debug builds where otherwise you can't get logs to stderr at all.
     if (command_line.GetSwitchValueASCII(switches::kEnableLogging) == "stderr")
-      log_mode = logging::LOG_ONLY_TO_SYSTEM_DEBUG_LOG;
+      log_mode = logging::LOG_TO_SYSTEM_DEBUG_LOG;
     else
       log_mode = kDefaultLoggingMode;
   } else {
@@ -165,7 +167,7 @@ base::FilePath SetUpSymlinkIfNeeded(const base::FilePath& symlink_path,
   // starting a new log, then delete the old symlink and make a new
   // one to a fresh log file.
   base::FilePath target_path;
-  bool symlink_exists = file_util::PathExists(symlink_path);
+  bool symlink_exists = base::PathExists(symlink_path);
   if (new_log || !symlink_exists) {
     target_path = GenerateTimestampedName(symlink_path, base::Time::Now());
 
@@ -202,16 +204,32 @@ base::FilePath GetSessionLogFile(const CommandLine& command_line) {
   if (env->GetVar(env_vars::kSessionLogDir, &log_dir_str) &&
       !log_dir_str.empty()) {
     log_dir = base::FilePath(log_dir_str);
-  } else {
+  } else if (command_line.HasSwitch(chromeos::switches::kLoginProfile)) {
     PathService::Get(chrome::DIR_USER_DATA, &log_dir);
-    base::FilePath login_profile =
-        command_line.GetSwitchValuePath(switches::kLoginProfile);
-    log_dir = log_dir.Append(login_profile);
+    base::FilePath profile_dir;
+    if (command_line.HasSwitch(switches::kMultiProfiles)) {
+      // We could not use g_browser_process > profile_helper() here.
+      std::string profile_dir_str = chrome::kProfileDirPrefix;
+      profile_dir_str.append(
+          command_line.GetSwitchValueASCII(chromeos::switches::kLoginProfile));
+      profile_dir = base::FilePath(profile_dir_str);
+    } else {
+      profile_dir =
+          command_line.GetSwitchValuePath(chromeos::switches::kLoginProfile);
+    }
+    log_dir = log_dir.Append(profile_dir);
   }
   return log_dir.Append(GetLogFileName().BaseName());
 }
 
 void RedirectChromeLogging(const CommandLine& command_line) {
+  if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kMultiProfiles) &&
+      chrome_logging_redirected_) {
+    // TODO(nkostylev): Support multiple active users. http://crbug.com/230345
+    LOG(ERROR) << "NOT redirecting logging for multi-profiles case.";
+    return;
+  }
+
   DCHECK(!chrome_logging_redirected_) <<
     "Attempted to redirect logging when it was already initialized.";
 
@@ -232,11 +250,11 @@ void RedirectChromeLogging(const CommandLine& command_line) {
 
   // ChromeOS always logs through the symlink, so it shouldn't be
   // deleted if it already exists.
-  if (!InitLogging(log_path.value().c_str(),
-                   DetermineLogMode(command_line),
-                   logging::LOCK_LOG_FILE,
-                   logging::APPEND_TO_OLD_LOG_FILE,
-                   dcheck_state)) {
+  logging::LoggingSettings settings;
+  settings.logging_dest = DetermineLogMode(command_line);
+  settings.log_file = log_path.value().c_str();
+  settings.dcheck_state = dcheck_state;
+  if (!logging::InitLogging(settings)) {
     DLOG(ERROR) << "Unable to initialize logging to " << log_path.value();
     RemoveSymlinkAndLog(log_path, target_path);
   } else {
@@ -260,15 +278,14 @@ void InitChromeLogging(const CommandLine& command_line,
 
   // Don't resolve the log path unless we need to. Otherwise we leave an open
   // ALPC handle after sandbox lockdown on Windows.
-  if (logging_dest == LOG_ONLY_TO_FILE ||
-      logging_dest == LOG_TO_BOTH_FILE_AND_SYSTEM_DEBUG_LOG) {
+  if ((logging_dest & LOG_TO_FILE) != 0) {
     log_path = GetLogFileName();
 
 #if defined(OS_CHROMEOS)
     // For BWSI (Incognito) logins, we want to put the logs in the user
     // profile directory that is created for the temporary session instead
     // of in the system log directory, for privacy reasons.
-    if (command_line.HasSwitch(switches::kGuestSession))
+    if (command_line.HasSwitch(chromeos::switches::kGuestSession))
       log_path = GetSessionLogFile(command_line);
 
     // On ChromeOS we log to the symlink.  We force creation of a new
@@ -291,11 +308,13 @@ void InitChromeLogging(const CommandLine& command_line,
       logging::ENABLE_DCHECK_FOR_NON_OFFICIAL_RELEASE_BUILDS :
       logging::DISABLE_DCHECK_FOR_NON_OFFICIAL_RELEASE_BUILDS;
 
-  bool success = InitLogging(log_path.value().c_str(),
-                             logging_dest,
-                             log_locking_state,
-                             delete_old_log_file,
-                             dcheck_state);
+  logging::LoggingSettings settings;
+  settings.logging_dest = logging_dest;
+  settings.log_file = log_path.value().c_str();
+  settings.lock_log = log_locking_state;
+  settings.delete_old = delete_old_log_file;
+  settings.dcheck_state = dcheck_state;
+  bool success = logging::InitLogging(settings);
 
 #if defined(OS_CHROMEOS)
   if (!success) {
@@ -381,13 +400,8 @@ void CleanupChromeLogging() {
 base::FilePath GetLogFileName() {
   std::string filename;
   scoped_ptr<base::Environment> env(base::Environment::Create());
-  if (env->GetVar(env_vars::kLogFileName, &filename) && !filename.empty()) {
-#if defined(OS_WIN)
-    return base::FilePath(UTF8ToWide(filename));
-#elif defined(OS_POSIX)
-    return base::FilePath(filename);
-#endif
-  }
+  if (env->GetVar(env_vars::kLogFileName, &filename) && !filename.empty())
+    return base::FilePath::FromUTF8Unsafe(filename);
 
   const base::FilePath log_filename(FILE_PATH_LITERAL("chrome_debug.log"));
   base::FilePath log_path;

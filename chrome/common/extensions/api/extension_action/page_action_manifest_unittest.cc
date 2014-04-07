@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 #include "chrome/common/extensions/api/extension_action/action_info.h"
-#include "chrome/common/extensions/api/extension_action/page_action_handler.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_manifest_constants.h"
 #include "chrome/common/extensions/manifest_tests/extension_manifest_test.h"
@@ -17,11 +16,6 @@ namespace extensions {
 
 class PageActionManifestTest : public ExtensionManifestTest {
  protected:
-  virtual void SetUp() OVERRIDE {
-    ExtensionManifestTest::SetUp();
-    (new PageActionHandler)->Register();
-  }
-
   virtual const char* test_data_dir() OVERRIDE {
     return "page_action";
   }
@@ -33,7 +27,8 @@ scoped_ptr<ActionInfo> PageActionManifestTest::LoadAction(
     const std::string& manifest_filename) {
   scoped_refptr<Extension> extension = LoadAndExpectSuccess(
       manifest_filename.c_str());
-  const ActionInfo* page_action_info = ActionInfo::GetPageActionInfo(extension);
+  const ActionInfo* page_action_info =
+      ActionInfo::GetPageActionInfo(extension.get());
   EXPECT_TRUE(page_action_info);
   if (page_action_info) {
     return make_scoped_ptr(new ActionInfo(*page_action_info));
@@ -46,8 +41,9 @@ scoped_ptr<ActionInfo> PageActionManifestTest::LoadAction(
 TEST_F(PageActionManifestTest, ManifestVersion2) {
   scoped_refptr<Extension> extension(
       LoadAndExpectSuccess("page_action_manifest_version_2.json"));
-  ASSERT_TRUE(extension);
-  const ActionInfo* page_action_info = ActionInfo::GetPageActionInfo(extension);
+  ASSERT_TRUE(extension.get());
+  const ActionInfo* page_action_info =
+      ActionInfo::GetPageActionInfo(extension.get());
   ASSERT_TRUE(page_action_info);
 
   EXPECT_EQ("", page_action_info->id);
@@ -127,7 +123,8 @@ TEST_F(PageActionManifestTest, LoadPageActionHelper) {
   // Only use "popup", expect success.
   scoped_refptr<Extension> extension =
       LoadAndExpectSuccess("page_action_popup.json");
-  const ActionInfo* extension_action = ActionInfo::GetPageActionInfo(extension);
+  const ActionInfo* extension_action =
+      ActionInfo::GetPageActionInfo(extension.get());
   ASSERT_TRUE(extension_action);
   ASSERT_STREQ(
       extension->url().Resolve(kPopupHtmlFile).spec().c_str(),
@@ -142,7 +139,7 @@ TEST_F(PageActionManifestTest, LoadPageActionHelper) {
 
   // Use only "default_popup", expect success.
   extension = LoadAndExpectSuccess("page_action_popup.json");
-  extension_action = ActionInfo::GetPageActionInfo(extension);
+  extension_action = ActionInfo::GetPageActionInfo(extension.get());
   ASSERT_TRUE(extension_action);
   ASSERT_STREQ(
       extension->url().Resolve(kPopupHtmlFile).spec().c_str(),

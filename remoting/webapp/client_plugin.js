@@ -31,7 +31,9 @@ remoting.ClientPlugin.prototype.onConnectionStatusUpdateHandler;
 remoting.ClientPlugin.prototype.onConnectionReadyHandler;
 /** @type {function(): void} Desktop size change callback. */
 remoting.ClientPlugin.prototype.onDesktopSizeUpdateHandler;
-/** @type {function(): void} Request a PIN from the user. */
+/** @type {function(!Array.<string>): void} Capabilities negotiated callback. */
+remoting.ClientPlugin.prototype.onSetCapabilitiesHandler;
+/** @type {function(boolean): void} Request a PIN from the user. */
 remoting.ClientPlugin.prototype.fetchPinHandler;
 
 /**
@@ -63,7 +65,10 @@ remoting.ClientPlugin.Feature = {
   PAUSE_AUDIO: 'pauseAudio',
   REMAP_KEY: 'remapKey',
   SEND_CLIPBOARD_ITEM: 'sendClipboardItem',
-  TRAP_KEY: 'trapKey'
+  THIRD_PARTY_AUTH: 'thirdPartyAuth',
+  TRAP_KEY: 'trapKey',
+  PINLESS_AUTH: 'pinlessAuth',
+  EXTENSION_MESSAGE: 'extensionMessage'
 };
 
 /**
@@ -99,10 +104,15 @@ remoting.ClientPlugin.prototype.onIncomingIq = function(iq) {};
  *     authentication methods the client should attempt to use.
  * @param {string} authenticationTag A host-specific tag to mix into
  *     authentication hashes.
+ * @param {string} clientPairingId For paired Me2Me connections, the
+ *     pairing id for this client, as issued by the host.
+ * @param {string} clientPairedSecret For paired Me2Me connections, the
+ *     paired secret for this client, as issued by the host.
  */
 remoting.ClientPlugin.prototype.connect = function(
     hostJid, hostPublicKey, localJid, sharedSecret,
-    authenticationMethods, authenticationTag) {};
+    authenticationMethods, authenticationTag,
+    clientPairingId, clientPairedSecret) {};
 
 /**
  * Release all currently pressed keys.
@@ -187,3 +197,22 @@ remoting.ClientPlugin.prototype.onPinFetched = function(pin) {};
  * Tells the plugin to ask for the PIN asynchronously.
  */
 remoting.ClientPlugin.prototype.useAsyncPinDialog = function() {};
+
+/**
+ * Sets the third party authentication token and shared secret.
+ *
+ * @param {string} token The token received from the token URL.
+ * @param {string} sharedSecret Shared secret received from the token URL.
+ */
+remoting.ClientPlugin.prototype.onThirdPartyTokenFetched =
+    function(token, sharedSecret) {};
+
+/**
+ * Request pairing with the host for PIN-less authentication.
+ *
+ * @param {string} clientName The human-readable name of the client.
+ * @param {function(string, string):void} onDone, Callback to receive the
+ *     client id and shared secret when they are available.
+ */
+remoting.ClientPlugin.prototype.requestPairing = function(
+    clientName, onDone) {};

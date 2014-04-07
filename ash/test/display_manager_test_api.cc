@@ -27,11 +27,12 @@ std::vector<DisplayInfo> CreateDisplayInfoListFromString(
   std::vector<DisplayInfo> display_info_list;
   std::vector<std::string> parts;
   base::SplitString(specs, ',', &parts);
-  int index = 0;
+  size_t index = 0;
   for (std::vector<std::string>::const_iterator iter = parts.begin();
        iter != parts.end(); ++iter, ++index) {
-    gfx::Display* display = display_manager->GetDisplayAt(index);
-    int64 id = display ? display->id() : gfx::Display::kInvalidDisplayID;
+    int64 id = index < display_manager->GetNumDisplays() ?
+        display_manager->GetDisplayAt(index).id() :
+        gfx::Display::kInvalidDisplayID;
     display_info_list.push_back(
         DisplayInfo::CreateFromSpecWithID(*iter, id));
   }
@@ -84,8 +85,6 @@ void DisplayManagerTestApi::UpdateDisplay(
 int64 DisplayManagerTestApi::SetFirstDisplayAsInternalDisplay() {
   const gfx::Display& internal = display_manager_->displays_[0];
   gfx::Display::SetInternalDisplayId(internal.id());
-  display_manager_->internal_display_info_.reset(new DisplayInfo(
-      display_manager_->GetDisplayInfo(internal.id())));
   return gfx::Display::InternalDisplayId();
 }
 

@@ -35,8 +35,8 @@ namespace {
 
 class TestTarget : public ui::AcceleratorTarget {
  public:
-  TestTarget() : accelerator_pressed_count_(0) {};
-  virtual ~TestTarget() {};
+  TestTarget() : accelerator_pressed_count_(0) {}
+  virtual ~TestTarget() {}
 
   int accelerator_pressed_count() const {
     return accelerator_pressed_count_;
@@ -118,18 +118,6 @@ class DummyVolumeControlDelegate : public VolumeControlDelegate {
     ++handle_volume_up_count_;
     last_accelerator_ = accelerator;
     return consume_;
-  }
-  virtual void SetVolumePercent(double percent) OVERRIDE {
-  }
-  virtual bool IsAudioMuted() const OVERRIDE {
-    return false;
-  }
-  virtual void SetAudioMuted(bool muted) OVERRIDE {
-  }
-  virtual float GetVolumeLevel() const OVERRIDE {
-    return 0.0;
-  }
-  virtual void SetVolumeLevel(float level) OVERRIDE {
   }
 
   int handle_volume_mute_count() const {
@@ -214,8 +202,9 @@ class DummyImeControlDelegate : public ImeControlDelegate {
     ++handle_next_ime_count_;
     return consume_;
   }
-  virtual bool HandlePreviousIme() OVERRIDE {
+  virtual bool HandlePreviousIme(const ui::Accelerator& accelerator) OVERRIDE {
     ++handle_previous_ime_count_;
+    last_accelerator_ = accelerator;
     return consume_;
   }
   virtual bool HandleSwitchIme(const ui::Accelerator& accelerator) OVERRIDE {
@@ -309,8 +298,8 @@ bool TestTarget::CanHandleAccelerators() const {
 
 class AcceleratorControllerTest : public test::AshTestBase {
  public:
-  AcceleratorControllerTest() {};
-  virtual ~AcceleratorControllerTest() {};
+  AcceleratorControllerTest() {}
+  virtual ~AcceleratorControllerTest() {}
 
  protected:
   void EnableInternalDisplay() {
@@ -320,6 +309,26 @@ class AcceleratorControllerTest : public test::AshTestBase {
 
   static AcceleratorController* GetController();
   static bool ProcessWithContext(const ui::Accelerator& accelerator);
+
+  // Several functions to access ExitWarningHandler (as friend).
+  static void StubForTest(ExitWarningHandler* ewh) {
+    ewh->stub_timer_for_test_ = true;
+  }
+  static void Reset(ExitWarningHandler* ewh) {
+    ewh->state_ = ExitWarningHandler::IDLE;
+  }
+  static void SimulateTimerExpired(ExitWarningHandler* ewh) {
+    ewh->TimerAction();
+  }
+  static bool is_ui_shown(ExitWarningHandler* ewh) {
+    return !!ewh->widget_;
+  }
+  static bool is_idle(ExitWarningHandler* ewh) {
+    return ewh->state_ == ExitWarningHandler::IDLE;
+  }
+  static bool is_exiting(ExitWarningHandler* ewh) {
+    return ewh->state_ == ExitWarningHandler::EXITING;
+  }
 
  private:
   DISALLOW_COPY_AND_ASSIGN(AcceleratorControllerTest);
@@ -335,6 +344,64 @@ bool AcceleratorControllerTest::ProcessWithContext(
   controller->context()->UpdateContext(accelerator);
   return controller->Process(accelerator);
 }
+
+#if !defined(OS_WIN)
+// Double press of exit shortcut => exiting
+TEST_F(AcceleratorControllerTest, ExitWarningHandlerTestDoublePress) {
+  ui::Accelerator press(ui::VKEY_Q, ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN);
+  ui::Accelerator release(press);
+  release.set_type(ui::ET_KEY_RELEASED);
+  ExitWarningHandler* ewh = GetController()->GetExitWarningHandlerForTest();
+  ASSERT_TRUE(!!ewh);
+  StubForTest(ewh);
+  EXPECT_TRUE(is_idle(ewh));
+  EXPECT_FALSE(is_ui_shown(ewh));
+  EXPECT_TRUE(ProcessWithContext(press));
+  EXPECT_FALSE(ProcessWithContext(release));
+  EXPECT_FALSE(is_idle(ewh));
+  EXPECT_TRUE(is_ui_shown(ewh));
+  EXPECT_TRUE(ProcessWithContext(press));  // second press before timer.
+  EXPECT_FALSE(ProcessWithContext(release));
+  SimulateTimerExpired(ewh);
+  EXPECT_TRUE(is_exiting(ewh));
+  EXPECT_FALSE(is_ui_shown(ewh));
+  Reset(ewh);
+}
+
+// Single press of exit shortcut before timer => idle
+TEST_F(AcceleratorControllerTest, ExitWarningHandlerTestSinglePress) {
+  ui::Accelerator press(ui::VKEY_Q, ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN);
+  ui::Accelerator release(press);
+  release.set_type(ui::ET_KEY_RELEASED);
+  ExitWarningHandler* ewh = GetController()->GetExitWarningHandlerForTest();
+  ASSERT_TRUE(!!ewh);
+  StubForTest(ewh);
+  EXPECT_TRUE(is_idle(ewh));
+  EXPECT_FALSE(is_ui_shown(ewh));
+  EXPECT_TRUE(ProcessWithContext(press));
+  EXPECT_FALSE(ProcessWithContext(release));
+  EXPECT_FALSE(is_idle(ewh));
+  EXPECT_TRUE(is_ui_shown(ewh));
+  SimulateTimerExpired(ewh);
+  EXPECT_TRUE(is_idle(ewh));
+  EXPECT_FALSE(is_ui_shown(ewh));
+  Reset(ewh);
+}
+
+// Shutdown ash with exit warning bubble open should not crash.
+TEST_F(AcceleratorControllerTest, LingeringExitWarningBubble) {
+  ExitWarningHandler* ewh = GetController()->GetExitWarningHandlerForTest();
+  ASSERT_TRUE(!!ewh);
+  StubForTest(ewh);
+
+  // Trigger once to show the bubble.
+  ewh->HandleAccelerator();
+  EXPECT_FALSE(is_idle(ewh));
+  EXPECT_TRUE(is_ui_shown(ewh));
+
+  // Exit ash and there should be no crash
+}
+#endif  // !defined(OS_WIN)
 
 TEST_F(AcceleratorControllerTest, Register) {
   const ui::Accelerator accelerator_a(ui::VKEY_A, ui::EF_NONE);
@@ -855,13 +922,24 @@ TEST_F(AcceleratorControllerTest, GlobalAccelerators) {
   // ToggleDesktopFullScreen (not implemented yet on Linux)
   EXPECT_TRUE(ProcessWithContext(
       ui::Accelerator(ui::VKEY_F11, ui::EF_CONTROL_DOWN)));
-#endif //  OS_LINUX
-#endif //  !NDEBUG
+#endif  // OS_LINUX
+#endif  // !NDEBUG
 
 #if !defined(OS_WIN)
   // Exit
+  ExitWarningHandler* ewh = GetController()->GetExitWarningHandlerForTest();
+  ASSERT_TRUE(!!ewh);
+  StubForTest(ewh);
+  EXPECT_TRUE(is_idle(ewh));
+  EXPECT_FALSE(is_ui_shown(ewh));
   EXPECT_TRUE(ProcessWithContext(
       ui::Accelerator(ui::VKEY_Q, ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN)));
+  EXPECT_FALSE(is_idle(ewh));
+  EXPECT_TRUE(is_ui_shown(ewh));
+  SimulateTimerExpired(ewh);
+  EXPECT_TRUE(is_idle(ewh));
+  EXPECT_FALSE(is_ui_shown(ewh));
+  Reset(ewh);
 #endif
 
   // New tab
@@ -1108,26 +1186,38 @@ TEST_F(AcceleratorControllerTest, ReservedAccelerators) {
 
 #if defined(OS_CHROMEOS)
 TEST_F(AcceleratorControllerTest, DisallowedAtModalWindow) {
-  std::set<AcceleratorAction> allActions;
+  std::set<AcceleratorAction> all_actions;
   for (size_t i = 0 ; i < kAcceleratorDataLength; ++i)
-    allActions.insert(kAcceleratorData[i].action);
+    all_actions.insert(kAcceleratorData[i].action);
+#if !defined(NDEBUG)
+  std::set<AcceleratorAction> all_desktop_actions;
+  for (size_t i = 0 ; i < kDesktopAcceleratorDataLength; ++i)
+    all_desktop_actions.insert(kDesktopAcceleratorData[i].action);
+#endif
+
   std::set<AcceleratorAction> actionsAllowedAtModalWindow;
   for (size_t k = 0 ; k < kActionsAllowedAtModalWindowLength; ++k)
     actionsAllowedAtModalWindow.insert(kActionsAllowedAtModalWindow[k]);
   for (std::set<AcceleratorAction>::const_iterator it =
            actionsAllowedAtModalWindow.begin();
        it != actionsAllowedAtModalWindow.end(); ++it) {
-    EXPECT_FALSE(allActions.find(*it) == allActions.end())
+    EXPECT_TRUE(all_actions.find(*it) != all_actions.end()
+
+#if !defined(NDEBUG)
+                || all_desktop_actions.find(*it) != all_desktop_actions.end()
+#endif
+                )
         << " action from kActionsAllowedAtModalWindow"
-        << " not found in kAcceleratorData. action: " << *it;
+        << " not found in kAcceleratorData or kDesktopAcceleratorData. "
+        << "action: " << *it;
   }
   scoped_ptr<aura::Window> window(
       CreateTestWindowInShellWithBounds(gfx::Rect(5, 5, 20, 20)));
   const ui::Accelerator dummy;
   wm::ActivateWindow(window.get());
   Shell::GetInstance()->SimulateModalWindowOpenForTesting(true);
-  for (std::set<AcceleratorAction>::const_iterator it = allActions.begin();
-       it != allActions.end(); ++it) {
+  for (std::set<AcceleratorAction>::const_iterator it = all_actions.begin();
+       it != all_actions.end(); ++it) {
     if (actionsAllowedAtModalWindow.find(*it) ==
         actionsAllowedAtModalWindow.end()) {
       EXPECT_TRUE(GetController()->PerformAction(*it, dummy))
@@ -1158,7 +1248,7 @@ TEST_F(AcceleratorControllerTest, DisallowedAtModalWindow) {
     EXPECT_EQ(2, delegate->handle_take_screenshot_count());
     EXPECT_TRUE(ProcessWithContext(
         ui::Accelerator(ui::VKEY_MEDIA_LAUNCH_APP1,
- ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN)));
+        ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN)));
     EXPECT_EQ(2, delegate->handle_take_screenshot_count());
   }
   // Brightness

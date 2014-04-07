@@ -6,7 +6,7 @@
 
 #include "base/callback.h"
 #include "base/compiler_specific.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "net/base/load_timing_info.h"
 #include "net/base/load_timing_info_test_util.h"
 #include "net/base/net_errors.h"
@@ -66,8 +66,8 @@ class SOCKSClientSocketPoolTest : public testing::Test {
 
    private:
     scoped_ptr<StaticSocketDataProvider> data_;
-    scoped_array<MockWrite> writes_;
-    scoped_array<MockRead> reads_;
+    scoped_ptr<MockWrite[]> writes_;
+    scoped_ptr<MockRead[]> reads_;
   };
 
   SOCKSClientSocketPoolTest()
@@ -242,7 +242,7 @@ TEST_F(SOCKSClientSocketPoolTest, CancelDuringTransportConnect) {
   EXPECT_EQ(0, transport_socket_pool_.cancel_count());
 
   // Now wait for the TCP sockets to connect.
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
 
   EXPECT_EQ(ClientSocketPoolTest::kRequestNotFound, GetOrderOfRequest(1));
   EXPECT_EQ(ClientSocketPoolTest::kRequestNotFound, GetOrderOfRequest(2));
@@ -278,7 +278,7 @@ TEST_F(SOCKSClientSocketPoolTest, CancelDuringSOCKSConnect) {
   EXPECT_EQ(0, transport_socket_pool_.release_count());
 
   // Now wait for the async data to reach the SOCKS connect jobs.
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
 
   EXPECT_EQ(ClientSocketPoolTest::kRequestNotFound, GetOrderOfRequest(1));
   EXPECT_EQ(ClientSocketPoolTest::kRequestNotFound, GetOrderOfRequest(2));

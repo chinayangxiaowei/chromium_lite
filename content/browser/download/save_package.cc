@@ -11,13 +11,13 @@
 #include "base/files/file_path.h"
 #include "base/i18n/file_util_icu.h"
 #include "base/logging.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/stl_util.h"
-#include "base/string_piece.h"
+#include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
-#include "base/sys_string_conversions.h"
+#include "base/strings/sys_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread.h"
-#include "base/utf_string_conversions.h"
 #include "content/browser/download/download_item_impl.h"
 #include "content/browser/download/download_manager_impl.h"
 #include "content/browser/download/download_stats.h"
@@ -43,7 +43,7 @@
 #include "net/base/mime_util.h"
 #include "net/base/net_util.h"
 #include "net/url_request/url_request_context.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebPageSerializerClient.h"
+#include "third_party/WebKit/public/web/WebPageSerializerClient.h"
 
 using base::Time;
 using WebKit::WebPageSerializerClient;
@@ -297,6 +297,7 @@ void SavePackage::InternalInit() {
 
 bool SavePackage::Init(
     const SavePackageDownloadCreatedCallback& download_created_callback) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   // Set proper running state.
   if (wait_state_ != INITIALIZE)
     return false;
@@ -313,13 +314,24 @@ bool SavePackage::Init(
   scoped_ptr<DownloadRequestHandleInterface> request_handle(
       new SavePackageRequestHandle(AsWeakPtr()));
   // The download manager keeps ownership but adds us as an observer.
-  download_ = download_manager_->CreateSavePackageDownloadItem(
+  download_manager_->CreateSavePackageDownloadItem(
       saved_main_file_path_,
       page_url_,
       ((save_type_ == SAVE_PAGE_TYPE_AS_MHTML) ?
        "multipart/related" : "text/html"),
       request_handle.Pass(),
-      this);
+      base::Bind(&SavePackage::InitWithDownloadItem, AsWeakPtr(),
+                 download_created_callback));
+  return true;
+}
+
+void SavePackage::InitWithDownloadItem(
+    const SavePackageDownloadCreatedCallback& download_created_callback,
+    DownloadItemImpl* item) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  DCHECK(item);
+  download_ = item;
+  download_->AddObserver(this);
   // Confirm above didn't delete the tab out from under us.
   if (!download_created_callback.is_null())
     download_created_callback.Run(download_);
@@ -349,8 +361,6 @@ bool SavePackage::Init(
 
     DoSavingProcess();
   }
-
-  return true;
 }
 
 void SavePackage::OnMHTMLGenerated(const base::FilePath& path, int64 size) {
@@ -363,9 +373,9 @@ void SavePackage::OnMHTMLGenerated(const base::FilePath& path, int64 size) {
   // Hack to avoid touching download_ after user cancel.
   // TODO(rdsmith/benjhayden): Integrate canceling on DownloadItem
   // with SavePackage flow.
-  if (download_->IsInProgress()) {
+  if (download_->GetState() == DownloadItem::IN_PROGRESS) {
     download_->SetTotalBytes(size);
-    download_->UpdateProgress(size, 0, "");
+    download_->DestinationUpdate(size, 0, std::string());
     // Must call OnAllDataSaved here in order for
     // GDataDownloadObserver::ShouldUpload() to return true.
     // ShouldCompleteDownload() may depend on the gdata uploader to finish.
@@ -424,7 +434,7 @@ bool SavePackage::GetSafePureFileName(
                                           dir_path.value().length() -
                                           file_name_ext.length());
   // Need an extra space for the separator.
-  if (!file_util::EndsWithSeparator(dir_path))
+  if (!dir_path.EndsWithSeparator())
     --available_length;
 
   // Plenty of room.
@@ -449,7 +459,11 @@ bool SavePackage::GenerateFileName(const std::string& disposition,
                                    base::FilePath::StringType* generated_name) {
   // TODO(jungshik): Figure out the referrer charset when having one
   // makes sense and pass it to GenerateFileName.
-  base::FilePath file_path = net::GenerateFileName(url, disposition, "", "", "",
+  base::FilePath file_path = net::GenerateFileName(url,
+                                                   disposition,
+                                                   std::string(),
+                                                   std::string(),
+                                                   std::string(),
                                                    kDefaultSaveName);
 
   DCHECK(!file_path.empty());
@@ -786,9 +800,10 @@ void SavePackage::Finish() {
     // Hack to avoid touching download_ after user cancel.
     // TODO(rdsmith/benjhayden): Integrate canceling on DownloadItem
     // with SavePackage flow.
-    if (download_->IsInProgress()) {
+    if (download_->GetState() == DownloadItem::IN_PROGRESS) {
       if (save_type_ != SAVE_PAGE_TYPE_AS_MHTML) {
-        download_->UpdateProgress(all_save_items_count_, CurrentSpeed(), "");
+        download_->DestinationUpdate(
+            all_save_items_count_, CurrentSpeed(), std::string());
         download_->OnAllDataSaved(DownloadItem::kEmptyFileHash);
       }
       download_->MarkAsComplete();
@@ -817,8 +832,10 @@ void SavePackage::SaveFinished(int32 save_id, int64 size, bool is_success) {
   // Hack to avoid touching download_ after user cancel.
   // TODO(rdsmith/benjhayden): Integrate canceling on DownloadItem
   // with SavePackage flow.
-  if (download_ && download_->IsInProgress())
-    download_->UpdateProgress(completed_count(), CurrentSpeed(), "");
+  if (download_ && (download_->GetState() == DownloadItem::IN_PROGRESS)) {
+    download_->DestinationUpdate(
+        completed_count(), CurrentSpeed(), std::string());
+  }
 
   if (save_item->save_source() == SaveFileCreateInfo::SAVE_FILE_FROM_DOM &&
       save_item->url() == page_url_ && !save_item->received_bytes()) {
@@ -862,8 +879,10 @@ void SavePackage::SaveFailed(const GURL& save_url) {
   // Hack to avoid touching download_ after user cancel.
   // TODO(rdsmith/benjhayden): Integrate canceling on DownloadItem
   // with SavePackage flow.
-  if (download_ && download_->IsInProgress())
-    download_->UpdateProgress(completed_count(), CurrentSpeed(), "");
+  if (download_ && (download_->GetState() == DownloadItem::IN_PROGRESS)) {
+    download_->DestinationUpdate(
+        completed_count(), CurrentSpeed(), std::string());
+  }
 
   if ((save_type_ == SAVE_PAGE_TYPE_AS_ONLY_HTML) ||
       (save_type_ == SAVE_PAGE_TYPE_AS_MHTML) ||
@@ -1155,7 +1174,7 @@ void SavePackage::OnReceivedSavableResourceLinksForCurrentPage(
   // Hack to avoid touching download_ after user cancel.
   // TODO(rdsmith/benjhayden): Integrate canceling on DownloadItem
   // with SavePackage flow.
-  if (download_ && download_->IsInProgress())
+  if (download_ && (download_->GetState() == DownloadItem::IN_PROGRESS))
     download_->SetTotalBytes(all_save_items_count_);
 
   if (all_save_items_count_) {
@@ -1299,7 +1318,7 @@ void SavePackage::GetSaveInfo() {
   // Can't use web_contents_ in the file thread, so get the data that we need
   // before calling to it.
   base::FilePath website_save_dir, download_save_dir;
-  bool skip_dir_check;
+  bool skip_dir_check = false;
   DCHECK(download_manager_);
   if (download_manager_->GetDelegate()) {
     download_manager_->GetDelegate()->GetSaveDir(
@@ -1327,9 +1346,9 @@ void SavePackage::CreateDirectoryOnFileThread(
   base::FilePath save_dir;
   // If the default html/websites save folder doesn't exist...
   // We skip the directory check for gdata directories on ChromeOS.
-  if (!skip_dir_check && !file_util::DirectoryExists(website_save_dir)) {
+  if (!skip_dir_check && !base::DirectoryExists(website_save_dir)) {
     // If the default download dir doesn't exist, create it.
-    if (!file_util::DirectoryExists(download_save_dir)) {
+    if (!base::DirectoryExists(download_save_dir)) {
       bool res = file_util::CreateDirectory(download_save_dir);
       DCHECK(res);
     }

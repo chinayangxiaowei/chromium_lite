@@ -6,6 +6,7 @@
 
 #include "base/run_loop.h"
 #include "ui/base/clipboard/clipboard.h"
+#include "ui/base/ime/input_method_initializer.h"
 
 #if defined(USE_AURA)
 #include "ui/aura/env.h"
@@ -36,6 +37,7 @@ void ViewsTestBase::SetUp() {
   aura_test_helper_.reset(new aura::test::AuraTestHelper(&message_loop_));
   aura_test_helper_->SetUp();
 #endif  // USE_AURA
+  ui::InitializeInputMethodForTesting();
 }
 
 void ViewsTestBase::TearDown() {
@@ -47,6 +49,7 @@ void ViewsTestBase::TearDown() {
   teardown_called_ = true;
   views_delegate_.reset();
   testing::Test::TearDown();
+  ui::ShutdownInputMethodForTesting();
 #if defined(USE_AURA)
   aura_test_helper_->TearDown();
 #endif

@@ -24,17 +24,17 @@ QuadCuller::QuadCuller(QuadList* quad_list,
                        bool for_surface)
     : quad_list_(quad_list),
       shared_quad_state_list_(shared_quad_state_list),
-      current_shared_quad_state_(NULL),
       layer_(layer),
       occlusion_tracker_(occlusion_tracker),
+      current_shared_quad_state_(NULL),
       show_culling_with_debug_border_quads_(
           show_culling_with_debug_border_quads),
       for_surface_(for_surface) {}
 
 SharedQuadState* QuadCuller::UseSharedQuadState(
     scoped_ptr<SharedQuadState> shared_quad_state) {
-  // FIXME: If all quads are culled for the shared_quad_state, we can drop it
-  // from the list.
+  // TODO(danakj): If all quads are culled for the shared_quad_state, we can
+  // drop it from the list.
   current_shared_quad_state_ = shared_quad_state.get();
   shared_quad_state_list_->push_back(shared_quad_state.Pass());
   return current_shared_quad_state_;
@@ -104,7 +104,7 @@ bool QuadCuller::Append(scoped_ptr<DrawQuad> draw_quad,
         &has_occlusion_from_outside_target_surface);
   }
 
-  append_quads_data->hadOcclusionFromOutsideTargetSurface |=
+  append_quads_data->had_occlusion_from_outside_target_surface |=
       has_occlusion_from_outside_target_surface;
 
   return AppendQuadInternal(draw_quad.Pass(),

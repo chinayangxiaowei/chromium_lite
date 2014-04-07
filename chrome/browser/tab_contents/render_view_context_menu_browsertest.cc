@@ -5,16 +5,15 @@
 #include <string>
 
 #include "base/memory/scoped_ptr.h"
-#include "base/string16.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string16.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/tab_contents/render_view_context_menu.h"
 #include "chrome/browser/tab_contents/render_view_context_menu_browsertest_util.h"
 #include "chrome/browser/tab_contents/render_view_context_menu_test_util.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/navigation_controller.h"
@@ -24,13 +23,8 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_view.h"
 #include "content/public/test/browser_test_utils.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebContextMenuData.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebInputEvent.h"
-#include "ui/base/clipboard/clipboard.h"
-
-#if defined(OS_MACOSX)
-#include "base/mac/scoped_nsautorelease_pool.h"
-#endif
+#include "third_party/WebKit/public/web/WebContextMenuData.h"
+#include "third_party/WebKit/public/web/WebInputEvent.h"
 
 using content::WebContents;
 
@@ -127,43 +121,107 @@ IN_PROC_BROWSER_TEST_F(ContextMenuBrowserTest,
   EXPECT_EQ(GURL("about:blank"), tab->GetURL());
 }
 
-// Copy link from Incognito window, close window, check the clipboard.
-IN_PROC_BROWSER_TEST_F(ContextMenuBrowserTest, CopyLinkFromIncognito) {
-  EXPECT_FALSE(browser()->profile()->IsOffTheRecord());
-  Browser* browser_incognito = CreateIncognitoBrowser();
+// Verify that "Open Link in New Tab" doesn't send URL fragment as referrer.
+IN_PROC_BROWSER_TEST_F(ContextMenuBrowserTest, OpenInNewTabReferrer) {
+  ui_test_utils::WindowedTabAddedNotificationObserver tab_observer(
+      content::NotificationService::AllSources());
 
-  // Copy link URL.
-  string16 url(ASCIIToUTF16("http://google.com/"));
+  ASSERT_TRUE(test_server()->Start());
+  GURL echoheader(test_server()->GetURL("echoheader?Referer"));
+
+  // Go to a |page| with a link to echoheader URL.
+  GURL page("data:text/html,<a href='" + echoheader.spec() + "'>link</a>");
+  ui_test_utils::NavigateToURL(browser(), page);
+
+  // Set up referrer URL with fragment.
+  const GURL kReferrerWithFragment("http://foo.com/test#fragment");
+  const std::string kCorrectReferrer("http://foo.com/test");
+
+  // Set up menu with link URL.
   content::ContextMenuParams context_menu_params;
-  context_menu_params.unfiltered_link_url = GURL(url);
+  context_menu_params.page_url = kReferrerWithFragment;
+  context_menu_params.link_url = echoheader;
+
+  // Select "Open Link in New Tab" and wait for the new tab to be added.
   TestRenderViewContextMenu menu(
-      browser_incognito->tab_strip_model()->GetActiveWebContents(),
+      browser()->tab_strip_model()->GetActiveWebContents(),
       context_menu_params);
   menu.Init();
-  menu.ExecuteCommand(IDC_CONTENT_CONTEXT_COPYLINKLOCATION, 0);
+  menu.ExecuteCommand(IDC_CONTENT_CONTEXT_OPENLINKNEWTAB, 0);
 
-  // Check the clipboard.
-  string16 content;
-  ui::Clipboard* clipboard = ui::Clipboard::GetForCurrentThread();
-  clipboard->ReadText(ui::Clipboard::BUFFER_STANDARD, &content);
-  EXPECT_EQ(url, content);
+  tab_observer.Wait();
+  content::WebContents* tab = tab_observer.GetTab();
+  content::WaitForLoadStop(tab);
 
-  // Close incognito window. No more text in the clipboard.
-  content::WindowedNotificationObserver signal(
-      chrome::NOTIFICATION_BROWSER_CLOSED,
-      content::Source<Browser>(browser_incognito));
-  chrome::CloseWindow(browser_incognito);
+  // Verify that it's the correct tab.
+  ASSERT_EQ(echoheader, tab->GetURL());
+  // Verify that the text on the page matches |kCorrectReferrer|.
+  std::string actual_referrer;
+  ASSERT_TRUE(content::ExecuteScriptAndExtractString(
+      tab,
+      "window.domAutomationController.send(window.document.body.textContent);",
+      &actual_referrer));
+  ASSERT_EQ(kCorrectReferrer, actual_referrer);
 
-#if defined(OS_MACOSX)
-  // BrowserWindowController depends on the auto release pool being recycled
-  // in the message loop to delete itself, which frees the Browser object
-  // which fires this event.
-  AutoreleasePool()->Recycle();
-#endif
+  // Verify that the referrer on the page matches |kCorrectReferrer|.
+  std::string page_referrer;
+  ASSERT_TRUE(content::ExecuteScriptAndExtractString(
+      tab,
+      "window.domAutomationController.send(window.document.referrer);",
+      &page_referrer));
+  ASSERT_EQ(kCorrectReferrer, page_referrer);
+}
 
-  signal.Wait();
-  EXPECT_FALSE(clipboard->IsFormatAvailable(
-      ui::Clipboard::GetPlainTextFormatType(), ui::Clipboard::BUFFER_STANDARD));
+// Verify that "Open Link in Incognito Window " doesn't send referrer URL.
+IN_PROC_BROWSER_TEST_F(ContextMenuBrowserTest, OpenIncognitoNoneReferrer) {
+  ui_test_utils::WindowedTabAddedNotificationObserver tab_observer(
+      content::NotificationService::AllSources());
+
+  ASSERT_TRUE(test_server()->Start());
+  GURL echoheader(test_server()->GetURL("echoheader?Referer"));
+
+  // Go to a |page| with a link to echoheader URL.
+  GURL page("data:text/html,<a href='" + echoheader.spec() + "'>link</a>");
+  ui_test_utils::NavigateToURL(browser(), page);
+
+  // Set up referrer URL with fragment.
+  const GURL kReferrerWithFragment("http://foo.com/test#fragment");
+  const std::string kNoneReferrer("None");
+  const std::string kEmptyReferrer("");
+
+  // Set up menu with link URL.
+  content::ContextMenuParams context_menu_params;
+  context_menu_params.page_url = kReferrerWithFragment;
+  context_menu_params.link_url = echoheader;
+
+  // Select "Open Link in Incognito Window" and wait for window to be added.
+  TestRenderViewContextMenu menu(
+      browser()->tab_strip_model()->GetActiveWebContents(),
+      context_menu_params);
+  menu.Init();
+  menu.ExecuteCommand(IDC_CONTENT_CONTEXT_OPENLINKOFFTHERECORD, 0);
+
+  tab_observer.Wait();
+  content::WebContents* tab = tab_observer.GetTab();
+  content::WaitForLoadStop(tab);
+
+  // Verify that it's the correct tab.
+  ASSERT_EQ(echoheader, tab->GetURL());
+  // Verify that the text on the page matches |kNoneReferrer|.
+  std::string actual_referrer;
+  ASSERT_TRUE(content::ExecuteScriptAndExtractString(
+      tab,
+      "window.domAutomationController.send(window.document.body.textContent);",
+      &actual_referrer));
+  ASSERT_EQ(kNoneReferrer, actual_referrer);
+
+  // Verify that the referrer on the page matches |kEmptyReferrer|.
+  std::string page_referrer;
+  ASSERT_TRUE(content::ExecuteScriptAndExtractString(
+      tab,
+      "window.domAutomationController.send(window.document.referrer);",
+      &page_referrer));
+  ASSERT_EQ(kEmptyReferrer, page_referrer);
 }
 
 }  // namespace

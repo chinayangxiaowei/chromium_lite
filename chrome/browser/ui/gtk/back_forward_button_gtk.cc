@@ -7,7 +7,7 @@
 #include <gtk/gtk.h>
 
 #include "base/bind.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
@@ -105,7 +105,7 @@ gboolean BackForwardButtonGtk::OnButtonPress(GtkWidget* widget,
     return FALSE;
 
   y_position_of_last_press_ = static_cast<int>(event->y);
-  MessageLoop::current()->PostDelayedTask(
+  base::MessageLoop::current()->PostDelayedTask(
       FROM_HERE,
       base::Bind(&BackForwardButtonGtk::ShowBackForwardMenu,
                  weak_factory_.GetWeakPtr(),

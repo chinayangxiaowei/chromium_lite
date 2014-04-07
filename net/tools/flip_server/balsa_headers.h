@@ -12,9 +12,9 @@
 #include <utility>
 #include <vector>
 
-#include "base/port.h"
 #include "base/logging.h"
-#include "base/string_piece.h"
+#include "base/port.h"
+#include "base/strings/string_piece.h"
 #include "net/tools/flip_server/balsa_enums.h"
 #include "net/tools/flip_server/string_piece_utils.h"
 
@@ -64,6 +64,7 @@ class BalsaBuffer {
   // BalsaHeaders implementation, yet be testable.
   friend class BalsaBufferTestSpouse;
   friend class BalsaHeaders;
+  friend class BalsaBufferTest;
 
   // The BufferBlock is a structure used internally by the
   // BalsaBuffer class to store the base buffer pointers to

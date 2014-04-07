@@ -7,10 +7,10 @@
 #include "base/bind.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/metrics/histogram.h"
 #include "base/threading/thread_restrictions.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "dbus/bus.h"
 #include "dbus/message.h"
 #include "dbus/object_path.h"
@@ -280,7 +280,7 @@ void ExportedObject::OnMethodCompleted(scoped_ptr<MethodCall> method_call,
 
   if (!response) {
     // Something bad happened in the method call.
-    scoped_ptr<dbus::ErrorResponse> error_response(
+    scoped_ptr<ErrorResponse> error_response(
         ErrorResponse::FromMethodCall(
             method_call.get(),
             DBUS_ERROR_FAILED,

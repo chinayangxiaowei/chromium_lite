@@ -5,7 +5,7 @@
 #include "chromeos/network/device_state.h"
 
 #include "base/logging.h"
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "base/values.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 
@@ -15,7 +15,9 @@ DeviceState::DeviceState(const std::string& path)
     : ManagedState(MANAGED_TYPE_DEVICE, path),
       provider_requires_roaming_(false),
       support_network_scan_(false),
-      scanning_(false) {
+      scanning_(false),
+      sim_lock_enabled_(false),
+      sim_present_(true) {
 }
 
 DeviceState::~DeviceState() {
@@ -23,6 +25,9 @@ DeviceState::~DeviceState() {
 
 bool DeviceState::PropertyChanged(const std::string& key,
                                   const base::Value& value) {
+  // All property values get stored in |properties_|.
+  properties_.SetWithoutPathExpansion(key, value.DeepCopy());
+
   if (ManagedStatePropertyChanged(key, value))
     return true;
   if (key == flimflam::kAddressProperty) {
@@ -34,7 +39,7 @@ bool DeviceState::PropertyChanged(const std::string& key,
   } else if (key == shill::kProviderRequiresRoamingProperty) {
     return GetBooleanValue(key, value, &provider_requires_roaming_);
   } else if (key == flimflam::kHomeProviderProperty) {
-    const DictionaryValue* dict = NULL;
+    const base::DictionaryValue* dict = NULL;
     if (!value.GetAsDictionary(&dict))
       return false;
     std::string home_provider_country;
@@ -56,8 +61,65 @@ bool DeviceState::PropertyChanged(const std::string& key,
                    << home_provider_id_;
     }
     return true;
+  } else if (key == flimflam::kTechnologyFamilyProperty) {
+    return GetStringValue(key, value, &technology_family_);
+  } else if (key == flimflam::kCarrierProperty) {
+    return GetStringValue(key, value, &carrier_);
+  } else if (key == flimflam::kFoundNetworksProperty) {
+    const base::ListValue* list = NULL;
+    if (!value.GetAsList(&list))
+      return false;
+    CellularScanResults parsed_results;
+    if (!network_util::ParseCellularScanResults(*list, &parsed_results))
+      return false;
+    scan_results_.swap(parsed_results);
+    return true;
+  } else if (key == flimflam::kSIMLockStatusProperty) {
+    const base::DictionaryValue* dict = NULL;
+    if (!value.GetAsDictionary(&dict))
+      return false;
+
+    // Return true if at least one of the property values changed.
+    bool property_changed = false;
+    const base::Value* out_value = NULL;
+    if (!dict->GetWithoutPathExpansion(flimflam::kSIMLockRetriesLeftProperty,
+                                       &out_value))
+      return false;
+    if (GetUInt32Value(flimflam::kSIMLockRetriesLeftProperty,
+                       *out_value, &sim_retries_left_))
+      property_changed = true;
+
+    if (!dict->GetWithoutPathExpansion(flimflam::kSIMLockTypeProperty,
+                                       &out_value))
+      return false;
+    if (GetStringValue(flimflam::kSIMLockTypeProperty,
+                       *out_value, &sim_lock_type_))
+      property_changed = true;
+
+    if (!dict->GetWithoutPathExpansion(flimflam::kSIMLockEnabledProperty,
+                                       &out_value))
+      return false;
+    if (GetBooleanValue(flimflam::kSIMLockEnabledProperty,
+                        *out_value, &sim_lock_enabled_))
+      property_changed = true;
+
+    return property_changed;
+  } else if (key == flimflam::kMeidProperty) {
+    return GetStringValue(key, value, &meid_);
+  } else if (key == flimflam::kImeiProperty) {
+    return GetStringValue(key, value, &imei_);
+  } else if (key == flimflam::kIccidProperty) {
+    return GetStringValue(key, value, &iccid_);
+  } else if (key == flimflam::kMdnProperty) {
+    return GetStringValue(key, value, &mdn_);
+  } else if (key == shill::kSIMPresentProperty) {
+    return GetBooleanValue(key, value, &sim_present_);
   }
   return false;
+}
+
+bool DeviceState::IsSimAbsent() const {
+  return technology_family_ == flimflam::kTechnologyFamilyGsm && !sim_present_;
 }
 
 }  // namespace chromeos

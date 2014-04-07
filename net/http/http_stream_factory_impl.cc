@@ -4,9 +4,10 @@
 
 #include "net/http/http_stream_factory_impl.h"
 
-#include "base/string_number_conversions.h"
+#include <string>
+
 #include "base/stl_util.h"
-#include "googleurl/src/gurl.h"
+#include "base/strings/string_number_conversions.h"
 #include "net/base/net_log.h"
 #include "net/base/net_util.h"
 #include "net/http/http_network_session.h"
@@ -17,6 +18,7 @@
 #include "net/http/http_stream_factory_impl_job.h"
 #include "net/http/http_stream_factory_impl_request.h"
 #include "net/spdy/spdy_http_stream.h"
+#include "url/gurl.h"
 
 namespace net {
 
@@ -39,11 +41,13 @@ GURL UpgradeUrlToHttps(const GURL& original_url, int port) {
 
 }  // namespace
 
-HttpStreamFactoryImpl::HttpStreamFactoryImpl(HttpNetworkSession* session)
+HttpStreamFactoryImpl::HttpStreamFactoryImpl(HttpNetworkSession* session,
+                                             bool for_websockets)
     : session_(session),
       http_pipelined_host_pool_(this, NULL,
                                 session_->http_server_properties(),
-                                session_->force_http_pipelining()) {}
+                                session_->force_http_pipelining()),
+      for_websockets_(for_websockets) {}
 
 HttpStreamFactoryImpl::~HttpStreamFactoryImpl() {
   DCHECK(request_map_.empty());
@@ -68,7 +72,48 @@ HttpStreamRequest* HttpStreamFactoryImpl::RequestStream(
     const SSLConfig& proxy_ssl_config,
     HttpStreamRequest::Delegate* delegate,
     const BoundNetLog& net_log) {
-  Request* request = new Request(request_info.url, this, delegate, net_log);
+  DCHECK(!for_websockets_);
+  return RequestStreamInternal(request_info,
+                               priority,
+                               server_ssl_config,
+                               proxy_ssl_config,
+                               delegate,
+                               NULL,
+                               net_log);
+}
+
+HttpStreamRequest* HttpStreamFactoryImpl::RequestWebSocketStream(
+    const HttpRequestInfo& request_info,
+    RequestPriority priority,
+    const SSLConfig& server_ssl_config,
+    const SSLConfig& proxy_ssl_config,
+    HttpStreamRequest::Delegate* delegate,
+    WebSocketStreamBase::Factory* factory,
+    const BoundNetLog& net_log) {
+  DCHECK(for_websockets_);
+  DCHECK(factory);
+  return RequestStreamInternal(request_info,
+                               priority,
+                               server_ssl_config,
+                               proxy_ssl_config,
+                               delegate,
+                               factory,
+                               net_log);
+}
+
+HttpStreamRequest* HttpStreamFactoryImpl::RequestStreamInternal(
+    const HttpRequestInfo& request_info,
+    RequestPriority priority,
+    const SSLConfig& server_ssl_config,
+    const SSLConfig& proxy_ssl_config,
+    HttpStreamRequest::Delegate* delegate,
+    WebSocketStreamBase::Factory* websocket_stream_factory,
+    const BoundNetLog& net_log) {
+  Request* request = new Request(request_info.url,
+                                 this,
+                                 delegate,
+                                 websocket_stream_factory,
+                                 net_log);
 
   GURL alternate_url;
   PortAlternateProtocolPair alternate =
@@ -113,6 +158,7 @@ void HttpStreamFactoryImpl::PreconnectStreams(
     RequestPriority priority,
     const SSLConfig& server_ssl_config,
     const SSLConfig& proxy_ssl_config) {
+  DCHECK(!for_websockets_);
   GURL alternate_url;
   PortAlternateProtocolPair alternate =
       GetAlternateProtocolRequestFor(request_info.url, &alternate_url);
@@ -180,7 +226,8 @@ PortAlternateProtocolPair HttpStreamFactoryImpl::GetAlternateProtocolRequestFor(
     return kNoAlternateProtocol;
 
   origin.set_port(alternate.port);
-  if (alternate.protocol >= NPN_SPDY_2 && alternate.protocol <= NPN_SPDY_3) {
+  if (alternate.protocol >= NPN_SPDY_MINIMUM_VERSION &&
+      alternate.protocol <= NPN_SPDY_MAXIMUM_VERSION) {
     if (!spdy_enabled())
       return kNoAlternateProtocol;
 
@@ -189,16 +236,18 @@ PortAlternateProtocolPair HttpStreamFactoryImpl::GetAlternateProtocolRequestFor(
 
     *alternate_url = UpgradeUrlToHttps(original_url, alternate.port);
   } else {
-    DCHECK_EQ(QUIC_1, alternate.protocol);
+    DCHECK_EQ(QUIC, alternate.protocol);
     if (!session_->params().enable_quic ||
-        !original_url.SchemeIs("http"))
-      return kNoAlternateProtocol;
+        !(original_url.SchemeIs("http") ||
+          session_->params().enable_quic_https)) {
+        return kNoAlternateProtocol;
+    }
     // TODO(rch):  Figure out how to make QUIC iteract with PAC
     // scripts.  By not re-writing the URL, we will query the PAC script
     // for the proxy to use to reach the original URL via TCP.  But
     // the alternate request will be going via UDP to a different port.
     *alternate_url = original_url;
-   }
+  }
   return alternate;
 }
 
@@ -213,8 +262,8 @@ void HttpStreamFactoryImpl::OrphanJob(Job* job, const Request* request) {
   job->Orphan(request);
 }
 
-void HttpStreamFactoryImpl::OnSpdySessionReady(
-    scoped_refptr<SpdySession> spdy_session,
+void HttpStreamFactoryImpl::OnNewSpdySessionReady(
+    const base::WeakPtr<SpdySession>& spdy_session,
     bool direct,
     const SSLConfig& used_ssl_config,
     const ProxyInfo& used_proxy_info,
@@ -222,15 +271,16 @@ void HttpStreamFactoryImpl::OnSpdySessionReady(
     NextProto protocol_negotiated,
     bool using_spdy,
     const BoundNetLog& net_log) {
-  const HostPortProxyPair& spdy_session_key =
-      spdy_session->host_port_proxy_pair();
-  while (!spdy_session->IsClosed()) {
-    // Each iteration may empty out the RequestSet for |spdy_session_key_ in
+  while (true) {
+    if (!spdy_session)
+      break;
+    const SpdySessionKey& spdy_session_key = spdy_session->spdy_session_key();
+    // Each iteration may empty out the RequestSet for |spdy_session_key| in
     // |spdy_session_request_map_|. So each time, check for RequestSet and use
     // the first one.
     //
     // TODO(willchan): If it's important, switch RequestSet out for a FIFO
-    // pqueue (Order by priority first, then FIFO within same priority). Unclear
+    // queue (Order by priority first, then FIFO within same priority). Unclear
     // that it matters here.
     if (!ContainsKey(spdy_session_request_map_, spdy_session_key))
       break;
@@ -239,9 +289,24 @@ void HttpStreamFactoryImpl::OnSpdySessionReady(
                       protocol_negotiated,
                       using_spdy,
                       net_log);
-    bool use_relative_url = direct || request->url().SchemeIs("https");
-    request->OnStreamReady(NULL, used_ssl_config, used_proxy_info,
-                           new SpdyHttpStream(spdy_session, use_relative_url));
+    if (for_websockets_) {
+      WebSocketStreamBase::Factory* factory =
+          request->websocket_stream_factory();
+      DCHECK(factory);
+      bool use_relative_url = direct || request->url().SchemeIs("wss");
+      request->OnWebSocketStreamReady(
+          NULL,
+          used_ssl_config,
+          used_proxy_info,
+          factory->CreateSpdyStream(spdy_session, use_relative_url));
+    } else {
+      bool use_relative_url = direct || request->url().SchemeIs("https");
+      request->OnStreamReady(
+          NULL,
+          used_ssl_config,
+          used_proxy_info,
+          new SpdyHttpStream(spdy_session, use_relative_url));
+    }
   }
   // TODO(mbelshe): Alert other valid requests.
 }

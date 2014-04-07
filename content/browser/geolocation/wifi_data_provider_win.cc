@@ -28,7 +28,7 @@
 #include <wlanapi.h>
 
 #include "base/metrics/histogram.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/win/windows_version.h"
 #include "content/browser/geolocation/wifi_data_provider_common.h"
 #include "content/browser/geolocation/wifi_data_provider_common_win.h"
@@ -618,7 +618,7 @@ bool GetSystemDirectory(string16* path) {
   if (buffer_size == 0) {
     return false;
   }
-  scoped_array<char16> buffer(new char16[buffer_size]);
+  scoped_ptr<char16[]> buffer(new char16[buffer_size]);
 
   // Return value excludes terminating NULL.
   int characters_written = ::GetSystemDirectory(buffer.get(), buffer_size);

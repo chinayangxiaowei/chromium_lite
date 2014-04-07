@@ -5,7 +5,7 @@
 #include "ui/base/ime/fake_input_method.h"
 
 #include "base/logging.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "ui/base/events/event.h"
 #include "ui/base/events/event_constants.h"
 #include "ui/base/events/event_utils.h"
@@ -51,6 +51,8 @@ void FakeInputMethod::SetDelegate(internal::InputMethodDelegate* delegate) {
 
 void FakeInputMethod::SetFocusedTextInputClient(TextInputClient* client) {
   text_input_client_ = client;
+  FOR_EACH_OBSERVER(InputMethodObserver, observers_,
+                    OnTextInputStateChanged(client));
 }
 
 TextInputClient* FakeInputMethod::GetTextInputClient() const {
@@ -98,15 +100,30 @@ bool FakeInputMethod::DispatchKeyEvent(const base::NativeEvent& native_event) {
 }
 
 bool FakeInputMethod::DispatchFabricatedKeyEvent(const ui::KeyEvent& event) {
-  return false;
+  bool handled = delegate_->DispatchFabricatedKeyEventPostIME(
+      event.type(), event.key_code(), event.flags());
+  if (event.type() == ET_KEY_PRESSED && text_input_client_) {
+    uint16 ch = event.GetCharacter();
+    if (ch)
+      text_input_client_->InsertChar(ch, event.flags());
+  }
+  return handled;
 }
 
 void FakeInputMethod::Init(bool focused) {}
 void FakeInputMethod::OnFocus() {}
 void FakeInputMethod::OnBlur() {}
-void FakeInputMethod::OnTextInputTypeChanged(const TextInputClient* client) {}
+bool FakeInputMethod::OnUntranslatedIMEMessage(const base::NativeEvent& event,
+                                               NativeEventResult* result) {
+  return false;
+}
+void FakeInputMethod::OnTextInputTypeChanged(const TextInputClient* client) {
+  FOR_EACH_OBSERVER(InputMethodObserver, observers_,
+                    OnTextInputStateChanged(client));
+}
 void FakeInputMethod::OnCaretBoundsChanged(const TextInputClient* client) {}
 void FakeInputMethod::CancelComposition(const TextInputClient* client) {}
+void FakeInputMethod::OnInputLocaleChanged() {}
 
 std::string FakeInputMethod::GetInputLocale() {
   return "";
@@ -120,12 +137,24 @@ bool FakeInputMethod::IsActive() {
   return true;
 }
 
+bool FakeInputMethod::IsCandidatePopupOpen() const {
+  return false;
+}
+
 ui::TextInputType FakeInputMethod::GetTextInputType() const {
   return ui::TEXT_INPUT_TYPE_NONE;
 }
 
 bool FakeInputMethod::CanComposeInline() const {
   return true;
+}
+
+void FakeInputMethod::AddObserver(InputMethodObserver* observer) {
+  observers_.AddObserver(observer);
+}
+
+void FakeInputMethod::RemoveObserver(InputMethodObserver* observer) {
+  observers_.RemoveObserver(observer);
 }
 
 }  // namespace ui

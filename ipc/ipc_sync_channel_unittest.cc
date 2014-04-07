@@ -11,13 +11,13 @@
 #include "base/bind.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
-#include "base/process_util.h"
+#include "base/message_loop/message_loop.h"
+#include "base/process/process_handle.h"
 #include "base/run_loop.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
+#include "base/synchronization/waitable_event.h"
 #include "base/threading/platform_thread.h"
 #include "base/threading/thread.h"
-#include "base/synchronization/waitable_event.h"
 #include "ipc/ipc_listener.h"
 #include "ipc/ipc_message.h"
 #include "ipc/ipc_sender.h"
@@ -70,11 +70,11 @@ class Worker : public Listener, public Sender {
   }
   void WaitForChannelCreation() { channel_created_->Wait(); }
   void CloseChannel() {
-    DCHECK(MessageLoop::current() == ListenerThread()->message_loop());
+    DCHECK(base::MessageLoop::current() == ListenerThread()->message_loop());
     channel_->Close();
   }
   void Start() {
-    StartThread(&listener_thread_, MessageLoop::TYPE_DEFAULT);
+    StartThread(&listener_thread_, base::MessageLoop::TYPE_DEFAULT);
     ListenerThread()->message_loop()->PostTask(
         FROM_HERE, base::Bind(&Worker::OnStart, this));
   }
@@ -154,9 +154,12 @@ class Worker : public Listener, public Sender {
   }
 
   virtual SyncChannel* CreateChannel() {
-    return new SyncChannel(
-        channel_name_, mode_, this, ipc_thread_.message_loop_proxy(), true,
-        &shutdown_event_);
+    return new SyncChannel(channel_name_,
+                           mode_,
+                           this,
+                           ipc_thread_.message_loop_proxy().get(),
+                           true,
+                           &shutdown_event_);
   }
 
   base::Thread* ListenerThread() {
@@ -169,7 +172,7 @@ class Worker : public Listener, public Sender {
   // Called on the listener thread to create the sync channel.
   void OnStart() {
     // Link ipc_thread_, listener_thread_ and channel_ altogether.
-    StartThread(&ipc_thread_, MessageLoop::TYPE_IO);
+    StartThread(&ipc_thread_, base::MessageLoop::TYPE_IO);
     channel_.reset(CreateChannel());
     channel_created_->Signal();
     Run();
@@ -213,7 +216,7 @@ class Worker : public Listener, public Sender {
     return true;
   }
 
-  void StartThread(base::Thread* thread, MessageLoop::Type type) {
+  void StartThread(base::Thread* thread, base::MessageLoop::Type type) {
     base::Thread::Options options;
     options.message_loop_type = type;
     thread->StartWithOptions(options);
@@ -266,7 +269,7 @@ void RunTest(std::vector<Worker*> workers) {
 
 class IPCSyncChannelTest : public testing::Test {
  private:
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
 };
 
 //------------------------------------------------------------------------------
@@ -325,7 +328,7 @@ class TwoStepServer : public Worker {
 
   virtual SyncChannel* CreateChannel() OVERRIDE {
     SyncChannel* channel = new SyncChannel(
-        this, ipc_thread().message_loop_proxy(), shutdown_event());
+        this, ipc_thread().message_loop_proxy().get(), shutdown_event());
     channel->Init(channel_name(), mode(), create_pipe_now_);
     return channel;
   }
@@ -346,7 +349,7 @@ class TwoStepClient : public Worker {
 
   virtual SyncChannel* CreateChannel() OVERRIDE {
     SyncChannel* channel = new SyncChannel(
-        this, ipc_thread().message_loop_proxy(), shutdown_event());
+        this, ipc_thread().message_loop_proxy().get(), shutdown_event());
     channel->Init(channel_name(), mode(), create_pipe_now_);
     return channel;
   }
@@ -1001,9 +1004,9 @@ class DoneEventRaceServer : public Worker {
       : Worker(Channel::MODE_SERVER, "done_event_race_server") { }
 
   virtual void Run() OVERRIDE {
-    MessageLoop::current()->PostTask(FROM_HERE,
-                                     base::Bind(&NestedCallback, this));
-    MessageLoop::current()->PostDelayedTask(
+    base::MessageLoop::current()->PostTask(FROM_HERE,
+                                           base::Bind(&NestedCallback, this));
+    base::MessageLoop::current()->PostDelayedTask(
         FROM_HERE,
         base::Bind(&TimeoutCallback),
         base::TimeDelta::FromSeconds(9));
@@ -1068,7 +1071,7 @@ class SyncMessageFilterServer : public Worker {
       : Worker(Channel::MODE_SERVER, "sync_message_filter_server"),
         thread_("helper_thread") {
     base::Thread::Options options;
-    options.message_loop_type = MessageLoop::TYPE_DEFAULT;
+    options.message_loop_type = base::MessageLoop::TYPE_DEFAULT;
     thread_.StartWithOptions(options);
     filter_ = new TestSyncMessageFilter(shutdown_event(), this,
                                         thread_.message_loop_proxy());
@@ -1242,9 +1245,13 @@ class RestrictedDispatchClient : public Worker {
     else
       LOG(ERROR) << "Send failed to dispatch incoming message on same channel";
 
-    non_restricted_channel_.reset(new SyncChannel(
-        "non_restricted_channel", Channel::MODE_CLIENT, this,
-        ipc_thread().message_loop_proxy(), true, shutdown_event()));
+    non_restricted_channel_.reset(
+        new SyncChannel("non_restricted_channel",
+                        Channel::MODE_CLIENT,
+                        this,
+                        ipc_thread().message_loop_proxy().get(),
+                        true,
+                        shutdown_event()));
 
     server_->ListenerThread()->message_loop()->PostTask(
         FROM_HERE, base::Bind(&RestrictedDispatchServer::OnDoPing, server_, 2));
@@ -1630,9 +1637,13 @@ class RestrictedDispatchPipeWorker : public Worker {
     if (is_first())
       event1_->Signal();
     event2_->Wait();
-    other_channel_.reset(new SyncChannel(
-        other_channel_name_, Channel::MODE_CLIENT, this,
-        ipc_thread().message_loop_proxy(), true, shutdown_event()));
+    other_channel_.reset(
+        new SyncChannel(other_channel_name_,
+                        Channel::MODE_CLIENT,
+                        this,
+                        ipc_thread().message_loop_proxy().get(),
+                        true,
+                        shutdown_event()));
     other_channel_->SetRestrictDispatchChannelGroup(group_);
     if (!is_first()) {
       event1_->Signal();
@@ -1706,9 +1717,13 @@ class ReentrantReplyServer1 : public Worker {
         server_ready_(server_ready) { }
 
   virtual void Run() OVERRIDE {
-    server2_channel_.reset(new SyncChannel(
-        "reentrant_reply2", Channel::MODE_CLIENT, this,
-        ipc_thread().message_loop_proxy(), true, shutdown_event()));
+    server2_channel_.reset(
+        new SyncChannel("reentrant_reply2",
+                        Channel::MODE_CLIENT,
+                        this,
+                        ipc_thread().message_loop_proxy().get(),
+                        true,
+                        shutdown_event()));
     server_ready_->Signal();
     Message* msg = new SyncChannelTestMsg_Reentrant1();
     server2_channel_->Send(msg);

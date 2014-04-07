@@ -14,7 +14,6 @@ class ConfirmInfoBarDelegate;
 
 namespace views {
 class Label;
-class TextButton;
 }
 
 // An infobar that shows a message, up to two optional buttons, and an optional,
@@ -25,19 +24,13 @@ class ConfirmInfoBar : public InfoBarView,
  public:
   ConfirmInfoBar(InfoBarService* owner, ConfirmInfoBarDelegate* delegate);
 
- protected:
-  // TODO(rogerta): These only need to be protected due to the
-  // OneClickLoginInfoBar experiment and can be made private once that's
-  // removed.
+ private:
   virtual ~ConfirmInfoBar();
-
-  views::TextButton* ok_button() { return ok_button_; }
 
   // InfoBarView:
   virtual void Layout() OVERRIDE;
-  virtual void ViewHierarchyChanged(bool is_add,
-                                    View* parent,
-                                    View* child) OVERRIDE;
+  virtual void ViewHierarchyChanged(
+      const ViewHierarchyChangedDetails& details) OVERRIDE;
   virtual void ButtonPressed(views::Button* sender,
                              const ui::Event& event) OVERRIDE;
   virtual int ContentMinimumWidth() const OVERRIDE;
@@ -45,12 +38,11 @@ class ConfirmInfoBar : public InfoBarView,
   // views::LinkListener:
   virtual void LinkClicked(views::Link* source, int event_flags) OVERRIDE;
 
- private:
   ConfirmInfoBarDelegate* GetDelegate();
 
   views::Label* label_;
-  views::TextButton* ok_button_;
-  views::TextButton* cancel_button_;
+  views::LabelButton* ok_button_;
+  views::LabelButton* cancel_button_;
   views::Link* link_;
 
   DISALLOW_COPY_AND_ASSIGN(ConfirmInfoBar);

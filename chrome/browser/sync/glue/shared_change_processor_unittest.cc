@@ -9,7 +9,7 @@
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/compiler_specific.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "chrome/browser/sync/glue/data_type_error_handler_mock.h"
 #include "chrome/browser/sync/profile_sync_components_factory_impl.h"
 #include "chrome/browser/sync/profile_sync_components_factory_mock.h"
@@ -37,8 +37,7 @@ class SyncSharedChangeProcessorTest : public testing::Test {
  public:
   SyncSharedChangeProcessorTest()
       : ui_thread_(BrowserThread::UI, &ui_loop_),
-        db_thread_(BrowserThread::DB),
-        db_syncable_service_(NULL) {}
+        db_thread_(BrowserThread::DB) {}
 
   virtual ~SyncSharedChangeProcessorTest() {
     EXPECT_FALSE(db_syncable_service_.get());
@@ -112,7 +111,7 @@ class SyncSharedChangeProcessorTest : public testing::Test {
         base::WeakPtr<syncer::SyncMergeResult>()));
   }
 
-  MessageLoopForUI ui_loop_;
+  base::MessageLoopForUI ui_loop_;
   content::TestBrowserThread ui_thread_;
   content::TestBrowserThread db_thread_;
 

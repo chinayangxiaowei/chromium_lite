@@ -7,8 +7,7 @@
 
 #include <string>
 
-#include "base/callback_forward.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_ptr.h"
 #include "content/common/content_export.h"
 #include "media/video/capture/video_capture_device.h"
 
@@ -38,16 +37,13 @@ class CONTENT_EXPORT WebContentsVideoCaptureDevice
   // WebContentsVideoCaptureDevice is itself deleted.
   // TODO(miu): Passing a destroy callback suggests needing to revisit the
   // design philosophy of an asynchronous DeAllocate().  http://crbug.com/158641
-  static media::VideoCaptureDevice* Create(const std::string& device_id,
-                                           const base::Closure& destroy_cb);
+  static media::VideoCaptureDevice* Create(const std::string& device_id);
 
   virtual ~WebContentsVideoCaptureDevice();
 
   // VideoCaptureDevice implementation.
-  virtual void Allocate(int width,
-                        int height,
-                        int frame_rate,
-                        VideoCaptureDevice::EventHandler* consumer) OVERRIDE;
+  virtual void Allocate(const media::VideoCaptureCapability& capture_format,
+                        VideoCaptureDevice::EventHandler* observer) OVERRIDE;
   virtual void Start() OVERRIDE;
   virtual void Stop() OVERRIDE;
   virtual void DeAllocate() OVERRIDE;
@@ -60,49 +56,17 @@ class CONTENT_EXPORT WebContentsVideoCaptureDevice
 
  private:
   class Impl;
+
   WebContentsVideoCaptureDevice(const Name& name,
                                 int render_process_id,
-                                int render_view_id,
-                                const base::Closure& destroy_cb);
+                                int render_view_id);
 
   Name device_name_;
-  scoped_refptr<Impl> capturer_;
+  const scoped_ptr<Impl> impl_;
 
   DISALLOW_COPY_AND_ASSIGN(WebContentsVideoCaptureDevice);
 };
 
-// Filters a sequence of events to achieve a target frequency.
-class CONTENT_EXPORT SmoothEventSampler {
- public:
-  explicit SmoothEventSampler(base::TimeDelta capture_period,
-                              bool events_are_reliable,
-                              int redundant_capture_goal);
-
-  // Add a new event to the event history, and return whether it ought to be
-  // sampled per to the sampling frequency limit. Even if this method returns
-  // true, the event is not recorded as a sample until RecordSample() is called.
-  bool AddEventAndConsiderSampling(base::Time now);
-
-  // Operates on the last event added by AddEventAndConsiderSampling(), marking
-  // it as sampled. After this point we are current in the stream of events, as
-  // we have sampled the most recent event.
-  void RecordSample();
-
-  // Returns true if, at time |now|, sampling should occur because too much time
-  // will have passed relative to the last event and/or sample.
-  bool IsOverdueForSamplingAt(base::Time now) const;
-
-  base::Time GetLastSampledEvent();
-
- private:
-  const bool events_are_reliable_;
-  const base::TimeDelta capture_period_;
-  const int redundant_capture_goal_;
-  base::Time current_event_;
-  base::Time last_sample_;
-  int last_sample_count_;
-  DISALLOW_COPY_AND_ASSIGN(SmoothEventSampler);
-};
 
 }  // namespace content
 

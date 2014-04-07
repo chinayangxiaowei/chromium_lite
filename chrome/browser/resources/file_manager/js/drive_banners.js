@@ -38,11 +38,11 @@ function FileListBannerController(
   this.volumeManager_.addEventListener('drive-connection-changed',
         this.onDriveConnectionChanged_.bind(this));
 
-  util.storage.onChanged.addListener(this.onStorageChange_.bind(this));
+  chrome.storage.onChanged.addListener(this.onStorageChange_.bind(this));
   this.welcomeHeaderCounter_ = WELCOME_HEADER_COUNTER_LIMIT;
   this.warningDismissedCounter_ = 0;
-  util.storage.sync.get([WELCOME_HEADER_COUNTER_KEY, WARNING_DISMISSED_KEY],
-                          function(values) {
+  chrome.storage.local.get([WELCOME_HEADER_COUNTER_KEY, WARNING_DISMISSED_KEY],
+                         function(values) {
     this.welcomeHeaderCounter_ =
         parseInt(values[WELCOME_HEADER_COUNTER_KEY]) || 0;
     this.warningDismissedCounter_ =
@@ -128,7 +128,7 @@ FileListBannerController.prototype.initializeWelcomeBanner_ = function() {
 FileListBannerController.prototype.setWelcomeHeaderCounter_ = function(value) {
   var values = {};
   values[WELCOME_HEADER_COUNTER_KEY] = value;
-  util.storage.local.set(values);
+  chrome.storage.local.set(values);
 };
 
 /**
@@ -139,11 +139,11 @@ FileListBannerController.prototype.setWarningDismissedCounter_ =
     function(value) {
   var values = {};
   values[WARNING_DISMISSED_KEY] = value;
-  util.storage.local.set(values);
+  chrome.storage.local.set(values);
 };
 
 /**
- * util.storage.onChanged event handler.
+ * chrome.storage.onChanged event handler.
  * @param {Object.<string, Object>} changes Changes values.
  * @param {string} areaName "local" or "sync".
  * @private
@@ -586,12 +586,6 @@ FileListBannerController.prototype.ensureDriveUnmountedPanelInitialized_ =
   var loading = create(panel, 'div', 'loading', str('DRIVE_LOADING'));
   var spinnerBox = create(loading, 'div', 'spinner-box');
   create(spinnerBox, 'div', 'spinner');
-  var progress = create(panel, 'div', 'progress');
-  chrome.fileBrowserPrivate.onDocumentFeedFetched.addListener(
-      function(fileCount) {
-        progress.textContent = strf('DRIVE_LOADING_PROGRESS', fileCount);
-      });
-
   create(panel, 'div', 'error', str('DRIVE_CANNOT_REACH'));
 
   var retryButton = create(panel, 'button', 'retry', str('DRIVE_RETRY'));

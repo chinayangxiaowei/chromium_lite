@@ -5,16 +5,15 @@
 #include "chrome/browser/extensions/image_loader.h"
 
 #include "base/json/json_file_value_serializer.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/path_service.h"
-#include "chrome/common/chrome_notification_types.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/common/chrome_paths.h"
-#include "chrome/common/extensions/api/icons/icons_handler.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/extensions/extension_icon_set.h"
 #include "chrome/common/extensions/manifest.h"
-#include "chrome/common/extensions/manifest_handler.h"
+#include "chrome/common/extensions/manifest_handlers/icons_handler.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/test/test_browser_thread.h"
 #include "extensions/common/extension_resource.h"
@@ -44,13 +43,13 @@ class ImageLoaderTest : public testing::Test {
   void OnImageLoaded(const gfx::Image& image) {
     image_loaded_count_++;
     if (quit_in_image_loaded_)
-      MessageLoop::current()->Quit();
+      base::MessageLoop::current()->Quit();
     image_ = image;
   }
 
   void WaitForImageLoad() {
     quit_in_image_loaded_ = true;
-    MessageLoop::current()->Run();
+    base::MessageLoop::current()->Run();
     quit_in_image_loaded_ = false;
   }
 
@@ -81,7 +80,7 @@ class ImageLoaderTest : public testing::Test {
       return NULL;
 
     EXPECT_TRUE(valid_value.get());
-    if (!valid_value.get())
+    if (!valid_value)
       return NULL;
 
     if (location == Manifest::COMPONENT) {
@@ -100,19 +99,13 @@ class ImageLoaderTest : public testing::Test {
  private:
   virtual void SetUp() OVERRIDE {
     testing::Test::SetUp();
-    (new extensions::IconsHandler)->Register();
-
     file_thread_.Start();
     io_thread_.Start();
   }
 
-  virtual void TearDown() OVERRIDE {
-    extensions::ManifestHandler::ClearRegistryForTesting();
-  }
-
   int image_loaded_count_;
   bool quit_in_image_loaded_;
-  MessageLoop ui_loop_;
+  base::MessageLoop ui_loop_;
   content::TestBrowserThread ui_thread_;
   content::TestBrowserThread file_thread_;
   content::TestBrowserThread io_thread_;
@@ -125,7 +118,7 @@ TEST_F(ImageLoaderTest, LoadImage) {
   ASSERT_TRUE(extension.get() != NULL);
 
   ExtensionResource image_resource = extensions::IconsInfo::GetIconResource(
-      extension,
+      extension.get(),
       extension_misc::EXTENSION_ICON_SMALLISH,
       ExtensionIconSet::MATCH_EXACTLY);
   gfx::Size max_size(extension_misc::EXTENSION_ICON_SMALLISH,
@@ -158,7 +151,7 @@ TEST_F(ImageLoaderTest, DeleteExtensionWhileWaitingForCache) {
   ASSERT_TRUE(extension.get() != NULL);
 
   ExtensionResource image_resource = extensions::IconsInfo::GetIconResource(
-      extension,
+      extension.get(),
       extension_misc::EXTENSION_ICON_SMALLISH,
       ExtensionIconSet::MATCH_EXACTLY);
   gfx::Size max_size(extension_misc::EXTENSION_ICON_SMALLISH,
@@ -209,7 +202,7 @@ TEST_F(ImageLoaderTest, MultipleImages) {
                  extension_misc::EXTENSION_ICON_BITTY};
   for (size_t i = 0; i < arraysize(sizes); ++i) {
     ExtensionResource resource = extensions::IconsInfo::GetIconResource(
-        extension, sizes[i], ExtensionIconSet::MATCH_EXACTLY);
+        extension.get(), sizes[i], ExtensionIconSet::MATCH_EXACTLY);
     info_list.push_back(ImageLoader::ImageRepresentation(
         resource,
         ImageLoader::ImageRepresentation::RESIZE_WHEN_LARGER,
@@ -252,7 +245,7 @@ TEST_F(ImageLoaderTest, IsComponentExtensionResource) {
   ASSERT_TRUE(extension.get() != NULL);
 
   ExtensionResource resource = extensions::IconsInfo::GetIconResource(
-      extension,
+      extension.get(),
       extension_misc::EXTENSION_ICON_BITTY,
       ExtensionIconSet::MATCH_EXACTLY);
 

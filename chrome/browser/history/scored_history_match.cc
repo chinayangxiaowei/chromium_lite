@@ -12,34 +12,21 @@
 
 #include <math.h>
 
-#include "base/command_line.h"
 #include "base/metrics/histogram.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/autocomplete/history_url_provider.h"
 #include "chrome/browser/autocomplete/url_prefix.h"
 #include "chrome/browser/bookmarks/bookmark_service.h"
-#include "chrome/browser/omnibox/omnibox_field_trial.h"
 #include "chrome/common/chrome_switches.h"
 #include "content/public/browser/browser_thread.h"
 
 namespace history {
 
-// The maximum score any candidate match can achieve.
-const int kMaxTotalScore = 1425;
-
-// Score ranges used to get a 'base' score for each of the scoring factors
-// (such as recency of last visit, times visited, times the URL was typed,
-// and the quality of the string match). There is a matching value range for
-// each of these scores for each factor. Note that the top score is greater
-// than |kMaxTotalScore|. The score for each candidate will be capped in the
-// final calculation.
-const int kScoreRank[] = { 1450, 1200, 900, 400 };
-
 // ScoredHistoryMatch ----------------------------------------------------------
 
 bool ScoredHistoryMatch::initialized_ = false;
-bool ScoredHistoryMatch::use_new_scoring = false;
+const size_t ScoredHistoryMatch::kMaxVisitsToScore = 10u;
 bool ScoredHistoryMatch::also_do_hup_like_scoring = false;
 int ScoredHistoryMatch::max_assigned_score_for_non_inlineable_matches = -1;
 
@@ -47,13 +34,13 @@ ScoredHistoryMatch::ScoredHistoryMatch()
     : raw_score(0),
       can_inline(false) {
   if (!initialized_) {
-    InitializeNewScoringField();
     InitializeAlsoDoHUPLikeScoringFieldAndMaxScoreField();
     initialized_ = true;
   }
 }
 
 ScoredHistoryMatch::ScoredHistoryMatch(const URLRow& row,
+                                       const VisitInfoVector& visits,
                                        const std::string& languages,
                                        const string16& lower_string,
                                        const String16Vector& terms,
@@ -64,7 +51,6 @@ ScoredHistoryMatch::ScoredHistoryMatch(const URLRow& row,
       raw_score(0),
       can_inline(false) {
   if (!initialized_) {
-    InitializeNewScoringField();
     InitializeAlsoDoHUPLikeScoringFieldAndMaxScoreField();
     initialized_ = true;
   }
@@ -157,70 +143,12 @@ ScoredHistoryMatch::ScoredHistoryMatch(const URLRow& row,
         num_components_in_best_prefix);
   }
 
-  // Determine if the associated URLs is referenced by any bookmarks.
-  float bookmark_boost =
-      (bookmark_service && bookmark_service->IsBookmarked(gurl)) ? 10.0 : 0.0;
-
-  if (use_new_scoring) {
-    const float topicality_score = GetTopicalityScore(
-        terms.size(), url, url_matches, title_matches, word_starts);
-    const float recency_score = GetRecencyScore(
-        (now - row.last_visit()).InDays());
-    const float popularity_score = GetPopularityScore(
-        row.typed_count() + bookmark_boost, row.visit_count());
-    raw_score = GetFinalRelevancyScore(
-        topicality_score, recency_score, popularity_score);
-    raw_score =
-        (raw_score <= kint32max) ? static_cast<int>(raw_score) : kint32max;
-  } else {  // "old" scoring
-    // Get partial scores based on term matching. Note that the score for
-    // each of the URL and title are adjusted by the fraction of the
-    // terms appearing in each.
-    int url_score =
-        ScoreComponentForMatches(url_matches, word_starts.url_word_starts_,
-                                 url.length()) *
-        std::min(url_matches.size(), terms.size()) / terms.size();
-    int title_score =
-        ScoreComponentForMatches(title_matches, word_starts.title_word_starts_,
-                                 title.length()) *
-        std::min(title_matches.size(), terms.size()) / terms.size();
-    // Arbitrarily pick the best.
-    // TODO(mrossetti): It might make sense that a term which appears in both
-    // the URL and the Title should boost the score a bit.
-    int term_score = std::max(url_score, title_score);
-    if (term_score == 0)
-      return;
-
-    // Determine scoring factors for the recency of visit, visit count and typed
-    // count attributes of the URLRow.
-    const int kDaysAgoLevel[] = { 1, 10, 20, 30 };
-    int days_ago_value = ScoreForValue((base::Time::Now() -
-        row.last_visit()).InDays(), kDaysAgoLevel);
-    const int kVisitCountLevel[] = { 50, 30, 10, 5 };
-    int visit_count_value = ScoreForValue(row.visit_count(), kVisitCountLevel);
-    const int kTypedCountLevel[] = { 50, 30, 10, 5 };
-    int typed_count_value = ScoreForValue(row.typed_count() + bookmark_boost,
-                                          kTypedCountLevel);
-
-    // The final raw score is calculated by:
-    //   - multiplying each factor by a 'relevance'
-    //   - calculating the average.
-    // Note that visit_count is reduced by typed_count because both are bumped
-    // when a typed URL is recorded thus giving visit_count too much weight.
-    const int kTermScoreRelevance = 4;
-    const int kDaysAgoRelevance = 2;
-    const int kVisitCountRelevance = 2;
-    const int kTypedCountRelevance = 5;
-    int effective_visit_count_value =
-        std::max(0, visit_count_value - typed_count_value);
-    raw_score = term_score * kTermScoreRelevance +
-                days_ago_value * kDaysAgoRelevance +
-                effective_visit_count_value * kVisitCountRelevance +
-                typed_count_value * kTypedCountRelevance;
-    raw_score /= (kTermScoreRelevance + kDaysAgoRelevance +
-                  kVisitCountRelevance + kTypedCountRelevance);
-    raw_score = std::min(kMaxTotalScore, raw_score);
-  }
+  const float topicality_score = GetTopicalityScore(
+      terms.size(), url, url_matches, title_matches, word_starts);
+  const float frecency_score = GetFrecency(now, visits);
+  raw_score = GetFinalRelevancyScore(topicality_score, frecency_score);
+  raw_score =
+      (raw_score <= kint32max) ? static_cast<int>(raw_score) : kint32max;
 
   if (also_do_hup_like_scoring && can_inline) {
     // HistoryURL-provider-like scoring gives any match that is
@@ -276,125 +204,6 @@ ScoredHistoryMatch::ScoredHistoryMatch(const URLRow& row,
 
 ScoredHistoryMatch::~ScoredHistoryMatch() {}
 
-// std::accumulate helper function to add up TermMatches' lengths as used in
-// ScoreComponentForMatches
-int AccumulateMatchLength(int total, const TermMatch& match) {
-  return total + match.length;
-}
-
-// static
-int ScoredHistoryMatch::ScoreComponentForMatches(
-    const TermMatches& provided_matches,
-    const WordStarts& word_starts,
-    size_t max_length) {
-  if (provided_matches.empty() || (max_length == 0))
-    return 0;
-
-  // The actual matches we'll use for matching.  This is |provided_matches|
-  // with all the matches not at a word boundary removed.
-  TermMatches matches;
-  MakeTermMatchesOnlyAtWordBoundaries(provided_matches, word_starts,
-                                      &matches);
-
-  if (matches.empty())
-    return 0;
-
-  // Score component for whether the input terms (if more than one) were found
-  // in the same order in the match.  Start with kOrderMaxValue points divided
-  // equally among (number of terms - 1); then discount each of those terms that
-  // is out-of-order in the match.
-  const int kOrderMaxValue = 1000;
-  int order_value = kOrderMaxValue;
-  if (matches.size() > 1) {
-    int max_possible_out_of_order = matches.size() - 1;
-    int out_of_order = 0;
-    for (size_t i = 1; i < matches.size(); ++i) {
-      if (matches[i - 1].term_num > matches[i].term_num)
-        ++out_of_order;
-    }
-    order_value = (max_possible_out_of_order - out_of_order) * kOrderMaxValue /
-        max_possible_out_of_order;
-  }
-
-  // Score component for how early in the match string the first search term
-  // appears.  Start with kStartMaxValue points and discount by
-  // kStartMaxValue/kMaxSignificantChars points for each character later than
-  // the first at which the term begins. No points are earned if the start of
-  // the match occurs at or after kMaxSignificantChars.
-  const int kStartMaxValue = 1000;
-  int start_value = (kMaxSignificantChars -
-      std::min(kMaxSignificantChars, matches[0].offset)) * kStartMaxValue /
-      kMaxSignificantChars;
-
-  // Score component for how much of the matched string the input terms cover.
-  // kCompleteMaxValue points times the fraction of the URL/page title string
-  // that was matched.
-  size_t term_length_total = std::accumulate(matches.begin(), matches.end(),
-                                             0, AccumulateMatchLength);
-  const size_t kMaxSignificantLength = 50;
-  size_t max_significant_length =
-      std::min(max_length, std::max(term_length_total, kMaxSignificantLength));
-  const int kCompleteMaxValue = 1000;
-  int complete_value =
-      term_length_total * kCompleteMaxValue / max_significant_length;
-
-  const int kOrderRelevance = 1;
-  const int kStartRelevance = 6;
-  const int kCompleteRelevance = 3;
-  int raw_score = order_value * kOrderRelevance +
-                  start_value * kStartRelevance +
-                  complete_value * kCompleteRelevance;
-  raw_score /= (kOrderRelevance + kStartRelevance + kCompleteRelevance);
-
-  // Scale the raw score into a single score component in the same manner as
-  // used in ScoredMatchForURL().
-  const int kTermScoreLevel[] = { 1000, 750, 500, 200 };
-  return ScoreForValue(raw_score, kTermScoreLevel);
-}
-
-// static
-void ScoredHistoryMatch::MakeTermMatchesOnlyAtWordBoundaries(
-    const TermMatches& provided_matches,
-    const WordStarts& word_starts,
-    TermMatches* matches_at_word_boundaries) {
-  matches_at_word_boundaries->clear();
-  // Resize it to an upper-bound estimate of the correct size.
-  matches_at_word_boundaries->reserve(provided_matches.size());
-  WordStarts::const_iterator next_word_starts = word_starts.begin();
-  for (TermMatches::const_iterator iter = provided_matches.begin();
-       iter != provided_matches.end(); ++iter) {
-    // Advance next_word_starts until it's >= the position of the term
-    // we're considering.
-    while ((next_word_starts != word_starts.end()) &&
-           (*next_word_starts < iter->offset)) {
-      ++next_word_starts;
-    }
-    if ((next_word_starts != word_starts.end()) &&
-        (*next_word_starts == iter->offset)) {
-      // At word boundary: copy this element into |matches_at_word_boundaries|.
-      matches_at_word_boundaries->push_back(*iter);
-    }
-  }
-}
-
-// static
-int ScoredHistoryMatch::ScoreForValue(int value, const int* value_ranks) {
-  int i = 0;
-  int rank_count = arraysize(kScoreRank);
-  while ((i < rank_count) && ((value_ranks[0] < value_ranks[1]) ?
-         (value > value_ranks[i]) : (value < value_ranks[i])))
-    ++i;
-  if (i >= rank_count)
-    return 0;
-  int score = kScoreRank[i];
-  if (i > 0) {
-    score += (value - value_ranks[i]) *
-        (kScoreRank[i - 1] - kScoreRank[i]) /
-        (value_ranks[i - 1] - value_ranks[i]);
-  }
-  return score;
-}
-
 // Comparison function for sorting ScoredMatches by their scores with
 // intelligent tie-breaking.
 bool ScoredHistoryMatch::MatchScoreGreater(const ScoredHistoryMatch& m1,
@@ -447,9 +256,9 @@ float ScoredHistoryMatch::GetTopicalityScore(
   // be on it."  The first part is necessary so unit tests pass.  (Many
   // unit tests don't set up the threading naming system; hence
   // CurrentlyOn(UI thread) will fail.)
-  DCHECK(
-      !content::BrowserThread::IsWellKnownThread(content::BrowserThread::UI) ||
-      content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
+  DCHECK(!content::BrowserThread::IsThreadInitialized(
+             content::BrowserThread::UI) ||
+         content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
   if (raw_term_score_to_topicality_score == NULL) {
     raw_term_score_to_topicality_score = new float[kMaxRawTermScore];
     FillInTermScoreToTopicalityScoreArray();
@@ -459,6 +268,7 @@ float ScoredHistoryMatch::GetTopicalityScore(
   // Everything else is less.  In general, a match that's not at a word
   // boundary is worth about 1/4th or 1/5th of a match at the word boundary
   // in the same part of the URL/title.
+  DCHECK_GT(num_terms, 0);
   std::vector<int> term_scores(num_terms, 0);
   std::vector<size_t>::const_iterator next_word_starts =
       word_starts.url_word_starts_.begin();
@@ -497,7 +307,7 @@ float ScoredHistoryMatch::GetTopicalityScore(
     } else if ((end_of_hostname_pos != std::string::npos) &&
         (iter->offset > end_of_hostname_pos)) {
       // match in path
-      term_scores[iter->term_num] += at_word_boundary ? 8 : 1;
+      term_scores[iter->term_num] += at_word_boundary ? 8 : 0;
     } else if ((colon_pos == std::string::npos) ||
          (iter->offset > colon_pos)) {
       // match in hostname
@@ -539,15 +349,21 @@ float ScoredHistoryMatch::GetTopicalityScore(
   // Compute the topicality_score as the sum of transformed term_scores.
   float topicality_score = 0;
   for (size_t i = 0; i < term_scores.size(); ++i) {
+    // Drop this URL if it seems like a term didn't appear or, more precisely,
+    // didn't appear in a part of the URL or title that we trust enough
+    // to give it credit for.  For instance, terms that appear in the middle
+    // of a CGI parameter get no credit.  Almost all the matches dropped
+    // due to this test would look stupid if shown to the user.
+    if (term_scores[i] == 0)
+      return 0;
     topicality_score += raw_term_score_to_topicality_score[
-        (term_scores[i] >= kMaxRawTermScore)? kMaxRawTermScore - 1:
+        (term_scores[i] >= kMaxRawTermScore) ? (kMaxRawTermScore - 1) :
         term_scores[i]];
   }
   // TODO(mpearson): If there are multiple terms, consider taking the
-  // geometric mean of per-term scores rather than sum as we're doing now
-  // (which is equivalent to the arthimatic mean).
+  // geometric mean of per-term scores rather than the arithmetic mean.
 
-  return topicality_score;
+  return topicality_score / num_terms;
 }
 
 // static
@@ -584,9 +400,9 @@ float ScoredHistoryMatch::GetRecencyScore(int last_visit_days_ago) {
   // be on it."  The first part is necessary so unit tests pass.  (Many
   // unit tests don't set up the threading naming system; hence
   // CurrentlyOn(UI thread) will fail.)
-  DCHECK(
-      !content::BrowserThread::IsWellKnownThread(content::BrowserThread::UI) ||
-      content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
+  DCHECK(!content::BrowserThread::IsThreadInitialized(
+             content::BrowserThread::UI) ||
+         content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
   if (days_ago_to_recency_score == NULL) {
     days_ago_to_recency_score = new float[kDaysToPrecomputeRecencyScoresFor];
     FillInDaysAgoToRecencyScoreArray();
@@ -605,19 +421,20 @@ void ScoredHistoryMatch::FillInDaysAgoToRecencyScoreArray() {
   for (int days_ago = 0; days_ago < kDaysToPrecomputeRecencyScoresFor;
        days_ago++) {
     int unnormalized_recency_score;
-    if (days_ago <= 1) {
+    if (days_ago <= 4) {
       unnormalized_recency_score = 100;
-    } else if (days_ago <= 7) {
-      // Linearly extrapolate between 1 and 7 days so 7 days has a score of 70.
-      unnormalized_recency_score = 70 + (7 - days_ago) * (100 - 70) / (7 - 1);
-    } else if (days_ago <= 30) {
-      // Linearly extrapolate between 7 and 30 days so 30 days has a score
+    } else if (days_ago <= 14) {
+      // Linearly extrapolate between 4 and 14 days so 14 days has a score
+      // of 70.
+      unnormalized_recency_score = 70 + (14 - days_ago) * (100 - 70) / (14 - 4);
+    } else if (days_ago <= 31) {
+      // Linearly extrapolate between 14 and 31 days so 31 days has a score
       // of 50.
-      unnormalized_recency_score = 50 + (30 - days_ago) * (70 - 50) / (30 - 7);
+      unnormalized_recency_score = 50 + (31 - days_ago) * (70 - 50) / (31 - 14);
     } else if (days_ago <= 90) {
       // Linearly extrapolate between 30 and 90 days so 90 days has a score
-      // of 20.
-      unnormalized_recency_score = 20 + (90 - days_ago) * (50 - 20) / (90 - 30);
+      // of 30.
+      unnormalized_recency_score = 30 + (90 - days_ago) * (50 - 30) / (90 - 30);
     } else {
       // Linearly extrapolate between 90 and 365 days so 365 days has a score
       // of 10.
@@ -633,100 +450,71 @@ void ScoredHistoryMatch::FillInDaysAgoToRecencyScoreArray() {
 }
 
 // static
-float ScoredHistoryMatch::GetPopularityScore(int typed_count,
-                                             int visit_count) {
-  // The max()s are to guard against database corruption.
-  return (std::max(typed_count, 0) * 5.0 + std::max(visit_count, 0) * 3.0) /
-      (5.0 + 3.0);
+float ScoredHistoryMatch::GetFrecency(const base::Time& now,
+                                      const VisitInfoVector& visits) {
+  // Compute the weighted average |value_of_transition| over the last at
+  // most kMaxVisitsToScore visits, where each visit is weighted using
+  // GetRecencyScore() based on how many days ago it happened.  Use
+  // kMaxVisitsToScore as the denominator for the average regardless of
+  // how many visits there were in order to penalize a match that has
+  // fewer visits than kMaxVisitsToScore.
+  const int total_sampled_visits = std::min(visits.size(), kMaxVisitsToScore);
+  if (total_sampled_visits == 0)
+    return 0.0f;
+  float summed_visit_points = 0;
+  for (int i = 0; i < total_sampled_visits; ++i) {
+    const int value_of_transition =
+        (visits[i].second == content::PAGE_TRANSITION_TYPED) ? 20 : 1;
+    const float bucket_weight =
+        GetRecencyScore((now - visits[i].first).InDays());
+    summed_visit_points += (value_of_transition * bucket_weight);
+  }
+  return visits.size() * summed_visit_points / total_sampled_visits;
 }
 
 // static
-float ScoredHistoryMatch::GetFinalRelevancyScore(
-    float topicality_score, float recency_score, float popularity_score) {
+float ScoredHistoryMatch::GetFinalRelevancyScore(float topicality_score,
+                                                 float frecency_score) {
+  if (topicality_score == 0)
+    return 0;
   // Here's how to interpret intermediate_score: Suppose the omnibox
-  // has one input term.  Suppose we have a URL that has 5 typed
-  // visits with the most recent being within a day and the omnibox
-  // input term has a single URL hostname hit at a word boundary.
-  // This URL will have an intermediate_score of 5.0 (= 1 topicality *
-  // 1 recency * 5 popularity).
-  float intermediate_score =
-      topicality_score * recency_score * popularity_score;
-  // The below code takes intermediate_score from [0, infinity) to
-  // relevancy scores in the range [0, 1400).
-  float attenuating_factor = 1.0;
-  if (intermediate_score < 4) {
-    // The formula in the final return line in this function only works if
-    // intermediate_score > 4.  For lower scores, we linearly interpolate
-    // between 0 and the formula when intermediate_score = 4.0.
-    attenuating_factor = intermediate_score / 4.0;
-    intermediate_score = 4.0;
+  // has one input term.  Suppose we have a URL for which the omnibox
+  // input term has a single URL hostname hit at a word boundary.  (This
+  // implies topicality_score = 1.0.).  Then the intermediate_score for
+  // this URL will depend entirely on the frecency_score with
+  // this interpretation:
+  // - a single typed visit more than three months ago, no other visits -> 0.2
+  // - a visit every three days, no typed visits -> 0.706
+  // - a visit every day, no typed visits -> 0.916
+  // - a single typed visit yesterday, no other visits -> 2.0
+  // - a typed visit once a week -> 11.77
+  // - a typed visit every three days -> 14.12
+  // - at least ten typed visits today -> 20.0 (maximum score)
+  const float intermediate_score = topicality_score * frecency_score;
+  // The below code maps intermediate_score to the range [0, 1399].
+  // The score maxes out at 1400 (i.e., cannot beat a good inline result).
+  if (intermediate_score <= 1) {
+    // Linearly extrapolate between 0 and 1.5 so 0 has a score of 400
+    // and 1.5 has a score of 600.
+    const float slope = (600 - 400) / (1.5f - 0.0f);
+    return 400 + slope * intermediate_score;
   }
-  DCHECK_GE(intermediate_score, 4.0);
-  return attenuating_factor * 1400.0 * (2.0 - exp(2.0 / intermediate_score));
-}
-
-void ScoredHistoryMatch::InitializeNewScoringField() {
-  enum NewScoringOption {
-    OLD_SCORING = 0,
-    NEW_SCORING = 1,
-    NEW_SCORING_AUTO_BUT_NOT_IN_FIELD_TRIAL = 2,
-    NEW_SCORING_FIELD_TRIAL_DEFAULT_GROUP = 3,
-    NEW_SCORING_FIELD_TRIAL_EXPERIMENT_GROUP = 4,
-    NUM_OPTIONS = 5
-  };
-  // should always be overwritten
-  NewScoringOption new_scoring_option = NUM_OPTIONS;
-
-  const std::string switch_value = CommandLine::ForCurrentProcess()->
-      GetSwitchValueASCII(switches::kOmniboxHistoryQuickProviderNewScoring);
-  if (switch_value == switches::kOmniboxHistoryQuickProviderNewScoringEnabled) {
-    new_scoring_option = NEW_SCORING;
-    use_new_scoring = true;
-  } else if (switch_value ==
-             switches::kOmniboxHistoryQuickProviderNewScoringDisabled) {
-    new_scoring_option = OLD_SCORING;
-    use_new_scoring = false;
-  } else {
-    // We'll assume any other flag means automatic.
-    // Automatic means eligible for the field trial.
-
-    // For the field trial stuff to work correctly, we must be running
-    // on the same thread as the thread that created the field trial,
-    // which happens via a call to OmniboxFieldTrial::Active in
-    // chrome_browser_main.cc on the main thread.  Let's check this to
-    // be sure.  We check "if we've heard of the UI thread then we'd better
-    // be on it."  The first part is necessary so unit tests pass.  (Many
-    // unit tests don't set up the threading naming system; hence
-    // CurrentlyOn(UI thread) will fail.)
-    DCHECK(!content::BrowserThread::IsWellKnownThread(
-               content::BrowserThread::UI) ||
-           content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
-    if (OmniboxFieldTrial::InHQPNewScoringFieldTrial()) {
-      if (OmniboxFieldTrial::InHQPNewScoringFieldTrialExperimentGroup()) {
-        new_scoring_option = NEW_SCORING_FIELD_TRIAL_EXPERIMENT_GROUP;
-        use_new_scoring = true;
-      } else {
-        new_scoring_option = NEW_SCORING_FIELD_TRIAL_DEFAULT_GROUP;
-        use_new_scoring = false;
-      }
-    } else {
-      new_scoring_option = NEW_SCORING_AUTO_BUT_NOT_IN_FIELD_TRIAL;
-      use_new_scoring = false;
-    }
+  if (intermediate_score <= 12.0) {
+    // Linearly extrapolate up to 12 so 12 has a score of 1300.
+    const float slope = (1300 - 600) / (12.0f - 1.5f);
+    return 600 + slope * (intermediate_score - 1.5);
   }
-
-  // Add a beacon to the logs that'll allow us to identify later what
-  // new scoring state a user is in.  Do this by incrementing a bucket in
-  // a histogram, where the bucket represents the user's new scoring state.
-  UMA_HISTOGRAM_ENUMERATION(
-      "Omnibox.HistoryQuickProviderNewScoringFieldTrialBeacon",
-      new_scoring_option, NUM_OPTIONS);
+  // Linearly extrapolate so a score of 20 (or more) has a score of 1399.
+  // (Scores above 20 are possible for URLs that have multiple term hits
+  // in the URL and/or title and that are visited practically all
+  // the time using typed visits.  We don't attempt to distinguish
+  // between these very good results.)
+  const float slope = (1399 - 1300) / (20.0f - 12.0f);
+  return std::min(1399.0, 1300 + slope * (intermediate_score - 12.0));
 }
 
 void ScoredHistoryMatch::InitializeAlsoDoHUPLikeScoringFieldAndMaxScoreField() {
-  also_do_hup_like_scoring =
-      OmniboxFieldTrial::InHQPReplaceHUPScoringFieldTrial() &&
-      OmniboxFieldTrial::InHQPReplaceHUPScoringFieldTrialExperimentGroup();
+  also_do_hup_like_scoring = false;
   // When doing HUP-like scoring, don't allow a non-inlineable match
   // to beat the score of good inlineable matches.  This is a problem
   // because if a non-inlineable match ends up with the highest score

@@ -6,7 +6,7 @@
 
 #include "base/bind.h"
 #include "base/lazy_instance.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_view.h"
 #include "grit/generated_resources.h"
@@ -136,7 +136,7 @@ SpeechRecognitionBubble* SpeechRecognitionBubble::Create(
 
 SpeechRecognitionBubbleBase::SpeechRecognitionBubbleBase(
     WebContents* web_contents)
-    : ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)),
+    : weak_factory_(this),
       animation_step_(0),
       display_mode_(DISPLAY_MODE_RECORDING),
       web_contents_(web_contents),
@@ -177,7 +177,7 @@ void SpeechRecognitionBubbleBase::SetWarmUpMode() {
 
 void SpeechRecognitionBubbleBase::DoWarmingUpAnimationStep() {
   SetImage(g_images.Get().warm_up()[animation_step_]);
-  MessageLoop::current()->PostDelayedTask(
+  base::MessageLoop::current()->PostDelayedTask(
       FROM_HERE,
       base::Bind(&SpeechRecognitionBubbleBase::DoWarmingUpAnimationStep,
           weak_factory_.GetWeakPtr()),
@@ -206,7 +206,7 @@ void SpeechRecognitionBubbleBase::DoRecognizingAnimationStep() {
   SetImage(g_images.Get().spinner()[animation_step_]);
   if (++animation_step_ >= static_cast<int>(g_images.Get().spinner().size()))
     animation_step_ = 0;
-  MessageLoop::current()->PostDelayedTask(
+  base::MessageLoop::current()->PostDelayedTask(
       FROM_HERE,
       base::Bind(&SpeechRecognitionBubbleBase::DoRecognizingAnimationStep,
           weak_factory_.GetWeakPtr()),
@@ -239,7 +239,7 @@ void SpeechRecognitionBubbleBase::DrawVolumeOverlay(SkCanvas* canvas,
       image.GetRepresentation(scale_factor_).sk_bitmap(), 0, 0);
   buffer_canvas.restore();
   SkPaint multiply_paint;
-  multiply_paint.setXfermode(SkXfermode::Create(SkXfermode::kModulate_Mode));
+  multiply_paint.setXfermodeMode(SkXfermode::kModulate_Mode);
   buffer_canvas.drawBitmap(
       g_images.Get().mic_mask()->GetRepresentation(scale_factor_).sk_bitmap(),
       -clip_right, 0, &multiply_paint);

@@ -6,7 +6,11 @@
 #define NET_HTTP_HTTP_NETWORK_SESSION_H_
 
 #include <set>
+#include <string>
+
+#include "base/basictypes.h"
 #include "base/memory/ref_counted.h"
+#include "base/memory/weak_ptr.h"
 #include "base/threading/non_thread_safe.h"
 #include "net/base/host_port_pair.h"
 #include "net/base/net_export.h"
@@ -51,6 +55,7 @@ class NET_EXPORT HttpNetworkSession
  public:
   struct NET_EXPORT Params {
     Params();
+    ~Params();
 
     ClientSocketFactory* client_socket_factory;
     HostResolver* host_resolver;
@@ -62,7 +67,7 @@ class NET_EXPORT HttpNetworkSession
     SSLConfigService* ssl_config_service;
     HttpAuthHandlerFactory* http_auth_handler_factory;
     NetworkDelegate* network_delegate;
-    HttpServerProperties* http_server_properties;
+    base::WeakPtr<HttpServerProperties> http_server_properties;
     NetLog* net_log;
     HostMappingRules* host_mapping_rules;
     bool force_http_pipelining;
@@ -70,7 +75,6 @@ class NET_EXPORT HttpNetworkSession
     bool http_pipelining_enabled;
     uint16 testing_fixed_http_port;
     uint16 testing_fixed_https_port;
-    size_t max_spdy_sessions_per_domain;
     bool force_spdy_single_domain;
     bool enable_spdy_ip_pooling;
     bool enable_spdy_credential_frames;
@@ -83,7 +87,8 @@ class NET_EXPORT HttpNetworkSession
     SpdySessionPool::TimeFunc time_func;
     std::string trusted_spdy_proxy;
     bool enable_quic;
-    uint16 origin_port_to_force_quic_on;
+    bool enable_quic_https;
+    HostPortPair origin_to_force_quic_on;
     QuicClock* quic_clock;  // Will be owned by QuicStreamFactory.
     QuicRandom* quic_random;
     bool enable_user_alternate_protocol_ports;
@@ -121,7 +126,7 @@ class NET_EXPORT HttpNetworkSession
 
   CertVerifier* cert_verifier() { return cert_verifier_; }
   ProxyService* proxy_service() { return proxy_service_; }
-  SSLConfigService* ssl_config_service() { return ssl_config_service_; }
+  SSLConfigService* ssl_config_service() { return ssl_config_service_.get(); }
   SpdySessionPool* spdy_session_pool() { return &spdy_session_pool_; }
   QuicStreamFactory* quic_stream_factory() { return &quic_stream_factory_; }
   HttpAuthHandlerFactory* http_auth_handler_factory() {
@@ -130,11 +135,14 @@ class NET_EXPORT HttpNetworkSession
   NetworkDelegate* network_delegate() {
     return network_delegate_;
   }
-  HttpServerProperties* http_server_properties() {
+  base::WeakPtr<HttpServerProperties> http_server_properties() {
     return http_server_properties_;
   }
   HttpStreamFactory* http_stream_factory() {
     return http_stream_factory_.get();
+  }
+  HttpStreamFactory* websocket_stream_factory() {
+    return websocket_stream_factory_.get();
   }
   NetLog* net_log() {
     return net_log_;
@@ -174,7 +182,7 @@ class NET_EXPORT HttpNetworkSession
 
   NetLog* const net_log_;
   NetworkDelegate* const network_delegate_;
-  HttpServerProperties* const http_server_properties_;
+  const base::WeakPtr<HttpServerProperties> http_server_properties_;
   CertVerifier* const cert_verifier_;
   HttpAuthHandlerFactory* const http_auth_handler_factory_;
   bool force_http_pipelining_;
@@ -190,6 +198,7 @@ class NET_EXPORT HttpNetworkSession
   QuicStreamFactory quic_stream_factory_;
   SpdySessionPool spdy_session_pool_;
   scoped_ptr<HttpStreamFactory> http_stream_factory_;
+  scoped_ptr<HttpStreamFactory> websocket_stream_factory_;
   std::set<HttpResponseBodyDrainer*> response_drainers_;
 
   Params params_;

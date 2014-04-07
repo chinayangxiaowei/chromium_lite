@@ -5,14 +5,15 @@
 #ifndef REMOTING_HOST_BASIC_DESKTOP_ENVIRONMENT_H_
 #define REMOTING_HOST_BASIC_DESKTOP_ENVIRONMENT_H_
 
+#include <string>
+
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
 #include "base/memory/ref_counted.h"
+#include "base/memory/scoped_ptr.h"
 #include "remoting/host/desktop_environment.h"
 
 namespace remoting {
-
-class LocalInputMonitor;
 
 // Used to create audio/video capturers and event executor that work with
 // the local console.
@@ -24,15 +25,17 @@ class BasicDesktopEnvironment : public DesktopEnvironment {
   virtual scoped_ptr<AudioCapturer> CreateAudioCapturer() OVERRIDE;
   virtual scoped_ptr<InputInjector> CreateInputInjector() OVERRIDE;
   virtual scoped_ptr<ScreenControls> CreateScreenControls() OVERRIDE;
-  virtual scoped_ptr<media::ScreenCapturer> CreateVideoCapturer() OVERRIDE;
+  virtual scoped_ptr<webrtc::ScreenCapturer> CreateVideoCapturer() OVERRIDE;
+  virtual std::string GetCapabilities() const OVERRIDE;
+  virtual void SetCapabilities(const std::string& capabilities) OVERRIDE;
 
  protected:
   friend class BasicDesktopEnvironmentFactory;
+
   BasicDesktopEnvironment(
       scoped_refptr<base::SingleThreadTaskRunner> caller_task_runner,
       scoped_refptr<base::SingleThreadTaskRunner> input_task_runner,
-      scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner,
-      base::WeakPtr<ClientSessionControl> client_session_control);
+      scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner);
 
   scoped_refptr<base::SingleThreadTaskRunner> caller_task_runner() const {
     return caller_task_runner_;
@@ -57,9 +60,6 @@ class BasicDesktopEnvironment : public DesktopEnvironment {
   // Used to run UI code.
   scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner_;
 
-  // Notifies the client session about the local mouse movements.
-  scoped_ptr<LocalInputMonitor> local_input_monitor_;
-
   DISALLOW_COPY_AND_ASSIGN(BasicDesktopEnvironment);
 };
 
@@ -73,8 +73,6 @@ class BasicDesktopEnvironmentFactory : public DesktopEnvironmentFactory {
   virtual ~BasicDesktopEnvironmentFactory();
 
   // DesktopEnvironmentFactory implementation.
-  virtual scoped_ptr<DesktopEnvironment> Create(
-      base::WeakPtr<ClientSessionControl> client_session_control) OVERRIDE;
   virtual bool SupportsAudioCapture() const OVERRIDE;
 
  protected:

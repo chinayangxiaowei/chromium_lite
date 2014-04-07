@@ -8,29 +8,33 @@
 
 #include "ash/shell.h"
 #include "base/command_line.h"
+#include "base/debug/trace_event.h"
 #include "base/file_util.h"
+#include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/metrics/histogram.h"
 #include "base/path_service.h"
 #include "base/prefs/pref_registry_simple.h"
 #include "base/prefs/pref_service.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/threading/worker_pool.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/chrome_notification_types.h"
+#include "chrome/browser/chromeos/login/startup_utils.h"
 #include "chrome/browser/chromeos/login/user.h"
 #include "chrome/browser/chromeos/login/user_manager.h"
 #include "chrome/browser/chromeos/login/wizard_controller.h"
 #include "chrome/browser/chromeos/settings/cros_settings.h"
 #include "chrome/browser/prefs/scoped_user_pref_update.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
+#include "chromeos/chromeos_switches.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_service.h"
@@ -107,6 +111,18 @@ static WallpaperManager* g_wallpaper_manager = NULL;
 
 // WallpaperManager, public: ---------------------------------------------------
 
+// TestApi. For testing purpose
+WallpaperManager::TestApi::TestApi(WallpaperManager* wallpaper_manager)
+    : wallpaper_manager_(wallpaper_manager) {
+}
+
+WallpaperManager::TestApi::~TestApi() {
+}
+
+base::FilePath WallpaperManager::TestApi::current_wallpaper_path() {
+  return wallpaper_manager_->current_wallpaper_path_;
+}
+
 // static
 WallpaperManager* WallpaperManager::Get() {
   if (!g_wallpaper_manager)
@@ -117,16 +133,16 @@ WallpaperManager* WallpaperManager::Get() {
 WallpaperManager::WallpaperManager()
     : no_observers_(true),
       loaded_wallpapers_(0),
-      ALLOW_THIS_IN_INITIALIZER_LIST(wallpaper_loader_(
-          new UserImageLoader(ImageDecoder::ROBUST_JPEG_CODEC))),
+      wallpaper_loader_(new UserImageLoader(ImageDecoder::ROBUST_JPEG_CODEC)),
+      command_line_for_testing_(NULL),
       should_cache_wallpaper_(false),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {
+      weak_factory_(this) {
   RestartTimer();
   registrar_.Add(this,
                  chrome::NOTIFICATION_LOGIN_USER_CHANGED,
                  content::NotificationService::AllSources());
   registrar_.Add(this,
-                 chrome::NOTIFICATION_LOGIN_WEBUI_VISIBLE,
+                 chrome::NOTIFICATION_LOGIN_OR_LOCK_WEBUI_VISIBLE,
                  content::NotificationService::AllSources());
   registrar_.Add(this,
                  chrome::NOTIFICATION_WALLPAPER_ANIMATION_FINISHED,
@@ -253,7 +269,15 @@ void WallpaperManager::InitializeWallpaper() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   UserManager* user_manager = UserManager::Get();
 
-  if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kTestType))
+  CommandLine* command_line = GetComandLine();
+  if (command_line->HasSwitch(chromeos::switches::kGuestSession)) {
+    // Guest wallpaper should be initialized when guest login.
+    // Note: This maybe called before login. So IsLoggedInAsGuest can not be
+    // used here to determine if current user is guest.
+    return;
+  }
+
+  if (command_line->HasSwitch(::switches::kTestType))
     WizardController::SetZeroDelays();
 
   // Zero delays is also set in autotests.
@@ -265,7 +289,7 @@ void WallpaperManager::InitializeWallpaper() {
   }
 
   if (!user_manager->IsUserLoggedIn()) {
-    if (!WizardController::IsDeviceRegistered())
+    if (!StartupUtils::IsDeviceRegistered())
       SetDefaultWallpaper();
     else
       InitializeRegisteredDeviceWallpaper();
@@ -283,9 +307,8 @@ void WallpaperManager::Observe(int type,
       ClearWallpaperCache();
       break;
     }
-    case chrome::NOTIFICATION_LOGIN_WEBUI_VISIBLE: {
-      if (!CommandLine::ForCurrentProcess()->
-          HasSwitch(switches::kDisableBootAnimation)) {
+    case chrome::NOTIFICATION_LOGIN_OR_LOCK_WEBUI_VISIBLE: {
+      if (!GetComandLine()->HasSwitch(switches::kDisableBootAnimation)) {
         BrowserThread::PostDelayedTask(
             BrowserThread::UI, FROM_HERE,
             base::Bind(&WallpaperManager::CacheUsersWallpapers,
@@ -390,8 +413,8 @@ void WallpaperManager::ResizeAndSaveWallpaper(const UserImage& wallpaper,
                                               int preferred_height) {
   if (layout == ash::WALLPAPER_LAYOUT_CENTER) {
     // TODO(bshe): Generates cropped custom wallpaper for CENTER layout.
-    if (file_util::PathExists(path))
-      file_util::Delete(path, false);
+    if (base::PathExists(path))
+      base::DeleteFile(path, false);
     return;
   }
   scoped_refptr<base::RefCountedBytes> data;
@@ -488,25 +511,10 @@ void WallpaperManager::SetCustomWallpaper(const std::string& username,
 }
 
 void WallpaperManager::SetDefaultWallpaper() {
-  ash::DesktopBackgroundController* controller =
-      ash::Shell::GetInstance()->desktop_background_controller();
-  ash::WallpaperResolution resolution = controller->GetAppropriateResolution();
-  ash::WallpaperInfo info;
-  if (UserManager::Get()->IsLoggedInAsGuest()) {
-    info = (resolution == ash::WALLPAPER_RESOLUTION_LARGE) ?
-        ash::kGuestLargeWallpaper : ash::kGuestSmallWallpaper;
-  } else {
-    info = (resolution == ash::WALLPAPER_RESOLUTION_LARGE) ?
-        ash::kDefaultLargeWallpaper : ash::kDefaultSmallWallpaper;
-  }
-
-  // Prevents loading of the same wallpaper as the currently loading/loaded one.
-  if (controller->GetWallpaperIDR() == info.idr)
-    return;
-
   current_wallpaper_path_.clear();
-  loaded_wallpapers_++;
-  controller->SetDefaultWallpaper(info);
+  if (ash::Shell::GetInstance()->desktop_background_controller()->
+          SetDefaultWallpaper(UserManager::Get()->IsLoggedInAsGuest()))
+    loaded_wallpapers_++;
 }
 
 void WallpaperManager::SetInitialUserWallpaper(const std::string& username,
@@ -555,7 +563,7 @@ void WallpaperManager::SetLastSelectedUser(
 
 void WallpaperManager::SetUserWallpaper(const std::string& email) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  if (email == kGuestUserEMail) {
+  if (email == UserManager::kGuestUserName) {
     SetDefaultWallpaper();
     return;
   }
@@ -622,6 +630,14 @@ void WallpaperManager::SetWallpaperFromImageSkia(
 void WallpaperManager::UpdateWallpaper() {
   ClearWallpaperCache();
   current_wallpaper_path_.clear();
+  // For GAIA login flow, the last_selected_user_ may not be set before user
+  // login. If UpdateWallpaper is called at GAIA login screen, no wallpaper will
+  // be set. It could result a black screen on external monitors.
+  // See http://crbug.com/265689 for detail.
+  if (last_selected_user_.empty()) {
+    SetDefaultWallpaper();
+    return;
+  }
   SetUserWallpaper(last_selected_user_);
 }
 
@@ -683,13 +699,12 @@ void WallpaperManager::ClearObsoleteWallpaperPrefs() {
 
 void WallpaperManager::DeleteAllExcept(const base::FilePath& path) {
   base::FilePath dir = path.DirName();
-  if (file_util::DirectoryExists(dir)) {
-    file_util::FileEnumerator files(dir, false,
-                                    file_util::FileEnumerator::FILES);
+  if (base::DirectoryExists(dir)) {
+    base::FileEnumerator files(dir, false, base::FileEnumerator::FILES);
     for (base::FilePath current = files.Next(); !current.empty();
          current = files.Next()) {
       if (current != path)
-        file_util::Delete(current, false);
+        base::DeleteFile(current, false);
     }
   }
 }
@@ -701,8 +716,8 @@ void WallpaperManager::DeleteWallpaperInList(
     base::FilePath path = *it;
     // Some users may still have legacy wallpapers with png extension. We need
     // to delete these wallpapers too.
-    if (!file_util::Delete(path, true) &&
-        !file_util::Delete(path.AddExtension(".png"), false)) {
+    if (!base::DeleteFile(path, true) &&
+        !base::DeleteFile(path.AddExtension(".png"), false)) {
       LOG(ERROR) << "Failed to remove user wallpaper at " << path.value();
     }
   }
@@ -744,17 +759,23 @@ void WallpaperManager::EnsureCustomWallpaperDirectories(
     const std::string& email) {
   base::FilePath dir;
   dir = GetCustomWallpaperDir(kSmallWallpaperSubDir, email);
-  if (!file_util::PathExists(dir))
+  if (!base::PathExists(dir))
     file_util::CreateDirectory(dir);
   dir = GetCustomWallpaperDir(kLargeWallpaperSubDir, email);
-  if (!file_util::PathExists(dir))
+  if (!base::PathExists(dir))
     file_util::CreateDirectory(dir);
   dir = GetCustomWallpaperDir(kOriginalWallpaperSubDir, email);
-  if (!file_util::PathExists(dir))
+  if (!base::PathExists(dir))
     file_util::CreateDirectory(dir);
   dir = GetCustomWallpaperDir(kThumbnailWallpaperSubDir, email);
-  if (!file_util::PathExists(dir))
+  if (!base::PathExists(dir))
     file_util::CreateDirectory(dir);
+}
+
+CommandLine* WallpaperManager::GetComandLine() {
+  CommandLine* command_line = command_line_for_testing_ ?
+      command_line_for_testing_ : CommandLine::ForCurrentProcess();
+  return command_line;
 }
 
 void WallpaperManager::FallbackToOldCustomWallpaper(const std::string& email,
@@ -775,7 +796,7 @@ void WallpaperManager::InitializeRegisteredDeviceWallpaper() {
   if (UserManager::Get()->IsUserLoggedIn())
     return;
 
-  bool disable_boot_animation = CommandLine::ForCurrentProcess()->
+  bool disable_boot_animation = GetComandLine()->
       HasSwitch(switches::kDisableBootAnimation);
   bool show_users = true;
   bool result = CrosSettings::Get()->GetBoolean(
@@ -859,28 +880,28 @@ void WallpaperManager::MoveCustomWallpapersOnWorker(const UserList& users) {
     EnsureCustomWallpaperDirectories(email);
     from_path = GetWallpaperPathForUser(email, true);
     // Old wallpaper with extension name may still exist.
-    if (!file_util::PathExists(from_path))
+    if (!base::PathExists(from_path))
       from_path = from_path.AddExtension(".png");
-    if (file_util::PathExists(from_path)) {
+    if (base::PathExists(from_path)) {
       // Appends DUMMY to the file name of moved custom wallpaper. This way we
       // do not need to update WallpaperInfo for user.
       to_path = GetCustomWallpaperPath(kSmallWallpaperSubDir, email, "DUMMY");
-      file_util::Move(from_path, to_path);
+      base::Move(from_path, to_path);
     }
     from_path = GetWallpaperPathForUser(email, false);
-    if (!file_util::PathExists(from_path))
+    if (!base::PathExists(from_path))
       from_path = from_path.AddExtension(".png");
-    if (file_util::PathExists(from_path)) {
+    if (base::PathExists(from_path)) {
       to_path = GetCustomWallpaperPath(kLargeWallpaperSubDir, email, "DUMMY");
-      file_util::Move(from_path, to_path);
+      base::Move(from_path, to_path);
     }
     from_path = GetOriginalWallpaperPathForUser(email);
-    if (!file_util::PathExists(from_path))
+    if (!base::PathExists(from_path))
       from_path = from_path.AddExtension(".png");
-    if (file_util::PathExists(from_path)) {
+    if (base::PathExists(from_path)) {
       to_path = GetCustomWallpaperPath(kOriginalWallpaperSubDir, email,
                                        "DUMMY");
-      file_util::Move(from_path, to_path);
+      base::Move(from_path, to_path);
     }
   }
 }
@@ -935,8 +956,8 @@ void WallpaperManager::GetCustomWallpaperInternalOld(
       IsRunningSequenceOnCurrentThread(sequence_token_));
   std::string file_name = wallpaper_path.BaseName().value();
 
-  if (!file_util::PathExists(wallpaper_path)) {
-    if (file_util::PathExists(wallpaper_path.AddExtension(".png"))) {
+  if (!base::PathExists(wallpaper_path)) {
+    if (base::PathExists(wallpaper_path.AddExtension(".png"))) {
       // Old wallpaper may have a png extension.
       file_name += ".png";
     } else {
@@ -948,7 +969,7 @@ void WallpaperManager::GetCustomWallpaperInternalOld(
   }
 
   base::FilePath valid_path = wallpaper_path.DirName().Append(file_name);
-  if (!file_util::PathExists(valid_path))
+  if (!base::PathExists(valid_path))
     valid_path = valid_path.AddExtension(".png");
   BrowserThread::PostTask(
       BrowserThread::UI, FROM_HERE,
@@ -969,7 +990,7 @@ void WallpaperManager::GetCustomWallpaperInternal(
       IsRunningSequenceOnCurrentThread(sequence_token_));
 
   base::FilePath valid_path = wallpaper_path;
-  if (!file_util::PathExists(wallpaper_path)) {
+  if (!base::PathExists(wallpaper_path)) {
     // Falls back on original file if the correct resoltuion file does not
     // exist. This may happen when the original custom wallpaper is small or
     // browser shutdown before resized wallpaper saved.
@@ -977,7 +998,7 @@ void WallpaperManager::GetCustomWallpaperInternal(
                                         info.file);
   }
 
-  if (!file_util::PathExists(valid_path)) {
+  if (!base::PathExists(valid_path)) {
     BrowserThread::PostTask(
         BrowserThread::UI,
         FROM_HERE,
@@ -1003,6 +1024,7 @@ void WallpaperManager::OnWallpaperDecoded(const std::string& email,
                                           bool update_wallpaper,
                                           const UserImage& wallpaper) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  TRACE_EVENT_ASYNC_END0("ui", "LoadAndDecodeWallpaper", this);
 
   // If decoded wallpaper is empty, we are probably failed to decode the file.
   // Use default wallpaper in this case.
@@ -1060,11 +1082,13 @@ void WallpaperManager::SaveCustomWallpaper(const std::string& email,
       GetCustomWallpaperPath(kLargeWallpaperSubDir, email, file_name);
 
   std::vector<unsigned char> image_data = wallpaper.raw_image();
-  // Saves the original file in case that resized wallpaper is not generated
-  // (i.e. chrome shutdown before resized wallpaper is saved).
-  SaveWallpaperInternal(original_path,
-                        reinterpret_cast<char*>(&*image_data.begin()),
-                        image_data.size());
+  // Re-encode orginal file to jpeg format and saves the result in case that
+  // resized wallpaper is not generated (i.e. chrome shutdown before resized
+  // wallpaper is saved).
+  ResizeAndSaveWallpaper(wallpaper, original_path,
+                         ash::WALLPAPER_LAYOUT_STRETCH,
+                         wallpaper.image().width(),
+                         wallpaper.image().height());
   DeleteAllExcept(original_path);
 
   ResizeAndSaveWallpaper(wallpaper, small_wallpaper_path, layout,
@@ -1094,6 +1118,7 @@ void WallpaperManager::StartLoad(const std::string& email,
                                  bool update_wallpaper,
                                  const base::FilePath& wallpaper_path) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  TRACE_EVENT_ASYNC_BEGIN0("ui", "LoadAndDecodeWallpaper", this);
 
   // All wallpaper related operation should run on the same thread. So we pass
   // |sequence_token_| here.
@@ -1113,4 +1138,4 @@ void WallpaperManager::TimezoneChanged(const icu::TimeZone& timezone) {
   RestartTimer();
 }
 
-}  // chromeos
+}  // namespace chromeos

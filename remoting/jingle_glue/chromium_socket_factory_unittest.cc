@@ -4,7 +4,7 @@
 
 #include "remoting/jingle_glue/chromium_socket_factory.h"
 
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -37,7 +37,7 @@ class ChromiumSocketFactoryTest : public testing::Test,
   }
 
  protected:
-  MessageLoopForIO message_loop_;
+  base::MessageLoopForIO message_loop_;
   base::RunLoop run_loop_;
 
   scoped_ptr<talk_base::PacketSocketFactory> socket_factory_;

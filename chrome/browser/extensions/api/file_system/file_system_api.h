@@ -9,7 +9,29 @@
 #include "chrome/common/extensions/api/file_system.h"
 #include "ui/shell_dialogs/select_file_dialog.h"
 
+namespace base {
+class FilePath;
+}
+
 namespace extensions {
+class ExtensionPrefs;
+
+namespace file_system_api {
+
+// Methods to get and set the path of the directory containing the last file
+// chosen by the user in response to a chrome.fileSystem.chooseEntry() call for
+// the given extension.
+
+// Returns true and populates result on success; false on failure.
+bool GetLastChooseEntryDirectory(const ExtensionPrefs* prefs,
+                                 const std::string& extension_id,
+                                 base::FilePath* path);
+
+void SetLastChooseEntryDirectory(ExtensionPrefs* prefs,
+                                 const std::string& extension_id,
+                                 const base::FilePath& path);
+
+}  // namespace file_system_api
 
 class FileSystemGetDisplayPathFunction : public SyncExtensionFunction {
  public:
@@ -28,24 +50,42 @@ class FileSystemEntryFunction : public AsyncExtensionFunction {
     WRITABLE
   };
 
+  FileSystemEntryFunction();
+
   virtual ~FileSystemEntryFunction() {}
 
   bool HasFileSystemWritePermission();
 
-  // This is called when a writable file entry is being returned. The function
-  // will ensure the file exists, creating it if necessary, and also check that
-  // the file is not a link. If it succeeds it proceeds to
-  // RegisterFileSystemAndSendResponse, otherwise to HandleWritableFileError.
-  void CheckWritableFile(const base::FilePath& path);
+  // This is called when writable file entries are being returned. The function
+  // will ensure the files exist, creating them if necessary, and also check
+  // that none of the files are links. If it succeeds it proceeds to
+  // RegisterFileSystemsAndSendResponse, otherwise to HandleWritableFileError.
+  void CheckWritableFiles(const std::vector<base::FilePath>& path);
 
   // This will finish the choose file process. This is either called directly
-  // from FileSelected, or from CreateFileIfNecessary. It is called on the UI
+  // from FilesSelected, or from WritableFileChecker. It is called on the UI
   // thread.
-  void RegisterFileSystemAndSendResponse(const base::FilePath& path,
-                                         EntryType entry_type);
+  void RegisterFileSystemsAndSendResponse(
+      const std::vector<base::FilePath>& path);
+
+  // Creates a response dictionary and sets it as the response to be sent.
+  void CreateResponse();
+
+  // Adds an entry to the response dictionary.
+  void AddEntryToResponse(const base::FilePath& path,
+                          const std::string& id_override);
 
   // called on the UI thread if there is a problem checking a writable file.
-  void HandleWritableFileError();
+  void HandleWritableFileError(const std::string& error);
+
+  // Whether multiple entries have been requested.
+  bool multiple_;
+
+  // The type of the entry or entries to return.
+  EntryType entry_type_;
+
+  // The dictionary to send as the response.
+  base::DictionaryValue* response_;
 };
 
 class FileSystemGetWritableEntryFunction : public FileSystemEntryFunction {
@@ -72,6 +112,9 @@ class FileSystemChooseEntryFunction : public FileSystemEntryFunction {
  public:
   // Allow picker UI to be skipped in testing.
   static void SkipPickerAndAlwaysSelectPathForTest(base::FilePath* path);
+  static void SkipPickerAndAlwaysSelectPathsForTest(
+      std::vector<base::FilePath>* paths);
+  static void SkipPickerAndSelectSuggestedPathForTest();
   static void SkipPickerAndAlwaysCancelForTest();
   static void StopSkippingPickerForTest();
   // Call this with the directory for test file paths. On Chrome OS, accessed
@@ -99,15 +142,50 @@ class FileSystemChooseEntryFunction : public FileSystemEntryFunction {
 
   virtual ~FileSystemChooseEntryFunction() {}
   virtual bool RunImpl() OVERRIDE;
-  bool ShowPicker(const base::FilePath& suggested_path,
-                  const ui::SelectFileDialog::FileTypeInfo& file_type_info,
-                  ui::SelectFileDialog::Type picker_type,
-                  EntryType entry_type);
+  void ShowPicker(const ui::SelectFileDialog::FileTypeInfo& file_type_info,
+                  ui::SelectFileDialog::Type picker_type);
 
  private:
-  // FileSelected and FileSelectionCanceled are called by the file picker.
-  void FileSelected(const base::FilePath& path, EntryType entry_type);
+  void SetInitialPathOnFileThread(const base::FilePath& suggested_name,
+                                  const base::FilePath& previous_path);
+
+  // FilesSelected and FileSelectionCanceled are called by the file picker.
+  void FilesSelected(const std::vector<base::FilePath>& path);
   void FileSelectionCanceled();
+
+  base::FilePath initial_path_;
+};
+
+class FileSystemRetainEntryFunction : public SyncExtensionFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION("fileSystem.retainEntry", FILESYSTEM_RETAINENTRY)
+
+ protected:
+  virtual ~FileSystemRetainEntryFunction() {}
+  virtual bool RunImpl() OVERRIDE;
+
+ private:
+  // Retains the file entry referenced by |entry_id| in apps::SavedFilesService.
+  // |entry_id| must refer to an entry in an isolated file system.
+  bool RetainFileEntry(const std::string& entry_id);
+};
+
+class FileSystemIsRestorableFunction : public SyncExtensionFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION("fileSystem.isRestorable", FILESYSTEM_ISRESTORABLE)
+
+ protected:
+  virtual ~FileSystemIsRestorableFunction() {}
+  virtual bool RunImpl() OVERRIDE;
+};
+
+class FileSystemRestoreEntryFunction : public FileSystemEntryFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION("fileSystem.restoreEntry", FILESYSTEM_RESTOREENTRY)
+
+ protected:
+  virtual ~FileSystemRestoreEntryFunction() {}
+  virtual bool RunImpl() OVERRIDE;
 };
 
 }  // namespace extensions

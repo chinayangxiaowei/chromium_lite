@@ -9,34 +9,28 @@
 #include "base/command_line.h"
 #include "base/json/json_string_value_serializer.h"
 #include "base/lazy_instance.h"
-#include "base/message_loop.h"
-#include "base/utf_string_conversions.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/extension_messages.h"
 #include "chrome/common/render_messages.h"
 #include "chrome/common/url_constants.h"
-#include "chrome/common/view_type.h"
 #include "chrome/renderer/extensions/chrome_v8_context.h"
 #include "chrome/renderer/extensions/console.h"
 #include "chrome/renderer/extensions/dispatcher.h"
-#include "chrome/renderer/extensions/miscellaneous_bindings.h"
+#include "chrome/renderer/extensions/messaging_bindings.h"
 #include "chrome/renderer/extensions/user_script_scheduler.h"
 #include "chrome/renderer/extensions/user_script_slave.h"
+#include "chrome/renderer/web_apps.h"
 #include "content/public/renderer/render_view.h"
 #include "content/public/renderer/render_view_visitor.h"
 #include "extensions/common/constants.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebURLRequest.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebConsoleMessage.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebDocument.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebFrame.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebScopedUserGesture.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebView.h"
-#include "webkit/glue/image_resource_fetcher.h"
-#include "webkit/glue/resource_fetcher.h"
-
-namespace base {
-class ListValue;
-}  // namespace base
+#include "third_party/WebKit/public/platform/WebURLRequest.h"
+#include "third_party/WebKit/public/web/WebConsoleMessage.h"
+#include "third_party/WebKit/public/web/WebDocument.h"
+#include "third_party/WebKit/public/web/WebFrame.h"
+#include "third_party/WebKit/public/web/WebScopedUserGesture.h"
+#include "third_party/WebKit/public/web/WebView.h"
 
 using content::ConsoleMessageLevel;
 using WebKit::WebConsoleMessage;
@@ -45,8 +39,6 @@ using WebKit::WebFrame;
 using WebKit::WebURLRequest;
 using WebKit::WebScopedUserGesture;
 using WebKit::WebView;
-using webkit_glue::ImageResourceFetcher;
-using webkit_glue::ResourceFetcher;
 
 namespace extensions {
 
@@ -67,7 +59,7 @@ class ViewAccumulator : public content::RenderViewVisitor {
  public:
   ViewAccumulator(const std::string& extension_id,
                   int browser_window_id,
-                  chrome::ViewType view_type)
+                  ViewType view_type)
       : extension_id_(extension_id),
         browser_window_id_(browser_window_id),
         view_type_(view_type) {
@@ -82,7 +74,7 @@ class ViewAccumulator : public content::RenderViewVisitor {
       return true;
 
     GURL url = render_view->GetWebView()->mainFrame()->document().url();
-    if (!url.SchemeIs(extensions::kExtensionScheme))
+    if (!url.SchemeIs(kExtensionScheme))
       return true;
     const std::string& extension_id = url.host();
     if (extension_id != extension_id_)
@@ -95,19 +87,19 @@ class ViewAccumulator : public content::RenderViewVisitor {
 
     views_.push_back(render_view);
 
-    if (view_type_ == chrome::VIEW_TYPE_EXTENSION_BACKGROUND_PAGE)
+    if (view_type_ == VIEW_TYPE_EXTENSION_BACKGROUND_PAGE)
       return false;  // There can be only one...
     return true;
   }
 
  private:
   // Returns true if |type| "isa" |match|.
-  static bool ViewTypeMatches(chrome::ViewType type, chrome::ViewType match) {
+  static bool ViewTypeMatches(ViewType type, ViewType match) {
     if (type == match)
       return true;
 
     // INVALID means match all.
-    if (match == chrome::VIEW_TYPE_INVALID)
+    if (match == VIEW_TYPE_INVALID)
       return true;
 
     return false;
@@ -115,7 +107,7 @@ class ViewAccumulator : public content::RenderViewVisitor {
 
   std::string extension_id_;
   int browser_window_id_;
-  chrome::ViewType view_type_;
+  ViewType view_type_;
   std::vector<content::RenderView*> views_;
 };
 
@@ -125,7 +117,7 @@ class ViewAccumulator : public content::RenderViewVisitor {
 std::vector<content::RenderView*> ExtensionHelper::GetExtensionViews(
     const std::string& extension_id,
     int browser_window_id,
-    chrome::ViewType view_type) {
+    ViewType view_type) {
   ViewAccumulator accumulator(extension_id, browser_window_id, view_type);
   content::RenderView::ForEach(&accumulator);
   return accumulator.views();
@@ -135,7 +127,7 @@ std::vector<content::RenderView*> ExtensionHelper::GetExtensionViews(
 content::RenderView* ExtensionHelper::GetBackgroundPage(
     const std::string& extension_id) {
   ViewAccumulator accumulator(extension_id, extension_misc::kUnknownWindowId,
-                              chrome::VIEW_TYPE_EXTENSION_BACKGROUND_PAGE);
+                              VIEW_TYPE_EXTENSION_BACKGROUND_PAGE);
   content::RenderView::ForEach(&accumulator);
   CHECK_LE(accumulator.views().size(), 1u);
   if (accumulator.views().size() == 0)
@@ -149,7 +141,7 @@ ExtensionHelper::ExtensionHelper(content::RenderView* render_view,
       content::RenderViewObserverTracker<ExtensionHelper>(render_view),
       dispatcher_(dispatcher),
       pending_app_icon_requests_(0),
-      view_type_(chrome::VIEW_TYPE_INVALID),
+      view_type_(VIEW_TYPE_INVALID),
       tab_id_(-1),
       browser_window_id_(-1) {
 }
@@ -217,9 +209,9 @@ void ExtensionHelper::DidStartProvisionalLoad(WebKit::WebFrame* frame) {
 void ExtensionHelper::DraggableRegionsChanged(WebKit::WebFrame* frame) {
   WebKit::WebVector<WebKit::WebDraggableRegion> webregions =
       frame->document().draggableRegions();
-  std::vector<extensions::DraggableRegion> regions;
+  std::vector<DraggableRegion> regions;
   for (size_t i = 0; i < webregions.size(); ++i) {
-    extensions::DraggableRegion region;
+    DraggableRegion region;
     region.bounds = webregions[i].bounds;
     region.draggable = webregions[i].draggable;
     regions.push_back(region);
@@ -239,13 +231,6 @@ void ExtensionHelper::FrameDetached(WebFrame* frame) {
 }
 
 void ExtensionHelper::DidCreateDataSource(WebFrame* frame, WebDataSource* ds) {
-  // If there are any app-related fetches in progress, they can be cancelled now
-  // since we have navigated away from the page that created them.
-  if (!frame->parent()) {
-    app_icon_fetchers_.clear();
-    app_definition_fetcher_.reset(NULL);
-  }
-
   // Check first if we created a scheduler for the frame, since this function
   // gets called for navigations within the document.
   if (g_schedulers.Get().count(frame))
@@ -265,35 +250,30 @@ void ExtensionHelper::OnExtensionResponse(int request_id,
 }
 
 void ExtensionHelper::OnExtensionMessageInvoke(const std::string& extension_id,
+                                               const std::string& module_name,
                                                const std::string& function_name,
                                                const base::ListValue& args,
-                                               const GURL& event_url,
                                                bool user_gesture) {
-  scoped_ptr<WebScopedUserGesture> web_user_gesture;
-  if (user_gesture) {
-    web_user_gesture.reset(new WebScopedUserGesture);
-  }
-
-  dispatcher_->v8_context_set().DispatchChromeHiddenMethod(
-      extension_id, function_name, args, render_view(), event_url);
+  dispatcher_->InvokeModuleSystemMethod(
+      render_view(), extension_id, module_name, function_name, args,
+      user_gesture);
 }
 
 void ExtensionHelper::OnExtensionDispatchOnConnect(
     int target_port_id,
     const std::string& channel_name,
-    const std::string& tab_json,
-    const std::string& source_extension_id,
-    const std::string& target_extension_id) {
-  MiscellaneousBindings::DispatchOnConnect(
+    const base::DictionaryValue& source_tab,
+    const ExtensionMsg_ExternalConnectionInfo& info) {
+  MessagingBindings::DispatchOnConnect(
       dispatcher_->v8_context_set().GetAll(),
-      target_port_id, channel_name, tab_json,
-      source_extension_id, target_extension_id,
+      target_port_id, channel_name, source_tab,
+      info.source_id, info.target_id, info.source_url,
       render_view());
 }
 
 void ExtensionHelper::OnExtensionDeliverMessage(int target_id,
                                                 const std::string& message) {
-  MiscellaneousBindings::DeliverMessage(dispatcher_->v8_context_set().GetAll(),
+  MessagingBindings::DeliverMessage(dispatcher_->v8_context_set().GetAll(),
                                         target_id,
                                         message,
                                         render_view());
@@ -302,7 +282,7 @@ void ExtensionHelper::OnExtensionDeliverMessage(int target_id,
 void ExtensionHelper::OnExtensionDispatchOnDisconnect(
     int port_id,
     const std::string& error_message) {
-  MiscellaneousBindings::DispatchOnDisconnect(
+  MessagingBindings::DispatchOnDisconnect(
       dispatcher_->v8_context_set().GetAll(),
       port_id, error_message,
       render_view());
@@ -314,8 +294,12 @@ void ExtensionHelper::OnExecuteCode(
   WebFrame* main_frame = webview->mainFrame();
   if (!main_frame) {
     ListValue val;
-    Send(new ExtensionHostMsg_ExecuteCodeFinished(
-        routing_id(), params.request_id, "No main frame", -1, GURL(""), val));
+    Send(new ExtensionHostMsg_ExecuteCodeFinished(routing_id(),
+                                                  params.request_id,
+                                                  "No main frame",
+                                                  -1,
+                                                  GURL(std::string()),
+                                                  val));
     return;
   }
 
@@ -349,7 +333,7 @@ void ExtensionHelper::OnGetApplicationInfo(int page_id) {
       routing_id(), page_id, app_info));
 }
 
-void ExtensionHelper::OnNotifyRendererViewType(chrome::ViewType type) {
+void ExtensionHelper::OnNotifyRendererViewType(ViewType type) {
   view_type_ = type;
 }
 
@@ -376,7 +360,8 @@ void ExtensionHelper::OnAppWindowClosed() {
       dispatcher_->v8_context_set().GetByV8Context(script_context);
   if (!chrome_v8_context)
     return;
-  chrome_v8_context->CallChromeHiddenMethod("OnAppWindowClosed", 0, NULL, NULL);
+  chrome_v8_context->module_system()->CallModuleMethod(
+      "app.window", "onAppWindowClosed");
 }
 
 }  // namespace extensions

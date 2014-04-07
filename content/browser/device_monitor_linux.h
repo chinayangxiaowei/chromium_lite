@@ -10,7 +10,7 @@
 
 #include "base/basictypes.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 
 extern "C" {
 struct udev_device;
@@ -20,7 +20,7 @@ namespace content {
 
 class UdevLinux;
 
-class DeviceMonitorLinux : public MessageLoop::DestructionObserver {
+class DeviceMonitorLinux : public base::MessageLoop::DestructionObserver {
  public:
   DeviceMonitorLinux();
   virtual ~DeviceMonitorLinux();

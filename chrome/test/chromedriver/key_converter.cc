@@ -5,8 +5,8 @@
 #include "chrome/test/chromedriver/key_converter.h"
 
 #include "base/format_macros.h"
-#include "base/stringprintf.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/test/chromedriver/chrome/status.h"
 #include "chrome/test/chromedriver/chrome/ui_events.h"
 #include "chrome/test/chromedriver/keycode_text_conversion.h"
@@ -97,6 +97,15 @@ const char16 kWebDriverControlKey = 0xE009U;
 const char16 kWebDriverAltKey = 0xE00AU;
 const char16 kWebDriverCommandKey = 0xE03DU;
 
+// Returns whether the given key code has a corresponding printable char.
+// Notice: The given key code should be a special WebDriver key code.
+bool IsSpecialKeyPrintable(ui::KeyboardCode key_code) {
+  return key_code == ui::VKEY_TAB || key_code == ui::VKEY_SPACE ||
+      key_code == ui::VKEY_OEM_1 || key_code == ui::VKEY_OEM_PLUS ||
+      key_code == ui::VKEY_OEM_COMMA ||
+      (key_code >= ui::VKEY_NUMPAD0 && key_code <= ui::VKEY_DIVIDE);
+}
+
 // Returns whether the given key is a WebDriver key modifier.
 bool IsModifierKey(char16 key) {
   switch (key) {
@@ -158,11 +167,13 @@ bool KeyCodeFromShorthandKey(char16 key_utf16,
 }  // namespace
 
 KeyEvent CreateKeyDownEvent(ui::KeyboardCode key_code, int modifiers) {
-  return KeyEvent(kRawKeyDownEventType, modifiers, "", "", key_code);
+  return KeyEvent(
+      kRawKeyDownEventType, modifiers, std::string(), std::string(), key_code);
 }
 
 KeyEvent CreateKeyUpEvent(ui::KeyboardCode key_code, int modifiers) {
-  return KeyEvent(kKeyUpEventType, modifiers, "", "", key_code);
+  return KeyEvent(
+      kKeyUpEventType, modifiers, std::string(), std::string(), key_code);
 }
 
 KeyEvent CreateCharEvent(const std::string& unmodified_text,
@@ -176,9 +187,9 @@ KeyEvent CreateCharEvent(const std::string& unmodified_text,
 }
 
 Status ConvertKeysToKeyEvents(const string16& client_keys,
-                            bool release_modifiers,
-                            int* modifiers,
-                            std::list<KeyEvent>* client_key_events) {
+                              bool release_modifiers,
+                              int* modifiers,
+                              std::list<KeyEvent>* client_key_events) {
   std::list<KeyEvent> key_events;
 
   string16 keys = client_keys;
@@ -240,7 +251,9 @@ Status ConvertKeysToKeyEvents(const string16& client_keys,
 
     // Get the key code, text, and modifiers for the given key.
     bool should_skip = false;
-    if (KeyCodeFromSpecialWebDriverKey(key, &key_code) ||
+    bool is_special_key = KeyCodeFromSpecialWebDriverKey(key, &key_code);
+    std::string error_msg;
+    if (is_special_key ||
         KeyCodeFromShorthandKey(key, &key_code, &should_skip)) {
       if (should_skip)
         continue;
@@ -253,6 +266,9 @@ Status ConvertKeysToKeyEvents(const string16& client_keys,
       if (key_code == ui::VKEY_RETURN) {
         // For some reason Chrome expects a carriage return for the return key.
         modified_text = unmodified_text = "\r";
+      } else if (is_special_key && !IsSpecialKeyPrintable(key_code)) {
+        // To prevent char event for special keys like DELETE.
+        modified_text = unmodified_text = std::string();
       } else {
         // WebDriver assumes a numpad key should translate to the number,
         // which requires NumLock to be on with some platforms. This isn't
@@ -260,26 +276,35 @@ Status ConvertKeysToKeyEvents(const string16& client_keys,
         int webdriver_modifiers = 0;
         if (key_code >= ui::VKEY_NUMPAD0 && key_code <= ui::VKEY_NUMPAD9)
           webdriver_modifiers = kNumLockKeyModifierMask;
-        unmodified_text = ConvertKeyCodeToText(key_code, webdriver_modifiers);
-        modified_text = ConvertKeyCodeToText(
-            key_code,
-            all_modifiers | webdriver_modifiers);
+        if (!ConvertKeyCodeToText(
+            key_code, webdriver_modifiers, &unmodified_text, &error_msg))
+          return Status(kUnknownError, error_msg);
+        if (!ConvertKeyCodeToText(
+            key_code, all_modifiers | webdriver_modifiers, &modified_text,
+            &error_msg))
+          return Status(kUnknownError, error_msg);
       }
     } else {
       int necessary_modifiers = 0;
-      ConvertCharToKeyCode(key, &key_code, &necessary_modifiers);
+      ConvertCharToKeyCode(key, &key_code, &necessary_modifiers, &error_msg);
+      if (!error_msg.empty())
+        return Status(kUnknownError, error_msg);
       all_modifiers |= necessary_modifiers;
       if (key_code != ui::VKEY_UNKNOWN) {
-        unmodified_text = ConvertKeyCodeToText(key_code, 0);
-        modified_text = ConvertKeyCodeToText(key_code, all_modifiers);
-      }
-
-      if (unmodified_text.empty() || modified_text.empty()) {
+        if (!ConvertKeyCodeToText(key_code, 0, &unmodified_text, &error_msg))
+          return Status(kUnknownError, error_msg);
+        if (!ConvertKeyCodeToText(
+            key_code, all_modifiers, &modified_text, &error_msg))
+          return Status(kUnknownError, error_msg);
+        if (unmodified_text.empty() || modified_text.empty()) {
+          // To prevent char event for special cases like CTRL + x (cut).
+          unmodified_text.clear();
+          modified_text.clear();
+        }
+      } else {
         // Do a best effort and use the raw key we were given.
-        if (unmodified_text.empty())
-          unmodified_text = UTF16ToUTF8(keys.substr(i, 1));
-        if (modified_text.empty())
-          modified_text = UTF16ToUTF8(keys.substr(i, 1));
+        unmodified_text = UTF16ToUTF8(keys.substr(i, 1));
+        modified_text = UTF16ToUTF8(keys.substr(i, 1));
       }
     }
 

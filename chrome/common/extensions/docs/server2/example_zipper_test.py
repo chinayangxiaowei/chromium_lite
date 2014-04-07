@@ -7,21 +7,21 @@ import os
 import sys
 import unittest
 
+from caching_file_system import CachingFileSystem
 from compiled_file_system import CompiledFileSystem
 from example_zipper import ExampleZipper
-from in_memory_object_store import InMemoryObjectStore
 from local_file_system import LocalFileSystem
-from memcache_file_system import MemcacheFileSystem
+from object_store_creator import ObjectStoreCreator
 
 class ExampleZipperTest(unittest.TestCase):
   def setUp(self):
-    object_store = InMemoryObjectStore('')
-    self._file_system = MemcacheFileSystem(
+    object_store_creator = ObjectStoreCreator.ForTest()
+    self._file_system = CachingFileSystem(
         LocalFileSystem(os.path.join(sys.path[0], 'test_data')),
-        object_store)
+        object_store_creator)
     self._example_zipper = ExampleZipper(
+        CompiledFileSystem.Factory(self._file_system, object_store_creator),
         self._file_system,
-        CompiledFileSystem.Factory(self._file_system, object_store),
         'example_zipper')
 
   def testCreateZip(self):

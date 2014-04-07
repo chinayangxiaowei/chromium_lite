@@ -11,25 +11,26 @@
 // IPC_MESSAGE_MACROS_LOG_ENABLED so ppapi_messages.h will generate the
 // ViewMsgLog et al. functions.
 
-#include "base/message_loop.h"
+#include "base/command_line.h"
+#include "base/message_loop/message_loop.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/threading/thread.h"
 #include "components/tracing/child_trace_message_filter.h"
 #include "ipc/ipc_channel_handle.h"
 #include "ipc/ipc_logging.h"
 #include "ipc/ipc_message.h"
-#include "native_client/src/shared/ppapi_proxy/ppruntime.h"
 #include "native_client/src/shared/srpc/nacl_srpc.h"
 #include "native_client/src/untrusted/irt/irt_ppapi.h"
 #include "ppapi/c/ppp.h"
 #include "ppapi/c/ppp_instance.h"
+#include "ppapi/native_client/src/shared/ppapi_proxy/ppruntime.h"
 #include "ppapi/proxy/plugin_dispatcher.h"
 #include "ppapi/proxy/plugin_globals.h"
 #include "ppapi/proxy/plugin_proxy_delegate.h"
 #include "ppapi/shared_impl/ppb_audio_shared.h"
 
 #if defined(IPC_MESSAGE_LOG_ENABLED)
-#include "base/hash_tables.h"
+#include "base/containers/hash_tables.h"
 
 LogFunctionMap g_log_function_mapping;
 
@@ -77,14 +78,18 @@ class PpapiDispatcher : public ProxyChannel,
   virtual std::string GetUILanguage() OVERRIDE;
   virtual void PreCacheFont(const void* logfontw) OVERRIDE;
   virtual void SetActiveURL(const std::string& url) OVERRIDE;
+  virtual PP_Resource CreateBrowserFont(
+      ppapi::proxy::Connection connection,
+      PP_Instance instance,
+      const PP_BrowserFont_Trusted_Description& desc,
+      const ppapi::Preferences& prefs) OVERRIDE;
 
   // IPC::Listener implementation.
   virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE;
 
  private:
   void OnMsgCreateNaClChannel(int renderer_id,
-                              const ppapi::PpapiPermissions& permissions,
-                              bool incognito,
+                              const ppapi::PpapiNaClChannelArgs& args,
                               SerializedHandle handle);
   void OnMsgResourceReply(
       const ppapi::proxy::ResourceMessageReplyParams& reply_params,
@@ -109,7 +114,7 @@ PpapiDispatcher::PpapiDispatcher(scoped_refptr<base::MessageLoopProxy> io_loop)
   InitWithChannel(this, base::kNullProcessId, channel_handle,
                   false);  // Channel is server.
   channel()->AddFilter(
-      new components::ChildTraceMessageFilter(message_loop_));
+      new tracing::ChildTraceMessageFilter(message_loop_.get()));
 }
 
 base::MessageLoopProxy* PpapiDispatcher::GetIPCMessageLoop() {
@@ -169,6 +174,15 @@ void PpapiDispatcher::SetActiveURL(const std::string& url) {
   NOTIMPLEMENTED();
 }
 
+PP_Resource PpapiDispatcher::CreateBrowserFont(
+    ppapi::proxy::Connection connection,
+    PP_Instance instance,
+    const PP_BrowserFont_Trusted_Description& desc,
+    const ppapi::Preferences& prefs) {
+  NOTIMPLEMENTED();
+  return 0;
+}
+
 bool PpapiDispatcher::OnMessageReceived(const IPC::Message& msg) {
   IPC_BEGIN_MESSAGE_MAP(PpapiDispatcher, msg)
     IPC_MESSAGE_HANDLER(PpapiMsg_CreateNaClChannel, OnMsgCreateNaClChannel)
@@ -181,16 +195,29 @@ bool PpapiDispatcher::OnMessageReceived(const IPC::Message& msg) {
 
 void PpapiDispatcher::OnMsgCreateNaClChannel(
     int renderer_id,
-    const ppapi::PpapiPermissions& permissions,
-    bool incognito,
+    const ppapi::PpapiNaClChannelArgs& args,
     SerializedHandle handle) {
+  static bool command_line_and_logging_initialized = false;
+  if (!command_line_and_logging_initialized) {
+    CommandLine::Init(0, NULL);
+    for (size_t i = 0; i < args.switch_names.size(); ++i) {
+      DCHECK(i < args.switch_values.size());
+      CommandLine::ForCurrentProcess()->AppendSwitchASCII(
+          args.switch_names[i], args.switch_values[i]);
+    }
+    logging::LoggingSettings settings;
+    settings.logging_dest = logging::LOG_TO_SYSTEM_DEBUG_LOG;
+    logging::InitLogging(settings);
+    command_line_and_logging_initialized = true;
+  }
   // Tell the process-global GetInterface which interfaces it can return to the
   // plugin.
   ppapi::proxy::InterfaceList::SetProcessGlobalPermissions(
-      permissions);
+      args.permissions);
 
   PluginDispatcher* dispatcher =
-      new PluginDispatcher(::PPP_GetInterface, permissions, incognito);
+      new PluginDispatcher(::PPP_GetInterface, args.permissions,
+                           args.off_the_record);
   // The channel handle's true name is not revealed here.
   IPC::ChannelHandle channel_handle("nacl", handle.descriptor());
   if (!dispatcher->InitPluginWithChannel(this, base::kNullProcessId,
@@ -233,29 +260,15 @@ void PpapiPluginRegisterThreadCreator(
   ppapi::PPB_Audio_Shared::SetThreadFunctions(thread_functions);
 }
 
-int IrtInit() {
-  static int initialized = 0;
-  if (initialized) {
-    return 0;
-  }
-  if (!NaClSrpcModuleInit()) {
-    return 1;
-  }
-  initialized = 1;
-  return 0;
-}
-
 int PpapiPluginMain() {
-  IrtInit();
-
   // Though it isn't referenced here, we must instantiate an AtExitManager.
   base::AtExitManager exit_manager;
-  MessageLoop loop;
+  base::MessageLoop loop;
   IPC::Logging::set_log_function_map(&g_log_function_mapping);
   ppapi::proxy::PluginGlobals plugin_globals;
   base::Thread io_thread("Chrome_NaClIOThread");
   base::Thread::Options options;
-  options.message_loop_type = MessageLoop::TYPE_IO;
+  options.message_loop_type = base::MessageLoop::TYPE_IO;
   io_thread.StartWithOptions(options);
 
   // Start up the SRPC server on another thread. Otherwise, when it blocks
@@ -278,8 +291,6 @@ int PpapiPluginMain() {
   plugin_globals.set_plugin_proxy_delegate(&ppapi_dispatcher);
 
   loop.Run();
-
-  NaClSrpcModuleFini();
 
   return 0;
 }

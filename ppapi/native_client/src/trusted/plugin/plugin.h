@@ -19,11 +19,7 @@
 #include "native_client/src/include/nacl_macros.h"
 #include "native_client/src/include/nacl_scoped_ptr.h"
 #include "native_client/src/include/nacl_string.h"
-#include "native_client/src/trusted/plugin/file_downloader.h"
-#include "native_client/src/trusted/plugin/nacl_subprocess.h"
-#include "native_client/src/trusted/plugin/pnacl_coordinator.h"
-#include "native_client/src/trusted/plugin/service_runtime.h"
-#include "native_client/src/trusted/plugin/utility.h"
+#include "native_client/src/trusted/validator/nacl_file_info.h"
 
 #include "ppapi/c/private/ppb_nacl_private.h"
 #include "ppapi/cpp/private/var_private.h"
@@ -33,6 +29,12 @@
 #include "ppapi/cpp/url_loader.h"
 #include "ppapi/cpp/var.h"
 #include "ppapi/cpp/view.h"
+
+#include "ppapi/native_client/src/trusted/plugin/file_downloader.h"
+#include "ppapi/native_client/src/trusted/plugin/nacl_subprocess.h"
+#include "ppapi/native_client/src/trusted/plugin/pnacl_coordinator.h"
+#include "ppapi/native_client/src/trusted/plugin/service_runtime.h"
+#include "ppapi/native_client/src/trusted/plugin/utility.h"
 
 struct NaClSrpcChannel;
 
@@ -102,8 +104,10 @@ class Plugin : public pp::InstancePrivate {
   //
   // Updates nacl_module_origin() and nacl_module_url().
   bool LoadNaClModule(nacl::DescWrapper* wrapper, ErrorInfo* error_info,
-                      pp::CompletionCallback init_done_cb,
-                      pp::CompletionCallback crash_cb);
+                      bool enable_dyncode_syscalls,
+                      bool enable_exception_handling,
+                      const pp::CompletionCallback& init_done_cb,
+                      const pp::CompletionCallback& crash_cb);
 
   // Finish hooking interfaces up, after low-level initialization is
   // complete.
@@ -251,9 +255,11 @@ class Plugin : public pp::InstancePrivate {
   // corresponding to the url body is recorded for further lookup.
   bool StreamAsFile(const nacl::string& url,
                     PP_CompletionCallback pp_callback);
-  // Returns an open POSIX file descriptor retrieved by StreamAsFile()
-  // or NACL_NO_FILE_DESC. The caller must take ownership of the descriptor.
-  int32_t GetPOSIXFileDesc(const nacl::string& url);
+
+  // Returns rich information for a file retrieved by StreamAsFile(). This info
+  // contains a file descriptor. The caller must take ownership of this
+  // descriptor.
+  struct NaClFileInfo GetFileInfo(const nacl::string& url);
 
   // A helper function that gets the scheme type for |url|. Uses URLUtil_Dev
   // interface which this class has as a member.
@@ -277,6 +283,8 @@ class Plugin : public pp::InstancePrivate {
   const nacl::string& mime_type() const { return mime_type_; }
   // The default MIME type for the NaCl plugin.
   static const char* const kNaClMIMEType;
+  // The MIME type for the plugin when using PNaCl.
+  static const char* const kPnaclMIMEType;
   // Returns true if PPAPI Dev interfaces should be allowed.
   bool enable_dev_interfaces() { return enable_dev_interfaces_; }
 
@@ -323,11 +331,17 @@ class Plugin : public pp::InstancePrivate {
                             NaClSubprocess* subprocess,
                             const Manifest* manifest,
                             bool should_report_uma,
-                            bool uses_irt,
-                            bool uses_ppapi,
-                            ErrorInfo* error_info,
-                            pp::CompletionCallback init_done_cb,
-                            pp::CompletionCallback crash_cb);
+                            const SelLdrStartParams& params,
+                            const pp::CompletionCallback& init_done_cb,
+                            const pp::CompletionCallback& crash_cb);
+
+  // Start sel_ldr from the main thread, given the start params.
+  // Sets |success| to true on success.
+  // |pp_error| is set by CallOnMainThread (should be PP_OK).
+  void StartSelLdrOnMainThread(int32_t pp_error,
+                               ServiceRuntime* service_runtime,
+                               const SelLdrStartParams& params,
+                               bool* success);
 
   // Callback used when getting the URL for the .nexe file.  If the URL loading
   // is successful, the file descriptor is opened and can be passed to sel_ldr
@@ -381,9 +395,6 @@ class Plugin : public pp::InstancePrivate {
   void HistogramStartupTimeSmall(const std::string& name, float dt);
   void HistogramStartupTimeMedium(const std::string& name, float dt);
 
-  // Determines the appropriate nexe for the sandbox and requests a load.
-  void RequestNexeLoad();
-
   // This NEXE is being used as a content type handler rather than directly by
   // an HTML document.
   bool NexeIsContentHandler() const;
@@ -398,6 +409,11 @@ class Plugin : public pp::InstancePrivate {
   // detail level LOG_FATAL NaClLog entry.  If the crash was not due
   // to a LOG_FATAL this method will do nothing.
   void CopyCrashLogToJsConsole();
+
+  // Open an app file by requesting a file descriptor from the browser. This
+  // method first checks that the url is for an installed file before making the
+  // request so it won't slow down non-installed file downloads.
+  bool OpenURLFast(const nacl::string& url, FileDownloader* downloader);
 
   ScriptablePlugin* scriptable_plugin_;
 
@@ -468,7 +484,7 @@ class Plugin : public pp::InstancePrivate {
   std::set<FileDownloader*> url_downloaders_;
   // Keep track of file descriptors opened by StreamAsFile().
   // These are owned by the browser.
-  std::map<nacl::string, int32_t> url_fd_map_;
+  std::map<nacl::string, struct NaClFileInfo> url_file_info_map_;
 
   // Pending progress events.
   std::queue<ProgressEvent*> progress_events_;

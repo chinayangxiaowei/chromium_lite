@@ -17,14 +17,15 @@
 #include "base/memory/ref_counted.h"
 #include "content/common/content_export.h"
 #include "content/public/common/common_param_traits_macros.h"
-#include "googleurl/src/gurl.h"
 #include "ipc/ipc_message_utils.h"
 #include "ui/gfx/native_widget_types.h"
 #include "ui/surface/transport_dib.h"
+#include "url/gurl.h"
 
 class SkBitmap;
 
 namespace content {
+class PageState;
 struct Referrer;
 }
 
@@ -55,6 +56,14 @@ struct CONTENT_EXPORT ParamTraits<net::HostPortPair> {
   typedef net::HostPortPair param_type;
   static void Write(Message* m, const param_type& p);
   static bool Read(const Message* m, PickleIterator* iter, param_type* r);
+  static void Log(const param_type& p, std::string* l);
+};
+
+template <>
+struct CONTENT_EXPORT ParamTraits<content::PageState> {
+  typedef content::PageState param_type;
+  static void Write(Message* m, const param_type& p);
+  static bool Read(const Message* m, PickleIterator* iter, param_type* p);
   static void Log(const param_type& p, std::string* l);
 };
 
@@ -184,7 +193,7 @@ struct ParamTraits<TransportDIB::Id> {
 };
 #endif
 
-#if defined(USE_X11)
+#if defined(TOOLKIT_GTK)
 template<>
 struct ParamTraits<TransportDIB::Id> {
   typedef TransportDIB::Id param_type;

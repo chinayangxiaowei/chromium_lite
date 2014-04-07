@@ -8,7 +8,7 @@
 
 #include <gtk/gtk.h>
 
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "content/public/browser/notification_details.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
@@ -173,7 +173,7 @@ void DownloadStartedAnimationGtk::Close() {
 
   web_contents_ = NULL;
   gtk_widget_destroy(popup_);
-  MessageLoop::current()->DeleteSoon(FROM_HERE, this);
+  base::MessageLoop::current()->DeleteSoon(FROM_HERE, this);
 }
 
 void DownloadStartedAnimationGtk::AnimateToState(double state) {

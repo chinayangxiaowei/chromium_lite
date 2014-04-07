@@ -9,11 +9,12 @@
 #include "base/compiler_specific.h"
 #include "base/event_types.h"
 #include "base/logging.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
 #include "ui/base/events/event_constants.h"
 #include "ui/base/gestures/gesture_types.h"
 #include "ui/base/keycodes/keyboard_codes.h"
+#include "ui/base/latency_info.h"
 #include "ui/base/ui_export.h"
 #include "ui/gfx/point.h"
 
@@ -80,6 +81,10 @@ class UI_EXPORT Event {
     return dispatch_to_hidden_targets_;
   }
 
+  LatencyInfo* latency() { return &latency_; }
+  const LatencyInfo* latency() const { return &latency_; }
+  void set_latency(const LatencyInfo& latency) { latency_ = latency; }
+
   // By default, events are "cancelable", this means any default processing that
   // the containing abstraction layer may perform can be prevented by calling
   // SetHandled(). SetHandled() or StopPropagation() must not be called for
@@ -92,6 +97,7 @@ class UI_EXPORT Event {
   bool IsControlDown() const { return (flags_ & EF_CONTROL_DOWN) != 0; }
   bool IsCapsLockDown() const { return (flags_ & EF_CAPS_LOCK_DOWN) != 0; }
   bool IsAltDown() const { return (flags_ & EF_ALT_DOWN) != 0; }
+  bool IsAltGrDown() const { return (flags_ & EF_ALTGR_DOWN) != 0; }
 
   bool IsKeyEvent() const {
     return type_ == ET_KEY_PRESSED ||
@@ -170,6 +176,10 @@ class UI_EXPORT Event {
            type_ == ET_SCROLL_FLING_START;
   }
 
+  bool IsMouseWheelEvent() const {
+    return type_ == ET_MOUSEWHEEL;
+  }
+
   // Returns true if the event has a valid |native_event_|.
   bool HasNativeEvent() const;
 
@@ -207,6 +217,8 @@ class UI_EXPORT Event {
 
   void set_name(const std::string& name) { name_ = name; }
 
+  void InitLatencyInfo();
+
  private:
   void operator=(const Event&);
 
@@ -214,12 +226,13 @@ class UI_EXPORT Event {
   void Init();
   void InitWithNativeEvent(const base::NativeEvent& native_event);
 
-  base::NativeEvent native_event_;
   EventType type_;
   std::string name_;
   base::TimeDelta time_stamp_;
+  LatencyInfo latency_;
   int flags_;
   bool dispatch_to_hidden_targets_;
+  base::NativeEvent native_event_;
   bool delete_native_event_;
   bool cancelable_;
   EventTarget* target_;
@@ -262,16 +275,10 @@ class UI_EXPORT LocatedEvent : public Event {
   }
   gfx::Point root_location() const { return root_location_; }
 
-  bool valid_system_location() const { return valid_system_location_; }
-  void set_system_location(const gfx::Point& loc) {
-    valid_system_location_ = true;
-    system_location_ = loc;
-  }
-  const gfx::Point& system_location() const { return system_location_; }
-
-  // Applies |root_transform| to the event.
+  // Transform the locations using |inverted_root_transform|.
   // This is applied to both |location_| and |root_location_|.
-  virtual void UpdateForRootTransform(const gfx::Transform& root_transform);
+  virtual void UpdateForRootTransform(
+      const gfx::Transform& inverted_root_transform);
 
   template <class T> void ConvertLocationToTarget(T* source, T* target) {
     if (target && target != source)
@@ -288,11 +295,7 @@ class UI_EXPORT LocatedEvent : public Event {
   LocatedEvent(const LocatedEvent& model, T* source, T* target)
       : Event(model),
         location_(model.location_),
-        root_location_(model.root_location_),
-        valid_system_location_(model.valid_system_location_),
-        system_location_(model.system_location_) {
-    // TODO(erg): May need to create system_location_ by converting location to
-    // system coordinates here.
+        root_location_(model.root_location_) {
     ConvertLocationToTarget(source, target);
   }
 
@@ -308,11 +311,6 @@ class UI_EXPORT LocatedEvent : public Event {
   // |location_| multiplied by an optional transformation matrix for
   // rotations, animations and skews.
   gfx::Point root_location_;
-
-  // |location_| in underlying system screen coordinates. This can be invalid
-  // |during synthesized events if a location isn't explicitly set.
-  bool valid_system_location_;
-  gfx::Point system_location_;
 };
 
 class UI_EXPORT MouseEvent : public LocatedEvent {
@@ -404,8 +402,6 @@ class UI_EXPORT MouseEvent : public LocatedEvent {
   // recent enough and within a small enough distance.
   static int GetRepeatCount(const MouseEvent& click_event);
 
-  gfx::Point root_location_;
-
   // See description above getter for details.
   int changed_button_flags_;
 
@@ -421,7 +417,8 @@ class UI_EXPORT MouseWheelEvent : public MouseEvent {
 
   explicit MouseWheelEvent(const base::NativeEvent& native_event);
   explicit MouseWheelEvent(const ScrollEvent& scroll_event);
-  MouseWheelEvent(const MouseEvent& mouse_event, int offset);
+  MouseWheelEvent(const MouseEvent& mouse_event, int x_offset, int y_offset);
+  MouseWheelEvent(const MouseWheelEvent& mouse_wheel_event);
 
   template <class T>
   MouseWheelEvent(const MouseWheelEvent& model,
@@ -430,17 +427,21 @@ class UI_EXPORT MouseWheelEvent : public MouseEvent {
                   EventType type,
                   int flags)
       : MouseEvent(model, source, target, type, flags),
-        offset_(model.offset_) {
+        offset_(model.x_offset(), model.y_offset()){
   }
 
   // The amount to scroll. This is in multiples of kWheelDelta.
-  // Note: offset() > 0 means scroll up / left.
-  int offset() const { return offset_; }
+  // Note: x_offset() > 0/y_offset() > 0 means scroll left/up.
+  int x_offset() const { return offset_.x(); }
+  int y_offset() const { return offset_.y(); }
+  const gfx::Vector2d& offset() const { return offset_; }
+
+  // Overridden from LocatedEvent.
+  virtual void UpdateForRootTransform(
+      const gfx::Transform& inverted_root_transform) OVERRIDE;
 
  private:
-  int offset_;
-
-  DISALLOW_COPY_AND_ASSIGN(MouseWheelEvent);
+  gfx::Vector2d offset_;
 };
 
 class UI_EXPORT TouchEvent : public LocatedEvent {
@@ -494,7 +495,7 @@ class UI_EXPORT TouchEvent : public LocatedEvent {
 
   // Overridden from LocatedEvent.
   virtual void UpdateForRootTransform(
-      const gfx::Transform& root_transform) OVERRIDE;
+      const gfx::Transform& inverted_root_transform) OVERRIDE;
 
  protected:
   void set_radius(float radius_x, float radius_y) {
@@ -530,7 +531,7 @@ class UI_EXPORT KeyEvent : public Event {
  public:
   KeyEvent(const base::NativeEvent& native_event, bool is_char);
 
-  // Used for synthetic events in testing.
+  // Used for synthetic events.
   KeyEvent(EventType type, KeyboardCode key_code, int flags, bool is_char);
 
   // These setters allow an I18N virtual keyboard to fabricate a keyboard event
@@ -660,7 +661,7 @@ class UI_EXPORT ScrollEvent : public MouseEvent {
 
   // Overridden from LocatedEvent.
   virtual void UpdateForRootTransform(
-      const gfx::Transform& root_transform) OVERRIDE;
+      const gfx::Transform& inverted_root_transform) OVERRIDE;
 
  private:
   // Potential accelerated offsets.

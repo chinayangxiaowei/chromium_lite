@@ -7,15 +7,15 @@
 #include <algorithm>
 
 #include "base/logging.h"
-#import "base/memory/scoped_nsobject.h"
-#include "base/string_piece.h"
-#include "base/sys_string_conversions.h"
+#import "base/mac/scoped_nsobject.h"
+#include "base/strings/string_piece.h"
+#include "base/strings/sys_string_conversions.h"
 #include "content/public/browser/native_web_keyboard_event.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_view.h"
-#include "content/shell/resource.h"
-#include "googleurl/src/gurl.h"
+#include "content/shell/app/resource.h"
 #import "ui/base/cocoa/underlay_opengl_hosting_window.h"
+#include "url/gurl.h"
 
 #if !defined(MAC_OS_X_VERSION_10_7) || \
     MAC_OS_X_VERSION_MAX_ALLOWED < MAC_OS_X_VERSION_10_7
@@ -106,7 +106,8 @@ void MakeShellButton(NSRect* rect,
                      NSView* target,
                      NSString* key,
                      NSUInteger modifier) {
-  scoped_nsobject<NSButton> button([[NSButton alloc] initWithFrame:*rect]);
+  base::scoped_nsobject<NSButton> button(
+      [[NSButton alloc] initWithFrame:*rect]);
   [button setTitle:title];
   [button setBezelStyle:NSSmallSquareBezelStyle];
   [button setAutoresizingMask:(NSViewMaxXMargin | NSViewMinYMargin)];
@@ -130,6 +131,9 @@ void Shell::PlatformCleanUp() {
 }
 
 void Shell::PlatformEnableUIControl(UIControl control, bool is_enabled) {
+  if (headless_)
+    return;
+
   int id;
   switch (control) {
     case BACK_BUTTON:
@@ -149,6 +153,9 @@ void Shell::PlatformEnableUIControl(UIControl control, bool is_enabled) {
 }
 
 void Shell::PlatformSetAddressBarURL(const GURL& url) {
+  if (headless_)
+    return;
+
   NSString* url_string = base::SysUTF8ToNSString(url.spec());
   [url_edit_view_ setStringValue:url_string];
 }
@@ -157,6 +164,12 @@ void Shell::PlatformSetIsLoading(bool loading) {
 }
 
 void Shell::PlatformCreateWindow(int width, int height) {
+  if (headless_) {
+    content_width_ = width;
+    content_height_ = height;
+    return;
+  }
+
   NSRect initial_window_bounds =
       NSMakeRect(0, 0, width, height + kURLBarHeight);
   NSRect content_rect = initial_window_bounds;
@@ -213,7 +226,7 @@ void Shell::PlatformCreateWindow(int width, int height) {
 
   button_frame.size.width =
       NSWidth(initial_window_bounds) - NSMinX(button_frame);
-  scoped_nsobject<NSTextField> url_edit_view(
+  base::scoped_nsobject<NSTextField> url_edit_view(
       [[NSTextField alloc] initWithFrame:button_frame]);
   [content addSubview:url_edit_view];
   [url_edit_view setAutoresizingMask:(NSViewWidthSizable | NSViewMinYMargin)];
@@ -229,14 +242,30 @@ void Shell::PlatformCreateWindow(int width, int height) {
 
 void Shell::PlatformSetContents() {
   NSView* web_view = web_contents_->GetView()->GetNativeView();
+  [web_view setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
+
+  if (headless_) {
+    SizeTo(content_width_, content_height_);
+    return;
+  }
+
   NSView* content = [window_ contentView];
   [content addSubview:web_view];
 
   NSRect frame = [content bounds];
   frame.size.height -= kURLBarHeight;
   [web_view setFrame:frame];
-  [web_view setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
   [web_view setNeedsDisplay:YES];
+}
+
+void Shell::SizeTo(int width, int height) {
+  if (!headless_) {
+    NOTREACHED();
+    return;
+  }
+  NSView* web_view = web_contents_->GetView()->GetNativeView();
+  NSRect frame = NSMakeRect(0, 0, width, height);
+  [web_view setFrame:frame];
 }
 
 void Shell::PlatformResizeSubViews() {
@@ -244,12 +273,18 @@ void Shell::PlatformResizeSubViews() {
 }
 
 void Shell::PlatformSetTitle(const string16& title) {
+  if (headless_)
+    return;
+
   NSString* title_string = base::SysUTF16ToNSString(title);
   [window_ setTitle:title_string];
 }
 
 void Shell::Close() {
-  [window_ performClose:nil];
+  if (headless_)
+    delete this;
+  else
+    [window_ performClose:nil];
 }
 
 void Shell::ActionPerformed(int control) {

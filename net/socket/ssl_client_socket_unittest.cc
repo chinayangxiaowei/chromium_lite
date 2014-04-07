@@ -7,23 +7,24 @@
 #include "base/callback_helpers.h"
 #include "base/memory/ref_counted.h"
 #include "net/base/address_list.h"
-#include "net/base/cert_test_util.h"
 #include "net/base/io_buffer.h"
-#include "net/base/mock_cert_verifier.h"
 #include "net/base/net_errors.h"
 #include "net/base/net_log.h"
 #include "net/base/net_log_unittest.h"
 #include "net/base/test_completion_callback.h"
 #include "net/base/test_data_directory.h"
-#include "net/base/test_root_certs.h"
+#include "net/cert/mock_cert_verifier.h"
+#include "net/cert/test_root_certs.h"
 #include "net/dns/host_resolver.h"
+#include "net/http/transport_security_state.h"
 #include "net/socket/client_socket_factory.h"
 #include "net/socket/client_socket_handle.h"
 #include "net/socket/socket_test_util.h"
 #include "net/socket/tcp_client_socket.h"
 #include "net/ssl/ssl_cert_request_info.h"
 #include "net/ssl/ssl_config_service.h"
-#include "net/test/test_server.h"
+#include "net/test/cert_test_util.h"
+#include "net/test/spawned_test_server/spawned_test_server.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/platform_test.h"
 
@@ -79,12 +80,6 @@ class WrappedStreamSocket : public net::StreamSocket {
   }
   virtual bool UsingTCPFastOpen() const OVERRIDE {
     return transport_->UsingTCPFastOpen();
-  }
-  virtual int64 NumBytesRead() const OVERRIDE {
-    return transport_->NumBytesRead();
-  }
-  virtual base::TimeDelta GetConnectTimeMicros() const OVERRIDE {
-    return transport_->GetConnectTimeMicros();
   }
   virtual bool WasNpnNegotiated() const OVERRIDE {
     return transport_->WasNpnNegotiated();
@@ -168,7 +163,7 @@ ReadBufferingStreamSocket::ReadBufferingStreamSocket(
 }
 
 void ReadBufferingStreamSocket::SetBufferSize(int size) {
-  DCHECK(!user_read_buf_);
+  DCHECK(!user_read_buf_.get());
   buffer_size_ = size;
   read_buffer_->SetCapacity(size);
 }
@@ -216,11 +211,11 @@ int ReadBufferingStreamSocket::DoLoop(int result) {
 
 int ReadBufferingStreamSocket::DoRead() {
   state_ = STATE_READ_COMPLETE;
-  int rv = transport_->Read(
-      read_buffer_,
-      read_buffer_->RemainingCapacity(),
-      base::Bind(&ReadBufferingStreamSocket::OnReadCompleted,
-                 base::Unretained(this)));
+  int rv =
+      transport_->Read(read_buffer_.get(),
+                       read_buffer_->RemainingCapacity(),
+                       base::Bind(&ReadBufferingStreamSocket::OnReadCompleted,
+                                  base::Unretained(this)));
   return rv;
 }
 
@@ -262,7 +257,7 @@ class SynchronousErrorStreamSocket : public WrappedStreamSocket {
   virtual int Write(net::IOBuffer* buf, int buf_len,
                     const net::CompletionCallback& callback) OVERRIDE;
 
-  // Sets the the next Read() call to return |error|.
+  // Sets the next Read() call and all future calls to return |error|.
   // If there is already a pending asynchronous read, the configured error
   // will not be returned until that asynchronous read has completed and Read()
   // is called again.
@@ -272,7 +267,7 @@ class SynchronousErrorStreamSocket : public WrappedStreamSocket {
     pending_read_error_ = error;
   }
 
-  // Sets the the next Write() call to return |error|.
+  // Sets the next Write() call and all future calls to return |error|.
   // If there is already a pending asynchronous write, the configured error
   // will not be returned until that asynchronous write has completed and
   // Write() is called again.
@@ -305,10 +300,8 @@ int SynchronousErrorStreamSocket::Read(
     net::IOBuffer* buf,
     int buf_len,
     const net::CompletionCallback& callback) {
-  if (have_read_error_) {
-    have_read_error_ = false;
+  if (have_read_error_)
     return pending_read_error_;
-  }
   return transport_->Read(buf, buf_len, callback);
 }
 
@@ -316,10 +309,8 @@ int SynchronousErrorStreamSocket::Write(
     net::IOBuffer* buf,
     int buf_len,
     const net::CompletionCallback& callback) {
-  if (have_write_error_) {
-    have_write_error_ = false;
+  if (have_write_error_)
     return pending_write_error_;
-  }
   return transport_->Write(buf, buf_len, callback);
 }
 
@@ -511,9 +502,11 @@ class SSLClientSocketTest : public PlatformTest {
  public:
   SSLClientSocketTest()
       : socket_factory_(net::ClientSocketFactory::GetDefaultFactory()),
-        cert_verifier_(new net::MockCertVerifier) {
+        cert_verifier_(new net::MockCertVerifier),
+        transport_security_state_(new net::TransportSecurityState) {
     cert_verifier_->set_default_result(net::OK);
     context_.cert_verifier = cert_verifier_.get();
+    context_.transport_security_state = transport_security_state_.get();
   }
 
  protected:
@@ -529,6 +522,7 @@ class SSLClientSocketTest : public PlatformTest {
 
   net::ClientSocketFactory* socket_factory_;
   scoped_ptr<net::MockCertVerifier> cert_verifier_;
+  scoped_ptr<net::TransportSecurityState> transport_security_state_;
   net::SSLClientSocketContext context_;
 };
 
@@ -549,9 +543,9 @@ static bool LogContainsSSLConnectEndEvent(
 };
 
 TEST_F(SSLClientSocketTest, Connect) {
-  net::TestServer test_server(net::TestServer::TYPE_HTTPS,
-                              net::TestServer::kLocalhost,
-                              base::FilePath());
+  net::SpawnedTestServer test_server(net::SpawnedTestServer::TYPE_HTTPS,
+                                     net::SpawnedTestServer::kLocalhost,
+                                     base::FilePath());
   ASSERT_TRUE(test_server.Start());
 
   net::AddressList addr;
@@ -590,11 +584,11 @@ TEST_F(SSLClientSocketTest, Connect) {
 }
 
 TEST_F(SSLClientSocketTest, ConnectExpired) {
-  net::TestServer::SSLOptions ssl_options(
-      net::TestServer::SSLOptions::CERT_EXPIRED);
-  net::TestServer test_server(net::TestServer::TYPE_HTTPS,
-                              ssl_options,
-                              base::FilePath());
+  net::SpawnedTestServer::SSLOptions ssl_options(
+      net::SpawnedTestServer::SSLOptions::CERT_EXPIRED);
+  net::SpawnedTestServer test_server(net::SpawnedTestServer::TYPE_HTTPS,
+                                     ssl_options,
+                                     base::FilePath());
   ASSERT_TRUE(test_server.Start());
 
   cert_verifier_->set_default_result(net::ERR_CERT_DATE_INVALID);
@@ -637,11 +631,11 @@ TEST_F(SSLClientSocketTest, ConnectExpired) {
 }
 
 TEST_F(SSLClientSocketTest, ConnectMismatched) {
-  net::TestServer::SSLOptions ssl_options(
-      net::TestServer::SSLOptions::CERT_MISMATCHED_NAME);
-  net::TestServer test_server(net::TestServer::TYPE_HTTPS,
-                              ssl_options,
-                              base::FilePath());
+  net::SpawnedTestServer::SSLOptions ssl_options(
+      net::SpawnedTestServer::SSLOptions::CERT_MISMATCHED_NAME);
+  net::SpawnedTestServer test_server(net::SpawnedTestServer::TYPE_HTTPS,
+                                     ssl_options,
+                                     base::FilePath());
   ASSERT_TRUE(test_server.Start());
 
   cert_verifier_->set_default_result(net::ERR_CERT_COMMON_NAME_INVALID);
@@ -686,11 +680,11 @@ TEST_F(SSLClientSocketTest, ConnectMismatched) {
 // Attempt to connect to a page which requests a client certificate. It should
 // return an error code on connect.
 TEST_F(SSLClientSocketTest, ConnectClientAuthCertRequested) {
-  net::TestServer::SSLOptions ssl_options;
+  net::SpawnedTestServer::SSLOptions ssl_options;
   ssl_options.request_client_certificate = true;
-  net::TestServer test_server(net::TestServer::TYPE_HTTPS,
-                              ssl_options,
-                              base::FilePath());
+  net::SpawnedTestServer test_server(net::SpawnedTestServer::TYPE_HTTPS,
+                                     ssl_options,
+                                     base::FilePath());
   ASSERT_TRUE(test_server.Start());
 
   net::AddressList addr;
@@ -748,11 +742,11 @@ TEST_F(SSLClientSocketTest, ConnectClientAuthCertRequested) {
 //
 // TODO(davidben): Also test providing an actual certificate.
 TEST_F(SSLClientSocketTest, ConnectClientAuthSendNullCert) {
-  net::TestServer::SSLOptions ssl_options;
+  net::SpawnedTestServer::SSLOptions ssl_options;
   ssl_options.request_client_certificate = true;
-  net::TestServer test_server(net::TestServer::TYPE_HTTPS,
-                              ssl_options,
-                              base::FilePath());
+  net::SpawnedTestServer test_server(net::SpawnedTestServer::TYPE_HTTPS,
+                                     ssl_options,
+                                     base::FilePath());
   ASSERT_TRUE(test_server.Start());
 
   net::AddressList addr;
@@ -810,9 +804,9 @@ TEST_F(SSLClientSocketTest, ConnectClientAuthSendNullCert) {
 //   - Server sends data unexpectedly.
 
 TEST_F(SSLClientSocketTest, Read) {
-  net::TestServer test_server(net::TestServer::TYPE_HTTPS,
-                              net::TestServer::kLocalhost,
-                              base::FilePath());
+  net::SpawnedTestServer test_server(net::SpawnedTestServer::TYPE_HTTPS,
+                                     net::SpawnedTestServer::kLocalhost,
+                                     base::FilePath());
   ASSERT_TRUE(test_server.Start());
 
   net::AddressList addr;
@@ -841,8 +835,8 @@ TEST_F(SSLClientSocketTest, Read) {
       new net::IOBuffer(arraysize(request_text) - 1));
   memcpy(request_buffer->data(), request_text, arraysize(request_text) - 1);
 
-  rv = sock->Write(request_buffer, arraysize(request_text) - 1,
-                   callback.callback());
+  rv = sock->Write(
+      request_buffer.get(), arraysize(request_text) - 1, callback.callback());
   EXPECT_TRUE(rv >= 0 || rv == net::ERR_IO_PENDING);
 
   if (rv == net::ERR_IO_PENDING)
@@ -851,7 +845,7 @@ TEST_F(SSLClientSocketTest, Read) {
 
   scoped_refptr<net::IOBuffer> buf(new net::IOBuffer(4096));
   for (;;) {
-    rv = sock->Read(buf, 4096, callback.callback());
+    rv = sock->Read(buf.get(), 4096, callback.callback());
     EXPECT_TRUE(rv >= 0 || rv == net::ERR_IO_PENDING);
 
     if (rv == net::ERR_IO_PENDING)
@@ -868,9 +862,9 @@ TEST_F(SSLClientSocketTest, Read) {
 // the socket connection uncleanly.
 // This is a regression test for http://crbug.com/238536
 TEST_F(SSLClientSocketTest, Read_WithSynchronousError) {
-  net::TestServer test_server(net::TestServer::TYPE_HTTPS,
-                              net::TestServer::kLocalhost,
-                              base::FilePath());
+  net::SpawnedTestServer test_server(net::SpawnedTestServer::TYPE_HTTPS,
+                                     net::SpawnedTestServer::kLocalhost,
+                                     base::FilePath());
   ASSERT_TRUE(test_server.Start());
 
   net::AddressList addr;
@@ -903,8 +897,8 @@ TEST_F(SSLClientSocketTest, Read_WithSynchronousError) {
       new net::IOBuffer(kRequestTextSize));
   memcpy(request_buffer->data(), request_text, kRequestTextSize);
 
-  rv = callback.GetResult(sock->Write(request_buffer, kRequestTextSize,
-                                      callback.callback()));
+  rv = callback.GetResult(
+      sock->Write(request_buffer.get(), kRequestTextSize, callback.callback()));
   EXPECT_EQ(kRequestTextSize, rv);
 
   // Simulate an unclean/forcible shutdown.
@@ -915,13 +909,92 @@ TEST_F(SSLClientSocketTest, Read_WithSynchronousError) {
   // Note: This test will hang if this bug has regressed. Simply checking that
   // rv != ERR_IO_PENDING is insufficient, as ERR_IO_PENDING is a legitimate
   // result when using a dedicated task runner for NSS.
-  rv = callback.GetResult(sock->Read(buf, 4096, callback.callback()));
+  rv = callback.GetResult(sock->Read(buf.get(), 4096, callback.callback()));
 
 #if !defined(USE_OPENSSL)
-  // NSS records the error exactly
+  // SSLClientSocketNSS records the error exactly
   EXPECT_EQ(net::ERR_CONNECTION_RESET, rv);
 #else
-  // OpenSSL treats any errors as a simple EOF.
+  // SSLClientSocketOpenSSL treats any errors as a simple EOF.
+  EXPECT_EQ(0, rv);
+#endif
+}
+
+// Tests that the SSLClientSocket properly handles when the underlying transport
+// asynchronously returns an error code while writing data - such as if an
+// intermediary terminates the socket connection uncleanly.
+// This is a regression test for http://crbug.com/249848
+TEST_F(SSLClientSocketTest, Write_WithSynchronousError) {
+  net::SpawnedTestServer test_server(net::SpawnedTestServer::TYPE_HTTPS,
+                                     net::SpawnedTestServer::kLocalhost,
+                                     base::FilePath());
+  ASSERT_TRUE(test_server.Start());
+
+  net::AddressList addr;
+  ASSERT_TRUE(test_server.GetAddressList(&addr));
+
+  net::TestCompletionCallback callback;
+  scoped_ptr<net::StreamSocket> real_transport(new net::TCPClientSocket(
+      addr, NULL, net::NetLog::Source()));
+  // Note: |error_socket|'s ownership is handed to |transport|, but the pointer
+  // is retained in order to configure additional errors.
+  SynchronousErrorStreamSocket* error_socket = new SynchronousErrorStreamSocket(
+      real_transport.Pass());
+  FakeBlockingStreamSocket* transport = new FakeBlockingStreamSocket(
+      scoped_ptr<net::StreamSocket>(error_socket));
+  int rv = callback.GetResult(transport->Connect(callback.callback()));
+  EXPECT_EQ(net::OK, rv);
+
+  // Disable TLS False Start to avoid handshake non-determinism.
+  net::SSLConfig ssl_config;
+  ssl_config.false_start_enabled = false;
+
+  scoped_ptr<net::SSLClientSocket> sock(
+      CreateSSLClientSocket(transport, test_server.host_port_pair(),
+                            ssl_config));
+
+  rv = callback.GetResult(sock->Connect(callback.callback()));
+  EXPECT_EQ(net::OK, rv);
+  EXPECT_TRUE(sock->IsConnected());
+
+  const char request_text[] = "GET / HTTP/1.0\r\n\r\n";
+  static const int kRequestTextSize =
+      static_cast<int>(arraysize(request_text) - 1);
+  scoped_refptr<net::IOBuffer> request_buffer(
+      new net::IOBuffer(kRequestTextSize));
+  memcpy(request_buffer->data(), request_text, kRequestTextSize);
+
+  // Simulate an unclean/forcible shutdown on the underlying socket.
+  // However, simulate this error asynchronously.
+  error_socket->SetNextWriteError(net::ERR_CONNECTION_RESET);
+  transport->SetNextWriteShouldBlock();
+
+  // This write should complete synchronously, because the TLS ciphertext
+  // can be created and placed into the outgoing buffers independent of the
+  // underlying transport.
+  rv = callback.GetResult(
+      sock->Write(request_buffer.get(), kRequestTextSize, callback.callback()));
+  EXPECT_EQ(kRequestTextSize, rv);
+
+  scoped_refptr<net::IOBuffer> buf(new net::IOBuffer(4096));
+
+  rv = sock->Read(buf.get(), 4096, callback.callback());
+  EXPECT_EQ(net::ERR_IO_PENDING, rv);
+
+  // Now unblock the outgoing request, having it fail with the connection
+  // being reset.
+  transport->UnblockWrite();
+
+  // Note: This will cause an inifite loop if this bug has regressed. Simply
+  // checking that rv != ERR_IO_PENDING is insufficient, as ERR_IO_PENDING
+  // is a legitimate result when using a dedicated task runner for NSS.
+  rv = callback.GetResult(rv);
+
+#if !defined(USE_OPENSSL)
+  // SSLClientSocketNSS records the error exactly
+  EXPECT_EQ(net::ERR_CONNECTION_RESET, rv);
+#else
+  // SSLClientSocketOpenSSL treats any errors as a simple EOF.
   EXPECT_EQ(0, rv);
 #endif
 }
@@ -929,9 +1002,9 @@ TEST_F(SSLClientSocketTest, Read_WithSynchronousError) {
 // Test the full duplex mode, with Read and Write pending at the same time.
 // This test also serves as a regression test for http://crbug.com/29815.
 TEST_F(SSLClientSocketTest, Read_FullDuplex) {
-  net::TestServer test_server(net::TestServer::TYPE_HTTPS,
-                              net::TestServer::kLocalhost,
-                              base::FilePath());
+  net::SpawnedTestServer test_server(net::SpawnedTestServer::TYPE_HTTPS,
+                                     net::SpawnedTestServer::kLocalhost,
+                                     base::FilePath());
   ASSERT_TRUE(test_server.Start());
 
   net::AddressList addr;
@@ -958,7 +1031,7 @@ TEST_F(SSLClientSocketTest, Read_FullDuplex) {
 
   // Issue a "hanging" Read first.
   scoped_refptr<net::IOBuffer> buf(new net::IOBuffer(4096));
-  rv = sock->Read(buf, 4096, callback.callback());
+  rv = sock->Read(buf.get(), 4096, callback.callback());
   // We haven't written the request, so there should be no response yet.
   ASSERT_EQ(net::ERR_IO_PENDING, rv);
 
@@ -974,7 +1047,8 @@ TEST_F(SSLClientSocketTest, Read_FullDuplex) {
       new net::StringIOBuffer(request_text));
 
   net::TestCompletionCallback callback2;  // Used for Write only.
-  rv = sock->Write(request_buffer, request_text.size(), callback2.callback());
+  rv = sock->Write(
+      request_buffer.get(), request_text.size(), callback2.callback());
   EXPECT_TRUE(rv >= 0 || rv == net::ERR_IO_PENDING);
 
   if (rv == net::ERR_IO_PENDING)
@@ -993,9 +1067,9 @@ TEST_F(SSLClientSocketTest, Read_FullDuplex) {
 // callback, the Write() callback should not be invoked.
 // Regression test for http://crbug.com/232633
 TEST_F(SSLClientSocketTest, Read_DeleteWhilePendingFullDuplex) {
-  net::TestServer test_server(net::TestServer::TYPE_HTTPS,
-                              net::TestServer::kLocalhost,
-                              base::FilePath());
+  net::SpawnedTestServer test_server(net::SpawnedTestServer::TYPE_HTTPS,
+                                     net::SpawnedTestServer::kLocalhost,
+                                     base::FilePath());
   ASSERT_TRUE(test_server.Start());
 
   net::AddressList addr;
@@ -1045,7 +1119,7 @@ TEST_F(SSLClientSocketTest, Read_DeleteWhilePendingFullDuplex) {
   // the ERR_IO_PENDING caused by SetReadShouldBlock() and thus return.
   DeleteSocketCallback read_callback(sock);
   scoped_refptr<net::IOBuffer> read_buf(new net::IOBuffer(4096));
-  rv = sock->Read(read_buf, 4096, read_callback.callback());
+  rv = sock->Read(read_buf.get(), 4096, read_callback.callback());
 
   // Ensure things didn't complete synchronously, otherwise |sock| is invalid.
   ASSERT_EQ(net::ERR_IO_PENDING, rv);
@@ -1068,7 +1142,7 @@ TEST_F(SSLClientSocketTest, Read_DeleteWhilePendingFullDuplex) {
   // SSLClientSocketOpenSSL::Write() will not return until all of
   // |request_buffer| has been written to the underlying BIO (although not
   // necessarily the underlying transport).
-  rv = callback.GetResult(sock->Write(request_buffer,
+  rv = callback.GetResult(sock->Write(request_buffer.get(),
                                       request_buffer->BytesRemaining(),
                                       callback.callback()));
   ASSERT_LT(0, rv);
@@ -1083,7 +1157,8 @@ TEST_F(SSLClientSocketTest, Read_DeleteWhilePendingFullDuplex) {
   // Attempt to write the remaining data. NSS will not be able to consume the
   // application data because the internal buffers are full, while OpenSSL will
   // return that its blocked because the underlying transport is blocked.
-  rv = sock->Write(request_buffer, request_buffer->BytesRemaining(),
+  rv = sock->Write(request_buffer.get(),
+                   request_buffer->BytesRemaining(),
                    callback.callback());
   ASSERT_EQ(net::ERR_IO_PENDING, rv);
   ASSERT_FALSE(callback.have_result());
@@ -1108,9 +1183,9 @@ TEST_F(SSLClientSocketTest, Read_DeleteWhilePendingFullDuplex) {
 }
 
 TEST_F(SSLClientSocketTest, Read_SmallChunks) {
-  net::TestServer test_server(net::TestServer::TYPE_HTTPS,
-                              net::TestServer::kLocalhost,
-                              base::FilePath());
+  net::SpawnedTestServer test_server(net::SpawnedTestServer::TYPE_HTTPS,
+                                     net::SpawnedTestServer::kLocalhost,
+                                     base::FilePath());
   ASSERT_TRUE(test_server.Start());
 
   net::AddressList addr;
@@ -1138,8 +1213,8 @@ TEST_F(SSLClientSocketTest, Read_SmallChunks) {
       new net::IOBuffer(arraysize(request_text) - 1));
   memcpy(request_buffer->data(), request_text, arraysize(request_text) - 1);
 
-  rv = sock->Write(request_buffer, arraysize(request_text) - 1,
-                   callback.callback());
+  rv = sock->Write(
+      request_buffer.get(), arraysize(request_text) - 1, callback.callback());
   EXPECT_TRUE(rv >= 0 || rv == net::ERR_IO_PENDING);
 
   if (rv == net::ERR_IO_PENDING)
@@ -1148,7 +1223,7 @@ TEST_F(SSLClientSocketTest, Read_SmallChunks) {
 
   scoped_refptr<net::IOBuffer> buf(new net::IOBuffer(1));
   for (;;) {
-    rv = sock->Read(buf, 1, callback.callback());
+    rv = sock->Read(buf.get(), 1, callback.callback());
     EXPECT_TRUE(rv >= 0 || rv == net::ERR_IO_PENDING);
 
     if (rv == net::ERR_IO_PENDING)
@@ -1161,9 +1236,9 @@ TEST_F(SSLClientSocketTest, Read_SmallChunks) {
 }
 
 TEST_F(SSLClientSocketTest, Read_ManySmallRecords) {
-  net::TestServer test_server(net::TestServer::TYPE_HTTPS,
-                              net::TestServer::kLocalhost,
-                              base::FilePath());
+  net::SpawnedTestServer test_server(net::SpawnedTestServer::TYPE_HTTPS,
+                                     net::SpawnedTestServer::kLocalhost,
+                                     base::FilePath());
   ASSERT_TRUE(test_server.Start());
 
   net::AddressList addr;
@@ -1192,7 +1267,7 @@ TEST_F(SSLClientSocketTest, Read_ManySmallRecords) {
   memcpy(request_buffer->data(), request_text, arraysize(request_text) - 1);
 
   rv = callback.GetResult(sock->Write(
-      request_buffer, arraysize(request_text) - 1, callback.callback()));
+      request_buffer.get(), arraysize(request_text) - 1, callback.callback()));
   ASSERT_GT(rv, 0);
   ASSERT_EQ(static_cast<int>(arraysize(request_text) - 1), rv);
 
@@ -1208,14 +1283,14 @@ TEST_F(SSLClientSocketTest, Read_ManySmallRecords) {
   transport->SetBufferSize(15000);
 
   scoped_refptr<net::IOBuffer> buffer(new net::IOBuffer(8192));
-  rv = callback.GetResult(sock->Read(buffer, 8192, callback.callback()));
+  rv = callback.GetResult(sock->Read(buffer.get(), 8192, callback.callback()));
   ASSERT_EQ(rv, 8192);
 }
 
 TEST_F(SSLClientSocketTest, Read_Interrupted) {
-  net::TestServer test_server(net::TestServer::TYPE_HTTPS,
-                              net::TestServer::kLocalhost,
-                              base::FilePath());
+  net::SpawnedTestServer test_server(net::SpawnedTestServer::TYPE_HTTPS,
+                                     net::SpawnedTestServer::kLocalhost,
+                                     base::FilePath());
   ASSERT_TRUE(test_server.Start());
 
   net::AddressList addr;
@@ -1243,8 +1318,8 @@ TEST_F(SSLClientSocketTest, Read_Interrupted) {
       new net::IOBuffer(arraysize(request_text) - 1));
   memcpy(request_buffer->data(), request_text, arraysize(request_text) - 1);
 
-  rv = sock->Write(request_buffer, arraysize(request_text) - 1,
-                   callback.callback());
+  rv = sock->Write(
+      request_buffer.get(), arraysize(request_text) - 1, callback.callback());
   EXPECT_TRUE(rv >= 0 || rv == net::ERR_IO_PENDING);
 
   if (rv == net::ERR_IO_PENDING)
@@ -1253,7 +1328,7 @@ TEST_F(SSLClientSocketTest, Read_Interrupted) {
 
   // Do a partial read and then exit.  This test should not crash!
   scoped_refptr<net::IOBuffer> buf(new net::IOBuffer(512));
-  rv = sock->Read(buf, 512, callback.callback());
+  rv = sock->Read(buf.get(), 512, callback.callback());
   EXPECT_TRUE(rv > 0 || rv == net::ERR_IO_PENDING);
 
   if (rv == net::ERR_IO_PENDING)
@@ -1263,9 +1338,9 @@ TEST_F(SSLClientSocketTest, Read_Interrupted) {
 }
 
 TEST_F(SSLClientSocketTest, Read_FullLogging) {
-  net::TestServer test_server(net::TestServer::TYPE_HTTPS,
-                              net::TestServer::kLocalhost,
-                              base::FilePath());
+  net::SpawnedTestServer test_server(net::SpawnedTestServer::TYPE_HTTPS,
+                                     net::SpawnedTestServer::kLocalhost,
+                                     base::FilePath());
   ASSERT_TRUE(test_server.Start());
 
   net::AddressList addr;
@@ -1296,8 +1371,8 @@ TEST_F(SSLClientSocketTest, Read_FullLogging) {
       new net::IOBuffer(arraysize(request_text) - 1));
   memcpy(request_buffer->data(), request_text, arraysize(request_text) - 1);
 
-  rv = sock->Write(request_buffer, arraysize(request_text) - 1,
-                   callback.callback());
+  rv = sock->Write(
+      request_buffer.get(), arraysize(request_text) - 1, callback.callback());
   EXPECT_TRUE(rv >= 0 || rv == net::ERR_IO_PENDING);
 
   if (rv == net::ERR_IO_PENDING)
@@ -1312,7 +1387,7 @@ TEST_F(SSLClientSocketTest, Read_FullLogging) {
 
   scoped_refptr<net::IOBuffer> buf(new net::IOBuffer(4096));
   for (;;) {
-    rv = sock->Read(buf, 4096, callback.callback());
+    rv = sock->Read(buf.get(), 4096, callback.callback());
     EXPECT_TRUE(rv >= 0 || rv == net::ERR_IO_PENDING);
 
     if (rv == net::ERR_IO_PENDING)
@@ -1331,9 +1406,9 @@ TEST_F(SSLClientSocketTest, Read_FullLogging) {
 
 // Regression test for http://crbug.com/42538
 TEST_F(SSLClientSocketTest, PrematureApplicationData) {
-  net::TestServer test_server(net::TestServer::TYPE_HTTPS,
-                              net::TestServer::kLocalhost,
-                              base::FilePath());
+  net::SpawnedTestServer test_server(net::SpawnedTestServer::TYPE_HTTPS,
+                                     net::SpawnedTestServer::kLocalhost,
+                                     base::FilePath());
   ASSERT_TRUE(test_server.Start());
 
   net::AddressList addr;
@@ -1389,13 +1464,13 @@ TEST_F(SSLClientSocketTest, CipherSuiteDisables) {
     0x0005,  // TLS_RSA_WITH_RC4_128_SHA
   };
 
-  net::TestServer::SSLOptions ssl_options;
+  net::SpawnedTestServer::SSLOptions ssl_options;
   // Enable only RC4 on the test server.
   ssl_options.bulk_ciphers =
-      net::TestServer::SSLOptions::BULK_CIPHER_RC4;
-  net::TestServer test_server(net::TestServer::TYPE_HTTPS,
-                              ssl_options,
-                              base::FilePath());
+      net::SpawnedTestServer::SSLOptions::BULK_CIPHER_RC4;
+  net::SpawnedTestServer test_server(net::SpawnedTestServer::TYPE_HTTPS,
+                                     ssl_options,
+                                     base::FilePath());
   ASSERT_TRUE(test_server.Start());
 
   net::AddressList addr;
@@ -1464,9 +1539,9 @@ TEST_F(SSLClientSocketTest, CipherSuiteDisables) {
 // Here we verify that such a simple ClientSocketHandle, not associated with any
 // client socket pool, can be destroyed safely.
 TEST_F(SSLClientSocketTest, ClientSocketHandleNotFromPool) {
-  net::TestServer test_server(net::TestServer::TYPE_HTTPS,
-                              net::TestServer::kLocalhost,
-                              base::FilePath());
+  net::SpawnedTestServer test_server(net::SpawnedTestServer::TYPE_HTTPS,
+                                     net::SpawnedTestServer::kLocalhost,
+                                     base::FilePath());
   ASSERT_TRUE(test_server.Start());
 
   net::AddressList addr;
@@ -1498,9 +1573,9 @@ TEST_F(SSLClientSocketTest, ClientSocketHandleNotFromPool) {
 // Verifies that SSLClientSocket::ExportKeyingMaterial return a success
 // code and different keying label results in different keying material.
 TEST_F(SSLClientSocketTest, ExportKeyingMaterial) {
-  net::TestServer test_server(net::TestServer::TYPE_HTTPS,
-                              net::TestServer::kLocalhost,
-                              base::FilePath());
+  net::SpawnedTestServer test_server(net::SpawnedTestServer::TYPE_HTTPS,
+                                     net::SpawnedTestServer::kLocalhost,
+                                     base::FilePath());
   ASSERT_TRUE(test_server.Start());
 
   net::AddressList addr;
@@ -1583,20 +1658,20 @@ TEST_F(SSLClientSocketTest, VerifyReturnChainProperlyOrdered) {
 
   // Add a rule that maps the server cert (A) to the chain of A->B->C2
   // rather than A->B->C.
-  cert_verifier_->AddResultForCert(certs[0], verify_result, net::OK);
+  cert_verifier_->AddResultForCert(certs[0].get(), verify_result, net::OK);
 
   // Load and install the root for the validated chain.
   scoped_refptr<net::X509Certificate> root_cert =
     net::ImportCertFromFile(net::GetTestCertsDirectory(),
                            "redundant-validated-chain-root.pem");
   ASSERT_NE(static_cast<net::X509Certificate*>(NULL), root_cert);
-  net::ScopedTestRoot scoped_root(root_cert);
+  net::ScopedTestRoot scoped_root(root_cert.get());
 
   // Set up a test server with CERT_CHAIN_WRONG_ROOT.
-  net::TestServer::SSLOptions ssl_options(
-      net::TestServer::SSLOptions::CERT_CHAIN_WRONG_ROOT);
-  net::TestServer test_server(
-      net::TestServer::TYPE_HTTPS, ssl_options,
+  net::SpawnedTestServer::SSLOptions ssl_options(
+      net::SpawnedTestServer::SSLOptions::CERT_CHAIN_WRONG_ROOT);
+  net::SpawnedTestServer test_server(
+      net::SpawnedTestServer::TYPE_HTTPS, ssl_options,
       base::FilePath(FILE_PATH_LITERAL("net/data/ssl")));
   ASSERT_TRUE(test_server.Start());
 
@@ -1655,10 +1730,10 @@ class SSLClientSocketCertRequestInfoTest : public SSLClientSocketTest {
   // Creates a test server with the given SSLOptions, connects to it and returns
   // the SSLCertRequestInfo reported by the socket.
   scoped_refptr<net::SSLCertRequestInfo> GetCertRequest(
-      net::TestServer::SSLOptions ssl_options) {
-    net::TestServer test_server(net::TestServer::TYPE_HTTPS,
-                                ssl_options,
-                                base::FilePath());
+      net::SpawnedTestServer::SSLOptions ssl_options) {
+    net::SpawnedTestServer test_server(net::SpawnedTestServer::TYPE_HTTPS,
+                                       ssl_options,
+                                       base::FilePath());
     if (!test_server.Start())
       return NULL;
 
@@ -1694,11 +1769,11 @@ class SSLClientSocketCertRequestInfoTest : public SSLClientSocketTest {
 };
 
 TEST_F(SSLClientSocketCertRequestInfoTest, NoAuthorities) {
-  net::TestServer::SSLOptions ssl_options;
+  net::SpawnedTestServer::SSLOptions ssl_options;
   ssl_options.request_client_certificate = true;
   scoped_refptr<net::SSLCertRequestInfo> request_info =
       GetCertRequest(ssl_options);
-  ASSERT_TRUE(request_info);
+  ASSERT_TRUE(request_info.get());
   EXPECT_EQ(0u, request_info->cert_authorities.size());
 }
 
@@ -1731,7 +1806,7 @@ TEST_F(SSLClientSocketCertRequestInfoTest, TwoAuthorities) {
   };
   const size_t kDiginotarLen = sizeof(kDiginotarDN);
 
-  net::TestServer::SSLOptions ssl_options;
+  net::SpawnedTestServer::SSLOptions ssl_options;
   ssl_options.request_client_certificate = true;
   ssl_options.client_authorities.push_back(
       net::GetTestClientCertsDirectory().Append(kThawteFile));
@@ -1739,7 +1814,7 @@ TEST_F(SSLClientSocketCertRequestInfoTest, TwoAuthorities) {
       net::GetTestClientCertsDirectory().Append(kDiginotarFile));
   scoped_refptr<net::SSLCertRequestInfo> request_info =
       GetCertRequest(ssl_options);
-  ASSERT_TRUE(request_info);
+  ASSERT_TRUE(request_info.get());
   ASSERT_EQ(2u, request_info->cert_authorities.size());
   EXPECT_EQ(std::string(reinterpret_cast<const char*>(kThawteDN), kThawteLen),
             request_info->cert_authorities[0]);

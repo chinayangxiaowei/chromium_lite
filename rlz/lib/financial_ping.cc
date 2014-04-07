@@ -8,9 +8,9 @@
 
 #include "base/basictypes.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "rlz/lib/assert.h"
 #include "rlz/lib/lib_values.h"
 #include "rlz/lib/machine_id.h"
@@ -19,7 +19,7 @@
 #include "rlz/lib/string_utils.h"
 
 #if !defined(OS_WIN)
-#include "base/time.h"
+#include "base/time/time.h"
 #endif
 
 #if defined(RLZ_NETWORK_IMPLEMENTATION_WIN_INET)
@@ -45,15 +45,15 @@ class InternetHandle {
 #else
 
 #include "base/bind.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
-#include "base/time.h"
-#include "googleurl/src/gurl.h"
+#include "base/time/time.h"
 #include "net/base/load_flags.h"
 #include "net/url_request/url_fetcher.h"
 #include "net/url_request/url_fetcher_delegate.h"
 #include "net/url_request/url_request_context.h"
 #include "net/url_request/url_request_context_getter.h"
+#include "url/gurl.h"
 
 #endif
 
@@ -252,7 +252,7 @@ bool FinancialPing::PingServer(const char* request, std::string* response) {
     return false;
 
   // Get the response text.
-  scoped_array<char> buffer(new char[kMaxPingResponseLength]);
+  scoped_ptr<char[]> buffer(new char[kMaxPingResponseLength]);
   if (buffer.get() == NULL)
     return false;
 
@@ -270,10 +270,10 @@ bool FinancialPing::PingServer(const char* request, std::string* response) {
     return false;
 
   // Run a blocking event loop to match the win inet implementation.
-  scoped_ptr<MessageLoop> message_loop;
+  scoped_ptr<base::MessageLoop> message_loop;
   // Ensure that we have a MessageLoop.
-  if (!MessageLoop::current())
-    message_loop.reset(new MessageLoop);
+  if (!base::MessageLoop::current())
+    message_loop.reset(new base::MessageLoop);
   base::RunLoop loop;
   FinancialPingUrlFetcherDelegate delegate(loop.QuitClosure());
 
@@ -295,11 +295,12 @@ bool FinancialPing::PingServer(const char* request, std::string* response) {
   fetcher->SetRequestContext(g_context);
 
   const base::TimeDelta kTimeout = base::TimeDelta::FromMinutes(5);
-  MessageLoop::ScopedNestableTaskAllower allow_nested(MessageLoop::current());
-  MessageLoop::current()->PostTask(
+  base::MessageLoop::ScopedNestableTaskAllower allow_nested(
+      base::MessageLoop::current());
+  base::MessageLoop::current()->PostTask(
       FROM_HERE,
       base::Bind(&net::URLFetcher::Start, base::Unretained(fetcher.get())));
-  MessageLoop::current()->PostDelayedTask(
+  base::MessageLoop::current()->PostDelayedTask(
       FROM_HERE, loop.QuitClosure(), kTimeout);
 
   loop.Run();

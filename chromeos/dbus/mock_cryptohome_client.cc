@@ -5,7 +5,7 @@
 #include "chromeos/dbus/mock_cryptohome_client.h"
 
 #include "base/bind.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 
 using ::testing::Invoke;
 using ::testing::_;
@@ -16,7 +16,7 @@ namespace {
 
 // Runs callback with true.
 void RunCallbackWithTrue(const BoolDBusMethodCallback& callback) {
-  MessageLoop::current()->PostTask(
+  base::MessageLoop::current()->PostTask(
       FROM_HERE, base::Bind(callback, DBUS_METHOD_CALL_SUCCESS, true));
 }
 
@@ -24,6 +24,8 @@ void RunCallbackWithTrue(const BoolDBusMethodCallback& callback) {
 
 MockCryptohomeClient::MockCryptohomeClient() {
   ON_CALL(*this, IsMounted(_))
+      .WillByDefault(Invoke(&RunCallbackWithTrue));
+  ON_CALL(*this, InstallAttributesIsReady(_))
       .WillByDefault(Invoke(&RunCallbackWithTrue));
 }
 

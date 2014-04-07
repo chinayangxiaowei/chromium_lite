@@ -8,14 +8,15 @@
 #include <string>
 #include <vector>
 
-#include "base/string16.h"
-#include "chrome/browser/bookmarks/bookmark_editor.h"
+#include "base/strings/string16.h"
 #include "chrome/browser/bookmarks/bookmark_node_data.h"
-#include "chrome/browser/history/snippet.h"
 
 class BookmarkModel;
 class BookmarkNode;
+
+namespace user_prefs {
 class PrefRegistrySyncable;
+}
 
 // A collection of bookmark utility functions used by various parts of the UI
 // that show bookmarks: bookmark manager, bookmark bar view ...
@@ -56,18 +57,6 @@ void GetMostRecentlyAddedEntries(BookmarkModel* model,
                                  size_t count,
                                  std::vector<const BookmarkNode*>* nodes);
 
-// Used by GetBookmarksMatchingText to return a matching node and the location
-// of the match in the title.
-struct TitleMatch {
-  TitleMatch();
-  ~TitleMatch();
-
-  const BookmarkNode* node;
-
-  // Location of the matching words in the title of the node.
-  Snippet::MatchPositions match_positions;
-};
-
 // Returns true if |n1| was added more recently than |n2|.
 bool MoreRecentlyAdded(const BookmarkNode* n1, const BookmarkNode* n2);
 
@@ -86,30 +75,8 @@ bool DoesBookmarkContainText(const BookmarkNode* node,
                              const string16& text,
                              const std::string& languages);
 
-// Modifies a bookmark node (assuming that there's no magic that needs to be
-// done regarding moving from one folder to another).  If a new node is
-// explicitly being added, returns a pointer to the new node that was created.
-// Otherwise the return value is identically |node|.
-const BookmarkNode* ApplyEditsWithNoFolderChange(
-    BookmarkModel* model,
-    const BookmarkNode* parent,
-    const BookmarkEditor::EditDetails& details,
-    const string16& new_title,
-    const GURL& new_url);
-
-// Modifies a bookmark node assuming that the parent of the node may have
-// changed and the node will need to be removed and reinserted.  If a new node
-// is explicitly being added, returns a pointer to the new node that was
-// created.  Otherwise the return value is identically |node|.
-const BookmarkNode* ApplyEditsWithPossibleFolderChange(
-    BookmarkModel* model,
-    const BookmarkNode* new_parent,
-    const BookmarkEditor::EditDetails& details,
-    const string16& new_title,
-    const GURL& new_url);
-
-// Register user preferences for BookmarksBar.
-void RegisterUserPrefs(PrefRegistrySyncable* registry);
+// Register user preferences for Bookmarks Bar.
+void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
 
 // Returns the parent for newly created folders/bookmarks. If |selection| has
 // one element and it is a folder, |selection[0]| is returned, otherwise

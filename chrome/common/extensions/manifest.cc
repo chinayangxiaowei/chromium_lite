@@ -7,12 +7,13 @@
 #include "base/basictypes.h"
 #include "base/lazy_instance.h"
 #include "base/logging.h"
-#include "base/stringprintf.h"
 #include "base/strings/string_split.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/common/extensions/extension_manifest_constants.h"
-#include "chrome/common/extensions/features/base_feature_provider.h"
+#include "chrome/common/extensions/features/feature.h"
 #include "extensions/common/error_utils.h"
+#include "extensions/common/features/feature_provider.h"
 #include "extensions/common/install_warning.h"
 
 namespace errors = extension_manifest_errors;
@@ -106,6 +107,8 @@ Manifest::Manifest(Location location, scoped_ptr<base::DictionaryValue> value)
       type_(TYPE_UNKNOWN) {
   if (value_->HasKey(keys::kTheme)) {
     type_ = TYPE_THEME;
+  } else if (value_->HasKey(keys::kExport)) {
+    type_ = TYPE_SHARED_MODULE;
   } else if (value_->HasKey(keys::kApp)) {
     if (value_->Get(keys::kWebURLs, NULL) ||
         value_->Get(keys::kLaunchWebURL, NULL)) {
@@ -139,16 +142,17 @@ bool Manifest::ValidateManifest(
   // TODO(aa): Consider having an error here in the case of strict error
   // checking to let developers know when they screw up.
 
-  std::set<std::string> feature_names =
-      BaseFeatureProvider::GetManifestFeatures()->GetAllFeatureNames();
-  for (std::set<std::string>::iterator feature_name = feature_names.begin();
+  FeatureProvider* provider = FeatureProvider::GetByName("manifest");
+  const std::vector<std::string>& feature_names =
+      provider->GetAllFeatureNames();
+  for (std::vector<std::string>::const_iterator feature_name =
+           feature_names.begin();
        feature_name != feature_names.end(); ++feature_name) {
     // Use Get instead of HasKey because the former uses path expansion.
     if (!value_->Get(*feature_name, NULL))
       continue;
 
-    Feature* feature =
-        BaseFeatureProvider::GetManifestFeatures()->GetFeature(*feature_name);
+    Feature* feature = provider->GetFeature(*feature_name);
     Feature::Availability result = feature->IsAvailableToManifest(
         extension_id_, type_, Feature::ConvertLocation(location_),
         GetManifestVersion());
@@ -160,7 +164,7 @@ bool Manifest::ValidateManifest(
   // Also generate warnings for keys that are not features.
   for (base::DictionaryValue::Iterator it(*value_); !it.IsAtEnd();
        it.Advance()) {
-    if (!BaseFeatureProvider::GetManifestFeatures()->GetFeature(it.key())) {
+    if (!provider->GetFeature(it.key())) {
       warnings->push_back(InstallWarning(
           InstallWarning::FORMAT_TEXT,
           base::StringPrintf("Unrecognized manifest key '%s'.",
@@ -247,8 +251,7 @@ bool Manifest::CanAccessPath(const std::string& path) const {
 }
 
 bool Manifest::CanAccessKey(const std::string& key) const {
-  Feature* feature =
-      BaseFeatureProvider::GetManifestFeatures()->GetFeature(key);
+  Feature* feature = FeatureProvider::GetByName("manifest")->GetFeature(key);
   if (!feature)
     return true;
 

@@ -11,6 +11,7 @@
 #include "ui/aura/test/aura_test_base.h"
 #include "ui/aura/test/event_generator.h"
 #include "ui/aura/test/test_activation_client.h"
+#include "ui/aura/test/test_cursor_client.h"
 #include "ui/aura/test/test_windows.h"
 #include "ui/base/events/event.h"
 #include "ui/base/events/event_utils.h"
@@ -20,55 +21,6 @@ namespace {
 base::TimeDelta GetTime() {
   return ui::EventTimeForNow();
 }
-
-class TestCursorClient : public aura::client::CursorClient {
- public:
-  TestCursorClient() : visible_(true), mouse_events_enabled_(true) {}
-  virtual ~TestCursorClient() {}
-
-  virtual void SetCursor(gfx::NativeCursor cursor) OVERRIDE {
-  }
-
-  virtual void ShowCursor() OVERRIDE {
-    visible_ = true;
-  }
-
-  virtual void HideCursor() OVERRIDE {
-    visible_ = false;
-  }
-
-  virtual bool IsCursorVisible() const OVERRIDE {
-    return visible_;
-  }
-
-  virtual void EnableMouseEvents() OVERRIDE {
-    mouse_events_enabled_ = true;
-  }
-
-  virtual void DisableMouseEvents() OVERRIDE {
-    mouse_events_enabled_ = false;
-  }
-
-  virtual bool IsMouseEventsEnabled() const OVERRIDE {
-    return mouse_events_enabled_;
-  }
-
-  virtual void SetDisplay(const gfx::Display& display) OVERRIDE {
-  }
-
-  virtual void LockCursor() OVERRIDE {
-  }
-
-  virtual void UnlockCursor() OVERRIDE {
-  }
-
-  virtual void SetCursorResourceModule(const string16& module_name) OVERRIDE {
-  }
-
- private:
-  bool visible_;
-  bool mouse_events_enabled_;
-};
 
 }
 
@@ -96,6 +48,52 @@ class ConsumeGestureEventFilter : public ui::EventHandler {
 
 typedef aura::test::AuraTestBase CompoundEventFilterTest;
 
+TEST_F(CompoundEventFilterTest, CursorVisibilityChange) {
+  scoped_ptr<CompoundEventFilter> compound_filter(new CompoundEventFilter);
+  aura::Env::GetInstance()->AddPreTargetHandler(compound_filter.get());
+  aura::test::TestWindowDelegate delegate;
+  scoped_ptr<aura::Window> window(CreateTestWindowWithDelegate(&delegate, 1234,
+      gfx::Rect(5, 5, 100, 100), root_window()));
+  window->Show();
+  window->SetCapture();
+
+  aura::test::TestCursorClient cursor_client(root_window());
+
+  // Send key event to hide the cursor.
+  ui::KeyEvent key(ui::ET_KEY_PRESSED, ui::VKEY_A, 0, true);
+  root_window()->AsRootWindowHostDelegate()->OnHostKeyEvent(&key);
+  EXPECT_FALSE(cursor_client.IsCursorVisible());
+
+  // Synthesized mouse event should not show the cursor.
+  ui::MouseEvent enter(ui::ET_MOUSE_ENTERED, gfx::Point(10, 10),
+                       gfx::Point(10, 10), 0);
+  enter.set_flags(enter.flags() | ui::EF_IS_SYNTHESIZED);
+  root_window()->AsRootWindowHostDelegate()->OnHostMouseEvent(&enter);
+  EXPECT_FALSE(cursor_client.IsCursorVisible());
+
+  ui::MouseEvent move(ui::ET_MOUSE_MOVED, gfx::Point(10, 10),
+                      gfx::Point(10, 10), 0);
+  move.set_flags(enter.flags() | ui::EF_IS_SYNTHESIZED);
+  root_window()->AsRootWindowHostDelegate()->OnHostMouseEvent(&move);
+  EXPECT_FALSE(cursor_client.IsCursorVisible());
+
+  ui::MouseEvent real_move(ui::ET_MOUSE_MOVED, gfx::Point(10, 10),
+                           gfx::Point(10, 10), 0);
+  root_window()->AsRootWindowHostDelegate()->OnHostMouseEvent(&real_move);
+  EXPECT_TRUE(cursor_client.IsCursorVisible());
+
+  // Send key event to hide the cursor again.
+  root_window()->AsRootWindowHostDelegate()->OnHostKeyEvent(&key);
+  EXPECT_FALSE(cursor_client.IsCursorVisible());
+
+  // Mouse synthesized exit event should not show the cursor.
+  ui::MouseEvent exit(ui::ET_MOUSE_EXITED, gfx::Point(10, 10),
+                      gfx::Point(10, 10), 0);
+  exit.set_flags(enter.flags() | ui::EF_IS_SYNTHESIZED);
+  root_window()->AsRootWindowHostDelegate()->OnHostMouseEvent(&exit);
+  EXPECT_FALSE(cursor_client.IsCursorVisible());
+}
+
 TEST_F(CompoundEventFilterTest, TouchHidesCursor) {
   scoped_ptr<CompoundEventFilter> compound_filter(new CompoundEventFilter);
   aura::Env::GetInstance()->AddPreTargetHandler(compound_filter.get());
@@ -105,8 +103,7 @@ TEST_F(CompoundEventFilterTest, TouchHidesCursor) {
   window->Show();
   window->SetCapture();
 
-  TestCursorClient cursor_client;
-  aura::client::SetCursorClient(root_window(), &cursor_client);
+  aura::test::TestCursorClient cursor_client(root_window());
 
   ui::MouseEvent mouse0(ui::ET_MOUSE_MOVED, gfx::Point(10, 10),
                         gfx::Point(10, 10), 0);
@@ -183,8 +180,7 @@ TEST_F(CompoundEventFilterTest, DontHideWhenMouseDown) {
       gfx::Rect(5, 5, 100, 100), root_window()));
   window->Show();
 
-  TestCursorClient cursor_client;
-  aura::client::SetCursorClient(root_window(), &cursor_client);
+  aura::test::TestCursorClient cursor_client(root_window());
 
   // Move and press the mouse over the window.
   event_generator.MoveMouseTo(10, 10);

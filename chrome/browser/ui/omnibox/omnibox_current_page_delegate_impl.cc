@@ -4,19 +4,23 @@
 
 #include "chrome/browser/ui/omnibox/omnibox_current_page_delegate_impl.h"
 
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/autocomplete/autocomplete_match.h"
 #include "chrome/browser/extensions/api/omnibox/omnibox_api.h"
 #include "chrome/browser/predictors/autocomplete_action_predictor.h"
 #include "chrome/browser/predictors/autocomplete_action_predictor_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/search/search.h"
+#include "chrome/browser/search_engines/template_url_service.h"
+#include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/sessions/session_tab_helper.h"
 #include "chrome/browser/ui/omnibox/omnibox_edit_controller.h"
 #include "chrome/browser/ui/search/search_tab_helper.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_view.h"
-#include "googleurl/src/gurl.h"
+#include "ui/base/window_open_disposition.h"
+#include "url/gurl.h"
 
 OmniboxCurrentPageDelegateImpl::OmniboxCurrentPageDelegateImpl(
     OmniboxEditController* controller,
@@ -32,6 +36,17 @@ bool OmniboxCurrentPageDelegateImpl::CurrentPageExists() const {
 
 const GURL& OmniboxCurrentPageDelegateImpl::GetURL() const {
   return controller_->GetWebContents()->GetURL();
+}
+
+bool OmniboxCurrentPageDelegateImpl::IsInstantNTP() const {
+  return chrome::IsInstantNTP(controller_->GetWebContents());
+}
+
+bool OmniboxCurrentPageDelegateImpl::IsSearchResultsPage() const {
+  Profile* profile = Profile::FromBrowserContext(
+      controller_->GetWebContents()->GetBrowserContext());
+  return TemplateURLServiceFactory::GetForProfile(profile)->
+      IsSearchResultsPageFromDefaultSearchProvider(GetURL());
 }
 
 bool OmniboxCurrentPageDelegateImpl::IsLoading() const {
@@ -50,7 +65,8 @@ const SessionID& OmniboxCurrentPageDelegateImpl::GetSessionID() const {
 
 bool OmniboxCurrentPageDelegateImpl::ProcessExtensionKeyword(
     TemplateURL* template_url,
-    const AutocompleteMatch& match) {
+    const AutocompleteMatch& match,
+    WindowOpenDisposition disposition) {
   if (!template_url->IsExtensionKeyword())
     return false;
 
@@ -59,7 +75,8 @@ bool OmniboxCurrentPageDelegateImpl::ProcessExtensionKeyword(
   extensions::ExtensionOmniboxEventRouter::OnInputEntered(
       controller_->GetWebContents(),
       template_url->GetExtensionId(),
-      UTF16ToUTF8(match.fill_into_edit.substr(prefix_length)));
+      UTF16ToUTF8(match.fill_into_edit.substr(prefix_length)),
+      disposition);
 
   return true;
 }
@@ -69,7 +86,7 @@ void OmniboxCurrentPageDelegateImpl::NotifySearchTabHelper(
     bool cancelling) {
   if (!controller_->GetWebContents())
     return;
-  chrome::search::SearchTabHelper::FromWebContents(
+  SearchTabHelper::FromWebContents(
       controller_->GetWebContents())->OmniboxEditModelChanged(
           user_input_in_progress, cancelling);
 }

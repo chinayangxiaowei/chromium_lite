@@ -6,7 +6,7 @@
 
 #include "base/location.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "content/public/browser/browser_thread.h"
 #include "sync/api/sync_change.h"
 #include "sync/api/sync_error.h"
@@ -23,6 +23,42 @@
 using content::BrowserThread;
 
 namespace browser_sync {
+
+namespace {
+
+void SetNodeSpecifics(const sync_pb::EntitySpecifics& entity_specifics,
+                      syncer::WriteNode* write_node) {
+  if (syncer::GetModelTypeFromSpecifics(entity_specifics) ==
+          syncer::PASSWORDS) {
+    write_node->SetPasswordSpecifics(
+        entity_specifics.password().client_only_encrypted_data());
+  } else {
+    write_node->SetEntitySpecifics(entity_specifics);
+  }
+}
+
+syncer::SyncData BuildRemoteSyncData(
+    int64 sync_id,
+    const syncer::BaseNode& read_node) {
+  // Use the specifics of non-password datatypes directly (encryption has
+  // already been handled).
+  if (read_node.GetModelType() != syncer::PASSWORDS) {
+    return syncer::SyncData::CreateRemoteData(sync_id,
+                                              read_node.GetEntitySpecifics(),
+                                              read_node.GetModificationTime());
+  }
+
+  // Passwords must be accessed differently, to account for their encryption,
+  // and stored into a temporary EntitySpecifics.
+  sync_pb::EntitySpecifics password_holder;
+  password_holder.mutable_password()->mutable_client_only_encrypted_data()->
+      CopyFrom(read_node.GetPasswordSpecifics());
+  return syncer::SyncData::CreateRemoteData(sync_id,
+                                            password_holder,
+                                            read_node.GetModificationTime());
+}
+
+}  // namespace
 
 GenericChangeProcessor::GenericChangeProcessor(
     DataTypeErrorHandler* error_handler,
@@ -53,7 +89,8 @@ void GenericChangeProcessor::ApplyChangesFromSyncModel(
           syncer::SyncChange(
               FROM_HERE,
               syncer::SyncChange::ACTION_DELETE,
-              syncer::SyncData::CreateRemoteData(it->id, it->specifics)));
+              syncer::SyncData::CreateRemoteData(
+                  it->id, it->specifics, base::Time())));
     } else {
       syncer::SyncChange::SyncChangeType action =
           (it->action == syncer::ChangeRecord::ACTION_ADD) ?
@@ -71,8 +108,7 @@ void GenericChangeProcessor::ApplyChangesFromSyncModel(
           syncer::SyncChange(
               FROM_HERE,
               action,
-              syncer::SyncData::CreateRemoteData(
-                  it->id, read_node.GetEntitySpecifics())));
+              BuildRemoteSyncData(it->id, read_node)));
     }
   }
 }
@@ -81,9 +117,12 @@ void GenericChangeProcessor::CommitChangesFromSyncModel() {
   DCHECK(CalledOnValidThread());
   if (syncer_changes_.empty())
     return;
-  if (!local_service_) {
+  if (!local_service_.get()) {
     syncer::ModelType type = syncer_changes_[0].sync_data().GetDataType();
-    syncer::SyncError error(FROM_HERE, "Local service destroyed.", type);
+    syncer::SyncError error(FROM_HERE,
+                            syncer::SyncError::DATATYPE_ERROR,
+                            "Local service destroyed.",
+                            type);
     error_handler()->OnSingleDatatypeUnrecoverableError(error.location(),
                                                         error.message());
     return;
@@ -107,28 +146,34 @@ syncer::SyncError GenericChangeProcessor::GetSyncDataForType(
   if (root.InitByTagLookup(syncer::ModelTypeToRootTag(type)) !=
           syncer::BaseNode::INIT_OK) {
     syncer::SyncError error(FROM_HERE,
-                    "Server did not create the top-level " + type_name +
-                    " node. We might be running against an out-of-date server.",
-                    type);
+                            syncer::SyncError::DATATYPE_ERROR,
+                            "Server did not create the top-level " + type_name +
+                                " node. We might be running against an out-of-"
+                                "date server.",
+                            type);
     return error;
   }
 
   // TODO(akalin): We'll have to do a tree traversal for bookmarks.
   DCHECK_NE(type, syncer::BOOKMARKS);
 
-  int64 sync_child_id = root.GetFirstChildId();
-  while (sync_child_id != syncer::kInvalidId) {
+  std::vector<int64> child_ids;
+  root.GetChildIds(&child_ids);
+
+  for (std::vector<int64>::iterator it = child_ids.begin();
+       it != child_ids.end(); ++it) {
     syncer::ReadNode sync_child_node(&trans);
-    if (sync_child_node.InitByIdLookup(sync_child_id) !=
+    if (sync_child_node.InitByIdLookup(*it) !=
             syncer::BaseNode::INIT_OK) {
       syncer::SyncError error(FROM_HERE,
-                      "Failed to fetch child node for type " + type_name + ".",
-                       type);
+                              syncer::SyncError::DATATYPE_ERROR,
+                              "Failed to fetch child node for type " +
+                                  type_name + ".",
+                              type);
       return error;
     }
-    current_sync_data->push_back(syncer::SyncData::CreateRemoteData(
-        sync_child_node.GetId(), sync_child_node.GetEntitySpecifics()));
-    sync_child_id = sync_child_node.GetSuccessorId();
+    current_sync_data->push_back(BuildRemoteSyncData(sync_child_node.GetId(),
+                                                     sync_child_node));
   }
   return syncer::SyncError();
 }
@@ -219,6 +264,7 @@ syncer::SyncError AttemptDelete(
     if (tag.empty()) {
       syncer::SyncError error(
           FROM_HERE,
+          syncer::SyncError::DATATYPE_ERROR,
           "Failed to delete " + type_str + " node. Local data, empty tag. " +
               change.location().ToString(),
           type);
@@ -295,8 +341,10 @@ syncer::SyncError GenericChangeProcessor::ProcessSyncChanges(
               syncer::ModelTypeToRootTag(change.sync_data().GetDataType())) !=
                   syncer::BaseNode::INIT_OK) {
         syncer::SyncError error(FROM_HERE,
-                        "Failed to look up root node for type " + type_str,
-                        type);
+                                syncer::SyncError::DATATYPE_ERROR,
+                                "Failed to look up root node for type " +
+                                    type_str,
+                                type);
         error_handler()->OnSingleDatatypeUnrecoverableError(FROM_HERE,
                                                             error.message());
         NOTREACHED();
@@ -305,8 +353,8 @@ syncer::SyncError GenericChangeProcessor::ProcessSyncChanges(
       }
       syncer::WriteNode::InitUniqueByCreationResult result =
           sync_node.InitUniqueByCreation(change.sync_data().GetDataType(),
-                                          root_node,
-                                          change.sync_data().GetTag());
+                                         root_node,
+                                         change.sync_data().GetTag());
       if (result != syncer::WriteNode::INIT_SUCCESS) {
         std::string error_prefix = "Failed to create " + type_str + " node: " +
             change.location().ToString() + ", ";
@@ -356,10 +404,10 @@ syncer::SyncError GenericChangeProcessor::ProcessSyncChanges(
         }
       }
       sync_node.SetTitle(UTF8ToWide(change.sync_data().GetTitle()));
-      sync_node.SetEntitySpecifics(change.sync_data().GetSpecifics());
+      SetNodeSpecifics(change.sync_data().GetSpecifics(), &sync_node);
       if (merge_result_.get()) {
-        merge_result_->set_num_items_added(
-            merge_result_->num_items_added() + 1);
+        merge_result_->set_num_items_added(merge_result_->num_items_added() +
+                                           1);
       }
     } else if (change.change_type() == syncer::SyncChange::ACTION_UPDATE) {
       // TODO(zea): consider having this logic for all possible changes?
@@ -449,7 +497,7 @@ syncer::SyncError GenericChangeProcessor::ProcessSyncChanges(
       }
 
       sync_node.SetTitle(UTF8ToWide(change.sync_data().GetTitle()));
-      sync_node.SetEntitySpecifics(change.sync_data().GetSpecifics());
+      SetNodeSpecifics(change.sync_data().GetSpecifics(), &sync_node);
       if (merge_result_.get()) {
         merge_result_->set_num_items_modified(
             merge_result_->num_items_modified() + 1);
@@ -459,6 +507,7 @@ syncer::SyncError GenericChangeProcessor::ProcessSyncChanges(
     } else {
       syncer::SyncError error(
           FROM_HERE,
+          syncer::SyncError::DATATYPE_ERROR,
           "Received unset SyncChange in the change processor, " +
               change.location().ToString(),
           type);

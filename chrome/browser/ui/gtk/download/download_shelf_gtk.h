@@ -12,7 +12,7 @@
 #include "base/compiler_specific.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "chrome/browser/download/download_shelf.h"
 #include "chrome/browser/ui/gtk/slide_animator_gtk.h"
 #include "content/public/browser/notification_observer.h"
@@ -37,7 +37,7 @@ class Point;
 class DownloadShelfGtk : public DownloadShelf,
                          public content::NotificationObserver,
                          public SlideAnimatorGtk::Delegate,
-                         public MessageLoopForUI::Observer {
+                         public base::MessageLoopForUI::Observer {
  public:
   DownloadShelfGtk(Browser* browser, gfx::NativeView view);
 
@@ -70,7 +70,7 @@ class DownloadShelfGtk : public DownloadShelf,
   // DownloadShelf implementation.
   virtual void DoAddDownload(content::DownloadItem* download) OVERRIDE;
   virtual void DoShow() OVERRIDE;
-  virtual void DoClose() OVERRIDE;
+  virtual void DoClose(CloseReason reason) OVERRIDE;
 
  private:
   // Remove |download_item| from the download shelf and delete it.

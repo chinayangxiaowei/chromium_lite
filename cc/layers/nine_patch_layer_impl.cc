@@ -2,9 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "nine_patch_layer_impl.h"
+#include "cc/layers/nine_patch_layer_impl.h"
 
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "base/values.h"
 #include "cc/layers/quad_sink.h"
 #include "cc/quads/texture_draw_quad.h"
@@ -38,8 +38,6 @@ void NinePatchLayerImpl::PushPropertiesTo(LayerImpl* layer) {
   layer_impl->SetLayout(image_bounds_, image_aperture_);
 }
 
-void NinePatchLayerImpl::WillDraw(ResourceProvider* resource_provider) {}
-
 static gfx::RectF NormalizedRect(float x,
                                  float y,
                                  float width,
@@ -57,10 +55,16 @@ void NinePatchLayerImpl::SetLayout(gfx::Size image_bounds, gfx::Rect aperture) {
   image_aperture_ = aperture;
 }
 
+bool NinePatchLayerImpl::WillDraw(DrawMode draw_mode,
+                                  ResourceProvider* resource_provider) {
+  if (!resource_id_ || draw_mode == DRAW_MODE_RESOURCELESS_SOFTWARE)
+    return false;
+  return LayerImpl::WillDraw(draw_mode, resource_provider);
+}
+
 void NinePatchLayerImpl::AppendQuads(QuadSink* quad_sink,
                                      AppendQuadsData* append_quads_data) {
-  if (!resource_id_)
-    return;
+  DCHECK(resource_id_);
 
   SharedQuadState* shared_quad_state =
       quad_sink->UseSharedQuadState(CreateSharedQuadState());
@@ -110,7 +114,10 @@ void NinePatchLayerImpl::AppendQuads(QuadSink* quad_sink,
       top_right.x(), bottom_left.y(), right_width, bottom_height);
   gfx::Rect top(top_left.right(), 0, middle_width, top_height);
   gfx::Rect left(0, top_left.bottom(), left_width, middle_height);
-  gfx::Rect right(top_right.x(), top_right.bottom(), right_width, left.height());
+  gfx::Rect right(top_right.x(),
+                  top_right.bottom(),
+                  right_width,
+                  left.height());
   gfx::Rect bottom(top.x(), bottom_left.y(), top.width(), bottom_height);
 
   float img_width = image_bounds_.width();
@@ -172,7 +179,9 @@ void NinePatchLayerImpl::AppendQuads(QuadSink* quad_sink,
                premultiplied_alpha,
                uv_top_left.origin(),
                uv_top_left.bottom_right(),
-               vertex_opacity, flipped);
+               SK_ColorTRANSPARENT,
+               vertex_opacity,
+               flipped);
   quad_sink->Append(quad.PassAs<DrawQuad>(), append_quads_data);
 
   quad = TextureDrawQuad::Create();
@@ -183,7 +192,9 @@ void NinePatchLayerImpl::AppendQuads(QuadSink* quad_sink,
                premultiplied_alpha,
                uv_top_right.origin(),
                uv_top_right.bottom_right(),
-               vertex_opacity, flipped);
+               SK_ColorTRANSPARENT,
+               vertex_opacity,
+               flipped);
   quad_sink->Append(quad.PassAs<DrawQuad>(), append_quads_data);
 
   quad = TextureDrawQuad::Create();
@@ -194,6 +205,7 @@ void NinePatchLayerImpl::AppendQuads(QuadSink* quad_sink,
                premultiplied_alpha,
                uv_bottom_left.origin(),
                uv_bottom_left.bottom_right(),
+               SK_ColorTRANSPARENT,
                vertex_opacity,
                flipped);
   quad_sink->Append(quad.PassAs<DrawQuad>(), append_quads_data);
@@ -206,6 +218,7 @@ void NinePatchLayerImpl::AppendQuads(QuadSink* quad_sink,
                premultiplied_alpha,
                uv_bottom_right.origin(),
                uv_bottom_right.bottom_right(),
+               SK_ColorTRANSPARENT,
                vertex_opacity,
                flipped);
   quad_sink->Append(quad.PassAs<DrawQuad>(), append_quads_data);
@@ -218,6 +231,7 @@ void NinePatchLayerImpl::AppendQuads(QuadSink* quad_sink,
                premultiplied_alpha,
                uv_top.origin(),
                uv_top.bottom_right(),
+               SK_ColorTRANSPARENT,
                vertex_opacity,
                flipped);
   quad_sink->Append(quad.PassAs<DrawQuad>(), append_quads_data);
@@ -230,6 +244,7 @@ void NinePatchLayerImpl::AppendQuads(QuadSink* quad_sink,
                premultiplied_alpha,
                uv_left.origin(),
                uv_left.bottom_right(),
+               SK_ColorTRANSPARENT,
                vertex_opacity,
                flipped);
   quad_sink->Append(quad.PassAs<DrawQuad>(), append_quads_data);
@@ -242,6 +257,7 @@ void NinePatchLayerImpl::AppendQuads(QuadSink* quad_sink,
                premultiplied_alpha,
                uv_right.origin(),
                uv_right.bottom_right(),
+               SK_ColorTRANSPARENT,
                vertex_opacity,
                flipped);
   quad_sink->Append(quad.PassAs<DrawQuad>(), append_quads_data);
@@ -254,29 +270,18 @@ void NinePatchLayerImpl::AppendQuads(QuadSink* quad_sink,
                premultiplied_alpha,
                uv_bottom.origin(),
                uv_bottom.bottom_right(),
+               SK_ColorTRANSPARENT,
                vertex_opacity,
                flipped);
   quad_sink->Append(quad.PassAs<DrawQuad>(), append_quads_data);
 }
-
-void NinePatchLayerImpl::DidDraw(ResourceProvider* resource_provider) {}
 
 void NinePatchLayerImpl::DidLoseOutputSurface() {
   resource_id_ = 0;
 }
 
 const char* NinePatchLayerImpl::LayerTypeAsString() const {
-  return "NinePatchLayer";
-}
-
-void NinePatchLayerImpl::DumpLayerProperties(std::string* str, int indent)
-    const {
-  str->append(IndentString(indent));
-  base::StringAppendF(
-      str, "imageAperture: %s\n", image_aperture_.ToString().c_str());
-  base::StringAppendF(
-      str, "image_bounds: %s\n", image_bounds_.ToString().c_str());
-  LayerImpl::DumpLayerProperties(str, indent);
+  return "cc::NinePatchLayerImpl";
 }
 
 base::DictionaryValue* NinePatchLayerImpl::LayerTreeAsJson() const {

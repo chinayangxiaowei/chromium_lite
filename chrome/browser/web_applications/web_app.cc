@@ -8,14 +8,18 @@
 #include "base/bind_helpers.h"
 #include "base/file_util.h"
 #include "base/i18n/file_util_icu.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread.h"
-#include "base/utf_string_conversions.h"
 #include "chrome/common/chrome_constants.h"
+#include "chrome/common/chrome_version_info.h"
 #include "chrome/common/extensions/extension.h"
+#include "chrome/common/extensions/manifest_handlers/app_launch_info.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/browser/browser_thread.h"
 #include "extensions/common/constants.h"
+#include "grit/chromium_strings.h"
+#include "ui/base/l10n/l10n_util.h"
 
 using content::BrowserThread;
 
@@ -40,13 +44,14 @@ void DeleteShortcutsOnFileThread(
 }
 
 void UpdateShortcutsOnFileThread(
+    const string16& old_app_title,
     const ShellIntegration::ShortcutInfo& shortcut_info) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
 
   base::FilePath shortcut_data_dir = web_app::GetWebAppDataDirectory(
       shortcut_info.profile_path, shortcut_info.extension_id, GURL());
   return web_app::internals::UpdatePlatformShortcuts(
-      shortcut_data_dir, shortcut_info);
+      shortcut_data_dir, old_app_title, shortcut_info);
 }
 
 }  // namespace
@@ -105,7 +110,9 @@ base::FilePath GetWebAppDataDirectory(const base::FilePath& profile_path,
 base::FilePath GetWebAppDataDirectory(const base::FilePath& profile_path,
                                       const extensions::Extension& extension) {
   return GetWebAppDataDirectory(
-      profile_path, extension.id(), GURL(extension.launch_web_url()));
+      profile_path,
+      extension.id(),
+      GURL(extensions::AppLaunchInfo::GetLaunchWebURL(&extension)));
 }
 
 std::string GenerateApplicationNameFromInfo(
@@ -142,14 +149,15 @@ std::string GetExtensionIdFromApplicationName(const std::string& app_name) {
 
 void CreateShortcuts(
     const ShellIntegration::ShortcutInfo& shortcut_info,
-    const ShellIntegration::ShortcutLocations& creation_locations) {
+    const ShellIntegration::ShortcutLocations& creation_locations,
+    ShortcutCreationReason creation_reason) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
   BrowserThread::PostTask(
       BrowserThread::FILE,
       FROM_HERE,
       base::Bind(base::IgnoreResult(&CreateShortcutsOnFileThread),
-                 shortcut_info, creation_locations));
+                 shortcut_info, creation_locations, creation_reason));
 }
 
 void DeleteAllShortcuts(const ShellIntegration::ShortcutInfo& shortcut_info) {
@@ -161,25 +169,28 @@ void DeleteAllShortcuts(const ShellIntegration::ShortcutInfo& shortcut_info) {
       base::Bind(&DeleteShortcutsOnFileThread, shortcut_info));
 }
 
-void UpdateAllShortcuts(const ShellIntegration::ShortcutInfo& shortcut_info) {
+void UpdateAllShortcuts(const string16& old_app_title,
+                        const ShellIntegration::ShortcutInfo& shortcut_info) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
   BrowserThread::PostTask(
       BrowserThread::FILE,
       FROM_HERE,
-      base::Bind(&UpdateShortcutsOnFileThread, shortcut_info));
+      base::Bind(&UpdateShortcutsOnFileThread, old_app_title, shortcut_info));
 }
 
 bool CreateShortcutsOnFileThread(
     const ShellIntegration::ShortcutInfo& shortcut_info,
-    const ShellIntegration::ShortcutLocations& creation_locations) {
+    const ShellIntegration::ShortcutLocations& creation_locations,
+    ShortcutCreationReason creation_reason) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
 
   base::FilePath shortcut_data_dir = GetWebAppDataDirectory(
       shortcut_info.profile_path, shortcut_info.extension_id,
       shortcut_info.url);
   return internals::CreatePlatformShortcuts(shortcut_data_dir, shortcut_info,
-                                            creation_locations);
+                                            creation_locations,
+                                            creation_reason);
 }
 
 bool IsValidUrl(const GURL& url) {
@@ -224,5 +235,12 @@ std::string GetWMClassFromAppName(std::string app_name) {
   return app_name;
 }
 #endif
+
+string16 GetAppShortcutsSubdirName() {
+  chrome::VersionInfo::Channel channel = chrome::VersionInfo::GetChannel();
+  if (channel == chrome::VersionInfo::CHANNEL_CANARY)
+    return l10n_util::GetStringUTF16(IDS_APP_SHORTCUTS_SUBDIR_NAME_CANARY);
+  return l10n_util::GetStringUTF16(IDS_APP_SHORTCUTS_SUBDIR_NAME);
+}
 
 }  // namespace web_app

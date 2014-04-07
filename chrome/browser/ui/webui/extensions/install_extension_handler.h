@@ -6,12 +6,15 @@
 #define CHROME_BROWSER_UI_WEBUI_EXTENSIONS_INSTALL_EXTENSION_HANDLER_H_
 
 #include "base/files/file_path.h"
+#include "base/strings/string16.h"
 #include "base/values.h"
 #include "content/public/browser/web_ui_message_handler.h"
 
 namespace content {
 class WebUIDataSource;
 }
+
+namespace extensions {
 
 // Handles installing an extension when its file is dragged onto the page.
 class InstallExtensionHandler : public content::WebUIMessageHandler {
@@ -42,10 +45,18 @@ class InstallExtensionHandler : public content::WebUIMessageHandler {
   // getting XSS'd.
   void HandleInstallMessage(const ListValue* args);
 
-  // The extension that will be installed when HandleInstallMessage() is called.
+  // Handles a notification from the JavaScript to install the directory
+  // currently being dragged.
+  void HandleInstallDirectoryMessage(const ListValue* args);
+
+  // The path to the file that will be installed when HandleInstallMessage() is
+  // called.
   base::FilePath file_to_install_;
+  base::string16 file_display_name_;
 
   DISALLOW_COPY_AND_ASSIGN(InstallExtensionHandler);
 };
+
+}  // namespace extensions
 
 #endif  // CHROME_BROWSER_UI_WEBUI_EXTENSIONS_INSTALL_EXTENSION_HANDLER_H_

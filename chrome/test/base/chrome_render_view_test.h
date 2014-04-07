@@ -9,12 +9,12 @@
 
 #include "chrome/renderer/chrome_content_renderer_client.h"
 #include "chrome/renderer/chrome_mock_render_thread.h"
-#include "components/autofill/renderer/autofill_agent.h"
+#include "components/autofill/content/renderer/autofill_agent.h"
 #include "content/public/test/render_view_test.h"
 
 namespace autofill {
 class AutofillAgent;
-class PasswordAutofillManager;
+class PasswordAutofillAgent;
 }
 
 namespace extensions {
@@ -34,7 +34,7 @@ class ChromeRenderViewTest : public content::RenderViewTest {
   chrome::ChromeContentRendererClient chrome_content_renderer_client_;
   extensions::Dispatcher* extension_dispatcher_;
 
-  autofill::PasswordAutofillManager* password_autofill_;
+  autofill::PasswordAutofillAgent* password_autofill_;
   autofill::AutofillAgent* autofill_agent_;
 
   // Naked pointer as ownership is with content::RenderViewTest::render_thread_.

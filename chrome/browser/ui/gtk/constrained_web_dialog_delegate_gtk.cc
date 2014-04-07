@@ -8,7 +8,7 @@
 #include <gtk/gtk.h>
 
 #include "chrome/browser/ui/gtk/constrained_window_gtk.h"
-#include "chrome/browser/ui/web_contents_modal_dialog_manager.h"
+#include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/browser/notification_source.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
@@ -22,6 +22,7 @@
 using content::WebContents;
 using ui::WebDialogDelegate;
 using ui::WebDialogWebContentsDelegate;
+using web_modal::WebContentsModalDialogManager;
 
 namespace {
 
@@ -33,7 +34,8 @@ class ConstrainedWebDialogDelegateGtk
       WebDialogDelegate* delegate,
       WebDialogWebContentsDelegate* tab_delegate)
       : ConstrainedWebDialogDelegateBase(
-            browser_context, delegate, tab_delegate) {}
+            browser_context, delegate, tab_delegate),
+        window_(NULL) {}
 
   // WebDialogWebContentsDelegate interface.
   virtual void CloseContents(WebContents* source) OVERRIDE {
@@ -81,7 +83,7 @@ class ConstrainedWebDialogDelegateViewGtk
   virtual void ReleaseWebContentsOnDialogClose() OVERRIDE {
     return impl_->ReleaseWebContentsOnDialogClose();
   }
-  virtual NativeWebContentsModalDialog GetNativeDialog() OVERRIDE {
+  virtual web_modal::NativeWebContentsModalDialog GetNativeDialog() OVERRIDE {
     return impl_->window();
   }
   virtual WebContents* GetWebContents() OVERRIDE {
@@ -127,7 +129,7 @@ ConstrainedWebDialogDelegateViewGtk::ConstrainedWebDialogDelegateViewGtk(
 
 void ConstrainedWebDialogDelegateViewGtk::OnDestroy(GtkWidget* widget) {
   if (!impl_->closed_via_webui())
-    GetWebDialogDelegate()->OnDialogClosed("");
+    GetWebDialogDelegate()->OnDialogClosed(std::string());
   delete this;
 }
 

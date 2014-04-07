@@ -8,11 +8,13 @@
 #include <map>
 #include <set>
 
-#include "base/cancelable_callback.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/scoped_ptr.h"
+#include "base/synchronization/lock.h"
+#include "base/threading/thread_checker.h"
 #include "media/audio/audio_io.h"
 #include "media/audio/audio_parameters.h"
+#include "media/audio/fake_audio_consumer.h"
 #include "media/base/audio_converter.h"
 
 namespace base {
@@ -34,10 +36,13 @@ class MEDIA_EXPORT VirtualAudioInputStream : public AudioInputStream {
       AfterCloseCallback;
 
   // Construct a target for audio loopback which mixes multiple data streams
-  // into a single stream having the given |params|.
-  VirtualAudioInputStream(const AudioParameters& params,
-                          base::MessageLoopProxy* message_loop,
-                          const AfterCloseCallback& after_close_cb);
+  // into a single stream having the given |params|.  |worker_loop| is the loop
+  // on which AudioInputCallback methods are called and may or may not be the
+  // single thread that invokes the AudioInputStream methods.
+  VirtualAudioInputStream(
+      const AudioParameters& params,
+      const scoped_refptr<base::MessageLoopProxy>& worker_loop,
+      const AfterCloseCallback& after_close_cb);
 
   virtual ~VirtualAudioInputStream();
 
@@ -68,24 +73,24 @@ class MEDIA_EXPORT VirtualAudioInputStream : public AudioInputStream {
 
   typedef std::map<AudioParameters, LoopbackAudioConverter*> AudioConvertersMap;
 
-  // When Start() is called on this class, we continuously schedule this
-  // callback to render audio using any attached VirtualAudioOutputStreams until
-  // Stop() is called.
-  void ReadAudio();
+  // Pulls audio data from all attached VirtualAudioOutputStreams, mixes and
+  // converts the streams into one, and pushes the result to |callback_|.
+  // Invoked on the worker thread.
+  void PumpAudio(AudioBus* audio_bus);
 
-  base::MessageLoopProxy* const message_loop_;
+  const scoped_refptr<base::MessageLoopProxy> worker_loop_;
 
   AfterCloseCallback after_close_cb_;
 
   AudioInputCallback* callback_;
 
   // Non-const for testing.
-  base::TimeDelta buffer_duration_;
-  base::Time next_read_time_;
-  scoped_array<uint8> buffer_;
+  scoped_ptr<uint8[]> buffer_;
   AudioParameters params_;
-  scoped_ptr<AudioBus> audio_bus_;
-  base::CancelableClosure on_more_data_cb_;
+
+  // Guards concurrent access to the converter network: converters_, mixer_, and
+  // num_attached_output_streams_.
+  base::Lock converter_network_lock_;
 
   // AudioConverters associated with the attached VirtualAudioOutputStreams,
   // partitioned by common AudioParameters.
@@ -97,6 +102,11 @@ class MEDIA_EXPORT VirtualAudioInputStream : public AudioInputStream {
 
   // Number of currently attached VirtualAudioOutputStreams.
   int num_attached_output_streams_;
+
+  // Handles callback timing for consumption of audio data.
+  FakeAudioConsumer fake_consumer_;
+
+  base::ThreadChecker thread_checker_;
 
   DISALLOW_COPY_AND_ASSIGN(VirtualAudioInputStream);
 };

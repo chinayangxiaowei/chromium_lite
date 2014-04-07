@@ -4,12 +4,12 @@
 
 #include "base/command_line.h"
 #include "base/strings/string_number_conversions.h"
-#include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_manifest_constants.h"
 #include "chrome/common/extensions/manifest_handlers/content_scripts_handler.h"
 #include "chrome/common/extensions/manifest_tests/extension_manifest_test.h"
 #include "extensions/common/error_utils.h"
+#include "extensions/common/switches.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace errors = extension_manifest_errors;
@@ -17,14 +17,9 @@ namespace errors = extension_manifest_errors;
 namespace extensions {
 
 class ContentScriptsManifestTest : public ExtensionManifestTest {
- protected:
-  virtual void SetUp() OVERRIDE {
-    ExtensionManifestTest::SetUp();
-    (new ContentScriptsHandler)->Register();
-  }
 };
 
-TEST_F(ContentScriptsManifestTest, ContentScriptMatchPattern) {
+TEST_F(ContentScriptsManifestTest, MatchPattern) {
   Testcase testcases[] = {
     // chrome:// urls are not allowed.
     Testcase("content_script_chrome_url_invalid.json",
@@ -48,16 +43,28 @@ TEST_F(ContentScriptsManifestTest, ContentScriptMatchPattern) {
   LoadAndExpectSuccess("ports_in_content_scripts.json");
 }
 
-TEST_F(ContentScriptsManifestTest, ContentScriptsOnChromeUrlsWithFlag) {
+TEST_F(ContentScriptsManifestTest, OnChromeUrlsWithFlag) {
   CommandLine::ForCurrentProcess()->AppendSwitch(
       switches::kExtensionsOnChromeURLs);
-  std::string error;
-  scoped_refptr<extensions::Extension> extension =
+  scoped_refptr<Extension> extension =
     LoadAndExpectSuccess("content_script_chrome_url_invalid.json");
-  EXPECT_EQ("", error);
   const GURL newtab_url("chrome://newtab/");
-  EXPECT_TRUE(ContentScriptsInfo::ExtensionHasScriptAtURL(extension,
-                                                          newtab_url));
+  EXPECT_TRUE(
+      ContentScriptsInfo::ExtensionHasScriptAtURL(extension.get(), newtab_url));
+}
+
+TEST_F(ContentScriptsManifestTest, ScriptableHosts) {
+  // TODO(yoz): Test GetScriptableHosts.
+  scoped_refptr<Extension> extension =
+      LoadAndExpectSuccess("content_script_yahoo.json");
+  URLPatternSet scriptable_hosts =
+      ContentScriptsInfo::GetScriptableHosts(extension.get());
+
+  URLPatternSet expected;
+  expected.AddPattern(
+      URLPattern(URLPattern::SCHEME_HTTP, "http://yahoo.com/*"));
+
+  EXPECT_EQ(expected, scriptable_hosts);
 }
 
 }  // namespace extensions

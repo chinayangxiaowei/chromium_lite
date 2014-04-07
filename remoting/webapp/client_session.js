@@ -28,19 +28,30 @@ var remoting = remoting || {};
  * @param {string} hostPublicKey The base64 encoded version of the host's
  *     public key.
  * @param {string} accessCode The IT2Me access code. Blank for Me2Me.
- * @param {function(function(string): void): void} fetchPin Called by Me2Me
- *     connections when a PIN needs to be obtained interactively.
+ * @param {function(boolean, function(string): void): void} fetchPin
+ *     Called by Me2Me connections when a PIN needs to be obtained
+ *     interactively.
+ * @param {function(string, string, string,
+ *                  function(string, string): void): void}
+ *     fetchThirdPartyToken Called by Me2Me connections when a third party
+ *     authentication token must be obtained.
  * @param {string} authenticationMethods Comma-separated list of
  *     authentication methods the client should attempt to use.
  * @param {string} hostId The host identifier for Me2Me, or empty for IT2Me.
  *     Mixed into authentication hashes for some authentication methods.
  * @param {remoting.ClientSession.Mode} mode The mode of this connection.
  * @param {string} hostDisplayName The name of the host for display purposes.
+ * @param {string} clientPairingId For paired Me2Me connections, the
+ *     pairing id for this client, as issued by the host.
+ * @param {string} clientPairedSecret For paired Me2Me connections, the
+ *     paired secret for this client, as issued by the host.
  * @constructor
  */
 remoting.ClientSession = function(hostJid, clientJid, hostPublicKey, accessCode,
-                                  fetchPin, authenticationMethods, hostId,
-                                  mode, hostDisplayName) {
+                                  fetchPin, fetchThirdPartyToken,
+                                  authenticationMethods, hostId,
+                                  mode, hostDisplayName,
+                                  clientPairingId, clientPairedSecret) {
   this.state = remoting.ClientSession.State.CREATED;
 
   this.hostJid = hostJid;
@@ -50,19 +61,28 @@ remoting.ClientSession = function(hostJid, clientJid, hostPublicKey, accessCode,
   this.accessCode_ = accessCode;
   /** @private */
   this.fetchPin_ = fetchPin;
+  /** @private */
+  this.fetchThirdPartyToken_ = fetchThirdPartyToken;
   this.authenticationMethods = authenticationMethods;
+  /** @type {string} */
   this.hostId = hostId;
   /** @type {string} */
   this.hostDisplayName = hostDisplayName;
   /** @type {remoting.ClientSession.Mode} */
   this.mode = mode;
+  /** @private */
+  this.clientPairingId_ = clientPairingId;
+  /** @private */
+  this.clientPairedSecret_ = clientPairedSecret
   this.sessionId = '';
   /** @type {remoting.ClientPlugin} */
   this.plugin = null;
   /** @private */
   this.shrinkToFit_ = true;
   /** @private */
-  this.resizeToClient_ = false;
+  this.resizeToClient_ = true;
+  /** @private */
+  this.remapKeys_ = '';
   /** @private */
   this.hasReceivedFrame_ = false;
   this.logToServer = new remoting.LogToServer();
@@ -111,9 +131,9 @@ remoting.ClientSession = function(hostJid, clientJid, hostPublicKey, accessCode,
 
   if (this.mode == remoting.ClientSession.Mode.IT2ME) {
     // Resize-to-client is not supported for IT2Me hosts.
-    this.resizeToClientButton_.parentNode.removeChild(
-        this.resizeToClientButton_);
+    this.resizeToClientButton_.hidden = true;
   } else {
+    this.resizeToClientButton_.hidden = false;
     this.resizeToClientButton_.addEventListener(
         'click', this.callSetScreenMode_, false);
   }
@@ -131,6 +151,44 @@ remoting.ClientSession = function(hostJid, clientJid, hostPublicKey, accessCode,
  */
 remoting.ClientSession.prototype.setOnStateChange = function(onStateChange) {
   this.onStateChange_ = onStateChange;
+};
+
+/**
+ * Called when the window or desktop size or the scaling settings change,
+ * to set the scroll-bar visibility.
+ *
+ * TODO(jamiewalch): crbug.com/252796: Remove this once crbug.com/240772 is
+ * fixed.
+ */
+remoting.ClientSession.prototype.updateScrollbarVisibility = function() {
+  var needsVerticalScroll = false;
+  var needsHorizontalScroll = false;
+  if (!this.shrinkToFit_) {
+    // Determine whether or not horizontal or vertical scrollbars are
+    // required, taking into account their width.
+    needsVerticalScroll = window.innerHeight < this.plugin.desktopHeight;
+    needsHorizontalScroll = window.innerWidth < this.plugin.desktopWidth;
+    var kScrollBarWidth = 16;
+    if (needsHorizontalScroll && !needsVerticalScroll) {
+      needsVerticalScroll =
+          window.innerHeight - kScrollBarWidth < this.plugin.desktopHeight;
+    } else if (!needsHorizontalScroll && needsVerticalScroll) {
+      needsHorizontalScroll =
+          window.innerWidth - kScrollBarWidth < this.plugin.desktopWidth;
+    }
+  }
+
+  var htmlNode = /** @type {HTMLElement} */ (document.body.parentNode);
+  if (needsHorizontalScroll) {
+    htmlNode.classList.remove('no-horizontal-scroll');
+  } else {
+    htmlNode.classList.add('no-horizontal-scroll');
+  }
+  if (needsVerticalScroll) {
+    htmlNode.classList.remove('no-vertical-scroll');
+  } else {
+    htmlNode.classList.add('no-vertical-scroll');
+  }
 };
 
 // Note that the positive values in both of these enums are copied directly
@@ -200,6 +258,7 @@ remoting.ClientSession.STATS_KEY_RENDER_LATENCY = 'renderLatency';
 remoting.ClientSession.STATS_KEY_ROUNDTRIP_LATENCY = 'roundtripLatency';
 
 // Keys for per-host settings.
+remoting.ClientSession.KEY_REMAP_KEYS = 'remapKeys';
 remoting.ClientSession.KEY_RESIZE_TO_CLIENT = 'resizeToClient';
 remoting.ClientSession.KEY_SHRINK_TO_FIT = 'shrinkToFit';
 
@@ -223,6 +282,40 @@ remoting.ClientSession.prototype.error_ =
  * @const
  */
 remoting.ClientSession.prototype.PLUGIN_ID = 'session-client-plugin';
+
+/**
+ * Set of capabilities for which hasCapability_() can be used to test.
+ *
+ * @enum {string}
+ */
+remoting.ClientSession.Capability = {
+  // When enabled this capability causes the client to send its screen
+  // resolution to the host once connection has been established. See
+  // this.plugin.notifyClientResolution().
+  SEND_INITIAL_RESOLUTION: 'sendInitialResolution',
+  RATE_LIMIT_RESIZE_REQUESTS: 'rateLimitResizeRequests'
+};
+
+/**
+ * The set of capabilities negotiated between the client and host.
+ * @type {Array.<string>}
+ * @private
+ */
+remoting.ClientSession.prototype.capabilities_ = null;
+
+/**
+ * @param {remoting.ClientSession.Capability} capability The capability to test
+ *     for.
+ * @return {boolean} True if the capability has been negotiated between
+ *     the client and host.
+ * @private
+ */
+remoting.ClientSession.prototype.hasCapability_ = function(capability) {
+  if (this.capabilities_ == null)
+    return false;
+
+  return this.capabilities_.indexOf(capability) > -1;
+};
 
 /**
  * @param {Element} container The element to add the plugin to.
@@ -284,6 +377,12 @@ remoting.ClientSession.prototype.createPluginAndConnect =
  * @private
  */
 remoting.ClientSession.prototype.onHostSettingsLoaded_ = function(options) {
+  if (remoting.ClientSession.KEY_REMAP_KEYS in options &&
+      typeof(options[remoting.ClientSession.KEY_REMAP_KEYS]) ==
+          'string') {
+    this.remapKeys_ = /** @type {string} */
+        options[remoting.ClientSession.KEY_REMAP_KEYS];
+  }
   if (remoting.ClientSession.KEY_RESIZE_TO_CLIENT in options &&
       typeof(options[remoting.ClientSession.KEY_RESIZE_TO_CLIENT]) ==
           'boolean') {
@@ -342,11 +441,9 @@ remoting.ClientSession.prototype.onPluginInitialized_ = function(initialized) {
     sendCadElement.hidden = true;
   }
 
-  // Remap the right Control key to the right Win / Cmd key on ChromeOS
-  // platforms, if the plugin has the remapKey feature.
-  if (this.plugin.hasFeature(remoting.ClientPlugin.Feature.REMAP_KEY) &&
-      remoting.runningOnChromeOS()) {
-    this.plugin.remapKey(0x0700e4, 0x0700e7);
+  // Apply customized key remappings if the plugin supports remapKeys.
+  if (this.plugin.hasFeature(remoting.ClientPlugin.Feature.REMAP_KEY)) {
+    this.applyRemapKeys_(true);
   }
 
   /** @param {string} msg The IQ stanza to send. */
@@ -362,7 +459,8 @@ remoting.ClientSession.prototype.onPluginInitialized_ = function(initialized) {
       this.onConnectionReady_.bind(this);
   this.plugin.onDesktopSizeUpdateHandler =
       this.onDesktopSizeChanged_.bind(this);
-
+  this.plugin.onSetCapabilitiesHandler =
+      this.onSetCapabilities_.bind(this);
   this.connectPluginToWcs_();
 };
 
@@ -382,12 +480,17 @@ remoting.ClientSession.prototype.removePlugin = function() {
     this.plugin.cleanup();
     this.plugin = null;
   }
+
+  // Delete event handlers that aren't relevent when not connected.
   this.resizeToClientButton_.removeEventListener(
       'click', this.callSetScreenMode_, false);
   this.shrinkToFitButton_.removeEventListener(
       'click', this.callSetScreenMode_, false);
   this.fullScreenButton_.removeEventListener(
       'click', this.callToggleFullScreen_, false);
+
+  // In case the user had selected full-screen mode, cancel it now.
+  document.webkitCancelFullScreen();
 };
 
 /**
@@ -480,6 +583,60 @@ remoting.ClientSession.prototype.sendPrintScreen = function() {
 }
 
 /**
+ * Sets and stores the key remapping setting for the current host.
+ *
+ * @param {string} remappings Comma separated list of key remappings.
+ */
+remoting.ClientSession.prototype.setRemapKeys = function(remappings) {
+  // Cancel any existing remappings and apply the new ones.
+  this.applyRemapKeys_(false);
+  this.remapKeys_ = remappings;
+  this.applyRemapKeys_(true);
+
+  // Save the new remapping setting.
+  var options = {};
+  options[remoting.ClientSession.KEY_REMAP_KEYS] = this.remapKeys_;
+  remoting.HostSettings.save(this.hostId, options);
+}
+
+/**
+ * Applies the configured key remappings to the session, or resets them.
+ *
+ * @param {boolean} apply True to apply remappings, false to cancel them.
+ */
+remoting.ClientSession.prototype.applyRemapKeys_ = function(apply) {
+  // By default, under ChromeOS, remap the right Control key to the right
+  // Win / Cmd key.
+  var remapKeys = this.remapKeys_;
+  if (remapKeys == '' && remoting.runningOnChromeOS()) {
+    remapKeys = '0x0700e4>0x0700e7';
+  }
+
+  var remappings = remapKeys.split(',');
+  for (var i = 0; i < remappings.length; ++i) {
+    var keyCodes = remappings[i].split('>');
+    if (keyCodes.length != 2) {
+      console.log('bad remapKey: ' + remappings[i]);
+      continue;
+    }
+    var fromKey = parseInt(keyCodes[0], 0);
+    var toKey = parseInt(keyCodes[1], 0);
+    if (!fromKey || !toKey) {
+      console.log('bad remapKey code: ' + remappings[i]);
+      continue;
+    }
+    if (apply) {
+      console.log('remapKey 0x' + fromKey.toString(16) +
+                  '>0x' + toKey.toString(16));
+      this.plugin.remapKey(fromKey, toKey);
+    } else {
+      console.log('cancel remapKey 0x' + fromKey.toString(16));
+      this.plugin.remapKey(fromKey, fromKey);
+    }
+  }
+}
+
+/**
  * Callback for the two "screen mode" related menu items: Resize desktop to
  * fit and Shrink to fit.
  *
@@ -515,7 +672,6 @@ remoting.ClientSession.prototype.onSetScreenMode_ = function(event) {
  */
 remoting.ClientSession.prototype.setScreenMode_ =
     function(shrinkToFit, resizeToClient) {
-
   if (resizeToClient && !this.resizeToClient_) {
     this.plugin.notifyClientResolution(window.innerWidth,
                                        window.innerHeight,
@@ -527,6 +683,7 @@ remoting.ClientSession.prototype.setScreenMode_ =
 
   this.shrinkToFit_ = shrinkToFit;
   this.resizeToClient_ = resizeToClient;
+  this.updateScrollbarVisibility();
 
   if (this.hostId != '') {
     var options = {};
@@ -539,6 +696,7 @@ remoting.ClientSession.prototype.setScreenMode_ =
   if (needsScrollReset) {
     this.scroll_(0, 0);
   }
+
 }
 
 /**
@@ -626,25 +784,34 @@ remoting.ClientSession.prototype.connectPluginToWcs_ = function() {
   };
   remoting.wcsSandbox.setOnIq(onIncomingIq);
 
+  /** @type remoting.ClientSession */
+  var that = this;
+  if (plugin.hasFeature(remoting.ClientPlugin.Feature.THIRD_PARTY_AUTH)) {
+    /** @type{function(string, string, string): void} */
+    var fetchThirdPartyToken = function(tokenUrl, hostPublicKey, scope) {
+      that.fetchThirdPartyToken_(
+          tokenUrl, hostPublicKey, scope,
+          plugin.onThirdPartyTokenFetched.bind(plugin));
+    };
+    plugin.fetchThirdPartyTokenHandler = fetchThirdPartyToken;
+  }
   if (this.accessCode_) {
     // Shared secret was already supplied before connecting (It2Me case).
     this.connectToHost_(this.accessCode_);
-
   } else if (plugin.hasFeature(
       remoting.ClientPlugin.Feature.ASYNC_PIN)) {
     // Plugin supports asynchronously asking for the PIN.
     plugin.useAsyncPinDialog();
-    /** @type remoting.ClientSession */
-    var that = this;
-    var fetchPin = function() {
-      that.fetchPin_(plugin.onPinFetched.bind(plugin));
+    /** @param {boolean} pairingSupported */
+    var fetchPin = function(pairingSupported) {
+      that.fetchPin_(pairingSupported, plugin.onPinFetched.bind(plugin));
     };
     plugin.fetchPinHandler = fetchPin;
     this.connectToHost_('');
-
   } else {
-    // Plugin doesn't support asynchronously asking for the PIN, ask now.
-    this.fetchPin_(this.connectToHost_.bind(this));
+    // Clients that don't support asking for a PIN asynchronously also don't
+    // support pairing, so request the PIN now without offering to remember it.
+    this.fetchPin_(false, this.connectToHost_.bind(this));
   }
 };
 
@@ -657,8 +824,8 @@ remoting.ClientSession.prototype.connectPluginToWcs_ = function() {
  */
 remoting.ClientSession.prototype.connectToHost_ = function(sharedSecret) {
   this.plugin.connect(this.hostJid, this.hostPublicKey, this.clientJid,
-                      sharedSecret, this.authenticationMethods,
-                      this.hostId);
+                      sharedSecret, this.authenticationMethods, this.hostId,
+                      this.clientPairingId_, this.clientPairedSecret_);
 };
 
 /**
@@ -698,7 +865,30 @@ remoting.ClientSession.prototype.onConnectionReady_ = function(ready) {
   } else {
     this.plugin.element().classList.remove("session-client-inactive");
   }
-}
+};
+
+/**
+ * Called when the client-host capabilities negotiation is complete.
+ *
+ * @param {!Array.<string>} capabilities The set of capabilities negotiated
+ *     between the client and host.
+ * @return {void} Nothing.
+ * @private
+ */
+remoting.ClientSession.prototype.onSetCapabilities_ = function(capabilities) {
+  if (this.capabilities_ != null) {
+    console.error('onSetCapabilities_() is called more than once');
+    return;
+  }
+
+  this.capabilities_ = capabilities;
+  if (this.hasCapability_(
+      remoting.ClientSession.Capability.SEND_INITIAL_RESOLUTION)) {
+    this.plugin.notifyClientResolution(window.innerWidth,
+                                       window.innerHeight,
+                                       window.devicePixelRatio);
+  }
+};
 
 /**
  * @private
@@ -746,17 +936,24 @@ remoting.ClientSession.prototype.onResize = function() {
   // Defer notifying the host of the change until the window stops resizing, to
   // avoid overloading the control channel with notifications.
   if (this.resizeToClient_) {
+    var kResizeRateLimitMs = 1000;
+    if (this.hasCapability_(
+        remoting.ClientSession.Capability.RATE_LIMIT_RESIZE_REQUESTS)) {
+      kResizeRateLimitMs = 250;
+    }
     this.notifyClientResolutionTimer_ = window.setTimeout(
         this.plugin.notifyClientResolution.bind(this.plugin,
                                                 window.innerWidth,
                                                 window.innerHeight,
                                                 window.devicePixelRatio),
-        1000);
+        kResizeRateLimitMs);
   }
 
   // If bump-scrolling is enabled, adjust the plugin margins to fully utilize
   // the new window area.
   this.scroll_(0, 0);
+
+  this.updateScrollbarVisibility();
 };
 
 /**
@@ -797,6 +994,7 @@ remoting.ClientSession.prototype.onDesktopSizeChanged_ = function() {
               this.plugin.desktopXDpi + 'x' +
               this.plugin.desktopYDpi + ' DPI');
   this.updateDimensions();
+  this.updateScrollbarVisibility();
 };
 
 /**
@@ -921,6 +1119,19 @@ remoting.ClientSession.prototype.logStatistics = function(stats) {
  */
 remoting.ClientSession.prototype.logHostOfflineErrors = function(enable) {
   this.logHostOfflineErrors_ = enable;
+};
+
+/**
+ * Request pairing with the host for PIN-less authentication.
+ *
+ * @param {string} clientName The human-readable name of the client.
+ * @param {function(string, string):void} onDone Callback to receive the
+ *     client id and shared secret when they are available.
+ */
+remoting.ClientSession.prototype.requestPairing = function(clientName, onDone) {
+  if (this.plugin) {
+    this.plugin.requestPairing(clientName, onDone);
+  }
 };
 
 /**

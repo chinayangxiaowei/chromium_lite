@@ -4,8 +4,6 @@
 
 #include "remoting/host/setup/daemon_controller.h"
 
-#include <objbase.h>
-
 #include "base/basictypes.h"
 #include "base/bind.h"
 #include "base/bind_helpers.h"
@@ -15,11 +13,11 @@
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread.h"
-#include "base/time.h"
-#include "base/timer.h"
-#include "base/utf_string_conversions.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "base/values.h"
 #include "base/win/scoped_bstr.h"
 #include "base/win/scoped_comptr.h"
@@ -441,7 +439,7 @@ DaemonController::AsyncResult DaemonControllerWin::HResultToAsyncResult(
 void DaemonControllerWin::DoGetConfig(const GetConfigCallback& callback) {
   DCHECK(worker_thread_.message_loop_proxy()->BelongsToCurrentThread());
 
-  scoped_ptr<base::DictionaryValue> dictionary_null(NULL);
+  scoped_ptr<base::DictionaryValue> dictionary_null;
 
   // Configure and start the Daemon Controller if it is installed already.
   HRESULT hr = ActivateController();

@@ -8,8 +8,8 @@
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
 #include "build/build_config.h"
-#include "third_party/angle/include/EGL/egl.h"
-#include "third_party/angle/include/EGL/eglext.h"
+#include "third_party/khronos/EGL/egl.h"
+#include "third_party/khronos/EGL/eglext.h"
 #include "ui/gl/egl_util.h"
 #include "ui/gl/gl_bindings.h"
 #include "ui/gl/gl_surface_egl.h"
@@ -25,11 +25,11 @@ using ui::GetLastEGLErrorString;
 namespace gfx {
 
 GLContextEGL::GLContextEGL(GLShareGroup* share_group)
-    : GLContext(share_group),
+    : GLContextReal(share_group),
       context_(NULL),
       display_(NULL),
       config_(NULL),
-      recreate_surface_on_makecurrent_(false) {
+      unbind_fbo_on_makecurrent_(false) {
 }
 
 bool GLContextEGL::Initialize(
@@ -98,6 +98,11 @@ bool GLContextEGL::MakeCurrent(GLSurface* surface) {
                "context", context_,
                "surface", surface);
 
+  if (unbind_fbo_on_makecurrent_ &&
+      eglGetCurrentContext() != EGL_NO_CONTEXT) {
+    glBindFramebufferEXT(GL_FRAMEBUFFER, 0);
+  }
+
   if (!eglMakeCurrent(display_,
                       surface->GetHandle(),
                       surface->GetHandle(),
@@ -107,71 +112,35 @@ bool GLContextEGL::MakeCurrent(GLSurface* surface) {
     return false;
   }
 
-  SetCurrent(this, surface);
+  // Set this as soon as the context is current, since we might call into GL.
+  SetRealGLApi();
+
+  SetCurrent(surface);
   if (!InitializeExtensionBindings()) {
     ReleaseCurrent(surface);
     return false;
   }
-
-#if defined(OS_ANDROID)
-  if (!RecreateSurfaceIfNeeded(surface))
-    return false;
-#endif
 
   if (!surface->OnMakeCurrent(this)) {
     LOG(ERROR) << "Could not make current.";
     return false;
   }
 
-  SetRealGLApi();
   return true;
 }
 
-void GLContextEGL::SetRecreateSurfaceOnMakeCurrent() {
-  recreate_surface_on_makecurrent_ = true;
-}
-
-bool GLContextEGL::RecreateSurfaceIfNeeded(GLSurface* surface) {
-  if (!recreate_surface_on_makecurrent_ ||
-      !surface ||
-      surface->IsOffscreen() ||
-      surface->GetBackingFrameBufferObject())
-    return true;
-
-  // This is specifically needed for Vivante GPU's on Android.
-  // A native view surface will not be configured correctly
-  // unless we do all of the following steps after making the
-  // surface current.
-  GLint fbo = 0;
-  glGetIntegerv(GL_FRAMEBUFFER_BINDING, &fbo);
-  glBindFramebufferEXT(GL_FRAMEBUFFER, 0);
-
-  eglMakeCurrent(display_,
-                 EGL_NO_SURFACE,
-                 EGL_NO_SURFACE,
-                 EGL_NO_CONTEXT);
-  if (!surface->Recreate()) {
-    LOG(ERROR) << "Failed to recreate surface";
-    return false;
-  }
-  if (!eglMakeCurrent(display_,
-                      surface->GetHandle(),
-                      surface->GetHandle(),
-                      context_)) {
-    LOG(ERROR) << "eglMakeCurrent failed with error "
-               << GetLastEGLErrorString();
-    return false;
-  }
-
-  glBindFramebufferEXT(GL_FRAMEBUFFER, fbo);
-  return true;
+void GLContextEGL::SetUnbindFboOnMakeCurrent() {
+  unbind_fbo_on_makecurrent_ = true;
 }
 
 void GLContextEGL::ReleaseCurrent(GLSurface* surface) {
   if (!IsCurrent(surface))
     return;
 
-  SetCurrent(NULL, NULL);
+  if (unbind_fbo_on_makecurrent_)
+    glBindFramebufferEXT(GL_FRAMEBUFFER, 0);
+
+  SetCurrent(NULL);
   eglMakeCurrent(display_,
                  EGL_NO_SURFACE,
                  EGL_NO_SURFACE,
@@ -186,7 +155,7 @@ bool GLContextEGL::IsCurrent(GLSurface* surface) {
   // If our context is current then our notion of which GLContext is
   // current must be correct. On the other hand, third-party code
   // using OpenGL might change the current context.
-  DCHECK(!native_context_is_current || (GetCurrent() == this));
+  DCHECK(!native_context_is_current || (GetRealCurrent() == this));
 
   if (!native_context_is_current)
     return false;

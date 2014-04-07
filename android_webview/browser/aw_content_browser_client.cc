@@ -13,7 +13,6 @@
 #include "android_webview/browser/net_disk_cache_remover.h"
 #include "android_webview/browser/renderer_host/aw_resource_dispatcher_host_delegate.h"
 #include "android_webview/common/url_constants.h"
-#include "base/android/locale_utils.h"
 #include "base/base_paths_android.h"
 #include "base/path_service.h"
 #include "content/public/browser/access_token_store.h"
@@ -24,8 +23,10 @@
 #include "grit/ui_resources.h"
 #include "net/android/network_library.h"
 #include "net/ssl/ssl_info.h"
+#include "ui/base/l10n/l10n_util_android.h"
 #include "ui/base/resource/resource_bundle.h"
 
+namespace android_webview {
 namespace {
 
 class AwAccessTokenStore : public content::AccessTokenStore {
@@ -51,12 +52,20 @@ class AwAccessTokenStore : public content::AccessTokenStore {
 
 }
 
-namespace android_webview {
+std::string AwContentBrowserClient::GetAcceptLangsImpl() {
+  // Start with the currnet locale.
+  std::string langs = l10n_util::GetDefaultLocale();
 
-// static
-AwContentBrowserClient* AwContentBrowserClient::FromContentBrowserClient(
-    content::ContentBrowserClient* client) {
-  return static_cast<AwContentBrowserClient*>(client);
+  // If we're not en-US, add in en-US which will be
+  // used with a lower q-value.
+  if (StringToLowerASCII(langs) != "en-us") {
+    langs += ",en-US";
+  }
+  return langs;
+}
+
+AwBrowserContext* AwContentBrowserClient::GetAwBrowserContext() {
+  return AwBrowserContext::GetDefault();
 }
 
 AwContentBrowserClient::AwContentBrowserClient(
@@ -81,10 +90,6 @@ void AwContentBrowserClient::AddCertificate(net::URLRequest* request,
                                             int render_view_id) {
   if (cert_size > 0)
     net::android::StoreCertificate(cert_type, cert_data, cert_size);
-}
-
-AwBrowserContext* AwContentBrowserClient::GetAwBrowserContext() {
-  return browser_context_.get();
 }
 
 content::BrowserMainParts* AwContentBrowserClient::CreateBrowserMainParts(
@@ -146,20 +151,12 @@ void AwContentBrowserClient::AppendExtraCommandLineSwitches(
 }
 
 std::string AwContentBrowserClient::GetApplicationLocale() {
-  return base::android::GetDefaultLocale();
+  return l10n_util::GetDefaultLocale();
 }
 
 std::string AwContentBrowserClient::GetAcceptLangs(
     content::BrowserContext* context) {
-  // Start with the currnet locale.
-  std::string langs = GetApplicationLocale();
-
-  // If we're not en-US, add in en-US which will be
-  // used with a lower q-value.
-  if (StringToLowerASCII(langs) != "en-us") {
-    langs += ",en-US";
-  }
-  return langs;
+  return GetAcceptLangsImpl();
 }
 
 gfx::ImageSkia* AwContentBrowserClient::GetDefaultFavicon() {
@@ -250,16 +247,19 @@ void AwContentBrowserClient::AllowCertificateError(
     bool overridable,
     bool strict_enforcement,
     const base::Callback<void(bool)>& callback,
-    bool* cancel_request) {
+    content::CertificateRequestResultType* result) {
 
   AwContentsClientBridgeBase* client =
       AwContentsClientBridgeBase::FromID(render_process_id, render_view_id);
-  if (client) {
-    client->AllowCertificateError(cert_error, ssl_info.cert, request_url,
-                                  callback, cancel_request);
-  } else {
-    *cancel_request = true;
-  }
+  bool cancel_request = true;
+  if (client)
+    client->AllowCertificateError(cert_error,
+                                  ssl_info.cert.get(),
+                                  request_url,
+                                  callback,
+                                  &cancel_request);
+  if (cancel_request)
+    *result = content::CERTIFICATE_REQUEST_RESULT_TYPE_DENY;
 }
 
 WebKit::WebNotificationPresenter::Permission
@@ -288,10 +288,19 @@ void AwContentBrowserClient::CancelDesktopNotification(
 
 bool AwContentBrowserClient::CanCreateWindow(
     const GURL& opener_url,
+    const GURL& opener_top_level_frame_url,
     const GURL& source_origin,
     WindowContainerType container_type,
+    const GURL& target_url,
+    const content::Referrer& referrer,
+    WindowOpenDisposition disposition,
+    const WebKit::WebWindowFeatures& features,
+    bool user_gesture,
+    bool opener_suppressed,
     content::ResourceContext* context,
     int render_process_id,
+    bool is_guest,
+    int opener_id,
     bool* no_javascript_access) {
   // We unconditionally allow popup windows at this stage and will give
   // the embedder the opporunity to handle displaying of the popup in
@@ -340,12 +349,6 @@ void AwContentBrowserClient::UpdateInspectorSetting(
   NOTIMPLEMENTED();
 }
 
-void AwContentBrowserClient::ClearInspectorSettings(
-    content::RenderViewHost* rvh) {
-  // TODO(boliu): Implement persisting inspector settings.
-  NOTIMPLEMENTED();
-}
-
 void AwContentBrowserClient::ClearCache(content::RenderViewHost* rvh) {
   RemoveHttpDiskCache(rvh->GetProcess()->GetBrowserContext(),
                       rvh->GetProcess()->GetID());
@@ -378,6 +381,7 @@ void AwContentBrowserClient::DidCreatePpapiPlugin(
 bool AwContentBrowserClient::AllowPepperSocketAPI(
     content::BrowserContext* browser_context,
     const GURL& url,
+    bool private_api,
     const content::SocketPermissionRequest& params) {
   NOTREACHED() << "Android WebView does not support plugins";
   return false;

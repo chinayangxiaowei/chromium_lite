@@ -7,8 +7,8 @@
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/utf_string_conversions.h"
-#include "content/common/child_process.h"
+#include "base/strings/utf_string_conversions.h"
+#include "content/child/child_process.h"
 #include "ppapi/c/pp_bool.h"
 #include "ppapi/c/private/ppp_flash_browser_operations.h"
 #include "ppapi/proxy/ppapi_messages.h"
@@ -49,7 +49,7 @@ void GetPermissionSettingsCallback(
   scoped_ptr<GetPermissionSettingsContext> context(
       reinterpret_cast<GetPermissionSettingsContext*>(user_data));
 
-  if (!context->dispatcher)
+  if (!context->dispatcher.get())
     return;
 
   ppapi::FlashSiteSettings site_vector;
@@ -105,7 +105,7 @@ BrokerProcessDispatcher::~BrokerProcessDispatcher() {
   // plugin. This is the case for common plugins where they may be used on a
   // source and destination page of a navigation. We don't want to tear down
   // and re-start processes each time in these cases.
-  MessageLoop::current()->PostDelayedTask(
+  base::MessageLoop::current()->PostDelayedTask(
       FROM_HERE,
       base::Bind(&ChildProcess::ReleaseProcess,
                  base::Unretained(ChildProcess::current())),
@@ -304,7 +304,7 @@ bool BrokerProcessDispatcher::SetSitePermission(
     return true;
 
   std::string data_str = ConvertPluginDataPath(plugin_data_path);
-  scoped_array<PP_Flash_BrowserOperations_SiteSetting> site_array(
+  scoped_ptr<PP_Flash_BrowserOperations_SiteSetting[]> site_array(
       new PP_Flash_BrowserOperations_SiteSetting[sites.size()]);
 
   for (size_t i = 0; i < sites.size(); ++i) {

@@ -5,16 +5,15 @@
 #include <string>
 #include <vector>
 
-#include "base/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/path_service.h"
 #include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/time.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "chrome/browser/search_engines/template_url.h"
 #include "chrome/browser/webdata/keyword_table.h"
-#include "chrome/browser/webdata/web_database.h"
+#include "components/webdata/common/web_database.h"
 #include "sql/statement.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -34,7 +33,7 @@ class KeywordTableTest : public testing::Test {
     table_.reset(new KeywordTable);
     db_.reset(new WebDatabase);
     db_->AddTable(table_.get());
-    ASSERT_EQ(sql::INIT_OK, db_->Init(file_, std::string()));
+    ASSERT_EQ(sql::INIT_OK, db_->Init(file_));
   }
 
   base::FilePath file_;
@@ -137,6 +136,7 @@ TEST_F(KeywordTableTest, GetTableContents) {
   keyword.SetKeyword(ASCIIToUTF16("keyword"));
   keyword.SetURL("http://url/");
   keyword.suggestions_url = "url2";
+  keyword.image_url = "http://image-search-url/";
   keyword.favicon_url = GURL("http://favicon.url/");
   keyword.show_in_default_list = true;
   keyword.safe_for_autoreplace = true;
@@ -151,6 +151,7 @@ TEST_F(KeywordTableTest, GetTableContents) {
 
   keyword.SetKeyword(ASCIIToUTF16("url"));
   keyword.instant_url = "http://instant2/";
+  keyword.image_url.clear();
   keyword.originating_url = GURL("http://originating.url/");
   keyword.input_encodings.push_back("Shift_JIS");
   keyword.id = 2;
@@ -162,8 +163,9 @@ TEST_F(KeywordTableTest, GetTableContents) {
 
   const char kTestContents[] = "1short_namekeywordhttp://favicon.url/"
       "http://url/1001url20001234-5678-90AB-CDEF[\"a_url1\",\"a_url2\"]espv"
-      "2short_nameurlhttp://favicon.url/http://url/1http://originating.url/00"
-      "Shift_JIS1url250http://instant2/0FEDC-BA09-8765-4321[]";
+      "http://image-search-url/2short_nameurlhttp://favicon.url/http://url/1"
+      "http://originating.url/00Shift_JIS1url250http://instant2/0"
+      "FEDC-BA09-8765-4321[]";
 
   std::string contents;
   EXPECT_TRUE(table_->GetTableContents("keywords",
@@ -187,6 +189,9 @@ TEST_F(KeywordTableTest, GetTableContentsOrdering) {
   keyword.alternate_urls.push_back("a_url1");
   keyword.alternate_urls.push_back("a_url2");
   keyword.search_terms_replacement_key = "espv";
+  keyword.image_url = "http://image-search-url/";
+  keyword.search_url_post_params = "ie=utf-8,oe=utf-8";
+  keyword.image_url_post_params = "name=1,value=2";
   EXPECT_TRUE(table_->AddKeyword(keyword));
 
   keyword.SetKeyword(ASCIIToUTF16("url"));
@@ -198,13 +203,16 @@ TEST_F(KeywordTableTest, GetTableContentsOrdering) {
   keyword.sync_guid = "FEDC-BA09-8765-4321";
   keyword.alternate_urls.clear();
   keyword.search_terms_replacement_key.clear();
+  keyword.image_url.clear();
+  keyword.search_url_post_params.clear();
+  keyword.image_url_post_params.clear();
   EXPECT_TRUE(table_->AddKeyword(keyword));
 
   const char kTestContents[] = "1short_nameurlhttp://favicon.url/http://url/1"
       "http://originating.url/00Shift_JIS1url250http://instant2/0"
-      "FEDC-BA09-8765-4321[]"
-      "2short_namekeywordhttp://favicon.url/http://url/1001"
-      "url20001234-5678-90AB-CDEF[\"a_url1\",\"a_url2\"]espv";
+      "FEDC-BA09-8765-4321[]2short_namekeywordhttp://favicon.url/"
+      "http://url/1001url20001234-5678-90AB-CDEF[\"a_url1\",\"a_url2\"]espv"
+      "http://image-search-url/ie=utf-8,oe=utf-8name=1,value=2";
 
   std::string contents;
   EXPECT_TRUE(table_->GetTableContents("keywords",

@@ -10,7 +10,7 @@
 #include "base/bind.h"
 #include "base/lazy_instance.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "cc/layers/layer.h"
 #include "content/browser/android/content_view_core_impl.h"
 #include "content/public/browser/android/compositor.h"
@@ -31,7 +31,7 @@ bool ContentViewRenderView::RegisterContentViewRenderView(JNIEnv* env) {
 
 ContentViewRenderView::ContentViewRenderView()
     : scheduled_composite_(false),
-      weak_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {
+      weak_factory_(this) {
 }
 
 ContentViewRenderView::~ContentViewRenderView() {
@@ -77,19 +77,19 @@ void ContentViewRenderView::ScheduleComposite() {
     return;
 
   scheduled_composite_ = true;
-  MessageLoop::current()->PostTask(
+  base::MessageLoop::current()->PostTask(
       FROM_HERE,
       base::Bind(&ContentViewRenderView::Composite,
                  weak_factory_.GetWeakPtr()));
 }
 
 void ContentViewRenderView::InitCompositor() {
-  if (!compositor_.get())
+  if (!compositor_)
     compositor_.reset(Compositor::Create(this));
 }
 
 void ContentViewRenderView::Composite() {
-  if (!compositor_.get())
+  if (!compositor_)
     return;
 
   scheduled_composite_ = false;

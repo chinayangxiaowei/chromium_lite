@@ -7,6 +7,7 @@ package org.chromium.content.browser;
 import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.Intent;
+import android.graphics.RectF;
 import android.util.Log;
 import android.view.ActionMode;
 import android.view.KeyEvent;
@@ -42,14 +43,6 @@ public class ContentViewClient {
     }
 
     /**
-     * Notifies that the content size has changed.
-     * @param widthCss The width of the content in CSS pixels.
-     * @param heightCss The height of the content in CSS pixels.
-     */
-    public void onContentSizeChanged(float widthCss, float heightCss) {
-    }
-
-    /**
       * Lets client listen on the scaling changes on delayed, throttled
       * and best-effort basis. Used for WebView.onScaleChanged.
       */
@@ -66,7 +59,13 @@ public class ContentViewClient {
             float topControlsOffsetYPix, float contentOffsetYPix, float overdrawBottomHeightPix) {
     }
 
-    public void onTabCrash() {
+    /**
+     * Notifies the client that the renderer backing the ContentView has crashed.
+     * @param crashedWhileOomProtected True iff the renderer died while being bound with a high
+     * priority binding, which indicates that it was probably an actual crash (as opposed to the
+     * renderer being killed by the OS out-of-memory killer).
+     */
+    public void onRendererCrash(boolean processWasOomProtected) {
     }
 
     public boolean shouldOverrideKeyEvent(KeyEvent event) {
@@ -173,5 +172,12 @@ public class ContentViewClient {
     }
 
     public void onExternalVideoSurfaceRequested(int playerId) {
+    }
+
+    public void onGeometryChanged(int playerId, RectF rect) {
+    }
+
+    public ContentVideoViewClient getContentVideoViewClient() {
+        return null;
     }
 }

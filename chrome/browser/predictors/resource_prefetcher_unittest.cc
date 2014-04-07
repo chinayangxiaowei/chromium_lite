@@ -3,16 +3,16 @@
 // found in the LICENSE file.
 
 #include "base/memory/ref_counted.h"
-#include "base/message_loop.h"
 #include "base/memory/scoped_ptr.h"
+#include "base/message_loop/message_loop.h"
 #include "chrome/browser/predictors/resource_prefetcher.h"
 #include "chrome/browser/predictors/resource_prefetcher_manager.h"
 #include "chrome/test/base/testing_profile.h"
 #include "content/public/test/test_browser_thread.h"
 #include "net/url_request/url_request.h"
 #include "net/url_request/url_request_test_util.h"
-#include "testing/gtest/include/gtest/gtest.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "testing/gtest/include/gtest/gtest.h"
 
 using testing::Eq;
 using testing::Property;
@@ -47,7 +47,7 @@ class TestResourcePrefetcher : public ResourcePrefetcher {
 // Delegate for ResourcePrefetcher.
 class TestResourcePrefetcherDelegate : public ResourcePrefetcher::Delegate {
  public:
-  explicit TestResourcePrefetcherDelegate(MessageLoop* loop)
+  explicit TestResourcePrefetcherDelegate(base::MessageLoop* loop)
       : request_context_getter_(new net::TestURLRequestContextGetter(
           loop->message_loop_proxy())) { }
   ~TestResourcePrefetcherDelegate() { }
@@ -111,7 +111,8 @@ class ResourcePrefetcherTest : public testing::Test {
 
 
   void OnReceivedRedirect(const std::string& url) {
-    prefetcher_->OnReceivedRedirect(GetInFlightRequest(url), GURL(""), NULL);
+    prefetcher_->OnReceivedRedirect(
+        GetInFlightRequest(url), GURL(std::string()), NULL);
   }
   void OnAuthRequired(const std::string& url) {
     prefetcher_->OnAuthRequired(GetInFlightRequest(url), NULL);
@@ -127,7 +128,7 @@ class ResourcePrefetcherTest : public testing::Test {
     prefetcher_->OnResponseStarted(GetInFlightRequest(url));
   }
 
-  MessageLoop loop_;
+  base::MessageLoop loop_;
   content::TestBrowserThread io_thread_;
   ResourcePrefetchPredictorConfig config_;
   TestResourcePrefetcherDelegate prefetcher_delegate_;
@@ -138,7 +139,7 @@ class ResourcePrefetcherTest : public testing::Test {
 };
 
 ResourcePrefetcherTest::ResourcePrefetcherTest()
-    : loop_(MessageLoop::TYPE_IO),
+    : loop_(base::MessageLoop::TYPE_IO),
       io_thread_(content::BrowserThread::IO, &loop_),
       prefetcher_delegate_(&loop_) {
   config_.max_prefetches_inflight_per_navigation = 5;

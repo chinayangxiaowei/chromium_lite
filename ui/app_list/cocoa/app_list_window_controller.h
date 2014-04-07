@@ -7,14 +7,16 @@
 
 #import <Cocoa/Cocoa.h>
 
-#include "base/memory/scoped_nsobject.h"
+#include "base/mac/scoped_nsobject.h"
+#include "ui/app_list/app_list_export.h"
 
 @class AppListViewController;
 
 // Controller for the app list NSWindow.
+APP_LIST_EXPORT
 @interface AppListWindowController : NSWindowController<NSWindowDelegate> {
  @private
-  scoped_nsobject<AppListViewController> appListViewController_;
+  base::scoped_nsobject<AppListViewController> appListViewController_;
 }
 
 - (AppListViewController*)appListViewController;

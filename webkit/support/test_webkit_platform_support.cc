@@ -6,62 +6,39 @@
 
 #include "base/command_line.h"
 #include "base/file_util.h"
+#include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/metrics/stats_counters.h"
 #include "base/path_service.h"
-#include "base/utf_string_conversions.h"
-#include "cc/base/thread_impl.h"
-#include "cc/output/context_provider.h"
+#include "base/strings/utf_string_conversions.h"
 #include "media/base/media.h"
 #include "net/cookies/cookie_monster.h"
-#include "net/http/http_cache.h"
-#include "net/test/test_server.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebAudioDevice.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebData.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebFileSystem.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebGamepads.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebStorageArea.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebStorageNamespace.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebString.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebURL.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebDatabase.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebKit.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebRuntimeFeatures.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebScriptController.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebSecurityPolicy.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebStorageEventDispatcher.h"
+#include "net/test/spawned_test_server/spawned_test_server.h"
+#include "third_party/WebKit/public/platform/WebData.h"
+#include "third_party/WebKit/public/platform/WebFileSystem.h"
+#include "third_party/WebKit/public/platform/WebStorageArea.h"
+#include "third_party/WebKit/public/platform/WebStorageNamespace.h"
+#include "third_party/WebKit/public/platform/WebString.h"
+#include "third_party/WebKit/public/platform/WebURL.h"
+#include "third_party/WebKit/public/web/WebDatabase.h"
+#include "third_party/WebKit/public/web/WebKit.h"
+#include "third_party/WebKit/public/web/WebRuntimeFeatures.h"
+#include "third_party/WebKit/public/web/WebScriptController.h"
+#include "third_party/WebKit/public/web/WebSecurityPolicy.h"
+#include "third_party/WebKit/public/web/WebStorageEventDispatcher.h"
 #include "v8/include/v8.h"
-#include "webkit/appcache/web_application_cache_host_impl.h"
-#include "webkit/compositor_bindings/web_compositor_support_impl.h"
-#include "webkit/compositor_bindings/web_layer_tree_view_impl_for_testing.h"
-#include "webkit/database/vfs_backend.h"
+#include "webkit/browser/database/vfs_backend.h"
+#include "webkit/child/webkitplatformsupport_impl.h"
 #include "webkit/glue/simple_webmimeregistry_impl.h"
-#include "webkit/glue/webclipboard_impl.h"
 #include "webkit/glue/webkit_glue.h"
-#include "webkit/glue/webkitplatformsupport_impl.h"
-#include "webkit/gpu/test_context_provider_factory.h"
-#include "webkit/gpu/webgraphicscontext3d_in_process_command_buffer_impl.h"
-#include "webkit/gpu/webgraphicscontext3d_in_process_impl.h"
-#include "webkit/plugins/npapi/plugin_list.h"
-#include "webkit/support/gc_extension.h"
-#include "webkit/support/simple_database_system.h"
-#include "webkit/support/test_webmessageportchannel.h"
-#include "webkit/support/web_audio_device_mock.h"
+#include "webkit/renderer/compositor_bindings/web_compositor_support_impl.h"
+#include "webkit/support/mock_webclipboard_impl.h"
 #include "webkit/support/web_gesture_curve_mock.h"
-#include "webkit/support/webkit_support.h"
+#include "webkit/support/web_layer_tree_view_impl_for_testing.h"
 #include "webkit/support/weburl_loader_mock_factory.h"
-#include "webkit/tools/test_shell/mock_webclipboard_impl.h"
-#include "webkit/tools/test_shell/simple_appcache_system.h"
-#include "webkit/tools/test_shell/simple_file_system.h"
-#include "webkit/tools/test_shell/simple_resource_loader_bridge.h"
-#include "webkit/tools/test_shell/simple_socket_stream_bridge.h"
-#include "webkit/tools/test_shell/simple_webcookiejar_impl.h"
-#include "webkit/tools/test_shell/test_shell_request_context.h"
-#include "webkit/tools/test_shell/test_shell_webblobregistry_impl.h"
 
 #if defined(OS_WIN)
-#include "third_party/WebKit/Source/Platform/chromium/public/win/WebThemeEngine.h"
-#include "webkit/tools/test_shell/test_shell_webthemeengine.h"
+#include "third_party/WebKit/public/platform/win/WebThemeEngine.h"
 #elif defined(OS_MACOSX)
 #include "base/mac/mac_util.h"
 #endif
@@ -69,11 +46,7 @@
 using WebKit::WebScriptController;
 using webkit::WebLayerTreeViewImplForTesting;
 
-TestWebKitPlatformSupport::TestWebKitPlatformSupport(bool unit_test_mode,
-    WebKit::Platform* shadow_platform_delegate)
-    : unit_test_mode_(unit_test_mode),
-      shadow_platform_delegate_(shadow_platform_delegate),
-      threaded_compositing_enabled_(false) {
+TestWebKitPlatformSupport::TestWebKitPlatformSupport() {
   v8::V8::SetCounterFunction(base::StatsTable::FindLocation);
 
   WebKit::initialize(this);
@@ -87,13 +60,10 @@ TestWebKitPlatformSupport::TestWebKitPlatformSupport(bool unit_test_mode,
   WebKit::WebSecurityPolicy::registerURLSchemeAsEmptyDocument(
       WebKit::WebString::fromUTF8("test-shell-resource"));
   WebScriptController::enableV8SingleThreadMode();
-  WebKit::WebRuntimeFeatures::enableSockets(true);
   WebKit::WebRuntimeFeatures::enableApplicationCache(true);
   WebKit::WebRuntimeFeatures::enableDatabase(true);
-  WebKit::WebRuntimeFeatures::enableDataTransferItems(true);
   WebKit::WebRuntimeFeatures::enableNotifications(true);
   WebKit::WebRuntimeFeatures::enableTouch(true);
-  WebKit::WebRuntimeFeatures::enableGamepad(true);
 
   // Load libraries for media and enable the media player.
   bool enable_media = false;
@@ -113,21 +83,6 @@ TestWebKitPlatformSupport::TestWebKitPlatformSupport(bool unit_test_mode,
   // test_shell, and set this to true. http://crbug.com/36451
   WebKit::WebRuntimeFeatures::enableGeolocation(false);
 
-  // Construct and initialize an appcache system for this scope.
-  // A new empty temp directory is created to house any cached
-  // content during the run. Upon exit that directory is deleted.
-  // If we can't create a tempdir, we'll use in-memory storage.
-  if (!appcache_dir_.CreateUniqueTempDir()) {
-    LOG(WARNING) << "Failed to create a temp dir for the appcache, "
-                    "using in-memory storage.";
-    DCHECK(appcache_dir_.path().empty());
-  }
-  SimpleAppCacheSystem::InitializeOnUIThread(appcache_dir_.path());
-
-  WebKit::WebDatabase::setObserver(&database_system_);
-
-  blob_registry_ = new TestShellWebBlobRegistryImpl();
-
   file_utilities_.set_sandbox_enabled(false);
 
   if (!file_system_root_.CreateUniqueTempDir()) {
@@ -136,33 +91,15 @@ TestWebKitPlatformSupport::TestWebKitPlatformSupport(bool unit_test_mode,
     DCHECK(file_system_root_.path().empty());
   }
 
-  {
-    // Initialize the hyphen library with a sample dictionary.
-    base::FilePath path = webkit_support::GetChromiumRootDirFilePath();
-    path = path.Append(FILE_PATH_LITERAL("third_party/hyphen/hyph_en_US.dic"));
-    base::PlatformFile dict_file = base::CreatePlatformFile(
-        path,
-        base::PLATFORM_FILE_OPEN | base::PLATFORM_FILE_READ,
-        NULL, NULL);
-    hyphenator_.LoadDictionary(dict_file);
-  }
-
 #if defined(OS_WIN)
   // Ensure we pick up the default theme engine.
   SetThemeEngine(NULL);
 #endif
 
-  net::HttpCache::Mode cache_mode = net::HttpCache::NORMAL;
   net::CookieMonster::EnableFileScheme();
-
-  // Initializing with a default context, which means no on-disk cookie DB,
-  // and no support for directory listings.
-  SimpleResourceLoaderBridge::Init(base::FilePath(), cache_mode, true);
 
   // Test shell always exposes the GC.
   webkit_glue::SetJavaScriptFlags(" --expose-gc");
-  // Expose GCController to JavaScript.
-  WebScriptController::registerExtension(extensions_v8::GCExtension::Get());
 }
 
 TestWebKitPlatformSupport::~TestWebKitPlatformSupport() {
@@ -182,80 +119,13 @@ WebKit::WebFileUtilities* TestWebKitPlatformSupport::fileUtilities() {
   return &file_utilities_;
 }
 
-WebKit::WebSandboxSupport* TestWebKitPlatformSupport::sandboxSupport() {
+WebKit::WebIDBFactory* TestWebKitPlatformSupport::idbFactory() {
+  NOTREACHED() <<
+      "IndexedDB cannot be tested with in-process harnesses.";
   return NULL;
 }
 
-WebKit::WebCookieJar* TestWebKitPlatformSupport::cookieJar() {
-  return &cookie_jar_;
-}
-
-WebKit::WebBlobRegistry* TestWebKitPlatformSupport::blobRegistry() {
-  return blob_registry_.get();
-}
-
-WebKit::WebFileSystem* TestWebKitPlatformSupport::fileSystem() {
-  return &file_system_;
-}
-
-WebKit::WebHyphenator* TestWebKitPlatformSupport::hyphenator() {
-  return &hyphenator_;
-}
-
-bool TestWebKitPlatformSupport::sandboxEnabled() {
-  return true;
-}
-
-WebKit::Platform::FileHandle
-TestWebKitPlatformSupport::databaseOpenFile(
-    const WebKit::WebString& vfs_file_name, int desired_flags) {
-  return SimpleDatabaseSystem::GetInstance()->OpenFile(
-      vfs_file_name, desired_flags);
-}
-
-int TestWebKitPlatformSupport::databaseDeleteFile(
-    const WebKit::WebString& vfs_file_name, bool sync_dir) {
-  return SimpleDatabaseSystem::GetInstance()->DeleteFile(
-      vfs_file_name, sync_dir);
-}
-
-long TestWebKitPlatformSupport::databaseGetFileAttributes(
-    const WebKit::WebString& vfs_file_name) {
-  return SimpleDatabaseSystem::GetInstance()->GetFileAttributes(
-      vfs_file_name);
-}
-
-long long TestWebKitPlatformSupport::databaseGetFileSize(
-    const WebKit::WebString& vfs_file_name) {
-  return SimpleDatabaseSystem::GetInstance()->GetFileSize(vfs_file_name);
-}
-
-long long TestWebKitPlatformSupport::databaseGetSpaceAvailableForOrigin(
-    const WebKit::WebString& origin_identifier) {
-  return SimpleDatabaseSystem::GetInstance()->GetSpaceAvailable(
-      origin_identifier);
-}
-
-unsigned long long TestWebKitPlatformSupport::visitedLinkHash(
-    const char* canonicalURL, size_t length) {
-  return 0;
-}
-
-bool TestWebKitPlatformSupport::isLinkVisited(unsigned long long linkHash) {
-  return false;
-}
-
-WebKit::WebMessagePortChannel*
-TestWebKitPlatformSupport::createMessagePortChannel() {
-  return new TestWebMessagePortChannel();
-}
-
-void TestWebKitPlatformSupport::prefetchHostName(const WebKit::WebString&) {
-}
-
 WebKit::WebURLLoader* TestWebKitPlatformSupport::createURLLoader() {
-  if (!unit_test_mode_)
-    return webkit_glue::WebKitPlatformSupportImpl::createURLLoader();
   return url_loader_factory_.CreateURLLoader(
       webkit_glue::WebKitPlatformSupportImpl::createURLLoader());
 }
@@ -282,32 +152,8 @@ WebKit::WebData TestWebKitPlatformSupport::loadResource(const char* name) {
 
 WebKit::WebString TestWebKitPlatformSupport::queryLocalizedString(
     WebKit::WebLocalizedString::Name name) {
-  // Returns messages same as WebKit's in DRT.
-  // We use different strings for form validation messages and page popup UI
-  // strings.
+  // Returns placeholder strings to check if they are correctly localized.
   switch (name) {
-    case WebKit::WebLocalizedString::ValidationValueMissing:
-    case WebKit::WebLocalizedString::ValidationValueMissingForCheckbox:
-    case WebKit::WebLocalizedString::ValidationValueMissingForFile:
-    case WebKit::WebLocalizedString::ValidationValueMissingForMultipleFile:
-    case WebKit::WebLocalizedString::ValidationValueMissingForRadio:
-    case WebKit::WebLocalizedString::ValidationValueMissingForSelect:
-      return ASCIIToUTF16("value missing");
-    case WebKit::WebLocalizedString::ValidationTypeMismatch:
-    case WebKit::WebLocalizedString::ValidationTypeMismatchForEmail:
-    case WebKit::WebLocalizedString::ValidationTypeMismatchForMultipleEmail:
-    case WebKit::WebLocalizedString::ValidationTypeMismatchForURL:
-      return ASCIIToUTF16("type mismatch");
-    case WebKit::WebLocalizedString::ValidationPatternMismatch:
-      return ASCIIToUTF16("pattern mismatch");
-    case WebKit::WebLocalizedString::ValidationTooLong:
-      return ASCIIToUTF16("too long");
-    case WebKit::WebLocalizedString::ValidationRangeUnderflow:
-      return ASCIIToUTF16("range underflow");
-    case WebKit::WebLocalizedString::ValidationRangeOverflow:
-      return ASCIIToUTF16("range overflow");
-    case WebKit::WebLocalizedString::ValidationStepMismatch:
-      return ASCIIToUTF16("step mismatch");
     case WebKit::WebLocalizedString::OtherDateLabel:
       return ASCIIToUTF16("<<OtherDateLabel>>");
     case WebKit::WebLocalizedString::OtherMonthLabel:
@@ -324,6 +170,8 @@ WebKit::WebString TestWebKitPlatformSupport::queryLocalizedString(
       return ASCIIToUTF16("<<ThisMonthLabel>>");
     case WebKit::WebLocalizedString::ThisWeekButtonLabel:
       return ASCIIToUTF16("<<ThisWeekLabel>>");
+    case WebKit::WebLocalizedString::WeekFormatTemplate:
+      return ASCIIToUTF16("Week $2, $1");
     default:
       return WebKitPlatformSupportImpl::queryLocalizedString(name);
   }
@@ -353,12 +201,6 @@ WebKit::WebString TestWebKitPlatformSupport::defaultLocale() {
   return ASCIIToUTF16("en-US");
 }
 
-WebKit::WebStorageNamespace*
-TestWebKitPlatformSupport::createLocalStorageNamespace(
-    const WebKit::WebString& path, unsigned quota) {
-  return dom_storage_system_.CreateLocalStorageNamespace();
-}
-
 #if defined(OS_WIN) || defined(OS_MACOSX)
 void TestWebKitPlatformSupport::SetThemeEngine(WebKit::WebThemeEngine* engine) {
   active_theme_engine_ = engine ?
@@ -370,121 +212,34 @@ WebKit::WebThemeEngine* TestWebKitPlatformSupport::themeEngine() {
 }
 #endif
 
-WebKit::WebGraphicsContext3D*
-TestWebKitPlatformSupport::createOffscreenGraphicsContext3D(
-    const WebKit::WebGraphicsContext3D::Attributes& attributes) {
-  using webkit::gpu::WebGraphicsContext3DInProcessCommandBufferImpl;
-  scoped_ptr<WebGraphicsContext3DInProcessCommandBufferImpl> context(
-      new WebGraphicsContext3DInProcessCommandBufferImpl());
-  if (!context->Initialize(attributes, NULL))
-    return NULL;
-  return context.release();
+WebKit::WebCompositorSupport*
+TestWebKitPlatformSupport::compositorSupport() {
+  return &compositor_support_;
 }
 
-WebKit::WebGraphicsContext3D*
-TestWebKitPlatformSupport::sharedOffscreenGraphicsContext3D() {
-  main_thread_contexts_ =
-      webkit::gpu::TestContextProviderFactory::GetInstance()->
-          OffscreenContextProviderForMainThread();
-  if (!main_thread_contexts_)
-    return NULL;
-  return main_thread_contexts_->Context3d();
+base::string16 TestWebKitPlatformSupport::GetLocalizedString(int message_id) {
+  return base::string16();
 }
 
-GrContext* TestWebKitPlatformSupport::sharedOffscreenGrContext() {
-  if (!main_thread_contexts_)
-    return NULL;
-  return main_thread_contexts_->GrContext();
-}
-
-bool TestWebKitPlatformSupport::canAccelerate2dCanvas() {
-  // We supply an OS-MESA based context for accelarated 2d
-  // canvas, which should always work.
-  return true;
-}
-
-bool TestWebKitPlatformSupport::isThreadedCompositingEnabled() {
-  return threaded_compositing_enabled_;
-}
-
-double TestWebKitPlatformSupport::audioHardwareSampleRate() {
-  return 44100.0;
-}
-
-size_t TestWebKitPlatformSupport::audioHardwareBufferSize() {
-  return 128;
-}
-
-WebKit::WebAudioDevice* TestWebKitPlatformSupport::createAudioDevice(
-    size_t bufferSize, unsigned numberOfInputChannels,
-    unsigned numberOfChannels, double sampleRate,
-    WebKit::WebAudioDevice::RenderCallback*,
-    const WebKit::WebString& input_device_id) {
-  return new WebAudioDeviceMock(sampleRate);
-}
-
-// TODO(crogers): remove once WebKit switches to new API.
-WebKit::WebAudioDevice* TestWebKitPlatformSupport::createAudioDevice(
-    size_t bufferSize, unsigned numberOfInputChannels,
-    unsigned numberOfChannels, double sampleRate,
-    WebKit::WebAudioDevice::RenderCallback*) {
-  return new WebAudioDeviceMock(sampleRate);
-}
-
-// TODO(crogers): remove once WebKit switches to new API.
-WebKit::WebAudioDevice* TestWebKitPlatformSupport::createAudioDevice(
-    size_t bufferSize, unsigned numberOfChannels, double sampleRate,
-    WebKit::WebAudioDevice::RenderCallback*) {
-  return new WebAudioDeviceMock(sampleRate);
-}
-
-void TestWebKitPlatformSupport::sampleGamepads(WebKit::WebGamepads& data) {
-  data = gamepad_data_;
-}
-
-void TestWebKitPlatformSupport::setGamepadData(
-    const WebKit::WebGamepads& data) {
-  gamepad_data_ = data;
-}
-
-void TestWebKitPlatformSupport::GetPlugins(
-    bool refresh, std::vector<webkit::WebPluginInfo>* plugins) {
-  if (refresh)
-    webkit::npapi::PluginList::Singleton()->RefreshPlugins();
-  webkit::npapi::PluginList::Singleton()->GetPlugins(plugins);
+base::StringPiece TestWebKitPlatformSupport::GetDataResource(
+    int resource_id,
+    ui::ScaleFactor scale_factor) {
+  return base::StringPiece();
 }
 
 webkit_glue::ResourceLoaderBridge*
 TestWebKitPlatformSupport::CreateResourceLoader(
     const webkit_glue::ResourceLoaderBridge::RequestInfo& request_info) {
-  return SimpleResourceLoaderBridge::Create(request_info);
+  NOTREACHED();
+  return NULL;
 }
 
 webkit_glue::WebSocketStreamHandleBridge*
 TestWebKitPlatformSupport::CreateWebSocketBridge(
     WebKit::WebSocketStreamHandle* handle,
     webkit_glue::WebSocketStreamHandleDelegate* delegate) {
-  return SimpleSocketStreamBridge::Create(handle, delegate);
-}
-
-WebKit::WebMediaStreamCenter*
-TestWebKitPlatformSupport::createMediaStreamCenter(
-    WebKit::WebMediaStreamCenterClient* client) {
-  if (shadow_platform_delegate_)
-    return shadow_platform_delegate_->createMediaStreamCenter(client);
-
-  return webkit_glue::WebKitPlatformSupportImpl::createMediaStreamCenter(
-      client);
-}
-
-WebKit::WebRTCPeerConnectionHandler*
-TestWebKitPlatformSupport::createRTCPeerConnectionHandler(
-    WebKit::WebRTCPeerConnectionHandlerClient* client) {
-  if (shadow_platform_delegate_)
-    return shadow_platform_delegate_->createRTCPeerConnectionHandler(client);
-
-  return webkit_glue::WebKitPlatformSupportImpl::createRTCPeerConnectionHandler(
-      client);
+  NOTREACHED();
+  return NULL;
 }
 
 WebKit::WebGestureCurve* TestWebKitPlatformSupport::createFlingAnimationCurve(
@@ -526,17 +281,23 @@ void TestWebKitPlatformSupport::serveAsynchronousMockedRequests() {
 }
 
 WebKit::WebString TestWebKitPlatformSupport::webKitRootDir() {
-  return webkit_support::GetWebKitRootDir();
+  base::FilePath path;
+  PathService::Get(base::DIR_SOURCE_ROOT, &path);
+  path = path.Append(FILE_PATH_LITERAL("third_party/WebKit"));
+  path = base::MakeAbsoluteFilePath(path);
+  CHECK(!path.empty());
+  std::string path_ascii = path.MaybeAsASCII();
+  CHECK(!path_ascii.empty());
+  return WebKit::WebString::fromUTF8(path_ascii.c_str());
 }
 
 
 WebKit::WebLayerTreeView*
     TestWebKitPlatformSupport::createLayerTreeViewForTesting() {
   scoped_ptr<WebLayerTreeViewImplForTesting> view(
-      new WebLayerTreeViewImplForTesting(
-          webkit_support::FAKE_CONTEXT, NULL));
+      new WebLayerTreeViewImplForTesting());
 
-  if (!view->initialize(scoped_ptr<cc::Thread>()))
+  if (!view->Initialize())
     return NULL;
   return view.release();
 }
@@ -548,3 +309,12 @@ WebKit::WebLayerTreeView*
   return createLayerTreeViewForTesting();
 }
 
+WebKit::WebData TestWebKitPlatformSupport::readFromFile(
+    const WebKit::WebString& path) {
+  base::FilePath file_path = base::FilePath::FromUTF16Unsafe(path);
+
+  std::string buffer;
+  file_util::ReadFileToString(file_path, &buffer);
+
+  return WebKit::WebData(buffer.data(), buffer.size());
+}

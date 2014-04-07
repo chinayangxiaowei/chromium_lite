@@ -10,7 +10,7 @@
 #include <roapi.h>
 #include <windows.applicationmodel.core.h>
 
-#include "base/string16.h"
+#include "base/strings/string16.h"
 
 void CheckHR(HRESULT hr, const char* str = nullptr);
 
@@ -54,10 +54,6 @@ HRESULT CompareProperties(
 // parameters are ordinarily ignored (i.e. metro apps on win8). Returns an
 // empty string on failure.
 string16 ReadArgumentsFromPinnedTaskbarShortcut();
-
-// Looks for a Window with the right class name that belongs to |thread_id|
-// thread. It loops forever looking for it, waiting |wait_ms| between loops.
-HWND FindCoreWindow(DWORD thread_id, int wait_ms);
 
 }  // namespace winrt_utils
 

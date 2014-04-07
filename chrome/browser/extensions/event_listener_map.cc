@@ -7,6 +7,7 @@
 #include "base/values.h"
 
 #include "chrome/browser/extensions/event_router.h"
+#include "ipc/ipc_message.h"
 
 namespace extensions {
 
@@ -37,7 +38,7 @@ bool EventListener::Equals(const EventListener* other) const {
 
 scoped_ptr<EventListener> EventListener::Copy() const {
   scoped_ptr<DictionaryValue> filter_copy;
-  if (filter.get())
+  if (filter)
     filter_copy.reset(filter->DeepCopy());
   return scoped_ptr<EventListener>(new EventListener(event_name, extension_id,
                                                      process,
@@ -53,7 +54,7 @@ EventListenerMap::~EventListenerMap() {}
 bool EventListenerMap::AddListener(scoped_ptr<EventListener> listener) {
   if (HasListener(listener.get()))
     return false;
-  if (listener->filter.get()) {
+  if (listener->filter) {
     scoped_ptr<EventMatcher> matcher(ParseEventMatcher(listener->filter.get()));
     MatcherID id = event_filter_.AddEventMatcher(listener->event_name,
                                                  matcher.Pass());
@@ -72,7 +73,7 @@ bool EventListenerMap::AddListener(scoped_ptr<EventListener> listener) {
 scoped_ptr<EventMatcher> EventListenerMap::ParseEventMatcher(
     DictionaryValue* filter_dict) {
   return scoped_ptr<EventMatcher>(new EventMatcher(
-      scoped_ptr<DictionaryValue>(filter_dict->DeepCopy())));
+      scoped_ptr<DictionaryValue>(filter_dict->DeepCopy()), MSG_ROUTING_NONE));
 }
 
 bool EventListenerMap::RemoveListener(const EventListener* listener) {
@@ -168,7 +169,7 @@ void EventListenerMap::LoadFilteredLazyListeners(
     const DictionaryValue& filtered) {
   for (DictionaryValue::Iterator it(filtered); !it.IsAtEnd(); it.Advance()) {
     // We skip entries if they are malformed.
-    const ListValue* filter_list = NULL;
+    const base::ListValue* filter_list = NULL;
     if (!it.value().GetAsList(&filter_list))
       continue;
     for (size_t i = 0; i < filter_list->GetSize(); i++) {
@@ -188,7 +189,8 @@ std::set<const EventListener*> EventListenerMap::GetEventListeners(
   if (IsFilteredEvent(event)) {
     // Look up the interested listeners via the EventFilter.
     std::set<MatcherID> ids =
-        event_filter_.MatchEvent(event.event_name, event.filter_info);
+        event_filter_.MatchEvent(event.event_name, event.filter_info,
+            MSG_ROUTING_NONE);
     for (std::set<MatcherID>::iterator id = ids.begin(); id != ids.end();
          id++) {
       EventListener* listener = listeners_by_matcher_id_[*id];

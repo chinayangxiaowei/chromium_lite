@@ -13,8 +13,8 @@
 #include "base/compiler_specific.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/process.h"
-#include "base/time.h"
+#include "base/process/process.h"
+#include "base/time/time.h"
 
 class AutomationProxy;
 
@@ -185,9 +185,6 @@ class ProxyLauncher {
 
   // If true, a user is paying attention to the test, so show error dialogs.
   bool show_error_dialogs_;
-
-  // Include histograms in log on exit.
-  bool dump_histograms_on_exit_;
 
   // Enable dchecks in release mode.
   bool enable_dcheck_;

@@ -6,10 +6,8 @@
 
 namespace message_center {
 
-const char kMessageIntentKey[] = "message_intent";
 const char kPriorityKey[] = "priority";
 const char kTimestampKey[] = "timestamp";
-const char kUnreadCountKey[] = "unread_count";
 const char kButtonOneTitleKey[] = "button_one_title";
 const char kButtonOneIconUrlKey[] = "button_one_icon_url";
 const char kButtonTwoTitleKey[] = "button_two_title";
@@ -19,5 +17,6 @@ const char kImageUrlKey[] = "image_url";
 const char kItemsKey[] = "items";
 const char kItemTitleKey[] = "title";
 const char kItemMessageKey[] = "message";
+const char kPrivateNeverTimeoutKey[] = "private_never_timeout";
 
 }  // namespace message_center

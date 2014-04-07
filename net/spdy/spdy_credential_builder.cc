@@ -5,11 +5,11 @@
 #include "net/spdy/spdy_credential_builder.h"
 
 #include "base/logging.h"
-#include "base/string_piece.h"
+#include "base/strings/string_piece.h"
 #include "crypto/ec_private_key.h"
 #include "crypto/ec_signature_creator.h"
-#include "net/base/asn1_util.h"
 #include "net/base/net_errors.h"
+#include "net/cert/asn1_util.h"
 #include "net/socket/ssl_client_socket.h"
 #include "net/spdy/spdy_framer.h"
 #include "net/ssl/server_bound_cert_service.h"
@@ -26,14 +26,10 @@ std::vector<uint8> ToVector(base::StringPiece piece) {
 
 // static
 int SpdyCredentialBuilder::Build(const std::string& tls_unique,
-                                 SSLClientCertType type,
                                  const std::string& key,
                                  const std::string& cert,
                                  size_t slot,
                                  SpdyCredential* credential) {
-  if (type != CLIENT_CERT_ECDSA_SIGN)
-    return ERR_BAD_SSL_CLIENT_AUTH_CERT;
-
   std::string secret = SpdyCredentialBuilder::GetCredentialSecret(tls_unique);
 
   // Extract the SubjectPublicKeyInfo from the certificate.

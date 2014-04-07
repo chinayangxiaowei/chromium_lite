@@ -7,11 +7,9 @@
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/command_line.h"
-#include "base/message_loop_proxy.h"
+#include "base/message_loop/message_loop_proxy.h"
 #include "base/threading/thread.h"
-#if defined(OS_ANDROID)
-#include "jni/AudioManagerAndroid_jni.h"
-#endif
+#include "build/build_config.h"
 #include "media/audio/audio_output_dispatcher_impl.h"
 #include "media/audio/audio_output_proxy.h"
 #include "media/audio/audio_output_resampler.h"
@@ -34,42 +32,75 @@ static const int kDefaultMaxInputStreams = 16;
 
 static const int kMaxInputChannels = 2;
 
-#if defined(OS_ANDROID)
-static const int kAudioModeNormal = 0x00000000;
-static const int kAudioModeInCommunication = 0x00000003;
-#endif
-
 const char AudioManagerBase::kDefaultDeviceName[] = "Default";
 const char AudioManagerBase::kDefaultDeviceId[] = "default";
 
+struct AudioManagerBase::DispatcherParams {
+  DispatcherParams(const AudioParameters& input,
+                   const AudioParameters& output,
+                   const std::string& device_id)
+      : input_params(input),
+        output_params(output),
+        input_device_id(device_id) {}
+  ~DispatcherParams() {}
+
+  const AudioParameters input_params;
+  const AudioParameters output_params;
+  const std::string input_device_id;
+  scoped_refptr<AudioOutputDispatcher> dispatcher;
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(DispatcherParams);
+};
+
+class AudioManagerBase::CompareByParams {
+ public:
+  explicit CompareByParams(const DispatcherParams* dispatcher)
+      : dispatcher_(dispatcher) {}
+  bool operator()(DispatcherParams* dispatcher_in) const {
+    // We will reuse the existing dispatcher when:
+    // 1) Unified IO is not used, input_params and output_params of the
+    //    existing dispatcher are the same as the requested dispatcher.
+    // 2) Unified IO is used, input_params, output_params and input_device_id
+    //    of the existing dispatcher are the same as the request dispatcher.
+    return (dispatcher_->input_params == dispatcher_in->input_params &&
+            dispatcher_->output_params == dispatcher_in->output_params &&
+            (!dispatcher_->input_params.input_channels() ||
+             dispatcher_->input_device_id == dispatcher_in->input_device_id));
+  }
+
+ private:
+  const DispatcherParams* dispatcher_;
+};
+
 AudioManagerBase::AudioManagerBase()
-    : num_active_input_streams_(0),
-      max_num_output_streams_(kDefaultMaxOutputStreams),
+    : max_num_output_streams_(kDefaultMaxOutputStreams),
       max_num_input_streams_(kDefaultMaxInputStreams),
       num_output_streams_(0),
       num_input_streams_(0),
+      // TODO(dalecurtis): Switch this to an ObserverListThreadSafe, so we don't
+      // block the UI thread when swapping devices.
       output_listeners_(
           ObserverList<AudioDeviceListener>::NOTIFY_EXISTING_ONLY),
       audio_thread_(new base::Thread("AudioThread")) {
 #if defined(OS_WIN)
   audio_thread_->init_com_with_mta(true);
+#elif defined(OS_MACOSX)
+  // CoreAudio calls must occur on the main thread of the process, which in our
+  // case is sadly the browser UI thread.  Failure to execute calls on the right
+  // thread leads to crashes and odd behavior.  See http://crbug.com/158170.
+  // TODO(dalecurtis): We should require the message loop to be passed in.
+  const CommandLine* cmd_line = CommandLine::ForCurrentProcess();
+  if (!cmd_line->HasSwitch(switches::kDisableMainThreadAudio) &&
+      base::MessageLoopProxy::current().get() &&
+      base::MessageLoop::current()->IsType(base::MessageLoop::TYPE_UI)) {
+    message_loop_ = base::MessageLoopProxy::current();
+    return;
+  }
 #endif
-#if defined(OS_MACOSX)
-  // On Mac, use a UI loop to get native message pump so that CoreAudio property
-  // listener callbacks fire.
-  CHECK(audio_thread_->StartWithOptions(
-      base::Thread::Options(MessageLoop::TYPE_UI, 0)));
-#else
-  CHECK(audio_thread_->Start());
-#endif
-  message_loop_ = audio_thread_->message_loop_proxy();
 
-#if defined(OS_ANDROID)
-  JNIEnv* env = base::android::AttachCurrentThread();
-  jobject context = base::android::GetApplicationContext();
-  j_audio_manager_.Reset(
-      Java_AudioManagerAndroid_createAudioManagerAndroid(env, context));
-#endif
+  CHECK(audio_thread_->Start());
+  message_loop_ = audio_thread_->message_loop_proxy();
 }
 
 AudioManagerBase::~AudioManagerBase() {
@@ -93,8 +124,17 @@ scoped_refptr<base::MessageLoopProxy> AudioManagerBase::GetMessageLoop() {
   return message_loop_;
 }
 
+scoped_refptr<base::MessageLoopProxy> AudioManagerBase::GetWorkerLoop() {
+  // Lazily start the worker thread.
+  if (!audio_thread_->IsRunning())
+    CHECK(audio_thread_->Start());
+
+  return audio_thread_->message_loop_proxy();
+}
+
 AudioOutputStream* AudioManagerBase::MakeAudioOutputStream(
-    const AudioParameters& params) {
+    const AudioParameters& params,
+    const std::string& input_device_id) {
   // TODO(miu): Fix ~50 call points across several unit test modules to call
   // this method on the audio thread, then uncomment the following:
   // DCHECK(message_loop_->BelongsToCurrentThread());
@@ -122,7 +162,7 @@ AudioOutputStream* AudioManagerBase::MakeAudioOutputStream(
       stream = MakeLinearOutputStream(params);
       break;
     case AudioParameters::AUDIO_PCM_LOW_LATENCY:
-      stream = MakeLowLatencyOutputStream(params);
+      stream = MakeLowLatencyOutputStream(params, input_device_id);
       break;
     case AudioParameters::AUDIO_FAKE:
       stream = FakeAudioOutputStream::MakeFakeStream(this, params);
@@ -134,10 +174,6 @@ AudioOutputStream* AudioManagerBase::MakeAudioOutputStream(
 
   if (stream) {
     ++num_output_streams_;
-#if defined(OS_ANDROID)
-    if (num_output_streams_ == 1)
-      RegisterHeadsetReceiver();
-#endif
   }
 
   return stream;
@@ -180,17 +216,13 @@ AudioInputStream* AudioManagerBase::MakeAudioInputStream(
 
   if (stream) {
     ++num_input_streams_;
-#if defined(OS_ANDROID)
-    if (num_input_streams_ == 1)
-      SetAudioMode(kAudioModeInCommunication);
-#endif
   }
 
   return stream;
 }
 
 AudioOutputStream* AudioManagerBase::MakeAudioOutputStreamProxy(
-    const AudioParameters& params) {
+    const AudioParameters& params, const std::string& input_device_id) {
 #if defined(OS_IOS)
   // IOS implements audio input only.
   NOTIMPLEMENTED();
@@ -198,15 +230,10 @@ AudioOutputStream* AudioManagerBase::MakeAudioOutputStreamProxy(
 #else
   DCHECK(message_loop_->BelongsToCurrentThread());
 
-  bool use_audio_output_resampler =
-      !CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kDisableAudioOutputResampler) &&
-      params.format() == AudioParameters::AUDIO_PCM_LOW_LATENCY;
-
   // If we're not using AudioOutputResampler our output parameters are the same
   // as our input parameters.
   AudioParameters output_params = params;
-  if (use_audio_output_resampler) {
+  if (params.format() == AudioParameters::AUDIO_PCM_LOW_LATENCY) {
     output_params = GetPreferredOutputStreamParameters(params);
 
     // Ensure we only pass on valid output parameters.
@@ -229,28 +256,31 @@ AudioOutputStream* AudioManagerBase::MakeAudioOutputStreamProxy(
     }
   }
 
-  std::pair<AudioParameters, AudioParameters> dispatcher_key =
-      std::make_pair(params, output_params);
-  AudioOutputDispatchersMap::iterator it =
-      output_dispatchers_.find(dispatcher_key);
-  if (it != output_dispatchers_.end())
-    return new AudioOutputProxy(it->second);
+  DispatcherParams* dispatcher_params =
+      new DispatcherParams(params, output_params, input_device_id);
 
-  base::TimeDelta close_delay =
-      base::TimeDelta::FromSeconds(kStreamCloseDelaySeconds);
-
-  if (use_audio_output_resampler &&
-      output_params.format() != AudioParameters::AUDIO_FAKE) {
-    scoped_refptr<AudioOutputDispatcher> dispatcher =
-        new AudioOutputResampler(this, params, output_params, close_delay);
-    output_dispatchers_[dispatcher_key] = dispatcher;
-    return new AudioOutputProxy(dispatcher);
+  AudioOutputDispatchers::iterator it =
+      std::find_if(output_dispatchers_.begin(), output_dispatchers_.end(),
+                   CompareByParams(dispatcher_params));
+  if (it != output_dispatchers_.end()) {
+    delete dispatcher_params;
+    return new AudioOutputProxy((*it)->dispatcher.get());
   }
 
-  scoped_refptr<AudioOutputDispatcher> dispatcher =
-      new AudioOutputDispatcherImpl(this, output_params, close_delay);
-  output_dispatchers_[dispatcher_key] = dispatcher;
-  return new AudioOutputProxy(dispatcher);
+  const base::TimeDelta kCloseDelay =
+      base::TimeDelta::FromSeconds(kStreamCloseDelaySeconds);
+  scoped_refptr<AudioOutputDispatcher> dispatcher;
+  if (output_params.format() != AudioParameters::AUDIO_FAKE) {
+    dispatcher = new AudioOutputResampler(this, params, output_params,
+                                          input_device_id, kCloseDelay);
+  } else {
+    dispatcher = new AudioOutputDispatcherImpl(this, output_params,
+                                               input_device_id, kCloseDelay);
+  }
+
+  dispatcher_params->dispatcher = dispatcher;
+  output_dispatchers_.push_back(dispatcher_params);
+  return new AudioOutputProxy(dispatcher.get());
 #endif  // defined(OS_IOS)
 }
 
@@ -268,10 +298,6 @@ void AudioManagerBase::ReleaseOutputStream(AudioOutputStream* stream) {
   // streams.
   --num_output_streams_;
   delete stream;
-#if defined(OS_ANDROID)
-  if (!num_output_streams_)
-    UnregisterHeadsetReceiver();
-#endif
 }
 
 void AudioManagerBase::ReleaseInputStream(AudioInputStream* stream) {
@@ -279,23 +305,6 @@ void AudioManagerBase::ReleaseInputStream(AudioInputStream* stream) {
   // TODO(xians) : Have a clearer destruction path for the AudioInputStream.
   --num_input_streams_;
   delete stream;
-#if defined(OS_ANDROID)
-  if (!num_input_streams_)
-    SetAudioMode(kAudioModeNormal);
-#endif
-}
-
-void AudioManagerBase::IncreaseActiveInputStreamCount() {
-  base::AtomicRefCountInc(&num_active_input_streams_);
-}
-
-void AudioManagerBase::DecreaseActiveInputStreamCount() {
-  DCHECK(IsRecordingInProcess());
-  base::AtomicRefCountDec(&num_active_input_streams_);
-}
-
-bool AudioManagerBase::IsRecordingInProcess() {
-  return !base::AtomicRefCountIsZero(&num_active_input_streams_);
 }
 
 void AudioManagerBase::Shutdown() {
@@ -307,16 +316,17 @@ void AudioManagerBase::Shutdown() {
     audio_thread_.swap(audio_thread);
   }
 
-  if (!audio_thread.get())
+  if (!audio_thread)
     return;
 
-  CHECK_NE(MessageLoop::current(), audio_thread->message_loop());
-
-  // We must use base::Unretained since Shutdown might have been called from
-  // the destructor and we can't alter the refcount of the object at that point.
-  audio_thread->message_loop()->PostTask(FROM_HERE, base::Bind(
-      &AudioManagerBase::ShutdownOnAudioThread,
-      base::Unretained(this)));
+  // Only true when we're sharing the UI message loop with the browser.  The UI
+  // loop is no longer running at this time and browser destruction is imminent.
+  if (message_loop_->BelongsToCurrentThread()) {
+    ShutdownOnAudioThread();
+  } else {
+    message_loop_->PostTask(FROM_HERE, base::Bind(
+        &AudioManagerBase::ShutdownOnAudioThread, base::Unretained(this)));
+  }
 
   // Stop() will wait for any posted messages to be processed first.
   audio_thread->Stop();
@@ -331,10 +341,10 @@ void AudioManagerBase::ShutdownOnAudioThread() {
   // the audio_thread_ member pointer when we get here, we can't verify exactly
   // what thread we're running on.  The method is not public though and only
   // called from one place, so we'll leave it at that.
-  AudioOutputDispatchersMap::iterator it = output_dispatchers_.begin();
+  AudioOutputDispatchers::iterator it = output_dispatchers_.begin();
   for (; it != output_dispatchers_.end(); ++it) {
-    scoped_refptr<AudioOutputDispatcher>& dispatcher = (*it).second;
-    if (dispatcher) {
+    scoped_refptr<AudioOutputDispatcher>& dispatcher = (*it)->dispatcher;
+    if (dispatcher.get()) {
       dispatcher->Shutdown();
       // All AudioOutputProxies must have been freed before Shutdown is called.
       // If they still exist, things will go bad.  They have direct pointers to
@@ -349,13 +359,6 @@ void AudioManagerBase::ShutdownOnAudioThread() {
   output_dispatchers_.clear();
 #endif  // defined(OS_IOS)
 }
-
-#if defined(OS_ANDROID)
-// static
-bool AudioManagerBase::RegisterAudioManager(JNIEnv* env) {
-  return RegisterNativesImpl(env);
-}
-#endif
 
 void AudioManagerBase::AddOutputDeviceChangeListener(
     AudioDeviceListener* listener) {
@@ -384,25 +387,5 @@ AudioParameters AudioManagerBase::GetInputStreamParameters(
   NOTREACHED();
   return AudioParameters();
 }
-
-#if defined(OS_ANDROID)
-void AudioManagerBase::SetAudioMode(int mode) {
-  Java_AudioManagerAndroid_setMode(
-      base::android::AttachCurrentThread(),
-      j_audio_manager_.obj(), mode);
-}
-
-void AudioManagerBase::RegisterHeadsetReceiver() {
-  Java_AudioManagerAndroid_registerHeadsetReceiver(
-      base::android::AttachCurrentThread(),
-      j_audio_manager_.obj());
-}
-
-void AudioManagerBase::UnregisterHeadsetReceiver() {
-  Java_AudioManagerAndroid_unregisterHeadsetReceiver(
-      base::android::AttachCurrentThread(),
-      j_audio_manager_.obj());
-}
-#endif  // defined(OS_ANDROID)
 
 }  // namespace media

@@ -11,15 +11,15 @@
 #include "base/test/test_suite.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/content_test_suite_base.h"
+#include "content/shell/app/shell_main_delegate.h"
+#include "content/shell/common/shell_content_client.h"
+#include "content/shell/common/shell_switches.h"
 #include "content/shell/shell_content_browser_client.h"
-#include "content/shell/shell_content_client.h"
-#include "content/shell/shell_main_delegate.h"
-#include "content/shell/shell_switches.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 #if defined(OS_ANDROID)
-#include "base/message_loop.h"
-#include "content/test/browser_test_message_pump_android.h"
+#include "base/message_loop/message_loop.h"
+#include "content/public/test/nested_message_pump_android.h"
 #endif
 
 #if defined(OS_WIN)
@@ -36,15 +36,13 @@ class ContentShellTestSuiteInitializer
   }
 
   virtual void OnTestStart(const testing::TestInfo& test_info) OVERRIDE {
-    DCHECK(!GetContentClient());
     content_client_.reset(new ShellContentClient);
     browser_content_client_.reset(new ShellContentBrowserClient());
-    content_client_->set_browser_for_testing(browser_content_client_.get());
     SetContentClient(content_client_.get());
+    SetBrowserClientForTesting(browser_content_client_.get());
   }
 
   virtual void OnTestEnd(const testing::TestInfo& test_info) OVERRIDE {
-    DCHECK_EQ(content_client_.get(), GetContentClient());
     browser_content_client_.reset();
     content_client_.reset();
     SetContentClient(NULL);
@@ -59,7 +57,7 @@ class ContentShellTestSuiteInitializer
 
 #if defined(OS_ANDROID)
 base::MessagePump* CreateMessagePumpForUI() {
-  return new BrowserTestMessagePumpAndroid();
+  return new NestedMessagePumpAndroid();
 };
 #endif
 
@@ -77,7 +75,8 @@ class ContentBrowserTestSuite : public ContentTestSuiteBase {
 #if defined(OS_ANDROID)
     // This needs to be done before base::TestSuite::Initialize() is called,
     // as it also tries to set MessagePumpForUIFactory.
-    if (!MessageLoop::InitMessagePumpForUIFactory(&CreateMessagePumpForUI))
+    if (!base::MessageLoop::InitMessagePumpForUIFactory(
+            &CreateMessagePumpForUI))
       LOG(INFO) << "MessagePumpForUIFactory already set, unable to override.";
 #endif
 
@@ -103,10 +102,6 @@ class ContentTestLauncherDelegate : public TestLauncherDelegate {
   ContentTestLauncherDelegate() {}
   virtual ~ContentTestLauncherDelegate() {}
 
-  virtual std::string GetEmptyTestName() OVERRIDE {
-    return std::string();
-  }
-
   virtual int RunTestSuite(int argc, char** argv) OVERRIDE {
     return ContentBrowserTestSuite(argc, argv).Run();
   }
@@ -116,6 +111,7 @@ class ContentTestLauncherDelegate : public TestLauncherDelegate {
     command_line->AppendSwitchPath(switches::kContentShellDataPath,
                                    temp_data_dir);
     command_line->AppendSwitch(switches::kUseFakeDeviceForMediaStream);
+    command_line->AppendSwitch(switches::kUseFakeUIForMediaStream);
     return true;
   }
 

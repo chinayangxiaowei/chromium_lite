@@ -6,7 +6,7 @@
 
 #include <string>
 
-#include "base/string_piece.h"
+#include "base/strings/string_piece.h"
 #include "base/values.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
@@ -25,7 +25,7 @@ namespace {
 // resource (via a StringPiece), instead of always copying resources.
 struct LazyDirectoryListerCacher {
   LazyDirectoryListerCacher() {
-    DictionaryValue value;
+    base::DictionaryValue value;
     value.SetString("header",
                     l10n_util::GetStringUTF16(IDS_DIRECTORY_LISTING_HEADER));
     value.SetString("parentDirText",

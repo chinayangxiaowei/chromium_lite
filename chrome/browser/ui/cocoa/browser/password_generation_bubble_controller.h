@@ -9,7 +9,7 @@
 
 #import "chrome/browser/ui/cocoa/base_bubble_controller.h"
 #import "chrome/browser/ui/cocoa/styled_text_field.h"
-#include "components/autofill/common/password_generation_util.h"
+#include "components/autofill/core/common/password_generation_util.h"
 #include "content/public/common/password_form.h"
 
 namespace autofill {
@@ -42,7 +42,7 @@ class PasswordManager;
   PasswordManager* passwordManager_;
   autofill::PasswordGenerator* passwordGenerator_;
   content::PasswordForm form_;
-  password_generation::PasswordGenerationActions actions_;
+  autofill::password_generation::PasswordGenerationActions actions_;
 
   PasswordGenerationTextField* textField_;   // weak
 }

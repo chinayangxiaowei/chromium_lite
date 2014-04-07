@@ -7,20 +7,34 @@
 var GetAvailability = requireNative('v8_context').GetAvailability;
 if (!GetAvailability('app').is_available) {
   exports.chromeApp = {};
-  exports.chromeHiddenApp = {};
+  exports.onInstallStateResponse = function(){};
   return;
 }
 
 var appNatives = requireNative('app');
-var chrome = requireNative('chrome').GetChrome();
+var process = requireNative('process');
+var extensionId = process.GetExtensionId();
+var logActivity = requireNative('activityLogger');
+
+function wrapForLogging(fun) {
+  if (!extensionId)
+    return fun;  // nothing interesting to log without an extension
+
+  return function() {
+    // TODO(ataly): We need to make sure we use the right prototype for
+    // fun.apply. Array slice can either be rewritten or similarly defined.
+    logActivity.LogAPICall(extensionId, "app." + fun.name,
+        $Array.slice(arguments));
+    return $Function.apply(fun, this, arguments);
+  };
+}
 
 // This becomes chrome.app
 var app = {
-  getIsInstalled: appNatives.GetIsInstalled,
-  install: appNatives.Install,
-  getDetails: appNatives.GetDetails,
-  getDetailsForFrame: appNatives.GetDetailsForFrame,
-  runningState: appNatives.GetRunningState
+  getIsInstalled: wrapForLogging(appNatives.GetIsInstalled),
+  getDetails: wrapForLogging(appNatives.GetDetails),
+  getDetailsForFrame: wrapForLogging(appNatives.GetDetailsForFrame),
+  runningState: wrapForLogging(appNatives.GetRunningState)
 };
 
 // Tricky; "getIsInstalled" is actually exposed as the getter "isInstalled",
@@ -29,18 +43,21 @@ var app = {
 //
 // So, define it manually, and let the getIsInstalled function act as its
 // documentation.
-app.__defineGetter__('isInstalled', appNatives.GetIsInstalled);
+app.__defineGetter__('isInstalled', wrapForLogging(appNatives.GetIsInstalled));
 
 // Called by app_bindings.cc.
-// This becomes chromeHidden.app
-var chromeHiddenApp = {
-  onInstallStateResponse: function(state, callbackId) {
-    if (callbackId) {
-      callbacks[callbackId](state);
-      delete callbacks[callbackId];
+function onInstallStateResponse(state, callbackId) {
+  var callback = callbacks[callbackId];
+  delete callbacks[callbackId];
+  if (typeof(callback) == 'function') {
+    try {
+      callback(state);
+    } catch (e) {
+      console.error('Exception in chrome.app.installState response handler: ' +
+                    e.stack);
     }
   }
-};
+}
 
 // TODO(kalman): move this stuff to its own custom bindings.
 var callbacks = {};
@@ -51,8 +68,10 @@ app.installState = function getInstallState(callback) {
   callbacks[callbackId] = callback;
   appNatives.GetInstallState(callbackId);
 };
+if (extensionId)
+  app.installState = wrapForLogging(app.installState);
 
-// These must match the names in InstallAppbinding() in
+// This must match InstallAppBindings() in
 // chrome/renderer/extensions/dispatcher.cc.
 exports.chromeApp = app;
-exports.chromeHiddenApp = chromeHiddenApp;
+exports.onInstallStateResponse = onInstallStateResponse;

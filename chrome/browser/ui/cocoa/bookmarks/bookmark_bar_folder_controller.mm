@@ -6,7 +6,7 @@
 
 #include "base/mac/bundle_locations.h"
 #include "base/mac/mac_util.h"
-#include "base/sys_string_conversions.h"
+#include "base/strings/sys_string_conversions.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
 #include "chrome/browser/bookmarks/bookmark_utils.h"
 #import "chrome/browser/ui/cocoa/bookmarks/bookmark_bar_constants.h"
@@ -18,7 +18,6 @@
 #import "chrome/browser/ui/cocoa/bookmarks/bookmark_folder_target.h"
 #import "chrome/browser/ui/cocoa/bookmarks/bookmark_menu_cocoa_controller.h"
 #import "chrome/browser/ui/cocoa/browser_window_controller.h"
-#import "chrome/browser/ui/cocoa/event_utils.h"
 #include "ui/base/theme_provider.h"
 
 using bookmarks::kBookmarkBarMenuCornerRadius;
@@ -235,13 +234,16 @@ struct LayoutMetrics {
 
 - (id)initWithParentButton:(BookmarkButton*)button
           parentController:(BookmarkBarFolderController*)parentController
-             barController:(BookmarkBarController*)barController {
+             barController:(BookmarkBarController*)barController
+                   profile:(Profile*)profile {
   NSString* nibPath =
       [base::mac::FrameworkBundle() pathForResource:@"BookmarkBarFolderWindow"
                                              ofType:@"nib"];
   if ((self = [super initWithWindowNibPath:nibPath owner:self])) {
     parentButton_.reset([button retain]);
     selectedIndex_ = -1;
+
+    profile_ = profile;
 
     // We want the button to remain bordered as part of the menu path.
     [button forceButtonBorderToStayOnAlways:YES];
@@ -843,7 +845,7 @@ struct LayoutMetrics {
   // more items) using the keyboard, the scroll view seems to want to be
   // offset by default: [ http://crbug.com/101099 ].  Explicitly reseting the
   // scroll position here is a bit hacky, but it does seem to work.
-  [[scrollView_ contentView] scrollToPoint:NSMakePoint(0, 0)];
+  [[scrollView_ contentView] scrollToPoint:NSZeroPoint];
 
   NSSize newSize = NSMakeSize(windowWidth, 0.0);
   [self adjustWindowLeft:newWindowTopLeft.x size:newSize scrollingBy:0.0];
@@ -1462,10 +1464,8 @@ static BOOL ValueInRangeInclusive(CGFloat low, CGFloat value, CGFloat high) {
 - (std::vector<const BookmarkNode*>)retrieveBookmarkNodeData {
   std::vector<const BookmarkNode*> dragDataNodes;
   BookmarkNodeData dragData;
-  if(dragData.ReadFromDragClipboard()) {
-    BookmarkModel* bookmarkModel = [self bookmarkModel];
-    Profile* profile = bookmarkModel->profile();
-    std::vector<const BookmarkNode*> nodes(dragData.GetNodes(profile));
+  if (dragData.ReadFromDragClipboard()) {
+    std::vector<const BookmarkNode*> nodes(dragData.GetNodes(profile_));
     dragDataNodes.assign(nodes.begin(), nodes.end());
   }
   return dragDataNodes;
@@ -1692,8 +1692,8 @@ static BOOL ValueInRangeInclusive(CGFloat low, CGFloat value, CGFloat high) {
   return y;
 }
 
-- (ui::ThemeProvider*)themeProvider {
-  return [parentController_ themeProvider];
+- (ThemeService*)themeService {
+  return [parentController_ themeService];
 }
 
 - (void)childFolderWillShow:(id<BookmarkButtonControllerProtocol>)child {
@@ -1731,7 +1731,8 @@ static BOOL ValueInRangeInclusive(CGFloat low, CGFloat value, CGFloat high) {
   folderController_ =
       [[BookmarkBarFolderController alloc] initWithParentButton:parentButton
                                                parentController:self
-                                                  barController:barController_];
+                                                  barController:barController_
+                                                        profile:profile_];
   [folderController_ showWindow:self];
 }
 

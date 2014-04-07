@@ -8,6 +8,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/accessibility/accessibility_extension_api_constants.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/api/tabs/tabs_constants.h"
 #include "chrome/browser/extensions/event_router.h"
 #include "chrome/browser/extensions/extension_system.h"
@@ -16,7 +17,7 @@
 #include "chrome/browser/infobars/infobar_delegate.h"
 #include "chrome/browser/infobars/infobar_service.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/chrome_notification_types.h"
+#include "content/public/browser/browser_accessibility_state.h"
 #include "content/public/browser/notification_service.h"
 #include "extensions/common/error_utils.h"
 
@@ -179,6 +180,19 @@ bool AccessibilitySetAccessibilityEnabledFunction::RunImpl() {
   return true;
 }
 
+bool AccessibilitySetNativeAccessibilityEnabledFunction::RunImpl() {
+  bool enabled;
+  EXTENSION_FUNCTION_VALIDATE(args_->GetBoolean(0, &enabled));
+  if (enabled) {
+    content::BrowserAccessibilityState::GetInstance()->
+        EnableAccessibility();
+  } else {
+    content::BrowserAccessibilityState::GetInstance()->
+        DisableAccessibility();
+  }
+  return true;
+}
+
 bool AccessibilityGetFocusedControlFunction::RunImpl() {
   // Get the serialized dict from the last focused control and return it.
   // However, if the dict is empty, that means we haven't seen any focus
@@ -213,10 +227,10 @@ bool AccessibilityGetAlertsForTabFunction::RunImpl() {
   ListValue* alerts_value = new ListValue;
 
   InfoBarService* infobar_service = InfoBarService::FromWebContents(contents);
-  for (size_t i = 0; i < infobar_service->GetInfoBarCount(); ++i) {
+  for (size_t i = 0; i < infobar_service->infobar_count(); ++i) {
     // TODO(hashimoto): Make other kind of alerts available.  crosbug.com/24281
     ConfirmInfoBarDelegate* confirm_infobar_delegate =
-        infobar_service->GetInfoBarDelegateAt(i)->AsConfirmInfoBarDelegate();
+        infobar_service->infobar_at(i)->AsConfirmInfoBarDelegate();
     if (confirm_infobar_delegate) {
       DictionaryValue* alert_value = new DictionaryValue;
       const string16 message_text = confirm_infobar_delegate->GetMessageText();

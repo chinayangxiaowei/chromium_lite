@@ -4,6 +4,9 @@
 
 #include "chrome/browser/policy/configuration_policy_provider.h"
 
+#include "base/callback.h"
+#include "chrome/browser/policy/external_data_fetcher.h"
+#include "chrome/browser/policy/policy_domain_descriptor.h"
 #include "chrome/browser/policy/policy_map.h"
 #include "policy/policy_constants.h"
 
@@ -55,7 +58,8 @@ void FixDeprecatedPolicies(PolicyMap* policies) {
     policies->Set(key::kProxySettings,
                   current_priority.level,
                   current_priority.scope,
-                  proxy_settings.release());
+                  proxy_settings.release(),
+                  NULL);
   }
 }
 
@@ -103,7 +107,6 @@ void ConfigurationPolicyProvider::RemoveObserver(Observer* observer) {
 }
 
 void ConfigurationPolicyProvider::RegisterPolicyDomain(
-    PolicyDomain domain,
-    const std::set<std::string>& component_ids) {}
+    scoped_refptr<const PolicyDomainDescriptor> descriptor) {}
 
 }  // namespace policy

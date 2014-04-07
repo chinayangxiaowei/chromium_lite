@@ -9,7 +9,6 @@
 
 #import <Cocoa/Cocoa.h>
 
-#include "base/memory/scoped_nsobject.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/scoped_vector.h"
 #include "base/memory/weak_ptr.h"
@@ -27,14 +26,10 @@ class ContentSettingDecoration;
 class EVBubbleDecoration;
 class KeywordHintDecoration;
 class LocationBarDecoration;
-class LocationBarViewMacBrowserTest;
 class LocationIconDecoration;
 class PageActionDecoration;
-class PlusDecoration;
 class Profile;
-class SearchTokenDecoration;
 class SelectedKeywordDecoration;
-class SeparatorDecoration;
 class StarDecoration;
 class ToolbarModel;
 class ZoomDecoration;
@@ -58,8 +53,6 @@ class LocationBarViewMac : public LocationBar,
 
   // Overridden from LocationBar:
   virtual void ShowFirstRunBubble() OVERRIDE;
-  virtual void SetInstantSuggestion(
-      const InstantSuggestion& suggestion) OVERRIDE;
   virtual string16 GetInputString() const OVERRIDE;
   virtual WindowOpenDisposition GetWindowOpenDisposition() const OVERRIDE;
   virtual content::PageTransition GetPageTransition() const OVERRIDE;
@@ -70,6 +63,7 @@ class LocationBarViewMac : public LocationBar,
   virtual void UpdatePageActions() OVERRIDE;
   virtual void InvalidatePageActions() OVERRIDE;
   virtual void UpdateOpenPDFInReaderPrompt() OVERRIDE;
+  virtual void UpdateGeneratedCreditCardView() OVERRIDE;
   virtual void SaveStateToContents(content::WebContents* contents) OVERRIDE;
   virtual void Revert() OVERRIDE;
   virtual const OmniboxView* GetLocationEntry() const OVERRIDE;
@@ -82,7 +76,6 @@ class LocationBarViewMac : public LocationBar,
   virtual ExtensionAction* GetPageAction(size_t index) OVERRIDE;
   virtual ExtensionAction* GetVisiblePageAction(size_t index) OVERRIDE;
   virtual void TestPageActionPressed(size_t index) OVERRIDE;
-  virtual void TestActionBoxMenuItemSelected(int command_id) OVERRIDE;
   virtual bool GetBookmarkStarVisibility() OVERRIDE;
 
   // Set/Get the editable state of the field.
@@ -91,10 +84,6 @@ class LocationBarViewMac : public LocationBar,
 
   // Set the starred state of the bookmark star.
   void SetStarred(bool starred);
-
-  // Set (or resets) the icon image resource for the action box plus decoration.
-  void ResetActionBoxIcon();
-  void SetActionBoxIcon(int image_id);
 
   // Happens when the zoom changes for the active tab. |can_show_bubble| is
   // false when the change in zoom for the active tab wasn't an explicit user
@@ -106,10 +95,6 @@ class LocationBarViewMac : public LocationBar,
   // Get the point in window coordinates on the star for the bookmark bubble to
   // aim at.
   NSPoint GetBookmarkBubblePoint() const;
-
-  // Get the point in window coordinates on the Action Box icon for
-  // anchoring its bubbles.
-  NSPoint GetActionBoxAnchorPoint() const;
 
   // Get the point in window coordinates in the security icon at which the page
   // info bubble aims.
@@ -183,7 +168,6 @@ class LocationBarViewMac : public LocationBar,
   ToolbarModel* toolbar_model() const { return toolbar_model_; }
 
  private:
-  friend LocationBarViewMacBrowserTest;
   friend ZoomDecorationTest;
 
   // Posts |notification| to the default notification center.
@@ -216,12 +200,6 @@ class LocationBarViewMac : public LocationBar,
   // Ensures the star decoration is visible or hidden, as required.
   void UpdateStarDecorationVisibility();
 
-  // Ensures the plus decoration is visible or hidden, as required.
-  void UpdatePlusDecorationVisibility();
-
-  // Gets the current search provider name.
-  string16 GetSearchProviderName() const;
-
   scoped_ptr<OmniboxViewMac> omnibox_view_;
 
   CommandUpdater* command_updater_;  // Weak, owned by Browser.
@@ -239,21 +217,12 @@ class LocationBarViewMac : public LocationBar,
   // A decoration that shows an icon to the left of the address.
   scoped_ptr<LocationIconDecoration> location_icon_decoration_;
 
-  // A decoration that shows the search provider being used.
-  scoped_ptr<SearchTokenDecoration> search_token_decoration_;
-
   // A decoration that shows the keyword-search bubble on the left.
   scoped_ptr<SelectedKeywordDecoration> selected_keyword_decoration_;
-
-  // A decoration used to draw a separator between other decorations.
-  scoped_ptr<SeparatorDecoration> separator_decoration_;
 
   // A decoration that shows a lock icon and ev-cert label in a bubble
   // on the left.
   scoped_ptr<EVBubbleDecoration> ev_bubble_decoration_;
-
-  // Action "plus" button right of bookmark star.
-  scoped_ptr<PlusDecoration> plus_decoration_;
 
   // Bookmark star right of page actions.
   scoped_ptr<StarDecoration> star_decoration_;

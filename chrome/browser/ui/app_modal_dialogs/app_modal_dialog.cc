@@ -5,9 +5,9 @@
 #include "chrome/browser/ui/app_modal_dialogs/app_modal_dialog.h"
 
 #include "base/logging.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/ui/app_modal_dialogs/app_modal_dialog_queue.h"
 #include "chrome/browser/ui/app_modal_dialogs/native_app_modal_dialog.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
@@ -15,11 +15,11 @@
 using content::WebContents;
 
 AppModalDialog::AppModalDialog(WebContents* web_contents, const string16& title)
-    : valid_(true),
+    : title_(title),
+      completed_(false),
+      valid_(true),
       native_dialog_(NULL),
-      title_(title),
-      web_contents_(web_contents),
-      completed_(false) {
+      web_contents_(web_contents) {
 }
 
 AppModalDialog::~AppModalDialog() {

@@ -5,14 +5,15 @@
 #include "content/browser/plugin_loader_posix.h"
 
 #include "base/bind.h"
-#include "base/message_loop.h"
-#include "base/message_loop_proxy.h"
+#include "base/message_loop/message_loop.h"
+#include "base/message_loop/message_loop_proxy.h"
 #include "base/metrics/histogram.h"
-#include "content/common/child_process_host_impl.h"
-#include "content/common/utility_messages.h"
 #include "content/browser/utility_process_host_impl.h"
+#include "content/common/child_process_host_impl.h"
+#include "content/common/plugin_list.h"
+#include "content/common/utility_messages.h"
 #include "content/public/browser/browser_thread.h"
-#include "webkit/plugins/npapi/plugin_list.h"
+#include "content/public/browser/plugin_service.h"
 
 namespace content {
 
@@ -58,7 +59,7 @@ void PluginLoaderPosix::OnProcessCrashed(int exit_code) {
 }
 
 bool PluginLoaderPosix::Send(IPC::Message* message) {
-  if (process_host_)
+  if (process_host_.get())
     return process_host_->Send(message);
   return false;
 }
@@ -75,12 +76,12 @@ void PluginLoaderPosix::GetPluginsToLoad() {
   next_load_index_ = 0;
 
   canonical_list_.clear();
-  PluginServiceImpl::GetInstance()->GetPluginList()->GetPluginPathsToLoad(
-      &canonical_list_);
+  PluginList::Singleton()->GetPluginPathsToLoad(
+      &canonical_list_,
+      PluginService::GetInstance()->NPAPIPluginsSupported());
 
   internal_plugins_.clear();
-  PluginServiceImpl::GetInstance()->GetPluginList()->GetInternalPlugins(
-      &internal_plugins_);
+  PluginList::Singleton()->GetInternalPlugins(&internal_plugins_);
 
   BrowserThread::PostTask(BrowserThread::IO, FROM_HERE,
       base::Bind(&PluginLoaderPosix::LoadPluginsInternal,
@@ -104,7 +105,7 @@ void PluginLoaderPosix::LoadPluginsInternal() {
 
   UtilityProcessHostImpl* host = new UtilityProcessHostImpl(
       this,
-      BrowserThread::GetMessageLoopProxyForThread(BrowserThread::IO));
+      BrowserThread::GetMessageLoopProxyForThread(BrowserThread::IO).get());
   process_host_ = host->AsWeakPtr();
   process_host_->DisableSandbox();
 #if defined(OS_MACOSX)
@@ -115,7 +116,7 @@ void PluginLoaderPosix::LoadPluginsInternal() {
 }
 
 void PluginLoaderPosix::OnPluginLoaded(uint32 index,
-                                       const webkit::WebPluginInfo& plugin) {
+                                       const WebPluginInfo& plugin) {
   if (index != next_load_index_) {
     LOG(ERROR) << "Received unexpected plugin load message for "
                << plugin.path.value() << "; index=" << index;
@@ -146,8 +147,7 @@ void PluginLoaderPosix::OnPluginLoadFailed(uint32 index,
 
 bool PluginLoaderPosix::MaybeAddInternalPlugin(
     const base::FilePath& plugin_path) {
-  for (std::vector<webkit::WebPluginInfo>::iterator it =
-           internal_plugins_.begin();
+  for (std::vector<WebPluginInfo>::iterator it = internal_plugins_.begin();
        it != internal_plugins_.end();
        ++it) {
     if (it->path == plugin_path) {
@@ -163,8 +163,7 @@ bool PluginLoaderPosix::MaybeRunPendingCallbacks() {
   if (next_load_index_ < canonical_list_.size())
     return false;
 
-  PluginServiceImpl::GetInstance()->GetPluginList()->SetPlugins(
-      loaded_plugins_);
+  PluginList::Singleton()->SetPlugins(loaded_plugins_);
 
   // Only call the first callback with loaded plugins because there may be
   // some extra plugin paths added since the first callback is added.

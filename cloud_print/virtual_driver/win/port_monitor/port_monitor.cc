@@ -15,16 +15,18 @@
 #include "base/at_exit.h"
 #include "base/command_line.h"
 #include "base/file_util.h"
+#include "base/files/file_enumerator.h"
 #include "base/logging.h"
 #include "base/path_service.h"
-#include "base/process.h"
-#include "base/process_util.h"
-#include "base/string16.h"
+#include "base/process/process.h"
+#include "base/process/launch.h"
+#include "base/strings/string16.h"
 #include "base/win/registry.h"
 #include "base/win/scoped_handle.h"
 #include "base/win/windows_version.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/installer/launcher_support/chrome_launcher_support.h"
-#include "cloud_print/virtual_driver/virtual_driver_switches.h"
+#include "cloud_print/common/win/cloud_print_utils.h"
 #include "cloud_print/virtual_driver/win/port_monitor/spooler_win.h"
 #include "cloud_print/virtual_driver/win/virtual_driver_consts.h"
 #include "cloud_print/virtual_driver/win/virtual_driver_helpers.h"
@@ -118,15 +120,12 @@ base::FilePath GetAppDataDir() {
 
 // Delete files which where not deleted by chrome.
 void DeleteLeakedFiles(const base::FilePath& dir) {
-  using file_util::FileEnumerator;
   base::Time delete_before = base::Time::Now() - base::TimeDelta::FromDays(1);
-  FileEnumerator enumerator(dir, false, FileEnumerator::FILES);
+  base::FileEnumerator enumerator(dir, false, base::FileEnumerator::FILES);
   for (base::FilePath file_path = enumerator.Next(); !file_path.empty();
        file_path = enumerator.Next()) {
-    FileEnumerator::FindInfo info;
-    enumerator.GetFindInfo(&info);
-    if (FileEnumerator::GetLastModifiedTime(info) < delete_before)
-      file_util::Delete(file_path, false);
+    if (enumerator.GetInfo().GetLastModifiedTime() < delete_before)
+      base::DeleteFile(file_path, false);
   }
 }
 
@@ -145,7 +144,7 @@ bool GetJobTitle(HANDLE printer_handle,
     LOG(ERROR) << "Unable to get bytes needed for job info.";
     return false;
   }
-  scoped_array<BYTE> buffer(new BYTE[bytes_needed]);
+  scoped_ptr<BYTE[]> buffer(new BYTE[bytes_needed]);
   if (!GetJob(printer_handle,
               job_id,
               1,
@@ -215,8 +214,7 @@ bool LaunchPrintDialog(const base::FilePath& xps_path,
 
   base::FilePath chrome_profile = GetChromeProfilePath();
   if (!chrome_profile.empty()) {
-    command_line.AppendSwitchPath(switches::kCloudPrintUserDataDir,
-                                  chrome_profile);
+    command_line.AppendSwitchPath(switches::kUserDataDir, chrome_profile);
   }
 
   command_line.AppendSwitchPath(switches::kCloudPrintFile,
@@ -290,7 +288,7 @@ base::FilePath ReadPathFromRegistry(HKEY root, const wchar_t* path_name) {
   base::win::RegKey gcp_key(HKEY_CURRENT_USER, kCloudPrintRegKey, KEY_READ);
   string16 data;
   if (SUCCEEDED(gcp_key.ReadValue(path_name, &data)) &&
-      file_util::PathExists(base::FilePath(data))) {
+      base::PathExists(base::FilePath(data))) {
     return base::FilePath(data);
   }
   return base::FilePath();
@@ -312,7 +310,7 @@ base::FilePath GetChromeExePath() {
 
 base::FilePath GetChromeProfilePath() {
   base::FilePath path = ReadPathFromAnyRegistry(kChromeProfilePathRegValue);
-  if (!path.empty() && file_util::DirectoryExists(path))
+  if (!path.empty() && base::DirectoryExists(path))
     return path;
   return base::FilePath();
 }
@@ -406,14 +404,7 @@ BOOL WINAPI Monitor2StartDocPort(HANDLE port_handle,
                                  DWORD job_id,
                                  DWORD,
                                  BYTE*) {
-  const wchar_t* kUsageKey = L"dr";
-  // Set appropriate key to 1 to let Omaha record usage.
-  base::win::RegKey key;
-  if (key.Create(HKEY_CURRENT_USER, kGoogleUpdateClientStateKey,
-                 KEY_SET_VALUE) != ERROR_SUCCESS ||
-      key.WriteValue(kUsageKey, L"1") != ERROR_SUCCESS) {
-    LOG(ERROR) << "Unable to set usage key";
-  }
+  SetGoogleUpdateUsage(kGoogleUpdateProductId);
   if (port_handle == NULL) {
     LOG(ERROR) << "port_handle should not be NULL.";
     SetLastError(ERROR_INVALID_PARAMETER);
@@ -512,7 +503,7 @@ BOOL WINAPI Monitor2EndDocPort(HANDLE port_handle) {
       }
     }
     if (delete_file)
-      file_util::Delete(port_data->file_path, false);
+      base::DeleteFile(port_data->file_path, false);
   }
   if (port_data->printer_handle != NULL) {
     // Tell the spooler that the job is complete.

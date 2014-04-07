@@ -11,9 +11,9 @@
 #include "base/command_line.h"
 #include "base/file_util.h"
 #include "base/path_service.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "skia/ext/vector_canvas.h"
 #include "skia/ext/vector_platform_device_emf_win.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -334,10 +334,9 @@ void Premultiply(SkBitmap bitmap) {
 void LoadPngFileToSkBitmap(const base::FilePath& filename,
                            SkBitmap* bitmap,
                            bool is_opaque) {
-  base::FilePath absolute_path(filename);
-  file_util::AbsolutePath(&absolute_path);
   std::string compressed;
-  file_util::ReadFileToString(absolute_path, &compressed);
+  file_util::ReadFileToString(base::MakeAbsoluteFilePath(filename),
+                              &compressed);
   ASSERT_TRUE(compressed.size());
 
   ASSERT_TRUE(gfx::PNGCodec::Decode(

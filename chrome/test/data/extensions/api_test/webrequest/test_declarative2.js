@@ -34,13 +34,13 @@ function getURLEchoUserAgent() {
 }
 
 function getURLHttpSimple() {
-  return getServerURL("files/extensions/api_test/webrequest/simpleLoad/a.html");
+  return getServerURL("extensions/api_test/webrequest/simpleLoad/a.html");
 }
 
 function getURLOfHTMLWithThirdParty() {
   // Returns the URL of a HTML document with a third-party resource.
   return getServerURL(
-      "files/extensions/api_test/webrequest/declarative/third-party.html");
+      "extensions/api_test/webrequest/declarative/third-party.html");
 }
 
 function getURLSetCookie() {
@@ -57,7 +57,7 @@ function getURLEchoCookie() {
 }
 
 function getURLHttpXHRData() {
-  return getServerURL("files/extensions/api_test/webrequest/xhr/data.json",
+  return getServerURL("extensions/api_test/webrequest/xhr/data.json",
                       "b.com");
 }
 
@@ -160,7 +160,7 @@ runTests([
             url: getURLHttpSimple(),
             statusCode: 200,
             fromCache: false,
-            statusLine: "HTTP/1.0 200 OK",
+            statusLine: "HTTP/1.1 200 OK",
             ip: "127.0.0.1",
           }
         }
@@ -249,42 +249,6 @@ runTests([
               "              (cookieMap.editedCookie === 'bar') &&" +
               "              !cookieMap.hasOwnProperty('deletedCookie');" +
               "chrome.extension.sendRequest(result);"});
-        });
-      }
-    );
-  },
-
-  function testPermission() {
-    // Test that a redirect is ignored if the extension has no permission.
-    // we load a.html from a.com and issue an XHR to b.com, which is not
-    // contained in the extension's host permissions. Therefore, we cannot
-    // redirect the XHR from b.com to a.com, and the request returns the
-    // original file from b.com.
-    ignoreUnexpected = true;
-    expect();
-    onRequest.addRules(
-      [ {'conditions': [new RequestMatcher({'url': {'pathContains': ".json"}})],
-         'actions': [
-             new RedirectRequest({'redirectUrl': getURLHttpSimple()})]}
-      ],
-      function() {
-        var callback = chrome.test.callbackAdded();
-        navigateAndWait(getURL("simpleLoad/a.html"), function() {
-          var asynchronous = false;
-          var req = new XMLHttpRequest();
-          req.onreadystatechange = function() {
-            if (this.readyState != this.DONE)
-              return;
-            // "{}" is the contents of the file at getURLHttpXHRData().
-            if (this.status == 200 && this.responseText == "{}\n") {
-              callback();
-            } else {
-              chrome.test.fail("Redirect was not prevented. Status: " +
-                  this.status + ", responseText: " + this.responseText);
-            }
-          };
-          req.open("GET", getURLHttpXHRData(), asynchronous);
-          req.send();
         });
       }
     );

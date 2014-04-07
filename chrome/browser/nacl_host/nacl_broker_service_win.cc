@@ -5,7 +5,7 @@
 #include "chrome/browser/nacl_host/nacl_broker_service_win.h"
 
 #include "chrome/browser/nacl_host/nacl_process_host.h"
-#include "chrome/common/chrome_process_type.h"
+#include "components/nacl/common/nacl_process_type.h"
 #include "content/public/browser/browser_child_process_host_iterator.h"
 
 using content::BrowserChildProcessHostIterator;
@@ -50,7 +50,7 @@ void NaClBrokerService::OnLoaderLaunched(const std::string& channel_id,
   if (pending_launches_.end() == it)
     NOTREACHED();
 
-  NaClProcessHost* client = it->second;
+  NaClProcessHost* client = it->second.get();
   if (client)
     client->OnProcessLaunchedByBroker(handle);
   pending_launches_.erase(it);
@@ -84,7 +84,7 @@ void NaClBrokerService::OnDebugExceptionHandlerLaunched(int32 pid,
   if (pending_debuggers_.end() == it)
     NOTREACHED();
 
-  NaClProcessHost* client = it->second;
+  NaClProcessHost* client = it->second.get();
   if (client)
     client->OnDebugExceptionHandlerLaunchedByBroker(success);
   pending_debuggers_.erase(it);

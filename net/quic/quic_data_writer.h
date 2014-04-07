@@ -10,7 +10,7 @@
 #include "base/basictypes.h"
 #include "base/logging.h"
 #include "base/port.h"
-#include "base/string_piece.h"
+#include "base/strings/string_piece.h"
 #include "net/base/int128.h"
 #include "net/base/net_export.h"
 #include "net/quic/quic_protocol.h"
@@ -46,6 +46,7 @@ class NET_EXPORT_PRIVATE QuicDataWriter {
   bool WriteUInt128(uint128 value);
   bool WriteStringPiece16(base::StringPiece val);
   bool WriteBytes(const void* data, size_t data_len);
+  bool WriteRepeatedByte(uint8 byte, size_t count);
   // Fills the remaining buffer with null characters.
   void WritePadding();
 
@@ -53,6 +54,7 @@ class NET_EXPORT_PRIVATE QuicDataWriter {
   // offset must be within the writer's capacity.
   // Return true if there is enough space at that offset, false otherwise.
   bool WriteUInt8ToOffset(uint8 value, size_t offset);
+  bool WriteUInt32ToOffset(uint32 value, size_t offset);
   bool WriteUInt48ToOffset(uint64 value, size_t offset);
 
   size_t capacity() const {

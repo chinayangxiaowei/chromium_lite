@@ -119,11 +119,14 @@ scoped_refptr<base::RefCountedMemory> Get1xPNGBytesFromUIImage(
 // Caller takes ownership of the returned UIImage.
 UIImage* CreateUIImageFromPNG(
     const std::vector<gfx::ImagePNGRep>& image_png_reps);
+gfx::Size UIImageSize(UIImage* image);
 #elif defined(OS_MACOSX)
 scoped_refptr<base::RefCountedMemory> Get1xPNGBytesFromNSImage(
     NSImage* nsimage);
 // Caller takes ownership of the returned NSImage.
-NSImage* NSImageFromPNG(const std::vector<gfx::ImagePNGRep>& image_png_reps);
+NSImage* NSImageFromPNG(const std::vector<gfx::ImagePNGRep>& image_png_reps,
+                        CGColorSpaceRef color_space);
+gfx::Size NSImageSize(NSImage* image);
 #endif // defined(OS_MACOSX)
 
 #if defined(OS_IOS)
@@ -237,6 +240,10 @@ class ImageRep {
 
   Image::RepresentationType type() const { return type_; }
 
+  virtual int Width() const = 0;
+  virtual int Height() const = 0;
+  virtual gfx::Size Size() const = 0;
+
  private:
   Image::RepresentationType type_;
 };
@@ -254,10 +261,37 @@ class ImageRepPNG : public ImageRep {
   virtual ~ImageRepPNG() {
   }
 
-  const std::vector<ImagePNGRep>& image_reps() { return image_png_reps_; }
+  virtual int Width() const OVERRIDE {
+    return Size().width();
+  }
+
+  virtual int Height() const OVERRIDE {
+    return Size().height();
+  }
+
+  virtual gfx::Size Size() const OVERRIDE {
+    // Read the PNG data to get the image size, caching it.
+    if (!size_cache_) {
+      for (std::vector<ImagePNGRep>::const_iterator it = image_reps().begin();
+           it != image_reps().end(); ++it) {
+        if (it->scale_factor == ui::SCALE_FACTOR_100P) {
+          size_cache_.reset(new gfx::Size(it->Size()));
+          return *size_cache_;
+        }
+      }
+      size_cache_.reset(new gfx::Size);
+    }
+
+    return *size_cache_;
+  }
+
+  const std::vector<ImagePNGRep>& image_reps() const { return image_png_reps_; }
 
  private:
   std::vector<ImagePNGRep> image_png_reps_;
+
+  // Cached to avoid having to parse the raw data multiple times.
+  mutable scoped_ptr<gfx::Size> size_cache_;
 
   DISALLOW_COPY_AND_ASSIGN(ImageRepPNG);
 };
@@ -271,6 +305,18 @@ class ImageRepSkia : public ImageRep {
   }
 
   virtual ~ImageRepSkia() {
+  }
+
+  virtual int Width() const OVERRIDE {
+    return image_->width();
+  }
+
+  virtual int Height() const OVERRIDE {
+    return image_->height();
+  }
+
+  virtual gfx::Size Size() const OVERRIDE {
+    return image_->size();
   }
 
   ImageSkia* image() { return image_.get(); }
@@ -297,6 +343,18 @@ class ImageRepGdk : public ImageRep {
     }
   }
 
+  virtual int Width() const OVERRIDE {
+    return gdk_pixbuf_get_width(pixbuf_);
+  }
+
+  virtual int Height() const OVERRIDE {
+    return gdk_pixbuf_get_height(pixbuf_);
+  }
+
+  virtual gfx::Size Size() const OVERRIDE {
+    return gfx::Size(Width(), Height());
+  }
+
   GdkPixbuf* pixbuf() const { return pixbuf_; }
 
  private:
@@ -317,6 +375,18 @@ class ImageRepCairo : public ImageRep {
 
   virtual ~ImageRepCairo() {
     delete cairo_cache_;
+  }
+
+  virtual int Width() const OVERRIDE {
+    return cairo_cache_->Width();
+  }
+
+  virtual int Height() const OVERRIDE {
+    return cairo_cache_->Height();
+  }
+
+  virtual gfx::Size Size() const OVERRIDE {
+    return gfx::Size(Width(), Height());
   }
 
   CairoCachedSurface* surface() const { return cairo_cache_; }
@@ -342,6 +412,18 @@ class ImageRepCocoaTouch : public ImageRep {
     image_ = nil;
   }
 
+  virtual int Width() const OVERRIDE {
+    return Size().width();
+  }
+
+  virtual int Height() const OVERRIDE {
+    return Size().height();
+  }
+
+  virtual gfx::Size Size() const OVERRIDE {
+    return internal::UIImageSize(image_);
+  }
+
   UIImage* image() const { return image_; }
 
  private:
@@ -363,6 +445,18 @@ class ImageRepCocoa : public ImageRep {
     image_ = nil;
   }
 
+  virtual int Width() const OVERRIDE {
+    return Size().width();
+  }
+
+  virtual int Height() const OVERRIDE {
+    return Size().height();
+  }
+
+  virtual gfx::Size Size() const OVERRIDE {
+    return internal::NSImageSize(image_);
+  }
+
   NSImage* image() const { return image_; }
 
  private:
@@ -379,6 +473,10 @@ class ImageStorage : public base::RefCounted<ImageStorage> {
  public:
   ImageStorage(gfx::Image::RepresentationType default_type)
       : default_representation_type_(default_type),
+#if defined(OS_MACOSX) && !defined(OS_IOS)
+        default_representation_color_space_(
+            base::mac::GetGenericRGBColorSpace()),
+#endif  // defined(OS_MACOSX) && !defined(OS_IOS)
         representations_deleter_(&representations_) {
   }
 
@@ -386,6 +484,15 @@ class ImageStorage : public base::RefCounted<ImageStorage> {
     return default_representation_type_;
   }
   gfx::Image::RepresentationMap& representations() { return representations_; }
+
+#if defined(OS_MACOSX) && !defined(OS_IOS)
+  void set_default_representation_color_space(CGColorSpaceRef color_space) {
+    default_representation_color_space_ = color_space;
+  }
+  CGColorSpaceRef default_representation_color_space() {
+    return default_representation_color_space_;
+  }
+#endif  // defined(OS_MACOSX) && !defined(OS_IOS)
 
  private:
   friend class base::RefCounted<ImageStorage>;
@@ -395,6 +502,14 @@ class ImageStorage : public base::RefCounted<ImageStorage> {
   // The type of image that was passed to the constructor. This key will always
   // exist in the |representations_| map.
   gfx::Image::RepresentationType default_representation_type_;
+
+#if defined(OS_MACOSX) && !defined(OS_IOS)
+  // The default representation's colorspace. This is used for converting to
+  // NSImage. This field exists to compensate for PNGCodec not writing or
+  // reading colorspace ancillary chunks. (sRGB, iCCP).
+  // Not owned.
+  CGColorSpaceRef default_representation_color_space_;
+#endif  // defined(OS_MACOSX) && !defined(OS_IOS)
 
   // All the representations of an Image. Size will always be at least one, with
   // more for any converted representations.
@@ -617,18 +732,22 @@ UIImage* Image::ToUIImage() const {
 NSImage* Image::ToNSImage() const {
   internal::ImageRep* rep = GetRepresentation(kImageRepCocoa, false);
   if (!rep) {
+    CGColorSpaceRef default_representation_color_space =
+        storage_->default_representation_color_space();
+
     switch (DefaultRepresentationType()) {
       case kImageRepPNG: {
         internal::ImageRepPNG* png_rep =
             GetRepresentation(kImageRepPNG, true)->AsImageRepPNG();
         rep = new internal::ImageRepCocoa(internal::NSImageFromPNG(
-            png_rep->image_reps()));
+            png_rep->image_reps(), default_representation_color_space));
         break;
       }
       case kImageRepSkia: {
         internal::ImageRepSkia* skia_rep =
             GetRepresentation(kImageRepSkia, true)->AsImageRepSkia();
-        NSImage* image = NSImageFromImageSkia(*skia_rep->image());
+        NSImage* image = NSImageFromImageSkiaWithColorSpace(*skia_rep->image(),
+            default_representation_color_space);
         base::mac::NSObjectRetain(image);
         rep = new internal::ImageRepCocoa(image);
         break;
@@ -781,9 +900,34 @@ bool Image::IsEmpty() const {
   return RepresentationCount() == 0;
 }
 
+int Image::Width() const {
+  if (IsEmpty())
+    return 0;
+  return GetRepresentation(DefaultRepresentationType(), true)->Width();
+}
+
+int Image::Height() const {
+  if (IsEmpty())
+    return 0;
+  return GetRepresentation(DefaultRepresentationType(), true)->Height();
+}
+
+gfx::Size Image::Size() const {
+  if (IsEmpty())
+    return gfx::Size();
+  return GetRepresentation(DefaultRepresentationType(), true)->Size();
+}
+
 void Image::SwapRepresentations(gfx::Image* other) {
   storage_.swap(other->storage_);
 }
+
+#if defined(OS_MACOSX)  && !defined(OS_IOS)
+void Image::SetSourceColorSpace(CGColorSpaceRef color_space) {
+  if (storage_.get())
+    storage_->set_default_representation_color_space(color_space);
+}
+#endif  // defined(OS_MACOSX) && !defined(OS_IOS)
 
 Image::RepresentationType Image::DefaultRepresentationType() const {
   CHECK(storage_.get());

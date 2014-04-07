@@ -19,18 +19,27 @@
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
+#include "base/prefs/pref_service.h"
+#include "chrome/browser/chrome_notification_types.h"
+#include "chrome/browser/invalidation/p2p_invalidation_service.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/signin/signin_manager.h"
+#include "chrome/browser/signin/signin_manager_base.h"
+#include "chrome/browser/signin/token_service.h"
+#include "chrome/browser/signin/token_service_factory.h"
 #include "chrome/browser/sync/about_sync_util.h"
 #include "chrome/browser/sync/glue/data_type_controller.h"
 #include "chrome/browser/sync/profile_sync_service_factory.h"
 #include "chrome/common/chrome_switches.h"
+#include "chrome/common/pref_names.h"
+#include "content/public/browser/notification_service.h"
+#include "google_apis/gaia/gaia_constants.h"
 #include "sync/internal_api/public/base/progress_marker_map.h"
 #include "sync/internal_api/public/sessions/sync_session_snapshot.h"
 #include "sync/internal_api/public/util/sync_string_conversions.h"
 
 using syncer::sessions::SyncSessionSnapshot;
+using invalidation::P2PInvalidationService;
 
 // TODO(rsimha): Remove the following lines once crbug.com/91863 is fixed.
 // The amount of time for which we wait for a live sync operation to complete.
@@ -99,14 +108,36 @@ bool StateChangeTimeoutEvent::Abort() {
   return !did_timeout_;
 }
 
+// static
+ProfileSyncServiceHarness* ProfileSyncServiceHarness::Create(
+    Profile* profile,
+    const std::string& username,
+    const std::string& password) {
+  return new ProfileSyncServiceHarness(profile, username, password, NULL);
+}
+
+// static
+ProfileSyncServiceHarness* ProfileSyncServiceHarness::CreateForIntegrationTest(
+    Profile* profile,
+    const std::string& username,
+    const std::string& password,
+    P2PInvalidationService* p2p_invalidation_service) {
+  return new ProfileSyncServiceHarness(profile,
+                                       username,
+                                       password,
+                                       p2p_invalidation_service);
+}
+
 ProfileSyncServiceHarness::ProfileSyncServiceHarness(
     Profile* profile,
     const std::string& username,
-    const std::string& password)
+    const std::string& password,
+    P2PInvalidationService* p2p_invalidation_service)
     : waiting_for_encryption_type_(syncer::UNSPECIFIED),
       wait_state_(INITIAL_WAIT_STATE),
       profile_(profile),
       service_(NULL),
+      p2p_invalidation_service_(p2p_invalidation_service),
       progress_marker_partner_(NULL),
       username_(username),
       password_(password),
@@ -124,17 +155,6 @@ ProfileSyncServiceHarness::ProfileSyncServiceHarness(
 ProfileSyncServiceHarness::~ProfileSyncServiceHarness() {
   if (service_->HasObserver(this))
     service_->RemoveObserver(this);
-}
-
-// static
-ProfileSyncServiceHarness* ProfileSyncServiceHarness::CreateAndAttach(
-    Profile* profile) {
-  ProfileSyncServiceFactory* f = ProfileSyncServiceFactory::GetInstance();
-  if (!f->HasProfileSyncService(profile)) {
-    NOTREACHED() << "Profile has never signed into sync.";
-    return NULL;
-  }
-  return new ProfileSyncServiceHarness(profile, "", "");
 }
 
 void ProfileSyncServiceHarness::SetCredentials(const std::string& username,
@@ -179,7 +199,18 @@ bool ProfileSyncServiceHarness::SetupSync(
   service_->SetSetupInProgress(true);
 
   // Authenticate sync client using GAIA credentials.
-  service_->signin()->StartSignIn(username_, password_, "", "");
+  service_->signin()->SetAuthenticatedUsername(username_);
+  profile_->GetPrefs()->SetString(prefs::kGoogleServicesUsername,
+                                  username_);
+  GoogleServiceSigninSuccessDetails details(username_, password_);
+  content::NotificationService::current()->Notify(
+      chrome::NOTIFICATION_GOOGLE_SIGNIN_SUCCESSFUL,
+      content::Source<Profile>(profile_),
+      content::Details<const GoogleServiceSigninSuccessDetails>(&details));
+  TokenServiceFactory::GetForProfile(profile_)->IssueAuthTokenForTest(
+      GaiaConstants::kGaiaOAuth2LoginRefreshToken, "oauth2_login_token");
+  TokenServiceFactory::GetForProfile(profile_)->IssueAuthTokenForTest(
+      GaiaConstants::kSyncService, "sync_token");
 
   // Wait for the OnBackendInitialized() callback.
   if (!AwaitBackendInitialized()) {
@@ -276,7 +307,7 @@ void ProfileSyncServiceHarness::SignalStateCompleteWithNextState(
 
 void ProfileSyncServiceHarness::SignalStateComplete() {
   if (waiting_for_status_change_)
-    MessageLoop::current()->QuitWhenIdle();
+    base::MessageLoop::current()->QuitWhenIdle();
 }
 
 bool ProfileSyncServiceHarness::RunStateChangeMachine() {
@@ -464,6 +495,26 @@ void ProfileSyncServiceHarness::OnStateChanged() {
   RunStateChangeMachine();
 }
 
+void ProfileSyncServiceHarness::OnSyncCycleCompleted() {
+  // Integration tests still use p2p notifications.
+  const SyncSessionSnapshot& snap = GetLastSessionSnapshot();
+  bool is_notifiable_commit =
+      (snap.model_neutral_state().num_successful_commits > 0);
+  if (is_notifiable_commit && p2p_invalidation_service_) {
+    syncer::ModelTypeSet model_types =
+        snap.model_neutral_state().commit_request_types;
+    syncer::ObjectIdSet ids = ModelTypeSetToObjectIdSet(model_types);
+    syncer::ObjectIdInvalidationMap invalidation_map =
+        syncer::ObjectIdSetToInvalidationMap(
+            ids,
+            syncer::Invalidation::kUnknownVersion,
+            "");
+    p2p_invalidation_service_->SendInvalidation(invalidation_map);
+  }
+
+  OnStateChanged();
+}
+
 void ProfileSyncServiceHarness::OnMigrationStateChange() {
   // Update migration state.
   if (HasPendingBackendMigration()) {
@@ -531,27 +582,6 @@ bool ProfileSyncServiceHarness::AwaitBackendInitialized() {
   wait_state_ = WAITING_FOR_ON_BACKEND_INITIALIZED;
   return AwaitStatusChangeWithTimeout(kLiveSyncOperationTimeoutMs,
                                       "Waiting for OnBackendInitialized().");
-}
-
-bool ProfileSyncServiceHarness::AwaitSyncRestart() {
-  DVLOG(1) << GetClientInfoString("AwaitSyncRestart");
-  if (service()->ShouldPushChanges()) {
-    // Sync has already been restarted; don't wait.
-    return true;
-  }
-
-  // Wait for the sync backend to be initialized.
-  if (!AwaitBackendInitialized()) {
-    LOG(ERROR) << "OnBackendInitialized() not seen after "
-               << kLiveSyncOperationTimeoutMs / 1000
-               << " seconds.";
-    return false;
-  }
-
-  // Wait for sync configuration to complete.
-  wait_state_ = WAITING_FOR_SYNC_CONFIGURATION;
-  return AwaitStatusChangeWithTimeout(kLiveSyncOperationTimeoutMs,
-                                      "Waiting for sync configuration.");
 }
 
 bool ProfileSyncServiceHarness::AwaitDataSyncCompletion(
@@ -759,8 +789,8 @@ bool ProfileSyncServiceHarness::AwaitStatusChangeWithTimeout(
     // Set the flag to tell SignalStateComplete() that it's OK to quit out of
     // the MessageLoop if we hit a state transition.
     waiting_for_status_change_ = true;
-    MessageLoop* loop = MessageLoop::current();
-    MessageLoop::ScopedNestableTaskAllower allow(loop);
+    base::MessageLoop* loop = base::MessageLoop::current();
+    base::MessageLoop::ScopedNestableTaskAllower allow(loop);
     loop->PostDelayedTask(
         FROM_HERE,
         base::Bind(&StateChangeTimeoutEvent::Callback,
@@ -850,8 +880,8 @@ bool ProfileSyncServiceHarness::MatchesOtherClient(
   // Only look for a match if we have at least one enabled datatype in
   // common with the partner client.
   const syncer::ModelTypeSet common_types =
-      Intersection(service()->GetPreferredDataTypes(),
-                   partner->service()->GetPreferredDataTypes());
+      Intersection(service()->GetActiveDataTypes(),
+                   partner->service()->GetActiveDataTypes());
 
   DVLOG(2) << profile_debug_name_ << ", " << partner->profile_debug_name_
            << ": common types are "
@@ -1014,7 +1044,7 @@ std::string ProfileSyncServiceHarness::GetSerializedProgressMarker(
 
   syncer::ProgressMarkerMap::const_iterator it =
       markers_map.find(model_type);
-  return (it != markers_map.end()) ? it->second : "";
+  return (it != markers_map.end()) ? it->second : std::string();
 }
 
 std::string ProfileSyncServiceHarness::GetClientInfoString(

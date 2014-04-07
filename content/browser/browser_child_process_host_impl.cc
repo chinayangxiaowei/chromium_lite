@@ -12,16 +12,14 @@
 #include "base/logging.h"
 #include "base/metrics/histogram.h"
 #include "base/path_service.h"
-#include "base/process_util.h"
 #include "base/stl_util.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "base/synchronization/waitable_event.h"
 #include "content/browser/histogram_message_filter.h"
 #include "content/browser/loader/resource_message_filter.h"
 #include "content/browser/profiler_message_filter.h"
 #include "content/browser/tracing/trace_message_filter.h"
 #include "content/common/child_process_host_impl.h"
-#include "content/common/plugin_messages.h"
 #include "content/public/browser/browser_child_process_host_delegate.h"
 #include "content/public/browser/browser_child_process_observer.h"
 #include "content/public/browser/browser_thread.h"
@@ -97,7 +95,8 @@ BrowserChildProcessHostImpl::BrowserChildProcessHostImpl(
     int process_type,
     BrowserChildProcessHostDelegate* delegate)
     : data_(process_type),
-      delegate_(delegate) {
+      delegate_(delegate),
+      power_monitor_message_broadcaster_(this) {
   data_.id = ChildProcessHostImpl::GenerateChildProcessUniqueId();
 
   child_process_host_.reset(ChildProcessHost::Create(this));
@@ -148,6 +147,7 @@ void BrowserChildProcessHostImpl::Launch(
     switches::kEnableDCHECK,
     switches::kEnableLogging,
     switches::kLoggingLevel,
+    switches::kTraceToConsole,
     switches::kV,
     switches::kVModule,
 #if defined(OS_POSIX)
@@ -205,6 +205,10 @@ void BrowserChildProcessHostImpl::ForceShutdown() {
   child_process_host_->ForceShutdown();
 }
 
+void BrowserChildProcessHostImpl::SetBackgrounded(bool backgrounded) {
+  child_process_->SetProcessBackgrounded(backgrounded);
+}
+
 void BrowserChildProcessHostImpl::SetTerminateChildOnShutdown(
     bool terminate_on_shutdown) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
@@ -221,7 +225,7 @@ void BrowserChildProcessHostImpl::NotifyProcessInstanceCreated(
 base::TerminationStatus BrowserChildProcessHostImpl::GetTerminationStatus(
     int* exit_code) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
-  if (!child_process_.get())  // If the delegate doesn't use Launch() helper.
+  if (!child_process_)  // If the delegate doesn't use Launch() helper.
     return base::GetTerminationStatus(data_.handle, exit_code);
   return child_process_->GetChildTerminationStatus(false /* known_dead */,
                                                    exit_code);
@@ -257,39 +261,41 @@ bool BrowserChildProcessHostImpl::CanShutdown() {
 
 void BrowserChildProcessHostImpl::OnChildDisconnected() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
-  DCHECK(data_.handle != base::kNullProcessHandle);
-  int exit_code;
-  base::TerminationStatus status = GetTerminationStatus(&exit_code);
-  switch (status) {
-    case base::TERMINATION_STATUS_PROCESS_CRASHED:
-    case base::TERMINATION_STATUS_ABNORMAL_TERMINATION: {
-      delegate_->OnProcessCrashed(exit_code);
-      BrowserThread::PostTask(BrowserThread::UI, FROM_HERE,
-                              base::Bind(&NotifyProcessCrashed, data_));
-      UMA_HISTOGRAM_ENUMERATION("ChildProcess.Crashed2",
-                                data_.process_type,
-                                PROCESS_TYPE_MAX);
-      break;
+  if (child_process_.get() || data_.handle) {
+    DCHECK(data_.handle != base::kNullProcessHandle);
+    int exit_code;
+    base::TerminationStatus status = GetTerminationStatus(&exit_code);
+    switch (status) {
+      case base::TERMINATION_STATUS_PROCESS_CRASHED:
+      case base::TERMINATION_STATUS_ABNORMAL_TERMINATION: {
+        delegate_->OnProcessCrashed(exit_code);
+        BrowserThread::PostTask(BrowserThread::UI, FROM_HERE,
+                                base::Bind(&NotifyProcessCrashed, data_));
+        UMA_HISTOGRAM_ENUMERATION("ChildProcess.Crashed2",
+                                  data_.process_type,
+                                  PROCESS_TYPE_MAX);
+        break;
+      }
+      case base::TERMINATION_STATUS_PROCESS_WAS_KILLED: {
+        delegate_->OnProcessCrashed(exit_code);
+        // Report that this child process was killed.
+        UMA_HISTOGRAM_ENUMERATION("ChildProcess.Killed2",
+                                  data_.process_type,
+                                  PROCESS_TYPE_MAX);
+        break;
+      }
+      case base::TERMINATION_STATUS_STILL_RUNNING: {
+        UMA_HISTOGRAM_ENUMERATION("ChildProcess.DisconnectedAlive2",
+                                  data_.process_type,
+                                  PROCESS_TYPE_MAX);
+      }
+      default:
+        break;
     }
-    case base::TERMINATION_STATUS_PROCESS_WAS_KILLED: {
-      delegate_->OnProcessCrashed(exit_code);
-      // Report that this child process was killed.
-      UMA_HISTOGRAM_ENUMERATION("ChildProcess.Killed2",
-                                data_.process_type,
-                                PROCESS_TYPE_MAX);
-      break;
-    }
-    case base::TERMINATION_STATUS_STILL_RUNNING: {
-      UMA_HISTOGRAM_ENUMERATION("ChildProcess.DisconnectedAlive2",
-                                data_.process_type,
-                                PROCESS_TYPE_MAX);
-    }
-    default:
-      break;
+    UMA_HISTOGRAM_ENUMERATION("ChildProcess.Disconnected2",
+                              data_.process_type,
+                              PROCESS_TYPE_MAX);
   }
-  UMA_HISTOGRAM_ENUMERATION("ChildProcess.Disconnected2",
-                            data_.process_type,
-                            PROCESS_TYPE_MAX);
   BrowserThread::PostTask(BrowserThread::UI, FROM_HERE,
                           base::Bind(&NotifyProcessHostDisconnected, data_));
   delete delegate_;  // Will delete us
@@ -300,7 +306,8 @@ bool BrowserChildProcessHostImpl::Send(IPC::Message* message) {
 }
 
 void BrowserChildProcessHostImpl::OnProcessLaunched() {
-  if (!child_process_->GetHandle()) {
+  base::ProcessHandle handle = child_process_->GetHandle();
+  if (!handle) {
     delete delegate_;  // Will delete us
     return;
   }
@@ -312,12 +319,12 @@ void BrowserChildProcessHostImpl::OnProcessLaunched() {
   // IPC channel thereafter.
   DCHECK(!early_exit_watcher_.GetWatchedEvent());
   early_exit_watcher_.StartWatching(
-      new base::WaitableEvent(child_process_->GetHandle()),
+      new base::WaitableEvent(handle),
       base::Bind(&BrowserChildProcessHostImpl::OnProcessExitedEarly,
                  base::Unretained(this)));
 #endif
 
-  data_.handle = child_process_->GetHandle();
+  data_.handle = handle;
   delegate_->OnProcessLaunched();
 }
 

@@ -7,21 +7,25 @@
 // NOTE: All messages must send an |int request_id| as their first parameter.
 
 // Multiply-included message file, hence no include guard.
-#include "base/process.h"
-#include "base/shared_memory.h"
+#include "base/memory/shared_memory.h"
+#include "base/process/process.h"
 #include "content/common/content_param_traits_macros.h"
 #include "content/public/common/common_param_traits.h"
 #include "content/public/common/resource_response.h"
 #include "ipc/ipc_message_macros.h"
 #include "net/base/request_priority.h"
-#include "webkit/glue/resource_request_body.h"
+#include "net/http/http_response_info.h"
+#include "webkit/common/resource_request_body.h"
 
 #ifndef CONTENT_COMMON_RESOURCE_MESSAGES_H_
 #define CONTENT_COMMON_RESOURCE_MESSAGES_H_
 
+namespace net {
+struct LoadTimingInfo;
+}
+
 namespace webkit_glue {
 struct ResourceDevToolsInfo;
-struct ResourceLoadTimingInfo;
 }
 
 namespace IPC {
@@ -35,8 +39,8 @@ struct ParamTraits<scoped_refptr<net::HttpResponseHeaders> > {
 };
 
 template <>
-struct CONTENT_EXPORT ParamTraits<webkit_base::DataElement> {
-  typedef webkit_base::DataElement param_type;
+struct CONTENT_EXPORT ParamTraits<webkit_common::DataElement> {
+  typedef webkit_common::DataElement param_type;
   static void Write(Message* m, const param_type& p);
   static bool Read(const Message* m, PickleIterator* iter, param_type* r);
   static void Log(const param_type& p, std::string* l);
@@ -51,8 +55,8 @@ struct ParamTraits<scoped_refptr<webkit_glue::ResourceDevToolsInfo> > {
 };
 
 template <>
-struct ParamTraits<webkit_glue::ResourceLoadTimingInfo> {
-  typedef webkit_glue::ResourceLoadTimingInfo param_type;
+struct ParamTraits<net::LoadTimingInfo> {
+  typedef net::LoadTimingInfo param_type;
   static void Write(Message* m, const param_type& p);
   static bool Read(const Message* m, PickleIterator* iter, param_type* r);
   static void Log(const param_type& p, std::string* l);
@@ -74,6 +78,10 @@ struct ParamTraits<scoped_refptr<webkit_glue::ResourceRequestBody> > {
 #define IPC_MESSAGE_START ResourceMsgStart
 #undef IPC_MESSAGE_EXPORT
 #define IPC_MESSAGE_EXPORT CONTENT_EXPORT
+
+IPC_ENUM_TRAITS_MAX_VALUE( \
+    net::HttpResponseInfo::ConnectionInfo, \
+    net::HttpResponseInfo::NUM_OF_CONNECTION_INFOS - 1)
 
 IPC_STRUCT_TRAITS_BEGIN(content::ResourceResponseHead)
   IPC_STRUCT_TRAITS_PARENT(webkit_glue::ResourceResponseInfo)
@@ -99,14 +107,13 @@ IPC_STRUCT_TRAITS_BEGIN(webkit_glue::ResourceResponseInfo)
   IPC_STRUCT_TRAITS_MEMBER(encoded_data_length)
   IPC_STRUCT_TRAITS_MEMBER(appcache_id)
   IPC_STRUCT_TRAITS_MEMBER(appcache_manifest_url)
-  IPC_STRUCT_TRAITS_MEMBER(connection_id)
-  IPC_STRUCT_TRAITS_MEMBER(connection_reused)
   IPC_STRUCT_TRAITS_MEMBER(load_timing)
   IPC_STRUCT_TRAITS_MEMBER(devtools_info)
   IPC_STRUCT_TRAITS_MEMBER(download_file_path)
   IPC_STRUCT_TRAITS_MEMBER(was_fetched_via_spdy)
   IPC_STRUCT_TRAITS_MEMBER(was_npn_negotiated)
   IPC_STRUCT_TRAITS_MEMBER(was_alternate_protocol_available)
+  IPC_STRUCT_TRAITS_MEMBER(connection_info)
   IPC_STRUCT_TRAITS_MEMBER(was_fetched_via_proxy)
   IPC_STRUCT_TRAITS_MEMBER(npn_negotiated_protocol)
   IPC_STRUCT_TRAITS_MEMBER(socket_address)

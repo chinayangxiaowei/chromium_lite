@@ -16,6 +16,7 @@
 #include "gpu/command_buffer/service/query_manager.h"
 #include "gpu/command_buffer/service/renderbuffer_manager.h"
 #include "gpu/command_buffer/service/shader_manager.h"
+#include "gpu/command_buffer/service/stream_texture_manager_mock.h"
 #include "gpu/command_buffer/service/test_helper.h"
 #include "gpu/command_buffer/service/texture_manager.h"
 #include "gpu/command_buffer/service/vertex_array_manager.h"
@@ -111,7 +112,7 @@ class GLES2DecoderTestBase : public testing::Test {
     return group_->renderbuffer_manager()->GetRenderbuffer(service_id);
   }
 
-  Texture* GetTexture(GLuint client_id) {
+  TextureRef* GetTexture(GLuint client_id) {
     return group_->texture_manager()->GetTexture(client_id);
   }
 
@@ -135,6 +136,11 @@ class GLES2DecoderTestBase : public testing::Test {
 
   ProgramManager* program_manager() {
     return group_->program_manager();
+  }
+
+  ::testing::StrictMock<MockStreamTextureManager>*
+  stream_texture_manager() const {
+    return stream_texture_manager_.get();
   }
 
   void DoCreateProgram(GLuint client_id, GLuint service_id);
@@ -192,6 +198,7 @@ class GLES2DecoderTestBase : public testing::Test {
   void SetupShaderForUniform(GLenum uniform_type);
   void SetupDefaultProgram();
   void SetupCubemapProgram();
+  void SetupSamplerExternalProgram();
   void SetupTexture();
 
   // Note that the error is returned as GLint instead of GLenum.
@@ -464,6 +471,7 @@ class GLES2DecoderTestBase : public testing::Test {
   static const GLenum kUniform1Type = GL_SAMPLER_2D;
   static const GLenum kUniform2Type = GL_INT_VEC2;
   static const GLenum kUniform3Type = GL_FLOAT_VEC3;
+  static const GLenum kUniformSamplerExternalType = GL_SAMPLER_EXTERNAL_OES;
   static const GLenum kUniformCubemapType = GL_SAMPLER_CUBE;
   static const GLint kInvalidUniformLocation = 30;
   static const GLint kBadUniformIndex = 1000;
@@ -519,7 +527,7 @@ class GLES2DecoderTestBase : public testing::Test {
     virtual int32 GetGetOffset() OVERRIDE;
 
    private:
-    scoped_array<int8> data_;
+    scoped_ptr<int8[]> data_;
     gpu::Buffer valid_buffer_;
     gpu::Buffer invalid_buffer_;
   };
@@ -527,6 +535,8 @@ class GLES2DecoderTestBase : public testing::Test {
   void AddExpectationsForVertexAttribManager();
 
   scoped_ptr< ::testing::StrictMock<MockCommandBufferEngine> > engine_;
+  scoped_ptr< ::testing::StrictMock<MockStreamTextureManager> >
+      stream_texture_manager_;
   scoped_refptr<ContextGroup> group_;
 };
 

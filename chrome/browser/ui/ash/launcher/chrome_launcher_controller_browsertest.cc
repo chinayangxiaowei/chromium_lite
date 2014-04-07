@@ -4,6 +4,9 @@
 
 #include "chrome/browser/ui/ash/launcher/chrome_launcher_controller.h"
 
+#include "apps/native_app_window.h"
+#include "apps/shell_window.h"
+#include "apps/shell_window_registry.h"
 #include "ash/ash_switches.h"
 #include "ash/launcher/launcher.h"
 #include "ash/launcher/launcher_model.h"
@@ -12,9 +15,10 @@
 #include "ash/test/shell_test_api.h"
 #include "ash/wm/window_util.h"
 #include "base/command_line.h"
-#include "base/stringprintf.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/automation/automation_util.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/extensions/extension_function_test_utils.h"
@@ -22,17 +26,13 @@
 #include "chrome/browser/extensions/extension_system.h"
 #include "chrome/browser/extensions/extension_test_message_listener.h"
 #include "chrome/browser/extensions/platform_app_browsertest_util.h"
-#include "chrome/browser/extensions/shell_window_registry.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/extensions/application_launch.h"
-#include "chrome/browser/ui/extensions/native_app_window.h"
-#include "chrome/browser/ui/extensions/shell_window.h"
 #include "chrome/browser/ui/host_desktop.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -43,6 +43,7 @@
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/window.h"
 
+using apps::ShellWindow;
 using extensions::Extension;
 using content::WebContents;
 
@@ -391,9 +392,14 @@ IN_PROC_BROWSER_TEST_F(LauncherPlatformAppBrowserTest, LaunchPanelWindow) {
   EXPECT_EQ(item_count, launcher_model()->item_count());
 }
 
+#if defined(OS_CHROMEOS)
+#define MAYBE_WindowActivation DISABLED_WindowActivation
+#else
+#define MAYBE_WindowActivation WindowActivation
+#endif
 // Confirm that app windows can be reactivated by clicking their icons and that
 // the correct activation order is maintained.
-IN_PROC_BROWSER_TEST_F(LauncherPlatformAppBrowserTest, WindowActivation) {
+IN_PROC_BROWSER_TEST_F(LauncherPlatformAppBrowserTest, MAYBE_WindowActivation) {
   int item_count = launcher_model()->item_count();
 
   // First run app.
@@ -825,4 +831,7 @@ IN_PROC_BROWSER_TEST_F(LauncherAppBrowserTest, OverflowBubble) {
   ChromeLauncherController* controller =
       static_cast<ChromeLauncherController*>(launcher_->delegate());
   controller->UnpinAppsWithID(std::string("fake_app_0"));
+
+  test.RunMessageLoopUntilAnimationsDone();
+  EXPECT_FALSE(launcher_->IsShowingOverflowBubble());
 }

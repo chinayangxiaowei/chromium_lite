@@ -13,7 +13,7 @@
 #include "base/compiler_specific.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/observer_list.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "ui/aura/aura_export.h"
 #include "ui/aura/client/window_types.h"
 #include "ui/aura/window_observer.h"
@@ -93,8 +93,8 @@ class AURA_EXPORT Window : public ui::LayerDelegate,
   const std::string& name() const { return name_; }
   void SetName(const std::string& name);
 
-  const string16 title() const { return title_; }
-  void set_title(const string16& title) { title_ = title; }
+  const base::string16 title() const { return title_; }
+  void set_title(const base::string16& title) { title_ = title; }
 
   bool transparent() const { return transparent_; }
   void SetTransparent(bool transparent);
@@ -157,9 +157,6 @@ class AURA_EXPORT Window : public ui::LayerDelegate,
   // Marks the a portion of window as needing to be painted.
   void SchedulePaintInRect(const gfx::Rect& rect);
 
-  // Assigns a new external texture to the window's layer.
-  void SetExternalTexture(ui::Texture* texture);
-
   // Places this window per |root_window|'s stacking client. The final location
   // may be a RootWindow other than the one passed in. |root_window| may not be
   // NULL. |bounds_in_screen| may be empty; it is more optional context that
@@ -174,6 +171,9 @@ class AURA_EXPORT Window : public ui::LayerDelegate,
   // |target|.  Does not stack on top of windows with NULL layer delegates,
   // see WindowTest.StackingMadrigal for details.
   void StackChildAbove(Window* child, Window* target);
+
+  // Stacks the specified child of this window at the bottom of the z-order.
+  void StackChildAtBottom(Window* child);
 
   // Stacks |child| below |target|. Does nothing if |child| is already below
   // |target|.
@@ -235,14 +235,18 @@ class AURA_EXPORT Window : public ui::LayerDelegate,
 
   void set_ignore_events(bool ignore_events) { ignore_events_ = ignore_events; }
 
-  // Sets the window to grab hits for an area extending -|insets| pixels outside
-  // its bounds. This can be used to create an invisible non-client area, for
-  // example if your windows have no visible frames but still need to have
-  // resize edges. It is possible to set a larger hit-region for touch-events.
+  // Sets the window to grab hits for mouse and touch to an area extending
+  // -|mouse_insets| and -|touch_insets| pixels outside its bounds. This can be
+  // used to create an invisible non-client area, for example if your windows
+  // have no visible frames but still need to have resize edges.
   void SetHitTestBoundsOverrideOuter(const gfx::Insets& mouse_insets,
-                                     int touch_scale) {
+                                     const gfx::Insets& touch_insets) {
     hit_test_bounds_override_outer_mouse_ = mouse_insets;
-    hit_test_bounds_override_outer_touch_ = mouse_insets.Scale(touch_scale);
+    hit_test_bounds_override_outer_touch_ = touch_insets;
+  }
+
+  gfx::Insets hit_test_bounds_override_outer_touch() const {
+    return hit_test_bounds_override_outer_touch_;
   }
 
   gfx::Insets hit_test_bounds_override_outer_mouse() const {
@@ -486,7 +490,7 @@ class AURA_EXPORT Window : public ui::LayerDelegate,
   int id_;
   std::string name_;
 
-  string16 title_;
+  base::string16 title_;
 
   // Whether layer is initialized as non-opaque.
   bool transparent_;

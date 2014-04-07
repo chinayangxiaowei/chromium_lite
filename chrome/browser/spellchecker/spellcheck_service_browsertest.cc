@@ -12,7 +12,7 @@
 #include "chrome/common/spellcheck_common.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "googleurl/src/gurl.h"
+#include "url/gurl.h"
 
 namespace {
 
@@ -53,10 +53,17 @@ IN_PROC_BROWSER_TEST_F(SpellcheckServiceBrowserTest, DeleteCorruptedBDICT) {
       arraysize(kCorruptedBDICT));
   EXPECT_EQ(arraysize(kCorruptedBDICT), actual);
 
-  // Attach an event to the SpellCheckHost object so we can receive its status
-  // updates.
+  // Attach an event to the SpellcheckService object so we can receive its
+  // status updates.
   base::WaitableEvent event(true, false);
   SpellcheckService::AttachStatusEvent(&event);
+
+  // Ensure that the SpellcheckService object does not already exist. Otherwise
+  // the next line will not force creation of the SpellcheckService and the
+  // test will fail.
+  SpellcheckService* service =
+      SpellcheckServiceFactory::GetForProfileWithoutCreating(GetProfile());
+  ASSERT_EQ(NULL, service);
 
   // Getting the spellcheck_service will initialize the SpellcheckService
   // object with the corrupted BDICT file created above since the hunspell
@@ -71,8 +78,8 @@ IN_PROC_BROWSER_TEST_F(SpellcheckServiceBrowserTest, DeleteCorruptedBDICT) {
   content::RunAllPendingInMessageLoop(content::BrowserThread::UI);
   EXPECT_EQ(SpellcheckService::BDICT_CORRUPTED,
             SpellcheckService::GetStatusEvent());
-  if (file_util::PathExists(bdict_path)) {
+  if (base::PathExists(bdict_path)) {
     ADD_FAILURE();
-    EXPECT_TRUE(file_util::Delete(bdict_path, true));
+    EXPECT_TRUE(base::DeleteFile(bdict_path, true));
   }
 }

@@ -7,10 +7,12 @@
 #include "base/bind_helpers.h"
 #include "base/debug/debugger.h"
 #include "base/run_loop.h"
-#include "base/time.h"
-#include "base/timer.h"
+#include "base/test/test_timeouts.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "content/browser/browser_thread_impl.h"
 #include "content/browser/renderer_host/media/video_capture_buffer_pool.h"
+#include "content/browser/renderer_host/media/video_capture_oracle.h"
 #include "content/browser/renderer_host/media/web_contents_capture_util.h"
 #include "content/browser/renderer_host/render_view_host_factory.h"
 #include "content/browser/renderer_host/render_widget_host_impl.h"
@@ -20,7 +22,7 @@
 #include "content/public/browser/notification_types.h"
 #include "content/public/test/mock_render_process_host.h"
 #include "content/public/test/test_browser_context.h"
-#include "content/public/test/test_browser_thread.h"
+#include "content/public/test/test_browser_thread_bundle.h"
 #include "content/public/test/test_utils.h"
 #include "content/test/test_web_contents.h"
 #include "media/base/video_util.h"
@@ -32,10 +34,10 @@
 
 namespace content {
 namespace {
+
 const int kTestWidth = 320;
 const int kTestHeight = 240;
 const int kTestFramesPerSecond = 20;
-const base::TimeDelta kWaitTimeout = base::TimeDelta::FromMilliseconds(10000);
 const SkColor kNothingYet = 0xdeadbeef;
 const SkColor kNotInterested = ~kNothingYet;
 
@@ -51,9 +53,9 @@ void DeadlineExceeded(base::Closure quit_closure) {
 
 void RunCurrentLoopWithDeadline() {
   base::Timer deadline(false, false);
-  deadline.Start(FROM_HERE, kWaitTimeout, base::Bind(
-      &DeadlineExceeded, MessageLoop::current()->QuitClosure()));
-  MessageLoop::current()->Run();
+  deadline.Start(FROM_HERE, TestTimeouts::action_max_timeout(), base::Bind(
+      &DeadlineExceeded, base::MessageLoop::current()->QuitClosure()));
+  base::MessageLoop::current()->Run();
   deadline.Stop();
 }
 
@@ -129,20 +131,10 @@ class CaptureTestSourceController {
   void WaitForNextCopy() {
     {
       base::AutoLock guard(lock_);
-      copy_done_ = MessageLoop::current()->QuitClosure();
+      copy_done_ = base::MessageLoop::current()->QuitClosure();
     }
 
     RunCurrentLoopWithDeadline();
-  }
-
-  void OnShutdown() {
-    base::AutoLock guard(lock_);
-    BrowserThread::PostTask(BrowserThread::UI, FROM_HERE, shutdown_hook_);
-  }
-
-  void SetShutdownHook(base::Closure shutdown_hook) {
-    base::AutoLock guard(lock_);
-    shutdown_hook_ = shutdown_hook;
   }
 
  private:
@@ -152,7 +144,6 @@ class CaptureTestSourceController {
   bool can_copy_to_video_frame_;
   bool use_frame_subscriber_;
   base::Closure copy_done_;
-  base::Closure shutdown_hook_;
 
   DISALLOW_COPY_AND_ASSIGN(CaptureTestSourceController);
 };
@@ -167,6 +158,7 @@ class CaptureTestView : public TestRenderWidgetHostView {
                            CaptureTestSourceController* controller)
       : TestRenderWidgetHostView(rwh),
         controller_(controller) {}
+
   virtual ~CaptureTestView() {}
 
   // TestRenderWidgetHostView overrides.
@@ -183,7 +175,8 @@ class CaptureTestView : public TestRenderWidgetHostView {
       const scoped_refptr<media::VideoFrame>& target,
       const base::Callback<void(bool)>& callback) OVERRIDE {
     SkColor c = ConvertRgbToYuv(controller_->GetSolidColor());
-    media::FillYUV(target, SkColorGetR(c), SkColorGetG(c), SkColorGetB(c));
+    media::FillYUV(
+        target.get(), SkColorGetR(c), SkColorGetG(c), SkColorGetB(c));
     callback.Run(true);
     controller_->SignalCopy();
   }
@@ -199,13 +192,17 @@ class CaptureTestView : public TestRenderWidgetHostView {
 
   // Simulate a compositor paint event for our subscriber.
   void SimulateUpdate() {
+    const base::Time present_time = base::Time::Now();
     RenderWidgetHostViewFrameSubscriber::DeliverFrameCallback callback;
     scoped_refptr<media::VideoFrame> target;
-    if (subscriber_ && subscriber_->ShouldCaptureFrame(&target, &callback)) {
+    if (subscriber_ && subscriber_->ShouldCaptureFrame(present_time,
+                                                       &target, &callback)) {
       SkColor c = ConvertRgbToYuv(controller_->GetSolidColor());
-      media::FillYUV(target, SkColorGetR(c), SkColorGetG(c), SkColorGetB(c));
-      BrowserThread::PostTask(BrowserThread::UI, FROM_HERE,
-          base::Bind(callback, base::Time::Now(), true));
+      media::FillYUV(
+          target.get(), SkColorGetR(c), SkColorGetG(c), SkColorGetB(c));
+      BrowserThread::PostTask(BrowserThread::UI,
+                              FROM_HERE,
+                              base::Bind(callback, present_time, true));
       controller_->SignalCopy();
     }
   }
@@ -233,10 +230,11 @@ class CaptureTestRenderViewHost : public TestRenderViewHost {
                             RenderViewHostDelegate* delegate,
                             RenderWidgetHostDelegate* widget_delegate,
                             int routing_id,
+                            int main_frame_routing_id,
                             bool swapped_out,
                             CaptureTestSourceController* controller)
       : TestRenderViewHost(instance, delegate, widget_delegate, routing_id,
-                           swapped_out),
+                           main_frame_routing_id, swapped_out),
         controller_(controller) {
     // Override the default view installed by TestRenderViewHost; we need
     // our special subclass which has mocked-out tab capture support.
@@ -293,10 +291,11 @@ class CaptureTestRenderViewHostFactory : public RenderViewHostFactory {
       RenderViewHostDelegate* delegate,
       RenderWidgetHostDelegate* widget_delegate,
       int routing_id,
-      bool swapped_out,
-      SessionStorageNamespace* session_storage_namespace) OVERRIDE {
+      int main_frame_routing_id,
+      bool swapped_out) OVERRIDE {
     return new CaptureTestRenderViewHost(instance, delegate, widget_delegate,
-                                         routing_id, swapped_out, controller_);
+                                         routing_id, main_frame_routing_id,
+                                         swapped_out, controller_);
   }
  private:
   CaptureTestSourceController* controller_;
@@ -311,8 +310,8 @@ class StubConsumer : public media::VideoCaptureDevice::EventHandler {
   StubConsumer()
       : error_encountered_(false),
         wait_color_yuv_(0xcafe1950) {
-    buffer_pool_ = new VideoCaptureBufferPool(
-        gfx::Size(kTestWidth, kTestHeight), 2);
+    buffer_pool_ =
+        new VideoCaptureBufferPool(kTestWidth * kTestHeight * 3 / 2, 2);
     EXPECT_TRUE(buffer_pool_->Allocate());
   }
   virtual ~StubConsumer() {}
@@ -321,7 +320,7 @@ class StubConsumer : public media::VideoCaptureDevice::EventHandler {
     base::AutoLock guard(lock_);
 
     if (wait_color_yuv_ == color || error_encountered_)
-      MessageLoop::current()->Quit();
+      base::MessageLoop::current()->Quit();
   }
 
   void WaitForNextColor(SkColor expected_color) {
@@ -356,7 +355,9 @@ class StubConsumer : public media::VideoCaptureDevice::EventHandler {
   }
 
   virtual scoped_refptr<media::VideoFrame> ReserveOutputBuffer() OVERRIDE {
-    return buffer_pool_->ReserveForProducer(0);
+    return buffer_pool_->ReserveI420VideoFrame(gfx::Size(kTestWidth,
+                                                         kTestHeight),
+                                               0);
   }
 
   virtual void OnIncomingCapturedFrame(
@@ -373,8 +374,10 @@ class StubConsumer : public media::VideoCaptureDevice::EventHandler {
       const scoped_refptr<media::VideoFrame>& frame,
       base::Time timestamp) OVERRIDE {
     EXPECT_EQ(gfx::Size(kTestWidth, kTestHeight), frame->coded_size());
-    EXPECT_EQ(media::VideoFrame::YV12, frame->format());
-    EXPECT_NE(0, buffer_pool_->RecognizeReservedBuffer(frame));
+    EXPECT_EQ(media::VideoFrame::I420, frame->format());
+    EXPECT_LE(
+        0,
+        buffer_pool_->RecognizeReservedBuffer(frame->shared_memory_handle()));
     uint8 yuv[3];
     for (int plane = 0; plane < 3; ++plane) {
       yuv[plane] = frame->data(plane)[0];
@@ -414,13 +417,11 @@ class StubConsumer : public media::VideoCaptureDevice::EventHandler {
   DISALLOW_COPY_AND_ASSIGN(StubConsumer);
 };
 
-}  // namespace
-
 // Test harness that sets up a minimal environment with necessary stubs.
 class WebContentsVideoCaptureDeviceTest : public testing::Test {
  public:
-  WebContentsVideoCaptureDeviceTest() {}
-
+  // This is public because C++ method pointer scoping rules are silly and make
+  // this hard to use with Bind().
   void ResetWebContents() {
     web_contents_.reset();
   }
@@ -435,10 +436,6 @@ class WebContentsVideoCaptureDeviceTest : public testing::Test {
     // custom RenderViewHostFactory, or else we implant some kind of delegated
     // CopyFromBackingStore functionality into TestRenderViewHost itself.
 
-    // The main thread will serve as the UI thread as well as the test thread.
-    // We'll manually pump the run loop at appropriate times in the test.
-    ui_thread_.reset(new TestBrowserThread(BrowserThread::UI, &message_loop_));
-
     render_process_host_factory_.reset(new MockRenderProcessHostFactory());
     // Create our (self-registering) RVH factory, so that when we create a
     // WebContents, it in turn creates CaptureTestRenderViewHosts.
@@ -449,10 +446,10 @@ class WebContentsVideoCaptureDeviceTest : public testing::Test {
 
     scoped_refptr<SiteInstance> site_instance =
         SiteInstance::Create(browser_context_.get());
-    static_cast<SiteInstanceImpl*>(site_instance.get())->
-        set_render_process_host_factory(render_process_host_factory_.get());
+    SiteInstanceImpl::set_render_process_host_factory(
+        render_process_host_factory_.get());
     web_contents_.reset(
-        TestWebContents::Create(browser_context_.get(), site_instance));
+        TestWebContents::Create(browser_context_.get(), site_instance.get()));
 
     // This is actually a CaptureTestRenderViewHost.
     RenderWidgetHostImpl* rwh =
@@ -463,13 +460,9 @@ class WebContentsVideoCaptureDeviceTest : public testing::Test {
             base::StringPrintf("%d:%d", rwh->GetProcess()->GetID(),
                                rwh->GetRoutingID()));
 
-    base::Closure destroy_cb = base::Bind(
-        &CaptureTestSourceController::OnShutdown,
-        base::Unretained(&controller_));
+    device_.reset(WebContentsVideoCaptureDevice::Create(device_id));
 
-    device_.reset(WebContentsVideoCaptureDevice::Create(device_id, destroy_cb));
-
-    content::RunAllPendingInMessageLoop();
+    base::RunLoop().RunUntilIdle();
   }
 
   virtual void TearDown() {
@@ -478,20 +471,20 @@ class WebContentsVideoCaptureDeviceTest : public testing::Test {
     // The device is destroyed asynchronously, and will notify the
     // CaptureTestSourceController when it finishes destruction.
     // Trigger this, and wait.
-    base::RunLoop shutdown_loop;
-    controller_.SetShutdownHook(shutdown_loop.QuitClosure());
-    device_->DeAllocate();
-    device_.reset();
-    shutdown_loop.Run();
+    if (device_) {
+      device_->DeAllocate();
+      device_.reset();
+    }
 
-    content::RunAllPendingInMessageLoop();
+    base::RunLoop().RunUntilIdle();
 
     // Destroy the browser objects.
     web_contents_.reset();
     browser_context_.reset();
 
-    content::RunAllPendingInMessageLoop();
+    base::RunLoop().RunUntilIdle();
 
+    SiteInstanceImpl::set_render_process_host_factory(NULL);
     render_view_host_factory_.reset();
     render_process_host_factory_.reset();
   }
@@ -516,17 +509,14 @@ class WebContentsVideoCaptureDeviceTest : public testing::Test {
     }
   }
 
+  void DestroyVideoCaptureDevice() { device_.reset(); }
+
  private:
   // The consumer is the ultimate recipient of captured pixel data.
   StubConsumer consumer_;
 
   // The controller controls which pixel patterns to produce.
   CaptureTestSourceController controller_;
-
-  // We run the UI message loop on the main thread. The capture device
-  // will also spin up its own threads.
-  MessageLoopForUI message_loop_;
-  scoped_ptr<TestBrowserThread> ui_thread_;
 
   // Self-registering RenderProcessHostFactory.
   scoped_ptr<MockRenderProcessHostFactory> render_process_host_factory_;
@@ -542,7 +532,7 @@ class WebContentsVideoCaptureDeviceTest : public testing::Test {
   // Finally, the WebContentsVideoCaptureDevice under test.
   scoped_ptr<media::VideoCaptureDevice> device_;
 
-  DISALLOW_COPY_AND_ASSIGN(WebContentsVideoCaptureDeviceTest);
+  TestBrowserThreadBundle thread_bundle_;
 };
 
 TEST_F(WebContentsVideoCaptureDeviceTest, InvalidInitialWebContentsError) {
@@ -551,7 +541,15 @@ TEST_F(WebContentsVideoCaptureDeviceTest, InvalidInitialWebContentsError) {
   // practice; we should be able to recover gracefully.
   ResetWebContents();
 
-  device()->Allocate(kTestWidth, kTestHeight, kTestFramesPerSecond, consumer());
+  media::VideoCaptureCapability capture_format(
+      kTestWidth,
+      kTestHeight,
+      kTestFramesPerSecond,
+      media::VideoCaptureCapability::kI420,
+      0,
+      false,
+      media::ConstantResolutionVideoCaptureDevice);
+  device()->Allocate(capture_format, consumer());
   device()->Start();
   ASSERT_NO_FATAL_FAILURE(consumer()->WaitForError());
   device()->DeAllocate();
@@ -560,7 +558,15 @@ TEST_F(WebContentsVideoCaptureDeviceTest, InvalidInitialWebContentsError) {
 TEST_F(WebContentsVideoCaptureDeviceTest, WebContentsDestroyed) {
   // We'll simulate the tab being closed after the capture pipeline is up and
   // running.
-  device()->Allocate(kTestWidth, kTestHeight, kTestFramesPerSecond, consumer());
+  media::VideoCaptureCapability capture_format(
+      kTestWidth,
+      kTestHeight,
+      kTestFramesPerSecond,
+      media::VideoCaptureCapability::kI420,
+      0,
+      false,
+      media::ConstantResolutionVideoCaptureDevice);
+  device()->Allocate(capture_format, consumer());
   device()->Start();
 
   // Do one capture to prove
@@ -568,7 +574,7 @@ TEST_F(WebContentsVideoCaptureDeviceTest, WebContentsDestroyed) {
   SimulateDrawEvent();
   ASSERT_NO_FATAL_FAILURE(consumer()->WaitForNextColor(SK_ColorRED));
 
-  content::RunAllPendingInMessageLoop();
+  base::RunLoop().RunUntilIdle();
 
   // Post a task to close the tab. We should see an error reported to the
   // consumer.
@@ -581,28 +587,46 @@ TEST_F(WebContentsVideoCaptureDeviceTest, WebContentsDestroyed) {
 
 TEST_F(WebContentsVideoCaptureDeviceTest,
        StopDeviceBeforeCaptureMachineCreation) {
-  device()->Allocate(kTestWidth, kTestHeight, kTestFramesPerSecond, consumer());
+  media::VideoCaptureCapability capture_format(
+      kTestWidth,
+      kTestHeight,
+      kTestFramesPerSecond,
+      media::VideoCaptureCapability::kI420,
+      0,
+      false,
+      media::ConstantResolutionVideoCaptureDevice);
+  device()->Allocate(capture_format, consumer());
   device()->Start();
   // Make a point of not running the UI messageloop here.
   device()->Stop();
   device()->DeAllocate();
+  DestroyVideoCaptureDevice();
 
   // Currently, there should be CreateCaptureMachineOnUIThread() and
   // DestroyCaptureMachineOnUIThread() tasks pending on the current (UI) message
   // loop. These should both succeed without crashing, and the machine should
   // wind up in the idle state.
-  content::RunAllPendingInMessageLoop();
+  base::RunLoop().RunUntilIdle();
 }
 
 TEST_F(WebContentsVideoCaptureDeviceTest, StopWithRendererWorkToDo) {
   // Set up the test to use RGB copies and an normal
   source()->SetCanCopyToVideoFrame(false);
   source()->SetUseFrameSubscriber(false);
-  device()->Allocate(kTestWidth, kTestHeight, kTestFramesPerSecond,
-                     consumer());
+  media::VideoCaptureCapability capture_format(
+      kTestWidth,
+      kTestHeight,
+      kTestFramesPerSecond,
+      media::VideoCaptureCapability::kI420,
+      0,
+      false,
+      media::ConstantResolutionVideoCaptureDevice);
+  device()->Allocate(capture_format, consumer());
+
   device()->Start();
   // Make a point of not running the UI messageloop here.
-  content::RunAllPendingInMessageLoop();
+  // TODO(ajwong): Why do we care?
+  base::RunLoop().RunUntilIdle();
 
   for (int i = 0; i < 10; ++i)
     SimulateDrawEvent();
@@ -614,14 +638,22 @@ TEST_F(WebContentsVideoCaptureDeviceTest, StopWithRendererWorkToDo) {
   // loop. These should both succeed without crashing, and the machine should
   // wind up in the idle state.
   ASSERT_FALSE(consumer()->HasError());
-  content::RunAllPendingInMessageLoop();
+  base::RunLoop().RunUntilIdle();
   ASSERT_FALSE(consumer()->HasError());
 }
 
 TEST_F(WebContentsVideoCaptureDeviceTest, DeviceRestart) {
-  device()->Allocate(kTestWidth, kTestHeight, kTestFramesPerSecond, consumer());
+  media::VideoCaptureCapability capture_format(
+      kTestWidth,
+      kTestHeight,
+      kTestFramesPerSecond,
+      media::VideoCaptureCapability::kI420,
+      0,
+      false,
+      media::ConstantResolutionVideoCaptureDevice);
+  device()->Allocate(capture_format, consumer());
   device()->Start();
-  content::RunAllPendingInMessageLoop();
+  base::RunLoop().RunUntilIdle();
   source()->SetSolidColor(SK_ColorRED);
   SimulateDrawEvent();
   SimulateDrawEvent();
@@ -636,7 +668,7 @@ TEST_F(WebContentsVideoCaptureDeviceTest, DeviceRestart) {
   // Device is stopped, but content can still be animating.
   SimulateDrawEvent();
   SimulateDrawEvent();
-  content::RunAllPendingInMessageLoop();
+  base::RunLoop().RunUntilIdle();
 
   device()->Start();
   source()->SetSolidColor(SK_ColorBLUE);
@@ -653,7 +685,15 @@ TEST_F(WebContentsVideoCaptureDeviceTest, DeviceRestart) {
 // consumer. The test will alternate between the three capture paths, simulating
 // falling in and out of accelerated compositing.
 TEST_F(WebContentsVideoCaptureDeviceTest, GoesThroughAllTheMotions) {
-  device()->Allocate(kTestWidth, kTestHeight, kTestFramesPerSecond, consumer());
+  media::VideoCaptureCapability capture_format(
+      kTestWidth,
+      kTestHeight,
+      kTestFramesPerSecond,
+      media::VideoCaptureCapability::kI420,
+      0,
+      false,
+      media::ConstantResolutionVideoCaptureDevice);
+  device()->Allocate(capture_format, consumer());
 
   device()->Start();
 
@@ -701,14 +741,33 @@ TEST_F(WebContentsVideoCaptureDeviceTest, GoesThroughAllTheMotions) {
 }
 
 TEST_F(WebContentsVideoCaptureDeviceTest, RejectsInvalidAllocateParams) {
-  BrowserThread::PostTask(BrowserThread::UI, FROM_HERE,
-      base::Bind(&media::VideoCaptureDevice::Allocate,
-                 base::Unretained(device()), 1280, 720, -2, consumer()));
+  media::VideoCaptureCapability capture_format(
+      1280,
+      720,
+      -2,
+      media::VideoCaptureCapability::kI420,
+      0,
+      false,
+      media::ConstantResolutionVideoCaptureDevice);
+  BrowserThread::PostTask(BrowserThread::UI,
+                          FROM_HERE,
+                          base::Bind(&media::VideoCaptureDevice::Allocate,
+                                     base::Unretained(device()),
+                                     capture_format,
+                                     consumer()));
   ASSERT_NO_FATAL_FAILURE(consumer()->WaitForError());
 }
 
 TEST_F(WebContentsVideoCaptureDeviceTest, BadFramesGoodFrames) {
-  device()->Allocate(kTestWidth, kTestHeight, kTestFramesPerSecond, consumer());
+  media::VideoCaptureCapability capture_format(
+      kTestWidth,
+      kTestHeight,
+      kTestFramesPerSecond,
+      media::VideoCaptureCapability::kI420,
+      0,
+      false,
+      media::ConstantResolutionVideoCaptureDevice);
+  device()->Allocate(capture_format, consumer());
 
   // 1x1 is too small to process; we intend for this to result in an error.
   source()->SetCopyResultSize(1, 1);
@@ -734,254 +793,5 @@ TEST_F(WebContentsVideoCaptureDeviceTest, BadFramesGoodFrames) {
   device()->DeAllocate();
 }
 
-// 60Hz sampled at 30Hz should produce 30Hz.
-TEST(SmoothEventSamplerTest, Sample60HertzAt30Hertz) {
-  SmoothEventSampler sampler(base::TimeDelta::FromSeconds(1) / 30, true, 200);
-  const base::TimeDelta vsync = base::TimeDelta::FromSeconds(1) / 60;
-
-  base::Time t;
-  ASSERT_TRUE(base::Time::FromString("Sat, 23 Mar 2013 1:21:08 GMT", &t));
-  for (int i = 0; i < 200; i++) {
-    ASSERT_TRUE(sampler.IsOverdueForSamplingAt(t))
-        << "Should sample until redundant capture goal is hit";
-    sampler.RecordSample();
-  }
-  ASSERT_FALSE(sampler.IsOverdueForSamplingAt(t))
-      << "Should not be overdue once redundant capture goal achieved.";
-
-  // Steady state, we should capture every other vsync, indefinitely.
-  for (int i = 0; i < 100; i++) {
-    SCOPED_TRACE(base::StringPrintf("Iteration %d", i));
-    ASSERT_TRUE(sampler.AddEventAndConsiderSampling(t));
-    sampler.RecordSample();
-    t += vsync;
-
-    ASSERT_FALSE(sampler.AddEventAndConsiderSampling(t));
-    t += vsync;
-  }
-
-  // Now pretend we're limited by backpressure in the pipeline. In this scenario
-  // case we are adding events but not sampling them.
-  for (int i = 0; i < 7; i++) {
-    SCOPED_TRACE(base::StringPrintf("Iteration %d", i));
-    ASSERT_EQ(i >= 3, sampler.IsOverdueForSamplingAt(t));
-    ASSERT_TRUE(sampler.AddEventAndConsiderSampling(t));
-    t += vsync;
-  }
-
-  // Now suppose we can sample again. We should be back in the steady state,
-  // but at a different phase.
-  ASSERT_TRUE(sampler.IsOverdueForSamplingAt(t));
-  for (int i = 0; i < 100; i++) {
-    SCOPED_TRACE(base::StringPrintf("Iteration %d", i));
-    ASSERT_TRUE(sampler.AddEventAndConsiderSampling(t));
-    sampler.RecordSample();
-    t += vsync;
-    ASSERT_FALSE(sampler.IsOverdueForSamplingAt(t));
-
-    ASSERT_FALSE(sampler.AddEventAndConsiderSampling(t));
-    t += vsync;
-    ASSERT_FALSE(sampler.IsOverdueForSamplingAt(t));
-  }
-}
-
-// 50Hz sampled at 30Hz should produce 25Hz.
-TEST(SmoothEventSamplerTest, Sample50HertzAt30Hertz) {
-  SmoothEventSampler sampler(base::TimeDelta::FromSeconds(1) / 30, true, 2);
-  const base::TimeDelta vsync = base::TimeDelta::FromSeconds(1) / 50;
-
-  base::Time t;
-  ASSERT_TRUE(base::Time::FromString("Sat, 23 Mar 2013 1:21:08 GMT", &t));
-  for (int i = 0; i < 2; i++) {
-    ASSERT_TRUE(sampler.IsOverdueForSamplingAt(t))
-        << "Should sample until redundant capture goal is hit";
-    sampler.RecordSample();
-  }
-  ASSERT_FALSE(sampler.IsOverdueForSamplingAt(t))
-      << "Should not be overdue once redundant capture goal achieved.";
-
-
-
-  // Steady state, we should capture every other vsync, indefinitely.
-  for (int i = 0; i < 100; i++) {
-    SCOPED_TRACE(base::StringPrintf("Iteration %d", i));
-    ASSERT_TRUE(sampler.AddEventAndConsiderSampling(t));
-    sampler.RecordSample();
-    t += vsync;
-
-    ASSERT_FALSE(sampler.AddEventAndConsiderSampling(t));
-    t += vsync;
-  }
-
-  // Now pretend we're limited by backpressure in the pipeline. In this scenario
-  // case we are adding events but not sampling them.
-  for (int i = 0; i < 7; i++) {
-    SCOPED_TRACE(base::StringPrintf("Iteration %d", i));
-    ASSERT_EQ(i >= 2, sampler.IsOverdueForSamplingAt(t));
-    ASSERT_TRUE(sampler.AddEventAndConsiderSampling(t));
-    t += vsync;
-  }
-
-  // Now suppose we can sample again. We should be back in the steady state,
-  // but at a different phase.
-  ASSERT_TRUE(sampler.IsOverdueForSamplingAt(t));
-  for (int i = 0; i < 100; i++) {
-    SCOPED_TRACE(base::StringPrintf("Iteration %d", i));
-    ASSERT_TRUE(sampler.AddEventAndConsiderSampling(t));
-    sampler.RecordSample();
-    t += vsync;
-    ASSERT_FALSE(sampler.IsOverdueForSamplingAt(t));
-
-    ASSERT_FALSE(sampler.AddEventAndConsiderSampling(t));
-    t += vsync;
-    ASSERT_FALSE(sampler.IsOverdueForSamplingAt(t));
-  }
-}
-
-// 30Hz sampled at 30Hz should produce 30Hz.
-TEST(SmoothEventSamplerTest, Sample30HertzAt30Hertz) {
-  SmoothEventSampler sampler(base::TimeDelta::FromSeconds(1) / 30, true, 3);
-  const base::TimeDelta vsync = base::TimeDelta::FromSeconds(1) / 30;
-
-  base::Time t;
-  ASSERT_TRUE(base::Time::FromString("Sat, 23 Mar 2013 1:21:08 GMT", &t));
-  for (int i = 0; i < 3; i++) {
-    ASSERT_TRUE(sampler.IsOverdueForSamplingAt(t))
-        << "Should sample until redundant capture goal is hit";
-    sampler.RecordSample();
-  }
-  ASSERT_FALSE(sampler.IsOverdueForSamplingAt(t))
-      << "Should not be overdue once redundant capture goal achieved.";
-
-  // Steady state, we should capture every vsync, indefinitely.
-  for (int i = 0; i < 200; i++) {
-    SCOPED_TRACE(base::StringPrintf("Iteration %d", i));
-    ASSERT_TRUE(sampler.AddEventAndConsiderSampling(t));
-    sampler.RecordSample();
-    t += vsync;
-  }
-
-  // Now pretend we're limited by backpressure in the pipeline. In this scenario
-  // case we are adding events but not sampling them.
-  for (int i = 0; i < 7; i++) {
-    SCOPED_TRACE(base::StringPrintf("Iteration %d", i));
-    ASSERT_EQ(i >= 1, sampler.IsOverdueForSamplingAt(t));
-    ASSERT_TRUE(sampler.AddEventAndConsiderSampling(t));
-    t += vsync;
-  }
-
-  // Now suppose we can sample again. We should be back in the steady state.
-  ASSERT_TRUE(sampler.IsOverdueForSamplingAt(t));
-  for (int i = 0; i < 100; i++) {
-    SCOPED_TRACE(base::StringPrintf("Iteration %d", i));
-    ASSERT_TRUE(sampler.AddEventAndConsiderSampling(t));
-    sampler.RecordSample();
-    t += vsync;
-    ASSERT_FALSE(sampler.IsOverdueForSamplingAt(t));
-  }
-}
-
-// 24Hz sampled at 30Hz should produce 24Hz.
-TEST(SmoothEventSamplerTest, Sample24HertzAt30Hertz) {
-  SmoothEventSampler sampler(base::TimeDelta::FromSeconds(1) / 30, true, 333);
-  const base::TimeDelta vsync = base::TimeDelta::FromSeconds(1) / 24;
-
-  base::Time t;
-  ASSERT_TRUE(base::Time::FromString("Sat, 23 Mar 2013 1:21:08 GMT", &t));
-  for (int i = 0; i < 333; i++) {
-    ASSERT_TRUE(sampler.IsOverdueForSamplingAt(t))
-        << "Should sample until redundant capture goal is hit";
-    sampler.RecordSample();
-  }
-  ASSERT_FALSE(sampler.IsOverdueForSamplingAt(t))
-      << "Should not be overdue once redundant capture goal achieved.";
-
-  // Steady state, we should capture every vsync, indefinitely.
-  for (int i = 0; i < 200; i++) {
-    SCOPED_TRACE(base::StringPrintf("Iteration %d", i));
-    ASSERT_TRUE(sampler.AddEventAndConsiderSampling(t));
-    sampler.RecordSample();
-    t += vsync;
-  }
-
-  // Now pretend we're limited by backpressure in the pipeline. In this scenario
-  // case we are adding events but not sampling them.
-  for (int i = 0; i < 7; i++) {
-    SCOPED_TRACE(base::StringPrintf("Iteration %d", i));
-    ASSERT_EQ(i >= 1, sampler.IsOverdueForSamplingAt(t));
-    ASSERT_TRUE(sampler.AddEventAndConsiderSampling(t));
-    t += vsync;
-  }
-
-  // Now suppose we can sample again. We should be back in the steady state.
-  ASSERT_TRUE(sampler.IsOverdueForSamplingAt(t));
-  for (int i = 0; i < 100; i++) {
-    SCOPED_TRACE(base::StringPrintf("Iteration %d", i));
-    ASSERT_TRUE(sampler.AddEventAndConsiderSampling(t));
-    sampler.RecordSample();
-    t += vsync;
-    ASSERT_FALSE(sampler.IsOverdueForSamplingAt(t));
-  }
-}
-
-TEST(SmoothEventSamplerTest, DoubleDrawAtOneTimeStillDirties) {
-  SmoothEventSampler sampler(base::TimeDelta::FromSeconds(1) / 30, true, 1);
-  const base::TimeDelta overdue_period = base::TimeDelta::FromSeconds(1);
-
-  base::Time t;
-  ASSERT_TRUE(base::Time::FromString("Sat, 23 Mar 2013 1:21:08 GMT", &t));
-  ASSERT_TRUE(sampler.AddEventAndConsiderSampling(t));
-  sampler.RecordSample();
-  t += overdue_period;
-  ASSERT_FALSE(sampler.IsOverdueForSamplingAt(t))
-      << "Sampled last event; should not be dirty.";
-
-  // Now simulate 2 events with the same clock value.
-  ASSERT_TRUE(sampler.AddEventAndConsiderSampling(t));
-  sampler.RecordSample();
-  ASSERT_FALSE(sampler.AddEventAndConsiderSampling(t))
-      << "Two events at same time -- expected second not to be sampled.";
-  ASSERT_TRUE(sampler.IsOverdueForSamplingAt(t + overdue_period))
-      << "Second event should dirty the capture state.";
-  sampler.RecordSample();
-  ASSERT_FALSE(sampler.IsOverdueForSamplingAt(t + overdue_period));
-}
-
-TEST(SmoothEventSamplerTest, FallbackToPollingIfUpdatesUnreliable) {
-  const base::TimeDelta timer_interval = base::TimeDelta::FromSeconds(1) / 30;
-  SmoothEventSampler should_not_poll(timer_interval, true, 1);
-  SmoothEventSampler should_poll(timer_interval, false, 1);
-
-  base::Time t;
-  ASSERT_TRUE(base::Time::FromString("Sat, 23 Mar 2013 1:21:08 GMT", &t));
-  ASSERT_TRUE(should_not_poll.AddEventAndConsiderSampling(t));
-  ASSERT_TRUE(should_poll.AddEventAndConsiderSampling(t));
-  should_not_poll.RecordSample();
-  should_poll.RecordSample();
-  t += timer_interval;
-  ASSERT_FALSE(should_not_poll.IsOverdueForSamplingAt(t))
-      << "Sampled last event; should not be dirty.";
-  ASSERT_FALSE(should_poll.IsOverdueForSamplingAt(t))
-      << "Dirty interval has not elapsed yet.";
-  t += timer_interval;
-  ASSERT_FALSE(should_not_poll.IsOverdueForSamplingAt(t))
-      << "Sampled last event; should not be dirty.";
-  ASSERT_TRUE(should_poll.IsOverdueForSamplingAt(t))
-      << "If updates are unreliable, must fall back to polling when idle.";
-  should_poll.RecordSample();
-  t += timer_interval;
-  ASSERT_FALSE(should_not_poll.IsOverdueForSamplingAt(t))
-      << "Sampled last event; should not be dirty.";
-  ASSERT_TRUE(should_poll.IsOverdueForSamplingAt(t))
-      << "If updates are unreliable, must fall back to polling when idle.";
-  should_poll.RecordSample();
-  t += timer_interval / 3;
-  ASSERT_FALSE(should_not_poll.IsOverdueForSamplingAt(t))
-      << "Sampled last event; should not be dirty.";
-  ASSERT_TRUE(should_poll.IsOverdueForSamplingAt(t))
-      << "If updates are unreliable, must fall back to polling when idle.";
-  should_poll.RecordSample();
-}
-
+}  // namespace
 }  // namespace content
-

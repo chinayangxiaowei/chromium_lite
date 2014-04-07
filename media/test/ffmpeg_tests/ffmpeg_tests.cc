@@ -19,9 +19,9 @@
 #include "base/logging.h"
 #include "base/md5.h"
 #include "base/path_service.h"
-#include "base/string_util.h"
-#include "base/time.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "media/base/djb2.h"
 #include "media/base/media.h"
 #include "media/ffmpeg/ffmpeg_common.h"
@@ -228,7 +228,7 @@ int main(int argc, const char** argv) {
   // Buffer used for audio decoding.
   scoped_ptr_malloc<AVFrame, media::ScopedPtrAVFree> audio_frame(
       avcodec_alloc_frame());
-  if (!audio_frame.get()) {
+  if (!audio_frame) {
     std::cerr << "Error: avcodec_alloc_frame for "
               << in_path.value() << std::endl;
     return 1;
@@ -237,7 +237,7 @@ int main(int argc, const char** argv) {
   // Buffer used for video decoding.
   scoped_ptr_malloc<AVFrame, media::ScopedPtrAVFree> video_frame(
       avcodec_alloc_frame());
-  if (!video_frame.get()) {
+  if (!video_frame) {
     std::cerr << "Error: avcodec_alloc_frame for "
               << in_path.value() << std::endl;
     return 1;

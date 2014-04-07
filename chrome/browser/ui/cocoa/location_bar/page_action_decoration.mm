@@ -6,7 +6,8 @@
 
 #import "chrome/browser/ui/cocoa/location_bar/page_action_decoration.h"
 
-#include "base/sys_string_conversions.h"
+#include "base/strings/sys_string_conversions.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/extension_action.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
@@ -22,8 +23,7 @@
 #import "chrome/browser/ui/cocoa/location_bar/location_bar_view_mac.h"
 #include "chrome/browser/ui/omnibox/location_bar_util.h"
 #include "chrome/browser/ui/webui/extensions/extension_info_ui.h"
-#include "chrome/common/chrome_notification_types.h"
-#include "chrome/common/extensions/api/icons/icons_handler.h"
+#include "chrome/common/extensions/manifest_handlers/icons_handler.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/web_contents.h"
 #include "skia/ext/skia_utils_mac.h"
@@ -53,10 +53,10 @@ PageActionDecoration::PageActionDecoration(
       page_action_(page_action),
       current_tab_id_(-1),
       preview_enabled_(false),
-      ALLOW_THIS_IN_INITIALIZER_LIST(scoped_icon_animation_observer_(
+      scoped_icon_animation_observer_(
           page_action->GetIconAnimation(
               SessionID::IdForTab(owner->GetWebContents())),
-          this)) {
+          this) {
   const Extension* extension = browser->profile()->GetExtensionService()->
       GetExtensionById(page_action->extension_id(), false);
   DCHECK(extension);
@@ -80,8 +80,7 @@ PageActionDecoration::~PageActionDecoration() {}
 
 // Always |kPageActionIconMaxSize| wide.  |ImageDecoration| draws the
 // image centered.
-CGFloat PageActionDecoration::GetWidthForSpace(CGFloat width,
-                                               CGFloat text_width) {
+CGFloat PageActionDecoration::GetWidthForSpace(CGFloat width) {
   return extensions::IconsInfo::kPageActionIconMaxSize;
 }
 
@@ -145,7 +144,9 @@ bool PageActionDecoration::ActivatePageAction(NSRect frame) {
       break;
 
     case LocationBarController::ACTION_SHOW_SCRIPT_POPUP:
-      ShowPopup(frame, ExtensionInfoUI::GetURL(page_action_->extension_id()));
+      ShowPopup(
+          frame,
+          extensions::ExtensionInfoUI::GetURL(page_action_->extension_id()));
       break;
   }
 

@@ -4,11 +4,12 @@
 
 #include "base/command_line.h"
 #include "base/file_util.h"
+#include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/path_service.h"
-#include "base/string_number_conversions.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
@@ -18,12 +19,11 @@
 #include "content/shell/shell.h"
 #include "content/test/content_browser_test.h"
 #include "content/test/content_browser_test_utils.h"
-#include "googleurl/src/gurl.h"
+#include "gpu/config/gpu_test_config.h"
 #include "net/base/net_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkColor.h"
-#include "ui/compositor/compositor_setup.h"
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/gfx/size.h"
 #include "ui/gl/gl_switches.h"
@@ -54,8 +54,8 @@ const char kBuildRevision[] = "build-revision";
 // should have been encoded using |gfx::PNGCodec::Encode|.
 bool ReadPNGFile(const base::FilePath& file_path, SkBitmap* bitmap) {
   DCHECK(bitmap);
-  base::FilePath abs_path(file_path);
-  if (!file_util::AbsolutePath(&abs_path))
+  base::FilePath abs_path(base::MakeAbsoluteFilePath(file_path));
+  if (abs_path.empty())
     return false;
 
   std::string png_data;
@@ -105,6 +105,13 @@ class GpuPixelBrowserTest : public ContentBrowserTest {
         ref_img_option_(kReferenceImageNone) {
   }
 
+  virtual void SetUp() {
+    // We expect real pixel output for these tests.
+    UseRealGLContexts();
+
+    ContentBrowserTest::SetUp();
+  }
+
   virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
     command_line->AppendSwitchASCII(switches::kTestGLLib,
                                     "libllvmpipe.so");
@@ -147,10 +154,8 @@ class GpuPixelBrowserTest : public ContentBrowserTest {
         "DISABLED_", "FLAKY_", "FAILS_", "MANUAL_"};
     for (size_t i = 0; i < arraysize(test_status_prefixes); ++i) {
       ReplaceFirstSubstringAfterOffset(
-          &test_name_, 0, test_status_prefixes[i], "");
+          &test_name_, 0, test_status_prefixes[i], std::string());
     }
-
-    ui::DisableTestCompositor();
   }
 
   // If the existing ref image was saved from an revision older than the
@@ -254,7 +259,7 @@ class GpuPixelBrowserTest : public ContentBrowserTest {
           LOG(ERROR) << "Can't save revision file to: "
                      << rev_path.value();
           rt = false;
-          file_util::Delete(img_path, false);
+          base::DeleteFile(img_path, false);
         } else {
           LOG(INFO) << "Saved revision file to: "
                     << rev_path.value();
@@ -398,10 +403,10 @@ class GpuPixelBrowserTest : public ContentBrowserTest {
   void ObtainLocalRefImageRevision() {
     base::FilePath filter;
     filter = filter.AppendASCII(test_name_ + "_*.rev");
-    file_util::FileEnumerator locator(ref_img_dir_,
-                                      false,  // non recursive
-                                      file_util::FileEnumerator::FILES,
-                                      filter.value());
+    base::FileEnumerator locator(ref_img_dir_,
+                                 false,  // non recursive
+                                 base::FileEnumerator::FILES,
+                                 filter.value());
     int64 max_revision = 0;
     std::vector<base::FilePath> outdated_revs;
     for (base::FilePath full_path = locator.Next();
@@ -424,7 +429,7 @@ class GpuPixelBrowserTest : public ContentBrowserTest {
     }
     ref_img_revision_ = max_revision;
     for (size_t i = 0; i < outdated_revs.size(); ++i)
-      file_util::Delete(outdated_revs[i], false);
+      base::DeleteFile(outdated_revs[i], false);
   }
 
   DISALLOW_COPY_AND_ASSIGN(GpuPixelBrowserTest);
@@ -456,7 +461,7 @@ IN_PROC_BROWSER_TEST_F(GpuPixelBrowserTest, MANUAL_WebGLGreenTriangle) {
 IN_PROC_BROWSER_TEST_F(GpuPixelBrowserTest, MANUAL_CSS3DBlueBox) {
   // If test baseline needs to be updated after a given revision, update the
   // following number. If no revision requirement, then 0.
-  const int64 ref_img_revision_update = 123489;
+  const int64 ref_img_revision_update = 209827;
 
   const ReferencePixel ref_pixels[] = {
     // x, y, r, g, b
@@ -534,10 +539,12 @@ class GpuPixelTestBrowserPlugin : public GpuPixelBrowserTest {
   }
 };
 
-IN_PROC_BROWSER_TEST_F(GpuPixelTestBrowserPlugin, MANUAL_BrowserPluginBlueBox) {
+// TODO(fsamuel): re-enable as MANUAL_BrowserPluginBlueBox: crbug.com/166165
+IN_PROC_BROWSER_TEST_F(GpuPixelTestBrowserPlugin,
+                       DISABLED_BrowserPluginBlueBox) {
   // If test baseline needs to be updated after a given revision, update the
   // following number. If no revision requirement, then 0.
-  const int64 ref_img_revision_update = 123489;
+  const int64 ref_img_revision_update = 209445;
 
   const ReferencePixel ref_pixels[] = {
     // x, y, r, g, b

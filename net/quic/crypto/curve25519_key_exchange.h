@@ -8,7 +8,7 @@
 #include <string>
 
 #include "base/compiler_specific.h"
-#include "base/string_piece.h"
+#include "base/strings/string_piece.h"
 #include "net/base/net_export.h"
 #include "net/quic/crypto/key_exchange.h"
 
@@ -31,10 +31,11 @@ class NET_EXPORT_PRIVATE Curve25519KeyExchange : public KeyExchange {
   static std::string NewPrivateKey(QuicRandom* rand);
 
   // KeyExchange interface.
+  virtual KeyExchange* NewKeyPair(QuicRandom* rand) const OVERRIDE;
   virtual bool CalculateSharedKey(const base::StringPiece& peer_public_value,
                                   std::string* shared_key) const OVERRIDE;
   virtual base::StringPiece public_value() const OVERRIDE;
-  virtual CryptoTag tag() const OVERRIDE;
+  virtual QuicTag tag() const OVERRIDE;
 
  private:
   Curve25519KeyExchange();

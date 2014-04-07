@@ -17,13 +17,13 @@
 #include "base/file_util.h"
 #include "base/logging.h"
 #include "base/path_service.h"
-#include "base/process.h"
-#include "base/process_util.h"
-#include "base/string16.h"
+#include "base/process/process.h"
+#include "base/strings/string16.h"
 #include "base/win/registry.h"
 #include "base/win/scoped_handle.h"
 #include "base/win/windows_version.h"
-#include "cloud_print/virtual_driver/virtual_driver_switches.h"
+#include "chrome/common/chrome_switches.h"
+#include "cloud_print/common/win/cloud_print_utils.h"
 #include "cloud_print/virtual_driver/win/port_monitor/spooler_win.h"
 #include "cloud_print/virtual_driver/win/virtual_driver_consts.h"
 #include "cloud_print/virtual_driver/win/virtual_driver_helpers.h"
@@ -44,7 +44,7 @@ bool XpsIsInstalled() {
     return false;
   }
   xps_path = xps_path.Append(L"mxdwdrv.dll");
-  if (!file_util::PathExists(xps_path)) {
+  if (!base::PathExists(xps_path)) {
     return false;
   }
   return true;

@@ -31,9 +31,9 @@ class MediaGalleriesDialogViews : public MediaGalleriesDialog,
   virtual ~MediaGalleriesDialogViews();
 
   // MediaGalleriesDialog implementation:
-  virtual void UpdateGallery(const MediaGalleryPrefInfo* gallery,
+  virtual void UpdateGallery(const MediaGalleryPrefInfo& gallery,
                              bool permitted) OVERRIDE;
-  virtual void ForgetGallery(const MediaGalleryPrefInfo* gallery) OVERRIDE;
+  virtual void ForgetGallery(MediaGalleryPrefId gallery) OVERRIDE;
 
   // views::DialogDelegate implementation:
   virtual string16 GetWindowTitle() const OVERRIDE;
@@ -45,6 +45,7 @@ class MediaGalleriesDialogViews : public MediaGalleriesDialog,
   virtual string16 GetDialogButtonLabel(ui::DialogButton button) const OVERRIDE;
   virtual bool IsDialogButtonEnabled(ui::DialogButton button) const OVERRIDE;
   virtual ui::ModalType GetModalType() const OVERRIDE;
+  virtual views::View* CreateExtraView() OVERRIDE;
   virtual bool Cancel() OVERRIDE;
   virtual bool Accept() OVERRIDE;
   virtual views::NonClientFrameView* CreateNonClientFrameView(
@@ -55,15 +56,16 @@ class MediaGalleriesDialogViews : public MediaGalleriesDialog,
                              const ui::Event& event) OVERRIDE;
 
  private:
-  typedef std::map<const MediaGalleryPrefInfo*, views::Checkbox*> CheckboxMap;
+  typedef std::map<MediaGalleryPrefId, views::Checkbox*> CheckboxMap;
 
   void InitChildViews();
 
   // Adds a checkbox or updates an existing checkbox. Returns true if a new one
   // was added.
-  bool AddOrUpdateGallery(const MediaGalleryPrefInfo* gallery,
+  bool AddOrUpdateGallery(const MediaGalleryPrefInfo& gallery,
                           bool permitted,
-                          views::View* container);
+                          views::View* container,
+                          int trailing_vertical_space);
 
   MediaGalleriesDialogController* controller_;
 
@@ -73,7 +75,7 @@ class MediaGalleriesDialogViews : public MediaGalleriesDialog,
   // The contents of the dialog. Owned by |window_|'s RootView.
   views::View* contents_;
 
-  // A map from media gallery to views::Checkbox view.
+  // A map from media gallery ID to views::Checkbox view.
   CheckboxMap checkbox_map_;
 
   // Pointer to the button to add a new gallery. Owned by parent in

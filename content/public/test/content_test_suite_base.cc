@@ -16,14 +16,15 @@
 #include "media/base/media.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/ui_base_paths.h"
-#include "ui/compositor/compositor_setup.h"
 
 #if defined(OS_ANDROID)
 #include "base/android/jni_android.h"
 #include "content/browser/android/browser_jni_registrar.h"
 #include "content/common/android/common_jni_registrar.h"
+#include "media/base/android/media_jni_registrar.h"
 #include "net/android/net_jni_registrar.h"
 #include "ui/android/ui_jni_registrar.h"
+#include "ui/gl/android/gl_jni_registrar.h"
 #include "ui/shell_dialogs/android/shell_dialogs_jni_registrar.h"
 #endif
 
@@ -53,6 +54,7 @@ void ContentTestSuiteBase::Initialize() {
   JNIEnv* env = base::android::AttachCurrentThread();
   content::android::RegisterCommonJni(env);
   content::android::RegisterBrowserJni(env);
+  media::RegisterJni(env);
   net::android::RegisterJni(env);
   ui::android::RegisterJni(env);
   ui::shell_dialogs::RegisterJni(env);
@@ -68,9 +70,6 @@ void ContentTestSuiteBase::Initialize() {
 
   RegisterPathProvider();
   ui::RegisterPathProvider();
-
-  // Mock out the compositor on platforms that use it.
-  ui::SetupTestCompositor();
 
   testing::UnitTest::GetInstance()->listeners().Append(
       new ContentTestSuiteBaseListener);

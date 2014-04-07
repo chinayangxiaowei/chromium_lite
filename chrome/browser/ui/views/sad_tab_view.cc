@@ -8,7 +8,7 @@
 
 #include "base/metrics/field_trial.h"
 #include "base/metrics/histogram.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/feedback/feedback_util.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
@@ -21,7 +21,7 @@
 #include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
-#include "ui/views/controls/button/text_button.h"
+#include "ui/views/controls/button/label_button.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/link.h"
@@ -40,18 +40,6 @@ const SkColor kCrashColor = SkColorSetRGB(35, 48, 64);
 const SkColor kKillColor = SkColorSetRGB(57, 48, 88);
 
 const char kCategoryTagCrash[] = "Crash";
-
-// Name of the experiment to run.
-const char kExperiment[] = "LowMemoryMargin";
-
-#define EXPERIMENT_CUSTOM_COUNTS(name, sample, min, max, buckets)          \
-    {                                                                      \
-      UMA_HISTOGRAM_CUSTOM_COUNTS(name, sample, min, max, buckets);        \
-      if (base::FieldTrialList::TrialExists(kExperiment))                  \
-        UMA_HISTOGRAM_CUSTOM_COUNTS(                                       \
-            base::FieldTrial::MakeName(name, kExperiment),                 \
-            sample, min, max, buckets);                                    \
-    }
 
 }  // namespace
 
@@ -79,14 +67,14 @@ SadTabView::SadTabView(WebContents* web_contents, chrome::SadTabKind kind)
     case chrome::SAD_TAB_KIND_CRASHED: {
       static int crashed = 0;
       crashed++;
-      EXPERIMENT_CUSTOM_COUNTS(
+      UMA_HISTOGRAM_CUSTOM_COUNTS(
           "Tabs.SadTab.CrashCreated", crashed, 1, 1000, 50);
       break;
     }
     case chrome::SAD_TAB_KIND_KILLED: {
       static int killed = 0;
       killed++;
-      EXPERIMENT_CUSTOM_COUNTS(
+      UMA_HISTOGRAM_CUSTOM_COUNTS(
           "Tabs.SadTab.KillCreated", killed, 1, 1000, 50);
       break;
     }
@@ -97,47 +85,8 @@ SadTabView::SadTabView(WebContents* web_contents, chrome::SadTabKind kind)
   // Set the background color.
   set_background(views::Background::CreateSolidBackground(
       (kind_ == chrome::SAD_TAB_KIND_CRASHED) ? kCrashColor : kKillColor));
-}
 
-SadTabView::~SadTabView() {}
-
-void SadTabView::LinkClicked(views::Link* source, int event_flags) {
-  DCHECK(web_contents_);
-  if (source == help_link_) {
-    GURL help_url((kind_ == chrome::SAD_TAB_KIND_CRASHED) ?
-        chrome::kCrashReasonURL : chrome::kKillReasonURL);
-    OpenURLParams params(
-        help_url, content::Referrer(), CURRENT_TAB,
-        content::PAGE_TRANSITION_LINK, false);
-    web_contents_->OpenURL(params);
-  } else if (source == feedback_link_) {
-    chrome::ShowFeedbackPage(
-        chrome::FindBrowserWithWebContents(web_contents_),
-        l10n_util::GetStringUTF8(IDS_KILLED_TAB_FEEDBACK_MESSAGE),
-        std::string(kCategoryTagCrash));
-  }
-}
-
-void SadTabView::ButtonPressed(views::Button* sender,
-                               const ui::Event& event) {
-  DCHECK(web_contents_);
-  DCHECK_EQ(reload_button_, sender);
-  web_contents_->GetController().Reload(true);
-}
-
-void SadTabView::Layout() {
-  // Specify the maximum message width explicitly.
-  message_->SizeToFit(static_cast<int>(width() * kMessageSize));
-  View::Layout();
-}
-
-void SadTabView::ViewHierarchyChanged(bool is_add,
-                                      views::View* parent,
-                                      views::View* child) {
-  if (child != this || !is_add)
-    return;
-
-  views::GridLayout* layout = views::GridLayout::CreatePanel(this);
+  views::GridLayout* layout = new views::GridLayout(this);
   SetLayoutManager(layout);
 
   const int column_set_id = 0;
@@ -170,11 +119,10 @@ void SadTabView::ViewHierarchyChanged(bool is_add,
 
   if (web_contents_) {
     layout->StartRowWithPadding(0, column_set_id, 0, kPadding);
-    reload_button_ = new views::TextButton(
+    reload_button_ = new views::LabelButton(
         this,
         l10n_util::GetStringUTF16(IDS_SAD_TAB_RELOAD_LABEL));
-    reload_button_->set_border(new views::TextButtonNativeThemeBorder(
-        reload_button_));
+    reload_button_->SetStyle(views::Button::STYLE_NATIVE_TEXTBUTTON);
     layout->AddView(reload_button_);
 
     help_link_ = CreateLink(l10n_util::GetStringUTF16(
@@ -212,6 +160,38 @@ void SadTabView::ViewHierarchyChanged(bool is_add,
     }
   }
   layout->AddPaddingRow(1, kPadding);
+}
+
+SadTabView::~SadTabView() {}
+
+void SadTabView::LinkClicked(views::Link* source, int event_flags) {
+  DCHECK(web_contents_);
+  if (source == help_link_) {
+    GURL help_url((kind_ == chrome::SAD_TAB_KIND_CRASHED) ?
+        chrome::kCrashReasonURL : chrome::kKillReasonURL);
+    OpenURLParams params(
+        help_url, content::Referrer(), CURRENT_TAB,
+        content::PAGE_TRANSITION_LINK, false);
+    web_contents_->OpenURL(params);
+  } else if (source == feedback_link_) {
+    chrome::ShowFeedbackPage(
+        chrome::FindBrowserWithWebContents(web_contents_),
+        l10n_util::GetStringUTF8(IDS_KILLED_TAB_FEEDBACK_MESSAGE),
+        std::string(kCategoryTagCrash));
+  }
+}
+
+void SadTabView::ButtonPressed(views::Button* sender,
+                               const ui::Event& event) {
+  DCHECK(web_contents_);
+  DCHECK_EQ(reload_button_, sender);
+  web_contents_->GetController().Reload(true);
+}
+
+void SadTabView::Layout() {
+  // Specify the maximum message width explicitly.
+  message_->SizeToFit(static_cast<int>(width() * kMessageSize));
+  View::Layout();
 }
 
 void SadTabView::OnPaint(gfx::Canvas* canvas) {

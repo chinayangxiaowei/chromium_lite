@@ -12,11 +12,16 @@
 #define NET_QUIC_QUIC_TIME_H_
 
 #include "base/basictypes.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "net/base/net_export.h"
 
 namespace net {
 
+static const uint64 kNumMicrosPerSecond = base::Time::kMicrosecondsPerSecond;
+
+// A QuicTime is a purely relative time. QuicTime values from different clocks
+// cannot be compared to each other. If you need an absolute time, see
+// QuicWallTime, below.
 class NET_EXPORT_PRIVATE QuicTime {
  public:
   // A QuicTime::Delta represents the signed difference between two points in
@@ -70,15 +75,11 @@ class NET_EXPORT_PRIVATE QuicTime {
   // will return false for these times.
   static QuicTime Zero();
 
-  // Create a new QuicTime holding the time_ms.
-  static QuicTime FromMilliseconds(int64 time_ms);
-
-  // Create a new QuicTime holding the time_us.
-  static QuicTime FromMicroseconds(int64 time_us);
-
-  int64 ToMilliseconds() const;
-
-  int64 ToMicroseconds() const;
+  // Produce the internal value to be used when logging.  This value
+  // represents the number of microseconds since some epoch.  It may
+  // be the UNIX epoch on some platforms.  On others, it may
+  // be a CPU ticks based value.
+  int64 ToDebuggingValue() const;
 
   bool IsInitialized() const;
 
@@ -89,10 +90,54 @@ class NET_EXPORT_PRIVATE QuicTime {
   Delta Subtract(const QuicTime& other) const;
 
  private:
-  base::TimeTicks ticks_;
+  friend bool operator==(QuicTime lhs, QuicTime rhs);
+  friend bool operator<(QuicTime lhs, QuicTime rhs);
 
   friend class QuicClock;
   friend class QuicClockTest;
+
+  base::TimeTicks ticks_;
+};
+
+// A QuicWallTime represents an absolute time that is globally consistent. It
+// provides, at most, one second granularity and, in practice, clock-skew means
+// that you shouldn't even depend on that.
+class NET_EXPORT_PRIVATE QuicWallTime {
+ public:
+  // FromUNIXSeconds constructs a QuicWallTime from a count of the seconds
+  // since the UNIX epoch.
+  static QuicWallTime FromUNIXSeconds(uint64 seconds);
+
+  // Zero returns a QuicWallTime set to zero. IsZero will return true for this
+  // value.
+  static QuicWallTime Zero();
+
+  // ToUNIXSeconds converts a QuicWallTime into a count of seconds since the
+  // UNIX epoch.
+  uint64 ToUNIXSeconds() const;
+
+  bool IsAfter(QuicWallTime other) const;
+  bool IsBefore(QuicWallTime other) const;
+
+  // IsZero returns true if this object is the result of calling |Zero|.
+  bool IsZero() const;
+
+  // AbsoluteDifference returns the absolute value of the time difference
+  // between |this| and |other|.
+  QuicTime::Delta AbsoluteDifference(QuicWallTime other) const;
+
+  // Add returns a new QuicWallTime that represents the time of |this| plus
+  // |delta|.
+  QuicWallTime Add(QuicTime::Delta delta) const;
+
+  // Subtract returns a new QuicWallTime that represents the time of |this|
+  // minus |delta|.
+  QuicWallTime Subtract(QuicTime::Delta delta) const;
+
+ private:
+  explicit QuicWallTime(uint64 seconds);
+
+  uint64 seconds_;
 };
 
 // Non-member relational operators for QuicTime::Delta.
@@ -116,13 +161,13 @@ inline bool operator>=(QuicTime::Delta lhs, QuicTime::Delta rhs) {
 }
 // Non-member relational operators for QuicTime.
 inline bool operator==(QuicTime lhs, QuicTime rhs) {
-  return lhs.ToMicroseconds() == rhs.ToMicroseconds();
+  return lhs.ticks_ == rhs.ticks_;
 }
 inline bool operator!=(QuicTime lhs, QuicTime rhs) {
   return !(lhs == rhs);
 }
 inline bool operator<(QuicTime lhs, QuicTime rhs) {
-  return lhs.ToMicroseconds() < rhs.ToMicroseconds();
+  return lhs.ticks_ < rhs.ticks_;
 }
 inline bool operator>(QuicTime lhs, QuicTime rhs) {
   return rhs < lhs;

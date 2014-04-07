@@ -5,23 +5,23 @@
 #ifndef CHROME_BROWSER_UI_WEBUI_CHROMEOS_LOGIN_NETWORK_SCREEN_HANDLER_H_
 #define CHROME_BROWSER_UI_WEBUI_CHROMEOS_LOGIN_NETWORK_SCREEN_HANDLER_H_
 
+#include <string>
+
 #include "base/compiler_specific.h"
-#include "chrome/browser/chromeos/login/network_screen_actor.h"
+#include "chrome/browser/chromeos/login/screens/network_screen_actor.h"
 #include "chrome/browser/ui/webui/chromeos/login/base_screen_handler.h"
 #include "ui/gfx/point.h"
 
-namespace base {
-class ListValue;
-}
-
 namespace chromeos {
+
+class CoreOobeActor;
 
 // WebUI implementation of NetworkScreenActor. It is used to interact with
 // the welcome screen (part of the page) of the OOBE.
 class NetworkScreenHandler : public NetworkScreenActor,
                              public BaseScreenHandler {
  public:
-  NetworkScreenHandler();
+  explicit NetworkScreenHandler(CoreOobeActor* core_oobe_actor);
   virtual ~NetworkScreenHandler();
 
   // NetworkScreenActor implementation:
@@ -36,8 +36,8 @@ class NetworkScreenHandler : public NetworkScreenActor,
   virtual void EnableContinue(bool enabled) OVERRIDE;
 
   // BaseScreenHandler implementation:
-  virtual void GetLocalizedStrings(
-      base::DictionaryValue* localized_strings) OVERRIDE;
+  virtual void DeclareLocalizedValues(LocalizedValuesBuilder* builder) OVERRIDE;
+  virtual void GetAdditionalParameters(base::DictionaryValue* dict) OVERRIDE;
   virtual void Initialize() OVERRIDE;
 
   // WebUIMessageHandler implementation:
@@ -45,13 +45,13 @@ class NetworkScreenHandler : public NetworkScreenActor,
 
  private:
   // Handles moving off the screen.
-  void HandleOnExit(const base::ListValue* args);
+  void HandleOnExit();
 
   // Handles change of the language.
-  void HandleOnLanguageChanged(const base::ListValue* args);
+  void HandleOnLanguageChanged(const std::string& locale);
 
   // Handles change of the input method.
-  void HandleOnInputMethodChanged(const base::ListValue* args);
+  void HandleOnInputMethodChanged(const std::string& id);
 
   // Returns available languages. Caller gets the ownership. Note, it does
   // depend on the current locale.
@@ -62,6 +62,7 @@ class NetworkScreenHandler : public NetworkScreenActor,
   static base::ListValue* GetInputMethods();
 
   NetworkScreenActor::Delegate* screen_;
+  CoreOobeActor* core_oobe_actor_;
 
   bool is_continue_enabled_;
 

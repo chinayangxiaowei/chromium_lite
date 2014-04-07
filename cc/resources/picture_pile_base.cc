@@ -4,7 +4,13 @@
 
 #include "cc/resources/picture_pile_base.h"
 
+#include <algorithm>
+#include <vector>
+
 #include "base/logging.h"
+#include "base/values.h"
+#include "cc/base/math_util.h"
+#include "cc/debug/traced_value.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/rect_conversions.h"
 
@@ -20,7 +26,9 @@ namespace cc {
 PicturePileBase::PicturePileBase()
     : min_contents_scale_(0),
       background_color_(SkColorSetARGBInline(0, 0, 0, 0)),
+      contents_opaque_(false),
       slow_down_raster_scale_factor_for_debug_(0),
+      show_debug_picture_borders_(false),
       num_raster_threads_(0) {
   tiling_.SetMaxTextureSize(gfx::Size(kBasePictureSize, kBasePictureSize));
   tile_grid_info_.fTileInterval.setEmpty();
@@ -35,8 +43,10 @@ PicturePileBase::PicturePileBase(const PicturePileBase* other)
       min_contents_scale_(other->min_contents_scale_),
       tile_grid_info_(other->tile_grid_info_),
       background_color_(other->background_color_),
+      contents_opaque_(other->contents_opaque_),
       slow_down_raster_scale_factor_for_debug_(
           other->slow_down_raster_scale_factor_for_debug_),
+      show_debug_picture_borders_(other->show_debug_picture_borders_),
       num_raster_threads_(other->num_raster_threads_) {
 }
 
@@ -47,8 +57,10 @@ PicturePileBase::PicturePileBase(
       min_contents_scale_(other->min_contents_scale_),
       tile_grid_info_(other->tile_grid_info_),
       background_color_(other->background_color_),
+      contents_opaque_(other->contents_opaque_),
       slow_down_raster_scale_factor_for_debug_(
           other->slow_down_raster_scale_factor_for_debug_),
+      show_debug_picture_borders_(other->show_debug_picture_borders_),
       num_raster_threads_(other->num_raster_threads_) {
   const PictureListMap& other_pic_list_map = other->picture_list_map_;
   for (PictureListMap::const_iterator map_iter = other_pic_list_map.begin();
@@ -111,7 +123,7 @@ void PicturePileBase::SetMinContentsScale(float min_contents_scale) {
   min_contents_scale_ = min_contents_scale;
 }
 
-void PicturePileBase::SetTileGridSize(const gfx::Size& tile_grid_size) {
+void PicturePileBase::SetTileGridSize(gfx::Size tile_grid_size) {
   tile_grid_info_.fTileInterval.set(
       tile_grid_size.width() - 2 * kTileGridBorderPixels,
       tile_grid_size.height() - 2 * kTileGridBorderPixels);
@@ -161,10 +173,31 @@ bool PicturePileBase::HasRecordingAt(int x, int y) {
 bool PicturePileBase::CanRaster(float contents_scale, gfx::Rect content_rect) {
   if (tiling_.total_size().IsEmpty())
     return false;
-  gfx::Rect layer_rect = gfx::ToEnclosingRect(
-      gfx::ScaleRect(content_rect, 1.f / contents_scale));
+  gfx::Rect layer_rect = gfx::ScaleToEnclosingRect(
+      content_rect, 1.f / contents_scale);
   layer_rect.Intersect(gfx::Rect(tiling_.total_size()));
   return recorded_region_.Contains(layer_rect);
+}
+
+scoped_ptr<base::Value> PicturePileBase::AsValue() const {
+  scoped_ptr<base::ListValue> pictures(new base::ListValue());
+  gfx::Rect layer_rect(tiling_.total_size());
+  for (TilingData::Iterator tile_iter(&tiling_, layer_rect);
+       tile_iter; ++tile_iter) {
+    PictureListMap::const_iterator map_iter =
+        picture_list_map_.find(tile_iter.index());
+    if (map_iter == picture_list_map_.end())
+      continue;
+    const PictureList& pic_list= map_iter->second;
+    if (pic_list.empty())
+      continue;
+    for (PictureList::const_reverse_iterator i = pic_list.rbegin();
+         i != pic_list.rend(); ++i) {
+      Picture* picture = (*i).get();
+      pictures->Append(TracedValue::CreateIDRef(picture).release());
+    }
+  }
+  return pictures.PassAs<base::Value>();
 }
 
 }  // namespace cc

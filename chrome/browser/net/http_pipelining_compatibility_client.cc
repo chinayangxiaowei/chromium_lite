@@ -6,9 +6,9 @@
 
 #include "base/metrics/field_trial.h"
 #include "base/metrics/histogram.h"
-#include "base/stringprintf.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
+#include "base/strings/stringprintf.h"
 #include "chrome/browser/io_thread.h"
 #include "chrome/common/chrome_version_info.h"
 #include "content/public/browser/browser_thread.h"
@@ -465,7 +465,8 @@ void CollectPipeliningCapabilityStatsOnIOThread(
   }
   // After May 4, 2012, the trial will disable itself.
   trial = base::FieldTrialList::FactoryGetFieldTrial(
-      kTrialName, kDivisor, "disable_test", 2012, 5, 4, NULL);
+      kTrialName, kDivisor, "disable_test", 2012, 5, 4,
+      base::FieldTrial::SESSION_RANDOMIZED, NULL);
 
   chrome::VersionInfo::Channel channel = chrome::VersionInfo::GetChannel();
   if (channel == chrome::VersionInfo::CHANNEL_CANARY) {

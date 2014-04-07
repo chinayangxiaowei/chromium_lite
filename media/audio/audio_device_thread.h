@@ -8,14 +8,16 @@
 #include "base/basictypes.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/shared_memory.h"
+#include "base/memory/shared_memory.h"
 #include "base/sync_socket.h"
 #include "base/synchronization/lock.h"
-#include "media/base/media_export.h"
 #include "media/audio/audio_parameters.h"
 #include "media/audio/shared_memory_util.h"
+#include "media/base/media_export.h"
 
+namespace base {
 class MessageLoop;
+}
 
 namespace media {
 class AudioBus;
@@ -86,7 +88,7 @@ class MEDIA_EXPORT AudioDeviceThread {
   // in order to join the worker thread and close the thread handle later via a
   // posted task.
   // If set to NULL, function will wait for the thread to exit before returning.
-  void Stop(MessageLoop* loop_for_join);
+  void Stop(base::MessageLoop* loop_for_join);
 
   // Returns true if the thread is stopped or stopping.
   bool IsStopped();

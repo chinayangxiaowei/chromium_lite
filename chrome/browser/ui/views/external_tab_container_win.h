@@ -18,13 +18,14 @@
 #include "chrome/browser/infobars/infobar_container.h"
 #include "chrome/browser/net/chrome_url_request_context.h"
 #include "chrome/browser/ui/blocked_content/blocked_content_tab_helper_delegate.h"
-#include "chrome/browser/ui/views/unhandled_keyboard_event_handler.h"
 #include "content/public/browser/navigation_type.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
+#include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "ui/base/accelerators/accelerator.h"
+#include "ui/views/controls/webview/unhandled_keyboard_event_handler.h"
 #include "ui/views/widget/widget_observer.h"
 
 class AutomationProvider;
@@ -43,6 +44,10 @@ class View;
 class WebView;
 class Widget;
 }
+
+#if defined(USE_AURA)
+class ContainerWindow;
+#endif
 
 // This class serves as the container window for an external tab.
 // An external tab is a Chrome tab that is meant to displayed in an
@@ -126,9 +131,11 @@ class ExternalTabContainerWin : public ExternalTabContainer,
       content::WebContents* source,
       const content::NativeWebKeyboardEvent& event) OVERRIDE;
   virtual bool TakeFocus(content::WebContents* source, bool reverse) OVERRIDE;
-  virtual bool CanDownload(content::RenderViewHost* render_view_host,
+  virtual void WebContentsFocused(content::WebContents* contents) OVERRIDE;
+  virtual void CanDownload(content::RenderViewHost* render_view_host,
                            int request_id,
-                           const std::string& request_method) OVERRIDE;
+                           const std::string& request_method,
+                           const base::Callback<void(bool)>& callback) OVERRIDE;
   virtual bool OnGoToEntryOffset(int offset) OVERRIDE;
   virtual bool HandleContextMenu(
       const content::ContextMenuParams& params) OVERRIDE;
@@ -139,6 +146,8 @@ class ExternalTabContainerWin : public ExternalTabContainer,
       GetJavaScriptDialogManager() OVERRIDE;
   virtual void ShowRepostFormWarningDialog(
       content::WebContents* source) OVERRIDE;
+  virtual content::ColorChooser* OpenColorChooser(
+      content::WebContents* web_contents, SkColor color) OVERRIDE;
   virtual void RunFileChooser(
       content::WebContents* tab,
       const content::FileChooserParams& params) OVERRIDE;
@@ -228,8 +237,8 @@ class ExternalTabContainerWin : public ExternalTabContainer,
   // Helper resource automation registration method, allowing registration of
   // pending RenderViewHosts.
   void RegisterRenderViewHostForAutomation(
-      content::RenderViewHost* render_view_host,
-      bool pending_view);
+      bool pending_view,
+      content::RenderViewHost* render_view_host);
 
   // Helper function for processing keystokes coming back from the renderer
   // process.
@@ -251,6 +260,8 @@ class ExternalTabContainerWin : public ExternalTabContainer,
   views::Widget* widget_;
   scoped_ptr<content::WebContents> web_contents_;
   scoped_refptr<AutomationProvider> automation_;
+
+  content::RenderViewHost::CreatedCallback rvh_callback_;
 
   content::NotificationRegistrar registrar_;
 
@@ -291,7 +302,7 @@ class ExternalTabContainerWin : public ExternalTabContainer,
   // The URL request context to be used for this tab. Can be NULL.
   scoped_refptr<ChromeURLRequestContextGetter> request_context_;
 
-  UnhandledKeyboardEventHandler unhandled_keyboard_event_handler_;
+  views::UnhandledKeyboardEventHandler unhandled_keyboard_event_handler_;
 
   // A mapping between accelerators and commands.
   std::map<ui::Accelerator, int> accelerator_table_;
@@ -323,6 +334,10 @@ class ExternalTabContainerWin : public ExternalTabContainer,
 
   // if this tab is a popup
   bool is_popup_window_;
+
+#if defined(USE_AURA)
+  base::WeakPtr<ContainerWindow> tab_container_window_;
+#endif
 
   DISALLOW_COPY_AND_ASSIGN(ExternalTabContainerWin);
 };

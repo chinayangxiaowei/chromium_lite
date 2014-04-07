@@ -9,12 +9,10 @@
 #include "base/callback.h"
 #include "base/files/file_path.h"
 #include "base/memory/ref_counted_memory.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/strings/string_split.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/common/time_format.h"
-#include "googleurl/src/gurl.h"
 #include "grit/generated_resources.h"
 #include "net/base/escape.h"
 #include "third_party/skia/include/core/SkBitmap.h"
@@ -22,6 +20,7 @@
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/webui/web_ui_util.h"
+#include "url/gurl.h"
 
 namespace {
 
@@ -48,15 +47,8 @@ void GetFilePathAndQuery(const std::string& url,
       gurl.path().substr(1), (net::UnescapeRule::URL_SPECIAL_CHARS |
                               net::UnescapeRule::SPACES));
 
-#if defined(OS_WIN)
-  // The path we receive has the wrong slashes and escaping for what we need;
-  // this only appears to matter for getting icons from .exe files.
-  std::replace(path.begin(), path.end(), '/', '\\');
-  *file_path = base::FilePath(UTF8ToWide(path));
-#elif defined(OS_POSIX)
-  // The correct encoding on Linux may not actually be UTF8.
-  *file_path = base::FilePath(path);
-#endif
+  *file_path = base::FilePath::FromUTF8Unsafe(path);
+  *file_path = file_path->NormalizePathSeparators();
   query->assign(gurl.query());
 }
 
@@ -106,7 +98,7 @@ void FileIconSource::FetchFileIcon(
     IconLoader::IconSize icon_size,
     const content::URLDataSource::GotDataCallback& callback) {
   IconManager* im = g_browser_process->icon_manager();
-  gfx::Image* icon = im->LookupIcon(path, icon_size);
+  gfx::Image* icon = im->LookupIconFromFilepath(path, icon_size);
 
   if (icon) {
     scoped_refptr<base::RefCountedBytes> icon_data(new base::RefCountedBytes);
@@ -114,7 +106,7 @@ void FileIconSource::FetchFileIcon(
         icon->ToImageSkia()->GetRepresentation(scale_factor).sk_bitmap(),
         false, &icon_data->data());
 
-    callback.Run(icon_data);
+    callback.Run(icon_data.get());
   } else {
     // Attach the ChromeURLDataManager request ID to the history request.
     IconRequestDetails details;
@@ -130,13 +122,14 @@ void FileIconSource::FetchFileIcon(
   }
 }
 
-std::string FileIconSource::GetSource() {
+std::string FileIconSource::GetSource() const {
   return kFileIconPath;
 }
 
 void FileIconSource::StartDataRequest(
     const std::string& url_path,
-    bool is_incognito,
+    int render_process_id,
+    int render_view_id,
     const content::URLDataSource::GotDataCallback& callback) {
   std::string query;
   base::FilePath file_path;
@@ -162,7 +155,7 @@ void FileIconSource::OnFileIconDataAvailable(const IconRequestDetails& details,
         false,
         &icon_data->data());
 
-    details.callback.Run(icon_data);
+    details.callback.Run(icon_data.get());
   } else {
     // TODO(glen): send a dummy icon.
     details.callback.Run(NULL);

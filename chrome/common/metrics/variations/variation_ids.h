@@ -82,7 +82,10 @@ enum VariationID {
   UNIFORMITY_SESSION_RANDOMIZED_5_PERCENT_LIMIT =
       UNIFORMITY_SESSION_RANDOMIZED_5_PERCENT_BASE + 20,
 
-  UNIFORMITY_TRIALS_MAX = 3300158,
+  // Name: UMA-Dynamic-Uniformity-Trial
+  // Range: 3300159 - 3300165
+  UNIFORMITY_DYNAMIC_TRIAL_BASE = 3300159,
+  UNIFORMITY_DYNAMIC_TRIAL_LIMIT = UNIFORMITY_DYNAMIC_TRIAL_BASE + 6,
 
   // Some values reserved for unit and integration tests.
   TEST_VALUE_A = 3300200,
@@ -99,9 +102,9 @@ enum VariationID {
 
   // Add new variation IDs below.
 
+  // DEPRECATED - DO NOT USE
   // Name: OmniboxSearchSuggest
   // Range: 3310000 - 3310019
-  // Suggest (Autocomplete) field trial, 20 IDs.
   // Now retired.  But please don't reuse these IDs; they may taint
   // your experiment results.
   SUGGEST_ID_MIN = 3310000,
@@ -121,13 +124,11 @@ enum VariationID {
   DUMMY_INSTANT_ID_EXPERIMENT_2 = 3310028,
   DUMMY_INSTANT_ID_EXPERIMENT_3 = 3310049,
 
+  // DEPRECATED - DO NOT USE
   // Name: OmniboxSearchSuggestStarted2012Q4
   // Range: 3310029 - 3310048
-  // Suggest (Autocomplete) field trial, 20 IDs.  This differs from
-  // the earlier omnibox suggest field trial in this file because
-  // we created a new trial (with a new name) in order to shuffle IDs.
-  // We assign new experiment IDs because it's a good practice not to
-  // reuse experiment IDs.
+  // Now retired.  But please don't reuse these IDs; they may taint
+  // your experiment results.
   SUGGEST_TRIAL_STARTED_2012_Q4_ID_MIN = 3310029,
   SUGGEST_TRIAL_STARTED_2012_Q4_ID_MAX = 3310048,
 
@@ -141,24 +142,40 @@ enum VariationID {
   EXTENDED_INSTANT_ID_DEV_GROUP_1    = 3310055,
   EXTENDED_INSTANT_ID_DEV_CONTROL    = 3310056,
 
+  // DEPRECATED - DO NOT USE
   // Name: OmniboxSearchSuggestTrialStarted2013Q1
   // Range: 3310060 - 3310079
-  // Suggest (Autocomplete) field trial, 20 IDs.  This differs from
-  // the earlier omnibox suggest field trials in this file because
-  // we created a new trial (with a new name) in order to shuffle IDs.
-  // We assign new experiment IDs because it's a good practice not to
-  // reuse experiment IDs.
+  // Now retired.  But please don't reuse these IDs; they may taint
+  // your experiment results.
   SUGGEST_TRIAL_STARTED_2013_Q1_ID_MIN = 3310060,
   SUGGEST_TRIAL_STARTED_2013_Q1_ID_MAX = 3310079,
 
   // Name: More IDs for the InstantExtended field trial.
   // Range: 3310080 - 3310085
-  EXTENDED_INSTANT_ID_BETA_GROUP_1   = 3310080,
-  EXTENDED_INSTANT_ID_BETA_CONTROL_1 = 3310081,
-  EXTENDED_INSTANT_ID_BETA_GROUP_2   = 3310082,
-  EXTENDED_INSTANT_ID_BETA_CONTROL_2 = 3310083,
-  EXTENDED_INSTANT_ID_CANARY_GROUP_2 = 3310084,
-  EXTENDED_INSTANT_ID_DEV_GROUP_2    = 3310085,
+  EXTENDED_INSTANT_ID_UNUSED_1            = 3310080,
+  EXTENDED_INSTANT_ID_UNUSED_2            = 3310081,
+  EXTENDED_INSTANT_ID_CANARY_CONTROL_2    = 3310082,
+  EXTENDED_INSTANT_ID_DEV_CONTROL_2       = 3310083,
+  EXTENDED_INSTANT_ID_CANARY_GROUP_2      = 3310084,
+  EXTENDED_INSTANT_ID_DEV_GROUP_2         = 3310085,
+  EXTENDED_INSTANT_ID_BETA_CONTROL_1      = 3310250,
+  EXTENDED_INSTANT_ID_BETA_CONTROL_2      = 3310251,
+  EXTENDED_INSTANT_ID_BETA_GROUP_1        = 3310252,
+  EXTENDED_INSTANT_ID_BETA_GROUP_2        = 3310253,
+  EXTENDED_INSTANT_ID_DEV_FRESH_CONTROL_1 = 3310254,
+  EXTENDED_INSTANT_ID_DEV_FRESH_CONTROL_2 = 3310255,
+  EXTENDED_INSTANT_ID_DEV_FRESH_GROUP_1   = 3310256,
+  EXTENDED_INSTANT_ID_DEV_FRESH_GROUP_2   = 3310257,
+  EXTENDED_INSTANT_ID_DEV_HOLDBACK        = 3310258,
+  EXTENDED_INSTANT_ID_DEV_OFFLINE_1       = 3310259,
+  EXTENDED_INSTANT_ID_DEV_OFFLINE_2       = 3310260,
+  EXTENDED_INSTANT_ID_DEV_INSTANT_1       = 3310261,
+  EXTENDED_INSTANT_ID_DEV_INSTANT_2       = 3310262,
+  // Reserve a contiguous chunk of IDs for Instant Extended.
+  EXTENDED_INSTANT_RANGE_ID_MIN           = 3310265,
+  EXTENDED_INSTANT_RANGE_ID_MAX           = 3310365,
+  EXTENDED_INSTANT_RANGE2_ID_MIN          = 3310368,
+  EXTENDED_INSTANT_RANGE2_ID_MAX          = 3310868,
 
   // Reserve 100 IDs to be used by autocomplete dynamic field trials.
   // The dynamic field trials are activated by a call to
@@ -202,10 +219,22 @@ enum VariationID {
   SEND_FEEDBACK_LINK_LOCATION_ALT_TEXT_AND_LOCATION_CROS_BETA = 3310219,
   SEND_FEEDBACK_LINK_LOCATION_DEFAULT = 3310249,
 
+  // OmniboxStopTimer field trial.
+  OMNIBOX_STOP_TIMER_CONTROL = 3310263,
+  OMNIBOX_STOP_TIMER_EXPERIMENT = 3310264,
+
+  // ShowAppLauncherPromo field trial
+  SHOW_APP_LAUNCHER_PROMO_UNTIL_DISMISSED = 3310366,
+  SHOW_APP_LAUNCHER_PROMO_RESET_PREF = 3310367,
+
+  // CookieRetentionPriorityStudy field trial.
+  COOKIE_RETENTION_PRIORITY_STUDY_EXPERIMENT_OFF = 3310869,
+  COOKIE_RETENTION_PRIORITY_STUDY_EXPERIMENT_ON = 3310870,
+
   // NEXT ID: When adding new IDs, please add them above this section, starting
   // with the value of NEXT_ID, and updating NEXT_ID to (end of your reserved
   // range) + 1.
-  NEXT_ID = 3310250,
+  NEXT_ID = 3310871,
 
   // USABLE IDs END HERE.
   //

@@ -6,9 +6,9 @@
 
 #include "base/bind.h"
 #include "base/command_line.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/prefs/pref_service.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/history/history_db_task.h"
 #include "chrome/browser/history/history_service.h"
@@ -25,7 +25,7 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_browser_thread.h"
-#include "googleurl/src/gurl.h"
+#include "url/gurl.h"
 
 using content::BrowserThread;
 
@@ -49,7 +49,7 @@ class WaitForHistoryTask : public history::HistoryDBTask {
   }
 
   virtual void DoneRunOnMainThread() OVERRIDE {
-    MessageLoop::current()->Quit();
+    base::MessageLoop::current()->Quit();
   }
 
  private:
@@ -91,7 +91,7 @@ class HistoryBrowserTest : public InProcessBrowserTest {
     HistoryService* history =
         HistoryServiceFactory::GetForProfile(GetProfile(),
                                              Profile::EXPLICIT_ACCESS);
-    history->HistoryService::ScheduleDBTask(task, &request_consumer);
+    history->HistoryService::ScheduleDBTask(task.get(), &request_consumer);
     content::RunMessageLoop();
   }
 
@@ -494,7 +494,7 @@ IN_PROC_BROWSER_TEST_F(HistoryBrowserTest, OneHistoryTabPerWindow) {
   EXPECT_EQ(expected_title, title_watcher.WaitAndGetTitle());
 
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), GURL(chrome::kAboutBlankURL), NEW_FOREGROUND_TAB,
+      browser(), GURL(content::kAboutBlankURL), NEW_FOREGROUND_TAB,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_NAVIGATION);
   chrome::ExecuteCommand(browser(), IDC_SHOW_HISTORY);
 

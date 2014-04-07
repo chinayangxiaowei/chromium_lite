@@ -23,7 +23,7 @@
 #include "content/public/browser/notification_registrar.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
-#include "googleurl/src/gurl.h"
+#include "url/gurl.h"
 
 struct RetargetingDetails;
 
@@ -224,7 +224,7 @@ class WebNavigationAPI : public ProfileKeyedAPI,
   explicit WebNavigationAPI(Profile* profile);
   virtual ~WebNavigationAPI();
 
-  // ProfileKeyedService implementation.
+  // BrowserContextKeyedService implementation.
   virtual void Shutdown() OVERRIDE;
 
   // ProfileKeyedAPI implementation.

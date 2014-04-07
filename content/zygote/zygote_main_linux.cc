@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "content/zygote/zygote_main.h"
+
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -14,30 +16,31 @@
 
 #include "base/basictypes.h"
 #include "base/command_line.h"
+#include "base/containers/hash_tables.h"
 #include "base/files/file_path.h"
-#include "base/hash_tables.h"
 #include "base/linux_util.h"
 #include "base/memory/scoped_ptr.h"
+#include "base/native_library.h"
 #include "base/pickle.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/posix/unix_domain_socket_linux.h"
-#include "base/process_util.h"
 #include "base/rand_util.h"
 #include "base/sys_info.h"
 #include "build/build_config.h"
 #include "content/common/font_config_ipc_linux.h"
-#include "content/common/pepper_plugin_registry.h"
+#include "content/common/pepper_plugin_list.h"
 #include "content/common/sandbox_linux.h"
 #include "content/common/zygote_commands_linux.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/main_function_params.h"
+#include "content/public/common/pepper_plugin_info.h"
 #include "content/public/common/sandbox_linux.h"
 #include "content/public/common/zygote_fork_delegate_linux.h"
 #include "content/zygote/zygote_linux.h"
 #include "crypto/nss_util.h"
 #include "sandbox/linux/services/libc_urandom_override.h"
 #include "sandbox/linux/suid/client/setuid_sandbox_client.h"
-#include "third_party/icu/public/i18n/unicode/timezone.h"
+#include "third_party/icu/source/i18n/unicode/timezone.h"
 #include "third_party/skia/include/ports/SkFontConfigInterface.h"
 
 #if defined(OS_LINUX)
@@ -48,13 +51,13 @@
 #include <signal.h>
 #endif
 
+#if defined(ENABLE_WEBRTC)
+#include "third_party/libjingle/overrides/init_webrtc.h"
+#endif
+
 namespace content {
 
 // See http://code.google.com/p/chromium/wiki/LinuxZygote
-
-// With SELinux we can carve out a precise sandbox, so we don't have to play
-// with intercepting libc calls.
-#if !defined(CHROMIUM_SELINUX)
 
 static void ProxyLocaltimeCallToBrowser(time_t input, struct tm* output,
                                         char* timezone_out,
@@ -247,7 +250,26 @@ struct tm* localtime64_r_override(const time_t* timep, struct tm* result) {
   }
 }
 
-#endif  // !CHROMIUM_SELINUX
+#if defined(ENABLE_PLUGINS)
+// Loads the (native) libraries but does not initialize them (i.e., does not
+// call PPP_InitializeModule). This is needed by the zygote on Linux to get
+// access to the plugins before entering the sandbox.
+void PreloadPepperPlugins() {
+  std::vector<PepperPluginInfo> plugins;
+  ComputePepperPluginList(&plugins);
+  for (size_t i = 0; i < plugins.size(); ++i) {
+    if (!plugins[i].is_internal && plugins[i].is_sandboxed) {
+      std::string error;
+      base::NativeLibrary library = base::LoadNativeLibrary(plugins[i].path,
+                                                            &error);
+      DLOG_IF(WARNING, !library) << "Unable to load plugin "
+                                 << plugins[i].path.value() << " "
+                                 << error;
+      (void)library;  // Prevent release-mode warning.
+    }
+  }
+}
+#endif
 
 // This function triggers the static and lazy construction of objects that need
 // to be created before imposing the sandbox.
@@ -277,11 +299,13 @@ static void PreSandboxInit() {
 #endif
 #if defined(ENABLE_PLUGINS)
   // Ensure access to the Pepper plugins before the sandbox is turned on.
-  PepperPluginRegistry::PreloadModules();
+  PreloadPepperPlugins();
+#endif
+#if defined(ENABLE_WEBRTC)
+  InitializeWebRtcModule();
 #endif
 }
 
-#if !defined(CHROMIUM_SELINUX)
 // Do nothing here
 static void SIGCHLDHandler(int signal) {
 }
@@ -427,37 +451,15 @@ static bool EnterSandbox(sandbox::SetuidSandboxClient* setuid_sandbox,
 
   return true;
 }
-#else  // CHROMIUM_SELINUX
-
-static bool EnterSandbox(sandbox::SetuidSandboxClient* setuid_sandbox,
-                         bool* using_suid_sandbox, bool* has_started_new_init) {
-  *using_suid_sandbox = false;
-  *has_started_new_init = false;
-
-  if (!setuid_sandbox)
-    return false;
-
-  PreSandboxInit();
-  SkFontConfigInterface::SetGlobal(
-      new FontConfigIPC(Zygote::kMagicSandboxIPCDescriptor)))->unref();
-  return true;
-}
-
-#endif  // CHROMIUM_SELINUX
 
 bool ZygoteMain(const MainFunctionParams& params,
                 ZygoteForkDelegate* forkdelegate) {
-#if !defined(CHROMIUM_SELINUX)
   g_am_zygote_or_renderer = true;
   sandbox::InitLibcUrandomOverrides();
-#endif
 
   LinuxSandbox* linux_sandbox = LinuxSandbox::GetInstance();
   // This will pre-initialize the various sandboxes that need it.
-  // There need to be a corresponding call to PreinitializeSandboxFinish()
-  // for each new process, this will be done in the Zygote child, once we know
-  // our process type.
-  linux_sandbox->PreinitializeSandboxBegin();
+  linux_sandbox->PreinitializeSandbox();
 
   sandbox::SetuidSandboxClient* setuid_sandbox =
       linux_sandbox->setuid_sandbox_client();
@@ -469,7 +471,7 @@ bool ZygoteMain(const MainFunctionParams& params,
     VLOG(1) << "ZygoteMain: fork delegate is NULL";
   }
 
-  // Turn on the SELinux or SUID sandbox.
+  // Turn on the sandbox.
   bool using_suid_sandbox = false;
   bool has_started_new_init = false;
 

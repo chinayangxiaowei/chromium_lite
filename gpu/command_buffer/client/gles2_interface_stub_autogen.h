@@ -77,7 +77,6 @@ virtual void Enable(GLenum cap) OVERRIDE;
 virtual void EnableVertexAttribArray(GLuint index) OVERRIDE;
 virtual void Finish() OVERRIDE;
 virtual void Flush() OVERRIDE;
-virtual void ShallowFlushCHROMIUM() OVERRIDE;
 virtual void FramebufferRenderbuffer(
     GLenum target, GLenum attachment, GLenum renderbuffertarget,
     GLuint renderbuffer) OVERRIDE;
@@ -165,6 +164,8 @@ virtual void ShaderBinary(
 virtual void ShaderSource(
     GLuint shader, GLsizei count, const GLchar* const* str,
     const GLint* length) OVERRIDE;
+virtual void ShallowFinishCHROMIUM() OVERRIDE;
+virtual void ShallowFlushCHROMIUM() OVERRIDE;
 virtual void StencilFunc(GLenum func, GLint ref, GLuint mask) OVERRIDE;
 virtual void StencilFuncSeparate(
     GLenum face, GLenum func, GLint ref, GLuint mask) OVERRIDE;
@@ -247,6 +248,9 @@ virtual void BlitFramebufferEXT(
 virtual void RenderbufferStorageMultisampleEXT(
     GLenum target, GLsizei samples, GLenum internalformat, GLsizei width,
     GLsizei height) OVERRIDE;
+virtual void FramebufferTexture2DMultisampleEXT(
+    GLenum target, GLenum attachment, GLenum textarget, GLuint texture,
+    GLint level, GLsizei samples) OVERRIDE;
 virtual void TexStorage2DEXT(
     GLenum target, GLsizei levels, GLenum internalFormat, GLsizei width,
     GLsizei height) OVERRIDE;
@@ -279,6 +283,8 @@ virtual void RegisterSharedIdsCHROMIUM(
 virtual GLboolean EnableFeatureCHROMIUM(const char* feature) OVERRIDE;
 virtual void* MapBufferCHROMIUM(GLuint target, GLenum access) OVERRIDE;
 virtual GLboolean UnmapBufferCHROMIUM(GLuint target) OVERRIDE;
+virtual void* MapImageCHROMIUM(GLuint image_id, GLenum access) OVERRIDE;
+virtual void UnmapImageCHROMIUM(GLuint image_id) OVERRIDE;
 virtual void* MapBufferSubDataCHROMIUM(
     GLuint target, GLintptr offset, GLsizeiptr size, GLenum access) OVERRIDE;
 virtual void UnmapBufferSubDataCHROMIUM(const void* mem) OVERRIDE;
@@ -286,7 +292,8 @@ virtual void* MapTexSubImage2DCHROMIUM(
     GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width,
     GLsizei height, GLenum format, GLenum type, GLenum access) OVERRIDE;
 virtual void UnmapTexSubImage2DCHROMIUM(const void* mem) OVERRIDE;
-virtual void ResizeCHROMIUM(GLuint width, GLuint height) OVERRIDE;
+virtual void ResizeCHROMIUM(
+    GLuint width, GLuint height, GLfloat scale_factor) OVERRIDE;
 virtual const GLchar* GetRequestableExtensionsCHROMIUM() OVERRIDE;
 virtual void RequestExtensionCHROMIUM(const char* extension) OVERRIDE;
 virtual void RateLimitOffscreenContextCHROMIUM() OVERRIDE;
@@ -297,6 +304,11 @@ virtual void GetProgramInfoCHROMIUM(
     GLuint program, GLsizei bufsize, GLsizei* size, void* info) OVERRIDE;
 virtual GLuint CreateStreamTextureCHROMIUM(GLuint texture) OVERRIDE;
 virtual void DestroyStreamTextureCHROMIUM(GLuint texture) OVERRIDE;
+virtual GLuint CreateImageCHROMIUM(
+    GLsizei width, GLsizei height, GLenum internalformat) OVERRIDE;
+virtual void DestroyImageCHROMIUM(GLuint image_id) OVERRIDE;
+virtual void GetImageParameterivCHROMIUM(
+    GLuint image_id, GLenum pname, GLint* params) OVERRIDE;
 virtual void GetTranslatedShaderSourceANGLE(
     GLuint shader, GLsizei bufsize, GLsizei* length, char* source) OVERRIDE;
 virtual void PostSubBufferCHROMIUM(
@@ -306,7 +318,7 @@ virtual void TexImageIOSurface2DCHROMIUM(
     GLuint plane) OVERRIDE;
 virtual void CopyTextureCHROMIUM(
     GLenum target, GLenum source_id, GLenum dest_id, GLint level,
-    GLint internalformat) OVERRIDE;
+    GLint internalformat, GLenum dest_type) OVERRIDE;
 virtual void DrawArraysInstancedANGLE(
     GLenum mode, GLint first, GLsizei count, GLsizei primcount) OVERRIDE;
 virtual void DrawElementsInstancedANGLE(

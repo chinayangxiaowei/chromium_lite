@@ -7,7 +7,7 @@
 #include <algorithm>
 
 #include "base/logging.h"
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "cc/base/math_util.h"
 #include "cc/debug/debug_colors.h"
 #include "cc/layers/delegated_renderer_layer_impl.h"
@@ -33,6 +33,7 @@ RenderSurfaceImpl::RenderSurfaceImpl(LayerImpl* owning_layer)
       target_surface_transforms_are_animating_(false),
       screen_space_transforms_are_animating_(false),
       is_clipped_(false),
+      contributes_to_drawn_surface_(false),
       nearest_ancestor_that_moves_pixels_(NULL),
       target_render_surface_layer_index_history_(0),
       current_layer_index_history_(0) {
@@ -56,60 +57,6 @@ std::string RenderSurfaceImpl::Name() const {
   return base::StringPrintf("RenderSurfaceImpl(id=%i,owner=%s)",
                             owning_layer_->id(),
                             owning_layer_->debug_name().data());
-}
-
-static std::string IndentString(int indent) {
-  std::string str;
-  for (int i = 0; i != indent; ++i)
-    str.append("  ");
-  return str;
-}
-
-void RenderSurfaceImpl::DumpSurface(std::string* str, int indent) const {
-  std::string indent_str = IndentString(indent);
-  str->append(indent_str);
-  base::StringAppendF(str, "%s\n", Name().data());
-
-  indent_str.append("  ");
-  str->append(indent_str);
-  base::StringAppendF(str,
-                      "content_rect: (%d, %d, %d, %d)\n",
-                      content_rect_.x(),
-                      content_rect_.y(),
-                      content_rect_.width(),
-                      content_rect_.height());
-
-  str->append(indent_str);
-  base::StringAppendF(str,
-                      "draw_transform: "
-                      "%f, %f, %f, %f, "
-                      "%f, %f, %f, %f, "
-                      "%f, %f, %f, %f, "
-                      "%f, %f, %f, %f\n",
-                      draw_transform_.matrix().getDouble(0, 0),
-                      draw_transform_.matrix().getDouble(0, 1),
-                      draw_transform_.matrix().getDouble(0, 2),
-                      draw_transform_.matrix().getDouble(0, 3),
-                      draw_transform_.matrix().getDouble(1, 0),
-                      draw_transform_.matrix().getDouble(1, 1),
-                      draw_transform_.matrix().getDouble(1, 2),
-                      draw_transform_.matrix().getDouble(1, 3),
-                      draw_transform_.matrix().getDouble(2, 0),
-                      draw_transform_.matrix().getDouble(2, 1),
-                      draw_transform_.matrix().getDouble(2, 2),
-                      draw_transform_.matrix().getDouble(2, 3),
-                      draw_transform_.matrix().getDouble(3, 0),
-                      draw_transform_.matrix().getDouble(3, 1),
-                      draw_transform_.matrix().getDouble(3, 2),
-                      draw_transform_.matrix().getDouble(3, 3));
-
-  str->append(indent_str);
-  base::StringAppendF(str,
-                      "current_damage_rect is pos(%f, %f), size(%f, %f)\n",
-                      damage_tracker_->current_damage_rect().x(),
-                      damage_tracker_->current_damage_rect().y(),
-                      damage_tracker_->current_damage_rect().width(),
-                      damage_tracker_->current_damage_rect().height());
 }
 
 int RenderSurfaceImpl::OwningLayerId() const {
@@ -226,13 +173,13 @@ void RenderSurfaceImpl::AppendQuads(QuadSink* quad_sink,
     quad_sink->Append(debug_border_quad.PassAs<DrawQuad>(), append_quads_data);
   }
 
-  // FIXME: By using the same RenderSurfaceImpl for both the content and its
-  // reflection, it's currently not possible to apply a separate mask to the
-  // reflection layer or correctly handle opacity in reflections (opacity must
-  // be applied after drawing both the layer and its reflection). The solution
-  // is to introduce yet another RenderSurfaceImpl to draw the layer and its
-  // reflection in. For now we only apply a separate reflection mask if the
-  // contents don't have a mask of their own.
+  // TODO(shawnsingh): By using the same RenderSurfaceImpl for both the content
+  // and its reflection, it's currently not possible to apply a separate mask to
+  // the reflection layer or correctly handle opacity in reflections (opacity
+  // must be applied after drawing both the layer and its reflection). The
+  // solution is to introduce yet another RenderSurfaceImpl to draw the layer
+  // and its reflection in. For now we only apply a separate reflection mask if
+  // the contents don't have a mask of their own.
   LayerImpl* mask_layer = owning_layer_->mask_layer();
   if (mask_layer &&
       (!mask_layer->DrawsContent() || mask_layer->bounds().IsEmpty()))
@@ -250,16 +197,15 @@ void RenderSurfaceImpl::AppendQuads(QuadSink* quad_sink,
     gfx::Vector2dF owning_layer_draw_scale =
         MathUtil::ComputeTransform2dScaleComponents(
             owning_layer_->draw_transform(), 1.f);
-    gfx::SizeF unclipped_surface_size = gfx::ScaleSize(
+    gfx::SizeF unclipped_mask_target_size = gfx::ScaleSize(
         owning_layer_->content_bounds(),
         owning_layer_draw_scale.x(),
         owning_layer_draw_scale.y());
-    // This assumes that the owning layer clips its subtree when a mask is
-    // present.
-    DCHECK(gfx::RectF(unclipped_surface_size).Contains(content_rect_));
 
-    float uv_scale_x = content_rect_.width() / unclipped_surface_size.width();
-    float uv_scale_y = content_rect_.height() / unclipped_surface_size.height();
+    float uv_scale_x =
+        content_rect_.width() / unclipped_mask_target_size.width();
+    float uv_scale_y =
+        content_rect_.height() / unclipped_mask_target_size.height();
 
     mask_uv_rect = gfx::RectF(
         uv_scale_x * content_rect_.x() / content_rect_.width(),

@@ -9,13 +9,12 @@
 #include "chrome/browser/autocomplete/autocomplete_input.h"
 #include "chrome/browser/autocomplete/autocomplete_match.h"
 #include "chrome/browser/autocomplete/autocomplete_provider.h"
-#include "googleurl/src/gurl.h"
+#include "url/gurl.h"
 
 // static
 const int AutocompleteClassifier::kDefaultOmniboxProviders =
     AutocompleteProvider::TYPE_BOOKMARK |
     AutocompleteProvider::TYPE_BUILTIN |
-    AutocompleteProvider::TYPE_HISTORY_CONTENTS |
     AutocompleteProvider::TYPE_HISTORY_QUICK |
     AutocompleteProvider::TYPE_HISTORY_URL |
     AutocompleteProvider::TYPE_KEYWORD |
@@ -25,6 +24,7 @@ const int AutocompleteClassifier::kDefaultOmniboxProviders =
 
 // static
 const int AutocompleteClassifier::kInstantExtendedOmniboxProviders =
+    AutocompleteProvider::TYPE_BOOKMARK |
     AutocompleteProvider::TYPE_BUILTIN |
     AutocompleteProvider::TYPE_HISTORY_QUICK |
     AutocompleteProvider::TYPE_HISTORY_URL |
@@ -32,6 +32,7 @@ const int AutocompleteClassifier::kInstantExtendedOmniboxProviders =
     // TODO: remove TYPE_SEARCH once it's no longer needed to pass
     // the Instant suggestion through via FinalizeInstantQuery.
     AutocompleteProvider::TYPE_SEARCH |
+    AutocompleteProvider::TYPE_SHORTCUTS |
     AutocompleteProvider::TYPE_ZERO_SUGGEST;
 
 AutocompleteClassifier::AutocompleteClassifier(Profile* profile)
@@ -53,7 +54,8 @@ void AutocompleteClassifier::Classify(const string16& text,
   DCHECK(!inside_classify_);
   base::AutoReset<bool> reset(&inside_classify_, true);
   controller_->Start(AutocompleteInput(
-      text, string16::npos, string16(), GURL(), true, prefer_keyword,
+      text, string16::npos, string16(), GURL(),
+      AutocompleteInput::INVALID_SPEC, true, prefer_keyword,
       allow_exact_keyword_match, AutocompleteInput::BEST_MATCH));
   DCHECK(controller_->done());
   const AutocompleteResult& result = controller_->result();

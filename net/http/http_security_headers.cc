@@ -4,9 +4,9 @@
 
 #include "base/base64.h"
 #include "base/basictypes.h"
-#include "base/string_number_conversions.h"
-#include "base/string_util.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_tokenizer.h"
+#include "base/strings/string_util.h"
 #include "net/http/http_security_headers.h"
 #include "net/http/http_util.h"
 
@@ -164,9 +164,9 @@ bool ParseAndAppendPin(const std::string& value,
 //     the UA, the UA MUST ignore the unrecognized directives and if the
 //     STS header field otherwise satisfies the above requirements (1
 //     through 4), the UA MUST process the recognized directives.
-bool ParseHSTSHeader(const base::Time& now, const std::string& value,
-                     base::Time* expiry,         // OUT
-                     bool* include_subdomains) {  // OUT
+bool ParseHSTSHeader(const std::string& value,
+                     base::TimeDelta* max_age,
+                     bool* include_subdomains) {
   uint32 max_age_candidate = 0;
   bool include_subdomains_candidate = false;
 
@@ -256,7 +256,7 @@ bool ParseHSTSHeader(const base::Time& now, const std::string& value,
     case AFTER_MAX_AGE:
     case AFTER_INCLUDE_SUBDOMAINS:
     case AFTER_UNKNOWN_LABEL:
-      *expiry = now + base::TimeDelta::FromSeconds(max_age_candidate);
+      *max_age = base::TimeDelta::FromSeconds(max_age_candidate);
       *include_subdomains = include_subdomains_candidate;
       return true;
     case START:
@@ -273,12 +273,13 @@ bool ParseHSTSHeader(const base::Time& now, const std::string& value,
 // "Public-Key-Pins" ":"
 //     "max-age" "=" delta-seconds ";"
 //     "pin-" algo "=" base64 [ ";" ... ]
-bool ParseHPKPHeader(const base::Time& now,
-                     const std::string& value,
+bool ParseHPKPHeader(const std::string& value,
                      const HashValueVector& chain_hashes,
-                     base::Time* expiry,
+                     base::TimeDelta* max_age,
+                     bool* include_subdomains,
                      HashValueVector* hashes) {
   bool parsed_max_age = false;
+  bool include_subdomains_candidate = false;
   uint32 max_age_candidate = 0;
   HashValueVector pins;
 
@@ -305,6 +306,8 @@ bool ParseHPKPHeader(const base::Time& now,
     } else if (LowerCaseEqualsASCII(equals.first, "pin-sha256")) {
       if (!ParseAndAppendPin(equals.second, HASH_VALUE_SHA256, &pins))
         return false;
+    } else if (LowerCaseEqualsASCII(equals.first, "includesubdomains")) {
+      include_subdomains_candidate = true;
     } else {
       // Silently ignore unknown directives for forward compatibility.
     }
@@ -318,7 +321,8 @@ bool ParseHPKPHeader(const base::Time& now,
   if (!IsPinListValid(pins, chain_hashes))
     return false;
 
-  *expiry = now + base::TimeDelta::FromSeconds(max_age_candidate);
+  *max_age = base::TimeDelta::FromSeconds(max_age_candidate);
+  *include_subdomains = include_subdomains_candidate;
   for (HashValueVector::const_iterator i = pins.begin();
        i != pins.end(); ++i) {
     hashes->push_back(*i);

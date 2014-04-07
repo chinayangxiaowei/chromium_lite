@@ -11,7 +11,7 @@ option optimize_for = LITE_RUNTIME;
 
 package metrics;
 
-// Next tag: 14
+// Next tag: 17
 message SystemProfileProto {
   // The time when the client was compiled/linked, in seconds since the epoch.
   optional int64 build_timestamp = 1;
@@ -58,7 +58,12 @@ message SystemProfileProto {
   // The date the user enabled UMA, in seconds since the epoch.
   // If the user has toggled the UMA enabled state multiple times, this will
   // be the most recent date on which UMA was enabled.
+  // For privacy, this is rounded to the nearest hour.
   optional int64 uma_enabled_date = 3;
+
+  // The time when the client was installed, in seconds since the epoch.
+  // For privacy, this is rounded to the nearest hour.
+  optional int64 install_date = 16;
 
   // The user's selected application locale, i.e. the user interface language.
   // The locale includes a language code and, possibly, also a country code,
@@ -78,7 +83,7 @@ message SystemProfileProto {
   }
   optional OS os = 5;
 
-  // Next tag for Hardware: 13
+  // Next tag for Hardware: 14
   // Information on the user's hardware.
   message Hardware {
     // The CPU architecture (x86, PowerPC, x86_64, ...)
@@ -116,6 +121,16 @@ message SystemProfileProto {
     optional float max_dpi_x = 9;
     optional float max_dpi_y = 10;
 
+    // Information on the CPU obtained by CPUID.
+    message CPU {
+      // A 12 character string naming the vendor, e.g. "GeniuneIntel".
+      optional string vendor_name = 1;
+
+      // The signature reported by CPUID (from EAX).
+      optional uint32 signature = 2;
+    }
+    optional CPU cpu = 13;
+
     // Information on the GPU
     message Graphics {
       // The GPU manufacturer's vendor id.
@@ -139,16 +154,71 @@ message SystemProfileProto {
         optional float overall_score = 3;
       }
       optional PerformanceStatistics performance_statistics = 5;
-      
-      // The GL_VENDOR string. An example of a gl_vendor string is 
+
+      // The GL_VENDOR string. An example of a gl_vendor string is
       // "Imagination Technologies". "" if we are not using OpenGL.
       optional string gl_vendor = 6;
-      
-      // The GL_RENDERER string. An example of a gl_renderer string is 
+
+      // The GL_RENDERER string. An example of a gl_renderer string is
       // "PowerVR SGX 540". "" if we are not using OpenGL.
       optional string gl_renderer = 7;
     }
     optional Graphics gpu = 8;
+
+    // Information about Bluetooth devices paired with the system.
+    message Bluetooth {
+      // Whether Bluetooth is present on this system.
+      optional bool is_present = 1;
+
+      // Whether Bluetooth is enabled on this system.
+      optional bool is_enabled = 2;
+
+      // Describes a paired device.
+      message PairedDevice {
+        // Assigned class of the device. This is a bitfield according to the
+        // Bluetooth specification available at the following URL:
+        // https://www.bluetooth.org/en-us/specification/assigned-numbers-overview/baseband
+        optional uint32 bluetooth_class = 1;
+
+        // Decoded device type.
+        enum Type {
+          DEVICE_UNKNOWN = 0;
+          DEVICE_COMPUTER = 1;
+          DEVICE_PHONE = 2;
+          DEVICE_MODEM = 3;
+          DEVICE_AUDIO = 4;
+          DEVICE_CAR_AUDIO = 5;
+          DEVICE_VIDEO = 6;
+          DEVICE_PERIPHERAL = 7;
+          DEVICE_JOYSTICK = 8;
+          DEVICE_GAMEPAD = 9;
+          DEVICE_KEYBOARD = 10;
+          DEVICE_MOUSE = 11;
+          DEVICE_TABLET = 12;
+          DEVICE_KEYBOARD_MOUSE_COMBO = 13;
+        }
+        optional Type type = 2;
+
+        // Vendor prefix of the Bluetooth address, these are OUI registered by
+        // the IEEE and are encoded with the first byte in bits 16-23, the
+        // second byte in bits 8-15 and the third byte in bits 0-7.
+        //
+        // ie. Google's OUI (00:1A:11) is encoded as 0x00001A11
+        optional uint32 vendor_prefix = 4;
+
+        // Vendor ID of the device, where available.
+        optional uint32 vendor_id = 5;
+
+        // Product ID of the device, where available.
+        optional uint32 product_id = 6;
+
+        // Device ID of the device, generally the release or version number in
+        // BCD format, where available.
+        optional uint32 device_id = 7;
+      }
+      repeated PairedDevice paired_device = 3;
+    }
+    optional Bluetooth bluetooth = 11;
   }
   optional Hardware hardware = 6;
 

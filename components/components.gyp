@@ -12,11 +12,15 @@
   'includes': [
     'autofill.gypi',
     'auto_login_parser.gypi',
+    'breakpad.gypi',
+    'browser_context_keyed_service.gypi',
     'components_tests.gypi',
     'navigation_interception.gypi',
+    'sessions.gypi',
     'user_prefs.gypi',
     'visitedlink.gypi',
     'webdata.gypi',
     'web_contents_delegate_android.gypi',
+    'web_modal.gypi',
   ],
 }

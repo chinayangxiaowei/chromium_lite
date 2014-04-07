@@ -8,12 +8,12 @@
 #include <cstdlib>
 
 #include "base/logging.h"
-#include "base/string_util.h"
 #include "base/strings/string_tokenizer.h"
+#include "base/strings/string_util.h"
 #include "build/build_config.h"
-#include "googleurl/src/gurl.h"
 #include "net/base/net_util.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
+#include "url/gurl.h"
 
 namespace net {
 namespace cookie_util {
@@ -24,8 +24,10 @@ bool DomainIsHostOnly(const std::string& domain_string) {
 
 std::string GetEffectiveDomain(const std::string& scheme,
                                const std::string& host) {
-  if (scheme == "http" || scheme == "https")
-    return RegistryControlledDomainService::GetDomainAndRegistry(host);
+  if (scheme == "http" || scheme == "https") {
+    return registry_controlled_domains::GetDomainAndRegistry(
+        host, net::registry_controlled_domains::EXCLUDE_PRIVATE_REGISTRIES);
+  }
 
   if (!DomainIsHostOnly(host))
     return host.substr(1);
@@ -196,6 +198,15 @@ base::Time ParseCookieTime(const std::string& time_string) {
   // NOTREACHED() << "Cookie exploded expiration failed: " << time_string;
 
   return base::Time();
+}
+
+GURL CookieOriginToURL(const std::string& domain, bool is_https) {
+  if (domain.empty())
+    return GURL();
+
+  const std::string scheme = is_https ? "https" : "http";
+  const std::string host = domain[0] == '.' ? domain.substr(1) : domain;
+  return GURL(scheme + "://" + host);
 }
 
 }  // namespace cookie_utils

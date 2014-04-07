@@ -7,16 +7,20 @@
 #include <set>
 
 #include "base/command_line.h"
+#include "base/environment.h"
 #include "base/i18n/rtl.h"
 #include "base/logging.h"
 #include "base/nix/mime_util_xdg.h"
 #include "base/stl_util.h"
+#include "base/strings/stringprintf.h"
 #include "chrome/browser/themes/theme_properties.h"
+#include "chrome/browser/ui/libgtk2ui/app_indicator_icon.h"
 #include "chrome/browser/ui/libgtk2ui/chrome_gtk_frame.h"
 #include "chrome/browser/ui/libgtk2ui/gtk2_util.h"
 #include "chrome/browser/ui/libgtk2ui/native_theme_gtk2.h"
 #include "chrome/browser/ui/libgtk2ui/select_file_dialog_impl.h"
 #include "chrome/browser/ui/libgtk2ui/skia_utils_gtk2.h"
+#include "chrome/browser/ui/libgtk2ui/unity_service.h"
 #include "grit/theme_resources.h"
 #include "grit/ui_resources.h"
 #include "third_party/skia/include/core/SkBitmap.h"
@@ -46,6 +50,12 @@
 // - Everything else that we're not doing.
 
 namespace {
+
+// Prefix for app indicator ids
+const char kAppIndicatorIdPrefix[] = "chrome_app_indicator_";
+
+// Number of app indicators used (used as part of app-indicator id).
+int indicators_count;
 
 // The size of the rendered toolbar image.
 const int kToolbarImageWidth = 64;
@@ -98,6 +108,8 @@ const int kThemeImages[] = {
 // A list of icons used in the autocomplete view that should be tinted to the
 // current gtk theme selection color so they stand out against the GtkEntry's
 // base color.
+// TODO(erg): Decide what to do about other icons that appear in the omnibox,
+// e.g. content settings icons.
 const int kAutocompleteImages[] = {
   IDR_OMNIBOX_EXTENSION_APP,
   IDR_OMNIBOX_HTTP,
@@ -108,9 +120,6 @@ const int kAutocompleteImages[] = {
   IDR_OMNIBOX_STAR_DARK,
   IDR_OMNIBOX_TTS,
   IDR_OMNIBOX_TTS_DARK,
-  IDR_GEOLOCATION_ALLOWED_LOCATIONBAR_ICON,
-  IDR_GEOLOCATION_DENIED_LOCATIONBAR_ICON,
-  IDR_REGISTER_PROTOCOL_HANDLER_LOCATIONBAR_ICON,
 };
 
 // This table converts button ids into a pair of gtk-stock id and state.
@@ -145,14 +154,23 @@ struct IDRGtkMapping {
 
 // The image resources that will be tinted by the 'button' tint value.
 const int kOtherToolbarButtonIDs[] = {
-  IDR_TOOLS, IDR_TOOLS_H, IDR_TOOLS_P,
-
-  // TODO(erg): The rest of these need to have some sort of injection done.
-  IDR_LOCATIONBG_C, IDR_LOCATIONBG_L, IDR_LOCATIONBG_R,
-  IDR_BROWSER_ACTIONS_OVERFLOW, IDR_BROWSER_ACTIONS_OVERFLOW_H,
+  IDR_TOOLBAR_BEZEL_HOVER,
+  IDR_TOOLBAR_BEZEL_PRESSED,
+  IDR_BROWSER_ACTION_H,
+  IDR_BROWSER_ACTION_P,
+  IDR_BROWSER_ACTIONS_OVERFLOW,
+  IDR_BROWSER_ACTIONS_OVERFLOW_H,
   IDR_BROWSER_ACTIONS_OVERFLOW_P,
-  IDR_MENU_DROPARROW,
-  IDR_THROBBER, IDR_THROBBER_WAITING, IDR_THROBBER_LIGHT,
+  IDR_THROBBER,
+  IDR_THROBBER_WAITING,
+  IDR_THROBBER_LIGHT,
+
+  // TODO(erg): The dropdown arrow should be tinted because we're injecting
+  // various background GTK colors, but the code that accesses them needs to be
+  // modified so that they ask their ui::ThemeProvider instead of the
+  // ResourceBundle. (i.e. in a light on dark theme, the dropdown arrow will be
+  // dark on dark)
+  IDR_MENU_DROPARROW
 };
 
 bool IsOverridableImage(int id) {
@@ -294,6 +312,8 @@ Gtk2UI::Gtk2UI() {
   // style-set signal handler.
   LoadGtkValues();
   SetXDGIconTheme();
+
+  indicators_count = 0;
 }
 
 Gtk2UI::~Gtk2UI() {
@@ -309,20 +329,20 @@ bool Gtk2UI::UseNativeTheme() const {
   return true;
 }
 
-gfx::Image* Gtk2UI::GetThemeImageNamed(int id) const {
+gfx::Image Gtk2UI::GetThemeImageNamed(int id) const {
   // Try to get our cached version:
   ImageCache::const_iterator it = gtk_images_.find(id);
   if (it != gtk_images_.end())
     return it->second;
 
   if (/*use_gtk_ && */ IsOverridableImage(id)) {
-    gfx::Image* image = new gfx::Image(
+    gfx::Image image = gfx::Image(
         gfx::ImageSkia::CreateFrom1xBitmap(GenerateGtkThemeBitmap(id)));
     gtk_images_[id] = image;
     return image;
   }
 
-  return NULL;
+  return gfx::Image();
 }
 
 bool Gtk2UI::GetColor(int id, SkColor* color) const {
@@ -335,8 +355,58 @@ bool Gtk2UI::GetColor(int id, SkColor* color) const {
   return false;
 }
 
+bool Gtk2UI::HasCustomImage(int id) const {
+  return IsOverridableImage(id);
+}
+
 ui::NativeTheme* Gtk2UI::GetNativeTheme() const {
   return NativeThemeGtk2::instance();
+}
+
+bool Gtk2UI::GetDefaultUsesSystemTheme() const {
+  scoped_ptr<base::Environment> env(base::Environment::Create());
+
+  switch (base::nix::GetDesktopEnvironment(env.get())) {
+    case base::nix::DESKTOP_ENVIRONMENT_GNOME:
+    case base::nix::DESKTOP_ENVIRONMENT_UNITY:
+    case base::nix::DESKTOP_ENVIRONMENT_XFCE:
+      return true;
+    case base::nix::DESKTOP_ENVIRONMENT_KDE3:
+    case base::nix::DESKTOP_ENVIRONMENT_KDE4:
+    case base::nix::DESKTOP_ENVIRONMENT_OTHER:
+      return false;
+  }
+  // Unless GetDesktopEnvironment() badly misbehaves, this should never happen.
+  NOTREACHED();
+  return false;
+}
+
+void Gtk2UI::SetDownloadCount(int count) const {
+  if (unity::IsRunning())
+    unity::SetDownloadCount(count);
+}
+
+void Gtk2UI::SetProgressFraction(float percentage) const {
+  if (unity::IsRunning())
+    unity::SetProgressFraction(percentage);
+}
+
+bool Gtk2UI::IsStatusIconSupported() const {
+  return AppIndicatorIcon::CouldOpen();
+}
+
+scoped_ptr<StatusIconLinux> Gtk2UI::CreateLinuxStatusIcon(
+    const gfx::ImageSkia& image,
+    const string16& tool_tip) const {
+  if (AppIndicatorIcon::CouldOpen()) {
+    ++indicators_count;
+    return scoped_ptr<StatusIconLinux>(new AppIndicatorIcon(
+        base::StringPrintf("%s%d", kAppIndicatorIdPrefix, indicators_count),
+        image,
+        tool_tip));
+  } else {
+    return scoped_ptr<StatusIconLinux>();
+  }
 }
 
 ui::SelectFileDialog* Gtk2UI::CreateSelectFileDialog(
@@ -699,14 +769,13 @@ SkBitmap Gtk2UI::GenerateGtkThemeBitmap(int id) const {
     // instead should tint based on the foreground text entry color in GTK+
     // mode because some themes that try to be dark *and* light have very
     // different colors between the omnibox and the normal background area.
+    // TODO(erg): Decide what to do about other icons that appear in the
+    // omnibox, e.g. content settings icons.
     case IDR_OMNIBOX_EXTENSION_APP:
     case IDR_OMNIBOX_HTTP:
     case IDR_OMNIBOX_SEARCH:
     case IDR_OMNIBOX_STAR:
-    case IDR_OMNIBOX_TTS:
-    case IDR_GEOLOCATION_ALLOWED_LOCATIONBAR_ICON:
-    case IDR_GEOLOCATION_DENIED_LOCATIONBAR_ICON:
-    case IDR_REGISTER_PROTOCOL_HANDLER_LOCATIONBAR_ICON: {
+    case IDR_OMNIBOX_TTS: {
       return GenerateTintedIcon(id, entry_tint_);
     }
     // In GTK mode, the dark versions of the omnibox icons only ever appear in
@@ -741,11 +810,14 @@ SkBitmap Gtk2UI::GenerateGtkThemeBitmap(int id) const {
     case IDR_STOP_P: {
       return GenerateGTKIcon(id);
     }
-    case IDR_TOOLS:
-    case IDR_TOOLS_H:
-    case IDR_TOOLS_P: {
-      return GenerateWrenchIcon(id);
-    }
+    case IDR_TOOLBAR_BEZEL_HOVER:
+      return GenerateToolbarBezel(GTK_STATE_PRELIGHT, IDR_TOOLBAR_BEZEL_HOVER);
+    case IDR_TOOLBAR_BEZEL_PRESSED:
+      return GenerateToolbarBezel(GTK_STATE_ACTIVE, IDR_TOOLBAR_BEZEL_PRESSED);
+    case IDR_BROWSER_ACTION_H:
+      return GenerateToolbarBezel(GTK_STATE_PRELIGHT, IDR_BROWSER_ACTION_H);
+    case IDR_BROWSER_ACTION_P:
+      return GenerateToolbarBezel(GTK_STATE_ACTIVE, IDR_BROWSER_ACTION_P);
     default: {
       return GenerateTintedIcon(id, button_tint_);
     }
@@ -795,7 +867,7 @@ SkBitmap Gtk2UI::GenerateFrameImage(
 }
 
 SkBitmap Gtk2UI::GenerateTabImage(int base_id) const {
-  const SkBitmap* base_image = GetThemeImageNamed(base_id)->ToSkBitmap();
+  const SkBitmap* base_image = GetThemeImageNamed(base_id).ToSkBitmap();
   SkBitmap bg_tint = SkBitmapOperations::CreateHSLShiftedBitmap(
       *base_image, GetDefaultTint(ThemeProperties::TINT_BACKGROUND_TAB));
   return SkBitmapOperations::CreateTiledBitmap(
@@ -874,17 +946,10 @@ SkBitmap Gtk2UI::GenerateGTKIcon(int base_id) const {
   return retval;
 }
 
-SkBitmap Gtk2UI::GenerateWrenchIcon(int base_id) const {
+SkBitmap Gtk2UI::GenerateToolbarBezel(int gtk_state, int sizing_idr) const {
   ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
-  SkBitmap default_bitmap = rb.GetImageNamed(IDR_TOOLS).AsBitmap();
-
-  // Part 1: Tint the wrench icon according to the button tint.
-  SkBitmap shifted = SkBitmapOperations::CreateHSLShiftedBitmap(
-      default_bitmap, button_tint_);
-
-  // The unhighlighted icon doesn't need to have a border composed onto it.
-  if (base_id == IDR_TOOLS)
-    return shifted;
+  SkBitmap default_bitmap =
+      rb.GetImageNamed(sizing_idr).AsBitmap();
 
   SkBitmap retval;
   retval.setConfig(SkBitmap::kARGB_8888_Config,
@@ -895,11 +960,10 @@ SkBitmap Gtk2UI::GenerateWrenchIcon(int base_id) const {
 
   SkCanvas canvas(retval);
   SkBitmap border = DrawGtkButtonBorder(
-      base_id == IDR_TOOLS_H ? GTK_STATE_PRELIGHT : GTK_STATE_ACTIVE,
+      gtk_state,
       default_bitmap.width(),
       default_bitmap.height());
   canvas.drawBitmap(border, 0, 0);
-  canvas.drawBitmap(shifted, 0, 0);
 
   return retval;
 }
@@ -973,7 +1037,7 @@ SkBitmap Gtk2UI::DrawGtkButtonBorder(int gtk_state,
 }
 
 void Gtk2UI::ClearAllThemeData() {
-  STLDeleteValues(&gtk_images_);
+  gtk_images_.clear();
 }
 
 }  // namespace libgtk2ui

@@ -5,7 +5,8 @@
 #include "net/quic/quic_stream_factory.h"
 
 #include "base/run_loop.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
+#include "net/cert/cert_verifier.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/http/http_response_headers.h"
 #include "net/http/http_response_info.h"
@@ -31,7 +32,9 @@ class QuicStreamFactoryTest : public ::testing::Test {
                  &crypto_client_stream_factory_,
                  &random_generator_, clock_),
         host_port_proxy_pair_(HostPortPair("www.google.com", 443),
-                              ProxyServer::Direct()) {
+                              ProxyServer::Direct()),
+        is_https_(false),
+        cert_verifier_(CertVerifier::CreateDefault()) {
   }
 
   scoped_ptr<QuicEncryptedPacket> ConstructRstPacket(
@@ -43,11 +46,10 @@ class QuicStreamFactoryTest : public ::testing::Test {
     header.public_header.version_flag = true;
     header.packet_sequence_number = num;
     header.entropy_flag = false;
-    header.fec_entropy_flag = false;
     header.fec_flag = false;
     header.fec_group = 0;
 
-    QuicRstStreamFrame rst(stream_id, QUIC_NO_ERROR);
+    QuicRstStreamFrame rst(stream_id, QUIC_STREAM_NO_ERROR);
     return scoped_ptr<QuicEncryptedPacket>(
         ConstructPacket(header, QuicFrame(&rst)));
   }
@@ -61,7 +63,6 @@ class QuicStreamFactoryTest : public ::testing::Test {
     header.public_header.version_flag = false;
     header.packet_sequence_number = 2;
     header.entropy_flag = false;
-    header.fec_entropy_flag = false;
     header.fec_flag = false;
     header.fec_group = 0;
 
@@ -71,17 +72,14 @@ class QuicStreamFactoryTest : public ::testing::Test {
     feedback.tcp.accumulated_number_of_lost_packets = 0;
     feedback.tcp.receive_window = 16000;
 
-    QuicFramer framer(kQuicVersion1,
-                      QuicDecrypter::Create(kNULL),
-                      QuicEncrypter::Create(kNULL),
-                      false);
+    QuicFramer framer(QuicVersionMax(), QuicTime::Zero(), false);
     QuicFrames frames;
     frames.push_back(QuicFrame(&ack));
     frames.push_back(QuicFrame(&feedback));
     scoped_ptr<QuicPacket> packet(
-        framer.ConstructFrameDataPacket(header, frames).packet);
-    return scoped_ptr<QuicEncryptedPacket>(
-        framer.EncryptPacket(header.packet_sequence_number, *packet));
+        framer.BuildUnsizedDataPacket(header, frames).packet);
+    return scoped_ptr<QuicEncryptedPacket>(framer.EncryptPacket(
+        ENCRYPTION_NONE, header.packet_sequence_number, *packet));
   }
 
   // Returns a newly created packet to send congestion feedback data.
@@ -93,7 +91,6 @@ class QuicStreamFactoryTest : public ::testing::Test {
     header.public_header.version_flag = false;
     header.packet_sequence_number = sequence_number;
     header.entropy_flag = false;
-    header.fec_entropy_flag = false;
     header.fec_flag = false;
     header.fec_group = 0;
 
@@ -109,25 +106,24 @@ class QuicStreamFactoryTest : public ::testing::Test {
   scoped_ptr<QuicEncryptedPacket> ConstructPacket(
       const QuicPacketHeader& header,
       const QuicFrame& frame) {
-    QuicFramer framer(kQuicVersion1,
-                      QuicDecrypter::Create(kNULL),
-                      QuicEncrypter::Create(kNULL),
-                      false);
+    QuicFramer framer(QuicVersionMax(), QuicTime::Zero(), false);
     QuicFrames frames;
     frames.push_back(frame);
     scoped_ptr<QuicPacket> packet(
-        framer.ConstructFrameDataPacket(header, frames).packet);
-    return scoped_ptr<QuicEncryptedPacket>(
-        framer.EncryptPacket(header.packet_sequence_number, *packet));
+        framer.BuildUnsizedDataPacket(header, frames).packet);
+    return scoped_ptr<QuicEncryptedPacket>(framer.EncryptPacket(
+        ENCRYPTION_NONE, header.packet_sequence_number, *packet));
   }
 
   MockHostResolver host_resolver_;
-  MockClientSocketFactory socket_factory_;
+  DeterministicMockClientSocketFactory socket_factory_;
   MockCryptoClientStreamFactory crypto_client_stream_factory_;
   MockRandom random_generator_;
   MockClock* clock_;  // Owned by factory_.
   QuicStreamFactory factory_;
   HostPortProxyPair host_port_proxy_pair_;
+  bool is_https_;
+  scoped_ptr<CertVerifier> cert_verifier_;
   BoundNetLog net_log_;
   TestCompletionCallback callback_;
 };
@@ -138,34 +134,31 @@ TEST_F(QuicStreamFactoryTest, CreateIfSessionExists) {
 }
 
 TEST_F(QuicStreamFactoryTest, Create) {
-  scoped_ptr<QuicEncryptedPacket> rst3(ConstructRstPacket(1, 3));
-  scoped_ptr<QuicEncryptedPacket> rst5(ConstructRstPacket(2, 5));
-  scoped_ptr<QuicEncryptedPacket> rst7(ConstructRstPacket(3, 7));
-  MockWrite writes[] = {
-    MockWrite(SYNCHRONOUS, rst3->data(), rst3->length()),
-    MockWrite(SYNCHRONOUS, rst5->data(), rst5->length()),
-    MockWrite(SYNCHRONOUS, rst7->data(), rst7->length()),
-  };
   MockRead reads[] = {
-    MockRead(ASYNC, OK),  // EOF
+    MockRead(ASYNC, OK, 0)  // EOF
   };
-  StaticSocketDataProvider socket_data(reads, arraysize(reads),
-                                       writes, arraysize(writes));
+  DeterministicSocketData socket_data(reads, arraysize(reads), NULL, 0);
   socket_factory_.AddSocketDataProvider(&socket_data);
+  socket_data.StopAfter(1);
 
   QuicStreamRequest request(&factory_);
-  EXPECT_EQ(ERR_IO_PENDING, request.Request(host_port_proxy_pair_, net_log_,
+  EXPECT_EQ(ERR_IO_PENDING, request.Request(host_port_proxy_pair_, is_https_,
+                                            cert_verifier_.get(), net_log_,
                                             callback_.callback()));
 
   EXPECT_EQ(OK, callback_.WaitForResult());
   scoped_ptr<QuicHttpStream> stream = request.ReleaseStream();
+  EXPECT_TRUE(stream.get());
 
   // Will reset stream 3.
   stream = factory_.CreateIfSessionExists(host_port_proxy_pair_, net_log_);
   EXPECT_TRUE(stream.get());
 
+  // TODO(rtenneti): We should probably have a tests that HTTP and HTTPS result
+  // in streams on different sessions.
   QuicStreamRequest request2(&factory_);
-  EXPECT_EQ(OK, request2.Request(host_port_proxy_pair_, net_log_,
+  EXPECT_EQ(OK, request2.Request(host_port_proxy_pair_, is_https_,
+                                 cert_verifier_.get(), net_log_,
                                  callback_.callback()));
   stream = request2.ReleaseStream();  // Will reset stream 5.
   stream.reset();  // Will reset stream 7.
@@ -174,14 +167,66 @@ TEST_F(QuicStreamFactoryTest, Create) {
   EXPECT_TRUE(socket_data.at_write_eof());
 }
 
+TEST_F(QuicStreamFactoryTest, MaxOpenStream) {
+  MockRead reads[] = {
+    MockRead(ASYNC, OK, 0)  // EOF
+  };
+  DeterministicSocketData socket_data(reads, arraysize(reads), NULL, 0);
+  socket_factory_.AddSocketDataProvider(&socket_data);
+  socket_data.StopAfter(1);
+
+  HttpRequestInfo request_info;
+  std::vector<QuicHttpStream*> streams;
+  // The MockCryptoClientStream sets max_open_streams to be
+  // 2 * kDefaultMaxStreamsPerConnection.
+  for (size_t i = 0; i < 2 * kDefaultMaxStreamsPerConnection; i++) {
+    QuicStreamRequest request(&factory_);
+    int rv = request.Request(host_port_proxy_pair_, is_https_,
+                             cert_verifier_.get(), net_log_,
+                             callback_.callback());
+    if (i == 0) {
+      EXPECT_EQ(ERR_IO_PENDING, rv);
+      EXPECT_EQ(OK, callback_.WaitForResult());
+    } else {
+      EXPECT_EQ(OK, rv);
+    }
+    scoped_ptr<QuicHttpStream> stream = request.ReleaseStream();
+    EXPECT_TRUE(stream);
+    EXPECT_EQ(OK, stream->InitializeStream(
+        &request_info, DEFAULT_PRIORITY, net_log_, CompletionCallback()));
+    streams.push_back(stream.release());
+  }
+
+  QuicStreamRequest request(&factory_);
+  EXPECT_EQ(OK, request.Request(host_port_proxy_pair_, is_https_,
+                                cert_verifier_.get(), net_log_,
+                                CompletionCallback()));
+  scoped_ptr<QuicHttpStream> stream = request.ReleaseStream();
+  EXPECT_TRUE(stream);
+  EXPECT_EQ(ERR_IO_PENDING, stream->InitializeStream(
+        &request_info, DEFAULT_PRIORITY, net_log_, callback_.callback()));
+
+  // Close the first stream.
+  streams.front()->Close(false);
+
+  ASSERT_TRUE(callback_.have_result());
+
+  EXPECT_EQ(OK, callback_.WaitForResult());
+
+  EXPECT_TRUE(socket_data.at_read_eof());
+  EXPECT_TRUE(socket_data.at_write_eof());
+  STLDeleteElements(&streams);
+}
+
 TEST_F(QuicStreamFactoryTest, CreateError) {
-  StaticSocketDataProvider socket_data(NULL, 0, NULL, 0);
+  DeterministicSocketData socket_data(NULL, 0, NULL, 0);
   socket_factory_.AddSocketDataProvider(&socket_data);
 
   host_resolver_.rules()->AddSimulatedFailure("www.google.com");
 
   QuicStreamRequest request(&factory_);
-  EXPECT_EQ(ERR_IO_PENDING, request.Request(host_port_proxy_pair_, net_log_,
+  EXPECT_EQ(ERR_IO_PENDING, request.Request(host_port_proxy_pair_, is_https_,
+                                            cert_verifier_.get(), net_log_,
                                             callback_.callback()));
 
   EXPECT_EQ(ERR_NAME_NOT_RESOLVED, callback_.WaitForResult());
@@ -191,23 +236,19 @@ TEST_F(QuicStreamFactoryTest, CreateError) {
 }
 
 TEST_F(QuicStreamFactoryTest, CancelCreate) {
-  scoped_ptr<QuicEncryptedPacket> rst3(ConstructRstPacket(1, 3));
-
-  MockWrite writes[] = {
-    MockWrite(SYNCHRONOUS, rst3->data(), rst3->length()),
-  };
   MockRead reads[] = {
-    MockRead(ASYNC, OK),  // EOF
+    MockRead(ASYNC, OK, 0)  // EOF
   };
-  StaticSocketDataProvider socket_data(reads, arraysize(reads),
-                                       writes, arraysize(writes));
+  DeterministicSocketData socket_data(reads, arraysize(reads), NULL, 0);
   socket_factory_.AddSocketDataProvider(&socket_data);
   {
     QuicStreamRequest request(&factory_);
-    EXPECT_EQ(ERR_IO_PENDING, request.Request(host_port_proxy_pair_, net_log_,
+    EXPECT_EQ(ERR_IO_PENDING, request.Request(host_port_proxy_pair_, is_https_,
+                                              cert_verifier_.get(), net_log_,
                                               callback_.callback()));
   }
 
+  socket_data.StopAfter(1);
   base::RunLoop run_loop;
   run_loop.RunUntilIdle();
 
@@ -221,30 +262,31 @@ TEST_F(QuicStreamFactoryTest, CancelCreate) {
 }
 
 TEST_F(QuicStreamFactoryTest, CloseAllSessions) {
-  scoped_ptr<QuicEncryptedPacket> rst3(ConstructRstPacket(1, 3));
   MockRead reads[] = {
-    MockRead(ASYNC, OK),  // EOF
+    MockRead(ASYNC, 0, 0)  // EOF
   };
-  StaticSocketDataProvider socket_data(reads, arraysize(reads),
-                                       NULL, 0);
+  DeterministicSocketData socket_data(reads, arraysize(reads), NULL, 0);
   socket_factory_.AddSocketDataProvider(&socket_data);
+  socket_data.StopAfter(1);
 
-  MockWrite writes2[] = {
-    MockWrite(SYNCHRONOUS, rst3->data(), rst3->length()),
-  };
   MockRead reads2[] = {
-    MockRead(ASYNC, OK),  // EOF
+    MockRead(ASYNC, 0, 0)  // EOF
   };
-  StaticSocketDataProvider socket_data2(reads2, arraysize(reads2),
-                                        writes2, arraysize(writes2));
+  DeterministicSocketData socket_data2(reads2, arraysize(reads2), NULL, 0);
   socket_factory_.AddSocketDataProvider(&socket_data2);
+  socket_data2.StopAfter(1);
 
   QuicStreamRequest request(&factory_);
-  EXPECT_EQ(ERR_IO_PENDING, request.Request(host_port_proxy_pair_, net_log_,
+  EXPECT_EQ(ERR_IO_PENDING, request.Request(host_port_proxy_pair_, is_https_,
+                                            cert_verifier_.get(), net_log_,
                                             callback_.callback()));
 
   EXPECT_EQ(OK, callback_.WaitForResult());
   scoped_ptr<QuicHttpStream> stream = request.ReleaseStream();
+  HttpRequestInfo request_info;
+  EXPECT_EQ(OK, stream->InitializeStream(&request_info,
+                                         DEFAULT_PRIORITY,
+                                         net_log_, CompletionCallback()));
 
   // Close the session and verify that stream saw the error.
   factory_.CloseAllSessions(ERR_INTERNET_DISCONNECTED);
@@ -255,7 +297,58 @@ TEST_F(QuicStreamFactoryTest, CloseAllSessions) {
   // a new session.
 
   QuicStreamRequest request2(&factory_);
-  EXPECT_EQ(ERR_IO_PENDING, request2.Request(host_port_proxy_pair_, net_log_,
+  EXPECT_EQ(ERR_IO_PENDING, request2.Request(host_port_proxy_pair_, is_https_,
+                                             cert_verifier_.get(), net_log_,
+                                             callback_.callback()));
+
+  EXPECT_EQ(OK, callback_.WaitForResult());
+  stream = request2.ReleaseStream();
+  stream.reset();  // Will reset stream 3.
+
+  EXPECT_TRUE(socket_data.at_read_eof());
+  EXPECT_TRUE(socket_data.at_write_eof());
+  EXPECT_TRUE(socket_data2.at_read_eof());
+  EXPECT_TRUE(socket_data2.at_write_eof());
+}
+
+TEST_F(QuicStreamFactoryTest, OnIPAddressChanged) {
+  MockRead reads[] = {
+    MockRead(ASYNC, 0, 0)  // EOF
+  };
+  DeterministicSocketData socket_data(reads, arraysize(reads), NULL, 0);
+  socket_factory_.AddSocketDataProvider(&socket_data);
+  socket_data.StopAfter(1);
+
+  MockRead reads2[] = {
+    MockRead(ASYNC, 0, 0)  // EOF
+  };
+  DeterministicSocketData socket_data2(reads2, arraysize(reads2), NULL, 0);
+  socket_factory_.AddSocketDataProvider(&socket_data2);
+  socket_data2.StopAfter(1);
+
+  QuicStreamRequest request(&factory_);
+  EXPECT_EQ(ERR_IO_PENDING, request.Request(host_port_proxy_pair_, is_https_,
+                                            cert_verifier_.get(), net_log_,
+                                            callback_.callback()));
+
+  EXPECT_EQ(OK, callback_.WaitForResult());
+  scoped_ptr<QuicHttpStream> stream = request.ReleaseStream();
+  HttpRequestInfo request_info;
+  EXPECT_EQ(OK, stream->InitializeStream(&request_info,
+                                         DEFAULT_PRIORITY,
+                                         net_log_, CompletionCallback()));
+
+  // Change the IP address and verify that stream saw the error.
+  factory_.OnIPAddressChanged();
+  EXPECT_EQ(ERR_NETWORK_CHANGED,
+            stream->ReadResponseHeaders(callback_.callback()));
+
+  // Now attempting to request a stream to the same origin should create
+  // a new session.
+
+  QuicStreamRequest request2(&factory_);
+  EXPECT_EQ(ERR_IO_PENDING, request2.Request(host_port_proxy_pair_, is_https_,
+                                             cert_verifier_.get(), net_log_,
                                              callback_.callback()));
 
   EXPECT_EQ(OK, callback_.WaitForResult());

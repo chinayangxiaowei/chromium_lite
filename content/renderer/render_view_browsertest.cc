@@ -4,33 +4,41 @@
 
 #include "base/basictypes.h"
 
-#include "base/shared_memory.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/memory/shared_memory.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
+#include "content/common/ssl_status_serialization.h"
 #include "content/common/view_messages.h"
 #include "content/public/browser/native_web_keyboard_event.h"
 #include "content/public/browser/web_ui_controller_factory.h"
 #include "content/public/common/bindings_policy.h"
+#include "content/public/common/page_zoom.h"
 #include "content/public/common/url_constants.h"
+#include "content/public/common/url_utils.h"
+#include "content/public/renderer/document_state.h"
+#include "content/public/renderer/history_item_serialization.h"
+#include "content/public/renderer/navigation_state.h"
 #include "content/public/test/render_view_test.h"
 #include "content/renderer/render_view_impl.h"
+#include "content/shell/common/shell_content_client.h"
 #include "content/shell/shell_content_browser_client.h"
-#include "content/shell/shell_content_client.h"
 #include "content/test/mock_keyboard.h"
 #include "net/base/net_errors.h"
+#include "net/cert/cert_status_flags.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebData.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebHTTPBody.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebString.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebURLError.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebHistoryItem.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebView.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebWindowFeatures.h"
+#include "third_party/WebKit/public/platform/WebData.h"
+#include "third_party/WebKit/public/platform/WebHTTPBody.h"
+#include "third_party/WebKit/public/platform/WebString.h"
+#include "third_party/WebKit/public/platform/WebURLError.h"
+#include "third_party/WebKit/public/platform/WebURLResponse.h"
+#include "third_party/WebKit/public/web/WebDataSource.h"
+#include "third_party/WebKit/public/web/WebFrame.h"
+#include "third_party/WebKit/public/web/WebHistoryItem.h"
+#include "third_party/WebKit/public/web/WebView.h"
+#include "third_party/WebKit/public/web/WebWindowFeatures.h"
 #include "ui/base/keycodes/keyboard_codes.h"
 #include "ui/base/range/range.h"
 #include "ui/gfx/codec/jpeg_codec.h"
-#include "webkit/glue/glue_serialize.h"
-#include "webkit/glue/web_io_operators.h"
 
 #if defined(OS_LINUX) && !defined(USE_AURA)
 #include "ui/base/gtk/event_synthesis_gtk.h"
@@ -204,7 +212,7 @@ class RenderViewImplTest : public RenderViewTest {
                                      flags);
     output->assign(1, static_cast<char16>(c));
     return 1;
-#elif defined(OS_LINUX)
+#elif defined(TOOLKIT_GTK)
     // We ignore |layout|, which means we are only testing the layout of the
     // current locale. TODO(estade): fix this to respect |layout|.
     std::vector<GdkEvent*> events;
@@ -299,9 +307,9 @@ TEST_F(RenderViewImplTest, OnNavigationHttpPost) {
   EXPECT_TRUE(host_nav_params.a.is_post);
 
   // Check post data sent to browser matches
-  EXPECT_FALSE(host_nav_params.a.content_state.empty());
-  const WebKit::WebHistoryItem item = webkit_glue::HistoryItemFromString(
-      host_nav_params.a.content_state);
+  EXPECT_TRUE(host_nav_params.a.page_state.IsValid());
+  const WebKit::WebHistoryItem item = PageStateToHistoryItem(
+      host_nav_params.a.page_state);
   WebKit::WebHTTPBody body = item.httpBody();
   WebKit::WebHTTPBody::Element element;
   bool successful = body.elementAt(0, element);
@@ -315,13 +323,16 @@ TEST_F(RenderViewImplTest, DecideNavigationPolicy) {
   WebUITestWebUIControllerFactory factory;
   WebUIControllerFactory::RegisterFactory(&factory);
 
+  DocumentState state;
+  state.set_navigation_state(NavigationState::CreateContentInitiated());
+
   // Navigations to normal HTTP URLs can be handled locally.
   WebKit::WebURLRequest request(GURL("http://foo.com"));
   WebKit::WebNavigationPolicy policy = view()->decidePolicyForNavigation(
       GetMainFrame(),
+      &state,
       request,
       WebKit::WebNavigationTypeLinkClicked,
-      WebKit::WebNode(),
       WebKit::WebNavigationPolicyCurrentTab,
       false);
   EXPECT_EQ(WebKit::WebNavigationPolicyCurrentTab, policy);
@@ -331,9 +342,9 @@ TEST_F(RenderViewImplTest, DecideNavigationPolicy) {
   form_request.setHTTPMethod("POST");
   policy = view()->decidePolicyForNavigation(
       GetMainFrame(),
+      &state,
       form_request,
       WebKit::WebNavigationTypeFormSubmitted,
-      WebKit::WebNode(),
       WebKit::WebNavigationPolicyCurrentTab,
       false);
   EXPECT_EQ(WebKit::WebNavigationPolicyIgnore, policy);
@@ -342,9 +353,9 @@ TEST_F(RenderViewImplTest, DecideNavigationPolicy) {
   WebKit::WebURLRequest popup_request(GURL("chrome://foo"));
   policy = view()->decidePolicyForNavigation(
       GetMainFrame(),
+      &state,
       popup_request,
       WebKit::WebNavigationTypeLinkClicked,
-      WebKit::WebNode(),
       WebKit::WebNavigationPolicyNewForegroundTab,
       false);
   EXPECT_EQ(WebKit::WebNavigationPolicyIgnore, policy);
@@ -354,13 +365,16 @@ TEST_F(RenderViewImplTest, DecideNavigationPolicyForWebUI) {
   // Enable bindings to simulate a WebUI view.
   view()->OnAllowBindings(BINDINGS_POLICY_WEB_UI);
 
+  DocumentState state;
+  state.set_navigation_state(NavigationState::CreateContentInitiated());
+
   // Navigations to normal HTTP URLs will be sent to browser process.
   WebKit::WebURLRequest request(GURL("http://foo.com"));
   WebKit::WebNavigationPolicy policy = view()->decidePolicyForNavigation(
       GetMainFrame(),
+      &state,
       request,
       WebKit::WebNavigationTypeLinkClicked,
-      WebKit::WebNode(),
       WebKit::WebNavigationPolicyCurrentTab,
       false);
   EXPECT_EQ(WebKit::WebNavigationPolicyIgnore, policy);
@@ -369,9 +383,9 @@ TEST_F(RenderViewImplTest, DecideNavigationPolicyForWebUI) {
   WebKit::WebURLRequest webui_request(GURL("chrome://foo"));
   policy = view()->decidePolicyForNavigation(
       GetMainFrame(),
+      &state,
       webui_request,
       WebKit::WebNavigationTypeLinkClicked,
-      WebKit::WebNode(),
       WebKit::WebNavigationPolicyCurrentTab,
       false);
   EXPECT_EQ(WebKit::WebNavigationPolicyIgnore, policy);
@@ -381,9 +395,9 @@ TEST_F(RenderViewImplTest, DecideNavigationPolicyForWebUI) {
   data_request.setHTTPMethod("POST");
   policy = view()->decidePolicyForNavigation(
       GetMainFrame(),
+      &state,
       data_request,
       WebKit::WebNavigationTypeFormSubmitted,
-      WebKit::WebNode(),
       WebKit::WebNavigationPolicyCurrentTab,
       false);
   EXPECT_EQ(WebKit::WebNavigationPolicyIgnore, policy);
@@ -398,9 +412,9 @@ TEST_F(RenderViewImplTest, DecideNavigationPolicyForWebUI) {
   RenderViewImpl* new_view = RenderViewImpl::FromWebView(new_web_view);
   policy = new_view->decidePolicyForNavigation(
       new_web_view->mainFrame(),
+      &state,
       popup_request,
       WebKit::WebNavigationTypeLinkClicked,
-      WebKit::WebNode(),
       WebKit::WebNavigationPolicyNewForegroundTab,
       false);
   EXPECT_EQ(WebKit::WebNavigationPolicyIgnore, policy);
@@ -417,32 +431,20 @@ TEST_F(RenderViewImplTest, SendSwapOutACK) {
   int initial_page_id = view()->GetPageId();
 
   // Respond to a swap out request.
-  ViewMsg_SwapOut_Params params;
-  params.closing_process_id = 10;
-  params.closing_route_id = 11;
-  params.new_render_process_host_id = 12;
-  params.new_request_id = 13;
-  view()->OnSwapOut(params);
+  view()->OnSwapOut();
 
   // Ensure the swap out commits synchronously.
   EXPECT_NE(initial_page_id, view()->GetPageId());
 
-  // Check for a valid OnSwapOutACK with echoed params.
+  // Check for a valid OnSwapOutACK.
   const IPC::Message* msg = render_thread_->sink().GetUniqueMessageMatching(
       ViewHostMsg_SwapOut_ACK::ID);
   ASSERT_TRUE(msg);
-  ViewHostMsg_SwapOut_ACK::Param reply_params;
-  ViewHostMsg_SwapOut_ACK::Read(msg, &reply_params);
-  EXPECT_EQ(params.closing_process_id, reply_params.a.closing_process_id);
-  EXPECT_EQ(params.closing_route_id, reply_params.a.closing_route_id);
-  EXPECT_EQ(params.new_render_process_host_id,
-            reply_params.a.new_render_process_host_id);
-  EXPECT_EQ(params.new_request_id, reply_params.a.new_request_id);
 
   // It is possible to get another swap out request.  Ensure that we send
   // an ACK, even if we don't have to do anything else.
   render_thread_->sink().ClearMessages();
-  view()->OnSwapOut(params);
+  view()->OnSwapOut();
   const IPC::Message* msg2 = render_thread_->sink().GetUniqueMessageMatching(
       ViewHostMsg_SwapOut_ACK::ID);
   ASSERT_TRUE(msg2);
@@ -479,7 +481,7 @@ TEST_F(RenderViewImplTest, ReloadWhileSwappedOut) {
       ViewHostMsg_UpdateState::ID);
   ASSERT_TRUE(msg_A);
   int page_id_A;
-  std::string state_A;
+  PageState state_A;
   ViewHostMsg_UpdateState::Read(msg_A, &page_id_A, &state_A);
   EXPECT_EQ(1, page_id_A);
   render_thread_->sink().ClearMessages();
@@ -492,17 +494,12 @@ TEST_F(RenderViewImplTest, ReloadWhileSwappedOut) {
   params_A.current_history_list_offset = 1;
   params_A.pending_history_list_offset = 0;
   params_A.page_id = 1;
-  params_A.state = state_A;
+  params_A.page_state = state_A;
   view()->OnNavigate(params_A);
   ProcessPendingMessages();
 
   // Respond to a swap out request.
-  ViewMsg_SwapOut_Params params;
-  params.closing_process_id = 10;
-  params.closing_route_id = 11;
-  params.new_render_process_host_id = 12;
-  params.new_request_id = 13;
-  view()->OnSwapOut(params);
+  view()->OnSwapOut();
 
   // Check for a OnSwapOutACK.
   const IPC::Message* msg = render_thread_->sink().GetUniqueMessageMatching(
@@ -511,7 +508,7 @@ TEST_F(RenderViewImplTest, ReloadWhileSwappedOut) {
   render_thread_->sink().ClearMessages();
 
   // It is possible to get a reload request at this point, containing the
-  // params.state of the initial page (e.g., if the new page fails the
+  // params.page_state of the initial page (e.g., if the new page fails the
   // provisional load in the renderer process, after we unload the old page).
   // Ensure the old page gets reloaded, not swappedout://.
   ViewMsg_Navigate_Params nav_params;
@@ -522,7 +519,7 @@ TEST_F(RenderViewImplTest, ReloadWhileSwappedOut) {
   nav_params.current_history_list_offset = 0;
   nav_params.pending_history_list_offset = 0;
   nav_params.page_id = 1;
-  nav_params.state = state_A;
+  nav_params.page_state = state_A;
   view()->OnNavigate(nav_params);
   ProcessPendingMessages();
 
@@ -555,7 +552,7 @@ TEST_F(RenderViewImplTest,  DISABLED_LastCommittedUpdateState) {
       ViewHostMsg_UpdateState::ID);
   ASSERT_TRUE(msg_A);
   int page_id_A;
-  std::string state_A;
+  PageState state_A;
   ViewHostMsg_UpdateState::Read(msg_A, &page_id_A, &state_A);
   EXPECT_EQ(1, page_id_A);
   render_thread_->sink().ClearMessages();
@@ -569,7 +566,7 @@ TEST_F(RenderViewImplTest,  DISABLED_LastCommittedUpdateState) {
       ViewHostMsg_UpdateState::ID);
   ASSERT_TRUE(msg_B);
   int page_id_B;
-  std::string state_B;
+  PageState state_B;
   ViewHostMsg_UpdateState::Read(msg_B, &page_id_B, &state_B);
   EXPECT_EQ(2, page_id_B);
   EXPECT_NE(state_A, state_B);
@@ -584,7 +581,7 @@ TEST_F(RenderViewImplTest,  DISABLED_LastCommittedUpdateState) {
       ViewHostMsg_UpdateState::ID);
   ASSERT_TRUE(msg_C);
   int page_id_C;
-  std::string state_C;
+  PageState state_C;
   ViewHostMsg_UpdateState::Read(msg_C, &page_id_C, &state_C);
   EXPECT_EQ(3, page_id_C);
   EXPECT_NE(state_B, state_C);
@@ -598,7 +595,7 @@ TEST_F(RenderViewImplTest,  DISABLED_LastCommittedUpdateState) {
   params_C.current_history_list_offset = 3;
   params_C.pending_history_list_offset = 2;
   params_C.page_id = 3;
-  params_C.state = state_C;
+  params_C.page_state = state_C;
   view()->OnNavigate(params_C);
   ProcessPendingMessages();
   render_thread_->sink().ClearMessages();
@@ -615,7 +612,7 @@ TEST_F(RenderViewImplTest,  DISABLED_LastCommittedUpdateState) {
   params_B.current_history_list_offset = 2;
   params_B.pending_history_list_offset = 1;
   params_B.page_id = 2;
-  params_B.state = state_B;
+  params_B.page_state = state_B;
   view()->OnNavigate(params_B);
 
   // Back to page A (page_id 1) and commit.
@@ -626,7 +623,7 @@ TEST_F(RenderViewImplTest,  DISABLED_LastCommittedUpdateState) {
   params_B.current_history_list_offset = 2;
   params_B.pending_history_list_offset = 0;
   params.page_id = 1;
-  params.state = state_A;
+  params.page_state = state_A;
   view()->OnNavigate(params);
   ProcessPendingMessages();
 
@@ -636,7 +633,7 @@ TEST_F(RenderViewImplTest,  DISABLED_LastCommittedUpdateState) {
       ViewHostMsg_UpdateState::ID);
   ASSERT_TRUE(msg);
   int page_id;
-  std::string state;
+  PageState state;
   ViewHostMsg_UpdateState::Read(msg, &page_id, &state);
   EXPECT_EQ(page_id_C, page_id);
   EXPECT_NE(state_A, state);
@@ -666,7 +663,7 @@ TEST_F(RenderViewImplTest, StaleNavigationsIgnored) {
       ViewHostMsg_UpdateState::ID);
   ASSERT_TRUE(msg_A);
   int page_id_A;
-  std::string state_A;
+  PageState state_A;
   ViewHostMsg_UpdateState::Read(msg_A, &page_id_A, &state_A);
   EXPECT_EQ(1, page_id_A);
   render_thread_->sink().ClearMessages();
@@ -679,7 +676,7 @@ TEST_F(RenderViewImplTest, StaleNavigationsIgnored) {
   params_A.current_history_list_offset = 1;
   params_A.pending_history_list_offset = 0;
   params_A.page_id = 1;
-  params_A.state = state_A;
+  params_A.page_state = state_A;
   view()->OnNavigate(params_A);
   ProcessPendingMessages();
 
@@ -697,7 +694,7 @@ TEST_F(RenderViewImplTest, StaleNavigationsIgnored) {
   params_B.current_history_list_offset = 0;
   params_B.pending_history_list_offset = 1;
   params_B.page_id = 2;
-  params_B.state = state_A;  // Doesn't matter, just has to be present.
+  params_B.page_state = state_A;  // Doesn't matter, just has to be present.
   view()->OnNavigate(params_B);
 
   // State should be unchanged.
@@ -731,7 +728,7 @@ TEST_F(RenderViewImplTest, DontIgnoreBackAfterNavEntryLimit) {
       ViewHostMsg_UpdateState::ID);
   ASSERT_TRUE(msg_A);
   int page_id_A;
-  std::string state_A;
+  PageState state_A;
   ViewHostMsg_UpdateState::Read(msg_A, &page_id_A, &state_A);
   EXPECT_EQ(1, page_id_A);
   render_thread_->sink().ClearMessages();
@@ -748,7 +745,7 @@ TEST_F(RenderViewImplTest, DontIgnoreBackAfterNavEntryLimit) {
       ViewHostMsg_UpdateState::ID);
   ASSERT_TRUE(msg_B);
   int page_id_B;
-  std::string state_B;
+  PageState state_B;
   ViewHostMsg_UpdateState::Read(msg_B, &page_id_B, &state_B);
   EXPECT_EQ(2, page_id_B);
   render_thread_->sink().ClearMessages();
@@ -763,7 +760,7 @@ TEST_F(RenderViewImplTest, DontIgnoreBackAfterNavEntryLimit) {
   params_B.current_history_list_offset = 1;
   params_B.pending_history_list_offset = 0;
   params_B.page_id = 2;
-  params_B.state = state_B;
+  params_B.page_state = state_B;
   view()->OnNavigate(params_B);
   ProcessPendingMessages();
 
@@ -774,7 +771,10 @@ TEST_F(RenderViewImplTest, DontIgnoreBackAfterNavEntryLimit) {
 
 // Test that our IME backend sends a notification message when the input focus
 // changes.
-TEST_F(RenderViewImplTest, OnImeStateChanged) {
+// crbug.com/276821:
+// Because Blink change cause this test failed, we first disabled this test and
+// fix later.
+TEST_F(RenderViewImplTest, DISABLED_OnImeTypeChanged) {
   // Enable our IME backend code.
   view()->OnSetInputMethodActive(true);
 
@@ -786,9 +786,45 @@ TEST_F(RenderViewImplTest, OnImeStateChanged) {
            "<body>"
            "<input id=\"test1\" type=\"text\" value=\"some text\"></input>"
            "<input id=\"test2\" type=\"password\"></input>"
+           "<input id=\"test3\" type=\"text\" inputmode=\"verbatim\"></input>"
+           "<input id=\"test4\" type=\"text\" inputmode=\"latin\"></input>"
+           "<input id=\"test5\" type=\"text\" inputmode=\"latin-name\"></input>"
+           "<input id=\"test6\" type=\"text\" inputmode=\"latin-prose\">"
+               "</input>"
+           "<input id=\"test7\" type=\"text\" inputmode=\"full-width-latin\">"
+               "</input>"
+           "<input id=\"test8\" type=\"text\" inputmode=\"kana\"></input>"
+           "<input id=\"test9\" type=\"text\" inputmode=\"katakana\"></input>"
+           "<input id=\"test10\" type=\"text\" inputmode=\"numeric\"></input>"
+           "<input id=\"test11\" type=\"text\" inputmode=\"tel\"></input>"
+           "<input id=\"test12\" type=\"text\" inputmode=\"email\"></input>"
+           "<input id=\"test13\" type=\"text\" inputmode=\"url\"></input>"
+           "<input id=\"test14\" type=\"text\" inputmode=\"unknown\"></input>"
+           "<input id=\"test15\" type=\"text\" inputmode=\"verbatim\"></input>"
            "</body>"
            "</html>");
   render_thread_->sink().ClearMessages();
+
+  struct InputModeTestCase {
+    const char* input_id;
+    ui::TextInputMode expected_mode;
+  };
+  static const InputModeTestCase kInputModeTestCases[] = {
+     {"test1", ui::TEXT_INPUT_MODE_DEFAULT},
+     {"test3", ui::TEXT_INPUT_MODE_VERBATIM},
+     {"test4", ui::TEXT_INPUT_MODE_LATIN},
+     {"test5", ui::TEXT_INPUT_MODE_LATIN_NAME},
+     {"test6", ui::TEXT_INPUT_MODE_LATIN_PROSE},
+     {"test7", ui::TEXT_INPUT_MODE_FULL_WIDTH_LATIN},
+     {"test8", ui::TEXT_INPUT_MODE_KANA},
+     {"test9", ui::TEXT_INPUT_MODE_KATAKANA},
+     {"test10", ui::TEXT_INPUT_MODE_NUMERIC},
+     {"test11", ui::TEXT_INPUT_MODE_TEL},
+     {"test12", ui::TEXT_INPUT_MODE_EMAIL},
+     {"test13", ui::TEXT_INPUT_MODE_URL},
+     {"test14", ui::TEXT_INPUT_MODE_DEFAULT},
+     {"test15", ui::TEXT_INPUT_MODE_VERBATIM},
+  };
 
   const int kRepeatCount = 10;
   for (int i = 0; i < kRepeatCount; i++) {
@@ -800,19 +836,19 @@ TEST_F(RenderViewImplTest, OnImeStateChanged) {
 
     // Update the IME status and verify if our IME backend sends an IPC message
     // to activate IMEs.
-    view()->UpdateTextInputState(RenderWidget::DO_NOT_SHOW_IME);
+    view()->UpdateTextInputType();
     const IPC::Message* msg = render_thread_->sink().GetMessageAt(0);
     EXPECT_TRUE(msg != NULL);
-    EXPECT_EQ(ViewHostMsg_TextInputStateChanged::ID, msg->type());
-    ViewHostMsg_TextInputStateChanged::Param params;
-    ViewHostMsg_TextInputStateChanged::Read(msg, &params);
-    EXPECT_EQ(ui::TEXT_INPUT_TYPE_TEXT, params.a.type);
-    EXPECT_EQ(true, params.a.can_compose_inline);
-    EXPECT_EQ("some text", params.a.value);
-    EXPECT_EQ(0, params.a.selection_start);
-    EXPECT_EQ(9, params.a.selection_end);
-    EXPECT_EQ(-1, params.a.composition_start);
-    EXPECT_EQ(-1, params.a.composition_end);
+    EXPECT_EQ(ViewHostMsg_TextInputTypeChanged::ID, msg->type());
+    ui::TextInputType type;
+    bool can_compose_inline = false;
+    ui::TextInputMode input_mode = ui::TEXT_INPUT_MODE_DEFAULT;
+    ViewHostMsg_TextInputTypeChanged::Read(msg,
+                                           &type,
+                                           &can_compose_inline,
+                                           &input_mode);
+    EXPECT_EQ(ui::TEXT_INPUT_TYPE_TEXT, type);
+    EXPECT_EQ(true, can_compose_inline);
 
     // Move the input focus to the second <input> element, where we should
     // de-activate IMEs.
@@ -822,12 +858,39 @@ TEST_F(RenderViewImplTest, OnImeStateChanged) {
 
     // Update the IME status and verify if our IME backend sends an IPC message
     // to de-activate IMEs.
-    view()->UpdateTextInputState(RenderWidget::DO_NOT_SHOW_IME);
+    view()->UpdateTextInputType();
     msg = render_thread_->sink().GetMessageAt(0);
     EXPECT_TRUE(msg != NULL);
-    EXPECT_EQ(ViewHostMsg_TextInputStateChanged::ID, msg->type());
-    ViewHostMsg_TextInputStateChanged::Read(msg, &params);
-    EXPECT_EQ(ui::TEXT_INPUT_TYPE_PASSWORD, params.a.type);
+    EXPECT_EQ(ViewHostMsg_TextInputTypeChanged::ID, msg->type());
+    ViewHostMsg_TextInputTypeChanged::Read(msg,
+                                           &type,
+                                           &can_compose_inline,
+                                           &input_mode);
+    EXPECT_EQ(ui::TEXT_INPUT_TYPE_PASSWORD, type);
+
+    for (size_t i = 0; i < ARRAYSIZE_UNSAFE(kInputModeTestCases); i++) {
+      const InputModeTestCase* test_case = &kInputModeTestCases[i];
+      std::string javascript =
+          base::StringPrintf("document.getElementById('%s').focus();",
+                             test_case->input_id);
+      // Move the input focus to the target <input> element, where we should
+      // activate IMEs.
+      ExecuteJavaScriptAndReturnIntValue(ASCIIToUTF16(javascript), NULL);
+      ProcessPendingMessages();
+      render_thread_->sink().ClearMessages();
+
+      // Update the IME status and verify if our IME backend sends an IPC
+      // message to activate IMEs.
+      view()->UpdateTextInputType();
+      const IPC::Message* msg = render_thread_->sink().GetMessageAt(0);
+      EXPECT_TRUE(msg != NULL);
+      EXPECT_EQ(ViewHostMsg_TextInputTypeChanged::ID, msg->type());
+      ViewHostMsg_TextInputTypeChanged::Read(msg,
+                                            &type,
+                                            &can_compose_inline,
+                                            &input_mode);
+      EXPECT_EQ(test_case->expected_mode, input_mode);
+    }
   }
 }
 
@@ -941,7 +1004,8 @@ TEST_F(RenderViewImplTest, ImeComposition) {
       case IME_CONFIRMCOMPOSITION:
         view()->OnImeConfirmComposition(
             WideToUTF16Hack(ime_message->ime_string),
-            ui::Range::InvalidRange());
+            ui::Range::InvalidRange(),
+            false);
         break;
 
       case IME_CANCELCOMPOSITION:
@@ -954,7 +1018,7 @@ TEST_F(RenderViewImplTest, ImeComposition) {
 
     // Update the status of our IME back-end.
     // TODO(hbono): we should verify messages to be sent from the back-end.
-    view()->UpdateTextInputState(RenderWidget::DO_NOT_SHOW_IME);
+    view()->UpdateTextInputType();
     ProcessPendingMessages();
     render_thread_->sink().ClearMessages();
 
@@ -1017,9 +1081,16 @@ TEST_F(RenderViewImplTest, OnSetTextDirection) {
   }
 }
 
+// see http://crbug.com/238750
+#if defined(OS_WIN)
+#define MAYBE_OnHandleKeyboardEvent DISABLED_OnHandleKeyboardEvent
+#else
+#define MAYBE_OnHandleKeyboardEvent OnHandleKeyboardEvent
+#endif
+
 // Test that we can receive correct DOM events when we send input events
 // through the RenderWidget::OnHandleInputEvent() function.
-TEST_F(RenderViewImplTest, OnHandleKeyboardEvent) {
+TEST_F(RenderViewImplTest, MAYBE_OnHandleKeyboardEvent) {
 #if !defined(OS_MACOSX)
   // Load an HTML page consisting of one <input> element and three
   // contentediable <div> elements.
@@ -1167,7 +1238,13 @@ TEST_F(RenderViewImplTest, OnHandleKeyboardEvent) {
 // keyboard events through the RenderWidget::OnHandleInputEvent() function.
 // This test is for preventing regressions caused only when we use non-US
 // keyboards, such as Issue 10846.
-TEST_F(RenderViewImplTest, InsertCharacters) {
+// see http://crbug.com/244562
+#if defined(OS_WIN)
+#define MAYBE_InsertCharacters DISABLED_InsertCharacters
+#else
+#define MAYBE_InsertCharacters InsertCharacters
+#endif
+TEST_F(RenderViewImplTest, MAYBE_InsertCharacters) {
 #if !defined(OS_MACOSX)
   static const struct {
     MockKeyboard::Layout layout;
@@ -1395,6 +1472,15 @@ TEST_F(RenderViewImplTest, DISABLED_DidFailProvisionalLoadWithErrorForError) {
   error.reason = net::ERR_FILE_NOT_FOUND;
   error.unreachableURL = GURL("http://foo");
   WebFrame* web_frame = GetMainFrame();
+
+  // Start a load that will reach provisional state synchronously,
+  // but won't complete synchronously.
+  ViewMsg_Navigate_Params params;
+  params.page_id = -1;
+  params.navigation_type = ViewMsg_Navigate_Type::NORMAL;
+  params.url = GURL("data:text/html,test data");
+  view()->OnNavigate(params);
+
   // An error occurred.
   view()->didFailProvisionalLoad(web_frame, error);
   // Frame should exit view-source mode.
@@ -1408,6 +1494,15 @@ TEST_F(RenderViewImplTest, DidFailProvisionalLoadWithErrorForCancellation) {
   error.reason = net::ERR_ABORTED;
   error.unreachableURL = GURL("http://foo");
   WebFrame* web_frame = GetMainFrame();
+
+  // Start a load that will reach provisional state synchronously,
+  // but won't complete synchronously.
+  ViewMsg_Navigate_Params params;
+  params.page_id = -1;
+  params.navigation_type = ViewMsg_Navigate_Type::NORMAL;
+  params.url = GURL("data:text/html,test data");
+  view()->OnNavigate(params);
+
   // A cancellation occurred.
   view()->didFailProvisionalLoad(web_frame, error);
   // Frame should stay in view-source mode.
@@ -1653,6 +1748,7 @@ TEST_F(RenderViewImplTest, TestBackForward) {
   EXPECT_EQ(1, was_page_b);
 }
 
+#if defined(OS_MACOSX) || defined(OS_WIN) || defined(USE_AURA)
 TEST_F(RenderViewImplTest, GetCompositionCharacterBoundsTest) {
   LoadHTML("<textarea id=\"test\"></textarea>");
   ExecuteJavaScript("document.getElementById('test').focus();");
@@ -1670,7 +1766,8 @@ TEST_F(RenderViewImplTest, GetCompositionCharacterBoundsTest) {
   ASSERT_EQ(ascii_composition.size(), bounds.size());
   for (size_t i = 0; i < bounds.size(); ++i)
     EXPECT_LT(0, bounds[i].width());
-  view()->OnImeConfirmComposition(empty_string, ui::Range::InvalidRange());
+  view()->OnImeConfirmComposition(
+      empty_string, ui::Range::InvalidRange(), false);
 
   // Non surrogate pair unicode character.
   const string16 unicode_composition = UTF8ToUTF16(
@@ -1680,7 +1777,8 @@ TEST_F(RenderViewImplTest, GetCompositionCharacterBoundsTest) {
   ASSERT_EQ(unicode_composition.size(), bounds.size());
   for (size_t i = 0; i < bounds.size(); ++i)
     EXPECT_LT(0, bounds[i].width());
-  view()->OnImeConfirmComposition(empty_string, ui::Range::InvalidRange());
+  view()->OnImeConfirmComposition(
+      empty_string, ui::Range::InvalidRange(), false);
 
   // Surrogate pair character.
   const string16 surrogate_pair_char = UTF8ToUTF16("\xF0\xA0\xAE\x9F");
@@ -1692,7 +1790,8 @@ TEST_F(RenderViewImplTest, GetCompositionCharacterBoundsTest) {
   ASSERT_EQ(surrogate_pair_char.size(), bounds.size());
   EXPECT_LT(0, bounds[0].width());
   EXPECT_EQ(0, bounds[1].width());
-  view()->OnImeConfirmComposition(empty_string, ui::Range::InvalidRange());
+  view()->OnImeConfirmComposition(
+      empty_string, ui::Range::InvalidRange(), false);
 
   // Mixed string.
   const string16 surrogate_pair_mixed_composition =
@@ -1714,14 +1813,14 @@ TEST_F(RenderViewImplTest, GetCompositionCharacterBoundsTest) {
       EXPECT_LT(0, bounds[i].width());
     }
   }
-  view()->OnImeConfirmComposition(empty_string, ui::Range::InvalidRange());
+  view()->OnImeConfirmComposition(
+      empty_string, ui::Range::InvalidRange(), false);
 }
+#endif
 
 TEST_F(RenderViewImplTest, ZoomLimit) {
-  const double kMinZoomLevel =
-      WebKit::WebView::zoomFactorToZoomLevel(kMinimumZoomFactor);
-  const double kMaxZoomLevel =
-      WebKit::WebView::zoomFactorToZoomLevel(kMaximumZoomFactor);
+  const double kMinZoomLevel = ZoomFactorToZoomLevel(kMinimumZoomFactor);
+  const double kMaxZoomLevel = ZoomFactorToZoomLevel(kMaximumZoomFactor);
 
   ViewMsg_Navigate_Params params;
   params.page_id = -1;
@@ -1737,9 +1836,8 @@ TEST_F(RenderViewImplTest, ZoomLimit) {
   EXPECT_DOUBLE_EQ(kMinZoomLevel, view()->GetWebView()->zoomLevel());
 
   // It should work even when the zoom limit is temporarily changed in the page.
-  view()->GetWebView()->zoomLimitsChanged(
-      WebKit::WebView::zoomFactorToZoomLevel(1.0),
-      WebKit::WebView::zoomFactorToZoomLevel(1.0));
+  view()->GetWebView()->zoomLimitsChanged(ZoomFactorToZoomLevel(1.0),
+                                          ZoomFactorToZoomLevel(1.0));
   params.url = GURL("data:text/html,max_zoomlimit_test");
   view()->OnSetZoomLevelForLoadingURL(params.url, kMaxZoomLevel);
   view()->OnNavigate(params);
@@ -1820,6 +1918,26 @@ TEST_F(RenderViewImplTest, NavigateFrame) {
   std::wstring output = UTF16ToWideHack(
       GetMainFrame()->contentAsText(kMaxOutputCharacters));
   EXPECT_EQ(output, L"hello \n\nworld");
+}
+
+// This test ensures that a RenderFrame object is created for the top level
+// frame in the RenderView.
+TEST_F(RenderViewImplTest, BasicRenderFrame) {
+  EXPECT_TRUE(view()->main_render_frame_.get());
+}
+
+TEST_F(RenderViewImplTest, GetSSLStatusOfFrame) {
+  LoadHTML("<!DOCTYPE html><html><body></body></html>");
+
+  WebFrame* frame = GetMainFrame();
+  SSLStatus ssl_status = view()->GetSSLStatusOfFrame(frame);
+  EXPECT_FALSE(net::IsCertStatusError(ssl_status.cert_status));
+
+  const_cast<WebKit::WebURLResponse&>(frame->dataSource()->response()).
+      setSecurityInfo(
+          SerializeSecurityInfo(0, net::CERT_STATUS_ALL_ERRORS, 0, 0));
+  ssl_status = view()->GetSSLStatusOfFrame(frame);
+  EXPECT_TRUE(net::IsCertStatusError(ssl_status.cert_status));
 }
 
 }  // namespace content

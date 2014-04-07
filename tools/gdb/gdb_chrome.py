@@ -57,9 +57,10 @@ class StringPrinter(Printer):
 class String16Printer(StringPrinter):
     def to_string(self):
         return webkit.ustring_to_string(self.val['_M_dataplus']['_M_p'])
-pp_set.add_printer('string16',
-                   '^string16|std::basic_string<(unsigned short|char16).*>$',
-                   String16Printer);
+pp_set.add_printer(
+    'string16',
+    '^string16|std::basic_string<(unsigned short|char16|base::char16).*>$',
+    String16Printer);
 
 
 class GURLPrinter(StringPrinter):
@@ -130,6 +131,15 @@ class CallbackPrinter(Printer):
 pp_set.add_printer('base::Callback', '^base::Callback<.*>$', CallbackPrinter)
 
 
+class LocationPrinter(Printer):
+    def to_string(self):
+        return '%s()@%s:%s' % (self.val['function_name_'].string(),
+                               self.val['file_name_'].string(),
+                               self.val['line_number_'])
+pp_set.add_printer('tracked_objects::Location', '^tracked_objects::Location$',
+                   LocationPrinter)
+
+
 class LockPrinter(Printer):
     def to_string(self):
         try:
@@ -174,6 +184,29 @@ class TimePrinter(object):
     def to_string(self):
         return str(self._datetime)
 pp_set.add_printer('base::Time', '^base::Time$', TimePrinter)
+
+
+class IpcMessagePrinter(Printer):
+    def header(self):
+        return self.val['header_'].cast(
+            gdb.lookup_type('IPC::Message::Header').pointer())
+
+    def to_string(self):
+        message_type = self.header()['type']
+        return '%s of kind %s line %s' % (
+            self.val.dynamic_type,
+            (message_type >> 16).cast(gdb.lookup_type('IPCMessageStart')),
+            message_type & 0xffff)
+
+    def children(self):
+        yield ('header_', self.header().dereference())
+        yield ('capacity_', self.val['capacity_'])
+        yield ('variable_buffer_offset_', self.val['variable_buffer_offset_'])
+        for field in self.val.type.fields():
+            if field.is_base_class:
+                continue
+            yield (field.name, self.val[field.name])
+pp_set.add_printer('IPC::Message', '^IPC::Message$', IpcMessagePrinter)
 
 
 class NotificationRegistrarPrinter(Printer):

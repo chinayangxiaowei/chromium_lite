@@ -6,14 +6,14 @@
 
 #include <utility>
 
-#include "base/memory/scoped_nsobject.h"
+#include "base/mac/scoped_nsobject.h"
+#include "chrome/browser/devtools/devtools_window.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_view.h"
 
 using content::WebContents;
-
 
 @implementation TabContentsController
 @synthesize webContents = contents_;
@@ -32,7 +32,7 @@ using content::WebContents;
 }
 
 - (void)loadView {
-  scoped_nsobject<NSView> view([[NSView alloc] initWithFrame:NSZeroRect]);
+  base::scoped_nsobject<NSView> view([[NSView alloc] initWithFrame:NSZeroRect]);
   [view setAutoresizingMask:NSViewHeightSizable|NSViewWidthSizable];
   [self setView:view];
 }
@@ -63,8 +63,9 @@ using content::WebContents;
   }
   [contentsNativeView setAutoresizingMask:NSViewWidthSizable|
                                           NSViewHeightSizable];
-  // The find bar will overlap the content's view when it comes out; inform
-  // the view.
+  // The rendering path with overlapping views disabled causes bugs when
+  // transitioning between composited and non-composited mode.
+  // http://crbug.com/279472
   contents_->GetView()->SetAllowOverlappingViews(true);
 }
 
@@ -84,8 +85,22 @@ using content::WebContents;
   // formally resigns first responder status.  Handle this by explicitly sending
   // a Blur() message to the renderer, but only if the RWHV currently has focus.
   content::RenderViewHost* rvh = [self webContents]->GetRenderViewHost();
-  if (rvh && rvh->GetView() && rvh->GetView()->HasFocus())
-    rvh->Blur();
+  if (rvh) {
+    if (rvh->GetView() && rvh->GetView()->HasFocus()) {
+      rvh->Blur();
+      return;
+    }
+    DevToolsWindow* devtoolsWindow =
+        DevToolsWindow::GetDockedInstanceForInspectedTab([self webContents]);
+    if (devtoolsWindow) {
+      content::RenderViewHost* devtoolsView =
+          devtoolsWindow->web_contents()->GetRenderViewHost();
+      if (devtoolsView && devtoolsView->GetView() &&
+          devtoolsView->GetView()->HasFocus()) {
+        devtoolsView->Blur();
+      }
+    }
+  }
 }
 
 - (void)willBecomeSelectedTab {

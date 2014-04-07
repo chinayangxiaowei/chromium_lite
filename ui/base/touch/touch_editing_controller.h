@@ -49,7 +49,7 @@ class UI_EXPORT TouchEditable : public ui::SimpleMenuModel::Delegate {
   virtual bool DrawsHandles() = 0;
 
   // Tells the editable to open context menu.
-  virtual void OpenContextMenu(const gfx::Point anchor) = 0;
+  virtual void OpenContextMenu(const gfx::Point& anchor) = 0;
 
  protected:
   virtual ~TouchEditable() {}
@@ -67,6 +67,9 @@ class UI_EXPORT TouchSelectionController {
 
   // Notifies the controller that the selection has changed.
   virtual void SelectionChanged() = 0;
+
+  // Returns true if the user is currently dragging one of the handles.
+  virtual bool IsHandleDragInProgress() = 0;
 };
 
 class UI_EXPORT TouchSelectionControllerFactory {

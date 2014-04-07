@@ -4,19 +4,21 @@
 
 #include "chrome/browser/extensions/extension_action_manager.h"
 
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/api/system_indicator/system_indicator_manager.h"
 #include "chrome/browser/extensions/api/system_indicator/system_indicator_manager_factory.h"
 #include "chrome/browser/extensions/extension_action.h"
+#include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_system.h"
+#include "chrome/browser/profiles/incognito_helpers.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_dependency_manager.h"
-#include "chrome/browser/profiles/profile_keyed_service_factory.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/extensions/api/extension_action/action_info.h"
 #include "chrome/common/extensions/api/extension_action/page_action_handler.h"
 #include "chrome/common/extensions/api/extension_action/script_badge_handler.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/feature_switch.h"
+#include "components/browser_context_keyed_service/browser_context_dependency_manager.h"
+#include "components/browser_context_keyed_service/browser_context_keyed_service_factory.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/notification_source.h"
 
@@ -24,13 +26,13 @@ namespace extensions {
 
 namespace {
 
-// ProfileKeyedServiceFactory for ExtensionActionManager.
-class ExtensionActionManagerFactory : public ProfileKeyedServiceFactory {
+// BrowserContextKeyedServiceFactory for ExtensionActionManager.
+class ExtensionActionManagerFactory : public BrowserContextKeyedServiceFactory {
  public:
-  // ProfileKeyedServiceFactory implementation:
+  // BrowserContextKeyedServiceFactory implementation:
   static ExtensionActionManager* GetForProfile(Profile* profile) {
     return static_cast<ExtensionActionManager*>(
-        GetInstance()->GetServiceForProfile(profile, true));
+        GetInstance()->GetServiceForBrowserContext(profile, true));
   }
 
   static ExtensionActionManagerFactory* GetInstance();
@@ -39,17 +41,19 @@ class ExtensionActionManagerFactory : public ProfileKeyedServiceFactory {
   friend struct DefaultSingletonTraits<ExtensionActionManagerFactory>;
 
   ExtensionActionManagerFactory()
-      : ProfileKeyedServiceFactory("ExtensionActionManager",
-                                   ProfileDependencyManager::GetInstance()) {
+      : BrowserContextKeyedServiceFactory(
+          "ExtensionActionManager",
+          BrowserContextDependencyManager::GetInstance()) {
   }
 
-  virtual ProfileKeyedService* BuildServiceInstanceFor(
-      Profile* profile) const OVERRIDE {
-    return new ExtensionActionManager(profile);
+  virtual BrowserContextKeyedService* BuildServiceInstanceFor(
+      content::BrowserContext* profile) const OVERRIDE {
+    return new ExtensionActionManager(static_cast<Profile*>(profile));
   }
 
-  virtual bool ServiceRedirectedInIncognito() const OVERRIDE {
-    return true;
+  virtual content::BrowserContext* GetBrowserContextToUse(
+      content::BrowserContext* context) const OVERRIDE {
+    return chrome::GetBrowserContextRedirectedInIncognito(context);
   }
 };
 
@@ -103,13 +107,24 @@ ExtensionAction* GetOrCreateOrNull(
     std::map<std::string, linked_ptr<ExtensionAction> >* map,
     const std::string& extension_id,
     ActionInfo::Type action_type,
-    const ActionInfo* action_info) {
+    const ActionInfo* action_info,
+    Profile* profile) {
   std::map<std::string, linked_ptr<ExtensionAction> >::const_iterator it =
       map->find(extension_id);
   if (it != map->end())
     return it->second.get();
   if (!action_info)
     return NULL;
+
+  // Only create action info for enabled extensions.
+  // This avoids bugs where actions are recreated just after being removed
+  // in response to NOTIFICATION_EXTENSION_UNLOADED in
+  // ExtensionActionManager::Observe()
+  ExtensionService* service =
+      ExtensionSystem::Get(profile)->extension_service();
+  if (!service->GetExtensionById(extension_id, false))
+    return NULL;
+
   linked_ptr<ExtensionAction> action(new ExtensionAction(
       extension_id, action_type, *action_info));
   (*map)[extension_id] = action;
@@ -126,7 +141,8 @@ ExtensionAction* ExtensionActionManager::GetPageAction(
     return NULL;
   return GetOrCreateOrNull(&page_actions_, extension.id(),
                            ActionInfo::TYPE_PAGE,
-                           ActionInfo::GetPageActionInfo(&extension));
+                           ActionInfo::GetPageActionInfo(&extension),
+                           profile_);
 }
 
 ExtensionAction* ExtensionActionManager::GetBrowserAction(
@@ -141,7 +157,7 @@ ExtensionAction* ExtensionActionManager::GetBrowserAction(
     action_type = ActionInfo::TYPE_PAGE;
   }
   return GetOrCreateOrNull(&browser_actions_, extension.id(),
-                           action_type, action_info);
+                           action_type, action_info, profile_);
 }
 
 ExtensionAction* ExtensionActionManager::GetSystemIndicator(
@@ -155,14 +171,16 @@ ExtensionAction* ExtensionActionManager::GetSystemIndicator(
 
   return GetOrCreateOrNull(&system_indicators_, extension.id(),
                            ActionInfo::TYPE_SYSTEM_INDICATOR,
-                           ActionInfo::GetSystemIndicatorInfo(&extension));
+                           ActionInfo::GetSystemIndicatorInfo(&extension),
+                           profile_);
 }
 
 ExtensionAction* ExtensionActionManager::GetScriptBadge(
     const extensions::Extension& extension) const {
   return GetOrCreateOrNull(&script_badges_, extension.id(),
                            ActionInfo::TYPE_SCRIPT_BADGE,
-                           ActionInfo::GetScriptBadgeInfo(&extension));
+                           ActionInfo::GetScriptBadgeInfo(&extension),
+                           profile_);
 }
 
 }  // namespace extensions

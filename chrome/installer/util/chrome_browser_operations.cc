@@ -8,7 +8,7 @@
 #include "base/file_util.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "chrome/installer/util/browser_distribution.h"
 #include "chrome/installer/util/channel_info.h"
 #include "chrome/installer/util/helper.h"
@@ -115,7 +115,7 @@ void ChromeBrowserOperations::AddDefaultShortcutProperties(
     int icon_index = dist->GetIconIndex();
     base::FilePath prefs_path(target_exe.DirName().AppendASCII(
         installer::kDefaultMasterPrefs));
-    if (file_util::PathExists(prefs_path)) {
+    if (base::PathExists(prefs_path)) {
       installer::MasterPreferences prefs(prefs_path);
       prefs.GetInt(installer::master_preferences::kChromeShortcutIconIndex,
                    &icon_index);

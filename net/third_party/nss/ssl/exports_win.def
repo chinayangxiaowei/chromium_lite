@@ -31,6 +31,7 @@ SSL_OptionGetDefault
 SSL_OptionSet
 SSL_OptionSetDefault
 SSL_PeerCertificate
+SSL_PeerStapledOCSPResponses
 SSL_ResetHandshake
 SSL_SetSockPeerID
 SSL_SetURL
@@ -41,6 +42,8 @@ SSL_GetImplementedCiphers
 SSL_GetNumImplementedCiphers
 SSL_HandshakeNegotiatedExtension
 SSL_SetNextProtoCallback
+SSL_SetNextProtoNego
+SSL_GetNextProto
 DTLS_GetHandshakeTimeout
 DTLS_ImportFD
 SSL_ExportKeyingMaterial
@@ -53,6 +56,5 @@ SSL_PeerCertificateChain
 SSL_SetClientChannelIDCallback
 SSL_GetPlatformClientAuthDataHook
 SSL_HandshakeResumedSession
-SSL_GetStapledOCSPResponse
 SSL_RestartHandshakeAfterChannelIDReq
 SSL_GetChannelBinding

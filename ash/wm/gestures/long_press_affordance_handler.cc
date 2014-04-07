@@ -66,7 +66,7 @@ views::Widget* CreateAffordanceWidget(aura::RootWindow* root_window) {
   params.accept_events = false;
   params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
   params.context = root_window;
-  params.transparent = true;
+  params.opacity = views::Widget::InitParams::TRANSLUCENT_WINDOW;
   widget->Init(params);
   widget->SetOpacity(0xFF);
   ash::GetRootWindowController(root_window)->GetContainer(
@@ -240,11 +240,9 @@ class LongPressAffordanceHandler::LongPressAffordanceView
 
 LongPressAffordanceHandler::LongPressAffordanceHandler()
     : ui::LinearAnimation(kAffordanceFrameRateHz, this),
-      view_(NULL),
       tap_down_touch_id_(-1),
       tap_down_display_id_(0),
-      current_animation_type_(NONE) {
-}
+      current_animation_type_(NONE) {}
 
 LongPressAffordanceHandler::~LongPressAffordanceHandler() {}
 

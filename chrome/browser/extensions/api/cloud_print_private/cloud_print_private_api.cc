@@ -39,6 +39,7 @@ CloudPrintPrivateSetupConnectorFunction::
 
 
 bool CloudPrintPrivateSetupConnectorFunction::RunImpl() {
+#if defined(ENABLE_FULL_PRINTING)
   using api::cloud_print_private::SetupConnector::Params;
   scoped_ptr<Params> params(Params::Create(*args_));
   if (CloudPrintTestsDelegate::instance()) {
@@ -46,19 +47,20 @@ bool CloudPrintPrivateSetupConnectorFunction::RunImpl() {
         params->user_email,
         params->robot_email,
         params->credentials,
-        params->connect_new_printers,
-        params->printer_blacklist);
+        params->user_settings);
   } else {
     if (!CloudPrintProxyServiceFactory::GetForProfile(profile_))
       return false;
+    scoped_ptr<base::DictionaryValue> user_setings(
+        params->user_settings.ToValue());
     CloudPrintProxyServiceFactory::GetForProfile(profile_)->
         EnableForUserWithRobot(params->credentials,
                                params->robot_email,
                                params->user_email,
-                               params->connect_new_printers,
-                               params->printer_blacklist);
+                               *user_setings);
   }
   SendResponse(true);
+#endif
   return true;
 }
 
@@ -84,6 +86,7 @@ CloudPrintPrivateGetPrintersFunction::~CloudPrintPrivateGetPrintersFunction() {
 }
 
 void CloudPrintPrivateGetPrintersFunction::CollectPrinters() {
+#if defined(ENABLE_FULL_PRINTING)
   std::vector<std::string> result;
   if (CloudPrintTestsDelegate::instance()) {
     result = CloudPrintTestsDelegate::instance()->GetPrinters();
@@ -94,6 +97,7 @@ void CloudPrintPrivateGetPrintersFunction::CollectPrinters() {
   content::BrowserThread::PostTask(content::BrowserThread::UI, FROM_HERE,
       base::Bind(&CloudPrintPrivateGetPrintersFunction::SendResponse,
                  this, true));
+#endif
 }
 
 

@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,8 @@
 
 namespace switches {
 
-const char kMergeUIAndRendererCompositorThreads[] =
-    "merge-ui-and-compositor-threads";
+const char kDisableSimpleCache[] = "disable-simple-cache";
+
+const char kDisableWebViewGLMode[] = "disable-webview-gl-mode";
 
 }  // namespace switches

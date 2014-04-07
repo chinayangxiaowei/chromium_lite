@@ -7,7 +7,7 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/api/dial/dial_api.h"
@@ -150,7 +150,9 @@ bool DialRegistry::PruneExpiredDevices() {
     linked_ptr<DialDeviceData> device = i->second;
     if (IsDeviceExpired(*device)) {
       DVLOG(1) << "Device " << device->label() << " expired, removing";
-      DCHECK(device_by_id_map_.erase(device->device_id()) == 1);
+      const size_t num_erased_by_id =
+          device_by_id_map_.erase(device->device_id());
+      DCHECK_EQ(num_erased_by_id, 1u);
       device_by_label_map_.erase(i++);
       pruned_device = true;
     } else {
@@ -299,17 +301,10 @@ void DialRegistry::OnNetworkChanged(
     NetworkChangeNotifier::ConnectionType type) {
   switch (type) {
     case NetworkChangeNotifier::CONNECTION_NONE:
-    case NetworkChangeNotifier::CONNECTION_2G:
-    case NetworkChangeNotifier::CONNECTION_3G:
-    case NetworkChangeNotifier::CONNECTION_4G:
       if (dial_.get()) {
         DVLOG(1) << "Lost connection, shutting down discovery and clearing"
                  << " list.";
-
-        if (NetworkChangeNotifier::IsConnectionCellular(type))
-          dial_api_->OnDialError(DIAL_CELLULAR_NETWORK);
-        else
-          dial_api_->OnDialError(DIAL_NETWORK_DISCONNECTED);
+        dial_api_->OnDialError(DIAL_NETWORK_DISCONNECTED);
 
         StopPeriodicDiscovery();
         // TODO(justinlin): As an optimization, we can probably keep our device
@@ -319,16 +314,16 @@ void DialRegistry::OnNetworkChanged(
         MaybeSendEvent();
       }
       break;
-    case NetworkChangeNotifier::CONNECTION_UNKNOWN:
+    case NetworkChangeNotifier::CONNECTION_2G:
+    case NetworkChangeNotifier::CONNECTION_3G:
+    case NetworkChangeNotifier::CONNECTION_4G:
     case NetworkChangeNotifier::CONNECTION_ETHERNET:
     case NetworkChangeNotifier::CONNECTION_WIFI:
+    case NetworkChangeNotifier::CONNECTION_UNKNOWN:
       if (!dial_.get()) {
         DVLOG(1) << "Connection detected, restarting discovery.";
         StartPeriodicDiscovery();
       }
-      break;
-    default:
-      NOTREACHED();
       break;
   }
 }

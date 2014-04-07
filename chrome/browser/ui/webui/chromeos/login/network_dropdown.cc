@@ -6,11 +6,13 @@
 
 #include <string>
 
-#include "base/time.h"
+#include "ash/system/chromeos/network/network_icon.h"
+#include "ash/system/chromeos/network/network_icon_animation.h"
+#include "base/time/time.h"
 #include "base/values.h"
-#include "chrome/browser/chromeos/login/base_login_display_host.h"
 #include "chrome/browser/chromeos/login/login_display_host.h"
-#include "chrome/browser/chromeos/net/connectivity_state_helper.h"
+#include "chrome/browser/chromeos/login/login_display_host_impl.h"
+#include "chromeos/network/network_state_handler.h"
 #include "content/public/browser/web_ui.h"
 #include "ui/base/models/menu_model.h"
 #include "ui/gfx/font.h"
@@ -107,27 +109,31 @@ base::ListValue* NetworkMenuWebUI::ConvertMenuModel(ui::MenuModel* model) {
 
 // NetworkDropdown -------------------------------------------------------------
 
-NetworkDropdown::NetworkDropdown(content::WebUI* web_ui,
+NetworkDropdown::NetworkDropdown(Actor* actor,
+                                 content::WebUI* web_ui,
                                  bool oobe)
-    : web_ui_(web_ui),
+    : actor_(actor),
+      web_ui_(web_ui),
       oobe_(oobe) {
+  DCHECK(actor_);
   network_menu_.reset(new NetworkMenuWebUI(this, web_ui));
-  network_icon_.reset(
-      new NetworkMenuIcon(this, NetworkMenuIcon::DROPDOWN_MODE));
-  ConnectivityStateHelper::Get()->AddNetworkManagerObserver(this);
-  ConnectivityStateHelper::Get()->RequestScan();
+  DCHECK(NetworkHandler::IsInitialized());
+  NetworkStateHandler* handler = NetworkHandler::Get()->network_state_handler();
+  handler->RequestScan();
+  handler->AddObserver(this, FROM_HERE);
   Refresh();
-  network_scan_timer_.Start(FROM_HERE,
+  network_scan_timer_.Start(
+      FROM_HERE,
       base::TimeDelta::FromSeconds(kNetworkScanIntervalSecs),
-      this, &NetworkDropdown::ForceNetworkScan);
+      this, &NetworkDropdown::RequestNetworkScan);
 }
 
 NetworkDropdown::~NetworkDropdown() {
-  ConnectivityStateHelper::Get()->RemoveNetworkManagerObserver(this);
-}
-
-void NetworkDropdown::SetLastNetworkType(ConnectionType last_network_type) {
-  // No longer implemented. TODO(stevenjb): Purge from JS.
+  ash::network_icon::NetworkIconAnimation::GetInstance()->RemoveObserver(this);
+  if (NetworkHandler::IsInitialized()) {
+    NetworkHandler::Get()->network_state_handler()->RemoveObserver(
+        this, FROM_HERE);
+  }
 }
 
 void NetworkDropdown::OnItemChosen(int id) {
@@ -135,19 +141,37 @@ void NetworkDropdown::OnItemChosen(int id) {
 }
 
 gfx::NativeWindow NetworkDropdown::GetNativeWindow() const {
-  return BaseLoginDisplayHost::default_host()->GetNativeWindow();
+  return LoginDisplayHostImpl::default_host()->GetNativeWindow();
 }
 
 void NetworkDropdown::OpenButtonOptions() {
-  BaseLoginDisplayHost::default_host()->OpenProxySettings();
+  LoginDisplayHostImpl::default_host()->OpenProxySettings();
 }
 
 bool NetworkDropdown::ShouldOpenButtonOptions() const {
   return !oobe_;
 }
 
-void NetworkDropdown::NetworkManagerChanged() {
+void NetworkDropdown::OnConnectToNetworkRequested(
+    const std::string& service_path) {
+  actor_->OnConnectToNetworkRequested(service_path);
+}
+
+void NetworkDropdown::DefaultNetworkChanged(const NetworkState* network) {
   Refresh();
+}
+
+void NetworkDropdown::NetworkConnectionStateChanged(
+    const NetworkState* network) {
+  Refresh();
+}
+
+void NetworkDropdown::NetworkListChanged() {
+  Refresh();
+}
+
+void NetworkDropdown::NetworkIconChanged() {
+  SetNetworkIconAndText();
 }
 
 void NetworkDropdown::Refresh() {
@@ -155,26 +179,31 @@ void NetworkDropdown::Refresh() {
   network_menu_->UpdateMenu();
 }
 
-void NetworkDropdown::NetworkMenuIconChanged() {
-  SetNetworkIconAndText();
-}
-
 void NetworkDropdown::SetNetworkIconAndText() {
   string16 text;
-  const gfx::ImageSkia icon_image = network_icon_->GetIconAndText(&text);
+  gfx::ImageSkia icon_image;
+  bool animating = false;
+  ash::network_icon::GetDefaultNetworkImageAndLabel(
+      ash::network_icon::ICON_TYPE_LIST, &icon_image, &text, &animating);
+  if (animating) {
+    ash::network_icon::NetworkIconAnimation::GetInstance()->AddObserver(this);
+  } else {
+    ash::network_icon::NetworkIconAnimation::GetInstance()->
+        RemoveObserver(this);
+  }
   SkBitmap icon_bitmap = icon_image.GetRepresentation(
       web_ui_->GetDeviceScaleFactor()).sk_bitmap();
-  std::string icon_str =
-      icon_image.isNull() ?
-          std::string() : webui::GetBitmapDataUrl(icon_bitmap);
+  std::string icon_str;
+  if (!icon_image.isNull())
+    icon_str = webui::GetBitmapDataUrl(icon_bitmap);
   base::StringValue title(text);
   base::StringValue icon(icon_str);
   web_ui_->CallJavascriptFunction("cr.ui.DropDown.updateNetworkTitle",
                                   title, icon);
 }
 
-void NetworkDropdown::ForceNetworkScan() {
-  ConnectivityStateHelper::Get()->RequestScan();
+void NetworkDropdown::RequestNetworkScan() {
+  NetworkHandler::Get()->network_state_handler()->RequestScan();
   Refresh();
 }
 

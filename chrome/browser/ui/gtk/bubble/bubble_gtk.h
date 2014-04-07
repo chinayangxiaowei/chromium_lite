@@ -92,6 +92,9 @@ class BubbleGtk : public content::NotificationObserver {
   // so you shouldn't hold a BubbleGtk pointer after calling Close().
   void Close();
 
+  // Move the window to the new anchor rectangle.
+  void SetPositionRelativeToAnchor(const gfx::Rect* rect);
+
   // content::NotificationObserver implementation.
   virtual void Observe(int type,
                        const content::NotificationSource& source,
@@ -168,6 +171,11 @@ class BubbleGtk : public content::NotificationObserver {
   // Grab (in the X sense) the pointer and keyboard.  This is needed to make
   // sure that we have the input focus.
   void GrabPointerAndKeyboard();
+
+  // Ungrab (in the X sense) the pointer and keyboard.  This is needed to make
+  // sure that we release the input focus, e.g. when an extension popup
+  // is inspected by the DevTools.
+  void UngrabPointerAndKeyboard();
 
   CHROMEG_CALLBACK_3(BubbleGtk, gboolean, OnGtkAccelerator, GtkAccelGroup*,
                      GObject*, guint, GdkModifierType);

@@ -10,15 +10,13 @@
 #include "base/bind_helpers.h"
 #include "base/command_line.h"
 #include "base/debug/alias.h"
-#include "base/file_util.h"
-#include "base/process_util.h"
-#include "base/sys_string_conversions.h"
+#include "base/strings/sys_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread.h"
 #include "base/threading/worker_pool.h"
-#include "base/utf_string_conversions.h"
 #include "content/browser/browser_main_loop.h"
 #include "content/browser/child_process_security_policy_impl.h"
-#include "content/browser/dom_storage/dom_storage_context_impl.h"
+#include "content/browser/dom_storage/dom_storage_context_wrapper.h"
 #include "content/browser/dom_storage/session_storage_namespace_impl.h"
 #include "content/browser/download/download_stats.h"
 #include "content/browser/gpu/gpu_data_manager_impl.h"
@@ -27,11 +25,13 @@
 #include "content/browser/plugin_process_host.h"
 #include "content/browser/plugin_service_impl.h"
 #include "content/browser/ppapi_plugin_process_host.h"
+#include "content/browser/renderer_host/pepper/pepper_security_helper.h"
 #include "content/browser/renderer_host/render_process_host_impl.h"
 #include "content/browser/renderer_host/render_view_host_delegate.h"
 #include "content/browser/renderer_host/render_widget_helper.h"
 #include "content/common/child_process_host_impl.h"
 #include "content/common/child_process_messages.h"
+#include "content/common/cookie_data.h"
 #include "content/common/desktop_notification_messages.h"
 #include "content/common/media/media_param_traits.h"
 #include "content/common/view_messages.h"
@@ -43,9 +43,11 @@
 #include "content/public/browser/plugin_service_filter.h"
 #include "content/public/browser/resource_context.h"
 #include "content/public/browser/user_metrics.h"
+#include "content/public/common/content_constants.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/context_menu_params.h"
 #include "content/public/common/url_constants.h"
+#include "content/public/common/webplugininfo.h"
 #include "ipc/ipc_channel_handle.h"
 #include "ipc/ipc_platform_file.h"
 #include "media/audio/audio_manager.h"
@@ -61,13 +63,9 @@
 #include "net/http/http_cache.h"
 #include "net/url_request/url_request_context.h"
 #include "net/url_request/url_request_context_getter.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebNotificationPresenter.h"
+#include "ppapi/shared_impl/file_type_conversion.h"
+#include "third_party/WebKit/public/web/WebNotificationPresenter.h"
 #include "ui/gfx/color_profile.h"
-#include "webkit/glue/webcookie.h"
-#include "webkit/glue/webkit_glue.h"
-#include "webkit/plugins/npapi/webplugin.h"
-#include "webkit/plugins/plugin_constants.h"
-#include "webkit/plugins/webplugininfo.h"
 
 #if defined(OS_MACOSX)
 #include "content/common/mac/font_descriptor.h"
@@ -82,6 +80,9 @@
 #if defined(OS_WIN)
 #include "content/browser/renderer_host/backing_store_win.h"
 #include "content/common/font_cache_dispatcher_win.h"
+#endif
+#if defined(OS_ANDROID)
+#include "media/base/android/webaudio_media_codec_bridge.h"
 #endif
 
 using net::CookieStore;
@@ -142,7 +143,7 @@ class OpenChannelToPpapiPluginCallback
 
   virtual void GetPpapiChannelInfo(base::ProcessHandle* renderer_handle,
                                    int* renderer_id) OVERRIDE {
-    *renderer_handle = filter()->peer_handle();
+    *renderer_handle = filter()->PeerHandle();
     *renderer_id = filter()->render_process_id();
   }
 
@@ -170,18 +171,16 @@ class OpenChannelToPpapiBrokerCallback
     : public PpapiPluginProcessHost::BrokerClient {
  public:
   OpenChannelToPpapiBrokerCallback(RenderMessageFilter* filter,
-                                   int routing_id,
-                                   int request_id)
+                                   int routing_id)
       : filter_(filter),
-        routing_id_(routing_id),
-        request_id_(request_id) {
+        routing_id_(routing_id) {
   }
 
   virtual ~OpenChannelToPpapiBrokerCallback() {}
 
   virtual void GetPpapiChannelInfo(base::ProcessHandle* renderer_handle,
                                    int* renderer_id) OVERRIDE {
-    *renderer_handle = filter_->peer_handle();
+    *renderer_handle = filter_->PeerHandle();
     *renderer_id = filter_->render_process_id();
   }
 
@@ -189,7 +188,6 @@ class OpenChannelToPpapiBrokerCallback
                                     base::ProcessId plugin_pid,
                                     int /* plugin_child_id */) OVERRIDE {
     filter_->Send(new ViewMsg_PpapiBrokerChannelCreated(routing_id_,
-                                                        request_id_,
                                                         plugin_pid,
                                                         channel_handle));
     delete this;
@@ -202,7 +200,6 @@ class OpenChannelToPpapiBrokerCallback
  private:
   scoped_refptr<RenderMessageFilter> filter_;
   int routing_id_;
-  int request_id_;
 };
 
 }  // namespace
@@ -242,7 +239,7 @@ class RenderMessageFilter::OpenChannelToNpapiPluginCallback
     return false;
   }
 
-  virtual void SetPluginInfo(const webkit::WebPluginInfo& info) OVERRIDE {
+  virtual void SetPluginInfo(const WebPluginInfo& info) OVERRIDE {
     info_ = info;
   }
 
@@ -284,19 +281,21 @@ class RenderMessageFilter::OpenChannelToNpapiPluginCallback
   }
 
   ResourceContext* context_;
-  webkit::WebPluginInfo info_;
+  WebPluginInfo info_;
   PluginProcessHost* host_;
   bool sent_plugin_channel_request_;
 };
 
 RenderMessageFilter::RenderMessageFilter(
     int render_process_id,
+    bool is_guest,
     PluginServiceImpl* plugin_service,
     BrowserContext* browser_context,
     net::URLRequestContextGetter* request_context,
     RenderWidgetHelper* render_widget_helper,
+    media::AudioManager* audio_manager,
     MediaInternals* media_internals,
-    DOMStorageContextImpl* dom_storage_context)
+    DOMStorageContextWrapper* dom_storage_context)
     : resource_dispatcher_host_(ResourceDispatcherHostImpl::Get()),
       plugin_service_(plugin_service),
       profile_data_directory_(browser_context->GetPath()),
@@ -306,9 +305,11 @@ RenderMessageFilter::RenderMessageFilter(
       incognito_(browser_context->IsOffTheRecord()),
       dom_storage_context_(dom_storage_context),
       render_process_id_(render_process_id),
+      is_guest_(is_guest),
       cpu_usage_(0),
+      audio_manager_(audio_manager),
       media_internals_(media_internals) {
-  DCHECK(request_context_);
+  DCHECK(request_context_.get());
 
   render_widget_helper_->Init(render_process_id_, resource_dispatcher_host_);
 }
@@ -342,7 +343,7 @@ void RenderMessageFilter::OnChannelClosing() {
 
 void RenderMessageFilter::OnChannelConnected(int32 peer_id) {
   BrowserMessageFilter::OnChannelConnected(peer_id);
-  base::ProcessHandle handle = peer_handle();
+  base::ProcessHandle handle = PeerHandle();
 #if defined(OS_MACOSX)
   process_metrics_.reset(base::ProcessMetrics::CreateProcessMetrics(handle,
                                                                     NULL));
@@ -390,6 +391,7 @@ bool RenderMessageFilter::OnMessageReceived(const IPC::Message& message,
                         OnDidDeleteOutOfProcessPepperInstance)
     IPC_MESSAGE_HANDLER(ViewHostMsg_OpenChannelToPpapiBroker,
                         OnOpenChannelToPpapiBroker)
+    IPC_MESSAGE_HANDLER(ViewHostMsg_AsyncOpenPepperFile, OnAsyncOpenPepperFile)
 #endif
     IPC_MESSAGE_HANDLER_GENERIC(ViewHostMsg_UpdateRect,
         render_widget_helper_->DidReceiveBackingStoreMsg(message))
@@ -398,22 +400,24 @@ bool RenderMessageFilter::OnMessageReceived(const IPC::Message& message,
                         OnCheckNotificationPermission)
     IPC_MESSAGE_HANDLER(ChildProcessHostMsg_SyncAllocateSharedMemory,
                         OnAllocateSharedMemory)
-#if defined(OS_MACOSX)
+#if defined(OS_POSIX) && !defined(TOOLKIT_GTK) && !defined(OS_ANDROID)
     IPC_MESSAGE_HANDLER(ViewHostMsg_AllocTransportDIB, OnAllocTransportDIB)
     IPC_MESSAGE_HANDLER(ViewHostMsg_FreeTransportDIB, OnFreeTransportDIB)
 #endif
     IPC_MESSAGE_HANDLER(ViewHostMsg_DidGenerateCacheableMetadata,
                         OnCacheableMetadataAvailable)
     IPC_MESSAGE_HANDLER_DELAY_REPLY(ViewHostMsg_Keygen, OnKeygen)
-    IPC_MESSAGE_HANDLER(ViewHostMsg_AsyncOpenFile, OnAsyncOpenFile)
     IPC_MESSAGE_HANDLER(ViewHostMsg_GetCPUUsage, OnGetCPUUsage)
     IPC_MESSAGE_HANDLER(ViewHostMsg_GetAudioHardwareConfig,
                         OnGetAudioHardwareConfig)
     IPC_MESSAGE_HANDLER(ViewHostMsg_GetMonitorColorProfile,
                         OnGetMonitorColorProfile)
-    IPC_MESSAGE_HANDLER(ViewHostMsg_MediaLogEvent, OnMediaLogEvent)
+    IPC_MESSAGE_HANDLER(ViewHostMsg_MediaLogEvents, OnMediaLogEvents)
     IPC_MESSAGE_HANDLER(ViewHostMsg_Are3DAPIsBlocked, OnAre3DAPIsBlocked)
     IPC_MESSAGE_HANDLER(ViewHostMsg_DidLose3DContext, OnDidLose3DContext)
+#if defined(OS_ANDROID)
+    IPC_MESSAGE_HANDLER(ViewHostMsg_RunWebAudioMediaCodec, OnWebAudioMediaCodec)
+#endif
     IPC_MESSAGE_UNHANDLED(handled = false)
   IPC_END_MESSAGE_MAP_EX()
 
@@ -431,6 +435,13 @@ base::TaskRunner* RenderMessageFilter::OverrideTaskRunnerForMessage(
   if (message.type() == ViewHostMsg_GetMonitorColorProfile::ID)
     return BrowserThread::GetBlockingPool();
 #endif
+#if defined(OS_MACOSX)
+  // OSX CoreAudio calls must all happen on the main thread.
+  if (message.type() == ViewHostMsg_GetAudioHardwareConfig::ID)
+    return audio_manager_->GetMessageLoop().get();
+#endif
+  if (message.type() == ViewHostMsg_AsyncOpenPepperFile::ID)
+    return BrowserThread::GetBlockingPool();
   return NULL;
 }
 
@@ -441,36 +452,48 @@ bool RenderMessageFilter::OffTheRecord() const {
 void RenderMessageFilter::OnCreateWindow(
     const ViewHostMsg_CreateWindow_Params& params,
     int* route_id,
+    int* main_frame_route_id,
     int* surface_id,
     int64* cloned_session_storage_namespace_id) {
   bool no_javascript_access;
   bool can_create_window =
       GetContentClient()->browser()->CanCreateWindow(
           params.opener_url,
+          params.opener_top_level_frame_url,
           params.opener_security_origin,
           params.window_container_type,
+          params.target_url,
+          params.referrer,
+          params.disposition,
+          params.features,
+          params.user_gesture,
+          params.opener_suppressed,
           resource_context_,
           render_process_id_,
+          is_guest_,
+          params.opener_id,
           &no_javascript_access);
 
   if (!can_create_window) {
     *route_id = MSG_ROUTING_NONE;
+    *main_frame_route_id = MSG_ROUTING_NONE;
     *surface_id = 0;
     return;
   }
 
   // This will clone the sessionStorage for namespace_id_to_clone.
   scoped_refptr<SessionStorageNamespaceImpl> cloned_namespace =
-      new SessionStorageNamespaceImpl(dom_storage_context_,
+      new SessionStorageNamespaceImpl(dom_storage_context_.get(),
                                       params.session_storage_namespace_id);
   *cloned_session_storage_namespace_id = cloned_namespace->id();
 
   render_widget_helper_->CreateNewWindow(params,
                                          no_javascript_access,
-                                         peer_handle(),
+                                         PeerHandle(),
                                          route_id,
+                                         main_frame_route_id,
                                          surface_id,
-                                         cloned_namespace);
+                                         cloned_namespace.get());
 }
 
 void RenderMessageFilter::OnCreateWidget(int opener_id,
@@ -494,10 +517,10 @@ void RenderMessageFilter::OnGetProcessMemorySizes(size_t* private_bytes,
   using base::ProcessMetrics;
 #if !defined(OS_MACOSX) || defined(OS_IOS)
   scoped_ptr<ProcessMetrics> metrics(ProcessMetrics::CreateProcessMetrics(
-      peer_handle()));
+      PeerHandle()));
 #else
   scoped_ptr<ProcessMetrics> metrics(ProcessMetrics::CreateProcessMetrics(
-      peer_handle(), content::BrowserChildProcessHost::GetPortProvider()));
+      PeerHandle(), content::BrowserChildProcessHost::GetPortProvider()));
 #endif
   if (!metrics->GetMemoryBytes(private_bytes, shared_bytes)) {
     *private_bytes = 0;
@@ -654,16 +677,16 @@ void RenderMessageFilter::OnGetPlugins(
 
 void RenderMessageFilter::GetPluginsCallback(
     IPC::Message* reply_msg,
-    const std::vector<webkit::WebPluginInfo>& all_plugins) {
+    const std::vector<WebPluginInfo>& all_plugins) {
   // Filter the plugin list.
   PluginServiceFilter* filter = PluginServiceImpl::GetInstance()->GetFilter();
-  std::vector<webkit::WebPluginInfo> plugins;
+  std::vector<WebPluginInfo> plugins;
 
   int child_process_id = -1;
   int routing_id = MSG_ROUTING_NONE;
   for (size_t i = 0; i < all_plugins.size(); ++i) {
     // Copy because the filter can mutate.
-    webkit::WebPluginInfo plugin(all_plugins[i]);
+    WebPluginInfo plugin(all_plugins[i]);
     if (!filter || filter->IsPluginAvailable(child_process_id,
                                              routing_id,
                                              resource_context_,
@@ -684,7 +707,7 @@ void RenderMessageFilter::OnGetPluginInfo(
     const GURL& page_url,
     const std::string& mime_type,
     bool* found,
-    webkit::WebPluginInfo* info,
+    WebPluginInfo* info,
     std::string* actual_mime_type) {
   bool allow_wildcard = true;
   *found = plugin_service_->GetPluginInfo(
@@ -728,7 +751,7 @@ void RenderMessageFilter::OnDidCreateOutOfProcessPepperInstance(
   // mapping to decide how to handle messages received from the (untrusted)
   // plugin, so an exploited renderer must not be able to insert fake mappings
   // that may allow it access to other render processes.
-  DCHECK(instance_data.render_process_id == 0);
+  DCHECK_EQ(0, instance_data.render_process_id);
   instance_data.render_process_id = render_process_id_;
   if (is_external) {
     // We provide the BrowserPpapiHost to the embedder, so it's safe to cast.
@@ -762,12 +785,11 @@ void RenderMessageFilter::OnDidDeleteOutOfProcessPepperInstance(
 
 void RenderMessageFilter::OnOpenChannelToPpapiBroker(
     int routing_id,
-    int request_id,
     const base::FilePath& path) {
   plugin_service_->OpenChannelToPpapiBroker(
       render_process_id_,
       path,
-      new OpenChannelToPpapiBrokerCallback(this, routing_id, request_id));
+      new OpenChannelToPpapiBrokerCallback(this, routing_id));
 }
 
 void RenderMessageFilter::OnGenerateRoutingID(int* route_id) {
@@ -789,13 +811,11 @@ void RenderMessageFilter::OnGetAudioHardwareConfig(
     media::AudioParameters* output_params) {
   DCHECK(input_params);
   DCHECK(output_params);
-  media::AudioManager* audio_manager = BrowserMainLoop::GetAudioManager();
-  *output_params = audio_manager->GetDefaultOutputStreamParameters();
+  *output_params = audio_manager_->GetDefaultOutputStreamParameters();
 
   // TODO(henrika): add support for all available input devices.
-  *input_params =
-      audio_manager->GetInputStreamParameters(
-          media::AudioManagerBase::kDefaultDeviceId);
+  *input_params = audio_manager_->GetInputStreamParameters(
+      media::AudioManagerBase::kDefaultDeviceId);
 }
 
 void RenderMessageFilter::OnGetMonitorColorProfile(std::vector<char>* profile) {
@@ -815,19 +835,17 @@ void RenderMessageFilter::OnDownloadUrl(const IPC::Message& message,
   save_info->suggested_name = suggested_name;
   scoped_ptr<net::URLRequest> request(
       resource_context_->GetRequestContext()->CreateRequest(url, NULL));
-  request->set_referrer(referrer.url.spec());
-  webkit_glue::ConfigureURLRequestForReferrerPolicy(
-      request.get(), referrer.policy);
   RecordDownloadSource(INITIATED_BY_RENDERER);
   resource_dispatcher_host_->BeginDownload(
       request.Pass(),
+      referrer,
       true,  // is_content_initiated
       resource_context_,
       render_process_id_,
       message.routing_id(),
       false,
       save_info.Pass(),
-      content::DownloadId::Invalid(),
+      content::DownloadItem::kInvalidId,
       ResourceDispatcherHostImpl::DownloadStartedCallback());
 }
 
@@ -846,7 +864,7 @@ void RenderMessageFilter::OnAllocateSharedMemory(
     uint32 buffer_size,
     base::SharedMemoryHandle* handle) {
   ChildProcessHostImpl::AllocateSharedMemory(
-      buffer_size, peer_handle(), handle);
+      buffer_size, PeerHandle(), handle);
 }
 
 net::URLRequestContext* RenderMessageFilter::GetRequestContextForURL(
@@ -862,9 +880,9 @@ net::URLRequestContext* RenderMessageFilter::GetRequestContextForURL(
   return context;
 }
 
-#if defined(OS_MACOSX)
+#if defined(OS_POSIX) && !defined(TOOLKIT_GTK) && !defined(OS_ANDROID)
 void RenderMessageFilter::OnAllocTransportDIB(
-    size_t size, bool cache_in_browser, TransportDIB::Handle* handle) {
+    uint32 size, bool cache_in_browser, TransportDIB::Handle* handle) {
   render_widget_helper_->AllocTransportDIB(size, cache_in_browser, handle);
 }
 
@@ -904,9 +922,11 @@ void RenderMessageFilter::OnCacheableMetadataAvailable(
   const net::RequestPriority kPriority = net::LOW;
   scoped_refptr<net::IOBuffer> buf(new net::IOBuffer(data.size()));
   memcpy(buf->data(), &data.front(), data.size());
-  cache->WriteMetadata(
-      url, kPriority,
-      base::Time::FromDoubleT(expected_response_time), buf, data.size());
+  cache->WriteMetadata(url,
+                       kPriority,
+                       base::Time::FromDoubleT(expected_response_time),
+                       buf.get(),
+                       data.size());
 }
 
 void RenderMessageFilter::OnKeygen(uint32 key_size_index,
@@ -967,49 +987,38 @@ void RenderMessageFilter::OnKeygenOnWorkerThread(
   Send(reply_msg);
 }
 
-void RenderMessageFilter::OnAsyncOpenFile(const IPC::Message& msg,
-                                          const base::FilePath& path,
-                                          int flags,
-                                          int message_id) {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
-
-  if (!ChildProcessSecurityPolicyImpl::GetInstance()->HasPermissionsForFile(
-          render_process_id_, path, flags)) {
-    DLOG(ERROR) << "Bad flags in ViewMsgHost_AsyncOpenFile message: " << flags;
+void RenderMessageFilter::OnAsyncOpenPepperFile(int routing_id,
+                                                const base::FilePath& path,
+                                                int pp_open_flags,
+                                                int message_id) {
+  int platform_file_flags = 0;
+  if (!CanOpenWithPepperFlags(pp_open_flags, render_process_id_, path) ||
+      !ppapi::PepperFileOpenFlagsToPlatformFileFlags(
+          pp_open_flags, &platform_file_flags)) {
+    DLOG(ERROR) <<
+        "Bad pp_open_flags in ViewMsgHost_AsyncOpenPepperFile message: " <<
+        pp_open_flags;
     RecordAction(UserMetricsAction("BadMessageTerminate_AOF"));
     BadMessageReceived();
     return;
   }
 
-  BrowserThread::PostTask(
-      BrowserThread::FILE, FROM_HERE, base::Bind(
-          &RenderMessageFilter::AsyncOpenFileOnFileThread, this,
-          path, flags, message_id, msg.routing_id()));
-}
-
-void RenderMessageFilter::AsyncOpenFileOnFileThread(const base::FilePath& path,
-                                                    int flags,
-                                                    int message_id,
-                                                    int routing_id) {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
   base::PlatformFileError error_code = base::PLATFORM_FILE_OK;
   base::PlatformFile file = base::CreatePlatformFile(
-      path, flags, NULL, &error_code);
+      path, platform_file_flags, NULL, &error_code);
   IPC::PlatformFileForTransit file_for_transit =
       file != base::kInvalidPlatformFileValue ?
-          IPC::GetFileHandleForProcess(file, peer_handle(), true) :
+          IPC::GetFileHandleForProcess(file, PeerHandle(), true) :
           IPC::InvalidPlatformFileForTransit();
 
-  IPC::Message* reply = new ViewMsg_AsyncOpenFile_ACK(
-      routing_id, error_code, file_for_transit, message_id);
-  BrowserThread::PostTask(
-      BrowserThread::IO, FROM_HERE,
-      base::Bind(base::IgnoreResult(&RenderMessageFilter::Send), this, reply));
+  Send(new ViewMsg_AsyncOpenPepperFile_ACK(
+      routing_id, error_code, file_for_transit, message_id));
 }
 
-void RenderMessageFilter::OnMediaLogEvent(const media::MediaLogEvent& event) {
+void RenderMessageFilter::OnMediaLogEvents(
+    const std::vector<media::MediaLogEvent>& events) {
   if (media_internals_)
-    media_internals_->OnMediaEvent(render_process_id_, event);
+    media_internals_->OnMediaEvents(render_process_id_, events);
 }
 
 void RenderMessageFilter::CheckPolicyForCookies(
@@ -1042,9 +1051,9 @@ void RenderMessageFilter::SendGetCookiesResponse(IPC::Message* reply_msg,
 void RenderMessageFilter::SendGetRawCookiesResponse(
     IPC::Message* reply_msg,
     const net::CookieList& cookie_list) {
-  std::vector<webkit_glue::WebCookie> cookies;
+  std::vector<CookieData> cookies;
   for (size_t i = 0; i < cookie_list.size(); ++i)
-    cookies.push_back(webkit_glue::WebCookie(cookie_list[i]));
+    cookies.push_back(CookieData(cookie_list[i]));
   ViewHostMsg_GetRawCookies::WriteReplyParams(reply_msg, cookies);
   Send(reply_msg);
 }
@@ -1144,4 +1153,19 @@ void RenderMessageFilter::OnPreCacheFontCharacters(const LOGFONT& font,
 }
 #endif
 
+#if defined(OS_ANDROID)
+void RenderMessageFilter::OnWebAudioMediaCodec(
+    base::SharedMemoryHandle encoded_data_handle,
+    base::FileDescriptor pcm_output,
+    uint32_t data_size) {
+  // Let a WorkerPool handle this request since the WebAudio
+  // MediaCodec bridge is slow and can block while sending the data to
+  // the renderer.
+  base::WorkerPool::PostTask(
+      FROM_HERE,
+      base::Bind(&media::WebAudioMediaCodecBridge::RunWebAudioMediaCodec,
+                 encoded_data_handle, pcm_output, data_size),
+      true);
+}
+#endif
 }  // namespace content

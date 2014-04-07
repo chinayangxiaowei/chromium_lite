@@ -19,8 +19,8 @@
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/session_storage_namespace.h"
 #include "content/public/common/referrer.h"
-#include "googleurl/src/gurl.h"
 #include "ui/gfx/size.h"
+#include "url/gurl.h"
 
 using base::TimeDelta;
 using base::TimeTicks;
@@ -336,18 +336,6 @@ void PrerenderLinkManager::OnPrerenderStop(
        new PrerenderMsg_OnPrerenderStop(prerender->prerender_id));
   RemovePrerender(prerender);
   StartPrerenders();
-}
-
-void PrerenderLinkManager::OnPrerenderAddAlias(
-    PrerenderHandle* prerender_handle,
-    const GURL& alias_url) {
-  LinkPrerender* prerender = FindByPrerenderHandle(prerender_handle);
-  if (!prerender)
-    return;
-
-  Send(prerender->launcher_child_id,
-       new PrerenderMsg_OnPrerenderAddAlias(prerender->prerender_id,
-                                            alias_url));
 }
 
 }  // namespace prerender

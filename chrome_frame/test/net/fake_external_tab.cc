@@ -22,9 +22,9 @@
 #include "base/prefs/json_pref_store.h"
 #include "base/prefs/pref_registry_simple.h"
 #include "base/prefs/pref_service.h"
-#include "base/string_piece.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
+#include "base/strings/string_piece.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/system_monitor/system_monitor.h"
 #include "base/test/test_timeouts.h"
 #include "base/threading/platform_thread.h"
@@ -37,7 +37,9 @@
 #include "chrome/browser/prefs/browser_prefs.h"
 #include "chrome/browser/prefs/proxy_config_dictionary.h"
 #include "chrome/browser/process_singleton.h"
+#include "chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/profiles/profiles_state.h"
 #include "chrome/browser/renderer_host/web_cache_manager.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_content_client.h"
@@ -71,6 +73,11 @@
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/resource/resource_bundle_win.h"
 #include "ui/base/ui_base_paths.h"
+
+#if defined(USE_AURA)
+#include "ui/gfx/screen.h"
+#include "ui/views/widget/desktop_aura/desktop_screen.h"
+#endif
 
 using content::BrowserThread;
 
@@ -153,8 +160,7 @@ class FakeMainDelegate : public content::ContentMainDelegate {
         testing::UnitTest::GetInstance());
 
     content::SetContentClient(&g_chrome_content_client.Get());
-    content::GetContentClient()->set_renderer_for_testing(
-        &g_renderer_client.Get());
+    content::SetRendererClientForTesting(&g_renderer_client.Get());
     return false;
   }
 
@@ -255,10 +261,13 @@ void FilterDisabledTests() {
 
     // These tests use HTTPS, and IE's trust store does not have the test
     // certs. So these tests time out waiting for user input. The
-    // functionality they test (HTTP Strict Transport Security) does not
-    // work in Chrome Frame anyway.
+    // functionality they test (HTTP Strict Transport Security and
+    // HTTP-based Public Key Pinning) does not work in Chrome Frame anyway.
+    "URLRequestTestHTTP.ProcessPKP",
     "URLRequestTestHTTP.ProcessSTS",
     "URLRequestTestHTTP.ProcessSTSOnce",
+    "URLRequestTestHTTP.ProcessSTSAndPKP",
+    "URLRequestTestHTTP.ProcessSTSAndPKP2",
 
     // These tests have been disabled as the Chrome cookie policies don't make
     // sense or have not been implemented for the host network stack.
@@ -316,9 +325,13 @@ void FilterDisabledTests() {
     "HTTPSRequestTest.SSLSessionCacheShardTest",
     "HTTPSRequestTest.SSLv3Fallback",
     "HTTPSRequestTest.TLSv1Fallback",
+    "HTTPSHardFailTest.*",
     "HTTPSOCSPTest.*",
     "HTTPSEVCRLSetTest.*",
-    "HTTPSCRLSetTest.*"
+    "HTTPSCRLSetTest.*",
+
+    // Chrome Frame doesn't support GetFullRequestHeaders.
+    "URLRequestTest*.*_GetFullRequestHeaders"
   };
 
   const char* ie9_disabled_tests[] = {
@@ -469,10 +482,10 @@ BOOL SupplyProxyCredentials::EnumChildren(HWND hwnd, LPARAM param) {
 FakeExternalTab::FakeExternalTab() {
   user_data_dir_ = chrome_frame_test::GetProfilePathForIE();
 
-  if (file_util::PathExists(user_data_dir_)) {
+  if (base::PathExists(user_data_dir_)) {
     VLOG(1) << __FUNCTION__ << " deleting IE Profile user data directory "
             << user_data_dir_.value();
-    bool deleted = file_util::Delete(user_data_dir_, true);
+    bool deleted = base::DeleteFile(user_data_dir_, true);
     LOG_IF(ERROR, !deleted) << "Failed to delete user data directory directory "
                             << user_data_dir_.value();
   }
@@ -533,8 +546,12 @@ void FakeExternalTab::Initialize() {
 }
 
 void FakeExternalTab::InitializePostThreadsCreated() {
+#if defined(USE_AURA)
+  gfx::Screen::SetScreenInstance(gfx::SCREEN_TYPE_NATIVE,
+                                 views::CreateDesktopScreen());
+#endif
   base::FilePath profile_path(
-      ProfileManager::GetDefaultProfileDir(user_data()));
+      profiles::GetDefaultProfileDir(user_data()));
   Profile* profile =
       g_browser_process->profile_manager()->GetProfile(profile_path);
 }
@@ -723,12 +740,11 @@ void CFUrlRequestUnittestRunner::InitializeLogging() {
   base::FilePath exe;
   PathService::Get(base::FILE_EXE, &exe);
   base::FilePath log_filename = exe.ReplaceExtension(FILE_PATH_LITERAL("log"));
-  logging::InitLogging(
-      log_filename.value().c_str(),
-      logging::LOG_TO_BOTH_FILE_AND_SYSTEM_DEBUG_LOG,
-      logging::LOCK_LOG_FILE,
-      logging::DELETE_OLD_LOG_FILE,
-      logging::DISABLE_DCHECK_FOR_NON_OFFICIAL_RELEASE_BUILDS);
+  logging::LoggingSettings settings;
+  settings.logging_dest = logging::LOG_TO_ALL;
+  settings.log_file = log_filename.value().c_str();
+  settings.delete_old = logging::DELETE_OLD_LOG_FILE;
+  logging::InitLogging(settings);
   // We want process and thread IDs because we may have multiple processes.
   // Note: temporarily enabled timestamps in an effort to catch bug 6361.
   logging::SetLogItems(true, true, true, true);
@@ -742,7 +758,7 @@ void CFUrlRequestUnittestRunner::StartInitializationTimeout() {
   timeout_closure_.Reset(
       base::Bind(&CFUrlRequestUnittestRunner::OnInitializationTimeout,
                  base::Unretained(this)));
-  MessageLoop::current()->PostDelayedTask(
+  base::MessageLoop::current()->PostDelayedTask(
       FROM_HERE,
       timeout_closure_.callback(),
       TestTimeouts::action_max_timeout());
@@ -785,8 +801,12 @@ int CFUrlRequestUnittestRunner::PreCreateThreads() {
   fake_chrome_.reset(new FakeExternalTab());
   fake_chrome_->Initialize();
   fake_chrome_->browser_process()->PreCreateThreads();
-  process_singleton_.reset(new ProcessSingleton(fake_chrome_->user_data()));
-  process_singleton_->Lock(NULL);
+  ProcessSingleton::NotificationCallback callback(
+      base::Bind(
+          &CFUrlRequestUnittestRunner::ProcessSingletonNotificationCallback,
+          base::Unretained(this)));
+  process_singleton_.reset(new ProcessSingleton(fake_chrome_->user_data(),
+                                                callback));
   return 0;
 }
 
@@ -808,30 +828,24 @@ bool CFUrlRequestUnittestRunner::ProcessSingletonNotificationCallback(
 
 void CFUrlRequestUnittestRunner::PreMainMessageLoopRun() {
   fake_chrome_->InitializePostThreadsCreated();
-  ProcessSingleton::NotificationCallback callback(
-      base::Bind(
-          &CFUrlRequestUnittestRunner::ProcessSingletonNotificationCallback,
-          base::Unretained(this)));
   // Call Create directly instead of NotifyOtherProcessOrCreate as failure is
   // prefered to notifying another process here.
-  if (!process_singleton_->Create(callback)) {
+  if (!process_singleton_->Create()) {
     LOG(FATAL) << "Failed to start up ProcessSingleton. Is another test "
                << "executable or Chrome Frame running?";
     if (crash_service_)
       base::KillProcess(crash_service_, 0, false);
     ::ExitProcess(1);
   }
-
-  StartChromeFrameInHostBrowser();
 }
 
 bool CFUrlRequestUnittestRunner::MainMessageLoopRun(int* result_code) {
-  DCHECK(MessageLoop::current());
-  DCHECK(MessageLoop::current()->type() == MessageLoop::TYPE_UI);
+  DCHECK(base::MessageLoop::current());
+  DCHECK(base::MessageLoop::current()->type() == base::MessageLoop::TYPE_UI);
 
   // We need to allow IO on the main thread for these tests.
   base::ThreadRestrictions::SetIOAllowed(true);
-  process_singleton_->Unlock();
+  StartChromeFrameInHostBrowser();
   StartInitializationTimeout();
   return false;
 }
@@ -889,7 +903,7 @@ void CFUrlRequestUnittestRunner::StopFileLogger(bool print) {
     }
   }
 
-  if (!log_file_.empty() && !file_util::Delete(log_file_, false))
+  if (!log_file_.empty() && !base::DeleteFile(log_file_, false))
     LOG(ERROR) << "Failed to delete log file " << log_file_.value();
 
   log_file_.clear();
@@ -919,6 +933,11 @@ const char* IEVersionToString(IEVersion version) {
 
 content::BrowserMainParts* FakeContentBrowserClient::CreateBrowserMainParts(
     const content::MainFunctionParams& parameters) {
+  // Normally this would happen during browser startup, but for tests
+  // we need to trigger creation of Profile-related services.
+  ChromeBrowserMainExtraPartsProfiles::
+      EnsureBrowserContextKeyedServiceFactoriesBuilt();
+
   // We never delete this, as the content module takes ownership.
   //
   // We must not construct this earlier, or we will have out-of-order

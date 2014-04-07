@@ -8,12 +8,13 @@
 #include "base/callback_forward.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/render_widget_host.h"
+#include "content/public/common/file_chooser_params.h"
 #include "content/public/common/page_zoom.h"
 #include "content/public/common/stop_find_action.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebDragOperation.h"
+#include "third_party/WebKit/public/web/WebDragOperation.h"
 
 class GURL;
-struct WebDropData;
+struct WebPreferences;
 
 namespace gfx {
 class Point;
@@ -34,10 +35,6 @@ struct WebMediaPlayerAction;
 struct WebPluginAction;
 }
 
-namespace webkit_glue {
-struct WebPreferences;
-}
-
 namespace content {
 
 class ChildProcessSecurityPolicy;
@@ -46,6 +43,7 @@ class RenderViewHostDelegate;
 class SessionStorageNamespace;
 class SiteInstance;
 struct CustomContextMenuContext;
+struct DropData;
 
 // A RenderViewHost is responsible for creating and talking to a RenderView
 // object in a child process. It exposes a high level API to users, for things
@@ -60,8 +58,6 @@ struct CustomContextMenuContext;
 // WebContents (see WebContents for an example) but also as views, etc.
 class CONTENT_EXPORT RenderViewHost : virtual public RenderWidgetHost {
  public:
-  typedef base::Callback<void(const base::Value*)> JavascriptResultCallback;
-
   // Returns the RenderViewHost given its ID and the ID of its render process.
   // Returns NULL if the IDs do not correspond to a live RenderViewHost.
   static RenderViewHost* FromID(int render_process_id, int render_view_id);
@@ -76,6 +72,11 @@ class CONTENT_EXPORT RenderViewHost : virtual public RenderWidgetHost {
   static void FilterURL(const RenderProcessHost* process,
                         bool empty_allowed,
                         GURL* url);
+
+  // Adds/removes a callback called on creation of each new RenderViewHost.
+  typedef base::Callback<void(RenderViewHost*)> CreatedCallback;
+  static void AddCreatedCallback(const CreatedCallback& callback);
+  static void RemoveCreatedCallback(const CreatedCallback& callback);
 
   virtual ~RenderViewHost() {}
 
@@ -136,7 +137,7 @@ class CONTENT_EXPORT RenderViewHost : virtual public RenderWidgetHost {
 
   // D&d drop target messages that get sent to WebKit.
   virtual void DragTargetDragEnter(
-      const WebDropData& drop_data,
+      const DropData& drop_data,
       const gfx::Point& client_pt,
       const gfx::Point& screen_pt,
       WebKit::WebDragOperationsMask operations_allowed,
@@ -178,6 +179,7 @@ class CONTENT_EXPORT RenderViewHost : virtual public RenderWidgetHost {
 
   // Runs some javascript within the context of a frame in the page. The result
   // is sent back via the provided callback.
+  typedef base::Callback<void(const base::Value*)> JavascriptResultCallback;
   virtual void ExecuteJavascriptInWebFrameCallbackResult(
       const string16& frame_xpath,
       const string16& jscript,
@@ -209,12 +211,11 @@ class CONTENT_EXPORT RenderViewHost : virtual public RenderWidgetHost {
   virtual void FirePageBeforeUnload(bool for_cross_site_transition) = 0;
 
   // Notifies the Listener that one or more files have been chosen by the user
-  // from a file chooser dialog for the form. |permissions| are flags from the
-  // base::PlatformFileFlags enum which specify which file permissions should
-  // be granted to the renderer.
+  // from a file chooser dialog for the form. |permissions| is the file
+  // selection mode in which the chooser dialog was created.
   virtual void FilesSelectedInChooser(
       const std::vector<ui::SelectedFileInfo>& files,
-      int permissions) = 0;
+      FileChooserParams::Mode permissions) = 0;
 
   virtual RenderViewHostDelegate* GetDelegate() const = 0;
 
@@ -269,11 +270,10 @@ class CONTENT_EXPORT RenderViewHost : virtual public RenderWidgetHost {
   virtual void ToggleSpeechInput() = 0;
 
   // Returns the current WebKit preferences.
-  virtual webkit_glue::WebPreferences GetWebkitPreferences() = 0;
+  virtual WebPreferences GetWebkitPreferences() = 0;
 
   // Passes a list of Webkit preferences to the renderer.
-  virtual void UpdateWebkitPreferences(
-      const webkit_glue::WebPreferences& prefs) = 0;
+  virtual void UpdateWebkitPreferences(const WebPreferences& prefs) = 0;
 
   // Informs the renderer process of a change in timezone.
   virtual void NotifyTimezoneChange() = 0;

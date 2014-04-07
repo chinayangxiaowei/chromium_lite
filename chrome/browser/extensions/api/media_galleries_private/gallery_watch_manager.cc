@@ -16,7 +16,7 @@
 #include "base/location.h"
 #include "base/memory/ref_counted.h"
 #include "base/stl_util.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "chrome/browser/extensions/api/media_galleries_private/media_galleries_private_event_router.h"
 #include "content/public/browser/browser_thread.h"
 
@@ -133,7 +133,7 @@ GalleryWatchManager::GalleryFilePathWatcher::GalleryFilePathWatcher(
     : event_router_(event_router),
       gallery_id_(gallery_id),
       on_destroyed_callback_(on_destroyed_callback),
-      weak_ptr_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {
+      weak_ptr_factory_(this) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
   gallery_path_ = path;
   AddExtension(extension_id);

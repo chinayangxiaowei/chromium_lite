@@ -20,7 +20,7 @@ namespace chromeos {
 class Authenticator;
 class LoginDisplayHost;
 class LoginStatusConsumer;
-struct UserCredentials;
+struct UserContext;
 
 class LoginUtils {
  public:
@@ -63,12 +63,16 @@ class LoginUtils {
   // If |pending_requests| is true, there's a pending online auth request.
   // If |display_email| is not empty, user's displayed email will be set to
   // this value, shown in UI.
+  // |user_context.username_hash| defines when user homedir is mounted.
   // Also see DelegateDeleted method.
+  // If |has_active_session| is true than this is a case of restoring user
+  // session after browser crash so no need to start new session.
   virtual void PrepareProfile(
-      const UserCredentials& credentials,
+      const UserContext& user_context,
       const std::string& display_email,
       bool using_oauth,
       bool has_cookies,
+      bool has_active_session,
       Delegate* delegate) = 0;
 
   // Invalidates |delegate|, which was passed to PrepareProfile method call.
@@ -94,9 +98,6 @@ class LoginUtils {
   // TODO(nkostylev): Cleanup after WebUI login migration is complete.
   virtual scoped_refptr<Authenticator> CreateAuthenticator(
       LoginStatusConsumer* consumer) = 0;
-
-  // Prewarms the authentication network connection.
-  virtual void PrewarmAuthentication() = 0;
 
   // Restores authentication session after crash.
   virtual void RestoreAuthenticationSession(Profile* profile) = 0;

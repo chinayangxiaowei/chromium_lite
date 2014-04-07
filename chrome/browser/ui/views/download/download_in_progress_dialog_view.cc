@@ -8,6 +8,7 @@
 
 #include "base/strings/string_number_conversions.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/views/constrained_window_views.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "grit/locale_settings.h"
@@ -21,10 +22,10 @@
 
 // static
 void DownloadInProgressDialogView::Show(Browser* browser,
-                                        gfx::NativeWindow parent_window) {
+                                        gfx::NativeWindow parent) {
   DownloadInProgressDialogView* window =
       new DownloadInProgressDialogView(browser);
-  views::Widget::CreateWindowWithParent(window, parent_window)->Show();
+  CreateBrowserModalDialogViews(window, parent)->Show();
 }
 
 DownloadInProgressDialogView::DownloadInProgressDialogView(Browser* browser)

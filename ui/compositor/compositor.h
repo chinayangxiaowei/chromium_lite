@@ -7,14 +7,15 @@
 
 #include <string>
 
-#include "base/hash_tables.h"
+#include "base/containers/hash_tables.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/observer_list.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "cc/trees/layer_tree_host_client.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/compositor/compositor_export.h"
+#include "ui/compositor/compositor_observer.h"
 #include "ui/gfx/native_widget_types.h"
 #include "ui/gfx/size.h"
 #include "ui/gfx/transform.h"
@@ -23,9 +24,15 @@
 
 class SkBitmap;
 
+namespace base {
+class MessageLoopProxy;
+class RunLoop;
+}
+
 namespace cc {
 class ContextProvider;
 class Layer;
+class LayerTreeDebugState;
 class LayerTreeHost;
 }
 
@@ -35,6 +42,7 @@ class GLSurface;
 class GLShareGroup;
 class Point;
 class Rect;
+class Size;
 }
 
 namespace WebKit {
@@ -48,6 +56,9 @@ class CompositorObserver;
 class ContextProviderFromContextFactory;
 class Layer;
 class PostedSwapQueue;
+class Reflector;
+class Texture;
+struct LatencyInfo;
 
 // This class abstracts the creation of the 3D context for the compositor. It is
 // a global object.
@@ -66,12 +77,20 @@ class COMPOSITOR_EXPORT ContextFactory {
   // Creates an output surface for the given compositor. The factory may keep
   // per-compositor data (e.g. a shared context), that needs to be cleaned up
   // by calling RemoveCompositor when the compositor gets destroyed.
-  virtual cc::OutputSurface* CreateOutputSurface(
+  virtual scoped_ptr<cc::OutputSurface> CreateOutputSurface(
       Compositor* compositor) = 0;
 
   // Creates a context used for offscreen rendering. This context can be shared
   // with all compositors.
-  virtual WebKit::WebGraphicsContext3D* CreateOffscreenContext() = 0;
+  virtual scoped_ptr<WebKit::WebGraphicsContext3D> CreateOffscreenContext() = 0;
+
+  // Creates a reflector that copies the content of the |mirrored_compositor|
+  // onto |mirroing_layer|.
+  virtual scoped_refptr<Reflector> CreateReflector(
+      Compositor* mirrored_compositor,
+      Layer* mirroring_layer) = 0;
+  // Removes the reflector, which stops the mirroring.
+  virtual void RemoveReflector(scoped_refptr<Reflector> reflector) = 0;
 
   virtual scoped_refptr<cc::ContextProvider>
       OffscreenContextProviderForMainThread() = 0;
@@ -80,6 +99,10 @@ class COMPOSITOR_EXPORT ContextFactory {
 
   // Destroys per-compositor data.
   virtual void RemoveCompositor(Compositor* compositor) = 0;
+
+  // When true, the factory uses test contexts that do not do real GL
+  // operations.
+  virtual bool DoesCreateTestContexts() = 0;
 };
 
 // The default factory that creates in-process contexts.
@@ -89,19 +112,27 @@ class COMPOSITOR_EXPORT DefaultContextFactory : public ContextFactory {
   virtual ~DefaultContextFactory();
 
   // ContextFactory implementation
-  virtual cc::OutputSurface* CreateOutputSurface(
+  virtual scoped_ptr<cc::OutputSurface> CreateOutputSurface(
       Compositor* compositor) OVERRIDE;
-  virtual WebKit::WebGraphicsContext3D* CreateOffscreenContext() OVERRIDE;
+  virtual scoped_ptr<WebKit::WebGraphicsContext3D> CreateOffscreenContext()
+      OVERRIDE;
+
+  virtual scoped_refptr<Reflector> CreateReflector(
+      Compositor* compositor,
+      Layer* layer) OVERRIDE;
+  virtual void RemoveReflector(scoped_refptr<Reflector> reflector) OVERRIDE;
+
   virtual scoped_refptr<cc::ContextProvider>
       OffscreenContextProviderForMainThread() OVERRIDE;
   virtual scoped_refptr<cc::ContextProvider>
       OffscreenContextProviderForCompositorThread() OVERRIDE;
   virtual void RemoveCompositor(Compositor* compositor) OVERRIDE;
+  virtual bool DoesCreateTestContexts() OVERRIDE;
 
   bool Initialize();
 
  private:
-  WebKit::WebGraphicsContext3D* CreateContextCommon(
+  scoped_ptr<WebKit::WebGraphicsContext3D> CreateContextCommon(
       Compositor* compositor,
       bool offscreen);
 
@@ -120,14 +151,22 @@ class COMPOSITOR_EXPORT TestContextFactory : public ContextFactory {
   virtual ~TestContextFactory();
 
   // ContextFactory implementation
-  virtual cc::OutputSurface* CreateOutputSurface(
+  virtual scoped_ptr<cc::OutputSurface> CreateOutputSurface(
       Compositor* compositor) OVERRIDE;
-  virtual WebKit::WebGraphicsContext3D* CreateOffscreenContext() OVERRIDE;
+  virtual scoped_ptr<WebKit::WebGraphicsContext3D> CreateOffscreenContext()
+      OVERRIDE;
+
+  virtual scoped_refptr<Reflector> CreateReflector(
+      Compositor* mirrored_compositor,
+      Layer* mirroring_layer) OVERRIDE;
+  virtual void RemoveReflector(scoped_refptr<Reflector> reflector) OVERRIDE;
+
   virtual scoped_refptr<cc::ContextProvider>
       OffscreenContextProviderForMainThread() OVERRIDE;
   virtual scoped_refptr<cc::ContextProvider>
       OffscreenContextProviderForCompositorThread() OVERRIDE;
   virtual void RemoveCompositor(Compositor* compositor) OVERRIDE;
+  virtual bool DoesCreateTestContexts() OVERRIDE;
 
  private:
   scoped_refptr<ContextProviderFromContextFactory>
@@ -207,6 +246,42 @@ class COMPOSITOR_EXPORT CompositorLock
   DISALLOW_COPY_AND_ASSIGN(CompositorLock);
 };
 
+// This is only to be used for test. It allows execution of other tasks on
+// the current message loop before the current task finishs (there is a
+// potential for re-entrancy).
+class COMPOSITOR_EXPORT DrawWaiterForTest : public ui::CompositorObserver {
+ public:
+  // Waits for a draw to be issued by the compositor. If the test times out
+  // here, there may be a logic error in the compositor code causing it
+  // not to draw.
+  static void Wait(Compositor* compositor);
+
+  // Waits for a commit instead of a draw.
+  static void WaitForCommit(Compositor* compositor);
+
+ private:
+  DrawWaiterForTest();
+  virtual ~DrawWaiterForTest();
+
+  void WaitImpl(Compositor* compositor);
+
+  // CompositorObserver implementation.
+  virtual void OnCompositingDidCommit(Compositor* compositor) OVERRIDE;
+  virtual void OnCompositingStarted(Compositor* compositor,
+                                    base::TimeTicks start_time) OVERRIDE;
+  virtual void OnCompositingEnded(Compositor* compositor) OVERRIDE;
+  virtual void OnCompositingAborted(Compositor* compositor) OVERRIDE;
+  virtual void OnCompositingLockStateChanged(Compositor* compositor) OVERRIDE;
+  virtual void OnUpdateVSyncParameters(Compositor* compositor,
+                                       base::TimeTicks timebase,
+                                       base::TimeDelta interval) OVERRIDE;
+
+  scoped_ptr<base::RunLoop> wait_run_loop_;
+
+  bool wait_for_commit_;
+
+  DISALLOW_COPY_AND_ASSIGN(DrawWaiterForTest);
+};
 
 // Compositor object to take care of GPU painting.
 // A Browser compositor object is responsible for generating the final
@@ -221,7 +296,17 @@ class COMPOSITOR_EXPORT Compositor
              gfx::AcceleratedWidget widget);
   virtual ~Compositor();
 
-  static void Initialize(bool useThread);
+  // Set up the compositor ContextFactory for a test environment. Unit tests
+  // that do not have a full content environment need to call this before
+  // initializing the Compositor.
+  // Some tests expect pixel output, and they should pass false for
+  // |allow_test_contexts|. Most unit tests should pass true. Once this has been
+  // called, the Initialize() and Terminate() methods should be used as normal.
+  static void InitializeContextFactoryForTests(bool allow_test_contexts);
+
+  static void Initialize();
+  static bool WasInitializedWithThread();
+  static scoped_refptr<base::MessageLoopProxy> GetCompositorMessageLoop();
   static void Terminate();
 
   // Schedules a redraw of the layer tree associated with this compositor.
@@ -245,15 +330,19 @@ class COMPOSITOR_EXPORT Compositor
   // compositing layers on.
   float device_scale_factor() const { return device_scale_factor_; }
 
-  // Draws the scene created by the layer tree and any visual effects. If
-  // |force_clear| is true, this will cause the compositor to clear before
-  // compositing.
-  void Draw(bool force_clear);
+  // Draws the scene created by the layer tree and any visual effects.
+  void Draw();
 
   // Where possible, draws are scissored to a damage region calculated from
   // changes to layer properties.  This bypasses that and indicates that
   // the whole frame needs to be drawn.
-  void ScheduleFullDraw();
+  void ScheduleFullRedraw();
+
+  // Schedule redraw and append damage_rect to the damage region calculated
+  // from changes to layer properties.
+  void ScheduleRedrawRect(const gfx::Rect& damage_rect);
+
+  void SetLatencyInfo(const ui::LatencyInfo& latency_info);
 
   // Reads the region |bounds_in_pixel| of the contents of the last rendered
   // frame into the given bitmap.
@@ -305,10 +394,9 @@ class COMPOSITOR_EXPORT Compositor
   virtual void Layout() OVERRIDE;
   virtual void ApplyScrollAndScale(gfx::Vector2d scroll_delta,
                                    float page_scale) OVERRIDE {}
-  virtual scoped_ptr<cc::OutputSurface>
-      CreateOutputSurface() OVERRIDE;
-  virtual void DidRecreateOutputSurface(bool success) OVERRIDE {}
-  virtual scoped_ptr<cc::InputHandler> CreateInputHandler() OVERRIDE;
+  virtual scoped_ptr<cc::OutputSurface> CreateOutputSurface(bool fallback)
+      OVERRIDE;
+  virtual void DidInitializeOutputSurface(bool success) OVERRIDE {}
   virtual void WillCommit() OVERRIDE {}
   virtual void DidCommit() OVERRIDE;
   virtual void DidCommitAndDrawFrame() OVERRIDE;
@@ -323,6 +411,9 @@ class COMPOSITOR_EXPORT Compositor
   int last_ended_frame() { return last_ended_frame_; }
 
   bool IsLocked() { return compositor_lock_ != NULL; }
+
+  const cc::LayerTreeDebugState& GetLayerTreeDebugState() const;
+  void SetLayerTreeDebugState(const cc::LayerTreeDebugState& debug_state);
 
  private:
   friend class base::RefCounted<Compositor>;
@@ -358,6 +449,8 @@ class COMPOSITOR_EXPORT Compositor
 
   int last_started_frame_;
   int last_ended_frame_;
+
+  bool next_draw_is_resize_;
 
   bool disable_schedule_composite_;
 

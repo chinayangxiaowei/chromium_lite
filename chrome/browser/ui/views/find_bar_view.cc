@@ -6,9 +6,9 @@
 
 #include <algorithm>
 
-#include "base/string_util.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/themes/theme_properties.h"
 #include "chrome/browser/ui/find_bar/find_bar_controller.h"
@@ -23,7 +23,6 @@
 #include "grit/theme_resources.h"
 #include "grit/ui_resources.h"
 #include "third_party/skia/include/effects/SkGradientShader.h"
-#include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "ui/base/events/event.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -81,7 +80,7 @@ FindBarView::FindBarView(FindBarHost* host)
   set_id(VIEW_ID_FIND_IN_PAGE);
   ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
 
-  find_text_ = new SearchTextfieldView();
+  find_text_ = new SearchTextfieldView;
   find_text_->set_id(VIEW_ID_FIND_IN_PAGE_TEXT_FIELD);
   find_text_->SetFont(rb.GetFont(ui::ResourceBundle::BaseFont));
   find_text_->set_default_width_in_chars(kDefaultCharWidth);
@@ -136,11 +135,11 @@ FindBarView::FindBarView(FindBarHost* host)
   close_button_->set_tag(CLOSE_TAG);
   close_button_->set_focusable(true);
   close_button_->SetImage(views::CustomButton::STATE_NORMAL,
-                          rb.GetImageSkiaNamed(IDR_TAB_CLOSE));
+                          rb.GetImageSkiaNamed(IDR_CLOSE_1));
   close_button_->SetImage(views::CustomButton::STATE_HOVERED,
-                          rb.GetImageSkiaNamed(IDR_TAB_CLOSE_H));
+                          rb.GetImageSkiaNamed(IDR_CLOSE_1_H));
   close_button_->SetImage(views::CustomButton::STATE_PRESSED,
-                          rb.GetImageSkiaNamed(IDR_TAB_CLOSE_P));
+                          rb.GetImageSkiaNamed(IDR_CLOSE_1_P));
   close_button_->SetTooltipText(
       l10n_util::GetStringUTF16(IDS_FIND_IN_PAGE_CLOSE_TOOLTIP));
   close_button_->SetAccessibleName(
@@ -192,7 +191,7 @@ void FindBarView::UpdateForResult(const FindNotificationDetails& result,
   // composed by them. To avoid this problem, we should check the IME status and
   // update the text only when the IME is not composing text.
   if (find_text_->text() != find_text && !find_text_->IsIMEComposing()) {
-    find_text_->SetText(find_text);
+    SetFindText(find_text);
     find_text_->SelectAll(true);
   }
 
@@ -305,48 +304,40 @@ void FindBarView::Layout() {
                                    sz.width(),
                                    sz.height());
 
-  sz = find_text_->GetPreferredSize();
-  const int find_text_y = (height() - sz.height()) / 2 + 1;
-
   // Then the label showing the match count number.
   sz = match_count_text_->GetPreferredSize();
   // We extend the label bounds a bit to give the background highlighting a bit
   // of breathing room (margins around the text).
   sz.Enlarge(kMatchCountExtraWidth, 0);
-  sz.set_width(std::max(kMatchCountMinWidth, static_cast<int>(sz.width())));
-  int match_count_x = find_previous_button_->x() -
-                      kWhiteSpaceAfterMatchCountLabel -
-                      sz.width();
+  sz.SetToMax(gfx::Size(kMatchCountMinWidth, 0));
+  int match_count_x =
+      find_previous_button_->x() - kWhiteSpaceAfterMatchCountLabel - sz.width();
+  int find_text_y = (height() - find_text_->GetPreferredSize().height()) / 2;
   match_count_text_->SetBounds(match_count_x,
                                find_text_y + find_text_->GetBaseline() -
                                    match_count_text_->GetBaseline(),
-                               sz.width(),
-                               sz.height());
+                               sz.width(), sz.height());
 
   // And whatever space is left in between, gets filled up by the find edit box.
-  sz = find_text_->GetPreferredSize();
-  sz.set_width(std::max(0, match_count_x - kMarginLeftOfFindTextfield));
-  int find_text_x = std::max(0, match_count_x - sz.width());
-  find_text_->SetBounds(find_text_x,
-                        (height() - sz.height()) / 2 + 1,
-                        sz.width(),
-                        sz.height());
+  int find_text_width = std::max(0, match_count_x - kMarginLeftOfFindTextfield);
+  find_text_->SetBounds(std::max(0, match_count_x - find_text_width),
+                        find_text_y, find_text_width,
+                        find_text_->GetPreferredSize().height());
 
   // The focus forwarder view is a hidden view that should cover the area
   // between the find text box and the find button so that when the user clicks
   // in that area we focus on the find text box.
   int find_text_edge = find_text_->x() + find_text_->width();
-  focus_forwarder_view_->SetBounds(find_text_edge,
-                                   find_previous_button_->y(),
-                                   find_previous_button_->x() -
-                                       find_text_edge,
-                                   find_previous_button_->height());
+  focus_forwarder_view_->SetBounds(
+      find_text_edge, find_previous_button_->y(),
+      find_previous_button_->x() - find_text_edge,
+      find_previous_button_->height());
 }
 
-void FindBarView::ViewHierarchyChanged(bool is_add, View* parent, View* child) {
-  if (is_add && child == this) {
-    find_text_->SetHorizontalMargins(3, 3);  // Left and Right margins.
-    find_text_->SetVerticalMargins(0, 0);  // Top and bottom margins.
+void FindBarView::ViewHierarchyChanged(
+    const ViewHierarchyChangedDetails& details) {
+  if (details.is_add && details.child == this) {
+    find_text_->SetHorizontalMargins(0, 2);  // Left and Right margins.
     find_text_->RemoveBorder();  // We draw our own border (a background image).
   }
 }
@@ -405,37 +396,12 @@ void FindBarView::ButtonPressed(
 
 void FindBarView::ContentsChanged(views::Textfield* sender,
                                   const string16& new_contents) {
-  FindBarController* controller = find_bar_host()->GetFindBarController();
-  DCHECK(controller);
-  content::WebContents* web_contents = controller->web_contents();
-  // We must guard against a NULL web_contents, which can happen if the text
-  // in the Find box is changed right after the tab is destroyed. Otherwise, it
-  // can lead to crashes, as exposed by automation testing in issue 8048.
-  if (!web_contents)
-    return;
-  FindTabHelper* find_tab_helper = FindTabHelper::FromWebContents(web_contents);
-
-  // When the user changes something in the text box we check the contents and
-  // if the textbox contains something we set it as the new search string and
-  // initiate search (even though old searches might be in progress).
-  if (!new_contents.empty()) {
-    // The last two params here are forward (true) and case sensitive (false).
-    find_tab_helper->StartFinding(new_contents, true, false);
-  } else {
-    find_tab_helper->StopFinding(FindBarController::kClearSelectionOnPage);
-    UpdateForResult(find_tab_helper->find_result(), string16());
-    find_bar_host()->MoveWindowIfNecessary(gfx::Rect(), false);
-
-    // Clearing the text box should clear the prepopulate state so that when
-    // we close and reopen the Find box it doesn't show the search we just
-    // deleted. We can't do this on ChromeOS yet because we get ContentsChanged
-    // sent for a lot more things than just the user nulling out the search
-    // terms. See http://crbug.com/45372.
-    Profile* profile =
-        Profile::FromBrowserContext(web_contents->GetBrowserContext());
-    FindBarState* find_bar_state = FindBarStateFactory::GetForProfile(profile);
-    find_bar_state->set_last_prepopulate_text(string16());
-  }
+  // TextfieldController::OnAfterUserAction() is supported only by Views
+  // implementation, and NativeTextfieldWin doesn't call OnAfterUserAction().
+  // Call Find() here.
+  // TODO(yukishiino): Remove this code after the migration to Views.
+  if (!views::Textfield::IsViewsTextfieldEnabled())
+    Find(new_contents);
 }
 
 bool FindBarView::HandleKeyEvent(views::Textfield* sender,
@@ -459,25 +425,63 @@ bool FindBarView::HandleKeyEvent(views::Textfield* sender,
                                     !key_event.IsShiftDown(),
                                     false);  // Not case sensitive.
     }
+    return true;
   }
 
   return false;
 }
 
-void FindBarView::OnAfterCutOrCopy() {
-  Profile* profile = host()->browser_view()->browser()->profile();
-  ui::Clipboard::SourceTag source_tag =
-      content::BrowserContext::GetMarkerForOffTheRecordContext(profile);
-  if (source_tag != ui::Clipboard::SourceTag()) {
-    // Overwrite the clipboard with the correct SourceTag
-    ui::Clipboard* clipboard = ui::Clipboard::GetForCurrentThread();
-    string16 text;
-    clipboard->ReadText(ui::Clipboard::BUFFER_STANDARD, &text);
+void FindBarView::OnAfterUserAction(views::Textfield* sender) {
+  // The composition text wouldn't be what the user is really looking for.
+  // We delay the search until the user commits the composition text.
+  if (sender->IsIMEComposing() || sender->text() == last_searched_text_)
+    return;
 
-    ui::ScopedClipboardWriter scw(clipboard,
-                                  ui::Clipboard::BUFFER_STANDARD,
-                                  source_tag);
-    scw.WriteText(text);
+  // TODO(yukishiino): Remove this condition check after the migration to Views.
+  if (views::Textfield::IsViewsTextfieldEnabled())
+    Find(sender->text());
+}
+
+void FindBarView::OnAfterPaste() {
+  // Clear the last search text so we always search for the user input after
+  // a paste operation, even if the pasted text is the same as before.
+  // See http://crbug.com/79002
+  last_searched_text_.clear();
+}
+
+void FindBarView::Find(const string16& search_text) {
+  FindBarController* controller = find_bar_host()->GetFindBarController();
+  DCHECK(controller);
+  content::WebContents* web_contents = controller->web_contents();
+  // We must guard against a NULL web_contents, which can happen if the text
+  // in the Find box is changed right after the tab is destroyed. Otherwise, it
+  // can lead to crashes, as exposed by automation testing in issue 8048.
+  if (!web_contents)
+    return;
+  FindTabHelper* find_tab_helper = FindTabHelper::FromWebContents(web_contents);
+
+  last_searched_text_ = search_text;
+
+  // When the user changes something in the text box we check the contents and
+  // if the textbox contains something we set it as the new search string and
+  // initiate search (even though old searches might be in progress).
+  if (!search_text.empty()) {
+    // The last two params here are forward (true) and case sensitive (false).
+    find_tab_helper->StartFinding(search_text, true, false);
+  } else {
+    find_tab_helper->StopFinding(FindBarController::kClearSelectionOnPage);
+    UpdateForResult(find_tab_helper->find_result(), string16());
+    find_bar_host()->MoveWindowIfNecessary(gfx::Rect(), false);
+
+    // Clearing the text box should clear the prepopulate state so that when
+    // we close and reopen the Find box it doesn't show the search we just
+    // deleted. We can't do this on ChromeOS yet because we get ContentsChanged
+    // sent for a lot more things than just the user nulling out the search
+    // terms. See http://crbug.com/45372.
+    Profile* profile =
+        Profile::FromBrowserContext(web_contents->GetBrowserContext());
+    FindBarState* find_bar_state = FindBarStateFactory::GetForProfile(profile);
+    find_bar_state->set_last_prepopulate_text(string16());
   }
 }
 
@@ -498,17 +502,29 @@ bool FindBarView::FocusForwarderView::OnMousePressed(
   return true;
 }
 
-FindBarView::SearchTextfieldView::SearchTextfieldView() {
+FindBarView::SearchTextfieldView::SearchTextfieldView()
+    : select_all_on_focus_(true) {}
+
+FindBarView::SearchTextfieldView::~SearchTextfieldView() {}
+
+bool FindBarView::SearchTextfieldView::OnMousePressed(
+    const ui::MouseEvent& event) {
+  // Avoid temporarily selecting all the text on focus from a mouse press; this
+  // prevents flickering before setting a cursor or dragging to select text.
+  select_all_on_focus_ = false;
+  return views::Textfield::OnMousePressed(event);
 }
 
-FindBarView::SearchTextfieldView::~SearchTextfieldView() {
+void FindBarView::SearchTextfieldView::OnMouseReleased(
+    const ui::MouseEvent& event) {
+  views::Textfield::OnMouseReleased(event);
+  select_all_on_focus_ = true;
 }
 
-void FindBarView::SearchTextfieldView::RequestFocus() {
-  if (HasFocus())
-    return;
-  views::View::RequestFocus();
-  SelectAll(true);
+void FindBarView::SearchTextfieldView::OnFocus() {
+  views::Textfield::OnFocus();
+  if (select_all_on_focus_)
+    SelectAll(true);
 }
 
 FindBarHost* FindBarView::find_bar_host() const {
@@ -520,7 +536,7 @@ void FindBarView::OnThemeChanged() {
   if (GetThemeProvider()) {
     close_button_->SetBackground(
         GetThemeProvider()->GetColor(ThemeProperties::COLOR_TAB_TEXT),
-        rb.GetImageSkiaNamed(IDR_TAB_CLOSE),
-        rb.GetImageSkiaNamed(IDR_TAB_CLOSE_MASK));
+        rb.GetImageSkiaNamed(IDR_CLOSE_1),
+        rb.GetImageSkiaNamed(IDR_CLOSE_1_MASK));
   }
 }

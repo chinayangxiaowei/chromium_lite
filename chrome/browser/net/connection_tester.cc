@@ -9,23 +9,23 @@
 #include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/memory/weak_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/thread_task_runner_handle.h"
 #include "base/threading/thread_restrictions.h"
-#include "base/utf_string_conversions.h"
 #include "chrome/common/chrome_switches.h"
 #include "content/public/browser/browser_thread.h"
-#include "net/base/cert_verifier.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
 #include "net/base/net_util.h"
+#include "net/cert/cert_verifier.h"
 #include "net/cookies/cookie_monster.h"
 #include "net/dns/host_resolver.h"
-#include "net/ftp/ftp_network_layer.h"
 #include "net/http/http_auth_handler_factory.h"
 #include "net/http/http_cache.h"
 #include "net/http/http_network_session.h"
 #include "net/http/http_server_properties_impl.h"
+#include "net/http/transport_security_state.h"
 #include "net/proxy/dhcp_proxy_script_fetcher_factory.h"
 #include "net/proxy/proxy_config_service_fixed.h"
 #include "net/proxy/proxy_script_fetcher_impl.h"
@@ -37,7 +37,7 @@
 #include "net/url_request/url_request_context_storage.h"
 
 #if !defined(OS_ANDROID) && !defined(OS_IOS)
-#include "chrome/browser/importer/firefox_proxy_settings.h"
+#include "chrome/browser/net/firefox_proxy_settings.h"
 #endif
 
 namespace {
@@ -54,8 +54,8 @@ class ExperimentURLRequestContext : public net::URLRequestContext {
 #if !defined(OS_IOS)
         proxy_request_context_(proxy_request_context),
 #endif
-        ALLOW_THIS_IN_INITIALIZER_LIST(storage_(this)),
-        ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {}
+        storage_(this),
+        weak_factory_(this) {}
 
   virtual ~ExperimentURLRequestContext() {}
 
@@ -109,18 +109,18 @@ class ExperimentURLRequestContext : public net::URLRequestContext {
     // The rest of the dependencies are standard, and don't depend on the
     // experiment being run.
     storage_.set_cert_verifier(net::CertVerifier::CreateDefault());
-#if !defined(DISABLE_FTP_SUPPORT)
-    storage_.set_ftp_transaction_factory(
-        new net::FtpNetworkLayer(host_resolver()));
-#endif
+    storage_.set_transport_security_state(new net::TransportSecurityState);
     storage_.set_ssl_config_service(new net::SSLConfigServiceDefaults);
     storage_.set_http_auth_handler_factory(
         net::HttpAuthHandlerFactory::CreateDefault(host_resolver()));
-    storage_.set_http_server_properties(new net::HttpServerPropertiesImpl);
+    storage_.set_http_server_properties(
+        scoped_ptr<net::HttpServerProperties>(
+            new net::HttpServerPropertiesImpl()));
 
     net::HttpNetworkSession::Params session_params;
     session_params.host_resolver = host_resolver();
     session_params.cert_verifier = cert_verifier();
+    session_params.transport_security_state = transport_security_state();
     session_params.proxy_service = proxy_service();
     session_params.ssl_config_service = ssl_config_service();
     session_params.http_auth_handler_factory = http_auth_handler_factory();
@@ -129,8 +129,7 @@ class ExperimentURLRequestContext : public net::URLRequestContext {
     scoped_refptr<net::HttpNetworkSession> network_session(
         new net::HttpNetworkSession(session_params));
     storage_.set_http_transaction_factory(new net::HttpCache(
-        network_session,
-        net::HttpCache::DefaultBackend::InMemory(0)));
+        network_session.get(), net::HttpCache::DefaultBackend::InMemory(0)));
     // In-memory cookie store.
     storage_.set_cookie_store(new net::CookieMonster(NULL, NULL));
 
@@ -162,12 +161,7 @@ class ExperimentURLRequestContext : public net::URLRequestContext {
         resolver->SetDefaultAddressFamily(net::ADDRESS_FAMILY_IPV4);
         break;
       case ConnectionTester::HOST_RESOLVER_EXPERIMENT_IPV6_PROBE: {
-        // Note that we don't use impl->ProbeIPv6Support() since that finishes
-        // asynchronously and may not take effect in time for the test.
-        // So instead we will probe synchronously (might take 100-200 ms).
-        net::AddressFamily family = net::TestIPv6Support().ipv6_supported ?
-            net::ADDRESS_FAMILY_UNSPECIFIED : net::ADDRESS_FAMILY_IPV4;
-        resolver->SetDefaultAddressFamily(family);
+        // The system HostResolver will probe by default.
         break;
       }
       default:
@@ -226,9 +220,8 @@ class ExperimentURLRequestContext : public net::URLRequestContext {
     // construction needs ot happen on the UI thread.
     return net::ERR_NOT_IMPLEMENTED;
 #else
-    config_service->reset(
-        net::ProxyService::CreateSystemProxyConfigService(
-            base::ThreadTaskRunnerHandle::Get(), NULL));
+    config_service->reset(net::ProxyService::CreateSystemProxyConfigService(
+        base::ThreadTaskRunnerHandle::Get().get(), NULL));
     return net::OK;
 #endif
   }
@@ -307,7 +300,7 @@ class ConnectionTester::TestRunner : public net::URLRequest::Delegate {
   TestRunner(ConnectionTester* tester, net::NetLog* net_log)
       : tester_(tester),
         net_log_(net_log),
-        ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {}
+        weak_factory_(this) {}
 
   // Finish running |experiment| once a ProxyConfigService has been created.
   // In the case of a FirefoxProxyConfigService, this will be called back
@@ -374,7 +367,7 @@ void ConnectionTester::TestRunner::ReadBody(net::URLRequest* request) {
   scoped_refptr<net::IOBuffer> unused_buffer(
       new net::IOBuffer(kReadBufferSize));
   int num_bytes;
-  if (request->Read(unused_buffer, kReadBufferSize, &num_bytes)) {
+  if (request->Read(unused_buffer.get(), kReadBufferSize, &num_bytes)) {
     OnReadCompleted(request, num_bytes);
   } else if (!request->status().is_io_pending()) {
     // Read failed synchronously.
@@ -393,7 +386,7 @@ void ConnectionTester::TestRunner::OnResponseCompleted(
   // Post a task to notify the parent rather than handling it right away,
   // to avoid re-entrancy problems with URLRequest. (Don't want the caller
   // to end up deleting the URLRequest while in the middle of processing).
-  MessageLoop::current()->PostTask(
+  base::MessageLoop::current()->PostTask(
       FROM_HERE,
       base::Bind(&TestRunner::OnExperimentCompletedWithResult,
                  weak_factory_.GetWeakPtr(), result));

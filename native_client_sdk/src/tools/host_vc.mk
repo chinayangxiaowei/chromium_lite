@@ -6,7 +6,6 @@
 # GNU Make based build file.  For details on GNU Make see:
 #   http://www.gnu.org/software/make/manual/make.html
 #
-#
 
 
 #
@@ -15,10 +14,10 @@
 # We use the C++ compiler for everything and then use the -Wl,-as-needed flag
 # in the linker to drop libc++ unless it's actually needed.
 #
-HOST_CC?=cl.exe /nologo
-HOST_CXX?=cl.exe /nologo /EHsc
-HOST_LINK?=link.exe /nologo
-HOST_LIB?=lib.exe /nologo
+HOST_CC ?= cl.exe /nologo
+HOST_CXX ?= cl.exe /nologo /EHsc
+HOST_LINK ?= link.exe /nologo
+HOST_LIB ?= lib.exe /nologo
 
 ifeq (,$(findstring cl.exe,$(shell $(WHICH) cl.exe)))
 $(warning To skip the host build use:)
@@ -27,13 +26,13 @@ $(error Unable to find cl.exe in PATH while building Windows host build)
 endif
 
 
-ifeq ('Debug','$(CONFIG)')
-WIN_OPT_FLAGS?=/Od /MTd /Z7
+ifeq ($(CONFIG),Release)
+WIN_OPT_FLAGS ?= /O2 /MT /Z7
 else
-WIN_OPT_FLAGS?=/O2 /MT /Z7
+WIN_OPT_FLAGS ?= /Od /MTd /Z7 -DNACL_SDK_DEBUG
 endif
 
-WIN_FLAGS?=-D WIN32 -D _WIN32 -D PTW32_STATIC_LIB
+WIN_FLAGS ?= -DWIN32 -D_WIN32 -DPTW32_STATIC_LIB
 
 
 #
@@ -74,11 +73,11 @@ endef
 #
 #
 define LIB_RULE
-$(STAMPDIR)/$(1).stamp : $(NACL_SDK_ROOT)/lib/$(OSNAME)_x86_32_host/$(CONFIG)/$(1).lib
+$(STAMPDIR)/$(1).stamp: $(LIBDIR)/$(OSNAME)_x86_32_host/$(CONFIG)/$(1).lib
 	@echo "TOUCHED $$@" > $(STAMPDIR)/$(1).stamp
 
-all:$(NACL_SDK_ROOT)/lib/$(OSNAME)_x86_32_host/$(CONFIG)/$(1).lib
-$(NACL_SDK_ROOT)/lib/$(OSNAME)_x86_32_host/$(CONFIG)/$(1).lib : $(foreach src,$(2),$(OUTDIR)/$(basename $(src)).o)
+all:$(LIBDIR)/$(OSNAME)_x86_32_host/$(CONFIG)/$(1).lib
+$(LIBDIR)/$(OSNAME)_x86_32_host/$(CONFIG)/$(1).lib: $(foreach src,$(2),$(OUTDIR)/$(basename $(src)).o)
 	$(MKDIR) -p $$(dir $$@)
 	$(call LOG,LIB,$$@,$(HOST_LIB) /OUT:$$@ $$^ $(WIN_LDFLAGS))
 endef
@@ -96,7 +95,7 @@ endef
 #
 define LINKER_RULE
 all: $(1)
-$(1) : $(2) $(foreach dep,$(4),$(STAMPDIR)/$(dep).stamp)
+$(1): $(2) $(foreach dep,$(4),$(STAMPDIR)/$(dep).stamp)
 	$(call LOG,LINK,$$@,$(HOST_LINK) /DLL /OUT:$(1) /PDB:$(1).pdb $(2) /DEBUG $(foreach path,$(5),/LIBPATH:$(path)/$(OSNAME)_x86_32_host/$(CONFIG)) $(foreach lib,$(3),$(lib).lib) $(6))
 endef
 
@@ -115,4 +114,19 @@ define LINK_RULE
 $(call LINKER_RULE,$(OUTDIR)/$(1)$(HOST_EXT),$(foreach src,$(2),$(OUTDIR)/$(basename $(src)).o),$(3),$(4),$(LIB_PATHS),$(6))
 endef
 
-all : $(LIB_LIST) $(DEPS_LIST)
+
+#
+# Strip Macro
+# This is a nop (copy) since visual studio already keeps debug info
+# separate from the binaries
+#
+# $1 = Target Name
+# $2 = Input Name
+#
+define STRIP_RULE
+all: $(OUTDIR)/$(1)$(HOST_EXT)
+$(OUTDIR)/$(1)$(HOST_EXT): $(OUTDIR)/$(2)$(HOST_EXT)
+	$(call LOG,COPY,$$@,$(CP) $$^ $$@)
+endef
+
+all: $(LIB_LIST) $(DEPS_LIST)

@@ -22,8 +22,9 @@
 #include "sync/internal_api/public/engine/sync_status.h"
 #include "sync/internal_api/public/sync_encryption_handler.h"
 #include "sync/internal_api/public/util/report_unrecoverable_error_function.h"
+#include "sync/internal_api/public/util/unrecoverable_error_handler.h"
 #include "sync/internal_api/public/util/weak_handle.h"
-#include "sync/notifier/invalidation_util.h"
+#include "sync/notifier/invalidation_handler.h"
 #include "sync/protocol/sync_protocol_error.h"
 
 namespace sync_pb {
@@ -36,16 +37,13 @@ class BaseTransaction;
 class DataTypeDebugInfoListener;
 class Encryptor;
 struct Experiments;
-class ExtensionsActivityMonitor;
+class ExtensionsActivity;
 class HttpPostProviderFactory;
 class InternalComponentsFactory;
-class InvalidationHandler;
-class Invalidator;
 class JsBackend;
 class JsEventHandler;
 class SyncEncryptionHandler;
 class SyncScheduler;
-class UnrecoverableErrorHandler;
 struct UserShare;
 
 namespace sessions {
@@ -61,7 +59,9 @@ enum ConnectionStatus {
 
 // Contains everything needed to talk to and identify a user account.
 struct SyncCredentials {
+  // The email associated with this account.
   std::string email;
+  // The raw authentication token's bytes.
   std::string sync_token;
 };
 
@@ -73,7 +73,7 @@ struct SyncCredentials {
 //
 // Unless stated otherwise, all methods of SyncManager should be called on the
 // same thread.
-class SYNC_EXPORT SyncManager {
+class SYNC_EXPORT SyncManager : public syncer::InvalidationHandler {
  public:
   // An interface the embedding application implements to be notified
   // on change events.  Note that these methods may be called on *any*
@@ -292,6 +292,8 @@ class SYNC_EXPORT SyncManager {
   // |user_agent| is a 7-bit ASCII string suitable for use as the User-Agent
   // HTTP header. Used internally when collecting stats to classify clients.
   // |invalidator| is owned and used to listen for invalidations.
+  // |invalidator_client_id| is used to unqiuely identify this client to the
+  // invalidation notification server.
   // |restored_key_for_bootstrapping| is the key used to boostrap the
   // cryptographer
   // |keystore_encryption_enabled| determines whether we enable the keystore
@@ -308,16 +310,17 @@ class SYNC_EXPORT SyncManager {
       bool use_ssl,
       scoped_ptr<HttpPostProviderFactory> post_factory,
       const std::vector<ModelSafeWorker*>& workers,
-      ExtensionsActivityMonitor* extensions_activity_monitor,
+      ExtensionsActivity* extensions_activity,
       ChangeDelegate* change_delegate,
       const SyncCredentials& credentials,
-      scoped_ptr<Invalidator> invalidator,
+      const std::string& invalidator_client_id,
       const std::string& restored_key_for_bootstrapping,
       const std::string& restored_keystore_key_for_bootstrapping,
-      scoped_ptr<InternalComponentsFactory> internal_components_factory,
+      InternalComponentsFactory* internal_components_factory,
       Encryptor* encryptor,
-      UnrecoverableErrorHandler* unrecoverable_error_handler,
-      ReportUnrecoverableErrorFunction report_unrecoverable_error_function) = 0;
+      scoped_ptr<UnrecoverableErrorHandler> unrecoverable_error_handler,
+      ReportUnrecoverableErrorFunction report_unrecoverable_error_function,
+      bool use_oauth2_token) = 0;
 
   // Throw an unrecoverable error from a transaction (mostly used for
   // testing).
@@ -338,27 +341,6 @@ class SYNC_EXPORT SyncManager {
   // Update tokens that we're using in Sync. Email must stay the same.
   virtual void UpdateCredentials(const SyncCredentials& credentials) = 0;
 
-  // Called when the user disables or enables a sync type.
-  virtual void UpdateEnabledTypes(ModelTypeSet enabled_types) = 0;
-
-  // Forwards to the underlying invalidator (see comments in invalidator.h).
-  virtual void RegisterInvalidationHandler(
-      InvalidationHandler* handler) = 0;
-
-  // Forwards to the underlying notifier (see comments in invalidator.h).
-  virtual void UpdateRegisteredInvalidationIds(
-      InvalidationHandler* handler,
-      const ObjectIdSet& ids) = 0;
-
-  // Forwards to the underlying notifier (see comments in invalidator.h).
-  virtual void UnregisterInvalidationHandler(
-      InvalidationHandler* handler) = 0;
-
-  // Forwards to the underlying notifier (see comments in invalidator.h).
-  virtual void AcknowledgeInvalidation(
-      const invalidation::ObjectId& id,
-      const syncer::AckHandle& ack_handle) = 0;
-
   // Put the syncer in normal mode ready to perform nudges and polls.
   virtual void StartSyncingNormally(
       const ModelSafeRoutingInfo& routing_info) = 0;
@@ -368,19 +350,30 @@ class SYNC_EXPORT SyncManager {
   // syncer will remain in CONFIGURATION_MODE until StartSyncingNormally is
   // called.
   // Data whose types are not in |new_routing_info| are purged from sync
-  // directory. The purged data is backed up in delete journal for recovery in
-  // next session if its type is in |failed_types|.
+  // directory, unless they're part of |to_ignore|, in which case they're left
+  // untouched. The purged data is backed up in delete journal for recovery in
+  // next session if its type is in |to_journal|. If in |to_unapply|
+  // only the local data is removed; the server data is preserved.
   // |ready_task| is invoked when the configuration completes.
   // |retry_task| is invoked if the configuration job could not immediately
   //              execute. |ready_task| will still be called when it eventually
   //              does finish.
   virtual void ConfigureSyncer(
       ConfigureReason reason,
-      ModelTypeSet types_to_config,
-      ModelTypeSet failed_types,
+      ModelTypeSet to_download,
+      ModelTypeSet to_purge,
+      ModelTypeSet to_journal,
+      ModelTypeSet to_unapply,
       const ModelSafeRoutingInfo& new_routing_info,
       const base::Closure& ready_task,
       const base::Closure& retry_task) = 0;
+
+  // Inform the syncer of a change in the invalidator's state.
+  virtual void OnInvalidatorStateChange(InvalidatorState state) = 0;
+
+  // Inform the syncer that its cached information about a type is obsolete.
+  virtual void OnIncomingInvalidation(
+      const ObjectIdInvalidationMap& invalidation_map) = 0;
 
   // Adds a listener to be notified of sync events.
   // NOTE: It is OK (in fact, it's probably a good idea) to call this before
@@ -408,7 +401,7 @@ class SYNC_EXPORT SyncManager {
   // If no scheduler exists, the callback is run immediately (from the loop
   // this was created on, which is the sync loop), as sync is effectively
   // stopped.
-  virtual void StopSyncingForShutdown(const base::Closure& callback) = 0;
+  virtual void StopSyncingForShutdown() = 0;
 
   // Issue a final SaveChanges, and close sqlite handles.
   virtual void ShutdownOnSyncThread() = 0;

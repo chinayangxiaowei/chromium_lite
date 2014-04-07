@@ -4,10 +4,30 @@
 
 #include "chrome/browser/ui/search/instant_page.h"
 
-#include "base/utf_string_conversions.h"
+#include "apps/app_launcher.h"
+#include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/chrome_notification_types.h"
+#include "chrome/browser/history/most_visited_tiles_experiment.h"
+#include "chrome/browser/history/top_sites.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/search/instant_service.h"
+#include "chrome/browser/search/instant_service_factory.h"
+#include "chrome/browser/search/search.h"
+#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/search/instant_tab.h"
+#include "chrome/browser/ui/search/search_model.h"
+#include "chrome/browser/ui/search/search_tab_helper.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/tabs/tab_strip_model_utils.h"
 #include "chrome/common/render_messages.h"
 #include "chrome/common/url_constants.h"
+#include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/navigation_details.h"
+#include "content/public/browser/navigation_entry.h"
+#include "content/public/browser/notification_service.h"
+#include "content/public/browser/notification_source.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/frame_navigate_params.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/font.h"
 
@@ -15,121 +35,82 @@ InstantPage::Delegate::~Delegate() {
 }
 
 InstantPage::~InstantPage() {
+  if (contents())
+    SearchTabHelper::FromWebContents(contents())->model()->RemoveObserver(this);
+
+  // |profile_| may be NULL during unit tests.
+  if (profile_) {
+    InstantService* instant_service =
+        InstantServiceFactory::GetForProfile(profile_);
+    instant_service->RemoveObserver(this);
+  }
 }
 
-bool InstantPage::IsLocalNTP() const {
+bool InstantPage::supports_instant() const {
+  return contents() ?
+      SearchTabHelper::FromWebContents(contents())->SupportsInstant() : false;
+}
+
+const std::string& InstantPage::instant_url() const {
+  return instant_url_;
+}
+
+bool InstantPage::IsLocal() const {
   return contents() &&
       contents()->GetURL() == GURL(chrome::kChromeSearchLocalNtpUrl);
 }
 
-bool InstantPage::IsLocalOverlay() const {
-  return contents() &&
-      contents()->GetURL() == GURL(chrome::kChromeSearchLocalOmniboxPopupURL);
-}
-
-void InstantPage::Update(const string16& text,
-                         size_t selection_start,
-                         size_t selection_end,
-                         bool verbatim) {
-  Send(new ChromeViewMsg_SearchBoxChange(routing_id(), text, verbatim,
-                                         selection_start, selection_end));
-}
-
-void InstantPage::Submit(const string16& text) {
-  Send(new ChromeViewMsg_SearchBoxSubmit(routing_id(), text));
-}
-
-void InstantPage::Cancel(const string16& text) {
-  Send(new ChromeViewMsg_SearchBoxCancel(routing_id(), text));
-}
-
-void InstantPage::SetPopupBounds(const gfx::Rect& bounds) {
-  Send(new ChromeViewMsg_SearchBoxPopupResize(routing_id(), bounds));
-}
-
-void InstantPage::SetOmniboxBounds(const gfx::Rect& bounds) {
-  Send(new ChromeViewMsg_SearchBoxMarginChange(
-      routing_id(), bounds.x(), bounds.width()));
-}
-
 void InstantPage::InitializeFonts() {
-  // TODO(sail) Remove this once the Mac omnibox font size is updated.
 #if defined(OS_MACOSX)
-  ui::ResourceBundle::FontStyle font_style = ui::ResourceBundle::BaseFont;
-#else
-  ui::ResourceBundle::FontStyle font_style = ui::ResourceBundle::MediumFont;
-#endif
+  // This value should be kept in sync with OmniboxViewMac::GetFieldFont.
   const gfx::Font& omnibox_font =
-      ui::ResourceBundle::GetSharedInstance().GetFont(font_style);
-  string16 omnibox_font_name = UTF8ToUTF16(omnibox_font.GetFontName());
-  size_t omnibox_font_size = omnibox_font.GetFontSize();
-  Send(new ChromeViewMsg_SearchBoxFontInformation(
-      routing_id(), omnibox_font_name, omnibox_font_size));
+      ui::ResourceBundle::GetSharedInstance().GetFont(
+          ui::ResourceBundle::MediumFont).DeriveFont(1);
+#else
+  const gfx::Font& omnibox_font =
+      ui::ResourceBundle::GetSharedInstance().GetFont(
+          ui::ResourceBundle::MediumFont);
+#endif
+  sender()->SetFontInformation(UTF8ToUTF16(omnibox_font.GetFontName()),
+                               omnibox_font.GetFontSize());
 }
 
-void InstantPage::DetermineIfPageSupportsInstant() {
-  Send(new ChromeViewMsg_DetermineIfPageSupportsInstant(routing_id()));
+void InstantPage::InitializePromos() {
+  sender()->SetPromoInformation(apps::IsAppLauncherEnabled());
 }
 
-void InstantPage::SendAutocompleteResults(
-    const std::vector<InstantAutocompleteResult>& results) {
-  Send(new ChromeViewMsg_SearchBoxAutocompleteResults(routing_id(), results));
+InstantPage::InstantPage(Delegate* delegate, const std::string& instant_url,
+                         Profile* profile, bool is_incognito)
+    : profile_(profile),
+      delegate_(delegate),
+      ipc_sender_(InstantIPCSender::Create(is_incognito)),
+      instant_url_(instant_url),
+      is_incognito_(is_incognito) {
+  // |profile_| may be NULL during unit tests.
+  if (profile_) {
+    InstantService* instant_service =
+        InstantServiceFactory::GetForProfile(profile_);
+    instant_service->AddObserver(this);
+  }
 }
 
-void InstantPage::UpOrDownKeyPressed(int count) {
-  Send(new ChromeViewMsg_SearchBoxUpOrDownKeyPressed(routing_id(), count));
-}
+void InstantPage::SetContents(content::WebContents* web_contents) {
+  ClearContents();
 
-void InstantPage::CancelSelection(const string16& user_text) {
-  Send(new ChromeViewMsg_SearchBoxCancelSelection(routing_id(), user_text));
-}
+  if (!web_contents)
+    return;
 
-void InstantPage::SendThemeBackgroundInfo(
-    const ThemeBackgroundInfo& theme_info) {
-  Send(new ChromeViewMsg_SearchBoxThemeChanged(routing_id(), theme_info));
-}
+  sender()->SetContents(web_contents);
+  Observe(web_contents);
+  SearchModel* model = SearchTabHelper::FromWebContents(contents())->model();
+  model->AddObserver(this);
 
-void InstantPage::SetDisplayInstantResults(bool display_instant_results) {
-  Send(new ChromeViewMsg_SearchBoxSetDisplayInstantResults(
-      routing_id(), display_instant_results));
-}
-
-void InstantPage::KeyCaptureChanged(bool is_key_capture_enabled) {
-  Send(new ChromeViewMsg_SearchBoxKeyCaptureChanged(
-      routing_id(), is_key_capture_enabled));
-}
-
-void InstantPage::SendMostVisitedItems(
-    const std::vector<InstantMostVisitedItemIDPair>& items) {
-  Send(new ChromeViewMsg_SearchBoxMostVisitedItemsChanged(routing_id(), items));
-}
-
-InstantPage::InstantPage(Delegate* delegate)
-    : delegate_(delegate),
-      supports_instant_(false) {
-}
-
-void InstantPage::SetContents(content::WebContents* contents) {
-  Observe(contents);
-}
-
-bool InstantPage::ShouldProcessRenderViewCreated() {
-  return false;
-}
-
-bool InstantPage::ShouldProcessRenderViewGone() {
-  return false;
+  // Already know whether the page supports instant.
+  if (model->instant_support() != INSTANT_SUPPORT_UNKNOWN)
+    InstantSupportDetermined(model->instant_support() == INSTANT_SUPPORT_YES);
 }
 
 bool InstantPage::ShouldProcessAboutToNavigateMainFrame() {
-  return false;
-}
-
-bool InstantPage::ShouldProcessSetSuggestions() {
-  return false;
-}
-
-bool InstantPage::ShouldProcessShowInstantOverlay() {
   return false;
 }
 
@@ -137,47 +118,38 @@ bool InstantPage::ShouldProcessFocusOmnibox() {
   return false;
 }
 
-bool InstantPage::ShouldProcessStartCapturingKeyStrokes() {
-  return false;
-}
-
-bool InstantPage::ShouldProcessStopCapturingKeyStrokes() {
-  return false;
-}
-
 bool InstantPage::ShouldProcessNavigateToURL() {
   return false;
 }
 
-void InstantPage::RenderViewCreated(content::RenderViewHost* render_view_host) {
-  if (ShouldProcessRenderViewCreated())
-    delegate_->InstantPageRenderViewCreated(contents());
+bool InstantPage::ShouldProcessPasteIntoOmnibox() {
+  return false;
 }
 
-void InstantPage::DidFinishLoad(
-    int64 /* frame_id */,
-    const GURL& /* validated_url */,
-    bool is_main_frame,
-    content::RenderViewHost* /* render_view_host */) {
-  if (is_main_frame && !supports_instant_)
-    DetermineIfPageSupportsInstant();
+bool InstantPage::ShouldProcessDeleteMostVisitedItem() {
+  return false;
+}
+
+bool InstantPage::ShouldProcessUndoMostVisitedDeletion() {
+  return false;
+}
+
+bool InstantPage::ShouldProcessUndoAllMostVisitedDeletions() {
+  return false;
 }
 
 bool InstantPage::OnMessageReceived(const IPC::Message& message) {
+  if (is_incognito_)
+    return false;
+
   bool handled = true;
   IPC_BEGIN_MESSAGE_MAP(InstantPage, message)
-    IPC_MESSAGE_HANDLER(ChromeViewHostMsg_SetSuggestions, OnSetSuggestions)
-    IPC_MESSAGE_HANDLER(ChromeViewHostMsg_InstantSupportDetermined,
-                        OnInstantSupportDetermined)
-    IPC_MESSAGE_HANDLER(ChromeViewHostMsg_ShowInstantOverlay,
-                        OnShowInstantOverlay)
     IPC_MESSAGE_HANDLER(ChromeViewHostMsg_FocusOmnibox, OnFocusOmnibox)
-    IPC_MESSAGE_HANDLER(ChromeViewHostMsg_StartCapturingKeyStrokes,
-                        OnStartCapturingKeyStrokes);
-    IPC_MESSAGE_HANDLER(ChromeViewHostMsg_StopCapturingKeyStrokes,
-                        OnStopCapturingKeyStrokes);
     IPC_MESSAGE_HANDLER(ChromeViewHostMsg_SearchBoxNavigate,
                         OnSearchBoxNavigate);
+    IPC_MESSAGE_HANDLER(ChromeViewHostMsg_PasteAndOpenDropdown,
+                        OnSearchBoxPaste);
+    IPC_MESSAGE_HANDLER(ChromeViewHostMsg_CountMouseover, OnCountMouseover);
     IPC_MESSAGE_HANDLER(ChromeViewHostMsg_SearchBoxDeleteMostVisitedItem,
                         OnDeleteMostVisitedItem);
     IPC_MESSAGE_HANDLER(ChromeViewHostMsg_SearchBoxUndoMostVisitedDeletion,
@@ -187,11 +159,6 @@ bool InstantPage::OnMessageReceived(const IPC::Message& message) {
     IPC_MESSAGE_UNHANDLED(handled = false)
   IPC_END_MESSAGE_MAP()
   return handled;
-}
-
-void InstantPage::RenderViewGone(base::TerminationStatus /* status */) {
-  if (ShouldProcessRenderViewGone())
-    delegate_->InstantPageRenderViewGone(contents());
 }
 
 void InstantPage::DidCommitProvisionalLoadForFrame(
@@ -204,84 +171,168 @@ void InstantPage::DidCommitProvisionalLoadForFrame(
     delegate_->InstantPageAboutToNavigateMainFrame(contents(), url);
 }
 
-void InstantPage::OnSetSuggestions(
-    int page_id,
-    const std::vector<InstantSuggestion>& suggestions) {
-  if (contents()->IsActiveEntry(page_id)) {
-    OnInstantSupportDetermined(page_id, true);
-    if (ShouldProcessSetSuggestions())
-      delegate_->SetSuggestions(contents(), suggestions);
-  }
+void InstantPage::DidNavigateMainFrame(
+    const content::LoadCommittedDetails& details,
+    const content::FrameNavigateParams& /* params */) {
+  // A 204 can be sent by the search provider as a lightweight signal
+  // to fall back to the local page, and we obviously want to fall back
+  // if we get any response code that indicates an error.
+  if (details.http_status_code == 204 || details.http_status_code >= 400)
+    delegate_->InstantPageLoadFailed(contents());
 }
 
-void InstantPage::OnInstantSupportDetermined(int page_id,
-                                             bool supports_instant) {
-  if (!contents()->IsActiveEntry(page_id) || supports_instant_) {
-    // Nothing to do if the page already supports Instant.
-    return;
-  }
+void InstantPage::DidFailProvisionalLoad(
+    int64 /* frame_id */,
+    bool is_main_frame,
+    const GURL& /* validated_url */,
+    int /* error_code */,
+    const string16& /* error_description */,
+    content::RenderViewHost* /* render_view_host */) {
+  if (is_main_frame)
+    delegate_->InstantPageLoadFailed(contents());
+}
 
-  supports_instant_ = supports_instant;
+void InstantPage::ThemeInfoChanged(const ThemeBackgroundInfo& theme_info) {
+  sender()->SendThemeBackgroundInfo(theme_info);
+}
+
+void InstantPage::MostVisitedItemsChanged(
+    const std::vector<InstantMostVisitedItem>& items) {
+  std::vector<InstantMostVisitedItem> items_copy(items);
+  MaybeRemoveMostVisitedItems(&items_copy);
+
+  sender()->SendMostVisitedItems(items_copy);
+
+  content::NotificationService::current()->Notify(
+      chrome::NOTIFICATION_INSTANT_SENT_MOST_VISITED_ITEMS,
+      content::Source<InstantPage>(this),
+      content::NotificationService::NoDetails());
+}
+
+void InstantPage::ModelChanged(const SearchModel::State& old_state,
+                               const SearchModel::State& new_state) {
+  if (old_state.instant_support != new_state.instant_support)
+    InstantSupportDetermined(new_state.instant_support == INSTANT_SUPPORT_YES);
+}
+
+void InstantPage::InstantSupportDetermined(bool supports_instant) {
   delegate_->InstantSupportDetermined(contents(), supports_instant);
 
   // If the page doesn't support Instant, stop listening to it.
   if (!supports_instant)
-    Observe(NULL);
+    ClearContents();
 }
 
-void InstantPage::OnShowInstantOverlay(int page_id,
-                                       int height,
-                                       InstantSizeUnits units) {
-  if (contents()->IsActiveEntry(page_id)) {
-    OnInstantSupportDetermined(page_id, true);
-    if (ShouldProcessShowInstantOverlay())
-      delegate_->ShowInstantOverlay(contents(), height, units);
-  }
-}
+void InstantPage::OnFocusOmnibox(int page_id, OmniboxFocusState state) {
+  if (!contents()->IsActiveEntry(page_id))
+    return;
 
-void InstantPage::OnFocusOmnibox(int page_id) {
-  if (contents()->IsActiveEntry(page_id)) {
-    OnInstantSupportDetermined(page_id, true);
-    if (ShouldProcessFocusOmnibox())
-      delegate_->FocusOmnibox(contents());
-  }
-}
+  SearchTabHelper::FromWebContents(contents())->InstantSupportChanged(true);
+  if (!ShouldProcessFocusOmnibox())
+    return;
 
-void InstantPage::OnStartCapturingKeyStrokes(int page_id) {
-  if (contents()->IsActiveEntry(page_id)) {
-    OnInstantSupportDetermined(page_id, true);
-    if (ShouldProcessStartCapturingKeyStrokes())
-      delegate_->StartCapturingKeyStrokes(contents());
-  }
-}
-
-void InstantPage::OnStopCapturingKeyStrokes(int page_id) {
-  if (contents()->IsActiveEntry(page_id)) {
-    OnInstantSupportDetermined(page_id, true);
-    if (ShouldProcessStopCapturingKeyStrokes())
-      delegate_->StopCapturingKeyStrokes(contents());
-  }
+  delegate_->FocusOmnibox(contents(), state);
 }
 
 void InstantPage::OnSearchBoxNavigate(int page_id,
                                       const GURL& url,
                                       content::PageTransition transition,
-                                      WindowOpenDisposition disposition) {
-  if (contents()->IsActiveEntry(page_id)) {
-    OnInstantSupportDetermined(page_id, true);
-    if (ShouldProcessNavigateToURL())
-      delegate_->NavigateToURL(contents(), url, transition, disposition);
-  }
+                                      WindowOpenDisposition disposition,
+                                      bool is_search_type) {
+  if (!contents()->IsActiveEntry(page_id))
+    return;
+
+  SearchTabHelper::FromWebContents(contents())->InstantSupportChanged(true);
+  if (!ShouldProcessNavigateToURL())
+    return;
+
+  delegate_->NavigateToURL(
+      contents(), url, transition, disposition, is_search_type);
 }
 
-void InstantPage::OnDeleteMostVisitedItem(InstantRestrictedID restricted_id) {
-  delegate_->DeleteMostVisitedItem(restricted_id);
+void InstantPage::OnSearchBoxPaste(int page_id, const string16& text) {
+  if (!contents()->IsActiveEntry(page_id))
+    return;
+
+  SearchTabHelper::FromWebContents(contents())->InstantSupportChanged(true);
+  if (!ShouldProcessPasteIntoOmnibox())
+    return;
+
+  delegate_->PasteIntoOmnibox(contents(), text);
 }
 
-void InstantPage::OnUndoMostVisitedDeletion(InstantRestrictedID restricted_id) {
-  delegate_->UndoMostVisitedDeletion(restricted_id);
+void InstantPage::OnCountMouseover(int page_id) {
+  if (!contents()->IsActiveEntry(page_id))
+    return;
+
+  InstantTab::CountMouseover(contents());
 }
 
-void InstantPage::OnUndoAllMostVisitedDeletions() {
+void InstantPage::OnDeleteMostVisitedItem(int page_id, const GURL& url) {
+  if (!contents()->IsActiveEntry(page_id))
+    return;
+
+  SearchTabHelper::FromWebContents(contents())->InstantSupportChanged(true);
+  if (!ShouldProcessDeleteMostVisitedItem())
+    return;
+
+  delegate_->DeleteMostVisitedItem(url);
+}
+
+void InstantPage::OnUndoMostVisitedDeletion(int page_id, const GURL& url) {
+  if (!contents()->IsActiveEntry(page_id))
+    return;
+
+  SearchTabHelper::FromWebContents(contents())->InstantSupportChanged(true);
+  if (!ShouldProcessUndoMostVisitedDeletion())
+    return;
+
+  delegate_->UndoMostVisitedDeletion(url);
+}
+
+void InstantPage::OnUndoAllMostVisitedDeletions(int page_id) {
+  if (!contents()->IsActiveEntry(page_id))
+    return;
+
+  SearchTabHelper::FromWebContents(contents())->InstantSupportChanged(true);
+  if (!ShouldProcessUndoAllMostVisitedDeletions())
+    return;
+
   delegate_->UndoAllMostVisitedDeletions();
+}
+
+void InstantPage::ClearContents() {
+  if (contents())
+    SearchTabHelper::FromWebContents(contents())->model()->RemoveObserver(this);
+
+  sender()->SetContents(NULL);
+  Observe(NULL);
+}
+
+void InstantPage::MaybeRemoveMostVisitedItems(
+    std::vector<InstantMostVisitedItem>* items) {
+// The code below uses APIs not available on Android and the experiment should
+// not run there.
+#if !defined(OS_ANDROID)
+  if (!history::MostVisitedTilesExperiment::IsDontShowOpenURLsEnabled())
+    return;
+
+  Browser* browser = chrome::FindBrowserWithProfile(profile_,
+                                                    chrome::GetActiveDesktop());
+  if (!browser)
+    return;
+
+  TabStripModel* tab_strip_model = browser->tab_strip_model();
+  history::TopSites* top_sites = profile_->GetTopSites();
+  if (!tab_strip_model || !top_sites) {
+    NOTREACHED();
+    return;
+  }
+
+  std::set<std::string> open_urls;
+  chrome::GetOpenUrls(*tab_strip_model, *top_sites, &open_urls);
+  history::MostVisitedTilesExperiment::RemoveItemsMatchingOpenTabs(
+      open_urls, items);
+
+#endif
 }

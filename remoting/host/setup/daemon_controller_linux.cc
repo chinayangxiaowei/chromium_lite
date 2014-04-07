@@ -16,10 +16,12 @@
 #include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/md5.h"
-#include "base/process_util.h"
-#include "base/string_number_conversions.h"
-#include "base/string_util.h"
+#include "base/process/kill.h"
+#include "base/process/launch.h"
+#include "base/process/process_handle.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
 #include "base/threading/thread.h"
 #include "base/values.h"
 #include "net/base/net_util.h"
@@ -34,8 +36,10 @@ namespace {
 const char kDaemonScript[] =
     "/opt/google/chrome-remote-desktop/chrome-remote-desktop";
 
-// Timeout for running daemon script.
-const int64 kDaemonTimeoutMs = 5000;
+// Timeout for running daemon script. The script itself sets a timeout when
+// waiting for the host to come online, so the setting here should be at least
+// as long.
+const int64 kDaemonTimeoutMs = 60000;
 
 // Timeout for commands that require password prompt - 5 minutes.
 const int64 kSudoTimeoutSeconds = 5 * 60;
@@ -117,8 +121,15 @@ static bool RunHostScriptWithTimeout(
     command_line.AppendArg(args[i]);
   }
   base::ProcessHandle process_handle;
-  if (!base::LaunchProcess(command_line, base::LaunchOptions(),
-                           &process_handle)) {
+
+  // Redirect the child's stdout to the parent's stderr. In the case where this
+  // parent process is a Native Messaging host, its stdout is used to send
+  // messages to the web-app.
+  base::FileHandleMappingVector fds_to_remap;
+  fds_to_remap.push_back(std::pair<int, int>(STDERR_FILENO, STDOUT_FILENO));
+  base::LaunchOptions options;
+  options.fds_to_remap = &fds_to_remap;
+  if (!base::LaunchProcess(command_line, options, &process_handle)) {
     return false;
   }
 
@@ -248,7 +259,7 @@ void DaemonControllerLinux::DoSetConfigAndStart(
 
   // Ensure the configuration directory exists.
   base::FilePath config_dir = GetConfigPath().DirName();
-  if (!file_util::DirectoryExists(config_dir) &&
+  if (!base::DirectoryExists(config_dir) &&
       !file_util::CreateDirectory(config_dir)) {
     LOG(ERROR) << "Failed to create config directory " << config_dir.value();
     done_callback.Run(RESULT_FAILED);
@@ -318,7 +329,7 @@ void DaemonControllerLinux::DoGetVersion(
     const GetVersionCallback& done_callback) {
   base::FilePath script_path;
   if (!GetScriptPath(&script_path)) {
-    done_callback.Run("");
+    done_callback.Run(std::string());
     return;
   }
   CommandLine command_line(script_path);
@@ -331,14 +342,14 @@ void DaemonControllerLinux::DoGetVersion(
   if (!result || exit_code != 0) {
     LOG(ERROR) << "Failed to run \"" << command_line.GetCommandLineString()
                << "\". Exit code: " << exit_code;
-    done_callback.Run("");
+    done_callback.Run(std::string());
     return;
   }
 
   TrimWhitespaceASCII(version, TRIM_ALL, &version);
   if (!ContainsOnlyChars(version, "0123456789.")) {
     LOG(ERROR) << "Received invalid host version number: " << version;
-    done_callback.Run("");
+    done_callback.Run(std::string());
     return;
   }
 

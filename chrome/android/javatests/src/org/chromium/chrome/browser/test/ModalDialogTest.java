@@ -14,20 +14,16 @@ import android.widget.CheckBox;
 import android.widget.EditText;
 
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.UrlUtils;
 import org.chromium.chrome.browser.JavascriptAppModalDialog;
-import org.chromium.chrome.browser.TabBase;
-import org.chromium.chrome.browser.test.util.TabBaseUtils;
-import org.chromium.chrome.browser.test.util.TabBaseUtils.TestCallbackHelperContainerForTab;
 import org.chromium.chrome.testshell.ChromiumTestShellTestBase;
-import org.chromium.content.browser.ContentViewClient;
+import org.chromium.chrome.testshell.TabShellTabUtils;
+import org.chromium.chrome.testshell.TabShellTabUtils.TestCallbackHelperContainerForTab;
 import org.chromium.content.browser.test.util.Criteria;
 import org.chromium.content.browser.test.util.CriteriaHelper;
 import org.chromium.content.browser.test.util.TestCallbackHelperContainer;
-import org.chromium.content.browser.test.util.TestContentViewClient;
-import org.chromium.content.browser.test.util.TestContentViewClientWrapper;
-import org.chromium.content.browser.test.util.TestWebContentsObserver;
 import org.chromium.content.browser.test.util.TestCallbackHelperContainer.OnEvaluateJavaScriptResultHelper;
 
 import java.util.concurrent.Callable;
@@ -38,7 +34,7 @@ import java.util.concurrent.TimeoutException;
  * Test suite for displaying and functioning of modal dialogs.
  */
 public class ModalDialogTest extends ChromiumTestShellTestBase {
-    private final static String TAG = ModalDialogTest.class.getSimpleName();
+    private final static String TAG = "ModalDialogTest";
     private final static String EMPTY_PAGE = UrlUtils.encodeHtmlDataUri(
             "<html><title>Modal Dialog Test</title><p>Testcase.</p></title></html>");
     private final static String BEFORE_UNLOAD_URL = UrlUtils.encodeHtmlDataUri(
@@ -175,8 +171,9 @@ public class ModalDialogTest extends ChromiumTestShellTestBase {
      * Verifies beforeunload dialogs are shown and they block/allow navigation
      * as appropriate.
      */
-    @MediumTest
-    @Feature({"Browser", "Main"})
+    //@MediumTest
+    //@Feature({"Browser", "Main"})
+    @DisabledTest //crbug/270593
     public void testBeforeUnloadDialog()
             throws InterruptedException, TimeoutException, ExecutionException {
         loadUrlWithSanitization(BEFORE_UNLOAD_URL);
@@ -422,6 +419,6 @@ public class ModalDialogTest extends ChromiumTestShellTestBase {
     }
 
     private TestCallbackHelperContainerForTab getActiveTabTestCallbackHelperContainer() {
-        return TabBaseUtils.getTestCallbackHelperContainer(getActivity().getActiveTab());
+        return TabShellTabUtils.getTestCallbackHelperContainer(getActivity().getActiveTab());
     }
 }

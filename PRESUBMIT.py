@@ -24,13 +24,8 @@ _EXCLUDED_PATHS = (
     r"^v8[\\\/].*",
     r".*MakeFile$",
     r".+_autogen\.h$",
-    r"^cc[\\\/].*",
     r".+[\\\/]pnacl_shim\.c$",
 )
-
-# Fragment of a regular expression that matches file name suffixes
-# used to indicate different platforms.
-_PLATFORM_SPECIFIERS = r'(_(android|chromeos|gtk|mac|posix|win))?'
 
 # Fragment of a regular expression that matches C++ and Objective-C++
 # implementation files.
@@ -41,10 +36,12 @@ _IMPLEMENTATION_EXTENSIONS = r'\.(cc|cpp|cxx|mm)$'
 _TEST_CODE_EXCLUDED_PATHS = (
     r'.*[/\\](fake_|test_|mock_).+%s' % _IMPLEMENTATION_EXTENSIONS,
     r'.+_test_(base|support|util)%s' % _IMPLEMENTATION_EXTENSIONS,
-    r'.+_(api|browser|perf|unit|ui)?test%s%s' % (_PLATFORM_SPECIFIERS,
-                                                 _IMPLEMENTATION_EXTENSIONS),
+    r'.+_(api|browser|perf|pixel|unit|ui)?test(_[a-z]+)?%s' %
+        _IMPLEMENTATION_EXTENSIONS,
     r'.+profile_sync_service_harness%s' % _IMPLEMENTATION_EXTENSIONS,
     r'.*[/\\](test|tool(s)?)[/\\].*',
+    # content_shell is used for running layout tests.
+    r'content[/\\]shell[/\\].*',
     # At request of folks maintaining this folder.
     r'chrome[/\\]browser[/\\]automation[/\\].*',
 )
@@ -160,8 +157,64 @@ _BANNED_CPP_FUNCTIONS = (
       True,
       (
         r"^content[\\\/]shell[\\\/]shell_browser_main\.cc$",
+        r"^net[\\\/]disk_cache[\\\/]cache_util\.cc$",
       ),
     ),
+    (
+      'SkRefPtr',
+      (
+        'The use of SkRefPtr is prohibited. ',
+        'Please use skia::RefPtr instead.'
+      ),
+      True,
+      (),
+    ),
+    (
+      'SkAutoRef',
+      (
+        'The indirect use of SkRefPtr via SkAutoRef is prohibited. ',
+        'Please use skia::RefPtr instead.'
+      ),
+      True,
+      (),
+    ),
+    (
+      'SkAutoTUnref',
+      (
+        'The use of SkAutoTUnref is dangerous because it implicitly ',
+        'converts to a raw pointer. Please use skia::RefPtr instead.'
+      ),
+      True,
+      (),
+    ),
+    (
+      'SkAutoUnref',
+      (
+        'The indirect use of SkAutoTUnref through SkAutoUnref is dangerous ',
+        'because it implicitly converts to a raw pointer. ',
+        'Please use skia::RefPtr instead.'
+      ),
+      True,
+      (),
+    ),
+)
+
+
+_VALID_OS_MACROS = (
+    # Please keep sorted.
+    'OS_ANDROID',
+    'OS_BSD',
+    'OS_CAT',       # For testing.
+    'OS_CHROMEOS',
+    'OS_FREEBSD',
+    'OS_IOS',
+    'OS_LINUX',
+    'OS_MACOSX',
+    'OS_NACL',
+    'OS_OPENBSD',
+    'OS_POSIX',
+    'OS_SOLARIS',
+    'OS_WIN',
 )
 
 
@@ -178,6 +231,7 @@ def _CheckNoProductionCodeUsingTestOnlyFunctions(input_api, output_api):
 
   base_function_pattern = r'ForTest(ing)?|for_test(ing)?'
   inclusion_pattern = input_api.re.compile(r'(%s)\s*\(' % base_function_pattern)
+  comment_pattern = input_api.re.compile(r'//.*%s' % base_function_pattern)
   exclusion_pattern = input_api.re.compile(
     r'::[A-Za-z0-9_]+(%s)|(%s)[^;]+\{' % (
       base_function_pattern, base_function_pattern))
@@ -198,17 +252,14 @@ def _CheckNoProductionCodeUsingTestOnlyFunctions(input_api, output_api):
     line_number = 0
     for line in lines:
       if (inclusion_pattern.search(line) and
+          not comment_pattern.search(line) and
           not exclusion_pattern.search(line)):
         problems.append(
           '%s:%d\n    %s' % (local_path, line_number, line.strip()))
       line_number += 1
 
   if problems:
-    if not input_api.is_committing:
-      return [output_api.PresubmitPromptWarning(_TEST_ONLY_WARNING, problems)]
-    else:
-      # We don't warn on commit, to avoid stopping commits going through CQ.
-      return [output_api.PresubmitNotifyResult(_TEST_ONLY_WARNING, problems)]
+    return [output_api.PresubmitPromptOrNotify(_TEST_ONLY_WARNING, problems)]
   else:
     return []
 
@@ -403,7 +454,7 @@ def _CheckUnwantedDependencies(input_api, output_api):
     changed_lines = [line for line_num, line in f.ChangedContents()]
     added_includes.append([f.LocalPath(), changed_lines])
 
-  deps_checker = checkdeps.DepsChecker()
+  deps_checker = checkdeps.DepsChecker(input_api.PresubmitLocalPath())
 
   error_descriptions = []
   warning_descriptions = []
@@ -421,13 +472,7 @@ def _CheckUnwantedDependencies(input_api, output_api):
         'You added one or more #includes that violate checkdeps rules.',
         error_descriptions))
   if warning_descriptions:
-    if not input_api.is_committing:
-      warning_factory = output_api.PresubmitPromptWarning
-    else:
-      # We don't want to block use of the CQ when there is a warning
-      # of this kind, so we only show a message when committing.
-      warning_factory = output_api.PresubmitNotifyResult
-    results.append(warning_factory(
+    results.append(output_api.PresubmitPromptOrNotify(
         'You added one or more #includes of files that are temporarily\n'
         'allowed but being removed. Can you avoid introducing the\n'
         '#include? See relevant DEPS file(s) for details and contacts.',
@@ -604,12 +649,7 @@ def _CheckIncludeOrder(input_api, output_api):
 
   results = []
   if warnings:
-    if not input_api.is_committing:
-      results.append(output_api.PresubmitPromptWarning(_INCLUDE_ORDER_WARNING,
-                                                       warnings))
-    else:
-      # We don't warn on commit, to avoid stopping commits going through CQ.
-      results.append(output_api.PresubmitNotifyResult(_INCLUDE_ORDER_WARNING,
+    results.append(output_api.PresubmitPromptOrNotify(_INCLUDE_ORDER_WARNING,
                                                       warnings))
   return results
 
@@ -650,21 +690,17 @@ def _CheckHardcodedGoogleHostsInLowerLayers(input_api, output_api):
                   _TEST_CODE_EXCLUDED_PATHS +
                   input_api.DEFAULT_BLACK_LIST))
 
-  pattern = input_api.re.compile('"[^"]*google\.com[^"]*"')
+  base_pattern = '"[^"]*google\.com[^"]*"'
+  comment_pattern = input_api.re.compile('//.*%s' % base_pattern)
+  pattern = input_api.re.compile(base_pattern)
   problems = []  # items are (filename, line_number, line)
   for f in input_api.AffectedSourceFiles(FilterFile):
     for line_num, line in f.ChangedContents():
-      if pattern.search(line):
+      if not comment_pattern.search(line) and pattern.search(line):
         problems.append((f.LocalPath(), line_num, line))
 
   if problems:
-    if not input_api.is_committing:
-      warning_factory = output_api.PresubmitPromptWarning
-    else:
-      # We don't want to block use of the CQ when there is a warning
-      # of this kind, so we only show a message when committing.
-      warning_factory = output_api.PresubmitNotifyResult
-    return [warning_factory(
+    return [output_api.PresubmitPromptOrNotify(
         'Most layers below src/chrome/ should not hardcode service URLs.\n'
         'Are you sure this is correct? (Contact: joi@chromium.org)',
         ['  %s:%d:  %s' % (
@@ -691,6 +727,88 @@ def _CheckNoAbbreviationInPngFileName(input_api, output_api):
   return results
 
 
+def _DepsFilesToCheck(re, changed_lines):
+  """Helper method for _CheckAddedDepsHaveTargetApprovals. Returns
+  a set of DEPS entries that we should look up."""
+  results = set()
+
+  # This pattern grabs the path without basename in the first
+  # parentheses, and the basename (if present) in the second. It
+  # relies on the simple heuristic that if there is a basename it will
+  # be a header file ending in ".h".
+  pattern = re.compile(
+      r"""['"]\+([^'"]+?)(/[a-zA-Z0-9_]+\.h)?['"].*""")
+  for changed_line in changed_lines:
+    m = pattern.match(changed_line)
+    if m:
+      path = m.group(1)
+      if not (path.startswith('grit/') or path == 'grit'):
+        results.add('%s/DEPS' % m.group(1))
+  return results
+
+
+def _CheckAddedDepsHaveTargetApprovals(input_api, output_api):
+  """When a dependency prefixed with + is added to a DEPS file, we
+  want to make sure that the change is reviewed by an OWNER of the
+  target file or directory, to avoid layering violations from being
+  introduced. This check verifies that this happens.
+  """
+  changed_lines = set()
+  for f in input_api.AffectedFiles():
+    filename = input_api.os_path.basename(f.LocalPath())
+    if filename == 'DEPS':
+      changed_lines |= set(line.strip()
+                           for line_num, line
+                           in f.ChangedContents())
+  if not changed_lines:
+    return []
+
+  virtual_depended_on_files = _DepsFilesToCheck(input_api.re, changed_lines)
+  if not virtual_depended_on_files:
+    return []
+
+  if input_api.is_committing:
+    if input_api.tbr:
+      return [output_api.PresubmitNotifyResult(
+          '--tbr was specified, skipping OWNERS check for DEPS additions')]
+    if not input_api.change.issue:
+      return [output_api.PresubmitError(
+          "DEPS approval by OWNERS check failed: this change has "
+          "no Rietveld issue number, so we can't check it for approvals.")]
+    output = output_api.PresubmitError
+  else:
+    output = output_api.PresubmitNotifyResult
+
+  owners_db = input_api.owners_db
+  owner_email, reviewers = input_api.canned_checks._RietveldOwnerAndReviewers(
+      input_api,
+      owners_db.email_regexp,
+      approval_needed=input_api.is_committing)
+
+  owner_email = owner_email or input_api.change.author_email
+
+  reviewers_plus_owner = set(reviewers)
+  if owner_email:
+    reviewers_plus_owner.add(owner_email)
+  missing_files = owners_db.files_not_covered_by(virtual_depended_on_files,
+                                                 reviewers_plus_owner)
+  unapproved_dependencies = ["'+%s'," % path[:-len('/DEPS')]
+                             for path in missing_files]
+
+  if unapproved_dependencies:
+    output_list = [
+      output('Missing LGTM from OWNERS of directories added to DEPS:\n    %s' %
+             '\n    '.join(sorted(unapproved_dependencies)))]
+    if not input_api.is_committing:
+      suggested_owners = owners_db.reviewers_for(missing_files, owner_email)
+      output_list.append(output(
+          'Suggested missing target path OWNERS:\n    %s' %
+          '\n    '.join(suggested_owners or [])))
+    return output_list
+
+  return []
+
+
 def _CommonChecks(input_api, output_api):
   """Checks common to both upload and commit."""
   results = []
@@ -714,6 +832,13 @@ def _CommonChecks(input_api, output_api):
   results.extend(_CheckPatchFiles(input_api, output_api))
   results.extend(_CheckHardcodedGoogleHostsInLowerLayers(input_api, output_api))
   results.extend(_CheckNoAbbreviationInPngFileName(input_api, output_api))
+  results.extend(_CheckForInvalidOSMacros(input_api, output_api))
+  results.extend(_CheckAddedDepsHaveTargetApprovals(input_api, output_api))
+  results.extend(
+      input_api.canned_checks.CheckChangeHasNoTabs(
+          input_api,
+          output_api,
+          source_file_filter=lambda x: x.LocalPath().endswith('.grd')))
 
   if any('PRESUBMIT.py' == f.LocalPath() for f in input_api.AffectedFiles()):
     results.extend(input_api.canned_checks.RunUnitTestsInDirectory(
@@ -806,6 +931,56 @@ def _CheckPatchFiles(input_api, output_api):
     return []
 
 
+def _DidYouMeanOSMacro(bad_macro):
+  try:
+    return {'A': 'OS_ANDROID',
+            'B': 'OS_BSD',
+            'C': 'OS_CHROMEOS',
+            'F': 'OS_FREEBSD',
+            'L': 'OS_LINUX',
+            'M': 'OS_MACOSX',
+            'N': 'OS_NACL',
+            'O': 'OS_OPENBSD',
+            'P': 'OS_POSIX',
+            'S': 'OS_SOLARIS',
+            'W': 'OS_WIN'}[bad_macro[3].upper()]
+  except KeyError:
+    return ''
+
+
+def _CheckForInvalidOSMacrosInFile(input_api, f):
+  """Check for sensible looking, totally invalid OS macros."""
+  preprocessor_statement = input_api.re.compile(r'^\s*#')
+  os_macro = input_api.re.compile(r'defined\((OS_[^)]+)\)')
+  results = []
+  for lnum, line in f.ChangedContents():
+    if preprocessor_statement.search(line):
+      for match in os_macro.finditer(line):
+        if not match.group(1) in _VALID_OS_MACROS:
+          good = _DidYouMeanOSMacro(match.group(1))
+          did_you_mean = ' (did you mean %s?)' % good if good else ''
+          results.append('    %s:%d %s%s' % (f.LocalPath(),
+                                             lnum,
+                                             match.group(1),
+                                             did_you_mean))
+  return results
+
+
+def _CheckForInvalidOSMacros(input_api, output_api):
+  """Check all affected files for invalid OS macros."""
+  bad_macros = []
+  for f in input_api.AffectedFiles():
+    if not f.LocalPath().endswith(('.py', '.js', '.html', '.css')):
+      bad_macros.extend(_CheckForInvalidOSMacrosInFile(input_api, f))
+
+  if not bad_macros:
+    return []
+
+  return [output_api.PresubmitError(
+      'Possibly invalid OS macro[s] found. Please fix your code\n'
+      'or add your macro to src/PRESUBMIT.py.', bad_macros)]
+
+
 def CheckChangeOnUpload(input_api, output_api):
   results = []
   results.extend(_CommonChecks(input_api, output_api))
@@ -843,11 +1018,11 @@ def GetPreferredTrySlaves(project, change):
     return []
 
   if all(re.search('\.(m|mm)$|(^|[/_])mac[/_.]', f) for f in files):
-    return ['mac_rel', 'mac_asan', 'mac:compile']
+    return ['mac_rel', 'mac:compile']
   if all(re.search('(^|[/_])win[/_.]', f) for f in files):
     return ['win_rel', 'win7_aura', 'win:compile']
   if all(re.search('(^|[/_])android[/_.]', f) for f in files):
-    return ['android_dbg', 'android_clang_dbg']
+    return ['android_aosp', 'android_dbg', 'android_clang_dbg']
   if all(re.search('^native_client_sdk', f) for f in files):
     return ['linux_nacl_sdk', 'win_nacl_sdk', 'mac_nacl_sdk']
   if all(re.search('[/_]ios[/_.]', f) for f in files):
@@ -863,17 +1038,24 @@ def GetPreferredTrySlaves(project, change):
       'linux_chromeos',
       'linux_clang:compile',
       'linux_rel',
-      'mac_asan',
       'mac_rel',
       'mac:compile',
       'win7_aura',
       'win_rel',
       'win:compile',
+      'win_x64_rel:compile',
   ]
 
   # Match things like path/aura/file.cc and path/file_aura.cc.
   # Same for chromeos.
   if any(re.search('[/_](aura|chromeos)', f) for f in files):
     trybots += ['linux_chromeos_clang:compile', 'linux_chromeos_asan']
+
+  # The AOSP bot doesn't build the chrome/ layer, so ignore any changes to it
+  # unless they're .gyp(i) files as changes to those files can break the gyp
+  # step on that bot.
+  if (not all(re.search('^chrome', f) for f in files) or
+      any(re.search('\.gypi?$', f) for f in files)):
+    trybots += ['android_aosp']
 
   return trybots

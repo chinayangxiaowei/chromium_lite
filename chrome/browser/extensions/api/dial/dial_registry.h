@@ -10,13 +10,13 @@
 #include <vector>
 
 #include "base/basictypes.h"
+#include "base/containers/hash_tables.h"
 #include "base/gtest_prod_util.h"
-#include "base/hash_tables.h"
 #include "base/memory/linked_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/threading/thread_checker.h"
-#include "base/time.h"
-#include "base/timer.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "chrome/browser/extensions/api/dial/dial_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "net/base/network_change_notifier.h"
@@ -179,6 +179,7 @@ class DialRegistry : public DialService::Observer,
   FRIEND_TEST_ALL_PREFIXES(DialRegistryTest, TestNoDevicesDiscovered);
   FRIEND_TEST_ALL_PREFIXES(DialRegistryTest, TestDevicesDiscovered);
   FRIEND_TEST_ALL_PREFIXES(DialRegistryTest, TestDeviceExpires);
+  FRIEND_TEST_ALL_PREFIXES(DialRegistryTest, TestExpiredDeviceIsRediscovered);
   FRIEND_TEST_ALL_PREFIXES(DialRegistryTest,
                            TestRemovingListenerDoesNotClearList);
   FRIEND_TEST_ALL_PREFIXES(DialRegistryTest, TestNetworkEventConnectionLost);

@@ -11,9 +11,8 @@ function Installer() {
 }
 
 Installer.prototype.install = function(url, onSuccess, onFailure) {
-  if (this._pendingInstall) {
+  if (this._pendingInstall)
     throw 'A Chrome Web Store installation is already pending.';
-  }
   var installId = webstoreNatives.Install(url, onSuccess, onFailure);
   if (installId !== undefined) {
     this._pendingInstall = {
@@ -36,6 +35,9 @@ Installer.prototype.onInstallResponse = function(installId, success, error) {
       pendingInstall.onSuccess();
     else if (!success && pendingInstall.onFailure)
       pendingInstall.onFailure(error);
+  } catch (e) {
+    console.error('Exception in chrome.webstore.install response handler: ' +
+                  e.stack);
   } finally {
     this._pendingInstall = null;
   }
@@ -50,13 +52,11 @@ var chromeWebstore = {
 };
 
 // Called by webstore_binding.cc.
-var chromeHiddenWebstore = {
-  onInstallResponse: function(installId, success, error) {
-    installer.onInstallResponse(installId, success, error);
-  }
-};
+function onInstallResponse(installId, success, error) {
+  installer.onInstallResponse(installId, success, error);
+}
 
 // These must match the names in InstallWebstorebinding in
 // chrome/renderer/extensions/dispatcher.cc.
 exports.chromeWebstore = chromeWebstore;
-exports.chromeHiddenWebstore = chromeHiddenWebstore;
+exports.onInstallResponse = onInstallResponse;

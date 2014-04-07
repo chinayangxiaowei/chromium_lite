@@ -8,10 +8,15 @@
 #include <map>
 #include <string>
 
-#include "chrome/browser/ui/views/unhandled_keyboard_event_handler.h"
+#include "base/memory/scoped_ptr.h"
+#include "base/observer_list.h"
+#include "chrome/browser/extensions/scoped_gaia_auth_extension.h"
+#include "chrome/browser/ui/chrome_web_modal_dialog_manager_delegate.h"
+#include "components/web_modal/web_contents_modal_dialog_host.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 #include "content/public/browser/web_contents_delegate.h"
+#include "ui/views/controls/webview/unhandled_keyboard_event_handler.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
 
@@ -33,7 +38,9 @@ namespace chromeos {
 // WebUI based start up and lock screens. It contains a WebView.
 class WebUILoginView : public views::View,
                        public content::WebContentsDelegate,
-                       public content::NotificationObserver {
+                       public content::NotificationObserver,
+                       public ChromeWebModalDialogManagerDelegate,
+                       public web_modal::WebContentsModalDialogHost {
  public:
   // Internal class name.
   static const char kViewClassName[];
@@ -47,7 +54,19 @@ class WebUILoginView : public views::View,
   // Overridden from views::Views:
   virtual bool AcceleratorPressed(
       const ui::Accelerator& accelerator) OVERRIDE;
-  virtual std::string GetClassName() const OVERRIDE;
+  virtual const char* GetClassName() const OVERRIDE;
+
+  // Overridden from ChromeWebModalDialogManagerDelegate:
+  virtual web_modal::WebContentsModalDialogHost*
+      GetWebContentsModalDialogHost() OVERRIDE;
+
+  // Overridden from web_modal::WebContentsModalDialogHost:
+  virtual gfx::NativeView GetHostView() const OVERRIDE;
+  virtual gfx::Point GetDialogPosition(const gfx::Size& size) OVERRIDE;
+  virtual void AddObserver(
+      web_modal::WebContentsModalDialogHostObserver* observer) OVERRIDE;
+  virtual void RemoveObserver(
+      web_modal::WebContentsModalDialogHostObserver* observer) OVERRIDE;
 
   // Called when WebUI window is created.
   virtual void OnWindowCreated();
@@ -82,12 +101,12 @@ class WebUILoginView : public views::View,
 
   void set_is_hidden(bool hidden) { is_hidden_ = hidden; }
 
- protected:
-  // Let non-login derived classes suppress emission of this signal.
+  // Let suppress emission of this signal.
   void set_should_emit_login_prompt_visible(bool emit) {
     should_emit_login_prompt_visible_ = emit;
   }
 
+ protected:
   // Overridden from views::View:
   virtual void Layout() OVERRIDE;
   virtual void OnLocaleChanged() OVERRIDE;
@@ -136,7 +155,7 @@ class WebUILoginView : public views::View,
   views::Widget* login_window_;
 
   // Converts keyboard events on the WebContents to accelerators.
-  UnhandledKeyboardEventHandler unhandled_keyboard_event_handler_;
+  views::UnhandledKeyboardEventHandler unhandled_keyboard_event_handler_;
 
   // Maps installed accelerators to OOBE webui accelerator identifiers.
   AccelMap accel_map_;
@@ -156,6 +175,10 @@ class WebUILoginView : public views::View,
 
   // True to forward keyboard event.
   bool forward_keyboard_event_;
+
+  scoped_ptr<ScopedGaiaAuthExtension> auth_extension_;
+
+  ObserverList<web_modal::WebContentsModalDialogHostObserver> observer_list_;
 
   DISALLOW_COPY_AND_ASSIGN(WebUILoginView);
 };

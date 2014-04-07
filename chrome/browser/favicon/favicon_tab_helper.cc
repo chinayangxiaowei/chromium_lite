@@ -4,6 +4,7 @@
 
 #include "chrome/browser/favicon/favicon_tab_helper.h"
 
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/favicon/favicon_handler.h"
 #include "chrome/browser/favicon/favicon_service_factory.h"
 #include "chrome/browser/favicon/favicon_util.h"
@@ -12,7 +13,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search/search.h"
 #include "chrome/common/chrome_constants.h"
-#include "chrome/common/chrome_notification_types.h"
+#include "chrome/common/url_constants.h"
 #include "content/public/browser/favicon_status.h"
 #include "content/public/browser/invalidate_type.h"
 #include "content/public/browser/navigation_controller.h"
@@ -22,7 +23,6 @@
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
-#include "content/public/browser/web_ui.h"
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_skia.h"
@@ -91,13 +91,16 @@ bool FaviconTabHelper::ShouldDisplayFavicon() {
   if (controller.GetLastCommittedEntry() && controller.GetPendingEntry())
     return true;
 
+  GURL url = web_contents()->GetURL();
+  if (url.SchemeIs(chrome::kChromeUIScheme) &&
+      url.host() == chrome::kChromeUINewTabHost) {
+    return false;
+  }
+
   // No favicon on Instant New Tab Pages.
-  if (chrome::search::IsInstantNTP(web_contents()))
+  if (chrome::IsInstantNTP(web_contents()))
     return false;
 
-  content::WebUI* web_ui = web_contents()->GetWebUIForCurrentState();
-  if (web_ui)
-    return !web_ui->ShouldHideFavicon();
   return true;
 }
 
@@ -123,19 +126,29 @@ void FaviconTabHelper::SaveFavicon() {
       favicon.image.IsEmpty()) {
     return;
   }
-  service->SetFavicons(entry->GetURL(), favicon.url, history::FAVICON,
-                       favicon.image);
+  service->SetFavicons(
+      entry->GetURL(), favicon.url, chrome::FAVICON, favicon.image);
 }
 
 NavigationEntry* FaviconTabHelper::GetActiveEntry() {
   return web_contents()->GetController().GetActiveEntry();
 }
 
-int FaviconTabHelper::StartDownload(const GURL& url, int image_size) {
-  return web_contents()->DownloadFavicon(
+int FaviconTabHelper::StartDownload(const GURL& url,
+                                    int preferred_image_size,
+                                    int max_image_size) {
+  FaviconService* favicon_service = FaviconServiceFactory::GetForProfile(
+      profile_->GetOriginalProfile(), Profile::IMPLICIT_ACCESS);
+  if (favicon_service && favicon_service->WasUnableToDownloadFavicon(url)) {
+    DVLOG(1) << "Skip Failed FavIcon: " << url;
+    return 0;
+  }
+
+  return web_contents()->DownloadImage(
       url,
       true,
-      image_size,
+      preferred_image_size,
+      max_image_size,
       base::Bind(&FaviconTabHelper::DidDownloadFavicon,base::Unretained(this)));
 }
 
@@ -154,8 +167,11 @@ void FaviconTabHelper::NavigateToPendingEntry(
       !profile_->IsOffTheRecord()) {
     FaviconService* favicon_service = FaviconServiceFactory::GetForProfile(
         profile_, Profile::IMPLICIT_ACCESS);
-    if (favicon_service)
+    if (favicon_service) {
       favicon_service->SetFaviconOutOfDateForPage(url);
+      if (reload_type == NavigationController::RELOAD_IGNORING_CACHE)
+        favicon_service->ClearUnableToDownloadFavicons();
+    }
   }
 }
 
@@ -176,9 +192,19 @@ void FaviconTabHelper::DidUpdateFaviconURL(
 
 void FaviconTabHelper::DidDownloadFavicon(
     int id,
+    int http_status_code,
     const GURL& image_url,
     int requested_size,
     const std::vector<SkBitmap>& bitmaps) {
+
+  if (bitmaps.empty() && http_status_code == 404) {
+    DVLOG(1) << "Failed to Download Favicon:" << image_url;
+    FaviconService* favicon_service = FaviconServiceFactory::GetForProfile(
+        profile_->GetOriginalProfile(), Profile::IMPLICIT_ACCESS);
+    if (favicon_service)
+      favicon_service->UnableToDownloadFavicon(image_url);
+  }
+
   favicon_handler_->OnDidDownloadFavicon(
       id, image_url, requested_size, bitmaps);
   if (touch_icon_handler_.get()) {

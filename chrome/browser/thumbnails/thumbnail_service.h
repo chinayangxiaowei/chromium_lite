@@ -5,10 +5,10 @@
 #ifndef CHROME_BROWSER_THUMBNAILS_THUMBNAIL_SERVICE_H_
 #define CHROME_BROWSER_THUMBNAILS_THUMBNAIL_SERVICE_H_
 
-#include "chrome/browser/profiles/refcounted_profile_keyed_service.h"
 #include "chrome/common/thumbnail_score.h"
-#include "googleurl/src/gurl.h"
+#include "components/browser_context_keyed_service/refcounted_browser_context_keyed_service.h"
 #include "ui/gfx/image/image.h"
+#include "url/gurl.h"
 
 namespace base {
 class RefCountedMemory;
@@ -22,7 +22,7 @@ struct ThumbnailingContext;
 // An interface abstracting access to thumbnails. Intended as a temporary
 // bridge facilitating switch from TopSites as the thumbnail source to a more
 // robust way of handling these artefacts.
-class ThumbnailService : public RefcountedProfileKeyedService {
+class ThumbnailService : public RefcountedBrowserContextKeyedService {
  public:
   // Sets the given thumbnail for the given URL. Returns true if the thumbnail
   // was updated. False means either the URL wasn't known to us, or we felt

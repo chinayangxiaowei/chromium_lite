@@ -9,8 +9,8 @@
 
 #include "base/basictypes.h"
 #include "base/memory/ref_counted.h"
-#include "base/string_piece.h"
-#include "base/time.h"
+#include "base/strings/string_piece.h"
+#include "base/time/time.h"
 #include "net/base/net_export.h"
 #include "net/base/net_util.h"
 
@@ -67,6 +67,9 @@ class NET_EXPORT_PRIVATE DnsRecordParser {
   // Parses the next resource record into |record|. Returns true if succeeded.
   bool ReadRecord(DnsResourceRecord* record);
 
+  // Skip a question section, returns true if succeeded.
+  bool SkipQuestion();
+
  private:
   const char* packet_;
   size_t length_;
@@ -115,6 +118,10 @@ class NET_EXPORT_PRIVATE DnsResponse {
   // packet matches the |query| id and question.
   bool InitParse(int nbytes, const DnsQuery& query);
 
+  // Assuming the internal buffer holds |nbytes| bytes, initialize the parser
+  // without matching it against an existing query.
+  bool InitParseWithoutQuery(int nbytes);
+
   // Returns true if response is valid, that is, after successful InitParse.
   bool IsValid() const;
 
@@ -123,7 +130,9 @@ class NET_EXPORT_PRIVATE DnsResponse {
   // Accessors for the header.
   uint16 flags() const;  // excluding rcode
   uint8 rcode() const;
+
   unsigned answer_count() const;
+  unsigned additional_answer_count() const;
 
   // Accessors to the question. The qname is unparsed.
   base::StringPiece qname() const;

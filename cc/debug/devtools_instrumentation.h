@@ -13,43 +13,59 @@ namespace devtools_instrumentation {
 namespace internal {
 const char kCategory[] = "cc,devtools";
 const char kLayerId[] = "layerId";
-const char kPaintLayer[] = "PaintLayer";
-const char kRasterTask[] = "RasterTask";
+const char kLayerTreeId[] = "layerTreeId";
 }
 
-struct ScopedPaintLayer {
-  ScopedPaintLayer(int layer_id) {
-    TRACE_EVENT_BEGIN1(internal::kCategory, internal::kPaintLayer,
+const char kPaintLayer[] = "PaintLayer";
+const char kRasterTask[] = "RasterTask";
+const char kImageDecodeTask[] = "ImageDecodeTask";
+const char kPaintSetup[] = "PaintSetup";
+const char kUpdateLayer[] = "UpdateLayer";
+
+class ScopedLayerTask {
+ public:
+  ScopedLayerTask(const char* event_name, int layer_id)
+    : event_name_(event_name) {
+    TRACE_EVENT_BEGIN1(internal::kCategory, event_name_,
         internal::kLayerId, layer_id);
   }
-  ~ScopedPaintLayer() {
-    TRACE_EVENT_END0(internal::kCategory, internal::kPaintLayer);
+  ~ScopedLayerTask() {
+    TRACE_EVENT_END0(internal::kCategory, event_name_);
   }
+ private:
+  const char* event_name_;
 
-  DISALLOW_COPY_AND_ASSIGN(ScopedPaintLayer);
+  DISALLOW_COPY_AND_ASSIGN(ScopedLayerTask);
 };
 
-struct ScopedRasterTask {
-  ScopedRasterTask(int layer_id) {
-    TRACE_EVENT_BEGIN1(internal::kCategory, internal::kRasterTask,
-        internal::kLayerId, layer_id);
+class ScopedLayerTreeTask {
+ public:
+  ScopedLayerTreeTask(const char* event_name,
+                      int layer_id,
+                      uint64 tree_id)
+    : event_name_(event_name) {
+    TRACE_EVENT_BEGIN2(internal::kCategory, event_name_,
+        internal::kLayerId, layer_id, internal::kLayerTreeId, tree_id);
   }
-  ~ScopedRasterTask() {
-    TRACE_EVENT_END0(internal::kCategory, internal::kRasterTask);
+  ~ScopedLayerTreeTask() {
+    TRACE_EVENT_END0(internal::kCategory, event_name_);
   }
+ private:
+  const char* event_name_;
 
-  DISALLOW_COPY_AND_ASSIGN(ScopedRasterTask);
+  DISALLOW_COPY_AND_ASSIGN(ScopedLayerTreeTask);
 };
 
 struct ScopedLayerObjectTracker
     : public base::debug::TraceScopedTrackableObject<int> {
-  ScopedLayerObjectTracker(int layer_id)
+  explicit ScopedLayerObjectTracker(int layer_id)
       : base::debug::TraceScopedTrackableObject<int>(
             internal::kCategory,
             internal::kLayerId,
             layer_id) {
   }
 
+ private:
   DISALLOW_COPY_AND_ASSIGN(ScopedLayerObjectTracker);
 };
 
@@ -57,4 +73,3 @@ struct ScopedLayerObjectTracker
 }  // namespace cc
 
 #endif  // CC_DEBUG_DEVTOOLS_INSTRUMENTATION_H_
-

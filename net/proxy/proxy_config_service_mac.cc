@@ -11,8 +11,8 @@
 #include "base/logging.h"
 #include "base/mac/foundation_util.h"
 #include "base/mac/scoped_cftyperef.h"
-#include "base/message_loop.h"
-#include "base/sys_string_conversions.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/sys_string_conversions.h"
 #include "net/base/net_errors.h"
 #include "net/proxy/proxy_config.h"
 #include "net/proxy/proxy_info.h"
@@ -42,7 +42,7 @@ bool GetBoolFromDictionary(CFDictionaryRef dict,
 }
 
 void GetCurrentProxyConfig(ProxyConfig* config) {
-  base::mac::ScopedCFTypeRef<CFDictionaryRef> config_dict(
+  base::ScopedCFTypeRef<CFDictionaryRef> config_dict(
       SCDynamicStoreCopyProxies(NULL));
   DCHECK(config_dict);
 
@@ -205,7 +205,7 @@ ProxyConfigServiceMac::ProxyConfigServiceMac(
       has_fetched_config_(false),
       helper_(new Helper(this)),
       io_thread_task_runner_(io_thread_task_runner) {
-  DCHECK(io_thread_task_runner_);
+  DCHECK(io_thread_task_runner_.get());
   config_watcher_.reset(new NetworkConfigWatcherMac(&forwarder_));
 }
 

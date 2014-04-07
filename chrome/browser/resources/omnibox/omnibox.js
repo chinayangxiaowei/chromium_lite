@@ -126,8 +126,9 @@ cr.define('omniboxDebug', function() {
     new PresentationInfoRecord('Fill Into Edit', '', 'fill_into_edit', false,
         'The text shown in the omnibox when the result is selected.'),
     new PresentationInfoRecord(
-        'IAO', '', 'inline_autocomplete_offset', false,
-        'The Inline Autocomplete Offset.'),
+        'Inline Autocompletion', '', 'inline_autocompletion', false,
+        'The text shown in the omnibox as a blue highlight selection ' +
+        'following the cursor, if this match is shown inline.'),
     new PresentationInfoRecord('Del', '', 'deletable', false,
         'A green checkmark indicates that the results can be deleted from ' +
         'the visit history.'),
@@ -145,7 +146,12 @@ cr.define('omniboxDebug', function() {
     new PresentationInfoRecord(
         'Template URL', '', 'template_url', false, ''),
     new PresentationInfoRecord(
-        'Associated Keyword', '', 'associated_keyword', false, ''),
+        'Associated Keyword', '', 'associated_keyword', false,
+        'If non-empty, a "press tab to search" hint will be shown and will ' +
+        'engage this keyword.'),
+    new PresentationInfoRecord(
+        'Keyword', '', 'keyword', false,
+        'The keyword of the search engine to be used.'),
     new PresentationInfoRecord(
         'Additional Info', '', 'additional_info', false,
         'Provider-specific information about the result.')

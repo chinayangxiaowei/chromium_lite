@@ -9,6 +9,7 @@
 
 #include <vector>
 
+#include "gpu/command_buffer/common/mailbox.h"
 #include "gpu/command_buffer/service/gles2_cmd_decoder.h"
 #include "base/callback_forward.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -25,6 +26,7 @@ class StreamTextureManager;
 namespace gles2 {
 
 class ContextGroup;
+class ErrorState;
 class QueryManager;
 
 class MockGLES2Decoder : public GLES2Decoder {
@@ -42,7 +44,7 @@ class MockGLES2Decoder : public GLES2Decoder {
                     const std::vector<int32>& attribs));
   MOCK_METHOD1(Destroy, void(bool have_context));
   MOCK_METHOD1(SetSurface, void(const scoped_refptr<gfx::GLSurface>& surface));
-  MOCK_METHOD2(SetParent, bool(GLES2Decoder* parent, uint32 parent_texture_id));
+  MOCK_METHOD1(ProduceFrontBuffer, bool(const Mailbox& mailbox));
   MOCK_METHOD1(ResizeOffscreenFrameBuffer, bool(const gfx::Size& size));
   MOCK_METHOD0(MakeCurrent, bool());
   MOCK_METHOD0(ReleaseCurrent, void());
@@ -56,6 +58,7 @@ class MockGLES2Decoder : public GLES2Decoder {
   MOCK_METHOD0(PerformIdleWork, void());
   MOCK_CONST_METHOD0(RestoreState, void());
   MOCK_CONST_METHOD0(RestoreActiveTexture, void());
+  MOCK_CONST_METHOD0(RestoreAllTextureUnitBindings, void());
   MOCK_CONST_METHOD1(RestoreAttribute, void(unsigned index));
   MOCK_CONST_METHOD0(RestoreBufferBindings, void());
   MOCK_CONST_METHOD0(RestoreFramebufferBindings, void());
@@ -66,12 +69,15 @@ class MockGLES2Decoder : public GLES2Decoder {
   MOCK_CONST_METHOD1(RestoreTextureUnitBindings, void(unsigned unit));
   MOCK_METHOD0(GetQueryManager, gpu::gles2::QueryManager*());
   MOCK_METHOD0(GetVertexArrayManager, gpu::gles2::VertexArrayManager*());
-  MOCK_METHOD1(SetResizeCallback, void(const base::Callback<void(gfx::Size)>&));
-  MOCK_METHOD1(SetStreamTextureManager, void(StreamTextureManager*));
+  MOCK_METHOD1(
+      SetResizeCallback, void(const base::Callback<void(gfx::Size, float)>&));
   MOCK_METHOD0(GetAsyncPixelTransferDelegate,
-      gfx::AsyncPixelTransferDelegate*());
-  MOCK_METHOD1(SetAsyncPixelTransferDelegate,
-      void(gfx::AsyncPixelTransferDelegate*));
+      AsyncPixelTransferDelegate*());
+  MOCK_METHOD0(GetAsyncPixelTransferManager,
+      AsyncPixelTransferManager*());
+  MOCK_METHOD0(ResetAsyncPixelTransferManagerForTest, void());
+  MOCK_METHOD1(SetAsyncPixelTransferManagerForTest,
+      void(AsyncPixelTransferManager*));
   MOCK_METHOD3(DoCommand, error::Error(unsigned int command,
                                        unsigned int arg_count,
                                        const void* cmd_data));
@@ -89,37 +95,21 @@ class MockGLES2Decoder : public GLES2Decoder {
       int width,
       int height,
       bool is_texture_immutable));
-  MOCK_METHOD0(GetGLError, uint32());
-  MOCK_METHOD5(SetGLError, void(
-      const char* filename, int line,
-      unsigned error, const char* function_name, const char* msg));
-  MOCK_METHOD5(SetGLErrorInvalidEnum, void(
-      const char* filename, int line,
-      const char* function_name, unsigned value, const char* label));
-  MOCK_METHOD6(SetGLErrorInvalidParam, void(
-      const char* filename,
-      int line,
-      unsigned error,
-      const char* function_name,
-      unsigned pname,
-      int param));
-  MOCK_METHOD3(PeekGLError, unsigned(
-      const char* file, int line, const char* filename));
-  MOCK_METHOD3(CopyRealGLErrorsToWrapper, void(
-      const char* file, int line, const char* filename));
-  MOCK_METHOD3(ClearRealGLErrors, void(
-      const char* file, int line, const char* filename));
+  MOCK_METHOD0(GetErrorState, ErrorState *());
 
-  MOCK_METHOD1(SetMsgCallback, void(const MsgCallback& callback));
+  MOCK_METHOD0(GetLogger, Logger*());
   MOCK_METHOD1(SetShaderCacheCallback,
                void(const ShaderCacheCallback& callback));
   MOCK_METHOD1(SetWaitSyncPointCallback,
                void(const WaitSyncPointCallback& callback));
+  MOCK_METHOD1(WaitForReadPixels,
+               void(base::Closure callback));
   MOCK_METHOD0(GetTextureUploadCount, uint32());
   MOCK_METHOD0(GetTotalTextureUploadTime, base::TimeDelta());
   MOCK_METHOD0(GetTotalProcessingCommandsTime, base::TimeDelta());
   MOCK_METHOD1(AddProcessingCommandsTime, void(base::TimeDelta));
   MOCK_METHOD0(WasContextLost, bool());
+  MOCK_METHOD0(WasContextLostByRobustnessExtension, bool());
   MOCK_METHOD1(LoseContext, void(uint32 reset_status));
 
   DISALLOW_COPY_AND_ASSIGN(MockGLES2Decoder);

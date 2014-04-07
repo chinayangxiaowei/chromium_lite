@@ -8,9 +8,9 @@
 #include <GLES2/gl2.h>
 
 #include <queue>
-#include "../client/hash_tables.h"
-#include "../common/gles2_cmd_format.h"
 #include "gles2_impl_export.h"
+#include "gpu/command_buffer/client/hash_tables.h"
+#include "gpu/command_buffer/common/gles2_cmd_format.h"
 
 namespace gpu {
 
@@ -34,7 +34,8 @@ class GLES2_IMPL_EXPORT BufferTracker {
           shm_id_(shm_id),
           shm_offset_(shm_offset),
           address_(address),
-          mapped_(false) {
+          mapped_(false),
+          transfer_ready_token_(0) {
     }
 
     GLenum id() const {
@@ -65,6 +66,14 @@ class GLES2_IMPL_EXPORT BufferTracker {
       return mapped_;
     }
 
+    void set_transfer_ready_token(int token) {
+      transfer_ready_token_ = token;
+    }
+
+    uint32 transfer_ready_token() const {
+      return transfer_ready_token_;
+    }
+
    private:
     friend class BufferTracker;
     friend class BufferTrackerTest;
@@ -75,6 +84,7 @@ class GLES2_IMPL_EXPORT BufferTracker {
     uint32 shm_offset_;
     void* address_;
     bool mapped_;
+    int32 transfer_ready_token_;
   };
 
   BufferTracker(MappedMemoryManager* manager);

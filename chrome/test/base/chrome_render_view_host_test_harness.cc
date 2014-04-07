@@ -4,8 +4,9 @@
 
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/signin/fake_signin_manager.h"
 #include "chrome/browser/signin/signin_manager_factory.h"
-#include "chrome/browser/signin/signin_manager_fake.h"
 #include "chrome/test/base/testing_profile.h"
 
 #if defined(USE_ASH)
@@ -20,34 +21,38 @@
 using content::RenderViewHostTester;
 using content::RenderViewHostTestHarness;
 
-ChromeRenderViewHostTestHarness::ChromeRenderViewHostTestHarness()
-    : RenderViewHostTestHarness() {
+ChromeRenderViewHostTestHarness::ChromeRenderViewHostTestHarness() {
 }
 
 ChromeRenderViewHostTestHarness::~ChromeRenderViewHostTestHarness() {
 }
 
 TestingProfile* ChromeRenderViewHostTestHarness::profile() {
-  return static_cast<TestingProfile*>(browser_context_.get());
+  return static_cast<TestingProfile*>(browser_context());
 }
 
 RenderViewHostTester* ChromeRenderViewHostTestHarness::rvh_tester() {
   return RenderViewHostTester::For(rvh());
 }
 
-static ProfileKeyedService* BuildSigninManagerFake(Profile* profile) {
-  return new FakeSigninManager(profile);
+static BrowserContextKeyedService* BuildSigninManagerFake(
+    content::BrowserContext* context) {
+  Profile* profile = static_cast<Profile*>(context);
+#if defined (OS_CHROMEOS)
+  SigninManagerBase* signin = new SigninManagerBase();
+  signin->Initialize(profile, NULL);
+  return signin;
+#else
+  FakeSigninManager* manager = new FakeSigninManager(profile);
+  manager->Initialize(profile, g_browser_process->local_state());
+  return manager;
+#endif
 }
 
 void ChromeRenderViewHostTestHarness::SetUp() {
-  Profile* profile = Profile::FromBrowserContext(browser_context_.get());
-  if (!profile) {
-    profile = new TestingProfile();
-    browser_context_.reset(profile);
-  }
-  SigninManagerFactory::GetInstance()->SetTestingFactory(
-          profile, BuildSigninManagerFake);
   RenderViewHostTestHarness::SetUp();
+  SigninManagerFactory::GetInstance()->SetTestingFactory(
+          profile(), BuildSigninManagerFake);
 }
 
 void ChromeRenderViewHostTestHarness::TearDown() {
@@ -58,4 +63,9 @@ void ChromeRenderViewHostTestHarness::TearDown() {
 #if defined(USE_AURA)
   aura::Env::DeleteInstance();
 #endif
+}
+
+content::BrowserContext*
+ChromeRenderViewHostTestHarness::CreateBrowserContext() {
+  return new TestingProfile();
 }

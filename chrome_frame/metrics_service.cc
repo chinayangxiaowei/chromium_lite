@@ -12,9 +12,9 @@
 // Its major job is to manage logs, prepare them for transmission.
 // Currently only histogram data is tracked in log.  When MetricsService
 // prepares log for submission it snapshots the current stats of histograms,
-// translates log to XML.  Transmission includes submitting a compressed log
-// as data in a URL-get, and is performed using functionality provided by
-// Urlmon
+// translates log to a protocol buffer.  Transmission includes submitting a
+// compressed log as data in a URL-get, and is performed using functionality
+// provided by Urlmon
 // The actual transmission is performed using a windows timer procedure which
 // basically means that the thread on which the MetricsService object is
 // instantiated needs a message pump. Also on IE7 where every tab is created
@@ -44,19 +44,13 @@
 #include <objbase.h>
 #include <windows.h>
 
-#if defined(USE_SYSTEM_LIBBZ2)
-#include <bzlib.h>
-#else
-#include "third_party/bzip2/bzlib.h"
-#endif
-
 #include "base/metrics/statistics_recorder.h"
-#include "base/string16.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
+#include "base/strings/string16.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/lock.h"
-#include "base/string_number_conversions.h"
-#include "base/utf_string_conversions.h"
 #include "base/win/scoped_comptr.h"
 #include "chrome/common/chrome_version_info.h"
 #include "chrome/common/metrics/metrics_log_base.h"
@@ -438,10 +432,7 @@ bool MetricsService::UploadData() {
 
   if (log_manager_.has_staged_log()) {
     HRESULT hr = ChromeFrameMetricsDataUploader::UploadDataHelper(
-        log_manager_.staged_log_text().xml, kServerUrlXml, kMimeTypeXml);
-    DCHECK(SUCCEEDED(hr));
-    hr = ChromeFrameMetricsDataUploader::UploadDataHelper(
-        log_manager_.staged_log_text().proto, kServerUrlProto, kMimeTypeProto);
+        log_manager_.staged_log_text(), kServerUrl, kMimeType);
     DCHECK(SUCCEEDED(hr));
     log_manager_.DiscardStagedLog();
   } else {

@@ -6,7 +6,7 @@
 // Packets are serialized just-in-time.  Control frames are queued.
 // Ack and Feedback frames will be requested from the Connection
 // just-in-time.  When a packet needs to be sent, the Generator
-// will serialized a packet and pass it to QuicConnection::SendOrQueuePacket()
+// will serialize a packet and pass it to QuicConnection::SendOrQueuePacket()
 //
 // The Generator's mode of operation is controlled by two conditions:
 //
@@ -62,15 +62,28 @@ class NET_EXPORT_PRIVATE QuicPacketGenerator {
   class NET_EXPORT_PRIVATE DelegateInterface {
    public:
     virtual ~DelegateInterface() {}
-    virtual bool CanWrite(bool is_retransmission,
-                          bool has_retransmittable_data) = 0;
+    virtual bool CanWrite(Retransmission retransmission,
+                          HasRetransmittableData retransmittable,
+                          IsHandshake handshake) = 0;
     virtual QuicAckFrame* CreateAckFrame() = 0;
     virtual QuicCongestionFeedbackFrame* CreateFeedbackFrame() = 0;
     // Takes ownership of |packet.packet| and |packet.retransmittable_frames|.
     virtual bool OnSerializedPacket(const SerializedPacket& packet) = 0;
   };
 
+  // Interface which gets callbacks from the QuicPacketGenerator at interesting
+  // points.  Implementations must not mutate the state of the generator
+  // as a result of these callbacks.
+  class NET_EXPORT_PRIVATE DebugDelegateInterface {
+   public:
+    virtual ~DebugDelegateInterface() {}
+
+    // Called when a frame has been added to the current packet.
+    virtual void OnFrameAddedToPacket(const QuicFrame& frame) = 0;
+  };
+
   QuicPacketGenerator(DelegateInterface* delegate,
+                      DebugDelegateInterface* debug_delegate,
                       QuicPacketCreator* creator);
 
   virtual ~QuicPacketGenerator();
@@ -87,24 +100,42 @@ class NET_EXPORT_PRIVATE QuicPacketGenerator {
   // Enables flushing and flushes queued data.
   void FinishBatchOperations();
 
-  bool HasQueuedData() const;
+  bool HasQueuedFrames() const;
+
+  void set_debug_delegate(DebugDelegateInterface* debug_delegate) {
+    debug_delegate_ = debug_delegate;
+  }
 
  private:
-  void SendQueuedData();
+  void SendQueuedFrames();
 
-  bool HasPendingData() const;
+  // Test to see if we have pending ack, feedback, or control frames.
+  bool HasPendingFrames() const;
+  // Test to see if the addition of a pending frame (which might be
+  // retransmittable) would still allow the resulting packet to be sent now.
+  bool CanSendWithNextPendingFrameAddition() const;
+  // Add exactly one pending frame, preferring ack over feedback over control
+  // frames.
   bool AddNextPendingFrame();
+
+  bool AddFrame(const QuicFrame& frame);
   void SerializeAndSendPacket();
 
   DelegateInterface* delegate_;
+  DebugDelegateInterface* debug_delegate_;
 
   QuicPacketCreator* packet_creator_;
   QuicFrames queued_control_frames_;
   bool should_flush_;
+  // Flags to indicate the need for just-in-time construction of a frame.
   bool should_send_ack_;
+  bool should_send_feedback_;
+  // If we put a non-retransmittable frame (namley ack or feedback frame) in
+  // this packet, then we have to hold a reference to it until we flush (and
+  // serialize it). Retransmittable frames are referenced elsewhere so that they
+  // can later be (optionally) retransmitted.
   scoped_ptr<QuicAckFrame> pending_ack_frame_;
   scoped_ptr<QuicCongestionFeedbackFrame> pending_feedback_frame_;
-  bool should_send_feedback_;
 
   DISALLOW_COPY_AND_ASSIGN(QuicPacketGenerator);
 };

@@ -5,8 +5,8 @@
 #include "chrome/browser/extensions/extension_error_ui.h"
 
 #include "base/logging.h"
-#include "base/string16.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string16.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/ui/global_error/global_error.h"
 #include "grit/chromium_strings.h"
@@ -62,13 +62,13 @@ string16 ExtensionErrorUI::GenerateMessage() {
                                 IDS_APP_ALERT_ITEM_BLACKLISTED);
 }
 
-string16 ExtensionErrorUI::GetBubbleViewMessage() {
+std::vector<string16> ExtensionErrorUI::GetBubbleViewMessages() {
   if (message_.empty()) {
     message_ = GenerateMessage();
     if (message_[message_.size()-1] == '\n')
       message_.resize(message_.size()-1);
   }
-  return message_;
+  return std::vector<string16>(1, message_);
 }
 
 string16 ExtensionErrorUI::GetBubbleViewTitle() {

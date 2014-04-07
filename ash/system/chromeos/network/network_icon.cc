@@ -7,8 +7,9 @@
 #include "ash/shell.h"
 #include "ash/system/chromeos/network/network_icon_animation.h"
 #include "ash/system/chromeos/network/network_icon_animation_observer.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chromeos/network/device_state.h"
+#include "chromeos/network/network_connection_handler.h"
 #include "chromeos/network/network_state.h"
 #include "chromeos/network/network_state_handler.h"
 #include "grit/ash_resources.h"
@@ -23,8 +24,10 @@
 #include "ui/gfx/size_conversions.h"
 
 using chromeos::DeviceState;
-using chromeos::NetworkStateHandler;
+using chromeos::NetworkConnectionHandler;
+using chromeos::NetworkHandler;
 using chromeos::NetworkState;
+using chromeos::NetworkStateHandler;
 
 namespace ash {
 namespace network_icon {
@@ -105,14 +108,39 @@ class NetworkIconImpl {
 
 typedef std::map<std::string, NetworkIconImpl*> NetworkIconMap;
 
-NetworkIconMap* GetIconMap(IconType icon_type) {
+NetworkIconMap* GetIconMapInstance(IconType icon_type, bool create) {
   typedef std::map<IconType, NetworkIconMap*> IconTypeMap;
   static IconTypeMap* s_icon_map = NULL;
-  if (s_icon_map == NULL)
+  if (s_icon_map == NULL) {
+    if (!create)
+      return NULL;
     s_icon_map = new IconTypeMap;
-  if (s_icon_map->count(icon_type) == 0)
+  }
+  if (s_icon_map->count(icon_type) == 0) {
+    if (!create)
+      return NULL;
     (*s_icon_map)[icon_type] = new NetworkIconMap;
+  }
   return (*s_icon_map)[icon_type];
+}
+
+NetworkIconMap* GetIconMap(IconType icon_type) {
+  return GetIconMapInstance(icon_type, true);
+}
+
+void PurgeIconMap(IconType icon_type,
+                  const std::set<std::string>& network_paths) {
+  NetworkIconMap* icon_map = GetIconMapInstance(icon_type, false);
+  if (!icon_map)
+    return;
+  for (NetworkIconMap::iterator loop_iter = icon_map->begin();
+       loop_iter != icon_map->end(); ) {
+    NetworkIconMap::iterator cur_iter = loop_iter++;
+    if (network_paths.count(cur_iter->first) == 0) {
+      delete cur_iter->second;
+      icon_map->erase(cur_iter);
+    }
+  }
 }
 
 //------------------------------------------------------------------------------
@@ -272,6 +300,17 @@ gfx::ImageSkia GetImageForIndex(ImageType image_type,
       gfx::Rect(0, index * height, width, height));
 }
 
+const gfx::ImageSkia GetConnectedImage(const std::string& type,
+                                       IconType icon_type) {
+  if (type == flimflam::kTypeVPN) {
+    return *ui::ResourceBundle::GetSharedInstance().GetImageSkiaNamed(
+        IDR_AURA_UBER_TRAY_NETWORK_VPN);
+  }
+  ImageType image_type = ImageTypeForNetworkType(type);
+  const int connected_index = NumImagesForType(image_type) - 1;
+  return GetImageForIndex(image_type, icon_type, connected_index);
+}
+
 const gfx::ImageSkia GetDisconnectedImage(const std::string& type,
                                           IconType icon_type) {
   if (type == flimflam::kTypeVPN) {
@@ -369,41 +408,42 @@ const gfx::ImageSkia* BadgeForNetworkTechnology(const NetworkState* network,
                                                 IconType icon_type) {
   const int kUnknownBadgeType = -1;
   int id = kUnknownBadgeType;
-  if (network->technology() == flimflam::kNetworkTechnologyEvdo) {
+  const std::string& technology = network->network_technology();
+  if (technology == flimflam::kNetworkTechnologyEvdo) {
     id = IconTypeIsDark(icon_type) ?
-        IDR_AURA_UBER_TRAY_NETWORK_3G_DARK :
-        IDR_AURA_UBER_TRAY_NETWORK_3G_LIGHT;
-  } else if (network->technology() == flimflam::kNetworkTechnology1Xrtt) {
+        IDR_AURA_UBER_TRAY_NETWORK_EVDO_DARK :
+        IDR_AURA_UBER_TRAY_NETWORK_EVDO_LIGHT;
+  } else if (technology == flimflam::kNetworkTechnology1Xrtt) {
     id = IDR_AURA_UBER_TRAY_NETWORK_1X;
-  } else if (network->technology() == flimflam::kNetworkTechnologyGprs) {
+  } else if (technology == flimflam::kNetworkTechnologyGprs) {
     id = IconTypeIsDark(icon_type) ?
         IDR_AURA_UBER_TRAY_NETWORK_GPRS_DARK :
         IDR_AURA_UBER_TRAY_NETWORK_GPRS_LIGHT;
-  } else if (network->technology() == flimflam::kNetworkTechnologyEdge) {
+  } else if (technology == flimflam::kNetworkTechnologyEdge) {
     id = IconTypeIsDark(icon_type) ?
         IDR_AURA_UBER_TRAY_NETWORK_EDGE_DARK :
         IDR_AURA_UBER_TRAY_NETWORK_EDGE_LIGHT;
-  } else if (network->technology() == flimflam::kNetworkTechnologyUmts) {
+  } else if (technology == flimflam::kNetworkTechnologyUmts) {
     id = IconTypeIsDark(icon_type) ?
         IDR_AURA_UBER_TRAY_NETWORK_3G_DARK :
         IDR_AURA_UBER_TRAY_NETWORK_3G_LIGHT;
-  } else if (network->technology() == flimflam::kNetworkTechnologyHspa) {
+  } else if (technology == flimflam::kNetworkTechnologyHspa) {
     id = IconTypeIsDark(icon_type) ?
         IDR_AURA_UBER_TRAY_NETWORK_HSPA_DARK :
         IDR_AURA_UBER_TRAY_NETWORK_HSPA_LIGHT;
-  } else if (network->technology() == flimflam::kNetworkTechnologyHspaPlus) {
+  } else if (technology == flimflam::kNetworkTechnologyHspaPlus) {
     id = IconTypeIsDark(icon_type) ?
         IDR_AURA_UBER_TRAY_NETWORK_HSPA_PLUS_DARK :
         IDR_AURA_UBER_TRAY_NETWORK_HSPA_PLUS_LIGHT;
-  } else if (network->technology() == flimflam::kNetworkTechnologyLte) {
+  } else if (technology == flimflam::kNetworkTechnologyLte) {
     id = IconTypeIsDark(icon_type) ?
         IDR_AURA_UBER_TRAY_NETWORK_LTE_DARK :
         IDR_AURA_UBER_TRAY_NETWORK_LTE_LIGHT;
-  } else if (network->technology() == flimflam::kNetworkTechnologyLteAdvanced) {
+  } else if (technology == flimflam::kNetworkTechnologyLteAdvanced) {
     id = IconTypeIsDark(icon_type) ?
         IDR_AURA_UBER_TRAY_NETWORK_LTE_ADVANCED_DARK :
         IDR_AURA_UBER_TRAY_NETWORK_LTE_ADVANCED_LIGHT;
-  } else if (network->technology() == flimflam::kNetworkTechnologyGsm) {
+  } else if (technology == flimflam::kNetworkTechnologyGsm) {
     id = IconTypeIsDark(icon_type) ?
         IDR_AURA_UBER_TRAY_NETWORK_GPRS_DARK :
         IDR_AURA_UBER_TRAY_NETWORK_GPRS_LIGHT;
@@ -444,7 +484,7 @@ gfx::ImageSkia GetIcon(const NetworkState* network,
 // Get connecting images
 
 gfx::ImageSkia GetConnectingVpnImage(IconType icon_type) {
-  NetworkStateHandler* handler = NetworkStateHandler::Get();
+  NetworkStateHandler* handler = NetworkHandler::Get()->network_state_handler();
   const NetworkState* connected_network = NULL;
   if (icon_type == ICON_TYPE_TRAY) {
     connected_network = handler->ConnectedNetworkByType(
@@ -546,8 +586,8 @@ bool NetworkIconImpl::UpdateCellularState(const NetworkState* network) {
 }
 
 bool NetworkIconImpl::UpdateVPNBadge() {
-  const NetworkState* vpn =
-      NetworkStateHandler::Get()->ConnectedNetworkByType(flimflam::kTypeVPN);
+  const NetworkState* vpn = NetworkHandler::Get()->network_state_handler()->
+      ConnectedNetworkByType(flimflam::kTypeVPN);
   if (vpn && vpn_badge_ == NULL) {
     vpn_badge_ = BadgeForVPN(icon_type_);
     return true;
@@ -561,7 +601,7 @@ bool NetworkIconImpl::UpdateVPNBadge() {
 void NetworkIconImpl::GetBadges(const NetworkState* network, Badges* badges) {
   DCHECK(network);
   ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
-  NetworkStateHandler* handler = NetworkStateHandler::Get();
+  NetworkStateHandler* handler = NetworkHandler::Get()->network_state_handler();
 
   const std::string& type = network->type();
   if (type == flimflam::kTypeWifi) {
@@ -580,8 +620,9 @@ void NetworkIconImpl::GetBadges(const NetworkState* network, Badges* badges) {
       // For networks that are always in roaming don't show roaming badge.
       const DeviceState* device =
           handler->GetDeviceState(network->device_path());
-      DCHECK(device);
-      if (!device->provider_requires_roaming()) {
+      LOG_IF(WARNING, !device) << "Could not find device state for "
+                               << network->device_path();
+      if (!device || !device->provider_requires_roaming()) {
         badges->bottom_right = rb.GetImageSkiaNamed(
             IconTypeIsDark(icon_type_) ?
             IDR_AURA_UBER_TRAY_NETWORK_ROAMING_DARK :
@@ -630,6 +671,11 @@ gfx::ImageSkia GetImageForNetwork(const NetworkState* network,
   return icon->image();
 }
 
+gfx::ImageSkia GetImageForConnectedNetwork(IconType icon_type,
+                                           const std::string& network_type) {
+  return GetConnectedImage(network_type, icon_type);
+}
+
 gfx::ImageSkia GetImageForConnectingNetwork(IconType icon_type,
                                             const std::string& network_type) {
   return GetConnectingImage(network_type, icon_type);
@@ -640,8 +686,8 @@ gfx::ImageSkia GetImageForDisconnectedNetwork(IconType icon_type,
   return GetDisconnectedImage(network_type, icon_type);
 }
 
-string16 GetLabelForNetwork(const chromeos::NetworkState* network,
-                            IconType icon_type) {
+base::string16 GetLabelForNetwork(const chromeos::NetworkState* network,
+                                  IconType icon_type) {
   DCHECK(network);
   std::string activation_state = network->activation_state();
   if (icon_type == ICON_TYPE_LIST) {
@@ -691,9 +737,9 @@ int GetCellularUninitializedMsg() {
   static base::Time s_uninitialized_state_time;
   static int s_uninitialized_msg(0);
 
-  NetworkStateHandler* handler = NetworkStateHandler::Get();
-  if (handler->TechnologyUninitialized(
-          NetworkStateHandler::kMatchTypeMobile)) {
+  NetworkStateHandler* handler = NetworkHandler::Get()->network_state_handler();
+  if (handler->GetTechnologyState(NetworkStateHandler::kMatchTypeMobile)
+      == NetworkStateHandler::TECHNOLOGY_UNINITIALIZED) {
     s_uninitialized_msg = IDS_ASH_STATUS_TRAY_INITIALIZING_CELLULAR;
     s_uninitialized_state_time = base::Time::Now();
     return s_uninitialized_msg;
@@ -711,6 +757,93 @@ int GetCellularUninitializedMsg() {
   if (dtime.InSeconds() < kInitializingDelaySeconds)
     return s_uninitialized_msg;
   return 0;
+}
+
+void GetDefaultNetworkImageAndLabel(IconType icon_type,
+                                    gfx::ImageSkia* image,
+                                    base::string16* label,
+                                    bool* animating) {
+  NetworkStateHandler* state_handler =
+      NetworkHandler::Get()->network_state_handler();
+  NetworkConnectionHandler* connect_handler =
+      NetworkHandler::Get()->network_connection_handler();
+  const NetworkState* connected_network =
+      state_handler->ConnectedNetworkByType(
+          NetworkStateHandler::kMatchTypeNonVirtual);
+  const NetworkState* connecting_network =
+      state_handler->ConnectingNetworkByType(
+          NetworkStateHandler::kMatchTypeWireless);
+  if (!connecting_network && icon_type == ICON_TYPE_TRAY) {
+    connecting_network =
+        state_handler->ConnectingNetworkByType(flimflam::kTypeVPN);
+  }
+
+  const NetworkState* network;
+  // If we are connecting to a network, and there is either no connected
+  // network, or the connection was user requested, use the connecting
+  // network.
+  if (connecting_network &&
+      (!connected_network ||
+       connect_handler->HasConnectingNetwork(connecting_network->path()))) {
+    network = connecting_network;
+  } else {
+    network = connected_network;
+  }
+
+  // Don't show ethernet in the tray
+  if (icon_type == ICON_TYPE_TRAY &&
+      network && network->type() == flimflam::kTypeEthernet) {
+    *image = gfx::ImageSkia();
+    *animating = false;
+    return;
+  }
+
+  if (!network) {
+    // If no connecting network, check if we are activating a network.
+    const NetworkState* mobile_network = state_handler->FirstNetworkByType(
+        NetworkStateHandler::kMatchTypeMobile);
+    if (mobile_network && (mobile_network->activation_state() ==
+                           flimflam::kActivationStateActivating)) {
+      network = mobile_network;
+    }
+  }
+  if (!network) {
+    // If no connecting network, check for cellular initializing.
+    int uninitialized_msg = GetCellularUninitializedMsg();
+    if (uninitialized_msg != 0) {
+      *image = GetImageForConnectingNetwork(icon_type, flimflam::kTypeCellular);
+      if (label)
+        *label = l10n_util::GetStringUTF16(uninitialized_msg);
+      *animating = true;
+    } else {
+      // Otherwise show the disconnected wifi icon.
+      *image = GetImageForDisconnectedNetwork(icon_type, flimflam::kTypeWifi);
+      if (label) {
+        *label = l10n_util::GetStringUTF16(
+            IDS_ASH_STATUS_TRAY_NETWORK_NOT_CONNECTED);
+      }
+      *animating = false;
+    }
+    return;
+  }
+  *animating = network->IsConnectingState();
+  // Get icon and label for connected or connecting network.
+  *image = GetImageForNetwork(network, icon_type);
+  if (label)
+    *label = GetLabelForNetwork(network, icon_type);
+}
+
+void PurgeNetworkIconCache() {
+  NetworkStateHandler::NetworkStateList networks;
+  NetworkHandler::Get()->network_state_handler()->GetNetworkList(&networks);
+  std::set<std::string> network_paths;
+  for (NetworkStateHandler::NetworkStateList::iterator iter = networks.begin();
+       iter != networks.end(); ++iter) {
+    network_paths.insert((*iter)->path());
+  }
+  PurgeIconMap(ICON_TYPE_TRAY, network_paths);
+  PurgeIconMap(ICON_TYPE_DEFAULT_VIEW, network_paths);
+  PurgeIconMap(ICON_TYPE_LIST, network_paths);
 }
 
 }  // namespace network_icon

@@ -62,12 +62,11 @@ class BookmarkPromptControllerTest : public BrowserWithTestWindowTest {
   };
 
   virtual void SetUp() OVERRIDE {
-    set_window(new MyTestBrowserWindow);
     TestingBrowserProcess::GetGlobal()->
         SetBookmarkPromptController(new BookmarkPromptController);
     BrowserWithTestWindowTest::SetUp();
-    static_cast<TestingProfile*>(browser()->profile())->
-        CreateHistoryService(true, false);
+    ASSERT_TRUE(static_cast<TestingProfile*>(browser()->profile())->
+        CreateHistoryService(true, false));
     static_cast<TestingProfile*>(browser()->profile())->
         BlockUntilHistoryIndexIsRefreshed();
     // Simulate browser activation.
@@ -80,6 +79,10 @@ class BookmarkPromptControllerTest : public BrowserWithTestWindowTest {
     static_cast<TestingProfile*>(browser()->profile())->
         DestroyHistoryService();
     BrowserWithTestWindowTest::TearDown();
+  }
+
+  virtual BrowserWindow* CreateBrowserWindow() OVERRIDE {
+    return new MyTestBrowserWindow;
   }
 
   base::FieldTrialList field_trial_list_;

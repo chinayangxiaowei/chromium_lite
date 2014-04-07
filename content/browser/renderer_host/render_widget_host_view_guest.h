@@ -16,10 +16,10 @@
 #include "ui/gfx/native_widget_types.h"
 #include "ui/gfx/rect.h"
 #include "ui/gfx/vector2d_f.h"
-#include "webkit/glue/webcursor.h"
+#include "webkit/common/cursors/webcursor.h"
 
 #if defined(TOOLKIT_GTK)
-#include "webkit/plugins/npapi/gtk_plugin_container_manager.h"
+#include "content/browser/renderer_host/gtk_plugin_container_manager.h"
 #endif  // defined(TOOLKIT_GTK)
 
 namespace content {
@@ -66,8 +66,8 @@ class CONTENT_EXPORT RenderWidgetHostViewGuest
   virtual void SetClickthroughRegion(SkRegion* region) OVERRIDE;
 #endif
 #if defined(OS_WIN) && defined(USE_AURA)
-  virtual void SetParentNativeViewAccessible(
-      gfx::NativeViewAccessible accessible_parent) OVERRIDE;
+  virtual gfx::NativeViewAccessible AccessibleObjectFromChildId(long child_id)
+      OVERRIDE;
 #endif
 
   // RenderWidgetHostViewPort implementation.
@@ -79,26 +79,33 @@ class CONTENT_EXPORT RenderWidgetHostViewGuest
   virtual void WasHidden() OVERRIDE;
   virtual void MovePluginWindows(
       const gfx::Vector2d& scroll_offset,
-      const std::vector<webkit::npapi::WebPluginGeometry>& moves) OVERRIDE;
+      const std::vector<WebPluginGeometry>& moves) OVERRIDE;
   virtual void Focus() OVERRIDE;
   virtual void Blur() OVERRIDE;
   virtual void UpdateCursor(const WebCursor& cursor) OVERRIDE;
   virtual void SetIsLoading(bool is_loading) OVERRIDE;
-  virtual void TextInputStateChanged(
-      const ViewHostMsg_TextInputState_Params& params) OVERRIDE;
+  virtual void TextInputTypeChanged(ui::TextInputType type,
+                                    bool can_compose_inline,
+                                    ui::TextInputMode input_mode) OVERRIDE;
   virtual void ImeCancelComposition() OVERRIDE;
+#if defined(OS_MACOSX) || defined(OS_WIN) || defined(USE_AURA)
   virtual void ImeCompositionRangeChanged(
       const ui::Range& range,
       const std::vector<gfx::Rect>& character_bounds) OVERRIDE;
+#endif
   virtual void DidUpdateBackingStore(
       const gfx::Rect& scroll_rect,
       const gfx::Vector2d& scroll_delta,
-      const std::vector<gfx::Rect>& copy_rects) OVERRIDE;
-  virtual void RenderViewGone(base::TerminationStatus status,
-                              int error_code) OVERRIDE;
+      const std::vector<gfx::Rect>& copy_rects,
+      const ui::LatencyInfo& latency_info) OVERRIDE;
+  virtual void RenderProcessGone(base::TerminationStatus status,
+                                 int error_code) OVERRIDE;
   virtual void Destroy() OVERRIDE;
   virtual void WillDestroyRenderWidget(RenderWidgetHost* rwh) {}
   virtual void SetTooltipText(const string16& tooltip_text) OVERRIDE;
+  virtual void SelectionChanged(const string16& text,
+                                size_t offset,
+                                const ui::Range& range) OVERRIDE;
   virtual void SelectionBoundsChanged(
       const ViewHostMsg_SelectionBounds_Params& params) OVERRIDE;
   virtual void ScrollOffsetChanged() OVERRIDE;
@@ -119,6 +126,9 @@ class CONTENT_EXPORT RenderWidgetHostViewGuest
   virtual void AcceleratedSurfacePostSubBuffer(
       const GpuHostMsg_AcceleratedSurfacePostSubBuffer_Params& params,
       int gpu_host_id) OVERRIDE;
+  virtual void OnSwapCompositorFrame(
+      uint32 output_surface_id,
+      scoped_ptr<cc::CompositorFrame> frame) OVERRIDE;
   virtual void AcceleratedSurfaceSuspend() OVERRIDE;
   virtual void AcceleratedSurfaceRelease() OVERRIDE;
   virtual bool HasAcceleratedSurface(const gfx::Size& desired_size) OVERRIDE;
@@ -129,8 +139,9 @@ class CONTENT_EXPORT RenderWidgetHostViewGuest
   virtual gfx::Rect GetBoundsInRootWindow() OVERRIDE;
   virtual gfx::GLSurfaceHandle GetCompositingSurface() OVERRIDE;
 #if defined(OS_WIN) || defined(USE_AURA)
-  virtual void ProcessAckedTouchEvent(const WebKit::WebTouchEvent& touch,
-                                      InputEventAckState ack_result) OVERRIDE;
+  virtual void ProcessAckedTouchEvent(
+      const TouchEventWithLatencyInfo& touch,
+      InputEventAckState ack_result) OVERRIDE;
 #endif  // defined(OS_WIN) || defined(USE_AURA)
   virtual bool LockMouse() OVERRIDE;
   virtual void UnlockMouse() OVERRIDE;
@@ -161,14 +172,6 @@ class CONTENT_EXPORT RenderWidgetHostViewGuest
   // RenderWidgetHostViewPort implementation.
   virtual void ShowDisambiguationPopup(const gfx::Rect& target_rect,
                                        const SkBitmap& zoomed_bitmap) OVERRIDE;
-  virtual void UpdateFrameInfo(const gfx::Vector2dF& scroll_offset,
-                               float page_scale_factor,
-                               const gfx::Vector2dF& page_scale_factor_limits,
-                               const gfx::SizeF& content_size,
-                               const gfx::SizeF& viewport_size,
-                               const gfx::Vector2dF& controls_offset,
-                               const gfx::Vector2dF& content_offset,
-                               float overdraw_bottom_height) OVERRIDE;
   virtual void HasTouchEventHandlers(bool need_touch_events) OVERRIDE;
 #endif  // defined(OS_ANDROID)
 
@@ -180,6 +183,11 @@ class CONTENT_EXPORT RenderWidgetHostViewGuest
 #if defined(OS_WIN) && !defined(USE_AURA)
   virtual void WillWmDestroy() OVERRIDE;
 #endif  // defined(OS_WIN) && !defined(USE_AURA)
+
+#if defined(OS_WIN) && defined(USE_AURA)
+  virtual void SetParentNativeViewAccessible(
+      gfx::NativeViewAccessible accessible_parent) OVERRIDE;
+#endif
 
   // Overridden from ui::GestureEventHelper.
   virtual bool DispatchLongPressGestureEvent(ui::GestureEvent* event) OVERRIDE;
@@ -203,6 +211,7 @@ class CONTENT_EXPORT RenderWidgetHostViewGuest
 
   BrowserPluginGuest *guest_;
   bool is_hidden_;
+  gfx::Size size_;
   // The platform view for this RenderWidgetHostView.
   // RenderWidgetHostViewGuest mostly only cares about stuff related to
   // compositing, the rest are directly forwared to this |platform_view_|.

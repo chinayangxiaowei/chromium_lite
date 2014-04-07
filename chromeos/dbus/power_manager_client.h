@@ -9,11 +9,10 @@
 
 #include "base/basictypes.h"
 #include "base/callback.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "chromeos/chromeos_export.h"
 #include "chromeos/dbus/dbus_client_implementation_type.h"
-
-#include "chromeos/dbus/power_supply_status.h"
+#include "third_party/cros_system_api/dbus/service_constants.h"
 
 namespace dbus {
 class Bus;
@@ -21,6 +20,7 @@ class Bus;
 
 namespace power_manager {
 class PowerManagementPolicy;
+class PowerSupplyProperties;
 }
 
 namespace chromeos {
@@ -37,11 +37,6 @@ class CHROMEOS_EXPORT PowerManagerClient {
   // Interface for observing changes from the power manager.
   class Observer {
    public:
-    enum ScreenDimmingState {
-      SCREEN_DIMMING_NONE = 0,
-      SCREEN_DIMMING_IDLE,
-    };
-
     virtual ~Observer() {}
 
     // Called if the power manager process restarts.
@@ -52,16 +47,23 @@ class CHROMEOS_EXPORT PowerManagerClient {
     // |user_initiated| is true if the action is initiated by the user.
     virtual void BrightnessChanged(int level, bool user_initiated) {}
 
-    // Called when power supply polling takes place.  |status| is a data
-    // structure that contains the current state of the power supply.
-    virtual void PowerChanged(const PowerSupplyStatus& status) {}
+    // Called when peripheral device battery status is received.
+    // |path| is the sysfs path for the battery of the peripheral device.
+    // |name| is the human readble name of the device.
+    // |level| within [0, 100] represents the device battery level and -1
+    // means an unknown level or device is disconnected.
+    virtual void PeripheralBatteryStatusReceived(const std::string& path,
+                                                 const std::string& name,
+                                                 int level) {}
+
+    // Called when updated information about the power supply is available.
+    // The status is automatically updated periodically, but
+    // RequestStatusUpdate() can be used to trigger an immediate update.
+    virtual void PowerChanged(
+        const power_manager::PowerSupplyProperties& proto) {}
 
     // Called when we go idle for threshold time.
     virtual void IdleNotify(int64 threshold_secs) {}
-
-    // Called when a request is received to dim or undim the screen in software
-    // (as opposed to the more-common method of adjusting the backlight).
-    virtual void ScreenDimmingRequested(ScreenDimmingState state) {}
 
     // Called when the system is about to suspend. Suspend is deferred until
     // all observers' implementations of this method have finished running.
@@ -91,12 +93,6 @@ class CHROMEOS_EXPORT PowerManagerClient {
     virtual void IdleActionDeferred() {}
   };
 
-  enum UpdateRequestType {
-    UPDATE_INITIAL,  // Initial update request.
-    UPDATE_USER,     // User initialted update request.
-    UPDATE_POLL      // Update requested by poll signal.
-  };
-
   // Adds and removes the observer.
   virtual void AddObserver(Observer* observer) = 0;
   virtual void RemoveObserver(Observer* observer) = 0;
@@ -124,8 +120,9 @@ class CHROMEOS_EXPORT PowerManagerClient {
   // Increases the keyboard brightness.
   virtual void IncreaseKeyboardBrightness() = 0;
 
-  // Request for power supply status update.
-  virtual void RequestStatusUpdate(UpdateRequestType update_type) = 0;
+  // Requests an updated copy of the power status. Observer::PowerChanged()
+  // will be called asynchronously.
+  virtual void RequestStatusUpdate() = 0;
 
   // Requests restart of the system.
   virtual void RequestRestart() = 0;
@@ -144,13 +141,11 @@ class CHROMEOS_EXPORT PowerManagerClient {
 
   // Notifies the power manager that the user is active (i.e. generating input
   // events).
-  virtual void NotifyUserActivity() = 0;
+  virtual void NotifyUserActivity(power_manager::UserActivityType type) = 0;
 
   // Notifies the power manager that a video is currently playing. It also
   // includes whether or not the containing window for the video is fullscreen.
-  virtual void NotifyVideoActivity(
-      const base::TimeTicks& last_activity_time,
-      bool is_fullscreen) = 0;
+  virtual void NotifyVideoActivity(bool is_fullscreen) = 0;
 
   // Tells the power manager to begin using |policy|.
   virtual void SetPolicy(

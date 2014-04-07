@@ -47,9 +47,6 @@ class NetworkLibraryImplStub : public NetworkLibraryImplBase {
 
   // NetworkLibrary implementation.
 
-  virtual void SetCheckPortalList(
-      const std::string& check_portal_list) OVERRIDE;
-  virtual void SetDefaultCheckPortalList() OVERRIDE;
   virtual void ChangePin(const std::string& old_pin,
                          const std::string& new_pin) OVERRIDE;
   virtual void ChangeRequirePin(bool require_pin,
@@ -64,24 +61,15 @@ class NetworkLibraryImplStub : public NetworkLibraryImplBase {
   virtual void SetCellularDataRoamingAllowed(bool new_value) OVERRIDE;
   virtual void SetCarrier(const std::string& carrier,
                           const NetworkOperationCallback& completed) OVERRIDE;
-  virtual void ResetModem() OVERRIDE;
   virtual bool IsCellularAlwaysInRoaming() OVERRIDE;
   virtual void RequestNetworkScan() OVERRIDE;
 
-  virtual void RefreshIPConfig(Network* network) OVERRIDE;
-
   virtual void DisconnectFromNetwork(const Network* network) OVERRIDE;
-
-  virtual void EnableOfflineMode(bool enable) OVERRIDE;
 
   virtual void GetIPConfigs(
       const std::string& device_path,
       HardwareAddressFormat format,
       const NetworkGetIPConfigsCallback& callback) OVERRIDE;
-  virtual NetworkIPConfigVector GetIPConfigsAndBlock(
-      const std::string& device_path,
-      std::string* hardware_address,
-      HardwareAddressFormat format) OVERRIDE;
   virtual void SetIPParameters(const std::string& service_path,
                                const std::string& address,
                                const std::string& netmask,

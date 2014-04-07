@@ -2,11 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/message_loop.h"
-#include "base/string16.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/string16.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/printing/print_job.h"
 #include "chrome/browser/printing/print_job_worker.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "content/public/browser/notification_registrar.h"
 #include "content/public/browser/notification_service.h"
 #include "printing/printed_pages_source.h"
@@ -46,7 +46,7 @@ class TestOwner : public printing::PrintJobWorkerOwner {
     settings_ = worker->printing_context()->settings();
     return worker;
   }
-  virtual MessageLoop* message_loop() OVERRIDE {
+  virtual base::MessageLoop* message_loop() OVERRIDE {
     EXPECT_FALSE(true);
     return NULL;
   }
@@ -93,7 +93,7 @@ TEST_F(PrintJobTest, SimplePrint) {
   // known lifetime.
 
   // This message loop is actually never run.
-  MessageLoop current;
+  base::MessageLoop current;
 
   content::NotificationRegistrar registrar_;
   TestPrintNotifObserv observ;
@@ -101,18 +101,26 @@ TEST_F(PrintJobTest, SimplePrint) {
                  content::NotificationService::AllSources());
   volatile bool check = false;
   scoped_refptr<printing::PrintJob> job(new TestPrintJob(&check));
-  EXPECT_EQ(MessageLoop::current(), job->message_loop());
+  EXPECT_EQ(base::MessageLoop::current(), job->message_loop());
   scoped_refptr<TestOwner> owner(new TestOwner);
   TestSource source;
-  job->Initialize(owner, &source, 1);
+  job->Initialize(owner.get(), &source, 1);
   job->Stop();
+  EXPECT_FALSE(job->is_stopped());
+  EXPECT_TRUE(job->is_stopping());
+  while (!job->is_stopped())
+  {
+    current.RunUntilIdle();
+  }
+  EXPECT_TRUE(job->is_stopped());
+  EXPECT_FALSE(job->is_stopping());
   job = NULL;
   EXPECT_TRUE(check);
 }
 
 TEST_F(PrintJobTest, SimplePrintLateInit) {
   volatile bool check = false;
-  MessageLoop current;
+  base::MessageLoop current;
   scoped_refptr<printing::PrintJob> job(new TestPrintJob(&check));
   job = NULL;
   EXPECT_TRUE(check);

@@ -26,11 +26,11 @@ chrome.test.getConfig(function(config) {
     function setupTestTab() {
       chrome.test.log("Creating tab...");
       chrome.tabs.create({
-        url: "http://localhost:PORT/files/extensions/test_file.html"
+        url: "http://localhost:PORT/extensions/test_file.html"
                  .replace(/PORT/, config.testServer.port)
-      }, function(tab) {
-        chrome.tabs.onUpdated.addListener(function listener(tabid, info) {
-          if (tab.id == tabid && info.status == 'complete') {
+      }, function(newTab) {
+        chrome.tabs.onUpdated.addListener(function listener(_, info, tab) {
+          if (tab.id == newTab.id && info.status == 'complete') {
             chrome.test.log("Created tab: " + tab.url);
             chrome.tabs.onUpdated.removeListener(listener);
             testTab = tab;
@@ -65,9 +65,11 @@ chrome.test.getConfig(function(config) {
     // Tests that postMessage from the tab and its response works.
     function postMessageFromTab() {
       chrome.runtime.onConnect.addListener(function(port) {
-        chrome.test.assertTrue(Boolean(port.sender.tab.url));
-        chrome.test.assertTrue(Boolean(port.sender.tab.title));
-        chrome.test.assertTrue(Boolean(port.sender.tab.id));
+        chrome.test.assertEq({
+          tab: testTab,
+          url: testTab.url,
+           id: chrome.runtime.id
+        }, port.sender);
         port.onMessage.addListener(function(msg) {
           chrome.test.assertTrue(msg.testPostMessageFromTab);
           port.postMessage({success: true, portName: port.name});
@@ -89,8 +91,11 @@ chrome.test.getConfig(function(config) {
       var doneListening = chrome.test.listenForever(
         chrome.runtime.onMessage,
         function(request, sender, sendResponse) {
-          chrome.test.assertTrue("url" in sender.tab, "no tab available.");
-          chrome.test.assertEq(sender.id, location.host);
+          chrome.test.assertEq({
+            tab: testTab,
+            url: testTab.url,
+             id: chrome.runtime.id
+          }, sender);
           if (request.step == 1) {
             // Step 1: Page should send another request for step 2.
             chrome.test.log("sendMessageFromTab: got step 1");
@@ -158,6 +163,21 @@ chrome.test.getConfig(function(config) {
       port.onDisconnect.addListener(function() {
         chrome.test.succeed();
       });
+    },
+
+    // Tests that a message which fails to serialize prints an error and
+    // doesn't send (http://crbug.com/263077).
+    function unserializableMessage() {
+      try {
+        chrome.tabs.connect(testTab.id).postMessage(function() {
+          // This shouldn't ever be called, so it's a bit pointless.
+          chrome.test.fail();
+        });
+        // Didn't crash.
+        chrome.test.succeed();
+      } catch (e) {
+        chrome.test.fail(e.stack);
+      }
     },
 
     // Tests that we get the disconnect event when the tab context closes.

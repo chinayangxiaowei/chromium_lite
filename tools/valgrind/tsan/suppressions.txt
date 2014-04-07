@@ -134,12 +134,11 @@
   fun:uprv_malloc_46
 }
 
+# http://bugs.icu-project.org/trac/ticket/10295
 {
-  Two writes, same value (ICU gLibCleanupFunctions[UCLN_UPLUG])
+  Two writes, same value (ICU gLibCleanupFunctions[*])
   ThreadSanitizer:Race
   fun:ucln_registerCleanup_46
-  fun:uplug_init_46
-  fun:u_init_46
 }
 
 # Reading a pointer to a mutex being initialized in a concurrent thread.
@@ -445,6 +444,49 @@
   ...
   fun:disk_cache::EntryImpl::WriteDataImpl*
 }
+{
+  bug_66835a
+  ThreadSanitizer:Race
+  fun:getenv
+  fun:::EnvironmentImpl::GetVarImpl
+  fun:::EnvironmentImpl::GetVar
+  fun:ShellIntegrationLinux::GetDesktopName
+  fun:::GetIsDefaultWebClient
+  fun:ShellIntegration::GetDefaultBrowser
+  fun:::RecordDefaultBrowserUMAStat
+  fun:base::internal::RunnableAdapter::Run
+}
+{
+  bug_66835b
+  ThreadSanitizer:Race
+  fun:__add_to_environ
+  fun:g_setenv
+  ...
+  fun:giop_init
+  fun:CORBA_ORB_init
+  fun:gconf_orb_get
+  ...
+  fun:gconf_activate_server
+  ...
+  fun:gconf_engine_get_fuller
+  fun:gconf_engine_get_entry
+  ...
+  fun:GConfTitlebarListener::GConfTitlebarListener
+  fun:DefaultSingletonTraits::New
+  fun:Singleton::get
+  fun:GConfTitlebarListener::GetInstance
+  fun:BrowserTitlebar::Init
+  fun:BrowserWindowGtk::InitWidgets
+  fun:BrowserWindowGtk::Init
+  fun:BrowserWindow::CreateBrowserWindow
+  fun:::CreateBrowserWindow
+  fun:Browser::Browser
+  fun:StartupBrowserCreatorImpl::OpenTabsInBrowser
+  fun:StartupBrowserCreatorImpl::ProcessSpecifiedURLs
+  fun:StartupBrowserCreatorImpl::ProcessStartupURLs
+  fun:StartupBrowserCreatorImpl::ProcessLaunchURLs
+  fun:StartupBrowserCreatorImpl::Launch
+}
 
 {
   bug_67957
@@ -710,8 +752,8 @@
    fun:timeout_correct
    fun:event_base_loop
    fun:base::MessagePumpLibevent::Run
-   fun:MessageLoop::RunInternal
-   fun:MessageLoop::RunHandler
+   fun:base::MessageLoop::RunInternal
+   fun:base::MessageLoop::RunHandler
 }
 {
   bug_104776_maybe_benign
@@ -881,7 +923,7 @@
   fun:g_object_new
   ...
   fun:ThemeServiceFactory::BuildServiceInstanceFor
-  fun:ProfileKeyedServiceFactory::GetServiceForProfile
+  fun:BrowserContextKeyedServiceFactory::GetServiceForBrowserContext
   fun:ThemeServiceFactory::GetForProfile
   fun:ExtensionService::GarbageCollectExtensions
   fun:ExtensionService::InitAfterImport
@@ -901,8 +943,8 @@
   ThreadSanitizer:Race
   fun:__alloc_dir
   fun:opendir
-  fun:file_util::FileEnumerator::ReadDirectory
-  fun:file_util::FileEnumerator::Next
+  fun:base::FileEnumerator::ReadDirectory
+  fun:base::FileEnumerator::Next
   fun:::GetPrefsCandidateFilesFromFolder
   fun:ExternalPrefLoader::ReadStandaloneExtensionPrefFiles
   fun:ExternalPrefLoader::LoadOnFileThread
@@ -993,63 +1035,14 @@
 {
   bug_175467
   ThreadSanitizer:Race
-  fun:_getstream
-  fun:_getstream
-  fun:_wfsopen
-  fun:_wfsopen
-  fun:file_util::OpenFile
-  fun:file_util::OpenFile
-  fun:file_util::OpenFile
-  fun:file_util::OpenFile
-  fun:components::VisitedLinkMaster::InitFromFile
-  fun:components::VisitedLinkMaster::InitFromFile
-  fun:components::VisitedLinkMaster::InitFromFile
-  fun:components::VisitedLinkMaster::Init
-  fun:components::VisitedLinkEventsTest::SetUp
-  fun:testing::internal::HandleExceptionsInMethodIfSupported
-}
-{
-  bug_66835a
-  ThreadSanitizer:Race
-  fun:getenv
-  fun:::EnvironmentImpl::GetVarImpl
-  fun:::EnvironmentImpl::GetVar
-  fun:ShellIntegrationLinux::GetDesktopName
-  fun:::GetIsDefaultWebClient
-  fun:ShellIntegration::GetDefaultBrowser
-  fun:::RecordDefaultBrowserUMAStat
-  fun:base::internal::RunnableAdapter::Run
-}
-{
-  bug_66835b
-  ThreadSanitizer:Race
-  fun:__add_to_environ
-  fun:g_setenv
   ...
-  fun:giop_init
-  fun:CORBA_ORB_init
-  fun:gconf_orb_get
-  ...
-  fun:gconf_activate_server
-  ...
-  fun:gconf_engine_get_fuller
-  fun:gconf_engine_get_entry
-  ...
-  fun:GConfTitlebarListener::GConfTitlebarListener
-  fun:DefaultSingletonTraits::New
-  fun:Singleton::get
-  fun:GConfTitlebarListener::GetInstance
-  fun:BrowserTitlebar::Init
-  fun:BrowserWindowGtk::InitWidgets
-  fun:BrowserWindowGtk::Init
-  fun:BrowserWindow::CreateBrowserWindow
-  fun:::CreateBrowserWindow
-  fun:Browser::Browser
-  fun:StartupBrowserCreatorImpl::OpenTabsInBrowser
-  fun:StartupBrowserCreatorImpl::ProcessSpecifiedURLs
-  fun:StartupBrowserCreatorImpl::ProcessStartupURLs
-  fun:StartupBrowserCreatorImpl::ProcessLaunchURLs
-  fun:StartupBrowserCreatorImpl::Launch
+  fun:file_util::OpenFile
+  fun:visitedlink::VisitedLinkMaster::InitFromFile
+  fun:visitedlink::VisitedLinkMaster::InitFromFile
+  fun:visitedlink::VisitedLinkMaster::InitFromFile
+  fun:visitedlink::VisitedLinkMaster::Init
+  fun:visitedlink::VisitedLinkEventsTest::CreateBrowserContext
+  fun:content::RenderViewHostTestHarness::SetUp
 }
 {
    bug_178433a
@@ -1065,32 +1058,6 @@
    fun:base::internal::scoped_ptr_impl::get
    ...
    fun:base::debug::TraceSamplingThread::ThreadMain
-}
-{
-   bug_222601a
-   ThreadSanitizer:Race
-   fun:XFixesFindDisplay
-   fun:XFixesQueryExtension
-   fun:media::::ScreenCapturerLinux::Init
-}
-{
-   bug_222601b
-   ThreadSanitizer:Race
-   fun:XextFindDisplay
-   ...
-   fun:XShmQueryVersion
-   fun:media::XServerPixelBuffer::InitShm
-   fun:media::XServerPixelBuffer::Init
-   fun:media::::ScreenCapturerLinux::Init
-}
-{
-   bug_222601c
-   ThreadSanitizer:Race
-   fun:XextAddDisplay
-   ...
-   fun:media::XServerPixelBuffer::InitShm
-   fun:media::XServerPixelBuffer::Init
-   fun:media::::ScreenCapturerLinux::Init
 }
 {
    bug_222684a
@@ -1109,4 +1076,63 @@
    fun:WebCore::SecurityOrigin::create
    fun:WebCore::SecurityOrigin::createFromString
    fun:WebKit::WebSecurityOrigin::createFromString
+}
+{
+  bug_225123
+  ThreadSanitizer:Race
+  fun:setlocale
+  ...
+  fun:gfx::GtkInitFromCommandLine
+}
+{
+  bug_239350
+  ThreadSanitizer:Race
+  fun:av_buffer_unref
+  fun:av_frame_unref
+  fun:avcodec_decode_video2
+  ...
+  fun:media::FFmpegVideoDecoder::Decode
+}
+{
+  bug_256792
+  ThreadSanitizer:Race
+  fun:media::AudioManagerLinux::~AudioManagerLinux
+  fun:content::MockAudioManager::~MockAudioManager
+  fun:content::MockAudioManager::~MockAudioManager
+  fun:base::DefaultDeleter*
+  fun:base::internal::scoped_ptr_impl::~scoped_ptr_impl
+  fun:scoped_ptr::~scoped_ptr
+  fun:content::MediaStreamManagerTest::~MediaStreamManagerTest
+  fun:content::MediaStreamManagerTest_MakeAndCancelMediaAccessRequest_Test::~MediaStreamManagerTest_MakeAndCancelMediaAccessRequest_Test
+  fun:content::MediaStreamManagerTest_MakeAndCancelMediaAccessRequest_Test::~MediaStreamManagerTest_MakeAndCancelMediaAccessRequest_Test
+  fun:testing::Test::DeleteSelf_
+  fun:testing::internal::HandleSehExceptionsInMethodIfSupported
+}
+{
+  bug_258935
+  ThreadSanitizer:Race
+  fun:base::Thread::StopSoon
+  fun:base::Thread::Stop
+  fun:content::UtilityMainThread::~UtilityMainThread
+  fun:content::UtilityMainThread::~UtilityMainThread
+  fun:base::DefaultDeleter::operator*
+  fun:base::internal::scoped_ptr_impl::~scoped_ptr_impl
+  fun:scoped_ptr::~scoped_ptr
+  fun:content::UtilityProcessHostImpl::~UtilityProcessHostImpl
+  fun:content::UtilityProcessHostImpl::~UtilityProcessHostImpl
+  fun:content::BrowserChildProcessHostImpl::OnChildDisconnected
+  fun:content::ChildProcessHostImpl::OnChannelError
+  fun:IPC::Channel::ChannelImpl::ClosePipeOnError
+  fun:IPC::Channel::ChannelImpl::OnFileCanReadWithoutBlocking
+  fun:base::MessagePumpLibevent::FileDescriptorWatcher::OnFileCanReadWithoutBlocking
+  fun:base::MessagePumpLibevent::OnLibeventNotification
+}
+{
+  bug_268924
+  ThreadSanitizer:Race
+  fun:base::PowerMonitor::PowerMonitor
+  fun:content::ChildThread::Init
+  fun:content::ChildThread::ChildThread
+  fun:content::UtilityThreadImpl::UtilityThreadImpl
+  fun:content::UtilityMainThread::InitInternal
 }

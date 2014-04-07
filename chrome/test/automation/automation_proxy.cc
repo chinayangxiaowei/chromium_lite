@@ -10,7 +10,6 @@
 #include "base/debug/trace_event.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted.h"
-#include "base/process_util.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/threading/platform_thread.h"
 #include "chrome/common/automation_constants.h"
@@ -144,7 +143,7 @@ void AutomationProxy::InitializeThread() {
   scoped_ptr<base::Thread> thread(
       new base::Thread("AutomationProxy_BackgroundThread"));
   base::Thread::Options options;
-  options.message_loop_type = MessageLoop::TYPE_IO;
+  options.message_loop_type = base::MessageLoop::TYPE_IO;
   bool thread_result = thread->StartWithOptions(options);
   DCHECK(thread_result);
   thread_.swap(thread);
@@ -158,10 +157,9 @@ void AutomationProxy::InitializeChannel(const std::string& channel_id,
   // The shutdown event could be global on the same lines as the automation
   // provider, where we use the shutdown event provided by the chrome browser
   // process.
-  channel_.reset(new IPC::SyncChannel(
-      this,  // we are the listener
-      thread_->message_loop_proxy(),
-      shutdown_event_.get()));
+  channel_.reset(new IPC::SyncChannel(this,  // we are the listener
+                                      thread_->message_loop_proxy().get(),
+                                      shutdown_event_.get()));
   channel_->AddFilter(new AutomationMessageFilter(this));
 
   // Create the pipe synchronously so that Chrome doesn't try to connect to an
@@ -404,9 +402,9 @@ void AutomationProxy::ResetChannel() {
     tracker_->put_channel(NULL);
 }
 
-bool AutomationProxy::BeginTracing(const std::string& categories) {
+bool AutomationProxy::BeginTracing(const std::string& category_patterns) {
   bool result = false;
-  bool send_success = Send(new AutomationMsg_BeginTracing(categories,
+  bool send_success = Send(new AutomationMsg_BeginTracing(category_patterns,
                                                           &result));
   return send_success && result;
 }

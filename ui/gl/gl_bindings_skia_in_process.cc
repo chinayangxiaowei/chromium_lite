@@ -124,6 +124,13 @@ GLvoid StubGLCompressedTexImage2D(GLenum target, GLint level,
                          imageSize, data);
 }
 
+GLvoid StubGLCopyTexSubImage2D(GLenum target, GLint level,
+                               GLint xoffset, GLint yoffset,
+                               GLint x, GLint y,
+                               GLsizei width, GLsizei height) {
+  glCopyTexSubImage2D(target, level, xoffset, yoffset, x, y, width, height);
+}
+
 GLuint StubGLCreateProgram(void) {
   return glCreateProgram();
 }
@@ -228,6 +235,13 @@ GLvoid StubGLFramebufferTexture2D(GLenum target, GLenum attachment,
                                   GLenum textarget, GLuint texture,
                                   GLint level) {
   glFramebufferTexture2DEXT(target, attachment, textarget, texture, level);
+}
+
+GLvoid StubGLFramebufferTexture2DMultisample(GLenum target, GLenum attachment,
+                                  GLenum textarget, GLuint texture,
+                                  GLint level, GLsizei samples) {
+  glFramebufferTexture2DMultisampleEXT(target, attachment, textarget, texture,
+      level, samples);
 }
 
 GLvoid StubGLFrontFace(GLenum mode) {
@@ -587,6 +601,7 @@ GrGLInterface* CreateInProcessSkiaGLBinding() {
   interface->fColorMask = StubGLColorMask;
   interface->fCompileShader = StubGLCompileShader;
   interface->fCompressedTexImage2D = StubGLCompressedTexImage2D;
+  interface->fCopyTexSubImage2D = StubGLCopyTexSubImage2D;
   interface->fCreateProgram = StubGLCreateProgram;
   interface->fCreateShader = StubGLCreateShader;
   interface->fCullFace = StubGLCullFace;
@@ -677,6 +692,8 @@ GrGLInterface* CreateInProcessSkiaGLBinding() {
   interface->fDeleteRenderbuffers = StubGLDeleteRenderbuffers;
   interface->fFramebufferRenderbuffer = StubGLFramebufferRenderbuffer;
   interface->fFramebufferTexture2D = StubGLFramebufferTexture2D;
+  interface->fFramebufferTexture2DMultisample =
+    StubGLFramebufferTexture2DMultisample;
   interface->fGenFramebuffers = StubGLGenFramebuffers;
   interface->fGenRenderbuffers = StubGLGenRenderbuffers;
   interface->fGetFramebufferAttachmentParameteriv =

@@ -15,8 +15,10 @@
 #include <limits>
 #include <string>
 
+#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/file_util.h"
+#include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/lazy_instance.h"
 #include "base/logging.h"
@@ -24,11 +26,11 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/scoped_vector.h"
 #include "base/path_service.h"
-#include "base/string16.h"
-#include "base/string_util.h"
+#include "base/strings/string16.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "base/win/registry.h"
 #include "base/win/scoped_co_mem.h"
@@ -399,10 +401,10 @@ class RegistryEntry {
         L"StartMenuInternet", reg_app_name));
 
     const string16 html_prog_id(GetBrowserProgId(suffix));
-    for (int i = 0; ShellUtil::kFileAssociations[i] != NULL; i++) {
+    for (int i = 0; ShellUtil::kPotentialFileAssociations[i] != NULL; i++) {
       entries->push_back(new RegistryEntry(
           capabilities + L"\\FileAssociations",
-          ShellUtil::kFileAssociations[i], html_prog_id));
+          ShellUtil::kPotentialFileAssociations[i], html_prog_id));
     }
     for (int i = 0; ShellUtil::kPotentialProtocolAssociations[i] != NULL;
         i++) {
@@ -432,10 +434,10 @@ class RegistryEntry {
         ShellUtil::kAppPathsRegistryPathName, chrome_path.DirName().value()));
 
     const string16 html_prog_id(GetBrowserProgId(suffix));
-    for (int i = 0; ShellUtil::kFileAssociations[i] != NULL; i++) {
+    for (int i = 0; ShellUtil::kPotentialFileAssociations[i] != NULL; i++) {
       string16 key(ShellUtil::kRegClasses);
       key.push_back(base::FilePath::kSeparators[0]);
-      key.append(ShellUtil::kFileAssociations[i]);
+      key.append(ShellUtil::kPotentialFileAssociations[i]);
       key.push_back(base::FilePath::kSeparators[0]);
       key.append(ShellUtil::kRegOpenWithProgids);
       entries->push_back(new RegistryEntry(key, html_prog_id, string16()));
@@ -489,10 +491,10 @@ class RegistryEntry {
       ScopedVector<RegistryEntry>* entries) {
     // File extension associations.
     string16 html_prog_id(GetBrowserProgId(suffix));
-    for (int i = 0; ShellUtil::kFileAssociations[i] != NULL; i++) {
+    for (int i = 0; ShellUtil::kDefaultFileAssociations[i] != NULL; i++) {
       string16 ext_key(ShellUtil::kRegClasses);
       ext_key.push_back(base::FilePath::kSeparators[0]);
-      ext_key.append(ShellUtil::kFileAssociations[i]);
+      ext_key.append(ShellUtil::kDefaultFileAssociations[i]);
       entries->push_back(new RegistryEntry(ext_key, html_prog_id));
     }
 
@@ -514,16 +516,16 @@ class RegistryEntry {
   // Generate work_item tasks required to create current registry entry and
   // add them to the given work item list.
   void AddToWorkItemList(HKEY root, WorkItemList *items) const {
-    items->AddCreateRegKeyWorkItem(root, _key_path);
-    if (_is_string) {
-      items->AddSetRegValueWorkItem(root, _key_path, _name, _value, true);
+    items->AddCreateRegKeyWorkItem(root, key_path_);
+    if (is_string_) {
+      items->AddSetRegValueWorkItem(root, key_path_, name_, value_, true);
     } else {
-      items->AddSetRegValueWorkItem(root, _key_path, _name, _int_value, true);
+      items->AddSetRegValueWorkItem(root, key_path_, name_, int_value_, true);
     }
   }
 
-  // Checks if the current registry entry exists in HKCU\|_key_path|\|_name|
-  // and value is |_value|. If the key does NOT exist in HKCU, checks for
+  // Checks if the current registry entry exists in HKCU\|key_path_|\|name_|
+  // and value is |value_|. If the key does NOT exist in HKCU, checks for
   // the correct name and value in HKLM.
   // |look_for_in| specifies roots (HKCU and/or HKLM) in which to look for the
   // key, unspecified roots are not looked into (i.e. the the key is assumed not
@@ -548,57 +550,57 @@ class RegistryEntry {
  private:
   // States this RegistryKey can be in compared to the registry.
   enum RegistryStatus {
-    // |_name| does not exist in the registry
+    // |name_| does not exist in the registry
     DOES_NOT_EXIST,
-    // |_name| exists, but its value != |_value|
+    // |name_| exists, but its value != |value_|
     DIFFERENT_VALUE,
-    // |_name| exists and its value is |_value|
+    // |name_| exists and its value is |value_|
     SAME_VALUE,
   };
 
   // Create a object that represent default value of a key
   RegistryEntry(const string16& key_path, const string16& value)
-      : _key_path(key_path), _name(),
-        _is_string(true), _value(value), _int_value(0) {
+      : key_path_(key_path), name_(),
+        is_string_(true), value_(value), int_value_(0) {
   }
 
   // Create a object that represent a key of type REG_SZ
   RegistryEntry(const string16& key_path, const string16& name,
                 const string16& value)
-      : _key_path(key_path), _name(name),
-        _is_string(true), _value(value), _int_value(0) {
+      : key_path_(key_path), name_(name),
+        is_string_(true), value_(value), int_value_(0) {
   }
 
   // Create a object that represent a key of integer type
   RegistryEntry(const string16& key_path, const string16& name,
                 DWORD value)
-      : _key_path(key_path), _name(name),
-        _is_string(false), _value(), _int_value(value) {
+      : key_path_(key_path), name_(name),
+        is_string_(false), value_(), int_value_(value) {
   }
 
-  string16 _key_path;  // key path for the registry entry
-  string16 _name;      // name of the registry entry
-  bool _is_string;     // true if current registry entry is of type REG_SZ
-  string16 _value;     // string value (useful if _is_string = true)
-  DWORD _int_value;    // integer value (useful if _is_string = false)
+  string16 key_path_;  // key path for the registry entry
+  string16 name_;      // name of the registry entry
+  bool is_string_;     // true if current registry entry is of type REG_SZ
+  string16 value_;     // string value (useful if is_string_ = true)
+  DWORD int_value_;    // integer value (useful if is_string_ = false)
 
   // Helper function for ExistsInRegistry().
   // Returns the RegistryStatus of the current registry entry in
-  // |root|\|_key_path|\|_name|.
+  // |root|\|key_path_|\|name_|.
   RegistryStatus StatusInRegistryUnderRoot(HKEY root) const {
-    RegKey key(root, _key_path.c_str(), KEY_QUERY_VALUE);
+    RegKey key(root, key_path_.c_str(), KEY_QUERY_VALUE);
     bool found = false;
     bool correct_value = false;
-    if (_is_string) {
+    if (is_string_) {
       string16 read_value;
-      found = key.ReadValue(_name.c_str(), &read_value) == ERROR_SUCCESS;
-      correct_value = read_value.size() == _value.size() &&
-          std::equal(_value.begin(), _value.end(), read_value.begin(),
+      found = key.ReadValue(name_.c_str(), &read_value) == ERROR_SUCCESS;
+      correct_value = read_value.size() == value_.size() &&
+          std::equal(value_.begin(), value_.end(), read_value.begin(),
                      base::CaseInsensitiveCompare<wchar_t>());
     } else {
       DWORD read_value;
-      found = key.ReadValueDW(_name.c_str(), &read_value) == ERROR_SUCCESS;
-      correct_value = read_value == _int_value;
+      found = key.ReadValueDW(name_.c_str(), &read_value) == ERROR_SUCCESS;
+      correct_value = read_value == int_value_;
     }
     return found ?
         (correct_value ? SAME_VALUE : DIFFERENT_VALUE) : DOES_NOT_EXIST;
@@ -690,7 +692,7 @@ bool ElevateAndRegisterChrome(BrowserDistribution* dist,
   base::FilePath exe_path =
       base::FilePath::FromWStringHack(chrome_exe).DirName()
           .Append(installer::kSetupExe);
-  if (!file_util::PathExists(exe_path)) {
+  if (!base::PathExists(exe_path)) {
     HKEY reg_root = InstallUtil::IsPerUserInstall(chrome_exe.c_str()) ?
         HKEY_CURRENT_USER : HKEY_LOCAL_MACHINE;
     RegKey key(reg_root, dist->GetUninstallRegPath().c_str(), KEY_READ);
@@ -700,7 +702,7 @@ bool ElevateAndRegisterChrome(BrowserDistribution* dist,
     exe_path = command_line.GetProgram();
   }
 
-  if (file_util::PathExists(exe_path)) {
+  if (base::PathExists(exe_path)) {
     CommandLine cmd(exe_path);
     cmd.AppendSwitchNative(installer::switches::kRegisterChromeBrowser,
                            chrome_exe);
@@ -1159,32 +1161,155 @@ ShellUtil::DefaultState ProbeProtocolHandlers(
   return ProbeOpenCommandHandlers(protocols, num_protocols);
 }
 
-// Removes shortcut at |shortcut_path| if it is a shortcut that points to
-// |target_exe|. If |delete_folder| is true, deletes the parent folder of
-// the shortcut completely. Returns true if either the shortcut was deleted
-// successfully or if the shortcut did not point to |target_exe|.
-bool MaybeRemoveShortcutAtPath(const base::FilePath& shortcut_path,
-                               const base::FilePath& target_exe,
-                               bool delete_folder) {
-  base::FilePath target_path;
-  if (!base::win::ResolveShortcut(shortcut_path, &target_path, NULL))
-    return false;
+// (Windows 8+) Finds and stores an app shortcuts folder path in *|path|.
+// Returns true on success.
+bool GetAppShortcutsFolder(BrowserDistribution* dist,
+                           ShellUtil::ShellChange level,
+                           base::FilePath *path) {
+  DCHECK(path);
+  DCHECK_GE(base::win::GetVersion(), base::win::VERSION_WIN8);
 
-  if (InstallUtil::ProgramCompare(target_exe).EvaluatePath(target_path)) {
-    // Unpin the shortcut if it was ever pinned by the user or the installer.
-    VLOG(1) << "Trying to unpin " << shortcut_path.value();
-    if (!base::win::TaskbarUnpinShortcutLink(shortcut_path.value().c_str())) {
-      VLOG(1) << shortcut_path.value()
-              << " wasn't pinned (or the unpin failed).";
-    }
-    if (delete_folder)
-      return file_util::Delete(shortcut_path.DirName(), true);
-    else
-      return file_util::Delete(shortcut_path, false);
+  base::FilePath folder;
+  if (!PathService::Get(base::DIR_APP_SHORTCUTS, &folder)) {
+    LOG(ERROR) << "Could not get application shortcuts location.";
+    return false;
   }
 
-  // The shortcut at |shortcut_path| doesn't point to |target_exe|, act as if
-  // our shortcut had been deleted.
+  folder = folder.Append(
+      ShellUtil::GetBrowserModelId(dist, level == ShellUtil::CURRENT_USER));
+  if (!base::DirectoryExists(folder)) {
+    VLOG(1) << "No start screen shortcuts.";
+    return false;
+  }
+
+  *path = folder;
+  return true;
+}
+
+// Shortcut filters for BatchShortcutAction().
+
+typedef base::Callback<bool(const base::FilePath& /*shortcut_path*/,
+                            const string16& /*args*/)>
+    ShortcutFilterCallback;
+
+// FilterTargetEq is a shortcut filter that matches only shortcuts that have a
+// specific target.
+class FilterTargetEq {
+ public:
+  explicit FilterTargetEq(const base::FilePath& desired_target_exe);
+
+  // Returns true if filter rules are satisfied, i.e.:
+  // - |target_path| matches |desired_target_compare_|.
+  bool Match(const base::FilePath& target_path, const string16& args) const;
+
+  // A convenience routine to create a callback to call Match().
+  // The callback is only valid during the lifetime of the FilterTargetEq
+  // instance.
+  ShortcutFilterCallback AsShortcutFilterCallback();
+
+ private:
+  InstallUtil::ProgramCompare desired_target_compare_;
+};
+
+FilterTargetEq::FilterTargetEq(const base::FilePath& desired_target_exe)
+    : desired_target_compare_(desired_target_exe) {}
+
+bool FilterTargetEq::Match(const base::FilePath& target_path,
+                           const string16& args) const {
+  return desired_target_compare_.EvaluatePath(target_path);
+}
+
+ShortcutFilterCallback FilterTargetEq::AsShortcutFilterCallback() {
+  return base::Bind(&FilterTargetEq::Match, base::Unretained(this));
+}
+
+// Shortcut operations for BatchShortcutAction().
+
+typedef base::Callback<bool(const base::FilePath& /*shortcut_path*/)>
+    ShortcutOperationCallback;
+
+bool ShortcutOpUnpin(const base::FilePath& shortcut_path) {
+  VLOG(1) << "Trying to unpin " << shortcut_path.value();
+  if (!base::win::TaskbarUnpinShortcutLink(shortcut_path.value().c_str())) {
+    VLOG(1) << shortcut_path.value() << " wasn't pinned (or the unpin failed).";
+    // No error, since shortcut might not be pinned.
+  }
+  return true;
+}
+
+bool ShortcutOpDelete(const base::FilePath& shortcut_path) {
+  bool ret = base::DeleteFile(shortcut_path, false);
+  LOG_IF(ERROR, !ret) << "Failed to remove " << shortcut_path.value();
+  return ret;
+}
+
+bool ShortcutOpUpdate(const base::win::ShortcutProperties& shortcut_properties,
+                      const base::FilePath& shortcut_path) {
+  bool ret = base::win::CreateOrUpdateShortcutLink(
+      shortcut_path, shortcut_properties, base::win::SHORTCUT_UPDATE_EXISTING);
+  LOG_IF(ERROR, !ret) << "Failed to update " << shortcut_path.value();
+  return ret;
+}
+
+// {|location|, |dist|, |level|} determine |shortcut_folder|.
+// For each shortcut in |shortcut_folder| that match |shortcut_filter|, apply
+// |shortcut_operation|. Returns true if all operations are successful.
+// All intended operations are attempted, even if failures occur.
+bool BatchShortcutAction(const ShortcutFilterCallback& shortcut_filter,
+                         const ShortcutOperationCallback& shortcut_operation,
+                         ShellUtil::ShortcutLocation location,
+                         BrowserDistribution* dist,
+                         ShellUtil::ShellChange level) {
+  DCHECK(!shortcut_operation.is_null());
+  base::FilePath shortcut_folder;
+  if (!ShellUtil::GetShortcutPath(location, dist, level, &shortcut_folder)) {
+    LOG(WARNING) << "Cannot find path at location " << location;
+    return false;
+  }
+
+  bool success = true;
+  base::FileEnumerator enumerator(
+      shortcut_folder, false, base::FileEnumerator::FILES,
+      string16(L"*") + installer::kLnkExt);
+  base::FilePath target_path;
+  string16 args;
+  for (base::FilePath shortcut_path = enumerator.Next();
+       !shortcut_path.empty();
+       shortcut_path = enumerator.Next()) {
+    if (base::win::ResolveShortcut(shortcut_path, &target_path, &args)) {
+      if (shortcut_filter.Run(target_path, args) &&
+          !shortcut_operation.Run(shortcut_path)) {
+        success = false;
+      }
+    } else {
+      LOG(ERROR) << "Cannot resolve shortcut at " << shortcut_path.value();
+      success = false;
+    }
+  }
+  return success;
+}
+
+// Removes folder spsecified by {|location|, |dist|, |level|}.
+bool RemoveShortcutFolder(ShellUtil::ShortcutLocation location,
+                          BrowserDistribution* dist,
+                          ShellUtil::ShellChange level) {
+
+  // Explicitly whitelist locations, since accidental calls can be very harmful.
+  if (location != ShellUtil::SHORTCUT_LOCATION_START_MENU &&
+      location != ShellUtil::SHORTCUT_LOCATION_APP_SHORTCUTS) {
+    NOTREACHED();
+    return false;
+  }
+
+  base::FilePath shortcut_folder;
+  if (!ShellUtil::GetShortcutPath(location, dist, level, &shortcut_folder)) {
+    LOG(WARNING) << "Cannot find path at location " << location;
+    return false;
+  }
+  if (!base::DeleteFile(shortcut_folder, true)) {
+    LOG(ERROR) << "Cannot remove folder " << shortcut_folder.value();
+    return false;
+  }
   return true;
 }
 
@@ -1220,8 +1345,10 @@ const wchar_t* ShellUtil::kChromeHTMLProgId = L"ChromiumHTM";
 const wchar_t* ShellUtil::kChromeHTMLProgIdDesc = L"Chromium HTML Document";
 #endif
 
-const wchar_t* ShellUtil::kFileAssociations[] = {L".htm", L".html", L".shtml",
-    L".xht", L".xhtml", NULL};
+const wchar_t* ShellUtil::kDefaultFileAssociations[] = {L".htm", L".html",
+    L".shtml", L".xht", L".xhtml", NULL};
+const wchar_t* ShellUtil::kPotentialFileAssociations[] = {L".htm", L".html",
+    L".shtml", L".xht", L".xhtml", L".webp", NULL};
 const wchar_t* ShellUtil::kBrowserProtocolAssociations[] = {L"ftp", L"http",
     L"https", NULL};
 const wchar_t* ShellUtil::kPotentialProtocolAssociations[] = {L"ftp", L"http",
@@ -1250,10 +1377,30 @@ bool ShellUtil::QuickIsChromeRegisteredInHKLM(BrowserDistribution* dist,
                                  CONFIRM_SHELL_REGISTRATION_IN_HKLM);
 }
 
+bool ShellUtil::ShortcutLocationIsSupported(
+    ShellUtil::ShortcutLocation location) {
+  switch (location) {
+    case SHORTCUT_LOCATION_DESKTOP:
+      return true;
+    case SHORTCUT_LOCATION_QUICK_LAUNCH:
+      return true;
+    case SHORTCUT_LOCATION_START_MENU:
+      return true;
+    case SHORTCUT_LOCATION_TASKBAR_PINS:
+      return base::win::GetVersion() >= base::win::VERSION_WIN7;
+    case SHORTCUT_LOCATION_APP_SHORTCUTS:
+      return base::win::GetVersion() >= base::win::VERSION_WIN8;
+    default:
+      NOTREACHED();
+      return false;
+  }
+}
+
 bool ShellUtil::GetShortcutPath(ShellUtil::ShortcutLocation location,
                                 BrowserDistribution* dist,
                                 ShellChange level,
                                 base::FilePath* path) {
+  DCHECK(path);
   int dir_key = -1;
   bool add_folder_for_dist = false;
   switch (location) {
@@ -1270,6 +1417,13 @@ bool ShellUtil::GetShortcutPath(ShellUtil::ShortcutLocation location,
                                           base::DIR_COMMON_START_MENU;
       add_folder_for_dist = true;
       break;
+    case SHORTCUT_LOCATION_TASKBAR_PINS:
+      dir_key = base::DIR_TASKBAR_PINS;
+      break;
+    case SHORTCUT_LOCATION_APP_SHORTCUTS:
+      // TODO(huangs): Move GetAppShortcutsFolder() logic into base_paths_win.
+      return GetAppShortcutsFolder(dist, level, path);
+
     default:
       NOTREACHED();
       return false;
@@ -1291,6 +1445,14 @@ bool ShellUtil::CreateOrUpdateShortcut(
     BrowserDistribution* dist,
     const ShellUtil::ShortcutProperties& properties,
     ShellUtil::ShortcutOperation operation) {
+  // Explicitly whitelist locations to which this is applicable.
+  if (location != SHORTCUT_LOCATION_DESKTOP &&
+      location != SHORTCUT_LOCATION_QUICK_LAUNCH &&
+      location != SHORTCUT_LOCATION_START_MENU) {
+    NOTREACHED();
+    return false;
+  }
+
   DCHECK(dist);
   // |pin_to_taskbar| is only acknowledged when first creating the shortcut.
   DCHECK(!properties.pin_to_taskbar ||
@@ -1299,8 +1461,7 @@ bool ShellUtil::CreateOrUpdateShortcut(
 
   base::FilePath user_shortcut_path;
   base::FilePath system_shortcut_path;
-  if (!GetShortcutPath(location, dist, SYSTEM_LEVEL, &system_shortcut_path) ||
-      system_shortcut_path.empty()) {
+  if (!GetShortcutPath(location, dist, SYSTEM_LEVEL, &system_shortcut_path)) {
     NOTREACHED();
     return false;
   }
@@ -1314,12 +1475,11 @@ bool ShellUtil::CreateOrUpdateShortcut(
     // Install the system-level shortcut if requested.
     chosen_path = &system_shortcut_path;
   } else if (operation != SHELL_SHORTCUT_CREATE_IF_NO_SYSTEM_LEVEL ||
-             !file_util::PathExists(system_shortcut_path)) {
+             !base::PathExists(system_shortcut_path)) {
     // Otherwise install the user-level shortcut, unless the system-level
     // variant of this shortcut is present on the machine and |operation| states
     // not to create a user-level shortcut in that case.
-    if (!GetShortcutPath(location, dist, CURRENT_USER, &user_shortcut_path) ||
-        user_shortcut_path.empty()) {
+    if (!GetShortcutPath(location, dist, CURRENT_USER, &user_shortcut_path)) {
       NOTREACHED();
       return false;
     }
@@ -1597,13 +1757,14 @@ bool ShellUtil::MakeChromeDefault(BrowserDistribution* dist,
         }
       }
 
-      for (int i = 0; ShellUtil::kFileAssociations[i] != NULL; i++) {
+      for (int i = 0; ShellUtil::kDefaultFileAssociations[i] != NULL; i++) {
         hr = pAAR->SetAppAsDefault(app_name.c_str(),
-            ShellUtil::kFileAssociations[i], AT_FILEEXTENSION);
+            ShellUtil::kDefaultFileAssociations[i], AT_FILEEXTENSION);
         if (!SUCCEEDED(hr)) {
           ret = false;
           LOG(ERROR) << "Failed to register as default for file extension "
-                     << ShellUtil::kFileAssociations[i] << " (" << hr << ")";
+                     << ShellUtil::kDefaultFileAssociations[i]
+                     << " (" << hr << ")";
         }
       }
     }
@@ -1858,104 +2019,55 @@ bool ShellUtil::RegisterChromeForProtocol(BrowserDistribution* dist,
   }
 }
 
-bool ShellUtil::RemoveShortcut(ShellUtil::ShortcutLocation location,
-                               BrowserDistribution* dist,
-                               const base::FilePath& target_exe,
-                               ShellChange level,
-                               const string16* shortcut_name) {
-  const bool delete_folder = (location == SHORTCUT_LOCATION_START_MENU);
+// static
+bool ShellUtil::RemoveShortcuts(ShellUtil::ShortcutLocation location,
+                                BrowserDistribution* dist,
+                                ShellChange level,
+                                const base::FilePath& target_exe) {
+  if (!ShellUtil::ShortcutLocationIsSupported(location))
+    return true;  // Vacuous success.
 
-  base::FilePath shortcut_folder;
-  if (!GetShortcutPath(location, dist, level, &shortcut_folder) ||
-      shortcut_folder.empty()) {
-    NOTREACHED();
-    return false;
-  }
+  switch (location) {
+    case SHORTCUT_LOCATION_START_MENU:  // Falls through.
+    case SHORTCUT_LOCATION_APP_SHORTCUTS:
+      return RemoveShortcutFolder(location, dist, level);
 
-  if (!delete_folder && !shortcut_name) {
-    file_util::FileEnumerator enumerator(shortcut_folder, false,
-        file_util::FileEnumerator::FILES);
-    bool had_failures = false;
-    for (base::FilePath path = enumerator.Next(); !path.empty();
-         path = enumerator.Next()) {
-      if (path.Extension() != installer::kLnkExt)
-        continue;
+    case SHORTCUT_LOCATION_TASKBAR_PINS:
+      return BatchShortcutAction(FilterTargetEq(target_exe).
+                                     AsShortcutFilterCallback(),
+                                 base::Bind(&ShortcutOpUnpin),
+                                 location,
+                                 dist,
+                                 level);
 
-      if (!MaybeRemoveShortcutAtPath(path, target_exe, delete_folder))
-        had_failures = true;
-    }
-    return !had_failures;
-  }
-
-  const string16 shortcut_base_name(
-      (shortcut_name ? *shortcut_name : dist->GetAppShortCutName()) +
-      installer::kLnkExt);
-  const base::FilePath shortcut_path(
-      shortcut_folder.Append(shortcut_base_name));
-  if (!file_util::PathExists(shortcut_path))
-    return true;
-
-  return MaybeRemoveShortcutAtPath(shortcut_path, target_exe, delete_folder);
-}
-
-void ShellUtil::RemoveTaskbarShortcuts(const string16& target_exe) {
-  if (base::win::GetVersion() < base::win::VERSION_WIN7)
-    return;
-
-  base::FilePath taskbar_pins_path;
-  if (!PathService::Get(base::DIR_TASKBAR_PINS, &taskbar_pins_path) ||
-      !file_util::PathExists(taskbar_pins_path)) {
-    LOG(ERROR) << "Couldn't find path to taskbar pins.";
-    return;
-  }
-
-  file_util::FileEnumerator shortcuts_enum(
-      taskbar_pins_path, false,
-      file_util::FileEnumerator::FILES, FILE_PATH_LITERAL("*.lnk"));
-
-  base::FilePath target_path(target_exe);
-  InstallUtil::ProgramCompare target_compare(target_path);
-  for (base::FilePath shortcut_path = shortcuts_enum.Next();
-       !shortcut_path.empty();
-       shortcut_path = shortcuts_enum.Next()) {
-    base::FilePath read_target;
-    if (!base::win::ResolveShortcut(shortcut_path, &read_target, NULL)) {
-      LOG(ERROR) << "Couldn't resolve shortcut at " << shortcut_path.value();
-      continue;
-    }
-    if (target_compare.EvaluatePath(read_target)) {
-      // Unpin this shortcut if it points to |target_exe|.
-      base::win::TaskbarUnpinShortcutLink(shortcut_path.value().c_str());
-    }
+    default:
+      return BatchShortcutAction(FilterTargetEq(target_exe).
+                                     AsShortcutFilterCallback(),
+                                 base::Bind(&ShortcutOpDelete),
+                                 location,
+                                 dist,
+                                 level);
   }
 }
 
-void ShellUtil::RemoveStartScreenShortcuts(BrowserDistribution* dist,
-                                           const string16& target_exe) {
-  if (base::win::GetVersion() < base::win::VERSION_WIN8)
-    return;
+// static
+bool ShellUtil::UpdateShortcuts(
+    ShellUtil::ShortcutLocation location,
+    BrowserDistribution* dist,
+    ShellChange level,
+    const base::FilePath& target_exe,
+    const ShellUtil::ShortcutProperties& properties) {
+  if (!ShellUtil::ShortcutLocationIsSupported(location))
+    return true;  // Vacuous success.
 
-  base::FilePath app_shortcuts_path;
-  if (!PathService::Get(base::DIR_APP_SHORTCUTS, &app_shortcuts_path)) {
-    LOG(ERROR) << "Could not get application shortcuts location to delete"
-               << " start screen shortcuts.";
-    return;
-  }
-
-  app_shortcuts_path = app_shortcuts_path.Append(
-      GetBrowserModelId(dist,
-                        InstallUtil::IsPerUserInstall(target_exe.c_str())));
-  if (!file_util::DirectoryExists(app_shortcuts_path)) {
-    VLOG(1) << "No start screen shortcuts to delete.";
-    return;
-  }
-
-  VLOG(1) << "Removing start screen shortcuts from "
-          << app_shortcuts_path.value();
-  if (!file_util::Delete(app_shortcuts_path, true)) {
-    LOG(ERROR) << "Failed to remove start screen shortcuts from "
-               << app_shortcuts_path.value();
-  }
+  base::win::ShortcutProperties shortcut_properties(
+      TranslateShortcutProperties(properties));
+  return BatchShortcutAction(FilterTargetEq(target_exe).
+                                 AsShortcutFilterCallback(),
+                             base::Bind(&ShortcutOpUpdate, shortcut_properties),
+                             location,
+                             dist,
+                             level);
 }
 
 bool ShellUtil::GetUserSpecificRegistrySuffix(string16* suffix) {

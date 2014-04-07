@@ -44,15 +44,17 @@ class VideoUtilTest : public testing::Test {
   }
 
   void CopyPlanes() {
-    CopyYPlane(y_plane_.get(), y_stride_, height_, destination_frame_);
-    CopyUPlane(u_plane_.get(), u_stride_, height_ / 2, destination_frame_);
-    CopyVPlane(v_plane_.get(), v_stride_, height_ / 2, destination_frame_);
+    CopyYPlane(y_plane_.get(), y_stride_, height_, destination_frame_.get());
+    CopyUPlane(
+        u_plane_.get(), u_stride_, height_ / 2, destination_frame_.get());
+    CopyVPlane(
+        v_plane_.get(), v_stride_, height_ / 2, destination_frame_.get());
   }
 
  private:
-  scoped_array<uint8> y_plane_;
-  scoped_array<uint8> u_plane_;
-  scoped_array<uint8> v_plane_;
+  scoped_ptr<uint8[]> y_plane_;
+  scoped_ptr<uint8[]> u_plane_;
+  scoped_ptr<uint8[]> v_plane_;
 
   int height_;
   int y_stride_;
@@ -342,6 +344,8 @@ TEST_F(VideoUtilTest, ComputeLetterboxRegion) {
   EXPECT_EQ(gfx::Rect(0, 250000000, 2000000000, 1500000000),
             ComputeLetterboxRegion(gfx::Rect(0, 0, 2000000000, 2000000000),
                                    gfx::Size(40000, 30000)));
+  EXPECT_TRUE(ComputeLetterboxRegion(gfx::Rect(0, 0, 2000000000, 2000000000),
+                                     gfx::Size(0, 0)).IsEmpty());
 }
 
 TEST_F(VideoUtilTest, LetterboxYUV) {

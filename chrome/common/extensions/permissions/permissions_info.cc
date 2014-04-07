@@ -4,14 +4,24 @@
 
 #include "chrome/common/extensions/permissions/permissions_info.h"
 
+#include "base/lazy_instance.h"
 #include "base/logging.h"
-#include "base/string_util.h"
+#include "base/stl_util.h"
+#include "base/strings/string_util.h"
+#include "extensions/common/extensions_client.h"
 
 namespace extensions {
 
+static base::LazyInstance<PermissionsInfo> g_permissions_info =
+    LAZY_INSTANCE_INITIALIZER;
+
 // static
 PermissionsInfo* PermissionsInfo::GetInstance() {
-  return Singleton<PermissionsInfo>::get();
+  return g_permissions_info.Pointer();
+}
+
+PermissionsInfo::~PermissionsInfo() {
+  STLDeleteContainerPairSecondPointers(id_map_.begin(), id_map_.end());
 }
 
 const APIPermissionInfo* PermissionsInfo::GetByID(
@@ -51,44 +61,41 @@ bool PermissionsInfo::HasChildPermissions(const std::string& name) const {
   return StartsWithASCII(i->first, name + '.', true);
 }
 
-PermissionsInfo::~PermissionsInfo() {
-  for (IDMap::iterator i = id_map_.begin(); i != id_map_.end(); ++i)
-    delete i->second;
-}
-
 PermissionsInfo::PermissionsInfo()
     : hosted_app_permission_count_(0),
       permission_count_(0) {
-  APIPermissionInfo::RegisterAllPermissions(this);
+  DCHECK(ExtensionsClient::Get());
+  InitializeWithProvider(ExtensionsClient::Get()->GetPermissionsProvider());
+}
+
+void PermissionsInfo::InitializeWithProvider(
+    const PermissionsProvider& provider) {
+  std::vector<APIPermissionInfo*> permissions = provider.GetAllPermissions();
+  std::vector<PermissionsProvider::AliasInfo> aliases =
+      provider.GetAllAliases();
+
+  for (size_t i = 0; i < permissions.size(); ++i)
+    RegisterPermission(permissions[i]);
+  for (size_t i = 0; i < aliases.size(); ++i)
+    RegisterAlias(aliases[i].name, aliases[i].alias);
 }
 
 void PermissionsInfo::RegisterAlias(
     const char* name,
     const char* alias) {
-  DCHECK(name_map_.find(name) != name_map_.end());
-  DCHECK(name_map_.find(alias) == name_map_.end());
+  DCHECK(ContainsKey(name_map_, name));
+  DCHECK(!ContainsKey(name_map_, alias));
   name_map_[alias] = name_map_[name];
 }
 
-const APIPermissionInfo* PermissionsInfo::RegisterPermission(
-    APIPermission::ID id,
-    const char* name,
-    int l10n_message_id,
-    PermissionMessage::ID message_id,
-    int flags,
-    const APIPermissionInfo::APIPermissionConstructor constructor) {
-  DCHECK(id_map_.find(id) == id_map_.end());
-  DCHECK(name_map_.find(name) == name_map_.end());
+void PermissionsInfo::RegisterPermission(APIPermissionInfo* permission) {
+  DCHECK(!ContainsKey(id_map_, permission->id()));
+  DCHECK(!ContainsKey(name_map_, permission->name()));
 
-  APIPermissionInfo* permission = new APIPermissionInfo(
-      id, name, l10n_message_id, message_id, flags, constructor);
-
-  id_map_[id] = permission;
-  name_map_[name] = permission;
+  id_map_[permission->id()] = permission;
+  name_map_[permission->name()] = permission;
 
   permission_count_++;
-
-  return permission;
 }
 
 }  // namespace extensions

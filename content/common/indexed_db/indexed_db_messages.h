@@ -12,10 +12,8 @@
 #include "content/common/indexed_db/indexed_db_param_traits.h"
 #include "ipc/ipc_message_macros.h"
 #include "ipc/ipc_param_traits.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebExceptionCode.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebIDBCursor.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebIDBDatabase.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebIDBMetadata.h"
+#include "third_party/WebKit/public/platform/WebIDBCursor.h"
+#include "third_party/WebKit/public/platform/WebIDBDatabase.h"
 
 #define IPC_MESSAGE_START IndexedDBMsgStart
 
@@ -25,13 +23,16 @@ IPC_ENUM_TRAITS(WebKit::WebIDBCursor::Direction)
 IPC_ENUM_TRAITS(WebKit::WebIDBDatabase::PutMode)
 IPC_ENUM_TRAITS(WebKit::WebIDBDatabase::TaskType)
 
+IPC_ENUM_TRAITS_MAX_VALUE(WebKit::WebIDBCallbacks::DataLoss,
+                          WebKit::WebIDBCallbacks::DataLossTotal)
+
 // Used to enumerate indexed databases.
 IPC_STRUCT_BEGIN(IndexedDBHostMsg_FactoryGetDatabaseNames_Params)
   // The response should have these ids.
   IPC_STRUCT_MEMBER(int32, ipc_thread_id)
   IPC_STRUCT_MEMBER(int32, ipc_callbacks_id)
-  // The origin doing the initiating.
-  IPC_STRUCT_MEMBER(string16, origin)
+  // The string id of the origin doing the initiating.
+  IPC_STRUCT_MEMBER(std::string, database_identifier)
 IPC_STRUCT_END()
 
 // Used to open an indexed database.
@@ -42,8 +43,8 @@ IPC_STRUCT_BEGIN(IndexedDBHostMsg_FactoryOpen_Params)
   IPC_STRUCT_MEMBER(int32, ipc_callbacks_id)
   // Identifier for database callbacks
   IPC_STRUCT_MEMBER(int32, ipc_database_callbacks_id)
-  // The origin doing the initiating.
-  IPC_STRUCT_MEMBER(string16, origin)
+  // The string id of the origin doing the initiating.
+  IPC_STRUCT_MEMBER(std::string, database_identifier)
   // The name of the database.
   IPC_STRUCT_MEMBER(string16, name)
   // The transaction id used if a database upgrade is needed.
@@ -57,8 +58,8 @@ IPC_STRUCT_BEGIN(IndexedDBHostMsg_FactoryDeleteDatabase_Params)
   // The response should have these ids.
   IPC_STRUCT_MEMBER(int32, ipc_thread_id)
   IPC_STRUCT_MEMBER(int32, ipc_callbacks_id)
-  // The origin doing the initiating.
-  IPC_STRUCT_MEMBER(string16, origin)
+  // The string id of the origin doing the initiating.
+  IPC_STRUCT_MEMBER(std::string, database_identifier)
   // The name of the database.
   IPC_STRUCT_MEMBER(string16, name)
 IPC_STRUCT_END()
@@ -125,7 +126,7 @@ IPC_STRUCT_BEGIN(IndexedDBHostMsg_DatabasePut_Params)
   // The index's id.
   IPC_STRUCT_MEMBER(int64, index_id)
   // The value to set.
-  IPC_STRUCT_MEMBER(std::vector<char>, value)
+  IPC_STRUCT_MEMBER(std::string, value)
   // The key to set it on (may not be "valid"/set in some cases).
   IPC_STRUCT_MEMBER(content::IndexedDBKey, key)
   // Whether this is an add or a put.
@@ -234,7 +235,7 @@ IPC_STRUCT_BEGIN(IndexedDBMsg_CallbacksSuccessIDBCursor_Params)
   IPC_STRUCT_MEMBER(int32, ipc_cursor_id)
   IPC_STRUCT_MEMBER(content::IndexedDBKey, key)
   IPC_STRUCT_MEMBER(content::IndexedDBKey, primary_key)
-  IPC_STRUCT_MEMBER(std::vector<char>, value)
+  IPC_STRUCT_MEMBER(std::string, value)
 IPC_STRUCT_END()
 
 IPC_STRUCT_BEGIN(IndexedDBMsg_CallbacksSuccessCursorContinue_Params)
@@ -243,7 +244,7 @@ IPC_STRUCT_BEGIN(IndexedDBMsg_CallbacksSuccessCursorContinue_Params)
   IPC_STRUCT_MEMBER(int32, ipc_cursor_id)
   IPC_STRUCT_MEMBER(content::IndexedDBKey, key)
   IPC_STRUCT_MEMBER(content::IndexedDBKey, primary_key)
-  IPC_STRUCT_MEMBER(std::vector<char>, value)
+  IPC_STRUCT_MEMBER(std::string, value)
 IPC_STRUCT_END()
 
 IPC_STRUCT_BEGIN(IndexedDBMsg_CallbacksSuccessCursorPrefetch_Params)
@@ -252,10 +253,9 @@ IPC_STRUCT_BEGIN(IndexedDBMsg_CallbacksSuccessCursorPrefetch_Params)
   IPC_STRUCT_MEMBER(int32, ipc_cursor_id)
   IPC_STRUCT_MEMBER(std::vector<content::IndexedDBKey>, keys)
   IPC_STRUCT_MEMBER(std::vector<content::IndexedDBKey>, primary_keys)
-  IPC_STRUCT_MEMBER(std::vector<std::vector<char> >, values)
+  IPC_STRUCT_MEMBER(std::vector<std::string>, values)
 IPC_STRUCT_END()
 
-// metadata payload for WebIDBMetadata
 IPC_STRUCT_BEGIN(IndexedDBIndexMetadata)
   IPC_STRUCT_MEMBER(int64, id)
   IPC_STRUCT_MEMBER(string16, name)
@@ -288,6 +288,7 @@ IPC_STRUCT_BEGIN(IndexedDBMsg_CallbacksUpgradeNeeded_Params)
   IPC_STRUCT_MEMBER(int32, ipc_database_callbacks_id)
   IPC_STRUCT_MEMBER(int32, ipc_database_id)
   IPC_STRUCT_MEMBER(int64, old_version)
+  IPC_STRUCT_MEMBER(WebKit::WebIDBCallbacks::DataLoss, data_loss)
   IPC_STRUCT_MEMBER(IndexedDBDatabaseMetadata, idb_metadata)
 IPC_STRUCT_END()
 
@@ -323,11 +324,11 @@ IPC_MESSAGE_CONTROL3(IndexedDBMsg_CallbacksSuccessIndexedDBKey,
 IPC_MESSAGE_CONTROL3(IndexedDBMsg_CallbacksSuccessValue,
                      int32 /* ipc_thread_id */,
                      int32 /* ipc_callbacks_id */,
-                     std::vector<char> /* value */)
+                     std::string /* value */)
 IPC_MESSAGE_CONTROL5(IndexedDBMsg_CallbacksSuccessValueWithKey,
                      int32 /* ipc_thread_id */,
                      int32 /* ipc_callbacks_id */,
-                     std::vector<char> /* value */,
+                     std::string /* value */,
                      content::IndexedDBKey /* indexed_db_key */,
                      content::IndexedDBKeyPath /* indexed_db_keypath */)
 IPC_MESSAGE_CONTROL3(IndexedDBMsg_CallbacksSuccessInteger,
@@ -404,12 +405,6 @@ IPC_MESSAGE_CONTROL3(IndexedDBHostMsg_CursorPrefetchReset,
                      int32, /* ipc_cursor_id */
                      int32, /* used_prefetches */
                      int32)  /* used_prefetches */
-
-// WebIDBCursor::delete() message.
-IPC_MESSAGE_CONTROL3(IndexedDBHostMsg_CursorDelete,
-                     int32, /* ipc_cursor_id */
-                     int32, /* ipc_thread_id */
-                     int32) /* ipc_callbacks_id */
 
 // WebIDBFactory::getDatabaseNames() message.
 IPC_MESSAGE_CONTROL1(IndexedDBHostMsg_FactoryGetDatabaseNames,

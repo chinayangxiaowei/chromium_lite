@@ -9,41 +9,32 @@
 
 #include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/path_service.h"
+#include "base/strings/stringprintf.h"
 #include "base/values.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/extensions/extension.h"
+#include "chrome/common/extensions/extension_manifest_constants.h"
+#include "chrome/common/extensions/extension_test_util.h"
+#include "chrome/common/extensions/features/api_feature.h"
+#include "chrome/common/extensions/features/base_feature_provider.h"
 #include "chrome/common/extensions/features/simple_feature.h"
 #include "chrome/common/extensions/manifest.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace extensions {
-namespace {
 
-class TestFeatureProvider : public FeatureProvider {
- public:
-  explicit TestFeatureProvider(Feature::Context context)
-      : context_(context) {
-  }
+using extension_test_util::BuildExtension;
 
-  virtual Feature* GetFeature(const std::string& name) OVERRIDE {
-    SimpleFeature* result = new SimpleFeature();
-    result->set_name(name);
-    result->extension_types()->insert(Manifest::TYPE_EXTENSION);
-    result->GetContexts()->insert(context_);
-    to_destroy_.push_back(make_linked_ptr(result));
-    return result;
-  }
+SimpleFeature* CreateAPIFeature() {
+  return new APIFeature();
+}
 
- private:
-  std::vector<linked_ptr<Feature> > to_destroy_;
-  Feature::Context context_;
-};
-
-TEST(ExtensionAPI, Creation) {
+TEST(ExtensionAPITest, Creation) {
   ExtensionAPI* shared_instance = ExtensionAPI::GetSharedInstance();
   EXPECT_EQ(shared_instance, ExtensionAPI::GetSharedInstance());
 
@@ -70,7 +61,7 @@ TEST(ExtensionAPI, Creation) {
   }
 }
 
-TEST(ExtensionAPI, SplitDependencyName) {
+TEST(ExtensionAPITest, SplitDependencyName) {
   struct {
     std::string input;
     std::string expected_feature_type;
@@ -94,20 +85,13 @@ TEST(ExtensionAPI, SplitDependencyName) {
   }
 }
 
-TEST(ExtensionAPI, IsPrivileged) {
+TEST(ExtensionAPITest, IsPrivileged) {
   scoped_ptr<ExtensionAPI> extension_api(
       ExtensionAPI::CreateWithDefaultConfiguration());
 
   EXPECT_FALSE(extension_api->IsPrivileged("runtime.connect"));
   EXPECT_FALSE(extension_api->IsPrivileged("runtime.onConnect"));
-
-  // Properties are not supported yet.
-  EXPECT_TRUE(extension_api->IsPrivileged("runtime.lastError"));
-
-  // Default unknown names to privileged for paranoia's sake.
-  EXPECT_TRUE(extension_api->IsPrivileged(""));
-  EXPECT_TRUE(extension_api->IsPrivileged("<unknown-namespace>"));
-  EXPECT_TRUE(extension_api->IsPrivileged("extension.<unknown-member>"));
+  EXPECT_FALSE(extension_api->IsPrivileged("runtime.lastError"));
 
   // Exists, but privileged.
   EXPECT_TRUE(extension_api->IsPrivileged("extension.getViews"));
@@ -123,56 +107,205 @@ TEST(ExtensionAPI, IsPrivileged) {
   EXPECT_FALSE(extension_api->IsPrivileged("storage.set"));
 }
 
-TEST(ExtensionAPI, IsPrivilegedFeatures) {
+TEST(ExtensionAPITest, IsPrivilegedFeatures) {
   struct {
-    std::string filename;
     std::string api_full_name;
     bool expect_is_privilged;
-    Feature::Context test2_contexts;
   } test_data[] = {
-    { "is_privileged_features_1.json", "test", false,
-      Feature::UNSPECIFIED_CONTEXT },
-    { "is_privileged_features_2.json", "test", true,
-      Feature::UNSPECIFIED_CONTEXT },
-    { "is_privileged_features_3.json", "test", false,
-      Feature::UNSPECIFIED_CONTEXT },
-    { "is_privileged_features_4.json", "test.bar", false,
-      Feature::UNSPECIFIED_CONTEXT },
-    { "is_privileged_features_5.json", "test.bar", true,
-      Feature::BLESSED_EXTENSION_CONTEXT },
-    { "is_privileged_features_5.json", "test.bar", false,
-      Feature::UNBLESSED_EXTENSION_CONTEXT }
+    { "test1", false },
+    { "test1.foo", true },
+    { "test2", true },
+    { "test2.foo", false },
+    { "test2.bar", false },
+    { "test2.baz", true },
+    { "test3", false },
+    { "test3.foo", true },
+    { "test4", false }
   };
 
+  base::FilePath api_features_path;
+  PathService::Get(chrome::DIR_TEST_DATA, &api_features_path);
+  api_features_path = api_features_path.AppendASCII("extensions")
+      .AppendASCII("extension_api_unittest")
+      .AppendASCII("privileged_api_features.json");
+
+  std::string api_features_str;
+  ASSERT_TRUE(file_util::ReadFileToString(
+      api_features_path, &api_features_str)) << "privileged_api_features.json";
+
+  scoped_ptr<base::DictionaryValue> value(static_cast<base::DictionaryValue*>(
+      base::JSONReader::Read(api_features_str)));
+  BaseFeatureProvider api_feature_provider(*value, CreateAPIFeature);
+
   for (size_t i = 0; i < ARRAYSIZE_UNSAFE(test_data); ++i) {
-    base::FilePath manifest_path;
-    PathService::Get(chrome::DIR_TEST_DATA, &manifest_path);
-    manifest_path = manifest_path.AppendASCII("extensions")
-        .AppendASCII("extension_api_unittest")
-        .AppendASCII(test_data[i].filename);
-
-    std::string manifest_str;
-    ASSERT_TRUE(file_util::ReadFileToString(manifest_path, &manifest_str))
-        << test_data[i].filename;
-
     ExtensionAPI api;
-    api.RegisterSchema("test", manifest_str);
-
-    TestFeatureProvider test2_provider(test_data[i].test2_contexts);
-    if (test_data[i].test2_contexts != Feature::UNSPECIFIED_CONTEXT) {
-      api.RegisterDependencyProvider("test2", &test2_provider);
-    }
-
+    api.RegisterDependencyProvider("api", &api_feature_provider);
     EXPECT_EQ(test_data[i].expect_is_privilged,
               api.IsPrivileged(test_data[i].api_full_name)) << i;
   }
 }
 
-TEST(ExtensionAPI, LazyGetSchema) {
+TEST(ExtensionAPITest, APIFeatures) {
+  struct {
+    std::string api_full_name;
+    bool expect_is_available;
+    Feature::Context context;
+    GURL url;
+  } test_data[] = {
+    { "test1", false, Feature::WEB_PAGE_CONTEXT, GURL() },
+    { "test1", true, Feature::BLESSED_EXTENSION_CONTEXT, GURL() },
+    { "test1", true, Feature::UNBLESSED_EXTENSION_CONTEXT, GURL() },
+    { "test1", true, Feature::CONTENT_SCRIPT_CONTEXT, GURL() },
+    { "test2", true, Feature::WEB_PAGE_CONTEXT, GURL("http://google.com") },
+    { "test2", false, Feature::BLESSED_EXTENSION_CONTEXT,
+        GURL("http://google.com") },
+    { "test2.foo", false, Feature::WEB_PAGE_CONTEXT,
+        GURL("http://google.com") },
+    { "test2.foo", true, Feature::CONTENT_SCRIPT_CONTEXT, GURL() },
+    { "test3", false, Feature::WEB_PAGE_CONTEXT, GURL("http://google.com") },
+    { "test3.foo", true, Feature::WEB_PAGE_CONTEXT, GURL("http://google.com") },
+    { "test3.foo", true, Feature::BLESSED_EXTENSION_CONTEXT,
+        GURL("http://bad.com") },
+    { "test4", true, Feature::BLESSED_EXTENSION_CONTEXT,
+        GURL("http://bad.com") },
+    { "test4.foo", false, Feature::BLESSED_EXTENSION_CONTEXT,
+        GURL("http://bad.com") },
+    { "test4.foo", false, Feature::UNBLESSED_EXTENSION_CONTEXT,
+        GURL("http://bad.com") },
+    { "test4.foo.foo", true, Feature::CONTENT_SCRIPT_CONTEXT, GURL() },
+    { "test5", true, Feature::WEB_PAGE_CONTEXT, GURL("http://foo.com") },
+    { "test5", false, Feature::WEB_PAGE_CONTEXT, GURL("http://bar.com") },
+    { "test5.blah", true, Feature::WEB_PAGE_CONTEXT, GURL("http://foo.com") },
+    { "test5.blah", false, Feature::WEB_PAGE_CONTEXT, GURL("http://bar.com") },
+    { "test6", false, Feature::BLESSED_EXTENSION_CONTEXT, GURL() },
+    { "test6.foo", true, Feature::BLESSED_EXTENSION_CONTEXT, GURL() },
+    { "test7", true, Feature::WEB_PAGE_CONTEXT, GURL("http://foo.com") },
+    { "test7.foo", false, Feature::WEB_PAGE_CONTEXT, GURL("http://bar.com") },
+    { "test7.foo", true, Feature::WEB_PAGE_CONTEXT, GURL("http://foo.com") },
+    { "test7.bar", false, Feature::WEB_PAGE_CONTEXT, GURL("http://bar.com") },
+    { "test7.bar", false, Feature::WEB_PAGE_CONTEXT, GURL("http://foo.com") },
+
+    // Test parent/child.
+    { "parent1", true, Feature::CONTENT_SCRIPT_CONTEXT, GURL() },
+    { "parent1", false, Feature::WEB_PAGE_CONTEXT, GURL("http://foo.com") },
+    { "parent1.child1", false, Feature::CONTENT_SCRIPT_CONTEXT, GURL() },
+    { "parent1.child1", true, Feature::WEB_PAGE_CONTEXT,
+        GURL("http://foo.com") },
+    { "parent1.child2", true, Feature::CONTENT_SCRIPT_CONTEXT, GURL() },
+    { "parent1.child2", false, Feature::WEB_PAGE_CONTEXT,
+        GURL("http://foo.com") },
+    { "parent2", true, Feature::CONTENT_SCRIPT_CONTEXT, GURL() },
+    { "parent2", true, Feature::BLESSED_EXTENSION_CONTEXT, GURL() },
+    { "parent2", true, Feature::UNBLESSED_EXTENSION_CONTEXT, GURL() },
+    { "parent2.child3", false, Feature::CONTENT_SCRIPT_CONTEXT, GURL() },
+    { "parent2.child3", true, Feature::BLESSED_EXTENSION_CONTEXT, GURL() },
+    { "parent2.child3", false, Feature::UNBLESSED_EXTENSION_CONTEXT, GURL() },
+    { "parent2.child3.child.child", true, Feature::CONTENT_SCRIPT_CONTEXT,
+        GURL() },
+    { "parent2.child3.child.child", false, Feature::BLESSED_EXTENSION_CONTEXT,
+        GURL() },
+    { "parent2.child3.child.child", true, Feature::UNBLESSED_EXTENSION_CONTEXT,
+        GURL() },
+    { "parent3", true, Feature::CONTENT_SCRIPT_CONTEXT, GURL() },
+    { "parent3", false, Feature::BLESSED_EXTENSION_CONTEXT, GURL() },
+    { "parent3", false, Feature::UNBLESSED_EXTENSION_CONTEXT, GURL() },
+    { "parent3.noparent", true, Feature::CONTENT_SCRIPT_CONTEXT, GURL() },
+    { "parent3.noparent", true, Feature::BLESSED_EXTENSION_CONTEXT, GURL() },
+    { "parent3.noparent", true, Feature::UNBLESSED_EXTENSION_CONTEXT, GURL() },
+    { "parent3.noparent.child", true, Feature::CONTENT_SCRIPT_CONTEXT, GURL() },
+    { "parent3.noparent.child", true, Feature::BLESSED_EXTENSION_CONTEXT,
+        GURL() },
+    { "parent3.noparent.child", true, Feature::UNBLESSED_EXTENSION_CONTEXT,
+        GURL() }
+  };
+
+  base::FilePath api_features_path;
+  PathService::Get(chrome::DIR_TEST_DATA, &api_features_path);
+  api_features_path = api_features_path.AppendASCII("extensions")
+      .AppendASCII("extension_api_unittest")
+      .AppendASCII("api_features.json");
+
+  std::string api_features_str;
+  ASSERT_TRUE(file_util::ReadFileToString(
+      api_features_path, &api_features_str)) << "api_features.json";
+
+  scoped_ptr<base::DictionaryValue> value(static_cast<base::DictionaryValue*>(
+      base::JSONReader::Read(api_features_str)));
+  BaseFeatureProvider api_feature_provider(*value, CreateAPIFeature);
+
+  for (size_t i = 0; i < ARRAYSIZE_UNSAFE(test_data); ++i) {
+    ExtensionAPI api;
+    api.RegisterDependencyProvider("api", &api_feature_provider);
+    for (base::DictionaryValue::Iterator iter(*value); !iter.IsAtEnd();
+         iter.Advance()) {
+      if (iter.key().find(".") == std::string::npos)
+        api.RegisterSchemaResource(iter.key(), 0);
+    }
+
+    EXPECT_EQ(test_data[i].expect_is_available,
+              api.IsAvailable(test_data[i].api_full_name,
+                              NULL,
+                              test_data[i].context,
+                              test_data[i].url).is_available()) << i;
+  }
+}
+
+TEST(ExtensionAPITest, IsAnyFeatureAvailableToContext) {
+  struct {
+    std::string api_full_name;
+    bool expect_is_available;
+    Feature::Context context;
+    GURL url;
+  } test_data[] = {
+    { "test1", false, Feature::WEB_PAGE_CONTEXT, GURL() },
+    { "test1", true, Feature::UNBLESSED_EXTENSION_CONTEXT, GURL() },
+    { "test2", true, Feature::CONTENT_SCRIPT_CONTEXT, GURL() },
+    { "test2", true, Feature::WEB_PAGE_CONTEXT, GURL("http://google.com") },
+    { "test2.foo", false, Feature::WEB_PAGE_CONTEXT,
+        GURL("http://google.com") },
+    { "test3", true, Feature::CONTENT_SCRIPT_CONTEXT, GURL() },
+    { "test3", true, Feature::WEB_PAGE_CONTEXT, GURL("http://foo.com") },
+    { "test4.foo", true, Feature::CONTENT_SCRIPT_CONTEXT, GURL() },
+    { "test7", false, Feature::WEB_PAGE_CONTEXT, GURL("http://google.com") },
+    { "test7", true, Feature::WEB_PAGE_CONTEXT, GURL("http://foo.com") },
+    { "test7", false, Feature::WEB_PAGE_CONTEXT, GURL("http://bar.com") }
+  };
+
+  base::FilePath api_features_path;
+  PathService::Get(chrome::DIR_TEST_DATA, &api_features_path);
+  api_features_path = api_features_path.AppendASCII("extensions")
+      .AppendASCII("extension_api_unittest")
+      .AppendASCII("api_features.json");
+
+  std::string api_features_str;
+  ASSERT_TRUE(file_util::ReadFileToString(
+      api_features_path, &api_features_str)) << "api_features.json";
+
+  scoped_ptr<base::DictionaryValue> value(static_cast<base::DictionaryValue*>(
+      base::JSONReader::Read(api_features_str)));
+  BaseFeatureProvider api_feature_provider(*value, CreateAPIFeature);
+
+  for (size_t i = 0; i < ARRAYSIZE_UNSAFE(test_data); ++i) {
+    ExtensionAPI api;
+    api.RegisterDependencyProvider("api", &api_feature_provider);
+    for (base::DictionaryValue::Iterator iter(*value); !iter.IsAtEnd();
+         iter.Advance()) {
+      if (iter.key().find(".") == std::string::npos)
+        api.RegisterSchemaResource(iter.key(), 0);
+    }
+
+    EXPECT_EQ(test_data[i].expect_is_available,
+              api.IsAnyFeatureAvailableToContext(test_data[i].api_full_name,
+                                                 test_data[i].context,
+                                                 test_data[i].url)) << i;
+  }
+}
+
+TEST(ExtensionAPITest, LazyGetSchema) {
   scoped_ptr<ExtensionAPI> apis(ExtensionAPI::CreateWithDefaultConfiguration());
 
-  EXPECT_EQ(NULL, apis->GetSchema(""));
-  EXPECT_EQ(NULL, apis->GetSchema(""));
+  EXPECT_EQ(NULL, apis->GetSchema(std::string()));
+  EXPECT_EQ(NULL, apis->GetSchema(std::string()));
   EXPECT_EQ(NULL, apis->GetSchema("experimental"));
   EXPECT_EQ(NULL, apis->GetSchema("experimental"));
   EXPECT_EQ(NULL, apis->GetSchema("foo"));
@@ -180,10 +313,10 @@ TEST(ExtensionAPI, LazyGetSchema) {
 
   EXPECT_TRUE(apis->GetSchema("experimental.dns"));
   EXPECT_TRUE(apis->GetSchema("experimental.dns"));
-  EXPECT_TRUE(apis->GetSchema("experimental.infobars"));
-  EXPECT_TRUE(apis->GetSchema("experimental.infobars"));
   EXPECT_TRUE(apis->GetSchema("extension"));
   EXPECT_TRUE(apis->GetSchema("extension"));
+  EXPECT_TRUE(apis->GetSchema("infobars"));
+  EXPECT_TRUE(apis->GetSchema("infobars"));
   EXPECT_TRUE(apis->GetSchema("omnibox"));
   EXPECT_TRUE(apis->GetSchema("omnibox"));
   EXPECT_TRUE(apis->GetSchema("storage"));
@@ -222,7 +355,7 @@ scoped_refptr<Extension> CreateExtensionWithPermission(
   return CreateExtensionWithPermissions(permissions);
 }
 
-TEST(ExtensionAPI, ExtensionWithUnprivilegedAPIs) {
+TEST(ExtensionAPITest, ExtensionWithUnprivilegedAPIs) {
   scoped_refptr<Extension> extension;
   {
     std::set<std::string> permissions;
@@ -234,50 +367,199 @@ TEST(ExtensionAPI, ExtensionWithUnprivilegedAPIs) {
   scoped_ptr<ExtensionAPI> extension_api(
       ExtensionAPI::CreateWithDefaultConfiguration());
 
+  // "runtime" has privileged parts that should not be accessed by content
+  // scripts.
+  EXPECT_FALSE(extension_api->IsAnyFeatureAvailableToContext(
+      "runtime.getBackgroundPage",
+      Feature::CONTENT_SCRIPT_CONTEXT,
+      GURL()));
+  EXPECT_FALSE(extension_api->IsAnyFeatureAvailableToContext(
+      "runtime.sendNativeMessage",
+      Feature::CONTENT_SCRIPT_CONTEXT,
+      GURL()));
+  // "runtime" also has unprivileged parts.
+  EXPECT_TRUE(extension_api->IsAnyFeatureAvailableToContext(
+      "runtime.sendMessage",
+      Feature::CONTENT_SCRIPT_CONTEXT,
+      GURL()));
+  EXPECT_TRUE(extension_api->IsAnyFeatureAvailableToContext(
+      "runtime.id",
+      Feature::CONTENT_SCRIPT_CONTEXT,
+      GURL()));
+
   // "storage" is completely unprivileged.
-  EXPECT_TRUE(extension_api->IsAvailable("storage",
-                                         extension.get(),
-                                         Feature::BLESSED_EXTENSION_CONTEXT,
-                                         GURL()).is_available());
-  EXPECT_TRUE(extension_api->IsAvailable("storage",
-                                         extension.get(),
-                                         Feature::UNBLESSED_EXTENSION_CONTEXT,
-                                         GURL()).is_available());
-  EXPECT_TRUE(extension_api->IsAvailable("storage",
-                                         extension.get(),
-                                         Feature::CONTENT_SCRIPT_CONTEXT,
-                                         GURL()).is_available());
+  EXPECT_TRUE(extension_api->IsAnyFeatureAvailableToContext(
+      "storage",
+      Feature::BLESSED_EXTENSION_CONTEXT,
+      GURL()));
+  EXPECT_TRUE(extension_api->IsAnyFeatureAvailableToContext(
+      "storage",
+      Feature::UNBLESSED_EXTENSION_CONTEXT,
+      GURL()));
+  EXPECT_TRUE(extension_api->IsAnyFeatureAvailableToContext(
+      "storage",
+      Feature::CONTENT_SCRIPT_CONTEXT,
+      GURL()));
 
   // "extension" is partially unprivileged.
-  EXPECT_TRUE(extension_api->IsAvailable("extension",
-                                         extension.get(),
-                                         Feature::BLESSED_EXTENSION_CONTEXT,
-                                         GURL()).is_available());
-  EXPECT_TRUE(extension_api->IsAvailable("extension",
-                                         extension.get(),
-                                         Feature::UNBLESSED_EXTENSION_CONTEXT,
-                                         GURL()).is_available());
-  EXPECT_TRUE(extension_api->IsAvailable("extension",
-                                         extension.get(),
-                                         Feature::CONTENT_SCRIPT_CONTEXT,
-                                         GURL()).is_available());
+  EXPECT_TRUE(extension_api->IsAnyFeatureAvailableToContext(
+      "extension",
+      Feature::BLESSED_EXTENSION_CONTEXT,
+      GURL()));
+  EXPECT_TRUE(extension_api->IsAnyFeatureAvailableToContext(
+      "extension",
+      Feature::UNBLESSED_EXTENSION_CONTEXT,
+      GURL()));
+  EXPECT_TRUE(extension_api->IsAnyFeatureAvailableToContext(
+      "extension",
+      Feature::CONTENT_SCRIPT_CONTEXT,
+      GURL()));
 
   // "history" is entirely privileged.
-  EXPECT_TRUE(extension_api->IsAvailable("history",
-                                         extension.get(),
-                                         Feature::BLESSED_EXTENSION_CONTEXT,
-                                         GURL()).is_available());
-  EXPECT_FALSE(extension_api->IsAvailable("history",
+  EXPECT_TRUE(extension_api->IsAnyFeatureAvailableToContext(
+      "history",
+      Feature::BLESSED_EXTENSION_CONTEXT,
+      GURL()));
+  EXPECT_FALSE(extension_api->IsAnyFeatureAvailableToContext(
+      "history",
+      Feature::UNBLESSED_EXTENSION_CONTEXT,
+      GURL()));
+  EXPECT_FALSE(extension_api->IsAnyFeatureAvailableToContext(
+      "history",
+      Feature::CONTENT_SCRIPT_CONTEXT,
+      GURL()));
+}
+
+scoped_refptr<Extension> CreateHostedApp() {
+  base::DictionaryValue values;
+  values.SetString(extension_manifest_keys::kName, "test");
+  values.SetString(extension_manifest_keys::kVersion, "0.1");
+  values.Set(extension_manifest_keys::kWebURLs, new base::ListValue());
+  values.SetString(extension_manifest_keys::kLaunchWebURL,
+                   "http://www.example.com");
+  std::string error;
+  scoped_refptr<Extension> extension(Extension::Create(
+      base::FilePath(), Manifest::INTERNAL, values, Extension::NO_FLAGS,
+      &error));
+  CHECK(extension.get());
+  return extension;
+}
+
+scoped_refptr<Extension> CreatePackagedAppWithPermissions(
+    const std::set<std::string>& permissions) {
+  base::DictionaryValue values;
+  values.SetString(extension_manifest_keys::kName, "test");
+  values.SetString(extension_manifest_keys::kVersion, "0.1");
+  values.SetString(extension_manifest_keys::kPlatformAppBackground,
+      "http://www.example.com");
+
+  base::DictionaryValue* app = new base::DictionaryValue();
+  base::DictionaryValue* background = new base::DictionaryValue();
+  base::ListValue* scripts = new base::ListValue();
+  scripts->Append(new base::StringValue("test.js"));
+  background->Set("scripts", scripts);
+  app->Set("background", background);
+  values.Set(extension_manifest_keys::kApp, app);
+  {
+    scoped_ptr<base::ListValue> permissions_list(new base::ListValue());
+    for (std::set<std::string>::const_iterator i = permissions.begin();
+        i != permissions.end(); ++i) {
+      permissions_list->Append(new base::StringValue(*i));
+    }
+    values.Set("permissions", permissions_list.release());
+  }
+
+  std::string error;
+  scoped_refptr<Extension> extension(Extension::Create(
+      base::FilePath(), Manifest::INTERNAL, values, Extension::NO_FLAGS,
+      &error));
+  CHECK(extension.get()) << error;
+  return extension;
+}
+
+TEST(ExtensionAPITest, HostedAppPermissions) {
+  scoped_refptr<Extension> extension = CreateHostedApp();
+
+  scoped_ptr<ExtensionAPI> extension_api(
+      ExtensionAPI::CreateWithDefaultConfiguration());
+
+  // "runtime" and "tabs" should not be available in hosted apps.
+  EXPECT_FALSE(extension_api->IsAvailable("runtime",
                                           extension.get(),
-                                          Feature::UNBLESSED_EXTENSION_CONTEXT,
+                                          Feature::BLESSED_EXTENSION_CONTEXT,
                                           GURL()).is_available());
-  EXPECT_FALSE(extension_api->IsAvailable("history",
+  EXPECT_FALSE(extension_api->IsAvailable("runtime.id",
                                           extension.get(),
-                                          Feature::CONTENT_SCRIPT_CONTEXT,
+                                          Feature::BLESSED_EXTENSION_CONTEXT,
+                                          GURL()).is_available());
+  EXPECT_FALSE(extension_api->IsAvailable("runtime.sendMessage",
+                                          extension.get(),
+                                          Feature::BLESSED_EXTENSION_CONTEXT,
+                                          GURL()).is_available());
+  EXPECT_FALSE(extension_api->IsAvailable("runtime.sendNativeMessage",
+                                          extension.get(),
+                                          Feature::BLESSED_EXTENSION_CONTEXT,
+                                          GURL()).is_available());
+  EXPECT_FALSE(extension_api->IsAvailable("tabs.create",
+                                          extension.get(),
+                                          Feature::BLESSED_EXTENSION_CONTEXT,
                                           GURL()).is_available());
 }
 
-TEST(ExtensionAPI, ExtensionWithDependencies) {
+TEST(ExtensionAPITest, AppAndFriendsAvailability) {
+
+  scoped_ptr<ExtensionAPI> extension_api(
+      ExtensionAPI::CreateWithDefaultConfiguration());
+
+  // Make sure chrome.app.runtime and chrome.app.window are available to apps,
+  // and chrome.app is not.
+  {
+    std::set<std::string> permissions;
+    permissions.insert("app.runtime");
+    permissions.insert("app.window");
+    scoped_refptr<Extension> extension =
+        CreatePackagedAppWithPermissions(permissions);
+    EXPECT_FALSE(extension_api->IsAvailable(
+        "app",
+        extension.get(),
+        Feature::BLESSED_EXTENSION_CONTEXT,
+        GURL("http://foo.com")).is_available());
+    EXPECT_TRUE(extension_api->IsAvailable(
+        "app.runtime",
+        extension.get(),
+        Feature::BLESSED_EXTENSION_CONTEXT,
+        GURL("http://foo.com")).is_available());
+    EXPECT_TRUE(extension_api->IsAvailable(
+        "app.window",
+        extension.get(),
+        Feature::BLESSED_EXTENSION_CONTEXT,
+        GURL("http://foo.com")).is_available());
+  }
+  // Make sure chrome.app.runtime and chrome.app.window are not available to
+  // extensions, and chrome.app is.
+  {
+    std::set<std::string> permissions;
+    scoped_refptr<Extension> extension =
+        CreateExtensionWithPermissions(permissions);
+    EXPECT_TRUE(extension_api->IsAvailable(
+        "app",
+        extension.get(),
+        Feature::BLESSED_EXTENSION_CONTEXT,
+        GURL("http://foo.com")).is_available());
+    EXPECT_FALSE(extension_api->IsAvailable(
+        "app.runtime",
+        extension.get(),
+        Feature::BLESSED_EXTENSION_CONTEXT,
+        GURL("http://foo.com")).is_available());
+    EXPECT_FALSE(extension_api->IsAvailable(
+        "app.window",
+        extension.get(),
+        Feature::BLESSED_EXTENSION_CONTEXT,
+        GURL("http://foo.com")).is_available());
+  }
+}
+
+TEST(ExtensionAPITest, ExtensionWithDependencies) {
   // Extension with the "ttsEngine" permission but not the "tts" permission; it
   // should not automatically get "tts" permission.
   {
@@ -319,7 +601,7 @@ bool MatchesURL(
       api_name, NULL, Feature::WEB_PAGE_CONTEXT, GURL(url)).is_available();
 }
 
-TEST(ExtensionAPI, URLMatching) {
+TEST(ExtensionAPITest, URLMatching) {
   scoped_ptr<ExtensionAPI> api(ExtensionAPI::CreateWithDefaultConfiguration());
 
   // "app" API is available to all URLs that content scripts can be injected.
@@ -327,11 +609,12 @@ TEST(ExtensionAPI, URLMatching) {
   EXPECT_TRUE(MatchesURL(api.get(), "app", "https://blah.net"));
   EXPECT_TRUE(MatchesURL(api.get(), "app", "file://somefile.html"));
 
-  // But not internal URLs (for chrome-extension:// the app API is injected by
-  // GetSchemasForExtension).
+  // But not internal URLs.
   EXPECT_FALSE(MatchesURL(api.get(), "app", "about:flags"));
   EXPECT_FALSE(MatchesURL(api.get(), "app", "chrome://flags"));
-  EXPECT_FALSE(MatchesURL(api.get(), "app",
+
+  // "app" should be available to chrome-extension URLs.
+  EXPECT_TRUE(MatchesURL(api.get(), "app",
                           "chrome-extension://fakeextension"));
 
   // "storage" API (for example) isn't available to any URLs.
@@ -345,7 +628,7 @@ TEST(ExtensionAPI, URLMatching) {
                           "chrome-extension://fakeextension"));
 }
 
-TEST(ExtensionAPI, GetAPINameFromFullName) {
+TEST(ExtensionAPITest, GetAPINameFromFullName) {
   struct {
     std::string input;
     std::string api_name;
@@ -373,13 +656,13 @@ TEST(ExtensionAPI, GetAPINameFromFullName) {
   }
 }
 
-TEST(ExtensionAPI, DefaultConfigurationFeatures) {
+TEST(ExtensionAPITest, DefaultConfigurationFeatures) {
   scoped_ptr<ExtensionAPI> api(ExtensionAPI::CreateWithDefaultConfiguration());
 
-  SimpleFeature* bookmarks =
-      static_cast<SimpleFeature*>(api->GetFeature("bookmarks"));
-  SimpleFeature* bookmarks_create =
-      static_cast<SimpleFeature*>(api->GetFeature("bookmarks.create"));
+  SimpleFeature* bookmarks = static_cast<SimpleFeature*>(
+      api->GetFeatureDependency("api:bookmarks"));
+  SimpleFeature* bookmarks_create = static_cast<SimpleFeature*>(
+      api->GetFeatureDependency("api:bookmarks.create"));
 
   struct {
     SimpleFeature* feature;
@@ -407,35 +690,33 @@ TEST(ExtensionAPI, DefaultConfigurationFeatures) {
   }
 }
 
-TEST(ExtensionAPI, FeaturesRequireContexts) {
-  scoped_ptr<base::ListValue> schema1(new base::ListValue());
-  base::DictionaryValue* feature_definition = new base::DictionaryValue();
-  schema1->Append(feature_definition);
-  feature_definition->SetString("namespace", "test");
-  feature_definition->SetBoolean("uses_feature_system", true);
-
-  scoped_ptr<base::ListValue> schema2(schema1->DeepCopy());
-
+TEST(ExtensionAPITest, FeaturesRequireContexts) {
+  // TODO(cduvall): Make this check API featues.
+  scoped_ptr<base::DictionaryValue> api_features1(new base::DictionaryValue());
+  scoped_ptr<base::DictionaryValue> api_features2(new base::DictionaryValue());
+  base::DictionaryValue* test1 = new base::DictionaryValue();
+  base::DictionaryValue* test2 = new base::DictionaryValue();
   base::ListValue* contexts = new base::ListValue();
   contexts->Append(new base::StringValue("content_script"));
-  feature_definition->Set("contexts", contexts);
+  test1->Set("contexts", contexts);
+  test1->SetString("channel", "stable");
+  test2->SetString("channel", "stable");
+  api_features1->Set("test", test1);
+  api_features2->Set("test", test2);
 
   struct {
-    base::ListValue* schema;
+    base::DictionaryValue* api_features;
     bool expect_success;
   } test_data[] = {
-    { schema1.get(), true },
-    { schema2.get(), false }
+    { api_features1.get(), true },
+    { api_features2.get(), false }
   };
 
+
   for (size_t i = 0; i < ARRAYSIZE_UNSAFE(test_data); ++i) {
-    std::string schema_source;
-    base::JSONWriter::Write(test_data[i].schema, &schema_source);
-
-    ExtensionAPI api;
-    api.RegisterSchema("test", base::StringPiece(schema_source));
-
-    Feature* feature = api.GetFeature("test");
+    BaseFeatureProvider api_feature_provider(*test_data[i].api_features,
+                                             CreateAPIFeature);
+    Feature* feature = api_feature_provider.GetFeature("test");
     EXPECT_EQ(test_data[i].expect_success, feature != NULL) << i;
   }
 }
@@ -449,7 +730,7 @@ static void GetDictionaryFromList(const base::DictionaryValue* schema,
   EXPECT_TRUE(list->GetDictionary(list_index, out));
 }
 
-TEST(ExtensionAPI, TypesHaveNamespace) {
+TEST(ExtensionAPITest, TypesHaveNamespace) {
   base::FilePath manifest_path;
   PathService::Get(chrome::DIR_TEST_DATA, &manifest_path);
   manifest_path = manifest_path.AppendASCII("extensions")
@@ -461,7 +742,8 @@ TEST(ExtensionAPI, TypesHaveNamespace) {
       << "Failed to load: " << manifest_path.value();
 
   ExtensionAPI api;
-  api.RegisterSchema("test.foo", manifest_str);
+  api.RegisterSchemaResource("test.foo", 0);
+  api.LoadSchema("test.foo", manifest_str);
 
   const base::DictionaryValue* schema = api.GetSchema("test.foo");
 
@@ -508,5 +790,83 @@ TEST(ExtensionAPI, TypesHaveNamespace) {
   EXPECT_EQ("fully.qualified.Type", type);
 }
 
-}  // namespace
+// Tests API availability with an empty manifest.
+TEST(ExtensionAPITest, NoPermissions) {
+  const struct {
+    const char* permission_name;
+    bool expect_success;
+  } kTests[] = {
+    // Test default module/package permission.
+    { "extension",      true },
+    { "i18n",           true },
+    { "permissions",    true },
+    { "runtime",        true },
+    { "test",           true },
+    // These require manifest keys.
+    { "browserAction",  false },
+    { "pageAction",     false },
+    { "pageActions",    false },
+    // Some negative tests.
+    { "bookmarks",      false },
+    { "cookies",        false },
+    { "history",        false },
+    // Make sure we find the module name after stripping '.'
+    { "runtime.abcd.onStartup",  true },
+    // Test Tabs functions.
+    { "tabs.create",      true },
+    { "tabs.duplicate",   true },
+    { "tabs.onRemoved",   true },
+    { "tabs.remove",      true },
+    { "tabs.update",      true },
+    { "tabs.getSelected", true },
+    { "tabs.onUpdated",   true },
+    // Test some whitelisted functions. These require no permissions.
+    { "app.getDetails",           true },
+    { "app.getDetailsForFrame",   true },
+    { "app.getIsInstalled",       true },
+    { "app.installState",         true },
+    { "app.runningState",         true },
+    { "management.getPermissionWarningsByManifest", true },
+    { "management.uninstallSelf", true },
+    // But other functions in those modules do.
+    { "management.getPermissionWarningsById", false },
+  };
+
+  scoped_ptr<ExtensionAPI> extension_api(
+      ExtensionAPI::CreateWithDefaultConfiguration());
+  scoped_refptr<Extension> extension =
+      BuildExtension(ExtensionBuilder().Pass()).Build();
+
+  for (size_t i = 0; i < ARRAYSIZE_UNSAFE(kTests); ++i) {
+    EXPECT_EQ(kTests[i].expect_success,
+              extension_api->IsAvailable(kTests[i].permission_name,
+                                         extension.get(),
+                                         Feature::BLESSED_EXTENSION_CONTEXT,
+                                         GURL()).is_available())
+        << "Permission being tested: " << kTests[i].permission_name;
+  }
+}
+
+// Tests that permissions that require manifest keys are available when those
+// keys are present.
+TEST(ExtensionAPITest, ManifestKeys) {
+  scoped_ptr<ExtensionAPI> extension_api(
+      ExtensionAPI::CreateWithDefaultConfiguration());
+
+  scoped_refptr<Extension> extension =
+      BuildExtension(ExtensionBuilder().Pass())
+      .MergeManifest(DictionaryBuilder().Set("browser_action",
+                                             DictionaryBuilder().Pass()))
+      .Build();
+
+  EXPECT_TRUE(extension_api->IsAvailable("browserAction",
+                                         extension.get(),
+                                         Feature::BLESSED_EXTENSION_CONTEXT,
+                                         GURL()).is_available());
+  EXPECT_FALSE(extension_api->IsAvailable("pageAction",
+                                          extension.get(),
+                                          Feature::BLESSED_EXTENSION_CONTEXT,
+                                          GURL()).is_available());
+}
+
 }  // namespace extensions

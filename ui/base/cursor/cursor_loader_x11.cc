@@ -4,17 +4,22 @@
 
 #include "ui/base/cursor/cursor_loader_x11.h"
 
+#include <float.h>
 #include <X11/Xlib.h>
 #include <X11/cursorfont.h>
 
 #include "base/logging.h"
 #include "grit/ui_resources.h"
+#include "skia/ext/image_operations.h"
 #include "ui/base/cursor/cursor.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/x/x11_util.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_skia.h"
+#include "ui/gfx/point_conversions.h"
+#include "ui/gfx/size_conversions.h"
 #include "ui/gfx/skbitmap_operations.h"
+#include "ui/gfx/skia_util.h"
 
 namespace {
 
@@ -94,6 +99,7 @@ int CursorShapeFromNative(const gfx::NativeCursor& native_cursor) {
       return XC_hand2;
     case ui::kCursorIBeam:
       return XC_xterm;
+    case ui::kCursorProgress:
     case ui::kCursorWait:
       return XC_watch;
     case ui::kCursorHelp:
@@ -118,10 +124,6 @@ int CursorShapeFromNative(const gfx::NativeCursor& native_cursor) {
       return XC_sb_v_double_arrow;
     case ui::kCursorEastWestResize:
       return XC_sb_h_double_arrow;
-    case ui::kCursorNorthEastSouthWestResize:
-    case ui::kCursorNorthWestSouthEastResize:
-      // There isn't really a useful cursor available for these.
-      return XC_left_ptr;
     case ui::kCursorColumnResize:
       return XC_sb_h_double_arrow;
     case ui::kCursorRowResize:
@@ -160,25 +162,9 @@ void CursorLoaderX11::LoadImageCursor(int id,
       GetScaleFactorFromScale(display().device_scale_factor()));
   SkBitmap bitmap = image_rep.sk_bitmap();
   gfx::Point hotpoint = hot;
-  switch (display().rotation()) {
-    case gfx::Display::ROTATE_0:
-      break;
-    case gfx::Display::ROTATE_90:
-      hotpoint.SetPoint(bitmap.height() - hot.y(), hot.x());
-      bitmap = SkBitmapOperations::Rotate(
-          bitmap, SkBitmapOperations::ROTATION_90_CW);
-      break;
-    case gfx::Display::ROTATE_180:
-      hotpoint.SetPoint(bitmap.width() - hot.x(), bitmap.height() - hot.y());
-      bitmap = SkBitmapOperations::Rotate(
-          bitmap, SkBitmapOperations::ROTATION_180_CW);
-      break;
-    case gfx::Display::ROTATE_270:
-      hotpoint.SetPoint(hot.y(), bitmap.width() - hot.x());
-      bitmap = SkBitmapOperations::Rotate(
-          bitmap, SkBitmapOperations::ROTATION_270_CW);
-      break;
-  }
+  ScaleAndRotateCursorBitmapAndHotpoint(
+      scale(), display().rotation(), &bitmap, &hotpoint);
+
   XcursorImage* x_image = SkBitmapToXcursorImage(&bitmap, hotpoint);
   cursors_[id] = CreateReffedCustomXCursor(x_image);
   // |image_rep| is owned by the resource bundle. So we do not need to free it.
@@ -192,8 +178,7 @@ void CursorLoaderX11::LoadAnimatedCursor(int id,
       ResourceBundle::GetSharedInstance().GetImageSkiaNamed(resource_id);
   const gfx::ImageSkiaRep& image_rep = image->GetRepresentation(
       GetScaleFactorFromScale(display().device_scale_factor()));
-  const SkBitmap bitmap = image_rep.sk_bitmap();
-  DCHECK_EQ(bitmap.config(), SkBitmap::kARGB_8888_Config);
+  SkBitmap bitmap = image_rep.sk_bitmap();
   int frame_width = bitmap.height();
   int frame_height = frame_width;
   int total_width = bitmap.width();
@@ -202,23 +187,22 @@ void CursorLoaderX11::LoadAnimatedCursor(int id,
   DCHECK_GT(frame_count, 0);
   XcursorImages* x_images = XcursorImagesCreate(frame_count);
   x_images->nimage = frame_count;
-  bitmap.lockPixels();
-  unsigned int* pixels = bitmap.getAddr32(0, 0);
-  // Create each frame.
+
   for (int frame = 0; frame < frame_count; ++frame) {
-    XcursorImage* x_image = XcursorImageCreate(frame_width, frame_height);
-    for (int row = 0; row < frame_height; ++row) {
-      // Copy |row|'th row of |frame|'th frame.
-      memcpy(x_image->pixels + row * frame_width,
-             pixels + frame * frame_width + row * total_width,
-             frame_width * 4);
-    }
-    x_image->xhot = hot.x();
-    x_image->yhot = hot.y();
+    gfx::Point hotpoint = hot;
+    int x_offset = frame_width * frame;
+    DCHECK_LE(x_offset + frame_width, total_width);
+
+    SkBitmap cropped = SkBitmapOperations::CreateTiledBitmap(
+        bitmap, x_offset, 0, frame_width, frame_height);
+    DCHECK_EQ(frame_width, cropped.width());
+    DCHECK_EQ(frame_height, cropped.height());
+
+    XcursorImage* x_image = SkBitmapToXcursorImage(&cropped, hotpoint);
+
     x_image->delay = frame_delay_ms;
     x_images->images[frame] = x_image;
   }
-  bitmap.unlockPixels();
 
   animated_cursors_[id] = std::make_pair(
       XcursorImagesLoadCursor(GetXDisplay(), x_images), x_images);
@@ -273,6 +257,50 @@ bool CursorLoaderX11::IsImageCursor(gfx::NativeCursor native_cursor) {
   if (find != cursors_.end())
     return cursors_[type];
   return GetXCursor(CursorShapeFromNative(native_cursor));
+}
+
+void ScaleAndRotateCursorBitmapAndHotpoint(float scale,
+                                           gfx::Display::Rotation rotation,
+                                           SkBitmap* bitmap,
+                                           gfx::Point* hotpoint) {
+  switch (rotation) {
+    case gfx::Display::ROTATE_0:
+      break;
+    case gfx::Display::ROTATE_90:
+      hotpoint->SetPoint(bitmap->height() - hotpoint->y(), hotpoint->x());
+      *bitmap = SkBitmapOperations::Rotate(
+          *bitmap, SkBitmapOperations::ROTATION_90_CW);
+      break;
+    case gfx::Display::ROTATE_180:
+      hotpoint->SetPoint(
+          bitmap->width() - hotpoint->x(), bitmap->height() - hotpoint->y());
+      *bitmap = SkBitmapOperations::Rotate(
+          *bitmap, SkBitmapOperations::ROTATION_180_CW);
+      break;
+    case gfx::Display::ROTATE_270:
+      hotpoint->SetPoint(hotpoint->y(), bitmap->width() - hotpoint->x());
+      *bitmap = SkBitmapOperations::Rotate(
+          *bitmap, SkBitmapOperations::ROTATION_270_CW);
+      break;
+  }
+
+  if (scale < FLT_EPSILON) {
+    NOTREACHED() << "Scale must be larger than 0.";
+    scale = 1.0f;
+  }
+
+  if (scale == 1.0f)
+    return;
+
+  gfx::Size scaled_size = gfx::ToFlooredSize(
+      gfx::ScaleSize(gfx::Size(bitmap->width(), bitmap->height()), scale));
+
+  *bitmap = skia::ImageOperations::Resize(
+      *bitmap,
+      skia::ImageOperations::RESIZE_BETTER,
+      scaled_size.width(),
+      scaled_size.height());
+  *hotpoint = gfx::ToFlooredPoint(gfx::ScalePoint(*hotpoint, scale));
 }
 
 }  // namespace ui

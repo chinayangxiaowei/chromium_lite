@@ -17,6 +17,15 @@ function FileGrid() {
 }
 
 /**
+ * Thumbnail quality.
+ * @enum {number}
+ */
+FileGrid.ThumbnailQuality = {
+  LOW: 0,
+  HIGH: 1
+};
+
+/**
  * Inherits from cr.ui.Grid.
  */
 FileGrid.prototype.__proto__ = cr.ui.Grid.prototype;
@@ -32,17 +41,23 @@ FileGrid.decorate = function(self, metadataCache) {
   self.__proto__ = FileGrid.prototype;
   self.metadataCache_ = metadataCache;
 
+  self.scrollBar_ = new MainPanelScrollBar();
+  self.scrollBar_.initialize(self.parentNode, self);
+
   self.itemConstructor = function(entry) {
     var item = self.ownerDocument.createElement('LI');
     FileGrid.Item.decorate(item, entry, self);
     return item;
   };
+
+  self.relayoutAggregation_ =
+      new AsyncUtil.Aggregation(self.relayoutImmediately_.bind(self));
 };
 
 /**
  * Updates items to reflect metadata changes.
  * @param {string} type Type of metadata changed.
- * @param {Object<string, Object>} props Map from entry URLs to metadata props.
+ * @param {Object.<string, Object>} props Map from entry URLs to metadata props.
  */
 FileGrid.prototype.updateListItemsMetadata = function(type, props) {
   var boxes = this.querySelectorAll('.img-container');
@@ -52,9 +67,31 @@ FileGrid.prototype.updateListItemsMetadata = function(type, props) {
     if (!entry || !(entry.toURL() in props))
       continue;
 
-    FileGrid.decorateThumbnailBox(box, entry, this.metadataCache_,
-                                  ThumbnailLoader.FillMode.FIT);
+    FileGrid.decorateThumbnailBox(box,
+                                  entry,
+                                  this.metadataCache_,
+                                  ThumbnailLoader.FillMode.FIT,
+                                  FileGrid.ThumbnailQuality.HIGH);
   }
+};
+
+/**
+ * Redraws the UI. Skips multiple consecutive calls.
+ */
+FileGrid.prototype.relayout = function() {
+  this.relayoutAggregation_.run();
+};
+
+/**
+ * Redraws the UI immediately.
+ * @private
+ */
+FileGrid.prototype.relayoutImmediately_ = function() {
+  this.startBatchUpdates();
+  this.columns = 0;
+  this.redraw();
+  this.endBatchUpdates();
+  cr.dispatchSimpleEvent(this, 'relayout');
 };
 
 /**
@@ -72,8 +109,11 @@ FileGrid.decorateThumbnail = function(li, entry, metadataCache) {
   li.appendChild(frame);
 
   var box = li.ownerDocument.createElement('div');
-  FileGrid.decorateThumbnailBox(
-      box, entry, metadataCache, ThumbnailLoader.FillMode.AUTO);
+  FileGrid.decorateThumbnailBox(box,
+                                entry,
+                                metadataCache,
+                                ThumbnailLoader.FillMode.AUTO,
+                                FileGrid.ThumbnailQuality.HIGH);
   frame.appendChild(box);
 
   var bottom = li.ownerDocument.createElement('div');
@@ -90,11 +130,12 @@ FileGrid.decorateThumbnail = function(li, entry, metadataCache) {
  * @param {Entry} entry Entry which thumbnail is generating for.
  * @param {MetadataCache} metadataCache To retrieve metadata.
  * @param {ThumbnailLoader.FillMode} fillMode Fill mode.
+ * @param {FileGrid.ThumbnailQuality} quality Thumbnail quality.
  * @param {function(HTMLElement)=} opt_imageLoadCallback Callback called when
  *     the image has been loaded before inserting it into the DOM.
  */
 FileGrid.decorateThumbnailBox = function(
-    box, entry, metadataCache, fillMode, opt_imageLoadCallback) {
+    box, entry, metadataCache, fillMode, quality, opt_imageLoadCallback) {
   box.className = 'img-container';
   if (entry.isDirectory) {
     box.setAttribute('generic-thumbnail', 'folder');
@@ -104,15 +145,6 @@ FileGrid.decorateThumbnailBox = function(
   }
 
   var imageUrl = entry.toURL();
-
-  // Failing to fetch a thumbnail likely means that the thumbnail URL
-  // is now stale. Request a refresh of the current directory, to get
-  // the new thumbnail URLs. Once the directory is refreshed, we'll get
-  // notified via onDirectoryChanged event.
-  var onImageLoadError = function() {
-    metadataCache.refreshFileMetadata(imageUrl);
-  };
-
   var metadataTypes = 'thumbnail|filesystem';
 
   if (FileType.isOnDrive(imageUrl)) {
@@ -123,16 +155,32 @@ FileGrid.decorateThumbnailBox = function(
     metadataTypes += '|media';
   }
 
+  // Drive provides high quality thumbnails via USE_EMBEDDED, however local
+  // images usually provide very tiny thumbnails, therefore USE_EMBEDDE can't
+  // be used to obtain high quality output.
+  var useEmbedded;
+  switch (quality) {
+    case FileGrid.ThumbnailQuality.LOW:
+      useEmbedded = ThumbnailLoader.UseEmbedded.USE_EMBEDDED;
+      break;
+    case FileGrid.ThumbnailQuality.HIGH:
+      useEmbedded = FileType.isOnDrive(imageUrl) ?
+          ThumbnailLoader.UseEmbedded.USE_EMBEDDED :
+          ThumbnailLoader.UseEmbedded.NO_EMBEDDED;
+      break;
+  }
+
   metadataCache.get(imageUrl, metadataTypes,
       function(metadata) {
         new ThumbnailLoader(imageUrl,
                             ThumbnailLoader.LoaderType.IMAGE,
-                            metadata).
+                            metadata,
+                            undefined,  // opt_mediaType
+                            useEmbedded).
             load(box,
-                 fillMode,
-                 ThumbnailLoader.OptimizationMode.DISCARD_DETACHED,
-                 opt_imageLoadCallback,
-                 onImageLoadError);
+                fillMode,
+                ThumbnailLoader.OptimizationMode.DISCARD_DETACHED,
+                opt_imageLoadCallback);
       });
 };
 
@@ -150,6 +198,10 @@ FileGrid.Item = function() {
 FileGrid.Item.prototype.__proto__ = cr.ui.ListItem.prototype;
 
 Object.defineProperty(FileGrid.Item.prototype, 'label', {
+  /**
+   * @this {FileGrid.Item}
+   * @return {string} Label of the item.
+   */
   get: function() {
     return this.querySelector('filename-label').textContent;
   }
@@ -164,16 +216,16 @@ FileGrid.Item.decorate = function(li, entry, grid) {
   li.__proto__ = FileGrid.Item.prototype;
   FileGrid.decorateThumbnail(li, entry, grid.metadataCache_, true);
 
-  if (grid.selectionModel.multiple) {
-    var checkBox = li.ownerDocument.createElement('input');
-    filelist.decorateSelectionCheckbox(checkBox, entry, grid);
-    checkBox.classList.add('white');
-    var bottom = li.querySelector('.thumbnail-bottom');
-    bottom.appendChild(checkBox);
-    bottom.classList.add('show-checkbox');
-  }
-
   // Override the default role 'listitem' to 'option' to match the parent's
   // role (listbox).
   li.setAttribute('role', 'option');
+};
+
+/**
+ * Sets the margin height for the transparent preview panel at the bottom.
+ * @param {number} margin Margin to be set in px.
+ */
+FileGrid.prototype.setBottomMarginForPanel = function(margin) {
+  this.style.paddingBottom = margin + 'px';
+  this.scrollBar_.setBottomMarginForPanel(margin);
 };

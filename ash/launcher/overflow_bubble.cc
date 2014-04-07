@@ -10,6 +10,7 @@
 #include "ash/launcher/launcher_view.h"
 #include "ash/root_window_controller.h"
 #include "ash/shelf/shelf_layout_manager.h"
+#include "ash/shelf/shelf_widget.h"
 #include "ash/shell.h"
 #include "ash/system/tray/system_tray.h"
 #include "ui/aura/root_window.h"
@@ -54,7 +55,7 @@ class OverflowBubbleView : public views::BubbleDelegateView {
   }
 
   // Gets arrow location based on shelf alignment.
-  views::BubbleBorder::ArrowLocation GetBubbleArrowLocation() const {
+  views::BubbleBorder::Arrow GetBubbleArrow() const {
     return GetShelfLayoutManagerForLauncher()->SelectValueForShelfAlignment(
         views::BubbleBorder::BOTTOM_LEFT,
         views::BubbleBorder::LEFT_TOP,
@@ -100,7 +101,7 @@ void OverflowBubbleView::InitOverflowBubble(views::View* anchor,
   // set_anchor_view needs to be called before GetShelfLayoutManagerForLauncher
   // can be called.
   set_anchor_view(anchor);
-  set_arrow_location(GetBubbleArrowLocation());
+  set_arrow(GetBubbleArrow());
   set_background(NULL);
   set_color(SkColorSetARGB(kLauncherBackgroundAlpha, 0, 0, 0));
   set_margins(gfx::Insets(kPadding, kPadding, kPadding, kPadding));
@@ -172,10 +173,14 @@ void OverflowBubbleView::ChildPreferredSizeChanged(views::View* child) {
 }
 
 bool OverflowBubbleView::OnMouseWheel(const ui::MouseWheelEvent& event) {
+  // The MouseWheelEvent was changed to support both X and Y offsets
+  // recently, but the behavior of this function was retained to continue
+  // using Y offsets only. Might be good to simply scroll in both
+  // directions as in OverflowBubbleView::OnScrollEvent.
   if (IsHorizontalAlignment())
-    ScrollByXOffset(-event.offset());
+    ScrollByXOffset(-event.y_offset());
   else
-    ScrollByYOffset(-event.offset());
+    ScrollByYOffset(-event.y_offset());
   Layout();
 
   return true;
@@ -193,10 +198,10 @@ gfx::Rect OverflowBubbleView::GetBubbleBounds() {
   gfx::Insets bubble_insets = border->GetInsets();
 
   const int border_size =
-      views::BubbleBorder::is_arrow_on_horizontal(arrow_location()) ?
+      views::BubbleBorder::is_arrow_on_horizontal(arrow()) ?
       bubble_insets.left() : bubble_insets.top();
   const int arrow_offset = border_size + kPadding + kLauncherViewLeadingInset +
-      kLauncherPreferredSize / 2;
+      ShelfLayoutManager::GetPreferredShelfSize() / 2;
 
   const gfx::Size content_size = GetPreferredSize();
   border->set_arrow_offset(arrow_offset);
@@ -211,7 +216,7 @@ gfx::Rect OverflowBubbleView::GetBubbleBounds() {
       anchor_rect.CenterPoint()).work_area();
 
   int offset = 0;
-  if (views::BubbleBorder::is_arrow_on_horizontal(arrow_location())) {
+  if (views::BubbleBorder::is_arrow_on_horizontal(arrow())) {
     if (bubble_rect.x() < monitor_rect.x())
       offset = monitor_rect.x() - bubble_rect.x();
     else if (bubble_rect.right() > monitor_rect.right())
@@ -272,6 +277,8 @@ void OverflowBubble::OnWidgetDestroying(views::Widget* widget) {
   DCHECK(widget == bubble_->GetWidget());
   bubble_ = NULL;
   launcher_view_ = NULL;
+  ShelfLayoutManager::ForLauncher(
+      widget->GetNativeView())->shelf_widget()->launcher()->SchedulePaint();
 }
 
 }  // namespace internal

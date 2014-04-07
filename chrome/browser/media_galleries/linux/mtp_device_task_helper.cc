@@ -8,11 +8,12 @@
 #include "chrome/browser/media_galleries/linux/mtp_device_object_enumerator.h"
 #include "chrome/browser/media_galleries/linux/mtp_read_file_worker.h"
 #include "chrome/browser/media_galleries/linux/snapshot_file_details.h"
+#include "chrome/browser/storage_monitor/storage_monitor.h"
 #include "content/public/browser/browser_thread.h"
 #include "device/media_transfer_protocol/media_transfer_protocol_manager.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
-#include "webkit/fileapi/async_file_util.h"
-#include "webkit/fileapi/file_system_util.h"
+#include "webkit/browser/fileapi/async_file_util.h"
+#include "webkit/common/fileapi/file_system_util.h"
 
 namespace chrome {
 
@@ -25,16 +26,13 @@ void DoNothing(bool error) {
 }
 
 device::MediaTransferProtocolManager* GetMediaTransferProtocolManager() {
-  device::MediaTransferProtocolManager* mtp_device_mgr =
-      device::MediaTransferProtocolManager::GetInstance();
-  DCHECK(mtp_device_mgr);
-  return mtp_device_mgr;
+  return StorageMonitor::GetInstance()->media_transfer_protocol_manager();
 }
 
 }  // namespace
 
 MTPDeviceTaskHelper::MTPDeviceTaskHelper()
-    : ALLOW_THIS_IN_INITIALIZER_LIST(weak_ptr_factory_(this)) {
+    : weak_ptr_factory_(this) {
   DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
 }
 
@@ -164,7 +162,7 @@ void MTPDeviceTaskHelper::OnDidReadDirectoryByPath(
   base::FilePath current;
   MTPDeviceObjectEnumerator file_enum(file_entries);
   while (!(current = file_enum.Next()).empty()) {
-    fileapi::AsyncFileUtil::Entry entry;
+    fileapi::DirectoryEntry entry;
     entry.name = fileapi::VirtualPath::BaseName(current).value();
     entry.is_directory = file_enum.IsDirectory();
     entry.size = file_enum.Size();

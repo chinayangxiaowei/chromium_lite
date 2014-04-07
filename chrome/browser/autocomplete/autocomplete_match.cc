@@ -6,12 +6,11 @@
 
 #include "base/i18n/time_formatting.h"
 #include "base/logging.h"
-#include "base/string16.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
+#include "base/strings/string16.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/time.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "chrome/browser/autocomplete/autocomplete_provider.h"
 #include "chrome/browser/search_engines/template_url.h"
 #include "chrome/browser/search_engines/template_url_service.h"
@@ -44,10 +43,10 @@ AutocompleteMatch::AutocompleteMatch()
       relevance(0),
       typed_count(-1),
       deletable(false),
-      inline_autocomplete_offset(string16::npos),
+      allowed_to_be_default_match(false),
       transition(content::PAGE_TRANSITION_GENERATED),
       is_history_what_you_typed_match(false),
-      type(SEARCH_WHAT_YOU_TYPED),
+      type(AutocompleteMatchType::SEARCH_WHAT_YOU_TYPED),
       starred(false),
       from_previous(false) {
 }
@@ -60,7 +59,7 @@ AutocompleteMatch::AutocompleteMatch(AutocompleteProvider* provider,
       relevance(relevance),
       typed_count(-1),
       deletable(deletable),
-      inline_autocomplete_offset(string16::npos),
+      allowed_to_be_default_match(false),
       transition(content::PAGE_TRANSITION_TYPED),
       is_history_what_you_typed_match(false),
       type(type),
@@ -74,7 +73,8 @@ AutocompleteMatch::AutocompleteMatch(const AutocompleteMatch& match)
       typed_count(match.typed_count),
       deletable(match.deletable),
       fill_into_edit(match.fill_into_edit),
-      inline_autocomplete_offset(match.inline_autocomplete_offset),
+      inline_autocompletion(match.inline_autocompletion),
+      allowed_to_be_default_match(match.allowed_to_be_default_match),
       destination_url(match.destination_url),
       stripped_destination_url(match.stripped_destination_url),
       contents(match.contents),
@@ -108,7 +108,8 @@ AutocompleteMatch& AutocompleteMatch::operator=(
   typed_count = match.typed_count;
   deletable = match.deletable;
   fill_into_edit = match.fill_into_edit;
-  inline_autocomplete_offset = match.inline_autocomplete_offset;
+  inline_autocompletion = match.inline_autocompletion;
+  allowed_to_be_default_match = match.allowed_to_be_default_match;
   destination_url = match.destination_url;
   stripped_destination_url = match.stripped_destination_url;
   contents = match.contents;
@@ -130,28 +131,6 @@ AutocompleteMatch& AutocompleteMatch::operator=(
 }
 
 // static
-std::string AutocompleteMatch::TypeToString(Type type) {
-  const char* strings[] = {
-    "url-what-you-typed",
-    "history-url",
-    "history-title",
-    "history-body",
-    "history-keyword",
-    "navsuggest",
-    "search-what-you-typed",
-    "search-history",
-    "search-suggest",
-    "search-other-engine",
-    "extension-app",
-    "contact",
-    "bookmark-title",
-  };
-  COMPILE_ASSERT(arraysize(strings) == NUM_TYPES,
-                 strings_array_must_match_type_enum);
-  return strings[type];
-}
-
-// static
 int AutocompleteMatch::TypeToIcon(Type type) {
   int icons[] = {
     IDR_OMNIBOX_HTTP,
@@ -170,7 +149,7 @@ int AutocompleteMatch::TypeToIcon(Type type) {
     IDR_OMNIBOX_SEARCH,
     IDR_OMNIBOX_HTTP,
   };
-  COMPILE_ASSERT(arraysize(icons) == NUM_TYPES,
+  COMPILE_ASSERT(arraysize(icons) == AutocompleteMatchType::NUM_TYPES,
                  icons_array_must_match_type_enum);
   return icons[type];
 }
@@ -352,10 +331,10 @@ string16 AutocompleteMatch::SanitizeString(const string16& text) {
 
 // static
 bool AutocompleteMatch::IsSearchType(Type type) {
-  return type == SEARCH_WHAT_YOU_TYPED ||
-         type == SEARCH_HISTORY ||
-         type == SEARCH_SUGGEST ||
-         type == SEARCH_OTHER_ENGINE;
+  return type == AutocompleteMatchType::SEARCH_WHAT_YOU_TYPED ||
+         type == AutocompleteMatchType::SEARCH_HISTORY ||
+         type == AutocompleteMatchType::SEARCH_SUGGEST ||
+         type == AutocompleteMatchType::SEARCH_OTHER_ENGINE;
 }
 
 void AutocompleteMatch::ComputeStrippedDestinationURL(Profile* profile) {
@@ -443,20 +422,36 @@ TemplateURL* AutocompleteMatch::GetTemplateURL(
 
 void AutocompleteMatch::RecordAdditionalInfo(const std::string& property,
                                              const std::string& value) {
-  DCHECK(property.size());
-  DCHECK(value.size());
+  DCHECK(!property.empty());
+  DCHECK(!value.empty());
   additional_info[property] = value;
 }
 
 void AutocompleteMatch::RecordAdditionalInfo(const std::string& property,
                                              int value) {
-  RecordAdditionalInfo(property, base::StringPrintf("%d", value));
+  RecordAdditionalInfo(property, base::IntToString(value));
 }
 
 void AutocompleteMatch::RecordAdditionalInfo(const std::string& property,
                                              const base::Time& value) {
   RecordAdditionalInfo(property,
                        UTF16ToUTF8(base::TimeFormatShortDateAndTime(value)));
+}
+
+std::string AutocompleteMatch::GetAdditionalInfo(
+    const std::string& property) const {
+  AdditionalInfo::const_iterator i(additional_info.find(property));
+  return (i == additional_info.end()) ? std::string() : i->second;
+}
+
+bool AutocompleteMatch::IsVerbatimType() const {
+  const bool is_keyword_verbatim_match =
+      (type == AutocompleteMatchType::SEARCH_OTHER_ENGINE &&
+       provider != NULL &&
+       provider->type() == AutocompleteProvider::TYPE_SEARCH);
+  return type == AutocompleteMatchType::SEARCH_WHAT_YOU_TYPED ||
+      type == AutocompleteMatchType::URL_WHAT_YOU_TYPED ||
+      is_keyword_verbatim_match;
 }
 
 #ifndef NDEBUG

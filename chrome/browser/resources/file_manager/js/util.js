@@ -13,8 +13,9 @@ var util = {};
  * Returns a function that console.log's its arguments, prefixed by |msg|.
  *
  * @param {string} msg The message prefix to use in the log.
- * @param {function=} opt_callback A function to invoke after logging.
- * @return {function} Function that logs.
+ * @param {function(...string)=} opt_callback A function to invoke after
+ *     logging.
+ * @return {function(...string)} Function that logs.
  */
 util.flog = function(msg, opt_callback) {
   return function() {
@@ -30,7 +31,7 @@ util.flog = function(msg, opt_callback) {
  * prefixed by |msg|.
  *
  * @param {string} msg The message prefix to use in the exception.
- * @return {function} Function that throws.
+ * @return {function(...string)} Function that throws.
  */
 util.ferr = function(msg) {
   return function() {
@@ -129,73 +130,66 @@ util.recurseAndResolveEntries = function(entries, recurse, successCallback) {
   var fileEntries = [];
   var fileBytes = 0;
 
-  var pathCompare = function(a, b) {
-    if (a.fullPath > b.fullPath)
-      return 1;
+  var steps = {
+    // Start operations.
+    start: function() {
+      for (var i = 0; i < entries.length; i++) {
+        var parentPath = PathUtil.getParentDirectory(entries[i].fullPath);
+        steps.tallyEntry(entries[i], parentPath);
+      }
+      steps.areWeThereYet();
+    },
 
-    if (a.fullPath < b.fullPath)
-      return -1;
+    // Process one entry.
+    tallyEntry: function(entry, originalSourcePath) {
+      entry.originalSourcePath = originalSourcePath;
+      if (entry.isDirectory) {
+        dirEntries.push(entry);
+        if (!recurse)
+          return;
+        pendingSubdirectories++;
+        util.forEachDirEntry(entry, function(inEntry) {
+          if (inEntry == null) {
+            // Null entry indicates we're done scanning this directory.
+            pendingSubdirectories--;
+            steps.areWeThereYet();
+            return;
+          }
+          steps.tallyEntry(inEntry, originalSourcePath);
+        });
+      } else {
+        fileEntries.push(entry);
+        pendingFiles++;
+        entry.getMetadata(function(metadata) {
+          fileBytes += metadata.size;
+          pendingFiles--;
+          steps.areWeThereYet();
+        });
+      }
+    },
 
-    return 0;
-  };
-
-  var parentPath = function(path) {
-    return path.substring(0, path.lastIndexOf('/'));
-  };
-
-  // We invoke this after each async callback to see if we've received all
-  // the expected callbacks.  If so, we're done.
-  var areWeThereYet = function() {
-    if (pendingSubdirectories == 0 && pendingFiles == 0) {
+    // We invoke this after each async callback to see if we've received all
+    // the expected callbacks.  If so, we're done.
+    areWeThereYet: function() {
+      if (!successCallback || pendingSubdirectories != 0 || pendingFiles != 0)
+        return;
+      var pathCompare = function(a, b) {
+        if (a.fullPath > b.fullPath)
+          return 1;
+        if (a.fullPath < b.fullPath)
+          return -1;
+        return 0;
+      };
       var result = {
         dirEntries: dirEntries.sort(pathCompare),
         fileEntries: fileEntries.sort(pathCompare),
         fileBytes: fileBytes
       };
-
-      if (successCallback) {
-        successCallback(result);
-      }
+      successCallback(result);
     }
   };
 
-  var tallyEntry = function(entry, originalSourcePath) {
-    entry.originalSourcePath = originalSourcePath;
-    if (entry.isDirectory) {
-      dirEntries.push(entry);
-      if (recurse) {
-        recurseDirectory(entry, originalSourcePath);
-      }
-    } else {
-      fileEntries.push(entry);
-      pendingFiles++;
-      entry.getMetadata(function(metadata) {
-        fileBytes += metadata.size;
-        pendingFiles--;
-        areWeThereYet();
-      });
-    }
-  };
-
-  var recurseDirectory = function(dirEntry, originalSourcePath) {
-    pendingSubdirectories++;
-
-    util.forEachDirEntry(dirEntry, function(entry) {
-        if (entry == null) {
-          // Null entry indicates we're done scanning this directory.
-          pendingSubdirectories--;
-          areWeThereYet();
-        } else {
-          tallyEntry(entry, originalSourcePath);
-        }
-    });
-  };
-
-  for (var i = 0; i < entries.length; i++) {
-    tallyEntry(entries[i], parentPath(entries[i].fullPath));
-  }
-
-  areWeThereYet();
+  steps.start();
 };
 
 /**
@@ -393,8 +387,8 @@ util.resolvePath = function(root, path, resultCallback, errorCallback) {
  * itself if necessary.
  * @param {DirEntry} root The root entry.
  * @param {string} path The file path.
- * @param {function} successCallback The callback.
- * @param {function} errorCallback The callback.
+ * @param {function(FileEntry)} successCallback The callback.
+ * @param {function(FileError)} errorCallback The callback.
  */
 util.getOrCreateFile = function(root, path, successCallback, errorCallback) {
   var dirname = null;
@@ -426,8 +420,8 @@ util.getOrCreateFile = function(root, path, successCallback, errorCallback) {
  * way.
  * @param {DirEntry} root The root entry.
  * @param {string} path The directory path.
- * @param {function} successCallback The callback.
- * @param {function} errorCallback The callback.
+ * @param {function(FileEntry)} successCallback The callback.
+ * @param {function(FileError)} errorCallback The callback.
  */
 util.getOrCreateDirectory = function(root, path, successCallback,
                                      errorCallback) {
@@ -452,14 +446,76 @@ util.getOrCreateDirectory = function(root, path, successCallback,
 /**
  * Remove a file or a directory.
  * @param {Entry} entry The entry to remove.
- * @param {function} onSuccess The success callback.
- * @param {function} onError The error callback.
+ * @param {function()} onSuccess The success callback.
+ * @param {function(FileError)} onError The error callback.
  */
 util.removeFileOrDirectory = function(entry, onSuccess, onError) {
   if (entry.isDirectory)
     entry.removeRecursively(onSuccess, onError);
   else
     entry.remove(onSuccess, onError);
+};
+
+/**
+ * Checks if an entry exists at |relativePath| in |dirEntry|.
+ * If exists, tries to deduplicate the path by inserting parenthesized number,
+ * such as " (1)", before the extension. If it still exists, tries the
+ * deduplication again by increasing the number up to 10 times.
+ * For example, suppose "file.txt" is given, "file.txt", "file (1).txt",
+ * "file (2).txt", ..., "file (9).txt" will be tried.
+ *
+ * @param {DirectoryEntry} dirEntry The target directory entry.
+ * @param {string} relativePath The path to be deduplicated.
+ * @param {function(string)} onSuccess Called with the deduplicated path on
+ *     success.
+ * @param {function(FileError)} onError Called on error.
+ */
+util.deduplicatePath = function(dirEntry, relativePath, onSuccess, onError) {
+  // The trial is up to 10.
+  var MAX_RETRY = 10;
+
+  // Crack the path into three part. The parenthesized number (if exists) will
+  // be replaced by incremented number for retry. For example, suppose
+  // |relativePath| is "file (10).txt", the second check path will be
+  // "file (11).txt".
+  var match = /^(.*?)(?: \((\d+)\))?(\.[^.]*?)?$/.exec(relativePath);
+  var prefix = match[1];
+  var copyNumber = match[2] ? parseInt(match[2], 10) : 0;
+  var ext = match[3] ? match[3] : '';
+
+  // The path currently checking the existence.
+  var trialPath = relativePath;
+
+  var onNotResolved = function(err) {
+    // We expect to be unable to resolve the target file, since we're going
+    // to create it during the copy.  However, if the resolve fails with
+    // anything other than NOT_FOUND, that's trouble.
+    if (err.code != FileError.NOT_FOUND_ERR) {
+      onError(err);
+      return;
+    }
+
+    // Found a path that doesn't exist.
+    onSuccess(trialPath);
+  }
+
+  var numRetry = MAX_RETRY;
+  var onResolved = function(entry) {
+    if (--numRetry == 0) {
+      // Hit the limit of the number of retrial.
+      // Note that we cannot create FileError object directly, so here we use
+      // Object.create instead.
+      onError(util.createFileError(FileError.PATH_EXISTS_ERR));
+      return;
+    }
+
+    ++copyNumber;
+    trialPath = prefix + ' (' + copyNumber + ')' + ext;
+    util.resolvePath(dirEntry, trialPath, onResolved, onNotResolved);
+  };
+
+  // Check to see if the target exists.
+  util.resolvePath(dirEntry, trialPath, onResolved, onNotResolved);
 };
 
 /**
@@ -537,20 +593,13 @@ util.readFileBytes = function(file, begin, end, callback, onError) {
   fileReader.readAsArrayBuffer(file.slice(begin, end));
 };
 
-if (!Blob.prototype.slice) {
-  /**
-   * This code might run in the test harness on older versions of Chrome where
-   * Blob.slice is still called Blob.webkitSlice.
-   */
-  Blob.prototype.slice = Blob.prototype.webkitSlice;
-}
-
 /**
  * Write a blob to a file.
  * Truncates the file first, so the previous content is fully overwritten.
  * @param {FileEntry} entry File entry.
  * @param {Blob} blob The blob to write.
- * @param {function} onSuccess Completion callback.
+ * @param {function(Event)} onSuccess Completion callback. The first argument is
+ *     a 'writeend' event.
  * @param {function(FileError)} onError Error handler.
  */
 util.writeBlobToFile = function(entry, blob, onSuccess, onError) {
@@ -603,10 +652,6 @@ util.applyTransform = function(element, transform) {
 util.makeFilesystemUrl = function(path) {
   path = path.split('/').map(encodeURIComponent).join('/');
   var prefix = 'external';
-  if (chrome.fileBrowserPrivate.mocked) {
-    prefix = (chrome.fileBrowserPrivate.FS_TYPE == window.TEMPORARY) ?
-        'temporary' : 'persistent';
-  }
   return 'filesystem:' + document.location.origin + '/' + prefix + path;
 };
 
@@ -722,53 +767,22 @@ util.createChild = function(parent, opt_className, opt_tag) {
 
 /**
  * Update the app state.
- * For app v1 use the top window location search query and hash.
- * For app v2 use the top window appState variable.
  *
- * @param {boolean} replace True if the history state should be replaced,
- *                          false if pushed.
  * @param {string} path Path to be put in the address bar after the hash.
  *   If null the hash is left unchanged.
  * @param {string|Object=} opt_param Search parameter. Used directly if string,
  *   stringified if object. If omitted the search query is left unchanged.
  */
-util.updateAppState = function(replace, path, opt_param) {
-  if (window.appState) {
-    // |replace| parameter is ignored. There is no stack, so saving/restoring
-    // the state is the apps responsibility.
-    if (typeof opt_param == 'string')
-      window.appState.params = {};
-    else if (typeof opt_param == 'object')
-      window.appState.params = opt_param;
-    if (path)
-      window.appState.defaultPath = path;
-    util.saveAppState();
-    return;
-  }
-
-  var location = document.location;
-
-  var search;
+util.updateAppState = function(path, opt_param) {
+  window.appState = window.appState || {};
   if (typeof opt_param == 'string')
-    search = opt_param;
+    window.appState.params = {};
   else if (typeof opt_param == 'object')
-    search = '?' + JSON.stringify(opt_param);
-  else
-    search = location.search;
-
-  var hash;
+    window.appState.params = opt_param;
   if (path)
-    hash = '#' + encodeURIComponent(path);
-  else
-    hash = location.hash;
-
-  var newLocation = location.origin + location.pathname + search + hash;
-  //TODO(kaznacheev): Fix replaceState for component extensions. Currently it
-  //does not replace the content of the address bar.
-  if (replace)
-    window.history.replaceState(undefined, path, newLocation);
-  else
-    window.history.pushState(undefined, path, newLocation);
+    window.appState.defaultPath = path;
+  util.saveAppState();
+  return;
 };
 
 /**
@@ -801,28 +815,22 @@ function strf(id, var_args) {
 /**
  * Adapter object that abstracts away the the difference between Chrome app APIs
  * v1 and v2. Is only necessary while the migration to v2 APIs is in progress.
+ * TODO(mtomasz): Clean up this. crbug.com/240606.
  */
 util.platform = {
   /**
-   * @return {boolean} True for v2.
+   * @return {boolean} True if Files.app is running via "chrome://files", open
+   * files or select folder dialog. False otherwise.
    */
-  v2: function() {
-    try {
-      return !!(chrome.app && chrome.app.runtime);
-    } catch (e) {
-      return false;
-    }
+  runningInBrowser: function() {
+    return !window.appID;
   },
 
   /**
    * @param {function(Object)} callback Function accepting a preference map.
    */
   getPreferences: function(callback) {
-    try {
-      callback(window.localStorage);
-    } catch (ignore) {
-      chrome.storage.local.get(callback);
-    }
+    chrome.storage.local.get(callback);
   },
 
   /**
@@ -830,234 +838,43 @@ util.platform = {
    * @param {function(string)} callback Function accepting the preference value.
    */
   getPreference: function(key, callback) {
-    try {
-      callback(window.localStorage[key]);
-    } catch (ignore) {
-      chrome.storage.local.get(key, function(items) {
-        callback(items[key]);
-      });
-    }
+    chrome.storage.local.get(key, function(items) {
+      callback(items[key]);
+    });
   },
 
   /**
    * @param {string} key Preference name.
    * @param {string|Object} value Preference value.
-   * @param {function=} opt_callback Completion callback.
+   * @param {function()=} opt_callback Completion callback.
    */
   setPreference: function(key, value, opt_callback) {
     if (typeof value != 'string')
       value = JSON.stringify(value);
 
-    try {
-      window.localStorage[key] = value;
-      if (opt_callback) opt_callback();
-    } catch (ignore) {
-      var items = {};
-      items[key] = value;
-      chrome.storage.local.set(items, opt_callback);
-    }
-  },
-
-  /**
-   * @param {function(Object)} callback Function accepting a status object.
-   */
-  getWindowStatus: function(callback) {
-    try {
-      chrome.windows.getCurrent(callback);
-    } catch (ignore) {
-      // TODO: fill the status object once the API is available.
-      callback({});
-    }
-  },
-
-  /**
-   * Close current window.
-   */
-  closeWindow: function() {
-    if (util.platform.v2()) {
-      window.close();
-    } else {
-      chrome.tabs.getCurrent(function(tab) {
-        chrome.tabs.remove(tab.id);
-      });
-    }
-  },
-
-  /**
-   * @return {string} Applicaton id.
-   */
-  getAppId: function() {
-    if (util.platform.v2()) {
-      return chrome.runtime.id;
-    } else {
-      return chrome.extension.getURL('').split('/')[2];
-    }
-  },
-
-  /**
-   * @param {string} path Path relative to the extension root.
-   * @return {string} Extension-based URL.
-   */
-  getURL: function(path) {
-    if (util.platform.v2()) {
-      return chrome.runtime.getURL(path);
-    } else {
-      return chrome.extension.getURL(path);
-    }
-  },
-
-  /**
-   * Suppress default context menu in a current window.
-   */
-  suppressContextMenu: function() {
-    // For packed v2 apps the default context menu would not show until
-    // --debug-packed-apps is added to the command line.
-    // For unpacked v2 apps (used for debugging) it is ok to show the menu.
-    if (util.platform.v2())
-      return;
-
-    // For the old style app we show the menu only in the test harness mode.
-    if (!util.TEST_HARNESS)
-      document.addEventListener('contextmenu',
-          function(e) { e.preventDefault() });
-  },
-
-  /**
-   * Creates a new window.
-   * @param {string} url Window url.
-   * @param {Object} options Window options.
-   */
-  createWindow: function(url, options) {
-    if (util.platform.v2()) {
-      chrome.app.window.create(url, options);
-    } else {
-      var params = {};
-      for (var key in options) {
-        if (options.hasOwnProperty(key)) {
-          params[key] = options[key];
-        }
-      }
-      params.url = url;
-      params.type = 'popup';
-      chrome.windows.create(params);
-    }
+    var items = {};
+    items[key] = value;
+    chrome.storage.local.set(items, opt_callback);
   }
 };
-
-/**
- * Load Javascript resources dynamically.
- * @param {Array.<string>} urls Array of script urls.
- * @param {function} onload Completion callback.
- */
-util.loadScripts = function(urls, onload) {
-  var countdown = urls.length;
-  if (!countdown) {
-    onload();
-    return;
-  }
-  var done = function() {
-    if (--countdown == 0)
-      onload();
-  };
-  while (urls.length) {
-    var script = document.createElement('script');
-    script.src = urls.shift();
-    document.head.appendChild(script);
-    script.onload = done;
-    script.onerror = done;
-  }
-};
-
-// TODO(serya): remove it when have migrated to AppsV2.
-util.__defineGetter__('storage', function() {
-  delete util.storage;
-  if (chrome.storage) {
-    util.storage = chrome.storage;
-    return util.storage;
-  }
-
-  var listeners = [];
-
-  function StorageArea(type) {
-    this.type_ = type;
-  }
-
-  StorageArea.prototype.set = function(items, opt_callback) {
-    var changes = {};
-    for (var i in items) {
-      changes[i] = {oldValue: window.localStorage[i], newValue: items[i]};
-      window.localStorage[i] = items[i];
-    }
-    if (opt_callback)
-      opt_callback();
-    for (var i = 0; i < listeners.length; i++) {
-      listeners[i](changes, this.type_);
-    }
-  };
-
-  StorageArea.prototype.get = function(keys, callback) {
-    if (!callback) {
-      // Since key is optionsl it's the callback.
-      keys(window.localStorage);
-      return;
-    }
-    if (typeof(keys) == 'string')
-      keys = [keys];
-    var result = {};
-    for (var i = 0; i < keys.length; i++) {
-      var key = keys[i];
-      result[key] = window.localStorage[key];
-    }
-    callback(result);
-  };
-
-  /**
-   * Simulation of the AppsV2 storage interface.
-   * @type {Object}
-   */
-  util.storage = {
-    local: new StorageArea('local'),
-    sync: new StorageArea('sync'),
-    onChanged: {
-      addListener: function(l) {
-        listeners.push(l);
-      },
-      removeListener: function(l) {
-        for (var i = 0; i < listeners.length; i++) {
-          listeners.splice(i, 1);
-        }
-      }
-    }
-  };
-  return util.storage;
-});
 
 /**
  * Attach page load handler.
- * Loads mock chrome.* APIs is the real ones are not present.
- * @param {function} handler Application-specific load handler.
+ * @param {function()} handler Application-specific load handler.
  */
 util.addPageLoadHandler = function(handler) {
   document.addEventListener('DOMContentLoaded', function() {
-    if (chrome.fileBrowserPrivate) {
-      handler();
-    } else {
-      util.TEST_HARNESS = true;
-      util.loadScripts(['js/mock_chrome.js', 'js/file_copy_manager.js'],
-          handler);
-    }
-    util.platform.suppressContextMenu();
+    handler();
   });
 };
 
 /**
- * Save app v2 launch data to the local storage.
+ * Save app launch data to the local storage.
  */
 util.saveAppState = function() {
   if (window.appState)
     util.platform.setPreference(window.appID, window.appState);
 };
-
 
 /**
  *  AppCache is a persistent timestamped key-value storage backed by
@@ -1191,12 +1008,12 @@ util.AppCache.cleanup_ = function(map) {
  *     cache.
  */
 util.loadImage = function(image, url, opt_options, opt_isValid) {
-  return ImageLoader.Client.loadToImage(url,
-                                        image,
-                                        opt_options || {},
-                                        function() { },
-                                        function() { image.onerror(); },
-                                        opt_isValid);
+  return ImageLoaderClient.loadToImage(url,
+                                      image,
+                                      opt_options || {},
+                                      function() {},
+                                      function() { image.onerror(); },
+                                      opt_isValid);
 };
 
 /**
@@ -1204,7 +1021,7 @@ util.loadImage = function(image, url, opt_options, opt_isValid) {
  * @param {number} taskId Task identifier returned by util.loadImage().
  */
 util.cancelLoadImage = function(taskId) {
-  ImageLoader.Client.getInstance().cancel(taskId);
+  ImageLoaderClient.getInstance().cancel(taskId);
 };
 
 /**
@@ -1251,18 +1068,25 @@ util.boardIs = function(boardPrefix) {
 };
 
 /**
- * Disabled browser shortcus key events on the given document.
- * @param {Element} element Element to be disabled browser shortcut keys on.
+ * Adds an isFocused method to the current window object.
  */
-util.disableBrowserShortcutKeys = function(element) {
-  element.addEventListener('keydown', function(e) {
-    switch (util.getKeyModifiers(e) + e.keyCode) {
-      case 'Ctrl-79':  // Disable native Ctrl-O (open file).
-      case 'Ctrl-83':  // Disable native Ctrl-S (save as).
-      case 'Ctrl-85':  // Disable native Ctrl-U (view source).
-        e.preventDefault();
-    }
+util.addIsFocusedMethod = function() {
+  var focused = true;
+
+  window.addEventListener('focus', function() {
+    focused = true;
   });
+
+  window.addEventListener('blur', function() {
+    focused = false;
+  });
+
+  /**
+   * @return {boolean} True if focused.
+   */
+  window.isFocused = function() {
+    return focused;
+  };
 };
 
 /**
@@ -1272,10 +1096,106 @@ util.disableBrowserShortcutKeys = function(element) {
  * @return {boolean} True if the window has been found. False otherwise.
  */
 util.redirectMainWindow = function(id, url) {
-  var windowViews = chrome.extension.getViews({ windowId: parseInt(id) });
-  if (!windowViews || windowViews.length === 0)
-    return false;
+  // TODO(mtomasz): Implement this for Apps V2, once the photo importer is
+  // restored.
+  return false;
+};
 
-  windowViews[0].location.href = url;
-  return true;
+/**
+ * Checks, if the Files.app's window is in a full screen mode.
+ *
+ * @param {AppWindow} appWindow App window to be maximized.
+ * @return {boolean} True if the full screen mode is enabled.
+ */
+util.isFullScreen = function(appWindow) {
+  if (appWindow) {
+    return appWindow.isFullscreen();
+  } else {
+    console.error('App window not passed. Unable to check status of ' +
+                  'the full screen mode.');
+    return false;
+  }
+};
+
+/**
+ * Toggles the full screen mode.
+ *
+ * @param {AppWindow} appWindow App window to be maximized.
+ * @param {boolean} enabled True for enabling, false for disabling.
+ */
+util.toggleFullScreen = function(appWindow, enabled) {
+  if (appWindow) {
+    if (enabled)
+      appWindow.fullscreen();
+    else
+      appWindow.restore();
+    return;
+  }
+
+  console.error(
+      'App window not passed. Unable to toggle the full screen mode.');
+};
+
+/**
+ * The type of a file operation error.
+ * @enum {number}
+ */
+util.FileOperationErrorType = {
+  UNEXPECTED_SOURCE_FILE: 0,
+  TARGET_EXISTS: 1,
+  FILESYSTEM_ERROR: 2,
+};
+
+/**
+ * The type of an entry changed event.
+ * @enum {number}
+ */
+util.EntryChangedType = {
+  CREATED: 0,
+  DELETED: 1,
+};
+
+/**
+ * @param {DirectoryEntry|Object} entry DirectoryEntry to be checked.
+ * @return {boolean} True if the given entry is fake.
+ */
+util.isFakeDirectoryEntry = function(entry) {
+  // Currently, fake entry doesn't support createReader.
+  return !('createReader' in entry);
+};
+
+/**
+ * Creates a FileError instance with given code.
+ * Note that we cannot create FileError instance by "new FileError(code)",
+ * unfortunately, so here we use Object.create.
+ * @param {number} code Error code for the FileError.
+ * @return {FileError} FileError instance
+ */
+util.createFileError = function(code) {
+  return Object.create(FileError.prototype, {
+    code: { get: function() { return code; } }
+  });
+};
+
+/**
+ * @param {Entry|Object} entry1 The entry to be compared. Can be a fake.
+ * @param {Entry|Object} entry2 The entry to be compared. Can be a fake.
+ * @return {boolean} True if the both entry represents a same file or directory.
+ */
+util.isSameEntry = function(entry1, entry2) {
+  // Currently, we can assume there is only one root.
+  // When we support multi-file system, we need to look at filesystem, too.
+  return entry1.fullPath == entry2.fullPath;
+};
+
+/**
+ * @param {Entry|Object} parent The parent entry. Can be a fake.
+ * @param {Entry|Object} child The child entry. Can be a fake.
+ * @return {boolean} True if parent entry is actualy the parent of the child
+ *     entry.
+ */
+util.isParentEntry = function(parent, child) {
+  // Currently, we can assume there is only one root.
+  // When we support multi-file system, we need to look at filesystem, too.
+  return PathUtil.isParentPath(parent.fullPath, child.fullPath);
 };

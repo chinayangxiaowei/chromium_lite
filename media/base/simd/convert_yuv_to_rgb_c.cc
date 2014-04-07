@@ -5,9 +5,27 @@
 #include "media/base/simd/convert_yuv_to_rgb.h"
 #include "media/base/simd/yuv_to_rgb_table.h"
 
+namespace media {
+
 #define packuswb(x) ((x) < 0 ? 0 : ((x) > 255 ? 255 : (x)))
 #define paddsw(x, y) (((x) + (y)) < -32768 ? -32768 : \
     (((x) + (y)) > 32767 ? 32767 : ((x) + (y))))
+
+// On Android, pixel layout is RGBA (see skia/include/core/SkColorPriv.h);
+// however, other Chrome platforms use BGRA (see skia/config/SkUserConfig.h).
+// Ideally, android should not use the functions here due to performance issue
+// (http://crbug.com/249980).
+#if defined(OS_ANDROID)
+#define SK_R32_SHIFT    0
+#define SK_G32_SHIFT    8
+#define SK_B32_SHIFT    16
+#define SK_A32_SHIFT    24
+#else
+#define SK_B32_SHIFT    0
+#define SK_G32_SHIFT    8
+#define SK_R32_SHIFT    16
+#define SK_A32_SHIFT    24
+#endif
 
 static inline void ConvertYUVToRGB32_C(uint8 y,
                                        uint8 u,
@@ -33,13 +51,42 @@ static inline void ConvertYUVToRGB32_C(uint8 y,
   r >>= 6;
   a >>= 6;
 
-  *reinterpret_cast<uint32*>(rgb_buf) = (packuswb(b)) |
-                                        (packuswb(g) << 8) |
-                                        (packuswb(r) << 16) |
-                                        (packuswb(a) << 24);
+  *reinterpret_cast<uint32*>(rgb_buf) = (packuswb(b) << SK_B32_SHIFT) |
+                                        (packuswb(g) << SK_G32_SHIFT) |
+                                        (packuswb(r) << SK_R32_SHIFT) |
+                                        (packuswb(a) << SK_A32_SHIFT);
 }
 
-extern "C" {
+static inline void ConvertYUVAToARGB_C(uint8 y,
+                                       uint8 u,
+                                       uint8 v,
+                                       uint8 a,
+                                       uint8* rgb_buf) {
+  int b = kCoefficientsRgbY[256+u][0];
+  int g = kCoefficientsRgbY[256+u][1];
+  int r = kCoefficientsRgbY[256+u][2];
+
+  b = paddsw(b, kCoefficientsRgbY[512+v][0]);
+  g = paddsw(g, kCoefficientsRgbY[512+v][1]);
+  r = paddsw(r, kCoefficientsRgbY[512+v][2]);
+
+  b = paddsw(b, kCoefficientsRgbY[y][0]);
+  g = paddsw(g, kCoefficientsRgbY[y][1]);
+  r = paddsw(r, kCoefficientsRgbY[y][2]);
+
+  b >>= 6;
+  g >>= 6;
+  r >>= 6;
+
+  b = packuswb(b) * a >> 8;
+  g = packuswb(g) * a >> 8;
+  r = packuswb(r) * a >> 8;
+
+  *reinterpret_cast<uint32*>(rgb_buf) = (b << SK_B32_SHIFT) |
+                                        (g << SK_G32_SHIFT) |
+                                        (r << SK_R32_SHIFT) |
+                                        (a << SK_A32_SHIFT);
+}
 
 void ConvertYUVToRGB32Row_C(const uint8* y_buf,
                             const uint8* u_buf,
@@ -56,6 +103,27 @@ void ConvertYUVToRGB32Row_C(const uint8* y_buf,
       ConvertYUVToRGB32_C(y1, u, v, rgb_buf + 4);
     }
     rgb_buf += 8;  // Advance 2 pixels.
+  }
+}
+
+void ConvertYUVAToARGBRow_C(const uint8* y_buf,
+                            const uint8* u_buf,
+                            const uint8* v_buf,
+                            const uint8* a_buf,
+                            uint8* rgba_buf,
+                            ptrdiff_t width) {
+  for (int x = 0; x < width; x += 2) {
+    uint8 u = u_buf[x >> 1];
+    uint8 v = v_buf[x >> 1];
+    uint8 y0 = y_buf[x];
+    uint8 a0 = a_buf[x];
+    ConvertYUVAToARGB_C(y0, u, v, a0, rgba_buf);
+    if ((x + 1) < width) {
+      uint8 y1 = y_buf[x + 1];
+      uint8 a1 = a_buf[x + 1];
+      ConvertYUVAToARGB_C(y1, u, v, a1, rgba_buf + 4);
+    }
+    rgba_buf += 8;  // Advance 2 pixels.
   }
 }
 
@@ -132,10 +200,6 @@ void LinearScaleYUVToRGB32RowWithRange_C(const uint8* y_buf,
   }
 }
 
-}
-
-namespace media {
-
 void ConvertYUVToRGB32_C(const uint8* yplane,
                          const uint8* uplane,
                          const uint8* vplane,
@@ -157,6 +221,35 @@ void ConvertYUVToRGB32_C(const uint8* yplane,
                            u_ptr,
                            v_ptr,
                            rgb_row,
+                           width);
+  }
+}
+
+void ConvertYUVAToARGB_C(const uint8* yplane,
+                         const uint8* uplane,
+                         const uint8* vplane,
+                         const uint8* aplane,
+                         uint8* rgbaframe,
+                         int width,
+                         int height,
+                         int ystride,
+                         int uvstride,
+                         int astride,
+                         int rgbastride,
+                         YUVType yuv_type) {
+  unsigned int y_shift = yuv_type;
+  for (int y = 0; y < height; y++) {
+    uint8* rgba_row = rgbaframe + y * rgbastride;
+    const uint8* y_ptr = yplane + y * ystride;
+    const uint8* u_ptr = uplane + (y >> y_shift) * uvstride;
+    const uint8* v_ptr = vplane + (y >> y_shift) * uvstride;
+    const uint8* a_ptr = aplane + y * astride;
+
+    ConvertYUVAToARGBRow_C(y_ptr,
+                           u_ptr,
+                           v_ptr,
+                           a_ptr,
+                           rgba_row,
                            width);
   }
 }

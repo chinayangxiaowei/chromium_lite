@@ -9,8 +9,12 @@
 #include "ash/shelf/shelf_widget.h"
 #include "ash/shell.h"
 #include "ash/shell_delegate.h"
+#include "ash/touch/touch_uma.h"
 #include "ash/wm/maximize_bubble_controller.h"
 #include "ash/wm/property_util.h"
+#include "ash/wm/window_animations.h"
+#include "ash/wm/window_properties.h"
+#include "ash/wm/window_util.h"
 #include "ash/wm/workspace/phantom_window_controller.h"
 #include "ash/wm/workspace/snap_sizer.h"
 #include "grit/ash_strings.h"
@@ -89,6 +93,9 @@ FrameMaximizeButton::FrameMaximizeButton(views::ButtonListener* listener,
       bubble_appearance_delay_ms_(kBubbleAppearanceDelayMS) {
   // TODO(sky): nuke this. It's temporary while we don't have good images.
   SetImageAlignment(ALIGN_LEFT, ALIGN_BOTTOM);
+
+  if (ash::Shell::IsForcedMaximizeMode())
+    views::View::SetVisible(false);
 }
 
 FrameMaximizeButton::~FrameMaximizeButton() {
@@ -102,7 +109,7 @@ FrameMaximizeButton::~FrameMaximizeButton() {
 void FrameMaximizeButton::SnapButtonHovered(SnapType type) {
   // Make sure to only show hover operations when no button is pressed and
   // a similar snap operation in progress does not get re-applied.
-  if (is_snap_enabled_ || (type == snap_type_ && snap_sizer_.get()))
+  if (is_snap_enabled_ || (type == snap_type_ && snap_sizer_))
     return;
   // Prime the mouse location with the center of the (local) button.
   press_location_ = gfx::Point(width() / 2, height() / 2);
@@ -140,7 +147,11 @@ void FrameMaximizeButton::SnapButtonHovered(SnapType type) {
 }
 
 void FrameMaximizeButton::ExecuteSnapAndCloseMenu(SnapType snap_type) {
-  DCHECK_NE(snap_type_, SNAP_NONE);
+  // We can come here with no snap type set in case that the mouse opened the
+  // maximize button and a touch event "touched" a button.
+  if (snap_type_ == SNAP_NONE)
+    SnapButtonHovered(snap_type);
+
   Cancel(true);
   // Tell our menu to close.
   maximizer_.reset();
@@ -165,7 +176,11 @@ void FrameMaximizeButton::OnWindowBoundsChanged(
 void FrameMaximizeButton::OnWindowPropertyChanged(aura::Window* window,
                                                   const void* key,
                                                   intptr_t old) {
-  Cancel(false);
+  // Changing the window position is managed status should not Cancel.
+  // Note that this case might happen when a non user managed window
+  // transitions from maximized to L/R maximized.
+  if (key != ash::internal::kWindowPositionManagedKey)
+    Cancel(false);
 }
 
 void FrameMaximizeButton::OnWindowDestroying(aura::Window* window) {
@@ -181,7 +196,7 @@ void FrameMaximizeButton::OnWindowDestroying(aura::Window* window) {
 void FrameMaximizeButton::OnWidgetActivationChanged(views::Widget* widget,
                                                     bool active) {
   // Upon losing focus, the control bubble should hide.
-  if (!active && maximizer_.get())
+  if (!active && maximizer_)
     maximizer_.reset();
 }
 
@@ -201,7 +216,7 @@ bool FrameMaximizeButton::OnMousePressed(const ui::MouseEvent& event) {
 
 void FrameMaximizeButton::OnMouseEntered(const ui::MouseEvent& event) {
   ImageButton::OnMouseEntered(event);
-  if (!maximizer_.get()) {
+  if (!maximizer_) {
     DCHECK(GetWidget());
     if (!widget_) {
       widget_ = frame_->GetWidget();
@@ -219,7 +234,7 @@ void FrameMaximizeButton::OnMouseExited(const ui::MouseEvent& event) {
   ImageButton::OnMouseExited(event);
   // Remove the bubble menu when the button is not pressed and the mouse is not
   // within the bubble.
-  if (!is_snap_enabled_ && maximizer_.get()) {
+  if (!is_snap_enabled_ && maximizer_) {
     if (maximizer_->GetBubbleWindow()) {
       gfx::Point screen_location = Shell::GetScreen()->GetCursorScreenPoint();
       if (!maximizer_->GetBubbleWindow()->GetBoundsInScreen().Contains(
@@ -264,14 +279,17 @@ void FrameMaximizeButton::OnGestureEvent(ui::GestureEvent* event) {
   }
 
   if (event->type() == ui::ET_GESTURE_TAP ||
-      event->type() == ui::ET_GESTURE_SCROLL_END ||
+      (event->type() == ui::ET_GESTURE_SCROLL_END && is_snap_enabled_) ||
       event->type() == ui::ET_SCROLL_FLING_START) {
     // The position of the event may have changed from the previous event (both
     // for TAP and SCROLL_END). So it is necessary to update the snap-state for
     // the current event.
     ProcessUpdateEvent(*event);
-    if (event->type() == ui::ET_GESTURE_TAP)
+    if (event->type() == ui::ET_GESTURE_TAP) {
       snap_type_ = SnapTypeForLocation(event->location());
+      TouchUMA::GetInstance()->RecordGestureAction(
+          TouchUMA::GESTURE_FRAMEMAXIMIZE_TAP);
+    }
     ProcessEndEvent(*event);
     event->SetHandled();
     return;
@@ -300,10 +318,18 @@ void FrameMaximizeButton::OnGestureEvent(ui::GestureEvent* event) {
   ImageButton::OnGestureEvent(event);
 }
 
+void FrameMaximizeButton::SetVisible(bool visible) {
+  // In the enforced maximized mode we do not allow to be made visible.
+  if (ash::Shell::IsForcedMaximizeMode())
+    return;
+
+  views::View::SetVisible(visible);
+}
+
 void FrameMaximizeButton::ProcessStartEvent(const ui::LocatedEvent& event) {
   DCHECK(is_snap_enabled_);
   // Prepare the help menu.
-  if (!maximizer_.get()) {
+  if (!maximizer_) {
     maximizer_.reset(new MaximizeBubbleController(
         this,
         GetMaximizeBubbleFrameState(),
@@ -373,7 +399,7 @@ void FrameMaximizeButton::Cancel(bool keep_menu_open) {
 }
 
 void FrameMaximizeButton::InstallEventFilter() {
-  if (escape_event_filter_.get())
+  if (escape_event_filter_)
     return;
 
   escape_event_filter_.reset(new EscapeEventFilter(this));
@@ -396,7 +422,7 @@ void FrameMaximizeButton::UpdateSnap(const gfx::Point& location,
                                      bool is_touch) {
   SnapType type = SnapTypeForLocation(location);
   if (type == snap_type_) {
-    if (snap_sizer_.get()) {
+    if (snap_sizer_) {
       snap_sizer_->Update(LocationForSnapSizer(location));
       phantom_window_->Show(ScreenAsh::ConvertRectToScreen(
           frame_->GetWidget()->GetNativeView()->parent(),
@@ -427,11 +453,11 @@ void FrameMaximizeButton::UpdateSnap(const gfx::Point& location,
     if (select_default)
       snap_sizer_->SelectDefaultSizeAndDisableResize();
   }
-  if (!phantom_window_.get()) {
+  if (!phantom_window_) {
     phantom_window_.reset(new internal::PhantomWindowController(
                               frame_->GetWidget()->GetNativeWindow()));
   }
-  if (maximizer_.get()) {
+  if (maximizer_) {
     phantom_window_->set_phantom_below_window(maximizer_->GetBubbleWindow());
     maximizer_->SetSnapType(snap_type_);
   }
@@ -469,19 +495,13 @@ gfx::Rect FrameMaximizeButton::ScreenBoundsForType(
           window->parent(),
           ScreenAsh::GetMaximizedWindowBoundsInParent(window));
     case SNAP_MINIMIZE: {
-      Launcher* launcher = Launcher::ForWindow(window);
-      // Launcher is created lazily and can be NULL.
-      if (!launcher)
-        return gfx::Rect();
-      gfx::Rect item_rect(launcher->GetScreenBoundsOfItemIconForWindow(
-          window));
-      if (!item_rect.IsEmpty()) {
+      gfx::Rect rect = GetMinimizeAnimationTargetBoundsInScreen(window);
+      if (!rect.IsEmpty()) {
         // PhantomWindowController insets slightly, outset it so the phantom
         // doesn't appear inset.
-        item_rect.Inset(-8, -8);
-        return item_rect;
+        rect.Inset(-8, -8);
       }
-      return launcher->shelf_widget()->GetWindowBoundsInScreen();
+      return rect;
     }
     case SNAP_RESTORE: {
       const gfx::Rect* restore = GetRestoreBoundsInScreen(window);
@@ -508,20 +528,35 @@ void FrameMaximizeButton::Snap(const SnapSizer& snap_sizer) {
     case SNAP_LEFT:
     case SNAP_RIGHT: {
       shell->delegate()->RecordUserMetricsAction(
-          snap_type_ == SNAP_LEFT ? ash::UMA_MAXIMIZE_BUTTON_MAXIMIZE_LEFT :
-                                    ash::UMA_MAXIMIZE_BUTTON_MAXIMIZE_RIGHT);
+          snap_type_ == SNAP_LEFT ?
+              ash::UMA_WINDOW_MAXIMIZE_BUTTON_MAXIMIZE_LEFT :
+              ash::UMA_WINDOW_MAXIMIZE_BUTTON_MAXIMIZE_RIGHT);
       // Get the bounds in screen coordinates for restore purposes.
       gfx::Rect restore = widget->GetWindowBoundsInScreen();
-      if (widget->IsMaximized()) {
+      if (widget->IsMaximized() || widget->IsFullscreen()) {
+        aura::Window* window = widget->GetNativeWindow();
         // In case of maximized we have a restore boundary.
-        DCHECK(ash::GetRestoreBoundsInScreen(widget->GetNativeWindow()));
+        DCHECK(ash::GetRestoreBoundsInScreen(window));
         // If it was maximized we need to recover the old restore set.
-        restore = *ash::GetRestoreBoundsInScreen(widget->GetNativeWindow());
+        restore = *ash::GetRestoreBoundsInScreen(window);
+
+        // The auto position manager will kick in when this is the only window.
+        // To avoid interference with it we tell it temporarily to not change
+        // the coordinates of this window.
+        bool is_managed = ash::wm::IsWindowPositionManaged(window);
+        if (is_managed)
+          ash::wm::SetWindowPositionManaged(window, false);
+
         // Set the restore size we want to restore to.
-        ash::SetRestoreBoundsInScreen(widget->GetNativeWindow(),
+        ash::SetRestoreBoundsInScreen(window,
                                       ScreenBoundsForType(snap_type_,
                                                           snap_sizer));
         widget->Restore();
+
+        // After the window is where we want it to be we allow the window to be
+        // auto managed again.
+        if (is_managed)
+          ash::wm::SetWindowPositionManaged(window, true);
       } else {
         // Others might also have set up a restore rectangle already. If so,
         // we should not overwrite the restore rectangle.
@@ -538,17 +573,17 @@ void FrameMaximizeButton::Snap(const SnapSizer& snap_sizer) {
     case SNAP_MAXIMIZE:
       widget->Maximize();
       shell->delegate()->RecordUserMetricsAction(
-          ash::UMA_MAXIMIZE_BUTTON_MAXIMIZE);
+          ash::UMA_WINDOW_MAXIMIZE_BUTTON_MAXIMIZE);
       break;
     case SNAP_MINIMIZE:
       widget->Minimize();
       shell->delegate()->RecordUserMetricsAction(
-          ash::UMA_MAXIMIZE_BUTTON_MINIMIZE);
+          ash::UMA_WINDOW_MAXIMIZE_BUTTON_MINIMIZE);
       break;
     case SNAP_RESTORE:
       widget->Restore();
       shell->delegate()->RecordUserMetricsAction(
-          ash::UMA_MAXIMIZE_BUTTON_RESTORE);
+          ash::UMA_WINDOW_MAXIMIZE_BUTTON_RESTORE);
       break;
     case SNAP_NONE:
       NOTREACHED();
@@ -556,7 +591,7 @@ void FrameMaximizeButton::Snap(const SnapSizer& snap_sizer) {
 }
 
 MaximizeBubbleFrameState
-   FrameMaximizeButton::GetMaximizeBubbleFrameState() const {
+FrameMaximizeButton::GetMaximizeBubbleFrameState() const {
   // When there are no restore bounds, we are in normal mode.
   if (!ash::GetRestoreBoundsInScreen(
            frame_->GetWidget()->GetNativeWindow()))
@@ -566,7 +601,8 @@ MaximizeBubbleFrameState
     return FRAME_STATE_FULL;
   // For Left/right maximize we need to check the dimensions.
   gfx::Rect bounds = frame_->GetWidget()->GetWindowBoundsInScreen();
-  gfx::Rect screen = Shell::GetScreen()->GetDisplayMatching(bounds).work_area();
+  gfx::Rect screen = Shell::GetScreen()->GetDisplayNearestWindow(
+      frame_->GetWidget()->GetNativeView()).work_area();
   if (bounds.width() < (screen.width() * kMinSnapSizePercent) / 100)
     return FRAME_STATE_NONE;
   // We might still have a horizontally filled window at this point which we

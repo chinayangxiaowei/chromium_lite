@@ -6,11 +6,11 @@
 #define CHROME_COMMON_EXTENSIONS_MANIFEST_H_
 
 #include <map>
-#include <string>
 #include <set>
+#include <string>
 
 #include "base/memory/scoped_ptr.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "base/values.h"
 
 namespace extensions {
@@ -55,7 +55,8 @@ class Manifest {
     // This is marked legacy because platform apps are preferred. For
     // backwards compatibility, we can't remove support for packaged apps
     TYPE_LEGACY_PACKAGED_APP,
-    TYPE_PLATFORM_APP
+    TYPE_PLATFORM_APP,
+    TYPE_SHARED_MODULE
   };
 
   // Given two install sources, return the one which should take priority
@@ -89,7 +90,7 @@ class Manifest {
     return IsUnpackedLocation(location);
   }
 
-  Manifest(Location location, scoped_ptr<DictionaryValue> value);
+  Manifest(Location location, scoped_ptr<base::DictionaryValue> value);
   virtual ~Manifest();
 
   const std::string& extension_id() const { return extension_id_; }
@@ -122,6 +123,7 @@ class Manifest {
     return type_ == TYPE_LEGACY_PACKAGED_APP;
   }
   bool is_extension() const { return type_ == TYPE_EXTENSION; }
+  bool is_shared_module() const { return type_ == TYPE_SHARED_MODULE; }
 
   // These access the wrapped manifest value, returning false when the property
   // does not exist or if the manifest type can't access it.

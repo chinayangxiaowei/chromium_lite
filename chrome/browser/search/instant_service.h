@@ -8,47 +8,53 @@
 #include <map>
 #include <set>
 #include <string>
+#include <vector>
 
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
+#include "base/gtest_prod_util.h"
 #include "base/memory/ref_counted.h"
-#include "chrome/browser/profiles/profile_keyed_service.h"
-#include "chrome/common/instant_restricted_id_cache.h"
+#include "base/memory/scoped_ptr.h"
+#include "base/memory/weak_ptr.h"
+#include "base/observer_list.h"
+#include "chrome/browser/history/history_types.h"
+#include "chrome/browser/ui/search/instant_ntp_prerenderer.h"
+#include "chrome/common/instant_types.h"
+#include "components/browser_context_keyed_service/browser_context_keyed_service.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 
 class GURL;
+class InstantExtendedTest;
 class InstantIOContext;
+class InstantServiceObserver;
+class InstantTestBase;
 class Profile;
+class ThemeService;
+
+namespace content {
+class WebContents;
+}
 
 namespace net {
 class URLRequest;
 }
 
 // Tracks render process host IDs that are associated with Instant.
-class InstantService : public ProfileKeyedService,
+class InstantService : public BrowserContextKeyedService,
                        public content::NotificationObserver {
  public:
   explicit InstantService(Profile* profile);
   virtual ~InstantService();
 
-  // A utility to translate an Instant path if it is of Most Visited item ID
-  // form.  If path is a Most Visited item ID and we have a URL for it, then
-  // this URL is returned in string form.  The |path| is a URL fragment
-  // corresponding to the path of url with the leading slash ("/") stripped.
-  // For example, chrome-search://favicon/72 would yield a |path| value of "72",
-  // and since 72 is a valid uint64 the path is translated to a valid url,
-  // "http://bingo.com/", say.
-  static const std::string MaybeTranslateInstantPathOnUI(
-      Profile* profile, const std::string& path);
-  static const std::string MaybeTranslateInstantPathOnIO(
-    const net::URLRequest* request, const std::string& path);
-  static bool IsInstantPath(const GURL& url);
-
   // Add, remove, and query RenderProcessHost IDs that are associated with
   // Instant processes.
   void AddInstantProcess(int process_id);
   bool IsInstantProcess(int process_id) const;
+
+  // Adds/Removes InstantService observers.
+  void AddObserver(InstantServiceObserver* observer);
+  void RemoveObserver(InstantServiceObserver* observer);
 
 #if defined(UNIT_TEST)
   int GetInstantProcessCount() const {
@@ -58,23 +64,57 @@ class InstantService : public ProfileKeyedService,
 
   // Most visited item API.
 
-  // Adds |items| to the |most_visited_item_cache_| assigning restricted IDs in
-  // the process.
-  void AddMostVisitedItems(const std::vector<InstantMostVisitedItem>& items);
+  // Invoked by the InstantController when the Instant page wants to delete a
+  // Most Visited item.
+  void DeleteMostVisitedItem(const GURL& url);
 
-  // Returns the last added InstantMostVisitedItems. After the call to
-  // |AddMostVisitedItems|, the caller should call this to get the items with
-  // the assigned IDs.
-  void GetCurrentMostVisitedItems(
-      std::vector<InstantMostVisitedItemIDPair>* items) const;
+  // Invoked by the InstantController when the Instant page wants to undo the
+  // blacklist action.
+  void UndoMostVisitedDeletion(const GURL& url);
 
-  // If the |most_visited_item_id| is found in the cache, sets the |item| to it
-  // and returns true.
-  bool GetMostVisitedItemForID(InstantRestrictedID most_visited_item_id,
-                               InstantMostVisitedItem* item) const;
+  // Invoked by the InstantController when the Instant page wants to undo all
+  // Most Visited deletions.
+  void UndoAllMostVisitedDeletions();
+
+  // Invoked by the InstantController to update theme information for NTP.
+  //
+  // TODO(kmadhusu): Invoking this from InstantController shouldn't be
+  // necessary. Investigate more and remove this from here.
+  void UpdateThemeInfo();
+
+  // Invoked by the InstantController to update most visited items details for
+  // NTP.
+  void UpdateMostVisitedItemsInfo();
+
+  // Forwards the request to InstantNTPPrerenderer to release and return the
+  // preloaded InstantNTP WebContents. May be NULL. InstantNTPPrerenderer will
+  // load a new InstantNTP after releasing the preloaded contents.
+  scoped_ptr<content::WebContents> ReleaseNTPContents() WARN_UNUSED_RESULT;
+
+  // The NTP WebContents. May be NULL. InstantNTPPrerenderer retains ownership.
+  content::WebContents* GetNTPContents() const;
+
+  // Notifies InstantService about the creation of a BrowserInstantController
+  // object. Used to preload InstantNTP.
+  void OnBrowserInstantControllerCreated();
+
+  // Notifies InstantService about the destruction of a BrowserInstantController
+  // object. Used to destroy the preloaded InstantNTP.
+  void OnBrowserInstantControllerDestroyed();
 
  private:
-  // Overridden from ProfileKeyedService:
+  friend class InstantExtendedTest;
+  friend class InstantTestBase;
+
+  FRIEND_TEST_ALL_PREFIXES(InstantExtendedNetworkTest,
+                           NTPReactsToNetworkChanges);
+  FRIEND_TEST_ALL_PREFIXES(InstantExtendedManualTest,
+                           MANUAL_ShowsGoogleNTP);
+  FRIEND_TEST_ALL_PREFIXES(InstantExtendedManualTest,
+                           MANUAL_SearchesFromFakebox);
+  FRIEND_TEST_ALL_PREFIXES(InstantExtendedTest, ProcessIsolation);
+
+  // Overridden from BrowserContextKeyedService:
   virtual void Shutdown() OVERRIDE;
 
   // Overridden from content::NotificationObserver:
@@ -82,17 +122,45 @@ class InstantService : public ProfileKeyedService,
                        const content::NotificationSource& source,
                        const content::NotificationDetails& details) OVERRIDE;
 
+  // Called when we get new most visited items from TopSites, registered as an
+  // async callback. Parses them and sends them to the renderer via
+  // SendMostVisitedItems.
+  void OnMostVisitedItemsReceived(const history::MostVisitedURLList& data);
+
+  // Notifies the observer about the last known most visited items.
+  void NotifyAboutMostVisitedItems();
+
+  // Theme changed notification handler.
+  void OnThemeChanged(ThemeService* theme_service);
+
+  // Used by tests.
+  InstantNTPPrerenderer* ntp_prerenderer();
+
   Profile* const profile_;
 
   // The process ids associated with Instant processes.
   std::set<int> process_ids_;
 
-  // A cache of the InstantMostVisitedItems sent to the Instant Pages.
-  InstantRestrictedIDCache<InstantMostVisitedItem> most_visited_item_cache_;
+  // InstantMostVisitedItems sent to the Instant Pages.
+  std::vector<InstantMostVisitedItem> most_visited_items_;
+
+  // Theme-related data for NTP overlay to adopt themes.
+  scoped_ptr<ThemeBackgroundInfo> theme_info_;
+
+  ObserverList<InstantServiceObserver> observers_;
 
   content::NotificationRegistrar registrar_;
 
   scoped_refptr<InstantIOContext> instant_io_context_;
+
+  InstantNTPPrerenderer ntp_prerenderer_;
+
+  // Total number of BrowserInstantController objects (does not include objects
+  // created for OTR browser windows). Used to preload and delete InstantNTP.
+  size_t browser_instant_controller_object_count_;
+
+  // Used for Top Sites async retrieval.
+  base::WeakPtrFactory<InstantService> weak_ptr_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(InstantService);
 };

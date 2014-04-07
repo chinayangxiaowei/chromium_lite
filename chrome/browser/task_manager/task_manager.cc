@@ -5,69 +5,61 @@
 #include "chrome/browser/task_manager/task_manager.h"
 
 #include "base/bind.h"
-#include "base/compiler_specific.h"
 #include "base/i18n/number_formatting.h"
 #include "base/i18n/rtl.h"
 #include "base/prefs/pref_registry_simple.h"
-#include "base/process_util.h"
+#include "base/process/process_metrics.h"
 #include "base/rand_util.h"
 #include "base/stl_util.h"
-#include "base/stringprintf.h"
+#include "base/strings/string16.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/threading/thread.h"
-#include "base/utf_string_conversions.h"
-#include "chrome/browser/background/background_contents_service.h"
-#include "chrome/browser/background/background_contents_service_factory.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/extensions/extension_host.h"
 #include "chrome/browser/extensions/extension_process_manager.h"
 #include "chrome/browser/extensions/extension_system.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/task_manager/task_manager_resource_providers.h"
-#include "chrome/browser/task_manager/task_manager_worker_resource_provider.h"
+#include "chrome/browser/task_manager/background_resource_provider.h"
+#include "chrome/browser/task_manager/browser_process_resource_provider.h"
+#include "chrome/browser/task_manager/child_process_resource_provider.h"
+#include "chrome/browser/task_manager/extension_process_resource_provider.h"
+#include "chrome/browser/task_manager/guest_resource_provider.h"
+#include "chrome/browser/task_manager/notification_resource_provider.h"
+#include "chrome/browser/task_manager/panel_resource_provider.h"
+#include "chrome/browser/task_manager/resource_provider.h"
+#include "chrome/browser/task_manager/tab_contents_resource_provider.h"
+#include "chrome/browser/task_manager/worker_resource_provider.h"
 #include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
-#include "chrome/common/view_type.h"
-#include "content/public/browser/browser_child_process_host.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/gpu_data_manager.h"
 #include "content/public/browser/gpu_data_manager_observer.h"
-#include "content/public/browser/render_view_host.h"
 #include "content/public/browser/resource_request_info.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/common/result_codes.h"
-#include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "grit/ui_resources.h"
-#include "third_party/icu/public/i18n/unicode/coll.h"
+#include "third_party/icu/source/i18n/unicode/coll.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/text/bytes_formatting.h"
 #include "ui/gfx/image/image_skia.h"
 
-#if defined(OS_WIN)
-#include "chrome/browser/task_manager/task_manager_os_resources_win.h"
+#if defined(OS_MACOSX)
+#include "content/public/browser/browser_child_process_host.h"
 #endif
 
 using content::BrowserThread;
-using content::OpenURLParams;
-using content::Referrer;
 using content::ResourceRequestInfo;
 using content::WebContents;
+using task_manager::Resource;
+using task_manager::ResourceProvider;
+
+class Profile;
 
 namespace {
-
-// The delay between updates of the information (in ms).
-#if defined(OS_MACOSX)
-// Match Activity Monitor's default refresh rate.
-const int kUpdateTimeMs = 2000;
-#else
-const int kUpdateTimeMs = 1000;
-#endif
 
 template <class T>
 int ValueCompare(T value1, T value2) {
@@ -115,6 +107,7 @@ bool IsSharedByGroup(int col_id) {
     case IDS_TASK_MANAGER_CPU_COLUMN:
     case IDS_TASK_MANAGER_PROCESS_ID_COLUMN:
     case IDS_TASK_MANAGER_JAVASCRIPT_MEMORY_ALLOCATED_COLUMN:
+    case IDS_TASK_MANAGER_VIDEO_MEMORY_COLUMN:
     case IDS_TASK_MANAGER_SQLITE_MEMORY_USED_COLUMN:
     case IDS_TASK_MANAGER_WEBCORE_IMAGE_CACHE_COLUMN:
     case IDS_TASK_MANAGER_WEBCORE_SCRIPTS_CACHE_COLUMN:
@@ -123,6 +116,59 @@ bool IsSharedByGroup(int col_id) {
     default:
       return false;
   }
+}
+
+#if defined(OS_WIN)
+void GetWinGDIHandles(base::ProcessHandle process,
+                      size_t* current,
+                      size_t* peak) {
+  *current = 0;
+  *peak = 0;
+  // Get a handle to |process| that has PROCESS_QUERY_INFORMATION rights.
+  HANDLE current_process = GetCurrentProcess();
+  HANDLE process_with_query_rights;
+  if (DuplicateHandle(current_process, process, current_process,
+                      &process_with_query_rights, PROCESS_QUERY_INFORMATION,
+                      false, 0)) {
+    *current = GetGuiResources(process_with_query_rights, GR_GDIOBJECTS);
+    *peak = GetGuiResources(process_with_query_rights, GR_GDIOBJECTS_PEAK);
+    CloseHandle(process_with_query_rights);
+  }
+}
+
+void GetWinUSERHandles(base::ProcessHandle process,
+                       size_t* current,
+                       size_t* peak) {
+  *current = 0;
+  *peak = 0;
+  // Get a handle to |process| that has PROCESS_QUERY_INFORMATION rights.
+  HANDLE current_process = GetCurrentProcess();
+  HANDLE process_with_query_rights;
+  if (DuplicateHandle(current_process, process, current_process,
+                      &process_with_query_rights, PROCESS_QUERY_INFORMATION,
+                      false, 0)) {
+    *current = GetGuiResources(process_with_query_rights, GR_USEROBJECTS);
+    *peak = GetGuiResources(process_with_query_rights, GR_USEROBJECTS_PEAK);
+    CloseHandle(process_with_query_rights);
+  }
+}
+#endif
+
+// Counts the number of extension background pages associated with this profile.
+int CountExtensionBackgroundPagesForProfile(Profile* profile) {
+  int count = 0;
+  ExtensionProcessManager* manager =
+      extensions::ExtensionSystem::Get(profile)->process_manager();
+  if (!manager)
+    return count;
+
+  const ExtensionProcessManager::ExtensionHostSet& background_hosts =
+      manager->background_hosts();
+  for (ExtensionProcessManager::const_iterator iter = background_hosts.begin();
+       iter != background_hosts.end(); ++iter) {
+    ++count;
+  }
+  return count;
 }
 
 }  // namespace
@@ -139,7 +185,7 @@ class TaskManagerModelGpuDataManagerObserver
   }
 
   static void NotifyVideoMemoryUsageStats(
-      content::GPUVideoMemoryUsageStats video_memory_usage_stats) {
+      const content::GPUVideoMemoryUsageStats& video_memory_usage_stats) {
     TaskManager::GetInstance()->model()->NotifyVideoMemoryUsageStats(
         video_memory_usage_stats);
   }
@@ -214,26 +260,26 @@ TaskManagerModel::TaskManagerModel(TaskManager* task_manager)
       goat_salt_(base::RandUint64()),
       last_unique_id_(0) {
   AddResourceProvider(
-      new TaskManagerBrowserProcessResourceProvider(task_manager));
+      new task_manager::BrowserProcessResourceProvider(task_manager));
   AddResourceProvider(
-      new TaskManagerBackgroundContentsResourceProvider(task_manager));
-  AddResourceProvider(new TaskManagerTabContentsResourceProvider(task_manager));
-  AddResourceProvider(new TaskManagerPanelResourceProvider(task_manager));
+      new task_manager::BackgroundContentsResourceProvider(task_manager));
   AddResourceProvider(
-      new TaskManagerChildProcessResourceProvider(task_manager));
+      new task_manager::TabContentsResourceProvider(task_manager));
+  AddResourceProvider(new task_manager::PanelResourceProvider(task_manager));
   AddResourceProvider(
-      new TaskManagerExtensionProcessResourceProvider(task_manager));
+      new task_manager::ChildProcessResourceProvider(task_manager));
   AddResourceProvider(
-      new TaskManagerGuestResourceProvider(task_manager));
+      new task_manager::ExtensionProcessResourceProvider(task_manager));
+  AddResourceProvider(new task_manager::GuestResourceProvider(task_manager));
 
 #if defined(ENABLE_NOTIFICATIONS)
-  TaskManager::ResourceProvider* provider =
-      TaskManagerNotificationResourceProvider::Create(task_manager);
+  ResourceProvider* provider =
+      task_manager::NotificationResourceProvider::Create(task_manager);
   if (provider)
     AddResourceProvider(provider);
 #endif
 
-  AddResourceProvider(new TaskManagerWorkerResourceProvider(task_manager));
+  AddResourceProvider(new task_manager::WorkerResourceProvider(task_manager));
 }
 
 void TaskManagerModel::AddObserver(TaskManagerModelObserver* observer) {
@@ -458,9 +504,7 @@ string16 TaskManagerModel::GetResourceVideoMemory(int index) const {
   if (!GetVideoMemory(index, &video_memory, &has_duplicates) || !video_memory)
     return ASCIIToUTF16("N/A");
   if (has_duplicates) {
-    return ASCIIToUTF16("(") +
-        GetMemCellText(video_memory) +
-        ASCIIToUTF16(")");
+    return GetMemCellText(video_memory) + ASCIIToUTF16("*");
   }
   return GetMemCellText(video_memory);
 }
@@ -531,11 +575,16 @@ bool TaskManagerModel::GetPhysicalMemory(int index, size_t* result) const {
         !iter->second->GetWorkingSetKBytes(&ws_usage))
       return false;
 
+    values.is_physical_memory_valid = true;
+#if defined(OS_LINUX)
+    // On Linux private memory is also resident. Just use it.
+    values.physical_memory = ws_usage.priv * 1024;
+#else
     // Memory = working_set.private + working_set.shareable.
     // We exclude the shared memory.
-    values.is_physical_memory_valid = true;
     values.physical_memory = iter->second->GetWorkingSetSize();
     values.physical_memory -= ws_usage.shared * 1024;
+#endif
   }
   *result = values.physical_memory;
   return true;
@@ -682,7 +731,7 @@ int TaskManagerModel::GetGoatsTeleported(int index) const {
 }
 
 bool TaskManagerModel::IsResourceFirstInGroup(int index) const {
-  TaskManager::Resource* resource = GetResource(index);
+  Resource* resource = GetResource(index);
   GroupMap::const_iterator iter = group_map_.find(resource->GetProcess());
   DCHECK(iter != group_map_.end());
   const ResourceList* group = iter->second;
@@ -690,7 +739,7 @@ bool TaskManagerModel::IsResourceFirstInGroup(int index) const {
 }
 
 bool TaskManagerModel::IsResourceLastInGroup(int index) const {
-  TaskManager::Resource* resource = GetResource(index);
+  Resource* resource = GetResource(index);
   GroupMap::const_iterator iter = group_map_.find(resource->GetProcess());
   DCHECK(iter != group_map_.end());
   const ResourceList* group = iter->second;
@@ -713,7 +762,7 @@ gfx::ImageSkia TaskManagerModel::GetResourceIcon(int index) const {
 
 TaskManagerModel::GroupRange
 TaskManagerModel::GetGroupRangeForResource(int index) const {
-  TaskManager::Resource* resource = GetResource(index);
+  Resource* resource = GetResource(index);
   GroupMap::const_iterator group_iter =
       group_map_.find(resource->GetProcess());
   DCHECK(group_iter != group_map_.end());
@@ -897,7 +946,7 @@ int TaskManagerModel::GetUniqueChildProcessId(int index) const {
   return GetResource(index)->GetUniqueChildProcessId();
 }
 
-TaskManager::Resource::Type TaskManagerModel::GetResourceType(int index) const {
+Resource::Type TaskManagerModel::GetResourceType(int index) const {
   return GetResource(index)->GetType();
 }
 
@@ -910,7 +959,7 @@ const extensions::Extension* TaskManagerModel::GetResourceExtension(
   return GetResource(index)->GetExtension();
 }
 
-void TaskManagerModel::AddResource(TaskManager::Resource* resource) {
+void TaskManagerModel::AddResource(Resource* resource) {
   resource->unique_id_ = ++last_unique_id_;
 
   base::ProcessHandle process = resource->GetProcess();
@@ -958,7 +1007,7 @@ void TaskManagerModel::AddResource(TaskManager::Resource* resource) {
                     OnItemsAdded(new_entry_index, 1));
 }
 
-void TaskManagerModel::RemoveResource(TaskManager::Resource* resource) {
+void TaskManagerModel::RemoveResource(Resource* resource) {
   base::ProcessHandle process = resource->GetProcess();
 
   // Find the associated group.
@@ -1022,7 +1071,7 @@ void TaskManagerModel::StartUpdating() {
   // If update_state_ is STOPPING, it means a task is still pending.  Setting
   // it to TASK_PENDING ensures the tasks keep being posted (by Refresh()).
   if (update_state_ == IDLE) {
-      MessageLoop::current()->PostTask(
+      base::MessageLoop::current()->PostTask(
           FROM_HERE,
           base::Bind(&TaskManagerModel::RefreshCallback, this));
   }
@@ -1178,7 +1227,7 @@ void TaskManagerModel::NotifyBytesRead(const net::URLRequest& request,
     origin_pid = info->GetOriginPID();
 
   if (bytes_read_buffer_.empty()) {
-    MessageLoop::current()->PostDelayedTask(
+    base::MessageLoop::current()->PostDelayedTask(
         FROM_HERE,
         base::Bind(&TaskManagerModel::NotifyMultipleBytesRead, this),
         base::TimeDelta::FromSeconds(1));
@@ -1204,7 +1253,7 @@ void TaskManagerModel::RefreshCallback() {
   Refresh();
 
   // Schedule the next update.
-  MessageLoop::current()->PostDelayedTask(
+  base::MessageLoop::current()->PostDelayedTask(
       FROM_HERE,
       base::Bind(&TaskManagerModel::RefreshCallback, this),
       base::TimeDelta::FromMilliseconds(kUpdateTimeMs));
@@ -1276,8 +1325,7 @@ void TaskManagerModel::RefreshVideoMemoryUsageStats() {
   content::GpuDataManager::GetInstance()->RequestVideoMemoryUsageStatsUpdate();
 }
 
-int64 TaskManagerModel::GetNetworkUsageForResource(
-    TaskManager::Resource* resource) const {
+int64 TaskManagerModel::GetNetworkUsageForResource(Resource* resource) const {
   // Returns default of 0 if no network usage.
   return per_resource_cache_[resource].network_usage;
 }
@@ -1291,7 +1339,7 @@ void TaskManagerModel::BytesRead(BytesReadParam param) {
 
   // TODO(jcampan): this should be improved once we have a better way of
   // linking a network notification back to the object that initiated it.
-  TaskManager::Resource* resource = NULL;
+  Resource* resource = NULL;
   for (ResourceProviderList::iterator iter = providers_.begin();
        iter != providers_.end(); ++iter) {
     resource = (*iter)->GetResource(param.origin_pid,
@@ -1348,14 +1396,14 @@ void TaskManagerModel::NotifyMultipleBytesRead() {
                  base::Owned(bytes_read_buffer)));
 }
 
-int64 TaskManagerModel::GetNetworkUsage(TaskManager::Resource* resource) const {
+int64 TaskManagerModel::GetNetworkUsage(Resource* resource) const {
   int64 net_usage = GetNetworkUsageForResource(resource);
   if (net_usage == 0 && !resource->SupportNetworkUsage())
     return -1;
   return net_usage;
 }
 
-double TaskManagerModel::GetCPUUsage(TaskManager::Resource* resource) const {
+double TaskManagerModel::GetCPUUsage(Resource* resource) const {
   const PerProcessValues& values(per_process_cache_[resource->GetProcess()]);
   // Returns 0 if not valid, which is fine.
   return values.cpu_usage;
@@ -1415,8 +1463,7 @@ bool TaskManagerModel::CacheV8Memory(int index) const {
   return true;
 }
 
-void TaskManagerModel::AddResourceProvider(
-    TaskManager::ResourceProvider* provider) {
+void TaskManagerModel::AddResourceProvider(ResourceProvider* provider) {
   DCHECK(provider);
   providers_.push_back(provider);
 }
@@ -1426,7 +1473,7 @@ TaskManagerModel::PerResourceValues& TaskManagerModel::GetPerResourceValues(
   return per_resource_cache_[GetResource(index)];
 }
 
-TaskManager::Resource* TaskManagerModel::GetResource(int index) const {
+Resource* TaskManagerModel::GetResource(int index) const {
   CHECK_GE(index, 0);
   CHECK_LT(index, static_cast<int>(resources_.size()));
   return resources_[index];
@@ -1435,42 +1482,6 @@ TaskManager::Resource* TaskManagerModel::GetResource(int index) const {
 ////////////////////////////////////////////////////////////////////////////////
 // TaskManager class
 ////////////////////////////////////////////////////////////////////////////////
-
-int TaskManager::Resource::GetRoutingID() const { return 0; }
-
-bool TaskManager::Resource::ReportsCacheStats() const { return false; }
-
-WebKit::WebCache::ResourceTypeStats
-TaskManager::Resource::GetWebCoreCacheStats() const {
-  return WebKit::WebCache::ResourceTypeStats();
-}
-
-bool TaskManager::Resource::ReportsFPS() const { return false; }
-
-float TaskManager::Resource::GetFPS() const { return 0.0f; }
-
-bool TaskManager::Resource::ReportsSqliteMemoryUsed() const { return false; }
-
-size_t TaskManager::Resource::SqliteMemoryUsedBytes() const { return 0; }
-
-const extensions::Extension* TaskManager::Resource::GetExtension() const {
-  return NULL;
-}
-
-bool TaskManager::Resource::ReportsV8MemoryStats() const { return false; }
-
-size_t TaskManager::Resource::GetV8MemoryAllocated() const { return 0; }
-
-size_t TaskManager::Resource::GetV8MemoryUsed() const { return 0; }
-
-bool TaskManager::Resource::CanInspect() const { return false; }
-
-content::WebContents* TaskManager::Resource::GetWebContents() const {
-  return NULL;
-}
-
-bool TaskManager::Resource::IsBackground() const { return false; }
-
 // static
 void TaskManager::RegisterPrefs(PrefRegistrySimple* registry) {
   registry->RegisterDictionaryPref(prefs::kTaskManagerWindowPlacement);
@@ -1523,66 +1534,16 @@ TaskManager* TaskManager::GetInstance() {
 
 void TaskManager::OpenAboutMemory(chrome::HostDesktopType desktop_type) {
   Browser* browser = chrome::FindOrCreateTabbedBrowser(
-      ProfileManager::GetDefaultProfileOrOffTheRecord(), desktop_type);
+      ProfileManager::GetLastUsedProfileAllowedByPolicy(), desktop_type);
   chrome::NavigateParams params(browser, GURL(chrome::kChromeUIMemoryURL),
                                 content::PAGE_TRANSITION_LINK);
   params.disposition = NEW_FOREGROUND_TAB;
+  params.window_action = chrome::NavigateParams::SHOW_WINDOW;
   chrome::Navigate(&params);
 }
 
-namespace {
-
-// Counts the number of extension background pages associated with this profile.
-int CountExtensionBackgroundPagesForProfile(Profile* profile) {
-  int count = 0;
-  ExtensionProcessManager* manager =
-      extensions::ExtensionSystem::Get(profile)->process_manager();
-  if (!manager)
-    return count;
-
-  const ExtensionProcessManager::ExtensionHostSet& background_hosts =
-      manager->background_hosts();
-  for (ExtensionProcessManager::const_iterator iter = background_hosts.begin();
-       iter != background_hosts.end(); ++iter) {
-    ++count;
-  }
-  return count;
-}
-
-}  // namespace
-
-// static
-int TaskManager::GetBackgroundPageCount() {
-  int count = 0;
-  ProfileManager* profile_manager = g_browser_process->profile_manager();
-  if (!profile_manager)  // Null when running unit tests.
-    return count;
-  std::vector<Profile*> profiles(profile_manager->GetLoadedProfiles());
-  for (std::vector<Profile*>::const_iterator iter = profiles.begin();
-       iter != profiles.end();
-       ++iter) {
-    Profile* profile = *iter;
-    // Count the number of Background Contents (background pages for hosted
-    // apps). Incognito windows do not support hosted apps, so just check the
-    // main profile.
-    BackgroundContentsService* background_contents_service =
-        BackgroundContentsServiceFactory::GetForProfile(profile);
-    if (background_contents_service)
-      count += background_contents_service->GetBackgroundContents().size();
-
-    // Count the number of extensions with background pages (including
-    // incognito).
-    count += CountExtensionBackgroundPagesForProfile(profile);
-    if (profile->HasOffTheRecordProfile()) {
-      count += CountExtensionBackgroundPagesForProfile(
-          profile->GetOffTheRecordProfile());
-    }
-  }
-  return count;
-}
-
 TaskManager::TaskManager()
-    : ALLOW_THIS_IN_INITIALIZER_LIST(model_(new TaskManagerModel(this))) {
+    : model_(new TaskManagerModel(this)) {
 }
 
 TaskManager::~TaskManager() {

@@ -5,20 +5,20 @@
 #include "content/renderer/pepper/pepper_file_chooser_host.h"
 
 #include "base/files/file_path.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "content/public/renderer/renderer_ppapi_host.h"
+#include "content/renderer/pepper/ppb_file_ref_impl.h"
 #include "content/renderer/render_view_impl.h"
 #include "ppapi/c/pp_errors.h"
 #include "ppapi/host/dispatch_host_message.h"
 #include "ppapi/host/ppapi_host.h"
 #include "ppapi/proxy/ppapi_messages.h"
 #include "ppapi/proxy/ppb_file_ref_proxy.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebCString.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebString.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebVector.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebFileChooserCompletion.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebFileChooserParams.h"
-#include "webkit/plugins/ppapi/ppb_file_ref_impl.h"
+#include "third_party/WebKit/public/platform/WebCString.h"
+#include "third_party/WebKit/public/platform/WebString.h"
+#include "third_party/WebKit/public/platform/WebVector.h"
+#include "third_party/WebKit/public/web/WebFileChooserCompletion.h"
+#include "third_party/WebKit/public/web/WebFileChooserParams.h"
 
 namespace content {
 
@@ -33,7 +33,7 @@ class PepperFileChooserHost::CompletionHandler
 
   virtual void didChooseFile(
       const WebKit::WebVector<WebKit::WebString>& file_names) {
-    if (host_) {
+    if (host_.get()) {
       std::vector<PepperFileChooserHost::ChosenFileInfo> files;
       for (size_t i = 0; i < file_names.size(); i++) {
         files.push_back(PepperFileChooserHost::ChosenFileInfo(
@@ -47,7 +47,7 @@ class PepperFileChooserHost::CompletionHandler
   }
   virtual void didChooseFile(
       const WebKit::WebVector<SelectedFileInfo>& file_names) {
-    if (host_) {
+    if (host_.get()) {
       std::vector<PepperFileChooserHost::ChosenFileInfo> files;
       for (size_t i = 0; i < file_names.size(); i++) {
         files.push_back(PepperFileChooserHost::ChosenFileInfo(
@@ -106,8 +106,7 @@ void PepperFileChooserHost::StoreChosenFiles(
     base::FilePath file_path(files[i].path);
 #endif
 
-    webkit::ppapi::PPB_FileRef_Impl* ref =
-        webkit::ppapi::PPB_FileRef_Impl::CreateExternal(
+    PPB_FileRef_Impl* ref = PPB_FileRef_Impl::CreateExternal(
         pp_instance(), file_path, files[i].display_name);
     ppapi::PPB_FileRef_CreateInfo create_info;
     ppapi::proxy::PPB_FileRef_Proxy::SerializeFileRef(ref->GetReference(),

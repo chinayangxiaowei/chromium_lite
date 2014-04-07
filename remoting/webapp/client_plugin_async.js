@@ -40,8 +40,17 @@ remoting.ClientPluginAsync = function(plugin) {
   this.onConnectionStatusUpdateHandler = function(state, error) {};
   /** @param {boolean} ready Connection ready state. */
   this.onConnectionReadyHandler = function(ready) {};
+  /**
+   * @param {string} tokenUrl Token-request URL, received from the host.
+   * @param {string} hostPublicKey Public key for the host.
+   * @param {string} scope OAuth scope to request the token for.
+   */
+  this.fetchThirdPartyTokenHandler = function(
+    tokenUrl, hostPublicKey, scope) {};
   this.onDesktopSizeUpdateHandler = function () {};
-  this.fetchPinHandler = function () {};
+  /** @param {!Array.<string>} capabilities The negotiated capabilities. */
+  this.onSetCapabilitiesHandler = function (capabilities) {};
+  this.fetchPinHandler = function (supportsPairing) {};
 
   /** @type {number} */
   this.pluginApiVersion_ = -1;
@@ -49,11 +58,14 @@ remoting.ClientPluginAsync = function(plugin) {
   this.pluginApiFeatures_ = [];
   /** @type {number} */
   this.pluginApiMinVersion_ = -1;
+  /** @type {!Array.<string>} */
+  this.capabilities_ = [];
   /** @type {boolean} */
   this.helloReceived_ = false;
   /** @type {function(boolean)|null} */
   this.onInitializedCallback_ = null;
-
+  /** @type {function(string, string):void} */
+  this.onPairingComplete_ = function(clientId, sharedSecret) {};
   /** @type {remoting.ClientSession.PerfStats} */
   this.perfStats_ = new remoting.ClientSession.PerfStats();
 
@@ -98,6 +110,17 @@ remoting.ClientPluginAsync.prototype.handleMessage_ = function(messageStr) {
     return;
   }
 
+  /**
+   * Splits a string into a list of words delimited by spaces.
+   * @param {string} str String that should be split.
+   * @return {!Array.<string>} List of words.
+   */
+  var tokenize = function(str) {
+    /** @type {Array.<string>} */
+    var tokens = str.match(/\S+/g);
+    return tokens ? tokens : [];
+  };
+
   if (message.method == 'hello') {
     // Reset the size in case we had to enlarge it to support click-to-play.
     this.plugin.width = 0;
@@ -108,13 +131,52 @@ remoting.ClientPluginAsync.prototype.handleMessage_ = function(messageStr) {
       return;
     }
     this.pluginApiVersion_ = /** @type {number} */ message.data['apiVersion'];
+
     if (this.pluginApiVersion_ >= 7) {
       if (typeof message.data['apiFeatures'] != 'string') {
         console.error('Received invalid hello message: ' + messageStr);
         return;
       }
       this.pluginApiFeatures_ =
-          /** @type {Array.<string>} */ message.data['apiFeatures'].split(' ');
+          /** @type {Array.<string>} */ tokenize(message.data['apiFeatures']);
+
+      // Negotiate capabilities.
+
+      /** @type {!Array.<string>} */
+      var requestedCapabilities = [];
+      if ('requestedCapabilities' in message.data) {
+        if (typeof message.data['requestedCapabilities'] != 'string') {
+          console.error('Received invalid hello message: ' + messageStr);
+          return;
+        }
+        requestedCapabilities = tokenize(message.data['requestedCapabilities']);
+      }
+
+      /** @type {!Array.<string>} */
+      var supportedCapabilities = [];
+      if ('supportedCapabilities' in message.data) {
+        if (typeof message.data['supportedCapabilities'] != 'string') {
+          console.error('Received invalid hello message: ' + messageStr);
+          return;
+        }
+        supportedCapabilities = tokenize(message.data['supportedCapabilities']);
+      }
+
+      // At the moment the webapp does not recognize any of
+      // 'requestedCapabilities' capabilities (so they all should be disabled)
+      // and do not care about any of 'supportedCapabilities' capabilities (so
+      // they all can be enabled).
+      this.capabilities_ = supportedCapabilities;
+
+      // Let the host know that the webapp can be requested to always send
+      // the client's dimensions.
+      this.capabilities_.push(
+          remoting.ClientSession.Capability.SEND_INITIAL_RESOLUTION);
+
+      // Let the host know that we're interested in knowing whether or not
+      // it rate-limits desktop-resize requests.
+      this.capabilities_.push(
+          remoting.ClientSession.Capability.RATE_LIMIT_RESIZE_REQUESTS);
     } else if (this.pluginApiVersion_ >= 6) {
       this.pluginApiFeatures_ = ['highQualityScaling', 'injectKeyEvent'];
     } else {
@@ -141,7 +203,7 @@ remoting.ClientPluginAsync.prototype.handleMessage_ = function(messageStr) {
     this.onDebugMessageHandler(message.data['message']);
   } else if (message.method == 'onConnectionStatus') {
     if (typeof message.data['state'] != 'string' ||
-        !(message.data['state'] in remoting.ClientSession.State) ||
+        !remoting.ClientSession.State.hasOwnProperty(message.data['state']) ||
         typeof message.data['error'] != 'string') {
       console.error('Received invalid onConnectionState message: ' +
                     messageStr);
@@ -151,7 +213,8 @@ remoting.ClientPluginAsync.prototype.handleMessage_ = function(messageStr) {
     /** @type {remoting.ClientSession.State} */
     var state = remoting.ClientSession.State[message.data['state']];
     var error;
-    if (message.data['error'] in remoting.ClientSession.ConnectionError) {
+    if (remoting.ClientSession.ConnectionError.hasOwnProperty(
+        message.data['error'])) {
       error = /** @type {remoting.ClientSession.ConnectionError} */
           remoting.ClientSession.ConnectionError[message.data['error']];
     } else {
@@ -207,7 +270,53 @@ remoting.ClientPluginAsync.prototype.handleMessage_ = function(messageStr) {
     var ready = /** @type {boolean} */ message.data['ready'];
     this.onConnectionReadyHandler(ready);
   } else if (message.method == 'fetchPin') {
-    this.fetchPinHandler();
+    // The pairingSupported value in the dictionary indicates whether both
+    // client and host support pairing. If the client doesn't support pairing,
+    // then the value won't be there at all, so give it a default of false.
+    /** @type {boolean} */
+    var pairingSupported = false;
+    if ('pairingSupported' in message.data) {
+      pairingSupported =
+          /** @type {boolean} */ message.data['pairingSupported'];
+      if (typeof pairingSupported != 'boolean') {
+        console.error('Received incorrect fetchPin message.');
+        return;
+      }
+    }
+    this.fetchPinHandler(pairingSupported);
+  } else if (message.method == 'setCapabilities') {
+    if (typeof message.data['capabilities'] != 'string') {
+      console.error('Received incorrect setCapabilities message.');
+      return;
+    }
+
+    /** @type {!Array.<string>} */
+    var capabilities = tokenize(message.data['capabilities']);
+    this.onSetCapabilitiesHandler(capabilities);
+  } else if (message.method == 'fetchThirdPartyToken') {
+    if (typeof message.data['tokenUrl'] != 'string' ||
+        typeof message.data['hostPublicKey'] != 'string' ||
+        typeof message.data['scope'] != 'string') {
+      console.error('Received incorrect fetchThirdPartyToken message.');
+      return;
+    }
+    var tokenUrl = /** @type {string} */ message.data['tokenUrl'];
+    var hostPublicKey =
+        /** @type {string} */ message.data['hostPublicKey'];
+    var scope = /** @type {string} */ message.data['scope'];
+    this.fetchThirdPartyTokenHandler(tokenUrl, hostPublicKey, scope);
+  } else if (message.method == 'pairingResponse') {
+    var clientId = /** @type {string} */ message.data['clientId'];
+    var sharedSecret = /** @type {string} */ message.data['sharedSecret'];
+    if (typeof clientId != 'string' || typeof sharedSecret != 'string') {
+      console.error('Received incorrect pairingResponse message.');
+      return;
+    }
+    this.onPairingComplete_(clientId, sharedSecret);
+  } else if (message.method == 'extensionMessage') {
+    // No messages currently supported.
+    console.log('Unexpected message received: ' +
+                message.data.type + ': ' + message.data.data);
   }
 };
 
@@ -295,10 +404,15 @@ remoting.ClientPluginAsync.prototype.onIncomingIq = function(iq) {
  *     authentication methods the client should attempt to use.
  * @param {string} authenticationTag A host-specific tag to mix into
  *     authentication hashes.
+ * @param {string} clientPairingId For paired Me2Me connections, the
+ *     pairing id for this client, as issued by the host.
+ * @param {string} clientPairedSecret For paired Me2Me connections, the
+ *     paired secret for this client, as issued by the host.
  */
 remoting.ClientPluginAsync.prototype.connect = function(
     hostJid, hostPublicKey, localJid, sharedSecret,
-    authenticationMethods, authenticationTag) {
+    authenticationMethods, authenticationTag,
+    clientPairingId, clientPairedSecret) {
   this.plugin.postMessage(JSON.stringify(
     { method: 'connect', data: {
         hostJid: hostJid,
@@ -306,7 +420,10 @@ remoting.ClientPluginAsync.prototype.connect = function(
         localJid: localJid,
         sharedSecret: sharedSecret,
         authenticationMethods: authenticationMethods,
-        authenticationTag: authenticationTag
+        authenticationTag: authenticationTag,
+        capabilities: this.capabilities_.join(" "),
+        clientPairingId: clientPairingId,
+        clientPairedSecret: clientPairedSecret
       }
     }));
 };
@@ -461,6 +578,53 @@ remoting.ClientPluginAsync.prototype.useAsyncPinDialog =
   }
   this.plugin.postMessage(JSON.stringify(
       { method: 'useAsyncPinDialog', data: {} }));
+};
+
+/**
+ * Sets the third party authentication token and shared secret.
+ *
+ * @param {string} token The token received from the token URL.
+ * @param {string} sharedSecret Shared secret received from the token URL.
+ */
+remoting.ClientPluginAsync.prototype.onThirdPartyTokenFetched = function(
+    token, sharedSecret) {
+  this.plugin.postMessage(JSON.stringify(
+    { method: 'onThirdPartyTokenFetched',
+      data: { token: token, sharedSecret: sharedSecret}}));
+};
+
+/**
+ * Request pairing with the host for PIN-less authentication.
+ *
+ * @param {string} clientName The human-readable name of the client.
+ * @param {function(string, string):void} onDone, Callback to receive the
+ *     client id and shared secret when they are available.
+ */
+remoting.ClientPluginAsync.prototype.requestPairing =
+    function(clientName, onDone) {
+  if (!this.hasFeature(remoting.ClientPlugin.Feature.PINLESS_AUTH)) {
+    return;
+  }
+  this.onPairingComplete_ = onDone;
+  this.plugin.postMessage(JSON.stringify(
+      { method: 'requestPairing', data: { clientName: clientName } }));
+};
+
+/**
+ * Send an extension message to the host.
+ *
+ * @param {string} type The message type.
+ * @param {Object} message The message payload.
+ */
+remoting.ClientPluginAsync.prototype.sendClientMessage =
+    function(type, message) {
+  if (!this.hasFeature(remoting.ClientPlugin.Feature.EXTENSION_MESSAGE)) {
+    return;
+  }
+  this.plugin.postMessage(JSON.stringify(
+    { method: 'extensionMessage',
+      data: { type: type, data: JSON.stringify(message) } }));
+
 };
 
 /**

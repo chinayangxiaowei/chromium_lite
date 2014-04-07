@@ -21,12 +21,11 @@
 #include "base/logging.h"
 #include "base/memory/scoped_handle.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
-#include "base/process_util.h"
-#include "base/shared_memory.h"
+#include "base/memory/shared_memory.h"
+#include "base/message_loop/message_loop.h"
 #include "media/video/video_decode_accelerator.h"
 #include "ui/gl/gl_bindings.h"
-#include "ui/gl/gl_surface.h"
+#include "ui/gl/gl_surface_egl.h"
 #include "ui/gl/gl_switches.h"
 
 namespace content {
@@ -203,6 +202,8 @@ linked_ptr<DXVAVideoDecodeAccelerator::DXVAPictureBuffer>
         const media::PictureBuffer& buffer, EGLConfig egl_config) {
   linked_ptr<DXVAPictureBuffer> picture_buffer(new DXVAPictureBuffer(buffer));
 
+  EGLDisplay egl_display = gfx::GLSurfaceEGL::GetHardwareDisplay();
+
   EGLint attrib_list[] = {
     EGL_WIDTH, buffer.size().width(),
     EGL_HEIGHT, buffer.size().height(),
@@ -212,7 +213,7 @@ linked_ptr<DXVAVideoDecodeAccelerator::DXVAPictureBuffer>
   };
 
   picture_buffer->decoding_surface_ = eglCreatePbufferSurface(
-      static_cast<EGLDisplay*>(eglGetDisplay(EGL_DEFAULT_DISPLAY)),
+      egl_display,
       egl_config,
       attrib_list);
   RETURN_ON_FAILURE(picture_buffer->decoding_surface_,
@@ -221,7 +222,7 @@ linked_ptr<DXVAVideoDecodeAccelerator::DXVAPictureBuffer>
 
   HANDLE share_handle = NULL;
   EGLBoolean ret = eglQuerySurfacePointerANGLE(
-      static_cast<EGLDisplay*>(eglGetDisplay(EGL_DEFAULT_DISPLAY)),
+      egl_display,
       picture_buffer->decoding_surface_,
       EGL_D3D_TEXTURE_2D_SHARE_HANDLE_ANGLE,
       &share_handle);
@@ -254,13 +255,15 @@ DXVAVideoDecodeAccelerator::DXVAPictureBuffer::DXVAPictureBuffer(
 
 DXVAVideoDecodeAccelerator::DXVAPictureBuffer::~DXVAPictureBuffer() {
   if (decoding_surface_) {
+    EGLDisplay egl_display = gfx::GLSurfaceEGL::GetHardwareDisplay();
+
     eglReleaseTexImage(
-        static_cast<EGLDisplay*>(eglGetDisplay(EGL_DEFAULT_DISPLAY)),
+        egl_display,
         decoding_surface_,
         EGL_BACK_BUFFER);
 
     eglDestroySurface(
-        static_cast<EGLDisplay*>(eglGetDisplay(EGL_DEFAULT_DISPLAY)),
+        egl_display,
         decoding_surface_);
     decoding_surface_ = NULL;
   }
@@ -268,8 +271,9 @@ DXVAVideoDecodeAccelerator::DXVAPictureBuffer::~DXVAPictureBuffer() {
 
 void DXVAVideoDecodeAccelerator::DXVAPictureBuffer::ReusePictureBuffer() {
   DCHECK(decoding_surface_);
+  EGLDisplay egl_display = gfx::GLSurfaceEGL::GetHardwareDisplay();
   eglReleaseTexImage(
-    static_cast<EGLDisplay*>(eglGetDisplay(EGL_DEFAULT_DISPLAY)),
+    egl_display,
     decoding_surface_,
     EGL_BACK_BUFFER);
   set_available(true);
@@ -347,8 +351,9 @@ bool DXVAVideoDecodeAccelerator::DXVAPictureBuffer::
           ++iterations < kMaxIterationsForD3DFlush) {
     Sleep(1);  // Poor-man's Yield().
   }
+  EGLDisplay egl_display = gfx::GLSurfaceEGL::GetHardwareDisplay();
   eglBindTexImage(
-      static_cast<EGLDisplay*>(eglGetDisplay(EGL_DEFAULT_DISPLAY)),
+      egl_display,
       decoding_surface_,
       EGL_BACK_BUFFER);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -369,7 +374,7 @@ void DXVAVideoDecodeAccelerator::PreSandboxInitialization() {
   // Should be called only once during program startup.
   DCHECK(!pre_sandbox_init_done_);
 
-  static wchar_t* decoding_dlls[] = {
+  static const wchar_t* kDecodingDlls[] = {
     L"d3d9.dll",
     L"dxva2.dll",
     L"mf.dll",
@@ -377,9 +382,9 @@ void DXVAVideoDecodeAccelerator::PreSandboxInitialization() {
     L"msmpeg2vdec.dll",
   };
 
-  for (int i = 0; i < arraysize(decoding_dlls); ++i) {
-    if (!::LoadLibrary(decoding_dlls[i])) {
-      DLOG(ERROR) << "Failed to load decoder dll: " << decoding_dlls[i]
+  for (int i = 0; i < arraysize(kDecodingDlls); ++i) {
+    if (!::LoadLibrary(kDecodingDlls[i])) {
+      DLOG(ERROR) << "Failed to load decoder dll: " << kDecodingDlls[i]
                   << ", Error: " << ::GetLastError();
       return;
     }
@@ -498,7 +503,7 @@ bool DXVAVideoDecodeAccelerator::Initialize(media::VideoCodecProfile profile) {
       PLATFORM_FAILURE, false);
 
   state_ = kNormal;
-  MessageLoop::current()->PostTask(FROM_HERE, base::Bind(
+  base::MessageLoop::current()->PostTask(FROM_HERE, base::Bind(
       &DXVAVideoDecodeAccelerator::NotifyInitializeDone,
       base::AsWeakPtr(this)));
   return true;
@@ -531,6 +536,9 @@ void DXVAVideoDecodeAccelerator::AssignPictureBuffers(
 
   RETURN_AND_NOTIFY_ON_FAILURE((state_ != kUninitialized),
       "Invalid state: " << state_, ILLEGAL_STATE,);
+  RETURN_AND_NOTIFY_ON_FAILURE((kNumPictureBuffers == buffers.size()),
+      "Failed to provide requested picture buffers. (Got " << buffers.size() <<
+      ", requested " << kNumPictureBuffers << ")", INVALID_ARGUMENT,);
 
   // Copy the picture buffers provided by the client to the available list,
   // and mark these buffers as available for use.
@@ -604,7 +612,7 @@ void DXVAVideoDecodeAccelerator::Reset() {
   RETURN_AND_NOTIFY_ON_FAILURE(SendMFTMessage(MFT_MESSAGE_COMMAND_FLUSH, 0),
       "Reset: Failed to send message.", PLATFORM_FAILURE,);
 
-  MessageLoop::current()->PostTask(FROM_HERE, base::Bind(
+  base::MessageLoop::current()->PostTask(FROM_HERE, base::Bind(
       &DXVAVideoDecodeAccelerator::NotifyResetDone, base::AsWeakPtr(this)));
 
   state_ = DXVAVideoDecodeAccelerator::kNormal;
@@ -652,6 +660,8 @@ bool DXVAVideoDecodeAccelerator::InitDecoder() {
             reinterpret_cast<ULONG_PTR>(device_manager_));
   RETURN_ON_HR_FAILURE(hr, "Failed to pass D3D manager to decoder", false);
 
+  EGLDisplay egl_display = gfx::GLSurfaceEGL::GetHardwareDisplay();
+
   EGLint config_attribs[] = {
     EGL_BUFFER_SIZE, 32,
     EGL_RED_SIZE, 8,
@@ -665,7 +675,7 @@ bool DXVAVideoDecodeAccelerator::InitDecoder() {
   EGLint num_configs;
 
   if (!eglChooseConfig(
-      static_cast<EGLDisplay*>(eglGetDisplay(EGL_DEFAULT_DISPLAY)),
+      egl_display,
       config_attribs,
       &egl_config_,
       1,
@@ -875,7 +885,7 @@ bool DXVAVideoDecodeAccelerator::ProcessOutputSample(IMFSample* sample) {
   RETURN_ON_HR_FAILURE(hr, "Failed to get surface description", false);
 
   // Go ahead and request picture buffers.
-  MessageLoop::current()->PostTask(FROM_HERE, base::Bind(
+  base::MessageLoop::current()->PostTask(FROM_HERE, base::Bind(
       &DXVAVideoDecodeAccelerator::RequestPictureBuffers,
       base::AsWeakPtr(this), surface_desc.Width, surface_desc.Height));
 
@@ -916,7 +926,7 @@ void DXVAVideoDecodeAccelerator::ProcessPendingSamples() {
 
       media::Picture output_picture(index->second->id(),
                                     sample_info.input_buffer_id);
-      MessageLoop::current()->PostTask(FROM_HERE, base::Bind(
+      base::MessageLoop::current()->PostTask(FROM_HERE, base::Bind(
           &DXVAVideoDecodeAccelerator::NotifyPictureReady,
           base::AsWeakPtr(this), output_picture));
 
@@ -926,7 +936,7 @@ void DXVAVideoDecodeAccelerator::ProcessPendingSamples() {
   }
 
   if (!pending_input_buffers_.empty() && pending_output_samples_.empty()) {
-    MessageLoop::current()->PostTask(FROM_HERE, base::Bind(
+    base::MessageLoop::current()->PostTask(FROM_HERE, base::Bind(
         &DXVAVideoDecodeAccelerator::DecodePendingInputBuffers,
         base::AsWeakPtr(this)));
   }
@@ -1037,7 +1047,7 @@ void DXVAVideoDecodeAccelerator::FlushInternal() {
       return;
   }
 
-  MessageLoop::current()->PostTask(FROM_HERE, base::Bind(
+  base::MessageLoop::current()->PostTask(FROM_HERE, base::Bind(
       &DXVAVideoDecodeAccelerator::NotifyFlushDone, base::AsWeakPtr(this)));
 
   state_ = kNormal;
@@ -1076,14 +1086,22 @@ void DXVAVideoDecodeAccelerator::DecodeInternal(
         "Failed to process output. Unexpected decoder state: " << state_,
         PLATFORM_FAILURE,);
     hr = decoder_->ProcessInput(0, sample, 0);
-    // If we continue to get the MF_E_NOTACCEPTING error and there is an output
-    // sample waiting to be consumed, we add the input sample to the queue and
-    // return. This is because we only support 1 pending output sample at any
+    // If we continue to get the MF_E_NOTACCEPTING error we do the following:-
+    // 1. Add the input sample to the pending queue.
+    // 2. If we don't have any output samples we post the
+    //    DecodePendingInputBuffers task to process the pending input samples.
+    //    If we have an output sample then the above task is posted when the
+    //    output samples are sent to the client.
+    // This is because we only support 1 pending output sample at any
     // given time due to the limitation with the Microsoft media foundation
     // decoder where it recycles the output Decoder surfaces.
-    // This input sample will be processed once the output sample is processed.
-    if (hr == MF_E_NOTACCEPTING && !pending_output_samples_.empty()) {
+    if (hr == MF_E_NOTACCEPTING) {
       pending_input_buffers_.push_back(sample);
+      if (pending_output_samples_.empty()) {
+        base::MessageLoop::current()->PostTask(FROM_HERE, base::Bind(
+            &DXVAVideoDecodeAccelerator::DecodePendingInputBuffers,
+            base::AsWeakPtr(this)));
+      }
       return;
     }
   }
@@ -1109,7 +1127,7 @@ void DXVAVideoDecodeAccelerator::DecodeInternal(
   // decoder to emit an output packet for every input packet.
   // http://code.google.com/p/chromium/issues/detail?id=108121
   // http://code.google.com/p/chromium/issues/detail?id=150925
-  MessageLoop::current()->PostTask(FROM_HERE, base::Bind(
+  base::MessageLoop::current()->PostTask(FROM_HERE, base::Bind(
       &DXVAVideoDecodeAccelerator::NotifyInputBufferRead,
       base::AsWeakPtr(this), input_buffer_id));
 }

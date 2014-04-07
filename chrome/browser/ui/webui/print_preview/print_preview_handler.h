@@ -115,6 +115,9 @@ class PrintPreviewHandler : public content::WebUIMessageHandler,
   // |args| is unused.
   void HandleSignin(const base::ListValue* args);
 
+  // Generates new token and sends back to UI.
+  void HandleGetAccessToken(const base::ListValue* args);
+
   // Brings up a web page to allow the user to configure cloud print.
   // |args| is unused.
   void HandleManageCloudPrint(const base::ListValue* args);
@@ -127,8 +130,9 @@ class PrintPreviewHandler : public content::WebUIMessageHandler,
   // |args| is unused.
   void HandleManagePrinters(const base::ListValue* args);
 
-  // Asks the browser to show the cloud print dialog. |args| is unused.
-  void HandlePrintWithCloudPrint(const base::ListValue* args);
+  // Asks the browser to show the cloud print dialog. |args| is signle int with
+  // page count.
+  void HandlePrintWithCloudPrintDialog(const base::ListValue* args);
 
   // Asks the browser for several settings that are needed before the first
   // preview is displayed.
@@ -151,6 +155,10 @@ class PrintPreviewHandler : public content::WebUIMessageHandler,
       const std::string& default_printer,
       const std::string& cloud_print_data);
 
+  // Send OAuth2 access token.
+  void SendAccessToken(const std::string& type,
+                       const std::string& access_token);
+
   // Sends the printer capabilities to the Web UI. |settings_info| contains
   // printer capabilities information.
   void SendPrinterCapabilities(const base::DictionaryValue& settings_info);
@@ -172,11 +180,10 @@ class PrintPreviewHandler : public content::WebUIMessageHandler,
   void PrintToPdf();
 
   // Asks the browser to show the cloud print dialog.
-  void PrintWithCloudPrintDialog(const base::RefCountedBytes* data,
-                                 const string16& title);
+  void PrintWithCloudPrintDialog();
 
-  // Gets the initiator tab for the print preview dialog.
-  content::WebContents* GetInitiatorTab() const;
+  // Gets the initiator for the print preview dialog.
+  content::WebContents* GetInitiator() const;
 
   // Closes the preview dialog.
   void ClosePreviewDialog();
@@ -184,8 +191,8 @@ class PrintPreviewHandler : public content::WebUIMessageHandler,
   // Adds all the recorded stats taken so far to histogram counts.
   void ReportStats();
 
-  // Clears initiator tab details for the print preview dialog.
-  void ClearInitiatorTabDetails();
+  // Clears initiator details for the print preview dialog.
+  void ClearInitiatorDetails();
 
   // Posts a task to save |data| to pdf at |print_to_pdf_path_|.
   void PostPrintToPdfTask();
@@ -221,6 +228,10 @@ class PrintPreviewHandler : public content::WebUIMessageHandler,
   // Holds the path to the print to pdf request. It is empty if no such request
   // exists.
   scoped_ptr<base::FilePath> print_to_pdf_path_;
+
+  // Holds token service to get OAuth2 access tokens.
+  class AccessTokenService;
+  scoped_ptr<AccessTokenService> token_service_;
 
   DISALLOW_COPY_AND_ASSIGN(PrintPreviewHandler);
 };

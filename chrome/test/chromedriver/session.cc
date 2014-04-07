@@ -11,6 +11,7 @@
 #include "chrome/test/chromedriver/chrome/status.h"
 #include "chrome/test/chromedriver/chrome/version.h"
 #include "chrome/test/chromedriver/chrome/web_view.h"
+#include "chrome/test/chromedriver/logging.h"
 
 FrameInfo::FrameInfo(const std::string& parent_frame_id,
                      const std::string& frame_id,
@@ -19,22 +20,28 @@ FrameInfo::FrameInfo(const std::string& parent_frame_id,
       frame_id(frame_id),
       chromedriver_frame_id(chromedriver_frame_id) {}
 
+const int Session::kDefaultPageLoadTimeoutMs = 5 * 60 * 1000;
+
 Session::Session(const std::string& id)
     : id(id),
-      thread(("SessionThread_" + id).c_str()),
+      quit(false),
+      detach(false),
+      sticky_modifiers(0),
       mouse_position(0, 0),
       implicit_wait(0),
-      page_load_timeout(0),
+      page_load_timeout(kDefaultPageLoadTimeoutMs),
       script_timeout(0) {
 }
 
 Session::Session(const std::string& id, scoped_ptr<Chrome> chrome)
     : id(id),
-      thread(("SessionThread_" + id).c_str()),
+      quit(false),
+      detach(false),
       chrome(chrome.Pass()),
+      sticky_modifiers(0),
       mouse_position(0, 0),
       implicit_wait(0),
-      page_load_timeout(0),
+      page_load_timeout(kDefaultPageLoadTimeoutMs),
       script_timeout(0),
       capabilities(CreateCapabilities()) {
 }
@@ -65,7 +72,7 @@ void Session::SwitchToSubFrame(const std::string& frame_id,
 
 std::string Session::GetCurrentFrameId() const {
   if (frames.empty())
-    return "";
+    return std::string();
   return frames.back().frame_id;
 }
 
@@ -73,7 +80,7 @@ scoped_ptr<base::DictionaryValue> Session::CreateCapabilities() {
   scoped_ptr<base::DictionaryValue> caps(new base::DictionaryValue());
   caps->SetString("browserName", "chrome");
   caps->SetString("version", chrome->GetVersion());
-  caps->SetString("driverVersion", kChromeDriverVersion);
+  caps->SetString("chrome.chromedriverVersion", kChromeDriverVersion);
   caps->SetString("platform", chrome->GetOperatingSystemName());
   caps->SetBoolean("javascriptEnabled", true);
   caps->SetBoolean("takesScreenshot", true);
@@ -89,17 +96,3 @@ scoped_ptr<base::DictionaryValue> Session::CreateCapabilities() {
   caps->SetBoolean("nativeEvents", true);
   return caps.Pass();
 }
-
-SessionAccessorImpl::SessionAccessorImpl(scoped_ptr<Session> session)
-    : session_(session.Pass()) {}
-
-Session* SessionAccessorImpl::Access(scoped_ptr<base::AutoLock>* lock) {
-  lock->reset(new base::AutoLock(session_lock_));
-  return session_.get();
-}
-
-void SessionAccessorImpl::DeleteSession() {
-  session_.reset();
-}
-
-SessionAccessorImpl::~SessionAccessorImpl() {}

@@ -8,10 +8,11 @@
 #include <fcntl.h>
 #include <netdb.h>
 #include <sys/socket.h>
+#include <netinet/in.h>
 
 #include "base/callback.h"
 #include "base/logging.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/metrics/stats_counters.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/rand_util.h"
@@ -21,17 +22,14 @@
 #include "net/base/net_log.h"
 #include "net/base/net_util.h"
 #include "net/udp/udp_net_log_parameters.h"
-#if defined(OS_POSIX)
-#include <netinet/in.h>
-#endif
 
 namespace {
 
-static const int kBindRetries = 10;
-static const int kPortStart = 1024;
-static const int kPortEnd = 65535;
+const int kBindRetries = 10;
+const int kPortStart = 1024;
+const int kPortEnd = 65535;
 
-}  // namespace net
+}  // namespace
 
 namespace net {
 
@@ -41,7 +39,9 @@ UDPSocketLibevent::UDPSocketLibevent(
     net::NetLog* net_log,
     const net::NetLog::Source& source)
         : socket_(kInvalidSocket),
-          socket_options_(0),
+          addr_family_(0),
+          socket_options_(SOCKET_OPTION_MULTICAST_LOOP),
+          multicast_time_to_live_(1),
           bind_type_(bind_type),
           rand_int_cb_(rand_int_cb),
           read_watcher_(this),
@@ -86,6 +86,7 @@ void UDPSocketLibevent::Close() {
     PLOG(ERROR) << "close";
 
   socket_ = kInvalidSocket;
+  addr_family_ = 0;
 }
 
 int UDPSocketLibevent::GetPeerAddress(IPEndPoint* address) const {
@@ -122,6 +123,8 @@ int UDPSocketLibevent::GetLocalAddress(IPEndPoint* address) const {
     if (!address->FromSockAddr(storage.addr, storage.addr_len))
       return ERR_FAILED;
     local_address_.reset(address.release());
+    net_log_.AddEvent(NetLog::TYPE_UDP_LOCAL_ADDRESS,
+                      CreateNetLogUDPConnectCallback(local_address_.get()));
   }
 
   *address = *local_address_;
@@ -149,8 +152,8 @@ int UDPSocketLibevent::RecvFrom(IOBuffer* buf,
   if (nread != ERR_IO_PENDING)
     return nread;
 
-  if (!MessageLoopForIO::current()->WatchFileDescriptor(
-          socket_, true, MessageLoopForIO::WATCH_READ,
+  if (!base::MessageLoopForIO::current()->WatchFileDescriptor(
+          socket_, true, base::MessageLoopForIO::WATCH_READ,
           &read_socket_watcher_, &read_watcher_)) {
     PLOG(ERROR) << "WatchFileDescriptor failed on read";
     int result = MapSystemError(errno);
@@ -192,8 +195,8 @@ int UDPSocketLibevent::SendToOrWrite(IOBuffer* buf,
   if (result != ERR_IO_PENDING)
     return result;
 
-  if (!MessageLoopForIO::current()->WatchFileDescriptor(
-          socket_, true, MessageLoopForIO::WATCH_WRITE,
+  if (!base::MessageLoopForIO::current()->WatchFileDescriptor(
+          socket_, true, base::MessageLoopForIO::WATCH_WRITE,
           &write_socket_watcher_, &write_watcher_)) {
     DVLOG(1) << "WatchFileDescriptor failed on write, errno " << errno;
     int result = MapSystemError(errno);
@@ -233,16 +236,24 @@ int UDPSocketLibevent::InternalConnect(const IPEndPoint& address) {
     rv = RandomBind(address);
   // else connect() does the DatagramSocket::DEFAULT_BIND
 
-  if (rv < 0)
+  if (rv < 0) {
+    Close();
     return rv;
+  }
 
   SockaddrStorage storage;
-  if (!address.ToSockAddr(storage.addr, &storage.addr_len))
-    return ERR_FAILED;
+  if (!address.ToSockAddr(storage.addr, &storage.addr_len)) {
+    Close();
+    return ERR_ADDRESS_INVALID;
+  }
 
   rv = HANDLE_EINTR(connect(socket_, storage.addr, storage.addr_len));
-  if (rv < 0)
-    return MapSystemError(errno);
+  if (rv < 0) {
+    // Close() may change the current errno. Map errno beforehand.
+    int result = MapSystemError(errno);
+    Close();
+    return result;
+  }
 
   remote_address_.reset(new IPEndPoint(address));
   return rv;
@@ -254,12 +265,17 @@ int UDPSocketLibevent::Bind(const IPEndPoint& address) {
   int rv = CreateSocket(address);
   if (rv < 0)
     return rv;
+
   rv = SetSocketOptions();
-  if (rv < 0)
+  if (rv < 0) {
+    Close();
     return rv;
+  }
   rv = DoBind(address);
-  if (rv < 0)
+  if (rv < 0) {
+    Close();
     return rv;
+  }
   local_address_.reset();
   return rv;
 }
@@ -325,7 +341,8 @@ void UDPSocketLibevent::DoWriteCallback(int rv) {
 }
 
 void UDPSocketLibevent::DidCompleteRead() {
-  int result = InternalRecvFrom(read_buf_, read_buf_len_, recv_from_address_);
+  int result =
+      InternalRecvFrom(read_buf_.get(), read_buf_len_, recv_from_address_);
   if (result != ERR_IO_PENDING) {
     read_buf_ = NULL;
     read_buf_len_ = 0;
@@ -363,7 +380,8 @@ void UDPSocketLibevent::LogRead(int result,
 }
 
 int UDPSocketLibevent::CreateSocket(const IPEndPoint& address) {
-  socket_ = socket(address.GetSockAddrFamily(), SOCK_DGRAM, 0);
+  addr_family_ = address.GetSockAddrFamily();
+  socket_ = socket(addr_family_, SOCK_DGRAM, 0);
   if (socket_ == kInvalidSocket)
     return MapSystemError(errno);
   if (SetNonBlocking(socket_)) {
@@ -375,8 +393,8 @@ int UDPSocketLibevent::CreateSocket(const IPEndPoint& address) {
 }
 
 void UDPSocketLibevent::DidCompleteWrite() {
-  int result = InternalSendTo(write_buf_, write_buf_len_,
-                              send_to_address_.get());
+  int result =
+      InternalSendTo(write_buf_.get(), write_buf_len_, send_to_address_.get());
 
   if (result != ERR_IO_PENDING) {
     write_buf_ = NULL;
@@ -476,11 +494,40 @@ int UDPSocketLibevent::SetSocketOptions() {
     // port.
     rv = setsockopt(socket_, SOL_SOCKET, SO_REUSEPORT, &true_value,
                     sizeof(true_value));
-    if (rv < 0)
-      return MapSystemError(errno);
-#endif  // defined(OS_MACOSX)
+#else
     rv = setsockopt(socket_, SOL_SOCKET, SO_BROADCAST, &true_value,
                     sizeof(true_value));
+#endif  // defined(OS_MACOSX)
+    if (rv < 0)
+      return MapSystemError(errno);
+  }
+
+  if (!(socket_options_ & SOCKET_OPTION_MULTICAST_LOOP)) {
+    int rv;
+    if (addr_family_ == AF_INET) {
+      u_char loop = 0;
+      rv = setsockopt(socket_, IPPROTO_IP, IP_MULTICAST_LOOP,
+                      &loop, sizeof(loop));
+    } else {
+      u_int loop = 0;
+      rv = setsockopt(socket_, IPPROTO_IPV6, IPV6_MULTICAST_LOOP,
+                      &loop, sizeof(loop));
+    }
+    if (rv < 0)
+      return MapSystemError(errno);
+  }
+  if (multicast_time_to_live_ != IP_DEFAULT_MULTICAST_TTL) {
+    int rv;
+    if (addr_family_ == AF_INET) {
+      u_char ttl = multicast_time_to_live_;
+      rv = setsockopt(socket_, IPPROTO_IP, IP_MULTICAST_TTL,
+                      &ttl, sizeof(ttl));
+    } else {
+      // Signed interger. -1 to use route default.
+      int ttl = multicast_time_to_live_;
+      rv = setsockopt(socket_, IPPROTO_IPV6, IPV6_MULTICAST_HOPS,
+                      &ttl, sizeof(ttl));
+    }
     if (rv < 0)
       return MapSystemError(errno);
   }
@@ -490,7 +537,7 @@ int UDPSocketLibevent::SetSocketOptions() {
 int UDPSocketLibevent::DoBind(const IPEndPoint& address) {
   SockaddrStorage storage;
   if (!address.ToSockAddr(storage.addr, &storage.addr_len))
-    return ERR_UNEXPECTED;
+    return ERR_ADDRESS_INVALID;
   int rv = bind(socket_, storage.addr, storage.addr_len);
   return rv < 0 ? MapSystemError(errno) : rv;
 }
@@ -509,4 +556,99 @@ int UDPSocketLibevent::RandomBind(const IPEndPoint& address) {
   return DoBind(IPEndPoint(ip, 0));
 }
 
+int UDPSocketLibevent::JoinGroup(const IPAddressNumber& group_address) const {
+  DCHECK(CalledOnValidThread());
+  if (!is_connected())
+    return ERR_SOCKET_NOT_CONNECTED;
+
+  switch (group_address.size()) {
+    case kIPv4AddressSize: {
+      if (addr_family_ != AF_INET)
+        return ERR_ADDRESS_INVALID;
+      ip_mreq mreq;
+      mreq.imr_interface.s_addr = INADDR_ANY;
+      memcpy(&mreq.imr_multiaddr, &group_address[0], kIPv4AddressSize);
+      int rv = setsockopt(socket_, IPPROTO_IP, IP_ADD_MEMBERSHIP,
+                          &mreq, sizeof(mreq));
+      if (rv < 0)
+        return MapSystemError(errno);
+      return OK;
+    }
+    case kIPv6AddressSize: {
+      if (addr_family_ != AF_INET6)
+        return ERR_ADDRESS_INVALID;
+      ipv6_mreq mreq;
+      mreq.ipv6mr_interface = 0;  // 0 indicates default multicast interface.
+      memcpy(&mreq.ipv6mr_multiaddr, &group_address[0], kIPv6AddressSize);
+      int rv = setsockopt(socket_, IPPROTO_IPV6, IPV6_JOIN_GROUP,
+                          &mreq, sizeof(mreq));
+      if (rv < 0)
+        return MapSystemError(errno);
+      return OK;
+    }
+    default:
+      NOTREACHED() << "Invalid address family";
+      return ERR_ADDRESS_INVALID;
+  }
+}
+
+int UDPSocketLibevent::LeaveGroup(const IPAddressNumber& group_address) const {
+  DCHECK(CalledOnValidThread());
+
+  if (!is_connected())
+    return ERR_SOCKET_NOT_CONNECTED;
+
+  switch (group_address.size()) {
+    case kIPv4AddressSize: {
+      if (addr_family_ != AF_INET)
+        return ERR_ADDRESS_INVALID;
+      ip_mreq mreq;
+      mreq.imr_interface.s_addr = INADDR_ANY;
+      memcpy(&mreq.imr_multiaddr, &group_address[0], kIPv4AddressSize);
+      int rv = setsockopt(socket_, IPPROTO_IP, IP_DROP_MEMBERSHIP,
+                          &mreq, sizeof(mreq));
+      if (rv < 0)
+        return MapSystemError(errno);
+      return OK;
+    }
+    case kIPv6AddressSize: {
+      if (addr_family_ != AF_INET6)
+        return ERR_ADDRESS_INVALID;
+      ipv6_mreq mreq;
+      mreq.ipv6mr_interface = 0;  // 0 indicates default multicast interface.
+      memcpy(&mreq.ipv6mr_multiaddr, &group_address[0], kIPv6AddressSize);
+      int rv = setsockopt(socket_, IPPROTO_IPV6, IPV6_LEAVE_GROUP,
+                          &mreq, sizeof(mreq));
+      if (rv < 0)
+        return MapSystemError(errno);
+      return OK;
+    }
+    default:
+      NOTREACHED() << "Invalid address family";
+      return ERR_ADDRESS_INVALID;
+  }
+}
+
+int UDPSocketLibevent::SetMulticastTimeToLive(int time_to_live) {
+  DCHECK(CalledOnValidThread());
+  if (is_connected())
+    return ERR_SOCKET_IS_CONNECTED;
+
+  if (time_to_live < 0 || time_to_live > 255)
+    return ERR_INVALID_ARGUMENT;
+  multicast_time_to_live_ = time_to_live;
+  return OK;
+}
+
+int UDPSocketLibevent::SetMulticastLoopbackMode(bool loopback) {
+  DCHECK(CalledOnValidThread());
+  if (is_connected())
+    return ERR_SOCKET_IS_CONNECTED;
+
+  if (loopback)
+    socket_options_ |= SOCKET_OPTION_MULTICAST_LOOP;
+  else
+    socket_options_ &= ~SOCKET_OPTION_MULTICAST_LOOP;
+  return OK;
+}
 }  // namespace net

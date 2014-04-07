@@ -5,7 +5,8 @@
 #include "chrome/browser/extensions/extension_context_menu_model.h"
 
 #include "base/prefs/pref_service.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/extensions/api/extension_action/extension_action_api.h"
 #include "chrome/browser/extensions/extension_action.h"
 #include "chrome/browser/extensions/extension_action_manager.h"
 #include "chrome/browser/extensions/extension_service.h"
@@ -31,11 +32,10 @@ using content::Referrer;
 using content::WebContents;
 using extensions::Extension;
 
-ExtensionContextMenuModel::ExtensionContextMenuModel(
-    const Extension* extension,
-    Browser* browser,
-    PopupDelegate* delegate)
-    : ALLOW_THIS_IN_INITIALIZER_LIST(SimpleMenuModel(this)),
+ExtensionContextMenuModel::ExtensionContextMenuModel(const Extension* extension,
+                                                     Browser* browser,
+                                                     PopupDelegate* delegate)
+    : SimpleMenuModel(this),
       extension_id_(extension->id()),
       browser_(browser),
       profile_(browser->profile()),
@@ -49,10 +49,9 @@ ExtensionContextMenuModel::ExtensionContextMenuModel(
   }
 }
 
-ExtensionContextMenuModel::ExtensionContextMenuModel(
-    const Extension* extension,
-    Browser* browser)
-    : ALLOW_THIS_IN_INITIALIZER_LIST(SimpleMenuModel(this)),
+ExtensionContextMenuModel::ExtensionContextMenuModel(const Extension* extension,
+                                                     Browser* browser)
+    : SimpleMenuModel(this),
       extension_id_(extension->id()),
       browser_(browser),
       profile_(browser->profile()),
@@ -113,14 +112,14 @@ void ExtensionContextMenuModel::ExecuteCommand(int command_id,
     }
     case CONFIGURE:
       DCHECK(!extensions::ManifestURL::GetOptionsPage(extension).is_empty());
-      extensions::ExtensionSystem::Get(profile_)->process_manager()->
-          OpenOptionsPage(extension, browser_);
+      ExtensionTabUtil::OpenOptionsPage(extension, browser_);
       break;
     case HIDE: {
-      ExtensionService* extension_service =
-          extensions::ExtensionSystem::Get(profile_)->extension_service();
-      extension_service->extension_prefs()->
-          SetBrowserActionVisibility(extension, false);
+      extensions::ExtensionActionAPI::SetBrowserActionVisibility(
+          extensions::ExtensionSystem::Get(profile_)->
+              extension_service()->extension_prefs(),
+          extension->id(),
+          false);
       break;
     }
     case UNINSTALL: {

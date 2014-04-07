@@ -5,9 +5,9 @@
 #include "chrome/browser/printing/background_printing_manager.h"
 
 #include "base/stl_util.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/printing/print_job.h"
 #include "chrome/browser/printing/print_preview_dialog_controller.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_details.h"
 #include "content/public/browser/notification_source.h"
@@ -63,16 +63,15 @@ void BackgroundPrintingManager::OwnPrintPreviewDialog(
                    rph_source);
   }
 
-  // Activate the initiator tab.
+  // Activate the initiator.
   PrintPreviewDialogController* dialog_controller =
       PrintPreviewDialogController::GetInstance();
   if (!dialog_controller)
     return;
-  WebContents* initiator_tab =
-      dialog_controller->GetInitiatorTab(preview_dialog);
-  if (!initiator_tab)
+  WebContents* initiator = dialog_controller->GetInitiator(preview_dialog);
+  if (!initiator)
     return;
-  initiator_tab->GetDelegate()->ActivateContents(initiator_tab);
+  initiator->GetDelegate()->ActivateContents(initiator);
 }
 
 void BackgroundPrintingManager::Observe(
@@ -153,7 +152,7 @@ void BackgroundPrintingManager::DeletePreviewContents(
                     content::Source<WebContents>(preview_contents));
   printing_contents_set_.erase(preview_contents);
   printing_contents_pending_deletion_set_.insert(preview_contents);
-  MessageLoop::current()->DeleteSoon(FROM_HERE, preview_contents);
+  base::MessageLoop::current()->DeleteSoon(FROM_HERE, preview_contents);
 }
 
 bool BackgroundPrintingManager::HasSharedRenderProcessHost(

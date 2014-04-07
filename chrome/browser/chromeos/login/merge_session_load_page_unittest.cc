@@ -2,16 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/chromeos/cros/cros_library.h"
+#include "base/run_loop.h"
+#include "chrome/browser/chromeos/cros/network_library.h"
 #include "chrome/browser/chromeos/login/merge_session_load_page.h"
+#include "chrome/browser/chromeos/login/user_manager.h"
+#include "chrome/browser/chromeos/settings/cros_settings.h"
+#include "chrome/browser/chromeos/settings/device_settings_service.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "content/public/browser/interstitial_page.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/test/test_browser_thread.h"
 #include "content/public/test/web_contents_tester.h"
 
-using content::BrowserThread;
 using content::InterstitialPage;
 using content::WebContents;
 using content::WebContentsTester;
@@ -45,12 +47,21 @@ class TestMergeSessionLoadPage :  public MergeSessionLoadPage {
 };
 
 class MergeSessionLoadPageTest : public ChromeRenderViewHostTestHarness {
- public:
-  MergeSessionLoadPageTest()
-      : ui_thread_(BrowserThread::UI, MessageLoop::current()),
-        file_user_blocking_thread_(
-            BrowserThread::FILE_USER_BLOCKING, MessageLoop::current()),
-        io_thread_(BrowserThread::IO, MessageLoop::current()) {
+ protected:
+  virtual void SetUp() OVERRIDE {
+    ChromeRenderViewHostTestHarness::SetUp();
+#if defined OS_CHROMEOS
+  test_user_manager_.reset(new chromeos::ScopedTestUserManager());
+#endif
+  }
+
+  virtual void TearDown() OVERRIDE {
+#if defined OS_CHROMEOS
+    // Clean up pending tasks that might depend on the user manager.
+    base::RunLoop().RunUntilIdle();
+    test_user_manager_.reset();
+#endif
+    ChromeRenderViewHostTestHarness::TearDown();
   }
 
   void Navigate(const char* url, int page_id) {
@@ -70,14 +81,10 @@ class MergeSessionLoadPageTest : public ChromeRenderViewHostTestHarness {
   }
 
  private:
-  content::TestBrowserThread ui_thread_;
-  content::TestBrowserThread file_user_blocking_thread_;
-  content::TestBrowserThread io_thread_;
-
-  // Initializes / shuts down a stub CrosLibrary.
-  chromeos::ScopedStubCrosEnabler stub_cros_enabler_;
-
-  DISALLOW_COPY_AND_ASSIGN(MergeSessionLoadPageTest);
+  ScopedStubNetworkLibraryEnabler stub_network_library_enabler_;
+  ScopedTestDeviceSettingsService test_device_settings_service_;
+  ScopedTestCrosSettings test_cros_settings_;
+  scoped_ptr<chromeos::ScopedTestUserManager> test_user_manager_;
 };
 
 TEST_F(MergeSessionLoadPageTest, MergeSessionPageNotShown) {
@@ -109,15 +116,15 @@ TEST_F(MergeSessionLoadPageTest, MergeSessionPageShown) {
   ShowInterstitial(kURL2);
   InterstitialPage* interstitial = GetMergeSessionLoadPage();
   ASSERT_TRUE(interstitial);
-  MessageLoop::current()->RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
 
   // Simulate merge session completion.
   UserManager::Get()->SetMergeSessionState(
       UserManager::MERGE_STATUS_DONE);
-  MessageLoop::current()->RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
 
   // The URL remains to be URL2.
-  EXPECT_EQ(kURL2, web_contents()->GetURL().spec());
+  EXPECT_EQ(kURL2, web_contents()->GetVisibleURL().spec());
 
   // Commit navigation and the interstitial page is gone.
   Navigate(kURL2, 2);

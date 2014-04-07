@@ -12,21 +12,17 @@ TestWebContentsView::TestWebContentsView() {
 TestWebContentsView::~TestWebContentsView() {
 }
 
-void TestWebContentsView::ShowContextMenu(const ContextMenuParams& params,
-                                          ContextMenuSourceType type) {
-}
-
 void TestWebContentsView::ShowPopupMenu(const gfx::Rect& bounds,
                                         int item_height,
                                         double item_font_size,
                                         int selected_item,
-                                        const std::vector<WebMenuItem>& items,
+                                        const std::vector<MenuItem>& items,
                                         bool right_aligned,
                                         bool allow_multiple_selection) {
 }
 
 void TestWebContentsView::StartDragging(
-    const WebDropData& drop_data,
+    const DropData& drop_data,
     WebKit::WebDragOperationsMask allowed_ops,
     const gfx::ImageSkia& image,
     const gfx::Vector2d& image_offset,
@@ -76,7 +72,7 @@ void TestWebContentsView::StoreFocus() {
 void TestWebContentsView::RestoreFocus() {
 }
 
-WebDropData* TestWebContentsView::GetDropData() const {
+DropData* TestWebContentsView::GetDropData() const {
   return NULL;
 }
 
@@ -86,6 +82,10 @@ gfx::Rect TestWebContentsView::GetViewBounds() const {
 
 #if defined(OS_MACOSX)
 void TestWebContentsView::SetAllowOverlappingViews(bool overlapping) {
+}
+
+bool TestWebContentsView::GetAllowOverlappingViews() const {
+  return false;
 }
 #endif
 

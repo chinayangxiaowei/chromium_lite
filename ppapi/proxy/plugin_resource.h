@@ -131,6 +131,8 @@ class PPAPI_PROXY_EXPORT PluginResource : public Resource {
                           IPC::Message* reply_msg,
                           ResourceMessageReplyParams* reply_params);
 
+  const Connection& connection() { return connection_; }
+
  private:
   IPC::Sender* GetSender(Destination dest) {
     return dest == RENDERER ? connection_.renderer_sender :
@@ -164,6 +166,9 @@ template<typename ReplyMsgClass, typename CallbackType>
 int32_t PluginResource::Call(Destination dest,
                              const IPC::Message& msg,
                              const CallbackType& callback) {
+  TRACE_EVENT2("ppapi proxy", "PluginResource::Call",
+               "Class", IPC_MESSAGE_ID_CLASS(msg.type()),
+               "Line", IPC_MESSAGE_ID_LINE(msg.type()));
   ResourceMessageCallParams params(pp_resource(), next_sequence_number_++);
   // Stash the |callback| in |callbacks_| identified by the sequence number of
   // the call.

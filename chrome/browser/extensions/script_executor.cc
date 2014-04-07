@@ -66,7 +66,7 @@ class Handler : public content::WebContentsObserver {
 
   virtual void WebContentsDestroyed(content::WebContents* tab) OVERRIDE {
     base::ListValue val;
-    callback_.Run(kRendererDestroyed, -1, GURL(""), val);
+    callback_.Run(kRendererDestroyed, -1, GURL(std::string()), val);
     delete this;
   }
 
@@ -76,7 +76,7 @@ class Handler : public content::WebContentsObserver {
                              int32 on_page_id,
                              const GURL& on_url,
                              const base::ListValue& script_result) {
-    if (script_observers_ && error.empty()) {
+    if (script_observers_.get() && error.empty()) {
       TabHelper::ScriptExecutionObserver::ExecutingScriptsMap id_map;
       id_map[extension_id_] = std::set<std::string>();
       FOR_EACH_OBSERVER(TabHelper::ScriptExecutionObserver, *script_observers_,

@@ -9,15 +9,12 @@
 
 #include "base/memory/scoped_ptr.h"
 #include "chrome/browser/chromeos/login/oauth2_login_verifier.h"
-#include "chrome/browser/chromeos/login/oauth2_policy_fetcher.h"
 #include "chrome/browser/chromeos/login/oauth2_token_fetcher.h"
 #include "chrome/browser/chromeos/login/oauth_login_manager.h"
-#include "content/public/browser/notification_observer.h"
-#include "content/public/browser/notification_registrar.h"
+#include "chrome/browser/signin/oauth2_token_service.h"
 #include "net/url_request/url_request_context_getter.h"
 
 class GoogleServiceAuthError;
-class PrefRegistrySyncable;
 class Profile;
 class TokenService;
 
@@ -25,18 +22,14 @@ namespace chromeos {
 
 // OAuth2 specialization of OAuthLoginManager.
 class OAuth2LoginManager : public OAuthLoginManager,
-                           public content::NotificationObserver,
                            public OAuth2LoginVerifier::Delegate,
-                           public OAuth2TokenFetcher::Delegate {
+                           public OAuth2TokenFetcher::Delegate,
+                           public OAuth2TokenService::Observer {
  public:
   explicit OAuth2LoginManager(OAuthLoginManager::Delegate* delegate);
   virtual ~OAuth2LoginManager();
 
-  static void RegisterUserPrefs(PrefRegistrySyncable* registry);
-
   // OAuthLoginManager overrides.
-  virtual void RestorePolicyTokens(
-      net::URLRequestContextGetter* auth_request_context) OVERRIDE;
   virtual void RestoreSession(
       Profile* user_profile,
       net::URLRequestContextGetter* auth_request_context,
@@ -57,10 +50,6 @@ class OAuth2LoginManager : public OAuthLoginManager,
     SESSION_RESTORE_MERGE_SESSION_FAILED = 5,
     SESSION_RESTORE_COUNT = SESSION_RESTORE_MERGE_SESSION_FAILED,
   };
-  // content::NotificationObserver overrides.
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
 
   // OAuth2LoginVerifier::Delegate overrides.
   virtual void OnOAuthLoginSuccess(
@@ -74,15 +63,15 @@ class OAuth2LoginManager : public OAuthLoginManager,
       const GaiaAuthConsumer::ClientOAuthResult& oauth2_tokens) OVERRIDE;
   virtual void OnOAuth2TokensFetchFailed() OVERRIDE;
 
+  // OAuth2TokenService::Observer implementation:
+  virtual void OnRefreshTokenAvailable(const std::string& account_id) OVERRIDE;
+
   // Retrieves TokenService for |user_profile_| and sets up notification
   // observer events.
   TokenService* SetupTokenService();
 
-  // Removes legacy tokens from OAuth1 flow.
-  void RemoveLegacyTokens();
-
-  // Records OAuth2 tokens fetched through either policy fetcher or cookies-to-
-  // token exchange into TokenService.
+  // Records OAuth2 tokens fetched through cookies-to-token exchange into
+  // TokenService.
   void StoreOAuth2Tokens(
       const GaiaAuthConsumer::ClientOAuthResult& oauth2_tokens);
 
@@ -99,10 +88,6 @@ class OAuth2LoginManager : public OAuthLoginManager,
   // Issue GAIA cookie recovery (MergeSession) from |refresh_token_|.
   void RestoreSessionCookies();
 
-  // Fetches device policy OAuth2 access tokens if have not attempted or
-  // failed that step previously.
-  void FetchPolicyTokens();
-
   // Checks GAIA error and figures out whether the request should be
   // re-attempted.
   bool RetryOnError(const GoogleServiceAuthError& error);
@@ -111,13 +96,14 @@ class OAuth2LoginManager : public OAuthLoginManager,
   void StartTokenService(
       const GaiaAuthConsumer::ClientLoginResult& gaia_credentials);
 
+  // Stops listening for a new login refresh token.
+  void StopObservingRefreshToken();
+
   // Keeps the track if we have already reported OAuth2 token being loaded
   // by TokenService.
   bool loading_reported_;
-  content::NotificationRegistrar registrar_;
   scoped_ptr<OAuth2TokenFetcher> oauth2_token_fetcher_;
   scoped_ptr<OAuth2LoginVerifier> login_verifier_;
-  scoped_ptr<OAuth2PolicyFetcher> oauth2_policy_fetcher_;
   // OAuth2 refresh token.
   std::string refresh_token_;
   // Authorization code for fetching OAuth2 tokens.

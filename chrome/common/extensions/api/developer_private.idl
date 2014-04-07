@@ -5,7 +5,6 @@
 // developerPrivate API.
 // This is a private API exposing developing and debugging functionalities for
 // apps and extensions.
-
 namespace developerPrivate {
 
   enum ItemType {
@@ -27,6 +26,11 @@ namespace developerPrivate {
     boolean incognito;
   };
 
+  dictionary InstallWarning {
+    boolean is_html;
+    DOMString message;
+  };
+
   dictionary ItemInfo {
     DOMString id;
     DOMString name;
@@ -45,7 +49,7 @@ namespace developerPrivate {
     boolean allow_reload;
     boolean terminated;
     boolean allow_incognito;
-    DOMString icon;
+    DOMString icon_url;
 
     // Path of an unpacked extension.
     DOMString? path;
@@ -55,6 +59,7 @@ namespace developerPrivate {
     DOMString? app_launch_url;
     DOMString? homepage_url;
     DOMString? update_url;
+    InstallWarning[] install_warnings;
     boolean offline_enabled;
 
     // All views of the current extension.
@@ -84,6 +89,17 @@ namespace developerPrivate {
     FOLDER
   };
 
+  enum EventType {
+    INSTALLED,
+    UNINSTALLED,
+    LOADED,
+    UNLOADED,
+    // New window / view opened.
+    VIEW_REGISTERED,
+    // window / view closed.
+    VIEW_UNREGISTERED
+  };
+
   dictionary PackDirectoryResponse {
     // The response message of success or error.
     DOMString message;
@@ -98,10 +114,20 @@ namespace developerPrivate {
     PackStatus status;
   };
 
+  dictionary ProjectInfo {
+    DOMString name;
+  };
+
+  dictionary EventData {
+    EventType event_type;
+    DOMString item_id;
+  };
+
   callback VoidCallback = void ();
   callback BooleanCallback = void (boolean result);
   callback ItemsInfoCallback = void (ItemInfo[] result);
   callback GetStringsCallback = void (object result);
+  callback GetProjectsInfoCallback = void (ProjectInfo[] result);
   callback PathCallback = void (DOMString path);
   callback PackCallback = void (PackDirectoryResponse response);
   callback VoidCallback = void();
@@ -119,6 +145,10 @@ namespace developerPrivate {
     static void getItemsInfo(boolean include_disabled,
                              boolean include_terminated,
                              ItemsInfoCallback callback);
+
+    // Opens a permissions dialog for given |itemId|.
+    static void showPermissionsDialog(DOMString itemId,
+                                      optional VoidCallback callback);
 
     // Opens an inspect window for given |options|
     static void inspect(InspectOptions options,
@@ -148,6 +178,15 @@ namespace developerPrivate {
     // Load a user selected unpacked item
     static void loadUnpacked(optional VoidCallback callback);
 
+    // Copies the syncfs folder for the extension to local disk.
+    static void exportSyncfsFolderToLocalfs(DOMString folder_name,
+                                            optional VoidCallback callback);
+
+    // Loads the unpacked app / extension.
+    // |callback| called with itemId of the loaded item.
+    static void loadProject(DOMString project_name,
+                            PathCallback callback);
+
     // Open Dialog to browse to an entry.
     // |select_type| : Select a file or a folder.
     // |file_type| : Required file type. For Example pem type is for private
@@ -168,6 +207,11 @@ namespace developerPrivate {
     // strings as a dictionary mapping from string identifier to the
     // translated string to use in the apps_debugger app UI.
     static void getStrings(GetStringsCallback callback);
+  };
+
+  interface Events {
+    // Fired when a item state is changed.
+    static void onItemStateChanged(EventData response);
   };
 
 };

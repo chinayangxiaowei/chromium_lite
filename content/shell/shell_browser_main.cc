@@ -12,16 +12,22 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
-#include "base/sys_string_conversions.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/sys_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread_restrictions.h"
-#include "base/utf_string_conversions.h"
 #include "content/public/browser/browser_main_runner.h"
+#include "content/shell/common/shell_switches.h"
+#include "content/shell/common/webkit_test_helpers.h"
 #include "content/shell/shell.h"
-#include "content/shell/shell_switches.h"
 #include "content/shell/webkit_test_controller.h"
 #include "net/base/net_util.h"
 #include "webkit/support/webkit_support.h"
+
+#if defined(OS_ANDROID)
+#include "base/run_loop.h"
+#include "content/shell/shell_layout_tests_android.h"
+#endif
 
 namespace {
 
@@ -49,7 +55,14 @@ GURL GetURLForLayoutTest(const std::string& test_name,
   }
   if (expected_pixel_hash)
     *expected_pixel_hash = pixel_hash;
-  GURL test_url(path_or_url);
+
+  GURL test_url;
+#if defined(OS_ANDROID)
+  if (content::GetTestUrlForAndroid(path_or_url, &test_url))
+    return test_url;
+#endif
+
+  test_url = GURL(path_or_url);
   if (!(test_url.is_valid() && test_url.has_scheme())) {
     // We're outside of the message loop here, and this is a test.
     base::ThreadRestrictions::ScopedAllowIO allow_io;
@@ -60,8 +73,11 @@ GURL GetURLForLayoutTest(const std::string& test_name,
 #else
     base::FilePath local_file(path_or_url);
 #endif
-    file_util::AbsolutePath(&local_file);
-    test_url = net::FilePathToFileURL(local_file);
+    if (!base::PathExists(local_file)) {
+      local_file = content::GetWebKitRootDirFilePath()
+          .Append(FILE_PATH_LITERAL("LayoutTests")).Append(local_file);
+    }
+    test_url = net::FilePathToFileURL(base::MakeAbsoluteFilePath(local_file));
   }
   base::FilePath local_path;
   if (current_working_directory) {
@@ -93,7 +109,9 @@ bool GetNextTest(const CommandLine::StringVector& args,
 }  // namespace
 
 // Main routine for running as the Browser process.
-int ShellBrowserMain(const content::MainFunctionParams& parameters) {
+int ShellBrowserMain(
+    const content::MainFunctionParams& parameters,
+    const scoped_ptr<content::BrowserMainRunner>& main_runner) {
   bool layout_test_mode =
       CommandLine::ForCurrentProcess()->HasSwitch(switches::kDumpRenderTree);
   base::ScopedTempDir browser_context_path_for_layout_tests;
@@ -104,22 +122,26 @@ int ShellBrowserMain(const content::MainFunctionParams& parameters) {
     CommandLine::ForCurrentProcess()->AppendSwitchASCII(
         switches::kContentShellDataPath,
         browser_context_path_for_layout_tests.path().MaybeAsASCII());
+
+#if defined(OS_ANDROID)
+    content::EnsureInitializeForAndroidLayoutTests();
+#endif
   }
 
-  scoped_ptr<content::BrowserMainRunner> main_runner_(
-      content::BrowserMainRunner::Create());
-
-  int exit_code = main_runner_->Initialize(parameters);
+  int exit_code = main_runner->Initialize(parameters);
+  DCHECK_LT(exit_code, 0)
+      << "BrowserMainRunner::Initialize failed in ShellBrowserMain";
 
   if (exit_code >= 0)
     return exit_code;
 
   if (CommandLine::ForCurrentProcess()->HasSwitch(
         switches::kCheckLayoutTestSysDeps)) {
-    MessageLoop::current()->PostTask(FROM_HERE, MessageLoop::QuitClosure());
-    main_runner_->Run();
+    base::MessageLoop::current()->PostTask(FROM_HERE,
+                                           base::MessageLoop::QuitClosure());
+    main_runner->Run();
     content::Shell::CloseAllWindows();
-    main_runner_->Shutdown();
+    main_runner->Shutdown();
     return 0;
   }
 
@@ -160,21 +182,33 @@ int ShellBrowserMain(const content::MainFunctionParams& parameters) {
       }
 
       ran_at_least_once = true;
-      main_runner_->Run();
+#if defined(OS_ANDROID)
+      // The message loop on Android is provided by the system, and does not
+      // offer a blocking Run() method. For layout tests, use a nested loop
+      // together with a base::RunLoop so it can block until a QuitClosure.
+      base::RunLoop run_loop;
+      run_loop.Run();
+#else
+      main_runner->Run();
+#endif
 
       if (!content::WebKitTestController::Get()->ResetAfterLayoutTest())
         break;
     }
     if (!ran_at_least_once) {
-      MessageLoop::current()->PostTask(FROM_HERE, MessageLoop::QuitClosure());
-      main_runner_->Run();
+      base::MessageLoop::current()->PostTask(FROM_HERE,
+                                             base::MessageLoop::QuitClosure());
+      main_runner->Run();
     }
     exit_code = 0;
-  } else {
-    exit_code = main_runner_->Run();
   }
 
-  main_runner_->Shutdown();
+#if !defined(OS_ANDROID)
+  if (!layout_test_mode)
+    exit_code = main_runner->Run();
+
+  main_runner->Shutdown();
+#endif
 
   return exit_code;
 }

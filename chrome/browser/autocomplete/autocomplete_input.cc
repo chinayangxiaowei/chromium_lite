@@ -4,15 +4,15 @@
 
 #include "chrome/browser/autocomplete/autocomplete_input.h"
 
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/external_protocol/external_protocol_handler.h"
-#include "chrome/browser/net/url_fixer_upper.h"
 #include "chrome/browser/profiles/profile_io_data.h"
+#include "chrome/common/net/url_fixer_upper.h"
 #include "content/public/common/url_constants.h"
-#include "googleurl/src/url_canon_ip.h"
 #include "net/base/net_util.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
+#include "url/url_canon_ip.h"
 
 namespace {
 
@@ -30,6 +30,7 @@ void AdjustCursorPositionIfNecessary(size_t num_leading_chars_removed,
 
 AutocompleteInput::AutocompleteInput()
     : cursor_position_(string16::npos),
+      current_page_classification_(AutocompleteInput::INVALID_SPEC),
       type_(INVALID),
       prevent_inline_autocomplete_(false),
       prefer_keyword_(false),
@@ -37,16 +38,19 @@ AutocompleteInput::AutocompleteInput()
       matches_requested_(ALL_MATCHES) {
 }
 
-AutocompleteInput::AutocompleteInput(const string16& text,
-                                     size_t cursor_position,
-                                     const string16& desired_tld,
-                                     const GURL& current_url,
-                                     bool prevent_inline_autocomplete,
-                                     bool prefer_keyword,
-                                     bool allow_exact_keyword_match,
-                                     MatchesRequested matches_requested)
+AutocompleteInput::AutocompleteInput(
+    const string16& text,
+    size_t cursor_position,
+    const string16& desired_tld,
+    const GURL& current_url,
+    AutocompleteInput::PageClassification current_page_classification,
+    bool prevent_inline_autocomplete,
+    bool prefer_keyword,
+    bool allow_exact_keyword_match,
+    MatchesRequested matches_requested)
     : cursor_position_(cursor_position),
       current_url_(current_url),
+      current_page_classification_(current_page_classification),
       prevent_inline_autocomplete_(prevent_inline_autocomplete),
       prefer_keyword_(prefer_keyword),
       allow_exact_keyword_match_(allow_exact_keyword_match),
@@ -178,7 +182,7 @@ AutocompleteInput::Type AutocompleteInput::Parse(
     // reach the renderer or else the renderer handles internally without
     // reaching the net::URLRequest logic.  We thus won't catch these above, but
     // we should still claim to handle them.
-    if (LowerCaseEqualsASCII(parsed_scheme, chrome::kViewSourceScheme) ||
+    if (LowerCaseEqualsASCII(parsed_scheme, content::kViewSourceScheme) ||
         LowerCaseEqualsASCII(parsed_scheme, chrome::kJavaScriptScheme) ||
         LowerCaseEqualsASCII(parsed_scheme, chrome::kDataScheme))
       return URL;
@@ -266,8 +270,10 @@ AutocompleteInput::Type AutocompleteInput::Parse(
   // use the registry length later below.)
   const string16 host(text.substr(parts->host.begin, parts->host.len));
   const size_t registry_length =
-      net::RegistryControlledDomainService::GetRegistryLength(UTF16ToUTF8(host),
-                                                              false);
+      net::registry_controlled_domains::GetRegistryLength(
+          UTF16ToUTF8(host),
+          net::registry_controlled_domains::EXCLUDE_UNKNOWN_REGISTRIES,
+          net::registry_controlled_domains::EXCLUDE_PRIVATE_REGISTRIES);
   if (registry_length == std::string::npos) {
     // Try to append the desired_tld.
     if (!desired_tld.empty()) {
@@ -275,8 +281,12 @@ AutocompleteInput::Type AutocompleteInput::Parse(
       if (host[host.length() - 1] != '.')
         host_with_tld += '.';
       host_with_tld += desired_tld;
-      if (net::RegistryControlledDomainService::GetRegistryLength(
-          UTF16ToUTF8(host_with_tld), false) != std::string::npos)
+      const size_t tld_length =
+          net::registry_controlled_domains::GetRegistryLength(
+              UTF16ToUTF8(host_with_tld),
+              net::registry_controlled_domains::EXCLUDE_UNKNOWN_REGISTRIES,
+              net::registry_controlled_domains::EXCLUDE_PRIVATE_REGISTRIES);
+      if (tld_length != std::string::npos)
         return URL;  // Something like "99999999999" that looks like a bad IP
                      // address, but becomes valid on attaching a TLD.
     }
@@ -425,7 +435,7 @@ void AutocompleteInput::ParseForEmphasizeComponents(
   int after_scheme_and_colon = parts.scheme.end() + 1;
   // For the view-source scheme, we should emphasize the scheme and host of the
   // URL qualified by the view-source prefix.
-  if (LowerCaseEqualsASCII(scheme_str, chrome::kViewSourceScheme) &&
+  if (LowerCaseEqualsASCII(scheme_str, content::kViewSourceScheme) &&
       (static_cast<int>(text.length()) > after_scheme_and_colon)) {
     // Obtain the URL prefixed by view-source and parse it.
     string16 real_url(text.substr(after_scheme_and_colon));
@@ -501,6 +511,7 @@ void AutocompleteInput::Clear() {
   text_.clear();
   cursor_position_ = string16::npos;
   current_url_ = GURL();
+  current_page_classification_ = AutocompleteInput::INVALID_SPEC;
   type_ = INVALID;
   parts_ = url_parse::Parsed();
   scheme_.clear();

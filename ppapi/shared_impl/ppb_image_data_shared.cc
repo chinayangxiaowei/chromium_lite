@@ -36,10 +36,19 @@ PP_ImageDataFormat PPB_ImageData_Shared::GetNativeImageDataFormat() {
 }
 
 // static
-bool PPB_ImageData_Shared::IsImageDataFormatSupported(
+PP_Bool PPB_ImageData_Shared::IsImageDataFormatSupported(
     PP_ImageDataFormat format) {
-  return format == PP_IMAGEDATAFORMAT_BGRA_PREMUL ||
-         format == PP_IMAGEDATAFORMAT_RGBA_PREMUL;
+  return PP_FromBool(format == PP_IMAGEDATAFORMAT_BGRA_PREMUL ||
+                     format == PP_IMAGEDATAFORMAT_RGBA_PREMUL);
+}
+
+// static
+PP_Bool PPB_ImageData_Shared::IsImageDataDescValid(
+    const PP_ImageDataDesc& desc) {
+  return PP_FromBool(IsImageDataFormatSupported(desc.format) &&
+                     desc.size.width > 0 &&
+                     desc.size.height > 0 &&
+                     desc.stride > 0);
 }
 
 }  // namespace ppapi

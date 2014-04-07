@@ -3,8 +3,8 @@
 // found in the LICENSE file.
 #include "chrome_frame/test/perf/chrome_frame_perftest.h"
 
-#include <atlwin.h>
 #include <atlhost.h>
+#include <atlwin.h>
 
 #include <map>
 #include <string>
@@ -15,12 +15,15 @@
 #include "base/files/file_path.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/path_service.h"
-#include "base/process_util.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
+#include "base/process/kill.h"
+#include "base/process/launch.h"
+#include "base/process/process_iterator.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/test/test_file_util.h"
 #include "base/threading/platform_thread.h"
-#include "base/time.h"
-#include "base/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "base/win/event_trace_consumer.h"
 #include "base/win/event_trace_controller.h"
 #include "base/win/registry.h"
@@ -317,7 +320,7 @@ class ChromeFrameStartupTest : public ChromeFramePerfTestBase {
       if (test_cold) {
         for (int binary_index = 0; binary_index < total_binaries;
              binary_index++) {
-          bool result = EvictFileFromSystemCacheWrapper(
+          bool result = base::EvictFileFromSystemCacheWithRetry(
               binaries_to_evict[binary_index]);
           if (!ignore_cache_error) {
             ASSERT_TRUE(result);
@@ -532,6 +535,7 @@ class ChromeFrameMemoryTest : public ChromeFramePerfTestBase {
       virtual_size_ = process_metrics->GetPagefileUsage();
       working_set_size_ = process_metrics->GetWorkingSetSize();
 
+      base::CloseProcessHandle(process_handle);
       return true;
     }
 
@@ -1327,7 +1331,7 @@ class EtwPerfSession {
   }
 
   ~EtwPerfSession() {
-    file_util::Delete(etl_log_file_, false);
+    base::DeleteFile(etl_log_file_, false);
   }
 
   void Start() {

@@ -17,6 +17,7 @@
 #include "content/public/common/result_codes.h"
 #include "content/public/common/url_constants.h"
 #include "net/base/escape.h"
+#include "ui/base/keycodes/keyboard_codes.h"
 
 namespace content {
 
@@ -40,14 +41,9 @@ BrowserPluginGuestManager* BrowserPluginGuestManager::Create() {
 BrowserPluginGuest* BrowserPluginGuestManager::CreateGuest(
     SiteInstance* embedder_site_instance,
     int instance_id,
-    const BrowserPluginHostMsg_CreateGuest_Params& params) {
+    const BrowserPluginHostMsg_Attach_Params& params,
+    scoped_ptr<base::DictionaryValue> extra_params) {
   SiteInstance* guest_site_instance = NULL;
-  int embedder_render_process_id =
-      embedder_site_instance->GetProcess()->GetID();
-  BrowserPluginGuest* guest =
-      GetGuestByInstanceID(instance_id, embedder_render_process_id);
-  CHECK(!guest);
-
   // Validate that the partition id coming from the renderer is valid UTF-8,
   // since we depend on this in other parts of the code, such as FilePath
   // creation. If the validation fails, treat it as a bad message and kill the
@@ -104,28 +100,22 @@ BrowserPluginGuest* BrowserPluginGuestManager::CreateGuest(
   return WebContentsImpl::CreateGuest(
       embedder_site_instance->GetBrowserContext(),
       guest_site_instance,
-      instance_id);
+      instance_id,
+      extra_params.Pass());
 }
 
 BrowserPluginGuest* BrowserPluginGuestManager::GetGuestByInstanceID(
     int instance_id,
     int embedder_render_process_id) const {
+  if (!CanEmbedderAccessInstanceIDMaybeKill(embedder_render_process_id,
+                                            instance_id)) {
+    return NULL;
+  }
   GuestInstanceMap::const_iterator it =
       guest_web_contents_by_instance_id_.find(instance_id);
   if (it == guest_web_contents_by_instance_id_.end())
     return NULL;
-
-  BrowserPluginGuest* guest =
-      static_cast<WebContentsImpl*>(it->second)->GetBrowserPluginGuest();
-  if (!CanEmbedderAccessGuest(embedder_render_process_id, guest)) {
-    // The embedder process is trying to access a guest it does not own.
-    content::RecordAction(UserMetricsAction("BadMessageTerminate_BPGM"));
-    base::KillProcess(
-        RenderProcessHost::FromID(embedder_render_process_id)->GetHandle(),
-        content::RESULT_CODE_KILLED_BAD_MESSAGE, false);
-    return NULL;
-  }
-  return guest;
+  return static_cast<WebContentsImpl*>(it->second)->GetBrowserPluginGuest();
 }
 
 void BrowserPluginGuestManager::AddGuest(int instance_id,
@@ -139,6 +129,20 @@ void BrowserPluginGuestManager::RemoveGuest(int instance_id) {
   DCHECK(guest_web_contents_by_instance_id_.find(instance_id) !=
          guest_web_contents_by_instance_id_.end());
   guest_web_contents_by_instance_id_.erase(instance_id);
+}
+
+bool BrowserPluginGuestManager::CanEmbedderAccessInstanceIDMaybeKill(
+    int embedder_render_process_id,
+    int instance_id) const {
+  if (!CanEmbedderAccessInstanceID(embedder_render_process_id, instance_id)) {
+    // The embedder process is trying to access a guest it does not own.
+    content::RecordAction(UserMetricsAction("BadMessageTerminate_BPGM"));
+    base::KillProcess(
+        RenderProcessHost::FromID(embedder_render_process_id)->GetHandle(),
+        content::RESULT_CODE_KILLED_BAD_MESSAGE, false);
+    return false;
+  }
+  return true;
 }
 
 void BrowserPluginGuestManager::OnMessageReceived(const IPC::Message& message,
@@ -160,11 +164,11 @@ void BrowserPluginGuestManager::OnMessageReceived(const IPC::Message& message,
   IPC_END_MESSAGE_MAP()
 }
 
-//static
+// static
 bool BrowserPluginGuestManager::CanEmbedderAccessGuest(
     int embedder_render_process_id,
     BrowserPluginGuest* guest) {
-  // An embedder can access |guest| if the guest has not been attached and its
+  // The embedder can access the guest if it has not been attached and its
   // opener's embedder lives in the same process as the given embedder.
   if (!guest->attached()) {
     if (!guest->opener())
@@ -177,6 +181,31 @@ bool BrowserPluginGuestManager::CanEmbedderAccessGuest(
 
   return embedder_render_process_id ==
       guest->embedder_web_contents()->GetRenderProcessHost()->GetID();
+}
+
+bool BrowserPluginGuestManager::CanEmbedderAccessInstanceID(
+    int embedder_render_process_id,
+    int instance_id) const {
+  // The embedder is trying to access a guest with a negative or zero
+  // instance ID.
+  if (instance_id <= browser_plugin::kInstanceIDNone)
+    return false;
+
+  // The embedder is trying to access an instance ID that has not yet been
+  // allocated by BrowserPluginGuestManager. This could cause instance ID
+  // collisions in the future, and potentially give one embedder access to a
+  // guest it does not own.
+  if (instance_id > next_instance_id_)
+    return false;
+
+  GuestInstanceMap::const_iterator it =
+      guest_web_contents_by_instance_id_.find(instance_id);
+  if (it == guest_web_contents_by_instance_id_.end())
+    return true;
+  BrowserPluginGuest* guest =
+      static_cast<WebContentsImpl*>(it->second)->GetBrowserPluginGuest();
+
+  return CanEmbedderAccessGuest(embedder_render_process_id, guest);
 }
 
 SiteInstance* BrowserPluginGuestManager::GetGuestSiteInstance(
@@ -202,6 +231,44 @@ void BrowserPluginGuestManager::OnUnhandledSwapBuffersACK(
                                                gpu_host_id,
                                                mailbox_name,
                                                sync_point);
+}
+
+void BrowserPluginGuestManager::DidSendScreenRects(
+    WebContentsImpl* embedder_web_contents) {
+  // TODO(lazyboy): Generalize iterating over guest instances and performing
+  // actions on the guests.
+  for (GuestInstanceMap::iterator it =
+           guest_web_contents_by_instance_id_.begin();
+               it != guest_web_contents_by_instance_id_.end(); ++it) {
+    BrowserPluginGuest* guest = it->second->GetBrowserPluginGuest();
+    if (embedder_web_contents == guest->embedder_web_contents()) {
+      static_cast<RenderViewHostImpl*>(
+          guest->GetWebContents()->GetRenderViewHost())->SendScreenRects();
+    }
+  }
+}
+
+bool BrowserPluginGuestManager::UnlockMouseIfNecessary(
+    WebContentsImpl* embedder_web_contents,
+    const NativeWebKeyboardEvent& event) {
+  if ((event.type != WebKit::WebInputEvent::RawKeyDown) ||
+      (event.windowsKeyCode != ui::VKEY_ESCAPE) ||
+      (event.modifiers & WebKit::WebInputEvent::InputModifiers)) {
+    return false;
+  }
+
+  // TODO(lazyboy): Generalize iterating over guest instances and performing
+  // actions on the guests.
+  for (GuestInstanceMap::iterator it =
+           guest_web_contents_by_instance_id_.begin();
+               it != guest_web_contents_by_instance_id_.end(); ++it) {
+    BrowserPluginGuest* guest = it->second->GetBrowserPluginGuest();
+    if (embedder_web_contents == guest->embedder_web_contents()) {
+      if (guest->UnlockMouseIfNecessary(event))
+        return true;
+    }
+  }
+  return false;
 }
 
 }  // namespace content

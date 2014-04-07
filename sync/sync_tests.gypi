@@ -31,8 +31,6 @@
         'js/js_test_util.h',
         'sessions/test_util.cc',
         'sessions/test_util.h',
-        'syncable/syncable_mock.cc',
-        'syncable/syncable_mock.h',
         'test/callback_counter.h',
         'test/engine/fake_model_worker.cc',
         'test/engine/fake_model_worker.h',
@@ -51,8 +49,6 @@
         'test/fake_encryptor.h',
         'test/fake_sync_encryption_handler.h',
         'test/fake_sync_encryption_handler.cc',
-        'test/fake_extensions_activity_monitor.cc',
-        'test/fake_extensions_activity_monitor.h',
         'test/test_transaction_observer.cc',
         'test/test_transaction_observer.h',
         'test/null_directory_change_delegate.cc',
@@ -243,36 +239,33 @@
           'engine/apply_control_data_updates_unittest.cc',
           'engine/apply_updates_and_resolve_conflicts_command_unittest.cc',
           'engine/backoff_delay_provider_unittest.cc',
-          'engine/build_commit_command_unittest.cc',
-          'engine/download_updates_command_unittest.cc',
+          'engine/download_unittest.cc',
           'engine/model_changing_syncer_command_unittest.cc',
           'engine/process_commit_response_command_unittest.cc',
           'engine/process_updates_command_unittest.cc',
           'engine/store_timestamps_command_unittest.cc',
-          'engine/sync_session_job_unittest.cc',
           'engine/sync_scheduler_unittest.cc',
-          'engine/sync_scheduler_whitebox_unittest.cc',
           'engine/syncer_proto_util_unittest.cc',
           'engine/syncer_unittest.cc',
-          'engine/throttled_data_type_tracker_unittest.cc',
           'engine/traffic_recorder_unittest.cc',
           'js/js_arg_list_unittest.cc',
           'js/js_event_details_unittest.cc',
           'js/sync_js_controller_unittest.cc',
           'protocol/proto_enum_conversions_unittest.cc',
           'protocol/proto_value_conversions_unittest.cc',
+          'sessions/nudge_tracker_unittest.cc',
           'sessions/ordered_commit_set_unittest.cc',
           'sessions/status_controller_unittest.cc',
           'sessions/sync_session_unittest.cc',
           'syncable/directory_backing_store_unittest.cc',
           'syncable/model_type_unittest.cc',
           'syncable/nigori_util_unittest.cc',
+          'syncable/parent_child_index_unittest.cc',
           'syncable/syncable_enum_conversions_unittest.cc',
           'syncable/syncable_id_unittest.cc',
           'syncable/syncable_unittest.cc',
           'syncable/syncable_util_unittest.cc',
           'util/cryptographer_unittest.cc',
-          'util/data_encryption_win_unittest.cc',
           'util/data_type_histogram_unittest.cc',
           'util/get_session_name_unittest.cc',
           'util/nigori_unittest.cc',
@@ -331,9 +324,6 @@
       'direct_dependent_settings': {
         'include_dirs': [
           '..',
-        ],
-        'sources': [
-          'notifier/invalidator_factory_unittest.cc',
         ],
         'conditions': [
           ['OS != "android"', {
@@ -395,7 +385,6 @@
           'internal_api/js_sync_manager_observer_unittest.cc',
           'internal_api/public/change_record_unittest.cc',
           'internal_api/public/sessions/sync_session_snapshot_unittest.cc',
-          'internal_api/public/sessions/sync_source_info_unittest.cc',
           'internal_api/syncapi_server_connection_manager_unittest.cc',
           'internal_api/sync_encryption_handler_impl_unittest.cc',
           'internal_api/sync_manager_impl_unittest.cc',
@@ -477,6 +466,44 @@
         }],
       ],
     },
+
+    # Test support files for using the Test Accounts service.
+    {
+      'target_name': 'test_support_accounts_client',
+      'type': 'static_library',
+      'direct_dependent_settings': {
+        'include_dirs': [
+          '..',
+        ],
+      },
+      'dependencies': [
+        '../base/base.gyp:base',
+        '../net/net.gyp:net',
+      ],
+      'sources': [
+        'test/accounts_client/test_accounts_client.cc',
+        'test/accounts_client/test_accounts_client.h',
+        'test/accounts_client/url_request_context_getter.cc',
+        'test/accounts_client/url_request_context_getter.h',
+      ],
+    },
+
+    # The Sync end-to-end (and associated infrastructure) tests.
+    {
+      'target_name': 'sync_endtoend_tests',
+      'type': '<(gtest_target_type)',
+      'dependencies': [
+        '../base/base.gyp:run_all_unittests',
+        '../testing/gmock.gyp:gmock',
+        '../testing/gtest.gyp:gtest',
+        '../url/url.gyp:url_lib',
+        'test_support_accounts_client',
+      ],
+      'sources': [
+        'test/accounts_client/test_accounts_client_unittest.cc',
+      ],
+    },
+
   ],
   'conditions': [
     ['OS != "ios"', {

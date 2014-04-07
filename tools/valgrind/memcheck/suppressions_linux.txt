@@ -19,9 +19,9 @@
 {
    # The InvalidRead error in rc4_wordconv is intentional.
    # https://bugzilla.mozilla.org/show_bug.cgi?id=341127
-   # TODO(wtc): This invalid read has been fixed in NSS 3.14.4.  Remove this
+   # TODO(wtc): This invalid read has been fixed in NSS 3.15.  Remove this
    # suppression when the system NSS libraries in Linux distributions are
-   # version 3.14.4 or later.
+   # version 3.15 or later.
    bug_43113 (Intentional)
    Memcheck:Unaddressable
    fun:rc4_wordconv
@@ -32,3 +32,4 @@
 # in our own code, or stuff that is so trivial it's not worth fixing.
 
 # 3. Suppressions for real chromium bugs that are not yet fixed.
+

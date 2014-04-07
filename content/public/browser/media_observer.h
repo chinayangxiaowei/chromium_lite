@@ -14,20 +14,6 @@ namespace content {
 // ContentBrowserClient to receive callbacks as media events occur.
 class MediaObserver {
  public:
-  // Called when capture devices are opened. The observer can call
-  // |close_callback| to stop the stream.
-  virtual void OnCaptureDevicesOpened(
-      int render_process_id,
-      int render_view_id,
-      const MediaStreamDevices& devices,
-      const base::Closure& close_callback) = 0;
-
-  // Called when the opened capture devices are closed.
-  virtual void OnCaptureDevicesClosed(
-      int render_process_id,
-      int render_view_id,
-      const MediaStreamDevices& devices) = 0;
-
   // Called when a audio capture device is plugged in or unplugged.
   virtual void OnAudioCaptureDevicesChanged(
       const MediaStreamDevices& devices) = 0;
@@ -40,15 +26,26 @@ class MediaObserver {
   virtual void OnMediaRequestStateChanged(
       int render_process_id,
       int render_view_id,
+      int page_request_id,
       const MediaStreamDevice& device,
       MediaRequestState state) = 0;
 
-  // Called when an audio stream is played or paused.
+  // Called when an audio stream transitions into a playing or paused state, and
+  // also at regular intervals to report the current power level of the audio
+  // signal in dBFS (decibels relative to full-scale) units.  |clipped| is true
+  // if any part of the audio signal has been clipped since the last call.  See
+  // media/audio/audio_power_monitor.h for more info.
   virtual void OnAudioStreamPlayingChanged(
       int render_process_id,
       int render_view_id,
       int stream_id,
-      bool playing) = 0;
+      bool is_playing,
+      float power_dbfs,
+      bool clipped) = 0;
+
+  // Called when the audio stream is being created.
+  virtual void OnCreatingAudioStream(int render_process_id,
+                                     int render_view_id) = 0;
 
  protected:
   virtual ~MediaObserver() {}

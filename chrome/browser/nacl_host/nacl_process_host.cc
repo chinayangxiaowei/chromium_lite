@@ -4,50 +4,48 @@
 
 #include "chrome/browser/nacl_host/nacl_process_host.h"
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
+#include "base/base_switches.h"
 #include "base/bind.h"
 #include "base/command_line.h"
-#include "base/message_loop.h"
+#include "base/file_util.h"
+#include "base/message_loop/message_loop.h"
 #include "base/metrics/histogram.h"
 #include "base/path_service.h"
-#include "base/process_util.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
+#include "base/process/process_iterator.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/win/windows_version.h"
 #include "build/build_config.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/extensions/extension_info_map.h"
-#include "chrome/browser/io_thread.h"
 #include "chrome/browser/nacl_host/nacl_browser.h"
-#include "chrome/browser/renderer_host/chrome_render_message_filter.h"
-#include "chrome/common/chrome_constants.h"
-#include "chrome/common/chrome_paths.h"
-#include "chrome/common/chrome_process_type.h"
-#include "chrome/common/chrome_switches.h"
-#include "chrome/common/chrome_version_info.h"
-#include "chrome/common/logging_chrome.h"
-#include "chrome/common/nacl_cmd_line.h"
-#include "chrome/common/nacl_messages.h"
-#include "chrome/common/render_messages.h"
-#include "chrome/common/url_constants.h"
+#include "chrome/browser/nacl_host/nacl_host_message_filter.h"
+#include "components/nacl/common/nacl_browser_delegate.h"
+#include "components/nacl/common/nacl_cmd_line.h"
+#include "components/nacl/common/nacl_host_messages.h"
+#include "components/nacl/common/nacl_messages.h"
+#include "components/nacl/common/nacl_process_type.h"
+#include "components/nacl/common/nacl_switches.h"
 #include "content/public/browser/browser_child_process_host.h"
 #include "content/public/browser/browser_ppapi_host.h"
 #include "content/public/browser/child_process_data.h"
 #include "content/public/common/child_process_host.h"
+#include "content/public/common/content_switches.h"
 #include "content/public/common/process_type.h"
-#include "extensions/common/constants.h"
-#include "extensions/common/url_pattern.h"
 #include "ipc/ipc_channel.h"
 #include "ipc/ipc_switches.h"
 #include "native_client/src/shared/imc/nacl_imc_c.h"
 #include "net/base/net_util.h"
-#include "net/base/tcp_listen_socket.h"
+#include "net/socket/tcp_listen_socket.h"
+#include "ppapi/host/host_factory.h"
+#include "ppapi/host/ppapi_host.h"
 #include "ppapi/proxy/ppapi_messages.h"
+#include "ppapi/shared_impl/ppapi_nacl_channel_args.h"
 
 #if defined(OS_POSIX)
 #include <fcntl.h>
@@ -56,11 +54,10 @@
 #elif defined(OS_WIN)
 #include <windows.h>
 
-#include "base/process_util.h"
 #include "base/threading/thread.h"
 #include "base/win/scoped_handle.h"
 #include "chrome/browser/nacl_host/nacl_broker_service_win.h"
-#include "chrome/common/nacl_debug_exception_handler_win.h"
+#include "components/nacl/common/nacl_debug_exception_handler_win.h"
 #include "content/public/common/sandbox_init.h"
 #include "content/public/common/sandboxed_process_launcher_delegate.h"
 #endif
@@ -182,25 +179,28 @@ NaClProcessHost::NaClProcessHost(const GURL& manifest_url,
                                  int render_view_id,
                                  uint32 permission_bits,
                                  bool uses_irt,
-                                 bool off_the_record)
+                                 bool enable_dyncode_syscalls,
+                                 bool enable_exception_handling,
+                                 bool off_the_record,
+                                 const base::FilePath& profile_directory)
     : manifest_url_(manifest_url),
       permissions_(GetNaClPermissions(permission_bits)),
 #if defined(OS_WIN)
       process_launched_by_broker_(false),
-#elif defined(OS_LINUX)
-      wait_for_nacl_gdb_(false),
 #endif
       reply_msg_(NULL),
 #if defined(OS_WIN)
       debug_exception_handler_requested_(false),
 #endif
       internal_(new NaClInternal()),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)),
-      enable_exception_handling_(false),
-      enable_debug_stub_(false),
+      weak_factory_(this),
       uses_irt_(uses_irt),
+      enable_debug_stub_(false),
+      enable_dyncode_syscalls_(enable_dyncode_syscalls),
+      enable_exception_handling_(enable_exception_handling),
       off_the_record_(off_the_record),
-      ALLOW_THIS_IN_INITIALIZER_LIST(ipc_plugin_listener_(this)),
+      profile_directory_(profile_directory),
+      ipc_plugin_listener_(this),
       render_view_id_(render_view_id) {
   process_.reset(content::BrowserChildProcessHost::Create(
       PROCESS_TYPE_NACL_LOADER, this));
@@ -211,13 +211,6 @@ NaClProcessHost::NaClProcessHost(const GURL& manifest_url,
   // for this use case.
   process_->SetName(net::FormatUrl(manifest_url_, std::string()));
 
-  // We allow untrusted hardware exception handling to be enabled via
-  // an env var for consistency with the standalone build of NaCl.
-  if (CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kEnableNaClExceptionHandling) ||
-      getenv("NACL_UNTRUSTED_EXCEPTION_HANDLING") != NULL) {
-    enable_exception_handling_ = true;
-  }
   enable_debug_stub_ = CommandLine::ForCurrentProcess()->HasSwitch(
       switches::kEnableNaClDebug);
 }
@@ -250,7 +243,7 @@ NaClProcessHost::~NaClProcessHost() {
     // The process failed to launch for some reason.
     // Don't keep the renderer hanging.
     reply_msg_->set_reply_error();
-    chrome_render_message_filter_->Send(reply_msg_);
+    nacl_host_message_filter_->Send(reply_msg_);
   }
 #if defined(OS_WIN)
   if (process_launched_by_broker_) {
@@ -261,7 +254,9 @@ NaClProcessHost::~NaClProcessHost() {
 
 // This is called at browser startup.
 // static
-void NaClProcessHost::EarlyStartup() {
+void NaClProcessHost::EarlyStartup(NaClBrowserDelegate* delegate) {
+  NaClBrowser::SetDelegate(delegate);
+  NaClBrowser::GetInstance()->EarlyStartup();
 #if defined(OS_LINUX) && !defined(OS_CHROMEOS)
   // Open the IRT file early to make sure that it isn't replaced out from
   // under us by autoupdate.
@@ -282,20 +277,36 @@ void NaClProcessHost::EarlyStartup() {
 }
 
 void NaClProcessHost::Launch(
-    ChromeRenderMessageFilter* chrome_render_message_filter,
+    NaClHostMessageFilter* nacl_host_message_filter,
     IPC::Message* reply_msg,
-    scoped_refptr<ExtensionInfoMap> extension_info_map) {
-  chrome_render_message_filter_ = chrome_render_message_filter;
+    const base::FilePath& manifest_path) {
+  nacl_host_message_filter_ = nacl_host_message_filter;
   reply_msg_ = reply_msg;
-  extension_info_map_ = extension_info_map;
+  manifest_path_ = manifest_path;
+
+  const CommandLine* cmd = CommandLine::ForCurrentProcess();
+#if defined(OS_WIN)
+  if (cmd->HasSwitch(switches::kEnableNaClDebug) &&
+      !cmd->HasSwitch(switches::kNoSandbox)) {
+    // We don't switch off sandbox automatically for security reasons.
+    SendErrorToRenderer("NaCl's GDB debug stub requires --no-sandbox flag"
+                        " on Windows. See crbug.com/265624.");
+    delete this;
+    return;
+  }
+#endif
+  if (cmd->HasSwitch(switches::kNaClGdb) &&
+      !cmd->HasSwitch(switches::kEnableNaClDebug)) {
+    LOG(WARNING) << "--nacl-gdb flag requires --enable-nacl-debug flag";
+  }
 
   // Start getting the IRT open asynchronously while we launch the NaCl process.
   // We'll make sure this actually finished in StartWithLaunchedProcess, below.
   NaClBrowser* nacl_browser = NaClBrowser::GetInstance();
   nacl_browser->EnsureAllResourcesAvailable();
   if (!nacl_browser->IsOk()) {
-    LOG(ERROR) << "NaCl process launch failed: could not find all the "
-        "resources needed to launch the process";
+    SendErrorToRenderer("could not find all the resources needed"
+                        " to launch the process");
     delete this;
     return;
   }
@@ -312,7 +323,7 @@ void NaClProcessHost::Launch(
   NaClHandle pair[2];
   // Create a connected socket
   if (NaClSocketPair(pair) == -1) {
-    LOG(ERROR) << "NaCl process launch failed: could not create a socket pair";
+    SendErrorToRenderer("NaClSocketPair() failed");
     delete this;
     return;
   }
@@ -327,34 +338,12 @@ void NaClProcessHost::Launch(
   }
 }
 
-#if defined(OS_WIN)
 void NaClProcessHost::OnChannelConnected(int32 peer_pid) {
-  // Set process handle, if it was not set previously.
-  // This is needed when NaCl process is launched with nacl-gdb.
   if (!CommandLine::ForCurrentProcess()->GetSwitchValuePath(
           switches::kNaClGdb).empty()) {
-    base::ProcessHandle process;
-    DCHECK(process_->GetData().handle == base::kNullProcessHandle);
-    if (base::OpenProcessHandleWithAccess(
-            peer_pid,
-            base::kProcessAccessDuplicateHandle |
-            base::kProcessAccessQueryInformation |
-            base::kProcessAccessWaitForTermination,
-            &process)) {
-      process_->SetHandle(process);
-      if (!StartWithLaunchedProcess()) {
-        delete this;
-        return;
-      }
-    } else {
-      LOG(ERROR) << "Failed to get process handle";
-    }
+    LaunchNaClGdb();
   }
 }
-#else
-void NaClProcessHost::OnChannelConnected(int32 peer_pid) {
-}
-#endif
 
 #if defined(OS_WIN)
 void NaClProcessHost::OnProcessLaunchedByBroker(base::ProcessHandle handle) {
@@ -376,71 +365,12 @@ bool NaClProcessHost::Send(IPC::Message* msg) {
   return process_->Send(msg);
 }
 
+bool NaClProcessHost::LaunchNaClGdb() {
 #if defined(OS_WIN)
-scoped_ptr<CommandLine> NaClProcessHost::GetCommandForLaunchWithGdb(
-    const base::FilePath& nacl_gdb,
-    CommandLine* line) {
-  CommandLine* cmd_line = new CommandLine(nacl_gdb);
-  // We can't use PrependWrapper because our parameters contain spaces.
-  cmd_line->AppendArg("--eval-command");
-  const base::FilePath::StringType& irt_path =
-      NaClBrowser::GetInstance()->GetIrtFilePath().value();
-  cmd_line->AppendArgNative(FILE_PATH_LITERAL("nacl-irt ") + irt_path);
-  base::FilePath manifest_path = GetManifestPath();
-  if (!manifest_path.empty()) {
-    cmd_line->AppendArg("--eval-command");
-    cmd_line->AppendArgNative(FILE_PATH_LITERAL("nacl-manifest ") +
-                              manifest_path.value());
-  }
-  base::FilePath script = CommandLine::ForCurrentProcess()->GetSwitchValuePath(
-      switches::kNaClGdbScript);
-  if (!script.empty()) {
-    cmd_line->AppendArg("--command");
-    cmd_line->AppendArgNative(script.value());
-  }
-  cmd_line->AppendArg("--args");
-  const CommandLine::StringVector& argv = line->argv();
-  for (size_t i = 0; i < argv.size(); i++) {
-    cmd_line->AppendArgNative(argv[i]);
-  }
-  return scoped_ptr<CommandLine>(cmd_line);
-}
-#elif defined(OS_LINUX)
-class NaClProcessHost::NaClGdbWatchDelegate
-    : public MessageLoopForIO::Watcher {
- public:
-  // fd_write_ is used by nacl-gdb via /proc/browser_PID/fd/fd_write_
-  NaClGdbWatchDelegate(int fd_read, int fd_write,
-                       const base::Closure& reply)
-      : fd_read_(fd_read),
-        fd_write_(fd_write),
-        reply_(reply) {}
-
-  virtual ~NaClGdbWatchDelegate() {
-    if (HANDLE_EINTR(close(fd_read_)) != 0)
-      DLOG(ERROR) << "close(fd_read_) failed";
-    if (HANDLE_EINTR(close(fd_write_)) != 0)
-      DLOG(ERROR) << "close(fd_write_) failed";
-  }
-
-  virtual void OnFileCanReadWithoutBlocking(int fd) OVERRIDE;
-  virtual void OnFileCanWriteWithoutBlocking(int fd) OVERRIDE {}
-
- private:
-  int fd_read_;
-  int fd_write_;
-  base::Closure reply_;
-};
-
-void NaClProcessHost::NaClGdbWatchDelegate::OnFileCanReadWithoutBlocking(
-    int fd) {
-  char buf;
-  if (HANDLE_EINTR(read(fd_read_, &buf, 1)) != 1 || buf != '\0')
-    LOG(ERROR) << "Failed to sync with nacl-gdb";
-  BrowserThread::PostTask(BrowserThread::IO, FROM_HERE, reply_);
-}
-
-bool NaClProcessHost::LaunchNaClGdb(base::ProcessId pid) {
+  base::FilePath nacl_gdb =
+      CommandLine::ForCurrentProcess()->GetSwitchValuePath(switches::kNaClGdb);
+  CommandLine cmd_line(nacl_gdb);
+#else
   CommandLine::StringType nacl_gdb =
       CommandLine::ForCurrentProcess()->GetSwitchValueNative(
           switches::kNaClGdb);
@@ -448,76 +378,38 @@ bool NaClProcessHost::LaunchNaClGdb(base::ProcessId pid) {
   // We don't support spaces inside arguments in --nacl-gdb switch.
   base::SplitString(nacl_gdb, static_cast<CommandLine::CharType>(' '), &argv);
   CommandLine cmd_line(argv);
+#endif
   cmd_line.AppendArg("--eval-command");
-  const base::FilePath::StringType& irt_path =
-      NaClBrowser::GetInstance()->GetIrtFilePath().value();
-  cmd_line.AppendArgNative(FILE_PATH_LITERAL("nacl-irt ") + irt_path);
-  base::FilePath manifest_path = GetManifestPath();
-  if (!manifest_path.empty()) {
+  base::FilePath::StringType irt_path(
+      NaClBrowser::GetInstance()->GetIrtFilePath().value());
+  // Avoid back slashes because nacl-gdb uses posix escaping rules on Windows.
+  // See issue https://code.google.com/p/nativeclient/issues/detail?id=3482.
+  std::replace(irt_path.begin(), irt_path.end(), '\\', '/');
+  cmd_line.AppendArgNative(FILE_PATH_LITERAL("nacl-irt \"") + irt_path +
+                           FILE_PATH_LITERAL("\""));
+  if (!manifest_path_.empty()) {
     cmd_line.AppendArg("--eval-command");
-    cmd_line.AppendArgNative(FILE_PATH_LITERAL("nacl-manifest ") +
-                             manifest_path.value());
+    base::FilePath::StringType manifest_path_value(manifest_path_.value());
+    std::replace(manifest_path_value.begin(), manifest_path_value.end(),
+                 '\\', '/');
+    cmd_line.AppendArgNative(FILE_PATH_LITERAL("nacl-manifest \"") +
+                             manifest_path_value + FILE_PATH_LITERAL("\""));
   }
   cmd_line.AppendArg("--eval-command");
-  cmd_line.AppendArg("attach " + base::IntToString(pid));
-  int fds[2];
-  if (pipe(fds) != 0)
-    return false;
-  // Tell the debugger to send a byte to the writable end of the pipe.
-  // We use a file descriptor in our process because the debugger will be
-  // typically launched in a separate terminal, and a lot of terminals close all
-  // file descriptors before launching external programs.
-  cmd_line.AppendArg("--eval-command");
-  cmd_line.AppendArg("dump binary value /proc/" +
-                     base::IntToString(base::GetCurrentProcId()) +
-                     "/fd/" + base::IntToString(fds[1]) + " (char)0");
+  cmd_line.AppendArg("target remote :4014");
   base::FilePath script = CommandLine::ForCurrentProcess()->GetSwitchValuePath(
       switches::kNaClGdbScript);
   if (!script.empty()) {
     cmd_line.AppendArg("--command");
     cmd_line.AppendArgNative(script.value());
   }
-  // wait on fds[0]
-  // If the debugger crashes before attaching to the NaCl process, the user can
-  // release resources by terminating the NaCl loader in Chrome Task Manager.
-  nacl_gdb_watcher_delegate_.reset(
-      new NaClGdbWatchDelegate(
-          fds[0], fds[1],
-          base::Bind(&NaClProcessHost::OnNaClGdbAttached,
-                     weak_factory_.GetWeakPtr())));
-  MessageLoopForIO::current()->WatchFileDescriptor(
-      fds[0],
-      true,
-      MessageLoopForIO::WATCH_READ,
-      &nacl_gdb_watcher_,
-      nacl_gdb_watcher_delegate_.get());
   return base::LaunchProcess(cmd_line, base::LaunchOptions(), NULL);
-}
-
-void NaClProcessHost::OnNaClGdbAttached() {
-  wait_for_nacl_gdb_ = false;
-  nacl_gdb_watcher_.StopWatchingFileDescriptor();
-  nacl_gdb_watcher_delegate_.reset();
-  OnProcessLaunched();
-}
-#endif
-
-base::FilePath NaClProcessHost::GetManifestPath() {
-  const extensions::Extension* extension = extension_info_map_->extensions()
-      .GetExtensionOrAppByURL(ExtensionURLInfo(manifest_url_));
-  if (extension != NULL &&
-      manifest_url_.SchemeIs(extensions::kExtensionScheme)) {
-    std::string path = manifest_url_.path();
-    TrimString(path, "/", &path);  // Remove first slash
-    return extension->path().AppendASCII(path);
-  }
-  return base::FilePath();
 }
 
 bool NaClProcessHost::LaunchSelLdr() {
   std::string channel_id = process_->GetHost()->CreateChannel();
   if (channel_id.empty()) {
-    LOG(ERROR) << "NaCl process launch failed: could not create channel";
+    SendErrorToRenderer("CreateChannel() failed");
     return false;
   }
 
@@ -551,12 +443,10 @@ bool NaClProcessHost::LaunchSelLdr() {
 #if defined(OS_WIN)
   // On Windows 64-bit NaCl loader is called nacl64.exe instead of chrome.exe
   if (RunningOnWOW64()) {
-    base::FilePath module_path;
-    if (!PathService::Get(base::FILE_MODULE, &module_path)) {
-      LOG(ERROR) << "NaCl process launch failed: could not resolve module";
+    if (!NaClBrowser::GetInstance()->GetNaCl64ExePath(&exe_path)) {
+      SendErrorToRenderer("could not get path to nacl64.exe");
       return false;
     }
-    exe_path = module_path.DirName().Append(chrome::kNaClAppName);
   }
 #endif
 
@@ -566,40 +456,18 @@ bool NaClProcessHost::LaunchSelLdr() {
   cmd_line->AppendSwitchASCII(switches::kProcessType,
                               switches::kNaClLoaderProcess);
   cmd_line->AppendSwitchASCII(switches::kProcessChannelID, channel_id);
-  if (logging::DialogsAreSuppressed())
+  if (NaClBrowser::GetDelegate()->DialogsAreSuppressed())
     cmd_line->AppendSwitch(switches::kNoErrorDialogs);
 
   if (!nacl_loader_prefix.empty())
     cmd_line->PrependWrapper(nacl_loader_prefix);
-
-  base::FilePath nacl_gdb =
-      CommandLine::ForCurrentProcess()->GetSwitchValuePath(switches::kNaClGdb);
-  if (!nacl_gdb.empty()) {
-#if defined(OS_WIN)
-    cmd_line->AppendSwitch(switches::kNoSandbox);
-    scoped_ptr<CommandLine> gdb_cmd_line(
-        GetCommandForLaunchWithGdb(nacl_gdb, cmd_line.get()));
-    // We can't use process_->Launch() because OnProcessLaunched will be called
-    // with process_->GetData().handle filled by handle of gdb process. This
-    // handle will be used to duplicate handles for NaCl process and as
-    // a result NaCl process will not be able to use them.
-    //
-    // So we don't fill process_->GetData().handle and wait for
-    // OnChannelConnected to get handle of NaCl process from its pid. Then we
-    // call OnProcessLaunched.
-    return base::LaunchProcess(*gdb_cmd_line, base::LaunchOptions(), NULL);
-#elif defined(OS_LINUX)
-    wait_for_nacl_gdb_ = true;
-#endif
-  }
 
   // On Windows we might need to start the broker process to launch a new loader
 #if defined(OS_WIN)
   if (RunningOnWOW64()) {
     if (!NaClBrokerService::GetInstance()->LaunchLoader(
             weak_factory_.GetWeakPtr(), channel_id)) {
-      LOG(ERROR) << "NaCl process launch failed: broker service did not launch "
-          "process";
+      SendErrorToRenderer("broker service did not launch process");
       return false;
     }
   } else {
@@ -622,6 +490,8 @@ bool NaClProcessHost::OnMessageReceived(const IPC::Message& msg) {
                         OnQueryKnownToValidate)
     IPC_MESSAGE_HANDLER(NaClProcessMsg_SetKnownToValidate,
                         OnSetKnownToValidate)
+    IPC_MESSAGE_HANDLER_DELAY_REPLY(NaClProcessMsg_ResolveFileToken,
+                                    OnResolveFileToken)
 #if defined(OS_WIN)
     IPC_MESSAGE_HANDLER_DELAY_REPLY(NaClProcessMsg_AttachDebugExceptionHandler,
                                     OnAttachDebugExceptionHandler)
@@ -642,8 +512,7 @@ void NaClProcessHost::OnProcessLaunched() {
 void NaClProcessHost::OnResourcesReady() {
   NaClBrowser* nacl_browser = NaClBrowser::GetInstance();
   if (!nacl_browser->IsReady()) {
-    LOG(ERROR) << "NaCl process launch failed: could not acquire shared "
-        "resources needed by NaCl";
+    SendErrorToRenderer("could not acquire shared resources needed by NaCl");
     delete this;
   } else if (!SendStart()) {
     delete this;
@@ -652,6 +521,20 @@ void NaClProcessHost::OnResourcesReady() {
 
 bool NaClProcessHost::ReplyToRenderer(
     const IPC::ChannelHandle& channel_handle) {
+#if defined(OS_WIN)
+  // If we are on 64-bit Windows, the NaCl process's sandbox is
+  // managed by a different process from the renderer's sandbox.  We
+  // need to inform the renderer's sandbox about the NaCl process so
+  // that the renderer can send handles to the NaCl process using
+  // BrokerDuplicateHandle().
+  if (RunningOnWOW64()) {
+    if (!content::BrokerAddTargetPeer(process_->GetData().handle)) {
+      SendErrorToRenderer("BrokerAddTargetPeer() failed");
+      return false;
+    }
+  }
+#endif
+
   nacl::FileDescriptor handle_for_renderer;
 #if defined(OS_WIN)
   // Copy the handle into the renderer process.
@@ -659,12 +542,12 @@ bool NaClProcessHost::ReplyToRenderer(
   if (!DuplicateHandle(base::GetCurrentProcessHandle(),
                        reinterpret_cast<HANDLE>(
                            internal_->socket_for_renderer),
-                       chrome_render_message_filter_->peer_handle(),
+                       nacl_host_message_filter_->PeerHandle(),
                        &handle_in_renderer,
                        0,  // Unused given DUPLICATE_SAME_ACCESS.
                        FALSE,
                        DUPLICATE_CLOSE_SOURCE | DUPLICATE_SAME_ACCESS)) {
-    LOG(ERROR) << "DuplicateHandle() failed";
+    SendErrorToRenderer("DuplicateHandle() failed");
     return false;
   }
   handle_for_renderer = reinterpret_cast<nacl::FileDescriptor>(
@@ -678,29 +561,34 @@ bool NaClProcessHost::ReplyToRenderer(
   handle_for_renderer = imc_handle;
 #endif
 
-#if defined(OS_WIN)
-  // If we are on 64-bit Windows, the NaCl process's sandbox is
-  // managed by a different process from the renderer's sandbox.  We
-  // need to inform the renderer's sandbox about the NaCl process so
-  // that the renderer can send handles to the NaCl process using
-  // BrokerDuplicateHandle().
-  if (RunningOnWOW64()) {
-    if (!content::BrokerAddTargetPeer(process_->GetData().handle)) {
-      LOG(ERROR) << "Failed to add NaCl process PID";
-      return false;
-    }
-  }
-#endif
-
   const ChildProcessData& data = process_->GetData();
-  ChromeViewHostMsg_LaunchNaCl::WriteReplyParams(
-      reply_msg_, handle_for_renderer,
-      channel_handle, base::GetProcId(data.handle), data.id);
-  chrome_render_message_filter_->Send(reply_msg_);
-  chrome_render_message_filter_ = NULL;
-  reply_msg_ = NULL;
+  SendMessageToRenderer(
+      nacl::NaClLaunchResult(handle_for_renderer,
+                             channel_handle,
+                             base::GetProcId(data.handle),
+                             data.id),
+      std::string() /* error_message */);
   internal_->socket_for_renderer = NACL_INVALID_HANDLE;
   return true;
+}
+
+void NaClProcessHost::SendErrorToRenderer(const std::string& error_message) {
+  LOG(ERROR) << "NaCl process launch failed: " << error_message;
+  SendMessageToRenderer(nacl::NaClLaunchResult(), error_message);
+}
+
+void NaClProcessHost::SendMessageToRenderer(
+    const nacl::NaClLaunchResult& result,
+    const std::string& error_message) {
+  DCHECK(nacl_host_message_filter_);
+  DCHECK(reply_msg_);
+  if (nacl_host_message_filter_ != NULL && reply_msg_ != NULL) {
+    NaClHostMsg_LaunchNaCl::WriteReplyParams(
+        reply_msg_, result, error_message);
+    nacl_host_message_filter_->Send(reply_msg_);
+    nacl_host_message_filter_ = NULL;
+    reply_msg_ = NULL;
+  }
 }
 
 // TCP port we chose for NaCl debug stub. It can be any other number.
@@ -741,13 +629,14 @@ bool NaClProcessHost::StartNaClExecution() {
   nacl::NaClStartParams params;
   params.validation_cache_enabled = nacl_browser->ValidationCacheIsEnabled();
   params.validation_cache_key = nacl_browser->GetValidationCacheKey();
-  params.version = chrome::VersionInfo().CreateVersionString();
+  params.version = NaClBrowser::GetDelegate()->GetVersionString();
   params.enable_exception_handling = enable_exception_handling_;
   params.enable_debug_stub = enable_debug_stub_ &&
       NaClBrowser::GetInstance()->URLMatchesDebugPatterns(manifest_url_);
   // Enable PPAPI proxy channel creation only for renderer processes.
   params.enable_ipc_proxy = enable_ppapi_proxy();
   params.uses_irt = uses_irt_;
+  params.enable_dyncode_syscalls = enable_dyncode_syscalls_;
 
   const ChildProcessData& data = process_->GetData();
   if (!ShareHandleToSelLdr(data.handle,
@@ -759,7 +648,6 @@ bool NaClProcessHost::StartNaClExecution() {
   if (params.uses_irt) {
     base::PlatformFile irt_file = nacl_browser->IrtFile();
     CHECK_NE(irt_file, base::kInvalidPlatformFileValue);
-
     // Send over the IRT file handle.  We don't close our own copy!
     if (!ShareHandleToSelLdr(data.handle, irt_file, false, &params.handles))
       return false;
@@ -828,7 +716,7 @@ void NaClProcessHost::OnPpapiChannelCreated(
         new IPC::ChannelProxy(channel_handle,
                               IPC::Channel::MODE_CLIENT,
                               &ipc_plugin_listener_,
-                              base::MessageLoopProxy::current()));
+                              base::MessageLoopProxy::current().get()));
     // Create the browser ppapi host and enable PPAPI message dispatching to the
     // browser process.
     ppapi_host_.reset(content::BrowserPpapiHost::CreateExternalPluginProcess(
@@ -836,17 +724,36 @@ void NaClProcessHost::OnPpapiChannelCreated(
         permissions_,
         process_->GetData().handle,
         ipc_proxy_channel_.get(),
-        chrome_render_message_filter_->GetHostResolver(),
-        chrome_render_message_filter_->render_process_id(),
-        render_view_id_));
+        nacl_host_message_filter_->GetHostResolver(),
+        nacl_host_message_filter_->render_process_id(),
+        render_view_id_,
+        profile_directory_));
+
+    ppapi::PpapiNaClChannelArgs args;
+    args.off_the_record = nacl_host_message_filter_->off_the_record();
+    args.permissions = permissions_;
+    CommandLine* cmdline = CommandLine::ForCurrentProcess();
+    DCHECK(cmdline);
+    std::string flag_whitelist[] = {switches::kV, switches::kVModule};
+    for (size_t i = 0; i < arraysize(flag_whitelist); ++i) {
+      std::string value = cmdline->GetSwitchValueASCII(flag_whitelist[i]);
+      if (!value.empty()) {
+        args.switch_names.push_back(flag_whitelist[i]);
+        args.switch_values.push_back(value);
+      }
+    }
+
+    ppapi_host_->GetPpapiHost()->AddHostFactoryFilter(
+        scoped_ptr<ppapi::host::HostFactory>(
+            NaClBrowser::GetDelegate()->CreatePpapiHostFactory(
+                ppapi_host_.get())));
 
     // Send a message to create the NaCl-Renderer channel. The handle is just
     // a place holder.
     ipc_proxy_channel_->Send(
         new PpapiMsg_CreateNaClChannel(
-            chrome_render_message_filter_->render_process_id(),
-            permissions_,
-            chrome_render_message_filter_->off_the_record(),
+            nacl_host_message_filter_->render_process_id(),
+            args,
             SerializedHandle(SerializedHandle::CHANNEL_HANDLE,
                              IPC::InvalidPlatformFileForTransit())));
   } else if (reply_msg_) {
@@ -872,18 +779,6 @@ bool NaClProcessHost::OnUntrustedMessageForwarded(const IPC::Message& msg) {
 }
 
 bool NaClProcessHost::StartWithLaunchedProcess() {
-#if defined(OS_LINUX)
-  if (wait_for_nacl_gdb_) {
-    if (LaunchNaClGdb(base::GetProcId(process_->GetData().handle))) {
-      // We will be called with wait_for_nacl_gdb_ = false once debugger is
-      // attached to the program.
-      return true;
-    }
-    DLOG(ERROR) << "Failed to launch debugger";
-    // Continue execution without debugger.
-  }
-#endif
-
   NaClBrowser* nacl_browser = NaClBrowser::GetInstance();
 
   if (nacl_browser->IsReady()) {
@@ -894,8 +789,7 @@ bool NaClProcessHost::StartWithLaunchedProcess() {
                    weak_factory_.GetWeakPtr()));
     return true;
   } else {
-    LOG(ERROR) << "NaCl process failed to launch: previously failed to acquire "
-        "shared resources";
+    SendErrorToRenderer("previously failed to acquire shared resources");
     return false;
   }
 }
@@ -908,6 +802,86 @@ void NaClProcessHost::OnQueryKnownToValidate(const std::string& signature,
 
 void NaClProcessHost::OnSetKnownToValidate(const std::string& signature) {
   NaClBrowser::GetInstance()->SetKnownToValidate(signature, off_the_record_);
+}
+
+void NaClProcessHost::FileResolved(
+    base::PlatformFile* file,
+    const base::FilePath& file_path,
+    IPC::Message* reply_msg) {
+  if (*file != base::kInvalidPlatformFileValue) {
+    IPC::PlatformFileForTransit handle = IPC::GetFileHandleForProcess(
+        *file,
+        process_->GetData().handle,
+        true /* close_source */);
+    NaClProcessMsg_ResolveFileToken::WriteReplyParams(
+        reply_msg,
+        handle,
+        file_path);
+  } else {
+    NaClProcessMsg_ResolveFileToken::WriteReplyParams(
+        reply_msg,
+        IPC::InvalidPlatformFileForTransit(),
+        base::FilePath(FILE_PATH_LITERAL("")));
+  }
+  Send(reply_msg);
+}
+
+void NaClProcessHost::OnResolveFileToken(uint64 file_token_lo,
+                                         uint64 file_token_hi,
+                                         IPC::Message* reply_msg) {
+  // Was the file registered?
+  //
+  // Note that the file path cache is of bounded size, and old entries can get
+  // evicted.  If a large number of NaCl modules are being launched at once,
+  // resolving the file_token may fail because the path cache was thrashed
+  // while the file_token was in flight.  In this case the query fails, and we
+  // need to fall back to the slower path.
+  //
+  // However: each NaCl process will consume 2-3 entries as it starts up, this
+  // means that eviction will not happen unless you start up 33+ NaCl processes
+  // at the same time, and this still requires worst-case timing.  As a
+  // practical matter, no entries should be evicted prematurely.
+  // The cache itself should take ~ (150 characters * 2 bytes/char + ~60 bytes
+  // data structure overhead) * 100 = 35k when full, so making it bigger should
+  // not be a problem, if needed.
+  //
+  // Each NaCl process will consume 2-3 entries because the manifest and main
+  // nexe are currently not resolved.  Shared libraries will be resolved.  They
+  // will be loaded sequentially, so they will only consume a single entry
+  // while the load is in flight.
+  //
+  // TODO(ncbray): track behavior with UMA. If entries are getting evicted or
+  // bogus keys are getting queried, this would be good to know.
+  base::FilePath file_path;
+  if (!NaClBrowser::GetInstance()->GetFilePath(file_token_lo, file_token_hi,
+                                               &file_path)) {
+    NaClProcessMsg_ResolveFileToken::WriteReplyParams(
+        reply_msg,
+        IPC::InvalidPlatformFileForTransit(),
+        base::FilePath(FILE_PATH_LITERAL("")));
+    Send(reply_msg);
+    return;
+  }
+
+  // Scratch space to share between the callbacks.
+  base::PlatformFile* data = new base::PlatformFile();
+
+  // Open the file.
+  if (!content::BrowserThread::PostBlockingPoolTaskAndReply(
+          FROM_HERE,
+          base::Bind(nacl::OpenNaClExecutableImpl,
+                     file_path, data),
+          base::Bind(&NaClProcessHost::FileResolved,
+                     weak_factory_.GetWeakPtr(),
+                     base::Owned(data),
+                     file_path,
+                     reply_msg))) {
+     NaClProcessMsg_ResolveFileToken::WriteReplyParams(
+         reply_msg,
+         IPC::InvalidPlatformFileForTransit(),
+         base::FilePath(FILE_PATH_LITERAL("")));
+     Send(reply_msg);
+  }
 }
 
 #if defined(OS_WIN)

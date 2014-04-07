@@ -6,8 +6,8 @@
 
 var binding = require('binding').Binding.create('permissions');
 
+var Event = require('event_bindings').Event;
 var sendRequest = require('sendRequest').sendRequest;
-var lastError = require('lastError');
 
 // These custom binding are only necessary because it is not currently
 // possible to have a union of types as the type of the items in an array.
@@ -21,7 +21,7 @@ binding.registerCustomHook(function(api) {
   var permissions = api.compiledApi;
 
   function maybeConvertToObject(str) {
-    var parts = str.split('|');
+    var parts = $String.split(str, '|');
     if (parts.length != 2)
       return str;
 
@@ -41,7 +41,7 @@ binding.registerCustomHook(function(api) {
     for (var i = 0; i < args.length; i += 1) {
       if (typeof(args[i]) == 'object') {
         var a = args[i];
-        var keys = Object.keys(a);
+        var keys = $Object.keys(a);
         if (keys.length != 1) {
           throw new Error("Too many keys in object-style permission.");
         }
@@ -73,9 +73,12 @@ binding.registerCustomHook(function(api) {
         // not objects, validation will fail after the for-loop above.  This
         // skips validation and calls the callback directly, then clears it so
         // that handleResponse doesn't call it again.
-        if (request.callback)
-          request.callback.apply(request, [response]);
-        delete request.callback;
+        try {
+          if (request.callback)
+            $Function.apply(request.callback, request, [response]);
+        } finally {
+          delete request.callback;
+        }
       });
 
   // Also convert complex permissions back to objects for events.  The
@@ -86,7 +89,7 @@ binding.registerCustomHook(function(api) {
     for (var i = 0; i < args[0].permissions.length; i += 1) {
       args[0].permissions[i] = maybeConvertToObject(args[0].permissions[i]);
     }
-    chrome.Event.prototype.dispatchToListener(callback, args);
+    Event.prototype.dispatchToListener(callback, args);
   };
   permissions.onRemoved.dispatchToListener =
       permissions.onAdded.dispatchToListener;

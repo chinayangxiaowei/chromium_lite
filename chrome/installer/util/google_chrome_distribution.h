@@ -8,12 +8,11 @@
 #ifndef CHROME_INSTALLER_UTIL_GOOGLE_CHROME_DISTRIBUTION_H_
 #define CHROME_INSTALLER_UTIL_GOOGLE_CHROME_DISTRIBUTION_H_
 
-#include "base/string16.h"
 #include "base/gtest_prod_util.h"
+#include "base/strings/string16.h"
 #include "chrome/installer/util/browser_distribution.h"
 
 namespace base {
-class DictionaryValue;
 class FilePath;
 }
 
@@ -57,8 +56,6 @@ class GoogleChromeDistribution : public BrowserDistribution {
 
   virtual string16 GetStateMediumKey() OVERRIDE;
 
-  virtual string16 GetStatsServerURL() OVERRIDE;
-
   virtual std::string GetNetworkStatsServer() const OVERRIDE;
 
   virtual std::string GetHttpPipeliningTestServer() const OVERRIDE;
@@ -100,27 +97,6 @@ class GoogleChromeDistribution : public BrowserDistribution {
 
  private:
   friend class BrowserDistribution;
-
-  FRIEND_TEST_ALL_PREFIXES(GoogleChromeDistTest, TestExtractUninstallMetrics);
-
-  // Extracts uninstall metrics from the JSON file located at file_path.
-  // Returns them in a form suitable for appending to a url that already
-  // has GET parameters, i.e. &metric1=foo&metric2=bar.
-  // Returns true if uninstall_metrics has been successfully populated with
-  // the uninstall metrics, false otherwise.
-  virtual bool ExtractUninstallMetricsFromFile(
-      const base::FilePath& file_path, string16* uninstall_metrics);
-
-  // Extracts uninstall metrics from the given JSON value.
-  virtual bool ExtractUninstallMetrics(const base::DictionaryValue& root,
-                                       string16* uninstall_metrics);
-
-  // Given a DictionaryValue containing a set of uninstall metrics,
-  // this builds a URL parameter list of all the contained metrics.
-  // Returns true if at least one uninstall metric was found in
-  // uninstall_metrics_dict, false otherwise.
-  virtual bool BuildUninstallMetricsString(
-      const base::DictionaryValue* uninstall_metrics_dict, string16* metrics);
 
   // The product ID for Google Update.
   string16 product_guid_;

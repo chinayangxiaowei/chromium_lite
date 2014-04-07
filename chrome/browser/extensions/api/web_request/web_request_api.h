@@ -13,7 +13,7 @@
 
 #include "base/memory/singleton.h"
 #include "base/memory/weak_ptr.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "chrome/browser/extensions/api/declarative_webrequest/request_stage.h"
 #include "chrome/browser/extensions/api/web_request/web_request_api_helpers.h"
 #include "chrome/browser/extensions/api/web_request/web_request_permissions.h"
@@ -25,7 +25,7 @@
 #include "net/base/completion_callback.h"
 #include "net/base/network_delegate.h"
 #include "net/http/http_request_headers.h"
-#include "webkit/glue/resource_type.h"
+#include "webkit/common/resource_type.h"
 
 class ExtensionInfoMap;
 class ExtensionWebRequestTimeTracker;
@@ -245,8 +245,9 @@ class ExtensionWebRequestEventRouter
       const std::string& sub_event_name,
       const RequestFilter& filter,
       int extra_info_spec,
-      int target_process_id,
-      int target_route_id,
+      int embedder_process_id,
+      int embedder_routing_id,
+      int web_view_instance_id,
       base::WeakPtr<IPC::Sender> ipc_sender);
 
   // Removes the listener for the given sub-event.
@@ -254,6 +255,13 @@ class ExtensionWebRequestEventRouter
       void* profile,
       const std::string& extension_id,
       const std::string& sub_event_name);
+
+  // Removes the listeners for a given <webview>.
+  void RemoveWebViewEventListeners(
+      void* profile,
+      const std::string& extension_id,
+      int embedder_process_id,
+      int web_view_instance_id);
 
   // Called when an incognito profile is created or destroyed.
   void OnOTRProfileCreated(void* original_profile,
@@ -274,7 +282,9 @@ class ExtensionWebRequestEventRouter
   typedef std::map<uint64, BlockedRequest> BlockedRequestMap;
   // Map of request_id -> bit vector of EventTypes already signaled
   typedef std::map<uint64, int> SignaledRequestMap;
-  typedef std::map<void*, void*> CrossProfileMap;
+  // For each profile: a bool indicating whether it is an incognito profile,
+  // and a pointer to the corresponding (non-)incognito profile.
+  typedef std::map<void*, std::pair<bool, void*> > CrossProfileMap;
   typedef std::list<base::Closure> CallbacksForPageLoad;
 
   ExtensionWebRequestEventRouter();
@@ -382,6 +392,11 @@ class ExtensionWebRequestEventRouter
   // Returns the matching cross profile (the regular profile if |profile| is
   // OTR and vice versa).
   void* GetCrossProfile(void* profile) const;
+
+  // Determines whether the specified profile is an incognito profile (based on
+  // the contents of the cross-profile table and without dereferencing the
+  // profile pointer).
+  bool IsIncognitoProfile(void* profile) const;
 
   // Returns true if |request| was already signaled to some event handlers.
   bool WasSignaled(const net::URLRequest& request) const;

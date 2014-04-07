@@ -10,9 +10,9 @@
 #include "base/logging.h"
 #include "base/md5.h"
 #include "base/rand_util.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "net/base/net_errors.h"
 #include "net/base/net_util.h"
 #include "net/http/http_auth.h"
@@ -270,12 +270,12 @@ bool HttpAuthHandlerDigest::ParseChallengeProperty(const std::string& name,
 std::string HttpAuthHandlerDigest::QopToString(QualityOfProtection qop) {
   switch (qop) {
     case QOP_UNSPECIFIED:
-      return "";
+      return std::string();
     case QOP_AUTH:
       return "auth";
     default:
       NOTREACHED();
-      return "";
+      return std::string();
   }
 }
 
@@ -284,14 +284,14 @@ std::string HttpAuthHandlerDigest::AlgorithmToString(
     DigestAlgorithm algorithm) {
   switch (algorithm) {
     case ALGORITHM_UNSPECIFIED:
-      return "";
+      return std::string();
     case ALGORITHM_MD5:
       return "MD5";
     case ALGORITHM_MD5_SESS:
       return "MD5-sess";
     default:
       NOTREACHED();
-      return "";
+      return std::string();
   }
 }
 

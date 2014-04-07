@@ -12,6 +12,7 @@ import org.chromium.android_webview.AwBrowserContext;
 import org.chromium.android_webview.AwBrowserProcess;
 import org.chromium.android_webview.AwContents;
 import org.chromium.android_webview.AwContentsClient;
+import org.chromium.android_webview.AwLayoutSizer;
 import org.chromium.android_webview.AwSettings;
 import org.chromium.android_webview.test.util.JSUtils;
 import org.chromium.base.test.util.InMemorySharedPreferences;
@@ -31,8 +32,8 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 public class AwTestBase
         extends ActivityInstrumentationTestCase2<AwTestRunnerActivity> {
-    protected final static int WAIT_TIMEOUT_SECONDS = 15;
-    private static final int CHECK_INTERVAL = 100;
+    protected static final int WAIT_TIMEOUT_SECONDS = 15;
+    protected static final int CHECK_INTERVAL = 100;
 
     public AwTestBase() {
         super(AwTestRunnerActivity.class);
@@ -70,7 +71,7 @@ public class AwTestBase
         getInstrumentation().runOnMainSync(new Runnable() {
             @Override
             public void run() {
-                awContents.getContentViewCore().getContentSettings().setJavaScriptEnabled(true);
+                awContents.getSettings().setJavaScriptEnabled(true);
             }
         });
     }
@@ -189,32 +190,75 @@ public class AwTestBase
         });
     }
 
-    protected AwTestContainerView createAwTestContainerView(
-            final AwContentsClient awContentsClient) {
-        return createAwTestContainerView(new AwTestContainerView(getActivity()),
-                awContentsClient);
+    /**
+     * Factory class used in creation of test AwContents instances.
+     *
+     * Test cases can provide subclass instances to the createAwTest* methods in order to create an
+     * AwContents instance with injected test dependencies.
+     */
+    public static class TestDependencyFactory {
+        public AwLayoutSizer createLayoutSizer() {
+            return new AwLayoutSizer();
+        }
+        public AwTestContainerView createAwTestContainerView(AwTestRunnerActivity activity) {
+            return new AwTestContainerView(activity);
+        }
+    }
+
+    protected TestDependencyFactory createTestDependencyFactory() {
+        return new TestDependencyFactory();
     }
 
     protected AwTestContainerView createAwTestContainerView(
-            final AwTestContainerView testContainerView,
             final AwContentsClient awContentsClient) {
-        testContainerView.initialize(new AwContents(
-                new AwBrowserContext(new InMemorySharedPreferences()),
-                testContainerView, testContainerView.getInternalAccessDelegate(),
-                awContentsClient, false));
+        return createAwTestContainerView(awContentsClient, true);
+    }
+
+    protected AwTestContainerView createAwTestContainerView(
+            final AwContentsClient awContentsClient, boolean supportsLegacyQuirks) {
+        AwTestContainerView testContainerView =
+                createDetachedAwTestContainerView(awContentsClient, supportsLegacyQuirks);
         getActivity().addView(testContainerView);
         testContainerView.requestFocus();
         return testContainerView;
     }
 
+    // The browser context needs to be a process-wide singleton.
+    private AwBrowserContext mBrowserContext =
+            new AwBrowserContext(new InMemorySharedPreferences());
+
+    protected AwTestContainerView createDetachedAwTestContainerView(
+            final AwContentsClient awContentsClient) {
+        return createDetachedAwTestContainerView(awContentsClient, true);
+    }
+
+    protected AwTestContainerView createDetachedAwTestContainerView(
+            final AwContentsClient awContentsClient, boolean supportsLegacyQuirks) {
+        final TestDependencyFactory testDependencyFactory = createTestDependencyFactory();
+        final AwTestContainerView testContainerView =
+            testDependencyFactory.createAwTestContainerView(getActivity());
+        // TODO(mnaganov): Should also have tests for the "pure Chromium" mode.
+        // See http://crbug.com/278106
+        testContainerView.initialize(new AwContents(
+                mBrowserContext, testContainerView, testContainerView.getInternalAccessDelegate(),
+                awContentsClient, false, testDependencyFactory.createLayoutSizer(),
+                supportsLegacyQuirks));
+        return testContainerView;
+    }
+
     protected AwTestContainerView createAwTestContainerViewOnMainSync(
             final AwContentsClient client) throws Exception {
+        return createAwTestContainerViewOnMainSync(client, true);
+    }
+
+    protected AwTestContainerView createAwTestContainerViewOnMainSync(
+            final AwContentsClient client, final boolean supportsLegacyQuirks) throws Exception {
         final AtomicReference<AwTestContainerView> testContainerView =
                 new AtomicReference<AwTestContainerView>();
         getInstrumentation().runOnMainSync(new Runnable() {
             @Override
             public void run() {
-                testContainerView.set(createAwTestContainerView(client));
+                testContainerView.set(createAwTestContainerView(client, supportsLegacyQuirks));
             }
         });
         return testContainerView.get();
@@ -298,6 +342,30 @@ public class AwTestBase
             @Override
             public void run() {
               awContents.clearCache(includeDiskFiles);
+            }
+        });
+    }
+
+    /**
+     * Returns pure page scale.
+     */
+    protected float getScaleOnUiThread(final AwContents awContents) throws Exception {
+        return runTestOnUiThreadAndGetResult(new Callable<Float>() {
+            @Override
+            public Float call() throws Exception {
+                return awContents.getContentViewCore().getScale();
+            }
+        });
+    }
+
+    /**
+     * Returns page scale multiplied by the screen density.
+     */
+    protected float getPixelScaleOnUiThread(final AwContents awContents) throws Throwable {
+        return runTestOnUiThreadAndGetResult(new Callable<Float>() {
+            @Override
+            public Float call() throws Exception {
+                return awContents.getScale();
             }
         });
     }

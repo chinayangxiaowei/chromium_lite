@@ -8,6 +8,7 @@
 
 #include "base/files/file_path.h"
 #include "base/logging.h"
+#include "base/metrics/sparse_histogram.h"
 #include "base/threading/thread_restrictions.h"
 
 namespace base {
@@ -50,11 +51,19 @@ PlatformFile CreatePlatformFileUnsafe(const FilePath& name,
     return NULL;
   }
 
-  DWORD access = (flags & PLATFORM_FILE_READ) ? GENERIC_READ : 0;
+  DWORD access = 0;
   if (flags & PLATFORM_FILE_WRITE)
-    access |= GENERIC_WRITE;
+    access = GENERIC_WRITE;
+  if (flags & PLATFORM_FILE_APPEND) {
+    DCHECK(!access);
+    access = FILE_APPEND_DATA;
+  }
+  if (flags & PLATFORM_FILE_READ)
+    access |= GENERIC_READ;
   if (flags & PLATFORM_FILE_WRITE_ATTRIBUTES)
     access |= FILE_WRITE_ATTRIBUTES;
+  if (flags & PLATFORM_FILE_EXECUTE)
+    access |= GENERIC_EXECUTE;
 
   DWORD sharing = (flags & PLATFORM_FILE_EXCLUSIVE_READ) ? 0 : FILE_SHARE_READ;
   if (!(flags & PLATFORM_FILE_EXCLUSIVE_WRITE))
@@ -87,25 +96,8 @@ PlatformFile CreatePlatformFileUnsafe(const FilePath& name,
   if (error) {
     if (file != kInvalidPlatformFileValue)
       *error = PLATFORM_FILE_OK;
-    else {
-      DWORD last_error = GetLastError();
-      switch (last_error) {
-        case ERROR_SHARING_VIOLATION:
-          *error = PLATFORM_FILE_ERROR_IN_USE;
-          break;
-        case ERROR_FILE_EXISTS:
-          *error = PLATFORM_FILE_ERROR_EXISTS;
-          break;
-        case ERROR_FILE_NOT_FOUND:
-          *error = PLATFORM_FILE_ERROR_NOT_FOUND;
-          break;
-        case ERROR_ACCESS_DENIED:
-          *error = PLATFORM_FILE_ERROR_ACCESS_DENIED;
-          break;
-        default:
-          *error = PLATFORM_FILE_ERROR_FAILED;
-      }
-    }
+    else
+      *error = LastErrorToPlatformFileError(GetLastError());
   }
 
   return file;
@@ -129,7 +121,7 @@ int64 SeekPlatformFile(PlatformFile file,
                        PlatformFileWhence whence,
                        int64 offset) {
   base::ThreadRestrictions::AssertIOAllowed();
-  if (file < 0 || offset < 0)
+  if (file == kInvalidPlatformFileValue || offset < 0)
     return -1;
 
   LARGE_INTEGER distance, res;
@@ -268,6 +260,42 @@ bool GetPlatformFileInfo(PlatformFile file, PlatformFileInfo* info) {
   info->last_accessed = base::Time::FromFileTime(file_info.ftLastAccessTime);
   info->creation_time = base::Time::FromFileTime(file_info.ftCreationTime);
   return true;
+}
+
+PlatformFileError LastErrorToPlatformFileError(DWORD last_error) {
+  switch (last_error) {
+    case ERROR_SHARING_VIOLATION:
+      return PLATFORM_FILE_ERROR_IN_USE;
+    case ERROR_FILE_EXISTS:
+      return PLATFORM_FILE_ERROR_EXISTS;
+    case ERROR_FILE_NOT_FOUND:
+    case ERROR_PATH_NOT_FOUND:
+      return PLATFORM_FILE_ERROR_NOT_FOUND;
+    case ERROR_ACCESS_DENIED:
+      return PLATFORM_FILE_ERROR_ACCESS_DENIED;
+    case ERROR_TOO_MANY_OPEN_FILES:
+      return PLATFORM_FILE_ERROR_TOO_MANY_OPENED;
+    case ERROR_OUTOFMEMORY:
+    case ERROR_NOT_ENOUGH_MEMORY:
+      return PLATFORM_FILE_ERROR_NO_MEMORY;
+    case ERROR_HANDLE_DISK_FULL:
+    case ERROR_DISK_FULL:
+    case ERROR_DISK_RESOURCES_EXHAUSTED:
+      return PLATFORM_FILE_ERROR_NO_SPACE;
+    case ERROR_USER_MAPPED_FILE:
+      return PLATFORM_FILE_ERROR_INVALID_OPERATION;
+    case ERROR_NOT_READY:
+    case ERROR_SECTOR_NOT_FOUND:
+    case ERROR_DEV_NOT_EXIST:
+    case ERROR_IO_DEVICE:
+    case ERROR_FILE_CORRUPT:
+    case ERROR_DISK_CORRUPT:
+      return PLATFORM_FILE_ERROR_IO;
+    default:
+      UMA_HISTOGRAM_SPARSE_SLOWLY("PlatformFile.UnknownErrors.Windows",
+                                  last_error);
+      return PLATFORM_FILE_ERROR_FAILED;
+  }
 }
 
 }  // namespace base

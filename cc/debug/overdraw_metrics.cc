@@ -39,7 +39,7 @@ static inline float PolygonArea(gfx::PointF points[8], int num_points) {
   float area = 0;
   for (int i = 0; i < num_points; ++i)
     area += WedgeProduct(points[i], points[(i+1)%num_points]);
-  return fabs(0.5f * area);
+  return std::abs(0.5f * area);
 }
 
 // Takes a given quad, maps it by the given transformation, and gives the area
@@ -51,7 +51,7 @@ static inline float AreaOfMappedQuad(const gfx::Transform& transform,
   MathUtil::MapClippedQuad(transform,
                            quad,
                            clipped_quad,
-                           num_vertices_in_clipped_quad);
+                           &num_vertices_in_clipped_quad);
   return PolygonArea(clipped_quad, num_vertices_in_clipped_quad);
 }
 
@@ -231,7 +231,8 @@ void OverdrawMetrics::RecordMetricsInternal(
       UMA_HISTOGRAM_CUSTOM_COUNTS(
           "Renderer4.contentsTextureBytes_Unscaled",
           static_cast<int>(contents_texture_use_bytes_ / 1000),
-          1000, 100000000, 50); {
+          1000, 100000000, 50);
+      {
         TRACE_COUNTER_ID1("cc",
                           "UploadTilesCulled",
                           layer_tree_host,

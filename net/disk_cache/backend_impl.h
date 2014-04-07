@@ -7,9 +7,9 @@
 #ifndef NET_DISK_CACHE_BACKEND_IMPL_H_
 #define NET_DISK_CACHE_BACKEND_IMPL_H_
 
+#include "base/containers/hash_tables.h"
 #include "base/files/file_path.h"
-#include "base/hash_tables.h"
-#include "base/timer.h"
+#include "base/timer/timer.h"
 #include "net/disk_cache/block_files.h"
 #include "net/disk_cache/disk_cache.h"
 #include "net/disk_cache/eviction.h"
@@ -24,6 +24,8 @@ class NetLog;
 }  // namespace net
 
 namespace disk_cache {
+
+struct Index;
 
 enum BackendFlags {
   kNone = 0,
@@ -48,14 +50,6 @@ class NET_EXPORT_PRIVATE BackendImpl : public Backend {
   BackendImpl(const base::FilePath& path, uint32 mask,
               base::MessageLoopProxy* cache_thread, net::NetLog* net_log);
   virtual ~BackendImpl();
-
-  // Returns a new backend with the desired flags. See the declaration of
-  // CreateCacheBackend().
-  static int CreateBackend(const base::FilePath& full_path, bool force,
-                           int max_bytes, net::CacheType type,
-                           uint32 flags, base::MessageLoopProxy* thread,
-                           net::NetLog* net_log, Backend** backend,
-                           const CompletionCallback& callback);
 
   // Performs general initialization for this current instance of the cache.
   int Init(const CompletionCallback& callback);
@@ -287,6 +281,9 @@ class NET_EXPORT_PRIVATE BackendImpl : public Backend {
   bool CreateBackingStore(disk_cache::File* file);
   bool InitBackingStore(bool* file_created);
   void AdjustMaxCacheSize(int table_len);
+
+  bool InitStats();
+  void StoreStats();
 
   // Deletes the cache and starts again.
   void RestartCache(bool failure);

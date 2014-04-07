@@ -14,27 +14,30 @@
 #include "base/command_line.h"
 #include "base/lazy_instance.h"
 #include "base/logging.h"
+#include "base/single_thread_task_runner.h"
 #include "base/synchronization/lock.h"
-#include "cc/base/thread_impl.h"
+#include "base/threading/thread.h"
 #include "cc/input/input_handler.h"
 #include "cc/layers/layer.h"
+#include "cc/output/compositor_frame.h"
 #include "cc/output/context_provider.h"
 #include "cc/output/output_surface.h"
 #include "cc/trees/layer_tree_host.h"
 #include "content/browser/gpu/browser_gpu_channel_host_factory.h"
 #include "content/browser/gpu/gpu_surface_tracker.h"
-#include "content/browser/renderer_host/image_transport_factory_android.h"
+#include "content/common/gpu/client/command_buffer_proxy_impl.h"
 #include "content/common/gpu/client/gl_helper.h"
 #include "content/common/gpu/client/gpu_channel_host.h"
 #include "content/common/gpu/client/webgraphicscontext3d_command_buffer_impl.h"
 #include "content/common/gpu/gpu_process_launch_causes.h"
+#include "content/public/browser/android/compositor_client.h"
 #include "content/public/common/content_switches.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebGraphicsContext3D.h"
+#include "third_party/WebKit/public/platform/WebGraphicsContext3D.h"
 #include "third_party/khronos/GLES2/gl2.h"
 #include "third_party/khronos/GLES2/gl2ext.h"
+#include "ui/gfx/android/device_display_info.h"
 #include "ui/gfx/android/java_bitmap.h"
-#include "webkit/glue/webthread_impl.h"
-#include "webkit/gpu/webgraphicscontext3d_in_process_impl.h"
+#include "webkit/common/gpu/webgraphicscontext3d_in_process_command_buffer_impl.h"
 
 namespace gfx {
 class JavaBitmap;
@@ -46,15 +49,40 @@ namespace {
 class DirectOutputSurface : public cc::OutputSurface {
  public:
   DirectOutputSurface(scoped_ptr<WebKit::WebGraphicsContext3D> context3d)
-      : cc::OutputSurface(context3d.Pass()) {}
+      : cc::OutputSurface(context3d.Pass()) {
+    capabilities_.adjust_deadline_for_parent = false;
+  }
 
-  virtual void Reshape(gfx::Size size) OVERRIDE {}
-  virtual void PostSubBuffer(gfx::Rect rect) OVERRIDE {}
-  virtual void SwapBuffers() OVERRIDE {}
+  virtual void Reshape(gfx::Size size, float scale_factor) OVERRIDE {
+    surface_size_ = size;
+  }
+  virtual void SwapBuffers(cc::CompositorFrame*) OVERRIDE {
+    context3d()->shallowFlushCHROMIUM();
+  }
+};
+
+// Used to override capabilities_.adjust_deadline_for_parent to false
+class OutputSurfaceWithoutParent : public cc::OutputSurface {
+ public:
+  OutputSurfaceWithoutParent(scoped_ptr<WebKit::WebGraphicsContext3D> context3d)
+      : cc::OutputSurface(context3d.Pass()) {
+    capabilities_.adjust_deadline_for_parent = false;
+  }
+
+  virtual void SwapBuffers(cc::CompositorFrame* frame) OVERRIDE {
+    content::WebGraphicsContext3DCommandBufferImpl* command_buffer =
+      static_cast<content::WebGraphicsContext3DCommandBufferImpl*>(context3d());
+    content::CommandBufferProxyImpl* command_buffer_proxy =
+        command_buffer->GetCommandBufferProxy();
+    DCHECK(command_buffer_proxy);
+    command_buffer_proxy->SetLatencyInfo(frame->metadata.latency_info);
+
+    OutputSurface::SwapBuffers(frame);
+  }
 };
 
 static bool g_initialized = false;
-static webkit_glue::WebThreadImpl* g_impl_thread = NULL;
+static base::Thread* g_impl_thread = NULL;
 static bool g_use_direct_gl = false;
 
 } // anonymous namespace
@@ -68,7 +96,7 @@ static base::LazyInstance<SurfaceMap>
 static base::LazyInstance<base::Lock> g_surface_map_lock;
 
 // static
-Compositor* Compositor::Create(Client* client) {
+Compositor* Compositor::Create(CompositorClient* client) {
   return client ? new CompositorImpl(client) : NULL;
 }
 
@@ -82,8 +110,10 @@ void Compositor::Initialize() {
 void Compositor::InitializeWithFlags(uint32 flags) {
   g_use_direct_gl = flags & DIRECT_CONTEXT_ON_DRAW_THREAD;
   if (flags & ENABLE_COMPOSITOR_THREAD) {
-    TRACE_EVENT_INSTANT0("test_gpu", "ThreadedCompositingInitialization");
-    g_impl_thread = new webkit_glue::WebThreadImpl("Browser Compositor");
+    TRACE_EVENT_INSTANT0("test_gpu", "ThreadedCompositingInitialization",
+                         TRACE_EVENT_SCOPE_THREAD);
+    g_impl_thread = new base::Thread("Browser Compositor");
+    g_impl_thread->Start();
   }
   Compositor::Initialize();
 }
@@ -114,23 +144,30 @@ jobject CompositorImpl::GetSurface(int surface_id) {
   return jsurface;
 }
 
-CompositorImpl::CompositorImpl(Compositor::Client* client)
+CompositorImpl::CompositorImpl(CompositorClient* client)
     : root_layer_(cc::Layer::Create()),
       has_transparent_background_(false),
       window_(NULL),
       surface_id_(0),
       client_(client),
-      weak_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {
+      weak_factory_(this) {
   DCHECK(client);
+  ImageTransportFactoryAndroid::AddObserver(this);
 }
 
 CompositorImpl::~CompositorImpl() {
+  ImageTransportFactoryAndroid::RemoveObserver(this);
   // Clean-up any surface references.
   SetSurface(NULL);
 }
 
+void CompositorImpl::SetNeedsRedraw() {
+  if (host_)
+    host_->SetNeedsRedraw();
+}
+
 void CompositorImpl::Composite() {
-  if (host_.get())
+  if (host_)
     host_->Composite(base::TimeTicks::Now());
 }
 
@@ -191,30 +228,32 @@ void CompositorImpl::SetSurface(jobject surface) {
 void CompositorImpl::SetVisible(bool visible) {
   if (!visible) {
     host_.reset();
-  } else if (!host_.get()) {
+  } else if (!host_) {
     cc::LayerTreeSettings settings;
+    settings.compositor_name = "BrowserCompositor";
     settings.refresh_rate = 60.0;
     settings.impl_side_painting = false;
+    settings.allow_antialiasing = false;
     settings.calculate_top_controls_position = false;
     settings.top_controls_height = 0.f;
     settings.use_memory_management = false;
+    settings.highp_threshold_min = 2048;
 
     // Do not clear the framebuffer when rendering into external GL contexts
     // like Android View System's.
     if (UsesDirectGL())
       settings.should_clear_root_render_pass = false;
 
-    scoped_ptr<cc::Thread> impl_thread;
-    if (g_impl_thread)
-      impl_thread = cc::ThreadImpl::CreateForDifferentThread(
-          g_impl_thread->message_loop()->message_loop_proxy());
+    scoped_refptr<base::SingleThreadTaskRunner> impl_thread_task_runner =
+        g_impl_thread ? g_impl_thread->message_loop()->message_loop_proxy()
+                      : NULL;
 
-    host_ = cc::LayerTreeHost::Create(this, settings, impl_thread.Pass());
+    host_ = cc::LayerTreeHost::Create(this, settings, impl_thread_task_runner);
     host_->SetRootLayer(root_layer_);
 
     host_->SetVisible(true);
-    host_->SetSurfaceReady();
-    host_->SetViewportSize(size_, size_);
+    host_->SetLayerTreeHostClientReady();
+    host_->SetViewportSize(size_);
     host_->set_has_transparent_background(has_transparent_background_);
   }
 }
@@ -230,18 +269,18 @@ void CompositorImpl::SetWindowBounds(const gfx::Size& size) {
 
   size_ = size;
   if (host_)
-    host_->SetViewportSize(size, size);
+    host_->SetViewportSize(size);
   root_layer_->SetBounds(size);
 }
 
 void CompositorImpl::SetHasTransparentBackground(bool flag) {
   has_transparent_background_ = flag;
-  if (host_.get())
+  if (host_)
     host_->set_has_transparent_background(flag);
 }
 
 bool CompositorImpl::CompositeAndReadback(void *pixels, const gfx::Rect& rect) {
-  if (host_.get())
+  if (host_)
     return host_->CompositeAndReadback(pixels, rect);
   else
     return false;
@@ -267,7 +306,6 @@ WebKit::WebGLId CompositorImpl::GenerateTexture(gfx::JavaBitmap& bitmap) {
                       type,
                       bitmap.pixels());
   context->shallowFlushCHROMIUM();
-  DCHECK(context->getError() == GL_NO_ERROR);
   return texture_id;
 }
 
@@ -289,7 +327,6 @@ WebKit::WebGLId CompositorImpl::GenerateCompressedTexture(gfx::Size& size,
                                 data_size,
                                 data);
   context->shallowFlushCHROMIUM();
-  DCHECK(context->getError() == GL_NO_ERROR);
   return texture_id;
 }
 
@@ -300,7 +337,6 @@ void CompositorImpl::DeleteTexture(WebKit::WebGLId texture_id) {
     return;
   context->deleteTexture(texture_id);
   context->shallowFlushCHROMIUM();
-  DCHECK(context->getError() == GL_NO_ERROR);
 }
 
 bool CompositorImpl::CopyTextureToBitmap(WebKit::WebGLId texture_id,
@@ -322,17 +358,16 @@ bool CompositorImpl::CopyTextureToBitmap(WebKit::WebGLId texture_id,
   return true;
 }
 
-scoped_ptr<cc::OutputSurface> CompositorImpl::CreateOutputSurface() {
-  if (g_use_direct_gl) {
-    WebKit::WebGraphicsContext3D::Attributes attrs;
-    attrs.shareResources = false;
-    attrs.noAutomaticFlushes = true;
-    scoped_ptr<WebKit::WebGraphicsContext3D> context(
-        webkit::gpu::WebGraphicsContext3DInProcessImpl::CreateForWindow(
-            attrs,
-            window_,
-            NULL));
+scoped_ptr<cc::OutputSurface> CompositorImpl::CreateOutputSurface(
+    bool fallback) {
+  WebKit::WebGraphicsContext3D::Attributes attrs;
+  attrs.shareResources = true;
+  attrs.noAutomaticFlushes = true;
 
+  if (g_use_direct_gl) {
+    scoped_ptr<WebKit::WebGraphicsContext3D> context(
+        webkit::gpu::WebGraphicsContext3DInProcessCommandBufferImpl::
+            CreateViewContext(attrs, window_));
     if (!window_) {
       return scoped_ptr<cc::OutputSurface>(
           new DirectOutputSurface(context.Pass()));
@@ -341,9 +376,6 @@ scoped_ptr<cc::OutputSurface> CompositorImpl::CreateOutputSurface() {
     return make_scoped_ptr(new cc::OutputSurface(context.Pass()));
   } else {
     DCHECK(window_ && surface_id_);
-    WebKit::WebGraphicsContext3D::Attributes attrs;
-    attrs.shareResources = true;
-    attrs.noAutomaticFlushes = true;
     GpuChannelHostFactory* factory = BrowserGpuChannelHostFactory::instance();
     GURL url("chrome://gpu/Compositor::createContext3D");
     scoped_ptr<WebGraphicsContext3DCommandBufferImpl> context(
@@ -351,20 +383,32 @@ scoped_ptr<cc::OutputSurface> CompositorImpl::CreateOutputSurface() {
                                                   url,
                                                   factory,
                                                   weak_factory_.GetWeakPtr()));
+    static const size_t kBytesPerPixel = 4;
+    gfx::DeviceDisplayInfo display_info;
+    size_t full_screen_texture_size_in_bytes =
+        display_info.GetDisplayHeight() *
+        display_info.GetDisplayWidth() *
+        kBytesPerPixel;
     if (!context->Initialize(
         attrs,
         false,
-        CAUSE_FOR_GPU_LAUNCH_WEBGRAPHICSCONTEXT3DCOMMANDBUFFERIMPL_INITIALIZE)) {
+        CAUSE_FOR_GPU_LAUNCH_WEBGRAPHICSCONTEXT3DCOMMANDBUFFERIMPL_INITIALIZE,
+        64 * 1024,  // command buffer size
+        64 * 1024,  // start transfer buffer size
+        64 * 1024,  // min transfer buffer size
+        std::min(3 * full_screen_texture_size_in_bytes,
+                 kDefaultMaxTransferBufferSize))) {
       LOG(ERROR) << "Failed to create 3D context for compositor.";
       return scoped_ptr<cc::OutputSurface>();
     }
-    return make_scoped_ptr(new cc::OutputSurface(
-        context.PassAs<WebKit::WebGraphicsContext3D>()));
+    return scoped_ptr<cc::OutputSurface>(
+        new OutputSurfaceWithoutParent(
+            context.PassAs<WebKit::WebGraphicsContext3D>()));
   }
 }
 
-scoped_ptr<cc::InputHandler> CompositorImpl::CreateInputHandler() {
-  return scoped_ptr<cc::InputHandler>();
+void CompositorImpl::OnLostResources() {
+  client_->DidLoseResources();
 }
 
 void CompositorImpl::DidCompleteSwapBuffers() {
@@ -395,6 +439,7 @@ CompositorImpl::OffscreenContextProviderForCompositorThread() {
 
 void CompositorImpl::OnViewContextSwapBuffersPosted() {
   TRACE_EVENT0("compositor", "CompositorImpl::OnViewContextSwapBuffersPosted");
+  client_->OnSwapBuffersPosted();
 }
 
 void CompositorImpl::OnViewContextSwapBuffersComplete() {
@@ -419,7 +464,6 @@ WebKit::WebGLId CompositorImpl::BuildBasicTexture() {
   context->texParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   context->texParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
   context->texParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-  DCHECK(context->getError() == GL_NO_ERROR);
   return texture_id;
 }
 

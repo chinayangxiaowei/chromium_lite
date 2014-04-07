@@ -41,13 +41,12 @@ class CloudPrintProxy : public CloudPrintProxyFrontend,
   void Initialize(ServiceProcessPrefs* service_prefs, Client* client);
 
   // Enables/disables cloud printing for the user
-  void EnableForUser(const std::string& lsid);
+  void EnableForUser();
   void EnableForUserWithRobot(
       const std::string& robot_auth_code,
       const std::string& robot_email,
       const std::string& user_email,
-      bool connect_new_printers,
-      const std::vector<std::string>& printer_blacklist);
+      const base::DictionaryValue& user_settings);
   void UnregisterPrintersAndDisableForUser();
   void DisableForUser();
   // Returns the proxy info.

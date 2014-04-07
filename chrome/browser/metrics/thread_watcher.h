@@ -51,13 +51,13 @@
 #include "base/gtest_prod_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/metrics/histogram.h"
 #include "base/synchronization/lock.h"
 #include "base/threading/platform_thread.h"
 #include "base/threading/thread.h"
 #include "base/threading/watchdog.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
@@ -331,10 +331,10 @@ class ThreadWatcherList {
   // watched, as they provide the system context of how hung *other* threads
   // are.
   //
-  // ThreadWatcher monitors six browser threads (i.e., UI, IO, DB, FILE,
-  // FILE_USER_BLOCKING and CACHE). Out of the 6 threads, any subset may be
-  // watched, to potentially cause a crash. The following example's command line
-  // causes exactly 3 threads to be watched.
+  // ThreadWatcher monitors five browser threads (i.e., UI, IO, DB, FILE,
+  // and CACHE). Out of the 5 threads, any subset may be watched, to potentially
+  // cause a crash. The following example's command line causes exactly 3
+  // threads to be watched.
   //
   // The example command line argument consists of "UI:3:18,IO:3:18,FILE:5:90".
   // In that string, the first parameter specifies the thread_id: UI, IO or

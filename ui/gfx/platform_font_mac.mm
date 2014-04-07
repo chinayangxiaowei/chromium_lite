@@ -7,9 +7,9 @@
 #include <Cocoa/Cocoa.h>
 
 #include "base/basictypes.h"
-#include "base/memory/scoped_nsobject.h"
-#include "base/sys_string_conversions.h"
-#include "base/utf_string_conversions.h"
+#include "base/mac/scoped_nsobject.h"
+#include "base/strings/sys_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/font.h"
 
@@ -27,6 +27,16 @@ PlatformFontMac::PlatformFontMac() {
 }
 
 PlatformFontMac::PlatformFontMac(NativeFont native_font) {
+  int style = 0;
+  NSFontSymbolicTraits traits = [[native_font fontDescriptor] symbolicTraits];
+  if (traits & NSFontItalicTrait)
+    style |= Font::ITALIC;
+  if (traits & NSFontBoldTrait)
+    style |= Font::BOLD;
+
+  InitWithNameSizeAndStyle(base::SysNSStringToUTF8([native_font familyName]),
+                           [native_font pointSize],
+                           style);
 }
 
 PlatformFontMac::PlatformFontMac(const std::string& font_name,
@@ -53,7 +63,7 @@ int PlatformFontMac::GetAverageCharacterWidth() const {
   return average_width_;
 }
 
-int PlatformFontMac::GetStringWidth(const string16& text) const {
+int PlatformFontMac::GetStringWidth(const base::string16& text) const {
   return Canvas::GetStringWidth(text,
                                 Font(const_cast<PlatformFontMac*>(this)));
 }
@@ -114,7 +124,7 @@ void PlatformFontMac::InitWithNameSizeAndStyle(const std::string& font_name,
 
 void PlatformFontMac::CalculateMetrics() {
   NSFont* font = GetNativeFont();
-  scoped_nsobject<NSLayoutManager> layout_manager(
+  base::scoped_nsobject<NSLayoutManager> layout_manager(
       [[NSLayoutManager alloc] init]);
   height_ = [layout_manager defaultLineHeightForFont:font];
   ascent_ = [font ascender];

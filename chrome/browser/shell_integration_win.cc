@@ -11,17 +11,19 @@
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/file_util.h"
-#include "base/message_loop.h"
+#include "base/files/file_enumerator.h"
+#include "base/message_loop/message_loop.h"
 #include "base/path_service.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/win/registry.h"
 #include "base/win/scoped_comptr.h"
 #include "base/win/scoped_propvariant.h"
 #include "base/win/shortcut.h"
 #include "base/win/windows_version.h"
+#include "chrome/browser/policy/policy_path_parser.h"
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths_internal.h"
@@ -90,13 +92,25 @@ string16 GetAppListAppName() {
 // |is_per_user_install|).
 string16 GetExpectedAppId(const CommandLine& command_line,
                           bool is_per_user_install) {
-  base::FilePath profile_path;
-  if (command_line.HasSwitch(switches::kUserDataDir)) {
-    profile_path =
-        command_line.GetSwitchValuePath(switches::kUserDataDir).AppendASCII(
-            chrome::kInitialProfile);
-  }
+  base::FilePath user_data_dir;
+  if (command_line.HasSwitch(switches::kUserDataDir))
+    user_data_dir = command_line.GetSwitchValuePath(switches::kUserDataDir);
+  else
+    chrome::GetDefaultUserDataDirectory(&user_data_dir);
+  // Adjust with any policy that overrides any other way to set the path.
+  policy::path_parser::CheckUserDataDirPolicy(&user_data_dir);
+  DCHECK(!user_data_dir.empty());
 
+  base::FilePath profile_subdir;
+  if (command_line.HasSwitch(switches::kProfileDirectory)) {
+    profile_subdir =
+        command_line.GetSwitchValuePath(switches::kProfileDirectory);
+  } else {
+    profile_subdir = base::FilePath(ASCIIToUTF16(chrome::kInitialProfile));
+  }
+  DCHECK(!profile_subdir.empty());
+
+  base::FilePath profile_path = user_data_dir.Append(profile_subdir);
   string16 app_name;
   if (command_line.HasSwitch(switches::kApp)) {
     app_name = UTF8ToUTF16(web_app::GenerateApplicationNameFromURL(
@@ -110,6 +124,7 @@ string16 GetExpectedAppId(const CommandLine& command_line,
     BrowserDistribution* dist = BrowserDistribution::GetDistribution();
     app_name = ShellUtil::GetBrowserModelId(dist, is_per_user_install);
   }
+  DCHECK(!app_name.empty());
 
   return ShellIntegration::GetAppModelIdForProfile(app_name, profile_path);
 }
@@ -381,9 +396,9 @@ int ShellIntegration::MigrateShortcutsInPathInternal(
   DCHECK(base::win::GetVersion() >= base::win::VERSION_WIN7);
 
   // Enumerate all pinned shortcuts in the given path directly.
-  file_util::FileEnumerator shortcuts_enum(
+  base::FileEnumerator shortcuts_enum(
       path, false,  // not recursive
-      file_util::FileEnumerator::FILES, FILE_PATH_LITERAL("*.lnk"));
+      base::FileEnumerator::FILES, FILE_PATH_LITERAL("*.lnk"));
 
   bool is_per_user_install =
       InstallUtil::IsPerUserInstall(chrome_exe.value().c_str());
@@ -450,7 +465,11 @@ int ShellIntegration::MigrateShortcutsInPathInternal(
       }
     }
 
-    if (check_dual_mode) {
+    // Only set dual mode if the expected app id is the default app id.
+    BrowserDistribution* dist = BrowserDistribution::GetDistribution();
+    string16 default_chromium_model_id(
+        ShellUtil::GetBrowserModelId(dist, is_per_user_install));
+    if (check_dual_mode && expected_app_id == default_chromium_model_id) {
       propvariant.Reset();
       if (property_store->GetValue(PKEY_AppUserModel_IsDualMode,
                                    propvariant.Receive()) != S_OK) {
@@ -511,7 +530,7 @@ base::FilePath ShellIntegration::GetStartMenuShortcut(
 
     shortcut = shortcut.Append(shortcut_name).Append(shortcut_name +
                                                      installer::kLnkExt);
-    if (file_util::PathExists(shortcut))
+    if (base::PathExists(shortcut))
       return shortcut;
   }
 

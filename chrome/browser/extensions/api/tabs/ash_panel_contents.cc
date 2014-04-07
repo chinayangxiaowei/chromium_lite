@@ -4,7 +4,9 @@
 
 #include "chrome/browser/extensions/api/tabs/ash_panel_contents.h"
 
+#include "apps/native_app_window.h"
 #include "base/values.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/api/tabs/tabs_constants.h"
 #include "chrome/browser/extensions/api/tabs/tabs_windows_api.h"
 #include "chrome/browser/extensions/api/tabs/windows_event_router.h"
@@ -12,14 +14,14 @@
 #include "chrome/browser/extensions/window_controller_list.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sessions/session_tab_helper.h"
-#include "chrome/browser/ui/extensions/native_app_window.h"
-#include "chrome/browser/ui/extensions/shell_window.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_messages.h"
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/gfx/image/image.h"
+
+using apps::ShellWindow;
+using apps::NativeAppWindow;
 
 // AshPanelWindowController ----------------------------------------------------
 
@@ -78,9 +80,9 @@ base::DictionaryValue* AshPanelWindowController::CreateWindowValueWithTabs(
     const extensions::Extension* extension) const {
   DCHECK(IsVisibleToExtension(extension));
   base::DictionaryValue* result = CreateWindowValue();
-  DictionaryValue* tab_value = CreateTabValue(extension, 0);
+  base::DictionaryValue* tab_value = CreateTabValue(extension, 0);
   if (tab_value) {
-    base::ListValue* tab_list = new ListValue();
+    base::ListValue* tab_list = new base::ListValue();
     tab_list->Append(tab_value);
     result->Set(extensions::tabs_constants::kTabsKey, tab_list);
   }
@@ -97,7 +99,7 @@ base::DictionaryValue* AshPanelWindowController::CreateTabValue(
   if (!web_contents)
     return NULL;
 
-  DictionaryValue* tab_value = new DictionaryValue();
+  base::DictionaryValue* tab_value = new base::DictionaryValue();
   tab_value->SetInteger(extensions::tabs_constants::kIdKey,
                         SessionID::IdForTab(web_contents));
   tab_value->SetInteger(extensions::tabs_constants::kIndexKey, 0);

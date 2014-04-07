@@ -7,7 +7,7 @@
 #include <algorithm>
 
 #include "base/bind.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "ui/app_list/search_result_list_view_delegate.h"
 #include "ui/app_list/views/search_result_view.h"
 #include "ui/base/events/event.h"
@@ -27,7 +27,7 @@ SearchResultListView::SearchResultListView(
       results_(NULL),
       last_visible_index_(0),
       selected_index_(-1),
-      ALLOW_THIS_IN_INITIALIZER_LIST(update_factory_(this)) {
+      update_factory_(this) {
   SetLayoutManager(
       new views::BoxLayout(views::BoxLayout::kVertical, 0, 0, 0));
 
@@ -75,6 +75,12 @@ bool SearchResultListView::IsResultViewSelected(
 
 bool SearchResultListView::OnKeyPressed(const ui::KeyEvent& event) {
   switch (event.key_code()) {
+    case ui::VKEY_TAB:
+      if (event.IsShiftDown())
+        SetSelectedIndex(std::max(selected_index_ - 1, 0));
+      else
+        SetSelectedIndex(std::min(selected_index_ + 1, last_visible_index_));
+      return true;
     case ui::VKEY_UP:
       SetSelectedIndex(std::max(selected_index_ - 1, 0));
       return true;
@@ -83,7 +89,7 @@ bool SearchResultListView::OnKeyPressed(const ui::KeyEvent& event) {
       return true;
     case ui::VKEY_RETURN:
       if (selected_index_ >= 0)
-        SearchResultActivated(GetResultViewAt(selected_index_), event);
+        SearchResultActivated(GetResultViewAt(selected_index_), event.flags());
       return true;
     default:
       break;
@@ -120,7 +126,7 @@ void SearchResultListView::ScheduleUpdate() {
   // When search results are added one by one, each addition generates an update
   // request. Consolidates those update requests into one Update call.
   if (!update_factory_.HasWeakPtrs()) {
-    MessageLoop::current()->PostTask(
+    base::MessageLoop::current()->PostTask(
         FROM_HERE,
         base::Bind(&SearchResultListView::Update,
                    update_factory_.GetWeakPtr()));
@@ -148,18 +154,28 @@ void SearchResultListView::ListItemsChanged(size_t start, size_t count) {
 }
 
 void SearchResultListView::SearchResultActivated(SearchResultView* view,
-                                                 const ui::Event& event) {
+                                                 int event_flags) {
   if (delegate_ && view->result())
-    delegate_->OpenResult(*(view->result()), event.flags());
+    delegate_->OpenResult(view->result(), event_flags);
 }
 
 void SearchResultListView::SearchResultActionActivated(SearchResultView* view,
-                                                       int action_index,
-                                                       const ui::Event& event) {
+                                                       size_t action_index,
+                                                       int event_flags) {
   if (delegate_ && view->result()) {
     delegate_->InvokeResultAction(
-        *(view->result()), action_index, event.flags());
+        view->result(), action_index, event_flags);
   }
+}
+
+void SearchResultListView::OnSearchResultInstalled(SearchResultView* view) {
+  if (delegate_ && view->result())
+    delegate_->OnResultInstalled(view->result());
+}
+
+void SearchResultListView::OnSearchResultUninstalled(SearchResultView* view) {
+  if (delegate_ && view->result())
+    delegate_->OnResultUninstalled(view->result());
 }
 
 }  // namespace app_list

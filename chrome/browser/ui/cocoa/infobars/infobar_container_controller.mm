@@ -5,6 +5,7 @@
 #include "base/logging.h"
 #include "base/mac/bundle_locations.h"
 #include "base/mac/mac_util.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/infobars/confirm_infobar_delegate.h"
 #include "chrome/browser/infobars/infobar.h"
 #include "chrome/browser/infobars/infobar_service.h"
@@ -13,7 +14,6 @@
 #import "chrome/browser/ui/cocoa/infobars/infobar_container_controller.h"
 #import "chrome/browser/ui/cocoa/infobars/infobar_controller.h"
 #import "chrome/browser/ui/cocoa/view_id_util.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "content/public/browser/notification_details.h"
 #include "content/public/browser/notification_source.h"
 #include "skia/ext/skia_utils_mac.h"
@@ -83,6 +83,8 @@ class InfoBarNotificationObserver : public content::NotificationObserver {
 
 @implementation InfoBarContainerController
 
+@synthesize shouldSuppressTopInfoBarTip = shouldSuppressTopInfoBarTip_;
+
 - (id)initWithResizeDelegate:(id<ViewResizer>)resizeDelegate {
   DCHECK(resizeDelegate);
   if ((self = [super initWithNibName:@"InfoBarContainer"
@@ -144,9 +146,9 @@ class InfoBarNotificationObserver : public content::NotificationObserver {
   if (currentWebContents_) {
     InfoBarService* infobarService =
         InfoBarService::FromWebContents(currentWebContents_);
-    for (size_t i = 0; i < infobarService->GetInfoBarCount(); ++i) {
-      InfoBar* infobar = infobarService->
-          GetInfoBarDelegateAt(i)->CreateInfoBar(infobarService);
+    for (size_t i = 0; i < infobarService->infobar_count(); ++i) {
+      InfoBar* infobar =
+          infobarService->infobar_at(i)->CreateInfoBar(infobarService);
       [self addInfoBar:infobar animate:NO];
     }
 
@@ -185,6 +187,13 @@ class InfoBarNotificationObserver : public content::NotificationObserver {
 - (void)setAnimationInProgress:(BOOL)inProgress {
   if ([resizeDelegate_ respondsToSelector:@selector(setAnimationInProgress:)])
     [resizeDelegate_ setAnimationInProgress:inProgress];
+}
+
+- (void)setShouldSuppressTopInfoBarTip:(BOOL)flag {
+  if (shouldSuppressTopInfoBarTip_ == flag)
+    return;
+  shouldSuppressTopInfoBarTip_ = flag;
+  [self positionInfoBarsAndRedraw];
 }
 
 @end
@@ -270,6 +279,9 @@ class InfoBarNotificationObserver : public content::NotificationObserver {
     [view setFrame:frame];
 
     minY += NSHeight(frame) - infobars::kTipHeight;
+
+    BOOL isTop = [controller isEqual:[infobarControllers_ objectAtIndex:0]];
+    [controller setHasTip:!shouldSuppressTopInfoBarTip_ || !isTop];
   }
 
   [resizeDelegate_ resizeView:[self view] newHeight:[self desiredHeight]];

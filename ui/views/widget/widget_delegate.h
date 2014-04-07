@@ -6,6 +6,7 @@
 #define UI_VIEWS_WIDGET_WIDGET_DELEGATE_H_
 
 #include <string>
+#include <vector>
 
 #include "ui/base/accessibility/accessibility_types.h"
 #include "ui/base/ui_base_types.h"
@@ -69,6 +70,9 @@ class VIEWS_EXPORT WidgetDelegate {
 
   // Returns true if the window should show a title in the title bar.
   virtual bool ShouldShowWindowTitle() const;
+
+  // Returns true if the window should show a close button in the title bar.
+  virtual bool ShouldShowCloseButton() const;
 
   // Returns true if the window should handle standard system commands, such as
   // close, minimize, maximize.
@@ -137,6 +141,12 @@ class VIEWS_EXPORT WidgetDelegate {
   // Return NULL to use the default one.
   virtual NonClientFrameView* CreateNonClientFrameView(Widget* widget);
 
+  // Called by the Widget to create the overlay View for this widget. Return
+  // NULL for no overlay. The overlay View will fill the Widget and sit on top
+  // of the ClientView and NonClientFrameView (both visually and wrt click
+  // targeting).
+  virtual View* CreateOverlayView();
+
   // Returns true if the window can be notified with the work area change.
   // Otherwise, the work area change for the top window will be processed by
   // the default window manager. In some cases, like panel, we would like to
@@ -154,6 +164,10 @@ class VIEWS_EXPORT WidgetDelegate {
   virtual bool ShouldDescendIntoChildForEventHandling(
       gfx::NativeView child,
       const gfx::Point& location);
+
+  // Populates |panes| with accessible panes in this window that can
+  // be cycled through with keyboard focus.
+  virtual void GetAccessiblePanes(std::vector<View*>* panes) {}
 
  protected:
   virtual ~WidgetDelegate() {}

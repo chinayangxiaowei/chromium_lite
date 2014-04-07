@@ -144,6 +144,10 @@ html[dir='rtl'] .overlay .page .action-area {
   display: block;
 }
 
+.overlay .page .button-strip > .default-button:not(:focus) {
+  border-color: rgba(0, 0, 0, 0.5);
+}
+
 /* On OSX 10.7, hidden scrollbars may prevent the user from realizing that the
  * overlay contains scrollable content. To resolve this, style the scrollbars on
  * OSX so they are always visible. See http://crbug.com/123010. */
@@ -163,3 +167,13 @@ html[dir='rtl'] .overlay .page .action-area {
   background-color: rgba(0, 0, 0, 0.5);
 }
 </if>
+
+.gray-bottom-bar {
+  background-color: #f5f5f5;
+  border-color: #e7e7e7;
+  border-top-style: solid;
+  border-width: 1px;
+  color: #888;
+  display: -webkit-box;
+  padding: 14px 17px;
+}

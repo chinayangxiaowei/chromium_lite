@@ -5,8 +5,8 @@
 #include <queue>
 
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
-#include "base/utf_string_conversions.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/utf_string_conversions.h"
 #include "content/browser/speech/audio_buffer.h"
 #include "content/browser/speech/google_streaming_remote_engine.h"
 #include "content/browser/speech/proto/google_streaming_api.pb.h"
@@ -79,7 +79,7 @@ class GoogleStreamingRemoteEngineTest : public SpeechRecognitionEngineDelegate,
   scoped_ptr<GoogleStreamingRemoteEngine> engine_under_test_;
   TestURLFetcherFactory url_fetcher_factory_;
   size_t last_number_of_upstream_chunks_seen_;
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
   std::string response_buffer_;
   SpeechRecognitionErrorCode error_;
   std::queue<SpeechRecognitionResults> results_;
@@ -380,7 +380,7 @@ void GoogleStreamingRemoteEngineTest::InjectDummyAudioChunk() {
                      sizeof(dummy_audio_buffer_data),
                      2 /* bytes per sample */));
   DCHECK(engine_under_test_.get());
-  engine_under_test_->TakeAudioChunk(*dummy_audio_chunk);
+  engine_under_test_->TakeAudioChunk(*dummy_audio_chunk.get());
 }
 
 size_t GoogleStreamingRemoteEngineTest::UpstreamChunksUploadedFromLastCall() {

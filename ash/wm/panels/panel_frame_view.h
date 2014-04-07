@@ -23,6 +23,9 @@ class FramePainter;
 class ASH_EXPORT PanelFrameView : public views::NonClientFrameView,
                                   public views::ButtonListener {
  public:
+  // Internal class name.
+  static const char kViewClassName[];
+
   enum FrameType {
     FRAME_NONE,
     FRAME_ASH
@@ -30,6 +33,9 @@ class ASH_EXPORT PanelFrameView : public views::NonClientFrameView,
 
   PanelFrameView(views::Widget* frame, FrameType frame_type);
   virtual ~PanelFrameView();
+
+  // Overridden from views::View:
+  virtual const char* GetClassName() const OVERRIDE;
 
  private:
   void InitFramePainter();
@@ -46,6 +52,7 @@ class ASH_EXPORT PanelFrameView : public views::NonClientFrameView,
   virtual void UpdateWindowTitle() OVERRIDE;
 
   // Overridden from views::View:
+  virtual gfx::Size GetMinimumSize() OVERRIDE;
   virtual void Layout() OVERRIDE;
   virtual void OnPaint(gfx::Canvas* canvas) OVERRIDE;
 

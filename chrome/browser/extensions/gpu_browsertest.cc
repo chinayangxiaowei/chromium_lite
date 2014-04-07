@@ -12,7 +12,7 @@
 #include "chrome/browser/extensions/extension_system.h"
 #include "chrome/browser/ui/browser.h"
 #include "content/public/browser/render_view_host.h"
-#include "webkit/glue/webpreferences.h"
+#include "webkit/common/webpreferences.h"
 
 // Tests that GPU acceleration is disabled for extension background
 // pages. See crbug.com/163698 .
@@ -26,7 +26,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionBrowserTest, WebKitPrefsBackgroundPage) {
       extensions::ExtensionSystem::Get(browser()->profile())->process_manager();
   extensions::ExtensionHost* host =
       FindHostWithPath(manager, "/backgroundpage.html", 1);
-  webkit_glue::WebPreferences prefs =
+  WebPreferences prefs =
       host->render_view_host()->GetWebkitPreferences();
   ASSERT_FALSE(prefs.accelerated_compositing_enabled);
 }

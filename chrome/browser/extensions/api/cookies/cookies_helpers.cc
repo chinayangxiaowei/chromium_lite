@@ -11,8 +11,8 @@
 #include "base/logging.h"
 #include "base/memory/linked_ptr.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/extensions/api/cookies/cookies_api_constants.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
@@ -21,11 +21,12 @@
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/extensions/api/cookies.h"
 #include "chrome/common/extensions/extension.h"
+#include "chrome/common/extensions/permissions/permissions_data.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/browser/web_contents.h"
-#include "googleurl/src/gurl.h"
 #include "net/cookies/canonical_cookie.h"
 #include "net/cookies/cookie_util.h"
+#include "url/gurl.h"
 
 using extensions::api::cookies::Cookie;
 using extensions::api::cookies::CookieStore;
@@ -74,8 +75,8 @@ scoped_ptr<Cookie> CreateCookie(
   cookie->host_only = net::cookie_util::DomainIsHostOnly(
       canonical_cookie.Domain());
   // A non-UTF8 path is invalid, so we just replace it with an empty string.
-  cookie->path = IsStringUTF8(canonical_cookie.Path()) ?
-      canonical_cookie.Path() : "";
+  cookie->path = IsStringUTF8(canonical_cookie.Path()) ? canonical_cookie.Path()
+                                                       : std::string();
   cookie->secure = canonical_cookie.IsSecure();
   cookie->http_only = canonical_cookie.IsHttpOnly();
   cookie->session = !canonical_cookie.IsPersistent();
@@ -89,10 +90,10 @@ scoped_ptr<Cookie> CreateCookie(
 }
 
 scoped_ptr<CookieStore> CreateCookieStore(Profile* profile,
-                                          ListValue* tab_ids) {
+                                          base::ListValue* tab_ids) {
   DCHECK(profile);
   DCHECK(tab_ids);
-  DictionaryValue dict;
+  base::DictionaryValue dict;
   dict.SetString(keys::kIdKey, GetStoreIdFromProfile(profile));
   dict.Set(keys::kTabIdsKey, tab_ids);
 
@@ -134,7 +135,7 @@ void AppendMatchingCookiesToVector(const net::CookieList& all_cookies,
     // Ignore any cookie whose domain doesn't match the extension's
     // host permissions.
     GURL cookie_domain_url = GetURLFromCanonicalCookie(*it);
-    if (!extension->HasHostPermission(cookie_domain_url))
+    if (!PermissionsData::HasHostPermission(extension, cookie_domain_url))
       continue;
     // Filter the cookie using the match filter.
     cookies_helpers::MatchFilter filter(details);
@@ -145,7 +146,7 @@ void AppendMatchingCookiesToVector(const net::CookieList& all_cookies,
   }
 }
 
-void AppendToTabIdList(Browser* browser, ListValue* tab_ids) {
+void AppendToTabIdList(Browser* browser, base::ListValue* tab_ids) {
   DCHECK(browser);
   DCHECK(tab_ids);
   TabStripModel* tab_strip = browser->tab_strip_model();

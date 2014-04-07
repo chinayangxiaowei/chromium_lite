@@ -7,7 +7,6 @@
 
 #include <string>
 
-#include "base/memory/singleton.h"
 #include "chrome/browser/chromeos/login/user.h"
 #include "chrome/browser/chromeos/login/user_flow.h"
 
@@ -38,54 +37,75 @@ class UserManager {
   class Observer {
    public:
     // Called when the local state preferences is changed.
-    virtual void LocalStateChanged(UserManager* user_manager) = 0;
+    virtual void LocalStateChanged(UserManager* user_manager);
 
     // Called when merge session state is changed.
-    virtual void MergeSessionStateChanged(MergeSessionState state) {}
+    virtual void MergeSessionStateChanged(MergeSessionState state);
 
    protected:
-    virtual ~Observer() {}
+    virtual ~Observer();
+  };
+
+  // TODO(nkostylev): Refactor and move this observer out of UserManager.
+  // Observer interface that defines methods used to notify on user session /
+  // active user state changes. Default implementation is empty.
+  class UserSessionStateObserver {
+   public:
+    // Called when active user has changed.
+    virtual void ActiveUserChanged(const User* active_user);
+
+    // Called right before notifying on user change so that those who rely
+    // on user_id hash would be accessing up-to-date value.
+    virtual void ActiveUserHashChanged(const std::string& hash);
+
+    // Called when UserManager finishes restoring user sessions after crash.
+    virtual void PendingUserSessionsRestoreFinished();
+
+   protected:
+    virtual ~UserSessionStateObserver();
   };
 
   // Username for stub login when not running on ChromeOS.
   static const char kStubUser[];
 
+  // Magic e-mail addresses are bad. They exist here because some code already
+  // depends on them and it is hard to figure out what. Any user types added in
+  // the future should be identified by a new |UserType|, not a new magic e-mail
+  // address.
+  // Username for Guest session user.
+  static const char kGuestUserName[];
+
   // Domain that is used for all locally managed users.
   static const char kLocallyManagedUserDomain[];
 
-  // Domain that is used for kiosk app robot.
-  static const char kKioskAppUserDomain[];
+  // The retail mode user has a magic, domainless e-mail address.
+  static const char kRetailModeUserName[];
 
-  // Returns a shared instance of a UserManager. Not thread-safe, should only be
+  // Creates the singleton instance. This method is not thread-safe and must be
   // called from the main UI thread.
-  static UserManager* Get();
+  static void Initialize();
 
-  // Set UserManager singleton object for test purpose only! Returns the
-  // previous singleton object and releases it from the singleton memory
-  // management. It is the responsibility of the test writer to restore the
-  // original object or delete it if needed.
-  //
-  // The intended usage is meant to be something like this:
-  //   virtual void SetUp() {
-  //     mock_user_manager_.reset(new MockUserManager());
-  //     old_user_manager_ = UserManager::Set(mock_user_manager_.get());
-  //     EXPECT_CALL...
-  //     ...
-  //   }
-  //   virtual void TearDown() {
-  //     ...
-  //     UserManager::Set(old_user_manager_);
-  //   }
-  //   scoped_ptr<MockUserManager> mock_user_manager_;
-  //   UserManager* old_user_manager_;
-  static UserManager* Set(UserManager* mock);
+  // Checks whether the singleton instance has been created already. This method
+  // is not thread-safe and must be called from the main UI thread.
+  static bool IsInitialized();
+
+  // Shuts down the UserManager. After this method has been called, the
+  // singleton has unregistered itself as an observer but remains available so
+  // that other classes can access it during their shutdown. This method is not
+  // thread-safe and must be called from the main UI thread.
+  virtual void Shutdown() = 0;
+
+  // Destroys the singleton instance. Always call Shutdown() first. This method
+  // is not thread-safe and must be called from the main UI thread.
+  static void Destroy();
+
+  // Returns the singleton instance or |NULL| if the singleton has either not
+  // been created yet or is already destroyed. This method is not thread-safe
+  // and must be called from the main UI thread.
+  static UserManager* Get();
 
   // Registers user manager preferences.
   static void RegisterPrefs(PrefRegistrySimple* registry);
-
-  // Indicates imminent shutdown, allowing the UserManager to remove any
-  // observers it has registered.
-  virtual void Shutdown() = 0;
 
   virtual ~UserManager();
 
@@ -95,33 +115,28 @@ class UserManager {
   // is sorted by last login date with the most recent user at the beginning.
   virtual const UserList& GetUsers() const = 0;
 
-  // Indicates that a user with the given email has just logged in. The
+  // Returns list of users admitted for logging in into multiprofile session.
+  virtual UserList GetUsersAdmittedForMultiProfile() const = 0;
+
+  // Returns a list of users who are currently logged in.
+  virtual const UserList& GetLoggedInUsers() const = 0;
+
+  // Returns a list of users who are currently logged in in the LRU order -
+  // so the active user is the first one in the list. If there is no user logged
+  // in, the current user will be returned.
+  virtual const UserList& GetLRULoggedInUsers() = 0;
+
+  // Indicates that a user with the given |email| has just logged in. The
   // persistent list is updated accordingly if the user is not ephemeral.
   // |browser_restart| is true when reloading Chrome after crash to distinguish
   // from normal sign in flow.
-  virtual void UserLoggedIn(const std::string& email, bool browser_restart) = 0;
+  // |username_hash| is used to identify homedir mount point.
+  virtual void UserLoggedIn(const std::string& email,
+                            const std::string& username_hash,
+                            bool browser_restart) = 0;
 
-  // Indicates that user just logged on as the retail mode user.
-  virtual void RetailModeUserLoggedIn() = 0;
-
-  // Indicates that user just started incognito session.
-  virtual void GuestUserLoggedIn() = 0;
-
-  // Indicates that a kiosk app robot just logged in.
-  virtual void KioskAppLoggedIn(const std::string& app_id) = 0;
-
-  // Indicates that a locally managed user just logged in.
-  virtual void LocallyManagedUserLoggedIn(const std::string& username) = 0;
-
-  // Indicates that a user just logged into a public account.
-  virtual void PublicAccountUserLoggedIn(User* user) = 0;
-
-  // Indicates that a regular user just logged in.
-  virtual void RegularUserLoggedIn(const std::string& email,
-                                   bool browser_restart) = 0;
-
-  // Indicates that a regular user just logged in as ephemeral.
-  virtual void RegularUserLoggedInAsEphemeral(const std::string& email) = 0;
+  // Switches to active user identified by |email|. User has to be logged in.
+  virtual void SwitchActiveUser(const std::string& email) = 0;
 
   // Called when browser session is started i.e. after
   // browser_creator.LaunchBrowser(...) was called after user sign in.
@@ -130,12 +145,23 @@ class UserManager {
   // Fires NOTIFICATION_SESSION_STARTED.
   virtual void SessionStarted() = 0;
 
-  // Creates locally managed user with given display name, and id (e-mail), and
-  // sets |display_name| for created user and stores it to
-  // persistent list. Returns created user, or existing user if there already
+  // Usually is called when Chrome is restarted after a crash and there's an
+  // active session. First user (one that is passed with --login-user) Chrome
+  // session has been already restored at this point. This method asks session
+  // manager for all active user sessions, marks them as logged in
+  // and notifies observers.
+  virtual void RestoreActiveSessions() = 0;
+
+  // Creates locally managed user with given |display_name| and|local_user_id|
+  // and persists that to user list. Also links this user identified by
+  // |sync_user_id| to manager with a |manager_id|.
+  // Returns created user, or existing user if there already
   // was locally managed user with such display name.
+  // TODO(antrim): Refactor into a single struct to have only 1 getter.
   virtual const User* CreateLocallyManagedUserRecord(
-      const std::string& e_mail,
+      const std::string& manager_id,
+      const std::string& local_user_id,
+      const std::string& sync_user_id,
       const string16& display_name) = 0;
 
   // Generates unique username for locally managed user.
@@ -165,8 +191,16 @@ class UserManager {
       const string16& display_name) const = 0;
 
   // Returns the logged-in user.
+  // TODO(nkostylev): Deprecate this call, move clients to GetActiveUser().
+  // http://crbug.com/230852
   virtual const User* GetLoggedInUser() const = 0;
   virtual User* GetLoggedInUser() = 0;
+
+  // Returns the logged-in user that is currently active within this session.
+  // There could be multiple users logged in at the the same but for now
+  // we support only one of them being active.
+  virtual const User* GetActiveUser() const = 0;
+  virtual User* GetActiveUser() = 0;
 
   // Saves user's oauth token status in local state preferences.
   virtual void SaveUserOAuthStatus(
@@ -195,6 +229,30 @@ class UserManager {
   virtual std::string GetUserDisplayEmail(
       const std::string& username) const = 0;
 
+  // Returns sync_user_id for locally managed user with |managed_user_id| or
+  // empty string if such user is not found or it doesn't have
+  // sync_user_id defined.
+  virtual std::string GetManagedUserSyncId(
+        const std::string& managed_user_id) const = 0;
+
+  // Returns the display name for manager of user |managed_user_id| if it is
+  // known (was previously set by a |SaveUserDisplayName| call).
+  // Otherwise, returns a manager id.
+  virtual string16 GetManagerDisplayNameForManagedUser(
+      const std::string& managed_user_id) const = 0;
+
+  // Returns the user id for manager of user |managed_user_id| if it is known
+  // (user is actually a managed user).
+  // Otherwise, returns an empty string.
+  virtual std::string GetManagerUserIdForManagedUser(
+      const std::string& managed_user_id) const = 0;
+
+  // Returns the display email for manager of user |managed_user_id| if it is
+  // known (user is actually a managed user).
+  // Otherwise, returns an empty string.
+  virtual std::string GetManagerDisplayEmailForManagedUser(
+      const std::string& managed_user_id) const = 0;
+
   // Returns true if current user is an owner.
   virtual bool IsCurrentUserOwner() const = 0;
 
@@ -210,7 +268,7 @@ class UserManager {
   // a password with which to unlock the session).
   virtual bool CanCurrentUserLock() const = 0;
 
-  // Returns true if user is signed in.
+  // Returns true if at least one user has signed in.
   virtual bool IsUserLoggedIn() const = 0;
 
   // Returns true if we're logged in as a regular user.
@@ -238,6 +296,10 @@ class UserManager {
   // browser_creator.LaunchBrowser(...) was called after sign in
   // or restart after crash.
   virtual bool IsSessionStarted() const = 0;
+
+  // Returns true iff browser has been restarted after crash and UserManager
+  // finished restoring user sessions.
+  virtual bool UserSessionsRestored() const = 0;
 
   // Returns merge session status.
   virtual MergeSessionState GetMergeSessionState() const = 0;
@@ -297,7 +359,47 @@ class UserManager {
   virtual void AddObserver(Observer* obs) = 0;
   virtual void RemoveObserver(Observer* obs) = 0;
 
+  virtual void AddSessionStateObserver(UserSessionStateObserver* obs) = 0;
+  virtual void RemoveSessionStateObserver(UserSessionStateObserver* obs) = 0;
+
   virtual void NotifyLocalStateChanged() = 0;
+
+  // Returns true if locally managed users allowed.
+  virtual bool AreLocallyManagedUsersAllowed() const = 0;
+
+ private:
+  friend class ScopedUserManagerEnabler;
+
+  // Sets the singleton to the given |user_manager|, taking ownership. Returns
+  // the previous value of the singleton, passing ownership.
+  static UserManager* SetForTesting(UserManager* user_manager);
+};
+
+// Helper class for unit tests. Initializes the UserManager singleton to the
+// given |user_manager| and tears it down again on destruction. If the singleton
+// had already been initialized, its previous value is restored after tearing
+// down |user_manager|.
+class ScopedUserManagerEnabler {
+ public:
+  // Takes ownership of |user_manager|.
+  explicit ScopedUserManagerEnabler(UserManager* user_manager);
+  ~ScopedUserManagerEnabler();
+
+ private:
+  UserManager* previous_user_manager_;
+
+  DISALLOW_COPY_AND_ASSIGN(ScopedUserManagerEnabler);
+};
+
+// Helper class for unit tests. Initializes the UserManager singleton on
+// construction and tears it down again on destruction.
+class ScopedTestUserManager {
+ public:
+  ScopedTestUserManager();
+  ~ScopedTestUserManager();
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(ScopedTestUserManager);
 };
 
 }  // namespace chromeos

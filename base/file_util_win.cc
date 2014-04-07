@@ -17,67 +17,73 @@
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/metrics/histogram.h"
-#include "base/process_util.h"
-#include "base/string_util.h"
+#include "base/process/process_handle.h"
+#include "base/rand_util.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread_restrictions.h"
-#include "base/time.h"
-#include "base/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "base/win/scoped_handle.h"
 #include "base/win/windows_version.h"
 
-using base::FilePath;
-
-namespace file_util {
+namespace base {
 
 namespace {
 
 const DWORD kFileShareAll =
     FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
 
-}  // namespace
+bool ShellCopy(const FilePath& from_path,
+               const FilePath& to_path,
+               bool recursive) {
+  // WinXP SHFileOperation doesn't like trailing separators.
+  FilePath stripped_from = from_path.StripTrailingSeparators();
+  FilePath stripped_to = to_path.StripTrailingSeparators();
 
-bool AbsolutePath(FilePath* path) {
-  base::ThreadRestrictions::AssertIOAllowed();
-  wchar_t file_path_buf[MAX_PATH];
-  if (!_wfullpath(file_path_buf, path->value().c_str(), MAX_PATH))
+  ThreadRestrictions::AssertIOAllowed();
+
+  // NOTE: I suspect we could support longer paths, but that would involve
+  // analyzing all our usage of files.
+  if (stripped_from.value().length() >= MAX_PATH ||
+      stripped_to.value().length() >= MAX_PATH) {
     return false;
-  *path = FilePath(file_path_buf);
-  return true;
-}
-
-int CountFilesCreatedAfter(const FilePath& path,
-                           const base::Time& comparison_time) {
-  base::ThreadRestrictions::AssertIOAllowed();
-
-  int file_count = 0;
-  FILETIME comparison_filetime(comparison_time.ToFileTime());
-
-  WIN32_FIND_DATA find_file_data;
-  // All files in given dir
-  std::wstring filename_spec = path.Append(L"*").value();
-  HANDLE find_handle = FindFirstFile(filename_spec.c_str(), &find_file_data);
-  if (find_handle != INVALID_HANDLE_VALUE) {
-    do {
-      // Don't count current or parent directories.
-      if ((wcscmp(find_file_data.cFileName, L"..") == 0) ||
-          (wcscmp(find_file_data.cFileName, L".") == 0))
-        continue;
-
-      long result = CompareFileTime(&find_file_data.ftCreationTime,  // NOLINT
-                                    &comparison_filetime);
-      // File was created after or on comparison time
-      if ((result == 1) || (result == 0))
-        ++file_count;
-    } while (FindNextFile(find_handle,  &find_file_data));
-    FindClose(find_handle);
   }
 
-  return file_count;
+  // SHFILEOPSTRUCT wants the path to be terminated with two NULLs,
+  // so we have to use wcscpy because wcscpy_s writes non-NULLs
+  // into the rest of the buffer.
+  wchar_t double_terminated_path_from[MAX_PATH + 1] = {0};
+  wchar_t double_terminated_path_to[MAX_PATH + 1] = {0};
+#pragma warning(suppress:4996)  // don't complain about wcscpy deprecation
+  wcscpy(double_terminated_path_from, stripped_from.value().c_str());
+#pragma warning(suppress:4996)  // don't complain about wcscpy deprecation
+  wcscpy(double_terminated_path_to, stripped_to.value().c_str());
+
+  SHFILEOPSTRUCT file_operation = {0};
+  file_operation.wFunc = FO_COPY;
+  file_operation.pFrom = double_terminated_path_from;
+  file_operation.pTo = double_terminated_path_to;
+  file_operation.fFlags = FOF_NOERRORUI | FOF_SILENT | FOF_NOCONFIRMATION |
+                          FOF_NOCONFIRMMKDIR;
+  if (!recursive)
+    file_operation.fFlags |= FOF_NORECURSION | FOF_FILESONLY;
+
+  return (SHFileOperation(&file_operation) == 0);
 }
 
-bool Delete(const FilePath& path, bool recursive) {
-  base::ThreadRestrictions::AssertIOAllowed();
+}  // namespace
+
+FilePath MakeAbsoluteFilePath(const FilePath& input) {
+  ThreadRestrictions::AssertIOAllowed();
+  wchar_t file_path[MAX_PATH];
+  if (!_wfullpath(file_path, input.value().c_str(), MAX_PATH))
+    return FilePath();
+  return FilePath(file_path);
+}
+
+bool DeleteFile(const FilePath& path, bool recursive) {
+  ThreadRestrictions::AssertIOAllowed();
 
   if (path.value().length() >= MAX_PATH)
     return false;
@@ -85,14 +91,14 @@ bool Delete(const FilePath& path, bool recursive) {
   if (!recursive) {
     // If not recursing, then first check to see if |path| is a directory.
     // If it is, then remove it with RemoveDirectory.
-    base::PlatformFileInfo file_info;
-    if (GetFileInfo(path, &file_info) && file_info.is_directory)
+    PlatformFileInfo file_info;
+    if (file_util::GetFileInfo(path, &file_info) && file_info.is_directory)
       return RemoveDirectory(path.value().c_str()) != 0;
 
     // Otherwise, it's a file, wildcard or non-existant. Try DeleteFile first
     // because it should be faster. If DeleteFile fails, then we fall through
     // to SHFileOperation, which will do the right thing.
-    if (DeleteFile(path.value().c_str()) != 0)
+    if (::DeleteFile(path.value().c_str()) != 0)
       return true;
   }
 
@@ -130,8 +136,8 @@ bool Delete(const FilePath& path, bool recursive) {
   return (err == 0 || err == ERROR_FILE_NOT_FOUND || err == 0x402);
 }
 
-bool DeleteAfterReboot(const FilePath& path) {
-  base::ThreadRestrictions::AssertIOAllowed();
+bool DeleteFileAfterReboot(const FilePath& path) {
+  ThreadRestrictions::AssertIOAllowed();
 
   if (path.value().length() >= MAX_PATH)
     return false;
@@ -141,42 +147,10 @@ bool DeleteAfterReboot(const FilePath& path) {
                         MOVEFILE_REPLACE_EXISTING) != FALSE;
 }
 
-bool MoveUnsafe(const FilePath& from_path, const FilePath& to_path) {
-  base::ThreadRestrictions::AssertIOAllowed();
-
-  // NOTE: I suspect we could support longer paths, but that would involve
-  // analyzing all our usage of files.
-  if (from_path.value().length() >= MAX_PATH ||
-      to_path.value().length() >= MAX_PATH) {
-    return false;
-  }
-  if (MoveFileEx(from_path.value().c_str(), to_path.value().c_str(),
-                 MOVEFILE_COPY_ALLOWED | MOVEFILE_REPLACE_EXISTING) != 0)
-    return true;
-
-  // Keep the last error value from MoveFileEx around in case the below
-  // fails.
-  bool ret = false;
-  DWORD last_error = ::GetLastError();
-
-  if (DirectoryExists(from_path)) {
-    // MoveFileEx fails if moving directory across volumes. We will simulate
-    // the move by using Copy and Delete. Ideally we could check whether
-    // from_path and to_path are indeed in different volumes.
-    ret = CopyAndDeleteDirectory(from_path, to_path);
-  }
-
-  if (!ret) {
-    // Leave a clue about what went wrong so that it can be (at least) picked
-    // up by a PLOG entry.
-    ::SetLastError(last_error);
-  }
-
-  return ret;
-}
-
-bool ReplaceFile(const FilePath& from_path, const FilePath& to_path) {
-  base::ThreadRestrictions::AssertIOAllowed();
+bool ReplaceFile(const FilePath& from_path,
+                 const FilePath& to_path,
+                 PlatformFileError* error) {
+  ThreadRestrictions::AssertIOAllowed();
   // Try a simple move first.  It will only succeed when |to_path| doesn't
   // already exist.
   if (::MoveFile(from_path.value().c_str(), to_path.value().c_str()))
@@ -189,62 +163,14 @@ bool ReplaceFile(const FilePath& from_path, const FilePath& to_path) {
                     REPLACEFILE_IGNORE_MERGE_ERRORS, NULL, NULL)) {
     return true;
   }
+  if (error)
+    *error = LastErrorToPlatformFileError(GetLastError());
   return false;
-}
-
-bool CopyFileUnsafe(const FilePath& from_path, const FilePath& to_path) {
-  base::ThreadRestrictions::AssertIOAllowed();
-
-  // NOTE: I suspect we could support longer paths, but that would involve
-  // analyzing all our usage of files.
-  if (from_path.value().length() >= MAX_PATH ||
-      to_path.value().length() >= MAX_PATH) {
-    return false;
-  }
-  return (::CopyFile(from_path.value().c_str(), to_path.value().c_str(),
-                     false) != 0);
-}
-
-bool ShellCopy(const FilePath& from_path, const FilePath& to_path,
-               bool recursive) {
-  // WinXP SHFileOperation doesn't like trailing separators.
-  FilePath stripped_from = from_path.StripTrailingSeparators();
-  FilePath stripped_to = to_path.StripTrailingSeparators();
-
-  base::ThreadRestrictions::AssertIOAllowed();
-
-  // NOTE: I suspect we could support longer paths, but that would involve
-  // analyzing all our usage of files.
-  if (stripped_from.value().length() >= MAX_PATH ||
-      stripped_to.value().length() >= MAX_PATH) {
-    return false;
-  }
-
-  // SHFILEOPSTRUCT wants the path to be terminated with two NULLs,
-  // so we have to use wcscpy because wcscpy_s writes non-NULLs
-  // into the rest of the buffer.
-  wchar_t double_terminated_path_from[MAX_PATH + 1] = {0};
-  wchar_t double_terminated_path_to[MAX_PATH + 1] = {0};
-#pragma warning(suppress:4996)  // don't complain about wcscpy deprecation
-  wcscpy(double_terminated_path_from, stripped_from.value().c_str());
-#pragma warning(suppress:4996)  // don't complain about wcscpy deprecation
-  wcscpy(double_terminated_path_to, stripped_to.value().c_str());
-
-  SHFILEOPSTRUCT file_operation = {0};
-  file_operation.wFunc = FO_COPY;
-  file_operation.pFrom = double_terminated_path_from;
-  file_operation.pTo = double_terminated_path_to;
-  file_operation.fFlags = FOF_NOERRORUI | FOF_SILENT | FOF_NOCONFIRMATION |
-                          FOF_NOCONFIRMMKDIR;
-  if (!recursive)
-    file_operation.fFlags |= FOF_NORECURSION | FOF_FILESONLY;
-
-  return (SHFileOperation(&file_operation) == 0);
 }
 
 bool CopyDirectory(const FilePath& from_path, const FilePath& to_path,
                    bool recursive) {
-  base::ThreadRestrictions::AssertIOAllowed();
+  ThreadRestrictions::AssertIOAllowed();
 
   if (recursive)
     return ShellCopy(from_path, to_path, true);
@@ -258,7 +184,7 @@ bool CopyDirectory(const FilePath& from_path, const FilePath& to_path,
     // Except that Vista fails to do that, and instead do a recursive copy if
     // the target directory doesn't exist.
     if (base::win::GetVersion() >= base::win::VERSION_VISTA)
-      CreateDirectory(to_path);
+      file_util::CreateDirectory(to_path);
     else
       ShellCopy(from_path, to_path, false);
   }
@@ -267,29 +193,13 @@ bool CopyDirectory(const FilePath& from_path, const FilePath& to_path,
   return ShellCopy(directory, to_path, false);
 }
 
-bool CopyAndDeleteDirectory(const FilePath& from_path,
-                            const FilePath& to_path) {
-  base::ThreadRestrictions::AssertIOAllowed();
-  if (CopyDirectory(from_path, to_path, true)) {
-    if (Delete(from_path, true)) {
-      return true;
-    }
-    // Like Move, this function is not transactional, so we just
-    // leave the copied bits behind if deleting from_path fails.
-    // If to_path exists previously then we have already overwritten
-    // it by now, we don't get better off by deleting the new bits.
-  }
-  return false;
-}
-
-
 bool PathExists(const FilePath& path) {
-  base::ThreadRestrictions::AssertIOAllowed();
+  ThreadRestrictions::AssertIOAllowed();
   return (GetFileAttributes(path.value().c_str()) != INVALID_FILE_ATTRIBUTES);
 }
 
 bool PathIsWritable(const FilePath& path) {
-  base::ThreadRestrictions::AssertIOAllowed();
+  ThreadRestrictions::AssertIOAllowed();
   HANDLE dir =
       CreateFile(path.value().c_str(), FILE_ADD_FILE, kFileShareAll,
                  NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
@@ -302,12 +212,22 @@ bool PathIsWritable(const FilePath& path) {
 }
 
 bool DirectoryExists(const FilePath& path) {
-  base::ThreadRestrictions::AssertIOAllowed();
+  ThreadRestrictions::AssertIOAllowed();
   DWORD fileattr = GetFileAttributes(path.value().c_str());
   if (fileattr != INVALID_FILE_ATTRIBUTES)
     return (fileattr & FILE_ATTRIBUTE_DIRECTORY) != 0;
   return false;
 }
+
+}  // namespace base
+
+// -----------------------------------------------------------------------------
+
+namespace file_util {
+
+using base::DirectoryExists;
+using base::FilePath;
+using base::kFileShareAll;
 
 bool GetTempDir(FilePath* path) {
   base::ThreadRestrictions::AssertIOAllowed();
@@ -394,7 +314,6 @@ bool CreateTemporaryDirInDir(const FilePath& base_dir,
   base::ThreadRestrictions::AssertIOAllowed();
 
   FilePath path_to_create;
-  srand(static_cast<uint32>(time(NULL)));
 
   for (int count = 0; count < 50; ++count) {
     // Try create a new temporary directory with random generated name. If
@@ -403,7 +322,7 @@ bool CreateTemporaryDirInDir(const FilePath& base_dir,
     new_dir_name.assign(prefix);
     new_dir_name.append(base::IntToString16(::base::GetCurrentProcId()));
     new_dir_name.push_back('_');
-    new_dir_name.append(base::IntToString16(rand() % kint16max));
+    new_dir_name.append(base::IntToString16(base::RandInt(0, kint16max)));
 
     path_to_create = base_dir.Append(new_dir_name);
     if (::CreateDirectory(path_to_create.value().c_str(), NULL)) {
@@ -426,7 +345,8 @@ bool CreateNewTempDirectory(const FilePath::StringType& prefix,
   return CreateTemporaryDirInDir(system_temp_dir, prefix, new_temp_path);
 }
 
-bool CreateDirectory(const FilePath& full_path) {
+bool CreateDirectoryAndGetError(const FilePath& full_path,
+                                base::PlatformFileError* error) {
   base::ThreadRestrictions::AssertIOAllowed();
 
   // If the path exists, we've succeeded if it's a directory, failed otherwise.
@@ -440,6 +360,9 @@ bool CreateDirectory(const FilePath& full_path) {
     }
     DLOG(WARNING) << "CreateDirectory(" << full_path_str << "), "
                   << "conflicts with existing file.";
+    if (error) {
+      *error = base::PLATFORM_FILE_ERROR_NOT_A_DIRECTORY;
+    }
     return false;
   }
 
@@ -450,10 +373,16 @@ bool CreateDirectory(const FilePath& full_path) {
   // directories starting with the highest-level missing parent.
   FilePath parent_path(full_path.DirName());
   if (parent_path.value() == full_path.value()) {
+    if (error) {
+      *error = base::PLATFORM_FILE_ERROR_NOT_FOUND;
+    }
     return false;
   }
-  if (!CreateDirectory(parent_path)) {
+  if (!CreateDirectoryAndGetError(parent_path, error)) {
     DLOG(WARNING) << "Failed to create one of the parent directories.";
+    if (error) {
+      DCHECK(*error != base::PLATFORM_FILE_OK);
+    }
     return false;
   }
 
@@ -466,6 +395,8 @@ bool CreateDirectory(const FilePath& full_path) {
       // race to create the same directory.
       return true;
     } else {
+      if (error)
+        *error = base::LastErrorToPlatformFileError(error_code);
       DLOG(WARNING) << "Failed to create directory " << full_path_str
                     << ", last error is " << error_code << ".";
       return false;
@@ -622,148 +553,6 @@ bool SetCurrentDirectory(const FilePath& directory) {
   return ret != 0;
 }
 
-///////////////////////////////////////////////
-// FileEnumerator
-
-FileEnumerator::FileEnumerator(const FilePath& root_path,
-                               bool recursive,
-                               int file_type)
-    : recursive_(recursive),
-      file_type_(file_type),
-      has_find_data_(false),
-      find_handle_(INVALID_HANDLE_VALUE) {
-  // INCLUDE_DOT_DOT must not be specified if recursive.
-  DCHECK(!(recursive && (INCLUDE_DOT_DOT & file_type_)));
-  memset(&find_data_, 0, sizeof(find_data_));
-  pending_paths_.push(root_path);
-}
-
-FileEnumerator::FileEnumerator(const FilePath& root_path,
-                               bool recursive,
-                               int file_type,
-                               const FilePath::StringType& pattern)
-    : recursive_(recursive),
-      file_type_(file_type),
-      has_find_data_(false),
-      pattern_(pattern),
-      find_handle_(INVALID_HANDLE_VALUE) {
-  // INCLUDE_DOT_DOT must not be specified if recursive.
-  DCHECK(!(recursive && (INCLUDE_DOT_DOT & file_type_)));
-  memset(&find_data_, 0, sizeof(find_data_));
-  pending_paths_.push(root_path);
-}
-
-FileEnumerator::~FileEnumerator() {
-  if (find_handle_ != INVALID_HANDLE_VALUE)
-    FindClose(find_handle_);
-}
-
-void FileEnumerator::GetFindInfo(FindInfo* info) {
-  DCHECK(info);
-
-  if (!has_find_data_)
-    return;
-
-  memcpy(info, &find_data_, sizeof(*info));
-}
-
-// static
-bool FileEnumerator::IsDirectory(const FindInfo& info) {
-  return (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-}
-
-// static
-FilePath FileEnumerator::GetFilename(const FindInfo& find_info) {
-  return FilePath(find_info.cFileName);
-}
-
-// static
-int64 FileEnumerator::GetFilesize(const FindInfo& find_info) {
-  ULARGE_INTEGER size;
-  size.HighPart = find_info.nFileSizeHigh;
-  size.LowPart = find_info.nFileSizeLow;
-  DCHECK_LE(size.QuadPart, std::numeric_limits<int64>::max());
-  return static_cast<int64>(size.QuadPart);
-}
-
-// static
-base::Time FileEnumerator::GetLastModifiedTime(const FindInfo& find_info) {
-  return base::Time::FromFileTime(find_info.ftLastWriteTime);
-}
-
-FilePath FileEnumerator::Next() {
-  base::ThreadRestrictions::AssertIOAllowed();
-
-  while (has_find_data_ || !pending_paths_.empty()) {
-    if (!has_find_data_) {
-      // The last find FindFirstFile operation is done, prepare a new one.
-      root_path_ = pending_paths_.top();
-      pending_paths_.pop();
-
-      // Start a new find operation.
-      FilePath src = root_path_;
-
-      if (pattern_.empty())
-        src = src.Append(L"*");  // No pattern = match everything.
-      else
-        src = src.Append(pattern_);
-
-      find_handle_ = FindFirstFile(src.value().c_str(), &find_data_);
-      has_find_data_ = true;
-    } else {
-      // Search for the next file/directory.
-      if (!FindNextFile(find_handle_, &find_data_)) {
-        FindClose(find_handle_);
-        find_handle_ = INVALID_HANDLE_VALUE;
-      }
-    }
-
-    if (INVALID_HANDLE_VALUE == find_handle_) {
-      has_find_data_ = false;
-
-      // This is reached when we have finished a directory and are advancing to
-      // the next one in the queue. We applied the pattern (if any) to the files
-      // in the root search directory, but for those directories which were
-      // matched, we want to enumerate all files inside them. This will happen
-      // when the handle is empty.
-      pattern_ = FilePath::StringType();
-
-      continue;
-    }
-
-    FilePath cur_file(find_data_.cFileName);
-    if (ShouldSkip(cur_file))
-      continue;
-
-    // Construct the absolute filename.
-    cur_file = root_path_.Append(find_data_.cFileName);
-
-    if (find_data_.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-      if (recursive_) {
-        // If |cur_file| is a directory, and we are doing recursive searching,
-        // add it to pending_paths_ so we scan it after we finish scanning this
-        // directory.
-        pending_paths_.push(cur_file);
-      }
-      if (file_type_ & FileEnumerator::DIRECTORIES)
-        return cur_file;
-    } else if (file_type_ & FileEnumerator::FILES) {
-      return cur_file;
-    }
-  }
-
-  return FilePath();
-}
-
-bool HasFileBeenModifiedSince(const FileEnumerator::FindInfo& find_info,
-                              const base::Time& cutoff_time) {
-  base::ThreadRestrictions::AssertIOAllowed();
-  FILETIME file_time = cutoff_time.ToFileTime();
-  long result = CompareFileTime(&find_info.ftLastWriteTime,  // NOLINT
-                                &file_time);
-  return result == 1 || result == 0;
-}
-
 bool NormalizeFilePath(const FilePath& path, FilePath* real_path) {
   base::ThreadRestrictions::AssertIOAllowed();
   FilePath mapped_file;
@@ -900,3 +689,71 @@ int GetMaximumPathComponentLength(const FilePath& path) {
 }
 
 }  // namespace file_util
+
+namespace base {
+namespace internal {
+
+bool MoveUnsafe(const FilePath& from_path, const FilePath& to_path) {
+  ThreadRestrictions::AssertIOAllowed();
+
+  // NOTE: I suspect we could support longer paths, but that would involve
+  // analyzing all our usage of files.
+  if (from_path.value().length() >= MAX_PATH ||
+      to_path.value().length() >= MAX_PATH) {
+    return false;
+  }
+  if (MoveFileEx(from_path.value().c_str(), to_path.value().c_str(),
+                 MOVEFILE_COPY_ALLOWED | MOVEFILE_REPLACE_EXISTING) != 0)
+    return true;
+
+  // Keep the last error value from MoveFileEx around in case the below
+  // fails.
+  bool ret = false;
+  DWORD last_error = ::GetLastError();
+
+  if (DirectoryExists(from_path)) {
+    // MoveFileEx fails if moving directory across volumes. We will simulate
+    // the move by using Copy and Delete. Ideally we could check whether
+    // from_path and to_path are indeed in different volumes.
+    ret = internal::CopyAndDeleteDirectory(from_path, to_path);
+  }
+
+  if (!ret) {
+    // Leave a clue about what went wrong so that it can be (at least) picked
+    // up by a PLOG entry.
+    ::SetLastError(last_error);
+  }
+
+  return ret;
+}
+
+bool CopyFileUnsafe(const FilePath& from_path, const FilePath& to_path) {
+  ThreadRestrictions::AssertIOAllowed();
+
+  // NOTE: I suspect we could support longer paths, but that would involve
+  // analyzing all our usage of files.
+  if (from_path.value().length() >= MAX_PATH ||
+      to_path.value().length() >= MAX_PATH) {
+    return false;
+  }
+  return (::CopyFile(from_path.value().c_str(), to_path.value().c_str(),
+                     false) != 0);
+}
+
+bool CopyAndDeleteDirectory(const FilePath& from_path,
+                            const FilePath& to_path) {
+  ThreadRestrictions::AssertIOAllowed();
+  if (CopyDirectory(from_path, to_path, true)) {
+    if (DeleteFile(from_path, true))
+      return true;
+
+    // Like Move, this function is not transactional, so we just
+    // leave the copied bits behind if deleting from_path fails.
+    // If to_path exists previously then we have already overwritten
+    // it by now, we don't get better off by deleting the new bits.
+  }
+  return false;
+}
+
+}  // namespace internal
+}  // namespace base

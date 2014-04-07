@@ -15,16 +15,21 @@
 #include "base/prefs/pref_service.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/values.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/chromeos/settings/cros_settings.h"
 #include "chrome/browser/chromeos/settings/cros_settings_names.h"
 #include "chrome/browser/chromeos/system/statistics_provider.h"
-#include "chrome/browser/policy/cloud/proto/device_management_backend.pb.h"
+#include "chrome/browser/policy/proto/cloud/device_management_backend.pb.h"
 #include "chrome/browser/prefs/scoped_user_pref_update.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_version_info.h"
 #include "chrome/common/pref_names.h"
+#include "chromeos/network/device_state.h"
+#include "chromeos/network/network_handler.h"
+#include "chromeos/network/network_state_handler.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_details.h"
 #include "content/public/browser/notification_source.h"
+#include "third_party/cros_system_api/dbus/service_constants.h"
 
 using base::Time;
 using base::TimeDelta;
@@ -47,20 +52,14 @@ const unsigned int kGeolocationPollIntervalSeconds = 30 * 60;
 
 const int64 kMillisecondsPerDay = Time::kMicrosecondsPerDay / 1000;
 
+// Keys for the geolocation status dictionary in local state.
 const char kLatitude[] = "latitude";
-
 const char kLongitude[] = "longitude";
-
 const char kAltitude[] = "altitude";
-
 const char kAccuracy[] = "accuracy";
-
 const char kAltitudeAccuracy[] = "altitude_accuracy";
-
 const char kHeading[] = "heading";
-
 const char kSpeed[] = "speed";
-
 const char kTimestamp[] = "timestamp";
 
 // Determine the day key (milliseconds since epoch for corresponding day in UTC)
@@ -75,10 +74,51 @@ int64 TimestampToDayKey(Time timestamp) {
 
 namespace policy {
 
+DeviceStatusCollector::Context::Context() {
+}
+
+DeviceStatusCollector::Context::~Context() {
+}
+
+void DeviceStatusCollector::Context::GetLocationUpdate(
+    const content::GeolocationProvider::LocationUpdateCallback& callback) {
+  owner_callback_ = callback;
+  content::BrowserThread::PostTask(
+      content::BrowserThread::IO,
+      FROM_HERE,
+      base::Bind(&DeviceStatusCollector::Context::GetLocationUpdateInternal,
+                 this));
+}
+
+void DeviceStatusCollector::Context::GetLocationUpdateInternal() {
+  our_callback_ = base::Bind(
+      &DeviceStatusCollector::Context::OnLocationUpdate, this);
+  content::GeolocationProvider::GetInstance()->AddLocationUpdateCallback(
+      our_callback_, true);
+}
+
+void DeviceStatusCollector::Context::OnLocationUpdate(
+    const content::Geoposition& geoposition) {
+  content::GeolocationProvider::GetInstance()->RemoveLocationUpdateCallback(
+      our_callback_);
+  our_callback_.Reset();
+  content::BrowserThread::PostTask(
+      content::BrowserThread::UI,
+      FROM_HERE,
+      base::Bind(&DeviceStatusCollector::Context::CallCollector,
+                 this, geoposition));
+}
+
+void DeviceStatusCollector::Context::CallCollector(
+    const content::Geoposition& geoposition) {
+  owner_callback_.Run(geoposition);
+  owner_callback_.Reset();
+}
+
 DeviceStatusCollector::DeviceStatusCollector(
     PrefService* local_state,
     chromeos::system::StatisticsProvider* provider,
-    LocationUpdateRequester location_update_requester)
+    LocationUpdateRequester* location_update_requester)
     : max_stored_past_activity_days_(kMaxStoredPastActivityDays),
       max_stored_future_activity_days_(kMaxStoredFutureActivityDays),
       local_state_(local_state),
@@ -87,14 +127,19 @@ DeviceStatusCollector::DeviceStatusCollector(
       duration_for_last_reported_day_(0),
       geolocation_update_in_progress_(false),
       statistics_provider_(provider),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)),
-      location_update_requester_(location_update_requester),
+      weak_factory_(this),
       report_version_info_(false),
       report_activity_times_(false),
       report_boot_mode_(false),
-      report_location_(false) {
-  if (!location_update_requester_)
-    location_update_requester_ = &content::RequestLocationUpdate;
+      report_location_(false),
+      report_network_interfaces_(false),
+      context_(new Context()) {
+  if (location_update_requester) {
+    location_update_requester_ = *location_update_requester;
+  } else {
+    location_update_requester_ =
+        base::Bind(&Context::GetLocationUpdate, context_.get());
+  }
   idle_poll_timer_.Start(FROM_HERE,
                          TimeDelta::FromSeconds(kIdlePollIntervalSeconds),
                          this, &DeviceStatusCollector::CheckIdleState);
@@ -108,6 +153,8 @@ DeviceStatusCollector::DeviceStatusCollector(
                                       this);
   cros_settings_->AddSettingsObserver(chromeos::kReportDeviceBootMode, this);
   cros_settings_->AddSettingsObserver(chromeos::kReportDeviceLocation, this);
+  cros_settings_->AddSettingsObserver(chromeos::kReportDeviceNetworkInterfaces,
+                                      this);
 
   // The last known location is persisted in local state. This makes location
   // information available immediately upon startup and avoids the need to
@@ -150,6 +197,8 @@ DeviceStatusCollector::~DeviceStatusCollector() {
                                          this);
   cros_settings_->RemoveSettingsObserver(chromeos::kReportDeviceBootMode, this);
   cros_settings_->RemoveSettingsObserver(chromeos::kReportDeviceLocation, this);
+  cros_settings_->RemoveSettingsObserver(
+      chromeos::kReportDeviceNetworkInterfaces, this);
 }
 
 // static
@@ -184,6 +233,8 @@ void DeviceStatusCollector::UpdateReportingSettings() {
       chromeos::kReportDeviceBootMode, &report_boot_mode_);
   cros_settings_->GetBoolean(
       chromeos::kReportDeviceLocation, &report_location_);
+  cros_settings_->GetBoolean(
+      chromeos::kReportDeviceNetworkInterfaces, &report_network_interfaces_);
 
   if (report_location_) {
     ScheduleGeolocationUpdateRequest();
@@ -215,7 +266,7 @@ void DeviceStatusCollector::TrimStoredActivityPeriods(int64 min_day_key,
       local_state_->GetDictionary(prefs::kDeviceActivityTimes);
 
   scoped_ptr<base::DictionaryValue> copy(activity_times->DeepCopy());
-  for (base::DictionaryValue::Iterator it(*activity_times); it.HasNext();
+  for (base::DictionaryValue::Iterator it(*activity_times); !it.IsAtEnd();
        it.Advance()) {
     int64 timestamp;
     if (base::StringToInt64(it.key(), &timestamp)) {
@@ -325,7 +376,7 @@ void DeviceStatusCollector::GetBootMode(
     em::DeviceStatusReportRequest* request) {
   std::string dev_switch_mode;
   if (statistics_provider_->GetMachineStatistic(
-      "devsw_boot", &dev_switch_mode)) {
+          chromeos::system::kDevSwitchBootMode, &dev_switch_mode)) {
     if (dev_switch_mode == "1")
       request->set_boot_mode("Dev");
     else if (dev_switch_mode == "0")
@@ -359,6 +410,49 @@ void DeviceStatusCollector::GetLocation(
   }
 }
 
+void DeviceStatusCollector::GetNetworkInterfaces(
+    em::DeviceStatusReportRequest* request) {
+  // Maps flimflam device type strings to proto enum constants.
+  static const struct {
+    const char* type_string;
+    em::NetworkInterface::NetworkDeviceType type_constant;
+  } kDeviceTypeMap[] = {
+    { flimflam::kTypeEthernet,  em::NetworkInterface::TYPE_ETHERNET,  },
+    { flimflam::kTypeWifi,      em::NetworkInterface::TYPE_WIFI,      },
+    { flimflam::kTypeWimax,     em::NetworkInterface::TYPE_WIMAX,     },
+    { flimflam::kTypeBluetooth, em::NetworkInterface::TYPE_BLUETOOTH, },
+    { flimflam::kTypeCellular,  em::NetworkInterface::TYPE_CELLULAR,  },
+  };
+
+  chromeos::NetworkStateHandler::DeviceStateList device_list;
+  chromeos::NetworkHandler::Get()->network_state_handler()->GetDeviceList(
+      &device_list);
+
+  chromeos::NetworkStateHandler::DeviceStateList::const_iterator device;
+  for (device = device_list.begin(); device != device_list.end(); ++device) {
+    // Determine the type enum constant for |device|.
+    size_t type_idx = 0;
+    for (; type_idx < ARRAYSIZE_UNSAFE(kDeviceTypeMap); ++type_idx) {
+      if ((*device)->type() == kDeviceTypeMap[type_idx].type_string)
+        break;
+    }
+
+    // If the type isn't in |kDeviceTypeMap|, the interface is not relevant for
+    // reporting. This filters out VPN devices.
+    if (type_idx >= ARRAYSIZE_UNSAFE(kDeviceTypeMap))
+      continue;
+
+    em::NetworkInterface* interface = request->add_network_interface();
+    interface->set_type(kDeviceTypeMap[type_idx].type_constant);
+    if (!(*device)->mac_address().empty())
+      interface->set_mac_address((*device)->mac_address());
+    if (!(*device)->meid().empty())
+      interface->set_meid((*device)->meid());
+    if (!(*device)->imei().empty())
+      interface->set_imei((*device)->imei());
+  }
+}
+
 void DeviceStatusCollector::GetStatus(em::DeviceStatusReportRequest* request) {
   // TODO(mnissler): Remove once the old cloud policy stack is retired. The old
   // stack doesn't support reporting successful submissions back to here, so
@@ -380,6 +474,9 @@ bool DeviceStatusCollector::GetDeviceStatus(
 
   if (report_location_)
     GetLocation(status);
+
+  if (report_network_interfaces_)
+    GetNetworkInterfaces(status);
 
   return true;
 }
@@ -422,7 +519,7 @@ void DeviceStatusCollector::ScheduleGeolocationUpdateRequest() {
         TimeDelta::FromSeconds(kGeolocationPollIntervalSeconds);
     if (elapsed > interval) {
       geolocation_update_in_progress_ = true;
-      location_update_requester_(base::Bind(
+      location_update_requester_.Run(base::Bind(
           &DeviceStatusCollector::ReceiveGeolocationUpdate,
           weak_factory_.GetWeakPtr()));
     } else {
@@ -434,10 +531,9 @@ void DeviceStatusCollector::ScheduleGeolocationUpdateRequest() {
     }
   } else {
     geolocation_update_in_progress_ = true;
-    location_update_requester_(base::Bind(
+    location_update_requester_.Run(base::Bind(
         &DeviceStatusCollector::ReceiveGeolocationUpdate,
         weak_factory_.GetWeakPtr()));
-
   }
 }
 

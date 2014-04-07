@@ -5,56 +5,100 @@
 #include "content/browser/renderer_host/media/audio_renderer_host.h"
 
 #include "base/bind.h"
+#include "base/bind_helpers.h"
+#include "base/command_line.h"
+#include "base/memory/shared_memory.h"
 #include "base/metrics/histogram.h"
-#include "base/process.h"
-#include "base/shared_memory.h"
+#include "base/process/process.h"
 #include "content/browser/browser_main_loop.h"
 #include "content/browser/media/media_internals.h"
+#include "content/browser/renderer_host/media/audio_input_device_manager.h"
 #include "content/browser/renderer_host/media/audio_mirroring_manager.h"
 #include "content/browser/renderer_host/media/audio_sync_reader.h"
+#include "content/browser/renderer_host/media/media_stream_manager.h"
 #include "content/common/media/audio_messages.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/media_observer.h"
+#include "content/public/common/content_switches.h"
+#include "media/audio/audio_manager_base.h"
 #include "media/audio/shared_memory_util.h"
 #include "media/base/audio_bus.h"
 #include "media/base/limits.h"
-
-// TODO(miu): Re-enable after M27 branch cut.  This feature is scheduled for
-// release in M28.
-#define DISABLED_AUDIO_INDICATOR_TRIGGERS_FOR_M27_ONLY
 
 using media::AudioBus;
 
 namespace content {
 
-struct AudioRendererHost::AudioEntry {
-  AudioEntry();
-  ~AudioEntry();
+class AudioRendererHost::AudioEntry
+    : public media::AudioOutputController::EventHandler {
+ public:
+  AudioEntry(AudioRendererHost* host,
+             int stream_id,
+             int render_view_id,
+             const media::AudioParameters& params,
+             const std::string& input_device_id,
+             scoped_ptr<base::SharedMemory> shared_memory,
+             scoped_ptr<media::AudioOutputController::SyncReader> reader);
+  virtual ~AudioEntry();
 
-  // The AudioOutputController that manages the audio stream.
-  scoped_refptr<media::AudioOutputController> controller;
+  int stream_id() const {
+    return stream_id_;
+  }
 
-  // The audio stream ID.
-  int stream_id;
+  int render_view_id() const {
+    return render_view_id_;
+  }
+
+  media::AudioOutputController* controller() const { return controller_.get(); }
+
+  base::SharedMemory* shared_memory() {
+    return shared_memory_.get();
+  }
+
+  media::AudioOutputController::SyncReader* reader() const {
+    return reader_.get();
+  }
+
+ private:
+  // media::AudioOutputController::EventHandler implementation.
+  virtual void OnCreated() OVERRIDE;
+  virtual void OnPlaying() OVERRIDE;
+  virtual void OnPowerMeasured(float power_dbfs, bool clipped) OVERRIDE;
+  virtual void OnPaused() OVERRIDE;
+  virtual void OnError() OVERRIDE;
+  virtual void OnDeviceChange(int new_buffer_size, int new_sample_rate)
+      OVERRIDE;
+
+  AudioRendererHost* const host_;
+  const int stream_id_;
 
   // The routing ID of the source render view.
-  int render_view_id;
+  const int render_view_id_;
+
+  // The AudioOutputController that manages the audio stream.
+  const scoped_refptr<media::AudioOutputController> controller_;
 
   // Shared memory for transmission of the audio data.
-  base::SharedMemory shared_memory;
+  const scoped_ptr<base::SharedMemory> shared_memory_;
 
-  // The synchronous reader to be used by the controller. We have the
-  // ownership of the reader.
-  scoped_ptr<media::AudioOutputController::SyncReader> reader;
-
-  // Set to true after we called Close() for the controller.
-  bool pending_close;
+  // The synchronous reader to be used by the controller.
+  const scoped_ptr<media::AudioOutputController::SyncReader> reader_;
 };
 
-AudioRendererHost::AudioEntry::AudioEntry()
-    : stream_id(0),
-      render_view_id(MSG_ROUTING_NONE),
-      pending_close(false) {
+AudioRendererHost::AudioEntry::AudioEntry(
+    AudioRendererHost* host, int stream_id, int render_view_id,
+    const media::AudioParameters& params,
+    const std::string& input_device_id,
+    scoped_ptr<base::SharedMemory> shared_memory,
+    scoped_ptr<media::AudioOutputController::SyncReader> reader)
+    : host_(host),
+      stream_id_(stream_id),
+      render_view_id_(render_view_id),
+      controller_(media::AudioOutputController::Create(
+          host->audio_manager_, this, params, input_device_id, reader.get())),
+      shared_memory_(shared_memory.Pass()),
+      reader_(reader.Pass()) {
+  DCHECK(controller_.get());
 }
 
 AudioRendererHost::AudioEntry::~AudioEntry() {}
@@ -65,12 +109,15 @@ AudioRendererHost::AudioRendererHost(
     int render_process_id,
     media::AudioManager* audio_manager,
     AudioMirroringManager* mirroring_manager,
-    MediaInternals* media_internals)
+    MediaInternals* media_internals,
+    MediaStreamManager* media_stream_manager)
     : render_process_id_(render_process_id),
       audio_manager_(audio_manager),
       mirroring_manager_(mirroring_manager),
-      media_internals_(media_internals) {
+      media_internals_(media_internals),
+      media_stream_manager_(media_stream_manager) {
   DCHECK(audio_manager_);
+  DCHECK(media_stream_manager_);
 }
 
 AudioRendererHost::~AudioRendererHost() {
@@ -78,96 +125,101 @@ AudioRendererHost::~AudioRendererHost() {
 }
 
 void AudioRendererHost::OnChannelClosing() {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
+
   BrowserMessageFilter::OnChannelClosing();
 
   // Since the IPC channel is gone, close all requested audio streams.
-  DeleteEntries();
+  while (!audio_entries_.empty()) {
+    // Note: OnCloseStream() removes the entries from audio_entries_.
+    OnCloseStream(audio_entries_.begin()->first);
+  }
 }
 
 void AudioRendererHost::OnDestruct() const {
   BrowserThread::DeleteOnIOThread::Destruct(this);
 }
 
-///////////////////////////////////////////////////////////////////////////////
-// media::AudioOutputController::EventHandler implementations.
-void AudioRendererHost::OnCreated(media::AudioOutputController* controller) {
+void AudioRendererHost::AudioEntry::OnCreated() {
+  BrowserThread::PostTask(
+      BrowserThread::IO,
+      FROM_HERE,
+      base::Bind(&AudioRendererHost::DoCompleteCreation, host_, stream_id_));
+}
+
+void AudioRendererHost::AudioEntry::OnPlaying() {
   BrowserThread::PostTask(
       BrowserThread::IO,
       FROM_HERE,
       base::Bind(
-          &AudioRendererHost::DoCompleteCreation,
-          this,
-          make_scoped_refptr(controller)));
+          base::IgnoreResult(&AudioRendererHost::Send), host_,
+          new AudioMsg_NotifyStreamStateChanged(
+              stream_id_, media::AudioOutputIPCDelegate::kPlaying)));
 }
 
-void AudioRendererHost::OnPlaying(media::AudioOutputController* controller) {
+void AudioRendererHost::AudioEntry::OnPowerMeasured(float power_dbfs,
+                                                    bool clipped) {
+  BrowserThread::PostTask(
+      BrowserThread::IO,
+      FROM_HERE,
+      base::Bind(&AudioRendererHost::DoNotifyAudioPowerLevel, host_,
+                 stream_id_, power_dbfs, clipped));
+}
+
+void AudioRendererHost::AudioEntry::OnPaused() {
   BrowserThread::PostTask(
       BrowserThread::IO,
       FROM_HERE,
       base::Bind(
-          &AudioRendererHost::DoSendPlayingMessage,
-          this,
-          make_scoped_refptr(controller)));
+          base::IgnoreResult(&AudioRendererHost::Send), host_,
+          new AudioMsg_NotifyStreamStateChanged(
+              stream_id_, media::AudioOutputIPCDelegate::kPaused)));
 }
 
-void AudioRendererHost::OnPaused(media::AudioOutputController* controller) {
+void AudioRendererHost::AudioEntry::OnError() {
   BrowserThread::PostTask(
       BrowserThread::IO,
       FROM_HERE,
-      base::Bind(
-          &AudioRendererHost::DoSendPausedMessage,
-          this,
-          make_scoped_refptr(controller)));
+      base::Bind(&AudioRendererHost::ReportErrorAndClose, host_, stream_id_));
 }
 
-void AudioRendererHost::OnError(media::AudioOutputController* controller) {
+void AudioRendererHost::AudioEntry::OnDeviceChange(int new_buffer_size,
+                                                   int new_sample_rate) {
   BrowserThread::PostTask(
       BrowserThread::IO,
       FROM_HERE,
-      base::Bind(
-          &AudioRendererHost::DoHandleError,
-          this,
-          make_scoped_refptr(controller)));
+      base::Bind(base::IgnoreResult(&AudioRendererHost::Send), host_,
+                 new AudioMsg_NotifyDeviceChanged(
+                     stream_id_, new_buffer_size, new_sample_rate)));
 }
 
-void AudioRendererHost::OnDeviceChange(media::AudioOutputController* controller,
-                                       int new_buffer_size,
-                                       int new_sample_rate) {
-  BrowserThread::PostTask(
-      BrowserThread::IO,
-      FROM_HERE,
-      base::Bind(&AudioRendererHost::DoSendDeviceChangeMessage,
-                 this, make_scoped_refptr(controller), new_buffer_size,
-                 new_sample_rate));
-}
-
-void AudioRendererHost::DoCompleteCreation(
-    media::AudioOutputController* controller) {
+void AudioRendererHost::DoCompleteCreation(int stream_id) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
 
-  AudioEntry* entry = LookupByController(controller);
-  if (!entry)
-    return;
-
-  if (!peer_handle()) {
+  if (!PeerHandle()) {
     NOTREACHED() << "Renderer process handle is invalid.";
-    DeleteEntryOnError(entry);
+    ReportErrorAndClose(stream_id);
+    return;
+  }
+
+  AudioEntry* const entry = LookupById(stream_id);
+  if (!entry) {
+    ReportErrorAndClose(stream_id);
     return;
   }
 
   // Once the audio stream is created then complete the creation process by
   // mapping shared memory and sharing with the renderer process.
   base::SharedMemoryHandle foreign_memory_handle;
-  if (!entry->shared_memory.ShareToProcess(peer_handle(),
-                                           &foreign_memory_handle)) {
+  if (!entry->shared_memory()->ShareToProcess(PeerHandle(),
+                                              &foreign_memory_handle)) {
     // If we failed to map and share the shared memory then close the audio
     // stream and send an error message.
-    DeleteEntryOnError(entry);
+    ReportErrorAndClose(entry->stream_id());
     return;
   }
 
-  AudioSyncReader* reader =
-      static_cast<AudioSyncReader*>(entry->reader.get());
+  AudioSyncReader* reader = static_cast<AudioSyncReader*>(entry->reader());
 
 #if defined(OS_WIN)
   base::SyncSocket::Handle foreign_socket_handle;
@@ -177,65 +229,37 @@ void AudioRendererHost::DoCompleteCreation(
 
   // If we failed to prepare the sync socket for the renderer then we fail
   // the construction of audio stream.
-  if (!reader->PrepareForeignSocketHandle(peer_handle(),
+  if (!reader->PrepareForeignSocketHandle(PeerHandle(),
                                           &foreign_socket_handle)) {
-    DeleteEntryOnError(entry);
+    ReportErrorAndClose(entry->stream_id());
     return;
   }
 
   Send(new AudioMsg_NotifyStreamCreated(
-      entry->stream_id,
+      entry->stream_id(),
       foreign_memory_handle,
       foreign_socket_handle,
-      media::PacketSizeInBytes(entry->shared_memory.requested_size())));
+      media::PacketSizeInBytes(entry->shared_memory()->requested_size())));
 }
 
-void AudioRendererHost::DoSendPlayingMessage(
-    media::AudioOutputController* controller) {
+void AudioRendererHost::DoNotifyAudioPowerLevel(int stream_id,
+                                                float power_dbfs,
+                                                bool clipped) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
 
-  AudioEntry* entry = LookupByController(controller);
-  if (!entry)
-    return;
-
-  Send(new AudioMsg_NotifyStreamStateChanged(
-      entry->stream_id, media::AudioOutputIPCDelegate::kPlaying));
-}
-
-void AudioRendererHost::DoSendPausedMessage(
-    media::AudioOutputController* controller) {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
-
-  AudioEntry* entry = LookupByController(controller);
-  if (!entry)
-    return;
-
-  Send(new AudioMsg_NotifyStreamStateChanged(
-      entry->stream_id, media::AudioOutputIPCDelegate::kPaused));
-}
-
-void AudioRendererHost::DoSendDeviceChangeMessage(
-    media::AudioOutputController* controller, int new_buffer_size,
-    int new_sample_rate) {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
-
-  AudioEntry* entry = LookupByController(controller);
-  if (!entry)
-    return;
-
-  Send(new AudioMsg_NotifyDeviceChanged(
-      entry->stream_id, new_buffer_size, new_sample_rate));
-}
-
-void AudioRendererHost::DoHandleError(
-    media::AudioOutputController* controller) {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
-
-  AudioEntry* entry = LookupByController(controller);
-  if (!entry)
-    return;
-
-  DeleteEntryOnError(entry);
+  MediaObserver* const media_observer =
+      GetContentClient()->browser()->GetMediaObserver();
+  if (media_observer) {
+    if (CommandLine::ForCurrentProcess()->HasSwitch(
+            switches::kEnableAudibleNotifications)) {
+      AudioEntry* const entry = LookupById(stream_id);
+      if (entry) {
+        media_observer->OnAudioStreamPlayingChanged(
+            render_process_id_, entry->render_view_id(), entry->stream_id(),
+            true, power_dbfs, clipped);
+      }
+    }
+  }
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -245,11 +269,8 @@ bool AudioRendererHost::OnMessageReceived(const IPC::Message& message,
   bool handled = true;
   IPC_BEGIN_MESSAGE_MAP_EX(AudioRendererHost, message, *message_was_ok)
     IPC_MESSAGE_HANDLER(AudioHostMsg_CreateStream, OnCreateStream)
-    IPC_MESSAGE_HANDLER(AudioHostMsg_AssociateStreamWithProducer,
-                        OnAssociateStreamWithProducer)
     IPC_MESSAGE_HANDLER(AudioHostMsg_PlayStream, OnPlayStream)
     IPC_MESSAGE_HANDLER(AudioHostMsg_PauseStream, OnPauseStream)
-    IPC_MESSAGE_HANDLER(AudioHostMsg_FlushStream, OnFlushStream)
     IPC_MESSAGE_HANDLER(AudioHostMsg_CloseStream, OnCloseStream)
     IPC_MESSAGE_HANDLER(AudioHostMsg_SetVolume, OnSetVolume)
     IPC_MESSAGE_UNHANDLED(handled = false)
@@ -259,8 +280,16 @@ bool AudioRendererHost::OnMessageReceived(const IPC::Message& message,
 }
 
 void AudioRendererHost::OnCreateStream(
-    int stream_id, const media::AudioParameters& params) {
+    int stream_id, int render_view_id, int session_id,
+    const media::AudioParameters& params) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
+
+  DVLOG(1) << "AudioRendererHost@" << this
+           << "::OnCreateStream(stream_id=" << stream_id
+           << ", render_view_id=" << render_view_id
+           << ", session_id=" << session_id << ")";
+  DCHECK_GT(render_view_id, 0);
+
   // media::AudioParameters is validated in the deserializer.
   int input_channels = params.input_channels();
   if (input_channels < 0 ||
@@ -270,87 +299,63 @@ void AudioRendererHost::OnCreateStream(
     return;
   }
 
-  media::AudioParameters audio_params(params);
+  // When the |input_channels| is valid, clients are trying to create a unified
+  // IO stream which opens an input device mapping to the |session_id|.
+  std::string input_device_id;
+  if (input_channels > 0) {
+    const StreamDeviceInfo* info = media_stream_manager_->
+        audio_input_device_manager()->GetOpenedDeviceInfoById(session_id);
+    if (!info) {
+      SendErrorMessage(stream_id);
+      DLOG(WARNING) << "No permission has been granted to input stream with "
+                    << "session_id=" << session_id;
+      return;
+    }
+
+    input_device_id = info->device.id;
+  }
 
   // Calculate output and input memory size.
-  int output_memory_size = AudioBus::CalculateMemorySize(audio_params);
-
-  int frames = audio_params.frames_per_buffer();
+  int output_memory_size = AudioBus::CalculateMemorySize(params);
+  int frames = params.frames_per_buffer();
   int input_memory_size =
       AudioBus::CalculateMemorySize(input_channels, frames);
-
-  scoped_ptr<AudioEntry> entry(new AudioEntry());
 
   // Create the shared memory and share with the renderer process.
   // For synchronized I/O (if input_channels > 0) then we allocate
   // extra memory after the output data for the input data.
   uint32 io_buffer_size = output_memory_size + input_memory_size;
-
   uint32 shared_memory_size =
       media::TotalSharedMemorySizeInBytes(io_buffer_size);
-  if (!entry->shared_memory.CreateAndMapAnonymous(shared_memory_size)) {
-    // If creation of shared memory failed then send an error message.
+  scoped_ptr<base::SharedMemory> shared_memory(new base::SharedMemory());
+  if (!shared_memory->CreateAndMapAnonymous(shared_memory_size)) {
     SendErrorMessage(stream_id);
     return;
   }
 
-  // Create sync reader and try to initialize it.
   scoped_ptr<AudioSyncReader> reader(
-      new AudioSyncReader(&entry->shared_memory, params, input_channels));
-
+      new AudioSyncReader(shared_memory.get(), params, input_channels));
   if (!reader->Init()) {
     SendErrorMessage(stream_id);
     return;
   }
 
-  // If we have successfully created the SyncReader then assign it to the
-  // entry and construct an AudioOutputController.
-  entry->reader.reset(reader.release());
-  entry->controller = media::AudioOutputController::Create(
-      audio_manager_, this, audio_params, entry->reader.get());
+  MediaObserver* const media_observer =
+      GetContentClient()->browser()->GetMediaObserver();
+  if (media_observer)
+    media_observer->OnCreatingAudioStream(render_process_id_, render_view_id);
 
-  if (!entry->controller) {
-    SendErrorMessage(stream_id);
-    return;
+  scoped_ptr<AudioEntry> entry(new AudioEntry(
+      this, stream_id, render_view_id, params, input_device_id,
+      shared_memory.Pass(),
+      reader.PassAs<media::AudioOutputController::SyncReader>()));
+  if (mirroring_manager_) {
+    mirroring_manager_->AddDiverter(
+        render_process_id_, entry->render_view_id(), entry->controller());
   }
-
-  // If we have created the controller successfully, create an entry and add it
-  // to the map.
-  entry->stream_id = stream_id;
   audio_entries_.insert(std::make_pair(stream_id, entry.release()));
   if (media_internals_)
     media_internals_->OnSetAudioStreamStatus(this, stream_id, "created");
-}
-
-void AudioRendererHost::OnAssociateStreamWithProducer(int stream_id,
-                                                      int render_view_id) {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
-
-  DVLOG(1) << "AudioRendererHost@" << this
-           << "::OnAssociateStreamWithProducer(stream_id=" << stream_id
-           << ", render_view_id=" << render_view_id << ")";
-
-  AudioEntry* const entry = LookupById(stream_id);
-  if (!entry) {
-    SendErrorMessage(stream_id);
-    return;
-  }
-
-  if (entry->render_view_id == render_view_id)
-    return;
-
-  // TODO(miu): Merge "AssociateWithProducer" message into "CreateStream"
-  // message so AudioRendererHost can assume a simpler "render_view_id is set
-  // once" scheme. http://crbug.com/166779
-  if (mirroring_manager_) {
-    mirroring_manager_->RemoveDiverter(
-        render_process_id_, entry->render_view_id, entry->controller);
-  }
-  entry->render_view_id = render_view_id;
-  if (mirroring_manager_) {
-    mirroring_manager_->AddDiverter(
-        render_process_id_, entry->render_view_id, entry->controller);
-  }
 }
 
 void AudioRendererHost::OnPlayStream(int stream_id) {
@@ -362,18 +367,9 @@ void AudioRendererHost::OnPlayStream(int stream_id) {
     return;
   }
 
-  entry->controller->Play();
+  entry->controller()->Play();
   if (media_internals_)
     media_internals_->OnSetAudioStreamPlaying(this, stream_id, true);
-
-#ifndef DISABLED_AUDIO_INDICATOR_TRIGGERS_FOR_M27_ONLY
-  MediaObserver* media_observer =
-      GetContentClient()->browser()->GetMediaObserver();
-  if (media_observer) {
-    media_observer->OnAudioStreamPlayingChanged(
-        render_process_id_, entry->render_view_id, stream_id, true);
-  }
-#endif
 }
 
 void AudioRendererHost::OnPauseStream(int stream_id) {
@@ -385,46 +381,9 @@ void AudioRendererHost::OnPauseStream(int stream_id) {
     return;
   }
 
-  entry->controller->Pause();
+  entry->controller()->Pause();
   if (media_internals_)
     media_internals_->OnSetAudioStreamPlaying(this, stream_id, false);
-
-#ifndef DISABLED_AUDIO_INDICATOR_TRIGGERS_FOR_M27_ONLY
-  MediaObserver* media_observer =
-      GetContentClient()->browser()->GetMediaObserver();
-  if (media_observer) {
-    media_observer->OnAudioStreamPlayingChanged(
-        render_process_id_, entry->render_view_id, stream_id, false);
-  }
-#endif
-}
-
-void AudioRendererHost::OnFlushStream(int stream_id) {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
-
-  AudioEntry* entry = LookupById(stream_id);
-  if (!entry) {
-    SendErrorMessage(stream_id);
-    return;
-  }
-
-  entry->controller->Flush();
-  if (media_internals_)
-    media_internals_->OnSetAudioStreamStatus(this, stream_id, "flushed");
-}
-
-void AudioRendererHost::OnCloseStream(int stream_id) {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
-
-  if (media_internals_)
-    media_internals_->OnSetAudioStreamStatus(this, stream_id, "closed");
-
-  AudioEntry* entry = LookupById(stream_id);
-
-  if (!entry)
-    return;
-
-  CloseAndDeleteStream(entry);
 }
 
 void AudioRendererHost::OnSetVolume(int stream_id, double volume) {
@@ -439,110 +398,80 @@ void AudioRendererHost::OnSetVolume(int stream_id, double volume) {
   // Make sure the volume is valid.
   if (volume < 0 || volume > 1.0)
     return;
-  entry->controller->SetVolume(volume);
+  entry->controller()->SetVolume(volume);
   if (media_internals_)
     media_internals_->OnSetAudioStreamVolume(this, stream_id, volume);
-
-#ifndef DISABLED_AUDIO_INDICATOR_TRIGGERS_FOR_M27_ONLY
-  MediaObserver* media_observer =
-      GetContentClient()->browser()->GetMediaObserver();
-  if (media_observer) {
-    bool playing = volume > 0;
-    media_observer->OnAudioStreamPlayingChanged(
-        render_process_id_, entry->render_view_id, stream_id, playing);
-  }
-#endif
 }
 
-void AudioRendererHost::SendErrorMessage(int32 stream_id) {
+void AudioRendererHost::SendErrorMessage(int stream_id) {
   Send(new AudioMsg_NotifyStreamStateChanged(
       stream_id, media::AudioOutputIPCDelegate::kError));
 }
 
-void AudioRendererHost::DeleteEntries() {
+void AudioRendererHost::OnCloseStream(int stream_id) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
 
-  for (AudioEntryMap::iterator i = audio_entries_.begin();
-       i != audio_entries_.end(); ++i) {
-    CloseAndDeleteStream(i->second);
+  // Prevent oustanding callbacks from attempting to close/delete the same
+  // AudioEntry twice.
+  AudioEntryMap::iterator i = audio_entries_.find(stream_id);
+  if (i == audio_entries_.end())
+    return;
+  scoped_ptr<AudioEntry> entry(i->second);
+  audio_entries_.erase(i);
+
+  media::AudioOutputController* const controller = entry->controller();
+  if (mirroring_manager_) {
+    mirroring_manager_->RemoveDiverter(
+        render_process_id_, entry->render_view_id(), controller);
   }
+  controller->Close(
+      base::Bind(&AudioRendererHost::DeleteEntry, this, base::Passed(&entry)));
+
+  if (media_internals_)
+    media_internals_->OnSetAudioStreamStatus(this, stream_id, "closed");
 }
 
-void AudioRendererHost::CloseAndDeleteStream(AudioEntry* entry) {
+void AudioRendererHost::DeleteEntry(scoped_ptr<AudioEntry> entry) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
 
-#ifndef DISABLED_AUDIO_INDICATOR_TRIGGERS_FOR_M27_ONLY
-  MediaObserver* media_observer =
+  // At this point, make the final "say" in audio playback state.
+  MediaObserver* const media_observer =
       GetContentClient()->browser()->GetMediaObserver();
   if (media_observer) {
     media_observer->OnAudioStreamPlayingChanged(
-        render_process_id_, entry->render_view_id, entry->stream_id, false);
+        render_process_id_, entry->render_view_id(), entry->stream_id(),
+        false, -std::numeric_limits<float>::infinity(), false);
   }
-#endif
-  if (!entry->pending_close) {
-    if (mirroring_manager_) {
-      mirroring_manager_->RemoveDiverter(
-          render_process_id_, entry->render_view_id, entry->controller);
-    }
-    entry->controller->Close(
-        base::Bind(&AudioRendererHost::DeleteEntry, this, entry));
-    entry->pending_close = true;
-  }
-}
-
-void AudioRendererHost::DeleteEntry(AudioEntry* entry) {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
-
-  // Delete the entry when this method goes out of scope.
-  scoped_ptr<AudioEntry> entry_deleter(entry);
-
-  // Erase the entry identified by |stream_id| from the map.
-  audio_entries_.erase(entry->stream_id);
 
   // Notify the media observer.
   if (media_internals_)
-    media_internals_->OnDeleteAudioStream(this, entry->stream_id);
+    media_internals_->OnDeleteAudioStream(this, entry->stream_id());
+
+  // Note: |entry| will be deleted upon leaving this scope.
 }
 
-void AudioRendererHost::DeleteEntryOnError(AudioEntry* entry) {
+void AudioRendererHost::ReportErrorAndClose(int stream_id) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
 
-  // Sends the error message first before we close the stream because
-  // |entry| is destroyed in DeleteEntry().
-  SendErrorMessage(entry->stream_id);
+  // Make sure this isn't a stray callback executing after the stream has been
+  // closed, so error notifications aren't sent after clients believe the stream
+  // is closed.
+  if (!LookupById(stream_id))
+    return;
+
+  SendErrorMessage(stream_id);
 
   if (media_internals_)
-    media_internals_->OnSetAudioStreamStatus(this, entry->stream_id, "error");
-  CloseAndDeleteStream(entry);
+    media_internals_->OnSetAudioStreamStatus(this, stream_id, "error");
+
+  OnCloseStream(stream_id);
 }
 
 AudioRendererHost::AudioEntry* AudioRendererHost::LookupById(int stream_id) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
 
-  AudioEntryMap::iterator i = audio_entries_.find(stream_id);
-  if (i != audio_entries_.end() && !i->second->pending_close)
-    return i->second;
-  return NULL;
-}
-
-AudioRendererHost::AudioEntry* AudioRendererHost::LookupByController(
-    media::AudioOutputController* controller) {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
-
-  // Iterate the map of entries.
-  // TODO(hclam): Implement a faster look up method.
-  for (AudioEntryMap::iterator i = audio_entries_.begin();
-       i != audio_entries_.end(); ++i) {
-    if (!i->second->pending_close && controller == i->second->controller.get())
-      return i->second;
-  }
-  return NULL;
-}
-
-media::AudioOutputController* AudioRendererHost::LookupControllerByIdForTesting(
-    int stream_id) {
-  AudioEntry* const entry = LookupById(stream_id);
-  return entry ? entry->controller : NULL;
+  AudioEntryMap::const_iterator i = audio_entries_.find(stream_id);
+  return i != audio_entries_.end() ? i->second : NULL;
 }
 
 }  // namespace content

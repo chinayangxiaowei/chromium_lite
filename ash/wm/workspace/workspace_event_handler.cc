@@ -7,6 +7,8 @@
 #include "ash/screen_ash.h"
 #include "ash/shell.h"
 #include "ash/shell_delegate.h"
+#include "ash/touch/touch_uma.h"
+#include "ash/wm/coordinate_conversion.h"
 #include "ash/wm/property_util.h"
 #include "ash/wm/window_util.h"
 #include "ash/wm/workspace/workspace_window_resizer.h"
@@ -22,12 +24,15 @@
 namespace ash {
 namespace {
 
-void SingleAxisMaximize(aura::Window* window, const gfx::Rect& maximize_rect) {
+void SingleAxisMaximize(aura::Window* window,
+                        const gfx::Rect& maximize_rect_in_screen) {
   gfx::Rect bounds_in_screen =
       ScreenAsh::ConvertRectToScreen(window->parent(), window->bounds());
-
   SetRestoreBoundsInScreen(window, bounds_in_screen);
-  window->SetBounds(maximize_rect);
+  gfx::Rect bounds_in_parent =
+      ScreenAsh::ConvertRectFromScreen(window->parent(),
+                                       maximize_rect_in_screen);
+  window->SetBounds(bounds_in_parent);
 }
 
 void SingleAxisUnmaximize(aura::Window* window,
@@ -90,8 +95,10 @@ void WorkspaceEventHandler::OnMouseEvent(ui::MouseEvent* event) {
       }
 
       if (event->flags() & ui::EF_IS_DOUBLE_CLICK &&
+          event->IsOnlyLeftMouseButton() &&
           target->delegate()->GetNonClientComponent(event->location()) ==
-          HTCAPTION) {
+          HTCAPTION &&
+          !ash::Shell::IsForcedMaximizeMode()) {
         bool destroyed = false;
         destroyed_ = &destroyed;
         ash::Shell::GetInstance()->delegate()->RecordUserMetricsAction(
@@ -114,14 +121,23 @@ void WorkspaceEventHandler::OnMouseEvent(ui::MouseEvent* event) {
 void WorkspaceEventHandler::OnGestureEvent(ui::GestureEvent* event) {
   aura::Window* target = static_cast<aura::Window*>(event->target());
   if (event->type() == ui::ET_GESTURE_TAP &&
-      event->details().tap_count() == 2 &&
       target->delegate()->GetNonClientComponent(event->location()) ==
       HTCAPTION) {
-    ash::Shell::GetInstance()->delegate()->RecordUserMetricsAction(
-        ash::UMA_TOGGLE_MAXIMIZE_CAPTION_GESTURE);
-    ToggleMaximizedState(target);  // |this| may be destroyed from here.
-    event->StopPropagation();
-    return;
+    if (event->details().tap_count() == 2) {
+      ash::Shell::GetInstance()->delegate()->RecordUserMetricsAction(
+          ash::UMA_TOGGLE_MAXIMIZE_CAPTION_GESTURE);
+      // Note: TouchUMA::GESTURE_FRAMEVIEW_TAP is counted twice each time
+      // TouchUMA::GESTURE_MAXIMIZE_DOUBLETAP is counted once.
+      TouchUMA::GetInstance()->RecordGestureAction(
+          TouchUMA::GESTURE_MAXIMIZE_DOUBLETAP);
+      ToggleMaximizedState(target);  // |this| may be destroyed from here.
+      event->StopPropagation();
+      return;
+    } else {
+      // Note: TouchUMA::GESTURE_FRAMEVIEW_TAP is counted twice for each tap.
+      TouchUMA::GetInstance()->RecordGestureAction(
+          TouchUMA::GESTURE_FRAMEVIEW_TAP);
+    }
   }
   ToplevelWindowEventHandler::OnGestureEvent(event);
 }
@@ -147,8 +163,10 @@ void WorkspaceEventHandler::HandleVerticalResizeDoubleClick(
            target->bounds().y() == work_area.y())) {
         SingleAxisUnmaximize(target, *restore_bounds);
       } else {
+        gfx::Point origin = target->bounds().origin();
+        wm::ConvertPointToScreen(target->parent(), &origin);
         SingleAxisMaximize(target,
-                           gfx::Rect(target->bounds().x(),
+                           gfx::Rect(origin.x(),
                                      work_area.y(),
                                      target->bounds().width(),
                                      work_area.height()));
@@ -162,9 +180,11 @@ void WorkspaceEventHandler::HandleVerticalResizeDoubleClick(
            target->bounds().x() == work_area.x())) {
         SingleAxisUnmaximize(target, *restore_bounds);
       } else {
+        gfx::Point origin = target->bounds().origin();
+        wm::ConvertPointToScreen(target->parent(), &origin);
         SingleAxisMaximize(target,
                            gfx::Rect(work_area.x(),
-                                     target->bounds().y(),
+                                     origin.y(),
                                      work_area.width(),
                                      target->bounds().height()));
       }

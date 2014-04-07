@@ -4,18 +4,14 @@
 
 #include "chrome/browser/chrome_browser_main_linux.h"
 
-#if !defined(OS_CHROMEOS)
-#include "chrome/browser/storage_monitor/storage_monitor_linux.h"
-#include "content/public/browser/browser_thread.h"
-#endif
-
-#if defined(USE_LINUX_BREAKPAD)
 #include <stdlib.h>
 
 #include "base/command_line.h"
 #include "base/linux_util.h"
 #include "base/prefs/pref_service.h"
 #include "chrome/app/breakpad_linux.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/metrics/metrics_service.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/env_vars.h"
 #include "chrome/common/pref_names.h"
@@ -24,13 +20,15 @@
 #include "chrome/browser/chromeos/settings/cros_settings.h"
 #include "chrome/browser/chromeos/settings/cros_settings_names.h"
 #include "chrome/common/chrome_version_info.h"
+#include "chromeos/chromeos_switches.h"
+#else
+#include "chrome/browser/storage_monitor/storage_monitor_linux.h"
+#include "chrome/browser/sxs_linux.h"
+#include "content/public/browser/browser_thread.h"
 #endif
-
-#endif  // defined(USE_LINUX_BREAKPAD)
 
 namespace {
 
-#if defined(USE_LINUX_BREAKPAD)
 #if !defined(OS_CHROMEOS)
 void GetLinuxDistroCallback() {
   base::GetLinuxDistro();  // Initialize base::linux_distro if needed.
@@ -60,8 +58,8 @@ bool IsCrashReportingEnabled(const PrefService* local_state) {
   bool breakpad_enabled = false;
   if (is_chrome_build) {
 #if defined(OS_CHROMEOS)
-    bool is_guest_session =
-        CommandLine::ForCurrentProcess()->HasSwitch(switches::kGuestSession);
+    bool is_guest_session = CommandLine::ForCurrentProcess()->HasSwitch(
+        chromeos::switches::kGuestSession);
     bool is_stable_channel =
         chrome::VersionInfo::GetChannel() ==
         chrome::VersionInfo::CHANNEL_STABLE;
@@ -98,7 +96,6 @@ bool IsCrashReportingEnabled(const PrefService* local_state) {
 
   return breakpad_enabled;
 }
-#endif  // defined(USE_LINUX_BREAKPAD)
 
 }  // namespace
 
@@ -111,42 +108,28 @@ ChromeBrowserMainPartsLinux::~ChromeBrowserMainPartsLinux() {
 }
 
 void ChromeBrowserMainPartsLinux::PreProfileInit() {
-#if defined(USE_LINUX_BREAKPAD)
 #if !defined(OS_CHROMEOS)
   // Needs to be called after we have chrome::DIR_USER_DATA and
   // g_browser_process.  This happens in PreCreateThreads.
   content::BrowserThread::PostTask(content::BrowserThread::FILE,
                                    FROM_HERE,
                                    base::Bind(&GetLinuxDistroCallback));
+
+  content::BrowserThread::PostTask(
+      content::BrowserThread::FILE,
+      FROM_HERE,
+      base::Bind(&sxs_linux::AddChannelMarkToUserDataDir));
 #endif
 
   if (IsCrashReportingEnabled(local_state()))
     InitCrashReporter();
-#endif
-
-#if !defined(OS_CHROMEOS)
-  const base::FilePath kDefaultMtabPath("/etc/mtab");
-  storage_monitor_ = new chrome::StorageMonitorLinux(kDefaultMtabPath);
-#endif
 
   ChromeBrowserMainPartsPosix::PreProfileInit();
 }
 
 void ChromeBrowserMainPartsLinux::PostProfileInit() {
-#if !defined(OS_CHROMEOS)
-  storage_monitor_->Init();
-#endif
-
   ChromeBrowserMainPartsPosix::PostProfileInit();
-}
 
-void ChromeBrowserMainPartsLinux::PostMainMessageLoopRun() {
-#if !defined(OS_CHROMEOS)
-  // Release it now. Otherwise the FILE thread would be gone when we try to
-  // release it in the dtor and Valgrind would report a leak on almost ever
-  // single browser_test.
-  storage_monitor_ = NULL;
-#endif
-
-  ChromeBrowserMainPartsPosix::PostMainMessageLoopRun();
+  g_browser_process->metrics_service()->RecordBreakpadRegistration(
+      IsCrashReporterEnabled());
 }

@@ -4,8 +4,8 @@
 
 #include "chrome/browser/ui/webui/options/options_ui_browsertest.h"
 
-#include "base/string16.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string16.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/url_constants.h"
@@ -17,15 +17,15 @@
 
 namespace options {
 
-OptionsBrowserTest::OptionsBrowserTest() {
+OptionsUIBrowserTest::OptionsUIBrowserTest() {
 }
 
-void OptionsBrowserTest::NavigateToSettings() {
+void OptionsUIBrowserTest::NavigateToSettings() {
   const GURL& url = GURL(chrome::kChromeUISettingsURL);
   ui_test_utils::NavigateToURL(browser(), url);
 }
 
-void OptionsBrowserTest::VerifyNavbar() {
+void OptionsUIBrowserTest::VerifyNavbar() {
   bool navbar_exist = false;
   EXPECT_TRUE(content::ExecuteScriptAndExtractBool(
       browser()->tab_strip_model()->GetActiveWebContents(),
@@ -35,7 +35,7 @@ void OptionsBrowserTest::VerifyNavbar() {
   EXPECT_EQ(true, navbar_exist);
 }
 
-void OptionsBrowserTest::VerifyTitle() {
+void OptionsUIBrowserTest::VerifyTitle() {
   string16 title =
       browser()->tab_strip_model()->GetActiveWebContents()->GetTitle();
   string16 expected_title = l10n_util::GetStringUTF16(IDS_SETTINGS_TITLE);
@@ -43,7 +43,7 @@ void OptionsBrowserTest::VerifyTitle() {
 }
 
 // Flaky, see http://crbug.com/119671.
-IN_PROC_BROWSER_TEST_F(OptionsBrowserTest, DISABLED_LoadOptionsByURL) {
+IN_PROC_BROWSER_TEST_F(OptionsUIBrowserTest, DISABLED_LoadOptionsByURL) {
   NavigateToSettings();
   VerifyTitle();
   VerifyNavbar();

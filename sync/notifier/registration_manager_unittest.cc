@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "base/basictypes.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/stl_util.h"
 #include "google/cacheinvalidation/include/invalidation-client.h"
 #include "sync/notifier/invalidation_util.h"
@@ -227,7 +227,7 @@ class RegistrationManagerTest : public testing::Test {
 
  private:
   // Needed by timers in RegistrationManager.
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
 
   DISALLOW_COPY_AND_ASSIGN(RegistrationManagerTest);
 };

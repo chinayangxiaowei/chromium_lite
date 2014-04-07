@@ -7,9 +7,9 @@
 #include "base/command_line.h"
 #include "base/i18n/icu_util.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/strings/string_split.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "third_party/khronos/GLES2/gl2.h"
 #include "third_party/skia/include/core/SkXfermode.h"
 #include "ui/aura/client/default_capture_client.h"
@@ -25,18 +25,17 @@
 #include "ui/compositor/compositor_observer.h"
 #include "ui/compositor/debug_utils.h"
 #include "ui/compositor/layer.h"
-#include "ui/compositor/test/compositor_test_support.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/rect.h"
 #include "ui/gfx/skia_util.h"
 #ifndef GL_GLEXT_PROTOTYPES
 #define GL_GLEXT_PROTOTYPES 1
 #endif
-#include "third_party/WebKit/Source/Platform/chromium/public/WebGraphicsContext3D.h"
+#include "third_party/WebKit/public/platform/WebGraphicsContext3D.h"
 #include "third_party/khronos/GLES2/gl2ext.h"
 
 #if defined(USE_X11)
-#include "base/message_pump_aurax11.h"
+#include "base/message_loop/message_pump_aurax11.h"
 #endif
 
 using base::TimeTicks;
@@ -111,7 +110,7 @@ class BenchCompositorObserver : public ui::CompositorObserver {
       }
     }
     if (max_frames_ && frames_ == max_frames_) {
-      MessageLoop::current()->Quit();
+      base::MessageLoop::current()->Quit();
     } else {
       Draw();
     }
@@ -208,12 +207,12 @@ class WebGLBench : public BenchCompositorObserver {
     webgl_.SetBounds(bounds);
     parent_->Add(&webgl_);
 
-    context_.reset(ui::ContextFactory::GetInstance()->CreateOffscreenContext());
+    context_ = ui::ContextFactory::GetInstance()->CreateOffscreenContext();
     context_->makeContextCurrent();
     texture_ = new WebGLTexture(context_.get(), bounds.size());
     fbo_ = context_->createFramebuffer();
     compositor->AddObserver(this);
-    webgl_.SetExternalTexture(texture_);
+    webgl_.SetExternalTexture(texture_.get());
     context_->bindFramebuffer(GL_FRAMEBUFFER, fbo_);
     context_->framebufferTexture2D(
         GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
@@ -238,7 +237,7 @@ class WebGLBench : public BenchCompositorObserver {
       context_->clear(GL_COLOR_BUFFER_BIT);
       context_->flush();
     }
-    webgl_.SetExternalTexture(texture_);
+    webgl_.SetExternalTexture(texture_.get());
     webgl_.SchedulePaint(gfx::Rect(webgl_.bounds().size()));
     compositor_->ScheduleDraw();
   }
@@ -301,8 +300,7 @@ int main(int argc, char** argv) {
   icu_util::Initialize();
   ResourceBundle::InitSharedInstanceWithLocale("en-US", NULL);
 
-  MessageLoop message_loop(MessageLoop::TYPE_UI);
-  ui::CompositorTestSupport::Initialize();
+  base::MessageLoop message_loop(base::MessageLoop::TYPE_UI);
   aura::Env::GetInstance();
   scoped_ptr<aura::TestScreen> test_screen(
       aura::TestScreen::CreateFullscreen());
@@ -357,11 +355,9 @@ int main(int argc, char** argv) {
 #endif
 
   root_window->ShowRootWindow();
-  MessageLoopForUI::current()->Run();
+  base::MessageLoopForUI::current()->Run();
   focus_client.reset();
   root_window.reset();
-
-  ui::CompositorTestSupport::Terminate();
 
   return 0;
 }

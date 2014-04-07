@@ -16,6 +16,8 @@
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/threading/thread_checker.h"
+#include "jingle/notifier/base/notifier_options.h"
+#include "jingle/notifier/listener/push_client.h"
 #include "jingle/notifier/listener/push_client_observer.h"
 #include "sync/base/sync_export.h"
 #include "sync/internal_api/public/base/model_type.h"
@@ -93,6 +95,7 @@ class SYNC_EXPORT_PRIVATE P2PInvalidator
   // to send notifications to all clients except for the one that triggered the
   // notification.  See crbug.com/97780.
   P2PInvalidator(scoped_ptr<notifier::PushClient> push_client,
+                 const std::string& invalidator_client_id,
                  P2PNotificationTarget send_notification_target);
 
   virtual ~P2PInvalidator();
@@ -105,11 +108,8 @@ class SYNC_EXPORT_PRIVATE P2PInvalidator
   virtual void Acknowledge(const invalidation::ObjectId& id,
                            const AckHandle& ack_handle) OVERRIDE;
   virtual InvalidatorState GetInvalidatorState() const OVERRIDE;
-  virtual void SetUniqueId(const std::string& unique_id) OVERRIDE;
   virtual void UpdateCredentials(
       const std::string& email, const std::string& token) OVERRIDE;
-  virtual void SendInvalidation(
-      const ObjectIdInvalidationMap& invalidation_map) OVERRIDE;
 
   // PushClientObserver implementation.
   virtual void OnNotificationsEnabled() OVERRIDE;
@@ -117,6 +117,9 @@ class SYNC_EXPORT_PRIVATE P2PInvalidator
       notifier::NotificationsDisabledReason reason) OVERRIDE;
   virtual void OnIncomingNotification(
       const notifier::Notification& notification) OVERRIDE;
+
+  void SendInvalidation(
+      const ObjectIdInvalidationMap& invalidation_map);
 
   void SendNotificationDataForTest(
       const P2PNotificationData& notification_data);
@@ -131,7 +134,7 @@ class SYNC_EXPORT_PRIVATE P2PInvalidator
   // The push client.
   scoped_ptr<notifier::PushClient> push_client_;
   // Our unique ID.
-  std::string unique_id_;
+  std::string invalidator_client_id_;
   // Whether we have called UpdateCredentials() yet.
   bool logged_in_;
   bool notifications_enabled_;

@@ -5,20 +5,16 @@
 #ifndef CHROME_BROWSER_FAVICON_FAVICON_UTIL_H_
 #define CHROME_BROWSER_FAVICON_FAVICON_UTIL_H_
 
+#include <vector>
+
 #include "ui/base/layout.h"
 
-class GURL;
-
-namespace content {
-class RenderViewHost;
+namespace chrome {
+struct FaviconBitmapResult;
 }
 
 namespace gfx {
 class Image;
-}
-
-namespace history {
-struct FaviconBitmapResult;
 }
 
 // Utility class for common favicon related code.
@@ -32,11 +28,16 @@ class FaviconUtil {
   // the default favicon.
   static std::vector<ui::ScaleFactor> GetFaviconScaleFactors();
 
+  // Sets the color space used for converting |image| to an NSImage to the
+  // system colorspace. This makes the favicon look the same in the browser UI
+  // as it does in the renderer.
+  static void SetFaviconColorSpace(gfx::Image* image);
+
   // Takes a vector of png-encoded frames, decodes them, and converts them to
   // a favicon of size favicon_size (in DIPs) at the desired ui scale factors.
   static gfx::Image SelectFaviconFramesFromPNGs(
-      const std::vector<history::FaviconBitmapResult>& png_data,
-      const std::vector<ui::ScaleFactor> scale_factors,
+      const std::vector<chrome::FaviconBitmapResult>& png_data,
+      const std::vector<ui::ScaleFactor>& scale_factors,
       int favicon_size);
 
   // Takes a vector of bitmaps and returns the index of the image that will best

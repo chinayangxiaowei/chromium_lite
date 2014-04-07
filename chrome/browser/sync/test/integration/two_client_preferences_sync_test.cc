@@ -163,19 +163,6 @@ IN_PROC_BROWSER_TEST_F(TwoClientPreferencesSyncTest, kShowBookmarkBar) {
   ASSERT_TRUE(BooleanPrefMatches(prefs::kShowBookmarkBar));
 }
 
-IN_PROC_BROWSER_TEST_F(TwoClientPreferencesSyncTest, kEnableInstant) {
-  ASSERT_TRUE(SetupSync()) << "SetupSync() failed.";
-  ASSERT_TRUE(BooleanPrefMatches(prefs::kInstantConfirmDialogShown));
-  ASSERT_TRUE(BooleanPrefMatches(prefs::kInstantEnabled));
-
-  ChangeBooleanPref(0, prefs::kInstantConfirmDialogShown);
-  ChangeBooleanPref(0, prefs::kInstantEnabled);
-
-  ASSERT_TRUE(GetClient(0)->AwaitMutualSyncCycleCompletion(GetClient(1)));
-  ASSERT_TRUE(BooleanPrefMatches(prefs::kInstantConfirmDialogShown));
-  ASSERT_TRUE(BooleanPrefMatches(prefs::kInstantEnabled));
-}
-
 // TCM ID - 3611311.
 IN_PROC_BROWSER_TEST_F(TwoClientPreferencesSyncTest, kCheckDefaultBrowser) {
   ASSERT_TRUE(SetupSync()) << "SetupSync() failed.";
@@ -221,11 +208,11 @@ IN_PROC_BROWSER_TEST_F(TwoClientPreferencesSyncTest, kEnableTranslate) {
 // TCM ID - 3664293.
 IN_PROC_BROWSER_TEST_F(TwoClientPreferencesSyncTest, kAutofillEnabled) {
   ASSERT_TRUE(SetupSync()) << "SetupSync() failed.";
-  ASSERT_TRUE(BooleanPrefMatches(prefs::kAutofillEnabled));
+  ASSERT_TRUE(BooleanPrefMatches(autofill::prefs::kAutofillEnabled));
 
-  ChangeBooleanPref(0, prefs::kAutofillEnabled);
+  ChangeBooleanPref(0, autofill::prefs::kAutofillEnabled);
   ASSERT_TRUE(GetClient(0)->AwaitMutualSyncCycleCompletion(GetClient(1)));
-  ASSERT_TRUE(BooleanPrefMatches(prefs::kAutofillEnabled));
+  ASSERT_TRUE(BooleanPrefMatches(autofill::prefs::kAutofillEnabled));
 }
 
 // TCM ID - 3632259.
@@ -370,16 +357,19 @@ IN_PROC_BROWSER_TEST_F(TwoClientPreferencesSyncTest,
   ASSERT_TRUE(SetupSync()) << "SetupSync() failed.";
   DisableVerifier();
 
-  ASSERT_TRUE(BooleanPrefMatches(prefs::kAutofillAuxiliaryProfilesEnabled));
+  ASSERT_TRUE(
+      BooleanPrefMatches(autofill::prefs::kAutofillAuxiliaryProfilesEnabled));
 
-  ChangeBooleanPref(0, prefs::kAutofillAuxiliaryProfilesEnabled);
+  ChangeBooleanPref(0, autofill::prefs::kAutofillAuxiliaryProfilesEnabled);
   ASSERT_TRUE(GetClient(0)->AwaitMutualSyncCycleCompletion(GetClient(1)));
 
   // kAutofillAuxiliaryProfilesEnabled is only synced on Mac.
 #if defined(OS_MACOSX)
-  ASSERT_TRUE(BooleanPrefMatches(prefs::kAutofillAuxiliaryProfilesEnabled));
+  ASSERT_TRUE(
+      BooleanPrefMatches(autofill::prefs::kAutofillAuxiliaryProfilesEnabled));
 #else
-  ASSERT_FALSE(BooleanPrefMatches(prefs::kAutofillAuxiliaryProfilesEnabled));
+  ASSERT_FALSE(
+      BooleanPrefMatches(autofill::prefs::kAutofillAuxiliaryProfilesEnabled));
 #endif  // OS_MACOSX
 }
 
@@ -401,18 +391,18 @@ IN_PROC_BROWSER_TEST_F(TwoClientPreferencesSyncTest,
 
   TranslatePrefs translate_client0_prefs(GetPrefs(0));
   TranslatePrefs translate_client1_prefs(GetPrefs(1));
-  ASSERT_FALSE(translate_client0_prefs.IsLanguageBlacklisted("fr"));
-  translate_client0_prefs.BlacklistLanguage("fr");
-  ASSERT_TRUE(translate_client0_prefs.IsLanguageBlacklisted("fr"));
+  ASSERT_FALSE(translate_client0_prefs.IsBlockedLanguage("fr"));
+  translate_client0_prefs.BlockLanguage("fr");
+  ASSERT_TRUE(translate_client0_prefs.IsBlockedLanguage("fr"));
 
   ASSERT_TRUE(GetClient(0)->AwaitMutualSyncCycleCompletion(GetClient(1)));
-  ASSERT_TRUE(translate_client1_prefs.IsLanguageBlacklisted("fr"));
+  ASSERT_TRUE(translate_client1_prefs.IsBlockedLanguage("fr"));
 
-  translate_client0_prefs.RemoveLanguageFromBlacklist("fr");
-  ASSERT_FALSE(translate_client0_prefs.IsLanguageBlacklisted("fr"));
+  translate_client0_prefs.UnblockLanguage("fr");
+  ASSERT_FALSE(translate_client0_prefs.IsBlockedLanguage("fr"));
 
   ASSERT_TRUE(GetClient(0)->AwaitMutualSyncCycleCompletion(GetClient(1)));
-  ASSERT_FALSE(translate_client1_prefs.IsLanguageBlacklisted("fr"));
+  ASSERT_FALSE(translate_client1_prefs.IsBlockedLanguage("fr"));
 }
 
 // TCM ID - 7307195.
@@ -481,28 +471,15 @@ IN_PROC_BROWSER_TEST_F(TwoClientPreferencesSyncTest, kAcceptLanguages) {
   AppendStringPref(0, prefs::kAcceptLanguages, ",ar");
   AppendStringPref(1, prefs::kAcceptLanguages, ",fr");
   ASSERT_TRUE(AwaitQuiescence());
-  // kAcceptLanguages is not synced on Mac.
-#if !defined(OS_MACOSX)
   ASSERT_TRUE(StringPrefMatches(prefs::kAcceptLanguages));
-#else
-  ASSERT_FALSE(StringPrefMatches(prefs::kAcceptLanguages));
-#endif  // OS_MACOSX
 
   ChangeStringPref(0, prefs::kAcceptLanguages, "en-US");
   ASSERT_TRUE(GetClient(0)->AwaitMutualSyncCycleCompletion(GetClient(1)));
-#if !defined(OS_MACOSX)
   ASSERT_TRUE(StringPrefMatches(prefs::kAcceptLanguages));
-#else
-  ASSERT_FALSE(StringPrefMatches(prefs::kAcceptLanguages));
-#endif  // OS_MACOSX
 
   ChangeStringPref(0, prefs::kAcceptLanguages, "ar,en-US");
   ASSERT_TRUE(GetClient(0)->AwaitMutualSyncCycleCompletion(GetClient(1)));
-#if !defined(OS_MACOSX)
   ASSERT_TRUE(StringPrefMatches(prefs::kAcceptLanguages));
-#else
-  ASSERT_FALSE(StringPrefMatches(prefs::kAcceptLanguages));
-#endif  // OS_MACOSX
 }
 
 // TCM ID - 7590682

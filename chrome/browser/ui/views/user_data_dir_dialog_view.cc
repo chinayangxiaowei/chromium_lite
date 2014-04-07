@@ -16,9 +16,8 @@
 
 UserDataDirDialogView::UserDataDirDialogView(
     const base::FilePath& user_data_dir)
-    : ALLOW_THIS_IN_INITIALIZER_LIST(select_file_dialog_(
-        ui::SelectFileDialog::Create(this,
-                                     new ChromeSelectFilePolicy(NULL)))),
+    : select_file_dialog_(ui::SelectFileDialog::Create(
+          this, new ChromeSelectFilePolicy(NULL))),
       is_blocking_(true) {
   const int kDialogWidth = 400;
   views::MessageBoxView::InitParams params(
@@ -104,10 +103,10 @@ void UserDataDirDialogView::FileSelectionCanceled(void* params) {
 namespace chrome {
 
 base::FilePath ShowUserDataDirDialog(const base::FilePath& user_data_dir) {
-  DCHECK_EQ(MessageLoop::TYPE_UI, MessageLoop::current()->type());
+  DCHECK_EQ(base::MessageLoop::TYPE_UI, base::MessageLoop::current()->type());
   // When the window closes, it will delete itself.
   UserDataDirDialogView* dialog = new UserDataDirDialogView(user_data_dir);
-  views::Widget::CreateWindow(dialog)->Show();
+  views::DialogDelegate::CreateDialogWidget(dialog, NULL, NULL)->Show();
   base::RunLoop run_loop(dialog);
   run_loop.Run();
   return dialog->user_data_dir();

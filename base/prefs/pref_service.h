@@ -16,7 +16,7 @@
 
 #include "base/callback.h"
 #include "base/compiler_specific.h"
-#include "base/hash_tables.h"
+#include "base/containers/hash_tables.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/observer_list.h"
@@ -53,7 +53,7 @@ class BASE_PREFS_EXPORT PrefService : public base::NonThreadSafe {
   enum PrefInitializationStatus {
     INITIALIZATION_STATUS_WAITING,
     INITIALIZATION_STATUS_SUCCESS,
-    INITIALIZATION_STATUS_CREATED_NEW_PROFILE,
+    INITIALIZATION_STATUS_CREATED_NEW_PREF_STORE,
     INITIALIZATION_STATUS_ERROR
   };
 

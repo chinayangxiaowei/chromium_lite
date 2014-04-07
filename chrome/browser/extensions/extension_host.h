@@ -12,12 +12,12 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/perftimer.h"
 #include "chrome/browser/extensions/extension_function_dispatcher.h"
-#include "chrome/common/view_type.h"
 #include "content/public/browser/javascript_dialog_manager.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "extensions/common/view_type.h"
 
 #if defined(TOOLKIT_VIEWS)
 #include "chrome/browser/ui/views/extensions/extension_view_views.h"
@@ -27,6 +27,10 @@
 #include "chrome/browser/ui/gtk/extensions/extension_view_gtk.h"
 #elif defined(OS_ANDROID)
 #include "chrome/browser/ui/android/extensions/extension_view_android.h"
+#endif
+
+#if !defined(OS_ANDROID)
+#include "chrome/browser/ui/chrome_web_modal_dialog_manager_delegate.h"
 #endif
 
 class Browser;
@@ -47,6 +51,9 @@ class WindowController;
 // privileges available to extensions.  It may have a view to be shown in the
 // browser UI, or it may be hidden.
 class ExtensionHost : public content::WebContentsDelegate,
+#if !defined(OS_ANDROID)
+                      public ChromeWebModalDialogManagerDelegate,
+#endif
                       public content::WebContentsObserver,
                       public ExtensionFunctionDispatcher::Delegate,
                       public content::NotificationObserver {
@@ -66,7 +73,7 @@ class ExtensionHost : public content::WebContentsDelegate,
 
   ExtensionHost(const Extension* extension,
                 content::SiteInstance* site_instance,
-                const GURL& url, chrome::ViewType host_type);
+                const GURL& url, ViewType host_type);
   virtual ~ExtensionHost();
 
 #if defined(TOOLKIT_VIEWS)
@@ -105,11 +112,12 @@ class ExtensionHost : public content::WebContentsDelegate,
 
   Profile* profile() const { return profile_; }
 
-  chrome::ViewType extension_host_type() const { return extension_host_type_; }
+  ViewType extension_host_type() const { return extension_host_type_; }
   const GURL& GetURL() const;
 
   // ExtensionFunctionDispatcher::Delegate
   virtual content::WebContents* GetAssociatedWebContents() const OVERRIDE;
+  virtual content::WebContents* GetVisibleWebContents() const OVERRIDE;
   void SetAssociatedWebContents(content::WebContents* web_contents);
 
   // Returns true if the render view is initialized and didn't crash.
@@ -135,7 +143,7 @@ class ExtensionHost : public content::WebContentsDelegate,
   virtual void RenderViewDeleted(
       content::RenderViewHost* render_view_host) OVERRIDE;
   virtual void RenderViewReady() OVERRIDE;
-  virtual void RenderViewGone(base::TerminationStatus status) OVERRIDE;
+  virtual void RenderProcessGone(base::TerminationStatus status) OVERRIDE;
   virtual void DocumentAvailableInMainFrame() OVERRIDE;
   virtual void DidStopLoading(
       content::RenderViewHost* render_view_host) OVERRIDE;
@@ -155,6 +163,8 @@ class ExtensionHost : public content::WebContentsDelegate,
                                      const gfx::Size& new_size) OVERRIDE;
   virtual content::JavaScriptDialogManager*
       GetJavaScriptDialogManager() OVERRIDE;
+  virtual content::ColorChooser* OpenColorChooser(
+      content::WebContents* web_contents, SkColor color) OVERRIDE;
   virtual void RunFileChooser(
       content::WebContents* tab,
       const content::FileChooserParams& params) OVERRIDE;
@@ -188,8 +198,7 @@ class ExtensionHost : public content::WebContentsDelegate,
   void Close();
 
   // ExtensionFunctionDispatcher::Delegate
-  virtual extensions::WindowController*
-      GetExtensionWindowController() const OVERRIDE;
+  virtual WindowController* GetExtensionWindowController() const OVERRIDE;
 
   // Message handlers.
   void OnRequest(const ExtensionHostMsg_Request_Params& params);
@@ -247,7 +256,7 @@ class ExtensionHost : public content::WebContentsDelegate,
   ExtensionFunctionDispatcher extension_function_dispatcher_;
 
   // The type of view being hosted.
-  chrome::ViewType extension_host_type_;
+  ViewType extension_host_type_;
 
   // The relevant WebContents associated with this ExtensionHost, if any.
   content::WebContents* associated_web_contents_;

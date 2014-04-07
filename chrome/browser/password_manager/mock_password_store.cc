@@ -7,8 +7,8 @@
 MockPasswordStore::MockPasswordStore() {}
 
 // static
-scoped_refptr<RefcountedProfileKeyedService> MockPasswordStore::Build(
-    Profile* profile) {
+scoped_refptr<RefcountedBrowserContextKeyedService> MockPasswordStore::Build(
+    content::BrowserContext* profile) {
   return new MockPasswordStore;
 }
 

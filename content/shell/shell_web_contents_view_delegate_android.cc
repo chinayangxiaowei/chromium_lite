@@ -28,11 +28,10 @@ ShellWebContentsViewDelegate::~ShellWebContentsViewDelegate() {
 }
 
 void ShellWebContentsViewDelegate::ShowContextMenu(
-    const ContextMenuParams& params,
-    ContextMenuSourceType type) {
+    const ContextMenuParams& params) {
   if (params.is_editable && params.selection_text.empty()) {
     content::ContentViewCore* content_view_core =
-        web_contents_->GetView()->GetContentNativeView();
+        ContentViewCore::FromWebContents(web_contents_);
     if (content_view_core) {
       content_view_core->ShowPastePopup(params.selection_start.x(),
                                         params.selection_start.y());

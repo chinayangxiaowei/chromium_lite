@@ -6,17 +6,17 @@
 
 #include <windows.h>
 #include <wincrypt.h>
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 
 #pragma comment(lib, "crypt32.lib")
 
-bool Encryptor::EncryptString16(const string16& plaintext,
+bool Encryptor::EncryptString16(const base::string16& plaintext,
                                 std::string* ciphertext) {
   return EncryptString(UTF16ToUTF8(plaintext), ciphertext);
 }
 
 bool Encryptor::DecryptString16(const std::string& ciphertext,
-                                string16* plaintext) {
+                                base::string16* plaintext) {
   std::string utf8;
   if (!DecryptString(ciphertext, &utf8))
     return false;

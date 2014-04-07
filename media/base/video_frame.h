@@ -7,9 +7,13 @@
 
 #include "base/callback.h"
 #include "base/md5.h"
+#include "base/memory/shared_memory.h"
+#include "gpu/command_buffer/common/mailbox.h"
 #include "media/base/buffers.h"
 #include "ui/gfx/rect.h"
 #include "ui/gfx/size.h"
+
+class SkBitmap;
 
 namespace media {
 
@@ -22,19 +26,19 @@ class MEDIA_EXPORT VideoFrame : public base::RefCountedThreadSafe<VideoFrame> {
   };
 
   enum {
-    kMaxPlanes = 3,
+    kMaxPlanes = 4,
 
     kRGBPlane = 0,
 
     kYPlane = 0,
     kUPlane = 1,
     kVPlane = 2,
+    kAPlane = 3,
   };
 
   // Surface formats roughly based on FOURCC labels, see:
   // http://www.fourcc.org/rgb.php
   // http://www.fourcc.org/yuv.php
-  // Keep in sync with WebKit::WebVideoFrame!
   enum Format {
     INVALID = 0,  // Invalid format value.  Used for error reporting.
     RGB32 = 4,  // 32bpp RGB packed with extra byte 8:8:8
@@ -46,7 +50,42 @@ class MEDIA_EXPORT VideoFrame : public base::RefCountedThreadSafe<VideoFrame> {
 #if defined(GOOGLE_TV)
     HOLE = 13,  // Hole frame.
 #endif
+    YV12A = 14,  // 20bpp YUVA planar 1x1 Y, 2x2 VU, 1x1 A samples.
   };
+
+  // Returns the name of a Format as a string.
+  static std::string FormatToString(Format format);
+
+  // This class calls the TextureNoLongerNeededCallback when the last reference
+  // on the class is destroyed. The VideoFrame holds a reference to the mailbox
+  // but anyone else who queries the mailbox should also hold a reference while
+  // it is uses the mailbox, to ensure it remains valid. When finished with the
+  // mailbox, call Return() with a new sync point, to ensure the mailbox remains
+  // valid for the issued commands.
+  class MEDIA_EXPORT MailboxHolder
+      : public base::RefCountedThreadSafe<MailboxHolder> {
+   public:
+    typedef base::Callback<void(uint32 sync_point)>
+        TextureNoLongerNeededCallback;
+
+    MailboxHolder(const gpu::Mailbox& mailbox,
+                  unsigned sync_point,
+                  const TextureNoLongerNeededCallback& release_callback);
+
+    const gpu::Mailbox& mailbox() const { return mailbox_; }
+    unsigned sync_point() const { return sync_point_; }
+
+    void Return(unsigned sync_point) { sync_point_ = sync_point; }
+
+   private:
+    friend class base::RefCountedThreadSafe<MailboxHolder>;
+    ~MailboxHolder();
+
+    gpu::Mailbox mailbox_;
+    unsigned sync_point_;
+    TextureNoLongerNeededCallback release_callback_;
+  };
+
 
   // Creates a new frame in system memory with given parameters. Buffers for
   // the frame are allocated but not initialized.
@@ -70,8 +109,8 @@ class MEDIA_EXPORT VideoFrame : public base::RefCountedThreadSafe<VideoFrame> {
                             const gfx::Size& natural_size);
 
   // CB to write pixels from the texture backing this frame into the
-  // |void*| parameter.
-  typedef base::Callback<void(void*)> ReadPixelsCB;
+  // |const SkBitmap&| parameter.
+  typedef base::Callback<void(const SkBitmap&)> ReadPixelsCB;
 
   // Wraps a native texture of the given parameters with a VideoFrame.  When the
   // frame is destroyed |no_longer_needed_cb.Run()| will be called.
@@ -80,10 +119,11 @@ class MEDIA_EXPORT VideoFrame : public base::RefCountedThreadSafe<VideoFrame> {
   // any) is applied.
   // |natural_size| is the width and height of the frame when the frame's aspect
   // ratio is applied to |visible_rect|.
+
   // |read_pixels_cb| may be used to do (slow!) readbacks from the
   // texture to main memory.
   static scoped_refptr<VideoFrame> WrapNativeTexture(
-      uint32 texture_id,
+      const scoped_refptr<MailboxHolder>& mailbox_holder,
       uint32 texture_target,
       const gfx::Size& coded_size,
       const gfx::Rect& visible_rect,
@@ -93,13 +133,30 @@ class MEDIA_EXPORT VideoFrame : public base::RefCountedThreadSafe<VideoFrame> {
       const base::Closure& no_longer_needed_cb);
 
   // Read pixels from the native texture backing |*this| and write
-  // them to |*pixels| as BGRA.  |pixels| must point to a buffer at
+  // them to |pixels| as BGRA.  |pixels| must point to a buffer at
   // least as large as 4*visible_rect().width()*visible_rect().height().
-  void ReadPixelsFromNativeTexture(void* pixels);
+  void ReadPixelsFromNativeTexture(const SkBitmap& pixels);
+
+  // Wraps image data in a buffer backed by a base::SharedMemoryHandle with a
+  // VideoFrame.  The image data resides in |data| and is assumed to be packed
+  // tightly in a buffer of logical dimensions |coded_size| with the appropriate
+  // bit depth and plane count as given by |format|.  When the frame is
+  // destroyed |no_longer_needed_cb.Run()| will be called.
+  static scoped_refptr<VideoFrame> WrapExternalSharedMemory(
+      Format format,
+      const gfx::Size& coded_size,
+      const gfx::Rect& visible_rect,
+      const gfx::Size& natural_size,
+      uint8* data,
+      base::SharedMemoryHandle handle,
+      base::TimeDelta timestamp,
+      const base::Closure& no_longer_needed_cb);
 
   // Wraps external YUV data of the given parameters with a VideoFrame.
   // The returned VideoFrame does not own the data passed in. When the frame
   // is destroyed |no_longer_needed_cb.Run()| will be called.
+  // TODO(sheu): merge this into WrapExternalSharedMemory().
+  // http://crbug.com/270217
   static scoped_refptr<VideoFrame> WrapExternalYuvData(
       Format format,
       const gfx::Size& coded_size,
@@ -154,12 +211,16 @@ class MEDIA_EXPORT VideoFrame : public base::RefCountedThreadSafe<VideoFrame> {
   // VideoFrame object and must not be freed by the caller.
   uint8* data(size_t plane) const;
 
-  // Returns the ID of the native texture wrapped by this frame.  Only valid to
-  // call if this is a NATIVE_TEXTURE frame.
-  uint32 texture_id() const;
+  // Returns the mailbox of the native texture wrapped by this frame. Only
+  // valid to call if this is a NATIVE_TEXTURE frame. Before using the
+  // mailbox, the caller must wait for the included sync point.
+  const scoped_refptr<MailboxHolder>& texture_mailbox() const;
 
   // Returns the texture target. Only valid for NATIVE_TEXTURE frames.
   uint32 texture_target() const;
+
+  // Returns the shared-memory handle, if present
+  base::SharedMemoryHandle shared_memory_handle() const;
 
   // Returns true if this VideoFrame represents the end of the stream.
   bool IsEndOfStream() const;
@@ -213,10 +274,13 @@ class MEDIA_EXPORT VideoFrame : public base::RefCountedThreadSafe<VideoFrame> {
   // Array of data pointers to each plane.
   uint8* data_[kMaxPlanes];
 
-  // Native texture ID, if this is a NATIVE_TEXTURE frame.
-  uint32 texture_id_;
+  // Native texture mailbox, if this is a NATIVE_TEXTURE frame.
+  scoped_refptr<MailboxHolder> texture_mailbox_holder_;
   uint32 texture_target_;
   ReadPixelsCB read_pixels_cb_;
+
+  // Shared memory handle, if this frame was allocated from shared memory.
+  base::SharedMemoryHandle shared_memory_handle_;
 
   base::Closure no_longer_needed_cb_;
 

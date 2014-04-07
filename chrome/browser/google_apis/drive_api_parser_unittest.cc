@@ -4,36 +4,23 @@
 
 #include "chrome/browser/google_apis/drive_api_parser.h"
 
-#include "base/file_util.h"
-#include "base/files/file_path.h"
-#include "base/json/json_file_value_serializer.h"
-#include "base/path_service.h"
-#include "base/string16.h"
-#include "base/time.h"
-#include "base/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "chrome/browser/google_apis/gdata_wapi_parser.h"
 #include "chrome/browser/google_apis/test_util.h"
 #include "chrome/browser/google_apis/time_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-using base::Value;
-using base::DictionaryValue;
-using base::ListValue;
-
 namespace google_apis {
 
-// TODO(nhiroki): Make it possible to run these tests on any platforms after
-// moving json files to out of 'chromeos' directory (http://crbug.com/149788).
-#if defined(OS_CHROMEOS)
 // Test about resource parsing.
 TEST(DriveAPIParserTest, AboutResourceParser) {
   std::string error;
-  scoped_ptr<Value> document = test_util::LoadJSONFile(
-      "chromeos/drive/about.json");
+  scoped_ptr<base::Value> document = test_util::LoadJSONFile(
+      "drive/about.json");
   ASSERT_TRUE(document.get());
 
-  ASSERT_EQ(Value::TYPE_DICTIONARY, document->GetType());
+  ASSERT_EQ(base::Value::TYPE_DICTIONARY, document->GetType());
   scoped_ptr<AboutResource> resource(new AboutResource());
   EXPECT_TRUE(resource->Parse(*document));
 
@@ -65,11 +52,11 @@ TEST(DriveAPIParserTest, AboutResourceFromAccountMetadata) {
 // Test app list parsing.
 TEST(DriveAPIParserTest, AppListParser) {
   std::string error;
-  scoped_ptr<Value> document = test_util::LoadJSONFile(
-      "chromeos/drive/applist.json");
+  scoped_ptr<base::Value> document = test_util::LoadJSONFile(
+      "drive/applist.json");
   ASSERT_TRUE(document.get());
 
-  ASSERT_EQ(Value::TYPE_DICTIONARY, document->GetType());
+  ASSERT_EQ(base::Value::TYPE_DICTIONARY, document->GetType());
   scoped_ptr<AppList> applist(new AppList);
   EXPECT_TRUE(applist->Parse(*document));
 
@@ -243,11 +230,11 @@ TEST(DriveAPIParserTest, AppListFromAccountMetadata) {
 // Test file list parsing.
 TEST(DriveAPIParserTest, FileListParser) {
   std::string error;
-  scoped_ptr<Value> document = test_util::LoadJSONFile(
-      "chromeos/drive/filelist.json");
+  scoped_ptr<base::Value> document = test_util::LoadJSONFile(
+      "drive/filelist.json");
   ASSERT_TRUE(document.get());
 
-  ASSERT_EQ(Value::TYPE_DICTIONARY, document->GetType());
+  ASSERT_EQ(base::Value::TYPE_DICTIONARY, document->GetType());
   scoped_ptr<FileList> filelist(new FileList);
   EXPECT_TRUE(filelist->Parse(*document));
 
@@ -279,13 +266,14 @@ TEST(DriveAPIParserTest, FileListParser) {
   EXPECT_TRUE(file1.labels().is_viewed());
 
   base::Time created_time;
-  ASSERT_TRUE(util::GetTimeFromString("2012-07-24T08:51:16.570Z",
-                                                   &created_time));
+  ASSERT_TRUE(
+      util::GetTimeFromString("2012-07-24T08:51:16.570Z", &created_time));
   EXPECT_EQ(created_time, file1.created_date());
 
   base::Time modified_time;
-  ASSERT_TRUE(util::GetTimeFromString("2012-07-27T05:43:20.269Z",
-                                                   &modified_time));
+  ASSERT_TRUE(
+      util::GetTimeFromString("2012-07-27T05:43:20.269Z", &modified_time));
+  EXPECT_EQ(modified_time, file1.modified_date());
   EXPECT_EQ(modified_time, file1.modified_by_me_date());
 
   ASSERT_EQ(1U, file1.parents().size());
@@ -309,6 +297,10 @@ TEST(DriveAPIParserTest, FileListParser) {
   EXPECT_EQ(GURL("https://docs.google.com/uc?"
                  "id=0B4v7G8yEYAWHUmRrU2lMS2hLABC&export=download"),
             file1.web_content_link());
+  ASSERT_EQ(1U, file1.open_with_links().size());
+  EXPECT_EQ("1234567890", file1.open_with_links()[0].app_id);
+  EXPECT_EQ(GURL("http://open_with_link/url"),
+            file1.open_with_links()[0].open_url);
 
   // Check file 2 (a Google Document)
   const FileResource& file2 = *filelist->items()[1];
@@ -320,6 +312,10 @@ TEST(DriveAPIParserTest, FileListParser) {
   EXPECT_TRUE(file2.labels().is_trashed());
   EXPECT_TRUE(file2.labels().is_restricted());
   EXPECT_TRUE(file2.labels().is_viewed());
+  base::Time shared_with_me_time;
+  ASSERT_TRUE(util::GetTimeFromString("2012-07-27T04:54:11.030Z",
+                                      &shared_with_me_time));
+  EXPECT_EQ(shared_with_me_time, file2.shared_with_me_date());
 
   EXPECT_EQ(0U, file2.file_size());
 
@@ -332,6 +328,7 @@ TEST(DriveAPIParserTest, FileListParser) {
                  "id=1Pc8jzfU1ErbN_eucMMqdqzY3eBm0v8sxXm_1CtLxABC&"
                  "v=3&s=AMedNnoAAAAAUBJyB0g8HbxZaLRnlztxefZPS24LiXYZ&sz=s220"),
             file2.thumbnail_link());
+  EXPECT_EQ(0U, file2.open_with_links().size());
 
   // Check file 3 (a folder)
   const FileResource& file3 = *filelist->items()[2];
@@ -343,16 +340,17 @@ TEST(DriveAPIParserTest, FileListParser) {
   ASSERT_EQ(1U, file3.parents().size());
   EXPECT_EQ("0AIv7G8yEYAWHUk9ABC", file3.parents()[0]->file_id());
   EXPECT_TRUE(file3.parents()[0]->is_root());
+  EXPECT_EQ(0U, file3.open_with_links().size());
 }
 
 // Test change list parsing.
 TEST(DriveAPIParserTest, ChangeListParser) {
   std::string error;
-  scoped_ptr<Value> document =
-      test_util::LoadJSONFile("chromeos/drive/changelist.json");
+  scoped_ptr<base::Value> document =
+      test_util::LoadJSONFile("drive/changelist.json");
   ASSERT_TRUE(document.get());
 
-  ASSERT_EQ(Value::TYPE_DICTIONARY, document->GetType());
+  ASSERT_EQ(base::Value::TYPE_DICTIONARY, document->GetType());
   scoped_ptr<ChangeList> changelist(new ChangeList);
   EXPECT_TRUE(changelist->Parse(*document));
 
@@ -369,7 +367,7 @@ TEST(DriveAPIParserTest, ChangeListParser) {
   EXPECT_EQ(8421, change1.change_id());
   EXPECT_FALSE(change1.is_deleted());
   EXPECT_EQ("1Pc8jzfU1ErbN_eucMMqdqzY3eBm0v8sxXm_1CtLxABC", change1.file_id());
-  EXPECT_EQ(change1.file_id(), change1.file().file_id());
+  EXPECT_EQ(change1.file_id(), change1.file()->file_id());
 
   scoped_ptr<ResourceEntry> entry1(
       ResourceEntry::CreateFromChangeResource(change1));
@@ -380,7 +378,7 @@ TEST(DriveAPIParserTest, ChangeListParser) {
   EXPECT_EQ(8424, change2.change_id());
   EXPECT_FALSE(change2.is_deleted());
   EXPECT_EQ("0B4v7G8yEYAWHUmRrU2lMS2hLABC", change2.file_id());
-  EXPECT_EQ(change2.file_id(), change2.file().file_id());
+  EXPECT_EQ(change2.file_id(), change2.file()->file_id());
 
   scoped_ptr<ResourceEntry> entry2(
       ResourceEntry::CreateFromChangeResource(change2));
@@ -391,7 +389,7 @@ TEST(DriveAPIParserTest, ChangeListParser) {
   EXPECT_EQ(8429, change3.change_id());
   EXPECT_FALSE(change3.is_deleted());
   EXPECT_EQ("0B4v7G8yEYAWHYW1OcExsUVZLABC", change3.file_id());
-  EXPECT_EQ(change3.file_id(), change3.file().file_id());
+  EXPECT_EQ(change3.file_id(), change3.file()->file_id());
 
   scoped_ptr<ResourceEntry> entry3(
       ResourceEntry::CreateFromChangeResource(change3));
@@ -409,6 +407,18 @@ TEST(DriveAPIParserTest, ChangeListParser) {
   EXPECT_EQ(change4.file_id(), entry4->resource_id());
   EXPECT_EQ(change4.is_deleted(), entry4->deleted());
 }
-#endif  // OS_CHROMEOS
+
+TEST(DriveAPIParserTest, HasKind) {
+  scoped_ptr<base::Value> change_list_json(
+      test_util::LoadJSONFile("drive/changelist.json"));
+  scoped_ptr<base::Value> file_list_json(
+      test_util::LoadJSONFile("drive/filelist.json"));
+
+  EXPECT_TRUE(ChangeList::HasChangeListKind(*change_list_json));
+  EXPECT_FALSE(ChangeList::HasChangeListKind(*file_list_json));
+
+  EXPECT_FALSE(FileList::HasFileListKind(*change_list_json));
+  EXPECT_TRUE(FileList::HasFileListKind(*file_list_json));
+}
 
 }  // namespace google_apis

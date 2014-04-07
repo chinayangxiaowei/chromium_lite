@@ -62,10 +62,20 @@
          'native_client/native_client.gyp:ppapi_lib',
       ],
       'variables': {
+        # This is user code (vs IRT code), so tls accesses do not
+        # need to be indirect through a function call.
+        'newlib_tls_flags=': [],
         # TODO(bradnelson): Remove this compile flag once new nacl_rev is
         # above 9362.
         'compile_flags': [
           '-DGL_GLEXT_PROTOTYPES',
+        ],
+        # Speed up pnacl linking by not generating debug info for tests.
+        # We compile with --strip-all under extra_args so debug info is
+        # discarded anyway.  Remove this and the --strip-all flag if
+        # debug info is really needed.
+       'compile_flags!': [
+          '-g',
         ],
         'defines': [
           'GL_GLEXT_PROTOTYPES',
@@ -81,31 +91,41 @@
           '-lppapi',
           '-pthread',
         ],
-        # TODO(bradchen): get rid of extra_deps64 and extra_deps32
-        # once native_client/build/untrusted.gypi no longer needs them.
-        'extra_deps_newlib64': [
-          '<(SHARED_INTERMEDIATE_DIR)/tc_newlib/lib64/libppapi_cpp.a',
-          '<(SHARED_INTERMEDIATE_DIR)/tc_newlib/lib64/libppapi.a',
+        'link_flags!': [
+          '-O3',
         ],
-        'extra_deps_newlib32': [
-          '<(SHARED_INTERMEDIATE_DIR)/tc_newlib/lib32/libppapi_cpp.a',
-          '<(SHARED_INTERMEDIATE_DIR)/tc_newlib/lib32/libppapi.a',
+        'translate_flags': [
+          '-O0',
         ],
-        'extra_deps_glibc64': [
-          '<(SHARED_INTERMEDIATE_DIR)/tc_glibc/lib64/libppapi_cpp.so',
-          '<(SHARED_INTERMEDIATE_DIR)/tc_glibc/lib64/libppapi.so',
+        'conditions': [
+          ['target_arch!="arm"', {
+            'extra_deps_newlib64': [
+              '>(tc_lib_dir_newlib64)/libppapi_cpp.a',
+              '>(tc_lib_dir_newlib64)/libppapi.a',
+            ],
+            'extra_deps_newlib32': [
+              '>(tc_lib_dir_newlib32)/libppapi_cpp.a',
+              '>(tc_lib_dir_newlib32)/libppapi.a',
+            ],
+            'extra_deps_glibc64': [
+              '>(tc_lib_dir_glibc64)/libppapi_cpp.so',
+              '>(tc_lib_dir_glibc64)/libppapi.so',
+            ],
+            'extra_deps_glibc32': [
+              '>(tc_lib_dir_glibc32)/libppapi_cpp.so',
+              '>(tc_lib_dir_glibc32)/libppapi.so',
+            ],
+          }],
+          ['target_arch=="arm"', {
+            'extra_deps_arm': [
+              '>(tc_lib_dir_newlib_arm)/libppapi_cpp.a',
+              '>(tc_lib_dir_newlib_arm)/libppapi.a',
+            ],
+          }],
         ],
-        'extra_deps_glibc32': [
-          '<(SHARED_INTERMEDIATE_DIR)/tc_glibc/lib32/libppapi_cpp.so',
-          '<(SHARED_INTERMEDIATE_DIR)/tc_glibc/lib32/libppapi.so',
-        ],
-        'extra_deps_arm': [
-          '<(SHARED_INTERMEDIATE_DIR)/tc_newlib/libarm/libppapi_cpp.a',
-          '<(SHARED_INTERMEDIATE_DIR)/tc_newlib/libarm/libppapi.a',
-        ],
-        'extra_deps_pnacl': [
-          '<(SHARED_INTERMEDIATE_DIR)/tc_pnacl_newlib/lib/libppapi_cpp.a',
-          '<(SHARED_INTERMEDIATE_DIR)/tc_pnacl_newlib/lib/libppapi.a',
+        'extra_deps_pnacl_newlib': [
+          '>(tc_lib_dir_pnacl_newlib)/libppapi_cpp.a',
+          '>(tc_lib_dir_pnacl_newlib)/libppapi.a',
         ],
         'sources': [
           '<@(test_common_source_files)',
@@ -116,18 +136,6 @@
         ],
       },
       'conditions': [
-        ['target_arch!="arm"', {
-          # This is user code (vs IRT code), so tls accesses do not
-          # need to be indirect through a function call.
-          # For PNaCl, the -mtls-use-call flag is localized to the
-          # IRT's translation command, so it is unnecessary to
-          # counteract that flag here.
-          'variables': {
-            'gcc_compile_flags': [
-              '-mno-tls-use-call',
-            ],
-          },
-        }],
         ['target_arch!="arm" and disable_glibc==0', {
           'variables': {
             'build_glibc': 1,
@@ -153,8 +161,8 @@
               '--objdump=>(nacl_objdump)',
               '--library-path=>(libdir_glibc64)',
               '--library-path=>(libdir_glibc32)',
-              '--library-path=<(SHARED_INTERMEDIATE_DIR)/tc_glibc/lib32',
-              '--library-path=<(SHARED_INTERMEDIATE_DIR)/tc_glibc/lib64',
+              '--library-path=>(tc_lib_dir_glibc32)',
+              '--library-path=>(tc_lib_dir_glibc64)',
               '--output=>(nmf_glibc)',
               '--stage-dependencies=<(PRODUCT_DIR)',
             ],

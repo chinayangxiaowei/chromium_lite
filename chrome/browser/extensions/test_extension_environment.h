@@ -5,17 +5,26 @@
 #ifndef CHROME_BROWSER_EXTENSIONS_TEST_EXTENSION_ENVIRONMENT_H_
 #define CHROME_BROWSER_EXTENSIONS_TEST_EXTENSION_ENVIRONMENT_H_
 
-#include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
-#include "chrome/test/base/testing_profile.h"
+#include "base/message_loop/message_loop.h"
 #include "content/public/test/test_browser_thread.h"
+
+#if defined(OS_CHROMEOS)
+#include "chrome/browser/chromeos/login/user_manager.h"
+#include "chrome/browser/chromeos/settings/cros_settings.h"
+#include "chrome/browser/chromeos/settings/device_settings_service.h"
+#endif
 
 #if defined(OS_WIN)
 #include "ui/base/win/scoped_ole_initializer.h"
 #endif
 
 class ExtensionService;
+class TestingProfile;
+
+namespace base {
+class Value;
+}
 
 namespace content {
 class WebContents;
@@ -30,10 +39,9 @@ class Extension;
 class TestExtensionEnvironment {
  public:
   TestExtensionEnvironment();
-
   ~TestExtensionEnvironment();
 
-  TestingProfile* profile() const { return profile_.get(); }
+  TestingProfile* profile() const;
 
   // Returns an ExtensionService created (and owned) by the
   // TestExtensionSystem created by the TestingProfile.
@@ -43,13 +51,13 @@ class TestExtensionEnvironment {
   // The Extension has a default manifest of {name: "Extension",
   // version: "1.0", manifest_version: 2}, and values in
   // manifest_extra override these defaults.
-  const Extension* MakeExtension(const Value& manifest_extra);
+  const Extension* MakeExtension(const base::Value& manifest_extra);
 
   // Returns a test web contents that has a tab id.
   scoped_ptr<content::WebContents> MakeTab() const;
 
  private:
-  MessageLoopForUI loop_;
+  base::MessageLoopForUI loop_;
   content::TestBrowserThread ui_thread_;
   content::TestBrowserThread file_thread_;
   content::TestBrowserThread file_blocking_thread_;
@@ -57,6 +65,12 @@ class TestExtensionEnvironment {
   // We may need to add the rest of the browser threads here.  This is
   // likely to be indicated by memory leaks in which the object was
   // expected to be freed by a DeleteSoon() call.
+
+#if defined(OS_CHROMEOS)
+  chromeos::ScopedTestDeviceSettingsService test_device_settings_service_;
+  chromeos::ScopedTestCrosSettings test_cros_settings_;
+  chromeos::ScopedTestUserManager test_user_manager_;
+#endif
 
 #if defined(OS_WIN)
   ui::ScopedOleInitializer ole_initializer_;

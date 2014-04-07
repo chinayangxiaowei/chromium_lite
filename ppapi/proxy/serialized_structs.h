@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "base/logging.h"
-#include "base/shared_memory.h"
+#include "base/memory/shared_memory.h"
 #include "build/build_config.h"
 #include "ppapi/c/dev/ppb_truetype_font_dev.h"
 #include "ppapi/c/pp_bool.h"
@@ -117,13 +117,14 @@ struct PPPDecryptor_Buffer {
   base::SharedMemoryHandle handle;
 };
 
+// TODO(raymes): Make ImageHandle compatible with SerializedHandle.
 #if defined(OS_WIN)
 typedef HANDLE ImageHandle;
-#elif defined(OS_MACOSX) || defined(OS_ANDROID)
-typedef base::SharedMemoryHandle ImageHandle;
-#else
-// On X Windows this is a SysV shared memory key.
+#elif defined(TOOLKIT_GTK)
+// On legacy X Windows this is a SysV shared memory key.
 typedef int ImageHandle;
+#else
+typedef base::SharedMemoryHandle ImageHandle;
 #endif
 
 }  // namespace proxy

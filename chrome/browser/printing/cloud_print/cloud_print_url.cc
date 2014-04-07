@@ -7,15 +7,15 @@
 #include "base/command_line.h"
 #include "base/logging.h"
 #include "base/prefs/pref_service.h"
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "chrome/browser/google/google_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "components/user_prefs/pref_registry_syncable.h"
 #include "google_apis/gaia/gaia_urls.h"
-#include "googleurl/src/gurl.h"
 #include "net/base/escape.h"
+#include "url/gurl.h"
 
 // Url must not be matched by "urls" section of
 // cloud_print_app/manifest.json. If it's matched, print driver dialog will
@@ -28,15 +28,19 @@ const char kTestPageURL[] =
     "http://www.google.com/landing/cloudprint/enable.html?print=true";
 
 // static
-void CloudPrintURL::RegisterUserPrefs(PrefRegistrySyncable* registry) {
-  registry->RegisterStringPref(prefs::kCloudPrintServiceURL,
-                               kDefaultCloudPrintServiceURL,
-                               PrefRegistrySyncable::UNSYNCABLE_PREF);
+void CloudPrintURL::RegisterProfilePrefs(
+    user_prefs::PrefRegistrySyncable* registry) {
+  registry->RegisterStringPref(
+      prefs::kCloudPrintServiceURL,
+      kDefaultCloudPrintServiceURL,
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   std::string url = GaiaUrls::GetInstance()->service_login_url();
   url.append("?service=cloudprint&sarp=1&continue=");
   url.append(net::EscapeQueryParamValue(kDefaultCloudPrintServiceURL, false));
-  registry->RegisterStringPref(prefs::kCloudPrintSigninURL, url,
-                               PrefRegistrySyncable::UNSYNCABLE_PREF);
+  registry->RegisterStringPref(
+      prefs::kCloudPrintSigninURL,
+      url,
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
 }
 
 // Returns the root service URL for the cloud print service.  The default is to

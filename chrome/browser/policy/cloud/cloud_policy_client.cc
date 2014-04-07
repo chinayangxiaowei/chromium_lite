@@ -9,6 +9,8 @@
 #include "base/logging.h"
 #include "base/stl_util.h"
 #include "chrome/browser/policy/cloud/device_management_service.h"
+#include "google_apis/gaia/gaia_constants.h"
+#include "google_apis/gaia/gaia_urls.h"
 
 namespace em = enterprise_management;
 
@@ -24,7 +26,7 @@ DeviceMode TranslateProtobufDeviceMode(
     case em::DeviceRegisterResponse::ENTERPRISE:
       return DEVICE_MODE_ENTERPRISE;
     case em::DeviceRegisterResponse::RETAIL:
-      return DEVICE_MODE_KIOSK;
+      return DEVICE_MODE_RETAIL_KIOSK;
   }
   LOG(ERROR) << "Unknown enrollment mode in registration response: " << mode;
   return DEVICE_MODE_NOT_SET;
@@ -32,12 +34,15 @@ DeviceMode TranslateProtobufDeviceMode(
 
 bool IsChromePolicy(const std::string& type) {
   return type == dm_protocol::kChromeDevicePolicyType ||
-         type == dm_protocol::kChromeUserPolicyType;
+         type == GetChromeUserPolicyType();
 }
 
 }  // namespace
 
 CloudPolicyClient::Observer::~Observer() {}
+
+void CloudPolicyClient::Observer::OnRobotAuthCodesFetched(
+    CloudPolicyClient* client) {}
 
 CloudPolicyClient::StatusProvider::~StatusProvider() {}
 
@@ -53,6 +58,8 @@ CloudPolicyClient::CloudPolicyClient(const std::string& machine_id,
       submit_machine_id_(false),
       public_key_version_(-1),
       public_key_version_valid_(false),
+      invalidation_version_(0),
+      fetched_invalidation_version_(0),
       service_(service),                  // Can be NULL for unit tests.
       status_provider_(status_provider),  // Can be NULL for unit tests.
       status_(DM_STATUS_SUCCESS) {
@@ -79,7 +86,8 @@ void CloudPolicyClient::SetupRegistration(const std::string& dm_token,
 void CloudPolicyClient::Register(em::DeviceRegisterRequest::Type type,
                                  const std::string& auth_token,
                                  const std::string& client_id,
-                                 bool is_auto_enrollement) {
+                                 bool is_auto_enrollement,
+                                 const std::string& requisition) {
   DCHECK(service_);
   DCHECK(!auth_token.empty());
   DCHECK(!is_registered());
@@ -109,12 +117,21 @@ void CloudPolicyClient::Register(em::DeviceRegisterRequest::Type type,
     request->set_machine_model(machine_model_);
   if (is_auto_enrollement)
     request->set_auto_enrolled(true);
+  if (!requisition.empty())
+    request->set_requisition(requisition);
 
   request_job_->SetRetryCallback(
       base::Bind(&CloudPolicyClient::OnRetryRegister, base::Unretained(this)));
 
   request_job_->Start(base::Bind(&CloudPolicyClient::OnRegisterCompleted,
                                  base::Unretained(this)));
+}
+
+void CloudPolicyClient::SetInvalidationInfo(
+    int64 version,
+    const std::string& payload) {
+  invalidation_version_ = version;
+  invalidation_payload_ = payload;
 }
 
 void CloudPolicyClient::FetchPolicy() {
@@ -157,6 +174,10 @@ void CloudPolicyClient::FetchPolicy() {
             last_policy_timestamp_ - base::Time::UnixEpoch());
         fetch_request->set_timestamp(timestamp.InMilliseconds());
       }
+      if (!invalidation_payload_.empty()) {
+        fetch_request->set_invalidation_version(invalidation_version_);
+        fetch_request->set_invalidation_payload(invalidation_payload_);
+      }
     }
   }
 
@@ -172,9 +193,36 @@ void CloudPolicyClient::FetchPolicy() {
     }
   }
 
+  // Set the fetched invalidation version to the latest invalidation version
+  // since it is now the invalidation version used for the latest fetch.
+  fetched_invalidation_version_ = invalidation_version_;
+
   // Fire the job.
   request_job_->Start(base::Bind(&CloudPolicyClient::OnPolicyFetchCompleted,
                                  base::Unretained(this)));
+}
+
+void CloudPolicyClient::FetchRobotAuthCodes(const std::string& auth_token) {
+  CHECK(is_registered());
+  DCHECK(!auth_token.empty());
+
+  request_job_.reset(service_->CreateJob(
+      DeviceManagementRequestJob::TYPE_API_AUTH_CODE_FETCH));
+  // The credentials of a domain user are needed in order to mint a new OAuth2
+  // authorization token for the robot account.
+  request_job_->SetOAuthToken(auth_token);
+  request_job_->SetDMToken(dm_token_);
+  request_job_->SetClientID(client_id_);
+
+  em::DeviceServiceApiAccessRequest* request =
+      request_job_->GetRequest()->mutable_service_api_access_request();
+  request->set_oauth2_client_id(
+      GaiaUrls::GetInstance()->oauth2_chrome_client_id());
+  request->add_auth_scope(GaiaConstants::kAnyApiOAuth2Scope);
+
+  request_job_->Start(
+      base::Bind(&CloudPolicyClient::OnFetchRobotAuthCodesCompleted,
+                 base::Unretained(this)));
 }
 
 void CloudPolicyClient::Unregister() {
@@ -186,6 +234,26 @@ void CloudPolicyClient::Unregister() {
   request_job_->GetRequest()->mutable_unregister_request();
   request_job_->Start(base::Bind(&CloudPolicyClient::OnUnregisterCompleted,
                                  base::Unretained(this)));
+}
+
+void CloudPolicyClient::UploadCertificate(
+    const std::string& certificate_data,
+    const CloudPolicyClient::StatusCallback& callback) {
+  CHECK(is_registered());
+  request_job_.reset(
+      service_->CreateJob(DeviceManagementRequestJob::TYPE_UPLOAD_CERTIFICATE));
+  request_job_->SetDMToken(dm_token_);
+  request_job_->SetClientID(client_id_);
+
+  em::DeviceManagementRequest* request = request_job_->GetRequest();
+  request->mutable_cert_upload_request()->set_device_certificate(
+      certificate_data);
+
+  DeviceManagementRequestJob::Callback job_callback = base::Bind(
+      &CloudPolicyClient::OnCertificateUploadCompleted,
+      base::Unretained(this),
+      callback);
+  request_job_->Start(job_callback);
 }
 
 void CloudPolicyClient::AddObserver(Observer* observer) {
@@ -222,6 +290,7 @@ void CloudPolicyClient::OnRetryRegister(DeviceManagementRequestJob* job) {
 
 void CloudPolicyClient::OnRegisterCompleted(
     DeviceManagementStatus status,
+    int net_error,
     const em::DeviceManagementResponse& response) {
   if (status == DM_STATUS_SUCCESS &&
       (!response.has_register_response() ||
@@ -249,8 +318,32 @@ void CloudPolicyClient::OnRegisterCompleted(
   }
 }
 
+void CloudPolicyClient::OnFetchRobotAuthCodesCompleted(
+    DeviceManagementStatus status,
+    int net_error,
+    const em::DeviceManagementResponse& response) {
+  if (status == DM_STATUS_SUCCESS &&
+      (!response.has_service_api_access_response() ||
+       response.service_api_access_response().auth_code().empty())) {
+    LOG(WARNING) << "Invalid service api access response.";
+    status = DM_STATUS_RESPONSE_DECODING_ERROR;
+  }
+
+  status_ = status;
+  if (status == DM_STATUS_SUCCESS) {
+    robot_api_auth_code_ = response.service_api_access_response().auth_code();
+    DVLOG(1) << "Device robot account auth code fetch complete - code = "
+             << robot_api_auth_code_;
+
+    NotifyRobotAuthCodesFetched();
+  } else {
+    NotifyClientError();
+  }
+}
+
 void CloudPolicyClient::OnPolicyFetchCompleted(
     DeviceManagementStatus status,
+    int net_error,
     const em::DeviceManagementResponse& response) {
   if (status == DM_STATUS_SUCCESS) {
     if (!response.has_policy_response() ||
@@ -296,6 +389,7 @@ void CloudPolicyClient::OnPolicyFetchCompleted(
 
 void CloudPolicyClient::OnUnregisterCompleted(
     DeviceManagementStatus status,
+    int net_error,
     const em::DeviceManagementResponse& response) {
   if (status == DM_STATUS_SUCCESS && !response.has_unregister_response()) {
     // Assume unregistration has succeeded either way.
@@ -311,12 +405,36 @@ void CloudPolicyClient::OnUnregisterCompleted(
   }
 }
 
+void CloudPolicyClient::OnCertificateUploadCompleted(
+    const CloudPolicyClient::StatusCallback& callback,
+    DeviceManagementStatus status,
+    int net_error,
+    const enterprise_management::DeviceManagementResponse& response) {
+  if (status == DM_STATUS_SUCCESS && !response.has_cert_upload_response()) {
+    LOG(WARNING) << "Empty upload certificate response.";
+    callback.Run(false);
+    return;
+  }
+
+  status_ = status;
+  if (status != DM_STATUS_SUCCESS) {
+    NotifyClientError();
+    callback.Run(false);
+    return;
+  }
+  callback.Run(true);
+}
+
 void CloudPolicyClient::NotifyPolicyFetched() {
   FOR_EACH_OBSERVER(Observer, observers_, OnPolicyFetched(this));
 }
 
 void CloudPolicyClient::NotifyRegistrationStateChanged() {
   FOR_EACH_OBSERVER(Observer, observers_, OnRegistrationStateChanged(this));
+}
+
+void CloudPolicyClient::NotifyRobotAuthCodesFetched() {
+  FOR_EACH_OBSERVER(Observer, observers_, OnRobotAuthCodesFetched(this));
 }
 
 void CloudPolicyClient::NotifyClientError() {

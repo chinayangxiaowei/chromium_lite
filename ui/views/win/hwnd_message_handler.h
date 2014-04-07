@@ -16,8 +16,8 @@
 #include "base/compiler_specific.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/message_loop.h"
-#include "base/string16.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/string16.h"
 #include "base/win/win_util.h"
 #include "ui/base/accessibility/accessibility_types.h"
 #include "ui/base/ui_base_types.h"
@@ -55,9 +55,10 @@ const int WM_NCUAHDRAWFRAME = 0xAF;
 // used by both a views::NativeWidget and an aura::RootWindowHost
 // implementation.
 // TODO(beng): This object should eventually *become* the WindowImpl.
-class VIEWS_EXPORT HWNDMessageHandler : public ui::WindowImpl,
-                                        public internal::InputMethodDelegate,
-                                        public MessageLoopForUI::Observer {
+class VIEWS_EXPORT HWNDMessageHandler :
+    public ui::WindowImpl,
+    public internal::InputMethodDelegate,
+    public base::MessageLoopForUI::Observer {
  public:
   explicit HWNDMessageHandler(HWNDMessageHandlerDelegate* delegate);
   ~HWNDMessageHandler();
@@ -74,7 +75,7 @@ class VIEWS_EXPORT HWNDMessageHandler : public ui::WindowImpl,
   void GetWindowPlacement(gfx::Rect* bounds,
                           ui::WindowShowState* show_state) const;
 
-  void SetBounds(const gfx::Rect& bounds);
+  void SetBounds(const gfx::Rect& bounds_in_pixels);
   void SetSize(const gfx::Size& size);
   void CenterWindow(const gfx::Size& size);
 
@@ -163,6 +164,13 @@ class VIEWS_EXPORT HWNDMessageHandler : public ui::WindowImpl,
       const base::NativeEvent& event) OVERRIDE;
   virtual void DidProcessEvent(const base::NativeEvent& event) OVERRIDE;
 
+  // Returns the auto-hide edges of the appbar. See Appbar::GetAutohideEdges()
+  // for details. If the edges change OnAppbarAutohideEdgesChanged() is called.
+  int GetAppbarAutohideEdges(HMONITOR monitor);
+
+  // Callback if the autohide edges have changed. See Appbar for details.
+  void OnAppbarAutohideEdgesChanged();
+
   // Can be called after the delegate has had the opportunity to set focus and
   // did not do so.
   void SetInitialFocus();
@@ -188,7 +196,7 @@ class VIEWS_EXPORT HWNDMessageHandler : public ui::WindowImpl,
 
   // Returns the insets of the client area relative to the non-client area of
   // the window.
-  gfx::Insets GetClientAreaInsets() const;
+  bool GetClientAreaInsets(gfx::Insets* insets) const;
 
   // Resets the window region for the current widget bounds if necessary.
   // If |force| is true, the window region is reset to NULL even for native
@@ -220,7 +228,6 @@ class VIEWS_EXPORT HWNDMessageHandler : public ui::WindowImpl,
   // Synchronously updates the invalid contents of the Widget. Valid for
   // layered windows only.
   void RedrawLayeredWindowContents();
-
 
   // Message Handlers ----------------------------------------------------------
 
@@ -257,6 +264,7 @@ class VIEWS_EXPORT HWNDMessageHandler : public ui::WindowImpl,
     MESSAGE_HANDLER_EX(WM_IME_COMPOSITION, OnImeMessages)
     MESSAGE_HANDLER_EX(WM_IME_ENDCOMPOSITION, OnImeMessages)
     MESSAGE_HANDLER_EX(WM_IME_REQUEST, OnImeMessages)
+    MESSAGE_HANDLER_EX(WM_IME_NOTIFY, OnImeMessages)
     MESSAGE_HANDLER_EX(WM_CHAR, OnImeMessages)
     MESSAGE_HANDLER_EX(WM_SYSCHAR, OnImeMessages)
     MESSAGE_HANDLER_EX(WM_DEADCHAR, OnImeMessages)
@@ -264,6 +272,11 @@ class VIEWS_EXPORT HWNDMessageHandler : public ui::WindowImpl,
 
     // Touch Events.
     MESSAGE_HANDLER_EX(WM_TOUCH, OnTouchEvent)
+
+    // Uses the general handler macro since the specific handler macro
+    // MSG_WM_NCACTIVATE would convert WPARAM type to BOOL type. The high
+    // word of WPARAM could be set when the window is minimized or restored.
+    MESSAGE_HANDLER_EX(WM_NCACTIVATE, OnNCActivate)
 
     // This list is in _ALPHABETICAL_ order! OR I WILL HURT YOU.
     MSG_WM_ACTIVATEAPP(OnActivateApp)
@@ -284,7 +297,6 @@ class VIEWS_EXPORT HWNDMessageHandler : public ui::WindowImpl,
     MSG_WM_KILLFOCUS(OnKillFocus)
     MSG_WM_MOVE(OnMove)
     MSG_WM_MOVING(OnMoving)
-    MSG_WM_NCACTIVATE(OnNCActivate)
     MSG_WM_NCCALCSIZE(OnNCCalcSize)
     MSG_WM_NCHITTEST(OnNCHitTest)
     MSG_WM_NCPAINT(OnNCPaint)
@@ -331,7 +343,7 @@ class VIEWS_EXPORT HWNDMessageHandler : public ui::WindowImpl,
   LRESULT OnMouseRange(UINT message, WPARAM w_param, LPARAM l_param);
   void OnMove(const CPoint& point);
   void OnMoving(UINT param, const RECT* new_bounds);
-  LRESULT OnNCActivate(BOOL active);
+  LRESULT OnNCActivate(UINT message, WPARAM w_param, LPARAM l_param);
   LRESULT OnNCCalcSize(BOOL mode, LPARAM l_param);
   LRESULT OnNCHitTest(const CPoint& point);
   void OnNCPaint(HRGN rgn);
@@ -454,6 +466,9 @@ class VIEWS_EXPORT HWNDMessageHandler : public ui::WindowImpl,
 
   // True the first time nccalc is called on a sizable widget
   bool is_first_nccalc_;
+
+  // A factory used to lookup appbar autohide edges.
+  base::WeakPtrFactory<HWNDMessageHandler> autohide_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(HWNDMessageHandler);
 };

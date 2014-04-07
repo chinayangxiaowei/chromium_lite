@@ -1,7 +1,6 @@
-/* Copyright (c) 2012 The Chromium Authors. All rights reserved.
- * Use of this source code is governed by a BSD-style license that can be
- * found in the LICENSE file.
- */
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
 
 #include <fcntl.h>
 #include <gmock/gmock.h>
@@ -16,7 +15,10 @@
 #include "nacl_io/mount_http.h"
 #include "nacl_io/mount_node_dir.h"
 #include "nacl_io/osdirent.h"
+#include "nacl_io/osunistd.h"
 #include "pepper_interface_mock.h"
+
+using namespace nacl_io;
 
 using ::testing::_;
 using ::testing::DoAll;
@@ -29,7 +31,7 @@ using ::testing::StrEq;
 class MountHttpMock : public MountHttp {
  public:
   MountHttpMock(StringMap_t map, PepperInterfaceMock* ppapi) {
-    EXPECT_TRUE(Init(1, map, ppapi));
+    EXPECT_EQ(0, Init(1, map, ppapi));
   }
 
   ~MountHttpMock() {
@@ -69,27 +71,89 @@ TEST_F(MountHttpTest, MountEmpty) {
   mnt_ = new MountHttpMock(args, &ppapi_);
 }
 
+TEST_F(MountHttpTest, Mkdir) {
+  StringMap_t args;
+  mnt_ = new MountHttpMock(args, &ppapi_);
+  char manifest[] = "-r-- 123 /mydir/foo\n-rw- 234 /thatdir/bar\n";
+  EXPECT_EQ(0, mnt_->ParseManifest(manifest));
+  // mkdir of existing directories should give "File exists".
+  EXPECT_EQ(EEXIST, mnt_->Mkdir(Path("/"), 0));
+  EXPECT_EQ(EEXIST, mnt_->Mkdir(Path("/mydir"), 0));
+  // mkdir of non-existent directories should give "Permission denied".
+  EXPECT_EQ(EACCES, mnt_->Mkdir(Path("/non_existent"), 0));
+}
+
+TEST_F(MountHttpTest, Rmdir) {
+  StringMap_t args;
+  mnt_ = new MountHttpMock(args, &ppapi_);
+  char manifest[] = "-r-- 123 /mydir/foo\n-rw- 234 /thatdir/bar\n";
+  EXPECT_EQ(0, mnt_->ParseManifest(manifest));
+  // Rmdir on existing dirs should give "Permission Denied"
+  EXPECT_EQ(EACCES, mnt_->Rmdir(Path("/")));
+  EXPECT_EQ(EACCES, mnt_->Rmdir(Path("/mydir")));
+  // Rmdir on existing files should give "Not a direcotory"
+  EXPECT_EQ(ENOTDIR, mnt_->Rmdir(Path("/mydir/foo")));
+  // Rmdir on non-existent files should give "No such file or directory"
+  EXPECT_EQ(ENOENT, mnt_->Rmdir(Path("/non_existent")));
+}
+
+TEST_F(MountHttpTest, Unlink) {
+  StringMap_t args;
+  mnt_ = new MountHttpMock(args, &ppapi_);
+  char manifest[] = "-r-- 123 /mydir/foo\n-rw- 234 /thatdir/bar\n";
+  EXPECT_EQ(0, mnt_->ParseManifest(manifest));
+  // Unlink of existing files should give "Permission Denied"
+  EXPECT_EQ(EACCES, mnt_->Unlink(Path("/mydir/foo")));
+  // Unlink of existing directory should give "Is a directory"
+  EXPECT_EQ(EISDIR, mnt_->Unlink(Path("/mydir")));
+  // Unlink of non-existent files should give "No such file or directory"
+  EXPECT_EQ(ENOENT, mnt_->Unlink(Path("/non_existent")));
+}
+
+TEST_F(MountHttpTest, Remove) {
+  StringMap_t args;
+  mnt_ = new MountHttpMock(args, &ppapi_);
+  char manifest[] = "-r-- 123 /mydir/foo\n-rw- 234 /thatdir/bar\n";
+  EXPECT_EQ(0, mnt_->ParseManifest(manifest));
+  // Remove of existing files should give "Permission Denied"
+  EXPECT_EQ(EACCES, mnt_->Remove(Path("/mydir/foo")));
+  // Remove of existing directory should give "Permission Denied"
+  EXPECT_EQ(EACCES, mnt_->Remove(Path("/mydir")));
+  // Unlink of non-existent files should give "No such file or directory"
+  EXPECT_EQ(ENOENT, mnt_->Remove(Path("/non_existent")));
+}
+
 TEST_F(MountHttpTest, ParseManifest) {
   StringMap_t args;
+  size_t result_size = 0;
+
   mnt_ = new MountHttpMock(args, &ppapi_);
 
   char manifest[] = "-r-- 123 /mydir/foo\n-rw- 234 /thatdir/bar\n";
-  EXPECT_TRUE(mnt_->ParseManifest(manifest));
+  EXPECT_EQ(0, mnt_->ParseManifest(manifest));
 
-  MountNodeDir* root = mnt_->FindOrCreateDir(Path("/"));
+  ScopedMountNode root;
+  EXPECT_EQ(0, mnt_->FindOrCreateDir(Path("/"), &root));
+  ASSERT_NE((MountNode*)NULL, root.get());
   EXPECT_EQ(2, root->ChildCount());
 
-  MountNodeDir* dir = mnt_->FindOrCreateDir(Path("/mydir"));
+  ScopedMountNode dir;
+  EXPECT_EQ(0, mnt_->FindOrCreateDir(Path("/mydir"), &dir));
+  ASSERT_NE((MountNode*)NULL, dir.get());
   EXPECT_EQ(1, dir->ChildCount());
 
-  MountNode* node = mnt_->GetMap()["/mydir/foo"];
-  EXPECT_TRUE(node);
-  EXPECT_EQ(123, node->GetSize());
+  MountNode* node = mnt_->GetMap()["/mydir/foo"].get();
+  EXPECT_NE((MountNode*)NULL, node);
+  EXPECT_EQ(0, node->GetSize(&result_size));
+  EXPECT_EQ(123, result_size);
 
   // Since these files are cached thanks to the manifest, we can open them
   // without accessing the PPAPI URL API.
-  MountNode* foo = mnt_->Open(Path("/mydir/foo"), O_RDONLY);
-  MountNode* bar = mnt_->Open(Path("/thatdir/bar"), O_RDWR);
+  ScopedMountNode foo;
+  EXPECT_EQ(0, mnt_->Open(Path("/mydir/foo"), O_RDONLY, &foo));
+
+  ScopedMountNode bar;
+  EXPECT_EQ(0, mnt_->Open(Path("/thatdir/bar"), O_RDWR, &bar));
 
   struct stat sfoo;
   struct stat sbar;
@@ -115,12 +179,15 @@ class MountHttpNodeTest : public MountHttpTest {
   void ExpectHeaders(const char* headers);
   void OpenNode();
   void SetResponse(int status_code, const char* headers);
+  // Set a response code, but expect the request to fail. Certain function calls
+  // expected by SetResponse are not expected here.
+  void SetResponseExpectFail(int status_code, const char* headers);
   void SetResponseBody(const char* body);
   void ResetMocks();
 
  protected:
   MountHttpMock* mnt_;
-  MountNode* node_;
+  ScopedMountNode node_;
 
   VarInterfaceMock* var_;
   URLLoaderInterfaceMock* loader_;
@@ -222,6 +289,17 @@ void MountHttpNodeTest::SetResponse(int status_code, const char* headers) {
                       Return(headers)));
 }
 
+void MountHttpNodeTest::SetResponseExpectFail(int status_code,
+                                              const char* headers) {
+  ON_CALL(*response_, GetProperty(response_resource_, _))
+      .WillByDefault(Return(PP_MakeUndefined()));
+
+  EXPECT_CALL(*response_,
+              GetProperty(response_resource_,
+                          PP_URLRESPONSEPROPERTY_STATUSCODE))
+      .WillOnce(Return(PP_MakeInt32(status_code)));
+}
+
 ACTION_P3(ReadResponseBodyAction, offset, body, body_length) {
   char* buf = static_cast<char*>(arg1);
   size_t read_length = arg2;
@@ -248,8 +326,8 @@ void MountHttpNodeTest::SetResponseBody(const char* body) {
 }
 
 void MountHttpNodeTest::OpenNode() {
-  node_ = mnt_->Open(Path(path_), O_RDONLY);
-  ASSERT_NE((MountNode*)NULL, node_);
+  ASSERT_EQ(0, mnt_->Open(Path(path_), O_RDONLY, &node_));
+  ASSERT_NE((MountNode*)NULL, node_.get());
 }
 
 void MountHttpNodeTest::ResetMocks() {
@@ -261,12 +339,13 @@ void MountHttpNodeTest::ResetMocks() {
 }
 
 void MountHttpNodeTest::TearDown() {
-  if (node_)
-    mnt_->ReleaseNode(node_);
+  node_.reset();
   delete mnt_;
 }
 
-TEST_F(MountHttpNodeTest, OpenAndClose) {
+TEST_F(MountHttpNodeTest, DISABLED_OpenAndCloseNoCache) {
+  StringMap_t smap;
+  smap["cache_content"] = "false";
   SetMountArgs(StringMap_t());
   ExpectOpen("HEAD");
   ExpectHeaders("");
@@ -274,7 +353,74 @@ TEST_F(MountHttpNodeTest, OpenAndClose) {
   OpenNode();
 }
 
+TEST_F(MountHttpNodeTest, OpenAndCloseNotFound) {
+  StringMap_t smap;
+  smap["cache_content"] = "false";
+  SetMountArgs(StringMap_t());
+  ExpectOpen("HEAD");
+  ExpectHeaders("");
+  SetResponseExpectFail(404, "");
+  ASSERT_EQ(ENOENT, mnt_->Open(Path(path_), O_RDONLY, &node_));
+}
+
+TEST_F(MountHttpNodeTest, OpenAndCloseServerError) {
+  StringMap_t smap;
+  smap["cache_content"] = "false";
+  SetMountArgs(StringMap_t());
+  ExpectOpen("HEAD");
+  ExpectHeaders("");
+  SetResponseExpectFail(500, "");
+  ASSERT_EQ(EIO, mnt_->Open(Path(path_), O_RDONLY, &node_));
+}
+
+TEST_F(MountHttpNodeTest, GetStat) {
+  StringMap_t smap;
+  smap["cache_content"] = "false";
+  SetMountArgs(StringMap_t());
+  ExpectOpen("HEAD");
+  ExpectHeaders("");
+  SetResponse(200, "Content-Length: 42\n");
+  OpenNode();
+
+  struct stat stat;
+  EXPECT_EQ(0, node_->GetStat(&stat));
+  EXPECT_EQ(42, stat.st_size);
+}
+
+TEST_F(MountHttpNodeTest, DISABLED_Access) {
+  StringMap_t smap;
+  smap["cache_content"] = "false";
+  SetMountArgs(StringMap_t());
+  ExpectOpen("HEAD");
+  ExpectHeaders("");
+  SetResponse(200, "");
+  ASSERT_EQ(0, mnt_->Access(Path(path_), R_OK));
+}
+
+TEST_F(MountHttpNodeTest, DISABLED_AccessWrite) {
+  StringMap_t smap;
+  smap["cache_content"] = "false";
+  SetMountArgs(StringMap_t());
+  ExpectOpen("HEAD");
+  ExpectHeaders("");
+  SetResponse(200, "");
+  ASSERT_EQ(EACCES, mnt_->Access(Path(path_), W_OK));
+}
+
+TEST_F(MountHttpNodeTest, AccessNotFound) {
+  StringMap_t smap;
+  smap["cache_content"] = "false";
+  SetMountArgs(StringMap_t());
+  ExpectOpen("HEAD");
+  ExpectHeaders("");
+  SetResponseExpectFail(404, "");
+  ASSERT_EQ(ENOENT, mnt_->Access(Path(path_), R_OK));
+}
+
 TEST_F(MountHttpNodeTest, ReadCached) {
+  size_t result_size = 0;
+  int result_bytes = 0;
+
   SetMountArgs(StringMap_t());
   ExpectOpen("HEAD");
   ExpectHeaders("");
@@ -282,7 +428,8 @@ TEST_F(MountHttpNodeTest, ReadCached) {
   OpenNode();
   ResetMocks();
 
-  EXPECT_EQ(42, node_->GetSize());
+  EXPECT_EQ(0, node_->GetSize(&result_size));
+  EXPECT_EQ(42, result_size);
 
   char buf[10];
   memset(&buf[0], 0, sizeof(buf));
@@ -291,51 +438,62 @@ TEST_F(MountHttpNodeTest, ReadCached) {
   ExpectHeaders("");
   SetResponse(200, "Content-Length: 42\n");
   SetResponseBody("Here is some response text. And some more.");
-  node_->Read(0, buf, sizeof(buf) - 1);
+  EXPECT_EQ(0, node_->Read(0, buf, sizeof(buf) - 1, &result_bytes));
   EXPECT_STREQ("Here is s", &buf[0]);
   ResetMocks();
 
   // Further reads should be cached.
-  node_->Read(0, buf, sizeof(buf) - 1);
+  EXPECT_EQ(0, node_->Read(0, buf, sizeof(buf) - 1, &result_bytes));
   EXPECT_STREQ("Here is s", &buf[0]);
-  node_->Read(10, buf, sizeof(buf) - 1);
+  EXPECT_EQ(0, node_->Read(10, buf, sizeof(buf) - 1, &result_bytes));
   EXPECT_STREQ("me respon", &buf[0]);
 
-  EXPECT_EQ(42, node_->GetSize());
+  EXPECT_EQ(0, node_->GetSize(&result_size));
+  EXPECT_EQ(42, result_size);
 }
 
-TEST_F(MountHttpNodeTest, ReadCachedNoContentLength) {
+TEST_F(MountHttpNodeTest, DISABLED_ReadCachedNoContentLength) {
+  size_t result_size = 0;
+  int result_bytes = 0;
+
   SetMountArgs(StringMap_t());
   ExpectOpen("HEAD");
   ExpectHeaders("");
   SetResponse(200, "");
   OpenNode();
   ResetMocks();
-
-  // Unknown size.
-  EXPECT_EQ(0, node_->GetSize());
-
-  char buf[10];
-  memset(&buf[0], 0, sizeof(buf));
 
   ExpectOpen("GET");
   ExpectHeaders("");
   SetResponse(200, "");  // No Content-Length response here.
   SetResponseBody("Here is some response text. And some more.");
-  node_->Read(0, buf, sizeof(buf) - 1);
+
+  // GetSize will Read() because it didn't get the content length from the HEAD
+  // request.
+  EXPECT_EQ(0, node_->GetSize(&result_size));
+  EXPECT_EQ(42, result_size);
+
+  char buf[10];
+  memset(&buf[0], 0, sizeof(buf));
+
+  EXPECT_EQ(0, node_->Read(0, buf, sizeof(buf) - 1, &result_bytes));
   EXPECT_STREQ("Here is s", &buf[0]);
   ResetMocks();
 
   // Further reads should be cached.
-  node_->Read(0, buf, sizeof(buf) - 1);
+  EXPECT_EQ(0, node_->Read(0, buf, sizeof(buf) - 1, &result_bytes));
   EXPECT_STREQ("Here is s", &buf[0]);
-  node_->Read(10, buf, sizeof(buf) - 1);
+  EXPECT_EQ(0, node_->Read(10, buf, sizeof(buf) - 1, &result_bytes));
   EXPECT_STREQ("me respon", &buf[0]);
 
-  EXPECT_EQ(42, node_->GetSize());
+  EXPECT_EQ(0, node_->GetSize(&result_size));
+  EXPECT_EQ(42, result_size);
 }
 
 TEST_F(MountHttpNodeTest, ReadCachedUnderrun) {
+  size_t result_size = 0;
+  int result_bytes = 0;
+
   SetMountArgs(StringMap_t());
   ExpectOpen("HEAD");
   ExpectHeaders("");
@@ -343,7 +501,8 @@ TEST_F(MountHttpNodeTest, ReadCachedUnderrun) {
   OpenNode();
   ResetMocks();
 
-  EXPECT_EQ(100, node_->GetSize());
+  EXPECT_EQ(0, node_->GetSize(&result_size));
+  EXPECT_EQ(100, result_size);
 
   char buf[10];
   memset(&buf[0], 0, sizeof(buf));
@@ -352,14 +511,19 @@ TEST_F(MountHttpNodeTest, ReadCachedUnderrun) {
   ExpectHeaders("");
   SetResponse(200, "Content-Length: 100\n");
   SetResponseBody("abcdefghijklmnopqrstuvwxyz");
-  node_->Read(0, buf, sizeof(buf) - 1);
+  EXPECT_EQ(0, node_->Read(0, buf, sizeof(buf) - 1, &result_bytes));
+  EXPECT_EQ(sizeof(buf) - 1, result_bytes);
   EXPECT_STREQ("abcdefghi", &buf[0]);
   ResetMocks();
 
-  EXPECT_EQ(26, node_->GetSize());
+  EXPECT_EQ(0, node_->GetSize(&result_size));
+  EXPECT_EQ(26, result_size);
 }
 
 TEST_F(MountHttpNodeTest, ReadCachedOverrun) {
+  size_t result_size = 0;
+  int result_bytes = 0;
+
   SetMountArgs(StringMap_t());
   ExpectOpen("HEAD");
   ExpectHeaders("");
@@ -367,7 +531,8 @@ TEST_F(MountHttpNodeTest, ReadCachedOverrun) {
   OpenNode();
   ResetMocks();
 
-  EXPECT_EQ(15, node_->GetSize());
+  EXPECT_EQ(0, node_->GetSize(&result_size));
+  EXPECT_EQ(15, result_size);
 
   char buf[10];
   memset(&buf[0], 0, sizeof(buf));
@@ -376,14 +541,18 @@ TEST_F(MountHttpNodeTest, ReadCachedOverrun) {
   ExpectHeaders("");
   SetResponse(200, "Content-Length: 15\n");
   SetResponseBody("01234567890123456789");
-  node_->Read(10, buf, sizeof(buf) - 1);
+  EXPECT_EQ(0, node_->Read(10, buf, sizeof(buf) - 1, &result_bytes));
+  EXPECT_EQ(5, result_bytes);
   EXPECT_STREQ("01234", &buf[0]);
   ResetMocks();
 
-  EXPECT_EQ(15, node_->GetSize());
+  EXPECT_EQ(0, node_->GetSize(&result_size));
+  EXPECT_EQ(15, result_size);
 }
 
 TEST_F(MountHttpNodeTest, ReadPartial) {
+  int result_bytes = 0;
+
   StringMap_t args;
   args["cache_content"] = "false";
   SetMountArgs(args);
@@ -400,7 +569,8 @@ TEST_F(MountHttpNodeTest, ReadPartial) {
   ExpectHeaders("Range: bytes=0-8\n");
   SetResponse(206, "Content-Length: 9\nContent-Range: bytes=0-8\n");
   SetResponseBody("012345678");
-  node_->Read(0, buf, sizeof(buf) - 1);
+  EXPECT_EQ(0, node_->Read(0, buf, sizeof(buf) - 1, &result_bytes));
+  EXPECT_EQ(sizeof(buf) - 1, result_bytes);
   EXPECT_STREQ("012345678", &buf[0]);
   ResetMocks();
 
@@ -409,11 +579,14 @@ TEST_F(MountHttpNodeTest, ReadPartial) {
   ExpectHeaders("Range: bytes=10-18\n");
   SetResponse(206, "Content-Length: 9\nContent-Range: bytes=10-18\n");
   SetResponseBody("abcdefghi");
-  node_->Read(10, buf, sizeof(buf) - 1);
+  EXPECT_EQ(0, node_->Read(10, buf, sizeof(buf) - 1, &result_bytes));
+  EXPECT_EQ(sizeof(buf) - 1, result_bytes);
   EXPECT_STREQ("abcdefghi", &buf[0]);
 }
 
 TEST_F(MountHttpNodeTest, ReadPartialNoServerSupport) {
+  int result_bytes = 0;
+
   StringMap_t args;
   args["cache_content"] = "false";
   SetMountArgs(args);
@@ -430,6 +603,8 @@ TEST_F(MountHttpNodeTest, ReadPartialNoServerSupport) {
   ExpectHeaders("Range: bytes=10-18\n");
   SetResponse(200, "Content-Length: 20\n");
   SetResponseBody("0123456789abcdefghij");
-  node_->Read(10, buf, sizeof(buf) - 1);
+  EXPECT_EQ(0, node_->Read(10, buf, sizeof(buf) - 1, &result_bytes));
+  EXPECT_EQ(sizeof(buf) - 1, result_bytes);
   EXPECT_STREQ("abcdefghi", &buf[0]);
 }
+

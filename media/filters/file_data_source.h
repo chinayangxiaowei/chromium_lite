@@ -9,6 +9,7 @@
 
 #include "base/files/file_path.h"
 #include "base/files/memory_mapped_file.h"
+#include "base/platform_file.h"
 #include "media/base/data_source.h"
 
 namespace media {
@@ -18,8 +19,10 @@ namespace media {
 class MEDIA_EXPORT FileDataSource : public DataSource {
  public:
   FileDataSource();
+  virtual ~FileDataSource();
 
   bool Initialize(const base::FilePath& file_path);
+  bool InitializeFromPlatformFile(const base::PlatformFile& file);
 
   // Implementation of DataSource.
   virtual void set_host(DataSourceHost* host) OVERRIDE;
@@ -33,9 +36,6 @@ class MEDIA_EXPORT FileDataSource : public DataSource {
   // Unit test helpers. Recreate the object if you want the default behaviour.
   void force_read_errors_for_testing() { force_read_errors_ = true; }
   void force_streaming_for_testing() { force_streaming_ = true; }
-
- protected:
-  virtual ~FileDataSource();
 
  private:
   // Informs the host of changes in total and buffered bytes.

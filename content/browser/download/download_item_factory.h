@@ -13,7 +13,6 @@
 #include <vector>
 
 #include "base/memory/scoped_ptr.h"
-#include "content/public/browser/download_id.h"
 #include "content/public/browser/download_item.h"
 
 class GURL;
@@ -40,13 +39,15 @@ public:
 
   virtual DownloadItemImpl* CreatePersistedItem(
       DownloadItemImplDelegate* delegate,
-      DownloadId download_id,
+      uint32 download_id,
       const base::FilePath& current_path,
       const base::FilePath& target_path,
       const std::vector<GURL>& url_chain,
       const GURL& referrer_url,
       const base::Time& start_time,
       const base::Time& end_time,
+      const std::string& etag,
+      const std::string& last_modified,
       int64 received_bytes,
       int64 total_bytes,
       DownloadItem::DownloadState state,
@@ -57,14 +58,15 @@ public:
 
   virtual DownloadItemImpl* CreateActiveItem(
       DownloadItemImplDelegate* delegate,
+      uint32 download_id,
       const DownloadCreateInfo& info,
       const net::BoundNetLog& bound_net_log) = 0;
 
   virtual DownloadItemImpl* CreateSavePageItem(
       DownloadItemImplDelegate* delegate,
+      uint32 download_id,
       const base::FilePath& path,
       const GURL& url,
-      DownloadId download_id,
       const std::string& mime_type,
       scoped_ptr<DownloadRequestHandleInterface> request_handle,
       const net::BoundNetLog& bound_net_log) = 0;

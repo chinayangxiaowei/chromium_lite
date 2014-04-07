@@ -5,6 +5,10 @@
 function Authenticator() {
 }
 
+/**
+ * Singleton getter of Authenticator.
+ * @return {Object} The singleton instance of Authenticator.
+ */
 Authenticator.getInstance = function() {
   if (!Authenticator.instance_) {
     Authenticator.instance_ = new Authenticator();
@@ -21,8 +25,8 @@ Authenticator.prototype = {
   inputLang_: undefined,
   intputEmail_: undefined,
 
-  GAIA_PAGE_ORIGIN: 'https://accounts.google.com',
-  GAIA_PAGE_PATH: '/ServiceLogin?service=chromeoslogin' +
+  GAIA_URL: 'https://accounts.google.com/',
+  GAIA_PAGE_PATH: 'ServiceLogin?service=chromeoslogin' +
       '&skipvpage=true&sarp=1&rm=hide' +
       '&continue=chrome-extension://mfffpogegjflfpflabcdkioaeobkgjik/' +
       'success.html',
@@ -31,19 +35,18 @@ Authenticator.prototype = {
 
   initialize: function() {
     var params = getUrlSearchParams(location.search);
-    this.gaiaOrigin_ = params['gaiaOrigin'] || this.GAIA_PAGE_ORIGIN;
-    this.gaiaUrlPath_ = params['gaiaUrlPath'] || '';
+    this.parentPage_ = params['parentPage'] || this.PARENT_PAGE;
+    this.gaiaUrl_ = params['gaiaUrl'] || this.GAIA_URL;
     this.inputLang_ = params['hl'];
     this.inputEmail_ = params['email'];
-    this.testEmail_ = params['test_email'];
-    this.testPassword_ = params['test_password'];
 
     document.addEventListener('DOMContentLoaded', this.onPageLoad.bind(this));
   },
 
   isGaiaMessage_: function(msg) {
-    return msg.origin == this.gaiaOrigin_ ||
-           msg.origin == this.GAIA_PAGE_ORIGIN;
+    // Not quite right, but good enough.
+    return this.gaiaUrl_.indexOf(msg.origin) == 0 ||
+           this.GAIA_URL.indexOf(msg.origin) == 0;
   },
 
   isInternalMessage_: function(msg) {
@@ -51,13 +54,7 @@ Authenticator.prototype = {
   },
 
   getFrameUrl_: function() {
-    var url = this.gaiaOrigin_;
-
-    if (this.gaiaOrigin_ == 'https://www.google.com')
-      url += '/accounts';
-
-    if (this.gaiaUrlPath_ && this.gaiaUrlPath_ != '')
-      url += this.gaiaUrlPath_;
+    var url = this.gaiaUrl_;
 
     url += this.GAIA_PAGE_PATH;
 
@@ -65,10 +62,6 @@ Authenticator.prototype = {
       url += '&hl=' + encodeURIComponent(this.inputLang_);
     if (this.inputEmail_)
       url += '&Email=' + encodeURIComponent(this.inputEmail_);
-    if (this.testEmail_)
-      url += '&test_email=' + encodeURIComponent(this.testEmail_);
-    if (this.testPassword_)
-      url += '&test_pwd=' + encodeURIComponent(this.testPassword_);
     return url;
   },
 
@@ -85,7 +78,7 @@ Authenticator.prototype = {
     var msg = {
       'method': 'loginUILoaded'
     };
-    window.parent.postMessage(msg, this.PARENT_PAGE);
+    window.parent.postMessage(msg, this.parentPage_);
   },
 
   onMessage: function(e) {
@@ -106,7 +99,7 @@ Authenticator.prototype = {
           'email': this.email_,
           'password': this.password_
         };
-        window.parent.postMessage(msg, this.PARENT_PAGE);
+        window.parent.postMessage(msg, this.parentPage_);
       } else {
         console.log('#### Authenticator.onMessage: unexpected attemptToken!?');
       }
@@ -117,4 +110,3 @@ Authenticator.prototype = {
 };
 
 Authenticator.getInstance().initialize();
-

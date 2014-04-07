@@ -6,8 +6,7 @@
 
 #include <gtk/gtk.h>
 
-#include "base/process_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/favicon/favicon_tab_helper.h"
 #include "chrome/browser/ui/gtk/gtk_util.h"
 #include "chrome/browser/ui/tab_contents/core_tab_helper.h"
@@ -52,7 +51,7 @@ class HungRendererDialogGtk {
     }
 
     // content::WebContentsObserver overrides:
-    virtual void RenderViewGone(base::TerminationStatus status) OVERRIDE {
+    virtual void RenderProcessGone(base::TerminationStatus status) OVERRIDE {
       dialog_->Hide();
     }
     virtual void WebContentsDestroyed(WebContents* tab) OVERRIDE {

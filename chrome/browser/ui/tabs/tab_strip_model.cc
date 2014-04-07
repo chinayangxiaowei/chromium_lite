@@ -45,6 +45,67 @@ bool ShouldForgetOpenersForTransition(content::PageTransition transition) {
       transition == content::PAGE_TRANSITION_AUTO_TOPLEVEL;
 }
 
+// CloseTracker is used when closing a set of WebContents. It listens for
+// deletions of the WebContents and removes from the internal set any time one
+// is deleted.
+class CloseTracker : public content::NotificationObserver {
+ public:
+  typedef std::vector<WebContents*> Contents;
+
+  explicit CloseTracker(const Contents& contents);
+  virtual ~CloseTracker();
+
+  // Returns true if there is another WebContents in the Tracker.
+  bool HasNext() const;
+
+  // Returns the next WebContents, or NULL if there are no more.
+  WebContents* Next();
+
+ private:
+  // NotificationObserver:
+  virtual void Observe(int type,
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE;
+
+  Contents contents_;
+
+  content::NotificationRegistrar registrar_;
+
+  DISALLOW_COPY_AND_ASSIGN(CloseTracker);
+};
+
+CloseTracker::CloseTracker(const Contents& contents)
+    : contents_(contents) {
+  registrar_.Add(this, content::NOTIFICATION_WEB_CONTENTS_DESTROYED,
+                 content::NotificationService::AllBrowserContextsAndSources());
+}
+
+CloseTracker::~CloseTracker() {
+}
+
+bool CloseTracker::HasNext() const {
+  return !contents_.empty();
+}
+
+WebContents* CloseTracker::Next() {
+  if (contents_.empty())
+    return NULL;
+
+  WebContents* web_contents = contents_[0];
+  contents_.erase(contents_.begin());
+  return web_contents;
+}
+
+void CloseTracker::Observe(int type,
+                           const content::NotificationSource& source,
+                           const content::NotificationDetails& details) {
+  WebContents* web_contents = content::Source<WebContents>(source).ptr();
+  Contents::iterator i =
+      std::find(contents_.begin(), contents_.end(), web_contents);
+  if (i != contents_.end())
+    contents_.erase(i);
+}
+
 }  // namespace
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -159,9 +220,13 @@ WebContents* TabStripModel::ReplaceWebContentsAt(int index,
   // too. We do this as nearly all observers need to treat a replacement of the
   // selected contents as the selection changing.
   if (active_index() == index) {
-    FOR_EACH_OBSERVER(TabStripModelObserver, observers_,
-                      ActiveTabChanged(old_contents, new_contents,
-                                       active_index(), false));
+    FOR_EACH_OBSERVER(
+        TabStripModelObserver,
+        observers_,
+        ActiveTabChanged(old_contents,
+                         new_contents,
+                         active_index(),
+                         TabStripModelObserver::CHANGE_REASON_REPLACED));
   }
   return old_contents;
 }
@@ -956,6 +1021,14 @@ bool TabStripModel::ContextMenuCommandToBrowserCommand(int cmd_id,
 ///////////////////////////////////////////////////////////////////////////////
 // TabStripModel, private:
 
+std::vector<WebContents*> TabStripModel::GetWebContentsFromIndices(
+    const std::vector<int>& indices) const {
+  std::vector<WebContents*> contents;
+  for (size_t i = 0; i < indices.size(); ++i)
+    contents.push_back(GetWebContentsAtImpl(indices[i]));
+  return contents;
+}
+
 void TabStripModel::GetIndicesWithSameDomain(int index,
                                              std::vector<int>* indices) {
   std::string domain = GetWebContentsAt(index)->GetURL().host();
@@ -1010,12 +1083,7 @@ bool TabStripModel::InternalCloseTabs(const std::vector<int>& indices,
   if (indices.empty())
     return true;
 
-  // Map the indices to WebContentses, that way if deleting a tab deletes
-  // other tabs we're ok. Crashes seem to indicate during tab deletion other
-  // tabs are getting removed.
-  std::vector<WebContents*> closing_contentses;
-  for (size_t i = 0; i < indices.size(); ++i)
-    closing_contentses.push_back(GetWebContentsAtImpl(indices[i]));
+  CloseTracker close_tracker(GetWebContentsFromIndices(indices));
 
   // We only try the fast shutdown path if the whole browser process is *not*
   // shutting down. Fast shutdown during browser termination is handled in
@@ -1040,14 +1108,16 @@ bool TabStripModel::InternalCloseTabs(const std::vector<int>& indices,
 
   // We now return to our regularly scheduled shutdown procedure.
   bool retval = true;
-  for (size_t i = 0; i < closing_contentses.size(); ++i) {
-    WebContents* closing_contents = closing_contentses[i];
+  while (close_tracker.HasNext()) {
+    WebContents* closing_contents = close_tracker.Next();
     int index = GetIndexOfWebContents(closing_contents);
     // Make sure we still contain the tab.
     if (index == kNoTab)
       continue;
 
-    closing_contents->OnCloseStarted();
+    CoreTabHelper* core_tab_helper =
+        CoreTabHelper::FromWebContents(closing_contents);
+    core_tab_helper->OnCloseStarted();
 
     // Update the explicitly closed state. If the unload handlers cancel the
     // close the state is reset in Browser. We don't update the explicitly
@@ -1103,10 +1173,14 @@ void TabStripModel::NotifyIfActiveTabChanged(WebContents* old_contents,
                                              NotifyTypes notify_types) {
   WebContents* new_contents = GetWebContentsAtImpl(active_index());
   if (old_contents != new_contents) {
+    int reason = notify_types == NOTIFY_USER_GESTURE
+                 ? TabStripModelObserver::CHANGE_REASON_USER_GESTURE
+                 : TabStripModelObserver::CHANGE_REASON_NONE;
     FOR_EACH_OBSERVER(TabStripModelObserver, observers_,
-                      ActiveTabChanged(old_contents, new_contents,
-                                       active_index(),
-                                       notify_types == NOTIFY_USER_GESTURE));
+        ActiveTabChanged(old_contents,
+                         new_contents,
+                         active_index(),
+                         reason));
     // Activating a discarded tab reloads it, so it is no longer discarded.
     contents_data_[active_index()]->discarded = false;
   }

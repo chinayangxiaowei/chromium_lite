@@ -7,16 +7,16 @@
 
 #include <string>
 
+#include "base/logging.h"
 #include "base/memory/aligned_memory.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
+#include "media/base/decrypt_config.h"
 #include "media/base/media_export.h"
 
 namespace media {
-
-class DecryptConfig;
 
 // A specialized buffer for interfacing with audio / video decoders.
 //
@@ -26,7 +26,7 @@ class DecryptConfig;
 //
 // Also includes decoder specific functionality for decryption.
 //
-// NOTE: It is illegal to call any method when IsEndOfStream() is true.
+// NOTE: It is illegal to call any method when end_of_stream() is true.
 class MEDIA_EXPORT DecoderBuffer
     : public base::RefCountedThreadSafe<DecoderBuffer> {
  public:
@@ -47,28 +47,78 @@ class MEDIA_EXPORT DecoderBuffer
   // padded and aligned as necessary.  |data| must not be NULL and |size| >= 0.
   static scoped_refptr<DecoderBuffer> CopyFrom(const uint8* data, int size);
 
+  // Create a DecoderBuffer whose |data_| is copied from |data| and |side_data_|
+  // is copied from |side_data|. Buffers will be padded and aligned as necessary
+  // Data pointers must not be NULL and sizes must be >= 0.
+  static scoped_refptr<DecoderBuffer> CopyFrom(const uint8* data, int size,
+                                               const uint8* side_data,
+                                               int side_data_size);
+
   // Create a DecoderBuffer indicating we've reached end of stream.
   //
-  // Calling any method other than IsEndOfStream() on the resulting buffer
+  // Calling any method other than end_of_stream() on the resulting buffer
   // is disallowed.
   static scoped_refptr<DecoderBuffer> CreateEOSBuffer();
 
-  base::TimeDelta GetTimestamp() const;
-  void SetTimestamp(const base::TimeDelta& timestamp);
+  base::TimeDelta timestamp() const {
+    DCHECK(!end_of_stream());
+    return timestamp_;
+  }
 
-  base::TimeDelta GetDuration() const;
-  void SetDuration(const base::TimeDelta& duration);
+  void set_timestamp(const base::TimeDelta& timestamp) {
+    DCHECK(!end_of_stream());
+    timestamp_ = timestamp;
+  }
 
-  const uint8* GetData() const;
-  uint8* GetWritableData() const;
+  base::TimeDelta duration() const {
+    DCHECK(!end_of_stream());
+    return duration_;
+  }
 
-  int GetDataSize() const;
+  void set_duration(const base::TimeDelta& duration) {
+    DCHECK(!end_of_stream());
+    duration_ = duration;
+  }
 
-  const DecryptConfig* GetDecryptConfig() const;
-  void SetDecryptConfig(scoped_ptr<DecryptConfig> decrypt_config);
+  const uint8* data() const {
+    DCHECK(!end_of_stream());
+    return data_.get();
+  }
+
+  uint8* writable_data() const {
+    DCHECK(!end_of_stream());
+    return data_.get();
+  }
+
+  int data_size() const {
+    DCHECK(!end_of_stream());
+    return size_;
+  }
+
+  const uint8* side_data() const {
+    DCHECK(!end_of_stream());
+    return side_data_.get();
+  }
+
+  int side_data_size() const {
+    DCHECK(!end_of_stream());
+    return side_data_size_;
+  }
+
+  const DecryptConfig* decrypt_config() const {
+    DCHECK(!end_of_stream());
+    return decrypt_config_.get();
+  }
+
+  void set_decrypt_config(scoped_ptr<DecryptConfig> decrypt_config) {
+    DCHECK(!end_of_stream());
+    decrypt_config_ = decrypt_config.Pass();
+  }
 
   // If there's no data in this buffer, it represents end of stream.
-  bool IsEndOfStream() const;
+  bool end_of_stream() const {
+    return data_ == NULL;
+  }
 
   // Returns a human-readable string describing |*this|.
   std::string AsHumanReadableString();
@@ -79,7 +129,8 @@ class MEDIA_EXPORT DecoderBuffer
   // Allocates a buffer of size |size| >= 0 and copies |data| into it.  Buffer
   // will be padded and aligned as necessary.  If |data| is NULL then |data_| is
   // set to NULL and |buffer_size_| to 0.
-  DecoderBuffer(const uint8* data, int size);
+  DecoderBuffer(const uint8* data, int size,
+                const uint8* side_data, int side_data_size);
   virtual ~DecoderBuffer();
 
  private:
@@ -88,6 +139,8 @@ class MEDIA_EXPORT DecoderBuffer
 
   int size_;
   scoped_ptr<uint8, base::ScopedPtrAlignedFree> data_;
+  int side_data_size_;
+  scoped_ptr<uint8, base::ScopedPtrAlignedFree> side_data_;
   scoped_ptr<DecryptConfig> decrypt_config_;
 
   // Constructor helper method for memory allocations.

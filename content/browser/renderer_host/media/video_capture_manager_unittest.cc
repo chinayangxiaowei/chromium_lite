@@ -9,8 +9,7 @@
 #include "base/bind.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
-#include "base/process_util.h"
+#include "base/message_loop/message_loop.h"
 #include "content/browser/browser_thread_impl.h"
 #include "content/browser/renderer_host/media/media_stream_provider.h"
 #include "content/browser/renderer_host/media/video_capture_manager.h"
@@ -70,12 +69,12 @@ class VideoCaptureManagerTest : public testing::Test {
  protected:
   virtual void SetUp() OVERRIDE {
     listener_.reset(new MockMediaStreamProviderListener());
-    message_loop_.reset(new MessageLoop(MessageLoop::TYPE_IO));
+    message_loop_.reset(new base::MessageLoop(base::MessageLoop::TYPE_IO));
     io_thread_.reset(new BrowserThreadImpl(BrowserThread::IO,
                                            message_loop_.get()));
     vcm_ = new VideoCaptureManager();
     vcm_->UseFakeDevice();
-    vcm_->Register(listener_.get(), message_loop_->message_loop_proxy());
+    vcm_->Register(listener_.get(), message_loop_->message_loop_proxy().get());
     frame_observer_.reset(new MockFrameObserver());
   }
 
@@ -83,7 +82,7 @@ class VideoCaptureManagerTest : public testing::Test {
 
   scoped_refptr<VideoCaptureManager> vcm_;
   scoped_ptr<MockMediaStreamProviderListener> listener_;
-  scoped_ptr<MessageLoop> message_loop_;
+  scoped_ptr<base::MessageLoop> message_loop_;
   scoped_ptr<BrowserThreadImpl> io_thread_;
   scoped_ptr<MockFrameObserver> frame_observer_;
 

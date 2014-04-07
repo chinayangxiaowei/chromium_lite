@@ -6,7 +6,7 @@
 #define UI_AURA_ENV_H_
 
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/observer_list.h"
 #include "ui/aura/aura_export.h"
 #include "ui/base/events/event_handler.h"
@@ -24,7 +24,7 @@ class Window;
 
 #if !defined(USE_X11)
 // Creates a platform-specific native event dispatcher.
-MessageLoop::Dispatcher* CreateDispatcher();
+base::MessageLoop::Dispatcher* CreateDispatcher();
 #endif
 
 // A singleton object that tracks general state within Aura.
@@ -56,18 +56,12 @@ class AURA_EXPORT Env : public ui::EventTarget {
   bool is_touch_down() const { return is_touch_down_; }
   void set_touch_down(bool value) { is_touch_down_ = value; }
 
-  // Whether RenderWidgetHostViewAura::OnPaint() should paint white background
-  // when backing store is not present. Default is true.
-  // In some cases when page is using transparent background painting white
-  // background before backing store is initialized causes a white splash.
-  bool render_white_bg() const { return render_white_bg_; }
-  void set_render_white_bg(bool value) { render_white_bg_ = value; }
 
   // Returns the native event dispatcher. The result should only be passed to
   // base::RunLoop(dispatcher), or used to dispatch an event by
   // |Dispatch(const NativeEvent&)| on it. It must never be stored.
 #if !defined(OS_MACOSX)
-  MessageLoop::Dispatcher* GetDispatcher();
+  base::MessageLoop::Dispatcher* GetDispatcher();
 #endif
 
   // Invoked by RootWindow when its host is activated.
@@ -91,7 +85,7 @@ class AURA_EXPORT Env : public ui::EventTarget {
 
   ObserverList<EnvObserver> observers_;
 #if !defined(USE_X11)
-  scoped_ptr<MessageLoop::Dispatcher> dispatcher_;
+  scoped_ptr<base::MessageLoop::Dispatcher> dispatcher_;
 #endif
 
   static Env* instance_;
@@ -99,7 +93,6 @@ class AURA_EXPORT Env : public ui::EventTarget {
   // Location of last mouse event, in screen coordinates.
   gfx::Point last_mouse_location_;
   bool is_touch_down_;
-  bool render_white_bg_;
 
 #if defined(USE_X11)
   DeviceListUpdaterAuraX11 device_list_updater_aurax11_;

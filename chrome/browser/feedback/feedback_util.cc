@@ -10,13 +10,15 @@
 
 #include "base/bind.h"
 #include "base/command_line.h"
+#include "base/file_util.h"
 #include "base/file_version_info.h"
 #include "base/memory/singleton.h"
-#include "base/message_loop.h"
-#include "base/stringprintf.h"
-#include "base/utf_string_conversions.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/win/windows_version.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/metrics/variations/variations_http_header_provider.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/safe_browsing/safe_browsing_util.h"
 #include "chrome/browser/ui/browser_list.h"
@@ -27,18 +29,25 @@
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_client.h"
-#include "googleurl/src/gurl.h"
 #include "grit/generated_resources.h"
 #include "grit/locale_settings.h"
 #include "grit/theme_resources.h"
 #include "net/base/load_flags.h"
+#include "net/http/http_request_headers.h"
 #include "net/url_request/url_fetcher.h"
 #include "net/url_request/url_fetcher_delegate.h"
 #include "net/url_request/url_request_status.h"
-#include "third_party/icu/public/common/unicode/locid.h"
+#include "third_party/icu/source/common/unicode/locid.h"
+#include "third_party/zlib/google/zip.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "url/gurl.h"
 
 using content::WebContents;
+
+namespace {
+const base::FilePath::CharType kLogsFilename[] =
+    FILE_PATH_LITERAL("system_logs.txt");
+}
 
 namespace chrome {
 const char kAppLauncherCategoryTag[] = "AppLauncher";
@@ -174,7 +183,7 @@ void FeedbackUtil::DispatchFeedback(Profile* profile,
                                     int64 delay) {
   DCHECK(post_body);
 
-  MessageLoop::current()->PostDelayedTask(
+  base::MessageLoop::current()->PostDelayedTask(
       FROM_HERE,
       base::Bind(&FeedbackUtil::SendFeedback, profile, post_body, delay),
       base::TimeDelta::FromMilliseconds(delay));
@@ -200,6 +209,12 @@ void FeedbackUtil::SendFeedback(Profile* profile,
   fetcher->SetRequestContext(profile->GetRequestContext());
   fetcher->SetLoadFlags(
       net::LOAD_DO_NOT_SAVE_COOKIES | net::LOAD_DO_NOT_SEND_COOKIES);
+
+  net::HttpRequestHeaders headers;
+  chrome_variations::VariationsHttpHeaderProvider::GetInstance()->AppendHeaders(
+      fetcher->GetOriginalURL(), profile->IsOffTheRecord(), false, &headers);
+  fetcher->SetExtraRequestHeaders(headers.ToString());
+
   fetcher->SetUploadData(std::string(kProtBufMimeType), *post_body);
   fetcher->Start();
 }
@@ -232,7 +247,7 @@ bool FeedbackUtil::ValidFeedbackSize(const std::string& content) {
 
 // static
 void FeedbackUtil::SendReport(scoped_refptr<FeedbackData> data) {
-  if (!data) {
+  if (!data.get()) {
     LOG(ERROR) << "FeedbackUtil::SendReport called with NULL data!";
     NOTREACHED();
     return;
@@ -283,7 +298,7 @@ void FeedbackUtil::SendReport(scoped_refptr<FeedbackData> data) {
   // CHROMEOS_RELEASE_VERSION from /etc/lsb-release
 #if !defined(OS_CHROMEOS)
   // Add OS version (eg, for WinXP SP2: "5.1.2600 Service Pack 2").
-  std::string os_version = "";
+  std::string os_version;
   SetOSVersion(&os_version);
   AddFeedbackData(&feedback_data, std::string(kOsVersionTag), os_version);
 #endif
@@ -415,4 +430,29 @@ gfx::Rect& FeedbackUtil::GetScreenshotSize() {
 void FeedbackUtil::SetScreenshotSize(const gfx::Rect& rect) {
   gfx::Rect& screen_size = GetScreenshotSize();
   screen_size = rect;
+}
+
+// static
+bool FeedbackUtil::ZipString(const std::string& logs,
+                             std::string* compressed_logs) {
+  base::FilePath temp_path;
+  base::FilePath zip_file;
+
+  // Create a temporary directory, put the logs into a file in it. Create
+  // another temporary file to receive the zip file in.
+  if (!file_util::CreateNewTempDirectory(FILE_PATH_LITERAL(""), &temp_path))
+    return false;
+  if (file_util::WriteFile(temp_path.Append(kLogsFilename),
+                           logs.c_str(), logs.size()) == -1)
+    return false;
+  if (!file_util::CreateTemporaryFile(&zip_file))
+    return false;
+
+  if (!zip::Zip(temp_path, zip_file, false))
+    return false;
+
+  if (!file_util::ReadFileToString(zip_file, compressed_logs))
+    return false;
+
+  return true;
 }

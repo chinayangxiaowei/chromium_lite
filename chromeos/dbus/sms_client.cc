@@ -10,9 +10,9 @@
 #include "base/command_line.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/message_loop.h"
-#include "base/stringprintf.h"
+#include "base/message_loop/message_loop.h"
 #include "base/stl_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/values.h"
 #include "chromeos/chromeos_switches.h"
 #include "dbus/bus.h"
@@ -101,7 +101,7 @@ class SMSClientStubImpl : public SMSClient {
     // Run callback asynchronously.
     if (callback.is_null())
       return;
-    MessageLoop::current()->PostTask(
+    base::MessageLoop::current()->PostTask(
         FROM_HERE,
         base::Bind(&SMSClientStubImpl::OnGetAll,
                    weak_ptr_factory_.GetWeakPtr(),

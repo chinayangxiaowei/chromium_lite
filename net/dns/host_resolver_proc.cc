@@ -75,18 +75,18 @@ int HostResolverProc::ResolveUsingPrevious(
     HostResolverFlags host_resolver_flags,
     AddressList* addrlist,
     int* os_error) {
-  if (previous_proc_) {
-    return previous_proc_->Resolve(host, address_family, host_resolver_flags,
-                                   addrlist, os_error);
+  if (previous_proc_.get()) {
+    return previous_proc_->Resolve(
+        host, address_family, host_resolver_flags, addrlist, os_error);
   }
 
   // Final fallback is the system resolver.
-  return SystemHostResolverProc(host, address_family, host_resolver_flags,
+  return SystemHostResolverCall(host, address_family, host_resolver_flags,
                                 addrlist, os_error);
 }
 
 void HostResolverProc::SetPreviousProc(HostResolverProc* proc) {
-  HostResolverProc* current_previous = previous_proc_;
+  HostResolverProc* current_previous = previous_proc_.get();
   previous_proc_ = NULL;
   // Now that we've guaranteed |this| is the last proc in a chain, we can
   // detect potential cycles using GetLastProc().
@@ -102,8 +102,8 @@ HostResolverProc* HostResolverProc::GetLastProc(HostResolverProc* proc) {
   if (proc == NULL)
     return NULL;
   HostResolverProc* last_proc = proc;
-  while (last_proc->previous_proc_ != NULL)
-    last_proc = last_proc->previous_proc_;
+  while (last_proc->previous_proc_.get() != NULL)
+    last_proc = last_proc->previous_proc_.get();
   return last_proc;
 }
 
@@ -119,7 +119,7 @@ HostResolverProc* HostResolverProc::GetDefault() {
   return default_proc_;
 }
 
-int SystemHostResolverProc(const std::string& host,
+int SystemHostResolverCall(const std::string& host,
                            AddressFamily address_family,
                            HostResolverFlags host_resolver_flags,
                            AddressList* addrlist,
@@ -247,5 +247,21 @@ int SystemHostResolverProc(const std::string& host,
   freeaddrinfo(ai);
   return OK;
 }
+
+SystemHostResolverProc::SystemHostResolverProc() : HostResolverProc(NULL) {}
+
+int SystemHostResolverProc::Resolve(const std::string& hostname,
+                                    AddressFamily address_family,
+                                    HostResolverFlags host_resolver_flags,
+                                    AddressList* addr_list,
+                                    int* os_error) {
+  return SystemHostResolverCall(hostname,
+                                address_family,
+                                host_resolver_flags,
+                                addr_list,
+                                os_error);
+}
+
+SystemHostResolverProc::~SystemHostResolverProc() {}
 
 }  // namespace net

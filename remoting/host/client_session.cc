@@ -6,8 +6,8 @@
 
 #include <algorithm>
 
-#include "base/message_loop_proxy.h"
-#include "media/video/capture/screen/screen_capturer.h"
+#include "base/message_loop/message_loop_proxy.h"
+#include "remoting/base/capabilities.h"
 #include "remoting/codec/audio_encoder.h"
 #include "remoting/codec/audio_encoder_opus.h"
 #include "remoting/codec/audio_encoder_speex.h"
@@ -26,6 +26,8 @@
 #include "remoting/proto/event.pb.h"
 #include "remoting/protocol/client_stub.h"
 #include "remoting/protocol/clipboard_thread_proxy.h"
+#include "remoting/protocol/pairing_registry.h"
+#include "third_party/webrtc/modules/desktop_capture/screen_capturer.h"
 
 // Default DPI to assume for old clients that use notifyClientDimensions.
 const int kDefaultDPI = 96;
@@ -42,11 +44,12 @@ ClientSession::ClientSession(
     scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner,
     scoped_ptr<protocol::ConnectionToClient> connection,
     DesktopEnvironmentFactory* desktop_environment_factory,
-    const base::TimeDelta& max_duration)
+    const base::TimeDelta& max_duration,
+    scoped_refptr<protocol::PairingRegistry> pairing_registry)
     : event_handler_(event_handler),
       connection_(connection.Pass()),
       client_jid_(connection_->session()->jid()),
-      control_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)),
+      control_factory_(this),
       desktop_environment_factory_(desktop_environment_factory),
       input_tracker_(&host_input_filter_),
       remote_input_filter_(&input_tracker_),
@@ -62,7 +65,8 @@ ClientSession::ClientSession(
       video_capture_task_runner_(video_capture_task_runner),
       video_encode_task_runner_(video_encode_task_runner),
       network_task_runner_(network_task_runner),
-      ui_task_runner_(ui_task_runner) {
+      ui_task_runner_(ui_task_runner),
+      pairing_registry_(pairing_registry) {
   connection_->SetEventHandler(this);
 
   // TODO(sergeyu): Currently ConnectionToClient expects stubs to be
@@ -85,19 +89,26 @@ ClientSession::ClientSession(
 
 ClientSession::~ClientSession() {
   DCHECK(CalledOnValidThread());
-  DCHECK(!audio_scheduler_);
+  DCHECK(!audio_scheduler_.get());
   DCHECK(!desktop_environment_);
   DCHECK(!input_injector_);
   DCHECK(!screen_controls_);
-  DCHECK(!video_scheduler_);
+  DCHECK(!video_scheduler_.get());
 
   connection_.reset();
 }
 
 void ClientSession::NotifyClientResolution(
     const protocol::ClientResolution& resolution) {
-  if (!resolution.has_dips_width() || !resolution.has_dips_height())
+  DCHECK(CalledOnValidThread());
+
+  // TODO(sergeyu): Move these checks to protocol layer.
+  if (!resolution.has_dips_width() || !resolution.has_dips_height() ||
+      resolution.dips_width() < 0 || resolution.dips_height() < 0 ||
+      resolution.width() <= 0 || resolution.height() <= 0) {
+    LOG(ERROR) << "Received invalid ClientResolution message.";
     return;
+  }
 
   VLOG(1) << "Received ClientResolution (dips_width="
           << resolution.dips_width() << ", dips_height="
@@ -107,36 +118,91 @@ void ClientSession::NotifyClientResolution(
     return;
 
   ScreenResolution client_resolution(
-      SkISize::Make(resolution.dips_width(), resolution.dips_height()),
-      SkIPoint::Make(kDefaultDPI, kDefaultDPI));
+      webrtc::DesktopSize(resolution.dips_width(), resolution.dips_height()),
+      webrtc::DesktopVector(kDefaultDPI, kDefaultDPI));
 
   // Try to match the client's resolution.
-  if (client_resolution.IsValid())
-    screen_controls_->SetScreenResolution(client_resolution);
+  screen_controls_->SetScreenResolution(client_resolution);
 }
 
 void ClientSession::ControlVideo(const protocol::VideoControl& video_control) {
+  DCHECK(CalledOnValidThread());
+
   if (video_control.has_enable()) {
     VLOG(1) << "Received VideoControl (enable="
             << video_control.enable() << ")";
-    if (video_scheduler_)
-      video_scheduler_->Pause(!video_control.enable());
+    video_scheduler_->Pause(!video_control.enable());
   }
 }
 
 void ClientSession::ControlAudio(const protocol::AudioControl& audio_control) {
+  DCHECK(CalledOnValidThread());
+
   if (audio_control.has_enable()) {
     VLOG(1) << "Received AudioControl (enable="
             << audio_control.enable() << ")";
-    if (audio_scheduler_)
+    if (audio_scheduler_.get())
       audio_scheduler_->Pause(!audio_control.enable());
   }
+}
+
+void ClientSession::SetCapabilities(
+    const protocol::Capabilities& capabilities) {
+  DCHECK(CalledOnValidThread());
+
+  // The client should not send protocol::Capabilities if it is not supported by
+  // the config channel.
+  if (!connection_->session()->config().SupportsCapabilities()) {
+    LOG(ERROR) << "Unexpected protocol::Capabilities has been received.";
+    return;
+  }
+
+  // Ignore all the messages but the 1st one.
+  if (client_capabilities_) {
+    LOG(WARNING) << "protocol::Capabilities has been received already.";
+    return;
+  }
+
+  client_capabilities_ = make_scoped_ptr(new std::string());
+  if (capabilities.has_capabilities())
+    *client_capabilities_ = capabilities.capabilities();
+
+  VLOG(1) << "Client capabilities: " << *client_capabilities_;
+
+  // Calculate the set of capabilities enabled by both client and host and
+  // pass it to the desktop environment if it is available.
+  desktop_environment_->SetCapabilities(
+      IntersectCapabilities(*client_capabilities_, host_capabilities_));
+}
+
+void ClientSession::RequestPairing(
+    const protocol::PairingRequest& pairing_request) {
+  if (pairing_registry_ && pairing_request.has_client_name()) {
+    protocol::PairingRegistry::Pairing pairing =
+        pairing_registry_->CreatePairing(pairing_request.client_name());
+    protocol::PairingResponse pairing_response;
+    pairing_response.set_client_id(pairing.client_id());
+    pairing_response.set_shared_secret(pairing.shared_secret());
+    connection_->client_stub()->SetPairingResponse(pairing_response);
+  }
+}
+
+void ClientSession::DeliverClientMessage(
+    const protocol::ExtensionMessage& message) {
+  // No messages are currently supported.
+  LOG(INFO) << "Unexpected message received: "
+            << message.type() << ": " << message.data();
 }
 
 void ClientSession::OnConnectionAuthenticated(
     protocol::ConnectionToClient* connection) {
   DCHECK(CalledOnValidThread());
   DCHECK_EQ(connection_.get(), connection);
+  DCHECK(!audio_scheduler_.get());
+  DCHECK(!desktop_environment_);
+  DCHECK(!input_injector_);
+  DCHECK(!screen_controls_);
+  DCHECK(!video_scheduler_.get());
 
   auth_input_filter_.set_enabled(true);
   auth_clipboard_filter_.set_enabled(true);
@@ -151,41 +217,48 @@ void ClientSession::OnConnectionAuthenticated(
                               this, &ClientSession::DisconnectSession);
   }
 
-  event_handler_->OnSessionAuthenticated(this);
-}
+  // Disconnect the session if the connection was rejected by the host.
+  if (!event_handler_->OnSessionAuthenticated(this)) {
+    DisconnectSession();
+    return;
+  }
 
-void ClientSession::OnConnectionChannelsConnected(
-    protocol::ConnectionToClient* connection) {
-  DCHECK(CalledOnValidThread());
-  DCHECK_EQ(connection_.get(), connection);
-  DCHECK(!audio_scheduler_);
-  DCHECK(!desktop_environment_);
-  DCHECK(!input_injector_);
-  DCHECK(!screen_controls_);
-  DCHECK(!video_scheduler_);
-
+  // Create the desktop environment. Drop the connection if it could not be
+  // created for any reason (for instance the curtain could not initialize).
   desktop_environment_ =
       desktop_environment_factory_->Create(control_factory_.GetWeakPtr());
+  if (!desktop_environment_) {
+    DisconnectSession();
+    return;
+  }
+
+  host_capabilities_ = desktop_environment_->GetCapabilities();
+
+  // Ignore protocol::Capabilities messages from the client if it does not
+  // support any capabilities.
+  if (!connection_->session()->config().SupportsCapabilities()) {
+    VLOG(1) << "The client does not support any capabilities.";
+
+    client_capabilities_ = make_scoped_ptr(new std::string());
+    desktop_environment_->SetCapabilities(*client_capabilities_);
+  }
 
   // Create the object that controls the screen resolution.
   screen_controls_ = desktop_environment_->CreateScreenControls();
 
-  // Create and start the event executor.
+  // Create the event executor.
   input_injector_ = desktop_environment_->CreateInputInjector();
-  input_injector_->Start(CreateClipboardProxy());
 
   // Connect the host clipboard and input stubs.
   host_input_filter_.set_input_stub(input_injector_.get());
   clipboard_echo_filter_.set_host_stub(input_injector_.get());
-
-  SetDisableInputs(false);
 
   // Create a VideoEncoder based on the session's video channel configuration.
   scoped_ptr<VideoEncoder> video_encoder =
       CreateVideoEncoder(connection_->session()->config());
 
   // Create a VideoScheduler to pump frames from the capturer to the client.
-  video_scheduler_ = VideoScheduler::Create(
+  video_scheduler_ = new VideoScheduler(
       video_capture_task_runner_,
       video_encode_task_runner_,
       network_task_runner_,
@@ -198,13 +271,39 @@ void ClientSession::OnConnectionChannelsConnected(
   if (connection_->session()->config().is_audio_enabled()) {
     scoped_ptr<AudioEncoder> audio_encoder =
         CreateAudioEncoder(connection_->session()->config());
-    audio_scheduler_ = AudioScheduler::Create(
+    audio_scheduler_ = new AudioScheduler(
         audio_task_runner_,
         network_task_runner_,
         desktop_environment_->CreateAudioCapturer(),
         audio_encoder.Pass(),
         connection_->audio_stub());
   }
+}
+
+void ClientSession::OnConnectionChannelsConnected(
+    protocol::ConnectionToClient* connection) {
+  DCHECK(CalledOnValidThread());
+  DCHECK_EQ(connection_.get(), connection);
+
+  // Negotiate capabilities with the client.
+  if (connection_->session()->config().SupportsCapabilities()) {
+    VLOG(1) << "Host capabilities: " << host_capabilities_;
+
+    protocol::Capabilities capabilities;
+    capabilities.set_capabilities(host_capabilities_);
+    connection_->client_stub()->SetCapabilities(capabilities);
+  }
+
+  // Start the event executor.
+  input_injector_->Start(CreateClipboardProxy());
+  SetDisableInputs(false);
+
+  // Start capturing the screen.
+  video_scheduler_->Start();
+
+  // Start recording audio.
+  if (connection_->session()->config().is_audio_enabled())
+    audio_scheduler_->Start();
 
   // Notify the event handler that all our channels are now connected.
   event_handler_->OnSessionChannelsConnected(this);
@@ -234,11 +333,11 @@ void ClientSession::OnConnectionClosed(
 
   // Stop components access the client, audio or video stubs, which are no
   // longer valid once ConnectionToClient calls OnConnectionClosed().
-  if (audio_scheduler_) {
+  if (audio_scheduler_.get()) {
     audio_scheduler_->Stop();
     audio_scheduler_ = NULL;
   }
-  if (video_scheduler_) {
+  if (video_scheduler_.get()) {
     video_scheduler_->Stop();
     video_scheduler_ = NULL;
   }
@@ -258,7 +357,7 @@ void ClientSession::OnSequenceNumberUpdated(
   DCHECK(CalledOnValidThread());
   DCHECK_EQ(connection_.get(), connection);
 
-  if (video_scheduler_)
+  if (video_scheduler_.get())
     video_scheduler_->UpdateSequenceNumber(sequence_number);
 
   event_handler_->OnSessionSequenceNumber(this, sequence_number);
@@ -325,7 +424,7 @@ scoped_ptr<VideoEncoder> ClientSession::CreateVideoEncoder(
   }
 
   NOTIMPLEMENTED();
-  return scoped_ptr<VideoEncoder>(NULL);
+  return scoped_ptr<VideoEncoder>();
 }
 
 // static
@@ -342,7 +441,7 @@ scoped_ptr<AudioEncoder> ClientSession::CreateAudioEncoder(
   }
 
   NOTIMPLEMENTED();
-  return scoped_ptr<AudioEncoder>(NULL);
+  return scoped_ptr<AudioEncoder>();
 }
 
 }  // namespace remoting

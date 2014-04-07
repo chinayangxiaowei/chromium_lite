@@ -33,8 +33,8 @@ class ScrollBarButton : public BaseScrollBarButton {
   virtual ~ScrollBarButton();
 
   virtual gfx::Size GetPreferredSize() OVERRIDE;
-  virtual std::string GetClassName() const OVERRIDE {
-    return "views/ScrollBarButton";
+  virtual const char* GetClassName() const OVERRIDE {
+    return "ScrollBarButton";
   }
 
  protected:
@@ -55,8 +55,8 @@ class ScrollBarThumb : public BaseScrollBarThumb {
   virtual ~ScrollBarThumb();
 
   virtual gfx::Size GetPreferredSize() OVERRIDE;
-  virtual std::string GetClassName() const OVERRIDE {
-    return "views/ScrollBarThumb";
+  virtual const char* GetClassName() const OVERRIDE {
+    return "ScrollBarThumb";
   }
 
  protected:
@@ -73,9 +73,7 @@ class ScrollBarThumb : public BaseScrollBarThumb {
 /////////////////////////////////////////////////////////////////////////////
 // ScrollBarButton
 
-ScrollBarButton::ScrollBarButton(
-    ButtonListener* listener,
-    Type type)
+ScrollBarButton::ScrollBarButton(ButtonListener* listener, Type type)
     : BaseScrollBarButton(listener),
       type_(type) {
   set_focusable(false);
@@ -229,8 +227,7 @@ ui::NativeTheme::State ScrollBarThumb::GetNativeThemeState() const {
 ////////////////////////////////////////////////////////////////////////////////
 // NativeScrollBarViews, public:
 
-const char NativeScrollBarViews::kViewClassName[] =
-    "views/NativeScrollBarViews";
+const char NativeScrollBarViews::kViewClassName[] = "NativeScrollBarViews";
 
 NativeScrollBarViews::NativeScrollBarViews(NativeScrollBar* scroll_bar)
     : BaseScrollBar(scroll_bar->IsHorizontal(),
@@ -290,6 +287,7 @@ void NativeScrollBarViews::OnPaint(gfx::Canvas* canvas) {
   params_.scrollbar_track.track_y = bounds.y();
   params_.scrollbar_track.track_width = bounds.width();
   params_.scrollbar_track.track_height = bounds.height();
+  params_.scrollbar_track.classic_state = 0;
 
   GetNativeTheme()->Paint(canvas->sk_canvas(), part_, state_, bounds, params_);
 }
@@ -301,7 +299,7 @@ gfx::Size NativeScrollBarViews::GetPreferredSize() {
   return gfx::Size(GetVerticalScrollBarWidth(theme), 0);
 }
 
-std::string NativeScrollBarViews::GetClassName() const {
+const char* NativeScrollBarViews::GetClassName() const {
   return kViewClassName;
 }
 

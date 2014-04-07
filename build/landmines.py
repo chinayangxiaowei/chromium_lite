@@ -47,7 +47,7 @@ def memoize(default=None):
 
 @memoize()
 def IsWindows():
-  return sys.platform.startswith('win') or sys.platform == 'cygwin'
+  return sys.platform in ['win32', 'cygwin']
 
 
 @memoize()
@@ -57,7 +57,7 @@ def IsLinux():
 
 @memoize()
 def IsMac():
-  return sys.platform.startswith('darwin')
+  return sys.platform == 'darwin'
 
 
 @memoize()
@@ -66,6 +66,9 @@ def gyp_defines():
   return dict(arg.split('=', 1)
       for arg in shlex.split(os.environ.get('GYP_DEFINES', '')))
 
+@memoize()
+def gyp_msvs_version():
+  return os.environ.get('GYP_MSVS_VERSION', '')
 
 @memoize()
 def distributor():
@@ -110,6 +113,8 @@ def builder():
     generator = os.environ['GYP_GENERATORS'].split(',')[0]
     if generator.endswith('-android'):
       return generator.split('-')[0]
+    elif generator.endswith('-ninja'):
+      return 'ninja'
     else:
       return generator
   else:
@@ -121,7 +126,7 @@ def builder():
     elif IsWindows():
       return 'msvs'
     elif IsLinux():
-      return 'make'
+      return 'ninja'
     elif IsMac():
       return 'xcode'
     else:
@@ -140,11 +145,19 @@ def get_landmines(target):
       builder() == 'ninja'):
     add('Need to clobber winja goma due to backend cwd cache fix.')
   if platform() == 'android':
-    add('Clobber: java files renamed in crrev.com/12880022')
+    add('Clobber: Resources removed in r195014 require clobber.')
   if platform() == 'win' and builder() == 'ninja':
     add('Compile on cc_unittests fails due to symbols removed in r185063.')
   if platform() == 'linux' and builder() == 'ninja':
     add('Builders switching from make to ninja will clobber on this.')
+  if platform() == 'mac':
+    add('Switching from bundle to unbundled dylib (issue 14743002).')
+  if (platform() == 'win' and builder() == 'ninja' and
+      gyp_msvs_version() == '2012' and
+      gyp_defines().get('target_arch') == 'x64' and
+      gyp_defines().get('dcheck_always_on') == '1'):
+    add("Switched win x64 trybots from VS2010 to VS2012.")
+  add('Need to clobber everything due to an IDL change in r154579 (blink)')
 
   return landmines
 
@@ -163,9 +176,7 @@ def get_target_build_dir(build_tool, target, is_iphone=False):
   if build_tool == 'xcode':
     ret = os.path.join(SRC_DIR, 'xcodebuild',
         target + ('-iphoneos' if is_iphone else ''))
-  elif build_tool == 'make':
-    ret = os.path.join(SRC_DIR, 'out', target)
-  elif build_tool == 'ninja':
+  elif build_tool in ['make', 'ninja', 'ninja-ios']:  # TODO: Remove ninja-ios.
     ret = os.path.join(SRC_DIR, 'out', target)
   elif build_tool in ['msvs', 'vs', 'ib']:
     ret = os.path.join(SRC_DIR, 'build', target)
@@ -223,7 +234,7 @@ def main():
 
   gyp_helper.apply_chromium_gyp_env()
 
-  for target in ('Debug', 'Release'):
+  for target in ('Debug', 'Release', 'Debug_x64', 'Release_x64'):
     set_up_landmines(target)
 
   return 0

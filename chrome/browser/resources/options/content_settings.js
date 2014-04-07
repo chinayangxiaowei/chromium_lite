@@ -29,8 +29,6 @@ cr.define('options', function() {
     initializePage: function() {
       OptionsPage.prototype.initializePage.call(this);
 
-      chrome.send('getContentFilterSettings');
-
       var exceptionsButtons =
           this.pageDiv.querySelectorAll('.exceptions-list-button');
       for (var i = 0; i < exceptionsButtons.length; i++) {
@@ -41,13 +39,13 @@ cr.define('options', function() {
           // history so back/forward and tab restore works.
           var hash = event.currentTarget.getAttribute('contentType');
           var url = page.name + '#' + hash;
-          window.history.replaceState({pageName: page.name},
-                                      page.title,
-                                      '/' + url);
+          window.history.pushState({pageName: page.name},
+                                    page.title,
+                                    '/' + url);
 
           // Navigate after the history has been replaced in order to have the
           // correct hash loaded.
-          OptionsPage.navigateToPage('contentExceptions');
+          OptionsPage.showPageByName('contentExceptions', false);
 
           uber.invokeMethodOnParent('setPath', {path: url});
           uber.invokeMethodOnParent('setTitle',
@@ -233,6 +231,14 @@ cr.define('options', function() {
    */
   ContentSettings.showMediaPepperFlashExceptionsLink = function(show) {
     $('media-pepper-flash-exceptions').hidden = !show;
+  }
+
+  /**
+   * Shows/hides the whole Web MIDI settings.
+   * @param {bool} show Wether to show the whole Web MIDI settings.
+   */
+  ContentSettings.showExperimentalWebMIDISettings = function(show) {
+    $('experimental-web-midi-settings').hidden = !show;
   }
 
   /**

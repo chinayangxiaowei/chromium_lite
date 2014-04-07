@@ -10,97 +10,12 @@
 #include "base/command_line.h"
 #include "base/logging.h"
 #include "base/memory/singleton.h"
-#include "base/string_util.h"
-#include "chrome/browser/net/url_fixer_upper.h"
+#include "base/strings/string_util.h"
+#include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/ui/browser_dialogs.h"
 #include "chrome/common/chrome_switches.h"
+#include "chrome/common/net/url_fixer_upper.h"
 #include "chrome/common/url_constants.h"
-
-namespace {
-
-// Add paths here to be included in chrome://chrome-urls (about:about).
-// These paths will also be suggested by BuiltinProvider.
-const char* const kPaths[] = {
-  chrome::kChromeUIAccessibilityHost,
-  chrome::kChromeUIAppCacheInternalsHost,
-  chrome::kChromeUIBlobInternalsHost,
-  chrome::kChromeUICacheHost,
-  chrome::kChromeUIChromeURLsHost,
-  chrome::kChromeUICrashesHost,
-  chrome::kChromeUICreditsHost,
-  chrome::kChromeUIDNSHost,
-  chrome::kChromeUIFlagsHost,
-  chrome::kChromeUIGpuHost,
-  chrome::kChromeUIHistoryHost,
-  chrome::kChromeUIIPCHost,
-  chrome::kChromeUIMediaInternalsHost,
-  chrome::kChromeUIMemoryHost,
-#if defined(OS_ANDROID) || defined(OS_IOS)
-  chrome::kChromeUINetExportHost,
-#endif
-  chrome::kChromeUINetInternalsHost,
-  chrome::kChromeUINetworkViewCacheHost,
-  chrome::kChromeUINewTabHost,
-  chrome::kChromeUIOmniboxHost,
-  chrome::kChromeUIPredictorsHost,
-  chrome::kChromeUIProfilerHost,
-  chrome::kChromeUIQuotaInternalsHost,
-  chrome::kChromeUISignInInternalsHost,
-  chrome::kChromeUIStatsHost,
-  chrome::kChromeUISyncInternalsHost,
-  chrome::kChromeUITermsHost,
-  chrome::kChromeUIUserActionsHost,
-  chrome::kChromeUIVersionHost,
-#if defined(OS_ANDROID)
-  chrome::kChromeUIWelcomeHost,
-#else
-  chrome::kChromeUIBookmarksHost,
-  chrome::kChromeUIDownloadsHost,
-  chrome::kChromeUIFlashHost,
-  chrome::kChromeUIInspectHost,
-  chrome::kChromeUIPluginsHost,
-  chrome::kChromeUISettingsHost,
-  chrome::kChromeUITracingHost,
-  chrome::kChromeUIWebRTCInternalsHost,
-#endif
-#if defined(OS_WIN)
-  chrome::kChromeUIConflictsHost,
-#endif
-#if defined(OS_LINUX) || defined(OS_OPENBSD)
-  chrome::kChromeUILinuxProxyConfigHost,
-  chrome::kChromeUISandboxHost,
-#endif
-#if defined(OS_CHROMEOS)
-  chrome::kChromeUIChooseMobileNetworkHost,
-  chrome::kChromeUICryptohomeHost,
-  chrome::kChromeUIDiagnosticsHost,
-  chrome::kChromeUIDiscardsHost,
-  chrome::kChromeUIDriveInternalsHost,
-  chrome::kChromeUIImageBurnerHost,
-  chrome::kChromeUIKeyboardOverlayHost,
-  chrome::kChromeUILoginHost,
-  chrome::kChromeUINetworkHost,
-  chrome::kChromeUIOobeHost,
-  chrome::kChromeUIOSCreditsHost,
-  chrome::kChromeUIProxySettingsHost,
-  chrome::kChromeUISystemInfoHost,
-  chrome::kChromeUITaskManagerHost,
-#endif
-#if !defined(DISABLE_NACL)
-  chrome::kChromeUINaClHost,
-#endif
-#if defined(ENABLE_CONFIGURATION_POLICY)
-  chrome::kChromeUIPolicyHost,
-#endif
-#if defined(ENABLE_EXTENSIONS)
-  chrome::kChromeUIExtensionsHost,
-#endif
-#if defined(ENABLE_PRINTING)
-  chrome::kChromeUIPrintHost,
-#endif
-};
-
-}  // namespace
 
 bool WillHandleBrowserAboutURL(GURL* url,
                                content::BrowserContext* browser_context) {
@@ -109,7 +24,7 @@ bool WillHandleBrowserAboutURL(GURL* url,
   *url = URLFixerUpper::FixupURL(url->possibly_invalid_spec(), std::string());
 
   // Check that about: URLs are fixed up to chrome: by URLFixerUpper::FixupURL.
-  DCHECK((*url == GURL(chrome::kAboutBlankURL)) ||
+  DCHECK((*url == GURL(content::kAboutBlankURL)) ||
          !url->SchemeIs(chrome::kAboutScheme));
 
   // Only handle chrome://foo/, URLFixerUpper::FixupURL translates about:foo.
@@ -123,7 +38,7 @@ bool WillHandleBrowserAboutURL(GURL* url,
     host = chrome::kChromeUIChromeURLsHost;
   // Replace cache with view-http-cache.
   if (host == chrome::kChromeUICacheHost) {
-    host = chrome::kChromeUINetworkViewCacheHost;
+    host = content::kChromeUINetworkViewCacheHost;
   // Replace sync with sync-internals (for legacy reasons).
   } else if (host == chrome::kChromeUISyncHost) {
     host = chrome::kChromeUISyncInternalsHost;
@@ -131,8 +46,7 @@ bool WillHandleBrowserAboutURL(GURL* url,
   } else if (host == chrome::kChromeUIExtensionsHost) {
     host = chrome::kChromeUIUberHost;
     path = chrome::kChromeUIExtensionsHost + url->path();
-  // Redirect chrome://settings/extensions.
-  // TODO(csilv): Remove this URL after M22 (legacy URL).
+  // Redirect chrome://settings/extensions (legacy URL).
   } else if (host == chrome::kChromeUISettingsHost &&
       url->path() == std::string("/") + chrome::kExtensionsSubPage) {
     host = chrome::kChromeUIUberHost;
@@ -155,6 +69,11 @@ bool WillHandleBrowserAboutURL(GURL* url,
   } else if (host == chrome::kChromeUIHelpHost) {
     host = chrome::kChromeUIUberHost;
     path = chrome::kChromeUIHelpHost + url->path();
+  } else if (host == chrome::kChromeUIRestartHost) {
+    // Call AttemptRestart after chrome::Navigate() completes to avoid access of
+    // gtk objects after they are destoyed by BrowserWindowGtk::Close().
+    base::MessageLoop::current()->PostTask(FROM_HERE,
+        base::Bind(&chrome::AttemptRestart));
   }
   GURL::Replacements replacements;
   replacements.SetHostStr(host);
@@ -167,8 +86,6 @@ bool WillHandleBrowserAboutURL(GURL* url,
 }
 
 bool HandleNonNavigationAboutURL(const GURL& url) {
-  std::string host(url.host());
-
   // chrome://ipc/ is currently buggy, so we disable it for official builds.
 #if !defined(OFFICIAL_BUILD)
 
@@ -185,8 +102,3 @@ bool HandleNonNavigationAboutURL(const GURL& url) {
   return false;
 }
 
-std::vector<std::string> ChromePaths() {
-  std::vector<std::string> paths(kPaths, kPaths + arraysize(kPaths));
-  std::sort(paths.begin(), paths.end());
-  return paths;
-}

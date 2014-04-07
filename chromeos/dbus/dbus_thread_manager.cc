@@ -12,11 +12,11 @@
 #include "base/threading/thread.h"
 #include "chromeos/chromeos_switches.h"
 #include "chromeos/dbus/bluetooth_adapter_client.h"
+#include "chromeos/dbus/bluetooth_agent_manager_client.h"
 #include "chromeos/dbus/bluetooth_device_client.h"
 #include "chromeos/dbus/bluetooth_input_client.h"
-#include "chromeos/dbus/bluetooth_manager_client.h"
-#include "chromeos/dbus/bluetooth_node_client.h"
-#include "chromeos/dbus/bluetooth_out_of_band_client.h"
+#include "chromeos/dbus/bluetooth_profile_manager_client.h"
+#include "chromeos/dbus/cras_audio_client.h"
 #include "chromeos/dbus/cros_disks_client.h"
 #include "chromeos/dbus/cryptohome_client.h"
 #include "chromeos/dbus/dbus_client_implementation_type.h"
@@ -67,7 +67,7 @@ class DBusThreadManagerImpl : public DBusThreadManager {
 
     // Create the D-Bus thread.
     base::Thread::Options thread_options;
-    thread_options.message_loop_type = MessageLoop::TYPE_IO;
+    thread_options.message_loop_type = base::MessageLoop::TYPE_IO;
     dbus_thread_.reset(new base::Thread("D-Bus thread"));
     dbus_thread_->StartWithOptions(thread_options);
 
@@ -83,17 +83,17 @@ class DBusThreadManagerImpl : public DBusThreadManager {
   // NOTE: Clients that access other clients in their constructor must be
   // construced in the correct order.
   void InitializeClients() {
-    bluetooth_manager_client_.reset(BluetoothManagerClient::Create(
-        client_type_, system_bus_.get()));
-    bluetooth_adapter_client_.reset(BluetoothAdapterClient::Create(
-        client_type_, system_bus_.get(), bluetooth_manager_client_.get()));
-    bluetooth_device_client_.reset(BluetoothDeviceClient::Create(
-        client_type_, system_bus_.get(), bluetooth_adapter_client_.get()));
-    bluetooth_input_client_.reset(BluetoothInputClient::Create(
-        client_type_, system_bus_.get(), bluetooth_adapter_client_.get()));
-    bluetooth_node_client_.reset(BluetoothNodeClient::Create(
-        client_type_, system_bus_.get(), bluetooth_device_client_.get()));
-    bluetooth_out_of_band_client_.reset(BluetoothOutOfBandClient::Create(
+    bluetooth_adapter_client_.reset(
+        BluetoothAdapterClient::Create(client_type_, system_bus_.get()));
+    bluetooth_agent_manager_client_.reset(
+        BluetoothAgentManagerClient::Create(client_type_, system_bus_.get()));
+    bluetooth_device_client_.reset(
+        BluetoothDeviceClient::Create(client_type_, system_bus_.get()));
+    bluetooth_input_client_.reset(
+        BluetoothInputClient::Create(client_type_, system_bus_.get()));
+    bluetooth_profile_manager_client_.reset(
+        BluetoothProfileManagerClient::Create(client_type_, system_bus_.get()));
+    cras_audio_client_.reset(CrasAudioClient::Create(
         client_type_, system_bus_.get()));
     cros_disks_client_.reset(
         CrosDisksClient::Create(client_type_, system_bus_.get()));
@@ -102,18 +102,27 @@ class DBusThreadManagerImpl : public DBusThreadManager {
     debug_daemon_client_.reset(
         DebugDaemonClient::Create(client_type_, system_bus_.get()));
 
+    // Construction order of the Stub implementations of the Shill clients
+    // matters; stub clients may only have construction dependencies on clients
+    // previously constructed.
     shill_manager_client_.reset(
         ShillManagerClient::Create(client_type_override_, system_bus_.get()));
     shill_device_client_.reset(
         ShillDeviceClient::Create(client_type_override_, system_bus_.get()));
     shill_ipconfig_client_.reset(
         ShillIPConfigClient::Create(client_type_override_, system_bus_.get()));
-    shill_profile_client_.reset(
-        ShillProfileClient::Create(client_type_override_, system_bus_.get()));
     shill_service_client_.reset(
         ShillServiceClient::Create(client_type_override_, system_bus_.get()));
+    shill_profile_client_.reset(
+        ShillProfileClient::Create(client_type_override_, system_bus_.get()));
     gsm_sms_client_.reset(
         GsmSMSClient::Create(client_type_override_, system_bus_.get()));
+
+    // If the Service client has a TestInterface, add the default services.
+    ShillServiceClient::TestInterface* service_client_test =
+        DBusThreadManager::Get()->GetShillServiceClient()->GetTestInterface();
+    if (service_client_test)
+      service_client_test->AddDefaultServices();
 
     image_burner_client_.reset(ImageBurnerClient::Create(client_type_,
                                                          system_bus_.get()));
@@ -181,7 +190,7 @@ class DBusThreadManagerImpl : public DBusThreadManager {
   virtual void InitIBusBus(
       const std::string &ibus_address,
       const base::Closure& on_disconnected_callback) OVERRIDE {
-    DCHECK(!ibus_bus_);
+    DCHECK(!ibus_bus_.get());
     dbus::Bus::Options ibus_bus_options;
     ibus_bus_options.bus_type = dbus::Bus::CUSTOM_ADDRESS;
     ibus_bus_options.address = ibus_address;
@@ -225,6 +234,11 @@ class DBusThreadManagerImpl : public DBusThreadManager {
     return bluetooth_adapter_client_.get();
   }
 
+  virtual BluetoothAgentManagerClient* GetBluetoothAgentManagerClient()
+      OVERRIDE {
+    return bluetooth_agent_manager_client_.get();
+  }
+
   virtual BluetoothDeviceClient* GetBluetoothDeviceClient() OVERRIDE {
     return bluetooth_device_client_.get();
   }
@@ -233,16 +247,13 @@ class DBusThreadManagerImpl : public DBusThreadManager {
     return bluetooth_input_client_.get();
   }
 
-  virtual BluetoothManagerClient* GetBluetoothManagerClient() OVERRIDE {
-    return bluetooth_manager_client_.get();
+  virtual BluetoothProfileManagerClient* GetBluetoothProfileManagerClient()
+      OVERRIDE {
+    return bluetooth_profile_manager_client_.get();
   }
 
-  virtual BluetoothNodeClient* GetBluetoothNodeClient() OVERRIDE {
-    return bluetooth_node_client_.get();
-  }
-
-  virtual BluetoothOutOfBandClient* GetBluetoothOutOfBandClient() OVERRIDE {
-    return bluetooth_out_of_band_client_.get();
+  virtual CrasAudioClient* GetCrasAudioClient() OVERRIDE {
+    return cras_audio_client_.get();
   }
 
   virtual CrosDisksClient* GetCrosDisksClient() OVERRIDE {
@@ -269,12 +280,12 @@ class DBusThreadManagerImpl : public DBusThreadManager {
     return shill_manager_client_.get();
   }
 
-  virtual ShillProfileClient* GetShillProfileClient() OVERRIDE {
-    return shill_profile_client_.get();
-  }
-
   virtual ShillServiceClient* GetShillServiceClient() OVERRIDE {
     return shill_service_client_.get();
+  }
+
+  virtual ShillProfileClient* GetShillProfileClient() OVERRIDE {
+    return shill_profile_client_.get();
   }
 
   virtual GsmSMSClient* GetGsmSMSClient() OVERRIDE {
@@ -377,19 +388,19 @@ class DBusThreadManagerImpl : public DBusThreadManager {
   scoped_refptr<dbus::Bus> system_bus_;
   scoped_refptr<dbus::Bus> ibus_bus_;
   scoped_ptr<BluetoothAdapterClient> bluetooth_adapter_client_;
+  scoped_ptr<BluetoothAgentManagerClient> bluetooth_agent_manager_client_;
   scoped_ptr<BluetoothDeviceClient> bluetooth_device_client_;
   scoped_ptr<BluetoothInputClient> bluetooth_input_client_;
-  scoped_ptr<BluetoothManagerClient> bluetooth_manager_client_;
-  scoped_ptr<BluetoothNodeClient> bluetooth_node_client_;
-  scoped_ptr<BluetoothOutOfBandClient> bluetooth_out_of_band_client_;
+  scoped_ptr<BluetoothProfileManagerClient> bluetooth_profile_manager_client_;
+  scoped_ptr<CrasAudioClient> cras_audio_client_;
   scoped_ptr<CrosDisksClient> cros_disks_client_;
   scoped_ptr<CryptohomeClient> cryptohome_client_;
   scoped_ptr<DebugDaemonClient> debug_daemon_client_;
   scoped_ptr<ShillDeviceClient> shill_device_client_;
   scoped_ptr<ShillIPConfigClient> shill_ipconfig_client_;
   scoped_ptr<ShillManagerClient> shill_manager_client_;
-  scoped_ptr<ShillProfileClient> shill_profile_client_;
   scoped_ptr<ShillServiceClient> shill_service_client_;
+  scoped_ptr<ShillProfileClient> shill_profile_client_;
   scoped_ptr<GsmSMSClient> gsm_sms_client_;
   scoped_ptr<ImageBurnerClient> image_burner_client_;
   scoped_ptr<IntrospectableClient> introspectable_client_;
@@ -468,8 +479,9 @@ void DBusThreadManager::Shutdown() {
   // If we called InitializeForTesting, this may get called more than once.
   // Ensure that we only shutdown DBusThreadManager once.
   CHECK(g_dbus_thread_manager || g_dbus_thread_manager_set_for_testing);
-  delete g_dbus_thread_manager;
+  DBusThreadManager* dbus_thread_manager = g_dbus_thread_manager;
   g_dbus_thread_manager = NULL;
+  delete dbus_thread_manager;
   VLOG(1) << "DBusThreadManager Shutdown completed";
 }
 
@@ -479,6 +491,17 @@ DBusThreadManager::DBusThreadManager() {
 
 DBusThreadManager::~DBusThreadManager() {
   dbus::statistics::Shutdown();
+  if (g_dbus_thread_manager == NULL)
+    return;  // Called form Shutdown() or local test instance.
+  // There should never be both a global instance and a local instance.
+  CHECK(this == g_dbus_thread_manager);
+  if (g_dbus_thread_manager_set_for_testing) {
+    g_dbus_thread_manager = NULL;
+    g_dbus_thread_manager_set_for_testing = false;
+    VLOG(1) << "DBusThreadManager destroyed";
+  } else {
+    LOG(FATAL) << "~DBusThreadManager() called outside of Shutdown()";
+  }
 }
 
 // static

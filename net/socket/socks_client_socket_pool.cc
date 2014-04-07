@@ -6,7 +6,7 @@
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "net/base/net_errors.h"
 #include "net/socket/client_socket_factory.h"
@@ -26,7 +26,7 @@ SOCKSSocketParams::SOCKSSocketParams(
     : transport_params_(proxy_server),
       destination_(host_port_pair),
       socks_v5_(socks_v5) {
-  if (transport_params_)
+  if (transport_params_.get())
     ignore_limits_ = transport_params_->ignore_limits();
   else
     ignore_limits_ = false;
@@ -52,8 +52,8 @@ SOCKSConnectJob::SOCKSConnectJob(
       socks_params_(socks_params),
       transport_pool_(transport_pool),
       resolver_(host_resolver),
-      ALLOW_THIS_IN_INITIALIZER_LIST(callback_(
-          base::Bind(&SOCKSConnectJob::OnIOComplete, base::Unretained(this)))) {
+      callback_(base::Bind(&SOCKSConnectJob::OnIOComplete,
+                           base::Unretained(this))) {
 }
 
 SOCKSConnectJob::~SOCKSConnectJob() {
@@ -276,13 +276,13 @@ void SOCKSClientSocketPool::RemoveLayeredPool(LayeredPool* layered_pool) {
   base_.RemoveLayeredPool(layered_pool);
 }
 
-DictionaryValue* SOCKSClientSocketPool::GetInfoAsValue(
+base::DictionaryValue* SOCKSClientSocketPool::GetInfoAsValue(
     const std::string& name,
     const std::string& type,
     bool include_nested_pools) const {
-  DictionaryValue* dict = base_.GetInfoAsValue(name, type);
+  base::DictionaryValue* dict = base_.GetInfoAsValue(name, type);
   if (include_nested_pools) {
-    ListValue* list = new ListValue();
+    base::ListValue* list = new base::ListValue();
     list->Append(transport_pool_->GetInfoAsValue("transport_socket_pool",
                                                  "transport_socket_pool",
                                                  false));

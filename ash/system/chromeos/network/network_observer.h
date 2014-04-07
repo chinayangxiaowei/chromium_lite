@@ -7,7 +7,11 @@
 
 #include <vector>
 
-#include "base/string16.h"
+#include "base/strings/string16.h"
+
+namespace chromeos {
+class NetworkState;
+}
 
 namespace ash {
 
@@ -35,8 +39,6 @@ class NetworkObserver {
 
   virtual ~NetworkObserver() {}
 
-  virtual void OnNetworkRefresh(const NetworkIconInfo& info) = 0;
-
   // Sets a network message notification.
   // |message_type| identifies the type of message.
   // |network_type| identifies the type of network involved.
@@ -45,16 +47,21 @@ class NetworkObserver {
   virtual void SetNetworkMessage(NetworkTrayDelegate* delegate,
                                  MessageType message_type,
                                  NetworkType network_type,
-                                 const string16& title,
-                                 const string16& message,
-                                 const std::vector<string16>& links) = 0;
+                                 const base::string16& title,
+                                 const base::string16& message,
+                                 const std::vector<base::string16>& links) = 0;
+
   // Clears the message notification for |message_type|.
   virtual void ClearNetworkMessage(MessageType message_type) = 0;
 
-  // Called when the user attempted to toggle Wi-Fi enable/disable.
+  // Called to request toggling Wi-Fi enable/disable, e.g. from an accelerator.
   // NOTE: Toggling is asynchronous and subsequent calls to query the current
   // state may return the old value.
-  virtual void OnWillToggleWifi() = 0;
+  virtual void RequestToggleWifi() = 0;
+
+  // Helper function to get the network type from NetworkState.
+  static NetworkType GetNetworkTypeForNetworkState(
+      const chromeos::NetworkState* network);
 };
 
 }  // namespace ash

@@ -5,7 +5,7 @@
 #include "net/cookies/cookie_store_test_helpers.h"
 
 #include "base/bind.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 
 namespace net {
 
@@ -42,10 +42,11 @@ void DelayedCookieMonster::SetCookieWithOptionsAsync(
       base::Bind(&DelayedCookieMonster::SetCookiesInternalCallback,
                  base::Unretained(this)));
   DCHECK_EQ(did_run_, true);
-  MessageLoop::current()->PostDelayedTask(
+  base::MessageLoop::current()->PostDelayedTask(
       FROM_HERE,
       base::Bind(&DelayedCookieMonster::InvokeSetCookiesCallback,
-                 base::Unretained(this), callback),
+                 base::Unretained(this),
+                 callback),
       base::TimeDelta::FromMilliseconds(kDelayedTime));
 }
 
@@ -59,10 +60,11 @@ void DelayedCookieMonster::GetCookiesWithOptionsAsync(
       base::Bind(&DelayedCookieMonster::GetCookiesWithOptionsInternalCallback,
                  base::Unretained(this)));
   DCHECK_EQ(did_run_, true);
-  MessageLoop::current()->PostDelayedTask(
+  base::MessageLoop::current()->PostDelayedTask(
       FROM_HERE,
       base::Bind(&DelayedCookieMonster::InvokeGetCookieStringCallback,
-                 base::Unretained(this), callback),
+                 base::Unretained(this),
+                 callback),
       base::TimeDelta::FromMilliseconds(kDelayedTime));
 }
 
@@ -90,7 +92,7 @@ std::string DelayedCookieMonster::GetCookiesWithOptions(
     const GURL& url,
     const CookieOptions& options) {
   ADD_FAILURE();
-  return "";
+  return std::string();
 }
 
 void DelayedCookieMonster::DeleteCookie(const GURL& url,
@@ -116,7 +118,7 @@ void DelayedCookieMonster::DeleteSessionCookiesAsync(const DeleteCallback&) {
 }
 
 CookieMonster* DelayedCookieMonster::GetCookieMonster() {
-  return cookie_monster_;
+  return cookie_monster_.get();
 }
 
 }  // namespace net

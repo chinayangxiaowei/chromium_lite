@@ -6,7 +6,8 @@
 
 #include "base/bind.h"
 #include "base/logging.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/chrome_page_zoom.h"
 #include "chrome/browser/extensions/window_controller.h"
 #include "chrome/browser/favicon/favicon_tab_helper.h"
@@ -15,8 +16,6 @@
 #include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/panels/panel.h"
 #include "chrome/browser/ui/prefs/prefs_tab_helper.h"
-#include "chrome/browser/view_type_utils.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/extensions/extension_messages.h"
 #include "content/public/browser/invalidate_type.h"
 #include "content/public/browser/navigation_controller.h"
@@ -27,7 +26,7 @@
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/user_metrics.h"
 #include "content/public/browser/web_contents.h"
-#include "ui/gfx/image/image.h"
+#include "extensions/browser/view_type_utils.h"
 #include "ipc/ipc_message.h"
 #include "ipc/ipc_message_macros.h"
 #include "ui/gfx/image/image.h"
@@ -52,7 +51,7 @@ void PanelHost::Init(const GURL& url) {
   content::WebContents::CreateParams create_params(
       profile_, content::SiteInstance::CreateForURL(profile_, url));
   web_contents_.reset(content::WebContents::Create(create_params));
-  chrome::SetViewType(web_contents_.get(), chrome::VIEW_TYPE_PANEL);
+  extensions::SetViewType(web_contents_.get(), extensions::VIEW_TYPE_PANEL);
   web_contents_->SetDelegate(this);
   content::WebContentsObserver::Observe(web_contents_.get());
 
@@ -105,8 +104,16 @@ content::WebContents* PanelHost::OpenURLFromTab(
   chrome::NavigateParams navigate_params(profile_,
                                          params.url,
                                          params.transition);
-  navigate_params.disposition = params.disposition == NEW_BACKGROUND_TAB ?
-      params.disposition : NEW_FOREGROUND_TAB;
+  switch (params.disposition) {
+    case NEW_BACKGROUND_TAB:
+    case NEW_WINDOW:
+    case OFF_THE_RECORD:
+      navigate_params.disposition = params.disposition;
+      break;
+    default:
+      navigate_params.disposition = NEW_FOREGROUND_TAB;
+      break;
+  }
   chrome::Navigate(&navigate_params);
   return navigate_params.target_contents;
 }
@@ -193,7 +200,7 @@ void PanelHost::RenderViewCreated(content::RenderViewHost* render_view_host) {
       render_view_host->GetRoutingID(), window->GetWindowId()));
 }
 
-void PanelHost::RenderViewGone(base::TerminationStatus status) {
+void PanelHost::RenderProcessGone(base::TerminationStatus status) {
   CloseContents(web_contents_.get());
 }
 
@@ -204,7 +211,7 @@ void PanelHost::WebContentsDestroyed(content::WebContents* web_contents) {
   // Close the panel after we return to the message loop (not immediately,
   // otherwise, it may destroy this object before the stack has a chance
   // to cleanly unwind.)
-  MessageLoop::current()->PostTask(
+  base::MessageLoop::current()->PostTask(
       FROM_HERE,
       base::Bind(&PanelHost::ClosePanel, weak_factory_.GetWeakPtr()));
 }

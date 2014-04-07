@@ -9,15 +9,16 @@
 #include <string>
 
 #include "base/memory/ref_counted.h"
-#include "base/message_loop_proxy.h"
+#include "base/message_loop/message_loop_proxy.h"
 #include "content/common/content_export.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebMediaStream.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebMediaStreamTrack.h"
+#include "third_party/WebKit/public/platform/WebMediaStream.h"
+#include "third_party/WebKit/public/platform/WebMediaStreamTrack.h"
 #include "third_party/libjingle/source/talk/app/webrtc/mediastream.h"
 #include "third_party/libjingle/source/talk/app/webrtc/peerconnectioninterface.h"
 
 namespace content {
 class MediaStreamDependencyFactory;
+class RemoteMediaStreamImpl;
 
 // PeerConnectionHandlerBase is the base class of a delegate for the
 // PeerConnection API messages going between WebKit and native
@@ -35,8 +36,6 @@ class CONTENT_EXPORT PeerConnectionHandlerBase
   bool AddStream(const WebKit::WebMediaStream& stream,
                  const webrtc::MediaConstraintsInterface* constraints);
   void RemoveStream(const WebKit::WebMediaStream& stream);
-  WebKit::WebMediaStream CreateRemoteWebKitMediaStream(
-      webrtc::MediaStreamInterface* stream);
   webrtc::MediaStreamTrackInterface* GetNativeMediaStreamTrack(
       const WebKit::WebMediaStream& stream,
       const WebKit::WebMediaStreamTrack& component);
@@ -50,7 +49,7 @@ class CONTENT_EXPORT PeerConnectionHandlerBase
   scoped_refptr<webrtc::PeerConnectionInterface> native_peer_connection_;
 
   typedef std::map<webrtc::MediaStreamInterface*,
-                   WebKit::WebMediaStream> RemoteStreamMap;
+      content::RemoteMediaStreamImpl*> RemoteStreamMap;
   RemoteStreamMap remote_streams_;
 
   // The message loop we are created on and on which to make calls to WebKit.

@@ -10,15 +10,15 @@
 
 #include "base/at_exit.h"
 #include "base/command_line.h"
-#include "base/process_util.h"
-#include "base/string16.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
+#include "base/strings/string16.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "net/disk_cache/disk_format.h"
 #include "net/tools/dump_cache/dump_files.h"
 #include "net/tools/dump_cache/simple_cache_dumper.h"
 
 #if defined(OS_WIN)
+#include "base/process/launch.h"
 #include "base/win/scoped_handle.h"
 #include "net/tools/dump_cache/upgrade_win.h"
 #endif
@@ -74,7 +74,7 @@ int Help() {
 
 // Starts a new process, to generate the files.
 int LaunchSlave(CommandLine command_line,
-                const string16& pipe_number,
+                const base::string16& pipe_number,
                 int version) {
   bool do_upgrade = command_line.HasSwitch(kUpgrade);
   bool do_convert_to_text = command_line.HasSwitch(kDumpToFiles);
@@ -134,7 +134,7 @@ int main(int argc, const char* argv[]) {
   }
 
 #if defined(OS_WIN)
-  string16 pipe_number = command_line.GetSwitchValueNative(kPipe);
+  base::string16 pipe_number = command_line.GetSwitchValueNative(kPipe);
   if (command_line.HasSwitch(kSlave) && slave_required)
     return RunSlave(input_path, pipe_number);
 

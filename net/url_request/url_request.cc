@@ -11,7 +11,8 @@
 #include "base/debug/stack_trace.h"
 #include "base/lazy_instance.h"
 #include "base/memory/singleton.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
+#include "base/metrics/histogram.h"
 #include "base/metrics/stats_counters.h"
 #include "base/stl_util.h"
 #include "base/synchronization/lock.h"
@@ -73,6 +74,68 @@ bool g_url_requests_started = false;
 
 // True if cookies are accepted by default.
 bool g_default_can_use_cookies = true;
+
+// When the URLRequest first assempts load timing information, it has the times
+// at which each event occurred.  The API requires the time which the request
+// was blocked on each phase.  This function handles the conversion.
+//
+// In the case of reusing a SPDY session or HTTP pipeline, old proxy results may
+// have been reused, so proxy resolution times may be before the request was
+// started.
+//
+// Due to preconnect and late binding, it is also possible for the connection
+// attempt to start before a request has been started, or proxy resolution
+// completed.
+//
+// This functions fixes both those cases.
+void ConvertRealLoadTimesToBlockingTimes(
+    net::LoadTimingInfo* load_timing_info) {
+  DCHECK(!load_timing_info->request_start.is_null());
+
+  // Earliest time possible for the request to be blocking on connect events.
+  base::TimeTicks block_on_connect = load_timing_info->request_start;
+
+  if (!load_timing_info->proxy_resolve_start.is_null()) {
+    DCHECK(!load_timing_info->proxy_resolve_end.is_null());
+
+    // Make sure the proxy times are after request start.
+    if (load_timing_info->proxy_resolve_start < load_timing_info->request_start)
+      load_timing_info->proxy_resolve_start = load_timing_info->request_start;
+    if (load_timing_info->proxy_resolve_end < load_timing_info->request_start)
+      load_timing_info->proxy_resolve_end = load_timing_info->request_start;
+
+    // Connect times must also be after the proxy times.
+    block_on_connect = load_timing_info->proxy_resolve_end;
+  }
+
+  // Make sure connection times are after start and proxy times.
+
+  net::LoadTimingInfo::ConnectTiming* connect_timing =
+      &load_timing_info->connect_timing;
+  if (!connect_timing->dns_start.is_null()) {
+    DCHECK(!connect_timing->dns_end.is_null());
+    if (connect_timing->dns_start < block_on_connect)
+      connect_timing->dns_start = block_on_connect;
+    if (connect_timing->dns_end < block_on_connect)
+      connect_timing->dns_end = block_on_connect;
+  }
+
+  if (!connect_timing->connect_start.is_null()) {
+    DCHECK(!connect_timing->connect_end.is_null());
+    if (connect_timing->connect_start < block_on_connect)
+      connect_timing->connect_start = block_on_connect;
+    if (connect_timing->connect_end < block_on_connect)
+      connect_timing->connect_end = block_on_connect;
+  }
+
+  if (!connect_timing->ssl_start.is_null()) {
+    DCHECK(!connect_timing->ssl_end.is_null());
+    if (connect_timing->ssl_start < block_on_connect)
+      connect_timing->ssl_start = block_on_connect;
+    if (connect_timing->ssl_end < block_on_connect)
+      connect_timing->ssl_end = block_on_connect;
+  }
+}
 
 }  // namespace
 
@@ -154,19 +217,16 @@ URLRequest::URLRequest(const GURL& url,
       priority_(DEFAULT_PRIORITY),
       identifier_(GenerateURLRequestIdentifier()),
       blocked_on_delegate_(false),
-      ALLOW_THIS_IN_INITIALIZER_LIST(before_request_callback_(
-          base::Bind(&URLRequest::BeforeRequestComplete,
-                     base::Unretained(this)))),
+      before_request_callback_(base::Bind(&URLRequest::BeforeRequestComplete,
+                                          base::Unretained(this))),
       has_notified_completion_(false),
       received_response_content_length_(0),
       creation_time_(base::TimeTicks::Now()) {
   SIMPLE_STATS_COUNTER("URLRequestCount");
 
   // Sanity check out environment.
-  DCHECK(MessageLoop::current()) << "The current MessageLoop must exist";
-
-  DCHECK(MessageLoop::current()->IsType(MessageLoop::TYPE_IO)) << ""
-      "The current MessageLoop must be TYPE_IO";
+  DCHECK(base::MessageLoop::current())
+      << "The current base::MessageLoop must exist";
 
   CHECK(context);
   context->url_requests()->insert(this);
@@ -193,19 +253,16 @@ URLRequest::URLRequest(const GURL& url,
       priority_(DEFAULT_PRIORITY),
       identifier_(GenerateURLRequestIdentifier()),
       blocked_on_delegate_(false),
-      ALLOW_THIS_IN_INITIALIZER_LIST(before_request_callback_(
-          base::Bind(&URLRequest::BeforeRequestComplete,
-                     base::Unretained(this)))),
+      before_request_callback_(base::Bind(&URLRequest::BeforeRequestComplete,
+                                          base::Unretained(this))),
       has_notified_completion_(false),
       received_response_content_length_(0),
       creation_time_(base::TimeTicks::Now()) {
   SIMPLE_STATS_COUNTER("URLRequestCount");
 
   // Sanity check out environment.
-  DCHECK(MessageLoop::current()) << "The current MessageLoop must exist";
-
-  DCHECK(MessageLoop::current()->IsType(MessageLoop::TYPE_IO)) << ""
-      "The current MessageLoop must be TYPE_IO";
+  DCHECK(base::MessageLoop::current())
+      << "The current base::MessageLoop must exist";
 
   CHECK(context);
   context->url_requests()->insert(this);
@@ -218,11 +275,11 @@ URLRequest::~URLRequest() {
 
   if (network_delegate_) {
     network_delegate_->NotifyURLRequestDestroyed(this);
-    if (job_)
+    if (job_.get())
       job_->NotifyURLRequestDestroyed();
   }
 
-  if (job_)
+  if (job_.get())
     OrphanJob();
 
   int deleted = context_->url_requests()->erase(this);
@@ -315,18 +372,24 @@ void URLRequest::SetExtraRequestHeaders(
   // for request headers are implemented.
 }
 
+bool URLRequest::GetFullRequestHeaders(HttpRequestHeaders* headers) const {
+  if (!job_.get())
+    return false;
+
+  return job_->GetFullRequestHeaders(headers);
+}
+
 LoadStateWithParam URLRequest::GetLoadState() const {
-  // Only return LOAD_STATE_WAITING_FOR_DELEGATE if there's a load state param.
-  if (blocked_on_delegate_ && !load_state_param_.empty()) {
+  if (blocked_on_delegate_) {
     return LoadStateWithParam(LOAD_STATE_WAITING_FOR_DELEGATE,
                               load_state_param_);
   }
-  return LoadStateWithParam(job_ ? job_->GetLoadState() : LOAD_STATE_IDLE,
-                            string16());
+  return LoadStateWithParam(job_.get() ? job_->GetLoadState() : LOAD_STATE_IDLE,
+                            base::string16());
 }
 
 UploadProgress URLRequest::GetUploadProgress() const {
-  if (!job_) {
+  if (!job_.get()) {
     // We haven't started or the request was cancelled
     return UploadProgress();
   }
@@ -340,13 +403,13 @@ UploadProgress URLRequest::GetUploadProgress() const {
 }
 
 void URLRequest::GetResponseHeaderById(int id, string* value) {
-  DCHECK(job_);
+  DCHECK(job_.get());
   NOTREACHED() << "implement me!";
 }
 
 void URLRequest::GetResponseHeaderByName(const string& name, string* value) {
   DCHECK(value);
-  if (response_info_.headers) {
+  if (response_info_.headers.get()) {
     response_info_.headers->GetNormalizedHeader(name, value);
   } else {
     value->clear();
@@ -355,7 +418,7 @@ void URLRequest::GetResponseHeaderByName(const string& name, string* value) {
 
 void URLRequest::GetAllResponseHeaders(string* headers) {
   DCHECK(headers);
-  if (response_info_.headers) {
+  if (response_info_.headers.get()) {
     response_info_.headers->GetNormalizedHeaders(headers);
   } else {
     headers->clear();
@@ -363,7 +426,7 @@ void URLRequest::GetAllResponseHeaders(string* headers) {
 }
 
 HostPortPair URLRequest::GetSocketAddress() const {
-  DCHECK(job_);
+  DCHECK(job_.get());
   return job_->GetSocketAddress();
 }
 
@@ -376,22 +439,22 @@ void URLRequest::GetLoadTimingInfo(LoadTimingInfo* load_timing_info) const {
 }
 
 bool URLRequest::GetResponseCookies(ResponseCookies* cookies) {
-  DCHECK(job_);
+  DCHECK(job_.get());
   return job_->GetResponseCookies(cookies);
 }
 
 void URLRequest::GetMimeType(string* mime_type) {
-  DCHECK(job_);
+  DCHECK(job_.get());
   job_->GetMimeType(mime_type);
 }
 
 void URLRequest::GetCharset(string* charset) {
-  DCHECK(job_);
+  DCHECK(job_.get());
   job_->GetCharset(charset);
 }
 
 int URLRequest::GetResponseCode() {
-  DCHECK(job_);
+  DCHECK(job_.get());
   return job_->GetResponseCode();
 }
 
@@ -426,23 +489,43 @@ void URLRequest::set_method(const std::string& method) {
   method_ = method;
 }
 
-void URLRequest::set_referrer(const std::string& referrer) {
-  DCHECK(!is_pending_);
-  referrer_ = referrer;
+// static
+std::string URLRequest::ComputeMethodForRedirect(
+    const std::string& method,
+    int http_status_code) {
+  // For 303 redirects, all request methods except HEAD are converted to GET,
+  // as per the latest httpbis draft.  The draft also allows POST requests to
+  // be converted to GETs when following 301/302 redirects, for historical
+  // reasons. Most major browsers do this and so shall we.  Both RFC 2616 and
+  // the httpbis draft say to prompt the user to confirm the generation of new
+  // requests, other than GET and HEAD requests, but IE omits these prompts and
+  // so shall we.
+  // See:  https://tools.ietf.org/html/draft-ietf-httpbis-p2-semantics-17#section-7.3
+  if ((http_status_code == 303 && method != "HEAD") ||
+      ((http_status_code == 301 || http_status_code == 302) &&
+       method == "POST")) {
+    return "GET";
+  }
+  return method;
 }
 
-GURL URLRequest::GetSanitizedReferrer() const {
-  GURL ret(referrer());
-
-  // Ensure that we do not send username and password fields in the referrer.
-  if (ret.has_username() || ret.has_password()) {
+void URLRequest::SetReferrer(const std::string& referrer) {
+  DCHECK(!is_pending_);
+  referrer_ = referrer;
+  // Ensure that we do not send URL fragment, username and password
+  // fields in the referrer.
+  GURL referrer_url(referrer);
+  UMA_HISTOGRAM_BOOLEAN("Net.URLRequest_SetReferrer_IsEmptyOrValid",
+                        referrer_url.is_empty() || referrer_url.is_valid());
+  if (referrer_url.is_valid() && (referrer_url.has_ref() ||
+      referrer_url.has_username() ||  referrer_url.has_password())) {
     GURL::Replacements referrer_mods;
+    referrer_mods.ClearRef();
     referrer_mods.ClearUsername();
     referrer_mods.ClearPassword();
-    ret = ret.ReplaceComponents(referrer_mods);
+    referrer_url = referrer_url.ReplaceComponents(referrer_mods);
+    referrer_ = referrer_url.spec();
   }
-
-  return ret;
 }
 
 void URLRequest::set_referrer_policy(ReferrerPolicy referrer_policy) {
@@ -484,7 +567,7 @@ void URLRequest::Start() {
 ///////////////////////////////////////////////////////////////////////////////
 
 void URLRequest::BeforeRequestComplete(int error) {
-  DCHECK(!job_);
+  DCHECK(!job_.get());
   DCHECK_NE(ERR_IO_PENDING, error);
   DCHECK_EQ(network_delegate_, context_->network_delegate());
 
@@ -516,7 +599,7 @@ void URLRequest::BeforeRequestComplete(int error) {
 
 void URLRequest::StartJob(URLRequestJob* job) {
   DCHECK(!is_pending_);
-  DCHECK(!job_);
+  DCHECK(!job_.get());
 
   net_log_.BeginEvent(
       NetLog::TYPE_URL_REQUEST_START_JOB,
@@ -545,9 +628,9 @@ void URLRequest::StartJob(URLRequestJob* job) {
 
 void URLRequest::Restart() {
   // Should only be called if the original job didn't make any progress.
-  DCHECK(job_ && !job_->has_response_started());
-  RestartWithJob(URLRequestJobManager::GetInstance()->CreateJob(
-      this, network_delegate_));
+  DCHECK(job_.get() && !job_->has_response_started());
+  RestartWithJob(
+      URLRequestJobManager::GetInstance()->CreateJob(this, network_delegate_));
 }
 
 void URLRequest::RestartWithJob(URLRequestJob *job) {
@@ -566,7 +649,7 @@ void URLRequest::CancelWithError(int error) {
 
 void URLRequest::CancelWithSSLError(int error, const SSLInfo& ssl_info) {
   // This should only be called on a started request.
-  if (!is_pending_ || !job_ || job_->has_response_started()) {
+  if (!is_pending_ || !job_.get() || job_->has_response_started()) {
     NOTREACHED();
     return;
   }
@@ -591,7 +674,7 @@ void URLRequest::DoCancel(int error, const SSLInfo& ssl_info) {
     }
   }
 
-  if (is_pending_ && job_)
+  if (is_pending_ && job_.get())
     job_->Kill();
 
   // We need to notify about the end of this job here synchronously. The
@@ -605,7 +688,7 @@ void URLRequest::DoCancel(int error, const SSLInfo& ssl_info) {
 }
 
 bool URLRequest::Read(IOBuffer* dest, int dest_size, int* bytes_read) {
-  DCHECK(job_);
+  DCHECK(job_.get());
   DCHECK(bytes_read);
   *bytes_read = 0;
 
@@ -635,7 +718,7 @@ bool URLRequest::Read(IOBuffer* dest, int dest_size, int* bytes_read) {
 }
 
 void URLRequest::StopCaching() {
-  DCHECK(job_);
+  DCHECK(job_.get());
   job_->StopCaching();
 }
 
@@ -687,40 +770,40 @@ void URLRequest::NotifyResponseStarted() {
 }
 
 void URLRequest::FollowDeferredRedirect() {
-  CHECK(job_);
+  CHECK(job_.get());
   CHECK(status_.is_success());
 
   job_->FollowDeferredRedirect();
 }
 
 void URLRequest::SetAuth(const AuthCredentials& credentials) {
-  DCHECK(job_);
+  DCHECK(job_.get());
   DCHECK(job_->NeedsAuth());
 
   job_->SetAuth(credentials);
 }
 
 void URLRequest::CancelAuth() {
-  DCHECK(job_);
+  DCHECK(job_.get());
   DCHECK(job_->NeedsAuth());
 
   job_->CancelAuth();
 }
 
 void URLRequest::ContinueWithCertificate(X509Certificate* client_cert) {
-  DCHECK(job_);
+  DCHECK(job_.get());
 
   job_->ContinueWithCertificate(client_cert);
 }
 
 void URLRequest::ContinueDespiteLastError() {
-  DCHECK(job_);
+  DCHECK(job_.get());
 
   job_->ContinueDespiteLastError();
 }
 
 void URLRequest::PrepareToRestart() {
-  DCHECK(job_);
+  DCHECK(job_.get());
 
   // Close the current URL_REQUEST_START_JOB, since we will be starting a new
   // one.
@@ -780,27 +863,18 @@ int URLRequest::Redirect(const GURL& location, int http_status_code) {
     final_upload_progress_ = job_->GetUploadProgress();
   PrepareToRestart();
 
-  // For 303 redirects, all request methods except HEAD are converted to GET,
-  // as per the latest httpbis draft.  The draft also allows POST requests to
-  // be converted to GETs when following 301/302 redirects, for historical
-  // reasons. Most major browsers do this and so shall we.  Both RFC 2616 and
-  // the httpbis draft say to prompt the user to confirm the generation of new
-  // requests, other than GET and HEAD requests, but IE omits these prompts and
-  // so shall we.
-  // See:  https://tools.ietf.org/html/draft-ietf-httpbis-p2-semantics-17#section-7.3
-  bool was_post = method_ == "POST";
-  if ((http_status_code == 303 && method_ != "HEAD") ||
-      ((http_status_code == 301 || http_status_code == 302) && was_post)) {
-    method_ = "GET";
-    upload_data_stream_.reset();
-    if (was_post) {
-      // If being switched from POST to GET, must remove headers that were
-      // specific to the POST and don't have meaning in GET. For example
-      // the inclusion of a multipart Content-Type header in GET can cause
-      // problems with some servers:
+  std::string new_method(ComputeMethodForRedirect(method_, http_status_code));
+  if (new_method != method_) {
+    if (method_ == "POST") {
+      // If being switched from POST, must remove headers that were specific to
+      // the POST and don't have meaning in other methods. For example the
+      // inclusion of a multipart Content-Type header in GET can cause problems
+      // with some servers:
       // http://code.google.com/p/chromium/issues/detail?id=843
       StripPostSpecificHeaders(&extra_request_headers_);
     }
+    upload_data_stream_.reset();
+    method_.swap(new_method);
   }
 
   // Suppress the referrer if we're redirecting out of https.
@@ -823,7 +897,7 @@ const URLRequestContext* URLRequest::context() const {
 
 int64 URLRequest::GetExpectedContentSize() const {
   int64 expected_content_size = -1;
-  if (job_)
+  if (job_.get())
     expected_content_size = job_->expected_content_size();
 
   return expected_content_size;
@@ -836,7 +910,7 @@ void URLRequest::SetPriority(RequestPriority priority) {
     return;
 
   priority_ = priority;
-  if (job_) {
+  if (job_.get()) {
     net_log_.AddEvent(NetLog::TYPE_URL_REQUEST_SET_PRIORITY,
                       NetLog::IntegerCallback("priority", priority_));
     job_->SetPriority(priority_);
@@ -950,6 +1024,14 @@ bool URLRequest::CanSetCookie(const std::string& cookie_line,
   return g_default_can_use_cookies;
 }
 
+bool URLRequest::CanEnablePrivacyMode() const {
+  if (network_delegate_) {
+    return network_delegate_->CanEnablePrivacyMode(url(),
+                                                   first_party_for_cookies_);
+  }
+  return !g_default_can_use_cookies;
+}
+
 
 void URLRequest::NotifyReadCompleted(int bytes_read) {
   // Notify in case the entire URL Request has been finished.
@@ -973,8 +1055,21 @@ void URLRequest::OnHeadersComplete() {
   // Cache load timing information now, as information will be lost once the
   // socket is closed and the ClientSocketHandle is Reset, which will happen
   // once the body is complete.  The start times should already be populated.
-  if (job_)
+  if (job_.get()) {
+    // Keep a copy of the two times the URLRequest sets.
+    base::TimeTicks request_start = load_timing_info_.request_start;
+    base::Time request_start_time = load_timing_info_.request_start_time;
+
+    // Clear load times.  Shouldn't be neded, but gives the GetLoadTimingInfo a
+    // consistent place to start from.
+    load_timing_info_ = LoadTimingInfo();
     job_->GetLoadTimingInfo(&load_timing_info_);
+
+    load_timing_info_.request_start = request_start;
+    load_timing_info_.request_start_time = request_start_time;
+
+    ConvertRealLoadTimesToBlockingTimes(&load_timing_info_);
+  }
 }
 
 void URLRequest::NotifyRequestCompleted() {
@@ -987,7 +1082,7 @@ void URLRequest::NotifyRequestCompleted() {
   is_redirecting_ = false;
   has_notified_completion_ = true;
   if (network_delegate_)
-    network_delegate_->NotifyCompleted(this, job_ != NULL);
+    network_delegate_->NotifyCompleted(this, job_.get() != NULL);
 }
 
 void URLRequest::SetBlockedOnDelegate() {

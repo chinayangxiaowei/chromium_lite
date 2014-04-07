@@ -7,6 +7,7 @@
 
 #include <string>
 
+#include "third_party/skia/include/core/SkColor.h"
 #include "ui/views/controls/label.h"
 
 namespace views {
@@ -27,12 +28,14 @@ class VIEWS_EXPORT Link : public Label {
   explicit Link(const string16& title);
   virtual ~Link();
 
+  static SkColor GetDefaultEnabledColor();
+
   const LinkListener* listener() { return listener_; }
   void set_listener(LinkListener* listener) { listener_ = listener; }
 
   // Overridden from View:
   virtual void OnEnabledChanged() OVERRIDE;
-  virtual std::string GetClassName() const OVERRIDE;
+  virtual const char* GetClassName() const OVERRIDE;
   virtual gfx::NativeCursor GetCursor(const ui::MouseEvent& event) OVERRIDE;
   virtual bool HitTestRect(const gfx::Rect& rect) const OVERRIDE;
   virtual bool OnMousePressed(const ui::MouseEvent& event) OVERRIDE;

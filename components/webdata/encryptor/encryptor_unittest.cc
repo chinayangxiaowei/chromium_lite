@@ -6,8 +6,8 @@
 
 #include <string>
 
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
@@ -27,8 +27,8 @@ class EncryptorTest : public testing::Test {
 };
 
 TEST_F(EncryptorTest, String16EncryptionDecryption) {
-  string16 plaintext;
-  string16 result;
+  base::string16 plaintext;
+  base::string16 result;
   std::string utf8_plaintext;
   std::string utf8_result;
   std::string ciphertext;

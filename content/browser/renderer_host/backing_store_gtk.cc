@@ -24,7 +24,7 @@
 #include "base/logging.h"
 #include "base/memory/singleton.h"
 #include "base/metrics/histogram.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "content/browser/renderer_host/render_process_host_impl.h"
 #include "skia/ext/platform_canvas.h"
 #include "third_party/skia/include/core/SkBitmap.h"
@@ -662,20 +662,6 @@ void BackingStoreGtk::XShowRect(const gfx::Point &origin,
   XCopyArea(display_, pixmap_, target, static_cast<GC>(pixmap_gc_),
             rect.x(), rect.y(), rect.width(), rect.height(),
             rect.x() + origin.x(), rect.y() + origin.y());
-}
-
-void BackingStoreGtk::CairoShowRect(const gfx::Rect& rect,
-                                    GdkDrawable* drawable) {
-  cairo_surface_t* surface = cairo_xlib_surface_create(
-      display_, pixmap_, static_cast<Visual*>(visual_),
-      size().width(), size().height());
-  cairo_t* cr = gdk_cairo_create(drawable);
-  cairo_set_source_surface(cr, surface, 0, 0);
-
-  cairo_rectangle(cr, rect.x(), rect.y(), rect.width(), rect.height());
-  cairo_fill(cr);
-  cairo_destroy(cr);
-  cairo_surface_destroy(surface);
 }
 
 #if defined(TOOLKIT_GTK)

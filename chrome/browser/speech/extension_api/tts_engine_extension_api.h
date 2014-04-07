@@ -5,8 +5,11 @@
 #ifndef CHROME_BROWSER_SPEECH_EXTENSION_API_TTS_ENGINE_EXTENSION_API_H_
 #define CHROME_BROWSER_SPEECH_EXTENSION_API_TTS_ENGINE_EXTENSION_API_H_
 
+#include <vector>
+
 #include "base/memory/singleton.h"
 #include "chrome/browser/extensions/extension_function.h"
+#include "chrome/browser/speech/tts_controller.h"
 
 class Utterance;
 
@@ -21,10 +24,12 @@ class Extension;
 namespace tts_engine_events {
 extern const char kOnSpeak[];
 extern const char kOnStop[];
+extern const char kOnPause[];
+extern const char kOnResume[];
 }
 
 // Return a list of all available voices registered by extensions.
-void GetExtensionVoices(Profile* profile, base::ListValue* result_voices);
+void GetExtensionVoices(Profile* profile, std::vector<VoiceData>* out_voices);
 
 // Find the first extension with a tts_voices in its
 // manifest that matches the speech parameters of this utterance.
@@ -38,12 +43,17 @@ bool GetMatchingExtensionVoice(Utterance* utterance,
 // Speak the given utterance by sending an event to the given TTS engine
 // extension voice.
 void ExtensionTtsEngineSpeak(Utterance* utterance,
-                             const extensions::Extension* extension,
-                             size_t voice_index);
+                             const VoiceData& voice);
 
 // Stop speaking the given utterance by sending an event to the extension
 // associated with this utterance.
 void ExtensionTtsEngineStop(Utterance* utterance);
+
+// Pause in the middle of speaking this utterance.
+void ExtensionTtsEnginePause(Utterance* utterance);
+
+// Resume speaking this utterance.
+void ExtensionTtsEngineResume(Utterance* utterance);
 
 // Hidden/internal extension function used to allow TTS engine extensions
 // to send events back to the client that's calling tts.speak().

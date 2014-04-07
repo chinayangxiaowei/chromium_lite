@@ -22,7 +22,6 @@ class Profile;
 
 namespace extensions {
 class Extension;
-}
 
 // ExtensionIconSource serves extension icons through network level chrome:
 // requests. Icons can be retrieved for any installed extension or app.
@@ -60,7 +59,7 @@ class ExtensionIconSource : public content::URLDataSource,
   // desaturated version of the icon. |exists|, if non-NULL, will be set to true
   // if the icon exists; false if it will lead to a default or not-present
   // image.
-  static GURL GetIconURL(const extensions::Extension* extension,
+  static GURL GetIconURL(const Extension* extension,
                          int icon_size,
                          ExtensionIconSet::MatchType match,
                          bool grayscale,
@@ -71,11 +70,12 @@ class ExtensionIconSource : public content::URLDataSource,
   static SkBitmap* LoadImageByResourceId(int resource_id);
 
   // content::URLDataSource implementation.
-  virtual std::string GetSource() OVERRIDE;
+  virtual std::string GetSource() const OVERRIDE;
   virtual std::string GetMimeType(const std::string&) const OVERRIDE;
   virtual void StartDataRequest(
       const std::string& path,
-      bool is_incognito,
+      int render_process_id,
+      int render_view_id,
       const content::URLDataSource::GotDataCallback& callback) OVERRIDE;
 
  private:
@@ -100,7 +100,7 @@ class ExtensionIconSource : public content::URLDataSource,
 
   // Loads the extension's |icon| for the given |request_id| and returns the
   // image to the client.
-  void LoadExtensionImage(const extensions::ExtensionResource& icon,
+  void LoadExtensionImage(const ExtensionResource& icon,
                           int request_id);
 
   // Loads the favicon image for the app associated with the |request_id|. If
@@ -110,7 +110,7 @@ class ExtensionIconSource : public content::URLDataSource,
   // FaviconService callback
   void OnFaviconDataAvailable(
       int request_id,
-      const history::FaviconBitmapResult& bitmap_result);
+      const chrome::FaviconBitmapResult& bitmap_result);
 
   // ImageLoader callback
   void OnImageLoaded(int request_id, const gfx::Image& image);
@@ -133,7 +133,7 @@ class ExtensionIconSource : public content::URLDataSource,
   // as an ExtensionIconRequest via GetData.
   void SetData(int request_id,
                const content::URLDataSource::GotDataCallback& callback,
-               const extensions::Extension* extension,
+               const Extension* extension,
                bool grayscale,
                int size,
                ExtensionIconSet::MatchType match);
@@ -160,5 +160,7 @@ class ExtensionIconSource : public content::URLDataSource,
 
   DISALLOW_COPY_AND_ASSIGN(ExtensionIconSource);
 };
+
+}  // namespace extensions
 
 #endif  // CHROME_BROWSER_UI_WEBUI_EXTENSIONS_EXTENSION_ICON_SOURCE_H_

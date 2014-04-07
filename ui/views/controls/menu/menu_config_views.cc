@@ -15,10 +15,10 @@
 namespace views {
 
 namespace {
-#if defined(OS_WIN)
-static const int kMenuCornerRadiusForAura = 0;
-#else
+#if defined(OS_CHROMEOS)
 static const int kMenuCornerRadiusForAura = 2;
+#else
+static const int kMenuCornerRadiusForAura = 0;
 #endif
 }  // namespace
 
@@ -31,31 +31,24 @@ void MenuConfig::Init(const ui::NativeTheme* theme) {
 void MenuConfig::InitAura(const ui::NativeTheme* theme) {
   text_color = theme->GetSystemColor(
       ui::NativeTheme::kColorId_EnabledMenuItemForegroundColor);
-  menu_horizontal_border_size = 0;
-  menu_vertical_border_size = 0;
   submenu_horizontal_inset = 1;
   ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
   arrow_to_edge_padding = 20;
-  icon_to_label_padding = 4;
   arrow_width =
       rb.GetImageNamed(IDR_MENU_HIERARCHY_ARROW).ToImageSkia()->width();
   const gfx::ImageSkia* check = GetMenuCheckImage();
   check_height = check->height();
-  item_left_margin = 4;
   item_min_height = 29;
-  separator_height = 15;
   separator_spacing_height = 7;
   separator_lower_height = 8;
   separator_upper_height = 8;
   font = rb.GetFont(ResourceBundle::BaseFont);
   label_to_arrow_padding = 20;
-  label_to_accelerator_padding = 20;
+  label_to_minor_text_padding = 20;
   always_use_icon_to_label_padding = true;
   align_arrow_and_shortcut = true;
   offset_context_menus = true;
   corner_radius = kMenuCornerRadiusForAura;
-  if (ui::NativeTheme::IsNewMenuStyleEnabled())
-    AdjustForCommonTheme();
 }
 
 #if !defined(OS_WIN)

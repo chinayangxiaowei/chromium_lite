@@ -45,6 +45,7 @@
 #include "net/cookies/cookie_monster.h"
 
 #include <algorithm>
+#include <functional>
 #include <set>
 
 #include "base/basictypes.h"
@@ -52,16 +53,16 @@
 #include "base/callback.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
-#include "base/message_loop_proxy.h"
+#include "base/message_loop/message_loop.h"
+#include "base/message_loop/message_loop_proxy.h"
 #include "base/metrics/histogram.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
-#include "googleurl/src/gurl.h"
-#include "net/cookies/canonical_cookie.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
+#include "net/cookies/canonical_cookie.h"
 #include "net/cookies/cookie_util.h"
 #include "net/cookies/parsed_cookie.h"
+#include "url/gurl.h"
 
 using base::Time;
 using base::TimeDelta;
@@ -70,22 +71,24 @@ using base::TimeTicks;
 // In steady state, most cookie requests can be satisfied by the in memory
 // cookie monster store.  However, if a request comes in during the initial
 // cookie load, it must be delayed until that load completes. That is done by
-// queueing it on CookieMonster::queue_ and running it when notification of
-// cookie load completion is received via CookieMonster::OnLoaded. This callback
-// is passed to the persistent store from CookieMonster::InitStore(), which is
-// called on the first operation invoked on the CookieMonster.
+// queueing it on CookieMonster::tasks_pending_ and running it when notification
+// of cookie load completion is received via CookieMonster::OnLoaded. This
+// callback is passed to the persistent store from CookieMonster::InitStore(),
+// which is called on the first operation invoked on the CookieMonster.
 //
 // On the browser critical paths (e.g. for loading initial web pages in a
 // session restore) it may take too long to wait for the full load. If a cookie
 // request is for a specific URL, DoCookieTaskForURL is called, which triggers a
 // priority load if the key is not loaded yet by calling PersistentCookieStore
-// :: LoadCookiesForKey. The request is queued in CookieMonster::tasks_queued
-// and executed upon receiving notification of key load completion via
-// CookieMonster::OnKeyLoaded(). If multiple requests for the same eTLD+1 are
-// received before key load completion, only the first request calls
+// :: LoadCookiesForKey. The request is queued in
+// CookieMonster::tasks_pending_for_key_ and executed upon receiving
+// notification of key load completion via CookieMonster::OnKeyLoaded(). If
+// multiple requests for the same eTLD+1 are received before key load
+// completion, only the first request calls
 // PersistentCookieStore::LoadCookiesForKey, all subsequent requests are queued
-// in CookieMonster::tasks_queued and executed upon receiving notification of
-// key load completion triggered by the first request for the same eTLD+1.
+// in CookieMonster::tasks_pending_for_key_ and executed upon receiving
+// notification of key load completion triggered by the first request for the
+// same eTLD+1.
 
 static const int kMinutesInTenYears = 10 * 365 * 24 * 60;
 
@@ -97,6 +100,14 @@ const size_t CookieMonster::kDomainMaxCookies           = 180;
 const size_t CookieMonster::kDomainPurgeCookies         = 30;
 const size_t CookieMonster::kMaxCookies                 = 3300;
 const size_t CookieMonster::kPurgeCookies               = 300;
+
+const size_t CookieMonster::kDomainCookiesQuotaLow    = 30;
+const size_t CookieMonster::kDomainCookiesQuotaMedium = 50;
+const size_t CookieMonster::kDomainCookiesQuotaHigh   =
+    CookieMonster::kDomainMaxCookies - CookieMonster::kDomainPurgeCookies
+    - CookieMonster::kDomainCookiesQuotaLow
+    - CookieMonster::kDomainCookiesQuotaMedium;
+
 const int CookieMonster::kSafeFromGlobalPurgeDays       = 30;
 
 namespace {
@@ -132,7 +143,7 @@ bool CookieSorter(CanonicalCookie* cc1, CanonicalCookie* cc2) {
   return cc1->Path().length() > cc2->Path().length();
 }
 
-bool LRUCookieSorter(const CookieMonster::CookieMap::iterator& it1,
+bool LRACookieSorter(const CookieMonster::CookieMap::iterator& it1,
                      const CookieMonster::CookieMap::iterator& it2) {
   // Cookies accessed less recently should be deleted first.
   if (it1->second->LastAccessDate() != it2->second->LastAccessDate())
@@ -192,36 +203,57 @@ bool GetCookieDomain(const GURL& url,
   return cookie_util::GetCookieDomainWithString(url, domain_string, result);
 }
 
-// Helper for GarbageCollection.  If |cookie_its->size() > num_max|, remove the
-// |num_max - num_purge| most recently accessed cookies from cookie_its.
-// (In other words, leave the entries that are candidates for
-// eviction in cookie_its.)  The cookies returned will be in order sorted by
-// access time, least recently accessed first.  The access time of the least
-// recently accessed entry not returned will be placed in
-// |*lra_removed| if that pointer is set.  FindLeastRecentlyAccessed
-// returns false if no manipulation is done (because the list size is less
-// than num_max), true otherwise.
-bool FindLeastRecentlyAccessed(
-    size_t num_max,
-    size_t num_purge,
-    Time* lra_removed,
-    std::vector<CookieMonster::CookieMap::iterator>* cookie_its) {
-  DCHECK_LE(num_purge, num_max);
-  if (cookie_its->size() > num_max) {
-    VLOG(kVlogGarbageCollection)
-        << "FindLeastRecentlyAccessed() Deep Garbage Collect.";
-    num_purge += cookie_its->size() - num_max;
-    DCHECK_GT(cookie_its->size(), num_purge);
+// For a CookieItVector iterator range [|it_begin|, |it_end|),
+// sorts the first |num_sort| + 1 elements by LastAccessDate().
+// The + 1 element exists so for any interval of length <= |num_sort| starting
+// from |cookies_its_begin|, a LastAccessDate() bound can be found.
+void SortLeastRecentlyAccessed(
+    CookieMonster::CookieItVector::iterator it_begin,
+    CookieMonster::CookieItVector::iterator it_end,
+    size_t num_sort) {
+  DCHECK_LT(static_cast<int>(num_sort), it_end - it_begin);
+  std::partial_sort(it_begin, it_begin + num_sort + 1, it_end, LRACookieSorter);
+}
 
-    // Add 1 so that we can get the last time left in the store.
-    std::partial_sort(cookie_its->begin(), cookie_its->begin() + num_purge + 1,
-                      cookie_its->end(), LRUCookieSorter);
-    *lra_removed =
-        (*(cookie_its->begin() + num_purge))->second->LastAccessDate();
-    cookie_its->erase(cookie_its->begin() + num_purge, cookie_its->end());
-    return true;
+// Predicate to support PartitionCookieByPriority().
+struct CookiePriorityEqualsTo
+    : std::unary_function<const CookieMonster::CookieMap::iterator, bool> {
+  CookiePriorityEqualsTo(CookiePriority priority)
+    : priority_(priority) {}
+
+  bool operator()(const CookieMonster::CookieMap::iterator it) const {
+    return it->second->Priority() == priority_;
   }
-  return false;
+
+  const CookiePriority priority_;
+};
+
+// For a CookieItVector iterator range [|it_begin|, |it_end|),
+// moves all cookies with a given |priority| to the beginning of the list.
+// Returns: An iterator in [it_begin, it_end) to the first element with
+// priority != |priority|, or |it_end| if all have priority == |priority|.
+CookieMonster::CookieItVector::iterator PartitionCookieByPriority(
+    CookieMonster::CookieItVector::iterator it_begin,
+    CookieMonster::CookieItVector::iterator it_end,
+    CookiePriority priority) {
+  return std::partition(it_begin, it_end, CookiePriorityEqualsTo(priority));
+}
+
+bool LowerBoundAccessDateComparator(
+  const CookieMonster::CookieMap::iterator it, const Time& access_date) {
+  return it->second->LastAccessDate() < access_date;
+}
+
+// For a CookieItVector iterator range [|it_begin|, |it_end|)
+// from a CookieItVector sorted by LastAccessDate(), returns the
+// first iterator with access date >= |access_date|, or cookie_its_end if this
+// holds for all.
+CookieMonster::CookieItVector::iterator LowerBoundAccessDate(
+    const CookieMonster::CookieItVector::iterator its_begin,
+    const CookieMonster::CookieItVector::iterator its_end,
+    const Time& access_date) {
+  return std::lower_bound(its_begin, its_end, access_date,
+                          LowerBoundAccessDateComparator);
 }
 
 // Mapping between DeletionCause and Delegate::ChangeCause; the mapping also
@@ -288,7 +320,8 @@ CookieMonster::CookieMonster(PersistentCookieStore* store, Delegate* delegate)
       delegate_(delegate),
       last_statistic_record_time_(Time::Now()),
       keep_expired_cookies_(false),
-      persist_session_cookies_(false) {
+      persist_session_cookies_(false),
+      priority_aware_garbage_collection_(false) {
   InitializeHistograms();
   SetDefaultCookieableSchemes();
 }
@@ -304,7 +337,8 @@ CookieMonster::CookieMonster(PersistentCookieStore* store,
       delegate_(delegate),
       last_statistic_record_time_(base::Time::Now()),
       keep_expired_cookies_(false),
-      persist_session_cookies_(false) {
+      persist_session_cookies_(false),
+      priority_aware_garbage_collection_(false) {
   InitializeHistograms();
   SetDefaultCookieableSchemes();
 }
@@ -382,6 +416,7 @@ class CookieMonster::SetCookieWithDetailsTask
                            const base::Time& expiration_time,
                            bool secure,
                            bool http_only,
+                           CookiePriority priority,
                            const CookieMonster::SetCookiesCallback& callback)
       : CookieMonsterTask(cookie_monster),
         url_(url),
@@ -392,6 +427,7 @@ class CookieMonster::SetCookieWithDetailsTask
         expiration_time_(expiration_time),
         secure_(secure),
         http_only_(http_only),
+        priority_(priority),
         callback_(callback) {
   }
 
@@ -410,6 +446,7 @@ class CookieMonster::SetCookieWithDetailsTask
   base::Time expiration_time_;
   bool secure_;
   bool http_only_;
+  CookiePriority priority_;
   CookieMonster::SetCookiesCallback callback_;
 
   DISALLOW_COPY_AND_ASSIGN(SetCookieWithDetailsTask);
@@ -418,7 +455,7 @@ class CookieMonster::SetCookieWithDetailsTask
 void CookieMonster::SetCookieWithDetailsTask::Run() {
   bool success = this->cookie_monster()->
       SetCookieWithDetails(url_, name_, value_, domain_, path_,
-                           expiration_time_, secure_, http_only_);
+                           expiration_time_, secure_, http_only_, priority_);
   if (!callback_.is_null()) {
     this->InvokeCallback(base::Bind(&CookieMonster::SetCookiesCallback::Run,
                                     base::Unretained(&callback_), success));
@@ -586,6 +623,47 @@ class CookieMonster::DeleteAllForHostTask
 
 void CookieMonster::DeleteAllForHostTask::Run() {
   int num_deleted = this->cookie_monster()->DeleteAllForHost(url_);
+  if (!callback_.is_null()) {
+    this->InvokeCallback(base::Bind(&CookieMonster::DeleteCallback::Run,
+                                    base::Unretained(&callback_), num_deleted));
+  }
+}
+
+// Task class for DeleteAllCreatedBetweenForHost call.
+class CookieMonster::DeleteAllCreatedBetweenForHostTask
+    : public CookieMonster::CookieMonsterTask {
+ public:
+  DeleteAllCreatedBetweenForHostTask(
+      CookieMonster* cookie_monster,
+      Time delete_begin,
+      Time delete_end,
+      const GURL& url,
+      const CookieMonster::DeleteCallback& callback)
+      : CookieMonsterTask(cookie_monster),
+        delete_begin_(delete_begin),
+        delete_end_(delete_end),
+        url_(url),
+        callback_(callback) {
+  }
+
+  // CookieMonster::CookieMonsterTask:
+  virtual void Run() OVERRIDE;
+
+ protected:
+  virtual ~DeleteAllCreatedBetweenForHostTask() {}
+
+ private:
+  Time delete_begin_;
+  Time delete_end_;
+  GURL url_;
+  CookieMonster::DeleteCallback callback_;
+
+  DISALLOW_COPY_AND_ASSIGN(DeleteAllCreatedBetweenForHostTask);
+};
+
+void CookieMonster::DeleteAllCreatedBetweenForHostTask::Run() {
+  int num_deleted = this->cookie_monster()->DeleteAllCreatedBetweenForHost(
+      delete_begin_, delete_end_, url_);
   if (!callback_.is_null()) {
     this->InvokeCallback(base::Bind(&CookieMonster::DeleteCallback::Run,
                                     base::Unretained(&callback_), num_deleted));
@@ -765,6 +843,41 @@ void CookieMonster::DeleteSessionCookiesTask::Run() {
   }
 }
 
+// Task class for HasCookiesForETLDP1Task call.
+class CookieMonster::HasCookiesForETLDP1Task
+    : public CookieMonster::CookieMonsterTask {
+ public:
+  HasCookiesForETLDP1Task(
+      CookieMonster* cookie_monster,
+      const std::string& etldp1,
+      const CookieMonster::HasCookiesForETLDP1Callback& callback)
+      : CookieMonsterTask(cookie_monster),
+        etldp1_(etldp1),
+        callback_(callback) {
+  }
+
+  // CookieMonster::CookieMonsterTask:
+  virtual void Run() OVERRIDE;
+
+ protected:
+  virtual ~HasCookiesForETLDP1Task() {}
+
+ private:
+  std::string etldp1_;
+  CookieMonster::HasCookiesForETLDP1Callback callback_;
+
+  DISALLOW_COPY_AND_ASSIGN(HasCookiesForETLDP1Task);
+};
+
+void CookieMonster::HasCookiesForETLDP1Task::Run() {
+  bool result = this->cookie_monster()->HasCookiesForETLDP1(etldp1_);
+  if (!callback_.is_null()) {
+    this->InvokeCallback(
+        base::Bind(&CookieMonster::HasCookiesForETLDP1Callback::Run,
+                   base::Unretained(&callback_), result));
+  }
+}
+
 // Asynchronous CookieMonster API
 
 void CookieMonster::SetCookieWithDetailsAsync(
@@ -773,13 +886,14 @@ void CookieMonster::SetCookieWithDetailsAsync(
     const std::string& value,
     const std::string& domain,
     const std::string& path,
-    const base::Time& expiration_time,
+    const Time& expiration_time,
     bool secure,
     bool http_only,
+    CookiePriority priority,
     const SetCookiesCallback& callback) {
   scoped_refptr<SetCookieWithDetailsTask> task =
       new SetCookieWithDetailsTask(this, url, name, value, domain, path,
-                                   expiration_time, secure, http_only,
+                                   expiration_time, secure, http_only, priority,
                                    callback);
 
   DoCookieTaskForURL(task, url);
@@ -813,6 +927,15 @@ void CookieMonster::GetAllCookiesForURLAsync(
   DoCookieTaskForURL(task, url);
 }
 
+void CookieMonster::HasCookiesForETLDP1Async(
+    const std::string& etldp1,
+    const HasCookiesForETLDP1Callback& callback) {
+  scoped_refptr<HasCookiesForETLDP1Task> task =
+      new HasCookiesForETLDP1Task(this, etldp1, callback);
+
+  DoCookieTaskForURL(task, GURL("http://" + etldp1));
+}
+
 void CookieMonster::DeleteAllAsync(const DeleteCallback& callback) {
   scoped_refptr<DeleteAllTask> task =
       new DeleteAllTask(this, callback);
@@ -828,6 +951,18 @@ void CookieMonster::DeleteAllCreatedBetweenAsync(
                                       callback);
 
   DoCookieTask(task);
+}
+
+void CookieMonster::DeleteAllCreatedBetweenForHostAsync(
+    const Time delete_begin,
+    const Time delete_end,
+    const GURL& url,
+    const DeleteCallback& callback) {
+  scoped_refptr<DeleteAllCreatedBetweenForHostTask> task =
+      new DeleteAllCreatedBetweenForHostTask(
+          this, delete_begin, delete_end, url, callback);
+
+  DoCookieTaskForURL(task, url);
 }
 
 void CookieMonster::DeleteAllForHostAsync(
@@ -891,7 +1026,7 @@ void CookieMonster::DoCookieTask(
     base::AutoLock autolock(lock_);
     InitIfNecessary();
     if (!loaded_) {
-      queue_.push(task_item);
+      tasks_pending_.push(task_item);
       return;
     }
   }
@@ -913,11 +1048,11 @@ void CookieMonster::DoCookieTaskForURL(
                                                        url.host()));
       if (keys_loaded_.find(key) == keys_loaded_.end()) {
         std::map<std::string, std::deque<scoped_refptr<CookieMonsterTask> > >
-          ::iterator it = tasks_queued_.find(key);
-        if (it == tasks_queued_.end()) {
+          ::iterator it = tasks_pending_for_key_.find(key);
+        if (it == tasks_pending_for_key_.end()) {
           store_->LoadCookiesForKey(key,
             base::Bind(&CookieMonster::OnKeyLoaded, this, key));
-          it = tasks_queued_.insert(std::make_pair(key,
+          it = tasks_pending_for_key_.insert(std::make_pair(key,
             std::deque<scoped_refptr<CookieMonsterTask> >())).first;
         }
         it->second.push_back(task_item);
@@ -935,7 +1070,8 @@ bool CookieMonster::SetCookieWithDetails(const GURL& url,
                                          const std::string& path,
                                          const base::Time& expiration_time,
                                          bool secure,
-                                         bool http_only) {
+                                         bool http_only,
+                                         CookiePriority priority) {
   base::AutoLock autolock(lock_);
 
   if (!HasCookieableScheme(url))
@@ -945,10 +1081,9 @@ bool CookieMonster::SetCookieWithDetails(const GURL& url,
   last_time_seen_ = creation_time;
 
   scoped_ptr<CanonicalCookie> cc;
-  cc.reset(CanonicalCookie::Create(
-      url, name, value, domain, path,
-      creation_time, expiration_time,
-      secure, http_only));
+  cc.reset(CanonicalCookie::Create(url, name, value, domain, path,
+                                   creation_time, expiration_time,
+                                   secure, http_only, priority));
 
   if (!cc.get())
     return false;
@@ -1066,7 +1201,9 @@ int CookieMonster::DeleteAllCreatedBetween(const Time& delete_begin,
   return num_deleted;
 }
 
-int CookieMonster::DeleteAllForHost(const GURL& url) {
+int CookieMonster::DeleteAllCreatedBetweenForHost(const Time delete_begin,
+                                                  const Time delete_end,
+                                                  const GURL& url) {
   base::AutoLock autolock(lock_);
 
   if (!HasCookieableScheme(url))
@@ -1086,7 +1223,11 @@ int CookieMonster::DeleteAllForHost(const GURL& url) {
     const CanonicalCookie* const cc = curit->second;
 
     // Delete only on a match as a host cookie.
-    if (cc->IsHostCookie() && cc->IsDomainMatch(host)) {
+    if (cc->IsHostCookie() && cc->IsDomainMatch(host) &&
+        cc->CreationDate() >= delete_begin &&
+        // The assumption that null |delete_end| is equivalent to
+        // Time::Max() is confusing.
+        (delete_end.is_null() || cc->CreationDate() < delete_end)) {
       num_deleted++;
 
       InternalDeleteCookie(curit, true, DELETE_COOKIE_EXPLICIT);
@@ -1094,6 +1235,11 @@ int CookieMonster::DeleteAllForHost(const GURL& url) {
   }
   return num_deleted;
 }
+
+int CookieMonster::DeleteAllForHost(const GURL& url) {
+  return DeleteAllCreatedBetweenForHost(Time(), Time::Max(), url);
+}
+
 
 bool CookieMonster::DeleteCanonicalCookie(const CanonicalCookie& cookie) {
   base::AutoLock autolock(lock_);
@@ -1140,10 +1286,10 @@ void CookieMonster::EnableFileScheme() {
 
 void CookieMonster::FlushStore(const base::Closure& callback) {
   base::AutoLock autolock(lock_);
-  if (initialized_ && store_)
+  if (initialized_ && store_.get())
     store_->Flush(callback);
   else if (!callback.is_null())
-    MessageLoop::current()->PostTask(FROM_HERE, callback);
+    base::MessageLoop::current()->PostTask(FROM_HERE, callback);
 }
 
 bool CookieMonster::SetCookieWithOptions(const GURL& url,
@@ -1232,18 +1378,34 @@ int CookieMonster::DeleteSessionCookies() {
   return num_deleted;
 }
 
+bool CookieMonster::HasCookiesForETLDP1(const std::string& etldp1) {
+  base::AutoLock autolock(lock_);
+
+  const std::string key(GetKey(etldp1));
+
+  CookieMapItPair its = cookies_.equal_range(key);
+  return its.first != its.second;
+}
+
 CookieMonster* CookieMonster::GetCookieMonster() {
   return this;
 }
 
+// This function must be called before the CookieMonster is used.
 void CookieMonster::SetPersistSessionCookies(bool persist_session_cookies) {
-  // This function must be called before the CookieMonster is used.
   DCHECK(!initialized_);
   persist_session_cookies_ = persist_session_cookies;
 }
 
+// This function must be called before the CookieMonster is used.
+void CookieMonster::SetPriorityAwareGarbageCollection(
+    bool priority_aware_garbage_collection) {
+  DCHECK(!initialized_);
+  priority_aware_garbage_collection_ = priority_aware_garbage_collection;
+}
+
 void CookieMonster::SetForceKeepSessionState() {
-  if (store_) {
+  if (store_.get()) {
     store_->SetForceKeepSessionState();
   }
 }
@@ -1255,7 +1417,7 @@ CookieMonster::~CookieMonster() {
 bool CookieMonster::SetCookieWithCreationTime(const GURL& url,
                                               const std::string& cookie_line,
                                               const base::Time& creation_time) {
-  DCHECK(!store_) << "This method is only to be used by unit-tests.";
+  DCHECK(!store_.get()) << "This method is only to be used by unit-tests.";
   base::AutoLock autolock(lock_);
 
   if (!HasCookieableScheme(url)) {
@@ -1268,7 +1430,7 @@ bool CookieMonster::SetCookieWithCreationTime(const GURL& url,
 }
 
 void CookieMonster::InitStore() {
-  DCHECK(store_) << "Store must exist to initialize";
+  DCHECK(store_.get()) << "Store must exist to initialize";
 
   // We bind in the current time so that we can report the wall-clock time for
   // loading cookies.
@@ -1289,22 +1451,22 @@ void CookieMonster::OnKeyLoaded(const std::string& key,
   // This function does its own separate locking.
   StoreLoadedCookies(cookies);
 
-  std::deque<scoped_refptr<CookieMonsterTask> > tasks_queued;
+  std::deque<scoped_refptr<CookieMonsterTask> > tasks_pending_for_key;
   {
     base::AutoLock autolock(lock_);
     keys_loaded_.insert(key);
     std::map<std::string, std::deque<scoped_refptr<CookieMonsterTask> > >
-      ::iterator it = tasks_queued_.find(key);
-    if (it == tasks_queued_.end())
+      ::iterator it = tasks_pending_for_key_.find(key);
+    if (it == tasks_pending_for_key_.end())
       return;
-    it->second.swap(tasks_queued);
-    tasks_queued_.erase(it);
+    it->second.swap(tasks_pending_for_key);
+    tasks_pending_for_key_.erase(it);
   }
 
-  while (!tasks_queued.empty()) {
-    scoped_refptr<CookieMonsterTask> task = tasks_queued.front();
+  while (!tasks_pending_for_key.empty()) {
+    scoped_refptr<CookieMonsterTask> task = tasks_pending_for_key.front();
     task->Run();
-    tasks_queued.pop_front();
+    tasks_pending_for_key.pop_front();
   }
 }
 
@@ -1353,14 +1515,14 @@ void CookieMonster::InvokeQueue() {
     scoped_refptr<CookieMonsterTask> request_task;
     {
       base::AutoLock autolock(lock_);
-      if (queue_.empty()) {
+      if (tasks_pending_.empty()) {
         loaded_ = true;
         creation_times_.clear();
         keys_loaded_.clear();
         break;
       }
-      request_task = queue_.front();
-      queue_.pop();
+      request_task = tasks_pending_.front();
+      tasks_pending_.pop();
     }
     request_task->Run();
   }
@@ -1576,8 +1738,8 @@ void CookieMonster::InternalInsertCookie(const std::string& key,
                                          bool sync_to_store) {
   lock_.AssertAcquired();
 
-  if ((cc->IsPersistent() || persist_session_cookies_) &&
-      store_ && sync_to_store)
+  if ((cc->IsPersistent() || persist_session_cookies_) && store_.get() &&
+      sync_to_store)
     store_->AddCookie(*cc);
   cookies_.insert(CookieMap::value_type(key, cc));
   if (delegate_.get()) {
@@ -1665,7 +1827,7 @@ void CookieMonster::InternalUpdateCookieAccessTime(CanonicalCookie* cc,
       (current - cc->LastAccessDate()).InMinutes());
 
   cc->SetLastAccessDate(current);
-  if ((cc->IsPersistent() || persist_session_cookies_) && store_)
+  if ((cc->IsPersistent() || persist_session_cookies_) && store_.get())
     store_->UpdateCookieAccessTime(*cc);
 }
 
@@ -1687,8 +1849,8 @@ void CookieMonster::InternalDeleteCookie(CookieMap::iterator it,
   CanonicalCookie* cc = it->second;
   VLOG(kVlogSetCookies) << "InternalDeleteCookie() cc: " << cc->DebugString();
 
-  if ((cc->IsPersistent() || persist_session_cookies_)
-      && store_ && sync_to_store)
+  if ((cc->IsPersistent() || persist_session_cookies_) && store_.get() &&
+      sync_to_store)
     store_->DeleteCookie(*cc);
   if (delegate_.get()) {
     ChangeCausePair mapping = ChangeCauseMapping[deletion_cause];
@@ -1701,78 +1863,124 @@ void CookieMonster::InternalDeleteCookie(CookieMap::iterator it,
 }
 
 // Domain expiry behavior is unchanged by key/expiry scheme (the
-// meaning of the key is different, but that's not visible to this
-// routine).
+// meaning of the key is different, but that's not visible to this routine).
 int CookieMonster::GarbageCollect(const Time& current,
                                   const std::string& key) {
   lock_.AssertAcquired();
 
   int num_deleted = 0;
+  Time safe_date(
+      Time::Now() - TimeDelta::FromDays(kSafeFromGlobalPurgeDays));
 
-  // Collect garbage for this key.
+  // Collect garbage for this key, minding cookie priorities.
   if (cookies_.count(key) > kDomainMaxCookies) {
     VLOG(kVlogGarbageCollection) << "GarbageCollect() key: " << key;
 
-    std::vector<CookieMap::iterator> cookie_its;
+    CookieItVector cookie_its;
     num_deleted += GarbageCollectExpired(
         current, cookies_.equal_range(key), &cookie_its);
-    base::Time oldest_removed;
-    if (FindLeastRecentlyAccessed(kDomainMaxCookies, kDomainPurgeCookies,
-                                  &oldest_removed, &cookie_its)) {
-      // Delete in two passes so we can figure out what we're nuking
-      // that would be kept at the global level.
-      int num_subject_to_global_purge =
-          GarbageCollectDeleteList(
-              current,
-              Time::Now() - TimeDelta::FromDays(kSafeFromGlobalPurgeDays),
-              DELETE_COOKIE_EVICTED_DOMAIN_PRE_SAFE,
-              cookie_its);
-      num_deleted += num_subject_to_global_purge;
-      // Correct because FindLeastRecentlyAccessed returns a sorted list.
-      cookie_its.erase(cookie_its.begin(),
-                       cookie_its.begin() + num_subject_to_global_purge);
-      num_deleted +=
-          GarbageCollectDeleteList(
-              current,
-              Time(),
-              DELETE_COOKIE_EVICTED_DOMAIN_POST_SAFE,
-              cookie_its);
+    if (cookie_its.size() > kDomainMaxCookies) {
+      VLOG(kVlogGarbageCollection) << "Deep Garbage Collect domain.";
+      size_t purge_goal =
+          cookie_its.size() - (kDomainMaxCookies - kDomainPurgeCookies);
+      DCHECK(purge_goal > kDomainPurgeCookies);
+
+      // Boundary iterators into |cookie_its| for different priorities.
+      CookieItVector::iterator it_bdd[4];
+      // Intialize |it_bdd| while sorting |cookie_its| by priorities.
+      // Schematic: [MLLHMHHLMM] => [LLL|MMMM|HHH], with 4 boundaries.
+      it_bdd[0] = cookie_its.begin();
+      it_bdd[3] = cookie_its.end();
+      it_bdd[1] = PartitionCookieByPriority(it_bdd[0], it_bdd[3],
+                                            COOKIE_PRIORITY_LOW);
+      it_bdd[2] = PartitionCookieByPriority(it_bdd[1], it_bdd[3],
+                                            COOKIE_PRIORITY_MEDIUM);
+      size_t quota[3] = {
+        kDomainCookiesQuotaLow,
+        kDomainCookiesQuotaMedium,
+        kDomainCookiesQuotaHigh
+      };
+
+      // Purge domain cookies in 3 rounds.
+      // Round 1: consider low-priority cookies only: evict least-recently
+      //   accessed, while protecting quota[0] of these from deletion.
+      // Round 2: consider {low, medium}-priority cookies, evict least-recently
+      //   accessed, while protecting quota[0] + quota[1].
+      // Round 3: consider all cookies, evict least-recently accessed.
+      size_t accumulated_quota = 0;
+      CookieItVector::iterator it_purge_begin = it_bdd[0];
+      for (int i = 0; i < 3 && purge_goal > 0; ++i) {
+        accumulated_quota += quota[i];
+
+        // If we are not using priority, only do Round 3. This reproduces the
+        // old way of indiscriminately purging least-recently accessed cookies.
+        if (!priority_aware_garbage_collection_ && i < 2)
+          continue;
+
+        size_t num_considered = it_bdd[i + 1] - it_purge_begin;
+        if (num_considered <= accumulated_quota)
+          continue;
+
+        // Number of cookies that will be purged in this round.
+        size_t round_goal =
+            std::min(purge_goal, num_considered - accumulated_quota);
+        purge_goal -= round_goal;
+
+        SortLeastRecentlyAccessed(it_purge_begin, it_bdd[i + 1], round_goal);
+        // Cookies accessed on or after |safe_date| would have been safe from
+        // global purge, and we want to keep track of this.
+        CookieItVector::iterator it_purge_end = it_purge_begin + round_goal;
+        CookieItVector::iterator it_purge_middle =
+            LowerBoundAccessDate(it_purge_begin, it_purge_end, safe_date);
+        // Delete cookies accessed before |safe_date|.
+        num_deleted += GarbageCollectDeleteRange(
+            current,
+            DELETE_COOKIE_EVICTED_DOMAIN_PRE_SAFE,
+            it_purge_begin,
+            it_purge_middle);
+        // Delete cookies accessed on or after |safe_date|.
+        num_deleted += GarbageCollectDeleteRange(
+            current,
+            DELETE_COOKIE_EVICTED_DOMAIN_POST_SAFE,
+            it_purge_middle,
+            it_purge_end);
+        it_purge_begin = it_purge_end;
+      }
+      DCHECK_EQ(0U, purge_goal);
     }
   }
 
-  // Collect garbage for everything.  With firefox style we want to
-  // preserve cookies touched in kSafeFromGlobalPurgeDays, otherwise
-  // not.
+  // Collect garbage for everything. With firefox style we want to preserve
+  // cookies accessed in kSafeFromGlobalPurgeDays, otherwise evict.
   if (cookies_.size() > kMaxCookies &&
-      (earliest_access_time_ <
-       Time::Now() - TimeDelta::FromDays(kSafeFromGlobalPurgeDays))) {
+      earliest_access_time_ < safe_date) {
     VLOG(kVlogGarbageCollection) << "GarbageCollect() everything";
-    std::vector<CookieMap::iterator> cookie_its;
-    base::Time oldest_left;
+    CookieItVector cookie_its;
     num_deleted += GarbageCollectExpired(
         current, CookieMapItPair(cookies_.begin(), cookies_.end()),
         &cookie_its);
-    if (FindLeastRecentlyAccessed(kMaxCookies, kPurgeCookies,
-                                  &oldest_left, &cookie_its)) {
-      Time oldest_safe_cookie(
-          (Time::Now() - TimeDelta::FromDays(kSafeFromGlobalPurgeDays)));
-      int num_evicted = GarbageCollectDeleteList(
+    if (cookie_its.size() > kMaxCookies) {
+      VLOG(kVlogGarbageCollection) << "Deep Garbage Collect everything.";
+      size_t purge_goal = cookie_its.size() - (kMaxCookies - kPurgeCookies);
+      DCHECK(purge_goal > kPurgeCookies);
+      // Sorts up to *and including* |cookie_its[purge_goal]|, so
+      // |earliest_access_time| will be properly assigned even if
+      // |global_purge_it| == |cookie_its.begin() + purge_goal|.
+      SortLeastRecentlyAccessed(cookie_its.begin(), cookie_its.end(),
+                                purge_goal);
+      // Find boundary to cookies older than safe_date.
+      CookieItVector::iterator global_purge_it =
+          LowerBoundAccessDate(cookie_its.begin(),
+                               cookie_its.begin() + purge_goal,
+                               safe_date);
+      // Only delete the old cookies.
+      num_deleted += GarbageCollectDeleteRange(
           current,
-          oldest_safe_cookie,
           DELETE_COOKIE_EVICTED_GLOBAL,
-          cookie_its);
-
-      // If no cookies were preserved by the time limit, the global last
-      // access is set to the value returned from FindLeastRecentlyAccessed.
-      // If the time limit preserved some cookies, we use the last access of
-      // the oldest preserved cookie.
-      if (num_evicted == static_cast<int>(cookie_its.size())) {
-        earliest_access_time_ = oldest_left;
-      } else {
-        earliest_access_time_ =
-            (*(cookie_its.begin() + num_evicted))->second->LastAccessDate();
-      }
-      num_deleted += num_evicted;
+          cookie_its.begin(),
+          global_purge_it);
+      // Set access day to the oldest cookie that wasn't deleted.
+      earliest_access_time_ = (*global_purge_it)->second->LastAccessDate();
     }
   }
 
@@ -1782,7 +1990,7 @@ int CookieMonster::GarbageCollect(const Time& current,
 int CookieMonster::GarbageCollectExpired(
     const Time& current,
     const CookieMapItPair& itpair,
-    std::vector<CookieMap::iterator>* cookie_its) {
+    CookieItVector* cookie_its) {
   if (keep_expired_cookies_)
     return 0;
 
@@ -1804,26 +2012,20 @@ int CookieMonster::GarbageCollectExpired(
   return num_deleted;
 }
 
-int CookieMonster::GarbageCollectDeleteList(
+int CookieMonster::GarbageCollectDeleteRange(
     const Time& current,
-    const Time& keep_accessed_after,
     DeletionCause cause,
-    std::vector<CookieMap::iterator>& cookie_its) {
-  int num_deleted = 0;
-  for (std::vector<CookieMap::iterator>::iterator it = cookie_its.begin();
-       it != cookie_its.end(); it++) {
-    if (keep_accessed_after.is_null() ||
-        (*it)->second->LastAccessDate() < keep_accessed_after) {
-      histogram_evicted_last_access_minutes_->Add(
-          (current - (*it)->second->LastAccessDate()).InMinutes());
-      InternalDeleteCookie((*it), true, cause);
-      num_deleted++;
-    }
+    CookieMonster::CookieItVector::iterator it_begin,
+    CookieMonster::CookieItVector::iterator it_end) {
+  for (CookieItVector::iterator it = it_begin; it != it_end; it++) {
+    histogram_evicted_last_access_minutes_->Add(
+        (current - (*it)->second->LastAccessDate()).InMinutes());
+    InternalDeleteCookie((*it), true, cause);
   }
-  return num_deleted;
+  return it_end - it_begin;
 }
 
-// A wrapper around RegistryControlledDomainService::GetDomainAndRegistry
+// A wrapper around registry_controlled_domains::GetDomainAndRegistry
 // to make clear we're creating a key for our local map.  Here and
 // in FindCookiesForHostAndDomain() are the only two places where
 // we need to conditionalize based on key type.
@@ -1848,7 +2050,8 @@ int CookieMonster::GarbageCollectDeleteList(
 // non-problem).
 std::string CookieMonster::GetKey(const std::string& domain) const {
   std::string effective_domain(
-      RegistryControlledDomainService::GetDomainAndRegistry(domain));
+      registry_controlled_domains::GetDomainAndRegistry(
+          domain, registry_controlled_domains::EXCLUDE_PRIVATE_REGISTRIES));
   if (effective_domain.empty())
     effective_domain = domain;
 

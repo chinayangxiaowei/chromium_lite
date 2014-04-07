@@ -7,11 +7,12 @@
 #include <map>
 #include <set>
 
+#include "base/bind.h"
 #include "base/compiler_specific.h"
 #include "base/memory/scoped_ptr.h"
 #include "chrome/browser/policy/cloud/mock_cloud_policy_client.h"
 #include "chrome/browser/policy/cloud/mock_device_management_service.h"
-#include "chrome/browser/policy/cloud/proto/device_management_backend.pb.h"
+#include "chrome/browser/policy/proto/cloud/device_management_backend.pb.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -32,6 +33,8 @@ const char kMachineID[] = "fake-machine-id";
 const char kMachineModel[] = "fake-machine-model";
 const char kOAuthToken[] = "fake-oauth-token";
 const char kDMToken[] = "fake-dm-token";
+const char kDeviceCertificate[] = "fake-device-certificate";
+const char kRequisition[] = "fake-requisition";
 
 class MockStatusProvider : public CloudPolicyClient::StatusProvider {
  public:
@@ -49,6 +52,15 @@ class MockStatusProvider : public CloudPolicyClient::StatusProvider {
 MATCHER_P(MatchProto, expected, "matches protobuf") {
   return arg.SerializePartialAsString() == expected.SerializePartialAsString();
 }
+
+// A mock class to allow us to set expectations on upload certificate callbacks.
+class MockUploadCertificateObserver {
+ public:
+  MockUploadCertificateObserver() {}
+  virtual ~MockUploadCertificateObserver() {}
+
+  MOCK_METHOD1(OnUploadComplete, void(bool));
+};
 
 }  // namespace
 
@@ -78,6 +90,9 @@ class CloudPolicyClientTest : public testing::Test {
 
     unregistration_request_.mutable_unregister_request();
     unregistration_response_.mutable_unregister_response();
+    upload_certificate_request_.mutable_cert_upload_request()->
+        set_device_certificate(kDeviceCertificate);
+    upload_certificate_response_.mutable_cert_upload_response();
   }
 
   virtual void SetUp() OVERRIDE {
@@ -138,6 +153,15 @@ class CloudPolicyClientTest : public testing::Test {
                                    MatchProto(unregistration_request_)));
   }
 
+  void ExpectUploadCertificate() {
+    EXPECT_CALL(service_,
+                CreateJob(DeviceManagementRequestJob::TYPE_UPLOAD_CERTIFICATE))
+        .WillOnce(service_.SucceedJob(upload_certificate_response_));
+    EXPECT_CALL(service_, StartJob(dm_protocol::kValueRequestUploadCertificate,
+                                   "", "", kDMToken, "", client_id_,
+                                   MatchProto(upload_certificate_request_)));
+  }
+
   void CheckPolicyResponse() {
     ASSERT_TRUE(client_->GetPolicyFor(policy_ns_key_));
     EXPECT_THAT(*client_->GetPolicyFor(policy_ns_key_),
@@ -155,17 +179,20 @@ class CloudPolicyClientTest : public testing::Test {
   em::DeviceManagementRequest registration_request_;
   em::DeviceManagementRequest policy_request_;
   em::DeviceManagementRequest unregistration_request_;
+  em::DeviceManagementRequest upload_certificate_request_;
 
   // Protobufs used in successful responses.
   em::DeviceManagementResponse registration_response_;
   em::DeviceManagementResponse policy_response_;
   em::DeviceManagementResponse unregistration_response_;
+  em::DeviceManagementResponse upload_certificate_response_;
 
   std::string client_id_;
   PolicyNamespaceKey policy_ns_key_;
   MockDeviceManagementService service_;
   StrictMock<MockStatusProvider> status_provider_;
   StrictMock<MockCloudPolicyClientObserver> observer_;
+  StrictMock<MockUploadCertificateObserver> upload_certificate_observer_;
   scoped_ptr<CloudPolicyClient> client_;
 };
 
@@ -173,6 +200,7 @@ TEST_F(CloudPolicyClientTest, Init) {
   EXPECT_CALL(service_, CreateJob(_)).Times(0);
   EXPECT_FALSE(client_->is_registered());
   EXPECT_FALSE(client_->GetPolicyFor(policy_ns_key_));
+  EXPECT_EQ(0, client_->fetched_invalidation_version());
 }
 
 TEST_F(CloudPolicyClientTest, SetupRegistrationAndPolicyFetch) {
@@ -194,7 +222,7 @@ TEST_F(CloudPolicyClientTest, RegistrationAndPolicyFetch) {
   ExpectRegistration(kOAuthToken);
   EXPECT_CALL(observer_, OnRegistrationStateChanged(_));
   client_->Register(em::DeviceRegisterRequest::USER,
-                    kOAuthToken, std::string(), false);
+                    kOAuthToken, std::string(), false, std::string());
   EXPECT_TRUE(client_->is_registered());
   EXPECT_FALSE(client_->GetPolicyFor(policy_ns_key_));
   EXPECT_EQ(DM_STATUS_SUCCESS, client_->status());
@@ -210,10 +238,12 @@ TEST_F(CloudPolicyClientTest, RegistrationAndPolicyFetch) {
 TEST_F(CloudPolicyClientTest, RegistrationParameters) {
   registration_request_.mutable_register_request()->set_reregister(true);
   registration_request_.mutable_register_request()->set_auto_enrolled(true);
+  registration_request_.mutable_register_request()->set_requisition(
+      kRequisition);
   ExpectRegistration(kOAuthToken);
   EXPECT_CALL(observer_, OnRegistrationStateChanged(_));
   client_->Register(em::DeviceRegisterRequest::USER,
-                    kOAuthToken, kClientID, true);
+                    kOAuthToken, kClientID, true, kRequisition);
   EXPECT_EQ(kClientID, client_id_);
 }
 
@@ -223,7 +253,7 @@ TEST_F(CloudPolicyClientTest, RegistrationNoToken) {
   ExpectRegistration(kOAuthToken);
   EXPECT_CALL(observer_, OnClientError(_));
   client_->Register(em::DeviceRegisterRequest::USER,
-                    kOAuthToken, std::string(), false);
+                    kOAuthToken, std::string(), false, std::string());
   EXPECT_FALSE(client_->is_registered());
   EXPECT_FALSE(client_->GetPolicyFor(policy_ns_key_));
   EXPECT_EQ(DM_STATUS_RESPONSE_DECODING_ERROR, client_->status());
@@ -236,7 +266,7 @@ TEST_F(CloudPolicyClientTest, RegistrationFailure) {
   EXPECT_CALL(service_, StartJob(_, _, _, _, _, _, _));
   EXPECT_CALL(observer_, OnClientError(_));
   client_->Register(em::DeviceRegisterRequest::USER,
-                    kOAuthToken, std::string(), false);
+                    kOAuthToken, std::string(), false, std::string());
   EXPECT_FALSE(client_->is_registered());
   EXPECT_FALSE(client_->GetPolicyFor(policy_ns_key_));
   EXPECT_EQ(DM_STATUS_REQUEST_FAILED, client_->status());
@@ -254,7 +284,7 @@ TEST_F(CloudPolicyClientTest, RetryRegistration) {
                                  "", kOAuthToken, "", "", _,
                                  MatchProto(registration_request_)));
   client_->Register(em::DeviceRegisterRequest::USER,
-                    kOAuthToken, std::string(), false);
+                    kOAuthToken, std::string(), false, std::string());
   EXPECT_FALSE(client_->is_registered());
   Mock::VerifyAndClearExpectations(&service_);
 
@@ -314,6 +344,40 @@ TEST_F(CloudPolicyClientTest, PolicyFetchWithMetaData) {
   EXPECT_CALL(status_provider_, OnSubmittedSuccessfully());
   client_->FetchPolicy();
   CheckPolicyResponse();
+}
+
+TEST_F(CloudPolicyClientTest, PolicyFetchWithInvalidation) {
+  Register();
+
+  int64 previous_version = client_->fetched_invalidation_version();
+  client_->SetInvalidationInfo(12345, "12345");
+  EXPECT_EQ(previous_version, client_->fetched_invalidation_version());
+  em::PolicyFetchRequest* policy_fetch_request =
+      policy_request_.mutable_policy_request()->mutable_request(0);
+  policy_fetch_request->set_invalidation_version(12345);
+  policy_fetch_request->set_invalidation_payload("12345");
+
+  ExpectPolicyFetch(kDMToken, dm_protocol::kValueUserAffiliationNone);
+  EXPECT_CALL(observer_, OnPolicyFetched(_));
+  EXPECT_CALL(status_provider_, OnSubmittedSuccessfully());
+  client_->FetchPolicy();
+  CheckPolicyResponse();
+  EXPECT_EQ(12345, client_->fetched_invalidation_version());
+}
+
+TEST_F(CloudPolicyClientTest, PolicyFetchWithInvalidationNoPayload) {
+  Register();
+
+  int64 previous_version = client_->fetched_invalidation_version();
+  client_->SetInvalidationInfo(-12345, std::string());
+  EXPECT_EQ(previous_version, client_->fetched_invalidation_version());
+
+  ExpectPolicyFetch(kDMToken, dm_protocol::kValueUserAffiliationNone);
+  EXPECT_CALL(observer_, OnPolicyFetched(_));
+  EXPECT_CALL(status_provider_, OnSubmittedSuccessfully());
+  client_->FetchPolicy();
+  CheckPolicyResponse();
+  EXPECT_EQ(-12345, client_->fetched_invalidation_version());
 }
 
 TEST_F(CloudPolicyClientTest, BadPolicyResponse) {
@@ -459,6 +523,47 @@ TEST_F(CloudPolicyClientTest, PolicyFetchWithExtensionPolicy) {
     ASSERT_TRUE(response);
     EXPECT_EQ(it->second.SerializeAsString(), response->SerializeAsString());
   }
+}
+
+TEST_F(CloudPolicyClientTest, UploadCertificate) {
+  Register();
+
+  ExpectUploadCertificate();
+  EXPECT_CALL(upload_certificate_observer_, OnUploadComplete(true)).Times(1);
+  CloudPolicyClient::StatusCallback callback = base::Bind(
+      &MockUploadCertificateObserver::OnUploadComplete,
+      base::Unretained(&upload_certificate_observer_));
+  client_->UploadCertificate(kDeviceCertificate, callback);
+  EXPECT_EQ(DM_STATUS_SUCCESS, client_->status());
+}
+
+TEST_F(CloudPolicyClientTest, UploadCertificateEmpty) {
+  Register();
+
+  upload_certificate_response_.clear_cert_upload_response();
+  ExpectUploadCertificate();
+  EXPECT_CALL(upload_certificate_observer_, OnUploadComplete(false)).Times(1);
+  CloudPolicyClient::StatusCallback callback = base::Bind(
+      &MockUploadCertificateObserver::OnUploadComplete,
+      base::Unretained(&upload_certificate_observer_));
+  client_->UploadCertificate(kDeviceCertificate, callback);
+  EXPECT_EQ(DM_STATUS_SUCCESS, client_->status());
+}
+
+TEST_F(CloudPolicyClientTest, UploadCertificateFailure) {
+  Register();
+
+  EXPECT_CALL(upload_certificate_observer_, OnUploadComplete(false)).Times(1);
+  EXPECT_CALL(service_,
+              CreateJob(DeviceManagementRequestJob::TYPE_UPLOAD_CERTIFICATE))
+      .WillOnce(service_.FailJob(DM_STATUS_REQUEST_FAILED));
+  EXPECT_CALL(service_, StartJob(_, _, _, _, _, _, _));
+  EXPECT_CALL(observer_, OnClientError(_));
+  CloudPolicyClient::StatusCallback callback = base::Bind(
+      &MockUploadCertificateObserver::OnUploadComplete,
+      base::Unretained(&upload_certificate_observer_));
+  client_->UploadCertificate(kDeviceCertificate, callback);
+  EXPECT_EQ(DM_STATUS_REQUEST_FAILED, client_->status());
 }
 
 }  // namespace policy

@@ -5,26 +5,23 @@
 #include "chrome/browser/chromeos/contacts/gdata_contacts_service.h"
 
 #include "base/bind.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
-#include "base/message_loop.h"
-#include "base/stringprintf.h"
-#include "base/time.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/stringprintf.h"
+#include "base/time/time.h"
 #include "chrome/browser/chromeos/contacts/contact.pb.h"
 #include "chrome/browser/chromeos/contacts/contact_test_util.h"
-#include "chrome/browser/google_apis/auth_service.h"
-#include "chrome/browser/google_apis/test_server/http_request.h"
-#include "chrome/browser/google_apis/test_server/http_response.h"
-#include "chrome/browser/google_apis/test_server/http_server.h"
+#include "chrome/browser/google_apis/dummy_auth_service.h"
 #include "chrome/browser/google_apis/test_util.h"
 #include "chrome/browser/google_apis/time_util.h"
-#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/in_process_browser_test.h"
-#include "chrome/test/base/testing_profile.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/test/test_browser_thread.h"
 #include "content/public/test/test_utils.h"
+#include "net/test/embedded_test_server/embedded_test_server.h"
+#include "net/test/embedded_test_server/http_request.h"
+#include "net/test/embedded_test_server/http_response.h"
 #include "net/url_request/url_request_test_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gfx/size.h"
@@ -79,22 +76,20 @@ class GDataContactsServiceTest : public testing::Test {
 
   virtual void SetUp() OVERRIDE {
     io_thread_.StartIOThread();
-    profile_.reset(new TestingProfile);
     request_context_getter_ = new net::TestURLRequestContextGetter(
         content::BrowserThread::GetMessageLoopProxyForThread(
             content::BrowserThread::IO));
 
-    test_server_.reset(new google_apis::test_server::HttpServer());
+    test_server_.reset(
+        new net::test_server::EmbeddedTestServer(
+            content::BrowserThread::GetMessageLoopProxyForThread(
+                content::BrowserThread::IO)));
     ASSERT_TRUE(test_server_->InitializeAndWaitUntilReady());
     test_server_->RegisterRequestHandler(
         base::Bind(&GDataContactsServiceTest::HandleDownloadRequest,
                    base::Unretained(this)));
-    service_.reset(new GDataContactsService(
-        request_context_getter_,
-        profile_.get()));
-    service_->Initialize();
-    service_->auth_service_for_testing()->set_access_token_for_testing(
-        kTestGDataAuthToken);
+    service_.reset(new GDataContactsService(request_context_getter_.get(),
+                                            new google_apis::DummyAuthService));
     service_->set_rewrite_photo_url_callback_for_testing(
         base::Bind(&GDataContactsServiceTest::RewritePhotoUrl,
                    base::Unretained(this)));
@@ -105,7 +100,7 @@ class GDataContactsServiceTest : public testing::Test {
   }
 
   virtual void TearDown() OVERRIDE {
-    test_server_->ShutdownAndWaitUntilComplete();
+    EXPECT_TRUE(test_server_->ShutdownAndWaitUntilComplete());
     test_server_.reset();
     request_context_getter_ = NULL;
     service_.reset();
@@ -134,7 +129,7 @@ class GDataContactsServiceTest : public testing::Test {
   }
 
   scoped_ptr<GDataContactsService> service_;
-  scoped_ptr<google_apis::test_server::HttpServer> test_server_;
+  scoped_ptr<net::test_server::EmbeddedTestServer> test_server_;
 
  private:
   // Rewrites |original_url|, a photo URL from a contacts feed, to instead point
@@ -148,7 +143,7 @@ class GDataContactsServiceTest : public testing::Test {
     CHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
     download_was_successful_ = true;
     downloaded_contacts_.swap(contacts);
-    MessageLoop::current()->Quit();
+    base::MessageLoop::current()->Quit();
   }
 
   // Handles failure for Download().
@@ -156,26 +151,25 @@ class GDataContactsServiceTest : public testing::Test {
     CHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
     download_was_successful_ = false;
     downloaded_contacts_.reset(new ScopedVector<contacts::Contact>());
-    MessageLoop::current()->Quit();
+    base::MessageLoop::current()->Quit();
   }
 
   // Handles a request for downloading a file. Reads a requested file and
   // returns the content.
-  scoped_ptr<google_apis::test_server::HttpResponse> HandleDownloadRequest(
-      const google_apis::test_server::HttpRequest& request) {
+  scoped_ptr<net::test_server::HttpResponse> HandleDownloadRequest(
+      const net::test_server::HttpRequest& request) {
     DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
     // Requested url must not contain a query string.
-    scoped_ptr<google_apis::test_server::HttpResponse> result =
+    scoped_ptr<net::test_server::BasicHttpResponse> result =
         google_apis::test_util::CreateHttpResponseFromFile(
             google_apis::test_util::GetTestFilePath(
                 std::string("chromeos/gdata/contacts") + request.relative_url));
-    return result.Pass();
+    return result.PassAs<net::test_server::HttpResponse>();
   }
 
-  MessageLoopForUI message_loop_;
+  base::MessageLoopForUI message_loop_;
   content::TestBrowserThread ui_thread_;
   content::TestBrowserThread io_thread_;
-  scoped_ptr<TestingProfile> profile_;
   scoped_refptr<net::TestURLRequestContextGetter> request_context_getter_;
 
   // Was the last download successful?  Used to pass the result back from

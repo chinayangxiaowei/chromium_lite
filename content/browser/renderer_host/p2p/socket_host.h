@@ -14,14 +14,20 @@ namespace IPC {
 class Sender;
 }
 
+namespace net {
+class URLRequestContextGetter;
+}
+
 namespace content {
 
 // Base class for P2P sockets.
 class CONTENT_EXPORT P2PSocketHost {
  public:
+  static const int kStunHeaderSize = 20;
   // Creates P2PSocketHost of the specific type.
   static P2PSocketHost* Create(IPC::Sender* message_sender,
-                               int id, P2PSocketType type);
+                               int id, P2PSocketType type,
+                               net::URLRequestContextGetter* url_context);
 
   virtual ~P2PSocketHost();
 
@@ -37,7 +43,7 @@ class CONTENT_EXPORT P2PSocketHost {
       const net::IPEndPoint& remote_address, int id) = 0;
 
  protected:
-  friend class P2PSocketHostTcpTest;
+  friend class P2PSocketHostTcpTestBase;
 
   enum StunMessageType {
     STUN_BINDING_REQUEST = 0x0001,
@@ -58,20 +64,10 @@ class CONTENT_EXPORT P2PSocketHost {
   enum State {
     STATE_UNINITIALIZED,
     STATE_CONNECTING,
+    STATE_TLS_CONNECTING,
     STATE_OPEN,
     STATE_ERROR,
   };
-
-  // Maximum size of send buffers. Must be big enough to fit data for
-  // one data burst. Send buffers size needs to be limited to prevent
-  // from consuming too much memory with misbehaving renderer process.
-  //
-  // TODO(sergeyu): Consider implementing congestion notifications to
-  // minimize buffering. This will require some fixes in libjingle,
-  // see crbug.com/91495 .
-  //
-  // This value is changed to 40KB and details is in crbug.com/231705.
-  static const int kMaxSendBufferSize = 40 * 1024;
 
   P2PSocketHost(IPC::Sender* message_sender, int id);
 

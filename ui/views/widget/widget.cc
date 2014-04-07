@@ -6,8 +6,9 @@
 
 #include "base/debug/trace_event.h"
 #include "base/logging.h"
-#include "base/message_loop.h"
-#include "base/utf_string_conversions.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/utf_string_conversions.h"
+#include "ui/base/default_theme_provider.h"
 #include "ui/base/events/event.h"
 #include "ui/base/hit_test.h"
 #include "ui/base/l10n/l10n_font_util.h"
@@ -21,11 +22,11 @@
 #include "ui/views/focus/widget_focus_manager.h"
 #include "ui/views/ime/input_method.h"
 #include "ui/views/views_delegate.h"
-#include "ui/views/widget/default_theme_provider.h"
 #include "ui/views/widget/native_widget_private.h"
 #include "ui/views/widget/root_view.h"
 #include "ui/views/widget/tooltip_manager.h"
 #include "ui/views/widget/widget_delegate.h"
+#include "ui/views/widget/widget_deletion_observer.h"
 #include "ui/views/widget/widget_observer.h"
 #include "ui/views/window/custom_frame_view.h"
 
@@ -62,36 +63,6 @@ NativeWidget* CreateNativeWidget(NativeWidget* native_widget,
 }
 
 }  // namespace
-
-// This class is used to keep track of the event a Widget is processing, and
-// restore any previously active event afterwards.
-class ScopedEvent {
- public:
-  ScopedEvent(Widget* widget, const ui::Event& event)
-      : widget_(widget),
-        event_(&event) {
-    widget->event_stack_.push(this);
-  }
-
-  ~ScopedEvent() {
-    if (widget_)
-      widget_->event_stack_.pop();
-  }
-
-  void reset() {
-    widget_ = NULL;
-  }
-
-  const ui::Event* event() {
-    return event_;
-  }
-
- private:
-  Widget* widget_;
-  const ui::Event* event_;
-
-  DISALLOW_COPY_AND_ASSIGN(ScopedEvent);
-};
 
 // A default implementation of WidgetDelegate, used by Widget when no
 // WidgetDelegate is supplied.
@@ -133,9 +104,9 @@ Widget::InitParams::InitParams()
     : type(TYPE_WINDOW),
       delegate(NULL),
       child(false),
-      transient(false),
-      transparent(ViewsDelegate::views_delegate &&
-                  ViewsDelegate::views_delegate->UseTransparentWindows()),
+      opacity((ViewsDelegate::views_delegate &&
+               ViewsDelegate::views_delegate->UseTransparentWindows()) ?
+              TRANSLUCENT_WINDOW : INFER_OPACITY),
       accept_events(true),
       can_activate(true),
       keep_on_top(false),
@@ -158,10 +129,10 @@ Widget::InitParams::InitParams(Type type)
     : type(type),
       delegate(NULL),
       child(type == TYPE_CONTROL),
-      transient(type == TYPE_BUBBLE || type == TYPE_POPUP || type == TYPE_MENU),
-      transparent(type == TYPE_WINDOW &&
-                  ViewsDelegate::views_delegate &&
-                  ViewsDelegate::views_delegate->UseTransparentWindows()),
+      opacity(((type == TYPE_WINDOW || type == TYPE_PANEL) &&
+               ViewsDelegate::views_delegate &&
+               ViewsDelegate::views_delegate->UseTransparentWindows()) ?
+              TRANSLUCENT_WINDOW : INFER_OPACITY),
       accept_events(true),
       can_activate(type != TYPE_POPUP && type != TYPE_MENU),
       keep_on_top(type == TYPE_MENU),
@@ -169,6 +140,7 @@ Widget::InitParams::InitParams(Type type)
       mirror_origin_in_rtl(false),
       has_dropshadow(false),
       remove_standard_frame(false),
+      use_system_default_icon(false),
       show_state(ui::SHOW_STATE_DEFAULT),
       double_buffer(false),
       parent(NULL),
@@ -187,7 +159,6 @@ Widget::Widget()
       widget_delegate_(NULL),
       non_client_view_(NULL),
       dragged_view_(NULL),
-      event_stack_(),
       ownership_(InitParams::NATIVE_WIDGET_OWNS_WIDGET),
       is_secondary_widget_(true),
       frame_type_(FRAME_TYPE_DEFAULT),
@@ -206,11 +177,6 @@ Widget::Widget()
 }
 
 Widget::~Widget() {
-  while (!event_stack_.empty()) {
-    event_stack_.top()->reset();
-    event_stack_.pop();
-  }
-
   DestroyRootView();
   if (ownership_ == InitParams::WIDGET_OWNS_NATIVE_WIDGET) {
     delete native_widget_;
@@ -346,10 +312,18 @@ void Widget::Init(const InitParams& in_params) {
        params.type != InitParams::TYPE_CONTROL &&
        params.type != InitParams::TYPE_TOOLTIP);
   params.top_level = is_top_level_;
+  if (params.opacity == InitParams::INFER_OPACITY) {
 #if defined(OS_WIN) && defined(USE_AURA)
-  // It'll need to be faded in if it's top level and not the main window.
-  params.transparent = is_top_level_ && params.type != InitParams::TYPE_WINDOW;
+    // By default, make all top-level windows but the main window transparent
+    // initially so that they can be made to fade in.
+    if (is_top_level_ && params.type != InitParams::TYPE_WINDOW)
+      params.opacity = InitParams::TRANSLUCENT_WINDOW;
+    else
+      params.opacity = InitParams::OPAQUE_WINDOW;
+#else
+    params.opacity = InitParams::OPAQUE_WINDOW;
 #endif
+  }
 
   if (ViewsDelegate::views_delegate)
     ViewsDelegate::views_delegate->OnBeforeWidgetInit(&params, this);
@@ -360,7 +334,7 @@ void Widget::Init(const InitParams& in_params) {
   native_widget_ = CreateNativeWidget(params.native_widget, this)->
                    AsNativeWidgetPrivate();
   root_view_.reset(CreateRootView());
-  default_theme_provider_.reset(new DefaultThemeProvider);
+  default_theme_provider_.reset(new ui::DefaultThemeProvider);
   if (params.type == InitParams::TYPE_MENU) {
     is_mouse_button_pressed_ =
         internal::NativeWidgetPrivate::IsMouseButtonDown();
@@ -372,13 +346,16 @@ void Widget::Init(const InitParams& in_params) {
     // Create the ClientView, add it to the NonClientView and add the
     // NonClientView to the RootView. This will cause everything to be parented.
     non_client_view_->set_client_view(widget_delegate_->CreateClientView(this));
+    non_client_view_->SetOverlayView(widget_delegate_->CreateOverlayView());
     SetContentsView(non_client_view_);
+    // Initialize the window's title before setting the window's initial bounds;
+    // the frame view's preferred height may depend on the presence of a title.
+    UpdateWindowTitle();
     SetInitialBounds(params.bounds);
     if (params.show_state == ui::SHOW_STATE_MAXIMIZED)
       Maximize();
     else if (params.show_state == ui::SHOW_STATE_MINIMIZED)
       Minimize();
-    UpdateWindowTitle();
   } else if (params.delegate) {
     SetContentsView(params.delegate->GetContentsView());
     SetInitialBoundsForFramelessWindow(params.bounds);
@@ -412,15 +389,16 @@ bool Widget::GetAccelerator(int cmd_id, ui::Accelerator* accelerator) {
   return false;
 }
 
-void Widget::ViewHierarchyChanged(bool is_add, View* parent, View* child) {
-  if (!is_add) {
-    if (child == dragged_view_)
+void Widget::ViewHierarchyChanged(
+    const View::ViewHierarchyChangedDetails& details) {
+  if (!details.is_add) {
+    if (details.child == dragged_view_)
       dragged_view_ = NULL;
     FocusManager* focus_manager = GetFocusManager();
     if (focus_manager)
-      focus_manager->ViewRemoved(child);
-    ViewStorage::GetInstance()->ViewRemoved(child);
-    native_widget_->ViewRemoved(child);
+      focus_manager->ViewRemoved(details.child);
+    ViewStorage::GetInstance()->ViewRemoved(details.child);
+    native_widget_->ViewRemoved(details.child);
   }
 }
 
@@ -574,6 +552,10 @@ void Widget::Close() {
 void Widget::CloseNow() {
   FOR_EACH_OBSERVER(WidgetObserver, observers_, OnWidgetClosing(this));
   native_widget_->CloseNow();
+}
+
+bool Widget::IsClosed() const {
+  return widget_closed_;
 }
 
 void Widget::Show() {
@@ -731,15 +713,17 @@ const FocusManager* Widget::GetFocusManager() const {
 }
 
 InputMethod* Widget::GetInputMethod() {
+  return const_cast<InputMethod*>(
+      const_cast<const Widget*>(this)->GetInputMethod());
+}
+
+const InputMethod* Widget::GetInputMethod() const {
   if (is_top_level()) {
-    if (!input_method_.get()) {
-      input_method_.reset(native_widget_->CreateInputMethod());
-      if (input_method_.get())
-        input_method_->Init(this);
-    }
+    if (!input_method_.get())
+      input_method_ = const_cast<Widget*>(this)->CreateInputMethod().Pass();
     return input_method_.get();
   } else {
-    Widget* toplevel = GetTopLevelWidget();
+    const Widget* toplevel = GetTopLevelWidget();
     // If GetTopLevelWidget() returns itself which is not toplevel,
     // the widget is detached from toplevel widget.
     // TODO(oshima): Fix GetTopLevelWidget() to return NULL
@@ -772,8 +756,8 @@ void Widget::SetCursor(gfx::NativeCursor cursor) {
   native_widget_->SetCursor(cursor);
 }
 
-void Widget::ResetLastMouseMoveFlag() {
-  last_mouse_event_was_move_ = false;
+bool Widget::IsMouseEventsEnabled() const {
+  return native_widget_->IsMouseEventsEnabled();
 }
 
 void Widget::SetNativeWindowProperty(const char* name, void* value) {
@@ -877,16 +861,12 @@ ui::Compositor* Widget::GetCompositor() {
   return native_widget_->GetCompositor();
 }
 
-gfx::Vector2d Widget::CalculateOffsetToAncestorWithLayer(
-    ui::Layer** layer_parent) {
-  return native_widget_->CalculateOffsetToAncestorWithLayer(layer_parent);
+ui::Layer* Widget::GetLayer() {
+  return native_widget_->GetLayer();
 }
 
-void Widget::ReorderLayers() {
-  ui::Layer* layer = NULL;
-  CalculateOffsetToAncestorWithLayer(&layer);
-  if (layer)
-    root_view_->ReorderChildLayers(layer);
+void Widget::ReorderNativeViews() {
+  native_widget_->ReorderNativeViews();
 }
 
 void Widget::UpdateRootLayers() {
@@ -894,15 +874,6 @@ void Widget::UpdateRootLayers() {
   // mutation of the tree can trigger this call we delay until absolutely
   // necessary.
   root_layers_dirty_ = true;
-}
-
-void Widget::NotifyAccessibilityEvent(
-    View* view,
-    ui::AccessibilityTypes::Event event_type,
-    bool send_native_event) {
-  // TODO(dmazzoni): get rid of this method and have clients just use
-  // View::NotifyAccessibilityEvent directly.
-  view->NotifyAccessibilityEvent(event_type, send_native_event);
 }
 
 const NativeWidget* Widget::native_widget() const {
@@ -932,10 +903,6 @@ bool Widget::HasCapture() {
   return native_widget_->HasCapture();
 }
 
-const ui::Event* Widget::GetCurrentEvent() {
-  return event_stack_.empty() ? NULL : event_stack_.top()->event();
-}
-
 void Widget::TooltipTextChanged(View* view) {
   TooltipManager* manager = native_widget_private()->GetTooltipManager();
   if (manager)
@@ -943,9 +910,14 @@ void Widget::TooltipTextChanged(View* view) {
 }
 
 bool Widget::SetInitialFocus() {
-  if (!focus_on_creation_)
-    return true;
   View* v = widget_delegate_->GetInitiallyFocusedView();
+  if (!focus_on_creation_) {
+    // If not focusing the window now, tell the focus manager which view to
+    // focus when the window is restored.
+    if (v)
+      focus_manager_->SetStoredFocusView(v);
+    return true;
+  }
   if (v)
     v->RequestFocus();
   return !!v;
@@ -957,6 +929,15 @@ View* Widget::GetChildViewParent() {
 
 gfx::Rect Widget::GetWorkAreaBoundsInScreen() const {
   return native_widget_->GetWorkAreaBoundsInScreen();
+}
+
+void Widget::SynthesizeMouseMoveEvent() {
+  last_mouse_event_was_move_ = false;
+  ui::MouseEvent mouse_event(ui::ET_MOUSE_MOVED,
+                             last_mouse_event_position_,
+                             last_mouse_event_position_,
+                             ui::EF_IS_SYNTHESIZED);
+  root_view_->OnMouseMoved(mouse_event);
 }
 
 void Widget::OnOwnerClosing() {
@@ -986,7 +967,10 @@ void Widget::EnableInactiveRendering() {
 }
 
 void Widget::OnNativeWidgetActivationChanged(bool active) {
-  if (!active)
+  // On windows we may end up here before we've completed initialization (from
+  // an WM_NCACTIVATE). If that happens the WidgetDelegate likely doesn't know
+  // the Widget and will crash attempting to access it.
+  if (!active && native_widget_initialized_)
     SaveWindowPlacement();
 
   FOR_EACH_OBSERVER(WidgetObserver, observers_,
@@ -1013,9 +997,9 @@ void Widget::OnNativeWidgetVisibilityChanged(bool visible) {
     root->layer()->SetVisible(visible);
 }
 
-void Widget::OnNativeWidgetCreated() {
+void Widget::OnNativeWidgetCreated(bool desktop_widget) {
   if (is_top_level())
-    focus_manager_.reset(FocusManagerFactory::Create(this));
+    focus_manager_.reset(FocusManagerFactory::Create(this, desktop_widget));
 
   native_widget_->InitModalType(widget_delegate_->GetModalType());
 
@@ -1086,36 +1070,7 @@ bool Widget::OnNativeWidgetPaintAccelerated(const gfx::Rect& dirty_region) {
   if (!compositor)
     return false;
 
-#if defined(OS_WIN) && defined(USE_AURA)
-  compositor->ScheduleDraw();
-#else
-  // If the root view is animating, it is likely that it does not cover the same
-  // set of pixels it did at the last frame, so we must clear when compositing
-  // to avoid leaving ghosts.
-  bool force_clear = false;
-  if (GetRootView()->layer()) {
-    const gfx::Transform& layer_transform = GetRootView()->layer()->transform();
-    if (layer_transform != GetRootView()->GetTransform()) {
-      // The layer has not caught up to the view (i.e., the layer is still
-      // animating), and so a clear is required.
-      force_clear = true;
-    } else {
-      // Determine if the layer fills the client area.
-      gfx::RectF layer_bounds = GetRootView()->layer()->bounds();
-      layer_transform.TransformRect(&layer_bounds);
-      gfx::Rect client_bounds = GetClientAreaBoundsInScreen();
-      // Translate bounds to origin (client area bounds are offset to account
-      // for buttons, etc).
-      client_bounds.set_origin(gfx::Point(0, 0));
-      if (!layer_bounds.Contains(client_bounds)) {
-        // It doesn't, and so a clear is required.
-        force_clear = true;
-      }
-    }
-  }
-
-  compositor->Draw(force_clear);
-#endif
+  compositor->ScheduleRedrawRect(dirty_region);
   return true;
 }
 
@@ -1123,7 +1078,7 @@ void Widget::OnNativeWidgetPaint(gfx::Canvas* canvas) {
   // On Linux Aura, we can get here during Init() because of the
   // SetInitialBounds call.
   if (native_widget_initialized_)
-  GetRootView()->Paint(canvas);
+    GetRootView()->Paint(canvas);
 }
 
 int Widget::GetNonClientComponent(const gfx::Point& point) {
@@ -1138,26 +1093,43 @@ int Widget::GetNonClientComponent(const gfx::Point& point) {
 }
 
 void Widget::OnKeyEvent(ui::KeyEvent* event) {
-  ScopedEvent scoped(this, *event);
   static_cast<internal::RootView*>(GetRootView())->
       DispatchKeyEvent(event);
 }
 
 void Widget::OnMouseEvent(ui::MouseEvent* event) {
-  ScopedEvent scoped(this, *event);
+  if (!IsMouseEventsEnabled())
+    return;
+
   View* root_view = GetRootView();
   switch (event->type()) {
-    case ui::ET_MOUSE_PRESSED:
+    case ui::ET_MOUSE_PRESSED: {
       last_mouse_event_was_move_ = false;
+
+      // We may get deleted by the time we return from OnMousePressed. So we
+      // use an observer to make sure we are still alive.
+      WidgetDeletionObserver widget_deletion_observer(this);
+
       // Make sure we're still visible before we attempt capture as the mouse
       // press processing may have made the window hide (as happens with menus).
-      if (root_view && root_view->OnMousePressed(*event) && IsVisible()) {
+
+      // It is possible for a View to show a context menu on mouse-press. Since
+      // the menu does a capture and starts a nested message-loop, the release
+      // would go to the menu. The next click (i.e. both mouse-press and release
+      // events) also go to the menu. The menu (and the nested message-loop)
+      // gets closed after this second release event. The code then resumes from
+      // here. So make sure that the mouse-button is still down before doing a
+      // capture.
+      if (root_view && root_view->OnMousePressed(*event) &&
+          widget_deletion_observer.IsWidgetAlive() && IsVisible() &&
+          internal::NativeWidgetPrivate::IsMouseButtonDown()) {
         is_mouse_button_pressed_ = true;
         if (!native_widget_->HasCapture())
           native_widget_->SetCapture();
         event->SetHandled();
       }
       return;
+    }
     case ui::ET_MOUSE_RELEASED:
       last_mouse_event_was_move_ = false;
       is_mouse_button_pressed_ = false;
@@ -1212,19 +1184,16 @@ void Widget::OnMouseCaptureLost() {
 }
 
 void Widget::OnTouchEvent(ui::TouchEvent* event) {
-  ScopedEvent scoped(this, *event);
   static_cast<internal::RootView*>(GetRootView())->
       DispatchTouchEvent(event);
 }
 
 void Widget::OnScrollEvent(ui::ScrollEvent* event) {
-  ScopedEvent scoped(this, *event);
   static_cast<internal::RootView*>(GetRootView())->
       DispatchScrollEvent(event);
 }
 
 void Widget::OnGestureEvent(ui::GestureEvent* event) {
-  ScopedEvent scoped(this, *event);
   switch (event->type()) {
     case ui::ET_GESTURE_TAP_DOWN:
       is_touch_down_ = true;
@@ -1415,9 +1384,16 @@ bool Widget::GetSavedWindowPlacement(gfx::Rect* bounds,
   return false;
 }
 
+scoped_ptr<InputMethod> Widget::CreateInputMethod() {
+  scoped_ptr<InputMethod> input_method(native_widget_->CreateInputMethod());
+  if (input_method.get())
+    input_method->Init(this);
+  return input_method.Pass();
+}
+
 void Widget::ReplaceInputMethod(InputMethod* input_method) {
   input_method_.reset(input_method);
-  input_method->set_delegate(native_widget_->GetInputMethodDelegate());
+  input_method->SetDelegate(native_widget_->GetInputMethodDelegate());
   input_method->Init(this);
 }
 

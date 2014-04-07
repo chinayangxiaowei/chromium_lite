@@ -6,9 +6,10 @@
 
 #include "base/bind.h"
 #include "base/file_util.h"
+#include "base/files/file_enumerator.h"
 #include "base/logging.h"
-#include "base/string16.h"
-#include "base/string_util.h"
+#include "base/strings/string16.h"
+#include "base/strings/string_util.h"
 #include "chrome/test/chromedriver/chrome/zip_internal.h"
 #include "chrome/test/chromedriver/chrome/zip_reader.h"
 #include "net/base/file_stream.h"
@@ -56,7 +57,7 @@ bool AddEntryToZip(zipFile zip_file, const base::FilePath& path,
   ReplaceSubstringsAfterOffset(&str_path, 0u, "\\", "/");
 #endif
 
-  bool is_directory = file_util::DirectoryExists(path);
+  bool is_directory = base::DirectoryExists(path);
   if (is_directory)
     str_path += "/";
 
@@ -126,7 +127,7 @@ bool Unzip(const base::FilePath& src_file, const base::FilePath& dest_dir) {
 bool ZipWithFilterCallback(const base::FilePath& src_dir,
                            const base::FilePath& dest_file,
                            const FilterCallback& filter_cb) {
-  DCHECK(file_util::DirectoryExists(src_dir));
+  DCHECK(base::DirectoryExists(src_dir));
 
   zipFile zip_file = internal::OpenForZipping(dest_file.AsUTF8Unsafe(),
                                               APPEND_STATUS_CREATE);
@@ -137,9 +138,8 @@ bool ZipWithFilterCallback(const base::FilePath& src_dir,
   }
 
   bool success = true;
-  file_util::FileEnumerator file_enumerator(src_dir, true /* recursive */,
-      file_util::FileEnumerator::FILES |
-      file_util::FileEnumerator::DIRECTORIES);
+  base::FileEnumerator file_enumerator(src_dir, true /* recursive */,
+      base::FileEnumerator::FILES | base::FileEnumerator::DIRECTORIES);
   for (base::FilePath path = file_enumerator.Next(); !path.value().empty();
        path = file_enumerator.Next()) {
     if (!filter_cb.Run(path)) {
@@ -175,7 +175,7 @@ bool Zip(const base::FilePath& src_dir, const base::FilePath& dest_file,
 bool ZipFiles(const base::FilePath& src_dir,
               const std::vector<base::FilePath>& src_relative_paths,
               int dest_fd) {
-  DCHECK(file_util::DirectoryExists(src_dir));
+  DCHECK(base::DirectoryExists(src_dir));
   zipFile zip_file = internal::OpenFdForZipping(dest_fd, APPEND_STATUS_CREATE);
 
   if (!zip_file) {

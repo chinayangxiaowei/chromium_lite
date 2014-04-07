@@ -5,15 +5,18 @@
 #ifndef CHROMEOS_DBUS_SHILL_PROFILE_CLIENT_STUB_H_
 #define CHROMEOS_DBUS_SHILL_PROFILE_CLIENT_STUB_H_
 
+#include <map>
 #include <string>
 
 #include "base/basictypes.h"
+#include "chromeos/dbus/shill_manager_client.h"
 #include "chromeos/dbus/shill_profile_client.h"
 
 namespace chromeos {
 
 // A stub implementation of ShillProfileClient.
-class ShillProfileClientStub : public ShillProfileClient {
+class ShillProfileClientStub : public ShillProfileClient,
+                               public ShillProfileClient::TestInterface {
  public:
   ShillProfileClientStub();
   virtual ~ShillProfileClientStub();
@@ -37,14 +40,30 @@ class ShillProfileClientStub : public ShillProfileClient {
                            const std::string& entry_path,
                            const base::Closure& callback,
                            const ErrorCallback& error_callback) OVERRIDE;
+  virtual ShillProfileClient::TestInterface* GetTestInterface() OVERRIDE;
+
+  // ShillProfileClient::TestInterface overrides.
+  virtual void AddProfile(const std::string& profile_path,
+                          const std::string& userhash) OVERRIDE;
+  virtual void AddEntry(const std::string& profile_path,
+                        const std::string& entry_path,
+                        const base::DictionaryValue& properties) OVERRIDE;
+  virtual bool AddService(const std::string& profile_path,
+                          const std::string& service_path) OVERRIDE;
+  virtual void GetProfilePaths(std::vector<std::string>* profiles) OVERRIDE;
+
+  static const char kSharedProfilePath[];
 
  private:
-  void PassEmptyDictionaryValue(
-      const DictionaryValueCallbackWithoutStatus& callback) const;
+  struct ProfileProperties;
+  typedef std::map<std::string, ProfileProperties*> ProfileMap;
 
-  // Note: This should remain the last member so it'll be destroyed and
-  // invalidate its weak pointers before any other members are destroyed.
-  base::WeakPtrFactory<ShillProfileClientStub> weak_ptr_factory_;
+  ProfileProperties* GetProfile(const dbus::ObjectPath& profile_path,
+                                const ErrorCallback& error_callback);
+
+  // The values are owned by this class and are explicitly destroyed where
+  // necessary.
+  ProfileMap profiles_;
 
   DISALLOW_COPY_AND_ASSIGN(ShillProfileClientStub);
 };

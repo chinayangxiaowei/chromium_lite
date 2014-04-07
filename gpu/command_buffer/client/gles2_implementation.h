@@ -13,19 +13,21 @@
 #include <string>
 #include <vector>
 
-#include "../client/buffer_tracker.h"
-#include "../client/client_context_state.h"
-#include "../client/gles2_cmd_helper.h"
-#include "../client/gles2_interface.h"
-#include "../client/query_tracker.h"
-#include "../client/ref_counted.h"
-#include "../client/ring_buffer.h"
-#include "../client/share_group.h"
-#include "../common/compiler_specific.h"
-#include "../common/debug_marker_manager.h"
-#include "../common/gles2_cmd_utils.h"
-#include "../common/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "gles2_impl_export.h"
+#include "gpu/command_buffer/client/buffer_tracker.h"
+#include "gpu/command_buffer/client/client_context_state.h"
+#include "gpu/command_buffer/client/gles2_cmd_helper.h"
+#include "gpu/command_buffer/client/gles2_interface.h"
+#include "gpu/command_buffer/client/gpu_memory_buffer_tracker.h"
+#include "gpu/command_buffer/client/image_factory.h"
+#include "gpu/command_buffer/client/query_tracker.h"
+#include "gpu/command_buffer/client/ref_counted.h"
+#include "gpu/command_buffer/client/ring_buffer.h"
+#include "gpu/command_buffer/client/share_group.h"
+#include "gpu/command_buffer/common/compiler_specific.h"
+#include "gpu/command_buffer/common/debug_marker_manager.h"
+#include "gpu/command_buffer/common/gles2_cmd_utils.h"
 
 #if !defined(NDEBUG) && !defined(__native_client__) && !defined(GLES2_CONFORMANCE_TESTS)  // NOLINT
   #if defined(GLES2_INLINE_OPTIMIZATION)
@@ -102,6 +104,7 @@ class TransferBufferInterface;
 
 namespace gles2 {
 
+class ImageFactory;
 class VertexArrayObjectManager;
 
 // This class emulates GLES2 over command buffers. It can be used by a client
@@ -119,7 +122,10 @@ class GLES2_IMPL_EXPORT GLES2Implementation : public GLES2Interface {
   };
 
   // Stores GL state that never changes.
-  struct GLStaticState {
+  struct GLES2_IMPL_EXPORT GLStaticState {
+    GLStaticState();
+    ~GLStaticState();
+
     struct GLES2_IMPL_EXPORT IntState {
       IntState();
       GLint max_combined_texture_image_units;
@@ -136,6 +142,12 @@ class GLES2_IMPL_EXPORT GLES2Implementation : public GLES2Interface {
       GLint num_shader_binary_formats;
     };
     IntState int_state;
+
+    typedef std::pair<GLenum,GLenum> ShaderPrecisionKey;
+    typedef std::map<ShaderPrecisionKey,
+                     cmds::GetShaderPrecisionFormat::Result>
+        ShaderPrecisionMap;
+    ShaderPrecisionMap shader_precisions;
   };
 
   // The maxiumum result size from simple GL get commands.
@@ -164,8 +176,8 @@ class GLES2_IMPL_EXPORT GLES2Implementation : public GLES2Interface {
       GLES2CmdHelper* helper,
       ShareGroup* share_group,
       TransferBufferInterface* transfer_buffer,
-      bool share_resources,
-      bool bind_generates_resource);
+      bool bind_generates_resource,
+      ImageFactory* image_factory);
 
   virtual ~GLES2Implementation();
 
@@ -184,7 +196,7 @@ class GLES2_IMPL_EXPORT GLES2Implementation : public GLES2Interface {
   // Include the auto-generated part of this class. We split this because
   // it means we can easily edit the non-auto generated parts right here in
   // this file instead of having to edit some template or the code generator.
-  #include "../client/gles2_implementation_autogen.h"
+  #include "gpu/command_buffer/client/gles2_implementation_autogen.h"
 
   virtual void DisableVertexAttribArray(GLuint index) OVERRIDE;
   virtual void EnableVertexAttribArray(GLuint index) OVERRIDE;
@@ -202,9 +214,6 @@ class GLES2_IMPL_EXPORT GLES2Implementation : public GLES2Interface {
   bool GetActiveUniformHelper(
       GLuint program, GLuint index, GLsizei bufsize, GLsizei* length,
       GLint* size, GLenum* type, char* name);
-
-  GLuint MakeTextureId();
-  void FreeTextureId(GLuint id);
 
   void SetSharedMemoryChunkSizeMultiple(unsigned int multiple);
 
@@ -345,6 +354,58 @@ class GLES2_IMPL_EXPORT GLES2Implementation : public GLES2Interface {
   int32 GetResultShmId();
   uint32 GetResultShmOffset();
 
+  bool QueryAndCacheStaticState();
+
+  // Helpers used to batch synchronous GetIntergerv calls with other
+  // synchronous calls.
+  struct GetMultipleIntegervState {
+    GetMultipleIntegervState(const GLenum* pnames, GLuint pnames_count,
+                             GLint* results, GLsizeiptr results_size)
+       : pnames(pnames),
+         pnames_count(pnames_count),
+         results(results),
+         results_size(results_size)
+    { }
+    // inputs
+    const GLenum* pnames;
+    GLuint pnames_count;
+    // outputs
+    GLint* results;
+    GLsizeiptr results_size;
+    // transfer buffer
+    int num_results;
+    int transfer_buffer_size_needed;
+    void* buffer;
+    void* results_buffer;
+  };
+  bool GetMultipleIntegervSetup(
+      GetMultipleIntegervState* state);
+  void GetMultipleIntegervRequest(
+      GetMultipleIntegervState* state);
+  void GetMultipleIntegervOnCompleted(
+      GetMultipleIntegervState* state);
+
+  // Helpers used to batch synchronous GetShaderPrecision calls with other
+  // synchronous calls.
+  struct GetAllShaderPrecisionFormatsState {
+    GetAllShaderPrecisionFormatsState(
+        const GLenum (*precision_params)[2],
+        int precision_params_count)
+        : precision_params(precision_params),
+          precision_params_count(precision_params_count)
+    { }
+    const GLenum (*precision_params)[2];
+    int precision_params_count;
+    int transfer_buffer_size_needed;
+    void* results_buffer;
+  };
+  void GetAllShaderPrecisionFormatsSetup(
+      GetAllShaderPrecisionFormatsState* state);
+  void GetAllShaderPrecisionFormatsRequest(
+      GetAllShaderPrecisionFormatsState* state);
+  void GetAllShaderPrecisionFormatsOnCompleted(
+      GetAllShaderPrecisionFormatsState* state);
+
   // Lazily determines if GL_ANGLE_pack_reverse_row_order is available
   bool IsAnglePackReverseRowOrderAvailable();
   bool IsChromiumFramebufferMultisampleAvailable();
@@ -435,6 +496,14 @@ class GLES2_IMPL_EXPORT GLES2Implementation : public GLES2Interface {
       GLenum target, GLintptr offset, GLsizeiptr size, const void* data,
       ScopedTransferBufferPtr* buffer);
 
+  GLuint CreateImageCHROMIUMHelper(
+      GLsizei width, GLsizei height, GLenum internalformat);
+  void DestroyImageCHROMIUMHelper(GLuint image_id);
+  void* MapImageCHROMIUMHelper(GLuint image_id, GLenum access);
+  void UnmapImageCHROMIUMHelper(GLuint image_id);
+  void GetImageParameterivCHROMIUMHelper(
+      GLuint image_id, GLenum pname, GLint* params);
+
   // Helper for GetVertexAttrib
   bool GetVertexAttribHelper(GLuint index, GLenum pname, uint32* param);
 
@@ -482,7 +551,10 @@ class GLES2_IMPL_EXPORT GLES2Implementation : public GLES2Interface {
   // for error checking.
   bool MustBeContextLost();
 
+  bool GetBoundPixelTransferBuffer(
+      GLenum target, const char* function_name, GLuint* buffer_id);
   BufferTracker::Buffer* GetBoundPixelUnpackTransferBufferIfValid(
+      GLuint buffer_id,
       const char* function_name, GLuint offset, GLsizei size);
 
   const std::string& GetLogPrefix() const;
@@ -532,7 +604,7 @@ class GLES2_IMPL_EXPORT GLES2Implementation : public GLES2Interface {
   // pack reverse row order as last set by glPixelstorei
   bool pack_reverse_row_order_;
 
-  scoped_array<TextureUnit> texture_units_;
+  scoped_ptr<TextureUnit[]> texture_units_;
 
   // 0 to gl_state_.max_combined_texture_image_units.
   GLuint active_texture_unit_;
@@ -547,7 +619,8 @@ class GLES2_IMPL_EXPORT GLES2Implementation : public GLES2Interface {
   // The currently bound array buffer.
   GLuint bound_array_buffer_id_;
 
-  // The currently bound pixel transfer buffer.
+  // The currently bound pixel transfer buffers.
+  GLuint bound_pixel_pack_transfer_buffer_id_;
   GLuint bound_pixel_unpack_transfer_buffer_id_;
 
   // Client side management for vertex array objects. Needed to correctly
@@ -582,13 +655,6 @@ class GLES2_IMPL_EXPORT GLES2Implementation : public GLES2Interface {
 
   scoped_ptr<MappedMemoryManager> mapped_memory_;
 
-  // Cache results of GetShaderPrecisionFormat
-  typedef std::pair<GLenum,GLenum> ShaderPrecisionCacheKey;
-  typedef std::map<ShaderPrecisionCacheKey,
-                   cmds::GetShaderPrecisionFormat::Result>
-      ShaderPrecisionCacheMap;
-  ShaderPrecisionCacheMap shader_precision_cache_;
-
   scoped_refptr<ShareGroup> share_group_;
 
   scoped_ptr<QueryTracker> query_tracker_;
@@ -596,9 +662,13 @@ class GLES2_IMPL_EXPORT GLES2Implementation : public GLES2Interface {
 
   scoped_ptr<BufferTracker> buffer_tracker_;
 
+  scoped_ptr<GpuMemoryBufferTracker> gpu_memory_buffer_tracker_;
+
   ErrorMessageCallback* error_message_callback_;
 
   scoped_ptr<std::string> current_trace_name_;
+
+  ImageFactory* image_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(GLES2Implementation);
 };

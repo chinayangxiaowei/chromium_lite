@@ -8,9 +8,9 @@
 #include "base/files/file_path.h"
 #include "base/native_library.h"
 #include "build/build_config.h"
-#include "content/common/child_thread.h"
+#include "content/child/child_thread.h"
+#include "content/child/npapi/plugin_lib.h"
 #include "content/plugin/plugin_channel.h"
-#include "webkit/plugins/npapi/plugin_lib.h"
 
 #if defined(OS_POSIX)
 #include "base/file_descriptor_posix.h"
@@ -25,9 +25,14 @@ class PluginThread : public ChildThread {
  public:
   PluginThread();
   virtual ~PluginThread();
+  virtual void Shutdown() OVERRIDE;
 
   // Returns the one plugin thread.
   static PluginThread* current();
+
+  // Tells the plugin thread to terminate the process forcefully instead of
+  // exiting cleanly.
+  void SetForcefullyTerminatePluginProcess();
 
  private:
   virtual bool OnControlMessageReceived(const IPC::Message& msg) OVERRIDE;
@@ -43,6 +48,8 @@ class PluginThread : public ChildThread {
 
   // The plugin module which is preloaded in Init
   base::NativeLibrary preloaded_plugin_module_;
+
+  bool forcefully_terminate_plugin_process_;
 
   DISALLOW_COPY_AND_ASSIGN(PluginThread);
 };

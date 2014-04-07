@@ -7,7 +7,7 @@
 #include "base/command_line.h"
 #include "base/lazy_instance.h"
 #include "base/metrics/field_trial.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "chrome/common/chrome_switches.h"
 
 namespace extensions {
@@ -17,10 +17,7 @@ namespace {
 class CommonSwitches {
  public:
   CommonSwitches()
-      : action_box(
-            switches::kActionBox,
-            FeatureSwitch::DEFAULT_DISABLED),
-        easy_off_store_install(
+      : easy_off_store_install(
             switches::kEasyOffStoreExtensionInstall,
             FeatureSwitch::DEFAULT_DISABLED),
         script_badges(
@@ -29,29 +26,18 @@ class CommonSwitches {
         script_bubble(
             switches::kScriptBubble,
             FeatureSwitch::DEFAULT_DISABLED),
-        sideload_wipeout(
-            switches::kSideloadWipeout,
-            base::FieldTrialList::FindFullName("SideloadWipeout") == "Enabled" ?
-                FeatureSwitch::DEFAULT_ENABLED :
-                FeatureSwitch::DEFAULT_DISABLED),
         prompt_for_external_extensions(
             switches::kPromptForExternalExtensions,
 #if defined(OS_WIN)
-            FeatureSwitch::DEFAULT_ENABLED),
-#else
-            FeatureSwitch::DEFAULT_DISABLED),
-#endif
-        tab_capture(
-            switches::kTabCapture,
             FeatureSwitch::DEFAULT_ENABLED) {}
+#else
+            FeatureSwitch::DEFAULT_DISABLED) {}
+#endif
 
-  FeatureSwitch action_box;
   FeatureSwitch easy_off_store_install;
   FeatureSwitch script_badges;
   FeatureSwitch script_bubble;
-  FeatureSwitch sideload_wipeout;
   FeatureSwitch prompt_for_external_extensions;
-  FeatureSwitch tab_capture;
 };
 
 base::LazyInstance<CommonSwitches> g_common_switches =
@@ -59,10 +45,6 @@ base::LazyInstance<CommonSwitches> g_common_switches =
 
 }  // namespace
 
-
-FeatureSwitch* FeatureSwitch::action_box() {
-  return &g_common_switches.Get().action_box;
-}
 FeatureSwitch* FeatureSwitch::easy_off_store_install() {
   return &g_common_switches.Get().easy_off_store_install;
 }
@@ -72,16 +54,9 @@ FeatureSwitch* FeatureSwitch::script_badges() {
 FeatureSwitch* FeatureSwitch::script_bubble() {
   return &g_common_switches.Get().script_bubble;
 }
-FeatureSwitch* FeatureSwitch::sideload_wipeout() {
-  return &g_common_switches.Get().sideload_wipeout;
-}
 FeatureSwitch* FeatureSwitch::prompt_for_external_extensions() {
   return &g_common_switches.Get().prompt_for_external_extensions;
 }
-FeatureSwitch* FeatureSwitch::tab_capture() {
-  return &g_common_switches.Get().tab_capture;
-}
-
 
 FeatureSwitch::ScopedOverride::ScopedOverride(FeatureSwitch* feature,
                                               bool override_value)

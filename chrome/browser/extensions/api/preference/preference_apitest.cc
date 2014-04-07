@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 #include "base/prefs/pref_service.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/extensions/extension_test_message_listener.h"
 #include "chrome/browser/profiles/profile.h"
@@ -11,17 +11,15 @@
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "webkit/plugins/npapi/mock_plugin_list.h"
 
 IN_PROC_BROWSER_TEST_F(ExtensionApiTest, PreferenceApi) {
   PrefService* pref_service = browser()->profile()->GetPrefs();
   pref_service->SetBoolean(prefs::kAlternateErrorPagesEnabled, false);
-  pref_service->SetBoolean(prefs::kAutofillEnabled, false);
+  pref_service->SetBoolean(autofill::prefs::kAutofillEnabled, false);
   pref_service->SetBoolean(prefs::kBlockThirdPartyCookies, true);
   pref_service->SetBoolean(prefs::kEnableHyperlinkAuditing, false);
   pref_service->SetBoolean(prefs::kEnableReferrers, false);
   pref_service->SetBoolean(prefs::kEnableTranslate, false);
-  pref_service->SetBoolean(prefs::kInstantEnabled, false);
   pref_service->SetBoolean(prefs::kNetworkPredictionEnabled, false);
   pref_service->SetBoolean(prefs::kSafeBrowsingEnabled, false);
   pref_service->SetBoolean(prefs::kSearchSuggestEnabled, false);
@@ -33,12 +31,11 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, PreferenceApi) {
   ASSERT_TRUE(pref);
   EXPECT_TRUE(pref->IsExtensionControlled());
   EXPECT_TRUE(pref_service->GetBoolean(prefs::kAlternateErrorPagesEnabled));
-  EXPECT_TRUE(pref_service->GetBoolean(prefs::kAutofillEnabled));
+  EXPECT_TRUE(pref_service->GetBoolean(autofill::prefs::kAutofillEnabled));
   EXPECT_FALSE(pref_service->GetBoolean(prefs::kBlockThirdPartyCookies));
   EXPECT_TRUE(pref_service->GetBoolean(prefs::kEnableHyperlinkAuditing));
   EXPECT_TRUE(pref_service->GetBoolean(prefs::kEnableReferrers));
   EXPECT_TRUE(pref_service->GetBoolean(prefs::kEnableTranslate));
-  EXPECT_TRUE(pref_service->GetBoolean(prefs::kInstantEnabled));
   EXPECT_TRUE(pref_service->GetBoolean(prefs::kNetworkPredictionEnabled));
   EXPECT_TRUE(pref_service->GetBoolean(prefs::kSafeBrowsingEnabled));
   EXPECT_TRUE(pref_service->GetBoolean(prefs::kSearchSuggestEnabled));

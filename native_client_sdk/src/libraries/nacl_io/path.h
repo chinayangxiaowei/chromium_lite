@@ -1,14 +1,16 @@
-/* Copyright (c) 2012 The Chromium Authors. All rights reserved.
- * Use of this source code is governed by a BSD-style license that can be
- * found in the LICENSE file.
- */
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
 #ifndef LIBRARIES_NACL_IO_PATH_H_
 #define LIBRARIES_NACL_IO_PATH_H_
 
 #include <string>
 #include <vector>
 
-#include "utils/macros.h"
+#include "sdk_util/macros.h"
+
+namespace nacl_io {
 
 typedef std::vector<std::string> StringArray_t;
 
@@ -61,9 +63,11 @@ class Path {
 
  private:
   // Internal representation of the path stored an array of string representing
-  // the directory traversal.  The first string is a "/" if this is an abolute
+  // the directory traversal.  The first string is a "/" if this is an absolute
   // path.
   StringArray_t paths_;
 };
+
+}  // namespace nacl_io
 
 #endif  // PACKAGES_LIBRARIES_NACL_IO_PATH_H_

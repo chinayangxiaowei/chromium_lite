@@ -12,13 +12,12 @@
 
 #include "base/basictypes.h"
 #include "base/callback.h"
-#include "base/hash_tables.h"
+#include "base/containers/hash_tables.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/threading/thread_checker.h"
 #include "cc/base/cc_export.h"
 #include "cc/output/context_provider.h"
 #include "cc/output/output_surface.h"
-#include "cc/output/texture_copier.h"
 #include "cc/resources/texture_mailbox.h"
 #include "cc/resources/transferable_resource.h"
 #include "third_party/khronos/GLES2/gl2.h"
@@ -26,9 +25,7 @@
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "ui/gfx/size.h"
 
-namespace WebKit {
-class WebGraphicsContext3D;
-}
+namespace WebKit { class WebGraphicsContext3D; }
 
 namespace gfx {
 class Rect;
@@ -51,19 +48,25 @@ class CC_EXPORT ResourceProvider {
     TextureUsageFramebuffer,
   };
   enum ResourceType {
+    InvalidType = 0,
     GLTexture = 1,
     Bitmap,
   };
 
-  static scoped_ptr<ResourceProvider> Create(OutputSurface* output_surface);
+  static scoped_ptr<ResourceProvider> Create(OutputSurface* output_surface,
+                                             int highp_threshold_min);
 
   virtual ~ResourceProvider();
 
+  void InitializeSoftware();
+  bool InitializeGL();
+
+  void DidLoseOutputSurface() { lost_output_surface_ = true; }
+
   WebKit::WebGraphicsContext3D* GraphicsContext3D();
-  TextureCopier* texture_copier() const { return texture_copier_.get(); }
   int max_texture_size() const { return max_texture_size_; }
   GLenum best_texture_format() const { return best_texture_format_; }
-  unsigned num_resources() const { return resources_.size(); }
+  size_t num_resources() const { return resources_.size(); }
 
   // Checks whether a resource is in use by a consumer.
   bool InUseByConsumer(ResourceId id);
@@ -71,9 +74,6 @@ class CC_EXPORT ResourceProvider {
 
   // Producer interface.
 
-  void set_default_resource_type(ResourceType type) {
-    default_resource_type_ = type;
-  }
   ResourceType default_resource_type() const { return default_resource_type_; }
   ResourceType GetResourceType(ResourceId id);
 
@@ -96,7 +96,9 @@ class CC_EXPORT ResourceProvider {
 
   ResourceId CreateBitmap(gfx::Size size);
   // Wraps an external texture into a GL resource.
-  ResourceId CreateResourceFromExternalTexture(unsigned texture_id);
+  ResourceId CreateResourceFromExternalTexture(
+      unsigned texture_target,
+      unsigned texture_id);
 
   // Wraps an external texture mailbox into a GL resource.
   ResourceId CreateResourceFromTextureMailbox(const TextureMailbox& mailbox);
@@ -121,6 +123,10 @@ class CC_EXPORT ResourceProvider {
   // Flush all context operations, kicking uploads and ensuring ordering with
   // respect to other contexts.
   void Flush();
+
+  // Finish all context operations, causing any pending callbacks to be
+  // scheduled.
+  void Finish();
 
   // Only flush the command buffer if supported.
   // Returns true if the shallow flush occurred, false otherwise.
@@ -166,13 +172,6 @@ class CC_EXPORT ResourceProvider {
   void ReceiveFromParent(
       const TransferableResourceArray& transferable_resources);
 
-  // Bind the given GL resource to a texture target for sampling using the
-  // specified filter for both minification and magnification. The resource
-  // must be locked for reading.
-  void BindForSampling(ResourceProvider::ResourceId resource_id,
-                       GLenum target,
-                       GLenum filter);
-
   // The following lock classes are part of the ResourceProvider API and are
   // needed to read and write the resource contents. The user must ensure
   // that they only use GL locks on GL resources, etc, and this is enforced
@@ -181,13 +180,15 @@ class CC_EXPORT ResourceProvider {
    public:
     ScopedReadLockGL(ResourceProvider* resource_provider,
                      ResourceProvider::ResourceId resource_id);
-    ~ScopedReadLockGL();
+    virtual ~ScopedReadLockGL();
 
     unsigned texture_id() const { return texture_id_; }
 
-   private:
+   protected:
     ResourceProvider* resource_provider_;
     ResourceProvider::ResourceId resource_id_;
+
+   private:
     unsigned texture_id_;
 
     DISALLOW_COPY_AND_ASSIGN(ScopedReadLockGL);
@@ -199,8 +200,17 @@ class CC_EXPORT ResourceProvider {
                     ResourceProvider::ResourceId resource_id,
                     GLenum target,
                     GLenum filter);
+    ScopedSamplerGL(ResourceProvider* resource_provider,
+                    ResourceProvider::ResourceId resource_id,
+                    GLenum target,
+                    GLenum unit,
+                    GLenum filter);
+    virtual ~ScopedSamplerGL();
 
    private:
+    GLenum target_;
+    GLenum unit_;
+
     DISALLOW_COPY_AND_ASSIGN(ScopedSamplerGL);
   };
 
@@ -262,6 +272,7 @@ class CC_EXPORT ResourceProvider {
     friend class base::RefCounted<Fence>;
     virtual ~Fence() {}
 
+   private:
     DISALLOW_COPY_AND_ASSIGN(Fence);
   };
 
@@ -274,18 +285,30 @@ class CC_EXPORT ResourceProvider {
   uint8_t* MapPixelBuffer(ResourceId id);
   void UnmapPixelBuffer(ResourceId id);
 
-  // Update pixels from acquired pixel buffer.
-  void SetPixelsFromBuffer(ResourceId id);
-
   // Asynchronously update pixels from acquired pixel buffer.
   void BeginSetPixels(ResourceId id);
   void ForceSetPixelsToComplete(ResourceId id);
   bool DidSetPixelsComplete(ResourceId id);
-  void AbortSetPixels(ResourceId id);
+
+  // Acquire and release an image. The image allows direct
+  // manipulation of texture memory.
+  void AcquireImage(ResourceId id);
+  void ReleaseImage(ResourceId id);
+
+  // Maps the acquired image so that its pixels could be modified.
+  // Unmap is called when all pixels are set.
+  uint8_t* MapImage(ResourceId id);
+  void UnmapImage(ResourceId id);
+
+  // Returns the stride for the image.
+  int GetImageStride(ResourceId id);
 
   // For tests only! This prevents detecting uninitialized reads.
   // Use SetPixels or LockForWrite to allocate implicitly.
   void AllocateForTesting(ResourceId id);
+
+  // For tests only!
+  void CreateForTesting(ResourceId id);
 
   // Sets the current read fence. If a resource is locked for read
   // and has read fences enabled, the resource will not allow writes
@@ -293,7 +316,7 @@ class CC_EXPORT ResourceProvider {
   void SetReadLockFence(scoped_refptr<Fence> fence) {
     current_read_lock_fence_ = fence;
   }
-  Fence* GetReadLockFence() { return current_read_lock_fence_; }
+  Fence* GetReadLockFence() { return current_read_lock_fence_.get(); }
 
   // Enable read lock fences for a specific resource.
   void EnableReadLockFences(ResourceProvider::ResourceId id, bool enable);
@@ -308,12 +331,18 @@ class CC_EXPORT ResourceProvider {
       scoped_refptr<cc::ContextProvider> offscreen_context_provider) {
     offscreen_context_provider_ = offscreen_context_provider;
   }
+  static GLint GetActiveTextureUnit(WebKit::WebGraphicsContext3D* context);
 
  private:
   struct Resource {
     Resource();
     ~Resource();
-    Resource(unsigned texture_id, gfx::Size size, GLenum format, GLenum filter);
+    Resource(unsigned texture_id,
+             gfx::Size size,
+             GLenum format,
+             GLenum filter,
+             GLenum texture_pool,
+             TextureUsageHint hint);
     Resource(uint8_t* pixels, gfx::Size size, GLenum format, GLenum filter);
 
     unsigned gl_id;
@@ -338,6 +367,9 @@ class CC_EXPORT ResourceProvider {
     GLenum format;
     // TODO(skyostil): Use a separate sampler object for filter state.
     GLenum filter;
+    unsigned image_id;
+    GLenum texture_pool;
+    TextureUsageHint hint;
     ResourceType type;
   };
   typedef base::hash_map<ResourceId, Resource> ResourceMap;
@@ -351,12 +383,14 @@ class CC_EXPORT ResourceProvider {
   typedef base::hash_map<int, Child> ChildMap;
 
   bool ReadLockFenceHasPassed(Resource* resource) {
-    return !resource->read_lock_fence ||
-        resource->read_lock_fence->HasPassed();
+    return !resource->read_lock_fence.get() ||
+           resource->read_lock_fence->HasPassed();
   }
 
-  explicit ResourceProvider(OutputSurface* output_surface);
-  bool Initialize();
+  explicit ResourceProvider(OutputSurface* output_surface,
+                            int highp_threshold_min);
+
+  void CleanUpGLIfNeeded();
 
   const Resource* LockForRead(ResourceId id);
   void UnlockForRead(ResourceId id);
@@ -368,10 +402,28 @@ class CC_EXPORT ResourceProvider {
   bool TransferResource(WebKit::WebGraphicsContext3D* context,
                         ResourceId id,
                         TransferableResource* resource);
-  void DeleteResourceInternal(ResourceMap::iterator it);
+  enum DeleteStyle {
+    Normal,
+    ForShutdown,
+  };
+  void DeleteResourceInternal(ResourceMap::iterator it, DeleteStyle style);
+  void LazyCreate(Resource* resource);
   void LazyAllocate(Resource* resource);
 
+  // Binds the given GL resource to a texture target for sampling using the
+  // specified filter for both minification and magnification. The resource
+  // must be locked for reading.
+  void BindForSampling(ResourceProvider::ResourceId resource_id,
+                       GLenum target,
+                       GLenum unit,
+                       GLenum filter);
+  void UnbindForSampling(ResourceProvider::ResourceId resource_id,
+                         GLenum target,
+                         GLenum unit);
+
   OutputSurface* output_surface_;
+  bool lost_output_surface_;
+  int highp_threshold_min_;
   ResourceId next_id_;
   ResourceMap resources_;
   int next_child_;
@@ -382,7 +434,6 @@ class CC_EXPORT ResourceProvider {
   bool use_texture_usage_hint_;
   bool use_shallow_flush_;
   scoped_ptr<TextureUploader> texture_uploader_;
-  scoped_ptr<AcceleratedTextureCopier> texture_copier_;
   int max_texture_size_;
   GLenum best_texture_format_;
 
@@ -395,6 +446,6 @@ class CC_EXPORT ResourceProvider {
   DISALLOW_COPY_AND_ASSIGN(ResourceProvider);
 };
 
-}
+}  // namespace cc
 
 #endif  // CC_RESOURCES_RESOURCE_PROVIDER_H_

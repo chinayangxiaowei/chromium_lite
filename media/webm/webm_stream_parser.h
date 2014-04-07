@@ -5,6 +5,8 @@
 #ifndef MEDIA_WEBM_WEBM_STREAM_PARSER_H_
 #define MEDIA_WEBM_WEBM_STREAM_PARSER_H_
 
+#include <map>
+
 #include "base/callback_forward.h"
 #include "base/memory/ref_counted.h"
 #include "media/base/audio_decoder_config.h"
@@ -24,9 +26,10 @@ class WebMStreamParser : public StreamParser {
 
   // StreamParser implementation.
   virtual void Init(const InitCB& init_cb, const NewConfigCB& config_cb,
-                    const NewBuffersCB& audio_cb,
-                    const NewBuffersCB& video_cb,
+                    const NewBuffersCB& new_buffers_cb,
+                    const NewTextBuffersCB& text_cb,
                     const NeedKeyCB& need_key_cb,
+                    const AddTextTrackCB& add_text_track_cb,
                     const NewMediaSegmentCB& new_segment_cb,
                     const base::Closure& end_of_segment_cb,
                     const LogCB& log_cb) OVERRIDE;
@@ -68,9 +71,14 @@ class WebMStreamParser : public StreamParser {
   State state_;
   InitCB init_cb_;
   NewConfigCB config_cb_;
-  NewBuffersCB audio_cb_;
-  NewBuffersCB video_cb_;
+  NewBuffersCB new_buffers_cb_;
+  NewTextBuffersCB text_cb_;
   NeedKeyCB need_key_cb_;
+  AddTextTrackCB add_text_track_cb_;
+
+  typedef std::map<int, TextTrack* > TextTrackMap;
+  TextTrackMap text_track_map_;
+
   NewMediaSegmentCB new_segment_cb_;
   base::Closure end_of_segment_cb_;
   LogCB log_cb_;

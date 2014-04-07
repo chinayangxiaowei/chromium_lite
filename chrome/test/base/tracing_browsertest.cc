@@ -5,7 +5,7 @@
 #include "chrome/test/base/tracing.h"
 
 #include "base/debug/trace_event.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -39,7 +39,7 @@ class TracingBrowserTest : public InProcessBrowserTest {
 
 void AddEvents(int num) {
   for (int i = 0; i < num; ++i)
-    TRACE_EVENT_INSTANT0(g_category, g_event);
+    TRACE_EVENT_INSTANT0(g_category, g_event, TRACE_EVENT_SCOPE_THREAD);
 }
 
 IN_PROC_BROWSER_TEST_F(TracingBrowserTest, BeginTracingWithWatch) {
@@ -55,7 +55,7 @@ IN_PROC_BROWSER_TEST_F(TracingBrowserTest, BeginTracingWithWatch) {
 
   // One event after wait.
   ASSERT_TRUE(BeginTracingWithWatch(g_category, g_category, g_event, 1));
-  MessageLoop::current()->PostTask(FROM_HERE, base::Bind(&AddEvents, 1));
+  base::MessageLoop::current()->PostTask(FROM_HERE, base::Bind(&AddEvents, 1));
   EXPECT_TRUE(WaitForWatchEvent(no_timeout));
   ASSERT_TRUE(EndTracing(&json_events));
 
@@ -73,7 +73,7 @@ IN_PROC_BROWSER_TEST_F(TracingBrowserTest, BeginTracingWithWatch) {
 
   // Multi event after wait.
   ASSERT_TRUE(BeginTracingWithWatch(g_category, g_category, g_event, 5));
-  MessageLoop::current()->PostTask(FROM_HERE, base::Bind(&AddEvents, 5));
+  base::MessageLoop::current()->PostTask(FROM_HERE, base::Bind(&AddEvents, 5));
   EXPECT_TRUE(WaitForWatchEvent(no_timeout));
   ASSERT_TRUE(EndTracing(&json_events));
 

@@ -6,27 +6,29 @@
 #include <vector>
 
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/sessions/session_types.h"
-#include "chrome/browser/sessions/session_types_test_helper.h"
 #include "chrome/browser/sync/glue/session_model_associator.h"
 #include "chrome/browser/sync/glue/synced_tab_delegate.h"
 #include "chrome/browser/sync/profile_sync_service_mock.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/profile_mock.h"
+#include "components/sessions/serialized_navigation_entry_test_helper.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/notification_details.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/common/page_transition_types.h"
 #include "content/public/test/test_browser_thread.h"
-#include "googleurl/src/gurl.h"
 #include "sync/protocol/session_specifics.pb.h"
 #include "sync/util/time.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/gurl.h"
 
 using content::BrowserThread;
+using sessions::SerializedNavigationEntry;
+using sessions::SerializedNavigationEntryTestHelper;
 using testing::NiceMock;
 using testing::Return;
 using testing::StrictMock;
@@ -77,7 +79,7 @@ class SyncSessionModelAssociatorTest : public testing::Test {
   }
 
  private:
-  MessageLoopForUI message_loop_;
+  base::MessageLoopForUI message_loop_;
   content::TestBrowserThread ui_thread_;
   NiceMock<ProfileMock> profile_;
   NiceMock<ProfileSyncServiceMock> sync_service_;
@@ -94,8 +96,9 @@ TEST_F(SyncSessionModelAssociatorTest, SessionWindowHasNoTabsToSync) {
   scoped_ptr<SessionTab> tab(new SessionTab());
   win.tabs.push_back(tab.release());
   ASSERT_TRUE(SessionWindowHasNoTabsToSync(win));
-  TabNavigation nav =
-      SessionTypesTestHelper::CreateNavigation("about:bubba", "title");
+  SerializedNavigationEntry nav =
+      SerializedNavigationEntryTestHelper::CreateNavigation("about:bubba",
+                                                            "title");
   win.tabs[0]->navigations.push_back(nav);
   ASSERT_FALSE(SessionWindowHasNoTabsToSync(win));
 }
@@ -103,14 +106,15 @@ TEST_F(SyncSessionModelAssociatorTest, SessionWindowHasNoTabsToSync) {
 TEST_F(SyncSessionModelAssociatorTest, ShouldSyncSessionTab) {
   SessionTab tab;
   ASSERT_FALSE(ShouldSyncSessionTab(tab));
-  TabNavigation nav =
-      SessionTypesTestHelper::CreateNavigation(
+  SerializedNavigationEntry nav =
+      SerializedNavigationEntryTestHelper::CreateNavigation(
           chrome::kChromeUINewTabURL, "title");
   tab.navigations.push_back(nav);
   // NewTab does not count as valid if it's the only navigation.
   ASSERT_FALSE(ShouldSyncSessionTab(tab));
-  TabNavigation nav2 =
-      SessionTypesTestHelper::CreateNavigation("about:bubba", "title");
+  SerializedNavigationEntry nav2 =
+      SerializedNavigationEntryTestHelper::CreateNavigation("about:bubba",
+                                                            "title");
   tab.navigations.push_back(nav2);
   // Once there's another navigation, the tab is valid.
   ASSERT_TRUE(ShouldSyncSessionTab(tab));
@@ -120,8 +124,8 @@ TEST_F(SyncSessionModelAssociatorTest,
        ShouldSyncSessionTabIgnoresFragmentForNtp) {
   SessionTab tab;
   ASSERT_FALSE(ShouldSyncSessionTab(tab));
-  TabNavigation nav =
-      SessionTypesTestHelper::CreateNavigation(
+  SerializedNavigationEntry nav =
+      SerializedNavigationEntryTestHelper::CreateNavigation(
           std::string(chrome::kChromeUINewTabURL) + "#bookmarks", "title");
   tab.navigations.push_back(nav);
   // NewTab does not count as valid if it's the only navigation.
@@ -181,7 +185,13 @@ class SyncedTabDelegateMock : public SyncedTabDelegate {
   MOCK_CONST_METHOD0(GetPendingEntry, content::NavigationEntry*());
   MOCK_CONST_METHOD1(GetEntryAtIndex, content::NavigationEntry*(int i));
   MOCK_CONST_METHOD0(GetActiveEntry, content::NavigationEntry*());
+  MOCK_CONST_METHOD0(ProfileIsManaged, bool());
+  MOCK_CONST_METHOD0(GetBlockedNavigations,
+                     const std::vector<const content::NavigationEntry*>*());
   MOCK_CONST_METHOD0(IsPinned, bool());
+  MOCK_CONST_METHOD0(HasWebContents, bool());
+  MOCK_CONST_METHOD0(GetSyncId, int());
+  MOCK_METHOD1(SetSyncId, void(int));
 };
 
 class SyncRefreshListener : public content::NotificationObserver {
@@ -332,6 +342,7 @@ TEST_F(SyncSessionModelAssociatorTest, SetSessionTabFromDelegate) {
       Return(entry3.get()));
   EXPECT_CALL(tab_mock, GetEntryCount()).WillRepeatedly(Return(3));
   EXPECT_CALL(tab_mock, GetPendingEntryIndex()).WillRepeatedly(Return(-1));
+  EXPECT_CALL(tab_mock, ProfileIsManaged()).WillRepeatedly(Return(false));
 
   SessionTab session_tab;
   session_tab.window_id.set_id(1);
@@ -343,7 +354,7 @@ TEST_F(SyncSessionModelAssociatorTest, SetSessionTabFromDelegate) {
   session_tab.user_agent_override = "override";
   session_tab.timestamp = kTime5;
   session_tab.navigations.push_back(
-      SessionTypesTestHelper::CreateNavigation(
+      SerializedNavigationEntryTestHelper::CreateNavigation(
           "http://www.example.com", "Example"));
   session_tab.session_storage_persistent_id = "persistent id";
   SetSessionTabFromDelegate(tab_mock, kTime4, &session_tab);
@@ -363,19 +374,93 @@ TEST_F(SyncSessionModelAssociatorTest, SetSessionTabFromDelegate) {
             session_tab.navigations[1].virtual_url());
   EXPECT_EQ(entry3->GetVirtualURL(),
             session_tab.navigations[2].virtual_url());
-  EXPECT_EQ(kTime1,
-            SessionTypesTestHelper::GetTimestamp(session_tab.navigations[0]));
-  EXPECT_EQ(kTime2,
-            SessionTypesTestHelper::GetTimestamp(session_tab.navigations[1]));
-  EXPECT_EQ(kTime3,
-            SessionTypesTestHelper::GetTimestamp(session_tab.navigations[2]));
+  EXPECT_EQ(kTime1, session_tab.navigations[0].timestamp());
+  EXPECT_EQ(kTime2, session_tab.navigations[1].timestamp());
+  EXPECT_EQ(kTime3, session_tab.navigations[2].timestamp());
+  EXPECT_EQ(SerializedNavigationEntry::STATE_INVALID,
+            session_tab.navigations[0].blocked_state());
+  EXPECT_EQ(SerializedNavigationEntry::STATE_INVALID,
+            session_tab.navigations[1].blocked_state());
+  EXPECT_EQ(SerializedNavigationEntry::STATE_INVALID,
+            session_tab.navigations[2].blocked_state());
+  EXPECT_TRUE(session_tab.session_storage_persistent_id.empty());
+}
+
+// Tests that for managed users blocked navigations are recorded and marked as
+// such, while regular navigations are marked as allowed.
+TEST_F(SyncSessionModelAssociatorTest, BlockedNavigations) {
+  NiceMock<SyncedTabDelegateMock> tab_mock;
+  EXPECT_CALL(tab_mock, GetSessionId()).WillRepeatedly(Return(0));
+  scoped_ptr<content::NavigationEntry> entry1(
+      content::NavigationEntry::Create());
+  entry1->SetVirtualURL(GURL("http://www.google.com"));
+  entry1->SetTimestamp(kTime1);
+  EXPECT_CALL(tab_mock, GetCurrentEntryIndex()).WillRepeatedly(Return(0));
+  EXPECT_CALL(tab_mock, GetEntryAtIndex(0)).WillRepeatedly(
+      Return(entry1.get()));
+  EXPECT_CALL(tab_mock, GetEntryCount()).WillRepeatedly(Return(1));
+  EXPECT_CALL(tab_mock, GetPendingEntryIndex()).WillRepeatedly(Return(-1));
+
+  content::NavigationEntry* entry2 = content::NavigationEntry::Create();
+  entry2->SetVirtualURL(GURL("http://blocked.com/foo"));
+  entry2->SetTimestamp(kTime2);
+  content::NavigationEntry* entry3 = content::NavigationEntry::Create();
+  entry3->SetVirtualURL(GURL("http://evil.com"));
+  entry3->SetTimestamp(kTime3);
+  ScopedVector<const content::NavigationEntry> blocked_navigations;
+  blocked_navigations.push_back(entry2);
+  blocked_navigations.push_back(entry3);
+
+  EXPECT_CALL(tab_mock, ProfileIsManaged()).WillRepeatedly(Return(true));
+  EXPECT_CALL(tab_mock, GetBlockedNavigations()).WillRepeatedly(
+      Return(&blocked_navigations.get()));
+
+  SessionTab session_tab;
+  session_tab.window_id.set_id(1);
+  session_tab.tab_id.set_id(1);
+  session_tab.tab_visual_index = 1;
+  session_tab.current_navigation_index = 1;
+  session_tab.pinned = true;
+  session_tab.extension_app_id = "app id";
+  session_tab.user_agent_override = "override";
+  session_tab.timestamp = kTime5;
+  session_tab.navigations.push_back(
+      SerializedNavigationEntryTestHelper::CreateNavigation(
+          "http://www.example.com", "Example"));
+  session_tab.session_storage_persistent_id = "persistent id";
+  SetSessionTabFromDelegate(tab_mock, kTime4, &session_tab);
+
+  EXPECT_EQ(0, session_tab.window_id.id());
+  EXPECT_EQ(0, session_tab.tab_id.id());
+  EXPECT_EQ(0, session_tab.tab_visual_index);
+  EXPECT_EQ(0, session_tab.current_navigation_index);
+  EXPECT_FALSE(session_tab.pinned);
+  EXPECT_TRUE(session_tab.extension_app_id.empty());
+  EXPECT_TRUE(session_tab.user_agent_override.empty());
+  EXPECT_EQ(kTime4, session_tab.timestamp);
+  ASSERT_EQ(3u, session_tab.navigations.size());
+  EXPECT_EQ(entry1->GetVirtualURL(),
+            session_tab.navigations[0].virtual_url());
+  EXPECT_EQ(entry2->GetVirtualURL(),
+            session_tab.navigations[1].virtual_url());
+  EXPECT_EQ(entry3->GetVirtualURL(),
+            session_tab.navigations[2].virtual_url());
+  EXPECT_EQ(kTime1, session_tab.navigations[0].timestamp());
+  EXPECT_EQ(kTime2, session_tab.navigations[1].timestamp());
+  EXPECT_EQ(kTime3, session_tab.navigations[2].timestamp());
+  EXPECT_EQ(SerializedNavigationEntry::STATE_ALLOWED,
+            session_tab.navigations[0].blocked_state());
+  EXPECT_EQ(SerializedNavigationEntry::STATE_BLOCKED,
+            session_tab.navigations[1].blocked_state());
+  EXPECT_EQ(SerializedNavigationEntry::STATE_BLOCKED,
+            session_tab.navigations[2].blocked_state());
   EXPECT_TRUE(session_tab.session_storage_persistent_id.empty());
 }
 
 // Create tab specifics with an empty favicon. Ensure it gets ignored and not
 // stored into the synced favicon lookups.
 TEST_F(SyncSessionModelAssociatorTest, LoadEmptyFavicon) {
-  std::string favicon = "";
+  std::string favicon;
   std::string favicon_url = "http://www.faviconurl.com/favicon.ico";
   std::string page_url = "http://www.faviconurl.com/page.html";
   sync_pb::SessionTab tab;

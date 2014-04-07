@@ -10,9 +10,9 @@
 #include "base/basictypes.h"
 #include "base/callback_forward.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/string_piece.h"
-#include "content/public/browser/notification_registrar.h"
+#include "base/strings/string_piece.h"
 #include "content/public/browser/notification_observer.h"
+#include "content/public/browser/notification_registrar.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "ipc/ipc_channel.h"
 #include "ui/gfx/native_widget_types.h"
@@ -28,7 +28,7 @@ typedef struct _GtkToolItem GtkToolItem;
 #elif defined(USE_AURA)
 #if defined(OS_CHROMEOS)
 namespace content {
-class MinimalAsh;
+class MinimalShell;
 }
 #endif
 namespace views {
@@ -51,6 +51,9 @@ class WebContents;
 class Shell : public WebContentsDelegate,
               public NotificationObserver {
  public:
+  static const int kDefaultTestWindowWidthDip;
+  static const int kDefaultTestWindowHeightDip;
+
   virtual ~Shell();
 
   void LoadURL(const GURL& url);
@@ -62,7 +65,8 @@ class Shell : public WebContentsDelegate,
   void Close();
   void ShowDevTools();
   void CloseDevTools();
-#if (defined(OS_WIN) && !defined(USE_AURA)) || defined(TOOLKIT_GTK)
+#if (defined(OS_WIN) && !defined(USE_AURA)) || \
+    defined(TOOLKIT_GTK) || defined(OS_MACOSX)
   // Resizes the main window to the given dimensions.
   void SizeTo(int width, int height);
 #endif
@@ -142,6 +146,7 @@ class Shell : public WebContentsDelegate,
   virtual void RendererUnresponsive(WebContents* source) OVERRIDE;
   virtual void ActivateContents(WebContents* contents) OVERRIDE;
   virtual void DeactivateContents(WebContents* contents) OVERRIDE;
+  virtual void WorkerCrashed(WebContents* source) OVERRIDE;
 
  private:
   enum UIControl {
@@ -150,10 +155,13 @@ class Shell : public WebContentsDelegate,
     STOP_BUTTON
   };
 
+  class DevToolsWebContentsObserver;
+
   explicit Shell(WebContents* web_contents);
 
   // Helper to create a new Shell given a newly created WebContents.
-  static Shell* CreateShell(WebContents* web_contents);
+  static Shell* CreateShell(WebContents* web_contents,
+                            const gfx::Size& initial_size);
 
   // Helper for one time initialization of application
   static void PlatformInitialize(const gfx::Size& default_window_size);
@@ -190,6 +198,8 @@ class Shell : public WebContentsDelegate,
                        const NotificationSource& source,
                        const NotificationDetails& details) OVERRIDE;
 
+  void OnDevToolsWebContentsDestroyed();
+
 #if defined(OS_WIN) && !defined(USE_AURA)
   static ATOM RegisterWindowClass();
   static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
@@ -208,12 +218,15 @@ class Shell : public WebContentsDelegate,
                      GObject*, guint, GdkModifierType);
   CHROMEG_CALLBACK_3(Shell, gboolean, OnHighlightURLView, GtkAccelGroup*,
                      GObject*, guint, GdkModifierType);
+  CHROMEG_CALLBACK_3(Shell, gboolean, OnReloadKeyPressed, GtkAccelGroup*,
+                     GObject*, guint, GdkModifierType);
 #endif
 
   scoped_ptr<ShellJavaScriptDialogManager> dialog_manager_;
 
   scoped_ptr<WebContents> web_contents_;
 
+  scoped_ptr<DevToolsWebContentsObserver> devtools_observer_;
   ShellDevToolsFrontend* devtools_frontend_;
 
   bool is_fullscreen_;
@@ -240,15 +253,19 @@ class Shell : public WebContentsDelegate,
 
   int content_width_;
   int content_height_;
+  int ui_elements_height_; // height of menubar, toolbar, etc.
 #elif defined(OS_ANDROID)
   base::android::ScopedJavaGlobalRef<jobject> java_object_;
 #elif defined(USE_AURA)
 #if defined(OS_CHROMEOS)
-  static content::MinimalAsh* minimal_ash_;
+  static content::MinimalShell* minimal_shell_;
 #endif
   static views::ViewsDelegate* views_delegate_;
 
   views::Widget* window_widget_;
+#elif defined(OS_MACOSX)
+  int content_width_;
+  int content_height_;
 #endif
 
   bool headless_;

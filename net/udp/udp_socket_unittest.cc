@@ -33,12 +33,12 @@ class UDPSocketTest : public PlatformTest {
   std::string RecvFromSocket(UDPServerSocket* socket) {
     TestCompletionCallback callback;
 
-    int rv = socket->RecvFrom(buffer_, kMaxRead, &recv_from_address_,
-                              callback.callback());
+    int rv = socket->RecvFrom(
+        buffer_.get(), kMaxRead, &recv_from_address_, callback.callback());
     if (rv == ERR_IO_PENDING)
       rv = callback.WaitForResult();
     if (rv < 0)
-      return "";  // error!
+      return std::string();  // error!
     return std::string(buffer_->data(), rv);
   }
 
@@ -59,12 +59,12 @@ class UDPSocketTest : public PlatformTest {
     int length = msg.length();
     scoped_refptr<StringIOBuffer> io_buffer(new StringIOBuffer(msg));
     scoped_refptr<DrainableIOBuffer> buffer(
-        new DrainableIOBuffer(io_buffer, length));
+        new DrainableIOBuffer(io_buffer.get(), length));
 
     int bytes_sent = 0;
     while (buffer->BytesRemaining()) {
-      int rv = socket->SendTo(buffer, buffer->BytesRemaining(),
-                              address, callback.callback());
+      int rv = socket->SendTo(
+          buffer.get(), buffer->BytesRemaining(), address, callback.callback());
       if (rv == ERR_IO_PENDING)
         rv = callback.WaitForResult();
       if (rv <= 0)
@@ -78,11 +78,11 @@ class UDPSocketTest : public PlatformTest {
   std::string ReadSocket(UDPClientSocket* socket) {
     TestCompletionCallback callback;
 
-    int rv = socket->Read(buffer_, kMaxRead, callback.callback());
+    int rv = socket->Read(buffer_.get(), kMaxRead, callback.callback());
     if (rv == ERR_IO_PENDING)
       rv = callback.WaitForResult();
     if (rv < 0)
-      return "";  // error!
+      return std::string();  // error!
     return std::string(buffer_->data(), rv);
   }
 
@@ -94,12 +94,12 @@ class UDPSocketTest : public PlatformTest {
     int length = msg.length();
     scoped_refptr<StringIOBuffer> io_buffer(new StringIOBuffer(msg));
     scoped_refptr<DrainableIOBuffer> buffer(
-        new DrainableIOBuffer(io_buffer, length));
+        new DrainableIOBuffer(io_buffer.get(), length));
 
     int bytes_sent = 0;
     while (buffer->BytesRemaining()) {
-      int rv = socket->Write(buffer, buffer->BytesRemaining(),
-                             callback.callback());
+      int rv = socket->Write(
+          buffer.get(), buffer->BytesRemaining(), callback.callback());
       if (rv == ERR_IO_PENDING)
         rv = callback.WaitForResult();
       if (rv <= 0)
@@ -518,12 +518,66 @@ TEST_F(UDPSocketTest, CloseWithPendingRead) {
 
   TestCompletionCallback callback;
   IPEndPoint from;
-  rv = server.RecvFrom(buffer_, kMaxRead, &from, callback.callback());
+  rv = server.RecvFrom(buffer_.get(), kMaxRead, &from, callback.callback());
   EXPECT_EQ(rv, ERR_IO_PENDING);
 
   server.Close();
 
   EXPECT_FALSE(callback.have_result());
+}
+
+#if defined(OS_ANDROID)
+// Some Android devices do not support multicast socket.
+// The ones supporting multicast need WifiManager.MulitcastLock to enable it.
+// http://goo.gl/jjAk9
+#define MAYBE_JoinMulticastGroup DISABLED_JoinMulticastGroup
+#else
+#define MAYBE_JoinMulticastGroup JoinMulticastGroup
+#endif  // defined(OS_ANDROID)
+
+TEST_F(UDPSocketTest, MAYBE_JoinMulticastGroup) {
+  const int kPort = 9999;
+  const char* const kGroup = "237.132.100.17";
+
+  IPEndPoint bind_address;
+  CreateUDPAddress("0.0.0.0", kPort, &bind_address);
+  IPAddressNumber group_ip;
+  EXPECT_TRUE(ParseIPLiteralToNumber(kGroup, &group_ip));
+
+  UDPSocket socket(DatagramSocket::DEFAULT_BIND,
+                   RandIntCallback(),
+                   NULL,
+                   NetLog::Source());
+  EXPECT_EQ(OK, socket.Bind(bind_address));
+  EXPECT_EQ(OK, socket.JoinGroup(group_ip));
+  // Joining group multiple times.
+  EXPECT_NE(OK, socket.JoinGroup(group_ip));
+  EXPECT_EQ(OK, socket.LeaveGroup(group_ip));
+  // Leaving group multiple times.
+  EXPECT_NE(OK, socket.LeaveGroup(group_ip));
+
+  socket.Close();
+}
+
+TEST_F(UDPSocketTest, MulticastOptions) {
+  const int kPort = 9999;
+  IPEndPoint bind_address;
+  CreateUDPAddress("0.0.0.0", kPort, &bind_address);
+
+  UDPSocket socket(DatagramSocket::DEFAULT_BIND,
+                   RandIntCallback(),
+                   NULL,
+                   NetLog::Source());
+  // Before binding.
+  EXPECT_EQ(OK, socket.SetMulticastLoopbackMode(false));
+  EXPECT_EQ(OK, socket.SetMulticastLoopbackMode(true));
+  EXPECT_EQ(OK, socket.SetMulticastTimeToLive(0));
+  EXPECT_EQ(OK, socket.SetMulticastTimeToLive(3));
+  EXPECT_NE(OK, socket.SetMulticastTimeToLive(-1));
+
+  EXPECT_EQ(OK, socket.Bind(bind_address));
+
+  socket.Close();
 }
 
 }  // namespace

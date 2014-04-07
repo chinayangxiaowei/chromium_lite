@@ -24,6 +24,8 @@ class BookmarkSpecifics;
 class ClientConfigParams;
 class ClientToServerMessage;
 class ClientToServerResponse;
+class CoalescedSyncedNotification;
+class CollapsedInfo;
 class DatatypeAssociationStats;
 class DebugEventInfo;
 class DebugInfo;
@@ -41,6 +43,8 @@ class FaviconTrackingSpecifics;
 class GlobalIdDirective;
 class HistoryDeleteDirectiveSpecifics;
 class KeystoreEncryptionFlagsSpecifics;
+class ManagedUserSettingSpecifics;
+class ManagedUserSpecifics;
 class NigoriSpecifics;
 class PasswordSpecifics;
 class PasswordSpecificsData;
@@ -51,7 +55,9 @@ class SessionHeader;
 class SessionSpecifics;
 class SessionTab;
 class SessionWindow;
+class SimpleCollapsedLayout;
 class SyncCycleCompletedEventInfo;
+class SyncedNotificationRenderInfo;
 class SyncedNotificationSpecifics;
 class TabNavigation;
 class ThemeSpecifics;
@@ -118,6 +124,20 @@ base::DictionaryValue* TimeRangeDirectiveToValue(
 base::DictionaryValue* KeystoreEncryptionToValue(
     const sync_pb::KeystoreEncryptionFlagsSpecifics& proto);
 
+// Sub protocols of SyncedNotifications.
+
+base::DictionaryValue* SimpleCollapsedLayoutToValue(
+    const sync_pb::SimpleCollapsedLayout& proto);
+
+base::DictionaryValue* CollapsedInfoToValue(
+    const sync_pb::CollapsedInfo& proto);
+
+base::DictionaryValue* RenderInfoToValue(
+    const sync_pb::SyncedNotificationRenderInfo& proto);
+
+base::DictionaryValue* CoalescedNotificationToValue(
+    const sync_pb::CoalescedSyncedNotification& proto);
+
 // Main *SpecificsToValue functions.
 
 SYNC_EXPORT_PRIVATE base::DictionaryValue* AppNotificationToValue(
@@ -165,6 +185,12 @@ SYNC_EXPORT_PRIVATE base::DictionaryValue* FaviconTrackingSpecificsToValue(
 SYNC_EXPORT base::DictionaryValue* HistoryDeleteDirectiveSpecificsToValue(
     const sync_pb::HistoryDeleteDirectiveSpecifics&
         history_delete_directive_specifics);
+
+SYNC_EXPORT_PRIVATE base::DictionaryValue* ManagedUserSettingSpecificsToValue(
+    const sync_pb::ManagedUserSettingSpecifics& managed_user_setting_specifics);
+
+SYNC_EXPORT_PRIVATE base::DictionaryValue* ManagedUserSpecificsToValue(
+    const sync_pb::ManagedUserSpecifics& managed_user_specifics);
 
 SYNC_EXPORT_PRIVATE base::DictionaryValue* NigoriSpecificsToValue(
     const sync_pb::NigoriSpecifics& nigori_specifics);

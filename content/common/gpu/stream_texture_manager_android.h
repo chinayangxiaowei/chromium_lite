@@ -17,12 +17,11 @@ struct GpuStreamTextureMsg_MatrixChanged_Params;
 
 namespace gfx {
 class Size;
+class SurfaceTextureBridge;
 }
 
 namespace content {
 class GpuChannel;
-
-class SurfaceTextureBridge;
 
 // Class for managing the stream texture.
 class StreamTextureManagerAndroid : public gpu::StreamTextureManager {
@@ -37,10 +36,10 @@ class StreamTextureManagerAndroid : public gpu::StreamTextureManager {
   virtual gpu::StreamTexture* LookupStreamTexture(uint32 service_id) OVERRIDE;
 
   // Methods invoked from GpuChannel.
-  void RegisterStreamTextureProxy(
-      int32 stream_id, const gfx::Size& initial_size, int32 route_id);
+  void RegisterStreamTextureProxy(int32 stream_id, int32 route_id);
   void EstablishStreamTexture(
       int32 stream_id, int32 primary_id, int32 secondary_id);
+  void SetStreamTextureSize(int32 stream_id, const gfx::Size& size);
 
   // Send new transform matrix.
   void SendMatrixChanged(int route_id,
@@ -56,13 +55,17 @@ class StreamTextureManagerAndroid : public gpu::StreamTextureManager {
     virtual ~StreamTextureAndroid();
 
     virtual void Update() OVERRIDE;
+    virtual gfx::Size GetSize() OVERRIDE;
 
-    scoped_refptr<SurfaceTextureBridge> surface_texture_bridge() {
+    scoped_refptr<gfx::SurfaceTextureBridge> surface_texture_bridge() {
         return surface_texture_bridge_;
     }
 
     // Called when a new frame is available.
     void OnFrameAvailable(int route_id);
+
+    // Set surface texture size.
+    void SetSize(const gfx::Size& size) { size_ = size; }
 
     // Callback function when transform matrix of the surface texture
     // has changed.
@@ -75,10 +78,13 @@ class StreamTextureManagerAndroid : public gpu::StreamTextureManager {
     }
 
    private:
-    scoped_refptr<SurfaceTextureBridge> surface_texture_bridge_;
+    scoped_refptr<gfx::SurfaceTextureBridge> surface_texture_bridge_;
 
     // Current transform matrix of the surface texture.
     float current_matrix_[16];
+
+    // Current size of the surface texture.
+    gfx::Size size_;
 
     // Whether the surface texture has been updated.
     bool has_updated_;

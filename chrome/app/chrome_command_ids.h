@@ -79,9 +79,8 @@
 #define IDC_ENCODING_MENU               35005
 #define IDC_EMAIL_PAGE_LOCATION         35006
 #define IDC_ADVANCED_PRINT              35007
-#define IDC_CHROME_TO_MOBILE_PAGE       35008
-#define IDC_PRINT_TO_DESTINATION        35009
-#define IDC_BOOKMARK_PAGE_FROM_STAR     35010
+#define IDC_PRINT_TO_DESTINATION        35008
+#define IDC_BOOKMARK_PAGE_FROM_STAR     35009
 
 // When adding a new encoding to this list, be sure to append it to the
 // EncodingMenuController::kValidEncodingIds array in
@@ -152,6 +151,7 @@
 #define IDC_FOCUS_NEXT_PANE             39004
 #define IDC_FOCUS_PREVIOUS_PANE         39005
 #define IDC_FOCUS_BOOKMARKS             39006
+#define IDC_FOCUS_INFOBARS              39007
 
 // Show various bits of UI
 #define IDC_OPEN_FILE                   40000
@@ -178,7 +178,6 @@
 #define IDC_DEV_TOOLS_INSPECT           40023
 #define IDC_UPGRADE_DIALOG              40024
 #define IDC_VIEW_INCOMPATIBILITIES      40025
-#define IDC_VIEW_BACKGROUND_PAGES       40026
 #define IDC_SHOW_KEYBOARD_OVERLAY       40027
 #define IDC_PROFILING_ENABLED           40028
 #define IDC_BOOKMARKS_MENU              40029
@@ -263,6 +262,7 @@
 #define IDC_CONTENT_CONTEXT_COPYIMAGELOCATION 50111
 #define IDC_CONTENT_CONTEXT_COPYIMAGE 50112
 #define IDC_CONTENT_CONTEXT_OPENIMAGENEWTAB 50113
+#define IDC_CONTENT_CONTEXT_SEARCHWEBFORIMAGE 50114
 // Audio/video items.
 #define IDC_CONTENT_CONTEXT_SAVEAVAS 50120
 #define IDC_CONTENT_CONTEXT_COPYAVLOCATION 50121

@@ -12,7 +12,6 @@
 #include "google_apis/gaia/google_service_auth_error.h"
 
 class Profile;
-class SigninManager;
 
 // Shows auth errors on the wrench menu using a bubble view and a
 // menu item. Services that wish to expose auth errors to the user should
@@ -31,7 +30,7 @@ class SigninGlobalError : public GlobalError {
     virtual GoogleServiceAuthError GetAuthStatus() const = 0;
   };
 
-  SigninGlobalError(SigninManager* signin_manager, Profile* profile);
+  SigninGlobalError(Profile* profile);
   virtual ~SigninGlobalError();
 
   // Adds a provider which the SigninGlobalError object will start querying for
@@ -48,19 +47,21 @@ class SigninGlobalError : public GlobalError {
   GoogleServiceAuthError GetLastAuthError() const { return auth_error_; }
 
   // GlobalError implementation.
-  virtual bool HasBadge() OVERRIDE;
   virtual bool HasMenuItem() OVERRIDE;
   virtual int MenuItemCommandID() OVERRIDE;
   virtual string16 MenuItemLabel() OVERRIDE;
   virtual void ExecuteMenuItem(Browser* browser) OVERRIDE;
   virtual bool HasBubbleView() OVERRIDE;
   virtual string16 GetBubbleViewTitle() OVERRIDE;
-  virtual string16 GetBubbleViewMessage() OVERRIDE;
+  virtual std::vector<string16> GetBubbleViewMessages() OVERRIDE;
   virtual string16 GetBubbleViewAcceptButtonLabel() OVERRIDE;
   virtual string16 GetBubbleViewCancelButtonLabel() OVERRIDE;
   virtual void OnBubbleViewDidClose(Browser* browser) OVERRIDE;
   virtual void BubbleViewAcceptButtonPressed(Browser* browser) OVERRIDE;
   virtual void BubbleViewCancelButtonPressed(Browser* browser) OVERRIDE;
+
+  // Returns the SigninGlobalError instance for the given profile.
+  static SigninGlobalError* GetForProfile(Profile* profile);
 
  private:
   std::set<const AuthStatusProvider*> provider_set_;
@@ -68,9 +69,6 @@ class SigninGlobalError : public GlobalError {
   // The auth error detected the last time AuthStatusChanged() was invoked (or
   // NONE if AuthStatusChanged() has never been invoked).
   GoogleServiceAuthError auth_error_;
-
-  // The SigninManager that owns this object.
-  SigninManager* signin_manager_;
 
   // The Profile this object belongs to.
   Profile* profile_;

@@ -6,7 +6,7 @@
 
 #include "base/json/json_writer.h"
 #include "base/rand_util.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "chrome/browser/history/history_backend.h"
 #include "chrome/browser/history/history_db_task.h"
@@ -48,6 +48,7 @@ base::Time UnixUsecToTime(int64 usec) {
 
 // Converts a base::Time value to a Unix timestamp in microseconds.
 int64 TimeToUnixUsec(base::Time time) {
+  DCHECK(!time.is_null());
   return (time - base::Time::UnixEpoch()).InMicroseconds();
 }
 
@@ -60,6 +61,44 @@ void GetTimesFromGlobalIds(
         base::Time::FromInternalValue(global_id_directive.global_id(i)));
   }
 }
+
+#if !defined(NDEBUG)
+// Checks that the given delete directive is properly formed.
+void CheckDeleteDirectiveValid(
+    const sync_pb::HistoryDeleteDirectiveSpecifics& delete_directive) {
+  if (delete_directive.has_global_id_directive()) {
+    const sync_pb::GlobalIdDirective& global_id_directive =
+        delete_directive.global_id_directive();
+
+    DCHECK(!delete_directive.has_time_range_directive());
+    DCHECK_NE(global_id_directive.global_id_size(), 0);
+    if (global_id_directive.has_start_time_usec())
+      DCHECK_GE(global_id_directive.start_time_usec(), 0);
+    if (global_id_directive.has_end_time_usec()) {
+      DCHECK_GT(global_id_directive.end_time_usec(), 0);
+
+      if (global_id_directive.has_start_time_usec()) {
+        DCHECK_LE(global_id_directive.start_time_usec(),
+                  global_id_directive.end_time_usec());
+      }
+    }
+
+  } else if (delete_directive.has_time_range_directive()) {
+    const sync_pb::TimeRangeDirective& time_range_directive =
+        delete_directive.time_range_directive();
+
+    DCHECK(!delete_directive.has_global_id_directive());
+    DCHECK(time_range_directive.has_start_time_usec());
+    DCHECK(time_range_directive.has_end_time_usec());
+    DCHECK_GE(time_range_directive.start_time_usec(), 0);
+    DCHECK_GT(time_range_directive.end_time_usec(), 0);
+    DCHECK_GT(time_range_directive.end_time_usec(),
+              time_range_directive.start_time_usec());
+  } else {
+    NOTREACHED() << "Delete directive has no time range or global ID directive";
+  }
+}
+#endif  // !defined(NDEBUG)
 
 }  // anonymous namespace
 
@@ -236,7 +275,7 @@ DeleteDirectiveHandler::DeleteDirectiveTask::ProcessTimeRangeDeleteDirectives(
 }
 
 DeleteDirectiveHandler::DeleteDirectiveHandler()
-    : weak_ptr_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {}
+    : weak_ptr_factory_(this) {}
 
 DeleteDirectiveHandler::~DeleteDirectiveHandler() {
   weak_ptr_factory_.InvalidateWeakPtrs();
@@ -270,10 +309,9 @@ bool DeleteDirectiveHandler::CreateDeleteDirectives(
   base::Time now = base::Time::Now();
   sync_pb::HistoryDeleteDirectiveSpecifics delete_directive;
 
-  int64 begin_time_usecs = TimeToUnixUsec(begin_time);
-  // Delete directives require a non-null begin time.
-  if (begin_time.is_null())
-    begin_time_usecs += 1;
+  // Delete directives require a non-null begin time, so use 1 if it's null.
+  int64 begin_time_usecs =
+      begin_time.is_null() ? 0 : TimeToUnixUsec(begin_time);
 
   // Determine the actual end time -- it should not be null or in the future.
   // TODO(dubroy): Use sane time (crbug.com/146090) here when it's available.
@@ -303,12 +341,17 @@ bool DeleteDirectiveHandler::CreateDeleteDirectives(
 syncer::SyncError DeleteDirectiveHandler::ProcessLocalDeleteDirective(
     const sync_pb::HistoryDeleteDirectiveSpecifics& delete_directive) {
   DCHECK(thread_checker_.CalledOnValidThread());
-  if (!sync_processor_.get()) {
+  if (!sync_processor_) {
     return syncer::SyncError(
         FROM_HERE,
+        syncer::SyncError::DATATYPE_ERROR,
         "Cannot send local delete directive to sync",
         syncer::HISTORY_DELETE_DIRECTIVES);
   }
+#if !defined(NDEBUG)
+  CheckDeleteDirectiveValid(delete_directive);
+#endif
+
   // Generate a random sync tag since history delete directives don't
   // have a 'built-in' ID.  8 bytes should suffice.
   std::string sync_tag = base::RandBytesAsString(8);
@@ -328,9 +371,12 @@ syncer::SyncError DeleteDirectiveHandler::ProcessSyncChanges(
     HistoryService* history_service,
     const syncer::SyncChangeList& change_list) {
   DCHECK(thread_checker_.CalledOnValidThread());
-  if (!sync_processor_.get()) {
+  if (!sync_processor_) {
     return syncer::SyncError(
-        FROM_HERE, "Sync is disabled.", syncer::HISTORY_DELETE_DIRECTIVES);
+        FROM_HERE,
+        syncer::SyncError::DATATYPE_ERROR,
+        "Sync is disabled.",
+        syncer::HISTORY_DELETE_DIRECTIVES);
   }
 
   syncer::SyncDataList delete_directives;

@@ -7,18 +7,20 @@
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/path_service.h"
 #include "content/public/browser/render_process_host.h"
+#include "content/public/common/content_paths.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/url_constants.h"
+#include "content/shell/app/shell_main_delegate.h"
+#include "content/shell/common/shell_switches.h"
+#include "content/shell/renderer/shell_content_renderer_client.h"
 #include "content/shell/shell.h"
 #include "content/shell/shell_browser_context.h"
 #include "content/shell/shell_content_browser_client.h"
-#include "content/shell/shell_content_renderer_client.h"
-#include "content/shell/shell_main_delegate.h"
-#include "content/shell/shell_switches.h"
 #include "content/test/test_content_client.h"
+#include "net/test/embedded_test_server/embedded_test_server.h"
 
 #if defined(OS_MACOSX)
 #include "base/mac/scoped_nsautorelease_pool.h"
@@ -42,6 +44,9 @@ ContentBrowserTest::ContentBrowserTest() {
   CHECK(PathService::Override(base::FILE_EXE, content_shell_path));
 #endif
   CreateTestServer(base::FilePath(FILE_PATH_LITERAL("content/test/data")));
+  base::FilePath content_test_data_dir;
+  CHECK(PathService::Get(DIR_TEST_DATA, &content_test_data_dir));
+  embedded_test_server()->ServeFilesFromDirectory(content_test_data_dir);
 }
 
 ContentBrowserTest::~ContentBrowserTest() {
@@ -60,8 +65,7 @@ void ContentBrowserTest::SetUp() {
   // and set up renderer.
   if (command_line->HasSwitch(switches::kSingleProcess)) {
     single_process_renderer_client_.reset(new ShellContentRendererClient);
-    GetContentClient()->set_renderer_for_testing(
-        single_process_renderer_client_.get());
+    SetRendererClientForTesting(single_process_renderer_client_.get());
   }
 
 #if defined(OS_MACOSX)
@@ -109,7 +113,7 @@ void ContentBrowserTest::RunTestOnMainThreadLoop() {
 #endif
 
   // Pump startup related events.
-  MessageLoopForUI::current()->RunUntilIdle();
+  base::MessageLoopForUI::current()->RunUntilIdle();
 
 #if defined(OS_MACOSX)
   pool.Recycle();
@@ -118,6 +122,8 @@ void ContentBrowserTest::RunTestOnMainThreadLoop() {
   SetUpOnMainThread();
 
   RunTestOnMainThread();
+
+  TearDownOnMainThread();
 #if defined(OS_MACOSX)
   pool.Recycle();
 #endif
@@ -131,22 +137,18 @@ void ContentBrowserTest::RunTestOnMainThreadLoop() {
 }
 
 Shell* ContentBrowserTest::CreateBrowser() {
-  ShellContentBrowserClient* browser_client =
-      static_cast<ShellContentBrowserClient*>(GetContentClient()->browser());
   return Shell::CreateNewWindow(
-      browser_client->browser_context(),
-      GURL(chrome::kAboutBlankURL),
+      ShellContentBrowserClient::Get()->browser_context(),
+      GURL(kAboutBlankURL),
       NULL,
       MSG_ROUTING_NONE,
       gfx::Size());
 }
 
 Shell* ContentBrowserTest::CreateOffTheRecordBrowser() {
-  ShellContentBrowserClient* browser_client =
-      static_cast<ShellContentBrowserClient*>(GetContentClient()->browser());
   return Shell::CreateNewWindow(
-      browser_client->off_the_record_browser_context(),
-      GURL(chrome::kAboutBlankURL),
+      ShellContentBrowserClient::Get()->off_the_record_browser_context(),
+      GURL(kAboutBlankURL),
       NULL,
       MSG_ROUTING_NONE,
       gfx::Size());

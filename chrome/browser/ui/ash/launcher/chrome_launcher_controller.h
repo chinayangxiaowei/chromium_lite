@@ -14,7 +14,7 @@
 #include "chrome/browser/extensions/app_icon_loader.h"
 #include "chrome/browser/extensions/extension_prefs.h"
 
-class BrowserLauncherItemControllerTest;
+class LauncherItemControllerPerAppTest;
 class LauncherItemController;
 class Profile;
 class ChromeLauncherAppMenuItem;
@@ -31,6 +31,10 @@ class RootWindow;
 
 namespace content {
 class WebContents;
+}
+
+namespace ui {
+class BaseWindow;
 }
 
 // A list of the elements which makes up a simple menu description.
@@ -256,11 +260,13 @@ class ChromeLauncherController
   virtual const extensions::Extension* GetExtensionForAppID(
       const std::string& app_id) const = 0;
 
+  // Activates a |window|. If |allow_minimize| is true and the system allows
+  // it, the the window will get minimized instead.
+  virtual void ActivateWindowOrMinimizeIfActive(ui::BaseWindow* window,
+                                                bool allow_minimize) = 0;
   // ash::LauncherDelegate overrides:
-  virtual void OnBrowserShortcutClicked(int event_flags) OVERRIDE = 0;
-  virtual void ItemClicked(const ash::LauncherItem& item,
+  virtual void ItemSelected(const ash::LauncherItem& item,
                            const ui::Event& event) OVERRIDE = 0;
-  virtual int GetBrowserShortcutResourceId() OVERRIDE = 0;
   virtual string16 GetTitle(const ash::LauncherItem& item) OVERRIDE = 0;
   virtual ui::MenuModel* CreateContextMenu(
       const ash::LauncherItem& item, aura::RootWindow* root) OVERRIDE = 0;
@@ -270,13 +276,14 @@ class ChromeLauncherController
   virtual ash::LauncherID GetIDByWindow(aura::Window* window) OVERRIDE = 0;
   virtual bool IsDraggable(const ash::LauncherItem& item) OVERRIDE = 0;
   virtual bool ShouldShowTooltip(const ash::LauncherItem& item) OVERRIDE = 0;
+  virtual bool IsPerAppLauncher() OVERRIDE;
 
   // extensions::AppIconLoader overrides:
   virtual void SetAppImage(const std::string& app_id,
                            const gfx::ImageSkia& image) OVERRIDE = 0;
 
  protected:
-  friend class BrowserLauncherItemControllerTest;
+  friend class LauncherItemControllerPerAppTest;
   friend class LauncherPlatformAppBrowserTest;
   friend class LauncherAppBrowserTest;
   // TODO(skuhne): Remove these when the old launcher get removed.

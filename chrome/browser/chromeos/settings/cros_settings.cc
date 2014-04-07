@@ -6,16 +6,16 @@
 
 #include "base/bind.h"
 #include "base/command_line.h"
-#include "base/lazy_instance.h"
+#include "base/logging.h"
 #include "base/stl_util.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "base/values.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/chromeos/settings/device_settings_provider.h"
 #include "chrome/browser/chromeos/settings/device_settings_service.h"
 #include "chrome/browser/chromeos/settings/stub_cros_settings_provider.h"
 #include "chrome/browser/chromeos/settings/system_settings_provider.h"
-#include "chrome/common/chrome_notification_types.h"
-#include "chrome/common/chrome_switches.h"
+#include "chromeos/chromeos_switches.h"
 #include "content/public/browser/notification_details.h"
 #include "content/public/browser/notification_source.h"
 #include "content/public/browser/notification_types.h"
@@ -23,12 +23,51 @@
 
 namespace chromeos {
 
-static base::LazyInstance<CrosSettings> g_cros_settings =
-    LAZY_INSTANCE_INITIALIZER;
+static CrosSettings*  g_cros_settings = NULL;
 
+// static
+void CrosSettings::Initialize() {
+  CHECK(!g_cros_settings);
+  g_cros_settings = new CrosSettings(DeviceSettingsService::Get());
+}
+
+// static
+bool CrosSettings::IsInitialized() {
+  return g_cros_settings;
+}
+
+// static
+void CrosSettings::Shutdown() {
+  DCHECK(g_cros_settings);
+  delete g_cros_settings;
+  g_cros_settings = NULL;
+}
+
+// static
 CrosSettings* CrosSettings::Get() {
-  // TODO(xiyaun): Use real stuff when underlying libcros is ready.
-  return g_cros_settings.Pointer();
+  CHECK(g_cros_settings);
+  return g_cros_settings;
+}
+
+CrosSettings::CrosSettings(DeviceSettingsService* device_settings_service) {
+  CrosSettingsProvider::NotifyObserversCallback notify_cb(
+      base::Bind(&CrosSettings::FireObservers,
+                 // This is safe since |this| is never deleted.
+                 base::Unretained(this)));
+  if (CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kStubCrosSettings)) {
+    AddSettingsProvider(new StubCrosSettingsProvider(notify_cb));
+  } else {
+    AddSettingsProvider(
+        new DeviceSettingsProvider(notify_cb, device_settings_service));
+  }
+  // System settings are not mocked currently.
+  AddSettingsProvider(new SystemSettingsProvider(notify_cb));
+}
+
+CrosSettings::~CrosSettings() {
+  STLDeleteElements(&providers_);
+  STLDeleteValues(&settings_observers_);
 }
 
 bool CrosSettings::IsCrosSettings(const std::string& path) {
@@ -154,6 +193,16 @@ bool CrosSettings::GetList(const std::string& path,
   return false;
 }
 
+bool CrosSettings::GetDictionary(
+    const std::string& path,
+    const base::DictionaryValue** out_value) const {
+  DCHECK(CalledOnValidThread());
+  const base::Value* value = GetPref(path);
+  if (value)
+    return value->GetAsDictionary(out_value);
+  return false;
+}
+
 bool CrosSettings::FindEmailInList(const std::string& path,
                                    const std::string& email) const {
   DCHECK(CalledOnValidThread());
@@ -270,27 +319,6 @@ CrosSettingsProvider* CrosSettings::GetProvider(
   return NULL;
 }
 
-CrosSettings::CrosSettings() {
-  CrosSettingsProvider::NotifyObserversCallback notify_cb(
-      base::Bind(&CrosSettings::FireObservers,
-                 // This is safe since |this| is never deleted.
-                 base::Unretained(this)));
-  if (CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kStubCrosSettings)) {
-    AddSettingsProvider(new StubCrosSettingsProvider(notify_cb));
-  } else {
-    AddSettingsProvider(
-        new DeviceSettingsProvider(notify_cb, DeviceSettingsService::Get()));
-  }
-  // System settings are not mocked currently.
-  AddSettingsProvider(new SystemSettingsProvider(notify_cb));
-}
-
-CrosSettings::~CrosSettings() {
-  STLDeleteElements(&providers_);
-  STLDeleteValues(&settings_observers_);
-}
-
 void CrosSettings::FireObservers(const std::string& path) {
   DCHECK(CalledOnValidThread());
   SettingsObserverMap::iterator observer_iterator =
@@ -305,6 +333,14 @@ void CrosSettings::FireObservers(const std::string& path) {
                       content::Source<CrosSettings>(this),
                       content::Details<const std::string>(&path));
   }
+}
+
+ScopedTestCrosSettings::ScopedTestCrosSettings() {
+  CrosSettings::Initialize();
+}
+
+ScopedTestCrosSettings::~ScopedTestCrosSettings() {
+  CrosSettings::Shutdown();
 }
 
 }  // namespace chromeos

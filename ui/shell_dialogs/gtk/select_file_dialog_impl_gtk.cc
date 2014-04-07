@@ -10,12 +10,12 @@
 #include "base/file_util.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
-#include "base/string_util.h"
-#include "base/sys_string_conversions.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/string_util.h"
+#include "base/strings/sys_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread.h"
 #include "base/threading/thread_restrictions.h"
-#include "base/utf_string_conversions.h"
 #include "grit/ui_strings.h"
 #include "ui/base/gtk/gtk_signal.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -49,7 +49,7 @@ class SelectFileDialogImplGTK : public ui::SelectFileDialogImpl {
   // |params| is user data we pass back via the Listener interface.
   virtual void SelectFileImpl(
       Type type,
-      const string16& title,
+      const base::string16& title,
       const base::FilePath& default_path,
       const FileTypeInfo* file_types,
       int file_type_index,
@@ -75,8 +75,11 @@ class SelectFileDialogImplGTK : public ui::SelectFileDialogImpl {
   // us when we were told to show the dialog.
   void FileNotSelected(GtkWidget* dialog);
 
-  GtkWidget* CreateSelectFolderDialog(const std::string& title,
-      const base::FilePath& default_path, gfx::NativeWindow parent);
+  GtkWidget* CreateSelectFolderDialog(
+      Type type,
+      const std::string& title,
+      const base::FilePath& default_path,
+      gfx::NativeWindow parent);
 
   GtkWidget* CreateFileOpenDialog(const std::string& title,
       const base::FilePath& default_path, gfx::NativeWindow parent);
@@ -166,7 +169,7 @@ bool SelectFileDialogImplGTK::HasMultipleFileTypeChoicesImpl() {
 // We ignore |default_extension|.
 void SelectFileDialogImplGTK::SelectFileImpl(
     Type type,
-    const string16& title,
+    const base::string16& title,
     const base::FilePath& default_path,
     const FileTypeInfo* file_types,
     int file_type_index,
@@ -191,7 +194,8 @@ void SelectFileDialogImplGTK::SelectFileImpl(
   GtkWidget* dialog = NULL;
   switch (type) {
     case SELECT_FOLDER:
-      dialog = CreateSelectFolderDialog(title_string, default_path,
+    case SELECT_UPLOAD_FOLDER:
+      dialog = CreateSelectFolderDialog(type, title_string, default_path,
                                         owning_window);
       break;
     case SELECT_OPEN_FILE:
@@ -351,17 +355,26 @@ GtkWidget* SelectFileDialogImplGTK::CreateFileOpenHelper(
 }
 
 GtkWidget* SelectFileDialogImplGTK::CreateSelectFolderDialog(
+    Type type,
     const std::string& title,
     const base::FilePath& default_path,
     gfx::NativeWindow parent) {
-  std::string title_string = !title.empty() ? title :
+  std::string title_string = title;
+  if (title_string.empty()) {
+    title_string = (type == SELECT_UPLOAD_FOLDER) ?
+        l10n_util::GetStringUTF8(IDS_SELECT_UPLOAD_FOLDER_DIALOG_TITLE) :
         l10n_util::GetStringUTF8(IDS_SELECT_FOLDER_DIALOG_TITLE);
+  }
+  std::string accept_button_label = (type == SELECT_UPLOAD_FOLDER) ?
+      l10n_util::GetStringUTF8(IDS_SELECT_UPLOAD_FOLDER_DIALOG_UPLOAD_BUTTON) :
+      GTK_STOCK_OPEN;
 
   GtkWidget* dialog =
       gtk_file_chooser_dialog_new(title_string.c_str(), parent,
                                   GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER,
                                   GTK_STOCK_CANCEL, GTK_RESPONSE_CANCEL,
-                                  GTK_STOCK_OPEN, GTK_RESPONSE_ACCEPT,
+                                  accept_button_label.c_str(),
+                                  GTK_RESPONSE_ACCEPT,
                                   NULL);
 
   if (!default_path.empty()) {

@@ -133,7 +133,7 @@ class BrowserEncodingTest
     base::FilePath expected_file_name = ui_test_utils::GetTestFilePath(
         base::FilePath(kTestDir), expected);
 
-    EXPECT_TRUE(file_util::ContentsEqual(full_file_name, expected_file_name));
+    EXPECT_TRUE(base::ContentsEqual(full_file_name, expected_file_name));
   }
 
   virtual void SetUpOnMainThread() OVERRIDE {
@@ -195,9 +195,7 @@ IN_PROC_BROWSER_TEST_F(BrowserEncodingTest, TestOverrideEncoding) {
   // Override the encoding to "gb18030".
   const std::string selected_encoding =
       CharacterEncoding::GetCanonicalEncodingNameByAliasName("gb18030");
-  content::TestNavigationObserver navigation_observer(
-      content::Source<content::NavigationController>(
-          &web_contents->GetController()));
+  content::TestNavigationObserver navigation_observer(web_contents);
   web_contents->SetOverrideEncoding(selected_encoding);
   navigation_observer.Wait();
   EXPECT_EQ("gb18030", web_contents->GetEncoding());
@@ -316,9 +314,7 @@ IN_PROC_BROWSER_TEST_F(BrowserEncodingTest, MAYBE_TestEncodingAutoDetect) {
     browser()->profile()->GetPrefs()->SetBoolean(
         prefs::kWebKitUsesUniversalDetector, true);
 
-    content::TestNavigationObserver observer(
-        content::Source<content::NavigationController>(
-            &web_contents->GetController()));
+    content::TestNavigationObserver observer(web_contents);
     chrome::Reload(browser(), CURRENT_TAB);
     observer.Wait();
 

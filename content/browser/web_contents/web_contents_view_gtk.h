@@ -56,7 +56,7 @@ class CONTENT_EXPORT WebContentsViewGtk
   virtual void SetInitialFocus() OVERRIDE;
   virtual void StoreFocus() OVERRIDE;
   virtual void RestoreFocus() OVERRIDE;
-  virtual WebDropData* GetDropData() const OVERRIDE;
+  virtual DropData* GetDropData() const OVERRIDE;
   virtual gfx::Rect GetViewBounds() const OVERRIDE;
 
   // WebContentsViewPort implementation ----------------------------------------
@@ -72,17 +72,15 @@ class CONTENT_EXPORT WebContentsViewGtk
   virtual void SetOverscrollControllerEnabled(bool enabled) OVERRIDE;
 
   // Backend implementation of RenderViewHostDelegateView.
-  virtual void ShowContextMenu(
-      const ContextMenuParams& params,
-      ContextMenuSourceType type) OVERRIDE;
+  virtual void ShowContextMenu(const ContextMenuParams& params) OVERRIDE;
   virtual void ShowPopupMenu(const gfx::Rect& bounds,
                              int item_height,
                              double item_font_size,
                              int selected_item,
-                             const std::vector<WebMenuItem>& items,
+                             const std::vector<MenuItem>& items,
                              bool right_aligned,
                              bool allow_multiple_selection) OVERRIDE;
-  virtual void StartDragging(const WebDropData& drop_data,
+  virtual void StartDragging(const DropData& drop_data,
                              WebKit::WebDragOperationsMask allowed_ops,
                              const gfx::ImageSkia& image,
                              const gfx::Vector2d& image_offset,

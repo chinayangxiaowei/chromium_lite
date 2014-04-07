@@ -19,6 +19,7 @@
 namespace base {
 class Lock;
 class MessageLoopProxy;
+class TaskRunner;
 }
 
 namespace ppapi {
@@ -49,13 +50,7 @@ class PPAPI_SHARED_EXPORT PpapiGlobals {
   virtual ~PpapiGlobals();
 
   // Getter for the global singleton.
-  inline static PpapiGlobals* Get() {
-    if (ppapi_globals_)
-      return ppapi_globals_;
-    // In unit tests, the following might be valid (see
-    // SetPpapiGlobalsOnThreadForTest). Normally, this will just return NULL.
-    return GetThreadLocalPointer();
-  }
+  static PpapiGlobals* Get();
 
   // This allows us to set a given PpapiGlobals object as the PpapiGlobals for
   // a given thread. After setting the PpapiGlobals for a thread, Get() will
@@ -110,10 +105,20 @@ class PPAPI_SHARED_EXPORT PpapiGlobals {
   // constructor, so PpapiGlobals must be created on the main thread.
   base::MessageLoopProxy* GetMainThreadMessageLoop();
 
+  // In tests, the PpapiGlobals object persists across tests but the MLP pointer
+  // it hangs on will go stale and the next PPAPI test will crash because of
+  // thread checks. This resets the pointer to be the current MLP object.
+  void ResetMainThreadMessageLoopForTesting();
+
   // Return the MessageLoopShared of the current thread, if any. This will
   // always return NULL on the host side, where PPB_MessageLoop is not
   // supported.
   virtual MessageLoopShared* GetCurrentMessageLoop() = 0;
+
+  // Returns a task runner for file operations that may block.
+  // TODO(bbudge) Move this to PluginGlobals when we no longer support
+  // in-process plugins.
+  virtual base::TaskRunner* GetFileTaskRunner(PP_Instance instance) = 0;
 
   // Returns the command line for the process.
   virtual std::string GetCmdLine() = 0;
@@ -131,8 +136,6 @@ class PPAPI_SHARED_EXPORT PpapiGlobals {
   // should always be NULL when running in production. It allows separate
   // threads to have distinct "globals".
   static PpapiGlobals* GetThreadLocalPointer();
-
-  static PpapiGlobals* ppapi_globals_;
 
   scoped_refptr<base::MessageLoopProxy> main_loop_proxy_;
 

@@ -24,6 +24,8 @@ class CC_EXPORT VideoLayer : public Layer {
   virtual scoped_ptr<LayerImpl> CreateLayerImpl(LayerTreeImpl* tree_impl)
       OVERRIDE;
 
+  virtual bool Update(ResourceUpdateQueue* queue,
+                      const OcclusionTracker* occlusion) OVERRIDE;
  private:
   explicit VideoLayer(VideoFrameProvider* provider);
   virtual ~VideoLayer();
@@ -31,6 +33,8 @@ class CC_EXPORT VideoLayer : public Layer {
   // This pointer is only for passing to VideoLayerImpl's constructor. It should
   // never be dereferenced by this class.
   VideoFrameProvider* provider_;
+
+  DISALLOW_COPY_AND_ASSIGN(VideoLayer);
 };
 
 }  // namespace cc

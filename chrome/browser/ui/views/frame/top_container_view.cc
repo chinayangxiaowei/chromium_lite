@@ -9,16 +9,26 @@
 #include "chrome/browser/ui/views/frame/immersive_mode_controller.h"
 
 TopContainerView::TopContainerView(BrowserView* browser_view)
-    : browser_view_(browser_view),
-      focus_manager_(browser_view->GetFocusManager()) {
-  focus_manager_->AddFocusChangeListener(this);
+    : browser_view_(browser_view) {
 }
 
 TopContainerView::~TopContainerView() {
-  focus_manager_->RemoveFocusChangeListener(this);
 }
 
-std::string TopContainerView::GetClassName() const {
+gfx::Size TopContainerView::GetPreferredSize() {
+  // The view wants to be as wide as its parent and tall enough to fully show
+  // all its children. In particular, the bottom of the bookmark bar can be
+  // be above the bottom of the toolbar while the bookmark bar is animating.
+  int height = 0;
+  for (int i = 0; i < child_count(); ++i) {
+    int child_bottom = child_at(i)->bounds().bottom();
+    if (child_bottom > height)
+      height = child_bottom;
+  }
+  return gfx::Size(browser_view_->width(), height);
+}
+
+const char* TopContainerView::GetClassName() const {
   return "TopContainerView";
 }
 
@@ -32,18 +42,4 @@ void TopContainerView::PaintChildren(gfx::Canvas* canvas) {
   }
 
   views::View::PaintChildren(canvas);
-}
-
-void TopContainerView::OnWillChangeFocus(View* focused_before,
-                                        View* focused_now) {
-}
-
-void TopContainerView::OnDidChangeFocus(View* focused_before,
-                                        View* focused_now) {
-  // If one of this view's children had focus before, but doesn't have focus
-  // now, we may want to slide out the top views in immersive fullscreen.
-  if (browser_view_->immersive_mode_controller()->enabled() &&
-      Contains(focused_before) &&
-      !Contains(focused_now))
-    browser_view_->immersive_mode_controller()->OnRevealViewLostFocus();
 }

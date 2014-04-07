@@ -11,7 +11,6 @@
 #include "ui/gfx/rect.h"
 #include "ui/gfx/size.h"
 #include "ui/gfx/vector2d.h"
-#include "ui/surface/transport_dib.h"
 
 class SkBitmap;
 class SkDevice;
@@ -39,7 +38,7 @@ class CC_EXPORT SoftwareOutputDevice {
                       gfx::Rect clip_rect);
 
   // TODO(skaslev) Remove this after UberCompositor lands.
-  virtual void ReclaimDIB(TransportDIB::Handle handle);
+  virtual void ReclaimSoftwareFrame(unsigned id);
 
  protected:
   gfx::Size viewport_size_;
@@ -47,9 +46,10 @@ class CC_EXPORT SoftwareOutputDevice {
   skia::RefPtr<SkDevice> device_;
   skia::RefPtr<SkCanvas> canvas_;
 
+ private:
   DISALLOW_COPY_AND_ASSIGN(SoftwareOutputDevice);
 };
 
 }  // namespace cc
 
-#endif // CC_OUTPUT_SOFTWARE_OUTPUT_DEVICE_H_
+#endif  // CC_OUTPUT_SOFTWARE_OUTPUT_DEVICE_H_

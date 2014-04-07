@@ -14,52 +14,32 @@
 #include "chrome/common/url_constants.h"
 #include "net/dns/mock_host_resolver.h"
 
-// Possible race in ChromeURLDataManager. http://crbug.com/59198
-#if defined(OS_MACOSX) || defined(OS_LINUX)
-#define MAYBE_TabOnRemoved DISABLED_TabOnRemoved
-#else
-#define MAYBE_TabOnRemoved TabOnRemoved
-#endif
 
 // Window resizes are not completed by the time the callback happens,
 // so these tests fail on linux/gtk. http://crbug.com/72369
 #if defined(OS_LINUX) && !defined(USE_AURA)
-#define MAYBE_FocusWindowDoesNotExitFullscreen \
-  DISABLED_FocusWindowDoesNotExitFullscreen
-#define MAYBE_UpdateWindowSizeExitsFullscreen \
-  DISABLED_UpdateWindowSizeExitsFullscreen
 #define MAYBE_UpdateWindowResize DISABLED_UpdateWindowResize
 #define MAYBE_UpdateWindowShowState DISABLED_UpdateWindowShowState
 #else
 
-#if defined(USE_AURA) || defined(OS_MACOSX) || defined(OS_WIN)
+#if defined(USE_AURA) || defined(OS_MACOSX)
 // Maximizing/fullscreen popup window doesn't work on aura's managed mode.
 // See bug crbug.com/116305.
 // Mac: http://crbug.com/103912
-// Failing on Win7: http://crbug.com/176683
 #define MAYBE_UpdateWindowShowState DISABLED_UpdateWindowShowState
 #else
 #define MAYBE_UpdateWindowShowState UpdateWindowShowState
-#endif  // defined(USE_AURA) || defined(OS_MACOSX) || defined(OS_WIN)
+#endif  // defined(USE_AURA) || defined(OS_MACOSX)
 
-// TODO(linux_aura) http://crbug.com/163931
-#if defined(OS_LINUX) && !defined(OS_CHROMEOS) && defined(USE_AURA)
-#define MAYBE_FocusWindowDoesNotExitFullscreen \
-  DISABLED_FocusWindowDoesNotExitFullscreen
-#else
-#define MAYBE_FocusWindowDoesNotExitFullscreen FocusWindowDoesNotExitFullscreen
-#endif
-
-#define MAYBE_UpdateWindowSizeExitsFullscreen UpdateWindowSizeExitsFullscreen
 #define MAYBE_UpdateWindowResize UpdateWindowResize
 #endif  // defined(OS_LINUX) && !defined(USE_AURA)
 
 // http://crbug.com/145639
-#if defined(OS_CHROMEOS)
+#if defined(OS_CHROMEOS) || defined(OS_WIN)
 #define MAYBE_TabEvents DISABLED_TabEvents
 #else
 #define MAYBE_TabEvents TabEvents
-#endif  // defined(OS_CHROMEOS)
+#endif
 
 class ExtensionApiNewTabTest : public ExtensionApiTest {
  public:
@@ -83,7 +63,13 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiNewTabTest, Tabs) {
   ASSERT_TRUE(RunExtensionSubtest("tabs/basics", "crud.html")) << message_;
 }
 
-IN_PROC_BROWSER_TEST_F(ExtensionApiTest, Tabs2) {
+// Flaky on windows: http://crbug.com/238667
+#if defined(OS_WIN)
+#define MAYBE_Tabs2 DISABLED_Tabs2
+#else
+#define MAYBE_Tabs2 Tabs2
+#endif
+IN_PROC_BROWSER_TEST_F(ExtensionApiTest, MAYBE_Tabs2) {
   ASSERT_TRUE(RunExtensionSubtest("tabs/basics", "crud2.html")) << message_;
 }
 
@@ -100,7 +86,13 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, TabPinned) {
   ASSERT_TRUE(RunExtensionSubtest("tabs/basics", "pinned.html")) << message_;
 }
 
-IN_PROC_BROWSER_TEST_F(ExtensionApiTest, TabMove) {
+// Flaky on windows: http://crbug.com/238667
+#if defined(OS_WIN)
+#define MAYBE_TabMove DISABLED_TabMove
+#else
+#define MAYBE_TabMove TabMove
+#endif
+IN_PROC_BROWSER_TEST_F(ExtensionApiTest, MAYBE_TabMove) {
   ASSERT_TRUE(RunExtensionSubtest("tabs/basics", "move.html")) << message_;
 }
 
@@ -117,7 +109,13 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, TabQuery) {
   ASSERT_TRUE(RunExtensionSubtest("tabs/basics", "query.html")) << message_;
 }
 
-IN_PROC_BROWSER_TEST_F(ExtensionApiTest, TabHighlight) {
+// Flaky on windows: http://crbug.com/239022
+#if defined(OS_WIN)
+#define MAYBE_TabHighlight DISABLED_TabHighlight
+#else
+#define MAYBE_TabHighlight TabHighlight
+#endif
+IN_PROC_BROWSER_TEST_F(ExtensionApiTest, MAYBE_TabHighlight) {
   ASSERT_TRUE(RunExtensionSubtest("tabs/basics", "highlight.html")) << message_;
 }
 
@@ -125,7 +123,13 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, TabCrashBrowser) {
   ASSERT_TRUE(RunExtensionSubtest("tabs/basics", "crash.html")) << message_;
 }
 
-IN_PROC_BROWSER_TEST_F(ExtensionApiTest, TabOpener) {
+// Flaky on windows: http://crbug.com/238667
+#if defined(OS_WIN)
+#define MAYBE_TabOpener DISABLED_TabOpener
+#else
+#define MAYBE_TabOpener TabOpener
+#endif
+IN_PROC_BROWSER_TEST_F(ExtensionApiTest, MAYBE_TabOpener) {
   ASSERT_TRUE(RunExtensionSubtest("tabs/basics", "opener.html")) << message_;
 }
 
@@ -135,11 +139,12 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, DISABLED_TabGetCurrent) {
 
 // Flaky on the trybots. See http://crbug.com/96725.
 IN_PROC_BROWSER_TEST_F(ExtensionApiTest, DISABLED_TabConnect) {
-  ASSERT_TRUE(StartTestServer());
+  ASSERT_TRUE(StartEmbeddedTestServer());
   ASSERT_TRUE(RunExtensionTest("tabs/connect")) << message_;
 }
 
-IN_PROC_BROWSER_TEST_F(ExtensionApiTest, MAYBE_TabOnRemoved) {
+// Possible race in ChromeURLDataManager. http://crbug.com/59198
+IN_PROC_BROWSER_TEST_F(ExtensionApiTest, DISABLED_TabOnRemoved) {
   ASSERT_TRUE(RunExtensionTest("tabs/on_removed")) << message_;
 }
 
@@ -150,7 +155,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, DISABLED_TabReload) {
 IN_PROC_BROWSER_TEST_F(ExtensionApiTest, DISABLED_CaptureVisibleTabJpeg) {
   host_resolver()->AddRule("a.com", "127.0.0.1");
   host_resolver()->AddRule("b.com", "127.0.0.1");
-  ASSERT_TRUE(StartTestServer());
+  ASSERT_TRUE(StartEmbeddedTestServer());
   ASSERT_TRUE(RunExtensionSubtest("tabs/capture_visible_tab",
                                   "test_jpeg.html")) << message_;
 }
@@ -158,7 +163,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, DISABLED_CaptureVisibleTabJpeg) {
 IN_PROC_BROWSER_TEST_F(ExtensionApiTest, DISABLED_CaptureVisibleTabPng) {
   host_resolver()->AddRule("a.com", "127.0.0.1");
   host_resolver()->AddRule("b.com", "127.0.0.1");
-  ASSERT_TRUE(StartTestServer());
+  ASSERT_TRUE(StartEmbeddedTestServer());
   ASSERT_TRUE(RunExtensionSubtest("tabs/capture_visible_tab",
                                   "test_png.html")) << message_;
 }
@@ -175,7 +180,13 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, CaptureVisibleFile) {
                                   "test_file.html")) << message_;
 }
 
-IN_PROC_BROWSER_TEST_F(ExtensionApiTest, CaptureVisibleNoFile) {
+// Flaky on windows: http://crbug.com/238667
+#if defined(OS_WIN)
+#define MAYBE_CaptureVisibleNoFile DISABLED_CaptureVisibleNoFile
+#else
+#define MAYBE_CaptureVisibleNoFile CaptureVisibleNoFile
+#endif
+IN_PROC_BROWSER_TEST_F(ExtensionApiTest, MAYBE_CaptureVisibleNoFile) {
   ASSERT_TRUE(RunExtensionSubtest(
       "tabs/capture_visible_tab", "test_nofile.html",
       ExtensionApiTest::kFlagNone)) << message_;
@@ -194,23 +205,6 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, TabsOnUpdated) {
 
 IN_PROC_BROWSER_TEST_F(ExtensionApiTest, TabsNoPermissions) {
   ASSERT_TRUE(RunExtensionTest("tabs/no_permissions")) << message_;
-}
-
-IN_PROC_BROWSER_TEST_F(ExtensionApiTest,
-                       MAYBE_FocusWindowDoesNotExitFullscreen) {
-  browser()->window()->EnterFullscreen(
-      GURL(), FEB_TYPE_BROWSER_FULLSCREEN_EXIT_INSTRUCTION);
-  bool is_fullscreen = browser()->window()->IsFullscreen();
-  ASSERT_TRUE(RunExtensionTest("window_update/focus")) << message_;
-  ASSERT_EQ(is_fullscreen, browser()->window()->IsFullscreen());
-}
-
-IN_PROC_BROWSER_TEST_F(ExtensionApiTest,
-                       MAYBE_UpdateWindowSizeExitsFullscreen) {
-  browser()->window()->EnterFullscreen(
-      GURL(), FEB_TYPE_BROWSER_FULLSCREEN_EXIT_INSTRUCTION);
-  ASSERT_TRUE(RunExtensionTest("window_update/sizing")) << message_;
-  ASSERT_FALSE(browser()->window()->IsFullscreen());
 }
 
 IN_PROC_BROWSER_TEST_F(ExtensionApiTest,

@@ -6,20 +6,18 @@
 
 #include "base/values.h"
 #include "chrome/browser/automation/automation_provider.h"
-#include "chrome/browser/chromeos/cros/cros_library.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/chromeos/login/authentication_notification_details.h"
-#include "chrome/browser/chromeos/login/enrollment/enterprise_enrollment_screen_actor.h"
+#include "chrome/browser/chromeos/login/enrollment/enrollment_screen_actor.h"
 #include "chrome/browser/chromeos/login/existing_user_controller.h"
 #include "chrome/browser/chromeos/login/screen_locker.h"
+#include "chrome/browser/chromeos/login/screens/wizard_screen.h"
 #include "chrome/browser/chromeos/login/user_image.h"
 #include "chrome/browser/chromeos/login/user_image_manager.h"
 #include "chrome/browser/chromeos/login/user_manager.h"
 #include "chrome/browser/chromeos/login/wizard_controller.h"
-#include "chrome/browser/chromeos/login/wizard_screen.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "content/public/browser/notification_service.h"
 
-using chromeos::CrosLibrary;
 using chromeos::NetworkLibrary;
 using chromeos::WizardController;
 
@@ -36,18 +34,19 @@ NetworkManagerInitObserver::NetworkManagerInitObserver(
 }
 
 NetworkManagerInitObserver::~NetworkManagerInitObserver() {
-    CrosLibrary::Get()->GetNetworkLibrary()->RemoveNetworkManagerObserver(this);
+  NetworkLibrary::Get()->RemoveNetworkManagerObserver(this);
 }
 
 bool NetworkManagerInitObserver::Init() {
-  if (!CrosLibrary::Get()->libcros_loaded()) {
-    // If cros library fails to load, don't wait for the network
-    // library to finish initializing, because it'll wait forever.
+  if (!NetworkLibrary::Get()->IsCros()) {
+    // If the network library is not the production version, don't wait for
+    // the network library to finish initializing, because it'll wait
+    // forever.
     automation_->OnNetworkLibraryInit();
     return false;
   }
 
-  CrosLibrary::Get()->GetNetworkLibrary()->AddNetworkManagerObserver(this);
+  NetworkLibrary::Get()->AddNetworkManagerObserver(this);
   return true;
 }
 
@@ -65,7 +64,7 @@ OOBEWebuiReadyObserver::OOBEWebuiReadyObserver(AutomationProvider* automation)
       WizardController::default_controller()->current_screen()) {
     OOBEWebuiReady();
   } else {
-    registrar_.Add(this, chrome::NOTIFICATION_LOGIN_WEBUI_VISIBLE,
+    registrar_.Add(this, chrome::NOTIFICATION_LOGIN_OR_LOCK_WEBUI_VISIBLE,
                    content::NotificationService::AllSources());
   }
 }
@@ -74,7 +73,7 @@ void OOBEWebuiReadyObserver::Observe(
     int type,
     const content::NotificationSource& source,
     const content::NotificationDetails& details) {
-  DCHECK(type == chrome::NOTIFICATION_LOGIN_WEBUI_VISIBLE);
+  DCHECK(type == chrome::NOTIFICATION_LOGIN_OR_LOCK_WEBUI_VISIBLE);
   OOBEWebuiReady();
 }
 
@@ -100,17 +99,18 @@ LoginObserver::~LoginObserver() {
 void LoginObserver::OnLoginFailure(const chromeos::LoginFailure& error) {
   scoped_ptr<DictionaryValue> return_value(new DictionaryValue);
   return_value->SetString("error_string", error.GetErrorString());
-  AutomationJSONReply(automation_, reply_message_.release())
+  AutomationJSONReply(automation_.get(), reply_message_.release())
       .SendSuccess(return_value.get());
   delete this;
 }
 
 void LoginObserver::OnLoginSuccess(
-    const chromeos::UserCredentials& credentials,
+    const chromeos::UserContext& user_context,
     bool pending_requests,
     bool using_oauth) {
   controller_->set_login_status_consumer(NULL);
-  AutomationJSONReply(automation_, reply_message_.release()).SendSuccess(NULL);
+  AutomationJSONReply(automation_.get(), reply_message_.release())
+      .SendSuccess(NULL);
   delete this;
 }
 
@@ -155,7 +155,7 @@ void WizardControllerObserver::Observe(
 void WizardControllerObserver::SendReply(const std::string& screen_name) {
   scoped_ptr<DictionaryValue> return_value(new DictionaryValue);
   return_value->SetString("next_screen", screen_name);
-  AutomationJSONReply(automation_, reply_message_.release())
+  AutomationJSONReply(automation_.get(), reply_message_.release())
       .SendSuccess(return_value.get());
   delete this;
 }
@@ -179,7 +179,7 @@ void ScreenLockUnlockObserver::Observe(
     const content::NotificationDetails& details) {
   DCHECK(type == chrome::NOTIFICATION_SCREEN_LOCK_STATE_CHANGED);
   if (automation_) {
-    AutomationJSONReply reply(automation_, reply_message_.release());
+    AutomationJSONReply reply(automation_.get(), reply_message_.release());
     bool is_screen_locked = *content::Details<bool>(details).ptr();
     if (lock_screen_ == is_screen_locked)
       reply.SendSuccess(NULL);
@@ -206,7 +206,7 @@ void ScreenUnlockObserver::OnLoginFailure(const chromeos::LoginFailure& error) {
   if (automation_) {
     scoped_ptr<DictionaryValue> return_value(new DictionaryValue);
     return_value->SetString("error_string", error.GetErrorString());
-    AutomationJSONReply(automation_, reply_message_.release())
+    AutomationJSONReply(automation_.get(), reply_message_.release())
         .SendSuccess(return_value.get());
   }
   delete this;
@@ -215,12 +215,12 @@ void ScreenUnlockObserver::OnLoginFailure(const chromeos::LoginFailure& error) {
 NetworkScanObserver::NetworkScanObserver(AutomationProvider* automation,
                                          IPC::Message* reply_message)
     : automation_(automation->AsWeakPtr()), reply_message_(reply_message) {
-  NetworkLibrary* network_library = CrosLibrary::Get()->GetNetworkLibrary();
+  NetworkLibrary* network_library = NetworkLibrary::Get();
   network_library->AddNetworkManagerObserver(this);
 }
 
 NetworkScanObserver::~NetworkScanObserver() {
-  NetworkLibrary* network_library = CrosLibrary::Get()->GetNetworkLibrary();
+  NetworkLibrary* network_library = NetworkLibrary::Get();
   network_library->RemoveNetworkManagerObserver(this);
 }
 
@@ -229,8 +229,8 @@ void NetworkScanObserver::OnNetworkManagerChanged(NetworkLibrary* obj) {
     return;
 
   if (automation_) {
-    AutomationJSONReply(automation_,
-                        reply_message_.release()).SendSuccess(NULL);
+    AutomationJSONReply(automation_.get(), reply_message_.release())
+        .SendSuccess(NULL);
   }
   delete this;
 }
@@ -240,12 +240,12 @@ ToggleNetworkDeviceObserver::ToggleNetworkDeviceObserver(
     const std::string& device, bool enable)
     : automation_(automation->AsWeakPtr()), reply_message_(reply_message),
       device_(device), enable_(enable) {
-  NetworkLibrary* network_library = CrosLibrary::Get()->GetNetworkLibrary();
+  NetworkLibrary* network_library = NetworkLibrary::Get();
   network_library->AddNetworkManagerObserver(this);
 }
 
 ToggleNetworkDeviceObserver::~ToggleNetworkDeviceObserver() {
-  NetworkLibrary* network_library = CrosLibrary::Get()->GetNetworkLibrary();
+  NetworkLibrary* network_library = NetworkLibrary::Get();
   network_library->RemoveNetworkManagerObserver(this);
 }
 
@@ -253,9 +253,10 @@ void ToggleNetworkDeviceObserver::OnNetworkManagerChanged(NetworkLibrary* obj) {
   if ((device_ == "ethernet" && enable_ == obj->ethernet_enabled()) ||
       (device_ == "wifi" && enable_ == obj->wifi_enabled()) ||
       (device_ == "cellular" && enable_ == obj->cellular_enabled())) {
-    if (automation_)
-      AutomationJSONReply(automation_,
-                          reply_message_.release()).SendSuccess(NULL);
+    if (automation_) {
+      AutomationJSONReply(automation_.get(), reply_message_.release())
+          .SendSuccess(NULL);
+    }
     delete this;
   }
 }
@@ -263,12 +264,12 @@ void ToggleNetworkDeviceObserver::OnNetworkManagerChanged(NetworkLibrary* obj) {
 NetworkStatusObserver::NetworkStatusObserver(AutomationProvider* automation,
                                                IPC::Message* reply_message)
     : automation_(automation->AsWeakPtr()), reply_message_(reply_message) {
-  NetworkLibrary* network_library = CrosLibrary::Get()->GetNetworkLibrary();
+  NetworkLibrary* network_library = NetworkLibrary::Get();
   network_library->AddNetworkManagerObserver(this);
 }
 
 NetworkStatusObserver::~NetworkStatusObserver() {
-  NetworkLibrary* network_library = CrosLibrary::Get()->GetNetworkLibrary();
+  NetworkLibrary* network_library = NetworkLibrary::Get();
   network_library->RemoveNetworkManagerObserver(this);
 }
 
@@ -280,7 +281,7 @@ void NetworkStatusObserver::OnNetworkManagerChanged(NetworkLibrary* obj) {
     if (automation_) {
       scoped_ptr<DictionaryValue> return_value(new DictionaryValue);
       return_value->SetString("error_string", "Network not found.");
-      AutomationJSONReply(automation_, reply_message_.release())
+      AutomationJSONReply(automation_.get(), reply_message_.release())
           .SendSuccess(return_value.get());
     }
     delete this;
@@ -300,14 +301,15 @@ void NetworkConnectObserver::NetworkStatusCheck(const chromeos::Network*
     if (automation_) {
       scoped_ptr<DictionaryValue> return_value(new DictionaryValue);
       return_value->SetString("error_string", network->GetErrorString());
-      AutomationJSONReply(automation_, reply_message_.release())
+      AutomationJSONReply(automation_.get(), reply_message_.release())
           .SendSuccess(return_value.get());
     }
     delete this;
   } else if (network->connected()) {
-    if (automation_)
-      AutomationJSONReply(automation_,
-                          reply_message_.release()).SendSuccess(NULL);
+    if (automation_) {
+      AutomationJSONReply(automation_.get(), reply_message_.release())
+          .SendSuccess(NULL);
+    }
     delete this;
   }
 
@@ -324,8 +326,8 @@ NetworkDisconnectObserver::NetworkDisconnectObserver(
 void NetworkDisconnectObserver::NetworkStatusCheck(const chromeos::Network*
                                                    network) {
   if (!network->connected()) {
-      AutomationJSONReply(automation_, reply_message_.release()).SendSuccess(
-                                                                 NULL);
+      AutomationJSONReply(automation_.get(), reply_message_.release())
+          .SendSuccess(NULL);
       delete this;
   }
 }
@@ -370,12 +372,12 @@ VirtualConnectObserver::VirtualConnectObserver(AutomationProvider* automation,
     : automation_(automation->AsWeakPtr()),
       reply_message_(reply_message),
       service_name_(service_name) {
-  NetworkLibrary* network_library = CrosLibrary::Get()->GetNetworkLibrary();
+  NetworkLibrary* network_library = NetworkLibrary::Get();
   network_library->AddNetworkManagerObserver(this);
 }
 
 VirtualConnectObserver::~VirtualConnectObserver() {
-  NetworkLibrary* network_library = CrosLibrary::Get()->GetNetworkLibrary();
+  NetworkLibrary* network_library = NetworkLibrary::Get();
   network_library->RemoveNetworkManagerObserver(this);
 }
 
@@ -391,14 +393,15 @@ void VirtualConnectObserver::OnNetworkManagerChanged(NetworkLibrary* cros) {
     if (automation_) {
       scoped_ptr<DictionaryValue> return_value(new DictionaryValue);
       return_value->SetString("error_string", virt->GetErrorString());
-      AutomationJSONReply(automation_, reply_message_.release())
+      AutomationJSONReply(automation_.get(), reply_message_.release())
           .SendSuccess(return_value.get());
     }
     delete this;
   } else if (virt->connected()) {
-    if (automation_)
-      AutomationJSONReply(automation_,
-                          reply_message_.release()).SendSuccess(NULL);
+    if (automation_) {
+      AutomationJSONReply(automation_.get(), reply_message_.release())
+          .SendSuccess(NULL);
+    }
     delete this;
   }
   // The network is in the NetworkLibrary's list, but there's no failure or
@@ -420,31 +423,4 @@ chromeos::VirtualNetwork* VirtualConnectObserver::GetVirtualNetwork(
     }
   }
   return virt;
-}
-
-EnrollmentObserver::EnrollmentObserver(AutomationProvider* automation,
-    IPC::Message* reply_message,
-    chromeos::EnterpriseEnrollmentScreen* enrollment_screen)
-    : automation_(automation->AsWeakPtr()),
-      reply_message_(reply_message),
-      enrollment_screen_(enrollment_screen) {
-  enrollment_screen_->AddTestingObserver(this);
-}
-
-EnrollmentObserver::~EnrollmentObserver() {}
-
-void EnrollmentObserver::OnEnrollmentComplete(bool succeeded) {
-  enrollment_screen_->RemoveTestingObserver(this);
-  if (automation_) {
-    if (succeeded) {
-      AutomationJSONReply(automation_,
-                          reply_message_.release()).SendSuccess(NULL);
-    } else {
-      scoped_ptr<DictionaryValue> return_value(new DictionaryValue);
-      return_value->SetString("error_string", "Enrollment failed.");
-      AutomationJSONReply(automation_, reply_message_.release())
-          .SendSuccess(return_value.get());
-    }
-  }
-  delete this;
 }

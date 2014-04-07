@@ -6,7 +6,7 @@
 
 #include "base/bind.h"
 #include "base/callback.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "chrome/browser/captive_portal/captive_portal_service.h"
 #include "chrome/browser/captive_portal/captive_portal_service_factory.h"
 #include "content/public/browser/interstitial_page.h"
@@ -53,7 +53,7 @@ CaptivePortalTabReloader::CaptivePortalTabReloader(
       slow_ssl_load_time_(
           base::TimeDelta::FromSeconds(kDefaultSlowSSLTimeSeconds)),
       open_login_tab_callback_(open_login_tab_callback),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {
+      weak_factory_(this) {
 }
 
 CaptivePortalTabReloader::~CaptivePortalTabReloader() {
@@ -100,7 +100,7 @@ void CaptivePortalTabReloader::OnLoadCommitted(int net_error) {
   // If the tab needs to reload, do so asynchronously, to avoid reentrancy
   // issues.
   if (state_ == STATE_NEEDS_RELOAD) {
-    MessageLoop::current()->PostTask(
+    base::MessageLoop::current()->PostTask(
         FROM_HERE,
         base::Bind(&CaptivePortalTabReloader::ReloadTabIfNeeded,
                    weak_factory_.GetWeakPtr()));

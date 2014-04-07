@@ -6,13 +6,13 @@
 
 #include "base/file_util.h"
 #include "base/file_version_info.h"
-#include "base/logging.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
+#include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/path_service.h"
-#include "base/process_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/process/memory.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "base/win/scoped_handle.h"
 #include "remoting/host/branding.h"
@@ -112,7 +112,7 @@ HRESULT ReadConfig(const base::FilePath& filename,
     return HRESULT_FROM_WIN32(error);
   }
 
-  scoped_array<char> buffer(new char[kMaxConfigFileSize]);
+  scoped_ptr<char[]> buffer(new char[kMaxConfigFileSize]);
   DWORD size = kMaxConfigFileSize;
   if (!::ReadFile(file, &buffer[0], size, &size, NULL)) {
     DWORD error = GetLastError();

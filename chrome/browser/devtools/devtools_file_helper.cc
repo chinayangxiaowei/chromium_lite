@@ -4,6 +4,7 @@
 
 #include "chrome/browser/devtools/devtools_file_helper.h"
 
+#include <set>
 #include <vector>
 
 #include "base/bind.h"
@@ -12,10 +13,11 @@
 #include "base/lazy_instance.h"
 #include "base/md5.h"
 #include "base/prefs/pref_service.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/value_conversions.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/download/download_prefs.h"
+#include "chrome/browser/platform_util.h"
 #include "chrome/browser/prefs/scoped_user_pref_update.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/chrome_select_file_policy.h"
@@ -27,13 +29,14 @@
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_view.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/url_constants.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/shell_dialogs/select_file_dialog.h"
-#include "webkit/fileapi/file_system_util.h"
-#include "webkit/fileapi/isolated_context.h"
+#include "webkit/browser/fileapi/isolated_context.h"
+#include "webkit/common/fileapi/file_system_util.h"
 
 using base::Bind;
 using base::Callback;
@@ -42,6 +45,7 @@ using content::BrowserThread;
 using content::DownloadManager;
 using content::RenderViewHost;
 using content::WebContents;
+using std::set;
 
 namespace {
 
@@ -55,16 +59,15 @@ namespace {
 typedef Callback<void(const base::FilePath&)> SelectedCallback;
 typedef Callback<void(void)> CanceledCallback;
 
-const base::FilePath::CharType kMagicFileName[] =
-    FILE_PATH_LITERAL(".allow-devtools-edit");
-
 class SelectFileDialog : public ui::SelectFileDialog::Listener,
                          public base::RefCounted<SelectFileDialog> {
  public:
   SelectFileDialog(const SelectedCallback& selected_callback,
-                   const CanceledCallback& canceled_callback)
+                   const CanceledCallback& canceled_callback,
+                   WebContents* web_contents)
       : selected_callback_(selected_callback),
-        canceled_callback_(canceled_callback) {
+        canceled_callback_(canceled_callback),
+        web_contents_(web_contents) {
     select_file_dialog_ = ui::SelectFileDialog::Create(
         this, new ChromeSelectFilePolicy(NULL));
   }
@@ -72,14 +75,15 @@ class SelectFileDialog : public ui::SelectFileDialog::Listener,
   void Show(ui::SelectFileDialog::Type type,
             const base::FilePath& default_path) {
     AddRef();  // Balanced in the three listener outcomes.
-    select_file_dialog_->SelectFile(type,
-                                    string16(),
-                                    default_path,
-                                    NULL,
-                                    0,
-                                    FILE_PATH_LITERAL(""),
-                                    NULL,
-                                    NULL);
+    select_file_dialog_->SelectFile(
+      type,
+      string16(),
+      default_path,
+      NULL,
+      0,
+      base::FilePath::StringType(),
+      platform_util::GetTopLevel(web_contents_->GetView()->GetNativeView()),
+      NULL);
   }
 
   // ui::SelectFileDialog::Listener implementation.
@@ -108,6 +112,7 @@ class SelectFileDialog : public ui::SelectFileDialog::Listener,
   scoped_refptr<ui::SelectFileDialog> select_file_dialog_;
   SelectedCallback selected_callback_;
   CanceledCallback canceled_callback_;
+  WebContents* web_contents_;
 };
 
 void WriteToFile(const base::FilePath& path, const std::string& content) {
@@ -146,6 +151,7 @@ std::string RegisterFileSystem(WebContents* web_contents,
   int renderer_id = render_view_host->GetProcess()->GetID();
   policy->GrantReadFileSystem(renderer_id, file_system_id);
   policy->GrantWriteFileSystem(renderer_id, file_system_id);
+  policy->GrantCreateFileForFileSystem(renderer_id, file_system_id);
 
   // We only need file level access for reading FileEntries. Saving FileEntries
   // just needs the file system to have read/write access, which is granted
@@ -154,23 +160,6 @@ std::string RegisterFileSystem(WebContents* web_contents,
     policy->GrantReadFile(renderer_id, path);
 
   return file_system_id;
-}
-
-typedef Callback<void(const std::vector<base::FilePath>&)>
-    ValidateFoldersCallback;
-
-void ValidateFoldersOnFileThread(const std::vector<base::FilePath>& file_paths,
-                                 const ValidateFoldersCallback& callback) {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
-  std::vector<base::FilePath> permitted_paths;
-  std::vector<base::FilePath>::const_iterator it;
-  for (it = file_paths.begin(); it != file_paths.end(); ++it) {
-    base::FilePath security_file_path = it->Append(kMagicFileName);
-    if (file_util::PathExists(security_file_path))
-      permitted_paths.push_back(*it);
-  }
-  BrowserThread::PostTask(BrowserThread::UI, FROM_HERE,
-                          Bind(callback, permitted_paths));
 }
 
 DevToolsFileHelper::FileSystem CreateFileSystemStruct(
@@ -191,6 +180,17 @@ DevToolsFileHelper::FileSystem CreateFileSystemStruct(
                                         file_system_path);
 }
 
+set<std::string> GetAddedFileSystemPaths(Profile* profile) {
+  const DictionaryValue* file_systems_paths_value =
+      profile->GetPrefs()->GetDictionary(prefs::kDevToolsFileSystemPaths);
+  set<std::string> result;
+  for (DictionaryValue::Iterator it(*file_systems_paths_value); !it.IsAtEnd();
+       it.Advance()) {
+    result.insert(it.key());
+  }
+  return result;
+}
+
 }  // namespace
 
 DevToolsFileHelper::FileSystem::FileSystem() {
@@ -208,7 +208,7 @@ DevToolsFileHelper::DevToolsFileHelper(WebContents* web_contents,
                                        Profile* profile)
     : web_contents_(web_contents),
       profile_(profile),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {
+      weak_factory_(this) {
 }
 
 DevToolsFileHelper::~DevToolsFileHelper() {
@@ -257,7 +257,8 @@ void DevToolsFileHelper::Save(const std::string& url,
            content,
            callback),
       Bind(&DevToolsFileHelper::SaveAsFileSelectionCanceled,
-           weak_factory_.GetWeakPtr()));
+           weak_factory_.GetWeakPtr()),
+      web_contents_);
   select_file_dialog->Show(ui::SelectFileDialog::SELECT_SAVEAS_FILE,
                            initial_path);
 }
@@ -293,43 +294,52 @@ void DevToolsFileHelper::SaveAsFileSelected(const std::string& url,
 void DevToolsFileHelper::SaveAsFileSelectionCanceled() {
 }
 
-void DevToolsFileHelper::AddFileSystem(const AddFileSystemCallback& callback) {
+void DevToolsFileHelper::AddFileSystem(
+    const AddFileSystemCallback& callback,
+    const ShowInfoBarCallback& show_info_bar_callback) {
   scoped_refptr<SelectFileDialog> select_file_dialog = new SelectFileDialog(
       Bind(&DevToolsFileHelper::InnerAddFileSystem,
            weak_factory_.GetWeakPtr(),
-           callback),
-      Bind(callback, "", FileSystem()));
+           callback,
+           show_info_bar_callback),
+      Bind(callback, FileSystem()),
+      web_contents_);
   select_file_dialog->Show(ui::SelectFileDialog::SELECT_FOLDER,
                            base::FilePath());
 }
 
 void DevToolsFileHelper::InnerAddFileSystem(
     const AddFileSystemCallback& callback,
+    const ShowInfoBarCallback& show_info_bar_callback,
     const base::FilePath& path) {
-  std::vector<base::FilePath> file_paths(1, path);
-  ValidateFoldersCallback validate_folders_callback = Bind(
-      &DevToolsFileHelper::AddValidatedFileSystem,
-      weak_factory_.GetWeakPtr(),
-      callback);
-  BrowserThread::PostTask(BrowserThread::FILE, FROM_HERE,
-                          Bind(&ValidateFoldersOnFileThread,
-                               file_paths,
-                               validate_folders_callback));
-}
+  std::string file_system_path = path.AsUTF8Unsafe();
 
-void DevToolsFileHelper::AddValidatedFileSystem(
-    const AddFileSystemCallback& callback,
-    const std::vector<base::FilePath>& permitted_paths) {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  if (permitted_paths.empty()) {
-    std::string magic_file_name = base::FilePath(kMagicFileName).AsUTF8Unsafe();
-    std::string error_string = l10n_util::GetStringFUTF8(
-        IDS_DEV_TOOLS_MAGIC_FILE_NOT_EXISTS_MESSAGE,
-        UTF8ToUTF16(magic_file_name));
-    callback.Run(error_string, FileSystem());
+  const DictionaryValue* file_systems_paths_value =
+      profile_->GetPrefs()->GetDictionary(prefs::kDevToolsFileSystemPaths);
+  if (file_systems_paths_value->HasKey(file_system_path)) {
+    callback.Run(FileSystem());
     return;
   }
-  base::FilePath path = permitted_paths.at(0);
+
+  std::string path_display_name = path.AsEndingWithSeparator().AsUTF8Unsafe();
+  string16 message = l10n_util::GetStringFUTF16(
+      IDS_DEV_TOOLS_CONFIRM_ADD_FILE_SYSTEM_MESSAGE,
+      UTF8ToUTF16(path_display_name));
+  show_info_bar_callback.Run(
+      message,
+      Bind(&DevToolsFileHelper::AddUserConfirmedFileSystem,
+           weak_factory_.GetWeakPtr(),
+           callback, path));
+}
+
+void DevToolsFileHelper::AddUserConfirmedFileSystem(
+    const AddFileSystemCallback& callback,
+    const base::FilePath& path,
+    bool allowed) {
+  if (!allowed) {
+    callback.Run(FileSystem());
+    return;
+  }
   std::string registered_name;
   std::string file_system_id = RegisterFileSystem(web_contents_,
                                                   path,
@@ -339,49 +349,29 @@ void DevToolsFileHelper::AddValidatedFileSystem(
   DictionaryPrefUpdate update(profile_->GetPrefs(),
                               prefs::kDevToolsFileSystemPaths);
   DictionaryValue* file_systems_paths_value = update.Get();
-  file_systems_paths_value->Set(file_system_path, Value::CreateNullValue());
+  file_systems_paths_value->SetWithoutPathExpansion(file_system_path,
+                                                    Value::CreateNullValue());
 
   FileSystem filesystem = CreateFileSystemStruct(web_contents_,
                                                  file_system_id,
                                                  registered_name,
                                                  file_system_path);
-  callback.Run("", filesystem);
+  callback.Run(filesystem);
 }
 
 void DevToolsFileHelper::RequestFileSystems(
     const RequestFileSystemsCallback& callback) {
-  const DictionaryValue* file_systems_paths_value =
-      profile_->GetPrefs()->GetDictionary(prefs::kDevToolsFileSystemPaths);
-  std::vector<base::FilePath> saved_paths;
-  for (DictionaryValue::Iterator it(*file_systems_paths_value); !it.IsAtEnd();
-       it.Advance()) {
-    std::string file_system_path = it.key();
-    base::FilePath path = base::FilePath::FromUTF8Unsafe(file_system_path);
-    saved_paths.push_back(path);
-  }
-
-  ValidateFoldersCallback validate_folders_callback = Bind(
-      &DevToolsFileHelper::RestoreValidatedFileSystems,
-      weak_factory_.GetWeakPtr(),
-      callback);
-  BrowserThread::PostTask(BrowserThread::FILE, FROM_HERE,
-                          Bind(&ValidateFoldersOnFileThread,
-                               saved_paths,
-                               validate_folders_callback));
-}
-
-void DevToolsFileHelper::RestoreValidatedFileSystems(
-    const RequestFileSystemsCallback& callback,
-    const std::vector<base::FilePath>& permitted_paths) {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  set<std::string> file_system_paths = GetAddedFileSystemPaths(profile_);
+  set<std::string>::const_iterator it = file_system_paths.begin();
   std::vector<FileSystem> file_systems;
-  std::vector<base::FilePath>::const_iterator it;
-  for (it = permitted_paths.begin(); it != permitted_paths.end(); ++it) {
+  for (; it != file_system_paths.end(); ++it) {
+    std::string file_system_path = *it;
+    base::FilePath path = base::FilePath::FromUTF8Unsafe(file_system_path);
+
     std::string registered_name;
     std::string file_system_id = RegisterFileSystem(web_contents_,
-                                                    *it,
+                                                    path,
                                                     &registered_name);
-    std::string file_system_path = it->AsUTF8Unsafe();
     FileSystem filesystem = CreateFileSystemStruct(web_contents_,
                                                    file_system_id,
                                                    registered_name,
@@ -400,4 +390,11 @@ void DevToolsFileHelper::RemoveFileSystem(const std::string& file_system_path) {
                               prefs::kDevToolsFileSystemPaths);
   DictionaryValue* file_systems_paths_value = update.Get();
   file_systems_paths_value->RemoveWithoutPathExpansion(file_system_path, NULL);
+}
+
+bool DevToolsFileHelper::IsFileSystemAdded(
+    const std::string& file_system_path) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  set<std::string> file_system_paths = GetAddedFileSystemPaths(profile_);
+  return file_system_paths.find(file_system_path) != file_system_paths.end();
 }

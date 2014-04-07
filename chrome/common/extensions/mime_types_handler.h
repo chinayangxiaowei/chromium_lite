@@ -14,7 +14,7 @@
 #include "chrome/common/extensions/manifest_handler.h"
 #include "extensions/common/url_pattern.h"
 #include "extensions/common/url_pattern_set.h"
-#include "googleurl/src/gurl.h"
+#include "url/gurl.h"
 
 class URLPattern;
 
@@ -24,12 +24,6 @@ class MimeTypesHandler {
   static std::vector<std::string> GetMIMETypeWhitelist();
 
   static MimeTypesHandler* GetHandler(const extensions::Extension* extension);
-
-  // Whitelists the extension to use MIME type filters for a test.
-  // |extension_id| should be owned by the test code.
-  static void set_extension_whitelisted_for_test(std::string* extension_id) {
-    g_test_extension_id_ = extension_id;
-  }
 
   MimeTypesHandler();
   ~MimeTypesHandler();
@@ -46,10 +40,6 @@ class MimeTypesHandler {
   bool CanHandleMIMEType(const std::string& mime_type) const;
 
  private:
-  // The id of the extension that will be whitelisted to use MIME type filters
-  // during tests.
-  static std::string* g_test_extension_id_;
-
   // The id for the extension this action belongs to (as defined in the
   // extension manifest).
   std::string extension_id_;

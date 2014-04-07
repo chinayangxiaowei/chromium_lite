@@ -11,22 +11,28 @@
 #include <utility>
 #include <vector>
 
+#include "base/containers/hash_tables.h"
 #include "base/gtest_prod_util.h"
-#include "base/hash_tables.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/scoped_vector.h"
 #include "base/memory/weak_ptr.h"
 #include "base/threading/non_thread_safe.h"
-#include "base/time.h"
-#include "base/timer.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
+#include "chrome/browser/media/media_capture_devices_dispatcher.h"
+#include "chrome/browser/predictors/logged_in_predictor_table.h"
 #include "chrome/browser/prerender/prerender_config.h"
 #include "chrome/browser/prerender/prerender_contents.h"
 #include "chrome/browser/prerender/prerender_final_status.h"
 #include "chrome/browser/prerender/prerender_origin.h"
-#include "chrome/browser/profiles/profile_keyed_service.h"
-#include "googleurl/src/gurl.h"
+#include "components/browser_context_keyed_service/browser_context_keyed_service.h"
+#include "content/public/browser/notification_observer.h"
+#include "content/public/browser/notification_registrar.h"
+#include "net/cookies/cookie_monster.h"
+#include "url/gurl.h"
 
 class Profile;
+struct ChromeCookieDetails;
 
 namespace base {
 class DictionaryValue;
@@ -38,6 +44,10 @@ class WebContents;
 
 namespace gfx {
 class Size;
+}
+
+namespace net {
+class URLRequestContextGetter;
 }
 
 #if defined(COMPILER_GCC)
@@ -68,7 +78,9 @@ class PrerenderTracker;
 // indicated otherwise.
 class PrerenderManager : public base::SupportsWeakPtr<PrerenderManager>,
                          public base::NonThreadSafe,
-                         public ProfileKeyedService {
+                         public content::NotificationObserver,
+                         public BrowserContextKeyedService,
+                         public MediaCaptureDevicesDispatcher::Observer {
  public:
   // NOTE: New values need to be appended, since they are used in histograms.
   enum PrerenderManagerMode {
@@ -91,6 +103,8 @@ class PrerenderManager : public base::SupportsWeakPtr<PrerenderManager>,
     CLEAR_MAX = 0x1 << 2
   };
 
+  typedef predictors::LoggedInPredictorTable::LoggedInStateMap LoggedInStateMap;
+
   // ID indicating that no experiment is active.
   static const uint8 kNoExperiment = 0;
 
@@ -99,7 +113,7 @@ class PrerenderManager : public base::SupportsWeakPtr<PrerenderManager>,
 
   virtual ~PrerenderManager();
 
-  // From ProfileKeyedService:
+  // From BrowserContextKeyedService:
   virtual void Shutdown() OVERRIDE;
 
   // Entry points for adding prerenders.
@@ -124,6 +138,11 @@ class PrerenderManager : public base::SupportsWeakPtr<PrerenderManager>,
   // tab at the time the prerender is generated from the omnibox. Returns a
   // caller-owned PrerenderHandle*, or NULL.
   PrerenderHandle* AddPrerenderFromOmnibox(
+      const GURL& url,
+      content::SessionStorageNamespace* session_storage_namespace,
+      const gfx::Size& size);
+
+  PrerenderHandle* AddPrerenderFromLocalPredictor(
       const GURL& url,
       content::SessionStorageNamespace* session_storage_namespace,
       const gfx::Size& size);
@@ -188,13 +207,13 @@ class PrerenderManager : public base::SupportsWeakPtr<PrerenderManager>,
   // is prerendering a page. The optional parameter |origin| is an output
   // parameter which, if a prerender is found, is set to the Origin of the
   // prerender |web_contents|.
-  bool IsWebContentsPrerendering(content::WebContents* web_contents,
+  bool IsWebContentsPrerendering(const content::WebContents* web_contents,
                                  Origin* origin) const;
 
   // Returns the PrerenderContents object for the given web_contents if it's
   // used for an active prerender page, otherwise returns NULL.
   PrerenderContents* GetPrerenderContents(
-      content::WebContents* web_contents) const;
+      const content::WebContents* web_contents) const;
 
   // Returns a list of all WebContents being prerendered.
   const std::vector<content::WebContents*> GetAllPrerenderingContents() const;
@@ -225,6 +244,10 @@ class PrerenderManager : public base::SupportsWeakPtr<PrerenderManager>,
   // Returns true iff the scheme of the URL given is valid for prerendering.
   static bool DoesURLHaveValidScheme(const GURL& url);
 
+  // Returns true iff the scheme of the subresource URL given is valid for
+  // prerendering.
+  static bool DoesSubresourceURLHaveValidScheme(const GURL& url);
+
   // Returns a Value object containing the active pages being prerendered, and
   // a history of pages which were prerendered. The caller is responsible for
   // deleting the return value.
@@ -252,6 +275,15 @@ class PrerenderManager : public base::SupportsWeakPtr<PrerenderManager>,
       PrerenderContents::MatchCompleteStatus mc_status,
       FinalStatus final_status) const;
 
+  // content::NotificationObserver
+  virtual void Observe(int type,
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE;
+
+  // MediaCaptureDevicesDispatcher::Observer
+  virtual void OnCreatingAudioStream(int render_process_id,
+                                     int render_view_id) OVERRIDE;
+
   const Config& config() const { return config_; }
   Config& mutable_config() { return config_; }
 
@@ -264,6 +296,17 @@ class PrerenderManager : public base::SupportsWeakPtr<PrerenderManager>,
   // provided URL.
   void RecordNavigation(const GURL& url);
 
+  // Updates the LoggedInPredictor state to reflect that a login has likely
+  // on the URL provided.
+  void RecordLikelyLoginOnURL(const GURL& url);
+
+  // Checks if the LoggedInPredictor shows that the user is likely logged on
+  // to the site for the URL provided.
+  void CheckIfLikelyLoggedInOnURL(const GURL& url,
+                                  bool* lookup_result,
+                                  bool* database_was_present,
+                                  const base::Closure& result_cb);
+
   Profile* profile() const { return profile_; }
 
   // Classes which will be tested in prerender unit browser tests should use
@@ -271,6 +314,15 @@ class PrerenderManager : public base::SupportsWeakPtr<PrerenderManager>,
   // mock advancing/retarding time.
   virtual base::Time GetCurrentTime() const;
   virtual base::TimeTicks GetCurrentTimeTicks() const;
+
+  scoped_refptr<predictors::LoggedInPredictorTable>
+  logged_in_predictor_table() {
+    return logged_in_predictor_table_;
+  }
+
+  PrerenderLocalPredictor* local_predictor() {
+    return local_predictor_.get();
+  }
 
  protected:
   class PrerenderData : public base::SupportsWeakPtr<PrerenderData> {
@@ -424,7 +476,7 @@ class PrerenderManager : public base::SupportsWeakPtr<PrerenderManager>,
   // automatically be cancelled.
   void PostCleanupTask();
 
-  base::TimeTicks GetExpiryTimeForNewPrerender() const;
+  base::TimeTicks GetExpiryTimeForNewPrerender(Origin origin) const;
   base::TimeTicks GetExpiryTimeForNavigatedAwayPrerender() const;
 
   void DeleteOldEntries();
@@ -499,6 +551,11 @@ class PrerenderManager : public base::SupportsWeakPtr<PrerenderManager>,
   // Must be called on the UI thread.
   bool IsEnabled() const;
 
+  void CookieChanged(ChromeCookieDetails* details);
+  void CookieChangedAnyCookiesLeftLookupResult(const std::string& domain_key,
+                                               bool cookies_exist);
+  void LoggedInPredictorDataReceived(scoped_ptr<LoggedInStateMap> new_map);
+
   // The configuration.
   Config config_;
 
@@ -560,9 +617,6 @@ class PrerenderManager : public base::SupportsWeakPtr<PrerenderManager>,
 
   std::list<content::WebContents*> old_web_contents_list_;
 
-  // Cancels pending tasks on deletion.
-  base::WeakPtrFactory<PrerenderManager> weak_factory_;
-
   ScopedVector<OnCloseWebContentsDeleter> on_close_web_contents_deleters_;
 
   scoped_ptr<PrerenderHistory> prerender_history_;
@@ -572,6 +626,18 @@ class PrerenderManager : public base::SupportsWeakPtr<PrerenderManager>,
   scoped_ptr<PrerenderHistograms> histograms_;
 
   scoped_ptr<PrerenderLocalPredictor> local_predictor_;
+
+  scoped_refptr<predictors::LoggedInPredictorTable> logged_in_predictor_table_;
+
+  // Here, we keep the logged in predictor state, but potentially a superset
+  // of its actual (database-backed) state, since we do not incorporate
+  // browser data deletion. We do not use this for actual lookups, but only
+  // to query cookie data for domains we know there was a login before.
+  // This is required to avoid a large number of cookie lookups on bulk
+  // deletion of cookies.
+  scoped_ptr<LoggedInStateMap> logged_in_state_;
+
+  content::NotificationRegistrar notification_registrar_;
 
   DISALLOW_COPY_AND_ASSIGN(PrerenderManager);
 };

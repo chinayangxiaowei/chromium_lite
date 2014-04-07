@@ -7,11 +7,13 @@
 
 #include "base/basictypes.h"
 #include "base/i18n/rtl.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "ui/base/ime/composition_text.h"
+#include "ui/base/ime/text_input_mode.h"
 #include "ui/base/ime/text_input_type.h"
 #include "ui/base/range/range.h"
 #include "ui/base/ui_export.h"
+#include "ui/gfx/native_widget_types.h"
 
 namespace gfx {
 class Rect;
@@ -27,7 +29,7 @@ class UI_EXPORT TextInputClient {
   // Input method result -------------------------------------------------------
 
   // Sets composition text and attributes. If there is composition text already,
-  // it’ll be replaced by the new one. Otherwise, current selection will be
+  // it'll be replaced by the new one. Otherwise, current selection will be
   // replaced. If there is no selection, the composition text will be inserted
   // at the insertion point.
   virtual void SetCompositionText(const ui::CompositionText& composition) = 0;
@@ -55,9 +57,16 @@ class UI_EXPORT TextInputClient {
 
   // Input context information -------------------------------------------------
 
+  // Returns native window to which input context is bound.
+  virtual gfx::NativeWindow GetAttachedWindow() const = 0;
+
   // Returns current text input type. It could be changed and even becomes
   // TEXT_INPUT_TYPE_NONE at runtime.
   virtual ui::TextInputType GetTextInputType() const = 0;
+
+  // Returns current text input mode. It could be changed and even becomes
+  // TEXT_INPUT_MODE_DEFAULT at runtime.
+  virtual ui::TextInputMode GetTextInputMode() const = 0;
 
   // Returns if the client supports inline composition currently.
   virtual bool CanComposeInline() const = 0;
@@ -65,12 +74,6 @@ class UI_EXPORT TextInputClient {
   // Returns current caret (insertion point) bounds relative to the screen
   // coordinates. If there is selection, then the selection bounds will be
   // returned.
-  // TODO(yusukes): Currently views::NativeTextfieldViews which implements this
-  // interface returns its view's coordinates. We should to do the following:
-  // 1) Modify NativeTextfieldViews so it returns screen coordinates.
-  // 2) Remove view-to-screen coordinates conversion code in InputMethodBridge.
-  // 3) Modify InputMethodWin. It requires a rect in toplevel window's
-  //    coordinates instead of screen.
   virtual gfx::Rect GetCaretBounds() = 0;
 
   // Retrieves the composition character boundary rectangle relative to the
@@ -106,7 +109,11 @@ class UI_EXPORT TextInputClient {
   // Deletes contents in the given UTF-16 based character range. Current
   // composition text will be confirmed before deleting the range.
   // The input caret will be moved to the place where the range gets deleted.
-  // Returns false if the oepration is not supported.
+  // ExtendSelectionAndDelete should be used instead as far as you are deleting
+  // characters around current caret. This function with the range based on
+  // GetSelectionRange has a race condition due to asynchronous IPCs between
+  // browser and renderer.
+  // Returns false if the operation is not supported.
   virtual bool DeleteRange(const ui::Range& range) = 0;
 
   // Retrieves the text content in a given UTF-16 based character range.
@@ -122,15 +129,22 @@ class UI_EXPORT TextInputClient {
   virtual void OnInputMethodChanged() = 0;
 
   // Called whenever the user requests to change the text direction and layout
-  // alignment of the current text box. It’s for supporting ctrl-shift on
+  // alignment of the current text box. It's for supporting ctrl-shift on
   // Windows.
   // Returns false if the operation is not supported.
   virtual bool ChangeTextDirectionAndLayoutAlignment(
       base::i18n::TextDirection direction) = 0;
 
   // Deletes the current selection plus the specified number of characters
-  // before and after the selection or caret.
+  // before and after the selection or caret. This function should be used
+  // instead of calling DeleteRange with GetSelectionRange, because
+  // GetSelectionRange may not be the latest value due to asynchronous of IPC
+  // between browser and renderer.
   virtual void ExtendSelectionAndDelete(size_t before, size_t after) = 0;
+
+  // Ensure the caret is within |rect|.  |rect| is in screen coordinates and
+  // may extend beyond the bounds of this TextInputClient.
+  virtual void EnsureCaretInRect(const gfx::Rect& rect) = 0;
 };
 
 }  // namespace ui

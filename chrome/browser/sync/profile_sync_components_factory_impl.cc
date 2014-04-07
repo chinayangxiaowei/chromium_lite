@@ -4,18 +4,16 @@
 
 #include "base/command_line.h"
 #include "build/build_config.h"
-#include "chrome/browser/api/webdata/autofill_web_data_service.h"
+#include "chrome/browser/about_flags.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/api/storage/settings_frontend.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_system.h"
 #include "chrome/browser/extensions/extension_system_factory.h"
 #include "chrome/browser/history/history_service.h"
 #include "chrome/browser/history/history_service_factory.h"
-#if !defined(OS_ANDROID)
-#include "chrome/browser/notifications/sync_notifier/chrome_notifier_service.h"
-#include "chrome/browser/notifications/sync_notifier/chrome_notifier_service_factory.h"
-#endif
+#include "chrome/browser/pref_service_flags_storage.h"
 #include "chrome/browser/prefs/pref_model_associator.h"
 #include "chrome/browser/prefs/pref_service_syncable.h"
 #include "chrome/browser/profiles/profile.h"
@@ -23,8 +21,6 @@
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/signin/signin_manager.h"
 #include "chrome/browser/signin/signin_manager_factory.h"
-#include "chrome/browser/spellchecker/spellcheck_factory.h"
-#include "chrome/browser/spellchecker/spellcheck_service.h"
 #include "chrome/browser/sync/glue/autofill_data_type_controller.h"
 #include "chrome/browser/sync/glue/autofill_profile_data_type_controller.h"
 #include "chrome/browser/sync/glue/bookmark_change_processor.h"
@@ -60,8 +56,28 @@
 #include "chrome/browser/webdata/autofill_profile_syncable_service.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
+#include "components/autofill/core/browser/webdata/autofill_webdata_service.h"
 #include "content/public/browser/browser_thread.h"
 #include "sync/api/syncable_service.h"
+
+#if defined(ENABLE_MANAGED_USERS)
+#include "chrome/browser/managed_mode/managed_user_service.h"
+#include "chrome/browser/managed_mode/managed_user_sync_service.h"
+#include "chrome/browser/managed_mode/managed_user_sync_service_factory.h"
+#include "chrome/browser/policy/managed_mode_policy_provider.h"
+#include "chrome/browser/policy/profile_policy_connector.h"
+#include "chrome/browser/policy/profile_policy_connector_factory.h"
+#endif
+
+#if !defined(OS_ANDROID)
+#include "chrome/browser/notifications/sync_notifier/chrome_notifier_service.h"
+#include "chrome/browser/notifications/sync_notifier/chrome_notifier_service_factory.h"
+#endif
+
+#if defined(ENABLE_SPELLCHECK)
+#include "chrome/browser/spellchecker/spellcheck_factory.h"
+#include "chrome/browser/spellchecker/spellcheck_service.h"
+#endif
 
 using browser_sync::AutofillDataTypeController;
 using browser_sync::AutofillProfileDataTypeController;
@@ -99,7 +115,8 @@ ProfileSyncComponentsFactoryImpl::ProfileSyncComponentsFactoryImpl(
       command_line_(command_line),
       extension_system_(
           extensions::ExtensionSystemFactory::GetForProfile(profile)),
-      web_data_service_(AutofillWebDataService::FromBrowserContext(profile_)) {
+      web_data_service_(
+          autofill::AutofillWebDataService::FromBrowserContext(profile_)) {
 }
 
 ProfileSyncComponentsFactoryImpl::~ProfileSyncComponentsFactoryImpl() {
@@ -144,11 +161,9 @@ void ProfileSyncComponentsFactoryImpl::RegisterCommonDataTypes(
         new TypedUrlDataTypeController(this, profile_, pss));
   }
 
-  // Unless it is explicitly disabled, history delete directive sync is
-  // enabled whenever full history sync is enabled.
-  if (command_line_->HasSwitch(switches::kHistoryEnableFullHistorySync) &&
-      !command_line_->HasSwitch(
-          switches::kDisableSyncHistoryDeleteDirectives)) {
+  // Delete directive sync is enabled by default.  Register unless full history
+  // sync is disabled.
+  if (!command_line_->HasSwitch(switches::kHistoryDisableFullHistorySync)) {
     pss->RegisterDataTypeController(
         new UIDataTypeController(
             syncer::HISTORY_DELETE_DIRECTIVES, this, profile_, pss));
@@ -162,7 +177,8 @@ void ProfileSyncComponentsFactoryImpl::RegisterCommonDataTypes(
         new SessionDataTypeController(this, profile_, pss));
   }
 
-  if (command_line_->HasSwitch(switches::kEnableSyncFavicons)) {
+  // Favicon sync is enabled by default. Register unless explicitly disabled.
+  if (!command_line_->HasSwitch(switches::kDisableSyncFavicons)) {
     pss->RegisterDataTypeController(
         new UIDataTypeController(syncer::FAVICON_IMAGES,
                                  this,
@@ -205,6 +221,13 @@ void ProfileSyncComponentsFactoryImpl::RegisterDesktopDataTypes(
   if (!command_line_->HasSwitch(switches::kDisableSyncPreferences)) {
     pss->RegisterDataTypeController(
         new UIDataTypeController(syncer::PREFERENCES, this, profile_, pss));
+
+  }
+
+  if (!command_line_->HasSwitch(switches::kDisableSyncPriorityPreferences)) {
+    pss->RegisterDataTypeController(
+        new UIDataTypeController(syncer::PRIORITY_PREFERENCES,
+                                 this, profile_, pss));
   }
 
 #if defined(ENABLE_THEMES)
@@ -238,15 +261,10 @@ void ProfileSyncComponentsFactoryImpl::RegisterDesktopDataTypes(
             syncer::APP_SETTINGS, this, profile_, pss));
   }
 
-  // Synced Notifications sync is disabled by default.
-  // TODO(petewil): Switch to enabled by default once datatype support is done.
-  if (command_line_->HasSwitch(switches::kEnableSyncSyncedNotifications)) {
-#if !defined(OS_ANDROID)
-    pss->RegisterDataTypeController(
-        new UIDataTypeController(
-            syncer::SYNCED_NOTIFICATIONS, this, profile_, pss));
-#endif
-  }
+  // Synced Notifications are enabled by default.
+  pss->RegisterDataTypeController(
+      new UIDataTypeController(
+          syncer::SYNCED_NOTIFICATIONS, this, profile_, pss));
 
 #if defined(OS_LINUX) || defined(OS_WIN) || defined(OS_CHROMEOS)
   // Dictionary sync is enabled by default.
@@ -256,20 +274,35 @@ void ProfileSyncComponentsFactoryImpl::RegisterDesktopDataTypes(
   }
 #endif
 
+#if defined(ENABLE_MANAGED_USERS)
+  if (ManagedUserService::AreManagedUsersEnabled()) {
+    if (profile_->IsManaged()) {
+      pss->RegisterDataTypeController(
+          new UIDataTypeController(
+              syncer::MANAGED_USER_SETTINGS, this, profile_, pss));
+    } else {
+      pss->RegisterDataTypeController(
+          new UIDataTypeController(
+              syncer::MANAGED_USERS, this, profile_, pss));
+    }
+  }
+#endif
 }
 
 DataTypeManager* ProfileSyncComponentsFactoryImpl::CreateDataTypeManager(
     const syncer::WeakHandle<syncer::DataTypeDebugInfoListener>&
         debug_info_listener,
-    SyncBackendHost* backend,
     const DataTypeController::TypeMap* controllers,
+    const browser_sync::DataTypeEncryptionHandler* encryption_handler,
+    SyncBackendHost* backend,
     DataTypeManagerObserver* observer,
-    const FailedDatatypesHandler* failed_datatypes_handler) {
+    browser_sync::FailedDataTypesHandler* failed_data_types_handler) {
   return new DataTypeManagerImpl(debug_info_listener,
-                                 backend,
                                  controllers,
+                                 encryption_handler,
+                                 backend,
                                  observer,
-                                 failed_datatypes_handler);
+                                 failed_data_types_handler);
 }
 
 browser_sync::GenericChangeProcessor*
@@ -298,17 +331,20 @@ base::WeakPtr<syncer::SyncableService> ProfileSyncComponentsFactoryImpl::
   switch (type) {
     case syncer::PREFERENCES:
       return PrefServiceSyncable::FromProfile(
-          profile_)->GetSyncableService()->AsWeakPtr();
+          profile_)->GetSyncableService(syncer::PREFERENCES)->AsWeakPtr();
+    case syncer::PRIORITY_PREFERENCES:
+      return PrefServiceSyncable::FromProfile(profile_)->GetSyncableService(
+          syncer::PRIORITY_PREFERENCES)->AsWeakPtr();
     case syncer::AUTOFILL:
     case syncer::AUTOFILL_PROFILE: {
       if (!web_data_service_.get())
         return base::WeakPtr<syncer::SyncableService>();
       if (type == syncer::AUTOFILL) {
         return AutocompleteSyncableService::FromWebDataService(
-            web_data_service_)->AsWeakPtr();
+            web_data_service_.get())->AsWeakPtr();
       } else {
         return AutofillProfileSyncableService::FromWebDataService(
-            web_data_service_)->AsWeakPtr();
+            web_data_service_.get())->AsWeakPtr();
       }
     }
     case syncer::APPS:
@@ -340,13 +376,28 @@ base::WeakPtr<syncer::SyncableService> ProfileSyncComponentsFactoryImpl::
           : base::WeakPtr<syncer::SyncableService>();
     }
 #endif
+#if defined(ENABLE_SPELLCHECK)
     case syncer::DICTIONARY:
       return SpellcheckServiceFactory::GetForProfile(profile_)->
           GetCustomDictionary()->AsWeakPtr();
+#endif
     case syncer::FAVICON_IMAGES:
-    case syncer::FAVICON_TRACKING:
-      return ProfileSyncServiceFactory::GetForProfile(profile_)->
-          GetSessionModelAssociator()->GetFaviconCache()->AsWeakPtr();
+    case syncer::FAVICON_TRACKING: {
+      browser_sync::SessionModelAssociator* model_associator =
+          ProfileSyncServiceFactory::GetForProfile(profile_)->
+              GetSessionModelAssociator();
+      if (!model_associator)
+        return base::WeakPtr<syncer::SyncableService>();
+      return model_associator->GetFaviconCache()->AsWeakPtr();
+    }
+#if defined(ENABLE_MANAGED_USERS)
+    case syncer::MANAGED_USER_SETTINGS:
+      return policy::ProfilePolicyConnectorFactory::GetForProfile(profile_)->
+          managed_mode_policy_provider()->AsWeakPtr();
+    case syncer::MANAGED_USERS:
+      return ManagedUserSyncServiceFactory::GetForProfile(profile_)->
+          AsWeakPtr();
+#endif
     default:
       // The following datatypes still need to be transitioned to the
       // syncer::SyncableService API:
@@ -374,6 +425,7 @@ ProfileSyncComponentsFactory::SyncComponents
 #endif
   BookmarkModelAssociator* model_associator =
       new BookmarkModelAssociator(bookmark_model,
+                                  profile_sync_service->profile(),
                                   user_share,
                                   error_handler,
                                   kExpectMobileBookmarksFolder);

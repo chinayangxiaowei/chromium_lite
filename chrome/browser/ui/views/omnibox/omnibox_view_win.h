@@ -21,7 +21,7 @@
 #include "ui/base/models/simple_menu_model.h"
 #include "ui/base/win/extra_sdk_defines.h"
 #include "ui/base/window_open_disposition.h"
-#include "ui/gfx/font.h"
+#include "ui/gfx/font_list.h"
 
 class LocationBarView;
 class OmniboxPopupView;
@@ -63,7 +63,8 @@ class OmniboxViewWin
                  LocationBarView* parent_view,
                  CommandUpdater* command_updater,
                  bool popup_window_mode,
-                 views::View* location_bar);
+                 const gfx::FontList& font_list,
+                 int font_y_offset);
   ~OmniboxViewWin();
 
   // Gets the relative window for the specified native view.
@@ -109,15 +110,13 @@ class OmniboxViewWin
   virtual bool OnAfterPossibleChange() OVERRIDE;
   virtual gfx::NativeView GetNativeView() const OVERRIDE;
   virtual gfx::NativeView GetRelativeWindowForPopup() const OVERRIDE;
-  virtual void SetInstantSuggestion(const string16& suggestion) OVERRIDE;
+  virtual void SetGrayTextAutocompletion(const string16& suggestion) OVERRIDE;
   virtual int TextWidth() const OVERRIDE;
-  virtual string16 GetInstantSuggestion() const OVERRIDE;
+  virtual string16 GetGrayTextAutocompletion() const OVERRIDE;
   virtual bool IsImeComposing() const OVERRIDE;
   virtual int GetMaxEditWidth(int entry_width) const OVERRIDE;
   virtual views::View* AddToView(views::View* parent) OVERRIDE;
   virtual int OnPerformDrop(const ui::DropTargetEvent& event) OVERRIDE;
-  virtual gfx::Font GetFont() OVERRIDE;
-  virtual int WidthOfTextAfterCursor() OVERRIDE;
 
   int GetPopupMaxYCoordinate();
 
@@ -397,15 +396,15 @@ class OmniboxViewWin
   void CopyURL();
 
   // The handle to the RichEdit DLL.  In the rare case where the user's system
-  // is missing this DLL (due to some kind of system corruption), we show an
-  // error dialog; see missing_system_file_dialog_win.h.
+  // is missing this DLL (due to some kind of system corruption), the similar
+  // OmniboxViewViews is used instead; see Textfield::IsViewsTextfieldEnabled().
   static HMODULE loaded_library_module_;
 
   scoped_ptr<OmniboxPopupView> popup_view_;
 
   // The parent view for the edit, used to align the popup and for
   // accessibility.
-  LocationBarView* parent_view_;
+  LocationBarView* location_bar_;
 
   // When true, the location bar view is read only and also is has a slightly
   // different presentation (font size / color). This is used for popups.
@@ -471,9 +470,8 @@ class OmniboxViewWin
   scoped_ptr<ui::SimpleMenuModel> context_menu_contents_;
   scoped_ptr<views::MenuRunner> context_menu_runner_;
 
-  // Font we're using.  We keep a reference to make sure the font supplied to
-  // the constructor doesn't go away before we do.
-  gfx::Font font_;
+  // The font list to draw text in Omnibox.
+  gfx::FontList font_list_;
 
   // Metrics about the font, which we keep so we don't need to recalculate them
   // every time we paint.  |font_y_adjustment_| is the number of pixels we need

@@ -9,8 +9,8 @@
 #include "base/bind_helpers.h"
 #include "base/files/file_path.h"
 #include "base/memory/ref_counted.h"
-#include "base/message_loop.h"
-#include "base/utf_string_conversions.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/browsing_data/browsing_data_helper_browsertest.h"
 #include "chrome/browser/browsing_data/browsing_data_indexed_db_helper.h"
 #include "chrome/browser/profiles/profile.h"
@@ -19,7 +19,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
-typedef BrowsingDataHelperCallback<BrowsingDataIndexedDBHelper::IndexedDBInfo>
+typedef BrowsingDataHelperCallback<content::IndexedDBInfo>
     TestCompletionCallback;
 
 typedef InProcessBrowserTest BrowsingDataIndexedDBHelperTest;
@@ -39,15 +39,15 @@ IN_PROC_BROWSER_TEST_F(BrowsingDataIndexedDBHelperTest, CannedAddIndexedDB) {
       base::Bind(&TestCompletionCallback::callback,
                  base::Unretained(&callback)));
 
-  std::list<BrowsingDataIndexedDBHelper::IndexedDBInfo> result =
+  std::list<content::IndexedDBInfo> result =
       callback.result();
 
   ASSERT_EQ(2U, result.size());
-  std::list<BrowsingDataIndexedDBHelper::IndexedDBInfo>::iterator info =
+  std::list<content::IndexedDBInfo>::iterator info =
       result.begin();
-  EXPECT_EQ(origin1, info->origin);
+  EXPECT_EQ(origin1, info->origin_);
   info++;
-  EXPECT_EQ(origin2, info->origin);
+  EXPECT_EQ(origin2, info->origin_);
 }
 
 IN_PROC_BROWSER_TEST_F(BrowsingDataIndexedDBHelperTest, CannedUnique) {
@@ -64,10 +64,10 @@ IN_PROC_BROWSER_TEST_F(BrowsingDataIndexedDBHelperTest, CannedUnique) {
       base::Bind(&TestCompletionCallback::callback,
                  base::Unretained(&callback)));
 
-  std::list<BrowsingDataIndexedDBHelper::IndexedDBInfo> result =
+  std::list<content::IndexedDBInfo> result =
       callback.result();
 
   ASSERT_EQ(1U, result.size());
-  EXPECT_EQ(origin, result.begin()->origin);
+  EXPECT_EQ(origin, result.begin()->origin_);
 }
 }  // namespace

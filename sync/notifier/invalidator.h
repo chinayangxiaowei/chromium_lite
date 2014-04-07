@@ -78,23 +78,11 @@ class SYNC_EXPORT Invalidator {
   // the updated state.
   virtual InvalidatorState GetInvalidatorState() const = 0;
 
-  // SetUniqueId must be called once, before any call to
-  // UpdateCredentials.  |unique_id| should be a non-empty globally
-  // unique string.
-  virtual void SetUniqueId(const std::string& unique_id) = 0;
-
   // The observers won't be notified of any notifications until
   // UpdateCredentials is called at least once. It can be called more than
   // once.
   virtual void UpdateCredentials(
       const std::string& email, const std::string& token) = 0;
-
-  // This is here only to support the old p2p notification implementation,
-  // which is still used by sync integration tests.
-  // TODO(akalin): Remove this once we move the integration tests off p2p
-  // notifications.
-  virtual void SendInvalidation(
-      const ObjectIdInvalidationMap& invalidation_map) = 0;
 };
 }  // namespace syncer
 

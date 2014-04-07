@@ -5,6 +5,8 @@
 #ifndef CC_LAYERS_IO_SURFACE_LAYER_IMPL_H_
 #define CC_LAYERS_IO_SURFACE_LAYER_IMPL_H_
 
+#include <string>
+
 #include "cc/base/cc_export.h"
 #include "cc/layers/layer_impl.h"
 #include "ui/gfx/size.h"
@@ -28,13 +30,14 @@ class CC_EXPORT IOSurfaceLayerImpl : public LayerImpl {
   virtual void AppendQuads(QuadSink* quad_sink,
                            AppendQuadsData* append_quads_data) OVERRIDE;
 
-  virtual void WillDraw(ResourceProvider* resource_provider) OVERRIDE;
+  virtual bool WillDraw(DrawMode draw_mode,
+                        ResourceProvider* resource_provider) OVERRIDE;
   virtual void DidLoseOutputSurface() OVERRIDE;
-
-  virtual void DumpLayerProperties(std::string* str, int indent) const OVERRIDE;
 
  private:
   IOSurfaceLayerImpl(LayerTreeImpl* tree_impl, int id);
+
+  void DestroyTexture();
 
   virtual const char* LayerTypeAsString() const OVERRIDE;
 
@@ -42,6 +45,7 @@ class CC_EXPORT IOSurfaceLayerImpl : public LayerImpl {
   gfx::Size io_surface_size_;
   bool io_surface_changed_;
   unsigned io_surface_texture_id_;
+  unsigned io_surface_resource_id_;
 
   DISALLOW_COPY_AND_ASSIGN(IOSurfaceLayerImpl);
 };

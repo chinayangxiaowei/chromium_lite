@@ -19,6 +19,7 @@
 
 class BookmarkModel;
 class BookmarkNode;
+class Profile;
 
 namespace syncer {
 class BaseNode;
@@ -41,6 +42,7 @@ class BookmarkModelAssociator
   // Should be set to true only by mobile clients.
   BookmarkModelAssociator(
       BookmarkModel* bookmark_model,
+      Profile* profile_,
       syncer::UserShare* user_share,
       DataTypeErrorHandler* unrecoverable_error_handler,
       bool expect_mobile_bookmarks_folder);
@@ -139,9 +141,14 @@ class BookmarkModelAssociator
 
   // Check whether bookmark model and sync model are synced by comparing
   // their transaction versions.
-  void CheckModelSyncState() const;
+  // Returns a PERSISTENCE_ERROR if a transaction mismatch was detected where
+  // the native model has a newer transaction verison.
+  syncer::SyncError CheckModelSyncState(
+      syncer::SyncMergeResult* local_merge_result,
+      syncer::SyncMergeResult* syncer_merge_result) const;
 
   BookmarkModel* bookmark_model_;
+  Profile* profile_;
   syncer::UserShare* user_share_;
   DataTypeErrorHandler* unrecoverable_error_handler_;
   const bool expect_mobile_bookmarks_folder_;

@@ -8,19 +8,20 @@
 #include "base/bind_helpers.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
-#include "base/process_util.h"
+#include "base/process/launch.h"
 #include "base/stl_util.h"
 #include "base/threading/thread.h"
 #include "base/threading/thread_restrictions.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/upgrade_detector.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/service_messages.h"
 #include "chrome/common/service_process_util.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/common/child_process_host.h"
+#include "google_apis/gaia/gaia_switches.h"
 #include "ui/base/ui_base_switches.h"
 
 using content::BrowserThread;
@@ -47,8 +48,10 @@ void ServiceProcessControl::ConnectInternal() {
   // TODO(hclam): Handle error connecting to channel.
   const IPC::ChannelHandle channel_id = GetServiceProcessChannel();
   SetChannel(new IPC::ChannelProxy(
-      channel_id, IPC::Channel::MODE_NAMED_CLIENT, this,
-      BrowserThread::GetMessageLoopProxyForThread(BrowserThread::IO)));
+      channel_id,
+      IPC::Channel::MODE_NAMED_CLIENT,
+      this,
+      BrowserThread::GetMessageLoopProxyForThread(BrowserThread::IO).get()));
 }
 
 void ServiceProcessControl::SetChannel(IPC::ChannelProxy* channel) {
@@ -99,7 +102,7 @@ void ServiceProcessControl::Launch(const base::Closure& success_task,
     connect_failure_tasks_.push_back(failure);
 
   // If we already in the process of launching, then we are done.
-  if (launcher_)
+  if (launcher_.get())
     return;
 
   // If the service process is already running then connects to it.
@@ -126,10 +129,13 @@ void ServiceProcessControl::Launch(const base::Closure& success_task,
                               switches::kServiceProcess);
 
   static const char* const kSwitchesToCopy[] = {
+    switches::kCloudPrintServiceURL,
     switches::kCloudPrintSetupProxy,
     switches::kEnableLogging,
+    switches::kIgnoreUrlFetcherCertRequests,
     switches::kLang,
     switches::kLoggingLevel,
+    switches::kLsoUrl,
     switches::kNoServiceAutorun,
     switches::kUserDataDir,
     switches::kV,
@@ -286,7 +292,7 @@ void ServiceProcessControl::Launcher::DoDetectLaunched() {
 
   // If the service process is not launched yet then check again in 2 seconds.
   const base::TimeDelta kDetectLaunchRetry = base::TimeDelta::FromSeconds(2);
-  MessageLoop::current()->PostDelayedTask(
+  base::MessageLoop::current()->PostDelayedTask(
       FROM_HERE, base::Bind(&Launcher::DoDetectLaunched, this),
       kDetectLaunchRetry);
 }

@@ -9,13 +9,12 @@
 #include "base/android/scoped_java_ref.h"
 #include "base/bind.h"
 #include "base/lazy_instance.h"
+#include "content/public/browser/web_contents.h"
 #include "content/shell/shell.h"
 #include "content/shell/shell_browser_context.h"
 #include "content/shell/shell_content_browser_client.h"
-#include "content/public/browser/web_contents.h"
-#include "content/shell/shell.h"
-#include "googleurl/src/gurl.h"
 #include "jni/ShellManager_jni.h"
+#include "url/gurl.h"
 
 using base::android::ScopedJavaLocalRef;
 
@@ -38,6 +37,12 @@ jobject CreateShellView(Shell* shell) {
   return Java_ShellManager_createShell(env, j_shell_manager).Release();
 }
 
+void CloseShellView(jobject shell_view) {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  jobject j_shell_manager = g_global_state.Get().j_shell_manager.obj();
+  Java_ShellManager_closeShell(env, j_shell_manager, shell_view);
+}
+
 // Register native methods
 bool RegisterShellManager(JNIEnv* env) {
   return RegisterNativesImpl(env);
@@ -50,8 +55,7 @@ static void Init(JNIEnv* env, jclass clazz, jobject obj) {
 
 void LaunchShell(JNIEnv* env, jclass clazz, jstring jurl) {
   ShellBrowserContext* browserContext =
-      static_cast<ShellContentBrowserClient*>(
-          GetContentClient()->browser())->browser_context();
+      ShellContentBrowserClient::Get()->browser_context();
   GURL url(base::android::ConvertJavaStringToUTF8(env, jurl));
   Shell::CreateNewWindow(browserContext,
                          url,

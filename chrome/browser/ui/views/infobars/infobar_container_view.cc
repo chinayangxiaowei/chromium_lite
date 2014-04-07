@@ -4,7 +4,7 @@
 
 #include "chrome/browser/ui/views/infobars/infobar_container_view.h"
 
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "chrome/browser/ui/view_ids.h"
 #include "chrome/browser/ui/views/infobars/infobar_view.h"
 #include "grit/generated_resources.h"
@@ -14,10 +14,8 @@
 // static
 const char InfoBarContainerView::kViewClassName[] = "InfoBarContainerView";
 
-InfoBarContainerView::InfoBarContainerView(
-    Delegate* delegate,
-    chrome::search::SearchModel* search_model)
-    : InfoBarContainer(delegate, search_model) {
+InfoBarContainerView::InfoBarContainerView(Delegate* delegate)
+    : InfoBarContainer(delegate) {
   set_id(VIEW_ID_INFO_BAR_CONTAINER);
 }
 
@@ -33,7 +31,7 @@ gfx::Size InfoBarContainerView::GetPreferredSize() {
   return gfx::Size(0, total_height);
 }
 
-std::string InfoBarContainerView::GetClassName() const {
+const char* InfoBarContainerView::GetClassName() const {
   return kViewClassName;
 }
 
@@ -62,5 +60,5 @@ void InfoBarContainerView::PlatformSpecificAddInfoBar(InfoBar* infobar,
 
 void InfoBarContainerView::PlatformSpecificRemoveInfoBar(InfoBar* infobar) {
   RemoveChildView(static_cast<InfoBarView*>(infobar));
-  MessageLoop::current()->DeleteSoon(FROM_HERE, infobar);
+  base::MessageLoop::current()->DeleteSoon(FROM_HERE, infobar);
 }

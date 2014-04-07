@@ -42,6 +42,7 @@ class MEDIA_EXPORT SourceBufferStream {
     kSuccess,
     kNeedBuffer,
     kConfigChange,
+    kEndOfStream
   };
 
   SourceBufferStream(const AudioDecoderConfig& audio_config,
@@ -62,6 +63,16 @@ class MEDIA_EXPORT SourceBufferStream {
   // Returns true if Append() was successful, false if |buffers| are not added.
   // TODO(vrk): Implement garbage collection. (crbug.com/125070)
   bool Append(const BufferQueue& buffers);
+
+  // Removes buffers between |start| and |end| according to the steps
+  // in the "Coded Frame Removal Algorithm" in the Media Source
+  // Extensions Spec.
+  // https://dvcs.w3.org/hg/html-media/raw-file/default/media-source/media-source.html#sourcebuffer-coded-frame-removal
+  //
+  // |duration| is the current duration of the presentation. It is
+  // required by the computation outlined in the spec.
+  void Remove(base::TimeDelta start, base::TimeDelta end,
+              base::TimeDelta duration);
 
   // Changes the SourceBufferStream's state so that it will start returning
   // buffers starting from the closest keyframe before |timestamp|.
@@ -88,8 +99,11 @@ class MEDIA_EXPORT SourceBufferStream {
   // Returns a list of the buffered time ranges.
   Ranges<base::TimeDelta> GetBufferedTime() const;
 
-  // Returns true if we don't have any ranges or the last range is selected.
-  bool IsEndSelected() const;
+  // Notifies this object that end of stream has been signalled.
+  void MarkEndOfStream();
+
+  // Clear the end of stream state set by MarkEndOfStream().
+  void UnmarkEndOfStream();
 
   const AudioDecoderConfig& GetCurrentAudioDecoderConfig();
   const VideoDecoderConfig& GetCurrentVideoDecoderConfig();
@@ -107,11 +121,12 @@ class MEDIA_EXPORT SourceBufferStream {
   // yet.
   base::TimeDelta GetMaxInterbufferDistance() const;
 
- private:
-  friend class SourceBufferStreamTest;
-  typedef std::list<SourceBufferRange*> RangeList;
+  void set_memory_limit_for_testing(int memory_limit) {
+    memory_limit_ = memory_limit;
+  }
 
-  void set_memory_limit(int memory_limit) { memory_limit_ = memory_limit; }
+ private:
+  typedef std::list<SourceBufferRange*> RangeList;
 
   // Frees up space if the SourceBufferStream is taking up too much memory.
   void GarbageCollectIfNeeded();
@@ -208,6 +223,12 @@ class MEDIA_EXPORT SourceBufferStream {
   // in |ranges_|, false otherwise or if |ranges_| is empty.
   bool ShouldSeekToStartOfBuffered(base::TimeDelta seek_timestamp) const;
 
+  // Returns true if the |prev_is_keyframe| & |current_is_keyframe| combination
+  // on buffers with the same timestamp should be allowed. Returns false if the
+  // combination should signal an error.
+  bool AllowSameTimestamp(bool prev_is_keyframe,
+                          bool current_is_keyframe) const;
+
   // Returns true if the timestamps of |buffers| are monotonically increasing
   // since the previous append to the media segment, false otherwise.
   bool IsMonotonicallyIncreasing(const BufferQueue& buffers) const;
@@ -250,6 +271,10 @@ class MEDIA_EXPORT SourceBufferStream {
   // one.
   std::string GetStreamTypeName() const;
 
+  // Returns true if we don't have any ranges or the last range is selected
+  // or there is a pending seek beyond any existing ranges.
+  bool IsEndSelected() const;
+
   // Callback used to report error strings that can help the web developer
   // figure out what is wrong with the content.
   LogCB log_cb_;
@@ -276,6 +301,9 @@ class MEDIA_EXPORT SourceBufferStream {
   // True if more data needs to be appended before the Seek() can complete,
   // false if no Seek() has been requested or the Seek() is completed.
   bool seek_pending_;
+
+  // True if the end of the stream has been signalled.
+  bool end_of_stream_;
 
   // Timestamp of the last request to Seek().
   base::TimeDelta seek_buffer_timestamp_;

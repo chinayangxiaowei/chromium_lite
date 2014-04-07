@@ -1,6 +1,7 @@
 # Copyright (c) 2012 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
+import logging
 import os
 import shutil
 import tempfile
@@ -9,15 +10,16 @@ import unittest
 from telemetry.core import browser_finder
 from telemetry.core import extension_to_load
 from telemetry.core.chrome import extension_dict_backend
-from telemetry.test import options_for_unittests
+from telemetry.unittest import options_for_unittests
 
 class ExtensionTest(unittest.TestCase):
   def setUp(self):
     extension_path = os.path.join(os.path.dirname(__file__),
         '..', '..', 'unittest_data', 'simple_extension')
-    load_extension = extension_to_load.ExtensionToLoad(extension_path)
 
     options = options_for_unittests.GetCopy()
+    load_extension = extension_to_load.ExtensionToLoad(
+        extension_path, options.browser_type)
     options.extensions_to_load = [load_extension]
     browser_to_create = browser_finder.FindBrowser(options)
 
@@ -27,6 +29,7 @@ class ExtensionTest(unittest.TestCase):
       # May not find a browser that supports extensions.
       return
     self._browser = browser_to_create.Create()
+    self._browser.Start()
     self._extension = self._browser.extensions[load_extension]
     self.assertTrue(self._extension)
 
@@ -37,6 +40,8 @@ class ExtensionTest(unittest.TestCase):
   def testExtensionBasic(self):
     """Test ExtensionPage's ExecuteJavaScript and EvaluateJavaScript."""
     if not self._extension:
+      logging.warning('Did not find a browser that supports extensions, '
+                      'skipping test.')
       return
     self._extension.ExecuteJavaScript('setTestVar("abcdef")')
     self.assertEquals('abcdef',
@@ -46,6 +51,8 @@ class ExtensionTest(unittest.TestCase):
     """Test that ExtensionPage.Disconnect exists by calling it.
     EvaluateJavaScript should reconnect."""
     if not self._extension:
+      logging.warning('Did not find a browser that supports extensions, '
+                      'skipping test.')
       return
     self._extension.Disconnect()
     self.assertEquals(2, self._extension.EvaluateJavaScript('1+1'))
@@ -55,17 +62,21 @@ class NonExistentExtensionTest(unittest.TestCase):
     """Test that a non-existent extension path will raise an exception."""
     extension_path = os.path.join(os.path.dirname(__file__),
         '..', '..', 'unittest_data', 'foo')
+    options = options_for_unittests.GetCopy()
     self.assertRaises(extension_to_load.ExtensionPathNonExistentException,
-                      lambda: extension_to_load.ExtensionToLoad(extension_path))
+                      lambda: extension_to_load.ExtensionToLoad(
+                          extension_path, options.browser_type))
 
   def testExtensionNotLoaded(self):
     """Querying an extension that was not loaded will return None"""
     extension_path = os.path.join(os.path.dirname(__file__),
         '..', '..', 'unittest_data', 'simple_extension')
-    load_extension = extension_to_load.ExtensionToLoad(extension_path)
     options = options_for_unittests.GetCopy()
+    load_extension = extension_to_load.ExtensionToLoad(
+        extension_path, options.browser_type)
     browser_to_create = browser_finder.FindBrowser(options)
     with browser_to_create.Create() as b:
+      b.Start()
       if b.supports_extensions:
         self.assertRaises(extension_dict_backend.ExtensionNotFoundException,
                           lambda: b.extensions[load_extension])
@@ -83,15 +94,17 @@ class MultipleExtensionTest(unittest.TestCase):
     for d in self._extension_dirs:
       shutil.copy(manifest_path, d)
       shutil.copy(script_path, d)
-    self._extensions_to_load = [extension_to_load.ExtensionToLoad(d)
-                                for d in self._extension_dirs]
     options = options_for_unittests.GetCopy()
+    self._extensions_to_load = [extension_to_load.ExtensionToLoad(
+                                    d, options.browser_type)
+                                for d in self._extension_dirs]
     options.extensions_to_load = self._extensions_to_load
     browser_to_create = browser_finder.FindBrowser(options)
     self._browser = None
     # May not find a browser that supports extensions.
     if browser_to_create:
       self._browser = browser_to_create.Create()
+      self._browser.Start()
 
   def tearDown(self):
     if self._browser:
@@ -101,6 +114,8 @@ class MultipleExtensionTest(unittest.TestCase):
 
   def testMultipleExtensions(self):
     if not self._browser:
+      logging.warning('Did not find a browser that supports extensions, '
+                      'skipping test.')
       return
 
     # Test contains.
@@ -118,16 +133,19 @@ class ComponentExtensionTest(unittest.TestCase):
   def testComponentExtensionBasic(self):
     extension_path = os.path.join(os.path.dirname(__file__),
         '..', '..', 'unittest_data', 'component_extension')
-    load_extension = extension_to_load.ExtensionToLoad(extension_path, True)
-
     options = options_for_unittests.GetCopy()
+    load_extension = extension_to_load.ExtensionToLoad(
+        extension_path, options.browser_type, is_component=True)
+
     options.extensions_to_load = [load_extension]
     browser_to_create = browser_finder.FindBrowser(options)
     if not browser_to_create:
-      # Some browsers don't support extensions.
+      logging.warning('Did not find a browser that supports extensions, '
+                      'skipping test.')
       return
 
     with browser_to_create.Create() as b:
+      b.Start()
       extension = b.extensions[load_extension]
       extension.ExecuteJavaScript('setTestVar("abcdef")')
       self.assertEquals('abcdef', extension.EvaluateJavaScript('_testVar'))
@@ -136,6 +154,9 @@ class ComponentExtensionTest(unittest.TestCase):
     # simple_extension does not have a public key.
     extension_path = os.path.join(os.path.dirname(__file__),
         '..', '..', 'unittest_data', 'simple_extension')
+    options = options_for_unittests.GetCopy()
     self.assertRaises(extension_to_load.MissingPublicKeyException,
-                      lambda: extension_to_load.ExtensionToLoad(extension_path,
-                                                                True))
+                      lambda: extension_to_load.ExtensionToLoad(
+                          extension_path,
+                          browser_type=options.browser_type,
+                          is_component=True))

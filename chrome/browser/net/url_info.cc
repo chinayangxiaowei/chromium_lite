@@ -14,7 +14,7 @@
 #include "base/lazy_instance.h"
 #include "base/logging.h"
 #include "base/metrics/histogram.h"
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 
 using base::Time;
 using base::TimeDelta;
@@ -361,7 +361,7 @@ std::string UrlInfo::GetAsciiMotivation() const {
       return RemoveJs(referring_url_.spec());
 
     default:
-      return "";
+      return std::string();
   }
 }
 

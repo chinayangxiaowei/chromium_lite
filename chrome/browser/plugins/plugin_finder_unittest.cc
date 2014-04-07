@@ -7,22 +7,20 @@
 #include "base/values.h"
 #include "chrome/browser/plugins/plugin_metadata.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "webkit/plugins/npapi/plugin_list.h"
 
 using base::DictionaryValue;
 using base::ListValue;
-using webkit::npapi::PluginList;
 
 TEST(PluginFinderTest, JsonSyntax) {
   scoped_ptr<DictionaryValue> plugin_list(
     PluginFinder::LoadBuiltInPluginList());
   ASSERT_TRUE(plugin_list.get());
-  base::Value* version = NULL;
+  scoped_ptr<base::Value> version;
   ASSERT_TRUE(plugin_list->Remove("x-version", &version));
   EXPECT_EQ(base::Value::TYPE_INTEGER, version->GetType());
 
   for (DictionaryValue::Iterator plugin_it(*plugin_list);
-       plugin_it.HasNext(); plugin_it.Advance()) {
+       !plugin_it.IsAtEnd(); plugin_it.Advance()) {
     const DictionaryValue* plugin = NULL;
     ASSERT_TRUE(plugin_it.value().GetAsDictionary(&plugin));
     std::string dummy_str;

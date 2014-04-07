@@ -18,6 +18,8 @@
 #include "ui/native_theme/native_theme.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
+#include "ui/views/color_constants.h"
+#include "ui/views/controls/button/menu_button.h"
 #include "ui/views/controls/combobox/combobox.h"
 #include "ui/views/controls/focusable_border.h"
 #include "ui/views/controls/menu/menu_runner.h"
@@ -42,7 +44,7 @@ const int kMenuBorderWidthRight = 1;
 const int kMenuBorderWidthBottom = 2;
 
 // Limit how small a combobox can be.
-const int kMinComboboxWidth = 148;
+const int kMinComboboxWidth = 25;
 
 // Size of the combobox arrow margins
 const int kDisclosureArrowLeftPadding = 7;
@@ -50,6 +52,8 @@ const int kDisclosureArrowRightPadding = 7;
 
 // Define the id of the first item in the menu (since it needs to be > 0)
 const int kFirstMenuItemId = 1000;
+
+const SkColor kInvalidTextColor = SK_ColorWHITE;
 
 // The background to use for invalid comboboxes.
 class InvalidBackground : public Background {
@@ -62,7 +66,7 @@ class InvalidBackground : public Background {
     gfx::Rect bounds(view->GetLocalBounds());
     // Inset by 2 to leave 1 empty pixel between background and border.
     bounds.Inset(2, 2, 2, 2);
-    canvas->FillRect(bounds, SK_ColorRED);
+    canvas->FillRect(bounds, kWarningColor);
   }
 
  private:
@@ -94,9 +98,11 @@ NativeComboboxViews::~NativeComboboxViews() {
 
 bool NativeComboboxViews::OnMousePressed(const ui::MouseEvent& mouse_event) {
   combobox_->RequestFocus();
-  if (mouse_event.IsLeftMouseButton()) {
+  const base::TimeDelta delta = base::Time::Now() - closed_time_;
+  if (mouse_event.IsLeftMouseButton() &&
+      (delta.InMilliseconds() > MenuButton::kMinimumTimeBetweenButtonClicks)) {
     UpdateFromModel();
-    ShowDropDownMenu();
+    ShowDropDownMenu(ui::MENU_SOURCE_MOUSE);
   }
 
   return true;
@@ -114,11 +120,19 @@ bool NativeComboboxViews::OnKeyPressed(const ui::KeyEvent& key_event) {
   if (selected_index_ == -1)
     selected_index_ = 0;
 
+  bool show_menu = false;
   int new_index = selected_index_;
   switch (key_event.key_code()) {
-    // Move to the next item if any.
+    // Show the menu on Space.
+    case ui::VKEY_SPACE:
+      show_menu = true;
+      break;
+
+    // Show the menu on Alt+Down (like Windows) or move to the next item if any.
     case ui::VKEY_DOWN:
-      if (new_index < (combobox_->model()->GetItemCount() - 1))
+      if (key_event.IsAltDown())
+        show_menu = true;
+      else if (new_index < (combobox_->model()->GetItemCount() - 1))
         new_index++;
       break;
 
@@ -144,7 +158,10 @@ bool NativeComboboxViews::OnKeyPressed(const ui::KeyEvent& key_event) {
       return false;
   }
 
-  if (new_index != selected_index_) {
+  if (show_menu) {
+    UpdateFromModel();
+    ShowDropDownMenu(ui::MENU_SOURCE_KEYBOARD);
+  } else if (new_index != selected_index_) {
     selected_index_ = new_index;
     combobox_->SelectionChanged();
     SchedulePaint();
@@ -178,7 +195,7 @@ void NativeComboboxViews::OnBlur() {
 void NativeComboboxViews::OnGestureEvent(ui::GestureEvent* gesture) {
   if (gesture->type() == ui::ET_GESTURE_TAP) {
     UpdateFromModel();
-    ShowDropDownMenu();
+    ShowDropDownMenu(ui::MENU_SOURCE_TOUCH);
     gesture->StopPropagation();
     return;
   }
@@ -198,6 +215,11 @@ void NativeComboboxViews::UpdateFromModel() {
 
   int num_items = combobox_->model()->GetItemCount();
   for (int i = 0; i < num_items; ++i) {
+    if (combobox_->model()->IsItemSeparatorAt(i)) {
+      menu->AppendSeparator();
+      continue;
+    }
+
     string16 text = combobox_->model()->GetItemAt(i);
 
     // Inserting the Unicode formatting characters if necessary so that the
@@ -214,6 +236,7 @@ void NativeComboboxViews::UpdateFromModel() {
 
 void NativeComboboxViews::UpdateSelectedIndex() {
   selected_index_ = combobox_->selected_index();
+  SchedulePaint();
 }
 
 void NativeComboboxViews::UpdateEnabled() {
@@ -235,12 +258,11 @@ gfx::Size NativeComboboxViews::GetPreferredSize() {
   // The preferred size will drive the local bounds which in turn is used to set
   // the minimum width for the dropdown list.
   gfx::Insets insets = GetInsets();
-  int total_width = content_width_ + insets.width() +
-      kDisclosureArrowLeftPadding + disclosure_arrow_->width() +
-      kDisclosureArrowRightPadding;
+  int total_width = std::max(kMinComboboxWidth, content_width_) +
+      insets.width() + kDisclosureArrowLeftPadding +
+      disclosure_arrow_->width() + kDisclosureArrowRightPadding;
 
-  return gfx::Size(std::min(kMinComboboxWidth, total_width),
-                   content_height_ + insets.height());
+  return gfx::Size(total_width, content_height_ + insets.height());
 }
 
 View* NativeComboboxViews::GetView() {
@@ -253,7 +275,7 @@ void NativeComboboxViews::SetFocus() {
 
 void NativeComboboxViews::ValidityStateChanged() {
   if (combobox_->invalid()) {
-    text_border_->SetColor(SK_ColorRED);
+    text_border_->SetColor(kWarningColor);
     set_background(new InvalidBackground());
   } else {
     text_border_->UseDefaultColor();
@@ -323,9 +345,9 @@ void NativeComboboxViews::PaintText(gfx::Canvas* canvas) {
   int x = insets.left();
   int y = insets.top();
   int text_height = height() - insets.height();
-  SkColor text_color = GetNativeTheme()->GetSystemColor(
-      combobox_->invalid() ? ui::NativeTheme::kColorId_LabelDisabledColor :
-      ui::NativeTheme::kColorId_LabelEnabledColor);
+  SkColor text_color = combobox_->invalid() ? kInvalidTextColor :
+      GetNativeTheme()->GetSystemColor(
+          ui::NativeTheme::kColorId_LabelEnabledColor);
 
   int index = GetSelectedIndex();
   if (index < 0 || index > combobox_->model()->GetItemCount())
@@ -360,8 +382,7 @@ void NativeComboboxViews::PaintText(gfx::Canvas* canvas) {
   canvas->Restore();
 }
 
-void NativeComboboxViews::ShowDropDownMenu() {
-
+void NativeComboboxViews::ShowDropDownMenu(ui::MenuSourceType source_type) {
   if (!dropdown_list_menu_runner_.get())
     UpdateFromModel();
 
@@ -388,10 +409,11 @@ void NativeComboboxViews::ShowDropDownMenu() {
 
   dropdown_open_ = true;
   if (dropdown_list_menu_runner_->RunMenuAt(
-          GetWidget(), NULL, bounds, MenuItemView::TOPLEFT,
-          MenuRunner::HAS_MNEMONICS) == MenuRunner::MENU_DELETED)
+          GetWidget(), NULL, bounds, MenuItemView::TOPLEFT, source_type, 0) ==
+      MenuRunner::MENU_DELETED)
     return;
   dropdown_open_ = false;
+  closed_time_ = base::Time::Now();
 
   // Need to explicitly clear mouse handler so that events get sent
   // properly after the menu finishes running. If we don't do this, then

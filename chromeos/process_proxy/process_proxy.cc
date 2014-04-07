@@ -11,9 +11,10 @@
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/file_util.h"
-#include "base/posix/eintr_wrapper.h"
-#include "base/process_util.h"
 #include "base/logging.h"
+#include "base/posix/eintr_wrapper.h"
+#include "base/process/kill.h"
+#include "base/process/launch.h"
 #include "base/threading/thread.h"
 #include "chromeos/process_proxy/process_output_watcher.h"
 
@@ -105,7 +106,7 @@ bool ProcessProxy::StartWatchingOnThread(
 
 void ProcessProxy::OnProcessOutput(ProcessOutputType type,
                                    const std::string& output) {
-  if (!callback_runner_)
+  if (!callback_runner_.get())
     return;
 
   callback_runner_->PostTask(

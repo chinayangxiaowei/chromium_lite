@@ -8,8 +8,8 @@
 #include <string>
 
 #include "base/files/file_path.h"
-#include "base/message_loop.h"
-#include "base/timer.h"
+#include "base/message_loop/message_loop.h"
+#include "base/timer/timer.h"
 #include "base/tuple.h"
 #include "build/build_config.h"
 
@@ -85,17 +85,20 @@ class MessageLoopHelper {
 class CallbackTest {
  public:
   // Creates a new CallbackTest object. When the callback is called, it will
-  // update |helper| with the result of the call. If |reuse| is false and a
-  // callback is called more than once, or if |reuse| is true and a callback
-  // is called more than twice, an error will be reported to |helper|.
+  // update |helper|. If |reuse| is false and a callback is called more than
+  // once, or if |reuse| is true and a callback is called more than twice, an
+  // error will be reported to |helper|.
   CallbackTest(MessageLoopHelper* helper, bool reuse);
   ~CallbackTest();
 
-  void Run(int params);
+  void Run(int result);
+
+  int last_result() const { return last_result_; }
 
  private:
   MessageLoopHelper* helper_;
   int reuse_;
+  int last_result_;
   DISALLOW_COPY_AND_ASSIGN(CallbackTest);
 };
 

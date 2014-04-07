@@ -6,14 +6,20 @@
 
 #include "base/metrics/histogram.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/time.h"
+#include "base/time/time.h"
+#include "chrome/browser/predictors/logged_in_predictor_table.h"
 #include "chrome/browser/prerender/prerender_histograms.h"
+#include "chrome/browser/prerender/prerender_local_predictor.h"
 #include "chrome/browser/prerender/prerender_manager.h"
 #include "chrome/browser/prerender/prerender_manager_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "content/public/browser/browser_thread.h"
+#include "content/public/browser/navigation_details.h"
+#include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_view.h"
+#include "content/public/common/frame_navigate_params.h"
 #include "skia/ext/platform_canvas.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/gfx/rect.h"
@@ -23,6 +29,23 @@ using content::WebContents;
 DEFINE_WEB_CONTENTS_USER_DATA_KEY(prerender::PrerenderTabHelper);
 
 namespace prerender {
+
+namespace {
+
+void ReportTabHelperURLSeenToLocalPredictor(
+    PrerenderManager* prerender_manager,
+    const GURL& url,
+    WebContents* web_contents) {
+  if (!prerender_manager)
+    return;
+  PrerenderLocalPredictor* local_predictor =
+      prerender_manager->local_predictor();
+  if (!local_predictor)
+    return;
+  local_predictor->OnTabHelperURLSeen(url, web_contents);
+}
+
+}  // namespace
 
 // Helper class to compute pixel-based stats on the paint progress
 // between when a prerendered page is swapped in and when the onload event
@@ -128,7 +151,8 @@ class PrerenderTabHelper::PixelStats {
 };
 
 PrerenderTabHelper::PrerenderTabHelper(content::WebContents* web_contents)
-    : content::WebContentsObserver(web_contents) {
+    : content::WebContentsObserver(web_contents),
+      weak_factory_(this) {
 }
 
 PrerenderTabHelper::~PrerenderTabHelper() {
@@ -138,12 +162,16 @@ void PrerenderTabHelper::ProvisionalChangeToMainFrameUrl(
     const GURL& url,
     content::RenderViewHost* render_view_host) {
   url_ = url;
+  RecordEvent(EVENT_MAINFRAME_CHANGE);
+  RecordEventIfLoggedInURL(EVENT_MAINFRAME_CHANGE_DOMAIN_LOGGED_IN, url);
   PrerenderManager* prerender_manager = MaybeGetPrerenderManager();
   if (!prerender_manager)
     return;
   if (prerender_manager->IsWebContentsPrerendering(web_contents(), NULL))
     return;
   prerender_manager->MarkWebContentsAsNotPrerendered(web_contents());
+  ReportTabHelperURLSeenToLocalPredictor(prerender_manager, url,
+                                         web_contents());
 }
 
 void PrerenderTabHelper::DidCommitProvisionalLoadForFrame(
@@ -154,6 +182,9 @@ void PrerenderTabHelper::DidCommitProvisionalLoadForFrame(
     content::RenderViewHost* render_view_host) {
   if (!is_main_frame)
     return;
+  RecordEvent(EVENT_MAINFRAME_COMMIT);
+  RecordEventIfLoggedInURL(EVENT_MAINFRAME_COMMIT_DOMAIN_LOGGED_IN,
+                           validated_url);
   url_ = validated_url;
   PrerenderManager* prerender_manager = MaybeGetPrerenderManager();
   if (!prerender_manager)
@@ -161,6 +192,8 @@ void PrerenderTabHelper::DidCommitProvisionalLoadForFrame(
   if (prerender_manager->IsWebContentsPrerendering(web_contents(), NULL))
     return;
   prerender_manager->RecordNavigation(validated_url);
+  ReportTabHelperURLSeenToLocalPredictor(prerender_manager, validated_url,
+                                         web_contents());
 }
 
 void PrerenderTabHelper::DidStopLoading(
@@ -210,6 +243,25 @@ void PrerenderTabHelper::DidStartProvisionalLoadForFrame(
   }
 }
 
+void PrerenderTabHelper::DidNavigateAnyFrame(
+      const content::LoadCommittedDetails& details,
+      const content::FrameNavigateParams& params) {
+  PrerenderManager* prerender_manager = MaybeGetPrerenderManager();
+  if (params.password_form.origin.is_valid() && prerender_manager) {
+    prerender_manager->RecordLikelyLoginOnURL(params.url);
+    RecordEvent(EVENT_LOGIN_ACTION_ADDED);
+    if (details.is_main_frame) {
+      RecordEvent(EVENT_LOGIN_ACTION_ADDED_MAINFRAME);
+      if (params.password_form.password_value.empty())
+        RecordEvent(EVENT_LOGIN_ACTION_ADDED_MAINFRAME_PW_EMPTY);
+    } else {
+      RecordEvent(EVENT_LOGIN_ACTION_ADDED_SUBFRAME);
+      if (params.password_form.password_value.empty())
+        RecordEvent(EVENT_LOGIN_ACTION_ADDED_SUBFRAME_PW_EMPTY);
+    }
+  }
+}
+
 PrerenderManager* PrerenderTabHelper::MaybeGetPrerenderManager() const {
   return PrerenderManagerFactory::GetForProfile(
       Profile::FromBrowserContext(web_contents()->GetBrowserContext()));
@@ -247,6 +299,39 @@ void PrerenderTabHelper::PrerenderSwappedIn() {
     if (pixel_stats_.get())
       pixel_stats_->GetBitmap(PixelStats::BITMAP_SWAP_IN, web_contents());
   }
+}
+
+void PrerenderTabHelper::RecordEvent(PrerenderTabHelper::Event event) const {
+  UMA_HISTOGRAM_ENUMERATION("Prerender.TabHelperEvent",
+                            event, PrerenderTabHelper::EVENT_MAX_VALUE);
+}
+
+void PrerenderTabHelper::RecordEventIfLoggedInURL(
+    PrerenderTabHelper::Event event, const GURL& url) {
+  PrerenderManager* prerender_manager = MaybeGetPrerenderManager();
+  if (!prerender_manager)
+    return;
+  scoped_ptr<bool> is_present(new bool);
+  scoped_ptr<bool> lookup_succeeded(new bool);
+  bool* is_present_ptr = is_present.get();
+  bool* lookup_succeeded_ptr = lookup_succeeded.get();
+  prerender_manager->CheckIfLikelyLoggedInOnURL(
+      url,
+      is_present_ptr,
+      lookup_succeeded_ptr,
+      base::Bind(&PrerenderTabHelper::RecordEventIfLoggedInURLResult,
+                 weak_factory_.GetWeakPtr(),
+                 event,
+                 base::Passed(&is_present),
+                 base::Passed(&lookup_succeeded)));
+}
+
+void PrerenderTabHelper::RecordEventIfLoggedInURLResult(
+    PrerenderTabHelper::Event event,
+    scoped_ptr<bool> is_present,
+    scoped_ptr<bool> lookup_succeeded) {
+  if (*lookup_succeeded && *is_present)
+    RecordEvent(event);
 }
 
 }  // namespace prerender

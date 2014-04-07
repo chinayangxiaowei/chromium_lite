@@ -4,22 +4,22 @@
 
 #include "net/socket/client_socket_pool_base.h"
 
-#include <math.h>
 #include "base/compiler_specific.h"
 #include "base/format_macros.h"
 #include "base/logging.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/metrics/stats_counters.h"
 #include "base/stl_util.h"
-#include "base/string_number_conversions.h"
-#include "base/string_util.h"
-#include "base/time.h"
+#include "base/strings/string_util.h"
+#include "base/time/time.h"
 #include "base/values.h"
-#include "net/base/net_log.h"
 #include "net/base/net_errors.h"
+#include "net/base/net_log.h"
 #include "net/socket/client_socket_handle.h"
 
 using base::TimeDelta;
+
+namespace net {
 
 namespace {
 
@@ -39,32 +39,29 @@ const int kCleanupInterval = 10;  // DO NOT INCREASE THIS TIMEOUT.
 // after a certain timeout has passed without receiving an ACK.
 bool g_connect_backup_jobs_enabled = true;
 
-double g_socket_reuse_policy_penalty_exponent = -1;
-int g_socket_reuse_policy = -1;
+// Compares the effective priority of two results, and returns 1 if |request1|
+// has greater effective priority than |request2|, 0 if they have the same
+// effective priority, and -1 if |request2| has the greater effective priority.
+// Requests with |ignore_limits| set have higher effective priority than those
+// without.  If both requests have |ignore_limits| set/unset, then the request
+// with the highest Pririoty has the highest effective priority.  Does not take
+// into account the fact that Requests are serviced in FIFO order if they would
+// otherwise have the same priority.
+int CompareEffectiveRequestPriority(
+    const internal::ClientSocketPoolBaseHelper::Request& request1,
+    const internal::ClientSocketPoolBaseHelper::Request& request2) {
+  if (request1.ignore_limits() && !request2.ignore_limits())
+    return 1;
+  if (!request1.ignore_limits() && request2.ignore_limits())
+    return -1;
+  if (request1.priority() > request2.priority())
+    return 1;
+  if (request1.priority() < request2.priority())
+    return -1;
+  return 0;
+}
 
 }  // namespace
-
-namespace net {
-
-int GetSocketReusePolicy() {
-  return g_socket_reuse_policy;
-}
-
-void SetSocketReusePolicy(int policy) {
-  DCHECK_GE(policy, 0);
-  DCHECK_LE(policy, 2);
-  if (policy > 2 || policy < 0) {
-    LOG(ERROR) << "Invalid socket reuse policy";
-    return;
-  }
-
-  double exponents[] = { 0, 0.25, -1 };
-  g_socket_reuse_policy_penalty_exponent = exponents[policy];
-  g_socket_reuse_policy = policy;
-
-  VLOG(1) << "Setting g_socket_reuse_policy_penalty_exponent = "
-          << g_socket_reuse_policy_penalty_exponent;
-}
 
 ConnectJob::ConnectJob(const std::string& group_name,
                        base::TimeDelta timeout_duration,
@@ -180,7 +177,7 @@ ClientSocketPoolBaseHelper::ClientSocketPoolBaseHelper(
       connect_job_factory_(connect_job_factory),
       connect_backup_jobs_enabled_(false),
       pool_generation_number_(0),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {
+      weak_factory_(this) {
   DCHECK_LE(0, max_sockets_per_group);
   DCHECK_LE(max_sockets_per_group, max_sockets);
 
@@ -212,16 +209,16 @@ ClientSocketPoolBaseHelper::CallbackResultPair::CallbackResultPair(
 
 ClientSocketPoolBaseHelper::CallbackResultPair::~CallbackResultPair() {}
 
-// InsertRequestIntoQueue inserts the request into the queue based on
-// priority.  Highest priorities are closest to the front.  Older requests are
-// prioritized over requests of equal priority.
-//
 // static
 void ClientSocketPoolBaseHelper::InsertRequestIntoQueue(
     const Request* r, RequestQueue* pending_requests) {
   RequestQueue::iterator it = pending_requests->begin();
-  while (it != pending_requests->end() && r->priority() <= (*it)->priority())
+  // TODO(mmenke):  Should the network stack require requests with
+  //                |ignore_limits| have the highest priority?
+  while (it != pending_requests->end() &&
+         CompareEffectiveRequestPriority(*r, *(*it)) <= 0) {
     ++it;
+  }
   pending_requests->insert(it, r);
 }
 
@@ -269,6 +266,17 @@ int ClientSocketPoolBaseHelper::RequestSocket(
     delete request;
   } else {
     InsertRequestIntoQueue(request, group->mutable_pending_requests());
+    // Have to do this asynchronously, as closing sockets in higher level pools
+    // call back in to |this|, which will cause all sorts of fun and exciting
+    // re-entrancy issues if the socket pool is doing something else at the
+    // time.
+    if (group->IsStalledOnPoolMaxSockets(max_sockets_per_group_)) {
+      base::MessageLoop::current()->PostTask(
+          FROM_HERE,
+          base::Bind(
+              &ClientSocketPoolBaseHelper::TryToCloseSocketsInLayeredPools,
+              weak_factory_.GetWeakPtr()));
+    }
   }
   return rv;
 }
@@ -426,7 +434,6 @@ bool ClientSocketPoolBaseHelper::AssignIdleSocketToRequest(
     const Request* request, Group* group) {
   std::list<IdleSocket>* idle_sockets = group->mutable_idle_sockets();
   std::list<IdleSocket>::iterator idle_socket_it = idle_sockets->end();
-  double max_score = -1;
 
   // Iterate through the idle sockets forwards (oldest to newest)
   //   * Delete any disconnected ones.
@@ -443,22 +450,7 @@ bool ClientSocketPoolBaseHelper::AssignIdleSocketToRequest(
 
     if (it->socket->WasEverUsed()) {
       // We found one we can reuse!
-      double score = 0;
-      int64 bytes_read = it->socket->NumBytesRead();
-      double num_kb = static_cast<double>(bytes_read) / 1024.0;
-      int idle_time_sec = (base::TimeTicks::Now() - it->start_time).InSeconds();
-      idle_time_sec = std::max(1, idle_time_sec);
-
-      if (g_socket_reuse_policy_penalty_exponent >= 0 && num_kb >= 0) {
-        score = num_kb / pow(idle_time_sec,
-                             g_socket_reuse_policy_penalty_exponent);
-      }
-
-      // Equality to prefer recently used connection.
-      if (score >= max_score) {
-        idle_socket_it = it;
-        max_score = score;
-      }
+      idle_socket_it = it;
     }
 
     ++it;
@@ -524,8 +516,10 @@ void ClientSocketPoolBaseHelper::CancelRequest(
       req->net_log().AddEvent(NetLog::TYPE_CANCELLED);
       req->net_log().EndEvent(NetLog::TYPE_SOCKET_POOL);
 
-      // We let the job run, unless we're at the socket limit.
-      if (group->jobs().size() && ReachedMaxSocketsLimit()) {
+      // We let the job run, unless we're at the socket limit and there is
+      // not another request waiting on the job.
+      if (group->jobs().size() > group->pending_requests().size() &&
+          ReachedMaxSocketsLimit()) {
         RemoveConnectJob(*group->jobs().begin(), group);
         CheckForStalledSocketGroups();
       }
@@ -566,27 +560,29 @@ LoadState ClientSocketPoolBaseHelper::GetLoadState(
   // Can't use operator[] since it is non-const.
   const Group& group = *group_map_.find(group_name)->second;
 
-  // Search pending_requests for matching handle.
+  // Search the first group.jobs().size() |pending_requests| for |handle|.
+  // If it's farther back in the deque than that, it doesn't have a
+  // corresponding ConnectJob.
+  size_t connect_jobs = group.jobs().size();
   RequestQueue::const_iterator it = group.pending_requests().begin();
-  for (size_t i = 0; it != group.pending_requests().end(); ++it, ++i) {
-    if ((*it)->handle() == handle) {
-      if (i < group.jobs().size()) {
-        LoadState max_state = LOAD_STATE_IDLE;
-        for (ConnectJobSet::const_iterator job_it = group.jobs().begin();
-             job_it != group.jobs().end(); ++job_it) {
-          max_state = std::max(max_state, (*job_it)->GetLoadState());
-        }
-        return max_state;
-      } else {
-        // TODO(wtc): Add a state for being on the wait list.
-        // See http://crbug.com/5077.
-        return LOAD_STATE_IDLE;
-      }
+  for (size_t i = 0; it != group.pending_requests().end() && i < connect_jobs;
+       ++it, ++i) {
+    if ((*it)->handle() != handle)
+      continue;
+
+    // Just return the state  of the farthest along ConnectJob for the first
+    // group.jobs().size() pending requests.
+    LoadState max_state = LOAD_STATE_IDLE;
+    for (ConnectJobSet::const_iterator job_it = group.jobs().begin();
+         job_it != group.jobs().end(); ++job_it) {
+      max_state = std::max(max_state, (*job_it)->GetLoadState());
     }
+    return max_state;
   }
 
-  NOTREACHED();
-  return LOAD_STATE_IDLE;
+  if (group.IsStalledOnPoolMaxSockets(max_sockets_per_group_))
+    return LOAD_STATE_WAITING_FOR_STALLED_SOCKET_POOL;
+  return LOAD_STATE_WAITING_FOR_AVAILABLE_SOCKET;
 }
 
 base::DictionaryValue* ClientSocketPoolBaseHelper::GetInfoAsValue(
@@ -1123,7 +1119,7 @@ void ClientSocketPoolBaseHelper::InvokeUserCallbackLater(
     ClientSocketHandle* handle, const CompletionCallback& callback, int rv) {
   CHECK(!ContainsKey(pending_callback_map_, handle));
   pending_callback_map_[handle] = CallbackResultPair(callback, rv);
-  MessageLoop::current()->PostTask(
+  base::MessageLoop::current()->PostTask(
       FROM_HERE,
       base::Bind(&ClientSocketPoolBaseHelper::InvokeUserCallback,
                  weak_factory_.GetWeakPtr(), handle));
@@ -1144,10 +1140,19 @@ void ClientSocketPoolBaseHelper::InvokeUserCallback(
   callback.Run(result);
 }
 
+void ClientSocketPoolBaseHelper::TryToCloseSocketsInLayeredPools() {
+  while (IsStalled()) {
+    // Closing a socket will result in calling back into |this| to use the freed
+    // socket slot, so nothing else is needed.
+    if (!CloseOneIdleConnectionInLayeredPool())
+      return;
+  }
+}
+
 ClientSocketPoolBaseHelper::Group::Group()
     : unassigned_job_count_(0),
       active_socket_count_(0),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {}
+      weak_factory_(this) {}
 
 ClientSocketPoolBaseHelper::Group::~Group() {
   CleanupBackupJob();
@@ -1161,7 +1166,7 @@ void ClientSocketPoolBaseHelper::Group::StartBackupSocketTimer(
   if (weak_factory_.HasWeakPtrs())
     return;
 
-  MessageLoop::current()->PostDelayedTask(
+  base::MessageLoop::current()->PostDelayedTask(
       FROM_HERE,
       base::Bind(&Group::OnBackupSocketTimerFired, weak_factory_.GetWeakPtr(),
                  group_name, pool),

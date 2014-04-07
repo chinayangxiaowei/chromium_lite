@@ -116,8 +116,9 @@ class CHROMEOS_EXPORT IBusEngineService {
   // This class doesn't take the ownership of |handler|.
   virtual void SetEngine(IBusEngineHandlerInterface* handler) = 0;
 
-  // Unsets the current IBus engine handler.
-  virtual void UnsetEngine() = 0;
+  // Unsets the IBus engine handler if |handler| equals to current engine
+  // handler.
+  virtual void UnsetEngine(IBusEngineHandlerInterface* handler) = 0;
 
   // Emits RegisterProperties signal.
   virtual void RegisterProperties(
@@ -141,6 +142,8 @@ class CHROMEOS_EXPORT IBusEngineService {
   virtual void RequireSurroundingText() = 0;
   // Emits CommitText signal.
   virtual void CommitText(const std::string& text) = 0;
+  // Emits DeleteSurroundingText signal.
+  virtual void DeleteSurroundingText(int32 offset, uint32 length) = 0;
 
   // Factory function, creates a new instance and returns ownership.
   // For normal usage, access the singleton via DBusThreadManager::Get().

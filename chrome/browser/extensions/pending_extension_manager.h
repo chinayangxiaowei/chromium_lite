@@ -15,7 +15,10 @@
 class ExtensionServiceInterface;
 class GURL;
 class PendingExtensionManager;
+
+namespace base {
 class Version;
+}
 
 FORWARD_DECLARE_TEST(ExtensionServiceTest,
                      UpdatePendingExtensionAlreadyInstalled);
@@ -77,6 +80,12 @@ class PendingExtensionManager {
       PendingExtensionInfo::ShouldAllowInstallPredicate should_allow_install,
       bool install_silently);
 
+  // Adds an extension that was depended on by another extension.
+  bool AddFromExtensionImport(
+      const std::string& id,
+      const GURL& update_url,
+      PendingExtensionInfo::ShouldAllowInstallPredicate should_allow_install);
+
   // Given an extension id and an update URL, schedule the extension
   // to be fetched, installed, and activated.
   bool AddFromExternalUpdateUrl(const std::string& id,
@@ -89,7 +98,7 @@ class PendingExtensionManager {
   bool AddFromExternalFile(
       const std::string& id,
       Manifest::Location location,
-      const Version& version);
+      const base::Version& version);
 
   // Get the list of pending IDs that should be installed from an update URL.
   // Pending extensions that will be installed from local files will not be
@@ -105,7 +114,7 @@ class PendingExtensionManager {
   bool AddExtensionImpl(
       const std::string& id,
       const GURL& update_url,
-      const Version& version,
+      const base::Version& version,
       PendingExtensionInfo::ShouldAllowInstallPredicate should_allow_install,
       bool is_from_sync,
       bool install_silently,

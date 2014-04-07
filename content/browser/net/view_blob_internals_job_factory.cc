@@ -5,16 +5,16 @@
 #include "content/browser/net/view_blob_internals_job_factory.h"
 
 #include "base/memory/scoped_ptr.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "content/public/common/url_constants.h"
-#include "webkit/blob/view_blob_internals_job.h"
+#include "webkit/browser/blob/view_blob_internals_job.h"
 
 namespace content {
 
 // static.
 bool ViewBlobInternalsJobFactory::IsSupportedURL(const GURL& url) {
   return url.SchemeIs(chrome::kChromeUIScheme) &&
-         url.host() == chrome::kChromeUIBlobInternalsHost;
+         url.host() == kChromeUIBlobInternalsHost;
 }
 
 // static.

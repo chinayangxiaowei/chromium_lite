@@ -7,12 +7,12 @@
 
 #include "ash/ash_export.h"
 #include "ash/shell_observer.h"
+#include "ash/wm/lock_state_controller.h"
 #include "ash/wm/session_state_animator.h"
-#include "ash/wm/session_state_controller.h"
 #include "base/basictypes.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/time.h"
-#include "base/timer.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "ui/aura/root_window_observer.h"
 
 namespace gfx {
@@ -32,7 +32,8 @@ class PowerButtonControllerTest;
 
 // Displays onscreen animations and locks or suspends the system in response to
 // the power button being pressed or released.
-class ASH_EXPORT SessionStateControllerImpl : public SessionStateController {
+class ASH_EXPORT SessionStateControllerImpl :
+    public LockStateController {
  public:
 
   // Helper class used by tests to access internal state.
@@ -96,7 +97,7 @@ class ASH_EXPORT SessionStateControllerImpl : public SessionStateController {
   virtual void OnAppTerminating() OVERRIDE;
   virtual void OnLockStateChanged(bool locked) OVERRIDE;
 
-  // SessionStateController overrides:
+  // SessionLockStateController overrides:
   virtual void StartLockAnimation(bool shutdown_after_lock) OVERRIDE;
 
   virtual void StartShutdownAnimation() OVERRIDE;

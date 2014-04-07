@@ -8,7 +8,7 @@
 #include <string>
 
 #include "base/basictypes.h"
-#include "googleurl/src/gurl.h"
+#include "url/gurl.h"
 
 // Keys used in JSON representation of extensions.
 namespace extension_manifest_keys {
@@ -40,8 +40,11 @@ namespace extension_manifest_keys {
   extern const char kEventName[];
   extern const char kExcludeGlobs[];
   extern const char kExcludeMatches[];
+  extern const char kExport[];
+  extern const char kExternallyConnectable[];
   extern const char kFileAccessList[];
   extern const char kFileHandlers[];
+  extern const char kFileHandlerExtensions[];
   extern const char kFileHandlerTitle[];
   extern const char kFileHandlerTypes[];
   extern const char kFileFilters[];
@@ -50,6 +53,7 @@ namespace extension_manifest_keys {
   extern const char kHomepageURL[];
   extern const char kIcons[];
   extern const char kId[];
+  extern const char kImport[];
   extern const char kIncognito[];
   extern const char kIncludeGlobs[];
   extern const char kInputComponents[];
@@ -69,10 +73,6 @@ namespace extension_manifest_keys {
   extern const char kLaunchContainer[];
   extern const char kLaunchHeight[];
   extern const char kLaunchLocalPath[];
-  extern const char kLaunchMaxHeight[];
-  extern const char kLaunchMaxWidth[];
-  extern const char kLaunchMinHeight[];
-  extern const char kLaunchMinWidth[];
   extern const char kLaunchWebURL[];
   extern const char kLaunchWidth[];
   extern const char kLayouts[];
@@ -81,11 +81,13 @@ namespace extension_manifest_keys {
   extern const char kMIMETypes[];
   extern const char kMimeTypesHandler[];
   extern const char kMinimumChromeVersion[];
+  extern const char kMinimumVersion[];
   extern const char kNaClModules[];
   extern const char kNaClModulesMIMEType[];
   extern const char kNaClModulesPath[];
   extern const char kName[];
   extern const char kOAuth2[];
+  extern const char kOAuth2AutoApprove[];
   extern const char kOAuth2ClientId[];
   extern const char kOAuth2Scopes[];
   extern const char kOfflineEnabled[];
@@ -102,7 +104,6 @@ namespace extension_manifest_keys {
   extern const char kPageActionPopup[];
   extern const char kPageActionPopupPath[];
   extern const char kPageActions[];
-  extern const char kPageLauncher[];
   extern const char kPermissions[];
   extern const char kPlatformAppBackground[];
   extern const char kPlatformAppBackgroundPage[];
@@ -112,6 +113,7 @@ namespace extension_manifest_keys {
   extern const char kPluginsPath[];
   extern const char kPluginsPublic[];
   extern const char kPublicKey[];
+  extern const char kResources[];
   extern const char kRequirements[];
   extern const char kRunAt[];
   extern const char kSandboxedPages[];
@@ -120,6 +122,12 @@ namespace extension_manifest_keys {
   extern const char kShiftKey[];
   extern const char kShortcutKey[];
   extern const char kSignature[];
+  extern const char kSpellcheck[];
+  extern const char kSpellcheckDictionaryFormat[];
+  extern const char kSpellcheckDictionaryLanguage[];
+  extern const char kSpellcheckDictionaryLocale[];
+  extern const char kSpellcheckDictionaryPath[];
+  extern const char kStorageManagedSchema[];
   extern const char kSuggestedKey[];
   extern const char kSystemIndicator[];
   extern const char kTheme[];
@@ -161,6 +169,25 @@ namespace extension_manifest_values {
   extern const char kKeybindingPlatformLinux[];
   extern const char kKeybindingPlatformMac[];
   extern const char kKeybindingPlatformWin[];
+  extern const char kKeyAlt[];
+  extern const char kKeyShift[];
+  extern const char kKeyCommand[];
+  extern const char kKeyCtrl[];
+  extern const char kKeyComma[];
+  extern const char kKeyDel[];
+  extern const char kKeyDown[];
+  extern const char kKeyHome[];
+  extern const char kKeyEnd[];
+  extern const char kKeyIns[];
+  extern const char kKeyLeft[];
+  extern const char kKeyMacCtrl[];
+  extern const char kKeyPgDwn[];
+  extern const char kKeyPgUp[];
+  extern const char kKeyPeriod[];
+  extern const char kKeyRight[];
+  extern const char kKeySeparator[];
+  extern const char kKeyTab[];
+  extern const char kKeyUp[];
   extern const char kLaunchContainerPanel[];
   extern const char kLaunchContainerTab[];
   extern const char kLaunchContainerWindow[];
@@ -178,11 +205,14 @@ namespace extension_manifest_errors {
   extern const char kAppsNotEnabled[];
   extern const char kBackgroundPermissionNeeded[];
   extern const char kBackgroundRequiredForPlatformApps[];
+  extern const char kCannotAccessChromeUrl[];
+  extern const char kCannotAccessExtensionUrl[];
   extern const char kCannotAccessPage[];
   extern const char kCannotChangeExtensionID[];
   extern const char kCannotClaimAllHostsInExtent[];
   extern const char kCannotClaimAllURLsInExtent[];
   extern const char kCannotScriptGallery[];
+  extern const char kCannotScriptSigninPage[];
   extern const char kCannotUninstallManagedExtension[];
   extern const char kChromeVersionTooLow[];
   extern const char kDevToolsExperimental[];
@@ -217,6 +247,10 @@ namespace extension_manifest_errors {
   extern const char kInvalidDisplayInNewTabPage[];
   extern const char kInvalidExcludeMatch[];
   extern const char kInvalidExcludeMatches[];
+  extern const char kInvalidExport[];
+  extern const char kInvalidExportPermissions[];
+  extern const char kInvalidExportResources[];
+  extern const char kInvalidExportResourcesString[];
   extern const char kInvalidFileAccessList[];
   extern const char kInvalidFileAccessValue[];
   extern const char kInvalidFileBrowserHandler[];
@@ -225,6 +259,9 @@ namespace extension_manifest_errors {
   extern const char kInvalidFileFiltersList[];
   extern const char kInvalidFileFilterValue[];
   extern const char kInvalidFileHandlers[];
+  extern const char kInvalidFileHandlerExtension[];
+  extern const char kInvalidFileHandlerExtensionElement[];
+  extern const char kInvalidFileHandlerNoTypeOrExtension[];
   extern const char kInvalidFileHandlerTitle[];
   extern const char kInvalidFileHandlerType[];
   extern const char kInvalidFileHandlerTypeElement[];
@@ -233,12 +270,14 @@ namespace extension_manifest_errors {
   extern const char kInvalidHomepageURL[];
   extern const char kInvalidIconPath[];
   extern const char kInvalidIcons[];
+  extern const char kInvalidImport[];
+  extern const char kInvalidImportAndExport[];
+  extern const char kInvalidImportId[];
+  extern const char kInvalidImportVersion[];
   extern const char kInvalidIncognitoBehavior[];
-  extern const char kInvalidIncognitoModeForPlatformApp[];
   extern const char kInvalidInputComponents[];
   extern const char kInvalidInputComponentDescription[];
   extern const char kInvalidInputComponentLayoutName[];
-  extern const char kInvalidInputComponentLayouts[];
   extern const char kInvalidInputComponentName[];
   extern const char kInvalidInputComponentShortcutKey[];
   extern const char kInvalidInputComponentShortcutKeycode[];
@@ -283,6 +322,7 @@ namespace extension_manifest_errors {
   extern const char kInvalidNaClModulesMIMEType[];
   extern const char kInvalidNaClModulesPath[];
   extern const char kInvalidName[];
+  extern const char kInvalidOAuth2AutoApprove[];
   extern const char kInvalidOAuth2ClientId[];
   extern const char kInvalidOAuth2Scopes[];
   extern const char kInvalidOfflineEnabled[];
@@ -302,7 +342,6 @@ namespace extension_manifest_errors {
   extern const char kInvalidPageActionsList[];
   extern const char kInvalidPageActionsListSize[];
   extern const char kInvalidPageActionTypeValue[];
-  extern const char kInvalidPageLauncher[];
   extern const char kInvalidPermission[];
   extern const char kInvalidPermissions[];
   extern const char kInvalidPermissionScheme[];
@@ -317,6 +356,11 @@ namespace extension_manifest_errors {
   extern const char kInvalidSandboxedPagesCSP[];
   extern const char kInvalidScriptBadge[];
   extern const char kInvalidSignature[];
+  extern const char kInvalidSpellcheck[];
+  extern const char kInvalidSpellcheckDictionaryFormat[];
+  extern const char kInvalidSpellcheckDictionaryLanguage[];
+  extern const char kInvalidSpellcheckDictionaryLocale[];
+  extern const char kInvalidSpellcheckDictionaryPath[];
   extern const char kInvalidSystemIndicator[];
   extern const char kInvalidTheme[];
   extern const char kInvalidThemeColors[];

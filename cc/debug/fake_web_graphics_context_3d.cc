@@ -4,6 +4,7 @@
 
 #include "cc/debug/fake_web_graphics_context_3d.h"
 
+#include "base/logging.h"
 #include "third_party/khronos/GLES2/gl2.h"
 
 using WebKit::WGC3Dboolean;
@@ -36,15 +37,6 @@ void FakeWebGraphicsContext3D::reshape(int width, int height) {
 }
 
 bool FakeWebGraphicsContext3D::isGLES2Compliant() {
-  return false;
-}
-
-bool FakeWebGraphicsContext3D::readBackFramebuffer(
-    unsigned char* pixels,
-    size_t buffer_size,
-    WebGLId framebuffer,
-    int width,
-    int height) {
   return false;
 }
 
@@ -124,6 +116,8 @@ void FakeWebGraphicsContext3D::getIntegerv(
     WebKit::WGC3Dint* value) {
   if (pname == GL_MAX_TEXTURE_SIZE)
     *value = 1024;
+  else if (pname == GL_ACTIVE_TEXTURE)
+    *value = GL_TEXTURE0;
 }
 
 void FakeWebGraphicsContext3D::getProgramiv(
@@ -150,6 +144,49 @@ void FakeWebGraphicsContext3D::getShaderiv(
 WebKit::WebString FakeWebGraphicsContext3D::getShaderInfoLog(
     WebGLId shader) {
   return WebKit::WebString();
+}
+
+void FakeWebGraphicsContext3D::getShaderPrecisionFormat(
+    WebKit::WGC3Denum shadertype,
+    WebKit::WGC3Denum precisiontype,
+    WebKit::WGC3Dint* range,
+    WebKit::WGC3Dint* precision) {
+  // Return the minimum precision requirements of the GLES specificatin.
+  switch (precisiontype) {
+    case GL_LOW_INT:
+      range[0] = 8;
+      range[1] = 8;
+      *precision = 0;
+      break;
+    case GL_MEDIUM_INT:
+      range[0] = 10;
+      range[1] = 10;
+      *precision = 0;
+      break;
+    case GL_HIGH_INT:
+      range[0] = 16;
+      range[1] = 16;
+      *precision = 0;
+      break;
+    case GL_LOW_FLOAT:
+      range[0] = 8;
+      range[1] = 8;
+      *precision = 8;
+      break;
+    case GL_MEDIUM_FLOAT:
+      range[0] = 14;
+      range[1] = 14;
+      *precision = 10;
+      break;
+    case GL_HIGH_FLOAT:
+      range[0] = 62;
+      range[1] = 62;
+      *precision = 16;
+      break;
+    default:
+      NOTREACHED();
+      break;
+  }
 }
 
 WebKit::WebString FakeWebGraphicsContext3D::getShaderSource(
@@ -294,6 +331,17 @@ void FakeWebGraphicsContext3D::setContextLostCallback(
 
 void FakeWebGraphicsContext3D::loseContextCHROMIUM(WGC3Denum current,
                                                    WGC3Denum other) {
+}
+
+WebKit::WGC3Duint FakeWebGraphicsContext3D::createImageCHROMIUM(
+     WebKit::WGC3Dsizei width, WebKit::WGC3Dsizei height,
+     WebKit::WGC3Denum internalformat) {
+  return 0;
+}
+
+void* FakeWebGraphicsContext3D::mapImageCHROMIUM(WebKit::WGC3Duint image_id,
+                                                 WebKit::WGC3Denum access) {
+  return 0;
 }
 
 }  // namespace cc

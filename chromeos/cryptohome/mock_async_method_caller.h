@@ -20,6 +20,7 @@ class MockAsyncMethodCaller : public AsyncMethodCaller {
   static const char kFakeAttestationCertRequest[];
   static const char kFakeAttestationCert[];
   static const char kFakeSanitizedUsername[];
+  static const char kFakeChallengeResponse[];
 
   MockAsyncMethodCaller();
   virtual ~MockAsyncMethodCaller();
@@ -37,7 +38,14 @@ class MockAsyncMethodCaller : public AsyncMethodCaller {
                                 const std::string& passhash,
                                 int flags,
                                 Callback callback));
+  MOCK_METHOD4(AsyncAddKey, void(const std::string& user_email,
+                                 const std::string& passhash,
+                                 const std::string& new_key,
+                                 Callback callback));
   MOCK_METHOD1(AsyncMountGuest, void(Callback callback));
+  MOCK_METHOD3(AsyncMountPublic, void(const std::string& public_mount_id,
+                                      int flags,
+                                      Callback callback));
   MOCK_METHOD2(AsyncRemove, void(const std::string& user_email,
                                  Callback callback));
   MOCK_METHOD1(AsyncTpmAttestationCreateEnrollRequest,
@@ -45,9 +53,30 @@ class MockAsyncMethodCaller : public AsyncMethodCaller {
   MOCK_METHOD2(AsyncTpmAttestationEnroll,
                void(const std::string& pca_response, const Callback& callback));
   MOCK_METHOD2(AsyncTpmAttestationCreateCertRequest,
-               void(bool is_cert_for_owner, const DataCallback& callback));
-  MOCK_METHOD2(AsyncTpmAttestationFinishCertRequest,
+               void(int options,
+                    const DataCallback& callback));
+  MOCK_METHOD4(AsyncTpmAttestationFinishCertRequest,
                void(const std::string& pca_response,
+                    chromeos::attestation::AttestationKeyType key_type,
+                    const std::string& key_name,
+                    const DataCallback& callback));
+  MOCK_METHOD3(TpmAttestationRegisterKey,
+               void(chromeos::attestation::AttestationKeyType key_type,
+                    const std::string& key_name,
+                    const Callback& callback));
+  MOCK_METHOD7(
+      TpmAttestationSignEnterpriseChallenge,
+      void(chromeos::attestation::AttestationKeyType key_type,
+           const std::string& key_name,
+           const std::string& domain,
+           const std::string& device_id,
+           chromeos::attestation::AttestationChallengeOptions options,
+           const std::string& challenge,
+           const DataCallback& callback));
+  MOCK_METHOD4(TpmAttestationSignSimpleChallenge,
+               void(chromeos::attestation::AttestationKeyType key_type,
+                    const std::string& key_name,
+                    const std::string& challenge,
                     const DataCallback& callback));
   MOCK_METHOD2(AsyncGetSanitizedUsername,
                void(const std::string& user,
@@ -63,6 +92,7 @@ class MockAsyncMethodCaller : public AsyncMethodCaller {
   void FakeCreateCertRequest(const DataCallback& callback);
   void FakeFinishCertRequest(const DataCallback& callback);
   void FakeGetSanitizedUsername(const DataCallback& callback);
+  void FakeEnterpriseChallenge(const DataCallback& callback);
 
   DISALLOW_COPY_AND_ASSIGN(MockAsyncMethodCaller);
 };

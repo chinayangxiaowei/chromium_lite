@@ -3,6 +3,9 @@
 // found in the LICENSE file.
 
 #include "cc/animation/transform_operations.h"
+
+#include <algorithm>
+
 #include "ui/gfx/transform_util.h"
 #include "ui/gfx/vector3d_f.h"
 
@@ -154,20 +157,10 @@ bool TransformOperations::BlendInternal(const TransformOperations& from,
           from_identity ? 0 : &from.operations_[i],
           to_identity ? 0 : &operations_[i],
           progress,
-          blended))
+          &blended))
           return false;
       result->PreconcatTransform(blended);
     }
-    return true;
-  }
-
-  if (progress <= 0.0) {
-    *result = from.Apply();
-    return true;
-  }
-
-  if (progress >= 1.0) {
-    *result = Apply();
     return true;
   }
 

@@ -9,8 +9,9 @@
 #include "base/guid.h"
 #include "base/location.h"
 #include "base/logging.h"
-#include "base/message_loop_proxy.h"
+#include "base/message_loop/message_loop_proxy.h"
 #include "base/metrics/histogram.h"
+#include "base/metrics/sparse_histogram.h"
 #include "base/prefs/pref_registry_simple.h"
 #include "base/prefs/pref_service.h"
 #include "base/strings/string_number_conversions.h"
@@ -18,13 +19,20 @@
 #include "chrome/browser/chromeos/policy/device_cloud_policy_manager_chromeos.h"
 #include "chrome/browser/policy/browser_policy_connector.h"
 #include "chrome/browser/policy/cloud/device_management_service.h"
-#include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
+#include "chromeos/chromeos_switches.h"
 #include "crypto/sha2.h"
 
 namespace em = enterprise_management;
 
 namespace {
+
+// UMA histogram names.
+const char kUMAProtocolTime[] = "Enterprise.AutoEnrollmentProtocolTime";
+const char kUMAExtraTime[] = "Enterprise.AutoEnrollmentExtraTime";
+const char kUMARequestStatus[] = "Enterprise.AutoEnrollmentRequestStatus";
+const char kUMANetworkErrorCode[] =
+    "Enterprise.AutoEnrollmentRequestNetworkErrorCode";
 
 // The modulus value is sent in an int64 field in the protobuf, whose maximum
 // value is 2^63-1. So 2^64 and 2^63 can't be represented as moduli and the
@@ -86,11 +94,15 @@ AutoEnrollmentClient::AutoEnrollmentClient(const base::Closure& callback,
       device_management_service_(service),
       local_state_(local_state) {
   DCHECK_LE(power_initial_, power_limit_);
+  DCHECK(!completion_callback_.is_null());
   if (!serial_number.empty())
     serial_number_hash_ = crypto::SHA256HashString(serial_number);
+  net::NetworkChangeNotifier::AddNetworkChangeObserver(this);
 }
 
-AutoEnrollmentClient::~AutoEnrollmentClient() {}
+AutoEnrollmentClient::~AutoEnrollmentClient() {
+  net::NetworkChangeNotifier::RemoveNetworkChangeObserver(this);
+}
 
 // static
 void AutoEnrollmentClient::RegisterPrefs(PrefRegistrySimple* registry) {
@@ -101,9 +113,10 @@ void AutoEnrollmentClient::RegisterPrefs(PrefRegistrySimple* registry) {
 // static
 bool AutoEnrollmentClient::IsDisabled() {
   CommandLine* command_line = CommandLine::ForCurrentProcess();
-  return
-      !command_line->HasSwitch(switches::kEnterpriseEnrollmentInitialModulus) &&
-      !command_line->HasSwitch(switches::kEnterpriseEnrollmentModulusLimit);
+  return !command_line->HasSwitch(
+             chromeos::switches::kEnterpriseEnrollmentInitialModulus) &&
+         !command_line->HasSwitch(
+             chromeos::switches::kEnterpriseEnrollmentModulusLimit);
 }
 
 // static
@@ -122,9 +135,9 @@ AutoEnrollmentClient* AutoEnrollmentClient::Create(
   }
 
   int power_initial = GetSanitizedArg(
-      switches::kEnterpriseEnrollmentInitialModulus);
+      chromeos::switches::kEnterpriseEnrollmentInitialModulus);
   int power_limit = GetSanitizedArg(
-      switches::kEnterpriseEnrollmentModulusLimit);
+      chromeos::switches::kEnterpriseEnrollmentModulusLimit);
   if (power_initial > power_limit) {
     LOG(ERROR) << "Initial auto-enrollment modulus is larger than the limit, "
                << "clamping to the limit.";
@@ -156,7 +169,7 @@ void AutoEnrollmentClient::Start() {
   if (GetCachedDecision()) {
     VLOG(1) << "AutoEnrollmentClient: using cached decision: "
             << should_auto_enroll_;
-  } else if (device_management_service_.get()) {
+  } else if (device_management_service_) {
     if (serial_number_hash_.empty()) {
       LOG(ERROR) << "Failed to get the hash of the serial number, "
                  << "will not attempt to auto-enroll.";
@@ -185,6 +198,25 @@ void AutoEnrollmentClient::CancelAndDeleteSoon() {
   }
 }
 
+void AutoEnrollmentClient::OnNetworkChanged(
+    net::NetworkChangeNotifier::ConnectionType type) {
+  if (GetCachedDecision()) {
+    // A previous request already obtained a definitive response from the
+    // server, so there is no point in retrying; it will get the same decision.
+    return;
+  }
+
+  if (type != net::NetworkChangeNotifier::CONNECTION_NONE &&
+      !completion_callback_.is_null() &&
+      !request_job_ &&
+      device_management_service_ &&
+      !serial_number_hash_.empty()) {
+    VLOG(1) << "Retrying auto enrollment check after network changed";
+    time_start_ = base::Time::Now();
+    SendRequest(power_initial_);
+  }
+}
+
 bool AutoEnrollmentClient::GetCachedDecision() {
   const PrefService::Preference* should_enroll_pref =
       local_state_->FindPreference(prefs::kShouldAutoEnroll);
@@ -210,7 +242,7 @@ bool AutoEnrollmentClient::GetCachedDecision() {
 void AutoEnrollmentClient::SendRequest(int power) {
   if (power < 0 || power > power_limit_ || serial_number_hash_.empty()) {
     NOTREACHED();
-    OnProtocolDone();
+    OnRequestDone();
     return;
   }
 
@@ -239,10 +271,15 @@ void AutoEnrollmentClient::SendRequest(int power) {
 
 void AutoEnrollmentClient::OnRequestCompletion(
     DeviceManagementStatus status,
+    int net_error,
     const em::DeviceManagementResponse& response) {
   if (status != DM_STATUS_SUCCESS || !response.has_auto_enrollment_response()) {
     LOG(ERROR) << "Auto enrollment error: " << status;
-    OnProtocolDone();
+    UMA_HISTOGRAM_SPARSE_SLOWLY(kUMARequestStatus, status);
+    if (status == DM_STATUS_REQUEST_FAILED)
+      UMA_HISTOGRAM_SPARSE_SLOWLY(kUMANetworkErrorCode, -net_error);
+    // The client will retry if a network change is detected.
+    OnRequestDone();
     return;
   }
 
@@ -272,18 +309,26 @@ void AutoEnrollmentClient::OnRequestCompletion(
                      << power << ") that isn't larger than the first used ("
                      << power_initial_ << "). Retrying anyway.";
       }
+      // Remember this value, so that eventual retries start with the correct
+      // modulus.
+      power_initial_ = power;
       SendRequest(power);
-      // Don't invoke the callback yet.
       return;
     }
   } else {
     // Server should have sent down a list of hashes to try.
     should_auto_enroll_ = IsSerialInProtobuf(enrollment_response.hash());
+    // Cache the current decision in local_state, so that it is reused in case
+    // the device reboots before enrolling.
+    local_state_->SetBoolean(prefs::kShouldAutoEnroll, should_auto_enroll_);
+    local_state_->SetInteger(prefs::kAutoEnrollmentPowerLimit, power_limit_);
+    local_state_->CommitPendingWrite();
     LOG(INFO) << "Auto enrollment complete, should_auto_enroll = "
               << should_auto_enroll_;
   }
 
   // Auto-enrollment done.
+  UMA_HISTOGRAM_SPARSE_SLOWLY(kUMARequestStatus, DM_STATUS_SUCCESS);
   OnProtocolDone();
 }
 
@@ -297,8 +342,6 @@ bool AutoEnrollmentClient::IsSerialInProtobuf(
 }
 
 void AutoEnrollmentClient::OnProtocolDone() {
-  static const char* kProtocolTime = "Enterprise.AutoEnrollmentProtocolTime";
-  static const char* kExtraTime = "Enterprise.AutoEnrollmentExtraTime";
   // The mininum time can't be 0, must be at least 1.
   static const base::TimeDelta kMin = base::TimeDelta::FromMilliseconds(1);
   static const base::TimeDelta kMax = base::TimeDelta::FromMinutes(5);
@@ -309,29 +352,30 @@ void AutoEnrollmentClient::OnProtocolDone() {
   base::Time now = base::Time::Now();
   if (!time_start_.is_null()) {
     base::TimeDelta delta = now - time_start_;
-    UMA_HISTOGRAM_CUSTOM_TIMES(kProtocolTime, delta, kMin, kMax, kBuckets);
-    time_start_ = base::Time();
-
-    // The decision is cached only if the protocol was actually started, which
-    // is the case only if |time_start_| was not null.
-    local_state_->SetBoolean(prefs::kShouldAutoEnroll, should_auto_enroll_);
-    local_state_->SetInteger(prefs::kAutoEnrollmentPowerLimit, power_limit_);
-    local_state_->CommitPendingWrite();
+    UMA_HISTOGRAM_CUSTOM_TIMES(kUMAProtocolTime, delta, kMin, kMax, kBuckets);
   }
   base::TimeDelta delta = kZero;
-  if (!time_extra_start_.is_null()) {
-    // CancelAndDeleteSoon() was invoked before.
+  if (!time_extra_start_.is_null())
     delta = now - time_extra_start_;
-    base::MessageLoopProxy::current()->DeleteSoon(FROM_HERE, this);
-    time_extra_start_ = base::Time();
-  }
   // This samples |kZero| when there was no need for extra time, so that we can
   // measure the ratio of users that succeeded without needing a delay to the
   // total users going through OOBE.
-  UMA_HISTOGRAM_CUSTOM_TIMES(kExtraTime, delta, kMin, kMax, kBuckets);
+  UMA_HISTOGRAM_CUSTOM_TIMES(kUMAExtraTime, delta, kMin, kMax, kBuckets);
 
   if (!completion_callback_.is_null())
     completion_callback_.Run();
+
+  OnRequestDone();
+}
+
+void AutoEnrollmentClient::OnRequestDone() {
+  request_job_.reset();
+  time_start_ = base::Time();
+
+  if (completion_callback_.is_null()) {
+    // CancelAndDeleteSoon() was invoked before.
+    base::MessageLoopProxy::current()->DeleteSoon(FROM_HERE, this);
+  }
 }
 
 }  // namespace policy

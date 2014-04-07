@@ -4,31 +4,40 @@
 
 #include "chrome/browser/extensions/platform_app_browsertest_util.h"
 
+#include "apps/app_window_contents.h"
+#include "apps/native_app_window.h"
+#include "apps/shell_window_registry.h"
 #include "base/command_line.h"
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "chrome/browser/extensions/api/tabs/tabs_api.h"
 #include "chrome/browser/extensions/extension_function_test_utils.h"
-#include "chrome/browser/extensions/shell_window_registry.h"
+#include "chrome/browser/ui/apps/chrome_shell_window_delegate.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/extensions/application_launch.h"
-#include "chrome/browser/ui/extensions/native_app_window.h"
 #include "chrome/common/chrome_switches.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/test/test_utils.h"
+#include "extensions/common/switches.h"
 
+using apps::ShellWindow;
+using apps::ShellWindowRegistry;
 using content::WebContents;
 
 namespace utils = extension_function_test_utils;
 
 namespace extensions {
 
+PlatformAppBrowserTest::PlatformAppBrowserTest() {
+  ChromeShellWindowDelegate::DisableExternalOpenForTesting();
+}
+
 void PlatformAppBrowserTest::SetUpCommandLine(CommandLine* command_line) {
   // Skips ExtensionApiTest::SetUpCommandLine.
   ExtensionBrowserTest::SetUpCommandLine(command_line);
 
   // Make event pages get suspended quicker.
-  command_line->AppendSwitchASCII(switches::kEventPageIdleTime, "1");
-  command_line->AppendSwitchASCII(switches::kEventPageSuspendingTime, "1");
+  command_line->AppendSwitchASCII(::switches::kEventPageIdleTime, "1");
+  command_line->AppendSwitchASCII(::switches::kEventPageSuspendingTime, "1");
 }
 
 const Extension* PlatformAppBrowserTest::LoadAndLaunchPlatformApp(
@@ -82,12 +91,12 @@ WebContents* PlatformAppBrowserTest::GetFirstShellWindowWebContents() {
 ShellWindow* PlatformAppBrowserTest::GetFirstShellWindow() {
   ShellWindowRegistry* app_registry =
       ShellWindowRegistry::Get(browser()->profile());
-  ShellWindowRegistry::const_iterator iter;
-  ShellWindowRegistry::ShellWindowSet shell_windows =
+  const ShellWindowRegistry::ShellWindowList& shell_windows =
       app_registry->shell_windows();
-  for (iter = shell_windows.begin(); iter != shell_windows.end(); ++iter) {
+
+  ShellWindowRegistry::const_iterator iter = shell_windows.begin();
+  if (iter != shell_windows.end())
     return *iter;
-  }
 
   return NULL;
 }
@@ -140,15 +149,18 @@ void PlatformAppBrowserTest::SetCommandLineArg(const std::string& test_file) {
 
 ShellWindow* PlatformAppBrowserTest::CreateShellWindow(
     const Extension* extension) {
-  ShellWindow::CreateParams params;
-  return ShellWindow::Create(
-      browser()->profile(), extension, GURL(""), params);
+  return CreateShellWindowFromParams(extension, ShellWindow::CreateParams());
 }
 
 ShellWindow* PlatformAppBrowserTest::CreateShellWindowFromParams(
     const Extension* extension, const ShellWindow::CreateParams& params) {
-  return ShellWindow::Create(
-      browser()->profile(), extension, GURL(""), params);
+  ShellWindow* window = new ShellWindow(browser()->profile(),
+                                        new ChromeShellWindowDelegate(),
+                                        extension);
+  window->Init(GURL(std::string()),
+               new apps::AppWindowContents(window),
+               params);
+  return window;
 }
 
 void PlatformAppBrowserTest::CloseShellWindow(ShellWindow* window) {
@@ -157,6 +169,20 @@ void PlatformAppBrowserTest::CloseShellWindow(ShellWindow* window) {
       content::NotificationService::AllSources());
   window->GetBaseWindow()->Close();
   destroyed_observer.Wait();
+}
+
+void PlatformAppBrowserTest::CallAdjustBoundsToBeVisibleOnScreenForShellWindow(
+    ShellWindow* window,
+    const gfx::Rect& cached_bounds,
+    const gfx::Rect& cached_screen_bounds,
+    const gfx::Rect& current_screen_bounds,
+    const gfx::Size& minimum_size,
+    gfx::Rect* bounds) {
+  window->AdjustBoundsToBeVisibleOnScreen(cached_bounds,
+                                          cached_screen_bounds,
+                                          current_screen_bounds,
+                                          minimum_size,
+                                          bounds);
 }
 
 void ExperimentalPlatformAppBrowserTest::SetUpCommandLine(

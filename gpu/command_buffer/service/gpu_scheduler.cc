@@ -8,8 +8,8 @@
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/debug/trace_event.h"
-#include "base/message_loop.h"
-#include "base/time.h"
+#include "base/message_loop/message_loop.h"
+#include "base/time/time.h"
 #include "ui/gl/gl_bindings.h"
 #include "ui/gl/gl_fence.h"
 #include "ui/gl/gl_switches.h"
@@ -24,27 +24,27 @@ namespace gpu {
 
 namespace {
 const int64 kRescheduleTimeOutDelay = 1000;
+const int64 kUnscheduleFenceTimeOutDelay = 10000;
 }
 
-GpuScheduler::GpuScheduler(
-    CommandBuffer* command_buffer,
-    AsyncAPIInterface* handler,
-    gles2::GLES2Decoder* decoder)
+GpuScheduler::GpuScheduler(CommandBuffer* command_buffer,
+                           AsyncAPIInterface* handler,
+                           gles2::GLES2Decoder* decoder)
     : command_buffer_(command_buffer),
       handler_(handler),
       decoder_(decoder),
-      parser_(NULL),
       unscheduled_count_(0),
       rescheduled_count_(0),
-      reschedule_task_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)),
-      was_preempted_(false) {
-}
+      reschedule_task_factory_(this),
+      was_preempted_(false) {}
 
 GpuScheduler::~GpuScheduler() {
 }
 
 void GpuScheduler::PutChanged() {
-  TRACE_EVENT1("gpu", "GpuScheduler:PutChanged", "this", this);
+  TRACE_EVENT1(
+     "gpu", "GpuScheduler:PutChanged",
+     "decoder", decoder_ ? decoder_->GetLogger()->GetLogPrefix() : "None");
 
   CommandBuffer::State state = command_buffer_->GetState();
 
@@ -149,7 +149,7 @@ void GpuScheduler::SetScheduled(bool scheduled) {
         // When the scheduler transitions from scheduled to unscheduled, post a
         // delayed task that it will force it back into a scheduled state after
         // a timeout. This should only be necessary on pre-Vista.
-        MessageLoop::current()->PostDelayedTask(
+        base::MessageLoop::current()->PostDelayedTask(
             FROM_HERE,
             base::Bind(&GpuScheduler::RescheduleTimeOut,
                        reschedule_task_factory_.GetWeakPtr()),
@@ -233,8 +233,14 @@ bool GpuScheduler::PollUnscheduleFences() {
     return true;
 
   if (unschedule_fences_.front()->fence.get()) {
+    base::Time now = base::Time::Now();
+    base::TimeDelta timeout =
+        base::TimeDelta::FromMilliseconds(kUnscheduleFenceTimeOutDelay);
+
     while (!unschedule_fences_.empty()) {
-      if (unschedule_fences_.front()->fence->HasCompleted()) {
+      const UnscheduleFence& fence = *unschedule_fences_.front();
+      if (fence.fence->HasCompleted() ||
+          now - fence.issue_time > timeout) {
         unschedule_fences_.front()->task.Run();
         unschedule_fences_.pop();
         SetScheduled(true);
@@ -291,8 +297,11 @@ void GpuScheduler::RescheduleTimeOut() {
   rescheduled_count_ = new_count;
 }
 
-GpuScheduler::UnscheduleFence::UnscheduleFence(
-    gfx::GLFence* fence_, base::Closure task_): fence(fence_), task(task_) {
+GpuScheduler::UnscheduleFence::UnscheduleFence(gfx::GLFence* fence_,
+                                               base::Closure task_)
+  : fence(fence_),
+    issue_time(base::Time::Now()),
+    task(task_) {
 }
 
 GpuScheduler::UnscheduleFence::~UnscheduleFence() {

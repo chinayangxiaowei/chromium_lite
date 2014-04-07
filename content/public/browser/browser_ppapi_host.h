@@ -6,11 +6,11 @@
 #define CONTENT_PUBLIC_BROWSER_BROWSER_PPAPI_HOST_H_
 
 #include "base/callback_forward.h"
-#include "base/process.h"
+#include "base/process/process.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/render_view_host.h"
-#include "googleurl/src/gurl.h"
 #include "ppapi/c/pp_instance.h"
+#include "url/gurl.h"
 
 namespace IPC {
 class ChannelProxy;
@@ -47,7 +47,8 @@ class CONTENT_EXPORT BrowserPpapiHost {
       IPC::ChannelProxy* channel,
       net::HostResolver* host_resolver,
       int render_process_id,
-      int render_view_id);
+      int render_view_id,
+      const base::FilePath& profile_directory);
 
   virtual ~BrowserPpapiHost() {}
 
@@ -75,6 +76,9 @@ class CONTENT_EXPORT BrowserPpapiHost {
 
   // Returns the name of the plugin.
   virtual const std::string& GetPluginName() = 0;
+
+  // Returns the path of the plugin.
+  virtual const base::FilePath& GetPluginPath() = 0;
 
   // Returns the user's profile data directory.
   virtual const base::FilePath& GetProfileDataDirectory() = 0;

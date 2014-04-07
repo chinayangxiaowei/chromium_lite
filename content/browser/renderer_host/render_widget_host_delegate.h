@@ -5,7 +5,9 @@
 #ifndef CONTENT_BROWSER_RENDER_WIDGET_HOST_DELEGATE_H_
 #define CONTENT_BROWSER_RENDER_WIDGET_HOST_DELEGATE_H_
 
+#include "build/build_config.h"
 #include "content/common/content_export.h"
+#include "ui/gfx/native_widget_types.h"
 
 namespace WebKit {
 class WebMouseWheelEvent;
@@ -43,6 +45,14 @@ class CONTENT_EXPORT RenderWidgetHostDelegate {
   // event before sending it to the renderer.
   // Returns true if the |event| was handled.
   virtual bool PreHandleWheelEvent(const WebKit::WebMouseWheelEvent& event);
+
+  // Notifies that screen rects were sent to renderer process.
+  virtual void DidSendScreenRects(RenderWidgetHostImpl* rwh) {}
+
+#if defined(OS_WIN) && defined(USE_AURA)
+  // Returns the widget's parent's NativeViewAccessible.
+  virtual gfx::NativeViewAccessible GetParentNativeViewAccessible();
+#endif
 
  protected:
   virtual ~RenderWidgetHostDelegate() {}

@@ -94,9 +94,10 @@ class ShortcutsProvider
       const string16& keyword,
       history::ShortcutsBackend* backend);
 
-  static int CalculateScore(
+  int CalculateScore(
       const string16& terms,
-      const history::ShortcutsBackend::Shortcut& shortcut);
+      const history::ShortcutsBackend::Shortcut& shortcut,
+      int max_relevance);
 
   std::string languages_;
   bool initialized_;

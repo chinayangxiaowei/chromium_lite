@@ -4,11 +4,11 @@
 
 #include "chrome/test/chromedriver/element_util.h"
 
-#include "base/string_util.h"
-#include "base/stringprintf.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/threading/platform_thread.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "chrome/test/chromedriver/basic_types.h"
 #include "chrome/test/chromedriver/chrome/js.h"
@@ -32,13 +32,6 @@ bool ParseFromValue(base::Value* value, WebPoint* point) {
   point->x = static_cast<int>(x);
   point->y = static_cast<int>(y);
   return true;
-}
-
-base::Value* CreateValueFrom(const WebPoint& point) {
-  base::DictionaryValue* dict = new base::DictionaryValue();
-  dict->SetInteger("x", point.x);
-  dict->SetInteger("y", point.y);
-  return dict;
 }
 
 bool ParseFromValue(base::Value* value, WebSize* size) {
@@ -114,8 +107,10 @@ Status VerifyElementClickable(
   base::DictionaryValue* dict;
   bool is_clickable;
   if (!result->GetAsDictionary(&dict) ||
-      !dict->GetBoolean("clickable", &is_clickable))
-    return Status(kUnknownError, "fail to parse value of IS_ELEMENT_CLICKABLE");
+      !dict->GetBoolean("clickable", &is_clickable)) {
+    return Status(kUnknownError,
+                  "failed to parse value of IS_ELEMENT_CLICKABLE");
+  }
 
   if (!is_clickable) {
     std::string message;
@@ -132,7 +127,7 @@ Status ScrollElementRegionIntoViewHelper(
     const std::string& element_id,
     const WebRect& region,
     bool center,
-    bool verify_clickable,
+    const std::string& clickable_element_id,
     WebPoint* location) {
   WebPoint tmp_location = *location;
   base::ListValue args;
@@ -145,12 +140,15 @@ Status ScrollElementRegionIntoViewHelper(
       args, &result);
   if (status.IsError())
     return status;
-  if (!ParseFromValue(result.get(), &tmp_location))
-    return Status(kUnknownError, "fail to parse value of GET_LOCATION_IN_VIEW");
-  if (verify_clickable) {
+  if (!ParseFromValue(result.get(), &tmp_location)) {
+    return Status(kUnknownError,
+                  "failed to parse value of GET_LOCATION_IN_VIEW");
+  }
+  if (!clickable_element_id.empty()) {
     WebPoint middle = tmp_location;
     middle.Offset(region.Width() / 2, region.Height() / 2);
-    status = VerifyElementClickable(frame, web_view, element_id, middle);
+    status = VerifyElementClickable(
+        frame, web_view, clickable_element_id, middle);
     if (status.IsError())
       return status;
   }
@@ -173,8 +171,10 @@ Status GetElementEffectiveStyle(
       args, &result);
   if (status.IsError())
     return status;
-  if (!result->GetAsString(value))
-    return Status(kUnknownError, "fail to parse value of GET_EFFECTIVE_STYLE");
+  if (!result->GetAsString(value)) {
+    return Status(kUnknownError,
+                  "failed to parse value of GET_EFFECTIVE_STYLE");
+  }
   return Status(kOk);
 }
 
@@ -199,7 +199,7 @@ Status GetElementBorder(
   base::StringToInt(border_left_str, &border_left_tmp);
   base::StringToInt(border_top_str, &border_top_tmp);
   if (border_left_tmp == -1 || border_top_tmp == -1)
-    return Status(kUnknownError, "fail to get border width of element");
+    return Status(kUnknownError, "failed to get border width of element");
   *border_left = border_left_tmp;
   *border_top = border_top_tmp;
   return Status(kOk);
@@ -211,6 +211,13 @@ base::DictionaryValue* CreateElement(const std::string& element_id) {
   base::DictionaryValue* element = new base::DictionaryValue();
   element->SetString(kElementKey, element_id);
   return element;
+}
+
+base::Value* CreateValueFrom(const WebPoint& point) {
+  base::DictionaryValue* dict = new base::DictionaryValue();
+  dict->SetInteger("x", point.x);
+  dict->SetInteger("y", point.y);
+  return dict;
 }
 
 Status FindElement(
@@ -318,9 +325,44 @@ Status GetElementClickableLocation(
     WebView* web_view,
     const std::string& element_id,
     WebPoint* location) {
+  std::string tag_name;
+  Status status = GetElementTagName(session, web_view, element_id, &tag_name);
+  if (status.IsError())
+    return status;
+  std::string target_element_id = element_id;
+  if (tag_name == "area") {
+    // Scroll the image into view instead of the area.
+    const char* kGetImageElementForArea =
+        "function (element) {"
+        "  var map = element.parentElement;"
+        "  if (map.tagName.toLowerCase() != 'map')"
+        "    throw new Error('the area is not within a map');"
+        "  var mapName = map.getAttribute('name');"
+        "  if (mapName == null)"
+        "    throw new Error ('area\\'s parent map must have a name');"
+        "  mapName = '#' + mapName.toLowerCase();"
+        "  var images = document.getElementsByTagName('img');"
+        "  for (var i = 0; i < images.length; i++) {"
+        "    if (images[i].useMap.toLowerCase() == mapName)"
+        "      return images[i];"
+        "  }"
+        "  throw new Error('no img is found for the area');"
+        "}";
+    base::ListValue args;
+    args.Append(CreateElement(element_id));
+    scoped_ptr<base::Value> result;
+    status = web_view->CallFunction(
+        session->GetCurrentFrameId(), kGetImageElementForArea, args, &result);
+    if (status.IsError())
+      return status;
+    const base::DictionaryValue* element_dict;
+    if (!result->GetAsDictionary(&element_dict) ||
+        !element_dict->GetString(kElementKey, &target_element_id))
+      return Status(kUnknownError, "no element reference returned by script");
+  }
   bool is_displayed = false;
-  Status status = IsElementDisplayed(
-      session, web_view, element_id, true, &is_displayed);
+  status = IsElementDisplayed(
+      session, web_view, target_element_id, true, &is_displayed);
   if (status.IsError())
     return status;
   if (!is_displayed)
@@ -332,12 +374,22 @@ Status GetElementClickableLocation(
     return status;
 
   status = ScrollElementRegionIntoView(
-      session, web_view, element_id, rect,
-      true /* center */, true /* verify_clickable */, location);
+      session, web_view, target_element_id, rect,
+      true /* center */, element_id, location);
   if (status.IsError())
     return status;
   location->Offset(rect.Width() / 2, rect.Height() / 2);
   return Status(kOk);
+}
+
+Status GetElementEffectiveStyle(
+    Session* session,
+    WebView* web_view,
+    const std::string& element_id,
+    const std::string& property_name,
+    std::string* property_value) {
+  return GetElementEffectiveStyle(session->GetCurrentFrameId(), web_view,
+                                  element_id, property_name, property_value);
 }
 
 Status GetElementRegion(
@@ -354,7 +406,7 @@ Status GetElementRegion(
     return status;
   if (!ParseFromValue(result.get(), rect)) {
     return Status(kUnknownError,
-        "fail to parse value of getElementRegion");
+                  "failed to parse value of getElementRegion");
   }
   return Status(kOk);
 }
@@ -374,7 +426,7 @@ Status GetElementTagName(
   if (status.IsError())
     return status;
   if (!result->GetAsString(name))
-    return Status(kUnknownError, "fail to get element tag name");
+    return Status(kUnknownError, "failed to get element tag name");
   return Status(kOk);
 }
 
@@ -392,7 +444,7 @@ Status GetElementSize(
   if (status.IsError())
     return status;
   if (!ParseFromValue(result.get(), size))
-    return Status(kUnknownError, "fail to parse value of GET_SIZE");
+    return Status(kUnknownError, "failed to parse value of GET_SIZE");
   return Status(kOk);
 }
 
@@ -466,7 +518,7 @@ Status IsOptionElementTogglable(
   if (status.IsError())
     return status;
   if (!result->GetAsBoolean(is_togglable))
-    return Status(kUnknownError, "fail check if option togglable or not");
+    return Status(kUnknownError, "failed check if option togglable or not");
   return Status(kOk);
 }
 
@@ -508,7 +560,7 @@ Status ScrollElementIntoView(
     return status;
   return ScrollElementRegionIntoView(
       session, web_view, id, WebRect(WebPoint(0, 0), size),
-      false /* center */, false /* verify_clickable */, location);
+      false /* center */, std::string(), location);
 }
 
 Status ScrollElementRegionIntoView(
@@ -517,13 +569,13 @@ Status ScrollElementRegionIntoView(
     const std::string& element_id,
     const WebRect& region,
     bool center,
-    bool verify_clickable,
+    const std::string& clickable_element_id,
     WebPoint* location) {
   WebPoint region_offset = region.origin;
   WebSize region_size = region.size;
   Status status = ScrollElementRegionIntoViewHelper(
       session->GetCurrentFrameId(), web_view, element_id, region,
-      center, verify_clickable, &region_offset);
+      center, clickable_element_id, &region_offset);
   if (status.IsError())
     return status;
   const char* kFindSubFrameScript =
@@ -547,7 +599,7 @@ Status ScrollElementRegionIntoView(
       return Status(kUnknownError, "no element reference returned by script");
     std::string frame_element_id;
     if (!element_dict->GetString(kElementKey, &frame_element_id))
-      return Status(kUnknownError, "fail to locate a sub frame");
+      return Status(kUnknownError, "failed to locate a sub frame");
 
     // Modify |region_offset| by the frame's border.
     int border_left = -1;
@@ -562,7 +614,7 @@ Status ScrollElementRegionIntoView(
     status = ScrollElementRegionIntoViewHelper(
         rit->parent_frame_id, web_view, frame_element_id,
         WebRect(region_offset, region_size),
-        center, verify_clickable, &region_offset);
+        center, frame_element_id, &region_offset);
     if (status.IsError())
       return status;
   }

@@ -41,15 +41,15 @@ MemBackendImpl::~MemBackendImpl() {
 }
 
 // Static.
-Backend* MemBackendImpl::CreateBackend(int max_bytes, net::NetLog* net_log) {
-  MemBackendImpl* cache = new MemBackendImpl(net_log);
+scoped_ptr<Backend> MemBackendImpl::CreateBackend(int max_bytes,
+                                                  net::NetLog* net_log) {
+  scoped_ptr<MemBackendImpl> cache(new MemBackendImpl(net_log));
   cache->SetMaxSize(max_bytes);
   if (cache->Init())
-    return cache;
+    return cache.PassAs<Backend>();
 
-  delete cache;
   LOG(ERROR) << "Unable to create cache";
-  return NULL;
+  return scoped_ptr<Backend>();
 }
 
 bool MemBackendImpl::Init() {
@@ -250,20 +250,26 @@ bool MemBackendImpl::DoomEntriesBetween(const Time initial_time,
 
   DCHECK(end_time >= initial_time);
 
-  MemEntryImpl* next = rankings_.GetNext(NULL);
+  MemEntryImpl* node = rankings_.GetNext(NULL);
+  // Last valid entry before |node|.
+  // Note, that entries after |node| may become invalid during |node| doom in
+  // case when they are child entries of it. It is guaranteed that
+  // parent node will go prior to it childs in ranking list (see
+  // InternalReadSparseData and InternalWriteSparseData).
+  MemEntryImpl* last_valid = NULL;
 
   // rankings_ is ordered by last used, this will descend through the cache
   // and start dooming items before the end_time, and will stop once it reaches
   // an item used before the initial time.
-  while (next) {
-    MemEntryImpl* node = next;
-    next = rankings_.GetNext(next);
-
+  while (node) {
     if (node->GetLastUsed() < initial_time)
       break;
 
     if (node->GetLastUsed() < end_time)
       node->Doom();
+    else
+      last_valid = node;
+    node = rankings_.GetNext(last_valid);
   }
 
   return true;

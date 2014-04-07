@@ -2,50 +2,166 @@
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file. */
 body {
-  background-attachment: fixed !important
+  background-attachment: fixed !important;
+  background-color: white;
+  cursor: default;
+  font-family: arial, sans-serif;
+  font-size: small;
+  margin: 0;
+  overflow-x: hidden;
+}
+
+#ntp-contents {
+  text-align: -webkit-center;
+}
+
+.non-google-page #ntp-contents {
+  position: absolute;
+  top: -webkit-calc(50% - 155px);
+  width: 100%;
+}
+
+body.hide-fakebox-logo #logo,
+body.hide-fakebox-logo #fakebox {
+  visibility: hidden;
+}
+
+body.fakebox-disable #fakebox {
+  border-color: rgb(238, 238, 238);
+  cursor: default;
+}
+
+body.fakebox-disable #fakebox > input {
+  cursor: default;
+}
+
+#logo {
+  background-image: url(images/2x/google_logo.png);
+  background-repeat: no-repeat;
+  background-size: 269px 95px;
+  height: 95px;
+  margin-bottom: 24px;
+  margin-top: 157px;
+  width: 269px;
+}
+
+body.alternate-logo #logo {
+  background-image: url(images/2x/white_google_logo.png);
+}
+
+#fakebox {
+  /* Use GPU compositing if available. */
+  -webkit-transform: translate3d(0, 0, 0);
+  -webkit-transition: -webkit-transform 100ms linear, border-color 100ms linear;
+  background-color: #fff;
+  border: 1px solid rgb(185, 185, 185);
+  border-radius: 1px;
+  border-top-color: rgb(160, 160, 160);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.1);
+  cursor: text;
+  font-size: 18px;
+  height: 36px;
+  max-width: 620px;
+  /* #fakebox width (here and below) should be 2px less than #mv-tiles
+     to account for its border. */
+  width: 298px;
+}
+
+#fakebox:hover {
+  border: 1px solid rgb(169, 169, 169);
+  border-top-color: rgb(144, 144, 144);
+}
+
+body.fakebox-focused #fakebox {
+  border: 1px solid rgb(77, 144, 254);
+}
+
+#fakebox > input {
+  bottom: 0;
+  left: 0;
+  opacity: 0;
+  position: absolute;
+  right: 0;
+  top: 0;
+}
+
+#cursor {
+  background: #333;
+  bottom: 5px;
+  left: 9px;
+  position: absolute;
+  top: 5px;
+  visibility: hidden;
+  width: 1px;
+}
+
+body.rtl #cursor {
+  left: auto;
+  right: 9px;
+}
+
+@-webkit-keyframes blink {
+  0% {
+    opacity: 1;
+  }
+  61.55% {
+    opacity: 0;
+  }
+}
+
+body.fakebox-drag-focused #cursor {
+  visibility: inherit;
+}
+
+body.fakebox-focused #cursor {
+  -webkit-animation: blink 1.3s step-end infinite;
+  visibility: inherit;
 }
 
 #most-visited {
   -webkit-user-select: none;
-  margin-top: 60px;
+  margin-top: 51px;
   text-align: -webkit-center;
-}
-
-.custom-theme .mv-title,
-.custom-theme #mv-msg {
-  color: #fff;
-  text-shadow: black 0 1px 3px;
-}
-
-.custom-theme #mv-notice-links span {
-  color: #fff;
-  text-shadow: rgb(17, 85, 204) 0 1px 3px;
 }
 
 #mv-tiles {
   /* Use GPU compositing if available. */
   -webkit-transform: translate3d(0, 0, 0);
-  -webkit-transition: width 200ms;
-  height: 120px;
+  height: 260px;
   overflow: hidden;
+  padding: 0 1em;
   white-space: nowrap;
   width: 304px;
 }
 
-@media only screen and (min-width:666px) {
+@media only screen and (min-width:660px) {
+  #fakebox {
+    width: 458px;
+  }
   #mv-tiles {
-    width: 466px;
+    width: 460px;
   }
 }
 
-@media only screen and (min-width:829px) {
-  #mv-tiles {
-    width: 629px;
+@media only screen and (min-width:820px) {
+  #fakebox {
+    width: 618px;
   }
+  #mv-tiles {
+    width: 620px;
+  }
+}
+
+.mv-row {
+  margin-bottom: 50px;
+}
+
+.mv-row:last-child {
+  margin-bottom: 0;
 }
 
 .mv-tile:first-child {
-  -webkit-margin-start: 0;
+  -webkit-margin-start: -1px;
 }
 
 .mv-tile {
@@ -53,55 +169,62 @@ body {
   -webkit-transform: translate3d(0, 0, 0);
   -webkit-transition-duration: 200ms;
   -webkit-transition-property: -webkit-transform, margin, opacity, width;
+  background: -webkit-linear-gradient(#f2f2f2, #e8e8e8);
+  border: 1px solid transparent;
+  border-radius: 3px;
+  box-shadow: inset 0 2px 3px rgba(0, 0, 0, .09);
   display: inline-block;
-  height: 85px;
-  width: 140px;
-}
-
-.mv-tile.mv-tile-hide {
-  -webkit-margin-end: -10px;
-  opacity: 0;
-  width: 10px;
+  height: 83px;
+  width: 138px;
 }
 
 /* Class applied to tiles to trigger the blacklist animation. */
 .mv-tile.mv-blacklist {
-  -webkit-margin-start: 0;
   -webkit-transform: scale(0.5);
   opacity: 0;
-  width: 0;
 }
 
-.mv-filler {
-  background: -webkit-linear-gradient(#f2f2f2, #e8e8e8);
-  border: 1px solid #e0e0e0;
-  border-radius: 3px;
-  box-shadow: inset 0 2px 3px rgba(0, 0, 0, .09);
-}
-
-.mv-page {
-  background: #fff;
+.mv-page-ready {
   border: 1px solid #c0c0c0;
-  border-radius: 2px;
-  box-shadow: 0 1px 0 rgba(255, 255, 255, .7);
   cursor: pointer;
+  outline: none;
 }
 
-.mv-page:hover {
+.mv-page-ready:hover,
+.mv-page-ready:focus {
   border-color: #7f7f7f
 }
 
-.mv-thumb {
-  background-size: 140px 85px;
-  height: 100%;
-  width: 100%;
+.mv-thumb,
+.mv-mask {
+  border: none;
+  cursor: pointer;
+  height: 83px;
+  left: 0;
+  position: absolute;
+  top: 0;
+  width: 138px;
 }
 
 .mv-title {
+  border: none;
   bottom: -28px;
-  color: #777;
+  height: 18px;
+  left: 0;
   position: absolute;
-  width: 100%;
+  width: 140px;
+}
+
+.mv-mask {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.mv-page:focus .mv-mask {
+  -webkit-transition: background-color 100ms ease-in-out;
+  background: -webkit-linear-gradient(rgba(255, 255, 255, 0),
+    rgba(255, 255, 255, 0) 80%, rgba(255, 255, 255, 0.9));
+  background-color: black;
 }
 
 .mv-x-hide .mv-x {
@@ -110,19 +233,20 @@ body {
 
 /* An X button to blacklist a tile or hide the notification. */
 .mv-x {
-  background: transparent url(images/close_bar.png);
+  background: transparent url(images/close_2.png);
   border: none;
   cursor: default;
   height: 16px;
   width: 16px;
 }
 
-.mv-x:hover {
-  background: transparent url(images/close_bar_hover.png);
+.mv-x:hover,
+#mv-notice-x:focus {
+  background: transparent url(images/close_2_hover.png);
 }
 
 .mv-x:active {
-  background: transparent url(images/close_bar_active.png);
+  background: transparent url(images/close_2_active.png);
 }
 
 .mv-page .mv-x {
@@ -133,30 +257,29 @@ body {
   top: 2px;
 }
 
-.mv-page:hover .mv-x {
+body.rtl .mv-page .mv-x {
+  left: 2px;
+  right: auto;
+}
+
+.mv-page-ready:hover .mv-x {
   -webkit-transition-delay: 500ms;
   opacity: 1;
 }
 
-.mv-domain {
-  bottom: 24px;
-  color: #777;
-  margin: 0 7px;
-  position: absolute;
-}
-
 .mv-favicon {
+  background-size: 16px;
   bottom: -8px;
   height: 16px;
   left: 61px;
+  pointer-events: none;
   position: absolute;
   width: 16px;
 }
 
 /* The notification shown when a tile is blacklisted. */
 #mv-notice {
-  font-family: Arial;
-  font-size: 75%;
+  font-size: 12px;
   font-weight: bold;
   opacity: 1;
   padding: 10px 0;
@@ -171,15 +294,19 @@ body {
   -webkit-margin-start: 6px;
   color: rgb(17, 85, 204);
   cursor: pointer;
+  outline: none;
   padding: 0 4px;
 }
 
-#mv-notice-links span:hover {
+#mv-notice-links span:hover,
+#mv-notice-links span:focus,
+#recent-tabs:hover {
   text-decoration: underline;
 }
 
 #mv-notice-links .mv-x {
   -webkit-margin-start: 8px;
+  outline: none;
   vertical-align: top;
 }
 
@@ -190,5 +317,42 @@ body {
 }
 
 #mv-notice.mv-notice-hide {
-  visibility: hidden;
+  display: none;
+}
+
+#attribution {
+  -webkit-user-select: none;
+  bottom: 0;
+  color: #fff;
+  cursor: default;
+  display: inline-block;
+  font-size: 13px;
+  position: fixed;
+  right: 8px;
+  text-align: left;
+  z-index: -1;
+}
+
+body.rtl #attribution {
+  text-align: right;
+}
+
+#recent-tabs {
+  background: #fff;
+  border: 1px solid #c0c0c0;
+  border-radius: 2px;
+  bottom: 0;
+  color: rgb(17, 85, 204);
+  cursor: pointer;
+  font-family: Arial;
+  font-size: 14px;
+  opacity: 0.9;
+  padding: 3px;
+  position: fixed;
+  right: 8px;
+}
+
+body.rtl #attribution,body.rtl #recent-tabs {
+  left: 8px;
+  right: auto;
 }

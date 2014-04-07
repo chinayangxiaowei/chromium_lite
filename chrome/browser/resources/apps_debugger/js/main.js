@@ -16,5 +16,15 @@ window.addEventListener('load', function(e) {
   appsDevTool.initialize();
 });
 
-chrome.management.onInstalled.addListener(ItemList.loadItemsInfo);
-chrome.management.onUninstalled.addListener(ItemList.loadItemsInfo);
+chrome.management.onInstalled.addListener(function(info) {
+  ItemList.loadItemsInfo(function() {
+    ItemList.makeUnpackedExtensionVisible(info.id);
+  });
+});
+chrome.management.onUninstalled.addListener(function() {
+  ItemList.loadItemsInfo();
+});
+
+chrome.developerPrivate.onItemStateChanged.addListener(function(response) {
+  ItemList.loadItemsInfo();
+});

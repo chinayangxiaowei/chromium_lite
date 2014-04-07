@@ -7,9 +7,9 @@
 #include "android_webview/browser/net/aw_url_request_job_factory.h"
 #include "android_webview/browser/net/input_stream_reader.h"
 #include "base/format_macros.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "net/url_request/url_request_job_factory_impl.h"
 #include "net/url_request/url_request_test_util.h"
 
@@ -47,15 +47,15 @@ class NotImplInputStream : public InputStream {
  public:
   NotImplInputStream() {}
   virtual ~NotImplInputStream() {}
-  virtual bool BytesAvailable(int* bytes_available) const {
+  virtual bool BytesAvailable(int* bytes_available) const OVERRIDE {
     NOTIMPLEMENTED();
     return false;
   }
-  virtual bool Skip(int64_t n, int64_t* bytes_skipped) {
+  virtual bool Skip(int64_t n, int64_t* bytes_skipped) OVERRIDE {
     NOTIMPLEMENTED();
     return false;
   }
-  virtual bool Read(net::IOBuffer* dest, int length, int* bytes_read) {
+  virtual bool Read(net::IOBuffer* dest, int length, int* bytes_read) OVERRIDE {
     NOTIMPLEMENTED();
     return false;
   }
@@ -69,28 +69,26 @@ class StreamReaderDelegate :
 
   virtual scoped_ptr<InputStream> OpenInputStream(
       JNIEnv* env,
-      const GURL& url) {
+      const GURL& url) OVERRIDE {
     return make_scoped_ptr<InputStream>(new NotImplInputStream());
   }
 
   virtual void OnInputStreamOpenFailed(net::URLRequest* request,
-                                       bool* restart) {
+                                       bool* restart) OVERRIDE {
     *restart = false;
   }
 
-  virtual bool GetMimeType(
-      JNIEnv* env,
-      net::URLRequest* request,
-      android_webview::InputStream* stream,
-      std::string* mime_type) {
+  virtual bool GetMimeType(JNIEnv* env,
+                           net::URLRequest* request,
+                           android_webview::InputStream* stream,
+                           std::string* mime_type) OVERRIDE {
     return false;
   }
 
-  virtual bool GetCharset(
-      JNIEnv* env,
-      net::URLRequest* request,
-      android_webview::InputStream* stream,
-      std::string* charset) {
+  virtual bool GetCharset(JNIEnv* env,
+                          net::URLRequest* request,
+                          android_webview::InputStream* stream,
+                          std::string* charset) OVERRIDE {
     return false;
   }
 };
@@ -101,7 +99,7 @@ class NullStreamReaderDelegate : public StreamReaderDelegate {
 
   virtual scoped_ptr<InputStream> OpenInputStream(
       JNIEnv* env,
-      const GURL& url) {
+      const GURL& url) OVERRIDE {
     return make_scoped_ptr<InputStream>(NULL);
   }
 };
@@ -131,13 +129,13 @@ class TestStreamReaderJob : public AndroidStreamReaderURLRequestJob {
   }
 
   virtual scoped_ptr<InputStreamReader> CreateStreamReader(
-      InputStream* stream) {
+      InputStream* stream) OVERRIDE {
     return stream_reader_.Pass();
   }
  protected:
   virtual ~TestStreamReaderJob() {}
 
-  virtual base::TaskRunner* GetWorkerThreadRunner() {
+  virtual base::TaskRunner* GetWorkerThreadRunner() OVERRIDE {
     return message_loop_proxy_.get();
   }
 
@@ -147,9 +145,8 @@ class TestStreamReaderJob : public AndroidStreamReaderURLRequestJob {
 
 class AndroidStreamReaderURLRequestJobTest : public Test {
  public:
-  AndroidStreamReaderURLRequestJobTest()
-      : loop_(MessageLoop::TYPE_IO) {
-  }
+  AndroidStreamReaderURLRequestJobTest() : loop_(base::MessageLoop::TYPE_IO) {}
+
  protected:
   virtual void SetUp() {
     context_.set_job_factory(&factory_);
@@ -198,7 +195,7 @@ class AndroidStreamReaderURLRequestJobTest : public Test {
     DCHECK(set_protocol);
   }
 
-  MessageLoop loop_;
+  base::MessageLoop loop_;
   TestURLRequestContext context_;
   android_webview::AwURLRequestJobFactory factory_;
   TestDelegate url_request_delegate_;
@@ -222,7 +219,7 @@ TEST_F(AndroidStreamReaderURLRequestJobTest, ReadEmptyStream) {
   req_->Start();
 
   // The TestDelegate will quit the message loop on request completion.
-  MessageLoop::current()->Run();
+  base::MessageLoop::current()->Run();
 
   EXPECT_FALSE(url_request_delegate_.request_failed());
   EXPECT_EQ(1, network_delegate_.completed_requests());
@@ -237,7 +234,7 @@ TEST_F(AndroidStreamReaderURLRequestJobTest, ReadWithNullStream) {
   req_->Start();
 
   // The TestDelegate will quit the message loop on request completion.
-  MessageLoop::current()->Run();
+  base::MessageLoop::current()->Run();
 
   // The request_failed() method is named confusingly but all it checks is
   // whether the request got as far as calling NotifyHeadersComplete.
@@ -271,7 +268,7 @@ TEST_F(AndroidStreamReaderURLRequestJobTest, ReadPartOfStream) {
   SetRange(req_.get(), offset, bytes_available);
   req_->Start();
 
-  MessageLoop::current()->Run();
+  base::MessageLoop::current()->Run();
 
   EXPECT_FALSE(url_request_delegate_.request_failed());
   EXPECT_EQ(bytes_to_read, url_request_delegate_.bytes_received());
@@ -302,7 +299,7 @@ TEST_F(AndroidStreamReaderURLRequestJobTest,
   SetRange(req_.get(), offset, bytes_available_reported);
   req_->Start();
 
-  MessageLoop::current()->Run();
+  base::MessageLoop::current()->Run();
 
   EXPECT_FALSE(url_request_delegate_.request_failed());
   EXPECT_EQ(bytes_to_read, url_request_delegate_.bytes_received());

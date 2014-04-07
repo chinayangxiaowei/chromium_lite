@@ -19,6 +19,7 @@
 #include "chrome/browser/safe_browsing/database_manager.h"
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
 #include "chrome/common/chrome_switches.h"
+#include "chrome/common/chrome_version_info.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/safe_browsing/csd.pb.h"
 #include "chrome/common/safe_browsing/safebrowsing_messages.h"
@@ -34,7 +35,7 @@
 #include "content/public/browser/resource_request_details.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/frame_navigate_params.h"
-#include "googleurl/src/gurl.h"
+#include "url/gurl.h"
 
 using content::BrowserThread;
 using content::NavigationEntry;
@@ -43,7 +44,7 @@ using content::WebContents;
 
 namespace safe_browsing {
 
-const int ClientSideDetectionHost::kMaxHostsPerIP = 20;
+const int ClientSideDetectionHost::kMaxUrlsPerIP = 20;
 const int ClientSideDetectionHost::kMaxIPsPerBrowse = 200;
 
 namespace {
@@ -79,7 +80,7 @@ class ClientSideDetectionHost::ShouldClassifyUrlRequest
     DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
     DCHECK(web_contents_);
     DCHECK(csd_service_);
-    DCHECK(database_manager_);
+    DCHECK(database_manager_.get());
     DCHECK(host_);
   }
 
@@ -165,7 +166,7 @@ class ClientSideDetectionHost::ShouldClassifyUrlRequest
 
   void CheckCsdWhitelist(const GURL& url) {
     DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
-    if (!database_manager_ ||
+    if (!database_manager_.get() ||
         database_manager_->MatchCsdWhitelistUrl(url)) {
       // We're done.  There is no point in going back to the UI thread.
       VLOG(1) << "Skipping phishing classification for URL: " << url
@@ -176,18 +177,22 @@ class ClientSideDetectionHost::ShouldClassifyUrlRequest
       return;
     }
 
+    bool malware_killswitch_on = database_manager_->IsMalwareKillSwitchOn();
+
     BrowserThread::PostTask(
         BrowserThread::UI,
         FROM_HERE,
-        base::Bind(&ShouldClassifyUrlRequest::CheckCache, this));
+        base::Bind(&ShouldClassifyUrlRequest::CheckCache, this,
+                   malware_killswitch_on));
   }
 
-  void CheckCache() {
+  void CheckCache(bool malware_killswitch_on) {
     DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
     if (canceled_) {
       return;
     }
 
+    host_->SetMalwareKillSwitch(malware_killswitch_on);
     // If result is cached, we don't want to run classification again
     bool is_phishing;
     if (csd_service_->GetValidCachedResult(params_.url, &is_phishing)) {
@@ -206,7 +211,7 @@ class ClientSideDetectionHost::ShouldClassifyUrlRequest
       VLOG(1) << "Reporting limit skipped for " << params_.url
               << " as it was in the cache.";
       UMA_HISTOGRAM_COUNTS("SBClientPhishing.ReportLimitSkipped", 1);
-    } else if (csd_service_->OverReportLimit()) {
+    } else if (csd_service_->OverPhishingReportLimit()) {
       VLOG(1) << "Too many report phishing requests sent recently, "
               << "not running classification for " << params_.url;
       UMA_HISTOGRAM_ENUMERATION("SBClientPhishing.PreClassificationCheckFail",
@@ -248,8 +253,10 @@ ClientSideDetectionHost* ClientSideDetectionHost::Create(
 ClientSideDetectionHost::ClientSideDetectionHost(WebContents* tab)
     : content::WebContentsObserver(tab),
       csd_service_(NULL),
-      weak_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)),
-      unsafe_unique_page_id_(-1) {
+      weak_factory_(this),
+      unsafe_unique_page_id_(-1),
+      malware_killswitch_on_(false),
+      malware_report_enabled_(false) {
   DCHECK(tab);
   // Note: csd_service_ and sb_service will be NULL here in testing.
   csd_service_ = g_browser_process->safe_browsing_detection_service();
@@ -259,15 +266,22 @@ ClientSideDetectionHost::ClientSideDetectionHost(WebContents* tab)
 
   scoped_refptr<SafeBrowsingService> sb_service =
       g_browser_process->safe_browsing_service();
-  if (sb_service) {
+  if (sb_service.get()) {
     ui_manager_ = sb_service->ui_manager();
     database_manager_ = sb_service->database_manager();
     ui_manager_->AddObserver(this);
   }
+
+  // Only enable the malware bad IP matching and report feature for canary
+  // and dev channel.
+  chrome::VersionInfo::Channel channel = chrome::VersionInfo::GetChannel();
+  malware_report_enabled_ = (
+      channel == chrome::VersionInfo::CHANNEL_DEV ||
+      channel == chrome::VersionInfo::CHANNEL_CANARY);
 }
 
 ClientSideDetectionHost::~ClientSideDetectionHost() {
-  if (ui_manager_)
+  if (ui_manager_.get())
     ui_manager_->RemoveObserver(this);
 }
 
@@ -320,11 +334,8 @@ void ClientSideDetectionHost::DidNavigateMainFrame(
   browse_info_->http_status_code = details.http_status_code;
 
   // Notify the renderer if it should classify this URL.
-  classification_request_ = new ShouldClassifyUrlRequest(params,
-                                                         web_contents(),
-                                                         csd_service_,
-                                                         database_manager_,
-                                                         this);
+  classification_request_ = new ShouldClassifyUrlRequest(
+      params, web_contents(), csd_service_, database_manager_.get(), this);
   classification_request_->Start();
 }
 
@@ -380,14 +391,18 @@ void ClientSideDetectionHost::OnPhishingDetectionDone(
       browse_info_.get() &&
       verdict->ParseFromString(verdict_str) &&
       verdict->IsInitialized()) {
-    scoped_ptr<ClientMalwareRequest> malware_verdict(new ClientMalwareRequest);
-    // Start browser-side malware feature extraction.  Once we're done it will
-    // send the malware client verdict request.
-    malware_verdict->set_url(verdict->url());
-    feature_extractor_->ExtractMalwareFeatures(
-        browse_info_.get(),
-        malware_verdict.get());
-    MalwareFeatureExtractionDone(malware_verdict.Pass());
+    // We do the malware IP matching and request sending if the feature
+    // is enabled.
+    if (malware_report_enabled_ && !MalwareKillSwitchIsOn()) {
+      scoped_ptr<ClientMalwareRequest> malware_verdict(
+          new ClientMalwareRequest);
+      // Start browser-side malware feature extraction.  Once we're done it will
+      // send the malware client verdict request.
+      malware_verdict->set_url(verdict->url());
+      feature_extractor_->ExtractMalwareFeatures(
+          browse_info_.get(), malware_verdict.get());
+      MalwareFeatureExtractionDone(malware_verdict.Pass());
+    }
 
     // We only send phishing verdict to the server if the verdict is phishing or
     // if a SafeBrowsing interstitial was already shown for this site.  E.g., a
@@ -416,7 +431,7 @@ void ClientSideDetectionHost::MaybeShowPhishingWarning(GURL phishing_url,
           << " is_phishing:" << is_phishing;
   if (is_phishing) {
     DCHECK(web_contents());
-    if (ui_manager_) {
+    if (ui_manager_.get()) {
       SafeBrowsingUIManager::UnsafeResource resource;
       resource.url = phishing_url;
       resource.original_url = phishing_url;
@@ -478,20 +493,20 @@ void ClientSideDetectionHost::MalwareFeatureExtractionDone(
   }
 }
 
-void ClientSideDetectionHost::UpdateIPHostMap(const std::string& ip,
-                                              const std::string& host) {
-  if (ip.empty() || host.empty())
+void ClientSideDetectionHost::UpdateIPUrlMap(const std::string& ip,
+                                             const std::string& url) {
+  if (ip.empty() || url.empty())
     return;
 
-  IPHostMap::iterator it = browse_info_->ips.find(ip);
+  IPUrlMap::iterator it = browse_info_->ips.find(ip);
   if (it == browse_info_->ips.end()) {
     if (int(browse_info_->ips.size()) < kMaxIPsPerBrowse) {
-      std::set<std::string> hosts;
-      hosts.insert(host);
-      browse_info_->ips.insert(make_pair(ip, hosts));
+      std::set<std::string> urls;
+      urls.insert(url);
+      browse_info_->ips.insert(make_pair(ip, urls));
     }
-  } else if (int(it->second.size()) < kMaxHostsPerIP) {
-    it->second.insert(host);
+  } else if (int(it->second.size()) < kMaxUrlsPerIP) {
+    it->second.insert(url);
   }
 }
 
@@ -503,9 +518,12 @@ void ClientSideDetectionHost::Observe(
   DCHECK_EQ(type, content::NOTIFICATION_RESOURCE_RESPONSE_STARTED);
   const ResourceRequestDetails* req = content::Details<ResourceRequestDetails>(
       details).ptr();
-  if (req && browse_info_.get()) {
-    UpdateIPHostMap(req->socket_address.host() /* ip */,
-                    req->url.host()  /* url host */);
+  if (req && browse_info_.get() && malware_report_enabled_ &&
+      !MalwareKillSwitchIsOn()) {
+    if (req->url.is_valid()) {
+      UpdateIPUrlMap(req->socket_address.host() /* ip */,
+                     req->url.spec()  /* url */);
+    }
   }
 }
 
@@ -526,7 +544,7 @@ void ClientSideDetectionHost::set_client_side_detection_service(
 void ClientSideDetectionHost::set_safe_browsing_managers(
     SafeBrowsingUIManager* ui_manager,
     SafeBrowsingDatabaseManager* database_manager) {
-  if (ui_manager_)
+  if (ui_manager_.get())
     ui_manager_->RemoveObserver(this);
 
   ui_manager_ = ui_manager;
@@ -534,6 +552,16 @@ void ClientSideDetectionHost::set_safe_browsing_managers(
     ui_manager_->AddObserver(this);
 
   database_manager_ = database_manager;
+}
+
+bool ClientSideDetectionHost::MalwareKillSwitchIsOn() {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  return malware_killswitch_on_;
+}
+
+void ClientSideDetectionHost::SetMalwareKillSwitch(bool killswitch_on) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  malware_killswitch_on_ = killswitch_on;
 }
 
 }  // namespace safe_browsing

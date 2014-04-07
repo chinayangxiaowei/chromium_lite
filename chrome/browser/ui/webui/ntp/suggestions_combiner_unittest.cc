@@ -9,7 +9,7 @@
 
 #include "base/memory/scoped_ptr.h"
 #include "base/stl_util.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "base/values.h"
 #include "chrome/browser/ui/webui/ntp/suggestions_combiner.h"
 #include "chrome/browser/ui/webui/ntp/suggestions_page_handler.h"
@@ -250,13 +250,12 @@ TEST_F(SuggestionsCombinerTest, SourcesAreNotDoneFetching) {
 }
 
 TEST_F(SuggestionsCombinerTest, TestSuite) {
-  size_t test_count = sizeof(test_suite)/sizeof(test_suite[0]);
+  size_t test_count = arraysize(test_suite);
   for (size_t i = 0; i < test_count; ++i) {
     const TestDescription& description = test_suite[i];
-    size_t source_count =
-        sizeof(description.sources)/sizeof(description.sources[0]);
+    size_t source_count = arraysize(description.sources);
 
-    scoped_array<SuggestionsSourceStub*> sources(
+    scoped_ptr<SuggestionsSourceStub*[]> sources(
         new SuggestionsSourceStub*[source_count]);
 
     // Setup sources.

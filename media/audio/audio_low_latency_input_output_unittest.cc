@@ -6,11 +6,11 @@
 #include "base/environment.h"
 #include "base/file_util.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/path_service.h"
 #include "base/synchronization/lock.h"
 #include "base/test/test_timeouts.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "media/audio/audio_io.h"
 #include "media/audio/audio_manager_base.h"
@@ -84,7 +84,7 @@ class MockAudioManager : public AudioManagerAnyPlatform {
   virtual ~MockAudioManager() {}
 
   virtual scoped_refptr<base::MessageLoopProxy> GetMessageLoop() OVERRIDE {
-    return MessageLoop::current()->message_loop_proxy();
+    return base::MessageLoop::current()->message_loop_proxy();
   }
 
  private:
@@ -99,7 +99,7 @@ class AudioLowLatencyInputOutputTest : public testing::Test {
   virtual ~AudioLowLatencyInputOutputTest() {}
 
   AudioManager* audio_manager() { return &mock_audio_manager_; }
-  MessageLoopForUI* message_loop() { return &message_loop_; }
+  base::MessageLoopForUI* message_loop() { return &message_loop_; }
 
   // Convenience method which ensures that we are not running on the build
   // bots and that at least one valid input and output device can be found.
@@ -112,7 +112,7 @@ class AudioLowLatencyInputOutputTest : public testing::Test {
   }
 
  private:
-  MessageLoopForUI message_loop_;
+  base::MessageLoopForUI message_loop_;
   MockAudioManager mock_audio_manager_;
 
   DISALLOW_COPY_AND_ASSIGN(AudioLowLatencyInputOutputTest);
@@ -136,7 +136,7 @@ class FullDuplexAudioSinkSource
       channels_(channels),
       input_elements_to_write_(0),
       output_elements_to_write_(0),
-      previous_write_time_(base::Time::Now()) {
+      previous_write_time_(base::TimeTicks::Now()) {
     // Size in bytes of each audio frame (4 bytes for 16-bit stereo PCM).
     frame_size_ = (16 / 8) * channels_;
 
@@ -186,8 +186,8 @@ class FullDuplexAudioSinkSource
 
     // Update three components in the AudioDelayState for this recorded
     // audio packet.
-    base::Time now_time = base::Time::Now();
-    int diff = (now_time - previous_write_time_).InMilliseconds();
+    const base::TimeTicks now_time = base::TimeTicks::Now();
+    const int diff = (now_time - previous_write_time_).InMilliseconds();
     previous_write_time_ = now_time;
     if (input_elements_to_write_ < kMaxDelayMeasurements) {
       delay_states_[input_elements_to_write_].delta_time_ms = diff;
@@ -258,7 +258,6 @@ class FullDuplexAudioSinkSource
   }
 
   virtual void OnError(AudioOutputStream* stream) OVERRIDE {}
-  virtual void WaitTillDataReady() OVERRIDE {}
 
  protected:
   // Converts from bytes to milliseconds taking the sample rate and size
@@ -275,10 +274,10 @@ class FullDuplexAudioSinkSource
   int channels_;
   int frame_size_;
   double frames_to_ms_;
-  scoped_array<AudioDelayState> delay_states_;
+  scoped_ptr<AudioDelayState[]> delay_states_;
   size_t input_elements_to_write_;
   size_t output_elements_to_write_;
-  base::Time previous_write_time_;
+  base::TimeTicks previous_write_time_;
 };
 
 class AudioInputStreamTraits {
@@ -309,7 +308,7 @@ class AudioOutputStreamTraits {
 
   static StreamType* CreateStream(AudioManager* audio_manager,
       const AudioParameters& params) {
-    return audio_manager->MakeAudioOutputStream(params);
+    return audio_manager->MakeAudioOutputStream(params, std::string());
   }
 };
 
@@ -433,7 +432,7 @@ TEST_F(AudioLowLatencyInputOutputTest, DISABLED_FullDuplexDelayMeasurement) {
   // in loop back during this time. At the same time, delay recordings are
   // performed and stored in the output text file.
   message_loop()->PostDelayedTask(FROM_HERE,
-      MessageLoop::QuitClosure(), TestTimeouts::action_timeout());
+      base::MessageLoop::QuitClosure(), TestTimeouts::action_timeout());
   message_loop()->Run();
 
   aos->Stop();

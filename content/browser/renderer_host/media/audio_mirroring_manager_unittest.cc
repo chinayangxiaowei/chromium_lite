@@ -8,7 +8,7 @@
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/synchronization/waitable_event.h"
 #include "content/browser/browser_thread_impl.h"
 #include "media/audio/audio_parameters.h"
@@ -46,7 +46,7 @@ class MockMirroringDestination
 class AudioMirroringManagerTest : public testing::Test {
  public:
   AudioMirroringManagerTest()
-      : message_loop_(MessageLoop::TYPE_IO),
+      : message_loop_(base::MessageLoop::TYPE_IO),
         io_thread_(BrowserThread::IO, &message_loop_),
         params_(AudioParameters::AUDIO_FAKE, media::CHANNEL_LAYOUT_STEREO,
                 AudioParameters::kAudioCDSampleRate, 16,
@@ -102,7 +102,7 @@ class AudioMirroringManagerTest : public testing::Test {
 }
 
  private:
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
   BrowserThreadImpl io_thread_;
   AudioParameters params_;
   AudioMirroringManager mirroring_manager_;

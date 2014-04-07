@@ -37,14 +37,9 @@ bool ContentRendererClient::HasErrorPage(int http_status_code,
   return false;
 }
 
-webkit_media::WebMediaPlayerImpl*
-ContentRendererClient::OverrideCreateWebMediaPlayer(
-    RenderView* render_view,
-    WebKit::WebFrame* frame,
-    WebKit::WebMediaPlayerClient* client,
-    base::WeakPtr<webkit_media::WebMediaPlayerDelegate> delegate,
-    const webkit_media::WebMediaPlayerParams& params) {
-  return NULL;
+void ContentRendererClient::DeferMediaLoad(RenderView* render_view,
+                                           const base::Closure& closure) {
+  closure.Run();
 }
 
 WebKit::WebMediaStreamCenter*
@@ -59,19 +54,32 @@ ContentRendererClient::OverrideCreateWebRTCPeerConnectionHandler(
   return NULL;
 }
 
+WebKit::WebMIDIAccessor*
+ContentRendererClient::OverrideCreateMIDIAccessor(
+    WebKit::WebMIDIAccessorClient* client) {
+  return NULL;
+}
+
+WebKit::WebAudioDevice*
+ContentRendererClient::OverrideCreateAudioDevice(
+    double sample_rate) {
+  return NULL;
+}
+
 WebKit::WebClipboard* ContentRendererClient::OverrideWebClipboard() {
   return NULL;
 }
 
-WebKit::WebMimeRegistry* ContentRendererClient::OverrideWebMimeRegistry() {
-  return NULL;
-}
-
-WebKit::WebHyphenator* ContentRendererClient::OverrideWebHyphenator() {
-  return NULL;
-}
-
 WebKit::WebThemeEngine* ContentRendererClient::OverrideThemeEngine() {
+  return NULL;
+}
+
+WebKit::WebSpeechSynthesizer* ContentRendererClient::OverrideSpeechSynthesizer(
+    WebKit::WebSpeechSynthesizerClient* client) {
+  return NULL;
+}
+
+WebKit::WebCrypto* ContentRendererClient::OverrideWebCrypto() {
   return NULL;
 }
 
@@ -96,6 +104,7 @@ bool ContentRendererClient::ShouldFork(WebKit::WebFrame* frame,
                                        const GURL& url,
                                        const std::string& http_method,
                                        bool is_initial_navigation,
+                                       bool is_server_redirect,
                                        bool* send_referrer) {
   return false;
 }
@@ -122,9 +131,14 @@ bool ContentRendererClient::IsLinkVisited(unsigned long long link_hash) {
   return false;
 }
 
+WebKit::WebPrescientNetworking*
+ContentRendererClient::GetPrescientNetworking() {
+  return NULL;
+}
+
 bool ContentRendererClient::ShouldOverridePageVisibilityState(
     const RenderView* render_view,
-    WebKit::WebPageVisibilityState* override_state) const {
+    WebKit::WebPageVisibilityState* override_state) {
   return false;
 }
 
@@ -144,17 +158,28 @@ bool ContentRendererClient::HandleSetCookieRequest(
   return false;
 }
 
-bool ContentRendererClient::AllowBrowserPlugin(
-    WebKit::WebPluginContainer* container) const {
-  return false;
-}
-
-MessageLoop* ContentRendererClient::OverrideCompositorMessageLoop() const {
+const void* ContentRendererClient::CreatePPAPIInterface(
+    const std::string& interface_name) {
   return NULL;
 }
 
-bool ContentRendererClient::ShouldCreateCompositorInputHandler() const {
-  return true;
+bool ContentRendererClient::IsExternalPepperPlugin(
+    const std::string& module_name) {
+  return false;
+}
+
+bool ContentRendererClient::IsPluginAllowedToCallRequestOSFileHandle(
+    WebKit::WebPluginContainer* container) {
+  return false;
+}
+
+bool ContentRendererClient::AllowBrowserPlugin(
+    WebKit::WebPluginContainer* container) {
+  return false;
+}
+
+bool ContentRendererClient::AllowPepperMediaStreamAPI(const GURL& url) {
+  return false;
 }
 
 }  // namespace content

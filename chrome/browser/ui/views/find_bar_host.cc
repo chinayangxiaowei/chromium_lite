@@ -39,7 +39,7 @@ FindBarHost::FindBarHost(BrowserView* browser_view)
     : DropdownBarHost(browser_view),
       find_bar_controller_(NULL) {
   FindBarView* find_bar_view = new FindBarView(this);
-  Init(find_bar_view, find_bar_view);
+  Init(browser_view->find_bar_host_view(), find_bar_view, find_bar_view);
 }
 
 FindBarHost::~FindBarHost() {
@@ -268,6 +268,10 @@ gfx::Rect FindBarHost::GetDialogPosition(gfx::Rect avoid_overlapping_rect) {
   if (widget_bounds.width() < prefsize.width())
     prefsize.set_width(widget_bounds.width());
 
+  // Don't show the find bar if |widget_bounds| is not tall enough.
+  if (widget_bounds.height() < prefsize.height())
+    return gfx::Rect();
+
   // Place the view in the top right corner of the widget boundaries (top left
   // for RTL languages).
   gfx::Rect view_location;
@@ -308,6 +312,12 @@ void FindBarHost::SetDialogPosition(const gfx::Rect& new_pos, bool no_redraw) {
   UpdateWindowEdges(new_pos);
 
   SetWidgetPositionNative(new_pos, no_redraw);
+
+  // Tell the immersive mode controller about the find bar's new bounds. The
+  // immersive mode controller uses the bounds to keep the top-of-window views
+  // revealed when the mouse is hovered over the find bar.
+  browser_view()->immersive_mode_controller()->OnFindBarVisibleBoundsChanged(
+      host()->GetWindowBoundsInScreen());
 }
 
 void FindBarHost::GetWidgetBounds(gfx::Rect* bounds) {
@@ -332,6 +342,17 @@ void FindBarHost::UnregisterAccelerators() {
   focus_manager()->UnregisterAccelerator(escape, this);
 
   DropdownBarHost::UnregisterAccelerators();
+}
+
+void FindBarHost::OnVisibilityChanged() {
+  // Tell the immersive mode controller about the find bar's bounds. The
+  // immersive mode controller uses the bounds to keep the top-of-window views
+  // revealed when the mouse is hovered over the find bar.
+  gfx::Rect visible_bounds;
+  if (IsVisible())
+    visible_bounds = host()->GetWindowBoundsInScreen();
+  browser_view()->immersive_mode_controller()->OnFindBarVisibleBoundsChanged(
+      visible_bounds);
 }
 
 ////////////////////////////////////////////////////////////////////////////////

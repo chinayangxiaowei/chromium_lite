@@ -8,21 +8,21 @@
 
 #include "base/debug/trace_event.h"
 #include "base/lazy_instance.h"
-#include "base/message_loop.h"
-#include "base/process.h"
-#include "base/string_number_conversions.h"
+#include "base/message_loop/message_loop.h"
+#include "base/process/process.h"
+#include "base/strings/string_number_conversions.h"
 #include "content/common/devtools_messages.h"
 #include "content/common/view_messages.h"
 #include "content/renderer/devtools/devtools_agent_filter.h"
 #include "content/renderer/devtools/devtools_client.h"
 #include "content/renderer/render_view_impl.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebPoint.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebString.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebConsoleMessage.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebConsoleMessage.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebDevToolsAgent.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebFrame.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebView.h"
+#include "third_party/WebKit/public/platform/WebPoint.h"
+#include "third_party/WebKit/public/platform/WebString.h"
+#include "third_party/WebKit/public/web/WebConsoleMessage.h"
+#include "third_party/WebKit/public/web/WebConsoleMessage.h"
+#include "third_party/WebKit/public/web/WebDevToolsAgent.h"
+#include "third_party/WebKit/public/web/WebFrame.h"
+#include "third_party/WebKit/public/web/WebView.h"
 
 #if defined(USE_TCMALLOC)
 #include "third_party/tcmalloc/chromium/src/gperftools/heap-profiler.h"
@@ -47,19 +47,17 @@ namespace {
 class WebKitClientMessageLoopImpl
     : public WebDevToolsAgentClient::WebKitClientMessageLoop {
  public:
-  WebKitClientMessageLoopImpl() : message_loop_(MessageLoop::current()) { }
-  virtual ~WebKitClientMessageLoopImpl() {
-    message_loop_ = NULL;
-  }
+  WebKitClientMessageLoopImpl() : message_loop_(base::MessageLoop::current()) {}
+  virtual ~WebKitClientMessageLoopImpl() { message_loop_ = NULL; }
   virtual void run() {
-    MessageLoop::ScopedNestableTaskAllower allow(message_loop_);
+    base::MessageLoop::ScopedNestableTaskAllower allow(message_loop_);
     message_loop_->Run();
   }
   virtual void quitNow() {
     message_loop_->QuitNow();
   }
  private:
-  MessageLoop* message_loop_;
+  base::MessageLoop* message_loop_;
 };
 
 typedef std::map<int, DevToolsAgent*> IdToAgentMap;
@@ -69,7 +67,9 @@ base::LazyInstance<IdToAgentMap>::Leaky
 } //  namespace
 
 DevToolsAgent::DevToolsAgent(RenderViewImpl* render_view)
-    : RenderViewObserver(render_view), is_attached_(false) {
+    : RenderViewObserver(render_view),
+      is_attached_(false),
+      is_devtools_client_(false) {
   g_agent_for_routing_id.Get()[routing_id()] = this;
 
   render_view->webview()->setDevToolsAgentClient(this);
@@ -135,7 +135,13 @@ void DevToolsAgent::clearBrowserCookies() {
 void DevToolsAgent::setTraceEventCallback(TraceEventCallback cb) {
   TraceLog* trace_log = TraceLog::GetInstance();
   trace_log->SetEventCallback(cb);
-  trace_log->SetEnabled(!!cb, TraceLog::RECORD_UNTIL_FULL);
+  if (!!cb) {
+    trace_log->SetEnabled(base::debug::CategoryFilter(
+        base::debug::CategoryFilter::kDefaultCategoryFilterString),
+        TraceLog::RECORD_UNTIL_FULL);
+  } else {
+    trace_log->SetDisabled();
+  }
 }
 
 #if defined(USE_TCMALLOC) && !defined(OS_WIN)
@@ -237,6 +243,10 @@ void DevToolsAgent::ContinueProgram() {
 }
 
 void DevToolsAgent::OnSetupDevToolsClient() {
+  // We only want to register once per render view.
+  if (is_devtools_client_)
+    return;
+  is_devtools_client_ = true;
   new DevToolsClient(static_cast<RenderViewImpl*>(render_view()));
 }
 

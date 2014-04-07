@@ -22,7 +22,7 @@ class LocationIconDecoration;
 
 class EVBubbleDecoration : public BubbleDecoration {
  public:
-  EVBubbleDecoration(LocationIconDecoration* location_icon, NSFont* font);
+  explicit EVBubbleDecoration(LocationIconDecoration* location_icon);
   virtual ~EVBubbleDecoration();
 
   // |GetWidthForSpace()| will set |full_label| as the label, if it
@@ -34,7 +34,7 @@ class EVBubbleDecoration : public BubbleDecoration {
   NSPoint GetBubblePointInFrame(NSRect frame);
 
   // Implement |LocationBarDecoration|.
-  virtual CGFloat GetWidthForSpace(CGFloat width, CGFloat text_width) OVERRIDE;
+  virtual CGFloat GetWidthForSpace(CGFloat width) OVERRIDE;
   virtual bool IsDraggable() OVERRIDE;
   virtual NSPasteboard* GetDragPasteboard() OVERRIDE;
   virtual NSImage* GetDragImage() OVERRIDE;
@@ -43,11 +43,8 @@ class EVBubbleDecoration : public BubbleDecoration {
   virtual bool AcceptsMousePress() OVERRIDE;
 
  private:
-  // Keeps a reference to the font for use when eliding.
-  scoped_nsobject<NSFont> font_;
-
   // The real label.  BubbleDecoration's label may be elided.
-  scoped_nsobject<NSString> full_label_;
+  base::scoped_nsobject<NSString> full_label_;
 
   LocationIconDecoration* location_icon_;  // weak, owned by location bar.
 

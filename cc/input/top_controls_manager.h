@@ -7,6 +7,7 @@
 
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "cc/input/top_controls_state.h"
 #include "cc/layers/layer_impl.h"
 #include "ui/gfx/size.h"
 #include "ui/gfx/vector2d_f.h"
@@ -47,7 +48,9 @@ class CC_EXPORT TopControlsManager
   }
   AnimationDirection animation_direction() { return animation_direction_; }
 
-  void EnableHidingTopControls(bool enable);
+  void UpdateTopControlsState(TopControlsState constraints,
+                              TopControlsState current,
+                              bool animate);
 
   void ScrollBegin();
   gfx::Vector2dF ScrollBy(const gfx::Vector2dF pending_delta);
@@ -62,7 +65,7 @@ class CC_EXPORT TopControlsManager
                      float top_controls_hide_threshold);
 
  private:
-  void SetControlsTopOffset(float);
+  void SetControlsTopOffset(float offset);
   void ResetAnimations();
   void SetupAnimation(AnimationDirection direction);
   void StartAnimationIfNecessary();
@@ -73,7 +76,7 @@ class CC_EXPORT TopControlsManager
 
   scoped_ptr<KeyframedFloatAnimationCurve> top_controls_animation_;
   AnimationDirection animation_direction_;
-  bool enable_hiding_;
+  TopControlsState permitted_state_;
   float controls_top_offset_;
   float top_controls_height_;
 

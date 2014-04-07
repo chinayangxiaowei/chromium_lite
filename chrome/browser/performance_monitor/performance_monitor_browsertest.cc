@@ -9,6 +9,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/threading/sequenced_worker_pool.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/performance_monitor/constants.h"
@@ -28,7 +29,6 @@
 #include "chrome/browser/ui/host_desktop.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_constants.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/chrome_version_info.h"
@@ -41,6 +41,10 @@
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "content/public/test/test_utils.h"
+
+#if defined(OS_CHROMEOS)
+#include "chromeos/chromeos_switches.h"
+#endif
 
 #if defined(OS_MACOSX)
 #include "base/mac/scoped_nsautorelease_pool.h"
@@ -285,9 +289,9 @@ class PerformanceMonitorUncleanExitBrowserTest
     // typically be logged in with 'user'.)
 #if defined(OS_CHROMEOS)
     const CommandLine command_line = *CommandLine::ForCurrentProcess();
-    if (command_line.HasSwitch(switches::kLoginProfile)) {
+    if (command_line.HasSwitch(chromeos::switches::kLoginProfile)) {
       first_profile_name_ =
-          command_line.GetSwitchValueASCII(switches::kLoginProfile);
+          command_line.GetSwitchValueASCII(chromeos::switches::kLoginProfile);
     } else {
       first_profile_name_ = chrome::kInitialProfile;
     }
@@ -303,12 +307,12 @@ class PerformanceMonitorUncleanExitBrowserTest
     PathService::Get(chrome::DIR_TEST_DATA, &stock_prefs_file);
     stock_prefs_file = stock_prefs_file.AppendASCII("performance_monitor")
                                        .AppendASCII("unclean_exit_prefs");
-    CHECK(file_util::PathExists(stock_prefs_file));
+    CHECK(base::PathExists(stock_prefs_file));
 
     base::FilePath first_profile_prefs_file =
         first_profile.Append(chrome::kPreferencesFilename);
-    CHECK(file_util::CopyFile(stock_prefs_file, first_profile_prefs_file));
-    CHECK(file_util::PathExists(first_profile_prefs_file));
+    CHECK(base::CopyFile(stock_prefs_file, first_profile_prefs_file));
+    CHECK(base::PathExists(first_profile_prefs_file));
 
     second_profile_name_ =
         std::string(chrome::kMultiProfileDirPrefix)
@@ -320,8 +324,8 @@ class PerformanceMonitorUncleanExitBrowserTest
 
     base::FilePath second_profile_prefs_file =
         second_profile.Append(chrome::kPreferencesFilename);
-    CHECK(file_util::CopyFile(stock_prefs_file, second_profile_prefs_file));
-    CHECK(file_util::PathExists(second_profile_prefs_file));
+    CHECK(base::CopyFile(stock_prefs_file, second_profile_prefs_file));
+    CHECK(base::PathExists(second_profile_prefs_file));
 
     return true;
   }
@@ -367,12 +371,12 @@ class PerformanceMonitorSessionRestoreBrowserTest
     observer.Wait();
 
     // Create a new window, which should trigger session restore.
+    content::TestNavigationObserver restore_observer(NULL, expected_tab_count);
+    restore_observer.StartWatchingNewWebContents();
     ui_test_utils::BrowserAddedObserver window_observer;
-    content::TestNavigationObserver navigation_observer(
-        content::NotificationService::AllSources(), expected_tab_count);
-    chrome::NewEmptyWindow(profile, chrome::HOST_DESKTOP_TYPE_NATIVE);
+    chrome::NewEmptyWindow(profile, chrome::GetActiveDesktop());
     Browser* new_browser = window_observer.WaitForSingleNewBrowser();
-    navigation_observer.Wait();
+    restore_observer.Wait();
     g_browser_process->ReleaseModule();
 
     return new_browser;

@@ -8,7 +8,6 @@
 #include "chrome/browser/extensions/extension_toolbar_model.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/in_process_browser_test.h"
 
 using extensions::Extension;
@@ -58,7 +57,7 @@ class ExtensionToolbarModelTest : public ExtensionBrowserTest,
     for (extensions::ExtensionList::const_iterator i = toolbar_items.begin();
          i < toolbar_items.end(); ++i) {
       if (index-- == 0)
-        return *i;
+        return i->get();
     }
     return NULL;
   }
@@ -72,9 +71,6 @@ class ExtensionToolbarModelTest : public ExtensionBrowserTest,
 };
 
 IN_PROC_BROWSER_TEST_F(ExtensionToolbarModelTest, Basic) {
-  CommandLine::ForCurrentProcess()->AppendSwitch(
-      switches::kEnableExperimentalExtensionApis);
-
   // Load an extension with no browser action.
   ASSERT_TRUE(LoadExtension(test_data_dir_.AppendASCII("api_test")
                                           .AppendASCII("browser_action")
@@ -112,9 +108,6 @@ IN_PROC_BROWSER_TEST_F(ExtensionToolbarModelTest, Basic) {
 }
 
 IN_PROC_BROWSER_TEST_F(ExtensionToolbarModelTest, ReorderAndReinsert) {
-  CommandLine::ForCurrentProcess()->AppendSwitch(
-      switches::kEnableExperimentalExtensionApis);
-
   // Load an extension with a browser action.
   base::FilePath extension_a_path(test_data_dir_.AppendASCII("api_test")
                                           .AppendASCII("browser_action")
@@ -346,4 +339,35 @@ IN_PROC_BROWSER_TEST_F(ExtensionToolbarModelTest, Uninstall) {
   // uninstall time).
   EXPECT_STREQ(idA.c_str(), ExtensionAt(0)->id().c_str());
   EXPECT_STREQ(idB.c_str(), ExtensionAt(1)->id().c_str());
+}
+
+IN_PROC_BROWSER_TEST_F(ExtensionToolbarModelTest, ReorderOnPrefChange) {
+  // Load three extensions with browser action.
+  base::FilePath extension_a_path(test_data_dir_.AppendASCII("api_test")
+                                                .AppendASCII("browser_action")
+                                                .AppendASCII("basics"));
+  ASSERT_TRUE(LoadExtension(extension_a_path));
+  base::FilePath extension_b_path(test_data_dir_.AppendASCII("api_test")
+                                                .AppendASCII("browser_action")
+                                                .AppendASCII("popup"));
+  ASSERT_TRUE(LoadExtension(extension_b_path));
+  base::FilePath extension_c_path(test_data_dir_.AppendASCII("api_test")
+                                                .AppendASCII("browser_action")
+                                                .AppendASCII("remove_popup"));
+  ASSERT_TRUE(LoadExtension(extension_c_path));
+  std::string id_a = ExtensionAt(0)->id();
+  std::string id_b = ExtensionAt(1)->id();
+  std::string id_c = ExtensionAt(2)->id();
+
+  // Change value of toolbar preference.
+  extensions::ExtensionIdList new_order;
+  new_order.push_back(id_c);
+  new_order.push_back(id_b);
+  extensions::ExtensionPrefs::Get(browser()->profile())->SetToolbarOrder(
+      new_order);
+
+  // Verify order is changed.
+  EXPECT_EQ(id_c, ExtensionAt(0)->id());
+  EXPECT_EQ(id_b, ExtensionAt(1)->id());
+  EXPECT_EQ(id_a, ExtensionAt(2)->id());
 }

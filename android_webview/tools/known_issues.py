@@ -41,6 +41,7 @@ KNOWN_INCOMPATIBLE = {
         'third_party/apple_sample_code',
         'third_party/bsdiff',
         'third_party/bspatch',
+        'third_party/speech-dispatcher',
         'third_party/sudden_motion_sensor',
         'third_party/swiftshader',
         'third_party/talloc',
@@ -50,22 +51,13 @@ KNOWN_INCOMPATIBLE = {
 
         # Code we don't want to build/include by accident from the main chromium
         # src/ directory.
+        'third_party/ashmem/*.[ch]',
         'third_party/expat/files/lib',
         'third_party/libjpeg/*.[ch]',
     ],
     'third_party/icu': [
         # Incompatible code from ICU's repository.
         'source/data/brkitr',
-
-        # Code we don't want to build/include by accident from ICU's repository.
-        'android',
-        'build',
-        'linux',
-        'mac',
-        'patches',
-        'public',
-        'source',
-        'windows',
     ],
 }
 

@@ -7,11 +7,11 @@
 
 #include <string>
 
-#include "ash/wm/session_state_observer.h"
+#include "ash/wm/lock_state_observer.h"
 #include "base/compiler_specific.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "chrome/browser/chromeos/login/lock_window.h"
 #include "chrome/browser/chromeos/login/login_display.h"
 #include "chrome/browser/chromeos/login/screen_locker_delegate.h"
@@ -31,7 +31,11 @@ namespace chromeos {
 
 class ScreenLocker;
 class WebUILoginDisplay;
-struct UserCredentials;
+struct UserContext;
+
+namespace login {
+class NetworkStateHelper;
+}
 
 namespace test {
 class WebUIScreenLockerTester;
@@ -43,7 +47,7 @@ class WebUIScreenLocker : public WebUILoginView,
                           public LoginDisplay::Delegate,
                           public ScreenLockerDelegate,
                           public LockWindow::Observer,
-                          public ash::SessionStateObserver,
+                          public ash::LockStateObserver,
                           public views::WidgetObserver,
                           public PowerManagerClient::Observer,
                           public content::WebContentsObserver {
@@ -51,7 +55,7 @@ class WebUIScreenLocker : public WebUILoginView,
   explicit WebUIScreenLocker(ScreenLocker* screen_locker);
 
   // ScreenLockerDelegate implementation.
-  virtual void LockScreen(bool unlock_on_input) OVERRIDE;
+  virtual void LockScreen() OVERRIDE;
   virtual void ScreenLockReady() OVERRIDE;
   virtual void OnAuthenticate() OVERRIDE;
   virtual void SetInputEnabled(bool enabled) OVERRIDE;
@@ -66,12 +70,10 @@ class WebUIScreenLocker : public WebUILoginView,
   // LoginDisplay::Delegate: implementation
   virtual void CancelPasswordChangedFlow() OVERRIDE;
   virtual void CreateAccount() OVERRIDE;
-  virtual void CreateLocallyManagedUser(const string16& display_name,
-                                        const std::string& password) OVERRIDE;
-
-  virtual void CompleteLogin(const UserCredentials& credentials) OVERRIDE;
+  virtual void CompleteLogin(const UserContext& user_context) OVERRIDE;
   virtual string16 GetConnectedNetworkName() OVERRIDE;
-  virtual void Login(const UserCredentials& credentials) OVERRIDE;
+  virtual bool IsSigninInProgress() const OVERRIDE;
+  virtual void Login(const UserContext& user_context) OVERRIDE;
   virtual void LoginAsRetailModeUser() OVERRIDE;
   virtual void LoginAsGuest() OVERRIDE;
   virtual void MigrateUserData(const std::string& old_password) OVERRIDE;
@@ -79,7 +81,9 @@ class WebUIScreenLocker : public WebUILoginView,
   virtual void OnSigninScreenReady() OVERRIDE;
   virtual void OnUserSelected(const std::string& username) OVERRIDE;
   virtual void OnStartEnterpriseEnrollment() OVERRIDE;
+  virtual void OnStartKioskEnableScreen() OVERRIDE;
   virtual void OnStartDeviceReset() OVERRIDE;
+  virtual void OnStartKioskAutolaunchScreen() OVERRIDE;
   virtual void ShowWrongHWIDScreen() OVERRIDE;
   virtual void ResetPublicSessionAutoLoginTimer() OVERRIDE;
   virtual void ResyncUserData() OVERRIDE;
@@ -94,9 +98,9 @@ class WebUIScreenLocker : public WebUILoginView,
   // LockWindow::Observer implementation.
   virtual void OnLockWindowReady() OVERRIDE;
 
-  // SessionStateObserver override.
-  virtual void OnSessionStateEvent(ash::SessionStateObserver::EventType event)
-      OVERRIDE;
+  // LockStateObserver override.
+  virtual void OnLockStateEvent(
+      ash::LockStateObserver::EventType event) OVERRIDE;
 
   // WidgetObserver override.
   virtual void OnWidgetDestroying(views::Widget* widget) OVERRIDE;
@@ -107,7 +111,7 @@ class WebUIScreenLocker : public WebUILoginView,
                                 const base::TimeTicks& time) OVERRIDE;
 
   // Overridden from content::WebContentsObserver:
-  virtual void RenderViewGone(base::TerminationStatus status) OVERRIDE;
+  virtual void RenderProcessGone(base::TerminationStatus status) OVERRIDE;
 
  private:
   friend class test::WebUIScreenLockerTester;
@@ -134,6 +138,8 @@ class WebUIScreenLocker : public WebUILoginView,
 
   // Time when lock was initiated, required for metrics.
   base::TimeTicks lock_time_;
+
+  scoped_ptr<login::NetworkStateHelper> network_state_helper_;
 
   base::WeakPtrFactory<WebUIScreenLocker> weak_factory_;
 

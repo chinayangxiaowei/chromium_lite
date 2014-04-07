@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 #include "content/browser/renderer_host/media/peer_connection_tracker_host.h"
 
-#include "base/process_util.h"
 #include "content/browser/media/webrtc_internals.h"
 #include "content/common/media/peer_connection_tracker_messages.h"
 
@@ -40,9 +39,9 @@ PeerConnectionTrackerHost::~PeerConnectionTrackerHost() {
 
 void PeerConnectionTrackerHost::OnAddPeerConnection(
     const PeerConnectionInfo& info) {
-  WebRTCInternals::GetInstance()->AddPeerConnection(
+  WebRTCInternals::GetInstance()->OnAddPeerConnection(
       render_process_id_,
-      base::GetProcId(peer_handle()),
+      peer_pid(),
       info.lid,
       info.url,
       info.servers,
@@ -50,14 +49,13 @@ void PeerConnectionTrackerHost::OnAddPeerConnection(
 }
 
 void PeerConnectionTrackerHost::OnRemovePeerConnection(int lid) {
-  WebRTCInternals::GetInstance()->RemovePeerConnection(
-      base::GetProcId(peer_handle()), lid);
+  WebRTCInternals::GetInstance()->OnRemovePeerConnection(peer_pid(), lid);
 }
 
 void PeerConnectionTrackerHost::OnUpdatePeerConnection(
     int lid, const std::string& type, const std::string& value) {
-  WebRTCInternals::GetInstance()->UpdatePeerConnection(
-      base::GetProcId(peer_handle()),
+  WebRTCInternals::GetInstance()->OnUpdatePeerConnection(
+      peer_pid(),
       lid,
       type,
       value);
@@ -65,8 +63,7 @@ void PeerConnectionTrackerHost::OnUpdatePeerConnection(
 
 void PeerConnectionTrackerHost::OnAddStats(int lid,
                                            const base::ListValue& value) {
-  WebRTCInternals::GetInstance()->AddStats(
-      base::GetProcId(peer_handle()), lid, value);
+  WebRTCInternals::GetInstance()->OnAddStats(peer_pid(), lid, value);
 }
 
 }  // namespace content

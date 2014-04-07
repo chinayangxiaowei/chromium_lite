@@ -2,16 +2,20 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/stringprintf.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/sync/profile_sync_service_harness.h"
 #include "chrome/browser/sync/test/integration/autofill_helper.h"
 #include "chrome/browser/sync/test/integration/bookmarks_helper.h"
 #include "chrome/browser/sync/test/integration/performance/sync_timing_helper.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
-#include "chrome/browser/webdata/autofill_entry.h"
-#include "components/autofill/browser/autofill_common_test.h"
-#include "components/autofill/browser/autofill_profile.h"
+#include "components/autofill/core/browser/autofill_common_test.h"
+#include "components/autofill/core/browser/autofill_profile.h"
+#include "components/autofill/core/browser/webdata/autofill_entry.h"
+
+using autofill::ServerFieldType;
+using autofill::AutofillKey;
+using autofill::AutofillProfile;
 
 using autofill_helper::AllProfilesMatch;
 using autofill_helper::GetAllKeys;
@@ -99,7 +103,7 @@ void AutofillSyncPerfTest::UpdateProfiles(int profile) {
   std::vector<AutofillProfile> autofill_profiles;
   for (size_t i = 0; i < all_profiles.size(); ++i) {
     autofill_profiles.push_back(*all_profiles[i]);
-    autofill_profiles.back().SetRawInfo(AutofillFieldType(NAME_FIRST),
+    autofill_profiles.back().SetRawInfo(autofill::NAME_FIRST,
                                         UTF8ToUTF16(NextName()));
   }
   SetProfiles(profile, &autofill_profiles);
@@ -120,9 +124,9 @@ void AutofillSyncPerfTest::AddKeys(int profile, int num_keys) {
 
 const AutofillProfile AutofillSyncPerfTest::NextAutofillProfile() {
   AutofillProfile profile;
-  autofill_test::SetProfileInfoWithGuid(&profile, NextGUID().c_str(),
-                                        NextName().c_str(), "", "", "", "", "",
-                                        "", "", "", "", "", "");
+  autofill::test::SetProfileInfoWithGuid(&profile, NextGUID().c_str(),
+                                         NextName().c_str(), "", "", "", "", "",
+                                         "", "", "", "", "", "");
   return profile;
 }
 

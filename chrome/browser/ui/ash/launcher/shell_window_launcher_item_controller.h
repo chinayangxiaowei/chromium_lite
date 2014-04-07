@@ -13,6 +13,10 @@
 #include "chrome/browser/ui/ash/launcher/launcher_item_controller.h"
 #include "ui/aura/window_observer.h"
 
+namespace apps {
+class ShellWindow;
+}
+
 namespace aura {
 class Window;
 }
@@ -22,7 +26,6 @@ class Image;
 }
 
 class ChromeLauncherController;
-class ShellWindow;
 
 // This is a ShellWindowItemLauncherController for shell windows. There is one
 // instance per app, per launcher id.
@@ -42,7 +45,7 @@ class ShellWindowLauncherItemController : public LauncherItemController,
 
   virtual ~ShellWindowLauncherItemController();
 
-  void AddShellWindow(ShellWindow* shell_window,
+  void AddShellWindow(apps::ShellWindow* shell_window,
                       ash::LauncherItemStatus status);
 
   void RemoveShellWindowForWindow(aura::Window* window);
@@ -64,7 +67,8 @@ class ShellWindowLauncherItemController : public LauncherItemController,
   virtual void LauncherItemChanged(
       int model_index,
       const ash::LauncherItem& old_item) OVERRIDE {}
-  virtual ChromeLauncherAppMenuItems GetApplicationList() OVERRIDE;
+  virtual ChromeLauncherAppMenuItems GetApplicationList(
+      int event_flags) OVERRIDE;
 
   // aura::WindowObserver
   virtual void OnWindowPropertyChanged(aura::Window* window,
@@ -78,15 +82,19 @@ class ShellWindowLauncherItemController : public LauncherItemController,
   void ActivateIndexedApp(size_t index);
 
  private:
-  typedef std::list<ShellWindow*> ShellWindowList;
+  typedef std::list<apps::ShellWindow*> ShellWindowList;
 
-  void ShowAndActivate(ShellWindow* shell_window);
+  void ShowAndActivateOrMinimize(apps::ShellWindow* shell_window);
+
+  // Activate the given |window_to_show|, or - if already selected - advance to
+  // the next window of similar type.
+  void ActivateOrAdvanceToNextShellWindow(apps::ShellWindow* window_to_show);
 
   // List of associated shell windows
   ShellWindowList shell_windows_;
 
   // Pointer to the most recently active shell window
-  ShellWindow* last_active_shell_window_;
+  apps::ShellWindow* last_active_shell_window_;
 
   // The launcher id associated with this set of windows. There is one
   // AppLauncherItemController for each |app_launcher_id_|.

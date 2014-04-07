@@ -15,7 +15,7 @@
 #include "base/mac/scoped_nsautorelease_pool.h"
 #include "base/metrics/histogram.h"
 #include "base/prefs/pref_service.h"
-#include "base/sys_string_conversions.h"
+#include "base/strings/sys_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/autocomplete/autocomplete_classifier.h"
 #include "chrome/browser/autocomplete/autocomplete_classifier_factory.h"
@@ -23,7 +23,6 @@
 #include "chrome/browser/devtools/devtools_window.h"
 #include "chrome/browser/extensions/tab_helper.h"
 #include "chrome/browser/favicon/favicon_tab_helper.h"
-#include "chrome/browser/net/url_fixer_upper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/themes/theme_service.h"
@@ -53,9 +52,10 @@
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_delegate.h"
 #include "chrome/browser/ui/tabs/tab_utils.h"
-#include "chrome/browser/ui/web_contents_modal_dialog_manager.h"
 #include "chrome/common/chrome_switches.h"
+#include "chrome/common/net/url_fixer_upper.h"
 #include "chrome/common/pref_names.h"
+#include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/user_metrics.h"
 #include "content/public/browser/web_contents.h"
@@ -65,6 +65,8 @@
 #include "grit/ui_resources.h"
 #include "skia/ext/skia_utils_mac.h"
 #import "third_party/GTM/AppKit/GTMNSAnimation+Duration.h"
+#import "ui/base/animation/animation_container.h"
+#include "ui/base/cocoa/animation_utils.h"
 #import "ui/base/cocoa/tracking_area.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/list_selection_model.h"
@@ -160,7 +162,7 @@ private:
 // 10.6 and 10.7.
 NSImage* CreateImageWithSize(NSSize size,
                              void (^drawingHandler)(NSSize)) {
-  scoped_nsobject<NSImage> result([[NSImage alloc] initWithSize:size]);
+  base::scoped_nsobject<NSImage> result([[NSImage alloc] initWithSize:size]);
   [NSGraphicsContext saveGraphicsState];
   for (ui::ScaleFactor scale_factor : ui::GetSupportedScaleFactors()) {
     float scale = GetScaleFactorScale(scale_factor);
@@ -500,6 +502,7 @@ NSImage* Overlay(NSImage* ground, NSImage* overlay, CGFloat alpha) {
         [[TabStripDragController alloc] initWithTabStripController:self]);
     tabContentsArray_.reset([[NSMutableArray alloc] init]);
     tabArray_.reset([[NSMutableArray alloc] init]);
+    animationContainer_ = new ui::AnimationContainer;
     NSWindow* browserWindow = [view window];
 
     // Important note: any non-tab subviews not added to |permanentSubviews_|
@@ -536,7 +539,7 @@ NSImage* Overlay(NSImage* ground, NSImage* overlay, CGFloat alpha) {
                                                        controller:self]);
     [self addSubviewToPermanentList:dragBlockingView_];
 
-    newTabTargetFrame_ = NSMakeRect(0, 0, 0, 0);
+    newTabTargetFrame_ = NSZeroRect;
     availableResizeWidth_ = kUseFullAvailableWidth;
 
     closingControllers_.reset([[NSMutableSet alloc] init]);
@@ -601,10 +604,11 @@ NSImage* Overlay(NSImage* ground, NSImage* overlay, CGFloat alpha) {
       if (selection == currentContents) {
         // Must manually force a selection since the model won't send
         // selection messages in this scenario.
-        [self activateTabWithContents:currentContents
-                     previousContents:NULL
-                              atIndex:i
-                          userGesture:NO];
+        [self
+            activateTabWithContents:currentContents
+                   previousContents:NULL
+                            atIndex:i
+                             reason:TabStripModelObserver::CHANGE_REASON_NONE];
       }
     }
     // Don't lay out the tabs until after the controller has been fully
@@ -653,6 +657,10 @@ NSImage* Overlay(NSImage* ground, NSImage* overlay, CGFloat alpha) {
   DCHECK(modelIndex >= 0 && modelIndex < tabStripModel_->count());
   NSInteger index = [self indexFromModelIndex:modelIndex];
   TabContentsController* controller = [tabContentsArray_ objectAtIndex:index];
+
+  // Make sure that any layers that move are not animated to their new
+  // positions.
+  ScopedCAActionDisabler disabler;
 
   // Resize the new view to fit the window. Calling |view| may lazily
   // instantiate the TabContentsController from the nib. Until we call
@@ -1288,7 +1296,7 @@ NSImage* Overlay(NSImage* ground, NSImage* overlay, CGFloat alpha) {
 
   // Make a new tab. Load the contents of this tab from the nib and associate
   // the new controller with |contents| so it can be looked up later.
-  scoped_nsobject<TabContentsController> contentsController(
+  base::scoped_nsobject<TabContentsController> contentsController(
       [[TabContentsController alloc] initWithContents:contents]);
   [tabContentsArray_ insertObject:contentsController atIndex:index];
 
@@ -1339,7 +1347,7 @@ NSImage* Overlay(NSImage* ground, NSImage* overlay, CGFloat alpha) {
 - (void)activateTabWithContents:(content::WebContents*)newContents
                previousContents:(content::WebContents*)oldContents
                         atIndex:(NSInteger)modelIndex
-                    userGesture:(bool)wasUserGesture {
+                         reason:(int)reason {
   // Take closing tabs into account.
   NSInteger activeIndex = [self indexFromModelIndex:modelIndex];
 
@@ -1402,7 +1410,7 @@ NSImage* Overlay(NSImage* ground, NSImage* overlay, CGFloat alpha) {
   // Simply create a new TabContentsController for |newContents| and place it
   // into the array, replacing |oldContents|.  An ActiveTabChanged notification
   // will follow, at which point we will install the new view.
-  scoped_nsobject<TabContentsController> newController(
+  base::scoped_nsobject<TabContentsController> newController(
       [[TabContentsController alloc] initWithContents:newContents]);
 
   // Bye bye, |oldController|.
@@ -1483,9 +1491,9 @@ NSImage* Overlay(NSImage* ground, NSImage* overlay, CGFloat alpha) {
   NSView* tabView = [closingTab view];
   CAAnimation* animation = [[tabView animationForKey:@"frameOrigin"] copy];
   [animation autorelease];
-  scoped_nsobject<TabCloseAnimationDelegate> delegate(
-    [[TabCloseAnimationDelegate alloc] initWithTabStrip:self
-                                          tabController:closingTab]);
+  base::scoped_nsobject<TabCloseAnimationDelegate> delegate(
+      [[TabCloseAnimationDelegate alloc] initWithTabStrip:self
+                                            tabController:closingTab]);
   [animation setDelegate:delegate.get()];  // Retains delegate.
   NSMutableDictionary* animationDictionary =
       [NSMutableDictionary dictionaryWithDictionary:[tabView animations]];
@@ -1614,26 +1622,27 @@ NSImage* Overlay(NSImage* ground, NSImage* overlay, CGFloat alpha) {
         ui::ThemeProvider* theme = [[tabStripView_ window] themeProvider];
         if (theme && [tabController projecting]) {
           NSImage* projectorGlow =
-              theme->GetNSImageNamed(IDR_TAB_CAPTURE_GLOW, true);
-          NSImage* projector = theme->GetNSImageNamed(IDR_TAB_CAPTURE, true);
+              theme->GetNSImageNamed(IDR_TAB_CAPTURE_GLOW);
+          NSImage* projector = theme->GetNSImageNamed(IDR_TAB_CAPTURE);
 
           NSRect frame = NSMakeRect(0,
                                     0,
                                     kProjectingIconWidthAndHeight,
                                     kProjectingIconWidthAndHeight);
           TabProjectingImageView* projectingView =
-              [[[TabProjectingImageView alloc] initWithFrame:frame
-                                         backgroundImage:[imageView image]
-                                          projectorImage:projector
-                                              throbImage:projectorGlow
-                                              durationMS:kRecordingDurationMs]
-                  autorelease];
+              [[[TabProjectingImageView alloc]
+                  initWithFrame:frame
+                backgroundImage:[imageView image]
+                 projectorImage:projector
+                     throbImage:projectorGlow
+                     durationMS:kRecordingDurationMs
+             animationContainer:animationContainer_.get()] autorelease];
 
           iconView = projectingView;
         } else if (theme && chrome::ShouldShowRecordingIndicator(contents)) {
           // Create a masked favicon.
-          NSImage* mask = theme->GetNSImageNamed(IDR_TAB_RECORDING_MASK, true);
-          NSImage* recording = theme->GetNSImageNamed(IDR_TAB_RECORDING, true);
+          NSImage* mask = theme->GetNSImageNamed(IDR_TAB_RECORDING_MASK);
+          NSImage* recording = theme->GetNSImageNamed(IDR_TAB_RECORDING);
           NSImage* favIconMasked = CreateMaskedFaviconForRecording(
                                        [imageView image], mask, recording);
 
@@ -1645,7 +1654,8 @@ NSImage* Overlay(NSImage* ground, NSImage* overlay, CGFloat alpha) {
                 backgroundImage:favIconMasked
                      throbImage:recording
                      durationMS:kRecordingDurationMs
-                  throbPosition:kThrobPositionBottomRight] autorelease];
+                  throbPosition:kThrobPositionBottomRight
+             animationContainer:animationContainer_.get()] autorelease];
 
           iconView = recordingView;
         } else if (chrome::IsPlayingAudio(contents) ||
@@ -1655,6 +1665,8 @@ NSImage* Overlay(NSImage* ground, NSImage* overlay, CGFloat alpha) {
                 NSMakeRect(0, 0, kIconWidthAndHeight, kIconWidthAndHeight);
             tabAudioIndicatorViewMac = [[[TabAudioIndicatorViewMac alloc]
                 initWithFrame:frame] autorelease];
+            [tabAudioIndicatorViewMac
+                setAnimationContainer:animationContainer_.get()];
           }
           [tabAudioIndicatorViewMac
               setIsPlayingAudio:chrome::IsPlayingAudio(contents)];
@@ -1734,12 +1746,12 @@ NSImage* Overlay(NSImage* ground, NSImage* overlay, CGFloat alpha) {
   // Cancel any pending tab transition.
   hoverTabSelector_->CancelTabTransition();
 
-  scoped_nsobject<TabContentsController> movedTabContentsController(
+  base::scoped_nsobject<TabContentsController> movedTabContentsController(
       [[tabContentsArray_ objectAtIndex:from] retain]);
   [tabContentsArray_ removeObjectAtIndex:from];
   [tabContentsArray_ insertObject:movedTabContentsController.get()
                           atIndex:to];
-  scoped_nsobject<TabController> movedTabController(
+  base::scoped_nsobject<TabController> movedTabController(
       [[tabArray_ objectAtIndex:from] retain]);
   DCHECK([movedTabController isKindOfClass:[TabController class]]);
   [tabArray_ removeObjectAtIndex:from];
@@ -2032,6 +2044,7 @@ NSImage* Overlay(NSImage* ground, NSImage* overlay, CGFloat alpha) {
   if (activeTabView) {
     [subviews addObject:activeTabView];
   }
+  WithNoAnimation noAnimation;
   [tabStripView_ setSubviews:subviews];
   [self setTabTrackingAreasEnabled:mouseInside_];
 }
@@ -2257,7 +2270,7 @@ NSImage* Overlay(NSImage* ground, NSImage* overlay, CGFloat alpha) {
   NSImage* pressed = rb.GetNativeImageNamed(IDR_NEWTAB_BUTTON_P).ToNSImage();
 
   NSImage* foreground = ApplyMask(
-      theme->GetNSImageNamed(IDR_THEME_TAB_BACKGROUND, true), mask);
+      theme->GetNSImageNamed(IDR_THEME_TAB_BACKGROUND), mask);
 
   [[newTabButton_ cell] setImage:Overlay(foreground, normal, 1.0)
                   forButtonState:image_button_cell::kDefaultState];
@@ -2270,7 +2283,7 @@ NSImage* Overlay(NSImage* ground, NSImage* overlay, CGFloat alpha) {
   if (theme->UsingDefaultTheme()) {
     const CGFloat alpha = tabs::kImageNoFocusAlpha;
     NSImage* background = ApplyMask(
-        theme->GetNSImageNamed(IDR_THEME_TAB_BACKGROUND_INACTIVE, true), mask);
+        theme->GetNSImageNamed(IDR_THEME_TAB_BACKGROUND_INACTIVE), mask);
     [[newTabButton_ cell] setImage:Overlay(background, normal, alpha)
                     forButtonState:image_button_cell::kDefaultStateBackground];
     [[newTabButton_ cell] setImage:Overlay(background, hover, alpha)

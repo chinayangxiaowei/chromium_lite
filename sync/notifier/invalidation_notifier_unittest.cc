@@ -5,7 +5,7 @@
 #include "sync/notifier/invalidation_notifier.h"
 
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "jingle/notifier/base/fake_base_task.h"
 #include "jingle/notifier/base/notifier_options.h"
 #include "jingle/notifier/listener/fake_push_client.h"
@@ -33,6 +33,7 @@ class InvalidationNotifierTestDelegate {
   }
 
   void CreateInvalidator(
+      const std::string& invalidator_client_id,
       const std::string& initial_state,
       const base::WeakPtr<InvalidationStateTracker>&
           invalidation_state_tracker) {
@@ -40,6 +41,7 @@ class InvalidationNotifierTestDelegate {
     invalidator_.reset(
         new InvalidationNotifier(
             scoped_ptr<notifier::PushClient>(new notifier::FakePushClient()),
+            invalidator_client_id,
             InvalidationStateMap(),
             initial_state,
             MakeWeakHandle(invalidation_state_tracker),
@@ -74,7 +76,7 @@ class InvalidationNotifierTestDelegate {
   }
 
  private:
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
   scoped_ptr<InvalidationNotifier> invalidator_;
 };
 

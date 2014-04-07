@@ -13,11 +13,10 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/threading/non_thread_safe.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "net/base/completion_callback.h"
 #include "net/base/net_export.h"
 #include "net/ssl/server_bound_cert_store.h"
-#include "net/ssl/ssl_client_cert_type.h"
 
 namespace base {
 class TaskRunner;
@@ -29,7 +28,14 @@ class ServerBoundCertServiceJob;
 class ServerBoundCertServiceRequest;
 class ServerBoundCertServiceWorker;
 
-// A class for creating and fetching server bound certs.
+// A class for creating and fetching server bound certs. These certs are used
+// to identify users' machines; their public keys are used as channel IDs in
+// http://tools.ietf.org/html/draft-balfanz-tls-channelid-00.
+// As a result although certs are set to be invalid after one year, we don't
+// actually expire them. Once generated, certs are valid as long as the users
+// want. Users can delete existing certs, and new certs will be generated
+// automatically.
+
 // Inherits from NonThreadSafe in order to use the function
 // |CalledOnValidThread|.
 class NET_EXPORT ServerBoundCertService
@@ -85,17 +91,13 @@ class NET_EXPORT ServerBoundCertService
   // longer hold.
   bool IsSystemTimeValid() const { return is_system_time_valid_; }
 
-  // Fetches the domain bound cert for the specified origin of the specified
-  // type if one exists and creates one otherwise. Returns OK if successful or
-  // an error code upon failure.
-  //
-  // |requested_types| is a list of the TLS ClientCertificateTypes the site will
-  // accept, ordered from most preferred to least preferred.  Types we don't
-  // support will be ignored. See ssl_client_cert_type.h.
+  // Fetches the domain bound cert for the specified host if one exists and
+  // creates one otherwise. Returns OK if successful or an error code upon
+  // failure.
   //
   // On successful completion, |private_key| stores a DER-encoded
-  // PrivateKeyInfo struct, and |cert| stores a DER-encoded certificate, and
-  // |type| specifies the type of certificate that was returned.
+  // PrivateKeyInfo struct, and |cert| stores a DER-encoded certificate.
+  // The PrivateKeyInfo is always an ECDSA private key.
   //
   // |callback| must not be null. ERR_IO_PENDING is returned if the operation
   // could not be completed immediately, in which case the result code will
@@ -105,9 +107,7 @@ class NET_EXPORT ServerBoundCertService
   // RequestHandle object must be cancelled or destroyed before the
   // ServerBoundCertService is destroyed.
   int GetDomainBoundCert(
-      const std::string& origin,
-      const std::vector<uint8>& requested_types,
-      SSLClientCertType* type,
+      const std::string& host,
       std::string* private_key,
       std::string* cert,
       const CompletionCallback& callback,
@@ -121,6 +121,7 @@ class NET_EXPORT ServerBoundCertService
   uint64 requests() const { return requests_; }
   uint64 cert_store_hits() const { return cert_store_hits_; }
   uint64 inflight_joins() const { return inflight_joins_; }
+  uint64 workers_created() const { return workers_created_; }
 
  private:
   // Cancels the specified request. |req| is the handle stored by
@@ -128,8 +129,8 @@ class NET_EXPORT ServerBoundCertService
   // callback will not be called.
   void CancelRequest(ServerBoundCertServiceRequest* req);
 
-  void GotServerBoundCert(const std::string& server_identifier,
-                          SSLClientCertType type,
+  void GotServerBoundCert(int err,
+                          const std::string& server_identifier,
                           base::Time expiration_time,
                           const std::string& key,
                           const std::string& cert);
@@ -139,7 +140,6 @@ class NET_EXPORT ServerBoundCertService
       scoped_ptr<ServerBoundCertStore::ServerBoundCert> cert);
   void HandleResult(int error,
                     const std::string& server_identifier,
-                    SSLClientCertType type,
                     const std::string& private_key,
                     const std::string& cert);
 
@@ -154,6 +154,7 @@ class NET_EXPORT ServerBoundCertService
   uint64 requests_;
   uint64 cert_store_hits_;
   uint64 inflight_joins_;
+  uint64 workers_created_;
 
   bool is_system_time_valid_;
 

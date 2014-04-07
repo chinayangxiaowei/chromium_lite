@@ -35,18 +35,17 @@ TEST_F(ExtensionContextMenuModelTest, PolicyDisablesItems) {
                    .Set("page_action", DictionaryBuilder()
                         .Set("default_title", "Hello")))
       .Build();
-  ASSERT_TRUE(extension);
-  service_->AddExtension(extension);
+  ASSERT_TRUE(extension.get());
+  service_->AddExtension(extension.get());
 
   // Create a Browser for the ExtensionContextMenuModel to use.
-  Browser::CreateParams params(profile_.get(),
-                               chrome::HOST_DESKTOP_TYPE_NATIVE);
+  Browser::CreateParams params(profile_.get(), chrome::GetActiveDesktop());
   TestBrowserWindow test_window;
   params.window = &test_window;
   Browser browser(params);
 
   scoped_refptr<ExtensionContextMenuModel> menu(
-      new ExtensionContextMenuModel(extension, &browser, NULL));
+      new ExtensionContextMenuModel(extension.get(), &browser, NULL));
 
   extensions::ExtensionSystem* system =
       extensions::ExtensionSystem::Get(profile_.get());

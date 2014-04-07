@@ -7,29 +7,18 @@ embedder.tests = {};
 embedder.baseGuestURL = '';
 embedder.guestURL = '';
 
-embedder.testStatus = '';
-
 // Sends a message to WebViewTest denoting it is done and test
 // has failed.
 embedder.failTest = function(msg) {
-  embedder.testStatus = 'FAILED';
-  chrome.test.log('test failure, reason: ' + msg);
-  chrome.test.sendMessage('DoneMediaTest');
+  window.console.log('test failure, reason: ' + msg);
+  chrome.test.sendMessage('DoneMediaTest.FAILED');
 };
 
 // Sends a message to WebViewTest denoting it is done and test
-// has succeeded, iff the test has not already failed.
+// has succeeded.
 embedder.maybePassTest = function() {
-  if (embedder.testStatus != 'FAILED') {
-    embedder.testStatus = 'PASSED';
-  }
-  chrome.test.sendMessage('DoneMediaTest');
-};
-
-// Called by browser_tests to query test state.
-function getTestStatus() {
-  chrome.test.log('getTestStatus called: status = ' + embedder.testStatus);
-  return embedder.testStatus;
+  window.console.log('test passed');
+  chrome.test.sendMessage('DoneMediaTest.PASSED');
 };
 
 /** @private */
@@ -226,7 +215,7 @@ function startAllowTest(testName) {
   chrome.test.getConfig(function(config) {
     embedder.baseGuestURL = 'http://localhost:' + config.testServer.port;
     embedder.guestURL = embedder.baseGuestURL +
-        '/files/extensions/platform_apps/web_view/media_access' +
+        '/extensions/platform_apps/web_view/media_access' +
         '/media_access_guest.html';
     chrome.test.log('Guest url is: ' + embedder.guestURL);
 
@@ -235,7 +224,6 @@ function startAllowTest(testName) {
       embedder.failTest('No such test: ' + testName);
       return;
     }
-    embedder.testStatus = '';
     testFunction();
   });
 }

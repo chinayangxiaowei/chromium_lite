@@ -27,6 +27,7 @@ void WebMVideoClient::Reset() {
   display_width_ = -1;
   display_height_ = -1;
   display_unit_ = -1;
+  alpha_mode_ = -1;
 }
 
 bool WebMVideoClient::InitializeConfig(
@@ -39,10 +40,16 @@ bool WebMVideoClient::InitializeConfig(
   if (codec_id == "V_VP8") {
     video_codec = kCodecVP8;
     profile = VP8PROFILE_MAIN;
+  } else if (codec_id == "V_VP9") {
+    video_codec = kCodecVP9;
+    profile = VP9PROFILE_MAIN;
   } else {
     MEDIA_LOG(log_cb_) << "Unsupported video codec_id " << codec_id;
     return false;
   }
+
+  VideoFrame::Format format =
+      (alpha_mode_ == 1) ? VideoFrame::YV12A : VideoFrame::YV12;
 
   if (pixel_width_ <= 0 || pixel_height_ <= 0)
     return false;
@@ -90,9 +97,8 @@ bool WebMVideoClient::InitializeConfig(
   }
 
   config->Initialize(
-      video_codec, profile, VideoFrame::YV12, coded_size,
-      visible_rect, natural_size, extra_data, extra_data_size,
-      is_encrypted, true);
+      video_codec, profile, format, coded_size, visible_rect, natural_size,
+      extra_data, extra_data_size, is_encrypted, true);
   return config->IsValidConfig();
 }
 
@@ -126,6 +132,9 @@ bool WebMVideoClient::OnUInt(int id, int64 val) {
       break;
     case kWebMIdDisplayUnit:
       dst = &display_unit_;
+      break;
+    case kWebMIdAlphaMode:
+      dst = &alpha_mode_;
       break;
     default:
       return true;

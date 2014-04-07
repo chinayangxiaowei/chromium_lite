@@ -12,7 +12,7 @@
 #include "content/public/browser/notification_types.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
-#include "googleurl/src/gurl.h"
+#include "url/gurl.h"
 
 using content::BrowserThread;
 
@@ -20,7 +20,7 @@ SearchProviderInstallStateMessageFilter::
     SearchProviderInstallStateMessageFilter(
     int render_process_id,
     Profile* profile)
-    : ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)),
+    : weak_factory_(this),
       provider_data_(profile, content::NOTIFICATION_RENDERER_PROCESS_TERMINATED,
           content::Source<content::RenderProcessHost>(
               content::RenderProcessHost::FromID(render_process_id))),

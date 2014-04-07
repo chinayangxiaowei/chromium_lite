@@ -7,7 +7,6 @@
 
 #include "base/base_export.h"
 #include "base/callback_forward.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
 #include "base/memory/ref_counted.h"
 #include "base/platform_file.h"
@@ -24,14 +23,6 @@ class Time;
 // This class provides asynchronous access to common file routines.
 class BASE_EXPORT FileUtilProxy {
  public:
-  // Holds metadata for file or directory entry.
-  struct Entry {
-    FilePath::StringType name;
-    bool is_directory;
-    int64 size;
-    base::Time last_modified_time;
-  };
-
   // This callback is used by methods that report only an error code.  It is
   // valid to pass a null callback to any function that takes a StatusCallback,
   // in which case the operation will complete silently.
@@ -105,17 +96,10 @@ class BASE_EXPORT FileUtilProxy {
   // Deletes a file or a directory.
   // It is an error to delete a non-empty directory with recursive=false.
   // This returns false if task posting to |task_runner| has failed.
-  static bool Delete(TaskRunner* task_runner,
-                     const FilePath& file_path,
-                     bool recursive,
-                     const StatusCallback& callback);
-
-  // Deletes a directory and all of its contents.
-  // This returns false if task posting to |task_runner| has failed.
-  static bool RecursiveDelete(
-      TaskRunner* task_runner,
-      const FilePath& file_path,
-      const StatusCallback& callback);
+  static bool DeleteFile(TaskRunner* task_runner,
+                         const FilePath& file_path,
+                         bool recursive,
+                         const StatusCallback& callback);
 
   // Reads from a file. On success, the file pointer is moved to position
   // |offset + bytes_to_read| in the file. The callback can be null.

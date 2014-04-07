@@ -12,7 +12,7 @@
 #include "base/files/file_path.h"
 #include "base/json/json_reader.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "net/base/address_list.h"
 #include "net/base/dns_util.h"
@@ -64,7 +64,7 @@ bool ReadTestCase(const char* filename,
     return false;
   }
 
-  DictionaryValue* dict;
+  base::DictionaryValue* dict;
   if (!value->GetAsDictionary(&dict)) {
     LOG(ERROR) << filename << ": test case is not a dictionary.";
     return false;
@@ -103,7 +103,7 @@ bool ReadTestCase(const char* filename,
   }
   *qtype = static_cast<uint16>(qtype_int);
 
-  ListValue* resp_list;
+  base::ListValue* resp_list;
   if (!dict->GetList("response", &resp_list)) {
     LOG(ERROR) << filename << ": response is missing or not a list.";
     return false;

@@ -7,7 +7,7 @@
 
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/threading/non_thread_safe.h"
 #include "net/base/address_list.h"
 #include "net/base/completion_callback.h"
@@ -53,8 +53,6 @@ class NET_EXPORT_PRIVATE TCPClientSocketLibevent : public StreamSocket,
   virtual void SetOmniboxSpeculation() OVERRIDE;
   virtual bool WasEverUsed() const OVERRIDE;
   virtual bool UsingTCPFastOpen() const OVERRIDE;
-  virtual int64 NumBytesRead() const OVERRIDE;
-  virtual base::TimeDelta GetConnectTimeMicros() const OVERRIDE;
   virtual bool WasNpnNegotiated() const OVERRIDE;
   virtual NextProto GetNegotiatedProtocol() const OVERRIDE;
   virtual bool GetSSLInfo(SSLInfo* ssl_info) OVERRIDE;
@@ -82,7 +80,56 @@ class NET_EXPORT_PRIVATE TCPClientSocketLibevent : public StreamSocket,
     CONNECT_STATE_NONE,
   };
 
-  class ReadWatcher : public MessageLoopForIO::Watcher {
+  // States that a fast open socket attempt can result in.
+  enum FastOpenStatus {
+    FAST_OPEN_STATUS_UNKNOWN,
+
+    // The initial fast open connect attempted returned synchronously,
+    // indicating that we had and sent a cookie along with the initial data.
+    FAST_OPEN_FAST_CONNECT_RETURN,
+
+    // The initial fast open connect attempted returned asynchronously,
+    // indicating that we did not have a cookie for the server.
+    FAST_OPEN_SLOW_CONNECT_RETURN,
+
+    // Some other error occurred on connection, so we couldn't tell if
+    // fast open would have worked.
+    FAST_OPEN_ERROR,
+
+    // An attempt to do a fast open succeeded immediately
+    // (FAST_OPEN_FAST_CONNECT_RETURN) and we later confirmed that the server
+    // had acked the data we sent.
+    FAST_OPEN_SYN_DATA_ACK,
+
+    // An attempt to do a fast open succeeded immediately
+    // (FAST_OPEN_FAST_CONNECT_RETURN) and we later confirmed that the server
+    // had nacked the data we sent.
+    FAST_OPEN_SYN_DATA_NACK,
+
+    // An attempt to do a fast open succeeded immediately
+    // (FAST_OPEN_FAST_CONNECT_RETURN) and our probe to determine if the
+    // socket was using fast open failed.
+    FAST_OPEN_SYN_DATA_FAILED,
+
+    // An attempt to do a fast open failed (FAST_OPEN_SLOW_CONNECT_RETURN)
+    // and we later confirmed that the server had acked initial data.  This
+    // should never happen (we didn't send data, so it shouldn't have
+    // been acked).
+    FAST_OPEN_NO_SYN_DATA_ACK,
+
+    // An attempt to do a fast open failed (FAST_OPEN_SLOW_CONNECT_RETURN)
+    // and we later discovered that the server had nacked initial data.  This
+    // is the expected case results for FAST_OPEN_SLOW_CONNECT_RETURN.
+    FAST_OPEN_NO_SYN_DATA_NACK,
+
+    // An attempt to do a fast open failed (FAST_OPEN_SLOW_CONNECT_RETURN)
+    // and our later probe for ack/nack state failed.
+    FAST_OPEN_NO_SYN_DATA_FAILED,
+
+    FAST_OPEN_MAX_VALUE
+  };
+
+  class ReadWatcher : public base::MessageLoopForIO::Watcher {
    public:
     explicit ReadWatcher(TCPClientSocketLibevent* socket) : socket_(socket) {}
 
@@ -98,7 +145,7 @@ class NET_EXPORT_PRIVATE TCPClientSocketLibevent : public StreamSocket,
     DISALLOW_COPY_AND_ASSIGN(ReadWatcher);
   };
 
-  class WriteWatcher : public MessageLoopForIO::Watcher {
+  class WriteWatcher : public base::MessageLoopForIO::Watcher {
    public:
     explicit WriteWatcher(TCPClientSocketLibevent* socket) : socket_(socket) {}
 
@@ -138,6 +185,9 @@ class NET_EXPORT_PRIVATE TCPClientSocketLibevent : public StreamSocket,
   // Internal function to write to a socket.
   int InternalWrite(IOBuffer* buf, int buf_len);
 
+  // Called when the socket is known to be in a connected state.
+  void RecordFastOpenStatus();
+
   int socket_;
 
   // Local IP address and port we are bound to. Set to NULL if Bind()
@@ -154,8 +204,8 @@ class NET_EXPORT_PRIVATE TCPClientSocketLibevent : public StreamSocket,
   int current_address_index_;
 
   // The socket's libevent wrappers
-  MessageLoopForIO::FileDescriptorWatcher read_socket_watcher_;
-  MessageLoopForIO::FileDescriptorWatcher write_socket_watcher_;
+  base::MessageLoopForIO::FileDescriptorWatcher read_socket_watcher_;
+  base::MessageLoopForIO::FileDescriptorWatcher write_socket_watcher_;
 
   // The corresponding watchers for reads and writes.
   ReadWatcher read_watcher_;
@@ -196,9 +246,7 @@ class NET_EXPORT_PRIVATE TCPClientSocketLibevent : public StreamSocket,
   // True when TCP FastOpen is in use and we have done the connect.
   bool tcp_fastopen_connected_;
 
-  base::TimeTicks connect_start_time_;
-  base::TimeDelta connect_time_micros_;
-  int64 num_bytes_read_;
+  enum FastOpenStatus fast_open_status_;
 
   DISALLOW_COPY_AND_ASSIGN(TCPClientSocketLibevent);
 };

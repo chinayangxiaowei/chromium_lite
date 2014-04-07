@@ -2,20 +2,28 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <algorithm>
+#include <string>
+
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/prefs/pref_service.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_system.h"
 #include "chrome/browser/first_run/first_run.h"
 #include "chrome/browser/infobars/infobar_service.h"
+#include "chrome/browser/managed_mode/managed_mode_navigation_observer.h"
+#include "chrome/browser/managed_mode/managed_user_service.h"
+#include "chrome/browser/managed_mode/managed_user_service_factory.h"
 #include "chrome/browser/prefs/session_startup_pref.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_impl.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/sessions/session_restore.h"
+#include "chrome/browser/signin/signin_promo.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_iterator.h"
@@ -26,25 +34,57 @@
 #include "chrome/browser/ui/startup/startup_browser_creator.h"
 #include "chrome/browser/ui/startup/startup_browser_creator_impl.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/ui/webui/sync_promo/sync_promo_ui.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "chrome/test/base/test_switches.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/web_contents.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/gurl.h"
+
+#if defined(ENABLE_CONFIGURATION_POLICY) && !defined(OS_CHROMEOS)
+#include "base/callback.h"
+#include "base/run_loop.h"
+#include "base/values.h"
+#include "chrome/browser/policy/browser_policy_connector.h"
+#include "chrome/browser/policy/external_data_fetcher.h"
+#include "chrome/browser/policy/mock_configuration_policy_provider.h"
+#include "chrome/browser/policy/policy_map.h"
+#include "chrome/browser/policy/policy_types.h"
+#include "policy/policy_constants.h"
+#include "testing/gmock/include/gmock/gmock.h"
+
+using testing::_;
+using testing::AnyNumber;
+using testing::Return;
+#endif  // defined(ENABLE_CONFIGURATION_POLICY) && !defined(OS_CHROMEOS)
 
 using extensions::Extension;
+
+namespace {
+
+// Check that there are two browsers. Find the one that is not |browser|.
+Browser* FindOneOtherBrowser(Browser* browser) {
+  // There should only be one other browser.
+  EXPECT_EQ(2u, chrome::GetBrowserCount(browser->profile(),
+                                        browser->host_desktop_type()));
+
+  // Find the new browser.
+  Browser* other_browser = NULL;
+  for (chrome::BrowserIterator it; !it.done() && !other_browser; it.Next()) {
+    if (*it != browser)
+      other_browser = *it;
+  }
+  return other_browser;
+}
+
+}  // namespace
 
 class StartupBrowserCreatorTest : public ExtensionBrowserTest {
  protected:
   virtual bool SetUpUserDataDirectory() OVERRIDE {
-    // Make sure the first run sentinel file exists before running these tests,
-    // since some of them customize the session startup pref whose value can
-    // be different than the default during the first run.
-    // TODO(bauerb): set the first run flag instead of creating a sentinel file.
-    first_run::CreateSentinel();
     return ExtensionBrowserTest::SetUpUserDataDirectory();
   }
 
@@ -52,7 +92,7 @@ class StartupBrowserCreatorTest : public ExtensionBrowserTest {
     ExtensionBrowserTest::SetUpCommandLine(command_line);
     command_line->AppendSwitch(switches::kEnablePanels);
     command_line->AppendSwitchASCII(switches::kHomePage,
-                                    chrome::kAboutBlankURL);
+                                    content::kAboutBlankURL);
 #if defined(OS_CHROMEOS)
     // TODO(nkostylev): Investigate if we can remove this switch.
     command_line->AppendSwitch(switches::kCreateBrowserOnStartupForTests);
@@ -82,23 +122,6 @@ class StartupBrowserCreatorTest : public ExtensionBrowserTest {
     ExtensionService* service = extensions::ExtensionSystem::Get(
         browser()->profile())->extension_service();
     service->extension_prefs()->SetLaunchType(app_id, launch_type);
-  }
-
-  // Check that there are two browsers.  Find the one that is not |browser()|.
-  void FindOneOtherBrowser(Browser** out_other_browser) {
-    // There should only be one other browser.
-    ASSERT_EQ(2u, chrome::GetBrowserCount(browser()->profile(),
-                                          browser()->host_desktop_type()));
-
-    // Find the new browser.
-    Browser* other_browser = NULL;
-  for (chrome::BrowserIterator it; !it.done() && !other_browser; it.Next()) {
-      if (*it != browser())
-        other_browser = *it;
-    }
-    ASSERT_TRUE(other_browser);
-    ASSERT_TRUE(other_browser != browser());
-    *out_other_browser = other_browser;
   }
 
   Browser* FindOneOtherBrowserForProfile(Profile* profile,
@@ -151,7 +174,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, OpenURLsPopup) {
   StartupBrowserCreatorImpl launch(base::FilePath(), dummy, first_run);
   // This should create a new window, but re-use the profile from |popup|. If
   // it used a NULL or invalid profile, it would crash.
-  launch.OpenURLsInBrowser(popup, false, urls);
+  launch.OpenURLsInBrowser(popup, false, urls, chrome::GetActiveDesktop());
   ASSERT_NE(popup, observer.added_browser_);
   BrowserList::RemoveObserver(&observer);
 }
@@ -184,12 +207,13 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
   chrome::startup::IsFirstRun first_run = first_run::IsChromeFirstRun() ?
       chrome::startup::IS_FIRST_RUN : chrome::startup::IS_NOT_FIRST_RUN;
   StartupBrowserCreatorImpl launch(base::FilePath(), dummy, first_run);
-  ASSERT_TRUE(launch.Launch(browser()->profile(), std::vector<GURL>(), false));
+  ASSERT_TRUE(launch.Launch(browser()->profile(), std::vector<GURL>(), false,
+                            browser()->host_desktop_type()));
 
   // This should have created a new browser window.  |browser()| is still
   // around at this point, even though we've closed its window.
-  Browser* new_browser = NULL;
-  ASSERT_NO_FATAL_FAILURE(FindOneOtherBrowser(&new_browser));
+  Browser* new_browser = FindOneOtherBrowser(browser());
+  ASSERT_TRUE(new_browser);
 
   // The new browser should have one tab for each URL.
   TabStripModel* tab_strip = new_browser->tab_strip_model();
@@ -228,11 +252,12 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
   chrome::startup::IsFirstRun first_run = first_run::IsChromeFirstRun() ?
       chrome::startup::IS_FIRST_RUN : chrome::startup::IS_NOT_FIRST_RUN;
   StartupBrowserCreatorImpl launch(base::FilePath(), dummy, first_run);
-  ASSERT_TRUE(launch.Launch(browser()->profile(), std::vector<GURL>(), false));
+  ASSERT_TRUE(launch.Launch(browser()->profile(), std::vector<GURL>(), false,
+                            browser()->host_desktop_type()));
 
   // This should have created a new browser window.
-  Browser* new_browser = NULL;
-  ASSERT_NO_FATAL_FAILURE(FindOneOtherBrowser(&new_browser));
+  Browser* new_browser = FindOneOtherBrowser(browser());
+  ASSERT_TRUE(new_browser);
 
   // The new browser should have exactly one tab (not the startup URLs).
   ASSERT_EQ(1, new_browser->tab_strip_model()->count());
@@ -252,12 +277,13 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, OpenAppShortcutNoPref) {
   chrome::startup::IsFirstRun first_run = first_run::IsChromeFirstRun() ?
       chrome::startup::IS_FIRST_RUN : chrome::startup::IS_NOT_FIRST_RUN;
   StartupBrowserCreatorImpl launch(base::FilePath(), command_line, first_run);
-  ASSERT_TRUE(launch.Launch(browser()->profile(), std::vector<GURL>(), false));
+  ASSERT_TRUE(launch.Launch(browser()->profile(), std::vector<GURL>(), false,
+                            browser()->host_desktop_type()));
 
   // No pref was set, so the app should have opened in a window.
   // The launch should have created a new browser.
-  Browser* new_browser = NULL;
-  ASSERT_NO_FATAL_FAILURE(FindOneOtherBrowser(&new_browser));
+  Browser* new_browser = FindOneOtherBrowser(browser());
+  ASSERT_TRUE(new_browser);
 
   // Expect an app window.
   EXPECT_TRUE(new_browser->is_app());
@@ -281,13 +307,14 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, OpenAppShortcutWindowPref) {
   chrome::startup::IsFirstRun first_run = first_run::IsChromeFirstRun() ?
       chrome::startup::IS_FIRST_RUN : chrome::startup::IS_NOT_FIRST_RUN;
   StartupBrowserCreatorImpl launch(base::FilePath(), command_line, first_run);
-  ASSERT_TRUE(launch.Launch(browser()->profile(), std::vector<GURL>(), false));
+  ASSERT_TRUE(launch.Launch(browser()->profile(), std::vector<GURL>(), false,
+                            browser()->host_desktop_type()));
 
   // Pref was set to open in a window, so the app should have opened in a
   // window.  The launch should have created a new browser. Find the new
   // browser.
-  Browser* new_browser = NULL;
-  ASSERT_NO_FATAL_FAILURE(FindOneOtherBrowser(&new_browser));
+  Browser* new_browser = FindOneOtherBrowser(browser());
+  ASSERT_TRUE(new_browser);
 
   // Expect an app window.
   EXPECT_TRUE(new_browser->is_app());
@@ -312,15 +339,16 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, OpenAppShortcutTabPref) {
   chrome::startup::IsFirstRun first_run = first_run::IsChromeFirstRun() ?
       chrome::startup::IS_FIRST_RUN : chrome::startup::IS_NOT_FIRST_RUN;
   StartupBrowserCreatorImpl launch(base::FilePath(), command_line, first_run);
-  ASSERT_TRUE(launch.Launch(browser()->profile(), std::vector<GURL>(), false));
+  ASSERT_TRUE(launch.Launch(browser()->profile(), std::vector<GURL>(), false,
+                            browser()->host_desktop_type()));
 
   // When an app shortcut is open and the pref indicates a tab should
   // open, the tab is open in a new browser window.  Expect a new window.
   ASSERT_EQ(2u, chrome::GetBrowserCount(browser()->profile(),
                                         browser()->host_desktop_type()));
 
-  Browser* new_browser = NULL;
-  ASSERT_NO_FATAL_FAILURE(FindOneOtherBrowser(&new_browser));
+  Browser* new_browser = FindOneOtherBrowser(browser());
+  ASSERT_TRUE(new_browser);
 
   // The tab should be in a tabbed window.
   EXPECT_TRUE(new_browser->is_type_tabbed());
@@ -369,11 +397,12 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, AddFirstRunTab) {
   CommandLine dummy(CommandLine::NO_PROGRAM);
   StartupBrowserCreatorImpl launch(base::FilePath(), dummy, &browser_creator,
                                    chrome::startup::IS_FIRST_RUN);
-  ASSERT_TRUE(launch.Launch(browser()->profile(), std::vector<GURL>(), false));
+  ASSERT_TRUE(launch.Launch(browser()->profile(), std::vector<GURL>(), false,
+                            browser()->host_desktop_type()));
 
   // This should have created a new browser window.
-  Browser* new_browser = NULL;
-  ASSERT_NO_FATAL_FAILURE(FindOneOtherBrowser(&new_browser));
+  Browser* new_browser = FindOneOtherBrowser(browser());
+  ASSERT_TRUE(new_browser);
 
   TabStripModel* tab_strip = new_browser->tab_strip_model();
   EXPECT_EQ(2, tab_strip->count());
@@ -397,11 +426,12 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, AddCustomFirstRunTab) {
   CommandLine dummy(CommandLine::NO_PROGRAM);
   StartupBrowserCreatorImpl launch(base::FilePath(), dummy, &browser_creator,
                                    chrome::startup::IS_FIRST_RUN);
-  ASSERT_TRUE(launch.Launch(browser()->profile(), std::vector<GURL>(), false));
+  ASSERT_TRUE(launch.Launch(browser()->profile(), std::vector<GURL>(), false,
+                            browser()->host_desktop_type()));
 
   // This should have created a new browser window.
-  Browser* new_browser = NULL;
-  ASSERT_NO_FATAL_FAILURE(FindOneOtherBrowser(&new_browser));
+  Browser* new_browser = FindOneOtherBrowser(browser());
+  ASSERT_TRUE(new_browser);
 
   TabStripModel* tab_strip = new_browser->tab_strip_model();
   EXPECT_EQ(4, tab_strip->count());
@@ -417,26 +447,23 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, AddCustomFirstRunTab) {
 }
 
 IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, SyncPromoNoWelcomePage) {
-  // Trick this test into thinking the promo has been shown for this profile; so
-  // that it will show it again (otherwise it skips showing it since
-  // --no-first-run is specified in browser tests).
-  SyncPromoUI::DidShowSyncPromoAtStartup(browser()->profile());
-
   // Do a simple non-process-startup browser launch.
   CommandLine dummy(CommandLine::NO_PROGRAM);
   StartupBrowserCreatorImpl launch(base::FilePath(), dummy,
                                    chrome::startup::IS_FIRST_RUN);
-  ASSERT_TRUE(launch.Launch(browser()->profile(), std::vector<GURL>(), false));
+  ASSERT_TRUE(launch.Launch(browser()->profile(), std::vector<GURL>(), false,
+                            browser()->host_desktop_type()));
 
   // This should have created a new browser window.
-  Browser* new_browser = NULL;
-  ASSERT_NO_FATAL_FAILURE(FindOneOtherBrowser(&new_browser));
+  Browser* new_browser = FindOneOtherBrowser(browser());
+  ASSERT_TRUE(new_browser);
 
   TabStripModel* tab_strip = new_browser->tab_strip_model();
   EXPECT_EQ(1, tab_strip->count());
 
-  if (SyncPromoUI::ShouldShowSyncPromoAtStartup(browser()->profile(), true)) {
-    EXPECT_EQ("signin", tab_strip->GetWebContentsAt(0)->GetURL().host());
+  if (signin::ShouldShowPromoAtStartup(browser()->profile(), true)) {
+    EXPECT_EQ(signin::GetPromoURL(signin::SOURCE_START_PAGE, false),
+              tab_strip->GetWebContentsAt(0)->GetURL());
   } else {
     EXPECT_EQ(GURL(chrome::kChromeUINewTabURL),
               tab_strip->GetWebContentsAt(0)->GetURL());
@@ -444,27 +471,25 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, SyncPromoNoWelcomePage) {
 }
 
 IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, SyncPromoWithWelcomePage) {
-  // Trick this test into thinking the promo has been shown for this profile; so
-  // that it will show it again (otherwise it skips showing it since
-  // --no-first-run is specified in browser tests).
-  SyncPromoUI::DidShowSyncPromoAtStartup(browser()->profile());
   first_run::SetShouldShowWelcomePage();
 
   // Do a simple non-process-startup browser launch.
   CommandLine dummy(CommandLine::NO_PROGRAM);
   StartupBrowserCreatorImpl launch(base::FilePath(), dummy,
                                    chrome::startup::IS_FIRST_RUN);
-  ASSERT_TRUE(launch.Launch(browser()->profile(), std::vector<GURL>(), false));
+  ASSERT_TRUE(launch.Launch(browser()->profile(), std::vector<GURL>(), false,
+                            browser()->host_desktop_type()));
 
   // This should have created a new browser window.
-  Browser* new_browser = NULL;
-  ASSERT_NO_FATAL_FAILURE(FindOneOtherBrowser(&new_browser));
+  Browser* new_browser = FindOneOtherBrowser(browser());
+  ASSERT_TRUE(new_browser);
 
   TabStripModel* tab_strip = new_browser->tab_strip_model();
   EXPECT_EQ(2, tab_strip->count());
 
-  if (SyncPromoUI::ShouldShowSyncPromoAtStartup(browser()->profile(), true)) {
-    EXPECT_EQ("signin", tab_strip->GetWebContentsAt(0)->GetURL().host());
+  if (signin::ShouldShowPromoAtStartup(browser()->profile(), true)) {
+    EXPECT_EQ(signin::GetPromoURL(signin::SOURCE_START_PAGE, false),
+              tab_strip->GetWebContentsAt(0)->GetURL());
   } else {
     EXPECT_EQ(GURL(chrome::kChromeUINewTabURL),
               tab_strip->GetWebContentsAt(0)->GetURL());
@@ -477,11 +502,6 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, SyncPromoWithFirstRunTabs) {
   StartupBrowserCreator browser_creator;
   browser_creator.AddFirstRunTab(test_server()->GetURL("files/title1.html"));
 
-  // Trick this test into thinking the promo has been shown for this profile; so
-  // that it will show it again (otherwise it skips showing it since
-  // --no-first-run is specified in browser tests).
-  SyncPromoUI::DidShowSyncPromoAtStartup(browser()->profile());
-
   // The welcome page should not be shown, even if
   // first_run::ShouldShowWelcomePage() says so, when there are already
   // more than 2 first run tabs.
@@ -491,16 +511,18 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, SyncPromoWithFirstRunTabs) {
   CommandLine dummy(CommandLine::NO_PROGRAM);
   StartupBrowserCreatorImpl launch(base::FilePath(), dummy, &browser_creator,
                                    chrome::startup::IS_FIRST_RUN);
-  ASSERT_TRUE(launch.Launch(browser()->profile(), std::vector<GURL>(), false));
+  ASSERT_TRUE(launch.Launch(browser()->profile(), std::vector<GURL>(), false,
+                            browser()->host_desktop_type()));
 
   // This should have created a new browser window.
-  Browser* new_browser = NULL;
-  ASSERT_NO_FATAL_FAILURE(FindOneOtherBrowser(&new_browser));
+  Browser* new_browser = FindOneOtherBrowser(browser());
+  ASSERT_TRUE(new_browser);
 
   TabStripModel* tab_strip = new_browser->tab_strip_model();
-  if (SyncPromoUI::ShouldShowSyncPromoAtStartup(browser()->profile(), true)) {
+  if (signin::ShouldShowPromoAtStartup(browser()->profile(), true)) {
     EXPECT_EQ(2, tab_strip->count());
-    EXPECT_EQ("signin", tab_strip->GetWebContentsAt(0)->GetURL().host());
+    EXPECT_EQ(signin::GetPromoURL(signin::SOURCE_START_PAGE, false),
+              tab_strip->GetWebContentsAt(0)->GetURL());
     EXPECT_EQ("title1.html",
               tab_strip->GetWebContentsAt(1)->GetURL().ExtractFileName());
   } else {
@@ -518,25 +540,22 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
   browser_creator.AddFirstRunTab(test_server()->GetURL("files/title1.html"));
   browser_creator.AddFirstRunTab(GURL("http://welcome_page"));
 
-  // Trick this test into thinking the promo has been shown for this profile; so
-  // that it will show it again (otherwise it skips showing it since
-  // --no-first-run is specified in browser tests).
-  SyncPromoUI::DidShowSyncPromoAtStartup(browser()->profile());
-
   // Do a simple non-process-startup browser launch.
   CommandLine dummy(CommandLine::NO_PROGRAM);
   StartupBrowserCreatorImpl launch(base::FilePath(), dummy, &browser_creator,
                                    chrome::startup::IS_FIRST_RUN);
-  ASSERT_TRUE(launch.Launch(browser()->profile(), std::vector<GURL>(), false));
+  ASSERT_TRUE(launch.Launch(browser()->profile(), std::vector<GURL>(), false,
+                            browser()->host_desktop_type()));
 
   // This should have created a new browser window.
-  Browser* new_browser = NULL;
-  ASSERT_NO_FATAL_FAILURE(FindOneOtherBrowser(&new_browser));
+  Browser* new_browser = FindOneOtherBrowser(browser());
+  ASSERT_TRUE(new_browser);
 
   TabStripModel* tab_strip = new_browser->tab_strip_model();
-  if (SyncPromoUI::ShouldShowSyncPromoAtStartup(browser()->profile(), true)) {
+  if (signin::ShouldShowPromoAtStartup(browser()->profile(), true)) {
     EXPECT_EQ(3, tab_strip->count());
-    EXPECT_EQ("signin", tab_strip->GetWebContentsAt(0)->GetURL().host());
+    EXPECT_EQ(signin::GetPromoURL(signin::SOURCE_START_PAGE, false),
+              tab_strip->GetWebContentsAt(0)->GetURL());
     EXPECT_EQ("title1.html",
               tab_strip->GetWebContentsAt(1)->GetURL().ExtractFileName());
     EXPECT_EQ(internals::GetWelcomePageURL(),
@@ -552,6 +571,12 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
 
 #if !defined(OS_CHROMEOS)
 IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, StartupURLsForTwoProfiles) {
+#if defined(OS_WIN) && defined(USE_ASH)
+  // Disable this test in Metro+Ash for now (http://crbug.com/262796).
+  if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kAshBrowserTests))
+    return;
+#endif
+
   Profile* default_profile = browser()->profile();
 
   ProfileManager* profile_manager = g_browser_process->profile_manager();
@@ -616,12 +641,8 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, StartupURLsForTwoProfiles) {
   EXPECT_EQ(urls2[0], tab_strip->GetWebContentsAt(0)->GetURL());
 }
 
-IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, UpdateWithTwoProfiles) {
-  // Make StartupBrowserCreator::WasRestarted() return true.
-  StartupBrowserCreator::was_restarted_read_ = false;
-  PrefService* pref_service = g_browser_process->local_state();
-  pref_service->SetBoolean(prefs::kWasRestarted, true);
-
+IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, PRE_UpdateWithTwoProfiles) {
+  // Simulate a browser restart by creating the profiles in the PRE_ part.
   ProfileManager* profile_manager = g_browser_process->profile_manager();
 
   // Create two profiles.
@@ -653,6 +674,35 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, UpdateWithTwoProfiles) {
   pref2.urls = urls2;
   SessionStartupPref::SetStartupPref(profile2, pref2);
 
+  profile1->GetPrefs()->CommitPendingWrite();
+  profile2->GetPrefs()->CommitPendingWrite();
+}
+
+IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, UpdateWithTwoProfiles) {
+#if defined(OS_WIN) && defined(USE_ASH)
+  // Disable this test in Metro+Ash for now (http://crbug.com/262796).
+  if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kAshBrowserTests))
+    return;
+#endif
+
+  // Make StartupBrowserCreator::WasRestarted() return true.
+  StartupBrowserCreator::was_restarted_read_ = false;
+  PrefService* pref_service = g_browser_process->local_state();
+  pref_service->SetBoolean(prefs::kWasRestarted, true);
+
+  ProfileManager* profile_manager = g_browser_process->profile_manager();
+
+  // Open the two profiles.
+  base::FilePath dest_path = profile_manager->user_data_dir();
+
+  Profile* profile1 = profile_manager->GetProfile(
+      dest_path.Append(FILE_PATH_LITERAL("New Profile 1")));
+  ASSERT_TRUE(profile1);
+
+  Profile* profile2 = profile_manager->GetProfile(
+      dest_path.Append(FILE_PATH_LITERAL("New Profile 2")));
+  ASSERT_TRUE(profile2);
+
   // Simulate a launch after a browser update.
   CommandLine dummy(CommandLine::NO_PROGRAM);
   int return_code;
@@ -665,7 +715,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, UpdateWithTwoProfiles) {
 
   while (SessionRestore::IsRestoring(profile1) ||
          SessionRestore::IsRestoring(profile2))
-    MessageLoop::current()->RunUntilIdle();
+    base::MessageLoop::current()->RunUntilIdle();
 
   // The startup URLs are ignored, and instead the last open sessions are
   // restored.
@@ -679,7 +729,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, UpdateWithTwoProfiles) {
   ASSERT_TRUE(new_browser);
   TabStripModel* tab_strip = new_browser->tab_strip_model();
   ASSERT_EQ(1, tab_strip->count());
-  EXPECT_EQ(GURL(chrome::kAboutBlankURL),
+  EXPECT_EQ(GURL(content::kAboutBlankURL),
             tab_strip->GetWebContentsAt(0)->GetURL());
 
   ASSERT_EQ(1u, chrome::GetBrowserCount(profile2,
@@ -688,12 +738,18 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, UpdateWithTwoProfiles) {
   ASSERT_TRUE(new_browser);
   tab_strip = new_browser->tab_strip_model();
   ASSERT_EQ(1, tab_strip->count());
-  EXPECT_EQ(GURL(chrome::kAboutBlankURL),
+  EXPECT_EQ(GURL(content::kAboutBlankURL),
             tab_strip->GetWebContentsAt(0)->GetURL());
 }
 
 IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
                        ProfilesWithoutPagesNotLaunched) {
+#if defined(OS_WIN) && defined(USE_ASH)
+  // Disable this test in Metro+Ash for now (http://crbug.com/262796).
+  if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kAshBrowserTests))
+    return;
+#endif
+
   Profile* default_profile = browser()->profile();
 
   ProfileManager* profile_manager = g_browser_process->profile_manager();
@@ -758,7 +814,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
          SessionRestore::IsRestoring(profile_home2) ||
          SessionRestore::IsRestoring(profile_last) ||
          SessionRestore::IsRestoring(profile_urls))
-    MessageLoop::current()->RunUntilIdle();
+    base::MessageLoop::current()->RunUntilIdle();
 
   Browser* new_browser = NULL;
   // The last open profile (the profile_home1 in this case) will always be
@@ -785,7 +841,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
   ASSERT_TRUE(new_browser);
   tab_strip = new_browser->tab_strip_model();
   ASSERT_EQ(1, tab_strip->count());
-  EXPECT_EQ(GURL(chrome::kAboutBlankURL),
+  EXPECT_EQ(GURL(content::kAboutBlankURL),
             tab_strip->GetWebContentsAt(0)->GetURL());
 
   // profile_home2 was not launched since it would've only opened the home page.
@@ -793,6 +849,12 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
 }
 
 IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, ProfilesLaunchedAfterCrash) {
+#if defined(OS_WIN) && defined(USE_ASH)
+  // Disable this test in Metro+Ash for now (http://crbug.com/262796).
+  if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kAshBrowserTests))
+    return;
+#endif
+
   // After an unclean exit, all profiles will be launched. However, they won't
   // open any pages automatically.
 
@@ -866,7 +928,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, ProfilesLaunchedAfterCrash) {
   content::WebContents* web_contents = tab_strip->GetWebContentsAt(0);
   EXPECT_EQ(GURL(chrome::kChromeUINewTabURL), web_contents->GetURL());
   EXPECT_EQ(1U,
-            InfoBarService::FromWebContents(web_contents)->GetInfoBarCount());
+            InfoBarService::FromWebContents(web_contents)->infobar_count());
 
   // The profile which normally opens last open pages displays the new tab page.
   ASSERT_EQ(1u, chrome::GetBrowserCount(profile_last,
@@ -878,7 +940,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, ProfilesLaunchedAfterCrash) {
   web_contents = tab_strip->GetWebContentsAt(0);
   EXPECT_EQ(GURL(chrome::kChromeUINewTabURL), web_contents->GetURL());
   EXPECT_EQ(1U,
-            InfoBarService::FromWebContents(web_contents)->GetInfoBarCount());
+            InfoBarService::FromWebContents(web_contents)->infobar_count());
 
   // The profile which normally opens URLs displays the new tab page.
   ASSERT_EQ(1u, chrome::GetBrowserCount(profile_urls,
@@ -890,6 +952,396 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, ProfilesLaunchedAfterCrash) {
   web_contents = tab_strip->GetWebContentsAt(0);
   EXPECT_EQ(GURL(chrome::kChromeUINewTabURL), web_contents->GetURL());
   EXPECT_EQ(1U,
-            InfoBarService::FromWebContents(web_contents)->GetInfoBarCount());
+            InfoBarService::FromWebContents(web_contents)->infobar_count());
 }
-#endif  // !OS_CHROMEOS
+
+class ManagedModeBrowserCreatorTest : public InProcessBrowserTest {
+ protected:
+  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+    InProcessBrowserTest::SetUpCommandLine(command_line);
+    command_line->AppendSwitch(switches::kEnableManagedUsers);
+  }
+};
+
+IN_PROC_BROWSER_TEST_F(ManagedModeBrowserCreatorTest,
+                       StartupManagedModeProfile) {
+  // Make this a managed profile.
+  ManagedUserService* managed_user_service =
+      ManagedUserServiceFactory::GetForProfile(browser()->profile());
+  managed_user_service->InitForTesting();
+
+  StartupBrowserCreator browser_creator;
+
+  // Do a simple non-process-startup browser launch.
+  CommandLine dummy(CommandLine::NO_PROGRAM);
+  StartupBrowserCreatorImpl launch(base::FilePath(), dummy, &browser_creator,
+                                   chrome::startup::IS_FIRST_RUN);
+  content::WindowedNotificationObserver observer(
+      content::NOTIFICATION_LOAD_STOP,
+      content::NotificationService::AllSources());
+  ASSERT_TRUE(launch.Launch(browser()->profile(), std::vector<GURL>(), false,
+                            browser()->host_desktop_type()));
+
+  // This should have created a new browser window.
+  Browser* new_browser = FindOneOtherBrowser(browser());
+  ASSERT_TRUE(new_browser);
+
+  TabStripModel* tab_strip = new_browser->tab_strip_model();
+  // There should be only one tab.
+  EXPECT_EQ(1, tab_strip->count());
+}
+
+#endif  // !defined(OS_CHROMEOS)
+
+// These tests are not applicable to Chrome OS as neither master_preferences nor
+// the sync promo exist there.
+#if !defined(OS_CHROMEOS)
+
+// On a branded Linux build, policy is required to suppress the first-run
+// dialog.
+#if !defined(OS_LINUX) || !defined(GOOGLE_CHROME_BUILD) || \
+    defined(ENABLE_CONFIGURATION_POLICY)
+
+class StartupBrowserCreatorFirstRunTest : public InProcessBrowserTest {
+ protected:
+  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE;
+  virtual void SetUpInProcessBrowserTestFixture() OVERRIDE;
+
+#if defined(ENABLE_CONFIGURATION_POLICY)
+  policy::MockConfigurationPolicyProvider provider_;
+  policy::PolicyMap policy_map_;
+#endif  // defined(ENABLE_CONFIGURATION_POLICY)
+};
+
+void StartupBrowserCreatorFirstRunTest::SetUpCommandLine(
+    CommandLine* command_line) {
+  command_line->AppendSwitch(switches::kForceFirstRun);
+}
+
+void StartupBrowserCreatorFirstRunTest::SetUpInProcessBrowserTestFixture() {
+#if defined(ENABLE_CONFIGURATION_POLICY)
+#if defined(OS_LINUX) && defined(GOOGLE_CHROME_BUILD)
+  // Set a policy that prevents the first-run dialog from being shown.
+  policy_map_.Set(policy::key::kMetricsReportingEnabled,
+                  policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_USER,
+                  base::Value::CreateBooleanValue(false), NULL);
+  provider_.UpdateChromePolicy(policy_map_);
+#endif  // defined(OS_LINUX) && defined(GOOGLE_CHROME_BUILD)
+
+  EXPECT_CALL(provider_, IsInitializationComplete(_))
+      .WillRepeatedly(Return(true));
+  EXPECT_CALL(provider_, RegisterPolicyDomain(_)).Times(AnyNumber());
+  policy::BrowserPolicyConnector::SetPolicyProviderForTesting(&provider_);
+#endif  // defined(ENABLE_CONFIGURATION_POLICY)
+}
+
+IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorFirstRunTest, SyncPromoForbidden) {
+  // Consistently enable the welcome page on all platforms.
+  first_run::SetShouldShowWelcomePage();
+
+  // Simulate the following master_preferences:
+  // {
+  //  "sync_promo": {
+  //    "show_on_first_run_allowed": false
+  //  }
+  // }
+  StartupBrowserCreator browser_creator;
+  browser()->profile()->GetPrefs()->SetBoolean(
+      prefs::kSignInPromoShowOnFirstRunAllowed, false);
+
+  // Do a process-startup browser launch.
+  CommandLine dummy(CommandLine::NO_PROGRAM);
+  StartupBrowserCreatorImpl launch(base::FilePath(), dummy, &browser_creator,
+                                   chrome::startup::IS_FIRST_RUN);
+  ASSERT_TRUE(launch.Launch(browser()->profile(), std::vector<GURL>(), true,
+                            browser()->host_desktop_type()));
+
+  // This should have created a new browser window.
+  Browser* new_browser = FindOneOtherBrowser(browser());
+  ASSERT_TRUE(new_browser);
+
+  // Verify that the NTP and the welcome page are shown.
+  TabStripModel* tab_strip = new_browser->tab_strip_model();
+  ASSERT_EQ(2, tab_strip->count());
+  EXPECT_EQ(GURL(chrome::kChromeUINewTabURL),
+            tab_strip->GetWebContentsAt(0)->GetURL());
+  EXPECT_EQ(internals::GetWelcomePageURL(),
+            tab_strip->GetWebContentsAt(1)->GetURL());
+}
+
+IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorFirstRunTest, SyncPromoAllowed) {
+  // Consistently enable the welcome page on all platforms.
+  first_run::SetShouldShowWelcomePage();
+
+  // Simulate the following master_preferences:
+  // {
+  //  "sync_promo": {
+  //    "show_on_first_run_allowed": true
+  //  }
+  // }
+  StartupBrowserCreator browser_creator;
+  browser()->profile()->GetPrefs()->SetBoolean(
+      prefs::kSignInPromoShowOnFirstRunAllowed, true);
+
+  // Do a process-startup browser launch.
+  CommandLine dummy(CommandLine::NO_PROGRAM);
+  StartupBrowserCreatorImpl launch(base::FilePath(), dummy, &browser_creator,
+                                   chrome::startup::IS_FIRST_RUN);
+  ASSERT_TRUE(launch.Launch(browser()->profile(), std::vector<GURL>(), true,
+                            browser()->host_desktop_type()));
+
+  // This should have created a new browser window.
+  Browser* new_browser = FindOneOtherBrowser(browser());
+  ASSERT_TRUE(new_browser);
+
+  // Verify that the sync promo and the welcome page are shown.
+  TabStripModel* tab_strip = new_browser->tab_strip_model();
+  ASSERT_EQ(2, tab_strip->count());
+  EXPECT_EQ(signin::GetPromoURL(signin::SOURCE_START_PAGE, false),
+            tab_strip->GetWebContentsAt(0)->GetURL());
+  EXPECT_EQ(internals::GetWelcomePageURL(),
+            tab_strip->GetWebContentsAt(1)->GetURL());
+}
+
+IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorFirstRunTest,
+                       FirstRunTabsPromoAllowed) {
+  // Simulate the following master_preferences:
+  // {
+  //  "first_run_tabs" : [
+  //    "files/title1.html"
+  //  ],
+  //  "sync_promo": {
+  //    "show_on_first_run_allowed": true
+  //  }
+  // }
+  StartupBrowserCreator browser_creator;
+  browser_creator.AddFirstRunTab(test_server()->GetURL("files/title1.html"));
+  browser()->profile()->GetPrefs()->SetBoolean(
+      prefs::kSignInPromoShowOnFirstRunAllowed, true);
+
+  // Do a process-startup browser launch.
+  CommandLine dummy(CommandLine::NO_PROGRAM);
+  StartupBrowserCreatorImpl launch(base::FilePath(), dummy, &browser_creator,
+                                   chrome::startup::IS_FIRST_RUN);
+  ASSERT_TRUE(launch.Launch(browser()->profile(), std::vector<GURL>(), true,
+                            browser()->host_desktop_type()));
+
+  // This should have created a new browser window.
+  Browser* new_browser = FindOneOtherBrowser(browser());
+  ASSERT_TRUE(new_browser);
+
+  // Verify that the first-run tab is shown and the sync promo has been added.
+  TabStripModel* tab_strip = new_browser->tab_strip_model();
+  ASSERT_EQ(2, tab_strip->count());
+  EXPECT_EQ(signin::GetPromoURL(signin::SOURCE_START_PAGE, false),
+            tab_strip->GetWebContentsAt(0)->GetURL());
+  EXPECT_EQ("title1.html",
+            tab_strip->GetWebContentsAt(1)->GetURL().ExtractFileName());
+}
+
+IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorFirstRunTest,
+                       FirstRunTabsContainSyncPromo) {
+  // Simulate the following master_preferences:
+  // {
+  //  "first_run_tabs" : [
+  //    "files/title1.html",
+  //    "chrome://signin/?source=0&next_page=chrome%3A%2F%2Fnewtab%2F"
+  //  ],
+  //  "sync_promo": {
+  //    "show_on_first_run_allowed": true
+  //  }
+  // }
+  StartupBrowserCreator browser_creator;
+  browser_creator.AddFirstRunTab(test_server()->GetURL("files/title1.html"));
+  browser_creator.AddFirstRunTab(signin::GetPromoURL(signin::SOURCE_START_PAGE,
+                                                     false));
+  browser()->profile()->GetPrefs()->SetBoolean(
+      prefs::kSignInPromoShowOnFirstRunAllowed, true);
+
+  // Do a process-startup browser launch.
+  CommandLine dummy(CommandLine::NO_PROGRAM);
+  StartupBrowserCreatorImpl launch(base::FilePath(), dummy, &browser_creator,
+                                   chrome::startup::IS_FIRST_RUN);
+  ASSERT_TRUE(launch.Launch(browser()->profile(), std::vector<GURL>(), true,
+                            browser()->host_desktop_type()));
+
+  // This should have created a new browser window.
+  Browser* new_browser = FindOneOtherBrowser(browser());
+  ASSERT_TRUE(new_browser);
+
+  // Verify that the first-run tabs are shown and no sync promo has been added
+  // as the first-run tabs contain it already.
+  TabStripModel* tab_strip = new_browser->tab_strip_model();
+  ASSERT_EQ(2, tab_strip->count());
+  EXPECT_EQ("title1.html",
+            tab_strip->GetWebContentsAt(0)->GetURL().ExtractFileName());
+  EXPECT_EQ(signin::GetPromoURL(signin::SOURCE_START_PAGE, false),
+            tab_strip->GetWebContentsAt(1)->GetURL());
+}
+
+IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorFirstRunTest,
+                       FirstRunTabsContainNTPSyncPromoAllowed) {
+  // Simulate the following master_preferences:
+  // {
+  //  "first_run_tabs" : [
+  //    "new_tab_page",
+  //    "files/title1.html"
+  //  ],
+  //  "sync_promo": {
+  //    "show_on_first_run_allowed": true
+  //  }
+  // }
+  StartupBrowserCreator browser_creator;
+  browser_creator.AddFirstRunTab(GURL("new_tab_page"));
+  browser_creator.AddFirstRunTab(test_server()->GetURL("files/title1.html"));
+  browser()->profile()->GetPrefs()->SetBoolean(
+      prefs::kSignInPromoShowOnFirstRunAllowed, true);
+
+  // Do a process-startup browser launch.
+  CommandLine dummy(CommandLine::NO_PROGRAM);
+  StartupBrowserCreatorImpl launch(base::FilePath(), dummy, &browser_creator,
+                                   chrome::startup::IS_FIRST_RUN);
+  ASSERT_TRUE(launch.Launch(browser()->profile(), std::vector<GURL>(), true,
+                            browser()->host_desktop_type()));
+
+  // This should have created a new browser window.
+  Browser* new_browser = FindOneOtherBrowser(browser());
+  ASSERT_TRUE(new_browser);
+
+  // Verify that the first-run tabs are shown but the NTP that they contain has
+  // been replaced by the sync promo.
+  TabStripModel* tab_strip = new_browser->tab_strip_model();
+  ASSERT_EQ(2, tab_strip->count());
+  EXPECT_EQ(signin::GetPromoURL(signin::SOURCE_START_PAGE, false),
+            tab_strip->GetWebContentsAt(0)->GetURL());
+  EXPECT_EQ("title1.html",
+            tab_strip->GetWebContentsAt(1)->GetURL().ExtractFileName());
+}
+
+IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorFirstRunTest,
+                       FirstRunTabsContainNTPSyncPromoForbidden) {
+  // Simulate the following master_preferences:
+  // {
+  //  "first_run_tabs" : [
+  //    "new_tab_page",
+  //    "files/title1.html"
+  //  ],
+  //  "sync_promo": {
+  //    "show_on_first_run_allowed": false
+  //  }
+  // }
+  StartupBrowserCreator browser_creator;
+  browser_creator.AddFirstRunTab(GURL("new_tab_page"));
+  browser_creator.AddFirstRunTab(test_server()->GetURL("files/title1.html"));
+  browser()->profile()->GetPrefs()->SetBoolean(
+      prefs::kSignInPromoShowOnFirstRunAllowed, false);
+
+  // Do a process-startup browser launch.
+  CommandLine dummy(CommandLine::NO_PROGRAM);
+  StartupBrowserCreatorImpl launch(base::FilePath(), dummy, &browser_creator,
+                                   chrome::startup::IS_FIRST_RUN);
+  ASSERT_TRUE(launch.Launch(browser()->profile(), std::vector<GURL>(), true,
+                            browser()->host_desktop_type()));
+
+  // This should have created a new browser window.
+  Browser* new_browser = FindOneOtherBrowser(browser());
+  ASSERT_TRUE(new_browser);
+
+  // Verify that the first-run tabs are shown, the NTP that they contain has not
+  // not been replaced by the sync promo and no sync promo has been added.
+  TabStripModel* tab_strip = new_browser->tab_strip_model();
+  ASSERT_EQ(2, tab_strip->count());
+  EXPECT_EQ(GURL(chrome::kChromeUINewTabURL),
+            tab_strip->GetWebContentsAt(0)->GetURL());
+  EXPECT_EQ("title1.html",
+            tab_strip->GetWebContentsAt(1)->GetURL().ExtractFileName());
+}
+
+IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorFirstRunTest,
+                       FirstRunTabsSyncPromoForbidden) {
+  // Simulate the following master_preferences:
+  // {
+  //  "first_run_tabs" : [
+  //    "files/title1.html"
+  //  ],
+  //  "sync_promo": {
+  //    "show_on_first_run_allowed": false
+  //  }
+  // }
+  StartupBrowserCreator browser_creator;
+  browser_creator.AddFirstRunTab(test_server()->GetURL("files/title1.html"));
+  browser()->profile()->GetPrefs()->SetBoolean(
+      prefs::kSignInPromoShowOnFirstRunAllowed, false);
+
+  // Do a process-startup browser launch.
+  CommandLine dummy(CommandLine::NO_PROGRAM);
+  StartupBrowserCreatorImpl launch(base::FilePath(), dummy, &browser_creator,
+                                   chrome::startup::IS_FIRST_RUN);
+  ASSERT_TRUE(launch.Launch(browser()->profile(), std::vector<GURL>(), true,
+                            browser()->host_desktop_type()));
+
+  // This should have created a new browser window.
+  Browser* new_browser = FindOneOtherBrowser(browser());
+  ASSERT_TRUE(new_browser);
+
+  // Verify that the first-run tab is shown and no sync promo has been added.
+  TabStripModel* tab_strip = new_browser->tab_strip_model();
+  ASSERT_EQ(1, tab_strip->count());
+  EXPECT_EQ("title1.html",
+            tab_strip->GetWebContentsAt(0)->GetURL().ExtractFileName());
+}
+
+#if defined(ENABLE_CONFIGURATION_POLICY)
+IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorFirstRunTest,
+                       RestoreOnStartupURLsPolicySpecified) {
+  // Simulate the following master_preferences:
+  // {
+  //  "sync_promo": {
+  //    "show_on_first_run_allowed": true
+  //  }
+  // }
+  StartupBrowserCreator browser_creator;
+  browser()->profile()->GetPrefs()->SetBoolean(
+      prefs::kSignInPromoShowOnFirstRunAllowed, true);
+
+  // Set the following user policies:
+  // * RestoreOnStartup = RestoreOnStartupIsURLs
+  // * RestoreOnStartupURLs = [ "files/title1.html" ]
+  policy_map_.Set(policy::key::kRestoreOnStartup,
+                  policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_USER,
+                  base::Value::CreateIntegerValue(
+                      SessionStartupPref::kPrefValueURLs),
+                  NULL);
+  base::ListValue startup_urls;
+  startup_urls.Append(base::Value::CreateStringValue(
+      test_server()->GetURL("files/title1.html").spec()));
+  policy_map_.Set(policy::key::kRestoreOnStartupURLs,
+                  policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_USER,
+                  startup_urls.DeepCopy(), NULL);
+  provider_.UpdateChromePolicy(policy_map_);
+  base::RunLoop().RunUntilIdle();
+
+  // Do a process-startup browser launch.
+  CommandLine dummy(CommandLine::NO_PROGRAM);
+  StartupBrowserCreatorImpl launch(base::FilePath(), dummy, &browser_creator,
+                                   chrome::startup::IS_FIRST_RUN);
+  ASSERT_TRUE(launch.Launch(browser()->profile(), std::vector<GURL>(), true,
+                            browser()->host_desktop_type()));
+
+  // This should have created a new browser window.
+  Browser* new_browser = FindOneOtherBrowser(browser());
+  ASSERT_TRUE(new_browser);
+
+  // Verify that the URL specified through policy is shown and no sync promo has
+  // been added.
+  TabStripModel* tab_strip = new_browser->tab_strip_model();
+  ASSERT_EQ(1, tab_strip->count());
+  EXPECT_EQ("title1.html",
+            tab_strip->GetWebContentsAt(0)->GetURL().ExtractFileName());
+}
+#endif  // defined(ENABLE_CONFIGURATION_POLICY)
+
+#endif  // !defined(OS_LINUX) || !defined(GOOGLE_CHROME_BUILD) ||
+        // defined(ENABLE_CONFIGURATION_POLICY)
+
+#endif  // !defined(OS_CHROMEOS)

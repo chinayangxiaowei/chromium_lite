@@ -6,7 +6,7 @@
 
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/ui/app_modal_dialogs/app_modal_dialog_queue.h"
@@ -15,7 +15,7 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/javascript_message_type.h"
 #include "jni/JavascriptAppModalDialog_jni.h"
-#include "ui/gfx/android/window_android.h"
+#include "ui/android/window_android.h"
 
 using base::android::AttachCurrentThread;
 using base::android::ConvertUTF16ToJavaString;

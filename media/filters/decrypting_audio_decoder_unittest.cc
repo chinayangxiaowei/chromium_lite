@@ -7,9 +7,9 @@
 
 #include "base/bind.h"
 #include "base/callback_helpers.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
+#include "media/base/audio_buffer.h"
 #include "media/base/buffers.h"
-#include "media/base/data_buffer.h"
 #include "media/base/decoder_buffer.h"
 #include "media/base/decrypt_config.h"
 #include "media/base/gmock_callback_support.h"
@@ -21,7 +21,6 @@
 using ::testing::_;
 using ::testing::AtMost;
 using ::testing::IsNull;
-using ::testing::ReturnRef;
 using ::testing::SaveArg;
 using ::testing::StrictMock;
 
@@ -37,7 +36,7 @@ static const uint8 kFakeIv[DecryptConfig::kDecryptionKeySize] = { 0 };
 static scoped_refptr<DecoderBuffer> CreateFakeEncryptedBuffer() {
   const int buffer_size = 16;  // Need a non-empty buffer;
   scoped_refptr<DecoderBuffer> buffer(new DecoderBuffer(buffer_size));
-  buffer->SetDecryptConfig(scoped_ptr<DecryptConfig>(new DecryptConfig(
+  buffer->set_decrypt_config(scoped_ptr<DecryptConfig>(new DecryptConfig(
       std::string(reinterpret_cast<const char*>(kFakeKeyId),
                   arraysize(kFakeKeyId)),
       std::string(reinterpret_cast<const char*>(kFakeIv), arraysize(kFakeIv)),
@@ -51,7 +50,7 @@ static scoped_refptr<DecoderBuffer> CreateFakeEncryptedBuffer() {
 namespace {
 
 ACTION_P(ReturnBuffer, buffer) {
-  arg0.Run(buffer ? DemuxerStream::kOk : DemuxerStream::kAborted, buffer);
+  arg0.Run(buffer.get() ? DemuxerStream::kOk : DemuxerStream::kAborted, buffer);
 }
 
 ACTION_P(RunCallbackIfNotNull, param) {
@@ -64,7 +63,7 @@ ACTION_P2(ResetAndRunCallback, callback, param) {
 }
 
 MATCHER(IsEndOfStream, "end of stream") {
-  return (arg->IsEndOfStream());
+  return (arg->end_of_stream());
 }
 
 }  // namespace
@@ -78,24 +77,27 @@ class DecryptingAudioDecoderTest : public testing::Test {
                 &DecryptingAudioDecoderTest::RequestDecryptorNotification,
                 base::Unretained(this)))),
         decryptor_(new StrictMock<MockDecryptor>()),
-        demuxer_(new StrictMock<MockDemuxerStream>()),
+        demuxer_(new StrictMock<MockDemuxerStream>(DemuxerStream::AUDIO)),
         encrypted_buffer_(CreateFakeEncryptedBuffer()),
         decoded_frame_(NULL),
-        end_of_stream_frame_(DataBuffer::CreateEOSBuffer()),
+        end_of_stream_frame_(AudioBuffer::CreateEOSBuffer()),
         decoded_frame_list_() {
-    scoped_refptr<DataBuffer> data_buffer = new DataBuffer(kFakeAudioFrameSize);
-    data_buffer->SetDataSize(kFakeAudioFrameSize);
-    // |decoded_frame_| contains random data.
-    decoded_frame_ = data_buffer;
-    decoded_frame_list_.push_back(decoded_frame_);
   }
 
   void InitializeAndExpectStatus(const AudioDecoderConfig& config,
                                  PipelineStatus status) {
-    EXPECT_CALL(*demuxer_, audio_decoder_config())
-        .WillRepeatedly(ReturnRef(config));
+    // Initialize data now that the config is known. Since the code uses
+    // invalid values (that CreateEmptyBuffer() doesn't support), tweak them
+    // just for CreateEmptyBuffer().
+    int channels = ChannelLayoutToChannelCount(config.channel_layout());
+    if (channels < 1)
+      channels = 1;
+    decoded_frame_ = AudioBuffer::CreateEmptyBuffer(
+        channels, kFakeAudioFrameSize, kNoTimestamp(), kNoTimestamp());
+    decoded_frame_list_.push_back(decoded_frame_);
 
-    decoder_->Initialize(demuxer_, NewExpectedStatusCB(status),
+    demuxer_->set_audio_decoder_config(config);
+    decoder_->Initialize(demuxer_.get(), NewExpectedStatusCB(status),
                          base::Bind(&MockStatisticsCB::OnStatistics,
                                     base::Unretained(&statistics_cb_)));
     message_loop_.RunUntilIdle();
@@ -122,10 +124,10 @@ class DecryptingAudioDecoderTest : public testing::Test {
 
   void ReadAndExpectFrameReadyWith(
       AudioDecoder::Status status,
-      const scoped_refptr<DataBuffer>& audio_frame) {
+      const scoped_refptr<AudioBuffer>& audio_frame) {
     if (status != AudioDecoder::kOk)
       EXPECT_CALL(*this, FrameReady(status, IsNull()));
-    else if (audio_frame->IsEndOfStream())
+    else if (audio_frame->end_of_stream())
       EXPECT_CALL(*this, FrameReady(status, IsEndOfStream()));
     else
       EXPECT_CALL(*this, FrameReady(status, audio_frame));
@@ -216,13 +218,13 @@ class DecryptingAudioDecoderTest : public testing::Test {
 
   MOCK_METHOD1(RequestDecryptorNotification, void(const DecryptorReadyCB&));
 
-  MOCK_METHOD2(FrameReady, void(AudioDecoder::Status,
-                                const scoped_refptr<DataBuffer>&));
+  MOCK_METHOD2(FrameReady,
+               void(AudioDecoder::Status, const scoped_refptr<AudioBuffer>&));
 
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
   scoped_ptr<DecryptingAudioDecoder> decoder_;
   scoped_ptr<StrictMock<MockDecryptor> > decryptor_;
-  scoped_refptr<StrictMock<MockDemuxerStream> > demuxer_;
+  scoped_ptr<StrictMock<MockDemuxerStream> > demuxer_;
   MockStatisticsCB statistics_cb_;
   AudioDecoderConfig config_;
 
@@ -233,8 +235,8 @@ class DecryptingAudioDecoderTest : public testing::Test {
 
   // Constant buffer/frames to be returned by the |demuxer_| and |decryptor_|.
   scoped_refptr<DecoderBuffer> encrypted_buffer_;
-  scoped_refptr<DataBuffer> decoded_frame_;
-  scoped_refptr<DataBuffer> end_of_stream_frame_;
+  scoped_refptr<AudioBuffer> decoded_frame_;
+  scoped_refptr<AudioBuffer> end_of_stream_frame_;
   Decryptor::AudioBuffers decoded_frame_list_;
 
  private:
@@ -267,6 +269,15 @@ TEST_F(DecryptingAudioDecoderTest, Initialize_UnsupportedAudioConfig) {
       .WillOnce(RunCallback<1>(false));
   EXPECT_CALL(*this, RequestDecryptorNotification(_))
       .WillOnce(RunCallbackIfNotNull(decryptor_.get()));
+
+  AudioDecoderConfig config(kCodecVorbis, kSampleFormatPlanarF32,
+                            CHANNEL_LAYOUT_STEREO, 44100, NULL, 0, true);
+  InitializeAndExpectStatus(config, DECODER_ERROR_NOT_SUPPORTED);
+}
+
+TEST_F(DecryptingAudioDecoderTest, Initialize_NullDecryptor) {
+  EXPECT_CALL(*this, RequestDecryptorNotification(_))
+      .WillRepeatedly(RunCallbackIfNotNull(static_cast<Decryptor*>(NULL)));
 
   AudioDecoderConfig config(kCodecVorbis, kSampleFormatPlanarF32,
                             CHANNEL_LAYOUT_STEREO, 44100, NULL, 0, true);
@@ -315,10 +326,16 @@ TEST_F(DecryptingAudioDecoderTest, DecryptAndDecode_NeedMoreData) {
 TEST_F(DecryptingAudioDecoderTest, DecryptAndDecode_MultipleFrames) {
   Initialize();
 
-  scoped_refptr<DataBuffer> frame_a = new DataBuffer(kFakeAudioFrameSize);
-  frame_a->SetDataSize(kFakeAudioFrameSize);
-  scoped_refptr<DataBuffer> frame_b = new DataBuffer(kFakeAudioFrameSize);
-  frame_b->SetDataSize(kFakeAudioFrameSize);
+  scoped_refptr<AudioBuffer> frame_a = AudioBuffer::CreateEmptyBuffer(
+      ChannelLayoutToChannelCount(config_.channel_layout()),
+      kFakeAudioFrameSize,
+      kNoTimestamp(),
+      kNoTimestamp());
+  scoped_refptr<AudioBuffer> frame_b = AudioBuffer::CreateEmptyBuffer(
+      ChannelLayoutToChannelCount(config_.channel_layout()),
+      kFakeAudioFrameSize,
+      kNoTimestamp(),
+      kNoTimestamp());
   decoded_frame_list_.push_back(frame_a);
   decoded_frame_list_.push_back(frame_b);
 
@@ -363,8 +380,7 @@ TEST_F(DecryptingAudioDecoderTest, DemuxerRead_ConfigChange) {
   EXPECT_NE(new_config.channel_layout(), config_.channel_layout());
   EXPECT_NE(new_config.samples_per_second(), config_.samples_per_second());
 
-  EXPECT_CALL(*demuxer_, audio_decoder_config())
-      .WillRepeatedly(ReturnRef(new_config));
+  demuxer_->set_audio_decoder_config(new_config);
   EXPECT_CALL(*decryptor_, DeinitializeDecoder(Decryptor::kAudio));
   EXPECT_CALL(*decryptor_, InitializeAudioDecoder(_, _))
       .WillOnce(RunCallback<1>(true));
@@ -492,8 +508,7 @@ TEST_F(DecryptingAudioDecoderTest, Reset_DuringDemuxerRead_ConfigChange) {
 
   // Even during pending reset, the decoder still needs to be initialized with
   // the new config.
-  EXPECT_CALL(*demuxer_, audio_decoder_config())
-      .WillRepeatedly(ReturnRef(new_config));
+  demuxer_->set_audio_decoder_config(new_config);
   EXPECT_CALL(*decryptor_, DeinitializeDecoder(Decryptor::kAudio));
   EXPECT_CALL(*decryptor_, InitializeAudioDecoder(_, _))
       .WillOnce(RunCallback<1>(true));

@@ -19,7 +19,7 @@ namespace gfx {
 class GLSurface;
 
 // Encapsulates an EGL OpenGL ES context.
-class GLContextEGL : public GLContext {
+class GLContextEGL : public GLContextReal {
  public:
   explicit GLContextEGL(GLShareGroup* share_group);
 
@@ -35,9 +35,7 @@ class GLContextEGL : public GLContext {
   virtual std::string GetExtensions() OVERRIDE;
   virtual bool WasAllocatedUsingRobustnessExtension() OVERRIDE;
   virtual bool GetTotalGpuMemory(size_t* bytes) OVERRIDE;
-  virtual void SetRecreateSurfaceOnMakeCurrent() OVERRIDE;
-
-  bool RecreateSurfaceIfNeeded(GLSurface* surface);
+  virtual void SetUnbindFboOnMakeCurrent() OVERRIDE;
 
  protected:
   virtual ~GLContextEGL();
@@ -46,7 +44,7 @@ class GLContextEGL : public GLContext {
   EGLContext context_;
   EGLDisplay display_;
   EGLConfig config_;
-  bool recreate_surface_on_makecurrent_;
+  bool unbind_fbo_on_makecurrent_;
 
   DISALLOW_COPY_AND_ASSIGN(GLContextEGL);
 };

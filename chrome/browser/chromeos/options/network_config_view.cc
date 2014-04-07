@@ -7,9 +7,11 @@
 #include <algorithm>
 
 #include "ash/shell.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
-#include "chrome/browser/chromeos/login/base_login_display_host.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/chromeos/cros/network_property_ui_data.h"
+#include "chrome/browser/chromeos/login/login_display_host_impl.h"
+#include "chrome/browser/chromeos/login/user.h"
 #include "chrome/browser/chromeos/options/vpn_config_view.h"
 #include "chrome/browser/chromeos/options/wifi_config_view.h"
 #include "chrome/browser/chromeos/options/wimax_config_view.h"
@@ -18,6 +20,8 @@
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/host_desktop.h"
+#include "chromeos/network/network_state.h"
+#include "chromeos/network/network_state_handler.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "grit/locale_settings.h"
@@ -38,8 +42,8 @@ using views::Widget;
 namespace {
 
 gfx::NativeWindow GetDialogParent() {
-  if (chromeos::BaseLoginDisplayHost::default_host()) {
-    return chromeos::BaseLoginDisplayHost::default_host()->GetNativeWindow();
+  if (chromeos::LoginDisplayHostImpl::default_host()) {
+    return chromeos::LoginDisplayHostImpl::default_host()->GetNativeWindow();
   } else {
     Browser* browser = chrome::FindTabbedBrowser(
         ProfileManager::GetDefaultProfileOrOffTheRecord(),
@@ -72,39 +76,38 @@ namespace chromeos {
 // static
 const int ChildNetworkConfigView::kInputFieldMinWidth = 270;
 
-NetworkConfigView::NetworkConfigView(Network* network)
+NetworkConfigView::NetworkConfigView()
     : child_config_view_(NULL),
       delegate_(NULL),
       advanced_button_(NULL) {
   DCHECK(GetActiveDialog() == NULL);
   SetActiveDialog(this);
-  if (network->type() == TYPE_WIFI) {
-    child_config_view_ =
-        new WifiConfigView(this, static_cast<WifiNetwork*>(network));
-  } else if (network->type() == TYPE_WIMAX) {
-    child_config_view_ =
-        new WimaxConfigView(this, static_cast<WimaxNetwork*>(network));
-  } else if (network->type() == TYPE_VPN) {
-    child_config_view_ =
-        new VPNConfigView(this, static_cast<VirtualNetwork*>(network));
-  } else {
-    NOTREACHED();
-  }
 }
 
-NetworkConfigView::NetworkConfigView(ConnectionType type)
-    : child_config_view_(NULL),
-      delegate_(NULL),
-      advanced_button_(NULL) {
-  DCHECK(GetActiveDialog() == NULL);
-  SetActiveDialog(this);
-  if (type == TYPE_WIFI) {
-    child_config_view_ = new WifiConfigView(this, false /* show_8021x */);
+void NetworkConfigView::InitWithNetworkState(const NetworkState* network) {
+  DCHECK(network);
+  std::string service_path = network->path();
+  if (network->type() == flimflam::kTypeWifi)
+    child_config_view_ = new WifiConfigView(this, service_path, false);
+  else if (network->type() == flimflam::kTypeWimax)
+    child_config_view_ = new WimaxConfigView(this, service_path);
+  else if (network->type() == flimflam::kTypeVPN)
+    child_config_view_ = new VPNConfigView(this, service_path);
+  else
+    NOTREACHED();
+}
+
+void NetworkConfigView::InitWithType(const std::string& type) {
+  if (type == flimflam::kTypeWifi) {
+    child_config_view_ = new WifiConfigView(this,
+                                            "" /* service_path */,
+                                            false /* show_8021x */);
     advanced_button_ = new views::LabelButton(this, l10n_util::GetStringUTF16(
         IDS_OPTIONS_SETTINGS_INTERNET_OPTIONS_ADVANCED_BUTTON));
     advanced_button_->SetStyle(views::Button::STYLE_NATIVE_TEXTBUTTON);
-  } else if (type == TYPE_VPN) {
-    child_config_view_ = new VPNConfigView(this);
+  } else if (type == flimflam::kTypeVPN) {
+    child_config_view_ = new VPNConfigView(this,
+                                           "" /* service_path */);
   } else {
     NOTREACHED();
   }
@@ -116,22 +119,29 @@ NetworkConfigView::~NetworkConfigView() {
 }
 
 // static
-bool NetworkConfigView::Show(Network* network, gfx::NativeWindow parent) {
+void NetworkConfigView::Show(const std::string& service_path,
+                             gfx::NativeWindow parent) {
   if (GetActiveDialog() != NULL)
-    return false;
-  NetworkConfigView* view = new NetworkConfigView(network);
+    return;
+  NetworkConfigView* view = new NetworkConfigView();
+  const NetworkState* network = NetworkHandler::Get()->network_state_handler()->
+      GetNetworkState(service_path);
+  if (!network) {
+    LOG(ERROR) << "NetworkConfigView::Show called with invalid service_path";
+    return;
+  }
+  view->InitWithNetworkState(network);
   view->ShowDialog(parent);
-  return true;
 }
 
 // static
-bool NetworkConfigView::ShowForType(ConnectionType type,
+void NetworkConfigView::ShowForType(const std::string& type,
                                     gfx::NativeWindow parent) {
   if (GetActiveDialog() != NULL)
-    return false;
-  NetworkConfigView* view = new NetworkConfigView(type);
+    return;
+  NetworkConfigView* view = new NetworkConfigView();
+  view->InitWithType(type);
   view->ShowDialog(parent);
-  return true;
 }
 
 gfx::NativeWindow NetworkConfigView::GetNativeWindow() const {
@@ -177,6 +187,11 @@ views::View* NetworkConfigView::GetInitiallyFocusedView() {
   return child_config_view_->GetInitiallyFocusedView();
 }
 
+string16 NetworkConfigView::GetWindowTitle() const {
+  DCHECK(!child_config_view_->GetTitle().empty());
+  return child_config_view_->GetTitle();
+}
+
 ui::ModalType NetworkConfigView::GetModalType() const {
   return ui::MODAL_TYPE_SYSTEM;
 }
@@ -200,7 +215,9 @@ void NetworkConfigView::ShowAdvancedView() {
   RemoveChildView(child_config_view_);
   delete child_config_view_;
   // For now, there is only an advanced view for Wi-Fi 802.1X.
-  child_config_view_ = new WifiConfigView(this, true /* show_8021x */);
+  child_config_view_ = new WifiConfigView(this,
+                                          "" /* service_path */,
+                                          true /* show_8021x */);
   AddChildView(child_config_view_);
   // Resize the window to be able to hold the new widgets.
   gfx::Size size = views::Widget::GetLocalizedContentsSize(
@@ -233,10 +250,10 @@ gfx::Size NetworkConfigView::GetPreferredSize() {
 }
 
 void NetworkConfigView::ViewHierarchyChanged(
-    bool is_add, views::View* parent, views::View* child) {
+    const ViewHierarchyChangedDetails& details) {
   // Can't init before we're inserted into a Container, because we require
   // a HWND to parent native child controls to.
-  if (is_add && child == this) {
+  if (details.is_add && details.child == this) {
     AddChildView(child_config_view_);
   }
 }
@@ -246,12 +263,25 @@ void NetworkConfigView::ShowDialog(gfx::NativeWindow parent) {
     parent = GetDialogParent();
   // Failed connections may result in a pop-up with no natural parent window,
   // so provide a fallback context on the active display.
-  Widget* window = parent ?
-      Widget::CreateWindowWithParent(this, parent) :
-      Widget::CreateWindowWithContext(this, ash::Shell::GetActiveRootWindow());
+  gfx::NativeWindow context = parent ? NULL : ash::Shell::GetActiveRootWindow();
+  Widget* window = DialogDelegate::CreateDialogWidget(this, context, parent);
   window->SetAlwaysOnTop(true);
   window->Show();
 }
+
+// ChildNetworkConfigView
+
+ChildNetworkConfigView::ChildNetworkConfigView(
+    NetworkConfigView* parent,
+    const std::string& service_path)
+    : parent_(parent),
+      service_path_(service_path) {
+}
+
+ChildNetworkConfigView::~ChildNetworkConfigView() {
+}
+
+// ControlledSettingIndicatorView
 
 ControlledSettingIndicatorView::ControlledSettingIndicatorView()
     : managed_(false),
@@ -271,10 +301,10 @@ ControlledSettingIndicatorView::~ControlledSettingIndicatorView() {}
 
 void ControlledSettingIndicatorView::Update(
     const NetworkPropertyUIData& ui_data) {
-  if (managed_ == ui_data.managed())
+  if (managed_ == ui_data.IsManaged())
     return;
 
-  managed_ = ui_data.managed();
+  managed_ = ui_data.IsManaged();
   PreferredSizeChanged();
 }
 

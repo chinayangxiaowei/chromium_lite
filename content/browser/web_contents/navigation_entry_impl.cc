@@ -5,8 +5,8 @@
 #include "content/browser/web_contents/navigation_entry_impl.h"
 
 #include "base/metrics/histogram.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "content/public/common/content_constants.h"
 #include "content/public/common/url_constants.h"
 #include "net/base/net_util.h"
@@ -50,6 +50,7 @@ NavigationEntryImpl::NavigationEntryImpl()
       is_overriding_user_agent_(false),
       is_renderer_initiated_(false),
       should_replace_entry_(false),
+      should_clear_history_list_(false),
       can_load_local_resources_(false) {
 }
 
@@ -76,6 +77,7 @@ NavigationEntryImpl::NavigationEntryImpl(SiteInstanceImpl* instance,
       is_overriding_user_agent_(false),
       is_renderer_initiated_(is_renderer_initiated),
       should_replace_entry_(false),
+      should_clear_history_list_(false),
       can_load_local_resources_(false) {
 }
 
@@ -133,12 +135,12 @@ const string16& NavigationEntryImpl::GetTitle() const {
   return title_;
 }
 
-void NavigationEntryImpl::SetContentState(const std::string& state) {
-  content_state_ = state;
+void NavigationEntryImpl::SetPageState(const PageState& state) {
+  page_state_ = state;
 }
 
-const std::string& NavigationEntryImpl::GetContentState() const {
-  return content_state_;
+const PageState& NavigationEntryImpl::GetPageState() const {
+  return page_state_;
 }
 
 void NavigationEntryImpl::SetPageID(int page_id) {
@@ -192,7 +194,7 @@ const string16& NavigationEntryImpl::GetTitleForDisplay(
 }
 
 bool NavigationEntryImpl::IsViewSourceMode() const {
-  return virtual_url_.SchemeIs(chrome::kViewSourceScheme);
+  return virtual_url_.SchemeIs(kViewSourceScheme);
 }
 
 void NavigationEntryImpl::SetTransitionType(
@@ -310,9 +312,9 @@ void NavigationEntryImpl::ClearExtraData(const std::string& key) {
 }
 
 void NavigationEntryImpl::SetScreenshotPNGData(
-    const std::vector<unsigned char>& png_data) {
-  screenshot_ = png_data.empty() ? NULL : new base::RefCountedBytes(png_data);
-  if (screenshot_)
+    scoped_refptr<base::RefCountedBytes> png_data) {
+  screenshot_ = png_data;
+  if (screenshot_.get())
     UMA_HISTOGRAM_MEMORY_KB("Overscroll.ScreenshotSize", screenshot_->size());
 }
 

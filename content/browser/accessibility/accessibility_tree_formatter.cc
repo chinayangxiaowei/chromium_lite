@@ -6,9 +6,10 @@
 
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/string_util.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "content/browser/accessibility/browser_accessibility_manager.h"
 #include "content/port/browser/render_widget_host_view_port.h"
 #include "content/public/browser/render_view_host.h"
@@ -18,11 +19,12 @@ namespace content {
 namespace {
 const int kIndentSpaces = 4;
 const char* kSkipString = "@NO_DUMP";
+const char* kChildrenDictAttr = "children";
 }
 
 AccessibilityTreeFormatter::AccessibilityTreeFormatter(
-    BrowserAccessibility* node)
-    : node_(node) {
+    BrowserAccessibility* root)
+    : root_(root) {
   Initialize();
 }
 
@@ -45,33 +47,71 @@ AccessibilityTreeFormatter* AccessibilityTreeFormatter::Create(
 AccessibilityTreeFormatter::~AccessibilityTreeFormatter() {
 }
 
+scoped_ptr<base::DictionaryValue>
+AccessibilityTreeFormatter::BuildAccessibilityTree() {
+  scoped_ptr<base::DictionaryValue> dict(new base::DictionaryValue);
+  RecursiveBuildAccessibilityTree(*root_, dict.get());
+  return dict.Pass();
+}
+
 void AccessibilityTreeFormatter::FormatAccessibilityTree(
     string16* contents) {
-  RecursiveFormatAccessibilityTree(node_, contents, 0);
+  scoped_ptr<base::DictionaryValue> dict = BuildAccessibilityTree();
+  RecursiveFormatAccessibilityTree(*(dict.get()), contents);
+}
+
+void AccessibilityTreeFormatter::RecursiveBuildAccessibilityTree(
+    const BrowserAccessibility& node, base::DictionaryValue* dict) {
+  AddProperties(node, dict);
+
+  base::ListValue* children = new base::ListValue;
+  dict->Set(kChildrenDictAttr, children);
+  if (!IncludeChildren(node))
+    return;
+
+  for (size_t i = 0; i < node.children().size(); ++i) {
+    BrowserAccessibility* child_node = node.children()[i];
+    base::DictionaryValue* child_dict = new base::DictionaryValue;
+    children->Append(child_dict);
+    RecursiveBuildAccessibilityTree(*child_node, child_dict);
+  }
 }
 
 void AccessibilityTreeFormatter::RecursiveFormatAccessibilityTree(
-    BrowserAccessibility* node, string16* contents, int indent) {
-  scoped_array<char> prefix(new char[indent + 1]);
-  for (int i = 0; i < indent; ++i)
-    prefix[i] = ' ';
-  prefix[indent] = '\0';
-
-  string16 line = ToString(node, prefix.get());
+    const base::DictionaryValue& dict, string16* contents, int depth) {
+  string16 line = ToString(dict, string16(depth * kIndentSpaces, ' '));
   if (line.find(ASCIIToUTF16(kSkipString)) != string16::npos)
     return;
 
   *contents += line;
-  for (size_t i = 0; i < node->children().size(); ++i) {
-    RecursiveFormatAccessibilityTree(node->children()[i], contents,
-                                     indent + kIndentSpaces);
+  const base::ListValue* children;
+  dict.GetList(kChildrenDictAttr, &children);
+  const base::DictionaryValue* child_dict;
+  for (size_t i = 0; i < children->GetSize(); i++) {
+    children->GetDictionary(i, &child_dict);
+    RecursiveFormatAccessibilityTree(*child_dict, contents, depth + 1);
   }
 }
 
-#if (!defined(OS_WIN) && !defined(OS_MACOSX))
-string16 AccessibilityTreeFormatter::ToString(BrowserAccessibility* node,
-                                              char* prefix) {
-  return UTF8ToUTF16(prefix) + base::IntToString16(node->renderer_id()) +
+#if !defined(OS_ANDROID)
+bool AccessibilityTreeFormatter::IncludeChildren(
+    const BrowserAccessibility& node) {
+  return true;
+}
+#endif
+
+#if (!defined(OS_WIN) && !defined(OS_MACOSX) && !defined(OS_ANDROID) && \
+     !defined(TOOLKIT_GTK))
+void AccessibilityTreeFormatter::AddProperties(const BrowserAccessibility& node,
+                                               base::DictionaryValue* dict) {
+  dict->SetInteger("id", node.renderer_id());
+}
+
+string16 AccessibilityTreeFormatter::ToString(const base::DictionaryValue& node,
+                                              const string16& indent) {
+  int id_value;
+  node.GetInteger("id", &id_value);
+  return indent + base::IntToString16(id_value) +
        ASCIIToUTF16("\n");
 }
 
@@ -80,28 +120,28 @@ void AccessibilityTreeFormatter::Initialize() {}
 // static
 const base::FilePath::StringType
 AccessibilityTreeFormatter::GetActualFileSuffix() {
-  return FILE_PATH_LITERAL("");
+  return base::FilePath::StringType();
 }
 
 // static
 const base::FilePath::StringType
 AccessibilityTreeFormatter::GetExpectedFileSuffix() {
-  return FILE_PATH_LITERAL("");
+  return base::FilePath::StringType();
 }
 
 // static
 const std::string AccessibilityTreeFormatter::GetAllowEmptyString() {
-  return "";
+  return std::string();
 }
 
 // static
 const std::string AccessibilityTreeFormatter::GetAllowString() {
-  return "";
+  return std::string();
 }
 
 // static
 const std::string AccessibilityTreeFormatter::GetDenyString() {
-  return "";
+  return std::string();
 }
 #endif
 
@@ -127,23 +167,31 @@ bool AccessibilityTreeFormatter::MatchesFilters(
   return allow;
 }
 
-void AccessibilityTreeFormatter::StartLine() {
-  line_.clear();
+string16 AccessibilityTreeFormatter::FormatCoordinates(
+    const char* name, const char* x_name, const char* y_name,
+    const base::DictionaryValue& value) {
+  int x, y;
+  value.GetInteger(x_name, &x);
+  value.GetInteger(y_name, &y);
+  std::string xy_str(base::StringPrintf("%s=(%d, %d)", name, x, y));
+
+  return UTF8ToUTF16(xy_str);
 }
 
-void AccessibilityTreeFormatter::Add(
-    bool include_by_default, const string16& attr) {
+void AccessibilityTreeFormatter::WriteAttribute(
+    bool include_by_default, const std::string& attr, string16* line) {
+  WriteAttribute(include_by_default, UTF8ToUTF16(attr), line);
+}
+
+void AccessibilityTreeFormatter::WriteAttribute(
+    bool include_by_default, const string16& attr, string16* line) {
   if (attr.empty())
     return;
   if (!MatchesFilters(attr, include_by_default))
     return;
-  if (!line_.empty())
-    line_ += ASCIIToUTF16(" ");
-  line_ += attr;
-}
-
-string16 AccessibilityTreeFormatter::FinishLine() {
-  return line_;
+  if (!line->empty())
+    *line += ASCIIToUTF16(" ");
+  *line += attr;
 }
 
 }  // namespace content

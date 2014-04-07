@@ -6,10 +6,13 @@
 
 #include <algorithm>
 
+#include "base/i18n/string_compare.h"
 #include "base/metrics/histogram.h"
+#include "base/prefs/pref_service.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/infobars/infobar_service.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/translate/translate_accept_languages.h"
 #include "chrome/browser/translate/translate_manager.h"
 #include "chrome/browser/translate/translate_tab_helper.h"
 #include "content/public/browser/navigation_details.h"
@@ -17,10 +20,23 @@
 #include "content/public/browser/web_contents.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
+#include "third_party/icu/source/i18n/unicode/coll.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/resource/resource_bundle.h"
 
 using content::NavigationEntry;
+
+namespace {
+
+const char kDeclineTranslate[] = "Translate.DeclineTranslate";
+const char kCloseInfobar[] = "Translate.DeclineTranslateCloseInfobar";
+const char kRevertTranslation[] = "Translate.RevertTranslation";
+const char kShowErrorInfobar[] = "Translate.ShowErrorInfobar";
+const char kPerformTranslate[] = "Translate.Translate";
+const char kNeverTranslateLang[] = "Translate.NeverTranslateLang";
+const char kNeverTranslateSite[] = "Translate.NeverTranslateSite";
+const char kAlwaysTranslateLang[] = "Translate.AlwaysTranslateLang";
+
+}  // namespace
 
 // static
 const size_t TranslateInfoBarDelegate::kNoIndex = static_cast<size_t>(-1);
@@ -29,13 +45,15 @@ TranslateInfoBarDelegate::~TranslateInfoBarDelegate() {
 }
 
 // static
-void TranslateInfoBarDelegate::Create(InfoBarService* infobar_service,
-                                      bool replace_existing_infobar,
-                                      Type infobar_type,
-                                      TranslateErrors::Type error_type,
-                                      PrefService* prefs,
-                                      const std::string& original_language,
-                                      const std::string& target_language) {
+void TranslateInfoBarDelegate::Create(
+    bool replace_existing_infobar,
+    InfoBarService* infobar_service,
+    Type infobar_type,
+    const std::string& original_language,
+    const std::string& target_language,
+    TranslateErrors::Type error_type,
+    PrefService* prefs,
+    const ShortcutConfiguration& shortcut_config) {
   // Check preconditions.
   if (infobar_type != TRANSLATION_ERROR) {
     DCHECK(TranslateManager::IsSupportedLanguage(target_language));
@@ -43,60 +61,75 @@ void TranslateInfoBarDelegate::Create(InfoBarService* infobar_service,
       // The original language can only be "unknown" for the "translating"
       // infobar, which is the case when the user started a translation from the
       // context menu.
-      DCHECK_EQ(TRANSLATING, infobar_type);
+      DCHECK(infobar_type == TRANSLATING || infobar_type == AFTER_TRANSLATE);
       DCHECK_EQ(chrome::kUnknownLanguageCode, original_language);
     }
   }
 
   // Find any existing translate infobar delegate.
   TranslateInfoBarDelegate* old_delegate = NULL;
-  for (size_t i = 0; i < infobar_service->GetInfoBarCount(); ++i) {
-    old_delegate =
-        infobar_service->GetInfoBarDelegateAt(i)->AsTranslateInfoBarDelegate();
-    if (old_delegate)
+  for (size_t i = 0; i < infobar_service->infobar_count(); ++i) {
+    old_delegate = infobar_service->infobar_at(i)->AsTranslateInfoBarDelegate();
+    if (old_delegate) {
+      if (!replace_existing_infobar)
+        return;
       break;
+    }
   }
 
   // Create the new delegate.
   scoped_ptr<TranslateInfoBarDelegate> infobar(
-      new TranslateInfoBarDelegate(infobar_type, error_type, infobar_service,
-                                   prefs, original_language, target_language));
-  infobar->UpdateBackgroundAnimation(old_delegate);
+      new TranslateInfoBarDelegate(infobar_service, infobar_type, old_delegate,
+                                   original_language, target_language,
+                                   error_type, prefs, shortcut_config));
+
+  // Do not create the after translate infobar if we are auto translating.
+  if ((infobar_type == TranslateInfoBarDelegate::AFTER_TRANSLATE) ||
+      (infobar_type == TranslateInfoBarDelegate::TRANSLATING)) {
+    TranslateTabHelper* translate_tab_helper =
+      TranslateTabHelper::FromWebContents(infobar_service->web_contents());
+    if (!translate_tab_helper ||
+         translate_tab_helper->language_state().InTranslateNavigation())
+      return;
+  }
 
   // Add the new delegate if necessary.
   if (!old_delegate) {
     infobar_service->AddInfoBar(infobar.PassAs<InfoBarDelegate>());
-  } else if (replace_existing_infobar) {
+  } else {
+    DCHECK(replace_existing_infobar);
     infobar_service->ReplaceInfoBar(old_delegate,
                                     infobar.PassAs<InfoBarDelegate>());
   }
 }
 
 void TranslateInfoBarDelegate::Translate() {
-  if (!owner()->GetWebContents()->GetBrowserContext()->IsOffTheRecord()) {
+  if (!web_contents()->GetBrowserContext()->IsOffTheRecord()) {
     prefs_.ResetTranslationDeniedCount(original_language_code());
     prefs_.IncrementTranslationAcceptedCount(original_language_code());
   }
 
-  TranslateManager::GetInstance()->TranslatePage(owner()->GetWebContents(),
+  TranslateManager::GetInstance()->TranslatePage(web_contents(),
                                                  original_language_code(),
                                                  target_language_code());
 
-  UMA_HISTOGRAM_COUNTS("Translate.Translate", 1);
+  UMA_HISTOGRAM_BOOLEAN(kPerformTranslate, true);
 }
 
 void TranslateInfoBarDelegate::RevertTranslation() {
-  TranslateManager::GetInstance()->RevertTranslation(owner()->GetWebContents());
+  TranslateManager::GetInstance()->RevertTranslation(web_contents());
   RemoveSelf();
+
+  UMA_HISTOGRAM_BOOLEAN(kRevertTranslation, true);
 }
 
 void TranslateInfoBarDelegate::ReportLanguageDetectionError() {
-  TranslateManager::GetInstance()->
-      ReportLanguageDetectionError(owner()->GetWebContents());
+  TranslateManager::GetInstance()->ReportLanguageDetectionError(
+      web_contents());
 }
 
 void TranslateInfoBarDelegate::TranslationDeclined() {
-  if (!owner()->GetWebContents()->GetBrowserContext()->IsOffTheRecord()) {
+  if (!web_contents()->GetBrowserContext()->IsOffTheRecord()) {
     prefs_.ResetTranslationAcceptedCount(original_language_code());
     prefs_.IncrementTranslationDeniedCount(original_language_code());
   }
@@ -106,25 +139,30 @@ void TranslateInfoBarDelegate::TranslationDeclined() {
   // translations when getting a LANGUAGE_DETERMINED from the page, which
   // happens when a load stops. That could happen multiple times, including
   // after the user already declined the translation.)
-  TranslateTabHelper* translate_tab_helper =
-      TranslateTabHelper::FromWebContents(owner()->GetWebContents());
-  translate_tab_helper->language_state().set_translation_declined(true);
+  TranslateTabHelper::FromWebContents(web_contents())->
+      language_state().set_translation_declined(true);
 
-  UMA_HISTOGRAM_COUNTS("Translate.DeclineTranslate", 1);
+  UMA_HISTOGRAM_BOOLEAN(kDeclineTranslate, true);
 }
 
-bool TranslateInfoBarDelegate::IsLanguageBlacklisted() {
-  return prefs_.IsLanguageBlacklisted(original_language_code());
+bool TranslateInfoBarDelegate::IsTranslatableLanguageByPrefs() {
+  Profile* profile =
+      Profile::FromBrowserContext(web_contents()->GetBrowserContext());
+  Profile* original_profile = profile->GetOriginalProfile();
+  return TranslatePrefs::CanTranslateLanguage(original_profile,
+                                              original_language_code());
 }
 
-void TranslateInfoBarDelegate::ToggleLanguageBlacklist() {
+void TranslateInfoBarDelegate::ToggleTranslatableLanguageByPrefs() {
   const std::string& original_lang = original_language_code();
-  if (prefs_.IsLanguageBlacklisted(original_lang)) {
-    prefs_.RemoveLanguageFromBlacklist(original_lang);
+  if (prefs_.IsBlockedLanguage(original_lang)) {
+    prefs_.UnblockLanguage(original_lang);
   } else {
-    prefs_.BlacklistLanguage(original_lang);
+    prefs_.BlockLanguage(original_lang);
     RemoveSelf();
   }
+
+  UMA_HISTOGRAM_BOOLEAN(kNeverTranslateLang, true);
 }
 
 bool TranslateInfoBarDelegate::IsSiteBlacklisted() {
@@ -143,6 +181,8 @@ void TranslateInfoBarDelegate::ToggleSiteBlacklist() {
     prefs_.BlacklistSite(host);
     RemoveSelf();
   }
+
+  UMA_HISTOGRAM_BOOLEAN(kNeverTranslateSite, true);
 }
 
 bool TranslateInfoBarDelegate::ShouldAlwaysTranslate() {
@@ -157,6 +197,8 @@ void TranslateInfoBarDelegate::ToggleAlwaysTranslate() {
     prefs_.RemoveLanguagePairFromWhitelist(original_lang, target_lang);
   else
     prefs_.WhitelistLanguagePair(original_lang, target_lang);
+
+  UMA_HISTOGRAM_BOOLEAN(kAlwaysTranslateLang, true);
 }
 
 void TranslateInfoBarDelegate::AlwaysTranslatePageLanguage() {
@@ -169,8 +211,8 @@ void TranslateInfoBarDelegate::AlwaysTranslatePageLanguage() {
 
 void TranslateInfoBarDelegate::NeverTranslatePageLanguage() {
   std::string original_lang = original_language_code();
-  DCHECK(!prefs_.IsLanguageBlacklisted(original_lang));
-  prefs_.BlacklistLanguage(original_lang);
+  DCHECK(!prefs_.IsBlockedLanguage(original_lang));
+  prefs_.BlockLanguage(original_lang);
   RemoveSelf();
 }
 
@@ -181,6 +223,9 @@ string16 TranslateInfoBarDelegate::GetMessageInfoBarText() {
   }
 
   DCHECK_EQ(TRANSLATION_ERROR, infobar_type_);
+  UMA_HISTOGRAM_ENUMERATION(kShowErrorInfobar,
+                            error_type_,
+                            TranslateErrors::TRANSLATE_ERROR_MAX);
   switch (error_type_) {
     case TranslateErrors::NETWORK:
       return l10n_util::GetStringUTF16(
@@ -225,32 +270,26 @@ void TranslateInfoBarDelegate::MessageInfoBarButtonPressed() {
     return;
   }
   // This is the "Try again..." case.
-  TranslateManager::GetInstance()->TranslatePage(owner()->GetWebContents(),
-      original_language_code(), target_language_code());
+  TranslateManager::GetInstance()->TranslatePage(
+      web_contents(), original_language_code(), target_language_code());
 }
 
 bool TranslateInfoBarDelegate::ShouldShowMessageInfoBarButton() {
   return !GetMessageInfoBarButtonText().empty();
 }
 
-bool TranslateInfoBarDelegate::ShouldShowNeverTranslateButton() {
+bool TranslateInfoBarDelegate::ShouldShowNeverTranslateShortcut() {
   DCHECK_EQ(BEFORE_TRANSLATE, infobar_type_);
-  return !owner()->GetWebContents()->GetBrowserContext()->IsOffTheRecord() &&
-      (prefs_.GetTranslationDeniedCount(original_language_code()) >= 3);
+  return !web_contents()->GetBrowserContext()->IsOffTheRecord() &&
+      (prefs_.GetTranslationDeniedCount(original_language_code()) >=
+          shortcut_config_.never_translate_min_count);
 }
 
-bool TranslateInfoBarDelegate::ShouldShowAlwaysTranslateButton() {
+bool TranslateInfoBarDelegate::ShouldShowAlwaysTranslateShortcut() {
   DCHECK_EQ(BEFORE_TRANSLATE, infobar_type_);
-  return !owner()->GetWebContents()->GetBrowserContext()->IsOffTheRecord() &&
-      (prefs_.GetTranslationAcceptedCount(original_language_code()) >= 3);
-}
-
-void TranslateInfoBarDelegate::UpdateBackgroundAnimation(
-    TranslateInfoBarDelegate* previous_infobar) {
-  if (!previous_infobar || previous_infobar->IsError() == IsError())
-    background_animation_ = NONE;
-  else
-    background_animation_ = IsError() ? NORMAL_TO_ERROR : ERROR_TO_NORMAL;
+  return !web_contents()->GetBrowserContext()->IsOffTheRecord() &&
+      (prefs_.GetTranslationAcceptedCount(original_language_code()) >=
+          shortcut_config_.always_translate_min_count);
 }
 
 // static
@@ -262,14 +301,27 @@ string16 TranslateInfoBarDelegate::GetLanguageDisplayableName(
 
 // static
 void TranslateInfoBarDelegate::GetAfterTranslateStrings(
-    std::vector<string16>* strings, bool* swap_languages) {
+    std::vector<string16>* strings,
+    bool* swap_languages,
+    bool autodetermined_source_language) {
   DCHECK(strings);
+
+  if (autodetermined_source_language) {
+    size_t offset;
+    string16 text = l10n_util::GetStringFUTF16(
+        IDS_TRANSLATE_INFOBAR_AFTER_MESSAGE_AUTODETERMINED_SOURCE_LANGUAGE,
+        string16(),
+        &offset);
+
+    strings->push_back(text.substr(0, offset));
+    strings->push_back(text.substr(offset));
+    return;
+  }
   DCHECK(swap_languages);
 
   std::vector<size_t> offsets;
-  string16 text =
-      l10n_util::GetStringFUTF16(IDS_TRANSLATE_INFOBAR_AFTER_MESSAGE,
-                                 string16(), string16(), &offsets);
+  string16 text = l10n_util::GetStringFUTF16(
+      IDS_TRANSLATE_INFOBAR_AFTER_MESSAGE, string16(), string16(), &offsets);
   DCHECK_EQ(2U, offsets.size());
 
   *swap_languages = (offsets[0] > offsets[1]);
@@ -282,12 +334,14 @@ void TranslateInfoBarDelegate::GetAfterTranslateStrings(
 }
 
 TranslateInfoBarDelegate::TranslateInfoBarDelegate(
-    Type infobar_type,
-    TranslateErrors::Type error_type,
     InfoBarService* infobar_service,
-    PrefService* prefs,
+    Type infobar_type,
+    TranslateInfoBarDelegate* old_delegate,
     const std::string& original_language,
-    const std::string& target_language)
+    const std::string& target_language,
+    TranslateErrors::Type error_type,
+    PrefService* prefs,
+    ShortcutConfiguration shortcut_config)
     : InfoBarDelegate(infobar_service),
       infobar_type_(infobar_type),
       background_animation_(NONE),
@@ -295,12 +349,23 @@ TranslateInfoBarDelegate::TranslateInfoBarDelegate(
       initial_original_language_index_(kNoIndex),
       target_language_index_(kNoIndex),
       error_type_(error_type),
-      prefs_(prefs) {
-  DCHECK_NE((infobar_type == TRANSLATION_ERROR),
+      prefs_(prefs),
+      shortcut_config_(shortcut_config) {
+  DCHECK_NE((infobar_type_ == TRANSLATION_ERROR),
             (error_type_ == TranslateErrors::NONE));
+
+  if (old_delegate && (old_delegate->is_error() != is_error()))
+    background_animation_ = is_error() ? NORMAL_TO_ERROR : ERROR_TO_NORMAL;
 
   std::vector<std::string> language_codes;
   TranslateManager::GetSupportedLanguages(&language_codes);
+
+  // Preparing for the alphabetical order in the locale.
+  UErrorCode error = U_ZERO_ERROR;
+  std::string locale = g_browser_process->GetApplicationLocale();
+  icu::Locale loc(locale.c_str());
+  scoped_ptr<icu::Collator> collator(icu::Collator::createInstance(loc, error));
+  collator->setStrength(icu::Collator::PRIMARY);
 
   languages_.reserve(language_codes.size());
   for (std::vector<std::string>::const_iterator iter = language_codes.begin();
@@ -311,8 +376,10 @@ TranslateInfoBarDelegate::TranslateInfoBarDelegate(
     // Insert the language in languages_ in alphabetical order.
     std::vector<LanguageNamePair>::iterator iter2;
     for (iter2 = languages_.begin(); iter2 != languages_.end(); ++iter2) {
-      if (language_name.compare(iter2->second) < 0)
+      if (base::i18n::CompareString16WithCollator(collator.get(),
+          language_name, iter2->second) == UCOL_LESS) {
         break;
+      }
     }
     languages_.insert(iter2, LanguageNamePair(language_code, language_name));
   }
@@ -329,6 +396,23 @@ TranslateInfoBarDelegate::TranslateInfoBarDelegate(
   DCHECK_NE(kNoIndex, target_language_index_);
 }
 
+void TranslateInfoBarDelegate::InfoBarDismissed() {
+  if (infobar_type_ != BEFORE_TRANSLATE)
+    return;
+
+  // The user closed the infobar without clicking the translate button.
+  TranslationDeclined();
+  UMA_HISTOGRAM_BOOLEAN(kCloseInfobar, true);
+}
+
+int TranslateInfoBarDelegate::GetIconID() const {
+  return IDR_INFOBAR_TRANSLATE;
+}
+
+InfoBarDelegate::Type TranslateInfoBarDelegate::GetInfoBarType() const {
+  return PAGE_ACTION_TYPE;
+}
+
 bool TranslateInfoBarDelegate::ShouldExpire(
     const content::LoadCommittedDetails& details) const {
   // Note: we allow closing this infobar even if the main frame navigation
@@ -339,31 +423,12 @@ bool TranslateInfoBarDelegate::ShouldExpire(
   return InfoBarDelegate::ShouldExpireInternal(details);
 }
 
-void TranslateInfoBarDelegate::InfoBarDismissed() {
-  if (infobar_type_ != BEFORE_TRANSLATE)
-    return;
-
-  // The user closed the infobar without clicking the translate button.
-  TranslationDeclined();
-  UMA_HISTOGRAM_COUNTS("Translate.DeclineTranslateCloseInfobar", 1);
-}
-
-gfx::Image* TranslateInfoBarDelegate::GetIcon() const {
-  return &ResourceBundle::GetSharedInstance().GetNativeImageNamed(
-      IDR_INFOBAR_TRANSLATE);
-}
-
-InfoBarDelegate::Type TranslateInfoBarDelegate::GetInfoBarType() const {
-  return PAGE_ACTION_TYPE;
-}
-
 TranslateInfoBarDelegate*
     TranslateInfoBarDelegate::AsTranslateInfoBarDelegate() {
   return this;
 }
 
 std::string TranslateInfoBarDelegate::GetPageHost() {
-  NavigationEntry* entry =
-      owner()->GetWebContents()->GetController().GetActiveEntry();
+  NavigationEntry* entry = web_contents()->GetController().GetActiveEntry();
   return entry ? entry->GetURL().HostNoBrackets() : std::string();
 }

@@ -6,8 +6,9 @@
 #define UI_VIEWS_WINDOW_DIALOG_DELEGATE_H_
 
 #include "base/compiler_specific.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "ui/base/accessibility/accessibility_types.h"
+#include "ui/base/models/dialog_model.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/views/widget/widget_delegate.h"
 
@@ -25,30 +26,19 @@ class DialogClientView;
 //  certain events.
 //
 ///////////////////////////////////////////////////////////////////////////////
-class VIEWS_EXPORT DialogDelegate : public WidgetDelegate {
+class VIEWS_EXPORT DialogDelegate : public ui::DialogModel,
+                                    public WidgetDelegate {
  public:
   virtual ~DialogDelegate();
 
-  // Returns whether to use the new dialog style.
+  // Returns whether to use the new dialog style in general.
+  // See UseNewStyleForThisDialog() for dialog-specific styling.
   static bool UseNewStyle();
 
-  // Returns a mask specifying which of the available DialogButtons are visible
-  // for the dialog. Note: Dialogs with just an OK button are frowned upon.
-  virtual int GetDialogButtons() const;
-
-  // Returns the default dialog button. This should not be a mask as only
-  // one button should ever be the default button.  Return
-  // ui::DIALOG_BUTTON_NONE if there is no default.  Default
-  // behavior is to return ui::DIALOG_BUTTON_OK or
-  // ui::DIALOG_BUTTON_CANCEL (in that order) if they are
-  // present, ui::DIALOG_BUTTON_NONE otherwise.
-  virtual int GetDefaultDialogButton() const;
-
-  // Returns the label of the specified dialog button.
-  virtual string16 GetDialogButtonLabel(ui::DialogButton button) const;
-
-  // Returns whether the specified dialog button is enabled.
-  virtual bool IsDialogButtonEnabled(ui::DialogButton button) const;
+  // Create a |dialog| window Widget with the specified |context| or |parent|.
+  static Widget* CreateDialogWidget(DialogDelegate* dialog,
+                                    gfx::NativeWindow context,
+                                    gfx::NativeWindow parent);
 
   // Override this function to display an extra view adjacent to the buttons.
   // Overrides may construct the view; this will only be called once per dialog.
@@ -64,21 +54,38 @@ class VIEWS_EXPORT DialogDelegate : public WidgetDelegate {
   virtual View* CreateFootnoteView();
 
   // For Dialog boxes, if there is a "Cancel" button or no dialog button at all,
-  // this is called when the user presses the "Cancel" button or the Close
-  // button on the window or in the system menu, or presses the Esc key.
-  // This function should return true if the window can be closed after it
-  // returns, or false if it must remain open.
+  // this is called when the user presses the "Cancel" button or the Esc key.
+  // It can also be called on a close action if |Close| has not been
+  // overridden. This function should return true if the window can be closed
+  // after it returns, or false if it must remain open.
   virtual bool Cancel();
 
   // For Dialog boxes, this is called when the user presses the "OK" button,
-  // or the Enter key.  Can also be called on Esc key or close button
-  // presses if there is no "Cancel" button.  This function should return
-  // true if the window can be closed after it returns, or false if it must
-  // remain open.  If |window_closing| is true, it means that this handler is
+  // or the Enter key. It can also be called on a close action if |Close|
+  // has not been overridden. This function should return true if the window
+  // can be closed after it returns, or false if it must remain open.
+  // If |window_closing| is true, it means that this handler is
   // being called because the window is being closed (e.g.  by Window::Close)
   // and there is no Cancel handler, so Accept is being called instead.
   virtual bool Accept(bool window_closing);
   virtual bool Accept();
+
+  // Called when the user closes the window without selecting an option,
+  // e.g. by pressing the close button on the window or using a window manager
+  // gesture. By default, this calls Accept() if the only button in the dialog
+  // is Accept, Cancel() otherwise. This function should return true if the
+  // window can be closed after it returns, or false if it must remain open.
+  virtual bool Close();
+
+  // Overridden from ui::DialogModel:
+  virtual base::string16 GetDialogLabel() const OVERRIDE;
+  virtual base::string16 GetDialogTitle() const OVERRIDE;
+  virtual int GetDialogButtons() const OVERRIDE;
+  virtual int GetDefaultDialogButton() const OVERRIDE;
+  virtual bool ShouldDefaultButtonBeBlue() const OVERRIDE;
+  virtual base::string16 GetDialogButtonLabel(
+      ui::DialogButton button) const OVERRIDE;
+  virtual bool IsDialogButtonEnabled(ui::DialogButton button) const OVERRIDE;
 
   // Overridden from WidgetDelegate:
   virtual View* GetInitiallyFocusedView() OVERRIDE;
@@ -88,9 +95,20 @@ class VIEWS_EXPORT DialogDelegate : public WidgetDelegate {
 
   // Create a frame view using the new dialog style.
   static NonClientFrameView* CreateNewStyleFrameView(Widget* widget);
+  // The semi-transparent border and shadow of the new style frame view does not
+  // work on child windows under Views/Win32. This is a kludge to get a
+  // reasonable-looking opaque border for the dialog. Note that this does not
+  // support arrows.
+  //
+  // TODO(wittman): Remove once WinAura is in place.
+  static NonClientFrameView* CreateNewStyleFrameView(Widget* widget,
+                                                     bool force_opaque_border);
+
+  // Returns whether this particular dialog should use the new dialog style.
+  virtual bool UseNewStyleForThisDialog() const;
 
   // Called when the window has been closed.
-  virtual void OnClose() {}
+  virtual void OnClosed() {}
 
   // A helper for accessing the DialogClientView object contained by this
   // delegate's Window.
@@ -111,11 +129,6 @@ class VIEWS_EXPORT DialogDelegateView : public DialogDelegate,
  public:
   DialogDelegateView();
   virtual ~DialogDelegateView();
-
-  // Create a |dialog| window Widget with the specified |context| or |parent|.
-  static Widget* CreateDialogWidget(DialogDelegateView* dialog,
-                                    gfx::NativeWindow context,
-                                    gfx::NativeWindow parent);
 
   // Overridden from DialogDelegate:
   virtual void DeleteDelegate() OVERRIDE;

@@ -32,6 +32,7 @@ class VideoDecoderVerbatim : public VideoDecoder {
                            uint8* image_buffer,
                            int image_stride,
                            SkRegion* output_region) OVERRIDE;
+  virtual const SkRegion* GetImageShape() OVERRIDE;
 
  private:
   enum State {
@@ -65,7 +66,7 @@ class VideoDecoderVerbatim : public VideoDecoder {
   SkISize screen_size_;
 
   // The bitmap holding the remote screen bits.
-  scoped_array<uint8> screen_buffer_;
+  scoped_ptr<uint8[]> screen_buffer_;
 
   DISALLOW_COPY_AND_ASSIGN(VideoDecoderVerbatim);
 };

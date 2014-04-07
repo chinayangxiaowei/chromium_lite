@@ -6,17 +6,19 @@
 
 #include "base/files/file_path.h"
 #include "base/mac/scoped_cftyperef.h"
-#include "base/memory/scoped_nsobject.h"
+#include "base/mac/scoped_nsobject.h"
 #include "base/memory/scoped_ptr.h"
-#include "googleurl/src/gurl.h"
+#include "content/common/content_export.h"
+#include "url/gurl.h"
 
-struct WebDropData;
 namespace content {
 class WebContentsImpl;
+struct DropData;
 }
 
 // A class that handles tracking and event processing for a drag and drop
 // originating from the content area.
+CONTENT_EXPORT
 @interface WebDragSource : NSObject {
  @private
   // Our contents. Weak reference (owns or co-owns us).
@@ -26,16 +28,16 @@ class WebContentsImpl;
   NSView* contentsView_;
 
   // Our drop data. Should only be initialized once.
-  scoped_ptr<WebDropData> dropData_;
+  scoped_ptr<content::DropData> dropData_;
 
   // The image to show as drag image. Can be nil.
-  scoped_nsobject<NSImage> dragImage_;
+  base::scoped_nsobject<NSImage> dragImage_;
 
   // The offset to draw |dragImage_| at.
   NSPoint imageOffset_;
 
   // Our pasteboard.
-  scoped_nsobject<NSPasteboard> pasteboard_;
+  base::scoped_nsobject<NSPasteboard> pasteboard_;
 
   // A mask of the allowed drag operations.
   NSDragOperation dragOperationMask_;
@@ -47,7 +49,7 @@ class WebContentsImpl;
   GURL downloadURL_;
 
   // The file UTI associated with the file drag, if any.
-  base::mac::ScopedCFTypeRef<CFStringRef> fileUTI_;
+  base::ScopedCFTypeRef<CFStringRef> fileUTI_;
 }
 
 // Initialize a WebDragSource object for a drag (originating on the given
@@ -55,7 +57,7 @@ class WebContentsImpl;
 // with data types appropriate for dropData.
 - (id)initWithContents:(content::WebContentsImpl*)contents
                   view:(NSView*)contentsView
-              dropData:(const WebDropData*)dropData
+              dropData:(const content::DropData*)dropData
                  image:(NSImage*)image
                 offset:(NSPoint)offset
             pasteboard:(NSPasteboard*)pboard
@@ -83,11 +85,5 @@ class WebContentsImpl;
 
 // Drag moved; hook up to -draggedImage:movedTo:.
 - (void)moveDragTo:(NSPoint)screenPoint;
-
-// Call to drag a promised file to the given path (should be called before
-// -endDragAt:...); hook up to -namesOfPromisedFilesDroppedAtDestination:.
-// Returns the file name (not including path) of the file deposited (or which
-// will be deposited).
-- (NSString*)dragPromisedFileTo:(NSString*)path;
 
 @end

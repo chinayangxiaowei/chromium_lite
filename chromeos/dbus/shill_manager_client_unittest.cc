@@ -19,84 +19,6 @@ namespace chromeos {
 
 namespace {
 
-// Pops a string-to-string dictionary from the reader.
-base::DictionaryValue* PopStringToStringDictionary(
-    dbus::MessageReader* reader) {
-  dbus::MessageReader array_reader(NULL);
-  if (!reader->PopArray(&array_reader))
-    return NULL;
-  scoped_ptr<base::DictionaryValue> result(new base::DictionaryValue);
-  while (array_reader.HasMoreData()) {
-    dbus::MessageReader entry_reader(NULL);
-    std::string key;
-    std::string value;
-    if (!array_reader.PopDictEntry(&entry_reader) ||
-        !entry_reader.PopString(&key) ||
-        !entry_reader.PopString(&value))
-      return NULL;
-    result->SetWithoutPathExpansion(key,
-                                    base::Value::CreateStringValue(value));
-  }
-  return result.release();
-}
-
-// Expects the reader to have a string-to-variant dictionary.
-void ExpectDictionaryValueArgument(
-    const base::DictionaryValue* expected_dictionary,
-    dbus::MessageReader* reader) {
-  dbus::MessageReader array_reader(NULL);
-  ASSERT_TRUE(reader->PopArray(&array_reader));
-  while (array_reader.HasMoreData()) {
-    dbus::MessageReader entry_reader(NULL);
-    ASSERT_TRUE(array_reader.PopDictEntry(&entry_reader));
-    std::string key;
-    ASSERT_TRUE(entry_reader.PopString(&key));
-    dbus::MessageReader variant_reader(NULL);
-    ASSERT_TRUE(entry_reader.PopVariant(&variant_reader));
-    scoped_ptr<base::Value> value;
-    // Variants in the dictionary can be basic types or string-to-string
-    // dictinoary.
-    switch (variant_reader.GetDataType()) {
-      case dbus::Message::ARRAY:
-        value.reset(PopStringToStringDictionary(&variant_reader));
-        break;
-      case dbus::Message::BOOL:
-      case dbus::Message::INT32:
-      case dbus::Message::STRING:
-        value.reset(dbus::PopDataAsValue(&variant_reader));
-        break;
-      default:
-        NOTREACHED();
-    }
-    ASSERT_TRUE(value.get());
-    const base::Value* expected_value = NULL;
-    EXPECT_TRUE(expected_dictionary->GetWithoutPathExpansion(key,
-                                                             &expected_value));
-    EXPECT_TRUE(value->Equals(expected_value));
-  }
-}
-
-// Creates a DictionaryValue with example properties.
-base::DictionaryValue* CreateExampleProperties() {
-  base::DictionaryValue* properties = new base::DictionaryValue;
-  properties->SetWithoutPathExpansion(
-      flimflam::kGuidProperty,
-      base::Value::CreateStringValue("00000000-0000-0000-0000-000000000000"));
-  properties->SetWithoutPathExpansion(
-      flimflam::kModeProperty,
-      base::Value::CreateStringValue(flimflam::kModeManaged));
-  properties->SetWithoutPathExpansion(
-      flimflam::kTypeProperty,
-      base::Value::CreateStringValue(flimflam::kTypeWifi));
-  properties->SetWithoutPathExpansion(
-      flimflam::kSSIDProperty,
-      base::Value::CreateStringValue("testssid"));
-  properties->SetWithoutPathExpansion(
-      flimflam::kSecurityProperty,
-      base::Value::CreateStringValue(flimflam::kSecurityPsk));
-  return properties;
-}
-
 void ExpectStringArguments(const std::vector<std::string>& arguments,
                            dbus::MessageReader* reader) {
   for (std::vector<std::string>::const_iterator iter = arguments.begin();
@@ -139,7 +61,7 @@ class ShillManagerClientTest : public ShillClientUnittestBase {
     ShillClientUnittestBase::SetUp();
     // Create a client with the mock bus.
     client_.reset(ShillManagerClient::Create(REAL_DBUS_CLIENT_IMPLEMENTATION,
-                                                mock_bus_));
+                                             mock_bus_.get()));
     // Run the message loop to run the signal connection result callback.
     message_loop_.RunUntilIdle();
   }
@@ -209,33 +131,6 @@ TEST_F(ShillManagerClientTest, GetProperties) {
                                     &value));
   // Run the message loop.
   message_loop_.RunUntilIdle();
-}
-
-TEST_F(ShillManagerClientTest, CallGetPropertiesAndBlock) {
-  // Create response.
-  scoped_ptr<dbus::Response> response(dbus::Response::CreateEmpty());
-  dbus::MessageWriter writer(response.get());
-  dbus::MessageWriter array_writer(NULL);
-  writer.OpenArray("{sv}", &array_writer);
-  dbus::MessageWriter entry_writer(NULL);
-  array_writer.OpenDictEntry(&entry_writer);
-  entry_writer.AppendString(flimflam::kOfflineModeProperty);
-  entry_writer.AppendVariantOfBool(true);
-  array_writer.CloseContainer(&entry_writer);
-  writer.CloseContainer(&array_writer);
-
-  // Create the expected value.
-  base::DictionaryValue value;
-  value.SetWithoutPathExpansion(flimflam::kOfflineModeProperty,
-                                base::Value::CreateBooleanValue(true));
-  // Set expectations.
-  PrepareForMethodCall(flimflam::kGetPropertiesFunction,
-                       base::Bind(&ExpectNoArgument),
-                       response.get());
-  // Call method.
-  scoped_ptr<base::DictionaryValue> result(
-      client_->CallGetPropertiesAndBlock());
-  EXPECT_TRUE(value.Equals(result.get()));
 }
 
 TEST_F(ShillManagerClientTest, GetNetworksForGeolocation) {
@@ -379,7 +274,7 @@ TEST_F(ShillManagerClientTest, ConfigureService) {
   dbus::MessageWriter writer(response.get());
   writer.AppendObjectPath(object_path);
   // Create the argument dictionary.
-  scoped_ptr<base::DictionaryValue> arg(CreateExampleProperties());
+  scoped_ptr<base::DictionaryValue> arg(CreateExampleServiceProperties());
   // Set expectations.
   PrepareForMethodCall(flimflam::kConfigureServiceFunction,
                        base::Bind(&ExpectDictionaryValueArgument, arg.get()),
@@ -403,7 +298,7 @@ TEST_F(ShillManagerClientTest, GetService) {
   dbus::MessageWriter writer(response.get());
   writer.AppendObjectPath(object_path);
   // Create the argument dictionary.
-  scoped_ptr<base::DictionaryValue> arg(CreateExampleProperties());
+  scoped_ptr<base::DictionaryValue> arg(CreateExampleServiceProperties());
   // Set expectations.
   PrepareForMethodCall(flimflam::kGetServiceFunction,
                        base::Bind(&ExpectDictionaryValueArgument, arg.get()),
@@ -433,21 +328,26 @@ TEST_F(ShillManagerClientTest, VerifyDestination) {
   arguments.push_back("nonce");
   arguments.push_back("signed_data");
   arguments.push_back("device_serial");
+  arguments.push_back("device_ssid");
+  arguments.push_back("device_bssid");
   PrepareForMethodCall(shill::kVerifyDestinationFunction,
                        base::Bind(&ExpectStringArguments, arguments),
                        response.get());
 
-
   // Call method.
   MockErrorCallback mock_error_callback;
-  client_->VerifyDestination(arguments[0],
-                             arguments[1],
-                             arguments[2],
-                             arguments[3],
-                             arguments[4],
-                             base::Bind(&ExpectBoolResultWithoutStatus,
-                                        expected),
-                             mock_error_callback.GetCallback());
+  ShillManagerClient::VerificationProperties properties;
+  properties.certificate = arguments[0];
+  properties.public_key = arguments[1];
+  properties.nonce = arguments[2];
+  properties.signed_data = arguments[3];
+  properties.device_serial = arguments[4];
+  properties.device_ssid = arguments[5];
+  properties.device_bssid = arguments[6];
+  client_->VerifyDestination(
+      properties,
+      base::Bind(&ExpectBoolResultWithoutStatus, expected),
+      mock_error_callback.GetCallback());
   EXPECT_CALL(mock_error_callback, Run(_, _)).Times(0);
 
   // Run the message loop.
@@ -467,6 +367,8 @@ TEST_F(ShillManagerClientTest, VerifyAndEncryptCredentials) {
   arguments.push_back("nonce");
   arguments.push_back("signed_data");
   arguments.push_back("device_serial");
+  arguments.push_back("device_ssid");
+  arguments.push_back("device_bssid");
   std::string service_path = "/";
   dbus::ObjectPath service_path_obj(service_path);
   PrepareForMethodCall(shill::kVerifyAndEncryptCredentialsFunction,
@@ -475,18 +377,21 @@ TEST_F(ShillManagerClientTest, VerifyAndEncryptCredentials) {
                                   service_path_obj),
                        response.get());
 
-
   // Call method.
   MockErrorCallback mock_error_callback;
-  client_->VerifyAndEncryptCredentials(arguments[0],
-                                    arguments[1],
-                                    arguments[2],
-                                    arguments[3],
-                                    arguments[4],
-                                    service_path,
-                                    base::Bind(&ExpectStringResultWithoutStatus,
-                                               expected),
-                                    mock_error_callback.GetCallback());
+  ShillManagerClient::VerificationProperties properties;
+  properties.certificate = arguments[0];
+  properties.public_key = arguments[1];
+  properties.nonce = arguments[2];
+  properties.signed_data = arguments[3];
+  properties.device_serial = arguments[4];
+  properties.device_ssid = arguments[5];
+  properties.device_bssid = arguments[6];
+  client_->VerifyAndEncryptCredentials(
+      properties,
+      service_path,
+      base::Bind(&ExpectStringResultWithoutStatus, expected),
+      mock_error_callback.GetCallback());
   EXPECT_CALL(mock_error_callback, Run(_, _)).Times(0);
 
   // Run the message loop.
@@ -506,23 +411,28 @@ TEST_F(ShillManagerClientTest, VerifyAndEncryptData) {
   arguments.push_back("nonce");
   arguments.push_back("signed_data");
   arguments.push_back("device_serial");
+  arguments.push_back("device_ssid");
+  arguments.push_back("device_bssid");
   arguments.push_back("data");
   PrepareForMethodCall(shill::kVerifyAndEncryptDataFunction,
                        base::Bind(&ExpectStringArguments, arguments),
                        response.get());
 
-
   // Call method.
   MockErrorCallback mock_error_callback;
-  client_->VerifyAndEncryptData(arguments[0],
-                             arguments[1],
-                             arguments[2],
-                             arguments[3],
-                             arguments[4],
-                             arguments[5],
-                             base::Bind(&ExpectStringResultWithoutStatus,
-                                        expected),
-                             mock_error_callback.GetCallback());
+  ShillManagerClient::VerificationProperties properties;
+  properties.certificate = arguments[0];
+  properties.public_key = arguments[1];
+  properties.nonce = arguments[2];
+  properties.signed_data = arguments[3];
+  properties.device_serial = arguments[4];
+  properties.device_ssid = arguments[5];
+  properties.device_bssid = arguments[6];
+  client_->VerifyAndEncryptData(
+      properties,
+      arguments[7],
+      base::Bind(&ExpectStringResultWithoutStatus, expected),
+      mock_error_callback.GetCallback());
   EXPECT_CALL(mock_error_callback, Run(_, _)).Times(0);
 
   // Run the message loop.

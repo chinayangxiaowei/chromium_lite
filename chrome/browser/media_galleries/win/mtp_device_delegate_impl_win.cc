@@ -16,12 +16,12 @@
 #include "base/memory/ref_counted.h"
 #include "base/sequenced_task_runner.h"
 #include "base/stl_util.h"
-#include "base/string_util.h"
 #include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/task_runner_util.h"
-#include "base/threading/sequenced_worker_pool.h"
 #include "base/threading/thread_restrictions.h"
-#include "base/utf_string_conversions.h"
+#include "chrome/browser/media_galleries/fileapi/media_file_system_backend.h"
 #include "chrome/browser/media_galleries/win/mtp_device_object_entry.h"
 #include "chrome/browser/media_galleries/win/mtp_device_object_enumerator.h"
 #include "chrome/browser/media_galleries/win/mtp_device_operations_util.h"
@@ -29,9 +29,7 @@
 #include "chrome/browser/media_galleries/win/snapshot_file_details.h"
 #include "chrome/browser/storage_monitor/storage_monitor.h"
 #include "content/public/browser/browser_thread.h"
-#include "webkit/fileapi/file_snapshot_policy.h"
-#include "webkit/fileapi/file_system_task_runners.h"
-#include "webkit/fileapi/file_system_util.h"
+#include "webkit/common/fileapi/file_system_util.h"
 
 namespace chrome {
 
@@ -55,13 +53,6 @@ bool GetStorageInfoOnUIThread(const string16& storage_path,
   DCHECK(monitor);
   return monitor->GetMTPStorageInfoFromDeviceId(
       UTF16ToUTF8(storage_device_id), pnp_device_id, storage_object_id);
-}
-
-scoped_refptr<base::SequencedTaskRunner> GetSequencedTaskRunner() {
-  base::SequencedWorkerPool* pool = content::BrowserThread::GetBlockingPool();
-  base::SequencedWorkerPool::SequenceToken media_sequence_token =
-      pool->GetNamedSequenceToken(fileapi::kMediaTaskRunnerName);
-  return pool->GetSequencedTaskRunner(media_sequence_token);
 }
 
 // Returns the object id of the file object specified by the |file_path|,
@@ -209,7 +200,7 @@ base::PlatformFileError ReadDirectoryOnBlockingPoolThread(
   scoped_ptr<fileapi::FileSystemFileUtil::AbstractFileEnumerator> file_enum =
       CreateFileEnumeratorOnBlockingPoolThread(device_info, root);
   while (!(current = file_enum->Next()).empty()) {
-    fileapi::AsyncFileUtil::Entry entry;
+    fileapi::DirectoryEntry entry;
     entry.is_directory = file_enum->IsDirectory();
     entry.name = fileapi::VirtualPath::BaseName(current).value();
     entry.size = file_enum->Size();
@@ -372,9 +363,9 @@ MTPDeviceDelegateImplWin::MTPDeviceDelegateImplWin(
     : storage_device_info_(pnp_device_id, registered_device_path,
                            storage_object_id),
       init_state_(UNINITIALIZED),
-      media_task_runner_(GetSequencedTaskRunner()),
+      media_task_runner_(MediaFileSystemBackend::MediaTaskRunner()),
       task_in_progress_(false),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_ptr_factory_(this)) {
+      weak_ptr_factory_(this) {
   DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::IO));
   DCHECK(!registered_device_path.empty());
   DCHECK(!pnp_device_id.empty());

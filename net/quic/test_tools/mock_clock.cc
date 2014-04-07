@@ -13,7 +13,6 @@ MockClock::~MockClock() {
 }
 
 void MockClock::AdvanceTime(QuicTime::Delta delta) {
-  CHECK_LE(0, delta.ToMicroseconds());
   now_ = now_.Add(delta);
 }
 
@@ -25,8 +24,9 @@ QuicTime MockClock::ApproximateNow() const {
   return now_;
 }
 
-QuicTime::Delta MockClock::NowAsDeltaSinceUnixEpoch() const {
-  return now_.Subtract(QuicTime::Zero());
+QuicWallTime MockClock::WallNow() const {
+  return QuicWallTime::FromUNIXSeconds(
+      now_.Subtract(QuicTime::Zero()).ToSeconds());
 }
 
 base::TimeTicks MockClock::NowInTicks() const {

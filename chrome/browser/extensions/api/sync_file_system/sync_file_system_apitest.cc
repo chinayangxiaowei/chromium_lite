@@ -3,24 +3,25 @@
 // found in the LICENSE file.
 
 #include "base/bind.h"
-#include "base/file_util.h"
+#include "base/command_line.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
 #include "chrome/browser/extensions/event_names.h"
 #include "chrome/browser/extensions/extension_apitest.h"
-#include "chrome/browser/sync_file_system/drive_file_sync_service.h"
+#include "chrome/browser/sync_file_system/drive_backend/drive_file_sync_service.h"
 #include "chrome/browser/sync_file_system/file_status_observer.h"
 #include "chrome/browser/sync_file_system/local_change_processor.h"
 #include "chrome/browser/sync_file_system/mock_remote_file_sync_service.h"
 #include "chrome/browser/sync_file_system/sync_file_system_service.h"
 #include "chrome/browser/sync_file_system/sync_file_system_service_factory.h"
+#include "chrome/browser/sync_file_system/sync_status_code.h"
+#include "chrome/browser/sync_file_system/syncable_file_system_util.h"
 #include "chrome/common/chrome_version_info.h"
+#include "chrome/test/base/test_switches.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "webkit/fileapi/file_system_url.h"
-#include "webkit/fileapi/syncable/sync_status_code.h"
-#include "webkit/fileapi/syncable/syncable_file_system_util.h"
-#include "webkit/quota/quota_manager.h"
+#include "webkit/browser/fileapi/file_system_url.h"
+#include "webkit/browser/quota/quota_manager.h"
 
 using ::testing::_;
 using ::testing::Eq;
@@ -54,6 +55,7 @@ class SyncFileSystemApiTest : public ExtensionApiTest {
 
   virtual void TearDownInProcessBrowserTestFixture() OVERRIDE {
     quota::QuotaManager::kSyncableStorageDefaultHostQuota = real_default_quota_;
+    ExtensionApiTest::TearDownInProcessBrowserTestFixture();
   }
 
   ::testing::NiceMock<MockRemoteFileSyncService>* mock_remote_service() {
@@ -85,7 +87,6 @@ ACTION_P5(ReturnWithFakeFileAddedStatus,
           sync_action_taken) {
   FileSystemURL mock_url = sync_file_system::CreateSyncableFileSystemURL(
       *origin,
-      sync_file_system::DriveFileSyncService::kServiceName,
       base::FilePath(FILE_PATH_LITERAL("foo.txt")));
   mock_remote_service->NotifyRemoteChangeQueueUpdated(0);
   base::MessageLoopProxy::current()->PostTask(
@@ -110,7 +111,20 @@ IN_PROC_BROWSER_TEST_F(SyncFileSystemApiTest, GetFileStatus) {
       << message_;
 }
 
-IN_PROC_BROWSER_TEST_F(SyncFileSystemApiTest, GetFileStatuses) {
+#if defined(ADDRESS_SANITIZER)
+// SyncFileSystemApiTest.GetFileStatuses fails under AddressSanitizer
+// on Precise. See http://crbug.com/230779.
+#define MAYBE_GetFileStatuses DISABLED_GetFileStatuses
+#else
+#define MAYBE_GetFileStatuses GetFileStatuses
+#endif
+IN_PROC_BROWSER_TEST_F(SyncFileSystemApiTest, MAYBE_GetFileStatuses) {
+#if defined(OS_WIN) && defined(USE_ASH)
+  // Disable this test in Metro+Ash for now (http://crbug.com/262796).
+  if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kAshBrowserTests))
+    return;
+#endif
+
   // Mocking to return IsConflicting() == true only for the path "Conflicting".
   base::FilePath conflicting = base::FilePath::FromUTF8Unsafe("Conflicting");
   EXPECT_CALL(*mock_remote_service(),

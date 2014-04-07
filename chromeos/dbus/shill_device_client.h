@@ -52,9 +52,10 @@ class CHROMEOS_EXPORT ShillDeviceClient {
     virtual void SetDeviceProperty(const std::string& device_path,
                                    const std::string& name,
                                    const base::Value& value) = 0;
+    virtual std::string GetDevicePathForType(const std::string& type) = 0;
 
    protected:
-    ~TestInterface() {}
+    virtual ~TestInterface() {}
   };
 
   virtual ~ShillDeviceClient();
@@ -78,15 +79,6 @@ class CHROMEOS_EXPORT ShillDeviceClient {
   // |callback| is called after the method call finishes.
   virtual void GetProperties(const dbus::ObjectPath& device_path,
                              const DictionaryValueCallback& callback) = 0;
-
-  // DEPRECATED DO NOT USE: Calls GetProperties method and blocks until the
-  // method call finishes.  The caller is responsible to delete the result.
-  // Thie method returns NULL when method call fails.
-  //
-  // TODO(hashimoto): Refactor CrosGetDeviceNetworkList and remove this method.
-  // crosbug.com/29902
-  virtual base::DictionaryValue* CallGetPropertiesAndBlock(
-      const dbus::ObjectPath& device_path) = 0;
 
   // Calls ProposeScan method.
   // |callback| is called after the method call finishes.

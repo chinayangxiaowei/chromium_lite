@@ -8,7 +8,9 @@
 #include <list>
 
 #include "ash/ash_export.h"
+#include "ash/display/display_controller.h"
 #include "ash/launcher/launcher_icon_observer.h"
+#include "ash/shelf/shelf_layout_manager_observer.h"
 #include "ash/shell_observer.h"
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
@@ -17,6 +19,8 @@
 #include "ui/aura/client/activation_change_observer.h"
 #include "ui/aura/layout_manager.h"
 #include "ui/aura/window_observer.h"
+#include "ui/keyboard/keyboard_controller.h"
+#include "ui/keyboard/keyboard_controller_observer.h"
 
 namespace aura {
 class Window;
@@ -35,6 +39,7 @@ class Launcher;
 
 namespace internal {
 class PanelCalloutWidget;
+class ShelfLayoutManager;
 
 // PanelLayoutManager is responsible for organizing panels within the
 // workspace. It is associated with a specific container window (i.e.
@@ -50,7 +55,10 @@ class ASH_EXPORT PanelLayoutManager
       public ash::LauncherIconObserver,
       public ash::ShellObserver,
       public aura::WindowObserver,
-      public aura::client::ActivationChangeObserver {
+      public aura::client::ActivationChangeObserver,
+      public keyboard::KeyboardControllerObserver,
+      public DisplayController::Observer,
+      public ShelfLayoutManagerObserver {
  public:
   explicit PanelLayoutManager(aura::Window* panel_container);
   virtual ~PanelLayoutManager();
@@ -93,14 +101,23 @@ class ASH_EXPORT PanelLayoutManager
   virtual void OnWindowActivated(aura::Window* gained_active,
                                  aura::Window* lost_active) OVERRIDE;
 
+  // Overridden from DisplayController::Observer
+  virtual void OnDisplayConfigurationChanged() OVERRIDE;
+
+  // Overridden from ShelfLayoutManagerObserver
+  virtual void WillChangeVisibilityState(
+      ShelfVisibilityState new_state) OVERRIDE;
+
  private:
   friend class PanelLayoutManagerTest;
   friend class PanelWindowResizerTest;
+  friend class DockedWindowResizerTest;
+  friend class DockedWindowLayoutManagerTest;
 
   views::Widget* CreateCalloutWidget();
 
   struct PanelInfo{
-    PanelInfo() : window(NULL), callout_widget(NULL) {}
+    PanelInfo() : window(NULL), callout_widget(NULL), slide_in(false) {}
 
     bool operator==(const aura::Window* other_window) const {
       return window == other_window;
@@ -112,6 +129,11 @@ class ASH_EXPORT PanelLayoutManager
     // manually as this structure is used in a std::list. See
     // http://www.chromium.org/developers/smart-pointer-guidelines
     PanelCalloutWidget* callout_widget;
+
+    // True on new and restored panel windows until the panel has been
+    // positioned. The first time Relayout is called the panel will slide into
+    // position and this will be set to false.
+    bool slide_in;
   };
 
   typedef std::list<PanelInfo> PanelList;
@@ -129,8 +151,14 @@ class ASH_EXPORT PanelLayoutManager
   // Update the callout arrows for all managed panels.
   void UpdateCallouts();
 
+  // Overridden from keyboard::KeyboardControllerObserver:
+  virtual void OnKeyboardBoundsChanging(
+      const gfx::Rect& keyboard_bounds) OVERRIDE;
+
   // Parent window associated with this layout manager.
   aura::Window* panel_container_;
+  // Protect against recursive calls to OnWindowAddedToLayout().
+  bool in_add_window_;
   // Protect against recursive calls to Relayout().
   bool in_layout_;
   // Ordered list of unowned pointers to panel windows.
@@ -139,8 +167,13 @@ class ASH_EXPORT PanelLayoutManager
   aura::Window* dragged_panel_;
   // The launcher we are observing for launcher icon changes.
   Launcher* launcher_;
-  // The last active panel. Used to maintain stacking even if no panels are
-  // currently focused.
+  // The shelf layout manager being observed for visibility changes.
+  ShelfLayoutManager* shelf_layout_manager_;
+  // Tracks the visibility of the shelf. Defaults to false when there is no
+  // shelf.
+  bool shelf_hidden_;
+  // The last active panel. Used to maintain stacking order even if no panels
+  // are currently focused.
   aura::Window* last_active_panel_;
   base::WeakPtrFactory<PanelLayoutManager> weak_factory_;
 

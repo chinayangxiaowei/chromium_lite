@@ -13,13 +13,14 @@
 #include "base/files/file_path.h"
 #include "base/pickle.h"
 #include "base/stl_util.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "base/threading/thread.h"
 #include "base/version.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_system.h"
+#include "chrome/browser/extensions/image_loader.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/extensions/api/i18n/default_locale_handler.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_file_util.h"
@@ -29,6 +30,7 @@
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/render_process_host.h"
 #include "extensions/common/extension_resource.h"
+#include "ui/base/resource/resource_bundle.h"
 
 using content::BrowserThread;
 
@@ -188,14 +190,23 @@ static bool LoadScriptContent(UserScript::File* script_file,
       script_file->extension_root(), script_file->relative_path(),
       ExtensionResource::SYMLINKS_MUST_RESOLVE_WITHIN_ROOT);
   if (path.empty()) {
-    LOG(WARNING) << "Failed to get file path to "
-                 << script_file->relative_path().value() << " from "
-                 << script_file->extension_root().value();
-    return false;
-  }
-  if (!file_util::ReadFileToString(path, &content)) {
-    LOG(WARNING) << "Failed to load user script file: " << path.value();
-    return false;
+    int resource_id;
+    if (extensions::ImageLoader::IsComponentExtensionResource(
+            script_file->extension_root(), script_file->relative_path(),
+            &resource_id)) {
+      const ResourceBundle& rb = ResourceBundle::GetSharedInstance();
+      content = rb.GetRawDataResource(resource_id).as_string();
+    } else {
+      LOG(WARNING) << "Failed to get file path to "
+                   << script_file->relative_path().value() << " from "
+                   << script_file->extension_root().value();
+      return false;
+    }
+  } else {
+    if (!file_util::ReadFileToString(path, &content)) {
+      LOG(WARNING) << "Failed to load user script file: " << path.value();
+      return false;
+    }
   }
 
   // Localize the content.
@@ -314,7 +325,7 @@ UserScriptMaster::UserScriptMaster(Profile* profile)
 }
 
 UserScriptMaster::~UserScriptMaster() {
-  if (script_reloader_)
+  if (script_reloader_.get())
     script_reloader_->DisownMaster();
 }
 
@@ -406,7 +417,7 @@ void UserScriptMaster::Observe(int type,
   }
 
   if (should_start_load) {
-    if (script_reloader_) {
+    if (script_reloader_.get()) {
       pending_load_ = true;
     } else {
       StartLoad();
@@ -415,7 +426,7 @@ void UserScriptMaster::Observe(int type,
 }
 
 void UserScriptMaster::StartLoad() {
-  if (!script_reloader_)
+  if (!script_reloader_.get())
     script_reloader_ = new ScriptReloader(this);
 
   script_reloader_->StartLoad(user_scripts_, extensions_info_);
@@ -423,6 +434,10 @@ void UserScriptMaster::StartLoad() {
 
 void UserScriptMaster::SendUpdate(content::RenderProcessHost* process,
                                   base::SharedMemory* shared_memory) {
+  // Don't allow injection of content scripts into <webview>.
+  if (process->IsGuest())
+    return;
+
   Profile* profile = Profile::FromBrowserContext(process->GetBrowserContext());
   // Make sure we only send user scripts to processes in our profile.
   if (!profile_->IsSameProfile(profile))

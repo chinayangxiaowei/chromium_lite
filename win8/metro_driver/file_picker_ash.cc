@@ -6,10 +6,9 @@
 #include "win8/metro_driver/file_picker_ash.h"
 
 #include "base/bind.h"
-#include "base/files/file_path.h"
 #include "base/logging.h"
-#include "base/message_loop.h"
-#include "base/string_util.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/string_util.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/win/metro.h"
 #include "base/win/scoped_comptr.h"
@@ -85,7 +84,7 @@ class StringVectorImpl : public mswr::RuntimeClass<StringVectorItf> {
 FilePickerSessionBase::FilePickerSessionBase(ChromeAppViewAsh* app_view,
                                              const string16& title,
                                              const string16& filter,
-                                             const string16& default_path)
+                                             const base::FilePath& default_path)
     : app_view_(app_view),
       title_(title),
       filter_(filter),
@@ -116,11 +115,12 @@ bool FilePickerSessionBase::DoFilePicker() {
   return true;
 }
 
-OpenFilePickerSession::OpenFilePickerSession(ChromeAppViewAsh* app_view,
-                                             const string16& title,
-                                             const string16& filter,
-                                             const string16& default_path,
-                                             bool allow_multi_select)
+OpenFilePickerSession::OpenFilePickerSession(
+    ChromeAppViewAsh* app_view,
+    const string16& title,
+    const string16& filter,
+    const base::FilePath& default_path,
+    bool allow_multi_select)
     : FilePickerSessionBase(app_view, title, filter, default_path),
       allow_multi_select_(allow_multi_select) {
 }
@@ -492,8 +492,13 @@ HRESULT SaveFilePickerSession::StartFilePicker() {
   }
 
   if (!default_path_.empty()) {
+    string16 file_part = default_path_.BaseName().value();
+    // If the suggested_name is a root directory, then don't set it as the
+    // suggested name.
+    if (file_part.size() == 1 && file_part[0] == L'\\')
+      file_part.clear();
     hr = picker->put_SuggestedFileName(
-        mswrw::HStringReference(default_path_.c_str()).Get());
+        mswrw::HStringReference(file_part.c_str()).Get());
     if (FAILED(hr))
       return hr;
   }
@@ -541,6 +546,75 @@ HRESULT SaveFilePickerSession::FilePickerDone(SaveFileAsyncOp* async,
     LOG(ERROR) << "Unexpected async status " << status;
   }
   app_view_->OnSaveFileCompleted(this, success_);
+  return S_OK;
+}
+
+FolderPickerSession::FolderPickerSession(ChromeAppViewAsh* app_view,
+                                         const string16& title)
+    : FilePickerSessionBase(app_view, title, L"", base::FilePath()) {}
+
+HRESULT FolderPickerSession::StartFilePicker() {
+  mswrw::HStringReference class_name(
+      RuntimeClass_Windows_Storage_Pickers_FolderPicker);
+
+  // Create the folder picker.
+  mswr::ComPtr<winstorage::Pickers::IFolderPicker> picker;
+  HRESULT hr = ::Windows::Foundation::ActivateInstance(
+      class_name.Get(), picker.GetAddressOf());
+  CheckHR(hr);
+
+  // Set the file type filter
+  mswr::ComPtr<winfoundtn::Collections::IVector<HSTRING>> filter;
+  hr = picker->get_FileTypeFilter(filter.GetAddressOf());
+  if (FAILED(hr))
+    return hr;
+
+  hr = filter->Append(mswrw::HStringReference(L"*").Get());
+  if (FAILED(hr))
+    return hr;
+
+  mswr::ComPtr<FolderPickerAsyncOp> completion;
+  hr = picker->PickSingleFolderAsync(&completion);
+  if (FAILED(hr))
+    return hr;
+
+  // Create the callback method.
+  typedef winfoundtn::IAsyncOperationCompletedHandler<
+      winstorage::StorageFolder*> HandlerDoneType;
+  mswr::ComPtr<HandlerDoneType> handler(mswr::Callback<HandlerDoneType>(
+      this, &FolderPickerSession::FolderPickerDone));
+  DCHECK(handler.Get() != NULL);
+  hr = completion->put_Completed(handler.Get());
+  return hr;
+}
+
+HRESULT FolderPickerSession::FolderPickerDone(FolderPickerAsyncOp* async,
+                                              AsyncStatus status) {
+  if (status == Completed) {
+    mswr::ComPtr<winstorage::IStorageFolder> folder;
+    HRESULT hr = async->GetResults(folder.GetAddressOf());
+
+    if (folder) {
+      mswr::ComPtr<winstorage::IStorageItem> storage_item;
+      if (SUCCEEDED(hr))
+        hr = folder.As(&storage_item);
+
+      mswrw::HString file_path;
+      if (SUCCEEDED(hr))
+        hr = storage_item->get_Path(file_path.GetAddressOf());
+
+      if (SUCCEEDED(hr)) {
+        string16 path_str = MakeStdWString(file_path.Get());
+        result_ = path_str;
+        success_ = true;
+      }
+    } else {
+      LOG(ERROR) << "NULL IStorageItem";
+    }
+  } else {
+    LOG(ERROR) << "Unexpected async status " << status;
+  }
+  app_view_->OnFolderPickerCompleted(this, success_);
   return S_OK;
 }
 

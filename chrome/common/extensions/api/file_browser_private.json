@@ -5,18 +5,33 @@
 [
   {
     "namespace":"fileBrowserPrivate",
-    "nodoc": "true",
+    "description": "none",
     "types": [
       {
-        "id": "FileBrowserTask",
+        "id": "FileTask",
         "type": "object",
-        "description": "Represents information about available browser tasks. A task is an abstraction of an operation that the file browser can perform over a selected file set.",
+        "description": "A file task represents an action that the file manager can perform over the currently selected files. See chrome/browser/chromeos/extensions/file_manager/file_tasks.h for details about how file tasks are handled.",
         "properties": {
-          "taskId": {"type": "string", "description": "The unique identifier of the task."},
-          "title": {"type": "string", "description": "Task title."},
-          "iconUrl": {"type": "string", "description": "Task icon url (from chrome://extension-icon/...)"},
-          "driveApp": {"type": "boolean", "description": "True if this is Drive App."},
-          "isDefault": {"type": "boolean", "description": "True if this task is a default task for the selected files."}
+          "taskId": {
+            "type": "string",
+            "description": "The unique identifier of the task."
+          },
+          "title": {
+            "type": "string",
+            "description": "Task title (ex. App name)."
+          },
+          "iconUrl": {
+            "type": "string",
+            "description": "Task icon url (from chrome://extension-icon/...)"
+          },
+          "driveApp": {
+            "type": "boolean",
+            "description": "True if this is Drive App."
+          },
+          "isDefault": {
+            "type": "boolean",
+            "description": "True if this task is a default task for the selected files."
+          }
         }
       },
       {
@@ -45,9 +60,9 @@
             "type": "boolean",
             "description": "Flag that specifies if volume is mounted in read-only mode."
           },
-          "totalSizeKB": {
-            "type": "integer",
-            "description": "Total disk volume size in KBs"
+          "totalSize": {
+            "type": "number",
+            "description": "Approximated total disk volume size in bytes."
           }
         }
       },
@@ -85,7 +100,7 @@
         }
       },
       {
-        "id": "DriveFileProperties",
+        "id": "DriveEntryProperties",
         "type": "object",
         "description": "Drive file properties.",
         "properties": {
@@ -98,21 +113,6 @@
             "type": "string",
             "optional": true,
             "description": "URL to the Drive thumbnail image for this file."
-          },
-          "contentUrl": {
-            "type": "string",
-            "optional": true,
-            "description": "Drive URL to the content for this file."
-          },
-          "editUrl": {
-            "type": "string",
-            "optional": true,
-            "description": "Drive edit URL for this file."
-          },
-          "shareUrl": {
-            "type": "string",
-            "optional": true,
-            "description": "Drive share URL for this file."
           },
           "isPinned": {
             "type": "boolean",
@@ -149,6 +149,11 @@
             "type": "string",
             "optional": true,
             "description": "Drive MIME type for this file."
+          },
+          "sharedWithMe": {
+            "type": "boolean",
+            "optional": true,
+            "description": "True if the entry is labeled as shared-with-me."
           }
         }
       },
@@ -182,13 +187,13 @@
         "type": "object",
         "description": "Information about total and remaining size on the mount point.",
         "properties": {
-          "totalSizeKB": {
-            "type": "integer",
-            "description": "Total available size on the mount point."
+          "totalSize": {
+            "type": "number",
+            "description": "Approximate total available size on the mount point."
           },
-          "remainingSizeKB": {
-            "type": "integer",
-            "description": "Remaining available size on the mount point."
+          "remainingSize": {
+            "type": "number",
+            "description": "Approximate remaining available size on the mount point."
           }
         }
       },
@@ -326,14 +331,14 @@
             "description": "Defines file transfer direction."
           },
           "processed": {
-            "type": "integer",
+            "type": "number",
             "optional": true,
-            "description": "Completed portion of the transfer operation."
+            "description": "Approximated completed portion of the transfer operation."
           },
           "total": {
-            "type": "integer",
+            "type": "number",
             "optional": true,
-            "description": "Total size (cost) of transfer operation."
+            "description": "Approximated total size of transfer operation."
           }
         }
       },
@@ -460,7 +465,7 @@
             "optional": true,
             "parameters": []
           }
-        ]        
+        ]
       },
       {
         "name": "getFileTasks",
@@ -485,7 +490,7 @@
               {
                 "name": "tasks",
                 "type": "array",
-                "items": {"$ref": "FileBrowserTask"},
+                "items": {"$ref": "FileTask"},
                 "description": "The list of matched file URL patterns for this task."
               }
             ]
@@ -557,8 +562,8 @@
         ]
       },
       {
-        "name": "requestLocalFileSystem",
-        "description": "Requests access to local file system",
+        "name": "requestFileSystem",
+        "description": "Requests access to the file system specially set up for Files.app. The filesystem has multiple mount points which provide access to the user's Downloadsfolder, removal media like SD cards, and Drive. See comments at CrosDiskMountPorivder for details.",
         "parameters": [
           {
             "name": "callback",
@@ -641,11 +646,6 @@
             "items": {"type": "string"}
           },
           {
-            "name": "id",
-            "type": "string",
-            "description": "File browser handler id as for internal tasks."
-          },
-          {
             "name": "callback",
             "type": "function",
             "parameters": [
@@ -659,13 +659,13 @@
         ]
       },
       {
-        "name": "getDriveFileProperties",
-        "description": "Requests Drive file properties for a list of files",
+        "name": "getDriveEntryProperties",
+        "description": "Requests Drive file properties for a file",
         "parameters": [
           {
-            "name": "fileUrls",
-            "type": "array",
-            "description": "Array of file URLs to fetch properties for."
+            "name": "fileUrl",
+            "type": "string",
+            "description": "URL of a file"
           },
           {
             "name": "callback",
@@ -673,9 +673,8 @@
             "parameters": [
               {
                 "name" : "fileProperties",
-                "type": "array",
-                "items": {"$ref": "DriveFileProperties"},
-                "description": "An array of the requested file properties, one entry for each file in fileUrls."
+                "$ref": "DriveEntryProperties",
+                "description": "A dictionary containing properties of the requested entry."
               }
             ]
           }
@@ -686,50 +685,21 @@
         "description": "Pins/unpins a Drive file in the cache",
         "parameters": [
           {
-            "name": "fileUrls",
-            "type": "array",
-            "description": "Array of file URLs to pin/unpin."
+            "name": "fileUrl",
+            "type": "string",
+            "description": "URL of a file to pin/unpin."
           },
           {
             "name": "pin",
             "type": "boolean",
-            "description": "Pass true to pin the files listed."
+            "description": "Pass true to pin the file."
           },
           {
             "name": "callback",
             "type": "function",
-            "parameters": [
-              {
-                "name" : "fileProperties",
-                "type": "array",
-                "items": {"$ref": "DriveFileProperties"},
-                "description": "An array of the pinned properties after pinning/unpinning the requested files, one entry for each file in fileUrls."
-              }
-            ]
-          }
-        ]
-      },
-      {
-        "name": "getFileLocations",
-        "description": "Get file locations",
-        "parameters": [
-          {
-            "name": "fileUrls",
-            "type": "array",
-            "description": "Array of file URLs to check.",
-            "items": { "type": "string" }
-          },
-          {
-            "name": "callback",
-            "type": "function",
-            "parameters": [
-              {
-                "name" : "locations",
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "An array of the file locations for the requested files, one entry for each file in fileUrls."
-              }
-            ]
+            "optional": true,
+            "description": "Completion callback. $ref:runtime.lastError will be set if there was an error.",
+            "parameters": []
           }
         ]
       },
@@ -843,47 +813,6 @@
         ]
       },
       {
-        "name": "getFileTransfers",
-        "description": "Get the list of ongoing file transfer operations.",
-        "parameters": [
-          {
-            "name": "callback",
-            "type": "function",
-            "parameters": [
-              {
-                "name" : "fileTransfers",
-                "type": "array",
-                "items": {"$ref": "FileTransferStatus"},
-                "description": "The list of FileTransferStatus representing ongoing file transfers."
-              }
-            ]
-          }
-        ]
-      },
-      {
-        "name": "transferFile",
-        "description": "Transfers file from local to remote file system.",
-        "parameters": [
-          {
-            "name": "sourceFileUrl",
-            "type": "string",
-            "description": "Source file from the local file system."
-          },
-          {
-            "name": "destinationFileUrl",
-            "type": "string",
-            "description": "Destination file on the remote file system."
-          },
-          {
-            "name": "callback",
-            "type": "function",
-            "optional": true,
-            "description": "Completion callback. chrome.runtime.lastError will be set if there was an error.",
-            "parameters": []
-          }
-        ]
-      },
-      {
         "name": "cancelFileTransfers",
         "description": "Cancels ongoing file transfers for selected files.",
         "parameters": [
@@ -925,7 +854,7 @@
             "name": "callback",
             "type": "function",
             "optional": true,
-            "description": "Completion callback. chrome.runtime.lastError will be set if there was an error.",
+            "description": "Completion callback. $ref:runtime.lastError will be set if there was an error.",
             "parameters": []
           }
         ]
@@ -961,28 +890,6 @@
             "name": "mountPath",
             "type": "string",
             "description": "Device's mount path."
-          }
-        ]
-      },
-      {
-        "name": "toggleFullscreen",
-        "description": "Switches fullscreen mode on/off for the File Browser.",
-        "parameters": []
-      },
-      {
-        "name": "isFullscreen",
-        "description": "Checks if the browser is in fullscreen mode.",
-        "parameters": [
-          {
-            "name": "callback",
-            "type": "function",
-            "parameters": [
-              {
-                "name" : "result",
-                "type": "boolean",
-                "description": "Whether the browser is in fullscreen mode."
-              }
-            ]
           }
         ]
       },
@@ -1037,11 +944,6 @@
                 "optional": true,
                 "description": "Search query."
               },
-              "sharedWithMe": {
-                "type": "boolean",
-                "optional": true,
-                "description": "If this is a request for files shared with me or not."
-              },
               "nextFeed": {
                 "type": "string",
                 "optional": true,
@@ -1054,21 +956,12 @@
             "type": "function",
             "parameters": [
               {
-                "name": "results",
+                "name": "entries",
                 "type": "array",
                 "items": {
                   "type": "object",
-                  "properties": {
-                    "entry": {
-                      "type": "object",
-                      "isInstanceOf": "Entry",
-                      "description": "A dictionary object which represents a Drive file. This will be converted into a kind of FileEntry object. See file_browser_handler_custom_bindings.cc for details. For filesystem API's Entry interface, see <a href='http://www.w3.org/TR/file-system-api/#the-entry-interface'>The Entry interface</a>."
-                    },
-                    "properties": {
-                      "$ref": "DriveFileProperties"
-                    }
-                  },
-                  "description": "Entry and Drive-related properties representing a search result."
+                  "isInstanceOf": "Entry",
+                  "description": "An Entry object which represents a Drive file. The conversion into a kind of FileEntry object is done in file_browser_handler_custom_bindings.cc. For filesystem API's Entry interface, see <a href='http://www.w3.org/TR/file-system-api/#the-entry-interface'>The Entry interface</a>."
                 }
               },
               {
@@ -1080,15 +973,32 @@
           }
         ]
       },
-{
+      {
         "name": "searchDriveMetadata",
         "type": "function",
         "description": "Performs drive metadata search.",
         "parameters": [
           {
-            "name": "searchQuery",
-            "type": "string",
-            "description": "Search query."
+            "name": "searchParams",
+            "type": "object",
+            "properties": {
+              "query": {
+                "type": "string",
+                "optional": true,
+                "description": "Search query. It can be empty. Any filename matches to an empty query."
+              },
+              "types": {
+                "type": "string",
+                "enum": ["EXCLUDE_DIRECTORIES", "SHARED_WITH_ME", "OFFLINE", "ALL"],
+                "optional": true,
+                "description": "The type of entry that is needed. Default to ALL."
+              },
+              "maxResults": {
+                "type": "integer",
+                "optional": true,
+                "description": "Maximum number of results."
+              }
+            }
           },
           {
             "name": "callback",
@@ -1119,12 +1029,7 @@
       },
       {
         "name": "clearDriveCache",
-        "description": "Clear all Drive local caches.",
-        "parameters": []
-      },
-      {
-        "name": "reloadDrive",
-        "description": "Reload the filesystem metadata from the server immediately.",
+        "description": "Clear all Drive local caches including locally cached user files and filesystem metadata. The file system metadata will be reloaded from the server immediately.",
         "parameters": []
       },
       {
@@ -1186,17 +1091,6 @@
         ]
       },
       {
-        "name": "requestDirectoryRefresh",
-        "description": "Requests a refresh of a directory. Used to get the latest metadata of files in a particular directory. Upon completion, onDirectoryChanged event is raised against the target directory, so that the file browser can redraw contents in the directory. Note that the onFileChanged event can be raised even if there is no change in the directory as it's expensive to check if the new contents match the existing ones.",
-        "parameters": [
-          {
-            "name": "fileURL",
-            "type": "string",
-            "description": "URL of the target directory"
-          }
-        ]
-      },
-      {
         "name": "validatePathNameLength",
         "description": "Checks whether the path name length fits in the limit of the filesystem.",
         "parameters": [
@@ -1213,7 +1107,7 @@
           {
             "name": "callback",
             "type": "function",
-            "description": "Called back when the check is finished.", 
+            "description": "Called back when the check is finished.",
             "parameters": [
               {
                 "name": "result",
@@ -1225,13 +1119,58 @@
         ]
       },
       {
-        "name": "openNewWindow",
-        "description": "Opens a new window of the Files.app.",
+        "name": "zoom",
+        "description": "Changes the zoom factor of the Files.app.",
+        "parameters": [
+          {
+            "name": "operation",
+            "type": "string",
+            "description": "Zooming mode.",
+            "enum": ["in", "out", "reset"]
+          }
+        ]
+      },
+      {
+        "name": "requestAccessToken",
+        "description": "Requests a Drive API OAuth2 access token.",
+        "parameters": [
+          {
+            "name": "refresh",
+            "type": "boolean",
+            "description": "Whether the token should be refetched instead of using the cached one."
+          },
+          {
+            "name": "callback",
+            "type": "function",
+            "parameters": [
+              {
+                "name": "accessToken",
+                "type": "string",
+                "description": "OAuth2 access token, or an empty string if failed to fetch."
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "getShareUrl",
+        "description": "Requests a share dialog url for the specified file.",
         "parameters": [
           {
             "name": "url",
             "type": "string",
-            "description": "Internal url to be opened."
+            "description": "Url for the file."
+          },
+          {
+            "name": "callback",
+            "type": "function",
+            "parameters": [
+              {
+                "name": "shareUrl",
+                "type": "string",
+                "description": "Share Url for the sharing dialog."
+              }
+            ]
           }
         ]
       }
@@ -1271,18 +1210,6 @@
             "$ref": "FileWatchEvent",
             "name": "event",
             "description": "File watch event information."
-          }
-        ]
-      },
-      {
-        "name": "onDocumentFeedFetched",
-        "type": "function",
-        "description": "Fired when a document feed is fetched.",
-        "parameters": [
-          {
-            "type": "integer",
-            "name": "entriesFetched",
-            "description": "Number of entries fetched so far."
           }
         ]
       },

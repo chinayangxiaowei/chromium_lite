@@ -4,7 +4,6 @@
 
 package org.chromium.content_shell_apk;
 
-import android.app.Activity;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -15,18 +14,21 @@ import android.util.Log;
 import android.view.KeyEvent;
 
 import org.chromium.base.ChromiumActivity;
+import org.chromium.base.MemoryPressureListener;
 import org.chromium.content.app.LibraryLoader;
-import org.chromium.content.browser.ActivityContentVideoViewDelegate;
+import org.chromium.content.browser.ActivityContentVideoViewClient;
 import org.chromium.content.browser.AndroidBrowserProcess;
-import org.chromium.content.browser.ContentVideoView;
+import org.chromium.content.browser.BrowserStartupConfig;
+import org.chromium.content.browser.ContentVideoViewClient;
 import org.chromium.content.browser.ContentView;
+import org.chromium.content.browser.ContentViewClient;
 import org.chromium.content.browser.DeviceUtils;
 import org.chromium.content.browser.TracingIntentHandler;
 import org.chromium.content.common.CommandLine;
 import org.chromium.content.common.ProcessInitException;
 import org.chromium.content_shell.Shell;
 import org.chromium.content_shell.ShellManager;
-import org.chromium.ui.gfx.ActivityNativeWindow;
+import org.chromium.ui.WindowAndroid;
 
 /**
  * Activity for managing the Content Shell.
@@ -34,7 +36,7 @@ import org.chromium.ui.gfx.ActivityNativeWindow;
 public class ContentShellActivity extends ChromiumActivity {
 
     public static final String COMMAND_LINE_FILE = "/data/local/tmp/content-shell-command-line";
-    private static final String TAG = ContentShellActivity.class.getName();
+    private static final String TAG = "ContentShellActivity";
 
     private static final String ACTIVE_SHELL_URL_KEY = "activeUrl";
     private static final String ACTION_START_TRACE =
@@ -43,8 +45,23 @@ public class ContentShellActivity extends ChromiumActivity {
             "org.chromium.content_shell.action.PROFILE_STOP";
     public static final String COMMAND_LINE_ARGS_KEY = "commandLineArgs";
 
+    /**
+     * Sending an intent with this action will simulate a memory pressure signal
+     * at a critical level.
+     */
+    private static final String ACTION_LOW_MEMORY =
+            "org.chromium.content_shell.action.ACTION_LOW_MEMORY";
+
+    /**
+     * Sending an intent with this action will simulate a memory pressure signal
+     * at a moderate level.
+     */
+    private static final String ACTION_TRIM_MEMORY_MODERATE =
+            "org.chromium.content_shell.action.ACTION_TRIM_MEMORY_MODERATE";
+
+
     private ShellManager mShellManager;
-    private ActivityNativeWindow mActivityNativeWindow;
+    private WindowAndroid mWindowAndroid;
     private BroadcastReceiver mReceiver;
 
     @Override
@@ -67,28 +84,53 @@ public class ContentShellActivity extends ChromiumActivity {
 
             setContentView(R.layout.content_shell_activity);
             mShellManager = (ShellManager) findViewById(R.id.shell_container);
-            mActivityNativeWindow = new ActivityNativeWindow(this);
-            mActivityNativeWindow.restoreInstanceState(savedInstanceState);
-            mShellManager.setWindow(mActivityNativeWindow);
-            ContentVideoView.registerContentVideoViewContextDelegate(
-                    new ActivityContentVideoViewDelegate(this));
+            mWindowAndroid = new WindowAndroid(this);
+            mWindowAndroid.restoreInstanceState(savedInstanceState);
+            mShellManager.setWindow(mWindowAndroid);
 
             String startupUrl = getUrlFromIntent(getIntent());
             if (!TextUtils.isEmpty(startupUrl)) {
                 mShellManager.setStartupUrl(Shell.sanitizeUrl(startupUrl));
             }
-            if (!AndroidBrowserProcess.init(this, AndroidBrowserProcess.MAX_RENDERERS_AUTOMATIC)) {
+
+            if (!CommandLine.getInstance().hasSwitch(CommandLine.DUMP_RENDER_TREE)) {
+                BrowserStartupConfig.setAsync(new BrowserStartupConfig.StartupCallback() {
+
+                    @Override
+                    public void run(int startupResult) {
+                        if (startupResult > 0) {
+                            // TODO: Show error message.
+                            Log.e(TAG, "ContentView initialization failed.");
+                            finish();
+                        } else {
+                            finishInitialization();
+                        }
+                    }
+                });
+            }
+
+            if (!AndroidBrowserProcess.init(this, AndroidBrowserProcess.MAX_RENDERERS_LIMIT)) {
                 String shellUrl = ShellManager.DEFAULT_SHELL_URL;
                 if (savedInstanceState != null
-                    && savedInstanceState.containsKey(ACTIVE_SHELL_URL_KEY)) {
+                        && savedInstanceState.containsKey(ACTIVE_SHELL_URL_KEY)) {
                     shellUrl = savedInstanceState.getString(ACTIVE_SHELL_URL_KEY);
                 }
                 mShellManager.launchShell(shellUrl);
+                finishInitialization();
             }
         } catch (ProcessInitException e) {
             Log.e(TAG, "ContentView initialization failed.", e);
             finish();
         }
+    }
+
+    private void finishInitialization() {
+        getActiveContentView().setContentViewClient(new ContentViewClient() {
+            @Override
+            public ContentVideoViewClient getContentVideoViewClient() {
+                return new ActivityContentVideoViewClient(ContentShellActivity.this);
+            }
+        });
     }
 
     @Override
@@ -99,7 +141,7 @@ public class ContentShellActivity extends ChromiumActivity {
             outState.putString(ACTIVE_SHELL_URL_KEY, activeShell.getContentView().getUrl());
         }
 
-        mActivityNativeWindow.saveInstanceState(outState);
+        mWindowAndroid.saveInstanceState(outState);
     }
 
     private void waitForDebuggerIfNeeded() {
@@ -127,6 +169,14 @@ public class ContentShellActivity extends ChromiumActivity {
     protected void onNewIntent(Intent intent) {
         if (getCommandLineParamsFromIntent(intent) != null) {
             Log.i(TAG, "Ignoring command line params: can only be set when creating the activity.");
+        }
+
+        if (ACTION_LOW_MEMORY.equals(intent.getAction())) {
+            MemoryPressureListener.simulateMemoryPressureSignal(TRIM_MEMORY_COMPLETE);
+            return;
+        } else if (ACTION_TRIM_MEMORY_MODERATE.equals(intent.getAction())) {
+            MemoryPressureListener.simulateMemoryPressureSignal(TRIM_MEMORY_MODERATE);
+            return;
         }
 
         String url = getUrlFromIntent(intent);
@@ -179,7 +229,7 @@ public class ContentShellActivity extends ChromiumActivity {
     @Override
     public void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        mActivityNativeWindow.onActivityResult(requestCode, resultCode, data);
+        mWindowAndroid.onActivityResult(requestCode, resultCode, data);
     }
 
     private static String getUrlFromIntent(Intent intent) {

@@ -59,9 +59,8 @@ class DownloadShelfView : public views::AccessiblePaneView,
   // Implementation of View.
   virtual gfx::Size GetPreferredSize() OVERRIDE;
   virtual void Layout() OVERRIDE;
-  virtual void ViewHierarchyChanged(bool is_add,
-                                    View* parent,
-                                    View* child) OVERRIDE;
+  virtual void ViewHierarchyChanged(
+      const ViewHierarchyChangedDetails& details) OVERRIDE;
   virtual void OnPaint(gfx::Canvas* canvas) OVERRIDE;
 
   // Implementation of ui::AnimationDelegate.
@@ -100,7 +99,7 @@ class DownloadShelfView : public views::AccessiblePaneView,
   // Implementation of DownloadShelf.
   virtual void DoAddDownload(content::DownloadItem* download) OVERRIDE;
   virtual void DoShow() OVERRIDE;
-  virtual void DoClose() OVERRIDE;
+  virtual void DoClose(CloseReason reason) OVERRIDE;
 
   // From AccessiblePaneView
   virtual views::View* GetDefaultFocusableChild() OVERRIDE;
@@ -165,9 +164,6 @@ class DownloadShelfView : public views::AccessiblePaneView,
 
   // The window this shelf belongs to.
   BrowserView* parent_;
-
-  // Whether we are auto-closing.
-  bool auto_closed_;
 
   views::MouseWatcher mouse_watcher_;
 

@@ -16,6 +16,7 @@
 #include "base/memory/scoped_ptr.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/browser_process_platform_part.h"
 
 class BackgroundModeManager;
 class CRLSetFetcher;
@@ -61,26 +62,22 @@ class TestingBrowserProcess : public BrowserProcess {
   virtual GpuModeManager* gpu_mode_manager() OVERRIDE;
   virtual RenderWidgetSnapshotTaker* GetRenderWidgetSnapshotTaker() OVERRIDE;
   virtual BackgroundModeManager* background_mode_manager() OVERRIDE;
+  virtual void set_background_mode_manager_for_test(
+      scoped_ptr<BackgroundModeManager> manager) OVERRIDE;
   virtual StatusTray* status_tray() OVERRIDE;
   virtual SafeBrowsingService* safe_browsing_service() OVERRIDE;
   virtual safe_browsing::ClientSideDetectionService*
       safe_browsing_detection_service() OVERRIDE;
   virtual net::URLRequestContextGetter* system_request_context() OVERRIDE;
-
-#if defined(OS_CHROMEOS)
-  virtual chromeos::OomPriorityManager* oom_priority_manager() OVERRIDE;
-#endif  // defined(OS_CHROMEOS)
+  virtual BrowserProcessPlatformPart* platform_part() OVERRIDE;
 
   virtual extensions::EventRouterForwarder*
       extension_event_router_forwarder() OVERRIDE;
   virtual NotificationUIManager* notification_ui_manager() OVERRIDE;
-#if defined(ENABLE_MESSAGE_CENTER)
   virtual message_center::MessageCenter* message_center() OVERRIDE;
-#endif
   virtual IntranetRedirectDetector* intranet_redirect_detector() OVERRIDE;
   virtual AutomationProviderList* GetAutomationProviderList() OVERRIDE;
   virtual void CreateDevToolsHttpProtocolHandler(
-      Profile* profile,
       chrome::HostDesktopType host_desktop_type,
       const std::string& ip,
       int port,
@@ -106,12 +103,16 @@ class TestingBrowserProcess : public BrowserProcess {
   virtual prerender::PrerenderTracker* prerender_tracker() OVERRIDE;
   virtual ComponentUpdateService* component_updater() OVERRIDE;
   virtual CRLSetFetcher* crl_set_fetcher() OVERRIDE;
+  virtual PnaclComponentInstaller* pnacl_component_installer() OVERRIDE;
   virtual BookmarkPromptController* bookmark_prompt_controller() OVERRIDE;
+  virtual chrome::StorageMonitor* storage_monitor() OVERRIDE;
   virtual chrome::MediaFileSystemRegistry*
       media_file_system_registry() OVERRIDE;
-  virtual void PlatformSpecificCommandLineProcessing(
-      const CommandLine& command_line) OVERRIDE;
   virtual bool created_local_state() const OVERRIDE;
+
+#if defined(ENABLE_WEBRTC)
+  virtual WebRtcLogUploader* webrtc_log_uploader() OVERRIDE;
+#endif
 
   // Set the local state for tests. Consumer is responsible for cleaning it up
   // afterwards (using ScopedTestingLocalState, for example).
@@ -122,6 +123,7 @@ class TestingBrowserProcess : public BrowserProcess {
   void SetSafeBrowsingService(SafeBrowsingService* sb_service);
   void SetBookmarkPromptController(BookmarkPromptController* controller);
   void SetSystemRequestContext(net::URLRequestContextGetter* context_getter);
+  void SetStorageMonitor(scoped_ptr<chrome::StorageMonitor> storage_monitor);
 
  private:
   scoped_ptr<content::NotificationService> notification_service_;
@@ -137,20 +139,30 @@ class TestingBrowserProcess : public BrowserProcess {
 #endif
   scoped_ptr<ProfileManager> profile_manager_;
   scoped_ptr<NotificationUIManager> notification_ui_manager_;
+
+#if defined(ENABLE_FULL_PRINTING)
   scoped_ptr<printing::BackgroundPrintingManager> background_printing_manager_;
   scoped_refptr<printing::PrintPreviewDialogController>
       print_preview_dialog_controller_;
+#endif
+
   scoped_ptr<prerender::PrerenderTracker> prerender_tracker_;
   scoped_ptr<RenderWidgetSnapshotTaker> render_widget_snapshot_taker_;
   scoped_refptr<SafeBrowsingService> sb_service_;
   scoped_ptr<BookmarkPromptController> bookmark_prompt_controller_;
-  scoped_ptr<chrome::MediaFileSystemRegistry> media_file_system_registry_;
 #endif  // !defined(OS_IOS)
+
+#if !defined(OS_IOS) && !defined(OS_ANDROID)
+  scoped_ptr<chrome::StorageMonitor> storage_monitor_;
+  scoped_ptr<chrome::MediaFileSystemRegistry> media_file_system_registry_;
+#endif
 
   // The following objects are not owned by TestingBrowserProcess:
   PrefService* local_state_;
   IOThread* io_thread_;
   net::URLRequestContextGetter* system_request_context_;
+
+  scoped_ptr<BrowserProcessPlatformPart> platform_part_;
 
   DISALLOW_COPY_AND_ASSIGN(TestingBrowserProcess);
 };

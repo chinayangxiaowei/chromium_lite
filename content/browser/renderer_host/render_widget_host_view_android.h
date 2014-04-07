@@ -12,13 +12,18 @@
 #include "base/compiler_specific.h"
 #include "base/i18n/rtl.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/process.h"
+#include "base/memory/weak_ptr.h"
+#include "base/process/process.h"
+#include "cc/layers/delegated_renderer_layer_client.h"
 #include "cc/layers/texture_layer_client.h"
+#include "cc/output/begin_frame_args.h"
+#include "content/browser/accessibility/browser_accessibility_manager.h"
+#include "content/browser/renderer_host/image_transport_factory_android.h"
 #include "content/browser/renderer_host/ime_adapter_android.h"
 #include "content/browser/renderer_host/render_widget_host_view_base.h"
 #include "gpu/command_buffer/common/mailbox.h"
 #include "third_party/skia/include/core/SkColor.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebGraphicsContext3D.h"
+#include "third_party/WebKit/public/platform/WebGraphicsContext3D.h"
 #include "ui/gfx/size.h"
 #include "ui/gfx/vector2d_f.h"
 
@@ -28,6 +33,8 @@ struct GpuHostMsg_AcceleratedSurfaceBuffersSwapped_Params;
 struct GpuHostMsg_AcceleratedSurfacePostSubBuffer_Params;
 
 namespace cc {
+class CopyOutputResult;
+class DelegatedRendererLayer;
 class Layer;
 class TextureLayer;
 }
@@ -40,6 +47,7 @@ class WebMouseEvent;
 
 namespace content {
 class ContentViewCoreImpl;
+class OverscrollGlow;
 class RenderWidgetHost;
 class RenderWidgetHostImpl;
 class SurfaceTextureTransportClient;
@@ -48,8 +56,12 @@ struct NativeWebKeyboardEvent;
 // -----------------------------------------------------------------------------
 // See comments in render_widget_host_view.h about this class and its members.
 // -----------------------------------------------------------------------------
-class RenderWidgetHostViewAndroid : public RenderWidgetHostViewBase,
-                                    public cc::TextureLayerClient {
+class RenderWidgetHostViewAndroid
+    : public RenderWidgetHostViewBase,
+      public BrowserAccessibilityDelegate,
+      public cc::TextureLayerClient,
+      public cc::DelegatedRendererLayerClient,
+      public ImageTransportFactoryAndroidObserver {
  public:
   RenderWidgetHostViewAndroid(RenderWidgetHostImpl* widget,
                               ContentViewCoreImpl* content_view_core);
@@ -72,7 +84,7 @@ class RenderWidgetHostViewAndroid : public RenderWidgetHostViewBase,
   virtual gfx::NativeViewAccessible GetNativeViewAccessible() OVERRIDE;
   virtual void MovePluginWindows(
       const gfx::Vector2d& scroll_offset,
-      const std::vector<webkit::npapi::WebPluginGeometry>& moves) OVERRIDE;
+      const std::vector<WebPluginGeometry>& moves) OVERRIDE;
   virtual void Focus() OVERRIDE;
   virtual void Blur() OVERRIDE;
   virtual bool HasFocus() const OVERRIDE;
@@ -85,18 +97,17 @@ class RenderWidgetHostViewAndroid : public RenderWidgetHostViewBase,
   virtual float GetOverdrawBottomHeight() const OVERRIDE;
   virtual void UpdateCursor(const WebCursor& cursor) OVERRIDE;
   virtual void SetIsLoading(bool is_loading) OVERRIDE;
-  virtual void TextInputStateChanged(
-      const ViewHostMsg_TextInputState_Params& params) OVERRIDE;
+  virtual void TextInputTypeChanged(ui::TextInputType type,
+                                    bool can_compose_inline,
+                                    ui::TextInputMode input_mode) OVERRIDE;
   virtual void ImeCancelComposition() OVERRIDE;
-  virtual void ImeCompositionRangeChanged(
-      const ui::Range& range,
-      const std::vector<gfx::Rect>& character_bounds) OVERRIDE;
   virtual void DidUpdateBackingStore(
       const gfx::Rect& scroll_rect,
       const gfx::Vector2d& scroll_delta,
-      const std::vector<gfx::Rect>& copy_rects) OVERRIDE;
-  virtual void RenderViewGone(base::TerminationStatus status,
-                              int error_code) OVERRIDE;
+      const std::vector<gfx::Rect>& copy_rects,
+      const ui::LatencyInfo& latency_info) OVERRIDE;
+  virtual void RenderProcessGone(base::TerminationStatus status,
+                                 int error_code) OVERRIDE;
   virtual void Destroy() OVERRIDE;
   virtual void SetTooltipText(const string16& tooltip_text) OVERRIDE;
   virtual void SelectionChanged(const string16& text,
@@ -129,7 +140,7 @@ class RenderWidgetHostViewAndroid : public RenderWidgetHostViewBase,
   virtual void GetScreenInfo(WebKit::WebScreenInfo* results) OVERRIDE;
   virtual gfx::Rect GetBoundsInRootWindow() OVERRIDE;
   virtual gfx::GLSurfaceHandle GetCompositingSurface() OVERRIDE;
-  virtual void ProcessAckedTouchEvent(const WebKit::WebTouchEvent& touch,
+  virtual void ProcessAckedTouchEvent(const TouchEventWithLatencyInfo& touch,
                                       InputEventAckState ack_result) OVERRIDE;
   virtual void SetHasHorizontalScrollbar(
       bool has_horizontal_scrollbar) OVERRIDE;
@@ -139,6 +150,8 @@ class RenderWidgetHostViewAndroid : public RenderWidgetHostViewBase,
       const WebKit::WebMouseWheelEvent& event) OVERRIDE;
   virtual InputEventAckState FilterInputEvent(
       const WebKit::WebInputEvent& input_event) OVERRIDE;
+  virtual void GestureEventAck(int gesture_event_type,
+                               InputEventAckState ack_result) OVERRIDE;
   virtual void OnAccessibilityNotifications(
       const std::vector<AccessibilityHostMsg_NotificationParams>&
           params) OVERRIDE;
@@ -146,21 +159,39 @@ class RenderWidgetHostViewAndroid : public RenderWidgetHostViewBase,
   virtual void UnlockMouse() OVERRIDE;
   virtual void HasTouchEventHandlers(bool need_touch_events) OVERRIDE;
   virtual void OnSwapCompositorFrame(
+      uint32 output_surface_id,
       scoped_ptr<cc::CompositorFrame> frame) OVERRIDE;
-  virtual void UpdateFrameInfo(const gfx::Vector2dF& scroll_offset,
-                               float page_scale_factor,
-                               const gfx::Vector2dF& page_scale_factor_limits,
-                               const gfx::SizeF& content_size,
-                               const gfx::SizeF& viewport_size,
-                               const gfx::Vector2dF& controls_offset,
-                               const gfx::Vector2dF& content_offset,
-                               float overdraw_bottom_height) OVERRIDE;
+  virtual void OnOverscrolled(gfx::Vector2dF accumulated_overscroll,
+                              gfx::Vector2dF current_fling_velocity) OVERRIDE;
   virtual void ShowDisambiguationPopup(const gfx::Rect& target_rect,
                                        const SkBitmap& zoomed_bitmap) OVERRIDE;
+  virtual SmoothScrollGesture* CreateSmoothScrollGesture(
+      bool scroll_down, int pixels_to_scroll, int mouse_event_x,
+      int mouse_event_y) OVERRIDE;
+
+  // Implementation of BrowserAccessibilityDelegate:
+  virtual void SetAccessibilityFocus(int acc_obj_id) OVERRIDE;
+  virtual void AccessibilityDoDefaultAction(int acc_obj_id) OVERRIDE;
+  virtual void AccessibilityScrollToMakeVisible(
+      int acc_obj_id, gfx::Rect subfocus) OVERRIDE;
+  virtual void AccessibilityScrollToPoint(
+      int acc_obj_id, gfx::Point point) OVERRIDE;
+  virtual void AccessibilitySetTextSelection(
+      int acc_obj_id, int start_offset, int end_offset) OVERRIDE;
+  virtual gfx::Point GetLastTouchEventLocation() const OVERRIDE;
+  virtual void FatalAccessibilityTreeError() OVERRIDE;
 
   // cc::TextureLayerClient implementation.
-  virtual unsigned PrepareTexture(cc::ResourceUpdateQueue* queue) OVERRIDE;
+  virtual unsigned PrepareTexture() OVERRIDE;
   virtual WebKit::WebGraphicsContext3D* Context3d() OVERRIDE;
+  virtual bool PrepareTextureMailbox(cc::TextureMailbox* mailbox,
+                                     bool use_shared_memory) OVERRIDE;
+
+  // cc::DelegatedRendererLayerClient implementation.
+  virtual void DidCommitFrameData() OVERRIDE;
+
+  // ImageTransportFactoryAndroidObserver implementation.
+  virtual void OnLostResources() OVERRIDE;
 
   // Non-virtual methods
   void SetContentViewCore(ContentViewCoreImpl* content_view_core);
@@ -170,10 +201,13 @@ class RenderWidgetHostViewAndroid : public RenderWidgetHostViewBase,
   void SendMouseEvent(const WebKit::WebMouseEvent& event);
   void SendMouseWheelEvent(const WebKit::WebMouseWheelEvent& event);
   void SendGestureEvent(const WebKit::WebGestureEvent& event);
+  void SendBeginFrame(const cc::BeginFrameArgs& args);
 
+  void OnTextInputStateChanged(const ViewHostMsg_TextInputState_Params& params);
   void OnProcessImeBatchStateAck(bool is_begin);
   void OnDidChangeBodyBackgroundColor(SkColor color);
   void OnStartContentIntent(const GURL& content_url);
+  void OnSetNeedsBeginFrame(bool enabled);
 
   int GetNativeImeAdapter();
 
@@ -192,25 +226,59 @@ class RenderWidgetHostViewAndroid : public RenderWidgetHostViewBase,
   void RequestContentClipping(const gfx::Rect& clipping,
                               const gfx::Size& content_size);
 
+  // Returns true when animation ticks are still needed. This avoids a separate
+  // round-trip for requesting follow-up animation.
+  bool Animate(base::TimeTicks frame_time);
+
+  void SynchronousFrameMetadata(
+      const cc::CompositorFrameMetadata& frame_metadata);
+
  private:
   void BuffersSwapped(const gpu::Mailbox& mailbox,
-                      const gfx::Size texture_size,
-                      const gfx::SizeF content_size,
+                      uint32_t output_surface_id,
                       const base::Closure& ack_callback);
 
   void RunAckCallbacks();
 
+  void SwapDelegatedFrame(uint32 output_surface_id,
+                          scoped_ptr<cc::DelegatedFrameData> frame_data);
+  void SendDelegatedFrameAck(uint32 output_surface_id);
+
+  void UpdateContentViewCoreFrameMetadata(
+      const cc::CompositorFrameMetadata& frame_metadata);
+  void ComputeContentsSize(const cc::CompositorFrameMetadata& frame_metadata);
   void ResetClipping();
   void ClipContents(const gfx::Rect& clipping, const gfx::Size& content_size);
 
+  void AttachLayers();
+  void RemoveLayers();
+
+  void CreateOverscrollEffectIfNecessary();
+  void UpdateAnimationSize(const cc::CompositorFrameMetadata& frame_metadata);
+  void ScheduleAnimationIfNecessary();
+
+  // Called after async screenshot task completes. Scales and crops the result
+  // of the copy.
+  static void PrepareTextureCopyOutputResult(
+      const gfx::Size& dst_size_in_pixel,
+      const base::Callback<void(bool, const SkBitmap&)>& callback,
+      scoped_ptr<cc::CopyOutputResult> result);
+  static void PrepareBitmapCopyOutputResult(
+      const gfx::Size& dst_size_in_pixel,
+      const base::Callback<void(bool, const SkBitmap&)>& callback,
+      scoped_ptr<cc::CopyOutputResult> result);
+
   // The model object.
   RenderWidgetHostImpl* host_;
+
+  // Used to track whether this render widget needs a BeginFrame.
+  bool needs_begin_frame_;
 
   // Whether or not this widget is potentially attached to the view hierarchy.
   // This view may not actually be attached if this is true, but it should be
   // treated as such, because as soon as a ContentViewCore is set the layer
   // will be attached automatically.
-  bool is_layer_attached_;
+  bool are_layers_attached_;
 
   // ContentViewCoreImpl is our interface to the view system.
   ContentViewCoreImpl* content_view_core_;
@@ -222,6 +290,8 @@ class RenderWidgetHostViewAndroid : public RenderWidgetHostViewBase,
 
   // The texture layer for this view when using browser-side compositing.
   scoped_refptr<cc::TextureLayer> texture_layer_;
+
+  scoped_refptr<cc::DelegatedRendererLayer> delegated_renderer_layer_;
 
   // The layer used for rendering the contents of this view.
   // It is either owned by texture_layer_ or surface_texture_transport_
@@ -242,11 +312,15 @@ class RenderWidgetHostViewAndroid : public RenderWidgetHostViewBase,
 
   // The mailbox of the previously received frame.
   gpu::Mailbox current_mailbox_;
+  uint32_t current_mailbox_output_surface_id_;
 
-  // The mailbox of the frame we last returned.
-  gpu::Mailbox last_mailbox_;
+  base::WeakPtrFactory<RenderWidgetHostViewAndroid> weak_ptr_factory_;
 
   std::queue<base::Closure> ack_callbacks_;
+
+  // Used to render overscroll overlays.
+  bool overscroll_effect_enabled_;
+  scoped_ptr<OverscrollGlow> overscroll_effect_;
 
   DISALLOW_COPY_AND_ASSIGN(RenderWidgetHostViewAndroid);
 };

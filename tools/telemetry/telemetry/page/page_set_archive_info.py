@@ -7,12 +7,24 @@ import os
 import re
 import shutil
 
+from telemetry.page import cloud_storage
+
+
+def _UpdateHashFile(file_path):
+  with open(file_path + '.sha1', 'wb') as f:
+    f.write(cloud_storage.GetHash(file_path))
+    f.flush()
+
+
 class PageSetArchiveInfo(object):
   def __init__(self, archive_data_file_path, page_set_file_path, data):
     self._archive_data_file_path = archive_data_file_path
     self._archive_data_file_dir = os.path.dirname(archive_data_file_path)
     # Back pointer to the page set file.
     self._page_set_file_path = page_set_file_path
+
+    for archive_path in data['archives']:
+      cloud_storage.GetIfChanged(cloud_storage.DEFAULT_BUCKET, archive_path)
 
     # Map from the relative path (as it appears in the metadata file) of the
     # .wpr file to a list of urls it supports.
@@ -30,6 +42,8 @@ class PageSetArchiveInfo(object):
 
   @classmethod
   def FromFile(cls, file_path, page_set_file_path):
+    cloud_storage.GetIfChanged(cloud_storage.DEFAULT_BUCKET, file_path)
+
     if os.path.exists(file_path):
       with open(file_path, 'r') as f:
         data = json.load(f)
@@ -47,11 +61,12 @@ class PageSetArchiveInfo(object):
   def AddNewTemporaryRecording(self, temp_target_wpr_file_path):
     self.temp_target_wpr_file_path = temp_target_wpr_file_path
 
-  def AddRecordedPages(self, pages):
+  def AddRecordedPages(self, urls):
     (target_wpr_file, target_wpr_file_path) = self._NextWprFileName()
-    for page in pages:
-      self._SetWprFileForPage(page, target_wpr_file)
+    for url in urls:
+      self._SetWprFileForPage(url, target_wpr_file)
     shutil.move(self.temp_target_wpr_file_path, target_wpr_file_path)
+    _UpdateHashFile(target_wpr_file_path)
     self._WriteToFile()
     self._DeleteAbandonedWprFiles()
 
@@ -85,7 +100,7 @@ class PageSetArchiveInfo(object):
     metadata['page_set'] = os.path.relpath(self._page_set_file_path,
                                            self._archive_data_file_dir)
     metadata['archives'] = self._wpr_file_to_urls.copy()
-    # Don't write data for abandones archives.
+    # Don't write data for abandoned archives.
     abandoned_wpr_files = self._AbandonedWprFiles()
     for wpr_file in abandoned_wpr_files:
       del metadata['archives'][wpr_file]
@@ -93,6 +108,7 @@ class PageSetArchiveInfo(object):
     with open(self._archive_data_file_path, 'w') as f:
       json.dump(metadata, f, indent=4)
       f.flush()
+    _UpdateHashFile(self._archive_data_file_path)
 
   def _WprFileNameToPath(self, wpr_file):
     return os.path.abspath(os.path.join(self._archive_data_file_dir, wpr_file))
@@ -118,12 +134,12 @@ class PageSetArchiveInfo(object):
     new_filename = '%s_%03d.wpr' % (base, highest_number + 1)
     return new_filename, self._WprFileNameToPath(new_filename)
 
-  def _SetWprFileForPage(self, page, wpr_file):
+  def _SetWprFileForPage(self, url, wpr_file):
     """For modifying the metadata when we're going to record a new archive."""
-    old_wpr_file = self._url_to_wpr_file.get(page.url, None)
+    old_wpr_file = self._url_to_wpr_file.get(url, None)
     if old_wpr_file:
-      self._wpr_file_to_urls[old_wpr_file].remove(page.url)
-    self._url_to_wpr_file[page.url] = wpr_file
+      self._wpr_file_to_urls[old_wpr_file].remove(url)
+    self._url_to_wpr_file[url] = wpr_file
     if wpr_file not in self._wpr_file_to_urls:
       self._wpr_file_to_urls[wpr_file] = []
-    self._wpr_file_to_urls[wpr_file].append(page.url)
+    self._wpr_file_to_urls[wpr_file].append(url)

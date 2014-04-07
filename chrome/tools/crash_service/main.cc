@@ -22,7 +22,7 @@ bool GetCrashServiceDirectory(base::FilePath* dir) {
   if (!file_util::GetTempDir(&temp_dir))
     return false;
   temp_dir = temp_dir.Append(L"chrome_crashes");
-  if (!file_util::PathExists(temp_dir)) {
+  if (!base::PathExists(temp_dir)) {
     if (!file_util::CreateDirectory(temp_dir))
       return false;
   }
@@ -46,12 +46,10 @@ int __stdcall wWinMain(HINSTANCE instance, HINSTANCE, wchar_t* cmd_line,
 
   // Logging to stderr (to help with debugging failures on the
   // buildbots) and to a file.
-  logging::InitLogging(
-      log_file.value().c_str(),
-      logging::LOG_TO_BOTH_FILE_AND_SYSTEM_DEBUG_LOG,
-      logging::LOCK_LOG_FILE,
-      logging::APPEND_TO_OLD_LOG_FILE,
-      logging::DISABLE_DCHECK_FOR_NON_OFFICIAL_RELEASE_BUILDS);
+  logging::LoggingSettings settings;
+  settings.logging_dest = logging::LOG_TO_ALL;
+  settings.log_file = log_file.value().c_str();
+  logging::InitLogging(settings);
   // Logging with pid, tid and timestamp.
   logging::SetLogItems(true, true, true, false);
 

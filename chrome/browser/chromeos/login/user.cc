@@ -5,8 +5,8 @@
 #include "chrome/browser/chromeos/login/user.h"
 
 #include "base/logging.h"
-#include "base/stringprintf.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/chromeos/login/default_user_images.h"
 #include "chrome/browser/chromeos/login/user_manager.h"
 #include "grit/theme_resources.h"
@@ -26,15 +26,6 @@ std::string GetUserName(const std::string& email) {
 }
 
 }  // namespace
-
-// Magic e-mail addresses are bad. They exist here because some code already
-// depends on them and it is hard to figure out what. Any user types added in
-// the future should be identified by a new |UserType|, not a new magic e-mail
-// address.
-// The guest user has a magic, empty e-mail address.
-const char kGuestUserEMail[] = "";
-// The retail mode user has a magic, domainless e-mail address.
-const char kRetailModeUserEMail[] = "demouser@";
 
 class RegularUser : public User {
  public:
@@ -111,21 +102,35 @@ class PublicAccountUser : public User {
   DISALLOW_COPY_AND_ASSIGN(PublicAccountUser);
 };
 
-UserCredentials::UserCredentials() {
+UserContext::UserContext() {
 }
 
-UserCredentials::UserCredentials(const std::string& username,
-                                 const std::string& password,
-                                 const std::string& auth_code)
+UserContext::UserContext(const std::string& username,
+                         const std::string& password,
+                         const std::string& auth_code)
     : username(username),
       password(password),
       auth_code(auth_code) {
 }
 
-bool UserCredentials::operator==(const UserCredentials& cred) const {
-  return cred.username == username &&
-         cred.password == password &&
-         cred.auth_code == auth_code;
+UserContext::UserContext(const std::string& username,
+                         const std::string& password,
+                         const std::string& auth_code,
+                         const std::string& username_hash)
+    : username(username),
+      password(password),
+      auth_code(auth_code),
+      username_hash(username_hash) {
+}
+
+UserContext::~UserContext() {
+}
+
+bool UserContext::operator==(const UserContext& context) const {
+  return context.username == username &&
+         context.password == password &&
+         context.auth_code == auth_code &&
+         context.username_hash == username_hash;
 }
 
 string16 User::GetDisplayName() const {
@@ -152,6 +157,18 @@ std::string User::display_email() const {
 
 bool User::can_lock() const {
   return false;
+}
+
+std::string User::username_hash() const {
+  return username_hash_;
+}
+
+bool User::is_logged_in() const {
+  return is_logged_in_;
+}
+
+bool User::is_active() const {
+  return is_active_;
 }
 
 User* User::CreateRegularUser(const std::string& email) {
@@ -183,7 +200,9 @@ User::User(const std::string& email)
       oauth_token_status_(OAUTH_TOKEN_STATUS_UNKNOWN),
       image_index_(kInvalidImageIndex),
       image_is_stub_(false),
-      image_is_loading_(false) {
+      image_is_loading_(false),
+      is_logged_in_(false),
+      is_active_(false) {
 }
 
 User::~User() {}
@@ -223,7 +242,7 @@ bool RegularUser::can_lock() const {
   return true;
 }
 
-GuestUser::GuestUser() : User(kGuestUserEMail) {
+GuestUser::GuestUser() : User(UserManager::kGuestUserName) {
   set_display_email(std::string());
 }
 
@@ -262,7 +281,7 @@ std::string LocallyManagedUser::display_email() const {
   return UTF16ToUTF8(display_name());
 }
 
-RetailModeUser::RetailModeUser() : User(kRetailModeUserEMail) {
+RetailModeUser::RetailModeUser() : User(UserManager::kRetailModeUserName) {
   set_display_email(std::string());
 }
 

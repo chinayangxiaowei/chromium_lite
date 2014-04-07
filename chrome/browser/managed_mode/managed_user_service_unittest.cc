@@ -4,15 +4,19 @@
 
 #include "base/path_service.h"
 #include "base/prefs/pref_service.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/extension_service_unittest.h"
 #include "chrome/browser/extensions/unpacked_installer.h"
 #include "chrome/browser/managed_mode/managed_user_service.h"
+#include "chrome/browser/managed_mode/managed_user_service_factory.h"
+#include "chrome/browser/prefs/scoped_user_pref_update.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/chrome_notification_types.h"
+#include "chrome/browser/ui/browser_list.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_profile.h"
+#include "content/public/test/test_browser_thread.h"
 #include "content/public/test/test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -51,46 +55,112 @@ class ManagedModeURLFilterObserver : public ManagedModeURLFilter::Observer {
   scoped_refptr<MessageLoopRunner> message_loop_runner_;
 };
 
+class ManagedUserServiceTest : public ::testing::Test {
+ public:
+  ManagedUserServiceTest() : ui_thread_(content::BrowserThread::UI,
+                                        &message_loop_) {
+    managed_user_service_ = ManagedUserServiceFactory::GetForProfile(&profile_);
+  }
+
+  virtual ~ManagedUserServiceTest() {}
+
+ protected:
+  base::MessageLoop message_loop_;
+  content::TestBrowserThread ui_thread_;
+  TestingProfile profile_;
+  ManagedUserService* managed_user_service_;
+};
+
 }  // namespace
 
-TEST(ManagedUserServiceTest, ExtensionManagementPolicyProvider) {
-  MessageLoop message_loop;
-  TestingProfile profile;
-  {
-    ManagedUserService managed_user_service(&profile);
-    EXPECT_FALSE(managed_user_service.ProfileIsManaged());
+TEST_F(ManagedUserServiceTest, ExtensionManagementPolicyProviderUnmanaged) {
+  EXPECT_FALSE(managed_user_service_->ProfileIsManaged());
 
-    string16 error_1;
-    EXPECT_TRUE(managed_user_service.UserMayLoad(NULL, &error_1));
-    EXPECT_EQ(string16(), error_1);
+  string16 error_1;
+  EXPECT_TRUE(managed_user_service_->UserMayLoad(NULL, &error_1));
+  EXPECT_EQ(string16(), error_1);
 
-    string16 error_2;
-    EXPECT_TRUE(managed_user_service.UserMayModifySettings(NULL, &error_2));
-    EXPECT_EQ(string16(), error_2);
-  }
+  string16 error_2;
+  EXPECT_TRUE(managed_user_service_->UserMayModifySettings(NULL, &error_2));
+  EXPECT_EQ(string16(), error_2);
+}
 
-  profile.GetPrefs()->SetBoolean(prefs::kProfileIsManaged, true);
-  {
-    ManagedUserService managed_user_service(&profile);
-    ManagedModeURLFilterObserver observer(
-        managed_user_service.GetURLFilterForUIThread());
-    EXPECT_TRUE(managed_user_service.ProfileIsManaged());
-    managed_user_service.Init();
+TEST_F(ManagedUserServiceTest, ExtensionManagementPolicyProviderManaged) {
+  ManagedModeURLFilterObserver observer(
+      managed_user_service_->GetURLFilterForUIThread());
+  managed_user_service_->InitForTesting();
+  EXPECT_TRUE(managed_user_service_->ProfileIsManaged());
 
-    string16 error_1;
-    EXPECT_FALSE(managed_user_service.UserMayLoad(NULL, &error_1));
-    EXPECT_FALSE(error_1.empty());
+  string16 error_1;
+  EXPECT_FALSE(managed_user_service_->UserMayLoad(NULL, &error_1));
+  EXPECT_FALSE(error_1.empty());
 
-    string16 error_2;
-    EXPECT_FALSE(managed_user_service.UserMayModifySettings(NULL, &error_2));
-    EXPECT_FALSE(error_2.empty());
+  string16 error_2;
+  EXPECT_FALSE(managed_user_service_->UserMayModifySettings(NULL, &error_2));
+  EXPECT_FALSE(error_2.empty());
 
 #ifndef NDEBUG
-    EXPECT_FALSE(managed_user_service.GetDebugPolicyProviderName().empty());
+  EXPECT_FALSE(managed_user_service_->GetDebugPolicyProviderName().empty());
 #endif
-    // Wait for the initial update to finish (otherwise we'll get leaks).
-    observer.Wait();
+  // Wait for the initial update to finish (otherwise we'll get leaks).
+  observer.Wait();
+}
+
+TEST_F(ManagedUserServiceTest, GetManualExceptionsForHost) {
+  GURL kExampleFooURL("http://www.example.com/foo");
+  GURL kExampleBarURL("http://www.example.com/bar");
+  GURL kExampleFooNoWWWURL("http://example.com/foo");
+  GURL kBlurpURL("http://blurp.net/bla");
+  GURL kMooseURL("http://moose.org/baz");
+  {
+    DictionaryPrefUpdate update(profile_.GetPrefs(),
+                                prefs::kManagedModeManualURLs);
+    base::DictionaryValue* dict = update.Get();
+    dict->SetBooleanWithoutPathExpansion(kExampleFooURL.spec(), true);
+    dict->SetBooleanWithoutPathExpansion(kExampleBarURL.spec(), false);
+    dict->SetBooleanWithoutPathExpansion(kExampleFooNoWWWURL.spec(), true);
+    dict->SetBooleanWithoutPathExpansion(kBlurpURL.spec(), true);
   }
+
+  EXPECT_EQ(ManagedUserService::MANUAL_ALLOW,
+            managed_user_service_->GetManualBehaviorForURL(kExampleFooURL));
+  EXPECT_EQ(ManagedUserService::MANUAL_BLOCK,
+            managed_user_service_->GetManualBehaviorForURL(kExampleBarURL));
+  EXPECT_EQ(ManagedUserService::MANUAL_ALLOW,
+            managed_user_service_->GetManualBehaviorForURL(
+                kExampleFooNoWWWURL));
+  EXPECT_EQ(ManagedUserService::MANUAL_ALLOW,
+            managed_user_service_->GetManualBehaviorForURL(kBlurpURL));
+  EXPECT_EQ(ManagedUserService::MANUAL_NONE,
+            managed_user_service_->GetManualBehaviorForURL(kMooseURL));
+  std::vector<GURL> exceptions;
+  managed_user_service_->GetManualExceptionsForHost("www.example.com",
+                                                    &exceptions);
+  ASSERT_EQ(2u, exceptions.size());
+  EXPECT_EQ(kExampleBarURL, exceptions[0]);
+  EXPECT_EQ(kExampleFooURL, exceptions[1]);
+
+  {
+    DictionaryPrefUpdate update(profile_.GetPrefs(),
+                                prefs::kManagedModeManualURLs);
+    base::DictionaryValue* dict = update.Get();
+    for (std::vector<GURL>::iterator it = exceptions.begin();
+         it != exceptions.end(); ++it) {
+      dict->RemoveWithoutPathExpansion(it->spec(), NULL);
+    }
+  }
+
+  EXPECT_EQ(ManagedUserService::MANUAL_NONE,
+            managed_user_service_->GetManualBehaviorForURL(kExampleFooURL));
+  EXPECT_EQ(ManagedUserService::MANUAL_NONE,
+            managed_user_service_->GetManualBehaviorForURL(kExampleBarURL));
+  EXPECT_EQ(ManagedUserService::MANUAL_ALLOW,
+            managed_user_service_->GetManualBehaviorForURL(
+                kExampleFooNoWWWURL));
+  EXPECT_EQ(ManagedUserService::MANUAL_ALLOW,
+            managed_user_service_->GetManualBehaviorForURL(kBlurpURL));
+  EXPECT_EQ(ManagedUserService::MANUAL_NONE,
+            managed_user_service_->GetManualBehaviorForURL(kMooseURL));
 }
 
 class ManagedUserServiceExtensionTest : public ExtensionServiceTestBase {
@@ -103,6 +173,10 @@ class ManagedUserServiceExtensionTest : public ExtensionServiceTestBase {
     InitializeEmptyExtensionService();
   }
 
+  virtual void TearDown() OVERRIDE {
+    ExtensionServiceTestBase::TearDown();
+  }
+
  protected:
   ScopedVector<ManagedModeSiteList> GetActiveSiteLists(
       ManagedUserService* managed_user_service) {
@@ -111,31 +185,37 @@ class ManagedUserServiceExtensionTest : public ExtensionServiceTestBase {
 };
 
 TEST_F(ManagedUserServiceExtensionTest, NoContentPacks) {
-  ManagedUserService managed_user_service(profile_.get());
-  managed_user_service.Init();
+  ManagedUserService* managed_user_service =
+      ManagedUserServiceFactory::GetForProfile(profile_.get());
+  managed_user_service->Init();
   ManagedModeURLFilter* url_filter =
-      managed_user_service.GetURLFilterForUIThread();
+      managed_user_service->GetURLFilterForUIThread();
 
   GURL url("http://youtube.com");
   ScopedVector<ManagedModeSiteList> site_lists =
-      GetActiveSiteLists(&managed_user_service);
+      GetActiveSiteLists(managed_user_service);
   ASSERT_EQ(0u, site_lists.size());
   EXPECT_EQ(ManagedModeURLFilter::ALLOW,
             url_filter->GetFilteringBehaviorForURL(url));
 }
 
+#if !defined(OS_CHROMEOS)
 TEST_F(ManagedUserServiceExtensionTest, InstallContentPacks) {
-  profile_->GetPrefs()->SetBoolean(prefs::kProfileIsManaged, true);
-  ManagedUserService managed_user_service(profile_.get());
-  managed_user_service.Init();
-  managed_user_service.SetElevated(true);
+  ManagedUserService* managed_user_service =
+      ManagedUserServiceFactory::GetForProfile(profile_.get());
+  managed_user_service->InitForTesting();
   ManagedModeURLFilter* url_filter =
-      managed_user_service.GetURLFilterForUIThread();
+      managed_user_service->GetURLFilterForUIThread();
   ManagedModeURLFilterObserver observer(url_filter);
   observer.Wait();
 
   GURL example_url("http://example.com");
   GURL moose_url("http://moose.org");
+  EXPECT_EQ(ManagedModeURLFilter::ALLOW,
+            url_filter->GetFilteringBehaviorForURL(example_url));
+
+  profile_->GetPrefs()->SetInteger(prefs::kDefaultManagedModeFilteringBehavior,
+                                   ManagedModeURLFilter::BLOCK);
   EXPECT_EQ(ManagedModeURLFilter::BLOCK,
             url_filter->GetFilteringBehaviorForURL(example_url));
 
@@ -143,6 +223,8 @@ TEST_F(ManagedUserServiceExtensionTest, InstallContentPacks) {
                                    ManagedModeURLFilter::WARN);
   EXPECT_EQ(ManagedModeURLFilter::WARN,
             url_filter->GetFilteringBehaviorForURL(example_url));
+
+  managed_user_service->set_elevated_for_testing(true);
 
   // Load a content pack.
   scoped_refptr<extensions::UnpackedInstaller> installer(
@@ -162,10 +244,10 @@ TEST_F(ManagedUserServiceExtensionTest, InstallContentPacks) {
       extension_load_observer.details();
   scoped_refptr<extensions::Extension> extension =
       make_scoped_refptr(details.ptr());
-  ASSERT_TRUE(extension);
+  ASSERT_TRUE(extension.get());
 
   ScopedVector<ManagedModeSiteList> site_lists =
-      GetActiveSiteLists(&managed_user_service);
+      GetActiveSiteLists(managed_user_service);
   ASSERT_EQ(1u, site_lists.size());
   std::vector<ManagedModeSiteList::Site> sites;
   site_lists[0]->GetSites(&sites);
@@ -188,7 +270,7 @@ TEST_F(ManagedUserServiceExtensionTest, InstallContentPacks) {
   installer->Load(extension_path);
   observer.Wait();
 
-  site_lists = GetActiveSiteLists(&managed_user_service);
+  site_lists = GetActiveSiteLists(managed_user_service);
   ASSERT_EQ(2u, site_lists.size());
   sites.clear();
   site_lists[0]->GetSites(&sites);
@@ -217,7 +299,7 @@ TEST_F(ManagedUserServiceExtensionTest, InstallContentPacks) {
                              extensions::Extension::DISABLE_USER_ACTION);
   observer.Wait();
 
-  site_lists = GetActiveSiteLists(&managed_user_service);
+  site_lists = GetActiveSiteLists(managed_user_service);
   ASSERT_EQ(1u, site_lists.size());
   sites.clear();
   site_lists[0]->GetSites(&sites);
@@ -231,3 +313,5 @@ TEST_F(ManagedUserServiceExtensionTest, InstallContentPacks) {
             url_filter->GetFilteringBehaviorForURL(moose_url));
 #endif
 }
+
+#endif  // OS_CHROMEOS

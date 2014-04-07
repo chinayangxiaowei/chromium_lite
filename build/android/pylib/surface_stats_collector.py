@@ -37,6 +37,10 @@ class SurfaceStatsCollector(object):
     self._data_queue = None
     self._stop_event = None
     self._results = []
+    self._warn_about_empty_data = True
+
+  def DisableWarningAboutEmptyData(self):
+    self._warn_about_empty_data = False
 
   def Start(self):
     assert not self._collector_thread
@@ -58,13 +62,67 @@ class SurfaceStatsCollector(object):
       self._collector_thread.join()
       self._collector_thread = None
 
+  def SampleResults(self):
+    self._StorePerfResults()
+    results = self.GetResults()
+    self._results = []
+    return results
+
   def GetResults(self):
-    return self._results
+    return self._results or self._GetEmptyResults()
+
+  def _GetEmptyResults(self):
+    return [
+        SurfaceStatsCollector.Result('refresh_period', None, 'seconds'),
+        SurfaceStatsCollector.Result('jank_count', None, 'janks'),
+        SurfaceStatsCollector.Result('max_frame_delay', None, 'vsyncs'),
+        SurfaceStatsCollector.Result('frame_lengths', None, 'vsyncs'),
+        SurfaceStatsCollector.Result('avg_surface_fps', None, 'fps')
+    ]
 
   @staticmethod
   def _GetNormalizedDeltas(data, refresh_period):
     deltas = [t2 - t1 for t1, t2 in zip(data, data[1:])]
     return (deltas, [delta / refresh_period for delta in deltas])
+
+  @staticmethod
+  def _CalculateResults(refresh_period, timestamps, result_suffix):
+    """Returns a list of SurfaceStatsCollector.Result."""
+    frame_count = len(timestamps)
+    seconds = timestamps[-1] - timestamps[0]
+
+    frame_lengths, normalized_frame_lengths = \
+        SurfaceStatsCollector._GetNormalizedDeltas(timestamps, refresh_period)
+    length_changes, normalized_changes = \
+        SurfaceStatsCollector._GetNormalizedDeltas(
+            frame_lengths, refresh_period)
+    jankiness = [max(0, round(change)) for change in normalized_changes]
+    pause_threshold = 20
+    jank_count = sum(1 for change in jankiness
+                     if change > 0 and change < pause_threshold)
+    return [
+        SurfaceStatsCollector.Result(
+            'avg_surface_fps' + result_suffix,
+            int(round(frame_count / seconds)), 'fps'),
+        SurfaceStatsCollector.Result(
+            'jank_count' + result_suffix, jank_count, 'janks'),
+        SurfaceStatsCollector.Result(
+            'max_frame_delay' + result_suffix,
+            round(max(normalized_frame_lengths)),
+            'vsyncs'),
+        SurfaceStatsCollector.Result(
+            'frame_lengths' + result_suffix, normalized_frame_lengths,
+            'vsyncs'),
+    ]
+
+  @staticmethod
+  def _CalculateBuckets(refresh_period, timestamps):
+    results = []
+    for pct in [0.99, 0.5]:
+      sliced = timestamps[min(int(-pct * len(timestamps)), -3) : ]
+      results += SurfaceStatsCollector._CalculateResults(
+          refresh_period, sliced, '_' + str(int(pct * 100)))
+    return results
 
   def _StorePerfResults(self):
     if self._use_legacy_method:
@@ -73,35 +131,21 @@ class SurfaceStatsCollector(object):
       seconds = td.seconds + td.microseconds / 1e6
       frame_count = (surface_after['page_flip_count'] -
                      self._surface_before['page_flip_count'])
-    else:
-      assert self._collector_thread
-      (refresh_period, timestamps) = self._GetDataFromThread()
-      if not refresh_period or not len(timestamps) >= 3:
+      self._results.append(SurfaceStatsCollector.Result(
+          'avg_surface_fps', int(round(frame_count / seconds)), 'fps'))
+      return
+
+    # Non-legacy method.
+    assert self._collector_thread
+    (refresh_period, timestamps) = self._GetDataFromThread()
+    if not refresh_period or not len(timestamps) >= 3:
+      if self._warn_about_empty_data:
         logging.warning('Surface stat data is empty')
-        return
-      frame_count = len(timestamps)
-      seconds = timestamps[-1] - timestamps[0]
-
-      frame_lengths, normalized_frame_lengths = \
-          self._GetNormalizedDeltas(timestamps, refresh_period)
-      length_changes, normalized_changes = \
-          self._GetNormalizedDeltas(frame_lengths, refresh_period)
-      jankiness = [max(0, round(change)) for change in normalized_changes]
-      pause_threshold = 20
-      jank_count = sum(1 for change in jankiness
-                       if change > 0 and change < pause_threshold)
-
-      self._results.append(SurfaceStatsCollector.Result(
-          'refresh_period', refresh_period, 'seconds'))
-      self._results.append(SurfaceStatsCollector.Result(
-          'jank_count', jank_count, 'janks'))
-      self._results.append(SurfaceStatsCollector.Result(
-          'max_frame_delay', round(max(normalized_frame_lengths)),
-          'vsyncs'))
-      self._results.append(SurfaceStatsCollector.Result(
-          'frame_lengths', normalized_frame_lengths, 'vsyncs'))
+      return
     self._results.append(SurfaceStatsCollector.Result(
-        'avg_surface_fps', int(round(frame_count / seconds)), 'fps'))
+        'refresh_period', refresh_period, 'seconds'))
+    self._results += self._CalculateResults(refresh_period, timestamps, '')
+    self._results += self._CalculateBuckets(refresh_period, timestamps)
 
   def _CollectorThread(self):
     last_timestamp = 0
@@ -200,7 +244,8 @@ class SurfaceStatsCollector(object):
     # the activity's main window are not updated when the main web content is
     # composited into a SurfaceView.
     results = self._adb.RunShellCommand(
-        'dumpsys SurfaceFlinger --latency SurfaceView', log_result=True)
+        'dumpsys SurfaceFlinger --latency SurfaceView',
+        log_result=logging.getLogger().isEnabledFor(logging.DEBUG))
     if not len(results):
       return (None, None)
 
@@ -208,11 +253,20 @@ class SurfaceStatsCollector(object):
     nanoseconds_per_second = 1e9
     refresh_period = long(results[0]) / nanoseconds_per_second
 
+    # If a fence associated with a frame is still pending when we query the
+    # latency data, SurfaceFlinger gives the frame a timestamp of INT64_MAX.
+    # Since we only care about completed frames, we will ignore any timestamps
+    # with this value.
+    pending_fence_timestamp = (1 << 63) - 1
+
     for line in results[1:]:
       fields = line.split()
       if len(fields) != 3:
         continue
-      timestamp = long(fields[1]) / nanoseconds_per_second
+      timestamp = long(fields[1])
+      if timestamp == pending_fence_timestamp:
+        continue
+      timestamp /= nanoseconds_per_second
       timestamps.append(timestamp)
 
     return (refresh_period, timestamps)

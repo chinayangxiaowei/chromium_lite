@@ -13,6 +13,9 @@
 
   'target_defaults': {
     'sources': [
+      # TODO(yoz): Create an extension_constants target for these.
+      '../extensions/common/constants.cc',
+      '../extensions/common/constants.h',
       'common/chrome_constants.cc',
       'common/chrome_constants.h',
       'common/chrome_paths.cc',
@@ -32,6 +35,8 @@
       'common/pref_font_webkit_names.h',
       'common/pref_names.cc',
       'common/pref_names.h',
+      'common/widevine_cdm_constants.cc',
+      'common/widevine_cdm_constants.h',
     ],
     'actions': [
       {
@@ -65,6 +70,7 @@
       ],
       'dependencies': [
         '../base/base.gyp:base',
+        '../components/nacl_common.gyp:nacl_switches',
         '../third_party/widevine/cdm/widevine_cdm.gyp:widevine_cdm_version_h',
       ],
       'target_conditions': [
@@ -94,6 +100,7 @@
           ],
           'dependencies': [
             '../base/base.gyp:base_nacl_win64',
+            '../components/nacl_common.gyp:nacl_switches_win64',
             '../third_party/widevine/cdm/widevine_cdm.gyp:widevine_cdm_version_h',
           ],
           'defines': [

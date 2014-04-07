@@ -10,12 +10,11 @@
 #include "base/logging.h"
 #include "base/mac/bundle_locations.h"
 #include "base/mac/mac_util.h"
-#include "base/sys_string_conversions.h"
+#include "base/strings/sys_string_conversions.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #import "chrome/browser/ui/cocoa/bookmarks/bookmark_all_tabs_controller.h"
-#import "chrome/browser/ui/cocoa/bookmarks/bookmark_cell_single_line.h"
 #import "chrome/browser/ui/cocoa/bookmarks/bookmark_editor_controller.h"
 #import "chrome/browser/ui/cocoa/bookmarks/bookmark_name_folder_controller.h"
 #import "chrome/browser/ui/cocoa/bookmarks/bookmark_tree_browser_cell.h"
@@ -147,6 +146,10 @@ class BookmarkEditorBaseControllerBridge : public BookmarkModelObserver {
     [controller_ nodeRemoved:node fromParent:parent];
     if (node->is_folder())
       [controller_ modelChangedPreserveSelection:NO];
+  }
+
+  virtual void BookmarkAllNodesRemoved(BookmarkModel* model) OVERRIDE {
+    [controller_ modelChangedPreserveSelection:NO];
   }
 
   virtual void BookmarkNodeChanged(BookmarkModel* model,

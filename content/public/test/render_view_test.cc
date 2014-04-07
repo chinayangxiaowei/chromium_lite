@@ -5,26 +5,27 @@
 #include "content/public/test/render_view_test.h"
 
 #include "base/run_loop.h"
+#include "content/common/dom_storage/dom_storage_types.h"
+#include "content/common/input_messages.h"
 #include "content/common/view_messages.h"
 #include "content/public/browser/native_web_keyboard_event.h"
 #include "content/public/common/renderer_preferences.h"
+#include "content/public/renderer/history_item_serialization.h"
 #include "content/renderer/render_thread_impl.h"
 #include "content/renderer/render_view_impl.h"
 #include "content/renderer/renderer_main_platform_delegate.h"
 #include "content/renderer/renderer_webkitplatformsupport_impl.h"
 #include "content/test/mock_render_process.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebURLRequest.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebFrame.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebHistoryItem.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebInputEvent.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebKit.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebScreenInfo.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebScriptController.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebScriptSource.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebView.h"
+#include "third_party/WebKit/public/platform/WebURLRequest.h"
+#include "third_party/WebKit/public/web/WebFrame.h"
+#include "third_party/WebKit/public/web/WebHistoryItem.h"
+#include "third_party/WebKit/public/web/WebInputEvent.h"
+#include "third_party/WebKit/public/web/WebKit.h"
+#include "third_party/WebKit/public/web/WebScreenInfo.h"
+#include "third_party/WebKit/public/web/WebScriptController.h"
+#include "third_party/WebKit/public/web/WebScriptSource.h"
+#include "third_party/WebKit/public/web/WebView.h"
 #include "ui/base/resource/resource_bundle.h"
-#include "webkit/dom_storage/dom_storage_types.h"
-#include "webkit/glue/glue_serialize.h"
 #include "webkit/glue/webkit_glue.h"
 
 using WebKit::WebFrame;
@@ -38,7 +39,8 @@ using WebKit::WebURLRequest;
 namespace {
 const int32 kOpenerId = -2;
 const int32 kRouteId = 5;
-const int32 kNewWindowRouteId = 6;
+const int32 kMainFrameRouteId = 6;
+const int32 kNewWindowRouteId = 7;
 const int32 kSurfaceId = 42;
 
 }  // namespace
@@ -76,7 +78,7 @@ RenderViewTest::~RenderViewTest() {
 }
 
 void RenderViewTest::ProcessPendingMessages() {
-  msg_loop_.PostTask(FROM_HERE, MessageLoop::QuitClosure());
+  msg_loop_.PostTask(FROM_HERE, base::MessageLoop::QuitClosure());
   msg_loop_.Run();
 }
 
@@ -126,12 +128,14 @@ void RenderViewTest::GoForward(const WebKit::WebHistoryItem& item) {
 void RenderViewTest::SetUp() {
   // Subclasses can set the ContentClient's renderer before calling
   // RenderViewTest::SetUp().
-  if (!GetContentClient()->renderer())
-    GetContentClient()->set_renderer_for_testing(&content_renderer_client_);
+  ContentRendererClient* old_client =
+      SetRendererClientForTesting(&content_renderer_client_);
+  if (old_client)
+    SetRendererClientForTesting(old_client);
 
   // Subclasses can set render_thread_ with their own implementation before
   // calling RenderViewTest::SetUp().
-  if (!render_thread_.get())
+  if (!render_thread_)
     render_thread_.reset(new MockRenderThread());
   render_thread_->set_routing_id(kRouteId);
   render_thread_->set_surface_id(kSurfaceId);
@@ -164,11 +168,12 @@ void RenderViewTest::SetUp() {
   RenderViewImpl* view = RenderViewImpl::Create(
       kOpenerId,
       RendererPreferences(),
-      webkit_glue::WebPreferences(),
+      WebPreferences(),
       new SharedRenderViewCounter(0),
       kRouteId,
+      kMainFrameRouteId,
       kSurfaceId,
-      dom_storage::kInvalidSessionStorageNamespaceId,
+      kInvalidSessionStorageNamespaceId,
       string16(),
       false,
       false,
@@ -213,13 +218,15 @@ void RenderViewTest::SendNativeKeyEvent(
 void RenderViewTest::SendWebKeyboardEvent(
     const WebKit::WebKeyboardEvent& key_event) {
   RenderViewImpl* impl = static_cast<RenderViewImpl*>(view_);
-  impl->OnMessageReceived(ViewMsg_HandleInputEvent(0, &key_event, false));
+  impl->OnMessageReceived(
+      InputMsg_HandleInputEvent(0, &key_event, ui::LatencyInfo(), false));
 }
 
 void RenderViewTest::SendWebMouseEvent(
     const WebKit::WebMouseEvent& mouse_event) {
   RenderViewImpl* impl = static_cast<RenderViewImpl*>(view_);
-  impl->OnMessageReceived(ViewMsg_HandleInputEvent(0, &mouse_event, false));
+  impl->OnMessageReceived(
+      InputMsg_HandleInputEvent(0, &mouse_event, ui::LatencyInfo(), false));
 }
 
 const char* const kGetCoordinatesScript =
@@ -278,7 +285,7 @@ bool RenderViewTest::SimulateElementClick(const std::string& element_id) {
   mouse_event.y = bounds.CenterPoint().y();
   mouse_event.clickCount = 1;
   scoped_ptr<IPC::Message> input_message(
-      new ViewMsg_HandleInputEvent(0, &mouse_event, false));
+      new InputMsg_HandleInputEvent(0, &mouse_event, ui::LatencyInfo(), false));
   RenderViewImpl* impl = static_cast<RenderViewImpl*>(view_);
   impl->OnMessageReceived(*input_message);
   return true;
@@ -312,8 +319,14 @@ uint32 RenderViewTest::GetNavigationIPCType() {
 void RenderViewTest::Resize(gfx::Size new_size,
                             gfx::Rect resizer_rect,
                             bool is_fullscreen) {
-  scoped_ptr<IPC::Message> resize_message(new ViewMsg_Resize(
-      0, new_size, new_size, 0.f, resizer_rect, is_fullscreen));
+  ViewMsg_Resize_Params params;
+  params.screen_info = WebKit::WebScreenInfo();
+  params.new_size = new_size;
+  params.physical_backing_size = new_size;
+  params.overdraw_bottom_height = 0.f;
+  params.resizer_rect = resizer_rect;
+  params.is_fullscreen = is_fullscreen;
+  scoped_ptr<IPC::Message> resize_message(new ViewMsg_Resize(0, params));
   OnMessageReceived(*resize_message);
 }
 
@@ -353,7 +366,7 @@ void RenderViewTest::GoToOffset(int offset,
   navigate_params.current_history_list_offset = impl->history_list_offset();
   navigate_params.pending_history_list_offset = pending_offset;
   navigate_params.page_id = impl->GetPageId() + offset;
-  navigate_params.state = webkit_glue::HistoryItemToString(history_item);
+  navigate_params.page_state = HistoryItemToPageState(history_item);
   navigate_params.request_time = base::Time::Now();
 
   ViewMsg_Navigate navigate_message(impl->GetRoutingID(), navigate_params);

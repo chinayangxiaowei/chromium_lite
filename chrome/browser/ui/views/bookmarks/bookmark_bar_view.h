@@ -67,13 +67,15 @@ class BookmarkBarView : public DetachableToolbarView,
   // The internal view class name.
   static const char kViewClassName[];
 
-  // Constants used in Browser View, as well as here.
+  // Constant used in Browser View, as well as here.
   // How inset the bookmarks bar is when displayed on the new tab page.
   static const int kNewtabHorizontalPadding;
-  static const int kNewtabVerticalPadding;
 
   // Maximum size of buttons on the bookmark bar.
   static const int kMaxButtonWidth;
+
+  // Number of pixels the attached bookmark bar overlaps with the toolbar.
+  static const int kToolbarAttachedBookmarkBarOverlap;
 
   // |browser_view| can be NULL during tests.
   BookmarkBarView(Browser* browser, BrowserView* browser_view);
@@ -98,9 +100,8 @@ class BookmarkBarView : public DetachableToolbarView,
   void SetBookmarkBarState(BookmarkBar::State state,
                            BookmarkBar::AnimateChangeType animate_type);
 
-  // How much we want the bookmark bar to overlap the toolbar.  If |return_max|
-  // is true, we return the maximum overlap rather than the current overlap.
-  int GetToolbarOverlap(bool return_max) const;
+  // Returns the toolbar overlap when fully detached.
+  int GetFullyDetachedToolbarOverlap() const;
 
   // Whether or not we are animating.
   bool is_animating();
@@ -164,11 +165,10 @@ class BookmarkBarView : public DetachableToolbarView,
   // View methods:
   virtual gfx::Size GetPreferredSize() OVERRIDE;
   virtual gfx::Size GetMinimumSize() OVERRIDE;
+  virtual bool HitTestRect(const gfx::Rect& rect) const OVERRIDE;
   virtual void Layout() OVERRIDE;
-  virtual void ViewHierarchyChanged(bool
-                                    is_add,
-                                    View* parent,
-                                    View* child) OVERRIDE;
+  virtual void ViewHierarchyChanged(
+      const ViewHierarchyChangedDetails& details) OVERRIDE;
   virtual void PaintChildren(gfx::Canvas* canvas) OVERRIDE;
   virtual bool GetDropFormats(
       int* formats,
@@ -179,10 +179,8 @@ class BookmarkBarView : public DetachableToolbarView,
   virtual int OnDragUpdated(const ui::DropTargetEvent& event) OVERRIDE;
   virtual void OnDragExited() OVERRIDE;
   virtual int OnPerformDrop(const ui::DropTargetEvent& event) OVERRIDE;
-  virtual void ShowContextMenu(const gfx::Point& p,
-                               bool is_mouse_gesture) OVERRIDE;
   virtual void OnThemeChanged() OVERRIDE;
-  virtual std::string GetClassName() const OVERRIDE;
+  virtual const char* GetClassName() const OVERRIDE;
 
   // AccessiblePaneView:
   virtual void GetAccessibleState(ui::AccessibleViewState* state) OVERRIDE;
@@ -217,6 +215,7 @@ class BookmarkBarView : public DetachableToolbarView,
                                    const BookmarkNode* parent,
                                    int old_index,
                                    const BookmarkNode* node) OVERRIDE;
+  virtual void BookmarkAllNodesRemoved(BookmarkModel* model) OVERRIDE;
   virtual void BookmarkNodeChanged(BookmarkModel* model,
                                    const BookmarkNode* node) OVERRIDE;
   virtual void BookmarkNodeChildrenReordered(BookmarkModel* model,
@@ -244,7 +243,8 @@ class BookmarkBarView : public DetachableToolbarView,
 
   // views::ContextMenuController:
   virtual void ShowContextMenuForView(views::View* source,
-                                      const gfx::Point& point) OVERRIDE;
+                                      const gfx::Point& point,
+                                      ui::MenuSourceType source_type) OVERRIDE;
 
  private:
   class ButtonSeparatorView;
@@ -368,11 +368,8 @@ class BookmarkBarView : public DetachableToolbarView,
   // desired bounds. If |compute_bounds_only| = FALSE, the bounds are set.
   gfx::Size LayoutItems(bool compute_bounds_only);
 
-  // Returns true if we should show the apps shortcut.
-  bool ShouldShowAppsShortcut() const;
-
   // Updates the visibility of the apps shortcut based on the pref value.
-  void OnAppsPageShortcutVisibilityChanged();
+  void OnAppsPageShortcutVisibilityPrefChanged();
 
   // Needed to react to kShowAppsShortcutInBookmarkBar changes.
   PrefChangeRegistrar profile_pref_registrar_;

@@ -4,9 +4,9 @@
 
 #include "chrome/browser/printing/print_job_manager.h"
 
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/printing/print_job.h"
 #include "chrome/browser/printing/printer_query.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "content/public/browser/notification_service.h"
 #include "printing/printed_document.h"
 #include "printing/printed_page.h"
@@ -60,7 +60,7 @@ void PrintJobManager::PopPrinterQuery(int document_cookie,
   for (PrinterQueries::iterator itr = queued_queries_.begin();
        itr != queued_queries_.end();
        ++itr) {
-    PrinterQuery* current_query = *itr;
+    PrinterQuery* current_query = itr->get();
     if (current_query->cookie() == document_cookie &&
         !current_query->is_callback_pending()) {
       *job = current_query;

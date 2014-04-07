@@ -14,9 +14,13 @@
 namespace remoting {
 namespace protocol {
 
-class ClientResolution;
-class VideoControl;
 class AudioControl;
+class Capabilities;
+class ClientResolution;
+class ExtensionMessage;
+class PairingResponse;
+class PairingRequest;
+class VideoControl;
 
 class HostStub {
  public:
@@ -33,6 +37,15 @@ class HostStub {
   // Configures audio properties. Currently only pausing & resuming the audio
   // channel is supported.
   virtual void ControlAudio(const AudioControl& audio_control) = 0;
+
+  // Passes the set of capabilities supported by the client to the host.
+  virtual void SetCapabilities(const Capabilities& capabilities) = 0;
+
+  // Requests pairing between the host and client for PIN-less authentication.
+  virtual void RequestPairing(const PairingRequest& pairing_request) = 0;
+
+  // Deliver an extension message from the client to the host.
+  virtual void DeliverClientMessage(const ExtensionMessage& message) = 0;
 
  protected:
   virtual ~HostStub() {}

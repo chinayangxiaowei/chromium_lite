@@ -9,8 +9,8 @@
 
 #include "base/command_line.h"
 #include "base/prefs/pref_service.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/extensions/api/bookmark_manager_private/bookmark_manager_private_api.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
@@ -19,11 +19,11 @@
 #include "chrome/browser/prefs/scoped_user_pref_update.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/common/extensions/api/icons/icons_handler.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/extensions/extension_icon_set.h"
 #include "chrome/common/extensions/incognito_handler.h"
+#include "chrome/common/extensions/manifest_handlers/icons_handler.h"
 #include "chrome/common/url_constants.h"
 #include "components/user_prefs/pref_registry_syncable.h"
 #include "content/public/browser/navigation_controller.h"
@@ -45,7 +45,7 @@ using extensions::URLOverrides;
 namespace {
 
 // De-dupes the items in |list|. Assumes the values are strings.
-void CleanUpDuplicates(ListValue* list) {
+void CleanUpDuplicates(base::ListValue* list) {
   std::set<std::string> seen_values;
 
   // Loop backwards as we may be removing items.
@@ -86,8 +86,8 @@ void UnregisterAndReplaceOverrideForWebContents(
 void RunFaviconCallbackAsync(
     const FaviconService::FaviconResultsCallback& callback,
     const gfx::Image& image) {
-  std::vector<history::FaviconBitmapResult>* favicon_bitmap_results =
-      new std::vector<history::FaviconBitmapResult>();
+  std::vector<chrome::FaviconBitmapResult>* favicon_bitmap_results =
+      new std::vector<chrome::FaviconBitmapResult>();
 
   const std::vector<gfx::ImageSkiaRep>& image_reps =
       image.AsImageSkia().image_reps();
@@ -98,12 +98,12 @@ void RunFaviconCallbackAsync(
     if (gfx::PNGCodec::EncodeBGRASkBitmap(image_rep.sk_bitmap(),
                                           false,
                                           &bitmap_data->data())) {
-      history::FaviconBitmapResult bitmap_result;
+      chrome::FaviconBitmapResult bitmap_result;
       bitmap_result.bitmap_data = bitmap_data;
       bitmap_result.pixel_size = gfx::Size(image_rep.pixel_width(),
                                             image_rep.pixel_height());
       // Leave |bitmap_result|'s icon URL as the default of GURL().
-      bitmap_result.icon_type = history::FAVICON;
+      bitmap_result.icon_type = chrome::FAVICON;
 
       favicon_bitmap_results->push_back(bitmap_result);
     } else {
@@ -129,11 +129,8 @@ ExtensionWebUI::ExtensionWebUI(content::WebUI* web_ui, const GURL& url)
   Profile* profile = Profile::FromWebUI(web_ui);
   ExtensionService* service = profile->GetExtensionService();
   const Extension* extension =
-      service->extensions()->GetExtensionOrAppByURL(ExtensionURLInfo(url));
+      service->extensions()->GetExtensionOrAppByURL(url);
   DCHECK(extension);
-  // Only hide the url for internal pages (e.g. chrome-extension or packaged
-  // component apps like bookmark manager.
-  bool should_hide_url = !extension->is_hosted_app();
 
   // The base class defaults to enabling WebUI bindings, but we don't need
   // those (this is also reflected in ChromeWebUIControllerFactory::
@@ -144,20 +141,6 @@ ExtensionWebUI::ExtensionWebUI(content::WebUI* web_ui, const GURL& url)
   const CommandLine& browser_command_line = *CommandLine::ForCurrentProcess();
   if (browser_command_line.HasSwitch(switches::kChromeFrame))
     bindings |= content::BINDINGS_POLICY_EXTERNAL_HOST;
-  // For chrome:// overrides, some of the defaults are a little different.
-  GURL effective_url = web_ui->GetWebContents()->GetURL();
-  if (effective_url.SchemeIs(chrome::kChromeUIScheme)) {
-    if (effective_url.host() == chrome::kChromeUINewTabHost) {
-      web_ui->FocusLocationBarByDefault();
-    } else {
-      // Current behavior of other chrome:// pages is to display the URL.
-      should_hide_url = false;
-    }
-  }
-
-  if (should_hide_url)
-    web_ui->HideURL();
-
   web_ui->SetBindings(bindings);
 
   // Hack: A few things we specialize just for the bookmark manager.
@@ -181,9 +164,11 @@ ExtensionWebUI::bookmark_manager_private_event_router() {
 // chrome:// URL overrides
 
 // static
-void ExtensionWebUI::RegisterUserPrefs(PrefRegistrySyncable* registry) {
-  registry->RegisterDictionaryPref(kExtensionURLOverrides,
-                                   PrefRegistrySyncable::UNSYNCABLE_PREF);
+void ExtensionWebUI::RegisterProfilePrefs(
+    user_prefs::PrefRegistrySyncable* registry) {
+  registry->RegisterDictionaryPref(
+      kExtensionURLOverrides,
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
 }
 
 // static
@@ -193,10 +178,10 @@ bool ExtensionWebUI::HandleChromeURLOverride(
     return false;
 
   Profile* profile = Profile::FromBrowserContext(browser_context);
-  const DictionaryValue* overrides =
+  const base::DictionaryValue* overrides =
       profile->GetPrefs()->GetDictionary(kExtensionURLOverrides);
   std::string page = url->host();
-  const ListValue* url_list = NULL;
+  const base::ListValue* url_list = NULL;
   if (!overrides || !overrides->GetList(page, &url_list))
     return false;
 
@@ -259,7 +244,7 @@ bool ExtensionWebUI::HandleChromeURLOverride(
 bool ExtensionWebUI::HandleChromeURLOverrideReverse(
     GURL* url, content::BrowserContext* browser_context) {
   Profile* profile = Profile::FromBrowserContext(browser_context);
-  const DictionaryValue* overrides =
+  const base::DictionaryValue* overrides =
       profile->GetPrefs()->GetDictionary(kExtensionURLOverrides);
   if (!overrides)
     return false;
@@ -268,12 +253,13 @@ bool ExtensionWebUI::HandleChromeURLOverrideReverse(
   // internal URL
   // chrome-extension://eemcgdkfndhakfknompkggombfjjjeno/main.html#1 to
   // chrome://bookmarks/#1 for display in the omnibox.
-  for (DictionaryValue::Iterator it(*overrides); !it.IsAtEnd(); it.Advance()) {
-    const ListValue* url_list = NULL;
+  for (base::DictionaryValue::Iterator it(*overrides); !it.IsAtEnd();
+       it.Advance()) {
+    const base::ListValue* url_list = NULL;
     if (!it.value().GetAsList(&url_list))
       continue;
 
-    for (ListValue::const_iterator it2 = url_list->begin();
+    for (base::ListValue::const_iterator it2 = url_list->begin();
          it2 != url_list->end(); ++it2) {
       std::string override;
       if (!(*it2)->GetAsString(&override))
@@ -298,22 +284,22 @@ void ExtensionWebUI::RegisterChromeURLOverrides(
 
   PrefService* prefs = profile->GetPrefs();
   DictionaryPrefUpdate update(prefs, kExtensionURLOverrides);
-  DictionaryValue* all_overrides = update.Get();
+  base::DictionaryValue* all_overrides = update.Get();
 
   // For each override provided by the extension, add it to the front of
   // the override list if it's not already in the list.
   URLOverrides::URLOverrideMap::const_iterator iter = overrides.begin();
   for (; iter != overrides.end(); ++iter) {
     const std::string& key = iter->first;
-    ListValue* page_overrides = NULL;
+    base::ListValue* page_overrides = NULL;
     if (!all_overrides->GetList(key, &page_overrides)) {
-      page_overrides = new ListValue();
+      page_overrides = new base::ListValue();
       all_overrides->Set(key, page_overrides);
     } else {
       CleanUpDuplicates(page_overrides);
 
       // Verify that the override isn't already in the list.
-      ListValue::iterator i = page_overrides->begin();
+      base::ListValue::iterator i = page_overrides->begin();
       for (; i != page_overrides->end(); ++i) {
         std::string override_val;
         if (!(*i)->GetAsString(&override_val)) {
@@ -336,7 +322,7 @@ void ExtensionWebUI::RegisterChromeURLOverrides(
 // static
 void ExtensionWebUI::UnregisterAndReplaceOverride(const std::string& page,
                                                   Profile* profile,
-                                                  ListValue* list,
+                                                  base::ListValue* list,
                                                   const Value* override) {
   size_t index = 0;
   bool found = list->Remove(*override, &index);
@@ -357,8 +343,8 @@ void ExtensionWebUI::UnregisterChromeURLOverride(const std::string& page,
     return;
   PrefService* prefs = profile->GetPrefs();
   DictionaryPrefUpdate update(prefs, kExtensionURLOverrides);
-  DictionaryValue* all_overrides = update.Get();
-  ListValue* page_overrides = NULL;
+  base::DictionaryValue* all_overrides = update.Get();
+  base::ListValue* page_overrides = NULL;
   if (!all_overrides->GetList(page, &page_overrides)) {
     // If it's being unregistered, it should already be in the list.
     NOTREACHED();
@@ -375,11 +361,11 @@ void ExtensionWebUI::UnregisterChromeURLOverrides(
     return;
   PrefService* prefs = profile->GetPrefs();
   DictionaryPrefUpdate update(prefs, kExtensionURLOverrides);
-  DictionaryValue* all_overrides = update.Get();
+  base::DictionaryValue* all_overrides = update.Get();
   URLOverrides::URLOverrideMap::const_iterator iter = overrides.begin();
   for (; iter != overrides.end(); ++iter) {
     const std::string& page = iter->first;
-    ListValue* page_overrides = NULL;
+    base::ListValue* page_overrides = NULL;
     if (!all_overrides->GetList(page, &page_overrides)) {
       // If it's being unregistered, it should already be in the list.
       NOTREACHED();

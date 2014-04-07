@@ -8,13 +8,14 @@
 
 #include "base/memory/scoped_ptr.h"
 #include "base/pickle.h"
-#include "base/time.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/common/content_client.h"
-#include "googleurl/src/gurl.h"
+#include "content/public/common/page_state.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/gurl.h"
 
 using std::string;
 
@@ -33,9 +34,9 @@ TEST(AndroidWebViewStateSerializerTest, TestHeaderSerialization) {
 TEST(AndroidWebViewStateSerializerTest, TestNavigationEntrySerialization) {
   // This is required for NavigationEntry::Create.
   content::ContentClient content_client;
-  content::ContentBrowserClient browser_client;
-  content_client.set_browser_for_testing(&browser_client);
   content::SetContentClient(&content_client);
+  content::ContentBrowserClient browser_client;
+  content::SetBrowserClientForTesting(&browser_client);
 
   scoped_ptr<content::NavigationEntry> entry(
       content::NavigationEntry::Create());
@@ -46,7 +47,8 @@ TEST(AndroidWebViewStateSerializerTest, TestNavigationEntrySerialization) {
   referrer.url = GURL("http://referrer_url");
   referrer.policy = WebKit::WebReferrerPolicyOrigin;
   const string16 title(UTF8ToUTF16("title"));
-  const string content_state("completely bogus state");
+  const content::PageState page_state =
+      content::PageState::CreateFromEncodedData("completely bogus state");
   const bool has_post_data = true;
   const GURL original_request_url("http://original_request_url");
   const GURL base_url_for_data_url("http://base_url");
@@ -57,7 +59,7 @@ TEST(AndroidWebViewStateSerializerTest, TestNavigationEntrySerialization) {
   entry->SetVirtualURL(virtual_url);
   entry->SetReferrer(referrer);
   entry->SetTitle(title);
-  entry->SetContentState(content_state);
+  entry->SetPageState(page_state);
   entry->SetHasPostData(has_post_data);
   entry->SetOriginalRequestURL(original_request_url);
   entry->SetBaseURLForDataURL(base_url_for_data_url);
@@ -78,7 +80,7 @@ TEST(AndroidWebViewStateSerializerTest, TestNavigationEntrySerialization) {
   EXPECT_EQ(referrer.url, copy->GetReferrer().url);
   EXPECT_EQ(referrer.policy, copy->GetReferrer().policy);
   EXPECT_EQ(title, copy->GetTitle());
-  EXPECT_EQ(content_state, copy->GetContentState());
+  EXPECT_EQ(page_state, copy->GetPageState());
   EXPECT_EQ(has_post_data, copy->GetHasPostData());
   EXPECT_EQ(original_request_url, copy->GetOriginalRequestURL());
   EXPECT_EQ(base_url_for_data_url, copy->GetBaseURLForDataURL());

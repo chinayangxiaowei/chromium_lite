@@ -10,18 +10,18 @@
 #include "base/callback.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
-#include "base/time.h"
+#include "base/message_loop/message_loop.h"
+#include "base/time/time.h"
 #include "chrome/browser/safe_browsing/client_side_detection_service.h"
 #include "chrome/common/safe_browsing/client_model.pb.h"
 #include "chrome/common/safe_browsing/csd.pb.h"
 #include "content/public/test/test_browser_thread.h"
 #include "crypto/sha2.h"
-#include "googleurl/src/gurl.h"
 #include "net/url_request/test_url_fetcher_factory.h"
 #include "net/url_request/url_request_status.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/gurl.h"
 
 using ::testing::_;
 using ::testing::Invoke;
@@ -54,7 +54,7 @@ class MockClientSideDetectionService : public ClientSideDetectionService {
 };
 
 ACTION(QuitCurrentMessageLoop) {
-  MessageLoop::current()->Quit();
+  base::MessageLoop::current()->Quit();
 }
 
 }  // namespace
@@ -126,12 +126,16 @@ class ClientSideDetectionServiceTest : public testing::Test {
         response_data, success);
   }
 
-  int GetNumReports() {
-    return csd_service_->GetNumReports();
+  int GetNumReports(std::queue<base::Time>* report_times) {
+    return csd_service_->GetNumReports(report_times);
   }
 
   std::queue<base::Time>& GetPhishingReportTimes() {
     return csd_service_->phishing_report_times_;
+  }
+
+  std::queue<base::Time>& GetMalwareReportTimes() {
+    return csd_service_->malware_report_times_;
   }
 
   void SetCache(const GURL& gurl, bool is_phishing, base::Time time) {
@@ -212,7 +216,7 @@ class ClientSideDetectionServiceTest : public testing::Test {
  protected:
   scoped_ptr<ClientSideDetectionService> csd_service_;
   scoped_ptr<net::FakeURLFetcherFactory> factory_;
-  MessageLoop msg_loop_;
+  base::MessageLoop msg_loop_;
 
  private:
   void SendRequestDone(GURL phishing_url, bool is_phishing) {
@@ -252,9 +256,8 @@ TEST_F(ClientSideDetectionServiceTest, FetchModelTest) {
   Mock::VerifyAndClearExpectations(&service);
 
   // Empty model file.
-  SetModelFetchResponse("", true /* success */);
-  EXPECT_CALL(service, EndFetchModel(
-      ClientSideDetectionService::MODEL_EMPTY))
+  SetModelFetchResponse(std::string(), true /* success */);
+  EXPECT_CALL(service, EndFetchModel(ClientSideDetectionService::MODEL_EMPTY))
       .WillOnce(QuitCurrentMessageLoop());
   service.StartFetchModel();
   msg_loop_.Run();  // EndFetchModel will quit the message loop.
@@ -414,6 +417,8 @@ TEST_F(ClientSideDetectionServiceTest, SendClientReportMalwareRequest) {
   csd_service_->SetEnabledAndRefreshState(true);
   GURL url("http://a.com/");
 
+  base::Time before = base::Time::Now();
+
   // Invalid response body from the server.
   SetClientReportMalwareResponse("invalid proto response", true /* success */);
   EXPECT_FALSE(SendClientReportMalwareRequest(url));
@@ -434,6 +439,25 @@ TEST_F(ClientSideDetectionServiceTest, SendClientReportMalwareRequest) {
   response.set_blacklist(false);
   SetClientReportMalwareResponse(response.SerializeAsString(), true);
   EXPECT_FALSE(SendClientReportMalwareRequest(url));
+
+  // Check that we have recorded all 4 requests within the correct time range.
+  base::Time after = base::Time::Now();
+  std::queue<base::Time>& report_times = GetMalwareReportTimes();
+  EXPECT_EQ(4U, report_times.size());
+
+  // Another normal behavior will fail because of the limit is hit
+  response.set_blacklist(true);
+  SetClientReportMalwareResponse(response.SerializeAsString(), true);
+  EXPECT_FALSE(SendClientReportMalwareRequest(url));
+
+  report_times = GetMalwareReportTimes();
+  EXPECT_EQ(4U, report_times.size());
+  while (!report_times.empty()) {
+    base::Time time = report_times.back();
+    report_times.pop();
+    EXPECT_LE(before, time);
+    EXPECT_GE(after, time);
+  }
 }
 
 TEST_F(ClientSideDetectionServiceTest, GetNumReportTest) {
@@ -448,7 +472,7 @@ TEST_F(ClientSideDetectionServiceTest, GetNumReportTest) {
   report_times.push(now);
   report_times.push(now);
 
-  EXPECT_EQ(2, GetNumReports());
+  EXPECT_EQ(2, GetNumReports(&report_times));
 }
 
 TEST_F(ClientSideDetectionServiceTest, CacheTest) {
@@ -576,7 +600,7 @@ TEST_F(ClientSideDetectionServiceTest, IsBadIpAddress) {
   ClientSideDetectionService::SetBadSubnets(
       model, &(csd_service_->bad_subnets_));
   EXPECT_FALSE(csd_service_->IsBadIpAddress("blabla"));
-  EXPECT_FALSE(csd_service_->IsBadIpAddress(""));
+  EXPECT_FALSE(csd_service_->IsBadIpAddress(std::string()));
 
   EXPECT_TRUE(csd_service_->IsBadIpAddress(
       "2620:0:1000:3103:21a:a0ff:fe10:786e"));

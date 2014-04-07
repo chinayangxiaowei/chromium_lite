@@ -35,6 +35,7 @@
                 'symbols/win/<(target_arch)/widevine_cdm_version.h',
             'widevine_cdm_binary_files%': [
               'binaries/win/<(target_arch)/widevinecdm.dll',
+              'binaries/win/<(target_arch)/widevinecdm.dll.lib',
             ],
           }],
         ],
@@ -48,16 +49,16 @@
       'target_name': 'widevinecdmadapter',
       'type': 'none',
       'conditions': [
-        [ 'branding == "Chrome" and OS != "android" and OS != "ios"', {
+        [ 'branding == "Chrome" and enable_pepper_cdms==1', {
           'dependencies': [
             '<(DEPTH)/ppapi/ppapi.gyp:ppapi_cpp',
             'widevine_cdm_version_h',
             'widevine_cdm_binaries',
           ],
           'sources': [
-            '<(DEPTH)/webkit/media/crypto/ppapi/cdm_wrapper.cc',
-            '<(DEPTH)/webkit/media/crypto/ppapi/cdm/content_decryption_module.h',
-            '<(DEPTH)/webkit/media/crypto/ppapi/linked_ptr.h',
+            '<(DEPTH)/media/cdm/ppapi/api/content_decryption_module.h',
+            '<(DEPTH)/media/cdm/ppapi/cdm_wrapper.cc',
+            '<(DEPTH)/media/cdm/ppapi/linked_ptr.h',
           ],
           'conditions': [
             [ 'os_posix == 1 and OS != "mac"', {
@@ -70,12 +71,17 @@
                 '<(PRODUCT_DIR)/libwidevinecdm.so',
               ],
             }],
-            [ 'OS == "win" and 0', {
+            [ 'OS == "win"', {
               'type': 'shared_library',
+              # TODO(jschuh): crbug.com/167187 fix size_t to int truncations.
+              'msvs_disabled_warnings': [ 4267, ],
+              'libraries': [
+                # Copied by widevine_cdm_binaries.
+                '<(PRODUCT_DIR)/widevinecdm.dll.lib',
+              ],
             }],
-            [ 'OS == "mac" and 0', {
+            [ 'OS == "mac"', {
               'type': 'loadable_module',
-              'mac_bundle': 1,
               'product_extension': 'plugin',
               'libraries': [
                 # Copied by widevine_cdm_binaries.
@@ -86,17 +92,10 @@
                   # Not to strip important symbols by -Wl,-dead_strip.
                   '-Wl,-exported_symbol,_PPP_GetInterface',
                   '-Wl,-exported_symbol,_PPP_InitializeModule',
-                  '-Wl,-exported_symbol,_PPP_ShutdownModule'
-                ]},
-              'copies': [
-                {
-                  'destination':
-                      '<(PRODUCT_DIR)/widevinecdmadapter.plugin/Contents/MacOS/',
-                  'files': [
-                    '<(PRODUCT_DIR)/libwidevinecdm.dylib',
-                  ]
-                }
-              ]
+                  '-Wl,-exported_symbol,_PPP_ShutdownModule',
+                ],
+                'DYLIB_INSTALL_NAME_BASE': '@loader_path',
+              },
             }],
           ],
         }],
@@ -113,6 +112,13 @@
     {
       'target_name': 'widevine_cdm_binaries',
       'type': 'none',
+      'conditions': [
+        [ 'OS=="mac"', {
+          'xcode_settings': {
+            'COPY_PHASE_STRIP': 'NO',
+          }
+        }],
+      ],
       'copies': [{
         # TODO(ddorwin): Do we need a sub-directory? We either need a
         # sub-directory or to rename manifest.json before we can copy it.

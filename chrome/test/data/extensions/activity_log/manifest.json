@@ -1,9 +1,13 @@
 {
-  "name": "Activity Log Test Extension",
+  "name": "Prerender Test Extension",
   "version": "0.1",
-  "description": "Testing the Activity Log",
-  "permissions": [ "cookies", "tabs", "webRequest", "webRequestBlocking",
-                   "http://*/*", "https://*/*" ],
-  "options_page": "options.html",
-  "manifest_version": 2
+  "description": "Testing the prerender",
+  "manifest_version": 2,
+  "content_scripts": [
+    {
+      "matches": ["http://www.google.com.bo/*"],
+      "js": ["google_cs.js"],
+      "run_at": "document_start"
+    }
+  ]
 }

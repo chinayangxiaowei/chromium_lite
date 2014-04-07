@@ -15,7 +15,7 @@
 
 #include "base/bind.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "base/tracked_objects.h"
 #include "base/values.h"
 #include "chrome/browser/metrics/tracking_synchronizer.h"
@@ -151,7 +151,7 @@ void ProfilerMessageHandler::OnResetData(const ListValue* list) {
 
 ProfilerUI::ProfilerUI(content::WebUI* web_ui)
     : WebUIController(web_ui),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_ptr_factory_(this)) {
+      weak_ptr_factory_(this) {
   web_ui->AddMessageHandler(new ProfilerMessageHandler());
 
   // Set up the chrome://profiler/ source.

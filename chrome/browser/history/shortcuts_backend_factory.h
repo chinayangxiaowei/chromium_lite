@@ -7,7 +7,7 @@
 
 #include "base/memory/ref_counted.h"
 #include "base/memory/singleton.h"
-#include "chrome/browser/profiles/refcounted_profile_keyed_service_factory.h"
+#include "components/browser_context_keyed_service/refcounted_browser_context_keyed_service_factory.h"
 
 class Profile;
 
@@ -17,7 +17,8 @@ class ShortcutsBackend;
 
 // Singleton that owns all instances of ShortcutsBackend and associates them
 // with Profiles.
-class ShortcutsBackendFactory : public RefcountedProfileKeyedServiceFactory {
+class ShortcutsBackendFactory
+    : public RefcountedBrowserContextKeyedServiceFactory {
  public:
   static scoped_refptr<history::ShortcutsBackend> GetForProfile(
       Profile* profile);
@@ -28,13 +29,13 @@ class ShortcutsBackendFactory : public RefcountedProfileKeyedServiceFactory {
   static ShortcutsBackendFactory* GetInstance();
 
   // Creates and returns a backend for testing purposes.
-  static scoped_refptr<RefcountedProfileKeyedService>
-      BuildProfileForTesting(Profile* profile);
+  static scoped_refptr<RefcountedBrowserContextKeyedService>
+      BuildProfileForTesting(content::BrowserContext* profile);
 
   // Creates and returns a backend but without creating its persistent database
   // for testing purposes.
-  static scoped_refptr<RefcountedProfileKeyedService>
-      BuildProfileNoDatabaseForTesting(Profile* profile);
+  static scoped_refptr<RefcountedBrowserContextKeyedService>
+      BuildProfileNoDatabaseForTesting(content::BrowserContext* profile);
 
  private:
   friend struct DefaultSingletonTraits<ShortcutsBackendFactory>;
@@ -42,9 +43,9 @@ class ShortcutsBackendFactory : public RefcountedProfileKeyedServiceFactory {
   ShortcutsBackendFactory();
   virtual ~ShortcutsBackendFactory();
 
-  // ProfileKeyedServiceFactory:
-  virtual scoped_refptr<RefcountedProfileKeyedService> BuildServiceInstanceFor(
-      Profile* profile) const OVERRIDE;
+  // BrowserContextKeyedServiceFactory:
+  virtual scoped_refptr<RefcountedBrowserContextKeyedService>
+      BuildServiceInstanceFor(content::BrowserContext* profile) const OVERRIDE;
   virtual bool ServiceIsNULLWhileTesting() const OVERRIDE;
 };
 

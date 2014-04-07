@@ -9,14 +9,14 @@
 #include "base/base64.h"
 #include "base/json/json_string_value_serializer.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/tracked_objects.h"
 #include "sync/internal_api/public/base/model_type_test_util.h"
 #include "sync/internal_api/public/read_node.h"
 #include "sync/internal_api/public/read_transaction.h"
+#include "sync/internal_api/public/test/test_user_share.h"
 #include "sync/internal_api/public/write_node.h"
 #include "sync/internal_api/public/write_transaction.h"
-#include "sync/internal_api/public/test/test_user_share.h"
 #include "sync/protocol/nigori_specifics.pb.h"
 #include "sync/protocol/sync.pb.h"
 #include "sync/syncable/entry.h"
@@ -91,7 +91,8 @@ class SyncEncryptionHandlerImplTest : public ::testing::Test {
     encryption_handler_.reset(
         new SyncEncryptionHandlerImpl(user_share(),
                                       &encryptor_,
-                                      "", ""  /* bootstrap tokens */));
+                                      std::string(),
+                                      std::string() /* bootstrap tokens */));
     encryption_handler_->AddObserver(&observer_);
   }
 
@@ -336,7 +337,7 @@ class SyncEncryptionHandlerImplTest : public ::testing::Test {
   scoped_ptr<SyncEncryptionHandlerImpl> encryption_handler_;
   StrictMock<SyncEncryptionHandlerObserverMock> observer_;
   TestIdFactory ids_;
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
 };
 
 // Verify that the encrypted types are being written to and read from the
@@ -347,7 +348,8 @@ TEST_F(SyncEncryptionHandlerImplTest, NigoriEncryptionTypes) {
   StrictMock<SyncEncryptionHandlerObserverMock> observer2;
   SyncEncryptionHandlerImpl handler2(user_share(),
                                      &encryptor_,
-                                     "", ""  /* bootstrap tokens */);
+                                     std::string(),
+                                     std::string() /* bootstrap tokens */);
   handler2.AddObserver(&observer2);
 
   // Just set the sensitive types (shouldn't trigger any notifications).
@@ -611,9 +613,8 @@ TEST_F(SyncEncryptionHandlerImplTest, SetKeystoreMigratesAndUpdatesBootstrap) {
     WriteTransaction trans(FROM_HERE, user_share());
     EXPECT_FALSE(GetCryptographer()->is_initialized());
     EXPECT_TRUE(encryption_handler()->NeedKeystoreKey(trans.GetWrappedTrans()));
-    EXPECT_FALSE(
-        encryption_handler()->SetKeystoreKeys(BuildEncryptionKeyProto(""),
-                                              trans.GetWrappedTrans()));
+    EXPECT_FALSE(encryption_handler()->SetKeystoreKeys(
+        BuildEncryptionKeyProto(std::string()), trans.GetWrappedTrans()));
     EXPECT_TRUE(encryption_handler()->NeedKeystoreKey(trans.GetWrappedTrans()));
   }
   Mock::VerifyAndClearExpectations(observer());
@@ -679,7 +680,7 @@ TEST_F(SyncEncryptionHandlerImplTest, SetKeystoreMigratesAndUpdatesBootstrap) {
   // token.
   SyncEncryptionHandlerImpl handler2(user_share(),
                                      &encryptor_,
-                                     "",  // Cryptographer bootstrap.
+                                     std::string(),  // Cryptographer bootstrap.
                                      keystore_bootstrap);
 
   {

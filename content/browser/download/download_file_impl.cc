@@ -8,8 +8,9 @@
 
 #include "base/bind.h"
 #include "base/file_util.h"
-#include "base/message_loop_proxy.h"
-#include "base/time.h"
+#include "base/message_loop/message_loop_proxy.h"
+#include "base/strings/stringprintf.h"
+#include "base/time/time.h"
 #include "content/browser/byte_stream.h"
 #include "content/browser/download/download_create_info.h"
 #include "content/browser/download/download_interrupt_reasons_impl.h"
@@ -50,7 +51,7 @@ DownloadFileImpl::DownloadFileImpl(
           bytes_seen_(0),
           bound_net_log_(bound_net_log),
           observer_(observer),
-          weak_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)),
+          weak_factory_(this),
           power_save_blocker_(power_save_blocker.Pass()) {
 }
 
@@ -98,6 +99,7 @@ DownloadInterruptReason DownloadFileImpl::AppendDataToFile(
                          base::TimeDelta::FromMilliseconds(kUpdatePeriodMs),
                          this, &DownloadFileImpl::SendUpdate);
   }
+  rate_estimator_.Increment(data_len);
   return file_.AppendDataToFile(data, data_len);
 }
 
@@ -108,8 +110,8 @@ void DownloadFileImpl::RenameAndUniquify(
 
   base::FilePath new_path(full_path);
 
-  int uniquifier =
-      file_util::GetUniquePathNumber(new_path, FILE_PATH_LITERAL(""));
+  int uniquifier = file_util::GetUniquePathNumber(
+      new_path, base::FilePath::StringType());
   if (uniquifier > 0) {
     new_path = new_path.InsertBeforeExtensionASCII(
         base::StringPrintf(" (%d)", uniquifier));
@@ -186,12 +188,8 @@ bool DownloadFileImpl::InProgress() const {
   return file_.in_progress();
 }
 
-int64 DownloadFileImpl::BytesSoFar() const {
-  return file_.bytes_so_far();
-}
-
 int64 DownloadFileImpl::CurrentSpeed() const {
-  return file_.CurrentSpeed();
+  return rate_estimator_.GetCountPerSecond();
 }
 
 bool DownloadFileImpl::GetHash(std::string* hash) {
@@ -200,6 +198,10 @@ bool DownloadFileImpl::GetHash(std::string* hash) {
 
 std::string DownloadFileImpl::GetHashState() {
   return file_.GetHashState();
+}
+
+void DownloadFileImpl::SetClientGuid(const std::string& guid) {
+  file_.SetClientGuid(guid);
 }
 
 void DownloadFileImpl::StreamActive() {
@@ -234,7 +236,8 @@ void DownloadFileImpl::StreamActive() {
         break;
       case ByteStreamReader::STREAM_COMPLETE:
         {
-          reason = stream_reader_->GetStatus();
+          reason = static_cast<DownloadInterruptReason>(
+              stream_reader_->GetStatus());
           SendUpdate();
           base::TimeTicks close_start(base::TimeTicks::Now());
           file_.Finish();
@@ -306,7 +309,8 @@ void DownloadFileImpl::SendUpdate() {
   BrowserThread::PostTask(
       BrowserThread::UI, FROM_HERE,
       base::Bind(&DownloadDestinationObserver::DestinationUpdate,
-                 observer_, BytesSoFar(), CurrentSpeed(), GetHashState()));
+                 observer_, file_.bytes_so_far(), CurrentSpeed(),
+                 GetHashState()));
 }
 
 // static

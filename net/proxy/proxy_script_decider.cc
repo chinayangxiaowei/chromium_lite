@@ -9,8 +9,8 @@
 #include "base/compiler_specific.h"
 #include "base/format_macros.h"
 #include "base/logging.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "net/base/net_errors.h"
 #include "net/proxy/dhcp_proxy_script_fetcher.h"
@@ -21,14 +21,14 @@ namespace net {
 
 namespace {
 
-bool LooksLikePacScript(const string16& script) {
+bool LooksLikePacScript(const base::string16& script) {
   // Note: this is only an approximation! It may not always work correctly,
   // however it is very likely that legitimate scripts have this exact string,
   // since they must minimally define a function of this name. Conversely, a
   // file not containing the string is not likely to be a PAC script.
   //
   // An exact test would have to load the script in a javascript evaluator.
-  return script.find(ASCIIToUTF16("FindProxyForURL")) != string16::npos;
+  return script.find(ASCIIToUTF16("FindProxyForURL")) != base::string16::npos;
 }
 
 }
@@ -47,10 +47,10 @@ bool LooksLikePacScript(const string16& script) {
 // http://code.google.com/p/chromium/issues/detail?id=18575#c20
 static const char kWpadUrl[] = "http://wpad/wpad.dat";
 
-Value* ProxyScriptDecider::PacSource::NetLogCallback(
+base::Value* ProxyScriptDecider::PacSource::NetLogCallback(
     const GURL* effective_pac_url,
     NetLog::LogLevel /* log_level */) const {
-  DictionaryValue* dict = new DictionaryValue();
+  base::DictionaryValue* dict = new base::DictionaryValue();
   std::string source;
   switch (type) {
     case PacSource::WPAD_DHCP:

@@ -68,11 +68,14 @@ class FaviconSource : public content::URLDataSource {
   // |type| is the type of icon this FaviconSource will provide.
   FaviconSource(Profile* profile, IconType type);
 
+  virtual ~FaviconSource();
+
   // content::URLDataSource implementation.
-  virtual std::string GetSource() OVERRIDE;
+  virtual std::string GetSource() const OVERRIDE;
   virtual void StartDataRequest(
       const std::string& path,
-      bool is_incognito,
+      int render_process_id,
+      int render_view_id,
       const content::URLDataSource::GotDataCallback& callback) OVERRIDE;
   virtual std::string GetMimeType(const std::string&) const OVERRIDE;
   virtual bool ShouldReplaceExistingSource() const OVERRIDE;
@@ -83,18 +86,16 @@ class FaviconSource : public content::URLDataSource {
   struct IconRequest {
     IconRequest();
     IconRequest(const content::URLDataSource::GotDataCallback& cb,
-                const std::string& path,
+                const GURL& path,
                 int size,
                 ui::ScaleFactor scale);
     ~IconRequest();
 
     content::URLDataSource::GotDataCallback callback;
-    std::string request_path;
+    GURL request_path;
     int size_in_dip;
     ui::ScaleFactor scale_factor;
   };
-
-  virtual ~FaviconSource();
 
   // Called when the favicon data is missing to perform additional checks to
   // locate the resource.
@@ -105,6 +106,9 @@ class FaviconSource : public content::URLDataSource {
   Profile* profile_;
 
  private:
+  FRIEND_TEST_ALL_PREFIXES(FaviconSourceTest, InstantParsing);
+  FRIEND_TEST_ALL_PREFIXES(FaviconSourceTest, Parsing);
+
   // Defines the allowed pixel sizes for requested favicons.
   enum IconSize {
     SIZE_16,
@@ -116,7 +120,7 @@ class FaviconSource : public content::URLDataSource {
   // Called when favicon data is available from the history backend.
   void OnFaviconDataAvailable(
       const IconRequest& request,
-      const history::FaviconBitmapResult& bitmap_result);
+      const chrome::FaviconBitmapResult& bitmap_result);
 
   // Sends the 16x16 DIP 1x default favicon.
   void SendDefaultResponse(
@@ -131,7 +135,7 @@ class FaviconSource : public content::URLDataSource {
   // database doesn't have a favicon for a webpage. Indexed by IconSize values.
   scoped_refptr<base::RefCountedMemory> default_favicons_[NUM_SIZES];
 
-  // The history::IconTypes of icon that this FaviconSource handles.
+  // The chrome::IconTypes of icon that this FaviconSource handles.
   int icon_types_;
 
   DISALLOW_COPY_AND_ASSIGN(FaviconSource);

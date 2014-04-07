@@ -11,7 +11,7 @@
 #include "ui/gfx/rect.h"
 #include "ui/gfx/size.h"
 
-#include "third_party/WebKit/Source/Platform/chromium/public/WebGraphicsContext3D.h"
+#include "third_party/WebKit/public/platform/WebGraphicsContext3D.h"
 
 namespace cc {
 class Layer;
@@ -22,19 +22,11 @@ class JavaBitmap;
 }
 
 namespace content {
+class CompositorClient;
 
 // An interface to the browser-side compositor.
 class CONTENT_EXPORT Compositor {
  public:
-  class Client {
-   public:
-    // Tells the client that it should schedule a composite.
-    virtual void ScheduleComposite() = 0;
-
-    // The compositor has completed swapping a frame.
-    virtual void OnSwapBuffersCompleted() {}
-  };
-
   virtual ~Compositor() {}
 
   // Performs the global initialization needed before any compositor
@@ -55,7 +47,7 @@ class CONTENT_EXPORT Compositor {
   static void InitializeWithFlags(uint32 flags);
 
   // Creates and returns a compositor instance.
-  static Compositor* Create(Client* client);
+  static Compositor* Create(CompositorClient* client);
 
   // Attaches the layer tree.
   virtual void SetRootLayer(scoped_refptr<cc::Layer> root) = 0;
@@ -85,6 +77,9 @@ class CONTENT_EXPORT Compositor {
   // The buffer must be at least window width * height * 4 (RGBA) bytes large.
   // The buffer is not modified if false is returned.
   virtual bool CompositeAndReadback(void *pixels, const gfx::Rect& rect) = 0;
+
+  // Invalidate the whole viewport.
+  virtual void SetNeedsRedraw() = 0;
 
   // Composite immediately. Used in single-threaded mode.
   virtual void Composite() = 0;

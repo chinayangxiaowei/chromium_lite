@@ -4,7 +4,11 @@
 
 #include "cc/layers/delegated_renderer_layer_impl.h"
 
+#include <algorithm>
+#include <utility>
+
 #include "base/bind.h"
+#include "base/containers/hash_tables.h"
 #include "cc/base/math_util.h"
 #include "cc/layers/append_quads_data.h"
 #include "cc/layers/quad_sink.h"
@@ -19,7 +23,9 @@ namespace cc {
 DelegatedRendererLayerImpl::DelegatedRendererLayerImpl(
     LayerTreeImpl* tree_impl, int id)
     : LayerImpl(tree_impl, id),
-      child_id_(0) {
+      have_render_passes_to_push_(false),
+      child_id_(0),
+      own_child_id_(false) {
 }
 
 DelegatedRendererLayerImpl::~DelegatedRendererLayerImpl() {
@@ -51,15 +57,94 @@ static ResourceProvider::ResourceId ResourceRemapHelper(
     return 0;
   }
 
-  DCHECK(it->first == id);
+  DCHECK_EQ(it->first, id);
   ResourceProvider::ResourceId remapped_id = it->second;
   remapped_resources->insert(remapped_id);
   return remapped_id;
 }
 
+void DelegatedRendererLayerImpl::PushPropertiesTo(LayerImpl* layer) {
+  LayerImpl::PushPropertiesTo(layer);
+
+  DelegatedRendererLayerImpl* delegated_layer =
+      static_cast<DelegatedRendererLayerImpl*>(layer);
+
+  // If we have a new child_id to give to the active layer, it should
+  // have already deleted its old child_id.
+  DCHECK(delegated_layer->child_id_ == 0 ||
+         delegated_layer->child_id_ == child_id_);
+  delegated_layer->child_id_ = child_id_;
+  delegated_layer->own_child_id_ = true;
+  own_child_id_ = false;
+
+  delegated_layer->SetDisplaySize(display_size_);
+  if (have_render_passes_to_push_) {
+    // This passes ownership of the render passes to the active tree.
+    delegated_layer->SetRenderPasses(&render_passes_in_draw_order_);
+    DCHECK(render_passes_in_draw_order_.empty());
+    have_render_passes_to_push_ = false;
+  }
+
+  // This is just a copy for testing since we keep the data on the pending layer
+  // for returning resources to the child for now.
+  delegated_layer->resources_ = resources_;
+}
+
 void DelegatedRendererLayerImpl::SetFrameData(
     scoped_ptr<DelegatedFrameData> frame_data,
-    gfx::RectF damage_in_frame,
+    gfx::RectF damage_in_frame) {
+  DCHECK(frame_data);
+
+  // A frame with an empty root render pass is invalid.
+  DCHECK(frame_data->render_pass_list.empty() ||
+         !frame_data->render_pass_list.back()->output_rect.IsEmpty());
+
+  CreateChildIdIfNeeded();
+  DCHECK(child_id_);
+
+  ResourceProvider* resource_provider = layer_tree_impl()->resource_provider();
+    const ResourceProvider::ResourceIdMap& resource_map =
+        resource_provider->GetChildToParentMap(child_id_);
+
+  resource_provider->ReceiveFromChild(child_id_, frame_data->resource_list);
+
+  bool invalid_frame = false;
+  ResourceProvider::ResourceIdSet used_resources;
+  DrawQuad::ResourceIteratorCallback remap_resources_to_parent_callback =
+      base::Bind(&ResourceRemapHelper,
+                 &invalid_frame,
+                 resource_map,
+                 &used_resources);
+  for (size_t i = 0; i < frame_data->render_pass_list.size(); ++i) {
+    RenderPass* pass = frame_data->render_pass_list[i];
+    for (size_t j = 0; j < pass->quad_list.size(); ++j) {
+      DrawQuad* quad = pass->quad_list[j];
+      quad->IterateResources(remap_resources_to_parent_callback);
+    }
+  }
+
+  if (invalid_frame)
+    return;
+
+  // Display size is already set so we can compute what the damage rect
+  // will be in layer space.
+  if (!frame_data->render_pass_list.empty()) {
+    RenderPass* new_root_pass = frame_data->render_pass_list.back();
+    gfx::RectF damage_in_layer = MathUtil::MapClippedRect(
+        DelegatedFrameToLayerSpaceTransform(
+            new_root_pass->output_rect.size()),
+        damage_in_frame);
+    set_update_rect(gfx::UnionRects(update_rect(), damage_in_layer));
+  }
+
+  // Save the remapped quads on the layer. This steals the quads and render
+  // passes from the frame_data.
+  SetRenderPasses(&frame_data->render_pass_list);
+  resources_.swap(used_resources);
+  have_render_passes_to_push_ = true;
+}
+
+void DelegatedRendererLayerImpl::CollectUnusedResources(
     TransferableResourceArray* resources_for_ack) {
   CreateChildIdIfNeeded();
   DCHECK(child_id_);
@@ -68,53 +153,12 @@ void DelegatedRendererLayerImpl::SetFrameData(
     const ResourceProvider::ResourceIdMap& resource_map =
         resource_provider->GetChildToParentMap(child_id_);
 
-  if (frame_data) {
-    // A frame with an empty root render pass is invalid.
-    DCHECK(frame_data->render_pass_list.empty() ||
-           !frame_data->render_pass_list.back()->output_rect.IsEmpty());
-
-    // Display size is already set so we can compute what the damage rect
-    // will be in layer space.
-    if (!frame_data->render_pass_list.empty()) {
-      RenderPass* new_root_pass = frame_data->render_pass_list.back();
-      gfx::RectF damage_in_layer = MathUtil::MapClippedRect(
-          DelegatedFrameToLayerSpaceTransform(
-              new_root_pass->output_rect.size()),
-          damage_in_frame);
-      set_update_rect(gfx::UnionRects(update_rect(), damage_in_layer));
-    }
-
-    resource_provider->ReceiveFromChild(child_id_, frame_data->resource_list);
-
-    bool invalid_frame = false;
-    ResourceProvider::ResourceIdSet used_resources;
-    DrawQuad::ResourceIteratorCallback remap_resources_to_parent_callback =
-        base::Bind(&ResourceRemapHelper,
-                   &invalid_frame,
-                   resource_map,
-                   &used_resources);
-    for (size_t i = 0; i < frame_data->render_pass_list.size(); ++i) {
-      RenderPass* pass = frame_data->render_pass_list[i];
-      for (size_t j = 0; j < pass->quad_list.size(); ++j) {
-        DrawQuad* quad = pass->quad_list[j];
-        quad->IterateResources(remap_resources_to_parent_callback);
-      }
-    }
-
-    if (!invalid_frame) {
-      // Save the remapped quads on the layer. This steals the quads and render
-      // passes from the frame_data.
-      SetRenderPasses(&frame_data->render_pass_list);
-      resources_.swap(used_resources);
-    }
-  }
-
   ResourceProvider::ResourceIdArray unused_resources;
   for (ResourceProvider::ResourceIdMap::const_iterator it =
            resource_map.begin();
        it != resource_map.end();
        ++it) {
-    bool resource_is_in_current_frame = resources_.count(it->second);
+    bool resource_is_in_current_frame = resources_.count(it->second) > 0;
     bool resource_is_in_use = resource_provider->InUseByConsumer(it->second);
     if (!resource_is_in_current_frame && !resource_is_in_use)
       unused_resources.push_back(it->second);
@@ -150,17 +194,21 @@ void DelegatedRendererLayerImpl::SetRenderPasses(
 
   if (!render_passes_in_draw_order_.empty())
     render_passes_in_draw_order_.back()->damage_rect.Union(old_root_damage);
+
+  // Give back an empty array instead of nulls.
+  render_passes_in_draw_order->clear();
 }
 
 void DelegatedRendererLayerImpl::ClearRenderPasses() {
-  // FIXME: Release the resources back to the nested compositor.
+  // TODO(danakj): Release the resources back to the nested compositor.
   render_passes_index_by_id_.clear();
   render_passes_in_draw_order_.clear();
 }
 
 scoped_ptr<LayerImpl> DelegatedRendererLayerImpl::CreateLayerImpl(
     LayerTreeImpl* tree_impl) {
-  return DelegatedRendererLayerImpl::Create(tree_impl, id()).PassAs<LayerImpl>();
+  return DelegatedRendererLayerImpl::Create(
+      tree_impl, id()).PassAs<LayerImpl>();
 }
 
 void DelegatedRendererLayerImpl::DidLoseOutputSurface() {
@@ -210,11 +258,18 @@ void DelegatedRendererLayerImpl::AppendContributingRenderPasses(
         ConvertDelegatedRenderPassId(render_passes_in_draw_order_[i]->id);
 
     // Don't clash with the RenderPass we generate if we own a RenderSurface.
-    DCHECK(output_render_pass_id.index > 0);
+    DCHECK_GT(output_render_pass_id.index, 0);
 
     render_pass_sink->AppendRenderPass(
         render_passes_in_draw_order_[i]->Copy(output_render_pass_id));
   }
+}
+
+bool DelegatedRendererLayerImpl::WillDraw(DrawMode draw_mode,
+                                          ResourceProvider* resource_provider) {
+  if (draw_mode == DRAW_MODE_RESOURCELESS_SOFTWARE)
+    return false;
+  return LayerImpl::WillDraw(draw_mode, resource_provider);
 }
 
 void DelegatedRendererLayerImpl::AppendQuads(
@@ -225,7 +280,7 @@ void DelegatedRendererLayerImpl::AppendQuads(
   if (render_passes_in_draw_order_.empty())
     return;
 
-  RenderPass::Id target_render_pass_id = append_quads_data->renderPassId;
+  RenderPass::Id target_render_pass_id = append_quads_data->render_pass_id;
 
   const RenderPass* root_delegated_render_pass =
       render_passes_in_draw_order_.back();
@@ -308,22 +363,27 @@ void DelegatedRendererLayerImpl::AppendRainbowDebugBorder(
 
     if (!top.IsEmpty()) {
       scoped_ptr<SolidColorDrawQuad> top_quad = SolidColorDrawQuad::Create();
-      top_quad->SetNew(shared_quad_state, top, colors[i % kNumColors]);
+      top_quad->SetNew(shared_quad_state, top, colors[i % kNumColors], false);
       quad_sink->Append(top_quad.PassAs<DrawQuad>(), append_quads_data);
 
       scoped_ptr<SolidColorDrawQuad> bottom_quad = SolidColorDrawQuad::Create();
-      bottom_quad->SetNew(
-          shared_quad_state, bottom, colors[kNumColors - 1 - (i % kNumColors)]);
+      bottom_quad->SetNew(shared_quad_state,
+                          bottom,
+                          colors[kNumColors - 1 - (i % kNumColors)],
+                          false);
       quad_sink->Append(bottom_quad.PassAs<DrawQuad>(), append_quads_data);
     }
     if (!left.IsEmpty()) {
       scoped_ptr<SolidColorDrawQuad> left_quad = SolidColorDrawQuad::Create();
-      left_quad->SetNew(
-          shared_quad_state, left, colors[kNumColors - 1 - (i % kNumColors)]);
+      left_quad->SetNew(shared_quad_state,
+                        left,
+                        colors[kNumColors - 1 - (i % kNumColors)],
+                        false);
       quad_sink->Append(left_quad.PassAs<DrawQuad>(), append_quads_data);
 
       scoped_ptr<SolidColorDrawQuad> right_quad = SolidColorDrawQuad::Create();
-      right_quad->SetNew(shared_quad_state, right, colors[i % kNumColors]);
+      right_quad->SetNew(
+          shared_quad_state, right, colors[i % kNumColors], false);
       quad_sink->Append(right_quad.PassAs<DrawQuad>(), append_quads_data);
     }
   }
@@ -389,7 +449,7 @@ void DelegatedRendererLayerImpl::AppendRenderPassQuads(
       RenderPass::Id output_contributing_render_pass_id =
           ConvertDelegatedRenderPassId(delegated_contributing_render_pass_id);
       DCHECK(output_contributing_render_pass_id !=
-             append_quads_data->renderPassId);
+             append_quads_data->render_pass_id);
 
       output_quad = RenderPassDrawQuad::MaterialCast(delegated_quad)->Copy(
           output_shared_quad_state,
@@ -402,7 +462,7 @@ void DelegatedRendererLayerImpl::AppendRenderPassQuads(
 }
 
 const char* DelegatedRendererLayerImpl::LayerTypeAsString() const {
-  return "DelegatedRendererLayer";
+  return "cc::DelegatedRendererLayerImpl";
 }
 
 void DelegatedRendererLayerImpl::CreateChildIdIfNeeded() {
@@ -411,14 +471,18 @@ void DelegatedRendererLayerImpl::CreateChildIdIfNeeded() {
 
   ResourceProvider* resource_provider = layer_tree_impl()->resource_provider();
   child_id_ = resource_provider->CreateChild();
+  own_child_id_ = true;
 }
 
 void DelegatedRendererLayerImpl::ClearChildId() {
   if (!child_id_)
     return;
 
-  ResourceProvider* resource_provider = layer_tree_impl()->resource_provider();
-  resource_provider->DestroyChild(child_id_);
+  if (own_child_id_) {
+    ResourceProvider* provider = layer_tree_impl()->resource_provider();
+    provider->DestroyChild(child_id_);
+  }
+
   child_id_ = 0;
 }
 

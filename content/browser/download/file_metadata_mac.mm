@@ -12,7 +12,7 @@
 #include "base/mac/mac_logging.h"
 #include "base/mac/mac_util.h"
 #include "base/mac/scoped_cftyperef.h"
-#include "googleurl/src/gurl.h"
+#include "url/gurl.h"
 
 namespace content {
 
@@ -70,7 +70,7 @@ void AddOriginMetadataToFile(const base::FilePath& file, const GURL& source,
   if (!file_path)
     return;
 
-  base::mac::ScopedCFTypeRef<MDItemRef> md_item(
+  base::ScopedCFTypeRef<MDItemRef> md_item(
       MDItemCreate(NULL, base::mac::NSToCFCast(file_path)));
   if (!md_item)
     return;

@@ -5,19 +5,19 @@
 #include "remoting/protocol/jingle_session.h"
 
 #include "base/bind.h"
-#include "base/message_loop.h"
-#include "base/time.h"
+#include "base/message_loop/message_loop.h"
 #include "base/test/test_timeouts.h"
+#include "base/time/time.h"
 #include "net/socket/socket.h"
 #include "net/socket/stream_socket.h"
 #include "remoting/base/constants.h"
+#include "remoting/jingle_glue/fake_signal_strategy.h"
 #include "remoting/protocol/authenticator.h"
 #include "remoting/protocol/channel_authenticator.h"
 #include "remoting/protocol/connection_tester.h"
 #include "remoting/protocol/fake_authenticator.h"
 #include "remoting/protocol/jingle_session_manager.h"
 #include "remoting/protocol/libjingle_transport_factory.h"
-#include "remoting/jingle_glue/fake_signal_strategy.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -49,7 +49,8 @@ const int kMessages = 100;
 const char kChannelName[] = "test_channel";
 
 void QuitCurrentThread() {
-  MessageLoop::current()->PostTask(FROM_HERE, MessageLoop::QuitClosure());
+  base::MessageLoop::current()->PostTask(FROM_HERE,
+                                         base::MessageLoop::QuitClosure());
 }
 
 ACTION(QuitThread) {
@@ -88,7 +89,7 @@ class MockStreamChannelCallback {
 class JingleSessionTest : public testing::Test {
  public:
   JingleSessionTest() {
-    message_loop_.reset(new MessageLoopForIO());
+    message_loop_.reset(new base::MessageLoopForIO());
   }
 
   // Helper method that handles OnIncomingSession().
@@ -256,7 +257,7 @@ class JingleSessionTest : public testing::Test {
         .Times(AtLeast(1));
   }
 
-  scoped_ptr<MessageLoopForIO> message_loop_;
+  scoped_ptr<base::MessageLoopForIO> message_loop_;
 
   scoped_ptr<FakeSignalStrategy> host_signal_strategy_;
   scoped_ptr<FakeSignalStrategy> client_signal_strategy_;
@@ -323,7 +324,7 @@ TEST_F(JingleSessionTest, Connect) {
       initiate_xml->FirstNamed(buzz::QName(kJingleNamespace, "jingle"));
   ASSERT_TRUE(jingle_element);
   ASSERT_EQ(kClientJid,
-            jingle_element->Attr(buzz::QName("", "initiator")));
+            jingle_element->Attr(buzz::QName(std::string(), "initiator")));
 }
 
 // Verify that we can connect two endpoints with multi-step authentication.

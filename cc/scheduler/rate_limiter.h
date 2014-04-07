@@ -7,15 +7,18 @@
 
 #include "base/memory/ref_counted.h"
 
+namespace base { class SingleThreadTaskRunner; }
+
 namespace WebKit { class WebGraphicsContext3D; }
 
 namespace cc {
 
-class Thread;
-
 class RateLimiterClient {
  public:
   virtual void RateLimit() = 0;
+
+ protected:
+  virtual ~RateLimiterClient() {}
 };
 
 // A RateLimiter can be used to make sure that a single context does not
@@ -28,7 +31,7 @@ class RateLimiter : public base::RefCounted<RateLimiter> {
   static scoped_refptr<RateLimiter> Create(
       WebKit::WebGraphicsContext3D* context,
       RateLimiterClient* client,
-      Thread* thread);
+      base::SingleThreadTaskRunner* task_runner);
 
   void Start();
 
@@ -40,7 +43,7 @@ class RateLimiter : public base::RefCounted<RateLimiter> {
 
   RateLimiter(WebKit::WebGraphicsContext3D* context,
               RateLimiterClient* client,
-              Thread* thread);
+              base::SingleThreadTaskRunner* task_runner);
   ~RateLimiter();
 
   void RateLimitContext();
@@ -48,10 +51,11 @@ class RateLimiter : public base::RefCounted<RateLimiter> {
   WebKit::WebGraphicsContext3D* context_;
   bool active_;
   RateLimiterClient* client_;
-  Thread* thread_;
+  base::SingleThreadTaskRunner* task_runner_;
 
   DISALLOW_COPY_AND_ASSIGN(RateLimiter);
 };
 
-}
+}  // namespace cc
+
 #endif  // CC_SCHEDULER_RATE_LIMITER_H_

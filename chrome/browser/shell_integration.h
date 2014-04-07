@@ -10,9 +10,9 @@
 #include "base/basictypes.h"
 #include "base/files/file_path.h"
 #include "base/memory/ref_counted.h"
-#include "base/string16.h"
-#include "googleurl/src/gurl.h"
-#include "ui/gfx/image/image.h"
+#include "base/strings/string16.h"
+#include "ui/gfx/image/image_family.h"
+#include "url/gurl.h"
 
 class CommandLine;
 
@@ -101,8 +101,9 @@ class ShellIntegration {
     string16 title;
     string16 description;
     base::FilePath extension_path;
-    gfx::Image favicon;
+    gfx::ImageFamily favicon;
     base::FilePath profile_path;
+    std::string profile_name;
   };
 
   // Info about which locations to create app shortcuts in.
@@ -111,6 +112,7 @@ class ShellIntegration {
 
     bool on_desktop;
     bool in_applications_menu;
+    string16 applications_menu_subdir;
 
     // For Windows, this refers to quick launch bar prior to Win7. In Win7,
     // this means "pin to taskbar". For Mac/Linux, this could be used for

@@ -8,16 +8,21 @@
 #include "base/basictypes.h"
 #include "base/memory/scoped_ptr.h"
 #include "content/public/browser/browser_main_parts.h"
+#include "content/public/common/main_function_params.h"
 
 namespace base {
 class Thread;
+}
+
+namespace net {
+class NetLog;
 }
 
 namespace content {
 
 class ShellBrowserContext;
 class ShellDevToolsDelegate;
-struct MainFunctionParams;
+class ShellPluginServiceFilter;
 
 class ShellBrowserMainParts : public BrowserMainParts {
  public:
@@ -32,22 +37,30 @@ class ShellBrowserMainParts : public BrowserMainParts {
   virtual bool MainMessageLoopRun(int* result_code) OVERRIDE;
   virtual void PostMainMessageLoopRun() OVERRIDE;
 
-  ShellDevToolsDelegate* devtools_delegate() { return devtools_delegate_; }
+  ShellDevToolsDelegate* devtools_delegate() {
+    return devtools_delegate_.get();
+  }
 
   ShellBrowserContext* browser_context() { return browser_context_.get(); }
   ShellBrowserContext* off_the_record_browser_context() {
     return off_the_record_browser_context_.get();
   }
 
+  net::NetLog* net_log() { return net_log_.get(); }
+
  private:
+  scoped_ptr<net::NetLog> net_log_;
   scoped_ptr<ShellBrowserContext> browser_context_;
   scoped_ptr<ShellBrowserContext> off_the_record_browser_context_;
 
   // For running content_browsertests.
-  const MainFunctionParams& parameters_;
+  const MainFunctionParams parameters_;
   bool run_message_loop_;
 
-  ShellDevToolsDelegate* devtools_delegate_;
+  scoped_ptr<ShellDevToolsDelegate> devtools_delegate_;
+#if defined(ENABLE_PLUGINS)
+  scoped_ptr<ShellPluginServiceFilter> plugin_service_filter_;
+#endif
 
   DISALLOW_COPY_AND_ASSIGN(ShellBrowserMainParts);
 };

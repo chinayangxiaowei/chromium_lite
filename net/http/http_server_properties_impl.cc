@@ -7,7 +7,7 @@
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/stl_util.h"
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "net/http/http_pipelined_host_capability.h"
 
 namespace net {
@@ -18,7 +18,8 @@ namespace net {
 static const int kDefaultNumHostsToRemember = 200;
 
 HttpServerPropertiesImpl::HttpServerPropertiesImpl()
-    : pipeline_capability_map_(
+    : weak_ptr_factory_(this),
+      pipeline_capability_map_(
         new CachedPipelineCapabilityMap(kDefaultNumHostsToRemember)) {
 }
 
@@ -81,7 +82,7 @@ void HttpServerPropertiesImpl::GetSpdyServerList(
        it != spdy_servers_table_.end(); ++it) {
     const std::string spdy_server_host_port = it->first;
     if (it->second)
-      spdy_server_list->Append(new StringValue(spdy_server_host_port));
+      spdy_server_list->Append(new base::StringValue(spdy_server_host_port));
   }
 }
 
@@ -110,6 +111,10 @@ void HttpServerPropertiesImpl::ForceAlternateProtocol(
 void HttpServerPropertiesImpl::DisableForcedAlternateProtocol() {
   delete g_forced_alternate_protocol;
   g_forced_alternate_protocol = NULL;
+}
+
+base::WeakPtr<HttpServerProperties> HttpServerPropertiesImpl::GetWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
 }
 
 void HttpServerPropertiesImpl::Clear() {
@@ -179,7 +184,7 @@ void HttpServerPropertiesImpl::SetAlternateProtocol(
     uint16 alternate_port,
     AlternateProtocol alternate_protocol) {
   if (alternate_protocol == ALTERNATE_PROTOCOL_BROKEN) {
-    LOG(DFATAL) << "Call MarkBrokenAlternateProtocolFor() instead.";
+    LOG(DFATAL) << "Call SetBrokenAlternateProtocol() instead.";
     return;
   }
 
@@ -244,7 +249,12 @@ bool HttpServerPropertiesImpl::SetSpdySetting(
   return true;
 }
 
-void HttpServerPropertiesImpl::ClearSpdySettings() {
+void HttpServerPropertiesImpl::ClearSpdySettings(
+    const HostPortPair& host_port_pair) {
+  spdy_settings_map_.erase(host_port_pair);
+}
+
+void HttpServerPropertiesImpl::ClearAllSpdySettings() {
   spdy_settings_map_.clear();
 }
 

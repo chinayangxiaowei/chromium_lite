@@ -9,12 +9,11 @@
 #include "base/memory/scoped_ptr.h"
 #include "content/public/browser/browser_main_parts.h"
 
+namespace base {
 class MessageLoop;
+}
 
 namespace android_webview {
-
-// TODO(joth): Remove this method when when http://crbug.com/161864 is closed.
-bool UseCompositorDirectDraw();
 
 class AwBrowserContext;
 class AwDevToolsDelegate;
@@ -33,7 +32,7 @@ class AwBrowserMainParts : public content::BrowserMainParts {
 
  private:
   // Android specific UI MessageLoop.
-  scoped_ptr<MessageLoop> main_message_loop_;
+  scoped_ptr<base::MessageLoop> main_message_loop_;
 
   AwBrowserContext* browser_context_;  // weak
   AwDevToolsDelegate* devtools_delegate_;

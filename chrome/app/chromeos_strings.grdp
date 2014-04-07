@@ -2,6 +2,8 @@
 <!-- ChromeOS-specific strings (included from generated_resources.grd).
      Everything in this file is wrapped in <if expr="pp_ifdef('chromeos')">. -->
 <grit-part>
+  <message name="IDS_EMPTY_STRING" desc="Empty string, exist only to make code generic. No translation required.">
+  </message>
   <!-- Idle logout dialog for retail mode -->
   <message name="IDS_IDLE_LOGOUT_TITLE" desc="Dialog title for the idle logout dialog. Used in retail mode only.">
     Are you still there?
@@ -18,7 +20,7 @@ Press any key to continue exploring.
     Going.. Going... Gone.
   </message>
 
-  <!-- Imageburn Strings -->
+<!-- Imageburn Strings -->
   <message name="IDS_CHECKING_FOR_UPDATES" desc="Notification for checking for update">
     Checking for updates
   </message>
@@ -138,6 +140,18 @@ Press any key to continue exploring.
   <message name="IDS_ECHO_CONSENT_DISMISS_BUTTON" desc="Dismiss dialog button label for disabled echo dialog.">
     Dismiss
   </message>
+  <message name="IDS_FLAGS_DISABLE_QUICKOFFICE_COMPONENT_APP_NAME" desc="Name for the flag to disable Chrome Office Viewer component extension.">
+    Disable Chrome Office Viewer component extension
+  </message>
+  <message name="IDS_FLAGS_DISABLE_QUICKOFFICE_COMPONENT_APP_DESCRIPTION" desc="Description for the flag to disable Chrome Office Viewer component extension.">
+    Disable Chrome Office Viewer component extension for testing purpose.
+  </message>
+  <message name="IDS_FLAGS_ENABLE_QUICKOFFICE_DESKTOP_VIEWING_NAME" desc="Name for the flag to enable office document viewing.">
+    Enable document viewing.
+  </message>
+  <message name="IDS_FLAGS_ENABLE_QUICKOFFICE_DESKTOP_VIEWING_DESCRIPTION" desc="Description for the flag to enable office document viewing.">
+    Enable document viewing, instead of editing.
+  </message>
   <message name="IDS_OFFERS_CONSENT_INFOBAR_LABEL_LEARN_MORE" desc="Text of the Learn More link in the echo dialog.">
     Learn More
   </message>
@@ -237,6 +251,30 @@ Press any key to continue exploring.
   <message name="IDS_EULA_SCREEN_TITLE" desc="Title of the OOBE EULA screen">
     The small print
   </message>
+  <message name="IDS_AUTOSTART_WARNING_TITLE" desc="Title of the kiosk autostart screen">
+    Auto-start permission requested
+  </message>
+  <message name="IDS_KIOSK_AUTOSTART_SCREEN_WARNING_MSG" desc="Warning text shown on kiosk autolaunch screen above the exclamation icon.">
+    Do you want to automatically start this app when the machine turns on?
+  </message>
+  <message name="IDS_KIOSK_AUTOSTART_CONFIRM" desc="Confirm button text">
+    Confirm
+  </message>
+  <message name="IDS_KIOSK_ENABLE_SCREEN_WARNING" desc="Title of the kiosk enable screen">
+    Enable Kiosk Mode
+  </message>
+  <message name="IDS_KIOSK_ENABLE_SCREEN_WARNING_DETAILS" desc="Warning text shown on kiosk enable screen above the exclamation icon.">
+    Would you like to be able to run kiosk applications on this device?
+  </message>
+  <message name="IDS_KIOSK_ENABLE_SCREEN_SUCCESS" desc="Confirmation text shown on kiosk enable screen after the feature is successfully enabled.">
+    Kiosk applications can now be installed on this device.
+  </message>
+  <message name="IDS_KIOSK_ENABLE_SCREEN_ERROR" desc="Error text shown on kiosk enable screen after we failed enabling this feature.">
+   An error occurred. Kiosk mode will not be available on this device.
+  </message>
+  <message name="IDS_KIOSK_ENABLE_SCREEN_ENABLE_BUTTON" desc="Enable button text">
+    Enable
+  </message>
   <message name="IDS_RESET_SCREEN_TITLE" desc="Title of the reset screen">
     Factory reset
   </message>
@@ -270,9 +308,6 @@ Press any key to continue exploring.
   <message name="IDS_LANGUAGES_MEDIUM_LEN_NAME_CHINESE_TRADITIONAL" desc="Medium length name for the input method for traditional Chinese which is show following the text: Your input method has changed to...">
    Traditional Chinese
   </message>
-  <message name="IDS_LANGUAGES_MEDIUM_LEN_NAME_JAPANESE" desc="Medium length name for the input method for Japanese which is show following the text: Your input method has changed to...">
-    Japanese
-  </message>
   <message name="IDS_LANGUAGES_MEDIUM_LEN_NAME_KOREAN" desc="Medium length name for the input method for Korean which is show following the text: Your input method has changed to...">
     Korean
   </message>
@@ -300,8 +335,11 @@ Press any key to continue exploring.
   <message name="IDS_OOBE_SPOKEN_FEEDBACK_OPTION" desc="Spoken feedback option shown on OOBE screens accessibility menu.">
     Spoken feedback
   </message>
+  <message name="IDS_OOBE_LARGE_CURSOR_OPTION" desc="Large mouse cursor option shown on OOBE screens accessibility menu.">
+    Large mouse cursor
+  </message>
   <message name="IDS_OOBE_HIGH_CONTRAST_MODE_OPTION" desc="High contrast mode option shown on OOBE screens accessibility menu.">
-    High contrast
+    High contrast mode
   </message>
   <message name="IDS_OOBE_SCREEN_MAGNIFIER_OPTION" desc="Screen magnifier option shown on OOBE screens accessibility menu.">
     Screen magnifier
@@ -320,12 +358,6 @@ Press any key to continue exploring.
   </message>
   <message name="IDS_LOGIN_BUTTON">
     Sign in
-  </message>
-  <message name="IDS_ENTER_GUEST_SESSION_BUTTON">
-    Enter
-  </message>
-  <message name="IDS_ENTER_GUEST_SESSION_BUTTON_ACCESSIBLE_NAME">
-    Browse as guest
   </message>
   <message name="IDS_DISABLED_ADD_USER_TOOLTIP" desc="Tooltip over disabled Add user button">
     The owner of this device has disabled new users from being added
@@ -425,82 +457,177 @@ Press any key to continue exploring.
     Browse as Guest
   </message>
   <message name="IDS_CREATE_ACCOUNT_HTML" desc="Text shown on side of Google sign-in UI.">
-    If you don't have a Google Account you can <ph name="LINK_START">$1<ex>&gt;a&lt;</ex></ph>Create a Google Account<ph name="LINK_END">$2<ex>&gt;/a&lt;</ex></ph> now.
+    If you don't have a Google Account you can <ph name="LINK_START">$1<ex>&gt;a&lt;</ex></ph>create a Google Account<ph name="LINK_END">$2<ex>&gt;/a&lt;</ex></ph> now.
   </message>
   <message name="IDS_BROWSE_WITHOUT_SIGNING_IN_HTML" desc="Text shown on side of Google sign-in UI.">
-    You may also skip signing in and <ph name="LINK_START">$1<ex>&gt;a&lt;</ex></ph>browse as guest<ph name="LINK_END">$2<ex>&gt;/a&lt;</ex></ph>.
+    You may also skip signing in and <ph name="LINK_START">$1<ex>&gt;a&lt;</ex></ph>browse as Guest<ph name="LINK_END">$2<ex>&gt;/a&lt;</ex></ph>.
   </message>
-  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_HTML" desc="Text shown on side of Google sign-in UI to create a locally managed user.">
-    <ph name="LINK_START">$1<ex>&gt;a&lt;</ex></ph>Create managed user<ph name="LINK_END">$2<ex>&gt;/a&lt;</ex></ph>
+  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_FEATURE_NAME" desc="Title close to icon shown on side of Google sign-in UI to create a supervised user.">
+    Supervised user
   </message>
-  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATE_ACCOUNT_NAME_TITLE" desc="Text shown as a title for user name field in locally managed user creation dialog.">
-    Create an account name
+    <message name="IDS_CREATE_LOCALLY_MANAGED_USER_HTML" desc="Text with actual link shown on side of Google sign-in UI to create a supervised user.">
+      <ph name="LINK_START">$1<ex>&gt;a&lt;</ex></ph>Create a supervised user<ph name="LINK_END">$2<ex>&gt;/a&lt;</ex></ph> for this device.
+    </message>
+  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_NO_MANAGER_TEXT" desc="Text shown when supervised user can be created, but no users that can be manager exist.">
+    At least one account must exist on this device before creating a supervised user.
   </message>
-  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATE_PASSWORD_TITLE" desc="Text shown as a title for password fields in locally managed user creation dialog.">
-    Create a password for this account
+  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATION_RESTRICTED_TEXT" desc="Text shown when supervised user can be created, but owner of the device restricted managed user creation or whitelist has been enabled for this device.">
+    Creation of supervised users is restricted by the owner of this device.
   </message>
-  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATE_PASSWORD_HINT" desc="Text shown as a hint in the password field in locally managed user creation dialog.">
+  <message name="IDS_CREATE_LOCALLY_MANAGED_INTRO_TEXT_TITLE" desc="Supervised user dialog, intro page, title">
+    What is a supervised user?
+  </message>
+  <message name="IDS_CREATE_LOCALLY_MANAGED_INTRO_ALTERNATE_TEXT" desc="Supervised user dialog, intro page, first paragraph">
+    A supervised user can explore the web with your guidance. As the manager of a supervised user, you can
+    <ph name="BEGIN_BOLD">&lt;strong&gt;</ph>allow or prohibit<ph name="END_BOLD">&lt;/strong&gt;</ph> certain websites,
+    <ph name="BEGIN_BOLD">&lt;strong&gt;</ph>review<ph name="END_BOLD">&lt;/strong&gt;</ph> websites the supervised user has visited, and
+    <ph name="BEGIN_BOLD">&lt;strong&gt;</ph>manage<ph name="END_BOLD">&lt;/strong&gt;</ph> other settings.
+  </message>
+  <message name="IDS_CREATE_LOCALLY_MANAGED_INTRO_TEXT_1" desc="Supervised user dialog, intro page, first paragraph">
+    A supervised user can explore the web with your guidance. As the manager of a supervised user in Chrome, you can:
+  </message>
+  <message name="IDS_CREATE_LOCALLY_MANAGED_INTRO_MANAGER_ITEM_1" desc="Supervised user dialog, intro page, options available to manager">
+    allow or prohibit certain websites,
+  </message>
+  <message name="IDS_CREATE_LOCALLY_MANAGED_INTRO_MANAGER_ITEM_2" desc="Supervised user dialog, intro page, options available to manager">
+    review websites the supervised user has visited, and
+  </message>
+  <message name="IDS_CREATE_LOCALLY_MANAGED_INTRO_MANAGER_ITEM_3" desc="Supervised user dialog, intro page, options available to manager">
+    manage other settings
+  </message>
+  <message name="IDS_CREATE_LOCALLY_MANAGED_INTRO_TEXT_2" desc="Supervised user dialog, intro page, second paragraph">
+    Creating a supervised user does not create a Google Account, and their settings
+    and data will not follow them to other devices with Chrome Sync. A supervised user applies only to this device.
+  </message>
+  <message name="IDS_CREATE_LOCALLY_MANAGED_INTRO_TEXT_3" desc="Supervised user dialog, intro page, third paragraph">
+    After you create a new supervised user, you can manage the settings at any time from any device at <ph name="MANAGEMENT_URL">$1<ex>www.example.com</ex></ph>.
+  </message>
+  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATE_PICK_MANAGER_TITLE" desc="Supervised user dialog, manager selection page, title of the page">
+    Choose the manager for this supervised user
+  </message>
+  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATE_PICK_MANAGER_EXPLANATION" desc="Supervised user dialog, manager selection page, explanation of the page">
+    The manager will be able to configure restrictions and settings for this supervised user at <ph name="MANAGEMENT_URL">$1<ex>www.example.com</ex></ph>.
+  </message>
+  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATE_MANAGER_PASSWORD_HINT" desc="Supervised user dialog, manager selection page, text shown as a hint in the user password field.">
     Enter password
   </message>
-  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATE_PASSWORD_CONFIRM_HINT" desc="Text shown as a hint in the password confirmation field in locally managed user creation dialog.">
+  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATE_ACCOUNT_NAME_TITLE" desc="Supervised user dialog, new user page, title for name of new user">
+    Create a name -
+  </message>
+  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATE_ACCOUNT_NAME_EXPLANATION" desc="Supervised user dialog, new user page, explanation for name of new user">
+    This supervised user will be managed by <ph name="MANAGER_EMAIL">$1<ex>john.doe@example.com</ex></ph>.
+  </message>
+  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATE_PASSWORD_TITLE" desc="Supervised user dialog, new user page, title for password for new user.">
+    Create a password -
+  </message>
+  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATE_PASSWORD_EXPLANATION" desc="Supervised user dialog, new user page, explanation for password for new user.">
+    The supervised user will need to use this password to sign in, so choose a safe password and remember to discuss it with the supervised user.
+  </message>
+  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATE_PASSWORD_HINT" desc="Text shown as a hint in the password field in supervised user creation dialog.">
+    Enter password
+  </message>
+  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATE_PASSWORD_CONFIRM_HINT" desc="Text shown as a hint in the password confirmation field in supervised user creation dialog.">
     Confirm password
   </message>
-  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATE_SELECT_MANAGER_TEXT" desc="Text shown as a title for list of possible managers (existing accounts) for locally managed user.">
-    Choose the manager for this user
-  </message>
-  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATE_MANAGER_PASSWORD_HINT" desc="Text shown as a hint in the user password field when this user is selected as a manager for locally managed user.">
-    Manager's password
-  </message>
-  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATE_CONTINUE_BUTTON_TEXT" desc="Text shown on continue button in locally managed user creation dialog.">
+  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATE_CONTINUE_BUTTON_TEXT" desc="Text shown on continue button in supervised user creation dialog.">
     Continue
   </message>
-  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATE_USERNAME_ALREADY_EXISTS" desc="Error text shown in locally managed user creation dialog when local account with suggested name already exists on machine.">
-    User with name <ph name="USER_DISPLAY_NAME">$1<ex>John</ex></ph> already exists.
+  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATE_START_BUTTON_TEXT" desc="Text shown on start button in supervised user creation dialog.">
+    Create supervised user
   </message>
-  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATE_PASSWORD_MISMATCH_ERROR" desc="Error text shown in locally managed user creation dialog when typed passwords does not match.">
-    Passwords do not match.
+  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATE_NEXT_BUTTON_TEXT" desc="Text shown on next button in supervised user creation dialog.">
+    Next
   </message>
-  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATE_PASSWORD_TOO_SHORT" desc="Error text shown in locally managed user creation dialog when typed password is too short.">
+  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATE_PREVIOUS_BUTTON_TEXT" desc="Text shown on previous button in supervised user creation dialog.">
+    Previous
+  </message>
+  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATED_1_TEXT_1" desc="Supervised user dialog, getting started page 1, paragraph 1">
+    A supervised user named <ph name="USER_DISPLAY_NAME">$1<ex>John</ex></ph> has been created.
+  </message>
+  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATED_1_TEXT_2" desc="Supervised user dialog, getting started page 1, paragraph 2">
+    To set which websites the supervised user can view, you can configure restrictions
+    and settings by visiting <ph name="MANAGEMENT_URL">$1<ex>www.example.com</ex></ph>.
+    If you do not change the default settings, <ph name="USER_DISPLAY_NAME">$2<ex>John</ex></ph>
+    can browse all sites on the web.
+  </message>
+  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATED_1_TEXT_3" desc="Supervised user dialog, getting started page 1, paragraph 3">
+    Please check your email at <ph name="BEGIN_BOLD">&lt;strong&gt;</ph><ph name="MANAGER_EMAIL">$1<ex>john.doe@example.com</ex></ph><ph name="END_BOLD">&lt;/strong&gt;</ph> for further instructions.
+  </message>
+  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATION_GOT_IT_BUTTON_TITLE" desc="Text for button on a screen with successful supervised user creation text">
+    Got it!
+  </message>
+  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATE_HANDLE_ERROR_BUTTON_TEXT" desc="Text for button on an error screen that closes supervised user creation dialog">
+    Okay
+  </message>
+  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATE_USERNAME_ALREADY_EXISTS" desc="Error text shown in supervised user creation dialog when local account with suggested name already exists on a device.">
+    Whoops, this name is already in use!
+  </message>
+  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATE_PASSWORD_MISMATCH_ERROR" desc="Error text shown in supervised user creation dialog when typed passwords does not match.">
+    Whoops, passwords do not match!
+  </message>
+  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATE_PASSWORD_TOO_SHORT" desc="Error text shown in supervised user creation dialog when typed password is too short.">
     Password is too short.
   </message>
   <message name="IDS_CREATE_LOCALLY_MANAGED_USER_MANAGER_PASSWORD_ERROR" desc="Error text shown in locally managed user creation dialog when manager password is incorrect.">
-    Incorrect manager password.
+    Incorrect password.
   </message>
-  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_MANAGER_INCONSISTENT_STATE" desc="Error text shown in locally managed user creation dialog when account is in inconsistent state.">
-    Manager account is in inconsistent state. Please log in to manager account first and then try creating locally managed user again.
+  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_MANAGER_INCONSISTENT_STATE_TITLE" desc="Supervised user dialog, error page, manager account is in inconsistent state, title">
+    Oops, something went wrong
   </message>
-  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATION_SUCCESS_TITLE" desc="Text shown when locally managed user was successfully created">
-    Setup is complete! Now learn what features are available to the manager of this account.
+  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_MANAGER_INCONSISTENT_STATE" desc="Supervised user dialog, error page, manager account is in inconsistent state, text">
+    To recover from this error, you will need to sign into your Google Account
+    from the sign-in screen. You can then sign out of your Google Account and
+    try creating a supervised user again.
   </message>
-  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATION_SUCCESS_IMAGE_TEXT" desc="Text shown when locally managed user was successfully created">
-    Text explaining feature(s).
+  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_MANAGER_INCONSISTENT_STATE_BUTTON" desc="Supervised user dialog, error page, manager account is in inconsistent state, button title">
+    OK, Take me back to sign-in screen
   </message>
-  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATION_SUCCESS_EMAIL_INSTRUCTIONS" desc="Text shown when locally managed user was successfully created">
-    Email instructions to the manager of this account
+  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_TPM_ERROR_TITLE" desc="Supervised user dialog, error page, tpm error during creation, title">
+    Oops, TPM error.
   </message>
-  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATION_SUCCESS_BUTTON_TITLE" desc="Text for button on a screen with successful locally managed user creation text">
-    Got it
+  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_TPM_ERROR" desc="Supervised user dialog, error page, tpm error during creation, text">
+    Something is wrong with device.  To recover from this error you will need to reboot device and try again.
   </message>
-  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATION_ERROR_TITLE" desc="Text shown in a title when locally managed user creation has failed for some reason">
-    Locally managed user creation failed.
+  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_TPM_ERROR_BUTTON" desc="Supervised user dialog, error page, tpm error during creation, button title">
+    OK
   </message>
-  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATION_ERROR_TPM_ERROR" desc="Text shown in a title when locally managed user creation has failed in case of TPM error">
-    TPM error.
+  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_GENERIC_ERROR_TITLE" desc="Supervised user dialog, error page, generic error during creation, title">
+    Oops, something went wrong
   </message>
-  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATION_ERROR_NOT_CONNECTED" desc="Text shown in a title when locally managed user creation has failed in case when device is offline">
-    You need to have internet access to create locally managed user.
+  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_GENERIC_ERROR" desc="Supervised user dialog, error page, generic error during creation, text">
+    Due to an error, a supervised user was not created. Please try again later.
   </message>
-  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATION_ERROR_TIMED_OUT" desc="Text shown in a title when locally managed user creation has failed in case when network timed out">
-    Network timeout. Please check your internet connection and try again.
+  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_GENERIC_ERROR_BUTTON" desc="Supervised user dialog, error page, generic error during creation, button title">
+    OK
   </message>
-  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATION_ERROR_SERVER_ERROR" desc="Text shown in a title when locally managed user creation has failed in case when there was server error on a remote side">
-    Server error. Please try again later.
-  </message>
-  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATION_ERROR_CANCEL_BUTTON_TITLE" desc="Text for button on an error reporting screen for locally managed user creation, that is used to abort whole operation">
+  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATION_ERROR_CANCEL_BUTTON_TITLE" desc="Text for button on an error reporting screen for supervised user creation, that is used to abort whole operation">
     Cancel
   </message>
-  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATION_ERROR_RETRY_BUTTON_TITLE" desc="Text for button on an error reporting screen for locally managed user creation, that is used to retry failed operation">
+  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATION_ERROR_RETRY_BUTTON_TITLE" desc="Text for button on an error reporting screen for supervised user creation, that is used to retry failed operation">
     Retry
+  </message>
+  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATION_AUTH_PROGRESS_MESSAGE" desc="Text shown next to progress indicator upon manager authentication.">
+    Authenticating
+  </message>
+  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATION_CREATION_PROGRESS_MESSAGE" desc="Text shown next to progress indicator upon supervised user creation.">
+    Creating supervised user
+  </message>
+  <message name="IDS_CREATE_LOCALLY_MANAGED_USER_CREATION_CREATION_TIMEOUT_MESSAGE" desc="Text shown at the place of progess indicator if creation takes too long and should be cancelled.">
+    Profile takes too long to create. You may want to cancel process and retry later.
+  </message>
+  <message name="IDS_USER_IS_LOCALLY_MANAGED_BY_NOTICE" desc="Text for notifications showing that this user is locally managed">
+    This user is supervised by <ph name="MANAGER_EMAIL">$1<ex>user@example.com</ex></ph>. Usage and history from this user can be reviewed by the manager on chrome.com.
+  </message>
+  <message name="IDS_SUPERVISED_USER_EXPIRED_TOKEN_WARNING" desc="Warning text that is shown on login screen trying to sign in as a supervised user that has expired token">
+    This supervised user may have been deleted or disabled by the manager. Please contact the manager if you would like to continue signing in as this user.
+  </message>
+  <message name="IDS_LOGIN_POD_USER_REMOVE_WARNING" desc="Text shown as a warning when attempting to remove supervised user.">
+    All files and local data associated with the supervised user will be permanently
+    deleted once this supervised user is removed. Visited websites and settings
+    for this supervised user may still be visible by the manager at <ph name="MANAGEMENT_URL">$1<ex>www.example.com</ex></ph>.
+  </message>
+  <message name="IDS_LOGIN_POD_USER_REMOVE_WARNING_BUTTON" desc="Text shown on a button that confirms removal of supervised user.">
+    Remove this user
   </message>
   <message name="IDS_OFFLINE_LOGIN_HTML" desc="Text which suggests enter as an existing user when valid network isn't presented.">
     If you've already registered on this device, you can <ph name="LINK2_START">$1<ex>&gt;a&lt;</ex></ph>sign in as an existing user<ph name="LINK2_END">$2<ex>&gt;/a&lt;</ex></ph>.
@@ -513,6 +640,9 @@ Press any key to continue exploring.
   </message>
   <message name="IDS_KIOSK_APPS_BUTTON" desc="Text shown on a button that brings up the kiosk apps menu on login screen">
     Apps
+  </message>
+  <message name="IDS_CANCEL_USER_ADDING" desc="Text shown on a button that cancel adding user into multiprofile session.">
+    Cancel multiple sign-in
   </message>
   <message name="IDS_LOGIN_OOBE_HELP_DIALOG_TITLE" desc="Default title for help dialogs during OOBE/login">
     Help
@@ -534,6 +664,9 @@ Press any key to continue exploring.
   </message>
   <message name="IDS_OPTIONS_SETTINGS_SECTION_TITLE_WIFI_NETWORK" desc="Title for the Wifi network group on the settings page.">
     Wi-Fi network
+  </message>
+  <message name="IDS_OPTIONS_SETTINGS_SECTION_TITLE_WIMAX_NETWORK" desc="Title for the WiMAX network group on the settings page.">
+    WiMAX network
   </message>
   <message name="IDS_OPTIONS_SETTINGS_SECTION_TITLE_CELLULAR_NETWORK" desc="Title for the cellular network group on the settings page.">
     Mobile data
@@ -573,6 +706,9 @@ Press any key to continue exploring.
   </message>
   <message name="IDS_OPTIONS_SETTINGS_NETWORK_DISABLE_WIFI" desc="Menu option in the Wi-Fi menu when there is a connected Wi-Fi network.">
     Disable Wi-Fi
+  </message>
+  <message name="IDS_OPTIONS_SETTINGS_NETWORK_DISABLE_WIMAX" desc="Menu option in the WiMAX menu when there is a connected WiMAX network.">
+    Disable WiMAX
   </message>
   <message name="IDS_OPTIONS_SETTINGS_NETWORK_DISABLE_CELLULAR" desc="Menu option in the Cellular menu when there is a connected cellular network.">
     Disable mobile data
@@ -694,14 +830,8 @@ Press any key to continue exploring.
   <message name="IDS_OPTIONS_SETTINGS_BLUETOOTH_NO_DEVICES_FOUND">
     No devices found
   </message>
-  <message name="IDS_OPTIONS_SETTINGS_BLUETOOTH_CONNECTED">
-    Connected
-  </message>
   <message name="IDS_OPTIONS_SETTINGS_BLUETOOTH_CONNECTING">
-    Connecting
-  </message>
-  <message name="IDS_OPTIONS_SETTINGS_BLUETOOTH_NOT_CONNECTED">
-    Not connected
+    <ph name="DEVICE_NAME">$1<ex>Apple Magic Mouse</ex></ph>: Connecting...
   </message>
   <message name="IDS_OPTIONS_SETTINGS_BLUETOOTH_ADD_DEVICE_TITLE">
     Add Bluetooth device
@@ -790,11 +920,14 @@ Press any key to continue exploring.
   <message name="IDS_OPTIONS_SETTINGS_ACCESSIBILITY_EXPLANATION" desc="In the settings tab, this text explains the accessibiliy features.">
     Enable accessibility features to make your device easier to use.
   </message>
+  <message name="IDS_OPTIONS_SETTINGS_ACCESSIBILITY_LARGE_CURSOR_DESCRIPTION" desc="In the settings tab, the text next to the checkbox for the large mouse cursor.">
+    Show large mouse cursor
+  </message>
   <message name="IDS_OPTIONS_SETTINGS_ACCESSIBILITY_SPOKEN_FEEDBACK_DESCRIPTION" desc="In the settings tab, the text next to the checkbox for spoken feedback.">
     Enable spoken feedback
   </message>
   <message name="IDS_OPTIONS_SETTINGS_ACCESSIBILITY_HIGH_CONTRAST_DESCRIPTION" desc="In the settings tab, the text next to the checkbox for high contrast mode.">
-    Enable high contrast
+    Use high contrast mode
   </message>
   <message name="IDS_OPTIONS_SETTINGS_ACCESSIBILITY_SCREEN_MAGNIFIER_DESCRIPTION" desc="In the settings tab, the text next to the dropdown for screen magnifier.">
     Enable screen magnifier
@@ -817,11 +950,26 @@ Press any key to continue exploring.
   <message name="IDS_OPTIONS_SETTINGS_ACCESSIBILITY_SHOULD_ALWAYS_SHOW_MENU" desc="In the settings tab, the text next to the checkbox to show the accessibility tray menu regardless of the state of a11y features.">
     Show accessibility options in the system menu
   </message>
+  <message name="IDS_OPTIONS_SETTINGS_ACCESSIBILITY_STICKY_KEYS_DESCRIPTION" desc="Inthe settings tab, the text next to the checkbox for the sticky keys.">
+    Enable sticky keys (to perform keyboard shortcuts by typing them sequentially)
+  </message>
   <message name="IDS_OPTIONS_SETTINGS_DISPLAY_OPTIONS_BUTTON_LABEL" desc="Label for the button opening display settings tab.">
     Display settings
   </message>
   <message name="IDS_OPTIONS_SETTINGS_DISPLAY_OPTIONS_TAB_TITLE" desc="Title for the display settings tab.">
     Manage displays
+  </message>
+  <message name="IDS_OPTIONS_SETTINGS_DISPLAY_OPTIONS_OPTIONS" desc="The section title for general options for a selected display.">
+    Options:
+  </message>
+  <message name="IDS_OPTIONS_SETTINGS_DISPLAY_OPTIONS_RESOLUTION" desc="The section title for resolution option for a selected display.">
+    Resolution:
+  </message>
+  <message name="IDS_OPTIONS_SETTINGS_DISPLAY_OPTIONS_ORIENTATION" desc="The section title for display orientation option for a selected display.">
+    Orientation:
+  </message>
+  <message name="IDS_OPTIONS_SETTINGS_DISPLAY_OPTIONS_OVERSCAN" desc="The section title for TV alignment (calibration of display overscan) option for a selected display.">
+    TV alignment:
   </message>
   <message name="IDS_OPTIONS_SETTINGS_DISPLAY_OPTIONS_START_MIRRORING" desc="Button label to start display mirroring.">
     Start mirroring
@@ -829,17 +977,20 @@ Press any key to continue exploring.
   <message name="IDS_OPTIONS_SETTINGS_DISPLAY_OPTIONS_STOP_MIRRORING" desc="Button label to stop display mirroring.">
     Stop mirroring
   </message>
+  <message name="IDS_OPTIONS_SETTINGS_DISPLAY_OPTIONS_MIRRORING_DISPLAY_NAME" desc="The text shown at display name field when mirroring.">
+    Mirroring
+  </message>
   <message name="IDS_OPTIONS_SETTINGS_DISPLAY_OPTIONS_SET_PRIMARY" desc="Button label to set a display primary.">
     Make primary
   </message>
-  <message name="IDS_OPTIONS_SETTINGS_DISPLAY_OPTIONS_APPLY_RESULT" desc="Button label to apply the current settings.">
-    Apply
+  <message name="IDS_OPTIONS_SETTINGS_DISPLAY_OPTIONS_RESOLUTION_ANNOTATION_BEST" desc="The text shown for resolution options to annotate this is the best resolution.">
+    (Best)
   </message>
-  <message name="IDS_OPTIONS_SETTINGS_DISPLAY_OPTIONS_RESOLUTION" desc="Label to describe the resolution of the currently selected display.">
-    Resolution:
+  <message name="IDS_OPTIONS_SETTINGS_DISPLAY_OPTIONS_STANDARD_ORIENTATION" desc="The default value of display orientation option item.">
+    Standard
   </message>
-  <message name="IDS_OPTIONS_SETTINGS_DISPLAY_OPTIONS_START_CALIBRATING_OVERSCAN" desc="Label to start calibrating the overscan preference.">
-    TV alignment
+  <message name="IDS_OPTIONS_SETTINGS_DISPLAY_OPTIONS_START_CALIBRATING_OVERSCAN" desc="Button label to start calibrating the overscan preference.">
+    Adjust...
   </message>
   <message name="IDS_OPTIONS_SETTINGS_DISPLAY_OVERSCAN_TAB_TITLE" desc="Title for the display overscan calibration tab.">
     TV alignment
@@ -868,6 +1019,9 @@ Press any key to continue exploring.
   <message name="IDS_OPTIONS_SETTINGS_DISCONNECT" desc="In the settings tab, the text on the button to disconnect from a network.">
     Disconnect
   </message>
+  <message name="IDS_OPTIONS_SETTINGS_CONFIGURE" desc="In the settings tab, the text on the button to configure a network.">
+    Configure
+  </message>
   <message name="IDS_OPTIONS_SETTINGS_FORGET" desc="In the settings tab, the text on the button to forget this network.">
     Forget this network
   </message>
@@ -893,7 +1047,7 @@ Press any key to continue exploring.
     Join Wi-Fi network
   </message>
   <message name="IDS_OPTIONS_SETTINGS_JOIN_WIMAX_NETWORKS" desc="The title for the dialog to join a wimax network.">
-    Join Wimax network
+    Join WiMAX network
   </message>
   <message name="IDS_OPTIONS_SETTINGS_ADD_VPN" desc="In the settings tab, the text on the button to add a private network.">
     Add private network
@@ -917,7 +1071,10 @@ Press any key to continue exploring.
     Disable mobile data roaming
   </message>
   <message name="IDS_OPTIONS_ACCOUNTS_ALLOW_BWSI_DESCRIPTION" desc="In the Accounts settings tab, the text on the checkbox to allow browse without signing in.">
-    Enable guest browsing
+    Enable Guest browsing
+  </message>
+  <message name="IDS_OPTIONS_ACCOUNTS_ENABLE_SUPERVISED_USERS" desc="In the Users settings dialog, the text on the checkbox to allow creation and sign-in of supervised users.">
+    Enable supervised users
   </message>
   <message name="IDS_OPTIONS_ACCOUNTS_USE_WHITELIST_DESCRIPTION" desc="In the Accounts settings tab, the text on the checkbox to restrict allowed user to a whitelist.">
     Restrict sign-in to the following users:
@@ -1014,6 +1171,9 @@ Press any key to continue exploring.
   </message>
   <message name="IDS_OPTIONS_SETTINGS_INTERNET_TAB_WIFI" desc="In settings Internet options, the title for the wifi tab.">
     Wi-Fi
+  </message>
+  <message name="IDS_OPTIONS_SETTINGS_INTERNET_TAB_WIMAX" desc="In settings Internet options, the title for the WiMAX tab.">
+    WiMAX
   </message>
   <message name="IDS_OPTIONS_SETTINGS_INTERNET_TAB_VPN" desc="In settings Internet options, the title for the VPN (Virtual Private Network) tab.">
     VPN
@@ -1459,6 +1619,19 @@ Press any key to continue exploring.
   </message>
   <message name="IDS_SIM_UNLOCK_SIM_DISABLED_MESSAGE" desc="Message shown when there're not PUK tries left and SIM card is disabled.">
     This SIM card is disabled and cannot be used. Please contact your service provider for a replacement.
+  </message>
+
+  <message name="IDS_SLOW_DISABLE" desc="The text of the button that disables performance collection for feedback reports">
+    Disable performance data collection
+  </message>
+  <message name="IDS_SLOW_ENABLE" desc="The text of the button that enables performance collection for feedback reports">
+    Enable performance data collection
+  </message>
+  <message name="IDS_SLOW_DESCRIPTION" desc="The description of the performance tracing feature for feedback reports.">
+    Enabling collection of performance data will help Google improve the system over time. No data is sent until you file a feedback report (Alt-Shift-I) and include performance data. You can return to this screen to disable collection at any time.
+  </message>
+  <message name="IDS_SLOW_WARNING" desc="The warning that informs users that enabling this can have a negative effect on their performance">
+    <ph name="BEGIN_BOLD">&lt;strong&gt;</ph>Note:<ph name="END_BOLD">&lt;/strong&gt;</ph> Only enable if you know what you are doing or if you have been asked to do so, as collection of data may reduce performance.
   </message>
 
   <message name="IDS_EULA_BACK_BUTTON" desc="Back button shown on EULA screen.">
@@ -1992,6 +2165,10 @@ Press any key to continue exploring.
            desc="The label for the section header for input methods">
     Input Method
   </message>
+  <message name="IDS_OPTIONS_SETTINGS_LANGUAGES_NO_INPUT_METHODS"
+           desc="The label for languages with no Input Methods">
+    This language doesn't have any input methods
+  </message>
   <message name="IDS_OPTIONS_SETTINGS_LANGUAGES_SIGN_OUT_BUTTON"
            desc="The label for the sign out button for changing UI language">
     Sign out
@@ -2096,30 +2273,6 @@ Press any key to continue exploring.
            desc="The label for the Pinyin simplified Chinese input method">
     Pinyin input method (for US Dvorak keyboard)
   </message>
-  <message name="IDS_OPTIONS_SETTINGS_LANGUAGES_JAPANESE_MOZC_US_INPUT_METHOD"
-           desc="The label for the Japanese input method for US keyboard">
-    Japanese input method (for US keyboard)
-  </message>
-  <message name="IDS_OPTIONS_SETTINGS_LANGUAGES_JAPANESE_MOZC_US_DV_INPUT_METHOD"
-           desc="The label for the Japanese input method for US Dvorak keyboard">
-    Japanese input method (for US Dvorak keyboard)
-  </message>
-  <message name="IDS_OPTIONS_SETTINGS_LANGUAGES_JAPANESE_MOZC_JP_INPUT_METHOD"
-           desc="The label for the Japanese input method for Japanese keyboard">
-    Japanese input method (for Japanese keyboard)
-  </message>
-  <message name="IDS_OPTIONS_SETTINGS_LANGUAGES_JAPANESE_GOOGLE_US_INPUT_METHOD"
-           desc="The label for the Google Japanese Input input method for US keyboard">
-    Google Japanese Input (for US keyboard)
-  </message>
-  <message name="IDS_OPTIONS_SETTINGS_LANGUAGES_JAPANESE_GOOGLE_US_DV_INPUT_METHOD"
-           desc="The label for the Google Japanese Input input method for US Dvorak keyboard">
-    Google Japanese Input (for US Dvorak keyboard)
-  </message>
-  <message name="IDS_OPTIONS_SETTINGS_LANGUAGES_JAPANESE_GOOGLE_JP_INPUT_METHOD"
-           desc="The label for the Google Japanese Input input method for Japanese keyboard">
-    Google Japanese Input (for Japanese keyboard)
-  </message>
   <message name="IDS_OPTIONS_SETTINGS_LANGUAGES_JAPANESE_HANDWRITING_INPUT_METHOD"
            desc="The label for the Japanese handwriting input method">
     Handwriting input method for Japanese
@@ -2200,9 +2353,6 @@ Press any key to continue exploring.
   <message name="IDS_STATUSBAR_DISABLE_SPOKEN_FEEDBACK" desc="The menu option to disable spoken feedback accessibility feature.">
     Disable spoken feedback
   </message>
-  <message name="IDS_STATUSBAR_NETWORK_LOCKED" desc="Message displayed while access to network devices is temporarily locked due to mobile network activation">
-    Please wait while we set up your mobile network.
-  </message>
   <message name="IDS_STATUSBAR_NETWORK_DEVICE_ETHERNET" desc="The ethernet network device.">
     Ethernet
   </message>
@@ -2211,6 +2361,24 @@ Press any key to continue exploring.
   </message>
   <message name="IDS_STATUSBAR_NETWORK_DEVICE_CELLULAR" desc="The cellular network device.">
     Mobile Data
+  </message>
+  <message name="IDS_NETWORK_TYPE_ETHERNET" desc="The ethernet network type.">
+    Ethernet
+  </message>
+  <message name="IDS_NETWORK_TYPE_WIFI" desc="The wifi network type.">
+    Wi-Fi
+  </message>
+  <message name="IDS_NETWORK_TYPE_WIMAX" desc="The wimax network type.">
+    WiMAX
+  </message>
+  <message name="IDS_NETWORK_TYPE_BLUETOOTH" desc="The bluetooth network type.">
+    Bluetooth
+  </message>
+  <message name="IDS_NETWORK_TYPE_CELLULAR" desc="The cellular network type.">
+    cellular
+  </message>
+  <message name="IDS_NETWORK_TYPE_VPN" desc="The vpn network type.">
+    VPN
   </message>
   <message name="IDS_STATUSBAR_NETWORK_DEVICE_CONNECTING" desc="The network device status connecting.">
     Connecting...
@@ -2351,11 +2519,8 @@ Battery full
   <message name="IDS_PROXY_AUTOMATIC" desc="Radio to select configuring from a URL.">
     Automatic proxy configuration
   </message>
-  <message name="IDS_PROXY_CONFIG_URL" desc="Label for the proxy config URL box.">
-    Autoconfiguration URL
-  </message>
-  <message name="IDS_PROXY_ADVANCED_CONFIG" desc="Label for the Advanced Proxy.">
-    Advanced Configuration
+  <message name="IDS_PROXY_USE_AUTOCONFIG_URL" desc="Label for the checkbox that controls whether to use an autoconfiguration URL.">
+    Use an autoconfiguration URL
   </message>
   <message name="IDS_PROXY_ADD_HOST" desc="Label for the Add host button.">
     Add
@@ -2368,6 +2533,9 @@ Battery full
   </message>
   <message name="IDS_PROXY_BYPASS" desc="Label for the proxy bypass list.">
     Do not use the proxy settings for these hosts and domains:
+  </message>
+  <message name="IDS_PROXY_WEB_PROXY_AUTO_DISCOVERY" desc="Label for the web proxy auto discovery url.">
+    Web Proxy Auto Discovery URL
   </message>
 
   <!-- Accessibility strings, to be spoken -->
@@ -2644,14 +2812,11 @@ Battery full
   <message name="IDS_OPTIONS_SETTINGS_INTERNET_CELLULAR_PRL_VERSION" desc="Label for cellular network modem PRL (Preferred Roaming List) version under chrome://options/internet">
     PRL version:
   </message>
-  <message name="IDS_OPTIONS_KIOSK" desc="Name of the kiosk management section on chrome settings page.">
-    Kiosk
-  </message>
-  <message name="IDS_OPTIONS_KIOSK_MANAGE_BUTTON" desc="Label of the button to bring up kiosk management overlay in the kiosk management section on chrome settings page.">
-    Manage kiosk applications
+  <message name="IDS_EXTENSIONS_ADD_KIOSK_APP_BUTTON" desc="Label of the button to bring up kiosk management overlay on chrome extensions page.">
+    Add kiosk application...
   </message>
   <message name="IDS_OPTIONS_KIOSK_OVERLAY_TITLE" desc="The title text of the kiosk settings overlay.">
-    Kiosk
+    Manage Kiosk Applications
   </message>
   <message name="IDS_OPTIONS_KIOSK_ADD_APP" desc="Label above the application id text input in the kiosk settings overlay.">
     Add kiosk application:
@@ -2660,16 +2825,25 @@ Battery full
     Enter application id or webstore URL.
   </message>
   <message name="IDS_OPTIONS_KIOSK_ENABLE_AUTO_LAUNCH" desc="Text for a button that enables an application to auto launch on startup in the kiosk settings overlay.">
-    Enable Auto Launch
+    Set to auto-launch
   </message>
   <message name="IDS_OPTIONS_KIOSK_DISABLE_AUTO_LAUNCH" desc="Text for a button that disables an application to auto launch on startup in the kiosk settings overlay.">
-    Disable Auto Launch
+    Disable auto-launch
   </message>
   <message name="IDS_OPTIONS_KIOSK_AUTO_LAUNCH" desc="Text shows besides an application that is set to auto launch on start up in the kiosk settings overlay.">
-    Auto Launch
+    (auto-launched)
   </message>
   <message name="IDS_OPTIONS_KIOSK_INVALID_APP" desc="Text shows besides an application that is not valid in the kiosk settings overlay.">
     Invalid application.
+  </message>
+  <message name="IDS_OPTIONS_KIOSK_DISABLE_BAILOUT_SHORTCUT_LABEL" desc="Label text for a checkbox to disable kiosk application launch bail out shortcut.">
+    Permanently keep this device in kiosk mode.
+  </message>
+  <message name="IDS_OPTIONS_KIOSK_DISABLE_BAILOUT_SHORTCUT_WARNING_BOLD" desc="Bold text of the warning dialog for disabling kiosk application launch bail out shortcut.">
+    Are you sure you want to permanently keep this device in kiosk mode?
+  </message>
+  <message name="IDS_OPTIONS_KIOSK_DISABLE_BAILOUT_SHORTCUT_WARNING_FORMAT" desc="Warning text of disabling kiosk application launch bail out shortcut.">
+    The only way to undo this is to re-install <ph name="IDS_SHORT_PRODUCT_OS_NAME">$1<ex>Chrome OS</ex></ph>.
   </message>
   <message name="IDS_KEYBOARD_OVERLAY_LEARN_MORE" desc="The text of the learn more link on the keyboard overlay.">
     Learn more
@@ -2682,45 +2856,6 @@ Battery full
   </message>
   <message name="IDS_KEYBOARD_OVERLAY_INSTRUCTIONS_HIDE" desc="The instruction for hiding the keyboard overlay.">
     Type Ctrl+Alt+/ or Escape to hide
-  </message>
-  <message name="IDS_KEYBOARD_OVERLAY_F1" desc="The text in the keyboard overlay to explain the shortcut.">
-    F1
-  </message>
-  <message name="IDS_KEYBOARD_OVERLAY_F2" desc="The text in the keyboard overlay to explain the shortcut.">
-    F2
-  </message>
-  <message name="IDS_KEYBOARD_OVERLAY_F3" desc="The text in the keyboard overlay to explain the shortcut.">
-    F3
-  </message>
-  <message name="IDS_KEYBOARD_OVERLAY_F4" desc="The text in the keyboard overlay to explain the shortcut.">
-    F4
-  </message>
-  <message name="IDS_KEYBOARD_OVERLAY_F5" desc="The text in the keyboard overlay to explain the shortcut.">
-    F5
-  </message>
-  <message name="IDS_KEYBOARD_OVERLAY_F6" desc="The text in the keyboard overlay to explain the shortcut.">
-    F6
-  </message>
-  <message name="IDS_KEYBOARD_OVERLAY_F7" desc="The text in the keyboard overlay to explain the shortcut.">
-    F7
-  </message>
-  <message name="IDS_KEYBOARD_OVERLAY_F8" desc="The text in the keyboard overlay to explain the shortcut.">
-    F8
-  </message>
-  <message name="IDS_KEYBOARD_OVERLAY_F9" desc="The text in the keyboard overlay to explain the shortcut.">
-    F9
-  </message>
-  <message name="IDS_KEYBOARD_OVERLAY_F10" desc="The text in the keyboard overlay to explain the shortcut.">
-    F10
-  </message>
-  <message name="IDS_KEYBOARD_OVERLAY_F11" desc="The text in the keyboard overlay to explain the shortcut.">
-    F11
-  </message>
-  <message name="IDS_KEYBOARD_OVERLAY_F12" desc="The text in the keyboard overlay to explain the shortcut.">
-    F12
-  </message>
-  <message name="IDS_KEYBOARD_OVERLAY_INSERT" desc="The text in the keyboard overlay to explain the shortcut.">
-    Insert
   </message>
   <!-- BEGIN GENERATED KEYBOARD OVERLAY STRINGS -->
   <message name="IDS_KEYBOARD_OVERLAY_ACTIVATE_LAST_LAUNCHER_ITEM" desc="The text in the keyboard overlay to explain the shortcut (Open the last launcher item).">
@@ -2819,7 +2954,7 @@ Battery full
   <message name="IDS_KEYBOARD_OVERLAY_DECREASE_KEY_BRIGHTNESS" desc="The text in the keyboard overlay to explain the shortcut (decrease the keyboard brightness).">
     Decrease key brightness
   </message>
-  <message name="IDS_KEYBOARD_OVERLAY_DELETE" desc="The text in the keyboard overlay to explain the shortcut.">
+  <message name="IDS_KEYBOARD_OVERLAY_DELETE" desc="The text in the keyboard overlay to explain the shortcut (Delete).">
     Delete
   </message>
   <message name="IDS_KEYBOARD_OVERLAY_DELETE_WORD" desc="The text in the keyboard overlay to explain the shortcut.">
@@ -2840,8 +2975,44 @@ Battery full
   <message name="IDS_KEYBOARD_OVERLAY_DOWNLOADS" desc="The text in the keyboard overlay to explain the shortcut.">
     Downloads
   </message>
-  <message name="IDS_KEYBOARD_OVERLAY_END" desc="The text in the keyboard overlay to explain the shortcut.">
+  <message name="IDS_KEYBOARD_OVERLAY_END" desc="The text in the keyboard overlay to explain the shortcut (End).">
     End
+  </message>
+  <message name="IDS_KEYBOARD_OVERLAY_F1" desc="The text in the keyboard overlay to explain the shortcut (F1).">
+    F1
+  </message>
+  <message name="IDS_KEYBOARD_OVERLAY_F10" desc="The text in the keyboard overlay to explain the shortcut (F10).">
+    F10
+  </message>
+  <message name="IDS_KEYBOARD_OVERLAY_F11" desc="The text in the keyboard overlay to explain the shortcut (F11).">
+    F11
+  </message>
+  <message name="IDS_KEYBOARD_OVERLAY_F12" desc="The text in the keyboard overlay to explain the shortcut (F12).">
+    F12
+  </message>
+  <message name="IDS_KEYBOARD_OVERLAY_F2" desc="The text in the keyboard overlay to explain the shortcut (F2).">
+    F2
+  </message>
+  <message name="IDS_KEYBOARD_OVERLAY_F3" desc="The text in the keyboard overlay to explain the shortcut (F3).">
+    F3
+  </message>
+  <message name="IDS_KEYBOARD_OVERLAY_F4" desc="The text in the keyboard overlay to explain the shortcut (F4).">
+    F4
+  </message>
+  <message name="IDS_KEYBOARD_OVERLAY_F5" desc="The text in the keyboard overlay to explain the shortcut (F5).">
+    F5
+  </message>
+  <message name="IDS_KEYBOARD_OVERLAY_F6" desc="The text in the keyboard overlay to explain the shortcut (F6).">
+    F6
+  </message>
+  <message name="IDS_KEYBOARD_OVERLAY_F7" desc="The text in the keyboard overlay to explain the shortcut (F7).">
+    F7
+  </message>
+  <message name="IDS_KEYBOARD_OVERLAY_F8" desc="The text in the keyboard overlay to explain the shortcut (F8).">
+    F8
+  </message>
+  <message name="IDS_KEYBOARD_OVERLAY_F9" desc="The text in the keyboard overlay to explain the shortcut (F9).">
+    F9
   </message>
   <message name="IDS_KEYBOARD_OVERLAY_FIND_PREVIOUS_TEXT" desc="The text in the keyboard overlay to explain the shortcut.">
     Find previous text
@@ -2888,7 +3059,7 @@ Battery full
   <message name="IDS_KEYBOARD_OVERLAY_HISTORY" desc="The text in the keyboard overlay to explain the shortcut.">
     History
   </message>
-  <message name="IDS_KEYBOARD_OVERLAY_HOME" desc="The text in the keyboard overlay to explain the shortcut.">
+  <message name="IDS_KEYBOARD_OVERLAY_HOME" desc="The text in the keyboard overlay to explain the shortcut (Home).">
     Home
   </message>
   <message name="IDS_KEYBOARD_OVERLAY_INCREASE_KEY_BRIGHTNESS" desc="The text in the keyboard overlay to explain the shortcut (Increase the keyboard brightness).">
@@ -2896,6 +3067,9 @@ Battery full
   </message>
   <message name="IDS_KEYBOARD_OVERLAY_INPUT_UNICODE_CHARACTERS" desc="The text in the keyboard overlay to explain the shortcut.">
     Input Unicode characters
+  </message>
+  <message name="IDS_KEYBOARD_OVERLAY_INSERT" desc="The text in the keyboard overlay to explain the shortcut (Insert).">
+    Insert
   </message>
   <message name="IDS_KEYBOARD_OVERLAY_JAVASCRIPT_CONSOLE" desc="The text in the keyboard overlay to explain the shortcut.">
     JavaScript console
@@ -2945,10 +3119,13 @@ Battery full
   <message name="IDS_KEYBOARD_OVERLAY_OPEN_ADDRESS_IN_NEW_TAB" desc="The text in the keyboard overlay to explain the shortcut.">
     Open address in new tab
   </message>
-  <message name="IDS_KEYBOARD_OVERLAY_PAGE_DOWN" desc="The text in the keyboard overlay to explain the shortcut.">
+  <message name="IDS_KEYBOARD_OVERLAY_OPEN_FILE_MANAGER" desc="The text in the keyboard overlay to explain the shortcut (Open the file manager).">
+    Open file manager
+  </message>
+  <message name="IDS_KEYBOARD_OVERLAY_PAGE_DOWN" desc="The text in the keyboard overlay to explain the shortcut (Page down).">
     Page down
   </message>
-  <message name="IDS_KEYBOARD_OVERLAY_PAGE_UP" desc="The text in the keyboard overlay to explain the shortcut.">
+  <message name="IDS_KEYBOARD_OVERLAY_PAGE_UP" desc="The text in the keyboard overlay to explain the shortcut (Page up).">
     Page up
   </message>
   <message name="IDS_KEYBOARD_OVERLAY_PASTE" desc="The text in the keyboard overlay to explain the shortcut.">
@@ -3035,6 +3212,9 @@ Battery full
   <message name="IDS_KEYBOARD_OVERLAY_TOGGLE_SPOKEN_FEEDBACK" desc="The text in the keyboard overlay to explain the shortcut (enable or disable spoken feedback).">
     Toggle spoken feedback
   </message>
+  <message name="IDS_KEYBOARD_OVERLAY_TOGGLE_TOUCH_HUD_PROJECTION" desc="The text in the keyboard overlay to explain the shortcut (enable or disable projection touch HUD).">
+    Toggle projection touch HUD
+  </message>
   <message name="IDS_KEYBOARD_OVERLAY_UNDO" desc="The text in the keyboard overlay to explain the shortcut.">
     Undo
   </message>
@@ -3061,12 +3241,6 @@ Battery full
   </message>
   <!-- END GENERATED KEYBOARD OVERLAY STRINGS -->
   <if expr="lang == 'ja'">
-    <message name="IDS_STATUSBAR_IME_JAPANESE_IME_STATUS_HIRAGANA" desc="In the language menu button, this shows a character set in use is set to Hiragana.">
-      Hiragana
-    </message>
-    <message name="IDS_STATUSBAR_IME_JAPANESE_IME_STATUS_KATAKANA" desc="In the language menu button, this shows a character set in use is set to KATAKANA.">
-      Katakana
-    </message>
   </if>
   <if expr="lang != 'ja'">
     <message translateable="false" name="IDS_STATUSBAR_IME_JAPANESE_IME_STATUS_HIRAGANA" desc="">
@@ -3076,19 +3250,6 @@ Battery full
       Katakana
     </message>
   </if>
-  <message name="IDS_STATUSBAR_IME_JAPANESE_IME_STATUS_DIRECT_INPUT" desc="In the language menu button, this shows a character set in use is set to 'direct input' mode.">
-    Direct input
-  </message>
-  <!-- "Half width" part is translateable. -->
-  <message name="IDS_STATUSBAR_IME_JAPANESE_IME_STATUS_HALF_WIDTH_KATAKANA" desc="In the language menu button, this shows a character set in use is set to half width Katakana.">
-    Half width Katakana
-  </message>
-  <message name="IDS_STATUSBAR_IME_JAPANESE_IME_STATUS_LATIN" desc="In the language menu button, this shows a character set in use is set to Latin.">
-    Latin
-  </message>
-  <message name="IDS_STATUSBAR_IME_JAPANESE_IME_STATUS_WIDE_LATIN" desc="In the language menu button, this shows a character set in use is set to wide Latin.">
-    Wide Latin
-  </message>
   <message name="IDS_STATUSBAR_IME_KOREAN_HANJA_INPUT_MODE" desc="In the language menu button, this shows the input mode.">
     Hanja mode
   </message>
@@ -3156,6 +3317,9 @@ Battery full
   </message>
   <message name="IDS_STATUSBAR_LAYOUT_CZECHIA" desc="In the language menu button, this shows the input mode.">
     Czech keyboard
+  </message>
+  <message name="IDS_STATUSBAR_LAYOUT_CZECHIA_QWERTY" desc="In the language menu button, this shows the input mode.">
+    Czech QWERTY keyboard
   </message>
   <message name="IDS_STATUSBAR_LAYOUT_USA_DVORAK" desc="In the language menu button, this shows the input mode.">
     US Dvorak keyboard
@@ -3258,6 +3422,24 @@ Battery full
   </message>
   <message name="IDS_STATUSBAR_LAYOUT_KOREA_104" desc="In the language menu button, this shows the input mode.">
     Korean keyboard
+  </message>
+  <message name="IDS_STATUSBAR_LAYOUT_ICELANDIC" desc="In the language menu button, this shows the input mode.">
+    Icelandic keyboard
+  </message>
+  <message name="IDS_STATUSBAR_LAYOUT_CANADIAN_MULTILINGUAL" desc="In the language menu button, this shows the input mode.">
+    Canadian Multilingual keyboard
+  </message>
+  <message name="IDS_STATUSBAR_LAYOUT_GEORGIAN" desc="In the language menu button, this shows the input mode.">
+    Georgian keyboard
+  </message>
+  <message name="IDS_STATUSBAR_LAYOUT_BELARUSIAN" desc="In the language menu button, this shows the input mode.">
+    Belarusian keyboard
+  </message>
+  <message name="IDS_STATUSBAR_LAYOUT_ARMENIAN_PHONETIC" desc="In the language menu button, this shows the input mode.">
+    Armenian Phonetic keyboard
+  </message>
+  <message name="IDS_STATUSBAR_LAYOUT_MONGOLIAN" desc="In the language menu button, this shows the input mode.">
+    Mongolian keyboard
   </message>
   <message name="IDS_INPUT_METHOD_INFOLIST_WINDOW_TITLE" desc="The title of the infolist window where the meanings and the usages of words are displayed.">
     Information
@@ -3481,9 +3663,6 @@ Battery full
   <message name="IDS_LOGIN_ERROR_TPM_FAILURE_REBOOT_BUTTON" desc="Label on button that restarts device.">
     Restart
   </message>
-  <message name="IDS_LOGIN_FIX_CAPTIVE_PORTAL" desc="An link text to fix Internet connection (captive portal) in guest mode.">
-    Enter as Guest
-  </message>
   <message name="IDS_LOGIN_PROXY_ERROR_TITLE" desc="A title of screen containing a message about proxy error.">
     Oops, something went wrong with signing in
   </message>
@@ -3520,8 +3699,11 @@ Battery full
   <message name="IDS_LOGIN_OFFLINE_MESSAGE" desc="An offline message that shows up in OOBE sign-in screen.">
     Please connect to the Internet to sign in to your Chromebook.
   </message>
-  <message name="IDS_GUEST" desc="Shown in login panel for users that would like to browse without signing in.">
-    Guest
+  <message name="IDS_UPDATE_OFFLINE_MESSAGE" desc="An offline message that shows up in the OOBE update screen.">
+    Please connect to the Internet to update your Chromebook.
+  </message>
+  <message name="IDS_UPDATE_PROXY_ERROR_MESSAGE" desc="An offline message that shows up when a proxy error has appeared in the OOBE update screen.">
+    The update check failed using the current proxy settings. Please adjust your <ph name="PROXY_SETTINGS_LINK_START">$1<ex>&gt;a&lt;</ex></ph>proxy settings<ph name="PROXY_SETTINGS_LINK_END">$2<ex>&gt;/a&lt;</ex></ph>.
   </message>
   <message name="IDS_ADD_USER" desc="Shown in login panel for adding new user to login screen.">
     Add a user
@@ -3551,15 +3733,15 @@ Battery full
     <ph name="PRODUCT_NAME">$1<ex>Google Chrome</ex></ph> <ph name="PRODUCT_VERSION">$2<ex>15.0.0.0</ex></ph> (Platform <ph name="PLATFORM_VERSION">$3<ex>900.0-11.09.01</ex></ph>)
   </message>
   <message name="IDS_DEVICE_OWNED_BY_NOTICE" desc="Text for notifications showing that this is managed device.">
-    This device is owned by <ph name="DOMAIN">$1<ex>acmecorp.com</ex></ph>.
+    This device is managed by <ph name="DOMAIN">$1<ex>acmecorp.com</ex></ph>.
   </message>
   <message name="IDS_LOGIN_PUBLIC_ACCOUNT_INFO_FORMAT" desc="Template for text shown in the public account user pod, informing the user that this is a public, managed account.">
-    This device is owned by <ph name="DOMAIN">$1<ex>yourdomain.com</ex></ph>.
+    This device is managed by <ph name="DOMAIN">$1<ex>yourdomain.com</ex></ph>.
   </message>
   <message name="IDS_LOGIN_PUBLIC_ACCOUNT_SIGNOUT_REMINDER" desc="Text shown in the public account user pod, reminding the user to log out.">
     Your information will be removed when you sign out.
   </message>
-  <message name="IDS_LOGIN_PUBLIC_ACCOUNT_ENTER" desc="Label text for the sign-in button in the public account user pod.">
+  <message name="IDS_LOGIN_PUBLIC_ACCOUNT_ENTER" meaning="Label text for signing in." desc="Label text for the sign-in button in the public account user pod.">
     Enter
   </message>
   <message name="IDS_LOGIN_PUBLIC_ACCOUNT_ENTER_ACCESSIBLE_NAME" desc="Text to be spoken when focus is set to the sign-in button in the public account user pod.">
@@ -3585,4 +3767,19 @@ Battery full
   <message name="IDS_KIOSK_APP_ERROR_USER_CANCEL" desc="Error message used when a kiosk app launch is canceled by user.">
     Kiosk application launch canceled.
   </message>
+
+  <!-- About Chrome page -->
+  <message name="IDS_UPGRADE_OFFLINE" desc="Status label: Currently offline">
+    You are currently offline.
+  </message>
+  <message name="IDS_UPGRADE_DISALLOWED" desc="Status label: Upgrade disallowed for the current network">
+    You are currently connected to the <ph name="NETWORK_TYPE">$1<ex>cellular</ex></ph> network.
+  </message>
+  <message name="IDS_UPGRADE_NETWORK_LIST_CELLULAR_ALLOWED" desc="Status label: for updates you need to connect to an Ethernet or Wi-Fi">
+    To check for updates, please use Ethernet or Wi-Fi.
+  </message>
+  <message name="IDS_UPGRADE_NETWORK_LIST_CELLULAR_DISALLOWED" desc="Status label: for updates you need to connect to an Ethernet, mobile data or Wi-Fi">
+    To check for updates, please use Ethernet, Wi-Fi or mobile data.
+  </message>
+
 </grit-part>

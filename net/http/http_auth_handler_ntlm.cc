@@ -8,8 +8,8 @@
 #include "base/base64.h"
 #endif
 #include "base/logging.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "net/base/net_errors.h"
 #include "net/base/net_util.h"
 
@@ -52,12 +52,12 @@ int HttpAuthHandlerNTLM::GenerateAuthTokenImpl(
 
   // The username may be in the form "DOMAIN\user".  Parse it into the two
   // components.
-  string16 domain;
-  string16 user;
-  const string16& username = credentials->username();
-  const char16 backslash_character = '\\';
+  base::string16 domain;
+  base::string16 user;
+  const base::string16& username = credentials->username();
+  const base::char16 backslash_character = '\\';
   size_t backslash_idx = username.find(backslash_character);
-  if (backslash_idx == string16::npos) {
+  if (backslash_idx == base::string16::npos) {
     user = username;
   } else {
     domain = username.substr(0, backslash_idx);

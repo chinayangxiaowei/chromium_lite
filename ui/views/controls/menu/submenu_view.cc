@@ -30,7 +30,7 @@ const SkColor kDropIndicatorColor = SK_ColorBLACK;
 namespace views {
 
 // static
-const char SubmenuView::kViewClassName[] = "views/SubmenuView";
+const char SubmenuView::kViewClassName[] = "SubmenuView";
 
 SubmenuView::SubmenuView(MenuItemView* parent)
     : parent_menu_item_(parent),
@@ -38,11 +38,10 @@ SubmenuView::SubmenuView(MenuItemView* parent)
       drop_item_(NULL),
       drop_position_(MenuDelegate::DROP_NONE),
       scroll_view_container_(NULL),
-      max_accelerator_width_(0),
+      max_minor_text_width_(0),
       minimum_preferred_width_(0),
       resize_open_menu_(false),
-      ALLOW_THIS_IN_INITIALIZER_LIST(
-          scroll_animator_(new ScrollAnimator(this))) {
+      scroll_animator_(new ScrollAnimator(this)) {
   DCHECK(parent);
   // We'll delete ourselves, otherwise the ScrollView would delete us on close.
   set_owned_by_client();
@@ -122,7 +121,7 @@ gfx::Size SubmenuView::GetPreferredSize() {
   if (!has_children())
     return gfx::Size();
 
-  max_accelerator_width_ = 0;
+  max_minor_text_width_ = 0;
   // The maximum width of items which contain maybe a label and multiple views.
   int max_complex_width = 0;
   // The max. width of items which contain a label and maybe an accelerator.
@@ -138,8 +137,8 @@ gfx::Size SubmenuView::GetPreferredSize() {
           menu->GetDimensions();
       max_simple_width = std::max(
           max_simple_width, dimensions.standard_width);
-      max_accelerator_width_ =
-          std::max(max_accelerator_width_, dimensions.accelerator_width);
+      max_minor_text_width_ =
+          std::max(max_minor_text_width_, dimensions.minor_text_width);
       max_complex_width = std::max(max_complex_width,
           dimensions.standard_width + dimensions.children_width);
       height += dimensions.height;
@@ -150,14 +149,14 @@ gfx::Size SubmenuView::GetPreferredSize() {
       height += child_pref_size.height();
     }
   }
-  if (max_accelerator_width_ > 0) {
-    max_accelerator_width_ +=
-        GetMenuItem()->GetMenuConfig().label_to_accelerator_padding;
+  if (max_minor_text_width_ > 0) {
+    max_minor_text_width_ +=
+        GetMenuItem()->GetMenuConfig().label_to_minor_text_padding;
   }
   gfx::Insets insets = GetInsets();
   return gfx::Size(
       std::max(max_complex_width,
-               std::max(max_simple_width + max_accelerator_width_ +
+               std::max(max_simple_width + max_minor_text_width_ +
                         insets.width(),
                minimum_preferred_width_ - 2 * insets.width())),
       height + insets.height());
@@ -237,10 +236,10 @@ bool SubmenuView::OnMouseWheel(const ui::MouseWheelEvent& e) {
   // the next/previous one entirely visible. If enough wasn't scrolled to show
   // any new rows, then just scroll the amount so that smooth scrolling using
   // the trackpad is possible.
-  int delta = abs(e.offset() / ui::MouseWheelEvent::kWheelDelta);
+  int delta = abs(e.y_offset() / ui::MouseWheelEvent::kWheelDelta);
   if (delta == 0)
-    return OnScroll(0, e.offset());
-  for (bool scroll_up = (e.offset() > 0); delta != 0; --delta) {
+    return OnScroll(0, e.y_offset());
+  for (bool scroll_up = (e.y_offset() > 0); delta != 0; --delta) {
     int scroll_target;
     if (scroll_up) {
       if (GetMenuItemAt(first_vis_index)->y() == vis_bounds.y()) {
@@ -313,12 +312,10 @@ void SubmenuView::ShowAt(Widget* parent,
     host_->InitMenuHost(parent, bounds, scroll_view_container_, do_capture);
   }
 
-  GetScrollViewContainer()->GetWidget()->NotifyAccessibilityEvent(
-      GetScrollViewContainer(),
+  GetScrollViewContainer()->NotifyAccessibilityEvent(
       ui::AccessibilityTypes::EVENT_MENUSTART,
       true);
-  GetWidget()->NotifyAccessibilityEvent(
-      this,
+  NotifyAccessibilityEvent(
       ui::AccessibilityTypes::EVENT_MENUPOPUPSTART,
       true);
 }
@@ -330,14 +327,9 @@ void SubmenuView::Reposition(const gfx::Rect& bounds) {
 
 void SubmenuView::Close() {
   if (host_) {
-    GetWidget()->NotifyAccessibilityEvent(
-        this,
-        ui::AccessibilityTypes::EVENT_MENUPOPUPEND,
-        true);
-    GetScrollViewContainer()->GetWidget()->NotifyAccessibilityEvent(
-        GetScrollViewContainer(),
-        ui::AccessibilityTypes::EVENT_MENUEND,
-        true);
+    NotifyAccessibilityEvent(ui::AccessibilityTypes::EVENT_MENUPOPUPEND, true);
+    GetScrollViewContainer()->NotifyAccessibilityEvent(
+        ui::AccessibilityTypes::EVENT_MENUEND, true);
 
     host_->DestroyMenuHost();
     host_ = NULL;
@@ -397,7 +389,7 @@ void SubmenuView::MenuHostDestroyed() {
   GetMenuItem()->GetMenuController()->Cancel(MenuController::EXIT_DESTROYED);
 }
 
-std::string SubmenuView::GetClassName() const {
+const char* SubmenuView::GetClassName() const {
   return kViewClassName;
 }
 

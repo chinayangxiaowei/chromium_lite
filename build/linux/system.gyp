@@ -43,7 +43,7 @@
           },
           'conditions': [
             ['_toolset=="target"', {
-              'direct_dependent_settings': {
+              'all_dependent_settings': {
                 'cflags': [
                   '<!@(<(pkg-config) --cflags <(gtk_packages))',
                 ],
@@ -57,7 +57,7 @@
                 ],
               },
             }, {
-              'direct_dependent_settings': {
+              'all_dependent_settings': {
                 'cflags': [
                   '<!@(pkg-config --cflags <(gtk_packages))',
                 ],
@@ -241,6 +241,15 @@
                 ],
               },
             }],
+            ['use_openssl==0 and clang==1', {
+              'direct_dependent_settings': {
+                'cflags': [
+                  # There is a broken header guard in /usr/include/nss/secmod.h:
+                  # https://bugzilla.mozilla.org/show_bug.cgi?id=884072
+                  '-Wno-header-guard',
+                ],
+              },
+            }],
           ]
         }],
       ],
@@ -370,9 +379,6 @@
                          '--output-h', '<(output_h)',
                          '--output-cc', '<(output_cc)',
                          '--header', '<gio/gio.h>',
-                         # TODO(phajdan.jr): This will no longer be needed
-                         # after switch to Precise, http://crbug.com/158577 .
-                         '--bundled-header', '"build/linux/gsettings.h"',
                          '--link-directly=<(linux_link_gsettings)',
                          'g_settings_new',
                          'g_settings_get_child',
@@ -480,6 +486,21 @@
             'output_h': '<(SHARED_INTERMEDIATE_DIR)/library_loaders/libspeechd.h',
             'output_cc': '<(INTERMEDIATE_DIR)/libspeechd_loader.cc',
             'generator': '../../tools/generate_library_loader/generate_library_loader.py',
+
+            # speech-dispatcher >= 0.8 installs libspeechd.h into
+            # speech-dispatcher/libspeechd.h, whereas speech-dispatcher < 0.8
+            # puts libspeechd.h in the top-level include directory.
+            # Since we need to support both cases for now, we ship a copy of
+            # libspeechd.h in third_party/speech-dispatcher. If the user
+            # prefers to link against the speech-dispatcher directly, the
+            # `libspeechd_h_prefix' variable can be passed to gyp with a value
+            # such as "speech-dispatcher/" that will be prepended to
+            # "libspeechd.h" in the #include directive.
+            # TODO(phaldan.jr): Once we do not need to support
+            # speech-dispatcher < 0.8 we can get rid of all this (including
+            # third_party/speech-dispatcher) and just include
+            # speech-dispatcher/libspeechd.h unconditionally.
+            'libspeechd_h_prefix%': '',
           },
           'action_name': 'generate_libspeechd_loader',
           'inputs': [
@@ -494,15 +515,23 @@
                      '--name', 'LibSpeechdLoader',
                      '--output-h', '<(output_h)',
                      '--output-cc', '<(output_cc)',
-                     '--header', '<libspeechd.h>',
+                     '--header', '<<(libspeechd_h_prefix)libspeechd.h>',
+                     '--bundled-header',
+                     '"third_party/speech-dispatcher/libspeechd.h"',
                      '--link-directly=<(linux_link_libspeechd)',
                      'spd_open',
                      'spd_say',
                      'spd_stop',
                      'spd_close',
+                     'spd_pause',
+                     'spd_resume',
                      'spd_set_notification_on',
                      'spd_set_voice_rate',
                      'spd_set_voice_pitch',
+                     'spd_list_synthesis_voices',
+                     'spd_set_synthesis_voice',
+                     'spd_list_modules',
+                     'spd_set_output_module',
           ],
           'message': 'Generating libspeechd library loader.',
           'process_outputs_as_sources': 1,
@@ -600,19 +629,6 @@
           'link_settings': {
             'libraries': [
               '<!@(libgcrypt-config --libs)',
-            ],
-          },
-        }],
-      ],
-    },
-    {
-      'target_name': 'selinux',
-      'type': 'none',
-      'conditions': [
-        ['_toolset=="target"', {
-          'link_settings': {
-            'libraries': [
-              '-lselinux',
             ],
           },
         }],
@@ -763,29 +779,29 @@
         ['_toolset=="target"', {
           'direct_dependent_settings': {
             'cflags': [
-              '<!@(<(pkg-config) --cflags pangocairo)',
+              '<!@(<(pkg-config) --cflags pangocairo pangoft2)',
             ],
           },
           'link_settings': {
             'ldflags': [
-              '<!@(<(pkg-config) --libs-only-L --libs-only-other pangocairo)',
+              '<!@(<(pkg-config) --libs-only-L --libs-only-other pangocairo pangoft2)',
             ],
             'libraries': [
-              '<!@(<(pkg-config) --libs-only-l pangocairo)',
+              '<!@(<(pkg-config) --libs-only-l pangocairo pangoft2)',
             ],
           },
         }, {
           'direct_dependent_settings': {
             'cflags': [
-              '<!@(pkg-config --cflags pangocairo)',
+              '<!@(pkg-config --cflags pangocairo pangoft2)',
             ],
           },
           'link_settings': {
             'ldflags': [
-              '<!@(pkg-config --libs-only-L --libs-only-other pangocairo)',
+              '<!@(pkg-config --libs-only-L --libs-only-other pangocairo pangoft2)',
             ],
             'libraries': [
-              '<!@(pkg-config --libs-only-l pangocairo)',
+              '<!@(pkg-config --libs-only-l pangocairo pangoft2)',
             ],
           },
         }],

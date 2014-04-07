@@ -5,8 +5,8 @@
 #import <Cocoa/Cocoa.h>
 
 #include "base/memory/scoped_ptr.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "content/browser/accessibility/browser_accessibility_cocoa.h"
 #include "content/browser/accessibility/browser_accessibility_manager.h"
 #include "content/browser/accessibility/browser_accessibility_manager_mac.h"
@@ -58,6 +58,11 @@ class BrowserAccessibilityTest : public ui::CocoaTest {
  public:
   virtual void SetUp() {
     CocoaTest::SetUp();
+    RebuildAccessibilityTree();
+  }
+
+ protected:
+  void RebuildAccessibilityTree() {
     AccessibilityNodeData root;
     root.id = 1000;
     root.location.set_width(500);
@@ -90,9 +95,8 @@ class BrowserAccessibilityTest : public ui::CocoaTest {
         retain]);
   }
 
- protected:
-  scoped_nsobject<MockAccessibilityDelegate> delegate_;
-  scoped_nsobject<BrowserAccessibilityCocoa> accessibility_;
+  base::scoped_nsobject<MockAccessibilityDelegate> delegate_;
+  base::scoped_nsobject<BrowserAccessibilityCocoa> accessibility_;
   scoped_ptr<BrowserAccessibilityManager> manager_;
 };
 
@@ -107,7 +111,7 @@ TEST_F(BrowserAccessibilityTest, HitTestTest) {
 // Test doing a hit test on the edge of a child.
 TEST_F(BrowserAccessibilityTest, EdgeHitTest) {
   BrowserAccessibilityCocoa* firstChild =
-      [accessibility_ accessibilityHitTest:NSMakePoint(0, 0)];
+      [accessibility_ accessibilityHitTest:NSZeroPoint];
   EXPECT_NSEQ(@"Child1",
       [firstChild accessibilityAttributeValue:NSAccessibilityTitleAttribute]);
 }
@@ -134,6 +138,28 @@ TEST_F(BrowserAccessibilityTest, InvalidAttributeTest) {
   NSString* shouldBeNil = [accessibility_
       accessibilityAttributeValue:@"NSAnInvalidAttribute"];
   EXPECT_TRUE(shouldBeNil == nil);
+}
+
+TEST_F(BrowserAccessibilityTest, RetainedDetachedObjectsReturnNil) {
+  // Get the first child.
+  BrowserAccessibilityCocoa* retainedFirstChild =
+      [accessibility_ accessibilityHitTest:NSMakePoint(50, 50)];
+  EXPECT_NSEQ(@"Child1", [retainedFirstChild
+      accessibilityAttributeValue:NSAccessibilityTitleAttribute]);
+
+  // Retain it. This simulates what the system might do with an
+  // accessibility object.
+  [retainedFirstChild retain];
+
+  // Rebuild the accessibility tree, which should detach |retainedFirstChild|.
+  RebuildAccessibilityTree();
+
+  // Now any attributes we query should return nil.
+  EXPECT_EQ(nil, [retainedFirstChild
+      accessibilityAttributeValue:NSAccessibilityTitleAttribute]);
+
+  // Don't leak memory in the test.
+  [retainedFirstChild release];
 }
 
 }  // namespace content

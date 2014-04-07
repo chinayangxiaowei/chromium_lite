@@ -4,17 +4,17 @@
 
 #include "apps/app_launch_for_metro_restart_win.h"
 
+#include "apps/launcher.h"
 #include "apps/pref_names.h"
 #include "base/bind.h"
 #include "base/files/file_path.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/prefs/pref_service.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/api/app_runtime/app_runtime_api.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_system.h"
-#include "chrome/browser/extensions/platform_app_launcher.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "win8/util/win8_util.h"
@@ -76,11 +76,9 @@ void HandleAppLaunchForMetroRestart(Profile* profile) {
   }
 
   const int kRestartAppLaunchDelayMs = 1000;
-  MessageLoop::current()->PostDelayedTask(
+  base::MessageLoop::current()->PostDelayedTask(
       FROM_HERE,
-      base::Bind(&LaunchAppWithId,
-                 profile,
-                 extension_id),
+      base::Bind(&LaunchAppWithId, profile, extension_id),
       base::TimeDelta::FromMilliseconds(kRestartAppLaunchDelayMs));
 }
 

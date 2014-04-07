@@ -13,8 +13,8 @@
 #include <list>
 #include <map>
 
+#include "base/message_loop/message_loop_proxy.h"
 #include "base/threading/thread.h"
-#include "base/message_loop_proxy.h"
 #include "base/synchronization/lock.h"
 #include "content/common/content_export.h"
 #include "media/video/capture/video_capture.h"
@@ -42,8 +42,12 @@ class CONTENT_EXPORT VideoCaptureImplManager
   virtual void RemoveDevice(media::VideoCaptureSessionId id,
                             media::VideoCapture::EventHandler* handler);
 
+  // Make all existing VideoCaptureImpl instances stop/resume delivering
+  // video frames to their clients, depends on flag |suspend|.
+  virtual void SuspendDevices(bool suspend);
+
   VideoCaptureMessageFilter* video_capture_message_filter() const {
-    return filter_;
+    return filter_.get();
   }
 
  protected:

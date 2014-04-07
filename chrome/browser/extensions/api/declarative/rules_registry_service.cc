@@ -5,15 +5,14 @@
 #include "chrome/browser/extensions/api/declarative/rules_registry_service.h"
 
 #include "base/bind.h"
+#include "base/lazy_instance.h"
 #include "base/logging.h"
+#include "base/memory/scoped_ptr.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/api/declarative/initializing_rules_registry.h"
-#include "chrome/browser/extensions/api/declarative/rules_registry_storage_delegate.h"
-#include "chrome/browser/extensions/api/declarative_content/content_constants.h"
 #include "chrome/browser/extensions/api/declarative_content/content_rules_registry.h"
-#include "chrome/browser/extensions/api/declarative_webrequest/webrequest_constants.h"
 #include "chrome/browser/extensions/api/declarative_webrequest/webrequest_rules_registry.h"
 #include "chrome/browser/extensions/api/web_request/web_request_api.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/extensions/extension.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_details.h"
@@ -22,15 +21,6 @@
 namespace extensions {
 
 namespace {
-
-// Returns the key to use for storing declarative rules in the state store.
-std::string GetDeclarativeRuleStorageKey(const std::string& event_name,
-                                         bool incognito) {
-  if (incognito)
-    return "declarative_rules.incognito." + event_name;
-  else
-    return "declarative_rules." + event_name;
-}
 
 // Registers |web_request_rules_registry| on the IO thread.
 void RegisterToExtensionWebRequestEventRouterOnIO(
@@ -43,61 +33,70 @@ void RegisterToExtensionWebRequestEventRouterOnIO(
 }  // namespace
 
 RulesRegistryService::RulesRegistryService(Profile* profile)
-    : profile_(profile) {
+    : content_rules_registry_(NULL),
+      profile_(profile) {
   if (profile) {
     registrar_.Add(this, chrome::NOTIFICATION_EXTENSION_UNLOADED,
-                   content::Source<Profile>(profile->GetOriginalProfile()));
+        content::Source<Profile>(profile->GetOriginalProfile()));
+    RegisterDefaultRulesRegistries();
   }
 }
 
-RulesRegistryService::~RulesRegistryService() {
-  for (size_t i = 0; i < delegates_.size(); ++i)
-    delegates_[i]->CleanupOnUIThread();
-}
+RulesRegistryService::~RulesRegistryService() {}
 
 void RulesRegistryService::RegisterDefaultRulesRegistries() {
-  RulesRegistryStorageDelegate* delegate = new RulesRegistryStorageDelegate();
+  scoped_ptr<RulesRegistryWithCache::RuleStorageOnUI> ui_part;
   scoped_refptr<WebRequestRulesRegistry> web_request_rules_registry(
-      new WebRequestRulesRegistry(profile_, delegate));
-  delegate->InitOnUIThread(profile_, web_request_rules_registry,
-      GetDeclarativeRuleStorageKey(
-          declarative_webrequest_constants::kOnRequest,
-          profile_->IsOffTheRecord()));
-  delegates_.push_back(delegate);
+      new WebRequestRulesRegistry(profile_, &ui_part));
+  ui_parts_of_registries_.push_back(ui_part.release());
 
-  RegisterRulesRegistry(declarative_webrequest_constants::kOnRequest,
-                        web_request_rules_registry);
+  RegisterRulesRegistry(web_request_rules_registry);
   content::BrowserThread::PostTask(
       content::BrowserThread::IO, FROM_HERE,
       base::Bind(&RegisterToExtensionWebRequestEventRouterOnIO,
           profile_, web_request_rules_registry));
 
 #if defined(ENABLE_EXTENSIONS)
-  delegate = new RulesRegistryStorageDelegate();
   scoped_refptr<ContentRulesRegistry> content_rules_registry(
-      new ContentRulesRegistry(profile_, delegate));
-  delegate->InitOnUIThread(profile_, content_rules_registry,
-      GetDeclarativeRuleStorageKey(
-          declarative_content_constants::kOnPageChanged,
-          profile_->IsOffTheRecord()));
-  delegates_.push_back(delegate);
+      new ContentRulesRegistry(profile_, &ui_part));
+  ui_parts_of_registries_.push_back(ui_part.release());
 
-  RegisterRulesRegistry(declarative_content_constants::kOnPageChanged,
-                        content_rules_registry);
+  RegisterRulesRegistry(content_rules_registry);
   content_rules_registry_ = content_rules_registry.get();
 #endif  // defined(ENABLE_EXTENSIONS)
 }
 
 void RulesRegistryService::Shutdown() {
+  // Release the references to all registries. This would happen soon during
+  // destruction of |*this|, but we need the ExtensionWebRequestEventRouter to
+  // be the last to reference the WebRequestRulesRegistry objects, so that
+  // the posted task below causes their destruction on the IO thread, not on UI
+  // where the destruction of |*this| takes place.
+  // TODO(vabr): Remove once http://crbug.com/218451#c6 gets addressed.
+  rule_registries_.clear();
   content::BrowserThread::PostTask(
       content::BrowserThread::IO, FROM_HERE,
       base::Bind(&RegisterToExtensionWebRequestEventRouterOnIO,
           profile_, scoped_refptr<WebRequestRulesRegistry>(NULL)));
 }
 
+static base::LazyInstance<ProfileKeyedAPIFactory<RulesRegistryService> >
+g_factory = LAZY_INSTANCE_INITIALIZER;
+
+// static
+ProfileKeyedAPIFactory<RulesRegistryService>*
+RulesRegistryService::GetFactoryInstance() {
+  return &g_factory.Get();
+}
+
+// static
+RulesRegistryService* RulesRegistryService::Get(Profile* profile) {
+  return ProfileKeyedAPIFactory<RulesRegistryService>::GetForProfile(profile);
+}
+
 void RulesRegistryService::RegisterRulesRegistry(
-    const std::string& event_name,
     scoped_refptr<RulesRegistry> rule_registry) {
+  const std::string event_name(rule_registry->event_name());
   DCHECK(rule_registries_.find(event_name) == rule_registries_.end());
   rule_registries_[event_name] =
       make_scoped_refptr(new InitializingRulesRegistry(rule_registry));
@@ -121,13 +120,14 @@ void RulesRegistryService::OnExtensionUnloaded(
   RulesRegistryMap::iterator i;
   for (i = rule_registries_.begin(); i != rule_registries_.end(); ++i) {
     scoped_refptr<RulesRegistry> registry = i->second;
-    if (content::BrowserThread::CurrentlyOn(registry->GetOwnerThread())) {
+    if (content::BrowserThread::CurrentlyOn(registry->owner_thread())) {
       registry->OnExtensionUnloaded(extension_id);
     } else {
       content::BrowserThread::PostTask(
-          registry->GetOwnerThread(), FROM_HERE,
-          base::Bind(&RulesRegistry::OnExtensionUnloaded, registry,
-                     extension_id));
+          registry->owner_thread(),
+          FROM_HERE,
+          base::Bind(
+              &RulesRegistry::OnExtensionUnloaded, registry, extension_id));
     }
   }
 }

@@ -21,10 +21,11 @@
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/resource/resource_bundle.h"
 #include "ui/base/text/text_elider.h"
+#include "ui/base/theme_provider.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/color_utils.h"
+#include "ui/gfx/image/image.h"
 #include "ui/gfx/render_text.h"
 #include "ui/native_theme/native_theme.h"
 
@@ -105,26 +106,28 @@ class OmniboxResultView::MirroringContext {
 OmniboxResultView::OmniboxResultView(
     OmniboxResultViewModel* model,
     int model_index,
-    const gfx::Font& font)
+    LocationBarView* location_bar_view,
+    const gfx::FontList& font_list)
     : edge_item_padding_(LocationBarView::GetItemPadding()),
       item_padding_(LocationBarView::GetItemPadding()),
       minimum_text_vertical_padding_(kMinimumTextVerticalPadding),
       model_(model),
       model_index_(model_index),
-      font_(font),
-      font_height_(std::max(font.GetHeight(),
-                            font.DeriveFont(0, gfx::BOLD).GetHeight())),
-      ellipsis_width_(font.GetStringWidth(string16(kEllipsis))),
+      location_bar_view_(location_bar_view),
+      font_list_(font_list),
+      font_height_(std::max(font_list.GetHeight(),
+                            font_list.DeriveFontList(gfx::BOLD).GetHeight())),
+      ellipsis_width_(font_list.GetPrimaryFont().GetStringWidth(
+          string16(kEllipsis))),
       mirroring_context_(new MirroringContext()),
       keyword_icon_(new views::ImageView()),
-      ALLOW_THIS_IN_INITIALIZER_LIST(
-          animation_(new ui::SlideAnimation(this))) {
+      animation_(new ui::SlideAnimation(this)) {
   CHECK_GE(model_index, 0);
   if (default_icon_size_ == 0) {
     default_icon_size_ =
-        ui::ResourceBundle::GetSharedInstance().GetImageSkiaNamed(
-        AutocompleteMatch::TypeToIcon(AutocompleteMatch::URL_WHAT_YOU_TYPED))->
-        width();
+        location_bar_view_->GetThemeProvider()->GetImageSkiaNamed(
+            AutocompleteMatch::TypeToIcon(
+                AutocompleteMatchType::URL_WHAT_YOU_TYPED))->width();
   }
   keyword_icon_->set_owned_by_client();
   keyword_icon_->EnableCanvasFlippingForRTLUI(true);
@@ -159,11 +162,15 @@ SkColor OmniboxResultView::GetColor(
   static bool initialized = false;
   static SkColor colors[NUM_STATES][NUM_KINDS];
   if (!initialized) {
-    colors[SELECTED][BACKGROUND] = theme->GetSystemColor(
-        ui::NativeTheme::kColorId_TextfieldSelectionBackgroundFocused);
     colors[NORMAL][BACKGROUND] = theme->GetSystemColor(
         ui::NativeTheme::kColorId_TextfieldDefaultBackground);
+    colors[NORMAL][TEXT] = theme->GetSystemColor(
+        ui::NativeTheme::kColorId_TextfieldDefaultColor);
     colors[NORMAL][URL] = SkColorSetARGB(0xff, 0x00, 0x99, 0x33);
+    colors[SELECTED][BACKGROUND] = theme->GetSystemColor(
+        ui::NativeTheme::kColorId_TextfieldSelectionBackgroundFocused);
+    colors[SELECTED][TEXT] = theme->GetSystemColor(
+        ui::NativeTheme::kColorId_TextfieldSelectionColor);
     colors[SELECTED][URL] = SkColorSetARGB(0xff, 0x00, 0x66, 0x22);
     colors[HOVERED][URL] = SkColorSetARGB(0xff, 0x00, 0x66, 0x22);
     CommonInitColors(theme, colors);
@@ -215,6 +222,10 @@ OmniboxResultView::ResultViewState OmniboxResultView::GetState() const {
   return model_->IsHoveredIndex(model_index_) ? HOVERED : NORMAL;
 }
 
+int OmniboxResultView::GetTextHeight() const {
+  return font_height_;
+}
+
 void OmniboxResultView::PaintMatch(gfx::Canvas* canvas,
                                    const AutocompleteMatch& match,
                                    int x) {
@@ -239,10 +250,6 @@ void OmniboxResultView::PaintMatch(gfx::Canvas* canvas,
     DrawString(canvas, match.description, match.description_class, true, x,
                text_bounds_.y());
   }
-}
-
-int OmniboxResultView::GetTextHeight() const {
-  return font_height_;
 }
 
 // static
@@ -319,13 +326,13 @@ gfx::ImageSkia OmniboxResultView::GetIcon() const {
         break;
     }
   }
-  return *ui::ResourceBundle::GetSharedInstance().GetImageSkiaNamed(icon);
+  return *(location_bar_view_->GetThemeProvider()->GetImageSkiaNamed(icon));
 }
 
 const gfx::ImageSkia* OmniboxResultView::GetKeywordIcon() const {
   // NOTE: If we ever begin returning icons of varying size, then callers need
   // to ensure that |keyword_icon_| is resized each time its image is reset.
-  return ui::ResourceBundle::GetSharedInstance().GetImageSkiaNamed(
+  return location_bar_view_->GetThemeProvider()->GetImageSkiaNamed(
       (GetState() == SELECTED) ? IDR_OMNIBOX_TTS_SELECTED : IDR_OMNIBOX_TTS);
 }
 
@@ -397,7 +404,7 @@ int OmniboxResultView::DrawString(
       gfx::RenderText* render_text = render_texts.back();
       current_run->classifications.push_back(render_text);
       render_text->SetText(text.substr(text_start, text_end - text_start));
-      render_text->SetFont(font_);
+      render_text->SetFontList(font_list_);
 
       // Calculate style-related data.
       if (classifications[i].style & ACMatchClassification::MATCH)
@@ -465,7 +472,7 @@ int OmniboxResultView::DrawString(
       // Align the text runs to a common baseline.
       const gfx::Rect rect(
           mirroring_context_->mirrored_left_coord(x, x + size.width()),
-          y + font_.GetBaseline() - (*j)->GetBaseline(),
+          y + font_list_.GetBaseline() - (*j)->GetBaseline(),
           size.width(), size.height());
       (*j)->SetDisplayRect(rect);
       (*j)->Draw(canvas);
@@ -506,8 +513,11 @@ void OmniboxResultView::Elide(Runs* runs, int remaining_width) const {
       first_classification = false;
 
       // Can we fit at least an ellipsis?
-      string16 elided_text = ui::ElideText((*j)->text(), (*j)->GetFont(),
-                                           remaining_width, ui::ELIDE_AT_END);
+      gfx::Font font((*j)->GetStyle(gfx::BOLD) ?
+          (*j)->GetPrimaryFont().DeriveFont(0, gfx::Font::BOLD) :
+          (*j)->GetPrimaryFont());
+      string16 elided_text(
+          ui::ElideText((*j)->text(), font, remaining_width, ui::ELIDE_AT_END));
       Classifications::reverse_iterator prior(j + 1);
       const bool on_first_classification = (prior == i->classifications.rend());
       if (elided_text.empty() && (remaining_width >= ellipsis_width_) &&
@@ -529,12 +539,9 @@ void OmniboxResultView::Elide(Runs* runs, int remaining_width) const {
         // If we could only fit an ellipsis, then only make it bold if there was
         // an immediate prior classification in this run that was also bold, or
         // it will look orphaned.
-        if ((((*j)->GetFont().GetStyle() & gfx::BOLD) != 0) &&
-            (elided_text.length() == 1) &&
-            (on_first_classification ||
-             (((*prior)->GetFont().GetStyle() & gfx::BOLD) == 0))) {
+        if ((*j)->GetStyle(gfx::BOLD) && (elided_text.length() == 1) &&
+            (on_first_classification || !(*prior)->GetStyle(gfx::BOLD)))
           (*j)->SetStyle(gfx::BOLD, false);
-        }
 
         // Erase any other classifications that come after the elided one.
         i->classifications.erase(j.base(), i->classifications.end());

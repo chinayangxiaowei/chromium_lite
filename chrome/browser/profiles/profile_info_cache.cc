@@ -14,14 +14,14 @@
 #include "base/prefs/pref_service.h"
 #include "base/rand_util.h"
 #include "base/stl_util.h"
-#include "base/string_piece.h"
-#include "base/stringprintf.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_piece.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/prefs/scoped_user_pref_update.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/pref_names.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_service.h"
@@ -48,6 +48,8 @@ const char kBackgroundAppsKey[] = "background_apps";
 const char kHasMigratedToGAIAInfoKey[] = "has_migrated_to_gaia_info";
 const char kGAIAPictureFileNameKey[] = "gaia_picture_file_name";
 const char kIsManagedKey[] = "is_managed";
+const char kSigninRequiredKey[] = "signin_required";
+const char kManagedUserId[] = "managed_user_id";
 
 const char kDefaultUrlPrefix[] = "chrome://theme/IDR_PROFILE_AVATAR_";
 const char kGAIAPictureFileName[] = "Google Profile Picture.png";
@@ -121,7 +123,7 @@ void SaveBitmap(ImageData* data,
 
   // Make sure the destination directory exists.
   base::FilePath dir = image_path.DirName();
-  if (!file_util::DirectoryExists(dir) && !file_util::CreateDirectory(dir)) {
+  if (!base::DirectoryExists(dir) && !file_util::CreateDirectory(dir)) {
     LOG(ERROR) << "Failed to create parent directory.";
     return;
   }
@@ -164,7 +166,7 @@ void ReadBitmap(const base::FilePath& image_path,
 
 void DeleteBitmap(const base::FilePath& image_path) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
-  file_util::Delete(image_path, false);
+  base::DeleteFile(image_path, false);
 }
 
 }  // namespace
@@ -174,14 +176,22 @@ ProfileInfoCache::ProfileInfoCache(PrefService* prefs,
     : prefs_(prefs),
       user_data_dir_(user_data_dir) {
   // Populate the cache
-  const DictionaryValue* cache =
-      prefs_->GetDictionary(prefs::kProfileInfoCache);
+  DictionaryPrefUpdate update(prefs_, prefs::kProfileInfoCache);
+  DictionaryValue* cache = update.Get();
   for (DictionaryValue::Iterator it(*cache); !it.IsAtEnd(); it.Advance()) {
-    const DictionaryValue* info = NULL;
-    it.value().GetAsDictionary(&info);
+    DictionaryValue* info = NULL;
+    cache->GetDictionaryWithoutPathExpansion(it.key(), &info);
     string16 name;
     info->GetString(kNameKey, &name);
     sorted_keys_.insert(FindPositionForProfile(it.key(), name), it.key());
+    // TODO(ibraaaa): delete this when we fully migrate to
+    // |prefs::kManagedUserId|.
+    bool is_managed = false;
+    info->GetBoolean(kIsManagedKey, &is_managed);
+    if (is_managed) {
+      info->SetString(kManagedUserId, "DUMMY_ID");
+      info->Remove(kIsManagedKey, NULL);
+    }
   }
 }
 
@@ -194,7 +204,7 @@ void ProfileInfoCache::AddProfileToCache(const base::FilePath& profile_path,
                                          const string16& name,
                                          const string16& username,
                                          size_t icon_index,
-                                         bool is_managed) {
+                                         const std::string& managed_user_id) {
   std::string key = CacheKeyFromProfilePath(profile_path);
   DictionaryPrefUpdate update(prefs_, prefs::kProfileInfoCache);
   DictionaryValue* cache = update.Get();
@@ -205,7 +215,7 @@ void ProfileInfoCache::AddProfileToCache(const base::FilePath& profile_path,
   info->SetString(kAvatarIconKey, GetDefaultAvatarIconUrl(icon_index));
   // Default value for whether background apps are running is false.
   info->SetBoolean(kBackgroundAppsKey, false);
-  info->SetBoolean(kIsManagedKey, is_managed);
+  info->SetString(kManagedUserId, managed_user_id);
   cache->Set(key, info.release());
 
   sorted_keys_.insert(FindPositionForProfile(key, name), key);
@@ -368,9 +378,20 @@ const gfx::Image* ProfileInfoCache::GetGAIAPictureOfProfileAtIndex(
 }
 
 bool ProfileInfoCache::ProfileIsManagedAtIndex(size_t index) const {
+  return !GetManagedUserIdOfProfileAtIndex(index).empty();
+}
+
+bool ProfileInfoCache::ProfileIsSigninRequiredAtIndex(size_t index) const {
   bool value = false;
-  GetInfoForProfileAtIndex(index)->GetBoolean(kIsManagedKey, &value);
+  GetInfoForProfileAtIndex(index)->GetBoolean(kSigninRequiredKey, &value);
   return value;
+}
+
+std::string ProfileInfoCache::GetManagedUserIdOfProfileAtIndex(
+    size_t index) const {
+  std::string managed_user_id;
+  GetInfoForProfileAtIndex(index)->GetString(kManagedUserId, &managed_user_id);
+  return managed_user_id;
 }
 
 void ProfileInfoCache::OnGAIAPictureLoaded(const base::FilePath& path,
@@ -483,6 +504,14 @@ void ProfileInfoCache::SetAvatarIconOfProfileAtIndex(size_t index,
   FOR_EACH_OBSERVER(ProfileInfoCacheObserver,
                     observer_list_,
                     OnProfileAvatarChanged(profile_path));
+}
+
+void ProfileInfoCache::SetManagedUserIdOfProfileAtIndex(size_t index,
+                                                        const std::string& id) {
+  scoped_ptr<DictionaryValue> info(GetInfoForProfileAtIndex(index)->DeepCopy());
+  info->SetString(kManagedUserId, id);
+  // This takes ownership of |info|.
+  SetInfoForProfileAtIndex(index, info.release());
 }
 
 void ProfileInfoCache::SetBackgroundStatusOfProfileAtIndex(
@@ -604,6 +633,17 @@ void ProfileInfoCache::SetIsUsingGAIAPictureOfProfileAtIndex(size_t index,
   FOR_EACH_OBSERVER(ProfileInfoCacheObserver,
                     observer_list_,
                     OnProfileAvatarChanged(profile_path));
+}
+
+void ProfileInfoCache::SetProfileSigninRequiredAtIndex(size_t index,
+                                                       bool value) {
+  if (value == ProfileIsSigninRequiredAtIndex(index))
+    return;
+
+  scoped_ptr<DictionaryValue> info(GetInfoForProfileAtIndex(index)->DeepCopy());
+  info->SetBoolean(kSigninRequiredKey, value);
+  // This takes ownership of |info|.
+  SetInfoForProfileAtIndex(index, info.release());
 }
 
 string16 ProfileInfoCache::ChooseNameForNewProfile(size_t icon_index) const {

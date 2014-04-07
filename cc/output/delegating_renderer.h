@@ -7,18 +7,15 @@
 
 #include "base/memory/scoped_ptr.h"
 #include "cc/base/cc_export.h"
+#include "cc/output/compositor_frame.h"
 #include "cc/output/renderer.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebGraphicsContext3D.h"
 
 namespace cc {
 
 class OutputSurface;
 class ResourceProvider;
 
-class CC_EXPORT DelegatingRenderer :
-    public Renderer,
-    public NON_EXPORTED_BASE(
-        WebKit::WebGraphicsContext3D::WebGraphicsContextLostCallback) {
+class CC_EXPORT DelegatingRenderer : public Renderer {
  public:
   static scoped_ptr<DelegatingRenderer> Create(
       RendererClient* client,
@@ -28,26 +25,26 @@ class CC_EXPORT DelegatingRenderer :
 
   virtual const RendererCapabilities& Capabilities() const OVERRIDE;
 
-  virtual void DrawFrame(RenderPassList& render_passes_in_draw_order) OVERRIDE;
+  virtual bool CanReadPixels() const OVERRIDE;
+
+  virtual void DrawFrame(RenderPassList* render_passes_in_draw_order) OVERRIDE;
 
   virtual void Finish() OVERRIDE {}
 
-  virtual bool SwapBuffers() OVERRIDE;
+  virtual void SwapBuffers() OVERRIDE;
+  virtual void ReceiveSwapBuffersAck(const CompositorFrameAck&) OVERRIDE;
 
   virtual void GetFramebufferPixels(void* pixels, gfx::Rect rect) OVERRIDE;
 
-  virtual void ReceiveCompositorFrameAck(const CompositorFrameAck&) OVERRIDE;
-
   virtual bool IsContextLost() OVERRIDE;
 
-  virtual void SetVisible(bool) OVERRIDE;
+  virtual void SetVisible(bool visible) OVERRIDE;
 
   virtual void SendManagedMemoryStats(size_t bytes_visible,
                                       size_t bytes_visible_and_nearby,
-                                      size_t bytes_allocated) OVERRIDE {}
+                                      size_t bytes_allocated) OVERRIDE;
 
-  // WebGraphicsContext3D::WebGraphicsContextLostCallback implementation.
-  virtual void onContextLost() OVERRIDE;
+  virtual void SetDiscardBackBufferWhenNotVisible(bool discard) OVERRIDE;
 
  private:
   DelegatingRenderer(RendererClient* client,
@@ -58,6 +55,7 @@ class CC_EXPORT DelegatingRenderer :
   OutputSurface* output_surface_;
   ResourceProvider* resource_provider_;
   RendererCapabilities capabilities_;
+  CompositorFrame frame_for_swap_buffers_;
   bool visible_;
 
   DISALLOW_COPY_AND_ASSIGN(DelegatingRenderer);

@@ -11,7 +11,7 @@
 #include "base/synchronization/condition_variable.h"
 #include "base/synchronization/lock.h"
 #include "base/threading/thread_checker.h"
-#include "base/time/default_clock.h"
+#include "base/time/default_tick_clock.h"
 #include "media/base/audio_renderer.h"
 #include "media/base/demuxer.h"
 #include "media/base/media_export.h"
@@ -19,8 +19,6 @@
 #include "media/base/ranges.h"
 #include "media/base/serial_runner.h"
 #include "ui/gfx/size.h"
-
-class MessageLoop;
 
 namespace base {
 class MessageLoopProxy;
@@ -33,33 +31,6 @@ class Clock;
 class FilterCollection;
 class MediaLog;
 class VideoRenderer;
-
-// Adapter for using asynchronous Pipeline methods in code that wants to run
-// synchronously.  To use, construct an instance of this class and pass the
-// |Callback()| to the Pipeline method requiring a callback.  Then Wait() for
-// the callback to get fired and call status() to see what the callback's
-// argument was.  This object is for one-time use; call |Callback()| exactly
-// once.
-class MEDIA_EXPORT PipelineStatusNotification {
- public:
-  PipelineStatusNotification();
-  ~PipelineStatusNotification();
-
-  // See class-level comment for usage.
-  PipelineStatusCB Callback();
-  void Wait();
-  PipelineStatus status();
-
- private:
-  void Notify(media::PipelineStatus status);
-
-  base::Lock lock_;
-  base::ConditionVariable cv_;
-  media::PipelineStatus status_;
-  bool notified_;
-
-  DISALLOW_COPY_AND_ASSIGN(PipelineStatusNotification);
-};
 
 // Pipeline runs the media pipeline.  Filters are created and called on the
 // message loop injected into this object. Pipeline works like a state
@@ -92,9 +63,7 @@ class MEDIA_EXPORT PipelineStatusNotification {
 // If any error ever happens, this object will transition to the "Error" state
 // from any state. If Stop() is ever called, this object will transition to
 // "Stopped" state.
-class MEDIA_EXPORT Pipeline
-    : public base::RefCountedThreadSafe<Pipeline>,
-      public DemuxerHost {
+class MEDIA_EXPORT Pipeline : public DemuxerHost {
  public:
   // Buffering states the pipeline transitions between during playback.
   // kHaveMetadata:
@@ -114,6 +83,7 @@ class MEDIA_EXPORT Pipeline
   // Constructs a media pipeline that will execute on |message_loop|.
   Pipeline(const scoped_refptr<base::MessageLoopProxy>& message_loop,
            MediaLog* media_log);
+  virtual ~Pipeline();
 
   // Build a pipeline to using the given filter collection to construct a filter
   // chain, executing |seek_cb| when the initial seek/preroll has completed.
@@ -144,6 +114,8 @@ class MEDIA_EXPORT Pipeline
   //
   // Stop() must complete before destroying the pipeline. It it permissible to
   // call Stop() at any point during the lifetime of the pipeline.
+  //
+  // It is safe to delete the pipeline during the execution of |stop_cb|.
   void Stop(const base::Closure& stop_cb);
 
   // Attempt to seek to the position specified by time.  |seek_cb| will be
@@ -226,10 +198,6 @@ class MEDIA_EXPORT Pipeline
   FRIEND_TEST_ALL_PREFIXES(PipelineTest, EndedCallback);
   FRIEND_TEST_ALL_PREFIXES(PipelineTest, AudioStreamShorterThanVideo);
   friend class MediaLog;
-
-  // Only allow ourselves to be deleted by reference counting.
-  friend class base::RefCountedThreadSafe<Pipeline>;
-  virtual ~Pipeline();
 
   // Pipeline states, as described above.
   enum State {
@@ -405,8 +373,8 @@ class MEDIA_EXPORT Pipeline
   // the filters.
   float playback_rate_;
 
-  // base::Clock used by |clock_|.
-  base::DefaultClock default_clock_;
+  // base::TickClock used by |clock_|.
+  base::DefaultTickClock default_tick_clock_;
 
   // Reference clock.  Keeps track of current playback time.  Uses system
   // clock and linear interpolation, but can have its time manually set
@@ -444,8 +412,6 @@ class MEDIA_EXPORT Pipeline
   // Set to true in DisableAudioRendererTask().
   bool audio_disabled_;
 
-  scoped_ptr<FilterCollection> filter_collection_;
-
   // Temporary callback used for Start() and Seek().
   PipelineStatusCB seek_cb_;
 
@@ -458,19 +424,22 @@ class MEDIA_EXPORT Pipeline
   BufferingStateCB buffering_state_cb_;
   base::Closure duration_change_cb_;
 
-  // Renderer references used for setting the volume, playback rate, and
-  // determining when playback has finished.
+  // Contains the demuxer and renderers to use when initializing.
+  scoped_ptr<FilterCollection> filter_collection_;
+
+  // Holds the initialized demuxer. Used for seeking. Owned by client.
+  Demuxer* demuxer_;
+
+  // Holds the initialized renderers. Used for setting the volume,
+  // playback rate, and determining when playback has finished.
   scoped_ptr<AudioRenderer> audio_renderer_;
   scoped_ptr<VideoRenderer> video_renderer_;
-
-  // Demuxer reference used for setting the preload value.
-  scoped_refptr<Demuxer> demuxer_;
 
   PipelineStatistics statistics_;
 
   // Time of pipeline creation; is non-zero only until the pipeline first
   // reaches "kStarted", at which point it is used & zeroed out.
-  base::Time creation_time_;
+  base::TimeTicks creation_time_;
 
   scoped_ptr<SerialRunner> pending_callbacks_;
 

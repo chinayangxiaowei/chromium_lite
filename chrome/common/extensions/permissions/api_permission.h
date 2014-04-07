@@ -12,11 +12,8 @@
 #include "base/callback.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/pickle.h"
+#include "base/values.h"
 #include "chrome/common/extensions/permissions/permission_message.h"
-
-namespace base {
-class Value;
-}
 
 namespace IPC {
 class Message;
@@ -25,7 +22,7 @@ class Message;
 namespace extensions {
 
 class APIPermissionInfo;
-class PermissionsInfo;
+class ChromeAPIPermissions;
 
 // APIPermission is for handling some complex permissions. Please refer to
 // extensions::SocketPermission as an example.
@@ -39,16 +36,17 @@ class APIPermission {
 
     // Real permissions.
     kActiveTab,
+    kActivityLogPrivate,
     kAdView,
     kAlarms,
     kAppCurrentWindowInternal,
     kAppRuntime,
     kAppWindow,
+    kAudio,
     kAudioCapture,
     kAutoTestPrivate,
     kBackground,
     kBluetooth,
-    kBluetoothDevice,
     kBookmark,
     kBookmarkManagerPrivate,
     kBrowsingData,
@@ -56,9 +54,11 @@ class APIPermission {
     kClipboardRead,
     kClipboardWrite,
     kCloudPrintPrivate,
+    kCommandLinePrivate,
     kContentSettings,
     kContextMenus,
     kCookie,
+    kDiagnostics,
     kDial,
     kDebugger,
     kDeclarative,
@@ -68,26 +68,36 @@ class APIPermission {
     kDevtools,
     kDownloads,
     kDownloadsInternal,
+    kDownloadsOpen,
+    kDownloadsShelf,
     kEchoPrivate,
+    kEnterprisePlatformKeysPrivate,
     kExperimental,
+    kFeedbackPrivate,
     kFileBrowserHandler,
     kFileBrowserHandlerInternal,
     kFileBrowserPrivate,
     kFileSystem,
+    kFileSystemRetainEntries,
     kFileSystemWrite,
     kFontSettings,
     kFullscreen,
     kGeolocation,
     kHistory,
+    kIdentity,
+    kIdentityPrivate,
     kIdle,
+    kInfobars,
     kInput,
     kInputMethodPrivate,
-    kManagedModePrivate,
+    kLocation,
+    kLogPrivate,
     kManagement,
     kMediaGalleries,
     kMediaGalleriesPrivate,
     kMediaPlayerPrivate,
     kMetricsPrivate,
+    kMusicManagerPrivate,
     kNativeMessaging,
     kNetworkingPrivate,
     kNotification,
@@ -95,9 +105,11 @@ class APIPermission {
     kPointerLock,
     kPlugin,
     kPower,
+    kPreferencesPrivate,
     kPrivacy,
     kProxy,
     kPushMessaging,
+    kRecoveryPrivate,
     kRtcPrivate,
     kScreensaver,
     kSerial,
@@ -108,7 +120,8 @@ class APIPermission {
     kSyncFileSystem,
     kSystemPrivate,
     kSystemIndicator,
-    kSystemInfoDisplay,
+    kSystemDisplay,
+    kSystemStorage,
     kTab,
     kTabCapture,
     kTerminalPrivate,
@@ -120,13 +133,17 @@ class APIPermission {
     kUsbDevice,
     kVideoCapture,
     kWallpaperPrivate,
+    kWebConnectable,  // for externally_connectable manifest key
     kWebNavigation,
     kWebRequest,
     kWebRequestBlocking,
     kWebRequestInternal,
-    kWebSocketProxyPrivate,
     kWebstorePrivate,
     kWebView,
+    kSystemCpu,
+    kSystemMemory,
+    kSystemInfoCpu,
+    kSystemInfoMemory,
     kEnumBoundary
   };
 
@@ -221,8 +238,9 @@ class APIPermissionInfo {
     // Indicates that extensions cannot specify the permission as optional.
     kFlagCannotBeOptional = 1 << 3,
 
-    // Indicates that extensions must specify the permission as optional.
-    kFlagMustBeOptional = 1 << 4
+    // Indicates that the permission is internal to the extensions
+    // system and cannot be specified in the "permissions" list.
+    kFlagInternal = 1 << 4,
   };
 
   typedef APIPermission* (*APIPermissionConstructor)(const APIPermissionInfo*);
@@ -262,15 +280,16 @@ class APIPermissionInfo {
     return (flags_ & kFlagCannotBeOptional) == 0;
   }
 
-  // Returns true if this permission must be added and removed via the
-  // optional permissions extension API.
-  bool must_be_optional() const {
-    return (flags_ & kFlagMustBeOptional) != 0;
+  // Returns true if this permission is internal rather than a
+  // "permissions" list entry.
+  bool is_internal() const {
+    return (flags_ & kFlagInternal) != 0;
   }
 
  private:
-  // Instances should only be constructed from within PermissionsInfo.
-  friend class PermissionsInfo;
+  // Instances should only be constructed from within a
+  // PermissionsInfo::Delegate.
+  friend class ChromeAPIPermissions;
   // Implementations of APIPermission will want to get the permission message,
   // but this class's implementation should be hidden from everyone else.
   friend class APIPermission;
@@ -282,9 +301,6 @@ class APIPermissionInfo {
       PermissionMessage::ID message_id,
       int flags,
       APIPermissionConstructor api_permission_constructor);
-
-  // Register ALL the permissions!
-  static void RegisterAllPermissions(PermissionsInfo* info);
 
   // Returns the localized permission message associated with this api.
   // Use GetMessage_ to avoid name conflict with macro GetMessage on Windows.

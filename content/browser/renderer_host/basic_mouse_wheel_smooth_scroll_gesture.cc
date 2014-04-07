@@ -26,21 +26,15 @@ bool BasicMouseWheelSmoothScrollGesture::ForwardInputEvents(
   if (pixels_scrolled_ >= pixels_to_scroll_)
     return false;
 
-  double positionDelta = 10;
-  if (!last_tick_time_.is_null()) {
-    RenderWidgetHostImpl* hostImpl = RenderWidgetHostImpl::From(host);
-    double desiredIntervalMs = hostImpl->SyntheticScrollMessageInterval();
-    double velocity = 10 / desiredIntervalMs;
-    double timeDelta = (now - last_tick_time_).InMillisecondsF();
-    positionDelta = velocity * timeDelta;
-  }
+  double position_delta = smooth_scroll_calculator_.GetScrollDelta(
+      now,
+      RenderWidgetHostImpl::From(host)->GetSyntheticScrollMessageInterval());
 
-  last_tick_time_ = now;
 
   WebKit::WebMouseWheelEvent event;
   event.type = WebKit::WebInputEvent::MouseWheel;
-  event.hasPreciseScrollingDeltas = 1;
-  event.deltaY = scroll_down_ ? -positionDelta : positionDelta;
+  event.hasPreciseScrollingDeltas = 0;
+  event.deltaY = scroll_down_ ? -position_delta : position_delta;
   // TODO(vollick): find a proper way to access
   // WebCore::WheelEvent::tickMultiplier.
   event.wheelTicksY = event.deltaY / 120;

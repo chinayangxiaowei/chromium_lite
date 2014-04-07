@@ -9,25 +9,14 @@
 #include "content/public/browser/web_contents_view.h"
 #include "jni/ColorChooserAndroid_jni.h"
 
-namespace content {
+namespace web_contents_delegate_android {
 
-ColorChooser* ColorChooser::Create(
-    int identifier, WebContents* tab, SkColor initial_color) {
-  return new components::ColorChooserAndroid(identifier, tab, initial_color);
-}
-
-}  // namespace content
-
-namespace components {
-
-ColorChooserAndroid::ColorChooserAndroid(int identifier,
-                                         content::WebContents* tab,
+ColorChooserAndroid::ColorChooserAndroid(content::WebContents* web_contents,
                                          SkColor initial_color)
-    : ColorChooser::ColorChooser(identifier),
-      content::WebContentsObserver(tab) {
+    : web_contents_(web_contents) {
   JNIEnv* env = AttachCurrentThread();
   content::ContentViewCore* content_view_core =
-      tab->GetView()->GetContentNativeView();
+      content::ContentViewCore::FromWebContents(web_contents);
   DCHECK(content_view_core);
 
   j_color_chooser_.Reset(Java_ColorChooserAndroid_createColorChooserAndroid(
@@ -54,8 +43,8 @@ void ColorChooserAndroid::SetSelectedColor(SkColor color) {
 }
 
 void ColorChooserAndroid::OnColorChosen(JNIEnv* env, jobject obj, jint color) {
-  web_contents()->DidChooseColorInColorChooser(identifier(), color);
-  web_contents()->DidEndColorChooser(identifier());
+  web_contents_->DidChooseColorInColorChooser(color);
+  web_contents_->DidEndColorChooser();
 }
 
 // ----------------------------------------------------------------------------
@@ -65,4 +54,4 @@ bool RegisterColorChooserAndroid(JNIEnv* env) {
   return RegisterNativesImpl(env);
 }
 
-}  // namespace components
+}  // namespace web_contents_delegate_android

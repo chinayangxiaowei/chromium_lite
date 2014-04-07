@@ -24,6 +24,8 @@ namespace ash {
 
 namespace internal {
 
+const char StatusAreaWidget::kNativeViewName[] = "StatusAreaWidget";
+
 StatusAreaWidget::StatusAreaWidget(aura::Window* status_container)
     : status_area_widget_delegate_(new internal::StatusAreaWidgetDelegate),
       system_tray_(NULL),
@@ -33,12 +35,11 @@ StatusAreaWidget::StatusAreaWidget(aura::Window* status_container)
       views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
   params.delegate = status_area_widget_delegate_;
   params.parent = status_container;
-  params.transparent = true;
+  params.opacity = views::Widget::InitParams::TRANSLUCENT_WINDOW;
   Init(params);
   set_focus_on_creation(false);
   SetContentsView(status_area_widget_delegate_);
-  GetNativeView()->SetName("StatusAreaWidget");
-  GetNativeView()->SetProperty(internal::kStayInSameRootWindowKey, true);
+  GetNativeView()->SetName(kNativeViewName);
 }
 
 StatusAreaWidget::~StatusAreaWidget() {
@@ -90,6 +91,12 @@ bool StatusAreaWidget::IsMessageBubbleShown() const {
            web_notification_tray_->IsMessageCenterBubbleVisible()));
 }
 
+void StatusAreaWidget::OnNativeWidgetActivationChanged(bool active) {
+  Widget::OnNativeWidgetActivationChanged(active);
+  if (active)
+    status_area_widget_delegate_->SetPaneFocusAndFocusDefault();
+}
+
 void StatusAreaWidget::AddSystemTray() {
   system_tray_ = new SystemTray(this);
   status_area_widget_delegate_->AddTray(system_tray_);
@@ -107,11 +114,6 @@ void StatusAreaWidget::SetShelfAlignment(ShelfAlignment alignment) {
   if (web_notification_tray_)
     web_notification_tray_->SetShelfAlignment(alignment);
   status_area_widget_delegate_->UpdateLayout();
-}
-
-void StatusAreaWidget::SetHideWebNotifications(bool hide) {
-  if (web_notification_tray_)
-    web_notification_tray_->SetHidePopupBubble(hide);
 }
 
 void StatusAreaWidget::SetHideSystemNotifications(bool hide) {

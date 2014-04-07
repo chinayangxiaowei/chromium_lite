@@ -12,10 +12,9 @@
 #include "ash/system/tray/system_tray_delegate.h"
 #include "ash/system/tray/system_tray_notifier.h"
 #include "ash/system/tray/tray_constants.h"
-#include "ash/system/tray/tray_views.h"
 #include "base/bind.h"
-#include "base/message_loop.h"
-#include "base/utf_string_conversions.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/utf_string_conversions.h"
 #include "grit/ash_resources.h"
 #include "grit/ash_strings.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -134,7 +133,7 @@ TrayBrightness::TrayBrightness(SystemTray* system_tray)
       got_current_percent_(false) {
   // Post a task to get the initial brightness; the BrightnessControlDelegate
   // isn't created yet.
-  MessageLoopForUI::current()->PostTask(
+  base::MessageLoopForUI::current()->PostTask(
       FROM_HERE,
       base::Bind(&TrayBrightness::GetInitialBrightness,
                  weak_ptr_factory_.GetWeakPtr()));

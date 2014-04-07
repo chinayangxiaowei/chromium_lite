@@ -17,8 +17,11 @@
 #include "content/public/browser/notification_registrar.h"
 #include "content/public/browser/notification_types.h"
 
-class MessageLoop;
 class Profile;
+
+namespace base {
+class MessageLoop;
+}
 
 namespace content {
 class NotificationService;
@@ -64,6 +67,9 @@ class TypedUrlChangeProcessor : public ChangeProcessor,
   // jank.
   virtual void CommitChangesFromSyncModel() OVERRIDE;
 
+  // Stop processing changes and wait for being destroyed.
+  void Disconnect();
+
  protected:
   virtual void StartImpl(Profile* profile) OVERRIDE;
 
@@ -98,10 +104,9 @@ class TypedUrlChangeProcessor : public ChangeProcessor,
   // WebDataService which is kept alive by our data type controller
   // holding a reference.
   history::HistoryBackend* history_backend_;
+  base::MessageLoop* backend_loop_;
 
   content::NotificationRegistrar notification_registrar_;
-
-  MessageLoop* expected_loop_;
 
   scoped_ptr<content::NotificationService> notification_service_;
 
@@ -112,6 +117,9 @@ class TypedUrlChangeProcessor : public ChangeProcessor,
   std::vector<GURL> pending_deleted_urls_;
   TypedUrlModelAssociator::TypedUrlVisitVector pending_new_visits_;
   history::VisitVector pending_deleted_visits_;
+
+  bool disconnected_;
+  base::Lock disconnect_lock_;
 
   DISALLOW_COPY_AND_ASSIGN(TypedUrlChangeProcessor);
 };

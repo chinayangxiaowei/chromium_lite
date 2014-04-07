@@ -4,40 +4,43 @@
 
 #include "chrome/browser/media_galleries/media_galleries_dialog_controller.h"
 
-#include "base/i18n/time_formatting.h"
 #include "base/path_service.h"
 #include "base/stl_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/media_galleries/media_file_system_registry.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/storage_monitor/media_storage_util.h"
 #include "chrome/browser/storage_monitor/storage_info.h"
+#include "chrome/browser/storage_monitor/storage_monitor.h"
 #include "chrome/browser/ui/chrome_select_file_policy.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/extensions/extension.h"
+#include "chrome/common/extensions/permissions/media_galleries_permission.h"
+#include "chrome/common/extensions/permissions/permissions_data.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_view.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/text/bytes_formatting.h"
 
+using extensions::APIPermission;
 using extensions::Extension;
 
 namespace chrome {
 
 namespace {
 
-bool IsAttachedDevice(const std::string& device_id) {
-  if (!MediaStorageUtil::IsRemovableDevice(device_id))
+// Comparator for sorting GalleryPermissionsVector -- sorts
+// allowed galleries low, and then sorts by absolute path.
+bool GalleriesVectorComparator(
+    const MediaGalleriesDialogController::GalleryPermission& a,
+    const MediaGalleriesDialogController::GalleryPermission& b) {
+  if (a.allowed && !b.allowed)
+    return true;
+  if (!a.allowed && b.allowed)
     return false;
 
-  std::vector<StorageInfo> removable_storages =
-      StorageMonitor::GetInstance()->GetAttachedStorage();
-  for (size_t i = 0; i < removable_storages.size(); ++i) {
-    if (removable_storages[i].device_id == device_id)
-      return true;
-  }
-  return false;
+  return a.pref_info.AbsolutePath() < b.pref_info.AbsolutePath();
 }
 
 }  // namespace
@@ -49,97 +52,40 @@ MediaGalleriesDialogController::MediaGalleriesDialogController(
       : web_contents_(web_contents),
         extension_(&extension),
         on_finish_(on_finish) {
+  // Passing unretained pointer is safe, since the dialog controller
+  // is self-deleting, and so won't be deleted until it can be shown
+  // and then closed.
+  StorageMonitor::GetInstance()->EnsureInitialized(base::Bind(
+      &MediaGalleriesDialogController::OnStorageMonitorInitialized,
+      base::Unretained(this)));
+}
+
+void MediaGalleriesDialogController::OnStorageMonitorInitialized() {
   MediaFileSystemRegistry* registry =
       g_browser_process->media_file_system_registry();
   preferences_ = registry->GetPreferences(
-      Profile::FromBrowserContext(web_contents->GetBrowserContext()));
+      Profile::FromBrowserContext(web_contents_->GetBrowserContext()));
   InitializePermissions();
 
   dialog_.reset(MediaGalleriesDialog::Create(this));
 
-  StorageMonitor* monitor = StorageMonitor::GetInstance();
-  if (monitor)
-    monitor->AddObserver(this);
+  StorageMonitor::GetInstance()->AddObserver(this);
 
   preferences_->AddGalleryChangeObserver(this);
 }
 
-MediaGalleriesDialogController::MediaGalleriesDialogController()
+MediaGalleriesDialogController::MediaGalleriesDialogController(
+    const extensions::Extension& extension)
     : web_contents_(NULL),
-      extension_(NULL),
+      extension_(&extension),
       preferences_(NULL) {}
 
 MediaGalleriesDialogController::~MediaGalleriesDialogController() {
-  StorageMonitor* monitor = StorageMonitor::GetInstance();
-  if (monitor)
-    monitor->RemoveObserver(this);
+  if (chrome::StorageMonitor::GetInstance())
+    StorageMonitor::GetInstance()->RemoveObserver(this);
 
   if (select_folder_dialog_.get())
     select_folder_dialog_->ListenerDestroyed();
-}
-
-// static
-string16 MediaGalleriesDialogController::GetGalleryDisplayName(
-    const MediaGalleryPrefInfo& gallery) {
-  string16 name = gallery.display_name;
-  if (IsAttachedDevice(gallery.device_id)) {
-    name += ASCIIToUTF16(" ");
-    name +=
-        l10n_util::GetStringUTF16(IDS_MEDIA_GALLERIES_DIALOG_DEVICE_ATTACHED);
-  }
-  return name;
-}
-
-// static
-string16 MediaGalleriesDialogController::GetGalleryDisplayNameNoAttachment(
-    const MediaGalleryPrefInfo& gallery) {
-  string16 name = gallery.display_name;
-  if (name.empty())
-    name = gallery.volume_label;
-  if (name.empty()) {
-    name = MediaStorageUtil::GetDisplayNameForDevice(
-      gallery.total_size_in_bytes,
-      MediaStorageUtil::GetFullProductName(UTF16ToUTF8(gallery.vendor_name),
-                                           UTF16ToUTF8(gallery.model_name)));
-  }
-
-  return name;
-}
-
-// static
-string16 MediaGalleriesDialogController::GetGalleryTooltip(
-    const MediaGalleryPrefInfo& gallery) {
-  return gallery.AbsolutePath().LossyDisplayName();
-}
-
-// static
-bool MediaGalleriesDialogController::GetGalleryAttached(
-    const MediaGalleryPrefInfo& gallery) {
-  return !MediaStorageUtil::IsRemovableDevice(gallery.device_id) ||
-         IsAttachedDevice(gallery.device_id);
-}
-
-// static
-string16 MediaGalleriesDialogController::GetGalleryAdditionalDetails(
-    const MediaGalleryPrefInfo& gallery) {
-  string16 attached;
-  if (MediaStorageUtil::IsRemovableDevice(gallery.device_id)) {
-    if (IsAttachedDevice(gallery.device_id)) {
-      attached = l10n_util::GetStringUTF16(
-          IDS_MEDIA_GALLERIES_DIALOG_DEVICE_ATTACHED);
-    } else if (!gallery.last_attach_time.is_null()) {
-      attached = l10n_util::GetStringFUTF16(
-          IDS_MEDIA_GALLERIES_LAST_ATTACHED,
-          base::TimeFormatShortDateNumeric(gallery.last_attach_time));
-    } else {
-      attached = l10n_util::GetStringUTF16(
-          IDS_MEDIA_GALLERIES_DIALOG_DEVICE_NOT_ATTACHED);
-    }
-  }
-
-  // TODO(gbillock): This is a placeholder. Need to actually get the
-  // right text here.
-  return attached;
 }
 
 string16 MediaGalleriesDialogController::GetHeader() const {
@@ -147,32 +93,84 @@ string16 MediaGalleriesDialogController::GetHeader() const {
 }
 
 string16 MediaGalleriesDialogController::GetSubtext() const {
-  std::string extension_name(extension_ ? extension_->name() : "");
-  return l10n_util::GetStringFUTF16(IDS_MEDIA_GALLERIES_DIALOG_SUBTEXT,
-                                    UTF8ToUTF16(extension_name));
+  extensions::MediaGalleriesPermission::CheckParam read_param(
+      extensions::MediaGalleriesPermission::kReadPermission);
+  extensions::MediaGalleriesPermission::CheckParam copy_to_param(
+      extensions::MediaGalleriesPermission::kCopyToPermission);
+  bool has_read_permission =
+      extensions::PermissionsData::CheckAPIPermissionWithParam(
+          extension_, APIPermission::kMediaGalleries, &read_param);
+  bool has_copy_to_permission =
+      extensions::PermissionsData::CheckAPIPermissionWithParam(
+          extension_, APIPermission::kMediaGalleries, &copy_to_param);
+
+  int id;
+  if (has_read_permission && has_copy_to_permission)
+    id = IDS_MEDIA_GALLERIES_DIALOG_SUBTEXT_READ_WRITE;
+  else if (has_copy_to_permission)
+    id = IDS_MEDIA_GALLERIES_DIALOG_SUBTEXT_WRITE_ONLY;
+  else
+    id = IDS_MEDIA_GALLERIES_DIALOG_SUBTEXT_READ_ONLY;
+
+  return l10n_util::GetStringFUTF16(id, UTF8ToUTF16(extension_->name()));
 }
 
 string16 MediaGalleriesDialogController::GetUnattachedLocationsHeader() const {
   return l10n_util::GetStringUTF16(IDS_MEDIA_GALLERIES_UNATTACHED_LOCATIONS);
 }
 
+// TODO(gbillock): Call this something a bit more connected to the
+// messaging in the dialog.
 bool MediaGalleriesDialogController::HasPermittedGalleries() const {
-  for (KnownGalleryPermissions::const_iterator iter = permissions().begin();
-       iter != permissions().end(); ++iter) {
+  for (KnownGalleryPermissions::const_iterator iter = known_galleries_.begin();
+       iter != known_galleries_.end(); ++iter) {
     if (iter->second.allowed)
       return true;
   }
+
+  // Do this? Views did.
+  if (new_galleries_.size() > 0)
+    return true;
+
   return false;
 }
 
-const MediaGalleriesDialogController::KnownGalleryPermissions&
-    MediaGalleriesDialogController::permissions() const {
-  return known_galleries_;
+// Note: sorts by display criterion: GalleriesVectorComparator.
+void MediaGalleriesDialogController::FillPermissions(
+    bool attached,
+    MediaGalleriesDialogController::GalleryPermissionsVector* permissions)
+    const {
+  for (KnownGalleryPermissions::const_iterator iter = known_galleries_.begin();
+       iter != known_galleries_.end(); ++iter) {
+    if ((attached && iter->second.pref_info.IsGalleryAvailable()) ||
+        (!attached && !iter->second.pref_info.IsGalleryAvailable())) {
+      permissions->push_back(iter->second);
+    }
+  }
+  for (GalleryPermissionsVector::const_iterator iter = new_galleries_.begin();
+       iter != new_galleries_.end(); ++iter) {
+    if ((attached && iter->pref_info.IsGalleryAvailable()) ||
+        (!attached && !iter->pref_info.IsGalleryAvailable())) {
+      permissions->push_back(*iter);
+    }
+  }
+
+  std::sort(permissions->begin(), permissions->end(),
+            GalleriesVectorComparator);
 }
 
-const MediaGalleriesDialogController::NewGalleryPermissions&
-    MediaGalleriesDialogController::new_permissions() const {
-  return new_galleries_;
+MediaGalleriesDialogController::GalleryPermissionsVector
+MediaGalleriesDialogController::AttachedPermissions() const {
+  GalleryPermissionsVector attached;
+  FillPermissions(true, &attached);
+  return attached;
+}
+
+MediaGalleriesDialogController::GalleryPermissionsVector
+MediaGalleriesDialogController::UnattachedPermissions() const {
+  GalleryPermissionsVector unattached;
+  FillPermissions(false, &unattached);
+  return unattached;
 }
 
 void MediaGalleriesDialogController::OnAddFolderClicked() {
@@ -184,37 +182,43 @@ void MediaGalleriesDialogController::OnAddFolderClicked() {
       ui::SelectFileDialog::SELECT_FOLDER,
       l10n_util::GetStringUTF16(IDS_MEDIA_GALLERIES_DIALOG_ADD_GALLERY_TITLE),
       user_data_dir,
-      NULL, 0, FILE_PATH_LITERAL(""),
+      NULL,
+      0,
+      base::FilePath::StringType(),
       web_contents_->GetView()->GetTopLevelNativeWindow(),
       NULL);
 }
 
-void MediaGalleriesDialogController::DidToggleGallery(
-    const MediaGalleryPrefInfo* gallery,
+void MediaGalleriesDialogController::DidToggleGalleryId(
+    MediaGalleryPrefId gallery_id,
     bool enabled) {
   // Check known galleries.
   KnownGalleryPermissions::iterator iter =
-      known_galleries_.find(gallery->pref_id);
+      known_galleries_.find(gallery_id);
   if (iter != known_galleries_.end()) {
     if (iter->second.allowed == enabled)
       return;
 
     iter->second.allowed = enabled;
-    if (ContainsKey(toggled_galleries_, gallery->pref_id))
-      toggled_galleries_.erase(gallery->pref_id);
+    if (ContainsKey(toggled_galleries_, gallery_id))
+      toggled_galleries_.erase(gallery_id);
     else
-      toggled_galleries_.insert(gallery->pref_id);
+      toggled_galleries_.insert(gallery_id);
     return;
   }
 
   // Check new galleries.
-  for (NewGalleryPermissions::iterator iter = new_galleries_.begin();
+  for (GalleryPermissionsVector::iterator iter = new_galleries_.begin();
        iter != new_galleries_.end(); ++iter) {
-    if (&iter->pref_info == gallery) {
+    if (iter->pref_info.pref_id == gallery_id) {
       iter->allowed = enabled;
       return;
     }
   }
+
+  // Don't sort -- the dialog is open, and we don't want to adjust any
+  // positions for future updates to the dialog contents until they are
+  // redrawn.
 }
 
 void MediaGalleriesDialogController::DialogFinished(bool accepted) {
@@ -248,38 +252,39 @@ void MediaGalleriesDialogController::FileSelected(const base::FilePath& path,
     KnownGalleryPermissions::const_iterator iter =
         known_galleries_.find(gallery.pref_id);
     DCHECK(iter != known_galleries_.end());
-    dialog_->UpdateGallery(&iter->second.pref_info, true);
+    dialog_->UpdateGallery(iter->second.pref_info, true);
     return;
   }
 
   // Try to find it in |new_galleries_| (user added same folder twice).
-  for (NewGalleryPermissions::iterator iter = new_galleries_.begin();
+  for (GalleryPermissionsVector::iterator iter = new_galleries_.begin();
        iter != new_galleries_.end(); ++iter) {
     if (iter->pref_info.path == gallery.path &&
         iter->pref_info.device_id == gallery.device_id) {
       iter->allowed = true;
-      dialog_->UpdateGallery(&iter->pref_info, true);
+      dialog_->UpdateGallery(iter->pref_info, true);
       return;
     }
   }
 
   // Lastly, add a new gallery to |new_galleries_|.
   new_galleries_.push_back(GalleryPermission(gallery, true));
-  dialog_->UpdateGallery(&new_galleries_.back().pref_info, true);
+  dialog_->UpdateGallery(new_galleries_.back().pref_info, true);
 }
 
 void MediaGalleriesDialogController::OnRemovableStorageAttached(
     const StorageInfo& info) {
-  UpdateGalleriesOnDeviceEvent(info.device_id);
+  UpdateGalleriesOnDeviceEvent(info.device_id());
 }
 
 void MediaGalleriesDialogController::OnRemovableStorageDetached(
     const StorageInfo& info) {
-  UpdateGalleriesOnDeviceEvent(info.device_id);
+  UpdateGalleriesOnDeviceEvent(info.device_id());
 }
 
 void MediaGalleriesDialogController::OnGalleryChanged(
-    MediaGalleriesPreferences* pref, const std::string& extension_id) {
+    MediaGalleriesPreferences* pref, const std::string& extension_id,
+    MediaGalleryPrefId /* pref_id */, bool /* has_permission */) {
   DCHECK_EQ(preferences_, pref);
   if (extension_id.empty() || extension_id == extension_->id())
     UpdateGalleriesOnPreferencesEvent();
@@ -316,7 +321,7 @@ void MediaGalleriesDialogController::SavePermissions() {
         *extension_, iter->first, iter->second.allowed);
   }
 
-  for (NewGalleryPermissions::const_iterator iter = new_galleries_.begin();
+  for (GalleryPermissionsVector::const_iterator iter = new_galleries_.begin();
        iter != new_galleries_.end(); ++iter) {
     // If the user added a gallery then unchecked it, forget about it.
     if (!iter->allowed)
@@ -324,8 +329,10 @@ void MediaGalleriesDialogController::SavePermissions() {
 
     // TODO(gbillock): Should be adding volume metadata during FileSelected.
     const MediaGalleryPrefInfo& gallery = iter->pref_info;
-    MediaGalleryPrefId id = preferences_->AddGalleryWithName(
-        gallery.device_id, gallery.display_name, gallery.path, true);
+    MediaGalleryPrefId id = preferences_->AddGallery(
+        gallery.device_id, gallery.path, true,
+        gallery.volume_label, gallery.vendor_name, gallery.model_name,
+        gallery.total_size_in_bytes, gallery.last_attach_time);
     preferences_->SetGalleryPermissionForExtension(*extension_, id, true);
   }
 }
@@ -355,12 +362,12 @@ void MediaGalleriesDialogController::UpdateGalleriesOnPreferencesEvent() {
     if (pref_it == pref_galleries.end() ||
         pref_it->second.type == MediaGalleryPrefInfo::kBlackListed) {
       galleries_to_forget.insert(gallery_id);
-      dialog_->ForgetGallery(&gallery.pref_info);
+      dialog_->ForgetGallery(gallery.pref_info.pref_id);
       continue;
     }
 
     // Look for duplicate entries in |new_galleries_|.
-    for (NewGalleryPermissions::iterator new_it = new_galleries_.begin();
+    for (GalleryPermissionsVector::iterator new_it = new_galleries_.begin();
          new_it != new_galleries_.end();
          ++new_it) {
       if (new_it->pref_info.path == gallery.pref_info.path &&
@@ -368,12 +375,12 @@ void MediaGalleriesDialogController::UpdateGalleriesOnPreferencesEvent() {
         // Found duplicate entry. Get the existing permission from it and then
         // remove it.
         gallery.allowed = new_it->allowed;
-        dialog_->ForgetGallery(&new_it->pref_info);
+        dialog_->ForgetGallery(new_it->pref_info.pref_id);
         new_galleries_.erase(new_it);
         break;
       }
     }
-    dialog_->UpdateGallery(&gallery.pref_info, gallery.allowed);
+    dialog_->UpdateGallery(gallery.pref_info, gallery.allowed);
   }
 
   // Remove the galleries to forget from |known_galleries_|. Doing it in the
@@ -390,13 +397,13 @@ void MediaGalleriesDialogController::UpdateGalleriesOnDeviceEvent(
   for (KnownGalleryPermissions::iterator iter = known_galleries_.begin();
        iter != known_galleries_.end(); ++iter) {
     if (iter->second.pref_info.device_id == device_id)
-      dialog_->UpdateGallery(&iter->second.pref_info, iter->second.allowed);
+      dialog_->UpdateGallery(iter->second.pref_info, iter->second.allowed);
   }
 
-  for (NewGalleryPermissions::iterator iter = new_galleries_.begin();
+  for (GalleryPermissionsVector::iterator iter = new_galleries_.begin();
        iter != new_galleries_.end(); ++iter) {
     if (iter->pref_info.device_id == device_id)
-      dialog_->UpdateGallery(&iter->pref_info, iter->allowed);
+      dialog_->UpdateGallery(iter->pref_info, iter->allowed);
   }
 }
 

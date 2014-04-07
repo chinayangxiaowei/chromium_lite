@@ -25,6 +25,16 @@ def pop_known_arguments(args):
     elif arg == '--gtest_print_time':
       # Ignore.
       pass
+    elif 'interactive_ui_tests' in arg:
+      # Run this test in a single thread. It is useful to run it under
+      # run_test_cases so automatic flaky test workaround is still used.
+      run_test_cases_extra_args.append('-j1')
+      rest.append(arg)
+    elif 'browser_tests' in arg:
+      # Test cases in this executable fire up *a lot* of child processes,
+      # causing huge memory bottleneck. So use less than N-cpus jobs.
+      run_test_cases_extra_args.append('--use-less-jobs')
+      rest.append(arg)
     else:
       rest.append(arg)
   return run_test_cases_extra_args, rest
@@ -50,7 +60,8 @@ def main():
   parser.disable_interspersed_args()
   options, args = parser.parse_args()
 
-  swarm_client_dir = os.path.join(ROOT_DIR, 'tools', 'swarm_client')
+  swarm_client_dir = os.path.join(
+      ROOT_DIR, 'tools', 'swarm_client', 'googletest')
   sys.path.insert(0, swarm_client_dir)
 
   cmd = [

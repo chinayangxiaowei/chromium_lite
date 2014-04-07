@@ -7,18 +7,13 @@
 #include "base/bind.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "content/browser/browser_thread_impl.h"
 #include "content/browser/renderer_host/media/audio_input_device_manager.h"
 #include "content/public/common/media_stream_request.h"
 #include "media/audio/audio_manager_base.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-
-#if defined(OS_ANDROID)
-#include "base/android/jni_android.h"
-#include "media/audio/audio_manager_base.h"
-#endif
 
 using testing::_;
 using testing::InSequence;
@@ -57,20 +52,14 @@ class AudioInputDeviceManagerTest : public testing::Test {
  protected:
   virtual void SetUp() OVERRIDE {
     // The test must run on Browser::IO.
-    message_loop_.reset(new MessageLoop(MessageLoop::TYPE_IO));
+    message_loop_.reset(new base::MessageLoop(base::MessageLoop::TYPE_IO));
     io_thread_.reset(new BrowserThreadImpl(BrowserThread::IO,
                                            message_loop_.get()));
-
-#if defined(OS_ANDROID)
-    media::AudioManagerBase::RegisterAudioManager(
-        base::android::AttachCurrentThread());
-#endif
-
     audio_manager_.reset(media::AudioManager::Create());
     manager_ = new AudioInputDeviceManager(audio_manager_.get());
     audio_input_listener_.reset(new MockAudioInputDeviceManagerListener());
     manager_->Register(audio_input_listener_.get(),
-                       message_loop_->message_loop_proxy());
+                       message_loop_->message_loop_proxy().get());
 
     // Gets the enumerated device list from the AudioInputDeviceManager.
     manager_->EnumerateDevices(MEDIA_DEVICE_AUDIO_CAPTURE);
@@ -88,7 +77,7 @@ class AudioInputDeviceManagerTest : public testing::Test {
     io_thread_.reset();
   }
 
-  scoped_ptr<MessageLoop> message_loop_;
+  scoped_ptr<base::MessageLoop> message_loop_;
   scoped_ptr<BrowserThreadImpl> io_thread_;
   scoped_refptr<AudioInputDeviceManager> manager_;
   scoped_ptr<MockAudioInputDeviceManagerListener> audio_input_listener_;
@@ -140,7 +129,7 @@ TEST_F(AudioInputDeviceManagerTest, OpenMultipleDevices) {
   InSequence s;
 
   int index = 0;
-  scoped_array<int> session_id(new int[devices_.size()]);
+  scoped_ptr<int[]> session_id(new int[devices_.size()]);
 
   // Opens the devices in a loop.
   for (StreamDeviceInfoArray::const_iterator iter = devices_.begin();
@@ -245,7 +234,7 @@ TEST_F(AudioInputDeviceManagerTest, AccessAndCloseSession) {
   InSequence s;
 
   int index = 0;
-  scoped_array<int> session_id(new int[devices_.size()]);
+  scoped_ptr<int[]> session_id(new int[devices_.size()]);
 
   // Loops through the devices and calls Open()/Close()/GetOpenedDeviceInfoById
   // for each device.

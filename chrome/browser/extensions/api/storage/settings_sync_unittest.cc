@@ -7,7 +7,7 @@
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "chrome/browser/extensions/api/storage/leveldb_settings_storage_factory.h"
 #include "chrome/browser/extensions/api/storage/settings_frontend.h"
 #include "chrome/browser/extensions/api/storage/settings_storage_factory.h"
@@ -24,6 +24,9 @@
 #include "sync/api/sync_error_factory_mock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+using base::DictionaryValue;
+using base::ListValue;
+using base::Value;
 using content::BrowserThread;
 
 namespace extensions {
@@ -94,6 +97,7 @@ class MockSyncChangeProcessor : public syncer::SyncChangeProcessor {
     if (fail_all_requests_) {
       return syncer::SyncError(
           FROM_HERE,
+          syncer::SyncError::DATATYPE_ERROR,
           "MockSyncChangeProcessor: configured to fail",
           change_list[0].sync_data().GetDataType());
     }
@@ -130,9 +134,10 @@ class MockSyncChangeProcessor : public syncer::SyncChangeProcessor {
     if (matching_changes.empty()) {
       ADD_FAILURE() << "No matching changes for " << extension_id << "/" <<
           key << " (out of " << changes_.size() << ")";
-      return SettingSyncData(
-          syncer::SyncChange::ACTION_INVALID, "", "",
-          scoped_ptr<Value>(new DictionaryValue()));
+      return SettingSyncData(syncer::SyncChange::ACTION_INVALID,
+                             std::string(),
+                             std::string(),
+                             scoped_ptr<Value>(new DictionaryValue()));
     }
     if (matching_changes.size() != 1u) {
       ADD_FAILURE() << matching_changes.size() << " matching changes for " <<
@@ -200,8 +205,8 @@ class TestingValueStoreFactory : public SettingsStorageFactory {
 class ExtensionSettingsSyncTest : public testing::Test {
  public:
   ExtensionSettingsSyncTest()
-      : ui_thread_(BrowserThread::UI, MessageLoop::current()),
-        file_thread_(BrowserThread::FILE, MessageLoop::current()),
+      : ui_thread_(BrowserThread::UI, base::MessageLoop::current()),
+        file_thread_(BrowserThread::FILE, base::MessageLoop::current()),
         storage_factory_(new util::ScopedSettingsStorageFactory()),
         sync_processor_(new MockSyncChangeProcessor),
         sync_processor_delegate_(new SyncChangeProcessorDelegate(
@@ -236,7 +241,7 @@ class ExtensionSettingsSyncTest : public testing::Test {
 
   // Gets the syncer::SyncableService for the given sync type.
   syncer::SyncableService* GetSyncableService(syncer::ModelType model_type) {
-    MessageLoop::current()->RunUntilIdle();
+    base::MessageLoop::current()->RunUntilIdle();
     return frontend_->GetBackendForSync(model_type);
   }
 
@@ -256,7 +261,7 @@ class ExtensionSettingsSyncTest : public testing::Test {
   }
 
   // Need these so that the DCHECKs for running on FILE or UI threads pass.
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
   content::TestBrowserThread ui_thread_;
   content::TestBrowserThread file_thread_;
 

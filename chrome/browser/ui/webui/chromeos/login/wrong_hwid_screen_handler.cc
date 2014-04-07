@@ -4,17 +4,22 @@
 
 #include "chrome/browser/ui/webui/chromeos/login/wrong_hwid_screen_handler.h"
 
-#include "base/bind.h"
-#include "base/values.h"
 #include "chrome/browser/ui/webui/chromeos/login/oobe_ui.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
-#include "ui/base/l10n/l10n_util.h"
+
+namespace {
+
+const char kJsScreenPath[] = "login.WrongHWIDScreen";
+
+}  // namespace
 
 namespace chromeos {
 
 WrongHWIDScreenHandler::WrongHWIDScreenHandler()
-    : delegate_(NULL), show_on_init_(false) {
+    : BaseScreenHandler(kJsScreenPath),
+      delegate_(NULL),
+      show_on_init_(false) {
 }
 
 WrongHWIDScreenHandler::~WrongHWIDScreenHandler() {
@@ -42,20 +47,15 @@ void WrongHWIDScreenHandler::SetDelegate(Delegate* delegate) {
     Initialize();
 }
 
-void WrongHWIDScreenHandler::GetLocalizedStrings(
-    base::DictionaryValue* localized_strings) {
-  localized_strings->SetString(
-      "wrongHWIDScreenHeader",
-      l10n_util::GetStringUTF16(IDS_WRONG_HWID_SCREEN_HEADER));
-  localized_strings->SetString(
-      "wrongHWIDMessageFirstPart",
-      l10n_util::GetStringUTF16(IDS_WRONG_HWID_SCREEN_MESSAGE_FIRST_PART));
-  localized_strings->SetString(
-      "wrongHWIDMessageSecondPart",
-      l10n_util::GetStringUTF16(IDS_WRONG_HWID_SCREEN_MESSAGE_SECOND_PART));
-  localized_strings->SetString(
-      "wrongHWIDScreenSkipLink",
-      l10n_util::GetStringUTF16(IDS_WRONG_HWID_SCREEN_SKIP_LINK));
+void WrongHWIDScreenHandler::DeclareLocalizedValues(
+    LocalizedValuesBuilder* builder) {
+  builder->Add("wrongHWIDScreenHeader", IDS_WRONG_HWID_SCREEN_HEADER);
+  builder->Add("wrongHWIDMessageFirstPart",
+                IDS_WRONG_HWID_SCREEN_MESSAGE_FIRST_PART);
+  builder->Add("wrongHWIDMessageSecondPart",
+                IDS_WRONG_HWID_SCREEN_MESSAGE_SECOND_PART);
+  builder->Add("wrongHWIDScreenSkipLink",
+                IDS_WRONG_HWID_SCREEN_SKIP_LINK);
 }
 
 void WrongHWIDScreenHandler::Initialize() {
@@ -69,15 +69,12 @@ void WrongHWIDScreenHandler::Initialize() {
 }
 
 void WrongHWIDScreenHandler::RegisterMessages() {
-  web_ui()->RegisterMessageCallback("wrongHWIDOnSkip",
-      base::Bind(&WrongHWIDScreenHandler::HandleOnSkip,
-                 base::Unretained(this)));
+  AddCallback("wrongHWIDOnSkip", &WrongHWIDScreenHandler::HandleOnSkip);
 }
 
-void WrongHWIDScreenHandler::HandleOnSkip(const base::ListValue* args) {
+void WrongHWIDScreenHandler::HandleOnSkip() {
   if (delegate_)
     delegate_->OnExit();
 }
 
 }  // namespace chromeos
-

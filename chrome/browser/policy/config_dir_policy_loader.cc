@@ -11,11 +11,14 @@
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/file_util.h"
+#include "base/files/file_enumerator.h"
 #include "base/json/json_file_value_serializer.h"
+#include "base/json/json_reader.h"
 #include "base/logging.h"
 #include "base/platform_file.h"
 #include "base/stl_util.h"
 #include "chrome/browser/policy/policy_bundle.h"
+#include "chrome/browser/policy/policy_load_status.h"
 
 namespace policy {
 
@@ -26,6 +29,31 @@ const base::FilePath::CharType kMandatoryConfigDir[] =
     FILE_PATH_LITERAL("managed");
 const base::FilePath::CharType kRecommendedConfigDir[] =
     FILE_PATH_LITERAL("recommended");
+
+PolicyLoadStatus JsonErrorToPolicyLoadStatus(int status) {
+  switch (status) {
+    case JSONFileValueSerializer::JSON_ACCESS_DENIED:
+    case JSONFileValueSerializer::JSON_CANNOT_READ_FILE:
+    case JSONFileValueSerializer::JSON_FILE_LOCKED:
+      return POLICY_LOAD_STATUS_READ_ERROR;
+    case JSONFileValueSerializer::JSON_NO_SUCH_FILE:
+      return POLICY_LOAD_STATUS_MISSING;
+    case base::JSONReader::JSON_INVALID_ESCAPE:
+    case base::JSONReader::JSON_SYNTAX_ERROR:
+    case base::JSONReader::JSON_UNEXPECTED_TOKEN:
+    case base::JSONReader::JSON_TRAILING_COMMA:
+    case base::JSONReader::JSON_TOO_MUCH_NESTING:
+    case base::JSONReader::JSON_UNEXPECTED_DATA_AFTER_ROOT:
+    case base::JSONReader::JSON_UNSUPPORTED_ENCODING:
+    case base::JSONReader::JSON_UNQUOTED_DICTIONARY_KEY:
+      return POLICY_LOAD_STATUS_PARSE_ERROR;
+    case base::JSONReader::JSON_NO_ERROR:
+      NOTREACHED();
+      return POLICY_LOAD_STATUS_STARTED;
+  }
+  NOTREACHED() << "Invalid status " << status;
+  return POLICY_LOAD_STATUS_PARSE_ERROR;
+}
 
 }  // namespace
 
@@ -73,8 +101,8 @@ base::Time ConfigDirPolicyLoader::LastModificationTime() {
       continue;
 
     // Enumerate the files and find the most recent modification timestamp.
-    file_util::FileEnumerator file_enumerator(path, false,
-                                              file_util::FileEnumerator::FILES);
+    base::FileEnumerator file_enumerator(path, false,
+                                         base::FileEnumerator::FILES);
     for (base::FilePath config_file = file_enumerator.Next();
          !config_file.empty();
          config_file = file_enumerator.Next()) {
@@ -91,11 +119,17 @@ void ConfigDirPolicyLoader::LoadFromPath(const base::FilePath& path,
                                          PolicyBundle* bundle) {
   // Enumerate the files and sort them lexicographically.
   std::set<base::FilePath> files;
-  file_util::FileEnumerator file_enumerator(path, false,
-                                            file_util::FileEnumerator::FILES);
+  base::FileEnumerator file_enumerator(path, false,
+                                       base::FileEnumerator::FILES);
   for (base::FilePath config_file_path = file_enumerator.Next();
        !config_file_path.empty(); config_file_path = file_enumerator.Next())
     files.insert(config_file_path);
+
+  PolicyLoadStatusSample status;
+  if (files.empty()) {
+    status.Add(POLICY_LOAD_STATUS_NO_POLICY);
+    return;
+  }
 
   // Start with an empty dictionary and merge the files' contents.
   // The files are processed in reverse order because |MergeFrom| gives priority
@@ -113,21 +147,21 @@ void ConfigDirPolicyLoader::LoadFromPath(const base::FilePath& path,
     if (!value.get()) {
       LOG(WARNING) << "Failed to read configuration file "
                    << config_file_iter->value() << ": " << error_msg;
+      status.Add(JsonErrorToPolicyLoadStatus(error_code));
       continue;
     }
     base::DictionaryValue* dictionary_value = NULL;
     if (!value->GetAsDictionary(&dictionary_value)) {
       LOG(WARNING) << "Expected JSON dictionary in configuration file "
                    << config_file_iter->value();
+      status.Add(POLICY_LOAD_STATUS_PARSE_ERROR);
       continue;
     }
 
     // Detach the "3rdparty" node.
-    base::Value* third_party = NULL;
-    if (dictionary_value->Remove("3rdparty", &third_party)) {
-      Merge3rdPartyPolicy(third_party, level, bundle);
-      delete third_party;
-    }
+    scoped_ptr<base::Value> third_party;
+    if (dictionary_value->Remove("3rdparty", &third_party))
+      Merge3rdPartyPolicy(third_party.get(), level, bundle);
 
     // Add chrome policy.
     PolicyMap policy_map;
@@ -156,7 +190,7 @@ void ConfigDirPolicyLoader::Merge3rdPartyPolicy(
   supported_domains["extensions"] = POLICY_DOMAIN_EXTENSIONS;
 
   for (base::DictionaryValue::Iterator domains_it(*domains_dictionary);
-       domains_it.HasNext(); domains_it.Advance()) {
+       !domains_it.IsAtEnd(); domains_it.Advance()) {
     if (!ContainsKey(supported_domains, domains_it.key())) {
       LOG(WARNING) << "Unsupported 3rd party policy domain: "
                    << domains_it.key();
@@ -172,7 +206,7 @@ void ConfigDirPolicyLoader::Merge3rdPartyPolicy(
 
     PolicyDomain domain = supported_domains[domains_it.key()];
     for (base::DictionaryValue::Iterator components_it(*components_dictionary);
-         components_it.HasNext(); components_it.Advance()) {
+         !components_it.IsAtEnd(); components_it.Advance()) {
       const base::DictionaryValue* policy_dictionary;
       if (!components_it.value().GetAsDictionary(&policy_dictionary)) {
         LOG(WARNING) << "3rdparty/" << domains_it.key() << "/"

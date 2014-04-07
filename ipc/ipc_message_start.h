@@ -11,7 +11,9 @@
 enum IPCMessageStart {
   AutomationMsgStart = 0,
   ViewMsgStart,
+  InputMsgStart,
   PluginMsgStart,
+  PluginProcessMsgStart,
   ProfileImportMsgStart,
   TestMsgStart,
   DevToolsMsgStart,
@@ -45,6 +47,7 @@ enum IPCMessageStart {
   DesktopNotificationMsgStart,
   GeolocationMsgStart,
   AudioMsgStart,
+  MIDIMsgStart,
   ChromeMsgStart,
   DragMsgStart,
   PrintMsgStart,
@@ -52,7 +55,7 @@ enum IPCMessageStart {
   ExtensionMsgStart,
   VideoCaptureMsgStart,
   QuotaMsgStart,
-  IconMsgStart,
+  ImageMsgStart,
   TextInputClientMsgStart,
   ChromeUtilityMsgStart,
   MediaStreamMsgStart,
@@ -76,6 +79,15 @@ enum IPCMessageStart {
   VisitedLinkMsgStart,
   OneClickSigninMsgStart,
   AppShimMsgStart,
+  ValidationMessageMsgStart,
+  WebRtcLoggingMsgStart,
+  TtsMsgStart,
+  MemoryBenchmarkMsgStart,
+  WebSocketMsgStart,
+  NaClHostMsgStart,
+  WebRTCIdentityMsgStart,
+  LocalDiscoveryMsgStart,
+  PowerMonitorMsgStart,
   LastIPCMsgStart      // Must come last.
 };
 

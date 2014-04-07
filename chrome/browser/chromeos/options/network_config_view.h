@@ -8,9 +8,7 @@
 #include <string>
 
 #include "base/compiler_specific.h"
-#include "base/string16.h"
-#include "chrome/browser/chromeos/cros/network_library.h"
-#include "chrome/browser/chromeos/cros/network_ui_data.h"
+#include "base/strings/string16.h"
 #include "ui/gfx/native_widget_types.h"  // gfx::NativeWindow
 #include "ui/views/controls/button/button.h"  // views::ButtonListener
 #include "ui/views/window/dialog_delegate.h"
@@ -27,6 +25,8 @@ class LabelButton;
 namespace chromeos {
 
 class ChildNetworkConfigView;
+class NetworkPropertyUIData;
+class NetworkState;
 
 // A dialog box for showing a password textfield.
 class NetworkConfigView : public views::DialogDelegateView,
@@ -45,9 +45,10 @@ class NetworkConfigView : public views::DialogDelegateView,
   };
 
   // Shows a network connection dialog if none is currently visible.
-  // Returns false if a dialog is already visible.
-  static bool Show(Network* network, gfx::NativeWindow parent);
-  static bool ShowForType(ConnectionType type, gfx::NativeWindow parent);
+  static void Show(const std::string& service_path, gfx::NativeWindow parent);
+  // Shows a dialog to configure a new network. |type| must be a valid Shill
+  // 'Type' property value.
+  static void ShowForType(const std::string& type, gfx::NativeWindow parent);
 
   // Returns corresponding native window.
   gfx::NativeWindow GetNativeWindow() const;
@@ -61,6 +62,7 @@ class NetworkConfigView : public views::DialogDelegateView,
   virtual views::View* GetInitiallyFocusedView() OVERRIDE;
 
   // views::WidgetDelegate methods.
+  virtual string16 GetWindowTitle() const OVERRIDE;
   virtual ui::ModalType GetModalType() const OVERRIDE;
 
   // views::View overrides.
@@ -78,16 +80,17 @@ class NetworkConfigView : public views::DialogDelegateView,
   // views::View overrides:
   virtual void Layout() OVERRIDE;
   virtual gfx::Size GetPreferredSize() OVERRIDE;
-  virtual void ViewHierarchyChanged(bool is_add,
-                                    views::View* parent,
-                                    views::View* child) OVERRIDE;
+  virtual void ViewHierarchyChanged(
+      const ViewHierarchyChangedDetails& details) OVERRIDE;
 
  private:
-  // Login dialog for known networks.
-  explicit NetworkConfigView(Network* network);
-  // Login dialog for new/hidden networks.
-  explicit NetworkConfigView(ConnectionType type);
+  NetworkConfigView();
   virtual ~NetworkConfigView();
+
+  // Login dialog for known networks.
+  void InitWithNetworkState(const NetworkState* network);
+  // Login dialog for new/hidden networks.
+  void InitWithType(const std::string& type);
 
   // Creates and shows a dialog containing this view.
   void ShowDialog(gfx::NativeWindow parent);
@@ -111,12 +114,14 @@ class NetworkConfigView : public views::DialogDelegateView,
 // methods, which are called by NetworkConfigView.
 class ChildNetworkConfigView : public views::View {
  public:
-  ChildNetworkConfigView(NetworkConfigView* parent, Network* network)
-      : service_path_(network->service_path()),
-        parent_(parent) {}
-  explicit ChildNetworkConfigView(NetworkConfigView* parent)
-      : parent_(parent) {}
-  virtual ~ChildNetworkConfigView() {}
+  // If |service_path| is NULL, a dialog for configuring a new network will
+  // be created.
+  ChildNetworkConfigView(NetworkConfigView* parent,
+                         const std::string& service_path);
+  virtual ~ChildNetworkConfigView();
+
+  // Get the title to show for the dialog.
+  virtual string16 GetTitle() const = 0;
 
   // Returns view that should be focused on dialog activation.
   virtual views::View* GetInitiallyFocusedView() = 0;
@@ -139,8 +144,8 @@ class ChildNetworkConfigView : public views::View {
   static const int kInputFieldMinWidth;
 
  protected:
-  std::string service_path_;
   NetworkConfigView* parent_;
+  std::string service_path_;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(ChildNetworkConfigView);

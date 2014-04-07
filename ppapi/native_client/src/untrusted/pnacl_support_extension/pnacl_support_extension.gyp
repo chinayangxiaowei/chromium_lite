@@ -13,13 +13,13 @@
     'target_name': 'pnacl_support_extension',
     'type': 'none',
     'conditions': [
-      ['disable_nacl==0 and disable_nacl_untrusted==0', {
+      ['disable_nacl==0 and disable_pnacl==0 and disable_nacl_untrusted==0', {
         'dependencies': [
           '../../../../../ppapi/native_client/src/untrusted/pnacl_irt_shim/pnacl_irt_shim.gyp:pnacl_irt_shim',
           '../../../../../native_client/tools.gyp:prep_toolchain',
         ],
         'sources': [
-          'pnacl_info_template.json',
+          'pnacl_component_crx_gen.py',
         ],
         # We could use 'copies', but we want to rename the files
         # in a white-listed way first.  Thus use a script.
@@ -30,6 +30,8 @@
               'pnacl_component_crx_gen.py',
               # A stamp file representing the contents of pnacl_translator.
               '<(DEPTH)/native_client/toolchain/pnacl_translator/SOURCE_SHA1',
+              '<(DEPTH)/native_client/pnacl/driver/pnacl_info_template.json',
+              '<(DEPTH)/native_client/TOOL_REVISIONS',
             ],
             'conditions': [
                 # On windows we need both ia32 and x64.
@@ -43,7 +45,7 @@
                       '<(PRODUCT_DIR)/pnacl/pnacl_public_x86_32_libgcc_a',
                       '<(PRODUCT_DIR)/pnacl/pnacl_public_x86_32_libgcc_eh_a',
                       '<(PRODUCT_DIR)/pnacl/pnacl_public_x86_32_libpnacl_irt_shim_a',
-                      '<(PRODUCT_DIR)/pnacl/pnacl_public_x86_32_llc_nexe',
+                      '<(PRODUCT_DIR)/pnacl/pnacl_public_x86_32_pnacl_llc_nexe',
                       '<(PRODUCT_DIR)/pnacl/pnacl_public_x86_64_crtbegin_o',
                       '<(PRODUCT_DIR)/pnacl/pnacl_public_x86_64_crtbeginS_o',
                       '<(PRODUCT_DIR)/pnacl/pnacl_public_x86_64_ld_nexe',
@@ -51,17 +53,17 @@
                       '<(PRODUCT_DIR)/pnacl/pnacl_public_x86_64_libgcc_a',
                       '<(PRODUCT_DIR)/pnacl/pnacl_public_x86_64_libgcc_eh_a',
                       '<(PRODUCT_DIR)/pnacl/pnacl_public_x86_64_libpnacl_irt_shim_a',
-                      '<(PRODUCT_DIR)/pnacl/pnacl_public_x86_64_llc_nexe',
+                      '<(PRODUCT_DIR)/pnacl/pnacl_public_x86_64_pnacl_llc_nexe',
                     ],
                     'inputs': [
-                      '<(SHARED_INTERMEDIATE_DIR)/tc_pnacl_translate/lib-x86-32/libpnacl_irt_shim.a',
-                      '<(SHARED_INTERMEDIATE_DIR)/tc_pnacl_translate/lib-x86-64/libpnacl_irt_shim.a',
+                      '>(tc_lib_dir_pnacl_translate)/lib-x86-32/libpnacl_irt_shim.a',
+                      '>(tc_lib_dir_pnacl_translate)/lib-x86-64/libpnacl_irt_shim.a',
                     ],
                     'variables': {
                       'lib_overrides': [
                         # Use the two freshly generated shims.
-                        '--lib_override=ia32,<(SHARED_INTERMEDIATE_DIR)/tc_pnacl_translate/lib-x86-32/libpnacl_irt_shim.a',
-                        '--lib_override=x64,<(SHARED_INTERMEDIATE_DIR)/tc_pnacl_translate/lib-x86-64/libpnacl_irt_shim.a',
+                        '--lib_override=ia32,>(tc_lib_dir_pnacl_translate)/lib-x86-32/libpnacl_irt_shim.a',
+                        '--lib_override=x64,>(tc_lib_dir_pnacl_translate)/lib-x86-64/libpnacl_irt_shim.a',
                       ],
                     },
                 }],
@@ -78,15 +80,15 @@
                           '<(PRODUCT_DIR)/pnacl/pnacl_public_arm_libgcc_a',
                           '<(PRODUCT_DIR)/pnacl/pnacl_public_arm_libgcc_eh_a',
                           '<(PRODUCT_DIR)/pnacl/pnacl_public_arm_libpnacl_irt_shim_a',
-                          '<(PRODUCT_DIR)/pnacl/pnacl_public_arm_llc_nexe',
+                          '<(PRODUCT_DIR)/pnacl/pnacl_public_arm_pnacl_llc_nexe',
                         ],
                         'inputs': [
-                          '<(SHARED_INTERMEDIATE_DIR)/tc_pnacl_translate/lib-arm/libpnacl_irt_shim.a',
+                          '>(tc_lib_dir_pnacl_translate)/lib-arm/libpnacl_irt_shim.a',
                         ],
                         'variables': {
                           'lib_overrides': [
                             # Use the freshly generated shim.
-                            '--lib_override=arm,<(SHARED_INTERMEDIATE_DIR)/tc_pnacl_translate/lib-arm/libpnacl_irt_shim.a',
+                            '--lib_override=arm,>(tc_lib_dir_pnacl_translate)/lib-arm/libpnacl_irt_shim.a',
                           ],
                         },
                       }],
@@ -100,15 +102,15 @@
                           '<(PRODUCT_DIR)/pnacl/pnacl_public_x86_32_libgcc_a',
                           '<(PRODUCT_DIR)/pnacl/pnacl_public_x86_32_libgcc_eh_a',
                           '<(PRODUCT_DIR)/pnacl/pnacl_public_x86_32_libpnacl_irt_shim_a',
-                          '<(PRODUCT_DIR)/pnacl/pnacl_public_x86_32_llc_nexe',
+                          '<(PRODUCT_DIR)/pnacl/pnacl_public_x86_32_pnacl_llc_nexe',
                         ],
                         'inputs': [
-                          '<(SHARED_INTERMEDIATE_DIR)/tc_pnacl_translate/lib-x86-32/libpnacl_irt_shim.a',
+                          '>(tc_lib_dir_pnacl_translate)/lib-x86-32/libpnacl_irt_shim.a',
                         ],
                         'variables': {
                           'lib_overrides': [
                             # Use the freshly generated shim.
-                            '--lib_override=ia32,<(SHARED_INTERMEDIATE_DIR)/tc_pnacl_translate/lib-x86-32/libpnacl_irt_shim.a',
+                            '--lib_override=ia32,>(tc_lib_dir_pnacl_translate)/lib-x86-32/libpnacl_irt_shim.a',
                           ],
                         },
                       }],
@@ -122,15 +124,15 @@
                           '<(PRODUCT_DIR)/pnacl/pnacl_public_x86_64_libgcc_a',
                           '<(PRODUCT_DIR)/pnacl/pnacl_public_x86_64_libgcc_eh_a',
                           '<(PRODUCT_DIR)/pnacl/pnacl_public_x86_64_libpnacl_irt_shim_a',
-                          '<(PRODUCT_DIR)/pnacl/pnacl_public_x86_64_llc_nexe',
+                          '<(PRODUCT_DIR)/pnacl/pnacl_public_x86_64_pnacl_llc_nexe',
                         ],
                         'inputs': [
-                          '<(SHARED_INTERMEDIATE_DIR)/tc_pnacl_translate/lib-x86-64/libpnacl_irt_shim.a',
+                          '>(tc_lib_dir_pnacl_translate)/lib-x86-64/libpnacl_irt_shim.a',
                         ],
                         'variables': {
                           'lib_overrides': [
                             # Use the freshly generated shim.
-                            '--lib_override=x64,<(SHARED_INTERMEDIATE_DIR)/tc_pnacl_translate/lib-x86-64/libpnacl_irt_shim.a',
+                            '--lib_override=x64,>(tc_lib_dir_pnacl_translate)/lib-x86-64/libpnacl_irt_shim.a',
                           ],
                         },
                       }],
@@ -141,9 +143,11 @@
               'python', 'pnacl_component_crx_gen.py',
               '--dest=<(PRODUCT_DIR)/pnacl',
               '<@(lib_overrides)',
-              '--installer_only=<(target_arch)',
+              '--target_arch=<(target_arch)',
+              '--info_template_path=<(DEPTH)/native_client/pnacl/driver/pnacl_info_template.json',
+              '--tool_revisions_path=<(DEPTH)/native_client/TOOL_REVISIONS',
               # ABI Version Number.
-              '0.0.0.1',
+              '1',
             ],
           },
         ],

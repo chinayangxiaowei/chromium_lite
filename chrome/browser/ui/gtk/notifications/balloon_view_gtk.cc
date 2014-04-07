@@ -11,8 +11,9 @@
 
 #include "base/bind.h"
 #include "base/debug/trace_event.h"
-#include "base/message_loop.h"
-#include "base/string_util.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/string_util.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/extension_host.h"
 #include "chrome/browser/extensions/extension_process_manager.h"
 #include "chrome/browser/notifications/balloon.h"
@@ -29,7 +30,6 @@
 #include "chrome/browser/ui/gtk/menu_gtk.h"
 #include "chrome/browser/ui/gtk/notifications/balloon_view_host_gtk.h"
 #include "chrome/browser/ui/gtk/rounded_window.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/extensions/extension.h"
 #include "content/public/browser/notification_source.h"
 #include "content/public/browser/render_view_host.h"
@@ -104,11 +104,8 @@ BalloonViewImpl::BalloonViewImpl(BalloonCollection* collection)
       hbox_(NULL),
       html_container_(NULL),
       weak_factory_(this),
-      close_button_(NULL),
-      animation_(NULL),
       menu_showing_(false),
-      pending_close_(false) {
-}
+      pending_close_(false) {}
 
 BalloonViewImpl::~BalloonViewImpl() {
   if (frame_container_) {
@@ -123,7 +120,7 @@ void BalloonViewImpl::Close(bool by_user) {
   if (!by_user && menu_showing_) {
     pending_close_ = true;
   } else {
-    MessageLoop::current()->PostTask(
+    base::MessageLoop::current()->PostTask(
         FROM_HERE,
         base::Bind(&BalloonViewImpl::DelayedClose,
                    weak_factory_.GetWeakPtr(),
@@ -268,14 +265,11 @@ void BalloonViewImpl::Show(Balloon* balloon) {
   ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
 
   // Create a button to dismiss the balloon and add it to the toolbar.
-  close_button_.reset(new CustomDrawButton(IDR_TAB_CLOSE,
-                                           IDR_TAB_CLOSE_P,
-                                           IDR_TAB_CLOSE_H,
-                                           IDR_TAB_CLOSE));
+  close_button_.reset(CustomDrawButton::CloseButtonBar(theme_service_));
   close_button_->SetBackground(
       SK_ColorBLACK,
-      rb.GetImageNamed(IDR_TAB_CLOSE).AsBitmap(),
-      rb.GetImageNamed(IDR_TAB_CLOSE_MASK).AsBitmap());
+      rb.GetImageNamed(IDR_CLOSE_1).AsBitmap(),
+      rb.GetImageNamed(IDR_CLOSE_1_MASK).AsBitmap());
   gtk_widget_set_tooltip_text(close_button_->widget(), dismiss_text.c_str());
   g_signal_connect(close_button_->widget(), "clicked",
                    G_CALLBACK(OnCloseButtonThunk), this);
@@ -470,11 +464,10 @@ void BalloonViewImpl::OnOptionsMenuButton(GtkWidget* widget,
 void BalloonViewImpl::StoppedShowing() {
   menu_showing_ = false;
   if (pending_close_) {
-    MessageLoop::current()->PostTask(
+    base::MessageLoop::current()->PostTask(
         FROM_HERE,
-        base::Bind(&BalloonViewImpl::DelayedClose,
-                   weak_factory_.GetWeakPtr(),
-                   false));
+        base::Bind(
+            &BalloonViewImpl::DelayedClose, weak_factory_.GetWeakPtr(), false));
   }
 }
 

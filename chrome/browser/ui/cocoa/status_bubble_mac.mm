@@ -9,10 +9,10 @@
 #include "base/bind.h"
 #include "base/compiler_specific.h"
 #include "base/mac/mac_util.h"
-#include "base/message_loop.h"
-#include "base/string_util.h"
-#include "base/sys_string_conversions.h"
-#include "base/utf_string_conversions.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/string_util.h"
+#include "base/strings/sys_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #import "chrome/browser/ui/cocoa/bubble_view.h"
 #include "net/base/net_util.h"
 #import "third_party/GTM/AppKit/GTMNSAnimation+Duration.h"
@@ -98,8 +98,8 @@ const CGFloat kExpansionDuration = 0.125;
 @end
 
 StatusBubbleMac::StatusBubbleMac(NSWindow* parent, id delegate)
-    : ALLOW_THIS_IN_INITIALIZER_LIST(timer_factory_(this)),
-      ALLOW_THIS_IN_INITIALIZER_LIST(expand_timer_factory_(this)),
+    : timer_factory_(this),
+      expand_timer_factory_(this),
       parent_(parent),
       delegate_(delegate),
       window_(nil),
@@ -170,7 +170,7 @@ void StatusBubbleMac::SetURL(const GURL& url, const std::string& languages) {
   if (is_expanded_ && !url.is_empty()) {
     ExpandBubble();
   } else if (original_url_text.length() > status.length()) {
-    MessageLoop::current()->PostDelayedTask(FROM_HERE,
+    base::MessageLoop::current()->PostDelayedTask(FROM_HERE,
         base::Bind(&StatusBubbleMac::ExpandBubble,
                    expand_timer_factory_.GetWeakPtr()),
         base::TimeDelta::FromMilliseconds(kExpandHoverDelay));
@@ -374,7 +374,7 @@ void StatusBubbleMac::Create() {
   // teardown sequence in BWC guarantees that |parent_| outlives the status
   // bubble and that the StatusBubble is torn down completely prior to the
   // window going away.
-  scoped_nsobject<BubbleView> view(
+  base::scoped_nsobject<BubbleView> view(
       [[BubbleView alloc] initWithFrame:NSZeroRect themeProvider:parent_]);
   [window_ setContentView:view];
 
@@ -523,7 +523,7 @@ void StatusBubbleMac::StartTimer(int64 delay_ms) {
   // There can only be one running timer.
   CancelTimer();
 
-  MessageLoop::current()->PostDelayedTask(FROM_HERE,
+  base::MessageLoop::current()->PostDelayedTask(FROM_HERE,
       base::Bind(&StatusBubbleMac::TimerFired, timer_factory_.GetWeakPtr()),
       base::TimeDelta::FromMilliseconds(delay_ms));
 }

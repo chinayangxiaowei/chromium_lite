@@ -15,7 +15,7 @@ namespace android_webview {
 // Should contain WebContentsDelegate code required by WebView that should not
 // be part of the Chromium Android port.
 class AwWebContentsDelegate
-    : public components::WebContentsDelegateAndroid {
+    : public web_contents_delegate_android::WebContentsDelegateAndroid {
  public:
   AwWebContentsDelegate(JNIEnv* env, jobject obj);
   virtual ~AwWebContentsDelegate();
@@ -27,9 +27,13 @@ class AwWebContentsDelegate
                          const gfx::Rect& selection_rect,
                          int active_match_ordinal,
                          bool final_update) OVERRIDE;
-  virtual bool CanDownload(content::RenderViewHost* source,
+  virtual void CanDownload(content::RenderViewHost* source,
                            int request_id,
-                           const std::string& request_method) OVERRIDE;
+                           const std::string& request_method,
+                           const base::Callback<void(bool)>& callback) OVERRIDE;
+  virtual void RunFileChooser(
+      content::WebContents* web_contents,
+      const content::FileChooserParams& params) OVERRIDE;
   virtual void AddNewContents(content::WebContents* source,
                               content::WebContents* new_contents,
                               WindowOpenDisposition disposition,
@@ -38,6 +42,8 @@ class AwWebContentsDelegate
                               bool* was_blocked) OVERRIDE;
   virtual void CloseContents(content::WebContents* source) OVERRIDE;
   virtual void ActivateContents(content::WebContents* contents) OVERRIDE;
+  virtual void UpdatePreferredSize(content::WebContents* web_contents,
+                                   const gfx::Size& pref_size) OVERRIDE;
 };
 
 bool RegisterAwWebContentsDelegate(JNIEnv* env);

@@ -1,12 +1,13 @@
-/* Copyright (c) 2012 The Chromium Authors. All rights reserved.
- * Use of this source code is governed by a BSD-style license that can be
- * found in the LICENSE file.
- */
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
 #ifndef LIBRARIES_NACL_IO_PEPPER_INTERFACE_H_
 #define LIBRARIES_NACL_IO_PEPPER_INTERFACE_H_
 
-#include <ppapi/c/dev/ppb_directory_reader_dev.h>
+#include <ppapi/c/pp_bool.h>
 #include <ppapi/c/pp_completion_callback.h>
+#include <ppapi/c/pp_errors.h>
 #include <ppapi/c/pp_file_info.h>
 #include <ppapi/c/pp_instance.h>
 #include <ppapi/c/pp_resource.h>
@@ -15,14 +16,18 @@
 #include <ppapi/c/ppb_file_io.h>
 #include <ppapi/c/ppb_file_ref.h>
 #include <ppapi/c/ppb_file_system.h>
+#include <ppapi/c/ppb_host_resolver.h>
 #include <ppapi/c/ppb_messaging.h>
 #include <ppapi/c/ppb_messaging.h>
+#include <ppapi/c/ppb_net_address.h>
 #include <ppapi/c/ppb_url_loader.h>
 #include <ppapi/c/ppb_url_request_info.h>
 #include <ppapi/c/ppb_url_response_info.h>
 #include <ppapi/c/ppb_var.h>
 
-#include <utils/macros.h>
+#include <sdk_util/macros.h>
+
+namespace nacl_io {
 
 // Note: To add a new interface:
 //
@@ -33,12 +38,12 @@
 
 
 // Forward declare interface classes.
+#include "nacl_io/pepper/undef_macros.h"
 #include "nacl_io/pepper/define_empty_macros.h"
 #undef BEGIN_INTERFACE
 #define BEGIN_INTERFACE(BaseClass, PPInterface, InterfaceString) \
     class BaseClass;
 #include "nacl_io/pepper/all_interfaces.h"
-#include "nacl_io/pepper/undef_macros.h"
 
 int PPErrorToErrno(int32_t err);
 
@@ -48,17 +53,19 @@ class PepperInterface {
   virtual PP_Instance GetInstance() = 0;
   virtual void AddRefResource(PP_Resource) = 0;
   virtual void ReleaseResource(PP_Resource) = 0;
+  virtual bool IsMainThread() = 0;
 
 // Interface getters.
+#include "nacl_io/pepper/undef_macros.h"
 #include "nacl_io/pepper/define_empty_macros.h"
 #undef BEGIN_INTERFACE
 #define BEGIN_INTERFACE(BaseClass, PPInterface, InterfaceString) \
     virtual BaseClass* Get##BaseClass() = 0;
 #include "nacl_io/pepper/all_interfaces.h"
-#include "nacl_io/pepper/undef_macros.h"
 };
 
 // Interface class definitions.
+#include "nacl_io/pepper/undef_macros.h"
 #define BEGIN_INTERFACE(BaseClass, PPInterface, InterfaceString) \
     class BaseClass { \
      public: \
@@ -77,7 +84,6 @@ class PepperInterface {
                 Type4) \
     virtual ReturnType MethodName(Type0, Type1, Type2, Type3, Type4) = 0;
 #include "nacl_io/pepper/all_interfaces.h"
-#include "nacl_io/pepper/undef_macros.h"
 
 
 class ScopedResource {
@@ -97,5 +103,7 @@ class ScopedResource {
 
   DISALLOW_COPY_AND_ASSIGN(ScopedResource);
 };
+
+}  // namespace nacl_io
 
 #endif  // LIBRARIES_NACL_IO_PEPPER_INTERFACE_H_

@@ -9,7 +9,7 @@
 #include "chrome/browser/policy/cloud/cloud_policy_constants.h"
 #include "chrome/browser/policy/cloud/mock_cloud_policy_client.h"
 #include "chrome/browser/policy/cloud/mock_cloud_policy_store.h"
-#include "chrome/browser/policy/cloud/proto/device_management_backend.pb.h"
+#include "chrome/browser/policy/proto/cloud/device_management_backend.pb.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -105,8 +105,11 @@ TEST_F(CloudPolicyServiceTest, RefreshPolicySuccess) {
   em::PolicyFetchResponse policy;
   policy.set_policy_data("fake policy");
   client_.SetPolicy(policy_ns_key_, policy);
+  client_.fetched_invalidation_version_ = 12345;
   EXPECT_CALL(store_, Store(ProtoMatches(policy))).Times(1);
+  EXPECT_EQ(0, store_.invalidation_version());
   client_.NotifyPolicyFetched();
+  EXPECT_EQ(12345, store_.invalidation_version());
 
   // Store reloads policy, callback gets triggered.
   store_.policy_.reset(new em::PolicyData());
@@ -118,7 +121,7 @@ TEST_F(CloudPolicyServiceTest, RefreshPolicySuccess) {
 
 TEST_F(CloudPolicyServiceTest, RefreshPolicyNotRegistered) {
   // Clear the token so the client is not registered.
-  client_.SetDMToken("");
+  client_.SetDMToken(std::string());
 
   EXPECT_CALL(client_, FetchPolicy()).Times(0);
   EXPECT_CALL(*this, OnPolicyRefresh(false)).Times(1);

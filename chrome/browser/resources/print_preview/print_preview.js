@@ -48,6 +48,13 @@ cr.define('print_preview', function() {
     this.appState_ = new print_preview.AppState();
 
     /**
+     * Data model that holds information about the document to print.
+     * @type {!print_preview.DocumentInfo}
+     * @private
+     */
+    this.documentInfo_ = new print_preview.DocumentInfo();
+
+    /**
      * Data store which holds print destinations.
      * @type {!print_preview.DestinationStore}
      * @private
@@ -61,7 +68,7 @@ cr.define('print_preview', function() {
      * @private
      */
     this.printTicketStore_ = new print_preview.PrintTicketStore(
-        this.destinationStore_, this.appState_);
+        this.destinationStore_, this.appState_, this.documentInfo_);
 
     /**
      * Holds the print and cancel buttons and renders some document statistics.
@@ -95,7 +102,8 @@ cr.define('print_preview', function() {
      * @type {!print_preview.PageSettings}
      * @private
      */
-    this.pageSettings_ = new print_preview.PageSettings(this.printTicketStore_);
+    this.pageSettings_ = new print_preview.PageSettings(
+        this.printTicketStore_.pageRange);
     this.addChild(this.pageSettings_);
 
     /**
@@ -104,7 +112,7 @@ cr.define('print_preview', function() {
      * @private
      */
     this.copiesSettings_ = new print_preview.CopiesSettings(
-        this.printTicketStore_);
+        this.printTicketStore_.copies, this.printTicketStore_.collate);
     this.addChild(this.copiesSettings_);
 
     /**
@@ -112,8 +120,8 @@ cr.define('print_preview', function() {
      * @type {!print_preview.LayoutSettings}
      * @private
      */
-    this.layoutSettings_ = new print_preview.LayoutSettings(
-          this.printTicketStore_);
+    this.layoutSettings_ =
+        new print_preview.LayoutSettings(this.printTicketStore_.landscape);
     this.addChild(this.layoutSettings_);
 
     /**
@@ -121,8 +129,8 @@ cr.define('print_preview', function() {
      * @type {!print_preview.ColorSettings}
      * @private
      */
-    this.colorSettings_ = new print_preview.ColorSettings(
-        this.printTicketStore_);
+    this.colorSettings_ =
+        new print_preview.ColorSettings(this.printTicketStore_.color);
     this.addChild(this.colorSettings_);
 
     /**
@@ -130,8 +138,8 @@ cr.define('print_preview', function() {
      * @type {!print_preview.MarginSettings}
      * @private
      */
-    this.marginSettings_ = new print_preview.MarginSettings(
-        this.printTicketStore_);
+    this.marginSettings_ =
+        new print_preview.MarginSettings(this.printTicketStore_.marginsType);
     this.addChild(this.marginSettings_);
 
     /**
@@ -140,7 +148,11 @@ cr.define('print_preview', function() {
      * @private
      */
     this.otherOptionsSettings_ = new print_preview.OtherOptionsSettings(
-        this.printTicketStore_);
+        this.printTicketStore_.duplex,
+        this.printTicketStore_.fitToPage,
+        this.printTicketStore_.cssBackground,
+        this.printTicketStore_.selectionOnly,
+        this.printTicketStore_.headerFooter);
     this.addChild(this.otherOptionsSettings_);
 
     /**
@@ -148,8 +160,10 @@ cr.define('print_preview', function() {
      * @type {!print_preview.PreviewArea}
      * @private
      */
-    this.previewArea_ = new print_preview.PreviewArea(
-        this.destinationStore_, this.printTicketStore_, this.nativeLayer_);
+    this.previewArea_ = new print_preview.PreviewArea(this.destinationStore_,
+                                                      this.printTicketStore_,
+                                                      this.nativeLayer_,
+                                                      this.documentInfo_);
     this.addChild(this.previewArea_);
 
     /**
@@ -213,6 +227,7 @@ cr.define('print_preview', function() {
       }
       this.nativeLayer_.startGetInitialSettings();
       this.destinationStore_.startLoadLocalDestinations();
+      cr.ui.FocusOutlineManager.forDocument(document);
     },
 
     /** @override */
@@ -428,6 +443,7 @@ cr.define('print_preview', function() {
             this.destinationStore_.selectedDestination,
             this.printTicketStore_,
             this.cloudPrintInterface_,
+            this.documentInfo_,
             this.uiState_ == PrintPreview.UiState_.OPENING_PDF_PREVIEW);
         return true;
       } else {
@@ -472,17 +488,17 @@ cr.define('print_preview', function() {
 
       var settings = event.initialSettings;
       this.isInKioskAutoPrintMode_ = settings.isInKioskAutoPrintMode;
-      document.title = settings.documentTitle;
 
       // The following components must be initialized in this order.
       this.appState_.init(settings.serializedAppStateStr);
-      this.printTicketStore_.init(
+      this.documentInfo_.init(
           settings.isDocumentModifiable,
           settings.documentTitle,
+          settings.documentHasSelection);
+      this.printTicketStore_.init(
           settings.thousandsDelimeter,
           settings.decimalDelimeter,
           settings.unitType,
-          settings.documentHasSelection,
           settings.selectionOnly);
       this.destinationStore_.init(settings.systemDefaultDestinationId);
     },
@@ -496,7 +512,8 @@ cr.define('print_preview', function() {
      */
     onCloudPrintEnable_: function(event) {
       this.cloudPrintInterface_ =
-          new cloudprint.CloudPrintInterface(event.baseCloudPrintUrl);
+          new cloudprint.CloudPrintInterface(event.baseCloudPrintUrl,
+                                             this.nativeLayer_);
       this.tracker.add(
           this.cloudPrintInterface_,
           cloudprint.CloudPrintInterface.EventType.SUBMIT_DONE,
@@ -541,6 +558,7 @@ cr.define('print_preview', function() {
       this.cloudPrintInterface_.submit(
           this.destinationStore_.selectedDestination,
           this.printTicketStore_,
+          this.documentInfo_,
           event.data);
     },
 
@@ -779,12 +797,13 @@ cr.define('print_preview', function() {
     },
 
     /**
-     * Called when the native layer dispatches a DISABLE_SCALING event. Updates
-     * the print ticket.
+     * Called when the native layer dispatches a DISABLE_SCALING event. Resets
+     * fit-to-page selection and updates document info.
      * @private
      */
     onDisableScaling_: function() {
-      this.printTicketStore_.updateFitToPage(false);
+      this.printTicketStore_.fitToPage.updateValue(null);
+      this.documentInfo_.updateIsScalingDisabled(true);
     },
 
     /**
@@ -799,7 +818,8 @@ cr.define('print_preview', function() {
       setIsVisible($('cloud-print-dialog-throbber'), true);
       this.setIsEnabled_(false);
       this.uiState_ = PrintPreview.UiState_.OPENING_NATIVE_PRINT_DIALOG;
-      this.nativeLayer_.startShowCloudPrintDialog();
+      this.nativeLayer_.startShowCloudPrintDialog(
+          this.printTicketStore_.pageRange.getPageNumberSet().size);
     },
 
     /**
@@ -873,8 +893,6 @@ cr.define('print_preview', function() {
 <include src="data/destination.js"/>
 <include src="data/local_parsers.js"/>
 <include src="data/cloud_parsers.js"/>
-<include src="data/chromium_capabilities.js"/>
-<include src="data/cloud_capabilities.js"/>
 <include src="data/destination_store.js"/>
 <include src="data/margins.js"/>
 <include src="data/document_info.js"/>

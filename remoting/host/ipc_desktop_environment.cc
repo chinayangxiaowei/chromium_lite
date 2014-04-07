@@ -8,10 +8,9 @@
 
 #include "base/compiler_specific.h"
 #include "base/logging.h"
-#include "base/process_util.h"
+#include "base/process/process_handle.h"
 #include "base/single_thread_task_runner.h"
 #include "ipc/ipc_sender.h"
-#include "media/video/capture/screen/screen_capturer.h"
 #include "remoting/host/audio_capturer.h"
 #include "remoting/host/chromoting_messages.h"
 #include "remoting/host/client_session_control.h"
@@ -19,6 +18,7 @@
 #include "remoting/host/desktop_session_proxy.h"
 #include "remoting/host/input_injector.h"
 #include "remoting/host/screen_controls.h"
+#include "third_party/webrtc/modules/desktop_capture/screen_capturer.h"
 
 namespace remoting {
 
@@ -36,10 +36,9 @@ IpcDesktopEnvironment::IpcDesktopEnvironment(
                                                    caller_task_runner,
                                                    io_task_runner,
                                                    capture_task_runner,
-                                                   client_session_control);
-
-  desktop_session_proxy_->ConnectToDesktopSession(desktop_session_connector,
-                                                  virtual_terminal);
+                                                   client_session_control,
+                                                   desktop_session_connector,
+                                                   virtual_terminal);
 }
 
 IpcDesktopEnvironment::~IpcDesktopEnvironment() {
@@ -57,8 +56,17 @@ scoped_ptr<ScreenControls> IpcDesktopEnvironment::CreateScreenControls() {
   return desktop_session_proxy_->CreateScreenControls();
 }
 
-scoped_ptr<media::ScreenCapturer> IpcDesktopEnvironment::CreateVideoCapturer() {
+scoped_ptr<webrtc::ScreenCapturer>
+IpcDesktopEnvironment::CreateVideoCapturer() {
   return desktop_session_proxy_->CreateVideoCapturer();
+}
+
+std::string IpcDesktopEnvironment::GetCapabilities() const {
+  return desktop_session_proxy_->GetCapabilities();
+}
+
+void IpcDesktopEnvironment::SetCapabilities(const std::string& capabilities) {
+  return desktop_session_proxy_->SetCapabilities(capabilities);
 }
 
 IpcDesktopEnvironmentFactory::IpcDesktopEnvironmentFactory(
@@ -71,19 +79,13 @@ IpcDesktopEnvironmentFactory::IpcDesktopEnvironmentFactory(
       caller_task_runner_(caller_task_runner),
       capture_task_runner_(capture_task_runner),
       io_task_runner_(io_task_runner),
-      curtain_activated_(false),
+      curtain_enabled_(false),
       daemon_channel_(daemon_channel),
-      connector_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)),
+      connector_factory_(this),
       next_id_(0) {
 }
 
 IpcDesktopEnvironmentFactory::~IpcDesktopEnvironmentFactory() {
-}
-
-void IpcDesktopEnvironmentFactory::SetActivated(bool activated) {
-  DCHECK(caller_task_runner_->BelongsToCurrentThread());
-
-  curtain_activated_ = activated;
 }
 
 scoped_ptr<DesktopEnvironment> IpcDesktopEnvironmentFactory::Create(
@@ -97,7 +99,13 @@ scoped_ptr<DesktopEnvironment> IpcDesktopEnvironmentFactory::Create(
                                 io_task_runner_,
                                 client_session_control,
                                 connector_factory_.GetWeakPtr(),
-                                curtain_activated_));
+                                curtain_enabled_));
+}
+
+void IpcDesktopEnvironmentFactory::SetEnableCurtaining(bool enable) {
+  DCHECK(caller_task_runner_->BelongsToCurrentThread());
+
+  curtain_enabled_ = enable;
 }
 
 bool IpcDesktopEnvironmentFactory::SupportsAudioCapture() const {

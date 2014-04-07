@@ -21,16 +21,16 @@
 #include <unistd.h>
 
 #include "native_client/src/include/nacl_scoped_ptr.h"
+#include "native_client/src/public/imc_syscalls.h"
+#include "native_client/src/public/name_service.h"
 #include "native_client/src/shared/srpc/nacl_srpc.h"
-#include "native_client/src/untrusted/nacl_ppapi_util/nacl_ppapi_util.h"
-#include "native_client/src/untrusted/nacl_ppapi_util/string_buffer.h"
-
-#include <sys/nacl_syscalls.h>
-#include <sys/nacl_name_service.h>
 
 #include "ppapi/cpp/instance.h"
 #include "ppapi/cpp/module.h"
 #include "ppapi/cpp/var.h"
+
+#include "ppapi/native_client/src/untrusted/nacl_ppapi_util/nacl_ppapi_util.h"
+#include "ppapi/native_client/src/untrusted/nacl_ppapi_util/string_buffer.h"
 
 #define RNG_OUTPUT_BYTES  1024
 

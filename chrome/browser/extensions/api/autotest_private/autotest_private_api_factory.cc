@@ -6,14 +6,16 @@
 
 #include "chrome/browser/extensions/api/autotest_private/autotest_private_api.h"
 #include "chrome/browser/extensions/extension_system_factory.h"
-#include "chrome/browser/profiles/profile_dependency_manager.h"
+#include "chrome/browser/profiles/incognito_helpers.h"
+#include "chrome/browser/profiles/profile.h"
+#include "components/browser_context_keyed_service/browser_context_dependency_manager.h"
 
 namespace extensions {
 
 // static
 AutotestPrivateAPI* AutotestPrivateAPIFactory::GetForProfile(Profile* profile) {
   return static_cast<AutotestPrivateAPI*>(GetInstance()->
-      GetServiceForProfile(profile, true));
+      GetServiceForBrowserContext(profile, true));
 }
 
 // static
@@ -22,24 +24,26 @@ AutotestPrivateAPIFactory* AutotestPrivateAPIFactory::GetInstance() {
 }
 
 AutotestPrivateAPIFactory::AutotestPrivateAPIFactory()
-    : ProfileKeyedServiceFactory("AutotestPrivateAPI",
-                                 ProfileDependencyManager::GetInstance()) {
+    : BrowserContextKeyedServiceFactory(
+        "AutotestPrivateAPI",
+        BrowserContextDependencyManager::GetInstance()) {
   DependsOn(ExtensionSystemFactory::GetInstance());
 }
 
 AutotestPrivateAPIFactory::~AutotestPrivateAPIFactory() {
 }
 
-ProfileKeyedService* AutotestPrivateAPIFactory::BuildServiceInstanceFor(
-    Profile* profile) const {
+BrowserContextKeyedService* AutotestPrivateAPIFactory::BuildServiceInstanceFor(
+    content::BrowserContext* profile) const {
   return new AutotestPrivateAPI();
 }
 
-bool AutotestPrivateAPIFactory::ServiceRedirectedInIncognito() const {
-  return true;
+content::BrowserContext* AutotestPrivateAPIFactory::GetBrowserContextToUse(
+    content::BrowserContext* context) const {
+  return chrome::GetBrowserContextRedirectedInIncognito(context);
 }
 
-bool AutotestPrivateAPIFactory::ServiceIsCreatedWithProfile() const {
+bool AutotestPrivateAPIFactory::ServiceIsCreatedWithBrowserContext() const {
   return true;
 }
 

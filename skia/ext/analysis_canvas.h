@@ -5,13 +5,10 @@
 #ifndef SKIA_EXT_ANALYSIS_CANVAS_H_
 #define SKIA_EXT_ANALYSIS_CANVAS_H_
 
-#include <list>
-#include <set>
-
-#include "base/hash_tables.h"
-#include "skia/ext/lazy_pixel_ref.h"
+#include "base/compiler_specific.h"
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "third_party/skia/include/core/SkDevice.h"
+#include "third_party/skia/include/core/SkPicture.h"
 
 namespace skia {
 
@@ -22,130 +19,143 @@ class AnalysisDevice;
 // played back through it.
 // To use: create a SkBitmap with kNo_Config, create an AnalysisDevice
 // using that bitmap, and create an AnalysisCanvas using the device.
-// Play a picture into the canvas, and then check isCheap().
-class SK_API AnalysisCanvas : public SkCanvas {
+// Play a picture into the canvas, and then check result.
+class SK_API AnalysisCanvas : public SkCanvas, public SkDrawPictureCallback {
  public:
-  typedef std::list<skia::LazyPixelRef*> LazyPixelRefList;
-
   AnalysisCanvas(AnalysisDevice*);
   virtual ~AnalysisCanvas();
 
-  // Returns true if the estimated cost of drawing is below an
-  // arbitrary threshold.
-  bool isCheap() const;
-  bool getColorIfSolid(SkColor* color) const;
-  bool isTransparent() const;
-  void consumeLazyPixelRefs(LazyPixelRefList* pixelRefs);
+  // Returns true when a SkColor can be used to represent result.
+  bool GetColorIfSolid(SkColor* color) const;
+  bool HasText() const;
 
-  // Returns the estimated cost of drawing, in arbitrary units.
-  int getEstimatedCost() const;
+  // SkDrawPictureCallback override.
+  virtual bool abortDrawing() OVERRIDE;
 
+  // SkCanvas overrides.
   virtual bool clipRect(const SkRect& rect,
                         SkRegion::Op op = SkRegion::kIntersect_Op,
-                        bool doAntiAlias = false) OVERRIDE;
+                        bool do_anti_alias = false) OVERRIDE;
   virtual bool clipPath(const SkPath& path,
                         SkRegion::Op op = SkRegion::kIntersect_Op,
-                        bool doAntiAlias = false) OVERRIDE;
+                        bool do_anti_alias = false) OVERRIDE;
   virtual bool clipRRect(const SkRRect& rrect,
                          SkRegion::Op op = SkRegion::kIntersect_Op,
-                         bool doAntiAlias = false) OVERRIDE;
+                         bool do_anti_alias = false) OVERRIDE;
 
-  virtual int saveLayer(const SkRect* bounds, const SkPaint*,
-                              SkCanvas::SaveFlags flags) OVERRIDE;
+  virtual int saveLayer(const SkRect* bounds,
+                        const SkPaint* paint,
+                        SkCanvas::SaveFlags flags) OVERRIDE;
   virtual int save(SaveFlags flags = kMatrixClip_SaveFlag) OVERRIDE;
 
   virtual void restore() OVERRIDE;
 
  private:
   typedef SkCanvas INHERITED;
-  static const int kNoLayer;
 
-  int savedStackSize_;
-  int forceNotSolidStackLevel_;
-  int forceNotTransparentStackLevel_;
+  int saved_stack_size_;
+  int force_not_solid_stack_level_;
+  int force_not_transparent_stack_level_;
 };
 
 class SK_API AnalysisDevice : public SkDevice {
  public:
-  typedef std::list<skia::LazyPixelRef*> LazyPixelRefList;
-  typedef base::hash_set<uint32_t> IdSet;
-
-  AnalysisDevice(const SkBitmap& bm);
+  AnalysisDevice(const SkBitmap& bitmap);
   virtual ~AnalysisDevice();
 
-  int getEstimatedCost() const;
-  bool getColorIfSolid(SkColor* color) const;
-  bool isTransparent() const;
-  void consumeLazyPixelRefs(LazyPixelRefList* pixelRefs);
+  bool GetColorIfSolid(SkColor* color) const;
+  bool HasText() const;
 
-  void setForceNotSolid(bool flag);
-  void setForceNotTransparent(bool flag);
+  void SetForceNotSolid(bool flag);
+  void SetForceNotTransparent(bool flag);
 
  protected:
+  // SkDevice overrides.
   virtual void clear(SkColor color) OVERRIDE;
-  virtual void drawPaint(const SkDraw&, const SkPaint& paint) OVERRIDE;
-  virtual void drawPoints(const SkDraw&, SkCanvas::PointMode mode,
-                          size_t count, const SkPoint[],
+  virtual void drawPaint(const SkDraw& draw, const SkPaint& paint) OVERRIDE;
+  virtual void drawPoints(const SkDraw& draw,
+                          SkCanvas::PointMode mode,
+                          size_t count,
+                          const SkPoint points[],
                           const SkPaint& paint) OVERRIDE;
-  virtual void drawRect(const SkDraw&, const SkRect& r,
+  virtual void drawRect(const SkDraw& draw,
+                        const SkRect& rect,
                         const SkPaint& paint) OVERRIDE;
-  virtual void drawOval(const SkDraw&, const SkRect& oval,
+  virtual void drawOval(const SkDraw& draw,
+                        const SkRect& oval,
                         const SkPaint& paint) OVERRIDE;
-  virtual void drawPath(const SkDraw&, const SkPath& path,
+  virtual void drawPath(const SkDraw& draw,
+                        const SkPath& path,
                         const SkPaint& paint,
-                        const SkMatrix* prePathMatrix = NULL,
-                        bool pathIsMutable = false) OVERRIDE;
-  virtual void drawBitmap(const SkDraw&, const SkBitmap& bitmap,
-                          const SkIRect* srcRectOrNull,
-                          const SkMatrix& matrix, const SkPaint& paint)
-                          OVERRIDE;
-  virtual void drawSprite(const SkDraw&, const SkBitmap& bitmap,
-                          int x, int y, const SkPaint& paint) OVERRIDE;
-  virtual void drawBitmapRect(const SkDraw&, const SkBitmap&,
-                              const SkRect* srcOrNull, const SkRect& dst,
+                        const SkMatrix* pre_path_matrix = NULL,
+                        bool path_is_mutable = false) OVERRIDE;
+  virtual void drawBitmap(const SkDraw& draw,
+                          const SkBitmap& bitmap,
+                          const SkMatrix& matrix,
+                          const SkPaint& paint) OVERRIDE;
+  virtual void drawSprite(const SkDraw& draw,
+                          const SkBitmap& bitmap,
+                          int x,
+                          int y,
+                          const SkPaint& paint) OVERRIDE;
+  virtual void drawBitmapRect(const SkDraw& draw,
+                              const SkBitmap& bitmap,
+                              const SkRect* src_or_null,
+                              const SkRect& dst,
                               const SkPaint& paint) OVERRIDE;
-  virtual void drawText(const SkDraw&, const void* text, size_t len,
-                        SkScalar x, SkScalar y, const SkPaint& paint)
-                        OVERRIDE;
-  virtual void drawPosText(const SkDraw& draw, const void* text, size_t len,
-                           const SkScalar pos[], SkScalar constY,
-                           int scalarsPerPos, const SkPaint& paint) OVERRIDE;
-  virtual void drawTextOnPath(const SkDraw&, const void* text, size_t len,
-                              const SkPath& path, const SkMatrix* matrix,
+  virtual void drawText(const SkDraw& draw,
+                        const void* text,
+                        size_t len,
+                        SkScalar x,
+                        SkScalar y,
+                        const SkPaint& paint) OVERRIDE;
+  virtual void drawPosText(const SkDraw& draw,
+                           const void* text,
+                           size_t len,
+                           const SkScalar pos[],
+                           SkScalar const_y,
+                           int scalars_per_pos,
+                           const SkPaint& paint) OVERRIDE;
+  virtual void drawTextOnPath(const SkDraw& draw,
+                              const void* text,
+                              size_t len,
+                              const SkPath& path,
+                              const SkMatrix* matrix,
                               const SkPaint& paint) OVERRIDE;
 #ifdef SK_BUILD_FOR_ANDROID
-  virtual void drawPosTextOnPath(const SkDraw& draw, const void* text,
+  virtual void drawPosTextOnPath(const SkDraw& draw,
+                                 const void* text,
                                  size_t len,
-                                 const SkPoint pos[], const SkPaint& paint,
-                                 const SkPath& path, const SkMatrix* matrix)
-                                 OVERRIDE;
+                                 const SkPoint pos[],
+                                 const SkPaint& paint,
+                                 const SkPath& path,
+                                 const SkMatrix* matrix) OVERRIDE;
 #endif
-  virtual void drawVertices(const SkDraw&, SkCanvas::VertexMode,
-                            int vertexCount,
-                            const SkPoint verts[], const SkPoint texs[],
-                            const SkColor colors[], SkXfermode* xmode,
-                            const uint16_t indices[], int indexCount,
+  virtual void drawVertices(const SkDraw& draw,
+                            SkCanvas::VertexMode vertex_mode,
+                            int vertex_count,
+                            const SkPoint verts[],
+                            const SkPoint texs[],
+                            const SkColor colors[],
+                            SkXfermode* xmode,
+                            const uint16_t indices[],
+                            int index_count,
                             const SkPaint& paint) OVERRIDE;
-  virtual void drawDevice(const SkDraw&, SkDevice*, int x, int y,
-                          const SkPaint&) OVERRIDE;
-
-  int estimatedCost_;
+  virtual void drawDevice(const SkDraw& draw,
+                          SkDevice* device,
+                          int x,
+                          int y,
+                          const SkPaint& paint) OVERRIDE;
 
  private:
-
   typedef SkDevice INHERITED;
 
-  void addPixelRefIfLazy(SkPixelRef* pixelRef);
-  void addBitmap(const SkBitmap& bitmap);
-  void addBitmapFromPaint(const SkPaint& paint);
-
-  bool isForcedNotSolid_;
-  bool isForcedNotTransparent_;
-  bool isSolidColor_;
+  bool is_forced_not_solid_;
+  bool is_forced_not_transparent_;
+  bool is_solid_color_;
   SkColor color_;
-  bool isTransparent_;
-  IdSet existingPixelRefIDs_;
-  LazyPixelRefList lazyPixelRefs_;
+  bool is_transparent_;
+  bool has_text_;
 };
 
 }  // namespace skia

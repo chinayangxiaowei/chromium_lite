@@ -28,7 +28,6 @@
 // --memoryusage: prints out memory usage when visiting each page.
 // --endurl=url: visits the specified url in the end.
 // --logfile=filepath: saves the visit log to the specified path.
-// --nopagedown: won't simulate page down key presses after page load.
 // --noclearprofile: do not clear profile dir before firing up each time.
 // --savedebuglog: save Chrome, V8, and test debug log for each page loaded.
 // --searchdumpsbypid: Look for crash dumps by browser process id.
@@ -41,6 +40,7 @@
 #include "base/environment.h"
 #include "base/file_util.h"
 #include "base/file_version_info.h"
+#include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/i18n/time_formatting.h"
 #include "base/memory/scoped_ptr.h"
@@ -48,12 +48,12 @@
 #include "base/prefs/json_pref_store.h"
 #include "base/prefs/pref_registry_simple.h"
 #include "base/prefs/pref_service.h"
-#include "base/string_util.h"
+#include "base/process/kill.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
 #include "base/test/test_file_util.h"
 #include "base/threading/platform_thread.h"
-#include "base/time.h"
-#include "chrome/browser/net/url_fixer_upper.h"
+#include "base/time/time.h"
 #include "chrome/browser/prefs/pref_service_mock_builder.h"
 #include "chrome/common/automation_messages.h"
 #include "chrome/common/chrome_constants.h"
@@ -61,6 +61,7 @@
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/chrome_version_info.h"
 #include "chrome/common/logging_chrome.h"
+#include "chrome/common/net/url_fixer_upper.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/render_messages.h"
 #include "chrome/common/url_constants.h"
@@ -70,7 +71,6 @@
 #include "chrome/test/automation/window_proxy.h"
 #include "chrome/test/ui/ui_test.h"
 #include "net/base/net_util.h"
-#include "ui/base/keycodes/keyboard_codes.h"
 #include "v8/include/v8-testing.h"
 
 namespace {
@@ -115,7 +115,6 @@ int32 g_iterations = 1;
 bool g_memory_usage = false;
 bool g_continuous_load = false;
 bool g_browser_existing = false;
-bool g_page_down = true;
 bool g_clear_profile = true;
 std::string g_end_url;
 base::FilePath g_log_file_path;
@@ -201,9 +200,6 @@ void SetPageRange(const CommandLine& parsed_command_line) {
   if (parsed_command_line.HasSwitch(kLogFileSwitch))
     g_log_file_path = parsed_command_line.GetSwitchValuePath(kLogFileSwitch);
 
-  if (parsed_command_line.HasSwitch(kNoPageDownSwitch))
-    g_page_down = false;
-
   if (parsed_command_line.HasSwitch(kNoClearProfileSwitch))
     g_clear_profile = false;
 
@@ -219,9 +215,8 @@ void SetPageRange(const CommandLine& parsed_command_line) {
         CommandLine v8_command_line(
             parsed_command_line.GetSwitchValuePath(switches::kJavaScriptFlags));
         if (v8_command_line.HasSwitch(kV8LogFileSwitch)) {
-          g_v8_log_path = v8_command_line.GetSwitchValuePath(kV8LogFileSwitch);
-          if (!file_util::AbsolutePath(&g_v8_log_path))
-            g_v8_log_path = base::FilePath();
+          g_v8_log_path = base::MakeAbsoluteFilePath(
+              v8_command_line.GetSwitchValuePath(kV8LogFileSwitch));
         }
       }
     }
@@ -334,19 +329,6 @@ class PageLoadTest : public UITest {
       scoped_refptr<TabProxy> tab_proxy(GetActiveTab());
       if (tab_proxy.get())
         result = tab_proxy->NavigateToURL(url);
-
-      if (result == AUTOMATION_MSG_NAVIGATION_SUCCESS) {
-        if (g_page_down) {
-          // Page down twice.
-          // Sleep for 2 seconds between commands.
-          // This used to be settable but the flag went away.
-          base::TimeDelta sleep_time = base::TimeDelta::FromSeconds(2);
-          tab_proxy->SimulateKeyPress(ui::VKEY_NEXT);
-          base::PlatformThread::Sleep(sleep_time);
-          tab_proxy->SimulateKeyPress(ui::VKEY_NEXT);
-          base::PlatformThread::Sleep(sleep_time);
-        }
-      }
     }
 
     // Log navigate complete time.
@@ -469,12 +451,6 @@ class PageLoadTest : public UITest {
         return;
       // For usage 1
       NavigationMetrics metrics;
-      // Though it would be nice to test the page down code path in usage 1,
-      // enabling page down adds several seconds to the test and does not seem
-      // worth the tradeoff. It is also potentially disruptive when running the
-      // test in the background as it will send the event to the window that
-      // has focus.
-      g_page_down = false;
 
       base::FilePath sample_data_dir = GetSampleDataDir();
       base::FilePath test_page_1 = sample_data_dir.AppendASCII(kTestPage1);
@@ -637,9 +613,9 @@ class PageLoadTest : public UITest {
       PathService::Get(chrome::DIR_CRASH_DUMPS, &crash_dumps_dir_path_);
     }
 
-    file_util::FileEnumerator enumerator(crash_dumps_dir_path_,
-                                         false,  // not recursive
-                                         file_util::FileEnumerator::FILES);
+    base::FileEnumerator enumerator(crash_dumps_dir_path_,
+                                    false,  // not recursive
+                                    base::FileEnumerator::FILES);
     for (base::FilePath path = enumerator.Next(); !path.value().empty();
          path = enumerator.Next()) {
       if (path.MatchesExtension(FILE_PATH_LITERAL(".dmp")))
@@ -660,7 +636,7 @@ class PageLoadTest : public UITest {
     if (!log_path.empty()) {
       base::FilePath saved_log_file_path =
           ConstructSavedDebugLogPath(log_path, index);
-      if (file_util::Move(log_path, saved_log_file_path)) {
+      if (base::Move(log_path, saved_log_file_path)) {
         log_file << " " << log_id << "=" << saved_log_file_path.value();
       }
     }
@@ -688,9 +664,9 @@ class PageLoadTest : public UITest {
   }
 
   bool HasNewCrashDumps() {
-    file_util::FileEnumerator enumerator(crash_dumps_dir_path_,
-                                         false,  // not recursive
-                                         file_util::FileEnumerator::FILES);
+    base::FileEnumerator enumerator(crash_dumps_dir_path_,
+                                    false,  // not recursive
+                                    base::FileEnumerator::FILES);
     for (base::FilePath path = enumerator.Next(); !path.value().empty();
          path = enumerator.Next()) {
       if (path.MatchesExtension(FILE_PATH_LITERAL(".dmp")) &&
@@ -708,9 +684,9 @@ class PageLoadTest : public UITest {
                             NavigationMetrics* metrics,
                             bool delete_dumps) {
     int num_dumps = 0;
-    file_util::FileEnumerator enumerator(crash_dumps_dir_path_,
-                                         false,  // not recursive
-                                         file_util::FileEnumerator::FILES);
+    base::FileEnumerator enumerator(crash_dumps_dir_path_,
+                                    false,  // not recursive
+                                    base::FileEnumerator::FILES);
     for (base::FilePath path = enumerator.Next(); !path.value().empty();
          path = enumerator.Next()) {
       if (path.MatchesExtension(FILE_PATH_LITERAL(".dmp")) &&
@@ -734,8 +710,8 @@ class PageLoadTest : public UITest {
   PrefService* GetLocalState(PrefRegistry* registry) {
     base::FilePath path = user_data_dir().Append(chrome::kLocalStateFilename);
     PrefServiceMockBuilder builder;
-    builder.WithUserFilePrefs(path,
-                              MessageLoop::current()->message_loop_proxy());
+    builder.WithUserFilePrefs(
+        path, base::MessageLoop::current()->message_loop_proxy().get());
     return builder.Create(registry);
   }
 
@@ -749,7 +725,7 @@ class PageLoadTest : public UITest {
     registry->RegisterIntegerPref(prefs::kStabilityCrashCount, 0);
     registry->RegisterIntegerPref(prefs::kStabilityRendererCrashCount, 0);
 
-    scoped_ptr<PrefService> local_state(GetLocalState(registry));
+    scoped_ptr<PrefService> local_state(GetLocalState(registry.get()));
     if (!local_state.get())
       return;
 

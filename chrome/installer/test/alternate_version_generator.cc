@@ -34,12 +34,14 @@
 #include "base/basictypes.h"
 #include "base/command_line.h"
 #include "base/file_util.h"
+#include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/path_service.h"
 #include "base/platform_file.h"
-#include "base/process_util.h"
-#include "base/string_util.h"
+#include "base/process/launch.h"
+#include "base/process/process_handle.h"
+#include "base/strings/string_util.h"
 #include "base/version.h"
 #include "base/win/pe_image.h"
 #include "base/win/scoped_handle.h"
@@ -74,7 +76,7 @@ class ScopedTempDirectory {
  public:
   ScopedTempDirectory() { }
   ~ScopedTempDirectory() {
-    if (!directory_.empty() && !file_util::Delete(directory_, true)) {
+    if (!directory_.empty() && !base::DeleteFile(directory_, true)) {
       LOG(DFATAL) << "Failed deleting temporary directory \""
                   << directory_.value() << "\"";
     }
@@ -179,7 +181,7 @@ bool MappedFile::Initialize(base::PlatformFile file) {
 
   if (base::GetPlatformFileInfo(file, &file_info)) {
     if (file_info.size <=
-        static_cast<int64>(std::numeric_limits<size_t>::max())) {
+        static_cast<int64>(std::numeric_limits<DWORD>::max())) {
       mapping_ = CreateFileMapping(file, NULL, PAGE_READWRITE, 0,
                                    static_cast<DWORD>(file_info.size), NULL);
       if (mapping_ != NULL) {
@@ -194,7 +196,7 @@ bool MappedFile::Initialize(base::PlatformFile file) {
         PLOG(DFATAL) << "CreateFileMapping failed";
       }
     } else {
-      LOG(DFATAL) << "Files larger than " << std::numeric_limits<size_t>::max()
+      LOG(DFATAL) << "Files larger than " << std::numeric_limits<DWORD>::max()
                   << " are not supported.";
     }
   } else {
@@ -432,8 +434,7 @@ bool ApplyAlternateVersion(const base::FilePath& work_dir,
 
   // Modify all .dll and .exe files with the current version.
   bool doing_great = true;
-  file_util::FileEnumerator all_files(work_dir, true,
-                                      file_util::FileEnumerator::FILES);
+  base::FileEnumerator all_files(work_dir, true, base::FileEnumerator::FILES);
   do {
     base::FilePath file = all_files.Next();
     if (file.empty()) {
@@ -447,8 +448,8 @@ bool ApplyAlternateVersion(const base::FilePath& work_dir,
 
   // Change the versioned directory.
   base::FilePath chrome_bin = work_dir.Append(&kChromeBin[0]);
-  doing_great = file_util::Move(chrome_bin.Append(ctx.current_version_str),
-                                chrome_bin.Append(ctx.new_version_str));
+  doing_great = base::Move(chrome_bin.Append(ctx.current_version_str),
+                           chrome_bin.Append(ctx.new_version_str));
 
   if (doing_great) {
     // Report the version numbers if requested.
@@ -524,7 +525,7 @@ bool GenerateAlternateVersion(const base::FilePath& original_installer_path,
   // Copy the original mini_installer.
   base::FilePath mini_installer =
       work_dir.directory().Append(original_installer_path.BaseName());
-  if (!file_util::CopyFile(original_installer_path, mini_installer)) {
+  if (!base::CopyFile(original_installer_path, mini_installer)) {
     LOG(DFATAL) << "Failed copying \"" << original_installer_path.value()
                 << "\" to \"" << mini_installer.value() << "\"";
     return false;
@@ -602,9 +603,9 @@ bool GenerateAlternateVersion(const base::FilePath& original_installer_path,
 
   // Get rid of intermediate files
   base::FilePath chrome_7z(chrome_7z_name);
-  if (!file_util::Delete(chrome_7z, false) ||
-      !file_util::Delete(chrome_packed_7z, false) ||
-      !file_util::Delete(setup_ex_, false)) {
+  if (!base::DeleteFile(chrome_7z, false) ||
+      !base::DeleteFile(chrome_packed_7z, false) ||
+      !base::DeleteFile(setup_ex_, false)) {
     LOG(DFATAL) << "Failed deleting intermediate files";
     return false;
   }
@@ -649,7 +650,7 @@ bool GenerateAlternateVersion(const base::FilePath& original_installer_path,
   }
 
   // Finally, move the updated mini_installer into place.
-  return file_util::Move(mini_installer, target_path);
+  return base::Move(mini_installer, target_path);
 }
 
 bool GenerateAlternatePEFileVersion(const base::FilePath& original_file,
@@ -679,7 +680,7 @@ bool GenerateSpecificPEFileVersion(const base::FilePath& original_file,
                                    const base::FilePath& target_file,
                                    const Version& version) {
   // First copy original_file to target_file.
-  if (!file_util::CopyFile(original_file, target_file)) {
+  if (!base::CopyFile(original_file, target_file)) {
     LOG(DFATAL) << "Failed copying \"" << original_file.value()
                 << "\" to \"" << target_file.value() << "\"";
     return false;

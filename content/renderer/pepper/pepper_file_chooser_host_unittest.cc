@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 #include "base/files/file_path.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "content/common/view_messages.h"
 #include "content/public/common/file_chooser_params.h"
 #include "content/public/test/render_view_test.h"
@@ -31,11 +31,9 @@ namespace {
 class PepperFileChooserHostTest : public RenderViewTest {
  public:
   PepperFileChooserHostTest()
-      : pp_instance_(123456),
-        old_content_client_(NULL) {}
+      : pp_instance_(123456) {}
 
   virtual void SetUp() {
-    old_content_client_ = GetContentClient();
     SetContentClient(&client_);
     RenderViewTest::SetUp();
 
@@ -45,7 +43,6 @@ class PepperFileChooserHostTest : public RenderViewTest {
     globals_.GetResourceTracker()->DidDeleteInstance(pp_instance_);
 
     RenderViewTest::TearDown();
-    SetContentClient(old_content_client_);
   }
 
   PP_Instance pp_instance() const { return pp_instance_; }
@@ -55,9 +52,6 @@ class PepperFileChooserHostTest : public RenderViewTest {
 
   ppapi::TestGlobals globals_;
   TestContentClient client_;
-
-  // Original value for the content client.
-  ContentClient* old_content_client_;
 };
 
 // For testing to convert our hardcoded file paths to 8-bit.

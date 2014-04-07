@@ -12,6 +12,43 @@
 
 namespace extensions {
 
+class MetricsPrivateGetIsCrashReportingEnabledFunction
+    : public SyncExtensionFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION("metricsPrivate.getIsCrashReportingEnabled",
+                             METRICSPRIVATE_GETISCRASHRECORDINGENABLED)
+
+ protected:
+  virtual ~MetricsPrivateGetIsCrashReportingEnabledFunction() {}
+
+  // ExtensionFunction:
+  virtual bool RunImpl() OVERRIDE;
+};
+
+class MetricsPrivateGetFieldTrialFunction : public SyncExtensionFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION("metricsPrivate.getFieldTrial",
+                             METRICSPRIVATE_GETFIELDTRIAL)
+
+ protected:
+  virtual ~MetricsPrivateGetFieldTrialFunction() {}
+
+  // ExtensionFunction:
+  virtual bool RunImpl() OVERRIDE;
+};
+
+class MetricsPrivateGetVariationParamsFunction : public SyncExtensionFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION("metricsPrivate.getVariationParams",
+                             METRICSPRIVATE_GETVARIATIONPARAMS)
+
+ protected:
+  virtual ~MetricsPrivateGetVariationParamsFunction() {}
+
+  // ExtensionFunction:
+  virtual bool RunImpl() OVERRIDE;
+};
+
 class MetricsPrivateRecordUserActionFunction : public SyncExtensionFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("metricsPrivate.recordUserAction",

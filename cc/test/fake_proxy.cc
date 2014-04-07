@@ -6,17 +6,20 @@
 
 namespace cc {
 
+void FakeProxy::SetLayerTreeHost(LayerTreeHost* host) {
+  layer_tree_host_ = host;
+}
+
 bool FakeProxy::CompositeAndReadback(void* pixels, gfx::Rect rect) {
   return true;
 }
 
 bool FakeProxy::IsStarted() const { return true; }
 
-bool FakeProxy::InitializeOutputSurface() { return true; }
-
-bool FakeProxy::InitializeRenderer() { return true; }
-
-bool FakeProxy::RecreateOutputSurface() { return true; }
+void FakeProxy::CreateAndInitializeOutputSurface() {
+  DCHECK(layer_tree_host_);
+  layer_tree_host_->OnCreateAndInitializeOutputSurfaceAttempted(true);
+}
 
 const RendererCapabilities& FakeProxy::GetRendererCapabilities() const {
   return capabilities_;
@@ -37,10 +40,6 @@ void FakeProxy::SetMaxPartialTextureUpdates(size_t max) {
 }
 
 bool FakeProxy::CommitPendingForTesting() { return false; }
-
-skia::RefPtr<SkPicture> FakeProxy::CapturePicture() {
-  return skia::RefPtr<SkPicture>();
-}
 
 scoped_ptr<base::Value> FakeProxy::AsValue() const {
   scoped_ptr<base::DictionaryValue> state(new base::DictionaryValue());

@@ -23,8 +23,16 @@ body {
   color: #222;
   font-size: 13px;
   margin: 0;
-  padding: 20px;
+  padding: 20px 20px 0 20px;
   direction: __MSG_@@bidi_dir__;
+}
+
+/*
+* The "app-v2" class is added to the <html> node by remoting.init if it's
+* running as a V2 app.
+*/
+body.apps-v2 .apps-v1-only {
+  display: none !important;
 }
 
 a {
@@ -40,7 +48,6 @@ a:active {
 strong, b {
   color: #000;
 }
-
 
 /*------------------------------------------------------------------
 Component: Buttons
@@ -145,29 +152,29 @@ button[disabled], button[disabled]:hover, button[disabled]:active {
     padding-top:100px;
     background-clip:padding-box;
     background-color: rgba(0,0,0,0.2);
-    -webkit-box-shadow: inset 1px 1px 0px rgba(0,0,0,0.10),
-                        inset 0px -1px 0px  rgba(0,0,0,0.07);
+    box-shadow: inset 1px 1px 0px rgba(0,0,0,0.10),
+                inset 0px -1px 0px  rgba(0,0,0,0.07);
 }
 
 ::-webkit-scrollbar-thumb:hover {
     background-color: rgba(0,0,0,0.4);
-    -webkit-box-shadow: inset 1px 1px 1px rgba(0,0,0,0.25);
+    box-shadow: inset 1px 1px 1px rgba(0,0,0,0.25);
 }
 
 ::-webkit-scrollbar-thumb:active {
-    -webkit-box-shadow: inset 1px 1px 3px rgba(0,0,0,0.35);
+    box-shadow: inset 1px 1px 3px rgba(0,0,0,0.35);
     background-color: rgba(0,0,0,0.5);
 }
 
 ::-webkit-scrollbar-track:hover {
   background-color:rgba(0,0,0,0.05);
-   -webkit-box-shadow: inset 1px 0px 0px  rgba(0,0,0,0.10);
+   box-shadow: inset 1px 0px 0px  rgba(0,0,0,0.10);
 }
 
 ::-webkit-scrollbar-track:active {
   background-color:rgba(0,0,0,0.05);
-  -webkit-box-shadow: inset 1px 0px 0px  rgba(0,0,0,0.14),
-                      inset -1px -1px 0px  rgba(0,0,0,0.07);
+  box-shadow: inset 1px 0px 0px  rgba(0,0,0,0.14),
+              inset -1px -1px 0px  rgba(0,0,0,0.07);
 }
 
 ::-webkit-scrollbar-track-piece {
@@ -191,11 +198,11 @@ input[type=text]:hover,
 input[type=password]:hover {
     border: 1px solid #b9b9b9;
     border-top: 1px solid #a0a0a0;
-    -webkit-box-shadow: inset 0px 1px 2px rgba(0,0,0,0.1);
+    box-shadow: inset 0px 1px 2px rgba(0,0,0,0.1);
 }
 input[type=text]:focus,
 input[type=password]:focus {
-    -webkit-box-shadow: inset 0px 1px 2px rgba(0,0,0,0.3);
+    box-shadow: inset 0px 1px 2px rgba(0,0,0,0.3);
     outline: none;
     border: 1px solid #4d90fe;
 }
@@ -209,7 +216,7 @@ Component: Modal Dialog
 }
 
 .kd-modaldialog {
-  -webkit-box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.2);
   background: white;
   outline:1px solid rgba(0,0,0,0.2);
   padding:30px 42px;
@@ -247,13 +254,14 @@ section > h2 {
 }
 
 header {
-  display: -webkit-box;
+  display: -webkit-flex;
   width: 100%;
 }
 
 html {
   -webkit-user-select: none;
   cursor: default;
+  height: 100%; /* Remove phantom pixels at the bottom of the body. */
 }
 
 section {
@@ -279,11 +287,26 @@ section {
 }
 
 .box-spacer {
-  -webkit-box-flex: 1;
+  -webkit-flex: 1;
 }
 
 .centered {
-  text-align: center;
+  margin: auto;
+}
+
+.button-row {
+  display: -webkit-flex;
+  -webkit-flex-direction: row;
+  -webkit-justify-content: flex-end;
+  margin-top: 20px;
+}
+
+.button-row button {
+  margin-left: 5px;
+}
+
+.button-row span:first-child {
+  width: 100%;
 }
 
 .clickable {
@@ -291,7 +314,7 @@ section {
 }
 
 .box {
-  display: -webkit-box;
+  display: -webkit-flex;
 }
 
 .host-list-empty-instructions {
@@ -315,8 +338,8 @@ section {
 }
 
 .section-row {
-  display: -webkit-box;
-  -webkit-box-align: center;
+  display: -webkit-flex;
+  -webkit-align-items: center;
   padding: 10px 0;
   border-top: 1px solid #EBEBEB;
 }
@@ -369,7 +392,7 @@ section {
   background-color: #f9edbe;
   border: 1px solid #f0c36d;
   -webkit-border-radius: 2px;
-  -webkit-box-shadow: 0px 2px 4px rgba(0,0,0,0.2);
+  box-shadow: 0px 2px 4px rgba(0,0,0,0.2);
   color: #222;
   padding: 8px 16px;
   text-align: center;
@@ -377,29 +400,26 @@ section {
   margin-top: 30px;
 }
 
-#survey-opt-in {
+#butter-bar {
   position: absolute;
   top: 80px;
   left: 0;
-}
-
-.butter-bar {
   display: -webkit-box;
   width: 100%;
 }
 
-.butter-bar .close-icon {
+#butter-bar-dismiss img {
   vertical-align: top;
   opacity: 0.4;
   margin-__MSG_@@bidi_start_edge__: 2px;
   margin-__MSG_@@bidi_end_edge__: -12px;
 }
 
-.butter-bar .close-icon:hover {
+#butter-bar-dimiss:hover {
   opacity: 0.7;
 }
 
-.butter-bar > p {
+#butter-bar > p {
   background-color: #f9edbe;
   border: 1px solid #f0c36d;
   -webkit-border-radius: 2px;
@@ -410,10 +430,14 @@ section {
   margin: auto;
 }
 
-.butter-bar a {
+#butter-bar a {
   color: inherit;
   text-decoration: underline;
   padding-__MSG_@@bidi_start_edge__: 2px;
+}
+
+#paired-clients-list table {
+  width: 100%;
 }
 
 .message {
@@ -430,6 +454,10 @@ section {
 
 td {
   vertical-align: middle;
+}
+
+thead {
+  font-weight: bold;
 }
 
 .host-online.clickable:hover,
@@ -502,12 +530,10 @@ button {
 .waiting {
   background-image: url('spinner.gif');
   background-repeat: no-repeat;
-  background-position: top __MSG_@@bidi_start_edge__;
+  background-position-y: 3px;
   padding-__MSG_@@bidi_start_edge__: 30px;
-  padding-top: 2px;
-  padding-bottom: 4px;
+  padding-top: 5px;
   color: rgb(180, 180, 180);
-  line-height: 27px; /* Same as line-height for buttons */
 }
 
 .prominent {
@@ -517,7 +543,6 @@ button {
 .space-before {
   margin-top: 20px;
 }
-
 
 #access-code-countdown-container {
   height: 50px;
@@ -549,6 +574,7 @@ button {
 .checkbox-label {
   display: block;
   padding-__MSG_@@bidi_start_edge__: 20px;
+  margin-top: 12px;
 }
 
 .checkbox-label input[type=checkbox] {
@@ -569,11 +595,11 @@ button {
 }
 
 .dialog-container {
-  position: fixed;
+  position: absolute;
   top: 200px;
   left: 0;
   width: 100%;
-  display: -webkit-box;
+  display: -webkit-flex;
 }
 
 .dialog-screen {
@@ -585,6 +611,21 @@ button {
   background-color: #fff;
   opacity: 0.75;
 }
+
+/* TODO(jamiewalch): crbug.com/252796: Remove these once crbug.com/240772
+ * is fixed. */
+.no-horizontal-scroll {
+  overflow-x: hidden !important;
+}
+
+.no-vertical-scroll {
+  overflow-y: hidden !important;
+}
+
+html.apps-v2.scrollable {
+  overflow: scroll;
+}
+
 
 /* TODO(jamiewalch): Reinstate this if we're able to get translations for
  *     "Why is this safe?" that don't overflow in any language.
@@ -605,9 +646,13 @@ button {
   display: none;
 }
 
+#remember-pin {
+  width: 315px;
+}
+
 #session-mode {
   position: absolute;
-  -webkit-box-shadow: 0 0 8px 0 black;
+  box-shadow: 0 0 8px 0 black;
   -webkit-user-select: none;
 }
 

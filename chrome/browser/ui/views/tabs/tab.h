@@ -100,6 +100,14 @@ class Tab : public TabAudioIndicator::Delegate,
     background_offset_ = offset;
   }
 
+  // Returns true if this tab became the active tab selected in
+  // response to the last ui::ET_GESTURE_BEGIN gesture dispatched to
+  // this tab. Only used for collecting UMA metrics.
+  // See ash/touch/touch_uma.cc.
+  bool tab_activated_with_last_gesture_begin() const {
+    return tab_activated_with_last_gesture_begin_;
+  }
+
   views::GlowHoverController* hover_controller() {
     return &hover_controller_;
   }
@@ -125,6 +133,7 @@ class Tab : public TabAudioIndicator::Delegate,
 
  private:
   friend class TabTest;
+  FRIEND_TEST_ALL_PREFIXES(TabTest, CloseButtonLayout);
   // The animation object used to swap the favicon with the sad tab icon.
   class FaviconCrashAnimation;
   class TabCloseButton;
@@ -160,13 +169,14 @@ class Tab : public TabAudioIndicator::Delegate,
 
   // Overridden from views::ContextMenuController:
   virtual void ShowContextMenuForView(views::View* source,
-                                      const gfx::Point& point) OVERRIDE;
+                                      const gfx::Point& point,
+                                      ui::MenuSourceType source_type) OVERRIDE;
 
   // Overridden from views::View:
   virtual void OnPaint(gfx::Canvas* canvas) OVERRIDE;
   virtual void Layout() OVERRIDE;
   virtual void OnThemeChanged() OVERRIDE;
-  virtual std::string GetClassName() const OVERRIDE;
+  virtual const char* GetClassName() const OVERRIDE;
   virtual bool HasHitTestMask() const OVERRIDE;
   virtual void GetHitTestMask(gfx::Path* path) const OVERRIDE;
   virtual bool GetTooltipText(const gfx::Point& p,
@@ -318,6 +328,8 @@ class Tab : public TabAudioIndicator::Delegate,
 
   ui::ThemeProvider* theme_provider_;
 
+  bool tab_activated_with_last_gesture_begin_;
+
   views::GlowHoverController hover_controller_;
 
   // The bounds of various sections of the display.
@@ -333,7 +345,6 @@ class Tab : public TabAudioIndicator::Delegate,
     gfx::ImageSkia* image_r;
     int l_width;
     int r_width;
-    int y_offset;
   };
   static TabImage tab_active_;
   static TabImage tab_inactive_;

@@ -7,34 +7,26 @@
 
 #include "base/memory/scoped_ptr.h"
 #include "content/renderer/mouse_lock_dispatcher.h"
+#include "content/renderer/pepper/fullscreen_container.h"
 #include "content/renderer/render_widget_fullscreen.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebWidget.h"
-#include "webkit/plugins/ppapi/fullscreen_container.h"
-
-namespace webkit {
-namespace ppapi {
-
-class PluginInstance;
-
-}  // namespace ppapi
-}  // namespace webkit
+#include "third_party/WebKit/public/web/WebWidget.h"
 
 namespace WebKit {
 class WebLayer;
 }
 
 namespace content {
+class PepperPluginInstanceImpl;
 
 // A RenderWidget that hosts a fullscreen pepper plugin. This provides a
 // FullscreenContainer that the plugin instance can callback into to e.g.
 // invalidate rects.
-class RenderWidgetFullscreenPepper :
-    public RenderWidgetFullscreen,
-    public webkit::ppapi::FullscreenContainer {
+class RenderWidgetFullscreenPepper : public RenderWidgetFullscreen,
+                                     public FullscreenContainer {
  public:
   static RenderWidgetFullscreenPepper* Create(
       int32 opener_id,
-      webkit::ppapi::PluginInstance* plugin,
+      PepperPluginInstanceImpl* plugin,
       const GURL& active_url,
       const WebKit::WebScreenInfo& screen_info);
 
@@ -44,10 +36,6 @@ class RenderWidgetFullscreenPepper :
   virtual void ScrollRect(int dx, int dy, const WebKit::WebRect& rect) OVERRIDE;
   virtual void Destroy() OVERRIDE;
   virtual void DidChangeCursor(const WebKit::WebCursorInfo& cursor) OVERRIDE;
-  virtual webkit::ppapi::PluginDelegate::PlatformContext3D*
-      CreateContext3D() OVERRIDE;
-  virtual void ReparentContext(
-      webkit::ppapi::PluginDelegate::PlatformContext3D*) OVERRIDE;
   virtual void SetLayer(WebKit::WebLayer* layer) OVERRIDE;
 
   // IPC::Listener implementation. This overrides the implementation
@@ -55,7 +43,7 @@ class RenderWidgetFullscreenPepper :
   virtual bool OnMessageReceived(const IPC::Message& msg) OVERRIDE;
 
   // Could be NULL when this widget is closing.
-  webkit::ppapi::PluginInstance* plugin() const { return plugin_; }
+  PepperPluginInstanceImpl* plugin() const { return plugin_; }
 
   MouseLockDispatcher* mouse_lock_dispatcher() const {
     return mouse_lock_dispatcher_.get();
@@ -64,7 +52,7 @@ class RenderWidgetFullscreenPepper :
   bool is_compositing() const { return !!layer_; }
 
  protected:
-  RenderWidgetFullscreenPepper(webkit::ppapi::PluginInstance* plugin,
+  RenderWidgetFullscreenPepper(PepperPluginInstanceImpl* plugin,
                                const GURL& active_url,
                                const WebKit::WebScreenInfo& screen_info);
   virtual ~RenderWidgetFullscreenPepper();
@@ -74,17 +62,13 @@ class RenderWidgetFullscreenPepper :
   virtual void DidInitiatePaint() OVERRIDE;
   virtual void DidFlushPaint() OVERRIDE;
   virtual void Close() OVERRIDE;
-  virtual webkit::ppapi::PluginInstance* GetBitmapForOptimizedPluginPaint(
+  virtual PepperPluginInstanceImpl* GetBitmapForOptimizedPluginPaint(
       const gfx::Rect& paint_bounds,
       TransportDIB** dib,
       gfx::Rect* location,
       gfx::Rect* clip,
       float* scale_factor) OVERRIDE;
-  virtual void OnResize(const gfx::Size& new_size,
-                        const gfx::Size& physical_backing_size,
-                        float overdraw_bottom_height,
-                        const gfx::Rect& resizer_rect,
-                        bool is_fullscreen) OVERRIDE;
+  virtual void OnResize(const ViewMsg_Resize_Params& params) OVERRIDE;
 
   // RenderWidgetFullscreen API.
   virtual WebKit::WebWidget* CreateWebWidget() OVERRIDE;
@@ -98,7 +82,7 @@ class RenderWidgetFullscreenPepper :
   GURL active_url_;
 
   // The plugin instance this widget wraps.
-  webkit::ppapi::PluginInstance* plugin_;
+  PepperPluginInstanceImpl* plugin_;
 
   WebKit::WebLayer* layer_;
 

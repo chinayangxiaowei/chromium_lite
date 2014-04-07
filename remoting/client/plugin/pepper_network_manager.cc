@@ -19,7 +19,7 @@ PepperNetworkManager::PepperNetworkManager(const pp::InstanceHandle& instance)
                this),
       start_count_(0),
       network_list_received_(false),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {
+      weak_factory_(this) {
 }
 
 PepperNetworkManager::~PepperNetworkManager() {
@@ -74,14 +74,14 @@ void PepperNetworkManager::OnNetworkList(const pp::NetworkListPrivate& list) {
     // TODO(sergeyu): Copy all addresses, not only the first one.
     talk_base::IPAddress address;
     switch (pp::NetAddressPrivate::GetFamily(addresses[0])) {
-      case PP_NETADDRESSFAMILY_IPV4: {
+      case PP_NETADDRESSFAMILY_PRIVATE_IPV4: {
         in_addr* address_ipv4 = reinterpret_cast<in_addr*>(address_bytes);
         address = talk_base::IPAddress(*address_ipv4);
         prefix_length = sizeof(in_addr) * 8;
         break;
       }
 
-      case PP_NETADDRESSFAMILY_IPV6: {
+      case PP_NETADDRESSFAMILY_PRIVATE_IPV6: {
         in6_addr* address_ipv6 = reinterpret_cast<in6_addr*>(address_bytes);
         address = talk_base::IPAddress(*address_ipv6);
         prefix_length = sizeof(in6_addr) * 8;

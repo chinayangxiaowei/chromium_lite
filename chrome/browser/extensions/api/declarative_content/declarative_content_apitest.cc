@@ -8,7 +8,7 @@
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/extensions/extension_test_message_listener.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/common/extensions/features/feature.h"
+#include "chrome/common/extensions/features/feature_channel.h"
 #include "content/public/test/browser_test_utils.h"
 
 namespace extensions {
@@ -23,7 +23,7 @@ class DeclarativeContentApiTest : public ExtensionApiTest {
   }
   virtual ~DeclarativeContentApiTest() {}
 
-  extensions::Feature::ScopedCurrentChannel current_channel_;
+  extensions::ScopedCurrentChannel current_channel_;
 };
 
 IN_PROC_BROWSER_TEST_F(DeclarativeContentApiTest, Overview) {
@@ -56,7 +56,7 @@ IN_PROC_BROWSER_TEST_F(DeclarativeContentApiTest, Overview) {
       tab, "document.body.innerHTML = '<input type=\"password\">';"));
   // Give the mutation observer a chance to run and send back the
   // matching-selector update.
-  ASSERT_TRUE(content::ExecuteScript(tab, ""));
+  ASSERT_TRUE(content::ExecuteScript(tab, std::string()));
   EXPECT_TRUE(page_action->GetIsVisible(tab_id));
 
   // Remove it again to make sure that reverts the action.
@@ -64,7 +64,7 @@ IN_PROC_BROWSER_TEST_F(DeclarativeContentApiTest, Overview) {
       tab, "document.body.innerHTML = 'Hello world';"));
   // Give the mutation observer a chance to run and send back the
   // matching-selector update.
-  ASSERT_TRUE(content::ExecuteScript(tab, ""));
+  ASSERT_TRUE(content::ExecuteScript(tab, std::string()));
   EXPECT_FALSE(page_action->GetIsVisible(tab_id));
 }
 

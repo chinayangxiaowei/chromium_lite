@@ -7,8 +7,8 @@
 #include "base/bind.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
-#import "base/memory/scoped_nsobject.h"
-#include "base/sys_string_conversions.h"
+#import "base/mac/scoped_nsobject.h"
+#include "base/strings/sys_string_conversions.h"
 #include "chrome/browser/printing/print_view_manager.h"
 #include "chrome/browser/sessions/session_id.h"
 #include "chrome/browser/sessions/session_tab_helper.h"
@@ -21,7 +21,7 @@
 #include "content/public/browser/save_page_type.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
-#include "googleurl/src/gurl.h"
+#include "url/gurl.h"
 
 using content::NavigationController;
 using content::NavigationEntry;
@@ -60,7 +60,7 @@ void ResumeAppleEventAndSendReply(NSAppleEventManagerSuspensionID suspension_id,
     SessionID session;
     SessionID::id_type futureSessionIDOfTab = session.id() + 1;
     // Holds the SessionID that the new tab is going to get.
-    scoped_nsobject<NSNumber> numID(
+    base::scoped_nsobject<NSNumber> numID(
         [[NSNumber alloc] initWithInt:futureSessionIDOfTab]);
     [self setUniqueID:numID];
   }
@@ -85,7 +85,7 @@ void ResumeAppleEventAndSendReply(NSAppleEventManagerSuspensionID suspension_id,
     webContents_ = webContents;
     SessionTabHelper* session_tab_helper =
         SessionTabHelper::FromWebContents(webContents);
-    scoped_nsobject<NSNumber> numID(
+    base::scoped_nsobject<NSNumber> numID(
         [[NSNumber alloc] initWithInt:session_tab_helper->session_id().id()]);
     [self setUniqueID:numID];
   }
@@ -100,7 +100,7 @@ void ResumeAppleEventAndSendReply(NSAppleEventManagerSuspensionID suspension_id,
   webContents_ = webContents;
   SessionTabHelper* session_tab_helper =
       SessionTabHelper::FromWebContents(webContents);
-  scoped_nsobject<NSNumber> numID(
+  base::scoped_nsobject<NSNumber> numID(
       [[NSNumber alloc] initWithInt:session_tab_helper->session_id().id()]);
   [self setUniqueID:numID];
 
@@ -304,13 +304,13 @@ void ResumeAppleEventAndSendReply(NSAppleEventManagerSuspensionID suspension_id,
   NavigationEntry* entry =
       webContents_->GetController().GetLastCommittedEntry();
   if (entry) {
-    webContents_->OpenURL(OpenURLParams(
-        GURL(chrome::kViewSourceScheme + std::string(":") +
-             entry->GetURL().spec()),
-        Referrer(),
-        NEW_FOREGROUND_TAB,
-        content::PAGE_TRANSITION_LINK,
-        false));
+    webContents_->OpenURL(
+        OpenURLParams(GURL(content::kViewSourceScheme + std::string(":") +
+                           entry->GetURL().spec()),
+                      Referrer(),
+                      NEW_FOREGROUND_TAB,
+                      content::PAGE_TRANSITION_LINK,
+                      false));
   }
 }
 

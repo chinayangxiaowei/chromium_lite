@@ -8,27 +8,29 @@ import sys
 import tempfile
 import time
 
-from telemetry.core import browser_finder
+from telemetry import test
 from telemetry.core import browser_options
+from telemetry.core import discover
 from telemetry.core import wpr_modes
-from telemetry.page import page_benchmark
+from telemetry.page import page_measurement
 from telemetry.page import page_runner
 from telemetry.page import page_set
 from telemetry.page import page_test
-from telemetry.test import discover
+from telemetry.page import test_expectations
+
 
 class RecordPage(page_test.PageTest):
-  def __init__(self, benchmarks):
+  def __init__(self, measurements):
     # This class overwrites PageTest.Run, so that the test method name is not
     # really used (except for throwing an exception if it doesn't exist).
     super(RecordPage, self).__init__('Run')
     self._action_names = set(
-        [benchmark().action_name_to_run
-         for benchmark in benchmarks.values()
-         if benchmark().action_name_to_run])
+        [measurement().action_name_to_run
+         for measurement in measurements.values()
+         if measurement().action_name_to_run])
 
   def CanRunForPage(self, page):
-    return bool(self._CompoundActionsForPage(page))
+    return page.url.startswith('http')
 
   def CustomizeBrowserOptionsForPage(self, page, options):
     for compound_action in self._CompoundActionsForPage(page):
@@ -37,9 +39,10 @@ class RecordPage(page_test.PageTest):
 
   def Run(self, options, page, tab, results):
     # When recording, sleep to catch any resources that load post-onload.
+    tab.WaitForDocumentReadyStateToBeComplete()
     time.sleep(3)
 
-    # Run the actions for all benchmarks. Reload the page between
+    # Run the actions for all measurements. Reload the page between
     # actions.
     should_reload = False
     for compound_action in self._CompoundActionsForPage(page):
@@ -58,16 +61,18 @@ class RecordPage(page_test.PageTest):
     return actions
 
 
-def Main(benchmark_dir):
-  benchmarks = discover.DiscoverClasses(benchmark_dir,
-                                        os.path.join(benchmark_dir, '..'),
-                                        page_benchmark.PageBenchmark)
+def Main(base_dir):
+  measurements = discover.DiscoverClasses(base_dir, base_dir,
+                                          page_measurement.PageMeasurement)
+  tests = discover.DiscoverClasses(base_dir, base_dir, test.Test,
+                                   index_by_class_name=True)
   options = browser_options.BrowserOptions()
-  parser = options.CreateParser('%prog <page_set>')
-  page_runner.PageRunner.AddCommandLineOptions(parser)
+  parser = options.CreateParser('%prog <PageSet|Measurement|Test>')
+  page_runner.AddCommandLineOptions(parser)
 
-  recorder = RecordPage(benchmarks)
+  recorder = RecordPage(measurements)
   recorder.AddCommandLineOptions(parser)
+  recorder.AddOutputOptions(parser)
 
   _, args = parser.parse_args()
 
@@ -75,7 +80,17 @@ def Main(benchmark_dir):
     parser.print_usage()
     sys.exit(1)
 
-  ps = page_set.PageSet.FromFile(args[0])
+  if args[0].endswith('.json'):
+    ps = page_set.PageSet.FromFile(args[0])
+  elif args[0] in tests:
+    ps = tests[args[0]]().CreatePageSet(options)
+  elif args[0] in measurements:
+    ps = measurements[args[0]]().CreatePageSet(args, options)
+  else:
+    parser.print_usage()
+    sys.exit(1)
+
+  expectations = test_expectations.TestExpectations()
 
   # Set the archive path to something temporary.
   temp_target_wpr_file_path = tempfile.mkstemp()[1]
@@ -83,33 +98,25 @@ def Main(benchmark_dir):
 
   # Do the actual recording.
   options.wpr_mode = wpr_modes.WPR_RECORD
+  options.no_proxy_server = True
   recorder.CustomizeBrowserOptions(options)
-  possible_browser = browser_finder.FindBrowser(options)
-  if not possible_browser:
-    print >> sys.stderr, """No browser found.\n
-Use --browser=list to figure out which are available.\n"""
-    sys.exit(1)
-  results = page_test.PageTestResults()
-  with page_runner.PageRunner(ps) as runner:
-    runner.Run(options, possible_browser, recorder, results)
+  results = page_runner.Run(recorder, ps, expectations, options)
 
-  if results.page_failures:
+  if results.errors or results.failures:
     logging.warning('Some pages failed. The recording has not been updated for '
                     'these pages.')
-    logging.warning('Failed pages: %s', '\n'.join(
-        [failure['page'].url for failure in results.page_failures]))
+    logging.warning('Failed pages:\n%s',
+                    '\n'.join(zip(*results.errors + results.failures)[0]))
 
-  if results.skipped_pages:
+  if results.skipped:
     logging.warning('Some pages were skipped. The recording has not been '
                     'updated for these pages.')
-    logging.warning('Skipped pages: %s', '\n'.join(
-        [skipped['page'].url for skipped in results.skipped_pages]))
+    logging.warning('Skipped pages:\n%s', '\n'.join(zip(*results.skipped)[0]))
 
-  if results.page_successes:
+  if results.successes:
     # Update the metadata for the pages which were recorded.
-    ps.wpr_archive_info.AddRecordedPages(
-        [page['page'] for page in results.page_successes])
+    ps.wpr_archive_info.AddRecordedPages(results.successes)
   else:
     os.remove(temp_target_wpr_file_path)
 
-  return min(255, len(results.page_failures))
+  return min(255, len(results.failures))

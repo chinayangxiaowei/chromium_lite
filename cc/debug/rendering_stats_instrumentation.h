@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef CC_RENDERING_STATS_INSTRUMENTATION_H_
-#define CC_RENDERING_STATS_INSTRUMENTATION_H_
+#ifndef CC_DEBUG_RENDERING_STATS_INSTRUMENTATION_H_
+#define CC_DEBUG_RENDERING_STATS_INSTRUMENTATION_H_
 
 #include "base/memory/scoped_ptr.h"
 #include "base/synchronization/lock.h"
@@ -32,17 +32,15 @@ class CC_EXPORT RenderingStatsInstrumentation {
   base::TimeTicks StartRecording() const;
   base::TimeDelta EndRecording(base::TimeTicks start_time) const;
 
-  // TODO(egraether): Remove after switching Layer::update() to use this class.
-  // Used in LayerTreeHost::paintLayerContents().
-  void AddStats(const RenderingStats& other);
-
   void IncrementAnimationFrameCount();
   void SetScreenFrameCount(int64 count);
   void SetDroppedFrameCount(int64 count);
 
   void AddCommit(base::TimeDelta duration);
   void AddPaint(base::TimeDelta duration, int64 pixels);
-  void AddRaster(base::TimeDelta duration,
+  void AddRecord(base::TimeDelta duration, int64 pixels);
+  void AddRaster(base::TimeDelta total_duraction,
+                 base::TimeDelta best_duration,
                  int64 pixels,
                  bool is_in_pending_tree_now_bin);
 
@@ -56,6 +54,8 @@ class CC_EXPORT RenderingStatsInstrumentation {
   void AddImageGathering(base::TimeDelta duration);
 
   void IncrementDeferredImageCacheHitCount();
+
+  void AddAnalysisResult(base::TimeDelta duration, bool is_solid_color);
 
  protected:
   RenderingStatsInstrumentation();
@@ -71,4 +71,4 @@ class CC_EXPORT RenderingStatsInstrumentation {
 
 }  // namespace cc
 
-#endif  // CC_RENDERING_STATS_INSTRUMENTATION_H_
+#endif  // CC_DEBUG_RENDERING_STATS_INSTRUMENTATION_H_

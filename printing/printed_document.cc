@@ -14,10 +14,10 @@
 #include "base/i18n/file_util_icu.h"
 #include "base/i18n/time_formatting.h"
 #include "base/lazy_instance.h"
-#include "base/message_loop.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
-#include "base/utf_string_conversions.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "printing/page_number.h"
 #include "printing/printed_page.h"
 #include "printing/printed_pages_source.h"
@@ -85,7 +85,7 @@ void PrintedDocument::SetPage(int page_number,
       mutable_.first_page = page_number;
 #endif
   }
-  DebugDump(*page);
+  DebugDump(*page.get());
 }
 
 bool PrintedDocument::GetPage(int page_number,
@@ -217,7 +217,7 @@ PrintedDocument::Immutable::Immutable(const PrintSettings& settings,
                                       PrintedPagesSource* source,
                                       int cookie)
     : settings_(settings),
-      source_message_loop_(MessageLoop::current()),
+      source_message_loop_(base::MessageLoop::current()),
       name_(source->RenderSourceName()),
       cookie_(cookie) {
 }
@@ -225,8 +225,8 @@ PrintedDocument::Immutable::Immutable(const PrintSettings& settings,
 PrintedDocument::Immutable::~Immutable() {
 }
 
-#if defined(OS_POSIX) && defined(USE_AURA)
-// This function is not used on aura linux/chromeos.
+#if (defined(OS_POSIX) && defined(USE_AURA)) || defined(OS_ANDROID)
+// This function is not used on aura linux/chromeos or android.
 void PrintedDocument::RenderPrintedPage(const PrintedPage& page,
                                         PrintingContext* context) const {
 }

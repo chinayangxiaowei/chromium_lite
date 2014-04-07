@@ -12,7 +12,7 @@
 #include "ui/compositor/compositor_switches.h"
 
 #if defined(USE_X11)
-#include "base/message_pump_aurax11.h"
+#include "base/message_loop/message_pump_aurax11.h"
 #endif
 
 namespace aura {
@@ -25,8 +25,7 @@ Env* Env::instance_ = NULL;
 
 Env::Env()
     : mouse_button_flags_(0),
-      is_touch_down_(false),
-      render_white_bg_(true) {
+      is_touch_down_(false) {
 }
 
 Env::~Env() {
@@ -64,7 +63,7 @@ void Env::RemoveObserver(EnvObserver* observer) {
 }
 
 #if !defined(OS_MACOSX)
-MessageLoop::Dispatcher* Env::GetDispatcher() {
+base::MessageLoop::Dispatcher* Env::GetDispatcher() {
 #if defined(USE_X11)
   return base::MessagePumpAuraX11::Current();
 #else
@@ -82,7 +81,7 @@ void Env::RootWindowActivated(RootWindow* root_window) {
 // Env, private:
 
 void Env::Init() {
-#if !defined(USE_X11)
+#if !defined(USE_X11) && !defined(USE_OZONE)
   dispatcher_.reset(CreateDispatcher());
 #endif
 #if defined(USE_X11)
@@ -91,9 +90,7 @@ void Env::Init() {
   base::MessagePumpAuraX11::Current()->AddObserver(
       &device_list_updater_aurax11_);
 #endif
-  ui::Compositor::Initialize(
-      CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kUIEnableThreadedCompositing));
+  ui::Compositor::Initialize();
 }
 
 void Env::NotifyWindowInitialized(Window* window) {

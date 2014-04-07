@@ -4,6 +4,8 @@
 
 #include "ui/app_list/test/app_list_test_view_delegate.h"
 
+#include "base/callback.h"
+#include "base/files/file_path.h"
 #include "ui/gfx/image/image_skia.h"
 
 namespace app_list {
@@ -12,13 +14,20 @@ namespace test {
 AppListTestViewDelegate::AppListTestViewDelegate()
     : activate_count_(0),
       dismiss_count_(0),
-      last_activated_(NULL) {
+      last_activated_(NULL),
+      test_signin_delegate_(NULL) {
 }
 
 AppListTestViewDelegate::~AppListTestViewDelegate() {}
 
 SigninDelegate* AppListTestViewDelegate::GetSigninDelegate() {
-  return NULL;
+  return test_signin_delegate_;
+}
+
+void AppListTestViewDelegate::GetShortcutPathForApp(
+    const std::string& app_id,
+    const base::Callback<void(const base::FilePath&)>& callback) {
+  callback.Run(base::FilePath());
 }
 
 void AppListTestViewDelegate::ActivateAppListItem(AppListItemModel* item,
@@ -35,12 +44,12 @@ gfx::ImageSkia AppListTestViewDelegate::GetWindowIcon() {
   return gfx::ImageSkia();
 }
 
-string16 AppListTestViewDelegate::GetCurrentUserName() {
-  return string16();
+base::string16 AppListTestViewDelegate::GetCurrentUserName() {
+  return base::string16();
 }
 
-string16 AppListTestViewDelegate::GetCurrentUserEmail() {
-  return string16();
+base::string16 AppListTestViewDelegate::GetCurrentUserEmail() {
+  return base::string16();
 }
 
 }  // namespace test

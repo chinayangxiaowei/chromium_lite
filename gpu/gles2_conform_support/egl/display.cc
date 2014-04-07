@@ -113,7 +113,7 @@ EGLSurface Display::CreateWindowSurface(EGLConfig config,
     return NULL;
 
   scoped_refptr<gpu::gles2::ContextGroup> group(
-      new gpu::gles2::ContextGroup(NULL, NULL, NULL, true));
+      new gpu::gles2::ContextGroup(NULL, NULL, NULL, NULL, true));
 
   decoder_.reset(gpu::gles2::GLES2Decoder::Create(group.get()));
   if (!decoder_.get())
@@ -126,12 +126,12 @@ EGLSurface Display::CreateWindowSurface(EGLConfig config,
   decoder_->set_engine(gpu_scheduler_.get());
   gfx::Size size(create_offscreen_width_, create_offscreen_height_);
   if (create_offscreen_) {
-    gl_surface_ = gfx::GLSurface::CreateOffscreenGLSurface(false, size);
+    gl_surface_ = gfx::GLSurface::CreateOffscreenGLSurface(size);
     create_offscreen_ = false;
     create_offscreen_width_ = 0;
     create_offscreen_height_ = 0;
   } else {
-    gl_surface_ = gfx::GLSurface::CreateViewGLSurface(false, win);
+    gl_surface_ = gfx::GLSurface::CreateViewGLSurface(win);
   }
   if (!gl_surface_.get())
     return EGL_NO_SURFACE;
@@ -142,7 +142,7 @@ EGLSurface Display::CreateWindowSurface(EGLConfig config,
   if (!gl_context_.get())
     return EGL_NO_SURFACE;
 
-  gl_context_->MakeCurrent(gl_surface_);
+  gl_context_->MakeCurrent(gl_surface_.get());
 
   EGLint depth_size = 0;
   EGLint alpha_size = 0;
@@ -224,13 +224,12 @@ EGLContext Display::CreateContext(EGLConfig config,
 
   DCHECK(command_buffer_ != NULL);
   DCHECK(transfer_buffer_.get());
-  bool share_resources = share_ctx != NULL;
   context_.reset(new gpu::gles2::GLES2Implementation(
       gles2_cmd_helper_.get(),
       NULL,
       transfer_buffer_.get(),
-      share_resources,
-      true));
+      true,
+      NULL));
 
   if (!context_->Initialize(
       kTransferBufferSize,

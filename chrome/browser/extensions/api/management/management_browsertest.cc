@@ -7,6 +7,7 @@
 #include "base/memory/ref_counted.h"
 #include "base/prefs/pref_service.h"
 #include "base/stl_util.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/extensions/extension_host.h"
 #include "chrome/browser/extensions/extension_service.h"
@@ -18,7 +19,6 @@
 #include "chrome/browser/prefs/scoped_user_pref_update.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -250,7 +250,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementTest, MAYBE_AutoUpdate) {
   NotificationListener notification_listener;
   base::FilePath basedir = test_data_dir_.AppendASCII("autoupdate");
   // Note: This interceptor gets requests on the IO thread.
-  content::URLRequestPrepackagedInterceptor interceptor;
+  content::URLLocalHostRequestPrepackagedInterceptor interceptor;
   net::URLFetcher::SetEnableInterceptionForTests(true);
 
   interceptor.SetResponseIgnoreQuery(
@@ -336,7 +336,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementTest,
   NotificationListener notification_listener;
   base::FilePath basedir = test_data_dir_.AppendASCII("autoupdate");
   // Note: This interceptor gets requests on the IO thread.
-  content::URLRequestPrepackagedInterceptor interceptor;
+  content::URLLocalHostRequestPrepackagedInterceptor interceptor;
   net::URLFetcher::SetEnableInterceptionForTests(true);
 
   interceptor.SetResponseIgnoreQuery(
@@ -412,7 +412,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementTest, MAYBE_ExternalUrlUpdate) {
   base::FilePath basedir = test_data_dir_.AppendASCII("autoupdate");
 
   // Note: This interceptor gets requests on the IO thread.
-  content::URLRequestPrepackagedInterceptor interceptor;
+  content::URLLocalHostRequestPrepackagedInterceptor interceptor;
   net::URLFetcher::SetEnableInterceptionForTests(true);
 
   interceptor.SetResponseIgnoreQuery(
@@ -498,7 +498,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementTest, ExternalPolicyRefresh) {
   base::FilePath basedir = test_data_dir_.AppendASCII("autoupdate");
 
   // Note: This interceptor gets requests on the IO thread.
-  content::URLRequestPrepackagedInterceptor interceptor;
+  content::URLLocalHostRequestPrepackagedInterceptor interceptor;
   net::URLFetcher::SetEnableInterceptionForTests(true);
 
   interceptor.SetResponseIgnoreQuery(
@@ -511,14 +511,14 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementTest, ExternalPolicyRefresh) {
   ASSERT_TRUE(service->disabled_extensions()->is_empty());
 
   PrefService* prefs = browser()->profile()->GetPrefs();
-  const DictionaryValue* forcelist =
+  const base::DictionaryValue* forcelist =
       prefs->GetDictionary(prefs::kExtensionInstallForceList);
   ASSERT_TRUE(forcelist->empty()) << kForceInstallNotEmptyHelp;
 
   {
     // Set the policy as a user preference and fire notification observers.
     DictionaryPrefUpdate pref_update(prefs, prefs::kExtensionInstallForceList);
-    DictionaryValue* forcelist = pref_update.Get();
+    base::DictionaryValue* forcelist = pref_update.Get();
     extensions::ExternalPolicyLoader::AddExtension(
         forcelist, kExtensionId, "http://localhost/autoupdate/manifest");
   }
@@ -554,7 +554,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementTest, ExternalPolicyRefresh) {
 }
 
 // See http://crbug.com/103371 and http://crbug.com/120640.
-#if defined(ADDRESS_SANITIZER)
+#if defined(ADDRESS_SANITIZER) || defined(OS_WIN)
 #define MAYBE_PolicyOverridesUserInstall DISABLED_PolicyOverridesUserInstall
 #else
 #define MAYBE_PolicyOverridesUserInstall PolicyOverridesUserInstall
@@ -573,7 +573,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementTest,
   ASSERT_TRUE(service->disabled_extensions()->is_empty());
 
   // Note: This interceptor gets requests on the IO thread.
-  content::URLRequestPrepackagedInterceptor interceptor;
+  content::URLLocalHostRequestPrepackagedInterceptor interceptor;
   net::URLFetcher::SetEnableInterceptionForTests(true);
 
   interceptor.SetResponseIgnoreQuery(
@@ -584,7 +584,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementTest,
 
   // Check that the policy is initially empty.
   PrefService* prefs = browser()->profile()->GetPrefs();
-  const DictionaryValue* forcelist =
+  const base::DictionaryValue* forcelist =
       prefs->GetDictionary(prefs::kExtensionInstallForceList);
   ASSERT_TRUE(forcelist->empty()) << kForceInstallNotEmptyHelp;
 
@@ -638,7 +638,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementTest,
   // and force enable it too.
   {
     DictionaryPrefUpdate pref_update(prefs, prefs::kExtensionInstallForceList);
-    DictionaryValue* forcelist = pref_update.Get();
+    base::DictionaryValue* forcelist = pref_update.Get();
     extensions::ExternalPolicyLoader::AddExtension(
         forcelist, kExtensionId, "http://localhost/autoupdate/manifest");
   }

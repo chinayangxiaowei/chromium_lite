@@ -7,7 +7,6 @@
 #include "base/i18n/rtl.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/command_updater.h"
-#include "chrome/browser/managed_mode/managed_mode.h"
 #include "chrome/browser/profiles/profile_metrics.h"
 #include "chrome/browser/profiles/profile_info_util.h"
 #include "chrome/browser/ui/browser.h"
@@ -51,11 +50,6 @@ gboolean AvatarMenuButtonGtk::OnButtonPressed(GtkWidget* widget,
   if (event->button != 1)
     return FALSE;
 
-  if (ManagedMode::IsInManagedMode()) {
-    ManagedMode::LeaveManagedMode();
-    return TRUE;
-  }
-
   ShowAvatarBubble();
   ProfileMetrics::LogProfileOpenMethod(ProfileMetrics::ICON_AVATAR_BUBBLE);
   return TRUE;
@@ -81,8 +75,13 @@ void AvatarMenuButtonGtk::UpdateButtonIcon() {
   GtkAllocation allocation;
   gtk_widget_get_allocation(widget(), &allocation);
   old_height_ = allocation.height;
-  gfx::Image icon = profiles::GetAvatarIconForTitleBar(*icon_, is_gaia_picture_,
-      profiles::kAvatarIconWidth, old_height_);
+
+  // GAIA images are square; use kWidth for both destination height and width
+  // since old_height_ is often not usable (typically a value of 1 which, after
+  // subtracting border, tries to resize the profile image to a size of -1).
+  gfx::Image icon = profiles::GetAvatarIconForTitleBar(
+      *icon_, is_gaia_picture_,
+      profiles::kAvatarIconWidth, profiles::kAvatarIconWidth);
   gtk_image_set_from_pixbuf(GTK_IMAGE(image_), icon.ToGdkPixbuf());
   gtk_misc_set_alignment(GTK_MISC(image_), 0.0, 1.0);
   gtk_widget_set_size_request(image_, -1, 0);

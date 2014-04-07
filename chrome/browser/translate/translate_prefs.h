@@ -6,15 +6,21 @@
 #define CHROME_BROWSER_TRANSLATE_TRANSLATE_PREFS_H_
 
 #include <string>
+#include <vector>
 
-#include "googleurl/src/gurl.h"
+#include "base/gtest_prod_util.h"
+#include "url/gurl.h"
 
-class PrefRegistrySyncable;
 class PrefService;
+class Profile;
 
 namespace base {
 class DictionaryValue;
 class ListValue;
+}
+
+namespace user_prefs {
+class PrefRegistrySyncable;
 }
 
 class TranslatePrefs {
@@ -24,12 +30,18 @@ class TranslatePrefs {
   static const char kPrefTranslateWhitelists[];
   static const char kPrefTranslateDeniedCount[];
   static const char kPrefTranslateAcceptedCount[];
+  static const char kPrefTranslateBlockedLanguages[];
 
   explicit TranslatePrefs(PrefService* user_prefs);
 
-  bool IsLanguageBlacklisted(const std::string& original_language) const;
-  void BlacklistLanguage(const std::string& original_language);
-  void RemoveLanguageFromBlacklist(const std::string& original_language);
+  bool IsBlockedLanguage(const std::string& original_language) const;
+  void BlockLanguage(const std::string& original_language);
+  void UnblockLanguage(const std::string& original_language);
+
+  // Removes a language from the old blacklist. This method is for
+  // chrome://translate-internals/.  Don't use this if there is no special
+  // reason.
+  void RemoveLanguageFromLegacyBlacklist(const std::string& original_language);
 
   bool IsSiteBlacklisted(const std::string& site) const;
   void BlacklistSite(const std::string& site);
@@ -50,7 +62,7 @@ class TranslatePrefs {
   void ClearBlacklistedLanguages();
 
   // Will return true if at least one site has been blacklisted.
-  bool HasBlacklistedSites();
+  bool HasBlacklistedSites() const;
   void ClearBlacklistedSites();
 
   // These methods are used to track how many times the user has denied the
@@ -67,14 +79,23 @@ class TranslatePrefs {
   void IncrementTranslationAcceptedCount(const std::string& language);
   void ResetTranslationAcceptedCount(const std::string& language);
 
-  static bool CanTranslate(PrefService* user_prefs,
-      const std::string& original_language, const GURL& url);
+  static bool CanTranslateLanguage(
+      Profile* profile, const std::string& language);
   static bool ShouldAutoTranslate(PrefService* user_prefs,
       const std::string& original_language, std::string* target_language);
-  static void RegisterUserPrefs(PrefRegistrySyncable* registry);
+  static void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
   static void MigrateUserPrefs(PrefService* user_prefs);
 
  private:
+  friend class TranslatePrefsTest;
+  FRIEND_TEST_ALL_PREFIXES(TranslatePrefsTest, CreateBlockedLanguages);
+
+  // Merges two language sets to migrate to the language setting UI.
+  static void CreateBlockedLanguages(
+      std::vector<std::string>* blocked_languages,
+      const std::vector<std::string>& blacklisted_languages,
+      const std::vector<std::string>& accept_languages);
+
   bool IsValueBlacklisted(const char* pref_id, const std::string& value) const;
   void BlacklistValue(const char* pref_id, const std::string& value);
   void RemoveValueFromBlacklist(const char* pref_id, const std::string& value);

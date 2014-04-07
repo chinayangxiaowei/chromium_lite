@@ -7,15 +7,17 @@
 #include "base/logging.h"
 #include "chrome/browser/infobars/confirm_infobar_delegate.h"
 #include "ui/base/window_open_disposition.h"
-#include "ui/views/controls/button/text_button.h"
+#include "ui/views/controls/button/label_button.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/link.h"
+
 
 // ConfirmInfoBarDelegate -----------------------------------------------------
 
 InfoBar* ConfirmInfoBarDelegate::CreateInfoBar(InfoBarService* owner) {
   return new ConfirmInfoBar(owner, this);
 }
+
 
 // ConfirmInfoBar -------------------------------------------------------------
 
@@ -62,23 +64,22 @@ void ConfirmInfoBar::Layout() {
   }
 }
 
-void ConfirmInfoBar::ViewHierarchyChanged(bool is_add,
-                                          View* parent,
-                                          View* child) {
-  if (is_add && child == this && (label_ == NULL)) {
+void ConfirmInfoBar::ViewHierarchyChanged(
+    const ViewHierarchyChangedDetails& details) {
+  if (details.is_add && details.child == this && (label_ == NULL)) {
     ConfirmInfoBarDelegate* delegate = GetDelegate();
     label_ = CreateLabel(delegate->GetMessageText());
     AddChildView(label_);
 
     if (delegate->GetButtons() & ConfirmInfoBarDelegate::BUTTON_OK) {
-      ok_button_ = CreateTextButton(this,
+      ok_button_ = CreateLabelButton(this,
           delegate->GetButtonLabel(ConfirmInfoBarDelegate::BUTTON_OK),
           delegate->NeedElevation(ConfirmInfoBarDelegate::BUTTON_OK));
       AddChildView(ok_button_);
     }
 
     if (delegate->GetButtons() & ConfirmInfoBarDelegate::BUTTON_CANCEL) {
-      cancel_button_ = CreateTextButton(this,
+      cancel_button_ = CreateLabelButton(this,
           delegate->GetButtonLabel(ConfirmInfoBarDelegate::BUTTON_CANCEL),
           delegate->NeedElevation(ConfirmInfoBarDelegate::BUTTON_CANCEL));
       AddChildView(cancel_button_);
@@ -93,12 +94,12 @@ void ConfirmInfoBar::ViewHierarchyChanged(bool is_add,
 
   // This must happen after adding all other children so InfoBarView can ensure
   // the close button is the last child.
-  InfoBarView::ViewHierarchyChanged(is_add, parent, child);
+  InfoBarView::ViewHierarchyChanged(details);
 }
 
 void ConfirmInfoBar::ButtonPressed(views::Button* sender,
                                    const ui::Event& event) {
-  if (!owned())
+  if (!owner())
     return;  // We're closing; don't call anything, it might access the owner.
   ConfirmInfoBarDelegate* delegate = GetDelegate();
   if ((ok_button_ != NULL) && sender == ok_button_) {
@@ -124,7 +125,7 @@ int ConfirmInfoBar::ContentMinimumWidth() const {
 }
 
 void ConfirmInfoBar::LinkClicked(views::Link* source, int event_flags) {
-  if (!owned())
+  if (!owner())
     return;  // We're closing; don't call anything, it might access the owner.
   DCHECK(link_ != NULL);
   DCHECK_EQ(link_, source);

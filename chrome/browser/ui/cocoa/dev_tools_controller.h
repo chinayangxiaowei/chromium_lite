@@ -7,9 +7,10 @@
 
 #import <Cocoa/Cocoa.h>
 
-#include "base/memory/scoped_nsobject.h"
+#include "base/mac/scoped_nsobject.h"
 #include "chrome/browser/devtools/devtools_window.h"
 
+@class FocusTracker;
 @class GraySplitView;
 class Profile;
 
@@ -23,13 +24,15 @@ class WebContents;
 @interface DevToolsController : NSObject<NSSplitViewDelegate> {
  @private
   // A view hosting docked devTools contents.
-  scoped_nsobject<GraySplitView> splitView_;
+  base::scoped_nsobject<GraySplitView> splitView_;
 
   DevToolsDockSide dockSide_;
 
   // Docked devtools window instance. NULL when current tab is not inspected
   // or is inspected with undocked version of DevToolsWindow.
   DevToolsWindow* devToolsWindow_;
+
+  base::scoped_nsobject<FocusTracker> focusTracker_;
 }
 
 - (id)init;
@@ -46,8 +49,6 @@ class WebContents;
 // the actual resize).
 - (void)updateDevToolsForWebContents:(content::WebContents*)contents
                          withProfile:(Profile*)profile;
-
-- (void)setTopContentOffset:(CGFloat)offset;
 
 @end
 

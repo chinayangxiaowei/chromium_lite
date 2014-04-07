@@ -22,6 +22,10 @@ namespace browser_sync {
 class SessionModelAssociator;
 }
 
+namespace chrome {
+struct FaviconImageResult;
+}
+
 namespace gfx {
 class Image;
 }
@@ -48,27 +52,43 @@ class RecentTabsSubMenuModel : public ui::SimpleMenuModel,
   virtual bool GetAcceleratorForCommandId(
       int command_id,
       ui::Accelerator* accelerator) OVERRIDE;
-  virtual bool IsItemForCommandIdDynamic(int command_id) const OVERRIDE;
-  virtual string16 GetLabelForCommandId(int command_id) const OVERRIDE;
   virtual void ExecuteCommand(int command_id, int event_flags) OVERRIDE;
+  virtual const gfx::Font* GetLabelFontAt(int index) const OVERRIDE;
 
   int GetMaxWidthForItemAtIndex(int item_index) const;
+  bool GetURLAndTitleForItemAtIndex(int index,
+                                    std::string* url,
+                                    string16* title) const;
+
+  // Command Id for recently closed items header or disabled item to which the
+  // accelerator string will be appended.
+  static const int kRecentlyClosedHeaderCommandId;
+  static const int kDisabledRecentlyClosedHeaderCommandId;
+
+  // Command Id for other devices section headers, using the device name.
+  static const int kDeviceNameCommandId;
 
  private:
-  struct NavigationItem;
-  typedef std::vector<NavigationItem> NavigationItems;
+  struct TabNavigationItem;
+  typedef std::vector<TabNavigationItem> TabNavigationItems;
+
+  typedef std::vector<SessionID::id_type> WindowItems;
 
   // Build the menu items by populating the model.
   void Build();
+  void BuildRecentTabs();
   void BuildDevices();
-  void BuildForeignTabItem(
-      const std::string& session_tag,
-      const SessionTab& tab);
+  void BuildLocalTabItem(int seesion_id,
+                         const string16& title,
+                         const GURL& url);
+  void BuildForeignTabItem(const std::string& session_tag,
+                           const SessionTab& tab);
+  void BuildWindowItem(const SessionID::id_type& window_id, int num_tabs);
   void AddDeviceFavicon(int index_in_menu,
                         browser_sync::SyncedSession::DeviceType device_type);
   void AddTabFavicon(int model_index, int command_id, const GURL& url);
   void OnFaviconDataAvailable(int command_id,
-                              const history::FaviconImageResult& image_result);
+                              const chrome::FaviconImageResult& image_result);
   browser_sync::SessionModelAssociator* GetModelAssociator();
 
   Browser* browser_;  // Weak.
@@ -78,11 +98,17 @@ class RecentTabsSubMenuModel : public ui::SimpleMenuModel,
   // Accelerator for reopening last closed tab.
   ui::Accelerator reopen_closed_tab_accelerator_;
 
-  // Navigation items.  The |command_id| is set to kFirstTabCommandId plus the
-  // index into this vector.  Upon invocation of the menu, the navigation
-  // information is retrieved from |model_| and used to navigate to the item
-  // specified.
-  NavigationItems model_;
+  // Navigation items for other devices and recent tabs. The |command_id| for
+  // these is set to kFirstTabCommandId plus the index into the vector. Upon
+  // invocation of the menu, the navigation information is retrieved from
+  // |tab_navigation_items_| and used to navigate to the item specified.
+  TabNavigationItems tab_navigation_items_;
+
+  // Window items for recently closed windows. The |command_id| for
+  // these is set to kFirstWindowCommandId plus the index into the vector. Upon
+  // invocation of the menu, information is retrieved from |window_items_|
+  // and used to create the specified window.
+  WindowItems window_items_;
 
   gfx::Image default_favicon_;
 

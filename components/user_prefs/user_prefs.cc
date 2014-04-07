@@ -9,7 +9,7 @@
 #include "base/prefs/pref_service.h"
 #include "content/public/browser/browser_context.h"
 
-namespace components {
+namespace user_prefs {
 
 namespace {
 
@@ -25,6 +25,7 @@ void* UserDataKey() {
 // static
 PrefService* UserPrefs::Get(content::BrowserContext* context) {
   DCHECK(context);
+  DCHECK(context->GetUserData(UserDataKey()));
   return static_cast<UserPrefs*>(
       context->GetUserData(UserDataKey()))->prefs_;
 }
@@ -43,4 +44,4 @@ UserPrefs::UserPrefs(PrefService* prefs) : prefs_(prefs) {
 UserPrefs::~UserPrefs() {
 }
 
-}  // namespace components
+}  // namespace user_prefs

@@ -6,17 +6,19 @@
 
 #include "base/bind.h"
 #include "base/json/json_writer.h"
-#include "base/message_loop.h"
-#include "base/time.h"
+#include "base/lazy_instance.h"
+#include "base/message_loop/message_loop.h"
 #include "base/time/clock.h"
+#include "base/time/default_clock.h"
+#include "base/time/time.h"
 #include "base/value_conversions.h"
 #include "base/values.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/event_router.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_system.h"
 #include "chrome/browser/extensions/state_store.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "content/public/browser/notification_service.h"
 
 namespace extensions {
@@ -39,7 +41,7 @@ class DefaultAlarmDelegate : public AlarmManager::Delegate {
 
   virtual void OnAlarm(const std::string& extension_id,
                        const Alarm& alarm) OVERRIDE {
-    scoped_ptr<ListValue> args(new ListValue());
+    scoped_ptr<base::ListValue> args(new base::ListValue());
     args->Append(alarm.js_alarm->ToValue().release());
     scoped_ptr<Event> event(new Event(kOnAlarmEvent, args.Pass()));
     ExtensionSystem::Get(profile_)->event_router()->DispatchEventToExtension(
@@ -73,7 +75,7 @@ std::vector<Alarm> AlarmsFromValue(const base::ListValue* list) {
 }
 
 scoped_ptr<base::ListValue> AlarmsToValue(const std::vector<Alarm>& alarms) {
-  scoped_ptr<base::ListValue> list(new ListValue());
+  scoped_ptr<base::ListValue> list(new base::ListValue());
   for (size_t i = 0; i < alarms.size(); ++i) {
     scoped_ptr<base::DictionaryValue> alarm =
         alarms[i].js_alarm->ToValue().Pass();
@@ -89,11 +91,13 @@ scoped_ptr<base::ListValue> AlarmsToValue(const std::vector<Alarm>& alarms) {
 
 // AlarmManager
 
-AlarmManager::AlarmManager(Profile* profile, base::Clock* clock)
+AlarmManager::AlarmManager(Profile* profile)
     : profile_(profile),
-      clock_(clock),
+      clock_(new base::DefaultClock()),
       delegate_(new DefaultAlarmDelegate(profile)) {
   registrar_.Add(this, chrome::NOTIFICATION_EXTENSION_LOADED,
+                 content::Source<Profile>(profile_));
+  registrar_.Add(this, chrome::NOTIFICATION_EXTENSION_UNINSTALLED,
                  content::Source<Profile>(profile_));
 
   StateStore* storage = ExtensionSystem::Get(profile_)->state_store();
@@ -166,6 +170,23 @@ void AlarmManager::RemoveAllAlarms(const std::string& extension_id) {
   WriteToStorage(extension_id);
 }
 
+void AlarmManager::SetClockForTesting(base::Clock* clock) {
+  clock_.reset(clock);
+}
+
+static base::LazyInstance<ProfileKeyedAPIFactory<AlarmManager> >
+g_factory = LAZY_INSTANCE_INITIALIZER;
+
+// static
+ProfileKeyedAPIFactory<AlarmManager>* AlarmManager::GetFactoryInstance() {
+  return &g_factory.Get();
+}
+
+// static
+AlarmManager* AlarmManager::Get(Profile* profile) {
+  return ProfileKeyedAPIFactory<AlarmManager>::GetForProfile(profile);
+}
+
 void AlarmManager::RemoveAlarmIterator(const AlarmIterator& iter) {
   AlarmList& list = iter.first->second;
   list.erase(iter.second);
@@ -215,7 +236,7 @@ void AlarmManager::WriteToStorage(const std::string& extension_id) {
   if (!storage)
     return;
 
-  scoped_ptr<Value> alarms;
+  scoped_ptr<base::Value> alarms;
   AlarmMap::iterator list = alarms_.find(extension_id);
   if (list != alarms_.end())
     alarms.reset(AlarmsToValue(list->second).release());
@@ -323,6 +344,12 @@ void AlarmManager::Observe(
             base::Bind(&AlarmManager::ReadFromStorage,
                        AsWeakPtr(), extension->id()));
       }
+      break;
+    }
+    case chrome::NOTIFICATION_EXTENSION_UNINSTALLED: {
+      const Extension* extension =
+          content::Details<const Extension>(details).ptr();
+      RemoveAllAlarms(extension->id());
       break;
     }
     default:

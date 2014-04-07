@@ -517,7 +517,7 @@ class ThreadedTransformTransition : public ThreadedLayerAnimationElement {
   }
 
   virtual void OnAbort(LayerAnimationDelegate* delegate) OVERRIDE {
-    if (delegate && animation_id()) {
+    if (delegate && Started()) {
       ThreadedLayerAnimationElement::OnAbort(delegate);
       delegate->SetTransformFromAnimation(Tween::ValueBetween(
           Tween::CalculateValue(tween_type(), last_progressed_fraction()),
@@ -623,7 +623,8 @@ bool LayerAnimationElement::Progress(base::TimeTicks now,
   bool need_draw;
   double t = 1.0;
 
-  if (effective_start_time_ == base::TimeTicks()) {
+  if ((effective_start_time_ == base::TimeTicks()) ||
+      (now < effective_start_time_))  {
     // This hasn't actually started yet.
     need_draw = false;
     last_progressed_fraction_ = 0.0;

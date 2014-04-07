@@ -69,10 +69,12 @@ int WebContentsDelegate::GetExtraRenderViewHeight() const {
   return 0;
 }
 
-bool WebContentsDelegate::CanDownload(RenderViewHost* render_view_host,
-                                      int request_id,
-                                      const std::string& request_method) {
-  return true;
+void WebContentsDelegate::CanDownload(
+    RenderViewHost* render_view_host,
+    int request_id,
+    const std::string& request_method,
+    const base::Callback<void(bool)>& callback) {
+  callback.Run(true);
 }
 
 bool WebContentsDelegate::HandleContextMenu(
@@ -85,8 +87,7 @@ void WebContentsDelegate::ViewSourceForTab(WebContents* source,
   // Fall back implementation based entirely on the view-source scheme.
   // It suffers from http://crbug.com/523 and that is why browser overrides
   // it with proper implementation.
-  GURL url = GURL(chrome::kViewSourceScheme + std::string(":") +
-                      page_url.spec());
+  GURL url = GURL(kViewSourceScheme + std::string(":") + page_url.spec());
   OpenURLFromTab(source, OpenURLParams(url, Referrer(),
                                        NEW_FOREGROUND_TAB,
                                        PAGE_TRANSITION_LINK, false));
@@ -94,10 +95,9 @@ void WebContentsDelegate::ViewSourceForTab(WebContents* source,
 
 void WebContentsDelegate::ViewSourceForFrame(WebContents* source,
                                              const GURL& frame_url,
-                                             const std::string& content_state) {
+                                             const PageState& page_state) {
   // Same as ViewSourceForTab, but for given subframe.
-  GURL url = GURL(chrome::kViewSourceScheme + std::string(":") +
-                      frame_url.spec());
+  GURL url = GURL(kViewSourceScheme + std::string(":") + frame_url.spec());
   OpenURLFromTab(source, OpenURLParams(url, Referrer(),
                                        NEW_FOREGROUND_TAB,
                                        PAGE_TRANSITION_LINK, false));
@@ -110,6 +110,13 @@ bool WebContentsDelegate::PreHandleKeyboardEvent(
   return false;
 }
 
+bool WebContentsDelegate::CanDragEnter(
+    WebContents* source,
+    const DropData& data,
+    WebKit::WebDragOperationsMask operations_allowed) {
+  return true;
+}
+
 bool WebContentsDelegate::OnGoToEntryOffset(int offset) {
   return true;
 }
@@ -119,7 +126,12 @@ bool WebContentsDelegate::ShouldCreateWebContents(
     int route_id,
     WindowContainerType window_container_type,
     const string16& frame_name,
-    const GURL& target_url) {
+    const GURL& target_url,
+    const Referrer& referrer,
+    WindowOpenDisposition disposition,
+    const WebKit::WebWindowFeatures& features,
+    bool user_gesture,
+    bool opener_suppressed) {
   return true;
 }
 
@@ -133,10 +145,15 @@ bool WebContentsDelegate::IsFullscreenForTabOrPending(
 }
 
 content::ColorChooser* WebContentsDelegate::OpenColorChooser(
-    WebContents* web_contents,
-    int color_chooser_id,
-    SkColor color) {
+    WebContents* web_contents, SkColor color) {
   return NULL;
+}
+
+void WebContentsDelegate::RequestMediaAccessPermission(
+    WebContents* web_contents,
+    const MediaStreamRequest& request,
+    const MediaResponseCallback& callback) {
+  callback.Run(MediaStreamDevices(), scoped_ptr<MediaStreamUI>());
 }
 
 bool WebContentsDelegate::RequestPpapiBrokerPermission(

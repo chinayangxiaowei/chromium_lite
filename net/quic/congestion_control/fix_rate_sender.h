@@ -27,7 +27,6 @@ class NET_EXPORT_PRIVATE FixRateSender : public SendAlgorithmInterface {
   virtual void OnIncomingQuicCongestionFeedbackFrame(
       const QuicCongestionFeedbackFrame& feedback,
       QuicTime feedback_receive_time,
-      QuicBandwidth sent_bandwidth,
       const SentPacketsMap& sent_packets) OVERRIDE;
   virtual void OnIncomingAck(QuicPacketSequenceNumber acked_sequence_number,
                              QuicByteCount acked_bytes,
@@ -36,14 +35,17 @@ class NET_EXPORT_PRIVATE FixRateSender : public SendAlgorithmInterface {
   virtual void SentPacket(QuicTime sent_time,
                           QuicPacketSequenceNumber equence_number,
                           QuicByteCount bytes,
-                          bool is_retransmission) OVERRIDE;
+                          Retransmission is_retransmission) OVERRIDE;
   virtual void AbandoningPacket(QuicPacketSequenceNumber sequence_number,
                                 QuicByteCount abandoned_bytes) OVERRIDE;
-  virtual QuicTime::Delta TimeUntilSend(QuicTime now,
-                                        bool is_retransmission,
-                                        bool has_retransmittable_data) OVERRIDE;
+  virtual QuicTime::Delta TimeUntilSend(
+      QuicTime now,
+      Retransmission is_retransmission,
+      HasRetransmittableData has_retransmittable_data,
+      IsHandshake handshake) OVERRIDE;
   virtual QuicBandwidth BandwidthEstimate() OVERRIDE;
   virtual QuicTime::Delta SmoothedRtt() OVERRIDE;
+  virtual QuicTime::Delta RetransmissionDelay() OVERRIDE;
   // End implementation of SendAlgorithmInterface.
 
  private:

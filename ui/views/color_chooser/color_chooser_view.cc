@@ -5,9 +5,9 @@
 #include "ui/views/color_chooser/color_chooser_view.h"
 
 #include "base/logging.h"
-#include "base/string_number_conversions.h"
-#include "base/stringprintf.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "ui/base/events/event.h"
 #include "ui/base/keycodes/keyboard_codes.h"
 #include "ui/gfx/canvas.h"
@@ -256,7 +256,6 @@ void ColorChooserView::SaturationValueView::OnSaturationValueChanged(
   marker_position_.set_x(x);
   marker_position_.set_y(y);
   SchedulePaint();
-  chooser_view_->OnSaturationValueChosen(saturation, value);
 }
 
 void ColorChooserView::SaturationValueView::ProcessEventAtLocation(
@@ -269,6 +268,7 @@ void ColorChooserView::SaturationValueView::ProcessEventAtLocation(
   saturation = SkScalarPin(saturation, 0, SK_Scalar1);
   value = SkScalarPin(value, 0, SK_Scalar1);
   OnSaturationValueChanged(saturation, value);
+  chooser_view_->OnSaturationValueChosen(saturation, value);
 }
 
 gfx::Size ColorChooserView::SaturationValueView::GetPreferredSize() {

@@ -10,12 +10,9 @@
 
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
-#include "base/prefs/pref_change_registrar.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "ui/base/models/combobox_model.h"
 #include "ui/base/models/simple_menu_model.h"
-
-class PrefService;
 
 namespace autofill {
 
@@ -26,7 +23,8 @@ class SuggestionsMenuModelDelegate {
   virtual ~SuggestionsMenuModelDelegate();
 
   // Called when a menu item has been activated.
-  virtual void SuggestionItemSelected(const SuggestionsMenuModel& model) = 0;
+  virtual void SuggestionItemSelected(SuggestionsMenuModel* model,
+                                      size_t index) = 0;
 };
 
 // A model for the dropdowns that allow the user to select from different
@@ -70,92 +68,49 @@ class SuggestionsMenuModel : public ui::SimpleMenuModel,
   // there are no items.
   std::string GetItemKeyForCheckedItem() const;
 
-  int checked_item() { return checked_item_; }
+  // Sets which item is checked.
+  void SetCheckedItem(const std::string& item_key);
+  void SetCheckedIndex(size_t index);
 
-  // ui::SimpleMenuModel::Delegate implementation.
-  virtual bool IsCommandIdChecked(int command_id) const OVERRIDE;
-  virtual bool IsCommandIdEnabled(int command_id) const OVERRIDE;
-  virtual bool GetAcceleratorForCommandId(
-      int command_id,
-      ui::Accelerator* accelerator) OVERRIDE;
-  virtual void ExecuteCommand(int command_id, int event_flags) OVERRIDE;
-
- private:
-  // The items this model represents, in presentation order. The first
-  // string is the "key" which identifies the item. The second is the
-  // display string for the item.
-  std::vector<std::pair<std::string, string16> > items_;
-
-  SuggestionsMenuModelDelegate* delegate_;
-
-  // The command id (and index) of the item which is currently checked.
-  int checked_item_;
-
-  DISALLOW_COPY_AND_ASSIGN(SuggestionsMenuModel);
-};
-
-// A delegate interface to allow the AccountChooserModel to inform its owner
-// of changes.
-class AccountChooserModelDelegate {
- public:
-  virtual ~AccountChooserModelDelegate();
-
-  // Called when the active account has changed.
-  virtual void AccountChoiceChanged() = 0;
-};
-
-// A menu model for the account chooser. This allows users to switch between
-// using Wallet and local Autofill. TODO(estade): this should support multiple
-// Wallet accounts.
-class AccountChooserModel : public ui::SimpleMenuModel,
-                            public ui::SimpleMenuModel::Delegate {
- public:
-  AccountChooserModel(AccountChooserModelDelegate* delegate,
-                      PrefService* prefs);
-  virtual ~AccountChooserModel();
-
-  // ui::SimpleMenuModel::Delegate implementation.
-  virtual bool IsCommandIdChecked(int command_id) const OVERRIDE;
-  virtual bool IsCommandIdEnabled(int command_id) const OVERRIDE;
-  virtual bool GetAcceleratorForCommandId(
-      int command_id,
-      ui::Accelerator* accelerator) OVERRIDE;
-  virtual void ExecuteCommand(int command_id, int event_flags) OVERRIDE;
-
-  // Should be called when the Wallet server returns an error.
-  void SetHadWalletError();
-
-  bool had_wallet_error() const { return had_wallet_error_; }
-
-  bool WalletIsSelected() const;
+  // Sets the item to be checked to the |n|th item that has key |item_key|.
+  // If there are fewer than |n| items that share |item_key|, the last one
+  // becomes checked. If there is no item with |item_key|, nothing happens.
+  // |n| is 1-indexed.
+  void SetCheckedItemNthWithKey(const std::string& item_key, size_t n);
 
   int checked_item() const { return checked_item_; }
 
+  // Enable/disable an item by key.
+  void SetEnabled(const std::string& item_key, bool enabled);
+
+  // ui::SimpleMenuModel::Delegate implementation.
+  virtual bool IsCommandIdChecked(int command_id) const OVERRIDE;
+  virtual bool IsCommandIdEnabled(int command_id) const OVERRIDE;
+  virtual bool GetAcceleratorForCommandId(
+      int command_id,
+      ui::Accelerator* accelerator) OVERRIDE;
+  virtual void ExecuteCommand(int command_id, int event_flags) OVERRIDE;
+
  private:
-  void PrefChanged(const std::string& pref);
+  // Represents an item in this model.
+  struct Item {
+    std::string key;  //  The key of the item.
+    bool enabled;  // Whether the item is selectable.
+  };
+  // The items this model represents in presentation order.
+  // Note: the index in this vector is the |command_id| of the item.
+  std::vector<Item> items_;
 
-  // Sets |checked_item_| from the relevant pref.
-  void UpdateCheckmarkFromPref();
+  // Returns the command id (and index) of the item by the |key|.
+  size_t GetItemIndex(const std::string& item_key);
 
-  // Command IDs of the items in this menu. For now, we only support a single
-  // account, so there's only one wallet item.
-  static const int kWalletItemId;
-  static const int kAutofillItemId;
+  SuggestionsMenuModelDelegate* delegate_;
 
-  AccountChooserModelDelegate* account_delegate_;
-
-  PrefService* prefs_;
-
-  // The command id of the currently active item.
+  // The command id (and index) of the item which is currently checked. Only one
+  // item is checked at a time.
   int checked_item_;
 
-  // Whether there has been a Wallet error while the owning dialog has been
-  // open.
-  bool had_wallet_error_;
-
-  PrefChangeRegistrar pref_change_registrar_;
-
-  DISALLOW_COPY_AND_ASSIGN(AccountChooserModel);
+  DISALLOW_COPY_AND_ASSIGN(SuggestionsMenuModel);
 };
 
 // A model for possible months in the Gregorian calendar.

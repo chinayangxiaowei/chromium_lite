@@ -4,29 +4,29 @@
 
 #include "content/worker/websharedworker_stub.h"
 
-#include "content/common/child_process.h"
-#include "content/common/child_thread.h"
-#include "content/common/fileapi/file_system_dispatcher.h"
-#include "content/common/webmessageportchannel_impl.h"
-#include "content/common/worker_messages.h"
 #include "base/compiler_specific.h"
-#include "content/worker/worker_thread.h"
+#include "content/child/child_process.h"
+#include "content/child/child_thread.h"
+#include "content/child/fileapi/file_system_dispatcher.h"
+#include "content/child/webmessageportchannel_impl.h"
+#include "content/common/worker_messages.h"
 #include "content/worker/shared_worker_devtools_agent.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebString.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebURL.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebSharedWorker.h"
+#include "content/worker/worker_thread.h"
+#include "third_party/WebKit/public/web/WebSharedWorker.h"
+#include "third_party/WebKit/public/platform/WebString.h"
+#include "third_party/WebKit/public/platform/WebURL.h"
 
 namespace content {
 
 WebSharedWorkerStub::WebSharedWorkerStub(
-    const string16& name, int route_id,
+    const string16& name,
+    int route_id,
     const WorkerAppCacheInitInfo& appcache_init_info)
     : route_id_(route_id),
       appcache_init_info_(appcache_init_info),
-      ALLOW_THIS_IN_INITIALIZER_LIST(client_(route_id, this)),
+      client_(route_id, this),
       name_(name),
-      started_(false),
-      worker_devtools_agent_(NULL) {
+      started_(false) {
 
   WorkerThread* worker_thread = WorkerThread::current();
   DCHECK(worker_thread);
@@ -108,7 +108,9 @@ void WebSharedWorkerStub::OnStartWorkerContext(
 void WebSharedWorkerStub::OnConnect(int sent_message_port_id, int routing_id) {
   if (started_) {
     WebKit::WebMessagePortChannel* channel =
-        new WebMessagePortChannelImpl(routing_id, sent_message_port_id);
+        new WebMessagePortChannelImpl(routing_id,
+                                      sent_message_port_id,
+                                      base::MessageLoopProxy::current().get());
     impl_->connect(channel, NULL);
   } else {
     // If two documents try to load a SharedWorker at the same time, the

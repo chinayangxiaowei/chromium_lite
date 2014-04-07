@@ -11,22 +11,27 @@
 /** @const */ var SCREEN_OOBE_EULA = 'eula';
 /** @const */ var SCREEN_OOBE_UPDATE = 'update';
 /** @const */ var SCREEN_OOBE_ENROLLMENT = 'oauth-enrollment';
+/** @const */ var SCREEN_OOBE_KIOSK_ENABLE = 'kiosk-enable';
 /** @const */ var SCREEN_GAIA_SIGNIN = 'gaia-signin';
 /** @const */ var SCREEN_ACCOUNT_PICKER = 'account-picker';
 /** @const */ var SCREEN_ERROR_MESSAGE = 'error-message';
 /** @const */ var SCREEN_USER_IMAGE_PICKER = 'user-image';
 /** @const */ var SCREEN_TPM_ERROR = 'tpm-error-message';
 /** @const */ var SCREEN_PASSWORD_CHANGED = 'password-changed';
-/** @const */ var SCREEN_CREATE_MANAGED_USER_DIALOG =
-    'managed-user-creation-dialog';
 /** @const */ var SCREEN_CREATE_MANAGED_USER_FLOW =
-    'managed-user-creation-flow';
+    'managed-user-creation';
 
 /* Accelerator identifiers. Must be kept in sync with webui_login_view.cc. */
 /** @const */ var ACCELERATOR_CANCEL = 'cancel';
 /** @const */ var ACCELERATOR_ENROLLMENT = 'enrollment';
+/** @const */ var ACCELERATOR_KIOSK_ENABLE = 'kiosk_enable';
 /** @const */ var ACCELERATOR_VERSION = 'version';
 /** @const */ var ACCELERATOR_RESET = 'reset';
+/** @const */ var ACCELERATOR_LEFT = 'left';
+/** @const */ var ACCELERATOR_RIGHT = 'right';
+/** @const */ var ACCELERATOR_DEVICE_REQUISITION = 'device_requisition';
+/** @const */ var ACCELERATOR_DEVICE_REQUISITION_REMORA =
+    'device_requisition_remora';
 
 /* Help topic identifiers. */
 /** @const */ var HELP_TOPIC_ENTERPRISE_REPORTING = 2535613;
@@ -37,12 +42,49 @@
   GAIA_SIGNIN: 1,
   ACCOUNT_PICKER: 2,
   WRONG_HWID_WARNING: 3,
-  MANAGED_USER_CREATION_DIALOG: 4,
-  MANAGED_USER_CREATION_FLOW: 5,
+  MANAGED_USER_CREATION_FLOW: 4,
+};
+
+/* Possible UI states of the error screen. */
+/** @const */ var ERROR_SCREEN_UI_STATE = {
+  UNKNOWN: 'ui-state-unknown',
+  UPDATE: 'ui-state-update',
+  SIGNIN: 'ui-state-signin',
+  MANAGED_USER_CREATION_FLOW: 'ui-state-locally-managed'
 };
 
 cr.define('cr.ui.login', function() {
   var Bubble = cr.ui.Bubble;
+
+  /**
+   * Maximum time in milliseconds to wait for step transition to finish.
+   * The value is used as the duration for ensureTransitionEndEvent below.
+   * It needs to be inline with the step screen transition duration time
+   * defined in css file. The current value in css is 200ms. To avoid emulated
+   * webkitTransitionEnd fired before real one, 250ms is used.
+   * @const
+   */
+  var MAX_SCREEN_TRANSITION_DURATION = 250;
+
+  /**
+   * webkitTransitionEnd does not always fire (e.g. when animation is aborted
+   * or when no paint happens during the animation). This function sets up
+   * a timer and emulate the event if it is not fired when the timer expires.
+   * @param {!HTMLElement} el The element to watch for webkitTransitionEnd.
+   * @param {number} timeOut The maximum wait time in milliseconds for the
+   *     webkitTransitionEnd to happen.
+   */
+  function ensureTransitionEndEvent(el, timeOut) {
+    var fired = false;
+    el.addEventListener('webkitTransitionEnd', function f(e) {
+      el.removeEventListener('webkitTransitionEnd', f);
+      fired = true;
+    });
+    window.setTimeout(function() {
+      if (!fired)
+        cr.dispatchSimpleEvent(el, 'webkitTransitionEnd');
+    }, timeOut);
+  }
 
   /**
    * Groups of screens (screen IDs) that should have the same dimensions.
@@ -82,10 +124,10 @@ cr.define('cr.ui.login', function() {
     allowToggleVersion_: false,
 
     /**
-     * List of parameters to showScreen calls.
-     * @type {array}
+     * Whether keyboard navigation flow is enforced.
+     * @type {boolean}
      */
-    screenParametersHistory_: [],
+    forceKeyboardFlow_: false,
 
     /**
      * Gets current screen element.
@@ -101,6 +143,16 @@ cr.define('cr.ui.login', function() {
      */
     set headerHidden(hidden) {
       $('login-header-bar').hidden = hidden;
+    },
+
+    /**
+     * Forces keyboard based OOBE navigation.
+     * @param {boolean} value True if keyboard navigation flow is forced.
+     */
+    set forceKeyboardFlow(value) {
+      this.forceKeyboardFlow_ = value;
+      if (value)
+        keyboard.initializeKeyboardFlow();
     },
 
     /**
@@ -137,6 +189,12 @@ cr.define('cr.ui.login', function() {
           if (this.currentScreen.cancelAutoEnrollment)
             this.currentScreen.cancelAutoEnrollment();
         }
+      } else if (name == ACCELERATOR_KIOSK_ENABLE) {
+        var currentStepId = this.screens_[this.currentStep_];
+        if (currentStepId == SCREEN_GAIA_SIGNIN ||
+            currentStepId == SCREEN_ACCOUNT_PICKER) {
+          chrome.send('toggleKioskEnableScreen');
+        }
       } else if (name == ACCELERATOR_VERSION) {
         if (this.allowToggleVersion_)
           $('version-labels').hidden = !$('version-labels').hidden;
@@ -146,7 +204,24 @@ cr.define('cr.ui.login', function() {
             currentStepId == SCREEN_ACCOUNT_PICKER) {
           chrome.send('toggleResetScreen');
         }
+      } else if (name == ACCELERATOR_DEVICE_REQUISITION) {
+        if (this.isOobeUI())
+          this.showDeviceRequisitionPrompt_();
+      } else if (name == ACCELERATOR_DEVICE_REQUISITION_REMORA) {
+        if (this.isOobeUI()) {
+          this.deviceRequisition_ = 'remora';
+          this.showDeviceRequisitionPrompt_();
+        }
       }
+
+      if (!this.forceKeyboardFlow_)
+        return;
+
+      // Handle special accelerators for keyboard enhanced navigation flow.
+      if (name == ACCELERATOR_LEFT)
+        keyboard.raiseKeyFocusPrevious(document.activeElement);
+      else if (name == ACCELERATOR_RIGHT)
+        keyboard.raiseKeyFocusNext(document.activeElement);
     },
 
     /**
@@ -260,9 +335,12 @@ cr.define('cr.ui.login', function() {
               innerContainer.classList.remove('animation');
               oldStep.classList.add('hidden');
             }
+            // Refresh defaultControl. It could have changed.
+            var defaultControl = newStep.defaultControl;
             if (defaultControl)
               defaultControl.focus();
           });
+          ensureTransitionEndEvent(oldStep, MAX_SCREEN_TRANSITION_DURATION);
         } else {
           oldStep.classList.add('hidden');
           if (defaultControl)
@@ -270,16 +348,21 @@ cr.define('cr.ui.login', function() {
         }
       } else {
         // First screen on OOBE launch.
-        if (innerContainer.classList.contains('down')) {
+        if (document.body.classList.contains('oobe-display') &&
+            innerContainer.classList.contains('down')) {
           innerContainer.classList.remove('down');
           innerContainer.addEventListener(
               'webkitTransitionEnd', function f(e) {
                 innerContainer.removeEventListener('webkitTransitionEnd', f);
                 $('progress-dots').classList.remove('down');
                 chrome.send('loginVisible', ['oobe']);
+                // Refresh defaultControl. It could have changed.
+                var defaultControl = newStep.defaultControl;
                 if (defaultControl)
                   defaultControl.focus();
               });
+          ensureTransitionEndEvent(innerContainer,
+                                   MAX_SCREEN_TRANSITION_DURATION);
         } else {
           if (defaultControl)
             defaultControl.focus();
@@ -313,13 +396,6 @@ cr.define('cr.ui.login', function() {
     showScreen: function(screen) {
       var screenId = screen.id;
 
-      // As for now, support "back" only for create managed user screen.
-      if (screenId != SCREEN_CREATE_MANAGED_USER_DIALOG) {
-        this.screenParametersHistory_ = [];
-      }
-
-      this.screenParametersHistory_.push(screen);
-
       // Make sure the screen is decorated.
       this.preloadScreen(screen);
 
@@ -340,16 +416,6 @@ cr.define('cr.ui.login', function() {
       var index = this.getScreenIndex_(screenId);
       if (index >= 0)
         this.toggleStep_(index, data);
-    },
-
-    /**
-     * Shows the previous screen of workflow.
-     */
-    goBack: function() {
-      if (this.screenParametersHistory_.length >= 2) {
-        this.screenParametersHistory_.pop();
-        this.showScreen(this.screenParametersHistory_.pop());
-      }
     },
 
     /**
@@ -382,7 +448,9 @@ cr.define('cr.ui.login', function() {
       var dot = document.createElement('div');
       dot.id = screenId + '-dot';
       dot.className = 'progdot';
-      $('progress-dots').appendChild(dot);
+      var progressDots = $('progress-dots');
+      if (progressDots)
+        progressDots.appendChild(dot);
 
       this.appendButtons_(el.buttons, screenId);
     },
@@ -458,6 +526,41 @@ cr.define('cr.ui.login', function() {
     },
 
     /**
+     * Shows the device requisition prompt.
+     */
+    showDeviceRequisitionPrompt_: function() {
+      if (!this.deviceRequisitionDialog_) {
+        this.deviceRequisitionDialog_ =
+            new cr.ui.dialogs.PromptDialog(document.body);
+        this.deviceRequisitionDialog_.setOkLabel(
+            loadTimeData.getString('deviceRequisitionPromptOk'));
+        this.deviceRequisitionDialog_.setCancelLabel(
+            loadTimeData.getString('deviceRequisitionPromptCancel'));
+      }
+      this.deviceRequisitionDialog_.show(
+          loadTimeData.getString('deviceRequisitionPromptText'),
+          this.deviceRequisition_,
+          this.onConfirmDeviceRequisitionPrompt_.bind(this));
+    },
+
+    /**
+     * Confirmation handle for the device requisition prompt.
+     * @param {string} value The value entered by the user.
+     */
+    onConfirmDeviceRequisitionPrompt_: function(value) {
+      this.deviceRequisition_ = value;
+      chrome.send('setDeviceRequisition', [value]);
+    },
+
+    /*
+     * Updates the device requisition string shown in the requisition prompt.
+     * @param {string} requisition The device requisition.
+     */
+    updateDeviceRequisition: function(requisition) {
+      this.deviceRequisition_ = requisition;
+    },
+
+    /**
      * Returns true if Oobe UI is shown.
      */
     isOobeUI: function() {
@@ -465,7 +568,16 @@ cr.define('cr.ui.login', function() {
     },
 
     /**
-     * Returns true if the current screen is the lock screen.
+     * Returns true if the current UI type is the "Sign-in to add user"
+     * (another user session is already active).
+     */
+    isSignInToAddScreen: function() {
+      return document.documentElement.getAttribute('screen') ==
+          'user-adding';
+    },
+
+    /**
+     * Returns true if the current UI type is the lock screen.
      */
     isLockScreen: function() {
       return document.documentElement.getAttribute('screen') == 'lock';
@@ -483,6 +595,17 @@ cr.define('cr.ui.login', function() {
    * Initializes display manager.
    */
   DisplayManager.initialize = function() {
+    // Extracting screen type from URL.
+    var hash = window.location.hash;
+    var screenType;
+    if (!hash) {
+      console.error('Screen type not found. Setting default value "login".');
+      screenType = 'login';
+    } else {
+      screenType = hash.substring(1);
+    }
+    document.documentElement.setAttribute('screen', screenType);
+
     var link = $('enterprise-info-hint-link');
     link.addEventListener(
         'click', DisplayManager.handleEnterpriseHintLinkClick);
@@ -535,9 +658,6 @@ cr.define('cr.ui.login', function() {
       $('login-header-bar').signinUIState = SIGNIN_UI_STATE.GAIA_SIGNIN;
     else if (currentScreenId == SCREEN_ACCOUNT_PICKER)
       $('login-header-bar').signinUIState = SIGNIN_UI_STATE.ACCOUNT_PICKER;
-    else if (currentScreenId == SCREEN_CREATE_MANAGED_USER_DIALOG)
-      $('login-header-bar').signinUIState =
-          SIGNIN_UI_STATE.MANAGED_USER_CREATION_DIALOG;
     chrome.send('showAddUser', [opt_email]);
   };
 
@@ -663,6 +783,13 @@ cr.define('cr.ui.login', function() {
    */
   DisplayManager.clearUserPodPassword = function() {
     $('pod-row').clearFocusedPod();
+  };
+
+  /**
+   * Restores input focus to currently selected pod.
+   */
+  DisplayManager.refocusCurrentPod = function() {
+    $('pod-row').refocusCurrentPod();
   };
 
   // Export

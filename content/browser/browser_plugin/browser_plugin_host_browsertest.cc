@@ -1,19 +1,20 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/command_line.h"
 #include "base/memory/singleton.h"
 #include "base/run_loop.h"
-#include "base/string_util.h"
 #include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/test/test_timeouts.h"
-#include "base/utf_string_conversions.h"
 #include "content/browser/browser_plugin/browser_plugin_guest.h"
 #include "content/browser/browser_plugin/browser_plugin_host_factory.h"
 #include "content/browser/browser_plugin/test_browser_plugin_embedder.h"
 #include "content/browser/browser_plugin/test_browser_plugin_guest.h"
 #include "content/browser/browser_plugin/test_browser_plugin_guest_manager.h"
+#include "content/browser/child_process_security_policy_impl.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/common/view_messages.h"
@@ -22,15 +23,18 @@
 #include "content/public/browser/render_view_host_observer.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/common/content_switches.h"
+#include "content/public/common/drop_data.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_utils.h"
 #include "content/shell/shell.h"
 #include "content/test/content_browser_test.h"
 #include "content/test/content_browser_test_utils.h"
 #include "net/base/net_util.h"
-#include "net/test/test_server.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebInputEvent.h"
-#include "webkit/glue/webdropdata.h"
+#include "net/test/embedded_test_server/embedded_test_server.h"
+#include "net/test/embedded_test_server/http_request.h"
+#include "net/test/embedded_test_server/http_response.h"
+#include "net/test/spawned_test_server/spawned_test_server.h"
+#include "third_party/WebKit/public/web/WebInputEvent.h"
 
 using WebKit::WebInputEvent;
 using WebKit::WebMouseEvent;
@@ -109,7 +113,7 @@ class TestBrowserPluginHostFactory : public BrowserPluginHostFactory {
   virtual BrowserPluginGuestManager*
       CreateBrowserPluginGuestManager() OVERRIDE {
     guest_manager_instance_count_++;
-    if (message_loop_runner_)
+    if (message_loop_runner_.get())
       message_loop_runner_->Quit();
     return new TestBrowserPluginGuestManager();
   }
@@ -213,7 +217,7 @@ class RenderViewHostMessageObserver : public RenderViewHostObserver {
   virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE {
     if (message.type() == message_id_) {
       message_received_ = true;
-      if (message_loop_runner_)
+      if (message_loop_runner_.get())
         message_loop_runner_->Quit();
     }
     return false;
@@ -242,6 +246,11 @@ class BrowserPluginHostTest : public ContentBrowserTest {
         TestBrowserPluginHostFactory::GetInstance());
     content::BrowserPluginGuestManager::set_factory_for_testing(
         TestBrowserPluginHostFactory::GetInstance());
+
+    // On legacy windows, the AcceptDragEvents test needs this to pass.
+#if defined(OS_WIN) && !defined(USE_AURA)
+    UseRealGLBindings();
+#endif
 
     ContentBrowserTest::SetUp();
   }
@@ -308,8 +317,8 @@ class BrowserPluginHostTest : public ContentBrowserTest {
                               const std::string& guest_url,
                               bool is_guest_data_url,
                               const std::string& embedder_code) {
-    ASSERT_TRUE(test_server()->Start());
-    GURL test_url(test_server()->GetURL(embedder_url));
+    ASSERT_TRUE(embedded_test_server()->InitializeAndWaitUntilReady());
+    GURL test_url(embedded_test_server()->GetURL(embedder_url));
     NavigateToURL(shell(), test_url);
 
     WebContentsImpl* embedder_web_contents = static_cast<WebContentsImpl*>(
@@ -318,6 +327,8 @@ class BrowserPluginHostTest : public ContentBrowserTest {
         embedder_web_contents->GetRenderViewHost());
     // Focus the embedder.
     rvh->Focus();
+    // Activative IME.
+    rvh->SetInputMethodActive(true);
 
     // Allow the test to do some operations on the embedder before we perform
     // the first navigation of the guest.
@@ -325,7 +336,7 @@ class BrowserPluginHostTest : public ContentBrowserTest {
       ExecuteSyncJSFunction(rvh, embedder_code);
 
     if (!is_guest_data_url) {
-      test_url = test_server()->GetURL(guest_url);
+      test_url = embedded_test_server()->GetURL(guest_url);
       ExecuteSyncJSFunction(
           rvh, base::StringPrintf("SetSrc('%s');", test_url.spec().c_str()));
     } else {
@@ -371,60 +382,6 @@ class BrowserPluginHostTest : public ContentBrowserTest {
   DISALLOW_COPY_AND_ASSIGN(BrowserPluginHostTest);
 };
 
-// This test loads a guest that has a busy loop, and therefore it hangs the
-// guest.
-//
-// Disabled on Windows and Linux since it is flaky. crbug.com/164812
-IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, GuestUnresponsive) {
-  // Override the hang timeout for guest to be very small.
-  content::BrowserPluginGuest::set_factory_for_testing(
-      TestShortHangTimeoutGuestFactory::GetInstance());
-  const char kEmbedderURL[] =
-      "files/browser_plugin_embedder_guest_unresponsive.html";
-  StartBrowserPluginTest(kEmbedderURL, kHTMLForGuestBusyLoop, true, "");
-  // Wait until the busy loop starts.
-  {
-    const string16 expected_title = ASCIIToUTF16("start");
-    content::TitleWatcher title_watcher(test_guest()->web_contents(),
-                                        expected_title);
-    // Hang the guest for a length of time.
-    int spin_time = 10 * TestTimeouts::tiny_timeout().InMilliseconds();
-    ExecuteSyncJSFunction(
-        test_guest()->web_contents()->GetRenderViewHost(),
-        base::StringPrintf("StartPauseMs(%d);", spin_time).c_str());
-
-    string16 actual_title = title_watcher.WaitAndGetTitle();
-    EXPECT_EQ(expected_title, actual_title);
-  }
-  {
-    const string16 expected_title = ASCIIToUTF16("done");
-    content::TitleWatcher title_watcher(test_embedder()->web_contents(),
-                                        expected_title);
-
-    // Send a mouse event to the guest.
-    SimulateMouseClick(test_embedder()->web_contents(), 0,
-        WebKit::WebMouseEvent::ButtonLeft);
-
-    string16 actual_title = title_watcher.WaitAndGetTitle();
-    EXPECT_EQ(expected_title, actual_title);
-  }
-
-  // Verify that the embedder has received the 'unresponsive' and 'responsive'
-  // events.
-  RenderViewHostImpl* rvh = static_cast<RenderViewHostImpl*>(
-      test_embedder()->web_contents()->GetRenderViewHost());
-  scoped_ptr<base::Value> value =
-      content::ExecuteScriptAndGetValue(rvh, "unresponsiveCalled");
-  bool result = false;
-  ASSERT_TRUE(value->GetAsBoolean(&result));
-  EXPECT_TRUE(result);
-
-  value = content::ExecuteScriptAndGetValue(rvh, "responsiveCalled");
-  result = false;
-  ASSERT_TRUE(value->GetAsBoolean(&result));
-  EXPECT_TRUE(result);
-}
-
 // This test ensures that if guest isn't there and we resize the guest (from
 // js), it remembers the size correctly.
 //
@@ -435,7 +392,7 @@ IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, NavigateAfterResize) {
   const gfx::Size nxt_size = gfx::Size(100, 200);
   const std::string embedder_code = base::StringPrintf(
       "SetSize(%d, %d);", nxt_size.width(), nxt_size.height());
-  const char kEmbedderURL[] = "files/browser_plugin_embedder.html";
+  const char kEmbedderURL[] = "/browser_plugin_embedder.html";
   StartBrowserPluginTest(kEmbedderURL, kHTMLForGuest, true, embedder_code);
 
   // Wait for the guest to receive a damage buffer of size 100x200.
@@ -444,9 +401,9 @@ IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, NavigateAfterResize) {
 }
 
 IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, AdvanceFocus) {
-  const char kEmbedderURL[] = "files/browser_plugin_focus.html";
-  const char* kGuestURL = "files/browser_plugin_focus_child.html";
-  StartBrowserPluginTest(kEmbedderURL, kGuestURL, false, "");
+  const char kEmbedderURL[] = "/browser_plugin_focus.html";
+  const char* kGuestURL = "/browser_plugin_focus_child.html";
+  StartBrowserPluginTest(kEmbedderURL, kGuestURL, false, std::string());
 
   SimulateMouseClick(test_embedder()->web_contents(), 0,
       WebKit::WebMouseEvent::ButtonLeft);
@@ -469,15 +426,15 @@ IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, AdvanceFocus) {
 // a RenderViewHost swap in the web_contents. We verify that the embedder in the
 // web_contents gets cleared properly.
 IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, EmbedderChangedAfterSwap) {
-  net::TestServer https_server(
-      net::TestServer::TYPE_HTTPS,
-      net::TestServer::kLocalhost,
+  net::SpawnedTestServer https_server(
+      net::SpawnedTestServer::TYPE_HTTPS,
+      net::SpawnedTestServer::kLocalhost,
       base::FilePath(FILE_PATH_LITERAL("content/test/data")));
   ASSERT_TRUE(https_server.Start());
 
   // 1. Load an embedder page with one guest in it.
-  const char kEmbedderURL[] = "files/browser_plugin_embedder.html";
-  StartBrowserPluginTest(kEmbedderURL, kHTMLForGuest, true, "");
+  const char kEmbedderURL[] = "/browser_plugin_embedder.html";
+  StartBrowserPluginTest(kEmbedderURL, kHTMLForGuest, true, std::string());
 
   // 2. Navigate to a URL in https, so we trigger a RenderViewHost swap.
   GURL test_https_url(https_server.GetURL(
@@ -502,14 +459,14 @@ IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, EmbedderChangedAfterSwap) {
 // therefore the embedder created on first page navigation stays the same in
 // web_contents.
 IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, EmbedderSameAfterNav) {
-  const char kEmbedderURL[] = "files/browser_plugin_embedder.html";
-  StartBrowserPluginTest(kEmbedderURL, kHTMLForGuest, true, "");
+  const char kEmbedderURL[] = "/browser_plugin_embedder.html";
+  StartBrowserPluginTest(kEmbedderURL, kHTMLForGuest, true, std::string());
   WebContentsImpl* embedder_web_contents = test_embedder()->web_contents();
 
   // Navigate to another page in same host and port, so RenderViewHost swap
   // does not happen and existing embedder doesn't change in web_contents.
-  GURL test_url_new(test_server()->GetURL(
-      "files/browser_plugin_title_change.html"));
+  GURL test_url_new(embedded_test_server()->GetURL(
+      "/browser_plugin_title_change.html"));
   const string16 expected_title = ASCIIToUTF16("done");
   content::TitleWatcher title_watcher(shell()->web_contents(), expected_title);
   NavigateToURL(shell(), test_url_new);
@@ -527,8 +484,8 @@ IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, EmbedderSameAfterNav) {
 
 // This test verifies that hiding the embedder also hides the guest.
 IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, BrowserPluginVisibilityChanged) {
-  const char kEmbedderURL[] = "files/browser_plugin_embedder.html";
-  StartBrowserPluginTest(kEmbedderURL, kHTMLForGuest, true, "");
+  const char kEmbedderURL[] = "/browser_plugin_embedder.html";
+  StartBrowserPluginTest(kEmbedderURL, kHTMLForGuest, true, std::string());
 
   // Hide the Browser Plugin.
   RenderViewHostImpl* rvh = static_cast<RenderViewHostImpl*>(
@@ -541,8 +498,8 @@ IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, BrowserPluginVisibilityChanged) {
 }
 
 IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, EmbedderVisibilityChanged) {
-  const char kEmbedderURL[] = "files/browser_plugin_embedder.html";
-  StartBrowserPluginTest(kEmbedderURL, kHTMLForGuest, true, "");
+  const char kEmbedderURL[] = "/browser_plugin_embedder.html";
+  StartBrowserPluginTest(kEmbedderURL, kHTMLForGuest, true, std::string());
 
   // Hide the embedder.
   test_embedder()->web_contents()->WasHidden();
@@ -551,36 +508,12 @@ IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, EmbedderVisibilityChanged) {
   test_guest()->WaitUntilHidden();
 }
 
-// This test verifies that calling the reload method reloads the guest.
-IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, ReloadGuest) {
-  const char kEmbedderURL[] = "files/browser_plugin_embedder.html";
-  StartBrowserPluginTest(kEmbedderURL, kHTMLForGuest, true, "");
-
-  test_guest()->ResetUpdateRectCount();
-
-  RenderViewHostImpl* rvh = static_cast<RenderViewHostImpl*>(
-      test_embedder()->web_contents()->GetRenderViewHost());
-  ExecuteSyncJSFunction(rvh, "document.getElementById('plugin').reload()");
-  test_guest()->WaitForReload();
-}
-
-// This test verifies that calling the stop method forwards the stop request
-// to the guest's WebContents.
-IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, StopGuest) {
-  const char kEmbedderURL[] = "files/browser_plugin_embedder.html";
-  StartBrowserPluginTest(kEmbedderURL, kHTMLForGuest, true, "");
-
-  RenderViewHostImpl* rvh = static_cast<RenderViewHostImpl*>(
-      test_embedder()->web_contents()->GetRenderViewHost());
-  ExecuteSyncJSFunction(rvh, "document.getElementById('plugin').stop()");
-  test_guest()->WaitForStop();
-}
-
 // Verifies that installing/uninstalling touch-event handlers in the guest
 // plugin correctly updates the touch-event handling state in the embedder.
 IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, AcceptTouchEvents) {
-  const char kEmbedderURL[] = "files/browser_plugin_embedder.html";
-  StartBrowserPluginTest(kEmbedderURL, kHTMLForGuestTouchHandler, true, "");
+  const char kEmbedderURL[] = "/browser_plugin_embedder.html";
+  StartBrowserPluginTest(
+      kEmbedderURL, kHTMLForGuestTouchHandler, true, std::string());
 
   RenderViewHostImpl* rvh = static_cast<RenderViewHostImpl*>(
       test_embedder()->web_contents()->GetRenderViewHost());
@@ -605,105 +538,11 @@ IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, AcceptTouchEvents) {
   EXPECT_FALSE(rvh->has_touch_handler());
 }
 
-IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, Renavigate) {
-  const char kEmbedderURL[] = "files/browser_plugin_embedder.html";
-  StartBrowserPluginTest(
-      kEmbedderURL, GetHTMLForGuestWithTitle("P1"), true, "");
-  RenderViewHostImpl* rvh = static_cast<RenderViewHostImpl*>(
-      test_embedder()->web_contents()->GetRenderViewHost());
-
-  // Navigate to P2 and verify that the navigation occurred.
-  {
-    const string16 expected_title = ASCIIToUTF16("P2");
-    content::TitleWatcher title_watcher(test_guest()->web_contents(),
-                                        expected_title);
-
-    ExecuteSyncJSFunction(
-        rvh,
-        base::StringPrintf(
-            "SetSrc('%s');", GetHTMLForGuestWithTitle("P2").c_str()));
-
-    string16 actual_title = title_watcher.WaitAndGetTitle();
-    EXPECT_EQ(expected_title, actual_title);
-  }
-
-  // Navigate to P3 and verify that the navigation occurred.
-  {
-    const string16 expected_title = ASCIIToUTF16("P3");
-    content::TitleWatcher title_watcher(test_guest()->web_contents(),
-                                        expected_title);
-
-    ExecuteSyncJSFunction(
-        rvh,
-        base::StringPrintf(
-            "SetSrc('%s');", GetHTMLForGuestWithTitle("P3").c_str()));
-
-    string16 actual_title = title_watcher.WaitAndGetTitle();
-    EXPECT_EQ(expected_title, actual_title);
-  }
-
-  // Go back and verify that we're back at P2.
-  {
-    const string16 expected_title = ASCIIToUTF16("P2");
-    content::TitleWatcher title_watcher(test_guest()->web_contents(),
-                                        expected_title);
-
-    ExecuteSyncJSFunction(rvh, "Back();");
-    string16 actual_title = title_watcher.WaitAndGetTitle();
-    EXPECT_EQ(expected_title, actual_title);
-
-    scoped_ptr<base::Value> value =
-      content::ExecuteScriptAndGetValue(rvh, "CanGoBack()");
-    bool result = false;
-    ASSERT_TRUE(value->GetAsBoolean(&result));
-    EXPECT_TRUE(result);
-
-    value = content::ExecuteScriptAndGetValue(rvh, "CanGoForward()");
-    result = false;
-    ASSERT_TRUE(value->GetAsBoolean(&result));
-    EXPECT_TRUE(result);
-  }
-
-  // Go forward and verify that we're back at P3.
-  {
-    const string16 expected_title = ASCIIToUTF16("P3");
-    content::TitleWatcher title_watcher(test_guest()->web_contents(),
-                                        expected_title);
-
-    ExecuteSyncJSFunction(rvh, "Forward();");
-    string16 actual_title = title_watcher.WaitAndGetTitle();
-    EXPECT_EQ(expected_title, actual_title);
-
-    scoped_ptr<base::Value> value =
-        content::ExecuteScriptAndGetValue(rvh, "CanGoForward()");
-    bool result = true;
-    ASSERT_TRUE(value->GetAsBoolean(&result));
-    EXPECT_FALSE(result);
-  }
-
-  // Go back two entries and verify that we're back at P1.
-  {
-    const string16 expected_title = ASCIIToUTF16("P1");
-    content::TitleWatcher title_watcher(test_guest()->web_contents(),
-                                        expected_title);
-
-    ExecuteSyncJSFunction(rvh, "Go(-2);");
-    string16 actual_title = title_watcher.WaitAndGetTitle();
-    EXPECT_EQ(expected_title, actual_title);
-
-    scoped_ptr<base::Value> value =
-        content::ExecuteScriptAndGetValue(rvh, "CanGoBack()");
-    bool result = true;
-    ASSERT_TRUE(value->GetAsBoolean(&result));
-    EXPECT_FALSE(result);
-  }
-}
-
 // This tests verifies that reloading the embedder does not crash the browser
 // and that the guest is reset.
 IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, ReloadEmbedder) {
-  const char kEmbedderURL[] = "files/browser_plugin_embedder.html";
-  StartBrowserPluginTest(kEmbedderURL, kHTMLForGuest, true, "");
+  const char kEmbedderURL[] = "/browser_plugin_embedder.html";
+  StartBrowserPluginTest(kEmbedderURL, kHTMLForGuest, true, std::string());
   RenderViewHostImpl* rvh = static_cast<RenderViewHostImpl*>(
       test_embedder()->web_contents()->GetRenderViewHost());
 
@@ -752,158 +591,6 @@ IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, ReloadEmbedder) {
   }
 }
 
-IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, TerminateGuest) {
-  const char kEmbedderURL[] = "files/browser_plugin_embedder.html";
-  StartBrowserPluginTest(kEmbedderURL, kHTMLForGuest, true, "");
-
-  RenderViewHostImpl* rvh = static_cast<RenderViewHostImpl*>(
-      test_embedder()->web_contents()->GetRenderViewHost());
-  ExecuteSyncJSFunction(rvh, "document.getElementById('plugin').terminate()");
-
-  // Expect the guest to crash.
-  test_guest()->WaitForExit();
-}
-
-// This test verifies that the guest is responsive after crashing and going back
-// to a previous navigation entry.
-IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, BackAfterTerminateGuest) {
-  const char* kEmbedderURL = "files/browser_plugin_embedder.html";
-  StartBrowserPluginTest(
-      kEmbedderURL, GetHTMLForGuestWithTitle("P1"), true, "");
-  RenderViewHostImpl* rvh = static_cast<RenderViewHostImpl*>(
-      test_embedder()->web_contents()->GetRenderViewHost());
-
-  // Navigate to P2 and verify that the navigation occurred.
-  {
-    const string16 expected_title = ASCIIToUTF16("P2");
-    content::TitleWatcher title_watcher(test_guest()->web_contents(),
-                                        expected_title);
-
-    ExecuteSyncJSFunction(
-        rvh,
-        base::StringPrintf(
-            "SetSrc('%s');", GetHTMLForGuestWithTitle("P2").c_str()));
-
-    string16 actual_title = title_watcher.WaitAndGetTitle();
-    EXPECT_EQ(expected_title, actual_title);
-  }
-  // Kill the guest.
-  ExecuteSyncJSFunction(rvh, "document.getElementById('plugin').terminate()");
-
-  // Expect the guest to report that it crashed.
-  test_guest()->WaitForExit();
-  // Go back and verify that we're back at P1.
-  {
-    const string16 expected_title = ASCIIToUTF16("P1");
-    content::TitleWatcher title_watcher(test_guest()->web_contents(),
-                                        expected_title);
-
-    ExecuteSyncJSFunction(rvh, "Back();");
-
-    string16 actual_title = title_watcher.WaitAndGetTitle();
-    EXPECT_EQ(expected_title, actual_title);
-  }
-  // Send an input event and verify that the guest receives the input.
-  SimulateMouseClick(test_embedder()->web_contents(), 0,
-      WebKit::WebMouseEvent::ButtonLeft);
-  test_guest()->WaitForInput();
-}
-
-IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, LoadStart) {
-  const char kEmbedderURL[] = "files/browser_plugin_embedder.html";
-  StartBrowserPluginTest(kEmbedderURL, "about:blank", true, "");
-
-  const string16 expected_title = ASCIIToUTF16(kHTMLForGuest);
-  content::TitleWatcher title_watcher(test_embedder()->web_contents(),
-                                      expected_title);
-  // Renavigate the guest to |kHTMLForGuest|.
-  RenderViewHostImpl* rvh = static_cast<RenderViewHostImpl*>(
-      test_embedder()->web_contents()->GetRenderViewHost());
-  ExecuteSyncJSFunction(rvh,
-                        base::StringPrintf("SetSrc('%s');", kHTMLForGuest));
-
-  string16 actual_title = title_watcher.WaitAndGetTitle();
-  EXPECT_EQ(expected_title, actual_title);
-}
-
-IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, LoadAbort) {
-  const char kEmbedderURL[] = "files/browser_plugin_embedder.html";
-  StartBrowserPluginTest(kEmbedderURL, "about:blank", true, "");
-
-  {
-    // Navigate the guest to "close-socket".
-    const string16 expected_title = ASCIIToUTF16("ERR_EMPTY_RESPONSE");
-    content::TitleWatcher title_watcher(test_embedder()->web_contents(),
-                                        expected_title);
-    RenderViewHostImpl* rvh = static_cast<RenderViewHostImpl*>(
-        test_embedder()->web_contents()->GetRenderViewHost());
-    GURL test_url = test_server()->GetURL("close-socket");
-    ExecuteSyncJSFunction(
-        rvh, base::StringPrintf("SetSrc('%s');", test_url.spec().c_str()));
-    string16 actual_title = title_watcher.WaitAndGetTitle();
-    EXPECT_EQ(expected_title, actual_title);
-  }
-
-  {
-    // Navigate the guest to an illegal chrome:// URL.
-    const string16 expected_title = ASCIIToUTF16("ERR_INVALID_URL");
-    content::TitleWatcher title_watcher(test_embedder()->web_contents(),
-                                        expected_title);
-    RenderViewHostImpl* rvh = static_cast<RenderViewHostImpl*>(
-        test_embedder()->web_contents()->GetRenderViewHost());
-    GURL test_url("chrome://newtab");
-    ExecuteSyncJSFunction(
-        rvh, base::StringPrintf("SetSrc('%s');", test_url.spec().c_str()));
-    string16 actual_title = title_watcher.WaitAndGetTitle();
-    EXPECT_EQ(expected_title, actual_title);
-  }
-
-  {
-    // Navigate the guest to an illegal file:// URL.
-    const string16 expected_title = ASCIIToUTF16("ERR_ABORTED");
-    content::TitleWatcher title_watcher(test_embedder()->web_contents(),
-                                        expected_title);
-    RenderViewHostImpl* rvh = static_cast<RenderViewHostImpl*>(
-        test_embedder()->web_contents()->GetRenderViewHost());
-    GURL test_url("file://foo");
-    ExecuteSyncJSFunction(
-        rvh, base::StringPrintf("SetSrc('%s');", test_url.spec().c_str()));
-    string16 actual_title = title_watcher.WaitAndGetTitle();
-    EXPECT_EQ(expected_title, actual_title);
-  }
-}
-
-IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, LoadRedirect) {
-  const char kEmbedderURL[] = "files/browser_plugin_embedder.html";
-  StartBrowserPluginTest(kEmbedderURL, "about:blank", true, "");
-
-  const string16 expected_title = ASCIIToUTF16("redirected");
-  content::TitleWatcher title_watcher(test_embedder()->web_contents(),
-                                      expected_title);
-
-  // Navigate with a redirect and wait until the title changes.
-  GURL redirect_url(test_server()->GetURL(
-      "server-redirect?files/title1.html"));
-  RenderViewHostImpl* rvh = static_cast<RenderViewHostImpl*>(
-      test_embedder()->web_contents()->GetRenderViewHost());
-  ExecuteSyncJSFunction(
-      rvh, base::StringPrintf("SetSrc('%s');", redirect_url.spec().c_str()));
-
-  string16 actual_title = title_watcher.WaitAndGetTitle();
-  EXPECT_EQ(expected_title, actual_title);
-
-  // Verify that we heard a loadRedirect during the navigation.
-  scoped_ptr<base::Value> value =
-      content::ExecuteScriptAndGetValue(rvh, "redirectOldUrl");
-  std::string result;
-  EXPECT_TRUE(value->GetAsString(&result));
-  EXPECT_EQ(redirect_url.spec().c_str(), result);
-
-  value = content::ExecuteScriptAndGetValue(rvh, "redirectNewUrl");
-  EXPECT_TRUE(value->GetAsString(&result));
-  EXPECT_EQ(test_server()->GetURL("files/title1.html").spec().c_str(), result);
-}
-
 // Always failing in the win7_aura try bot.  See http://crbug.com/181107.
 #if defined(OS_WIN) && defined(USE_AURA)
 #define MAYBE_AcceptDragEvents DISABLED_AcceptDragEvents
@@ -914,8 +601,9 @@ IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, LoadRedirect) {
 // Tests that a drag-n-drop over the browser plugin in the embedder happens
 // correctly.
 IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, MAYBE_AcceptDragEvents) {
-  const char kEmbedderURL[] = "files/browser_plugin_dragging.html";
-  StartBrowserPluginTest(kEmbedderURL, kHTMLForGuestAcceptDrag, true, "");
+  const char kEmbedderURL[] = "/browser_plugin_dragging.html";
+  StartBrowserPluginTest(
+      kEmbedderURL, kHTMLForGuestAcceptDrag, true, std::string());
 
   RenderViewHostImpl* rvh = static_cast<RenderViewHostImpl*>(
       test_embedder()->web_contents()->GetRenderViewHost());
@@ -934,7 +622,7 @@ IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, MAYBE_AcceptDragEvents) {
   double end_x, end_y;
   ASSERT_TRUE(end->GetDouble(0, &end_x) && end->GetDouble(1, &end_y));
 
-  WebDropData drop_data;
+  DropData drop_data;
   GURL url = GURL("https://www.domain.com/index.html");
   drop_data.url = url;
 
@@ -969,9 +657,9 @@ IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, MAYBE_AcceptDragEvents) {
 // message.
 IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, PostMessage) {
   const char* kTesting = "testing123";
-  const char* kEmbedderURL = "files/browser_plugin_embedder.html";
-  const char* kGuestURL = "files/browser_plugin_post_message_guest.html";
-  StartBrowserPluginTest(kEmbedderURL, kGuestURL, false, "");
+  const char* kEmbedderURL = "/browser_plugin_embedder.html";
+  const char* kGuestURL = "/browser_plugin_post_message_guest.html";
+  StartBrowserPluginTest(kEmbedderURL, kGuestURL, false, std::string());
   RenderViewHostImpl* rvh = static_cast<RenderViewHostImpl*>(
       test_embedder()->web_contents()->GetRenderViewHost());
   {
@@ -997,9 +685,9 @@ IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, PostMessage) {
 // iframe targeting is fixed (see http://crbug.com/153701).
 IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, DISABLED_PostMessageToIFrame) {
   const char* kTesting = "testing123";
-  const char* kEmbedderURL = "files/browser_plugin_embedder.html";
-  const char* kGuestURL = "files/browser_plugin_post_message_guest.html";
-  StartBrowserPluginTest(kEmbedderURL, kGuestURL, false, "");
+  const char* kEmbedderURL = "/browser_plugin_embedder.html";
+  const char* kGuestURL = "/browser_plugin_post_message_guest.html";
+  StartBrowserPluginTest(kEmbedderURL, kGuestURL, false, std::string());
   RenderViewHostImpl* rvh = static_cast<RenderViewHostImpl*>(
       test_embedder()->web_contents()->GetRenderViewHost());
   {
@@ -1021,8 +709,8 @@ IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, DISABLED_PostMessageToIFrame) {
 
     RenderViewHostImpl* guest_rvh = static_cast<RenderViewHostImpl*>(
         test_guest()->web_contents()->GetRenderViewHost());
-    GURL test_url = test_server()->GetURL(
-        "files/browser_plugin_post_message_guest.html");
+    GURL test_url = embedded_test_server()->GetURL(
+        "/browser_plugin_post_message_guest.html");
     ExecuteSyncJSFunction(
         guest_rvh,
         base::StringPrintf(
@@ -1043,50 +731,10 @@ IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, DISABLED_PostMessageToIFrame) {
   }
 }
 
-IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, LoadStop) {
-  const char* kEmbedderURL = "files/browser_plugin_embedder.html";
-  StartBrowserPluginTest(kEmbedderURL, "about:blank", true, "");
-
-  const string16 expected_title = ASCIIToUTF16("loadStop");
-  content::TitleWatcher title_watcher(
-     test_embedder()->web_contents(), expected_title);
-  // Renavigate the guest to |kHTMLForGuest|.
-  RenderViewHostImpl* rvh = static_cast<RenderViewHostImpl*>(
-      test_embedder()->web_contents()->GetRenderViewHost());
-  ExecuteSyncJSFunction(rvh,
-                        base::StringPrintf("SetSrc('%s');", kHTMLForGuest));
-
-  string16 actual_title = title_watcher.WaitAndGetTitle();
-  EXPECT_EQ(expected_title, actual_title);
-}
-
-IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, LoadCommit) {
-  const char* kEmbedderURL = "files/browser_plugin_embedder.html";
-  StartBrowserPluginTest(kEmbedderURL, "about:blank", true, "");
-
-  const string16 expected_title = ASCIIToUTF16(
-      base::StringPrintf("loadCommit:%s", kHTMLForGuest));
-  content::TitleWatcher title_watcher(
-      test_embedder()->web_contents(), expected_title);
-  // Renavigate the guest to |kHTMLForGuest|.
-  RenderViewHostImpl* rvh = static_cast<RenderViewHostImpl*>(
-      test_embedder()->web_contents()->GetRenderViewHost());
-  ExecuteSyncJSFunction(rvh,
-                        base::StringPrintf("SetSrc('%s');", kHTMLForGuest));
-
-  string16 actual_title = title_watcher.WaitAndGetTitle();
-  EXPECT_EQ(expected_title, actual_title);
-  scoped_ptr<base::Value> is_top_level =
-      content::ExecuteScriptAndGetValue(rvh, "commitIsTopLevel");
-  bool top_level_bool = false;
-  EXPECT_TRUE(is_top_level->GetAsBoolean(&top_level_bool));
-  EXPECT_EQ(true, top_level_bool);
-}
-
 // This test verifies that if a browser plugin is hidden before navigation,
 // the guest starts off hidden.
 IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, HiddenBeforeNavigation) {
-  const char* kEmbedderURL = "files/browser_plugin_embedder.html";
+  const char* kEmbedderURL = "/browser_plugin_embedder.html";
   const std::string embedder_code =
       "document.getElementById('plugin').style.visibility = 'hidden'";
   StartBrowserPluginTest(
@@ -1094,31 +742,10 @@ IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, HiddenBeforeNavigation) {
   EXPECT_FALSE(test_guest()->visible());
 }
 
-// This test verifies that if we lose the guest, and get a new one,
-// the new guest will inherit the visibility state of the old guest.
-IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, VisibilityPreservation) {
-  const char* kEmbedderURL = "files/browser_plugin_embedder.html";
-  StartBrowserPluginTest(kEmbedderURL, kHTMLForGuest, true, "");
-  RenderViewHostImpl* rvh = static_cast<RenderViewHostImpl*>(
-      test_embedder()->web_contents()->GetRenderViewHost());
-  // Hide the BrowserPlugin.
-  ExecuteSyncJSFunction(
-      rvh, "document.getElementById('plugin').style.visibility = 'hidden';");
-  test_guest()->WaitUntilHidden();
-  // Kill the current guest.
-  ExecuteSyncJSFunction(rvh, "document.getElementById('plugin').terminate();");
-  test_guest()->WaitForExit();
-  // Get a new guest.
-  ExecuteSyncJSFunction(rvh, "document.getElementById('plugin').reload();");
-  test_guest()->WaitForLoadStop();
-  // Verify that the guest is told to hide.
-  test_guest()->WaitUntilHidden();
-}
-
 // This test verifies that if a browser plugin is focused before navigation then
 // the guest starts off focused.
 IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, FocusBeforeNavigation) {
-  const char* kEmbedderURL = "files/browser_plugin_embedder.html";
+  const char* kEmbedderURL = "/browser_plugin_embedder.html";
   const std::string embedder_code =
       "document.getElementById('plugin').focus();";
   StartBrowserPluginTest(
@@ -1133,51 +760,9 @@ IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, FocusBeforeNavigation) {
   EXPECT_TRUE(result);
 }
 
-// This test verifies that if we lose the guest, and get a new one,
-// the new guest will inherit the focus state of the old guest.
-// crbug.com/170249
-IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, DISABLED_FocusPreservation) {
-  const char* kEmbedderURL = "files/browser_plugin_embedder.html";
-  StartBrowserPluginTest(kEmbedderURL, kHTMLForGuest, true, "");
-  RenderViewHostImpl* rvh = static_cast<RenderViewHostImpl*>(
-      test_embedder()->web_contents()->GetRenderViewHost());
-  RenderViewHostImpl* guest_rvh = static_cast<RenderViewHostImpl*>(
-      test_guest()->web_contents()->GetRenderViewHost());
-  {
-    // Focus the BrowserPlugin. This will have the effect of also focusing the
-    // current guest.
-    ExecuteSyncJSFunction(rvh, "document.getElementById('plugin').focus();");
-    // Verify that key presses go to the guest.
-    SimulateSpaceKeyPress(test_embedder()->web_contents());
-    test_guest()->WaitForInput();
-    // Verify that the guest is focused.
-    scoped_ptr<base::Value> value =
-        content::ExecuteScriptAndGetValue(guest_rvh, "document.hasFocus()");
-    bool result = false;
-    ASSERT_TRUE(value->GetAsBoolean(&result));
-    EXPECT_TRUE(result);
-  }
-
-  // Kill the current guest.
-  ExecuteSyncJSFunction(rvh, "document.getElementById('plugin').terminate();");
-  test_guest()->WaitForExit();
-
-  {
-    // Get a new guest.
-    ExecuteSyncJSFunction(rvh, "document.getElementById('plugin').reload();");
-    test_guest()->WaitForLoadStop();
-    // Verify that the guest is focused.
-    scoped_ptr<base::Value> value =
-        content::ExecuteScriptAndGetValue(guest_rvh, "document.hasFocus()");
-    bool result = false;
-    ASSERT_TRUE(value->GetAsBoolean(&result));
-    EXPECT_TRUE(result);
-  }
-}
-
 IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, FocusTracksEmbedder) {
-  const char* kEmbedderURL = "files/browser_plugin_embedder.html";
-  StartBrowserPluginTest(kEmbedderURL, kHTMLForGuest, true, "");
+  const char* kEmbedderURL = "/browser_plugin_embedder.html";
+  StartBrowserPluginTest(kEmbedderURL, kHTMLForGuest, true, std::string());
   RenderViewHostImpl* rvh = static_cast<RenderViewHostImpl*>(
       test_embedder()->web_contents()->GetRenderViewHost());
   RenderViewHostImpl* guest_rvh = static_cast<RenderViewHostImpl*>(
@@ -1204,7 +789,7 @@ IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, FocusTracksEmbedder) {
 // This test verifies that if a browser plugin is in autosize mode before
 // navigation then the guest starts auto-sized.
 IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, AutoSizeBeforeNavigation) {
-  const char* kEmbedderURL = "files/browser_plugin_embedder.html";
+  const char* kEmbedderURL = "/browser_plugin_embedder.html";
   const std::string embedder_code =
       "document.getElementById('plugin').minwidth = 300;"
       "document.getElementById('plugin').minheight = 200;"
@@ -1220,9 +805,9 @@ IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, AutoSizeBeforeNavigation) {
 // This test verifies that enabling autosize resizes the guest and triggers
 // a 'sizechanged' event.
 IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, AutoSizeAfterNavigation) {
-  const char* kEmbedderURL = "files/browser_plugin_embedder.html";
+  const char* kEmbedderURL = "/browser_plugin_embedder.html";
   StartBrowserPluginTest(
-      kEmbedderURL, kHTMLForGuestWithSize, true, "");
+      kEmbedderURL, kHTMLForGuestWithSize, true, std::string());
   RenderViewHostImpl* rvh = static_cast<RenderViewHostImpl*>(
       test_embedder()->web_contents()->GetRenderViewHost());
 
@@ -1260,7 +845,7 @@ IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, AutoSizeAfterNavigation) {
 
 // Test for regression http://crbug.com/162961.
 IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, GetRenderViewHostAtPositionTest) {
-  const char kEmbedderURL[] = "files/browser_plugin_embedder.html";
+  const char kEmbedderURL[] = "/browser_plugin_embedder.html";
   const std::string embedder_code =
       base::StringPrintf("SetSize(%d, %d);", 100, 100);
   StartBrowserPluginTest(kEmbedderURL, kHTMLForGuestWithSize, true,
@@ -1273,55 +858,10 @@ IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, GetRenderViewHostAtPositionTest) {
             test_embedder()->last_rvh_at_position_response());
 }
 
-IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, ChangeWindowName) {
-  const char kEmbedderURL[] = "files/browser_plugin_naming_embedder.html";
-  const char* kGuestURL = "files/browser_plugin_naming_guest.html";
-  StartBrowserPluginTest(kEmbedderURL, kGuestURL, false, "");
-
-  RenderViewHostImpl* rvh = static_cast<RenderViewHostImpl*>(
-      test_embedder()->web_contents()->GetRenderViewHost());
-  // Verify that the plugin's name is properly initialized.
-  {
-    scoped_ptr<base::Value> value = content::ExecuteScriptAndGetValue(
-        rvh, "document.getElementById('plugin').name");
-    std::string result;
-    EXPECT_TRUE(value->GetAsString(&result));
-    EXPECT_EQ("start", result);
-  }
-  {
-    // Open a channel with the guest, wait until it replies,
-    // then verify that the plugin's name has been updated.
-    const string16 expected_title = ASCIIToUTF16("guest");
-    content::TitleWatcher title_watcher(test_embedder()->web_contents(),
-                                        expected_title);
-    ExecuteSyncJSFunction(rvh, "OpenCommChannel();");
-    string16 actual_title = title_watcher.WaitAndGetTitle();
-    EXPECT_EQ(expected_title, actual_title);
-
-    scoped_ptr<base::Value> value = content::ExecuteScriptAndGetValue(
-        rvh, "document.getElementById('plugin').name");
-    std::string result;
-    EXPECT_TRUE(value->GetAsString(&result));
-    EXPECT_EQ("guest", result);
-  }
-  {
-    // Set the plugin's name and verify that the window.name of the guest
-    // has been updated.
-    const string16 expected_title = ASCIIToUTF16("foobar");
-    content::TitleWatcher title_watcher(test_embedder()->web_contents(),
-                                        expected_title);
-    ExecuteSyncJSFunction(rvh,
-        "document.getElementById('plugin').name = 'foobar';");
-    string16 actual_title = title_watcher.WaitAndGetTitle();
-    EXPECT_EQ(expected_title, actual_title);
-
-  }
-}
-
 // This test verifies that all autosize attributes can be removed
 // without crashing the plugin, or throwing errors.
 IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, RemoveAutosizeAttributes) {
-  const char* kEmbedderURL = "files/browser_plugin_embedder.html";
+  const char* kEmbedderURL = "/browser_plugin_embedder.html";
   const std::string embedder_code =
       "document.getElementById('plugin').minwidth = 300;"
       "document.getElementById('plugin').minheight = 200;"
@@ -1347,7 +887,7 @@ IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, RemoveAutosizeAttributes) {
 
 // This test verifies that autosize works when some of the parameters are unset.
 IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, PartialAutosizeAttributes) {
-  const char* kEmbedderURL = "files/browser_plugin_embedder.html";
+  const char* kEmbedderURL = "/browser_plugin_embedder.html";
   const std::string embedder_code =
       "document.getElementById('plugin').minwidth = 300;"
       "document.getElementById('plugin').minheight = 200;"
@@ -1389,6 +929,16 @@ IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, PartialAutosizeAttributes) {
     string16 actual_title = title_watcher.WaitAndGetTitle();
     EXPECT_EQ(expected_title, actual_title);
   }
+}
+
+// This test verifies that if IME is enabled in the embedder, it is also enabled
+// in the guest.
+IN_PROC_BROWSER_TEST_F(BrowserPluginHostTest, VerifyInputMethodActive) {
+  const char* kEmbedderURL = "/browser_plugin_embedder.html";
+  StartBrowserPluginTest(kEmbedderURL, kHTMLForGuest, true, std::string());
+  RenderViewHostImpl* rvh = static_cast<RenderViewHostImpl*>(
+      test_guest()->web_contents()->GetRenderViewHost());
+  EXPECT_TRUE(rvh->input_method_active());
 }
 
 }  // namespace content

@@ -11,10 +11,11 @@
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/json/json_reader.h"
-#include "base/message_loop.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
-#include "base/utf_string_conversions.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "google_apis/gaia/gaia_urls.h"
 #include "google_apis/gaia/google_service_auth_error.h"
@@ -45,22 +46,45 @@ static const char kIssueAdviceValueAuto[] = "auto";
 static const char kIssueAdviceValueConsent[] = "consent";
 static const char kAccessTokenKey[] = "token";
 static const char kConsentKey[] = "consent";
+static const char kExpiresInKey[] = "expiresIn";
 static const char kScopesKey[] = "scopes";
 static const char kDescriptionKey[] = "description";
 static const char kDetailKey[] = "detail";
 static const char kDetailSeparators[] = "\n";
+static const char kError[] = "error";
+static const char kMessage[] = "message";
 
-static GoogleServiceAuthError CreateAuthError(URLRequestStatus status) {
+static GoogleServiceAuthError CreateAuthError(const net::URLFetcher* source) {
+  URLRequestStatus status = source->GetStatus();
   if (status.status() == URLRequestStatus::CANCELED) {
     return GoogleServiceAuthError(GoogleServiceAuthError::REQUEST_CANCELED);
-  } else {
-    // TODO(munjal): Improve error handling. Currently we return connection
-    // error for even application level errors. We need to either expand the
-    // GoogleServiceAuthError enum or create a new one to report better
-    // errors.
+  }
+  if (status.status() == URLRequestStatus::FAILED) {
     DLOG(WARNING) << "Server returned error: errno " << status.error();
     return GoogleServiceAuthError::FromConnectionError(status.error());
   }
+
+  std::string response_body;
+  source->GetResponseAsString(&response_body);
+  scoped_ptr<Value> value(base::JSONReader::Read(response_body));
+  DictionaryValue* response;
+  if (!value.get() || !value->GetAsDictionary(&response)) {
+    return GoogleServiceAuthError::FromUnexpectedServiceResponse(
+        base::StringPrintf(
+            "Not able to parse a JSON object from a service response. "
+            "HTTP Status of the response is: %d", source->GetResponseCode()));
+  }
+  DictionaryValue* error;
+  if (!response->GetDictionary(kError, &error)) {
+    return GoogleServiceAuthError::FromUnexpectedServiceResponse(
+        "Not able to find a detailed error in a service response.");
+  }
+  std::string message;
+  if (!error->GetString(kMessage, &message)) {
+    return GoogleServiceAuthError::FromUnexpectedServiceResponse(
+        "Not able to find an error message within a service error.");
+  }
+  return GoogleServiceAuthError::FromServiceError(message);
 }
 
 }  // namespace
@@ -75,12 +99,12 @@ bool IssueAdviceInfoEntry::operator ==(const IssueAdviceInfoEntry& rhs) const {
 OAuth2MintTokenFlow::Parameters::Parameters() : mode(MODE_ISSUE_ADVICE) {}
 
 OAuth2MintTokenFlow::Parameters::Parameters(
-    const std::string& rt,
+    const std::string& at,
     const std::string& eid,
     const std::string& cid,
     const std::vector<std::string>& scopes_arg,
     Mode mode_arg)
-    : login_refresh_token(rt),
+    : access_token(at),
       extension_id(eid),
       client_id(cid),
       scopes(scopes_arg),
@@ -89,23 +113,23 @@ OAuth2MintTokenFlow::Parameters::Parameters(
 
 OAuth2MintTokenFlow::Parameters::~Parameters() {}
 
-OAuth2MintTokenFlow::OAuth2MintTokenFlow(
-    URLRequestContextGetter* context,
-    Delegate* delegate,
-    const Parameters& parameters)
-    : OAuth2ApiCallFlow(
-          context, parameters.login_refresh_token,
-          "", std::vector<std::string>()),
+OAuth2MintTokenFlow::OAuth2MintTokenFlow(URLRequestContextGetter* context,
+                                         Delegate* delegate,
+                                         const Parameters& parameters)
+    : OAuth2ApiCallFlow(context,
+                        std::string(),
+                        parameters.access_token,
+                        std::vector<std::string>()),
       delegate_(delegate),
       parameters_(parameters),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {
-}
+      weak_factory_(this) {}
 
 OAuth2MintTokenFlow::~OAuth2MintTokenFlow() { }
 
-void OAuth2MintTokenFlow::ReportSuccess(const std::string& access_token) {
+void OAuth2MintTokenFlow::ReportSuccess(const std::string& access_token,
+                                        int time_to_live) {
   if (delegate_)
-    delegate_->OnMintTokenSuccess(access_token);
+    delegate_->OnMintTokenSuccess(access_token, time_to_live);
 
   // |this| may already be deleted.
 }
@@ -151,34 +175,39 @@ std::string OAuth2MintTokenFlow::CreateApiCallBody() {
 
 void OAuth2MintTokenFlow::ProcessApiCallSuccess(
     const net::URLFetcher* source) {
-  // TODO(munjal): Change error code paths in this method to report an
-  // internal error.
   std::string response_body;
   source->GetResponseAsString(&response_body);
   scoped_ptr<base::Value> value(base::JSONReader::Read(response_body));
-  DictionaryValue* dict = NULL;
+  base::DictionaryValue* dict = NULL;
   if (!value.get() || !value->GetAsDictionary(&dict)) {
-    ReportFailure(GoogleServiceAuthError::FromConnectionError(101));
+    ReportFailure(GoogleServiceAuthError::FromUnexpectedServiceResponse(
+        "Not able to parse a JSON object from a service response."));
     return;
   }
 
-  std::string issue_advice;
-  if (!dict->GetString(kIssueAdviceKey, &issue_advice)) {
-    ReportFailure(GoogleServiceAuthError::FromConnectionError(101));
+  std::string issue_advice_value;
+  if (!dict->GetString(kIssueAdviceKey, &issue_advice_value)) {
+    ReportFailure(GoogleServiceAuthError::FromUnexpectedServiceResponse(
+        "Not able to find an issueAdvice in a service response."));
     return;
   }
-  if (issue_advice == kIssueAdviceValueConsent) {
+  if (issue_advice_value == kIssueAdviceValueConsent) {
     IssueAdviceInfo issue_advice;
     if (ParseIssueAdviceResponse(dict, &issue_advice))
       ReportIssueAdviceSuccess(issue_advice);
     else
-      ReportFailure(GoogleServiceAuthError::FromConnectionError(101));
+      ReportFailure(GoogleServiceAuthError::FromUnexpectedServiceResponse(
+          "Not able to parse the contents of consent "
+          "from a service response."));
   } else {
     std::string access_token;
-    if (ParseMintTokenResponse(dict, &access_token))
-      ReportSuccess(access_token);
+    int time_to_live;
+    if (ParseMintTokenResponse(dict, &access_token, &time_to_live))
+      ReportSuccess(access_token, time_to_live);
     else
-      ReportFailure(GoogleServiceAuthError::FromConnectionError(101));
+      ReportFailure(GoogleServiceAuthError::FromUnexpectedServiceResponse(
+          "Not able to parse the contents of access token "
+          "from a service response."));
   }
 
   // |this| may be deleted!
@@ -186,7 +215,7 @@ void OAuth2MintTokenFlow::ProcessApiCallSuccess(
 
 void OAuth2MintTokenFlow::ProcessApiCallFailure(
     const net::URLFetcher* source) {
-  ReportFailure(CreateAuthError(source->GetStatus()));
+  ReportFailure(CreateAuthError(source));
 }
 void OAuth2MintTokenFlow::ProcessNewAccessToken(
     const std::string& access_token) {
@@ -201,10 +230,15 @@ void OAuth2MintTokenFlow::ProcessMintAccessTokenFailure(
 
 // static
 bool OAuth2MintTokenFlow::ParseMintTokenResponse(
-    const base::DictionaryValue* dict, std::string* access_token) {
+    const base::DictionaryValue* dict, std::string* access_token,
+    int* time_to_live) {
   CHECK(dict);
   CHECK(access_token);
-  return dict->GetString(kAccessTokenKey, access_token);
+  CHECK(time_to_live);
+  std::string ttl_string;
+  return dict->GetString(kExpiresInKey, &ttl_string) &&
+      base::StringToInt(ttl_string, time_to_live) &&
+      dict->GetString(kAccessTokenKey, access_token);
 }
 
 // static

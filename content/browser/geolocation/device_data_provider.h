@@ -27,9 +27,9 @@
 #include "base/basictypes.h"
 #include "base/bind.h"
 #include "base/memory/ref_counted.h"
-#include "base/message_loop.h"
-#include "base/string16.h"
-#include "base/string_util.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/string16.h"
+#include "base/strings/string_util.h"
 #include "base/threading/non_thread_safe.h"
 #include "content/common/content_export.h"
 
@@ -92,7 +92,7 @@ template<typename DataType>
 class DeviceDataProviderImplBase : public DeviceDataProviderImplBaseHack {
  public:
   DeviceDataProviderImplBase()
-      : container_(NULL), client_loop_(MessageLoop::current()) {
+      : container_(NULL), client_loop_(base::MessageLoop::current()) {
     DCHECK(client_loop_);
   }
 
@@ -138,12 +138,10 @@ class DeviceDataProviderImplBase : public DeviceDataProviderImplBaseHack {
   }
 
   bool CalledOnClientThread() const {
-    return MessageLoop::current() == this->client_loop_;
+    return base::MessageLoop::current() == this->client_loop_;
   }
 
-  MessageLoop* client_loop() const {
-    return client_loop_;
-  }
+  base::MessageLoop* client_loop() const { return client_loop_; }
 
  private:
   void NotifyListenersInClientLoop() {
@@ -162,7 +160,7 @@ class DeviceDataProviderImplBase : public DeviceDataProviderImplBaseHack {
 
   // Reference to the client's message loop, all callbacks and access to
   // the listeners_ member should happen in this context.
-  MessageLoop* client_loop_;
+  base::MessageLoop* client_loop_;
 
   ListenersSet listeners_;
 
@@ -255,11 +253,11 @@ class DeviceDataProvider : public base::NonThreadSafe {
   DeviceDataProvider() {
     DCHECK(factory_function_);
     impl_ = (*factory_function_)();
-    DCHECK(impl_);
+    DCHECK(impl_.get());
     impl_->SetContainer(this);
   }
   virtual ~DeviceDataProvider() {
-    DCHECK(impl_);
+    DCHECK(impl_.get());
     impl_->SetContainer(NULL);
   }
 

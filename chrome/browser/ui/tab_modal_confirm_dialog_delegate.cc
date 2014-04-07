@@ -4,7 +4,7 @@
 
 #include "chrome/browser/ui/tab_modal_confirm_dialog_delegate.h"
 
-#include "chrome/common/chrome_notification_types.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/notification_source.h"
 #include "content/public/browser/web_contents.h"
@@ -36,8 +36,7 @@ TabModalConfirmDialogDelegate::~TabModalConfirmDialogDelegate() {
 void TabModalConfirmDialogDelegate::Cancel() {
   if (closing_)
     return;
-  // Make sure we won't do anything when |Cancel()| or |Accept()| is called
-  // again.
+  // Make sure we won't do anything when another action occurs.
   closing_ = true;
   OnCanceled();
   CloseDialog();
@@ -46,13 +45,21 @@ void TabModalConfirmDialogDelegate::Cancel() {
 void TabModalConfirmDialogDelegate::Accept() {
   if (closing_)
     return;
-  // Make sure we won't do anything when |Cancel()| or |Accept()| is called
-  // again.
+  // Make sure we won't do anything when another action occurs.
   closing_ = true;
   OnAccepted();
   CloseDialog();
 }
 
+void TabModalConfirmDialogDelegate::LinkClicked(
+    WindowOpenDisposition disposition) {
+  if (closing_)
+    return;
+  // Make sure we won't do anything when another action occurs.
+  closing_ = true;
+  OnLinkClicked(disposition);
+  CloseDialog();
+}
 
 void TabModalConfirmDialogDelegate::Observe(
     int type,
@@ -62,10 +69,19 @@ void TabModalConfirmDialogDelegate::Observe(
   // the same page anymore) or if the tab is closed.
   if (type == content::NOTIFICATION_LOAD_START ||
       type == chrome::NOTIFICATION_TAB_CLOSING) {
-    Cancel();
+    Close();
   } else {
     NOTREACHED();
   }
+}
+
+void TabModalConfirmDialogDelegate::Close() {
+  if (closing_)
+    return;
+  // Make sure we won't do anything when another action occurs.
+  closing_ = true;
+  OnClosed();
+  CloseDialog();
 }
 
 gfx::Image* TabModalConfirmDialogDelegate::GetIcon() {
@@ -80,6 +96,10 @@ string16 TabModalConfirmDialogDelegate::GetCancelButtonTitle() {
   return l10n_util::GetStringUTF16(IDS_CANCEL);
 }
 
+string16 TabModalConfirmDialogDelegate::GetLinkText() const {
+  return string16();
+}
+
 const char* TabModalConfirmDialogDelegate::GetAcceptButtonIcon() {
   return NULL;
 }
@@ -92,6 +112,13 @@ void TabModalConfirmDialogDelegate::OnAccepted() {
 }
 
 void TabModalConfirmDialogDelegate::OnCanceled() {
+}
+
+void TabModalConfirmDialogDelegate::OnLinkClicked(
+    WindowOpenDisposition disposition) {
+}
+
+void TabModalConfirmDialogDelegate::OnClosed() {
 }
 
 void TabModalConfirmDialogDelegate::CloseDialog() {

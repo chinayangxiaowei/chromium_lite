@@ -10,6 +10,8 @@ import android.net.Uri;
 import java.util.concurrent.TimeUnit;
 
 import org.chromium.base.test.util.UrlUtils;
+import org.chromium.content.browser.test.util.Criteria;
+import org.chromium.content.browser.test.util.CriteriaHelper;
 import org.chromium.content.browser.test.util.DOMUtils;
 import org.chromium.content.browser.test.util.JavaScriptUtils;
 import org.chromium.content.browser.test.util.TestCallbackHelperContainer;

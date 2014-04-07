@@ -5,8 +5,9 @@
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/api/management/management_api.h"
 #include "chrome/browser/extensions/api/management/management_api_constants.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
@@ -17,8 +18,8 @@
 #include "chrome/browser/extensions/extension_test_message_listener.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_switches.h"
+#include "content/public/browser/notification_service.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/test/test_utils.h"
 
@@ -94,6 +95,16 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementApiBrowserTest,
 }
 
 IN_PROC_BROWSER_TEST_F(ExtensionManagementApiBrowserTest,
+                       SelfUninstallNoPermissions) {
+  ExtensionTestMessageListener listener1("success", false);
+  ASSERT_TRUE(LoadExtension(
+      test_data_dir_.AppendASCII("management/self_uninstall_helper")));
+  ASSERT_TRUE(LoadExtension(
+      test_data_dir_.AppendASCII("management/self_uninstall_noperm")));
+  ASSERT_TRUE(listener1.WaitUntilSatisfied());
+}
+
+IN_PROC_BROWSER_TEST_F(ExtensionManagementApiBrowserTest,
                        UninstallWithConfirmDialog) {
   ExtensionService* service = ExtensionSystem::Get(browser()->profile())->
       extension_service();
@@ -112,9 +123,9 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementApiBrowserTest,
 
   EXPECT_TRUE(MatchPattern(
       util::RunFunctionAndReturnError(
-          uninstall_function,
+          uninstall_function.get(),
           base::StringPrintf("[\"%s\", {\"showConfirmDialog\": true}]",
-              id.c_str()),
+                             id.c_str()),
           browser()),
       keys::kUninstallCanceledError));
 
@@ -126,7 +137,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementApiBrowserTest,
   ManagementUninstallFunction::SetAutoConfirmForTest(true);
 
   util::RunFunctionAndReturnSingleResult(
-      uninstall_function,
+      uninstall_function.get(),
       base::StringPrintf("[\"%s\", {\"showConfirmDialog\": true}]", id.c_str()),
       browser());
 
@@ -257,15 +268,15 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementApiEscalationTest,
   // This should succeed when user accepts dialog.
   CommandLine::ForCurrentProcess()->AppendSwitchASCII(
       switches::kAppsGalleryInstallAutoConfirmForTests, "accept");
-  SetEnabled(true, true, "");
+  SetEnabled(true, true, std::string());
 
   // Crash the extension. Mock a reload by disabling and then enabling. The
   // extension should be reloaded and enabled.
   ASSERT_TRUE(CrashEnabledExtension(kId));
-  SetEnabled(false, true, "");
-  SetEnabled(true, true, "");
-  const Extension* extension = ExtensionSystem::Get(browser()->profile())->
-      extension_service()->GetExtensionById(kId, false);
+  SetEnabled(false, true, std::string());
+  SetEnabled(true, true, std::string());
+  const Extension* extension = ExtensionSystem::Get(browser()->profile())
+      ->extension_service()->GetExtensionById(kId, false);
   EXPECT_TRUE(extension);
 }
 

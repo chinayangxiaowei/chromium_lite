@@ -8,7 +8,7 @@
 #ifndef CHROME_INSTALLER_UTIL_USER_EXPERIMENT_H_
 #define CHROME_INSTALLER_UTIL_USER_EXPERIMENT_H_
 
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "chrome/installer/util/util_constants.h"
 
 class CommandLine;
@@ -60,7 +60,7 @@ void LaunchBrowserUserExperiment(const CommandLine& base_command,
 // function just performs it.
 void InactiveUserToastExperiment(int flavor,
                                  const string16& experiment_group,
-                                 const Product& installation,
+                                 const Product& product,
                                  const base::FilePath& application_path);
 
 }  // namespace installer

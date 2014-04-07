@@ -5,16 +5,11 @@
 #include "base/basictypes.h"
 #include "base/environment.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/threading/platform_thread.h"
 #include "media/audio/audio_io.h"
 #include "media/audio/audio_manager_base.h"
 #include "testing/gtest/include/gtest/gtest.h"
-
-#if defined(OS_ANDROID)
-#include "base/android/jni_android.h"
-#include "media/audio/audio_manager_base.h"
-#endif
 
 namespace media {
 
@@ -72,11 +67,6 @@ static bool CanRunAudioTests(AudioManager* audio_man) {
 }
 
 static AudioInputStream* CreateTestAudioInputStream(AudioManager* audio_man) {
-#if defined(OS_ANDROID)
-  bool ret = media::AudioManagerBase::RegisterAudioManager(
-                 base::android::AttachCurrentThread());
-  EXPECT_TRUE(ret);
-#endif
   AudioInputStream* ais = audio_man->MakeAudioInputStream(
       AudioParameters(AudioParameters::AUDIO_PCM_LINEAR, CHANNEL_LAYOUT_STEREO,
                       kSamplingRate, 16, kSamplesPerPacket),
@@ -128,8 +118,14 @@ TEST(AudioInputTest, CreateAndClose) {
   ais->Close();
 }
 
+#if defined(OS_LINUX) && !defined(OS_CHROMEOS) && defined(ARCH_CPU_ARM_FAMILY)
+// This test is failing on ARM linux: http://crbug.com/238490
+#define MAYBE_OpenAndClose DISABLED_OpenAndClose
+#else
+#define MAYBE_OpenAndClose OpenAndClose
+#endif
 // Test create, open and close of an AudioInputStream without recording audio.
-TEST(AudioInputTest, OpenAndClose) {
+TEST(AudioInputTest, MAYBE_OpenAndClose) {
   scoped_ptr<AudioManager> audio_man(AudioManager::Create());
   if (!CanRunAudioTests(audio_man.get()))
     return;
@@ -138,8 +134,14 @@ TEST(AudioInputTest, OpenAndClose) {
   ais->Close();
 }
 
+#if defined(OS_LINUX) && !defined(OS_CHROMEOS) && defined(ARCH_CPU_ARM_FAMILY)
+// This test is failing on ARM linux: http://crbug.com/238490
+#define MAYBE_OpenStopAndClose DISABLED_OpenStopAndClose
+#else
+#define MAYBE_OpenStopAndClose OpenStopAndClose
+#endif
 // Test create, open, stop and close of an AudioInputStream without recording.
-TEST(AudioInputTest, OpenStopAndClose) {
+TEST(AudioInputTest, MAYBE_OpenStopAndClose) {
   scoped_ptr<AudioManager> audio_man(AudioManager::Create());
   if (!CanRunAudioTests(audio_man.get()))
     return;
@@ -149,12 +151,18 @@ TEST(AudioInputTest, OpenStopAndClose) {
   ais->Close();
 }
 
+#if defined(OS_LINUX) && !defined(OS_CHROMEOS) && defined(ARCH_CPU_ARM_FAMILY)
+// This test is failing on ARM linux: http://crbug.com/238490
+#define MAYBE_Record DISABLED_Record
+#else
+#define MAYBE_Record Record
+#endif
 // Test a normal recording sequence using an AudioInputStream.
-TEST(AudioInputTest, Record) {
+TEST(AudioInputTest, MAYBE_Record) {
   scoped_ptr<AudioManager> audio_man(AudioManager::Create());
   if (!CanRunAudioTests(audio_man.get()))
     return;
-  MessageLoop message_loop(MessageLoop::TYPE_DEFAULT);
+  base::MessageLoop message_loop(base::MessageLoop::TYPE_DEFAULT);
   AudioInputStream* ais = CreateTestAudioInputStream(audio_man.get());
   EXPECT_TRUE(ais->Open());
 
@@ -164,7 +172,7 @@ TEST(AudioInputTest, Record) {
   // extra time.
   message_loop.PostDelayedTask(
       FROM_HERE,
-      MessageLoop::QuitClosure(),
+      base::MessageLoop::QuitClosure(),
       base::TimeDelta::FromMilliseconds(690));
   message_loop.Run();
   EXPECT_GE(test_callback.callback_count(), 1);

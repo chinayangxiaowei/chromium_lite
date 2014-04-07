@@ -8,26 +8,59 @@
 
 #include "ash/caps_lock_delegate_stub.h"
 #include "ash/host/root_window_host_factory.h"
+#include "ash/session_state_delegate.h"
+#include "ash/session_state_delegate_stub.h"
 #include "ash/shell/context_menu.h"
 #include "ash/shell/example_factory.h"
 #include "ash/shell/launcher_delegate_impl.h"
 #include "ash/shell/toplevel_window.h"
 #include "ash/shell_window_ids.h"
 #include "ash/wm/window_util.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "ui/aura/window.h"
+#include "ui/keyboard/keyboard_controller_proxy.h"
+#include "ui/views/corewm/input_method_event_filter.h"
 
 namespace ash {
+
+namespace {
+
+class DummyKeyboardControllerProxy : public keyboard::KeyboardControllerProxy {
+ public:
+  DummyKeyboardControllerProxy() {}
+  virtual ~DummyKeyboardControllerProxy() {}
+
+ private:
+  // Overridden from keyboard::KeyboardControllerProxy:
+  virtual content::BrowserContext* GetBrowserContext() OVERRIDE {
+    return Shell::GetInstance()->browser_context();
+  }
+
+  virtual ui::InputMethod* GetInputMethod() OVERRIDE {
+    return Shell::GetInstance()->input_method_filter()->input_method();
+  }
+
+  virtual void RequestAudioInput(content::WebContents* web_contents,
+      const content::MediaStreamRequest& request,
+      const content::MediaResponseCallback& callback) OVERRIDE {
+    return;
+  }
+
+  DISALLOW_COPY_AND_ASSIGN(DummyKeyboardControllerProxy);
+};
+
+}  // namespace
+
 namespace shell {
 
 ShellDelegateImpl::ShellDelegateImpl()
     : watcher_(NULL),
       launcher_delegate_(NULL),
-      locked_(false),
       spoken_feedback_enabled_(false),
       high_contrast_enabled_(false),
       screen_magnifier_enabled_(false),
-      screen_magnifier_type_(kDefaultMagnifierType) {
+      screen_magnifier_type_(kDefaultMagnifierType),
+      large_cursor_enabled_(false) {
 }
 
 ShellDelegateImpl::~ShellDelegateImpl() {
@@ -39,43 +72,16 @@ void ShellDelegateImpl::SetWatcher(WindowWatcher* watcher) {
     launcher_delegate_->set_watcher(watcher);
 }
 
-bool ShellDelegateImpl::IsUserLoggedIn() const {
-  return true;
-}
-
-bool ShellDelegateImpl::IsSessionStarted() const {
-  return true;
-}
-
-bool ShellDelegateImpl::IsGuestSession() const {
+bool ShellDelegateImpl::IsFirstRunAfterBoot() const {
   return false;
 }
 
-bool ShellDelegateImpl::IsFirstRunAfterBoot() const {
+bool ShellDelegateImpl::IsMultiProfilesEnabled() const {
   return false;
 }
 
 bool ShellDelegateImpl::IsRunningInForcedAppMode() const {
   return false;
-}
-
-bool ShellDelegateImpl::CanLockScreen() const {
-  return true;
-}
-
-void ShellDelegateImpl::LockScreen() {
-  ash::shell::CreateLockScreen();
-  locked_ = true;
-  ash::Shell::GetInstance()->UpdateShelfVisibility();
-}
-
-void ShellDelegateImpl::UnlockScreen() {
-  locked_ = false;
-  ash::Shell::GetInstance()->UpdateShelfVisibility();
-}
-
-bool ShellDelegateImpl::IsScreenLocked() const {
-  return locked_;
 }
 
 void ShellDelegateImpl::PreInit() {
@@ -85,7 +91,7 @@ void ShellDelegateImpl::Shutdown() {
 }
 
 void ShellDelegateImpl::Exit() {
-  MessageLoopForUI::current()->Quit();
+  base::MessageLoopForUI::current()->Quit();
 }
 
 void ShellDelegateImpl::NewTab() {
@@ -96,6 +102,10 @@ void ShellDelegateImpl::NewWindow(bool incognito) {
   create_params.can_resize = true;
   create_params.can_maximize = true;
   ash::shell::ToplevelWindow::CreateToplevelWindow(create_params);
+}
+
+void ShellDelegateImpl::ToggleFullscreen() {
+  ToggleMaximized();
 }
 
 void ShellDelegateImpl::ToggleMaximized() {
@@ -110,17 +120,15 @@ void ShellDelegateImpl::OpenFileManager(bool as_dialog) {
 void ShellDelegateImpl::OpenCrosh() {
 }
 
-void ShellDelegateImpl::OpenMobileSetup(const std::string& service_path) {
-}
-
 void ShellDelegateImpl::RestoreTab() {
 }
 
-bool ShellDelegateImpl::RotatePaneFocus(Shell::Direction direction) {
-  return true;
+void ShellDelegateImpl::ShowKeyboardOverlay() {
 }
 
-void ShellDelegateImpl::ShowKeyboardOverlay() {
+keyboard::KeyboardControllerProxy*
+    ShellDelegateImpl::CreateKeyboardControllerProxy() {
+  return new DummyKeyboardControllerProxy();
 }
 
 void ShellDelegateImpl::ShowTaskManager() {
@@ -163,8 +171,19 @@ MagnifierType ShellDelegateImpl::GetMagnifierType() const {
   return screen_magnifier_type_;
 }
 
+void ShellDelegateImpl::SetLargeCursorEnabled(bool enabled) {
+  large_cursor_enabled_ = enabled;
+}
+
+bool ShellDelegateImpl::IsLargeCursorEnabled() const {
+  return large_cursor_enabled_;
+}
+
 bool ShellDelegateImpl::ShouldAlwaysShowAccessibilityMenu() const {
   return false;
+}
+
+void ShellDelegateImpl::SilenceSpokenFeedback() const {
 }
 
 app_list::AppListViewDelegate* ShellDelegateImpl::CreateAppListViewDelegate() {
@@ -189,6 +208,10 @@ ash::CapsLockDelegate* ShellDelegateImpl::CreateCapsLockDelegate() {
   return new CapsLockDelegateStub;
 }
 
+ash::SessionStateDelegate* ShellDelegateImpl::CreateSessionStateDelegate() {
+  return new SessionStateDelegateStub;
+}
+
 aura::client::UserActionClient* ShellDelegateImpl::CreateUserActionClient() {
   return NULL;
 }
@@ -208,14 +231,6 @@ void ShellDelegateImpl::HandleMediaPlayPause() {
 void ShellDelegateImpl::HandleMediaPrevTrack() {
 }
 
-string16 ShellDelegateImpl::GetTimeRemainingString(base::TimeDelta delta) {
-  return string16();
-}
-
-string16 ShellDelegateImpl::GetTimeDurationLongString(base::TimeDelta delta) {
-  return string16();
-}
-
 void ShellDelegateImpl::SaveScreenMagnifierScale(double scale) {
 }
 
@@ -231,8 +246,8 @@ RootWindowHostFactory* ShellDelegateImpl::CreateRootWindowHostFactory() {
   return RootWindowHostFactory::Create();
 }
 
-string16 ShellDelegateImpl::GetProductName() const {
-  return string16();
+base::string16 ShellDelegateImpl::GetProductName() const {
+  return base::string16();
 }
 
 }  // namespace shell

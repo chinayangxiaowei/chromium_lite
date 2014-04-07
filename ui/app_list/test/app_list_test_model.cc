@@ -4,7 +4,7 @@
 
 #include "ui/app_list/test/app_list_test_model.h"
 
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "ui/app_list/app_list_item_model.h"
 
 namespace app_list {
@@ -13,6 +13,10 @@ namespace test {
 void AppListTestModel::PopulateApps(int n) {
   for (int i = 0; i < n; ++i)
     AddItem(base::StringPrintf("Item %d", i));
+}
+
+void AppListTestModel::PopulateAppWithId(int id) {
+  AddItem(base::StringPrintf("Item %d", id));
 }
 
 std::string AppListTestModel::GetModelContent() {

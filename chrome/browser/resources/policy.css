@@ -22,6 +22,10 @@ body.uber-frame header {
   max-width: none;
 }
 
+html[dir='rtl'] body.uber-frame header {
+  right: 23px;
+}
+
 body.uber-frame section {
   max-width: none;
 }
@@ -56,22 +60,50 @@ div.label {
 }
 
 #show-unset-container {
+  float: right;
   text-align: right;
 }
 
 html[dir='rtl'] #show-unset-container {
+  float: left;
   text-align: left;
+}
+
+div.reload-policies-button {
+  float: left;
+}
+
+html[dir='rtl'] div.reload-policies-button {
+  float: right;
+}
+
+div.show-unset-checkbox {
+  float: right;
+}
+
+html[dir='rtl'] div.show-unset-checkbox {
+  float: left;
+}
+
+section.reload-show-unset-section {
+  padding-bottom: 30px;
+  padding-top: 15px;
+}
+
+section.status-box-section {
+  clear: both;
+}
+
+div.table-description {
+  color: rgb(100, 100, 100);
 }
 
 div.no-policies-set {
   color: rgb(180, 180, 180);
   font-size: 125%;
-  margin-top: 70px;
+  margin-bottom: 10px;
+  margin-top: 20px;
   text-align: center;
-}
-
-section:not(.empty) > div.no-policies-set {
-  display: none;
 }
 
 table {
@@ -84,6 +116,18 @@ table {
 
 section.empty > table {
   display: none;
+}
+
+section:not(.empty) > div.no-policies-set {
+  display: none;
+}
+
+#main-section {
+  -webkit-padding-start: 0;
+}
+
+section.policy-table-section {
+  padding-bottom: 10px;
 }
 
 th,
@@ -124,4 +168,11 @@ tbody:not(.show-overflowed-value) > tr.expanded-value-container {
 td.expanded-value {
   white-space: pre;
   word-wrap: break-word;
+}
+
+html:not(.focus-outline-visible)
+:enabled:focus:-webkit-any(input[type='checkbox'],
+                           input[type='radio'], button) {
+  /* Cancel border-color for :focus specified in widgets.css. */
+  border-color: rgba(0, 0, 0, 0.25);
 }

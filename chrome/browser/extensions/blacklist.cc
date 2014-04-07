@@ -11,11 +11,10 @@
 #include "base/memory/ref_counted.h"
 #include "base/prefs/pref_service.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/extension_prefs.h"
-#include "chrome/browser/safe_browsing/database_manager.h"
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
 #include "chrome/browser/safe_browsing/safe_browsing_util.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/pref_names.h"
 #include "content/public/browser/notification_details.h"
 #include "content/public/browser/notification_source.h"
@@ -116,7 +115,8 @@ class SafeBrowsingClientImpl
 
 void IsNotEmpty(const Blacklist::IsBlacklistedCallback& callback,
                 const std::set<std::string>& set) {
-  callback.Run(!set.empty());
+  callback.Run(set.empty() ? Blacklist::NOT_BLACKLISTED
+                           : Blacklist::BLACKLISTED);
 }
 
 }  // namespace
@@ -142,11 +142,11 @@ Blacklist::ScopedDatabaseManagerForTest::~ScopedDatabaseManagerForTest() {
 Blacklist::Blacklist(ExtensionPrefs* prefs) : prefs_(prefs) {
   scoped_refptr<SafeBrowsingDatabaseManager> database_manager =
       g_database_manager.Get().get();
-  if (database_manager) {
-    registrar_.Add(this,
-                   chrome::NOTIFICATION_SAFE_BROWSING_UPDATE_COMPLETE,
-                   content::Source<SafeBrowsingDatabaseManager>(
-                        database_manager));
+  if (database_manager.get()) {
+    registrar_.Add(
+        this,
+        chrome::NOTIFICATION_SAFE_BROWSING_UPDATE_COMPLETE,
+        content::Source<SafeBrowsingDatabaseManager>(database_manager.get()));
   }
 
   // TODO(kalman): Delete anything from the pref blacklist that is in the
@@ -180,10 +180,9 @@ void Blacklist::GetBlacklistedIDs(const std::set<std::string>& ids,
       pref_blacklisted_ids.insert(*it);
   }
 
-  if (!g_database_manager.Get().get()) {
+  if (!g_database_manager.Get().get().get()) {
     base::MessageLoopProxy::current()->PostTask(
-        FROM_HERE,
-        base::Bind(callback, pref_blacklisted_ids));
+        FROM_HERE, base::Bind(callback, pref_blacklisted_ids));
     return;
   }
 

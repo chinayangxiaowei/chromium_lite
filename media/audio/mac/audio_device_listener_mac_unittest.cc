@@ -7,7 +7,7 @@
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "media/audio/mac/audio_device_listener_mac.h"
 #include "media/base/bind_to_loop.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -63,8 +63,6 @@ class AudioDeviceListenerMacTest : public testing::Test {
         kAudioObjectPropertyElementMaster }
     };
 
-    // Force sample rate change so the listener fires.
-    output_device_listener_->current_sample_rate_++;
     return noErr == output_device_listener_->OnDefaultDeviceChanged(
         kAudioObjectSystemObject, 1, addresses, output_device_listener_.get());
   }
@@ -72,7 +70,7 @@ class AudioDeviceListenerMacTest : public testing::Test {
   MOCK_METHOD0(OnDeviceChange, void());
 
  protected:
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
   scoped_ptr<AudioDeviceListenerMac> output_device_listener_;
 
   DISALLOW_COPY_AND_ASSIGN(AudioDeviceListenerMacTest);

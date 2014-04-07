@@ -5,11 +5,13 @@
 #include "cc/quads/io_surface_draw_quad.h"
 
 #include "base/logging.h"
+#include "base/values.h"
+#include "cc/base/math_util.h"
 
 namespace cc {
 
 IOSurfaceDrawQuad::IOSurfaceDrawQuad()
-    : io_surface_texture_id(0),
+    : io_surface_resource_id(0),
       orientation(FLIPPED) {
 }
 
@@ -21,14 +23,14 @@ void IOSurfaceDrawQuad::SetNew(const SharedQuadState* shared_quad_state,
                                gfx::Rect rect,
                                gfx::Rect opaque_rect,
                                gfx::Size io_surface_size,
-                               unsigned io_surface_texture_id,
+                               unsigned io_surface_resource_id,
                                Orientation orientation) {
   gfx::Rect visible_rect = rect;
   bool needs_blending = false;
   DrawQuad::SetAll(shared_quad_state, DrawQuad::IO_SURFACE_CONTENT, rect,
-                   opaque_rect, visible_rect, needs_blending); 
+                   opaque_rect, visible_rect, needs_blending);
   this->io_surface_size = io_surface_size;
-  this->io_surface_texture_id = io_surface_texture_id;
+  this->io_surface_resource_id = io_surface_resource_id;
   this->orientation = orientation;
 }
 
@@ -38,25 +40,40 @@ void IOSurfaceDrawQuad::SetAll(const SharedQuadState* shared_quad_state,
                                gfx::Rect visible_rect,
                                bool needs_blending,
                                gfx::Size io_surface_size,
-                               unsigned io_surface_texture_id,
+                               unsigned io_surface_resource_id,
                                Orientation orientation) {
   DrawQuad::SetAll(shared_quad_state, DrawQuad::IO_SURFACE_CONTENT, rect,
                    opaque_rect, visible_rect, needs_blending);
   this->io_surface_size = io_surface_size;
-  this->io_surface_texture_id = io_surface_texture_id;
+  this->io_surface_resource_id = io_surface_resource_id;
   this->orientation = orientation;
 }
 
 void IOSurfaceDrawQuad::IterateResources(
     const ResourceIteratorCallback& callback) {
-  // TODO(danakj): Convert to TextureDrawQuad?
-  NOTIMPLEMENTED();
+  io_surface_resource_id = callback.Run(io_surface_resource_id);
 }
 
 const IOSurfaceDrawQuad* IOSurfaceDrawQuad::MaterialCast(
     const DrawQuad* quad) {
   DCHECK(quad->material == DrawQuad::IO_SURFACE_CONTENT);
   return static_cast<const IOSurfaceDrawQuad*>(quad);
+}
+
+void IOSurfaceDrawQuad::ExtendValue(base::DictionaryValue* value) const {
+  value->Set("io_surface_size", MathUtil::AsValue(io_surface_size).release());
+  value->SetInteger("io_surface_resource_id", io_surface_resource_id);
+  const char* orientation_string = NULL;
+  switch (orientation) {
+    case FLIPPED:
+      orientation_string = "flipped";
+      break;
+    case UNFLIPPED:
+      orientation_string = "unflipped";
+      break;
+  }
+
+  value->SetString("orientation", orientation_string);
 }
 
 }  // namespace cc

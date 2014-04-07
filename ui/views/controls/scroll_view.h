@@ -28,7 +28,7 @@ namespace views {
 
 class VIEWS_EXPORT ScrollView : public View, public ScrollBarController {
  public:
-  static const char* const kViewClassName;
+  static const char kViewClassName[];
 
   ScrollView();
   virtual ~ScrollView();
@@ -48,6 +48,10 @@ class VIEWS_EXPORT ScrollView : public View, public ScrollBarController {
   // Returns the visible region of the content View.
   gfx::Rect GetVisibleRect() const;
 
+  void set_hide_horizontal_scrollbar(bool visible) {
+    hide_horizontal_scrollbar_ = visible;
+  }
+
   // Retrieves the width/height of scrollbars. These return 0 if the scrollbar
   // has not yet been created.
   int GetScrollBarWidth() const;
@@ -66,8 +70,10 @@ class VIEWS_EXPORT ScrollView : public View, public ScrollBarController {
   virtual void Layout() OVERRIDE;
   virtual bool OnKeyPressed(const ui::KeyEvent& event) OVERRIDE;
   virtual bool OnMouseWheel(const ui::MouseWheelEvent& e) OVERRIDE;
+  virtual void OnMouseEntered(const ui::MouseEvent& event) OVERRIDE;
+  virtual void OnMouseExited(const ui::MouseEvent& event) OVERRIDE;
   virtual void OnGestureEvent(ui::GestureEvent* event) OVERRIDE;
-  virtual std::string GetClassName() const OVERRIDE;
+  virtual const char* GetClassName() const OVERRIDE;
 
   // ScrollBarController overrides:
   virtual void ScrollToPosition(ScrollBar* source, int position) OVERRIDE;
@@ -120,6 +126,10 @@ class VIEWS_EXPORT ScrollView : public View, public ScrollBarController {
 
   // Resize corner.
   View* resize_corner_;
+
+  // If true, never show the horizontal scrollbar (even if the contents is wider
+  // than the viewport).
+  bool hide_horizontal_scrollbar_;
 
   DISALLOW_COPY_AND_ASSIGN(ScrollView);
 };

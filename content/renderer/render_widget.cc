@@ -9,54 +9,61 @@
 #include "base/debug/trace_event.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/memory/singleton.h"
+#include "base/message_loop/message_loop.h"
 #include "base/metrics/histogram.h"
 #include "base/stl_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "cc/base/switches.h"
-#include "cc/base/thread.h"
-#include "cc/base/thread_impl.h"
 #include "cc/output/output_surface.h"
 #include "cc/trees/layer_tree_host.h"
+#include "content/child/npapi/webplugin.h"
 #include "content/common/gpu/client/webgraphicscontext3d_command_buffer_impl.h"
+#include "content/common/input_messages.h"
 #include "content/common/swapped_out_messages.h"
 #include "content/common/view_messages.h"
 #include "content/public/common/content_switches.h"
+#include "content/renderer/cursor_utils.h"
 #include "content/renderer/gpu/compositor_output_surface.h"
-#include "content/renderer/gpu/compositor_software_output_device_gl_adapter.h"
+#include "content/renderer/gpu/compositor_software_output_device.h"
+#include "content/renderer/gpu/delegated_compositor_output_surface.h"
 #include "content/renderer/gpu/input_handler_manager.h"
 #include "content/renderer/gpu/mailbox_output_surface.h"
 #include "content/renderer/gpu/render_widget_compositor.h"
+#include "content/renderer/ime_event_guard.h"
+#include "content/renderer/pepper/pepper_plugin_instance_impl.h"
 #include "content/renderer/render_process.h"
+#include "content/renderer/render_process_visibility_manager.h"
 #include "content/renderer/render_thread_impl.h"
 #include "content/renderer/renderer_webkitplatformsupport_impl.h"
 #include "ipc/ipc_sync_message.h"
 #include "skia/ext/platform_canvas.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebGraphicsContext3D.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebPoint.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebRect.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebSize.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebString.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebCursorInfo.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebHelperPlugin.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebPagePopup.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebPopupMenu.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebPopupMenuInfo.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebRange.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebScreenInfo.h"
+#include "third_party/WebKit/public/platform/WebGraphicsContext3D.h"
+#include "third_party/WebKit/public/platform/WebPoint.h"
+#include "third_party/WebKit/public/platform/WebRect.h"
+#include "third_party/WebKit/public/platform/WebSize.h"
+#include "third_party/WebKit/public/platform/WebString.h"
+#include "third_party/WebKit/public/web/WebCursorInfo.h"
+#include "third_party/WebKit/public/web/WebHelperPlugin.h"
+#include "third_party/WebKit/public/web/WebPagePopup.h"
+#include "third_party/WebKit/public/web/WebPopupMenu.h"
+#include "third_party/WebKit/public/web/WebPopupMenuInfo.h"
+#include "third_party/WebKit/public/web/WebRange.h"
+#include "third_party/WebKit/public/web/WebScreenInfo.h"
 #include "third_party/skia/include/core/SkShader.h"
 #include "ui/base/ui_base_switches.h"
+#include "ui/gfx/point.h"
 #include "ui/gfx/rect_conversions.h"
 #include "ui/gfx/size_conversions.h"
 #include "ui/gfx/skia_util.h"
 #include "ui/gl/gl_switches.h"
 #include "ui/surface/transport_dib.h"
-#include "webkit/compositor_bindings/web_rendering_stats_impl.h"
-#include "webkit/glue/webkit_glue.h"
-#include "webkit/gpu/webgraphicscontext3d_in_process_impl.h"
-#include "webkit/plugins/npapi/webplugin.h"
-#include "webkit/plugins/ppapi/ppapi_plugin_instance.h"
+#include "webkit/renderer/compositor_bindings/web_rendering_stats_impl.h"
+
+#if defined(OS_ANDROID)
+#include "content/renderer/android/synchronous_compositor_factory.h"
+#endif
 
 #if defined(OS_POSIX)
 #include "ipc/ipc_channel_posix.h"
@@ -64,12 +71,13 @@
 #include "third_party/skia/include/core/SkPixelRef.h"
 #endif  // defined(OS_POSIX)
 
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebWidget.h"
+#include "third_party/WebKit/public/web/WebWidget.h"
 
 using WebKit::WebCompositionUnderline;
 using WebKit::WebCursorInfo;
 using WebKit::WebGestureEvent;
 using WebKit::WebInputEvent;
+using WebKit::WebKeyboardEvent;
 using WebKit::WebMouseEvent;
 using WebKit::WebNavigationPolicy;
 using WebKit::WebPagePopup;
@@ -108,6 +116,7 @@ const char* GetEventName(WebInputEvent::Type type) {
     CASE_TYPE(GestureFlingStart);
     CASE_TYPE(GestureFlingCancel);
     CASE_TYPE(GestureTap);
+    CASE_TYPE(GestureTapUnconfirmed);
     CASE_TYPE(GestureTapDown);
     CASE_TYPE(GestureTapCancel);
     CASE_TYPE(GestureDoubleTap);
@@ -130,7 +139,51 @@ const char* GetEventName(WebInputEvent::Type type) {
 #undef CASE_TYPE
   return "";
 }
+
+typedef std::map<std::string, ui::TextInputMode> TextInputModeMap;
+
+class TextInputModeMapSingleton {
+ public:
+  static TextInputModeMapSingleton* GetInstance() {
+    return Singleton<TextInputModeMapSingleton>::get();
+  }
+  TextInputModeMapSingleton()
+      : map() {
+    map["verbatim"] = ui::TEXT_INPUT_MODE_VERBATIM;
+    map["latin"] = ui::TEXT_INPUT_MODE_LATIN;
+    map["latin-name"] = ui::TEXT_INPUT_MODE_LATIN_NAME;
+    map["latin-prose"] = ui::TEXT_INPUT_MODE_LATIN_PROSE;
+    map["full-width-latin"] = ui::TEXT_INPUT_MODE_FULL_WIDTH_LATIN;
+    map["kana"] = ui::TEXT_INPUT_MODE_KANA;
+    map["katakana"] = ui::TEXT_INPUT_MODE_KATAKANA;
+    map["numeric"] = ui::TEXT_INPUT_MODE_NUMERIC;
+    map["tel"] = ui::TEXT_INPUT_MODE_TEL;
+    map["email"] = ui::TEXT_INPUT_MODE_EMAIL;
+    map["url"] = ui::TEXT_INPUT_MODE_URL;
+  }
+  TextInputModeMap& Map() {
+    return map;
+  }
+ private:
+  TextInputModeMap map;
+
+  friend struct DefaultSingletonTraits<TextInputModeMapSingleton>;
+
+  DISALLOW_COPY_AND_ASSIGN(TextInputModeMapSingleton);
+};
+
+ui::TextInputMode ConvertInputMode(
+    const WebKit::WebString& input_mode) {
+  static TextInputModeMapSingleton* singleton =
+      TextInputModeMapSingleton::GetInstance();
+  TextInputModeMap::iterator it = singleton->Map().find(input_mode.utf8());
+  if (it == singleton->Map().end())
+    return ui::TEXT_INPUT_MODE_DEFAULT;
+  return it->second;
 }
+
+}  // namespace
+
 namespace content {
 
 RenderWidget::RenderWidget(WebKit::WebPopupType popup_type,
@@ -162,6 +215,7 @@ RenderWidget::RenderWidget(WebKit::WebPopupType popup_type,
       input_method_is_active_(false),
       text_input_type_(ui::TEXT_INPUT_TYPE_NONE),
       can_compose_inline_(true),
+      text_input_mode_(ui::TEXT_INPUT_MODE_DEFAULT),
       popup_type_(popup_type),
       pending_window_rect_count_(0),
       suppress_next_char_events_(false),
@@ -170,10 +224,12 @@ RenderWidget::RenderWidget(WebKit::WebPopupType popup_type,
       invalidation_task_posted_(false),
       screen_info_(screen_info),
       device_scale_factor_(screen_info_.deviceScaleFactor),
-      throttle_input_events_(true),
-      next_smooth_scroll_gesture_id_(0),
       is_threaded_compositing_enabled_(false),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_ptr_factory_(this)) {
+      next_output_surface_id_(0),
+#if defined(OS_ANDROID)
+      outstanding_ime_acks_(0),
+#endif
+      weak_ptr_factory_(this) {
   if (!swapped_out)
     RenderProcess::current()->AddRefProcess();
   DCHECK(RenderThread::Get());
@@ -182,13 +238,19 @@ RenderWidget::RenderWidget(WebKit::WebPopupType popup_type,
   is_threaded_compositing_enabled_ =
       CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kEnableThreadedCompositing);
+
+  RenderProcessVisibilityManager::GetInstance()->WidgetVisibilityChanged(true);
 }
 
 RenderWidget::~RenderWidget() {
   DCHECK(!webwidget_) << "Leaking our WebWidget!";
   STLDeleteElements(&updates_pending_swap_);
   if (current_paint_buf_) {
-    RenderProcess::current()->ReleaseTransportDIB(current_paint_buf_);
+    if (RenderProcess::current()) {
+      // If the RenderProcess is already gone, it will have released all DIBs
+      // in its destructor anyway.
+      RenderProcess::current()->ReleaseTransportDIB(current_paint_buf_);
+    }
     current_paint_buf_ = NULL;
   }
   // If we are swapped out, we have released already.
@@ -204,7 +266,7 @@ RenderWidget* RenderWidget::Create(int32 opener_id,
   scoped_refptr<RenderWidget> widget(
       new RenderWidget(popup_type, screen_info, false));
   if (widget->Init(opener_id)) {  // adds reference on success.
-    return widget;
+    return widget.get();
   }
   return NULL;
 }
@@ -292,9 +354,22 @@ bool RenderWidget::AllowPartialSwap() const {
   return true;
 }
 
+bool RenderWidget::UsingSynchronousRendererCompositor() const {
+#if defined(OS_ANDROID)
+  return SynchronousCompositorFactory::GetInstance() != NULL;
+#else
+  return false;
+#endif
+}
+
 bool RenderWidget::OnMessageReceived(const IPC::Message& message) {
   bool handled = true;
   IPC_BEGIN_MESSAGE_MAP(RenderWidget, message)
+    IPC_MESSAGE_HANDLER(InputMsg_HandleInputEvent, OnHandleInputEvent)
+    IPC_MESSAGE_HANDLER(InputMsg_CursorVisibilityChange,
+                        OnCursorVisibilityChange)
+    IPC_MESSAGE_HANDLER(InputMsg_MouseCaptureLost, OnMouseCaptureLost)
+    IPC_MESSAGE_HANDLER(InputMsg_SetFocus, OnSetFocus)
     IPC_MESSAGE_HANDLER(ViewMsg_Close, OnClose)
     IPC_MESSAGE_HANDLER(ViewMsg_CreatingNew_ACK, OnCreatingNewAck)
     IPC_MESSAGE_HANDLER(ViewMsg_Resize, OnResize)
@@ -305,9 +380,6 @@ bool RenderWidget::OnMessageReceived(const IPC::Message& message) {
     IPC_MESSAGE_HANDLER(ViewMsg_UpdateRect_ACK, OnUpdateRectAck)
     IPC_MESSAGE_HANDLER(ViewMsg_SwapBuffers_ACK,
                         OnViewContextSwapBuffersComplete)
-    IPC_MESSAGE_HANDLER(ViewMsg_HandleInputEvent, OnHandleInputEvent)
-    IPC_MESSAGE_HANDLER(ViewMsg_MouseCaptureLost, OnMouseCaptureLost)
-    IPC_MESSAGE_HANDLER(ViewMsg_SetFocus, OnSetFocus)
     IPC_MESSAGE_HANDLER(ViewMsg_SetInputMethodActive, OnSetInputMethodActive)
     IPC_MESSAGE_HANDLER(ViewMsg_ImeSetComposition, OnImeSetComposition)
     IPC_MESSAGE_HANDLER(ViewMsg_ImeConfirmComposition, OnImeConfirmComposition)
@@ -316,13 +388,15 @@ bool RenderWidget::OnMessageReceived(const IPC::Message& message) {
     IPC_MESSAGE_HANDLER(ViewMsg_SmoothScrollCompleted, OnSmoothScrollCompleted)
     IPC_MESSAGE_HANDLER(ViewMsg_SetTextDirection, OnSetTextDirection)
     IPC_MESSAGE_HANDLER(ViewMsg_Move_ACK, OnRequestMoveAck)
-    IPC_MESSAGE_HANDLER(ViewMsg_ScreenInfoChanged, OnScreenInfoChanged)
     IPC_MESSAGE_HANDLER(ViewMsg_UpdateScreenRects, OnUpdateScreenRects)
 #if defined(OS_ANDROID)
     IPC_MESSAGE_HANDLER(ViewMsg_ImeBatchStateChanged, OnImeBatchStateChanged)
     IPC_MESSAGE_HANDLER(ViewMsg_ShowImeIfNeeded, OnShowImeIfNeeded)
+    IPC_MESSAGE_HANDLER(ViewMsg_ImeEventAck, OnImeEventAck)
 #endif
     IPC_MESSAGE_HANDLER(ViewMsg_Snapshot, OnSnapshot)
+    IPC_MESSAGE_HANDLER(ViewMsg_SetBrowserRenderingStats,
+                        OnSetBrowserRenderingStats)
     IPC_MESSAGE_UNHANDLED(handled = false)
   IPC_END_MESSAGE_MAP()
   return handled;
@@ -351,9 +425,13 @@ void RenderWidget::Resize(const gfx::Size& new_size,
                           const gfx::Rect& resizer_rect,
                           bool is_fullscreen,
                           ResizeAck resize_ack) {
-  // A resize ack shouldn't be requested if we have not ACK'd the previous one.
-  DCHECK(resize_ack != SEND_RESIZE_ACK || !next_paint_is_resize_ack());
-  DCHECK(resize_ack == SEND_RESIZE_ACK || resize_ack == NO_RESIZE_ACK);
+  if (!RenderThreadImpl::current() ||  // Will be NULL during unit tests.
+      !RenderThreadImpl::current()->layout_test_mode()) {
+    // A resize ack shouldn't be requested if we have not ACK'd the previous
+    // one.
+    DCHECK(resize_ack != SEND_RESIZE_ACK || !next_paint_is_resize_ack());
+    DCHECK(resize_ack == SEND_RESIZE_ACK || resize_ack == NO_RESIZE_ACK);
+  }
 
   // Ignore this during shutdown.
   if (!webwidget_)
@@ -386,27 +464,34 @@ void RenderWidget::Resize(const gfx::Size& new_size,
     // ensures that we only resize as fast as we can paint.  We only need to
     // send an ACK if we are resized to a non-empty rect.
     webwidget_->resize(new_size);
-    if (!new_size.IsEmpty()) {
-      if (!is_accelerated_compositing_active_) {
-        // Resize should have caused an invalidation of the entire view.
-        DCHECK(paint_aggregator_.HasPendingUpdate());
-      }
 
-      // Send the Resize_ACK flag once we paint again if requested.
-      if (resize_ack == SEND_RESIZE_ACK)
-        set_next_paint_is_resize_ack();
+    if (!RenderThreadImpl::current() ||  // Will be NULL during unit tests.
+        !RenderThreadImpl::current()->layout_test_mode()) {
+      // Resize should have caused an invalidation of the entire view.
+      DCHECK(new_size.IsEmpty() || is_accelerated_compositing_active_ ||
+             paint_aggregator_.HasPendingUpdate());
     }
-  } else {
+  } else if (!RenderThreadImpl::current() ||  // Will be NULL during unit tests.
+             !RenderThreadImpl::current()->layout_test_mode()) {
     resize_ack = NO_RESIZE_ACK;
   }
+
+  if (new_size.IsEmpty() || physical_backing_size.IsEmpty()) {
+    // For empty size or empty physical_backing_size, there is no next paint
+    // (along with which to send the ack) until they are set to non-empty.
+    resize_ack = NO_RESIZE_ACK;
+  }
+
+  // Send the Resize_ACK flag once we paint again if requested.
+  if (resize_ack == SEND_RESIZE_ACK)
+    set_next_paint_is_resize_ack();
 
   if (fullscreen_change)
     DidToggleFullscreen();
 
   // If a resize ack is requested and it isn't set-up, then no more resizes will
   // come in and in general things will go wrong.
-  DCHECK(resize_ack != SEND_RESIZE_ACK || new_size.IsEmpty() ||
-         next_paint_is_resize_ack());
+  DCHECK(resize_ack != SEND_RESIZE_ACK || next_paint_is_resize_ack());
 }
 
 void RenderWidget::OnClose() {
@@ -423,7 +508,7 @@ void RenderWidget::OnClose() {
   // If there is a Send call on the stack, then it could be dangerous to close
   // now.  Post a task that only gets invoked when there are no nested message
   // loops.
-  MessageLoop::current()->PostNonNestableTask(
+  base::MessageLoop::current()->PostNonNestableTask(
       FROM_HERE, base::Bind(&RenderWidget::Close, this));
 
   // Balances the AddRef taken when we called AddRoute.
@@ -438,13 +523,12 @@ void RenderWidget::OnCreatingNewAck() {
   CompleteInit();
 }
 
-void RenderWidget::OnResize(const gfx::Size& new_size,
-                            const gfx::Size& physical_backing_size,
-                            float overdraw_bottom_height,
-                            const gfx::Rect& resizer_rect,
-                            bool is_fullscreen) {
-  Resize(new_size, physical_backing_size, overdraw_bottom_height, resizer_rect,
-         is_fullscreen, SEND_RESIZE_ACK);
+void RenderWidget::OnResize(const ViewMsg_Resize_Params& params) {
+  screen_info_ = params.screen_info;
+  SetDeviceScaleFactor(screen_info_.deviceScaleFactor);
+  Resize(params.new_size, params.physical_backing_size,
+         params.overdraw_bottom_height, params.resizer_rect,
+         params.is_fullscreen, SEND_RESIZE_ACK);
 }
 
 void RenderWidget::OnChangeResizeRect(const gfx::Rect& resizer_rect) {
@@ -541,7 +625,7 @@ void RenderWidget::OnUpdateRectAck() {
 bool RenderWidget::SupportsAsynchronousSwapBuffers() {
   // Contexts using the command buffer support asynchronous swapbuffers.
   // See RenderWidget::CreateOutputSurface().
-  if (RenderThreadImpl::current()->compositor_message_loop_proxy())
+  if (RenderThreadImpl::current()->compositor_message_loop_proxy().get())
     return false;
 
   return true;
@@ -555,7 +639,18 @@ bool RenderWidget::ForceCompositingModeEnabled() {
   return false;
 }
 
-scoped_ptr<cc::OutputSurface> RenderWidget::CreateOutputSurface() {
+scoped_ptr<cc::OutputSurface> RenderWidget::CreateOutputSurface(bool fallback) {
+  const CommandLine& command_line = *CommandLine::ForCurrentProcess();
+
+#if defined(OS_ANDROID)
+   if (SynchronousCompositorFactory* factory =
+       SynchronousCompositorFactory::GetInstance()) {
+    return factory->CreateOutputSurface(routing_id());
+  }
+#endif
+
+  uint32 output_surface_id = next_output_surface_id_++;
+
   // Explicitly disable antialiasing for the compositor. As of the time of
   // this writing, the only platform that supported antialiasing for the
   // compositor was Mac OS X, because the on-screen OpenGL context creation
@@ -570,29 +665,41 @@ scoped_ptr<cc::OutputSurface> RenderWidget::CreateOutputSurface() {
   attributes.antialias = false;
   attributes.shareResources = true;
   attributes.noAutomaticFlushes = true;
-  WebGraphicsContext3D* context = CreateGraphicsContext3D(attributes);
-  if (!context)
-    return scoped_ptr<cc::OutputSurface>();
+  attributes.depth = false;
+  attributes.stencil = false;
+  if (command_line.HasSwitch(cc::switches::kForceDirectLayerDrawing))
+    attributes.stencil = true;
+  WebGraphicsContext3DCommandBufferImpl* context = NULL;
+  if (!fallback)
+    context = CreateGraphicsContext3D(attributes);
 
-  const CommandLine& command_line = *CommandLine::ForCurrentProcess();
-  if (command_line.HasSwitch(switches::kEnableSoftwareCompositingGLAdapter)) {
-      // In the absence of a software-based delegating renderer, use this
-      // stopgap adapter class to present the software renderer output using a
-      // 3d context.
-      return scoped_ptr<cc::OutputSurface>(
-          new CompositorOutputSurface(routing_id(), NULL,
-              new CompositorSoftwareOutputDeviceGLAdapter(context)));
-  } else {
-      bool composite_to_mailbox =
-          command_line.HasSwitch(cc::switches::kCompositeToMailbox);
-      DCHECK(!composite_to_mailbox || command_line.HasSwitch(
-          cc::switches::kEnableCompositorFrameMessage));
-      // No swap throttling yet when compositing on the main thread.
-      DCHECK(!composite_to_mailbox || is_threaded_compositing_enabled_);
-      return scoped_ptr<cc::OutputSurface>(composite_to_mailbox ?
-          new MailboxOutputSurface(routing_id(), context, NULL) :
-              new CompositorOutputSurface(routing_id(), context, NULL));
+  if (!context) {
+    if (!command_line.HasSwitch(switches::kEnableSoftwareCompositing))
+      return scoped_ptr<cc::OutputSurface>();
+    return scoped_ptr<cc::OutputSurface>(
+        new CompositorOutputSurface(routing_id(),
+                                    output_surface_id,
+                                    NULL,
+                                    new CompositorSoftwareOutputDevice(),
+                                    true));
   }
+
+  if (command_line.HasSwitch(switches::kEnableDelegatedRenderer) &&
+      !command_line.HasSwitch(switches::kDisableDelegatedRenderer)) {
+    DCHECK(is_threaded_compositing_enabled_);
+    return scoped_ptr<cc::OutputSurface>(
+        new DelegatedCompositorOutputSurface(routing_id(), output_surface_id,
+                                             context, NULL));
+  }
+  if (command_line.HasSwitch(cc::switches::kCompositeToMailbox)) {
+    DCHECK(is_threaded_compositing_enabled_);
+    return scoped_ptr<cc::OutputSurface>(
+        new MailboxOutputSurface(routing_id(), output_surface_id,
+                                 context, NULL));
+  }
+  return scoped_ptr<cc::OutputSurface>(
+      new CompositorOutputSurface(routing_id(), output_surface_id,
+                                  context, NULL, false));
 }
 
 void RenderWidget::OnViewContextSwapBuffersAborted() {
@@ -619,7 +726,7 @@ void RenderWidget::OnViewContextSwapBuffersPosted() {
     // pending_update_params_ can be NULL if the swap doesn't correspond to an
     // DoDeferredUpdate compositing pass, hence doesn't require an UpdateRect
     // message.
-    if (pending_update_params_.get()) {
+    if (pending_update_params_) {
       msg = new ViewHostMsg_UpdateRect(routing_id_, *pending_update_params_);
       pending_update_params_.reset();
     }
@@ -679,14 +786,22 @@ void RenderWidget::OnViewContextSwapBuffersComplete() {
 }
 
 void RenderWidget::OnHandleInputEvent(const WebKit::WebInputEvent* input_event,
+                                      const ui::LatencyInfo& latency_info,
                                       bool is_keyboard_shortcut) {
-  TRACE_EVENT0("renderer", "RenderWidget::OnHandleInputEvent");
-
   handling_input_event_ = true;
   if (!input_event) {
     handling_input_event_ = false;
     return;
   }
+
+  const char* const event_name = GetEventName(input_event->type);
+  TRACE_EVENT1("renderer", "RenderWidget::OnHandleInputEvent",
+               "event", event_name);
+
+  if (compositor_)
+    compositor_->SetLatencyInfo(latency_info);
+  else
+    latency_info_.MergeWith(latency_info);
 
   base::TimeDelta now = base::TimeDelta::FromInternalValue(
       base::TimeTicks::Now().ToInternalValue());
@@ -695,12 +810,9 @@ void RenderWidget::OnHandleInputEvent(const WebKit::WebInputEvent* input_event,
       (now.InSecondsF() - input_event->timeStampSeconds) *
           base::Time::kMicrosecondsPerSecond);
   UMA_HISTOGRAM_CUSTOM_COUNTS("Event.Latency.Renderer", delta, 0, 1000000, 100);
-  std::string name_for_event =
-      base::StringPrintf("Event.Latency.Renderer.%s",
-                         GetEventName(input_event->type));
   base::HistogramBase* counter_for_type =
       base::Histogram::FactoryGet(
-          name_for_event,
+          base::StringPrintf("Event.Latency.Renderer.%s", event_name),
           0,
           1000000,
           100,
@@ -714,6 +826,12 @@ void RenderWidget::OnHandleInputEvent(const WebKit::WebInputEvent* input_event,
     TRACE_EVENT2("renderer", "HandleMouseMove",
                  "x", mouse_event.x, "y", mouse_event.y);
     prevent_default = WillHandleMouseEvent(mouse_event);
+  }
+
+  if (WebInputEvent::isKeyboardEventType(input_event->type)) {
+    const WebKeyboardEvent& key_event =
+        *static_cast<const WebKeyboardEvent*>(input_event);
+    prevent_default = WillHandleKeyEvent(key_event);
   }
 
   if (WebInputEvent::isGestureEventType(input_event->type)) {
@@ -750,8 +868,10 @@ void RenderWidget::OnHandleInputEvent(const WebKit::WebInputEvent* input_event,
   }
 
   IPC::Message* response =
-      new ViewHostMsg_HandleInputEvent_ACK(routing_id_, input_event->type,
-                                           ack_result);
+      new InputHostMsg_HandleInputEvent_ACK(routing_id_,
+                                            input_event->type,
+                                            ack_result,
+                                            latency_info);
   bool event_type_gets_rate_limited =
       input_event->type == WebInputEvent::MouseMove ||
       input_event->type == WebInputEvent::MouseWheel ||
@@ -763,20 +883,18 @@ void RenderWidget::OnHandleInputEvent(const WebKit::WebInputEvent* input_event,
                     compositor_->commitRequested();
   }
 
-  bool is_input_throttled =
-      throttle_input_events_ &&
-      frame_pending;
-
-  if (event_type_gets_rate_limited && is_input_throttled && !is_hidden_) {
+  if (event_type_gets_rate_limited && frame_pending && !is_hidden_) {
     // We want to rate limit the input events in this case, so we'll wait for
     // painting to finish before ACKing this message.
-    if (pending_input_event_ack_.get()) {
+    if (pending_input_event_ack_) {
       // As two different kinds of events could cause us to postpone an ack
       // we send it now, if we have one pending. The Browser should never
       // send us the same kind of event we are delaying the ack for.
       Send(pending_input_event_ack_.release());
     }
     pending_input_event_ack_.reset(response);
+    if (compositor_)
+      compositor_->NotifyInputThrottledUntilCommit();
   } else {
     Send(response);
   }
@@ -785,7 +903,7 @@ void RenderWidget::OnHandleInputEvent(const WebKit::WebInputEvent* input_event,
   // Allow the IME to be shown when the focus changes as a consequence
   // of a processed touch end event.
   if (input_event->type == WebInputEvent::TouchEnd && processed)
-    UpdateTextInputState(SHOW_IME_IF_NEEDED);
+    UpdateTextInputState(true, true);
 #endif
 
   handling_input_event_ = false;
@@ -798,6 +916,11 @@ void RenderWidget::OnHandleInputEvent(const WebKit::WebInputEvent* input_event,
     if (WebInputEvent::isTouchEventType(input_event->type))
       DidHandleTouchEvent(*(static_cast<const WebTouchEvent*>(input_event)));
   }
+}
+
+void RenderWidget::OnCursorVisibilityChange(bool is_visible) {
+  if (webwidget_)
+    webwidget_->setCursorVisibilityState(is_visible);
 }
 
 void RenderWidget::OnMouseCaptureLost() {
@@ -858,12 +981,13 @@ void RenderWidget::PaintRect(const gfx::Rect& rect,
   TransportDIB* optimized_dib = NULL;
   gfx::Rect optimized_copy_rect, optimized_copy_location;
   float dib_scale_factor;
-  webkit::ppapi::PluginInstance* optimized_instance =
+  PepperPluginInstanceImpl* optimized_instance =
       GetBitmapForOptimizedPluginPaint(rect, &optimized_dib,
                                        &optimized_copy_location,
                                        &optimized_copy_rect,
                                        &dib_scale_factor);
   if (optimized_instance) {
+#if defined(ENABLE_PLUGINS)
     // This plugin can be optimize-painted and we can just ask it to paint
     // itself. We don't actually need the TransportDIB in this case.
     //
@@ -890,8 +1014,7 @@ void RenderWidget::PaintRect(const gfx::Rect& rect,
 
     SkAutoCanvasRestore auto_restore(canvas, true);
     canvas->scale(device_scale_factor_, device_scale_factor_);
-    optimized_instance->Paint(webkit_glue::ToWebCanvas(canvas),
-                              optimized_copy_location, rect);
+    optimized_instance->Paint(canvas, optimized_copy_location, rect);
     canvas->restore();
     if (kEnableGpuBenchmarking) {
       base::TimeDelta paint_time =
@@ -899,13 +1022,14 @@ void RenderWidget::PaintRect(const gfx::Rect& rect,
       if (!is_accelerated_compositing_active_)
         software_stats_.total_paint_time += paint_time;
     }
+#endif
   } else {
     // Normal painting case.
     base::TimeTicks paint_begin_ticks;
     if (kEnableGpuBenchmarking)
       paint_begin_ticks = base::TimeTicks::HighResNow();
 
-    webwidget_->paint(webkit_glue::ToWebCanvas(canvas), rect);
+    webwidget_->paint(canvas, rect);
 
     if (kEnableGpuBenchmarking) {
       base::TimeDelta paint_time =
@@ -924,7 +1048,6 @@ void RenderWidget::PaintRect(const gfx::Rect& rect,
   if (kEnableGpuBenchmarking) {
     int64 num_pixels_processed = rect.width() * rect.height();
     software_stats_.total_pixels_painted += num_pixels_processed;
-    software_stats_.total_pixels_rasterized += num_pixels_processed;
   }
 }
 
@@ -1039,12 +1162,13 @@ void RenderWidget::InvalidationCallback() {
 void RenderWidget::DoDeferredUpdateAndSendInputAck() {
   DoDeferredUpdate();
 
-  if (pending_input_event_ack_.get())
+  if (pending_input_event_ack_)
     Send(pending_input_event_ack_.release());
 }
 
 void RenderWidget::DoDeferredUpdate() {
   TRACE_EVENT0("renderer", "RenderWidget::DoDeferredUpdate");
+  TRACE_EVENT_SCOPED_SAMPLING_STATE("Chrome", "Paint");
 
   if (!webwidget_)
     return;
@@ -1071,9 +1195,6 @@ void RenderWidget::DoDeferredUpdate() {
     return;
   }
 
-  if (is_accelerated_compositing_active_)
-    using_asynchronous_swapbuffers_ = SupportsAsynchronousSwapBuffers();
-
   // Tracking of frame rate jitter
   base::TimeTicks frame_begin_ticks = base::TimeTicks::Now();
   InstrumentWillBeginFrame();
@@ -1084,10 +1205,15 @@ void RenderWidget::DoDeferredUpdate() {
   // GpuRenderingActivated message.
   webwidget_->layout();
 
+  // Check for whether we need to track swap buffers. We need to do that after
+  // layout() because it may have switched us to accelerated compositing.
+  if (is_accelerated_compositing_active_)
+    using_asynchronous_swapbuffers_ = SupportsAsynchronousSwapBuffers();
+
   // The following two can result in further layout and possibly
   // enable GPU acceleration so they need to be called before any painting
   // is done.
-  UpdateTextInputState(DO_NOT_SHOW_IME);
+  UpdateTextInputType();
   UpdateSelectionBounds();
 
   // Suppress painting if nothing is dirty.  This has to be done after updating
@@ -1170,6 +1296,11 @@ void RenderWidget::DoDeferredUpdate() {
   next_paint_flags_ = 0;
   need_update_rect_for_auto_resize_ = false;
 
+  if (!is_accelerated_compositing_active_)
+    pending_update_params_->latency_info = latency_info_;
+
+  latency_info_.Clear();
+
   if (update.scroll_rect.IsEmpty() &&
       !is_accelerated_compositing_active_ &&
       GetBitmapForOptimizedPluginPaint(bounds, &dib, &optimized_copy_location,
@@ -1198,7 +1329,7 @@ void RenderWidget::DoDeferredUpdate() {
     scoped_ptr<skia::PlatformCanvas> canvas(
         RenderProcess::current()->GetDrawingCanvas(&current_paint_buf_,
                                                    pixel_bounds));
-    if (!canvas.get()) {
+    if (!canvas) {
       NOTREACHED();
       return;
     }
@@ -1235,7 +1366,8 @@ void RenderWidget::DoDeferredUpdate() {
     // Software FPS tick for performance tests. The accelerated path traces the
     // frame events in didCommitAndDrawCompositorFrame. See throughput_tests.cc.
     // NOTE: Tests may break if this event is renamed or moved.
-    UNSHIPPED_TRACE_EVENT_INSTANT0("test_fps", "TestFrameTickSW");
+    UNSHIPPED_TRACE_EVENT_INSTANT0("test_fps", "TestFrameTickSW",
+                                   TRACE_EVENT_SCOPE_THREAD);
   } else {  // Accelerated compositing path
     // Begin painting.
     // If painting is done via the gpu process then we don't set any damage
@@ -1253,14 +1385,14 @@ void RenderWidget::DoDeferredUpdate() {
   // UpdateReply message so we can receive another input event before the
   // UpdateRect_ACK on platforms where the UpdateRect_ACK is sent from within
   // the UpdateRect IPC message handler.
-  if (pending_input_event_ack_.get())
+  if (pending_input_event_ack_)
     Send(pending_input_event_ack_.release());
 
   // If Composite() called SwapBuffers, pending_update_params_ will be reset (in
   // OnSwapBuffersPosted), meaning a message has been added to the
   // updates_pending_swap_ queue, that will be sent later. Otherwise, we send
   // the message now.
-  if (pending_update_params_.get()) {
+  if (pending_update_params_) {
     // sending an ack to browser process that the paint is complete...
     update_reply_pending_ = pending_update_params_->needs_ack;
     Send(new ViewHostMsg_UpdateRect(routing_id_, *pending_update_params_));
@@ -1282,8 +1414,6 @@ void RenderWidget::Composite(base::TimeTicks frame_begin_time) {
 // WebWidgetClient
 
 void RenderWidget::didInvalidateRect(const WebRect& rect) {
-  TRACE_EVENT2("renderer", "RenderWidget::didInvalidateRect",
-               "width", rect.width, "height", rect.height);
   // The invalidated rect might be outside the bounds of the view.
   gfx::Rect view_rect(size_);
   gfx::Rect damaged_rect = gfx::IntersectRects(view_rect, rect);
@@ -1314,7 +1444,7 @@ void RenderWidget::didInvalidateRect(const WebRect& rect) {
   // 2) Allows us to collect more damage rects before painting to help coalesce
   //    the work that we will need to do.
   invalidation_task_posted_ = true;
-  MessageLoop::current()->PostTask(
+  base::MessageLoop::current()->PostTask(
       FROM_HERE, base::Bind(&RenderWidget::InvalidationCallback, this));
 }
 
@@ -1355,30 +1485,33 @@ void RenderWidget::didScrollRect(int dx, int dy,
   // 2) Allows us to collect more damage rects before painting to help coalesce
   //    the work that we will need to do.
   invalidation_task_posted_ = true;
-  MessageLoop::current()->PostTask(
+  base::MessageLoop::current()->PostTask(
       FROM_HERE, base::Bind(&RenderWidget::InvalidationCallback, this));
 }
 
 void RenderWidget::didAutoResize(const WebSize& new_size) {
   if (size_.width() != new_size.width || size_.height() != new_size.height) {
     size_ = new_size;
+
     // If we don't clear PaintAggregator after changing autoResize state, then
     // we might end up in a situation where bitmap_rect is larger than the
     // view_size. By clearing PaintAggregator, we ensure that we don't end up
     // with invalid damage rects.
     paint_aggregator_.ClearPendingUpdate();
 
-    if (auto_resize_mode_)
-      AutoResizeCompositor();
-
-    if (RenderThreadImpl::current()->short_circuit_size_updates()) {
-      setWindowRect(WebRect(rootWindowRect().x,
-                            rootWindowRect().y,
-                            new_size.width,
-                            new_size.height));
-    } else {
-      need_update_rect_for_auto_resize_ = true;
+    if (RenderThreadImpl::current()->layout_test_mode()) {
+      WebRect new_pos(rootWindowRect().x,
+                      rootWindowRect().y,
+                      new_size.width,
+                      new_size.height);
+      view_screen_rect_ = new_pos;
+      window_screen_rect_ = new_pos;
     }
+
+    AutoResizeCompositor();
+
+    if (!RenderThreadImpl::current()->layout_test_mode())
+      need_update_rect_for_auto_resize_ = true;
   }
 }
 
@@ -1431,7 +1564,8 @@ void RenderWidget::didDeactivateCompositor() {
 }
 
 void RenderWidget::initializeLayerTreeView() {
-  compositor_ = RenderWidgetCompositor::Create(this);
+  compositor_ = RenderWidgetCompositor::Create(
+      this, is_threaded_compositing_enabled_);
   if (!compositor_)
     return;
 
@@ -1452,12 +1586,15 @@ void RenderWidget::suppressCompositorScheduling(bool enable) {
 void RenderWidget::willBeginCompositorFrame() {
   TRACE_EVENT0("gpu", "RenderWidget::willBeginCompositorFrame");
 
-  DCHECK(RenderThreadImpl::current()->compositor_message_loop_proxy());
+  DCHECK(RenderThreadImpl::current()->compositor_message_loop_proxy().get());
 
   // The following two can result in further layout and possibly
   // enable GPU acceleration so they need to be called before any painting
   // is done.
-  UpdateTextInputState(DO_NOT_SHOW_IME);
+  UpdateTextInputType();
+#if defined(OS_ANDROID)
+  UpdateTextInputState(false, true);
+#endif
   UpdateSelectionBounds();
 
   WillInitiatePaint();
@@ -1465,7 +1602,7 @@ void RenderWidget::willBeginCompositorFrame() {
 
 void RenderWidget::didBecomeReadyForAdditionalInput() {
   TRACE_EVENT0("renderer", "RenderWidget::didBecomeReadyForAdditionalInput");
-  if (pending_input_event_ack_.get())
+  if (pending_input_event_ack_)
     Send(pending_input_event_ack_.release());
 }
 
@@ -1476,7 +1613,8 @@ void RenderWidget::didCommitAndDrawCompositorFrame() {
   TRACE_EVENT0("gpu", "RenderWidget::didCommitAndDrawCompositorFrame");
   // Accelerated FPS tick for performance tests. See throughput_tests.cc.
   // NOTE: Tests may break if this event is renamed or moved.
-  UNSHIPPED_TRACE_EVENT_INSTANT0("test_fps", "TestFrameTickGPU");
+  UNSHIPPED_TRACE_EVENT_INSTANT0("test_fps", "TestFrameTickGPU",
+                                 TRACE_EVENT_SCOPE_THREAD);
   // Notify subclasses that we initiated the paint operation.
   DidInitiatePaint();
 }
@@ -1510,8 +1648,7 @@ void RenderWidget::didCompleteSwapBuffers() {
 }
 
 void RenderWidget::scheduleComposite() {
-  TRACE_EVENT0("gpu", "RenderWidget::scheduleComposite");
-  if (RenderThreadImpl::current()->compositor_message_loop_proxy() &&
+  if (RenderThreadImpl::current()->compositor_message_loop_proxy().get() &&
       compositor_) {
     compositor_->setNeedsRedraw();
   } else {
@@ -1539,8 +1676,8 @@ void RenderWidget::scheduleAnimation() {
 
 void RenderWidget::didChangeCursor(const WebCursorInfo& cursor_info) {
   // TODO(darin): Eliminate this temporary.
-  WebCursor cursor(cursor_info);
-
+  WebCursor cursor;
+  InitializeCursorFromWebKitCursorInfo(&cursor, cursor_info);
   // Only send a SetCursor message if we need to make a change.
   if (!current_cursor_.IsEqual(cursor)) {
     current_cursor_ = cursor;
@@ -1571,6 +1708,14 @@ void RenderWidget::show(WebNavigationPolicy) {
   SetPendingWindowRect(initial_pos_);
 }
 
+void RenderWidget::didProgrammaticallyScroll(
+    const WebKit::WebPoint& scroll_point) {
+  if (!compositor_)
+    return;
+  Send(new ViewHostMsg_DidProgrammaticallyScroll(
+    routing_id_, gfx::Vector2d(scroll_point.x, scroll_point.y)));
+}
+
 void RenderWidget::didFocus() {
 }
 
@@ -1598,7 +1743,7 @@ void RenderWidget::closeWidgetSoon() {
   // could be closed before the JS finishes executing.  So instead, post a
   // message back to the message loop, which won't run until the JS is
   // complete, and then the Close message can be sent.
-  MessageLoop::current()->PostTask(
+  base::MessageLoop::current()->PostTask(
       FROM_HERE, base::Bind(&RenderWidget::DoDeferredClose, this));
 }
 
@@ -1625,7 +1770,7 @@ void RenderWidget::setToolTipText(const WebKit::WebString& text,
 
 void RenderWidget::setWindowRect(const WebRect& pos) {
   if (did_show_) {
-    if (!RenderThreadImpl::current()->short_circuit_size_updates()) {
+    if (!RenderThreadImpl::current()->layout_test_mode()) {
       Send(new ViewHostMsg_RequestMove(routing_id_, pos));
       SetPendingWindowRect(pos);
     } else {
@@ -1669,83 +1814,43 @@ void RenderWidget::OnSetInputMethodActive(bool is_active) {
   input_method_is_active_ = is_active;
 }
 
-void RenderWidget::UpdateCompositionInfo(
-    const ui::Range& range,
-    const std::vector<gfx::Rect>& character_bounds) {
-  if (!ShouldUpdateCompositionInfo(range, character_bounds))
-    return;
-  composition_character_bounds_ = character_bounds;
-  composition_range_ = range;
-  Send(new ViewHostMsg_ImeCompositionRangeChanged(
-      routing_id(), composition_range_, composition_character_bounds_));
-}
-
 void RenderWidget::OnImeSetComposition(
     const string16& text,
     const std::vector<WebCompositionUnderline>& underlines,
     int selection_start, int selection_end) {
-  if (!webwidget_)
+  if (!ShouldHandleImeEvent())
     return;
-  DCHECK(!handling_ime_event_);
-  handling_ime_event_ = true;
-  if (webwidget_->setComposition(
+  ImeEventGuard guard(this);
+  if (!webwidget_->setComposition(
       text, WebVector<WebCompositionUnderline>(underlines),
       selection_start, selection_end)) {
-    // Setting the IME composition was successful. Send the new composition
-    // range to the browser.
-    ui::Range range(ui::Range::InvalidRange());
-    size_t location, length;
-    if (webwidget_->compositionRange(&location, &length)) {
-      range.set_start(location);
-      range.set_end(location + length);
-    }
-    // The IME was cancelled via the Esc key, so just send back the caret.
-    else if (webwidget_->caretOrSelectionRange(&location, &length)) {
-      range.set_start(location);
-      range.set_end(location + length);
-    }
-    std::vector<gfx::Rect> character_bounds;
-    GetCompositionCharacterBounds(&character_bounds);
-    UpdateCompositionInfo(range, character_bounds);
-  } else {
     // If we failed to set the composition text, then we need to let the browser
     // process to cancel the input method's ongoing composition session, to make
     // sure we are in a consistent state.
     Send(new ViewHostMsg_ImeCancelComposition(routing_id()));
-
-    // Send an updated IME range with just the caret range.
-    ui::Range range(ui::Range::InvalidRange());
-    size_t location, length;
-    if (webwidget_->caretOrSelectionRange(&location, &length)) {
-      range.set_start(location);
-      range.set_end(location + length);
-    }
-    UpdateCompositionInfo(range, std::vector<gfx::Rect>());
   }
-  handling_ime_event_ = false;
-  UpdateTextInputState(DO_NOT_SHOW_IME);
+#if defined(OS_MACOSX) || defined(OS_WIN) || defined(USE_AURA)
+  UpdateCompositionInfo(true);
+#endif
 }
 
-void RenderWidget::OnImeConfirmComposition(
-    const string16& text, const ui::Range& replacement_range) {
-  if (!webwidget_)
+void RenderWidget::OnImeConfirmComposition(const string16& text,
+                                           const ui::Range& replacement_range,
+                                           bool keep_selection) {
+  if (!ShouldHandleImeEvent())
     return;
-  DCHECK(!handling_ime_event_);
-  handling_ime_event_ = true;
+  ImeEventGuard guard(this);
   handling_input_event_ = true;
-  webwidget_->confirmComposition(text);
+  if (text.length())
+    webwidget_->confirmComposition(text);
+  else if (keep_selection)
+    webwidget_->confirmComposition(WebWidget::KeepSelection);
+  else
+    webwidget_->confirmComposition(WebWidget::DoNotKeepSelection);
   handling_input_event_ = false;
-
-  // Send an updated IME range with just the caret range.
-  ui::Range range(ui::Range::InvalidRange());
-  size_t location, length;
-  if (webwidget_->caretOrSelectionRange(&location, &length)) {
-    range.set_start(location);
-    range.set_end(location + length);
-  }
-  UpdateCompositionInfo(range, std::vector<gfx::Rect>());
-  handling_ime_event_ = false;
-  UpdateTextInputState(DO_NOT_SHOW_IME);
+#if defined(OS_MACOSX) || defined(OS_WIN) || defined(USE_AURA)
+  UpdateCompositionInfo(true);
+#endif
 }
 
 // This message causes the renderer to render an image of the
@@ -1796,7 +1901,7 @@ void RenderWidget::OnPaintAtSize(const TransportDIB::Handle& dib_handle,
   scoped_ptr<skia::PlatformCanvas> canvas(
       paint_at_size_buffer->GetPlatformCanvas(canvas_size.width(),
                                               canvas_size.height()));
-  if (!canvas.get()) {
+  if (!canvas) {
     NOTREACHED();
     return;
   }
@@ -1854,7 +1959,7 @@ bool RenderWidget::OnSnapshotHelper(const gfx::Rect& src_subrect,
                                  true,
                                  NULL,
                                  skia::RETURN_NULL_ON_FAILURE));
-  if (!canvas.get())
+  if (!canvas)
     return false;
 
   canvas->save();
@@ -1872,40 +1977,34 @@ bool RenderWidget::OnSnapshotHelper(const gfx::Rect& src_subrect,
   return true;
 }
 
-void RenderWidget::OnRepaint(const gfx::Size& size_to_paint) {
+void RenderWidget::OnRepaint(gfx::Size size_to_paint) {
   // During shutdown we can just ignore this message.
   if (!webwidget_)
     return;
 
+  // Even if the browser provides an empty damage rect, it's still expecting to
+  // receive a repaint ack so just damage the entire widget bounds.
+  if (size_to_paint.IsEmpty()) {
+    size_to_paint = size_;
+  }
+
   set_next_paint_is_repaint_ack();
-  if (is_accelerated_compositing_active_) {
-    if (compositor_)
-      compositor_->setNeedsRedraw();
-    scheduleComposite();
+  if (is_accelerated_compositing_active_ && compositor_) {
+    compositor_->SetNeedsRedrawRect(gfx::Rect(size_to_paint));
   } else {
     gfx::Rect repaint_rect(size_to_paint.width(), size_to_paint.height());
     didInvalidateRect(repaint_rect);
   }
 }
 
-void RenderWidget::OnSmoothScrollCompleted(int gesture_id) {
-  PendingSmoothScrollGestureMap::iterator it =
-      pending_smooth_scroll_gestures_.find(gesture_id);
-  DCHECK(it != pending_smooth_scroll_gestures_.end());
-  it->second.Run();
-  pending_smooth_scroll_gestures_.erase(it);
+void RenderWidget::OnSmoothScrollCompleted() {
+  pending_smooth_scroll_gesture_.Run();
 }
 
 void RenderWidget::OnSetTextDirection(WebTextDirection direction) {
   if (!webwidget_)
     return;
   webwidget_->setTextDirection(direction);
-}
-
-void RenderWidget::OnScreenInfoChanged(
-    const WebKit::WebScreenInfo& screen_info) {
-  screen_info_ = screen_info;
-  SetDeviceScaleFactor(screen_info.deviceScaleFactor);
 }
 
 void RenderWidget::OnUpdateScreenRects(const gfx::Rect& view_screen_rect,
@@ -1921,9 +2020,26 @@ void RenderWidget::OnImeBatchStateChanged(bool is_begin) {
 }
 
 void RenderWidget::OnShowImeIfNeeded() {
-  UpdateTextInputState(SHOW_IME_IF_NEEDED);
+  UpdateTextInputState(true, true);
+}
+
+void RenderWidget::IncrementOutstandingImeEventAcks() {
+  ++outstanding_ime_acks_;
+}
+
+void RenderWidget::OnImeEventAck() {
+  --outstanding_ime_acks_;
+  DCHECK(outstanding_ime_acks_ >= 0);
 }
 #endif
+
+bool RenderWidget::ShouldHandleImeEvent() {
+#if defined(OS_ANDROID)
+  return !!webwidget_ && outstanding_ime_acks_ == 0;
+#else
+  return !!webwidget_;
+#endif
+}
 
 void RenderWidget::SetDeviceScaleFactor(float device_scale_factor) {
   if (device_scale_factor_ == device_scale_factor)
@@ -1938,7 +2054,7 @@ void RenderWidget::SetDeviceScaleFactor(float device_scale_factor) {
   }
 }
 
-webkit::ppapi::PluginInstance* RenderWidget::GetBitmapForOptimizedPluginPaint(
+PepperPluginInstanceImpl* RenderWidget::GetBitmapForOptimizedPluginPaint(
     const gfx::Rect& paint_bounds,
     TransportDIB** dib,
     gfx::Rect* location,
@@ -2023,10 +2139,57 @@ static bool IsDateTimeInput(ui::TextInputType type) {
       type == ui::TEXT_INPUT_TYPE_WEEK;
 }
 
-void RenderWidget::UpdateTextInputState(ShowIme show_ime) {
+
+void RenderWidget::StartHandlingImeEvent() {
+  DCHECK(!handling_ime_event_);
+  handling_ime_event_ = true;
+}
+
+void RenderWidget::FinishHandlingImeEvent() {
+  DCHECK(handling_ime_event_);
+  handling_ime_event_ = false;
+  // While handling an ime event, text input state and selection bounds updates
+  // are ignored. These must explicitly be updated once finished handling the
+  // ime event.
+  UpdateSelectionBounds();
+#if defined(OS_ANDROID)
+  UpdateTextInputState(false, false);
+#endif
+}
+
+void RenderWidget::UpdateTextInputType() {
+  if (!input_method_is_active_)
+    return;
+
+  ui::TextInputType new_type = GetTextInputType();
+  if (IsDateTimeInput(new_type))
+    return;  // Not considered as a text input field in WebKit/Chromium.
+
+  bool new_can_compose_inline = CanComposeInline();
+
+  WebKit::WebTextInputInfo new_info;
+  if (webwidget_)
+    new_info = webwidget_->textInputInfo();
+  const ui::TextInputMode new_mode = ConvertInputMode(new_info.inputMode);
+
+  if (text_input_type_ != new_type
+      || can_compose_inline_ != new_can_compose_inline
+      || text_input_mode_ != new_mode) {
+    Send(new ViewHostMsg_TextInputTypeChanged(routing_id(),
+                                              new_type,
+                                              new_can_compose_inline,
+                                              new_mode));
+    text_input_type_ = new_type;
+    can_compose_inline_ = new_can_compose_inline;
+    text_input_mode_ = new_mode;
+  }
+}
+
+#if defined(OS_ANDROID)
+void RenderWidget::UpdateTextInputState(bool show_ime_if_needed,
+                                        bool send_ime_ack) {
   if (handling_ime_event_)
     return;
-  bool show_ime_if_needed = (show_ime == SHOW_IME_IF_NEEDED);
   if (!show_ime_if_needed && !input_method_is_active_)
     return;
   ui::TextInputType new_type = GetTextInputType();
@@ -2053,6 +2216,9 @@ void RenderWidget::UpdateTextInputState(ShowIme show_ime) {
     p.composition_end = new_info.compositionEnd;
     p.can_compose_inline = new_can_compose_inline;
     p.show_ime_if_needed = show_ime_if_needed;
+    p.require_ack = send_ime_ack;
+    if (p.require_ack)
+      IncrementOutstandingImeEventAcks();
     Send(new ViewHostMsg_TextInputStateChanged(routing_id(), p));
 
     text_input_info_ = new_info;
@@ -2060,6 +2226,7 @@ void RenderWidget::UpdateTextInputState(ShowIme show_ime) {
     can_compose_inline_ = new_can_compose_inline;
   }
 }
+#endif
 
 void RenderWidget::GetSelectionBounds(gfx::Rect* focus, gfx::Rect* anchor) {
   WebRect focus_webrect;
@@ -2072,6 +2239,8 @@ void RenderWidget::GetSelectionBounds(gfx::Rect* focus, gfx::Rect* anchor) {
 void RenderWidget::UpdateSelectionBounds() {
   if (!webwidget_)
     return;
+  if (handling_ime_event_)
+    return;
 
   ViewHostMsg_SelectionBounds_Params params;
   GetSelectionBounds(&params.anchor_rect, &params.focus_rect);
@@ -2083,24 +2252,9 @@ void RenderWidget::UpdateSelectionBounds() {
     params.is_anchor_first = webwidget_->isSelectionAnchorFirst();
     Send(new ViewHostMsg_SelectionBoundsChanged(routing_id_, params));
   }
-
-  std::vector<gfx::Rect> character_bounds;
-  GetCompositionCharacterBounds(&character_bounds);
-  UpdateCompositionInfo(composition_range_, character_bounds);
-}
-
-bool RenderWidget::ShouldUpdateCompositionInfo(
-    const ui::Range& range,
-    const std::vector<gfx::Rect>& bounds) {
-  if (composition_range_ != range)
-    return true;
-  if (bounds.size() != composition_character_bounds_.size())
-    return true;
-  for (size_t i = 0; i < bounds.size(); ++i) {
-    if (bounds[i] != composition_character_bounds_[i])
-      return true;
-  }
-  return false;
+#if defined(OS_MACOSX) || defined(OS_WIN) || defined(USE_AURA)
+  UpdateCompositionInfo(false);
+#endif
 }
 
 // Check WebKit::WebTextInputType and ui::TextInputType is kept in sync.
@@ -2153,11 +2307,58 @@ ui::TextInputType RenderWidget::GetTextInputType() {
   return ui::TEXT_INPUT_TYPE_NONE;
 }
 
+#if defined(OS_MACOSX) || defined(OS_WIN) || defined(USE_AURA)
+void RenderWidget::UpdateCompositionInfo(bool should_update_range) {
+  ui::Range range = ui::Range();
+  if (should_update_range) {
+    GetCompositionRange(&range);
+  } else {
+    range = composition_range_;
+  }
+  std::vector<gfx::Rect> character_bounds;
+  GetCompositionCharacterBounds(&character_bounds);
+
+  if (!ShouldUpdateCompositionInfo(range, character_bounds))
+    return;
+  composition_character_bounds_ = character_bounds;
+  composition_range_ = range;
+  Send(new ViewHostMsg_ImeCompositionRangeChanged(
+      routing_id(), composition_range_, composition_character_bounds_));
+}
+
 void RenderWidget::GetCompositionCharacterBounds(
     std::vector<gfx::Rect>* bounds) {
   DCHECK(bounds);
   bounds->clear();
 }
+
+void RenderWidget::GetCompositionRange(ui::Range* range) {
+  size_t location, length;
+  if (webwidget_->compositionRange(&location, &length)) {
+    range->set_start(location);
+    range->set_end(location + length);
+  } else if (webwidget_->caretOrSelectionRange(&location, &length)) {
+    range->set_start(location);
+    range->set_end(location + length);
+  } else {
+    *range = ui::Range::InvalidRange();
+  }
+}
+
+bool RenderWidget::ShouldUpdateCompositionInfo(
+    const ui::Range& range,
+    const std::vector<gfx::Rect>& bounds) {
+  if (composition_range_ != range)
+    return true;
+  if (bounds.size() != composition_character_bounds_.size())
+    return true;
+  for (size_t i = 0; i < bounds.size(); ++i) {
+    if (bounds[i] != composition_character_bounds_[i])
+      return true;
+  }
+  return false;
+}
+#endif
 
 bool RenderWidget::CanComposeInline() {
   return true;
@@ -2175,6 +2376,7 @@ void RenderWidget::resetInputMethod() {
   if (!input_method_is_active_)
     return;
 
+  ImeEventGuard guard(this);
   // If the last text input type is not None, then we should finish any
   // ongoing composition regardless of the new text input type.
   if (text_input_type_ != ui::TEXT_INPUT_TYPE_NONE) {
@@ -2184,15 +2386,9 @@ void RenderWidget::resetInputMethod() {
       Send(new ViewHostMsg_ImeCancelComposition(routing_id()));
   }
 
-  // Send an updated IME range with the current caret rect.
-  ui::Range range(ui::Range::InvalidRange());
-  size_t location, length;
-  if (webwidget_->caretOrSelectionRange(&location, &length)) {
-    range.set_start(location);
-    range.set_end(location + length);
-  }
-
-  UpdateCompositionInfo(range, std::vector<gfx::Rect>());
+#if defined(OS_MACOSX) || defined(OS_WIN) || defined(USE_AURA)
+  UpdateCompositionInfo(true);
+#endif
 }
 
 void RenderWidget::didHandleGestureEvent(
@@ -2203,13 +2399,12 @@ void RenderWidget::didHandleGestureEvent(
     return;
   if (event.type == WebInputEvent::GestureTap ||
       event.type == WebInputEvent::GestureLongPress) {
-    UpdateTextInputState(SHOW_IME_IF_NEEDED);
+    UpdateTextInputState(true, true);
   }
 #endif
 }
 
-void RenderWidget::SchedulePluginMove(
-    const webkit::npapi::WebPluginGeometry& move) {
+void RenderWidget::SchedulePluginMove(const WebPluginGeometry& move) {
   size_t i = 0;
   for (; i < plugin_window_moves_.size(); ++i) {
     if (plugin_window_moves_[i].window == move.window) {
@@ -2249,10 +2444,6 @@ void RenderWidget::GetRenderingStats(
       software_stats_.total_paint_time;
   stats.rendering_stats.total_pixels_painted +=
       software_stats_.total_pixels_painted;
-  stats.rendering_stats.total_rasterize_time +=
-      software_stats_.total_rasterize_time;
-  stats.rendering_stats.total_pixels_rasterized +=
-      software_stats_.total_pixels_rasterized;
 }
 
 bool RenderWidget::GetGpuRenderingStats(GpuRenderingStats* stats) const {
@@ -2263,6 +2454,19 @@ bool RenderWidget::GetGpuRenderingStats(GpuRenderingStats* stats) const {
   return gpu_channel->CollectRenderingStatsForSurface(surface_id(), stats);
 }
 
+RenderWidgetCompositor* RenderWidget::compositor() const {
+  return compositor_.get();
+}
+
+void RenderWidget::OnSetBrowserRenderingStats(
+    const BrowserRenderingStats& stats) {
+  browser_rendering_stats_ = stats;
+}
+
+void RenderWidget::GetBrowserRenderingStats(BrowserRenderingStats* stats) {
+  *stats = browser_rendering_stats_;
+}
+
 void RenderWidget::BeginSmoothScroll(
     bool down,
     const SmoothScrollCompletionCallback& callback,
@@ -2270,7 +2474,6 @@ void RenderWidget::BeginSmoothScroll(
     int mouse_event_x,
     int mouse_event_y) {
   DCHECK(!callback.is_null());
-  int id = next_smooth_scroll_gesture_id_++;
 
   ViewHostMsg_BeginSmoothScroll_Params params;
   params.scroll_down = down;
@@ -2278,11 +2481,15 @@ void RenderWidget::BeginSmoothScroll(
   params.mouse_event_x = mouse_event_x;
   params.mouse_event_y = mouse_event_y;
 
-  Send(new ViewHostMsg_BeginSmoothScroll(routing_id_, id, params));
-  pending_smooth_scroll_gestures_.insert(std::make_pair(id, callback));
+  Send(new ViewHostMsg_BeginSmoothScroll(routing_id_, params));
+  pending_smooth_scroll_gesture_ = callback;
 }
 
 bool RenderWidget::WillHandleMouseEvent(const WebKit::WebMouseEvent& event) {
+  return false;
+}
+
+bool RenderWidget::WillHandleKeyEvent(const WebKit::WebKeyboardEvent& event) {
   return false;
 }
 
@@ -2291,13 +2498,20 @@ bool RenderWidget::WillHandleGestureEvent(
   return false;
 }
 
+void RenderWidget::hasTouchEventHandlers(bool has_handlers) {
+  Send(new ViewHostMsg_HasTouchEventHandlers(routing_id_, has_handlers));
+}
+
 bool RenderWidget::HasTouchEventHandlersAt(const gfx::Point& point) const {
   return true;
 }
 
-WebGraphicsContext3D* RenderWidget::CreateGraphicsContext3D(
-    const WebGraphicsContext3D::Attributes& attributes) {
+WebGraphicsContext3DCommandBufferImpl* RenderWidget::CreateGraphicsContext3D(
+    const WebKit::WebGraphicsContext3D::Attributes& attributes) {
   if (!webwidget_)
+    return NULL;
+  if (CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kDisableGpuCompositing))
     return NULL;
   scoped_ptr<WebGraphicsContext3DCommandBufferImpl> context(
       new WebGraphicsContext3DCommandBufferImpl(
@@ -2306,7 +2520,7 @@ WebGraphicsContext3D* RenderWidget::CreateGraphicsContext3D(
           RenderThreadImpl::current(),
           weak_ptr_factory_.GetWeakPtr()));
 
-  if (!context->Initialize(
+  if (!context->InitializeWithDefaultBufferSizes(
           attributes,
           false /* bind generates resources */,
           CAUSE_FOR_GPU_LAUNCH_WEBGRAPHICSCONTEXT3DCOMMANDBUFFERIMPL_INITIALIZE))

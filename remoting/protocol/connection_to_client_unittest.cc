@@ -5,8 +5,8 @@
 #include "remoting/protocol/connection_to_client.h"
 
 #include "base/bind.h"
-#include "base/message_loop.h"
-#include "base/message_loop_proxy.h"
+#include "base/message_loop/message_loop.h"
+#include "base/message_loop/message_loop_proxy.h"
 #include "remoting/base/constants.h"
 #include "remoting/protocol/fake_session.h"
 #include "remoting/protocol/protocol_mock_objects.h"
@@ -46,7 +46,7 @@ class ConnectionToClientTest : public testing::Test {
     message_loop_.RunUntilIdle();
   }
 
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
   MockConnectionToClientEventHandler handler_;
   MockClipboardStub clipboard_stub_;
   MockHostStub host_stub_;

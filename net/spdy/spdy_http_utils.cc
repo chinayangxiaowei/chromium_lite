@@ -6,9 +6,9 @@
 
 #include <string>
 
-#include "base/string_number_conversions.h"
-#include "base/string_util.h"
-#include "base/time.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/time/time.h"
 #include "net/base/escape.h"
 #include "net/base/load_flags.h"
 #include "net/base/net_util.h"
@@ -39,8 +39,6 @@ bool SpdyHeadersToHttpResponse(const SpdyHeaderBlock& headers,
   if (it == headers.end())
     return false;
   version = it->second;
-
-  response->response_time = base::Time::Now();
 
   std::string raw_headers(version);
   raw_headers.push_back(' ');
@@ -188,8 +186,9 @@ GURL GetUrlFromHeaderBlock(const SpdyHeaderBlock& headers,
   if (it != headers.end())
     path = it->second;
 
-  std::string url =  (scheme.empty() || host_port.empty() || path.empty())
-      ? "" : scheme + "://" + host_port + path;
+  std::string url = (scheme.empty() || host_port.empty() || path.empty())
+                        ? std::string()
+                        : scheme + "://" + host_port + path;
   return GURL(url);
 }
 

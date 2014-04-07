@@ -16,13 +16,14 @@
 #include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
+#include "chrome/browser/chrome_notification_types.h"
+#include "chrome/browser/extensions/api/module/module.h"
 #include "chrome/browser/extensions/blacklist.h"
 #include "chrome/browser/extensions/crx_installer.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/pending_extension_manager.h"
 #include "chrome/browser/extensions/updater/extension_downloader.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_set.h"
 #include "chrome/common/extensions/manifest.h"
@@ -106,10 +107,7 @@ ExtensionUpdater::FetchedCRXFile::FetchedCRXFile(
       download_url(u),
       request_ids(request_ids) {}
 
-ExtensionUpdater::FetchedCRXFile::FetchedCRXFile()
-    : extension_id(""),
-      path(),
-      download_url() {}
+ExtensionUpdater::FetchedCRXFile::FetchedCRXFile() : path(), download_url() {}
 
 ExtensionUpdater::FetchedCRXFile::~FetchedCRXFile() {}
 
@@ -136,7 +134,7 @@ ExtensionUpdater::ExtensionUpdater(ExtensionServiceInterface* service,
                                    Blacklist* blacklist,
                                    int frequency_seconds)
     : alive_(false),
-      weak_ptr_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)),
+      weak_ptr_factory_(this),
       service_(service), frequency_seconds_(frequency_seconds),
       will_check_soon_(false), extension_prefs_(extension_prefs),
       prefs_(prefs), profile_(profile), blacklist_(blacklist),
@@ -304,7 +302,7 @@ void ExtensionUpdater::AddToDownloader(
   InProgressCheck& request = requests_in_progress_[request_id];
   for (ExtensionSet::const_iterator extension_iter = extensions->begin();
        extension_iter != extensions->end(); ++extension_iter) {
-    const Extension& extension = **extension_iter;
+    const Extension& extension = *extension_iter->get();
     if (!Manifest::IsAutoUpdateableLocation(extension.location())) {
       VLOG(2) << "Extension " << extension.id() << " is not auto updateable";
       continue;
@@ -547,7 +545,7 @@ bool ExtensionUpdater::GetPingDataForExtension(
 
 std::string ExtensionUpdater::GetUpdateUrlData(const std::string& id) {
   DCHECK(alive_);
-  return extension_prefs_->GetUpdateUrlData(id);
+  return extension::GetUpdateURLData(extension_prefs_, id);
 }
 
 bool ExtensionUpdater::IsExtensionPending(const std::string& id) {
@@ -668,7 +666,7 @@ void ExtensionUpdater::Observe(int type,
     }
     case chrome::NOTIFICATION_EXTENSION_INSTALLED: {
       const Extension* extension =
-          content::Details<const Extension>(details).ptr();
+          content::Details<const InstalledExtensionInfo>(details)->extension;
       if (extension)
         throttle_info_.erase(extension->id());
       break;

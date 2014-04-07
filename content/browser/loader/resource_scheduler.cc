@@ -11,9 +11,12 @@
 #include "content/public/browser/resource_request_info.h"
 #include "content/public/browser/resource_throttle.h"
 #include "ipc/ipc_message_macros.h"
+#include "net/base/host_port_pair.h"
 #include "net/base/load_flags.h"
 #include "net/base/request_priority.h"
+#include "net/http/http_server_properties.h"
 #include "net/url_request/url_request.h"
+#include "net/url_request/url_request_context.h"
 
 namespace content {
 
@@ -310,7 +313,12 @@ size_t ResourceScheduler::GetNumDelayableRequestsInFlight(
   for (RequestSet::iterator it = client->in_flight_requests.begin();
        it != client->in_flight_requests.end(); ++it) {
     if ((*it)->url_request()->priority() < net::LOW) {
-      ++count;
+      const net::HttpServerProperties& http_server_properties =
+          *(*it)->url_request()->context()->http_server_properties();
+      if (!http_server_properties.SupportsSpdy(
+          net::HostPortPair::FromURL((*it)->url_request()->url()))) {
+        ++count;
+      }
     }
   }
   return count;
@@ -324,6 +332,7 @@ size_t ResourceScheduler::GetNumDelayableRequestsInFlight(
 //
 //   * Higher priority requests (>= net::LOW).
 //   * Synchronous requests.
+//   * Requests to SPDY-capable origin servers.
 //
 // 2. The remainder are delayable requests, which follow these rules:
 //
@@ -331,10 +340,22 @@ size_t ResourceScheduler::GetNumDelayableRequestsInFlight(
 //     requests.
 //   * Once the renderer has a <body>, start loading delayable requests.
 //   * Never exceed 10 delayable requests in flight per client.
+//   * Prior to <body>, allow one delayable request to load at a time.
 bool ResourceScheduler::ShouldStartRequest(ScheduledResourceRequest* request,
                                            Client* client) const {
-  if (request->url_request()->priority() >= net::LOW ||
-      !ResourceRequestInfo::ForRequest(request->url_request())->IsAsync()) {
+  const net::URLRequest& url_request = *request->url_request();
+  const net::HttpServerProperties& http_server_properties =
+      *url_request.context()->http_server_properties();
+
+  // TODO(willchan): We should really improve this algorithm as described in
+  // crbug.com/164101. Also, theoretically we should not count a SPDY request
+  // against the delayable requests limit.
+  bool origin_supports_spdy = http_server_properties.SupportsSpdy(
+      net::HostPortPair::FromURL(url_request.url()));
+
+  if (url_request.priority() >= net::LOW ||
+      !ResourceRequestInfo::ForRequest(&url_request)->IsAsync() ||
+      origin_supports_spdy) {
     return true;
   }
 
@@ -346,7 +367,8 @@ bool ResourceScheduler::ShouldStartRequest(ScheduledResourceRequest* request,
 
   bool have_immediate_requests_in_flight =
       client->in_flight_requests.size() > num_delayable_requests_in_flight;
-  if (have_immediate_requests_in_flight && !client->has_body) {
+  if (have_immediate_requests_in_flight && !client->has_body &&
+      num_delayable_requests_in_flight != 0) {
     return false;
   }
 

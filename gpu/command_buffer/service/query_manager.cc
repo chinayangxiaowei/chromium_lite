@@ -7,15 +7,137 @@
 #include "base/atomicops.h"
 #include "base/bind.h"
 #include "base/logging.h"
-#include "base/shared_memory.h"
-#include "base/time.h"
+#include "base/memory/shared_memory.h"
+#include "base/synchronization/lock.h"
+#include "base/time/time.h"
 #include "gpu/command_buffer/common/gles2_cmd_format.h"
+#include "gpu/command_buffer/service/async_pixel_transfer_manager.h"
+#include "gpu/command_buffer/service/error_state.h"
 #include "gpu/command_buffer/service/feature_info.h"
 #include "gpu/command_buffer/service/gles2_cmd_decoder.h"
-#include "ui/gl/async_pixel_transfer_delegate.h"
 
 namespace gpu {
 namespace gles2 {
+
+namespace {
+
+class AsyncPixelTransferCompletionObserverImpl
+    : public AsyncPixelTransferCompletionObserver {
+ public:
+  AsyncPixelTransferCompletionObserverImpl(uint32 submit_count)
+      : submit_count_(submit_count),
+        cancelled_(false) {}
+
+  void Cancel() {
+    base::AutoLock locked(lock_);
+    cancelled_ = true;
+  }
+
+  virtual void DidComplete(const AsyncMemoryParams& mem_params) OVERRIDE {
+    base::AutoLock locked(lock_);
+    if (!cancelled_) {
+      DCHECK(mem_params.shared_memory);
+      DCHECK(mem_params.shared_memory->memory());
+      void* data = static_cast<int8*>(mem_params.shared_memory->memory()) +
+                   mem_params.shm_data_offset;
+      QuerySync* sync = static_cast<QuerySync*>(data);
+
+      // Need a MemoryBarrier here to ensure that upload completed before
+      // submit_count was written to sync->process_count.
+      base::subtle::MemoryBarrier();
+      sync->process_count = submit_count_;
+    }
+  }
+
+ private:
+  virtual ~AsyncPixelTransferCompletionObserverImpl() {}
+
+  uint32 submit_count_;
+
+  base::Lock lock_;
+  bool cancelled_;
+
+  DISALLOW_COPY_AND_ASSIGN(AsyncPixelTransferCompletionObserverImpl);
+};
+
+class AsyncPixelTransfersCompletedQuery
+    : public QueryManager::Query,
+      public base::SupportsWeakPtr<AsyncPixelTransfersCompletedQuery> {
+ public:
+  AsyncPixelTransfersCompletedQuery(
+      QueryManager* manager, GLenum target, int32 shm_id, uint32 shm_offset);
+
+  virtual bool Begin() OVERRIDE;
+  virtual bool End(uint32 submit_count) OVERRIDE;
+  virtual bool Process() OVERRIDE;
+  virtual void Destroy(bool have_context) OVERRIDE;
+
+ protected:
+  virtual ~AsyncPixelTransfersCompletedQuery();
+
+  scoped_refptr<AsyncPixelTransferCompletionObserverImpl> observer_;
+};
+
+AsyncPixelTransfersCompletedQuery::AsyncPixelTransfersCompletedQuery(
+    QueryManager* manager, GLenum target, int32 shm_id, uint32 shm_offset)
+    : Query(manager, target, shm_id, shm_offset) {
+}
+
+bool AsyncPixelTransfersCompletedQuery::Begin() {
+  return true;
+}
+
+bool AsyncPixelTransfersCompletedQuery::End(uint32 submit_count) {
+  AsyncMemoryParams mem_params;
+  // Get the real shared memory since it might need to be duped to prevent
+  // use-after-free of the memory.
+  Buffer buffer = manager()->decoder()->GetSharedMemoryBuffer(shm_id());
+  if (!buffer.shared_memory)
+    return false;
+  mem_params.shared_memory = buffer.shared_memory;
+  mem_params.shm_size = buffer.size;
+  mem_params.shm_data_offset = shm_offset();
+  mem_params.shm_data_size = sizeof(QuerySync);
+
+  observer_ = new AsyncPixelTransferCompletionObserverImpl(submit_count);
+
+  // Ask AsyncPixelTransferDelegate to run completion callback after all
+  // previous async transfers are done. No guarantee that callback is run
+  // on the current thread.
+  manager()->decoder()->GetAsyncPixelTransferManager()
+      ->AsyncNotifyCompletion(mem_params, observer_);
+
+  return AddToPendingTransferQueue(submit_count);
+}
+
+bool AsyncPixelTransfersCompletedQuery::Process() {
+  QuerySync* sync = manager()->decoder()->GetSharedMemoryAs<QuerySync*>(
+      shm_id(), shm_offset(), sizeof(*sync));
+  if (!sync)
+    return false;
+
+  // Check if completion callback has been run. sync->process_count atomicity
+  // is guaranteed as this is already used to notify client of a completed
+  // query.
+  if (sync->process_count != submit_count())
+    return true;
+
+  UnmarkAsPending();
+  return true;
+}
+
+void AsyncPixelTransfersCompletedQuery::Destroy(bool /* have_context */) {
+  if (!IsDeleted()) {
+    MarkAsDeleted();
+  }
+}
+
+AsyncPixelTransfersCompletedQuery::~AsyncPixelTransfersCompletedQuery() {
+  if (observer_)
+    observer_->Cancel();
+}
+
+}  // namespace
 
 class AllSamplesPassedQuery : public QueryManager::Query {
  public:
@@ -166,11 +288,12 @@ void CommandLatencyQuery::Destroy(bool /* have_context */) {
 CommandLatencyQuery::~CommandLatencyQuery() {
 }
 
-class AsyncPixelTransfersCompletedQuery
-    : public QueryManager::Query
-    , public base::SupportsWeakPtr<AsyncPixelTransfersCompletedQuery> {
+
+class AsyncReadPixelsCompletedQuery
+    : public QueryManager::Query,
+      public base::SupportsWeakPtr<AsyncReadPixelsCompletedQuery> {
  public:
-  AsyncPixelTransfersCompletedQuery(
+  AsyncReadPixelsCompletedQuery(
       QueryManager* manager, GLenum target, int32 shm_id, uint32 shm_offset);
 
   virtual bool Begin() OVERRIDE;
@@ -179,79 +302,47 @@ class AsyncPixelTransfersCompletedQuery
   virtual void Destroy(bool have_context) OVERRIDE;
 
  protected:
-  virtual ~AsyncPixelTransfersCompletedQuery();
-
-  static void MarkAsCompletedThreadSafe(
-      uint32 submit_count, const gfx::AsyncMemoryParams& mem_params) {
-    DCHECK(mem_params.shared_memory);
-    DCHECK(mem_params.shared_memory->memory());
-    void *data = static_cast<int8*>(mem_params.shared_memory->memory()) +
-        mem_params.shm_data_offset;
-    QuerySync* sync = static_cast<QuerySync*>(data);
-
-    // Need a MemoryBarrier here to ensure that upload completed before
-    // submit_count was written to sync->process_count.
-    base::subtle::MemoryBarrier();
-    sync->process_count = submit_count;
-  }
+  void Complete();
+  virtual ~AsyncReadPixelsCompletedQuery();
 };
 
-AsyncPixelTransfersCompletedQuery::AsyncPixelTransfersCompletedQuery(
+AsyncReadPixelsCompletedQuery::AsyncReadPixelsCompletedQuery(
     QueryManager* manager, GLenum target, int32 shm_id, uint32 shm_offset)
     : Query(manager, target, shm_id, shm_offset) {
 }
 
-bool AsyncPixelTransfersCompletedQuery::Begin() {
+bool AsyncReadPixelsCompletedQuery::Begin() {
   return true;
 }
 
-bool AsyncPixelTransfersCompletedQuery::End(uint32 submit_count) {
-  gfx::AsyncMemoryParams mem_params;
-  // Get the real shared memory since it might need to be duped to prevent
-  // use-after-free of the memory.
-  Buffer buffer = manager()->decoder()->GetSharedMemoryBuffer(shm_id());
-  if (!buffer.shared_memory)
+bool AsyncReadPixelsCompletedQuery::End(uint32 submit_count) {
+  if (!AddToPendingQueue(submit_count)) {
     return false;
-  mem_params.shared_memory = buffer.shared_memory;
-  mem_params.shm_size = buffer.size;
-  mem_params.shm_data_offset = shm_offset();
-  mem_params.shm_data_size = sizeof(QuerySync);
+  }
+  manager()->decoder()->WaitForReadPixels(
+      base::Bind(&AsyncReadPixelsCompletedQuery::Complete,
+                 AsWeakPtr()));
 
-  // Ask AsyncPixelTransferDelegate to run completion callback after all
-  // previous async transfers are done. No guarantee that callback is run
-  // on the current thread.
-  manager()->decoder()->GetAsyncPixelTransferDelegate()->AsyncNotifyCompletion(
-      mem_params,
-      base::Bind(AsyncPixelTransfersCompletedQuery::MarkAsCompletedThreadSafe,
-                 submit_count));
-
-  return AddToPendingTransferQueue(submit_count);
-}
-
-bool AsyncPixelTransfersCompletedQuery::Process() {
-  QuerySync* sync = manager()->decoder()->GetSharedMemoryAs<QuerySync*>(
-      shm_id(), shm_offset(), sizeof(*sync));
-  if (!sync)
-    return false;
-
-  // Check if completion callback has been run. sync->process_count atomicity
-  // is guaranteed as this is already used to notify client of a completed
-  // query.
-  if (sync->process_count != submit_count())
-    return true;
-
-  UnmarkAsPending();
   return true;
 }
 
-void AsyncPixelTransfersCompletedQuery::Destroy(bool /* have_context */) {
+void AsyncReadPixelsCompletedQuery::Complete() {
+  MarkAsCompleted(1);
+}
+
+bool AsyncReadPixelsCompletedQuery::Process() {
+  return true;
+}
+
+void AsyncReadPixelsCompletedQuery::Destroy(bool /* have_context */) {
   if (!IsDeleted()) {
     MarkAsDeleted();
   }
 }
 
-AsyncPixelTransfersCompletedQuery::~AsyncPixelTransfersCompletedQuery() {
+AsyncReadPixelsCompletedQuery::~AsyncReadPixelsCompletedQuery() {
 }
+
 
 class GetErrorQuery : public QueryManager::Query {
  public:
@@ -280,7 +371,7 @@ bool GetErrorQuery::Begin() {
 
 bool GetErrorQuery::End(uint32 submit_count) {
   MarkAsPending(submit_count);
-  return MarkAsCompleted(manager()->decoder()->GetGLError());
+  return MarkAsCompleted(manager()->decoder()->GetErrorState()->GetGLError());
 }
 
 bool GetErrorQuery::Process() {
@@ -324,7 +415,7 @@ void QueryManager::Destroy(bool have_context) {
   pending_queries_.clear();
   pending_transfer_queries_.clear();
   while (!queries_.empty()) {
-    Query* query = queries_.begin()->second;
+    Query* query = queries_.begin()->second.get();
     query->Destroy(have_context);
     queries_.erase(queries_.begin());
   }
@@ -342,6 +433,10 @@ QueryManager::Query* QueryManager::CreateQuery(
       break;
     case GL_ASYNC_PIXEL_TRANSFERS_COMPLETED_CHROMIUM:
       query = new AsyncPixelTransfersCompletedQuery(
+          this, target, shm_id, shm_offset);
+      break;
+    case GL_ASYNC_READ_PIXELS_COMPLETED_CHROMIUM:
+      query = new AsyncReadPixelsCompletedQuery(
           this, target, shm_id, shm_offset);
       break;
     case GL_GET_ERROR_QUERY_CHROMIUM:
@@ -365,13 +460,13 @@ QueryManager::Query* QueryManager::CreateQuery(
 QueryManager::Query* QueryManager::GetQuery(
     GLuint client_id) {
   QueryMap::iterator it = queries_.find(client_id);
-  return it != queries_.end() ? it->second : NULL;
+  return it != queries_.end() ? it->second.get() : NULL;
 }
 
 void QueryManager::RemoveQuery(GLuint client_id) {
   QueryMap::iterator it = queries_.find(client_id);
   if (it != queries_.end()) {
-    Query* query = it->second;
+    Query* query = it->second.get();
     RemovePendingQuery(query);
     query->MarkAsDeleted();
     queries_.erase(it);
@@ -431,7 +526,26 @@ QueryManager::Query::Query(
   manager_->StartTracking(this);
 }
 
+void QueryManager::Query::RunCallbacks() {
+  for (size_t i = 0; i < callbacks_.size(); i++) {
+    callbacks_[i].Run();
+  }
+  callbacks_.clear();
+}
+
+void QueryManager::Query::AddCallback(base::Closure callback) {
+  if (pending_) {
+    callbacks_.push_back(callback);
+  } else {
+    callback.Run();
+  }
+}
+
 QueryManager::Query::~Query() {
+  // The query is getting deleted, either by the client or
+  // because the context was lost. Call any outstanding
+  // callbacks to avoid leaks.
+  RunCallbacks();
   if (manager_) {
     manager_->StopTracking(this);
     manager_ = NULL;
@@ -465,6 +579,7 @@ bool QueryManager::ProcessPendingQueries() {
     if (query->pending()) {
       break;
     }
+    query->RunCallbacks();
     pending_queries_.pop_front();
   }
 
@@ -484,6 +599,7 @@ bool QueryManager::ProcessPendingTransferQueries() {
     if (query->pending()) {
       break;
     }
+    query->RunCallbacks();
     pending_transfer_queries_.pop_front();
   }
 
@@ -561,5 +677,3 @@ bool QueryManager::EndQuery(Query* query, uint32 submit_count) {
 
 }  // namespace gles2
 }  // namespace gpu
-
-

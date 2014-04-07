@@ -6,10 +6,11 @@
 
 #include "base/command_line.h"
 #include "base/environment.h"
+#include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/metrics/histogram.h"
 #include "base/nix/xdg_util.h"
-#include "base/process_util.h"
+#include "base/process/launch.h"
 #include "base/stl_util.h"
 #include "media/audio/audio_output_dispatcher.h"
 #include "media/audio/audio_parameters.h"
@@ -176,7 +177,7 @@ void AudioManagerLinux::GetAlsaDevicesInfo(
 
       media::AudioDeviceName name;
       name.unique_id = unique_device_name.get();
-      if (desc.get()) {
+      if (desc) {
         // Use the more user friendly description as name.
         // Replace '\n' with '-'.
         char* pret = strchr(desc.get(), '\n');
@@ -256,8 +257,10 @@ AudioOutputStream* AudioManagerLinux::MakeLinearOutputStream(
 }
 
 AudioOutputStream* AudioManagerLinux::MakeLowLatencyOutputStream(
-    const AudioParameters& params) {
+    const AudioParameters& params,
+    const std::string& input_device_id) {
   DCHECK_EQ(AudioParameters::AUDIO_PCM_LOW_LATENCY, params.format());
+  // TODO(xians): Use input_device_id for unified IO.
   return MakeOutputStream(params);
 }
 

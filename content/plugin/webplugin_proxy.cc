@@ -9,21 +9,21 @@
 #include "base/bind.h"
 #include "base/lazy_instance.h"
 #include "base/memory/scoped_handle.h"
-#include "base/shared_memory.h"
+#include "base/memory/shared_memory.h"
 #include "build/build_config.h"
-#include "content/common/npobject_proxy.h"
-#include "content/common/npobject_util.h"
-#include "content/common/plugin_messages.h"
+#include "content/child/npapi/npobject_proxy.h"
+#include "content/child/npapi/npobject_util.h"
+#include "content/child/npapi/webplugin_delegate_impl.h"
+#include "content/child/plugin_messages.h"
 #include "content/plugin/plugin_channel.h"
 #include "content/plugin/plugin_thread.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/url_constants.h"
 #include "skia/ext/platform_canvas.h"
 #include "skia/ext/platform_device.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebBindings.h"
+#include "third_party/WebKit/public/web/WebBindings.h"
 #include "ui/gfx/blit.h"
 #include "ui/gfx/canvas.h"
-#include "webkit/plugins/npapi/webplugin_delegate_impl.h"
 
 #if defined(OS_MACOSX)
 #include "base/mac/mac_util.h"
@@ -36,15 +36,11 @@
 #endif
 
 #if defined(OS_WIN)
+#include "content/common/plugin_process_messages.h"
 #include "content/public/common/sandbox_init.h"
 #endif
 
 using WebKit::WebBindings;
-
-using webkit::npapi::WebPluginResourceClient;
-#if defined(OS_MACOSX)
-using webkit::npapi::WebPluginAcceleratedSurface;
-#endif
 
 namespace content {
 
@@ -69,7 +65,7 @@ WebPluginProxy::WebPluginProxy(
       page_url_(page_url),
       windowless_buffer_index_(0),
       host_render_view_routing_id_(host_render_view_routing_id),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {
+      weak_factory_(this) {
 #if defined(USE_X11)
   windowless_shm_pixmaps_[0] = None;
   windowless_shm_pixmaps_[1] = None;
@@ -102,7 +98,7 @@ WebPluginProxy::~WebPluginProxy() {
 
 #if defined(OS_MACOSX)
   // Destroy the surface early, since it may send messages during cleanup.
-  if (accelerated_surface_.get())
+  if (accelerated_surface_)
     accelerated_surface_.reset();
 #endif
 
@@ -199,9 +195,11 @@ void WebPluginProxy::InvalidateRect(const gfx::Rect& rect) {
     waiting_for_paint_ = true;
     // Invalidates caused by calls to NPN_InvalidateRect/NPN_InvalidateRgn
     // need to be painted asynchronously as per the NPAPI spec.
-    MessageLoop::current()->PostTask(FROM_HERE,
-        base::Bind(&WebPluginProxy::OnPaint, weak_factory_.GetWeakPtr(),
-            damaged_rect_));
+    base::MessageLoop::current()->PostTask(
+        FROM_HERE,
+        base::Bind(&WebPluginProxy::OnPaint,
+                   weak_factory_.GetWeakPtr(),
+                   damaged_rect_));
     damaged_rect_ = gfx::Rect();
   }
 }
@@ -217,8 +215,15 @@ NPObject* WebPluginProxy::GetWindowScriptNPObject() {
   if (!success)
     return NULL;
 
-  window_npobject_ = NPObjectProxy::Create(
-      channel_, npobject_route_id, host_render_view_routing_id_, page_url_);
+  // PluginChannel creates a dummy owner identifier for unknown owners, so
+  // use that.
+  NPP owner = channel_->GetExistingNPObjectOwner(MSG_ROUTING_NONE);
+
+  window_npobject_ = NPObjectProxy::Create(channel_.get(),
+                                           npobject_route_id,
+                                           host_render_view_routing_id_,
+                                           page_url_,
+                                           owner);
 
   return window_npobject_;
 }
@@ -234,8 +239,15 @@ NPObject* WebPluginProxy::GetPluginElement() {
   if (!success)
     return NULL;
 
-  plugin_element_ = NPObjectProxy::Create(
-      channel_, npobject_route_id, host_render_view_routing_id_, page_url_);
+  // PluginChannel creates a dummy owner identifier for unknown owners, so
+  // use that.
+  NPP owner = channel_->GetExistingNPObjectOwner(MSG_ROUTING_NONE);
+
+  plugin_element_ = NPObjectProxy::Create(channel_.get(),
+                                          npobject_route_id,
+                                          host_render_view_routing_id_,
+                                          page_url_,
+                                          owner);
 
   return plugin_element_;
 }
@@ -306,8 +318,7 @@ void WebPluginProxy::HandleURLRequest(const char* url,
     // Please refer to https://bugzilla.mozilla.org/show_bug.cgi?id=366082
     // for more details on this.
     if (delegate_->GetQuirks() &
-        webkit::npapi::WebPluginDelegateImpl::
-            PLUGIN_QUIRK_BLOCK_NONSTANDARD_GETURL_REQUESTS) {
+        WebPluginDelegateImpl::PLUGIN_QUIRK_BLOCK_NONSTANDARD_GETURL_REQUESTS) {
       GURL request_url(url);
       if (!request_url.SchemeIs(chrome::kHttpScheme) &&
           !request_url.SchemeIs(chrome::kHttpsScheme) &&
@@ -486,7 +497,7 @@ void WebPluginProxy::CreateDIBAndCGContextFromHandle(
     const TransportDIB::Handle& dib_handle,
     const gfx::Rect& window_rect,
     scoped_ptr<TransportDIB>* dib_out,
-    base::mac::ScopedCFTypeRef<CGContextRef>* cg_context_out) {
+    base::ScopedCFTypeRef<CGContextRef>* cg_context_out) {
   // Convert the shared memory handle to a handle that works in our process,
   // and then use that to create a CGContextRef.
   TransportDIB* dib = TransportDIB::Map(dib_handle);
@@ -521,7 +532,7 @@ void WebPluginProxy::SetWindowlessBuffers(
                                   &windowless_contexts_[1]);
 }
 
-#elif defined(USE_X11)
+#elif defined(TOOLKIT_GTK)
 
 void WebPluginProxy::CreateDIBAndCanvasFromHandle(
     const TransportDIB::Handle& dib_handle,
@@ -587,7 +598,7 @@ void WebPluginProxy::SetWindowlessBuffers(
   }
 }
 
-#elif defined(OS_ANDROID)
+#else
 
 void WebPluginProxy::SetWindowlessBuffers(
     const TransportDIB::Handle& windowless_buffer0,
@@ -629,7 +640,7 @@ void WebPluginProxy::StartIme() {
 
 WebPluginAcceleratedSurface* WebPluginProxy::GetAcceleratedSurface(
     gfx::GpuPreference gpu_preference) {
-  if (!accelerated_surface_.get())
+  if (!accelerated_surface_)
     accelerated_surface_.reset(
         WebPluginAcceleratedSurfaceProxy::Create(this, gpu_preference));
   return accelerated_surface_.get();

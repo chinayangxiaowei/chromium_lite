@@ -6,14 +6,14 @@
 
 #include <vector>
 
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "content/browser/gpu/gpu_process_host_ui_shim.h"
 #include "content/browser/ppapi_plugin_process_host.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/common/content_constants.h"
 #include "content/public/common/url_constants.h"
-#include "googleurl/src/gurl.h"
 #include "ppapi/proxy/ppapi_messages.h"
-#include "webkit/plugins/plugin_constants.h"
+#include "url/gurl.h"
 
 namespace content {
 
@@ -42,7 +42,7 @@ bool HandleDebugURL(const GURL& url, PageTransition transition) {
   if (!(transition & PAGE_TRANSITION_FROM_ADDRESS_BAR))
     return false;
 
-  if (url.host() == chrome::kChromeUIBrowserCrashHost) {
+  if (url.host() == kChromeUIBrowserCrashHost) {
     // Induce an intentional crash in the browser process.
     CHECK(false);
     return true;

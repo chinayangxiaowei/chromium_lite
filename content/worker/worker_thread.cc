@@ -7,20 +7,21 @@
 #include "base/command_line.h"
 #include "base/lazy_instance.h"
 #include "base/threading/thread_local.h"
-#include "content/common/appcache/appcache_dispatcher.h"
-#include "content/common/db_message_filter.h"
-#include "content/common/indexed_db/indexed_db_message_filter.h"
-#include "content/common/web_database_observer_impl.h"
+#include "content/child/appcache/appcache_dispatcher.h"
+#include "content/child/appcache/appcache_frontend_impl.h"
+#include "content/child/db_message_filter.h"
+#include "content/child/indexed_db/indexed_db_message_filter.h"
+#include "content/child/runtime_features.h"
+#include "content/child/web_database_observer_impl.h"
 #include "content/common/worker_messages.h"
 #include "content/public/common/content_switches.h"
 #include "content/worker/websharedworker_stub.h"
 #include "content/worker/worker_webkitplatformsupport_impl.h"
 #include "ipc/ipc_sync_channel.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebBlobRegistry.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebDatabase.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebIDBFactory.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebKit.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebRuntimeFeatures.h"
+#include "third_party/WebKit/public/platform/WebBlobRegistry.h"
+#include "third_party/WebKit/public/web/WebDatabase.h"
+#include "third_party/WebKit/public/web/WebKit.h"
+#include "third_party/WebKit/public/web/WebRuntimeFeatures.h"
 #include "webkit/glue/webkit_glue.h"
 
 using WebKit::WebRuntimeFeatures;
@@ -32,13 +33,14 @@ static base::LazyInstance<base::ThreadLocalPointer<WorkerThread> > lazy_tls =
 
 WorkerThread::WorkerThread() {
   lazy_tls.Pointer()->Set(this);
-  webkit_platform_support_.reset(
-      new WorkerWebKitPlatformSupportImpl(thread_safe_sender()));
+  webkit_platform_support_.reset(new WorkerWebKitPlatformSupportImpl(
+      thread_safe_sender(),
+      sync_message_filter(),
+      quota_message_filter()));
   WebKit::initialize(webkit_platform_support_.get());
-  WebKit::setIDBFactory(
-      webkit_platform_support_.get()->idbFactory());
 
-  appcache_dispatcher_.reset(new AppCacheDispatcher(this));
+  appcache_dispatcher_.reset(
+      new AppCacheDispatcher(this, new AppCacheFrontendImpl()));
 
   web_database_observer_impl_.reset(
       new WebDatabaseObserverImpl(sync_message_filter()));
@@ -46,36 +48,20 @@ WorkerThread::WorkerThread() {
   db_message_filter_ = new DBMessageFilter();
   channel()->AddFilter(db_message_filter_.get());
 
-  indexed_db_message_filter_ = new IndexedDBMessageFilter;
+  indexed_db_message_filter_ = new IndexedDBMessageFilter(
+      thread_safe_sender());
   channel()->AddFilter(indexed_db_message_filter_.get());
 
   const CommandLine& command_line = *CommandLine::ForCurrentProcess();
-
-  webkit_glue::EnableWebCoreLogChannels(
-      command_line.GetSwitchValueASCII(switches::kWebCoreLogChannels));
-
-  WebKit::WebRuntimeFeatures::enableDatabase(
-      !command_line.HasSwitch(switches::kDisableDatabases));
-
-  WebKit::WebRuntimeFeatures::enableApplicationCache(
-      !command_line.HasSwitch(switches::kDisableApplicationCache));
-
-#if defined(OS_WIN)
-  // We don't yet support notifications on non-Windows, so hide it from pages.
-  WebRuntimeFeatures::enableNotifications(
-      !command_line.HasSwitch(switches::kDisableDesktopNotifications));
-#endif
-
-  WebRuntimeFeatures::enableSockets(
-      !command_line.HasSwitch(switches::kDisableWebSockets));
-
-  WebRuntimeFeatures::enableFileSystem(
-      !command_line.HasSwitch(switches::kDisableFileSystem));
-
-  WebRuntimeFeatures::enableIndexedDatabase(true);
+  SetRuntimeFeaturesDefaultsAndUpdateFromArgs(command_line);
 }
 
 WorkerThread::~WorkerThread() {
+}
+
+void WorkerThread::Shutdown() {
+  ChildThread::Shutdown();
+
   // Shutdown in reverse of the initialization order.
   channel()->RemoveFilter(indexed_db_message_filter_.get());
   indexed_db_message_filter_ = NULL;

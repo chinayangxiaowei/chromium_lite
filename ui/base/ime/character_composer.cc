@@ -4,16 +4,19 @@
 
 #include "ui/base/ime/character_composer.h"
 
+#include <X11/Xlib.h>
+
 #include <algorithm>
 #include <iterator>
 
+#include "base/strings/utf_string_conversions.h"
 #include "base/third_party/icu/icu_utf.h"
-#include "base/utf_string_conversions.h"
 // Note for Gtk removal: gdkkeysyms.h only contains a set of
 // '#define GDK_KeyName 0xNNNN' macros and does not #include any Gtk headers.
 #include "third_party/gtk+/gdk/gdkkeysyms.h"
 #include "ui/base/events/event_constants.h"
 #include "ui/base/glib/glib_integers.h"
+#include "ui/base/x/x11_util.h"
 
 // Note for Gtk removal: gtkimcontextsimpleseqs.h does not #include any Gtk
 // headers and only contains one big guint16 array |gtk_compose_seqs_compact|
@@ -24,6 +27,23 @@
 #include "third_party/gtk+/gtk/gtkimcontextsimpleseqs.h"
 
 namespace {
+
+// A black list for not composing dead keys. Once the key combination is listed
+// below, the dead key won't work even when this is listed in
+// gtkimcontextsimpleseqs.h. This only supports two keyevent sequenses.
+// TODO(nona): Remove this hack.
+const struct BlackListedDeadKey {
+  uint32 first_key;  // target first key event.
+  uint32 second_key;  // target second key event.
+  uint32 output_char;  // the character to be inserted if the filter is matched.
+  bool consume;  // true if the original key event will be consumed.
+} kBlackListedDeadKeys[] = {
+  { GDK_KEY_dead_acute, GDK_KEY_m, GDK_KEY_apostrophe, false },
+  { GDK_KEY_dead_acute, GDK_KEY_s, GDK_KEY_apostrophe, false },
+  { GDK_KEY_dead_acute, GDK_KEY_t, GDK_KEY_apostrophe, false },
+  { GDK_KEY_dead_acute, GDK_KEY_v, GDK_KEY_apostrophe, false },
+  { GDK_KEY_dead_acute, GDK_KEY_dead_acute, GDK_KEY_apostrophe, true },
+};
 
 typedef std::vector<unsigned int> ComposeBufferType;
 
@@ -349,6 +369,19 @@ bool UTF32CharacterToUTF16(uint32 character, string16* output) {
   return true;
 }
 
+// Converts a X keycode to a X keysym with no modifiers.
+KeySym XKeyCodeToXKeySym(unsigned int keycode) {
+  Display* display = ui::GetXDisplay();
+  if (!display)
+    return NoSymbol;
+
+  XKeyEvent x_key_event = {0};
+  x_key_event.type = KeyPress;
+  x_key_event.display = display;
+  x_key_event.keycode = keycode;
+  return ::XLookupKeysym(&x_key_event, 0);
+}
+
 // Returns an hexadecimal digit integer (0 to 15) corresponding to |keyval|.
 // -1 is returned when |keyval| cannot be a hexadecimal digit.
 int KeyvalToHexDigit(unsigned int keyval) {
@@ -377,7 +410,8 @@ void CharacterComposer::Reset() {
 }
 
 bool CharacterComposer::FilterKeyPress(unsigned int keyval,
-                                       unsigned int flags) {
+                                       unsigned int keycode,
+                                       int flags) {
   composed_character_.clear();
   preedit_string_.clear();
 
@@ -401,9 +435,9 @@ bool CharacterComposer::FilterKeyPress(unsigned int keyval,
   // Filter key press in an appropriate manner.
   switch (composition_mode_) {
     case KEY_SEQUENCE_MODE:
-      return FilterKeyPressSequenceMode(keyval, flags);
+      return FilterKeyPressSequenceMode(keyval, keycode, flags);
     case HEX_MODE:
-      return FilterKeyPressHexMode(keyval, flags);
+      return FilterKeyPressHexMode(keyval, keycode, flags);
     default:
       NOTREACHED();
       return false;
@@ -411,9 +445,21 @@ bool CharacterComposer::FilterKeyPress(unsigned int keyval,
 }
 
 bool CharacterComposer::FilterKeyPressSequenceMode(unsigned int keyval,
-                                                   unsigned int flags) {
+                                                   unsigned int keycode,
+                                                   int flags) {
   DCHECK(composition_mode_ == KEY_SEQUENCE_MODE);
   compose_buffer_.push_back(keyval);
+
+  if (compose_buffer_.size() == 2U) {
+    for (size_t i = 0; i < ARRAYSIZE_UNSAFE(kBlackListedDeadKeys); ++i) {
+      if (compose_buffer_[0] == kBlackListedDeadKeys[i].first_key &&
+          compose_buffer_[1] == kBlackListedDeadKeys[i].second_key ) {
+        Reset();
+        composed_character_.push_back(kBlackListedDeadKeys[i].output_char);
+        return kBlackListedDeadKeys[i].consume;
+      }
+    }
+  }
 
   // Check compose table.
   uint32 composed_character_utf32 = 0;
@@ -436,10 +482,18 @@ bool CharacterComposer::FilterKeyPressSequenceMode(unsigned int keyval,
 }
 
 bool CharacterComposer::FilterKeyPressHexMode(unsigned int keyval,
-                                              unsigned int flags) {
+                                              unsigned int keycode,
+                                              int flags) {
   DCHECK(composition_mode_ == HEX_MODE);
   const size_t kMaxHexSequenceLength = 8;
-  const int hex_digit = KeyvalToHexDigit(keyval);
+  int hex_digit = KeyvalToHexDigit(keyval);
+  if (hex_digit < 0) {
+    // With 101 keyboard, control + shift + 3 produces '#', but a user may
+    // have intended to type '3'.  So, if a hexadecimal character was not found,
+    // suppose a user is holding shift key (and possibly control key, too) and
+    // try a character with modifier keys removed.
+    hex_digit = KeyvalToHexDigit(XKeyCodeToXKeySym(keycode));
+  }
 
   if (keyval == GDK_KEY_Escape) {
     // Cancel composition when ESC is pressed.

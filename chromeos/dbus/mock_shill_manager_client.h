@@ -22,7 +22,6 @@ class MockShillManagerClient : public ShillManagerClient {
   MOCK_METHOD1(RemovePropertyChangedObserver,
                void(ShillPropertyChangedObserver* observer));
   MOCK_METHOD1(GetProperties, void(const DictionaryValueCallback& callback));
-  MOCK_METHOD0(CallGetPropertiesAndBlock, base::DictionaryValue*());
   MOCK_METHOD1(GetNetworksForGeolocation,
                void(const DictionaryValueCallback& callback));
   MOCK_METHOD4(SetProperty, void(const std::string& name,
@@ -41,33 +40,31 @@ class MockShillManagerClient : public ShillManagerClient {
   MOCK_METHOD3(ConfigureService, void(const base::DictionaryValue& properties,
                                       const ObjectPathCallback& callback,
                                       const ErrorCallback& error_callback));
+  MOCK_METHOD4(ConfigureServiceForProfile,
+               void(const dbus::ObjectPath& profile_path,
+                    const base::DictionaryValue& properties,
+                    const ObjectPathCallback& callback,
+                    const ErrorCallback& error_callback));
   MOCK_METHOD3(GetService, void(const base::DictionaryValue& properties,
                                 const ObjectPathCallback& callback,
                                 const ErrorCallback& error_callback));
-  MOCK_METHOD7(VerifyDestination, void(const std::string& certificate,
-                                       const std::string& public_key,
-                                       const std::string& nonce,
-                                       const std::string& signed_data,
-                                       const std::string& device_serial,
-                                       const BooleanCallback& callback,
-                                       const ErrorCallback& error_callback));
-  MOCK_METHOD8(VerifyAndEncryptCredentials,
-               void(const std::string& certificate,
-                    const std::string& public_key,
-                    const std::string& nonce,
-                    const std::string& signed_data,
-                    const std::string& device_serial,
+  MOCK_METHOD3(VerifyDestination,
+               void(const VerificationProperties& properties,
+                    const BooleanCallback& callback,
+                    const ErrorCallback& error_callback));
+  MOCK_METHOD4(VerifyAndEncryptCredentials,
+               void(const VerificationProperties& properties,
                     const std::string& service_path,
                     const StringCallback& callback,
                     const ErrorCallback& error_callback));
-  MOCK_METHOD8(VerifyAndEncryptData, void(const std::string& certificate,
-                                       const std::string& public_key,
-                                       const std::string& nonce,
-                                       const std::string& signed_data,
-                                       const std::string& device_serial,
-                                       const std::string& data,
-                                       const StringCallback& callback,
-                                       const ErrorCallback& error_callback));
+  MOCK_METHOD4(VerifyAndEncryptData,
+               void(const VerificationProperties& properties,
+                    const std::string& data,
+                    const StringCallback& callback,
+                    const ErrorCallback& error_callback));
+  MOCK_METHOD2(ConnectToBestServices,
+               void(const base::Closure& callback,
+                    const ErrorCallback& error_callback));
   MOCK_METHOD0(GetTestInterface, TestInterface*());
 
 };

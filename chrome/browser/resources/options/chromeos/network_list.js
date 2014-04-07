@@ -19,13 +19,13 @@ cr.define('options.network', function() {
   function Constants() {}
 
   // Network types:
-  Constants.TYPE_UNKNOWN = 0;
-  Constants.TYPE_ETHERNET = 1;
-  Constants.TYPE_WIFI = 2;
-  Constants.TYPE_WIMAX = 3;
-  Constants.TYPE_BLUETOOTH = 4;
-  Constants.TYPE_CELLULAR = 5;
-  Constants.TYPE_VPN = 6;
+  Constants.TYPE_UNKNOWN = 'UNKNOWN';
+  Constants.TYPE_ETHERNET = 'ethernet';
+  Constants.TYPE_WIFI = 'wifi';
+  Constants.TYPE_WIMAX = 'wimax';
+  Constants.TYPE_BLUETOOTH = 'bluetooth';
+  Constants.TYPE_CELLULAR = 'cellular';
+  Constants.TYPE_VPN = 'vpn';
 
   // Cellular activation states:
   Constants.ACTIVATION_STATE_UNKNOWN = 0;
@@ -42,7 +42,6 @@ cr.define('options.network', function() {
                              'wimax',
                              'cellular',
                              'vpn',
-                             'airplaneMode',
                              'addConnection'];
 
   /**
@@ -111,6 +110,16 @@ cr.define('options.network', function() {
    * @private
    */
   var defaultIcons_ = {};
+
+  /**
+   * Contains the current logged in user type, which is one of 'none',
+   * 'regular', 'owner', 'guest', 'retail-mode', 'public-account',
+   * 'locally-managed', and 'kiosk-app', or empty string if the data has not
+   * been set.
+   * @type {string}
+   * @private
+   */
+  var loggedInUserType_ = '';
 
   /**
    * Create an element in the network list for controlling network
@@ -464,7 +473,7 @@ cr.define('options.network', function() {
 
         var label = enableDataRoaming_ ? 'disableDataRoaming' :
             'enableDataRoaming';
-        var disabled = !UIAccountTweaks.currentUserIsOwner();
+        var disabled = loggedInUserType_ != 'owner';
         var entry = {label: loadTimeData.getString(label),
                      data: {}};
         if (disabled) {
@@ -526,8 +535,7 @@ cr.define('options.network', function() {
                        },
                        data: {}});
         } else if (this.data_.key == 'wimax') {
-          // TODO(zelidrag): Add proper strings for wimax.
-          addendum.push({label: loadTimeData.getString('turnOffCellular'),
+          addendum.push({label: loadTimeData.getString('turnOffWimax'),
                        command: function() {
                          chrome.send('disableWimax');
                        },
@@ -722,7 +730,7 @@ cr.define('options.network', function() {
     button.appendChild(buttonLabel);
     var callback = null;
     if (typeof command == 'string') {
-      var type = String(data.networkType);
+      var type = data.networkType;
       var path = data.servicePath;
       callback = function() {
         chrome.send('networkCommand',
@@ -775,14 +783,6 @@ cr.define('options.network', function() {
 
       // Wi-Fi control is always visible.
       this.update({key: 'wifi', networkList: []});
-
-      if (airplaneModeAvailable_()) {
-        this.update({key: 'airplaneMode',
-                     subtitle: loadTimeData.getString('airplaneModeLabel'),
-                     command: function() {
-                       chrome.send('toggleAirplaneMode');
-                     }});
-      }
 
       var entryAddWifi = {
         label: loadTimeData.getString('addConnectionWifi'),
@@ -943,6 +943,14 @@ cr.define('options.network', function() {
   };
 
   /**
+   * Sets the current logged in user type.
+   * @param {string} userType Current logged in user type.
+   */
+  NetworkList.updateLoggedInUserType = function(userType) {
+    loggedInUserType_ = String(userType);
+  };
+
+  /**
    * Chrome callback for updating network controls.
    * @param {Object} data Description of available network devices and their
    *     corresponding state.
@@ -955,16 +963,6 @@ cr.define('options.network', function() {
     cellularSupportsScan_ = data.cellularSupportsScan;
     wimaxAvailable_ = data.wimaxAvailable;
     wimaxEnabled_ = data.wimaxEnabled;
-
-    if (data.accessLocked) {
-      $('network-locked-message').hidden = false;
-      networkList.disabled = true;
-      $('use-shared-proxies').setDisabled('network-lock', true);
-    } else {
-      $('network-locked-message').hidden = true;
-      networkList.disabled = false;
-      $('use-shared-proxies').setDisabled('network-lock', false);
-    }
 
     // Only show Ethernet control if connected.
     var ethernetConnection = getConnection_(data.wiredList);
@@ -988,8 +986,8 @@ cr.define('options.network', function() {
     else
       addEnableNetworkButton_('wifi', 'enableWifi', 'wifi');
 
-    // Only show cellular control if available and not in airplane mode.
-    if (data.cellularAvailable && !data.airplaneMode) {
+    // Only show cellular control if available.
+    if (data.cellularAvailable) {
       if (data.cellularEnabled)
         loadData_('cellular', data.wirelessList, data.rememberedList);
       else
@@ -998,8 +996,8 @@ cr.define('options.network', function() {
       networkList.deleteItem('cellular');
     }
 
-    // Only show cellular control if available and not in airplane mode.
-    if (data.wimaxAvailable && !data.airplaneMode) {
+    // Only show cellular control if available.
+    if (data.wimaxAvailable) {
       if (data.wimaxEnabled)
         loadData_('wimax', data.wirelessList, data.rememberedList);
       else
@@ -1015,7 +1013,6 @@ cr.define('options.network', function() {
       loadData_('vpn', data.vpnList, data.rememberedList);
     else
       networkList.deleteItem('vpn');
-    networkList.updateToggleControl('airplaneMode', data.airplaneMode);
     networkList.endBatchUpdates();
   };
 
@@ -1160,17 +1157,6 @@ cr.define('options.network', function() {
         return entry;
     }
     return null;
-  }
-
-  /**
-   * Queries if airplane mode is available.
-   * @return {boolean} Indicates if airplane mode is available.
-   * @private
-   */
-  function airplaneModeAvailable_() {
-     // TODO(kevers): Use library callback to determine if airplane mode is
-     // available once back-end suport is in place.
-     return false;
   }
 
   /**

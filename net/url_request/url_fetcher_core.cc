@@ -69,15 +69,15 @@ URLFetcherCore::URLFetcherCore(URLFetcher* fetcher,
       original_url_(original_url),
       request_type_(request_type),
       delegate_(d),
-      delegate_task_runner_(
-          base::ThreadTaskRunnerHandle::Get()),
-      request_(NULL),
+      delegate_task_runner_(base::ThreadTaskRunnerHandle::Get()),
       load_flags_(LOAD_NORMAL),
       response_code_(URLFetcher::RESPONSE_CODE_INVALID),
       buffer_(new IOBuffer(kBufferSize)),
       url_request_data_key_(NULL),
       was_fetched_via_proxy_(false),
       upload_content_set_(false),
+      upload_range_offset_(0),
+      upload_range_length_(0),
       is_chunked_upload_(false),
       was_cancelled_(false),
       file_writer_(NULL),
@@ -96,9 +96,9 @@ URLFetcherCore::URLFetcherCore(URLFetcher* fetcher,
 }
 
 void URLFetcherCore::Start() {
-  DCHECK(delegate_task_runner_);
-  DCHECK(request_context_getter_) << "We need an URLRequestContext!";
-  if (network_task_runner_) {
+  DCHECK(delegate_task_runner_.get());
+  DCHECK(request_context_getter_.get()) << "We need an URLRequestContext!";
+  if (network_task_runner_.get()) {
     DCHECK_EQ(network_task_runner_,
               request_context_getter_->GetNetworkTaskRunner());
   } else {
@@ -111,7 +111,7 @@ void URLFetcherCore::Start() {
 }
 
 void URLFetcherCore::Stop() {
-  if (delegate_task_runner_)  // May be NULL in tests.
+  if (delegate_task_runner_.get())  // May be NULL in tests.
     DCHECK(delegate_task_runner_->BelongsToCurrentThread());
 
   delegate_ = NULL;
@@ -145,16 +145,22 @@ void URLFetcherCore::SetUploadData(const std::string& upload_content_type,
 void URLFetcherCore::SetUploadFilePath(
     const std::string& upload_content_type,
     const base::FilePath& file_path,
+    uint64 range_offset,
+    uint64 range_length,
     scoped_refptr<base::TaskRunner> file_task_runner) {
   DCHECK(!is_chunked_upload_);
   DCHECK(!upload_content_set_);
   DCHECK(upload_content_.empty());
   DCHECK(upload_file_path_.empty());
+  DCHECK_EQ(upload_range_offset_, 0ULL);
+  DCHECK_EQ(upload_range_length_, 0ULL);
   DCHECK(upload_content_type_.empty());
   DCHECK(!upload_content_type.empty());
 
   upload_content_type_ = upload_content_type;
   upload_file_path_ = file_path;
+  upload_range_offset_ = range_offset;
+  upload_range_length_ = range_length;
   upload_file_task_runner_ = file_task_runner;
   upload_content_set_ = true;
 }
@@ -175,7 +181,7 @@ void URLFetcherCore::SetChunkedUpload(const std::string& content_type) {
 
 void URLFetcherCore::AppendChunkToUpload(const std::string& content,
                                          bool is_last_chunk) {
-  DCHECK(delegate_task_runner_);
+  DCHECK(delegate_task_runner_.get());
   DCHECK(network_task_runner_.get());
   network_task_runner_->PostTask(
       FROM_HERE,
@@ -212,7 +218,7 @@ void URLFetcherCore::GetExtraRequestHeaders(
 
 void URLFetcherCore::SetRequestContext(
     URLRequestContextGetter* request_context_getter) {
-  DCHECK(!request_context_getter_);
+  DCHECK(!request_context_getter_.get());
   DCHECK(request_context_getter);
   request_context_getter_ = request_context_getter;
 }
@@ -273,7 +279,7 @@ void URLFetcherCore::SaveResponseToTemporaryFile(
 }
 
 HttpResponseHeaders* URLFetcherCore::GetResponseHeaders() const {
-  return response_headers_;
+  return response_headers_.get();
 }
 
 // TODO(panayiotis): socket_address_ is written in the IO thread,
@@ -352,9 +358,16 @@ bool URLFetcherCore::GetResponseAsFilePath(bool take_ownership,
   *out_response_path = file_writer_->file_path();
 
   if (take_ownership) {
-    network_task_runner_->PostTask(
-        FROM_HERE,
-        base::Bind(&URLFetcherCore::DisownFile, this));
+    // Intentionally calling a file_writer_ method directly without posting
+    // the task to network_task_runner_.
+    //
+    // This is for correctly handling the case when file_writer_->DisownFile()
+    // is soon followed by URLFetcherCore::Stop(). We have to make sure that
+    // DisownFile takes effect before Stop deletes file_writer_.
+    //
+    // This direct call should be thread-safe, since DisownFile itself does no
+    // file operation. It just flips the state to be referred in destruction.
+    file_writer_->DisownFile();
   }
   return true;
 }
@@ -423,16 +436,15 @@ void URLFetcherCore::OnReadCompleted(URLRequest* request,
     InformDelegateDownloadProgress();
     InformDelegateDownloadDataIfNecessary(bytes_read);
 
-    const int result = response_writer_->Write(
-        buffer_, bytes_read,
-        base::Bind(&URLFetcherCore::DidWriteBuffer, this));
+    const int result =
+        WriteBuffer(new DrainableIOBuffer(buffer_.get(), bytes_read));
     if (result < 0) {
       // Write failed or waiting for write completion.
       if (result == ERR_IO_PENDING)
         waiting_on_write = true;
       break;
     }
-  } while (request_->Read(buffer_, kBufferSize, &bytes_read));
+  } while (request_->Read(buffer_.get(), kBufferSize, &bytes_read));
 
   const URLRequestStatus status = request_->status();
 
@@ -518,7 +530,7 @@ void URLFetcherCore::StartURLRequest() {
     return;
   }
 
-  DCHECK(request_context_getter_);
+  DCHECK(request_context_getter_.get());
   DCHECK(!request_.get());
 
   g_registry.Get().AddURLFetcherCore(this);
@@ -533,7 +545,7 @@ void URLFetcherCore::StartURLRequest() {
   if (is_chunked_upload_)
     request_->EnableChunkedUpload();
   request_->set_load_flags(flags);
-  request_->set_referrer(referrer_);
+  request_->SetReferrer(referrer_);
   request_->set_first_party_for_cookies(first_party_for_cookies_.is_empty() ?
       original_url_ : first_party_for_cookies_);
   if (url_request_data_key_ && !url_request_create_data_callback_.is_null()) {
@@ -566,10 +578,12 @@ void URLFetcherCore::StartURLRequest() {
         request_->set_upload(make_scoped_ptr(
             UploadDataStream::CreateWithReader(reader.Pass(), 0)));
       } else if (!upload_file_path_.empty()) {
-        scoped_ptr<UploadElementReader> reader(new UploadFileElementReader(
-            upload_file_task_runner_,
-            upload_file_path_,
-            0, kuint64max, base::Time()));
+        scoped_ptr<UploadElementReader> reader(
+            new UploadFileElementReader(upload_file_task_runner_.get(),
+                                        upload_file_path_,
+                                        upload_range_offset_,
+                                        upload_range_length_,
+                                        base::Time()));
         request_->set_upload(make_scoped_ptr(
             UploadDataStream::CreateWithReader(reader.Pass(), 0)));
       }
@@ -627,10 +641,10 @@ void URLFetcherCore::StartURLRequestWhenAppropriate() {
   if (was_cancelled_)
     return;
 
-  DCHECK(request_context_getter_);
+  DCHECK(request_context_getter_.get());
 
   int64 delay = 0LL;
-  if (original_url_throttler_entry_ == NULL) {
+  if (original_url_throttler_entry_.get() == NULL) {
     URLRequestThrottlerManager* manager =
         request_context_getter_->GetURLRequestContext()->throttler_manager();
     if (manager) {
@@ -638,7 +652,7 @@ void URLFetcherCore::StartURLRequestWhenAppropriate() {
           manager->RegisterRequestUrl(original_url_);
     }
   }
-  if (original_url_throttler_entry_ != NULL) {
+  if (original_url_throttler_entry_.get() != NULL) {
     delay = original_url_throttler_entry_->ReserveSendingTimeForNextRequest(
         GetBackoffReleaseTime());
   }
@@ -691,7 +705,7 @@ void URLFetcherCore::InformDelegateFetchIsComplete() {
 
 void URLFetcherCore::NotifyMalformedContent() {
   DCHECK(network_task_runner_->BelongsToCurrentThread());
-  if (url_throttler_entry_ != NULL) {
+  if (url_throttler_entry_.get() != NULL) {
     int status_code = response_code_;
     if (status_code == URLFetcher::RESPONSE_CODE_INVALID) {
       // The status code will generally be known by the time clients
@@ -780,12 +794,12 @@ void URLFetcherCore::ReleaseRequest() {
 base::TimeTicks URLFetcherCore::GetBackoffReleaseTime() {
   DCHECK(network_task_runner_->BelongsToCurrentThread());
 
-  if (original_url_throttler_entry_) {
+  if (original_url_throttler_entry_.get()) {
     base::TimeTicks original_url_backoff =
         original_url_throttler_entry_->GetExponentialBackoffReleaseTime();
     base::TimeTicks destination_url_backoff;
-    if (url_throttler_entry_ != NULL &&
-        original_url_throttler_entry_ != url_throttler_entry_) {
+    if (url_throttler_entry_.get() != NULL &&
+        original_url_throttler_entry_.get() != url_throttler_entry_.get()) {
       destination_url_backoff =
           url_throttler_entry_->GetExponentialBackoffReleaseTime();
     }
@@ -812,14 +826,36 @@ void URLFetcherCore::CompleteAddingUploadDataChunk(
                                 is_last_chunk);
 }
 
-void URLFetcherCore::DidWriteBuffer(int result) {
-  if (result < 0) {
+int URLFetcherCore::WriteBuffer(scoped_refptr<DrainableIOBuffer> data) {
+  while (data->BytesRemaining() > 0) {
+    const int result = response_writer_->Write(
+        data.get(),
+        data->BytesRemaining(),
+        base::Bind(&URLFetcherCore::DidWriteBuffer, this, data));
+    if (result < 0)
+      return result;
+    data->DidConsume(result);
+  }
+  return OK;
+}
+
+void URLFetcherCore::DidWriteBuffer(scoped_refptr<DrainableIOBuffer> data,
+                                    int result) {
+  if (result >= 0) {  // Continue writing.
+    data->DidConsume(result);
+    result = WriteBuffer(data);
+    if (result == ERR_IO_PENDING)
+      return;
+  }
+
+  if (result < 0) {  // Handle errors.
     delegate_task_runner_->PostTask(
         FROM_HERE,
         base::Bind(&URLFetcherCore::InformDelegateFetchIsComplete, this));
     return;
   }
   // Finished writing buffer_. Read some more.
+  DCHECK_EQ(0, data->BytesRemaining());
   ReadResponse();
 }
 
@@ -831,13 +867,8 @@ void URLFetcherCore::ReadResponse() {
   int bytes_read = 0;
   if (request_->status().is_success() &&
       (request_type_ != URLFetcher::HEAD))
-    request_->Read(buffer_, kBufferSize, &bytes_read);
+    request_->Read(buffer_.get(), kBufferSize, &bytes_read);
   OnReadCompleted(request_.get(), bytes_read);
-}
-
-void URLFetcherCore::DisownFile() {
-  DCHECK(file_writer_);
-  file_writer_->DisownFile();
 }
 
 void URLFetcherCore::InformDelegateUploadProgress() {

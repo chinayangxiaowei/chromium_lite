@@ -7,10 +7,11 @@
 
 #import <Cocoa/Cocoa.h>
 
-#import "base/memory/scoped_nsobject.h"
 #import "ui/base/cocoa/tracking_area.h"
+#import "ui/base/ui_export.h"
 
 // A button that changes when you hover over it and click it.
+UI_EXPORT
 @interface HoverButton : NSButton {
  @protected
   // Enumeration of the hover states that the close button can be in at any one
@@ -24,7 +25,7 @@
   HoverState hoverState_;
 
  @private
-  // Tracking area for button mouseover states.
+  // Tracking area for button mouseover states. Nil if not enabled.
   ui::ScopedCrTrackingArea trackingArea_;
 }
 

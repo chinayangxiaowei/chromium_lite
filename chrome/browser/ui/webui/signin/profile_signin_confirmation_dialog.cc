@@ -7,25 +7,12 @@
 #include "base/basictypes.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
-#include "base/prefs/pref_service.h"
-#include "base/utf_string_conversions.h"
-#include "chrome/browser/bookmarks/bookmark_model.h"
-#include "chrome/browser/bookmarks/bookmark_model_factory.h"
-#include "chrome/browser/extensions/extension_service.h"
-#include "chrome/browser/extensions/extension_system.h"
-#include "chrome/browser/history/history_backend.h"
-#include "chrome/browser/history/history_db_task.h"
-#include "chrome/browser/history/history_service.h"
-#include "chrome/browser/history/history_service_factory.h"
+#include "base/values.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_dialogs.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/webui/constrained_web_dialog_ui.h"
-#include "chrome/common/extensions/extension.h"
-#include "chrome/common/extensions/extension_set.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_message_handler.h"
@@ -34,9 +21,7 @@
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 
-namespace content {
-class WebContents;
-}
+// ProfileSigninConfirmationHandler --------------------------------------------
 
 namespace {
 
@@ -44,9 +29,7 @@ class ProfileSigninConfirmationHandler : public content::WebUIMessageHandler {
  public:
   ProfileSigninConfirmationHandler(
       const ProfileSigninConfirmationDialog* dialog,
-      const base::Closure& cancel_signin,
-      const base::Closure& signin_with_new_profile,
-      const base::Closure& continue_signin);
+      ui::ProfileSigninConfirmationDelegate* delegate_);
   virtual ~ProfileSigninConfirmationHandler();
   virtual void RegisterMessages() OVERRIDE;
 
@@ -59,96 +42,30 @@ class ProfileSigninConfirmationHandler : public content::WebUIMessageHandler {
   // Weak ptr to parent dialog.
   const ProfileSigninConfirmationDialog* dialog_;
 
-  // Dialog button callbacks.
-  base::Closure cancel_signin_;
-  base::Closure signin_with_new_profile_;
-  base::Closure continue_signin_;
+  // Dialog button handling.
+  ui::ProfileSigninConfirmationDelegate* delegate_;
 };
-
-const int kHistoryEntriesBeforeNewProfilePrompt = 10;
-
-// Determines whether a profile has any typed URLs in its history.
-class HasTypedURLsTask : public history::HistoryDBTask {
- public:
-  HasTypedURLsTask(base::Callback<void(bool)> cb)
-      : has_typed_urls_(0), cb_(cb) {
-  }
-  virtual bool RunOnDBThread(history::HistoryBackend* backend,
-                             history::HistoryDatabase* db) OVERRIDE {
-    history::URLRows rows;
-    backend->GetAllTypedURLs(&rows);
-    if (!rows.empty())
-      has_typed_urls_ = true;
-    return true;
-  }
-  virtual void DoneRunOnMainThread() OVERRIDE {
-    cb_.Run(has_typed_urls_);
-  }
- private:
-  virtual ~HasTypedURLsTask() {}
-  bool has_typed_urls_;
-  base::Callback<void(bool)> cb_;
-};
-
-// Invokes one of two callbacks depending on a boolean flag.
-void CallbackFork(base::Closure first, base::Closure second,
-                  bool invoke_first) {
-  if (invoke_first)
-    first.Run();
-  else
-    second.Run();
-}
-
-// Invokes a chain of callbacks until one of them signals completion.
-//
-// Each callback accepts a callback parameter that should be invoked
-// with |true| to signal completion (the chain should be broken) or
-// |false| otherwise.  When the chain is stopped |return_result| will be
-// invoked with the result that stopped the chain: |true| if one of the
-// callbacks stopped the chain, or |false| if none of them did.
-//
-// This is essentially a special case of "series" from the async.js
-// library: https://github.com/caolan/async
-//
-// TODO(dconnelly): This should really be in a library.
-void ChainCallbacksUntilTrue(
-    base::Callback<void(base::Callback<void(bool)>)> first,
-    base::Callback<void(base::Callback<void(bool)>)> second,
-    base::Callback<void(bool)> return_result) {
-  // We implement the completion signalling callback using CallbackFork:
-  // if the first callback passes it |true|, |return_result| will be
-  // invoked immediately, and otherwise the second callback will be
-  // invoked and passed |return_result| directly since it's last in
-  // the chain.
-  first.Run(base::Bind(&CallbackFork,
-                       base::Bind(return_result, true),
-                       base::Bind(second, return_result)));
-}
-
-}  // namespace
 
 ProfileSigninConfirmationHandler::ProfileSigninConfirmationHandler(
-      const ProfileSigninConfirmationDialog* dialog,
-      const base::Closure& cancel_signin,
-      const base::Closure& signin_with_new_profile,
-      const base::Closure& continue_signin)
-  : dialog_(dialog),
-    cancel_signin_(cancel_signin),
-    signin_with_new_profile_(signin_with_new_profile),
-    continue_signin_(continue_signin) {
+    const ProfileSigninConfirmationDialog* dialog,
+    ui::ProfileSigninConfirmationDelegate* delegate)
+  : dialog_(dialog), delegate_(delegate) {
 }
 
 ProfileSigninConfirmationHandler::~ProfileSigninConfirmationHandler() {
 }
 
 void ProfileSigninConfirmationHandler::RegisterMessages() {
-  web_ui()->RegisterMessageCallback("cancel",
+  web_ui()->RegisterMessageCallback(
+      "cancel",
       base::Bind(&ProfileSigninConfirmationHandler::OnCancelButtonClicked,
                  base::Unretained(this)));
-  web_ui()->RegisterMessageCallback("createNewProfile",
+  web_ui()->RegisterMessageCallback(
+      "createNewProfile",
       base::Bind(&ProfileSigninConfirmationHandler::OnCreateProfileClicked,
                  base::Unretained(this)));
-  web_ui()->RegisterMessageCallback("continue",
+  web_ui()->RegisterMessageCallback(
+      "continue",
       base::Bind(&ProfileSigninConfirmationHandler::OnContinueButtonClicked,
                  base::Unretained(this)));
 }
@@ -156,78 +73,88 @@ void ProfileSigninConfirmationHandler::RegisterMessages() {
 void ProfileSigninConfirmationHandler::OnCancelButtonClicked(
     const base::ListValue* args) {
   // TODO(dconnelly): redirect back to NTP?
-  cancel_signin_.Run();
+  delegate_->OnCancelSignin();
   dialog_->Close();
 }
 
 void ProfileSigninConfirmationHandler::OnCreateProfileClicked(
     const base::ListValue* args) {
-  signin_with_new_profile_.Run();
+  delegate_->OnSigninWithNewProfile();
   dialog_->Close();
 }
 
 void ProfileSigninConfirmationHandler::OnContinueButtonClicked(
     const base::ListValue* args) {
-  continue_signin_.Run();
+  delegate_->OnContinueSignin();
   dialog_->Close();
 }
 
-void ProfileSigninConfirmationDialog::ShowDialog(
+}  // namespace
+
+#if !defined(TOOLKIT_VIEWS) && !defined(OS_MACOSX)
+namespace chrome {
+// static
+// Declared in browser_dialogs.h
+void ShowProfileSigninConfirmationDialog(
+    Browser* browser,
+    content::WebContents* web_contents,
     Profile* profile,
     const std::string& username,
-    const base::Closure& cancel_signin,
-    const base::Closure& signin_with_new_profile,
-    const base::Closure& continue_signin) {
-  new ProfileSigninConfirmationDialog(profile,
-                                      username,
-                                      cancel_signin,
-                                      signin_with_new_profile,
-                                      continue_signin);
+    ui::ProfileSigninConfirmationDelegate* delegate) {
+  ProfileSigninConfirmationDialog::ShowDialog(web_contents,
+                                              profile,
+                                              username,
+                                              delegate);
 }
+}  // namespace chrome
+#endif
+
+// ProfileSigninConfirmationDialog ---------------------------------------------
 
 ProfileSigninConfirmationDialog::ProfileSigninConfirmationDialog(
+    content::WebContents* web_contents,
     Profile* profile,
     const std::string& username,
-    const base::Closure& cancel_signin,
-    const base::Closure& signin_with_new_profile,
-    const base::Closure& continue_signin)
-  : username_(username),
-    cancel_signin_(cancel_signin),
-    signin_with_new_profile_(signin_with_new_profile),
-    continue_signin_(continue_signin),
+    ui::ProfileSigninConfirmationDelegate* delegate)
+  : web_contents_(web_contents),
     profile_(profile),
-    weak_pointer_factory_(this) {
-  CheckShouldPromptForNewProfile(
-      base::Bind(&ProfileSigninConfirmationDialog::OnPromptCheckComplete,
-                 weak_pointer_factory_.GetWeakPtr()));
+    username_(username),
+    signin_delegate_(delegate),
+    dialog_delegate_(NULL),
+    prompt_for_new_profile_(true) {
 }
 
 ProfileSigninConfirmationDialog::~ProfileSigninConfirmationDialog() {
 }
 
-void ProfileSigninConfirmationDialog::Close() const {
-  closed_by_handler_ = true;
-  delegate_->OnDialogCloseFromWebUI();
+// static
+void ProfileSigninConfirmationDialog::ShowDialog(
+  content::WebContents* web_contents,
+  Profile* profile,
+  const std::string& username,
+  ui::ProfileSigninConfirmationDelegate* delegate) {
+  ProfileSigninConfirmationDialog* dialog =
+      new ProfileSigninConfirmationDialog(web_contents,
+                                          profile,
+                                          username,
+                                          delegate);
+  ui::CheckShouldPromptForNewProfile(
+      profile,
+      // This callback is guaranteed to be invoked, and once it is, the dialog
+      // owns itself.
+      base::Bind(&ProfileSigninConfirmationDialog::Show,
+                 base::Unretained(dialog)));
 }
 
-void ProfileSigninConfirmationDialog::Show() {
-  Browser* browser = FindBrowserWithProfile(profile_,
-                                            chrome::GetActiveDesktop());
-  if (!browser) {
-    DLOG(WARNING) << "No browser found to display the confirmation dialog";
-    cancel_signin_.Run();
-    return;
-  }
+void ProfileSigninConfirmationDialog::Close() const {
+  closed_by_handler_ = true;
+  dialog_delegate_->OnDialogCloseFromWebUI();
+}
 
-  content::WebContents* web_contents =
-      browser->tab_strip_model()->GetActiveWebContents();
-  if (!web_contents) {
-    DLOG(WARNING) << "No web contents found to display the confirmation dialog";
-    cancel_signin_.Run();
-    return;
-  }
-
-  delegate_ = CreateConstrainedWebDialog(profile_, this, NULL, web_contents);
+void ProfileSigninConfirmationDialog::Show(bool prompt) {
+  prompt_for_new_profile_ = prompt;
+  dialog_delegate_ =
+      CreateConstrainedWebDialog(profile_, this, NULL, web_contents_);
 }
 
 ui::ModalType ProfileSigninConfirmationDialog::GetDialogModalType() const {
@@ -235,8 +162,7 @@ ui::ModalType ProfileSigninConfirmationDialog::GetDialogModalType() const {
 }
 
 string16 ProfileSigninConfirmationDialog::GetDialogTitle() const {
-  return l10n_util::GetStringUTF16(
-      IDS_ENTERPRISE_SIGNIN_PROFILE_LINK_DIALOG_TITLE);
+  return l10n_util::GetStringUTF16(IDS_ENTERPRISE_SIGNIN_TITLE);
 }
 
 GURL ProfileSigninConfirmationDialog::GetDialogContentURL() const {
@@ -246,10 +172,7 @@ GURL ProfileSigninConfirmationDialog::GetDialogContentURL() const {
 void ProfileSigninConfirmationDialog::GetWebUIMessageHandlers(
     std::vector<content::WebUIMessageHandler*>* handlers) const {
   handlers->push_back(
-      new ProfileSigninConfirmationHandler(this,
-                                           cancel_signin_,
-                                           signin_with_new_profile_,
-                                           continue_signin_));
+      new ProfileSigninConfirmationHandler(this, signin_delegate_));
 }
 
 void ProfileSigninConfirmationDialog::GetDialogSize(gfx::Size* size) const {
@@ -266,7 +189,7 @@ void ProfileSigninConfirmationDialog::GetDialogSize(gfx::Size* size) const {
 
 std::string ProfileSigninConfirmationDialog::GetDialogArgs() const {
   std::string data;
-  DictionaryValue dict;
+  base::DictionaryValue dict;
   dict.SetString("username", username_);
   dict.SetBoolean("promptForNewProfile", prompt_for_new_profile_);
 #if defined(OS_WIN)
@@ -279,7 +202,7 @@ std::string ProfileSigninConfirmationDialog::GetDialogArgs() const {
 void ProfileSigninConfirmationDialog::OnDialogClosed(
     const std::string& json_retval) {
   if (!closed_by_handler_)
-    cancel_signin_.Run();
+    signin_delegate_->OnCancelSignin();
 }
 
 void ProfileSigninConfirmationDialog::OnCloseContents(
@@ -291,95 +214,4 @@ void ProfileSigninConfirmationDialog::OnCloseContents(
 
 bool ProfileSigninConfirmationDialog::ShouldShowDialogTitle() const {
   return true;
-}
-
-bool ProfileSigninConfirmationDialog::HasBookmarks() {
-  BookmarkModel* bookmarks = BookmarkModelFactory::GetForProfile(profile_);
-  return bookmarks && bookmarks->HasBookmarks();
-}
-
-bool ProfileSigninConfirmationDialog::HasBeenShutdown() {
-  return profile_->GetPrefs()->GetInitializationStatus() !=
-    PrefService::INITIALIZATION_STATUS_CREATED_NEW_PROFILE;
-}
-
-void ProfileSigninConfirmationDialog::OnHistoryQueryResults(
-    size_t max_entries,
-    base::Callback<void(bool)> cb,
-    CancelableRequestProvider::Handle handle,
-    history::QueryResults* results) {
-  history::QueryResults owned_results;
-  results->Swap(&owned_results);
-  cb.Run(owned_results.size() >= max_entries);
-}
-
-void ProfileSigninConfirmationDialog::CheckHasHistory(
-    int max_entries,
-    base::Callback<void(bool)> cb) {
-  HistoryService* service =
-    HistoryServiceFactory::GetForProfileWithoutCreating(profile_);
-  if (!service) {
-    cb.Run(false);
-    return;
-  }
-  history::QueryOptions opts;
-  opts.max_count = max_entries;
-  service->QueryHistory(
-      UTF8ToUTF16(""), opts, &history_count_request_consumer,
-      base::Bind(&ProfileSigninConfirmationDialog::OnHistoryQueryResults,
-                 weak_pointer_factory_.GetWeakPtr(),
-                 max_entries, cb));
-}
-
-bool ProfileSigninConfirmationDialog::HasSyncedExtensions() {
-  extensions::ExtensionSystem* system =
-      extensions::ExtensionSystem::Get(profile_);
-  if (system && system->extension_service()) {
-    const ExtensionSet* extensions = system->extension_service()->extensions();
-    for (ExtensionSet::const_iterator iter = extensions->begin();
-         iter != extensions->end(); ++iter) {
-      // The webstore is synced so that it stays put on the new tab
-      // page, but since it's installed by default we don't want to
-      // consider it when determining if the profile is dirty.
-      if ((*iter)->IsSyncable() &&
-          (*iter)->id() != extension_misc::kWebStoreAppId) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-void ProfileSigninConfirmationDialog::CheckHasTypedURLs(
-    base::Callback<void(bool)> cb) {
-  HistoryService* service =
-    HistoryServiceFactory::GetForProfileWithoutCreating(profile_);
-  if (!service) {
-    cb.Run(false);
-    return;
-  }
-  service->ScheduleDBTask(new HasTypedURLsTask(cb),
-                          &typed_urls_request_consumer);
-}
-
-void ProfileSigninConfirmationDialog::CheckShouldPromptForNewProfile(
-    base::Callback<void(bool)> return_result) {
-  if (HasBeenShutdown() ||
-      HasBookmarks() ||
-      HasSyncedExtensions()) {
-    return_result.Run(true);
-    return;
-  }
-  ChainCallbacksUntilTrue(
-      base::Bind(&ProfileSigninConfirmationDialog::CheckHasHistory,
-                 weak_pointer_factory_.GetWeakPtr(),
-                 kHistoryEntriesBeforeNewProfilePrompt),
-      base::Bind(&ProfileSigninConfirmationDialog::CheckHasTypedURLs,
-                 weak_pointer_factory_.GetWeakPtr()),
-      return_result);
-}
-
-void ProfileSigninConfirmationDialog::OnPromptCheckComplete(bool prompt) {
-  prompt_for_new_profile_ = prompt;
-  Show();
 }

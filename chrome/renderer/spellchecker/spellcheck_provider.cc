@@ -7,16 +7,17 @@
 #include "base/command_line.h"
 #include "base/metrics/histogram.h"
 #include "chrome/common/chrome_switches.h"
+#include "chrome/common/spellcheck_marker.h"
 #include "chrome/common/spellcheck_messages.h"
 #include "chrome/common/spellcheck_result.h"
 #include "chrome/renderer/spellchecker/spellcheck.h"
 #include "content/public/renderer/render_view.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebVector.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebFrame.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebTextCheckingCompletion.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebTextCheckingResult.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebTextCheckingType.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebView.h"
+#include "third_party/WebKit/public/platform/WebVector.h"
+#include "third_party/WebKit/public/web/WebFrame.h"
+#include "third_party/WebKit/public/web/WebTextCheckingCompletion.h"
+#include "third_party/WebKit/public/web/WebTextCheckingResult.h"
+#include "third_party/WebKit/public/web/WebTextCheckingType.h"
+#include "third_party/WebKit/public/web/WebView.h"
 
 using WebKit::WebFrame;
 using WebKit::WebString;
@@ -29,18 +30,6 @@ COMPILE_ASSERT(int(WebKit::WebTextCheckingTypeSpelling) ==
                int(SpellCheckResult::SPELLING), mismatching_enums);
 COMPILE_ASSERT(int(WebKit::WebTextCheckingTypeGrammar) ==
                int(SpellCheckResult::GRAMMAR), mismatching_enums);
-COMPILE_ASSERT(int(WebKit::WebTextCheckingTypeLink) ==
-               int(SpellCheckResult::LINK), mismatching_enums);
-COMPILE_ASSERT(int(WebKit::WebTextCheckingTypeQuote) ==
-               int(SpellCheckResult::QUOTE), mismatching_enums);
-COMPILE_ASSERT(int(WebKit::WebTextCheckingTypeDash) ==
-               int(SpellCheckResult::DASH), mismatching_enums);
-COMPILE_ASSERT(int(WebKit::WebTextCheckingTypeReplacement) ==
-               int(SpellCheckResult::REPLACEMENT), mismatching_enums);
-COMPILE_ASSERT(int(WebKit::WebTextCheckingTypeCorrection) ==
-               int(SpellCheckResult::CORRECTION), mismatching_enums);
-COMPILE_ASSERT(int(WebKit::WebTextCheckingTypeShowCorrectionPanel) ==
-               int(SpellCheckResult::SHOWCORRECTIONPANEL), mismatching_enums);
 
 SpellCheckProvider::SpellCheckProvider(
     content::RenderView* render_view,
@@ -57,16 +46,14 @@ SpellCheckProvider::SpellCheckProvider(
 }
 
 SpellCheckProvider::~SpellCheckProvider() {
-#if defined(OS_MACOSX)
-  Send(new SpellCheckHostMsg_DocumentClosed(routing_id(), routing_id()));
-#endif
 }
 
 void SpellCheckProvider::RequestTextChecking(
-    const WebString& text,
-    WebTextCheckingCompletion* completion) {
+    const string16& text,
+    WebTextCheckingCompletion* completion,
+    const std::vector<SpellCheckMarker>& markers) {
   // Ignore invalid requests.
-  if (text.isEmpty() || !HasWordCharacters(text, 0)) {
+  if (text.empty() || !HasWordCharacters(text, 0)) {
     completion->didCancelCheckingText();
     return;
   }
@@ -88,13 +75,14 @@ void SpellCheckProvider::RequestTextChecking(
   Send(new SpellCheckHostMsg_RequestTextCheck(
       routing_id(),
       text_check_completions_.Add(completion),
-      text));
+      text,
+      markers));
 #else
   Send(new SpellCheckHostMsg_CallSpellingService(
       routing_id(),
       text_check_completions_.Add(completion),
-      0,
-      string16(text)));
+      string16(text),
+      markers));
 #endif  // !OS_MACOSX
 }
 
@@ -159,24 +147,30 @@ void SpellCheckProvider::checkTextOfParagraph(
     const WebKit::WebString& text,
     WebKit::WebTextCheckingTypeMask mask,
     WebKit::WebVector<WebKit::WebTextCheckingResult>* results) {
-#if !defined(OS_MACOSX)
-  // Since Mac has its own spell checker, this method will not be used on Mac.
-
   if (!results)
     return;
 
   if (!(mask & WebKit::WebTextCheckingTypeSpelling))
     return;
 
-  spellcheck_->SpellCheckParagraph(string16(text), results);
-#endif
+  // TODO(groby): As far as I can tell, this method is never invoked.
+  // UMA results seem to support that. Investigate, clean up if true.
+  NOTREACHED();
+  spellcheck_->SpellCheckParagraph(text, results);
   UMA_HISTOGRAM_COUNTS("SpellCheck.api.paragraph", text.length());
 }
 
 void SpellCheckProvider::requestCheckingOfText(
     const WebString& text,
+    const WebVector<uint32>& markers,
+    const WebVector<unsigned>& marker_offsets,
     WebTextCheckingCompletion* completion) {
-  RequestTextChecking(text, completion);
+  std::vector<SpellCheckMarker> spellcheck_markers;
+  for (size_t i = 0; i < markers.size(); ++i) {
+    spellcheck_markers.push_back(
+        SpellCheckMarker(markers[i], marker_offsets[i]));
+  }
+  RequestTextChecking(text, completion, spellcheck_markers);
   UMA_HISTOGRAM_COUNTS("SpellCheck.api.async", text.length());
 }
 
@@ -211,7 +205,6 @@ void SpellCheckProvider::updateSpellingUIWithMisspelledWord(
 #if !defined(OS_MACOSX)
 void SpellCheckProvider::OnRespondSpellingService(
     int identifier,
-    int offset,
     bool succeeded,
     const string16& line,
     const std::vector<SpellCheckResult>& results) {
@@ -223,7 +216,7 @@ void SpellCheckProvider::OnRespondSpellingService(
 
   // If |succeeded| is false, we use local spellcheck as a fallback.
   if (!succeeded) {
-    spellcheck_->RequestTextChecking(line, offset, completion);
+    spellcheck_->RequestTextChecking(line, completion);
     return;
   }
 
@@ -231,7 +224,7 @@ void SpellCheckProvider::OnRespondSpellingService(
   // visualize the differences between ours and the on-line spellchecker.
   WebKit::WebVector<WebKit::WebTextCheckingResult> textcheck_results;
   spellcheck_->CreateTextCheckingResults(SpellCheck::USE_NATIVE_CHECKER,
-                                         offset,
+                                         0,
                                          line,
                                          results,
                                          &textcheck_results);
@@ -244,7 +237,7 @@ void SpellCheckProvider::OnRespondSpellingService(
 #endif
 
 bool SpellCheckProvider::HasWordCharacters(
-    const WebKit::WebString& text,
+    const string16& text,
     int index) const {
   const char16* data = text.data();
   int length = text.length();
@@ -306,10 +299,12 @@ void SpellCheckProvider::EnableSpellcheck(bool enable) {
 
   WebFrame* frame = render_view()->GetWebView()->focusedFrame();
   frame->enableContinuousSpellChecking(enable);
+  if (!enable)
+    frame->removeSpellingMarkers();
 }
 
 bool SpellCheckProvider::SatisfyRequestFromCache(
-    const WebString& text,
+    const string16& text,
     WebTextCheckingCompletion* completion) {
   size_t last_length = last_request_.length();
 

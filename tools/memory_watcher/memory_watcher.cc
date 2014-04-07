@@ -11,9 +11,9 @@
 #include "base/file_util.h"
 #include "base/logging.h"
 #include "base/metrics/stats_counters.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/lock.h"
-#include "base/utf_string_conversions.h"
 #include "tools/memory_watcher/call_stack.h"
 #include "tools/memory_watcher/preamble_patcher.h"
 
@@ -82,8 +82,8 @@ void MemoryWatcher::CloseLogFile() {
     file_ = NULL;
     std::wstring tmp_name = ASCIIToWide(file_name_);
     tmp_name += L".tmp";
-    file_util::Move(base::FilePath(tmp_name),
-                    base::FilePath(ASCIIToWide(file_name_)));
+    base::Move(base::FilePath(tmp_name),
+               base::FilePath(ASCIIToWide(file_name_)));
   }
 }
 

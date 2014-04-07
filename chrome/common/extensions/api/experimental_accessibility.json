@@ -8,7 +8,7 @@
     "compiler_options": {
       "implemented_in": "chrome/browser/accessibility/accessibility_extension_api.h"
     },
-    "nodoc": true,
+    "description": "none",
     "types": [
       {
         "id": "CheckboxDetails",
@@ -150,6 +150,18 @@
             "type": "boolean",
             "name": "enabled",
             "description": "True if accessibility support should be enabled."
+          }
+        ]
+      },
+      {
+        "name": "setNativeAccessibilityEnabled",
+        "type": "function",
+        "description": "Enables or disables native accessibility support. Once disabled, it is up to the calling extension to provide accessibility for web contents.",
+        "parameters": [
+          {
+            "type": "boolean",
+            "name": "enabled",
+            "description": "True if native accessibility support should be enabled."
           }
         ]
       },

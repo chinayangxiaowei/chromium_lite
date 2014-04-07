@@ -9,11 +9,11 @@
 #include "base/files/file_path.h"
 #include "base/i18n/rtl.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
-#include "googleurl/src/gurl.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gfx/font.h"
+#include "url/gurl.h"
 
 namespace ui {
 
@@ -341,6 +341,31 @@ TEST(TextEliderTest, ElideTextTruncate) {
   for (size_t i = 0; i < ARRAYSIZE_UNSAFE(cases); ++i) {
     string16 result = ElideText(UTF8ToUTF16(cases[i].input), font,
                                 cases[i].width, TRUNCATE_AT_END);
+    EXPECT_EQ(cases[i].output, UTF16ToUTF8(result));
+  }
+}
+
+TEST(TextEliderTest, ElideTextEllipsis) {
+  const gfx::Font font;
+  const int kTestWidth = font.GetStringWidth(ASCIIToUTF16("Test"));
+  const char* kEllipsis = "\xE2\x80\xA6";
+  const int kEllipsisWidth = font.GetStringWidth(UTF8ToUTF16(kEllipsis));
+  struct TestData {
+    const char* input;
+    int width;
+    const char* output;
+  } cases[] = {
+    { "", 0, "" },
+    { "Test", 0, "" },
+    { "Test", kEllipsisWidth, kEllipsis },
+    { "", kTestWidth, "" },
+    { "Tes", kTestWidth, "Tes" },
+    { "Test", kTestWidth, "Test" },
+  };
+
+  for (size_t i = 0; i < ARRAYSIZE_UNSAFE(cases); ++i) {
+    string16 result = ElideText(UTF8ToUTF16(cases[i].input), font,
+                                cases[i].width, ELIDE_AT_END);
     EXPECT_EQ(cases[i].output, UTF16ToUTF8(result));
   }
 }

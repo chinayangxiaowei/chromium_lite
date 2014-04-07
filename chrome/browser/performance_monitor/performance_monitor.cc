@@ -10,13 +10,14 @@
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/logging.h"
-#include "base/process_util.h"
+#include "base/process/process_iterator.h"
 #include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/threading/worker_pool.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_shutdown.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/crx_installer.h"
 #include "chrome/browser/performance_monitor/constants.h"
 #include "chrome/browser/performance_monitor/performance_monitor_util.h"
@@ -24,7 +25,6 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_iterator.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/chrome_version_info.h"
 #include "chrome/common/extensions/extension.h"
@@ -98,9 +98,7 @@ PerformanceMonitor::PerformanceDataForIOThread::PerformanceDataForIOThread()
     : network_bytes_read(0) {
 }
 
-PerformanceMonitor::PerformanceMonitor() : database_(NULL),
-                                           metrics_map_(new MetricsMap) {
-}
+PerformanceMonitor::PerformanceMonitor() : metrics_map_(new MetricsMap) {}
 
 PerformanceMonitor::~PerformanceMonitor() {
   BrowserThread::PostBlockingPoolSequencedTask(
@@ -492,8 +490,10 @@ void PerformanceMonitor::Observe(int type,
                                  const content::NotificationDetails& details) {
   switch (type) {
     case chrome::NOTIFICATION_EXTENSION_INSTALLED: {
-      AddExtensionEvent(EVENT_EXTENSION_INSTALL,
-                        content::Details<Extension>(details).ptr());
+      AddExtensionEvent(
+          EVENT_EXTENSION_INSTALL,
+          content::Details<const extensions::InstalledExtensionInfo>(details)->
+              extension);
       break;
     }
     case chrome::NOTIFICATION_EXTENSION_ENABLED: {
@@ -618,23 +618,19 @@ void PerformanceMonitor::AddRendererClosedEvent(
       details.status == base::TERMINATION_STATUS_PROCESS_WAS_KILLED ?
       EVENT_RENDERER_KILLED : EVENT_RENDERER_CRASH;
 
-  content::RenderProcessHost::RenderWidgetHostsIterator iter =
-      host->GetRenderWidgetHostsIterator();
-
   // A RenderProcessHost may contain multiple render views - for each valid
   // render view, extract the url, and append it to the string, comma-separating
   // the entries.
   std::string url_list;
-  for (; !iter.IsAtEnd(); iter.Advance()) {
-    const content::RenderWidgetHost* widget = iter.GetCurrentValue();
-    DCHECK(widget);
-    if (!widget || !widget->IsRenderView())
+  content::RenderWidgetHost::List widgets =
+      content::RenderWidgetHost::GetRenderWidgetHosts();
+  for (size_t i = 0; i < widgets.size(); ++i) {
+    if (widgets[i]->GetProcess()->GetID() != host->GetID())
+      continue;
+    if (!widgets[i]->IsRenderView())
       continue;
 
-    content::RenderViewHost* view =
-        content::RenderViewHost::From(
-            const_cast<content::RenderWidgetHost*>(widget));
-
+    content::RenderViewHost* view = content::RenderViewHost::From(widgets[i]);
     std::string url;
     if (!MaybeGetURLFromRenderView(view, &url))
       continue;

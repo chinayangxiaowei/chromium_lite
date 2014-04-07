@@ -4,9 +4,10 @@
 
 #include "chrome/browser/ui/views/extensions/media_galleries_dialog_views.h"
 
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/views/constrained_window_views.h"
-#include "chrome/browser/ui/web_contents_modal_dialog_manager.h"
+#include "components/web_modal/web_contents_modal_dialog_manager.h"
+#include "components/web_modal/web_contents_modal_dialog_manager_delegate.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_view.h"
 #include "grit/generated_resources.h"
@@ -26,6 +27,8 @@
 #include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/dialog_client_view.h"
+
+using web_modal::WebContentsModalDialogManager;
 
 namespace {
 
@@ -63,10 +66,8 @@ void ScrollableView::Layout() {
 
 namespace chrome {
 
-typedef MediaGalleriesDialogController::KnownGalleryPermissions
-    GalleryPermissions;
-typedef MediaGalleriesDialogController::NewGalleryPermissions
-    NewGalleryPermissions;
+typedef MediaGalleriesDialogController::GalleryPermissionsVector
+    GalleryPermissionsVector;
 
 MediaGalleriesDialogViews::MediaGalleriesDialogViews(
     MediaGalleriesDialogController* controller)
@@ -80,12 +81,16 @@ MediaGalleriesDialogViews::MediaGalleriesDialogViews(
 
   // Ownership of |contents_| is handed off by this call. |window_| will take
   // care of deleting itself after calling DeleteDelegate().
-  window_ = CreateWebContentsModalDialogViews(
-      this,
-      controller->web_contents()->GetView()->GetNativeView());
   WebContentsModalDialogManager* web_contents_modal_dialog_manager =
       WebContentsModalDialogManager::FromWebContents(
           controller->web_contents());
+  DCHECK(web_contents_modal_dialog_manager);
+  DCHECK(web_contents_modal_dialog_manager->delegate());
+  window_ = CreateWebContentsModalDialogViews(
+      this,
+      controller->web_contents()->GetView()->GetNativeView(),
+      web_contents_modal_dialog_manager->delegate()->
+          GetWebContentsModalDialogHost());
   web_contents_modal_dialog_manager->ShowDialog(window_->GetNativeView());
 }
 
@@ -96,9 +101,8 @@ void MediaGalleriesDialogViews::InitChildViews() {
   contents_->RemoveAllChildViews(true);
   int dialog_content_width = views::Widget::GetLocalizedContentsWidth(
       IDS_MEDIA_GALLERIES_DIALOG_CONTENT_WIDTH_CHARS);
-  views::GridLayout* layout = new views::GridLayout(contents_);
-  layout->SetInsets(views::kPanelVertMargin, views::kPanelHorizMargin,
-                    0, views::kPanelHorizMargin);
+  views::GridLayout* layout = views::GridLayout::CreatePanel(contents_);
+  contents_->SetLayoutManager(layout);
 
   int column_set_id = 0;
   views::ColumnSet* columns = layout->AddColumnSet(column_set_id);
@@ -108,28 +112,27 @@ void MediaGalleriesDialogViews::InitChildViews() {
                      views::GridLayout::FIXED,
                      dialog_content_width,
                      0);
-  contents_->SetLayoutManager(layout);
-  contents_->set_border(views::Border::CreateEmptyBorder(
-      views::kPanelSubVerticalSpacing,
-      0,
-      views::kPanelSubVerticalSpacing,
-      0));
 
-  // Header text.
-  views::Label* header = new views::Label(controller_->GetHeader());
-  ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
-  header->SetFont(rb.GetFont(ui::ResourceBundle::MediumFont));
-  header->SetHorizontalAlignment(gfx::ALIGN_LEFT);
-  layout->StartRow(0, column_set_id);
-  layout->AddView(header);
+  if (!DialogDelegate::UseNewStyle()) {
+    // Header text.
+    views::Label* header = new views::Label(controller_->GetHeader());
+    ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
+    header->SetFont(rb.GetFont(ui::ResourceBundle::MediumFont));
+    header->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+    layout->StartRow(0, column_set_id);
+    layout->AddView(header);
+  }
 
   // Message text.
   views::Label* subtext = new views::Label(controller_->GetSubtext());
   subtext->SetMultiLine(true);
   subtext->SetHorizontalAlignment(gfx::ALIGN_LEFT);
-  layout->StartRowWithPadding(0, column_set_id,
-                              0, views::kRelatedControlVerticalSpacing);
-  layout->AddView(subtext);
+  layout->StartRow(0, column_set_id);
+  layout->AddView(
+      subtext, 1, 1,
+      views::GridLayout::FILL, views::GridLayout::LEADING,
+      dialog_content_width, subtext->GetHeightForWidth(dialog_content_width));
+  layout->AddPaddingRow(0, views::kRelatedControlVerticalSpacing);
 
   // Scrollable area for checkboxes.
   ScrollableView* scroll_container = new ScrollableView();
@@ -144,28 +147,19 @@ void MediaGalleriesDialogViews::InitChildViews() {
 
   // Add attached galleries checkboxes.
   checkbox_map_.clear();
-  const GalleryPermissions& permissions = controller_->permissions();
-  const NewGalleryPermissions& new_permissions = controller_->new_permissions();
-  for (GalleryPermissions::const_iterator iter = permissions.begin();
+  GalleryPermissionsVector permissions = controller_->AttachedPermissions();
+  for (GalleryPermissionsVector::const_iterator iter = permissions.begin();
        iter != permissions.end(); ++iter) {
-    if (MediaGalleriesDialogController::GetGalleryAttached(
-            iter->second.pref_info)) {
-      AddOrUpdateGallery(&iter->second.pref_info, iter->second.allowed,
-                         scroll_container);
-    }
-  }
-  for (NewGalleryPermissions::const_iterator iter = new_permissions.begin();
-       iter != new_permissions.end(); ++iter) {
-    if (MediaGalleriesDialogController::GetGalleryAttached(iter->pref_info))
-      AddOrUpdateGallery(&iter->pref_info, iter->allowed, scroll_container);
+    int spacing = 0;
+    if (iter + 1 == permissions.end())
+      spacing = views::kRelatedControlSmallVerticalSpacing;
+    AddOrUpdateGallery(iter->pref_info, iter->allowed, scroll_container,
+                       spacing);
   }
 
   // Separator line.
-  views::View* strut = new views::View;
-  strut->set_border(views::Border::CreateEmptyBorder(
-      views::kRelatedControlVerticalSpacing, 0, 0, 0));
-  scroll_container->AddChildView(strut);
-  views::Separator* separator = new views::Separator;
+  views::Separator* separator = new views::Separator(
+      views::Separator::HORIZONTAL);
   scroll_container->AddChildView(separator);
 
   // Unattached locations section.
@@ -181,21 +175,15 @@ void MediaGalleriesDialogViews::InitChildViews() {
   scroll_container->AddChildView(unattached_text);
 
   // Add unattached galleries checkboxes.
-  for (GalleryPermissions::const_iterator iter = permissions.begin();
-       iter != permissions.end(); ++iter) {
-    if (!MediaGalleriesDialogController::GetGalleryAttached(
-            iter->second.pref_info)) {
-      AddOrUpdateGallery(&iter->second.pref_info, iter->second.allowed,
-                         scroll_container);
-    }
-  }
-  for (NewGalleryPermissions::const_iterator iter = new_permissions.begin();
-       iter != new_permissions.end(); ++iter) {
-    if (!MediaGalleriesDialogController::GetGalleryAttached(iter->pref_info))
-      AddOrUpdateGallery(&iter->pref_info, iter->allowed, scroll_container);
+  GalleryPermissionsVector unattached_permissions =
+      controller_->UnattachedPermissions();
+  for (GalleryPermissionsVector::const_iterator iter =
+           unattached_permissions.begin();
+       iter != unattached_permissions.end(); ++iter) {
+    AddOrUpdateGallery(iter->pref_info, iter->allowed, scroll_container, 0);
   }
 
-  confirm_available_ |= new_permissions.size() > 0;
+  confirm_available_ = controller_->HasPermittedGalleries();
 
   // Add the scrollable area to the outer dialog view. It will squeeze against
   // the title/subtitle and buttons to occupy all available space in the dialog.
@@ -207,52 +195,30 @@ void MediaGalleriesDialogViews::InitChildViews() {
   layout->AddView(scroll_view, 1, 1,
                   views::GridLayout::FILL, views::GridLayout::FILL,
                   dialog_content_width, kScrollAreaHeight);
-
-  // Add location button.
-  add_gallery_button_ = new views::LabelButton(this,
-      l10n_util::GetStringUTF16(IDS_MEDIA_GALLERIES_DIALOG_ADD_GALLERY));
-  add_gallery_button_->SetStyle(views::Button::STYLE_NATIVE_TEXTBUTTON);
-  views::View* add_gallery_container = new views::View();
-  add_gallery_container->SetLayoutManager(
-      new views::BoxLayout(views::BoxLayout::kHorizontal, 0, 0, 0));
-  add_gallery_container->set_border(views::Border::CreateEmptyBorder(
-      views::kRelatedControlVerticalSpacing,
-      views::kPanelHorizMargin,
-      views::kRelatedControlVerticalSpacing,
-      0));
-  add_gallery_container->AddChildView(add_gallery_button_);
-  layout->StartRowWithPadding(0, column_set_id,
-                              0, views::kRelatedControlVerticalSpacing);
-  layout->AddView(add_gallery_container, 1, 1,
-                  views::GridLayout::LEADING, views::GridLayout::LEADING);
 }
 
 void MediaGalleriesDialogViews::UpdateGallery(
-    const MediaGalleryPrefInfo* gallery,
+    const MediaGalleryPrefInfo& gallery,
     bool permitted) {
   InitChildViews();
   contents_->Layout();
 }
 
-void MediaGalleriesDialogViews::ForgetGallery(
-    const MediaGalleryPrefInfo* gallery) {
+void MediaGalleriesDialogViews::ForgetGallery(MediaGalleryPrefId gallery) {
   InitChildViews();
   contents_->Layout();
 }
 
 bool MediaGalleriesDialogViews::AddOrUpdateGallery(
-    const MediaGalleryPrefInfo* gallery,
+    const MediaGalleryPrefInfo& gallery,
     bool permitted,
-    views::View* container) {
-  string16 label =
-      MediaGalleriesDialogController::GetGalleryDisplayNameNoAttachment(
-          *gallery);
-  string16 tooltip_text =
-      MediaGalleriesDialogController::GetGalleryTooltip(*gallery);
-  string16 details =
-      MediaGalleriesDialogController::GetGalleryAdditionalDetails(*gallery);
+    views::View* container,
+    int trailing_vertical_space) {
+  string16 label = gallery.GetGalleryDisplayName();
+  string16 tooltip_text = gallery.GetGalleryTooltip();
+  string16 details = gallery.GetGalleryAdditionalDetails();
 
-  CheckboxMap::iterator iter = checkbox_map_.find(gallery);
+  CheckboxMap::iterator iter = checkbox_map_.find(gallery.pref_id);
   if (iter != checkbox_map_.end()) {
     views::Checkbox* checkbox = iter->second;
     checkbox->SetChecked(permitted);
@@ -286,7 +252,7 @@ bool MediaGalleriesDialogViews::AddOrUpdateGallery(
   checkbox_view->set_border(views::Border::CreateEmptyBorder(
       0,
       views::kPanelHorizMargin,
-      0,
+      trailing_vertical_space,
       0));
   checkbox_view->SetLayoutManager(
       new views::BoxLayout(views::BoxLayout::kHorizontal, 0, 0, 0));
@@ -296,7 +262,7 @@ bool MediaGalleriesDialogViews::AddOrUpdateGallery(
   container->AddChildView(checkbox_view);
 
   checkbox->SetChecked(permitted);
-  checkbox_map_[gallery] = checkbox;
+  checkbox_map_[gallery.pref_id] = checkbox;
 
   return true;
 }
@@ -306,7 +272,7 @@ string16 MediaGalleriesDialogViews::GetWindowTitle() const {
 }
 
 bool MediaGalleriesDialogViews::ShouldShowWindowTitle() const {
-  return false;
+  return DialogDelegate::UseNewStyle();
 }
 
 void MediaGalleriesDialogViews::DeleteDelegate() {
@@ -345,17 +311,20 @@ ui::ModalType MediaGalleriesDialogViews::GetModalType() const {
 #endif
 }
 
+views::View* MediaGalleriesDialogViews::CreateExtraView() {
+  DCHECK(!add_gallery_button_);
+  add_gallery_button_ = new views::LabelButton(this,
+      l10n_util::GetStringUTF16(IDS_MEDIA_GALLERIES_DIALOG_ADD_GALLERY));
+  add_gallery_button_->SetStyle(views::Button::STYLE_NATIVE_TEXTBUTTON);
+  return add_gallery_button_;
+}
+
 bool MediaGalleriesDialogViews::Cancel() {
   return true;
 }
 
 bool MediaGalleriesDialogViews::Accept() {
   accepted_ = true;
-
-  for (CheckboxMap::const_iterator iter = checkbox_map_.begin();
-       iter != checkbox_map_.end(); ++iter) {
-    controller_->DidToggleGallery(iter->first, iter->second->checked());
-  }
 
   return true;
 }
@@ -377,6 +346,15 @@ void MediaGalleriesDialogViews::ButtonPressed(views::Button* sender,
   if (sender == add_gallery_button_) {
     controller_->OnAddFolderClicked();
     return;
+  }
+
+  for (CheckboxMap::const_iterator iter = checkbox_map_.begin();
+       iter != checkbox_map_.end(); ++iter) {
+    if (sender == iter->second) {
+      controller_->DidToggleGalleryId(iter->first,
+                                      iter->second->checked());
+      return;
+    }
   }
 }
 

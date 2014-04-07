@@ -4,19 +4,22 @@
 
 #include "chrome/browser/background/background_contents_service.h"
 
+#include "apps/app_load_service.h"
 #include "base/basictypes.h"
 #include "base/bind.h"
 #include "base/command_line.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/prefs/pref_service.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/background/background_contents_service_factory.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/extension_host.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_system.h"
+#include "chrome/browser/extensions/image_loader.h"
 #include "chrome/browser/notifications/desktop_notification_service.h"
 #include "chrome/browser/notifications/notification.h"
 #include "chrome/browser/notifications/notification_ui_manager.h"
@@ -26,20 +29,22 @@
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/host_desktop.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/common/extensions/api/icons/icons_handler.h"
 #include "chrome/common/extensions/background_info.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/extensions/extension_icon_set.h"
+#include "chrome/common/extensions/manifest_handlers/icons_handler.h"
 #include "chrome/common/pref_names.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/web_contents.h"
 #include "grit/generated_resources.h"
+#include "grit/theme_resources.h"
 #include "ipc/ipc_message.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/resource/resource_bundle.h"
+#include "ui/gfx/image/image.h"
 
 using content::SiteInstance;
 using content::WebContents;
@@ -56,9 +61,9 @@ void CloseBalloon(const std::string id) {
 }
 
 void ScheduleCloseBalloon(const std::string& extension_id) {
-  if (!MessageLoop::current())  // For unit_tests
+  if (!base::MessageLoop::current())  // For unit_tests
     return;
-  MessageLoop::current()->PostTask(
+  base::MessageLoop::current()->PostTask(
       FROM_HERE, base::Bind(&CloseBalloon, kNotificationPrefix + extension_id));
 }
 
@@ -79,26 +84,35 @@ class CrashNotificationDelegate : public NotificationDelegate {
   virtual void Close(bool by_user) OVERRIDE {}
 
   virtual void Click() OVERRIDE {
+    // http://crbug.com/247790 involves a crash notification balloon being
+    // clicked while the extension isn't in the TERMINATED state. In that case,
+    // any of the "reload" methods called below can unload the extension, which
+    // indirectly destroys *this, invalidating all the member variables, so we
+    // copy the extension ID before using it.
+    std::string copied_extension_id = extension_id_;
     if (is_hosted_app_) {
       // There can be a race here: user clicks the balloon, and simultaneously
       // reloads the sad tab for the app. So we check here to be safe before
       // loading the background page.
       BackgroundContentsService* service =
           BackgroundContentsServiceFactory::GetForProfile(profile_);
-      if (!service->GetAppBackgroundContents(ASCIIToUTF16(extension_id_)))
-        service->LoadBackgroundContentsForExtension(profile_, extension_id_);
+      if (!service->GetAppBackgroundContents(ASCIIToUTF16(copied_extension_id)))
+        service->LoadBackgroundContentsForExtension(profile_,
+                                                    copied_extension_id);
     } else if (is_platform_app_) {
-      extensions::ExtensionSystem::Get(profile_)->extension_service()->
-          RestartExtension(extension_id_);
+      apps::AppLoadService::Get(profile_)->
+          RestartApplication(copied_extension_id);
     } else {
       extensions::ExtensionSystem::Get(profile_)->extension_service()->
-          ReloadExtension(extension_id_);
+          ReloadExtension(copied_extension_id);
     }
 
     // Closing the balloon here should be OK, but it causes a crash on Mac
     // http://crbug.com/78167
-    ScheduleCloseBalloon(extension_id_);
+    ScheduleCloseBalloon(copied_extension_id);
   }
+
+  virtual bool HasClickedListener() OVERRIDE { return true; }
 
   virtual std::string id() const OVERRIDE {
     return kNotificationPrefix + extension_id_;
@@ -119,20 +133,58 @@ class CrashNotificationDelegate : public NotificationDelegate {
   DISALLOW_COPY_AND_ASSIGN(CrashNotificationDelegate);
 };
 
+#if defined(ENABLE_NOTIFICATIONS)
+void NotificationImageReady(
+    const std::string extension_name,
+    const string16 message,
+    const GURL extension_url,
+    scoped_refptr<CrashNotificationDelegate> delegate,
+    Profile* profile,
+    const gfx::Image& icon) {
+  gfx::Image notification_icon(icon);
+  if (icon.IsEmpty()) {
+    ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
+    notification_icon = rb.GetImageNamed(IDR_EXTENSION_DEFAULT_ICON);
+  }
+  string16 title;  // no notification title
+  DesktopNotificationService::AddIconNotification(extension_url,
+                                                  title,
+                                                  message,
+                                                  notification_icon,
+                                                  string16(),
+                                                  delegate.get(),
+                                                  profile);
+}
+#endif
+
 void ShowBalloon(const Extension* extension, Profile* profile) {
 #if defined(ENABLE_NOTIFICATIONS)
-  string16 title;  // no notifiaction title
   string16 message = l10n_util::GetStringFUTF16(
-      extension->is_app() ?  IDS_BACKGROUND_CRASHED_APP_BALLOON_MESSAGE :
-      IDS_BACKGROUND_CRASHED_EXTENSION_BALLOON_MESSAGE,
+      extension->is_app() ? IDS_BACKGROUND_CRASHED_APP_BALLOON_MESSAGE :
+                            IDS_BACKGROUND_CRASHED_EXTENSION_BALLOON_MESSAGE,
       UTF8ToUTF16(extension->name()));
-  GURL icon_url(extensions::IconsInfo::GetIconURL(
+
+  extension_misc::ExtensionIcons size(extension_misc::EXTENSION_ICON_MEDIUM);
+  extensions::ExtensionResource resource =
+      extensions::IconsInfo::GetIconResource(
+          extension, size, ExtensionIconSet::MATCH_SMALLER);
+  scoped_refptr<CrashNotificationDelegate> delegate =
+    new CrashNotificationDelegate(profile, extension);
+  // We can't just load the image in the Observe method below because, despite
+  // what this method is called, it may call the callback synchronously.
+  // However, it's possible that the extension went away during the interim,
+  // so we'll bind all the pertinent data here.
+  extensions::ImageLoader::Get(profile)->LoadImageAsync(
       extension,
-      extension_misc::EXTENSION_ICON_SMALLISH,
-      ExtensionIconSet::MATCH_BIGGER));
-  DesktopNotificationService::AddNotification(
-      extension->url(), title, message, icon_url, string16(),
-      new CrashNotificationDelegate(profile, extension), profile);
+      resource,
+      gfx::Size(size, size),
+      base::Bind(
+          &NotificationImageReady,
+          extension->name(),
+          message,
+          extension->url(),
+          delegate,
+          profile));
 #endif
 }
 
@@ -329,7 +381,7 @@ void BackgroundContentsService::Observe(
       // notifications for this extension to be cancelled by
       // DesktopNotificationService. For this reason, instead of showing the
       // balloon right now, we schedule it to show a little later.
-      MessageLoop::current()->PostTask(
+      base::MessageLoop::current()->PostTask(
           FROM_HERE, base::Bind(&ShowBalloon, extension, profile));
       break;
     }
@@ -473,7 +525,7 @@ void BackgroundContentsService::LoadBackgroundContentsFromManifests(
       extension_service()->extensions();
   ExtensionSet::const_iterator iter = extensions->begin();
   for (; iter != extensions->end(); ++iter) {
-    const Extension* extension = *iter;
+    const Extension* extension = iter->get();
     if (extension->is_hosted_app() &&
         BackgroundInfo::HasBackgroundPage(extension)) {
       LoadBackgroundContents(profile,

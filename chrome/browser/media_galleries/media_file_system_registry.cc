@@ -12,23 +12,19 @@
 #include "base/bind.h"
 #include "base/callback.h"
 #include "base/files/file_path.h"
-#include "base/json/json_writer.h"
-#include "base/path_service.h"
 #include "base/prefs/pref_service.h"
 #include "base/stl_util.h"
-#include "base/string_util.h"
-#include "base/strings/string_number_conversions.h"
-#include "base/utf_string_conversions.h"
-#include "base/values.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_system.h"
+#include "chrome/browser/media_galleries/imported_media_gallery_registry.h"
 #include "chrome/browser/media_galleries/media_file_system_context.h"
+#include "chrome/browser/media_galleries/media_galleries_dialog_controller.h"
 #include "chrome/browser/media_galleries/media_galleries_preferences_factory.h"
 #include "chrome/browser/media_galleries/scoped_mtp_device_map_entry.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/storage_monitor/media_storage_util.h"
 #include "chrome/browser/storage_monitor/storage_monitor.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_constants.h"
@@ -43,8 +39,8 @@
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
-#include "webkit/fileapi/file_system_types.h"
-#include "webkit/fileapi/isolated_context.h"
+#include "webkit/browser/fileapi/isolated_context.h"
+#include "webkit/common/fileapi/file_system_types.h"
 
 using content::BrowserThread;
 using content::NavigationController;
@@ -63,7 +59,7 @@ struct InvalidatedGalleriesInfo {
 
 }  // namespace
 
-MediaFileSystemInfo::MediaFileSystemInfo(const std::string& fs_name,
+MediaFileSystemInfo::MediaFileSystemInfo(const string16& fs_name,
                                          const base::FilePath& fs_path,
                                          const std::string& filesystem_id,
                                          MediaGalleryPrefId pref_id,
@@ -259,7 +255,6 @@ class ExtensionGalleriesHost
     }
   }
 
-  // TODO(kmadhusu): Clean up this code. http://crbug.com/140340.
   // Revoke the file system for |id| if this extension has created one for |id|.
   void RevokeGalleryByPrefId(MediaGalleryPrefId id) {
     PrefIdFsInfoMap::iterator gallery = pref_id_map_.find(id);
@@ -269,12 +264,10 @@ class ExtensionGalleriesHost
     file_system_context_->RevokeFileSystem(gallery->second.fsid);
     pref_id_map_.erase(gallery);
 
-#if defined(SUPPORT_MTP_DEVICE_FILESYSTEM)
     MediaDeviceEntryReferencesMap::iterator mtp_device_host =
         media_device_map_references_.find(id);
     if (mtp_device_host != media_device_map_references_.end())
       media_device_map_references_.erase(mtp_device_host);
-#endif
 
     if (pref_id_map_.empty()) {
       rph_refs_.Reset();
@@ -290,11 +283,8 @@ class ExtensionGalleriesHost
 
  private:
   typedef std::map<MediaGalleryPrefId, MediaFileSystemInfo> PrefIdFsInfoMap;
-#if defined(SUPPORT_MTP_DEVICE_FILESYSTEM)
   typedef std::map<MediaGalleryPrefId, scoped_refptr<ScopedMTPDeviceMapEntry> >
       MediaDeviceEntryReferencesMap;
-#endif
-
 
   // Private destructor and friend declaration for ref counted implementation.
   friend class base::RefCountedThreadSafe<ExtensionGalleriesHost>;
@@ -303,9 +293,7 @@ class ExtensionGalleriesHost
     DCHECK(rph_refs_.empty());
     DCHECK(pref_id_map_.empty());
 
-#if defined(SUPPORT_MTP_DEVICE_FILESYSTEM)
     DCHECK(media_device_map_references_.empty());
-#endif
   }
 
   void GetMediaFileSystemsForAttachedDevices(
@@ -339,31 +327,27 @@ class ExtensionGalleriesHost
         continue;
 
       std::string fsid;
-      if (MediaStorageUtil::IsMassStorageDevice(device_id)) {
+      if (StorageInfo::IsMassStorageDevice(device_id)) {
         fsid = file_system_context_->RegisterFileSystemForMassStorage(
             device_id, path);
       } else {
-#if defined(SUPPORT_MTP_DEVICE_FILESYSTEM)
         scoped_refptr<ScopedMTPDeviceMapEntry> mtp_device_host;
         fsid = file_system_context_->RegisterFileSystemForMTPDevice(
             device_id, path, &mtp_device_host);
         DCHECK(mtp_device_host.get());
         media_device_map_references_[pref_id] = mtp_device_host;
-#else
-        NOTIMPLEMENTED();
-        continue;
-#endif
       }
-      DCHECK(!fsid.empty());
+      if (fsid.empty())
+        continue;
 
       MediaFileSystemInfo new_entry(
-          MakeJSONFileSystemName(gallery_info.display_name, pref_id, device_id),
+          gallery_info.GetGalleryDisplayName(),
           path,
           fsid,
           pref_id,
           GetTransientIdForRemovableDeviceId(device_id),
-          MediaStorageUtil::IsRemovableDevice(device_id),
-          MediaStorageUtil::IsMediaDevice(device_id));
+          StorageInfo::IsRemovableDevice(device_id),
+          StorageInfo::IsMediaDevice(device_id));
       result.push_back(new_entry);
       new_galleries.insert(pref_id);
       pref_id_map_[pref_id] = new_entry;
@@ -380,55 +364,10 @@ class ExtensionGalleriesHost
   }
 
   std::string GetTransientIdForRemovableDeviceId(const std::string& device_id) {
-    if (!MediaStorageUtil::IsRemovableDevice(device_id))
+    if (!StorageInfo::IsRemovableDevice(device_id))
       return std::string();
 
-    // StorageMonitor may be NULL in unit tests.
-    StorageMonitor* monitor = StorageMonitor::GetInstance();
-    if (!monitor)
-      return std::string();
-
-    return monitor->GetTransientIdForDeviceId(device_id);
-  }
-
-  // This code is deprecated and should be removed. See http://crbug.com/170138
-  // Make a JSON string out of |name|, |pref_id| and |device_id|. The IDs makes
-  // the combined name unique. The JSON string should not contain any slashes.
-  std::string MakeJSONFileSystemName(const string16& name,
-                                     const MediaGalleryPrefId& pref_id,
-                                     const std::string& device_id) {
-    string16 sanitized_name;
-    string16 separators =
-#if defined(FILE_PATH_USES_WIN_SEPARATORS)
-        base::FilePath::kSeparators
-#else
-        ASCIIToUTF16(base::FilePath::kSeparators)
-#endif
-        ;  // NOLINT
-    ReplaceChars(name, separators.c_str(), ASCIIToUTF16("_"), &sanitized_name);
-
-    base::DictionaryValue dict_value;
-    dict_value.SetStringWithoutPathExpansion(
-        MediaFileSystemRegistry::kNameKey, sanitized_name);
-
-    // This should have been a StringValue, but it's a bit late to change it.
-    dict_value.SetIntegerWithoutPathExpansion(
-        MediaFileSystemRegistry::kGalleryIdKey, pref_id);
-
-    // |device_id| can be empty, in which case, just omit it.
-    std::string transient_device_id =
-        GetTransientIdForRemovableDeviceId(device_id);
-    if (!transient_device_id.empty()) {
-      dict_value.SetStringWithoutPathExpansion(
-          MediaFileSystemRegistry::kDeviceIdKey, transient_device_id);
-    }
-    dict_value.SetStringWithoutPathExpansion(
-        "DEPRECATED",
-        "This JSON string is deprecated, use getMediaFileSystemMetadata.");
-
-    std::string json_string;
-    base::JSONWriter::Write(&dict_value, &json_string);
-    return json_string;
+    return StorageMonitor::GetInstance()->GetTransientIdForDeviceId(device_id);
   }
 
   void CleanUp() {
@@ -440,9 +379,7 @@ class ExtensionGalleriesHost
     }
     pref_id_map_.clear();
 
-#if defined(SUPPORT_MTP_DEVICE_FILESYSTEM)
     media_device_map_references_.clear();
-#endif
 
     no_references_callback_.Run();
   }
@@ -457,11 +394,9 @@ class ExtensionGalleriesHost
   // A map from the gallery preferences id to the file system information.
   PrefIdFsInfoMap pref_id_map_;
 
-#if defined(SUPPORT_MTP_DEVICE_FILESYSTEM)
   // A map from the gallery preferences id to the corresponding media device
   // host object.
   MediaDeviceEntryReferencesMap media_device_map_references_;
-#endif
 
   // The set of render processes and web contents that may have references to
   // the file system ids this instance manages.
@@ -473,10 +408,6 @@ class ExtensionGalleriesHost
 /******************
  * Public methods
  ******************/
-
-const char MediaFileSystemRegistry::kDeviceIdKey[] = "deviceId";
-const char MediaFileSystemRegistry::kGalleryIdKey[] = "galleryId";
-const char MediaFileSystemRegistry::kNameKey[] = "name";
 
 void MediaFileSystemRegistry::GetMediaFileSystemsForExtension(
     const content::RenderViewHost* rvh,
@@ -532,18 +463,23 @@ MediaGalleriesPreferences* MediaFileSystemRegistry::GetPreferences(
   // once per profile.
   extension_hosts_map_[profile] = ExtensionHostMap();
 
-  // StorageMonitor may be NULL in unit tests.
+  // TODO(gbillock): Move this stanza to MediaGalleriesPreferences init code.
   StorageMonitor* monitor = StorageMonitor::GetInstance();
-  if (!monitor)
-    return preferences;
-  std::vector<StorageInfo> existing_devices = monitor->GetAttachedStorage();
+  DCHECK(monitor->IsInitialized());
+  std::vector<StorageInfo> existing_devices =
+      monitor->GetAllAvailableStorages();
   for (size_t i = 0; i < existing_devices.size(); i++) {
-    if (!MediaStorageUtil::IsMediaDevice(existing_devices[i].device_id))
+    if (!(StorageInfo::IsMediaDevice(existing_devices[i].device_id()) &&
+          StorageInfo::IsRemovableDevice(existing_devices[i].device_id())))
       continue;
-    preferences->AddGalleryWithName(existing_devices[i].device_id,
-                                    existing_devices[i].name,
-                                    base::FilePath(),
-                                    false /*not user added*/);
+    preferences->AddGallery(existing_devices[i].device_id(),
+                            base::FilePath(),
+                            false,
+                            existing_devices[i].storage_label(),
+                            existing_devices[i].vendor_name(),
+                            existing_devices[i].model_name(),
+                            existing_devices[i].total_size_in_bytes(),
+                            base::Time::Now());
   }
   return preferences;
 }
@@ -566,7 +502,7 @@ void MediaFileSystemRegistry::OnRemovableStorageDetached(
     MediaGalleriesPreferences* preferences = GetPreferences(profile_it->first);
     InvalidatedGalleriesInfo invalid_galleries_in_profile;
     invalid_galleries_in_profile.pref_ids =
-        preferences->LookUpGalleriesByDeviceId(info.device_id);
+        preferences->LookUpGalleriesByDeviceId(info.device_id());
 
     for (ExtensionHostMap::const_iterator extension_host_it =
              profile_it->second.begin();
@@ -594,17 +530,6 @@ void MediaFileSystemRegistry::OnRemovableStorageDetached(
   }
 }
 
-size_t MediaFileSystemRegistry::GetExtensionGalleriesHostCountForTests() const {
-  size_t extension_galleries_host_count = 0;
-  for (ExtensionGalleriesHostMap::const_iterator it =
-           extension_hosts_map_.begin();
-       it != extension_hosts_map_.end();
-       ++it) {
-    extension_galleries_host_count += it->second.size();
-  }
-  return extension_galleries_host_count;
-}
-
 /******************
  * Private methods
  ******************/
@@ -623,25 +548,35 @@ class MediaFileSystemRegistry::MediaFileSystemContextImpl
   virtual std::string RegisterFileSystemForMassStorage(
       const std::string& device_id, const base::FilePath& path) OVERRIDE {
     DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-    DCHECK(MediaStorageUtil::IsMassStorageDevice(device_id));
+    DCHECK(StorageInfo::IsMassStorageDevice(device_id));
 
     // Sanity checks for |path|.
     CHECK(path.IsAbsolute());
     CHECK(!path.ReferencesParent());
-    std::string fs_name(extension_misc::kMediaFileSystemPathPart);
-    const std::string fsid =
-        IsolatedContext::GetInstance()->RegisterFileSystemForPath(
-            fileapi::kFileSystemTypeNativeMedia, path, &fs_name);
-    CHECK(!fsid.empty());
+
+    std::string fsid;
+    if (StorageInfo::IsITunesDevice(device_id)) {
+      ImportedMediaGalleryRegistry* imported_registry =
+          ImportedMediaGalleryRegistry::GetInstance();
+      fsid = imported_registry->RegisterITunesFilesystemOnUIThread(path);
+    } else if (StorageInfo::IsPicasaDevice(device_id)) {
+      ImportedMediaGalleryRegistry* imported_registry =
+          ImportedMediaGalleryRegistry::GetInstance();
+      fsid = imported_registry->RegisterPicasaFilesystemOnUIThread(
+          path);
+    } else {
+      std::string fs_name(extension_misc::kMediaFileSystemPathPart);
+      fsid = IsolatedContext::GetInstance()->RegisterFileSystemForPath(
+          fileapi::kFileSystemTypeNativeMedia, path, &fs_name);
+    }
     return fsid;
   }
 
-#if defined(SUPPORT_MTP_DEVICE_FILESYSTEM)
   virtual std::string RegisterFileSystemForMTPDevice(
       const std::string& device_id, const base::FilePath& path,
       scoped_refptr<ScopedMTPDeviceMapEntry>* entry) OVERRIDE {
     DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-    DCHECK(!MediaStorageUtil::IsMassStorageDevice(device_id));
+    DCHECK(!StorageInfo::IsMassStorageDevice(device_id));
 
     // Sanity checks for |path|.
     CHECK(MediaStorageUtil::CanCreateFileSystem(device_id, path));
@@ -654,14 +589,14 @@ class MediaFileSystemRegistry::MediaFileSystemContextImpl
     *entry = registry_->GetOrCreateScopedMTPDeviceMapEntry(path.value());
     return fsid;
   }
-#endif
 
   virtual void RevokeFileSystem(const std::string& fsid) OVERRIDE {
-    IsolatedContext::GetInstance()->RevokeFileSystem(fsid);
-  }
+    ImportedMediaGalleryRegistry* imported_registry =
+        ImportedMediaGalleryRegistry::GetInstance();
+    if (imported_registry->RevokeImportedFilesystemOnUIThread(fsid))
+      return;
 
-  virtual MediaFileSystemRegistry* GetMediaFileSystemRegistry() OVERRIDE {
-    return registry_;
+    IsolatedContext::GetInstance()->RevokeFileSystem(fsid);
   }
 
  private:
@@ -672,20 +607,16 @@ class MediaFileSystemRegistry::MediaFileSystemContextImpl
 
 MediaFileSystemRegistry::MediaFileSystemRegistry()
     : file_system_context_(new MediaFileSystemContextImpl(this)) {
-  // StorageMonitor may be NULL in unit tests.
-  StorageMonitor* monitor = StorageMonitor::GetInstance();
-  if (monitor)
-    monitor->AddObserver(this);
+  StorageMonitor::GetInstance()->AddObserver(this);
 }
 
 MediaFileSystemRegistry::~MediaFileSystemRegistry() {
-  // StorageMonitor may be NULL in unit tests.
-  StorageMonitor* monitor = StorageMonitor::GetInstance();
-  if (monitor)
-    monitor->RemoveObserver(this);
-#if defined(SUPPORT_MTP_DEVICE_FILESYSTEM)
+  // TODO(gbillock): This is needed because the unit test uses the
+  // g_browser_process registry. We should create one in the unit test,
+  // and then can remove this.
+  if (StorageMonitor::GetInstance())
+    StorageMonitor::GetInstance()->RemoveObserver(this);
   DCHECK(mtp_device_delegate_map_.empty());
-#endif
 }
 
 void MediaFileSystemRegistry::OnRememberedGalleriesChanged(
@@ -734,7 +665,6 @@ void MediaFileSystemRegistry::OnRememberedGalleriesChanged(
   }
 }
 
-#if defined(SUPPORT_MTP_DEVICE_FILESYSTEM)
 scoped_refptr<ScopedMTPDeviceMapEntry>
 MediaFileSystemRegistry::GetOrCreateScopedMTPDeviceMapEntry(
     const base::FilePath::StringType& device_location) {
@@ -749,7 +679,7 @@ MediaFileSystemRegistry::GetOrCreateScopedMTPDeviceMapEntry(
                      base::Unretained(this),
                      device_location));
   mtp_device_host->Init();
-  mtp_device_delegate_map_[device_location] = mtp_device_host;
+  mtp_device_delegate_map_[device_location] = mtp_device_host.get();
   return mtp_device_host;
 }
 
@@ -760,7 +690,6 @@ void MediaFileSystemRegistry::RemoveScopedMTPDeviceMapEntry(
   DCHECK(delegate_it != mtp_device_delegate_map_.end());
   mtp_device_delegate_map_.erase(delegate_it);
 }
-#endif
 
 void MediaFileSystemRegistry::OnExtensionGalleriesHostEmpty(
     Profile* profile, const std::string& extension_id) {

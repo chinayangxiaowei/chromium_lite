@@ -7,13 +7,12 @@
 #include "base/bind.h"
 #include "base/callback.h"
 #include "base/callback_helpers.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/threading/platform_thread.h"
 #include "media/base/buffers.h"
 #include "media/base/limits.h"
 #include "media/base/pipeline.h"
 #include "media/base/video_frame.h"
-#include "media/filters/decrypting_demuxer_stream.h"
 
 namespace media {
 
@@ -23,17 +22,19 @@ base::TimeDelta VideoRendererBase::kMaxLastFrameDuration() {
 
 VideoRendererBase::VideoRendererBase(
     const scoped_refptr<base::MessageLoopProxy>& message_loop,
+    ScopedVector<VideoDecoder> decoders,
     const SetDecryptorReadyCB& set_decryptor_ready_cb,
     const PaintCB& paint_cb,
     const SetOpaqueCB& set_opaque_cb,
     bool drop_frames)
     : message_loop_(message_loop),
       weak_factory_(this),
-      video_frame_stream_(message_loop, set_decryptor_ready_cb),
+      video_frame_stream_(
+          message_loop, decoders.Pass(), set_decryptor_ready_cb),
       received_end_of_stream_(false),
       frame_available_(&lock_),
       state_(kUninitialized),
-      thread_(base::kNullThreadHandle),
+      thread_(),
       pending_read_(false),
       drop_frames_(drop_frames),
       playback_rate_(0),
@@ -46,7 +47,7 @@ VideoRendererBase::VideoRendererBase(
 VideoRendererBase::~VideoRendererBase() {
   base::AutoLock auto_lock(lock_);
   CHECK(state_ == kStopped || state_ == kUninitialized) << state_;
-  CHECK_EQ(thread_, base::kNullThreadHandle);
+  CHECK(thread_.is_null());
 }
 
 void VideoRendererBase::Play(const base::Closure& callback) {
@@ -70,8 +71,12 @@ void VideoRendererBase::Flush(const base::Closure& callback) {
   base::AutoLock auto_lock(lock_);
   DCHECK_EQ(state_, kPaused);
   flush_cb_ = callback;
-  state_ = kFlushingDecoder;
+  state_ = kFlushing;
 
+  // This is necessary if the |video_frame_stream_| has already seen an end of
+  // stream and needs to drain it before flushing it.
+  ready_frames_.clear();
+  received_end_of_stream_ = false;
   video_frame_stream_.Reset(base::Bind(
       &VideoRendererBase::OnVideoFrameStreamResetDone, weak_this_));
 }
@@ -94,15 +99,15 @@ void VideoRendererBase::Stop(const base::Closure& callback) {
   DoStopOrError_Locked();
 
   // Clean up our thread if present.
-  base::PlatformThreadHandle thread_to_join = base::kNullThreadHandle;
-  if (thread_ != base::kNullThreadHandle) {
+  base::PlatformThreadHandle thread_to_join = base::PlatformThreadHandle();
+  if (!thread_.is_null()) {
     // Signal the thread since it's possible to get stopped with the video
     // thread waiting for a read to complete.
     frame_available_.Signal();
     std::swap(thread_, thread_to_join);
   }
 
-  if (thread_to_join != base::kNullThreadHandle) {
+  if (!thread_to_join.is_null()) {
     base::AutoUnlock auto_unlock(lock_);
     base::PlatformThread::Join(thread_to_join);
   }
@@ -130,8 +135,7 @@ void VideoRendererBase::Preroll(base::TimeDelta time,
   AttemptRead_Locked();
 }
 
-void VideoRendererBase::Initialize(const scoped_refptr<DemuxerStream>& stream,
-                                   const VideoDecoderList& decoders,
+void VideoRendererBase::Initialize(DemuxerStream* stream,
                                    const PipelineStatusCB& init_cb,
                                    const StatisticsCB& statistics_cb,
                                    const TimeCB& max_time_cb,
@@ -143,7 +147,6 @@ void VideoRendererBase::Initialize(const scoped_refptr<DemuxerStream>& stream,
   DCHECK(message_loop_->BelongsToCurrentThread());
   base::AutoLock auto_lock(lock_);
   DCHECK(stream);
-  DCHECK(!decoders.empty());
   DCHECK_EQ(stream->type(), DemuxerStream::VIDEO);
   DCHECK(!init_cb.is_null());
   DCHECK(!statistics_cb.is_null());
@@ -167,7 +170,6 @@ void VideoRendererBase::Initialize(const scoped_refptr<DemuxerStream>& stream,
 
   video_frame_stream_.Initialize(
       stream,
-      decoders,
       statistics_cb,
       base::Bind(&VideoRendererBase::OnVideoFrameStreamInitialized,
                  weak_this_));
@@ -209,7 +211,7 @@ void VideoRendererBase::OnVideoFrameStreamInitialized(bool success,
 #if defined(OS_WIN)
   // Bump up our priority so our sleeping is more accurate.
   // TODO(scherkus): find out if this is necessary, but it seems to help.
-  ::SetThreadPriority(thread_, THREAD_PRIORITY_ABOVE_NORMAL);
+  ::SetThreadPriority(thread_.platform_handle(), THREAD_PRIORITY_ABOVE_NORMAL);
 #endif  // defined(OS_WIN)
   base::ResetAndReturn(&init_cb_).Run(PIPELINE_OK);
 }
@@ -222,7 +224,7 @@ void VideoRendererBase::ThreadMain() {
   // Nothing special about the value, other than we're being more OS-friendly
   // than sleeping for 1 millisecond.
   //
-  // TOOD(scherkus): switch to pure event-driven frame timing instead of this
+  // TODO(scherkus): switch to pure event-driven frame timing instead of this
   // kIdleTimeDelta business http://crbug.com/106874
   const base::TimeDelta kIdleTimeDelta =
       base::TimeDelta::FromMilliseconds(10);
@@ -329,18 +331,20 @@ void VideoRendererBase::DropNextReadyFrame_Locked() {
       &VideoRendererBase::AttemptRead, weak_this_));
 }
 
-void VideoRendererBase::FrameReady(VideoDecoder::Status status,
+void VideoRendererBase::FrameReady(VideoFrameStream::Status status,
                                    const scoped_refptr<VideoFrame>& frame) {
   base::AutoLock auto_lock(lock_);
   DCHECK_NE(state_, kUninitialized);
+  DCHECK_NE(state_, kFlushed);
 
   CHECK(pending_read_);
   pending_read_ = false;
 
-  if (status != VideoDecoder::kOk) {
-    DCHECK(!frame);
+  if (status == VideoFrameStream::DECODE_ERROR ||
+      status == VideoFrameStream::DECRYPT_ERROR) {
+    DCHECK(!frame.get());
     PipelineStatus error = PIPELINE_ERROR_DECODE;
-    if (status == VideoDecoder::kDecryptError)
+    if (status == VideoFrameStream::DECRYPT_ERROR)
       error = PIPELINE_ERROR_DECRYPT;
 
     if (!preroll_cb_.is_null()) {
@@ -352,18 +356,12 @@ void VideoRendererBase::FrameReady(VideoDecoder::Status status,
     return;
   }
 
-  // Already-queued Decoder ReadCB's can fire after various state transitions
-  // have happened; in that case just drop those frames immediately.
-  if (state_ == kStopped || state_ == kError || state_ == kFlushed ||
-      state_ == kFlushingDecoder)
+  // Already-queued VideoFrameStream ReadCB's can fire after various state
+  // transitions have happened; in that case just drop those frames immediately.
+  if (state_ == kStopped || state_ == kError || state_ == kFlushing)
     return;
 
-  if (state_ == kFlushing) {
-    AttemptFlush_Locked();
-    return;
-  }
-
-  if (!frame) {
+  if (!frame.get()) {
     // Abort preroll early for a NULL frame because we won't get more frames.
     // A new preroll will be requested after this one completes so there is no
     // point trying to collect more frames.
@@ -393,7 +391,7 @@ void VideoRendererBase::FrameReady(VideoDecoder::Status status,
   AddReadyFrame_Locked(frame);
 
   if (state_ == kPrerolling) {
-    if (!video_frame_stream_.HasOutputFrameAvailable() ||
+    if (!video_frame_stream_.CanReadWithoutStalling() ||
         ready_frames_.size() >= static_cast<size_t>(limits::kMaxVideoFrames)) {
       TransitionToPrerolled_Locked();
     }
@@ -453,18 +451,17 @@ void VideoRendererBase::AttemptRead_Locked() {
 
   switch (state_) {
     case kPaused:
-    case kFlushing:
     case kPrerolling:
     case kPlaying:
       pending_read_ = true;
-      video_frame_stream_.ReadFrame(base::Bind(&VideoRendererBase::FrameReady,
-                                               weak_this_));
+      video_frame_stream_.Read(base::Bind(&VideoRendererBase::FrameReady,
+                                          weak_this_));
       return;
 
     case kUninitialized:
     case kInitializing:
     case kPrerolled:
-    case kFlushingDecoder:
+    case kFlushing:
     case kFlushed:
     case kEnded:
     case kStopped:
@@ -478,22 +475,10 @@ void VideoRendererBase::OnVideoFrameStreamResetDone() {
   if (state_ == kStopped)
     return;
 
-  DCHECK_EQ(kFlushingDecoder, state_);
-  DCHECK(!pending_read_);
-
-  state_ = kFlushing;
-  AttemptFlush_Locked();
-}
-
-void VideoRendererBase::AttemptFlush_Locked() {
-  lock_.AssertAcquired();
   DCHECK_EQ(kFlushing, state_);
-
-  ready_frames_.clear();
-  received_end_of_stream_ = false;
-
-  if (pending_read_)
-    return;
+  DCHECK(!pending_read_);
+  DCHECK(ready_frames_.empty());
+  DCHECK(!received_end_of_stream_);
 
   state_ = kFlushed;
   last_timestamp_ = kNoTimestamp();

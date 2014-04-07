@@ -9,8 +9,11 @@
 #include "base/i18n/break_iterator.h"
 #include "base/logging.h"
 #include "base/stl_util.h"
+#include "third_party/icu/source/common/unicode/rbbi.h"
+#include "third_party/icu/source/common/unicode/utf16.h"
 #include "third_party/skia/include/core/SkTypeface.h"
 #include "third_party/skia/include/effects/SkGradientShader.h"
+#include "ui/base/text/text_elider.h"
 #include "ui/base/text/utf16_indexing.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/insets.h"
@@ -224,7 +227,7 @@ void SkiaTextRenderer::DrawPosText(const SkPoint* pos,
     if (!paint_.isLCDRenderText() &&
         paint_.getShader() &&
         !paint_.getLooper()) {
-      deferred_fade_shader_ = paint_.getShader();
+      deferred_fade_shader_ = skia::SharePtr(paint_.getShader());
       paint_.setShader(NULL);
       canvas_skia_->saveLayer(&bounds_, NULL);
     }
@@ -303,7 +306,7 @@ void StyleIterator::UpdatePosition(size_t position) {
 RenderText::~RenderText() {
 }
 
-void RenderText::SetText(const string16& text) {
+void RenderText::SetText(const base::string16& text) {
   DCHECK(!composition_range_.IsValid());
   text_ = text;
 
@@ -322,13 +325,22 @@ void RenderText::SetText(const string16& text) {
   if (directionality_mode_ == DIRECTIONALITY_FROM_TEXT)
     text_direction_ = base::i18n::UNKNOWN_DIRECTION;
 
-  UpdateObscuredText();
+  obscured_reveal_index_ = -1;
+  UpdateLayoutText();
   ResetLayout();
 }
 
 void RenderText::SetHorizontalAlignment(HorizontalAlignment alignment) {
   if (horizontal_alignment_ != alignment) {
     horizontal_alignment_ = alignment;
+    display_offset_ = Vector2d();
+    cached_bounds_and_offset_valid_ = false;
+  }
+}
+
+void RenderText::SetVerticalAlignment(VerticalAlignment alignment) {
+  if (vertical_alignment_ != alignment) {
+    vertical_alignment_ = alignment;
     display_offset_ = Vector2d();
     cached_bounds_and_offset_valid_ = false;
   }
@@ -345,18 +357,16 @@ void RenderText::SetFont(const Font& font) {
 }
 
 void RenderText::SetFontSize(int size) {
-  font_list_ = font_list_.DeriveFontListWithSize(size);
-  cached_bounds_and_offset_valid_ = false;
-  ResetLayout();
+  SetFontList(font_list_.DeriveFontListWithSize(size));
+}
+
+const Font& RenderText::GetPrimaryFont() const {
+  return font_list_.GetPrimaryFont();
 }
 
 void RenderText::SetCursorEnabled(bool cursor_enabled) {
   cursor_enabled_ = cursor_enabled;
   cached_bounds_and_offset_valid_ = false;
-}
-
-const Font& RenderText::GetFont() const {
-  return font_list_.GetFonts()[0];
 }
 
 void RenderText::ToggleInsertMode() {
@@ -367,10 +377,21 @@ void RenderText::ToggleInsertMode() {
 void RenderText::SetObscured(bool obscured) {
   if (obscured != obscured_) {
     obscured_ = obscured;
+    obscured_reveal_index_ = -1;
     cached_bounds_and_offset_valid_ = false;
-    UpdateObscuredText();
+    UpdateLayoutText();
     ResetLayout();
   }
+}
+
+void RenderText::SetObscuredRevealIndex(int index) {
+  if (obscured_reveal_index_ == index)
+    return;
+
+  obscured_reveal_index_ = index;
+  cached_bounds_and_offset_valid_ = false;
+  UpdateLayoutText();
+  ResetLayout();
 }
 
 void RenderText::SetDisplayRect(const Rect& r) {
@@ -466,7 +487,7 @@ void RenderText::SelectWord() {
     return;
   }
 
-  size_t cursor_pos = cursor_position();
+  size_t selection_max = selection().GetMax();
 
   base::i18n::BreakIterator iter(text(), base::i18n::BreakIterator::BREAK_WORD);
   bool success = iter.Init();
@@ -474,22 +495,26 @@ void RenderText::SelectWord() {
   if (!success)
     return;
 
-  size_t selection_start = cursor_pos;
-  for (; selection_start != 0; --selection_start) {
-    if (iter.IsStartOfWord(selection_start) ||
-        iter.IsEndOfWord(selection_start))
+  size_t selection_min = selection().GetMin();
+  if (selection_min == text().length() && selection_min != 0)
+    --selection_min;
+
+  for (; selection_min != 0; --selection_min) {
+    if (iter.IsStartOfWord(selection_min) ||
+        iter.IsEndOfWord(selection_min))
       break;
   }
 
-  if (selection_start == cursor_pos)
-    ++cursor_pos;
+  if (selection_min == selection_max && selection_max != text().length())
+    ++selection_max;
 
-  for (; cursor_pos < text().length(); ++cursor_pos)
-    if (iter.IsEndOfWord(cursor_pos) || iter.IsStartOfWord(cursor_pos))
+  for (; selection_max < text().length(); ++selection_max)
+    if (iter.IsEndOfWord(selection_max) || iter.IsStartOfWord(selection_max))
       break;
 
-  MoveCursorTo(selection_start, false);
-  MoveCursorTo(cursor_pos, true);
+  const bool reversed = selection().is_reversed();
+  MoveCursorTo(reversed ? selection_max : selection_min, false);
+  MoveCursorTo(reversed ? selection_min : selection_max, true);
 }
 
 const ui::Range& RenderText::GetCompositionRange() const {
@@ -556,6 +581,11 @@ void RenderText::ApplyStyle(TextStyle style,
   }
 }
 
+bool RenderText::GetStyle(TextStyle style) const {
+  return (styles_[style].breaks().size() == 1) &&
+      styles_[style].breaks().front().second;
+}
+
 void RenderText::SetDirectionalityMode(DirectionalityMode mode) {
   if (mode == directionality_mode_)
     return;
@@ -597,6 +627,10 @@ VisualCursorDirection RenderText::GetVisualDirectionOfLogicalEnd() {
       CURSOR_RIGHT : CURSOR_LEFT;
 }
 
+int RenderText::GetContentWidth() {
+  return GetStringSize().width() + (cursor_enabled_ ? 1 : 0);
+}
+
 void RenderText::Draw(Canvas* canvas) {
   EnsureLayout();
 
@@ -608,10 +642,11 @@ void RenderText::Draw(Canvas* canvas) {
     canvas->ClipRect(clip_rect);
   }
 
-  if (!text().empty())
+  if (!text().empty() && focused())
     DrawSelection(canvas);
 
-  DrawCursor(canvas);
+  if (cursor_enabled() && cursor_visible() && focused())
+    DrawCursor(canvas, selection_model_);
 
   if (!text().empty())
     DrawVisualText(canvas);
@@ -620,15 +655,33 @@ void RenderText::Draw(Canvas* canvas) {
     canvas->Restore();
 }
 
-void RenderText::DrawSelectedText(Canvas* canvas) {
+void RenderText::DrawCursor(Canvas* canvas, const SelectionModel& position) {
+  // Paint cursor. Replace cursor is drawn as rectangle for now.
+  // TODO(msw): Draw a better cursor with a better indication of association.
+  canvas->FillRect(GetCursorBounds(position, true), cursor_color_);
+}
+
+void RenderText::DrawSelectedTextForDrag(Canvas* canvas) {
   EnsureLayout();
   const std::vector<Rect> sel = GetSubstringBounds(selection());
+
+  // Override the selection color with black, and force the background to be
+  // transparent so that it's rendered without subpixel antialiasing.
+  const bool saved_background_is_transparent = background_is_transparent();
+  const SkColor saved_selection_color = selection_color();
+  set_background_is_transparent(true);
+  set_selection_color(SK_ColorBLACK);
+
   for (size_t i = 0; i < sel.size(); ++i) {
     canvas->Save();
     canvas->ClipRect(sel[i]);
     DrawVisualText(canvas);
     canvas->Restore();
   }
+
+  // Restore saved transparency and selection color.
+  set_selection_color(saved_selection_color);
+  set_background_is_transparent(saved_background_is_transparent);
 }
 
 Rect RenderText::GetCursorBounds(const SelectionModel& caret,
@@ -636,23 +689,22 @@ Rect RenderText::GetCursorBounds(const SelectionModel& caret,
   EnsureLayout();
 
   size_t caret_pos = caret.caret_pos();
+  DCHECK(IsCursorablePosition(caret_pos));
   // In overtype mode, ignore the affinity and always indicate that we will
   // overtype the next character.
   LogicalCursorDirection caret_affinity =
       insert_mode ? caret.caret_affinity() : CURSOR_FORWARD;
-  int x = 0, width = 1, height = 0;
+  int x = 0, width = 1;
+  Size size = GetStringSize();
   if (caret_pos == (caret_affinity == CURSOR_BACKWARD ? 0 : text().length())) {
     // The caret is attached to the boundary. Always return a 1-dip width caret,
     // since there is nothing to overtype.
-    Size size = GetStringSize();
     if ((GetTextDirection() == base::i18n::RIGHT_TO_LEFT) == (caret_pos == 0))
       x = size.width();
-    height = size.height();
   } else {
     size_t grapheme_start = (caret_affinity == CURSOR_FORWARD) ?
         caret_pos : IndexOfAdjacentGrapheme(caret_pos, CURSOR_BACKWARD);
-    ui::Range xspan;
-    GetGlyphBounds(grapheme_start, &xspan, &height);
+    ui::Range xspan(GetGlyphBounds(grapheme_start));
     if (insert_mode) {
       x = (caret_affinity == CURSOR_BACKWARD) ? xspan.end() : xspan.start();
     } else {  // overtype mode
@@ -660,9 +712,7 @@ Rect RenderText::GetCursorBounds(const SelectionModel& caret,
       width = xspan.length();
     }
   }
-  height = std::min(height, display_rect().height());
-  int y = (display_rect().height() - height) / 2;
-  return Rect(ToViewPoint(Point(x, y)), Size(width, height));
+  return Rect(ToViewPoint(Point(x, 0)), Size(width, size.height()));
 }
 
 const Rect& RenderText::GetUpdatedCursorBounds() {
@@ -671,7 +721,7 @@ const Rect& RenderText::GetUpdatedCursorBounds() {
 }
 
 size_t RenderText::IndexOfAdjacentGrapheme(size_t index,
-    LogicalCursorDirection direction) {
+                                           LogicalCursorDirection direction) {
   if (index > text().length())
     return text().length();
 
@@ -708,6 +758,7 @@ void RenderText::SetTextShadows(const ShadowValues& shadows) {
 
 RenderText::RenderText()
     : horizontal_alignment_(base::i18n::IsRTL() ? ALIGN_RIGHT : ALIGN_LEFT),
+      vertical_alignment_(ALIGN_VCENTER),
       directionality_mode_(DIRECTIONALITY_FROM_TEXT),
       text_direction_(base::i18n::UNKNOWN_DIRECTION),
       cursor_enabled_(true),
@@ -716,13 +767,14 @@ RenderText::RenderText()
       cursor_color_(kDefaultColor),
       selection_color_(kDefaultColor),
       selection_background_focused_color_(kDefaultSelectionBackgroundColor),
-      selection_background_unfocused_color_(kDefaultSelectionBackgroundColor),
       focused_(false),
       composition_range_(ui::Range::InvalidRange()),
       colors_(kDefaultColor),
       styles_(NUM_TEXT_STYLES),
       composition_and_selection_styles_applied_(false),
       obscured_(false),
+      obscured_reveal_index_(-1),
+      truncate_length_(0),
       fade_head_(false),
       fade_tail_(false),
       background_is_transparent_(false),
@@ -762,8 +814,8 @@ void RenderText::SetSelectionModel(const SelectionModel& model) {
   cached_bounds_and_offset_valid_ = false;
 }
 
-const string16& RenderText::GetLayoutText() const {
-  return obscured() ? obscured_text_ : text();
+const base::string16& RenderText::GetLayoutText() const {
+  return layout_text_.empty() ? text_ : layout_text_;
 }
 
 void RenderText::ApplyCompositionAndSelectionStyles() {
@@ -807,24 +859,19 @@ Point RenderText::ToViewPoint(const Point& point) {
   return point + GetTextOffset();
 }
 
-int RenderText::GetContentWidth() {
-  return GetStringSize().width() + (cursor_enabled_ ? 1 : 0);
-}
-
 Vector2d RenderText::GetAlignmentOffset() {
-  if (horizontal_alignment() == ALIGN_LEFT)
-    return Vector2d();
-
-  int x_offset = display_rect().width() - GetContentWidth();
-  if (horizontal_alignment() == ALIGN_CENTER)
-    x_offset /= 2;
-  return Vector2d(x_offset, 0);
-}
-
-Vector2d RenderText::GetOffsetForDrawing() {
-  // Center the text vertically in the display area.
-  return GetTextOffset() +
-      Vector2d(0, (display_rect().height() - GetStringSize().height()) / 2);
+  Vector2d offset;
+  if (horizontal_alignment_ != ALIGN_LEFT) {
+    offset.set_x(display_rect().width() - GetContentWidth());
+    if (horizontal_alignment_ == ALIGN_CENTER)
+      offset.set_x(offset.x() / 2);
+  }
+  if (vertical_alignment_ != ALIGN_TOP) {
+    offset.set_y(display_rect().height() - GetStringSize().height());
+    if (vertical_alignment_ == ALIGN_VCENTER)
+      offset.set_y(offset.y() / 2);
+  }
+  return offset;
 }
 
 void RenderText::ApplyFadeEffects(internal::SkiaTextRenderer* renderer) {
@@ -838,7 +885,8 @@ void RenderText::ApplyFadeEffects(internal::SkiaTextRenderer* renderer) {
   if (text_width <= display_width)
     return;
 
-  int gradient_width = CalculateFadeGradientWidth(GetFont(), display_width);
+  int gradient_width = CalculateFadeGradientWidth(GetPrimaryFont(),
+                                                  display_width);
   if (gradient_width == 0)
     return;
 
@@ -848,7 +896,7 @@ void RenderText::ApplyFadeEffects(internal::SkiaTextRenderer* renderer) {
   // TODO(asvitkine): This is currently not based on GetTextDirection() because
   //                  RenderTextWin does not return a direction that's based on
   //                  the text content.
-  if (horizontal_alignment() == ALIGN_RIGHT)
+  if (horizontal_alignment_ == ALIGN_RIGHT)
     std::swap(fade_left, fade_right);
 
   Rect solid_part = display_rect();
@@ -898,14 +946,38 @@ void RenderText::MoveCursorTo(size_t position, bool select) {
         (cursor == 0) ? CURSOR_FORWARD : CURSOR_BACKWARD));
 }
 
-void RenderText::UpdateObscuredText() {
-  if (!obscured_)
-    return;
+void RenderText::UpdateLayoutText() {
+  layout_text_.clear();
 
-  const size_t obscured_text_length =
-      static_cast<size_t>(ui::UTF16IndexToOffset(text_, 0, text_.length()));
-  if (obscured_text_.length() != obscured_text_length)
-    obscured_text_.resize(obscured_text_length, kPasswordReplacementChar);
+  if (obscured_) {
+    size_t obscured_text_length =
+        static_cast<size_t>(ui::UTF16IndexToOffset(text_, 0, text_.length()));
+    layout_text_.assign(obscured_text_length, kPasswordReplacementChar);
+
+    if (obscured_reveal_index_ >= 0 &&
+        obscured_reveal_index_ < static_cast<int>(text_.length())) {
+      // Gets the index range in |text_| to be revealed.
+      size_t start = obscured_reveal_index_;
+      U16_SET_CP_START(text_.data(), 0, start);
+      size_t end = start;
+      UChar32 unused_char;
+      U16_NEXT(text_.data(), end, text_.length(), unused_char);
+
+      // Gets the index in |layout_text_| to be replaced.
+      const size_t cp_start =
+          static_cast<size_t>(ui::UTF16IndexToOffset(text_, 0, start));
+      if (layout_text_.length() > cp_start)
+        layout_text_.replace(cp_start, 1, text_.substr(start, end - start));
+    }
+  }
+
+  const base::string16& text = obscured_ ? layout_text_ : text_;
+  if (truncate_length_ > 0 && truncate_length_ < text.length()) {
+    // Truncate the text at a valid character break and append an ellipsis.
+    icu::StringCharacterIterator iter(text.c_str());
+    iter.setIndex32(truncate_length_ - 1);
+    layout_text_.assign(text.substr(0, iter.getIndex()) + ui::kEllipsisUTF16);
+  }
 }
 
 void RenderText::UpdateCachedBoundsAndOffset() {
@@ -927,13 +999,13 @@ void RenderText::UpdateCachedBoundsAndOffset() {
     // Don't pan if the text fits in the display width or when the cursor is
     // disabled.
     delta_x = -display_offset_.x();
-  } else if (cursor_bounds_.right() >= display_rect_.right()) {
+  } else if (cursor_bounds_.right() > display_rect_.right()) {
     // TODO(xji): when the character overflow is a RTL character, currently, if
     // we pan cursor at the rightmost position, the entered RTL character is not
     // displayed. Should pan cursor to show the last logical characters.
     //
-    // Pan to show the cursor when it overflows to the right,
-    delta_x = display_rect_.right() - cursor_bounds_.right() - 1;
+    // Pan to show the cursor when it overflows to the right.
+    delta_x = display_rect_.right() - cursor_bounds_.right();
   } else if (cursor_bounds_.x() < display_rect_.x()) {
     // TODO(xji): have similar problem as above when overflow character is a
     // LTR character.
@@ -956,20 +1028,9 @@ void RenderText::UpdateCachedBoundsAndOffset() {
 }
 
 void RenderText::DrawSelection(Canvas* canvas) {
-  const SkColor color = focused() ? selection_background_focused_color_ :
-                                    selection_background_unfocused_color_;
   const std::vector<Rect> sel = GetSubstringBounds(selection());
   for (std::vector<Rect>::const_iterator i = sel.begin(); i < sel.end(); ++i)
-    canvas->FillRect(*i, color);
-}
-
-void RenderText::DrawCursor(Canvas* canvas) {
-  // Paint cursor. Replace cursor is drawn as rectangle for now.
-  // TODO(msw): Draw a better cursor with a better indication of association.
-  if (cursor_enabled() && cursor_visible() && focused()) {
-    canvas->FillRect(GetUpdatedCursorBounds(),
-        insert_mode_ ? cursor_color_ : selection_background_unfocused_color_);
-  }
+    canvas->FillRect(*i, selection_background_focused_color_);
 }
 
 }  // namespace gfx

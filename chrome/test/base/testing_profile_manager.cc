@@ -4,9 +4,10 @@
 
 #include "chrome/test/base/testing_profile_manager.h"
 
-#include "base/files/file_path.h"
-#include "base/memory/scoped_ptr.h"
-#include "base/utf_string_conversions.h"
+#include "base/memory/ref_counted.h"
+#include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/extensions/extension_special_storage_policy.h"
+#include "chrome/browser/prefs/pref_service_syncable.h"
 #include "chrome/browser/profiles/profile_info_cache.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/test/base/testing_browser_process.h"
@@ -45,8 +46,10 @@ bool TestingProfileManager::SetUp() {
 
 TestingProfile* TestingProfileManager::CreateTestingProfile(
     const std::string& profile_name,
+    scoped_ptr<PrefServiceSyncable> prefs,
     const string16& user_name,
-    int avatar_id) {
+    int avatar_id,
+    const std::string& managed_user_id) {
   DCHECK(called_set_up_);
 
   // Create a path for the profile based on the name.
@@ -54,14 +57,21 @@ TestingProfile* TestingProfileManager::CreateTestingProfile(
   profile_path = profile_path.AppendASCII(profile_name);
 
   // Create the profile and register it.
-  TestingProfile* profile = new TestingProfile(profile_path);
+  TestingProfile* profile = new TestingProfile(
+      profile_path,
+      NULL,
+      scoped_refptr<ExtensionSpecialStoragePolicy>(),
+      prefs.Pass());
   profile_manager_->AddProfile(profile);  // Takes ownership.
 
   // Update the user metadata.
   ProfileInfoCache& cache = profile_manager_->GetProfileInfoCache();
   size_t index = cache.GetIndexOfProfileWithPath(profile_path);
-  cache.SetNameOfProfileAtIndex(index, user_name);
   cache.SetAvatarIconOfProfileAtIndex(index, avatar_id);
+  cache.SetManagedUserIdOfProfileAtIndex(index, managed_user_id);
+  // SetNameOfProfileAtIndex may reshuffle the list of profiles, so we do it
+  // last.
+  cache.SetNameOfProfileAtIndex(index, user_name);
 
   testing_profiles_.insert(std::make_pair(profile_name, profile));
 
@@ -71,7 +81,8 @@ TestingProfile* TestingProfileManager::CreateTestingProfile(
 TestingProfile* TestingProfileManager::CreateTestingProfile(
     const std::string& name) {
   DCHECK(called_set_up_);
-  return CreateTestingProfile(name, UTF8ToUTF16(name), 0);
+  return CreateTestingProfile(name, scoped_ptr<PrefServiceSyncable>(),
+                              UTF8ToUTF16(name), 0, std::string());
 }
 
 void TestingProfileManager::DeleteTestingProfile(const std::string& name) {
@@ -94,6 +105,11 @@ void TestingProfileManager::DeleteProfileInfoCache() {
 
 void TestingProfileManager::SetLoggedIn(bool logged_in) {
   profile_manager_->logged_in_ = logged_in;
+}
+
+const base::FilePath& TestingProfileManager::profiles_dir() {
+  DCHECK(called_set_up_);
+  return profiles_dir_.path();
 }
 
 ProfileManager* TestingProfileManager::profile_manager() {

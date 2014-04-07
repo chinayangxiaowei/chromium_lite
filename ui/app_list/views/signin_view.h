@@ -12,21 +12,21 @@
 #include "ui/views/controls/link_listener.h"
 #include "ui/views/view.h"
 
+namespace gfx {
+class Font;
+}
+
 namespace app_list {
 
 class SigninDelegate;
 
 // The SigninView is shown in the app list when the user needs to sign in.
-// It just shows a webview, which is prepared for signin by the signin delegate.
 class SigninView : public views::View,
                    public views::ButtonListener,
                    public views::LinkListener {
  public:
   SigninView(SigninDelegate* delegate, int width);
   virtual ~SigninView();
-
-  // Show the signin UI and begins the signin process.
-  void BeginSignin();
 
  private:
   // views::ButtonListener overrides:
@@ -38,6 +38,9 @@ class SigninView : public views::View,
 
   views::Link* learn_more_link_;
   views::Link* settings_link_;
+  scoped_ptr<gfx::Font> title_font_;
+  scoped_ptr<gfx::Font> text_font_;
+  scoped_ptr<gfx::Font> button_font_;
 
   SigninDelegate* delegate_;
 

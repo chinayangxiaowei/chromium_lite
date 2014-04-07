@@ -48,15 +48,6 @@ class MockLibGps : public LibGps {
   static MockLibGps* g_instance_;
 };
 
-class LocaionProviderListenerLoopQuitter
-    : public LocationProviderBase::ListenerInterface {
-  // LocationProviderBase::ListenerInterface
-  virtual void LocationUpdateAvailable(
-      LocationProviderBase* provider) OVERRIDE {
-    MessageLoop::current()->Quit();
-  }
-};
-
 class GeolocationGpsProviderLinuxTests : public testing::Test {
  public:
   GeolocationGpsProviderLinuxTests();
@@ -70,10 +61,9 @@ class GeolocationGpsProviderLinuxTests : public testing::Test {
   }
 
  protected:
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
   BrowserThreadImpl ui_thread_;
-  LocaionProviderListenerLoopQuitter location_listener_;
-  scoped_ptr<GpsLocationProviderLinux> provider_;
+  scoped_ptr<LocationProvider> provider_;
 };
 
 void CheckValidPosition(const Geoposition& expected,
@@ -82,6 +72,11 @@ void CheckValidPosition(const Geoposition& expected,
   EXPECT_DOUBLE_EQ(expected.latitude, actual.latitude);
   EXPECT_DOUBLE_EQ(expected.longitude, actual.longitude);
   EXPECT_DOUBLE_EQ(expected.accuracy, actual.accuracy);
+}
+
+void QuitMessageLoopAfterUpdate(const LocationProvider* provider,
+                                const Geoposition& position) {
+  base::MessageLoop::current()->Quit();
 }
 
 MockLibGps* MockLibGps::g_instance_ = NULL;
@@ -111,11 +106,10 @@ MockLibGps::~MockLibGps() {
 GeolocationGpsProviderLinuxTests::GeolocationGpsProviderLinuxTests()
     : ui_thread_(BrowserThread::IO, &message_loop_),
       provider_(new GpsLocationProviderLinux(NewMockLibGps)) {
-  provider_->RegisterListener(&location_listener_);
+  provider_->SetUpdateCallback(base::Bind(&QuitMessageLoopAfterUpdate));
 }
 
 GeolocationGpsProviderLinuxTests::~GeolocationGpsProviderLinuxTests() {
-  provider_->UnregisterListener(&location_listener_);
 }
 
 TEST_F(GeolocationGpsProviderLinuxTests, NoLibGpsInstalled) {
@@ -151,7 +145,7 @@ TEST_F(GeolocationGpsProviderLinuxTests, GetPosition) {
   MockLibGps::g_instance_->get_position_.timestamp =
       base::Time::FromDoubleT(200);
   EXPECT_TRUE(MockLibGps::g_instance_->get_position_.Validate());
-  MessageLoop::current()->Run();
+  base::MessageLoop::current()->Run();
   EXPECT_EQ(1, MockLibGps::g_instance_->get_position_calls_);
   EXPECT_EQ(1, MockLibGps::g_instance_->gps_open_calls_);
   EXPECT_EQ(1, MockLibGps::g_instance_->gps_read_calls_);
@@ -160,7 +154,7 @@ TEST_F(GeolocationGpsProviderLinuxTests, GetPosition) {
 
   // Movement. This will block for up to half a second.
   MockLibGps::g_instance_->get_position_.latitude += 0.01;
-  MessageLoop::current()->Run();
+  base::MessageLoop::current()->Run();
   provider_->GetPosition(&position);
   EXPECT_EQ(2, MockLibGps::g_instance_->get_position_calls_);
   EXPECT_EQ(1, MockLibGps::g_instance_->gps_open_calls_);
@@ -175,8 +169,10 @@ void EnableGpsOpenCallback() {
 
 TEST_F(GeolocationGpsProviderLinuxTests, LibGpsReconnect) {
   // Setup gpsd reconnect interval to be 1000ms to speed up test.
-  provider_->SetGpsdReconnectIntervalMillis(1000);
-  provider_->SetPollPeriodMovingMillis(200);
+  GpsLocationProviderLinux* gps_provider =
+      static_cast<GpsLocationProviderLinux*>(provider_.get());
+  gps_provider->SetGpsdReconnectIntervalMillis(1000);
+  gps_provider->SetPollPeriodMovingMillis(200);
   const bool ok = provider_->StartProvider(true);
   EXPECT_TRUE(ok);
   ASSERT_TRUE(MockLibGps::g_instance_);
@@ -194,11 +190,11 @@ TEST_F(GeolocationGpsProviderLinuxTests, LibGpsReconnect) {
   EXPECT_TRUE(MockLibGps::g_instance_->get_position_.Validate());
   // This task makes gps_open() and LibGps::Start() to succeed after
   // 1500ms.
-  MessageLoop::current()->PostDelayedTask(
+  base::MessageLoop::current()->PostDelayedTask(
       FROM_HERE,
       base::Bind(&EnableGpsOpenCallback),
       base::TimeDelta::FromMilliseconds(1500));
-  MessageLoop::current()->Run();
+  base::MessageLoop::current()->Run();
   provider_->GetPosition(&position);
   EXPECT_TRUE(position.Validate());
   // 3 gps_open() calls are expected (2 failures and 1 success)

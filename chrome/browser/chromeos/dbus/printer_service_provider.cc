@@ -4,13 +4,13 @@
 
 #include "chrome/browser/chromeos/dbus/printer_service_provider.h"
 
+#include "ash/session_state_delegate.h"
 #include "ash/shell.h"
-#include "ash/shell_delegate.h"
 #include "ash/wm/window_util.h"
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/metrics/histogram.h"
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
@@ -48,7 +48,7 @@ void ActivateContents(Browser* browser, content::WebContents* contents) {
 
 Browser* ActivateAndGetBrowserForUrl(GURL url) {
   for (TabContentsIterator it; !it.done(); it.Next()) {
-    if (it->GetURL() == url) {
+    if (it->GetLastCommittedURL() == url) {
       ActivateContents(it.browser(), *it);
       return it.browser();
     }
@@ -60,8 +60,9 @@ void FindOrOpenCloudPrintPage(const std::string& /* vendor */,
                               const std::string& /* product */) {
   UMA_HISTOGRAM_ENUMERATION("PrinterService.PrinterServiceEvent", PRINTER_ADDED,
                             PRINTER_SERVICE_EVENT_MAX);
-  if (!ash::Shell::GetInstance()->delegate()->IsSessionStarted() ||
-      ash::Shell::GetInstance()->delegate()->IsScreenLocked()) {
+  if (!ash::Shell::GetInstance()->session_state_delegate()->
+          IsActiveUserSessionStarted() ||
+      ash::Shell::GetInstance()->session_state_delegate()->IsScreenLocked()) {
     return;
   }
 

@@ -7,7 +7,7 @@
 
 #include "base/callback.h"
 #include "base/memory/ref_counted.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "media/base/media_export.h"
 #include "media/base/pipeline_status.h"
 
@@ -40,10 +40,10 @@ class MEDIA_EXPORT AudioRenderer {
   //
   // |disabled_cb| is executed when audio rendering has been disabled due to
   // external factors (i.e., device was removed). |time_cb| will no longer be
-  // executed.
+  // executed. TODO(scherkus): this might not be needed http://crbug.com/234708
   //
   // |error_cb| is executed if an error was encountered.
-  virtual void Initialize(const scoped_refptr<DemuxerStream>& stream,
+  virtual void Initialize(DemuxerStream* stream,
                           const PipelineStatusCB& init_cb,
                           const StatisticsCB& statistics_cb,
                           const base::Closure& underflow_cb,
@@ -81,10 +81,7 @@ class MEDIA_EXPORT AudioRenderer {
   virtual void SetVolume(float volume) = 0;
 
   // Resumes playback after underflow occurs.
-  //
-  // |buffer_more_audio| is set to true if you want to increase the size of the
-  // decoded audio buffer.
-  virtual void ResumeAfterUnderflow(bool buffer_more_audio) = 0;
+  virtual void ResumeAfterUnderflow() = 0;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(AudioRenderer);

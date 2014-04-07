@@ -10,11 +10,12 @@
 #include <string>
 
 #include "base/basictypes.h"
+#include "base/callback.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/observer_list.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "chrome/browser/policy/cloud/cloud_policy_constants.h"
-#include "chrome/browser/policy/cloud/proto/device_management_backend.pb.h"
+#include "chrome/browser/policy/proto/cloud/device_management_backend.pb.h"
 
 namespace policy {
 
@@ -35,6 +36,10 @@ class CloudPolicyClient {
   typedef std::map<PolicyNamespaceKey,
                    enterprise_management::PolicyFetchResponse*> ResponseMap;
 
+  // A callback which receives boolean status of an operation.  If the operation
+  // succeeded, |status| is true.
+  typedef base::Callback<void(bool status)> StatusCallback;
+
   // Observer interface for state and policy changes.
   class Observer {
    public:
@@ -47,6 +52,11 @@ class CloudPolicyClient {
     // Called upon registration state changes. This callback is invoked for
     // successful completion of registration and unregistration requests.
     virtual void OnRegistrationStateChanged(CloudPolicyClient* client) = 0;
+
+    // Called when a request for device robot OAuth2 authorization tokens
+    // returns successfully. Only occurs during enrollment. Optional
+    // (default implementation is a noop).
+    virtual void OnRobotAuthCodesFetched(CloudPolicyClient* client);
 
     // Indicates there's been an error in a previously-issued request.
     virtual void OnClientError(CloudPolicyClient* client) = 0;
@@ -91,7 +101,13 @@ class CloudPolicyClient {
       enterprise_management::DeviceRegisterRequest::Type registration_type,
       const std::string& auth_token,
       const std::string& client_id,
-      bool is_auto_enrollment);
+      bool is_auto_enrollment,
+      const std::string& requisition);
+
+  // Sets information about a policy invalidation. Subsequent fetch operations
+  // will use the given info, and callers can use fetched_invalidation_version
+  // to determine which version of policy was fetched.
+  void SetInvalidationInfo(int64 version, const std::string& payload);
 
   // Requests a policy fetch. The client being registered is a prerequisite to
   // this operation and this call will CHECK if the client is not in registered
@@ -102,8 +118,20 @@ class CloudPolicyClient {
   // requests and the latest request will eventually trigger notifications.
   virtual void FetchPolicy();
 
+  // Requests OAuth2 auth codes for the device robot account. The client being
+  // registered is a prerequisite to this operation and this call will CHECK if
+  // the client is not in registered state.
+  virtual void FetchRobotAuthCodes(const std::string& auth_token);
+
   // Sends an unregistration request to the server.
   virtual void Unregister();
+
+  // Upload a device certificate to the server.  Like FetchPolicy, this method
+  // requires that the client is in a registered state.  |certificate_data| must
+  // hold the X.509 certificate data to be sent to the server.  The |callback|
+  // will be called when the operation completes.
+  virtual void UploadCertificate(const std::string& certificate_data,
+                                 const StatusCallback& callback);
 
   // Adds an observer to be called back upon policy and state changes.
   void AddObserver(Observer* observer);
@@ -159,6 +187,17 @@ class CloudPolicyClient {
     return status_;
   }
 
+  const std::string& robot_api_auth_code() const {
+    return robot_api_auth_code_;
+  }
+
+  // Returns the invalidation version that was used for the last FetchPolicy.
+  // Observers can call this method from their OnPolicyFetched method to
+  // determine which at which invalidation version the policy was fetched.
+  int64 fetched_invalidation_version() const {
+    return fetched_invalidation_version_;
+  }
+
  protected:
   // A set of PolicyNamespaceKeys to fetch.
   typedef std::set<PolicyNamespaceKey> NamespaceSet;
@@ -169,21 +208,38 @@ class CloudPolicyClient {
   // Callback for registration requests.
   void OnRegisterCompleted(
       DeviceManagementStatus status,
+      int net_error,
       const enterprise_management::DeviceManagementResponse& response);
 
   // Callback for policy fetch requests.
   void OnPolicyFetchCompleted(
       DeviceManagementStatus status,
+      int net_error,
+      const enterprise_management::DeviceManagementResponse& response);
+
+  // Callback for robot account api authorization requests.
+  void OnFetchRobotAuthCodesCompleted(
+      DeviceManagementStatus status,
+      int net_error,
       const enterprise_management::DeviceManagementResponse& response);
 
   // Callback for unregistration requests.
   void OnUnregisterCompleted(
       DeviceManagementStatus status,
+      int net_error,
+      const enterprise_management::DeviceManagementResponse& response);
+
+  // Callback for certificate upload requests.
+  void OnCertificateUploadCompleted(
+      const StatusCallback& callback,
+      DeviceManagementStatus status,
+      int net_error,
       const enterprise_management::DeviceManagementResponse& response);
 
   // Observer notification helpers.
   void NotifyPolicyFetched();
   void NotifyRegistrationStateChanged();
+  void NotifyRobotAuthCodesFetched();
   void NotifyClientError();
 
   // Data necessary for constructing policy requests.
@@ -199,6 +255,14 @@ class CloudPolicyClient {
   base::Time last_policy_timestamp_;
   int public_key_version_;
   bool public_key_version_valid_;
+  std::string robot_api_auth_code_;
+
+  // Information for the latest policy invalidation received.
+  int64 invalidation_version_;
+  std::string invalidation_payload_;
+
+  // The invalidation version used for the most recent fetch operation.
+  int64 fetched_invalidation_version_;
 
   // Used for issuing requests to the cloud.
   DeviceManagementService* service_;

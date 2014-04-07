@@ -8,12 +8,25 @@
 #include <shellapi.h>
 
 #include "base/bind.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/threading/thread.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/gfx/icon_util.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/size.h"
+
+// static
+IconGroupID IconLoader::ReadGroupIDFromFilepath(
+    const base::FilePath& filepath) {
+  if (!IsIconMutableFromFilepath(filepath))
+    return filepath.Extension();
+  return filepath.value();
+}
+
+bool IconLoader::IsIconMutableFromFilepath(const base::FilePath& filepath) {
+  base::FilePath::StringType extension = filepath.Extension();
+  return extension == L".exe" || extension == L".dll" || extension == L".ico";
+}
 
 void IconLoader::ReadIcon() {
   int size = 0;

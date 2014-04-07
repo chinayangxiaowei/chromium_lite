@@ -12,44 +12,78 @@ import android.util.Log;
 import android.view.KeyEvent;
 
 import org.chromium.base.ChromiumActivity;
+import org.chromium.base.MemoryPressureListener;
 import org.chromium.chrome.browser.DevToolsServer;
-import org.chromium.chrome.browser.TabBase;
-import org.chromium.content.app.LibraryLoader;
-import org.chromium.content.browser.ActivityContentVideoViewDelegate;
+import org.chromium.content.browser.ActivityContentVideoViewClient;
 import org.chromium.content.browser.AndroidBrowserProcess;
-import org.chromium.content.browser.ContentVideoView;
+import org.chromium.content.browser.BrowserStartupConfig;
+import org.chromium.content.browser.ContentVideoViewClient;
 import org.chromium.content.browser.ContentView;
+import org.chromium.content.browser.ContentViewClient;
 import org.chromium.content.browser.DeviceUtils;
 import org.chromium.content.common.CommandLine;
 import org.chromium.content.common.ProcessInitException;
-import org.chromium.ui.gfx.ActivityNativeWindow;
+import org.chromium.ui.WindowAndroid;
 
 /**
  * The {@link Activity} component of a basic test shell to test Chrome features.
  */
 public class ChromiumTestShellActivity extends ChromiumActivity {
-    private static final String TAG = ChromiumTestShellActivity.class.getCanonicalName();
+    private static final String TAG = "ChromiumTestShellActivity";
     private static final String COMMAND_LINE_FILE =
             "/data/local/tmp/chromium-testshell-command-line";
+    /**
+     * Sending an intent with this action will simulate a memory pressure signal
+     * at a critical level.
+     */
+    private static final String ACTION_LOW_MEMORY =
+            "org.chromium.chrome_test_shell.action.ACTION_LOW_MEMORY";
 
-    private ActivityNativeWindow mWindow;
+    /**
+     * Sending an intent with this action will simulate a memory pressure signal
+     * at a moderate level.
+     */
+    private static final String ACTION_TRIM_MEMORY_MODERATE =
+            "org.chromium.chrome_test_shell.action.ACTION_TRIM_MEMORY_MODERATE";
+
+    private WindowAndroid mWindow;
     private TabManager mTabManager;
     private DevToolsServer mDevToolsServer;
 
     @Override
-    protected void onCreate(Bundle savedInstanceState) {
+    protected void onCreate(final Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
         if (!CommandLine.isInitialized()) CommandLine.initFromFile(COMMAND_LINE_FILE);
         waitForDebuggerIfNeeded();
 
         DeviceUtils.addDeviceSpecificUserAgentSwitch(this);
+
+        BrowserStartupConfig.setAsync(new BrowserStartupConfig.StartupCallback() {
+            @Override
+            public void run(int startupResult) {
+                if (startupResult > 0) {
+                    // TODO: Show error message.
+                    Log.e(TAG, "Chromium browser process initialization failed");
+                    finish();
+                } else {
+                    finishInitialization(savedInstanceState);
+                }
+            }
+        });
+
         try {
-            AndroidBrowserProcess.init(this, AndroidBrowserProcess.MAX_RENDERERS_AUTOMATIC);
+            if (!AndroidBrowserProcess.init(this, AndroidBrowserProcess.MAX_RENDERERS_LIMIT)) {
+                // Process was already running, finish initialization now.
+                finishInitialization(savedInstanceState);
+            }
         } catch (ProcessInitException e) {
             Log.e(TAG, "Chromium browser process initialization failed", e);
             finish();
         }
+    }
+
+    private void finishInitialization(final Bundle savedInstanceState) {
         setContentView(R.layout.testshell_activity);
         mTabManager = (TabManager) findViewById(R.id.tab_manager);
         String startupUrl = getUrlFromIntent(getIntent());
@@ -57,14 +91,11 @@ public class ChromiumTestShellActivity extends ChromiumActivity {
             mTabManager.setStartupUrl(startupUrl);
         }
 
-        mWindow = new ActivityNativeWindow(this);
+        mWindow = new WindowAndroid(this);
         mWindow.restoreInstanceState(savedInstanceState);
         mTabManager.setWindow(mWindow);
 
-        ContentVideoView.registerContentVideoViewContextDelegate(
-                new ActivityContentVideoViewDelegate(this));
-
-        mDevToolsServer = new DevToolsServer(true, "chromium_testshell_devtools_remote");
+        mDevToolsServer = new DevToolsServer("chromium_testshell");
         mDevToolsServer.setRemoteDebuggingEnabled(true);
     }
 
@@ -85,7 +116,7 @@ public class ChromiumTestShellActivity extends ChromiumActivity {
     @Override
     public boolean onKeyUp(int keyCode, KeyEvent event) {
         if (keyCode == KeyEvent.KEYCODE_BACK) {
-            TabBase tab = getActiveTab();
+            TestShellTab tab = getActiveTab();
             if (tab != null && tab.getContentView().canGoBack()) {
                 tab.getContentView().goBack();
                 return true;
@@ -97,9 +128,17 @@ public class ChromiumTestShellActivity extends ChromiumActivity {
 
     @Override
     protected void onNewIntent(Intent intent) {
+        if (ACTION_LOW_MEMORY.equals(intent.getAction())) {
+            MemoryPressureListener.simulateMemoryPressureSignal(TRIM_MEMORY_COMPLETE);
+            return;
+        } else if (ACTION_TRIM_MEMORY_MODERATE.equals(intent.getAction())) {
+            MemoryPressureListener.simulateMemoryPressureSignal(TRIM_MEMORY_MODERATE);
+            return;
+        }
+
         String url = getUrlFromIntent(intent);
         if (!TextUtils.isEmpty(url)) {
-            TabBase tab = getActiveTab();
+            TestShellTab tab = getActiveTab();
             if (tab != null) tab.loadUrlWithSanitization(url);
         }
     }
@@ -126,9 +165,9 @@ public class ChromiumTestShellActivity extends ChromiumActivity {
     }
 
     /**
-     * @return The {@link TabBase} that is currently visible.
+     * @return The {@link TestShellTab} that is currently visible.
      */
-    public TabBase getActiveTab() {
+    public TestShellTab getActiveTab() {
         return mTabManager != null ? mTabManager.getCurrentTab() : null;
     }
 
@@ -136,16 +175,23 @@ public class ChromiumTestShellActivity extends ChromiumActivity {
      * @return The ContentView of the active tab.
      */
     public ContentView getActiveContentView() {
-        TabBase tab = getActiveTab();
+        TestShellTab tab = getActiveTab();
         return tab != null ? tab.getContentView() : null;
     }
 
     /**
-     * Creates a {@link TabBase} with a URL specified by {@code url}.
-     * @param url The URL the new {@link TabBase} should start with.
+     * Creates a {@link TestShellTab} with a URL specified by {@code url}.
+     *
+     * @param url The URL the new {@link TestShellTab} should start with.
      */
     public void createTab(String url) {
         mTabManager.createTab(url);
+        getActiveContentView().setContentViewClient(new ContentViewClient() {
+            @Override
+            public ContentVideoViewClient getContentVideoViewClient() {
+                return new ActivityContentVideoViewClient(ChromiumTestShellActivity.this);
+            }
+        });
     }
 
     private void waitForDebuggerIfNeeded() {

@@ -9,8 +9,8 @@
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/memory/singleton.h"
-#include "base/message_loop.h"
-#include "base/message_pump_android.h"
+#include "base/message_loop/message_loop.h"
+#include "base/message_loop/message_pump_android.h"
 #include "base/path_service.h"
 #include "base/synchronization/waitable_event.h"
 
@@ -72,6 +72,8 @@ class Waitable {
 
 // The MessagePumpForUI implementation for test purpose.
 class MessagePumpForUIStub : public base::MessagePumpForUI {
+  virtual ~MessagePumpForUIStub() {}
+
   virtual void Start(base::MessagePump::Delegate* delegate) OVERRIDE {
     NOTREACHED() << "The Start() method shouldn't be called in test, using"
         " Run() method should be used.";
@@ -129,9 +131,6 @@ class MessagePumpForUIStub : public base::MessagePumpForUI {
       const base::TimeTicks& delayed_work_time) OVERRIDE {
     Waitable::GetInstance()->Signal();
   }
-
- protected:
-  virtual ~MessagePumpForUIStub() {}
 };
 
 base::MessagePump* CreateMessagePumpForUIStub() {
@@ -165,11 +164,9 @@ void InitPathProvider(int key) {
 namespace base {
 
 void InitAndroidTestLogging() {
-  logging::InitLogging(NULL,
-                       logging::LOG_ONLY_TO_SYSTEM_DEBUG_LOG,
-                       logging::DONT_LOCK_LOG_FILE,
-                       logging::DELETE_OLD_LOG_FILE,
-                       logging::DISABLE_DCHECK_FOR_NON_OFFICIAL_RELEASE_BUILDS);
+  logging::LoggingSettings settings;
+  settings.logging_dest = logging::LOG_TO_SYSTEM_DEBUG_LOG;
+  logging::InitLogging(settings);
   // To view log output with IDs and timestamps use "adb logcat -v threadtime".
   logging::SetLogItems(false,    // Process ID
                        false,    // Thread ID

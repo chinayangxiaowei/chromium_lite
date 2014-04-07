@@ -15,7 +15,9 @@
 #include "base/nix/xdg_util.h"
 #include "base/prefs/pref_service.h"
 #include "base/stl_util.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/themes/custom_theme_supplier.h"
 #include "chrome/browser/themes/theme_properties.h"
 #include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/browser/ui/browser.h"
@@ -26,7 +28,6 @@
 #include "chrome/browser/ui/gtk/gtk_chrome_link_button.h"
 #include "chrome/browser/ui/gtk/gtk_util.h"
 #include "chrome/browser/ui/gtk/hover_controller_gtk.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/pref_names.h"
 #include "content/public/browser/notification_details.h"
@@ -103,6 +104,8 @@ const int kThemeImages[] = {
 // A list of icons used in the autocomplete view that should be tinted to the
 // current gtk theme selection color so they stand out against the GtkEntry's
 // base color.
+// TODO(erg): Decide what to do about other icons that appear in the omnibox,
+// e.g. content settings icons.
 const int kAutocompleteImages[] = {
   IDR_OMNIBOX_EXTENSION_APP,
   IDR_OMNIBOX_HTTP,
@@ -113,9 +116,6 @@ const int kAutocompleteImages[] = {
   IDR_OMNIBOX_STAR_DARK,
   IDR_OMNIBOX_TTS,
   IDR_OMNIBOX_TTS_DARK,
-  IDR_GEOLOCATION_ALLOWED_LOCATIONBAR_ICON,
-  IDR_GEOLOCATION_DENIED_LOCATIONBAR_ICON,
-  IDR_REGISTER_PROTOCOL_HANDLER_LOCATIONBAR_ICON,
 };
 
 bool IsOverridableImage(int id) {
@@ -298,7 +298,6 @@ void GtkThemeService::Init(Profile* profile) {
   registrar_.Add(prefs::kUsesSystemTheme,
                  base::Bind(&GtkThemeService::OnUsesSystemThemeChanged,
                             base::Unretained(this)));
-  use_gtk_ = profile->GetPrefs()->GetBoolean(prefs::kUsesSystemTheme);
   ThemeService::Init(profile);
 }
 
@@ -349,18 +348,21 @@ void GtkThemeService::InitThemesFor(content::NotificationObserver* observer) {
 
 void GtkThemeService::SetTheme(const extensions::Extension* extension) {
   profile()->GetPrefs()->SetBoolean(prefs::kUsesSystemTheme, false);
+  use_gtk_ = false;
   LoadDefaultValues();
   ThemeService::SetTheme(extension);
 }
 
 void GtkThemeService::UseDefaultTheme() {
   profile()->GetPrefs()->SetBoolean(prefs::kUsesSystemTheme, false);
+  use_gtk_ = false;
   LoadDefaultValues();
   ThemeService::UseDefaultTheme();
 }
 
 void GtkThemeService::SetNativeTheme() {
   profile()->GetPrefs()->SetBoolean(prefs::kUsesSystemTheme, true);
+  use_gtk_ = true;
   ClearAllThemeData();
   LoadGtkValues();
   NotifyThemeChanged();
@@ -368,6 +370,18 @@ void GtkThemeService::SetNativeTheme() {
 
 bool GtkThemeService::UsingDefaultTheme() const {
   return !use_gtk_ && ThemeService::UsingDefaultTheme();
+}
+
+void GtkThemeService::SetCustomDefaultTheme(
+    scoped_refptr<CustomThemeSupplier> theme_supplier) {
+  profile()->GetPrefs()->SetBoolean(prefs::kUsesSystemTheme, false);
+  use_gtk_ = false;
+  LoadDefaultValues();
+  ThemeService::SetCustomDefaultTheme(theme_supplier);
+}
+
+bool GtkThemeService::ShouldInitWithNativeTheme() const {
+  return profile()->GetPrefs()->GetBoolean(prefs::kUsesSystemTheme);
 }
 
 bool GtkThemeService::UsingNativeTheme() const {
@@ -459,9 +473,9 @@ GtkIconSet* GtkThemeService::GetIconSetForId(int id) const {
 void GtkThemeService::GetScrollbarColors(GdkColor* thumb_active_color,
                                          GdkColor* thumb_inactive_color,
                                          GdkColor* track_color) {
-  const GdkColor* theme_thumb_active = NULL;
-  const GdkColor* theme_thumb_inactive = NULL;
-  const GdkColor* theme_trough_color = NULL;
+  GdkColor* theme_thumb_active = NULL;
+  GdkColor* theme_thumb_inactive = NULL;
+  GdkColor* theme_trough_color = NULL;
   gtk_widget_style_get(GTK_WIDGET(fake_frame_),
                        "scrollbar-slider-prelight-color", &theme_thumb_active,
                        "scrollbar-slider-normal-color", &theme_thumb_inactive,
@@ -474,6 +488,9 @@ void GtkThemeService::GetScrollbarColors(GdkColor* thumb_active_color,
     *thumb_active_color = *theme_thumb_active;
     *thumb_inactive_color = *theme_thumb_inactive;
     *track_color = *theme_trough_color;
+    gdk_color_free(theme_thumb_active);
+    gdk_color_free(theme_thumb_inactive);
+    gdk_color_free(theme_trough_color);
     return;
   }
 
@@ -546,14 +563,20 @@ void GtkThemeService::GetScrollbarColors(GdkColor* thumb_active_color,
 
   // Override any of the default colors with ones that were specified by the
   // theme.
-  if (theme_thumb_active)
+  if (theme_thumb_active) {
     *thumb_active_color = *theme_thumb_active;
+    gdk_color_free(theme_thumb_active);
+  }
 
-  if (theme_thumb_inactive)
+  if (theme_thumb_inactive) {
     *thumb_inactive_color = *theme_thumb_inactive;
+    gdk_color_free(theme_thumb_inactive);
+  }
 
-  if (theme_trough_color)
+  if (theme_trough_color) {
     *track_color = *theme_trough_color;
+    gdk_color_free(theme_trough_color);
+  }
 }
 
 // static
@@ -617,27 +640,23 @@ bool GtkThemeService::DefaultUsesSystemTheme() {
   return false;
 }
 
-void GtkThemeService::ClearAllThemeData() {
-  colors_.clear();
-  tints_.clear();
-
-  ThemeService::ClearAllThemeData();
-}
-
 void GtkThemeService::LoadThemePrefs() {
-  if (use_gtk_) {
-    LoadGtkValues();
-    set_ready();
-  } else {
-    LoadDefaultValues();
-    ThemeService::LoadThemePrefs();
-  }
+  // Initialize the values sent to webkit with the default values.
+  // ThemeService::LoadThemePrefs() will replace them with values for the native
+  // gtk theme if necessary.
+  LoadDefaultValues();
+
+  // This takes care of calling SetNativeTheme() if necessary.
+  ThemeService::LoadThemePrefs();
 
   SetXDGIconTheme();
   RebuildMenuIconSets();
 }
 
 void GtkThemeService::NotifyThemeChanged() {
+  if (!ready_)
+    return;
+
   ThemeService::NotifyThemeChanged();
 
   // Notify all GtkChromeButtons of their new rendering mode:
@@ -670,6 +689,8 @@ void GtkThemeService::NotifyThemeChanged() {
 }
 
 void GtkThemeService::FreePlatformCaches() {
+  colors_.clear();
+  tints_.clear();
   ThemeService::FreePlatformCaches();
   STLDeleteValues(&gtk_images_);
 }
@@ -982,14 +1003,13 @@ SkBitmap GtkThemeService::GenerateGtkThemeBitmap(int id) const {
     // instead should tint based on the foreground text entry color in GTK+
     // mode because some themes that try to be dark *and* light have very
     // different colors between the omnibox and the normal background area.
+    // TODO(erg): Decide what to do about other icons that appear in the
+    // omnibox, e.g. content settings icons.
     case IDR_OMNIBOX_EXTENSION_APP:
     case IDR_OMNIBOX_HTTP:
     case IDR_OMNIBOX_SEARCH:
     case IDR_OMNIBOX_STAR:
-    case IDR_OMNIBOX_TTS:
-    case IDR_GEOLOCATION_ALLOWED_LOCATIONBAR_ICON:
-    case IDR_GEOLOCATION_DENIED_LOCATIONBAR_ICON:
-    case IDR_REGISTER_PROTOCOL_HANDLER_LOCATIONBAR_ICON: {
+    case IDR_OMNIBOX_TTS: {
       return GenerateTintedIcon(id, entry_tint_);
     }
     // In GTK mode, the dark versions of the omnibox icons only ever appear in

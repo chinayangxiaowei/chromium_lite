@@ -5,7 +5,7 @@
 #include "ui/message_center/views/message_bubble_base.h"
 
 #include "base/bind.h"
-#include "ui/message_center/message_center_constants.h"
+#include "ui/message_center/message_center_style.h"
 #include "ui/message_center/message_center_util.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_observer.h"
@@ -21,15 +21,13 @@ namespace message_center {
 
 const SkColor MessageBubbleBase::kBackgroundColor =
     SkColorSetRGB(0xfe, 0xfe, 0xfe);
-const SkColor MessageBubbleBase::kHeaderBackgroundColorLight =
-    SkColorSetRGB(0xf1, 0xf1, 0xf1);
-const SkColor MessageBubbleBase::kHeaderBackgroundColorDark =
-    SkColorSetRGB(0xe7, 0xe7, 0xe7);
 
-MessageBubbleBase::MessageBubbleBase(MessageCenter* message_center)
+MessageBubbleBase::MessageBubbleBase(MessageCenter* message_center,
+                                     MessageCenterTray* tray)
     : message_center_(message_center),
+      tray_(tray),
       bubble_view_(NULL),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_ptr_factory_(this)),
+      weak_ptr_factory_(this),
       max_height_(kMessageBubbleBaseDefaultMaxHeight) {
 }
 
@@ -45,7 +43,7 @@ void MessageBubbleBase::BubbleViewDestroyed() {
 
 void MessageBubbleBase::ScheduleUpdate() {
   weak_ptr_factory_.InvalidateWeakPtrs();  // Cancel any pending update.
-  MessageLoop::current()->PostDelayedTask(
+  base::MessageLoop::current()->PostDelayedTask(
       FROM_HERE,
       base::Bind(&MessageBubbleBase::UpdateBubbleView,
                  weak_ptr_factory_.GetWeakPtr()),
@@ -58,9 +56,6 @@ bool MessageBubbleBase::IsVisible() const {
 
 void MessageBubbleBase::SetMaxHeight(int height) {
   // Maximum height makes sense only for the new design.
-  if (!message_center::IsRichNotificationEnabled())
-    return;
-
   if (height == 0)
     height = kMessageBubbleBaseDefaultMaxHeight;
   if (height == max_height_)
@@ -78,7 +73,7 @@ views::TrayBubbleView::InitParams MessageBubbleBase::GetDefaultInitParams(
       anchor_alignment,
       kNotificationWidth,
       kNotificationWidth);
-  init_params.arrow_color = kHeaderBackgroundColorDark;
+  init_params.arrow_color = kBackgroundDarkColor;
   return init_params;
 }
 

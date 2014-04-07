@@ -4,7 +4,7 @@
 
 #include "chrome/test/chromedriver/chrome/status.h"
 
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 
 namespace {
 
@@ -13,8 +13,12 @@ const char* DefaultMessageForStatusCode(StatusCode code) {
   switch (code) {
     case kOk:
       return "ok";
+    case kNoSuchSession:
+      return "no such session";
     case kNoSuchElement:
       return "no such element";
+    case kNoSuchFrame:
+      return "no such frame";
     case kUnknownCommand:
       return "unknown command";
     case kStaleElementReference:
@@ -29,6 +33,8 @@ const char* DefaultMessageForStatusCode(StatusCode code) {
       return "javascript error";
     case kXPathLookupError:
       return "xpath lookup error";
+    case kTimeout:
+      return "timeout";
     case kNoSuchWindow:
       return "no such window";
     case kInvalidCookieDomain:
@@ -43,10 +49,8 @@ const char* DefaultMessageForStatusCode(StatusCode code) {
       return "invalid selector";
     case kSessionNotCreatedException:
       return "session not created exception";
-    case kNoSuchSession:
-      return "no such session";
-    case kNoSuchFrame:
-      return "no such frame";
+    case kNoSuchExecutionContext:
+      return "no such execution context";
     case kChromeNotReachable:
       return "chrome not reachable";
     case kDisconnected:

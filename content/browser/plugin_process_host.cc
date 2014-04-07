@@ -15,18 +15,17 @@
 #include "base/base_switches.h"
 #include "base/bind.h"
 #include "base/command_line.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/metrics/histogram.h"
 #include "base/path_service.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "content/browser/browser_child_process_host_impl.h"
 #include "content/browser/gpu/gpu_data_manager_impl.h"
 #include "content/browser/plugin_service_impl.h"
 #include "content/common/child_process_host_impl.h"
-#include "content/common/plugin_messages.h"
+#include "content/common/plugin_process_messages.h"
 #include "content/common/resource_messages.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/content_browser_client.h"
@@ -51,9 +50,8 @@
 
 #if defined(OS_WIN)
 #include "base/win/windows_version.h"
+#include "content/common/plugin_constants_win.h"
 #include "content/public/common/sandboxed_process_launcher_delegate.h"
-#include "webkit/plugins/npapi/plugin_constants_win.h"
-#include "webkit/plugins/npapi/webplugin_delegate_impl.h"
 #endif
 
 namespace content {
@@ -121,32 +119,22 @@ PluginProcessHost::~PluginProcessHost() {
   std::set<HWND>::iterator window_index;
   for (window_index = plugin_parent_windows_set_.begin();
        window_index != plugin_parent_windows_set_.end();
-       window_index++) {
+       ++window_index) {
     PostMessage(*window_index, WM_CLOSE, 0, 0);
   }
 #elif defined(OS_MACOSX)
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
   // If the plugin process crashed but had fullscreen windows open at the time,
   // make sure that the menu bar is visible.
-  std::set<uint32>::iterator window_index;
-  for (window_index = plugin_fullscreen_windows_set_.begin();
-       window_index != plugin_fullscreen_windows_set_.end();
-       window_index++) {
-    if (BrowserThread::CurrentlyOn(BrowserThread::UI)) {
-      base::mac::ReleaseFullScreen(base::mac::kFullScreenModeHideAll);
-    } else {
-      BrowserThread::PostTask(BrowserThread::UI, FROM_HERE,
-                              base::Bind(base::mac::ReleaseFullScreen,
-                                         base::mac::kFullScreenModeHideAll));
-    }
+  for (size_t i = 0; i < plugin_fullscreen_windows_set_.size(); ++i) {
+    BrowserThread::PostTask(BrowserThread::UI, FROM_HERE,
+                            base::Bind(base::mac::ReleaseFullScreen,
+                                       base::mac::kFullScreenModeHideAll));
   }
   // If the plugin hid the cursor, reset that.
   if (!plugin_cursor_visible_) {
-    if (BrowserThread::CurrentlyOn(BrowserThread::UI)) {
-      base::mac::SetCursorVisibility(true);
-    } else {
-      BrowserThread::PostTask(BrowserThread::UI, FROM_HERE,
-                              base::Bind(base::mac::SetCursorVisibility, true));
-    }
+    BrowserThread::PostTask(BrowserThread::UI, FROM_HERE,
+                            base::Bind(base::mac::SetCursorVisibility, true));
   }
 #endif
   // Cancel all pending and sent requests.
@@ -157,7 +145,7 @@ bool PluginProcessHost::Send(IPC::Message* message) {
   return process_->Send(message);
 }
 
-bool PluginProcessHost::Init(const webkit::WebPluginInfo& info) {
+bool PluginProcessHost::Init(const WebPluginInfo& info) {
   info_ = info;
   process_->SetName(info_.name);
 

@@ -17,11 +17,11 @@
 #include "base/json/json_writer.h"
 #include "base/memory/ref_counted.h"
 #include "base/path_service.h"
-#include "base/stringprintf.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/waitable_event.h"
-#include "base/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/common/automation_constants.h"
 #include "chrome/common/automation_messages.h"
@@ -54,7 +54,7 @@ bool CheckForChromeExe(const std::vector<base::FilePath>& browser_exes,
   for (size_t i = 0; i < browser_exes.size(); ++i) {
     for (size_t j = 0; j < locations.size(); ++j) {
       base::FilePath path = locations[j].Append(browser_exes[i]);
-      if (file_util::PathExists(path)) {
+      if (base::PathExists(path)) {
         *browser_exe = path;
         return true;
       }
@@ -97,7 +97,7 @@ bool GetDefaultChromeExe(base::FilePath* browser_exe) {
   if (PathService::Get(base::DIR_MODULE, &module_dir)) {
     for (size_t j = 0; j < browser_exes.size(); ++j) {
       base::FilePath path = module_dir.Append(browser_exes[j]);
-      if (file_util::PathExists(path)) {
+      if (base::PathExists(path)) {
         *browser_exe = path;
         return true;
       }
@@ -398,7 +398,7 @@ void Automation::Init(
   if (options.ignore_certificate_errors)
     command.AppendSwitch(switches::kIgnoreCertificateErrors);
   if (options.user_data_dir.empty())
-    command.AppendArg(chrome::kAboutBlankURL);
+    command.AppendArg(content::kAboutBlankURL);
 
   command.AppendArguments(options.command, true /* include_program */);
 
@@ -411,7 +411,7 @@ void Automation::Init(
     }
     command.SetProgram(browser_exe);
   }
-  if (!file_util::PathExists(command.GetProgram())) {
+  if (!base::PathExists(command.GetProgram())) {
     std::string message = base::StringPrintf(
         "Could not find Chrome binary at: %" PRFilePath,
         command.GetProgram().value().c_str());
@@ -440,7 +440,7 @@ void Automation::Init(
 #elif defined(OS_POSIX)
     base::FilePath temp_file;
     if (!file_util::CreateTemporaryFile(&temp_file) ||
-        !file_util::Delete(temp_file, false /* recursive */)) {
+        !base::DeleteFile(temp_file, false /* recursive */)) {
       *error = new Error(kUnknownError, "Could not create temporary filename");
       return;
     }
@@ -525,7 +525,9 @@ void Automation::Terminate() {
     if (!launcher_->WaitForBrowserProcessToQuit(
             base::TimeDelta::FromSeconds(10), &exit_code)) {
       logger_.Log(kWarningLogLevel, "Chrome still running, terminating...");
-      TerminateAllChromeProcesses(launcher_->process_id());
+      ChromeProcessList process_pids(GetRunningChromeProcesses(
+          launcher_->process_id()));
+      TerminateAllChromeProcesses(process_pids);
     }
     base::CloseProcessHandle(launcher_->process());
     logger_.Log(kInfoLogLevel, "Chrome shutdown");
@@ -542,15 +544,14 @@ void Automation::ExecuteScript(const WebViewId& view_id,
   if (*error)
     return;
 
-  Value* unscoped_value;
   automation::Error auto_error;
+  scoped_ptr<Value> value;
   if (!SendExecuteJavascriptJSONRequest(automation(), view_locator,
                                         frame_path.value(), script,
-                                        &unscoped_value, &auto_error)) {
+                                        &value, &auto_error)) {
     *error = Error::FromAutomationError(auto_error);
     return;
   }
-  scoped_ptr<Value> value(unscoped_value);
   if (!value->GetAsString(result))
     *error = new Error(kUnknownError, "Execute script did not return string");
 }
@@ -712,7 +713,7 @@ void Automation::SendWebMouseEvent(const WebViewId& view_id,
     return;
 
   automation::Error auto_error;
-  if (!SendWebMouseEventJSONRequest(
+  if (!SendWebMouseEventJSONRequestDeprecated(
           automation(), view_locator, event, &auto_error)) {
     *error = Error::FromAutomationError(auto_error);
   }
@@ -727,7 +728,7 @@ void Automation::CaptureEntirePageAsPNG(const WebViewId& view_id,
     return;
 
   automation::Error auto_error;
-  if (!SendCaptureEntirePageJSONRequest(
+  if (!SendCaptureEntirePageJSONRequestDeprecated(
           automation(), view_locator, path, &auto_error)) {
     *error = Error::FromAutomationError(auto_error);
   }
@@ -743,7 +744,7 @@ void Automation::HeapProfilerDump(const WebViewId& view_id,
     return;
 
   automation::Error auto_error;
-  if (!SendHeapProfilerDumpJSONRequest(
+  if (!SendHeapProfilerDumpJSONRequestDeprecated(
           automation(), view_locator, reason, &auto_error)) {
     *error = Error::FromAutomationError(auto_error);
   }
@@ -790,12 +791,12 @@ void Automation::NavigateToURLAsync(const WebViewId& view_id,
   } else {
     scoped_refptr<BrowserProxy> browser =
         automation()->GetBrowserWindow(view_locator.browser_index());
-    if (!browser) {
+    if (!browser.get()) {
       *error = new Error(kUnknownError, "Couldn't obtain browser proxy");
       return;
     }
     scoped_refptr<TabProxy> tab = browser->GetTab(view_locator.tab_index());
-    if (!tab) {
+    if (!tab.get()) {
       *error = new Error(kUnknownError, "Couldn't obtain tab proxy");
       return;
     }
@@ -842,7 +843,7 @@ void Automation::Reload(const WebViewId& view_id, Error** error) {
 }
 
 void Automation::GetCookies(const std::string& url,
-                            ListValue** cookies,
+                            scoped_ptr<ListValue>* cookies,
                             Error** error) {
   automation::Error auto_error;
   if (!SendGetCookiesJSONRequest(automation(), url, cookies, &auto_error))
@@ -974,7 +975,8 @@ void Automation::GetChromeDriverAutomationVersion(int* version, Error** error) {
 
 void Automation::WaitForAllViewsToStopLoading(Error** error) {
   automation::Error auto_error;
-  if (!SendWaitForAllViewsToStopLoadingJSONRequest(automation(), &auto_error))
+  if (!SendWaitForAllViewsToStopLoadingJSONRequestDeprecated(
+          automation(), &auto_error))
     *error = Error::FromAutomationError(auto_error);
 }
 

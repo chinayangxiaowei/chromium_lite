@@ -9,24 +9,30 @@
 #include "base/compiler_specific.h"
 #include "content/public/browser/url_data_source.h"
 
+class Profile;
+
 // Serves HTML and resources for the local new tab page i.e.
 // chrome-search://local-ntp/local-ntp.html
 class LocalNtpSource : public content::URLDataSource {
  public:
-  LocalNtpSource();
+  explicit LocalNtpSource(Profile* profile);
 
  private:
   virtual ~LocalNtpSource();
 
   // Overridden from content::URLDataSource:
-  virtual std::string GetSource() OVERRIDE;
+  virtual std::string GetSource() const OVERRIDE;
   virtual void StartDataRequest(
       const std::string& path,
-      bool is_incognito,
+      int render_process_id,
+      int render_view_id,
       const content::URLDataSource::GotDataCallback& callback) OVERRIDE;
   virtual std::string GetMimeType(const std::string& path) const OVERRIDE;
   virtual bool ShouldServiceRequest(
       const net::URLRequest* request) const OVERRIDE;
+  virtual std::string GetContentSecurityPolicyFrameSrc() const OVERRIDE;
+
+  Profile* profile_;
 
   DISALLOW_COPY_AND_ASSIGN(LocalNtpSource);
 };

@@ -4,8 +4,8 @@
 
 #include "chrome/browser/ui/views/extensions/shell_window_frame_view.h"
 
-#include "base/utf_string_conversions.h"
-#include "chrome/browser/ui/views/extensions/native_app_window_views.h"
+#include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/ui/views/apps/native_app_window_views.h"
 #include "extensions/common/draggable_region.h"
 #include "grit/theme_resources.h"
 #include "grit/ui_strings.h"  // Accessibility names
@@ -112,13 +112,14 @@ void ShellWindowFrameView::Init(views::Widget* frame) {
   aura::Window* window = frame->GetNativeWindow();
 #if defined(USE_ASH)
   if (chrome::IsNativeWindowInAsh(window)) {
-    // Ensure we get resize cursors for a few pixels outside our bounds.
-    window->SetHitTestBoundsOverrideOuter(
-        gfx::Insets(-ash::kResizeOutsideBoundsSize,
-                    -ash::kResizeOutsideBoundsSize,
-                    -ash::kResizeOutsideBoundsSize,
-                    -ash::kResizeOutsideBoundsSize),
+    gfx::Insets mouse_insets = gfx::Insets(-ash::kResizeOutsideBoundsSize,
+                                           -ash::kResizeOutsideBoundsSize,
+                                           -ash::kResizeOutsideBoundsSize,
+                                           -ash::kResizeOutsideBoundsSize);
+    gfx::Insets touch_insets = mouse_insets.Scale(
         ash::kResizeOutsideBoundsScaleForTouch);
+    // Ensure we get resize cursors for a few pixels outside our bounds.
+    window->SetHitTestBoundsOverrideOuter(mouse_insets, touch_insets);
 
     // If the window is in ash, the inside area used for resizing will be
     // smaller due to the fact that outside area is also used for resizing.
@@ -193,21 +194,19 @@ int ShellWindowFrameView::NonClientHitTest(const gfx::Point& point) {
   bool can_ever_resize = frame_->widget_delegate() ?
       frame_->widget_delegate()->CanResize() :
       false;
-  if (can_ever_resize) {
-    // Don't allow overlapping resize handles when the window is maximized or
-    // fullscreen, as it can't be resized in those states.
-    int resize_border =
-        frame_->IsMaximized() || frame_->IsFullscreen() ? 0 :
-        resize_inside_bounds_size;
-    int frame_component = GetHTComponentForFrame(point,
-                                                 resize_border,
-                                                 resize_border,
-                                                 resize_area_corner_size,
-                                                 resize_area_corner_size,
-                                                 can_ever_resize);
-    if (frame_component != HTNOWHERE)
-      return frame_component;
-  }
+  // Don't allow overlapping resize handles when the window is maximized or
+  // fullscreen, as it can't be resized in those states.
+  int resize_border =
+      (frame_->IsMaximized() || frame_->IsFullscreen()) ? 0 :
+      resize_inside_bounds_size;
+  int frame_component = GetHTComponentForFrame(point,
+                                               resize_border,
+                                               resize_border,
+                                               resize_area_corner_size,
+                                               resize_area_corner_size,
+                                               can_ever_resize);
+  if (frame_component != HTNOWHERE)
+    return frame_component;
 
   // Check for possible draggable region in the client area for the frameless
   // window.
@@ -320,7 +319,7 @@ void ShellWindowFrameView::OnPaint(gfx::Canvas* canvas) {
   canvas->DrawPath(path, paint);
 }
 
-std::string ShellWindowFrameView::GetClassName() const {
+const char* ShellWindowFrameView::GetClassName() const {
   return kViewClassName;
 }
 
@@ -344,13 +343,14 @@ gfx::Size ShellWindowFrameView::GetMinimumSize() {
 
 gfx::Size ShellWindowFrameView::GetMaximumSize() {
   gfx::Size max_size = frame_->client_view()->GetMaximumSize();
-  if (window_->frameless())
-    return max_size;
 
-  if (!max_size.IsEmpty()) {
-    gfx::Rect client_bounds = GetBoundsForClientView();
-    max_size.Enlarge(0, client_bounds.y());
-  }
+  // Add to the client maximum size the height of any title bar and borders.
+  gfx::Size client_size = GetBoundsForClientView().size();
+  if (max_size.width())
+    max_size.Enlarge(width() - client_size.width(), 0);
+  if (max_size.height())
+    max_size.Enlarge(0, height() - client_size.height());
+
   return max_size;
 }
 

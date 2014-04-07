@@ -4,6 +4,12 @@
 
 #include "content/renderer/pepper/pepper_video_capture_host.h"
 
+#include "content/renderer/pepper/host_globals.h"
+#include "content/renderer/pepper/pepper_media_device_manager.h"
+#include "content/renderer/pepper/pepper_platform_video_capture.h"
+#include "content/renderer/pepper/pepper_plugin_instance_impl.h"
+#include "content/renderer/pepper/renderer_ppapi_host_impl.h"
+#include "content/renderer/render_view_impl.h"
 #include "ppapi/host/dispatch_host_message.h"
 #include "ppapi/host/ppapi_host.h"
 #include "ppapi/proxy/host_dispatcher.h"
@@ -11,18 +17,14 @@
 #include "ppapi/shared_impl/host_resource.h"
 #include "ppapi/thunk/enter.h"
 #include "ppapi/thunk/ppb_buffer_api.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebDocument.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebElement.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebPluginContainer.h"
-#include "webkit/plugins/ppapi/host_globals.h"
-#include "webkit/plugins/ppapi/ppapi_plugin_instance.h"
+#include "third_party/WebKit/public/web/WebDocument.h"
+#include "third_party/WebKit/public/web/WebElement.h"
+#include "third_party/WebKit/public/web/WebPluginContainer.h"
 
 using ppapi::HostResource;
 using ppapi::TrackedCallback;
 using ppapi::thunk::EnterResourceNoLock;
 using ppapi::thunk::PPB_Buffer_API;
-using webkit::ppapi::HostGlobals;
-using webkit::ppapi::PPB_Buffer_Impl;
 
 namespace {
 
@@ -33,15 +35,18 @@ const uint32_t kMaxBuffers = 20;
 
 namespace content {
 
-PepperVideoCaptureHost::PepperVideoCaptureHost(RendererPpapiHost* host,
+PepperVideoCaptureHost::PepperVideoCaptureHost(RendererPpapiHostImpl* host,
                                                PP_Instance instance,
                                                PP_Resource resource)
     : ResourceHost(host->GetPpapiHost(), instance, resource),
       renderer_ppapi_host_(host),
       buffer_count_hint_(0),
       status_(PP_VIDEO_CAPTURE_STATUS_STOPPED),
-      ALLOW_THIS_IN_INITIALIZER_LIST(
-          enumeration_helper_(this, this, PP_DEVICETYPE_DEV_VIDEOCAPTURE)) {
+      enumeration_helper_(
+          this,
+          PepperMediaDeviceManager::GetForRenderView(
+              host->GetRenderViewForInstance(pp_instance())),
+          PP_DEVICETYPE_DEV_VIDEOCAPTURE) {
 }
 
 PepperVideoCaptureHost::~PepperVideoCaptureHost() {
@@ -49,7 +54,7 @@ PepperVideoCaptureHost::~PepperVideoCaptureHost() {
 }
 
 bool PepperVideoCaptureHost::Init() {
-  return !!GetPluginDelegate();
+  return !!renderer_ppapi_host_->GetPluginInstance(pp_instance());
 }
 
 int32_t PepperVideoCaptureHost::OnResourceMessageReceived(
@@ -171,7 +176,7 @@ void PepperVideoCaptureHost::OnDeviceInfoReceived(
   // for sending below.
   std::vector<HostResource> buffer_host_resources;
   buffers_.reserve(buffer_count_hint_);
-  ::ppapi::ResourceTracker* tracker =
+  ppapi::ResourceTracker* tracker =
       HostGlobals::Get()->GetResourceTracker();
   ppapi::proxy::HostDispatcher* dispatcher =
       ppapi::proxy::HostDispatcher::GetForInstance(pp_instance());
@@ -241,14 +246,6 @@ void PepperVideoCaptureHost::OnDeviceInfoReceived(
           info, buffer_host_resources, size)));
 }
 
-webkit::ppapi::PluginDelegate* PepperVideoCaptureHost::GetPluginDelegate() {
-  webkit::ppapi::PluginInstance* instance =
-      renderer_ppapi_host_->GetPluginInstance(pp_instance());
-  if (instance)
-    return instance->delegate();
-  return NULL;
-}
-
 int32_t PepperVideoCaptureHost::OnOpen(
     ppapi::host::HostMessageContext* context,
     const std::string& device_id,
@@ -257,20 +254,19 @@ int32_t PepperVideoCaptureHost::OnOpen(
   if (platform_video_capture_.get())
     return PP_ERROR_FAILED;
 
-  webkit::ppapi::PluginDelegate* plugin_delegate = GetPluginDelegate();
-  if (!plugin_delegate)
-    return PP_ERROR_FAILED;
-
   SetRequestedInfo(requested_info, buffer_count);
 
-  webkit::ppapi::PluginInstance* instance =
+  PepperPluginInstance* instance =
       renderer_ppapi_host_->GetPluginInstance(pp_instance());
   if (!instance)
     return PP_ERROR_FAILED;
 
-  platform_video_capture_ =
-      plugin_delegate->CreateVideoCapture(device_id,
-          instance->container()->element().document().url(), this);
+  RenderViewImpl* render_view = static_cast<RenderViewImpl*>(
+      renderer_ppapi_host_->GetRenderViewForInstance(pp_instance()));
+
+  platform_video_capture_ = new PepperPlatformVideoCapture(
+      render_view->AsWeakPtr(), device_id,
+      instance->GetContainer()->element().document().url(), this);
 
   open_reply_context_ = context->MakeReplyMessageContext();
 
@@ -286,7 +282,7 @@ int32_t PepperVideoCaptureHost::OnStartCapture(
   DCHECK(buffers_.empty());
 
   // It's safe to call this regardless it's capturing or not, because
-  // PepperPlatformVideoCaptureImpl maintains the state.
+  // PepperPlatformVideoCapture maintains the state.
   platform_video_capture_->StartCapture(this, capability_);
   return PP_OK;
 }
@@ -318,7 +314,7 @@ int32_t PepperVideoCaptureHost::StopCapture() {
 
   ReleaseBuffers();
   // It's safe to call this regardless it's capturing or not, because
-  // PepperPlatformVideoCaptureImpl maintains the state.
+  // PepperPlatformVideoCapture maintains the state.
   platform_video_capture_->StopCapture(this);
   return PP_OK;
 }
@@ -334,7 +330,7 @@ int32_t PepperVideoCaptureHost::Close() {
 }
 
 void PepperVideoCaptureHost::ReleaseBuffers() {
-  ::ppapi::ResourceTracker* tracker = HostGlobals::Get()->GetResourceTracker();
+  ppapi::ResourceTracker* tracker = HostGlobals::Get()->GetResourceTracker();
   for (size_t i = 0; i < buffers_.size(); ++i) {
     buffers_[i].buffer->Unmap();
     tracker->ReleaseResource(buffers_[i].buffer->pp_resource());

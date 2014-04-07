@@ -7,7 +7,7 @@
 #include "chrome/browser/ui/cocoa/download/download_util_mac.h"
 
 #include "base/logging.h"
-#include "base/sys_string_conversions.h"
+#include "base/strings/sys_string_conversions.h"
 #include "content/public/browser/download_item.h"
 #include "content/public/browser/download_manager.h"
 #include "ui/gfx/image/image.h"
@@ -29,7 +29,7 @@ void AddFileToPasteboard(NSPasteboard* pasteboard, const base::FilePath& path) {
 void DragDownload(const DownloadItem* download,
                   gfx::Image* icon,
                   gfx::NativeView view) {
-  DCHECK(download->IsComplete());
+  DCHECK_EQ(DownloadItem::COMPLETE, download->GetState());
   NSPasteboard* pasteboard = [NSPasteboard pasteboardWithName:NSDragPboard];
   AddFileToPasteboard(pasteboard, download->GetTargetFilePath());
 

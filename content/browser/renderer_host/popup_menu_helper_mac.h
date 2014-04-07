@@ -8,16 +8,16 @@
 #include <vector>
 
 #include "base/compiler_specific.h"
+#include "content/common/content_export.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 #include "ui/gfx/rect.h"
-
-struct WebMenuItem;
 
 namespace content {
 class RenderViewHost;
 class RenderViewHostImpl;
 class RenderWidgetHostViewMac;
+struct MenuItem;
 
 class PopupMenuHelper : public NotificationObserver {
  public:
@@ -32,9 +32,12 @@ class PopupMenuHelper : public NotificationObserver {
                      int item_height,
                      double item_font_size,
                      int selected_item,
-                     const std::vector<WebMenuItem>& items,
+                     const std::vector<MenuItem>& items,
                      bool right_aligned,
                      bool allow_multiple_selection);
+
+  // Immediately return from ShowPopupMenu.
+  CONTENT_EXPORT static void DontShowPopupMenuForTesting();
 
  protected:
   virtual RenderWidgetHostViewMac* GetRenderWidgetHostView() const;

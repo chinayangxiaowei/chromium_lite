@@ -8,11 +8,11 @@
 #define CHROME_RENDERER_SAFE_BROWSING_PHISHING_CLASSIFIER_DELEGATE_H_
 
 #include "base/memory/scoped_ptr.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "content/public/common/page_transition_types.h"
 #include "content/public/renderer/render_process_observer.h"
 #include "content/public/renderer/render_view_observer.h"
-#include "googleurl/src/gurl.h"
+#include "url/gurl.h"
 
 namespace safe_browsing {
 class ClientPhishingRequest;

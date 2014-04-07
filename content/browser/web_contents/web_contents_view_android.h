@@ -11,6 +11,7 @@
 #include "content/port/browser/web_contents_view_port.h"
 #include "content/public/browser/web_contents_view_delegate.h"
 #include "content/public/common/context_menu_params.h"
+#include "ui/gfx/rect_f.h"
 
 namespace content {
 class ContentViewCoreImpl;
@@ -28,7 +29,11 @@ class WebContentsViewAndroid : public WebContentsViewPort,
   // by the UI frontend.
   void SetContentViewCore(ContentViewCoreImpl* content_view_core);
 
-  void RequestExternalVideoSurface(int player_id);
+#if defined(GOOGLE_TV)
+  void NotifyExternalSurface(int player_id,
+                             bool is_request,
+                             const gfx::RectF& rect);
+#endif
 
   // WebContentsView implementation --------------------------------------------
   virtual gfx::NativeView GetNativeView() const OVERRIDE;
@@ -42,7 +47,7 @@ class WebContentsViewAndroid : public WebContentsViewPort,
   virtual void SetInitialFocus() OVERRIDE;
   virtual void StoreFocus() OVERRIDE;
   virtual void RestoreFocus() OVERRIDE;
-  virtual WebDropData* GetDropData() const OVERRIDE;
+  virtual DropData* GetDropData() const OVERRIDE;
   virtual gfx::Rect GetViewBounds() const OVERRIDE;
 
   // WebContentsViewPort implementation ----------------------------------------
@@ -58,16 +63,15 @@ class WebContentsViewAndroid : public WebContentsViewPort,
   virtual void SetOverscrollControllerEnabled(bool enabled) OVERRIDE;
 
   // Backend implementation of RenderViewHostDelegateView.
-  virtual void ShowContextMenu(const ContextMenuParams& params,
-                               ContextMenuSourceType type) OVERRIDE;
+  virtual void ShowContextMenu(const ContextMenuParams& params) OVERRIDE;
   virtual void ShowPopupMenu(const gfx::Rect& bounds,
                              int item_height,
                              double item_font_size,
                              int selected_item,
-                             const std::vector<WebMenuItem>& items,
+                             const std::vector<MenuItem>& items,
                              bool right_aligned,
                              bool allow_multiple_selection) OVERRIDE;
-  virtual void StartDragging(const WebDropData& drop_data,
+  virtual void StartDragging(const DropData& drop_data,
                              WebKit::WebDragOperationsMask allowed_ops,
                              const gfx::ImageSkia& image,
                              const gfx::Vector2d& image_offset,

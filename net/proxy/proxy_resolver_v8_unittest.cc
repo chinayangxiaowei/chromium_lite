@@ -5,15 +5,15 @@
 #include "base/compiler_specific.h"
 #include "base/file_util.h"
 #include "base/path_service.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
-#include "base/utf_string_conversions.h"
-#include "googleurl/src/gurl.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "net/base/net_errors.h"
 #include "net/base/net_log_unittest.h"
 #include "net/proxy/proxy_info.h"
 #include "net/proxy/proxy_resolver_v8.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/gurl.h"
 
 namespace net {
 namespace {
@@ -26,7 +26,7 @@ class MockJSBindings : public ProxyResolverV8::JSBindings {
   MockJSBindings() : my_ip_address_count(0), my_ip_address_ex_count(0),
                      should_terminate(false) {}
 
-  virtual void Alert(const string16& message) OVERRIDE {
+  virtual void Alert(const base::string16& message) OVERRIDE {
     VLOG(1) << "PAC-alert: " << message;  // Helpful when debugging.
     alerts.push_back(UTF16ToUTF8(message));
   }
@@ -65,7 +65,8 @@ class MockJSBindings : public ProxyResolverV8::JSBindings {
     return false;
   }
 
-  virtual void OnError(int line_number, const string16& message) OVERRIDE {
+  virtual void OnError(int line_number,
+                       const base::string16& message) OVERRIDE {
     // Helpful when debugging.
     VLOG(1) << "PAC-error: [" << line_number << "] " << message;
 
@@ -388,7 +389,8 @@ TEST(ProxyResolverV8Test, NoSetPacScript) {
 
   // Clear it, by initializing with an empty string.
   resolver.SetPacScript(
-      ProxyResolverScriptData::FromUTF16(string16()), CompletionCallback());
+      ProxyResolverScriptData::FromUTF16(base::string16()),
+      CompletionCallback());
 
   // Resolve should fail again now.
   result = resolver.GetProxyForURL(

@@ -7,7 +7,7 @@
 #include <utility>
 
 #include "base/logging.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 
 namespace gpu {
 namespace gles2 {
@@ -16,8 +16,7 @@ Shader::Shader(GLuint service_id, GLenum shader_type)
       : use_count_(0),
         service_id_(service_id),
         shader_type_(shader_type),
-        valid_(false),
-        compilation_status_(NOT_COMPILED) {
+        valid_(false) {
 }
 
 Shader::~Shader() {
@@ -49,6 +48,11 @@ void Shader::SetStatus(
     attrib_map_.clear();
     uniform_map_.clear();
     name_map_.clear();
+  }
+  if (valid && source_.get()) {
+    signature_source_.reset(new std::string(source_->c_str()));
+  } else {
+    signature_source_.reset();
   }
 }
 
@@ -93,7 +97,7 @@ ShaderManager::~ShaderManager() {
 void ShaderManager::Destroy(bool have_context) {
   while (!shaders_.empty()) {
     if (have_context) {
-      Shader* shader = shaders_.begin()->second;
+      Shader* shader = shaders_.begin()->second.get();
       if (!shader->IsDeleted()) {
         glDeleteShader(shader->service_id());
         shader->MarkAsDeleted();
@@ -112,12 +116,12 @@ Shader* ShaderManager::CreateShader(
           client_id, scoped_refptr<Shader>(
               new Shader(service_id, shader_type))));
   DCHECK(result.second);
-  return result.first->second;
+  return result.first->second.get();
 }
 
 Shader* ShaderManager::GetShader(GLuint client_id) {
   ShaderMap::iterator it = shaders_.find(client_id);
-  return it != shaders_.end() ? it->second : NULL;
+  return it != shaders_.end() ? it->second.get() : NULL;
 }
 
 bool ShaderManager::GetClientId(GLuint service_id, GLuint* client_id) const {

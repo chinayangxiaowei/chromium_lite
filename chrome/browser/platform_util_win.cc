@@ -11,19 +11,18 @@
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/win/registry.h"
 #include "base/win/scoped_co_mem.h"
 #include "base/win/scoped_comptr.h"
 #include "base/win/windows_version.h"
 #include "content/public/browser/browser_thread.h"
-#include "googleurl/src/gurl.h"
 #include "ui/base/win/shell.h"
 #include "ui/gfx/native_widget_types.h"
+#include "url/gurl.h"
 
 using content::BrowserThread;
 
@@ -31,9 +30,9 @@ namespace {
 
 void ShowItemInFolderOnFileThread(const base::FilePath& full_path) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
-  base::FilePath dir = full_path.DirName();
+  base::FilePath dir = full_path.DirName().AsEndingWithSeparator();
   // ParseDisplayName will fail if the directory is "C:", it must be "C:\\".
-  if (dir.value() == L"" || !file_util::EnsureEndsWithSeparator(&dir))
+  if (dir.empty())
     return;
 
   typedef HRESULT (WINAPI *SHOpenFolderAndSelectItemsFuncPtr)(
@@ -85,9 +84,7 @@ void ShowItemInFolderOnFileThread(const base::FilePath& full_path) {
   if (FAILED(hr))
     return;
 
-  const ITEMIDLIST* highlight[] = {
-    {file_item},
-  };
+  const ITEMIDLIST* highlight[] = { file_item };
 
   hr = (*open_folder_and_select_itemsPtr)(dir_item, arraysize(highlight),
                                           highlight, NULL);

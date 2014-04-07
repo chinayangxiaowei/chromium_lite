@@ -11,10 +11,13 @@
 #include "content/public/browser/navigation_details.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
+#include "ui/base/resource/resource_bundle.h"
 
 using content::NavigationEntry;
 
 // InfoBarDelegate ------------------------------------------------------------
+
+const int InfoBarDelegate::kNoIconID = 0;
 
 InfoBarDelegate::~InfoBarDelegate() {
 }
@@ -39,8 +42,8 @@ bool InfoBarDelegate::ShouldExpire(
 void InfoBarDelegate::InfoBarDismissed() {
 }
 
-gfx::Image* InfoBarDelegate::GetIcon() const {
-  return NULL;
+int InfoBarDelegate::GetIconID() const {
+  return kNoIconID;
 }
 
 InfoBarDelegate::Type InfoBarDelegate::GetInfoBarType() const {
@@ -91,18 +94,23 @@ TranslateInfoBarDelegate* InfoBarDelegate::AsTranslateInfoBarDelegate() {
   return NULL;
 }
 
-InfoBarDelegate::InfoBarDelegate(InfoBarService* infobar_service)
+gfx::Image InfoBarDelegate::GetIcon() const {
+  int icon_id = GetIconID();
+  return (icon_id == kNoIconID) ? gfx::Image() :
+      ResourceBundle::GetSharedInstance().GetNativeImageNamed(icon_id);
+}
+
+InfoBarDelegate::InfoBarDelegate(InfoBarService* owner)
     : contents_unique_id_(0),
-      owner_(infobar_service) {
-  if (infobar_service)
+      owner_(owner) {
+  if (owner_)
     StoreActiveEntryUniqueID();
 }
 
 void InfoBarDelegate::StoreActiveEntryUniqueID() {
-  content::WebContents* web_contents = owner_->GetWebContents();
-  DCHECK(web_contents);
+  DCHECK(web_contents());
   NavigationEntry* active_entry =
-      web_contents->GetController().GetActiveEntry();
+      web_contents()->GetController().GetActiveEntry();
   contents_unique_id_ = active_entry ? active_entry->GetUniqueID() : 0;
 }
 

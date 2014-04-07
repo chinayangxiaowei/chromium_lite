@@ -9,7 +9,7 @@
 
 #include "base/files/file_path.h"
 #include "base/metrics/histogram.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 
 namespace content {
 
@@ -42,7 +42,7 @@ void BrowserAccessibilityStateImpl::UpdatePlatformSpecificHistograms() {
   if (!EnumProcessModules(process, modules, 0, &bytes_required))
     return;
 
-  scoped_array<char> buffer(new char[bytes_required]);
+  scoped_ptr<char[]> buffer(new char[bytes_required]);
   modules = reinterpret_cast<HMODULE*>(buffer.get());
   DWORD ignore;
   if (!EnumProcessModules(process, modules, bytes_required, &ignore))

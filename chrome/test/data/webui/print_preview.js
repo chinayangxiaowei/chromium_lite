@@ -224,6 +224,10 @@ function checkElementDisplayed(el, isDisplayed) {
 
 // Test that disabled settings hide the disabled sections.
 TEST_F('PrintPreviewWebUITest', 'TestSectionsDisabled', function() {
+  checkSectionVisible($('layout-settings'), true);
+  checkSectionVisible($('color-settings'), true);
+  checkSectionVisible($('copies-settings'), true);
+
   var initialSettingsSetEvent =
       new cr.Event(print_preview.NativeLayer.EventType.INITIAL_SETTINGS_SET);
   initialSettingsSetEvent.initialSettings = this.initialSettings_;
@@ -233,10 +237,6 @@ TEST_F('PrintPreviewWebUITest', 'TestSectionsDisabled', function() {
       new cr.Event(print_preview.NativeLayer.EventType.LOCAL_DESTINATIONS_SET);
   localDestsSetEvent.destinationInfos = this.localDestinationInfos_;
   this.nativeLayer_.dispatchEvent(localDestsSetEvent);
-
-  checkSectionVisible($('layout-settings'), true);
-  checkSectionVisible($('color-settings'), true);
-  checkSectionVisible($('copies-settings'), true);
 
   var capsSetEvent =
       new cr.Event(print_preview.NativeLayer.EventType.CAPABILITIES_SET);
@@ -426,9 +426,9 @@ TEST_F('PrintPreviewWebUITest',
       $('other-options-settings').querySelector('.header-footer-container'),
       true);
 
-  printPreview.printTicketStore_.updateMarginsType(
+  printPreview.printTicketStore_.marginsType.updateValue(
       print_preview.ticket_items.MarginsType.Value.CUSTOM);
-  printPreview.printTicketStore_.updateCustomMargins(
+  printPreview.printTicketStore_.customMargins.updateValue(
       new print_preview.Margins(0, 0, 0, 0));
 
   checkElementDisplayed(
@@ -466,9 +466,9 @@ TEST_F('PrintPreviewWebUITest',
       $('other-options-settings').querySelector('.header-footer-container'),
       true);
 
-  printPreview.printTicketStore_.updateMarginsType(
+  printPreview.printTicketStore_.marginsType.updateValue(
       print_preview.ticket_items.MarginsType.Value.CUSTOM);
-  printPreview.printTicketStore_.updateCustomMargins(
+  printPreview.printTicketStore_.customMargins.updateValue(
       new print_preview.Margins(36, 36, 36, 36));
 
   checkElementDisplayed(
@@ -506,9 +506,9 @@ TEST_F('PrintPreviewWebUITest',
       $('other-options-settings').querySelector('.header-footer-container'),
       true);
 
-  printPreview.printTicketStore_.updateMarginsType(
+  printPreview.printTicketStore_.marginsType.updateValue(
       print_preview.ticket_items.MarginsType.Value.CUSTOM);
-  printPreview.printTicketStore_.updateCustomMargins(
+  printPreview.printTicketStore_.customMargins.updateValue(
       new print_preview.Margins(0, 36, 0, 36));
 
   checkElementDisplayed(
@@ -547,9 +547,9 @@ TEST_F('PrintPreviewWebUITest',
       $('other-options-settings').querySelector('.header-footer-container'),
       true);
 
-  printPreview.printTicketStore_.updateMarginsType(
+  printPreview.printTicketStore_.marginsType.updateValue(
       print_preview.ticket_items.MarginsType.Value.CUSTOM);
-  printPreview.printTicketStore_.updateCustomMargins(
+  printPreview.printTicketStore_.customMargins.updateValue(
       new print_preview.Margins(0, 36, 36, 36));
 
   checkElementDisplayed(
@@ -585,10 +585,8 @@ TEST_F('PrintPreviewWebUITest', 'TestColorSettingsTrue', function() {
 
   checkSectionVisible($('color-settings'), true);
 
-  var colorOption = $('color-settings').getElementsByClassName(
-      'color-settings-color-option')[0];
-  var bwOption = $('color-settings').getElementsByClassName(
-      'color-settings-bw-option')[0];
+  var colorOption = $('color-settings').querySelector('.color-option');
+  var bwOption = $('color-settings').querySelector('.bw-option');
   expectTrue(colorOption.checked);
   expectFalse(bwOption.checked);
 });
@@ -621,10 +619,8 @@ TEST_F('PrintPreviewWebUITest', 'TestColorSettingsFalse', function() {
 
   checkSectionVisible($('color-settings'), false);
 
-  var colorOption = $('color-settings').getElementsByClassName(
-      'color-settings-color-option')[0];
-  var bwOption = $('color-settings').getElementsByClassName(
-      'color-settings-bw-option')[0];
+  var colorOption = $('color-settings').querySelector('.color-option');
+  var bwOption = $('color-settings').querySelector('.bw-option');
   expectFalse(colorOption.checked);
   expectTrue(bwOption.checked);
 });
@@ -724,7 +720,7 @@ TEST_F('PrintPreviewWebUITest', 'TestPrinterChangeUpdatesPreview', function() {
 
   var previewGenerator = mock(print_preview.PreviewGenerator);
   printPreview.previewArea_.previewGenerator_ = previewGenerator.proxy();
-  previewGenerator.expects(once()).requestPreview();
+  previewGenerator.expects(exactly(6)).requestPreview();
 
   var barDestination;
   var destinations = printPreview.destinationStore_.destinations;

@@ -5,13 +5,15 @@
 #ifndef COMPONENTS_TRACING_CHILD_TRACE_MESSAGE_FILTER_H_
 #define COMPONENTS_TRACING_CHILD_TRACE_MESSAGE_FILTER_H_
 
+#include "base/bind.h"
+#include "base/memory/ref_counted_memory.h"
 #include "ipc/ipc_channel_proxy.h"
 
 namespace base {
 class MessageLoopProxy;
 }
 
-namespace components {
+namespace tracing {
 
 // This class sends and receives trace messages on child processes.
 class ChildTraceMessageFilter : public IPC::ChannelProxy::MessageFilter {
@@ -28,8 +30,7 @@ class ChildTraceMessageFilter : public IPC::ChannelProxy::MessageFilter {
 
  private:
   // Message handlers.
-  void OnBeginTracing(const std::vector<std::string>& included_categories,
-                      const std::vector<std::string>& excluded_categories,
+  void OnBeginTracing(const std::string& category_filter_str,
                       base::TimeTicks browser_time,
                       int mode);
   void OnEndTracing();
@@ -49,6 +50,6 @@ class ChildTraceMessageFilter : public IPC::ChannelProxy::MessageFilter {
   DISALLOW_COPY_AND_ASSIGN(ChildTraceMessageFilter);
 };
 
-} // namespace components
+}  // namespace tracing
 
 #endif  // COMPONENTS_TRACING_CHILD_TRACE_MESSAGE_FILTER_H_

@@ -8,17 +8,17 @@
 
 #include "base/logging.h"
 #include "base/mac/foundation_util.h"
-#include "base/string_util.h"
-#include "base/sys_string_conversions.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/sys_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ssl/ssl_client_auth_observer.h"
 #import "chrome/browser/ui/cocoa/constrained_window/constrained_window_mac.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_view.h"
 #include "grit/generated_resources.h"
-#include "net/base/x509_certificate.h"
-#include "net/base/x509_util_mac.h"
+#include "net/cert/x509_certificate.h"
+#include "net/cert/x509_util_mac.h"
 #include "net/ssl/ssl_cert_request_info.h"
 #include "ui/base/cocoa/window_size_constants.h"
 #include "ui/base/l10n/l10n_util_mac.h"
@@ -111,7 +111,7 @@ void ShowSSLClientCertificateSelector(
     CFIndex index =
         CFArrayGetFirstIndexOfValue(identities_, range, [panel_ identity]);
     if (index != -1)
-      cert = certificates_[index];
+      cert = certificates_[index].get();
     else
       NOTREACHED();
   }

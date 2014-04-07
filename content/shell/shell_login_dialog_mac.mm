@@ -8,8 +8,8 @@
 
 #include "base/logging.h"
 #include "base/mac/bundle_locations.h"
-#import "base/memory/scoped_nsobject.h"
-#include "base/sys_string_conversions.h"
+#import "base/mac/scoped_nsobject.h"
+#include "base/strings/sys_string_conversions.h"
 #include "content/public/browser/browser_thread.h"
 #import "ui/base/cocoa/nib_loading.h"
 
@@ -24,7 +24,7 @@ const int kPasswordFieldTag = 2;
 // going away.
 @interface ShellLoginDialogHelper : NSObject<NSAlertDelegate> {
  @private
-  scoped_nsobject<NSAlert> alert_;
+  base::scoped_nsobject<NSAlert> alert_;
   NSTextField* usernameField_;  // WEAK; owned by alert_
   NSSecureTextField* passwordField_;  // WEAK; owned by alert_
 }

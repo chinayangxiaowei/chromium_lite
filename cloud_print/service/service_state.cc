@@ -7,9 +7,9 @@
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
-#include "base/message_loop.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "net/base/escape.h"
 #include "net/base/io_buffer.h"
 #include "net/base/load_flags.h"
@@ -45,14 +45,14 @@ class ServiceStateURLRequestDelegate : public net::URLRequest::Delegate {
         return;
     }
     request->Cancel();
-  };
+  }
 
   virtual void OnReadCompleted(net::URLRequest* request,
                                int bytes_read) OVERRIDE {
     Read(request);
     if (!request->status().is_io_pending())
-      MessageLoop::current()->Quit();
-  };
+      base::MessageLoop::current()->Quit();
+  }
 
   const std::string& data() const {
     return data_;
@@ -64,7 +64,7 @@ class ServiceStateURLRequestDelegate : public net::URLRequest::Delegate {
     const int kBufSize = 100000;
     scoped_refptr<net::IOBuffer> buf(new net::IOBuffer(kBufSize));
     int num_bytes = 0;
-    while (request->Read(buf, kBufSize, &num_bytes)) {
+    while (request->Read(buf.get(), kBufSize, &num_bytes)) {
       data_.append(buf->data(), buf->data() + num_bytes);
     }
   }
@@ -160,7 +160,7 @@ std::string ServiceState::ToString() {
 std::string ServiceState::LoginToGoogle(const std::string& service,
                                         const std::string& email,
                                         const std::string& password) {
-  MessageLoop loop(MessageLoop::TYPE_IO);
+  base::MessageLoop loop(base::MessageLoop::TYPE_IO);
 
   net::URLRequestContextBuilder builder;
   scoped_ptr<net::URLRequestContext> context(builder.Build());
@@ -190,11 +190,12 @@ std::string ServiceState::LoginToGoogle(const std::string& service,
   request.set_method("POST");
   request.Start();
 
-  MessageLoop::current()->PostDelayedTask(FROM_HERE,
-      MessageLoop::QuitClosure(),
+  base::MessageLoop::current()->PostDelayedTask(
+      FROM_HERE,
+      base::MessageLoop::QuitClosure(),
       base::TimeDelta::FromMilliseconds(kRequestTimeoutMs));
 
-  MessageLoop::current()->Run();
+  base::MessageLoop::current()->Run();
 
   const char kAuthStart[] = "Auth=";
   std::vector<std::string> lines;

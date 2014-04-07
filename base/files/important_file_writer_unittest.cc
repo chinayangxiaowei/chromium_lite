@@ -9,10 +9,10 @@
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/logging.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "base/threading/thread.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace base {
@@ -60,19 +60,17 @@ class ImportantFileWriterTest : public testing::Test {
 };
 
 TEST_F(ImportantFileWriterTest, Basic) {
-  ImportantFileWriter writer(file_,
-                             MessageLoopProxy::current());
-  EXPECT_FALSE(file_util::PathExists(writer.path()));
+  ImportantFileWriter writer(file_, MessageLoopProxy::current().get());
+  EXPECT_FALSE(PathExists(writer.path()));
   writer.WriteNow("foo");
   RunLoop().RunUntilIdle();
 
-  ASSERT_TRUE(file_util::PathExists(writer.path()));
+  ASSERT_TRUE(PathExists(writer.path()));
   EXPECT_EQ("foo", GetFileContent(writer.path()));
 }
 
 TEST_F(ImportantFileWriterTest, ScheduleWrite) {
-  ImportantFileWriter writer(file_,
-                             MessageLoopProxy::current());
+  ImportantFileWriter writer(file_, MessageLoopProxy::current().get());
   writer.set_commit_interval(TimeDelta::FromMilliseconds(25));
   EXPECT_FALSE(writer.HasPendingWrite());
   DataSerializer serializer("foo");
@@ -84,13 +82,12 @@ TEST_F(ImportantFileWriterTest, ScheduleWrite) {
       TimeDelta::FromMilliseconds(100));
   MessageLoop::current()->Run();
   EXPECT_FALSE(writer.HasPendingWrite());
-  ASSERT_TRUE(file_util::PathExists(writer.path()));
+  ASSERT_TRUE(PathExists(writer.path()));
   EXPECT_EQ("foo", GetFileContent(writer.path()));
 }
 
 TEST_F(ImportantFileWriterTest, DoScheduledWrite) {
-  ImportantFileWriter writer(file_,
-                             MessageLoopProxy::current());
+  ImportantFileWriter writer(file_, MessageLoopProxy::current().get());
   EXPECT_FALSE(writer.HasPendingWrite());
   DataSerializer serializer("foo");
   writer.ScheduleWrite(&serializer);
@@ -102,13 +99,12 @@ TEST_F(ImportantFileWriterTest, DoScheduledWrite) {
       TimeDelta::FromMilliseconds(100));
   MessageLoop::current()->Run();
   EXPECT_FALSE(writer.HasPendingWrite());
-  ASSERT_TRUE(file_util::PathExists(writer.path()));
+  ASSERT_TRUE(PathExists(writer.path()));
   EXPECT_EQ("foo", GetFileContent(writer.path()));
 }
 
 TEST_F(ImportantFileWriterTest, BatchingWrites) {
-  ImportantFileWriter writer(file_,
-                             MessageLoopProxy::current());
+  ImportantFileWriter writer(file_, MessageLoopProxy::current().get());
   writer.set_commit_interval(TimeDelta::FromMilliseconds(25));
   DataSerializer foo("foo"), bar("bar"), baz("baz");
   writer.ScheduleWrite(&foo);
@@ -119,7 +115,7 @@ TEST_F(ImportantFileWriterTest, BatchingWrites) {
       MessageLoop::QuitWhenIdleClosure(),
       TimeDelta::FromMilliseconds(100));
   MessageLoop::current()->Run();
-  ASSERT_TRUE(file_util::PathExists(writer.path()));
+  ASSERT_TRUE(PathExists(writer.path()));
   EXPECT_EQ("baz", GetFileContent(writer.path()));
 }
 

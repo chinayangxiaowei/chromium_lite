@@ -16,15 +16,18 @@
 #include "content/public/browser/notification_registrar.h"
 #include "content/public/browser/notification_source.h"
 
-class PrefRegistrySyncable;
 class Profile;
 
 namespace base {
-  class DictionaryValue;
+class DictionaryValue;
 }
 
 namespace ui {
-  class Accelerator;
+class Accelerator;
+}
+
+namespace user_prefs {
+class PrefRegistrySyncable;
 }
 
 namespace extensions {
@@ -43,7 +46,7 @@ class CommandService : public ProfileKeyedAPI,
   };
 
   // Register prefs for keybinding.
-  static void RegisterUserPrefs(PrefRegistrySyncable* registry);
+  static void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
 
   // Constructs a CommandService object for the given profile.
   explicit CommandService(Profile* profile);
@@ -109,6 +112,12 @@ class CommandService : public ProfileKeyedAPI,
                          std::string command_name,
                          bool allow_overrides);
 
+  // Removes all keybindings for a given extension by its |extension_id|.
+  // |command_name| is optional and if specified, causes only the command with
+  // the name |command_name| to be removed.
+  void RemoveKeybindingPrefs(const std::string& extension_id,
+                             const std::string& command_name);
+
   // Update the keybinding prefs (for a command with a matching |extension_id|
   // and |command_name|) to |keystroke|. If the command had another key assigned
   // that key assignment will be removed.
@@ -150,12 +159,6 @@ class CommandService : public ProfileKeyedAPI,
   // is ignored. |user_pref| is the PrefService used to record the new
   // keybinding assignment.
   void AssignInitialKeybindings(const extensions::Extension* extension);
-
-  // Removes all keybindings for a given extension by its |extension_id|.
-  // |command_name| is optional and if specified, causes only the command with
-  // the name |command_name| to be removed.
-  void RemoveKeybindingPrefs(const std::string& extension_id,
-                             const std::string& command_name);
 
   bool GetExtensionActionCommand(const std::string& extension_id,
                                  QueryType query_type,

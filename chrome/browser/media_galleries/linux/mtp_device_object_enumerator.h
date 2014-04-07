@@ -8,9 +8,9 @@
 #include <vector>
 
 #include "base/files/file_path.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "device/media_transfer_protocol/mtp_file_entry.pb.h"
-#include "webkit/fileapi/file_system_file_util.h"
+#include "webkit/browser/fileapi/file_system_file_util.h"
 
 namespace chrome {
 

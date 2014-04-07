@@ -11,16 +11,16 @@
 #include <set>
 #include <string>
 
-#include "base/memory/ref_counted.h"
 #include "base/memory/linked_ptr.h"
+#include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "chrome/browser/extensions/extension_warning_set.h"
-#include "googleurl/src/gurl.h"
 #include "net/base/auth.h"
 #include "net/http/http_request_headers.h"
 #include "net/http/http_response_headers.h"
-#include "webkit/glue/resource_type.h"
+#include "url/gurl.h"
+#include "webkit/common/resource_type.h"
 
 namespace base {
 class ListValue;
@@ -52,6 +52,8 @@ struct RequestCookie {
   DISALLOW_COPY_AND_ASSIGN(RequestCookie);
 };
 
+bool NullableEquals(const RequestCookie* a, const RequestCookie* b);
+
 // Data container for ResponseCookies as defined in the declarative WebRequest
 // API definition.
 struct ResponseCookie {
@@ -69,6 +71,8 @@ struct ResponseCookie {
   DISALLOW_COPY_AND_ASSIGN(ResponseCookie);
 };
 
+bool NullableEquals(const ResponseCookie* a, const ResponseCookie* b);
+
 // Data container for FilterResponseCookies as defined in the declarative
 // WebRequest API definition.
 struct FilterResponseCookie : ResponseCookie {
@@ -80,6 +84,9 @@ struct FilterResponseCookie : ResponseCookie {
  private:
   DISALLOW_COPY_AND_ASSIGN(FilterResponseCookie);
 };
+
+bool NullableEquals(const FilterResponseCookie* a,
+                    const FilterResponseCookie* b);
 
 enum CookieModificationType {
   ADD,
@@ -99,6 +106,9 @@ struct RequestCookieModification {
   DISALLOW_COPY_AND_ASSIGN(RequestCookieModification);
 };
 
+bool NullableEquals(const RequestCookieModification* a,
+                    const RequestCookieModification* b);
+
 struct ResponseCookieModification {
   ResponseCookieModification();
   ~ResponseCookieModification();
@@ -110,6 +120,9 @@ struct ResponseCookieModification {
  private:
   DISALLOW_COPY_AND_ASSIGN(ResponseCookieModification);
 };
+
+bool NullableEquals(const ResponseCookieModification* a,
+                    const ResponseCookieModification* b);
 
 typedef std::vector<linked_ptr<RequestCookieModification> >
     RequestCookieModifications;
@@ -292,6 +305,13 @@ bool ParseResourceType(const std::string& type_str,
 
 // Triggers clearing each renderer's in-memory cache the next time it navigates.
 void ClearCacheOnNavigation();
+
+// Tells renderer processes that the web request or declarative web request
+// API has been used by |extension| in profile |profile_id| to collect
+// UMA statistics on Page Load Times. Needs to be called on the UI thread.
+void NotifyWebRequestAPIUsed(
+    void* profile_id,
+    scoped_refptr<const extensions::Extension> extension);
 
 }  // namespace extension_web_request_api_helpers
 

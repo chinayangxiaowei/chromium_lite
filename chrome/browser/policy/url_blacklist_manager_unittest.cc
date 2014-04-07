@@ -7,16 +7,16 @@
 #include <ostream>
 
 #include "base/basictypes.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/prefs/pref_registry_simple.h"
 #include "base/prefs/testing_pref_service.h"
 #include "chrome/common/pref_names.h"
 #include "content/public/test/test_browser_thread.h"
 #include "google_apis/gaia/gaia_urls.h"
-#include "googleurl/src/gurl.h"
 #include "net/url_request/url_request.h"
 #include "net/url_request/url_request_test_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/gurl.h"
 
 namespace policy {
 
@@ -70,7 +70,7 @@ class TestingURLBlacklistManager : public URLBlacklistManager {
 class URLBlacklistManagerTest : public testing::Test {
  protected:
   URLBlacklistManagerTest()
-      : loop_(MessageLoop::TYPE_IO),
+      : loop_(base::MessageLoop::TYPE_IO),
         ui_thread_(BrowserThread::UI, &loop_),
         file_thread_(BrowserThread::FILE, &loop_),
         io_thread_(BrowserThread::IO, &loop_) {
@@ -93,7 +93,7 @@ class URLBlacklistManagerTest : public testing::Test {
     blacklist_manager_.reset();
   }
 
-  MessageLoop loop_;
+  base::MessageLoop loop_;
   TestingPrefServiceSimple pref_service_;
   scoped_ptr<TestingURLBlacklistManager> blacklist_manager_;
 
@@ -225,46 +225,88 @@ TEST_F(URLBlacklistManagerTest, ShutdownWithPendingTask2) {
   loop_.RunUntilIdle();
 }
 
-TEST_F(URLBlacklistManagerTest, HasStandardScheme) {
-  EXPECT_TRUE(URLBlacklist::HasStandardScheme(GURL("http://example.com")));
-  EXPECT_TRUE(URLBlacklist::HasStandardScheme(GURL("https://example.com")));
-  EXPECT_TRUE(URLBlacklist::HasStandardScheme(GURL("ftp://example.com")));
-  EXPECT_TRUE(URLBlacklist::HasStandardScheme(GURL("gopher://example.com")));
-  EXPECT_TRUE(URLBlacklist::HasStandardScheme(GURL("ws://example.com")));
-  EXPECT_TRUE(URLBlacklist::HasStandardScheme(GURL("wss://example.com")));
-  EXPECT_FALSE(URLBlacklist::HasStandardScheme(GURL("wtf://example.com")));
-}
-
 INSTANTIATE_TEST_CASE_P(
     URLBlacklistFilterToComponentsTestInstance,
     URLBlacklistFilterToComponentsTest,
     testing::Values(
         FilterTestParams("google.com",
-                         "", ".google.com", true, 0u, ""),
+                         std::string(),
+                         ".google.com",
+                         true,
+                         0u,
+                         std::string()),
         FilterTestParams(".google.com",
-                         "", "google.com", false, 0u, ""),
+                         std::string(),
+                         "google.com",
+                         false,
+                         0u,
+                         std::string()),
         FilterTestParams("http://google.com",
-                         "http", ".google.com", true, 0u, ""),
+                         "http",
+                         ".google.com",
+                         true,
+                         0u,
+                         std::string()),
         FilterTestParams("google.com/",
-                         "", ".google.com", true, 0u, "/"),
+                         std::string(),
+                         ".google.com",
+                         true,
+                         0u,
+                         "/"),
         FilterTestParams("http://google.com:8080/whatever",
-                         "http", ".google.com", true, 8080u, "/whatever"),
+                         "http",
+                         ".google.com",
+                         true,
+                         8080u,
+                         "/whatever"),
         FilterTestParams("http://user:pass@google.com:8080/whatever",
-                         "http", ".google.com", true, 8080u, "/whatever"),
+                         "http",
+                         ".google.com",
+                         true,
+                         8080u,
+                         "/whatever"),
         FilterTestParams("123.123.123.123",
-                         "", "123.123.123.123", false, 0u, ""),
+                         std::string(),
+                         "123.123.123.123",
+                         false,
+                         0u,
+                         std::string()),
         FilterTestParams("https://123.123.123.123",
-                         "https", "123.123.123.123", false, 0u, ""),
+                         "https",
+                         "123.123.123.123",
+                         false,
+                         0u,
+                         std::string()),
         FilterTestParams("123.123.123.123/",
-                         "", "123.123.123.123", false, 0u, "/"),
+                         std::string(),
+                         "123.123.123.123",
+                         false,
+                         0u,
+                         "/"),
         FilterTestParams("http://123.123.123.123:123/whatever",
-                         "http", "123.123.123.123", false, 123u, "/whatever"),
+                         "http",
+                         "123.123.123.123",
+                         false,
+                         123u,
+                         "/whatever"),
         FilterTestParams("*",
-                         "", "", true, 0u, ""),
+                         std::string(),
+                         std::string(),
+                         true,
+                         0u,
+                         std::string()),
         FilterTestParams("ftp://*",
-                         "ftp", "", true, 0u, ""),
+                         "ftp",
+                         std::string(),
+                         true,
+                         0u,
+                         std::string()),
         FilterTestParams("http://*/whatever",
-                         "http", "", true, 0u, "/whatever")));
+                         "http",
+                         std::string(),
+                         true,
+                         0u,
+                         "/whatever")));
 
 TEST_F(URLBlacklistManagerTest, Filtering) {
   URLBlacklist blacklist;
@@ -463,12 +505,20 @@ TEST_F(URLBlacklistManagerTest, DontBlockResources) {
   request.set_load_flags(net::LOAD_MAIN_FRAME);
   EXPECT_TRUE(blacklist_manager_->IsRequestBlocked(request));
 
-  // Sync gets a free pass.
+  // On most platforms, sync gets a free pass due to signin flows.
+  bool block_signin_urls = false;
+#if defined(OS_CHROMEOS)
+  // There are no sync specific signin flows on Chrome OS, so no special
+  // treatment.
+  block_signin_urls = true;
+#endif
+
   GURL sync_url(
       GaiaUrls::GetInstance()->service_login_url() + "?service=chromiumsync");
   net::URLRequest sync_request(sync_url, NULL, &context);
   sync_request.set_load_flags(net::LOAD_MAIN_FRAME);
-  EXPECT_FALSE(blacklist_manager_->IsRequestBlocked(sync_request));
+  EXPECT_EQ(block_signin_urls,
+            blacklist_manager_->IsRequestBlocked(sync_request));
 }
 
 }  // namespace policy

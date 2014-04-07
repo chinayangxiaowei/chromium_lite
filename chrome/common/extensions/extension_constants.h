@@ -8,7 +8,7 @@
 #include <string>
 
 #include "base/basictypes.h"
-#include "googleurl/src/gurl.h"
+#include "url/gurl.h"
 
 namespace extension_urls {
   // Returns the URL prefix for the extension/apps gallery. Can be set via the
@@ -25,14 +25,21 @@ namespace extension_urls {
   // to get the item detail URL.
   std::string GetWebstoreItemDetailURLPrefix();
 
-  // Returns the URL leading to a search page for Web Intents. The search is
-  // specific to intents with the given |action| and |type|.
-  GURL GetWebstoreIntentQueryURL(const std::string& action,
-                                 const std::string& type);
-
   // Returns the URL used to get webstore data (ratings, manifest, icon URL,
   // etc.) about an extension from the webstore as JSON.
   GURL GetWebstoreItemJsonDataURL(const std::string& extension_id);
+
+  // Returns the URL used to get webstore search results in JSON format. The URL
+  // returns a JSON dictionary that has the search results (under "results").
+  // Each entry in the array is a dictionary as the data returned for
+  // GetWebstoreItemJsonDataURL above. |query| is the user typed query string.
+  // |hl| is the host language code, e.g. en_US. Both arguments will be escaped
+  // and added as a query parameter to the returned web store json search URL.
+  GURL GetWebstoreJsonSearchUrl(const std::string& query,
+                                const std::string& hl);
+
+  // Returns the URL of the web store search results page for |query|.
+  GURL GetWebstoreSearchPageUrl(const std::string& query);
 
   // Return the update URL used by gallery/webstore extensions/apps.
   GURL GetWebstoreUpdateUrl();
@@ -49,38 +56,6 @@ namespace extension_urls {
   extern const char kGalleryBrowsePrefix[];
 }  // namespace extension_urls
 
-namespace extension_filenames {
-  // The name of a temporary directory to install an extension into for
-  // validation before finalizing install.
-  extern const char kTempExtensionName[];
-
-  // The file to write our decoded images to, relative to the extension_path.
-  extern const char kDecodedImagesFilename[];
-
-  // The file to write our decoded message catalogs to, relative to the
-  // extension_path.
-  extern const char kDecodedMessageCatalogsFilename[];
-
-  // The filename to use for a background page generated from
-  // background.scripts.
-  extern const char kGeneratedBackgroundPageFilename[];
-}
-
-// Keys in the dictionary returned by Extension::GetBasicInfo().
-namespace extension_info_keys {
-  extern const char kDescriptionKey[];
-  extern const char kEnabledKey[];
-  extern const char kHomepageUrlKey[];
-  extern const char kIdKey[];
-  extern const char kNameKey[];
-  extern const char kKioskEnabledKey[];
-  extern const char kOfflineEnabledKey[];
-  extern const char kOptionsUrlKey[];
-  extern const char kDetailsUrlKey[];
-  extern const char kVersionKey[];
-  extern const char kPackagedAppKey[];
-}
-
 namespace extension_misc {
   // Matches chrome.windows.WINDOW_ID_NONE.
   const int kUnknownWindowId = -1;
@@ -91,6 +66,9 @@ namespace extension_misc {
   // The extension id of the bookmark manager.
   extern const char kBookmarkManagerId[];
 
+  // The extension id of the Chrome component application.
+  extern const char kChromeAppId[];
+
   // The extension id of the Citrix Receiver application.
   extern const char kCitrixReceiverAppId[];
 
@@ -100,8 +78,29 @@ namespace extension_misc {
   // The extension id of the dev Citrix Receiver application.
   extern const char kCitrixReceiverAppDevId[];
 
+  // The extension id of the Cloud Print component application.
+  extern const char kCloudPrintAppId[];
+
   // The extension id of the Enterprise Web Store component application.
   extern const char kEnterpriseWebStoreAppId[];
+
+  // The extension id of GMail application.
+  extern const char kGmailAppId[];
+
+  // The extension id of the Google Doc application.
+  extern const char kGoogleDocAppId[];
+
+  // The extension id of the Google Play Music application.
+  extern const char kGooglePlayMusicAppId[];
+
+  // The extension id of the Google Search application.
+  extern const char kGoogleSearchAppId[];
+
+  // The extension id of the Google Sheets application.
+  extern const char kGoogleSheetsAppId[];
+
+  // The extension id of the Google Slides application.
+  extern const char kGoogleSlidesAppId[];
 
   // The extension id of the HTerm app for ChromeOS.
   extern const char kHTermAppId[];
@@ -121,20 +120,23 @@ namespace extension_misc {
   // The extension id of the Office Viewer extension.
   extern const char kQuickOfficeExtensionId[];
 
+  // The extension id of the settings application.
+  extern const char kSettingsAppId[];
+
   // The extension id used for testing streamsPrivate
   extern const char kStreamsPrivateTestExtensionId[];
 
   // The extension id of the Web Store component application.
   extern const char kWebStoreAppId[];
 
-  // The extension id of the Cloud Print component application.
-  extern const char kCloudPrintAppId[];
+  // The extension id of the Youtube application.
+  extern const char kYoutubeAppId[];
 
-  // The extension id of the Chrome component application.
-  extern const char kChromeAppId[];
+  // The extension id of the Identity API UI application.
+  extern const char kIdentityApiUiAppId[];
 
-  // The extension id of the settings application.
-  extern const char kSettingsAppId[];
+  // The extension id of the in-app payments support application.
+  extern const char kInAppPaymentsSupportAppId[];
 
   // Note: this structure is an ASN.1 which encodes the algorithm used
   // with its parameters. This is defined in PKCS #1 v2.1 (RFC 3447).
@@ -231,13 +233,31 @@ namespace extension_misc {
     // User clicked app launcher search result.
     APP_LAUNCH_APP_LIST_SEARCH,
 
+    // User clicked the chrome app icon from the app launcher's main view.
+    APP_LAUNCH_APP_LIST_MAIN_CHROME,
+
+    // User clicked the webstore icon from the app launcher's main view.
+    APP_LAUNCH_APP_LIST_MAIN_WEBSTORE,
+
+    // User clicked the chrome app icon from the app launcher's search view.
+    APP_LAUNCH_APP_LIST_SEARCH_CHROME,
+
+    // User clicked the webstore icon from the app launcher's search view.
+    APP_LAUNCH_APP_LIST_SEARCH_WEBSTORE,
+
     APP_LAUNCH_BUCKET_BOUNDARY,
     APP_LAUNCH_BUCKET_INVALID
   };
 
+  // The extension id of the ChromeVox extension.
+  extern const char kChromeVoxExtensionId[];
+
 #if defined(OS_CHROMEOS)
   // Path to preinstalled ChromeVox screen reader extension.
   extern const char kChromeVoxExtensionPath[];
+  // Path to preinstalled Connectivity Diagnostics extension.
+  extern const char kConnectivityDiagnosticsPath[];
+  extern const char kConnectivityDiagnosticsLauncherPath[];
   // Path to preinstalled speech synthesis extension.
   extern const char kSpeechSynthesisExtensionPath[];
   // The extension id of the speech synthesis extension.
@@ -302,7 +322,6 @@ namespace extension_misc {
   // List of sizes for extension icons that can be defined in the manifest.
   extern const int kScriptBadgeIconSizes[];
   extern const size_t kNumScriptBadgeIconSizes;
-
-}  // extension_misc
+}  // namespace extension_misc
 
 #endif  // CHROME_COMMON_EXTENSIONS_EXTENSION_CONSTANTS_H_

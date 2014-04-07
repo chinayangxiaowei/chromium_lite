@@ -16,9 +16,9 @@
 #include "base/file_util.h"
 #include "base/i18n/case_conversion.h"
 #include "base/metrics/histogram.h"
-#include "base/string_util.h"
-#include "base/time.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "chrome/browser/autocomplete/autocomplete_provider.h"
 #include "chrome/browser/autocomplete/url_prefix.h"
 #include "chrome/browser/bookmarks/bookmark_service.h"
@@ -43,7 +43,7 @@ using google::protobuf::RepeatedPtrField;
 using in_memory_url_index::InMemoryURLIndexCacheItem;
 
 namespace {
-static const size_t kMaxVisitsToUse = 10u;
+static const size_t kMaxVisitsToStoreInCache = 10u;
 }  // anonymous namespace
 
 namespace history {
@@ -120,8 +120,11 @@ UpdateRecentVisitsFromHistoryDBTask::UpdateRecentVisitsFromHistoryDBTask(
 bool UpdateRecentVisitsFromHistoryDBTask::RunOnDBThread(
     HistoryBackend* backend,
     HistoryDatabase* db) {
+  // Make sure the private data is going to get as many recent visits as
+  // ScoredHistoryMatch::GetFrecency() hopes to use.
+  DCHECK_GE(kMaxVisitsToStoreInCache, ScoredHistoryMatch::kMaxVisitsToScore);
   succeeded_ = db->GetMostRecentVisitsForURL(url_id_,
-                                             kMaxVisitsToUse,
+                                             kMaxVisitsToStoreInCache,
                                              &recent_visits_);
   if (!succeeded_)
     recent_visits_.clear();
@@ -339,7 +342,8 @@ void URLIndexPrivateData::UpdateRecentVisits(
   if (row_pos != history_info_map_.end()) {
     VisitInfoVector* visits = &row_pos->second.visits;
     visits->clear();
-    const size_t size = std::min(recent_visits.size(), kMaxVisitsToUse);
+    const size_t size =
+        std::min(recent_visits.size(), kMaxVisitsToStoreInCache);
     visits->reserve(size);
     for (size_t i = 0; i < size; i++) {
       // Copy from the VisitVector the only fields visits needs.
@@ -392,7 +396,7 @@ scoped_refptr<URLIndexPrivateData> URLIndexPrivateData::RestoreFromFile(
     const base::FilePath& file_path,
     const std::string& languages) {
   base::TimeTicks beginning_time = base::TimeTicks::Now();
-  if (!file_util::PathExists(file_path))
+  if (!base::PathExists(file_path))
     return NULL;
   std::string data;
   // If there is no cache file then simply give up. This will cause us to
@@ -440,6 +444,7 @@ scoped_refptr<URLIndexPrivateData> URLIndexPrivateData::RebuildFromHistory(
   URLDatabase::URLEnumerator history_enum;
   if (!history_db->InitURLEnumeratorForSignificant(&history_enum))
     return NULL;
+  rebuilt_data->last_time_rebuilt_from_history_ = base::Time::Now();
   for (URLRow row; history_enum.GetNextURL(&row); ) {
     rebuilt_data->IndexRow(history_db, NULL, row, languages,
                            scheme_whitelist);
@@ -471,6 +476,7 @@ void URLIndexPrivateData::CancelPendingUpdates() {
 
 scoped_refptr<URLIndexPrivateData> URLIndexPrivateData::Duplicate() const {
   scoped_refptr<URLIndexPrivateData> data_copy = new URLIndexPrivateData;
+  data_copy->last_time_rebuilt_from_history_ = last_time_rebuilt_from_history_;
   data_copy->word_list_ = word_list_;
   data_copy->available_words_ = available_words_;
   data_copy->word_map_ = word_map_;
@@ -492,6 +498,7 @@ bool URLIndexPrivateData::Empty() const {
 }
 
 void URLIndexPrivateData::Clear() {
+  last_time_rebuilt_from_history_ = base::Time();
   word_list_.clear();
   available_words_.clear();
   word_map_.clear();
@@ -728,8 +735,11 @@ bool URLIndexPrivateData::IndexRow(
     // However, unittest code actually calls this on the UI thread.
     // So we don't do any thread checks.
     VisitVector recent_visits;
+    // Make sure the private data is going to get as many recent visits as
+    // ScoredHistoryMatch::GetFrecency() hopes to use.
+    DCHECK_GE(kMaxVisitsToStoreInCache, ScoredHistoryMatch::kMaxVisitsToScore);
     if (history_db->GetMostRecentVisitsForURL(row_id,
-                                              kMaxVisitsToUse,
+                                              kMaxVisitsToStoreInCache,
                                               &recent_visits))
       UpdateRecentVisits(row_id, recent_visits);
   } else {
@@ -901,7 +911,8 @@ bool URLIndexPrivateData::SaveToFile(const base::FilePath& file_path) {
 void URLIndexPrivateData::SavePrivateData(
     InMemoryURLIndexCacheItem* cache) const {
   DCHECK(cache);
-  cache->set_timestamp(base::Time::Now().ToInternalValue());
+  cache->set_last_rebuild_timestamp(
+      last_time_rebuilt_from_history_.ToInternalValue());
   cache->set_version(saved_cache_version_);
   // history_item_count_ is no longer used but rather than change the protobuf
   // definition use a placeholder. This will go away with the switch to SQLite.
@@ -1033,6 +1044,19 @@ void URLIndexPrivateData::SaveWordStartsMap(
 bool URLIndexPrivateData::RestorePrivateData(
     const InMemoryURLIndexCacheItem& cache,
     const std::string& languages) {
+  last_time_rebuilt_from_history_ =
+      base::Time::FromInternalValue(cache.last_rebuild_timestamp());
+  const base::TimeDelta rebuilt_ago =
+      base::Time::Now() - last_time_rebuilt_from_history_;
+  if ((rebuilt_ago > base::TimeDelta::FromDays(7)) ||
+      (rebuilt_ago < base::TimeDelta::FromDays(-1))) {
+    // Cache is more than a week old or, somehow, from some time in the future.
+    // It's probably a good time to rebuild the index from history to
+    // allow synced entries to now appear, expired entries to disappear, etc.
+    // Allow one day in the future to make the cache not rebuild on simple
+    // system clock changes such as time zone changes.
+    return false;
+  }
   if (cache.has_version()) {
     if (cache.version() < kCurrentCacheFileVersion) {
       // Don't try to restore an old format cache file.  (This will cause
@@ -1270,11 +1294,13 @@ void URLIndexPrivateData::AddHistoryMatch::operator()(
       private_data_.history_info_map_.find(history_id);
   if (hist_pos != private_data_.history_info_map_.end()) {
     const URLRow& hist_item = hist_pos->second.url_row;
+    const VisitInfoVector& visits = hist_pos->second.visits;
     WordStartsMap::const_iterator starts_pos =
         private_data_.word_starts_map_.find(history_id);
     DCHECK(starts_pos != private_data_.word_starts_map_.end());
-    ScoredHistoryMatch match(hist_item, languages_, lower_string_, lower_terms_,
-                             starts_pos->second, now_, bookmark_service_);
+    ScoredHistoryMatch match(hist_item, visits, languages_, lower_string_,
+                             lower_terms_, starts_pos->second, now_,
+                             bookmark_service_);
     if (match.raw_score > 0)
       scored_matches_.push_back(match);
   }

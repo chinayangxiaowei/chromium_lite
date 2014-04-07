@@ -52,8 +52,6 @@ class CreateApplicationShortcutView : public views::DialogDelegateView,
   // Overridden from views::DialogDelegate:
   virtual string16 GetDialogButtonLabel(ui::DialogButton button) const OVERRIDE;
   virtual bool IsDialogButtonEnabled(ui::DialogButton button) const OVERRIDE;
-  virtual bool CanResize() const OVERRIDE;
-  virtual bool CanMaximize() const OVERRIDE;
   virtual ui::ModalType GetModalType() const OVERRIDE;
   virtual string16 GetWindowTitle() const OVERRIDE;
   virtual bool Accept() OVERRIDE;
@@ -78,6 +76,7 @@ class CreateApplicationShortcutView : public views::DialogDelegateView,
 
   // Target shortcut info.
   ShellIntegration::ShortcutInfo shortcut_info_;
+  string16 shortcut_menu_subdir_;
 
   DISALLOW_COPY_AND_ASSIGN(CreateApplicationShortcutView);
 };
@@ -98,6 +97,7 @@ class CreateUrlApplicationShortcutView : public CreateApplicationShortcutView {
   // Favicon download callback.
   void DidDownloadFavicon(
       int id,
+      int http_status_code,
       const GURL& image_url,
       int requested_size,
       const std::vector<SkBitmap>& bitmaps);
@@ -118,15 +118,20 @@ class CreateUrlApplicationShortcutView : public CreateApplicationShortcutView {
 class CreateChromeApplicationShortcutView
     : public CreateApplicationShortcutView {
  public:
-  CreateChromeApplicationShortcutView(Profile* profile,
-                                      const extensions::Extension* app);
+  CreateChromeApplicationShortcutView(
+      Profile* profile,
+      const extensions::Extension* app,
+      const base::Closure& close_callback);
   virtual ~CreateChromeApplicationShortcutView();
+  virtual bool Accept() OVERRIDE;
+  virtual bool Cancel() OVERRIDE;
 
  private:
   void OnShortcutInfoLoaded(
       const ShellIntegration::ShortcutInfo& shortcut_info);
 
   const extensions::Extension* app_;
+  base::Closure close_callback_;
 
   base::WeakPtrFactory<CreateChromeApplicationShortcutView> weak_ptr_factory_;
 

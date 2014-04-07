@@ -7,7 +7,7 @@
 
 #include <set>
 
-#include "base/time.h"
+#include "base/time/time.h"
 #include "cc/animation/animation.h"
 #include "cc/animation/animation_events.h"
 #include "third_party/skia/include/core/SkColor.h"
@@ -191,8 +191,6 @@ class COMPOSITOR_EXPORT LayerAnimationElement {
   virtual void OnAbort(LayerAnimationDelegate* delegate) = 0;
 
   base::TimeDelta duration() const { return duration_; }
-
-  base::TimeDelta duration() { return duration_; }
 
   // Actually start the animation, dispatching to another thread if needed.
   virtual void RequestEffectiveStart(LayerAnimationDelegate* delegate);

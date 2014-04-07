@@ -10,7 +10,7 @@
 #include "base/values.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_manifest_constants.h"
-#include "chrome/common/extensions/features/feature.h"
+#include "chrome/common/extensions/features/feature_channel.h"
 #include "chrome/common/extensions/manifest.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -19,15 +19,12 @@ class ExtensionManifestTest : public testing::Test {
   ExtensionManifestTest();
 
  protected:
-  virtual void SetUp() OVERRIDE;
-  virtual void TearDown() OVERRIDE;
-
   // Helper class that simplifies creating methods that take either a filename
   // to a manifest or the manifest itself.
   class Manifest {
    public:
     explicit Manifest(const char* name);
-    Manifest(DictionaryValue* manifest, const char* name);
+    Manifest(base::DictionaryValue* manifest, const char* name);
     // C++98 requires the copy constructor for a type to be visible if you
     // take a const-ref of a temporary for that type.  Since Manifest
     // contains a scoped_ptr, its implicit copy constructor is declared
@@ -43,19 +40,19 @@ class ExtensionManifestTest : public testing::Test {
 
     const std::string& name() const { return name_; };
 
-    DictionaryValue* GetManifest(char const* test_data_dir,
-                                 std::string* error) const;
+    base::DictionaryValue* GetManifest(char const* test_data_dir,
+                                       std::string* error) const;
 
    private:
     const std::string name_;
-    mutable DictionaryValue* manifest_;
-    mutable scoped_ptr<DictionaryValue> manifest_holder_;
+    mutable base::DictionaryValue* manifest_;
+    mutable scoped_ptr<base::DictionaryValue> manifest_holder_;
   };
 
   // The subdirectory in which to find test data files.
   virtual char const* test_data_dir();
 
-  scoped_ptr<DictionaryValue> LoadManifest(
+  scoped_ptr<base::DictionaryValue> LoadManifest(
       char const* manifest_name,
       std::string* error);
 
@@ -114,7 +111,7 @@ class ExtensionManifestTest : public testing::Test {
 
   // used to differentiate between calls to LoadAndExpectError,
   // LoadAndExpectWarning and LoadAndExpectSuccess via function RunTestcases.
-  enum EXPECT_TYPE {
+  enum ExpectType {
     EXPECT_TYPE_ERROR,
     EXPECT_TYPE_WARNING,
     EXPECT_TYPE_SUCCESS
@@ -138,8 +135,11 @@ class ExtensionManifestTest : public testing::Test {
              int flags);
   };
 
-  void RunTestcases(const Testcase* testcases, size_t num_testcases,
-      EXPECT_TYPE type);
+  void RunTestcases(const Testcase* testcases,
+                    size_t num_testcases,
+                    ExpectType type);
+
+  void RunTestcase(const Testcase& testcase, ExpectType type);
 
   bool enable_apps_;
 
@@ -149,7 +149,7 @@ class ExtensionManifestTest : public testing::Test {
   //
   // These objects nest, so if a test wants to explicitly test the behaviour
   // on stable or beta, declare it inside that test.
-  extensions::Feature::ScopedCurrentChannel current_channel_;
+  extensions::ScopedCurrentChannel current_channel_;
 };
 
 #endif  // CHROME_COMMON_EXTENSIONS_MANIFEST_TESTS_EXTENSION_MANIFEST_TEST_H_

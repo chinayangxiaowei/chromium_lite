@@ -5,9 +5,9 @@
 #include "chrome/common/extensions/mime_types_handler.h"
 
 #include "base/logging.h"
-#include "base/string_util.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/extensions/extension_manifest_constants.h"
@@ -15,8 +15,8 @@
 #include "content/public/common/url_constants.h"
 #include "extensions/common/error_utils.h"
 #include "extensions/common/url_pattern.h"
-#include "googleurl/src/gurl.h"
-#include "googleurl/src/url_util.h"
+#include "url/gurl.h"
+#include "url/url_util.h"
 
 namespace keys = extension_manifest_keys;
 namespace errors = extension_manifest_errors;
@@ -49,8 +49,6 @@ MimeTypesHandlerInfo::~MimeTypesHandlerInfo() {
 // static
 std::vector<std::string> MimeTypesHandler::GetMIMETypeWhitelist() {
   std::vector<std::string> whitelist;
-  if (g_test_extension_id_)
-    whitelist.push_back(*g_test_extension_id_);
   for (size_t i = 0; i < arraysize(kMIMETypeHandlersWhitelist); ++i)
     whitelist.push_back(kMIMETypeHandlersWhitelist[i]);
   return whitelist;
@@ -80,8 +78,6 @@ MimeTypesHandler* MimeTypesHandler::GetHandler(
   return NULL;
 }
 
-std::string* MimeTypesHandler::g_test_extension_id_ = NULL;
-
 MimeTypesHandlerParser::MimeTypesHandlerParser() {
 }
 
@@ -90,7 +86,7 @@ MimeTypesHandlerParser::~MimeTypesHandlerParser() {
 
 bool MimeTypesHandlerParser::Parse(extensions::Extension* extension,
                                    string16* error) {
-  const ListValue* mime_types_value = NULL;
+  const base::ListValue* mime_types_value = NULL;
   if (!extension->manifest()->GetList(keys::kMIMETypes,
                                       &mime_types_value)) {
     *error = ASCIIToUTF16(errors::kInvalidMimeTypesHandler);

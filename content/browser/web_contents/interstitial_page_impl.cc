@@ -8,11 +8,11 @@
 
 #include "base/bind.h"
 #include "base/compiler_specific.h"
-#include "base/message_loop.h"
-#include "base/string_util.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread.h"
-#include "base/utf_string_conversions.h"
-#include "content/browser/dom_storage/dom_storage_context_impl.h"
+#include "content/browser/dom_storage/dom_storage_context_wrapper.h"
 #include "content/browser/dom_storage/session_storage_namespace_impl.h"
 #include "content/browser/loader/resource_dispatcher_host_impl.h"
 #include "content/browser/renderer_host/render_process_host_impl.h"
@@ -34,6 +34,7 @@
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/notification_source.h"
 #include "content/public/browser/storage_partition.h"
+#include "content/public/browser/web_contents_delegate.h"
 #include "content/public/common/bindings_policy.h"
 #include "content/public/common/page_transition_types.h"
 #include "net/base/escape.h"
@@ -76,10 +77,10 @@ class InterstitialPageImpl::InterstitialPageRVHDelegateView
                              int item_height,
                              double item_font_size,
                              int selected_item,
-                             const std::vector<WebMenuItem>& items,
+                             const std::vector<MenuItem>& items,
                              bool right_aligned,
                              bool allow_multiple_selection) OVERRIDE;
-  virtual void StartDragging(const WebDropData& drop_data,
+  virtual void StartDragging(const DropData& drop_data,
                              WebDragOperationsMask operations_allowed,
                              const gfx::ImageSkia& image,
                              const gfx::Vector2d& image_offset,
@@ -134,7 +135,8 @@ InterstitialPageImpl::InterstitialPageImpl(WebContents* web_contents,
                                            bool new_navigation,
                                            const GURL& url,
                                            InterstitialPageDelegate* delegate)
-    : web_contents_(static_cast<WebContentsImpl*>(web_contents)),
+    : WebContentsObserver(web_contents),
+      web_contents_(static_cast<WebContentsImpl*>(web_contents)),
       url_(url),
       new_navigation_(new_navigation),
       should_discard_pending_nav_entry_(new_navigation),
@@ -147,11 +149,10 @@ InterstitialPageImpl::InterstitialPageImpl(WebContents* web_contents,
       should_revert_web_contents_title_(false),
       web_contents_was_loading_(false),
       resource_dispatcher_host_notified_(false),
-      ALLOW_THIS_IN_INITIALIZER_LIST(rvh_delegate_view_(
-          new InterstitialPageRVHDelegateView(this))),
+      rvh_delegate_view_(new InterstitialPageRVHDelegateView(this)),
       create_view_(true),
       delegate_(delegate),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_ptr_factory_(this)) {
+      weak_ptr_factory_(this) {
   InitInterstitialPageMap();
   // It would be inconsistent to create an interstitial with no new navigation
   // (which is the case when the interstitial was triggered by a sub-resource on
@@ -224,11 +225,6 @@ void InterstitialPageImpl::Show() {
                          net::EscapePath(delegate_->GetHTMLContents());
   render_view_host_->NavigateToURL(GURL(data_url));
 
-  notification_registrar_.Add(this,
-                              NOTIFICATION_WEB_CONTENTS_DESTROYED,
-                              Source<WebContents>(web_contents_));
-  notification_registrar_.Add(this, NOTIFICATION_NAV_ENTRY_COMMITTED,
-      Source<NavigationController>(&web_contents_->GetController()));
   notification_registrar_.Add(this, NOTIFICATION_NAV_ENTRY_PENDING,
       Source<NavigationController>(&web_contents_->GetController()));
   notification_registrar_.Add(
@@ -268,7 +264,8 @@ void InterstitialPageImpl::Hide() {
 
   // Shutdown the RVH asynchronously, as we may have been called from a RVH
   // delegate method, and we can't delete the RVH out from under itself.
-  MessageLoop::current()->PostNonNestableTask(FROM_HERE,
+  base::MessageLoop::current()->PostNonNestableTask(
+      FROM_HERE,
       base::Bind(&InterstitialPageImpl::Shutdown,
                  weak_ptr_factory_.GetWeakPtr(),
                  render_view_host_));
@@ -323,20 +320,6 @@ void InterstitialPageImpl::Observe(
         TakeActionOnResourceDispatcher(CANCEL);
       }
       break;
-    case NOTIFICATION_WEB_CONTENTS_DESTROYED:
-    case NOTIFICATION_NAV_ENTRY_COMMITTED:
-      if (action_taken_ == NO_ACTION) {
-        // We are navigating away from the interstitial or closing a tab with an
-        // interstitial.  Default to DontProceed(). We don't just call Hide as
-        // subclasses will almost certainly override DontProceed to do some work
-        // (ex: close pending connections).
-        DontProceed();
-      } else {
-        // User decided to proceed and either the navigation was committed or
-        // the tab was closed before that.
-        Hide();
-      }
-      break;
     case NOTIFICATION_DOM_OPERATION_RESPONSE:
       if (enabled()) {
         Details<DomOperationNotificationDetails> dom_op_details(
@@ -349,6 +332,15 @@ void InterstitialPageImpl::Observe(
   }
 }
 
+void InterstitialPageImpl::NavigationEntryCommitted(
+    const LoadCommittedDetails& load_details) {
+  OnNavigatingAwayOrTabClosing();
+}
+
+void InterstitialPageImpl::WebContentsDestroyed(WebContents* web_contents) {
+  OnNavigatingAwayOrTabClosing();
+}
+
 RenderViewHostDelegateView* InterstitialPageImpl::GetDelegateView() {
   return rvh_delegate_view_.get();
 }
@@ -357,9 +349,10 @@ const GURL& InterstitialPageImpl::GetURL() const {
   return url_;
 }
 
-void InterstitialPageImpl::RenderViewGone(RenderViewHost* render_view_host,
-                                          base::TerminationStatus status,
-                                          int error_code) {
+void InterstitialPageImpl::RenderViewTerminated(
+    RenderViewHost* render_view_host,
+    base::TerminationStatus status,
+    int error_code) {
   // Our renderer died. This should not happen in normal cases.
   // If we haven't already started shutdown, just dismiss the interstitial.
   // We cannot check for enabled() here, because we may have called Disable
@@ -378,7 +371,8 @@ void InterstitialPageImpl::DidNavigate(
     DontProceed();
     return;
   }
-  if (params.transition == PAGE_TRANSITION_AUTO_SUBFRAME) {
+  if (PageTransitionCoreTypeIs(params.transition,
+                               PAGE_TRANSITION_AUTO_SUBFRAME)) {
     // No need to handle navigate message from iframe in the interstitial page.
     return;
   }
@@ -450,9 +444,9 @@ RendererPreferences InterstitialPageImpl::GetRendererPrefs(
   return renderer_preferences_;
 }
 
-webkit_glue::WebPreferences InterstitialPageImpl::GetWebkitPrefs() {
+WebPreferences InterstitialPageImpl::GetWebkitPrefs() {
   if (!enabled())
-    return webkit_glue::WebPreferences();
+    return WebPreferences();
 
   return WebContentsImpl::GetWebkitPrefs(render_view_host_, url_);
 }
@@ -476,6 +470,13 @@ void InterstitialPageImpl::HandleKeyboardEvent(
     web_contents_->HandleKeyboardEvent(event);
 }
 
+#if defined(OS_WIN) && defined(USE_AURA)
+gfx::NativeViewAccessible
+InterstitialPageImpl::GetParentNativeViewAccessible() {
+  return web_contents_->GetParentNativeViewAccessible();
+}
+#endif
+
 WebContents* InterstitialPageImpl::web_contents() const {
   return web_contents_;
 }
@@ -489,16 +490,20 @@ RenderViewHost* InterstitialPageImpl::CreateRenderViewHost() {
   BrowserContext* browser_context = web_contents()->GetBrowserContext();
   scoped_refptr<SiteInstance> site_instance =
       SiteInstance::Create(browser_context);
-  DOMStorageContextImpl* dom_storage_context =
-      static_cast<DOMStorageContextImpl*>(
+  DOMStorageContextWrapper* dom_storage_context =
+      static_cast<DOMStorageContextWrapper*>(
           BrowserContext::GetStoragePartition(
-              browser_context, site_instance)->GetDOMStorageContext());
-  SessionStorageNamespaceImpl* session_storage_namespace_impl =
+              browser_context, site_instance.get())->GetDOMStorageContext());
+  session_storage_namespace_ =
       new SessionStorageNamespaceImpl(dom_storage_context);
 
-  RenderViewHostImpl* render_view_host = new RenderViewHostImpl(
-      site_instance, this, this, MSG_ROUTING_NONE, false,
-      session_storage_namespace_impl);
+  RenderViewHostImpl* render_view_host =
+      new RenderViewHostImpl(site_instance.get(),
+                             this,
+                             this,
+                             MSG_ROUTING_NONE,
+                             MSG_ROUTING_NONE,
+                             false);
   web_contents_->RenderViewForInterstitialPageCreated(render_view_host);
   return render_view_host;
 }
@@ -666,6 +671,7 @@ gfx::Rect InterstitialPageImpl::GetRootWindowResizerRect() const {
 
 void InterstitialPageImpl::CreateNewWindow(
     int route_id,
+    int main_frame_route_id,
     const ViewHostMsg_CreateWindow_Params& params,
     SessionStorageNamespace* session_storage_namespace) {
   NOTREACHED() << "InterstitialPage does not support showing popups yet.";
@@ -698,9 +704,9 @@ void InterstitialPageImpl::ShowCreatedFullscreenWidget(int route_id) {
       << "InterstitialPage does not support showing full screen popups.";
 }
 
-void InterstitialPageImpl::ShowContextMenu(
-    const ContextMenuParams& params,
-    ContextMenuSourceType type) {
+SessionStorageNamespace* InterstitialPageImpl::GetSessionStorageNamespace(
+    SiteInstance* instance) {
+  return session_storage_namespace_.get();
 }
 
 void InterstitialPageImpl::Disable() {
@@ -710,6 +716,20 @@ void InterstitialPageImpl::Disable() {
 void InterstitialPageImpl::Shutdown(RenderViewHostImpl* render_view_host) {
   render_view_host->Shutdown();
   // We are deleted now.
+}
+
+void InterstitialPageImpl::OnNavigatingAwayOrTabClosing() {
+  if (action_taken_ == NO_ACTION) {
+    // We are navigating away from the interstitial or closing a tab with an
+    // interstitial.  Default to DontProceed(). We don't just call Hide as
+    // subclasses will almost certainly override DontProceed to do some work
+    // (ex: close pending connections).
+    DontProceed();
+  } else {
+    // User decided to proceed and either the navigation was committed or
+    // the tab was closed before that.
+    Hide();
+  }
 }
 
 void InterstitialPageImpl::TakeActionOnResourceDispatcher(
@@ -754,14 +774,14 @@ void InterstitialPageImpl::InterstitialPageRVHDelegateView::ShowPopupMenu(
     int item_height,
     double item_font_size,
     int selected_item,
-    const std::vector<WebMenuItem>& items,
+    const std::vector<MenuItem>& items,
     bool right_aligned,
     bool allow_multiple_selection) {
   NOTREACHED() << "InterstitialPage does not support showing popup menus.";
 }
 
 void InterstitialPageImpl::InterstitialPageRVHDelegateView::StartDragging(
-    const WebDropData& drop_data,
+    const DropData& drop_data,
     WebDragOperationsMask allowed_operations,
     const gfx::ImageSkia& image,
     const gfx::Vector2d& image_offset,
@@ -775,6 +795,9 @@ void InterstitialPageImpl::InterstitialPageRVHDelegateView::UpdateDragCursor(
 }
 
 void InterstitialPageImpl::InterstitialPageRVHDelegateView::GotFocus() {
+  WebContents* web_contents = interstitial_page_->web_contents();
+  if (web_contents && web_contents->GetDelegate())
+    web_contents->GetDelegate()->WebContentsFocused(web_contents);
 }
 
 void InterstitialPageImpl::InterstitialPageRVHDelegateView::TakeFocus(

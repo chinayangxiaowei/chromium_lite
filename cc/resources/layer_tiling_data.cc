@@ -4,6 +4,8 @@
 
 #include "cc/resources/layer_tiling_data.h"
 
+#include <vector>
+
 #include "base/logging.h"
 
 namespace cc {
@@ -71,8 +73,8 @@ void LayerTilingData::ContentRectToTileIndices(gfx::Rect content_rect,
                                                int* bottom) const {
   // An empty rect doesn't result in an empty set of tiles, so don't pass an
   // empty rect.
-  // FIXME: Possibly we should fill a vector of tiles instead,
-  //        since the normal use of this function is to enumerate some tiles.
+  // TODO(enne): Possibly we should fill a vector of tiles instead, since the
+  // normal use of this function is to enumerate some tiles.
   DCHECK(!content_rect.IsEmpty());
 
   *left = tiling_data_.TileXIndexFromSrcCoord(content_rect.x());

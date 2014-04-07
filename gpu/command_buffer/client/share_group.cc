@@ -2,12 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "../client/atomicops.h"
-#include "../client/share_group.h"
-#include "../client/gles2_implementation.h"
-#include "../client/program_info_manager.h"
-#include "../common/id_allocator.h"
-#include "../common/logging.h"
+#include "gpu/command_buffer/client/atomicops.h"
+#include "gpu/command_buffer/client/gles2_implementation.h"
+#include "gpu/command_buffer/client/program_info_manager.h"
+#include "gpu/command_buffer/client/share_group.h"
+#include "gpu/command_buffer/common/id_allocator.h"
+#include "gpu/command_buffer/common/logging.h"
 
 namespace gpu {
 namespace gles2 {
@@ -20,10 +20,6 @@ class IdHandler : public IdHandlerInterface {
  public:
   IdHandler() { }
   virtual ~IdHandler() { }
-
-  // Overridden from IdHandlerInterface.
-  virtual void Destroy(GLES2Implementation* /* gl_impl */) OVERRIDE {
-  }
 
   // Overridden from IdHandlerInterface.
   virtual void MakeIds(
@@ -83,10 +79,6 @@ class NonReusedIdHandler : public IdHandlerInterface {
   virtual ~NonReusedIdHandler() {}
 
   // Overridden from IdHandlerInterface.
-  virtual void Destroy(GLES2Implementation* /* gl_impl */) OVERRIDE {
-  }
-
-  // Overridden from IdHandlerInterface.
   virtual void MakeIds(
       GLES2Implementation* /* gl_impl */,
       GLuint id_offset, GLsizei n, GLuint* ids) OVERRIDE {
@@ -124,10 +116,6 @@ class SharedIdHandler : public IdHandlerInterface {
 
   virtual ~SharedIdHandler() {}
 
-  // Overridden from IdHandlerInterface.
-  virtual void Destroy(GLES2Implementation* /* gl_impl */) OVERRIDE {
-  }
-
   virtual void MakeIds(GLES2Implementation* gl_impl,
                        GLuint id_offset,
                        GLsizei n,
@@ -164,12 +152,6 @@ class ThreadSafeIdHandlerWrapper : public IdHandlerInterface {
   virtual ~ThreadSafeIdHandlerWrapper() { }
 
   // Overridden from IdHandlerInterface.
-  virtual void Destroy(GLES2Implementation* gl_impl) OVERRIDE {
-    AutoLock auto_lock(lock_);
-    id_handler_->Destroy(gl_impl);
-  }
-
-  // Overridden from IdHandlerInterface.
   virtual void MakeIds(GLES2Implementation* gl_impl,
                        GLuint id_offset,
                        GLsizei n,
@@ -194,14 +176,12 @@ class ThreadSafeIdHandlerWrapper : public IdHandlerInterface {
   }
 
  private:
-   IdHandlerInterface* id_handler_;
+   scoped_ptr<IdHandlerInterface> id_handler_;
    Lock lock_;
 };
 
-ShareGroup::ShareGroup(bool share_resources, bool bind_generates_resource)
-    : sharing_resources_(share_resources),
-      bind_generates_resource_(bind_generates_resource),
-      gles2_(NULL) {
+ShareGroup::ShareGroup(bool bind_generates_resource)
+    : bind_generates_resource_(bind_generates_resource) {
   if (bind_generates_resource) {
     for (int i = 0; i < id_namespaces::kNumIdNamespaces; ++i) {
       if (i == id_namespaces::kProgramsAndShaders) {
@@ -226,21 +206,11 @@ ShareGroup::ShareGroup(bool share_resources, bool bind_generates_resource)
   program_info_manager_.reset(ProgramInfoManager::Create(false));
 }
 
-void ShareGroup::SetGLES2ImplementationForDestruction(
-    GLES2Implementation* gl_impl) {
-  gles2_ = gl_impl;
-}
-
 void ShareGroup::set_program_info_manager(ProgramInfoManager* manager) {
   program_info_manager_.reset(manager);
 }
 
-ShareGroup::~ShareGroup() {
-  for (int i = 0; i < id_namespaces::kNumIdNamespaces; ++i) {
-    id_handlers_[i]->Destroy(gles2_);
-    id_handlers_[i].reset();
-  }
-}
+ShareGroup::~ShareGroup() {}
 
 }  // namespace gles2
 }  // namespace gpu

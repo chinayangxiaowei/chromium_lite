@@ -16,10 +16,13 @@
 
 #include <map>
 
+#include "base/memory/weak_ptr.h"
+#include "base/values.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "third_party/WebKit/public/web/WebDragOperation.h"
 
-struct BrowserPluginHostMsg_CreateGuest_Params;
+struct BrowserPluginHostMsg_Attach_Params;
 struct BrowserPluginHostMsg_ResizeGuest_Params;
 
 namespace gfx {
@@ -28,9 +31,12 @@ class Point;
 
 namespace content {
 
+class BrowserPluginGuest;
 class BrowserPluginGuestManager;
 class BrowserPluginHostFactory;
+class RenderWidgetHostImpl;
 class WebContentsImpl;
+struct NativeWebKeyboardEvent;
 
 class CONTENT_EXPORT BrowserPluginEmbedder : public WebContentsObserver {
  public:
@@ -46,6 +52,15 @@ class CONTENT_EXPORT BrowserPluginEmbedder : public WebContentsObserver {
       int y,
       const WebContents::GetRenderViewHostCallback& callback);
 
+  // Called when embedder's |rwh| has sent screen rects to renderer.
+  void DidSendScreenRects();
+
+  // Called when embedder's WebContentsImpl has unhandled keyboard input.
+  // Returns whether the BrowserPlugin has handled the keyboard event.
+  // Currently we are only interested in checking for the escape key to
+  // unlock hte guest's pointer lock.
+  bool HandleKeyboardEvent(const NativeWebKeyboardEvent& event);
+
   // Overrides factory for testing. Default (NULL) value indicates regular
   // (non-test) environment.
   static void set_factory_for_testing(BrowserPluginHostFactory* factory) {
@@ -53,8 +68,26 @@ class CONTENT_EXPORT BrowserPluginEmbedder : public WebContentsObserver {
   }
 
   // WebContentsObserver implementation.
-  virtual void RenderViewGone(base::TerminationStatus status) OVERRIDE;
+  virtual void RenderProcessGone(base::TerminationStatus status) OVERRIDE;
   virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE;
+
+  void DragSourceEndedAt(int client_x, int client_y, int screen_x,
+      int screen_y, WebKit::WebDragOperation operation);
+
+  void DragSourceMovedTo(int client_x, int client_y,
+                         int screen_x, int screen_y);
+
+  void OnUpdateDragCursor(bool* handled);
+
+  void DragEnteredGuest(BrowserPluginGuest* guest);
+
+  void DragLeftGuest(BrowserPluginGuest* guest);
+
+  void StartDrag(BrowserPluginGuest* guest);
+
+  void StopDrag(BrowserPluginGuest* guest);
+
+  void SystemDragEnded();
 
  private:
   friend class TestBrowserPluginEmbedder;
@@ -69,9 +102,8 @@ class CONTENT_EXPORT BrowserPluginEmbedder : public WebContentsObserver {
 
   void OnAllocateInstanceID(int request_id);
   void OnAttach(int instance_id,
-                const BrowserPluginHostMsg_CreateGuest_Params& params);
-  void OnCreateGuest(int instance_id,
-                     const BrowserPluginHostMsg_CreateGuest_Params& params);
+                const BrowserPluginHostMsg_Attach_Params& params,
+                const base::DictionaryValue& extra_params);
   void OnPluginAtPositionResponse(int instance_id,
                                   int request_id,
                                   const gfx::Point& position);
@@ -87,6 +119,17 @@ class CONTENT_EXPORT BrowserPluginEmbedder : public WebContentsObserver {
   GetRenderViewHostCallbackMap pending_get_render_view_callbacks_;
   // Next request id for BrowserPluginMsg_PluginAtPositionRequest query.
   int next_get_render_view_request_id_;
+
+  // Used to correctly update the cursor when dragging over a guest, and to
+  // handle a race condition when dropping onto the guest that started the drag
+  // (the race is that the dragend message arrives before the drop message so
+  // the drop never takes place).
+  // crbug.com/233571
+  base::WeakPtr<BrowserPluginGuest> guest_dragging_over_;
+
+  // Pointer to the guest that started the drag, used to forward necessary drag
+  // status messages to the correct guest.
+  base::WeakPtr<BrowserPluginGuest> guest_started_drag_;
 
   DISALLOW_COPY_AND_ASSIGN(BrowserPluginEmbedder);
 };

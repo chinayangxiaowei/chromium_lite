@@ -30,24 +30,30 @@ bool Range::IsEmpty() {
   return start_ >= end_;
 }
 
-inline void IntersectNegativeHalfplane(Range& out, float previous,
-    float current, float target, float time_delta) {
+inline void IntersectNegativeHalfplane(Range* out,
+                                       float previous,
+                                       float current,
+                                       float target,
+                                       float time_delta) {
   float time_per_dist = time_delta / (current - previous);
   float t = (target - current) * time_per_dist;
   if (time_per_dist > 0.0f)
-    out.start_ = std::max(out.start_, t);
+    out->start_ = std::max(out->start_, t);
   else
-    out.end_ = std::min(out.end_, t);
+    out->end_ = std::min(out->end_, t);
 }
 
-inline void IntersectPositiveHalfplane(Range& out, float previous,
-    float current, float target, float time_delta) {
+inline void IntersectPositiveHalfplane(Range* out,
+                                       float previous,
+                                       float current,
+                                       float target,
+                                       float time_delta) {
   float time_per_dist = time_delta / (current - previous);
   float t = (target - current) * time_per_dist;
   if (time_per_dist < 0.0f)
-    out.start_ = std::max(out.start_, t);
+    out->start_ = std::max(out->start_, t);
   else
-    out.end_ = std::min(out.end_, t);
+    out->end_ = std::min(out->end_, t);
 }
 
 }  // namespace
@@ -90,14 +96,11 @@ scoped_ptr<base::Value> TileResolutionAsValue(
 
 scoped_ptr<base::Value> TilePriority::AsValue() const {
   scoped_ptr<base::DictionaryValue> state(new base::DictionaryValue());
-  state->SetBoolean("is_live", is_live);
   state->Set("resolution", TileResolutionAsValue(resolution).release());
   state->Set("time_to_visible_in_seconds",
              MathUtil::AsValueSafely(time_to_visible_in_seconds).release());
   state->Set("distance_to_visible_in_pixels",
              MathUtil::AsValueSafely(distance_to_visible_in_pixels).release());
-  state->Set("current_screen_quad",
-             MathUtil::AsValue(current_screen_quad).release());
   return state.PassAs<base::Value>();
 }
 
@@ -126,16 +129,16 @@ float TilePriority::TimeForBoundsToIntersect(const gfx::RectF& previous_bounds,
   // each other during that period of time.
   Range range(0.0f, kMaxTimeToVisibleInSeconds);
   IntersectPositiveHalfplane(
-      range, previous_bounds.x(), current_bounds.x(),
+      &range, previous_bounds.x(), current_bounds.x(),
       target_bounds.right(), time_delta);
   IntersectNegativeHalfplane(
-      range, previous_bounds.right(), current_bounds.right(),
+      &range, previous_bounds.right(), current_bounds.right(),
       target_bounds.x(), time_delta);
   IntersectPositiveHalfplane(
-      range, previous_bounds.y(), current_bounds.y(),
+      &range, previous_bounds.y(), current_bounds.y(),
       target_bounds.bottom(), time_delta);
   IntersectNegativeHalfplane(
-      range, previous_bounds.bottom(), current_bounds.bottom(),
+      &range, previous_bounds.bottom(), current_bounds.bottom(),
       target_bounds.y(), time_delta);
   return range.IsEmpty() ? kMaxTimeToVisibleInSeconds : range.start_;
 }
@@ -185,6 +188,9 @@ scoped_ptr<base::Value> GlobalStateThatImpactsTilePriority::AsValue() const {
   state->Set("memory_limit_policy",
              TileMemoryLimitPolicyAsValue(memory_limit_policy).release());
   state->SetInteger("memory_limit_in_bytes", memory_limit_in_bytes);
+  state->SetInteger("unused_memory_limit_in_bytes",
+                    unused_memory_limit_in_bytes);
+  state->SetInteger("num_resources_limit", num_resources_limit);
   state->Set("tree_priority", TreePriorityAsValue(tree_priority).release());
   return state.PassAs<base::Value>();
 }

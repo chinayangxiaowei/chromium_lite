@@ -9,17 +9,17 @@
 #include "base/basictypes.h"
 #include "base/logging.h"
 #include "base/prefs/pref_service.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/bookmarks/bookmark_utils.h"
 #include "chrome/browser/history/history_service.h"
-#include "chrome/browser/net/url_fixer_upper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/bookmarks/bookmark_utils.h"
+#include "chrome/browser/ui/views/constrained_window_views.h"
+#include "chrome/common/net/url_fixer_upper.h"
 #include "components/user_prefs/user_prefs.h"
-#include "googleurl/src/gurl.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "grit/locale_settings.h"
@@ -28,7 +28,6 @@
 #include "ui/views/background.h"
 #include "ui/views/controls/button/label_button.h"
 #include "ui/views/controls/label.h"
-#include "ui/views/controls/menu/menu_model_adapter.h"
 #include "ui/views/controls/menu/menu_runner.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/controls/tree/tree_view.h"
@@ -37,6 +36,7 @@
 #include "ui/views/layout/layout_constants.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/dialog_client_view.h"
+#include "url/gurl.h"
 
 using views::GridLayout;
 
@@ -65,7 +65,6 @@ BookmarkEditorView::BookmarkEditorView(
     BookmarkEditor::Configuration configuration)
     : profile_(profile),
       tree_view_(NULL),
-      new_folder_button_(NULL),
       url_label_(NULL),
       url_tf_(NULL),
       title_label_(NULL),
@@ -95,7 +94,7 @@ string16 BookmarkEditorView::GetDialogButtonLabel(
 
 bool BookmarkEditorView::IsDialogButtonEnabled(ui::DialogButton button) const {
   if (button == ui::DIALOG_BUTTON_OK) {
-    if (!bb_model_->IsLoaded())
+    if (!bb_model_->loaded())
       return false;
 
     if (details_.GetNodeType() != BookmarkNode::FOLDER)
@@ -219,9 +218,9 @@ void BookmarkEditorView::ExecuteCommand(int command_id, int event_flags) {
 }
 
 void BookmarkEditorView::Show(gfx::NativeWindow parent) {
-  views::DialogDelegateView::CreateDialogWidget(this, NULL, parent);
+  CreateBrowserModalDialogViews(this, parent);
   UserInputChanged();
-  if (show_tree_ && bb_model_->IsLoaded())
+  if (show_tree_ && bb_model_->loaded())
     ExpandAndSelect();
   GetWidget()->Show();
   // Select all the text in the name Textfield.
@@ -230,13 +229,10 @@ void BookmarkEditorView::Show(gfx::NativeWindow parent) {
   title_tf_->RequestFocus();
 }
 
-void BookmarkEditorView::Close() {
-  DCHECK(GetWidget());
-  GetWidget()->Close();
-}
-
-void BookmarkEditorView::ShowContextMenuForView(views::View* source,
-                                                const gfx::Point& point) {
+void BookmarkEditorView::ShowContextMenuForView(
+    views::View* source,
+    const gfx::Point& point,
+    ui::MenuSourceType source_type) {
   DCHECK_EQ(tree_view_, source);
   if (!tree_view_->GetSelectedNode())
     return;
@@ -244,11 +240,11 @@ void BookmarkEditorView::ShowContextMenuForView(views::View* source,
       (tree_model_->GetParent(tree_view_->GetSelectedNode()) ==
        tree_model_->GetRoot());
 
-  views::MenuModelAdapter adapter(GetMenuModel());
-  context_menu_runner_.reset(new views::MenuRunner(adapter.CreateMenu()));
+  context_menu_runner_.reset(new views::MenuRunner(GetMenuModel()));
 
   if (context_menu_runner_->RunMenuAt(source->GetWidget()->GetTopLevelWidget(),
         NULL, gfx::Rect(point, gfx::Size()), views::MenuItemView::TOPRIGHT,
+        source_type,
         views::MenuRunner::HAS_MNEMONICS | views::MenuRunner::CONTEXT_MENU) ==
         views::MenuRunner::MENU_DELETED)
     return;
@@ -291,8 +287,6 @@ void BookmarkEditorView::Init() {
   }
 
   GridLayout* layout = GridLayout::CreatePanel(this);
-  if (views::DialogDelegate::UseNewStyle())
-    layout->SetInsets(gfx::Insets());
   SetLayoutManager(layout);
 
   const int labels_column_set_id = 0;
@@ -335,9 +329,8 @@ void BookmarkEditorView::Init() {
         l10n_util::GetStringUTF16(IDS_BOOKMARK_EDITOR_URL_LABEL));
 
     url_tf_ = new views::Textfield;
-    PrefService* prefs = profile_ ?
-        components::UserPrefs::Get(profile_) :
-        NULL;
+    PrefService* prefs =
+        profile_ ? user_prefs::UserPrefs::Get(profile_) : NULL;
     url_tf_->SetText(chrome::FormatBookmarkURLForDisplay(url, prefs));
     url_tf_->SetController(this);
     url_tf_->SetAccessibleName(url_label_->text());
@@ -357,7 +350,7 @@ void BookmarkEditorView::Init() {
 
   layout->AddPaddingRow(0, views::kRelatedControlVerticalSpacing);
 
-  if (!show_tree_ || bb_model_->IsLoaded())
+  if (!show_tree_ || bb_model_->loaded())
     Reset();
 }
 
@@ -387,6 +380,10 @@ void BookmarkEditorView::BookmarkNodeRemoved(BookmarkModel* model,
   } else {
     Reset();
   }
+}
+
+void BookmarkEditorView::BookmarkAllNodesRemoved(BookmarkModel* model) {
+  Reset();
 }
 
 void BookmarkEditorView::BookmarkNodeChildrenReordered(
@@ -519,7 +516,7 @@ BookmarkEditorView::EditorNode* BookmarkEditorView::FindNodeWithID(
 }
 
 void BookmarkEditorView::ApplyEdits() {
-  DCHECK(bb_model_->IsLoaded());
+  DCHECK(bb_model_->loaded());
 
   if (tree_view_)
     tree_view_->CommitEdit();
@@ -545,7 +542,7 @@ void BookmarkEditorView::ApplyEdits(EditorNode* parent) {
   string16 new_title(title_tf_->text());
 
   if (!show_tree_) {
-    bookmark_utils::ApplyEditsWithNoFolderChange(
+    BookmarkEditor::ApplyEditsWithNoFolderChange(
         bb_model_, parent_, details_, new_title, new_url);
     return;
   }
@@ -555,7 +552,7 @@ void BookmarkEditorView::ApplyEdits(EditorNode* parent) {
   ApplyNameChangesAndCreateNewFolders(
       bb_model_->root_node(), tree_model_->GetRoot(), parent, &new_parent);
 
-  bookmark_utils::ApplyEditsWithPossibleFolderChange(
+  BookmarkEditor::ApplyEditsWithPossibleFolderChange(
       bb_model_, new_parent, details_, new_title, new_url);
 
   BookmarkExpandedStateTracker::Nodes expanded_nodes;

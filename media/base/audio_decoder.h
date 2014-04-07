@@ -13,7 +13,7 @@
 
 namespace media {
 
-class DataBuffer;
+class AudioBuffer;
 class DemuxerStream;
 
 class MEDIA_EXPORT AudioDecoder {
@@ -31,7 +31,7 @@ class MEDIA_EXPORT AudioDecoder {
   // Initialize an AudioDecoder with the given DemuxerStream, executing the
   // callback upon completion.
   // statistics_cb is used to update global pipeline statistics.
-  virtual void Initialize(const scoped_refptr<DemuxerStream>& stream,
+  virtual void Initialize(DemuxerStream* stream,
                           const PipelineStatusCB& status_cb,
                           const StatisticsCB& statistics_cb) = 0;
 
@@ -45,7 +45,8 @@ class MEDIA_EXPORT AudioDecoder {
   // indicate the end of the stream. A NULL buffer pointer indicates an aborted
   // Read(). This can happen if the DemuxerStream gets flushed and doesn't have
   // any more data to return.
-  typedef base::Callback<void(Status, const scoped_refptr<DataBuffer>&)> ReadCB;
+  typedef base::Callback<void(Status, const scoped_refptr<AudioBuffer>&)>
+      ReadCB;
   virtual void Read(const ReadCB& read_cb) = 0;
 
   // Reset decoder state, dropping any queued encoded data.

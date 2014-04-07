@@ -9,23 +9,23 @@
 namespace json_schema_compiler {
 namespace util {
 
-bool GetItemFromList(const ListValue& from, int index, int* out) {
+bool GetItemFromList(const base::ListValue& from, int index, int* out) {
   return from.GetInteger(index, out);
 }
 
-bool GetItemFromList(const ListValue& from, int index, bool* out) {
+bool GetItemFromList(const base::ListValue& from, int index, bool* out) {
   return from.GetBoolean(index, out);
 }
 
-bool GetItemFromList(const ListValue& from, int index, double* out) {
+bool GetItemFromList(const base::ListValue& from, int index, double* out) {
   return from.GetDouble(index, out);
 }
 
-bool GetItemFromList(const ListValue& from, int index, std::string* out) {
+bool GetItemFromList(const base::ListValue& from, int index, std::string* out) {
   return from.GetString(index, out);
 }
 
-bool GetItemFromList(const ListValue& from,
+bool GetItemFromList(const base::ListValue& from,
                      int index,
                      linked_ptr<base::Value>* out) {
   const base::Value* value = NULL;
@@ -35,9 +35,9 @@ bool GetItemFromList(const ListValue& from,
   return true;
 }
 
-bool GetItemFromList(const ListValue& from, int index,
+bool GetItemFromList(const base::ListValue& from, int index,
     linked_ptr<base::DictionaryValue>* out) {
-  const DictionaryValue* dict = NULL;
+  const base::DictionaryValue* dict = NULL;
   if (!from.GetDictionary(index, &dict))
     return false;
   *out = make_linked_ptr(dict->DeepCopy());
@@ -67,7 +67,30 @@ void AddItemToList(const linked_ptr<base::Value>& from,
 
 void AddItemToList(const linked_ptr<base::DictionaryValue>& from,
                    base::ListValue* out) {
-  out->Append(static_cast<Value*>(from->DeepCopy()));
+  out->Append(static_cast<base::Value*>(from->DeepCopy()));
+}
+
+std::string ValueTypeToString(Value::Type type) {
+  switch(type) {
+    case Value::TYPE_NULL:
+      return "null";
+    case Value::TYPE_BOOLEAN:
+      return "boolean";
+    case Value::TYPE_INTEGER:
+      return "integer";
+    case Value::TYPE_DOUBLE:
+      return "number";
+    case Value::TYPE_STRING:
+      return "string";
+    case Value::TYPE_BINARY:
+      return "binary";
+    case Value::TYPE_DICTIONARY:
+      return "dictionary";
+    case Value::TYPE_LIST:
+      return "list";
+  }
+  NOTREACHED();
+  return "";
 }
 
 }  // namespace api_util

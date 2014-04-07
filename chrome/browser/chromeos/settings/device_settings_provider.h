@@ -15,9 +15,9 @@
 #include "base/gtest_prod_util.h"
 #include "base/memory/weak_ptr.h"
 #include "base/prefs/pref_value_map.h"
-#include "chrome/browser/chromeos/policy/proto/chrome_device_policy.pb.h"
 #include "chrome/browser/chromeos/settings/cros_settings_provider.h"
 #include "chrome/browser/chromeos/settings/device_settings_service.h"
+#include "chrome/browser/policy/proto/chromeos/chrome_device_policy.pb.h"
 
 namespace base {
 class Value;
@@ -73,6 +73,9 @@ class DeviceSettingsProvider : public CrosSettingsProvider,
       const enterprise_management::ChromeDeviceSettingsProto& policy,
       PrefValueMap* new_values_cache) const;
   void DecodeNetworkPolicies(
+      const enterprise_management::ChromeDeviceSettingsProto& policy,
+      PrefValueMap* new_values_cache) const;
+  void DecodeAutoUpdatePolicies(
       const enterprise_management::ChromeDeviceSettingsProto& policy,
       PrefValueMap* new_values_cache) const;
   void DecodeReportingPolicies(

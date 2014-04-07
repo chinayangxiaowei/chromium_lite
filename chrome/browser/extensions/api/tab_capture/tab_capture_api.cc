@@ -6,21 +6,25 @@
 
 #include "chrome/browser/extensions/api/tab_capture/tab_capture_api.h"
 
-#include "base/stringprintf.h"
+#include "base/command_line.h"
+#include "base/strings/stringprintf.h"
 #include "base/values.h"
-#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/extensions/api/tab_capture/tab_capture_registry.h"
 #include "chrome/browser/extensions/api/tab_capture/tab_capture_registry_factory.h"
 #include "chrome/browser/extensions/browser_event_router.h"
 #include "chrome/browser/extensions/event_names.h"
 #include "chrome/browser/extensions/extension_renderer_state.h"
+#include "chrome/browser/extensions/tab_helper.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sessions/session_tab_helper.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/common/extensions/feature_switch.h"
+#include "chrome/common/chrome_switches.h"
+#include "chrome/common/extensions/features/feature.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
+#include "extensions/common/features/feature_provider.h"
 
 using extensions::api::tab_capture::MediaStreamConstraint;
 
@@ -35,6 +39,9 @@ const char kCapturingSameTab[] = "Cannot capture a tab with an active stream.";
 const char kFindingTabError[] = "Error finding tab to capture.";
 const char kNoAudioOrVideo[] = "Capture failed. No audio or video requested.";
 const char kPermissionError[] = "Tab Capture API flag is not enabled.";
+const char kGrantError[] =
+    "Extension has not been invoked for the current page (see activeTab "
+    "permission). Chrome pages cannot be captured.";
 
 // Keys/values for media stream constraints.
 const char kMediaStreamSource[] = "chromeMediaSource";
@@ -44,11 +51,6 @@ const char kMediaStreamSourceTab[] = "tab";
 }  // namespace
 
 bool TabCaptureCaptureFunction::RunImpl() {
-  if (!FeatureSwitch::tab_capture()->IsEnabled()) {
-    error_ = kPermissionError;
-    return false;
-  }
-
   scoped_ptr<api::tab_capture::Capture::Params> params =
       TabCapture::Capture::Params::Create(*args_);
   EXTENSION_FUNCTION_VALIDATE(params.get());
@@ -66,6 +68,21 @@ bool TabCaptureCaptureFunction::RunImpl() {
       target_browser->tab_strip_model()->GetActiveWebContents();
   if (!target_contents) {
     error_ = kFindingTabError;
+    return false;
+  }
+
+  const Extension* extension = GetExtension();
+  const std::string& extension_id = extension->id();
+
+  // Make sure either we have been granted permission to capture through an
+  // extension icon click or our extension is whitelisted.
+  if (!TabHelper::FromWebContents(target_contents)->
+          active_tab_permission_granter()->IsGranted(extension) &&
+      CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
+          switches::kWhitelistedExtensionID) != extension_id &&
+      !FeatureProvider::GetByName("permission")->GetFeature("tabCapture")->
+          IsIdInWhitelist(extension_id)) {
+    error_ = kGrantError;
     return false;
   }
 
@@ -115,7 +132,7 @@ bool TabCaptureCaptureFunction::RunImpl() {
       extensions::TabCaptureRegistryFactory::GetForProfile(profile());
   if (!registry->AddRequest(render_process_id,
                             routing_id,
-                            GetExtension()->id(),
+                            extension_id,
                             tab_id,
                             tab_capture::TAB_CAPTURE_STATE_NONE)) {
     error_ = kCapturingSameTab;
@@ -133,11 +150,6 @@ bool TabCaptureCaptureFunction::RunImpl() {
 }
 
 bool TabCaptureGetCapturedTabsFunction::RunImpl() {
-  if (!FeatureSwitch::tab_capture()->IsEnabled()) {
-    error_ = kPermissionError;
-    return false;
-  }
-
   extensions::TabCaptureRegistry* registry =
       extensions::TabCaptureRegistryFactory::GetForProfile(profile());
 

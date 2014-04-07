@@ -13,11 +13,12 @@
 #include "base/debug/trace_event.h"
 #include "base/i18n/rtl.h"
 #include "base/metrics/histogram.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/autocomplete/autocomplete_classifier.h"
 #include "chrome/browser/autocomplete/autocomplete_classifier_factory.h"
 #include "chrome/browser/autocomplete/autocomplete_match.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/themes/theme_properties.h"
 #include "chrome/browser/themes/theme_service.h"
@@ -32,7 +33,6 @@
 #include "chrome/browser/ui/gtk/tabs/tab_strip_menu_controller.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_delegate.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "content/public/browser/notification_source.h"
 #include "content/public/browser/user_metrics.h"
 #include "content/public/browser/web_contents.h"
@@ -915,7 +915,7 @@ void TabStripGtk::DestroyDraggedTab(TabGtk* tab) {
   gtk_container_remove(GTK_CONTAINER(tabstrip_.get()), tab->widget());
   // If we delete the dragged source tab here, the DestroyDragWidget posted
   // task will be run after the tab is deleted, leading to a crash.
-  MessageLoop::current()->DeleteSoon(FROM_HERE, tab);
+  base::MessageLoop::current()->DeleteSoon(FROM_HERE, tab);
 
   // Force a layout here, because if we've just quickly drag detached a Tab,
   // the stopping of the active animation above may have left the TabStrip in a
@@ -1054,7 +1054,7 @@ void TabStripGtk::TabDetachedAt(WebContents* contents, int index) {
 void TabStripGtk::ActiveTabChanged(WebContents* old_contents,
                                    WebContents* new_contents,
                                    int index,
-                                   bool user_gesture) {
+                                   int reason) {
   TRACE_EVENT0("ui::gtk", "TabStripGtk::ActiveTabChanged");
   ReStack();
 }
@@ -1406,7 +1406,7 @@ void TabStripGtk::RemoveTabAt(int index) {
   // Remove the Tab from the TabStrip's list.
   tab_data_.erase(tab_data_.begin() + index);
 
-  if (!IsDragSessionActive() || !drag_controller_->IsDraggingTab(removed)) {
+  if (!removed->dragging()) {
     gtk_container_remove(GTK_CONTAINER(tabstrip_.get()), removed->widget());
     delete removed;
   }
@@ -1417,7 +1417,7 @@ void TabStripGtk::HandleGlobalMouseMoveEvent() {
     // Mouse moved outside the tab slop zone, start a timer to do a resize
     // layout after a short while...
     if (!weak_factory_.HasWeakPtrs()) {
-      MessageLoop::current()->PostDelayedTask(
+      base::MessageLoop::current()->PostDelayedTask(
           FROM_HERE,
           base::Bind(&TabStripGtk::ResizeLayoutTabs,
                      weak_factory_.GetWeakPtr()),
@@ -1655,14 +1655,14 @@ void TabStripGtk::ReStack() {
 
 void TabStripGtk::AddMessageLoopObserver() {
   if (!added_as_message_loop_observer_) {
-    MessageLoopForUI::current()->AddObserver(this);
+    base::MessageLoopForUI::current()->AddObserver(this);
     added_as_message_loop_observer_ = true;
   }
 }
 
 void TabStripGtk::RemoveMessageLoopObserver() {
   if (added_as_message_loop_observer_) {
-    MessageLoopForUI::current()->RemoveObserver(this);
+    base::MessageLoopForUI::current()->RemoveObserver(this);
     added_as_message_loop_observer_ = false;
   }
 }
@@ -2125,7 +2125,7 @@ void TabStripGtk::OnSizeAllocate(GtkWidget* widget, GtkAllocation* allocation) {
   if (GetTabCount() == 1) {
     Layout();
   } else if (!layout_factory_.HasWeakPtrs()) {
-    MessageLoop::current()->PostDelayedTask(
+    base::MessageLoop::current()->PostDelayedTask(
         FROM_HERE,
         base::Bind(&TabStripGtk::Layout, layout_factory_.GetWeakPtr()),
         base::TimeDelta::FromMilliseconds(kLayoutAfterSizeAllocateMs));

@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/file_util.h"
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
 #include "content/browser/download/download_file_factory.h"
@@ -24,9 +23,9 @@
 #include "content/test/content_browser_test_utils.h"
 #include "content/test/net/url_request_mock_http_job.h"
 #include "content/test/net/url_request_slow_download_job.h"
-#include "googleurl/src/gurl.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/gurl.h"
 
 using testing::_;
 using testing::InvokeWithoutArgs;
@@ -52,9 +51,9 @@ class DragDownloadFileTest : public ContentBrowserTest {
   virtual ~DragDownloadFileTest() {}
 
   void Succeed() {
-    BrowserThread::PostTask(
-        BrowserThread::UI, FROM_HERE,
-        MessageLoopForUI::current()->QuitClosure());
+    BrowserThread::PostTask(BrowserThread::UI,
+                            FROM_HERE,
+                            base::MessageLoopForUI::current()->QuitClosure());
   }
 
   void FailFast() {
@@ -95,16 +94,19 @@ IN_PROC_BROWSER_TEST_F(DragDownloadFileTest, DragDownloadFileTest_NetError) {
       "download-test.lib"))));
   Referrer referrer;
   std::string referrer_encoding;
-  DragDownloadFile* file = new DragDownloadFile(
-      name, scoped_ptr<net::FileStream>(NULL), url, referrer,
-      referrer_encoding, shell()->web_contents());
+  DragDownloadFile* file = new DragDownloadFile(name,
+                                                scoped_ptr<net::FileStream>(),
+                                                url,
+                                                referrer,
+                                                referrer_encoding,
+                                                shell()->web_contents());
   scoped_refptr<MockDownloadFileObserver> observer(
       new MockDownloadFileObserver());
-  EXPECT_CALL(*observer, OnDownloadAborted()).WillOnce(InvokeWithoutArgs(
-      this, &DragDownloadFileTest::Succeed));
-  ON_CALL(*observer, OnDownloadCompleted(_)).WillByDefault(InvokeWithoutArgs(
-      this, &DragDownloadFileTest::FailFast));
-  file->Start(observer);
+  EXPECT_CALL(*observer.get(), OnDownloadAborted())
+      .WillOnce(InvokeWithoutArgs(this, &DragDownloadFileTest::Succeed));
+  ON_CALL(*observer.get(), OnDownloadCompleted(_))
+      .WillByDefault(InvokeWithoutArgs(this, &DragDownloadFileTest::FailFast));
+  file->Start(observer.get());
   RunMessageLoop();
 }
 
@@ -116,21 +118,17 @@ IN_PROC_BROWSER_TEST_F(DragDownloadFileTest, DragDownloadFileTest_Complete) {
   Referrer referrer;
   std::string referrer_encoding;
   net::FileStream* stream = NULL;
-#if defined(OS_POSIX)
-  stream = CreateFileStreamForDrop(
-      &name, GetContentClient()->browser()->GetNetLog());
-#endif
   SetUpServer();
   DragDownloadFile* file = new DragDownloadFile(
       name, scoped_ptr<net::FileStream>(stream), url, referrer,
       referrer_encoding, shell()->web_contents());
   scoped_refptr<MockDownloadFileObserver> observer(
       new MockDownloadFileObserver());
-  EXPECT_CALL(*observer, OnDownloadCompleted(_)).WillOnce(InvokeWithoutArgs(
-      this, &DragDownloadFileTest::Succeed));
-  ON_CALL(*observer, OnDownloadAborted()).WillByDefault(InvokeWithoutArgs(
-      this, &DragDownloadFileTest::FailFast));
-  file->Start(observer);
+  EXPECT_CALL(*observer.get(), OnDownloadCompleted(_))
+      .WillOnce(InvokeWithoutArgs(this, &DragDownloadFileTest::Succeed));
+  ON_CALL(*observer.get(), OnDownloadAborted())
+      .WillByDefault(InvokeWithoutArgs(this, &DragDownloadFileTest::FailFast));
+  file->Start(observer.get());
   RunMessageLoop();
 }
 

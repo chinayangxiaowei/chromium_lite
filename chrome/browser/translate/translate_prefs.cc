@@ -4,9 +4,17 @@
 
 #include "chrome/browser/translate/translate_prefs.h"
 
+#include "base/command_line.h"
 #include "base/prefs/pref_service.h"
-#include "base/string_util.h"
+#include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
 #include "chrome/browser/prefs/scoped_user_pref_update.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/translate/translate_accept_languages.h"
+#include "chrome/browser/translate/translate_manager.h"
+#include "chrome/common/chrome_switches.h"
+#include "chrome/common/pref_names.h"
+#include "chrome/common/translate/translate_util.h"
 #include "components/user_prefs/pref_registry_syncable.h"
 
 const char TranslatePrefs::kPrefTranslateLanguageBlacklist[] =
@@ -19,6 +27,49 @@ const char TranslatePrefs::kPrefTranslateDeniedCount[] =
     "translate_denied_count";
 const char TranslatePrefs::kPrefTranslateAcceptedCount[] =
     "translate_accepted_count";
+const char TranslatePrefs::kPrefTranslateBlockedLanguages[] =
+    "translate_blocked_languages";
+
+namespace {
+
+void GetBlacklistedLanguages(const PrefService* prefs,
+                             std::vector<std::string>* languages) {
+  DCHECK(languages->empty());
+
+  const char* key = TranslatePrefs::kPrefTranslateLanguageBlacklist;
+  const ListValue* list = prefs->GetList(key);
+  for (ListValue::const_iterator it = list->begin(); it != list->end(); ++it) {
+    std::string lang;
+    (*it)->GetAsString(&lang);
+    languages->push_back(lang);
+  }
+}
+
+}  // namespace
+
+namespace {
+
+void AppendLanguageToAcceptLanguages(PrefService* prefs,
+                                     const std::string& language) {
+  if (!TranslateAcceptLanguages::CanBeAcceptLanguage(language))
+    return;
+
+  std::string accept_language = language;
+  TranslateUtil::ToChromeLanguageSynonym(&accept_language);
+
+  std::string accept_languages_str = prefs->GetString(prefs::kAcceptLanguages);
+  std::vector<std::string> accept_languages;
+  base::SplitString(accept_languages_str, ',', &accept_languages);
+  if (std::find(accept_languages.begin(),
+                accept_languages.end(),
+                accept_language) == accept_languages.end()) {
+    accept_languages.push_back(accept_language);
+  }
+  accept_languages_str = JoinString(accept_languages, ',');
+  prefs->SetString(prefs::kAcceptLanguages, accept_languages_str);
+}
+
+}  // namespace
 
 // TranslatePrefs: public: -----------------------------------------------------
 
@@ -26,18 +77,45 @@ TranslatePrefs::TranslatePrefs(PrefService* user_prefs)
     : prefs_(user_prefs) {
 }
 
-bool TranslatePrefs::IsLanguageBlacklisted(
+bool TranslatePrefs::IsBlockedLanguage(
     const std::string& original_language) const {
-  return IsValueBlacklisted(kPrefTranslateLanguageBlacklist, original_language);
+  CommandLine* command_line = CommandLine::ForCurrentProcess();
+  if (command_line->HasSwitch(switches::kEnableTranslateSettings)) {
+    return IsValueBlacklisted(kPrefTranslateBlockedLanguages,
+                              original_language);
+  } else {
+    return IsValueBlacklisted(kPrefTranslateLanguageBlacklist,
+                              original_language);
+  }
 }
 
-void TranslatePrefs::BlacklistLanguage(const std::string& original_language) {
-  BlacklistValue(kPrefTranslateLanguageBlacklist, original_language);
-}
-
-void TranslatePrefs::RemoveLanguageFromBlacklist(
+void TranslatePrefs::BlockLanguage(
     const std::string& original_language) {
-  RemoveValueFromBlacklist(kPrefTranslateLanguageBlacklist, original_language);
+  CommandLine* command_line = CommandLine::ForCurrentProcess();
+  if (command_line->HasSwitch(switches::kEnableTranslateSettings)) {
+    BlacklistValue(kPrefTranslateBlockedLanguages, original_language);
+    AppendLanguageToAcceptLanguages(prefs_, original_language);
+  } else {
+    BlacklistValue(kPrefTranslateLanguageBlacklist, original_language);
+  }
+}
+
+void TranslatePrefs::UnblockLanguage(
+    const std::string& original_language) {
+  CommandLine* command_line = CommandLine::ForCurrentProcess();
+  if (command_line->HasSwitch(switches::kEnableTranslateSettings)) {
+    RemoveValueFromBlacklist(kPrefTranslateBlockedLanguages,
+                             original_language);
+  } else {
+    RemoveValueFromBlacklist(kPrefTranslateLanguageBlacklist,
+                             original_language);
+  }
+}
+
+void TranslatePrefs::RemoveLanguageFromLegacyBlacklist(
+    const std::string& original_language) {
+  RemoveValueFromBlacklist(kPrefTranslateLanguageBlacklist,
+                           original_language);
 }
 
 bool TranslatePrefs::IsSiteBlacklisted(const std::string& site) const {
@@ -90,14 +168,22 @@ void TranslatePrefs::RemoveLanguagePairFromWhitelist(
 }
 
 bool TranslatePrefs::HasBlacklistedLanguages() const {
-  return !IsListEmpty(kPrefTranslateLanguageBlacklist);
+  CommandLine* command_line = CommandLine::ForCurrentProcess();
+  if (command_line->HasSwitch(switches::kEnableTranslateSettings))
+    return !IsListEmpty(kPrefTranslateBlockedLanguages);
+  else
+    return !IsListEmpty(kPrefTranslateLanguageBlacklist);
 }
 
 void TranslatePrefs::ClearBlacklistedLanguages() {
-  prefs_->ClearPref(kPrefTranslateLanguageBlacklist);
+  CommandLine* command_line = CommandLine::ForCurrentProcess();
+  if (command_line->HasSwitch(switches::kEnableTranslateSettings))
+    prefs_->ClearPref(kPrefTranslateBlockedLanguages);
+  else
+    prefs_->ClearPref(kPrefTranslateLanguageBlacklist);
 }
 
-bool TranslatePrefs::HasBlacklistedSites() {
+bool TranslatePrefs::HasBlacklistedSites() const {
   return !IsListEmpty(kPrefTranslateSiteBlacklist);
 }
 
@@ -160,33 +246,65 @@ void TranslatePrefs::ResetTranslationAcceptedCount(
 
 // TranslatePrefs: public, static: ---------------------------------------------
 
-bool TranslatePrefs::CanTranslate(PrefService* user_prefs,
-    const std::string& original_language, const GURL& url) {
-  TranslatePrefs prefs(user_prefs);
-  if (prefs.IsSiteBlacklisted(url.HostNoBrackets()))
-    return false;
-  return (!prefs.IsLanguageBlacklisted(original_language));
+// static
+bool TranslatePrefs::CanTranslateLanguage(Profile* profile,
+                                          const std::string& language) {
+  TranslatePrefs translate_prefs(profile->GetPrefs());
+  bool blocked = translate_prefs.IsBlockedLanguage(language);
+
+  CommandLine* command_line = CommandLine::ForCurrentProcess();
+  if (command_line->HasSwitch(switches::kEnableTranslateSettings)) {
+    bool is_accept_language =
+        TranslateManager::IsAcceptLanguage(profile, language);
+    bool can_be_accept_language =
+        TranslateAcceptLanguages::CanBeAcceptLanguage(language);
+
+    // Don't translate any user black-listed languages. Checking
+    // |is_accept_language| is necessary because if the user eliminates the
+    // language from the preference, it is natural to forget whether or not
+    // the language should be translated. Checking |cannot_be_accept_language|
+    // is also necessary because some minor languages can't be selected in the
+    // language preference even though the language is available in Translate
+    // server.
+    if (blocked && (is_accept_language || !can_be_accept_language))
+      return false;
+  } else {
+    // Don't translate any user user selected language.
+    if (blocked)
+      return false;
+  }
+
+  return true;
 }
 
+// static
 bool TranslatePrefs::ShouldAutoTranslate(PrefService* user_prefs,
     const std::string& original_language, std::string* target_language) {
   TranslatePrefs prefs(user_prefs);
   return prefs.IsLanguageWhitelisted(original_language, target_language);
 }
 
-void TranslatePrefs::RegisterUserPrefs(PrefRegistrySyncable* registry) {
+// static
+void TranslatePrefs::RegisterProfilePrefs(
+    user_prefs::PrefRegistrySyncable* registry) {
   registry->RegisterListPref(kPrefTranslateLanguageBlacklist,
-                             PrefRegistrySyncable::SYNCABLE_PREF);
+                             user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
   registry->RegisterListPref(kPrefTranslateSiteBlacklist,
-                             PrefRegistrySyncable::SYNCABLE_PREF);
-  registry->RegisterDictionaryPref(kPrefTranslateWhitelists,
-                                   PrefRegistrySyncable::SYNCABLE_PREF);
-  registry->RegisterDictionaryPref(kPrefTranslateDeniedCount,
-                                   PrefRegistrySyncable::SYNCABLE_PREF);
-  registry->RegisterDictionaryPref(kPrefTranslateAcceptedCount,
-                                   PrefRegistrySyncable::SYNCABLE_PREF);
+                             user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+  registry->RegisterDictionaryPref(
+      kPrefTranslateWhitelists,
+      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+  registry->RegisterDictionaryPref(
+      kPrefTranslateDeniedCount,
+      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+  registry->RegisterDictionaryPref(
+      kPrefTranslateAcceptedCount,
+      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+  registry->RegisterListPref(kPrefTranslateBlockedLanguages,
+                             user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
 }
 
+// static
 void TranslatePrefs::MigrateUserPrefs(PrefService* user_prefs) {
   // Old format of kPrefTranslateWhitelists
   // - original language -> list of target langs to auto-translate
@@ -206,27 +324,112 @@ void TranslatePrefs::MigrateUserPrefs(PrefService* user_prefs) {
   //   keep auto-translated.
   DictionaryPrefUpdate update(user_prefs, kPrefTranslateWhitelists);
   DictionaryValue* dict = update.Get();
-  if (!dict || dict->empty())
-    return;
-  DictionaryValue::Iterator iter(*dict);
-  while (!iter.IsAtEnd()) {
-    const ListValue* list = NULL;
-    if (!iter.value().GetAsList(&list) || !list)
-      break;  // Dictionary has either been migrated or new format.
-    std::string key = iter.key();
-    // Advance the iterator before removing the current element.
-    iter.Advance();
-    std::string target_lang;
-    if (list->empty() || !list->GetString(list->GetSize() - 1, &target_lang) ||
-        target_lang.empty()) {
-      dict->Remove(key, NULL);
-    } else {
-      dict->SetString(key, target_lang);
+  if (dict && !dict->empty()) {
+    DictionaryValue::Iterator iter(*dict);
+    while (!iter.IsAtEnd()) {
+      const ListValue* list = NULL;
+      if (!iter.value().GetAsList(&list) || !list)
+        break;  // Dictionary has either been migrated or new format.
+      std::string key = iter.key();
+      // Advance the iterator before removing the current element.
+      iter.Advance();
+      std::string target_lang;
+      if (list->empty() ||
+          !list->GetString(list->GetSize() - 1, &target_lang) ||
+          target_lang.empty()) {
+        dict->Remove(key, NULL);
+      } else {
+        dict->SetString(key, target_lang);
+      }
     }
+  }
+
+  // Get the union of the blacklist and the Accept languages, and set this to
+  // the new language set 'translate_blocked_languages'. This is used for the
+  // settings UI for Translate and configration to determine which langauage
+  // should be translated instead of the blacklist. The blacklist is no longer
+  // used after launching the settings UI.
+  // After that, Set 'translate_languages_not_translate' to Accept languages to
+  // enable settings for users.
+  bool merged = user_prefs->HasPrefPath(kPrefTranslateBlockedLanguages);
+
+  const CommandLine& command_line = *CommandLine::ForCurrentProcess();
+  bool enabled_translate_settings =
+      command_line.HasSwitch(switches::kEnableTranslateSettings);
+
+  if (!merged && enabled_translate_settings) {
+    std::vector<std::string> blacklisted_languages;
+    GetBlacklistedLanguages(user_prefs, &blacklisted_languages);
+
+    std::string accept_languages_str =
+        user_prefs->GetString(prefs::kAcceptLanguages);
+    std::vector<std::string> accept_languages;
+    base::SplitString(accept_languages_str, ',', &accept_languages);
+
+    std::vector<std::string> blocked_languages;
+    CreateBlockedLanguages(&blocked_languages,
+                           blacklisted_languages,
+                           accept_languages);
+
+    // Create the new preference kPrefTranslateBlockedLanguages.
+    {
+      ListValue* blocked_languages_list = new ListValue();
+      for (std::vector<std::string>::const_iterator it =
+               blocked_languages.begin();
+           it != blocked_languages.end(); ++it) {
+        blocked_languages_list->Append(new StringValue(*it));
+      }
+      ListPrefUpdate update(user_prefs, kPrefTranslateBlockedLanguages);
+      ListValue* list = update.Get();
+      DCHECK(list != NULL);
+      list->Swap(blocked_languages_list);
+    }
+
+    // Update kAcceptLanguages
+    for (std::vector<std::string>::const_iterator it =
+             blocked_languages.begin();
+         it != blocked_languages.end(); ++it) {
+      std::string lang = *it;
+      TranslateUtil::ToChromeLanguageSynonym(&lang);
+      bool not_found =
+          std::find(accept_languages.begin(), accept_languages.end(), lang) ==
+          accept_languages.end();
+      if (not_found)
+        accept_languages.push_back(lang);
+    }
+
+    std::string new_accept_languages_str = JoinString(accept_languages, ",");
+    user_prefs->SetString(prefs::kAcceptLanguages, new_accept_languages_str);
   }
 }
 
 // TranslatePrefs: private: ----------------------------------------------------
+
+// static
+void TranslatePrefs::CreateBlockedLanguages(
+    std::vector<std::string>* blocked_languages,
+    const std::vector<std::string>& blacklisted_languages,
+    const std::vector<std::string>& accept_languages) {
+  DCHECK(blocked_languages->empty());
+
+  std::set<std::string> result;
+
+  for (std::vector<std::string>::const_iterator it =
+           blacklisted_languages.begin();
+       it != blacklisted_languages.end(); ++it) {
+    result.insert(*it);
+  }
+
+  for (std::vector<std::string>::const_iterator it = accept_languages.begin();
+       it != accept_languages.end(); ++it) {
+    std::string lang = *it;
+    TranslateUtil::ToTranslateLanguageSynonym(&lang);
+    result.insert(lang);
+  }
+
+  blocked_languages->insert(blocked_languages->begin(),
+                            result.begin(), result.end());
+}
 
 bool TranslatePrefs::IsValueInList(const ListValue* list,
     const std::string& in_value) const {

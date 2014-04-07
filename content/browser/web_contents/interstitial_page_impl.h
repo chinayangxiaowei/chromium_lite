@@ -8,14 +8,14 @@
 #include "base/compiler_specific.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/process_util.h"
 #include "content/browser/renderer_host/render_view_host_delegate.h"
 #include "content/browser/renderer_host/render_widget_host_delegate.h"
 #include "content/public/browser/interstitial_page.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
+#include "content/public/browser/web_contents_observer.h"
 #include "content/public/common/renderer_preferences.h"
-#include "googleurl/src/gurl.h"
+#include "url/gurl.h"
 
 namespace content {
 class NavigationEntry;
@@ -33,6 +33,7 @@ enum ResourceRequestAction {
 class CONTENT_EXPORT InterstitialPageImpl
     : public NON_EXPORTED_BASE(InterstitialPage),
       public NotificationObserver,
+      public WebContentsObserver,
       public RenderViewHostDelegate,
       public RenderWidgetHostDelegate {
  public:
@@ -89,12 +90,17 @@ class CONTENT_EXPORT InterstitialPageImpl
                        const NotificationSource& source,
                        const NotificationDetails& details) OVERRIDE;
 
+  // WebContentsObserver implementation:
+  virtual void WebContentsDestroyed(WebContents* web_contents) OVERRIDE;
+  virtual void NavigationEntryCommitted(
+      const LoadCommittedDetails& load_details) OVERRIDE;
+
   // RenderViewHostDelegate implementation:
   virtual RenderViewHostDelegateView* GetDelegateView() OVERRIDE;
   virtual const GURL& GetURL() const OVERRIDE;
-  virtual void RenderViewGone(RenderViewHost* render_view_host,
-                              base::TerminationStatus status,
-                              int error_code) OVERRIDE;
+  virtual void RenderViewTerminated(RenderViewHost* render_view_host,
+                                    base::TerminationStatus status,
+                                    int error_code) OVERRIDE;
   virtual void DidNavigate(
       RenderViewHost* render_view_host,
       const ViewHostMsg_FrameNavigate_Params& params) OVERRIDE;
@@ -104,10 +110,11 @@ class CONTENT_EXPORT InterstitialPageImpl
                            base::i18n::TextDirection title_direction) OVERRIDE;
   virtual RendererPreferences GetRendererPrefs(
       BrowserContext* browser_context) const OVERRIDE;
-  virtual webkit_glue::WebPreferences GetWebkitPrefs() OVERRIDE;
+  virtual WebPreferences GetWebkitPrefs() OVERRIDE;
   virtual gfx::Rect GetRootWindowResizerRect() const OVERRIDE;
   virtual void CreateNewWindow(
       int route_id,
+      int main_frame_route_id,
       const ViewHostMsg_CreateWindow_Params& params,
       SessionStorageNamespace* session_storage_namespace) OVERRIDE;
   virtual void CreateNewWidget(int route_id,
@@ -120,9 +127,9 @@ class CONTENT_EXPORT InterstitialPageImpl
   virtual void ShowCreatedWidget(int route_id,
                                  const gfx::Rect& initial_pos) OVERRIDE;
   virtual void ShowCreatedFullscreenWidget(int route_id) OVERRIDE;
-  virtual void ShowContextMenu(
-      const ContextMenuParams& params,
-      ContextMenuSourceType type) OVERRIDE;
+
+  virtual SessionStorageNamespace* GetSessionStorageNamespace(
+      SiteInstance* instance) OVERRIDE;
 
   // RenderWidgetHostDelegate implementation:
   virtual void RenderWidgetDeleted(
@@ -132,6 +139,9 @@ class CONTENT_EXPORT InterstitialPageImpl
       bool* is_keyboard_shortcut) OVERRIDE;
   virtual void HandleKeyboardEvent(
       const NativeWebKeyboardEvent& event) OVERRIDE;
+#if defined(OS_WIN) && defined(USE_AURA)
+  virtual gfx::NativeViewAccessible GetParentNativeViewAccessible() OVERRIDE;
+#endif
 
   bool enabled() const { return enabled_; }
   WebContents* web_contents() const;
@@ -158,6 +168,8 @@ class CONTENT_EXPORT InterstitialPageImpl
 
   // Shutdown the RVH.  We will be deleted by the time this method returns.
   void Shutdown(RenderViewHostImpl* render_view_host);
+
+  void OnNavigatingAwayOrTabClosing();
 
   // Executes the passed action on the ResourceDispatcher (on the IO thread).
   // Used to block/resume/cancel requests for the RenderViewHost hidden by this
@@ -230,6 +242,8 @@ class CONTENT_EXPORT InterstitialPageImpl
   scoped_ptr<InterstitialPageDelegate> delegate_;
 
   base::WeakPtrFactory<InterstitialPageImpl> weak_ptr_factory_;
+
+  scoped_refptr<SessionStorageNamespace> session_storage_namespace_;
 
   DISALLOW_COPY_AND_ASSIGN(InterstitialPageImpl);
 };

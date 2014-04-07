@@ -10,11 +10,10 @@
 #include "base/basictypes.h"
 #include "base/callback.h"
 #include "base/memory/ref_counted_memory.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "ui/gfx/native_widget_types.h"
 
 class CommandLine;
-class PrefRegistrySyncable;
 
 namespace base {
 class FilePath;
@@ -24,9 +23,13 @@ namespace content {
 class BrowserContext;
 }
 
+namespace user_prefs {
+class PrefRegistrySyncable;
+}
+
 namespace print_dialog_cloud {
 
-void RegisterUserPrefs(PrefRegistrySyncable* registry);
+void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
 
 // Creates a print dialog to print a file on disk.
 // Called on the FILE or UI thread. Even though this may start up a modal

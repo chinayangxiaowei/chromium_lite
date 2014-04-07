@@ -2,43 +2,55 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "apps/launcher.h"
+#include "apps/native_app_window.h"
+#include "apps/shell_window.h"
+#include "apps/shell_window_registry.h"
 #include "base/bind.h"
+#include "base/command_line.h"
 #include "base/file_util.h"
+#include "base/files/scoped_temp_dir.h"
 #include "base/prefs/pref_service.h"
+#include "base/stl_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/test/test_timeouts.h"
 #include "base/threading/platform_thread.h"
-#include "base/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/automation/automation_util.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/devtools/devtools_window.h"
 #include "chrome/browser/extensions/api/permissions/permissions_api.h"
+#include "chrome/browser/extensions/component_loader.h"
+#include "chrome/browser/extensions/event_names.h"
+#include "chrome/browser/extensions/event_router.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/extensions/extension_prefs.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_system.h"
 #include "chrome/browser/extensions/extension_test_message_listener.h"
 #include "chrome/browser/extensions/platform_app_browsertest_util.h"
-#include "chrome/browser/extensions/platform_app_launcher.h"
-#include "chrome/browser/extensions/shell_window_registry.h"
 #include "chrome/browser/tab_contents/render_view_context_menu.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/extensions/application_launch.h"
-#include "chrome/browser/ui/extensions/native_app_window.h"
-#include "chrome/browser/ui/extensions/shell_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/ui/web_contents_modal_dialog_manager.h"
-#include "chrome/common/chrome_notification_types.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/test/base/test_switches.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/user_prefs/pref_registry_syncable.h"
+#include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents_view.h"
 #include "content/public/test/test_utils.h"
-#include "googleurl/src/gurl.h"
+#include "net/test/embedded_test_server/embedded_test_server.h"
+#include "url/gurl.h"
 
+using apps::ShellWindow;
+using apps::ShellWindowRegistry;
 using content::WebContents;
+using web_modal::WebContentsModalDialogManager;
 
 namespace extensions {
 
@@ -96,6 +108,20 @@ class TabsAddedNotificationObserver
   DISALLOW_COPY_AND_ASSIGN(TabsAddedNotificationObserver);
 };
 
+bool CopyTestDataAndSetCommandLineArg(
+    const base::FilePath& test_data_file,
+    const base::FilePath& temp_dir,
+    const char* filename) {
+  base::FilePath path = temp_dir.AppendASCII(
+      filename).NormalizePathSeparators();
+  if (!(base::CopyFile(test_data_file, path)))
+    return false;
+
+  CommandLine* command_line = CommandLine::ForCurrentProcess();
+  command_line->AppendArgPath(path);
+  return true;
+}
+
 const char kTestFilePath[] = "platform_apps/launch_files/test.txt";
 
 }  // namespace
@@ -131,8 +157,7 @@ IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest, EmptyContextMenu) {
   // only include the developer tools.
   WebContents* web_contents = GetFirstShellWindowWebContents();
   ASSERT_TRUE(web_contents);
-  WebKit::WebContextMenuData data;
-  content::ContextMenuParams params(data);
+  content::ContextMenuParams params;
   scoped_ptr<PlatformAppContextMenu> menu;
   menu.reset(new PlatformAppContextMenu(web_contents, params));
   menu->Init();
@@ -156,8 +181,7 @@ IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest, AppWithContextMenu) {
   // separator and the developer tools, is all that should be in the menu.
   WebContents* web_contents = GetFirstShellWindowWebContents();
   ASSERT_TRUE(web_contents);
-  WebKit::WebContextMenuData data;
-  content::ContextMenuParams params(data);
+  content::ContextMenuParams params;
   scoped_ptr<PlatformAppContextMenu> menu;
   menu.reset(new PlatformAppContextMenu(web_contents, params));
   menu->Init();
@@ -184,8 +208,7 @@ IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest, InstalledAppWithContextMenu) {
   // these are all that should be in the menu.
   WebContents* web_contents = GetFirstShellWindowWebContents();
   ASSERT_TRUE(web_contents);
-  WebKit::WebContextMenuData data;
-  content::ContextMenuParams params(data);
+  content::ContextMenuParams params;
   scoped_ptr<PlatformAppContextMenu> menu;
   menu.reset(new PlatformAppContextMenu(web_contents, params));
   menu->Init();
@@ -212,8 +235,7 @@ IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest, AppWithContextMenuTextField) {
   // separator and the developer tools, is all that should be in the menu.
   WebContents* web_contents = GetFirstShellWindowWebContents();
   ASSERT_TRUE(web_contents);
-  WebKit::WebContextMenuData data;
-  content::ContextMenuParams params(data);
+  content::ContextMenuParams params;
   params.is_editable = true;
   scoped_ptr<PlatformAppContextMenu> menu;
   menu.reset(new PlatformAppContextMenu(web_contents, params));
@@ -241,8 +263,7 @@ IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest, AppWithContextMenuSelection) {
   // separator and the developer tools, is all that should be in the menu.
   WebContents* web_contents = GetFirstShellWindowWebContents();
   ASSERT_TRUE(web_contents);
-  WebKit::WebContextMenuData data;
-  content::ContextMenuParams params(data);
+  content::ContextMenuParams params;
   params.selection_text = ASCIIToUTF16("Hello World");
   scoped_ptr<PlatformAppContextMenu> menu;
   menu.reset(new PlatformAppContextMenu(web_contents, params));
@@ -269,8 +290,7 @@ IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest, AppWithContextMenuClicked) {
   // Test that the menu item shows up
   WebContents* web_contents = GetFirstShellWindowWebContents();
   ASSERT_TRUE(web_contents);
-  WebKit::WebContextMenuData data;
-  content::ContextMenuParams params(data);
+  content::ContextMenuParams params;
   params.page_url = GURL("http://foo.bar");
   scoped_ptr<PlatformAppContextMenu> menu;
   menu.reset(new PlatformAppContextMenu(web_contents, params));
@@ -288,7 +308,7 @@ IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest, AppWithContextMenuClicked) {
 IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest, DisallowNavigation) {
   TabsAddedNotificationObserver observer(2);
 
-  ASSERT_TRUE(StartTestServer());
+  ASSERT_TRUE(StartEmbeddedTestServer());
   ASSERT_TRUE(RunPlatformAppTest("platform_apps/navigation")) << message_;
 
   observer.Wait();
@@ -300,7 +320,7 @@ IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest, DisallowNavigation) {
 }
 
 IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest, Iframes) {
-  ASSERT_TRUE(StartTestServer());
+  ASSERT_TRUE(StartEmbeddedTestServer());
   ASSERT_TRUE(RunPlatformAppTest("platform_apps/iframes")) << message_;
 }
 
@@ -314,8 +334,8 @@ IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest, Restrictions) {
 }
 
 // Tests that platform apps can use the chrome.app.window.* API.
-// Flaky, http://crbug.com/167097 .
-IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest, WindowsApi) {
+// It is flaky: http://crbug.com/223467
+IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest, DISABLED_WindowsApi) {
   ASSERT_TRUE(RunPlatformAppTest("platform_apps/windows_api")) << message_;
 }
 
@@ -327,11 +347,11 @@ IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest, PlatformAppsOnly) {
 
 // Tests that platform apps have isolated storage by default.
 IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest, Isolation) {
-  ASSERT_TRUE(StartTestServer());
+  ASSERT_TRUE(StartEmbeddedTestServer());
 
   // Load a (non-app) page under the "localhost" origin that sets a cookie.
-  GURL set_cookie_url = test_server()->GetURL(
-      "files/extensions/platform_apps/isolation/set_cookie.html");
+  GURL set_cookie_url = embedded_test_server()->GetURL(
+      "/extensions/platform_apps/isolation/set_cookie.html");
   GURL::Replacements replace_host;
   std::string host_str("localhost");  // Must stay in scope with replace_host.
   replace_host.SetHostStr(host_str);
@@ -356,7 +376,14 @@ IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest, Isolation) {
   ASSERT_TRUE(RunPlatformAppTest("platform_apps/isolation")) << message_;
 }
 
-IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest, ExtensionWindowingApis) {
+// See crbug.com/248441
+#if defined(OS_WIN)
+#define MAYBE_ExtensionWindowingApis DISABLED_ExtensionWindowingApis
+#else
+#define MAYBE_ExtensionWindowingApis ExtensionWindowingApis
+#endif
+
+IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest, MAYBE_ExtensionWindowingApis) {
   // Initially there should be just the one browser window visible to the
   // extensions API.
   const Extension* extension = LoadExtension(
@@ -371,7 +398,7 @@ IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest, ExtensionWindowingApis) {
   LoadAndLaunchPlatformApp("minimal");
   ASSERT_TRUE(launched_listener.WaitUntilSatisfied());
   ASSERT_EQ(1U, GetShellWindowCount());
-  ShellWindowRegistry::ShellWindowSet shell_windows =
+  ShellWindowRegistry::ShellWindowList shell_windows =
       ShellWindowRegistry::Get(browser()->profile())->shell_windows();
   int shell_window_id = (*shell_windows.begin())->session_id().id();
 
@@ -439,6 +466,95 @@ IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest, LaunchWithRelativeFile) {
   }
 }
 
+// Tests that launch data is sent through if the file extension matches.
+IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest, LaunchWithFileExtension) {
+  SetCommandLineArg(kTestFilePath);
+  ASSERT_TRUE(RunPlatformAppTest("platform_apps/launch_file_by_extension"))
+      << message_;
+}
+
+// Tests that launch data is sent through if the file extension and MIME type
+// both match.
+IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest,
+                       LaunchWithFileExtensionAndMimeType) {
+  SetCommandLineArg(kTestFilePath);
+  ASSERT_TRUE(RunPlatformAppTest(
+      "platform_apps/launch_file_by_extension_and_type")) << message_;
+}
+
+// Tests that launch data is sent through for a file with no extension if a
+// handler accepts "".
+IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest, LaunchWithFileWithoutExtension) {
+  SetCommandLineArg("platform_apps/launch_files/test");
+  ASSERT_TRUE(RunPlatformAppTest("platform_apps/launch_file_with_no_extension"))
+      << message_;
+}
+
+#if !defined(OS_WIN)
+// Tests that launch data is sent through for a file with an empty extension if
+// a handler accepts "".
+IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest, LaunchWithFileEmptyExtension) {
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+  ClearCommandLineArgs();
+  ASSERT_TRUE(CopyTestDataAndSetCommandLineArg(
+      test_data_dir_.AppendASCII(kTestFilePath),
+      temp_dir.path(),
+      "test."));
+  ASSERT_TRUE(RunPlatformAppTest("platform_apps/launch_file_with_no_extension"))
+      << message_;
+}
+
+// Tests that launch data is sent through for a file with an empty extension if
+// a handler accepts *.
+IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest,
+                       LaunchWithFileEmptyExtensionAcceptAny) {
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+  ClearCommandLineArgs();
+  ASSERT_TRUE(CopyTestDataAndSetCommandLineArg(
+      test_data_dir_.AppendASCII(kTestFilePath),
+      temp_dir.path(),
+      "test."));
+  ASSERT_TRUE(RunPlatformAppTest(
+      "platform_apps/launch_file_with_any_extension")) << message_;
+}
+#endif
+
+// Tests that launch data is sent through for a file with no extension if a
+// handler accepts *.
+IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest,
+                       LaunchWithFileWithoutExtensionAcceptAny) {
+  SetCommandLineArg("platform_apps/launch_files/test");
+  ASSERT_TRUE(RunPlatformAppTest(
+      "platform_apps/launch_file_with_any_extension")) << message_;
+}
+
+// Tests that launch data is sent through for a file with an extension if a
+// handler accepts *.
+IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest,
+                       LaunchWithFileAcceptAnyExtension) {
+  SetCommandLineArg(kTestFilePath);
+  ASSERT_TRUE(RunPlatformAppTest(
+      "platform_apps/launch_file_with_any_extension")) << message_;
+}
+
+// Tests that no launch data is sent through if the file has the wrong
+// extension.
+IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest, LaunchWithWrongExtension) {
+  SetCommandLineArg(kTestFilePath);
+  ASSERT_TRUE(RunPlatformAppTest("platform_apps/launch_wrong_extension"))
+      << message_;
+}
+
+// Tests that no launch data is sent through if the file has no extension but
+// the handler requires a specific extension.
+IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest, LaunchWithWrongEmptyExtension) {
+  SetCommandLineArg("platform_apps/launch_files/test");
+  ASSERT_TRUE(RunPlatformAppTest("platform_apps/launch_wrong_extension"))
+      << message_;
+}
+
 // Tests that no launch data is sent through if the file is of the wrong MIME
 // type.
 IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest, LaunchWithWrongType) {
@@ -455,12 +571,12 @@ IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest, LaunchWithNoIntent) {
       << message_;
 }
 
-// Tests that no launch data is sent through if the file MIME type cannot
-// be read.
+// Tests that launch data is sent through with the MIME type set to
+// application/octet-stream if the file MIME type cannot be read.
 IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest, LaunchNoType) {
   SetCommandLineArg("platform_apps/launch_files/test.unknownextension");
-  ASSERT_TRUE(RunPlatformAppTest("platform_apps/launch_invalid"))
-      << message_;
+  ASSERT_TRUE(RunPlatformAppTest(
+      "platform_apps/launch_application_octet_stream")) << message_;
 }
 
 // Tests that no launch data is sent through if the file does not exist.
@@ -496,7 +612,7 @@ IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest, GetDisplayPath) {
 #endif  // defined(OS_CHROMEOS)
 
 IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest, OpenLink) {
-  ASSERT_TRUE(StartTestServer());
+  ASSERT_TRUE(StartEmbeddedTestServer());
   content::WindowedNotificationObserver observer(
       chrome::NOTIFICATION_TAB_ADDED,
       content::Source<content::WebContentsDelegate>(browser()));
@@ -521,6 +637,94 @@ IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest, MutationEventsDisabled) {
 IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest,
                        MAYBE_ShellWindowRestorePosition) {
   ASSERT_TRUE(RunPlatformAppTest("platform_apps/geometry"));
+}
+
+// This appears to be unreliable on linux.
+// TODO(stevenjb): Investigate and enable
+#if defined(OS_LINUX) && !defined(USE_ASH)
+#define MAYBE_ShellWindowRestoreState DISABLED_ShellWindowRestoreState
+#else
+#define MAYBE_ShellWindowRestoreState ShellWindowRestoreState
+#endif
+IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest,
+                       MAYBE_ShellWindowRestoreState) {
+  ASSERT_TRUE(RunPlatformAppTest("platform_apps/restore_state"));
+}
+
+IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest,
+                       ShellWindowAdjustBoundsToBeVisibleOnScreen) {
+  const Extension* extension = LoadAndLaunchPlatformApp("minimal");
+  ShellWindow* window = CreateShellWindow(extension);
+
+  // The screen bounds didn't change, the cached bounds didn't need to adjust.
+  gfx::Rect cached_bounds(80, 100, 400, 400);
+  gfx::Rect cached_screen_bounds(0, 0, 1600, 900);
+  gfx::Rect current_screen_bounds(0, 0, 1600, 900);
+  gfx::Size minimum_size(200, 200);
+  gfx::Rect bounds;
+  CallAdjustBoundsToBeVisibleOnScreenForShellWindow(window,
+                                                    cached_bounds,
+                                                    cached_screen_bounds,
+                                                    current_screen_bounds,
+                                                    minimum_size,
+                                                    &bounds);
+  EXPECT_EQ(bounds, cached_bounds);
+
+  // We have an empty screen bounds, the cached bounds didn't need to adjust.
+  gfx::Rect empty_screen_bounds;
+  CallAdjustBoundsToBeVisibleOnScreenForShellWindow(window,
+                                                    cached_bounds,
+                                                    empty_screen_bounds,
+                                                    current_screen_bounds,
+                                                    minimum_size,
+                                                    &bounds);
+  EXPECT_EQ(bounds, cached_bounds);
+
+  // Cached bounds is completely off the new screen bounds in horizontal
+  // locations. Expect to reposition the bounds.
+  gfx::Rect horizontal_out_of_screen_bounds(-800, 100, 400, 400);
+  CallAdjustBoundsToBeVisibleOnScreenForShellWindow(
+      window,
+      horizontal_out_of_screen_bounds,
+      gfx::Rect(-1366, 0, 1600, 900),
+      current_screen_bounds,
+      minimum_size,
+      &bounds);
+  EXPECT_EQ(bounds, gfx::Rect(0, 100, 400, 400));
+
+  // Cached bounds is completely off the new screen bounds in vertical
+  // locations. Expect to reposition the bounds.
+  gfx::Rect vertical_out_of_screen_bounds(10, 1000, 400, 400);
+  CallAdjustBoundsToBeVisibleOnScreenForShellWindow(
+      window,
+      vertical_out_of_screen_bounds,
+      gfx::Rect(-1366, 0, 1600, 900),
+      current_screen_bounds,
+      minimum_size,
+      &bounds);
+  EXPECT_EQ(bounds, gfx::Rect(10, 500, 400, 400));
+
+  // From a large screen resulotion to a small one. Expect it fit on screen.
+  gfx::Rect big_cache_bounds(10, 10, 1000, 1000);
+  CallAdjustBoundsToBeVisibleOnScreenForShellWindow(
+      window,
+      big_cache_bounds,
+      gfx::Rect(0, 0, 1600, 1000),
+      gfx::Rect(0, 0, 800, 600),
+      minimum_size,
+      &bounds);
+  EXPECT_EQ(bounds, gfx::Rect(0, 0, 800, 600));
+
+  // Don't resize the bounds smaller than minimum size, when the minimum size is
+  // larger than the screen.
+  CallAdjustBoundsToBeVisibleOnScreenForShellWindow(
+      window,
+      big_cache_bounds,
+      gfx::Rect(0, 0, 1600, 1000),
+      gfx::Rect(0, 0, 800, 600),
+      gfx::Size(900, 900),
+      &bounds);
+  EXPECT_EQ(bounds, gfx::Rect(0, 0, 900, 900));
 }
 
 namespace {
@@ -584,11 +788,28 @@ void PlatformAppDevToolsBrowserTest::RunTestWithDevTools(
 
 }  // namespace
 
-IN_PROC_BROWSER_TEST_F(PlatformAppDevToolsBrowserTest, ReOpenedWithID) {
+// http://crbug.com/246634
+#if defined(OS_CHROMEOS)
+#define MAYBE_ReOpenedWithID DISABLED_ReOpenedWithID
+#else
+#define MAYBE_ReOpenedWithID ReOpenedWithID
+#endif
+IN_PROC_BROWSER_TEST_F(PlatformAppDevToolsBrowserTest, MAYBE_ReOpenedWithID) {
+#if defined(OS_WIN) && defined(USE_ASH)
+  // Disable this test in Metro+Ash for now (http://crbug.com/262796).
+  if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kAshBrowserTests))
+    return;
+#endif
   RunTestWithDevTools("minimal_id", RELAUNCH | HAS_ID);
 }
 
-IN_PROC_BROWSER_TEST_F(PlatformAppDevToolsBrowserTest, ReOpenedWithURL) {
+// http://crbug.com/246999
+#if defined(OS_CHROMEOS) || defined(OS_WIN)
+#define MAYBE_ReOpenedWithURL DISABLED_ReOpenedWithURL
+#else
+#define MAYBE_ReOpenedWithURL ReOpenedWithURL
+#endif
+IN_PROC_BROWSER_TEST_F(PlatformAppDevToolsBrowserTest, MAYBE_ReOpenedWithURL) {
   RunTestWithDevTools("minimal", RELAUNCH);
 }
 
@@ -734,19 +955,15 @@ IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest,
       extension_service()->extension_prefs();
 
   // Clear the registered events to ensure they are updated.
-  extension_prefs->SetRegisteredEvents(extension->id(),
-                                       std::set<std::string>());
+  extensions::ExtensionSystem::Get(browser()->profile())->event_router()->
+      SetRegisteredEvents(extension->id(), std::set<std::string>());
 
-  const base::StringValue old_version("1");
-  std::string pref_path("extensions.settings.");
-  pref_path += extension->id();
-  pref_path += ".manifest.version";
-  // TODO(joi): Do registrations up front.
-  PrefRegistrySyncable* registry = static_cast<PrefRegistrySyncable*>(
-      extension_prefs->pref_service()->DeprecatedGetPrefRegistry());
-  registry->RegisterStringPref(
-      pref_path.c_str(), std::string(), PrefRegistrySyncable::UNSYNCABLE_PREF);
-  extension_prefs->pref_service()->Set(pref_path.c_str(), old_version);
+  DictionaryPrefUpdate update(extension_prefs->pref_service(),
+                              ExtensionPrefs::kExtensionsPref);
+  DictionaryValue* dict = update.Get();
+  std::string key(extension->id());
+  key += ".manifest.version";
+  dict->SetString(key, "1");
 }
 
 // Component App Test 3 of 3: simulate a component extension upgrade that
@@ -790,7 +1007,9 @@ IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest, MAYBE_Messaging) {
 #if defined(OS_LINUX) && !defined(OS_CHROMEOS) && defined(USE_AURA)
 #define MAYBE_WebContentsHasFocus DISABLED_WebContentsHasFocus
 #else
-#define MAYBE_WebContentsHasFocus WebContentsHasFocus
+// This test depends on focus and so needs to be in interactive_ui_tests.
+// http://crbug.com/227041
+#define MAYBE_WebContentsHasFocus DISABLED_WebContentsHasFocus
 #endif
 IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest, MAYBE_WebContentsHasFocus) {
   ExtensionTestMessageListener launched_listener("Launched", true);
@@ -798,10 +1017,72 @@ IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest, MAYBE_WebContentsHasFocus) {
   ASSERT_TRUE(launched_listener.WaitUntilSatisfied());
 
   EXPECT_EQ(1LU, GetShellWindowCount());
-  ShellWindowRegistry::ShellWindowSet shell_windows = ShellWindowRegistry::Get(
+  ShellWindowRegistry::ShellWindowList shell_windows = ShellWindowRegistry::Get(
       browser()->profile())->shell_windows();
   EXPECT_TRUE((*shell_windows.begin())->web_contents()->
       GetRenderWidgetHostView()->HasFocus());
 }
+
+
+#if defined(OS_CHROMEOS)
+
+class PlatformAppIncognitoBrowserTest : public PlatformAppBrowserTest,
+                                        public ShellWindowRegistry::Observer {
+ public:
+  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+    // Tell chromeos to launch in Guest mode, aka incognito.
+    command_line->AppendSwitch(switches::kIncognito);
+    PlatformAppBrowserTest::SetUpCommandLine(command_line);
+  }
+  virtual void SetUp() OVERRIDE {
+    // Make sure the file manager actually gets loaded.
+    ComponentLoader::EnableBackgroundExtensionsForTesting();
+    PlatformAppBrowserTest::SetUp();
+  }
+
+  // ShellWindowRegistry::Observer implementation.
+  virtual void OnShellWindowAdded(ShellWindow* shell_window) OVERRIDE {
+    opener_app_ids_.insert(shell_window->extension()->id());
+  }
+  virtual void OnShellWindowIconChanged(ShellWindow* shell_window) OVERRIDE {}
+  virtual void OnShellWindowRemoved(ShellWindow* shell_window) OVERRIDE {}
+
+ protected:
+  // A set of ids of apps we've seen open a shell window.
+  std::set<std::string> opener_app_ids_;
+};
+
+IN_PROC_BROWSER_TEST_F(PlatformAppIncognitoBrowserTest, IncognitoComponentApp) {
+  // Get the file manager app.
+  const Extension* file_manager = extension_service()->GetExtensionById(
+      "hhaomjibdihmijegdhdafkllkbggdgoj", false);
+  ASSERT_TRUE(file_manager != NULL);
+  Profile* incognito_profile = profile()->GetOffTheRecordProfile();
+  ASSERT_TRUE(incognito_profile != NULL);
+
+  // Wait until the file manager has had a chance to register its listener
+  // for the launch event.
+  EventRouter* router = ExtensionSystem::Get(incognito_profile)->event_router();
+  ASSERT_TRUE(router != NULL);
+  while (!router->ExtensionHasEventListener(file_manager->id(),
+                                            event_names::kOnLaunched)) {
+    content::RunAllPendingInMessageLoop();
+  }
+
+  // Listen for new shell windows so we see the file manager app launch itself.
+  ShellWindowRegistry* registry = ShellWindowRegistry::Get(incognito_profile);
+  ASSERT_TRUE(registry != NULL);
+  registry->AddObserver(this);
+
+  chrome::AppLaunchParams params(incognito_profile, file_manager, 0);
+  chrome::OpenApplication(params);
+
+  while (!ContainsKey(opener_app_ids_, file_manager->id())) {
+    content::RunAllPendingInMessageLoop();
+  }
+}
+
+#endif  // defined(OS_CHROMEOS)
+
 
 }  // namespace extensions

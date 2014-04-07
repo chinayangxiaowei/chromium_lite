@@ -5,21 +5,19 @@
 #include "chrome/browser/chromeos/extensions/info_private_api.h"
 
 #include "base/values.h"
-#include "chrome/browser/chromeos/cros/cros_library.h"
-#include "chrome/browser/chromeos/cros/network_library.h"
+#include "chrome/browser/chromeos/login/startup_utils.h"
 #include "chrome/browser/chromeos/login/user_manager.h"
-#include "chrome/browser/chromeos/login/wizard_controller.h"
 #include "chrome/browser/chromeos/system/statistics_provider.h"
+#include "chromeos/network/device_state.h"
+#include "chromeos/network/network_handler.h"
+#include "chromeos/network/network_state_handler.h"
+#include "third_party/cros_system_api/dbus/service_constants.h"
 
-using chromeos::CrosLibrary;
-using chromeos::NetworkLibrary;
+using chromeos::NetworkHandler;
 
 namespace extensions {
 
 namespace {
-
-// Name of machine statistic property with HWID.
-const char kHardwareClass[] = "hardware_class";
 
 // Key which corresponds to the HWID setting.
 const char kPropertyHWID[] = "hwid";
@@ -29,9 +27,6 @@ const char kPropertyHomeProvider[] = "homeProvider";
 
 // Key which corresponds to the initial_locale property.
 const char kPropertyInitialLocale[] = "initialLocale";
-
-// Name of machine statistic property with board.
-const char kPropertyReleaseBoard[] = "CHROMEOS_RELEASE_BOARD";
 
 // Key which corresponds to the board property in JS.
 const char kPropertyBoard[] = "board";
@@ -69,19 +64,24 @@ base::Value* ChromeosInfoPrivateGetFunction::GetValue(
     std::string hwid;
     chromeos::system::StatisticsProvider* provider =
         chromeos::system::StatisticsProvider::GetInstance();
-    provider->GetMachineStatistic(kHardwareClass, &hwid);
+    provider->GetMachineStatistic(chromeos::system::kHardwareClass, &hwid);
     return new base::StringValue(hwid);
   } else if (property_name == kPropertyHomeProvider) {
-    NetworkLibrary* netlib = CrosLibrary::Get()->GetNetworkLibrary();
-    return new base::StringValue(netlib->GetCellularHomeCarrierId());
+    const chromeos::DeviceState* cellular_device =
+        NetworkHandler::Get()->network_state_handler()->GetDeviceStateByType(
+            flimflam::kTypeCellular);
+    std::string home_provider_id;
+    if (cellular_device)
+      home_provider_id = cellular_device->home_provider_id();
+    return new base::StringValue(home_provider_id);
   } else if (property_name == kPropertyInitialLocale) {
     return new base::StringValue(
-        chromeos::WizardController::GetInitialLocale());
+        chromeos::StartupUtils::GetInitialLocale());
   } else if (property_name == kPropertyBoard) {
     std::string board;
     chromeos::system::StatisticsProvider* provider =
         chromeos::system::StatisticsProvider::GetInstance();
-    provider->GetMachineStatistic(kPropertyReleaseBoard, &board);
+    provider->GetMachineStatistic(chromeos::system::kMachineInfoBoard, &board);
     return new base::StringValue(board);
   } else if (property_name == kPropertyOwner) {
     return Value::CreateBooleanValue(

@@ -11,7 +11,7 @@
 #include "base/i18n/time_formatting.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/prefs/pref_service.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/crash_upload_list.h"
@@ -78,7 +78,7 @@ class CrashesDOMHandler : public WebUIMessageHandler,
   virtual void RegisterMessages() OVERRIDE;
 
   // CrashUploadList::Delegate implemenation.
-  virtual void OnCrashListAvailable() OVERRIDE;
+  virtual void OnUploadListAvailable() OVERRIDE;
 
  private:
   // Asynchronously fetches the list of crashes. Called from JS.
@@ -104,7 +104,7 @@ CrashesDOMHandler::~CrashesDOMHandler() {
 }
 
 void CrashesDOMHandler::RegisterMessages() {
-  upload_list_->LoadCrashListAsynchronously();
+  upload_list_->LoadUploadListAsynchronously();
 
   web_ui()->RegisterMessageCallback("requestCrashList",
       base::Bind(&CrashesDOMHandler::HandleRequestCrashes,
@@ -112,32 +112,31 @@ void CrashesDOMHandler::RegisterMessages() {
 }
 
 void CrashesDOMHandler::HandleRequestCrashes(const ListValue* args) {
-  if (!CrashesUI::CrashReportingEnabled() || list_available_)
+  if (!CrashesUI::CrashReportingUIEnabled() || list_available_)
     UpdateUI();
   else
     js_request_pending_ = true;
 }
 
-void CrashesDOMHandler::OnCrashListAvailable() {
+void CrashesDOMHandler::OnUploadListAvailable() {
   list_available_ = true;
   if (js_request_pending_)
     UpdateUI();
 }
 
 void CrashesDOMHandler::UpdateUI() {
-  bool crash_reporting_enabled = CrashesUI::CrashReportingEnabled();
+  bool crash_reporting_enabled = CrashesUI::CrashReportingUIEnabled();
   ListValue crash_list;
 
   if (crash_reporting_enabled) {
-    std::vector<CrashUploadList::CrashInfo> crashes;
-    upload_list_->GetUploadedCrashes(50, &crashes);
+    std::vector<CrashUploadList::UploadInfo> crashes;
+    upload_list_->GetUploads(50, &crashes);
 
-    for (std::vector<CrashUploadList::CrashInfo>::iterator i = crashes.begin();
+    for (std::vector<CrashUploadList::UploadInfo>::iterator i = crashes.begin();
          i != crashes.end(); ++i) {
       DictionaryValue* crash = new DictionaryValue();
-      crash->SetString("id", i->crash_id);
-      crash->SetString("time",
-                       base::TimeFormatFriendlyDateAndTime(i->crash_time));
+      crash->SetString("id", i->id);
+      crash->SetString("time", base::TimeFormatFriendlyDateAndTime(i->time));
       crash_list.Append(crash);
     }
   }
@@ -175,15 +174,21 @@ base::RefCountedMemory* CrashesUI::GetFaviconResourceBytes(
 }
 
 // static
-bool CrashesUI::CrashReportingEnabled() {
-#if defined(GOOGLE_CHROME_BUILD) && !defined(OS_CHROMEOS)
-  PrefService* prefs = g_browser_process->local_state();
-  return prefs->GetBoolean(prefs::kMetricsReportingEnabled);
-#elif defined(GOOGLE_CHROME_BUILD) && defined(OS_CHROMEOS)
+bool CrashesUI::CrashReportingUIEnabled() {
+#if defined(GOOGLE_CHROME_BUILD)
+#if defined(OS_CHROMEOS)
   bool reporting_enabled = false;
   chromeos::CrosSettings::Get()->GetBoolean(chromeos::kStatsReportingPref,
                                             &reporting_enabled);
   return reporting_enabled;
+#elif defined(OS_ANDROID)
+  // Android has it's own setings for metrics / crash uploading.
+  PrefService* prefs = g_browser_process->local_state();
+  return prefs->GetBoolean(prefs::kCrashReportingEnabled);
+#else
+  PrefService* prefs = g_browser_process->local_state();
+  return prefs->GetBoolean(prefs::kMetricsReportingEnabled);
+#endif
 #else
   return false;
 #endif

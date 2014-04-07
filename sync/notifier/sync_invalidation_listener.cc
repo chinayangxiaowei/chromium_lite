@@ -31,11 +31,10 @@ SyncInvalidationListener::Delegate::~Delegate() {}
 SyncInvalidationListener::SyncInvalidationListener(
     base::TickClock* tick_clock,
     scoped_ptr<notifier::PushClient> push_client)
-    : weak_ptr_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)),
-      ack_tracker_(tick_clock, ALLOW_THIS_IN_INITIALIZER_LIST(this)),
+    : weak_ptr_factory_(this),
+      ack_tracker_(tick_clock, this),
       push_client_(push_client.get()),
-      sync_system_resources_(push_client.Pass(),
-                             ALLOW_THIS_IN_INITIALIZER_LIST(this)),
+      sync_system_resources_(push_client.Pass(), this),
       delegate_(NULL),
       ticl_state_(DEFAULT_INVALIDATION_ERROR),
       push_client_state_(DEFAULT_INVALIDATION_ERROR) {
@@ -103,16 +102,6 @@ void SyncInvalidationListener::Start(
   registration_manager_.reset(
       new RegistrationManager(invalidation_client_.get()));
 
-  // TODO(rlarocque): This call exists as part of an effort to move the
-  // invalidator's ID out of sync.  It writes the provided (sync-managed) ID to
-  // storage that lives on the UI thread.  Once this has been in place for a
-  // milestone or two, we can remove it and start looking for invalidator client
-  // IDs exclusively in the InvalidationStateTracker.  See crbug.com/124142.
-  invalidation_state_tracker_.Call(
-      FROM_HERE,
-      &InvalidationStateTracker::SetInvalidatorClientId,
-      client_id);
-
   // Set up reminders for any invalidations that have not been locally
   // acknowledged.
   ObjectIdSet unacknowledged_ids;
@@ -139,7 +128,7 @@ void SyncInvalidationListener::UpdateRegisteredIds(const ObjectIdSet& ids) {
   // |ticl_state_| can go to INVALIDATIONS_ENABLED even without a
   // working XMPP connection (as observed by us), so check it instead
   // of GetState() (see http://crbug.com/139424).
-  if (ticl_state_ == INVALIDATIONS_ENABLED && registration_manager_.get()) {
+  if (ticl_state_ == INVALIDATIONS_ENABLED && registration_manager_) {
     DoRegistrationUpdate();
   }
 }
@@ -216,7 +205,7 @@ void SyncInvalidationListener::Invalidate(
 
   ObjectIdSet ids;
   ids.insert(id);
-  PrepareInvalidation(ids, payload, client, ack_handle);
+  PrepareInvalidation(ids, invalidation.version(), payload, client, ack_handle);
 }
 
 void SyncInvalidationListener::InvalidateUnknownVersion(
@@ -229,7 +218,12 @@ void SyncInvalidationListener::InvalidateUnknownVersion(
 
   ObjectIdSet ids;
   ids.insert(object_id);
-  PrepareInvalidation(ids, std::string(), client, ack_handle);
+  PrepareInvalidation(
+      ids,
+      Invalidation::kUnknownVersion,
+      std::string(),
+      client,
+      ack_handle);
 }
 
 // This should behave as if we got an invalidation with version
@@ -241,11 +235,17 @@ void SyncInvalidationListener::InvalidateAll(
   DCHECK_EQ(client, invalidation_client_.get());
   DVLOG(1) << "InvalidateAll";
 
-  PrepareInvalidation(registered_ids_, std::string(), client, ack_handle);
+  PrepareInvalidation(
+      registered_ids_,
+      Invalidation::kUnknownVersion,
+      std::string(),
+      client,
+      ack_handle);
 }
 
 void SyncInvalidationListener::PrepareInvalidation(
     const ObjectIdSet& ids,
+    int64 version,
     const std::string& payload,
     invalidation::InvalidationClient* client,
     const invalidation::AckHandle& ack_handle) {
@@ -261,6 +261,7 @@ void SyncInvalidationListener::PrepareInvalidation(
       base::Bind(&SyncInvalidationListener::EmitInvalidation,
                  weak_ptr_factory_.GetWeakPtr(),
                  ids,
+                 version,
                  payload,
                  client,
                  ack_handle));
@@ -268,13 +269,14 @@ void SyncInvalidationListener::PrepareInvalidation(
 
 void SyncInvalidationListener::EmitInvalidation(
     const ObjectIdSet& ids,
+    int64 version,
     const std::string& payload,
     invalidation::InvalidationClient* client,
     const invalidation::AckHandle& ack_handle,
     const AckHandleMap& local_ack_handles) {
   DCHECK(CalledOnValidThread());
   ObjectIdInvalidationMap invalidation_map =
-      ObjectIdSetToInvalidationMap(ids, payload);
+      ObjectIdSetToInvalidationMap(ids, version, payload);
   for (AckHandleMap::const_iterator it = local_ack_handles.begin();
        it != local_ack_handles.end(); ++it) {
     // Update in-memory copy of the invalidation state.
@@ -291,6 +293,7 @@ void SyncInvalidationListener::OnTimeout(const ObjectIdSet& ids) {
   for (ObjectIdSet::const_iterator it = ids.begin(); it != ids.end(); ++it) {
     Invalidation invalidation;
     invalidation.ack_handle = invalidation_state_map_[*it].expected;
+    invalidation.version = invalidation_state_map_[*it].version;
     invalidation.payload = invalidation_state_map_[*it].payload;
     invalidation_map.insert(std::make_pair(*it, invalidation));
   }
@@ -404,7 +407,7 @@ AckTracker* SyncInvalidationListener::GetAckTrackerForTest() {
 
 void SyncInvalidationListener::Stop() {
   DCHECK(CalledOnValidThread());
-  if (!invalidation_client_.get()) {
+  if (!invalidation_client_) {
     return;
   }
 

@@ -4,10 +4,10 @@
 
 #include "chrome/browser/content_settings/content_settings_internal_extension_provider.h"
 
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/content_settings/content_settings_rule.h"
 #include "chrome/browser/extensions/extension_host.h"
 #include "chrome/browser/extensions/extension_service.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/content_settings.h"
 #include "chrome/common/content_settings_pattern.h"
 #include "chrome/common/extensions/api/plugins/plugins_handler.h"
@@ -29,8 +29,8 @@ InternalExtensionProvider::InternalExtensionProvider(
   const ExtensionSet* extensions = extension_service->extensions();
   for (ExtensionSet::const_iterator it = extensions->begin();
        it != extensions->end(); ++it) {
-    if (extensions::PluginInfo::HasPlugins(*it))
-      SetContentSettingForExtension(*it, CONTENT_SETTING_ALLOW);
+    if (extensions::PluginInfo::HasPlugins(it->get()))
+      SetContentSettingForExtension(it->get(), CONTENT_SETTING_ALLOW);
   }
   Profile* profile = extension_service->profile();
   registrar_->Add(this, chrome::NOTIFICATION_EXTENSION_HOST_CREATED,
@@ -117,19 +117,19 @@ void InternalExtensionProvider::SetContentSettingForExtension(
       value_map_.DeleteValue(primary_pattern,
                              secondary_pattern,
                              CONTENT_SETTINGS_TYPE_PLUGINS,
-                             ResourceIdentifier(""));
+                             ResourceIdentifier());
     } else {
       value_map_.SetValue(primary_pattern,
                           secondary_pattern,
                           CONTENT_SETTINGS_TYPE_PLUGINS,
-                          ResourceIdentifier(""),
+                          ResourceIdentifier(),
                           Value::CreateIntegerValue(setting));
     }
   }
   NotifyObservers(primary_pattern,
                   secondary_pattern,
                   CONTENT_SETTINGS_TYPE_PLUGINS,
-                  ResourceIdentifier(""));
+                  ResourceIdentifier());
 }
 
 }  // namespace content_settings

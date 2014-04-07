@@ -13,25 +13,24 @@
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
 #include "base/memory/ref_counted.h"
-#include "base/message_loop_proxy.h"
+#include "base/message_loop/message_loop_proxy.h"
 #include "base/path_service.h"
-#include "base/process_util.h"
-#include "base/string16.h"
-#include "base/string_util.h"
-#include "base/time.h"
-#include "base/utf_string_conversions.h"
-#include "googleurl/src/url_util.h"
-#include "net/base/cert_verifier.h"
+#include "base/strings/string16.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "net/base/io_buffer.h"
 #include "net/base/load_timing_info.h"
 #include "net/base/net_errors.h"
 #include "net/base/network_delegate.h"
+#include "net/cert/cert_verifier.h"
 #include "net/cookies/cookie_monster.h"
 #include "net/disk_cache/disk_cache.h"
 #include "net/ftp/ftp_network_layer.h"
 #include "net/http/http_auth_handler_factory.h"
 #include "net/http/http_cache.h"
 #include "net/http/http_network_layer.h"
+#include "net/http/http_request_headers.h"
 #include "net/proxy/proxy_service.h"
 #include "net/ssl/ssl_config_service_defaults.h"
 #include "net/url_request/url_request.h"
@@ -39,6 +38,7 @@
 #include "net/url_request/url_request_context_getter.h"
 #include "net/url_request/url_request_context_storage.h"
 #include "net/url_request/url_request_job_factory.h"
+#include "url/url_util.h"
 
 using base::TimeDelta;
 
@@ -107,9 +107,6 @@ class TestURLRequestContextGetter : public URLRequestContextGetter {
 
 class TestURLRequest : public URLRequest {
  public:
-  // todo(tedv): Remove this interface in favor of the one below it.
-  TestURLRequest(
-      const GURL& url, Delegate* delegate, TestURLRequestContext* context);
   TestURLRequest(
       const GURL& url, Delegate* delegate,
       TestURLRequestContext* context, NetworkDelegate* network_delegate);
@@ -152,6 +149,11 @@ class TestDelegate : public URLRequest::Delegate {
     return certificate_errors_are_fatal_;
   }
   bool auth_required_called() const { return auth_required_; }
+  bool have_full_request_headers() const { return have_full_request_headers_; }
+  const HttpRequestHeaders& full_request_headers() const {
+    return full_request_headers_;
+  }
+  void ClearFullRequestHeaders();
 
   // URLRequest::Delegate:
   virtual void OnReceivedRedirect(URLRequest* request, const GURL& new_url,
@@ -193,6 +195,8 @@ class TestDelegate : public URLRequest::Delegate {
   bool certificate_errors_are_fatal_;
   bool auth_required_;
   std::string data_received_;
+  bool have_full_request_headers_;
+  HttpRequestHeaders full_request_headers_;
 
   // our read buffer
   scoped_refptr<IOBuffer> buf_;
@@ -253,7 +257,7 @@ class TestNetworkDelegate : public NetworkDelegate {
   virtual void OnCompleted(URLRequest* request, bool started) OVERRIDE;
   virtual void OnURLRequestDestroyed(URLRequest* request) OVERRIDE;
   virtual void OnPACScriptError(int line_number,
-                                const string16& error) OVERRIDE;
+                                const base::string16& error) OVERRIDE;
   virtual NetworkDelegate::AuthRequiredResponse OnAuthRequired(
       URLRequest* request,
       const AuthChallengeInfo& auth_info,

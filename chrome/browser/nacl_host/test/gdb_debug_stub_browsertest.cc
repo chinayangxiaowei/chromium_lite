@@ -5,11 +5,12 @@
 #include "base/command_line.h"
 #include "base/environment.h"
 #include "base/path_service.h"
-#include "base/process_util.h"
+#include "base/process/kill.h"
+#include "base/process/launch.h"
 #include "base/strings/string_number_conversions.h"
 #include "chrome/browser/nacl_host/nacl_browser.h"
-#include "chrome/common/chrome_switches.h"
 #include "chrome/test/ppapi/ppapi_test.h"
+#include "components/nacl/common/nacl_switches.h"
 #include "content/public/test/test_utils.h"
 
 class NaClGdbDebugStubTest : public PPAPINaClNewlibTest {
@@ -66,15 +67,22 @@ void NaClGdbDebugStubTest::RunDebugStubTest(const std::string& nacl_module,
 // NaCl tests are disabled under ASAN because of qualification test.
 #if defined(ADDRESS_SANITIZER)
 # define MAYBE_Empty DISABLED_Empty
-# define MAYBE_Breakpoint DISABLED_Breakpoint
 #else
 # define MAYBE_Empty Empty
-# define MAYBE_Breakpoint Breakpoint
 #endif
 
 IN_PROC_BROWSER_TEST_F(NaClGdbDebugStubTest, MAYBE_Empty) {
   RunDebugStubTest("Empty", "continue");
 }
+
+#if defined(ADDRESS_SANITIZER)
+# define MAYBE_Breakpoint DISABLED_Breakpoint
+#elif defined(OS_LINUX) && !defined(OS_CHROMEOS) && defined(ARCH_CPU_ARM_FAMILY)
+// Timing out on ARM linux: http://crbug.com/238469
+# define MAYBE_Breakpoint DISABLED_Breakpoint
+#else
+# define MAYBE_Breakpoint Breakpoint
+#endif
 
 IN_PROC_BROWSER_TEST_F(NaClGdbDebugStubTest, MAYBE_Breakpoint) {
   RunDebugStubTest("Empty", "breakpoint");

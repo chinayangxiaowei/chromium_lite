@@ -7,6 +7,7 @@
 #include "base/bind.h"
 #include "base/logging.h"
 #include "base/stl_util.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/notifications/balloon.h"
 #include "chrome/browser/notifications/balloon_host.h"
 #include "chrome/browser/notifications/notification.h"
@@ -14,7 +15,6 @@
 #include "chrome/browser/ui/panels/docked_panel_collection.h"
 #include "chrome/browser/ui/panels/panel.h"
 #include "chrome/browser/ui/panels/panel_manager.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "content/public/browser/notification_registrar.h"
 #include "content/public/browser/notification_service.h"
 #include "ui/gfx/rect.h"
@@ -41,7 +41,7 @@ const int kVerticalSpacingBetweenBalloonAndPanel = 5;
 
 BalloonCollectionImpl::BalloonCollectionImpl()
 #if USE_OFFSETS
-    : ALLOW_THIS_IN_INITIALIZER_LIST(reposition_factory_(this)),
+    : reposition_factory_(this),
       added_as_message_loop_observer_(false)
 #endif
 {
@@ -92,8 +92,9 @@ void BalloonCollectionImpl::Add(const Notification& notification,
   AddImpl(notification, profile, false);
 }
 
-bool BalloonCollectionImpl::DoesIdExist(const std::string& id) {
-  return base_.DoesIdExist(id);
+const Notification* BalloonCollectionImpl::FindById(
+    const std::string& id) const {
+  return base_.FindById(id);
 }
 
 bool BalloonCollectionImpl::RemoveById(const std::string& id) {
@@ -235,14 +236,14 @@ gfx::Rect BalloonCollectionImpl::GetBalloonsBoundingBox() const {
 #if USE_OFFSETS
 void BalloonCollectionImpl::AddMessageLoopObserver() {
   if (!added_as_message_loop_observer_) {
-    MessageLoopForUI::current()->AddObserver(this);
+    base::MessageLoopForUI::current()->AddObserver(this);
     added_as_message_loop_observer_ = true;
   }
 }
 
 void BalloonCollectionImpl::RemoveMessageLoopObserver() {
   if (added_as_message_loop_observer_) {
-    MessageLoopForUI::current()->RemoveObserver(this);
+    base::MessageLoopForUI::current()->RemoveObserver(this);
     added_as_message_loop_observer_ = false;
   }
 }
@@ -267,7 +268,7 @@ void BalloonCollectionImpl::HandleMouseMoveEvent() {
     // Mouse has left the region.  Schedule a reposition after
     // a short delay.
     if (!reposition_factory_.HasWeakPtrs()) {
-      MessageLoop::current()->PostDelayedTask(
+      base::MessageLoop::current()->PostDelayedTask(
           FROM_HERE,
           base::Bind(&BalloonCollectionImpl::CancelOffsets,
                      reposition_factory_.GetWeakPtr()),

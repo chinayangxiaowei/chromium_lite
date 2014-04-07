@@ -2,10 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ash/display/display_controller.h"
 #include "ash/shell.h"
 #include "ash/test/ash_test_base.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "ui/aura/client/tooltip_client.h"
 #include "ui/aura/env.h"
 #include "ui/aura/root_window.h"
@@ -99,7 +98,7 @@ class TooltipControllerTest : public AshTestBase {
 TEST_F(TooltipControllerTest, NonNullTooltipClient) {
   EXPECT_TRUE(aura::client::GetTooltipClient(Shell::GetPrimaryRootWindow())
               != NULL);
-  EXPECT_EQ(string16(), helper_->GetTooltipText());
+  EXPECT_EQ(base::string16(), helper_->GetTooltipText());
   EXPECT_EQ(NULL, helper_->GetTooltipWindow());
   EXPECT_FALSE(helper_->IsTooltipVisible());
 }
@@ -109,13 +108,13 @@ TEST_F(TooltipControllerTest, HideTooltipWhenCursorHidden) {
   TooltipTestView* view = new TooltipTestView;
   AddViewToWidgetAndResize(widget.get(), view);
   view->set_tooltip_text(ASCIIToUTF16("Tooltip Text"));
-  EXPECT_EQ(string16(), helper_->GetTooltipText());
+  EXPECT_EQ(base::string16(), helper_->GetTooltipText());
   EXPECT_EQ(NULL, helper_->GetTooltipWindow());
 
   aura::test::EventGenerator generator(Shell::GetPrimaryRootWindow());
   generator.MoveMouseRelativeTo(widget->GetNativeView(),
                                 view->bounds().CenterPoint());
-  string16 expected_tooltip = ASCIIToUTF16("Tooltip Text");
+  base::string16 expected_tooltip = ASCIIToUTF16("Tooltip Text");
 
   // Fire tooltip timer so tooltip becomes visible.
   helper_->FireTooltipTimer();
@@ -132,16 +131,10 @@ TEST_F(TooltipControllerTest, HideTooltipWhenCursorHidden) {
   EXPECT_TRUE(helper_->IsTooltipVisible());
 }
 
-#if defined(OS_WIN)
-// Multiple displays are not supported on Windows Ash. http://crbug.com/165962
-#define MAYBE_TooltipsOnMultiDisplayShouldNotCrash \
-        DISABLED_TooltipsOnMultiDisplayShouldNotCrash
-#else
-#define MAYBE_TooltipsOnMultiDisplayShouldNotCrash \
-        TooltipsOnMultiDisplayShouldNotCrash
-#endif
+TEST_F(TooltipControllerTest, TooltipsOnMultiDisplayShouldNotCrash) {
+  if (!SupportsMultipleDisplays())
+    return;
 
-TEST_F(TooltipControllerTest, MAYBE_TooltipsOnMultiDisplayShouldNotCrash) {
   UpdateDisplay("1000x600,600x400");
   Shell::RootWindowList root_windows = Shell::GetAllRootWindows();
   scoped_ptr<views::Widget> widget1(CreateNewWidgetWithBoundsOn(

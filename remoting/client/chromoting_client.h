@@ -7,7 +7,7 @@
 #ifndef REMOTING_CLIENT_CHROMOTING_CLIENT_H_
 #define REMOTING_CLIENT_CHROMOTING_CLIENT_H_
 
-#include <list>
+#include <string>
 
 #include "base/callback.h"
 #include "base/memory/scoped_ptr.h"
@@ -19,7 +19,6 @@
 #include "remoting/protocol/connection_to_host.h"
 #include "remoting/protocol/input_stub.h"
 #include "remoting/protocol/video_stub.h"
-#include "remoting/jingle_glue/xmpp_proxy.h"
 
 namespace base {
 class SingleThreadTaskRunner;
@@ -38,10 +37,12 @@ class ClientUserInterface;
 class FrameConsumerProxy;
 class FrameProducer;
 class RectangleUpdateDecoder;
+class SignalStrategy;
 
 class ChromotingClient : public protocol::ConnectionToHost::HostEventCallback,
                          public protocol::ClientStub {
  public:
+  // |audio_player| may be null, in which case audio will not be requested.
   ChromotingClient(const ClientConfig& config,
                    ClientContext* client_context,
                    protocol::ConnectionToHost* connection,
@@ -51,23 +52,31 @@ class ChromotingClient : public protocol::ConnectionToHost::HostEventCallback,
 
   virtual ~ChromotingClient();
 
-  // Start/stop the client. Must be called on the main thread.
-  void Start(scoped_refptr<XmppProxy> xmpp_proxy,
+  // Start the client. Must be called on the main thread. |signal_strategy|
+  // must outlive the client.
+  void Start(SignalStrategy* signal_strategy,
              scoped_ptr<protocol::TransportFactory> transport_factory);
-  void Stop(const base::Closure& shutdown_task);
 
   FrameProducer* GetFrameProducer();
 
   // Return the stats recorded by this client.
   ChromotingStats* GetStats();
 
+  // ClientStub implementation.
+  virtual void SetCapabilities(
+      const protocol::Capabilities& capabilities) OVERRIDE;
+  virtual void SetPairingResponse(
+      const protocol::PairingResponse& pairing_response) OVERRIDE;
+  virtual void DeliverHostMessage(
+      const protocol::ExtensionMessage& message) OVERRIDE;
+
   // ClipboardStub implementation for receiving clipboard data from host.
-  virtual void InjectClipboardEvent(const protocol::ClipboardEvent& event)
-      OVERRIDE;
+  virtual void InjectClipboardEvent(
+      const protocol::ClipboardEvent& event) OVERRIDE;
 
   // CursorShapeStub implementation for receiving cursor shape updates.
-  virtual void SetCursorShape(const protocol::CursorShapeInfo& cursor_shape)
-      OVERRIDE;
+  virtual void SetCursorShape(
+      const protocol::CursorShapeInfo& cursor_shape) OVERRIDE;
 
   // ConnectionToHost::HostEventCallback implementation.
   virtual void OnConnectionState(
@@ -76,10 +85,11 @@ class ChromotingClient : public protocol::ConnectionToHost::HostEventCallback,
   virtual void OnConnectionReady(bool ready) OVERRIDE;
 
  private:
-  // Initializes connection.
-  void Initialize();
+  // Called when the connection is authenticated.
+  void OnAuthenticated();
 
-  void OnDisconnected(const base::Closure& shutdown_task);
+  // Called when all channels are connected.
+  void OnChannelsConnected();
 
   // The following are not owned by this class.
   ClientConfig config_;
@@ -92,6 +102,12 @@ class ChromotingClient : public protocol::ConnectionToHost::HostEventCallback,
 
   // If non-NULL, this is called when the client is done.
   base::Closure client_done_;
+
+  // The set of all capabilities supported by the host.
+  std::string host_capabilities_;
+
+  // True if |protocol::Capabilities| message has been received.
+  bool host_capabilities_received_;
 
   // Record the statistics of the connection.
   ChromotingStats stats_;

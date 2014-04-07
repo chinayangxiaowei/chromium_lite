@@ -2,8 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/utf_string_conversions.h"
-#include "content/browser/browser_thread_impl.h"
+#include "base/strings/utf_string_conversions.h"
 #include "content/browser/renderer_host/test_render_view_host.h"
 #include "content/browser/site_instance_impl.h"
 #include "content/browser/web_contents/navigation_controller_impl.h"
@@ -12,21 +11,23 @@
 #include "content/browser/webui/web_ui_controller_factory_registry.h"
 #include "content/common/view_messages.h"
 #include "content/public/browser/notification_details.h"
+#include "content/public/browser/notification_service.h"
 #include "content/public/browser/notification_source.h"
 #include "content/public/browser/notification_types.h"
+#include "content/public/browser/render_process_host.h"
+#include "content/public/browser/render_view_host_observer.h"
 #include "content/public/browser/web_ui_controller.h"
 #include "content/public/common/bindings_policy.h"
 #include "content/public/common/javascript_message_type.h"
 #include "content/public/common/page_transition_types.h"
 #include "content/public/common/url_constants.h"
+#include "content/public/common/url_utils.h"
 #include "content/public/test/mock_render_process_host.h"
-#include "content/public/test/test_browser_context.h"
 #include "content/public/test/test_notification_tracker.h"
 #include "content/test/test_content_browser_client.h"
 #include "content/test/test_content_client.h"
 #include "content/test/test_web_contents.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "webkit/glue/glue_serialize.h"
 
 namespace content {
 namespace {
@@ -106,18 +107,55 @@ class RenderViewHostManagerTest
     // Commit the navigation with a new page ID.
     int32 max_page_id = contents()->GetMaxPageIDForSiteInstance(
         active_rvh()->GetSiteInstance());
-    active_test_rvh()->SendNavigate(max_page_id + 1, url);
 
-    // Simulate the SwapOut_ACK that fires if you commit a cross-site navigation
-    // without making any network requests.
+    // Simulate the SwapOut_ACK that fires if you commit a cross-site
+    // navigation.
     if (old_rvh != active_rvh())
-      old_rvh->OnSwapOutACK(false);
+      old_rvh->OnSwappedOut(false);
+
+    active_test_rvh()->SendNavigate(max_page_id + 1, url);
   }
 
   bool ShouldSwapProcesses(RenderViewHostManager* manager,
                            const NavigationEntryImpl* cur_entry,
                            const NavigationEntryImpl* new_entry) const {
     return manager->ShouldSwapProcessesForNavigation(cur_entry, new_entry);
+  }
+
+  // Creates a test RenderViewHost that's swapped out.
+  TestRenderViewHost* CreateSwappedOutRenderViewHost() {
+    const GURL kChromeURL("chrome://foo");
+    const GURL kDestUrl("http://www.google.com/");
+
+    // Navigate our first tab to a chrome url and then to the destination.
+    NavigateActiveAndCommit(kChromeURL);
+    TestRenderViewHost* ntp_rvh = static_cast<TestRenderViewHost*>(
+        contents()->GetRenderManagerForTesting()->current_host());
+
+    // Navigate to a cross-site URL.
+    contents()->GetController().LoadURL(
+        kDestUrl, Referrer(), PAGE_TRANSITION_LINK, std::string());
+    EXPECT_TRUE(contents()->cross_navigation_pending());
+
+    // Manually increase the number of active views in the
+    // SiteInstance that ntp_rvh belongs to, to prevent it from being
+    // destroyed when it gets swapped out.
+    static_cast<SiteInstanceImpl*>(ntp_rvh->GetSiteInstance())->
+        increment_active_view_count();
+
+    TestRenderViewHost* dest_rvh = static_cast<TestRenderViewHost*>(
+        contents()->GetRenderManagerForTesting()->pending_render_view_host());
+    CHECK(dest_rvh);
+    EXPECT_NE(ntp_rvh, dest_rvh);
+
+    // BeforeUnload finishes.
+    ntp_rvh->SendShouldCloseACK(true);
+
+    // Assume SwapOutACK times out, so the dest_rvh proceeds and commits.
+    dest_rvh->SendNavigate(101, kDestUrl);
+
+    EXPECT_TRUE(ntp_rvh->is_swapped_out());
+    return ntp_rvh;
   }
 
  private:
@@ -130,7 +168,6 @@ class RenderViewHostManagerTest
 // a regression test for bug 9364.
 TEST_F(RenderViewHostManagerTest, NewTabPageProcesses) {
   set_should_create_webui(true);
-  BrowserThreadImpl ui_thread(BrowserThread::UI, MessageLoop::current());
   const GURL kChromeUrl("chrome://foo");
   const GURL kDestUrl("http://www.google.com/");
 
@@ -162,9 +199,10 @@ TEST_F(RenderViewHostManagerTest, NewTabPageProcesses) {
   TestRenderViewHost* dest_rvh2 = static_cast<TestRenderViewHost*>(
       contents2->GetRenderManagerForTesting()->pending_render_view_host());
   ASSERT_TRUE(dest_rvh2);
+
   ntp_rvh2->SendShouldCloseACK(true);
+  ntp_rvh2->OnSwappedOut(false);
   dest_rvh2->SendNavigate(101, kDestUrl);
-  ntp_rvh2->OnSwapOutACK(false);
 
   // The two RVH's should be different in every way.
   EXPECT_NE(active_rvh()->GetProcess(), dest_rvh2->GetProcess());
@@ -179,9 +217,9 @@ TEST_F(RenderViewHostManagerTest, NewTabPageProcesses) {
   contents2->GetController().LoadURL(
       kChromeUrl, Referrer(), PAGE_TRANSITION_LINK, std::string());
   dest_rvh2->SendShouldCloseACK(true);
+  dest_rvh2->OnSwappedOut(false);
   static_cast<TestRenderViewHost*>(contents2->GetRenderManagerForTesting()->
      pending_render_view_host())->SendNavigate(102, kChromeUrl);
-  dest_rvh2->OnSwapOutACK(false);
 
   EXPECT_NE(active_rvh()->GetSiteInstance(),
             contents2->GetRenderViewHost()->GetSiteInstance());
@@ -195,7 +233,6 @@ TEST_F(RenderViewHostManagerTest, NewTabPageProcesses) {
 // for synchronous messages, which cannot be ignored without leaving the
 // renderer in a stuck state.  See http://crbug.com/93427.
 TEST_F(RenderViewHostManagerTest, FilterMessagesWhileSwappedOut) {
-  BrowserThreadImpl ui_thread(BrowserThread::UI, MessageLoop::current());
   const GURL kChromeURL("chrome://foo");
   const GURL kDestUrl("http://www.google.com/");
 
@@ -219,6 +256,12 @@ TEST_F(RenderViewHostManagerTest, FilterMessagesWhileSwappedOut) {
       contents()->GetRenderManagerForTesting()->pending_render_view_host());
   ASSERT_TRUE(dest_rvh);
   EXPECT_NE(ntp_rvh, dest_rvh);
+
+  // Create one more view in the same SiteInstance where dest_rvh2
+  // exists so that it doesn't get deleted on navigation to another
+  // site.
+  static_cast<SiteInstanceImpl*>(ntp_rvh->GetSiteInstance())->
+      increment_active_view_count();
 
   // BeforeUnload finishes.
   ntp_rvh->SendShouldCloseACK(true);
@@ -267,12 +310,182 @@ TEST_F(RenderViewHostManagerTest, FilterMessagesWhileSwappedOut) {
   EXPECT_TRUE(ntp_process_host->sink().GetUniqueMessageMatching(IPC_REPLY_ID));
 }
 
+TEST_F(RenderViewHostManagerTest, WhiteListSwapCompositorFrame) {
+  TestRenderViewHost* swapped_out_rvh = CreateSwappedOutRenderViewHost();
+  TestRenderWidgetHostView* swapped_out_rwhv =
+      static_cast<TestRenderWidgetHostView*>(swapped_out_rvh->GetView());
+  EXPECT_FALSE(swapped_out_rwhv->did_swap_compositor_frame());
+
+  MockRenderProcessHost* process_host =
+      static_cast<MockRenderProcessHost*>(swapped_out_rvh->GetProcess());
+  process_host->sink().ClearMessages();
+
+  cc::CompositorFrame frame;
+  ViewHostMsg_SwapCompositorFrame msg(rvh()->GetRoutingID(), 0, frame);
+
+  EXPECT_TRUE(swapped_out_rvh->OnMessageReceived(msg));
+  EXPECT_TRUE(swapped_out_rwhv->did_swap_compositor_frame());
+}
+
+TEST_F(RenderViewHostManagerTest, WhiteListDidActivateAcceleratedCompositing) {
+  TestRenderViewHost* swapped_out_rvh = CreateSwappedOutRenderViewHost();
+
+  MockRenderProcessHost* process_host =
+      static_cast<MockRenderProcessHost*>(swapped_out_rvh->GetProcess());
+  process_host->sink().ClearMessages();
+  ViewHostMsg_DidActivateAcceleratedCompositing msg(
+      rvh()->GetRoutingID(), true);
+  EXPECT_TRUE(swapped_out_rvh->OnMessageReceived(msg));
+  EXPECT_TRUE(swapped_out_rvh->is_accelerated_compositing_active());
+}
+
+// Test if RenderViewHost::GetRenderWidgetHosts() only returns active
+// widgets.
+TEST_F(RenderViewHostManagerTest, GetRenderWidgetHostsReturnsActiveViews) {
+  TestRenderViewHost* swapped_out_rvh = CreateSwappedOutRenderViewHost();
+  EXPECT_TRUE(swapped_out_rvh->is_swapped_out());
+
+  RenderWidgetHost::List widgets = RenderWidgetHost::GetRenderWidgetHosts();
+  // We know that there is the only one active widget. Another view is
+  // now swapped out, so the swapped out view is not included in the
+  // list.
+  EXPECT_TRUE(widgets.size() == 1);
+  RenderViewHost* rvh = RenderViewHost::From(widgets[0]);
+  EXPECT_FALSE(static_cast<RenderViewHostImpl*>(rvh)->is_swapped_out());
+}
+
+// Test if RenderViewHost::GetRenderWidgetHosts() returns a subset of
+// RenderViewHostImpl::GetAllRenderWidgetHosts().
+// RenderViewHost::GetRenderWidgetHosts() returns only active widgets, but
+// RenderViewHostImpl::GetAllRenderWidgetHosts() returns everything
+// including swapped out ones.
+TEST_F(RenderViewHostManagerTest,
+       GetRenderWidgetHostsWithinGetAllRenderWidgetHosts) {
+  TestRenderViewHost* swapped_out_rvh = CreateSwappedOutRenderViewHost();
+  EXPECT_TRUE(swapped_out_rvh->is_swapped_out());
+
+  RenderWidgetHost::List widgets = RenderWidgetHost::GetRenderWidgetHosts();
+  RenderWidgetHost::List all_widgets =
+      RenderWidgetHostImpl::GetAllRenderWidgetHosts();
+
+  for (size_t i = 0; i < widgets.size(); ++i) {
+    bool found = false;
+    for (size_t j = 0; j < all_widgets.size(); ++j) {
+      if (widgets[i] == all_widgets[j]) {
+        found = true;
+        break;
+      }
+    }
+    EXPECT_TRUE(found);
+  }
+}
+
+// Test if SiteInstanceImpl::active_view_count() is correctly updated
+// as views in a SiteInstance get swapped out and in.
+TEST_F(RenderViewHostManagerTest, ActiveViewCountWhileSwappingInandOut) {
+  const GURL kUrl1("http://www.google.com/");
+  const GURL kUrl2("http://www.chromium.org/");
+
+  // Navigate to an initial URL.
+  contents()->NavigateAndCommit(kUrl1);
+  TestRenderViewHost* rvh1 = test_rvh();
+
+  SiteInstanceImpl* instance1 =
+      static_cast<SiteInstanceImpl*>(rvh1->GetSiteInstance());
+  EXPECT_EQ(instance1->active_view_count(), 1U);
+
+  // Create 2 new tabs and simulate them being the opener chain for the main
+  // tab.  They should be in the same SiteInstance.
+  scoped_ptr<TestWebContents> opener1(
+      TestWebContents::Create(browser_context(), instance1));
+  contents()->SetOpener(opener1.get());
+
+  scoped_ptr<TestWebContents> opener2(
+      TestWebContents::Create(browser_context(), instance1));
+  opener1->SetOpener(opener2.get());
+
+  EXPECT_EQ(instance1->active_view_count(), 3U);
+
+  // Navigate to a cross-site URL (different SiteInstance but same
+  // BrowsingInstance).
+  contents()->NavigateAndCommit(kUrl2);
+  TestRenderViewHost* rvh2 = test_rvh();
+  SiteInstanceImpl* instance2 =
+      static_cast<SiteInstanceImpl*>(rvh2->GetSiteInstance());
+
+  // rvh2 is on chromium.org which is different from google.com on
+  // which other tabs are.
+  EXPECT_EQ(instance2->active_view_count(), 1U);
+
+  // There are two active views on google.com now.
+  EXPECT_EQ(instance1->active_view_count(), 2U);
+
+  // Navigate to the original origin (google.com).
+  contents()->NavigateAndCommit(kUrl1);
+
+  EXPECT_EQ(instance1->active_view_count(), 3U);
+}
+
+// This deletes a WebContents when the given RVH is deleted. This is
+// only for testing whether deleting an RVH does not cause any UaF in
+// other parts of the system. For now, this class is only used for the
+// next test cases to detect the bug mentioned at
+// http://crbug.com/259859.
+class RenderViewHostDestroyer : public content::RenderViewHostObserver {
+ public:
+  RenderViewHostDestroyer(RenderViewHost* render_view_host,
+                          WebContents* web_contents)
+      : content::RenderViewHostObserver(render_view_host),
+        web_contents_(web_contents) {}
+
+  virtual void RenderViewHostDestroyed(RenderViewHost* render_view_host)
+      OVERRIDE {
+    delete web_contents_;
+  }
+
+ private:
+  WebContents* web_contents_;
+  DISALLOW_COPY_AND_ASSIGN(RenderViewHostDestroyer);
+};
+
+// Test if ShutdownRenderViewHostsInSiteInstance() does not touch any
+// RenderWidget that has been freed while deleting a RenderViewHost in
+// a previous iteration. This is a regression test for
+// http://crbug.com/259859.
+TEST_F(RenderViewHostManagerTest,
+       DetectUseAfterFreeInShutdownRenderViewHostsInSiteInstance) {
+  const GURL kChromeURL("chrome://newtab");
+  const GURL kUrl1("http://www.google.com");
+  const GURL kUrl2("http://www.chromium.org");
+
+  // Navigate our first tab to a chrome url and then to the destination.
+  NavigateActiveAndCommit(kChromeURL);
+  TestRenderViewHost* ntp_rvh = static_cast<TestRenderViewHost*>(
+      contents()->GetRenderManagerForTesting()->current_host());
+
+  // Create one more tab and navigate to kUrl1.  web_contents is not
+  // wrapped as scoped_ptr since it intentionally deleted by destroyer
+  // below as part of this test.
+  TestWebContents* web_contents =
+      TestWebContents::Create(browser_context(), ntp_rvh->GetSiteInstance());
+  web_contents->NavigateAndCommit(kUrl1);
+  RenderViewHostDestroyer destroyer(ntp_rvh, web_contents);
+
+  // This causes the first tab to navigate to kUrl2, which destroys
+  // the ntp_rvh in ShutdownRenderViewHostsInSiteInstance(). When
+  // ntp_rvh is destroyed, it also destroys the RVHs in web_contents
+  // too. This can test whether
+  // SiteInstanceImpl::ShutdownRenderViewHostsInSiteInstance() can
+  // touch any object freed in this way or not while iterating through
+  // all widgets.
+  contents()->NavigateAndCommit(kUrl2);
+}
+
 // When there is an error with the specified page, renderer exits view-source
 // mode. See WebFrameImpl::DidFail(). We check by this test that
 // EnableViewSourceMode message is sent on every navigation regardless
 // RenderView is being newly created or reused.
 TEST_F(RenderViewHostManagerTest, AlwaysSendEnableViewSourceMode) {
-  BrowserThreadImpl ui_thread(BrowserThread::UI, MessageLoop::current());
   const GURL kChromeUrl("chrome://foo");
   const GURL kUrl("view-source:http://foo");
 
@@ -288,8 +501,9 @@ TEST_F(RenderViewHostManagerTest, AlwaysSendEnableViewSourceMode) {
   controller().LoadURL(
       kUrl, Referrer(), PAGE_TRANSITION_TYPED, std::string());
   // Simulate response from RenderView for FirePageBeforeUnload.
+  base::TimeTicks now = base::TimeTicks::Now();
   test_rvh()->OnMessageReceived(ViewHostMsg_ShouldClose_ACK(
-      rvh()->GetRoutingID(), true, base::TimeTicks(), base::TimeTicks()));
+      rvh()->GetRoutingID(), true, now, now));
   ASSERT_TRUE(pending_rvh());  // New pending RenderViewHost will be created.
   RenderViewHost* last_rvh = pending_rvh();
   int32 new_id = contents()->GetMaxPageIDForSiteInstance(
@@ -331,7 +545,7 @@ TEST_F(RenderViewHostManagerTest, Init) {
   RenderViewHostManager manager(web_contents.get(), web_contents.get(),
                                 web_contents.get());
 
-  manager.Init(browser_context(), instance, MSG_ROUTING_NONE);
+  manager.Init(browser_context(), instance, MSG_ROUTING_NONE, MSG_ROUTING_NONE);
 
   RenderViewHost* host = manager.current_host();
   ASSERT_TRUE(host);
@@ -358,7 +572,7 @@ TEST_F(RenderViewHostManagerTest, Navigate) {
   RenderViewHostManager manager(web_contents.get(), web_contents.get(),
                                 web_contents.get());
 
-  manager.Init(browser_context(), instance, MSG_ROUTING_NONE);
+  manager.Init(browser_context(), instance, MSG_ROUTING_NONE, MSG_ROUTING_NONE);
 
   RenderViewHost* host;
 
@@ -451,7 +665,7 @@ TEST_F(RenderViewHostManagerTest, NavigateWithEarlyReNavigation) {
   RenderViewHostManager manager(web_contents.get(), web_contents.get(),
                                 web_contents.get());
 
-  manager.Init(browser_context(), instance, MSG_ROUTING_NONE);
+  manager.Init(browser_context(), instance, MSG_ROUTING_NONE, MSG_ROUTING_NONE);
 
   // 1) The first navigation. --------------------------
   const GURL kUrl1("http://www.google.com/");
@@ -516,14 +730,13 @@ TEST_F(RenderViewHostManagerTest, NavigateWithEarlyReNavigation) {
   test_host->SendShouldCloseACK(true);
 
   // CrossSiteResourceHandler::StartCrossSiteTransition triggers a
-  // call of RenderViewHostManager::OnCrossSiteResponse before
+  // call of RenderViewHostManager::SwapOutOldPage before
   // RenderViewHostManager::DidNavigateMainFrame is called.
   // The RVH is not swapped out until the commit.
-  manager.OnCrossSiteResponse(host2->GetProcess()->GetID(),
-                              host2->GetPendingRequestId());
+  manager.SwapOutOldPage();
   EXPECT_TRUE(test_process_host->sink().GetUniqueMessageMatching(
       ViewMsg_SwapOut::ID));
-  test_host->OnSwapOutACK(false);
+  test_host->OnSwappedOut(false);
 
   EXPECT_EQ(host, manager.current_host());
   EXPECT_FALSE(static_cast<RenderViewHostImpl*>(
@@ -563,15 +776,13 @@ TEST_F(RenderViewHostManagerTest, NavigateWithEarlyReNavigation) {
   test_host->SendShouldCloseACK(true);
 
   // CrossSiteResourceHandler::StartCrossSiteTransition triggers a
-  // call of RenderViewHostManager::OnCrossSiteResponse before
+  // call of RenderViewHostManager::SwapOutOldPage before
   // RenderViewHostManager::DidNavigateMainFrame is called.
   // The RVH is not swapped out until the commit.
-  manager.OnCrossSiteResponse(host3->GetProcess()->GetID(),
-                              static_cast<RenderViewHostImpl*>(
-                                  host3)->GetPendingRequestId());
+  manager.SwapOutOldPage();
   EXPECT_TRUE(test_process_host->sink().GetUniqueMessageMatching(
       ViewMsg_SwapOut::ID));
-  test_host->OnSwapOutACK(false);
+  test_host->OnSwappedOut(false);
 
   // Commit.
   manager.DidNavigateMainFrame(host3);
@@ -590,7 +801,6 @@ TEST_F(RenderViewHostManagerTest, NavigateWithEarlyReNavigation) {
 // Tests WebUI creation.
 TEST_F(RenderViewHostManagerTest, WebUI) {
   set_should_create_webui(true);
-  BrowserThreadImpl ui_thread(BrowserThread::UI, MessageLoop::current());
   SiteInstance* instance = SiteInstance::Create(browser_context());
 
   scoped_ptr<TestWebContents> web_contents(
@@ -598,7 +808,7 @@ TEST_F(RenderViewHostManagerTest, WebUI) {
   RenderViewHostManager manager(web_contents.get(), web_contents.get(),
                                 web_contents.get());
 
-  manager.Init(browser_context(), instance, MSG_ROUTING_NONE);
+  manager.Init(browser_context(), instance, MSG_ROUTING_NONE, MSG_ROUTING_NONE);
   EXPECT_FALSE(manager.current_host()->IsRenderViewLive());
 
   const GURL kUrl("chrome://foo");
@@ -644,7 +854,8 @@ TEST_F(RenderViewHostManagerTest, WebUIInNewTab) {
       TestWebContents::Create(browser_context(), blank_instance));
   RenderViewHostManager manager1(web_contents1.get(), web_contents1.get(),
                                  web_contents1.get());
-  manager1.Init(browser_context(), blank_instance, MSG_ROUTING_NONE);
+  manager1.Init(
+      browser_context(), blank_instance, MSG_ROUTING_NONE, MSG_ROUTING_NONE);
   // Test the case that new RVH is considered live.
   manager1.current_host()->CreateRenderView(string16(), -1, -1);
 
@@ -673,7 +884,8 @@ TEST_F(RenderViewHostManagerTest, WebUIInNewTab) {
       TestWebContents::Create(browser_context(), webui_instance));
   RenderViewHostManager manager2(web_contents2.get(), web_contents2.get(),
                                  web_contents2.get());
-  manager2.Init(browser_context(), webui_instance, MSG_ROUTING_NONE);
+  manager2.Init(
+      browser_context(), webui_instance, MSG_ROUTING_NONE, MSG_ROUTING_NONE);
   // Make sure the new RVH is considered live.  This is usually done in
   // RenderWidgetHost::Init when opening a new tab from a link.
   manager2.current_host()->CreateRenderView(string16(), -1, -1);
@@ -724,7 +936,7 @@ TEST_F(RenderViewHostManagerTest, PageDoesBackAndReload) {
   params.gesture = NavigationGestureAuto;
   params.was_within_same_page = false;
   params.is_post = false;
-  params.content_state = webkit_glue::CreateHistoryStateForURL(GURL(kUrl2));
+  params.page_state = PageState::CreateFromURL(kUrl2);
   contents()->DidNavigate(evil_rvh, params);
 
   // That should have cancelled the pending RVH, and the evil RVH should be the
@@ -748,8 +960,16 @@ TEST_F(RenderViewHostManagerTest, NavigateAfterMissingSwapOutACK) {
   // Navigate to two pages.
   contents()->NavigateAndCommit(kUrl1);
   TestRenderViewHost* rvh1 = test_rvh();
+
+  // Keep active_view_count nonzero so that no swapped out views in
+  // this SiteInstance get forcefully deleted.
+  static_cast<SiteInstanceImpl*>(rvh1->GetSiteInstance())->
+      increment_active_view_count();
+
   contents()->NavigateAndCommit(kUrl2);
   TestRenderViewHost* rvh2 = test_rvh();
+  static_cast<SiteInstanceImpl*>(rvh2->GetSiteInstance())->
+      increment_active_view_count();
 
   // Now go back, but suppose the SwapOut_ACK isn't received.  This shouldn't
   // happen, but we have seen it when going back quickly across many entries
@@ -758,7 +978,7 @@ TEST_F(RenderViewHostManagerTest, NavigateAfterMissingSwapOutACK) {
   EXPECT_TRUE(rvh2->is_waiting_for_beforeunload_ack());
   contents()->ProceedWithCrossSiteNavigation();
   EXPECT_FALSE(rvh2->is_waiting_for_beforeunload_ack());
-  rvh2->SwapOut(1, 1);
+  rvh2->SwapOut();
   EXPECT_TRUE(rvh2->is_waiting_for_unload_ack());
 
   // The back navigation commits.  We should proactively clear the
@@ -814,20 +1034,20 @@ TEST_F(RenderViewHostManagerTest, CreateSwappedOutOpenerRVHs) {
                   rvh2->GetSiteInstance()));
 
   // Ensure rvh1 is placed on swapped out list of the current tab.
-  EXPECT_TRUE(manager->IsSwappedOut(rvh1));
+  EXPECT_TRUE(manager->IsOnSwappedOutList(rvh1));
   EXPECT_EQ(rvh1,
             manager->GetSwappedOutRenderViewHost(rvh1->GetSiteInstance()));
 
   // Ensure a swapped out RVH is created in the first opener tab.
   TestRenderViewHost* opener1_rvh = static_cast<TestRenderViewHost*>(
       opener1_manager->GetSwappedOutRenderViewHost(rvh2->GetSiteInstance()));
-  EXPECT_TRUE(opener1_manager->IsSwappedOut(opener1_rvh));
+  EXPECT_TRUE(opener1_manager->IsOnSwappedOutList(opener1_rvh));
   EXPECT_TRUE(opener1_rvh->is_swapped_out());
 
   // Ensure a swapped out RVH is created in the second opener tab.
   TestRenderViewHost* opener2_rvh = static_cast<TestRenderViewHost*>(
       opener2_manager->GetSwappedOutRenderViewHost(rvh2->GetSiteInstance()));
-  EXPECT_TRUE(opener2_manager->IsSwappedOut(opener2_rvh));
+  EXPECT_TRUE(opener2_manager->IsOnSwappedOutList(opener2_rvh));
   EXPECT_TRUE(opener2_rvh->is_swapped_out());
 
   // Navigate to a cross-BrowsingInstance URL.
@@ -843,6 +1063,50 @@ TEST_F(RenderViewHostManagerTest, CreateSwappedOutOpenerRVHs) {
                    rvh3->GetSiteInstance()));
   EXPECT_FALSE(opener2_manager->GetSwappedOutRenderViewHost(
                    rvh3->GetSiteInstance()));
+}
+
+// Test that we clean up swapped out RenderViewHosts when a process hosting
+// those associated RenderViews crashes. http://crbug.com/258993
+TEST_F(RenderViewHostManagerTest, CleanUpSwappedOutRVHOnProcessCrash) {
+  const GURL kUrl1("http://www.google.com/");
+
+  // Navigate to an initial URL.
+  contents()->NavigateAndCommit(kUrl1);
+  TestRenderViewHost* rvh1 = test_rvh();
+
+  // Create a new tab as an opener for the main tab.
+  scoped_ptr<TestWebContents> opener1(
+      TestWebContents::Create(browser_context(), rvh1->GetSiteInstance()));
+  RenderViewHostManager* opener1_manager =
+      opener1->GetRenderManagerForTesting();
+  contents()->SetOpener(opener1.get());
+
+  EXPECT_FALSE(opener1_manager->GetSwappedOutRenderViewHost(
+      rvh1->GetSiteInstance()));
+  opener1->CreateSwappedOutRenderView(rvh1->GetSiteInstance());
+  EXPECT_TRUE(opener1_manager->GetSwappedOutRenderViewHost(
+      rvh1->GetSiteInstance()));
+
+  // Fake a process crash.
+  RenderProcessHost::RendererClosedDetails details(
+      rvh1->GetProcess()->GetHandle(),
+      base::TERMINATION_STATUS_PROCESS_CRASHED,
+      0);
+  NotificationService::current()->Notify(
+      NOTIFICATION_RENDERER_PROCESS_CLOSED,
+      Source<RenderProcessHost>(rvh1->GetProcess()),
+      Details<RenderProcessHost::RendererClosedDetails>(&details));
+  rvh1->set_render_view_created(false);
+
+  // Ensure that the swapped out RenderViewHost has been deleted.
+  EXPECT_FALSE(opener1_manager->GetSwappedOutRenderViewHost(
+      rvh1->GetSiteInstance()));
+
+  // Reload the initial tab. This should recreate the opener.
+  contents()->GetController().Reload(true);
+
+  EXPECT_EQ(opener1_manager->current_host()->GetRoutingID(),
+            test_rvh()->opener_route_id());
 }
 
 // Test that RenderViewHosts created for WebUI navigations are properly
@@ -879,7 +1143,7 @@ TEST_F(RenderViewHostManagerTest, EnableWebUIWithSwappedOutOpener) {
   // Ensure a swapped out RVH is created in the first opener tab.
   TestRenderViewHost* opener1_rvh = static_cast<TestRenderViewHost*>(
       opener1_manager->GetSwappedOutRenderViewHost(rvh2->GetSiteInstance()));
-  EXPECT_TRUE(opener1_manager->IsSwappedOut(opener1_rvh));
+  EXPECT_TRUE(opener1_manager->IsOnSwappedOutList(opener1_rvh));
   EXPECT_TRUE(opener1_rvh->is_swapped_out());
 
   // Ensure the new RVH has WebUI bindings.
@@ -900,7 +1164,7 @@ TEST_F(RenderViewHostManagerTest, NoSwapOnGuestNavigations) {
   RenderViewHostManager manager(web_contents.get(), web_contents.get(),
                                 web_contents.get());
 
-  manager.Init(browser_context(), instance, MSG_ROUTING_NONE);
+  manager.Init(browser_context(), instance, MSG_ROUTING_NONE, MSG_ROUTING_NONE);
 
   RenderViewHost* host;
 

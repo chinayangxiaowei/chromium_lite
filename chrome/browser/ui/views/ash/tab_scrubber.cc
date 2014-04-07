@@ -7,13 +7,13 @@
 #include "ash/shell.h"
 #include "ash/wm/window_util.h"
 #include "base/metrics/histogram.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/tabs/tab.h"
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/pref_names.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/notification_source.h"
@@ -126,8 +126,10 @@ void TabScrubber::OnScrollEvent(ui::ScrollEvent* event) {
     swipe_y_ = start_point.y();
     ImmersiveModeController* immersive_controller =
         browser_view->immersive_mode_controller();
-    if (immersive_controller->enabled())
-      immersive_reveal_lock_.reset(immersive_controller->GetRevealedLock());
+    if (immersive_controller->IsEnabled()) {
+      immersive_reveal_lock_.reset(immersive_controller->GetRevealedLock(
+          ImmersiveModeController::ANIMATE_REVEAL_YES));
+    }
     tab_strip->AddObserver(this);
   } else if (highlighted_tab_ == -1) {
     Direction direction = (x_offset < 0) ? LEFT : RIGHT;

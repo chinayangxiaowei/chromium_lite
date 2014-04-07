@@ -29,6 +29,7 @@ struct MouseEvent {
              MouseButton button,
              int x,
              int y,
+             int modifiers,
              int click_count);
   ~MouseEvent();
 
@@ -36,8 +37,27 @@ struct MouseEvent {
   MouseButton button;
   int x;
   int y;
+  int modifiers;
   // |click_count| should not be negative.
   int click_count;
+};
+
+// Specifies the type of the touch event.
+enum TouchEventType {
+  kTouchStart = 0,
+  kTouchEnd,
+  kTouchMove,
+};
+
+struct TouchEvent {
+  TouchEvent(TouchEventType type,
+             int x,
+             int y);
+  ~TouchEvent();
+
+  TouchEventType type;
+  int x;
+  int y;
 };
 
 // Specifies the type of the keyboard event.

@@ -7,10 +7,9 @@
 #include "base/bind_helpers.h"
 #include "base/compiler_specific.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/synchronization/waitable_event.h"
 #include "chrome/test/chromedriver/net/url_request_context_getter.h"
-#include "googleurl/src/gurl.h"
 #include "net/base/ip_endpoint.h"
 #include "net/base/net_errors.h"
 #include "net/base/net_log.h"
@@ -18,6 +17,7 @@
 #include "net/socket/tcp_server_socket.h"
 #include "net/url_request/url_fetcher.h"
 #include "net/url_request/url_fetcher_delegate.h"
+#include "url/gurl.h"
 
 namespace {
 
@@ -63,10 +63,10 @@ class SyncUrlFetcher : public net::URLFetcherDelegate {
 
 }  // namespace
 
-bool FetchUrl(const GURL& url,
+bool FetchUrl(const std::string& url,
               URLRequestContextGetter* getter,
               std::string* response) {
-  return SyncUrlFetcher(url, getter, response).Fetch();
+  return SyncUrlFetcher(GURL(url), getter, response).Fetch();
 }
 
 bool FindOpenPort(int* port) {

@@ -87,9 +87,9 @@ void Canvas::RecreateBackingCanvas(const gfx::Size& size,
 }
 
 // static
-int Canvas::GetStringWidth(const string16& text, const gfx::Font& font) {
+int Canvas::GetStringWidth(const base::string16& text, const gfx::Font& font) {
   int width = 0, height = 0;
-  Canvas::SizeStringInt(text, font, &width, &height, NO_ELLIPSIS);
+  Canvas::SizeStringInt(text, font, &width, &height, 0, NO_ELLIPSIS);
   return width;
 }
 
@@ -409,14 +409,14 @@ void Canvas::DrawImageInPath(const gfx::ImageSkia& image,
   canvas_->drawPath(path, p);
 }
 
-void Canvas::DrawStringInt(const string16& text,
+void Canvas::DrawStringInt(const base::string16& text,
                            const gfx::Font& font,
                            SkColor color,
                            int x, int y, int w, int h) {
   DrawStringInt(text, font, color, x, y, w, h, DefaultCanvasTextAlignment());
 }
 
-void Canvas::DrawStringInt(const string16& text,
+void Canvas::DrawStringInt(const base::string16& text,
                            const gfx::Font& font,
                            SkColor color,
                            const gfx::Rect& display_rect) {
@@ -424,7 +424,7 @@ void Canvas::DrawStringInt(const string16& text,
                 display_rect.width(), display_rect.height());
 }
 
-void Canvas::DrawStringInt(const string16& text,
+void Canvas::DrawStringInt(const base::string16& text,
                            const gfx::Font& font,
                            SkColor color,
                            int x, int y, int w, int h,
@@ -433,6 +433,7 @@ void Canvas::DrawStringInt(const string16& text,
                         font,
                         color,
                         gfx::Rect(x, y, w, h),
+                        0,
                         flags,
                         ShadowValues());
 }

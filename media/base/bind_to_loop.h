@@ -12,7 +12,7 @@
 
 #include "base/bind.h"
 #include "base/location.h"
-#include "base/message_loop_proxy.h"
+#include "base/message_loop/message_loop_proxy.h"
 
 // This is a helper utility for base::Bind()ing callbacks on to particular
 // MessageLoops.  A typical use is when |a| (of class |A|) wants to hand a
@@ -41,8 +41,8 @@ base::internal::PassedWrapper<scoped_ptr<T> > TrampolineForward(
     scoped_ptr<T>& p) { return base::Passed(&p); }
 
 template <typename T>
-base::internal::PassedWrapper<scoped_array<T> > TrampolineForward(
-    scoped_array<T>& p) { return base::Passed(&p); }
+base::internal::PassedWrapper<scoped_ptr<T[]> > TrampolineForward(
+    scoped_ptr<T[]>& p) { return base::Passed(&p); }
 
 template <typename T, typename R>
 base::internal::PassedWrapper<scoped_ptr_malloc<T, R> > TrampolineForward(

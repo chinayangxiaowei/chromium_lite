@@ -8,7 +8,7 @@
 #include "base/compiler_specific.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/threading/simple_thread.h"
 #include "base/threading/thread.h"
@@ -148,6 +148,11 @@ class PluginProxyTestHarness : public ProxyTestHarnessBase {
     virtual std::string GetUILanguage() OVERRIDE;
     virtual void PreCacheFont(const void* logfontw) OVERRIDE;
     virtual void SetActiveURL(const std::string& url) OVERRIDE;
+    virtual PP_Resource CreateBrowserFont(
+        Connection connection,
+        PP_Instance instance,
+        const PP_BrowserFont_Trusted_Description& desc,
+        const Preferences& prefs) OVERRIDE;
 
    private:
     base::MessageLoopProxy* ipc_message_loop_;  // Weak
@@ -177,7 +182,7 @@ class PluginProxyTest : public PluginProxyTestHarness, public testing::Test {
   virtual void SetUp();
   virtual void TearDown();
  private:
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
 };
 
 // This class provides support for multi-thread testing. A secondary thread is
@@ -301,7 +306,7 @@ class HostProxyTest : public HostProxyTestHarness, public testing::Test {
   virtual void SetUp();
   virtual void TearDown();
  private:
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
 };
 
 // Use this base class to test both sides of a proxy.
@@ -339,7 +344,7 @@ class TwoWayTest : public testing::Test {
   // The plugin side of the proxy runs on its own thread.
   base::Thread plugin_thread_;
   // The message loop for the main (host) thread.
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
 
   // Aliases for the host and plugin harnesses; if we're testing a PPP
   // interface, remote_harness will point to plugin_, and local_harness

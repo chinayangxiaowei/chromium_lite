@@ -30,9 +30,6 @@ struct TextRun {
   // |font.DeriveFont()|, which is expensive on Windows.
   int font_style;
 
-  // TODO(msw): Disambiguate color/style from TextRuns for proper glyph shaping.
-  //            See an example: http://www.catch22.net/tuts/uniscribe-mysteries
-  SkColor foreground;
   bool strike;
   bool diagonal_strike;
   bool underline;
@@ -79,10 +76,7 @@ class RenderTextWin : public RenderText {
   virtual SelectionModel AdjacentWordSelectionModel(
       const SelectionModel& selection,
       VisualCursorDirection direction) OVERRIDE;
-  virtual void SetSelectionModel(const SelectionModel& model) OVERRIDE;
-  virtual void GetGlyphBounds(size_t index,
-                              ui::Range* xspan,
-                              int* height) OVERRIDE;
+  virtual ui::Range GetGlyphBounds(size_t index) OVERRIDE;
   virtual std::vector<Rect> GetSubstringBounds(const ui::Range& range) OVERRIDE;
   virtual size_t TextIndexToLayoutIndex(size_t index) const OVERRIDE;
   virtual size_t LayoutIndexToTextIndex(size_t index) const OVERRIDE;
@@ -92,6 +86,8 @@ class RenderTextWin : public RenderText {
   virtual void DrawVisualText(Canvas* canvas) OVERRIDE;
 
  private:
+  FRIEND_TEST_ALL_PREFIXES(RenderTextTest, Win_LogicalClusters);
+
   void ItemizeLogicalText();
   void LayoutVisualText();
   void LayoutTextRun(internal::TextRun* run);
@@ -106,7 +102,7 @@ class RenderTextWin : public RenderText {
   // Return the run index that contains the argument; or the length of the
   // |runs_| vector if argument exceeds the text length or width.
   size_t GetRunContainingCaret(const SelectionModel& caret) const;
-  size_t GetRunContainingPoint(const Point& point) const;
+  size_t GetRunContainingXCoord(int x) const;
 
   // Given a |run|, returns the SelectionModel that contains the logical first
   // or last caret position inside (not at a boundary of) the run.

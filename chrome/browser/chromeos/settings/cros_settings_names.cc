@@ -18,16 +18,33 @@ const char kAccountsPrefEphemeralUsersEnabled[] =
     "cros.accounts.ephemeralUsersEnabled";
 const char kAccountsPrefDeviceLocalAccounts[] =
     "cros.accounts.deviceLocalAccounts";
+const char kAccountsPrefDeviceLocalAccountsKeyId[] =
+    "id";
+const char kAccountsPrefDeviceLocalAccountsKeyType[] =
+    "type";
+const char kAccountsPrefDeviceLocalAccountsKeyKioskAppId[] =
+    "kiosk_app_id";
+const char kAccountsPrefDeviceLocalAccountsKeyKioskAppUpdateURL[] =
+    "kiosk_app_id_update_url";
 const char kAccountsPrefDeviceLocalAccountAutoLoginId[] =
     "cros.accounts.deviceLocalAccountAutoLoginId";
 const char kAccountsPrefDeviceLocalAccountAutoLoginDelay[] =
     "cros.accounts.deviceLocalAccountAutoLoginDelay";
-
-// Name of signed setting persisted on device, writeable only by owner.
-const char kSettingProxyEverywhere[] = "cros.proxy.everywhere";
+const char kAccountsPrefDeviceLocalAccountAutoLoginBailoutEnabled[] =
+    "cros.accounts.deviceLocalAccountAutoLoginBailoutEnabled";
+const char kAccountsPrefSupervisedUsersEnabled[] =
+    "cros.accounts.supervisedUsersEnabled";
 
 // All cros.signed.* settings are stored in SignedSettings.
 const char kSignedDataRoamingEnabled[] = "cros.signed.data_roaming_enabled";
+
+// True if auto-update was disabled by the system administrator.
+const char kUpdateDisabled[] = "cros.system.updateDisabled";
+
+// A list of strings which specifies allowed connection types for
+// update.
+const char kAllowedConnectionTypesForUpdate[] =
+    "cros.system.allowedConnectionTypesForUpdate";
 
 // The first constant refers to the user setting editable in the UI. The second
 // refers to the timezone policy. This seperation is necessary to allow the user
@@ -35,6 +52,10 @@ const char kSignedDataRoamingEnabled[] = "cros.signed.data_roaming_enabled";
 // the policy's value on logout.
 const char kSystemTimezone[] = "cros.system.timezone";
 const char kSystemTimezonePolicy[] = "cros.system.timezone_policy";
+
+// Value of kUse24HourClock user preference of device' owner.
+// ChromeOS device uses this setting on login screen.
+const char kSystemUse24HourClock[] = "cros.system.use_24hour_clock";
 
 const char kDeviceOwner[] = "cros.device.owner";
 
@@ -61,12 +82,19 @@ const char kReportDeviceBootMode[] = "cros.device_status.report_boot_mode";
 // along with device policy requests.
 const char kReportDeviceLocation[] = "cros.device_status.report_location";
 
+// Determines whether the device reports network interface types and addresses
+// in device status reports to the device management server.
+const char kReportDeviceNetworkInterfaces[] =
+    "cros.device_status.report_network_interfaces";
+
 // A list of dictionaries, each detailing one extension to install as part of
 // the AppPack and including the following fields:
 // "extension-id": ID of the extension to install
 // "update-url": URL to check the extension's version and download location
 // "key-checksum": checksum of the extension's CRX public key, encoded in hex.
 const char kAppPack[] = "cros.app_pack";
+const char kAppPackKeyExtensionId[] = "extension-id";
+const char kAppPackKeyUpdateUrl[] = "update-url";
 
 // Values from the ScreenSaver proto. Defines the extension ID of the screen
 // saver extension and the timeout before the screen saver should be started.
@@ -96,4 +124,13 @@ const char kAllowRedeemChromeOsRegistrationOffers[] =
 // A list pref storing the flags that need to be applied to the browser upon
 // start-up.
 const char kStartUpFlags[] = "cros.startup_flags";
+
+// A string pref for the restrict parameter to be appended to the Variations URL
+// when pinging the Variations server.
+const char kVariationsRestrictParameter[] =
+    "cros.variations_restrict_parameter";
+
+// A boolean pref that indicates whether attestation is enabled for the device.
+const char kDeviceAttestationEnabled[] = "cros.device.attestation_enabled";
+
 }  // namespace chromeos

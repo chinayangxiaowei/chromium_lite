@@ -7,12 +7,12 @@
 
 #include <string>
 
-#include "googleurl/src/gurl.h"
 #include "net/base/net_export.h"
 #include "net/proxy/proxy_bypass_rules.h"
 #include "net/proxy/proxy_config_source.h"
 #include "net/proxy/proxy_list.h"
 #include "net/proxy/proxy_server.h"
+#include "url/gurl.h"
 
 namespace base {
 class Value;
@@ -170,7 +170,7 @@ class NET_EXPORT ProxyConfig {
 
   // Creates a Value dump of this configuration. The caller is responsible for
   // deleting the returned value.
-  base::Value* ToValue() const;
+  base::DictionaryValue* ToValue() const;
 
   ProxyRules& proxy_rules() {
     return proxy_rules_;

@@ -5,20 +5,25 @@
 #include "base/bind_helpers.h"
 #include "base/command_line.h"
 #include "base/logging.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "content/browser/browser_plugin/browser_plugin_guest.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
 #include "content/browser/renderer_host/render_widget_host_view_guest.h"
-#if defined(OS_WIN) || defined(USE_AURA)
-#include "content/browser/renderer_host/ui_events_helper.h"
-#endif
 #include "content/common/browser_plugin/browser_plugin_messages.h"
 #include "content/common/gpu/gpu_messages.h"
 #include "content/common/view_messages.h"
+#include "content/common/webplugin_geometry.h"
 #include "content/public/common/content_switches.h"
 #include "skia/ext/platform_canvas.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebScreenInfo.h"
-#include "webkit/plugins/npapi/webplugin.h"
+#include "third_party/WebKit/public/web/WebScreenInfo.h"
+
+#if defined(OS_MACOSX)
+#import "content/browser/renderer_host/render_widget_host_view_mac_dictionary_helper.h"
+#endif
+
+#if defined(OS_WIN) || defined(USE_AURA)
+#include "content/browser/renderer_host/ui_events_helper.h"
+#endif
 
 namespace content {
 
@@ -62,25 +67,35 @@ RenderWidgetHost* RenderWidgetHostViewGuest::GetRenderWidgetHost() const {
 }
 
 void RenderWidgetHostViewGuest::WasShown() {
-  if (!is_hidden_)
+  // If the WebContents associated with us showed an interstitial page in the
+  // beginning, the teardown path might call WasShown() while |host_| is in
+  // the process of destruction. Avoid calling WasShown below in this case.
+  // TODO(lazyboy): We shouldn't be showing interstitial pages in guests in the
+  // first place: http://crbug.com/273089.
+  //
+  // |guest_| is NULL during test.
+  if (!is_hidden_ || (guest_ && guest_->is_in_destruction()))
     return;
   is_hidden_ = false;
   host_->WasShown();
 }
 
 void RenderWidgetHostViewGuest::WasHidden() {
-  if (is_hidden_)
+  // |guest_| is NULL during test.
+  if (is_hidden_ || (guest_ && guest_->is_in_destruction()))
     return;
   is_hidden_ = true;
   host_->WasHidden();
 }
 
 void RenderWidgetHostViewGuest::SetSize(const gfx::Size& size) {
-  platform_view_->SetSize(size);
+  size_ = size;
+  host_->WasResized();
 }
 
 gfx::Rect RenderWidgetHostViewGuest::GetBoundsInRootWindow() {
-  return platform_view_->GetBoundsInRootWindow();
+  // We do not have any root window specific parts in this view.
+  return GetViewBounds();
 }
 
 gfx::GLSurfaceHandle RenderWidgetHostViewGuest::GetCompositingSurface() {
@@ -89,7 +104,7 @@ gfx::GLSurfaceHandle RenderWidgetHostViewGuest::GetCompositingSurface() {
 
 #if defined(OS_WIN) || defined(USE_AURA)
 void RenderWidgetHostViewGuest::ProcessAckedTouchEvent(
-    const WebKit::WebTouchEvent& touch, InputEventAckState ack_result) {
+    const TouchEventWithLatencyInfo& touch, InputEventAckState ack_result) {
   // TODO(fsamuel): Currently we will only take this codepath if the guest has
   // requested touch events. A better solution is to always forward touchpresses
   // to the embedder process to target a BrowserPlugin, and then route all
@@ -124,21 +139,31 @@ bool RenderWidgetHostViewGuest::IsShowing() {
 }
 
 gfx::Rect RenderWidgetHostViewGuest::GetViewBounds() const {
-  return platform_view_->GetViewBounds();
+  RenderWidgetHostViewPort* rwhv = static_cast<RenderWidgetHostViewPort*>(
+      guest_->GetEmbedderRenderWidgetHostView());
+  gfx::Rect embedder_bounds;
+  if (rwhv)
+    embedder_bounds = rwhv->GetViewBounds();
+  gfx::Rect shifted_rect = guest_->ToGuestRect(embedder_bounds);
+  shifted_rect.set_width(size_.width());
+  shifted_rect.set_height(size_.height());
+  return shifted_rect;
 }
 
-void RenderWidgetHostViewGuest::RenderViewGone(base::TerminationStatus status,
-                                               int error_code) {
-  platform_view_->RenderViewGone(status, error_code);
+void RenderWidgetHostViewGuest::RenderProcessGone(
+    base::TerminationStatus status,
+    int error_code) {
+  platform_view_->RenderProcessGone(status, error_code);
   // Destroy the guest view instance only, so we don't end up calling
   // platform_view_->Destroy().
   DestroyGuestView();
 }
 
 void RenderWidgetHostViewGuest::Destroy() {
-  platform_view_->Destroy();
   // The RenderWidgetHost's destruction led here, so don't call it.
   DestroyGuestView();
+
+  platform_view_->Destroy();
 }
 
 void RenderWidgetHostViewGuest::SetTooltipText(const string16& tooltip_text) {
@@ -151,13 +176,13 @@ void RenderWidgetHostViewGuest::AcceleratedSurfaceBuffersSwapped(
   // If accelerated surface buffers are getting swapped then we're not using
   // the software path.
   guest_->clear_damage_buffer();
+  BrowserPluginMsg_BuffersSwapped_Params guest_params;
+  guest_params.size = params.size;
+  guest_params.mailbox_name = params.mailbox_name;
+  guest_params.route_id = params.route_id;
+  guest_params.host_id = gpu_host_id;
   guest_->SendMessageToEmbedder(
-      new BrowserPluginMsg_BuffersSwapped(
-          guest_->instance_id(),
-          params.size,
-          params.mailbox_name,
-          params.route_id,
-          gpu_host_id));
+      new BrowserPluginMsg_BuffersSwapped(guest_->instance_id(), guest_params));
 }
 
 void RenderWidgetHostViewGuest::AcceleratedSurfacePostSubBuffer(
@@ -166,8 +191,38 @@ void RenderWidgetHostViewGuest::AcceleratedSurfacePostSubBuffer(
   NOTREACHED();
 }
 
+void RenderWidgetHostViewGuest::OnSwapCompositorFrame(
+    uint32 output_surface_id,
+    scoped_ptr<cc::CompositorFrame> frame) {
+  if (frame->software_frame_data) {
+    cc::SoftwareFrameData* frame_data = frame->software_frame_data.get();
+#ifdef OS_WIN
+    base::SharedMemory shared_memory(frame_data->handle, true,
+                                     host_->GetProcess()->GetHandle());
+#else
+    base::SharedMemory shared_memory(frame_data->handle, true);
+#endif
+
+    RenderWidgetHostView* embedder_view =
+        guest_->GetEmbedderRenderWidgetHostView();
+    base::ProcessHandle embedder_pid =
+        embedder_view->GetRenderWidgetHost()->GetProcess()->GetHandle();
+
+    shared_memory.GiveToProcess(embedder_pid, &frame_data->handle);
+  }
+
+  guest_->clear_damage_buffer();
+  guest_->SendMessageToEmbedder(
+      new BrowserPluginMsg_CompositorFrameSwapped(
+          guest_->instance_id(),
+          *frame,
+          host_->GetRoutingID(),
+          output_surface_id,
+          host_->GetProcess()->GetID()));
+}
+
 void RenderWidgetHostViewGuest::SetBounds(const gfx::Rect& rect) {
-  platform_view_->SetBounds(rect);
+  SetSize(rect.size());
 }
 
 bool RenderWidgetHostViewGuest::OnMessageReceived(const IPC::Message& msg) {
@@ -205,7 +260,7 @@ gfx::NativeViewAccessible RenderWidgetHostViewGuest::GetNativeViewAccessible() {
 
 void RenderWidgetHostViewGuest::MovePluginWindows(
     const gfx::Vector2d& scroll_offset,
-    const std::vector<webkit::npapi::WebPluginGeometry>& moves) {
+    const std::vector<WebPluginGeometry>& moves) {
   platform_view_->MovePluginWindows(scroll_offset, moves);
 }
 
@@ -232,25 +287,38 @@ void RenderWidgetHostViewGuest::SetIsLoading(bool is_loading) {
   platform_view_->SetIsLoading(is_loading);
 }
 
-void RenderWidgetHostViewGuest::TextInputStateChanged(
-    const ViewHostMsg_TextInputState_Params& params) {
-  platform_view_->TextInputStateChanged(params);
+void RenderWidgetHostViewGuest::TextInputTypeChanged(
+    ui::TextInputType type,
+    bool can_compose_inline,
+    ui::TextInputMode input_mode) {
+  RenderWidgetHostViewPort::FromRWHV(
+      guest_->GetEmbedderRenderWidgetHostView())->
+          TextInputTypeChanged(type, can_compose_inline, input_mode);
 }
 
 void RenderWidgetHostViewGuest::ImeCancelComposition() {
   platform_view_->ImeCancelComposition();
 }
 
+#if defined(OS_MACOSX) || defined(OS_WIN) || defined(USE_AURA)
 void RenderWidgetHostViewGuest::ImeCompositionRangeChanged(
     const ui::Range& range,
     const std::vector<gfx::Rect>& character_bounds) {
 }
+#endif
 
 void RenderWidgetHostViewGuest::DidUpdateBackingStore(
     const gfx::Rect& scroll_rect,
     const gfx::Vector2d& scroll_delta,
-    const std::vector<gfx::Rect>& copy_rects) {
+    const std::vector<gfx::Rect>& copy_rects,
+    const ui::LatencyInfo& latency_info) {
   NOTREACHED();
+}
+
+void RenderWidgetHostViewGuest::SelectionChanged(const string16& text,
+                                                 size_t offset,
+                                                 const ui::Range& range) {
+  platform_view_->SelectionChanged(text, offset, range);
 }
 
 void RenderWidgetHostViewGuest::SelectionBoundsChanged(
@@ -308,8 +376,10 @@ void RenderWidgetHostViewGuest::SetClickthroughRegion(SkRegion* region) {
 #endif
 
 #if defined(OS_WIN) && defined(USE_AURA)
-void RenderWidgetHostViewGuest::SetParentNativeViewAccessible(
-    gfx::NativeViewAccessible accessible_parent) {
+gfx::NativeViewAccessible
+RenderWidgetHostViewGuest::AccessibleObjectFromChildId(long child_id) {
+  NOTIMPLEMENTED();
+  return NULL;
 }
 #endif
 
@@ -336,7 +406,10 @@ void RenderWidgetHostViewGuest::UnlockMouse() {
 }
 
 void RenderWidgetHostViewGuest::GetScreenInfo(WebKit::WebScreenInfo* results) {
-  platform_view_->GetScreenInfo(results);
+  RenderWidgetHostViewPort* embedder_view =
+      RenderWidgetHostViewPort::FromRWHV(
+          guest_->GetEmbedderRenderWidgetHostView());
+  embedder_view->GetScreenInfo(results);
 }
 
 void RenderWidgetHostViewGuest::OnAccessibilityNotifications(
@@ -361,7 +434,21 @@ void RenderWidgetHostViewGuest::WindowFrameChanged() {
 }
 
 void RenderWidgetHostViewGuest::ShowDefinitionForSelection() {
-  platform_view_->ShowDefinitionForSelection();
+  gfx::Point origin;
+  gfx::Rect guest_bounds = GetViewBounds();
+  gfx::Rect embedder_bounds =
+      guest_->GetEmbedderRenderWidgetHostView()->GetViewBounds();
+
+  gfx::Vector2d guest_offset = gfx::Vector2d(
+      // Horizontal offset of guest from embedder.
+      guest_bounds.x() - embedder_bounds.x(),
+      // Vertical offset from guest's top to embedder's bottom edge.
+      embedder_bounds.bottom() - guest_bounds.y());
+
+  RenderWidgetHostViewMacDictionaryHelper helper(platform_view_);
+  helper.SetTargetView(guest_->GetEmbedderRenderWidgetHostView());
+  helper.set_offset(guest_offset);
+  helper.ShowDefinitionForSelection();
 }
 
 bool RenderWidgetHostViewGuest::SupportsSpeech() const {
@@ -397,17 +484,6 @@ void RenderWidgetHostViewGuest::ShowDisambiguationPopup(
     const SkBitmap& zoomed_bitmap) {
 }
 
-void RenderWidgetHostViewGuest::UpdateFrameInfo(
-    const gfx::Vector2dF& scroll_offset,
-    float page_scale_factor,
-    const gfx::Vector2dF& page_scale_factor_limits,
-    const gfx::SizeF& content_size,
-    const gfx::SizeF& viewport_size,
-    const gfx::Vector2dF& controls_offset,
-    const gfx::Vector2dF& content_offset,
-    float overdraw_bottom_height) {
-}
-
 void RenderWidgetHostViewGuest::HasTouchEventHandlers(bool need_touch_events) {
 }
 #endif  // defined(OS_ANDROID)
@@ -418,7 +494,7 @@ GdkEventButton* RenderWidgetHostViewGuest::GetLastMouseDown() {
 }
 
 gfx::NativeView RenderWidgetHostViewGuest::BuildInputMethodsGtkMenu() {
-  return gfx::NativeView();
+  return platform_view_->BuildInputMethodsGtkMenu();
 }
 #endif  // defined(TOOLKIT_GTK)
 
@@ -427,9 +503,16 @@ void RenderWidgetHostViewGuest::WillWmDestroy() {
 }
 #endif
 
+#if defined(OS_WIN) && defined(USE_AURA)
+void RenderWidgetHostViewGuest::SetParentNativeViewAccessible(
+    gfx::NativeViewAccessible accessible_parent) {
+}
+#endif
+
 void RenderWidgetHostViewGuest::DestroyGuestView() {
+  host_->SetView(NULL);
   host_ = NULL;
-  MessageLoop::current()->DeleteSoon(FROM_HERE, this);
+  base::MessageLoop::current()->DeleteSoon(FROM_HERE, this);
 }
 
 bool RenderWidgetHostViewGuest::DispatchLongPressGestureEvent(
@@ -445,7 +528,7 @@ bool RenderWidgetHostViewGuest::DispatchCancelTouchEvent(
   WebKit::WebTouchEvent cancel_event;
   cancel_event.type = WebKit::WebInputEvent::TouchCancel;
   cancel_event.timeStampSeconds = event->time_stamp().InSecondsF();
-  host_->ForwardTouchEvent(cancel_event);
+  host_->ForwardTouchEventWithLatencyInfo(cancel_event, *event->latency());
   return true;
 }
 

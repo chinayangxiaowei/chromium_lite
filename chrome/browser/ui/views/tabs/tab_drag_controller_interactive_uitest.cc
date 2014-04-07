@@ -10,26 +10,28 @@
 #include "base/command_line.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_iterator.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/host_desktop.h"
+#include "chrome/browser/ui/immersive_fullscreen_configuration.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/tabs/tab.h"
 #include "chrome/browser/ui/views/tabs/tab_drag_controller.h"
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/interactive_test_utils.h"
-#include "chrome/test/base/ui_controls.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/notification_details.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/notification_source.h"
 #include "content/public/browser/web_contents.h"
+#include "ui/base/test/ui_controls.h"
 #include "ui/gfx/screen.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
@@ -39,7 +41,10 @@
 #include "ash/display/display_manager.h"
 #include "ash/shell.h"
 #include "ash/test/cursor_manager_test_api.h"
+#include "ash/wm/coordinate_conversion.h"
 #include "ash/wm/window_util.h"
+#include "chrome/browser/ui/views/frame/immersive_mode_controller_ash.h"
+#include "ui/aura/client/screen_position_client.h"
 #include "ui/aura/root_window.h"
 #include "ui/aura/test/event_generator.h"
 #endif
@@ -77,7 +82,7 @@ class QuitDraggingObserver : public content::NotificationObserver {
                        const content::NotificationSource& source,
                        const content::NotificationDetails& details) OVERRIDE {
     DCHECK_EQ(chrome::NOTIFICATION_TAB_DRAG_LOOP_DONE, type);
-    MessageLoopForUI::current()->Quit();
+    base::MessageLoopForUI::current()->Quit();
     delete this;
   }
 
@@ -149,6 +154,15 @@ TabDragControllerTest::TabDragControllerTest()
 TabDragControllerTest::~TabDragControllerTest() {
 }
 
+void TabDragControllerTest::SetUp() {
+  // TODO(danakj): Remove this when the tests are not flaky (crbug.com/270065)
+  // or we use test contexts in the renderer to keep things fast enough to
+  // avoid the flake (crbug.com/270918).
+  UseRealGLBindings();
+
+  InProcessBrowserTest::SetUp();
+}
+
 void TabDragControllerTest::StopAnimating(TabStrip* tab_strip) {
   tab_strip->StopAnimating(true);
 }
@@ -199,6 +213,32 @@ bool GetTrackedByWorkspace(Browser* browser) {
 
 }  // namespace
 
+#if defined(USE_ASH) && !defined(OS_WIN)  // TODO(win_ash)
+class ScreenEventGeneratorDelegate : public aura::test::EventGeneratorDelegate {
+ public:
+  explicit ScreenEventGeneratorDelegate(aura::RootWindow* root_window)
+      : root_window_(root_window) {}
+  virtual ~ScreenEventGeneratorDelegate() {}
+
+  // EventGeneratorDelegate overrides:
+  virtual aura::RootWindow* GetRootWindowAt(
+      const gfx::Point& point) const OVERRIDE {
+    return root_window_;
+  }
+
+  virtual aura::client::ScreenPositionClient* GetScreenPositionClient(
+      const aura::Window* window) const OVERRIDE {
+    return aura::client::GetScreenPositionClient(root_window_);
+  }
+
+ private:
+  aura::RootWindow* root_window_;
+
+  DISALLOW_COPY_AND_ASSIGN(ScreenEventGeneratorDelegate);
+};
+
+#endif
+
 class DetachToBrowserTabDragControllerTest
     : public TabDragControllerTest,
       public ::testing::WithParamInterface<const char*> {
@@ -219,6 +259,16 @@ class DetachToBrowserTabDragControllerTest
   InputSource input_source() const {
     return !strcmp(GetParam(), "mouse") ?
         INPUT_SOURCE_MOUSE : INPUT_SOURCE_TOUCH;
+  }
+
+  // Set root window from a point in screen coordinates
+  void SetEventGeneratorRootWindow(const gfx::Point& point) {
+    if (input_source() == INPUT_SOURCE_MOUSE)
+      return;
+#if defined(USE_ASH) && !defined(OS_WIN)  // TODO(win_ash)
+    event_generator_.reset(new aura::test::EventGenerator(
+        new ScreenEventGeneratorDelegate(ash::wm::GetRootWindowAt(point))));
+#endif
   }
 
   // The following methods update one of the mouse or touch input depending upon
@@ -266,7 +316,7 @@ class DetachToBrowserTabDragControllerTest
     if (input_source() == INPUT_SOURCE_MOUSE)
       return ui_controls::SendMouseMoveNotifyWhenDone(x, y, task);
 #if defined(USE_ASH) && !defined(OS_WIN)  // TODO(win_ash)
-    MessageLoop::current()->PostTask(FROM_HERE, task);
+    base::MessageLoop::current()->PostTask(FROM_HERE, task);
     event_generator_->MoveTouch(gfx::Point(x, y));
 #else
     NOTREACHED();
@@ -297,7 +347,7 @@ class DetachToBrowserTabDragControllerTest
       // Schedule observer to quit message loop when done dragging. This has to
       // be async so the message loop can run.
       test::QuitWhenNotDraggingImpl();
-      MessageLoop::current()->Run();
+      base::MessageLoop::current()->Run();
     } else {
       // Touch events are sync, so we know we're not in a drag session. But some
       // tests rely on the browser fully closing, which is async. So, run all
@@ -360,9 +410,15 @@ void DragToSeparateWindowStep2(DetachToBrowserTabDragControllerTest* test,
 
 }  // namespace
 
+#if defined(OS_WIN) && defined(USE_AURA)
+#define MAYBE_DragToSeparateWindow DISABLED_DragToSeparateWindow
+#else
+#define MAYBE_DragToSeparateWindow DragToSeparateWindow
+#endif
+
 // Creates two browsers, drags from first into second.
 IN_PROC_BROWSER_TEST_P(DetachToBrowserTabDragControllerTest,
-                       DragToSeparateWindow) {
+                       MAYBE_DragToSeparateWindow) {
   TabStrip* tab_strip = GetTabStripForBrowser(browser());
 
   // Add another tab to browser().
@@ -396,6 +452,10 @@ IN_PROC_BROWSER_TEST_P(DetachToBrowserTabDragControllerTest,
   EXPECT_EQ("100 0", IDString(browser2->tab_strip_model()));
   EXPECT_EQ("1", IDString(browser()->tab_strip_model()));
   EXPECT_TRUE(GetTrackedByWorkspace(browser2));
+
+  // Both windows should not be maximized
+  EXPECT_FALSE(browser()->window()->IsMaximized());
+  EXPECT_FALSE(browser2->window()->IsMaximized());
 }
 
 namespace {
@@ -467,6 +527,67 @@ IN_PROC_BROWSER_TEST_P(DetachToBrowserTabDragControllerTest,
   EXPECT_TRUE(IsWindowPositionManaged(browser()->window()->GetNativeWindow()));
   EXPECT_TRUE(IsWindowPositionManaged(
       new_browser->window()->GetNativeWindow()));
+
+  // Both windows should not be maximized
+  EXPECT_FALSE(browser()->window()->IsMaximized());
+  EXPECT_FALSE(new_browser->window()->IsMaximized());
+}
+
+// Drags from browser to separate window and releases mouse.
+IN_PROC_BROWSER_TEST_P(DetachToBrowserTabDragControllerTest,
+                       DetachToOwnWindowFromMaximizedWindow) {
+  if (!TabDragController::ShouldDetachIntoNewBrowser()) {
+    VLOG(1)
+        << "Skipping DetachToOwnWindowFromMaximizedWindow on this platform.";
+    return;
+  }
+
+  // Maximize the initial browser window.
+  browser()->window()->Maximize();
+  ASSERT_TRUE(browser()->window()->IsMaximized());
+
+  // Add another tab.
+  AddTabAndResetBrowser(browser());
+  TabStrip* tab_strip = GetTabStripForBrowser(browser());
+
+  // Move to the first tab and drag it enough so that it detaches.
+  gfx::Point tab_0_center(
+      GetCenterInScreenCoordinates(tab_strip->tab_at(0)));
+  ASSERT_TRUE(PressInput(tab_0_center));
+  ASSERT_TRUE(DragInputToNotifyWhenDone(
+                  tab_0_center.x(), tab_0_center.y() + GetDetachY(tab_strip),
+                  base::Bind(&DetachToOwnWindowStep2, this)));
+  if (input_source() == INPUT_SOURCE_MOUSE) {
+    ASSERT_TRUE(ReleaseMouseAsync());
+    QuitWhenNotDragging();
+  }
+
+  // Should no longer be dragging.
+  ASSERT_FALSE(tab_strip->IsDragSessionActive());
+  ASSERT_FALSE(TabDragController::IsActive());
+
+  // There should now be another browser.
+  ASSERT_EQ(2u, native_browser_list->size());
+  Browser* new_browser = native_browser_list->get(1);
+  ASSERT_TRUE(new_browser->window()->IsActive());
+  TabStrip* tab_strip2 = GetTabStripForBrowser(new_browser);
+  ASSERT_FALSE(tab_strip2->IsDragSessionActive());
+
+  EXPECT_EQ("0", IDString(new_browser->tab_strip_model()));
+  EXPECT_EQ("1", IDString(browser()->tab_strip_model()));
+
+  // The bounds of the initial window should not have changed.
+  EXPECT_TRUE(browser()->window()->IsMaximized());
+
+  EXPECT_TRUE(GetTrackedByWorkspace(browser()));
+  EXPECT_TRUE(GetTrackedByWorkspace(new_browser));
+  // After this both windows should still be managable.
+  EXPECT_TRUE(IsWindowPositionManaged(browser()->window()->GetNativeWindow()));
+  EXPECT_TRUE(IsWindowPositionManaged(
+      new_browser->window()->GetNativeWindow()));
+
+  // The new window should not be maximized.
+  EXPECT_FALSE(new_browser->window()->IsMaximized());
 }
 
 // Deletes a tab being dragged before the user moved enough to start a drag.
@@ -601,6 +722,9 @@ IN_PROC_BROWSER_TEST_P(DetachToBrowserTabDragControllerTest,
   EXPECT_EQ("0", IDString(new_browser->tab_strip_model()));
 
   EXPECT_TRUE(GetTrackedByWorkspace(new_browser));
+
+  // Remaining browser window should not be maximized
+  EXPECT_FALSE(new_browser->window()->IsMaximized());
 }
 
 namespace {
@@ -639,6 +763,9 @@ IN_PROC_BROWSER_TEST_P(DetachToBrowserTabDragControllerTest,
   EXPECT_EQ(1u, native_browser_list->size());
 
   EXPECT_EQ("0 1", IDString(browser()->tab_strip_model()));
+
+  // Remaining browser window should not be maximized
+  EXPECT_FALSE(browser()->window()->IsMaximized());
 }
 
 namespace {
@@ -683,6 +810,9 @@ IN_PROC_BROWSER_TEST_P(DetachToBrowserTabDragControllerTest, DragAll) {
   EXPECT_EQ("0 1", IDString(browser()->tab_strip_model()));
 
   EXPECT_TRUE(GetTrackedByWorkspace(browser()));
+
+  // Remaining browser window should not be maximized
+  EXPECT_FALSE(browser()->window()->IsMaximized());
 }
 
 namespace {
@@ -745,6 +875,9 @@ IN_PROC_BROWSER_TEST_P(DetachToBrowserTabDragControllerTest,
   EXPECT_EQ("100 0 1", IDString(browser2->tab_strip_model()));
 
   EXPECT_TRUE(GetTrackedByWorkspace(browser2));
+
+  // Remaining browser window should not be maximized
+  EXPECT_FALSE(browser2->window()->IsMaximized());
 }
 
 namespace {
@@ -814,6 +947,9 @@ IN_PROC_BROWSER_TEST_P(DetachToBrowserTabDragControllerTest,
   ASSERT_EQ(1u, native_browser_list->size());
 
   EXPECT_TRUE(GetTrackedByWorkspace(browser2));
+
+  // Remaining browser window should not be maximized
+  EXPECT_FALSE(browser2->window()->IsMaximized());
 }
 
 // Creates two browsers, drags from first into the second in such a way that
@@ -858,6 +994,10 @@ IN_PROC_BROWSER_TEST_P(DetachToBrowserTabDragControllerTest,
 
   EXPECT_TRUE(GetTrackedByWorkspace(browser()));
   EXPECT_TRUE(GetTrackedByWorkspace(browser2));
+
+  // Both windows should not be maximized
+  EXPECT_FALSE(browser()->window()->IsMaximized());
+  EXPECT_FALSE(browser2->window()->IsMaximized());
 }
 
 // Creates two browsers, the first browser has a single tab and drags into the
@@ -896,6 +1036,10 @@ IN_PROC_BROWSER_TEST_P(DetachToBrowserTabDragControllerTest,
   EXPECT_EQ("100 0", IDString(browser2->tab_strip_model()));
 
   EXPECT_TRUE(GetTrackedByWorkspace(browser2));
+
+  // Remaining browser window should not be maximized
+  EXPECT_FALSE(browser2->window()->IsMaximized());
+
   // Make sure that the window is still managed and not user moved.
   EXPECT_TRUE(IsWindowPositionManaged(browser2->window()->GetNativeWindow()));
   EXPECT_FALSE(HasUserChangedWindowPositionOrSize(
@@ -941,8 +1085,11 @@ IN_PROC_BROWSER_TEST_P(DetachToBrowserTabDragControllerTest,
   // Should be two windows and not dragging.
   ASSERT_FALSE(TabDragController::IsActive());
   ASSERT_EQ(2u, native_browser_list->size());
-  for (chrome::BrowserIterator it; !it.done(); it.Next())
+  for (chrome::BrowserIterator it; !it.done(); it.Next()) {
     EXPECT_TRUE(GetTrackedByWorkspace(*it));
+    // Should not be maximized
+    EXPECT_FALSE(it->window()->IsMaximized());
+  }
 }
 
 #if defined(USE_ASH) && !defined(OS_WIN)  // TODO(win_ash)
@@ -998,12 +1145,16 @@ IN_PROC_BROWSER_TEST_P(DetachToBrowserTabDragControllerTest,
   Browser* new_browser = native_browser_list->get(1);
   ASSERT_TRUE(new_browser->window()->IsActive());
 
-  // Only the new browser should be visible.
-  EXPECT_FALSE(browser()->window()->GetNativeWindow()->IsVisible());
+  EXPECT_TRUE(browser()->window()->GetNativeWindow()->IsVisible());
   EXPECT_TRUE(new_browser->window()->GetNativeWindow()->IsVisible());
 
   EXPECT_TRUE(GetTrackedByWorkspace(browser()));
   EXPECT_TRUE(GetTrackedByWorkspace(new_browser));
+
+  // The source window should be maximized, but the new window should now
+  // be restored.
+  EXPECT_TRUE(browser()->window()->IsMaximized());
+  EXPECT_FALSE(new_browser->window()->IsMaximized());
 }
 
 // Subclass of DetachToBrowserInSeparateDisplayTabDragControllerTest that
@@ -1015,8 +1166,9 @@ class DetachToBrowserInSeparateDisplayTabDragControllerTest
 
   virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
     DetachToBrowserTabDragControllerTest::SetUpCommandLine(command_line);
+    // Make screens sufficiently wide to host 2 browsers side by side.
     command_line->AppendSwitchASCII("ash-host-window-bounds",
-                                    "0+0-250x250,251+0-250x250");
+                                    "0+0-600x600,601+0-600x600");
   }
 
  private:
@@ -1026,12 +1178,17 @@ class DetachToBrowserInSeparateDisplayTabDragControllerTest
 
 namespace {
 
+void DragSingleTabToSeparateWindowInSecondDisplayStep3(
+    DetachToBrowserTabDragControllerTest* test) {
+  ASSERT_TRUE(test->ReleaseInput());
+}
+
 void DragSingleTabToSeparateWindowInSecondDisplayStep2(
     DetachToBrowserTabDragControllerTest* test,
     const gfx::Point& target_point) {
-  ASSERT_TRUE(test->DragInputTo(target_point));
-  if (test->input_source() == INPUT_SOURCE_TOUCH)
-    ASSERT_TRUE(test->ReleaseInput());
+  ASSERT_TRUE(test->DragInputToNotifyWhenDone(
+      target_point.x(), target_point.y(),
+      base::Bind(&DragSingleTabToSeparateWindowInSecondDisplayStep3, test)));
 }
 
 }  // namespace
@@ -1044,18 +1201,16 @@ IN_PROC_BROWSER_TEST_P(DetachToBrowserInSeparateDisplayTabDragControllerTest,
   TabStrip* tab_strip = GetTabStripForBrowser(browser());
 
   // Move to the first tab and drag it enough so that it detaches.
-  gfx::Point tab_0_center(
-      GetCenterInScreenCoordinates(tab_strip->tab_at(0)));
+  // Then drag it to the final destination on the second screen.
+  gfx::Point tab_0_center(GetCenterInScreenCoordinates(tab_strip->tab_at(0)));
   ASSERT_TRUE(PressInput(tab_0_center));
   ASSERT_TRUE(DragInputToNotifyWhenDone(
                   tab_0_center.x(), tab_0_center.y() + GetDetachY(tab_strip),
                   base::Bind(&DragSingleTabToSeparateWindowInSecondDisplayStep2,
-                             this, gfx::Point(tab_0_center.x(), 250 +
-                                              GetDetachY(tab_strip)))));
-  if (input_source() == INPUT_SOURCE_MOUSE) {
-    ASSERT_TRUE(ReleaseMouseAsync());
-    QuitWhenNotDragging();
-  }
+                             this, gfx::Point(600 + tab_0_center.x(),
+                                              tab_0_center.y()
+                                              + GetDetachY(tab_strip)))));
+  QuitWhenNotDragging();
 
   // Should no longer be dragging.
   ASSERT_FALSE(tab_strip->IsDragSessionActive());
@@ -1068,8 +1223,23 @@ IN_PROC_BROWSER_TEST_P(DetachToBrowserInSeparateDisplayTabDragControllerTest,
   TabStrip* tab_strip2 = GetTabStripForBrowser(new_browser);
   ASSERT_FALSE(tab_strip2->IsDragSessionActive());
 
+  // This other browser should be on the second screen (with mouse drag)
+  // With the touch input the browser cannot be dragged from one screen
+  // to another and the window stays on the first screen.
+  if (input_source() == INPUT_SOURCE_MOUSE) {
+    std::vector<aura::RootWindow*> roots(ash::Shell::GetAllRootWindows());
+    ASSERT_EQ(2u, roots.size());
+    aura::RootWindow* second_root = roots[1];
+    EXPECT_EQ(second_root,
+              new_browser->window()->GetNativeWindow()->GetRootWindow());
+  }
+
   EXPECT_EQ("0", IDString(new_browser->tab_strip_model()));
   EXPECT_EQ("1", IDString(browser()->tab_strip_model()));
+
+  // Both windows should not be maximized
+  EXPECT_FALSE(browser()->window()->IsMaximized());
+  EXPECT_FALSE(new_browser->window()->IsMaximized());
 }
 
 namespace {
@@ -1096,7 +1266,7 @@ void DragTabToWindowInSeparateDisplayStep2(
 
 }  // namespace
 
-// Drags from browser to a second display and releases input.
+// Drags from browser to another browser on a second display and releases input.
 IN_PROC_BROWSER_TEST_P(DetachToBrowserInSeparateDisplayTabDragControllerTest,
                        DragTabToWindowInSeparateDisplay) {
   // Add another tab.
@@ -1140,7 +1310,219 @@ IN_PROC_BROWSER_TEST_P(DetachToBrowserInSeparateDisplayTabDragControllerTest,
   ASSERT_FALSE(TabDragController::IsActive());
   EXPECT_EQ("0 100", IDString(browser2->tab_strip_model()));
   EXPECT_EQ("1", IDString(browser()->tab_strip_model()));
+
+  // Both windows should not be maximized
+  EXPECT_FALSE(browser()->window()->IsMaximized());
+  EXPECT_FALSE(browser2->window()->IsMaximized());
 }
+
+// Drags from browser to another browser on a second display and releases input.
+IN_PROC_BROWSER_TEST_P(DetachToBrowserInSeparateDisplayTabDragControllerTest,
+                       DragTabToWindowOnSecondDisplay) {
+  // Add another tab.
+  AddTabAndResetBrowser(browser());
+  TabStrip* tab_strip = GetTabStripForBrowser(browser());
+
+  // Create another browser.
+  Browser* browser2 = CreateBrowser(browser()->profile());
+  TabStrip* tab_strip2 = GetTabStripForBrowser(browser2);
+  ResetIDs(browser2->tab_strip_model(), 100);
+
+  // Move both browsers to the second display.
+  std::vector<aura::RootWindow*> roots(ash::Shell::GetAllRootWindows());
+  ASSERT_EQ(2u, roots.size());
+  aura::RootWindow* second_root = roots[1];
+  gfx::Rect work_area = gfx::Screen::GetNativeScreen()->GetDisplayNearestWindow(
+      second_root).work_area();
+  browser()->window()->SetBounds(work_area);
+
+  // position both browser windows side by side on the second screen.
+  gfx::Rect work_area2(work_area);
+  work_area.set_width(work_area.width()/2);
+  browser()->window()->SetBounds(work_area);
+  work_area2.set_x(work_area2.x() + work_area2.width()/2);
+  work_area2.set_width(work_area2.width()/2);
+  browser2->window()->SetBounds(work_area2);
+  EXPECT_EQ(second_root,
+            browser()->window()->GetNativeWindow()->GetRootWindow());
+  EXPECT_EQ(second_root,
+            browser2->window()->GetNativeWindow()->GetRootWindow());
+
+  // Move to the first tab and drag it enough so that it detaches, but not
+  // enough that it attaches to browser2.
+  // SetEventGeneratorRootWindow sets correct (second) RootWindow
+  gfx::Point tab_0_center(GetCenterInScreenCoordinates(tab_strip->tab_at(0)));
+  SetEventGeneratorRootWindow(tab_0_center);
+  ASSERT_TRUE(PressInput(tab_0_center));
+  ASSERT_TRUE(DragInputToNotifyWhenDone(
+                  tab_0_center.x(), tab_0_center.y() + GetDetachY(tab_strip),
+                  base::Bind(&DragTabToWindowInSeparateDisplayStep2,
+                             this, tab_strip, tab_strip2)));
+  QuitWhenNotDragging();
+
+  // Should now be attached to tab_strip2.
+  ASSERT_TRUE(tab_strip2->IsDragSessionActive());
+  ASSERT_FALSE(tab_strip->IsDragSessionActive());
+  ASSERT_TRUE(TabDragController::IsActive());
+
+  // Release the mouse, stopping the drag session.
+  ASSERT_TRUE(ReleaseInput());
+  ASSERT_FALSE(tab_strip2->IsDragSessionActive());
+  ASSERT_FALSE(tab_strip->IsDragSessionActive());
+  ASSERT_FALSE(TabDragController::IsActive());
+  EXPECT_EQ("0 100", IDString(browser2->tab_strip_model()));
+  EXPECT_EQ("1", IDString(browser()->tab_strip_model()));
+
+  // Both windows should not be maximized
+  EXPECT_FALSE(browser()->window()->IsMaximized());
+  EXPECT_FALSE(browser2->window()->IsMaximized());
+}
+
+// Drags from a maximized browser to another non-maximized browser on a second
+// display and releases input.
+IN_PROC_BROWSER_TEST_P(DetachToBrowserInSeparateDisplayTabDragControllerTest,
+                       DragMaxTabToNonMaxWindowInSeparateDisplay) {
+  // Add another tab.
+  AddTabAndResetBrowser(browser());
+  browser()->window()->Maximize();
+  TabStrip* tab_strip = GetTabStripForBrowser(browser());
+
+  // Create another browser on the second display.
+  std::vector<aura::RootWindow*> roots(ash::Shell::GetAllRootWindows());
+  ASSERT_EQ(2u, roots.size());
+  aura::RootWindow* first_root = roots[0];
+  aura::RootWindow* second_root = roots[1];
+  gfx::Rect work_area = gfx::Screen::GetNativeScreen()->GetDisplayNearestWindow(
+      second_root).work_area();
+  work_area.Inset(20,20,20,60);
+  Browser::CreateParams params(browser()->profile(),
+                               browser()->host_desktop_type());
+  params.initial_show_state = ui::SHOW_STATE_NORMAL;
+  params.initial_bounds = work_area;
+  Browser* browser2 = new Browser(params);
+  AddBlankTabAndShow(browser2);
+
+  TabStrip* tab_strip2 = GetTabStripForBrowser(browser2);
+  ResetIDs(browser2->tab_strip_model(), 100);
+
+  EXPECT_EQ(second_root,
+            browser2->window()->GetNativeWindow()->GetRootWindow());
+  EXPECT_EQ(first_root,
+            browser()->window()->GetNativeWindow()->GetRootWindow());
+  EXPECT_EQ(2, tab_strip->tab_count());
+  EXPECT_EQ(1, tab_strip2->tab_count());
+
+  // Move to the first tab and drag it enough so that it detaches, but not
+  // enough that it attaches to browser2.
+  gfx::Point tab_0_center(GetCenterInScreenCoordinates(tab_strip->tab_at(0)));
+  ASSERT_TRUE(PressInput(tab_0_center));
+  ASSERT_TRUE(DragInputToNotifyWhenDone(
+                  tab_0_center.x(), tab_0_center.y() + GetDetachY(tab_strip),
+                  base::Bind(&DragTabToWindowInSeparateDisplayStep2,
+                             this, tab_strip, tab_strip2)));
+  QuitWhenNotDragging();
+
+  // Should now be attached to tab_strip2.
+  ASSERT_TRUE(tab_strip2->IsDragSessionActive());
+  ASSERT_FALSE(tab_strip->IsDragSessionActive());
+  ASSERT_TRUE(TabDragController::IsActive());
+
+  // Release the mouse, stopping the drag session.
+  ASSERT_TRUE(ReleaseInput());
+
+  // tab should have moved
+  EXPECT_EQ(1, tab_strip->tab_count());
+  EXPECT_EQ(2, tab_strip2->tab_count());
+
+  ASSERT_FALSE(tab_strip2->IsDragSessionActive());
+  ASSERT_FALSE(tab_strip->IsDragSessionActive());
+  ASSERT_FALSE(TabDragController::IsActive());
+  EXPECT_EQ("0 100", IDString(browser2->tab_strip_model()));
+  EXPECT_EQ("1", IDString(browser()->tab_strip_model()));
+
+  // Source browser should still be maximized, target should not
+  EXPECT_TRUE(browser()->window()->IsMaximized());
+  EXPECT_FALSE(browser2->window()->IsMaximized());
+}
+
+// Immersive fullscreen is ChromeOS only.
+#if defined(OS_CHROMEOS)
+// Drags from a restored browser to an immersive fullscreen browser on a
+// second display and releases input.
+IN_PROC_BROWSER_TEST_P(DetachToBrowserInSeparateDisplayTabDragControllerTest,
+                       DragTabToImmersiveBrowserOnSeparateDisplay) {
+  ImmersiveFullscreenConfiguration::EnableImmersiveFullscreenForTest();
+  ASSERT_TRUE(ImmersiveFullscreenConfiguration::UseImmersiveFullscreen());
+
+  // Add another tab.
+  AddTabAndResetBrowser(browser());
+  TabStrip* tab_strip = GetTabStripForBrowser(browser());
+
+  // Create another browser.
+  Browser* browser2 = CreateBrowser(browser()->profile());
+  TabStrip* tab_strip2 = GetTabStripForBrowser(browser2);
+  ResetIDs(browser2->tab_strip_model(), 100);
+
+  // Move the second browser to the second display.
+  std::vector<aura::RootWindow*> roots(ash::Shell::GetAllRootWindows());
+  ASSERT_EQ(2u, roots.size());
+  aura::RootWindow* second_root = roots[1];
+  gfx::Rect work_area = gfx::Screen::GetNativeScreen()->GetDisplayNearestWindow(
+      second_root).work_area();
+  browser2->window()->SetBounds(work_area);
+  EXPECT_EQ(second_root,
+            browser2->window()->GetNativeWindow()->GetRootWindow());
+
+  // Put the second browser into immersive fullscreen.
+  BrowserView* browser_view2 = BrowserView::GetBrowserViewForBrowser(browser2);
+  ImmersiveModeControllerAsh* immersive_controller2 =
+      static_cast<ImmersiveModeControllerAsh*>(
+          browser_view2->immersive_mode_controller());
+  immersive_controller2->DisableAnimationsForTest();
+  chrome::ToggleFullscreenMode(browser2);
+  ASSERT_TRUE(immersive_controller2->IsEnabled());
+  ASSERT_FALSE(immersive_controller2->IsRevealed());
+  ASSERT_TRUE(tab_strip2->IsImmersiveStyle());
+
+  // Move to the first tab and drag it enough so that it detaches, but not
+  // enough that it attaches to browser2.
+  gfx::Point tab_0_center(GetCenterInScreenCoordinates(tab_strip->tab_at(0)));
+  ASSERT_TRUE(PressInput(tab_0_center));
+  ASSERT_TRUE(DragInputToNotifyWhenDone(
+                  tab_0_center.x(), tab_0_center.y() + GetDetachY(tab_strip),
+                  base::Bind(&DragTabToWindowInSeparateDisplayStep2,
+                             this, tab_strip, tab_strip2)));
+  QuitWhenNotDragging();
+
+  // Should now be attached to tab_strip2.
+  ASSERT_TRUE(tab_strip2->IsDragSessionActive());
+  ASSERT_FALSE(tab_strip->IsDragSessionActive());
+  ASSERT_TRUE(TabDragController::IsActive());
+
+  // browser2's top chrome should be revealed and the tab strip should be
+  // at normal height while user is tragging tabs_strip2's tabs.
+  ASSERT_TRUE(immersive_controller2->IsRevealed());
+  ASSERT_FALSE(tab_strip2->IsImmersiveStyle());
+
+  // Release the mouse, stopping the drag session.
+  ASSERT_TRUE(ReleaseInput());
+  ASSERT_FALSE(tab_strip2->IsDragSessionActive());
+  ASSERT_FALSE(tab_strip->IsDragSessionActive());
+  ASSERT_FALSE(TabDragController::IsActive());
+  EXPECT_EQ("0 100", IDString(browser2->tab_strip_model()));
+  EXPECT_EQ("1", IDString(browser()->tab_strip_model()));
+
+  // The first browser window should not be in immersive fullscreen.
+  // browser2 should still be in immersive fullscreen, but the top chrome should
+  // no longer be revealed.
+  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
+  EXPECT_FALSE(browser_view->immersive_mode_controller()->IsEnabled());
+
+  EXPECT_TRUE(immersive_controller2->IsEnabled());
+  EXPECT_FALSE(immersive_controller2->IsRevealed());
+  EXPECT_TRUE(tab_strip2->IsImmersiveStyle());
+}
+#endif  // OS_CHROMEOS
 
 class DifferentDeviceScaleFactorDisplayTabDragControllerTest
     : public DetachToBrowserTabDragControllerTest {
@@ -1150,7 +1532,7 @@ class DifferentDeviceScaleFactorDisplayTabDragControllerTest
   virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
     DetachToBrowserTabDragControllerTest::SetUpCommandLine(command_line);
     command_line->AppendSwitchASCII("ash-host-window-bounds",
-                                    "400x400,800x800*2");
+                                    "400x400,0+400-800x800*2");
   }
 
   float GetCursorDeviceScaleFactor() const {
@@ -1266,7 +1648,7 @@ class DetachToBrowserInSeparateDisplayAndCancelTabDragControllerTest
 
   void QuitWhenNotDragging() {
     test::QuitWhenNotDraggingImpl();
-    MessageLoop::current()->Run();
+    base::MessageLoop::current()->Run();
   }
 
  private:
@@ -1283,7 +1665,9 @@ void CancelDragTabToWindowInSeparateDisplayStep3(
   ASSERT_EQ(2u, browser_list->size());
 
   // Switching display mode should cancel the drag operation.
-  ash::internal::DisplayManager::CycleDisplay();
+  ash::internal::DisplayManager* display_manager =
+      ash::Shell::GetInstance()->display_manager();
+  display_manager->AddRemoveDisplay();
 }
 
 // Invoked from the nested message loop.

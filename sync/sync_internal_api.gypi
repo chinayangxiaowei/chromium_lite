@@ -11,8 +11,9 @@
   ],
   'dependencies': [
     '../base/base.gyp:base',
-    '../build/temp_gyp/googleurl.gyp:googleurl',
     '../net/net.gyp:net',
+    '../third_party/zlib/zlib.gyp:zlib',
+    '../url/url.gyp:url_lib',
   ],
   'sources': [
     'internal_api/base_node.cc',
@@ -50,6 +51,7 @@
     'internal_api/public/configure_reason.h',
     'internal_api/public/data_type_association_stats.cc',
     'internal_api/public/data_type_association_stats.h',
+    'internal_api/public/data_type_debug_info_listener.cc',
     'internal_api/public/data_type_debug_info_listener.h',
     'internal_api/public/delete_journal.h',
     'internal_api/public/engine/model_safe_worker.cc',
@@ -71,8 +73,6 @@
     'internal_api/public/sessions/model_neutral_state.h',
     'internal_api/public/sessions/sync_session_snapshot.cc',
     'internal_api/public/sessions/sync_session_snapshot.h',
-    'internal_api/public/sessions/sync_source_info.cc',
-    'internal_api/public/sessions/sync_source_info.h',
     'internal_api/public/sync_encryption_handler.cc',
     'internal_api/public/sync_encryption_handler.h',
     'internal_api/public/sync_manager_factory.h',

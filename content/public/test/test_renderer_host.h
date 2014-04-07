@@ -6,9 +6,10 @@
 #define CONTENT_PUBLIC_TEST_TEST_RENDERER_HOST_H_
 
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/common/page_transition_types.h"
+#include "content/public/test/test_browser_thread_bundle.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 #if defined(USE_AURA)
@@ -75,6 +76,7 @@ class RenderViewHostTester {
   // setting the rest of the parameters in the message to the "typical" values.
   // This is a helper function for simulating the most common types of loads.
   virtual void SendNavigate(int page_id, const GURL& url) = 0;
+  virtual void SendFailedNavigate(int page_id, const GURL& url) = 0;
 
   // Calls OnMsgNavigate on the RenderViewHost with the given information,
   // including a custom PageTransition.  Sets the rest of the
@@ -147,11 +149,27 @@ class RenderViewHostTestHarness : public testing::Test {
 
   // Simulates a reload of the current page.
   void Reload();
+  void FailedReload();
 
  protected:
   // testing::Test
   virtual void SetUp() OVERRIDE;
   virtual void TearDown() OVERRIDE;
+
+  // Derived classes should override this method to use a custom BrowserContext.
+  // It is invoked by SetUp after threads were started.
+  // RenderViewHostTestHarness will take ownership of the returned
+  // BrowserContext.
+  virtual BrowserContext* CreateBrowserContext();
+
+  // Configures which TestBrowserThreads inside |thread_bundle| are backed by
+  // real threads. Must be called before SetUp().
+  void SetThreadBundleOptions(int options) {
+    DCHECK(thread_bundle_.get() == NULL);
+    thread_bundle_options_ = options;
+  }
+
+  TestBrowserThreadBundle* thread_bundle() { return thread_bundle_.get(); }
 
 #if defined(USE_AURA)
   aura::RootWindow* root_window() { return aura_test_helper_->root_window(); }
@@ -160,15 +178,9 @@ class RenderViewHostTestHarness : public testing::Test {
   // Replaces the RPH being used.
   void SetRenderProcessHostFactory(RenderProcessHostFactory* factory);
 
-  // This browser context will be created in SetUp if it has not already been
-  // created.  This allows tests to override the browser context if they so
-  // choose in their own SetUp function before calling the base class's (us)
-  // SetUp().
+ private:
   scoped_ptr<BrowserContext> browser_context_;
 
-  MessageLoopForUI message_loop_;
-
- private:
   // It is important not to use this directly in the implementation as
   // web_contents() and SetContents() are virtual and may be
   // overridden by subclasses.
@@ -180,6 +192,9 @@ class RenderViewHostTestHarness : public testing::Test {
   scoped_ptr<aura::test::AuraTestHelper> aura_test_helper_;
 #endif
   RenderViewHostTestEnabler rvh_test_enabler_;
+
+  int thread_bundle_options_;
+  scoped_ptr<TestBrowserThreadBundle> thread_bundle_;
 
   DISALLOW_COPY_AND_ASSIGN(RenderViewHostTestHarness);
 };

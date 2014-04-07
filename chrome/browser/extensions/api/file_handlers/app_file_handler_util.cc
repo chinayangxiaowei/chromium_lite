@@ -5,16 +5,54 @@
 #include "chrome/browser/extensions/api/file_handlers/app_file_handler_util.h"
 
 #include "chrome/browser/extensions/extension_prefs.h"
-#include "chrome/browser/extensions/extension_service.h"
-#include "chrome/browser/extensions/extension_system.h"
 #include "content/public/browser/child_process_security_policy.h"
 #include "net/base/mime_util.h"
-#include "webkit/fileapi/file_system_types.h"
-#include "webkit/fileapi/isolated_context.h"
+#include "webkit/browser/fileapi/isolated_context.h"
+#include "webkit/common/fileapi/file_system_types.h"
 
 namespace extensions {
 
 namespace app_file_handler_util {
+
+namespace {
+
+bool FileHandlerCanHandleFileWithExtension(
+    const FileHandlerInfo& handler,
+    const base::FilePath& path) {
+  for (std::set<std::string>::const_iterator extension =
+       handler.extensions.begin();
+       extension != handler.extensions.end(); ++extension) {
+    if (*extension == "*")
+      return true;
+
+    if (path.MatchesExtension(
+        base::FilePath::kExtensionSeparator +
+        base::FilePath::FromUTF8Unsafe(*extension).value())) {
+      return true;
+    }
+
+    // Also accept files with no extension for handlers that support an
+    // empty extension, i.e. both "foo" and "foo." match.
+    if (extension->empty() &&
+        path.MatchesExtension(base::FilePath::StringType())) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool FileHandlerCanHandleFileWithMimeType(
+    const FileHandlerInfo& handler,
+    const std::string& mime_type) {
+  for (std::set<std::string>::const_iterator type = handler.types.begin();
+       type != handler.types.end(); ++type) {
+    if (net::MatchesMimeType(*type, mime_type))
+      return true;
+  }
+  return false;
+}
+
+}  // namespace
 
 typedef std::vector<FileHandlerInfo> FileHandlerList;
 
@@ -32,27 +70,26 @@ const FileHandlerInfo* FileHandlerForId(const Extension& app,
   return NULL;
 }
 
-const FileHandlerInfo* FirstFileHandlerForMimeType(const Extension& app,
-    const std::string& mime_type) {
+const FileHandlerInfo* FirstFileHandlerForFile(
+    const Extension& app,
+    const std::string& mime_type,
+    const base::FilePath& path) {
   const FileHandlerList* file_handlers = FileHandlers::GetFileHandlers(&app);
   if (!file_handlers)
     return NULL;
 
   for (FileHandlerList::const_iterator i = file_handlers->begin();
        i != file_handlers->end(); i++) {
-    for (std::set<std::string>::const_iterator t = i->types.begin();
-         t != i->types.end(); t++) {
-      if (net::MatchesMimeType(*t, mime_type))
-        return &*i;
-    }
+    if (FileHandlerCanHandleFile(*i, mime_type, path))
+      return &*i;
   }
   return NULL;
 }
 
-std::vector<const FileHandlerInfo*> FindFileHandlersForMimeTypes(
-    const Extension& app, const std::set<std::string>& mime_types) {
+std::vector<const FileHandlerInfo*> FindFileHandlersForFiles(
+    const Extension& app, const PathAndMimeTypeSet& files) {
   std::vector<const FileHandlerInfo*> handlers;
-  if (mime_types.empty())
+  if (files.empty())
     return handlers;
 
   // Look for file handlers which can handle all the MIME types specified.
@@ -63,9 +100,9 @@ std::vector<const FileHandlerInfo*> FindFileHandlersForMimeTypes(
   for (FileHandlerList::const_iterator data = file_handlers->begin();
        data != file_handlers->end(); ++data) {
     bool handles_all_types = true;
-    for (std::set<std::string>::const_iterator type_iter = mime_types.begin();
-         type_iter != mime_types.end(); ++type_iter) {
-      if (!FileHandlerCanHandleFileWithMimeType(*data, *type_iter)) {
+    for (PathAndMimeTypeSet::const_iterator it = files.begin();
+         it != files.end(); ++it) {
+      if (!FileHandlerCanHandleFile(*data, it->second, it->first)) {
         handles_all_types = false;
         break;
       }
@@ -76,16 +113,12 @@ std::vector<const FileHandlerInfo*> FindFileHandlersForMimeTypes(
   return handlers;
 }
 
-bool FileHandlerCanHandleFileWithMimeType(
+bool FileHandlerCanHandleFile(
     const FileHandlerInfo& handler,
-    const std::string& mime_type) {
-  // TODO(benwells): this should check the file's extension as well.
-  for (std::set<std::string>::const_iterator type = handler.types.begin();
-       type != handler.types.end(); ++type) {
-    if (net::MatchesMimeType(*type, mime_type))
-      return true;
-  }
-  return false;
+    const std::string& mime_type,
+    const base::FilePath& path) {
+  return FileHandlerCanHandleFileWithMimeType(handler, mime_type) ||
+      FileHandlerCanHandleFileWithExtension(handler, path);
 }
 
 GrantedFileEntry CreateFileEntry(
@@ -110,18 +143,6 @@ GrantedFileEntry CreateFileEntry(
     policy->GrantWriteFileSystem(renderer_id, result.filesystem_id);
 
   result.id = result.filesystem_id + ":" + result.registered_name;
-
-  // We only need file level access for reading FileEntries. Saving FileEntries
-  // just needs the file system to have read/write access, which is granted
-  // above if required.
-  if (!policy->CanReadFile(renderer_id, path))
-    policy->GrantReadFile(renderer_id, path);
-
-  ExtensionPrefs* prefs = extensions::ExtensionSystem::Get(profile)->
-      extension_service()->extension_prefs();
-  // Save this file entry in the prefs.
-  prefs->AddSavedFileEntry(extension_id, result.id, path, writable);
-
   return result;
 }
 

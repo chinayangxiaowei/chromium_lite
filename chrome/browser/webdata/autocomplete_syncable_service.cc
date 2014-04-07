@@ -6,19 +6,24 @@
 
 #include "base/location.h"
 #include "base/logging.h"
-#include "base/utf_string_conversions.h"
-#include "chrome/browser/api/webdata/autofill_web_data_service.h"
-#include "chrome/browser/webdata/autofill_table.h"
-#include "chrome/browser/webdata/web_database.h"
-#include "chrome/common/chrome_notification_types.h"
+#include "base/strings/utf_string_conversions.h"
+#include "components/autofill/core/browser/webdata/autofill_table.h"
+#include "components/autofill/core/browser/webdata/autofill_webdata_service.h"
+#include "components/webdata/common/web_database.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/browser/notification_service.h"
 #include "net/base/escape.h"
 #include "sync/api/sync_error.h"
 #include "sync/api/sync_error_factory.h"
 #include "sync/protocol/autofill_specifics.pb.h"
 #include "sync/protocol/sync.pb.h"
 
+using autofill::AutofillChange;
+using autofill::AutofillChangeList;
+using autofill::AutofillEntry;
+using autofill::AutofillKey;
+using autofill::AutofillTable;
+using autofill::AutofillWebDataService;
+using autofill::AutofillWebDataBackend;
 using content::BrowserThread;
 
 namespace {
@@ -88,14 +93,14 @@ void* UserDataKey() {
 }  // namespace
 
 AutocompleteSyncableService::AutocompleteSyncableService(
-    AutofillWebDataService* web_data_service)
-    : web_data_service_(web_data_service),
+    AutofillWebDataBackend* webdata_backend)
+    : webdata_backend_(webdata_backend),
+      scoped_observer_(this),
       cull_expired_entries_(false) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::DB));
-  DCHECK(web_data_service_);
-  notification_registrar_.Add(
-      this, chrome::NOTIFICATION_AUTOFILL_ENTRIES_CHANGED,
-      content::Source<AutofillWebDataService>(web_data_service));
+  DCHECK(webdata_backend_);
+
+  scoped_observer_.Add(webdata_backend_);
 }
 
 AutocompleteSyncableService::~AutocompleteSyncableService() {
@@ -103,10 +108,11 @@ AutocompleteSyncableService::~AutocompleteSyncableService() {
 }
 
 // static
-void AutocompleteSyncableService::CreateForWebDataService(
-    AutofillWebDataService* web_data_service) {
+void AutocompleteSyncableService::CreateForWebDataServiceAndBackend(
+    AutofillWebDataService* web_data_service,
+    AutofillWebDataBackend* webdata_backend) {
   web_data_service->GetDBUserData()->SetUserData(
-      UserDataKey(), new AutocompleteSyncableService(web_data_service));
+      UserDataKey(), new AutocompleteSyncableService(webdata_backend));
 }
 
 // static
@@ -117,9 +123,15 @@ AutocompleteSyncableService* AutocompleteSyncableService::FromWebDataService(
 }
 
 AutocompleteSyncableService::AutocompleteSyncableService()
-    : web_data_service_(NULL),
+    : webdata_backend_(NULL),
+      scoped_observer_(this),
       cull_expired_entries_(false) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::DB));
+}
+
+void AutocompleteSyncableService::InjectStartSyncFlare(
+    const syncer::SyncableService::StartSyncFlare& flare) {
+  flare_ = flare;
 }
 
 syncer::SyncMergeResult AutocompleteSyncableService::MergeDataAndStartSyncing(
@@ -169,7 +181,7 @@ syncer::SyncMergeResult AutocompleteSyncableService::MergeDataAndStartSyncing(
     return merge_result;
   }
 
-  AutofillWebDataService::NotifyOfMultipleAutofillChanges(web_data_service_);
+  webdata_backend_->NotifyOfMultipleAutofillChanges();
 
   syncer::SyncChangeList new_changes;
   for (AutocompleteEntryMap::iterator i = new_db_entries.begin();
@@ -183,7 +195,7 @@ syncer::SyncMergeResult AutocompleteSyncableService::MergeDataAndStartSyncing(
   if (cull_expired_entries_) {
     // This will schedule a deletion operation on the DB thread, which will
     // trigger a notification to propagate the deletion to Sync.
-    web_data_service_->RemoveExpiredFormElements();
+    webdata_backend_->RemoveExpiredFormElements();
   }
 
   merge_result.set_error(
@@ -226,8 +238,10 @@ syncer::SyncError AutocompleteSyncableService::ProcessSyncChanges(
   DCHECK(sync_processor_.get());
 
   if (!sync_processor_.get()) {
-    syncer::SyncError error(FROM_HERE, "Models not yet associated.",
-                    syncer::AUTOFILL);
+    syncer::SyncError error(FROM_HERE,
+                            syncer::SyncError::DATATYPE_ERROR,
+                            "Models not yet associated.",
+                            syncer::AUTOFILL);
     return error;
   }
 
@@ -286,42 +300,35 @@ syncer::SyncError AutocompleteSyncableService::ProcessSyncChanges(
         "Failed to update webdata.");
   }
 
-  AutofillWebDataService::NotifyOfMultipleAutofillChanges(web_data_service_);
+  webdata_backend_->NotifyOfMultipleAutofillChanges();
 
   if (cull_expired_entries_) {
     // This will schedule a deletion operation on the DB thread, which will
     // trigger a notification to propagate the deletion to Sync.
-    web_data_service_->RemoveExpiredFormElements();
+    webdata_backend_->RemoveExpiredFormElements();
   }
 
   return list_processing_error;
 }
 
-void AutocompleteSyncableService::Observe(int type,
-    const content::NotificationSource& source,
-    const content::NotificationDetails& details) {
-  DCHECK_EQ(chrome::NOTIFICATION_AUTOFILL_ENTRIES_CHANGED, type);
-
-  // Check if sync is on. If we receive notification prior to the sync being set
-  // up we are going to process all when MergeData..() is called. If we receive
-  // notification after the sync exited, it will be sinced next time Chrome
-  // starts.
-  if (!sync_processor_.get())
-    return;
-  AutofillWebDataService* web_data_service =
-      content::Source<AutofillWebDataService>(source).ptr();
-
-  DCHECK_EQ(web_data_service_, web_data_service);
-
-  AutofillChangeList* changes =
-      content::Details<AutofillChangeList>(details).ptr();
-  ActOnChanges(*changes);
+void AutocompleteSyncableService::AutofillEntriesChanged(
+    const AutofillChangeList& changes) {
+  // Check if sync is on. If we recieve this notification prior to sync being
+  // started, we'll notify sync to start as soon as it can and later process
+  // all entries when MergeData..() is called. If we receive this notification
+  // sync has exited, it will be synced next time Chrome starts.
+  if (sync_processor_.get()) {
+    ActOnChanges(changes);
+  } else if (!flare_.is_null()) {
+    flare_.Run(syncer::AUTOFILL);
+    flare_.Reset();
+  }
 }
 
 bool AutocompleteSyncableService::LoadAutofillData(
     std::vector<AutofillEntry>* entries) const {
   return AutofillTable::FromWebDatabase(
-      web_data_service_->GetDatabase())->GetAllAutofillEntries(entries);
+      webdata_backend_->GetDatabase())->GetAllAutofillEntries(entries);
 }
 
 bool AutocompleteSyncableService::SaveChangesToWebData(
@@ -330,7 +337,7 @@ bool AutocompleteSyncableService::SaveChangesToWebData(
 
   if (!new_entries.empty() &&
       !AutofillTable::FromWebDatabase(
-          web_data_service_->GetDatabase())->UpdateAutofillEntries(
+          webdata_backend_->GetDatabase())->UpdateAutofillEntries(
               new_entries)) {
     return false;
   }
@@ -404,7 +411,7 @@ void AutocompleteSyncableService::WriteAutofillEntry(
 syncer::SyncError AutocompleteSyncableService::AutofillEntryDelete(
     const sync_pb::AutofillSpecifics& autofill) {
   if (!AutofillTable::FromWebDatabase(
-          web_data_service_->GetDatabase())->RemoveFormElement(
+          webdata_backend_->GetDatabase())->RemoveFormElement(
               UTF8ToUTF16(autofill.name()), UTF8ToUTF16(autofill.value()))) {
     return error_handler_->CreateAndUploadError(
         FROM_HERE,
@@ -423,11 +430,11 @@ void AutocompleteSyncableService::ActOnChanges(
       case AutofillChange::ADD:
       case AutofillChange::UPDATE: {
         std::vector<base::Time> timestamps;
-        if (!AutofillTable::FromWebDatabase(
-                web_data_service_->GetDatabase())->GetAutofillTimestamps(
-                    change->key().name(),
-                    change->key().value(),
-                    &timestamps)) {
+        WebDatabase* db = webdata_backend_->GetDatabase();
+        if (!AutofillTable::FromWebDatabase(db)->GetAutofillTimestamps(
+                change->key().name(),
+                change->key().value(),
+                &timestamps)) {
           NOTREACHED();
           return;
         }

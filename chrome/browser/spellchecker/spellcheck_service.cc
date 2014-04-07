@@ -35,10 +35,19 @@ SpellcheckService::EventType g_status_type =
 
 SpellcheckService::SpellcheckService(Profile* profile)
     : profile_(profile),
-      weak_ptr_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {
+      weak_ptr_factory_(this) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   PrefService* prefs = profile_->GetPrefs();
   pref_change_registrar_.Init(prefs);
+
+  std::string language_code;
+  std::string country_code;
+  chrome::spellcheck_common::GetISOLanguageCountryCodeFromLocale(
+      prefs->GetString(prefs::kSpellCheckDictionary),
+      &language_code,
+      &country_code);
+  feedback_sender_.reset(new spellcheck::FeedbackSender(
+      profile->GetRequestContext(), language_code, country_code));
 
   pref_change_registrar_.Add(
       prefs::kEnableAutoSpellCorrect,
@@ -63,10 +72,9 @@ SpellcheckService::SpellcheckService(Profile* profile)
   custom_dictionary_->AddObserver(this);
   custom_dictionary_->Load();
 
-  registrar_.Add(weak_ptr_factory_.GetWeakPtr(),
+  registrar_.Add(this,
                  content::NOTIFICATION_RENDERER_PROCESS_CREATED,
                  content::NotificationService::AllSources());
-
 }
 
 SpellcheckService::~SpellcheckService() {
@@ -194,6 +202,21 @@ SpellcheckHunspellDictionary* SpellcheckService::GetHunspellDictionary() {
   return hunspell_dictionary_.get();
 }
 
+spellcheck::FeedbackSender* SpellcheckService::GetFeedbackSender() {
+  return feedback_sender_.get();
+}
+
+bool SpellcheckService::LoadExternalDictionary(std::string language,
+                                               std::string locale,
+                                               std::string path,
+                                               DictionaryFormat format) {
+  return false;
+}
+
+bool SpellcheckService::UnloadExternalDictionary(std::string path) {
+  return false;
+}
+
 void SpellcheckService::Observe(int type,
                                 const content::NotificationSource& source,
                                 const content::NotificationDetails& details) {
@@ -269,12 +292,17 @@ void SpellcheckService::OnEnableAutoSpellCorrectChanged() {
 void SpellcheckService::OnSpellCheckDictionaryChanged() {
   if (hunspell_dictionary_.get())
     hunspell_dictionary_->RemoveObserver(this);
+  std::string dictionary =
+      profile_->GetPrefs()->GetString(prefs::kSpellCheckDictionary);
   hunspell_dictionary_.reset(new SpellcheckHunspellDictionary(
-      profile_->GetPrefs()->GetString(prefs::kSpellCheckDictionary),
-      profile_->GetRequestContext(),
-      this));
+      dictionary, profile_->GetRequestContext(), this));
   hunspell_dictionary_->AddObserver(this);
   hunspell_dictionary_->Load();
+  std::string language_code;
+  std::string country_code;
+  chrome::spellcheck_common::GetISOLanguageCountryCodeFromLocale(
+      dictionary, &language_code, &country_code);
+  feedback_sender_->OnLanguageCountryChange(language_code, country_code);
 }
 
 void SpellcheckService::OnUseSpellingServiceChanged() {

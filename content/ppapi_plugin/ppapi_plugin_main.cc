@@ -5,10 +5,12 @@
 #include "base/command_line.h"
 #include "base/debug/debugger.h"
 #include "base/i18n/rtl.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/threading/platform_thread.h"
 #include "build/build_config.h"
-#include "content/common/child_process.h"
+#include "content/child/child_process.h"
+#include "content/common/content_constants_internal.h"
+#include "content/common/sandbox_linux.h"
 #include "content/ppapi_plugin/ppapi_thread.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/content_switches.h"
@@ -78,8 +80,11 @@ int PpapiPluginMain(const MainFunctionParams& parameters) {
 #endif
   }
 
-  MessageLoop main_message_loop;
+  base::MessageLoop main_message_loop;
   base::PlatformThread::SetName("CrPPAPIMain");
+  base::debug::TraceLog::GetInstance()->SetProcessName("PPAPI Process");
+  base::debug::TraceLog::GetInstance()->SetProcessSortIndex(
+      kTraceEventPpapiProcessSortIndex);
 
 #if defined(OS_LINUX) && defined(USE_NSS)
   // Some out-of-process PPAPI plugins use NSS.
@@ -93,7 +98,7 @@ int PpapiPluginMain(const MainFunctionParams& parameters) {
     GetContentClient()->plugin()->PreSandboxInitialization();
 
 #if defined(OS_LINUX)
-  InitializeSandbox();
+  LinuxSandbox::InitializeSandbox();
 #endif
 
   ChildProcess ppapi_process;

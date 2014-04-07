@@ -22,28 +22,27 @@ class ExtensionInfoBarGtk : public InfoBarGtk,
  public:
   ExtensionInfoBarGtk(InfoBarService* owner,
                       ExtensionInfoBarDelegate* delegate);
+
+ private:
   virtual ~ExtensionInfoBarGtk();
 
-  // Overridden from InfoBar (through InfoBarGtk):
+  // InfoBarGtk:
   virtual void PlatformSpecificHide(bool animate) OVERRIDE;
-
-  // Overridden from InfoBarGtk:
   virtual void GetTopColor(InfoBarDelegate::Type type,
                            double* r, double* g, double* b) OVERRIDE;
   virtual void GetBottomColor(InfoBarDelegate::Type type,
                               double* r, double* g, double* b) OVERRIDE;
+  virtual void InitWidgets() OVERRIDE;
 
-  // Overridden from MenuGtk::Delegate:
+  // MenuGtk::Delegate:
   virtual void StoppedShowing() OVERRIDE;
 
-  // Overridden from ExtensionInfoBarDelegate::DelegateObserver:
+  // ExtensionInfoBarDelegate::DelegateObserver:
   virtual void OnDelegateDeleted() OVERRIDE;
 
- private:
-  // Build the widgets of the Infobar.
-  void BuildWidgets();
-
   void OnImageLoaded(const gfx::Image& image);
+
+  ExtensionInfoBarDelegate* GetDelegate();
 
   // Looks at the window the infobar is in and gets the browser. Can return
   // NULL if we aren't attached.
@@ -62,7 +61,10 @@ class ExtensionInfoBarGtk : public InfoBarGtk,
   CHROMEGTK_CALLBACK_1(ExtensionInfoBarGtk, gboolean, OnExpose,
                        GdkEventExpose*);
 
-  ExtensionInfoBarDelegate* delegate_;
+  // TODO(pkasting): This shadows InfoBarView::delegate_.  Get rid of this once
+  // InfoBars own their delegates (and thus we don't need the DelegateObserver
+  // functionality).  For now, almost everyone should use GetDelegate() instead.
+  InfoBarDelegate* delegate_;
 
   ExtensionViewGtk* view_;
 

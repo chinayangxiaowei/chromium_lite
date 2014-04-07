@@ -10,10 +10,6 @@
 namespace extensions {
 
 class DefaultLocaleManifestTest : public ExtensionManifestTest {
-  virtual void SetUp() OVERRIDE {
-    ExtensionManifestTest::SetUp();
-    (new DefaultLocaleHandler)->Register();
-  }
 };
 
 TEST_F(DefaultLocaleManifestTest, DefaultLocale) {
@@ -22,7 +18,7 @@ TEST_F(DefaultLocaleManifestTest, DefaultLocale) {
 
   scoped_refptr<Extension> extension(
       LoadAndExpectSuccess("default_locale_valid.json"));
-  EXPECT_EQ("de-AT", LocaleInfo::GetDefaultLocale(extension));
+  EXPECT_EQ("de-AT", LocaleInfo::GetDefaultLocale(extension.get()));
 }
 
 }  // namespace extensions

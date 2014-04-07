@@ -11,10 +11,12 @@
 #include "base/command_line.h"
 #include "base/debug/trace_event.h"
 #include "base/file_util.h"
+#include "base/json/string_escape.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/stringprintf.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/content_browser_client.h"
@@ -27,7 +29,7 @@
 #include "content/public/browser/web_ui_data_source.h"
 #include "content/public/browser/web_ui_message_handler.h"
 #include "content/public/common/url_constants.h"
-#include "grit/content_resources.h"
+#include "grit/tracing_resources.h"
 #include "ipc/ipc_channel.h"
 #include "ui/shell_dialogs/select_file_dialog.h"
 
@@ -40,8 +42,7 @@ namespace content {
 namespace {
 
 WebUIDataSource* CreateTracingHTMLSource() {
-  WebUIDataSource* source =
-      WebUIDataSource::Create(chrome::kChromeUITracingHost);
+  WebUIDataSource* source = WebUIDataSource::Create(kChromeUITracingHost);
 
   source->SetJsonPath("strings.js");
   source->SetDefaultResource(IDR_TRACING_HTML);
@@ -88,7 +89,8 @@ class TracingMessageHandler
   void OnGetKnownCategories(const base::ListValue* list);
 
   // Callbacks.
-  void LoadTraceFileComplete(string16* file_contents);
+  void LoadTraceFileComplete(string16* file_contents,
+                             const base::FilePath &path);
   void SaveTraceFileComplete();
 
  private:
@@ -120,14 +122,15 @@ class TaskProxy : public base::RefCountedThreadSafe<TaskProxy> {
  public:
   explicit TaskProxy(const base::WeakPtr<TracingMessageHandler>& handler)
       : handler_(handler) {}
-  void LoadTraceFileCompleteProxy(string16* file_contents) {
-    if (handler_)
-      handler_->LoadTraceFileComplete(file_contents);
+  void LoadTraceFileCompleteProxy(string16* file_contents,
+                                  const base::FilePath& path) {
+    if (handler_.get())
+      handler_->LoadTraceFileComplete(file_contents, path);
     delete file_contents;
   }
 
   void SaveTraceFileCompleteProxy() {
-    if (handler_)
+    if (handler_.get())
       handler_->SaveTraceFileComplete();
   }
 
@@ -154,7 +157,7 @@ TracingMessageHandler::TracingMessageHandler()
 }
 
 TracingMessageHandler::~TracingMessageHandler() {
-  if (select_trace_file_dialog_)
+  if (select_trace_file_dialog_.get())
     select_trace_file_dialog_->ListenerDestroyed();
 
   // If we are the current subscriber, this will result in ending tracing.
@@ -257,7 +260,8 @@ void ReadTraceFileCallback(TaskProxy* proxy, const base::FilePath& path) {
   BrowserThread::PostTask(
       BrowserThread::UI, FROM_HERE,
       base::Bind(&TaskProxy::LoadTraceFileCompleteProxy, proxy,
-                 contents16.release()));
+                 contents16.release(),
+                 path));
 }
 
 // A callback used for asynchronously writing a file from a string. Calls the
@@ -317,11 +321,15 @@ void TracingMessageHandler::OnLoadTraceFile(const base::ListValue* list) {
       ui::SelectFileDialog::SELECT_OPEN_FILE,
       string16(),
       base::FilePath(),
-      NULL, 0, FILE_PATH_LITERAL(""),
-      web_ui()->GetWebContents()->GetView()->GetTopLevelNativeWindow(), NULL);
+      NULL,
+      0,
+      base::FilePath::StringType(),
+      web_ui()->GetWebContents()->GetView()->GetTopLevelNativeWindow(),
+      NULL);
 }
 
-void TracingMessageHandler::LoadTraceFileComplete(string16* contents) {
+void TracingMessageHandler::LoadTraceFileComplete(string16* contents,
+                                                  const base::FilePath& path) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
   // We need to pass contents to tracingController.onLoadTraceFileComplete, but
@@ -341,8 +349,12 @@ void TracingMessageHandler::LoadTraceFileComplete(string16* contents) {
     javascript += contents->substr(i, kMaxSize) + suffix;
     rvh->ExecuteJavascriptInWebFrame(string16(), javascript);
   }
+
+  // The CallJavascriptFunction is not used because we need to pass
+  // the first param |window.traceData| through as an un-quoted string.
   rvh->ExecuteJavascriptInWebFrame(string16(), UTF8ToUTF16(
-      "tracingController.onLoadTraceFileComplete(JSON.parse(window.traceData));"
+      "tracingController.onLoadTraceFileComplete(window.traceData," +
+      base::GetDoubleQuotedJson(path.value()) + ");" +
       "delete window.traceData;"));
 }
 
@@ -367,8 +379,11 @@ void TracingMessageHandler::OnSaveTraceFile(const base::ListValue* list) {
       ui::SelectFileDialog::SELECT_SAVEAS_FILE,
       string16(),
       base::FilePath(),
-      NULL, 0, FILE_PATH_LITERAL(""),
-      web_ui()->GetWebContents()->GetView()->GetTopLevelNativeWindow(), NULL);
+      NULL,
+      0,
+      base::FilePath::StringType(),
+      web_ui()->GetWebContents()->GetView()->GetTopLevelNativeWindow(),
+      NULL);
 }
 
 void TracingMessageHandler::SaveTraceFileComplete() {
@@ -420,6 +435,14 @@ void TracingMessageHandler::OnBeginTracing(const base::ListValue* args) {
 void TracingMessageHandler::OnEndTracingAsync(const base::ListValue* list) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
+  // This is really us beginning to end tracing, rather than tracing being truly
+  // over. When this function yields, we expect to get some number of
+  // OnTraceDataCollected callbacks, which will append data to window.traceData.
+  // To set up for this, set window.traceData to the empty string.
+  web_ui()->GetWebContents()->GetRenderViewHost()->
+    ExecuteJavascriptInWebFrame(string16(),
+                                UTF8ToUTF16("window.traceData = '';"));
+
   // TODO(nduca): fix javascript code to make sure trace_enabled_ is always true
   //              here. triggered a false condition by just clicking stop
   //              trace a few times when it was going slow, and maybe switching
@@ -450,7 +473,11 @@ void TracingMessageHandler::OnEndTracingComplete() {
     return;
 #endif
   }
-  web_ui()->CallJavascriptFunction("tracingController.onEndTracingComplete");
+
+  RenderViewHost* rvh = web_ui()->GetWebContents()->GetRenderViewHost();
+  rvh->ExecuteJavascriptInWebFrame(string16(), UTF8ToUTF16(
+      "tracingController.onEndTracingComplete(window.traceData);"
+      "delete window.traceData;"));
 }
 
 void TracingMessageHandler::OnEndSystemTracingAck(
@@ -469,17 +496,18 @@ void TracingMessageHandler::OnTraceDataCollected(
     const scoped_refptr<base::RefCountedString>& trace_fragment) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
-  base::debug::TraceResultBuffer::SimpleOutput output;
-  base::debug::TraceResultBuffer trace_buffer;
-  trace_buffer.SetOutputCallback(output.GetCallback());
-  output.Append("tracingController.onTraceDataCollected(");
-  trace_buffer.Start();
-  trace_buffer.AddFragment(trace_fragment->data());
-  trace_buffer.Finish();
-  output.Append(");");
+  std::string javascript;
+  javascript.reserve(trace_fragment->size() * 2);
+  javascript.append("window.traceData += \"");
+  base::JsonDoubleQuote(trace_fragment->data(), false, &javascript);
+
+  // Intentionally append a , to the traceData. This technically causes all
+  // traceData that we pass back to JS to end with a comma, but that is actually
+  // something the JS side strips away anyway
+  javascript.append(",\";");
 
   web_ui()->GetWebContents()->GetRenderViewHost()->
-      ExecuteJavascriptInWebFrame(string16(), UTF8ToUTF16(output.json_output));
+    ExecuteJavascriptInWebFrame(string16(), UTF8ToUTF16(javascript));
 }
 
 void TracingMessageHandler::OnTraceBufferPercentFullReply(float percent_full) {
@@ -491,7 +519,7 @@ void TracingMessageHandler::OnTraceBufferPercentFullReply(float percent_full) {
 
 void TracingMessageHandler::OnGetKnownCategories(const base::ListValue* list) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  if (!TraceController::GetInstance()->GetKnownCategoriesAsync(this)) {
+  if (!TraceController::GetInstance()->GetKnownCategoryGroupsAsync(this)) {
     std::set<std::string> ret;
     OnKnownCategoriesCollected(ret);
   }
@@ -502,7 +530,7 @@ void TracingMessageHandler::OnKnownCategoriesCollected(
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
   scoped_ptr<base::ListValue> categories(new base::ListValue());
-  for (std::set<std::string>::iterator iter = known_categories.begin();
+  for (std::set<std::string>::const_iterator iter = known_categories.begin();
        iter != known_categories.end();
        ++iter) {
     categories->AppendString(*iter);

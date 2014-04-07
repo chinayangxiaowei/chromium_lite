@@ -6,7 +6,7 @@
 #define NET_SOCKET_TCP_SERVER_SOCKET_LIBEVENT_H_
 
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/threading/non_thread_safe.h"
 #include "net/base/completion_callback.h"
 #include "net/base/net_log.h"
@@ -16,17 +16,16 @@ namespace net {
 
 class IPEndPoint;
 
-class NET_EXPORT_PRIVATE TCPServerSocketLibevent
-    : public ServerSocket,
-      public base::NonThreadSafe,
-      public MessageLoopForIO::Watcher {
+class NET_EXPORT_PRIVATE TCPServerSocketLibevent :
+    public ServerSocket,
+    public base::NonThreadSafe,
+    public base::MessageLoopForIO::Watcher {
  public:
   TCPServerSocketLibevent(net::NetLog* net_log,
                           const net::NetLog::Source& source);
   virtual ~TCPServerSocketLibevent();
 
   // net::ServerSocket implementation.
-  virtual void AllowAddressReuse() OVERRIDE;
   virtual int Listen(const net::IPEndPoint& address, int backlog) OVERRIDE;
   virtual int GetLocalAddress(IPEndPoint* address) const OVERRIDE;
   virtual int Accept(scoped_ptr<StreamSocket>* socket,
@@ -43,12 +42,10 @@ class NET_EXPORT_PRIVATE TCPServerSocketLibevent
 
   int socket_;
 
-  MessageLoopForIO::FileDescriptorWatcher accept_socket_watcher_;
+  base::MessageLoopForIO::FileDescriptorWatcher accept_socket_watcher_;
 
   scoped_ptr<StreamSocket>* accept_socket_;
   CompletionCallback accept_callback_;
-
-  bool reuse_address_;
 
   BoundNetLog net_log_;
 };

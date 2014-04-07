@@ -4,7 +4,7 @@
 
 #include "base/command_line.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/prefs/pref_service.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile_manager.h"
@@ -25,7 +25,7 @@ class AppListControllerBrowserTest : public InProcessBrowserTest {
   void OnProfileCreated(Profile* profile, Profile::CreateStatus status) {
     if (status == Profile::CREATE_STATUS_INITIALIZED) {
       profile2_ = profile;
-      MessageLoop::current()->Quit();
+      base::MessageLoop::current()->Quit();
     }
   }
 
@@ -42,15 +42,12 @@ class AppListControllerBrowserTest : public InProcessBrowserTest {
 IN_PROC_BROWSER_TEST_F(AppListControllerBrowserTest, ShowAndDismiss) {
   AppListService* service = AppListService::Get();
   ASSERT_FALSE(service->IsAppListVisible());
-  service->ShowAppList(browser()->profile());
+  service->ShowForProfile(browser()->profile());
   ASSERT_TRUE(service->IsAppListVisible());
   service->DismissAppList();
   ASSERT_FALSE(service->IsAppListVisible());
 }
 
-// TODO(tapted): Enable this when profile switching code has been moved up the
-// app list controller hierarchy.
-#if !defined(OS_MACOSX)
 IN_PROC_BROWSER_TEST_F(AppListControllerBrowserTest, SwitchAppListProfiles) {
   ProfileManager* profile_manager = g_browser_process->profile_manager();
   ASSERT_TRUE(temp_profile_dir_.CreateUniqueTempDir());
@@ -58,15 +55,15 @@ IN_PROC_BROWSER_TEST_F(AppListControllerBrowserTest, SwitchAppListProfiles) {
       temp_profile_dir_.path(),
       base::Bind(&AppListControllerBrowserTest::OnProfileCreated,
                  this),
-      string16(), string16(), false);
+      string16(), string16(), std::string());
   content::RunMessageLoop();  // Will stop in OnProfileCreated().
 
   AppListService* service = AppListService::Get();
   ASSERT_FALSE(service->IsAppListVisible());
-  service->ShowAppList(browser()->profile());
+  service->ShowForProfile(browser()->profile());
   ASSERT_TRUE(service->IsAppListVisible());
   ASSERT_EQ(browser()->profile(), service->GetCurrentAppListProfile());
-  service->ShowAppList(profile2_);
+  service->ShowForProfile(profile2_);
   ASSERT_TRUE(service->IsAppListVisible());
   ASSERT_EQ(profile2_, service->GetCurrentAppListProfile());
   service->DismissAppList();
@@ -77,7 +74,7 @@ class ShowAppListBrowserTest : public InProcessBrowserTest {
  public:
   ShowAppListBrowserTest() {}
 
-  void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
     command_line->AppendSwitch(switches::kShowAppList);
   }
 
@@ -97,5 +94,4 @@ IN_PROC_BROWSER_TEST_F(ShowAppListBrowserTest, ShowAppListFlag) {
   CreateBrowser(service->GetCurrentAppListProfile());
   service->DismissAppList();
 }
-#endif  // !defined(OS_MACOSX)
 #endif  // !defined(OS_CHROMEOS) && !defined(USE_AURA)

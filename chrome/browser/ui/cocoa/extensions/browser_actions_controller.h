@@ -7,7 +7,7 @@
 
 #import <Cocoa/Cocoa.h>
 
-#import "base/memory/scoped_nsobject.h"
+#import "base/mac/scoped_nsobject.h"
 #include "base/memory/scoped_ptr.h"
 
 class Browser;
@@ -17,7 +17,6 @@ class Browser;
 class ExtensionToolbarModel;
 class ExtensionServiceObserverBridge;
 @class MenuButton;
-class PrefRegistrySyncable;
 class Profile;
 
 namespace extensions {
@@ -49,19 +48,19 @@ extern NSString* const kBrowserActionVisibilityChangedNotification;
   // A dictionary of Extension ID -> BrowserActionButton pairs representing the
   // buttons present in the container view. The ID is a string unique to each
   // extension.
-  scoped_nsobject<NSMutableDictionary> buttons_;
+  base::scoped_nsobject<NSMutableDictionary> buttons_;
 
   // Array of hidden buttons in the correct order in which the user specified.
-  scoped_nsobject<NSMutableArray> hiddenButtons_;
+  base::scoped_nsobject<NSMutableArray> hiddenButtons_;
 
   // The currently running chevron animation (fade in/out).
-  scoped_nsobject<NSViewAnimation> chevronAnimation_;
+  base::scoped_nsobject<NSViewAnimation> chevronAnimation_;
 
   // The chevron button used when Browser Actions are hidden.
-  scoped_nsobject<MenuButton> chevronMenuButton_;
+  base::scoped_nsobject<MenuButton> chevronMenuButton_;
 
   // The Browser Actions overflow menu.
-  scoped_nsobject<NSMenu> overflowMenu_;
+  base::scoped_nsobject<NSMenu> overflowMenu_;
 }
 
 @property(readonly, nonatomic) BrowserActionsContainerView* containerView;
@@ -104,9 +103,6 @@ extern NSString* const kBrowserActionVisibilityChangedNotification;
 // being hidden (fading out). Will return NO if it is not hidden or is in the
 // process of fading in.
 - (BOOL)chevronIsHidden;
-
-// Registers the user preferences used by this class.
-+ (void)registerUserPrefs:(PrefRegistrySyncable*)prefs;
 
 @end  // @interface BrowserActionsController
 

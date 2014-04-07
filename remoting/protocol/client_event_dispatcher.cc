@@ -4,8 +4,8 @@
 
 #include "remoting/protocol/client_event_dispatcher.h"
 
-#include "base/message_loop_proxy.h"
-#include "base/time.h"
+#include "base/message_loop/message_loop_proxy.h"
+#include "base/time/time.h"
 #include "net/socket/stream_socket.h"
 #include "remoting/base/constants.h"
 #include "remoting/proto/event.pb.h"

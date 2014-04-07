@@ -7,6 +7,7 @@
 
 #include "base/compiler_specific.h"
 #include "chrome/browser/ui/webui/options/language_options_handler.h"
+#include "chromeos/ime/component_extension_ime_manager.h"
 #include "chromeos/ime/input_method_descriptor.h"
 
 namespace chromeos {
@@ -15,7 +16,8 @@ namespace options {
 // Language options page UI handler for Chrome OS.  For non-Chrome OS,
 // see LanguageOptionsHnadler.
 class CrosLanguageOptionsHandler
-    : public ::options::LanguageOptionsHandlerCommon {
+    : public ::options::LanguageOptionsHandlerCommon,
+      public ComponentExtensionIMEManager::Observer {
  public:
   CrosLanguageOptionsHandler();
   virtual ~CrosLanguageOptionsHandler();
@@ -39,18 +41,27 @@ class CrosLanguageOptionsHandler
   static base::ListValue* GetInputMethodList(
       const input_method::InputMethodDescriptors& descriptors);
 
-  // Gets the list of languages from the given input descriptors.
+  // Gets the list of accept languages with the given input descriptors.
+  // Listed languages will be used as Accept-Language header.
   // The return value will look like:
   // [{'code': 'fi', 'displayName': 'Finnish', 'nativeDisplayName': 'suomi'},
   //  ...]
-  static base::ListValue* GetLanguageList(
+  static base::ListValue* GetAcceptLanguageList(
       const input_method::InputMethodDescriptors& descriptors);
 
-  // Gets the list of input methods that are implemented in an extension.
+  // Gets the list of UI languages with the given input descriptors.
+  // The return value will look like:
+  // [{'code': 'fi', 'displayName': 'Finnish', 'nativeDisplayName': 'suomi'},
+  //  ...]
+  static base::ListValue* GetUILanguageList(
+      const input_method::InputMethodDescriptors& descriptors);
+
+  // Converts input method descriptors to the list of input methods.
   // The return value will look like:
   // [{'id': '_ext_ime_nejguenhnsnjnwychcnsdsdjketest',
   //   'displayName': 'Sample IME'},  ...]
-  static base::ListValue* GetExtensionImeList();
+  static base::ListValue* ConvertInputMethodDescriptosToIMEList(
+      const input_method::InputMethodDescriptors& descriptors);
 
  private:
   // LanguageOptionsHandlerCommon implementation.
@@ -71,6 +82,24 @@ class CrosLanguageOptionsHandler
   // Called when the input method options page is opened.
   // |args| will contain the input method ID as string (ex. "mozc").
   void InputMethodOptionsOpenCallback(const base::ListValue* args);
+
+  // ComponentExtensionIMEManager::Observer override.
+  virtual void OnInitialized() OVERRIDE;
+
+  // Gets the list of languages with |descriptors| based on
+  // |base_language_codes|.
+  static base::ListValue* GetLanguageListInternal(
+      const input_method::InputMethodDescriptors& descriptors,
+      const std::vector<std::string>& base_language_codes);
+
+  // OptionsPageUIHandler implementation.
+  virtual void InitializePage() OVERRIDE;
+
+  // True if the component extension list was appended into input method list.
+  bool composition_extension_appended_;
+
+  // True if this page was initialized.
+  bool is_page_initialized_;
 
   DISALLOW_COPY_AND_ASSIGN(CrosLanguageOptionsHandler);
 };

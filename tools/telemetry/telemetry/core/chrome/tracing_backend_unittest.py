@@ -10,7 +10,7 @@ import unittest
 
 from telemetry.core import util
 from telemetry.core.chrome import tracing_backend
-from telemetry.test import tab_test_case
+from telemetry.unittest import tab_test_case
 
 
 class TracingBackendTest(tab_test_case.TabTestCase):
@@ -32,13 +32,31 @@ class TracingBackendTest(tab_test_case.TabTestCase):
     self._StartServer()
     self._browser.StartTracing()
     self._browser.StopTracing()
-    model = self._browser.GetTraceResultAndReset().AsTimelineModel()
-    events = model.GetAllEvents()
-    assert len(events) > 0
+
+    # TODO(tengs): check model for correctness after trace_event_importer
+    # is implemented (crbug.com/173327).
+
 
 class TracingResultImplTest(unittest.TestCase):
+  # Override TestCase.run to run a test with all possible
+  # implementations of TraceResult.
+  def __init__(self, method_name):
+    self._traceResultImplClass = None
+    super(TracingResultImplTest, self).__init__(method_name)
+
+  def run(self, result=None):
+    def RawTraceResultImplWrapper(strings):
+      return tracing_backend.RawTraceResultImpl(map(json.loads, strings))
+    classes = [
+        tracing_backend.TraceResultImpl,
+        RawTraceResultImplWrapper
+    ]
+    for cls in classes:
+      self._traceResultImplClass = cls
+      super(TracingResultImplTest, self).run(result)
+
   def testWrite1(self):
-    ri = tracing_backend.TraceResultImpl([])
+    ri = self._traceResultImplClass([])
     f = cStringIO.StringIO()
     ri.Serialize(f)
     v = f.getvalue()
@@ -48,7 +66,7 @@ class TracingResultImplTest(unittest.TestCase):
     self.assertEquals(j['traceEvents'], [])
 
   def testWrite2(self):
-    ri = tracing_backend.TraceResultImpl([
+    ri = self._traceResultImplClass([
         '"foo"',
         '"bar"'])
     f = cStringIO.StringIO()
@@ -60,7 +78,7 @@ class TracingResultImplTest(unittest.TestCase):
     self.assertEquals(j['traceEvents'], ['foo', 'bar'])
 
   def testWrite3(self):
-    ri = tracing_backend.TraceResultImpl([
+    ri = self._traceResultImplClass([
         '"foo"',
         '"bar"',
         '"baz"'])

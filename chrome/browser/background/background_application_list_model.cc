@@ -8,23 +8,23 @@
 #include <set>
 
 #include "base/stl_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/background/background_contents_service.h"
 #include "chrome/browser/background/background_contents_service_factory.h"
 #include "chrome/browser/background/background_mode_manager.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/extension_prefs.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_system.h"
 #include "chrome/browser/extensions/image_loader.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/chrome_notification_types.h"
-#include "chrome/common/extensions/api/icons/icons_handler.h"
 #include "chrome/common/extensions/background_info.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/extensions/extension_icon_set.h"
+#include "chrome/common/extensions/manifest_handlers/icons_handler.h"
 #include "chrome/common/extensions/permissions/permission_set.h"
 #include "content/public/browser/notification_details.h"
 #include "content/public/browser/notification_source.h"
@@ -43,7 +43,8 @@ using extensions::UpdatedExtensionPermissionsInfo;
 class ExtensionNameComparator {
  public:
   explicit ExtensionNameComparator(icu::Collator* collator);
-  bool operator()(const Extension* x, const Extension* y);
+  bool operator()(const scoped_refptr<const Extension>& x,
+                  const scoped_refptr<const Extension>& y);
 
  private:
   icu::Collator* collator_;
@@ -53,11 +54,11 @@ ExtensionNameComparator::ExtensionNameComparator(icu::Collator* collator)
   : collator_(collator) {
 }
 
-bool ExtensionNameComparator::operator()(const Extension* x,
-                                         const Extension* y) {
+bool ExtensionNameComparator::operator()(
+    const scoped_refptr<const Extension>& x,
+    const scoped_refptr<const Extension>& y) {
   return l10n_util::StringComparator<string16>(collator_)(
-    UTF8ToUTF16(x->name()),
-    UTF8ToUTF16(y->name()));
+      UTF8ToUTF16(x->name()), UTF8ToUTF16(y->name()));
 }
 
 // Background application representation, private to the
@@ -90,7 +91,7 @@ void GetServiceApplications(ExtensionService* service,
   for (ExtensionSet::const_iterator cursor = extensions->begin();
        cursor != extensions->end();
        ++cursor) {
-    const Extension* extension = *cursor;
+    const Extension* extension = cursor->get();
     if (BackgroundApplicationListModel::IsBackgroundApp(*extension,
                                                         service->profile())) {
       applications_result->push_back(extension);
@@ -103,7 +104,7 @@ void GetServiceApplications(ExtensionService* service,
   for (ExtensionSet::const_iterator cursor = extensions->begin();
        cursor != extensions->end();
        ++cursor) {
-    const Extension* extension = *cursor;
+    const Extension* extension = cursor->get();
     if (BackgroundApplicationListModel::IsBackgroundApp(*extension,
                                                         service->profile())) {
       applications_result->push_back(extension);
@@ -139,10 +140,7 @@ BackgroundApplicationListModel::Application::~Application() {
 BackgroundApplicationListModel::Application::Application(
     BackgroundApplicationListModel* model,
     const Extension* extension)
-    : extension_(extension),
-      icon_(NULL),
-      model_(model) {
-}
+    : extension_(extension), model_(model) {}
 
 void BackgroundApplicationListModel::Application::OnImageLoaded(
     const gfx::Image& image) {
@@ -226,7 +224,7 @@ void BackgroundApplicationListModel::DissociateApplicationData(
 const Extension* BackgroundApplicationListModel::GetExtension(
     int position) const {
   DCHECK(position >= 0 && static_cast<size_t>(position) < extensions_.size());
-  return extensions_[position];
+  return extensions_[position].get();
 }
 
 const BackgroundApplicationListModel::Application*

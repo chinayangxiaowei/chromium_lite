@@ -10,8 +10,9 @@
 #include "base/command_line.h"
 #include "base/prefs/pref_service.h"
 #include "base/stl_util.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/content_settings/content_settings_custom_extension_provider.h"
 #include "chrome/browser/content_settings/content_settings_default_provider.h"
 #include "chrome/browser/content_settings/content_settings_details.h"
@@ -23,7 +24,6 @@
 #include "chrome/browser/content_settings/content_settings_rule.h"
 #include "chrome/browser/content_settings/content_settings_utils.h"
 #include "chrome/browser/extensions/extension_service.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/content_settings_pattern.h"
 #include "chrome/common/pref_names.h"
@@ -35,9 +35,9 @@
 #include "content/public/browser/user_metrics.h"
 #include "content/public/common/content_switches.h"
 #include "extensions/common/constants.h"
-#include "googleurl/src/gurl.h"
 #include "net/base/net_errors.h"
 #include "net/base/static_cookie_policy.h"
+#include "url/gurl.h"
 
 using content::BrowserThread;
 using content::UserMetricsAction;
@@ -133,33 +133,37 @@ void HostContentSettingsMap::RegisterExtensionService(
   OnContentSettingChanged(ContentSettingsPattern(),
                           ContentSettingsPattern(),
                           CONTENT_SETTINGS_TYPE_DEFAULT,
-                          "");
+                          std::string());
 }
 #endif
 
 // static
-void HostContentSettingsMap::RegisterUserPrefs(PrefRegistrySyncable* registry) {
-  registry->RegisterIntegerPref(prefs::kContentSettingsWindowLastTabIndex,
-                                0,
-                                PrefRegistrySyncable::UNSYNCABLE_PREF);
-  registry->RegisterIntegerPref(prefs::kContentSettingsDefaultWhitelistVersion,
-                                0,
-                                PrefRegistrySyncable::SYNCABLE_PREF);
-  registry->RegisterBooleanPref(prefs::kContentSettingsClearOnExitMigrated,
-                                false,
-                                PrefRegistrySyncable::SYNCABLE_PREF);
+void HostContentSettingsMap::RegisterProfilePrefs(
+    user_prefs::PrefRegistrySyncable* registry) {
+  registry->RegisterIntegerPref(
+      prefs::kContentSettingsWindowLastTabIndex,
+      0,
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
+  registry->RegisterIntegerPref(
+      prefs::kContentSettingsDefaultWhitelistVersion,
+      0,
+      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+  registry->RegisterBooleanPref(
+      prefs::kContentSettingsClearOnExitMigrated,
+      false,
+      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
 
   // Register the prefs for the content settings providers.
-  content_settings::DefaultProvider::RegisterUserPrefs(registry);
-  content_settings::PrefProvider::RegisterUserPrefs(registry);
-  content_settings::PolicyProvider::RegisterUserPrefs(registry);
+  content_settings::DefaultProvider::RegisterProfilePrefs(registry);
+  content_settings::PrefProvider::RegisterProfilePrefs(registry);
+  content_settings::PolicyProvider::RegisterProfilePrefs(registry);
 }
 
 ContentSetting HostContentSettingsMap::GetDefaultContentSettingFromProvider(
     ContentSettingsType content_type,
     content_settings::ProviderInterface* provider) const {
   scoped_ptr<content_settings::RuleIterator> rule_iterator(
-      provider->GetRuleIterator(content_type, "", false));
+      provider->GetRuleIterator(content_type, std::string(), false));
 
   ContentSettingsPattern wildcard = ContentSettingsPattern::Wildcard();
   while (rule_iterator->HasNext()) {
@@ -381,6 +385,8 @@ bool HostContentSettingsMap::IsSettingAllowedForType(
     case CONTENT_SETTINGS_TYPE_MEDIASTREAM_MIC:
     case CONTENT_SETTINGS_TYPE_MEDIASTREAM_CAMERA:
     case CONTENT_SETTINGS_TYPE_PPAPI_BROKER:
+    case CONTENT_SETTINGS_TYPE_AUTOMATIC_DOWNLOADS:
+    case CONTENT_SETTINGS_TYPE_MIDI_SYSEX:
       return setting == CONTENT_SETTING_ASK;
     default:
       return false;
@@ -460,19 +466,18 @@ void HostContentSettingsMap::MigrateObsoleteClearOnExitPref() {
   AddSettingsForOneType(content_settings_providers_[PREF_PROVIDER],
                         PREF_PROVIDER,
                         CONTENT_SETTINGS_TYPE_COOKIES,
-                        "",
+                        std::string(),
                         &exceptions,
                         false);
   for (ContentSettingsForOneType::iterator it = exceptions.begin();
        it != exceptions.end(); ++it) {
     if (it->setting != CONTENT_SETTING_ALLOW)
       continue;
-    SetWebsiteSetting(
-        it->primary_pattern,
-        it->secondary_pattern,
-        CONTENT_SETTINGS_TYPE_COOKIES,
-        "",
-        Value::CreateIntegerValue(CONTENT_SETTING_SESSION_ONLY));
+    SetWebsiteSetting(it->primary_pattern,
+                      it->secondary_pattern,
+                      CONTENT_SETTINGS_TYPE_COOKIES,
+                      std::string(),
+                      Value::CreateIntegerValue(CONTENT_SETTING_SESSION_ONLY));
   }
 
   prefs_->SetBoolean(prefs::kContentSettingsClearOnExitMigrated, true);
@@ -526,7 +531,8 @@ bool HostContentSettingsMap::ShouldAllowAllContent(
     const GURL& secondary_url,
     ContentSettingsType content_type) {
   if (content_type == CONTENT_SETTINGS_TYPE_NOTIFICATIONS ||
-      content_type == CONTENT_SETTINGS_TYPE_GEOLOCATION) {
+      content_type == CONTENT_SETTINGS_TYPE_GEOLOCATION ||
+      content_type == CONTENT_SETTINGS_TYPE_MIDI_SYSEX) {
     return false;
   }
   if (secondary_url.SchemeIs(chrome::kChromeUIScheme) &&

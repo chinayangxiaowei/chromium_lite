@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright (c) 2013 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,29 +13,30 @@
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/file_util.h"
+#include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/path_service.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
 #include "base/strings/string_split.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "base/version.h"
 #include "build/build_config.h"
 #include "chrome/browser/component_updater/component_updater_service.h"
+#include "chrome/browser/component_updater/ppapi_utils.h"
 #include "chrome/browser/plugins/plugin_prefs.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pepper_flash.h"
-#include "chrome/common/pepper_flash.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/plugin_service.h"
+#include "content/public/common/content_constants.h"
 #include "content/public/common/pepper_plugin_info.h"
 #include "ppapi/c/private/ppb_pdf.h"
-#include "webkit/plugins/plugin_constants.h"
-#include "webkit/plugins/ppapi/plugin_module.h"
+#include "ppapi/shared_impl/ppapi_permissions.h"
 
 #include "flapper_version.h"  // In SHARED_INTERMEDIATE_DIR.
 
@@ -45,7 +46,7 @@ using content::PluginService;
 namespace {
 
 // CRX hash. The extension id is: mimojjlkmoijpicakmndhoigimigcmbb.
-const uint8 sha2_hash[] = {0xc8, 0xce, 0x99, 0xba, 0xce, 0x89, 0xf8, 0x20,
+const uint8 kSha2Hash[] = {0xc8, 0xce, 0x99, 0xba, 0xce, 0x89, 0xf8, 0x20,
                            0xac, 0xd3, 0x7e, 0x86, 0x8c, 0x86, 0x2c, 0x11,
                            0xb9, 0x40, 0xc5, 0x55, 0xaf, 0x08, 0x63, 0x70,
                            0x54, 0xf9, 0x56, 0xd3, 0xe7, 0x88, 0xba, 0x8c};
@@ -96,8 +97,8 @@ bool GetPepperFlashDirectory(base::FilePath* latest_dir,
                              std::vector<base::FilePath>* older_dirs) {
   base::FilePath base_dir = GetPepperFlashBaseDirectory();
   bool found = false;
-  file_util::FileEnumerator
-      file_enumerator(base_dir, false, file_util::FileEnumerator::DIRECTORIES);
+  base::FileEnumerator
+      file_enumerator(base_dir, false, base::FileEnumerator::DIRECTORIES);
   for (base::FilePath path = file_enumerator.Next(); !path.value().empty();
        path = file_enumerator.Next()) {
     Version version(path.BaseName().MaybeAsASCII());
@@ -124,7 +125,7 @@ bool GetPepperFlashDirectory(base::FilePath* latest_dir,
 // Returns true if the Pepper |interface_name| is implemented  by this browser.
 // It does not check if the interface is proxied.
 bool SupportsPepperInterface(const char* interface_name) {
-  if (webkit::ppapi::PluginModule::SupportsInterface(interface_name))
+  if (IsSupportedPepperInterface(interface_name))
     return true;
   // The PDF interface is invisible to SupportsInterface() on the browser
   // process because it is provided using PpapiInterfaceFactoryManager. We need
@@ -146,31 +147,31 @@ bool MakePepperFlashPluginInfo(const base::FilePath& flash_path,
   plugin_info->is_internal = false;
   plugin_info->is_out_of_process = out_of_process;
   plugin_info->path = flash_path;
-  plugin_info->name = kFlashPluginName;
+  plugin_info->name = content::kFlashPluginName;
   plugin_info->permissions = kPepperFlashPermissions;
 
   // The description is like "Shockwave Flash 10.2 r154".
   plugin_info->description = base::StringPrintf("%s %d.%d r%d",
-      kFlashPluginName, ver_nums[0], ver_nums[1], ver_nums[2]);
+      content::kFlashPluginName, ver_nums[0], ver_nums[1], ver_nums[2]);
 
   plugin_info->version = flash_version.GetString();
 
-  webkit::WebPluginMimeType swf_mime_type(kFlashPluginSwfMimeType,
-                                          kFlashPluginSwfExtension,
-                                          kFlashPluginName);
+  content::WebPluginMimeType swf_mime_type(content::kFlashPluginSwfMimeType,
+                                           content::kFlashPluginSwfExtension,
+                                           content::kFlashPluginName);
   plugin_info->mime_types.push_back(swf_mime_type);
-  webkit::WebPluginMimeType spl_mime_type(kFlashPluginSplMimeType,
-                                          kFlashPluginSplExtension,
-                                          kFlashPluginName);
+  content::WebPluginMimeType spl_mime_type(content::kFlashPluginSplMimeType,
+                                           content::kFlashPluginSplExtension,
+                                           content::kFlashPluginName);
   plugin_info->mime_types.push_back(spl_mime_type);
   return true;
 }
 
-bool IsPepperFlash(const webkit::WebPluginInfo& plugin) {
+bool IsPepperFlash(const content::WebPluginInfo& plugin) {
   // We try to recognize Pepper Flash by the following criteria:
   // * It is a Pepper plug-in.
   // * It has the special Flash permissions.
-  return webkit::IsPepperPlugin(plugin) &&
+  return plugin.is_pepper_plugin() &&
          (plugin.pepper_permissions & ppapi::PERMISSION_FLASH);
 }
 
@@ -181,9 +182,9 @@ void RegisterPepperFlashWithChrome(const base::FilePath& path,
   if (!MakePepperFlashPluginInfo(path, version, true, &plugin_info))
     return;
 
-  std::vector<webkit::WebPluginInfo> plugins;
+  std::vector<content::WebPluginInfo> plugins;
   PluginService::GetInstance()->GetInternalPlugins(&plugins);
-  for (std::vector<webkit::WebPluginInfo>::const_iterator it = plugins.begin();
+  for (std::vector<content::WebPluginInfo>::const_iterator it = plugins.begin();
        it != plugins.end(); ++it) {
     if (!IsPepperFlash(*it))
       continue;
@@ -219,11 +220,11 @@ bool CheckPepperFlashInterfaceString(const std::string& interface_string) {
 
 // Returns true if this browser implements all the interfaces that Flash
 // specifies in its component installer manifest.
-bool CheckPepperFlashInterfaces(base::DictionaryValue* manifest) {
-  base::ListValue* interface_list = NULL;
+bool CheckPepperFlashInterfaces(const base::DictionaryValue& manifest) {
+  const base::ListValue* interface_list = NULL;
 
   // We don't *require* an interface list, apparently.
-  if (!manifest->GetList("x-ppapi-required-interfaces", &interface_list))
+  if (!manifest.GetList("x-ppapi-required-interfaces", &interface_list))
     return true;
 
   for (size_t i = 0; i < interface_list->GetSize(); i++) {
@@ -247,8 +248,11 @@ class PepperFlashComponentInstaller : public ComponentInstaller {
 
   virtual void OnUpdateError(int error) OVERRIDE;
 
-  virtual bool Install(base::DictionaryValue* manifest,
+  virtual bool Install(const base::DictionaryValue& manifest,
                        const base::FilePath& unpack_path) OVERRIDE;
+
+  virtual bool GetInstalledFile(const std::string& file,
+                                base::FilePath* installed_file) OVERRIDE;
 
  private:
   Version current_version_;
@@ -263,22 +267,23 @@ void PepperFlashComponentInstaller::OnUpdateError(int error) {
   NOTREACHED() << "Pepper Flash update error: " << error;
 }
 
-bool PepperFlashComponentInstaller::Install(base::DictionaryValue* manifest,
-                                            const base::FilePath& unpack_path) {
+bool PepperFlashComponentInstaller::Install(
+    const base::DictionaryValue& manifest,
+    const base::FilePath& unpack_path) {
   Version version;
   if (!CheckPepperFlashManifest(manifest, &version))
     return false;
   if (current_version_.CompareTo(version) > 0)
     return false;
-  if (!file_util::PathExists(unpack_path.Append(
+  if (!base::PathExists(unpack_path.Append(
           chrome::kPepperFlashPluginFilename)))
     return false;
   // Passed the basic tests. Time to install it.
   base::FilePath path =
       GetPepperFlashBaseDirectory().AppendASCII(version.GetString());
-  if (file_util::PathExists(path))
+  if (base::PathExists(path))
     return false;
-  if (!file_util::Move(unpack_path, path))
+  if (!base::Move(unpack_path, path))
     return false;
   // Installation is done. Now tell the rest of chrome. Both the path service
   // and to the plugin service.
@@ -291,10 +296,15 @@ bool PepperFlashComponentInstaller::Install(base::DictionaryValue* manifest,
   return true;
 }
 
-bool CheckPepperFlashManifest(base::DictionaryValue* manifest,
+bool PepperFlashComponentInstaller::GetInstalledFile(
+    const std::string& file, base::FilePath* installed_file) {
+  return false;
+}
+
+bool CheckPepperFlashManifest(const base::DictionaryValue& manifest,
                               Version* version_out) {
   std::string name;
-  manifest->GetStringASCII("name", &name);
+  manifest.GetStringASCII("name", &name);
   // TODO(viettrungluu): Support WinFlapper for now, while we change the format
   // of the manifest. (Should be safe to remove checks for "WinFlapper" in, say,
   // Nov. 2011.)  crbug.com/98458
@@ -302,7 +312,7 @@ bool CheckPepperFlashManifest(base::DictionaryValue* manifest,
     return false;
 
   std::string proposed_version;
-  manifest->GetStringASCII("version", &proposed_version);
+  manifest.GetStringASCII("version", &proposed_version);
   Version version(proposed_version.c_str());
   if (!version.IsValid())
     return false;
@@ -317,12 +327,12 @@ bool CheckPepperFlashManifest(base::DictionaryValue* manifest,
   }
 
   std::string os;
-  manifest->GetStringASCII("x-ppapi-os", &os);
+  manifest.GetStringASCII("x-ppapi-os", &os);
   if (os != kPepperFlashOperatingSystem)
     return false;
 
   std::string arch;
-  manifest->GetStringASCII("x-ppapi-arch", &arch);
+  manifest.GetStringASCII("x-ppapi-arch", &arch);
   if (arch != kPepperFlashArch)
     return false;
 
@@ -340,7 +350,7 @@ void FinishPepperFlashUpdateRegistration(ComponentUpdateService* cus,
   pepflash.name = "pepper_flash";
   pepflash.installer = new PepperFlashComponentInstaller(version);
   pepflash.version = version;
-  pepflash.pk_hash.assign(sha2_hash, &sha2_hash[sizeof(sha2_hash)]);
+  pepflash.pk_hash.assign(kSha2Hash, &kSha2Hash[sizeof(kSha2Hash)]);
   if (cus->RegisterComponent(pepflash) != ComponentUpdateService::kOk) {
     NOTREACHED() << "Pepper Flash component registration failed.";
   }
@@ -349,7 +359,7 @@ void FinishPepperFlashUpdateRegistration(ComponentUpdateService* cus,
 void StartPepperFlashUpdateRegistration(ComponentUpdateService* cus) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
   base::FilePath path = GetPepperFlashBaseDirectory();
-  if (!file_util::PathExists(path)) {
+  if (!base::PathExists(path)) {
     if (!file_util::CreateDirectory(path)) {
       NOTREACHED() << "Could not create Pepper Flash directory.";
       return;
@@ -360,7 +370,7 @@ void StartPepperFlashUpdateRegistration(ComponentUpdateService* cus) {
   std::vector<base::FilePath> older_dirs;
   if (GetPepperFlashDirectory(&path, &version, &older_dirs)) {
     path = path.Append(chrome::kPepperFlashPluginFilename);
-    if (file_util::PathExists(path)) {
+    if (base::PathExists(path)) {
       BrowserThread::PostTask(
           BrowserThread::UI, FROM_HERE,
           base::Bind(&RegisterPepperFlashWithChrome, path, version));
@@ -376,7 +386,7 @@ void StartPepperFlashUpdateRegistration(ComponentUpdateService* cus) {
   // Remove older versions of Pepper Flash.
   for (std::vector<base::FilePath>::iterator iter = older_dirs.begin();
        iter != older_dirs.end(); ++iter) {
-    file_util::Delete(*iter, true);
+    base::DeleteFile(*iter, true);
   }
 }
 #endif  // defined(GOOGLE_CHROME_BUILD) && !defined(OS_LINUX)

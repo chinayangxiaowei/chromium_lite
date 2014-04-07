@@ -17,8 +17,8 @@
 #include "base/prefs/pref_service.h"
 #include "base/run_loop.h"
 #include "base/stl_util.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/policy/browser_policy_connector.h"
@@ -32,10 +32,10 @@
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test_utils.h"
-#include "googleurl/src/gurl.h"
 #include "policy/policy_constants.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/gurl.h"
 
 using testing::AnyNumber;
 using testing::Return;
@@ -389,7 +389,7 @@ class PolicyPrefsTest
   virtual void SetUpInProcessBrowserTestFixture() OVERRIDE {
     EXPECT_CALL(provider_, IsInitializationComplete(_))
         .WillRepeatedly(Return(true));
-    EXPECT_CALL(provider_, RegisterPolicyDomain(_, _)).Times(AnyNumber());
+    EXPECT_CALL(provider_, RegisterPolicyDomain(_)).Times(AnyNumber());
     BrowserPolicyConnector::SetPolicyProviderForTesting(&provider_);
   }
 
@@ -519,8 +519,8 @@ IN_PROC_BROWSER_TEST_P(PolicyPrefsTest, CheckPolicyIndicators) {
       // set by policy.
       PolicyMap policies;
       UpdateProviderPolicy(policies);
-      VerifyControlledSettingIndicators(browser(), indicator_selector,
-                                        "", "", false);
+      VerifyControlledSettingIndicators(
+          browser(), indicator_selector, std::string(), std::string(), false);
       // Check that the appropriate controlled setting indicator is shown when a
       // value is enforced by policy.
       policies.LoadFrom(&(*indicator_test_case)->policy(),

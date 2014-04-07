@@ -13,7 +13,7 @@
 #include "base/memory/scoped_vector.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "chrome/browser/prerender/prerender_final_status.h"
 #include "chrome/browser/prerender/prerender_origin.h"
@@ -80,11 +80,6 @@ class PrerenderContents : public content::NotificationObserver,
 
     // Signals that the prerender has stopped running.
     virtual void OnPrerenderStop(PrerenderContents* contents) = 0;
-
-    // Signals the discovery, through redirects, of a new alias for this
-    // prerender.
-    virtual void OnPrerenderAddAlias(PrerenderContents* contents,
-                                     const GURL& alias_url);
 
     // Signals that this prerender has just become a MatchComplete replacement.
     virtual void OnPrerenderCreatedMatchCompleteReplacement(
@@ -236,7 +231,7 @@ class PrerenderContents : public content::NotificationObserver,
   virtual void DidUpdateFaviconURL(int32 page_id,
       const std::vector<content::FaviconURL>& urls) OVERRIDE;
 
-  virtual void RenderViewGone(base::TerminationStatus status) OVERRIDE;
+  virtual void RenderProcessGone(base::TerminationStatus status) OVERRIDE;
 
   // content::NotificationObserver
   virtual void Observe(int type,
@@ -298,7 +293,6 @@ class PrerenderContents : public content::NotificationObserver,
   void NotifyPrerenderStart();
   void NotifyPrerenderStopLoading();
   void NotifyPrerenderStop();
-  void NotifyPrerenderAddAlias(const GURL& alias_url);
   void NotifyPrerenderCreatedMatchCompleteReplacement(
       PrerenderContents* replacement);
 

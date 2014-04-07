@@ -13,13 +13,13 @@
 
 #include "base/bind.h"
 #include "base/debug/trace_event.h"
-#include "base/message_loop.h"
-#include "base/message_loop_proxy.h"
+#include "base/memory/shared_memory.h"
+#include "base/message_loop/message_loop.h"
+#include "base/message_loop/message_loop_proxy.h"
 #include "base/posix/eintr_wrapper.h"
-#include "base/shared_memory.h"
-#include "content/common/gpu/gl_scoped_binders.h"
 #include "content/common/gpu/media/exynos_video_decode_accelerator.h"
 #include "content/common/gpu/media/h264_parser.h"
+#include "ui/gl/scoped_binders.h"
 
 namespace content {
 
@@ -49,6 +49,11 @@ namespace content {
   } while (0)
 
 namespace {
+
+// TODO(posciak): remove once we update linux-headers.
+#ifndef V4L2_EVENT_RESOLUTION_CHANGE
+#define V4L2_EVENT_RESOLUTION_CHANGE 5
+#endif
 
 const char kExynosMfcDevice[] = "/dev/mfc-dec";
 const char kExynosGscDevice[] = "/dev/gsc1";
@@ -207,12 +212,13 @@ ExynosVideoDecodeAccelerator::ExynosVideoDecodeAccelerator(
       client_(client_ptr_factory_.GetWeakPtr()),
       decoder_thread_("ExynosDecoderThread"),
       decoder_state_(kUninitialized),
-      decoder_current_bitstream_buffer_(NULL),
       decoder_delay_bitstream_buffer_id_(-1),
       decoder_current_input_buffer_(-1),
       decoder_decode_buffer_tasks_scheduled_(0),
       decoder_frames_at_client_(0),
       decoder_flushing_(false),
+      resolution_change_pending_(false),
+      resolution_change_reset_pending_(false),
       decoder_partial_frame_pending_(false),
       mfc_fd_(-1),
       mfc_input_streamon_(false),
@@ -220,6 +226,7 @@ ExynosVideoDecodeAccelerator::ExynosVideoDecodeAccelerator(
       mfc_output_streamon_(false),
       mfc_output_buffer_queued_count_(0),
       mfc_output_buffer_pixelformat_(0),
+      mfc_output_dpb_size_(0),
       gsc_fd_(-1),
       gsc_input_streamon_(false),
       gsc_input_buffer_queued_count_(0),
@@ -379,6 +386,12 @@ bool ExynosVideoDecodeAccelerator::Initialize(
   format.fmt.pix_mp.pixelformat = V4L2_PIX_FMT_NV12MT_16X16;
   IOCTL_OR_ERROR_RETURN_FALSE(mfc_fd_, VIDIOC_S_FMT, &format);
 
+  // Subscribe to the resolution change event.
+  struct v4l2_event_subscription sub;
+  memset(&sub, 0, sizeof(sub));
+  sub.type = V4L2_EVENT_RESOLUTION_CHANGE;
+  IOCTL_OR_ERROR_RETURN_FALSE(mfc_fd_, VIDIOC_SUBSCRIBE_EVENT, &sub);
+
   // Initialize format-specific bits.
   if (video_profile_ >= media::H264PROFILE_MIN &&
       video_profile_ <= media::H264PROFILE_MAX) {
@@ -427,7 +440,9 @@ void ExynosVideoDecodeAccelerator::AssignPictureBuffers(
   DCHECK(child_message_loop_proxy_->BelongsToCurrentThread());
 
   if (buffers.size() != gsc_output_buffer_map_.size()) {
-    DLOG(ERROR) << "AssignPictureBuffers(): invalid buffer count";
+    DLOG(ERROR) << "AssignPictureBuffers(): Failed to provide requested picture"
+      " buffers. (Got " << buffers.size() << ", requested " <<
+      gsc_output_buffer_map_.size() << ")";
     NOTIFY_ERROR(INVALID_ARGUMENT);
     return;
   }
@@ -454,7 +469,7 @@ void ExynosVideoDecodeAccelerator::AssignPictureBuffers(
     EGL_NONE,
   };
   Display* x_display = base::MessagePumpForUI::GetDefaultXDisplay();
-  ScopedTextureBinder bind_restore(0);
+  gfx::ScopedTextureBinder bind_restore(GL_TEXTURE_2D, 0);
   for (size_t i = 0; i < pic_buffers_ref->picture_buffers.size(); ++i) {
     PictureBufferArrayRef::PictureBufferRef& buffer =
         pic_buffers_ref->picture_buffers[i];
@@ -597,7 +612,7 @@ bool ExynosVideoDecodeAccelerator::PostSandboxInitialization() {
 void ExynosVideoDecodeAccelerator::DecodeTask(
     scoped_ptr<BitstreamBufferRef> bitstream_record) {
   DVLOG(3) << "DecodeTask(): input_id=" << bitstream_record->input_id;
-  DCHECK_EQ(decoder_thread_.message_loop(), MessageLoop::current());
+  DCHECK_EQ(decoder_thread_.message_loop(), base::MessageLoop::current());
   DCHECK_NE(decoder_state_, kUninitialized);
   TRACE_EVENT1("Video Decoder", "EVDA::DecodeTask", "input_id",
                bitstream_record->input_id);
@@ -623,7 +638,7 @@ void ExynosVideoDecodeAccelerator::DecodeTask(
 
 void ExynosVideoDecodeAccelerator::DecodeBufferTask() {
   DVLOG(3) << "DecodeBufferTask()";
-  DCHECK_EQ(decoder_thread_.message_loop(), MessageLoop::current());
+  DCHECK_EQ(decoder_thread_.message_loop(), base::MessageLoop::current());
   DCHECK_NE(decoder_state_, kUninitialized);
   TRACE_EVENT0("Video Decoder", "EVDA::DecodeBufferTask");
 
@@ -634,6 +649,9 @@ void ExynosVideoDecodeAccelerator::DecodeBufferTask() {
     return;
   } else if (decoder_state_ == kError) {
     DVLOG(2) << "DecodeBufferTask(): early out: kError state";
+    return;
+  } else if (decoder_state_ == kChangingResolution) {
+    DVLOG(2) << "DecodeBufferTask(): early out: resolution change pending";
     return;
   }
 
@@ -820,7 +838,7 @@ bool ExynosVideoDecodeAccelerator::AdvanceFrameFragment(
 }
 
 void ExynosVideoDecodeAccelerator::ScheduleDecodeBufferTaskIfNeeded() {
-  DCHECK_EQ(decoder_thread_.message_loop(), MessageLoop::current());
+  DCHECK_EQ(decoder_thread_.message_loop(), base::MessageLoop::current());
 
   // If we're behind on tasks, schedule another one.
   int buffers_to_decode = decoder_input_queue_.size();
@@ -837,7 +855,7 @@ void ExynosVideoDecodeAccelerator::ScheduleDecodeBufferTaskIfNeeded() {
 bool ExynosVideoDecodeAccelerator::DecodeBufferInitial(
     const void* data, size_t size, size_t* endpos) {
   DVLOG(3) << "DecodeBufferInitial(): data=" << data << ", size=" << size;
-  DCHECK_EQ(decoder_thread_.message_loop(), MessageLoop::current());
+  DCHECK_EQ(decoder_thread_.message_loop(), base::MessageLoop::current());
   DCHECK_NE(decoder_state_, kUninitialized);
   DCHECK_NE(decoder_state_, kDecoding);
   DCHECK(!device_poll_thread_.IsRunning());
@@ -860,35 +878,21 @@ bool ExynosVideoDecodeAccelerator::DecodeBufferInitial(
 
   // Check and see if we have format info yet.
   struct v4l2_format format;
-  format.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-  if (ioctl(mfc_fd_, VIDIOC_G_FMT, &format) != 0) {
-    if (errno == EINVAL) {
-      // We will get EINVAL if we haven't seen sufficient stream to decode the
-      // format.  Return true and schedule the next buffer.
-      *endpos = size;
-      return true;
-    } else {
-      DPLOG(ERROR) << "DecodeBufferInitial(): ioctl() failed: VIDIOC_G_FMT";
-      NOTIFY_ERROR(PLATFORM_FAILURE);
-      return false;
-    }
+  bool again = false;
+  if (!GetFormatInfo(&format, &again))
+    return false;
+
+  if (again) {
+    // Need more stream to decode format, return true and schedule next buffer.
+    *endpos = size;
+    return true;
   }
 
   // Run this initialization only on first startup.
   if (decoder_state_ == kInitialized) {
-    DVLOG(3) << "DecodeBufferInitial(): running one-time initialization";
+    DVLOG(3) << "DecodeBufferInitial(): running initialization";
     // Success! Setup our parameters.
-    CHECK_EQ(format.fmt.pix_mp.num_planes, 2);
-    frame_buffer_size_.SetSize(
-        format.fmt.pix_mp.width, format.fmt.pix_mp.height);
-    mfc_output_buffer_size_[0] = format.fmt.pix_mp.plane_fmt[0].sizeimage;
-    mfc_output_buffer_size_[1] = format.fmt.pix_mp.plane_fmt[1].sizeimage;
-    mfc_output_buffer_pixelformat_ = format.fmt.pix_mp.pixelformat;
-    DCHECK_EQ(mfc_output_buffer_pixelformat_, V4L2_PIX_FMT_NV12MT_16X16);
-
-    // Create our other buffers.
-    if (!CreateMfcOutputBuffers() || !CreateGscInputBuffers() ||
-        !CreateGscOutputBuffers())
+    if (!CreateBuffersForFormat(format))
       return false;
 
     // MFC expects to process the initial buffer once during stream init to
@@ -912,7 +916,7 @@ bool ExynosVideoDecodeAccelerator::DecodeBufferInitial(
 bool ExynosVideoDecodeAccelerator::DecodeBufferContinue(
     const void* data, size_t size) {
   DVLOG(3) << "DecodeBufferContinue(): data=" << data << ", size=" << size;
-  DCHECK_EQ(decoder_thread_.message_loop(), MessageLoop::current());
+  DCHECK_EQ(decoder_thread_.message_loop(), base::MessageLoop::current());
   DCHECK_EQ(decoder_state_, kDecoding);
 
   // Both of these calls will set kError state if they fail.
@@ -924,7 +928,7 @@ bool ExynosVideoDecodeAccelerator::DecodeBufferContinue(
 bool ExynosVideoDecodeAccelerator::AppendToInputFrame(
     const void* data, size_t size) {
   DVLOG(3) << "AppendToInputFrame()";
-  DCHECK_EQ(decoder_thread_.message_loop(), MessageLoop::current());
+  DCHECK_EQ(decoder_thread_.message_loop(), base::MessageLoop::current());
   DCHECK_NE(decoder_state_, kUninitialized);
   DCHECK_NE(decoder_state_, kResetting);
   DCHECK_NE(decoder_state_, kError);
@@ -990,7 +994,7 @@ bool ExynosVideoDecodeAccelerator::AppendToInputFrame(
 
 bool ExynosVideoDecodeAccelerator::FlushInputFrame() {
   DVLOG(3) << "FlushInputFrame()";
-  DCHECK_EQ(decoder_thread_.message_loop(), MessageLoop::current());
+  DCHECK_EQ(decoder_thread_.message_loop(), base::MessageLoop::current());
   DCHECK_NE(decoder_state_, kUninitialized);
   DCHECK_NE(decoder_state_, kResetting);
   DCHECK_NE(decoder_state_, kError);
@@ -1029,7 +1033,7 @@ bool ExynosVideoDecodeAccelerator::FlushInputFrame() {
 void ExynosVideoDecodeAccelerator::AssignPictureBuffersTask(
     scoped_ptr<PictureBufferArrayRef> pic_buffers) {
   DVLOG(3) << "AssignPictureBuffersTask()";
-  DCHECK_EQ(decoder_thread_.message_loop(), MessageLoop::current());
+  DCHECK_EQ(decoder_thread_.message_loop(), base::MessageLoop::current());
   DCHECK_NE(decoder_state_, kUninitialized);
   TRACE_EVENT0("Video Decoder", "EVDA::AssignPictureBuffersTask");
 
@@ -1062,11 +1066,14 @@ void ExynosVideoDecodeAccelerator::AssignPictureBuffersTask(
 
   // We got buffers!  Kick the GSC.
   EnqueueGsc();
+
+  if (decoder_state_ == kChangingResolution)
+    ResumeAfterResolutionChange();
 }
 
-void ExynosVideoDecodeAccelerator::ServiceDeviceTask() {
+void ExynosVideoDecodeAccelerator::ServiceDeviceTask(bool mfc_event_pending) {
   DVLOG(3) << "ServiceDeviceTask()";
-  DCHECK_EQ(decoder_thread_.message_loop(), MessageLoop::current());
+  DCHECK_EQ(decoder_thread_.message_loop(), base::MessageLoop::current());
   DCHECK_NE(decoder_state_, kUninitialized);
   DCHECK_NE(decoder_state_, kInitialized);
   DCHECK_NE(decoder_state_, kAfterReset);
@@ -1078,8 +1085,13 @@ void ExynosVideoDecodeAccelerator::ServiceDeviceTask() {
   } else if (decoder_state_ == kError) {
     DVLOG(2) << "ServiceDeviceTask(): early out: kError state";
     return;
+  } else if (decoder_state_ == kChangingResolution) {
+    DVLOG(2) << "ServiceDeviceTask(): early out: kChangingResolution state";
+    return;
   }
 
+  if (mfc_event_pending)
+    DequeueMfcEvents();
   DequeueMfc();
   DequeueGsc();
   EnqueueMfc();
@@ -1131,11 +1143,12 @@ void ExynosVideoDecodeAccelerator::ServiceDeviceTask() {
            << decoder_frames_at_client_ << "]";
 
   ScheduleDecodeBufferTaskIfNeeded();
+  StartResolutionChangeIfNeeded();
 }
 
 void ExynosVideoDecodeAccelerator::EnqueueMfc() {
   DVLOG(3) << "EnqueueMfc()";
-  DCHECK_EQ(decoder_thread_.message_loop(), MessageLoop::current());
+  DCHECK_EQ(decoder_thread_.message_loop(), base::MessageLoop::current());
   DCHECK_NE(decoder_state_, kUninitialized);
   TRACE_EVENT0("Video Decoder", "EVDA::EnqueueMfc");
 
@@ -1178,9 +1191,29 @@ void ExynosVideoDecodeAccelerator::EnqueueMfc() {
   }
 }
 
+void ExynosVideoDecodeAccelerator::DequeueMfcEvents() {
+  DCHECK_EQ(decoder_thread_.message_loop(), base::MessageLoop::current());
+  DCHECK_EQ(decoder_state_, kDecoding);
+  DVLOG(3) << "DequeueMfcEvents()";
+
+  struct v4l2_event ev;
+  memset(&ev, 0, sizeof(ev));
+
+  while (ioctl(mfc_fd_, VIDIOC_DQEVENT, &ev) == 0) {
+    if (ev.type == V4L2_EVENT_RESOLUTION_CHANGE) {
+      DVLOG(3) << "DequeueMfcEvents(): got resolution change event.";
+      DCHECK(!resolution_change_pending_);
+      resolution_change_pending_ = true;
+    } else {
+      DLOG(FATAL) << "DequeueMfcEvents(): got an event (" << ev.type
+                  << ") we haven't subscribed to.";
+    }
+  }
+}
+
 void ExynosVideoDecodeAccelerator::DequeueMfc() {
   DVLOG(3) << "DequeueMfc()";
-  DCHECK_EQ(decoder_thread_.message_loop(), MessageLoop::current());
+  DCHECK_EQ(decoder_thread_.message_loop(), base::MessageLoop::current());
   DCHECK_NE(decoder_state_, kUninitialized);
   TRACE_EVENT0("Video Decoder", "EVDA::DequeueMfc");
 
@@ -1191,8 +1224,11 @@ void ExynosVideoDecodeAccelerator::DequeueMfc() {
   while (mfc_input_buffer_queued_count_ > 0) {
     DCHECK(mfc_input_streamon_);
     memset(&dqbuf, 0, sizeof(dqbuf));
+    memset(planes, 0, sizeof(planes));
     dqbuf.type   = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
     dqbuf.memory = V4L2_MEMORY_MMAP;
+    dqbuf.m.planes = planes;
+    dqbuf.length = 1;
     if (ioctl(mfc_fd_, VIDIOC_DQBUF, &dqbuf) != 0) {
       if (errno == EAGAIN) {
         // EAGAIN if we're just out of buffers to dequeue.
@@ -1259,7 +1295,7 @@ void ExynosVideoDecodeAccelerator::DequeueMfc() {
 
 void ExynosVideoDecodeAccelerator::EnqueueGsc() {
   DVLOG(3) << "EnqueueGsc()";
-  DCHECK_EQ(decoder_thread_.message_loop(), MessageLoop::current());
+  DCHECK_EQ(decoder_thread_.message_loop(), base::MessageLoop::current());
   DCHECK_NE(decoder_state_, kUninitialized);
   DCHECK_NE(decoder_state_, kInitialized);
   TRACE_EVENT0("Video Decoder", "EVDA::EnqueueGsc");
@@ -1284,7 +1320,6 @@ void ExynosVideoDecodeAccelerator::EnqueueGsc() {
     }
   }
 
-  // Enqueue a GSC output, only if we need one
   if (gsc_input_buffer_queued_count_ != 0 &&
       gsc_output_buffer_queued_count_ == 0 &&
       !gsc_free_output_buffers_.empty()) {
@@ -1311,7 +1346,7 @@ void ExynosVideoDecodeAccelerator::EnqueueGsc() {
 
 void ExynosVideoDecodeAccelerator::DequeueGsc() {
   DVLOG(3) << "DequeueGsc()";
-  DCHECK_EQ(decoder_thread_.message_loop(), MessageLoop::current());
+  DCHECK_EQ(decoder_thread_.message_loop(), base::MessageLoop::current());
   DCHECK_NE(decoder_state_, kUninitialized);
   DCHECK_NE(decoder_state_, kInitialized);
   DCHECK_NE(decoder_state_, kAfterReset);
@@ -1320,11 +1355,15 @@ void ExynosVideoDecodeAccelerator::DequeueGsc() {
   // Dequeue completed GSC input (VIDEO_OUTPUT) buffers, and recycle to the free
   // list.  Also recycle the corresponding MFC output buffers at this time.
   struct v4l2_buffer dqbuf;
+  struct v4l2_plane planes[2];
   while (gsc_input_buffer_queued_count_ > 0) {
     DCHECK(gsc_input_streamon_);
     memset(&dqbuf, 0, sizeof(dqbuf));
+    memset(planes, 0, sizeof(planes));
     dqbuf.type   = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
     dqbuf.memory = V4L2_MEMORY_DMABUF;
+    dqbuf.m.planes = planes;
+    dqbuf.length = 2;
     if (ioctl(gsc_fd_, VIDIOC_DQBUF, &dqbuf) != 0) {
       if (errno == EAGAIN) {
         // EAGAIN if we're just out of buffers to dequeue.
@@ -1352,8 +1391,11 @@ void ExynosVideoDecodeAccelerator::DequeueGsc() {
   while (gsc_output_buffer_queued_count_ > 0) {
     DCHECK(gsc_output_streamon_);
     memset(&dqbuf, 0, sizeof(dqbuf));
+    memset(planes, 0, sizeof(planes));
     dqbuf.type   = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
     dqbuf.memory = V4L2_MEMORY_DMABUF;
+    dqbuf.m.planes = planes;
+    dqbuf.length = 1;
     if (ioctl(gsc_fd_, VIDIOC_DQBUF, &dqbuf) != 0) {
       if (errno == EAGAIN) {
         // EAGAIN if we're just out of buffers to dequeue.
@@ -1518,12 +1560,17 @@ void ExynosVideoDecodeAccelerator::ReusePictureBufferTask(
     int32 picture_buffer_id, scoped_ptr<EGLSyncKHRRef> egl_sync_ref) {
   DVLOG(3) << "ReusePictureBufferTask(): picture_buffer_id="
            << picture_buffer_id;
-  DCHECK_EQ(decoder_thread_.message_loop(), MessageLoop::current());
+  DCHECK_EQ(decoder_thread_.message_loop(), base::MessageLoop::current());
   TRACE_EVENT0("Video Decoder", "EVDA::ReusePictureBufferTask");
 
   // We run ReusePictureBufferTask even if we're in kResetting.
   if (decoder_state_ == kError) {
     DVLOG(2) << "ReusePictureBufferTask(): early out: kError state";
+    return;
+  }
+
+  if (decoder_state_ == kChangingResolution) {
+    DVLOG(2) << "ReusePictureBufferTask(): early out: kChangingResolution";
     return;
   }
 
@@ -1558,7 +1605,7 @@ void ExynosVideoDecodeAccelerator::ReusePictureBufferTask(
 
 void ExynosVideoDecodeAccelerator::FlushTask() {
   DVLOG(3) << "FlushTask()";
-  DCHECK_EQ(decoder_thread_.message_loop(), MessageLoop::current());
+  DCHECK_EQ(decoder_thread_.message_loop(), base::MessageLoop::current());
   TRACE_EVENT0("Video Decoder", "EVDA::FlushTask");
 
   // Flush outstanding buffers.
@@ -1608,6 +1655,21 @@ void ExynosVideoDecodeAccelerator::NotifyFlushDoneIfNeeded() {
        gsc_input_buffer_queued_count_ + gsc_output_buffer_queued_count_ ) != 0)
     return;
 
+  // TODO(posciak): crbug.com/270039. MFC requires a streamoff-streamon
+  // sequence after flush to continue, even if we are not resetting. This would
+  // make sense, because we don't really want to resume from a non-resume point
+  // (e.g. not from an IDR) if we are flushed.
+  // MSE player however triggers a Flush() on chunk end, but never Reset(). One
+  // could argue either way, or even say that Flush() is not needed/harmful when
+  // transitioning to next chunk.
+  // For now, do the streamoff-streamon cycle to satisfy MFC and not freeze when
+  // doing MSE. This should be harmless otherwise.
+  if (!StopDevicePoll(false))
+    return;
+
+  if (!StartDevicePoll())
+    return;
+
   decoder_delay_bitstream_buffer_id_ = -1;
   decoder_flushing_ = false;
   DVLOG(3) << "NotifyFlushDoneIfNeeded(): returning flush";
@@ -1620,7 +1682,7 @@ void ExynosVideoDecodeAccelerator::NotifyFlushDoneIfNeeded() {
 
 void ExynosVideoDecodeAccelerator::ResetTask() {
   DVLOG(3) << "ResetTask()";
-  DCHECK_EQ(decoder_thread_.message_loop(), MessageLoop::current());
+  DCHECK_EQ(decoder_thread_.message_loop(), base::MessageLoop::current());
   TRACE_EVENT0("Video Decoder", "EVDA::ResetTask");
 
   if (decoder_state_ == kError) {
@@ -1628,10 +1690,25 @@ void ExynosVideoDecodeAccelerator::ResetTask() {
     return;
   }
 
-  // We stop streaming, but we _don't_ destroy our buffers.
-  if (!StopDevicePoll())
+  // If we are in the middle of switching resolutions, postpone reset until
+  // it's done. We don't have to worry about timing of this wrt to decoding,
+  // because MFC input pipe is already stopped if we are changing resolution.
+  // We will come back here after we are done with the resolution change.
+  DCHECK(!resolution_change_reset_pending_);
+  if (resolution_change_pending_ || decoder_state_ == kChangingResolution) {
+    resolution_change_reset_pending_ = true;
+    return;
+  }
+
+  // We stop streaming and clear buffer tracking info (not preserving
+  // MFC inputs).
+  // StopDevicePoll() unconditionally does _not_ destroy buffers, however.
+  if (!StopDevicePoll(false))
     return;
 
+  DequeueMfcEvents();
+
+  resolution_change_pending_ = false;
   decoder_current_bitstream_buffer_.reset();
   decoder_input_queue_.clear();
 
@@ -1650,7 +1727,7 @@ void ExynosVideoDecodeAccelerator::ResetTask() {
 
 void ExynosVideoDecodeAccelerator::ResetDoneTask() {
   DVLOG(3) << "ResetDoneTask()";
-  DCHECK_EQ(decoder_thread_.message_loop(), MessageLoop::current());
+  DCHECK_EQ(decoder_thread_.message_loop(), base::MessageLoop::current());
   TRACE_EVENT0("Video Decoder", "EVDA::ResetDoneTask");
 
   if (decoder_state_ == kError) {
@@ -1683,7 +1760,7 @@ void ExynosVideoDecodeAccelerator::DestroyTask() {
   // DestroyTask() should run regardless of decoder_state_.
 
   // Stop streaming and the device_poll_thread_.
-  StopDevicePoll();
+  StopDevicePoll(false);
 
   decoder_current_bitstream_buffer_.reset();
   decoder_current_input_buffer_ = -1;
@@ -1698,7 +1775,7 @@ void ExynosVideoDecodeAccelerator::DestroyTask() {
 
 bool ExynosVideoDecodeAccelerator::StartDevicePoll() {
   DVLOG(3) << "StartDevicePoll()";
-  DCHECK_EQ(decoder_thread_.message_loop(), MessageLoop::current());
+  DCHECK_EQ(decoder_thread_.message_loop(), base::MessageLoop::current());
   DCHECK(!device_poll_thread_.IsRunning());
 
   // Start up the device poll thread and schedule its first DevicePollTask().
@@ -1715,9 +1792,9 @@ bool ExynosVideoDecodeAccelerator::StartDevicePoll() {
   return true;
 }
 
-bool ExynosVideoDecodeAccelerator::StopDevicePoll() {
+bool ExynosVideoDecodeAccelerator::StopDevicePoll(bool keep_mfc_input_state) {
   DVLOG(3) << "StopDevicePoll()";
-  DCHECK_EQ(decoder_thread_.message_loop(), MessageLoop::current());
+  DCHECK_EQ(decoder_thread_.message_loop(), base::MessageLoop::current());
 
   // Signal the DevicePollTask() to stop, and stop the device poll thread.
   if (!SetDevicePollInterrupt())
@@ -1728,11 +1805,13 @@ bool ExynosVideoDecodeAccelerator::StopDevicePoll() {
     return false;
 
   // Stop streaming.
-  if (mfc_input_streamon_) {
-    __u32 type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
-    IOCTL_OR_ERROR_RETURN_FALSE(mfc_fd_, VIDIOC_STREAMOFF, &type);
+  if (!keep_mfc_input_state) {
+    if (mfc_input_streamon_) {
+      __u32 type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
+      IOCTL_OR_ERROR_RETURN_FALSE(mfc_fd_, VIDIOC_STREAMOFF, &type);
+    }
+    mfc_input_streamon_ = false;
   }
-  mfc_input_streamon_ = false;
   if (mfc_output_streamon_) {
     __u32 type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
     IOCTL_OR_ERROR_RETURN_FALSE(mfc_fd_, VIDIOC_STREAMOFF, &type);
@@ -1750,15 +1829,17 @@ bool ExynosVideoDecodeAccelerator::StopDevicePoll() {
   gsc_output_streamon_ = false;
 
   // Reset all our accounting info.
-  mfc_input_ready_queue_.clear();
-  mfc_free_input_buffers_.clear();
-  for (size_t i = 0; i < mfc_input_buffer_map_.size(); ++i) {
-    mfc_free_input_buffers_.push_back(i);
-    mfc_input_buffer_map_[i].at_device = false;
-    mfc_input_buffer_map_[i].bytes_used = 0;
-    mfc_input_buffer_map_[i].input_id = -1;
+  if (!keep_mfc_input_state) {
+    mfc_input_ready_queue_.clear();
+    mfc_free_input_buffers_.clear();
+    for (size_t i = 0; i < mfc_input_buffer_map_.size(); ++i) {
+      mfc_free_input_buffers_.push_back(i);
+      mfc_input_buffer_map_[i].at_device = false;
+      mfc_input_buffer_map_[i].bytes_used = 0;
+      mfc_input_buffer_map_[i].input_id = -1;
+    }
+    mfc_input_buffer_queued_count_ = 0;
   }
-  mfc_input_buffer_queued_count_ = 0;
   mfc_free_output_buffers_.clear();
   for (size_t i = 0; i < mfc_output_buffer_map_.size(); ++i) {
     mfc_free_output_buffers_.push_back(i);
@@ -1790,7 +1871,7 @@ bool ExynosVideoDecodeAccelerator::StopDevicePoll() {
 
 bool ExynosVideoDecodeAccelerator::SetDevicePollInterrupt() {
   DVLOG(3) << "SetDevicePollInterrupt()";
-  DCHECK_EQ(decoder_thread_.message_loop(), MessageLoop::current());
+  DCHECK_EQ(decoder_thread_.message_loop(), base::MessageLoop::current());
 
   const uint64 buf = 1;
   if (HANDLE_EINTR(write(device_poll_interrupt_fd_, &buf, sizeof(buf))) == -1) {
@@ -1803,7 +1884,7 @@ bool ExynosVideoDecodeAccelerator::SetDevicePollInterrupt() {
 
 bool ExynosVideoDecodeAccelerator::ClearDevicePollInterrupt() {
   DVLOG(3) << "ClearDevicePollInterrupt()";
-  DCHECK_EQ(decoder_thread_.message_loop(), MessageLoop::current());
+  DCHECK_EQ(decoder_thread_.message_loop(), base::MessageLoop::current());
 
   uint64 buf;
   if (HANDLE_EINTR(read(device_poll_interrupt_fd_, &buf, sizeof(buf))) == -1) {
@@ -1819,9 +1900,87 @@ bool ExynosVideoDecodeAccelerator::ClearDevicePollInterrupt() {
   return true;
 }
 
+void ExynosVideoDecodeAccelerator::StartResolutionChangeIfNeeded() {
+  DCHECK_EQ(decoder_thread_.message_loop(), base::MessageLoop::current());
+  DCHECK_EQ(decoder_state_, kDecoding);
+
+  if (!resolution_change_pending_)
+    return;
+
+  if (!mfc_output_gsc_input_queue_.empty() ||
+      gsc_input_buffer_queued_count_ + gsc_output_buffer_queued_count_ > 0) {
+    DVLOG(3) << "StartResolutionChangeIfNeeded(): waiting for GSC to finish.";
+    return;
+  }
+
+  DVLOG(3) << "No more work for GSC, initiate resolution change";
+
+  // Keep MFC input queue.
+  if (!StopDevicePoll(true))
+    return;
+
+  decoder_state_ = kChangingResolution;
+  DCHECK(resolution_change_pending_);
+  resolution_change_pending_ = false;
+
+  // Post a task to clean up buffers on child thread. This will also ensure
+  // that we won't accept ReusePictureBuffer() anymore after that.
+  child_message_loop_proxy_->PostTask(FROM_HERE, base::Bind(
+      &ExynosVideoDecodeAccelerator::ResolutionChangeDestroyBuffers,
+      weak_this_));
+}
+
+void ExynosVideoDecodeAccelerator::FinishResolutionChange() {
+  DCHECK_EQ(decoder_thread_.message_loop(), base::MessageLoop::current());
+  DVLOG(3) << "FinishResolutionChange()";
+
+  if (decoder_state_ == kError) {
+    DVLOG(2) << "FinishResolutionChange(): early out: kError state";
+    return;
+  }
+
+  struct v4l2_format format;
+  bool again;
+  bool ret = GetFormatInfo(&format, &again);
+  if (!ret || again) {
+    DVLOG(3) << "Couldn't get format information after resolution change";
+    NOTIFY_ERROR(PLATFORM_FAILURE);
+    return;
+  }
+
+  if (!CreateBuffersForFormat(format)) {
+    DVLOG(3) << "Couldn't reallocate buffers after resolution change";
+    NOTIFY_ERROR(PLATFORM_FAILURE);
+    return;
+  }
+
+  // From here we stay in kChangingResolution and wait for
+  // AssignPictureBuffers() before we can resume.
+}
+
+void ExynosVideoDecodeAccelerator::ResumeAfterResolutionChange() {
+  DCHECK_EQ(decoder_thread_.message_loop(), base::MessageLoop::current());
+  DVLOG(3) << "ResumeAfterResolutionChange()";
+
+  decoder_state_ = kDecoding;
+
+  if (resolution_change_reset_pending_) {
+    resolution_change_reset_pending_ = false;
+    ResetTask();
+    return;
+  }
+
+  if (!StartDevicePoll())
+    return;
+
+  EnqueueMfc();
+  // Gsc will get enqueued in AssignPictureBuffersTask().
+  ScheduleDecodeBufferTaskIfNeeded();
+}
+
 void ExynosVideoDecodeAccelerator::DevicePollTask(unsigned int poll_fds) {
   DVLOG(3) << "DevicePollTask()";
-  DCHECK_EQ(device_poll_thread_.message_loop(), MessageLoop::current());
+  DCHECK_EQ(device_poll_thread_.message_loop(), base::MessageLoop::current());
   TRACE_EVENT0("Video Decoder", "EVDA::DevicePollTask");
 
   // This routine just polls the set of device fds, and schedules a
@@ -1830,6 +1989,7 @@ void ExynosVideoDecodeAccelerator::DevicePollTask(unsigned int poll_fds) {
   // device_poll_interrupt_fd_.
   struct pollfd pollfds[3];
   nfds_t nfds;
+  int mfc_pollfd = -1;
 
   // Add device_poll_interrupt_fd_;
   pollfds[0].fd = device_poll_interrupt_fd_;
@@ -1839,7 +1999,8 @@ void ExynosVideoDecodeAccelerator::DevicePollTask(unsigned int poll_fds) {
   if (poll_fds & kPollMfc) {
     DVLOG(3) << "DevicePollTask(): adding MFC to poll() set";
     pollfds[nfds].fd = mfc_fd_;
-    pollfds[nfds].events = POLLIN | POLLOUT | POLLERR;
+    pollfds[nfds].events = POLLIN | POLLOUT | POLLERR | POLLPRI;
+    mfc_pollfd = nfds;
     nfds++;
   }
   // Add GSC fd, if we should poll on it.
@@ -1858,11 +2019,14 @@ void ExynosVideoDecodeAccelerator::DevicePollTask(unsigned int poll_fds) {
     return;
   }
 
+  bool mfc_event_pending = (mfc_pollfd != -1 &&
+                            pollfds[mfc_pollfd].revents & POLLPRI);
+
   // All processing should happen on ServiceDeviceTask(), since we shouldn't
   // touch decoder state from this thread.
   decoder_thread_.message_loop()->PostTask(FROM_HERE, base::Bind(
       &ExynosVideoDecodeAccelerator::ServiceDeviceTask,
-      base::Unretained(this)));
+      base::Unretained(this), mfc_event_pending));
 }
 
 void ExynosVideoDecodeAccelerator::NotifyError(Error error) {
@@ -1886,13 +2050,55 @@ void ExynosVideoDecodeAccelerator::SetDecoderState(State state) {
   // We can touch decoder_state_ only if this is the decoder thread or the
   // decoder thread isn't running.
   if (decoder_thread_.message_loop() != NULL &&
-      decoder_thread_.message_loop() != MessageLoop::current()) {
+      decoder_thread_.message_loop() != base::MessageLoop::current()) {
     decoder_thread_.message_loop()->PostTask(FROM_HERE, base::Bind(
         &ExynosVideoDecodeAccelerator::SetDecoderState,
         base::Unretained(this), state));
   } else {
     decoder_state_ = state;
   }
+}
+
+bool ExynosVideoDecodeAccelerator::GetFormatInfo(struct v4l2_format* format,
+                                                 bool* again) {
+  DCHECK_EQ(decoder_thread_.message_loop(), base::MessageLoop::current());
+
+  *again = false;
+  memset(format, 0, sizeof(*format));
+  format->type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+  if (HANDLE_EINTR(ioctl(mfc_fd_, VIDIOC_G_FMT, format)) != 0) {
+    if (errno == EINVAL) {
+      // EINVAL means we haven't seen sufficient stream to decode the format.
+      *again = true;
+      return true;
+    } else {
+      DPLOG(ERROR) << "DecodeBufferInitial(): ioctl() failed: VIDIOC_G_FMT";
+      NOTIFY_ERROR(PLATFORM_FAILURE);
+      return false;
+    }
+  }
+
+  return true;
+}
+
+bool ExynosVideoDecodeAccelerator::CreateBuffersForFormat(
+    const struct v4l2_format& format) {
+  DCHECK_EQ(decoder_thread_.message_loop(), base::MessageLoop::current());
+  CHECK_EQ(format.fmt.pix_mp.num_planes, 2);
+  frame_buffer_size_.SetSize(
+      format.fmt.pix_mp.width, format.fmt.pix_mp.height);
+  mfc_output_buffer_size_[0] = format.fmt.pix_mp.plane_fmt[0].sizeimage;
+  mfc_output_buffer_size_[1] = format.fmt.pix_mp.plane_fmt[1].sizeimage;
+  mfc_output_buffer_pixelformat_ = format.fmt.pix_mp.pixelformat;
+  DCHECK_EQ(mfc_output_buffer_pixelformat_, V4L2_PIX_FMT_NV12MT_16X16);
+  DVLOG(3) << "CreateBuffersForFormat(): new resolution: "
+           << frame_buffer_size_.ToString();
+
+  if (!CreateMfcOutputBuffers() || !CreateGscInputBuffers() ||
+      !CreateGscOutputBuffers())
+    return false;
+
+  return true;
 }
 
 bool ExynosVideoDecodeAccelerator::CreateMfcInputBuffers() {
@@ -1958,7 +2164,8 @@ bool ExynosVideoDecodeAccelerator::CreateMfcInputBuffers() {
 
 bool ExynosVideoDecodeAccelerator::CreateMfcOutputBuffers() {
   DVLOG(3) << "CreateMfcOutputBuffers()";
-  DCHECK_EQ(decoder_state_, kInitialized);
+  DCHECK(decoder_state_ == kInitialized ||
+         decoder_state_ == kChangingResolution);
   DCHECK(!mfc_output_streamon_);
   DCHECK(mfc_output_buffer_map_.empty());
 
@@ -1967,13 +2174,14 @@ bool ExynosVideoDecodeAccelerator::CreateMfcOutputBuffers() {
   memset(&ctrl, 0, sizeof(ctrl));
   ctrl.id = V4L2_CID_MIN_BUFFERS_FOR_CAPTURE;
   IOCTL_OR_ERROR_RETURN_FALSE(mfc_fd_, VIDIOC_G_CTRL, &ctrl);
+  mfc_output_dpb_size_ = ctrl.value;
 
   // Output format setup in Initialize().
 
   // Allocate the output buffers.
   struct v4l2_requestbuffers reqbufs;
   memset(&reqbufs, 0, sizeof(reqbufs));
-  reqbufs.count  = ctrl.value + kMfcOutputBufferExtraCount;
+  reqbufs.count  = mfc_output_dpb_size_ + kDpbOutputBufferExtraCount;
   reqbufs.type   = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
   reqbufs.memory = V4L2_MEMORY_MMAP;
   IOCTL_OR_ERROR_RETURN_FALSE(mfc_fd_, VIDIOC_REQBUFS, &reqbufs);
@@ -2014,7 +2222,8 @@ bool ExynosVideoDecodeAccelerator::CreateMfcOutputBuffers() {
 
 bool ExynosVideoDecodeAccelerator::CreateGscInputBuffers() {
   DVLOG(3) << "CreateGscInputBuffers()";
-  DCHECK_EQ(decoder_state_, kInitialized);
+  DCHECK(decoder_state_ == kInitialized ||
+         decoder_state_ == kChangingResolution);
   DCHECK(!gsc_input_streamon_);
   DCHECK(gsc_input_buffer_map_.empty());
 
@@ -2052,7 +2261,12 @@ bool ExynosVideoDecodeAccelerator::CreateGscInputBuffers() {
   memset(&control, 0, sizeof(control));
   control.id = V4L2_CID_GLOBAL_ALPHA;
   control.value = 255;
-  IOCTL_OR_ERROR_RETURN_FALSE(gsc_fd_, VIDIOC_S_CTRL, &control);
+  if (HANDLE_EINTR(ioctl(gsc_fd_, VIDIOC_S_CTRL, &control)) != 0) {
+    memset(&control, 0, sizeof(control));
+    control.id = V4L2_CID_ALPHA_COMPONENT;
+    control.value = 255;
+    IOCTL_OR_ERROR_RETURN_FALSE(gsc_fd_, VIDIOC_S_CTRL, &control);
+  }
 
   struct v4l2_requestbuffers reqbufs;
   memset(&reqbufs, 0, sizeof(reqbufs));
@@ -2072,7 +2286,8 @@ bool ExynosVideoDecodeAccelerator::CreateGscInputBuffers() {
 
 bool ExynosVideoDecodeAccelerator::CreateGscOutputBuffers() {
   DVLOG(3) << "CreateGscOutputBuffers()";
-  DCHECK_EQ(decoder_state_, kInitialized);
+  DCHECK(decoder_state_ == kInitialized ||
+         decoder_state_ == kChangingResolution);
   DCHECK(!gsc_output_streamon_);
   DCHECK(gsc_output_buffer_map_.empty());
 
@@ -2092,7 +2307,7 @@ bool ExynosVideoDecodeAccelerator::CreateGscOutputBuffers() {
 
   struct v4l2_requestbuffers reqbufs;
   memset(&reqbufs, 0, sizeof(reqbufs));
-  reqbufs.count = kGscOutputBufferCount;
+  reqbufs.count = mfc_output_dpb_size_ + kDpbOutputBufferExtraCount;
   reqbufs.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
   reqbufs.memory = V4L2_MEMORY_DMABUF;
   IOCTL_OR_ERROR_RETURN_FALSE(gsc_fd_, VIDIOC_REQBUFS, &reqbufs);
@@ -2199,8 +2414,11 @@ void ExynosVideoDecodeAccelerator::DestroyGscOutputBuffers() {
         eglDestroyImageKHR(egl_display_, output_record.egl_image);
       if (output_record.egl_sync != EGL_NO_SYNC_KHR)
         eglDestroySyncKHR(egl_display_, output_record.egl_sync);
-      if (client_)
+      if (client_) {
+        DVLOG(1) << "DestroyGscOutputBuffers(): "
+                 << "dismissing PictureBuffer id=" << output_record.picture_id;
         client_->DismissPictureBuffer(output_record.picture_id);
+      }
       ++i;
     } while (i < gsc_output_buffer_map_.size());
   }
@@ -2215,6 +2433,20 @@ void ExynosVideoDecodeAccelerator::DestroyGscOutputBuffers() {
 
   gsc_output_buffer_map_.clear();
   gsc_free_output_buffers_.clear();
+}
+
+void ExynosVideoDecodeAccelerator::ResolutionChangeDestroyBuffers() {
+  DCHECK(child_message_loop_proxy_->BelongsToCurrentThread());
+  DVLOG(3) << "ResolutionChangeDestroyBuffers()";
+
+  DestroyGscInputBuffers();
+  DestroyGscOutputBuffers();
+  DestroyMfcOutputBuffers();
+
+  // Finish resolution change on decoder thread.
+  decoder_thread_.message_loop()->PostTask(FROM_HERE, base::Bind(
+      &ExynosVideoDecodeAccelerator::FinishResolutionChange,
+      base::Unretained(this)));
 }
 
 }  // namespace content

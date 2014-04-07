@@ -6,7 +6,7 @@
 #define EXTENSIONS_COMMON_EVENT_FILTERING_INFO_H_
 
 #include "base/memory/scoped_ptr.h"
-#include "googleurl/src/gurl.h"
+#include "url/gurl.h"
 
 namespace base {
 class Value;
@@ -27,17 +27,23 @@ class EventFilteringInfo {
   EventFilteringInfo();
   ~EventFilteringInfo();
   void SetURL(const GURL& url);
+  void SetInstanceID(int instance_id);
 
   bool has_url() const { return has_url_; }
   const GURL& url() const { return url_; }
 
-  std::string AsJSONString() const;
+  bool has_instance_id() const { return has_instance_id_; }
+  int instance_id() const { return instance_id_; }
+
   scoped_ptr<base::Value> AsValue() const;
   bool IsEmpty() const;
 
  private:
   bool has_url_;
   GURL url_;
+
+  bool has_instance_id_;
+  int instance_id_;
 
   // Allow implicit copy and assignment.
 };

@@ -17,9 +17,12 @@
 #include "chrome/browser/sync/glue/model_associator.h"
 #include "sync/protocol/password_specifics.pb.h"
 
-class MessageLoop;
 class PasswordStore;
 class ProfileSyncService;
+
+namespace base {
+class MessageLoop;
+}
 
 namespace content {
 struct PasswordForm;
@@ -115,10 +118,6 @@ class PasswordModelAssociator
   static void WriteToSyncNode(const content::PasswordForm& password_form,
                               syncer::WriteNode* node);
 
-  // Called at various points in model association to determine if the
-  // user requested an abort.
-  bool IsAbortPending();
-
  private:
   typedef std::map<std::string, int64> PasswordToSyncIdMap;
   typedef std::map<int64, std::string> SyncIdToPasswordMap;
@@ -127,13 +126,11 @@ class PasswordModelAssociator
   PasswordStore* password_store_;
   int64 password_node_id_;
 
-  // Abort association pending flag and lock.  If this is set to true
-  // (via the AbortAssociation method), return from the
-  // AssociateModels method as soon as possible.
-  base::Lock abort_association_pending_lock_;
-  bool abort_association_pending_;
+  // Set true by AbortAssociation.
+  bool abort_association_requested_;
+  base::Lock association_lock_;
 
-  MessageLoop* expected_loop_;
+  base::MessageLoop* expected_loop_;
 
   PasswordToSyncIdMap id_map_;
   SyncIdToPasswordMap id_map_inverse_;

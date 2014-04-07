@@ -12,9 +12,9 @@
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/logging.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/stl_util.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "ui/aura/client/animation_host.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/window.h"
@@ -430,8 +430,16 @@ void AnimateHideWindow_Rotate(aura::Window* window) {
 }
 
 bool AnimateShowWindow(aura::Window* window) {
-  if (!HasWindowVisibilityAnimationTransition(window, ANIMATE_SHOW))
+  if (!HasWindowVisibilityAnimationTransition(window, ANIMATE_SHOW)) {
+    if (HasWindowVisibilityAnimationTransition(window, ANIMATE_HIDE)) {
+      // Since hide animation may have changed opacity and transform,
+      // reset them to show the window.
+      window->layer()->set_delegate(window);
+      window->layer()->SetOpacity(kWindowAnimation_ShowOpacity);
+      window->layer()->SetTransform(gfx::Transform());
+    }
     return false;
+  }
 
   switch (GetWindowVisibilityAnimationType(window)) {
     case WINDOW_VISIBILITY_ANIMATION_TYPE_DROP:
@@ -452,8 +460,16 @@ bool AnimateShowWindow(aura::Window* window) {
 }
 
 bool AnimateHideWindow(aura::Window* window) {
-  if (!HasWindowVisibilityAnimationTransition(window, ANIMATE_HIDE))
+  if (!HasWindowVisibilityAnimationTransition(window, ANIMATE_HIDE)) {
+    if (HasWindowVisibilityAnimationTransition(window, ANIMATE_SHOW)) {
+      // Since show animation may have changed opacity and transform,
+      // reset them, though the change should be hidden.
+      window->layer()->set_delegate(NULL);
+      window->layer()->SetOpacity(kWindowAnimation_HideOpacity);
+      window->layer()->SetTransform(gfx::Transform());
+    }
     return false;
+  }
 
   switch (GetWindowVisibilityAnimationType(window)) {
     case WINDOW_VISIBILITY_ANIMATION_TYPE_DROP:

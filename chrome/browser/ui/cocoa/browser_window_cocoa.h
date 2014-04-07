@@ -5,7 +5,7 @@
 #ifndef CHROME_BROWSER_UI_COCOA_BROWSER_WINDOW_COCOA_H_
 #define CHROME_BROWSER_UI_COCOA_BROWSER_WINDOW_COCOA_H_
 
-#include "base/memory/scoped_nsobject.h"
+#include "base/mac/scoped_nsobject.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
 #include "chrome/browser/extensions/extension_keybinding_registry.h"
@@ -32,7 +32,7 @@ class Extension;
 class BrowserWindowCocoa :
     public BrowserWindow,
     public extensions::ExtensionKeybindingRegistry::Delegate,
-    public chrome::search::SearchModelObserver {
+    public SearchModelObserver {
  public:
   BrowserWindowCocoa(Browser* browser,
                      BrowserWindowController* controller);
@@ -60,6 +60,7 @@ class BrowserWindowCocoa :
   virtual void SetStarredState(bool is_starred) OVERRIDE;
   virtual void ZoomChangedForActiveTab(bool can_show_bubble) OVERRIDE;
   virtual gfx::Rect GetRestoredBounds() const OVERRIDE;
+  virtual ui::WindowShowState GetRestoredState() const OVERRIDE;
   virtual gfx::Rect GetBounds() const OVERRIDE;
   virtual bool IsMaximized() const OVERRIDE;
   virtual bool IsMinimized() const OVERRIDE;
@@ -83,23 +84,24 @@ class BrowserWindowCocoa :
   virtual void FocusToolbar() OVERRIDE;
   virtual void FocusAppMenu() OVERRIDE;
   virtual void FocusBookmarksToolbar() OVERRIDE;
+  virtual void FocusInfobars() OVERRIDE;
   virtual void RotatePaneFocus(bool forwards) OVERRIDE;
   virtual bool IsBookmarkBarVisible() const OVERRIDE;
   virtual bool IsBookmarkBarAnimating() const OVERRIDE;
   virtual bool IsTabStripEditable() const OVERRIDE;
   virtual bool IsToolbarVisible() const OVERRIDE;
   virtual gfx::Rect GetRootWindowResizerRect() const OVERRIDE;
-  virtual bool IsPanel() const OVERRIDE;
   virtual void ConfirmAddSearchProvider(TemplateURL* template_url,
                                         Profile* profile) OVERRIDE;
   virtual void ToggleBookmarkBar() OVERRIDE;
   virtual void ShowUpdateChromeDialog() OVERRIDE;
   virtual void ShowBookmarkBubble(const GURL& url,
                                   bool already_bookmarked) OVERRIDE;
-  virtual void ShowChromeToMobileBubble() OVERRIDE;
 #if defined(ENABLE_ONE_CLICK_SIGNIN)
   virtual void ShowOneClickSigninBubble(
       OneClickSigninBubbleType type,
+      const string16& email,
+      const string16& error_message,
       const StartSyncCallback& start_sync_callback) OVERRIDE;
 #endif
   virtual bool IsDownloadShelfVisible() const OVERRIDE;
@@ -111,8 +113,7 @@ class BrowserWindowCocoa :
   virtual void ShowWebsiteSettings(Profile* profile,
                                    content::WebContents* web_contents,
                                    const GURL& url,
-                                   const content::SSLStatus& ssl,
-                                   bool show_history) OVERRIDE;
+                                   const content::SSLStatus& ssl) OVERRIDE;
   virtual void ShowAppMenu() OVERRIDE;
   virtual bool PreHandleKeyboardEvent(
       const content::NativeWebKeyboardEvent& event,
@@ -129,11 +130,11 @@ class BrowserWindowCocoa :
   virtual void EnterFullscreenWithChrome() OVERRIDE;
   virtual bool IsFullscreenWithChrome() OVERRIDE;
   virtual bool IsFullscreenWithoutChrome() OVERRIDE;
-  virtual gfx::Rect GetInstantBounds() OVERRIDE;
   virtual WindowOpenDisposition GetDispositionForPopupBounds(
       const gfx::Rect& bounds) OVERRIDE;
   virtual FindBar* CreateFindBar() OVERRIDE;
-  virtual bool GetConstrainedWindowTopY(int* top_y) OVERRIDE;
+  virtual web_modal::WebContentsModalDialogHost*
+      GetWebContentsModalDialogHost() OVERRIDE;
   virtual void ShowAvatarBubble(content::WebContents* web_contents,
                                 const gfx::Rect& rect) OVERRIDE;
   virtual void ShowAvatarBubbleFromAvatarButton() OVERRIDE;
@@ -146,10 +147,9 @@ class BrowserWindowCocoa :
   virtual extensions::ActiveTabPermissionGranter*
       GetActiveTabPermissionGranter() OVERRIDE;
 
-  // Overridden from chrome::search::SearchModelObserver:
-  virtual void ModelChanged(
-      const chrome::search::SearchModel::State& old_state,
-      const chrome::search::SearchModel::State& new_state) OVERRIDE;
+  // Overridden from SearchModelObserver:
+  virtual void ModelChanged(const SearchModel::State& old_state,
+                            const SearchModel::State& new_state) OVERRIDE;
 
   // Adds the given FindBar cocoa controller to this browser window.
   void AddFindBar(FindBarCocoaController* find_bar_cocoa_controller);
@@ -166,7 +166,7 @@ class BrowserWindowCocoa :
   Browser* browser_;  // weak, owned by controller
   BrowserWindowController* controller_;  // weak, owns us
   base::WeakPtrFactory<Browser> confirm_close_factory_;
-  scoped_nsobject<NSString> pending_window_title_;
+  base::scoped_nsobject<NSString> pending_window_title_;
   ui::WindowShowState initial_show_state_;
   NSInteger attention_request_id_;  // identifier from requestUserAttention
 };

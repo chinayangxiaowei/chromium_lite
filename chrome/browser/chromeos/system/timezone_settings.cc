@@ -15,13 +15,13 @@
 #include "base/memory/singleton.h"
 #include "base/observer_list.h"
 #include "base/stl_util.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host.h"
-#include "third_party/icu/public/i18n/unicode/timezone.h"
+#include "third_party/icu/source/i18n/unicode/timezone.h"
 
 using content::BrowserThread;
 
@@ -42,93 +42,127 @@ const char kFallbackTimeZoneId[] = "America/Los_Angeles";
 // Even after filtering out duplicate entries with a strict identity check,
 // we still have 400+ zones. Relaxing the criteria for the timezone
 // identity is likely to cut down the number to < 100. Until we
-// come up with a better list, we hard-code the following list as used by
-// Android.
+// come up with a better list, we hard-code the following list. It came from
+// from Android initially, but more entries have been added.
 static const char* kTimeZones[] = {
-    "Pacific/Majuro",
     "Pacific/Midway",
     "Pacific/Honolulu",
     "America/Anchorage",
     "America/Los_Angeles",
+    "America/Vancouver",
     "America/Tijuana",
-    "America/Denver",
     "America/Phoenix",
+    "America/Denver",
+    "America/Edmonton",
     "America/Chihuahua",
+    "America/Regina",
+    "America/Costa_Rica",
     "America/Chicago",
     "America/Mexico_City",
-    "America/Costa_Rica",
-    "America/Regina",
-    "America/New_York",
+    "America/Winnipeg",
     "America/Bogota",
+    "America/New_York",
+    "America/Toronto",
     "America/Caracas",
     "America/Barbados",
+    "America/Halifax",
     "America/Manaus",
     "America/Santiago",
     "America/St_Johns",
     "America/Sao_Paulo",
     "America/Araguaina",
     "America/Argentina/Buenos_Aires",
-    "America/Godthab",
+    "America/Argentina/San_Luis",
     "America/Montevideo",
+    "America/Godthab",
     "Atlantic/South_Georgia",
-    "Atlantic/Azores",
     "Atlantic/Cape_Verde",
+    "Atlantic/Azores",
     "Africa/Casablanca",
     "Europe/London",
+    "Europe/Dublin",
     "Europe/Amsterdam",
     "Europe/Belgrade",
+    "Europe/Berlin",
     "Europe/Brussels",
+    "Europe/Madrid",
+    "Europe/Paris",
+    "Europe/Rome",
+    "Europe/Stockholm",
     "Europe/Sarajevo",
+    "Europe/Vienna",
+    "Europe/Warsaw",
+    "Europe/Zurich",
     "Africa/Windhoek",
+    "Africa/Lagos",
     "Africa/Brazzaville",
-    "Asia/Amman",
-    "Europe/Athens",
-    "Asia/Beirut",
     "Africa/Cairo",
+    "Africa/Harare",
+    "Africa/Maputo",
+    "Africa/Johannesburg",
     "Europe/Helsinki",
+    "Europe/Athens",
+    "Asia/Amman",
+    "Asia/Beirut",
     "Asia/Jerusalem",
     "Europe/Minsk",
-    "Africa/Harare",
     "Asia/Baghdad",
-    "Europe/Moscow",
+    "Asia/Riyadh",
     "Asia/Kuwait",
     "Africa/Nairobi",
     "Asia/Tehran",
-    "Asia/Baku",
-    "Asia/Tbilisi",
-    "Asia/Yerevan",
+    "Europe/Moscow",
     "Asia/Dubai",
+    "Asia/Tbilisi",
+    "Indian/Mauritius",
+    "Asia/Baku",
+    "Asia/Yerevan",
     "Asia/Kabul",
     "Asia/Karachi",
+    "Asia/Ashgabat",
     "Asia/Oral",
-    "Asia/Yekaterinburg",
     "Asia/Calcutta",
     "Asia/Colombo",
     "Asia/Katmandu",
+    "Asia/Yekaterinburg",
     "Asia/Almaty",
+    "Asia/Dhaka",
     "Asia/Rangoon",
-    "Asia/Krasnoyarsk",
     "Asia/Bangkok",
+    "Asia/Jakarta",
+    "Asia/Omsk",
+    "Asia/Novosibirsk",
     "Asia/Shanghai",
     "Asia/Hong_Kong",
-    "Asia/Irkutsk",
     "Asia/Kuala_Lumpur",
-    "Australia/Perth",
+    "Asia/Singapore",
+    "Asia/Manila",
     "Asia/Taipei",
+    "Asia/Makassar",
+    "Asia/Krasnoyarsk",
+    "Australia/Perth",
+    "Australia/Eucla",
+    "Asia/Irkutsk",
     "Asia/Seoul",
     "Asia/Tokyo",
-    "Asia/Yakutsk",
+    "Asia/Jayapura",
     "Australia/Adelaide",
     "Australia/Darwin",
     "Australia/Brisbane",
     "Australia/Hobart",
     "Australia/Sydney",
-    "Asia/Vladivostok",
+    "Asia/Yakutsk",
     "Pacific/Guam",
+    "Pacific/Port_Moresby",
+    "Asia/Vladivostok",
+    "Asia/Sakhalin",
     "Asia/Magadan",
     "Pacific/Auckland",
     "Pacific/Fiji",
+    "Pacific/Majuro",
     "Pacific/Tongatapu",
+    "Pacific/Apia",
+    "Pacific/Kiritimati",
 };
 
 std::string GetTimezoneIDAsString() {
@@ -167,14 +201,14 @@ void SetTimezoneIDFromString(const std::string& id) {
   base::FilePath timezone_file(kTimezoneFilesDir + id);
 
   // Make sure timezone_file exists.
-  if (!file_util::PathExists(timezone_file)) {
+  if (!base::PathExists(timezone_file)) {
     LOG(ERROR) << "SetTimezoneID: Cannot find timezone file "
                << timezone_file.value();
     return;
   }
 
   // Delete old symlink2 if it exists.
-  file_util::Delete(timezone_symlink2, false);
+  base::DeleteFile(timezone_symlink2, false);
 
   // Create new symlink2.
   if (symlink(timezone_file.value().c_str(),
@@ -185,7 +219,7 @@ void SetTimezoneIDFromString(const std::string& id) {
   }
 
   // Move symlink2 to symlink.
-  if (!file_util::ReplaceFile(timezone_symlink2, timezone_symlink)) {
+  if (!base::ReplaceFile(timezone_symlink2, timezone_symlink, NULL)) {
     LOG(ERROR) << "SetTimezoneID: Unable to move symlink "
                << timezone_symlink2.value() << " to "
                << timezone_symlink.value();
@@ -318,21 +352,12 @@ const icu::TimeZone* TimezoneSettingsBaseImpl::GetKnownTimezoneOrNull(
 }
 
 void TimezoneSettingsBaseImpl::NotifyRenderers() {
-  content::RenderProcessHost::iterator process_iterator(
-      content::RenderProcessHost::AllHostsIterator());
-  for (; !process_iterator.IsAtEnd(); process_iterator.Advance()) {
-    content::RenderProcessHost* render_process_host =
-        process_iterator.GetCurrentValue();
-    content::RenderProcessHost::RenderWidgetHostsIterator widget_iterator(
-        render_process_host->GetRenderWidgetHostsIterator());
-    for (; !widget_iterator.IsAtEnd(); widget_iterator.Advance()) {
-      const content::RenderWidgetHost* widget =
-          widget_iterator.GetCurrentValue();
-      if (widget->IsRenderView()) {
-        content::RenderViewHost* view = content::RenderViewHost::From(
-            const_cast<content::RenderWidgetHost*>(widget));
-        view->NotifyTimezoneChange();
-      }
+  content::RenderWidgetHost::List widgets =
+      content::RenderWidgetHost::GetRenderWidgetHosts();
+  for (size_t i = 0; i < widgets.size(); ++i) {
+    if (widgets[i]->IsRenderView()) {
+      content::RenderViewHost* view = content::RenderViewHost::From(widgets[i]);
+      view->NotifyTimezoneChange();
     }
   }
 }

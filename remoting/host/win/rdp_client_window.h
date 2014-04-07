@@ -11,7 +11,8 @@
 #include <atlctl.h>
 
 #include "base/basictypes.h"
-#include "base/message_loop.h"
+#include "base/memory/ref_counted.h"
+#include "base/message_loop/message_loop.h"
 #include "base/win/scoped_comptr.h"
 #include "net/base/ip_endpoint.h"
 #include "third_party/skia/include/core/SkSize.h"
@@ -64,6 +65,7 @@ class RdpClientWindow
   // Specifies the endpoint to connect to and passes the event handler pointer
   // to be notified about connection events.
   RdpClientWindow(const net::IPEndPoint& server_endpoint,
+                  const std::string& terminal_id,
                   EventHandler* event_handler);
   ~RdpClientWindow();
 
@@ -75,6 +77,10 @@ class RdpClientWindow
   // Initiates shutdown of the connection. The caller must not delete |this|
   // until it receives OnDisconnected() notification.
   void Disconnect();
+
+  // Emulates pressing Ctrl+Alt+End combination that is translated to Secure
+  // Attention Sequence by the ActiveX control.
+  void InjectSas();
 
  private:
   typedef IDispEventImpl<1, RdpClientWindow,
@@ -103,9 +109,15 @@ class RdpClientWindow
     SINK_ENTRY_EX(1, __uuidof(mstsc::IMsTscAxEvents), 4, OnDisconnected)
     SINK_ENTRY_EX(1, __uuidof(mstsc::IMsTscAxEvents), 10, OnFatalError)
     SINK_ENTRY_EX(1, __uuidof(mstsc::IMsTscAxEvents), 15, OnConfirmClose)
+    SINK_ENTRY_EX(1, __uuidof(mstsc::IMsTscAxEvents), 18,
+                  OnAuthenticationWarningDisplayed)
+    SINK_ENTRY_EX(1, __uuidof(mstsc::IMsTscAxEvents), 19,
+                  OnAuthenticationWarningDismissed)
   END_SINK_MAP()
 
   // mstsc::IMsTscAxEvents notifications.
+  STDMETHOD(OnAuthenticationWarningDisplayed)();
+  STDMETHOD(OnAuthenticationWarningDismissed)();
   STDMETHOD(OnConnected)();
   STDMETHOD(OnDisconnected)(long reason);
   STDMETHOD(OnFatalError)(long error_code);
@@ -126,9 +138,16 @@ class RdpClientWindow
   // The endpoint to connect to.
   net::IPEndPoint server_endpoint_;
 
+  // The terminal ID assigned to this connection.
+  std::string terminal_id_;
+
   // Interfaces exposed by the RDP ActiveX control.
   base::win::ScopedComPtr<mstsc::IMsRdpClient> client_;
   base::win::ScopedComPtr<mstsc::IMsRdpClientAdvancedSettings> client_settings_;
+
+  // Used to cancel modal dialog boxes shown by the RDP control.
+  class WindowHook;
+  scoped_refptr<WindowHook> window_activate_hook_;
 };
 
 }  // namespace remoting

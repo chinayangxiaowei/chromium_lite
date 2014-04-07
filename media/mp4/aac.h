@@ -38,13 +38,26 @@ class MEDIA_EXPORT AAC {
   // Returns the samples_per_second value that should used in an
   // AudioDecoderConfig.
   int GetOutputSamplesPerSecond(bool sbr_in_mimetype) const;
-  ChannelLayout channel_layout() const;
+
+  // Gets the channel layout for the AAC stream.
+  // |sbr_in_mimetype| should be set to true if the SBR mode is
+  // signalled in the mimetype. (ie mp4a.40.5 in the codecs parameter).
+  // Returns the channel_layout value that should used in an
+  // AudioDecoderConfig.
+  ChannelLayout GetChannelLayout(bool sbr_in_mimetype) const;
 
   // This function converts a raw AAC frame into an AAC frame with an ADTS
   // header. On success, the function returns true and stores the converted data
   // in the buffer. The function returns false on failure and leaves the buffer
   // unchanged.
   bool ConvertEsdsToADTS(std::vector<uint8>* buffer) const;
+
+#if defined(OS_ANDROID)
+  // Returns the codec specific data needed by android MediaCodec.
+  std::vector<uint8> codec_specific_data() const {
+    return codec_specific_data_;
+  }
+#endif
 
   // Size in bytes of the ADTS header added by ConvertEsdsToADTS().
   static const size_t kADTSHeaderSize = 7;
@@ -59,6 +72,11 @@ class MEDIA_EXPORT AAC {
   uint8 profile_;
   uint8 frequency_index_;
   uint8 channel_config_;
+
+#if defined(OS_ANDROID)
+  // The codec specific data needed by the android MediaCodec.
+  std::vector<uint8> codec_specific_data_;
+#endif
 
   // The following variables store audio configuration information that
   // can be used by Chromium. They are based on the AAC specific

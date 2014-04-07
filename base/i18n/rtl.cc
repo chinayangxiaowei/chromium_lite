@@ -6,13 +6,13 @@
 
 #include "base/files/file_path.h"
 #include "base/logging.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "base/strings/sys_string_conversions.h"
-#include "base/utf_string_conversions.h"
-#include "third_party/icu/public/common/unicode/locid.h"
-#include "third_party/icu/public/common/unicode/uchar.h"
-#include "third_party/icu/public/common/unicode/uscript.h"
-#include "third_party/icu/public/i18n/unicode/coll.h"
+#include "base/strings/utf_string_conversions.h"
+#include "third_party/icu/source/common/unicode/locid.h"
+#include "third_party/icu/source/common/unicode/uchar.h"
+#include "third_party/icu/source/common/unicode/uscript.h"
+#include "third_party/icu/source/i18n/unicode/coll.h"
 
 #if defined(TOOLKIT_GTK)
 #include <gtk/gtk.h>

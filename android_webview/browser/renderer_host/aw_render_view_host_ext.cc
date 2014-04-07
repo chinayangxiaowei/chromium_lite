@@ -6,10 +6,13 @@
 
 #include "android_webview/browser/aw_browser_context.h"
 #include "android_webview/browser/scoped_allow_wait_for_legacy_web_view_api.h"
+#include "android_webview/common/aw_switches.h"
 #include "android_webview/common/render_view_messages.h"
 #include "base/android/scoped_java_ref.h"
 #include "base/callback.h"
+#include "base/command_line.h"
 #include "base/logging.h"
+#include "content/public/browser/android/content_view_core.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/user_metrics.h"
@@ -18,9 +21,13 @@
 
 namespace android_webview {
 
-AwRenderViewHostExt::AwRenderViewHostExt(content::WebContents* contents)
+AwRenderViewHostExt::AwRenderViewHostExt(
+    AwRenderViewHostExtClient* client, content::WebContents* contents)
     : content::WebContentsObserver(contents),
+      client_(client),
+      background_color_(SK_ColorWHITE),
       has_new_hit_test_data_(false) {
+  DCHECK(client_);
 }
 
 AwRenderViewHostExt::~AwRenderViewHostExt() {}
@@ -63,12 +70,6 @@ const AwHitTestData& AwRenderViewHostExt::GetLastHitTestData() const {
   return last_hit_test_data_;
 }
 
-void AwRenderViewHostExt::SetEnableFixedLayoutMode(bool enable) {
-  DCHECK(CalledOnValidThread());
-  Send(new AwViewMsg_SetEnableFixedLayoutMode(web_contents()->GetRoutingID(),
-                                              enable));
-}
-
 void AwRenderViewHostExt::SetTextZoomLevel(double level) {
   DCHECK(CalledOnValidThread());
   Send(new AwViewMsg_SetTextZoomLevel(web_contents()->GetRoutingID(), level));
@@ -85,7 +86,27 @@ void AwRenderViewHostExt::SetInitialPageScale(double page_scale_factor) {
                                          page_scale_factor));
 }
 
-void AwRenderViewHostExt::RenderViewGone(base::TerminationStatus status) {
+void AwRenderViewHostExt::SetBackgroundColor(SkColor c) {
+  if (background_color_ == c)
+    return;
+  background_color_ = c;
+  if (web_contents()->GetRenderViewHost()) {
+    Send(new AwViewMsg_SetBackgroundColor(web_contents()->GetRoutingID(),
+                                          background_color_));
+  }
+}
+
+void AwRenderViewHostExt::SetJsOnlineProperty(bool network_up) {
+  Send(new AwViewMsg_SetJsOnlineProperty(network_up));
+}
+
+void AwRenderViewHostExt::RenderViewCreated(
+    content::RenderViewHost* render_view_host) {
+  Send(new AwViewMsg_SetBackgroundColor(web_contents()->GetRoutingID(),
+                                        background_color_));
+}
+
+void AwRenderViewHostExt::RenderProcessGone(base::TerminationStatus status) {
   DCHECK(CalledOnValidThread());
   for (std::map<int, DocumentHasImagesResult>::iterator pending_req =
            pending_document_has_images_requests_.begin();
@@ -111,6 +132,8 @@ bool AwRenderViewHostExt::OnMessageReceived(const IPC::Message& message) {
                         OnDocumentHasImagesResponse)
     IPC_MESSAGE_HANDLER(AwViewHostMsg_UpdateHitTestData,
                         OnUpdateHitTestData)
+    IPC_MESSAGE_HANDLER(AwViewHostMsg_PageScaleFactorChanged,
+                        OnPageScaleFactorChanged)
     IPC_MESSAGE_UNHANDLED(handled = false)
   IPC_END_MESSAGE_MAP()
 
@@ -135,6 +158,10 @@ void AwRenderViewHostExt::OnUpdateHitTestData(
   DCHECK(CalledOnValidThread());
   last_hit_test_data_ = hit_test_data;
   has_new_hit_test_data_ = true;
+}
+
+void AwRenderViewHostExt::OnPageScaleFactorChanged(float page_scale_factor) {
+  client_->OnWebLayoutPageScaleFactorChanged(page_scale_factor);
 }
 
 }  // namespace android_webview

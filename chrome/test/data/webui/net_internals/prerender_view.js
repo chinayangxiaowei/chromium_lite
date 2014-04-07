@@ -90,14 +90,18 @@ PrerenderTask.prototype = {
     assertTrue(prerenderInfo.enabled, 'Prerendering not enabled.');
 
     // Check number of rows in both tables.
-    NetInternalsTest.checkStyledTableRows(PrerenderView.HISTORY_DIV_ID,
-                                          prerenderInfo.history.length);
-    NetInternalsTest.checkStyledTableRows(PrerenderView.ACTIVE_DIV_ID,
-                                          prerenderInfo.active.length);
+    NetInternalsTest.checkTbodyRows(PrerenderView.HISTORY_TABLE_ID,
+                                    prerenderInfo.history.length);
+    NetInternalsTest.checkTbodyRows(PrerenderView.ACTIVE_TABLE_ID,
+                                    prerenderInfo.active.length);
 
     if (this.state_ == STATE.START_PRERENDERING) {
       this.startPrerendering_(prerenderInfo);
     } else if (this.state_ == STATE.NEED_NAVIGATE) {
+      // Can't safely swap in a prerender until the main frame has committed.
+      // Waiting until the load has completed isn't necessary, but it's simpler.
+      if (!prerenderInfo.active[0].is_loaded)
+        return;
       this.navigate_(prerenderInfo);
     } else if (this.state_ == STATE.HISTORY_WAIT) {
       this.checkDone_(prerenderInfo);

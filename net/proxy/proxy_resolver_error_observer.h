@@ -6,7 +6,7 @@
 #define NET_PROXY_PROXY_RESOLVER_ERROR_OBSERVER_H_
 
 #include "base/basictypes.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "net/base/net_export.h"
 
 namespace net {
@@ -25,7 +25,8 @@ class NET_EXPORT_PRIVATE ProxyResolverErrorObserver {
   // backing proxy resolver is ProxyResolverV8Tracing, then it will not
   // be called concurrently, however it will be called from a different
   // thread than the proxy resolver's origin thread.
-  virtual void OnPACScriptError(int line_number, const string16& error) = 0;
+  virtual void OnPACScriptError(int line_number,
+                                const base::string16& error) = 0;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(ProxyResolverErrorObserver);

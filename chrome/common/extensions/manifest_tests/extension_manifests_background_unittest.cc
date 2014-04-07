@@ -7,13 +7,11 @@
 #include "base/command_line.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/values.h"
-#include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/background_info.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_manifest_constants.h"
-#include "chrome/common/extensions/features/base_feature_provider.h"
-#include "chrome/common/extensions/features/feature.h"
-#include "chrome/common/extensions/manifest_handler.h"
+#include "chrome/common/extensions/features/feature_channel.h"
+#include "extensions/common/constants.h"
 #include "extensions/common/error_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -23,10 +21,6 @@ namespace keys = extension_manifest_keys;
 namespace extensions {
 
 class ExtensionManifestBackgroundTest : public ExtensionManifestTest {
-  virtual void SetUp() OVERRIDE {
-    ExtensionManifestTest::SetUp();
-    (new BackgroundManifestHandler)->Register();
-  }
 };
 
 TEST_F(ExtensionManifestBackgroundTest, BackgroundPermission) {
@@ -42,17 +36,17 @@ TEST_F(ExtensionManifestBackgroundTest, BackgroundScripts) {
 
   scoped_refptr<Extension> extension(
       LoadAndExpectSuccess(Manifest(manifest.get(), "")));
-  ASSERT_TRUE(extension);
+  ASSERT_TRUE(extension.get());
   const std::vector<std::string>& background_scripts =
-      BackgroundInfo::GetBackgroundScripts(extension);
+      BackgroundInfo::GetBackgroundScripts(extension.get());
   ASSERT_EQ(2u, background_scripts.size());
   EXPECT_EQ("foo.js", background_scripts[0u]);
   EXPECT_EQ("bar/baz.js", background_scripts[1u]);
 
-  EXPECT_TRUE(BackgroundInfo::HasBackgroundPage(extension));
-  EXPECT_EQ(std::string("/") +
-            extension_filenames::kGeneratedBackgroundPageFilename,
-            BackgroundInfo::GetBackgroundURL(extension).path());
+  EXPECT_TRUE(BackgroundInfo::HasBackgroundPage(extension.get()));
+  EXPECT_EQ(
+      std::string("/") + kGeneratedBackgroundPageFilename,
+      BackgroundInfo::GetBackgroundURL(extension.get()).path());
 
   manifest->SetString("background_page", "monkey.html");
   LoadAndExpectError(Manifest(manifest.get(), ""),
@@ -62,17 +56,19 @@ TEST_F(ExtensionManifestBackgroundTest, BackgroundScripts) {
 TEST_F(ExtensionManifestBackgroundTest, BackgroundPage) {
   scoped_refptr<Extension> extension(
       LoadAndExpectSuccess("background_page.json"));
-  ASSERT_TRUE(extension);
-  EXPECT_EQ("/foo.html", BackgroundInfo::GetBackgroundURL(extension).path());
-  EXPECT_TRUE(BackgroundInfo::AllowJSAccess(extension));
+  ASSERT_TRUE(extension.get());
+  EXPECT_EQ("/foo.html",
+            BackgroundInfo::GetBackgroundURL(extension.get()).path());
+  EXPECT_TRUE(BackgroundInfo::AllowJSAccess(extension.get()));
 
   std::string error;
   scoped_ptr<base::DictionaryValue> manifest(
       LoadManifest("background_page_legacy.json", &error));
   ASSERT_TRUE(manifest.get());
   extension = LoadAndExpectSuccess(Manifest(manifest.get(), ""));
-  ASSERT_TRUE(extension);
-  EXPECT_EQ("/foo.html", BackgroundInfo::GetBackgroundURL(extension).path());
+  ASSERT_TRUE(extension.get());
+  EXPECT_EQ("/foo.html",
+            BackgroundInfo::GetBackgroundURL(extension.get()).path());
 
   manifest->SetInteger(keys::kManifestVersion, 2);
   LoadAndExpectWarning(
@@ -83,19 +79,16 @@ TEST_F(ExtensionManifestBackgroundTest, BackgroundPage) {
 TEST_F(ExtensionManifestBackgroundTest, BackgroundAllowNoJsAccess) {
   scoped_refptr<Extension> extension;
   extension = LoadAndExpectSuccess("background_allow_no_js_access.json");
-  ASSERT_TRUE(extension);
-  EXPECT_FALSE(BackgroundInfo::AllowJSAccess(extension));
+  ASSERT_TRUE(extension.get());
+  EXPECT_FALSE(BackgroundInfo::AllowJSAccess(extension.get()));
 
   extension = LoadAndExpectSuccess("background_allow_no_js_access2.json");
-  ASSERT_TRUE(extension);
-  EXPECT_FALSE(BackgroundInfo::AllowJSAccess(extension));
+  ASSERT_TRUE(extension.get());
+  EXPECT_FALSE(BackgroundInfo::AllowJSAccess(extension.get()));
 }
 
 TEST_F(ExtensionManifestBackgroundTest, BackgroundPageWebRequest) {
-  CommandLine::ForCurrentProcess()->AppendSwitch(
-      switches::kEnableExperimentalExtensionApis);
-  Feature::ScopedCurrentChannel current_channel(
-      chrome::VersionInfo::CHANNEL_DEV);
+  ScopedCurrentChannel current_channel(chrome::VersionInfo::CHANNEL_DEV);
 
   std::string error;
   scoped_ptr<base::DictionaryValue> manifest(
@@ -105,8 +98,8 @@ TEST_F(ExtensionManifestBackgroundTest, BackgroundPageWebRequest) {
   manifest->SetInteger(keys::kManifestVersion, 2);
   scoped_refptr<Extension> extension(
       LoadAndExpectSuccess(Manifest(manifest.get(), "")));
-  ASSERT_TRUE(extension);
-  EXPECT_TRUE(BackgroundInfo::HasLazyBackgroundPage(extension));
+  ASSERT_TRUE(extension.get());
+  EXPECT_TRUE(BackgroundInfo::HasLazyBackgroundPage(extension.get()));
 
   base::ListValue* permissions = new base::ListValue();
   permissions->Append(new base::StringValue("webRequest"));

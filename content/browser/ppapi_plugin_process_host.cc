@@ -9,14 +9,15 @@
 #include "base/base_switches.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
-#include "base/process_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/metrics/field_trial.h"
+#include "base/strings/utf_string_conversions.h"
 #include "content/browser/browser_child_process_host_impl.h"
 #include "content/browser/plugin_service_impl.h"
 #include "content/browser/renderer_host/render_message_filter.h"
 #include "content/common/child_process_host_impl.h"
 #include "content/common/child_process_messages.h"
 #include "content/public/browser/content_browser_client.h"
+#include "content/public/common/content_constants.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/pepper_plugin_info.h"
 #include "content/public/common/process_type.h"
@@ -24,7 +25,6 @@
 #include "net/base/network_change_notifier.h"
 #include "ppapi/proxy/ppapi_messages.h"
 #include "ui/base/ui_base_switches.h"
-#include "webkit/plugins/plugin_switches.h"
 
 #if defined(OS_WIN)
 #include "content/common/sandbox_win.h"
@@ -218,11 +218,12 @@ PpapiPluginProcessHost::PpapiPluginProcessHost(
   filter_ = new PepperMessageFilter(permissions_, host_resolver);
 
   host_impl_.reset(new BrowserPpapiHostImpl(this, permissions_, info.name,
-                                            profile_data_directory,
-                                            false));
+                                            info.path, profile_data_directory,
+                                            false,
+                                            filter_));
 
   process_->GetHost()->AddFilter(filter_.get());
-  process_->GetHost()->AddFilter(host_impl_->message_filter());
+  process_->GetHost()->AddFilter(host_impl_->message_filter().get());
 
   GetContentClient()->browser()->DidCreatePpapiPlugin(host_impl_.get());
 
@@ -237,13 +238,13 @@ PpapiPluginProcessHost::PpapiPluginProcessHost()
       PROCESS_TYPE_PPAPI_BROKER, this));
 
   ppapi::PpapiPermissions permissions;  // No permissions.
-  // The plugin name and profile data directory shouldn't be needed for the
-  // broker.
-  std::string plugin_name;
-  base::FilePath profile_data_directory;
-  host_impl_.reset(new BrowserPpapiHostImpl(this, permissions, plugin_name,
-                                            profile_data_directory,
-                                            false));
+  // The plugin name, path and profile data directory shouldn't be needed for
+  // the broker.
+  host_impl_.reset(new BrowserPpapiHostImpl(this, permissions,
+                                            std::string(), base::FilePath(),
+                                            base::FilePath(),
+                                            false,
+                                            NULL));
 }
 
 bool PpapiPluginProcessHost::Init(const PepperPluginInfo& info) {
@@ -286,20 +287,27 @@ bool PpapiPluginProcessHost::Init(const PepperPluginInfo& info) {
                              arraysize(kCommonForwardSwitches));
 
   if (!is_broker_) {
-    // TODO(vtl): Stop passing flash args in the command line, on windows is
-    // going to explode.
     static const char* kPluginForwardSwitches[] = {
-      switches::kDisablePepperThreading,
       switches::kDisableSeccompFilterSandbox,
 #if defined(OS_MACOSX)
       switches::kEnableSandboxLogging,
 #endif
       switches::kNoSandbox,
-      switches::kPpapiFlashArgs,
       switches::kPpapiStartupDialog,
     };
     cmd_line->CopySwitchesFrom(browser_command_line, kPluginForwardSwitches,
                                arraysize(kPluginForwardSwitches));
+
+    // Copy any flash args over and introduce field trials if necessary.
+    // TODO(vtl): Stop passing flash args in the command line, or windows is
+    // going to explode.
+    std::string field_trial =
+        base::FieldTrialList::FindFullName(kLowLatencyFlashAudioFieldTrialName);
+    std::string existing_args =
+        browser_command_line.GetSwitchValueASCII(switches::kPpapiFlashArgs);
+    if (field_trial == kLowLatencyFlashAudioFieldTrialEnabledName)
+      existing_args.append(" enable_low_latency_audio=1");
+    cmd_line->AppendSwitchASCII(switches::kPpapiFlashArgs, existing_args);
   }
 
   std::string locale = GetContentClient()->browser()->GetApplicationLocale();
@@ -318,7 +326,7 @@ bool PpapiPluginProcessHost::Init(const PepperPluginInfo& info) {
 #if defined(OS_POSIX)
   bool use_zygote = !is_broker_ && plugin_launcher.empty() && info.is_sandboxed;
   if (!info.is_sandboxed)
-    cmd_line->AppendSwitchASCII(switches::kNoSandbox, "");
+    cmd_line->AppendSwitchASCII(switches::kNoSandbox, std::string());
 #endif  // OS_POSIX
   process_->Launch(
 #if defined(OS_WIN)

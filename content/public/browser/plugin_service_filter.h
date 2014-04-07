@@ -7,11 +7,12 @@
 
 class GURL;
 
-namespace webkit {
-struct WebPluginInfo;
+namespace base {
+class FilePath;
 }
 
 namespace content {
+struct WebPluginInfo;
 
 // Callback class to let the client filter the list of all installed plug-ins
 // and block them from being loaded.
@@ -27,7 +28,7 @@ class PluginServiceFilter {
                                  const void* context,
                                  const GURL& url,
                                  const GURL& policy_url,
-                                 webkit::WebPluginInfo* plugin) = 0;
+                                 WebPluginInfo* plugin) = 0;
 
   // Whether the renderer has permission to load available |plugin|.
   virtual bool CanLoadPlugin(int render_process_id,

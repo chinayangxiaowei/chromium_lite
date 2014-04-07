@@ -7,7 +7,7 @@
 #include "base/callback.h"
 #include "base/callback_helpers.h"
 #include "base/logging.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "media/base/audio_decoder_config.h"
 #include "media/base/stream_parser_buffer.h"
 #include "media/base/video_decoder_config.h"
@@ -42,9 +42,10 @@ MP4StreamParser::~MP4StreamParser() {}
 
 void MP4StreamParser::Init(const InitCB& init_cb,
                            const NewConfigCB& config_cb,
-                           const NewBuffersCB& audio_cb,
-                           const NewBuffersCB& video_cb,
+                           const NewBuffersCB& new_buffers_cb,
+                           const NewTextBuffersCB& /* text_cb */ ,
                            const NeedKeyCB& need_key_cb,
+                           const AddTextTrackCB& /* add_text_track_cb */ ,
                            const NewMediaSegmentCB& new_segment_cb,
                            const base::Closure& end_of_segment_cb,
                            const LogCB& log_cb) {
@@ -52,15 +53,14 @@ void MP4StreamParser::Init(const InitCB& init_cb,
   DCHECK(init_cb_.is_null());
   DCHECK(!init_cb.is_null());
   DCHECK(!config_cb.is_null());
-  DCHECK(!audio_cb.is_null() || !video_cb.is_null());
+  DCHECK(!new_buffers_cb.is_null());
   DCHECK(!need_key_cb.is_null());
   DCHECK(!end_of_segment_cb.is_null());
 
   ChangeState(kParsingBoxes);
   init_cb_ = init_cb;
   config_cb_ = config_cb;
-  audio_cb_ = audio_cb;
-  video_cb_ = video_cb;
+  new_buffers_cb_ = new_buffers_cb;
   need_key_cb_ = need_key_cb;
   new_segment_cb_ = new_segment_cb;
   end_of_segment_cb_ = end_of_segment_cb;
@@ -69,7 +69,6 @@ void MP4StreamParser::Init(const InitCB& init_cb,
 
 void MP4StreamParser::Reset() {
   queue_.Reset();
-  moov_.reset();
   runs_.reset();
   moof_head_ = 0;
   mdat_tail_ = 0;
@@ -112,6 +111,7 @@ bool MP4StreamParser::Parse(const uint8* buf, int size) {
 
   if (err) {
     DLOG(ERROR) << "Error while parsing MP4";
+    moov_.reset();
     Reset();
     ChangeState(kError);
     return false;
@@ -157,7 +157,7 @@ bool MP4StreamParser::ParseBox(bool* err) {
 bool MP4StreamParser::ParseMoov(BoxReader* reader) {
   moov_.reset(new Movie);
   RCHECK(moov_->Parse(reader));
-  runs_.reset(new TrackRunIterator(moov_.get(), log_cb_));
+  runs_.reset();
 
   has_audio_ = false;
   has_video_ = false;
@@ -197,7 +197,7 @@ bool MP4StreamParser::ParseMoov(BoxReader* reader) {
       const AudioSampleEntry& entry = samp_descr.audio_entries[desc_idx];
       const AAC& aac = entry.esds.aac;
 
-      if (!(entry.format == FOURCC_MP4A ||
+      if (!(entry.format == FOURCC_MP4A || entry.format == FOURCC_EAC3 ||
             (entry.format == FOURCC_ENCA &&
              entry.sinf.format.format == FOURCC_MP4A))) {
         MEDIA_LOG(log_cb_) << "Unsupported audio format 0x"
@@ -205,8 +205,11 @@ bool MP4StreamParser::ParseMoov(BoxReader* reader) {
         return false;
       }
 
-      int audio_type = entry.esds.object_type;
+      uint8 audio_type = entry.esds.object_type;
       DVLOG(1) << "audio_type " << std::hex << audio_type;
+      if (audio_type == kForbidden && entry.format == FOURCC_EAC3) {
+        audio_type = kEAC3;
+      }
       if (audio_object_types_.find(audio_type) == audio_object_types_.end()) {
         MEDIA_LOG(log_cb_) << "audio object type 0x" << std::hex << audio_type
                            << " does not match what is specified in the"
@@ -214,9 +217,24 @@ bool MP4StreamParser::ParseMoov(BoxReader* reader) {
         return false;
       }
 
+      AudioCodec codec = kUnknownAudioCodec;
+      ChannelLayout channel_layout = CHANNEL_LAYOUT_NONE;
+      int sample_per_second = 0;
+      std::vector<uint8> extra_data;
       // Check if it is MPEG4 AAC defined in ISO 14496 Part 3 or
       // supported MPEG2 AAC varients.
-      if (audio_type != kISO_14496_3 && audio_type != kISO_13818_7_AAC_LC) {
+      if (ESDescriptor::IsAAC(audio_type)) {
+        codec = kCodecAAC;
+        channel_layout = aac.GetChannelLayout(has_sbr_);
+        sample_per_second = aac.GetOutputSamplesPerSecond(has_sbr_);
+#if defined(OS_ANDROID)
+        extra_data = aac.codec_specific_data();
+#endif
+      } else if (audio_type == kEAC3) {
+        codec = kCodecEAC3;
+        channel_layout = GuessChannelLayout(entry.channelcount);
+        sample_per_second = entry.samplerate;
+      } else {
         MEDIA_LOG(log_cb_) << "Unsupported audio object type 0x" << std::hex
                            << audio_type << " in esds.";
         return false;
@@ -236,10 +254,10 @@ bool MP4StreamParser::ParseMoov(BoxReader* reader) {
 
       is_audio_track_encrypted_ = entry.sinf.info.track_encryption.is_encrypted;
       DVLOG(1) << "is_audio_track_encrypted_: " << is_audio_track_encrypted_;
-      audio_config.Initialize(kCodecAAC, sample_format,
-                              aac.channel_layout(),
-                              aac.GetOutputSamplesPerSecond(has_sbr_),
-                              NULL, 0, is_audio_track_encrypted_, false);
+      audio_config.Initialize(
+          codec, sample_format, channel_layout, sample_per_second,
+          extra_data.size() ? &extra_data[0] : NULL, extra_data.size(),
+          is_audio_track_encrypted_, false);
       has_audio_ = true;
       audio_track_id_ = track->header.track_id;
     }
@@ -281,7 +299,8 @@ bool MP4StreamParser::ParseMoov(BoxReader* reader) {
   if (moov_->extends.header.fragment_duration > 0) {
     duration = TimeDeltaFromRational(moov_->extends.header.fragment_duration,
                                      moov_->header.timescale);
-  } else if (moov_->header.duration > 0) {
+  } else if (moov_->header.duration > 0 &&
+             moov_->header.duration != kuint64max) {
     duration = TimeDeltaFromRational(moov_->header.duration,
                                      moov_->header.timescale);
   } else {
@@ -291,7 +310,7 @@ bool MP4StreamParser::ParseMoov(BoxReader* reader) {
   if (!init_cb_.is_null())
     base::ResetAndReturn(&init_cb_).Run(true, duration);
 
-  RCHECK(EmitNeedKeyIfNecessary(moov_->pssh));
+  EmitNeedKeyIfNecessary(moov_->pssh);
   return true;
 }
 
@@ -299,33 +318,35 @@ bool MP4StreamParser::ParseMoof(BoxReader* reader) {
   RCHECK(moov_.get());  // Must already have initialization segment
   MovieFragment moof;
   RCHECK(moof.Parse(reader));
+  if (!runs_)
+    runs_.reset(new TrackRunIterator(moov_.get(), log_cb_));
   RCHECK(runs_->Init(moof));
-  RCHECK(EmitNeedKeyIfNecessary(moof.pssh));
-  new_segment_cb_.Run(runs_->GetMinDecodeTimestamp());
+  EmitNeedKeyIfNecessary(moof.pssh);
+  new_segment_cb_.Run();
   ChangeState(kEmittingSamples);
   return true;
 }
 
-bool MP4StreamParser::EmitNeedKeyIfNecessary(
+void MP4StreamParser::EmitNeedKeyIfNecessary(
     const std::vector<ProtectionSystemSpecificHeader>& headers) {
   // TODO(strobe): ensure that the value of init_data (all PSSH headers
   // concatenated in arbitrary order) matches the EME spec.
   // See https://www.w3.org/Bugs/Public/show_bug.cgi?id=17673.
   if (headers.empty())
-    return true;
+    return;
 
   size_t total_size = 0;
   for (size_t i = 0; i < headers.size(); i++)
     total_size += headers[i].raw_box.size();
 
-  scoped_array<uint8> init_data(new uint8[total_size]);
+  scoped_ptr<uint8[]> init_data(new uint8[total_size]);
   size_t pos = 0;
   for (size_t i = 0; i < headers.size(); i++) {
     memcpy(&init_data.get()[pos], &headers[i].raw_box[0],
            headers[i].raw_box.size());
     pos += headers[i].raw_box.size();
   }
-  return need_key_cb_.Run(kMp4InitDataType, init_data.Pass(), total_size);
+  need_key_cb_.Run(kMp4InitDataType, init_data.Pass(), total_size);
 }
 
 bool MP4StreamParser::PrepareAVCBuffer(
@@ -440,6 +461,10 @@ bool MP4StreamParser::EnqueueSample(BufferQueue* audio_buffers,
   std::vector<SubsampleEntry> subsamples;
   if (runs_->is_encrypted()) {
     decrypt_config = runs_->GetDecryptConfig();
+    if (!decrypt_config) {
+      *err = true;
+      return false;
+    }
     subsamples = decrypt_config->subsamples();
   }
 
@@ -454,7 +479,8 @@ bool MP4StreamParser::EnqueueSample(BufferQueue* audio_buffers,
   }
 
   if (audio) {
-    if (!PrepareAACBuffer(runs_->audio_description().esds.aac,
+    if (ESDescriptor::IsAAC(runs_->audio_description().esds.object_type) &&
+        !PrepareAACBuffer(runs_->audio_description().esds.aac,
                           &frame_buf, &subsamples)) {
       MEDIA_LOG(log_cb_) << "Failed to prepare AAC sample for decode";
       *err = true;
@@ -485,10 +511,10 @@ bool MP4StreamParser::EnqueueSample(BufferQueue* audio_buffers,
                                  runs_->is_keyframe());
 
   if (decrypt_config)
-    stream_buf->SetDecryptConfig(decrypt_config.Pass());
+    stream_buf->set_decrypt_config(decrypt_config.Pass());
 
-  stream_buf->SetDuration(runs_->duration());
-  stream_buf->SetTimestamp(runs_->cts());
+  stream_buf->set_duration(runs_->duration());
+  stream_buf->set_timestamp(runs_->cts());
   stream_buf->SetDecodeTimestamp(runs_->dts());
 
   DVLOG(3) << "Pushing frame: aud=" << audio
@@ -510,16 +536,13 @@ bool MP4StreamParser::EnqueueSample(BufferQueue* audio_buffers,
 
 bool MP4StreamParser::SendAndFlushSamples(BufferQueue* audio_buffers,
                                           BufferQueue* video_buffers) {
-  bool err = false;
-  if (!audio_buffers->empty()) {
-    err |= (audio_cb_.is_null() || !audio_cb_.Run(*audio_buffers));
-    audio_buffers->clear();
-  }
-  if (!video_buffers->empty()) {
-    err |= (video_cb_.is_null() || !video_cb_.Run(*video_buffers));
-    video_buffers->clear();
-  }
-  return !err;
+  if (audio_buffers->empty() && video_buffers->empty())
+    return true;
+
+  bool success = new_buffers_cb_.Run(*audio_buffers, *video_buffers);
+  audio_buffers->clear();
+  video_buffers->clear();
+  return success;
 }
 
 bool MP4StreamParser::ReadAndDiscardMDATsUntil(const int64 offset) {

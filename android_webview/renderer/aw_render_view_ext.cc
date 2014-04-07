@@ -8,31 +8,42 @@
 
 #include "android_webview/common/aw_hit_test_data.h"
 #include "android_webview/common/render_view_messages.h"
-#include "android_webview/common/renderer_picture_map.h"
 #include "base/bind.h"
-#include "base/string_piece.h"
+#include "base/strings/string_piece.h"
+#include "base/strings/utf_string_conversions.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/renderer/android_content_detection_prefixes.h"
 #include "content/public/renderer/document_state.h"
 #include "content/public/renderer/render_view.h"
 #include "skia/ext/refptr.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebSize.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebURL.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebVector.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebDataSource.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebDocument.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebElement.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebFrame.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebHitTestResult.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebNode.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebNodeList.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebSecurityOrigin.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebView.h"
-#include "third_party/skia/include/core/SkPicture.h"
+#include "third_party/WebKit/public/platform/WebSize.h"
+#include "third_party/WebKit/public/platform/WebURL.h"
+#include "third_party/WebKit/public/platform/WebVector.h"
+#include "third_party/WebKit/public/web/WebDataSource.h"
+#include "third_party/WebKit/public/web/WebDocument.h"
+#include "third_party/WebKit/public/web/WebElement.h"
+#include "third_party/WebKit/public/web/WebFrame.h"
+#include "third_party/WebKit/public/web/WebHitTestResult.h"
+#include "third_party/WebKit/public/web/WebImageCache.h"
+#include "third_party/WebKit/public/web/WebNode.h"
+#include "third_party/WebKit/public/web/WebNodeList.h"
+#include "third_party/WebKit/public/web/WebSecurityOrigin.h"
+#include "third_party/WebKit/public/web/WebView.h"
+#include "url/url_canon.h"
+#include "url/url_util.h"
 
 namespace android_webview {
 
 namespace {
+
+bool AllowMixedContent(const WebKit::WebURL& url) {
+  // We treat non-standard schemes as "secure" in the WebView to allow them to
+  // be used for request interception.
+  // TODO(benm): Tighten this restriction by requiring embedders to register
+  // their custom schemes? See b/9420953.
+  GURL gurl(url);
+  return !gurl.IsStandard();
+}
 
 GURL GetAbsoluteUrl(const WebKit::WebNode& node, const string16& url_fragment) {
   return GURL(node.document().completeURL(url_fragment));
@@ -66,7 +77,12 @@ bool RemovePrefixAndAssignIfMatches(const base::StringPiece& prefix,
   const base::StringPiece spec(url.possibly_invalid_spec());
 
   if (spec.starts_with(prefix)) {
-    dest->assign(spec.begin() + prefix.length(), spec.end());
+    url_canon::RawCanonOutputW<1024> output;
+    url_util::DecodeURLEscapeSequences(spec.data() + prefix.length(),
+        spec.length() - prefix.length(), &output);
+    std::string decoded_url = UTF16ToUTF8(
+        string16(output.data(), output.length()));
+    dest->assign(decoded_url.begin(), decoded_url.end());
     return true;
   }
   return false;
@@ -127,7 +143,7 @@ void PopulateHitTestData(const GURL& absolute_link_url,
 }  // namespace
 
 AwRenderViewExt::AwRenderViewExt(content::RenderView* render_view)
-    : content::RenderViewObserver(render_view) {
+    : content::RenderViewObserver(render_view), page_scale_factor_(0.0f) {
   render_view->GetWebView()->setPermissionClient(this);
 }
 
@@ -144,12 +160,11 @@ bool AwRenderViewExt::OnMessageReceived(const IPC::Message& message) {
   IPC_BEGIN_MESSAGE_MAP(AwRenderViewExt, message)
     IPC_MESSAGE_HANDLER(AwViewMsg_DocumentHasImages, OnDocumentHasImagesRequest)
     IPC_MESSAGE_HANDLER(AwViewMsg_DoHitTest, OnDoHitTest)
-    IPC_MESSAGE_HANDLER(AwViewMsg_SetEnableFixedLayoutMode,
-                        OnSetEnableFixedLayoutMode)
     IPC_MESSAGE_HANDLER(AwViewMsg_SetTextZoomLevel, OnSetTextZoomLevel)
     IPC_MESSAGE_HANDLER(AwViewMsg_ResetScrollAndScaleState,
                         OnResetScrollAndScaleState)
     IPC_MESSAGE_HANDLER(AwViewMsg_SetInitialPageScale, OnSetInitialPageScale)
+    IPC_MESSAGE_HANDLER(AwViewMsg_SetBackgroundColor, OnSetBackgroundColor)
     IPC_MESSAGE_UNHANDLED(handled = false)
   IPC_END_MESSAGE_MAP()
   return handled;
@@ -169,19 +184,20 @@ void AwRenderViewExt::OnDocumentHasImagesRequest(int id) {
                                                    hasImages));
 }
 
-bool AwRenderViewExt::allowImage(WebKit::WebFrame* frame,
-                                 bool enabled_per_settings,
-                                 const WebKit::WebURL& image_url) {
-  // Implementing setBlockNetworkImages, so allow local scheme images to be
-  // loaded.
-  if (enabled_per_settings)
-    return true;
+bool AwRenderViewExt::allowDisplayingInsecureContent(
+      WebKit::WebFrame* frame,
+      bool enabled_per_settings,
+      const WebKit::WebSecurityOrigin& origin,
+      const WebKit::WebURL& url) {
+  return enabled_per_settings ? true : AllowMixedContent(url);
+}
 
-  // For compatibility, only blacklist network schemes instead of whitelisting.
-  const GURL url(image_url);
-  return !(url.SchemeIs(chrome::kHttpScheme) ||
-           url.SchemeIs(chrome::kHttpsScheme) ||
-           url.SchemeIs(chrome::kFtpScheme));
+bool AwRenderViewExt::allowRunningInsecureContent(
+      WebKit::WebFrame* frame,
+      bool enabled_per_settings,
+      const WebKit::WebSecurityOrigin& origin,
+      const WebKit::WebURL& url) {
+  return enabled_per_settings ? true : AllowMixedContent(url);
 }
 
 void AwRenderViewExt::DidCommitProvisionalLoad(WebKit::WebFrame* frame,
@@ -192,6 +208,29 @@ void AwRenderViewExt::DidCommitProvisionalLoad(WebKit::WebFrame* frame,
     WebKit::WebSecurityOrigin origin = frame->document().securityOrigin();
     origin.grantLoadLocalResources();
   }
+}
+
+void AwRenderViewExt::DidCommitCompositorFrame() {
+  UpdatePageScaleFactor();
+}
+
+void AwRenderViewExt::UpdatePageScaleFactor() {
+  if (page_scale_factor_ != render_view()->GetWebView()->pageScaleFactor()) {
+    page_scale_factor_ = render_view()->GetWebView()->pageScaleFactor();
+    Send(new AwViewHostMsg_PageScaleFactorChanged(routing_id(),
+                                                  page_scale_factor_));
+  }
+}
+
+void AwRenderViewExt::Navigate(const GURL& url) {
+  // Navigate is called only on NEW navigations, so WebImageCache won't be freed
+  // when the user just clicks on links, but only when a navigation is started,
+  // for instance via loadUrl. A better approach would be clearing the cache on
+  // cross-site boundaries, however this would require too many changes both on
+  // the browser side (in RenderViewHostManger), to the IPCmessages and to the
+  // RenderViewObserver. Thus, clearing decoding image cache on Navigate, seems
+  // a more acceptable compromise.
+  WebKit::WebImageCache::clear();
 }
 
 void AwRenderViewExt::FocusedNodeChanged(const WebKit::WebNode& node) {
@@ -244,12 +283,6 @@ void AwRenderViewExt::OnDoHitTest(int view_x, int view_y) {
   Send(new AwViewHostMsg_UpdateHitTestData(routing_id(), data));
 }
 
-void AwRenderViewExt::OnSetEnableFixedLayoutMode(bool enabled) {
-  if (!render_view() || !render_view()->GetWebView())
-    return;
-  render_view()->GetWebView()->enableFixedLayoutMode(enabled);
-}
-
 void AwRenderViewExt::OnSetTextZoomLevel(double zoom_level) {
   if (!render_view() || !render_view()->GetWebView())
     return;
@@ -269,6 +302,12 @@ void AwRenderViewExt::OnSetInitialPageScale(double page_scale_factor) {
     return;
   render_view()->GetWebView()->setInitialPageScaleOverride(
       page_scale_factor);
+}
+
+void AwRenderViewExt::OnSetBackgroundColor(SkColor c) {
+  if (!render_view() || !render_view()->GetWebView())
+    return;
+  render_view()->GetWebView()->setBaseBackgroundColor(c);
 }
 
 }  // namespace android_webview

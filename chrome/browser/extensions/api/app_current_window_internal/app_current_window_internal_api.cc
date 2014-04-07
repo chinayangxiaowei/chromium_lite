@@ -4,14 +4,16 @@
 
 #include "chrome/browser/extensions/api/app_current_window_internal/app_current_window_internal_api.h"
 
+#include "apps/native_app_window.h"
+#include "apps/shell_window.h"
+#include "apps/shell_window_registry.h"
 #include "base/command_line.h"
-#include "chrome/browser/extensions/shell_window_registry.h"
-#include "chrome/browser/ui/extensions/native_app_window.h"
-#include "chrome/browser/ui/extensions/shell_window.h"
-#include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/api/app_current_window_internal.h"
 #include "chrome/common/extensions/api/app_window.h"
+#include "chrome/common/extensions/features/feature_channel.h"
+#include "extensions/common/switches.h"
 
+using apps::ShellWindow;
 namespace SetBounds = extensions::api::app_current_window_internal::SetBounds;
 using extensions::api::app_current_window_internal::Bounds;
 namespace SetIcon = extensions::api::app_current_window_internal::SetIcon;
@@ -24,14 +26,14 @@ const char kNoAssociatedShellWindow[] =
     "The context from which the function was called did not have an "
     "associated shell window.";
 
-const char kNoExperimental[] =
-    "This function is experimental. Use --enable-experimental-extension-apis "
-    "to enable.";
+const char kDevChannelOnly[] =
+    "This function is currently only available in the Dev channel.";
 
 }  // namespace
 
 bool AppCurrentWindowInternalExtensionFunction::RunImpl() {
-  ShellWindowRegistry* registry = ShellWindowRegistry::Get(profile());
+  apps::ShellWindowRegistry* registry =
+      apps::ShellWindowRegistry::Get(profile());
   DCHECK(registry);
   content::RenderViewHost* rvh = render_view_host();
   if (!rvh)
@@ -51,21 +53,27 @@ bool AppCurrentWindowInternalFocusFunction::RunWithWindow(ShellWindow* window) {
   return true;
 }
 
+bool AppCurrentWindowInternalFullscreenFunction::RunWithWindow(
+    ShellWindow* window) {
+  window->Fullscreen();
+  return true;
+}
+
 bool AppCurrentWindowInternalMaximizeFunction::RunWithWindow(
     ShellWindow* window) {
-  window->GetBaseWindow()->Maximize();
+  window->Maximize();
   return true;
 }
 
 bool AppCurrentWindowInternalMinimizeFunction::RunWithWindow(
     ShellWindow* window) {
-  window->GetBaseWindow()->Minimize();
+  window->Minimize();
   return true;
 }
 
 bool AppCurrentWindowInternalRestoreFunction::RunWithWindow(
     ShellWindow* window) {
-  window->GetBaseWindow()->Restore();
+  window->Restore();
   return true;
 }
 
@@ -97,7 +105,7 @@ bool AppCurrentWindowInternalSetBoundsFunction::RunWithWindow(
     ShellWindow* window) {
   // Start with the current bounds, and change any values that are specified in
   // the incoming parameters.
-  gfx::Rect bounds = window->GetBaseWindow()->GetBounds();
+  gfx::Rect bounds = window->GetClientBounds();
   scoped_ptr<SetBounds::Params> params(SetBounds::Params::Create(*args_));
   CHECK(params.get());
   if (params->bounds.left)
@@ -116,9 +124,9 @@ bool AppCurrentWindowInternalSetBoundsFunction::RunWithWindow(
 
 bool AppCurrentWindowInternalSetIconFunction::RunWithWindow(
     ShellWindow* window) {
-  if (!CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kEnableExperimentalExtensionApis)) {
-    error_ = kNoExperimental;
+  if (GetCurrentChannel() > chrome::VersionInfo::CHANNEL_DEV &&
+      GetExtension()->location() != extensions::Manifest::COMPONENT) {
+    error_ = kDevChannelOnly;
     return false;
   }
 

@@ -6,69 +6,73 @@
 #define UI_MESSAGE_CENTER_VIEWS_NOTIFIER_SETTINGS_VIEW_H_
 
 #include <set>
-#include <string>
 
-#include "base/string16.h"
-#include "ui/gfx/image/image.h"
-#include "ui/gfx/image/image_skia.h"
-#include "ui/gfx/native_widget_types.h"
+#include "base/memory/scoped_ptr.h"
 #include "ui/message_center/message_center_export.h"
 #include "ui/message_center/notifier_settings.h"
-#include "ui/views/controls/button/button.h"
-#include "ui/views/widget/widget_delegate.h"
+#include "ui/message_center/views/message_bubble_base.h"
+#include "ui/views/controls/button/image_button.h"
+#include "ui/views/controls/button/menu_button_listener.h"
+#include "ui/views/view.h"
 
 namespace views {
-class ScrollView;
+class Label;
+class MenuButton;
+class MenuRunner;
 }
 
 namespace message_center {
+class NotifierGroupMenuModel;
 
 // A class to show the list of notifier extensions / URL patterns and allow
 // users to customize the settings.
 class MESSAGE_CENTER_EXPORT NotifierSettingsView
-    : public NotifierSettingsDelegate,
-      public views::WidgetDelegateView,
-      public views::ButtonListener {
+    : public NotifierSettingsObserver,
+      public views::View,
+      public views::ButtonListener,
+      public views::MenuButtonListener {
  public:
-  // Create a new widget of the notifier settings and returns it. Note that
-  // the widget and the view is self-owned. It'll be deleted when it's closed
-  // or the chrome's shutdown.
-  static NotifierSettingsView* Create(NotifierSettingsProvider* delegate,
-                                      gfx::NativeView context);
+  explicit NotifierSettingsView(NotifierSettingsProvider* provider);
+  virtual ~NotifierSettingsView();
+
+  bool IsScrollable();
 
   // Overridden from NotifierSettingsDelegate:
-  virtual void UpdateIconImage(const std::string& id,
+  virtual void UpdateIconImage(const NotifierId& notifier_id,
                                const gfx::Image& icon) OVERRIDE;
-  virtual void UpdateFavicon(const GURL& url, const gfx::Image& icon) OVERRIDE;
+  virtual void NotifierGroupChanged() OVERRIDE;
 
-  void set_delegate(NotifierSettingsProvider* new_delegate) {
-    delegate_ = new_delegate;
+  void set_provider(NotifierSettingsProvider* new_provider) {
+    provider_ = new_provider;
   }
 
  private:
   class NotifierButton;
 
-  NotifierSettingsView(NotifierSettingsProvider* delegate);
-  virtual ~NotifierSettingsView();
-
-  // Overridden from views::WidgetDelegate:
-  virtual void WindowClosing() OVERRIDE;
-  virtual views::View* GetContentsView() OVERRIDE;
-  virtual bool CanResize() const OVERRIDE;
+  // Given a new list of notifiers, updates the view to reflect it.
+  void UpdateContentsView(const std::vector<Notifier*>& notifiers);
 
   // Overridden from views::View:
   virtual void Layout() OVERRIDE;
   virtual gfx::Size GetMinimumSize() OVERRIDE;
   virtual gfx::Size GetPreferredSize() OVERRIDE;
+  virtual bool OnKeyPressed(const ui::KeyEvent& event) OVERRIDE;
+  virtual bool OnMouseWheel(const ui::MouseWheelEvent& event) OVERRIDE;
 
   // Overridden from views::ButtonListener:
   virtual void ButtonPressed(views::Button* sender,
                              const ui::Event& event) OVERRIDE;
+  virtual void OnMenuButtonClicked(views::View* source,
+                                   const gfx::Point& point) OVERRIDE;
 
-  views::View* title_entry_;
+  views::ImageButton* title_arrow_;
+  views::Label* title_label_;
+  views::MenuButton* notifier_group_selector_;
   views::ScrollView* scroller_;
-  NotifierSettingsProvider* delegate_;
+  NotifierSettingsProvider* provider_;
   std::set<NotifierButton*> buttons_;
+  scoped_ptr<NotifierGroupMenuModel> notifier_group_menu_model_;
+  scoped_ptr<views::MenuRunner> notifier_group_menu_runner_;
 
   DISALLOW_COPY_AND_ASSIGN(NotifierSettingsView);
 };

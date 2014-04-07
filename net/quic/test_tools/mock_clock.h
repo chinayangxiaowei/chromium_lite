@@ -9,7 +9,7 @@
 
 #include "base/compiler_specific.h"
 #include "base/logging.h"
-#include "base/time.h"
+#include "base/time/time.h"
 
 namespace net {
 
@@ -25,7 +25,7 @@ class MockClock : public QuicClock {
 
   virtual QuicTime ApproximateNow() const OVERRIDE;
 
-  virtual QuicTime::Delta NowAsDeltaSinceUnixEpoch() const OVERRIDE;
+  virtual QuicWallTime WallNow() const OVERRIDE;
 
   base::TimeTicks NowInTicks() const;
 

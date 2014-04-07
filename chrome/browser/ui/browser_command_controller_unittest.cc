@@ -7,7 +7,9 @@
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/command_updater.h"
+#include "chrome/browser/profiles/profile_destroyer.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/profiles/profiles_state.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window_state.h"
@@ -137,25 +139,10 @@ TEST_F(BrowserCommandControllerTest, AppFullScreen) {
   ASSERT_TRUE(browser()->is_app());
   browser()->command_controller()->FullscreenStateChanged();
   EXPECT_TRUE(chrome::IsCommandEnabled(browser(), IDC_FULLSCREEN));
-
-  // Enabled for panels.
-  Browser::CreateParams panel_params(Browser::TYPE_PANEL, profile(),
-                                     browser()->host_desktop_type());
-  TestBrowserWindow panel_window;
-  panel_params.window = &panel_window;
-  Browser panel_browser(panel_params);
-  ASSERT_TRUE(panel_browser.is_type_panel());
-  EXPECT_TRUE(chrome::IsCommandEnabled(&panel_browser, IDC_FULLSCREEN));
-
-  // Disabled for app-panels.
-  panel_browser.app_name_ = "app";
-  ASSERT_TRUE(panel_browser.is_app());
-  panel_browser.command_controller()->FullscreenStateChanged();
-  EXPECT_FALSE(chrome::IsCommandEnabled(&panel_browser, IDC_FULLSCREEN));
 }
 
 TEST_F(BrowserCommandControllerTest, AvatarMenuDisabledWhenOnlyOneProfile) {
-  if (!ProfileManager::IsMultipleProfilesEnabled())
+  if (!profiles::IsMultipleProfilesEnabled())
     return;
 
   TestingProfileManager testing_profile_manager(
@@ -219,10 +206,8 @@ class BrowserCommandControllerFullscreenTest
   virtual ~BrowserCommandControllerFullscreenTest() {}
 
   // BrowserWithTestWindowTest overrides:
-  virtual void SetUp() {
-    // Must be set before base SetUp() is called.
-    set_window(new FullscreenTestBrowserWindow);
-    BrowserWithTestWindowTest::SetUp();
+  virtual BrowserWindow* CreateBrowserWindow() OVERRIDE {
+    return new FullscreenTestBrowserWindow;
   }
 
  private:
@@ -310,14 +295,14 @@ TEST_F(BrowserCommandControllerTest,
   TestingProfile::Builder builder;
   TestingProfile* profile2 = builder.Build().release();
   profile2->set_incognito(true);
-  TestingProfile* profile1 =
-      testing_profile_manager.CreateTestingProfile("p1");
+  TestingProfile::Builder builder2;
+  TestingProfile* profile1 = builder2.Build().release();
   profile2->SetOriginalProfile(profile1);
   EXPECT_EQ(profile2->GetOriginalProfile(), profile1);
   profile1->SetOffTheRecordProfile(profile2);
+
   // Create a new browser based on the off the record profile.
-  Browser::CreateParams profile_params(profile2,
-                                       chrome::HOST_DESKTOP_TYPE_NATIVE);
+  Browser::CreateParams profile_params(profile2, chrome::GetActiveDesktop());
   scoped_ptr<Browser> browser2(
       chrome::CreateBrowserWithTestWindowForParams(&profile_params));
 
@@ -332,7 +317,7 @@ TEST_F(BrowserCommandControllerTest,
   EXPECT_FALSE(command_updater->IsCommandEnabled(IDC_SHOW_SYNC_SETUP));
   delete command_controller;
   browser2.reset();
-  testing_profile_manager.DeleteTestingProfile("p1");
+  ProfileDestroyer::DestroyProfileWhenAppropriate(profile1);
 }
 
 TEST_F(BrowserCommandControllerTest,

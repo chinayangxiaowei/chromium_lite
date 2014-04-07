@@ -9,7 +9,7 @@
 #include "chrome/browser/extensions/api/dns/mock_host_resolver_creator.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/extensions/extension_function_test_utils.h"
-#include "chrome/common/chrome_switches.h"
+#include "extensions/common/switches.h"
 #include "net/base/net_errors.h"
 #include "net/base/net_util.h"
 #include "net/dns/mock_host_resolver.h"
@@ -27,7 +27,8 @@ class DnsApiTest : public ExtensionApiTest {
 
   virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
     ExtensionApiTest::SetUpCommandLine(command_line);
-    command_line->AppendSwitch(switches::kEnableExperimentalExtensionApis);
+    command_line->AppendSwitch(
+        extensions::switches::kEnableExperimentalExtensionApis);
   }
 
   virtual void SetUpOnMainThread() OVERRIDE {
@@ -61,9 +62,10 @@ IN_PROC_BROWSER_TEST_F(DnsApiTest, DnsResolveIPLiteral) {
   resolve_function->set_has_callback(true);
 
   scoped_ptr<base::Value> result(RunFunctionAndReturnSingleResult(
-      resolve_function, "[\"127.0.0.1\"]", browser()));
+      resolve_function.get(), "[\"127.0.0.1\"]", browser()));
   ASSERT_EQ(base::Value::TYPE_DICTIONARY, result->GetType());
-  DictionaryValue *value = static_cast<DictionaryValue*>(result.get());
+  base::DictionaryValue *value =
+      static_cast<base::DictionaryValue*>(result.get());
 
   int resultCode;
   EXPECT_TRUE(value->GetInteger("resultCode", &resultCode));
@@ -89,7 +91,8 @@ IN_PROC_BROWSER_TEST_F(DnsApiTest, DnsResolveHostname) {
       RunFunctionAndReturnSingleResult(resolve_function.get(),
                                        function_arguments, browser()));
   ASSERT_EQ(base::Value::TYPE_DICTIONARY, result->GetType());
-  DictionaryValue *value = static_cast<DictionaryValue*>(result.get());
+  base::DictionaryValue *value =
+      static_cast<base::DictionaryValue*>(result.get());
 
   int resultCode;
   EXPECT_TRUE(value->GetInteger("resultCode", &resultCode));

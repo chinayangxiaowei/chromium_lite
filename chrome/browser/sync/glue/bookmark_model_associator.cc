@@ -8,11 +8,13 @@
 
 #include "base/bind.h"
 #include "base/command_line.h"
-#include "base/hash_tables.h"
+#include "base/containers/hash_tables.h"
+#include "base/format_macros.h"
 #include "base/location.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sync/glue/bookmark_change_processor.h"
@@ -191,14 +193,16 @@ const BookmarkNode* BookmarkNodeIdIndex::Find(int64 id) const {
 
 BookmarkModelAssociator::BookmarkModelAssociator(
     BookmarkModel* bookmark_model,
+    Profile* profile,
     syncer::UserShare* user_share,
     DataTypeErrorHandler* unrecoverable_error_handler,
     bool expect_mobile_bookmarks_folder)
     : bookmark_model_(bookmark_model),
+      profile_(profile),
       user_share_(user_share),
       unrecoverable_error_handler_(unrecoverable_error_handler),
       expect_mobile_bookmarks_folder_(expect_mobile_bookmarks_folder),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {
+      weak_factory_(this) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   DCHECK(bookmark_model_);
   DCHECK(user_share_);
@@ -211,7 +215,7 @@ BookmarkModelAssociator::~BookmarkModelAssociator() {
 
 void BookmarkModelAssociator::UpdatePermanentNodeVisibility() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  DCHECK(bookmark_model_->IsLoaded());
+  DCHECK(bookmark_model_->loaded());
 
   bookmark_model_->SetPermanentNodeVisible(
       BookmarkNode::MOBILE,
@@ -362,7 +366,10 @@ bool BookmarkModelAssociator::GetSyncIdForTaggedNode(const std::string& tag,
 syncer::SyncError BookmarkModelAssociator::AssociateModels(
     syncer::SyncMergeResult* local_merge_result,
     syncer::SyncMergeResult* syncer_merge_result) {
-  CheckModelSyncState();
+  syncer::SyncError error = CheckModelSyncState(local_merge_result,
+                                                syncer_merge_result);
+  if (error.IsSet())
+    return error;
 
   scoped_ptr<ScopedAssociationUpdater> association_updater(
       new ScopedAssociationUpdater(bookmark_model_));
@@ -391,7 +398,7 @@ syncer::SyncError BookmarkModelAssociator::BuildAssociations(
   // This algorithm will not do well if the folder name has changes but the
   // children under them are all the same.
 
-  DCHECK(bookmark_model_->IsLoaded());
+  DCHECK(bookmark_model_->loaded());
 
   // To prime our association, we associate the top-level nodes, Bookmark Bar
   // and Other Bookmarks.
@@ -474,10 +481,13 @@ syncer::SyncError BookmarkModelAssociator::BuildAssociations(
 
     BookmarkNodeFinder node_finder(parent_node);
 
+    std::vector<int64> children;
+    sync_parent.GetChildIds(&children);
     int index = 0;
-    int64 sync_child_id = sync_parent.GetFirstChildId();
-    while (sync_child_id != syncer::kInvalidId) {
-      syncer::WriteNode sync_child_node(&trans);
+    for (std::vector<int64>::const_iterator it = children.begin();
+         it != children.end(); ++it) {
+      int64 sync_child_id = *it;
+      syncer::ReadNode sync_child_node(&trans);
       if (sync_child_node.InitByIdLookup(sync_child_id) !=
               syncer::BaseNode::INIT_OK) {
         return unrecoverable_error_handler_->CreateAndUploadError(
@@ -491,28 +501,27 @@ syncer::SyncError BookmarkModelAssociator::BuildAssociations(
           GURL(sync_child_node.GetBookmarkSpecifics().url()),
           sync_child_node.GetTitle(),
           sync_child_node.GetIsFolder());
-      if (child_node)
+      if (child_node) {
         Associate(child_node, sync_child_id);
-      // All bookmarks are currently modified at association time (even if
-      // it doesn't change anything).
-      // TODO(sync): introduce logic to only modify the bookmark model if
-      // necessary.
-      const BookmarkNode* new_child_node =
-          BookmarkChangeProcessor::CreateOrUpdateBookmarkNode(
-              &sync_child_node,
-              bookmark_model_,
-              this);
-      if (new_child_node != child_node) {
-        local_merge_result->set_num_items_added(
-            local_merge_result->num_items_added() + 1);
-      } else {
+
+        // All bookmarks are currently modified at association time, even if
+        // nothing has changed.
+        // TODO(sync): Only modify the bookmark model if necessary.
+        BookmarkChangeProcessor::UpdateBookmarkWithSyncData(
+            sync_child_node, bookmark_model_, child_node, profile_);
+        bookmark_model_->Move(child_node, parent_node, index);
         local_merge_result->set_num_items_modified(
             local_merge_result->num_items_modified() + 1);
+      } else {
+        child_node = BookmarkChangeProcessor::CreateBookmarkNode(
+            &sync_child_node, parent_node, bookmark_model_, profile_, index);
+        if (child_node)
+          Associate(child_node, sync_child_id);
+        local_merge_result->set_num_items_added(
+            local_merge_result->num_items_added() + 1);
       }
       if (sync_child_node.GetIsFolder())
         dfs_stack.push(sync_child_id);
-
-      sync_child_id = sync_child_node.GetSuccessorId();
       ++index;
     }
 
@@ -522,7 +531,7 @@ syncer::SyncError BookmarkModelAssociator::BuildAssociations(
     // So the children starting from index in the parent bookmark node are the
     // ones that are not present in the parent sync node. So create them.
     for (int i = index; i < parent_node->child_count(); ++i) {
-      sync_child_id = BookmarkChangeProcessor::CreateSyncNode(
+      int64 sync_child_id = BookmarkChangeProcessor::CreateSyncNode(
           parent_node, bookmark_model_, i, &trans, this,
           unrecoverable_error_handler_);
       if (syncer::kInvalidId == sync_child_id) {
@@ -642,7 +651,7 @@ void BookmarkModelAssociator::PostPersistAssociationsTask() {
   // No need to post a task if a task is already pending.
   if (weak_factory_.HasWeakPtrs())
     return;
-  MessageLoop::current()->PostTask(
+  base::MessageLoop::current()->PostTask(
       FROM_HERE,
       base::Bind(
           &BookmarkModelAssociator::PersistAssociations,
@@ -697,22 +706,46 @@ bool BookmarkModelAssociator::CryptoReadyIfNecessary() {
       trans.GetCryptographer()->is_ready();
 }
 
-void BookmarkModelAssociator::CheckModelSyncState() const {
+syncer::SyncError BookmarkModelAssociator::CheckModelSyncState(
+    syncer::SyncMergeResult* local_merge_result,
+    syncer::SyncMergeResult* syncer_merge_result) const {
   std::string version_str;
   if (bookmark_model_->root_node()->GetMetaInfo(kBookmarkTransactionVersionKey,
                                                 &version_str)) {
     syncer::ReadTransaction trans(FROM_HERE, user_share_);
-    int64 native_version;
-    if (base::StringToInt64(version_str, &native_version) &&
-        native_version != trans.GetModelVersion(syncer::BOOKMARKS)) {
+    int64 native_version = syncer::syncable::kInvalidTransactionVersion;
+    if (!base::StringToInt64(version_str, &native_version))
+      return syncer::SyncError();
+    local_merge_result->set_pre_association_version(native_version);
+
+    int64 sync_version = trans.GetModelVersion(syncer::BOOKMARKS);
+    syncer_merge_result->set_pre_association_version(sync_version);
+
+    if (native_version != sync_version) {
       UMA_HISTOGRAM_ENUMERATION("Sync.LocalModelOutOfSync",
                                 ModelTypeToHistogramInt(syncer::BOOKMARKS),
                                 syncer::MODEL_TYPE_COUNT);
+
       // Clear version on bookmark model so that we only report error once.
       bookmark_model_->DeleteNodeMetaInfo(bookmark_model_->root_node(),
                                           kBookmarkTransactionVersionKey);
+
+      // If the native version is higher, there was a sync persistence failure,
+      // and we need to delay association until after a GetUpdates.
+      if (sync_version < native_version) {
+        std::string message = base::StringPrintf(
+            "Native version (%" PRId64 ") does not match sync version (%"
+                PRId64 ")",
+            native_version,
+            sync_version);
+        return syncer::SyncError(FROM_HERE,
+                                 syncer::SyncError::PERSISTENCE_ERROR,
+                                 message,
+                                 syncer::BOOKMARKS);
+      }
     }
   }
+  return syncer::SyncError();
 }
 
 }  // namespace browser_sync

@@ -11,11 +11,12 @@
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/animation/animation_delegate.h"
 #include "ui/base/animation/slide_animation.h"
-#include "ui/gfx/font.h"
+#include "ui/gfx/font_list.h"
 #include "ui/gfx/rect.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/view.h"
 
+class LocationBarView;
 class OmniboxResultViewModel;
 
 namespace gfx {
@@ -46,7 +47,8 @@ class OmniboxResultView : public views::View,
 
   OmniboxResultView(OmniboxResultViewModel* model,
                     int model_index,
-                    const gfx::Font& font);
+                    LocationBarView* location_bar_view,
+                    const gfx::FontList& font_list);
   virtual ~OmniboxResultView();
 
   SkColor GetColor(ResultViewState state, ColorKind kind) const;
@@ -65,14 +67,14 @@ class OmniboxResultView : public views::View,
 
   ResultViewState GetState() const;
 
+  // Returns the height of the text portion of the result view. In the base
+  // class, this is the height of one line of text.
+  virtual int GetTextHeight() const;
+
  protected:
   virtual void PaintMatch(gfx::Canvas* canvas,
                           const AutocompleteMatch& match,
                           int x);
-
-  // Returns the height of the text portion of the result view. In the base
-  // class, this is the height of one line of text.
-  virtual int GetTextHeight() const;
 
   // Draws the specified |text| into the canvas, using highlighting provided by
   // |classifications|. If |force_dim| is true, ACMatchClassification::DIM is
@@ -144,7 +146,9 @@ class OmniboxResultView : public views::View,
   OmniboxResultViewModel* model_;
   size_t model_index_;
 
-  const gfx::Font font_;
+  LocationBarView* location_bar_view_;
+
+  const gfx::FontList font_list_;
   int font_height_;
 
   // Width of the ellipsis in the normal font.

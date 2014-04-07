@@ -8,7 +8,7 @@
 
 #include "base/compiler_specific.h"
 #include "base/mac/bundle_locations.h"
-#include "base/memory/scoped_nsobject.h"
+#include "base/mac/scoped_nsobject.h"
 #include "ui/aura/event.h"
 #include "ui/aura/root_window.h"
 #include "ui/aura/root_window_host.h"
@@ -49,10 +49,6 @@ class RootWindowHostMac : public RootWindowHost,
   virtual bool CopyAreaToSkCanvas(const gfx::Rect& source_bounds,
                                   const gfx::Point& dest_offset,
                                   SkCanvas* canvas) OVERRIDE;
-  virtual bool GrabSnapshot(
-      const gfx::Rect& snapshot_bounds,
-      std::vector<unsigned char>* png_representation) OVERRIDE;
-
   // RootWindowHostMacDelegate:
   virtual void SendEvent(const base::NativeEvent& native_event) OVERRIDE;
 
@@ -71,7 +67,7 @@ class RootWindowHostMac : public RootWindowHost,
 
   // An NSWindowController for the root window.  Controls the actual Cocoa
   // window on Mac.
-  scoped_nsobject<NSWindowController> controller_;
+  base::scoped_nsobject<NSWindowController> controller_;
 
   DISALLOW_COPY_AND_ASSIGN(RootWindowHostMac);
 };
@@ -175,13 +171,6 @@ bool RootWindowHostMac::ConfineCursorToRootWindow() {
 }
 
 void RootWindowHostMac::UnConfineCursor() {
-}
-
-bool RootWindowHostMac::GrabSnapshot(
-    const gfx::Rect& snapshot_bounds,
-    std::vector<unsigned char>* png_representation) {
-  NOTIMPLEMENTED();
-  return false;
 }
 
 void RootWindowHostMac::SendEvent(const base::NativeEvent& native_event) {

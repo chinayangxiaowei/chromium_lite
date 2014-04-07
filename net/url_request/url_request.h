@@ -11,11 +11,10 @@
 #include "base/debug/leak_tracker.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "base/supports_user_data.h"
-#include "base/time.h"
 #include "base/threading/non_thread_safe.h"
-#include "googleurl/src/gurl.h"
+#include "base/time/time.h"
 #include "net/base/auth.h"
 #include "net/base/completion_callback.h"
 #include "net/base/load_states.h"
@@ -29,6 +28,7 @@
 #include "net/http/http_request_headers.h"
 #include "net/http/http_response_info.h"
 #include "net/url_request/url_request_status.h"
+#include "url/gurl.h"
 
 // Temporary layering violation to allow existing users of a deprecated
 // interface.
@@ -365,14 +365,19 @@ class NET_EXPORT URLRequest : NON_EXPORTED_BASE(public base::NonThreadSafe),
   const std::string& method() const { return method_; }
   void set_method(const std::string& method);
 
+  // Determines the new method of the request afer following a redirect.
+  // |method| is the method used to arrive at the redirect,
+  // |http_status_code| is the status code associated with the redirect.
+  static std::string ComputeMethodForRedirect(const std::string& method,
+                                              int http_status_code);
+
   // The referrer URL for the request.  This header may actually be suppressed
   // from the underlying network request for security reasons (e.g., a HTTPS
   // URL will not be sent as the referrer for a HTTP request).  The referrer
   // may only be changed before Start() is called.
   const std::string& referrer() const { return referrer_; }
-  void set_referrer(const std::string& referrer);
-  // Returns the referrer header with potential username and password removed.
-  GURL GetSanitizedReferrer() const;
+  // Referrer is sanitized to remove URL fragment, user name and password.
+  void SetReferrer(const std::string& referrer);
 
   // The referrer policy to apply when updating the referrer during redirects.
   // The referrer policy may only be changed before Start() is called.
@@ -422,11 +427,26 @@ class NET_EXPORT URLRequest : NON_EXPORTED_BASE(public base::NonThreadSafe),
     return extra_request_headers_;
   }
 
+  // Gets the full request headers sent to the server.
+  //
+  // Return true and overwrites headers if it can get the request headers;
+  // otherwise, returns false and does not modify headers.  (Always returns
+  // false for request types that don't have headers, like file requests.)
+  //
+  // This is guaranteed to succeed if:
+  //
+  // 1. A redirect or auth callback is currently running.  Once it ends, the
+  //    headers may become unavailable as a new request with the new address
+  //    or credentials is made.
+  //
+  // 2. The OnResponseStarted callback is currently running or has run.
+  bool GetFullRequestHeaders(HttpRequestHeaders* headers) const;
+
   // Returns the current load state for the request. |param| is an optional
   // parameter describing details related to the load state. Not all load states
   // have a parameter.
   LoadStateWithParam GetLoadState() const;
-  void SetLoadStateParam(const string16& param) {
+  void SetLoadStateParam(const base::string16& param) {
     load_state_param_ = param;
   }
 
@@ -732,6 +752,7 @@ class NET_EXPORT URLRequest : NON_EXPORTED_BASE(public base::NonThreadSafe),
   bool CanGetCookies(const CookieList& cookie_list) const;
   bool CanSetCookie(const std::string& cookie_line,
                     CookieOptions* options) const;
+  bool CanEnablePrivacyMode() const;
 
   // Called when the delegate blocks or unblocks this request when intercepting
   // certain requests.
@@ -809,7 +830,7 @@ class NET_EXPORT URLRequest : NON_EXPORTED_BASE(public base::NonThreadSafe),
 
   // An optional parameter that provides additional information about the load
   // state. Only used with the LOAD_STATE_WAITING_FOR_DELEGATE state.
-  string16 load_state_param_;
+  base::string16 load_state_param_;
 
   base::debug::LeakTracker<URLRequest> leak_tracker_;
 

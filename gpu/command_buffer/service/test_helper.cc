@@ -7,12 +7,13 @@
 #include <algorithm>
 #include <string>
 
-#include "base/string_number_conversions.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_tokenizer.h"
 #include "gpu/command_buffer/common/types.h"
 #include "gpu/command_buffer/service/buffer_manager.h"
+#include "gpu/command_buffer/service/error_state_mock.h"
 #include "gpu/command_buffer/service/gl_utils.h"
-#include "gpu/command_buffer/service/gles2_cmd_decoder_mock.h"
+#include "gpu/command_buffer/service/gpu_switches.h"
 #include "gpu/command_buffer/service/program_manager.h"
 #include "gpu/command_buffer/service/texture_manager.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -272,25 +273,17 @@ void TestHelper::SetupContextGroupInitExpectations(
 
 void TestHelper::SetupFeatureInfoInitExpectations(
       ::gfx::MockGLInterface* gl, const char* extensions) {
-  SetupFeatureInfoInitExpectationsWithVendor(gl, extensions, "", "", "");
+  SetupFeatureInfoInitExpectationsWithGLVersion(gl, extensions, "");
 }
 
-void TestHelper::SetupFeatureInfoInitExpectationsWithVendor(
+void TestHelper::SetupFeatureInfoInitExpectationsWithGLVersion(
      ::gfx::MockGLInterface* gl,
      const char* extensions,
-     const char* vendor,
-     const char* renderer,
      const char* version) {
   InSequence sequence;
 
   EXPECT_CALL(*gl, GetString(GL_EXTENSIONS))
       .WillOnce(Return(reinterpret_cast<const uint8*>(extensions)))
-      .RetiresOnSaturation();
-  EXPECT_CALL(*gl, GetString(GL_VENDOR))
-      .WillOnce(Return(reinterpret_cast<const uint8*>(vendor)))
-      .RetiresOnSaturation();
-  EXPECT_CALL(*gl, GetString(GL_RENDERER))
-      .WillOnce(Return(reinterpret_cast<const uint8*>(renderer)))
       .RetiresOnSaturation();
   EXPECT_CALL(*gl, GetString(GL_VERSION))
       .WillOnce(Return(reinterpret_cast<const uint8*>(version)))
@@ -499,10 +492,10 @@ void TestHelper::SetupShader(
 }
 
 void TestHelper::DoBufferData(
-    ::gfx::MockGLInterface* gl, MockGLES2Decoder* decoder,
+    ::gfx::MockGLInterface* gl, MockErrorState* error_state,
     BufferManager* manager, Buffer* buffer, GLsizeiptr size, GLenum usage,
     const GLvoid* data, GLenum error) {
-  EXPECT_CALL(*decoder, CopyRealGLErrorsToWrapper(_, _, _))
+  EXPECT_CALL(*error_state, CopyRealGLErrorsToWrapper(_, _, _))
       .Times(1)
       .RetiresOnSaturation();
   if (manager->IsUsageClientSideArray(usage)) {
@@ -516,32 +509,33 @@ void TestHelper::DoBufferData(
         .Times(1)
         .RetiresOnSaturation();
   }
-  EXPECT_CALL(*decoder, PeekGLError(_, _, _))
+  EXPECT_CALL(*error_state, PeekGLError(_, _, _))
       .WillOnce(Return(error))
       .RetiresOnSaturation();
-  manager->DoBufferData(decoder, buffer, size, usage, data);
+  manager->DoBufferData(error_state, buffer, size, usage, data);
 }
 
 void TestHelper::SetTexParameterWithExpectations(
-    ::gfx::MockGLInterface* gl, MockGLES2Decoder* decoder,
-    TextureManager* manager, Texture* texture,
+    ::gfx::MockGLInterface* gl, MockErrorState* error_state,
+    TextureManager* manager, TextureRef* texture_ref,
     GLenum pname, GLint value, GLenum error) {
   if (error == GL_NO_ERROR) {
     if (pname != GL_TEXTURE_POOL_CHROMIUM) {
-      EXPECT_CALL(*gl, TexParameteri(texture->target(), pname, value))
+      EXPECT_CALL(*gl, TexParameteri(texture_ref->texture()->target(),
+                                     pname, value))
           .Times(1)
           .RetiresOnSaturation();
     }
   } else if (error == GL_INVALID_ENUM) {
-    EXPECT_CALL(*decoder, SetGLErrorInvalidEnum(_, _, _, value, _))
+    EXPECT_CALL(*error_state, SetGLErrorInvalidEnum(_, _, _, value, _))
         .Times(1)
         .RetiresOnSaturation();
   } else {
-    EXPECT_CALL(*decoder, SetGLErrorInvalidParam(_, _, error, _, _, _))
+    EXPECT_CALL(*error_state, SetGLErrorInvalidParam(_, _, error, _, _, _))
         .Times(1)
         .RetiresOnSaturation();
   }
-  manager->SetParameter("", decoder, texture, pname, value);
+  manager->SetParameter("", error_state, texture_ref, pname, value);
 }
 
 ScopedGLImplementationSetter::ScopedGLImplementationSetter(

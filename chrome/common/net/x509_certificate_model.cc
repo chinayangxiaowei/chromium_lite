@@ -6,7 +6,7 @@
 
 #include <unicode/uidna.h>
 
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -61,7 +61,7 @@ std::string ProcessRawBytesWithSeparators(const unsigned char* data,
   size_t kMin = 0U;
 
   if (!data_length)
-    return "";
+    return std::string();
 
   ret.reserve(std::max(kMin, data_length * 3 - 1));
 

@@ -3,7 +3,7 @@
   "version": "1.0",
   "manifest_version": 2,
   "permissions": [
-    { "mediaGalleries": ["write", "allAutoDetected"] }
+    { "mediaGalleries": ["copyTo", "allAutoDetected"] }
   ],
   "app": {
     "background": {

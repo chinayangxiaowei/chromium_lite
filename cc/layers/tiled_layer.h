@@ -28,14 +28,14 @@ class CC_EXPORT TiledLayer : public ContentsScalingLayer {
   virtual void PushPropertiesTo(LayerImpl* layer) OVERRIDE;
   virtual bool BlocksPendingCommit() const OVERRIDE;
   virtual bool DrawsContent() const OVERRIDE;
+  virtual void ReduceMemoryUsage() OVERRIDE;
   virtual void SetNeedsDisplayRect(const gfx::RectF& dirty_rect) OVERRIDE;
   virtual void SetLayerTreeHost(LayerTreeHost* layer_tree_host) OVERRIDE;
   virtual void SetTexturePriorities(const PriorityCalculator& priority_calc)
       OVERRIDE;
   virtual Region VisibleContentOpaqueRegion() const OVERRIDE;
-  virtual void Update(ResourceUpdateQueue* queue,
-                      const OcclusionTracker* occlusion,
-                      RenderingStats* stats) OVERRIDE;
+  virtual bool Update(ResourceUpdateQueue* queue,
+                      const OcclusionTracker* occlusion) OVERRIDE;
 
  protected:
   TiledLayer();
@@ -96,7 +96,6 @@ class CC_EXPORT TiledLayer : public ContentsScalingLayer {
                    int bottom,
                    ResourceUpdateQueue* queue,
                    const OcclusionTracker* occlusion,
-                   RenderingStats* stats,
                    bool* did_paint);
   bool HaveTexturesForTiles(int left,
                             int top,
@@ -114,8 +113,7 @@ class CC_EXPORT TiledLayer : public ContentsScalingLayer {
                           int right,
                           int bottom,
                           ResourceUpdateQueue* queue,
-                          const OcclusionTracker* occlusion,
-                          RenderingStats* stats);
+                          const OcclusionTracker* occlusion);
   void UpdateScrollPrediction();
 
   UpdatableTile* TileAt(int i, int j) const;
@@ -139,5 +137,6 @@ class CC_EXPORT TiledLayer : public ContentsScalingLayer {
   DISALLOW_COPY_AND_ASSIGN(TiledLayer);
 };
 
-}
+}  // namespace cc
+
 #endif  // CC_LAYERS_TILED_LAYER_H_

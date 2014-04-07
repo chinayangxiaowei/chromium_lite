@@ -6,7 +6,7 @@
 #include "base/file_util.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/path_service.h"
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "base/test/trace_event_analyzer.h"
 #include "base/version.h"
 #include "chrome/browser/ui/browser.h"
@@ -14,19 +14,19 @@
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/in_process_browser_test.h"
-#include "chrome/test/base/test_launcher_utils.h"
 #include "chrome/test/base/tracing.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/gpu_data_manager.h"
 #include "content/public/common/content_switches.h"
-#include "content/public/common/gpu_info.h"
 #include "content/public/test/browser_test_utils.h"
-#include "content/test/gpu/gpu_test_config.h"
+#include "gpu/config/gpu_feature_type.h"
+#include "gpu/config/gpu_info.h"
+#include "gpu/config/gpu_test_config.h"
 #include "net/base/net_util.h"
-#include "ui/gl/gl_switches.h"
-#include "ui/compositor/compositor_setup.h"
+#include "ui/gl/gl_implementation.h"
+
 #if defined(OS_MACOSX)
-#include "ui/surface/io_surface_support_mac.h"
+#include "ui/gl/io_surface_support_mac.h"
 #endif
 
 #if defined(OS_WIN)
@@ -34,7 +34,7 @@
 #endif
 
 using content::GpuDataManager;
-using content::GpuFeatureType;
+using gpu::GpuFeatureType;
 using trace_analyzer::Query;
 using trace_analyzer::TraceAnalyzer;
 using trace_analyzer::TraceEventVector;
@@ -47,7 +47,14 @@ const char kWebGLCreationEvent[] = "DrawingBufferCreation";
 
 class GpuFeatureTest : public InProcessBrowserTest {
  public:
-  GpuFeatureTest() : trace_categories_("test_gpu"), gpu_enabled_(false) {}
+  GpuFeatureTest() : category_patterns_("test_gpu") {}
+
+  virtual void SetUp() OVERRIDE {
+    // We expect to use real GL contexts for these tests.
+    UseRealGLContexts();
+
+    InProcessBrowserTest::SetUp();
+  }
 
   virtual void SetUpInProcessBrowserTestFixture() OVERRIDE {
     base::FilePath test_dir;
@@ -56,23 +63,12 @@ class GpuFeatureTest : public InProcessBrowserTest {
   }
 
   virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
-    // Do not use mesa if real GPU is required.
-    if (!command_line->HasSwitch(switches::kUseGpuInTests)) {
-#if !defined(OS_MACOSX)
-      CHECK(test_launcher_utils::OverrideGLImplementation(
-          command_line, gfx::kGLImplementationOSMesaName)) <<
-          "kUseGL must not be set by test framework code!";
-#endif
-    } else {
-      gpu_enabled_ = true;
-    }
     command_line->AppendSwitch(switches::kDisablePopupBlocking);
-    ui::DisableTestCompositor();
     command_line->AppendSwitchASCII(switches::kWindowSize, "400,300");
   }
 
   void SetupBlacklist(const std::string& json_blacklist) {
-    content::GPUInfo gpu_info;
+    gpu::GPUInfo gpu_info;
     GpuDataManager::GetInstance()->InitializeForTesting(
         json_blacklist, gpu_info);
   }
@@ -83,13 +79,13 @@ class GpuFeatureTest : public InProcessBrowserTest {
                bool new_tab) {
 #if defined(OS_LINUX) && !defined(NDEBUG)
     // Bypass tests on GPU Linux Debug bots.
-    if (gpu_enabled_)
+    if (gfx::GetGLImplementation() != gfx::kGLImplementationOSMesaGL)
       return;
 #endif
 
     base::FilePath test_path;
     test_path = gpu_test_dir_.Append(url);
-    ASSERT_TRUE(file_util::PathExists(test_path))
+    ASSERT_TRUE(base::PathExists(test_path))
         << "Missing test file: " << test_path.value();
 
     content::DOMMessageQueue message_queue;
@@ -115,7 +111,7 @@ class GpuFeatureTest : public InProcessBrowserTest {
                     bool event_expected = false) {
 #if defined(OS_LINUX) && !defined(NDEBUG)
     // Bypass tests on GPU Linux Debug bots.
-    if (gpu_enabled_)
+    if (gfx::GetGLImplementation() != gfx::kGLImplementationOSMesaGL)
       return;
 #endif
 #if defined(OS_MACOSX)
@@ -124,7 +120,7 @@ class GpuFeatureTest : public InProcessBrowserTest {
       return;
 #endif
 
-    ASSERT_TRUE(tracing::BeginTracing(trace_categories_));
+    ASSERT_TRUE(tracing::BeginTracing(category_patterns_));
 
     // Have to use a new tab for the blacklist to work.
     RunTest(url, NULL, true);
@@ -150,10 +146,10 @@ class GpuFeatureTest : public InProcessBrowserTest {
   // Trigger a resize of the chrome window, and use tracing to wait for the
   // given |wait_event|.
   bool ResizeAndWait(const gfx::Rect& new_bounds,
-                     const char* trace_categories,
+                     const char* category_patterns,
                      const char* wait_category,
                      const char* wait_event) {
-    if (!tracing::BeginTracingWithWatch(trace_categories, wait_category,
+    if (!tracing::BeginTracingWithWatch(category_patterns, wait_category,
                                         wait_event, 1))
       return false;
     browser()->window()->SetBounds(new_bounds);
@@ -169,35 +165,24 @@ class GpuFeatureTest : public InProcessBrowserTest {
  protected:
   base::FilePath gpu_test_dir_;
   scoped_ptr<TraceAnalyzer> analyzer_;
-  std::string trace_categories_;
+  std::string category_patterns_;
   std::string trace_events_json_;
-  bool gpu_enabled_;
 };
 
-#if defined(OS_WIN)
+#if defined(OS_WIN) || defined(ADDRESS_SANITIZER)
 // This test is flaky on Windows. http://crbug.com/177113
+// Also fails under AddressSanitizer. http://crbug.com/185178
 #define MAYBE_AcceleratedCompositingAllowed DISABLED_AcceleratedCompositingAllowed
 #else
 #define MAYBE_AcceleratedCompositingAllowed AcceleratedCompositingAllowed
 #endif
 
 IN_PROC_BROWSER_TEST_F(GpuFeatureTest, MAYBE_AcceleratedCompositingAllowed) {
-  GpuFeatureType type =
-      GpuDataManager::GetInstance()->GetBlacklistedFeatures();
-  EXPECT_EQ(type, 0);
+  EXPECT_FALSE(GpuDataManager::GetInstance()->IsFeatureBlacklisted(
+      gpu::GPU_FEATURE_TYPE_ACCELERATED_COMPOSITING));
 
   const base::FilePath url(FILE_PATH_LITERAL("feature_compositing.html"));
   RunEventTest(url, kSwapBuffersEvent, true);
-}
-
-// Flash Stage3D may be blacklisted for other reasons on XP, so ignore it.
-GpuFeatureType IgnoreGpuFeatures(GpuFeatureType type) {
-#if defined(OS_WIN)
-  if (base::win::GetVersion() < base::win::VERSION_VISTA)
-    return static_cast<GpuFeatureType>(type &
-        ~content::GPU_FEATURE_TYPE_FLASH_STAGE3D);
-#endif
-  return type;
 }
 
 class AcceleratedCompositingBlockedTest : public GpuFeatureTest {
@@ -221,8 +206,8 @@ class AcceleratedCompositingBlockedTest : public GpuFeatureTest {
   }
 };
 
-#if (defined(OS_WIN) && defined(USE_AURA))
-// Compositing is always on for Windows Aura.
+#if defined(USE_AURA)
+// Compositing is always on for Aura.
 #define MAYBE_AcceleratedCompositingBlocked DISABLED_AcceleratedCompositingBlocked
 #else
 #define MAYBE_AcceleratedCompositingBlocked AcceleratedCompositingBlocked
@@ -230,11 +215,8 @@ class AcceleratedCompositingBlockedTest : public GpuFeatureTest {
 
 IN_PROC_BROWSER_TEST_F(AcceleratedCompositingBlockedTest,
     MAYBE_AcceleratedCompositingBlocked) {
-  GpuFeatureType type =
-      GpuDataManager::GetInstance()->GetBlacklistedFeatures();
-  type = IgnoreGpuFeatures(type);
-
-  EXPECT_EQ(type, content::GPU_FEATURE_TYPE_ACCELERATED_COMPOSITING);
+  EXPECT_TRUE(GpuDataManager::GetInstance()->IsFeatureBlacklisted(
+      gpu::GPU_FEATURE_TYPE_ACCELERATED_COMPOSITING));
 
   const base::FilePath url(FILE_PATH_LITERAL("feature_compositing.html"));
   RunEventTest(url, kSwapBuffersEvent, false);
@@ -248,8 +230,8 @@ class AcceleratedCompositingTest : public GpuFeatureTest {
   }
 };
 
-#if defined(OS_WIN) && defined(USE_AURA)
-// Compositing is always on for Windows Aura.
+#if defined(USE_AURA)
+// Compositing is always on for Aura.
 #define MAYBE_AcceleratedCompositingDisabled DISABLED_AcceleratedCompositingDisabled
 #else
 #define MAYBE_AcceleratedCompositingDisabled AcceleratedCompositingDisabled
@@ -262,10 +244,15 @@ IN_PROC_BROWSER_TEST_F(AcceleratedCompositingTest,
   RunEventTest(url, kSwapBuffersEvent, false);
 }
 
-IN_PROC_BROWSER_TEST_F(GpuFeatureTest, WebGLAllowed) {
-  GpuFeatureType type =
-      GpuDataManager::GetInstance()->GetBlacklistedFeatures();
-  EXPECT_EQ(type, 0);
+#if defined(OS_CHROMEOS)
+#define MAYBE_WebGLAllowed DISABLED_WebGLAllowed
+#else
+#define MAYBE_WebGLAllowed WebGLAllowed
+#endif
+// Times out on CrOS: http://crbug.com/166060
+IN_PROC_BROWSER_TEST_F(GpuFeatureTest, MAYBE_WebGLAllowed) {
+  EXPECT_FALSE(GpuDataManager::GetInstance()->IsFeatureBlacklisted(
+      gpu::GPU_FEATURE_TYPE_WEBGL));
 
   const base::FilePath url(FILE_PATH_LITERAL("feature_webgl.html"));
   RunEventTest(url, kWebGLCreationEvent, true);
@@ -286,10 +273,8 @@ IN_PROC_BROWSER_TEST_F(GpuFeatureTest, WebGLBlocked) {
       "  ]\n"
       "}";
   SetupBlacklist(json_blacklist);
-  GpuFeatureType type =
-      GpuDataManager::GetInstance()->GetBlacklistedFeatures();
-  type = IgnoreGpuFeatures(type);
-  EXPECT_EQ(type, content::GPU_FEATURE_TYPE_WEBGL);
+  EXPECT_TRUE(GpuDataManager::GetInstance()->IsFeatureBlacklisted(
+      gpu::GPU_FEATURE_TYPE_WEBGL));
 
   const base::FilePath url(FILE_PATH_LITERAL("feature_webgl.html"));
   RunEventTest(url, kWebGLCreationEvent, false);
@@ -312,14 +297,11 @@ IN_PROC_BROWSER_TEST_F(WebGLTest, WebGLDisabled) {
 }
 
 IN_PROC_BROWSER_TEST_F(GpuFeatureTest, MultisamplingAllowed) {
-  GpuFeatureType type =
-      GpuDataManager::GetInstance()->GetBlacklistedFeatures();
-  EXPECT_EQ(type, 0);
+  EXPECT_FALSE(GpuDataManager::GetInstance()->IsFeatureBlacklisted(
+      gpu::GPU_FEATURE_TYPE_MULTISAMPLING));
 
   // Multisampling is not supported if running on top of osmesa.
-  std::string use_gl = CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
-      switches::kUseGL);
-  if (use_gl == gfx::kGLImplementationOSMesaName)
+  if (gfx::GetGLImplementation() != gfx::kGLImplementationOSMesaGL)
     return;
 
   // Linux Intel uses mesa driver, where multisampling is not supported.
@@ -327,7 +309,7 @@ IN_PROC_BROWSER_TEST_F(GpuFeatureTest, MultisamplingAllowed) {
   std::vector<std::string> configs;
   configs.push_back("LINUX INTEL");
   configs.push_back("MAC VMWARE");
-  if (GPUTestBotConfig::CurrentConfigMatches(configs))
+  if (gpu::GPUTestBotConfig::CurrentConfigMatches(configs))
     return;
 
   const base::FilePath url(FILE_PATH_LITERAL("feature_multisampling.html"));
@@ -336,7 +318,7 @@ IN_PROC_BROWSER_TEST_F(GpuFeatureTest, MultisamplingAllowed) {
 
 IN_PROC_BROWSER_TEST_F(GpuFeatureTest, MultisamplingBlocked) {
   // Multisampling fails on virtualized mac os.
-  if (GPUTestBotConfig::CurrentConfigMatches("MAC VMWARE"))
+  if (gpu::GPUTestBotConfig::CurrentConfigMatches("MAC VMWARE"))
     return;
 
   const std::string json_blacklist =
@@ -353,10 +335,8 @@ IN_PROC_BROWSER_TEST_F(GpuFeatureTest, MultisamplingBlocked) {
       "  ]\n"
       "}";
   SetupBlacklist(json_blacklist);
-  GpuFeatureType type =
-      GpuDataManager::GetInstance()->GetBlacklistedFeatures();
-  type = IgnoreGpuFeatures(type);
-  EXPECT_EQ(type, content::GPU_FEATURE_TYPE_MULTISAMPLING);
+  EXPECT_TRUE(GpuDataManager::GetInstance()->IsFeatureBlacklisted(
+      gpu::GPU_FEATURE_TYPE_MULTISAMPLING));
 
   const base::FilePath url(FILE_PATH_LITERAL("feature_multisampling.html"));
   RunTest(url, "\"FALSE\"", true);
@@ -372,7 +352,7 @@ class WebGLMultisamplingTest : public GpuFeatureTest {
 
 IN_PROC_BROWSER_TEST_F(WebGLMultisamplingTest, MultisamplingDisabled) {
   // Multisampling fails on virtualized mac os.
-  if (GPUTestBotConfig::CurrentConfigMatches("MAC VMWARE"))
+  if (gpu::GPUTestBotConfig::CurrentConfigMatches("MAC VMWARE"))
     return;
 
   const base::FilePath url(FILE_PATH_LITERAL("feature_multisampling.html"));
@@ -381,12 +361,11 @@ IN_PROC_BROWSER_TEST_F(WebGLMultisamplingTest, MultisamplingDisabled) {
 
 IN_PROC_BROWSER_TEST_F(GpuFeatureTest, Canvas2DAllowed) {
   // Accelerated canvas 2D is not supported on XP.
-  if (GPUTestBotConfig::CurrentConfigMatches("XP"))
+  if (gpu::GPUTestBotConfig::CurrentConfigMatches("XP"))
     return;
 
-  GpuFeatureType type =
-      GpuDataManager::GetInstance()->GetBlacklistedFeatures();
-  EXPECT_EQ(type, 0);
+  EXPECT_FALSE(GpuDataManager::GetInstance()->IsFeatureBlacklisted(
+      gpu::GPU_FEATURE_TYPE_ACCELERATED_2D_CANVAS));
 
   const base::FilePath url(FILE_PATH_LITERAL("feature_canvas2d.html"));
   RunEventTest(url, kAcceleratedCanvasCreationEvent, true);
@@ -407,10 +386,8 @@ IN_PROC_BROWSER_TEST_F(GpuFeatureTest, Canvas2DBlocked) {
       "  ]\n"
       "}";
   SetupBlacklist(json_blacklist);
-  GpuFeatureType type =
-      GpuDataManager::GetInstance()->GetBlacklistedFeatures();
-  type = IgnoreGpuFeatures(type);
-  EXPECT_EQ(type, content::GPU_FEATURE_TYPE_ACCELERATED_2D_CANVAS);
+  EXPECT_TRUE(GpuDataManager::GetInstance()->IsFeatureBlacklisted(
+      gpu::GPU_FEATURE_TYPE_ACCELERATED_2D_CANVAS));
 
   const base::FilePath url(FILE_PATH_LITERAL("feature_canvas2d.html"));
   RunEventTest(url, kAcceleratedCanvasCreationEvent, false);
@@ -464,7 +441,7 @@ IN_PROC_BROWSER_TEST_F(ThreadedCompositorTest, DISABLED_ThreadedCompositor) {
 #define MAYBE_RafNoDamage RafNoDamage
 #endif
 IN_PROC_BROWSER_TEST_F(GpuFeatureTest, MAYBE_RafNoDamage) {
-  trace_categories_ = "-test_*";
+  category_patterns_ = "-test_*";
   const base::FilePath url(FILE_PATH_LITERAL("feature_raf_no_damage.html"));
   RunEventTest(url);
 
@@ -508,7 +485,7 @@ IN_PROC_BROWSER_TEST_F(GpuFeatureTest, IOSurfaceReuse) {
   const base::FilePath url(
       FILE_PATH_LITERAL("feature_compositing_static.html"));
   base::FilePath test_path = gpu_test_dir_.Append(url);
-  ASSERT_TRUE(file_util::PathExists(test_path))
+  ASSERT_TRUE(base::PathExists(test_path))
       << "Missing test file: " << test_path.value();
 
   ui_test_utils::NavigateToURL(browser(), net::FilePathToFileURL(test_path));
@@ -572,4 +549,4 @@ IN_PROC_BROWSER_TEST_F(GpuFeatureTest, IOSurfaceReuse) {
 }
 #endif
 
-}  // namespace anonymous
+}  // namespace

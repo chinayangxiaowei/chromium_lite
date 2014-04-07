@@ -5,13 +5,14 @@
 #include "chrome/browser/sync_file_system/sync_file_system_service_factory.h"
 
 #include "base/command_line.h"
+#include "chrome/browser/drive/drive_notification_manager_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_dependency_manager.h"
+#include "chrome/browser/signin/profile_oauth2_token_service_factory.h"
 #include "chrome/browser/sync/profile_sync_service.h"
-#include "chrome/browser/sync/profile_sync_service_factory.h"
-#include "chrome/browser/sync_file_system/drive_file_sync_service.h"
+#include "chrome/browser/sync_file_system/drive_backend/drive_file_sync_service.h"
 #include "chrome/browser/sync_file_system/sync_file_system_service.h"
-#include "webkit/fileapi/syncable/syncable_file_system_util.h"
+#include "chrome/browser/sync_file_system/syncable_file_system_util.h"
+#include "components/browser_context_keyed_service/browser_context_dependency_manager.h"
 
 namespace sync_file_system {
 
@@ -23,7 +24,7 @@ const char kDisableLastWriteWin[] = "disable-syncfs-last-write-win";
 SyncFileSystemService* SyncFileSystemServiceFactory::GetForProfile(
     Profile* profile) {
   return static_cast<SyncFileSystemService*>(
-      GetInstance()->GetServiceForProfile(profile, true));
+      GetInstance()->GetServiceForBrowserContext(profile, true));
 }
 
 // static
@@ -37,15 +38,20 @@ void SyncFileSystemServiceFactory::set_mock_remote_file_service(
 }
 
 SyncFileSystemServiceFactory::SyncFileSystemServiceFactory()
-    : ProfileKeyedServiceFactory("SyncFileSystemService",
-                                 ProfileDependencyManager::GetInstance()) {
-  DependsOn(ProfileSyncServiceFactory::GetInstance());
+    : BrowserContextKeyedServiceFactory(
+        "SyncFileSystemService",
+        BrowserContextDependencyManager::GetInstance()) {
+  DependsOn(drive::DriveNotificationManagerFactory::GetInstance());
+  DependsOn(ProfileOAuth2TokenServiceFactory::GetInstance());
 }
 
 SyncFileSystemServiceFactory::~SyncFileSystemServiceFactory() {}
 
-ProfileKeyedService* SyncFileSystemServiceFactory::BuildServiceInstanceFor(
-    Profile* profile) const {
+BrowserContextKeyedService*
+SyncFileSystemServiceFactory::BuildServiceInstanceFor(
+    content::BrowserContext* context) const {
+  Profile* profile = static_cast<Profile*>(context);
+
   SyncFileSystemService* service = new SyncFileSystemService(profile);
 
   scoped_ptr<LocalFileSyncService> local_file_service(
@@ -57,15 +63,14 @@ ProfileKeyedService* SyncFileSystemServiceFactory::BuildServiceInstanceFor(
   } else {
     // FileSystem needs to be registered before DriveFileSyncService runs
     // its initialization code.
-    // TODO(kinuko): Clean up RegisterSyncableFileSystem in
-    // local_file_sync_context.cc, which is still there for testing.
-    RegisterSyncableFileSystem(DriveFileSyncService::kServiceName);
-    remote_file_service.reset(new DriveFileSyncService(profile));
+    RegisterSyncableFileSystem();
+    remote_file_service =
+        DriveFileSyncService::Create(profile).PassAs<RemoteFileSyncService>();
   }
 
   if (CommandLine::ForCurrentProcess()->HasSwitch(kDisableLastWriteWin)) {
     remote_file_service->SetConflictResolutionPolicy(
-        CONFLICT_RESOLUTION_MANUAL);
+        CONFLICT_RESOLUTION_POLICY_MANUAL);
   }
 
   service->Initialize(local_file_service.Pass(),

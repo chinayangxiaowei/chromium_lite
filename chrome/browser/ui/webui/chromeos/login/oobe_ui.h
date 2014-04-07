@@ -24,13 +24,13 @@ class BaseScreenHandler;
 class CoreOobeHandler;
 class ErrorScreenHandler;
 class KioskAppMenuHandler;
+class KioskEnableScreenActor;
 class NativeWindowDelegate;
+class NetworkDropdownHandler;
 class NetworkStateInformer;
 class SigninScreenHandler;
 class SigninScreenHandlerDelegate;
-}
-
-namespace chromeos {
+class UpdateScreenHandler;
 
 // A custom WebUI that defines datasource for out-of-box-experience (OOBE) UI:
 // - welcome screen (setup language/keyboard/network).
@@ -40,24 +40,6 @@ class OobeUI : public OobeDisplay,
                public content::WebUIController,
                public CoreOobeHandler::Delegate {
  public:
-  enum Screen {
-    SCREEN_OOBE_NETWORK = 0,
-    SCREEN_OOBE_EULA,
-    SCREEN_OOBE_UPDATE,
-    SCREEN_OOBE_ENROLLMENT,
-    SCREEN_GAIA_SIGNIN,
-    SCREEN_ACCOUNT_PICKER,
-    SCREEN_ERROR_MESSAGE,
-    SCREEN_USER_IMAGE_PICKER,
-    SCREEN_TPM_ERROR,
-    SCREEN_PASSWORD_CHANGED,
-    SCREEN_CREATE_MANAGED_USER_DIALOG,
-    SCREEN_CREATE_MANAGED_USER_FLOW,
-    SCREEN_TERMS_OF_SERVICE,
-    SCREEN_WRONG_HWID,
-    SCREEN_UNKNOWN
-  };
-
   // JS oobe/login screens names.
   static const char kScreenOobeNetwork[];
   static const char kScreenOobeEula[];
@@ -65,11 +47,12 @@ class OobeUI : public OobeDisplay,
   static const char kScreenOobeEnrollment[];
   static const char kScreenGaiaSignin[];
   static const char kScreenAccountPicker[];
+  static const char kScreenKioskAutolaunch[];
+  static const char kScreenKioskEnable[];
   static const char kScreenErrorMessage[];
   static const char kScreenUserImagePicker[];
   static const char kScreenTpmError[];
   static const char kScreenPasswordChanged[];
-  static const char kScreenManagedUserCreationDialog[];
   static const char kScreenManagedUserCreationFlow[];
   static const char kScreenTermsOfService[];
   static const char kScreenWrongHWID[];
@@ -83,16 +66,19 @@ class OobeUI : public OobeDisplay,
   virtual UpdateScreenActor* GetUpdateScreenActor() OVERRIDE;
   virtual NetworkScreenActor* GetNetworkScreenActor() OVERRIDE;
   virtual EulaScreenActor* GetEulaScreenActor() OVERRIDE;
-  virtual EnterpriseEnrollmentScreenActor* GetEnterpriseEnrollmentScreenActor()
-      OVERRIDE;
+  virtual EnrollmentScreenActor* GetEnrollmentScreenActor() OVERRIDE;
   virtual ResetScreenActor* GetResetScreenActor() OVERRIDE;
+  virtual KioskAutolaunchScreenActor* GetKioskAutolaunchScreenActor() OVERRIDE;
+  virtual KioskEnableScreenActor* GetKioskEnableScreenActor() OVERRIDE;
   virtual TermsOfServiceScreenActor*
       GetTermsOfServiceScreenActor() OVERRIDE;
   virtual UserImageScreenActor* GetUserImageScreenActor() OVERRIDE;
-  virtual ViewScreenDelegate* GetRegistrationScreenActor() OVERRIDE;
+  virtual ErrorScreenActor* GetErrorScreenActor() OVERRIDE;
   virtual WrongHWIDScreenActor* GetWrongHWIDScreenActor() OVERRIDE;
   virtual LocallyManagedUserCreationScreenHandler*
       GetLocallyManagedUserCreationScreenActor() OVERRIDE;
+  virtual bool IsJSReady(const base::Closure& display_is_ready_callback)
+      OVERRIDE;
 
   // Collects localized strings from the owned handlers.
   void GetLocalizedStrings(base::DictionaryValue* localized_strings);
@@ -135,12 +121,18 @@ class OobeUI : public OobeDisplay,
   // Reference to CoreOobeHandler that handles common requests of Oobe page.
   CoreOobeHandler* core_handler_;
 
+  // Reference to NetworkDropdownHandler that handles interaction with
+  // network dropdown.
+  NetworkDropdownHandler* network_dropdown_handler_;
+
   // Screens actors. Note, OobeUI owns them via |handlers_|, not directly here.
-  UpdateScreenActor* update_screen_actor_;
+  UpdateScreenHandler* update_screen_handler_;
   NetworkScreenActor* network_screen_actor_;
   EulaScreenActor* eula_screen_actor_;
-  EnterpriseEnrollmentScreenActor* enterprise_enrollment_screen_actor_;
+  EnrollmentScreenActor* enrollment_screen_actor_;
   ResetScreenActor* reset_screen_actor_;
+  KioskAutolaunchScreenActor* autolaunch_screen_actor_;
+  KioskEnableScreenActor* kiosk_enable_screen_actor_;
   WrongHWIDScreenActor* wrong_hwid_screen_actor_;
   LocallyManagedUserCreationScreenHandler*
       locally_managed_user_creation_screen_actor_;
@@ -168,6 +160,13 @@ class OobeUI : public OobeDisplay,
 
   // Maps screen ids to JS screen names.
   std::vector<std::string> screen_names_;
+
+  // Flag that indicates whether JS part is fully loaded and ready to accept
+  // calls.
+  bool ready_;
+
+  // Callbacks to notify when JS part is fully loaded and ready to accept calls.
+  std::vector<base::Closure> ready_callbacks_;
 
   DISALLOW_COPY_AND_ASSIGN(OobeUI);
 };

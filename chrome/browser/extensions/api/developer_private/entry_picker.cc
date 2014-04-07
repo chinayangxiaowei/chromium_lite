@@ -5,14 +5,11 @@
 #include "chrome/browser/extensions/api/developer_private/entry_picker.h"
 
 #include "base/bind.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "chrome/browser/extensions/api/developer_private/developer_private_api.h"
-#include "chrome/browser/extensions/shell_window_registry.h"
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/ui/chrome_select_file_policy.h"
-#include "chrome/browser/ui/extensions/shell_window.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_view.h"
 #include "ui/shell_dialogs/select_file_dialog.h"
@@ -64,8 +61,9 @@ EntryPicker::EntryPicker(EntryPickerClient* client,
                                   last_directory,
                                   &info,
                                   file_type_index,
-                                  FILE_PATH_LITERAL(""),
-                                  owning_window, NULL);
+                                  base::FilePath::StringType(),
+                                  owning_window,
+                                  NULL);
 }
 
 EntryPicker::~EntryPicker() {}

@@ -3,13 +3,13 @@
 // found in the LICENSE file.
 
 #include "base/files/file_path.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/web_contents.h"
-#include "googleurl/src/gurl.h"
+#include "url/gurl.h"
 
 class IFrameTest : public InProcessBrowserTest {
  protected:

@@ -11,13 +11,12 @@
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/debug/trace_event.h"
-#include "base/file_util.h"
 #include "base/lazy_instance.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/memory/weak_ptr.h"
-#include "base/message_loop.h"
-#include "base/string_util.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/string_util.h"
 #include "content/browser/fileapi/chrome_blob_storage_context.h"
 #include "content/browser/histogram_internals_request_job.h"
 #include "content/browser/net/view_blob_internals_job_factory.h"
@@ -28,16 +27,19 @@
 #include "content/browser/webui/url_data_source_impl.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/content_browser_client.h"
+#include "content/public/browser/render_process_host.h"
+#include "content/public/browser/resource_request_info.h"
 #include "content/public/common/url_constants.h"
-#include "googleurl/src/url_util.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
 #include "net/http/http_response_headers.h"
+#include "net/http/http_status_code.h"
 #include "net/url_request/url_request.h"
 #include "net/url_request/url_request_context.h"
 #include "net/url_request/url_request_job.h"
 #include "net/url_request/url_request_job_factory.h"
-#include "webkit/appcache/view_appcache_internals_job.h"
+#include "url/url_util.h"
+#include "webkit/browser/appcache/view_appcache_internals_job.h"
 
 using appcache::AppCacheService;
 
@@ -61,11 +63,12 @@ bool SchemeIsInSchemes(const std::string& scheme,
 // is the hostname and |path| is the remaining portion of the URL.
 void URLToRequest(const GURL& url, std::string* source_name,
                   std::string* path) {
+  std::vector<std::string> additional_schemes;
   DCHECK(url.SchemeIs(chrome::kChromeDevToolsScheme) ||
          url.SchemeIs(chrome::kChromeUIScheme) ||
-         SchemeIsInSchemes(
-             url.scheme(),
-             GetContentClient()->browser()->GetAdditionalWebUISchemes()));
+         (GetContentClient()->browser()->GetAdditionalWebUISchemes(
+             &additional_schemes),
+          SchemeIsInSchemes(url.scheme(), additional_schemes)));
 
   if (!url.is_valid()) {
     NOTREACHED();
@@ -108,6 +111,7 @@ class URLRequestChromeJob : public net::URLRequestJob,
                            int buf_size,
                            int* bytes_read) OVERRIDE;
   virtual bool GetMimeType(std::string* mime_type) const OVERRIDE;
+  virtual int GetResponseCode() const OVERRIDE;
   virtual void GetResponseInfo(net::HttpResponseInfo* info) OVERRIDE;
 
   // Used to notify that the requested data's |mime_type| is ready.
@@ -209,7 +213,7 @@ URLRequestChromeJob::URLRequestChromeJob(net::URLRequest* request,
       deny_xframe_options_(true),
       is_incognito_(is_incognito),
       backend_(backend),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {
+      weak_factory_(this) {
   DCHECK(backend);
 }
 
@@ -220,10 +224,9 @@ URLRequestChromeJob::~URLRequestChromeJob() {
 void URLRequestChromeJob::Start() {
   // Start reading asynchronously so that all error reporting and data
   // callbacks happen as they would for network requests.
-  MessageLoop::current()->PostTask(
+  base::MessageLoop::current()->PostTask(
       FROM_HERE,
-      base::Bind(&URLRequestChromeJob::StartAsync,
-                 weak_factory_.GetWeakPtr()));
+      base::Bind(&URLRequestChromeJob::StartAsync, weak_factory_.GetWeakPtr()));
 
   TRACE_EVENT_ASYNC_BEGIN1("browser", "DataManager:Request", this, "URL",
       request_->url().possibly_invalid_spec());
@@ -238,8 +241,12 @@ bool URLRequestChromeJob::GetMimeType(std::string* mime_type) const {
   return !mime_type_.empty();
 }
 
+int URLRequestChromeJob::GetResponseCode() const {
+  return net::HTTP_OK;
+}
+
 void URLRequestChromeJob::GetResponseInfo(net::HttpResponseInfo* info) {
-  DCHECK(!info->headers);
+  DCHECK(!info->headers.get());
   // Set the headers so that requests serviced by ChromeURLDataManager return a
   // status code of 200. Without this they return a 0, which makes the status
   // indistiguishable from other error types. Instant relies on getting a 200.
@@ -278,7 +285,7 @@ void URLRequestChromeJob::DataAvailable(base::RefCountedMemory* bytes) {
     int bytes_read;
     if (pending_buf_.get()) {
       CHECK(pending_buf_->data());
-      CompleteRead(pending_buf_, pending_buf_size_, &bytes_read);
+      CompleteRead(pending_buf_.get(), pending_buf_size_, &bytes_read);
       pending_buf_ = NULL;
       NotifyReadComplete(bytes_read);
     }
@@ -373,7 +380,7 @@ class ChromeProtocolHandler
 
     // Next check for chrome://appcache-internals/, which uses its own job type.
     if (request->url().SchemeIs(chrome::kChromeUIScheme) &&
-        request->url().host() == chrome::kChromeUIAppCacheInternalsHost) {
+        request->url().host() == kChromeUIAppCacheInternalsHost) {
       return appcache::ViewAppCacheInternalsJobFactory::CreateJobForRequest(
           request, network_delegate, appcache_service_);
     }
@@ -387,14 +394,14 @@ class ChromeProtocolHandler
 #if defined(USE_TCMALLOC)
     // Next check for chrome://tcmalloc/, which uses its own job type.
     if (request->url().SchemeIs(chrome::kChromeUIScheme) &&
-        request->url().host() == chrome::kChromeUITcmallocHost) {
+        request->url().host() == kChromeUITcmallocHost) {
       return new TcmallocInternalsRequestJob(request, network_delegate);
     }
 #endif
 
     // Next check for chrome://histograms/, which uses its own job type.
     if (request->url().SchemeIs(chrome::kChromeUIScheme) &&
-        request->url().host() == chrome::kChromeUIHistogramHost) {
+        request->url().host() == kChromeUIHistogramHost) {
       return new HistogramInternalsRequestJob(request, network_delegate);
     }
 
@@ -402,6 +409,10 @@ class ChromeProtocolHandler
     return new URLRequestChromeJob(
         request, network_delegate,
         GetURLDataManagerForResourceContext(resource_context_), is_incognito_);
+  }
+
+  virtual bool IsSafeRedirectTarget(const GURL& location) const OVERRIDE {
+    return false;
   }
 
  private:
@@ -481,10 +492,11 @@ bool URLDataManagerBackend::StartRequest(const net::URLRequest* request,
   if (i == data_sources_.end())
     return false;
 
-  URLDataSourceImpl* source = i->second;
+  URLDataSourceImpl* source = i->second.get();
 
   if (!source->source()->ShouldServiceRequest(request))
     return false;
+  source->source()->WillServiceRequest(request, &path);
 
   // Save this request so we know where to send the data.
   RequestID request_id = next_request_id_++;
@@ -500,11 +512,17 @@ bool URLDataManagerBackend::StartRequest(const net::URLRequest* request,
   job->set_deny_xframe_options(
       source->source()->ShouldDenyXFrameOptions());
 
+  // Look up additional request info to pass down.
+  int render_process_id = -1;
+  int render_view_id = -1;
+  ResourceRequestInfo::GetRenderViewForRequest(request,
+                                               &render_process_id,
+                                               &render_view_id);
+
   // Forward along the request to the data source.
-  MessageLoop* target_message_loop =
+  base::MessageLoop* target_message_loop =
       source->source()->MessageLoopForRequestPath(path);
   if (!target_message_loop) {
-    bool is_incognito = job->is_incognito();
     job->MimeTypeAvailable(source->source()->GetMimeType(path));
     // Eliminate potentially dangling pointer to avoid future use.
     job = NULL;
@@ -513,7 +531,7 @@ bool URLDataManagerBackend::StartRequest(const net::URLRequest* request,
     // on for this path.  Call directly into it from this thread, the IO
     // thread.
     source->source()->StartDataRequest(
-        path, is_incognito,
+        path, render_process_id, render_view_id,
         base::Bind(&URLDataSourceImpl::SendResponse, source, request_id));
   } else {
     // URLRequestChromeJob should receive mime type before data. This
@@ -531,8 +549,8 @@ bool URLDataManagerBackend::StartRequest(const net::URLRequest* request,
     target_message_loop->PostTask(
         FROM_HERE,
         base::Bind(&URLDataManagerBackend::CallStartRequest,
-                   make_scoped_refptr(source), path, job->is_incognito(),
-                   request_id));
+                   make_scoped_refptr(source), path, render_process_id,
+                   render_view_id, request_id));
   }
   return true;
 }
@@ -540,11 +558,22 @@ bool URLDataManagerBackend::StartRequest(const net::URLRequest* request,
 void URLDataManagerBackend::CallStartRequest(
     scoped_refptr<URLDataSourceImpl> source,
     const std::string& path,
-    bool is_incognito,
+    int render_process_id,
+    int render_view_id,
     int request_id) {
+  if (BrowserThread::CurrentlyOn(BrowserThread::UI) &&
+      render_process_id != -1 &&
+      !RenderProcessHost::FromID(render_process_id)) {
+    // Make the request fail if its initiating renderer is no longer valid.
+    // This can happen when the IO thread posts this task just before the
+    // renderer shuts down.
+    source->SendResponse(request_id, NULL);
+    return;
+  }
   source->source()->StartDataRequest(
       path,
-      is_incognito,
+      render_process_id,
+      render_view_id,
       base::Bind(&URLDataSourceImpl::SendResponse, source, request_id));
 }
 

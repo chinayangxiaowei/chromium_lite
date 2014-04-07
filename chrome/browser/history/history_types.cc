@@ -69,8 +69,7 @@ VisitRow::VisitRow()
       url_id(0),
       referring_visit(0),
       transition(content::PAGE_TRANSITION_LINK),
-      segment_id(0),
-      is_indexed(false) {
+      segment_id(0) {
 }
 
 VisitRow::VisitRow(URLID arg_url_id,
@@ -83,8 +82,7 @@ VisitRow::VisitRow(URLID arg_url_id,
       visit_time(arg_visit_time),
       referring_visit(arg_referring_visit),
       transition(arg_transition),
-      segment_id(arg_segment_id),
-      is_indexed(false) {
+      segment_id(arg_segment_id) {
 }
 
 VisitRow::~VisitRow() {
@@ -92,18 +90,24 @@ VisitRow::~VisitRow() {
 
 // URLResult -------------------------------------------------------------------
 
-URLResult::URLResult() {
+URLResult::URLResult()
+    : blocked_visit_(false) {
 }
 
 URLResult::URLResult(const GURL& url, base::Time visit_time)
     : URLRow(url),
-      visit_time_(visit_time) {
+      visit_time_(visit_time),
+      blocked_visit_(false) {
 }
 
 URLResult::URLResult(const GURL& url,
                      const Snippet::MatchPositions& title_matches)
     : URLRow(url) {
   title_match_positions_ = title_matches;
+}
+URLResult::URLResult(const URLRow& url_row)
+    : URLRow(url_row),
+      blocked_visit_(false) {
 }
 
 URLResult::~URLResult() {
@@ -114,6 +118,12 @@ void URLResult::SwapResult(URLResult* other) {
   std::swap(visit_time_, other->visit_time_);
   snippet_.Swap(&other->snippet_);
   title_match_positions_.swap(other->title_match_positions_);
+  std::swap(blocked_visit_, other->blocked_visit_);
+}
+
+// static
+bool URLResult::CompareVisitTime(const URLResult& lhs, const URLResult& rhs) {
+  return lhs.visit_time() > rhs.visit_time();
 }
 
 // QueryResults ----------------------------------------------------------------
@@ -121,10 +131,7 @@ void URLResult::SwapResult(URLResult* other) {
 QueryResults::QueryResults() : reached_beginning_(false) {
 }
 
-QueryResults::~QueryResults() {
-  // Free all the URL objects.
-  STLDeleteContainerPointers(results_.begin(), results_.end());
-}
+QueryResults::~QueryResults() {}
 
 const size_t* QueryResults::MatchesForURL(const GURL& url,
                                           size_t* num_matches) const {
@@ -173,8 +180,6 @@ void QueryResults::DeleteRange(size_t begin, size_t end) {
   std::set<GURL> urls_modified;
   for (size_t i = begin; i <= end; i++) {
     urls_modified.insert(results_[i]->url());
-    delete results_[i];
-    results_[i] = NULL;
   }
 
   // Now just delete that range in the vector en masse (the STL ending is
@@ -239,7 +244,6 @@ void QueryResults::AdjustResultMap(size_t begin, size_t end, ptrdiff_t delta) {
 
 QueryOptions::QueryOptions()
     : max_count(0),
-      body_only(false),
       duplicate_policy(QueryOptions::REMOVE_ALL_DUPLICATES) {
 }
 
@@ -382,35 +386,10 @@ bool RowQualifiesAsSignificant(const URLRow& row,
 IconMapping::IconMapping()
     : mapping_id(0),
       icon_id(0),
-      icon_type(INVALID_ICON) {
+      icon_type(chrome::INVALID_ICON) {
 }
 
 IconMapping::~IconMapping() {}
-
-// FaviconBitmapResult --------------------------------------------------------
-
-FaviconBitmapResult::FaviconBitmapResult()
-    : expired(false),
-      icon_type(history::INVALID_ICON) {
-}
-
-FaviconBitmapResult::~FaviconBitmapResult() {
-}
-
-// FaviconImageResult ---------------------------------------------------------
-
-FaviconImageResult::FaviconImageResult() {
-}
-
-FaviconImageResult::~FaviconImageResult() {
-}
-
-// FaviconSizes --------------------------------------------------------------
-
-const FaviconSizes& GetDefaultFaviconSizes() {
-  CR_DEFINE_STATIC_LOCAL(FaviconSizes, kDefaultFaviconSizes, ());
-  return kDefaultFaviconSizes;
-}
 
 // FaviconBitmapIDSize ---------------------------------------------------------
 
@@ -429,14 +408,6 @@ FaviconBitmap::FaviconBitmap()
 }
 
 FaviconBitmap::~FaviconBitmap() {
-}
-
-// ImportedFaviconUsage --------------------------------------------------------
-
-ImportedFaviconUsage::ImportedFaviconUsage() {
-}
-
-ImportedFaviconUsage::~ImportedFaviconUsage() {
 }
 
 // VisitDatabaseObserver -------------------------------------------------------

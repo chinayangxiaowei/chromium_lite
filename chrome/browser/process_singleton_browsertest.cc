@@ -12,12 +12,13 @@
 
 #include "base/bind.h"
 #include "base/command_line.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/ref_counted.h"
 #include "base/path_service.h"
-#include "base/process_util.h"
+#include "base/process/kill.h"
+#include "base/process/launch.h"
+#include "base/process/process_iterator.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/test/test_timeouts.h"
 #include "base/threading/thread.h"
@@ -253,7 +254,7 @@ IN_PROC_BROWSER_TEST_F(ProcessSingletonTest, MAYBE_StartupRaceCondition) {
       chrome_starters_[i]->Reset();
 
       ASSERT_TRUE(chrome_starter_threads_[i]->IsRunning());
-      ASSERT_NE(static_cast<MessageLoop*>(NULL),
+      ASSERT_NE(static_cast<base::MessageLoop*>(NULL),
                 chrome_starter_threads_[i]->message_loop());
 
       chrome_starter_threads_[i]->message_loop()->PostTask(

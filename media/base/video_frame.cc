@@ -10,9 +10,10 @@
 #include "base/callback_helpers.h"
 #include "base/logging.h"
 #include "base/memory/aligned_memory.h"
-#include "base/string_piece.h"
+#include "base/strings/string_piece.h"
 #include "media/base/limits.h"
 #include "media/base/video_util.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 
 namespace media {
 
@@ -31,13 +32,43 @@ scoped_refptr<VideoFrame> VideoFrame::CreateFrame(
       frame->AllocateRGB(4u);
       break;
     case VideoFrame::YV12:
+    case VideoFrame::YV12A:
     case VideoFrame::YV16:
+    case VideoFrame::I420:
       frame->AllocateYUV();
       break;
     default:
       LOG(FATAL) << "Unsupported frame format: " << format;
   }
   return frame;
+}
+
+// static
+std::string VideoFrame::FormatToString(VideoFrame::Format format) {
+  switch (format) {
+    case VideoFrame::INVALID:
+      return "INVALID";
+    case VideoFrame::RGB32:
+      return "RGB32";
+    case VideoFrame::YV12:
+      return "YV12";
+    case VideoFrame::YV16:
+      return "YV16";
+    case VideoFrame::EMPTY:
+      return "EMPTY";
+    case VideoFrame::I420:
+      return "I420";
+    case VideoFrame::NATIVE_TEXTURE:
+      return "NATIVE_TEXTURE";
+#if defined(GOOGLE_TV)
+    case VideoFrame::HOLE:
+      return "HOLE";
+#endif
+    case VideoFrame::YV12A:
+      return "YV12A";
+  }
+  NOTREACHED() << "Invalid videoframe format provided: " << format;
+  return "";
 }
 
 // static
@@ -62,7 +93,7 @@ bool VideoFrame::IsValidConfig(VideoFrame::Format format,
 
 // static
 scoped_refptr<VideoFrame> VideoFrame::WrapNativeTexture(
-    uint32 texture_id,
+    const scoped_refptr<MailboxHolder>& mailbox_holder,
     uint32 texture_target,
     const gfx::Size& coded_size,
     const gfx::Rect& visible_rect,
@@ -72,17 +103,48 @@ scoped_refptr<VideoFrame> VideoFrame::WrapNativeTexture(
     const base::Closure& no_longer_needed_cb) {
   scoped_refptr<VideoFrame> frame(new VideoFrame(
       NATIVE_TEXTURE, coded_size, visible_rect, natural_size, timestamp));
-  frame->texture_id_ = texture_id;
+  frame->texture_mailbox_holder_ = mailbox_holder;
   frame->texture_target_ = texture_target;
   frame->read_pixels_cb_ = read_pixels_cb;
   frame->no_longer_needed_cb_ = no_longer_needed_cb;
+
   return frame;
 }
 
-void VideoFrame::ReadPixelsFromNativeTexture(void* pixels) {
+void VideoFrame::ReadPixelsFromNativeTexture(const SkBitmap& pixels) {
   DCHECK_EQ(format_, NATIVE_TEXTURE);
   if (!read_pixels_cb_.is_null())
     read_pixels_cb_.Run(pixels);
+}
+
+// static
+scoped_refptr<VideoFrame> VideoFrame::WrapExternalSharedMemory(
+    Format format,
+    const gfx::Size& coded_size,
+    const gfx::Rect& visible_rect,
+    const gfx::Size& natural_size,
+    uint8* data,
+    base::SharedMemoryHandle handle,
+    base::TimeDelta timestamp,
+    const base::Closure& no_longer_needed_cb) {
+  switch (format) {
+    case I420: {
+      scoped_refptr<VideoFrame> frame(new VideoFrame(
+          format, coded_size, visible_rect, natural_size, timestamp));
+      frame->shared_memory_handle_ = handle;
+      frame->strides_[kYPlane] = coded_size.width();
+      frame->strides_[kUPlane] = coded_size.width() / 2;
+      frame->strides_[kVPlane] = coded_size.width() / 2;
+      frame->data_[kYPlane] = data;
+      frame->data_[kUPlane] = data + coded_size.GetArea();
+      frame->data_[kVPlane] = data + (coded_size.GetArea() * 5 / 4);
+      frame->no_longer_needed_cb_ = no_longer_needed_cb;
+      return frame;
+    }
+    default:
+      NOTIMPLEMENTED();
+      return NULL;
+  }
 }
 
 // static
@@ -91,8 +153,12 @@ scoped_refptr<VideoFrame> VideoFrame::WrapExternalYuvData(
     const gfx::Size& coded_size,
     const gfx::Rect& visible_rect,
     const gfx::Size& natural_size,
-    int32 y_stride, int32 u_stride, int32 v_stride,
-    uint8* y_data, uint8* u_data, uint8* v_data,
+    int32 y_stride,
+    int32 u_stride,
+    int32 v_stride,
+    uint8* y_data,
+    uint8* u_data,
+    uint8* v_data,
     base::TimeDelta timestamp,
     const base::Closure& no_longer_needed_cb) {
   DCHECK(format == YV12 || format == YV16 || format == I420) << format;
@@ -123,7 +189,7 @@ scoped_refptr<VideoFrame> VideoFrame::CreateColorFrame(
   DCHECK(IsValidConfig(VideoFrame::YV12, size, gfx::Rect(size), size));
   scoped_refptr<VideoFrame> frame = VideoFrame::CreateFrame(
       VideoFrame::YV12, size, gfx::Rect(size), size, timestamp);
-  FillYUV(frame, y, u, v);
+  FillYUV(frame.get(), y, u, v);
   return frame;
 }
 
@@ -165,9 +231,11 @@ size_t VideoFrame::NumPlanes(Format format) {
       return 1;
     case VideoFrame::YV12:
     case VideoFrame::YV16:
-      return 3;
-    case VideoFrame::EMPTY:
     case VideoFrame::I420:
+      return 3;
+    case VideoFrame::YV12A:
+      return 4;
+    case VideoFrame::EMPTY:
     case VideoFrame::INVALID:
       break;
   }
@@ -203,7 +271,8 @@ void VideoFrame::AllocateRGB(size_t bytes_per_pixel) {
 }
 
 void VideoFrame::AllocateYUV() {
-  DCHECK(format_ == VideoFrame::YV12 || format_ == VideoFrame::YV16);
+  DCHECK(format_ == VideoFrame::YV12 || format_ == VideoFrame::YV16 ||
+         format_ == VideoFrame::YV12A || format_ == VideoFrame::I420);
   // Align Y rows at least at 16 byte boundaries.  The stride for both
   // YV12 and YV16 is 1/2 of the stride of Y.  For YV12, every row of bytes for
   // U and V applies to two rows of Y (one byte of UV for 4 bytes of Y), so in
@@ -212,7 +281,9 @@ void VideoFrame::AllocateYUV() {
   // YV16. We also round the height of the surface allocated to be an even
   // number to avoid any potential of faulting by code that attempts to access
   // the Y values of the final row, but assumes that the last row of U & V
-  // applies to a full two rows of Y.
+  // applies to a full two rows of Y. YV12A is the same as YV12, but with an
+  // additional alpha plane that has the same size and alignment as the Y plane.
+
   size_t y_stride = RoundUp(row_bytes(VideoFrame::kYPlane),
                             kFrameSizeAlignment);
   size_t uv_stride = RoundUp(row_bytes(VideoFrame::kUPlane),
@@ -221,9 +292,14 @@ void VideoFrame::AllocateYUV() {
   // and then the size needs to be a multiple of two macroblocks (vertically).
   // See libavcodec/utils.c:avcodec_align_dimensions2().
   size_t y_height = RoundUp(coded_size_.height(), kFrameSizeAlignment * 2);
-  size_t uv_height = format_ == VideoFrame::YV12 ? y_height / 2 : y_height;
+  size_t uv_height =
+      (format_ == VideoFrame::YV12 || format_ == VideoFrame::YV12A ||
+       format_ == VideoFrame::I420)
+          ? y_height / 2
+          : y_height;
   size_t y_bytes = y_height * y_stride;
   size_t uv_bytes = uv_height * uv_stride;
+  size_t a_bytes = format_ == VideoFrame::YV12A ? y_bytes : 0;
 
   // The extra line of UV being allocated is because h264 chroma MC
   // overreads by one line in some cases, see libavcodec/utils.c:
@@ -231,7 +307,7 @@ void VideoFrame::AllocateYUV() {
   // put_h264_chroma_mc4_ssse3().
   uint8* data = reinterpret_cast<uint8*>(
       base::AlignedAlloc(
-          y_bytes + (uv_bytes * 2 + uv_stride) + kFrameSizePadding,
+          y_bytes + (uv_bytes * 2 + uv_stride) + a_bytes + kFrameSizePadding,
           kFrameAddressAlignment));
   no_longer_needed_cb_ = base::Bind(&ReleaseData, data);
   COMPILE_ASSERT(0 == VideoFrame::kYPlane, y_plane_data_must_be_index_0);
@@ -241,6 +317,10 @@ void VideoFrame::AllocateYUV() {
   strides_[VideoFrame::kYPlane] = y_stride;
   strides_[VideoFrame::kUPlane] = uv_stride;
   strides_[VideoFrame::kVPlane] = uv_stride;
+  if (format_ == YV12A) {
+    data_[VideoFrame::kAPlane] = data + y_bytes + (2 * uv_bytes);
+    strides_[VideoFrame::kAPlane] = y_stride;
+  }
 }
 
 VideoFrame::VideoFrame(VideoFrame::Format format,
@@ -252,8 +332,8 @@ VideoFrame::VideoFrame(VideoFrame::Format format,
       coded_size_(coded_size),
       visible_rect_(visible_rect),
       natural_size_(natural_size),
-      texture_id_(0),
       texture_target_(0),
+      shared_memory_handle_(base::SharedMemory::NULLHandle()),
       timestamp_(timestamp) {
   memset(&strides_, 0, sizeof(strides_));
   memset(&data_, 0, sizeof(data_));
@@ -282,8 +362,13 @@ int VideoFrame::row_bytes(size_t plane) const {
       return width * 4;
 
     // Planar, 8bpp.
+    case YV12A:
+      if (plane == kAPlane)
+        return width;
+    // Fallthrough.
     case YV12:
     case YV16:
+    case I420:
       if (plane == kYPlane)
         return width;
       return RoundUp(width, 2) / 2;
@@ -305,7 +390,12 @@ int VideoFrame::rows(size_t plane) const {
     case YV16:
       return height;
 
+    case YV12A:
+      if (plane == kAPlane)
+        return height;
+    // Fallthrough.
     case YV12:
+    case I420:
       if (plane == kYPlane)
         return height;
       return RoundUp(height, 2) / 2;
@@ -324,14 +414,19 @@ uint8* VideoFrame::data(size_t plane) const {
   return data_[plane];
 }
 
-uint32 VideoFrame::texture_id() const {
+const scoped_refptr<VideoFrame::MailboxHolder>& VideoFrame::texture_mailbox()
+    const {
   DCHECK_EQ(format_, NATIVE_TEXTURE);
-  return texture_id_;
+  return texture_mailbox_holder_;
 }
 
 uint32 VideoFrame::texture_target() const {
   DCHECK_EQ(format_, NATIVE_TEXTURE);
   return texture_target_;
+}
+
+base::SharedMemoryHandle VideoFrame::shared_memory_handle() const {
+  return shared_memory_handle_;
 }
 
 bool VideoFrame::IsEndOfStream() const {
@@ -348,6 +443,19 @@ void VideoFrame::HashFrameForTesting(base::MD5Context* context) {
           row_bytes(plane)));
     }
   }
+}
+
+VideoFrame::MailboxHolder::MailboxHolder(
+    const gpu::Mailbox& mailbox,
+    unsigned sync_point,
+    const TextureNoLongerNeededCallback& release_callback)
+    : mailbox_(mailbox),
+      sync_point_(sync_point),
+      release_callback_(release_callback) {}
+
+VideoFrame::MailboxHolder::~MailboxHolder() {
+  if (!release_callback_.is_null())
+    release_callback_.Run(sync_point_);
 }
 
 }  // namespace media

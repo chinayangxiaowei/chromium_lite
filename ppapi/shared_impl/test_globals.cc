@@ -8,11 +8,13 @@ namespace ppapi {
 
 TestGlobals::TestGlobals()
     : ppapi::PpapiGlobals(),
+      resource_tracker_(ResourceTracker::THREAD_SAFE),
       callback_tracker_(new CallbackTracker) {
 }
 
 TestGlobals::TestGlobals(PpapiGlobals::PerThreadForTest per_thread_for_test)
     : ppapi::PpapiGlobals(per_thread_for_test),
+      resource_tracker_(ResourceTracker::THREAD_SAFE),
       callback_tracker_(new CallbackTracker) {
 }
 
@@ -70,6 +72,10 @@ void TestGlobals::BroadcastLogWithSource(PP_Module module,
 }
 
 MessageLoopShared* TestGlobals::GetCurrentMessageLoop() {
+  return NULL;
+}
+
+base::TaskRunner* TestGlobals::GetFileTaskRunner(PP_Instance instance) {
   return NULL;
 }
 

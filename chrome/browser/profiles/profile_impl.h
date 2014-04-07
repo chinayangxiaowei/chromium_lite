@@ -14,14 +14,13 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/prefs/pref_change_registrar.h"
-#include "base/timer.h"
+#include "base/timer/timer.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_impl_io_data.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/host_zoom_map.h"
 
 class NetPrefObserver;
-class PrefRegistrySyncable;
 class PrefService;
 class PrefServiceSyncable;
 class SSLConfigServiceManager;
@@ -38,16 +37,17 @@ namespace base {
 class SequencedTaskRunner;
 }
 
-namespace content {
-class SpeechRecognitionPreferences;
-}
-
 namespace extensions {
 class ExtensionSystem;
 }
 
 namespace policy {
-class UserCloudPolicyManager;
+class CloudPolicyManager;
+class ProfilePolicyConnector;
+}
+
+namespace user_prefs {
+class refRegistrySyncable;
 }
 
 // The default profile implementation.
@@ -58,10 +58,10 @@ class ProfileImpl : public Profile {
 
   virtual ~ProfileImpl();
 
-  static void RegisterUserPrefs(PrefRegistrySyncable* registry);
+  static void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
 
   // content::BrowserContext implementation:
-  virtual base::FilePath GetPath() OVERRIDE;
+  virtual base::FilePath GetPath() const OVERRIDE;
   virtual content::DownloadManagerDelegate*
       GetDownloadManagerDelegate() OVERRIDE;
   virtual net::URLRequestContextGetter* GetRequestContext() OVERRIDE;
@@ -74,36 +74,38 @@ class ProfileImpl : public Profile {
       GetMediaRequestContextForStoragePartition(
           const base::FilePath& partition_path,
           bool in_memory) OVERRIDE;
+  virtual void RequestMIDISysExPermission(
+      int render_process_id,
+      int render_view_id,
+      const GURL& requesting_frame,
+      const MIDISysExPermissionCallback& callback) OVERRIDE;
   virtual content::ResourceContext* GetResourceContext() OVERRIDE;
   virtual content::GeolocationPermissionContext*
       GetGeolocationPermissionContext() OVERRIDE;
-  virtual content::SpeechRecognitionPreferences*
-      GetSpeechRecognitionPreferences() OVERRIDE;
   virtual quota::SpecialStoragePolicy* GetSpecialStoragePolicy() OVERRIDE;
 
   // Profile implementation:
   virtual scoped_refptr<base::SequencedTaskRunner> GetIOTaskRunner() OVERRIDE;
+  // Note that this implementation returns the Google-services username, if any,
+  // not the Chrome user's display name.
   virtual std::string GetProfileName() OVERRIDE;
   virtual bool IsOffTheRecord() const OVERRIDE;
   virtual Profile* GetOffTheRecordProfile() OVERRIDE;
   virtual void DestroyOffTheRecordProfile() OVERRIDE;
   virtual bool HasOffTheRecordProfile() OVERRIDE;
   virtual Profile* GetOriginalProfile() OVERRIDE;
+  virtual bool IsManaged() OVERRIDE;
   virtual history::TopSites* GetTopSites() OVERRIDE;
   virtual history::TopSites* GetTopSitesWithoutCreating() OVERRIDE;
   virtual ExtensionService* GetExtensionService() OVERRIDE;
   virtual ExtensionSpecialStoragePolicy*
       GetExtensionSpecialStoragePolicy() OVERRIDE;
-  virtual policy::ManagedModePolicyProvider*
-      GetManagedModePolicyProvider() OVERRIDE;
-  virtual policy::PolicyService* GetPolicyService() OVERRIDE;
   virtual PrefService* GetPrefs() OVERRIDE;
   virtual PrefService* GetOffTheRecordPrefs() OVERRIDE;
   virtual net::URLRequestContextGetter*
       GetRequestContextForExtensions() OVERRIDE;
   virtual net::SSLConfigService* GetSSLConfigService() OVERRIDE;
   virtual HostContentSettingsMap* GetHostContentSettingsMap() OVERRIDE;
-  virtual ProtocolHandlerRegistry* GetProtocolHandlerRegistry() OVERRIDE;
   virtual bool IsSameProfile(Profile* profile) OVERRIDE;
   virtual base::Time GetStartTime() const OVERRIDE;
   virtual net::URLRequestContextGetter* CreateRequestContext(
@@ -152,7 +154,7 @@ class ProfileImpl : public Profile {
               base::SequencedTaskRunner* sequenced_task_runner);
 
   // Does final initialization. Should be called after prefs were loaded.
-  void DoFinalInit(bool is_new_profile);
+  void DoFinalInit();
 
   void InitHostZoomMap();
 
@@ -189,6 +191,8 @@ class ProfileImpl : public Profile {
                           base::FilePath* cache_path,
                           int* max_size);
 
+  PrefProxyConfigTracker* CreateProxyConfigTracker();
+
   content::HostZoomMap::ZoomLevelChangedCallback zoom_callback_;
   PrefChangeRegistrar pref_change_registrar_;
 
@@ -201,24 +205,19 @@ class ProfileImpl : public Profile {
   //  that the declaration occurs AFTER things it depends on as destruction
   //  happens in reverse order of declaration.
 
+  // TODO(mnissler, joaodasilva): The |profile_policy_connector_| provides the
+  // PolicyService that the |prefs_| depend on, and must outlive |prefs_|.
+  // This can be removed once |prefs_| becomes a BrowserContextKeyedService too.
+  // |profile_policy_connector_| in turn depends on |cloud_policy_manager_|.
 #if defined(ENABLE_CONFIGURATION_POLICY)
-  // |prefs_| depends on |policy_service_|, which depends on
-  // |user_cloud_policy_manager_| and |managed_mode_policy_provider_|.
-  // TODO(bauerb, mnissler): Once |prefs_| is a ProfileKeyedService, these
-  // should become proper ProfileKeyedServices as well.
-#if !defined(OS_CHROMEOS)
-  scoped_ptr<policy::UserCloudPolicyManager> cloud_policy_manager_;
-#endif  // !defined(OS_CHROMEOS)
-#if defined(ENABLE_MANAGED_USERS)
-  scoped_ptr<policy::ManagedModePolicyProvider> managed_mode_policy_provider_;
-#endif  // defined(ENABLE_MANAGED_USERS)
-#endif  // defined(ENABLE_CONFIGURATION_POLICY)
-  scoped_ptr<policy::PolicyService> policy_service_;
+  scoped_ptr<policy::CloudPolicyManager> cloud_policy_manager_;
+#endif
+  scoped_ptr<policy::ProfilePolicyConnector> profile_policy_connector_;
 
   // Keep |prefs_| on top for destruction order because |extension_prefs_|,
   // |net_pref_observer_|, |io_data_| and others store pointers to |prefs_| and
   // shall be destructed first.
-  scoped_refptr<PrefRegistrySyncable> pref_registry_;
+  scoped_refptr<user_prefs::PrefRegistrySyncable> pref_registry_;
   scoped_ptr<PrefServiceSyncable> prefs_;
   scoped_ptr<PrefServiceSyncable> otr_prefs_;
   ProfileImplIOData::Handle io_data_;
@@ -258,16 +257,16 @@ class ProfileImpl : public Profile {
   // STOP!!!! DO NOT ADD ANY MORE ITEMS HERE!!!!
   //
   // Instead, make your Service/Manager/whatever object you're hanging off the
-  // Profile use our new ProfileKeyedServiceFactory system instead. You can
-  // find the design document here:
+  // Profile use our new BrowserContextKeyedServiceFactory system instead.
+  // You can find the design document here:
   //
   //   https://sites.google.com/a/chromium.org/dev/developers/design-documents/profile-architecture
   //
   // and you can read the raw headers here:
   //
-  //   chrome/browser/profile/profile_keyed_service.h
-  //   chrome/browser/profile/profile_keyed_service_factory.{h,cc}
-  //   chrome/browser/profile/profile_keyed_dependency_manager.{h,cc}
+  //   components/browser_context_keyed_service/browser_context_dependency_manager.{h,cc}
+  //   components/browser_context_keyed_service/browser_context_keyed_service.h
+  //   components/browser_context_keyed_service/browser_context_keyed_service_factory.{h,cc}
 
   Profile::Delegate* delegate_;
 

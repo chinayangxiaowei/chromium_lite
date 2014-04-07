@@ -8,18 +8,18 @@
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/platform_file.h"
-#include "base/process_util.h"
+#include "base/threading/sequenced_worker_pool.h"
 #include "base/values.h"
 #include "chrome/browser/extensions/api/messaging/native_messaging_host_manifest.h"
 #include "chrome/browser/extensions/api/messaging/native_process_launcher.h"
 #include "chrome/common/chrome_version_info.h"
 #include "chrome/common/extensions/features/feature.h"
 #include "extensions/common/constants.h"
-#include "googleurl/src/gurl.h"
 #include "net/base/file_stream.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
 #include "net/base/net_util.h"
+#include "url/gurl.h"
 
 namespace {
 
@@ -78,13 +78,14 @@ NativeMessageProcessHost::~NativeMessageProcessHost() {
 
 // static
 scoped_ptr<NativeMessageProcessHost> NativeMessageProcessHost::Create(
+    gfx::NativeView native_view,
     base::WeakPtr<Client> weak_client_ui,
     const std::string& source_extension_id,
     const std::string& native_host_name,
     int destination_port) {
   return CreateWithLauncher(weak_client_ui, source_extension_id,
                             native_host_name, destination_port,
-                            NativeProcessLauncher::CreateDefault());
+                            NativeProcessLauncher::CreateDefault(native_view));
 }
 
 // static
@@ -137,10 +138,18 @@ void NativeMessageProcessHost::OnHostProcessLaunched(
   }
 
   read_file_ = read_file;
+
+  scoped_refptr<base::TaskRunner> task_runner(
+      content::BrowserThread::GetBlockingPool()->
+          GetTaskRunnerWithShutdownBehavior(
+              base::SequencedWorkerPool::SKIP_ON_SHUTDOWN));
+
   read_stream_.reset(new net::FileStream(
-      read_file, base::PLATFORM_FILE_READ | base::PLATFORM_FILE_ASYNC, NULL));
+      read_file, base::PLATFORM_FILE_READ | base::PLATFORM_FILE_ASYNC, NULL,
+      task_runner));
   write_stream_.reset(new net::FileStream(
-      write_file, base::PLATFORM_FILE_WRITE | base::PLATFORM_FILE_ASYNC, NULL));
+      write_file, base::PLATFORM_FILE_WRITE | base::PLATFORM_FILE_ASYNC, NULL,
+      task_runner));
 
   WaitRead();
   DoWrite();
@@ -197,8 +206,8 @@ void NativeMessageProcessHost::WaitRead() {
   // would always be consuming one thread in the thread pool. On Windows
   // FileStream uses overlapped IO, so that optimization isn't necessary there.
 #if defined(OS_POSIX)
-  MessageLoopForIO::current()->WatchFileDescriptor(
-    read_file_, false /* persistent */, MessageLoopForIO::WATCH_READ,
+  base::MessageLoopForIO::current()->WatchFileDescriptor(
+    read_file_, false /* persistent */, base::MessageLoopForIO::WATCH_READ,
     &read_watcher_, this);
 #else  // defined(OS_POSIX)
   DoRead();
@@ -211,9 +220,9 @@ void NativeMessageProcessHost::DoRead() {
   while (!closed_ && !read_eof_ && !read_pending_) {
     read_buffer_ = new net::IOBuffer(kReadBufferSize);
     int result = read_stream_->Read(
-        read_buffer_, kReadBufferSize,
-        base::Bind(&NativeMessageProcessHost::OnRead,
-                   base::Unretained(this)));
+        read_buffer_.get(),
+        kReadBufferSize,
+        base::Bind(&NativeMessageProcessHost::OnRead, base::Unretained(this)));
     HandleReadResult(result);
   }
 }
@@ -281,18 +290,20 @@ void NativeMessageProcessHost::DoWrite() {
   DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::IO));
 
   while (!write_pending_ && !closed_) {
-    if (!current_write_buffer_ || !current_write_buffer_->BytesRemaining()) {
+    if (!current_write_buffer_.get() ||
+        !current_write_buffer_->BytesRemaining()) {
       if (write_queue_.empty())
         return;
       current_write_buffer_ = new net::DrainableIOBuffer(
-          write_queue_.front(), write_queue_.front()->size());
+          write_queue_.front().get(), write_queue_.front()->size());
       write_queue_.pop();
     }
 
-    int result = write_stream_->Write(
-        current_write_buffer_, current_write_buffer_->BytesRemaining(),
-        base::Bind(&NativeMessageProcessHost::OnWritten,
-                   base::Unretained(this)));
+    int result =
+        write_stream_->Write(current_write_buffer_.get(),
+                             current_write_buffer_->BytesRemaining(),
+                             base::Bind(&NativeMessageProcessHost::OnWritten,
+                                        base::Unretained(this)));
     HandleWriteResult(result);
   }
 }

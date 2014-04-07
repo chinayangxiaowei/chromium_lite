@@ -9,53 +9,41 @@ var sendRequest = require('sendRequest').sendRequest;
 var imageUtil = require('imageUtil');
 var lastError = require('lastError');
 
-function url_getter(context, key) {
-  var f = function() {
-    return this[key];
-  };
-  return f.bind(context);
-}
-
-function url_setter(context, key) {
+function image_data_setter(context, key) {
   var f = function(val) {
     this[key] = val;
   };
-  return f.bind(context);
+  return $Function.bind(f, context);
 }
 
 function replaceNotificationOptionURLs(notification_details, callback) {
   // A URL Spec is an object with the following keys:
   //  path: The resource to be downloaded.
+  //  width: (optional) The maximum width of the image to be downloaded.
+  //  height: (optional) The maximum height of the image to be downloaded.
   //  callback: A function to be called when the URL is complete. It
   //    should accept an ImageData object and set the appropriate
   //    field in the output of create.
 
-  // TODO(dewittj): Try to remove hard-coding.
-  // |iconUrl| is required.
-  var url_specs = [{
-    path: notification_details.iconUrl,
-    width: 80,
-    height: 80,
-    callback: url_setter(notification_details, 'iconUrl')
-  }];
-
-  // |secondIconUrl| is optional.
-  if (notification_details.secondIconUrl) {
-    url_specs.push({
-      path: notification_details.secondIconUrl,
+  // TODO(dewittj): Try to remove hard-coding of image sizes.
+  // |iconUrl| might be optional for notification updates.
+  var url_specs = [];
+  if (notification_details.iconUrl) {
+    $Array.push(url_specs, {
+      path: notification_details.iconUrl,
       width: 80,
       height: 80,
-      callback: url_setter(notification_details, 'secondIconUrl')
+      callback: image_data_setter(notification_details, 'iconBitmap')
     });
   }
 
   // |imageUrl| is optional.
   if (notification_details.imageUrl) {
-    url_specs.push({
+    $Array.push(url_specs, {
       path: notification_details.imageUrl,
-      width: 300,
-      height: 300,
-      callback: url_setter(notification_details, 'imageUrl')
+      width: 360,
+      height: 540,
+      callback: image_data_setter(notification_details, 'imageBitmap')
     });
   }
 
@@ -65,14 +53,19 @@ function replaceNotificationOptionURLs(notification_details, callback) {
     var num_buttons = button_list.length;
     for (var i = 0; i < num_buttons; i++) {
       if (button_list[i].iconUrl) {
-        url_specs.push({
+        $Array.push(url_specs, {
           path: button_list[i].iconUrl,
           width: 16,
           height: 16,
-          callback: url_setter(button_list[i], 'iconUrl')
+          callback: image_data_setter(button_list[i], 'iconBitmap')
         });
       }
     }
+  }
+
+  if (!url_specs.length) {
+    callback(true);
+    return;
   }
 
   var errors = 0;
@@ -95,7 +88,7 @@ function replaceNotificationOptionURLs(notification_details, callback) {
   });
 }
 
-function genHandle(failure_function) {
+function genHandle(name, failure_function) {
   return function(id, input_notification_details, callback) {
     // TODO(dewittj): Remove this hack. This is used as a way to deep
     // copy a complex JSON object.
@@ -109,19 +102,23 @@ function genHandle(failure_function) {
             that.definition.parameters);
         return;
       }
-      lastError.run('Unable to download all specified images.',
+      lastError.run(name,
+                    'Unable to download all specified images.',
+                    null,
                     failure_function, [callback, id])
     });
   };
 }
 
-var handleCreate = genHandle(function(callback, id) { callback(id); });
-var handleUpdate = genHandle(function(callback, id) { callback(false); });
+var handleCreate = genHandle('notifications.create',
+                             function(callback, id) { callback(id); });
+var handleUpdate = genHandle('notifications.update',
+                             function(callback, id) { callback(false); });
 
 var notificationsCustomHook = function(bindingsAPI, extensionId) {
   var apiFunctions = bindingsAPI.apiFunctions;
   apiFunctions.setHandleRequest('create', handleCreate);
-  apiFunctions.setHandleRequest('update', handleCreate);
+  apiFunctions.setHandleRequest('update', handleUpdate);
 };
 
 binding.registerCustomHook(notificationsCustomHook);

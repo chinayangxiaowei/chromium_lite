@@ -101,6 +101,8 @@
         'proxy/resource_message_test_sink.h',
         'shared_impl/test_globals.cc',
         'shared_impl/test_globals.h',
+        'shared_impl/unittest_utils.cc',
+        'shared_impl/unittest_utils.h',
       ],
     },
 
@@ -120,6 +122,14 @@
       'sources': [
         'proxy/ppapi_perftests.cc',
         'proxy/ppp_messaging_proxy_perftest.cc',
+      ],
+      'conditions': [
+        # See http://crbug.com/162998#c4 for why this is needed.
+        ['OS=="linux" and linux_use_tcmalloc==1', {
+          'dependencies': [
+            '../base/allocator/allocator.gyp:allocator',
+          ],
+        }],
       ],
     },
     {
@@ -142,15 +152,29 @@
         '../testing/gtest.gyp:gtest',
         '../ui/surface/surface.gyp:surface',
       ],
+      # For the nacl_http_response_headers_unittest below.
+      'include_dirs': [
+        '../ppapi',
+      ],
       'sources': [
         'proxy/run_all_unittests.cc',
 
         'host/resource_message_filter_unittest.cc',
+        # Piggy back on ppapi_unittests for a simple NaCl unittest,
+        # which must not have dependencies on anything other than stdlibs.
+        # We add the source file, not just the test to ensure that the object
+        # is built.  Otherwise, we would need to depend on the NaCl trusted
+        # plugin being built to build the object.
+        # TODO(jvoung): move this to unit_tests instead of ppapi_unittests
+        # once this moves into chrome.
+        'native_client/src/trusted/plugin/nacl_http_response_headers.cc',
+        'native_client/src/trusted/plugin/nacl_http_response_headers_unittest.cc',
         'proxy/device_enumeration_resource_helper_unittest.cc',
         'proxy/file_chooser_resource_unittest.cc',
         'proxy/flash_resource_unittest.cc',
         'proxy/mock_resource.cc',
         'proxy/mock_resource.h',
+        'proxy/pdf_resource_unittest.cc',
         'proxy/plugin_dispatcher_unittest.cc',
         'proxy/plugin_resource_tracker_unittest.cc',
         'proxy/plugin_var_tracker_unittest.cc',
@@ -159,8 +183,11 @@
         'proxy/ppp_instance_proxy_unittest.cc',
         'proxy/ppp_messaging_proxy_unittest.cc',
         'proxy/printing_resource_unittest.cc',
+        'proxy/raw_var_data_unittest.cc',
         'proxy/serialized_var_unittest.cc',
+        'proxy/talk_resource_unittest.cc',
         'proxy/websocket_resource_unittest.cc',
+        'shared_impl/proxy_lock_unittest.cc',
         'shared_impl/resource_tracker_unittest.cc',
         'shared_impl/thread_aware_callback_unittest.cc',
         'shared_impl/time_conversion_unittest.cc',
@@ -269,6 +296,16 @@
       ],
     },
     {
+      'target_name': 'ppapi_example_crxfs',
+      'dependencies': [
+        'ppapi_example_skeleton',
+        'ppapi.gyp:ppapi_cpp',
+      ],
+      'sources': [
+        'examples/crxfs/crxfs.cc',
+      ],
+    },
+    {
       'target_name': 'ppapi_example_audio',
       'dependencies': [
         'ppapi_example_skeleton',
@@ -351,6 +388,16 @@
       ],
     },
     {
+      'target_name': 'ppapi_example_scaling',
+      'dependencies': [
+        'ppapi_example_skeleton',
+        'ppapi.gyp:ppapi_cpp',
+      ],
+      'sources': [
+        'examples/scaling/scaling.cc',
+      ],
+    },
+    {
       'target_name': 'ppapi_example_scroll',
       'dependencies': [
         'ppapi_example_skeleton',
@@ -396,7 +443,6 @@
         'ppapi_example_skeleton',
         'ppapi.gyp:ppapi_cpp',
         'ppapi.gyp:ppapi_gles2',
-        'ppapi.gyp:ppapi_egl',
       ],
       'include_dirs': [
         'lib/gl/include',
@@ -411,7 +457,6 @@
         'ppapi_example_skeleton',
         'ppapi.gyp:ppapi_cpp',
         'ppapi.gyp:ppapi_gles2',
-        'ppapi.gyp:ppapi_egl',
       ],
       'include_dirs': [
         'lib/gl/include',
@@ -429,13 +474,22 @@
         'ppapi_example_skeleton',
         'ppapi.gyp:ppapi_cpp',
         'ppapi.gyp:ppapi_gles2',
-        'ppapi.gyp:ppapi_egl',
       ],
       'include_dirs': [
         'lib/gl/include',
       ],
       'sources': [
         'examples/video_capture/video_capture.cc',
+      ],
+    },
+    {
+      'target_name': 'ppapi_example_video_effects',
+      'dependencies': [
+        'ppapi_example_skeleton',
+        'ppapi.gyp:ppapi_cpp',
+      ],
+      'sources': [
+        'examples/video_effects/video_effects.cc',
       ],
     },
     {

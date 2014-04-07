@@ -28,18 +28,19 @@ class TestLauncherDelegate : public LauncherDelegate,
 
   void AddLauncherItem(aura::Window* window);
   void AddLauncherItem(aura::Window* window, LauncherItemStatus status);
+  void RemoveLauncherItemForWindow(aura::Window* window);
 
   static TestLauncherDelegate* instance() { return instance_; }
 
   // WindowObserver implementation
-  virtual void OnWillRemoveWindow(aura::Window* window) OVERRIDE;
+  virtual void OnWindowDestroying(aura::Window* window) OVERRIDE;
+  virtual void OnWindowHierarchyChanging(
+      const HierarchyChangeParams& params) OVERRIDE;
 
   // LauncherDelegate implementation.
-  virtual void OnBrowserShortcutClicked(int event_flags) OVERRIDE;
-  virtual void ItemClicked(const LauncherItem& item,
+  virtual void ItemSelected(const LauncherItem& item,
                            const ui::Event& event) OVERRIDE;
-  virtual int GetBrowserShortcutResourceId() OVERRIDE;
-  virtual string16 GetTitle(const LauncherItem& item) OVERRIDE;
+  virtual base::string16 GetTitle(const LauncherItem& item) OVERRIDE;
   virtual ui::MenuModel* CreateContextMenu(const LauncherItem& item,
                                            aura::RootWindow* root) OVERRIDE;
   virtual ash::LauncherMenuModel* CreateApplicationMenu(
@@ -48,6 +49,13 @@ class TestLauncherDelegate : public LauncherDelegate,
   virtual ash::LauncherID GetIDByWindow(aura::Window* window) OVERRIDE;
   virtual bool IsDraggable(const ash::LauncherItem& item) OVERRIDE;
   virtual bool ShouldShowTooltip(const LauncherItem& item) OVERRIDE;
+  virtual void OnLauncherCreated(Launcher* launcher) OVERRIDE;
+  virtual void OnLauncherDestroyed(Launcher* launcher) OVERRIDE;
+  virtual bool IsPerAppLauncher() OVERRIDE;
+  virtual LauncherID GetLauncherIDForAppID(const std::string& app_id) OVERRIDE;
+  virtual void PinAppWithID(const std::string& app_id) OVERRIDE;
+  virtual bool IsAppPinned(const std::string& app_id) OVERRIDE;
+  virtual void UnpinAppsWithID(const std::string& app_id) OVERRIDE;
 
  private:
   typedef std::map<aura::Window*, ash::LauncherID> WindowToID;
@@ -61,9 +69,6 @@ class TestLauncherDelegate : public LauncherDelegate,
 
   // Maps from window to the id we gave it.
   WindowToID window_to_id_;
-
-  // Parent windows we are watching.
-  ObservedWindows observed_windows_;
 
   DISALLOW_COPY_AND_ASSIGN(TestLauncherDelegate);
 };

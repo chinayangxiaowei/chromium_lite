@@ -4,25 +4,14 @@
 
 #include "chrome/browser/browsing_data/browsing_data_database_helper.h"
 
-#include "base/file_util.h"
-#include "base/message_loop.h"
 #include "chrome/test/base/testing_profile.h"
-#include "content/public/test/test_browser_thread.h"
+#include "content/public/test/test_browser_thread_bundle.h"
 #include "testing/gtest/include/gtest/gtest.h"
-
-using content::BrowserThread;
 
 namespace {
 
 class CannedBrowsingDataDatabaseHelperTest : public testing::Test {
- public:
-  CannedBrowsingDataDatabaseHelperTest()
-      : ui_thread_(BrowserThread::UI, &message_loop_) {
-  }
-
- protected:
-  MessageLoop message_loop_;
-  content::TestBrowserThread ui_thread_;
+  content::TestBrowserThreadBundle thread_bundle_;
 };
 
 TEST_F(CannedBrowsingDataDatabaseHelperTest, Empty) {
@@ -35,7 +24,7 @@ TEST_F(CannedBrowsingDataDatabaseHelperTest, Empty) {
       new CannedBrowsingDataDatabaseHelper(&profile));
 
   ASSERT_TRUE(helper->empty());
-  helper->AddDatabase(origin, db, "");
+  helper->AddDatabase(origin, db, std::string());
   ASSERT_FALSE(helper->empty());
   helper->Reset();
   ASSERT_TRUE(helper->empty());
@@ -52,9 +41,9 @@ TEST_F(CannedBrowsingDataDatabaseHelperTest, IgnoreExtensionsAndDevTools) {
       new CannedBrowsingDataDatabaseHelper(&profile));
 
   ASSERT_TRUE(helper->empty());
-  helper->AddDatabase(origin1, db, "");
+  helper->AddDatabase(origin1, db, std::string());
   ASSERT_TRUE(helper->empty());
-  helper->AddDatabase(origin2, db, "");
+  helper->AddDatabase(origin2, db, std::string());
   ASSERT_TRUE(helper->empty());
   helper->Reset();
   ASSERT_TRUE(helper->empty());

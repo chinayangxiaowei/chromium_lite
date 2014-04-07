@@ -62,22 +62,21 @@
 #include "base/file_util.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/path_service.h"
 #include "base/posix/eintr_wrapper.h"
-#include "base/process_util.h"
 #include "base/rand_util.h"
 #include "base/safe_strerror_posix.h"
 #include "base/sequenced_task_runner_helpers.h"
 #include "base/stl_util.h"
-#include "base/stringprintf.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
-#include "base/sys_string_conversions.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/sys_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/threading/platform_thread.h"
-#include "base/time.h"
-#include "base/timer.h"
-#include "base/utf_string_conversions.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
 #if defined(TOOLKIT_GTK)
 #include "chrome/browser/ui/gtk/process_singleton_dialog.h"
 #endif
@@ -406,16 +405,16 @@ bool ConnectSocket(ScopedSocket* socket,
 // This class sets up a listener on the singleton socket and handles parsing
 // messages that come in on the singleton socket.
 class ProcessSingleton::LinuxWatcher
-    : public MessageLoopForIO::Watcher,
-      public MessageLoop::DestructionObserver,
+    : public base::MessageLoopForIO::Watcher,
+      public base::MessageLoop::DestructionObserver,
       public base::RefCountedThreadSafe<ProcessSingleton::LinuxWatcher,
                                         BrowserThread::DeleteOnIOThread> {
  public:
   // A helper class to read message from an established socket.
-  class SocketReader : public MessageLoopForIO::Watcher {
+  class SocketReader : public base::MessageLoopForIO::Watcher {
    public:
     SocketReader(ProcessSingleton::LinuxWatcher* parent,
-                 MessageLoop* ui_message_loop,
+                 base::MessageLoop* ui_message_loop,
                  int fd)
         : parent_(parent),
           ui_message_loop_(ui_message_loop),
@@ -423,8 +422,8 @@ class ProcessSingleton::LinuxWatcher
           bytes_read_(0) {
       DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
       // Wait for reads.
-      MessageLoopForIO::current()->WatchFileDescriptor(
-          fd, true, MessageLoopForIO::WATCH_READ, &fd_reader_, this);
+      base::MessageLoopForIO::current()->WatchFileDescriptor(
+          fd, true, base::MessageLoopForIO::WATCH_READ, &fd_reader_, this);
       // If we haven't completed in a reasonable amount of time, give up.
       timer_.Start(FROM_HERE, base::TimeDelta::FromSeconds(kTimeoutInSeconds),
                    this, &SocketReader::CleanupAndDeleteSelf);
@@ -453,13 +452,13 @@ class ProcessSingleton::LinuxWatcher
       // We're deleted beyond this point.
     }
 
-    MessageLoopForIO::FileDescriptorWatcher fd_reader_;
+    base::MessageLoopForIO::FileDescriptorWatcher fd_reader_;
 
     // The ProcessSingleton::LinuxWatcher that owns us.
     ProcessSingleton::LinuxWatcher* const parent_;
 
     // A reference to the UI message loop.
-    MessageLoop* const ui_message_loop_;
+    base::MessageLoop* const ui_message_loop_;
 
     // The file descriptor we're reading.
     const int fd_;
@@ -478,7 +477,7 @@ class ProcessSingleton::LinuxWatcher
 
   // We expect to only be constructed on the UI thread.
   explicit LinuxWatcher(ProcessSingleton* parent)
-      : ui_message_loop_(MessageLoop::current()),
+      : ui_message_loop_(base::MessageLoop::current()),
         parent_(parent) {
   }
 
@@ -513,18 +512,18 @@ class ProcessSingleton::LinuxWatcher
     DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
     STLDeleteElements(&readers_);
 
-    MessageLoopForIO* ml = MessageLoopForIO::current();
+    base::MessageLoopForIO* ml = base::MessageLoopForIO::current();
     ml->RemoveDestructionObserver(this);
   }
 
   // Removes and deletes the SocketReader.
   void RemoveSocketReader(SocketReader* reader);
 
-  MessageLoopForIO::FileDescriptorWatcher fd_watcher_;
+  base::MessageLoopForIO::FileDescriptorWatcher fd_watcher_;
 
   // A reference to the UI message loop (i.e., the message loop we were
   // constructed on).
-  MessageLoop* ui_message_loop_;
+  base::MessageLoop* ui_message_loop_;
 
   // The ProcessSingleton that owns us.
   ProcessSingleton* const parent_;
@@ -556,27 +555,17 @@ void ProcessSingleton::LinuxWatcher::OnFileCanReadWithoutBlocking(int fd) {
 void ProcessSingleton::LinuxWatcher::StartListening(int socket) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
   // Watch for client connections on this socket.
-  MessageLoopForIO* ml = MessageLoopForIO::current();
+  base::MessageLoopForIO* ml = base::MessageLoopForIO::current();
   ml->AddDestructionObserver(this);
-  ml->WatchFileDescriptor(socket, true, MessageLoopForIO::WATCH_READ,
+  ml->WatchFileDescriptor(socket, true, base::MessageLoopForIO::WATCH_READ,
                           &fd_watcher_, this);
 }
 
 void ProcessSingleton::LinuxWatcher::HandleMessage(
     const std::string& current_dir, const std::vector<std::string>& argv,
     SocketReader* reader) {
-  DCHECK(ui_message_loop_ == MessageLoop::current());
+  DCHECK(ui_message_loop_ == base::MessageLoop::current());
   DCHECK(reader);
-  // If locked, it means we are not ready to process this message because
-  // we are probably in a first run critical phase.
-  if (parent_->locked()) {
-    DLOG(WARNING) << "Browser is locked";
-    parent_->saved_startup_messages_.push_back(
-        std::make_pair(argv, base::FilePath(current_dir)));
-    // Send back "ACK" message to prevent the client process from starting up.
-    reader->FinishWithACK(kACKToken, arraysize(kACKToken) - 1);
-    return;
-  }
 
   if (parent_->notification_callback_.Run(CommandLine(argv),
                                           base::FilePath(current_dir))) {
@@ -692,11 +681,12 @@ void ProcessSingleton::LinuxWatcher::SocketReader::FinishWithACK(
 ///////////////////////////////////////////////////////////////////////////////
 // ProcessSingleton
 //
-ProcessSingleton::ProcessSingleton(const base::FilePath& user_data_dir)
-    : locked_(false),
-      foreground_window_(NULL),
+ProcessSingleton::ProcessSingleton(
+    const base::FilePath& user_data_dir,
+    const NotificationCallback& notification_callback)
+    : notification_callback_(notification_callback),
       current_pid_(base::GetCurrentProcId()),
-      ALLOW_THIS_IN_INITIALIZER_LIST(watcher_(new LinuxWatcher(this))) {
+      watcher_(new LinuxWatcher(this)) {
   socket_path_ = user_data_dir.Append(chrome::kSingletonSocketFilename);
   lock_path_ = user_data_dir.Append(chrome::kSingletonLockFilename);
   cookie_path_ = user_data_dir.Append(chrome::kSingletonCookieFilename);
@@ -835,24 +825,21 @@ ProcessSingleton::NotifyResult ProcessSingleton::NotifyOtherProcessWithTimeout(
   return PROCESS_NOTIFIED;
 }
 
-ProcessSingleton::NotifyResult ProcessSingleton::NotifyOtherProcessOrCreate(
-    const NotificationCallback& notification_callback) {
+ProcessSingleton::NotifyResult ProcessSingleton::NotifyOtherProcessOrCreate() {
   return NotifyOtherProcessWithTimeoutOrCreate(
       *CommandLine::ForCurrentProcess(),
-      notification_callback,
       kTimeoutInSeconds);
 }
 
 ProcessSingleton::NotifyResult
 ProcessSingleton::NotifyOtherProcessWithTimeoutOrCreate(
     const CommandLine& command_line,
-    const NotificationCallback& notification_callback,
     int timeout_seconds) {
   NotifyResult result = NotifyOtherProcessWithTimeout(command_line,
                                                       timeout_seconds, true);
   if (result != PROCESS_NONE)
     return result;
-  if (Create(notification_callback))
+  if (Create())
     return PROCESS_NONE;
   // If the Create() failed, try again to notify. (It could be that another
   // instance was starting at the same time and managed to grab the lock before
@@ -879,8 +866,7 @@ void ProcessSingleton::DisablePromptForTesting() {
   g_disable_prompt = true;
 }
 
-bool ProcessSingleton::Create(
-    const NotificationCallback& notification_callback) {
+bool ProcessSingleton::Create() {
   int sock;
   sockaddr_un addr;
 
@@ -936,8 +922,6 @@ bool ProcessSingleton::Create(
 
   if (listen(sock, 5) < 0)
     NOTREACHED() << "listen failed: " << safe_strerror(errno);
-
-  notification_callback_ = notification_callback;
 
   DCHECK(BrowserThread::IsMessageLoopValid(BrowserThread::IO));
   BrowserThread::PostTask(
@@ -999,4 +983,3 @@ void ProcessSingleton::KillProcess(int pid) {
   DCHECK(rv == 0 || errno == ESRCH) << "Error killing process: "
                                     << safe_strerror(errno);
 }
-

@@ -8,10 +8,7 @@
 #include "content/public/common/page_transition_types.h"
 
 class GURL;
-
-namespace webkit_glue {
 struct WebPreferences;
-}
 
 namespace content {
 
@@ -58,7 +55,6 @@ class WebContentsTester {
       BrowserContext* browser_context,
       SiteInstance* instance);
 
-  // Deprecated.  Creates a WebContents enabled for testing, that
   // Simulates the appropriate RenderView (pending if any, current otherwise)
   // sending a navigate notification for the NavigationController pending entry.
   virtual void CommitPendingNavigation() = 0;
@@ -91,7 +87,7 @@ class WebContentsTester {
       PageTransition transition) = 0;
 
   // Promote GetWebkitPrefs to public.
-  virtual webkit_glue::WebPreferences TestGetWebkitPrefs() = 0;
+  virtual WebPreferences TestGetWebkitPrefs() = 0;
 };
 
 }  // namespace content

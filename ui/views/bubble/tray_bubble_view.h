@@ -98,7 +98,8 @@ class VIEWS_EXPORT TrayBubbleView : public views::BubbleDelegateView {
     bool can_activate;
     bool close_on_deactivate;
     SkColor arrow_color;
-    views::BubbleBorder::ArrowLocation arrow_location;
+    bool first_item_has_no_margin;
+    views::BubbleBorder::Arrow arrow;
     int arrow_offset;
     views::BubbleBorder::ArrowPaintType arrow_paint_type;
     views::BubbleBorder::Shadow shadow;
@@ -153,6 +154,7 @@ class VIEWS_EXPORT TrayBubbleView : public views::BubbleDelegateView {
   // Overridden from views::View.
   virtual gfx::Size GetPreferredSize() OVERRIDE;
   virtual gfx::Size GetMaximumSize() OVERRIDE;
+  virtual int GetHeightForWidth(int width) OVERRIDE;
   virtual void OnMouseEntered(const ui::MouseEvent& event) OVERRIDE;
   virtual void OnMouseExited(const ui::MouseEvent& event) OVERRIDE;
   virtual void GetAccessibleState(ui::AccessibleViewState* state) OVERRIDE;
@@ -168,9 +170,8 @@ class VIEWS_EXPORT TrayBubbleView : public views::BubbleDelegateView {
 
   // Overridden from views::View.
   virtual void ChildPreferredSizeChanged(View* child) OVERRIDE;
-  virtual void ViewHierarchyChanged(bool is_add,
-                                    views::View* parent,
-                                    views::View* child) OVERRIDE;
+  virtual void ViewHierarchyChanged(
+      const ViewHierarchyChangedDetails& details) OVERRIDE;
 
  private:
   InitParams params_;

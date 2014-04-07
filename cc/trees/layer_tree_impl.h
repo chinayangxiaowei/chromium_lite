@@ -5,9 +5,15 @@
 #ifndef CC_TREES_LAYER_TREE_IMPL_H_
 #define CC_TREES_LAYER_TREE_IMPL_H_
 
-#include "base/hash_tables.h"
+#include <list>
+#include <string>
+#include <vector>
+
+#include "base/containers/hash_tables.h"
 #include "base/values.h"
 #include "cc/layers/layer_impl.h"
+#include "cc/resources/ui_resource_client.h"
+#include "ui/base/latency_info.h"
 
 #if defined(COMPILER_GCC)
 namespace BASE_HASH_NAMESPACE {
@@ -17,8 +23,8 @@ struct hash<cc::LayerImpl*> {
     return hash<size_t>()(reinterpret_cast<size_t>(ptr));
   }
 };
-} // namespace BASE_HASH_NAMESPACE
-#endif // COMPILER
+}  // namespace BASE_HASH_NAMESPACE
+#endif  // COMPILER
 
 namespace cc {
 
@@ -34,14 +40,14 @@ class OutputSurface;
 class PaintTimeCounter;
 class Proxy;
 class ResourceProvider;
-class ScrollbarLayerImpl;
 class TileManager;
 struct RendererCapabilities;
+struct UIResourceRequest;
+
+typedef std::list<UIResourceRequest> UIResourceRequestQueue;
 
 class CC_EXPORT LayerTreeImpl {
  public:
-  typedef std::vector<LayerImpl*> LayerList;
-
   static scoped_ptr<LayerTreeImpl> create(
       LayerTreeHostImpl* layer_tree_host_impl) {
     return make_scoped_ptr(new LayerTreeImpl(layer_tree_host_impl));
@@ -65,7 +71,9 @@ class CC_EXPORT LayerTreeImpl {
   LayerImpl* FindPendingTreeLayerById(int id);
   int MaxTextureSize() const;
   bool PinchGestureActive() const;
-  base::TimeTicks CurrentFrameTime() const;
+  base::TimeTicks CurrentFrameTimeTicks() const;
+  base::Time CurrentFrameTime() const;
+  base::TimeTicks CurrentPhysicalTimeTicks() const;
   void SetNeedsCommit();
 
   // Tree specific methods exposed to layer-impl tree.
@@ -77,8 +85,6 @@ class CC_EXPORT LayerTreeImpl {
   const LayerTreeDebugState& debug_state() const;
   float device_scale_factor() const;
   gfx::Size device_viewport_size() const;
-  gfx::Size layout_viewport_size() const;
-  std::string layer_tree_as_text() const;
   DebugRectHistory* debug_rect_history() const;
   scoped_ptr<base::Value> AsValue() const;
 
@@ -88,7 +94,7 @@ class CC_EXPORT LayerTreeImpl {
   void SetRootLayer(scoped_ptr<LayerImpl>);
   scoped_ptr<LayerImpl> DetachLayerTree();
 
-  void PushPropertiesTo(LayerTreeImpl*);
+  void PushPropertiesTo(LayerTreeImpl* tree_impl);
 
   int source_frame_number() const { return source_frame_number_; }
   void set_source_frame_number(int frame_number) {
@@ -101,13 +107,14 @@ class CC_EXPORT LayerTreeImpl {
   }
 
   LayerImpl* RootScrollLayer() const;
-  LayerImpl* RootClipLayer() const;
+  LayerImpl* RootContainerLayer() const;
   LayerImpl* CurrentlyScrollingLayer() const;
   void SetCurrentlyScrollingLayer(LayerImpl* layer);
   void ClearCurrentlyScrollingLayer();
 
   void FindRootScrollLayer();
   void UpdateMaxScrollOffset();
+  void ApplySentScrollAndScaleDeltas();
 
   SkColor background_color() const { return background_color_; }
   void set_background_color(SkColor color) { background_color_ = color; }
@@ -118,14 +125,6 @@ class CC_EXPORT LayerTreeImpl {
   void set_has_transparent_background(bool transparent) {
     has_transparent_background_ = transparent;
   }
-
-  enum UpdateDrawPropertiesReason {
-    UPDATE_PENDING_TREE,
-    UPDATE_ACTIVE_TREE,
-    UPDATE_ACTIVE_TREE_FOR_DRAW
-  };
-
-  gfx::Transform ImplTransform() const;
 
   void SetPageScaleFactorAndLimits(float page_scale_factor,
       float min_page_scale_factor, float max_page_scale_factor);
@@ -142,8 +141,10 @@ class CC_EXPORT LayerTreeImpl {
   }
   float sent_page_scale_delta() const { return sent_page_scale_delta_; }
 
-  // Updates draw properties and render surface layer list
-  void UpdateDrawProperties(UpdateDrawPropertiesReason reason);
+  // Updates draw properties and render surface layer list, as well as tile
+  // priorities.
+  void UpdateDrawProperties();
+
   void set_needs_update_draw_properties() {
     needs_update_draw_properties_ = true;
   }
@@ -154,11 +155,9 @@ class CC_EXPORT LayerTreeImpl {
   void set_needs_full_tree_sync(bool needs) { needs_full_tree_sync_ = needs; }
   bool needs_full_tree_sync() const { return needs_full_tree_sync_; }
 
-  void ClearRenderSurfaces();
+  void set_ui_resource_request_queue(const UIResourceRequestQueue& queue);
 
-  bool AreVisibleResourcesReady() const;
-
-  const LayerList& RenderSurfaceLayerList() const;
+  const LayerImplList& RenderSurfaceLayerList() const;
 
   // These return the size of the root scrollable area and the size of
   // the user-visible scrolling viewport, in CSS layout coordinates.
@@ -190,25 +189,28 @@ class CC_EXPORT LayerTreeImpl {
   // Useful for debug assertions, probably shouldn't be used for anything else.
   Proxy* proxy() const;
 
-  void SetPinchZoomHorizontalLayerId(int layer_id);
-  void SetPinchZoomVerticalLayerId(int layer_id);
+  void SetRootLayerScrollOffsetDelegate(
+      LayerScrollOffsetDelegate* root_layer_scroll_offset_delegate);
 
-  void DidBeginScroll();
-  void DidUpdateScroll();
-  void DidEndScroll();
+  void SetLatencyInfo(const ui::LatencyInfo& latency_info);
+  const ui::LatencyInfo& GetLatencyInfo();
+  void ClearLatencyInfo();
+
+  void WillModifyTilePriorities();
+
+  ResourceProvider::ResourceId ResourceIdForUIResource(UIResourceId uid) const;
+  void ProcessUIResourceRequestQueue();
+
+  void AddLayerWithCopyOutputRequest(LayerImpl* layer);
+  void RemoveLayerWithCopyOutputRequest(LayerImpl* layer);
+  const std::vector<LayerImpl*> LayersWithCopyOutputRequest() const;
 
  protected:
-  LayerTreeImpl(LayerTreeHostImpl* layer_tree_host_impl);
+  explicit LayerTreeImpl(LayerTreeHostImpl* layer_tree_host_impl);
 
   void UpdateSolidColorScrollbars();
 
-  // Hide existence of pinch-zoom scrollbars.
-  void UpdatePinchZoomScrollbars();
-  void FadeInPinchZoomScrollbars();
-  void FadeOutPinchZoomScrollbars();
-  ScrollbarLayerImpl* PinchZoomScrollbarHorizontal();
-  ScrollbarLayerImpl* PinchZoomScrollbarVertical();
-  bool HasPinchZoomScrollbars() const;
+  void UpdateRootScrollLayerSizeDelta();
 
   LayerTreeHostImpl* layer_tree_host_impl_;
   int source_frame_number_;
@@ -216,11 +218,9 @@ class CC_EXPORT LayerTreeImpl {
   HeadsUpDisplayLayerImpl* hud_layer_;
   LayerImpl* root_scroll_layer_;
   LayerImpl* currently_scrolling_layer_;
+  LayerScrollOffsetDelegate* root_layer_scroll_offset_delegate_;
   SkColor background_color_;
   bool has_transparent_background_;
-
-  int pinch_zoom_scrollbar_horizontal_layer_id_;
-  int pinch_zoom_scrollbar_vertical_layer_id_;
 
   float page_scale_factor_;
   float page_scale_delta_;
@@ -231,12 +231,14 @@ class CC_EXPORT LayerTreeImpl {
   typedef base::hash_map<int, LayerImpl*> LayerIdMap;
   LayerIdMap layer_id_map_;
 
+  std::vector<LayerImpl*> layers_with_copy_output_request_;
+
   // Persisted state for non-impl-side-painting.
   int scrolling_layer_id_from_previous_tree_;
 
   // List of visible layers for the most recently prepared frame. Used for
   // rendering and input event hit testing.
-  LayerList render_surface_layer_list_;
+  LayerImplList render_surface_layer_list_;
 
   bool contents_textures_purged_;
   bool viewport_size_invalid_;
@@ -246,9 +248,14 @@ class CC_EXPORT LayerTreeImpl {
   // structural differences relative to the active tree.
   bool needs_full_tree_sync_;
 
+  ui::LatencyInfo latency_info_;
+
+  UIResourceRequestQueue ui_resource_request_queue_;
+
+ private:
   DISALLOW_COPY_AND_ASSIGN(LayerTreeImpl);
 };
 
-}
+}  // namespace cc
 
 #endif  // CC_TREES_LAYER_TREE_IMPL_H_

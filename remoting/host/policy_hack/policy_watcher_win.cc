@@ -16,10 +16,10 @@
 
 #include "base/compiler_specific.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop_proxy.h"
-#include "base/string16.h"
+#include "base/message_loop/message_loop_proxy.h"
+#include "base/strings/string16.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/waitable_event.h"
-#include "base/utf_string_conversions.h"
 #include "base/values.h"
 #include "base/win/object_watcher.h"
 #include "base/win/registry.h"
@@ -172,7 +172,7 @@ class PolicyWatcherWin :
     scoped_ptr<base::DictionaryValue> policy(new base::DictionaryValue());
 
     for (base::DictionaryValue::Iterator i(Defaults());
-         i.HasNext(); i.Advance()) {
+         !i.IsAtEnd(); i.Advance()) {
       const std::string& policy_name = i.key();
       if (i.value().GetType() == base::DictionaryValue::TYPE_BOOLEAN) {
         bool bool_value;

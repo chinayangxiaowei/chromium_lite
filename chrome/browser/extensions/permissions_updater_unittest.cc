@@ -8,18 +8,21 @@
 #include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/values.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_service_unittest.h"
 #include "chrome/browser/extensions/permissions_updater.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/extensions/extension.h"
+#include "chrome/common/extensions/extension_test_util.h"
 #include "chrome/common/extensions/permissions/permission_set.h"
 #include "chrome/test/base/testing_profile.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 #include "content/public/browser/notification_service.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+using extension_test_util::LoadManifest;
 
 namespace extensions {
 
@@ -52,11 +55,9 @@ class PermissionsUpdaterListener : public content::NotificationObserver {
   }
 
   bool received_notification() const { return received_notification_; }
-  const Extension* extension() const { return extension_; }
-  const PermissionSet* permissions() const { return permissions_; }
-  UpdatedExtensionPermissionsInfo::Reason reason() const {
-    return reason_;
-  }
+  const Extension* extension() const { return extension_.get(); }
+  const PermissionSet* permissions() const { return permissions_.get(); }
+  UpdatedExtensionPermissionsInfo::Reason reason() const { return reason_; }
 
  private:
   virtual void Observe(int type,
@@ -72,7 +73,7 @@ class PermissionsUpdaterListener : public content::NotificationObserver {
 
     if (waiting_) {
       waiting_ = false;
-      MessageLoopForUI::current()->Quit();
+      base::MessageLoopForUI::current()->Quit();
     }
   }
 
@@ -87,24 +88,15 @@ class PermissionsUpdaterListener : public content::NotificationObserver {
 class PermissionsUpdaterTest : public ExtensionServiceTestBase {
 };
 
-scoped_refptr<Extension> LoadManifest(std::string* error) {
+scoped_refptr<Extension> LoadOurManifest() {
   base::FilePath path;
-  PathService::Get(chrome::DIR_TEST_DATA, &path);
-  path = path.AppendASCII("extensions")
-      .AppendASCII("api_test")
+  path = path.AppendASCII("api_test")
       .AppendASCII("permissions")
-      .AppendASCII("optional")
-      .AppendASCII("manifest.json");
-
-  JSONFileValueSerializer serializer(path);
-  scoped_ptr<Value> result(serializer.Deserialize(NULL, error));
-  if (!result.get())
-    return NULL;
-
-  scoped_refptr<Extension> extension = Extension::Create(
-      path.DirName(), Manifest::INTERNAL,
-      *static_cast<DictionaryValue*>(result.get()), Extension::NO_FLAGS, error);
-  return extension;
+      .AppendASCII("optional");
+  return LoadManifest(path.AsUTF8Unsafe(),
+                      "manifest.json",
+                      Manifest::INTERNAL,
+                      Extension::NO_FLAGS);
 }
 
 void AddPattern(URLPatternSet* extent, const std::string& pattern) {
@@ -122,9 +114,8 @@ TEST_F(PermissionsUpdaterTest, AddAndRemovePermissions) {
   InitializeEmptyExtensionService();
 
   // Load the test extension.
-  std::string error;
-  scoped_refptr<Extension> extension = LoadManifest(&error);
-  ASSERT_TRUE(error.empty()) << error;
+  scoped_refptr<Extension> extension = LoadOurManifest();
+  ASSERT_TRUE(extension.get());
 
   APIPermissionSet default_apis;
   default_apis.insert(APIPermission::kManagement);
@@ -136,7 +127,8 @@ TEST_F(PermissionsUpdaterTest, AddAndRemovePermissions) {
   // Make sure it loaded properly.
   scoped_refptr<const PermissionSet> permissions =
       extension->GetActivePermissions();
-  ASSERT_EQ(*default_permissions, *extension->GetActivePermissions());
+  ASSERT_EQ(*default_permissions.get(),
+            *extension->GetActivePermissions().get());
 
   // Add a few permissions.
   APIPermissionSet apis;
@@ -158,12 +150,13 @@ TEST_F(PermissionsUpdaterTest, AddAndRemovePermissions) {
   ASSERT_TRUE(listener.received_notification());
   ASSERT_EQ(extension, listener.extension());
   ASSERT_EQ(UpdatedExtensionPermissionsInfo::ADDED, listener.reason());
-  ASSERT_EQ(*delta, *listener.permissions());
+  ASSERT_EQ(*delta.get(), *listener.permissions());
 
   // Make sure the extension's active permissions reflect the change.
   scoped_refptr<PermissionSet> active_permissions =
-      PermissionSet::CreateUnion(default_permissions, delta);
-  ASSERT_EQ(*active_permissions, *extension->GetActivePermissions());
+      PermissionSet::CreateUnion(default_permissions.get(), delta.get());
+  ASSERT_EQ(*active_permissions.get(),
+            *extension->GetActivePermissions().get());
 
   // Verify that the new granted and active permissions were also stored
   // in the extension preferences. In this case, the granted permissions should
@@ -174,10 +167,10 @@ TEST_F(PermissionsUpdaterTest, AddAndRemovePermissions) {
 
   scoped_refptr<PermissionSet> from_prefs =
       prefs->GetActivePermissions(extension->id());
-  ASSERT_EQ(*active_permissions, *from_prefs);
+  ASSERT_EQ(*active_permissions.get(), *from_prefs.get());
 
   from_prefs = prefs->GetGrantedPermissions(extension->id());
-  ASSERT_EQ(*active_permissions, *from_prefs);
+  ASSERT_EQ(*active_permissions.get(), *from_prefs.get());
 
   // In the second part of the test, we'll remove the permissions that we
   // just added except for 'notification'.
@@ -185,27 +178,28 @@ TEST_F(PermissionsUpdaterTest, AddAndRemovePermissions) {
   delta = new PermissionSet(apis, hosts, URLPatternSet());
 
   listener.Reset();
-  updater.RemovePermissions(extension, delta);
+  updater.RemovePermissions(extension.get(), delta.get());
   listener.Wait();
 
   // Verify that the notification was correct.
   ASSERT_TRUE(listener.received_notification());
   ASSERT_EQ(extension, listener.extension());
   ASSERT_EQ(UpdatedExtensionPermissionsInfo::REMOVED, listener.reason());
-  ASSERT_EQ(*delta, *listener.permissions());
+  ASSERT_EQ(*delta.get(), *listener.permissions());
 
   // Make sure the extension's active permissions reflect the change.
   active_permissions =
-      PermissionSet::CreateDifference(active_permissions, delta);
-  ASSERT_EQ(*active_permissions, *extension->GetActivePermissions());
+      PermissionSet::CreateDifference(active_permissions.get(), delta.get());
+  ASSERT_EQ(*active_permissions.get(),
+            *extension->GetActivePermissions().get());
 
   // Verify that the extension prefs hold the new active permissions and the
   // same granted permissions.
   from_prefs = prefs->GetActivePermissions(extension->id());
-  ASSERT_EQ(*active_permissions, *from_prefs);
+  ASSERT_EQ(*active_permissions.get(), *from_prefs.get());
 
   from_prefs = prefs->GetGrantedPermissions(extension->id());
-  ASSERT_EQ(*granted_permissions, *from_prefs);
+  ASSERT_EQ(*granted_permissions.get(), *from_prefs.get());
 }
 
 }  // namespace extensions

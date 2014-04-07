@@ -21,6 +21,7 @@ import tempfile
 def DoMain(argv):
   parser = optparse.OptionParser()
   parser.add_option('--code')
+  parser.add_option('--run-linker', action='store_true')
   parser.add_option('--on-success', default='')
   parser.add_option('--on-failure', default='')
 
@@ -29,7 +30,9 @@ def DoMain(argv):
   if not options.code:
     parser.error('Missing required --code switch.')
 
-  cxx = os.environ.get('CXX', 'g++')
+  # The environment variable might expand to a string with spaces,
+  # e.g. "ccache g++". Convert it to a list suitable for argv.
+  cxx = os.environ.get('CXX', 'g++').split()
 
   tmpdir = tempfile.mkdtemp()
   try:
@@ -39,7 +42,12 @@ def DoMain(argv):
 
     o_path = os.path.join(tmpdir, 'test.o')
 
-    cxx_popen = subprocess.Popen([cxx, cxx_path, '-o', o_path, '-c'],
+    cxx_cmdline = cxx + [cxx_path, '-o', o_path]
+    if not options.run_linker:
+      cxx_cmdline.append('-c')
+    # Pass remaining arguments to the compiler.
+    cxx_cmdline += args
+    cxx_popen = subprocess.Popen(cxx_cmdline,
                                  stdout=subprocess.PIPE,
                                  stderr=subprocess.PIPE)
     cxx_stdout, cxx_stderr = cxx_popen.communicate()

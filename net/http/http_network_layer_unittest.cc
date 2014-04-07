@@ -4,12 +4,14 @@
 
 #include "net/http/http_network_layer.h"
 
-#include "net/base/mock_cert_verifier.h"
+#include "base/strings/stringprintf.h"
 #include "net/base/net_log.h"
+#include "net/cert/mock_cert_verifier.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/http/http_network_session.h"
 #include "net/http/http_server_properties_impl.h"
 #include "net/http/http_transaction_unittest.h"
+#include "net/http/transport_security_state.h"
 #include "net/proxy/proxy_service.h"
 #include "net/socket/socket_test_util.h"
 #include "net/spdy/spdy_session_pool.h"
@@ -31,21 +33,25 @@ class HttpNetworkLayerTest : public PlatformTest {
 
   void ConfigureTestDependencies(ProxyService* proxy_service) {
     cert_verifier_.reset(new MockCertVerifier);
+    transport_security_state_.reset(new TransportSecurityState);
     proxy_service_.reset(proxy_service);
     HttpNetworkSession::Params session_params;
     session_params.client_socket_factory = &mock_socket_factory_;
     session_params.host_resolver = &host_resolver_;
     session_params.cert_verifier = cert_verifier_.get();
+    session_params.transport_security_state = transport_security_state_.get();
     session_params.proxy_service = proxy_service_.get();
-    session_params.ssl_config_service = ssl_config_service_;
-    session_params.http_server_properties = &http_server_properties_;
+    session_params.ssl_config_service = ssl_config_service_.get();
+    session_params.http_server_properties =
+        http_server_properties_.GetWeakPtr();
     network_session_ = new HttpNetworkSession(session_params);
-    factory_.reset(new HttpNetworkLayer(network_session_));
+    factory_.reset(new HttpNetworkLayer(network_session_.get()));
   }
 
   MockClientSocketFactory mock_socket_factory_;
   MockHostResolver host_resolver_;
   scoped_ptr<CertVerifier> cert_verifier_;
+  scoped_ptr<TransportSecurityState> transport_security_state_;
   scoped_ptr<ProxyService> proxy_service_;
   const scoped_refptr<SSLConfigService> ssl_config_service_;
   scoped_refptr<HttpNetworkSession> network_session_;
@@ -88,12 +94,12 @@ TEST_F(HttpNetworkLayerTest, GET) {
   };
   MockWrite data_writes[] = {
     MockWrite("GET / HTTP/1.1\r\n"
-                   "Host: www.google.com\r\n"
-                   "Connection: keep-alive\r\n"
-                   "User-Agent: Foo/1.0\r\n\r\n"),
+              "Host: www.google.com\r\n"
+              "Connection: keep-alive\r\n"
+              "User-Agent: Foo/1.0\r\n\r\n"),
   };
   StaticSocketDataProvider data(data_reads, arraysize(data_reads),
-                                     data_writes, arraysize(data_writes));
+                                data_writes, arraysize(data_writes));
   mock_socket_factory_.AddSocketDataProvider(&data);
 
   TestCompletionCallback callback;
@@ -110,8 +116,7 @@ TEST_F(HttpNetworkLayerTest, GET) {
   EXPECT_EQ(OK, rv);
 
   rv = trans->Start(&request_info, callback.callback(), BoundNetLog());
-  if (rv == ERR_IO_PENDING)
-    rv = callback.WaitForResult();
+  rv = callback.GetResult(rv);
   ASSERT_EQ(OK, rv);
 
   std::string contents;
@@ -191,6 +196,83 @@ TEST_F(HttpNetworkLayerTest, ServerFallback) {
   ASSERT_TRUE(1u == proxy_service_->proxy_retry_info().size());
   EXPECT_EQ("bad:8080", (*proxy_service_->proxy_retry_info().begin()).first);
 }
+
+#if defined(SPDY_PROXY_AUTH_ORIGIN)
+TEST_F(HttpNetworkLayerTest, ServerFallbackOnInternalServerError) {
+  // Verify that "500 Internal Server Error" via the data reduction proxy
+  // induces proxy fallback to a second proxy, if configured.
+
+  // To configure this test, we need to wire up a custom proxy service to use
+  // a pair of proxies. We'll induce fallback via the first and return
+  // the expected data via the second.
+  std::string data_reduction_proxy(
+      HostPortPair::FromURL(GURL(SPDY_PROXY_AUTH_ORIGIN)).ToString());
+  std::string pac_string = base::StringPrintf(
+      "PROXY %s; PROXY good:8080", data_reduction_proxy.data());
+  ConfigureTestDependencies(ProxyService::CreateFixedFromPacResult(pac_string));
+
+  MockRead data_reads[] = {
+    MockRead("HTTP/1.1 500 Internal Server Error\r\n\r\n"),
+    MockRead("Bypass message"),
+    MockRead(SYNCHRONOUS, OK),
+  };
+  MockWrite data_writes[] = {
+    MockWrite("GET http://www.google.com/ HTTP/1.1\r\n"
+              "Host: www.google.com\r\n"
+              "Proxy-Connection: keep-alive\r\n\r\n"),
+  };
+  StaticSocketDataProvider data1(data_reads, arraysize(data_reads),
+                                 data_writes, arraysize(data_writes));
+  mock_socket_factory_.AddSocketDataProvider(&data1);
+
+  // Second data provider returns the expected content.
+  MockRead data_reads2[] = {
+    MockRead("HTTP/1.0 200 OK\r\n"
+             "Server: not-proxy\r\n\r\n"),
+    MockRead("content"),
+    MockRead(SYNCHRONOUS, OK),
+  };
+  MockWrite data_writes2[] = {
+    MockWrite("GET http://www.google.com/ HTTP/1.1\r\n"
+              "Host: www.google.com\r\n"
+              "Proxy-Connection: keep-alive\r\n\r\n"),
+  };
+  StaticSocketDataProvider data2(data_reads2, arraysize(data_reads2),
+                                 data_writes2, arraysize(data_writes2));
+  mock_socket_factory_.AddSocketDataProvider(&data2);
+
+  TestCompletionCallback callback;
+
+  HttpRequestInfo request_info;
+  request_info.url = GURL("http://www.google.com/");
+  request_info.method = "GET";
+  request_info.load_flags = LOAD_NORMAL;
+
+  scoped_ptr<HttpTransaction> trans;
+  int rv = factory_->CreateTransaction(DEFAULT_PRIORITY, &trans, NULL);
+  EXPECT_EQ(OK, rv);
+
+  rv = trans->Start(&request_info, callback.callback(), BoundNetLog());
+  if (rv == ERR_IO_PENDING)
+    rv = callback.WaitForResult();
+  ASSERT_EQ(OK, rv);
+
+  std::string contents;
+  rv = ReadTransaction(trans.get(), &contents);
+  EXPECT_EQ(OK, rv);
+
+  // We should obtain content from the second socket provider write
+  // corresponding to the fallback proxy.
+  EXPECT_EQ("content", contents);
+  // We also have a server header here that isn't set by the proxy.
+  EXPECT_TRUE(trans->GetResponseInfo()->headers->HasHeaderValue(
+      "server", "not-proxy"));
+  // We should also observe the data reduction proxy in the retry list.
+  ASSERT_TRUE(1u == proxy_service_->proxy_retry_info().size());
+  EXPECT_EQ(data_reduction_proxy,
+            (*proxy_service_->proxy_retry_info().begin()).first);
+}
+#endif  // defined(SPDY_PROXY_AUTH_ORIGIN)
 
 TEST_F(HttpNetworkLayerTest, ServerFallbackDoesntLoop) {
   // Verify that a Connection: Proxy-Bypass header will display the original
@@ -288,6 +370,76 @@ TEST_F(HttpNetworkLayerTest, ProxyBypassIgnoredOnDirectConnection) {
 
   // We should have no entries in our bad proxy list.
   ASSERT_EQ(0u, proxy_service_->proxy_retry_info().size());
+}
+
+TEST_F(HttpNetworkLayerTest, NetworkVerified) {
+  MockRead data_reads[] = {
+    MockRead("HTTP/1.0 200 OK\r\n\r\n"),
+    MockRead("hello world"),
+    MockRead(SYNCHRONOUS, OK),
+  };
+  MockWrite data_writes[] = {
+    MockWrite("GET / HTTP/1.1\r\n"
+              "Host: www.google.com\r\n"
+              "Connection: keep-alive\r\n"
+              "User-Agent: Foo/1.0\r\n\r\n"),
+  };
+  StaticSocketDataProvider data(data_reads, arraysize(data_reads),
+                                data_writes, arraysize(data_writes));
+  mock_socket_factory_.AddSocketDataProvider(&data);
+
+  TestCompletionCallback callback;
+
+  HttpRequestInfo request_info;
+  request_info.url = GURL("http://www.google.com/");
+  request_info.method = "GET";
+  request_info.extra_headers.SetHeader(HttpRequestHeaders::kUserAgent,
+                                       "Foo/1.0");
+  request_info.load_flags = LOAD_NORMAL;
+
+  scoped_ptr<HttpTransaction> trans;
+  int rv = factory_->CreateTransaction(DEFAULT_PRIORITY, &trans, NULL);
+  EXPECT_EQ(OK, rv);
+
+  rv = trans->Start(&request_info, callback.callback(), BoundNetLog());
+  ASSERT_EQ(OK, callback.GetResult(rv));
+
+  EXPECT_TRUE(trans->GetResponseInfo()->network_accessed);
+}
+
+TEST_F(HttpNetworkLayerTest, NetworkUnVerified) {
+  MockRead data_reads[] = {
+    MockRead(ASYNC, ERR_CONNECTION_RESET),
+  };
+  MockWrite data_writes[] = {
+    MockWrite("GET / HTTP/1.1\r\n"
+              "Host: www.google.com\r\n"
+              "Connection: keep-alive\r\n"
+              "User-Agent: Foo/1.0\r\n\r\n"),
+  };
+  StaticSocketDataProvider data(data_reads, arraysize(data_reads),
+                                data_writes, arraysize(data_writes));
+  mock_socket_factory_.AddSocketDataProvider(&data);
+
+  TestCompletionCallback callback;
+
+  HttpRequestInfo request_info;
+  request_info.url = GURL("http://www.google.com/");
+  request_info.method = "GET";
+  request_info.extra_headers.SetHeader(HttpRequestHeaders::kUserAgent,
+                                       "Foo/1.0");
+  request_info.load_flags = LOAD_NORMAL;
+
+  scoped_ptr<HttpTransaction> trans;
+  int rv = factory_->CreateTransaction(DEFAULT_PRIORITY, &trans, NULL);
+  EXPECT_EQ(OK, rv);
+
+  rv = trans->Start(&request_info, callback.callback(), BoundNetLog());
+  ASSERT_EQ(ERR_CONNECTION_RESET, callback.GetResult(rv));
+
+  // If the response info is null, that means that any consumer won't
+  // see the network accessed bit set.
+  EXPECT_EQ(NULL, trans->GetResponseInfo());
 }
 
 }  // namespace

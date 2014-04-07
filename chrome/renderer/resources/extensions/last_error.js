@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-var DCHECK = requireNative('logging').DCHECK;
 var GetAvailability = requireNative('v8_context').GetAvailability;
 var GetGlobal = requireNative('sendRequest').GetGlobal;
 
@@ -16,14 +15,25 @@ var GetGlobal = requireNative('sendRequest').GetGlobal;
 //     the chrome object to try to prevent bugs here.
 
 /**
- * Sets the last error on |targetChrome| to |message|.
+ * Sets the last error for |name| on |targetChrome| to |message| with an
+ * optional |stack|.
  */
-function set(message, targetChrome) {
-  DCHECK(targetChrome != undefined);
+function set(name, message, stack, targetChrome) {
+  var errorMessage = name + ': ' + message;
+  if (stack != null && stack != '')
+    errorMessage += '\n' + stack;
+
+  if (!targetChrome)
+    throw new Error('No chrome object to set error: ' + errorMessage);
   clear(targetChrome);  // in case somebody has set a sneaky getter/setter
-  var errorObject = { 'message': message };
-  if (GetAvailability('extension').is_available)
+
+  console.error(errorMessage);
+
+  var errorObject = { message: message };
+  if (GetAvailability('extension.lastError').is_available)
     targetChrome.extension.lastError = errorObject;
+
+  assertRuntimeIsAvailable();
   targetChrome.runtime.lastError = errorObject;
 };
 
@@ -31,23 +41,39 @@ function set(message, targetChrome) {
  * Clears the last error on |targetChrome|.
  */
 function clear(targetChrome) {
-  DCHECK(targetChrome != undefined);
-  if (GetAvailability('extension').is_available)
+  if (!targetChrome)
+    throw new Error('No target chrome to clear error');
+
+  if (GetAvailability('extension.lastError').is_available)
     delete targetChrome.extension.lastError;
+
+  assertRuntimeIsAvailable();
   delete targetChrome.runtime.lastError;
 };
 
+function assertRuntimeIsAvailable() {
+  // chrome.runtime should always be available, but maybe it's disappeared for
+  // some reason? Add debugging for http://crbug.com/258526.
+  var runtimeAvailability = GetAvailability('runtime.lastError');
+  if (!runtimeAvailability.is_available) {
+    throw new Error('runtime.lastError is not available: ' +
+                    runtimeAvailability.message);
+  }
+  if (!chrome.runtime)
+    throw new Error('runtime namespace is null or undefined');
+}
+
 /**
- * Runs |callback(args)| with last error set to |message|.
+ * Runs |callback(args)| with last error args as in set().
  *
  * The target chrome object is the global object's of the callback, so this
  * method won't work if the real callback has been wrapped (etc).
  */
-function run(message, callback, args) {
+function run(name, message, stack, callback, args) {
   var targetChrome = GetGlobal(callback).chrome;
-  set(message, targetChrome);
+  set(name, message, stack, targetChrome);
   try {
-    callback.apply(undefined, args);
+    $Function.apply(callback, undefined, args);
   } finally {
     clear(targetChrome);
   }

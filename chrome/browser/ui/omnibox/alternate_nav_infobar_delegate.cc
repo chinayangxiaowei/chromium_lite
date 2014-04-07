@@ -4,13 +4,13 @@
 
 #include "chrome/browser/ui/omnibox/alternate_nav_infobar_delegate.h"
 
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/infobars/infobar_service.h"
 #include "content/public/browser/web_contents.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/resource/resource_bundle.h"
+
 
 // static
 void AlternateNavInfoBarDelegate::Create(InfoBarService* infobar_service,
@@ -42,23 +42,19 @@ string16 AlternateNavInfoBarDelegate::GetLinkText() const {
 
 bool AlternateNavInfoBarDelegate::LinkClicked(
     WindowOpenDisposition disposition) {
-  content::OpenURLParams params(
+  // Pretend the user typed this URL, so that navigating to it will be the
+  // default action when it's typed again in the future.
+  web_contents()->OpenURL(content::OpenURLParams(
       alternate_nav_url_, content::Referrer(), disposition,
-      // Pretend the user typed this URL, so that navigating to
-      // it will be the default action when it's typed again in
-      // the future.
-      content::PAGE_TRANSITION_TYPED,
-      false);
-  owner()->GetWebContents()->OpenURL(params);
+      content::PAGE_TRANSITION_TYPED, false));
 
   // We should always close, even if the navigation did not occur within this
   // WebContents.
   return true;
 }
 
-gfx::Image* AlternateNavInfoBarDelegate::GetIcon() const {
-  return &ui::ResourceBundle::GetSharedInstance().GetNativeImageNamed(
-      IDR_INFOBAR_ALT_NAV_URL);
+int AlternateNavInfoBarDelegate::GetIconID() const {
+  return IDR_INFOBAR_ALT_NAV_URL;
 }
 
 InfoBarDelegate::Type AlternateNavInfoBarDelegate::GetInfoBarType() const {

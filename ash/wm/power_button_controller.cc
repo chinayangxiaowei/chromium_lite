@@ -5,18 +5,19 @@
 #include "ash/wm/power_button_controller.h"
 
 #include "ash/ash_switches.h"
+#include "ash/session_state_delegate.h"
 #include "ash/shell.h"
-#include "ash/shell_delegate.h"
 #include "ash/shell_window_ids.h"
+#include "ash/wm/lock_state_controller.h"
 #include "ash/wm/session_state_animator.h"
-#include "ash/wm/session_state_controller.h"
 #include "base/command_line.h"
 #include "ui/aura/root_window.h"
 #include "ui/views/corewm/compound_event_filter.h"
 
 namespace ash {
 
-PowerButtonController::PowerButtonController(SessionStateController* controller)
+PowerButtonController::PowerButtonController(
+    LockStateController* controller)
     : power_button_down_(false),
       lock_button_down_(false),
       screen_is_off_(false),
@@ -45,13 +46,15 @@ void PowerButtonController::OnPowerButtonEvent(
   if (screen_is_off_)
     return;
 
-  Shell* shell = Shell::GetInstance();
+  const SessionStateDelegate* session_state_delegate =
+      Shell::GetInstance()->session_state_delegate();
   if (has_legacy_power_button_) {
     // If power button releases won't get reported correctly because we're not
     // running on official hardware, just lock the screen or shut down
     // immediately.
     if (down) {
-      if (shell->CanLockScreen() && !shell->IsScreenLocked() &&
+      if (session_state_delegate->CanLockScreen() &&
+          !session_state_delegate->IsScreenLocked() &&
           !controller_->LockRequested()) {
         controller_->StartLockAnimationAndLockImmediately();
       } else {
@@ -64,10 +67,12 @@ void PowerButtonController::OnPowerButtonEvent(
       if (controller_->LockRequested())
         return;
 
-      if (shell->CanLockScreen() && !shell->IsScreenLocked())
+      if (session_state_delegate->CanLockScreen() &&
+          !session_state_delegate->IsScreenLocked()) {
         controller_->StartLockAnimation(true);
-      else
+      } else {
         controller_->StartShutdownAnimation();
+      }
     } else {  // Button is up.
       if (controller_->CanCancelLockAnimation())
         controller_->CancelLockAnimation();
@@ -81,9 +86,12 @@ void PowerButtonController::OnLockButtonEvent(
     bool down, const base::TimeTicks& timestamp) {
   lock_button_down_ = down;
 
-  Shell* shell = Shell::GetInstance();
-  if (!shell->CanLockScreen() || shell->IsScreenLocked() ||
-      controller_->LockRequested() || controller_->ShutdownRequested()) {
+  const SessionStateDelegate* session_state_delegate =
+      Shell::GetInstance()->session_state_delegate();
+  if (!session_state_delegate->CanLockScreen() ||
+      session_state_delegate->IsScreenLocked() ||
+      controller_->LockRequested() ||
+      controller_->ShutdownRequested()) {
     return;
   }
 

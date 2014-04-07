@@ -5,7 +5,7 @@ import os
 import unittest
 
 from telemetry.core import browser_finder
-from telemetry.test import options_for_unittests
+from telemetry.unittest import options_for_unittests
 
 class TemporaryHTTPServerTest(unittest.TestCase):
   def testBasicHosting(self):
@@ -14,6 +14,7 @@ class TemporaryHTTPServerTest(unittest.TestCase):
     options = options_for_unittests.GetCopy()
     browser_to_create = browser_finder.FindBrowser(options)
     with browser_to_create.Create() as b:
+      b.Start()
       b.SetHTTPServerDirectories(unittest_data_dir)
       t = b.tabs[0]
       t.Navigate(b.http_server.UrlOf('/blank.html'))

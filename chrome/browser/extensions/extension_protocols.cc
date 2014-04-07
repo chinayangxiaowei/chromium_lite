@@ -6,31 +6,38 @@
 
 #include <algorithm>
 
+#include "base/base64.h"
 #include "base/compiler_specific.h"
+#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/format_macros.h"
 #include "base/logging.h"
 #include "base/memory/weak_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/path_service.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
+#include "base/sha1.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/threading/worker_pool.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/extension_info_map.h"
 #include "chrome/browser/extensions/image_loader.h"
 #include "chrome/common/chrome_paths.h"
-#include "chrome/common/extensions/api/icons/icons_handler.h"
 #include "chrome/common/extensions/background_info.h"
+#include "chrome/common/extensions/csp_handler.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_file_util.h"
 #include "chrome/common/extensions/incognito_handler.h"
+#include "chrome/common/extensions/manifest_handlers/icons_handler.h"
+#include "chrome/common/extensions/manifest_handlers/shared_module_info.h"
+#include "chrome/common/extensions/manifest_url_handler.h"
 #include "chrome/common/extensions/web_accessible_resources_handler.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/browser/resource_request_info.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension_resource.h"
-#include "googleurl/src/url_util.h"
 #include "grit/component_extension_resources_map.h"
 #include "net/base/mime_util.h"
 #include "net/base/net_errors.h"
@@ -40,14 +47,17 @@
 #include "net/url_request/url_request_file_job.h"
 #include "net/url_request/url_request_simple_job.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "url/url_util.h"
 
 using content::ResourceRequestInfo;
 using extensions::Extension;
+using extensions::SharedModuleInfo;
 
 namespace {
 
 net::HttpResponseHeaders* BuildHttpHeaders(
-    const std::string& content_security_policy, bool send_cors_header) {
+    const std::string& content_security_policy, bool send_cors_header,
+    const base::Time& last_modified_time) {
   std::string raw_headers;
   raw_headers.append("HTTP/1.1 200 OK");
   if (!content_security_policy.empty()) {
@@ -60,6 +70,25 @@ net::HttpResponseHeaders* BuildHttpHeaders(
     raw_headers.append(1, '\0');
     raw_headers.append("Access-Control-Allow-Origin: *");
   }
+
+  if (!last_modified_time.is_null()) {
+    // Hash the time and make an etag to avoid exposing the exact
+    // user installation time of the extension.
+    std::string hash = base::StringPrintf("%" PRId64,
+                                          last_modified_time.ToInternalValue());
+    hash = base::SHA1HashString(hash);
+    std::string etag;
+    if (base::Base64Encode(hash, &etag)) {
+      raw_headers.append(1, '\0');
+      raw_headers.append("ETag: \"");
+      raw_headers.append(etag);
+      raw_headers.append("\"");
+      // Also force revalidation.
+      raw_headers.append(1, '\0');
+      raw_headers.append("cache-control: no-cache");
+    }
+  }
+
   raw_headers.append(2, '\0');
   return new net::HttpResponseHeaders(raw_headers);
 }
@@ -68,6 +97,15 @@ void ReadMimeTypeFromFile(const base::FilePath& filename,
                           std::string* mime_type,
                           bool* result) {
   *result = net::GetMimeTypeFromFile(filename, mime_type);
+}
+
+void GetLastModifiedTime(const base::FilePath& filename,
+                         base::Time* last_modified_time) {
+  if (base::PathExists(filename)) {
+    base::PlatformFileInfo info;
+    if (file_util::GetFileInfo(filename, &info))
+      *last_modified_time = info.last_modified;
+  }
 }
 
 class URLRequestResourceBundleJob : public net::URLRequestSimpleJob {
@@ -81,9 +119,11 @@ class URLRequestResourceBundleJob : public net::URLRequestSimpleJob {
       : net::URLRequestSimpleJob(request, network_delegate),
         filename_(filename),
         resource_id_(resource_id),
-        weak_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {
+        weak_factory_(this) {
+     // Leave cache headers out of resource bundle requests.
     response_info_.headers = BuildHttpHeaders(content_security_policy,
-                                              send_cors_header);
+                                              send_cors_header,
+                                              base::Time());
   }
 
   // Overridden from URLRequestSimpleJob:
@@ -157,8 +197,10 @@ class GeneratedBackgroundPageJob : public net::URLRequestSimpleJob {
       : net::URLRequestSimpleJob(request, network_delegate),
         extension_(extension) {
     const bool send_cors_headers = false;
+    // Leave cache headers out of generated background page jobs.
     response_info_.headers = BuildHttpHeaders(content_security_policy,
-                                              send_cors_headers);
+                                              send_cors_headers,
+                                              base::Time());
   }
 
   // Overridden from URLRequestSimpleJob:
@@ -171,7 +213,7 @@ class GeneratedBackgroundPageJob : public net::URLRequestSimpleJob {
 
     *data = "<!DOCTYPE html>\n<body>\n";
     const std::vector<std::string>& background_scripts =
-        extensions::BackgroundInfo::GetBackgroundScripts(extension_);
+        extensions::BackgroundInfo::GetBackgroundScripts(extension_.get());
     for (size_t i = 0; i < background_scripts.size(); ++i) {
       *data += "<script src=\"";
       *data += background_scripts[i];
@@ -192,9 +234,12 @@ class GeneratedBackgroundPageJob : public net::URLRequestSimpleJob {
   net::HttpResponseInfo response_info_;
 };
 
-void ReadResourceFilePath(const extensions::ExtensionResource& resource,
-                          base::FilePath* file_path) {
+void ReadResourceFilePathAndLastModifiedTime(
+    const extensions::ExtensionResource& resource,
+    base::FilePath* file_path,
+    base::Time* last_modified_time) {
   *file_path = resource.GetFilePath();
+  GetLastModifiedTime(*file_path, last_modified_time);
 }
 
 class URLRequestExtensionJob : public net::URLRequestFileJob {
@@ -203,17 +248,16 @@ class URLRequestExtensionJob : public net::URLRequestFileJob {
                          net::NetworkDelegate* network_delegate,
                          const std::string& extension_id,
                          const base::FilePath& directory_path,
+                         const base::FilePath& relative_path,
                          const std::string& content_security_policy,
                          bool send_cors_header)
     : net::URLRequestFileJob(request, network_delegate, base::FilePath()),
       // TODO(tc): Move all of these files into resources.pak so we don't break
       // when updating on Linux.
-      resource_(extension_id, directory_path,
-                extension_file_util::ExtensionURLToRelativeFilePath(
-                    request->url())),
-      weak_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {
-      response_info_.headers = BuildHttpHeaders(content_security_policy,
-                                                send_cors_header);
+      resource_(extension_id, directory_path, relative_path),
+      content_security_policy_(content_security_policy),
+      send_cors_header_(send_cors_header),
+      weak_factory_(this) {
   }
 
   virtual void GetResponseInfo(net::HttpResponseInfo* info) OVERRIDE {
@@ -222,13 +266,16 @@ class URLRequestExtensionJob : public net::URLRequestFileJob {
 
   virtual void Start() OVERRIDE {
     base::FilePath* read_file_path = new base::FilePath;
+    base::Time* last_modified_time = new base::Time();
     bool posted = base::WorkerPool::PostTaskAndReply(
         FROM_HERE,
-        base::Bind(&ReadResourceFilePath, resource_,
-                   base::Unretained(read_file_path)),
-        base::Bind(&URLRequestExtensionJob::OnFilePathRead,
+        base::Bind(&ReadResourceFilePathAndLastModifiedTime, resource_,
+                   base::Unretained(read_file_path),
+                   base::Unretained(last_modified_time)),
+        base::Bind(&URLRequestExtensionJob::OnFilePathAndLastModifiedTimeRead,
                    weak_factory_.GetWeakPtr(),
-                   base::Owned(read_file_path)),
+                   base::Owned(read_file_path),
+                   base::Owned(last_modified_time)),
         true /* task is slow */);
     DCHECK(posted);
   }
@@ -236,13 +283,20 @@ class URLRequestExtensionJob : public net::URLRequestFileJob {
  private:
   virtual ~URLRequestExtensionJob() {}
 
-  void OnFilePathRead(base::FilePath* read_file_path) {
+  void OnFilePathAndLastModifiedTimeRead(base::FilePath* read_file_path,
+                                         base::Time* last_modified_time) {
     file_path_ = *read_file_path;
+    response_info_.headers = BuildHttpHeaders(
+        content_security_policy_,
+        send_cors_header_,
+        *last_modified_time);
     URLRequestFileJob::Start();
   }
 
   net::HttpResponseInfo response_info_;
   extensions::ExtensionResource resource_;
+  std::string content_security_policy_;
+  bool send_cors_header_;
   base::WeakPtrFactory<URLRequestExtensionJob> weak_factory_;
 };
 
@@ -269,6 +323,7 @@ bool ExtensionCanLoadInIncognito(const ResourceRequestInfo* info,
 // first need to find a way to get CanLoadInIncognito state into the renderers.
 bool AllowExtensionResourceLoad(net::URLRequest* request,
                                 bool is_incognito,
+                                const Extension* extension,
                                 ExtensionInfoMap* extension_info_map) {
   const ResourceRequestInfo* info = ResourceRequestInfo::ForRequest(request);
 
@@ -284,6 +339,64 @@ bool AllowExtensionResourceLoad(net::URLRequest* request,
                                                    extension_info_map)) {
     return false;
   }
+
+  // The following checks are meant to replicate similar set of checks in the
+  // renderer process, performed by ResourceRequestPolicy::CanRequestResource.
+  // These are not exactly equivalent, because we don't have the same bits of
+  // information. The two checks need to be kept in sync as much as possible, as
+  // an exploited renderer can bypass the checks in ResourceRequestPolicy.
+
+  // Check if the extension for which this request is made is indeed loaded in
+  // the process sending the request. If not, we need to explicitly check if
+  // the resource is explicitly accessible or fits in a set of exception cases.
+  // Note: This allows a case where two extensions execute in the same renderer
+  // process to request each other's resources. We can't do a more precise
+  // check, since the renderer can lie about which extension has made the
+  // request.
+  if (extension_info_map->process_map().Contains(
+      request->url().host(), info->GetChildID())) {
+    return true;
+  }
+
+  if (!content::PageTransitionIsWebTriggerable(info->GetPageTransition()))
+    return false;
+
+  // The following checks require that we have an actual extension object. If we
+  // don't have it, allow the request handling to continue with the rest of the
+  // checks.
+  if (!extension)
+    return true;
+
+  // Disallow loading of packaged resources for hosted apps. We don't allow
+  // hybrid hosted/packaged apps. The one exception is access to icons, since
+  // some extensions want to be able to do things like create their own
+  // launchers.
+  std::string resource_root_relative_path =
+      request->url().path().empty() ? std::string()
+                                    : request->url().path().substr(1);
+  if (extension->is_hosted_app() &&
+      !extensions::IconsInfo::GetIcons(extension)
+          .ContainsPath(resource_root_relative_path)) {
+    LOG(ERROR) << "Denying load of " << request->url().spec() << " from "
+               << "hosted app.";
+    return false;
+  }
+
+  // Extensions with web_accessible_resources: allow loading by regular
+  // renderers. Since not all subresources are required to be listed in a v2
+  // manifest, we must allow all loads if there are any web accessible
+  // resources. See http://crbug.com/179127.
+  if (extension->manifest_version() < 2 ||
+      extensions::WebAccessibleResourcesInfo::HasWebAccessibleResources(
+      extension)) {
+    return true;
+  }
+
+  // If there aren't any explicitly marked web accessible resources, the
+  // load should be allowed only if it is by DevTools. A close approximation is
+  // checking if the extension contains a DevTools page.
+  if (extensions::ManifestURL::GetDevToolsPage(extension).is_empty())
+    return false;
 
   return true;
 }
@@ -326,17 +439,18 @@ class ExtensionProtocolHandler
 net::URLRequestJob*
 ExtensionProtocolHandler::MaybeCreateJob(
     net::URLRequest* request, net::NetworkDelegate* network_delegate) const {
+  // chrome-extension://extension-id/resource/path.js
+  std::string extension_id = request->url().host();
+  const Extension* extension =
+      extension_info_map_->extensions().GetByID(extension_id);
+
   // TODO(mpcomplete): better error code.
   if (!AllowExtensionResourceLoad(
-           request, is_incognito_, extension_info_map_)) {
+           request, is_incognito_, extension, extension_info_map_)) {
     return new net::URLRequestErrorJob(
         request, network_delegate, net::ERR_ADDRESS_UNREACHABLE);
   }
 
-  // chrome-extension://extension-id/resource/path.js
-  const std::string& extension_id = request->url().host();
-  const Extension* extension =
-      extension_info_map_->extensions().GetByID(extension_id);
   base::FilePath directory_path;
   if (extension)
     directory_path = extension->path();
@@ -356,7 +470,8 @@ ExtensionProtocolHandler::MaybeCreateJob(
   if (extension) {
     std::string resource_path = request->url().path();
     content_security_policy =
-        extension->GetResourceContentSecurityPolicy(resource_path);
+        extensions::CSPInfo::GetResourceContentSecurityPolicy(extension,
+                                                              resource_path);
     if ((extension->manifest_version() >= 2 ||
          extensions::WebAccessibleResourcesInfo::HasWebAccessibleResources(
              extension)) &&
@@ -367,7 +482,7 @@ ExtensionProtocolHandler::MaybeCreateJob(
 
   std::string path = request->url().path();
   if (path.size() > 1 &&
-      path.substr(1) == extension_filenames::kGeneratedBackgroundPageFilename) {
+      path.substr(1) == extensions::kGeneratedBackgroundPageFilename) {
     return new GeneratedBackgroundPageJob(
         request, network_delegate, extension, content_security_policy);
   }
@@ -399,10 +514,50 @@ ExtensionProtocolHandler::MaybeCreateJob(
     }
   }
 
+  relative_path =
+      extension_file_util::ExtensionURLToRelativeFilePath(request->url());
+
+  if (SharedModuleInfo::IsImportedPath(path)) {
+    std::string new_extension_id;
+    std::string new_relative_path;
+    SharedModuleInfo::ParseImportedPath(path, &new_extension_id,
+                                        &new_relative_path);
+    const Extension* new_extension =
+        extension_info_map_->extensions().GetByID(new_extension_id);
+
+    bool first_party_in_import = false;
+    // NB: This first_party_for_cookies call is not for security, it is only
+    // used so an exported extension can limit the visible surface to the
+    // extension that imports it, more or less constituting its API.
+    const std::string& first_party_path =
+        request->first_party_for_cookies().path();
+    if (SharedModuleInfo::IsImportedPath(first_party_path)) {
+      std::string first_party_id;
+      std::string dummy;
+      SharedModuleInfo::ParseImportedPath(first_party_path, &first_party_id,
+                                          &dummy);
+      if (first_party_id == new_extension_id) {
+        first_party_in_import = true;
+      }
+    }
+
+    if (SharedModuleInfo::ImportsExtensionById(extension, new_extension_id) &&
+        new_extension &&
+        (first_party_in_import ||
+         SharedModuleInfo::IsExportAllowed(new_extension, new_relative_path))) {
+      directory_path = new_extension->path();
+      extension_id = new_extension_id;
+      relative_path = base::FilePath::FromUTF8Unsafe(new_relative_path);
+    } else {
+      return NULL;
+    }
+  }
+
   return new URLRequestExtensionJob(request,
                                     network_delegate,
                                     extension_id,
                                     directory_path,
+                                    relative_path,
                                     content_security_policy,
                                     send_cors_header);
 }

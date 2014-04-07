@@ -11,15 +11,15 @@
 #include "base/basictypes.h"
 #include "base/callback.h"
 #include "base/memory/scoped_vector.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "chrome/browser/defaults.h"
-#include "chrome/browser/profiles/profile_keyed_service.h"
 #include "chrome/browser/sessions/base_session_service.h"
 #include "chrome/browser/sessions/session_id.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_list_observer.h"
 #include "chrome/common/cancelable_task_tracker.h"
+#include "components/browser_context_keyed_service/browser_context_keyed_service.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 #include "ui/base/ui_base_types.h"
@@ -49,13 +49,13 @@ class WebContents;
 // with incognito windows.
 //
 // SessionService itself maintains a set of SessionCommands that allow
-// SessionService to rebuild the open state of the browser (as
-// SessionWindow, SessionTab and TabNavigation). The commands are periodically
+// SessionService to rebuild the open state of the browser (as SessionWindow,
+// SessionTab and SerializedNavigationEntry). The commands are periodically
 // flushed to SessionBackend and written to a file. Every so often
-// SessionService rebuilds the contents of the file from the open state
-// of the browser.
+// SessionService rebuilds the contents of the file from the open state of the
+// browser.
 class SessionService : public BaseSessionService,
-                       public ProfileKeyedService,
+                       public BrowserContextKeyedService,
                        public content::NotificationObserver,
                        public chrome::BrowserListObserver {
   friend class SessionServiceTestHelper;
@@ -159,9 +159,10 @@ class SessionService : public BaseSessionService,
                                         int count);
 
   // Updates the navigation entry for the specified tab.
-  void UpdateTabNavigation(const SessionID& window_id,
-                           const SessionID& tab_id,
-                           const TabNavigation& navigation);
+  void UpdateTabNavigation(
+      const SessionID& window_id,
+      const SessionID& tab_id,
+      const sessions::SerializedNavigationEntry& navigation);
 
   // Notification that a tab has restored its entries or a closed tab is being
   // reused.
@@ -308,8 +309,9 @@ class SessionService : public BaseSessionService,
   // navigation with an index > |index| is returned.
   //
   // This assumes the navigations are ordered by index in ascending order.
-  std::vector<TabNavigation>::iterator FindClosestNavigationWithIndex(
-      std::vector<TabNavigation>* navigations,
+  std::vector<sessions::SerializedNavigationEntry>::iterator
+  FindClosestNavigationWithIndex(
+      std::vector<sessions::SerializedNavigationEntry>* navigations,
       int index);
 
   // Does the following:

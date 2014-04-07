@@ -11,8 +11,8 @@
 #include "base/callback.h"
 #include "base/logging.h"
 #include "base/stl_util.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "ui/aura/client/capture_client.h"
 #include "ui/aura/client/event_client.h"
 #include "ui/aura/client/screen_position_client.h"
@@ -23,8 +23,8 @@
 #include "ui/aura/layout_manager.h"
 #include "ui/aura/root_window.h"
 #include "ui/aura/window_delegate.h"
-#include "ui/aura/window_destruction_observer.h"
 #include "ui/aura/window_observer.h"
+#include "ui/aura/window_tracker.h"
 #include "ui/base/animation/multi_animation.h"
 #include "ui/compositor/compositor.h"
 #include "ui/compositor/layer.h"
@@ -33,6 +33,15 @@
 #include "ui/gfx/screen.h"
 
 namespace aura {
+
+namespace {
+
+void MailboxReleaseCallback(scoped_ptr<base::SharedMemory> shared_memory,
+                            unsigned sync_point, bool lost_resource) {
+  // NOTE: shared_memory will get released when we go out of scope.
+}
+
+}  // namespace
 
 Window::Window(WindowDelegate* delegate)
     : type_(client::WINDOW_TYPE_UNKNOWN),
@@ -145,9 +154,12 @@ ui::Layer* Window::RecreateLayer() {
     return NULL;
 
   old_layer->set_delegate(NULL);
+  float mailbox_scale_factor;
+  cc::TextureMailbox old_mailbox =
+      old_layer->GetTextureMailbox(&mailbox_scale_factor);
   scoped_refptr<ui::Texture> old_texture = old_layer->external_texture();
-  if (delegate_ && old_texture)
-    old_layer->SetExternalTexture(delegate_->CopyTexture());
+  if (delegate_ && old_texture.get())
+    old_layer->SetExternalTexture(delegate_->CopyTexture().get());
 
   layer_ = new ui::Layer(old_layer->type());
   layer_owner_.reset(layer_);
@@ -158,15 +170,33 @@ ui::Layer* Window::RecreateLayer() {
   // Move the original texture to the new layer if the old layer has a
   // texture and we could copy it into the old layer,
   // crbug.com/175211.
-  if (delegate_ && old_texture)
-    layer_->SetExternalTexture(old_texture);
+  if (delegate_ && old_texture.get()) {
+    layer_->SetExternalTexture(old_texture.get());
+  } else if (old_mailbox.IsSharedMemory()) {
+    base::SharedMemory* old_buffer = old_mailbox.shared_memory();
+    const size_t size = old_mailbox.shared_memory_size_in_bytes();
+
+    scoped_ptr<base::SharedMemory> new_buffer(new base::SharedMemory);
+    new_buffer->CreateAndMapAnonymous(size);
+
+    if (old_buffer->memory() && new_buffer->memory()) {
+      memcpy(new_buffer->memory(), old_buffer->memory(), size);
+      base::SharedMemory* new_buffer_raw_ptr = new_buffer.get();
+      cc::TextureMailbox::ReleaseCallback callback =
+          base::Bind(MailboxReleaseCallback, Passed(&new_buffer));
+      cc::TextureMailbox new_mailbox(new_buffer_raw_ptr,
+                                     old_mailbox.shared_memory_size(),
+                                     callback);
+      layer_->SetTextureMailbox(new_mailbox, mailbox_scale_factor);
+    }
+  }
 
   UpdateLayerName(name_);
   layer_->SetFillsBoundsOpaquely(!transparent_);
-  // Install new layer as a sibling of the old layer, stacked on top of it.
+  // Install new layer as a sibling of the old layer, stacked below it.
   if (old_layer->parent()) {
     old_layer->parent()->Add(layer_);
-    old_layer->parent()->StackAbove(layer_, old_layer);
+    old_layer->parent()->StackBelow(layer_, old_layer);
   }
   // Migrate all the child layers over to the new layer. Copy the list because
   // the items are removed during iteration.
@@ -265,7 +295,7 @@ void Window::SetTransform(const gfx::Transform& transform) {
 }
 
 void Window::SetLayoutManager(LayoutManager* layout_manager) {
-  if (layout_manager == layout_manager_.get())
+  if (layout_manager == layout_manager_)
     return;
   layout_manager_.reset(layout_manager);
   if (!layout_manager)
@@ -313,10 +343,6 @@ void Window::SchedulePaintInRect(const gfx::Rect& rect) {
   }
 }
 
-void Window::SetExternalTexture(ui::Texture* texture) {
-  layer_->SetExternalTexture(texture);
-}
-
 void Window::SetDefaultParentByRootWindow(RootWindow* root_window,
                                           const gfx::Rect& bounds_in_screen) {
   DCHECK(root_window);
@@ -338,6 +364,12 @@ void Window::StackChildAtTop(Window* child) {
 
 void Window::StackChildAbove(Window* child, Window* target) {
   StackChildRelativeTo(child, target, STACK_ABOVE);
+}
+
+void Window::StackChildAtBottom(Window* child) {
+  if (children_.size() <= 1 || child == children_.front())
+    return;  // At the bottom already.
+  StackChildBelow(child, children_.front());
 }
 
 void Window::StackChildBelow(Window* child, Window* target) {
@@ -363,7 +395,7 @@ void Window::AddChild(Window* child) {
   layer_->Add(child->layer_);
 
   children_.push_back(child);
-  if (layout_manager_.get())
+  if (layout_manager_)
     layout_manager_->OnWindowAddedToLayout(child);
   FOR_EACH_OBSERVER(WindowObserver, observers_, OnWindowAdded(child));
   child->OnParentChanged();
@@ -470,7 +502,7 @@ gfx::NativeCursor Window::GetCursor(const gfx::Point& point) const {
 }
 
 void Window::SetEventFilter(ui::EventHandler* event_filter) {
-  if (event_filter_.get())
+  if (event_filter_)
     RemovePreTargetHandler(event_filter_.get());
   event_filter_.reset(event_filter);
   if (event_filter)
@@ -712,15 +744,18 @@ void Window::SetVisible(bool visible) {
                     OnWindowVisibilityChanging(this, visible));
 
   RootWindow* root_window = GetRootWindow();
-  if (client::GetVisibilityClient(root_window)) {
-    client::GetVisibilityClient(root_window)->UpdateLayerVisibility(
-        this, visible);
-  } else {
+  if (root_window)
+    root_window->DispatchMouseExitToHidingWindow(this);
+
+  client::VisibilityClient* visibility_client =
+      client::GetVisibilityClient(this);
+  if (visibility_client)
+    visibility_client->UpdateLayerVisibility(this, visible);
+  else
     layer_->SetVisible(visible);
-  }
   visible_ = visible;
   SchedulePaint();
-  if (parent_ && parent_->layout_manager_.get())
+  if (parent_ && parent_->layout_manager_)
     parent_->layout_manager_->OnChildWindowVisibilityChanged(this, visible);
 
   if (delegate_)
@@ -768,25 +803,20 @@ Window* Window::GetWindowForPoint(const gfx::Point& local_point,
     Window* child = *it;
 
     if (for_event_handling) {
+      if (child->ignore_events_)
+        continue;
       // The client may not allow events to be processed by certain subtrees.
       client::EventClient* client = client::GetEventClient(GetRootWindow());
       if (client && !client->CanProcessEventsWithinSubtree(child))
         continue;
+      if (delegate_ && !delegate_->ShouldDescendIntoChildForEventHandling(
+              child, local_point)) {
+        continue;
+      }
     }
-
-    // We don't process events for invisible windows or those that have asked
-    // to ignore events.
-    if (!child->IsVisible() || (for_event_handling && child->ignore_events_))
-      continue;
 
     gfx::Point point_in_child_coords(local_point);
     ConvertPointToTarget(this, child, &point_in_child_coords);
-    if (for_event_handling && delegate_ &&
-        !delegate_->ShouldDescendIntoChildForEventHandling(
-            child, local_point)) {
-      continue;
-    }
-
     Window* match = child->GetWindowForPoint(point_in_child_coords,
                                              return_tightest,
                                              for_event_handling);
@@ -798,7 +828,7 @@ Window* Window::GetWindowForPoint(const gfx::Point& local_point,
 }
 
 void Window::RemoveChildImpl(Window* child, Window* new_parent) {
-  if (layout_manager_.get())
+  if (layout_manager_)
     layout_manager_->OnWillRemoveWindowFromLayout(child);
   FOR_EACH_OBSERVER(WindowObserver, observers_, OnWillRemoveWindow(child));
   RootWindow* root_window = child->GetRootWindow();
@@ -811,13 +841,13 @@ void Window::RemoveChildImpl(Window* child, Window* new_parent) {
   // We should only remove the child's layer if the child still owns that layer.
   // Someone else may have acquired ownership of it via AcquireLayer() and may
   // expect the hierarchy to go unchanged as the Window is destroyed.
-  if (child->layer_owner_.get())
+  if (child->layer_owner_)
     layer_->Remove(child->layer_);
   Windows::iterator i = std::find(children_.begin(), children_.end(), child);
   DCHECK(i != children_.end());
   children_.erase(i);
   child->OnParentChanged();
-  if (layout_manager_.get())
+  if (layout_manager_)
     layout_manager_->OnWindowRemovedFromLayout(child);
 }
 
@@ -844,8 +874,14 @@ void Window::StackChildRelativeTo(Window* child,
   // for an explanation of this.
   size_t final_target_i = target_i;
   while (final_target_i > 0 &&
-         children_[final_target_i]->layer()->delegate() == NULL)
+         children_[final_target_i]->layer()->delegate() == NULL) {
     --final_target_i;
+  }
+
+  // Allow stacking immediately below a window with a NULL layer.
+  if (direction == STACK_BELOW && target_i != final_target_i)
+    direction = STACK_ABOVE;
+
   Window* final_target = children_[final_target_i];
 
   // If we couldn't find a valid target position, don't move anything.
@@ -991,13 +1027,14 @@ void Window::NotifyWindowVisibilityChanged(aura::Window* target,
 
 bool Window::NotifyWindowVisibilityChangedAtReceiver(aura::Window* target,
                                                      bool visible) {
-  // |this| may be deleted during a call to OnWindowVisibilityChanged
-  // on one of the observers. We create an local observer for that. In
-  // that case we exit without further access to any members.
-  WindowDestructionObserver destruction_observer(this);
+  // |this| may be deleted during a call to OnWindowVisibilityChanged() on one
+  // of the observers. We create an local observer for that. In that case we
+  // exit without further access to any members.
+  WindowTracker tracker;
+  tracker.Add(this);
   FOR_EACH_OBSERVER(WindowObserver, observers_,
                     OnWindowVisibilityChanged(target, visible));
-  return !destruction_observer.destroyed();
+  return tracker.Contains(this);
 }
 
 bool Window::NotifyWindowVisibilityChangedDown(aura::Window* target,
@@ -1033,7 +1070,7 @@ void Window::NotifyWindowVisibilityChangedUp(aura::Window* target,
 
 void Window::OnLayerBoundsChanged(const gfx::Rect& old_bounds,
                                   bool contained_mouse) {
-  if (layout_manager_.get())
+  if (layout_manager_)
     layout_manager_->OnWindowResized();
   if (delegate_)
     delegate_->OnBoundsChanged(old_bounds, bounds());

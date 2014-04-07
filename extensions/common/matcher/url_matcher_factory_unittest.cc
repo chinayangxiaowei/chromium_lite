@@ -6,11 +6,11 @@
 
 #include "base/basictypes.h"
 #include "base/format_macros.h"
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "base/values.h"
 #include "extensions/common/matcher/url_matcher_constants.h"
-#include "googleurl/src/gurl.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/gurl.h"
 
 namespace extensions {
 
@@ -33,6 +33,10 @@ TEST(URLMatcherFactoryTest, CreateFromURLFilterDictionary) {
   // Invalid regex value: {"urlMatches": "*"}
   DictionaryValue invalid_condition3;
   invalid_condition3.SetString(keys::kURLMatchesKey, "*");
+
+  // Invalid regex value: {"originAndPathMatches": "*"}
+  DictionaryValue invalid_condition4;
+  invalid_condition4.SetString(keys::kOriginAndPathMatchesKey, "*");
 
   // Valid values:
   // {
@@ -77,6 +81,12 @@ TEST(URLMatcherFactoryTest, CreateFromURLFilterDictionary) {
   error.clear();
   result = URLMatcherFactory::CreateFromURLFilterDictionary(
       matcher.condition_factory(), &invalid_condition3, 3, &error);
+  EXPECT_FALSE(error.empty());
+  EXPECT_FALSE(result.get());
+
+  error.clear();
+  result = URLMatcherFactory::CreateFromURLFilterDictionary(
+      matcher.condition_factory(), &invalid_condition4, 4, &error);
   EXPECT_FALSE(error.empty());
   EXPECT_FALSE(result.get());
 
@@ -234,7 +244,7 @@ void UrlConditionCaseTest::CheckCondition(
       matcher.condition_factory(), &condition, 1, &error);
   if (expected_result == CREATE_FAILURE) {
     EXPECT_FALSE(error.empty());
-    EXPECT_FALSE(result);
+    EXPECT_FALSE(result.get());
     return;
   }
   EXPECT_EQ("", error);

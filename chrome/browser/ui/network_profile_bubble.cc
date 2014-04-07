@@ -17,7 +17,7 @@
 #include "base/logging.h"
 #include "base/metrics/histogram.h"
 #include "base/prefs/pref_service.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_finder.h"
@@ -135,7 +135,7 @@ void NetworkProfileBubble::CheckNetworkProfile(
       } else {
         RecordUmaEvent(METRIC_CHECK_IO_FAILED);
       }
-      file_util::Delete(temp_file, false);
+      base::DeleteFile(temp_file, false);
     }
     if (profile_on_network) {
       RecordUmaEvent(METRIC_PROFILE_ON_NETWORK);
@@ -157,13 +157,16 @@ void NetworkProfileBubble::SetNotificationShown(bool shown) {
 }
 
 // static
-void NetworkProfileBubble::RegisterUserPrefs(PrefRegistrySyncable* registry) {
-  registry->RegisterIntegerPref(prefs::kNetworkProfileWarningsLeft,
-                                kMaxWarnings,
-                                PrefRegistrySyncable::UNSYNCABLE_PREF);
-  registry->RegisterInt64Pref(prefs::kNetworkProfileLastWarningTime,
-                              0,
-                              PrefRegistrySyncable::UNSYNCABLE_PREF);
+void NetworkProfileBubble::RegisterProfilePrefs(
+    user_prefs::PrefRegistrySyncable* registry) {
+  registry->RegisterIntegerPref(
+      prefs::kNetworkProfileWarningsLeft,
+      kMaxWarnings,
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
+  registry->RegisterInt64Pref(
+      prefs::kNetworkProfileLastWarningTime,
+      0,
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
 }
 
 // static

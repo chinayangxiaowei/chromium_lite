@@ -4,37 +4,29 @@
 
 #include "content/browser/renderer_host/test_render_view_host.h"
 
-#include "content/browser/dom_storage/dom_storage_context_impl.h"
+#include "content/browser/dom_storage/dom_storage_context_wrapper.h"
 #include "content/browser/dom_storage/session_storage_namespace_impl.h"
 #include "content/browser/renderer_host/test_backing_store.h"
 #include "content/browser/site_instance_impl.h"
+#include "content/common/dom_storage/dom_storage_types.h"
 #include "content/common/view_messages.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/common/content_client.h"
+#include "content/public/common/page_state.h"
 #include "content/public/common/password_form.h"
 #include "content/test/test_web_contents.h"
 #include "media/base/video_frame.h"
 #include "ui/gfx/rect.h"
-#include "webkit/dom_storage/dom_storage_types.h"
-#include "webkit/glue/glue_serialize.h"
-#include "webkit/glue/webpreferences.h"
+#include "webkit/common/webpreferences.h"
 
 namespace content {
 
 namespace {
-// Normally this is done by the NavigationController, but we'll fake it out
-// here for testing.
-SessionStorageNamespaceImpl* CreateSessionStorageNamespace(
-    SiteInstance* instance) {
-  RenderProcessHost* process_host = instance->GetProcess();
-  DOMStorageContext* dom_storage_context =
-      BrowserContext::GetStoragePartition(process_host->GetBrowserContext(),
-                                          instance)->GetDOMStorageContext();
-  return new SessionStorageNamespaceImpl(
-      static_cast<DOMStorageContextImpl*>(dom_storage_context));
-}
+
+const int64 kFrameId = 13UL;
+
 }  // namespace
 
 
@@ -55,12 +47,14 @@ void InitNavigateParams(ViewHostMsg_FrameNavigate_Params* params,
   params->gesture = NavigationGestureUser;
   params->was_within_same_page = false;
   params->is_post = false;
-  params->content_state = webkit_glue::CreateHistoryStateForURL(GURL(url));
+  params->page_state = PageState::CreateFromURL(url);
 }
 
 TestRenderWidgetHostView::TestRenderWidgetHostView(RenderWidgetHost* rwh)
     : rwh_(RenderWidgetHostImpl::From(rwh)),
-      is_showing_(false) {
+      is_showing_(false),
+      did_swap_compositor_frame_(false) {
+  rwh_->SetView(this);
 }
 
 TestRenderWidgetHostView::~TestRenderWidgetHostView() {
@@ -102,10 +96,12 @@ bool TestRenderWidgetHostView::IsShowing() {
   return is_showing_;
 }
 
-void TestRenderWidgetHostView::RenderViewGone(base::TerminationStatus status,
-                                              int error_code) {
+void TestRenderWidgetHostView::RenderProcessGone(base::TerminationStatus status,
+                                                 int error_code) {
   delete this;
 }
+
+void TestRenderWidgetHostView::Destroy() { delete this; }
 
 gfx::Rect TestRenderWidgetHostView::GetViewBounds() const {
   return gfx::Rect();
@@ -202,6 +198,13 @@ gfx::NativeView TestRenderWidgetHostView::BuildInputMethodsGtkMenu() {
 }
 #endif  // defined(TOOLKIT_GTK)
 
+void TestRenderWidgetHostView::OnSwapCompositorFrame(
+    uint32 output_surface_id,
+    scoped_ptr<cc::CompositorFrame> frame) {
+  did_swap_compositor_frame_ = true;
+}
+
+
 gfx::GLSurfaceHandle TestRenderWidgetHostView::GetCompositingSurface() {
   return gfx::GLSurfaceHandle();
 }
@@ -212,9 +215,10 @@ void TestRenderWidgetHostView::SetClickthroughRegion(SkRegion* region) {
 #endif
 
 #if defined(OS_WIN) && defined(USE_AURA)
-void TestRenderWidgetHostView::SetParentNativeViewAccessible(
-    gfx::NativeViewAccessible accessible_parent) {
+gfx::NativeViewAccessible
+TestRenderWidgetHostView::AccessibleObjectFromChildId(long child_id) {
   NOTIMPLEMENTED();
+  return NULL;
 }
 #endif
 
@@ -225,35 +229,42 @@ bool TestRenderWidgetHostView::LockMouse() {
 void TestRenderWidgetHostView::UnlockMouse() {
 }
 
+#if defined(OS_WIN) && defined(USE_AURA)
+void TestRenderWidgetHostView::SetParentNativeViewAccessible(
+    gfx::NativeViewAccessible accessible_parent) {
+}
+#endif
+
 TestRenderViewHost::TestRenderViewHost(
     SiteInstance* instance,
     RenderViewHostDelegate* delegate,
     RenderWidgetHostDelegate* widget_delegate,
     int routing_id,
+    int main_frame_routing_id,
     bool swapped_out)
     : RenderViewHostImpl(instance,
                          delegate,
                          widget_delegate,
                          routing_id,
-                         swapped_out,
-                         CreateSessionStorageNamespace(instance)),
+                         main_frame_routing_id,
+                         swapped_out),
       render_view_created_(false),
       delete_counter_(NULL),
       simulate_fetch_via_proxy_(false),
-      contents_mime_type_("text/html") {
-  // For normal RenderViewHosts, this is freed when |Shutdown()| is
-  // called.  For TestRenderViewHost, the view is explicitly
-  // deleted in the destructor below, because
-  // TestRenderWidgetHostView::Destroy() doesn't |delete this|.
-  SetView(new TestRenderWidgetHostView(this));
+      simulate_history_list_was_cleared_(false),
+      contents_mime_type_("text/html"),
+      opener_route_id_(MSG_ROUTING_NONE) {
+  // TestRenderWidgetHostView installs itself into this->view_ in its
+  // constructor, and deletes itself when TestRenderWidgetHostView::Destroy() is
+  // called.
+  new TestRenderWidgetHostView(this);
+
+  main_frame_id_ = kFrameId;
 }
 
 TestRenderViewHost::~TestRenderViewHost() {
   if (delete_counter_)
     ++*delete_counter_;
-
-  // Since this isn't a traditional view, we have to delete it.
-  delete GetView();
 }
 
 bool TestRenderViewHost::CreateRenderView(
@@ -262,6 +273,7 @@ bool TestRenderViewHost::CreateRenderView(
     int32 max_page_id) {
   DCHECK(!render_view_created_);
   render_view_created_ = true;
+  opener_route_id_ = opener_route_id;
   return true;
 }
 
@@ -273,26 +285,47 @@ void TestRenderViewHost::SendNavigate(int page_id, const GURL& url) {
   SendNavigateWithTransition(page_id, url, PAGE_TRANSITION_LINK);
 }
 
+void TestRenderViewHost::SendFailedNavigate(int page_id, const GURL& url) {
+  SendNavigateWithTransitionAndResponseCode(
+      page_id, url, PAGE_TRANSITION_LINK, 500);
+}
+
 void TestRenderViewHost::SendNavigateWithTransition(
     int page_id, const GURL& url, PageTransition transition) {
-  OnDidStartProvisionalLoadForFrame(0, -1, true, url);
-  SendNavigateWithParameters(page_id, url, transition, url);
+  SendNavigateWithTransitionAndResponseCode(page_id, url, transition, 200);
 }
 
 void TestRenderViewHost::SendNavigateWithOriginalRequestURL(
     int page_id, const GURL& url, const GURL& original_request_url) {
-  OnDidStartProvisionalLoadForFrame(0, -1, true, url);
+  OnDidStartProvisionalLoadForFrame(kFrameId, -1, true, url);
   SendNavigateWithParameters(page_id, url, PAGE_TRANSITION_LINK,
-      original_request_url);
+                             original_request_url, 200, 0);
+}
+
+void TestRenderViewHost::SendNavigateWithFile(
+    int page_id, const GURL& url, const base::FilePath& file_path) {
+  SendNavigateWithParameters(page_id, url, PAGE_TRANSITION_LINK,
+                             url, 200, &file_path);
+}
+
+void TestRenderViewHost::SendNavigateWithTransitionAndResponseCode(
+    int page_id, const GURL& url, PageTransition transition,
+    int response_code) {
+  // DidStartProvisionalLoad may delete the pending entry that holds |url|,
+  // so we keep a copy of it to use in SendNavigateWithParameters.
+  GURL url_copy(url);
+  OnDidStartProvisionalLoadForFrame(kFrameId, -1, true, url_copy);
+  SendNavigateWithParameters(page_id, url_copy, transition, url_copy,
+                             response_code, 0);
 }
 
 void TestRenderViewHost::SendNavigateWithParameters(
     int page_id, const GURL& url, PageTransition transition,
-    const GURL& original_request_url) {
+    const GURL& original_request_url, int response_code,
+    const base::FilePath* file_path_for_history_item) {
   ViewHostMsg_FrameNavigate_Params params;
-
   params.page_id = page_id;
-  params.frame_id = 0;
+  params.frame_id = kFrameId;
   params.url = url;
   params.referrer = Referrer();
   params.transition = transition;
@@ -306,19 +339,26 @@ void TestRenderViewHost::SendNavigateWithParameters(
   params.contents_mime_type = contents_mime_type_;
   params.is_post = false;
   params.was_within_same_page = false;
-  params.http_status_code = 0;
+  params.http_status_code = response_code;
   params.socket_address.set_host("2001:db8::1");
   params.socket_address.set_port(80);
   params.was_fetched_via_proxy = simulate_fetch_via_proxy_;
-  params.content_state = webkit_glue::CreateHistoryStateForURL(GURL(url));
+  params.history_list_was_cleared = simulate_history_list_was_cleared_;
   params.original_request_url = original_request_url;
+
+  params.page_state = PageState::CreateForTesting(
+      url,
+      false,
+      file_path_for_history_item ? "data" : NULL,
+      file_path_for_history_item);
 
   ViewHostMsg_FrameNavigate msg(1, params);
   OnNavigate(msg);
 }
 
 void TestRenderViewHost::SendShouldCloseACK(bool proceed) {
-  OnShouldCloseACK(proceed, base::TimeTicks(), base::TimeTicks());
+  base::TimeTicks now = base::TimeTicks::Now();
+  OnShouldCloseACK(proceed, now, now);
 }
 
 void TestRenderViewHost::SetContentsMimeType(const std::string& mime_type) {
@@ -326,7 +366,7 @@ void TestRenderViewHost::SetContentsMimeType(const std::string& mime_type) {
 }
 
 void TestRenderViewHost::SimulateSwapOutACK() {
-  OnSwapOutACK(false);
+  OnSwappedOut(false);
 }
 
 void TestRenderViewHost::SimulateWasHidden() {
@@ -338,15 +378,29 @@ void TestRenderViewHost::SimulateWasShown() {
 }
 
 void TestRenderViewHost::TestOnStartDragging(
-    const WebDropData& drop_data) {
+    const DropData& drop_data) {
   WebKit::WebDragOperationsMask drag_operation = WebKit::WebDragOperationEvery;
   DragEventSourceInfo event_info;
   OnStartDragging(drop_data, drag_operation, SkBitmap(), gfx::Vector2d(),
                   event_info);
 }
 
+void TestRenderViewHost::TestOnUpdateStateWithFile(
+    int process_id,
+    const base::FilePath& file_path) {
+  OnUpdateState(process_id,
+                PageState::CreateForTesting(GURL("http://www.google.com"),
+                                            false,
+                                            "data",
+                                            &file_path));
+}
+
 void TestRenderViewHost::set_simulate_fetch_via_proxy(bool proxy) {
   simulate_fetch_via_proxy_ = proxy;
+}
+
+void TestRenderViewHost::set_simulate_history_list_was_cleared(bool cleared) {
+  simulate_history_list_was_cleared_ = cleared;
 }
 
 RenderViewHostImplTestHarness::RenderViewHostImplTestHarness() {

@@ -16,9 +16,8 @@
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/message_loop.h"
-#include "base/process_util.h"
-#include "base/stringprintf.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/stringprintf.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/test/test_timeouts.h"
 #include "base/test/thread_test_helper.h"
@@ -43,11 +42,25 @@ class ProcessSingletonLinuxTest : public testing::Test {
   class TestableProcessSingleton : public ProcessSingleton {
    public:
     explicit TestableProcessSingleton(const base::FilePath& user_data_dir)
-        : ProcessSingleton(user_data_dir) {}
+        : ProcessSingleton(
+            user_data_dir,
+            base::Bind(&TestableProcessSingleton::NotificationCallback,
+                       base::Unretained(this))) {}
+
+
+    std::vector<CommandLine::StringVector> callback_command_lines_;
+
     using ProcessSingleton::NotifyOtherProcessWithTimeout;
     using ProcessSingleton::NotifyOtherProcessWithTimeoutOrCreate;
     using ProcessSingleton::OverrideCurrentPidForTesting;
     using ProcessSingleton::OverrideKillCallbackForTesting;
+
+   private:
+    bool NotificationCallback(const CommandLine& command_line,
+                              const base::FilePath& current_directory) {
+      callback_command_lines_.push_back(command_line.argv());
+      return true;
+    }
   };
 
   ProcessSingletonLinuxTest()
@@ -73,7 +86,7 @@ class ProcessSingletonLinuxTest : public testing::Test {
 
   virtual void TearDown() {
     scoped_refptr<base::ThreadTestHelper> io_helper(new base::ThreadTestHelper(
-        BrowserThread::GetMessageLoopProxyForThread(BrowserThread::IO)));
+        BrowserThread::GetMessageLoopProxyForThread(BrowserThread::IO).get()));
     ASSERT_TRUE(io_helper->Run());
 
     // Destruct the ProcessSingleton object before the IO thread so that its
@@ -84,8 +97,8 @@ class ProcessSingletonLinuxTest : public testing::Test {
           base::Bind(&ProcessSingletonLinuxTest::DestructProcessSingleton,
                      base::Unretained(this)));
 
-      scoped_refptr<base::ThreadTestHelper> helper(
-          new base::ThreadTestHelper(worker_thread_->message_loop_proxy()));
+      scoped_refptr<base::ThreadTestHelper> helper(new base::ThreadTestHelper(
+          worker_thread_->message_loop_proxy().get()));
       ASSERT_TRUE(helper->Run());
     }
 
@@ -105,8 +118,7 @@ class ProcessSingletonLinuxTest : public testing::Test {
                   base::Unretained(this)));
 
     scoped_refptr<base::ThreadTestHelper> helper(
-        new base::ThreadTestHelper(
-            worker_thread_->message_loop_proxy()));
+        new base::ThreadTestHelper(worker_thread_->message_loop_proxy().get()));
     ASSERT_TRUE(helper->Run());
   }
 
@@ -122,7 +134,8 @@ class ProcessSingletonLinuxTest : public testing::Test {
     CommandLine command_line(CommandLine::ForCurrentProcess()->GetProgram());
     command_line.AppendArg("about:blank");
     if (override_kill) {
-      process_singleton->OverrideCurrentPidForTesting(base::GetCurrentProcId() + 1);
+      process_singleton->OverrideCurrentPidForTesting(
+          base::GetCurrentProcId() + 1);
       process_singleton->OverrideKillCallbackForTesting(
           base::Bind(&ProcessSingletonLinuxTest::KillCallback,
                      base::Unretained(this)));
@@ -141,14 +154,18 @@ class ProcessSingletonLinuxTest : public testing::Test {
     CommandLine command_line(CommandLine::ForCurrentProcess()->GetProgram());
     command_line.AppendArg(url);
     return process_singleton->NotifyOtherProcessWithTimeoutOrCreate(
-        command_line, base::Bind(&NotificationCallback), timeout.InSeconds());
+        command_line, timeout.InSeconds());
   }
 
   void CheckNotified() {
-    ASSERT_EQ(1u, callback_command_lines_.size());
+    ASSERT_TRUE(process_singleton_on_thread_ != NULL);
+    ASSERT_EQ(1u, process_singleton_on_thread_->callback_command_lines_.size());
     bool found = false;
-    for (size_t i = 0; i < callback_command_lines_[0].size(); ++i) {
-      if (callback_command_lines_[0][i] == "about:blank") {
+    for (size_t i = 0;
+         i < process_singleton_on_thread_->callback_command_lines_[0].size();
+         ++i) {
+      if (process_singleton_on_thread_->callback_command_lines_[0][i] ==
+          "about:blank") {
         found = true;
         break;
       }
@@ -184,20 +201,12 @@ class ProcessSingletonLinuxTest : public testing::Test {
     ASSERT_TRUE(!process_singleton_on_thread_);
     process_singleton_on_thread_ = CreateProcessSingleton();
     ASSERT_EQ(ProcessSingleton::PROCESS_NONE,
-              process_singleton_on_thread_->NotifyOtherProcessOrCreate(
-                  base::Bind(&ProcessSingletonLinuxTest::InternalCallback,
-                             base::Unretained(this))));
+              process_singleton_on_thread_->NotifyOtherProcessOrCreate());
   }
 
   void DestructProcessSingleton() {
     ASSERT_TRUE(process_singleton_on_thread_);
     delete process_singleton_on_thread_;
-  }
-
-  bool InternalCallback(const CommandLine& command_line,
-                        const base::FilePath& current_directory) {
-    callback_command_lines_.push_back(command_line.argv());
-    return true;
   }
 
   void KillCallback(int pid) {
@@ -211,8 +220,6 @@ class ProcessSingletonLinuxTest : public testing::Test {
 
   scoped_ptr<base::Thread> worker_thread_;
   TestableProcessSingleton* process_singleton_on_thread_;
-
-  std::vector<CommandLine::StringVector> callback_command_lines_;
 };
 
 }  // namespace
@@ -348,8 +355,7 @@ TEST_F(ProcessSingletonLinuxTest, CreateFailsWithExistingBrowser) {
   scoped_ptr<TestableProcessSingleton> process_singleton(
       CreateProcessSingleton());
   process_singleton->OverrideCurrentPidForTesting(base::GetCurrentProcId() + 1);
-  EXPECT_FALSE(process_singleton->Create(
-               base::Bind(&NotificationCallback)));
+  EXPECT_FALSE(process_singleton->Create());
 }
 
 // Test that Create fails when another browser is using the profile directory
@@ -370,7 +376,7 @@ TEST_F(ProcessSingletonLinuxTest, CreateChecksCompatibilitySocket) {
                       socket_path_.value().c_str()));
   ASSERT_EQ(0, unlink(cookie_path_.value().c_str()));
 
-  EXPECT_FALSE(process_singleton->Create(base::Bind(&NotificationCallback)));
+  EXPECT_FALSE(process_singleton->Create());
 }
 
 // Test that we fail when lock says process is on another host and we can't

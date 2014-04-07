@@ -4,6 +4,7 @@
 
 #include "ash/system/date/tray_date.h"
 
+#include "ash/session_state_delegate.h"
 #include "ash/shell.h"
 #include "ash/shell_delegate.h"
 #include "ash/system/date/date_view.h"
@@ -12,17 +13,17 @@
 #include "ash/system/tray/system_tray_notifier.h"
 #include "ash/system/tray/tray_constants.h"
 #include "ash/system/tray/tray_item_view.h"
-#include "ash/system/tray/tray_views.h"
+#include "ash/system/tray/tray_popup_header_button.h"
 #include "base/i18n/time_formatting.h"
-#include "base/stringprintf.h"
-#include "base/time.h"
-#include "base/timer.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "grit/ash_resources.h"
 #include "grit/ash_strings.h"
-#include "third_party/icu/public/i18n/unicode/datefmt.h"
-#include "third_party/icu/public/i18n/unicode/fieldpos.h"
-#include "third_party/icu/public/i18n/unicode/fmtable.h"
+#include "third_party/icu/source/i18n/unicode/datefmt.h"
+#include "third_party/icu/source/i18n/unicode/fieldpos.h"
+#include "third_party/icu/source/i18n/unicode/fmtable.h"
 #include "third_party/skia/include/core/SkRect.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -89,7 +90,7 @@ class DateDefaultView : public views::View,
       view->AddButton(shutdown_);
     }
 
-    if (ash::Shell::GetInstance()->CanLockScreen()) {
+    if (ash::Shell::GetInstance()->session_state_delegate()->CanLockScreen()) {
       lock_ = new ash::internal::TrayPopupHeaderButton(this,
           IDR_AURA_UBER_TRAY_LOCKSCREEN,
           IDR_AURA_UBER_TRAY_LOCKSCREEN,

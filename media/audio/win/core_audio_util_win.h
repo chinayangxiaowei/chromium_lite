@@ -16,7 +16,7 @@
 #include <string>
 
 #include "base/basictypes.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "base/win/scoped_comptr.h"
 #include "media/audio/audio_device_name.h"
 #include "media/audio/audio_parameters.h"
@@ -75,7 +75,7 @@ class MEDIA_EXPORT CoreAudioUtil {
   // Returns true if the provided unique |device_id| corresponds to the current
   // default device for the specified by a data-flow direction and role.
   static bool DeviceIsDefault(
-      EDataFlow flow, ERole role, std::string device_id);
+      EDataFlow flow, ERole role, const std::string& device_id);
 
   // Query if the audio device is a rendering device or a capture device.
   static EDataFlow GetDataFlow(IMMDevice* device);
@@ -117,6 +117,14 @@ class MEDIA_EXPORT CoreAudioUtil {
                                 AUDCLNT_SHAREMODE share_mode,
                                 const WAVEFORMATPCMEX* format);
 
+  // Returns true if the specified |channel_layout| is supported for the
+  // default IMMDevice where flow direction and role is define by |data_flow|
+  // and |role|. If this method returns true for a certain channel layout, it
+  // means that SharedModeInitialize() will succeed using a format based on
+  // the preferred format where the channel layout has been modified.
+  static bool IsChannelLayoutSupported(EDataFlow data_flow, ERole role,
+                                       ChannelLayout channel_layout);
+
   // For a shared-mode stream, the audio engine periodically processes the
   // data in the endpoint buffer at the period obtained in |device_period|.
   // For an exclusive mode stream, |device_period| corresponds to the minimum
@@ -129,12 +137,15 @@ class MEDIA_EXPORT CoreAudioUtil {
                                  REFERENCE_TIME* device_period);
 
   // Get the preferred audio parameters for the specified |client| or the
-  // given direction and role is define by |data_flow| and |role|.
+  // given direction and role is define by |data_flow| and |role|, or the
+  // unique device id given by |device_id|.
   // The acquired values should only be utilized for shared mode streamed since
   // there are no preferred settings for an exclusive mode stream.
   static HRESULT GetPreferredAudioParameters(IAudioClient* client,
                                              AudioParameters* params);
   static HRESULT GetPreferredAudioParameters(EDataFlow data_flow, ERole role,
+                                             AudioParameters* params);
+  static HRESULT GetPreferredAudioParameters(const std::string& device_id,
                                              AudioParameters* params);
 
   // After activating an IAudioClient interface on an audio endpoint device,

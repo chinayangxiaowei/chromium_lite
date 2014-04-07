@@ -41,6 +41,7 @@ namespace syncer {
 class SYNC_EXPORT_PRIVATE UniquePosition {
  public:
   static const size_t kSuffixLength;
+  static const size_t kCompressBytesThreshold;
 
   static bool IsValidSuffix(const std::string& suffix);
   static bool IsValidBytes(const std::string& bytes);
@@ -49,6 +50,7 @@ class SYNC_EXPORT_PRIVATE UniquePosition {
   static UniquePosition CreateInvalid();
 
   // Converts from a 'sync_pb::UniquePosition' protobuf to a UniquePosition.
+  // This may return an invalid position if the parsing fails.
   static UniquePosition FromProto(const sync_pb::UniquePosition& proto);
 
   // Creates a position with the given suffix.  Ordering among positions created
@@ -77,6 +79,9 @@ class SYNC_EXPORT_PRIVATE UniquePosition {
 
   // Serializes the position's internal state to a protobuf.
   void ToProto(sync_pb::UniquePosition* proto) const;
+
+  // Serializes the protobuf representation of this object as a string.
+  void SerializeToString(std::string* blob) const;
 
   // Returns a human-readable representation of this item's internal state.
   std::string ToDebugString() const;
@@ -111,10 +116,22 @@ class SYNC_EXPORT_PRIVATE UniquePosition {
                                            const std::string& after,
                                            const std::string& suffix);
 
+  // Expects a run-length compressed string as input.  For internal use only.
   explicit UniquePosition(const std::string& internal_rep);
-  UniquePosition(const std::string& prefix, const std::string& suffix);
 
-  std::string bytes_;
+  // Expects an uncompressed prefix and suffix as input.  The |suffix| parameter
+  // must be a suffix of |uncompressed|.  For internal use only.
+  UniquePosition(const std::string& uncompressed, const std::string& suffix);
+
+  // Implementation of an order-preserving run-length compression scheme.
+  static std::string Compress(const std::string& input);
+  static std::string CompressImpl(const std::string& input);
+  static std::string Uncompress(const std::string& compressed);
+  static bool IsValidCompressed(const std::string& str);
+
+  // The position value after it has been run through the custom compression
+  // algorithm.  See Compress() and Uncompress() functions above.
+  std::string compressed_;
   bool is_valid_;
 };
 

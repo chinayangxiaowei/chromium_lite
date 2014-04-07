@@ -111,7 +111,7 @@ gfx::NativeView WebContentsViewWin::GetContentNativeView() const {
 }
 
 gfx::NativeWindow WebContentsViewWin::GetTopLevelNativeWindow() const {
-  return GetParent(GetNativeView());
+  return ::GetAncestor(GetNativeView(), GA_ROOT);
 }
 
 void WebContentsViewWin::GetContainerBounds(gfx::Rect *out) const {
@@ -155,7 +155,7 @@ void WebContentsViewWin::CreateView(
   // Remove the root view drop target so we can register our own.
   RevokeDragDrop(GetNativeView());
   drag_dest_ = new WebDragDest(hwnd(), web_contents_);
-  if (delegate_.get()) {
+  if (delegate_) {
     WebDragDestDelegate* delegate = delegate_->GetDragDestDelegate();
     if (delegate)
       drag_dest_->set_delegate(delegate);
@@ -184,16 +184,16 @@ void WebContentsViewWin::SetInitialFocus() {
 }
 
 void WebContentsViewWin::StoreFocus() {
-  if (delegate_.get())
+  if (delegate_)
     delegate_->StoreFocus();
 }
 
 void WebContentsViewWin::RestoreFocus() {
-  if (delegate_.get())
+  if (delegate_)
     delegate_->RestoreFocus();
 }
 
-WebDropData* WebContentsViewWin::GetDropData() const {
+DropData* WebContentsViewWin::GetDropData() const {
   return drag_dest_->current_drop_data();
 }
 
@@ -243,25 +243,23 @@ void WebContentsViewWin::RenderViewSwappedIn(RenderViewHost* host) {
 void WebContentsViewWin::SetOverscrollControllerEnabled(bool enabled) {
 }
 
-void WebContentsViewWin::ShowContextMenu(
-    const ContextMenuParams& params,
-    ContextMenuSourceType type) {
-  if (delegate_.get())
-    delegate_->ShowContextMenu(params, type);
+void WebContentsViewWin::ShowContextMenu(const ContextMenuParams& params) {
+  if (delegate_)
+    delegate_->ShowContextMenu(params);
 }
 
 void WebContentsViewWin::ShowPopupMenu(const gfx::Rect& bounds,
                                        int item_height,
                                        double item_font_size,
                                        int selected_item,
-                                       const std::vector<WebMenuItem>& items,
+                                       const std::vector<MenuItem>& items,
                                        bool right_aligned,
                                        bool allow_multiple_selection) {
   // External popup menus are only used on Mac and Android.
   NOTIMPLEMENTED();
 }
 
-void WebContentsViewWin::StartDragging(const WebDropData& drop_data,
+void WebContentsViewWin::StartDragging(const DropData& drop_data,
                                        WebKit::WebDragOperationsMask operations,
                                        const gfx::ImageSkia& image,
                                        const gfx::Vector2d& image_offset,
@@ -310,11 +308,11 @@ LRESULT WebContentsViewWin::OnCreate(
 
 LRESULT WebContentsViewWin::OnDestroy(
     UINT message, WPARAM wparam, LPARAM lparam, BOOL& handled) {
-  if (drag_dest_.get()) {
+  if (drag_dest_) {
     RevokeDragDrop(GetNativeView());
     drag_dest_ = NULL;
   }
-  if (drag_handler_.get()) {
+  if (drag_handler_) {
     drag_handler_->CancelDrag();
     drag_handler_ = NULL;
   }
@@ -357,7 +355,7 @@ LRESULT WebContentsViewWin::OnWindowPosChanged(
   if (rwhv)
     rwhv->SetSize(size);
 
-  if (delegate_.get())
+  if (delegate_)
     delegate_->SizeChanged(size);
 
   return 0;

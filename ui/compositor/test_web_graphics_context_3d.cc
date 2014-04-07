@@ -33,23 +33,6 @@ int TestWebGraphicsContext3D::height() {
   return 0;
 }
 
-bool TestWebGraphicsContext3D::isGLES2Compliant() {
-  return false;
-}
-
-bool TestWebGraphicsContext3D::readBackFramebuffer(
-    unsigned char* pixels,
-    size_t bufferSize,
-    WebKit::WebGLId framebuffer,
-    int width,
-    int height) {
-  return false;
-}
-
-WebKit::WebGLId TestWebGraphicsContext3D::getPlatformTextureId() {
-  return 0;
-}
-
 bool TestWebGraphicsContext3D::isContextLost() {
   return false;
 }
@@ -115,6 +98,8 @@ void TestWebGraphicsContext3D::getIntegerv(WebKit::WGC3Denum pname,
                                            WebKit::WGC3Dint* value) {
   if (pname == GL_MAX_TEXTURE_SIZE)
     *value = 1024;
+  else if (pname == GL_ACTIVE_TEXTURE)
+    *value = GL_TEXTURE0;
 }
 
 void TestWebGraphicsContext3D::getProgramiv(WebKit::WebGLId program,

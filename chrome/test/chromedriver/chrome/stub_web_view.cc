@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/files/file_path.h"
 #include "base/values.h"
 #include "chrome/test/chromedriver/chrome/status.h"
 #include "chrome/test/chromedriver/chrome/stub_web_view.h"
@@ -19,7 +20,7 @@ Status StubWebView::ConnectIfNecessary() {
   return Status(kOk);
 }
 
-Status StubWebView::Close() {
+Status StubWebView::HandleReceivedEvents() {
   return Status(kOk);
 }
 
@@ -44,6 +45,22 @@ Status StubWebView::CallFunction(const std::string& frame,
   return Status(kOk);
 }
 
+Status StubWebView::CallAsyncFunction(const std::string& frame,
+                                      const std::string& function,
+                                      const base::ListValue& args,
+                                      const base::TimeDelta& timeout,
+                                      scoped_ptr<base::Value>* result) {
+  return Status(kOk);
+}
+
+Status StubWebView::CallUserAsyncFunction(const std::string& frame,
+                                          const std::string& function,
+                                          const base::ListValue& args,
+                                          const base::TimeDelta& timeout,
+                                          scoped_ptr<base::Value>* result) {
+  return Status(kOk);
+}
+
 Status StubWebView::GetFrameByFunction(const std::string& frame,
                                        const std::string& function,
                                        const base::ListValue& args,
@@ -51,7 +68,12 @@ Status StubWebView::GetFrameByFunction(const std::string& frame,
   return Status(kOk);
 }
 
-Status StubWebView::DispatchMouseEvents(const std::list<MouseEvent>& events) {
+Status StubWebView::DispatchMouseEvents(const std::list<MouseEvent>& events,
+                                        const std::string& frame) {
+  return Status(kOk);
+}
+
+Status StubWebView::DispatchTouchEvents(const std::list<TouchEvent>& events) {
   return Status(kOk);
 }
 
@@ -68,7 +90,8 @@ Status StubWebView::DeleteCookie(const std::string& name,
   return Status(kOk);
 }
 
-Status StubWebView::WaitForPendingNavigations(const std::string& frame_id) {
+Status StubWebView::WaitForPendingNavigations(const std::string& frame_id,
+                                              int timeout) {
   return Status(kOk);
 }
 
@@ -77,14 +100,21 @@ Status StubWebView::IsPendingNavigation(const std::string& frame_id,
   return Status(kOk);
 }
 
-Status StubWebView::GetMainFrame(std::string* frame_id) {
-  return Status(kOk);
-}
-
 JavaScriptDialogManager* StubWebView::GetJavaScriptDialogManager() {
   return NULL;
 }
 
+Status StubWebView::OverrideGeolocation(const Geoposition& geoposition) {
+  return Status(kOk);
+}
+
 Status StubWebView::CaptureScreenshot(std::string* screenshot) {
+  return Status(kOk);
+}
+
+Status StubWebView::SetFileInputFiles(
+    const std::string& frame,
+    const base::DictionaryValue& element,
+    const std::vector<base::FilePath>& files) {
   return Status(kOk);
 }

@@ -10,11 +10,12 @@
 #include <vector>
 
 #include "base/memory/ref_counted.h"
-#include "base/time.h"
-#include "chrome/browser/profiles/profile_keyed_service.h"
+#include "base/time/time.h"
 #include "chrome/browser/sessions/session_id.h"
 #include "chrome/browser/sessions/session_types.h"
 #include "chrome/browser/ui/host_desktop.h"
+#include "components/browser_context_keyed_service/browser_context_keyed_service.h"
+#include "components/sessions/serialized_navigation_entry.h"
 #include "content/public/browser/session_storage_namespace.h"
 #include "ui/base/window_open_disposition.h"
 
@@ -37,7 +38,7 @@ class WebContents;
 //
 // To listen for changes to the set of entries managed by the TabRestoreService
 // add an observer.
-class TabRestoreService : public ProfileKeyedService {
+class TabRestoreService : public BrowserContextKeyedService {
  public:
   // Interface used to allow the test to provide a custom time.
   class TimeFactory {
@@ -81,7 +82,7 @@ class TabRestoreService : public ProfileKeyedService {
     bool has_browser() const { return browser_id > 0; }
 
     // The navigations.
-    std::vector<TabNavigation> navigations;
+    std::vector<sessions::SerializedNavigationEntry> navigations;
 
     // Index of the selected navigation in navigations.
     int current_navigation_index;
@@ -154,8 +155,9 @@ class TabRestoreService : public ProfileKeyedService {
   // Restores the most recently closed entry. Does nothing if there are no
   // entries to restore. If the most recently restored entry is a tab, it is
   // added to |delegate|. If a new browser needs to be created for this entry,
-  // it will be created on the desktop specified by |host_desktop_type|.
-  virtual void RestoreMostRecentEntry(
+  // it will be created on the desktop specified by |host_desktop_type|. Returns
+  // the WebContents of the restored tab(s).
+  virtual std::vector<content::WebContents*> RestoreMostRecentEntry(
       TabRestoreServiceDelegate* delegate,
       chrome::HostDesktopType host_desktop_type) = 0;
 
@@ -169,10 +171,12 @@ class TabRestoreService : public ProfileKeyedService {
   // browser window) of the tab when it was closed will be respected if
   // disposition is UNKNOWN. If a new browser needs to be created for this
   // entry, it will be created on the desktop specified by |host_desktop_type|.
-  virtual void RestoreEntryById(TabRestoreServiceDelegate* delegate,
-                                SessionID::id_type id,
-                                chrome::HostDesktopType host_desktop_type,
-                                WindowOpenDisposition disposition) = 0;
+  // Returns the WebContents of the restored tab(s).
+  virtual std::vector<content::WebContents*> RestoreEntryById(
+      TabRestoreServiceDelegate* delegate,
+      SessionID::id_type id,
+      chrome::HostDesktopType host_desktop_type,
+      WindowOpenDisposition disposition) = 0;
 
   // Loads the tabs and previous session. This does nothing if the tabs
   // from the previous session have already been loaded.

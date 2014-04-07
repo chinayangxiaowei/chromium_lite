@@ -17,26 +17,24 @@ class Rect;
 namespace ash {
 class FramePainter;
 namespace internal {
-class AlwaysOnTopController;
 class RootWindowController;
 
 // Shell-specific window property keys.
 
 // Alphabetical sort.
 
-// A Key to store AlwaysOnTopController per RootWindow. The value is
-// owned by the RootWindow.
-extern const aura::WindowProperty<internal::AlwaysOnTopController*>* const
-    kAlwaysOnTopControllerKey;
-
 // A property key to indicate that an in progress drag should be continued
 // after the window is reparented to another container.
 extern const aura::WindowProperty<bool>* const kContinueDragAfterReparent;
 
-// A property key to indicate that the user is cycling through workspaces.
-// The property should only be set on the root window.
+// A property key to store display_id an aura::RootWindow is mapped to.
+extern const aura::WindowProperty<int64>* const kDisplayIdKey;
+
+// A property key to indicate whether there is any chrome at all that cannot be
+// hidden when the window is fullscreen. This is unrelated to whether the full
+// chrome can be revealed by hovering the mouse at the top of the screen.
 ASH_EXPORT extern const aura::WindowProperty<bool>* const
-    kCyclingThroughWorkspacesKey;
+    kFullscreenUsesMinimalChromeKey;
 
 // A property key to disable the frame painter policy for solo windows.
 // It is only available for root windows.
@@ -48,15 +46,8 @@ ASH_EXPORT extern const aura::WindowProperty<bool>* const
 extern const aura::WindowProperty<bool>* const
     kIgnoredByShelfKey;
 
-// True if this is a browser window in immersive mode.
-ASH_EXPORT extern const aura::WindowProperty<bool>* const kImmersiveModeKey;
-
 // True if this window is an attached panel.
 ASH_EXPORT extern const aura::WindowProperty<bool>* const kPanelAttachedKey;
-
-// Used to remember the show state before the window was minimized.
-extern const aura::WindowProperty<ui::WindowShowState>* const
-    kRestoreShowStateKey;
 
 extern const aura::WindowProperty<RootWindowController*>* const
     kRootWindowControllerKey;
@@ -85,9 +76,6 @@ ASH_EXPORT extern const aura::WindowProperty<gfx::Rect*>* const
 
 // Property to tell if the container uses the screen coordinates.
 extern const aura::WindowProperty<bool>* const kUsesScreenCoordinatesKey;
-
-extern const aura::WindowProperty<WindowPersistsAcrossAllWorkspacesType>* const
-    kWindowPersistsAcrossAllWorkspacesKey;
 
 // A property key to remember if a windows position can be managed by the
 // workspace manager or not.

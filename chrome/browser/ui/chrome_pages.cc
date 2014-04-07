@@ -5,8 +5,8 @@
 #include "chrome/browser/ui/chrome_pages.h"
 
 #include "base/logging.h"
-#include "base/stringprintf.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/stringprintf.h"
 #include "chrome/browser/download/download_shelf.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/signin_manager.h"
@@ -18,14 +18,15 @@
 #include "chrome/browser/ui/singleton_tabs.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/webui/options/content_settings_handler.h"
-#include "chrome/browser/ui/webui/signin/login_ui_service.h"
-#include "chrome/browser/ui/webui/signin/login_ui_service_factory.h"
-#include "chrome/browser/ui/webui/sync_promo/sync_promo_ui.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/browser/user_metrics.h"
 #include "google_apis/gaia/gaia_urls.h"
-#include "googleurl/src/gurl.h"
 #include "net/base/url_util.h"
+#include "url/gurl.h"
+
+#if defined(OS_WIN)
+#include "chrome/browser/enumerate_modules_model_win.h"
+#endif
 
 using content::UserMetricsAction;
 
@@ -65,7 +66,7 @@ void ShowBookmarkManager(Browser* browser) {
 }
 
 void ShowBookmarkManagerForNode(Browser* browser, int64 node_id) {
-  OpenBookmarkManagerWithHash(browser, "", node_id);
+  OpenBookmarkManagerWithHash(browser, std::string(), node_id);
 }
 
 void ShowHistory(Browser* browser) {
@@ -80,8 +81,9 @@ void ShowDownloads(Browser* browser) {
   content::RecordAction(UserMetricsAction("ShowDownloads"));
   if (browser->window()) {
     DownloadShelf* shelf = browser->window()->GetDownloadShelf();
+    // The downloads page is always shown in response to a user action.
     if (shelf->IsShowing())
-      shelf->Close();
+      shelf->Close(DownloadShelf::USER_ACTION);
   }
   ShowSingletonTabOverwritingNTP(
       browser,
@@ -105,6 +107,19 @@ void ShowExtensions(Browser* browser,
 }
 
 void ShowConflicts(Browser* browser) {
+#if defined(OS_WIN)
+  EnumerateModulesModel* model = EnumerateModulesModel::GetInstance();
+  if (model->modules_to_notify_about() > 0) {
+    GURL help_center_url = model->GetFirstNotableConflict();
+    if (help_center_url.is_valid()) {
+      EnumerateModulesModel::RecordLearnMoreStat(true);
+      ShowSingletonTab(browser, help_center_url);
+      model->AcknowledgeConflictNotification();
+      return;
+    }
+  }
+#endif
+
   content::RecordAction(UserMetricsAction("AboutConflicts"));
   ShowSingletonTab(browser, GURL(kChromeUIConflictsURL));
 }
@@ -130,6 +145,12 @@ void ShowHelp(Browser* browser, HelpSource source) {
 
 void ShowPolicy(Browser* browser) {
   ShowSingletonTab(browser, GURL(kChromeUIPolicyURL));
+}
+
+void ShowSlow(Browser* browser) {
+#if defined(OS_CHROMEOS)
+  ShowSingletonTab(browser, GURL(kChromeUISlowURL));
+#endif
 }
 
 void ShowSettings(Browser* browser) {
@@ -189,9 +210,9 @@ void ShowSearchEngineSettings(Browser* browser) {
   ShowSettingsSubPage(browser, kSearchEnginesSubPage);
 }
 
-void ShowBrowserSignin(Browser* browser, SyncPromoUI::Source source) {
+void ShowBrowserSignin(Browser* browser, signin::Source source) {
   Profile* original_profile = browser->profile()->GetOriginalProfile();
-  SigninManager* manager =
+  SigninManagerBase* manager =
       SigninManagerFactory::GetForProfile(original_profile);
   DCHECK(manager->IsSigninAllowed());
   // If we're signed in, just show settings.
@@ -207,28 +228,8 @@ void ShowBrowserSignin(Browser* browser, SyncPromoUI::Source source) {
                                             chrome::HOST_DESKTOP_TYPE_NATIVE);
     }
 
-    const bool use_web_flow = SyncPromoUI::UseWebBasedSigninFlow();
-    const bool show_promo =
-        SyncPromoUI::ShouldShowSyncPromo(browser->profile());
-
-    LoginUIService* login = LoginUIServiceFactory::GetForProfile(
-        original_profile);
-    if (use_web_flow || (show_promo && login->current_login_ui() == NULL)) {
-      NavigateToSingletonTab(browser,
-                             GURL(SyncPromoUI::GetSyncPromoURL(GURL(),
-                                                               source,
-                                                               false)));
-    } else {
-      if (login->current_login_ui()) {
-        login->current_login_ui()->FocusUI();
-      } else {
-        // Need to navigate to the settings page and display the sync setup UI.
-        // This always displays the signin UI since the user is not yet signed
-        // in.
-        chrome::ShowSettingsSubPage(browser, chrome::kSyncSetupSubPage);
-      }
-    }
-
+    NavigateToSingletonTab(browser,
+                           GURL(signin::GetPromoURL(source, false)));
     DCHECK_GT(browser->tab_strip_model()->count(), 0);
   }
 }

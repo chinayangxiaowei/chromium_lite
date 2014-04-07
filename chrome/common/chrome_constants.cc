@@ -133,21 +133,17 @@ const char* const kHelperFlavorSuffixes[] = {
 };
 #endif  // OS_MACOSX
 
-const wchar_t kNaClAppName[] = L"nacl64";
-
 #if defined(OS_WIN)
 const base::FilePath::CharType kMetroDriverDll[] = FPL("metro_driver.dll");
 const wchar_t kStatusTrayWindowClass[] = L"Chrome_StatusTrayWindow";
 #endif  // defined(OS_WIN)
 
-const wchar_t kMessageWindowClass[] = L"Chrome_MessageWindow";
 const wchar_t kCrashReportLog[] = L"Reported Crashes.txt";
 const wchar_t kTestingInterfaceDLL[] = L"testing_interface.dll";
 const char    kInitialProfile[] = "Default";
 const char    kMultiProfileDirPrefix[] = "Profile ";
+const base::FilePath::CharType kGuestProfileDir[] = FPL("Guest Profile");
 const wchar_t kBrowserResourcesDll[] = L"chrome.dll";
-const base::FilePath::CharType kExtensionFileExtension[] = FPL(".crx");
-const base::FilePath::CharType kExtensionKeyFileExtension[] = FPL(".pem");
 
 // filenames
 #if defined(OS_ANDROID)
@@ -210,10 +206,6 @@ const base::FilePath::CharType kPepperFlashPluginFilename[] =
 // directory names
 const wchar_t kUserDataDirname[] = L"User Data";
 
-#if defined(OS_CHROMEOS)
-const base::FilePath::CharType kDriveCacheDirname[] = FPL("GCache");
-#endif  // defined(OS_CHROMEOS)
-
 // We don't enable record mode in the released product because users could
 // potentially be tricked into running a product in record mode without
 // knowing it.  Enable in debug builds.  Playback mode is allowed always,
@@ -228,7 +220,7 @@ const bool kRecordModeEnabled = true;
 
 const char* const kUnknownLanguageCode = "und";
 
-const int kJavascriptMessageExpectedDelay = 1000;
+const int kJavaScriptMessageExpectedDelay = 1000;
 
 #if defined(OS_ANDROID)
 const bool kEnableTouchIcon = true;
@@ -256,6 +248,16 @@ const wchar_t kMetroRegistryPath[] =
     L"Software\\" PRODUCT_STRING_PATH L"\\Metro";
 const wchar_t kLaunchModeValue[] = L"launch_mode";
 #endif
+
+#if defined(OS_CHROMEOS)
+const char kProfileDirPrefix[] = "u-";
+#endif
+
+// This GUID is associated with any 'don't ask me again' settings that the
+// user can select for different file types.
+// {2676A9A2-D919-4FEE-9187-152100393AB2}
+const char kApplicationClientIDStringForAVScanning[] =
+    "2676A9A2-D919-4FEE-9187-152100393AB2";
 
 }  // namespace chrome
 

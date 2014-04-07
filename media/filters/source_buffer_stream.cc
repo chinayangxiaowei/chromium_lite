@@ -281,10 +281,19 @@ static base::TimeDelta kSeekToStartFudgeRoom() {
   return base::TimeDelta::FromMilliseconds(1000);
 }
 // The maximum amount of data in bytes the stream will keep in memory.
+#if defined(GOOGLE_TV)
+// In Google TV, set the size of the buffer to 1 min because of
+// the limited memory of the embedded system.
+// 2MB: approximately 1 minutes of 256Kbps content.
+// 30MB: approximately 1 minutes of 4Mbps content.
+static int kDefaultAudioMemoryLimit = 2 * 1024 * 1024;
+static int kDefaultVideoMemoryLimit = 30 * 1024 * 1024;
+#else
 // 12MB: approximately 5 minutes of 320Kbps content.
 // 150MB: approximately 5 minutes of 4Mbps content.
 static int kDefaultAudioMemoryLimit = 12 * 1024 * 1024;
 static int kDefaultVideoMemoryLimit = 150 * 1024 * 1024;
+#endif
 
 namespace media {
 
@@ -294,6 +303,7 @@ SourceBufferStream::SourceBufferStream(const AudioDecoderConfig& audio_config,
       current_config_index_(0),
       append_config_index_(0),
       seek_pending_(false),
+      end_of_stream_(false),
       seek_buffer_timestamp_(kNoTimestamp()),
       selected_range_(NULL),
       media_segment_start_time_(kNoTimestamp()),
@@ -315,6 +325,7 @@ SourceBufferStream::SourceBufferStream(const VideoDecoderConfig& video_config,
       current_config_index_(0),
       append_config_index_(0),
       seek_pending_(false),
+      end_of_stream_(false),
       seek_buffer_timestamp_(kNoTimestamp()),
       selected_range_(NULL),
       media_segment_start_time_(kNoTimestamp()),
@@ -339,6 +350,7 @@ SourceBufferStream::~SourceBufferStream() {
 
 void SourceBufferStream::OnNewMediaSegment(
     base::TimeDelta media_segment_start_time) {
+  DCHECK(!end_of_stream_);
   media_segment_start_time_ = media_segment_start_time;
   new_media_segment_ = true;
 
@@ -365,6 +377,7 @@ bool SourceBufferStream::Append(
 
   DCHECK(!buffers.empty());
   DCHECK(media_segment_start_time_ != kNoTimestamp());
+  DCHECK(!end_of_stream_);
 
   // New media segments must begin with a keyframe.
   if (new_media_segment_ && !buffers.front()->IsKeyframe()) {
@@ -456,6 +469,64 @@ bool SourceBufferStream::Append(
   return true;
 }
 
+void SourceBufferStream::Remove(base::TimeDelta start, base::TimeDelta end,
+                                base::TimeDelta duration) {
+  DCHECK(start >= base::TimeDelta()) << start.InSecondsF();
+  DCHECK(start < end) << "start " << start.InSecondsF()
+                      << " end " << end.InSecondsF();
+  DCHECK(duration != kNoTimestamp());
+
+  base::TimeDelta remove_end_timestamp = duration;
+  base::TimeDelta keyframe_timestamp = FindKeyframeAfterTimestamp(end);
+  if (keyframe_timestamp != kNoTimestamp()) {
+    remove_end_timestamp = keyframe_timestamp;
+  } else if (end < remove_end_timestamp) {
+    remove_end_timestamp = end;
+  }
+
+  RangeList::iterator itr = ranges_.begin();
+
+  while (itr != ranges_.end()) {
+    SourceBufferRange* range = *itr;
+    if (range->GetStartTimestamp() >= remove_end_timestamp)
+      break;
+
+    // Split off any remaining end piece and add it to |ranges_|.
+    SourceBufferRange* new_range =
+        range->SplitRange(remove_end_timestamp, false);
+    if (new_range) {
+      itr = ranges_.insert(++itr, new_range);
+      --itr;
+    }
+
+    // If the current range now is completely covered by the removal
+    // range then delete it and move on.
+    if (start <= range->GetStartTimestamp()) {
+      if (selected_range_ == range)
+          SetSelectedRange(NULL);
+
+        delete range;
+        itr = ranges_.erase(itr);
+        continue;
+    }
+
+    // Truncate the current range so that it only contains data before
+    // the removal range.
+    BufferQueue saved_buffers;
+    range->TruncateAt(start, &saved_buffers, false);
+
+    // Check to see if the current playback position was removed and
+    // update the selected range appropriately.
+    if (!saved_buffers.empty()) {
+      SetSelectedRange(NULL);
+      SetSelectedRangeIfNeeded(saved_buffers.front()->GetDecodeTimestamp());
+    }
+
+    // Move on to the next range.
+    ++itr;
+  }
+}
+
 void SourceBufferStream::ResetSeekState() {
   SetSelectedRange(NULL);
   track_buffer_.clear();
@@ -471,6 +542,21 @@ bool SourceBufferStream::ShouldSeekToStartOfBuffered(
       ranges_.front()->GetStartTimestamp();
   return (seek_timestamp <= beginning_of_buffered &&
           beginning_of_buffered < kSeekToStartFudgeRoom());
+}
+
+// Buffers with the same timestamp are only allowed under certain conditions.
+// Video: Allowed when the previous frame and current frame are NOT keyframes.
+//        This is the situation for VP8 Alt-Ref frames.
+// Otherwise: Allowed in all situations except where a non-keyframe is followed
+//            by a keyframe.
+// Returns true if |prev_is_keyframe| and |current_is_keyframe| indicate a
+// same timestamp situation that is allowed. False is returned otherwise.
+bool SourceBufferStream::AllowSameTimestamp(
+    bool prev_is_keyframe, bool current_is_keyframe) const {
+  if (video_configs_.size() > 0)
+    return !prev_is_keyframe && !current_is_keyframe;
+
+  return prev_is_keyframe || !current_is_keyframe;
 }
 
 bool SourceBufferStream::IsMonotonicallyIncreasing(
@@ -491,8 +577,9 @@ bool SourceBufferStream::IsMonotonicallyIncreasing(
       }
 
       if (current_timestamp == prev_timestamp &&
-          (current_is_keyframe || prev_is_keyframe)) {
-        MEDIA_LOG(log_cb_) << "Invalid alt-ref frame construct detected at "
+          !AllowSameTimestamp(prev_is_keyframe, current_is_keyframe)) {
+        MEDIA_LOG(log_cb_) << "Unexpected combination of buffers with the"
+                           << " same timestamp detected at "
                            << current_timestamp.InSecondsF();
         return false;
       }
@@ -684,28 +771,25 @@ bool SourceBufferStream::InsertIntoExistingRange(
         deleted_buffers);
   }
 
-  // Check for invalid alt-ref frame constructs:
-  //   * A keyframe followed by a non-keyframe.
-  //   * A non-keyframe followed by a keyframe that is not
-  //     the first frame of a media segment.
-  if (prev_timestamp == next_timestamp &&
-      ((prev_is_keyframe && !next_is_keyframe) ||
-       (!new_media_segment_ && next_is_keyframe))) {
-    MEDIA_LOG(log_cb_) << "Invalid alt-ref frame construct detected at time "
-                       << prev_timestamp.InSecondsF();
-    return false;
+  bool is_exclusive = false;
+  if (prev_timestamp == next_timestamp) {
+    if (!new_media_segment_ &&
+        !AllowSameTimestamp(prev_is_keyframe, next_is_keyframe)) {
+      MEDIA_LOG(log_cb_) << "Invalid same timestamp construct detected at time "
+                         << prev_timestamp.InSecondsF();
+      return false;
+    }
+
+    // Make the delete range exclusive if we are dealing with an allowed same
+    // timestamp situation so that the buffer with the same timestamp that is
+    // already stored in |*range_for_new_buffers_itr| doesn't get deleted.
+    is_exclusive = AllowSameTimestamp(prev_is_keyframe, next_is_keyframe);
   }
 
   // If we cannot append the |new_buffers| to the end of the existing range,
   // this is either a start overlap or a middle overlap. Delete the buffers
   // that |new_buffers| overlaps.
   if (!range_for_new_buffers->CanAppendBuffersToEnd(new_buffers)) {
-    // Make the delete range exclusive if we are dealing with an alt-ref
-    // situation so that the buffer with the same timestamp that is already
-    // stored in |*range_for_new_buffers_itr| doesn't get deleted.
-    bool is_exclusive = prev_timestamp == next_timestamp &&
-        !prev_is_keyframe && !next_is_keyframe;
-
     DeleteBetween(
         range_for_new_buffers_itr, new_buffers.front()->GetDecodeTimestamp(),
         new_buffers.back()->GetDecodeTimestamp(), is_exclusive,
@@ -810,7 +894,7 @@ void SourceBufferStream::ResolveEndOverlap(
     AddToRanges(new_next_range);
 
   // If we didn't overlap a selected range, return.
-  if (selected_range_ != overlapped_range.get())
+  if (selected_range_ != overlapped_range)
     return;
 
   // If the |overlapped_range| transfers its next buffer position to
@@ -893,7 +977,7 @@ void SourceBufferStream::Seek(base::TimeDelta timestamp) {
 }
 
 bool SourceBufferStream::IsSeekPending() const {
-  return seek_pending_;
+  return !(end_of_stream_ && IsEndSelected()) && seek_pending_;
 }
 
 void SourceBufferStream::OnSetDuration(base::TimeDelta duration) {
@@ -946,8 +1030,11 @@ SourceBufferStream::Status SourceBufferStream::GetNextBuffer(
     return kSuccess;
   }
 
-  if (!selected_range_ || !selected_range_->HasNextBuffer())
+  if (!selected_range_ || !selected_range_->HasNextBuffer()) {
+    if (end_of_stream_ && IsEndSelected())
+      return kEndOfStream;
     return kNeedBuffer;
+  }
 
   if (selected_range_->GetNextConfigId() != current_config_index_) {
     config_change_pending_ = true;
@@ -1032,8 +1119,24 @@ Ranges<base::TimeDelta> SourceBufferStream::GetBufferedTime() const {
   return ranges;
 }
 
+void SourceBufferStream::MarkEndOfStream() {
+  DCHECK(!end_of_stream_);
+  end_of_stream_ = true;
+}
+
+void SourceBufferStream::UnmarkEndOfStream() {
+  DCHECK(end_of_stream_);
+  end_of_stream_ = false;
+}
+
 bool SourceBufferStream::IsEndSelected() const {
-  return ranges_.empty() || selected_range_ == ranges_.back();
+  if (ranges_.empty())
+    return true;
+
+  if (seek_pending_)
+    return seek_buffer_timestamp_ >= ranges_.back()->GetBufferedEndTimestamp();
+
+  return selected_range_ == ranges_.back();
 }
 
 const AudioDecoderConfig& SourceBufferStream::GetCurrentAudioDecoderConfig() {
@@ -1300,7 +1403,7 @@ void SourceBufferRange::AppendBuffersToEnd(const BufferQueue& new_buffers) {
        itr != new_buffers.end(); ++itr) {
     DCHECK((*itr)->GetDecodeTimestamp() != kNoTimestamp());
     buffers_.push_back(*itr);
-    size_in_bytes_ += (*itr)->GetDataSize();
+    size_in_bytes_ += (*itr)->data_size();
 
     if ((*itr)->IsKeyframe()) {
       keyframe_map_.insert(
@@ -1457,7 +1560,7 @@ int SourceBufferRange::DeleteGOPFromFront(BufferQueue* deleted_buffers) {
   // Delete buffers from the beginning of the buffered range up until (but not
   // including) the next keyframe.
   for (int i = 0; i < end_index; i++) {
-    int bytes_deleted = buffers_.front()->GetDataSize();
+    int bytes_deleted = buffers_.front()->data_size();
     size_in_bytes_ -= bytes_deleted;
     total_bytes_deleted += bytes_deleted;
     deleted_buffers->push_back(buffers_.front());
@@ -1497,7 +1600,7 @@ int SourceBufferRange::DeleteGOPFromBack(BufferQueue* deleted_buffers) {
 
   int total_bytes_deleted = 0;
   while (buffers_.size() != goal_size) {
-    int bytes_deleted = buffers_.back()->GetDataSize();
+    int bytes_deleted = buffers_.back()->data_size();
     size_in_bytes_ -= bytes_deleted;
     total_bytes_deleted += bytes_deleted;
     // We're removing buffers from the back, so push each removed buffer to the
@@ -1541,7 +1644,7 @@ void SourceBufferRange::FreeBufferRange(
     const BufferQueue::iterator& ending_point) {
   for (BufferQueue::iterator itr = starting_point;
        itr != ending_point; ++itr) {
-    size_in_bytes_ -= (*itr)->GetDataSize();
+    size_in_bytes_ -= (*itr)->data_size();
     DCHECK_GE(size_in_bytes_, 0);
   }
   buffers_.erase(starting_point, ending_point);
@@ -1684,7 +1787,7 @@ base::TimeDelta SourceBufferRange::GetEndTimestamp() const {
 
 base::TimeDelta SourceBufferRange::GetBufferedEndTimestamp() const {
   DCHECK(!buffers_.empty());
-  base::TimeDelta duration = buffers_.back()->GetDuration();
+  base::TimeDelta duration = buffers_.back()->duration();
   if (duration == kNoTimestamp() || duration == base::TimeDelta())
     duration = GetApproximateDuration();
   return GetEndTimestamp() + duration;

@@ -21,28 +21,32 @@
 
 class GURL;
 
-namespace components {
+namespace visitedlink {
 class VisitedLinkMaster;
-}  // namespace components
+}
 
 namespace content {
 class ResourceContext;
 class WebContents;
-}  // namespace content
+}
 
 namespace android_webview {
 
-class AwURLRequestContextGetter;
+class AwFormDatabaseService;
 class AwQuotaManagerBridge;
+class AwURLRequestContextGetter;
 class JniDependencyFactory;
 
 class AwBrowserContext : public content::BrowserContext,
-                         public components::VisitedLinkDelegate {
+                         public visitedlink::VisitedLinkDelegate {
  public:
 
   AwBrowserContext(const base::FilePath path,
                    JniDependencyFactory* native_factory);
   virtual ~AwBrowserContext();
+
+  // Currently only one instance per process is supported.
+  static AwBrowserContext* GetDefault();
 
   // Convenience method to returns the AwBrowserContext corresponding to the
   // given WebContents.
@@ -55,7 +59,7 @@ class AwBrowserContext : public content::BrowserContext,
   // Maps to BrowserMainParts::PreMainMessageLoopRun.
   void PreMainMessageLoopRun();
 
-  // These methods map to Add methods in components::VisitedLinkMaster.
+  // These methods map to Add methods in visitedlink::VisitedLinkMaster.
   void AddVisitedURLs(const std::vector<GURL>& urls);
 
   net::URLRequestContextGetter* CreateRequestContext(
@@ -67,8 +71,11 @@ class AwBrowserContext : public content::BrowserContext,
 
   AwQuotaManagerBridge* GetQuotaManagerBridge();
 
+  AwFormDatabaseService* GetFormDatabaseService();
+  void CreateUserPrefServiceIfNecessary();
+
   // content::BrowserContext implementation.
-  virtual base::FilePath GetPath() OVERRIDE;
+  virtual base::FilePath GetPath() const OVERRIDE;
   virtual bool IsOffTheRecord() const OVERRIDE;
   virtual net::URLRequestContextGetter* GetRequestContext() OVERRIDE;
   virtual net::URLRequestContextGetter* GetRequestContextForRenderProcess(
@@ -79,16 +86,19 @@ class AwBrowserContext : public content::BrowserContext,
   virtual net::URLRequestContextGetter*
       GetMediaRequestContextForStoragePartition(
           const base::FilePath& partition_path, bool in_memory) OVERRIDE;
+  virtual void RequestMIDISysExPermission(
+      int render_process_id,
+      int render_view_id,
+      const GURL& requesting_frame,
+      const MIDISysExPermissionCallback& callback) OVERRIDE;
   virtual content::ResourceContext* GetResourceContext() OVERRIDE;
   virtual content::DownloadManagerDelegate*
       GetDownloadManagerDelegate() OVERRIDE;
   virtual content::GeolocationPermissionContext*
       GetGeolocationPermissionContext() OVERRIDE;
-  virtual content::SpeechRecognitionPreferences*
-      GetSpeechRecognitionPreferences() OVERRIDE;
   virtual quota::SpecialStoragePolicy* GetSpecialStoragePolicy() OVERRIDE;
 
-  // components::VisitedLinkDelegate implementation.
+  // visitedlink::VisitedLinkDelegate implementation.
   virtual void RebuildTable(
       const scoped_refptr<URLEnumerator>& enumerator) OVERRIDE;
 
@@ -101,11 +111,14 @@ class AwBrowserContext : public content::BrowserContext,
   scoped_refptr<content::GeolocationPermissionContext>
       geolocation_permission_context_;
   scoped_ptr<AwQuotaManagerBridge> quota_manager_bridge_;
+  scoped_ptr<AwFormDatabaseService> form_database_service_;
 
   AwDownloadManagerDelegate download_manager_delegate_;
 
-  scoped_ptr<components::VisitedLinkMaster> visitedlink_master_;
+  scoped_ptr<visitedlink::VisitedLinkMaster> visitedlink_master_;
   scoped_ptr<content::ResourceContext> resource_context_;
+
+  bool user_pref_service_ready_;
 
   DISALLOW_COPY_AND_ASSIGN(AwBrowserContext);
 };

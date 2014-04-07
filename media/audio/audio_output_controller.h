@@ -7,16 +7,14 @@
 
 #include "base/atomic_ref_count.h"
 #include "base/callback.h"
+#include "base/cancelable_callback.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/weak_ptr.h"
-#include "media/audio/audio_buffers_state.h"
 #include "media/audio/audio_io.h"
 #include "media/audio/audio_manager.h"
+#include "media/audio/audio_power_monitor.h"
 #include "media/audio/audio_source_diverter.h"
 #include "media/audio/simple_sources.h"
 #include "media/base/media_export.h"
-
-class MessageLoop;
 
 // An AudioOutputController controls an AudioOutputStream and provides data
 // to this output stream. It has an important function that it executes
@@ -28,14 +26,14 @@ class MessageLoop;
 //
 // Here is a state transition diagram for the AudioOutputController:
 //
-//   *[ Empty ]  -->  [ Created ]  -->  [ Starting ]  -->  [ Playing ]  --.
-//        |                |               |    ^               |         |
-//        |                |               |    |               |         |
-//        |                |               |    |               v         |
-//        |                |               |    `---------  [ Paused ]    |
-//        |                |               |                    |         |
-//        |                v               v                    |         |
-//        `----------->  [      Closed       ]  <-------------------------'
+//   *[ Empty ]  -->  [ Created ]  -->  [ Playing ]  -------.
+//        |                |               |    ^           |
+//        |                |               |    |           |
+//        |                |               |    |           v
+//        |                |               |    `-----  [ Paused ]
+//        |                |               |                |
+//        |                v               v                |
+//        `----------->  [      Closed       ]  <-----------'
 //
 // * Initial state
 //
@@ -51,9 +49,6 @@ class MessageLoop;
 // AudioSourceCallback interface. AudioOutputController uses the SyncReader
 // passed to it via construction to synchronously fulfill this read request.
 //
-// Since AudioOutputController uses AudioManager's message loop the controller
-// uses WeakPtr to allow safe cancellation of pending tasks.
-//
 
 namespace media {
 
@@ -67,12 +62,12 @@ class MEDIA_EXPORT AudioOutputController
   // following methods are called on the audio manager thread.
   class MEDIA_EXPORT EventHandler {
    public:
-    virtual void OnCreated(AudioOutputController* controller) = 0;
-    virtual void OnPlaying(AudioOutputController* controller) = 0;
-    virtual void OnPaused(AudioOutputController* controller) = 0;
-    virtual void OnError(AudioOutputController* controller) = 0;
-    virtual void OnDeviceChange(AudioOutputController* controller,
-                                int new_buffer_size, int new_sample_rate) = 0;
+    virtual void OnCreated() = 0;
+    virtual void OnPlaying() = 0;
+    virtual void OnPowerMeasured(float power_dbfs, bool clipped) = 0;
+    virtual void OnPaused() = 0;
+    virtual void OnError() = 0;
+    virtual void OnDeviceChange(int new_buffer_size, int new_sample_rate) = 0;
 
    protected:
     virtual ~EventHandler() {}
@@ -91,16 +86,14 @@ class MEDIA_EXPORT AudioOutputController
     // prepare more data and perform synchronization.
     virtual void UpdatePendingBytes(uint32 bytes) = 0;
 
-    // Attempt to completely fill |dest|, return the actual number of
-    // frames that could be read.
-    // |source| may optionally be provided for input data.
-    virtual int Read(AudioBus* source, AudioBus* dest) = 0;
+    // Attempt to completely fill |dest|, return the actual number of frames
+    // that could be read.  |source| may optionally be provided for input data.
+    // If |block| is specified, the Read() will block until data is available
+    // or a timeout is reached.
+    virtual int Read(bool block, const AudioBus* source, AudioBus* dest) = 0;
 
     // Close this synchronous reader.
     virtual void Close() = 0;
-
-    // Check if data is ready.
-    virtual bool DataReady() = 0;
   };
 
   // Factory method for creating an AudioOutputController.
@@ -110,7 +103,8 @@ class MEDIA_EXPORT AudioOutputController
   // outlive AudioOutputController.
   static scoped_refptr<AudioOutputController> Create(
       AudioManager* audio_manager, EventHandler* event_handler,
-      const AudioParameters& params, SyncReader* sync_reader);
+      const AudioParameters& params, const std::string& input_device_id,
+      SyncReader* sync_reader);
 
   // Methods to control playback of the stream.
 
@@ -119,10 +113,6 @@ class MEDIA_EXPORT AudioOutputController
 
   // Pause this audio output stream.
   void Pause();
-
-  // Discard all audio data buffered in this output stream. This method only
-  // has effect when the stream is paused.
-  void Flush();
 
   // Closes the audio output stream. The state is changed and the resources
   // are freed on the audio manager thread. closed_task is executed after that.
@@ -143,9 +133,6 @@ class MEDIA_EXPORT AudioOutputController
                            AudioBus* dest,
                            AudioBuffersState buffers_state) OVERRIDE;
   virtual void OnError(AudioOutputStream* stream) OVERRIDE;
-  // Deprecated: Currently only used for starting audio playback and for audio
-  // mirroring.
-  virtual void WaitTillDataReady() OVERRIDE;
 
   // AudioDeviceListener implementation.  When called AudioOutputController will
   // shutdown the existing |stream_|, transition to the kRecreating state,
@@ -163,7 +150,6 @@ class MEDIA_EXPORT AudioOutputController
   enum State {
     kEmpty,
     kCreated,
-    kStarting,
     kPlaying,
     kPaused,
     kClosed,
@@ -179,22 +165,25 @@ class MEDIA_EXPORT AudioOutputController
   static const int kPollPauseInMilliseconds;
 
   AudioOutputController(AudioManager* audio_manager, EventHandler* handler,
-                        const AudioParameters& params, SyncReader* sync_reader);
+                        const AudioParameters& params,
+                        const std::string& input_device_id,
+                        SyncReader* sync_reader);
 
   // The following methods are executed on the audio manager thread.
   void DoCreate(bool is_for_device_change);
   void DoPlay();
-  void PollAndStartIfDataReady();
   void DoPause();
-  void DoFlush();
   void DoClose();
   void DoSetVolume(double volume);
   void DoReportError();
   void DoStartDiverting(AudioOutputStream* to_stream);
   void DoStopDiverting();
 
-  // Helper methods that start/stop physical stream.
-  void StartStream();
+  // Calls EventHandler::OnPowerMeasured() with the current power level and then
+  // schedules itself to be called again later.
+  void ReportPowerMeasurementPeriodically();
+
+  // Helper method that stops the physical stream.
   void StopStream();
 
   // Helper method that stops, closes, and NULLs |*stream_|.
@@ -209,8 +198,9 @@ class MEDIA_EXPORT AudioOutputController
   const AudioParameters params_;
   EventHandler* const handler_;
 
-  // Note: It's important to invalidate the weak pointers whenever stream_ is
-  // changed.  See comment for weak_this_.
+  // Used by the unified IO to open the correct input device.
+  std::string input_device_id_;
+
   AudioOutputStream* stream_;
 
   // When non-NULL, audio is being diverted to this stream.
@@ -241,9 +231,11 @@ class MEDIA_EXPORT AudioOutputController
   // Number of times left.
   int number_polling_attempts_left_;
 
-  // Used to auto-cancel the delayed tasks that are created to poll for data
-  // (when starting-up a stream).
-  base::WeakPtrFactory<AudioOutputController> weak_this_;
+  // Scans audio samples from OnMoreIOData() as input to compute power levels.
+  AudioPowerMonitor power_monitor_;
+
+  // Periodic callback to report power levels during playback.
+  base::CancelableClosure power_poll_callback_;
 
   DISALLOW_COPY_AND_ASSIGN(AudioOutputController);
 };

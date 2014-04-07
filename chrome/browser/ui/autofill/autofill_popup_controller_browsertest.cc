@@ -4,27 +4,30 @@
 
 #include "base/basictypes.h"
 #include "base/memory/scoped_ptr.h"
-#include "chrome/browser/ui/autofill/autofill_popup_controller_impl.h"
 #include "chrome/browser/ui/autofill/autofill_popup_view.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
-#include "components/autofill/browser/autofill_manager.h"
-#include "components/autofill/browser/test_autofill_external_delegate.h"
+#include "components/autofill/content/browser/autofill_driver_impl.h"
+#include "components/autofill/core/browser/autofill_manager.h"
+#include "components/autofill/core/browser/test_autofill_external_delegate.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/test/test_utils.h"
 #include "ui/gfx/rect.h"
 #include "ui/gfx/vector2d.h"
 
+namespace autofill {
 namespace {
 
 class TestAutofillExternalDelegate : public AutofillExternalDelegate {
  public:
   TestAutofillExternalDelegate(content::WebContents* web_contents,
-                               AutofillManager* autofill_manager)
-      : AutofillExternalDelegate(web_contents, autofill_manager),
+                               AutofillManager* autofill_manager,
+                               AutofillDriver* autofill_driver)
+      : AutofillExternalDelegate(web_contents, autofill_manager,
+                                 autofill_driver),
         popup_hidden_(true) {}
   virtual ~TestAutofillExternalDelegate() {}
 
@@ -37,7 +40,7 @@ class TestAutofillExternalDelegate : public AutofillExternalDelegate {
   virtual void OnPopupHidden(content::KeyboardListener* listener) OVERRIDE {
     popup_hidden_ = true;
 
-    if (message_loop_runner_)
+    if (message_loop_runner_.get())
       message_loop_runner_->Quit();
 
     AutofillExternalDelegate::OnPopupHidden(listener);
@@ -74,10 +77,13 @@ class AutofillPopupControllerBrowserTest
     ASSERT_TRUE(web_contents_ != NULL);
     Observe(web_contents_);
 
+    AutofillDriverImpl* driver =
+        AutofillDriverImpl::FromWebContents(web_contents_);
     autofill_external_delegate_.reset(
        new TestAutofillExternalDelegate(
            web_contents_,
-           AutofillManager::FromWebContents(web_contents_)));
+           driver->autofill_manager(),
+           driver));
   }
 
   // Normally the WebContents will automatically delete the delegate, but here
@@ -95,12 +101,17 @@ class AutofillPopupControllerBrowserTest
   scoped_ptr<TestAutofillExternalDelegate> autofill_external_delegate_;
 };
 
+#if defined(OS_LINUX)
+#define MAYBE_HidePopupOnWindowConfiguration DISABLED_HidePopupOnWindowConfiguration
+#else
+#define MAYBE_HidePopupOnWindowConfiguration HidePopupOnWindowConfiguration
+#endif
 // Autofill UI isn't currently hidden on window move on Mac.
 // http://crbug.com/180566
 #if !defined(OS_MACOSX)
 IN_PROC_BROWSER_TEST_F(AutofillPopupControllerBrowserTest,
-                       HidePopupOnWindowConfiguration) {
-  autofill::GenerateTestAutofillPopup(autofill_external_delegate_.get());
+                       MAYBE_HidePopupOnWindowConfiguration) {
+  GenerateTestAutofillPopup(autofill_external_delegate_.get());
 
   EXPECT_FALSE(autofill_external_delegate_->popup_hidden());
 
@@ -112,3 +123,17 @@ IN_PROC_BROWSER_TEST_F(AutofillPopupControllerBrowserTest,
   EXPECT_TRUE(autofill_external_delegate_->popup_hidden());
 }
 #endif // !defined(OS_MACOSX)
+
+// This test checks that the browser doesn't crash if the delegate is deleted
+// before the popup is hidden.
+IN_PROC_BROWSER_TEST_F(AutofillPopupControllerBrowserTest,
+                       DeleteDelegateBeforePopupHidden){
+  GenerateTestAutofillPopup(autofill_external_delegate_.get());
+
+  // Delete the external delegate here so that is gets deleted before popup is
+  // hidden. This can happen if the web_contents are destroyed before the popup
+  // is hidden. See http://crbug.com/232475
+  autofill_external_delegate_.reset();
+}
+
+}  // namespace autofill

@@ -45,6 +45,13 @@ remoting.WcsSandboxContent.prototype.onMessage_ = function(event) {
 
   switch (event.data['command']) {
 
+    case 'proxyXhrs':
+      // Since the WCS driver code constructs XHRs directly, the only
+      // mechanism for proxying them is to replace the XMLHttpRequest
+      // constructor.
+      XMLHttpRequest = remoting.XMLHttpRequestProxy;
+      break;
+
     case 'sendIq':
       /** @type {string} */
       var stanza = event.data['stanza'];
@@ -75,7 +82,7 @@ remoting.WcsSandboxContent.prototype.onMessage_ = function(event) {
       } else if (!remoting.wcsLoader) {
         remoting.wcsLoader = new remoting.WcsLoader();
         remoting.wcsLoader.start(token,
-                                 this.onReady_.bind(this),
+                                 this.onLocalJid_.bind(this),
                                  this.onError_.bind(this));
       }
       break;
@@ -121,10 +128,10 @@ remoting.WcsSandboxContent.prototype.onMessage_ = function(event) {
  * @param {string} clientJid The full JID of the WCS client.
  * @private
  */
-remoting.WcsSandboxContent.prototype.onReady_ = function(clientJid) {
+remoting.WcsSandboxContent.prototype.onLocalJid_ = function(clientJid) {
   remoting.wcs.setOnIq(this.onIq_.bind(this));
   var message = {
-    'command': 'onReady',
+    'command': 'onLocalJid',
     'clientJid': clientJid
   };
   this.parentWindow_.postMessage(message, '*');

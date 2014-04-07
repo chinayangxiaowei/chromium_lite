@@ -13,15 +13,19 @@
 #include "base/callback_forward.h"
 #include "base/memory/linked_ptr.h"
 #include "base/memory/scoped_ptr.h"
+#include "base/memory/scoped_vector.h"
+#include "base/values.h"
+#include "content/public/browser/certificate_request_result_type.h"
 #include "content/public/browser/file_descriptor_info.h"
-#include "content/public/common/socket_permission_request.h"
 #include "content/public/common/content_client.h"
+#include "content/public/common/socket_permission_request.h"
 #include "content/public/common/window_container_type.h"
 #include "net/base/mime_util.h"
 #include "net/cookies/canonical_cookie.h"
 #include "net/url_request/url_request_job_factory.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebNotificationPresenter.h"
-#include "webkit/glue/resource_type.h"
+#include "third_party/WebKit/public/web/WebNotificationPresenter.h"
+#include "ui/base/window_open_disposition.h"
+#include "webkit/common/resource_type.h"
 
 #if defined(OS_POSIX) && !defined(OS_MACOSX)
 #include "base/posix/global_descriptors.h"
@@ -29,8 +33,14 @@
 
 class CommandLine;
 class GURL;
+struct WebPreferences;
+
+namespace WebKit {
+struct WebWindowFeatures;
+}
 
 namespace base {
+class DictionaryValue;
 class FilePath;
 }
 namespace crypto {
@@ -61,8 +71,9 @@ namespace ui {
 class SelectFilePolicy;
 }
 
-namespace webkit_glue {
-struct WebPreferences;
+namespace fileapi {
+class ExternalMountPoints;
+class FileSystemBackend;
 }
 
 namespace content {
@@ -71,8 +82,10 @@ class AccessTokenStore;
 class BrowserChildProcessHost;
 class BrowserContext;
 class BrowserMainParts;
+class BrowserPluginGuestDelegate;
 class BrowserPpapiHost;
 class BrowserURLHandler;
+class LocationProvider;
 class MediaObserver;
 class QuotaPermissionContext;
 class RenderProcessHost;
@@ -85,6 +98,7 @@ class WebContents;
 class WebContentsViewDelegate;
 class WebContentsViewPort;
 struct MainFunctionParams;
+struct Referrer;
 struct ShowDesktopNotificationHostMsgParams;
 
 // A mapping from the scheme name to the protocol handler that services its
@@ -125,12 +139,31 @@ class CONTENT_EXPORT ContentBrowserClient {
   virtual WebContentsViewDelegate* GetWebContentsViewDelegate(
       WebContents* web_contents);
 
-  // Notifies that a new RenderHostView has been created.
-  virtual void RenderViewHostCreated(RenderViewHost* render_view_host) {}
+  // Notifies that a guest WebContents has been created. A guest WebContents
+  // represents a renderer that's hosted within a BrowserPlugin. Creation can
+  // occur an arbitrary length of time before attachment. If the new guest has
+  // an |opener_web_contents|, then it's a new window created by that opener.
+  // If the guest was created via navigation, then |extra_params| will be
+  // non-NULL. |extra_params| are parameters passed to the BrowserPlugin object
+  // element by the content embedder. These parameters may include the API to
+  // enable for the given guest. |guest_delegate| is a return parameter of
+  // the delegate in the content embedder that will service the guest in the
+  // content layer. The content layer takes ownership of the |guest_delegate|.
+  virtual void GuestWebContentsCreated(
+      WebContents* guest_web_contents,
+      WebContents* opener_web_contents,
+      BrowserPluginGuestDelegate** guest_delegate,
+      scoped_ptr<base::DictionaryValue> extra_params) {}
 
-  // Notifies that a <webview> guest WebContents has been created.
-  virtual void GuestWebContentsCreated(WebContents* guest_web_contents,
-                                       WebContents* embedder_web_contents) {}
+  // Notifies that a guest WebContents has been attached to a BrowserPlugin.
+  // A guest is attached to a BrowserPlugin when the guest has acquired an
+  // embedder WebContents. This happens on initial navigation or when a new
+  // window is attached to a BrowserPlugin. |extra_params| are params sent
+  // from javascript.
+  virtual void GuestWebContentsAttached(
+      WebContents* guest_web_contents,
+      WebContents* embedder_web_contents,
+      const base::DictionaryValue& extra_params) {}
 
   // Notifies that a RenderProcessHost has been created. This is called before
   // the content layer adds its own BrowserMessageFilters, so that the
@@ -154,7 +187,8 @@ class CONTENT_EXPORT ContentBrowserClient {
   // act as aliases to the chrome: scheme.  The additional schemes may or may
   // not serve specific WebUI pages depending on the particular URLDataSource
   // and its override of URLDataSource::ShouldServiceRequest.
-  virtual std::vector<std::string> GetAdditionalWebUISchemes();
+  virtual void GetAdditionalWebUISchemes(
+      std::vector<std::string>* additional_schemes) {}
 
   // Creates the main net::URLRequestContextGetter. Should only be called once
   // per ContentBrowserClient object.
@@ -175,6 +209,12 @@ class CONTENT_EXPORT ContentBrowserClient {
   // Returns whether a specified URL is handled by the embedder's internal
   // protocol handlers.
   virtual bool IsHandledURL(const GURL& url);
+
+  // Returns whether the given process is allowed to commit |url|.  This is a
+  // more conservative check than IsSuitableHost, since it is used after a
+  // navigation has committed to ensure that the process did not exceed its
+  // authority.
+  virtual bool CanCommitURL(RenderProcessHost* process_host, const GURL& url);
 
   // Returns whether a new view for a given |site_url| can be launched in a
   // given |process_host|.
@@ -206,6 +246,10 @@ class CONTENT_EXPORT ContentBrowserClient {
   virtual bool ShouldSwapProcessesForRedirect(ResourceContext* resource_context,
                                               const GURL& current_url,
                                               const GURL& new_url);
+
+  // Returns true if the passed in URL should be assigned as the site of the
+  // current SiteInstance, if it does not yet have a site.
+  virtual bool ShouldAssignSiteForURL(const GURL& url);
 
   // See CharacterEncoding's comment.
   virtual std::string GetCanonicalEncodingNameByAliasName(
@@ -332,8 +376,9 @@ class CONTENT_EXPORT ContentBrowserClient {
   // Informs the embedder that a certificate error has occured.  If
   // |overridable| is true and if |strict_enforcement| is false, the user
   // can ignore the error and continue. The embedder can call the callback
-  // asynchronously. If |cancel_request| is set to true, the request will be
-  // cancelled immediately and the callback won't be run.
+  // asynchronously. If |result| is not set to
+  // CERTIFICATE_REQUEST_RESULT_TYPE_CONTINUE, the request will be cancelled
+  // or denied immediately, and the callback won't be run.
   virtual void AllowCertificateError(
       int render_process_id,
       int render_view_id,
@@ -344,7 +389,7 @@ class CONTENT_EXPORT ContentBrowserClient {
       bool overridable,
       bool strict_enforcement,
       const base::Callback<void(bool)>& callback,
-      bool* cancel_request) {}
+      CertificateRequestResultType* result) {}
 
   // Selects a SSL client certificate and returns it to the |callback|. If no
   // certificate was selected NULL is returned to the |callback|.
@@ -404,13 +449,21 @@ class CONTENT_EXPORT ContentBrowserClient {
   // type. If true is returned, |no_javascript_access| will indicate whether
   // the window that is created should be scriptable/in the same process.
   // This is called on the IO thread.
-  virtual bool CanCreateWindow(
-      const GURL& opener_url,
-      const GURL& source_origin,
-      WindowContainerType container_type,
-      ResourceContext* context,
-      int render_process_id,
-      bool* no_javascript_access);
+  virtual bool CanCreateWindow(const GURL& opener_url,
+                               const GURL& opener_top_level_frame_url,
+                               const GURL& source_origin,
+                               WindowContainerType container_type,
+                               const GURL& target_url,
+                               const content::Referrer& referrer,
+                               WindowOpenDisposition disposition,
+                               const WebKit::WebWindowFeatures& features,
+                               bool user_gesture,
+                               bool opener_suppressed,
+                               content::ResourceContext* context,
+                               int render_process_id,
+                               bool is_guest,
+                               int opener_id,
+                               bool* no_javascript_access);
 
   // Returns a title string to use in the task manager for a process host with
   // the given URL, or the empty string to fall back to the default logic.
@@ -441,15 +494,12 @@ class CONTENT_EXPORT ContentBrowserClient {
   // to the embedder to update it if it wants.
   virtual void OverrideWebkitPrefs(RenderViewHost* render_view_host,
                                    const GURL& url,
-                                   webkit_glue::WebPreferences* prefs) {}
+                                   WebPreferences* prefs) {}
 
   // Inspector setting was changed and should be persisted.
   virtual void UpdateInspectorSetting(RenderViewHost* rvh,
                                       const std::string& key,
                                       const std::string& value) {}
-
-  // Clear the Inspector settings.
-  virtual void ClearInspectorSettings(RenderViewHost* rvh) {}
 
   // Notifies that BrowserURLHandler has been created, so that the embedder can
   // optionally add their own handlers.
@@ -483,18 +533,36 @@ class CONTENT_EXPORT ContentBrowserClient {
   virtual bool SupportsBrowserPlugin(BrowserContext* browser_context,
                                      const GURL& site_url);
 
-  // Returns true if renderer processes can use Pepper TCP/UDP sockets from
-  // the given origin and connection type.
+  // Returns true if the socket operation specified by |params| is allowed
+  // from the given |browser_context| and |url|. |private_api| indicates whether
+  // this permission check is for the private Pepper socket API or the public
+  // one.
   virtual bool AllowPepperSocketAPI(BrowserContext* browser_context,
                                     const GURL& url,
+                                    bool private_api,
                                     const SocketPermissionRequest& params);
-
-  // Returns the directory containing hyphenation dictionaries.
-  virtual base::FilePath GetHyphenDictionaryDirectory();
 
   // Returns an implementation of a file selecition policy. Can return NULL.
   virtual ui::SelectFilePolicy* CreateSelectFilePolicy(
       WebContents* web_contents);
+
+  // Returns additional allowed scheme set which can access files in
+  // FileSystem API.
+  virtual void GetAdditionalAllowedSchemesForFileSystem(
+      std::vector<std::string>* additional_schemes) {}
+
+  // Returns additional file system backends for FileSystem API.
+  // |browser_context| is needed in the additional FileSystemBackends.
+  // It has mount points to create objects returned by additional
+  // FileSystemBackends, and SpecialStoragePolicy for permission granting.
+  virtual void GetAdditionalFileSystemBackends(
+      BrowserContext* browser_context,
+      const base::FilePath& storage_partition_path,
+      ScopedVector<fileapi::FileSystemBackend>* additional_backends) {}
+
+  // Allows an embedder to return its own LocationProvider implementation.
+  // Return NULL to use the default one for the platform to be created.
+  virtual LocationProvider* OverrideSystemLocationProvider();
 
 #if defined(OS_POSIX) && !defined(OS_MACOSX)
   // Populates |mappings| with all files that need to be mapped before launching

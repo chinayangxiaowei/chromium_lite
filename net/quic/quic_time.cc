@@ -72,36 +72,14 @@ bool QuicTime::Delta::IsInfinite() const {
 
 // static
 QuicTime QuicTime::Zero() {
-  return QuicTime::FromMilliseconds(0);
-}
-
-// static
-QuicTime QuicTime::FromMilliseconds(int64 time_ms) {
-  // DateTime use 100 ns as resolution make sure we don't pass down too high
-  // values.
-  DCHECK(time_ms < kQuicInfiniteTimeUs / 1000);
-  return QuicTime(base::TimeTicks() +
-                  base::TimeDelta::FromMilliseconds(time_ms));
-}
-
-// static
-QuicTime QuicTime::FromMicroseconds(int64 time_us) {
-  // DateTime use 100 ns as resolution make sure we don't pass down too high
-  // values.
-  DCHECK(time_us < kQuicInfiniteTimeUs);
-  return QuicTime(base::TimeTicks() +
-                  base::TimeDelta::FromMicroseconds(time_us));
+  return QuicTime(base::TimeTicks());
 }
 
 QuicTime::QuicTime(base::TimeTicks ticks)
     : ticks_(ticks) {
 }
 
-int64 QuicTime::ToMilliseconds() const {
-  return (ticks_ - base::TimeTicks()).InMilliseconds();
-}
-
-int64 QuicTime::ToMicroseconds() const {
+int64 QuicTime::ToDebuggingValue() const {
   return (ticks_ - base::TimeTicks()).InMicroseconds();
 }
 
@@ -119,6 +97,67 @@ QuicTime QuicTime::Subtract(const Delta& delta) const {
 
 QuicTime::Delta QuicTime::Subtract(const QuicTime& other) const {
   return QuicTime::Delta(ticks_ - other.ticks_);
+}
+
+// static
+QuicWallTime QuicWallTime::FromUNIXSeconds(uint64 seconds) {
+  return QuicWallTime(seconds);
+}
+
+// static
+QuicWallTime QuicWallTime::Zero() {
+  return QuicWallTime(0);
+}
+
+uint64 QuicWallTime::ToUNIXSeconds() const {
+  return seconds_;
+}
+
+bool QuicWallTime::IsAfter(QuicWallTime other) const {
+  return seconds_ > other.seconds_;
+}
+
+bool QuicWallTime::IsBefore(QuicWallTime other) const {
+  return seconds_ < other.seconds_;
+}
+
+bool QuicWallTime::IsZero() const {
+  return seconds_ == 0;
+}
+
+QuicTime::Delta QuicWallTime::AbsoluteDifference(QuicWallTime other) const {
+  uint64 d;
+
+  if (seconds_ > other.seconds_) {
+    d = seconds_ - other.seconds_;
+  } else {
+    d = other.seconds_ - seconds_;
+  }
+
+  if (d > static_cast<uint64>(kint64max)) {
+    d = kint64max;
+  }
+  return QuicTime::Delta::FromSeconds(d);
+}
+
+QuicWallTime QuicWallTime::Add(QuicTime::Delta delta) const {
+  uint64 seconds = seconds_ + delta.ToSeconds();
+  if (seconds < seconds_) {
+    seconds = kuint64max;
+  }
+  return QuicWallTime(seconds);
+}
+
+QuicWallTime QuicWallTime::Subtract(QuicTime::Delta delta) const {
+  uint64 seconds = seconds_ - delta.ToSeconds();
+  if (seconds > seconds_) {
+    seconds = 0;
+  }
+  return QuicWallTime(seconds);
+}
+
+QuicWallTime::QuicWallTime(uint64 seconds)
+    : seconds_(seconds) {
 }
 
 }  // namespace net

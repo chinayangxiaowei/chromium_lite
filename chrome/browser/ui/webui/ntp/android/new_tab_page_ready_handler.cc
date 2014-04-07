@@ -7,8 +7,7 @@
 #include "base/bind.h"
 #include "base/logging.h"
 #include "base/values.h"
-#include "chrome/common/chrome_notification_types.h"
-#include "content/public/browser/notification_service.h"
+#include "chrome/browser/android/tab_android.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 
@@ -24,14 +23,22 @@ void NewTabPageReadyHandler::RegisterMessages() {
   web_ui()->RegisterMessageCallback("NTPUnexpectedNavigation", base::Bind(
       &NewTabPageReadyHandler::HandleNewTabPageUnexpectedNavigation,
       base::Unretained(this)));
+  web_ui()->RegisterMessageCallback("notifyNTPTitleLoaded", base::Bind(
+      &NewTabPageReadyHandler::HandleNewTabPageTitleLoaded,
+      base::Unretained(this)));
+}
+
+void NewTabPageReadyHandler::HandleNewTabPageTitleLoaded(
+    const ListValue* args) {
+  web_ui()->OverrideTitle(string16());
 }
 
 void NewTabPageReadyHandler::HandleNewTabPageReady(
     const ListValue* args) {
-  content::NotificationService::current()->Notify(
-      chrome::NOTIFICATION_NEW_TAB_READY,
-      content::Source<content::WebContents>(web_ui()->GetWebContents()),
-      content::NotificationService::NoDetails());
+  TabAndroid* tab = TabAndroid::FromWebContents(web_ui()->GetWebContents());
+  if (!tab)
+    return;
+  tab->OnNewTabPageReady();
 }
 
 void NewTabPageReadyHandler::HandleNewTabPageUnexpectedNavigation(

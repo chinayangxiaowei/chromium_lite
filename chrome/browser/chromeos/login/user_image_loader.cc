@@ -8,7 +8,7 @@
 #include "base/file_util.h"
 #include "base/files/file_path.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/threading/worker_pool.h"
 #include "chrome/browser/chromeos/login/helper.h"
 #include "chrome/browser/chromeos/login/user_image.h"
@@ -51,7 +51,7 @@ void UserImageLoader::Start(const std::string& filepath,
                             int size,
                             const SequenceToken& token,
                             const LoadedCallback& loaded_cb) {
-  target_message_loop_ = MessageLoop::current();
+  target_message_loop_ = base::MessageLoop::current();
 
   ImageInfo image_info(size, loaded_cb);
   base::SequencedWorkerPool* pool = BrowserThread::GetBlockingPool();

@@ -9,7 +9,7 @@
 
 #include "base/basictypes.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/string_piece.h"
+#include "base/strings/string_piece.h"
 #include "build/build_config.h"
 #include "crypto/crypto_export.h"
 
@@ -114,9 +114,12 @@ class CRYPTO_EXPORT Encryptor {
   scoped_ptr<Counter> counter_;
 
 #if defined(USE_OPENSSL)
-  bool Crypt(bool encrypt,  // Pass true to encrypt, false to decrypt.
+  bool Crypt(bool do_encrypt,  // Pass true to encrypt, false to decrypt.
              const base::StringPiece& input,
              std::string* output);
+  bool CryptCTR(bool do_encrypt,
+                const base::StringPiece& input,
+                std::string* output);
   std::string iv_;
 #elif defined(USE_NSS) || defined(OS_WIN) || defined(OS_MACOSX)
   bool Crypt(PK11Context* context,

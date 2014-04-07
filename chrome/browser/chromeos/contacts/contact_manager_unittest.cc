@@ -5,15 +5,15 @@
 #include "chrome/browser/chromeos/contacts/contact_manager.h"
 
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
-#include "chrome/test/base/testing_browser_process.h"
-#include "chrome/test/base/testing_profile.h"
-#include "chrome/test/base/testing_profile_manager.h"
+#include "base/message_loop/message_loop.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/chromeos/contacts/contact.pb.h"
 #include "chrome/browser/chromeos/contacts/contact_manager_observer.h"
 #include "chrome/browser/chromeos/contacts/contact_test_util.h"
 #include "chrome/browser/chromeos/contacts/fake_contact_store.h"
-#include "chrome/common/chrome_notification_types.h"
+#include "chrome/test/base/testing_browser_process.h"
+#include "chrome/test/base/testing_profile.h"
+#include "chrome/test/base/testing_profile_manager.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_details.h"
 #include "content/public/browser/notification_service.h"
@@ -80,7 +80,7 @@ class ContactManagerTest : public testing::Test {
     contact_manager_->Init();
   }
 
-  MessageLoopForUI message_loop_;
+  base::MessageLoopForUI message_loop_;
   content::TestBrowserThread ui_thread_;
 
   scoped_ptr<TestingProfileManager> profile_manager_;

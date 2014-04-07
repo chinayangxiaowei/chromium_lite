@@ -14,14 +14,12 @@
 #include "base/observer_list.h"
 #include "chrome/browser/extensions/active_tab_permission_granter.h"
 #include "chrome/browser/extensions/extension_function_dispatcher.h"
-#include "chrome/common/web_apps.h"
+#include "chrome/common/web_application_info.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "third_party/skia/include/core/SkBitmap.h"
-
-struct WebApplicationInfo;
 
 namespace content {
 struct LoadCommittedDetails;
@@ -34,7 +32,6 @@ class Image;
 namespace extensions {
 class Extension;
 class LocationBarController;
-class RulesRegistryService;
 class ScriptBadgeController;
 class ScriptBubbleController;
 class ScriptExecutor;
@@ -219,6 +216,9 @@ class TabHelper : public content::WebContentsObserver,
   // the data is available.
   void GetApplicationInfo(int32 page_id);
 
+  // Sends our tab ID to |render_view_host|.
+  void SetTabId(content::RenderViewHost* render_view_host);
+
   // Data for app extensions ---------------------------------------------------
 
   // Our content script observers. Declare at top so that it will outlive all
@@ -252,8 +252,6 @@ class TabHelper : public content::WebContentsObserver,
   scoped_ptr<ActiveTabPermissionGranter> active_tab_permission_granter_;
 
   scoped_ptr<ScriptBubbleController> script_bubble_controller_;
-
-  RulesRegistryService* rules_registry_service_;
 
   Profile* profile_;
 

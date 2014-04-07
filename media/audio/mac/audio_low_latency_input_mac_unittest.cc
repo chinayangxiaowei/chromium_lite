@@ -4,7 +4,7 @@
 
 #include "base/basictypes.h"
 #include "base/environment.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/test/test_timeouts.h"
 #include "base/threading/platform_thread.h"
 #include "media/audio/audio_io.h"
@@ -24,7 +24,7 @@ namespace media {
 
 ACTION_P3(CheckCountAndPostQuitTask, count, limit, loop) {
   if (++*count >= limit) {
-    loop->PostTask(FROM_HERE, MessageLoop::QuitClosure());
+    loop->PostTask(FROM_HERE, base::MessageLoop::QuitClosure());
   }
 }
 
@@ -217,7 +217,7 @@ TEST_F(MacAudioInputTest, AUAudioInputStreamVerifyMonoRecording) {
     return;
 
   int count = 0;
-  MessageLoopForUI loop;
+  base::MessageLoopForUI loop;
 
   // Create an audio input stream which records in mono.
   AudioInputStream* ais = CreateAudioInputStream(CHANNEL_LAYOUT_MONO);
@@ -252,7 +252,7 @@ TEST_F(MacAudioInputTest, AUAudioInputStreamVerifyStereoRecording) {
     return;
 
   int count = 0;
-  MessageLoopForUI loop;
+  base::MessageLoopForUI loop;
 
   // Create an audio input stream which records in stereo.
   AudioInputStream* ais = CreateAudioInputStream(CHANNEL_LAYOUT_STEREO);

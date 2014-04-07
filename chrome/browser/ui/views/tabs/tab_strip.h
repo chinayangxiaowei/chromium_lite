@@ -9,7 +9,7 @@
 
 #include "base/compiler_specific.h"
 #include "base/memory/ref_counted.h"
-#include "base/timer.h"
+#include "base/timer/timer.h"
 #include "chrome/browser/ui/tabs/tab_strip_layout_type.h"
 #include "chrome/browser/ui/views/tabs/tab.h"
 #include "chrome/browser/ui/views/tabs/tab_controller.h"
@@ -187,7 +187,8 @@ class TabStrip : public views::View,
   virtual void AddSelectionFromAnchorTo(Tab* tab) OVERRIDE;
   virtual void CloseTab(Tab* tab, CloseTabSource source) OVERRIDE;
   virtual void ShowContextMenuForTab(Tab* tab,
-                                     const gfx::Point& p) OVERRIDE;
+                                     const gfx::Point& p,
+                                     ui::MenuSourceType source_type) OVERRIDE;
   virtual bool IsActiveTab(const Tab* tab) const OVERRIDE;
   virtual bool IsTabSelected(const Tab* tab) const OVERRIDE;
   virtual bool IsTabPinned(const Tab* tab) const OVERRIDE;
@@ -211,7 +212,7 @@ class TabStrip : public views::View,
   // views::View overrides:
   virtual void Layout() OVERRIDE;
   virtual void PaintChildren(gfx::Canvas* canvas) OVERRIDE;
-  virtual std::string GetClassName() const OVERRIDE;
+  virtual const char* GetClassName() const OVERRIDE;
   virtual gfx::Size GetPreferredSize() OVERRIDE;
   // NOTE: the drag and drop methods are invoked from FrameView. This is done
   // to allow for a drop region that extends outside the bounds of the TabStrip.
@@ -221,6 +222,8 @@ class TabStrip : public views::View,
   virtual int OnPerformDrop(const ui::DropTargetEvent& event) OVERRIDE;
   virtual void GetAccessibleState(ui::AccessibleViewState* state) OVERRIDE;
   virtual views::View* GetEventHandlerForPoint(
+      const gfx::Point& point) OVERRIDE;
+  virtual views::View* GetTooltipHandlerForPoint(
       const gfx::Point& point) OVERRIDE;
 
   // Returns preferred height in immersive style.
@@ -472,7 +475,15 @@ class TabStrip : public views::View,
   int GenerateIdealBoundsForMiniTabs(int* first_non_mini_index);
 
   // Returns the width needed for the new tab button (and padding).
-  int new_tab_button_width() const;
+  static int new_tab_button_width();
+
+  // Returns the vertical offset of the tab strip button. This offset applies
+  // only to restored windows.
+  static int button_v_offset();
+
+  // Returns the width of the area that contains tabs. This does not include
+  // the width of the new tab button.
+  int tab_area_width() const;
 
   // Starts various types of TabStrip animations.
   void StartResizeLayoutAnimation();
@@ -495,6 +506,13 @@ class TabStrip : public views::View,
   // Returns the tab to use for event handling starting at index |start| and
   // iterating by |delta|.
   Tab* FindTabForEventFrom(const gfx::Point& point, int start, int delta);
+
+  // For a given point, finds a tab that is hit by the point. If the point hits
+  // an area on which two tabs are overlapping, the tab is selected as follows:
+  // - If one of the tabs is active, select it.
+  // - Select the left one.
+  // If no tabs are hit, returns NULL.
+  views::View* FindTabHitByPoint(const gfx::Point& point);
 
   // Returns the x-coordinates of the tabs.
   std::vector<int> GetTabXCoordinates();

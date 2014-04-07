@@ -5,14 +5,16 @@
 #include "chrome/browser/media_galleries/media_galleries_preferences_factory.h"
 
 #include "chrome/browser/media_galleries/media_galleries_preferences.h"
-#include "chrome/browser/profiles/profile_dependency_manager.h"
+#include "chrome/browser/profiles/incognito_helpers.h"
+#include "chrome/browser/profiles/profile.h"
+#include "components/browser_context_keyed_service/browser_context_dependency_manager.h"
 #include "components/user_prefs/pref_registry_syncable.h"
 
 // static
 chrome::MediaGalleriesPreferences*
 MediaGalleriesPreferencesFactory::GetForProfile(Profile* profile) {
   return static_cast<chrome::MediaGalleriesPreferences*>(
-      GetInstance()->GetServiceForProfile(profile, true));
+      GetInstance()->GetServiceForBrowserContext(profile, true));
 }
 
 // static
@@ -22,21 +24,25 @@ MediaGalleriesPreferencesFactory::GetInstance() {
 }
 
 MediaGalleriesPreferencesFactory::MediaGalleriesPreferencesFactory()
-    : ProfileKeyedServiceFactory("MediaGalleriesPreferences",
-                                 ProfileDependencyManager::GetInstance()) {}
+    : BrowserContextKeyedServiceFactory(
+        "MediaGalleriesPreferences",
+        BrowserContextDependencyManager::GetInstance()) {}
 
 MediaGalleriesPreferencesFactory::~MediaGalleriesPreferencesFactory() {}
 
-ProfileKeyedService* MediaGalleriesPreferencesFactory::BuildServiceInstanceFor(
-    Profile* profile) const {
-  return new chrome::MediaGalleriesPreferences(profile);
+BrowserContextKeyedService*
+MediaGalleriesPreferencesFactory::BuildServiceInstanceFor(
+    content::BrowserContext* profile) const {
+  return new chrome::MediaGalleriesPreferences(static_cast<Profile*>(profile));
 }
 
-void MediaGalleriesPreferencesFactory::RegisterUserPrefs(
-    PrefRegistrySyncable* prefs) {
-  chrome::MediaGalleriesPreferences::RegisterUserPrefs(prefs);
+void MediaGalleriesPreferencesFactory::RegisterProfilePrefs(
+    user_prefs::PrefRegistrySyncable* prefs) {
+  chrome::MediaGalleriesPreferences::RegisterProfilePrefs(prefs);
 }
 
-bool MediaGalleriesPreferencesFactory::ServiceRedirectedInIncognito() const {
-  return true;
+content::BrowserContext*
+MediaGalleriesPreferencesFactory::GetBrowserContextToUse(
+    content::BrowserContext* context) const {
+  return chrome::GetBrowserContextRedirectedInIncognito(context);
 }

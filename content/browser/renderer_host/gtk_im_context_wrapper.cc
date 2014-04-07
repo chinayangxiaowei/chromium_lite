@@ -11,12 +11,12 @@
 #include <algorithm>
 
 #include "base/logging.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "content/browser/renderer_host/render_widget_host_impl.h"
 #include "content/browser/renderer_host/render_widget_host_view_gtk.h"
 #include "content/public/browser/native_web_keyboard_event.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebCompositionUnderline.h"
+#include "third_party/WebKit/public/web/WebCompositionUnderline.h"
 #include "ui/base/gtk/gtk_im_context_util.h"
 #include "ui/gfx/gtk_util.h"
 #include "ui/gfx/rect.h"
@@ -438,7 +438,8 @@ void GtkIMContextWrapper::ProcessInputMethodResult(const GdkEventKey* event,
       // Send an IME event.
       // Unlike a Char event, an IME event is NOT dispatched to onkeypress()
       // handlers or autofill.
-      host->ImeConfirmComposition(commit_text_);
+      host->ImeConfirmComposition(
+          commit_text_,ui::Range::InvalidRange(),false);
       // Set this flag to false, as this composition session has been
       // finished.
       is_composing_text_ = false;
@@ -475,7 +476,8 @@ void GtkIMContextWrapper::ConfirmComposition() {
   if (is_composing_text_) {
     if (host_view_->GetRenderWidgetHost()) {
       RenderWidgetHostImpl::From(
-          host_view_->GetRenderWidgetHost())->ImeConfirmComposition();
+          host_view_->GetRenderWidgetHost())->ImeConfirmComposition(
+              string16(), ui::Range::InvalidRange(), false);
     }
 
     // Reset the input method.
@@ -484,10 +486,8 @@ void GtkIMContextWrapper::ConfirmComposition() {
 }
 
 void GtkIMContextWrapper::HandleCommit(const string16& text) {
-  if (suppress_next_commit_) {
-    suppress_next_commit_ = false;
+  if (suppress_next_commit_)
     return;
-  }
 
   // Append the text to the buffer, because commit signal might be fired
   // multiple times when processing a key event.
@@ -502,7 +502,8 @@ void GtkIMContextWrapper::HandleCommit(const string16& text) {
     // Workaround http://crbug.com/45478 by sending fake key down/up events.
     SendFakeCompositionKeyEvent(WebKit::WebInputEvent::RawKeyDown);
     RenderWidgetHostImpl::From(
-        host_view_->GetRenderWidgetHost())->ImeConfirmComposition(text);
+        host_view_->GetRenderWidgetHost())->ImeConfirmComposition(
+            text, ui::Range::InvalidRange(), false);
     SendFakeCompositionKeyEvent(WebKit::WebInputEvent::KeyUp);
   }
 }

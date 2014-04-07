@@ -6,14 +6,14 @@
 
 #include "base/bind.h"
 #include "base/logging.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/image_loader.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/common/chrome_notification_types.h"
-#include "chrome/common/extensions/api/icons/icons_handler.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/extensions/extension_icon_set.h"
+#include "chrome/common/extensions/manifest_handlers/icons_handler.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/notification_source.h"
 #include "extensions/common/extension_resource.h"
@@ -21,11 +21,6 @@
 #include "grit/theme_resources.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/image/image.h"
-
-#if defined(ENABLE_MANAGED_USERS)
-#include "chrome/browser/managed_mode/managed_user_service.h"
-#include "chrome/browser/managed_mode/managed_user_service_factory.h"
-#endif
 
 namespace {
 
@@ -61,7 +56,7 @@ ExtensionUninstallDialog::ExtensionUninstallDialog(
       delegate_(delegate),
       extension_(NULL),
       state_(kImageIsLoading),
-      ui_loop_(MessageLoop::current()) {
+      ui_loop_(base::MessageLoop::current()) {
   if (browser) {
     registrar_.Add(this,
                    chrome::NOTIFICATION_BROWSER_CLOSED,
@@ -74,18 +69,8 @@ ExtensionUninstallDialog::~ExtensionUninstallDialog() {
 
 void ExtensionUninstallDialog::ConfirmUninstall(
     const extensions::Extension* extension) {
-  DCHECK(ui_loop_ == MessageLoop::current());
+  DCHECK(ui_loop_ == base::MessageLoop::current());
   extension_ = extension;
-
-#if defined(ENABLE_MANAGED_USERS)
-  // If the profile belongs to a managed user, and the profile is not in
-  // elevated state, a passphrase dialog is shown, and if the custodian
-  // authorizes by entering his passphrase, the uninstall is continued by
-  // calling |ExtensionUninstallAccepted| on the delegate.
-  if (ShowAuthorizationDialog())
-    return;
-#endif
-
   extensions::ExtensionResource image = extensions::IconsInfo::GetIconResource(
       extension_,
       extension_misc::EXTENSION_ICON_LARGE,
@@ -145,30 +130,3 @@ void ExtensionUninstallDialog::Observe(
     delegate_->ExtensionUninstallCanceled();
   }
 }
-
-#if defined(ENABLE_MANAGED_USERS)
-bool ExtensionUninstallDialog::ShowAuthorizationDialog() {
-  ManagedUserService* service =
-      ManagedUserServiceFactory::GetForProfile(profile_);
-  if (service->ProfileIsManaged() && !service->CanSkipPassphraseDialog()) {
-    service->RequestAuthorizationUsingActiveWebContents(
-        browser_,
-        base::Bind(&ExtensionUninstallDialog::OnAuthorizationResult,
-                   base::Unretained(this)));
-    return true;
-  }
-  return false;
-}
-
-void ExtensionUninstallDialog::OnAuthorizationResult(bool success) {
-  if (success) {
-    ManagedUserService* service = ManagedUserServiceFactory::GetForProfile(
-        profile_);
-    DCHECK(service);
-    service->AddElevationForExtension(extension_->id());
-    delegate_->ExtensionUninstallAccepted();
-  } else {
-    delegate_->ExtensionUninstallCanceled();
-  }
-}
-#endif

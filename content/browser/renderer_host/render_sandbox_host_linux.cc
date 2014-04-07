@@ -19,20 +19,20 @@
 #include "base/command_line.h"
 #include "base/linux_util.h"
 #include "base/memory/scoped_ptr.h"
+#include "base/memory/shared_memory.h"
 #include "base/memory/singleton.h"
 #include "base/pickle.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/posix/unix_domain_socket_linux.h"
-#include "base/process_util.h"
-#include "base/shared_memory.h"
-#include "base/string_number_conversions.h"
-#include "base/string_util.h"
+#include "base/process/launch.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
+#include "content/child/webkitplatformsupport_impl.h"
 #include "content/common/font_config_ipc_linux.h"
 #include "content/common/sandbox_linux.h"
-#include "content/common/webkitplatformsupport_impl.h"
 #include "skia/ext/skia_utils_base.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebKit.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/linux/WebFontInfo.h"
+#include "third_party/WebKit/public/web/WebKit.h"
+#include "third_party/WebKit/public/web/linux/WebFontInfo.h"
 #include "third_party/npapi/bindings/npapi_extensions.h"
 #include "third_party/skia/include/ports/SkFontConfigInterface.h"
 #include "ui/gfx/font_render_params_linux.h"
@@ -40,6 +40,7 @@
 using WebKit::WebCString;
 using WebKit::WebFontInfo;
 using WebKit::WebUChar;
+using WebKit::WebUChar32;
 
 namespace content {
 
@@ -142,8 +143,8 @@ class SandboxIPCProcess  {
       HandleFontMatchRequest(fd, pickle, iter, fds);
     } else if (kind == FontConfigIPC::METHOD_OPEN) {
       HandleFontOpenRequest(fd, pickle, iter, fds);
-    } else if (kind == LinuxSandbox::METHOD_GET_FONT_FAMILY_FOR_CHARS) {
-      HandleGetFontFamilyForChars(fd, pickle, iter, fds);
+    } else if (kind == LinuxSandbox::METHOD_GET_FONT_FAMILY_FOR_CHAR) {
+      HandleGetFontFamilyForChar(fd, pickle, iter, fds);
     } else if (kind == LinuxSandbox::METHOD_LOCALTIME) {
       HandleLocaltime(fd, pickle, iter, fds);
     } else if (kind == LinuxSandbox::METHOD_GET_CHILD_WITH_INODE) {
@@ -233,52 +234,29 @@ class SandboxIPCProcess  {
     }
   }
 
-  void HandleGetFontFamilyForChars(int fd, const Pickle& pickle,
-                                   PickleIterator iter,
-                                   std::vector<int>& fds) {
+  void HandleGetFontFamilyForChar(int fd, const Pickle& pickle,
+                                  PickleIterator iter,
+                                  std::vector<int>& fds) {
     // The other side of this call is
     // chrome/renderer/renderer_sandbox_support_linux.cc
 
-    int num_chars;
-    if (!pickle.ReadInt(&iter, &num_chars))
-      return;
-
-    // We don't want a corrupt renderer asking too much of us, it might
-    // overflow later in the code.
-    static const int kMaxChars = 4096;
-    if (num_chars < 1 || num_chars > kMaxChars) {
-      LOG(WARNING) << "HandleGetFontFamilyForChars: too many chars: "
-                   << num_chars;
-      return;
-    }
-
     EnsureWebKitInitialized();
-    scoped_array<WebUChar> chars(new WebUChar[num_chars]);
-
-    for (int i = 0; i < num_chars; ++i) {
-      uint32_t c;
-      if (!pickle.ReadUInt32(&iter, &c)) {
-        return;
-      }
-
-      chars[i] = c;
-    }
+    WebUChar32 c;
+    if (!pickle.ReadInt(&iter, &c))
+      return;
 
     std::string preferred_locale;
     if (!pickle.ReadString(&iter, &preferred_locale))
       return;
 
     WebKit::WebFontFamily family;
-    WebFontInfo::familyForChars(chars.get(),
-                                num_chars,
-                                preferred_locale.c_str(),
-                                &family);
+    WebFontInfo::familyForChar(c, preferred_locale.c_str(), &family);
 
     Pickle reply;
     if (family.name.data()) {
       reply.WriteString(family.name.data());
     } else {
-      reply.WriteString("");
+      reply.WriteString(std::string());
     }
     reply.WriteBool(family.isBold);
     reply.WriteBool(family.isItalic);
@@ -664,12 +642,12 @@ class SandboxIPCProcess  {
 
 SandboxIPCProcess::~SandboxIPCProcess() {
   paths_.deleteAll();
-  if (webkit_platform_support_.get())
-    WebKit::shutdown();
+  if (webkit_platform_support_)
+    WebKit::shutdownWithoutV8();
 }
 
 void SandboxIPCProcess::EnsureWebKitInitialized() {
-  if (webkit_platform_support_.get())
+  if (webkit_platform_support_)
     return;
   webkit_platform_support_.reset(new WebKitPlatformSupportImpl);
   WebKit::initializeWithoutV8(webkit_platform_support_.get());

@@ -12,7 +12,7 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/scoped_vector.h"
 #include "base/observer_list.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "chrome/browser/custom_handlers/protocol_handler_registry.h"
 #include "chrome/browser/extensions/context_menu_matcher.h"
 #include "chrome/browser/extensions/menu_manager.h"
@@ -237,6 +237,9 @@ class RenderViewContextMenu : public ui::SimpleMenuModel::Delegate,
   // Copy to the clipboard an image located at a point in the RenderView
   void CopyImageAt(int x, int y);
 
+  // Get an image located at a point in the RenderView for search.
+  void GetImageThumbnailForSearch();
+
   // Launch the inspector targeting a point in the RenderView
   void Inspect(int x, int y);
 
@@ -273,11 +276,24 @@ class RenderViewContextMenu : public ui::SimpleMenuModel::Delegate,
   // An observer that handles a 'spell-checker options' submenu.
   scoped_ptr<SpellCheckerSubMenuObserver> spellchecker_submenu_observer_;
 
+#if defined(ENABLE_FULL_PRINTING)
   // An observer that disables menu items when print preview is active.
   scoped_ptr<PrintPreviewContextMenuObserver> print_preview_menu_observer_;
+#endif
 
   // Our observers.
   mutable ObserverList<RenderViewContextMenuObserver> observers_;
+
+  // Whether a command has been executed. Used to track whether menu observers
+  // should be notified of menu closing without execution.
+  bool command_executed_;
+
+  // Whether or not the menu was triggered for a browser plugin guest.
+  // Guests are rendered inside chrome apps, but have most of the actions
+  // that a regular web page has.
+  // Currently actions/items that are suppressed from guests are: searching,
+  // printing, speech and instant.
+  bool is_guest_;
 
   DISALLOW_COPY_AND_ASSIGN(RenderViewContextMenu);
 };

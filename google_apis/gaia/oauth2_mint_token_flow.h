@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "base/memory/weak_ptr.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "google_apis/gaia/oauth2_api_call_flow.h"
 
 class GoogleServiceAuthError;
@@ -74,14 +74,14 @@ class OAuth2MintTokenFlow : public OAuth2ApiCallFlow {
   struct Parameters {
    public:
     Parameters();
-    Parameters(const std::string& rt,
+    Parameters(const std::string& at,
                const std::string& eid,
                const std::string& cid,
                const std::vector<std::string>& scopes_arg,
                Mode mode_arg);
     ~Parameters();
 
-    std::string login_refresh_token;
+    std::string access_token;
     std::string extension_id;
     std::string client_id;
     std::vector<std::string> scopes;
@@ -90,7 +90,8 @@ class OAuth2MintTokenFlow : public OAuth2ApiCallFlow {
 
   class Delegate {
    public:
-    virtual void OnMintTokenSuccess(const std::string& access_token) {}
+    virtual void OnMintTokenSuccess(const std::string& access_token,
+                                    int time_to_live) {}
     virtual void OnIssueAdviceSuccess(const IssueAdviceInfo& issue_advice)  {}
     virtual void OnMintTokenFailure(const GoogleServiceAuthError& error) {}
 
@@ -126,14 +127,15 @@ class OAuth2MintTokenFlow : public OAuth2ApiCallFlow {
   FRIEND_TEST_ALL_PREFIXES(OAuth2MintTokenFlowTest,
       ProcessMintAccessTokenFailure);
 
-  void ReportSuccess(const std::string& access_token);
+  void ReportSuccess(const std::string& access_token, int time_to_live);
   void ReportIssueAdviceSuccess(const IssueAdviceInfo& issue_advice);
   void ReportFailure(const GoogleServiceAuthError& error);
 
   static bool ParseIssueAdviceResponse(
       const base::DictionaryValue* dict, IssueAdviceInfo* issue_advice);
   static bool ParseMintTokenResponse(
-      const base::DictionaryValue* dict, std::string* access_token);
+      const base::DictionaryValue* dict, std::string* access_token,
+      int* time_to_live);
 
   Delegate* delegate_;
   Parameters parameters_;

@@ -19,23 +19,22 @@ InputMethodBridge::InputMethodBridge(internal::InputMethodDelegate* delegate,
       shared_input_method_(shared_input_method),
       context_focused_(false) {
   DCHECK(host_);
-  set_delegate(delegate);
+  SetDelegate(delegate);
 }
 
 InputMethodBridge::~InputMethodBridge() {
+  // By the time we get here it's very likely |widget_|'s NativeWidget has been
+  // destroyed. This means any calls to |widget_| that go to the NativeWidget,
+  // such as IsActive(), will crash. SetFocusedTextInputClient() may callback to
+  // this and go into |widget_|. NULL out |widget_| so we don't attempt to use
+  // it.
+  DetachFromWidget();
   if (host_->GetTextInputClient() == this)
     host_->SetFocusedTextInputClient(NULL);
 }
 
-void InputMethodBridge::Init(Widget* widget) {
-  InputMethodBase::Init(widget);
-}
-
 void InputMethodBridge::OnFocus() {
-  InputMethodBase::OnFocus();
-
-  // Ask the system-wide IME to send all TextInputClient messages to |this|
-  // object.
+  // Direct the shared IME to send TextInputClient messages to |this| object.
   if (shared_input_method_ || !host_->GetTextInputClient())
     host_->SetFocusedTextInputClient(this);
 
@@ -46,14 +45,18 @@ void InputMethodBridge::OnFocus() {
 }
 
 void InputMethodBridge::OnBlur() {
-  // win32 sends multiple focus lost events, ignore all but the first.
-  if (widget_focused())
-    return;
+  if (HasCompositionText()) {
+    ConfirmCompositionText();
+    host_->CancelComposition(this);
+  }
 
-  ConfirmCompositionText();
-  InputMethodBase::OnBlur();
   if (host_->GetTextInputClient() == this)
     host_->SetFocusedTextInputClient(NULL);
+}
+
+bool InputMethodBridge::OnUntranslatedIMEMessage(const base::NativeEvent& event,
+                                                 NativeEventResult* result) {
+  return host_->OnUntranslatedIMEMessage(event, result);
 }
 
 void InputMethodBridge::DispatchKeyEvent(const ui::KeyEvent& key) {
@@ -80,6 +83,10 @@ void InputMethodBridge::CancelComposition(View* view) {
     host_->CancelComposition(this);
 }
 
+void InputMethodBridge::OnInputLocaleChanged() {
+  return host_->OnInputLocaleChanged();
+}
+
 std::string InputMethodBridge::GetInputLocale() {
   return host_->GetInputLocale();
 }
@@ -90,6 +97,10 @@ base::i18n::TextDirection InputMethodBridge::GetInputTextDirection() {
 
 bool InputMethodBridge::IsActive() {
   return host_->IsActive();
+}
+
+bool InputMethodBridge::IsCandidatePopupOpen() const {
+  return host_->IsCandidatePopupOpen();
 }
 
 // Overridden from TextInputClient. Forward an event from the system-wide IME
@@ -125,9 +136,20 @@ void InputMethodBridge::InsertChar(char16 ch, int flags) {
     client->InsertChar(ch, flags);
 }
 
+gfx::NativeWindow InputMethodBridge::GetAttachedWindow() const {
+  TextInputClient* client = GetTextInputClient();
+  return client ?
+      client->GetAttachedWindow() : static_cast<gfx::NativeWindow>(NULL);
+}
+
 ui::TextInputType InputMethodBridge::GetTextInputType() const {
   TextInputClient* client = GetTextInputClient();
   return client ? client->GetTextInputType() : ui::TEXT_INPUT_TYPE_NONE;
+}
+
+ui::TextInputMode InputMethodBridge::GetTextInputMode() const {
+  TextInputClient* client = GetTextInputClient();
+  return client ? client->GetTextInputMode() : ui::TEXT_INPUT_MODE_DEFAULT;
 }
 
 bool InputMethodBridge::CanComposeInline() const {
@@ -135,38 +157,22 @@ bool InputMethodBridge::CanComposeInline() const {
   return client ? client->CanComposeInline() : true;
 }
 
-gfx::Rect InputMethodBridge::ConvertRectToFocusedView(const gfx::Rect& rect) {
-  gfx::Point origin = rect.origin();
-  gfx::Point end = gfx::Point(rect.right(), rect.bottom());
-  View::ConvertPointToScreen(GetFocusedView(), &origin);
-  View::ConvertPointToScreen(GetFocusedView(), &end);
-  return gfx::Rect(origin.x(),
-                   origin.y(),
-                   end.x() - origin.x(),
-                   end.y() - origin.y());
-}
-
 gfx::Rect InputMethodBridge::GetCaretBounds() {
   TextInputClient* client = GetTextInputClient();
-  if (!client || !GetFocusedView())
+  if (!client)
     return gfx::Rect();
 
-  const gfx::Rect rect = client->GetCaretBounds();
-  return ConvertRectToFocusedView(rect);
+  return client->GetCaretBounds();
 }
 
 bool InputMethodBridge::GetCompositionCharacterBounds(uint32 index,
                                                       gfx::Rect* rect) {
   DCHECK(rect);
   TextInputClient* client = GetTextInputClient();
-  if (!client || !GetFocusedView())
+  if (!client)
     return false;
 
-  gfx::Rect relative_rect;
-  if (!client->GetCompositionCharacterBounds(index, &relative_rect))
-    return false;
-  *rect = ConvertRectToFocusedView(relative_rect);
-  return true;
+  return client->GetCompositionCharacterBounds(index, rect);
 }
 
 bool InputMethodBridge::HasCompositionText() {
@@ -224,14 +230,29 @@ void InputMethodBridge::ExtendSelectionAndDelete(size_t before, size_t after) {
     client->ExtendSelectionAndDelete(before, after);
 }
 
+void InputMethodBridge::EnsureCaretInRect(const gfx::Rect& rect) {
+  TextInputClient* client = GetTextInputClient();
+  if (client)
+    client->EnsureCaretInRect(rect);
+}
+
 // Overridden from FocusChangeListener.
 void InputMethodBridge::OnWillChangeFocus(View* focused_before, View* focused) {
-  ConfirmCompositionText();
+  if (HasCompositionText()) {
+    ConfirmCompositionText();
+    CancelComposition(focused_before);
+  }
 }
 
 void InputMethodBridge::OnDidChangeFocus(View* focused_before, View* focused) {
-  OnTextInputTypeChanged(GetFocusedView());
-  OnCaretBoundsChanged(GetFocusedView());
+  DCHECK_EQ(GetFocusedView(), focused);
+  OnTextInputTypeChanged(focused);
+  OnCaretBoundsChanged(focused);
 }
+
+ui::InputMethod* InputMethodBridge::GetHostInputMethod() const {
+  return host_;
+}
+
 
 }  // namespace views

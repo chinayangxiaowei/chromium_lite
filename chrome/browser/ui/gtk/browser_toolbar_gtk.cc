@@ -17,12 +17,13 @@
 #include "base/path_service.h"
 #include "base/prefs/pref_service.h"
 #include "chrome/app/chrome_command_ids.h"
-#include "chrome/browser/net/url_fixer_upper.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/themes/theme_properties.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/global_error/global_error.h"
 #include "chrome/browser/ui/global_error/global_error_service.h"
 #include "chrome/browser/ui/global_error/global_error_service_factory.h"
 #include "chrome/browser/ui/gtk/accelerators_gtk.h"
@@ -42,7 +43,7 @@
 #include "chrome/browser/ui/gtk/view_id_util.h"
 #include "chrome/browser/ui/toolbar/encoding_menu_controller.h"
 #include "chrome/browser/upgrade_detector.h"
-#include "chrome/common/chrome_notification_types.h"
+#include "chrome/common/net/url_fixer_upper.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/browser/host_zoom_map.h"
@@ -103,7 +104,7 @@ BrowserToolbarGtk::BrowserToolbarGtk(Browser* browser, BrowserWindowGtk* window)
       window_(window),
       zoom_callback_(base::Bind(&BrowserToolbarGtk::OnZoomLevelChanged,
                                 base::Unretained(this))) {
-  wrench_menu_model_.reset(new WrenchMenuModel(this, browser_, false, false));
+  wrench_menu_model_.reset(new WrenchMenuModel(this, browser_, false));
 
   chrome::AddCommandObserver(browser_, IDC_BACK, this);
   chrome::AddCommandObserver(browser_, IDC_FORWARD, this);
@@ -670,7 +671,7 @@ bool BrowserToolbarGtk::ShouldOnlyShowLocation() const {
 }
 
 void BrowserToolbarGtk::RebuildWrenchMenu() {
-  wrench_menu_model_.reset(new WrenchMenuModel(this, browser_, false, false));
+  wrench_menu_model_.reset(new WrenchMenuModel(this, browser_, false));
   wrench_menu_.reset(new MenuGtk(this, wrench_menu_model_.get()));
   // The bookmark menu model needs to be able to force the wrench menu to close.
   wrench_menu_model_->bookmark_sub_menu_model()->SetMenuGtk(wrench_menu_.get());
@@ -685,8 +686,21 @@ gboolean BrowserToolbarGtk::OnWrenchMenuButtonExpose(GtkWidget* sender,
     resource_id = UpgradeDetector::GetInstance()->GetIconResourceID(
             UpgradeDetector::UPGRADE_ICON_TYPE_BADGE);
   } else {
-    resource_id = GlobalErrorServiceFactory::GetForProfile(
-        browser_->profile())->GetFirstBadgeResourceID();
+    GlobalError* error = GlobalErrorServiceFactory::GetForProfile(
+        browser_->profile())->GetHighestSeverityGlobalErrorWithWrenchMenuItem();
+    if (error) {
+      switch (error->GetSeverity()) {
+        case GlobalError::SEVERITY_LOW:
+          resource_id = IDR_UPDATE_BADGE;
+          break;
+        case GlobalError::SEVERITY_MEDIUM:
+          resource_id = IDR_UPDATE_BADGE4;
+          break;
+        case GlobalError::SEVERITY_HIGH:
+          resource_id = IDR_UPDATE_BADGE3;
+          break;
+      }
+    }
   }
 
   if (!resource_id)

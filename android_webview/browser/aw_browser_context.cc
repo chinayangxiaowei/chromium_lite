@@ -4,9 +4,16 @@
 
 #include "android_webview/browser/aw_browser_context.h"
 
+#include "android_webview/browser/aw_form_database_service.h"
+#include "android_webview/browser/aw_pref_store.h"
 #include "android_webview/browser/aw_quota_manager_bridge.h"
 #include "android_webview/browser/jni_dependency_factory.h"
 #include "android_webview/browser/net/aw_url_request_context_getter.h"
+#include "base/prefs/pref_registry_simple.h"
+#include "base/prefs/pref_service.h"
+#include "base/prefs/pref_service_builder.h"
+#include "components/autofill/core/common/autofill_pref_names.h"
+#include "components/user_prefs/user_prefs.h"
 #include "components/visitedlink/browser/visitedlink_master.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/resource_context.h"
@@ -14,9 +21,15 @@
 #include "content/public/browser/web_contents.h"
 #include "net/url_request/url_request_context.h"
 
+using content::BrowserThread;
+
 namespace android_webview {
 
 namespace {
+
+// Shows notifications which correspond to PersistentPrefStore's reading errors.
+void HandleReadError(PersistentPrefStore::PrefReadError error) {
+}
 
 class AwResourceContext : public content::ResourceContext {
  public:
@@ -26,12 +39,18 @@ class AwResourceContext : public content::ResourceContext {
 
   // content::ResourceContext implementation.
   virtual net::HostResolver* GetHostResolver() OVERRIDE {
-    DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::IO));
+    DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
     return getter_->GetURLRequestContext()->host_resolver();
   }
   virtual net::URLRequestContext* GetRequestContext() OVERRIDE {
-    DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::IO));
+    DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
     return getter_->GetURLRequestContext();
+  }
+  virtual bool AllowMicAccess(const GURL& origin) OVERRIDE {
+    return false;
+  }
+  virtual bool AllowCameraAccess(const GURL& origin) OVERRIDE {
+    return false;
   }
 
  private:
@@ -40,16 +59,34 @@ class AwResourceContext : public content::ResourceContext {
   DISALLOW_COPY_AND_ASSIGN(AwResourceContext);
 };
 
+AwBrowserContext* g_browser_context = NULL;
+
 }  // namespace
 
 AwBrowserContext::AwBrowserContext(
     const base::FilePath path,
     JniDependencyFactory* native_factory)
     : context_storage_path_(path),
-      native_factory_(native_factory) {
+      native_factory_(native_factory),
+      user_pref_service_ready_(false) {
+  DCHECK(g_browser_context == NULL);
+  g_browser_context = this;
+
+  // This constructor is entered during the creation of ContentBrowserClient,
+  // before browser threads are created. Therefore any checks to enforce
+  // threading (such as BrowserThread::CurrentlyOn()) will fail here.
 }
 
 AwBrowserContext::~AwBrowserContext() {
+  DCHECK(g_browser_context == this);
+  g_browser_context = NULL;
+}
+
+// static
+AwBrowserContext* AwBrowserContext::GetDefault() {
+  // TODO(joth): rather than store in a global here, lookup this instance
+  // from the Java-side peer.
+  return g_browser_context;
 }
 
 // static
@@ -60,14 +97,17 @@ AwBrowserContext* AwBrowserContext::FromWebContents(
 }
 
 void AwBrowserContext::InitializeBeforeThreadCreation() {
-  DCHECK(!url_request_context_getter_);
+  DCHECK(!url_request_context_getter_.get());
   url_request_context_getter_ = new AwURLRequestContextGetter(this);
 }
 
 void AwBrowserContext::PreMainMessageLoopRun() {
   visitedlink_master_.reset(
-      new components::VisitedLinkMaster(this, this, false));
+      new visitedlink::VisitedLinkMaster(this, this, false));
   visitedlink_master_->Init();
+
+  form_database_service_.reset(
+      new AwFormDatabaseService(context_storage_path_));
 }
 
 void AwBrowserContext::AddVisitedURLs(const std::vector<GURL>& urls) {
@@ -77,7 +117,7 @@ void AwBrowserContext::AddVisitedURLs(const std::vector<GURL>& urls) {
 
 net::URLRequestContextGetter* AwBrowserContext::CreateRequestContext(
     content::ProtocolHandlerMap* protocol_handlers) {
-  CHECK(url_request_context_getter_);
+  CHECK(url_request_context_getter_.get());
   url_request_context_getter_->SetProtocolHandlers(protocol_handlers);
   return url_request_context_getter_.get();
 }
@@ -87,7 +127,7 @@ AwBrowserContext::CreateRequestContextForStoragePartition(
     const base::FilePath& partition_path,
     bool in_memory,
     content::ProtocolHandlerMap* protocol_handlers) {
-  CHECK(url_request_context_getter_);
+  CHECK(url_request_context_getter_.get());
   return url_request_context_getter_.get();
 }
 
@@ -99,7 +139,36 @@ AwQuotaManagerBridge* AwBrowserContext::GetQuotaManagerBridge() {
   return quota_manager_bridge_.get();
 }
 
-base::FilePath AwBrowserContext::GetPath() {
+AwFormDatabaseService* AwBrowserContext::GetFormDatabaseService() {
+  return form_database_service_.get();
+}
+
+// Create user pref service for autofill functionality.
+void AwBrowserContext::CreateUserPrefServiceIfNecessary() {
+  if (user_pref_service_ready_)
+    return;
+
+  user_pref_service_ready_ = true;
+  PrefRegistrySimple* pref_registry = new PrefRegistrySimple();
+  // We only use the autocomplete feature of the Autofill, which is
+  // controlled via the manager_delegate. We don't use the rest
+  // of autofill, which is why it is hardcoded as disabled here.
+  pref_registry->RegisterBooleanPref(
+      autofill::prefs::kAutofillEnabled, false);
+  pref_registry->RegisterDoublePref(
+      autofill::prefs::kAutofillPositiveUploadRate, 0.0);
+  pref_registry->RegisterDoublePref(
+      autofill::prefs::kAutofillNegativeUploadRate, 0.0);
+
+  PrefServiceBuilder pref_service_builder;
+  pref_service_builder.WithUserPrefs(new AwPrefStore());
+  pref_service_builder.WithReadErrorCallback(base::Bind(&HandleReadError));
+
+  user_prefs::UserPrefs::Set(this,
+                             pref_service_builder.Create(pref_registry));
+}
+
+base::FilePath AwBrowserContext::GetPath() const {
   return context_storage_path_;
 }
 
@@ -122,6 +191,15 @@ net::URLRequestContextGetter* AwBrowserContext::GetMediaRequestContext() {
   return GetRequestContext();
 }
 
+void AwBrowserContext::RequestMIDISysExPermission(
+      int render_process_id,
+      int render_view_id,
+      const GURL& requesting_frame,
+      const MIDISysExPermissionCallback& callback) {
+  // TODO(toyoshim): Android is not supported yet.
+  callback.Run(false);
+}
+
 net::URLRequestContextGetter*
 AwBrowserContext::GetMediaRequestContextForRenderProcess(
     int renderer_child_id) {
@@ -137,9 +215,9 @@ AwBrowserContext::GetMediaRequestContextForStoragePartition(
 
 content::ResourceContext* AwBrowserContext::GetResourceContext() {
   if (!resource_context_) {
-    CHECK(url_request_context_getter_);
-    resource_context_.reset(new AwResourceContext(
-        url_request_context_getter_.get()));
+    CHECK(url_request_context_getter_.get());
+    resource_context_.reset(
+        new AwResourceContext(url_request_context_getter_.get()));
   }
   return resource_context_.get();
 }
@@ -151,22 +229,15 @@ AwBrowserContext::GetDownloadManagerDelegate() {
 
 content::GeolocationPermissionContext*
 AwBrowserContext::GetGeolocationPermissionContext() {
-  if (!geolocation_permission_context_) {
+  if (!geolocation_permission_context_.get()) {
     geolocation_permission_context_ =
         native_factory_->CreateGeolocationPermission(this);
   }
-  return geolocation_permission_context_;
-}
-
-content::SpeechRecognitionPreferences*
-AwBrowserContext::GetSpeechRecognitionPreferences() {
-  // By default allows profanities in speech recognition if return NULL.
-  return NULL;
+  return geolocation_permission_context_.get();
 }
 
 quota::SpecialStoragePolicy* AwBrowserContext::GetSpecialStoragePolicy() {
-  // TODO(boliu): Implement this so we are not relying on default behavior.
-  NOTIMPLEMENTED();
+  // Intentionally returning NULL as 'Extensions' and 'Apps' not supported.
   return NULL;
 }
 

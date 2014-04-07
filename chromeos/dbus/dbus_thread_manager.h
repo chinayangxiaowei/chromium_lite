@@ -27,11 +27,11 @@ class DBusThreadManagerObserver;
 
 // Style Note: Clients are sorted by names.
 class BluetoothAdapterClient;
+class BluetoothAgentManagerClient;
 class BluetoothDeviceClient;
 class BluetoothInputClient;
-class BluetoothManagerClient;
-class BluetoothNodeClient;
-class BluetoothOutOfBandClient;
+class BluetoothProfileManagerClient;
+class CrasAudioClient;
 class CrosDisksClient;
 class CryptohomeClient;
 class DebugDaemonClient;
@@ -121,11 +121,11 @@ class CHROMEOS_EXPORT DBusThreadManager {
   // All returned objects are owned by DBusThreadManager.  Do not cache these
   // pointers and use them after DBusThreadManager has been shut down.
   virtual BluetoothAdapterClient* GetBluetoothAdapterClient() = 0;
+  virtual BluetoothAgentManagerClient* GetBluetoothAgentManagerClient() = 0;
   virtual BluetoothDeviceClient* GetBluetoothDeviceClient() = 0;
   virtual BluetoothInputClient* GetBluetoothInputClient() = 0;
-  virtual BluetoothManagerClient* GetBluetoothManagerClient() = 0;
-  virtual BluetoothNodeClient* GetBluetoothNodeClient() = 0;
-  virtual BluetoothOutOfBandClient* GetBluetoothOutOfBandClient() = 0;
+  virtual BluetoothProfileManagerClient* GetBluetoothProfileManagerClient() = 0;
+  virtual CrasAudioClient* GetCrasAudioClient() = 0;
   virtual CrosDisksClient* GetCrosDisksClient() = 0;
   virtual CryptohomeClient* GetCryptohomeClient() = 0;
   virtual DebugDaemonClient* GetDebugDaemonClient() = 0;
@@ -147,8 +147,8 @@ class CHROMEOS_EXPORT DBusThreadManager {
   virtual ShillDeviceClient* GetShillDeviceClient() = 0;
   virtual ShillIPConfigClient* GetShillIPConfigClient() = 0;
   virtual ShillManagerClient* GetShillManagerClient() = 0;
-  virtual ShillProfileClient* GetShillProfileClient() = 0;
   virtual ShillServiceClient* GetShillServiceClient() = 0;
+  virtual ShillProfileClient* GetShillProfileClient() = 0;
   virtual SMSClient* GetSMSClient() = 0;
   virtual SystemClockClient* GetSystemClockClient() = 0;
   virtual UpdateEngineClient* GetUpdateEngineClient() = 0;

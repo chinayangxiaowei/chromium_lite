@@ -9,18 +9,20 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
+#include "build/build_config.h"
 #include "sandbox/linux/tests/unit_tests.h"
 #include "sandbox/linux/seccomp-bpf/sandbox_bpf.h"
-
 
 namespace sandbox {
 
 // A BPF_DEATH_TEST is just the same as a BPF_TEST, but it assumes that the
 // test will fail with a particular known error condition. Use the DEATH_XXX()
 // macros from unit_tests.h to specify the expected error condition.
+// A BPF_DEATH_TEST is always disabled under ThreadSanitizer, see
+// crbug.com/243968.
 #define BPF_DEATH_TEST(test_case_name, test_name, death, policy, aux...)      \
   void BPF_TEST_##test_name(sandbox::BpfTests<aux>::AuxType& BPF_AUX);        \
-  TEST(test_case_name, test_name) {                                           \
+  TEST(test_case_name, DISABLE_ON_TSAN(test_name)) {                          \
     sandbox::BpfTests<aux>::TestArgs arg(BPF_TEST_##test_name, policy);       \
     sandbox::BpfTests<aux>::RunTestInProcess(                                 \
                                    sandbox::BpfTests<aux>::TestWrapper, &arg, \
@@ -92,6 +94,14 @@ class BpfTests : public UnitTests {
 
       arg->test()(arg->aux_);
     } else {
+      printf("This BPF test is not fully running in this configuration!\n");
+      // Android, ARM and Valgrind are the three only configurations where we
+      // accept not having kernel BPF support.
+      // TODO(jln): remote ARM from this list when possible (crbug.com/243478).
+      if (!IsAndroid() && !IsRunningOnValgrind() && !IsArchitectureArm()) {
+        const bool seccomp_bpf_is_supported = false;
+        BPF_ASSERT(seccomp_bpf_is_supported);
+      }
       // Call the compiler and verify the policy. That's the least we can do,
       // if we don't have kernel support.
       playground2::Sandbox sandbox;

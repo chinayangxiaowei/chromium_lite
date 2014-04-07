@@ -11,10 +11,10 @@
 #include "base/files/file_path.h"
 #include "base/mac/bundle_locations.h"
 #include "base/mac/mac_util.h"
+#include "base/mac/scoped_nsobject.h"
 #include "base/memory/ref_counted_memory.h"
-#include "base/memory/scoped_nsobject.h"
+#include "base/strings/sys_string_conversions.h"
 #include "base/synchronization/lock.h"
-#include "base/sys_string_conversions.h"
 #include "ui/base/resource/resource_handle.h"
 #include "ui/gfx/image/image.h"
 
@@ -90,7 +90,7 @@ base::FilePath ResourceBundle::GetLocaleFilePath(const std::string& app_locale,
   if (locale_file_path.empty() || !locale_file_path.IsAbsolute())
     return base::FilePath();
 
-  if (test_file_exists && !file_util::PathExists(locale_file_path))
+  if (test_file_exists && !base::PathExists(locale_file_path))
     return base::FilePath();
 
   return locale_file_path;
@@ -119,16 +119,15 @@ gfx::Image& ResourceBundle::GetNativeImageNamed(int resource_id, ImageRTL rtl) {
     image = delegate_->GetNativeImageNamed(resource_id, rtl);
 
   if (image.IsEmpty()) {
-    scoped_nsobject<NSImage> ns_image;
+    base::scoped_nsobject<NSImage> ns_image;
     for (size_t i = 0; i < data_packs_.size(); ++i) {
       scoped_refptr<base::RefCountedStaticMemory> data(
           data_packs_[i]->GetStaticMemory(resource_id));
       if (!data.get())
         continue;
 
-      scoped_nsobject<NSData> ns_data(
-          [[NSData alloc] initWithBytes:data->front()
-                                 length:data->size()]);
+      base::scoped_nsobject<NSData> ns_data(
+          [[NSData alloc] initWithBytes:data->front() length:data->size()]);
       if (!ns_image.get()) {
         ns_image.reset([[NSImage alloc] initWithData:ns_data]);
       } else {

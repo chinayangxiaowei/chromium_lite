@@ -6,12 +6,12 @@
 #define CHROME_BROWSER_UI_VIEWS_LOCATION_BAR_ZOOM_BUBBLE_VIEW_H_
 
 #include "base/basictypes.h"
-#include "base/timer.h"
+#include "base/timer/timer.h"
+#include "chrome/browser/ui/views/frame/immersive_mode_controller.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 #include "ui/views/bubble/bubble_delegate.h"
 #include "ui/views/controls/button/button.h"
-#include "ui/views/controls/button/text_button.h"
 #include "ui/views/controls/label.h"
 
 class FullscreenController;
@@ -25,7 +25,8 @@ class WebContents;
 // View used to display the zoom percentage when it has changed.
 class ZoomBubbleView : public views::BubbleDelegateView,
                        public views::ButtonListener,
-                       public content::NotificationObserver {
+                       public content::NotificationObserver,
+                       public ImmersiveModeController::Observer {
  public:
   // Shows the bubble and automatically closes it after a short time period if
   // |auto_close| is true.
@@ -38,16 +39,22 @@ class ZoomBubbleView : public views::BubbleDelegateView,
   // Whether the zoom bubble is currently showing.
   static bool IsShowing();
 
+  // Returns the zoom bubble if the zoom bubble is showing. Returns NULL
+  // otherwise.
+  static const ZoomBubbleView* GetZoomBubbleForTest();
+
  private:
   ZoomBubbleView(views::View* anchor_view,
                  content::WebContents* web_contents,
                  bool auto_close,
+                 ImmersiveModeController* immersive_mode_controller,
                  FullscreenController* fullscreen_controller);
   virtual ~ZoomBubbleView();
 
-  // Place the bubble in the top right (left in RTL) of the |screen_bounds| that
-  // contain |web_contents_|'s browser window. Because the positioning is based
-  // on the size of the bubble, this must be called after the bubble is created.
+  // If the bubble is not anchored to a view, places the bubble in the top
+  // right (left in RTL) of the |screen_bounds| that contain |web_contents_|'s
+  // browser window. Because the positioning is based on the size of the
+  // bubble, this must be called after the bubble is created.
   void AdjustForFullscreen(const gfx::Rect& screen_bounds);
 
   // Refreshes the bubble by changing the zoom percentage appropriately and
@@ -82,6 +89,10 @@ class ZoomBubbleView : public views::BubbleDelegateView,
                        const content::NotificationSource& source,
                        const content::NotificationDetails& details) OVERRIDE;
 
+  // ImmersiveModeController::Observer methods.
+  virtual void OnImmersiveRevealStarted() OVERRIDE;
+  virtual void OnImmersiveModeControllerDestroyed() OVERRIDE;
+
   // Singleton instance of the zoom bubble. The zoom bubble can only be shown on
   // the active browser window, so there is no case in which it will be shown
   // twice at the same time.
@@ -98,6 +109,11 @@ class ZoomBubbleView : public views::BubbleDelegateView,
 
   // Whether the currently displayed bubble will automatically close.
   bool auto_close_;
+
+  // The immersive mode controller for the BrowserView containing
+  // |web_contents_|.
+  // Not owned.
+  ImmersiveModeController* immersive_mode_controller_;
 
   // Used to register for fullscreen change notifications.
   content::NotificationRegistrar registrar_;

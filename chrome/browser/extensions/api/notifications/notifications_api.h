@@ -13,6 +13,8 @@
 #include "chrome/common/extensions/api/notifications.h"
 #include "ui/message_center/notification_types.h"
 
+class Notification;
+
 namespace extensions {
 
 class NotificationsApiFunction : public ApiFunction {
@@ -25,9 +27,11 @@ class NotificationsApiFunction : public ApiFunction {
   NotificationsApiFunction();
   virtual ~NotificationsApiFunction();
 
-  void CreateNotification(
-      const std::string& id,
-      api::notifications::NotificationOptions* options);
+  bool CreateNotification(const std::string& id,
+                          api::notifications::NotificationOptions* options);
+  bool UpdateNotification(const std::string& id,
+                          api::notifications::NotificationOptions* options,
+                          Notification* notification);
 
   bool IsNotificationsApiEnabled();
 
@@ -87,6 +91,20 @@ class NotificationsClearFunction : public NotificationsApiFunction {
   scoped_ptr<api::notifications::Clear::Params> params_;
 
   DECLARE_EXTENSION_FUNCTION("notifications.clear", NOTIFICATIONS_CLEAR)
+};
+
+class NotificationsGetAllFunction : public NotificationsApiFunction {
+ public:
+  NotificationsGetAllFunction();
+
+  // UIThreadExtensionFunction:
+  virtual bool RunNotificationsApi() OVERRIDE;
+
+ protected:
+  virtual ~NotificationsGetAllFunction();
+
+ private:
+  DECLARE_EXTENSION_FUNCTION("notifications.getAll", NOTIFICATIONS_GET_ALL)
 };
 
 }  // namespace extensions

@@ -6,7 +6,7 @@ package org.chromium.ui.gfx;
 
 import android.content.Context;
 import android.graphics.PixelFormat;
-import android.telephony.TelephonyManager;
+import android.os.Build;
 import android.util.DisplayMetrics;
 import android.view.Display;
 import android.view.WindowManager;
@@ -24,11 +24,13 @@ import org.chromium.base.JNINamespace;
 @JNINamespace("gfx")
 public class DeviceDisplayInfo {
 
-  private WindowManager mWinManager;
+
+  private final Context mAppContext;
+  private final WindowManager mWinManager;
 
   private DeviceDisplayInfo(Context context) {
-      Context appContext = context.getApplicationContext();
-      mWinManager = (WindowManager) appContext.getSystemService(Context.WINDOW_SERVICE);
+      mAppContext = context.getApplicationContext();
+      mWinManager = (WindowManager) mAppContext.getSystemService(Context.WINDOW_SERVICE);
   }
 
   /**
@@ -47,22 +49,33 @@ public class DeviceDisplayInfo {
       return getMetrics().widthPixels;
   }
 
+  @SuppressWarnings("deprecation")
+  private int getPixelFormat() {
+      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.JELLY_BEAN_MR1) {
+          return getDisplay().getPixelFormat();
+      }
+      // JellyBean MR1 and later always uses RGBA_8888.
+      return PixelFormat.RGBA_8888;
+  }
+
   /**
    * @return Bits per pixel.
    */
   @CalledByNative
   public int getBitsPerPixel() {
+      int format = getPixelFormat();
       PixelFormat info = new PixelFormat();
-      PixelFormat.getPixelFormatInfo(getDisplay().getPixelFormat(), info);
+      PixelFormat.getPixelFormatInfo(format, info);
       return info.bitsPerPixel;
   }
 
   /**
    * @return Bits per component.
    */
+  @SuppressWarnings("deprecation")
   @CalledByNative
   public int getBitsPerComponent() {
-      int format = getDisplay().getPixelFormat();
+      int format = getPixelFormat();
       switch (format) {
       case PixelFormat.RGBA_4444:
           return 4;
@@ -102,24 +115,12 @@ public class DeviceDisplayInfo {
       return getMetrics().density;
   }
 
-  /**
-   * @return Display refresh rate in frames per second.
-   */
-  @CalledByNative
-  public double getRefreshRate() {
-      double result = getDisplay().getRefreshRate();
-      // Sanity check.
-      return (result >= 61 || result < 30) ? 0 : result;
-  }
-
   private Display getDisplay() {
       return mWinManager.getDefaultDisplay();
   }
 
   private DisplayMetrics getMetrics() {
-      DisplayMetrics metrics = new DisplayMetrics();
-      getDisplay().getMetrics(metrics);
-      return metrics;
+      return mAppContext.getResources().getDisplayMetrics();
   }
 
   /**

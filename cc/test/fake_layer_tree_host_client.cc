@@ -17,7 +17,8 @@ FakeLayerTreeHostClient::FakeLayerTreeHostClient(RendererOptions options)
 
 FakeLayerTreeHostClient::~FakeLayerTreeHostClient() {}
 
-scoped_ptr<OutputSurface> FakeLayerTreeHostClient::CreateOutputSurface() {
+scoped_ptr<OutputSurface> FakeLayerTreeHostClient::CreateOutputSurface(
+    bool fallback) {
   if (use_software_rendering_) {
     if (use_delegating_renderer_) {
       return FakeOutputSurface::CreateDelegatingSoftware(
@@ -28,27 +29,15 @@ scoped_ptr<OutputSurface> FakeLayerTreeHostClient::CreateOutputSurface() {
         make_scoped_ptr(new SoftwareOutputDevice)).PassAs<OutputSurface>();
   }
 
-  WebKit::WebGraphicsContext3D::Attributes attrs;
-  if (use_delegating_renderer_) {
-    return FakeOutputSurface::CreateDelegating3d(
-        TestWebGraphicsContext3D::Create(attrs)
-            .PassAs<WebKit::WebGraphicsContext3D>())
-        .PassAs<OutputSurface>();
-  }
+  if (use_delegating_renderer_)
+    return FakeOutputSurface::CreateDelegating3d().PassAs<OutputSurface>();
 
-  return FakeOutputSurface::Create3d(
-      TestWebGraphicsContext3D::Create(attrs)
-          .PassAs<WebKit::WebGraphicsContext3D>())
-      .PassAs<OutputSurface>();
-}
-
-scoped_ptr<InputHandler> FakeLayerTreeHostClient::CreateInputHandler() {
-  return scoped_ptr<InputHandler>();
+  return CreateFakeOutputSurface();
 }
 
 scoped_refptr<cc::ContextProvider> FakeLayerTreeHostClient::
     OffscreenContextProviderForMainThread() {
-  if (!main_thread_contexts_ ||
+  if (!main_thread_contexts_.get() ||
       main_thread_contexts_->DestroyedOnMainThread()) {
     main_thread_contexts_ = FakeContextProvider::Create();
     if (!main_thread_contexts_->BindToCurrentThread())
@@ -59,7 +48,7 @@ scoped_refptr<cc::ContextProvider> FakeLayerTreeHostClient::
 
 scoped_refptr<cc::ContextProvider> FakeLayerTreeHostClient::
     OffscreenContextProviderForCompositorThread() {
-  if (!compositor_thread_contexts_ ||
+  if (!compositor_thread_contexts_.get() ||
       compositor_thread_contexts_->DestroyedOnMainThread())
     compositor_thread_contexts_ = FakeContextProvider::Create();
   return compositor_thread_contexts_;

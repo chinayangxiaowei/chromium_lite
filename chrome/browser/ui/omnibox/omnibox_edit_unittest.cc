@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/autocomplete/autocomplete_classifier_factory.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/ui/omnibox/omnibox_edit_controller.h"
@@ -62,8 +62,10 @@ class TestingOmniboxView : public OmniboxView {
   virtual gfx::NativeView GetRelativeWindowForPopup() const OVERRIDE {
     return NULL;
   }
-  virtual void SetInstantSuggestion(const string16& input) OVERRIDE {}
-  virtual string16 GetInstantSuggestion() const OVERRIDE { return string16(); }
+  virtual void SetGrayTextAutocompletion(const string16& input) OVERRIDE {}
+  virtual string16 GetGrayTextAutocompletion() const OVERRIDE {
+    return string16();
+  }
   virtual int TextWidth() const OVERRIDE { return 0; }
   virtual bool IsImeComposing() const OVERRIDE { return false; }
 
@@ -75,8 +77,6 @@ class TestingOmniboxView : public OmniboxView {
   virtual int OnPerformDrop(const ui::DropTargetEvent& event) OVERRIDE {
     return 0;
   }
-  virtual gfx::Font GetFont() OVERRIDE { return gfx::Font(); }
-  virtual int WidthOfTextAfterCursor() OVERRIDE { return 0; }
 #endif
 
   virtual int GetOmniboxTextLength() const OVERRIDE { return 0; }

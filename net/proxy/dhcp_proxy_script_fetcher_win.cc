@@ -47,14 +47,9 @@ DhcpProxyScriptFetcherWin::DhcpProxyScriptFetcherWin(
 DhcpProxyScriptFetcherWin::~DhcpProxyScriptFetcherWin() {
   // Count as user-initiated if we are not yet in STATE_DONE.
   Cancel();
-
-  // The WeakPtr we passed to the worker thread may be destroyed on the
-  // worker thread.  This detaches any outstanding WeakPtr state from
-  // the current thread.
-  base::SupportsWeakPtr<DhcpProxyScriptFetcherWin>::DetachFromThread();
 }
 
-int DhcpProxyScriptFetcherWin::Fetch(string16* utf16_text,
+int DhcpProxyScriptFetcherWin::Fetch(base::string16* utf16_text,
                                      const CompletionCallback& callback) {
   DCHECK(CalledOnValidThread());
   if (state_ != STATE_START && state_ != STATE_DONE) {

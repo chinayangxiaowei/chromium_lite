@@ -7,6 +7,7 @@
 #include "chrome/browser/extensions/api/web_navigation/web_navigation_api.h"
 
 #include "base/lazy_instance.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/api/web_navigation/web_navigation_api_constants.h"
 #include "chrome/browser/extensions/api/web_navigation/web_navigation_api_helpers.h"
 #include "chrome/browser/extensions/event_router.h"
@@ -17,8 +18,6 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_iterator.h"
 #include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/view_type_utils.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/extensions/api/web_navigation.h"
 #include "content/public/browser/navigation_details.h"
 #include "content/public/browser/notification_service.h"
@@ -28,6 +27,7 @@
 #include "content/public/browser/resource_request_details.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/url_constants.h"
+#include "extensions/browser/view_type_utils.h"
 #include "net/base/net_errors.h"
 
 namespace GetFrame = extensions::api::web_navigation::GetFrame;
@@ -36,6 +36,8 @@ namespace GetAllFrames = extensions::api::web_navigation::GetAllFrames;
 DEFINE_WEB_CONTENTS_USER_DATA_KEY(extensions::WebNavigationTabObserver);
 
 namespace extensions {
+
+#if !defined(OS_ANDROID)
 
 namespace helpers = web_navigation_api_helpers;
 namespace keys = web_navigation_api_constants;
@@ -119,7 +121,7 @@ void WebNavigationEventRouter::TabReplacedAt(
   if (!tab_observer) {
     // If you hit this DCHECK(), please add reproduction steps to
     // http://crbug.com/109464.
-    DCHECK(chrome::GetViewType(old_contents) != chrome::VIEW_TYPE_TAB_CONTENTS);
+    DCHECK(GetViewType(old_contents) != VIEW_TYPE_TAB_CONTENTS);
     return;
   }
   const FrameNavigationState& frame_navigation_state =
@@ -167,8 +169,7 @@ void WebNavigationEventRouter::Retargeting(const RetargetingDetails* details) {
   if (!tab_observer) {
     // If you hit this DCHECK(), please add reproduction steps to
     // http://crbug.com/109464.
-    DCHECK(chrome::GetViewType(details->source_web_contents) !=
-           chrome::VIEW_TYPE_TAB_CONTENTS);
+    DCHECK(GetViewType(details->source_web_contents) != VIEW_TYPE_TAB_CONTENTS);
     return;
   }
   const FrameNavigationState& frame_navigation_state =
@@ -253,6 +254,9 @@ WebNavigationTabObserver::WebNavigationTabObserver(
   registrar_.Add(this,
                  content::NOTIFICATION_RESOURCE_RECEIVED_REDIRECT,
                  content::Source<content::WebContents>(web_contents));
+  registrar_.Add(this,
+                 content::NOTIFICATION_RENDER_VIEW_HOST_WILL_CLOSE_RENDER_VIEW,
+                 content::NotificationService::AllSources());
 }
 
 WebNavigationTabObserver::~WebNavigationTabObserver() {}
@@ -309,6 +313,14 @@ void WebNavigationTabObserver::Observe(
             resource_redirect_details->frame_id, render_view_host);
         navigation_state_.SetIsServerRedirected(frame_id);
       }
+      break;
+    }
+
+    case content::NOTIFICATION_RENDER_VIEW_HOST_WILL_CLOSE_RENDER_VIEW: {
+      // The RenderView is technically not yet deleted, but the RenderViewHost
+      // already starts to filter out some IPCs. In order to not get confused,
+      // we consider the RenderView dead already now.
+      RenderViewDeleted(content::Source<content::RenderViewHost>(source).ptr());
       break;
     }
 
@@ -518,10 +530,22 @@ void WebNavigationTabObserver::DocumentLoadedInFrame(
   FrameNavigationState::FrameID frame_id(frame_num, render_view_host);
   if (!navigation_state_.CanSendEvents(frame_id))
     return;
+  navigation_state_.SetParsingFinished(frame_id);
   helpers::DispatchOnDOMContentLoaded(web_contents(),
                                       navigation_state_.GetUrl(frame_id),
                                       navigation_state_.IsMainFrame(frame_id),
                                       frame_num);
+
+  if (!navigation_state_.GetNavigationCompleted(frame_id))
+    return;
+
+  // The load might already have finished by the time we finished parsing. For
+  // compatibility reasons, we artifically delay the load completed signal until
+  // after parsing was completed.
+  helpers::DispatchOnCompleted(web_contents(),
+                               navigation_state_.GetUrl(frame_id),
+                               navigation_state_.IsMainFrame(frame_id),
+                               frame_num);
 }
 
 void WebNavigationTabObserver::DidFinishLoad(
@@ -543,10 +567,19 @@ void WebNavigationTabObserver::DidFinishLoad(
   navigation_state_.SetNavigationCompleted(frame_id);
   if (!navigation_state_.CanSendEvents(frame_id))
     return;
-  DCHECK(navigation_state_.GetUrl(frame_id) == validated_url ||
-         (navigation_state_.GetUrl(frame_id) == GURL(chrome::kAboutSrcDocURL) &&
-          validated_url == GURL(chrome::kAboutBlankURL)));
+  DCHECK(
+      navigation_state_.GetUrl(frame_id) == validated_url ||
+      (navigation_state_.GetUrl(frame_id) == GURL(content::kAboutSrcDocURL) &&
+       validated_url == GURL(content::kAboutBlankURL)))
+      << "validated URL is " << validated_url << " but we expected "
+      << navigation_state_.GetUrl(frame_id);
   DCHECK_EQ(navigation_state_.IsMainFrame(frame_id), is_main_frame);
+
+  // The load might already have finished by the time we finished parsing. For
+  // compatibility reasons, we artifically delay the load completed signal until
+  // after parsing was completed.
+  if (!navigation_state_.GetParsingFinished(frame_id))
+    return;
   helpers::DispatchOnCompleted(web_contents(),
                                navigation_state_.GetUrl(frame_id),
                                is_main_frame,
@@ -822,10 +855,11 @@ WebNavigationAPI::GetFactoryInstance() {
   return &g_factory.Get();
 }
 
-void WebNavigationAPI::OnListenerAdded(
-    const extensions::EventListenerInfo& details) {
+void WebNavigationAPI::OnListenerAdded(const EventListenerInfo& details) {
   web_navigation_event_router_.reset(new WebNavigationEventRouter(profile_));
   ExtensionSystem::Get(profile_)->event_router()->UnregisterObserver(this);
 }
+
+#endif  // OS_ANDROID
 
 }  // namespace extensions

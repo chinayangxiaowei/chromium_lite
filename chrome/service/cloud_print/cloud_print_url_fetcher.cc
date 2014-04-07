@@ -4,7 +4,7 @@
 
 #include "chrome/service/cloud_print/cloud_print_url_fetcher.h"
 
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "base/values.h"
 #include "chrome/common/cloud_print/cloud_print_constants.h"
 #include "chrome/common/cloud_print/cloud_print_helpers.h"
@@ -12,11 +12,11 @@
 #include "chrome/service/cloud_print/cloud_print_token_store.h"
 #include "chrome/service/net/service_url_request_context.h"
 #include "chrome/service/service_process.h"
-#include "googleurl/src/gurl.h"
 #include "net/base/load_flags.h"
 #include "net/http/http_status_code.h"
 #include "net/url_request/url_fetcher.h"
 #include "net/url_request/url_request_status.h"
+#include "url/gurl.h"
 
 namespace cloud_print {
 

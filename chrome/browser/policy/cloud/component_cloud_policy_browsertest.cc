@@ -4,13 +4,9 @@
 
 #include <string>
 
-#include "base/bind.h"
 #include "base/command_line.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
-#include "base/files/scoped_temp_dir.h"
 #include "base/memory/ref_counted.h"
-#include "base/message_loop.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
 #include "chrome/browser/browser_process.h"
@@ -19,8 +15,10 @@
 #include "chrome/browser/policy/browser_policy_connector.h"
 #include "chrome/browser/policy/cloud/cloud_policy_constants.h"
 #include "chrome/browser/policy/cloud/mock_cloud_policy_client.h"
-#include "chrome/browser/policy/cloud/proto/chrome_extension_policy.pb.h"
 #include "chrome/browser/policy/policy_service.h"
+#include "chrome/browser/policy/profile_policy_connector.h"
+#include "chrome/browser/policy/profile_policy_connector_factory.h"
+#include "chrome/browser/policy/proto/cloud/chrome_extension_policy.pb.h"
 #include "chrome/browser/policy/test/local_policy_test_server.h"
 #include "chrome/browser/policy/test_utils.h"
 #include "chrome/browser/profiles/profile.h"
@@ -32,13 +30,10 @@
 #include "testing/gtest/include/gtest/gtest.h"
 
 #if defined(OS_CHROMEOS)
-#include "chrome/browser/chromeos/login/user_manager.h"
 #include "chrome/browser/chromeos/policy/user_cloud_policy_manager_chromeos.h"
+#include "chrome/browser/chromeos/policy/user_cloud_policy_manager_factory_chromeos.h"
 #include "chrome/common/chrome_paths.h"
-#include "chromeos/dbus/mock_cryptohome_client.h"
-#include "chromeos/dbus/mock_dbus_thread_manager.h"
-#include "chromeos/dbus/mock_session_manager_client.h"
-#include "chromeos/dbus/mock_update_engine_client.h"
+#include "chromeos/chromeos_switches.h"
 #else
 #include "chrome/browser/policy/cloud/user_cloud_policy_manager.h"
 #include "chrome/browser/policy/cloud/user_cloud_policy_manager_factory.h"
@@ -86,45 +81,6 @@ const char kTestPolicy2[] =
 
 const char kTestPolicy2JSON[] = "{\"Another\":\"turn_it_off\"}";
 
-#if defined(OS_CHROMEOS)
-
-const char kSanitizedUsername[] = "0123456789ABCDEF0123456789ABCDEF01234567";
-
-ACTION(GetSanitizedUsername) {
-  MessageLoop::current()->PostTask(
-      FROM_HERE,
-      base::Bind(arg1, chromeos::DBUS_METHOD_CALL_SUCCESS, kSanitizedUsername));
-}
-
-ACTION_P(RetrieveUserPolicy, storage) {
-  MessageLoop::current()->PostTask(FROM_HERE, base::Bind(arg0, *storage));
-}
-
-ACTION_P2(StoreUserPolicy, storage, user_policy_key_file) {
-  // The session_manager stores a copy of the policy key at
-  // /var/run/user_policy/$hash/policy.pub. Simulate that behavior here, so
-  // that the policy signature can be validated.
-  em::PolicyFetchResponse policy;
-  ASSERT_TRUE(policy.ParseFromString(arg0));
-  if (policy.has_new_public_key()) {
-    ASSERT_TRUE(file_util::CreateDirectory(user_policy_key_file.DirName()));
-    int result = file_util::WriteFile(
-        user_policy_key_file,
-        policy.new_public_key().data(),
-        policy.new_public_key().size());
-    ASSERT_EQ(static_cast<int>(policy.new_public_key().size()), result);
-  }
-
-  *storage = arg0;
-  MessageLoop::current()->PostTask(FROM_HERE, base::Bind(arg1, true));
-}
-
-#else
-
-const char kTestUser[] = "user@example.com";
-
-#endif  // OS_CHROMEOS
-
 }  // namespace
 
 class ComponentCloudPolicyTest : public ExtensionBrowserTest {
@@ -138,7 +94,8 @@ class ComponentCloudPolicyTest : public ExtensionBrowserTest {
     // ExtensionBrowserTest sets the login users to a non-managed value;
     // replace it. This is the default username sent in policy blobs from the
     // testserver.
-    command_line->AppendSwitchASCII(switches::kLoginUser, "user@example.com");
+    command_line->AppendSwitchASCII(
+        chromeos::switches::kLoginUser, "user@example.com");
 #endif
   }
 
@@ -153,32 +110,6 @@ class ComponentCloudPolicyTest : public ExtensionBrowserTest {
     command_line->AppendSwitchASCII(switches::kDeviceManagementUrl, url);
     command_line->AppendSwitch(switches::kEnableComponentCloudPolicy);
 
-#if defined(OS_CHROMEOS)
-    ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
-    base::FilePath user_key_path =
-        temp_dir_.path().AppendASCII(kSanitizedUsername)
-                        .AppendASCII("policy.pub");
-    PathService::Override(chrome::DIR_USER_POLICY_KEYS, temp_dir_.path());
-
-    mock_dbus_thread_manager_ = new chromeos::MockDBusThreadManager();
-    chromeos::DBusThreadManager::InitializeForTesting(
-        mock_dbus_thread_manager_);
-    EXPECT_CALL(*mock_dbus_thread_manager_->mock_cryptohome_client(),
-                GetSanitizedUsername(_, _))
-        .WillRepeatedly(GetSanitizedUsername());
-    EXPECT_CALL(*mock_dbus_thread_manager_->mock_session_manager_client(),
-                StoreUserPolicy(_, _))
-        .WillRepeatedly(StoreUserPolicy(&session_manager_user_policy_,
-                                        user_key_path));
-    EXPECT_CALL(*mock_dbus_thread_manager_->mock_session_manager_client(),
-                RetrieveUserPolicy(_))
-        .WillRepeatedly(RetrieveUserPolicy(&session_manager_user_policy_));
-    EXPECT_CALL(*mock_dbus_thread_manager_->mock_update_engine_client(),
-                GetLastStatus())
-        .Times(1)
-        .WillOnce(Return(chromeos::MockUpdateEngineClient::Status()));
-#endif  // OS_CHROMEOS
-
     ExtensionBrowserTest::SetUpInProcessBrowserTestFixture();
   }
 
@@ -190,7 +121,7 @@ class ComponentCloudPolicyTest : public ExtensionBrowserTest {
     ExtensionTestMessageListener ready_listener("ready", true);
     event_listener_.reset(new ExtensionTestMessageListener("event", true));
     extension_ = LoadExtension(kTestExtensionPath);
-    ASSERT_TRUE(extension_);
+    ASSERT_TRUE(extension_.get());
     ASSERT_EQ(kTestExtension, extension_->id());
     EXPECT_TRUE(ready_listener.WaitUntilSatisfied());
 
@@ -200,7 +131,8 @@ class ComponentCloudPolicyTest : public ExtensionBrowserTest {
 
 #if defined(OS_CHROMEOS)
     UserCloudPolicyManagerChromeOS* policy_manager =
-        connector->GetUserCloudPolicyManager();
+        UserCloudPolicyManagerFactoryChromeOS::GetForProfile(
+            browser()->profile());
     ASSERT_TRUE(policy_manager);
 #else
     // Mock a signed-in user. This is used by the UserCloudPolicyStore to pass
@@ -208,7 +140,7 @@ class ComponentCloudPolicyTest : public ExtensionBrowserTest {
     SigninManager* signin_manager =
         SigninManagerFactory::GetForProfile(browser()->profile());
     ASSERT_TRUE(signin_manager);
-    signin_manager->SetAuthenticatedUsername(kTestUser);
+    signin_manager->SetAuthenticatedUsername("user@example.com");
 
     UserCloudPolicyManager* policy_manager =
         UserCloudPolicyManagerFactory::GetForProfile(browser()->profile());
@@ -245,7 +177,7 @@ class ComponentCloudPolicyTest : public ExtensionBrowserTest {
     }
     scoped_refptr<const extensions::Extension> extension(
         ExtensionBrowserTest::LoadExtension(full_path.Append(path)));
-    if (!extension) {
+    if (!extension.get()) {
       ADD_FAILURE();
       return NULL;
     }
@@ -253,7 +185,9 @@ class ComponentCloudPolicyTest : public ExtensionBrowserTest {
   }
 
   void RefreshPolicies() {
-    PolicyService* policy_service = browser()->profile()->GetPolicyService();
+    ProfilePolicyConnector* profile_connector =
+        ProfilePolicyConnectorFactory::GetForProfile(browser()->profile());
+    PolicyService* policy_service = profile_connector->policy_service();
     base::RunLoop run_loop;
     policy_service->RefreshPolicies(run_loop.QuitClosure());
     run_loop.Run();
@@ -262,12 +196,6 @@ class ComponentCloudPolicyTest : public ExtensionBrowserTest {
   LocalPolicyTestServer test_server_;
   scoped_refptr<const extensions::Extension> extension_;
   scoped_ptr<ExtensionTestMessageListener> event_listener_;
-
-#if defined(OS_CHROMEOS)
-  base::ScopedTempDir temp_dir_;
-  std::string session_manager_user_policy_;
-  chromeos::MockDBusThreadManager* mock_dbus_thread_manager_;
-#endif
 };
 
 // TODO(joaodasilva): enable these for other platforms once ready.
@@ -315,7 +243,7 @@ IN_PROC_BROWSER_TEST_F(ComponentCloudPolicyTest, InstallNewExtension) {
   result_listener.AlsoListenForFailureMessage("fail");
   scoped_refptr<const extensions::Extension> extension2 =
       LoadExtension(kTestExtension2Path);
-  ASSERT_TRUE(extension2);
+  ASSERT_TRUE(extension2.get());
   ASSERT_EQ(kTestExtension2, extension2->id());
 
   // This extension only sends the 'policy' signal once it receives the policy,

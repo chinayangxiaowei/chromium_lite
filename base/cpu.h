@@ -31,6 +31,7 @@ class BASE_EXPORT CPU {
 
   // Accessors for CPU information.
   const std::string& vendor_name() const { return cpu_vendor_; }
+  int signature() const { return signature_; }
   int stepping() const { return stepping_; }
   int model() const { return model_; }
   int family() const { return family_; }
@@ -45,6 +46,9 @@ class BASE_EXPORT CPU {
   bool has_sse41() const { return has_sse41_; }
   bool has_sse42() const { return has_sse42_; }
   bool has_avx() const { return has_avx_; }
+  bool has_non_stop_time_stamp_counter() const {
+    return has_non_stop_time_stamp_counter_;
+  }
   IntelMicroArchitecture GetIntelMicroArchitecture() const;
   const std::string& cpu_brand() const { return cpu_brand_; }
 
@@ -52,6 +56,7 @@ class BASE_EXPORT CPU {
   // Query the processor for CPUID information.
   void Initialize();
 
+  int signature_;  // raw form of type, family, model, and stepping
   int type_;  // process type
   int family_;  // family of the processor
   int model_;  // model of processor
@@ -66,6 +71,7 @@ class BASE_EXPORT CPU {
   bool has_sse41_;
   bool has_sse42_;
   bool has_avx_;
+  bool has_non_stop_time_stamp_counter_;
   std::string cpu_vendor_;
   std::string cpu_brand_;
 };

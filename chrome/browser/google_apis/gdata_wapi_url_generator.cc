@@ -5,10 +5,11 @@
 #include "chrome/browser/google_apis/gdata_wapi_url_generator.h"
 
 #include "base/logging.h"
-#include "base/stringprintf.h"
-#include "googleurl/src/gurl.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/stringprintf.h"
 #include "net/base/escape.h"
 #include "net/base/url_util.h"
+#include "url/gurl.h"
 
 namespace google_apis {
 namespace {
@@ -48,10 +49,6 @@ const char kInitiateUploadExistingFileURLPrefix[] =
 const int kMaxDocumentsPerFeed = 500;
 const int kMaxDocumentsPerSearchFeed = 50;
 
-// URL requesting documents list that shared to the authenticated user only
-const char kGetResourceListURLForSharedWithMe[] =
-    "/feeds/default/private/full/-/shared-with-me";
-
 // URL requesting documents list of changes to documents collections.
 const char kGetChangesListURL[] = "/feeds/default/private/changes";
 
@@ -59,6 +56,9 @@ const char kGetChangesListURL[] = "/feeds/default/private/changes";
 
 const char GDataWapiUrlGenerator::kBaseUrlForProduction[] =
     "https://docs.google.com/";
+
+const char GDataWapiUrlGenerator::kBaseDownloadUrlForProduction[] =
+    "https://www.googledrive.com/host/";
 
 // static
 GURL GDataWapiUrlGenerator::AddStandardUrlParams(const GURL& url) {
@@ -77,33 +77,19 @@ GURL GDataWapiUrlGenerator::AddInitiateUploadUrlParams(const GURL& url) {
 // static
 GURL GDataWapiUrlGenerator::AddFeedUrlParams(
     const GURL& url,
-    int num_items_to_fetch,
-    int changestamp,
-    const std::string& search_string) {
+    int num_items_to_fetch) {
   GURL result = AddStandardUrlParams(url);
   result = net::AppendOrReplaceQueryParameter(result, "showfolders", "true");
   result = net::AppendOrReplaceQueryParameter(result, "include-shared", "true");
   result = net::AppendOrReplaceQueryParameter(
-      result,
-      "max-results",
-      base::StringPrintf("%d", num_items_to_fetch));
-  result = net::AppendOrReplaceQueryParameter(
-      result, "include-installed-apps", "true");
-
-  if (changestamp) {
-    result = net::AppendQueryParameter(result,
-                                       "start-index",
-                                       base::StringPrintf("%d", changestamp));
-  }
-
-  if (!search_string.empty()) {
-    result = net::AppendOrReplaceQueryParameter(result, "q", search_string);
-  }
+      result, "max-results", base::IntToString(num_items_to_fetch));
   return result;
 }
 
-GDataWapiUrlGenerator::GDataWapiUrlGenerator(const GURL& base_url)
-    : base_url_(GURL(base_url)) {
+GDataWapiUrlGenerator::GDataWapiUrlGenerator(const GURL& base_url,
+                                             const GURL& base_download_url)
+    : base_url_(base_url),
+      base_download_url_(base_download_url) {
 }
 
 GDataWapiUrlGenerator::~GDataWapiUrlGenerator() {
@@ -111,9 +97,8 @@ GDataWapiUrlGenerator::~GDataWapiUrlGenerator() {
 
 GURL GDataWapiUrlGenerator::GenerateResourceListUrl(
     const GURL& override_url,
-    int start_changestamp,
+    int64 start_changestamp,
     const std::string& search_string,
-    bool shared_with_me,
     const std::string& directory_resource_id) const {
   DCHECK_LE(0, start_changestamp);
 
@@ -126,8 +111,6 @@ GURL GDataWapiUrlGenerator::GenerateResourceListUrl(
     // |start_changestamp| that provides the original start point.
     start_changestamp = 0;
     url = override_url;
-  } else if (shared_with_me) {
-    url = base_url_.Resolve(kGetResourceListURLForSharedWithMe);
   } else if (start_changestamp > 0) {
     // The start changestamp shouldn't be used for a search.
     DCHECK(search_string.empty());
@@ -140,7 +123,33 @@ GURL GDataWapiUrlGenerator::GenerateResourceListUrl(
   } else {
     url = base_url_.Resolve(kResourceListRootURL);
   }
-  return AddFeedUrlParams(url, max_docs, start_changestamp, search_string);
+
+  url = AddFeedUrlParams(url, max_docs);
+
+  if (start_changestamp) {
+    url = net::AppendOrReplaceQueryParameter(
+        url, "start-index", base::Int64ToString(start_changestamp));
+  }
+  if (!search_string.empty()) {
+    url = net::AppendOrReplaceQueryParameter(url, "q", search_string);
+  }
+
+  return url;
+}
+
+GURL GDataWapiUrlGenerator::GenerateSearchByTitleUrl(
+    const std::string& title,
+    const std::string& directory_resource_id) const {
+  DCHECK(!title.empty());
+
+  GURL url = directory_resource_id.empty() ?
+      base_url_.Resolve(kResourceListRootURL) :
+      base_url_.Resolve(base::StringPrintf(
+          kContentURLFormat, net::EscapePath(directory_resource_id).c_str()));
+  url = AddFeedUrlParams(url, kMaxDocumentsPerFeed);
+  url = net::AppendOrReplaceQueryParameter(url, "title", title);
+  url = net::AppendOrReplaceQueryParameter(url, "title-exact", "true");
+  return url;
 }
 
 GURL GDataWapiUrlGenerator::GenerateEditUrl(
@@ -151,6 +160,24 @@ GURL GDataWapiUrlGenerator::GenerateEditUrl(
 GURL GDataWapiUrlGenerator::GenerateEditUrlWithoutParams(
     const std::string& resource_id) const {
   return base_url_.Resolve(kGetEditURLPrefix + net::EscapePath(resource_id));
+}
+
+GURL GDataWapiUrlGenerator::GenerateEditUrlWithEmbedOrigin(
+    const std::string& resource_id, const GURL& embed_origin) const {
+  GURL url = GenerateEditUrl(resource_id);
+  if (!embed_origin.is_empty()) {
+    // Construct a valid serialized embed origin from an url, according to
+    // WD-html5-20110525. Such string has to be built manually, since
+    // GURL::spec() always adds the trailing slash. Moreover, ports are
+    // currently not supported.
+    DCHECK(!embed_origin.has_port());
+    DCHECK(!embed_origin.has_path() || embed_origin.path() == "/");
+    const std::string serialized_embed_origin =
+        embed_origin.scheme() + "://" + embed_origin.host();
+    url = net::AppendOrReplaceQueryParameter(
+        url, "embedOrigin", serialized_embed_origin);
+  }
+  return url;
 }
 
 GURL GDataWapiUrlGenerator::GenerateContentUrl(
@@ -209,6 +236,15 @@ GURL GDataWapiUrlGenerator::GenerateAccountMetadataUrl(
         result, "include-installed-apps", "true");
   }
   return result;
+}
+
+GURL GDataWapiUrlGenerator::GenerateDownloadFileUrl(
+    const std::string& resource_id) const {
+  // Strip the file type prefix before the colon character.
+  size_t colon = resource_id.find(':');
+  return base_download_url_.Resolve(net::EscapePath(
+      colon == std::string::npos ? resource_id
+                                 : resource_id.substr(colon + 1)));
 }
 
 }  // namespace google_apis

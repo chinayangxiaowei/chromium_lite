@@ -8,7 +8,7 @@
 #include "base/thread_task_runner_handle.h"
 #include "base/threading/sequenced_worker_pool.h"
 #include "build/build_config.h"
-#include "net/base/cert_database.h"
+#include "net/cert/cert_database.h"
 #include "net/socket/client_socket_handle.h"
 #if defined(USE_OPENSSL)
 #include "net/socket/ssl_client_socket_openssl.h"
@@ -98,15 +98,18 @@ class DefaultClientSocketFactory : public ClientSocketFactory,
     // from call to call.
     scoped_refptr<base::SequencedTaskRunner> nss_task_runner(
         nss_thread_task_runner_);
-    if (!nss_task_runner)
+    if (!nss_task_runner.get())
       nss_task_runner = base::ThreadTaskRunnerHandle::Get();
 
 #if defined(USE_OPENSSL)
     return new SSLClientSocketOpenSSL(transport_socket, host_and_port,
                                       ssl_config, context);
 #elif defined(USE_NSS) || defined(OS_MACOSX) || defined(OS_WIN)
-    return new SSLClientSocketNSS(nss_task_runner, transport_socket,
-                                  host_and_port, ssl_config, context);
+    return new SSLClientSocketNSS(nss_task_runner.get(),
+                                  transport_socket,
+                                  host_and_port,
+                                  ssl_config,
+                                  context);
 #else
     NOTIMPLEMENTED();
     return NULL;

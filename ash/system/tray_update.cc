@@ -14,9 +14,8 @@
 #include "ash/system/tray/system_tray_delegate.h"
 #include "ash/system/tray/system_tray_notifier.h"
 #include "ash/system/tray/tray_constants.h"
-#include "ash/system/tray/tray_views.h"
-#include "base/time.h"
-#include "base/timer.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "grit/ash_resources.h"
 #include "grit/ash_strings.h"
 #include "ui/aura/window.h"
@@ -86,7 +85,8 @@ class UpdateView : public ash::internal::ActionableView {
  private:
   // Overridden from ActionableView.
   virtual bool PerformAction(const ui::Event& event) OVERRIDE {
-    ash::Shell::GetInstance()->system_tray_delegate()->RequestRestart();
+    ash::Shell::GetInstance()->
+        system_tray_delegate()->RequestRestartForUpdate();
     return true;
   }
 
@@ -181,7 +181,7 @@ views::View* TrayUpdate::CreateDetailedView(user::LoginStatus status) {
 }
 
 void TrayUpdate::DestroyDetailedView() {
-  if (nagger_.get()) {
+  if (nagger_) {
     // The nagger was being displayed. Now that the detailed view is being
     // closed, that means either the user clicks on it to restart, or the user
     // didn't click on it to restart. In either case, start the timer to show

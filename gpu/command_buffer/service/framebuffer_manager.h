@@ -6,7 +6,7 @@
 #define GPU_COMMAND_BUFFER_SERVICE_FRAMEBUFFER_MANAGER_H_
 
 #include "base/basictypes.h"
-#include "base/hash_tables.h"
+#include "base/containers/hash_tables.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
 #include "gpu/command_buffer/service/gl_utils.h"
@@ -19,6 +19,7 @@ class FramebufferManager;
 class Renderbuffer;
 class RenderbufferManager;
 class Texture;
+class TextureRef;
 class TextureManager;
 
 // Info about a particular Framebuffer.
@@ -30,12 +31,13 @@ class GPU_EXPORT Framebuffer : public base::RefCounted<Framebuffer> {
     virtual GLsizei height() const = 0;
     virtual GLenum internal_format() const = 0;
     virtual GLsizei samples() const = 0;
+    virtual GLuint object_name() const = 0;
     virtual bool cleared() const = 0;
     virtual void SetCleared(
         RenderbufferManager* renderbuffer_manager,
         TextureManager* texture_manager,
         bool cleared) = 0;
-    virtual bool IsTexture(Texture* texture) const = 0;
+    virtual bool IsTexture(TextureRef* texture) const = 0;
     virtual bool IsRenderbuffer(
         Renderbuffer* renderbuffer) const = 0;
     virtual bool CanRenderTo() const = 0;
@@ -71,8 +73,8 @@ class GPU_EXPORT Framebuffer : public base::RefCounted<Framebuffer> {
 
   // Attaches a texture to a particlar attachment. Pass null to detach.
   void AttachTexture(
-      GLenum attachment, Texture* texture, GLenum target,
-      GLint level);
+      GLenum attachment, TextureRef* texture_ref, GLenum target,
+      GLint level, GLsizei samples);
 
   // Unbinds the given renderbuffer if it is bound.
   void UnbindRenderbuffer(
@@ -80,7 +82,7 @@ class GPU_EXPORT Framebuffer : public base::RefCounted<Framebuffer> {
 
   // Unbinds the given texture if it is bound.
   void UnbindTexture(
-      GLenum target, Texture* texture);
+      GLenum target, TextureRef* texture_ref);
 
   const Attachment* GetAttachment(GLenum attachment) const;
 
@@ -118,6 +120,9 @@ class GPU_EXPORT Framebuffer : public base::RefCounted<Framebuffer> {
   GLenum GetDrawBuffer(GLenum draw_buffer) const;
 
   void SetDrawBuffers(GLsizei n, const GLenum* bufs);
+
+  // Return true if any draw buffers has an alpha channel.
+  bool HasAlphaMRT() const;
 
   static void ClearFramebufferCompleteComboMap();
 
@@ -170,7 +175,7 @@ class GPU_EXPORT Framebuffer : public base::RefCounted<Framebuffer> {
   static FramebufferComboCompleteMap* framebuffer_combo_complete_map_;
   static bool allow_framebuffer_combo_complete_map_;
 
-  scoped_array<GLenum> draw_buffers_;
+  scoped_ptr<GLenum[]> draw_buffers_;
 
   DISALLOW_COPY_AND_ASSIGN(Framebuffer);
 };

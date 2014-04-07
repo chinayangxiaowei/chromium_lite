@@ -16,14 +16,16 @@ class InfoBarService;
 // the reload right from the infobar.
 class CollectedCookiesInfoBarDelegate : public ConfirmInfoBarDelegate {
  public:
-  // Creates a collected cookies delegate and adds it to |infobar_service|.
+  // Creates a collected cookies infobar delegate and adds it to
+  // |infobar_service|.
   static void Create(InfoBarService* infobar_service);
 
  private:
   explicit CollectedCookiesInfoBarDelegate(InfoBarService* infobar_service);
+  virtual ~CollectedCookiesInfoBarDelegate();
 
-  // ConfirmInfoBarDelegate overrides.
-  virtual gfx::Image* GetIcon() const OVERRIDE;
+  // ConfirmInfoBarDelegate:
+  virtual int GetIconID() const OVERRIDE;
   virtual Type GetInfoBarType() const OVERRIDE;
   virtual string16 GetMessageText() const OVERRIDE;
   virtual int GetButtons() const OVERRIDE;

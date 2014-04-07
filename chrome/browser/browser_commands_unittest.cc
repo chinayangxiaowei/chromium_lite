@@ -17,10 +17,6 @@
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
 
-#if defined(OS_CHROMEOS)
-#include "chrome/browser/chromeos/login/mock_user_manager.h"
-#endif
-
 typedef BrowserWithTestWindowTest BrowserCommandsTest;
 
 using content::OpenURLParams;
@@ -30,7 +26,7 @@ using content::WebContents;
 // Tests IDC_SELECT_TAB_0, IDC_SELECT_NEXT_TAB, IDC_SELECT_PREVIOUS_TAB and
 // IDC_SELECT_LAST_TAB.
 TEST_F(BrowserCommandsTest, TabNavigationAccelerators) {
-  GURL about_blank(chrome::kAboutBlankURL);
+  GURL about_blank(content::kAboutBlankURL);
 
   // Create three tabs.
   AddTab(browser(), about_blank);
@@ -171,15 +167,17 @@ TEST_F(BrowserCommandsTest, BackForwardInNewTab) {
   EXPECT_EQ(0, browser()->tab_strip_model()->active_index());
   ASSERT_EQ(2, browser()->tab_strip_model()->count());
 
-  // The original tab should be unchanged.
   WebContents* zeroth = browser()->tab_strip_model()->GetWebContentsAt(0);
-  EXPECT_EQ(url2, zeroth->GetURL());
+  WebContents* first = browser()->tab_strip_model()->GetWebContentsAt(1);
+
+  // The original tab should be unchanged.
+  EXPECT_EQ(url2, zeroth->GetLastCommittedURL());
   EXPECT_TRUE(zeroth->GetController().CanGoBack());
   EXPECT_FALSE(zeroth->GetController().CanGoForward());
 
-  // The new tab should be like the first one but navigated back.
-  WebContents* first = browser()->tab_strip_model()->GetWebContentsAt(1);
-  EXPECT_EQ(url1, browser()->tab_strip_model()->GetWebContentsAt(1)->GetURL());
+  // The new tab should be like the first one but navigated back. Since we
+  // didn't wait for the load to complete, we can't use GetLastCommittedURL.
+  EXPECT_EQ(url1, first->GetVisibleURL());
   EXPECT_FALSE(first->GetController().CanGoBack());
   EXPECT_TRUE(first->GetController().CanGoForward());
 
@@ -194,7 +192,7 @@ TEST_F(BrowserCommandsTest, BackForwardInNewTab) {
   chrome::GoForward(browser(), NEW_BACKGROUND_TAB);
 
   // The previous tab should be unchanged and still in the foreground.
-  EXPECT_EQ(url1, first->GetURL());
+  EXPECT_EQ(url1, first->GetLastCommittedURL());
   EXPECT_FALSE(first->GetController().CanGoBack());
   EXPECT_TRUE(first->GetController().CanGoForward());
   EXPECT_EQ(1, browser()->tab_strip_model()->active_index());
@@ -202,7 +200,9 @@ TEST_F(BrowserCommandsTest, BackForwardInNewTab) {
   // There should be a new tab navigated forward.
   ASSERT_EQ(3, browser()->tab_strip_model()->count());
   WebContents* second = browser()->tab_strip_model()->GetWebContentsAt(2);
-  EXPECT_EQ(url2, second->GetURL());
+  // Since we didn't wait for load to complete, we can't use
+  // GetLastCommittedURL.
+  EXPECT_EQ(url2, second->GetVisibleURL());
   EXPECT_TRUE(second->GetController().CanGoBack());
   EXPECT_FALSE(second->GetController().CanGoForward());
 
@@ -214,7 +214,8 @@ TEST_F(BrowserCommandsTest, BackForwardInNewTab) {
   chrome::GoBack(browser(), NEW_FOREGROUND_TAB);
   ASSERT_EQ(3, browser()->tab_strip_model()->active_index());
   ASSERT_EQ(url1,
-            browser()->tab_strip_model()->GetActiveWebContents()->GetURL());
+            browser()->tab_strip_model()->GetActiveWebContents()->
+                GetVisibleURL());
 
   // Same thing again for forward.
   // TODO(brettw) bug 11055: see the comment above about why we need this.
@@ -223,6 +224,6 @@ TEST_F(BrowserCommandsTest, BackForwardInNewTab) {
   chrome::GoForward(browser(), NEW_FOREGROUND_TAB);
   ASSERT_EQ(4, browser()->tab_strip_model()->active_index());
   ASSERT_EQ(url2,
-            browser()->tab_strip_model()->GetActiveWebContents()->GetURL());
+            browser()->tab_strip_model()->GetActiveWebContents()->
+                GetVisibleURL());
 }
-

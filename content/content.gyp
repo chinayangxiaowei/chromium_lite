@@ -5,23 +5,12 @@
 {
   'variables': {
     'chromium_code': 1,  # Use higher warning level.
+    'chromium_enable_vtune_jit_for_v8%': 0,  # enable the vtune support for V8 engine.
     'directxsdk_exists': '<!(python <(DEPTH)/build/dir_exists.py ../third_party/directxsdk)',
-    'conditions': [
-      ['inside_chromium_build==0', {
-        'webkit_src_dir': '../../../..',
-      },{
-        'webkit_src_dir': '../third_party/WebKit',
-      }],
-    ],
   },
   'target_defaults': {
     'defines': ['CONTENT_IMPLEMENTATION'],
     'conditions': [
-      ['inside_chromium_build==0', {
-        'dependencies': [
-          '../webkit/support/setup_third_party.gyp:third_party_headers',
-        ],
-      }],
       # TODO(jschuh): Remove this after crbug.com/173851 gets fixed.
       ['OS=="win" and target_arch=="x64"', {
         'msvs_settings': {
@@ -32,12 +21,10 @@
       }],
     ],
   },
+  'includes': [
+    'content_tests.gypi',
+  ],
   'conditions': [
-    ['inside_chromium_build==1', {
-      'includes': [
-        'content_tests.gypi',
-      ],
-    }],
     ['OS != "ios"', {
       'includes': [
         '../build/win_precompile.gypi',
@@ -59,8 +46,9 @@
           'target_name': 'content',
           'type': 'none',
           'dependencies': [
-            'content_app',
+            'content_app_browser',
             'content_browser',
+            'content_child',
             'content_common',
           ],
           'conditions': [
@@ -77,7 +65,43 @@
           ],
         },
         {
-          'target_name': 'content_app',
+          'target_name': 'content_app_browser',
+          'type': 'static_library',
+          'variables': { 'enable_wexit_time_destructors': 1, },
+          'includes': [
+            'content_app.gypi',
+          ],
+          'dependencies': [
+            'content_common',
+          ],
+          'conditions': [
+            ['chrome_multiple_dll', {
+              'defines': [
+                'CHROME_MULTIPLE_DLL_BROWSER',
+              ],
+            }],
+          ],
+        },
+        {
+          'target_name': 'content_app_child',
+          'type': 'static_library',
+          'variables': { 'enable_wexit_time_destructors': 1, },
+          'includes': [
+            'content_app.gypi',
+          ],
+          'dependencies': [
+            'content_common',
+          ],
+          'conditions': [
+            ['chrome_multiple_dll', {
+              'defines': [
+                'CHROME_MULTIPLE_DLL_CHILD',
+              ],
+            }],
+          ],
+        },
+        {
+          'target_name': 'content_app_both',
           'type': 'static_library',
           'variables': { 'enable_wexit_time_destructors': 1, },
           'includes': [
@@ -99,12 +123,17 @@
             'content_resources.gyp:content_resources',
           ],
           'conditions': [
-            ['OS != "ios"', {
+            ['OS != "ios" and chrome_multiple_dll != 1', {
               'dependencies': [
                 'content_gpu',
-                'content_renderer',
+                'content_utility',
               ],
             }],
+            ['java_bridge==1', {
+              'dependencies': [
+                'content_child',
+              ]
+            }]
           ],
         },
         {
@@ -124,6 +153,24 @@
           # Disable c4267 warnings until we fix size_t to int truncations.
           'msvs_disabled_warnings': [ 4267, ],
         },
+        {
+          'target_name': 'content_child',
+          'type': 'static_library',
+          'variables': { 'enable_wexit_time_destructors': 1, },
+          'includes': [
+            'content_child.gypi',
+          ],
+          'conditions': [
+            ['OS != "ios"', {
+              'dependencies': [
+                'content_resources.gyp:content_resources',
+              ],
+            }],
+          ],
+          # Disable c4267 warnings until we fix size_t to int truncations.
+          'msvs_disabled_warnings': [ 4267, ],
+        },
+
       ],
       'conditions': [
         ['OS != "ios"', {
@@ -136,6 +183,7 @@
                 'content_gpu.gypi',
               ],
               'dependencies': [
+                'content_child',
                 'content_common',
               ],
             },
@@ -147,6 +195,7 @@
                 'content_plugin.gypi',
               ],
               'dependencies': [
+                'content_child',
                 'content_common',
               ],
             },
@@ -168,8 +217,16 @@
                 'content_renderer.gypi',
               ],
               'dependencies': [
+                'content_child',
                 'content_common',
                 'content_resources.gyp:content_resources',
+              ],
+              'conditions': [
+                ['chromium_enable_vtune_jit_for_v8==1', {
+                  'dependencies': [
+                    '../v8/src/third_party/vtune/v8vtune.gyp:v8_vtune',
+                  ],
+                }],
               ],
             },
             {
@@ -180,6 +237,7 @@
                 'content_utility.gypi',
               ],
               'dependencies': [
+                'content_child',
                 'content_common',
               ],
             },
@@ -191,6 +249,7 @@
                 'content_worker.gypi',
               ],
               'dependencies': [
+                'content_child',
                 'content_common',
               ],
             },
@@ -213,10 +272,16 @@
                 '<(DEPTH)/third_party/mach_override/mach_override.gyp:mach_override',
               ],
             }],
+            ['chromium_enable_vtune_jit_for_v8==1', {
+              'dependencies': [
+                '../v8/src/third_party/vtune/v8vtune.gyp:v8_vtune',
+              ],
+            }],
           ],
           'includes': [
             'content_app.gypi',
             'content_browser.gypi',
+            'content_child.gypi',
             'content_common.gypi',
             'content_gpu.gypi',
             'content_plugin.gypi',
@@ -236,9 +301,19 @@
           },
         },
         {
-          'target_name': 'content_app',
+          'target_name': 'content_app_browser',
           'type': 'none',
           'dependencies': ['content', 'content_browser'],
+        },
+        {
+          'target_name': 'content_app_child',
+          'type': 'none',
+          'dependencies': ['content', 'content_child'],
+        },
+        {
+          'target_name': 'content_app_both',
+          'type': 'none',
+          'dependencies': ['content'],
         },
         {
           'target_name': 'content_browser',
@@ -251,6 +326,11 @@
           'dependencies': ['content', 'content_resources.gyp:content_resources'],
           # Disable c4267 warnings until we fix size_t to int truncations.
           'msvs_disabled_warnings': [ 4267, ],
+        },
+        {
+          'target_name': 'content_child',
+          'type': 'none',
+          'dependencies': ['content'],
         },
         {
           'target_name': 'content_gpu',
@@ -301,6 +381,21 @@
           'includes': [ '../build/java_aidl.gypi' ],
         },
         {
+          'target_name': 'content_native_libraries_gen',
+          'type': 'none',
+          'sources': [
+            'public/android/java/templates/NativeLibraries.template',
+          ],
+          'variables': {
+            'package_name': 'org/chromium/content/app',
+            'include_path': 'public/android/java/templates',
+            'template_deps': [
+              'public/android/java/templates/native_libraries_array.h'
+            ],
+          },
+          'includes': [ '../build/android/java_cpp_template.gypi' ],
+        },
+        {
           'target_name': 'content_java',
           'type': 'none',
           'dependencies': [
@@ -312,9 +407,13 @@
             'content_common',
             'page_transition_types_java',
             'result_codes_java',
+            'speech_recognition_error_java',
+            'top_controls_state_java',
+            'content_native_libraries_gen',
           ],
           'variables': {
             'java_in_dir': '../content/public/android/java',
+            'jar_excluded_classes': [ '*/NativeLibraries.class' ],
             'has_java_resources': 1,
             'R_package': 'org.chromium.content',
             'R_package_relpath': 'org/chromium/content',
@@ -355,22 +454,28 @@
           'includes': [ '../build/android/java_cpp_template.gypi' ],
         },
         {
-          'target_name': 'surface_texture_jni_headers',
+          'target_name': 'speech_recognition_error_java',
           'type': 'none',
+          'sources': [
+            'public/android/java/src/org/chromium/content/browser/SpeechRecognitionError.template',
+          ],
           'variables': {
-            'jni_gen_package': 'content',
-            'input_java_class': 'android/graphics/SurfaceTexture.class',
+            'package_name': 'org/chromium/content/browser',
+            'template_deps': ['public/common/speech_recognition_error_list.h'],
           },
-          'includes': [ '../build/jar_file_jni_generator.gypi' ],
+          'includes': [ '../build/android/java_cpp_template.gypi' ],
         },
         {
-          'target_name': 'surface_jni_headers',
+          'target_name': 'top_controls_state_java',
           'type': 'none',
+          'sources': [
+            'public/android/java/src/org/chromium/content/common/TopControlsState.template',
+          ],
           'variables': {
-            'jni_gen_package': 'content',
-            'input_java_class': 'android/view/Surface.class',
+            'package_name': 'org/chromium/content/common',
+            'template_deps': ['public/common/top_controls_state_list.h'],
           },
-          'includes': [ '../build/jar_file_jni_generator.gypi' ],
+          'includes': [ '../build/android/java_cpp_template.gypi' ],
         },
         {
           'target_name': 'java_set_jni_headers',
@@ -387,8 +492,6 @@
           'type': 'none',
           'dependencies': [
             'java_set_jni_headers',
-            'surface_texture_jni_headers',
-            'surface_jni_headers',
           ],
           'direct_dependent_settings': {
             'include_dirs': [

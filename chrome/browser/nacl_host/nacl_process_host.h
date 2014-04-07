@@ -11,19 +11,20 @@
 #include "base/files/file_util_proxy.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
-#include "base/message_loop.h"
-#include "base/process.h"
-#include "chrome/common/nacl_types.h"
+#include "base/message_loop/message_loop.h"
+#include "base/process/process.h"
+#include "components/nacl/common/nacl_types.h"
 #include "content/public/browser/browser_child_process_host_delegate.h"
 #include "content/public/browser/browser_child_process_host_iterator.h"
-#include "googleurl/src/gurl.h"
 #include "ipc/ipc_channel_handle.h"
-#include "net/base/tcp_listen_socket.h"
+#include "net/socket/tcp_listen_socket.h"
 #include "ppapi/shared_impl/ppapi_permissions.h"
+#include "url/gurl.h"
 
-class ChromeRenderMessageFilter;
 class CommandLine;
 class ExtensionInfoMap;
+class NaClBrowserDelegate;
+class NaClHostMessageFilter;
 
 namespace content {
 class BrowserChildProcessHost;
@@ -47,21 +48,25 @@ class NaClProcessHost : public content::BrowserChildProcessHostDelegate {
   // render_view_id: RenderView routing id, to control access to private APIs.
   // permission_bits: controls which interfaces the NaCl plugin can use.
   // off_the_record: was the process launched from an incognito renderer?
+  // profile_directory: is the path of current profile directory.
   NaClProcessHost(const GURL& manifest_url,
                   int render_view_id,
                   uint32 permission_bits,
                   bool uses_irt,
-                  bool off_the_record);
+                  bool enable_dyncode_syscalls,
+                  bool enable_exception_handling,
+                  bool off_the_record,
+                  const base::FilePath& profile_directory);
   virtual ~NaClProcessHost();
 
   // Do any minimal work that must be done at browser startup.
-  static void EarlyStartup();
+  static void EarlyStartup(NaClBrowserDelegate* delegate);
 
   // Initialize the new NaCl process. Result is returned by sending ipc
   // message reply_msg.
-  void Launch(ChromeRenderMessageFilter* chrome_render_message_filter,
+  void Launch(NaClHostMessageFilter* nacl_host_message_filter,
               IPC::Message* reply_msg,
-              scoped_refptr<ExtensionInfoMap> extension_info_map);
+              const base::FilePath& manifest_path);
 
   virtual void OnChannelConnected(int32 peer_pid) OVERRIDE;
 
@@ -95,22 +100,14 @@ class NaClProcessHost : public content::BrowserChildProcessHostDelegate {
     NaClProcessHost* host_;
   };
 
-#if defined(OS_WIN)
-  // Create command line for launching loader under nacl-gdb.
-  scoped_ptr<CommandLine> GetCommandForLaunchWithGdb(
-      const base::FilePath& nacl_gdb, CommandLine* line);
-#elif defined(OS_LINUX)
-  bool LaunchNaClGdb(base::ProcessId pid);
-  void OnNaClGdbAttached();
-#endif
+  bool LaunchNaClGdb();
+
 #if defined(OS_POSIX)
   // Create bound TCP socket in the browser process so that the NaCl GDB debug
   // stub can use it to accept incoming connections even when the Chrome sandbox
   // is enabled.
   SocketDescriptor GetDebugStubSocketHandle();
 #endif
-  // Get path to manifest on local disk if possible.
-  base::FilePath GetManifestPath();
   bool LaunchSelLdr();
 
   // BrowserChildProcessHostDelegate implementation:
@@ -125,6 +122,14 @@ class NaClProcessHost : public content::BrowserChildProcessHostDelegate {
   // Sends the reply message to the renderer who is waiting for the plugin
   // to load. Returns true on success.
   bool ReplyToRenderer(const IPC::ChannelHandle& channel_handle);
+
+  // Sends the reply with error message to the renderer.
+  void SendErrorToRenderer(const std::string& error_message);
+
+  // Sends the reply message to the renderer. Either result or
+  // error message must be empty.
+  void SendMessageToRenderer(const nacl::NaClLaunchResult& result,
+                             const std::string& error_message);
 
   // Sends the message to the NaCl process to load the plugin. Returns true
   // on success.
@@ -143,6 +148,11 @@ class NaClProcessHost : public content::BrowserChildProcessHostDelegate {
   // Message handlers for validation caching.
   void OnQueryKnownToValidate(const std::string& signature, bool* result);
   void OnSetKnownToValidate(const std::string& signature);
+  void OnResolveFileToken(uint64 file_token_lo, uint64 file_token_hi,
+                          IPC::Message* reply_msg);
+  void FileResolved(base::PlatformFile* file, const base::FilePath& file_path,
+                    IPC::Message* reply_msg);
+
 #if defined(OS_WIN)
   // Message handler for Windows hardware exception handling.
   void OnAttachDebugExceptionHandler(const std::string& info,
@@ -164,16 +174,10 @@ class NaClProcessHost : public content::BrowserChildProcessHostDelegate {
   // This field becomes true when the broker successfully launched
   // the NaCl loader.
   bool process_launched_by_broker_;
-#elif defined(OS_LINUX)
-  bool wait_for_nacl_gdb_;
-  MessageLoopForIO::FileDescriptorWatcher nacl_gdb_watcher_;
-
-  class NaClGdbWatchDelegate;
-  scoped_ptr<NaClGdbWatchDelegate> nacl_gdb_watcher_delegate_;
 #endif
-  // The ChromeRenderMessageFilter that requested this NaCl process.  We use
+  // The NaClHostMessageFilter that requested this NaCl process.  We use
   // this for sending the reply once the process has started.
-  scoped_refptr<ChromeRenderMessageFilter> chrome_render_message_filter_;
+  scoped_refptr<NaClHostMessageFilter> nacl_host_message_filter_;
 
   // The reply message to send. We must always send this message when the
   // sub-process either succeeds or fails to unblock the renderer waiting for
@@ -184,9 +188,9 @@ class NaClProcessHost : public content::BrowserChildProcessHostDelegate {
   scoped_ptr<IPC::Message> attach_debug_exception_handler_reply_msg_;
 #endif
 
-  // Set of extensions for (NaCl) manifest auto-detection. The file path to
-  // manifest is passed to nacl-gdb when it is used to debug the NaCl loader.
-  scoped_refptr<ExtensionInfoMap> extension_info_map_;
+  // The file path to the manifest is passed to nacl-gdb when it is used to
+  // debug the NaCl loader.
+  base::FilePath manifest_path_;
 
   // Socket pairs for the NaCl process and renderer.
   scoped_ptr<NaClInternal> internal_;
@@ -195,12 +199,15 @@ class NaClProcessHost : public content::BrowserChildProcessHostDelegate {
 
   scoped_ptr<content::BrowserChildProcessHost> process_;
 
-  bool enable_exception_handling_;
-  bool enable_debug_stub_;
-
   bool uses_irt_;
 
+  bool enable_debug_stub_;
+  bool enable_dyncode_syscalls_;
+  bool enable_exception_handling_;
+
   bool off_the_record_;
+
+  const base::FilePath profile_directory_;
 
   // Channel proxy to terminate the NaCl-Browser PPAPI channel.
   scoped_ptr<IPC::ChannelProxy> ipc_proxy_channel_;

@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 #include "base/files/file_path.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "chrome/browser/extensions/api/api_resource.h"
 #include "chrome/browser/extensions/api/api_resource_manager.h"
 #include "chrome/browser/extensions/extension_function_test_utils.h"
@@ -12,8 +12,8 @@
 #include "chrome/common/extensions/extension_test_util.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
 #include "content/public/browser/browser_thread.h"
-#include "googleurl/src/gurl.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/gurl.h"
 
 namespace utils = extension_function_test_utils;
 
@@ -30,14 +30,15 @@ class ApiResourceManagerUnitTest : public BrowserWithTestWindowTest {
 
 class FakeApiResource : public ApiResource {
  public:
-  FakeApiResource(const std::string& owner_extension_id) :
+  explicit FakeApiResource(const std::string& owner_extension_id) :
       ApiResource(owner_extension_id) {}
   virtual ~FakeApiResource() {}
+  static const BrowserThread::ID kThreadId = BrowserThread::UI;
 };
 
 TEST_F(ApiResourceManagerUnitTest, TwoAppsCannotShareResources) {
   scoped_ptr<ApiResourceManager<FakeApiResource> > manager(
-      new ApiResourceManager<FakeApiResource>(BrowserThread::UI));
+      new ApiResourceManager<FakeApiResource>(NULL));
   scoped_refptr<extensions::Extension> extension_one(
       utils::CreateEmptyExtension("one"));
   scoped_refptr<extensions::Extension> extension_two(

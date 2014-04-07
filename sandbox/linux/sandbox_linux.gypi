@@ -47,15 +47,7 @@
             'suid_sandbox_client',
           ],
         }],
-        # Only compile in the seccomp mode 1 code for the flag combination
-        # where we support it.
-        [ 'OS=="linux" and (target_arch=="ia32" or target_arch=="x64") '
-          'and toolkit_views==0 and selinux==0', {
-          'dependencies': [
-            'linux/seccomp-legacy/seccomp.gyp:seccomp_sandbox',
-          ],
-        }],
-        # Similarly, compile seccomp BPF when we support it
+        # Compile seccomp BPF when we support it.
         [ 'compile_seccomp_bpf==1', {
           'dependencies': [
             'seccomp_bpf',
@@ -84,6 +76,11 @@
           'dependencies': [
             '../testing/android/native_test.gyp:native_test_native_code',
           ],
+          'ldflags!': [
+              # Remove warnings about text relocations, to prevent build
+              # failure.
+              '-Wl,--warn-shared-textrel'
+          ],
         }],
       ],
     },
@@ -104,6 +101,7 @@
         'seccomp-bpf/port.h',
         'seccomp-bpf/sandbox_bpf.cc',
         'seccomp-bpf/sandbox_bpf.h',
+        'seccomp-bpf/sandbox_bpf_policy_forward.h',
         'seccomp-bpf/syscall.cc',
         'seccomp-bpf/syscall.h',
         'seccomp-bpf/syscall_iterator.cc',

@@ -11,9 +11,9 @@
 #include "base/basictypes.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "printing/image.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebPrintScalingOption.h"
+#include "third_party/WebKit/public/web/WebPrintScalingOption.h"
 #include "ui/gfx/rect.h"
 #include "ui/gfx/size.h"
 
@@ -42,7 +42,7 @@ class MockPrinterPage : public base::RefCounted<MockPrinterPage> {
   virtual ~MockPrinterPage();
 
   uint32 source_size_;
-  scoped_array<uint8> source_data_;
+  scoped_ptr<uint8[]> source_data_;
   printing::Image image_;
 
   DISALLOW_COPY_AND_ASSIGN(MockPrinterPage);

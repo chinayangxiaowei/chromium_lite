@@ -8,12 +8,12 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/signin_manager.h"
 #include "chrome/browser/signin/signin_manager_factory.h"
+#include "chrome/browser/signin/signin_promo.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/extensions/application_launch.h"
 #include "chrome/browser/ui/host_desktop.h"
-#include "chrome/browser/ui/webui/sync_promo/sync_promo_ui.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "content/public/common/page_transition_types.h"
 #include "grit/chromium_strings.h"
@@ -23,7 +23,7 @@
 
 namespace {
 
-SigninManager* GetSigninManager(Profile* profile) {
+SigninManagerBase* GetSigninManager(Profile* profile) {
   return SigninManagerFactory::GetForProfile(profile);
 }
 
@@ -53,7 +53,7 @@ void ChromeSigninDelegate::ShowSignin() {
 
   Browser* browser = FindOrCreateTabbedBrowser(profile_,
                                                chrome::GetActiveDesktop());
-  chrome::ShowBrowserSignin(browser, SyncPromoUI::SOURCE_APP_LAUNCHER);
+  chrome::ShowBrowserSignin(browser, signin::SOURCE_APP_LAUNCHER);
 }
 
 void ChromeSigninDelegate::OpenLearnMore() {
@@ -99,8 +99,6 @@ string16 ChromeSigninDelegate::GetSettingsLinkText() {
   ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
   return rb.GetLocalizedString(IDS_APP_LIST_SIGNIN_SETTINGS_TEXT);
 }
-
-void ChromeSigninDelegate::GaiaCredentialsValid() {}
 
 ChromeSigninDelegate::~ChromeSigninDelegate() {}
 

@@ -1,7 +1,6 @@
-/* Copyright (c) 2012 The Chromium Authors. All rights reserved.
- * Use of this source code is governed by a BSD-style license that can be
- * found in the LICENSE file.
- */
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
 
 #include <errno.h>
 #include <fcntl.h>
@@ -18,173 +17,176 @@
 
 #include "gtest/gtest.h"
 
+using namespace nacl_io;
+
 namespace {
+
+class MountNodeRefMock : public MountNode {
+ public:
+  MountNodeRefMock(Mount* mnt) : MountNode(mnt) {}
+};
 
 class MountRefMock : public Mount {
  public:
-  MountRefMock(int* mount_count, int* handle_count)
-      : mount_count(mount_count),
-        handle_count(handle_count) {
-    (*mount_count)++;
-  }
-
-  ~MountRefMock() {
-    (*mount_count)--;
-  }
+  MountRefMock() {}
+  ~MountRefMock() {}
 
  public:
-  MountNode* Open(const Path& path, int mode) { return NULL; }
-  int Close(MountNode* node) { return 0; }
-  int Unlink(const Path& path) { return 0; }
-  int Mkdir(const Path& path, int permissions) { return 0; }
-  int Rmdir(const Path& path) { return 0; }
-  int Remove(const Path& path) { return 0; }
-
- public:
-  int* mount_count;
-  int* handle_count;
+  Error Access(const Path& path, int a_mode) { return ENOSYS; }
+  Error Open(const Path& path, int mode, ScopedMountNode* out_node) {
+    out_node->reset(NULL);
+    return ENOSYS;
+  }
+  Error Unlink(const Path& path) { return 0; }
+  Error Mkdir(const Path& path, int permissions) { return 0; }
+  Error Rmdir(const Path& path) { return 0; }
+  Error Remove(const Path& path) { return 0; }
 };
 
 class KernelHandleRefMock : public KernelHandle {
  public:
-  KernelHandleRefMock(Mount* mnt, MountNode* node, int flags)
-      : KernelHandle(mnt, node, flags) {
-    MountRefMock* mock_mount = static_cast<MountRefMock*>(mnt);
-    (*mock_mount->handle_count)++;
-  }
+  KernelHandleRefMock(const ScopedMount& mnt, const ScopedMountNode& node)
+      : KernelHandle(mnt, node) {}
 
-  ~KernelHandleRefMock() {
-    MountRefMock* mock_mount = static_cast<MountRefMock*>(mount_);
-    (*mock_mount->handle_count)--;
-  }
+  ~KernelHandleRefMock() {}
 };
 
 class KernelObjectTest : public ::testing::Test {
  public:
-  KernelObjectTest()
-      : mount_count(0),
-        handle_count(0) {
+  KernelObjectTest() {
     proxy = new KernelObject;
-    mnt = new MountRefMock(&mount_count, &handle_count);
+    mnt.reset(new MountRefMock());
+    node.reset(new MountNodeRefMock(mnt.get()));
   }
 
   ~KernelObjectTest() {
     // mnt is ref-counted, it doesn't need to be explicitly deleted.
+    node.reset(NULL);
+    mnt.reset(NULL);
     delete proxy;
   }
 
   KernelObject* proxy;
-  MountRefMock* mnt;
-  int mount_count;
-  int handle_count;
+  ScopedMount mnt;
+  ScopedMountNode node;
 };
 
 }  // namespace
 
+#include <nacl_io/mount_mem.h>
+#include <nacl_io/mount_http.h>
 
 TEST_F(KernelObjectTest, Referencing) {
-  KernelHandle* handle = new KernelHandleRefMock(mnt, NULL, 0);
-  KernelHandle* handle2 = new KernelHandleRefMock(mnt, NULL, 0);
-
-  // Objects should have one ref when we start
+  // The mount and node should have 1 ref count at this point
   EXPECT_EQ(1, mnt->RefCount());
-  EXPECT_EQ(1, handle->RefCount());
+  EXPECT_EQ(1, node->RefCount());
 
-  // Objects should have two refs when we get here
-  int fd1 = proxy->AllocateFD(handle);
+  // Pass the mount and node into a KernelHandle
+  KernelHandle* raw_handle = new KernelHandleRefMock(mnt, node);
+  ScopedKernelHandle handle_a(raw_handle);
+
+  // The mount and node should have 1 ref count at this point
+  EXPECT_EQ(1, handle_a->RefCount());
   EXPECT_EQ(2, mnt->RefCount());
-  EXPECT_EQ(2, handle->RefCount());
+  EXPECT_EQ(2, node->RefCount());
 
-  // If we "dup" the handle, we should bump the refs
-  int fd2 = proxy->AllocateFD(handle);
-  EXPECT_EQ(3, mnt->RefCount());
-  EXPECT_EQ(3, handle->RefCount());
+  ScopedKernelHandle handle_b = handle_a;
 
-  // If use a new handle with the same values... bump the refs
-  int fd3 = proxy->AllocateFD(handle2);
-  EXPECT_EQ(4, mnt->RefCount());
-  EXPECT_EQ(2, handle2->RefCount());
+  // There should be two references to the KernelHandle, the mount and node
+  // should be unchanged.
+  EXPECT_EQ(2, handle_a->RefCount());
+  EXPECT_EQ(2, handle_b->RefCount());
+  EXPECT_EQ(handle_a.get(), handle_b.get());
+  EXPECT_EQ(2, mnt->RefCount());
+  EXPECT_EQ(2, node->RefCount());
 
-  // Handles are expectd to come out in order
+  // Allocating an FD should cause the KernelProxy to ref the handle and
+  // the node and mount should be unchanged.
+  int fd1 = proxy->AllocateFD(handle_a);
+  EXPECT_EQ(3, handle_a->RefCount());
+  EXPECT_EQ(2, mnt->RefCount());
+  EXPECT_EQ(2, node->RefCount());
+
+  // If we "dup" the handle, we should bump the ref count on the handle
+  int fd2 = proxy->AllocateFD(handle_b);
+  EXPECT_EQ(4, handle_a->RefCount());
+  EXPECT_EQ(2, mnt->RefCount());
+  EXPECT_EQ(2, node->RefCount());
+
+  // Handles are expected to come out in order
   EXPECT_EQ(0, fd1);
   EXPECT_EQ(1, fd2);
-  EXPECT_EQ(2, fd3);
+
+  // Now we "free" the handles, since the proxy should hold them.
+  handle_a.reset(NULL);
+  handle_b.reset(NULL);
+  EXPECT_EQ(2, mnt->RefCount());
+  EXPECT_EQ(2, node->RefCount());
 
   // We should find the handle by either fd
-  EXPECT_EQ(handle, proxy->AcquireHandle(fd1));
-  EXPECT_EQ(handle, proxy->AcquireHandle(fd2));
+  EXPECT_EQ(0, proxy->AcquireHandle(fd1, &handle_a));
+  EXPECT_EQ(0, proxy->AcquireHandle(fd2, &handle_b));
+  EXPECT_EQ(raw_handle, handle_a.get());
+  EXPECT_EQ(raw_handle, handle_b.get());
 
-  // A non existant fd should fail
-  EXPECT_EQ(NULL, proxy->AcquireHandle(-1));
-  EXPECT_EQ(EBADF, errno);
-  EXPECT_EQ(NULL, proxy->AcquireHandle(100));
-  EXPECT_EQ(EBADF, errno);
+  EXPECT_EQ(4, handle_a->RefCount());
+  EXPECT_EQ(2, mnt->RefCount());
+  EXPECT_EQ(2, node->RefCount());
 
-  // Acquiring the handle, should have ref'd it
-  EXPECT_EQ(4, mnt->RefCount());
-  EXPECT_EQ(5, handle->RefCount());
+  // A non existent fd should fail, and handleA should decrement as handleB
+  // is released by the call.
+  EXPECT_EQ(EBADF, proxy->AcquireHandle(-1, &handle_b));
+  EXPECT_EQ(NULL, handle_b.get());
+  EXPECT_EQ(3, handle_a->RefCount());
 
-  // Release the handle for each call to acquire
-  proxy->ReleaseHandle(handle);
-  proxy->ReleaseHandle(handle);
+  EXPECT_EQ(EBADF, proxy->AcquireHandle(100, &handle_b));
+  EXPECT_EQ(NULL, handle_b.get());
 
-  // Release the handle for each time we constructed something
-  proxy->ReleaseHandle(handle);
-  proxy->ReleaseHandle(handle2);
-  proxy->ReleaseMount(mnt);
+  // Now only the KernelProxy should reference the KernelHandle in the
+  // FD to KernelHandle Map.
+  handle_a.reset();
+  handle_b.reset();
 
-  // We should now only have references used by the KernelProxy
-  EXPECT_EQ(2, handle->RefCount());
-  EXPECT_EQ(1, handle2->RefCount());
-  EXPECT_EQ(3, mnt->RefCount());
-
-  EXPECT_EQ(2, handle_count);
-  EXPECT_EQ(1, mount_count);
+  EXPECT_EQ(2, raw_handle->RefCount());
+  EXPECT_EQ(2, mnt->RefCount());
+  EXPECT_EQ(2, node->RefCount());
+  proxy->FreeFD(fd2);
+  EXPECT_EQ(1, raw_handle->RefCount());
+  EXPECT_EQ(2, mnt->RefCount());
+  EXPECT_EQ(2, node->RefCount());
 
   proxy->FreeFD(fd1);
-  EXPECT_EQ(2, handle_count);
-  EXPECT_EQ(1, mount_count);
-
-  proxy->FreeFD(fd3);
-  EXPECT_EQ(1, handle_count);
-  EXPECT_EQ(1, mount_count);
-
-  proxy->FreeFD(fd2);
-  EXPECT_EQ(0, handle_count);
-  EXPECT_EQ(0, mount_count);
+  EXPECT_EQ(1, mnt->RefCount());
+  EXPECT_EQ(1, node->RefCount());
 }
 
 TEST_F(KernelObjectTest, FreeAndReassignFD) {
-  EXPECT_EQ(0, handle_count);
+  // The mount and node should have 1 ref count at this point
+  EXPECT_EQ(1, mnt->RefCount());
+  EXPECT_EQ(1, node->RefCount());
 
-  KernelHandle* handle = new KernelHandleRefMock(mnt, NULL, 0);
+  KernelHandle* raw_handle = new KernelHandleRefMock(mnt, node);
+  ScopedKernelHandle handle(raw_handle);
 
-  EXPECT_EQ(1, handle_count);
-  EXPECT_EQ(1, handle->RefCount());
+  EXPECT_EQ(2, mnt->RefCount());
+  EXPECT_EQ(2, node->RefCount());
+  EXPECT_EQ(1, raw_handle->RefCount());
 
-  // Assign to a non-existant FD
-  proxy->FreeAndReassignFD(2, handle);
-  EXPECT_EQ((KernelHandle*)NULL, proxy->AcquireHandle(0));
-  EXPECT_EQ((KernelHandle*)NULL, proxy->AcquireHandle(1));
-  EXPECT_EQ(handle, proxy->AcquireHandle(2));
-  proxy->ReleaseHandle(handle);
+  proxy->AllocateFD(handle);
+  EXPECT_EQ(2, mnt->RefCount());
+  EXPECT_EQ(2, node->RefCount());
+  EXPECT_EQ(2, raw_handle->RefCount());
 
-  EXPECT_EQ(1, handle_count);
-  EXPECT_EQ(2, handle->RefCount());
+  proxy->FreeAndReassignFD(5, handle);
+  EXPECT_EQ(2, mnt->RefCount());
+  EXPECT_EQ(2, node->RefCount());
+  EXPECT_EQ(3, raw_handle->RefCount());
 
-  proxy->FreeAndReassignFD(0, handle);
-  EXPECT_EQ(handle, proxy->AcquireHandle(0));
-  EXPECT_EQ((KernelHandle*)NULL, proxy->AcquireHandle(1));
-  EXPECT_EQ(handle, proxy->AcquireHandle(2));
-  proxy->ReleaseHandle(handle);
-  proxy->ReleaseHandle(handle);
+  handle.reset();
+  EXPECT_EQ(2, raw_handle->RefCount());
 
-  EXPECT_EQ(1, handle_count);
-  EXPECT_EQ(3, handle->RefCount());
-
-  proxy->FreeFD(0);
-  proxy->FreeFD(2);
-  proxy->ReleaseHandle(handle);  // handle is constructed with a refcount of 1.
-
-  EXPECT_EQ(0, handle_count);
+  proxy->AcquireHandle(5, &handle);
+  EXPECT_EQ(3, raw_handle->RefCount());
+  EXPECT_EQ(raw_handle, handle.get());
 }
+

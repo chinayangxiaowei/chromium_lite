@@ -33,6 +33,9 @@ common_vars_defines() {
     "x86")
       toolchain_arch="x86"
       ;;
+    "mips")
+      toolchain_arch="mipsel-linux-android"
+      ;;
     *)
       echo "TARGET_ARCH: ${TARGET_ARCH} is not supported." >& 2
       print_usage
@@ -59,6 +62,8 @@ common_vars_defines() {
   export PATH=$PATH:${ANDROID_NDK_ROOT}
   export PATH=$PATH:${ANDROID_SDK_ROOT}/tools
   export PATH=$PATH:${ANDROID_SDK_ROOT}/platform-tools
+  export PATH=$PATH:${ANDROID_SDK_ROOT}/build-tools/\
+${ANDROID_SDK_BUILD_TOOLS_VERSION}
 
   # This must be set before ANDROID_TOOLCHAIN, so that clang could find the
   # gold linker.
@@ -106,8 +111,6 @@ common_vars_defines() {
   # and V8 mksnapshot.
   case "${TARGET_ARCH}" in
     "arm")
-      DEFINES+=" arm_neon=0 armv7=1 arm_thumb=1 arm_fpu=vfpv3-d16"
-      DEFINES+=" arm_neon_optional=1"  # Enable dynamic NEON support.
       DEFINES+=" ${ORDER_DEFINES}"
       DEFINES+=" target_arch=arm"
       ;;
@@ -119,6 +122,9 @@ common_vars_defines() {
         's/i.86/ia32/;s/x86_64/x64/;s/amd64/x64/;s/arm.*/arm/;s/i86pc/ia32/')
       DEFINES+=" host_arch=${host_arch}"
       DEFINES+=" target_arch=ia32"
+      ;;
+    "mips")
+      DEFINES+=" target_arch=mipsel"
       ;;
     *)
       echo "TARGET_ARCH: ${TARGET_ARCH} is not supported." >& 2
@@ -172,7 +178,7 @@ print_usage() {
 process_options() {
   host_os=$(uname -s | sed -e 's/Linux/linux/;s/Darwin/mac/')
   try_32bit_host_build=
-  while [[ $1 ]]; do
+  while [[ -n $1 ]]; do
     case "$1" in
       --target-arch=*)
         target_arch="$(echo "$1" | sed 's/^[^=]*=//')"
@@ -212,19 +218,23 @@ process_options() {
 #  > make
 ################################################################################
 sdk_build_init() {
-  # If ANDROID_NDK_ROOT is set when envsetup is run, use the ndk pointed to by
-  # the environment variable.  Otherwise, use the default ndk from the tree.
+
+  # Allow the caller to override a few environment variables. If any of them is
+  # unset, we default to a sane value that's known to work. This allows for
+  # experimentation with a custom SDK.
   if [[ -z "${ANDROID_NDK_ROOT}" || ! -d "${ANDROID_NDK_ROOT}" ]]; then
     export ANDROID_NDK_ROOT="${CHROME_SRC}/third_party/android_tools/ndk/"
   fi
-
-  # If ANDROID_SDK_ROOT is set when envsetup is run, and if it has the
-  # right SDK-compatible directory layout, use the sdk pointed to by the
-  # environment variable.  Otherwise, use the default sdk from the tree.
+  if [[ -z "${ANDROID_SDK_VERSION}" ]]; then
+    export ANDROID_SDK_VERSION=18
+  fi
   local sdk_suffix=platforms/android-${ANDROID_SDK_VERSION}
   if [[ -z "${ANDROID_SDK_ROOT}" || \
        ! -d "${ANDROID_SDK_ROOT}/${sdk_suffix}" ]]; then
     export ANDROID_SDK_ROOT="${CHROME_SRC}/third_party/android_tools/sdk/"
+  fi
+  if [[ -z "${ANDROID_SDK_BUILD_TOOLS_VERSION}" ]]; then
+    export ANDROID_SDK_BUILD_TOOLS_VERSION=18.0.1
   fi
 
   unset ANDROID_BUILD_TOP
@@ -248,6 +258,9 @@ sdk_build_init() {
     return 1
   fi
 
+  # Directory containing build-tools: aapt, aidl, dx
+  export ANDROID_SDK_TOOLS="${ANDROID_SDK_ROOT}/build-tools/\
+${ANDROID_SDK_BUILD_TOOLS_VERSION}"
 }
 
 ################################################################################
@@ -256,6 +269,9 @@ sdk_build_init() {
 # settings specified there.
 #############################################################################
 webview_build_init() {
+  # Use the latest API in the AOSP prebuilts directory (change with AOSP roll).
+  export ANDROID_SDK_VERSION=17
+
   # For the WebView build we always use the NDK and SDK in the Android tree,
   # and we don't touch ANDROID_TOOLCHAIN which is already set by Android.
   export ANDROID_NDK_ROOT=${ANDROID_BUILD_TOP}/prebuilts/ndk/8
@@ -287,12 +303,17 @@ ${ANDROID_SDK_VERSION}
   DEFINES+=" android_webview_build=1"
   # temporary until all uses of android_build_type are gone (crbug.com/184431)
   DEFINES+=" android_build_type=1"
-  DEFINES+=" android_src=\$(GYP_ABS_ANDROID_TOP_DIR)"
-  DEFINES+=" android_sdk=\$(GYP_ABS_ANDROID_TOP_DIR)/${ANDROID_SDK}"
-  DEFINES+=" android_sdk_root=\$(GYP_ABS_ANDROID_TOP_DIR)/${ANDROID_SDK}"
-  DEFINES+=" android_sdk_tools=\$(GYP_ABS_ANDROID_TOP_DIR)/${ANDROID_SDK_TOOLS}"
+  DEFINES+=" android_src=\$(PWD)"
+  DEFINES+=" android_sdk=\$(PWD)/${ANDROID_SDK}"
+  DEFINES+=" android_sdk_root=\$(PWD)/${ANDROID_SDK}"
+  DEFINES+=" android_sdk_tools=\$(PWD)/${ANDROID_SDK_TOOLS}"
   DEFINES+=" android_sdk_version=${ANDROID_SDK_VERSION}"
   DEFINES+=" android_toolchain=${ANDROID_TOOLCHAIN}"
+  if [[ -n "$CHROME_ANDROID_WEBVIEW_ENABLE_DMPROF" ]]; then
+    DEFINES+=" disable_debugallocation=1"
+    DEFINES+=" android_full_debug=1"
+    DEFINES+=" android_use_tcmalloc=1"
+  fi
   export GYP_DEFINES="${DEFINES}"
 
   export GYP_GENERATORS="android"

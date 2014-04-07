@@ -9,12 +9,13 @@
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
 #include "base/logging.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "base/thread_task_runner_handle.h"
 #include "base/threading/thread.h"
-#include "net/base/cert_verifier.h"
+#include "net/base/cache_type.h"
 #include "net/base/net_errors.h"
 #include "net/base/network_delegate.h"
+#include "net/cert/cert_verifier.h"
 #include "net/cookies/cookie_monster.h"
 #include "net/dns/host_resolver.h"
 #include "net/ftp/ftp_network_layer.h"
@@ -26,9 +27,13 @@
 #include "net/http/transport_security_state.h"
 #include "net/proxy/proxy_service.h"
 #include "net/ssl/ssl_config_service_defaults.h"
+#include "net/url_request/data_protocol_handler.h"
+#include "net/url_request/file_protocol_handler.h"
+#include "net/url_request/ftp_protocol_handler.h"
 #include "net/url_request/static_http_user_agent_settings.h"
 #include "net/url_request/url_request_context.h"
 #include "net/url_request/url_request_context_storage.h"
+#include "net/url_request/url_request_job_factory_impl.h"
 
 namespace net {
 
@@ -77,7 +82,7 @@ class BasicNetworkDelegate : public NetworkDelegate {
   virtual void OnURLRequestDestroyed(URLRequest* request) OVERRIDE {}
 
   virtual void OnPACScriptError(int line_number,
-                                const string16& error) OVERRIDE {}
+                                const base::string16& error) OVERRIDE {}
 
   virtual NetworkDelegate::AuthRequiredResponse OnAuthRequired(
       URLRequest* request,
@@ -125,7 +130,7 @@ class BasicURLRequestContext : public URLRequestContext {
   BasicURLRequestContext()
       : cache_thread_("Cache Thread"),
         file_thread_("File Thread"),
-        ALLOW_THIS_IN_INITIALIZER_LIST(storage_(this)) {}
+        storage_(this) {}
 
   URLRequestContextStorage* storage() {
     return &storage_;
@@ -133,7 +138,7 @@ class BasicURLRequestContext : public URLRequestContext {
 
   void StartCacheThread() {
     cache_thread_.StartWithOptions(
-        base::Thread::Options(MessageLoop::TYPE_IO, 0));
+        base::Thread::Options(base::MessageLoop::TYPE_IO, 0));
   }
 
   scoped_refptr<base::MessageLoopProxy> cache_message_loop_proxy() {
@@ -143,10 +148,10 @@ class BasicURLRequestContext : public URLRequestContext {
 
   void StartFileThread() {
     file_thread_.StartWithOptions(
-        base::Thread::Options(MessageLoop::TYPE_DEFAULT, 0));
+        base::Thread::Options(base::MessageLoop::TYPE_DEFAULT, 0));
   }
 
-  MessageLoop* file_message_loop() {
+  base::MessageLoop* file_message_loop() {
     DCHECK(file_thread_.IsRunning());
     return file_thread_.message_loop();
   }
@@ -180,7 +185,11 @@ URLRequestContextBuilder::HttpNetworkSessionParams::~HttpNetworkSessionParams()
 {}
 
 URLRequestContextBuilder::URLRequestContextBuilder()
-    : ftp_enabled_(false),
+    : data_enabled_(false),
+      file_enabled_(false),
+#if !defined(DISABLE_FTP_SUPPORT)
+      ftp_enabled_(false),
+#endif
       http_cache_enabled_(true) {}
 URLRequestContextBuilder::~URLRequestContextBuilder() {}
 
@@ -205,11 +214,6 @@ URLRequestContext* URLRequestContextBuilder::Build() {
 
   storage->set_host_resolver(net::HostResolver::CreateDefaultResolver(NULL));
 
-  if (ftp_enabled_) {
-    storage->set_ftp_transaction_factory(
-        new FtpNetworkLayer(context->host_resolver()));
-  }
-
   context->StartFileThread();
 
   // TODO(willchan): Switch to using this code when
@@ -219,7 +223,7 @@ URLRequestContext* URLRequestContextBuilder::Build() {
 #else
   ProxyConfigService* proxy_config_service =
       ProxyService::CreateSystemProxyConfigService(
-          base::ThreadTaskRunnerHandle::Get(),
+          base::ThreadTaskRunnerHandle::Get().get(),
           context->file_message_loop());
 #endif  // defined(OS_LINUX) || defined(OS_ANDROID)
   storage->set_proxy_service(
@@ -233,7 +237,9 @@ URLRequestContext* URLRequestContextBuilder::Build() {
           context->host_resolver()));
   storage->set_cookie_store(new CookieMonster(NULL, NULL));
   storage->set_transport_security_state(new net::TransportSecurityState());
-  storage->set_http_server_properties(new net::HttpServerPropertiesImpl);
+  storage->set_http_server_properties(
+      scoped_ptr<net::HttpServerProperties>(
+          new net::HttpServerPropertiesImpl()));
   storage->set_cert_verifier(CertVerifier::CreateDefault());
 
   net::HttpNetworkSession::Params network_session_params;
@@ -270,11 +276,12 @@ URLRequestContext* URLRequestContextBuilder::Build() {
     HttpCache::BackendFactory* http_cache_backend = NULL;
     if (http_cache_params_.type == HttpCacheParams::DISK) {
       context->StartCacheThread();
-      http_cache_backend =
-          new HttpCache::DefaultBackend(DISK_CACHE,
-                                        http_cache_params_.path,
-                                        http_cache_params_.max_size,
-                                        context->cache_message_loop_proxy());
+      http_cache_backend = new HttpCache::DefaultBackend(
+          DISK_CACHE,
+          net::CACHE_BACKEND_DEFAULT,
+          http_cache_params_.path,
+          http_cache_params_.max_size,
+          context->cache_message_loop_proxy().get());
     } else {
       http_cache_backend =
           HttpCache::DefaultBackend::InMemory(http_cache_params_.max_size);
@@ -286,9 +293,24 @@ URLRequestContext* URLRequestContextBuilder::Build() {
     scoped_refptr<net::HttpNetworkSession> network_session(
         new net::HttpNetworkSession(network_session_params));
 
-    http_transaction_factory = new HttpNetworkLayer(network_session);
+    http_transaction_factory = new HttpNetworkLayer(network_session.get());
   }
   storage->set_http_transaction_factory(http_transaction_factory);
+
+  URLRequestJobFactoryImpl* job_factory = new URLRequestJobFactoryImpl;
+  if (data_enabled_)
+    job_factory->SetProtocolHandler("data", new DataProtocolHandler);
+  if (file_enabled_)
+    job_factory->SetProtocolHandler("file", new FileProtocolHandler);
+#if !defined(DISABLE_FTP_SUPPORT)
+  if (ftp_enabled_) {
+    ftp_transaction_factory_.reset(
+        new FtpNetworkLayer(context->host_resolver()));
+    job_factory->SetProtocolHandler("ftp",
+        new FtpProtocolHandler(ftp_transaction_factory_.get()));
+  }
+#endif
+  storage->set_job_factory(job_factory);
 
   // TODO(willchan): Support sdch.
 

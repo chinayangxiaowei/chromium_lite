@@ -9,15 +9,15 @@
 
 #include "base/basictypes.h"
 #include "base/i18n/icu_string_conversions.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace net {
 namespace {
 
-const size_t kNpos = string16::npos;
+const size_t kNpos = base::string16::npos;
 
 struct EscapeCase {
   const char* input;
@@ -250,19 +250,19 @@ TEST(EscapeTest, UnescapeURLComponent) {
   };
 
   for (size_t i = 0; i < arraysize(unescape_cases); i++) {
-    string16 str(WideToUTF16(unescape_cases[i].input));
+    base::string16 str(WideToUTF16(unescape_cases[i].input));
     EXPECT_EQ(WideToUTF16(unescape_cases[i].output),
               UnescapeURLComponent(str, unescape_cases[i].rules));
   }
 
   // Test the NULL character unescaping (which wouldn't work above since those
   // are just char pointers).
-  string16 input(WideToUTF16(L"Null"));
+  base::string16 input(WideToUTF16(L"Null"));
   input.push_back(0);  // Also have a NULL in the input.
   input.append(WideToUTF16(L"%00%39Test"));
 
   // When we're unescaping NULLs
-  string16 expected(WideToUTF16(L"Null"));
+  base::string16 expected(WideToUTF16(L"Null"));
   expected.push_back(0);
   expected.push_back(0);
   expected.append(ASCIIToUTF16("9Test"));
@@ -329,7 +329,7 @@ TEST(EscapeTest, UnescapeAndDecodeUTF8URLComponent) {
     EXPECT_EQ(std::string(unescape_cases[i].query_unescaped), unescaped);
 
     // TODO: Need to test unescape_spaces and unescape_percent.
-    string16 decoded = UnescapeAndDecodeUTF8URLComponent(
+    base::string16 decoded = UnescapeAndDecodeUTF8URLComponent(
         unescape_cases[i].input, UnescapeRule::NORMAL, NULL);
     EXPECT_EQ(WideToUTF16(unescape_cases[i].decoded), decoded);
   }
@@ -385,7 +385,7 @@ TEST(EscapeTest, UnescapeForHTML) {
     { "&amp; &", "& &" },
   };
   for (size_t i = 0; i < arraysize(tests); ++i) {
-    string16 result = UnescapeForHTML(ASCIIToUTF16(tests[i].input));
+    base::string16 result = UnescapeForHTML(ASCIIToUTF16(tests[i].input));
     EXPECT_EQ(ASCIIToUTF16(tests[i].expected_output), result);
   }
 }

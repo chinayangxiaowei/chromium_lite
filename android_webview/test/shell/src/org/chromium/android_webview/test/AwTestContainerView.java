@@ -12,6 +12,8 @@ import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputConnection;
 import android.widget.FrameLayout;
 import android.util.Log;
 
@@ -30,6 +32,7 @@ public class AwTestContainerView extends FrameLayout {
     public AwTestContainerView(Context context) {
         super(context);
         mInternalAccessDelegate = new InternalAccessAdapter();
+        setOverScrollMode(View.OVER_SCROLL_ALWAYS);
     }
 
     public void initialize(AwContents awContents) {
@@ -54,22 +57,41 @@ public class AwTestContainerView extends FrameLayout {
 
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
         mAwContents.onConfigurationChanged(newConfig);
     }
 
     @Override
     public void onAttachedToWindow() {
+        super.onAttachedToWindow();
         mAwContents.onAttachedToWindow();
     }
 
     @Override
     public void onDetachedFromWindow() {
+        super.onDetachedFromWindow();
         mAwContents.onDetachedFromWindow();
     }
 
     @Override
     public void onFocusChanged(boolean focused, int direction, Rect previouslyFocusedRect) {
+        super.onFocusChanged(focused, direction, previouslyFocusedRect);
         mAwContents.onFocusChanged(focused, direction, previouslyFocusedRect);
+    }
+
+    @Override
+    public InputConnection onCreateInputConnection(EditorInfo outAttrs) {
+        return mAwContents.onCreateInputConnection(outAttrs);
+    }
+
+    @Override
+    public boolean onKeyUp(int keyCode, KeyEvent event) {
+        return mAwContents.onKeyUp(keyCode, event);
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        return mAwContents.dispatchKeyEvent(event);
     }
 
     @Override
@@ -79,27 +101,50 @@ public class AwTestContainerView extends FrameLayout {
 
     @Override
     public void onSizeChanged(int w, int h, int ow, int oh) {
+        super.onSizeChanged(w, h, ow, oh);
         mAwContents.onSizeChanged(w, h, ow, oh);
     }
 
     @Override
+    public void onOverScrolled(int scrollX, int scrollY, boolean clampedX, boolean clampedY) {
+        mAwContents.onContainerViewOverScrolled(scrollX, scrollY, clampedX, clampedY);
+    }
+
+    @Override
+    public void onScrollChanged(int l, int t, int oldl, int oldt) {
+        super.onScrollChanged(l, t, oldl, oldt);
+        if (mAwContents != null) {
+            mAwContents.onContainerViewScrollChanged(l, t, oldl, oldt);
+        }
+    }
+
+    @Override
+    public void computeScroll() {
+        mAwContents.computeScroll();
+    }
+
+    @Override
     public void onVisibilityChanged(View changedView, int visibility) {
+        super.onVisibilityChanged(changedView, visibility);
         mAwContents.onVisibilityChanged(changedView, visibility);
     }
 
     @Override
     public void onWindowVisibilityChanged(int visibility) {
+        super.onWindowVisibilityChanged(visibility);
         mAwContents.onWindowVisibilityChanged(visibility);
     }
 
     @Override
     public boolean onTouchEvent(MotionEvent ev) {
+        super.onTouchEvent(ev);
         return mAwContents.onTouchEvent(ev);
     }
 
     @Override
     public void onDraw(Canvas canvas) {
         mAwContents.onDraw(canvas);
+        super.onDraw(canvas);
     }
 
     // TODO: AwContents could define a generic class that holds an implementation similar to
@@ -137,6 +182,23 @@ public class AwTestContainerView extends FrameLayout {
         }
 
         @Override
+        public void super_scrollTo(int scrollX, int scrollY) {
+            // We're intentionally not calling super.scrollTo here to make testing easier.
+            AwTestContainerView.this.scrollTo(scrollX, scrollY);
+        }
+
+        @Override
+        public void overScrollBy(int deltaX, int deltaY,
+                int scrollX, int scrollY,
+                int scrollRangeX, int scrollRangeY,
+                int maxOverScrollX, int maxOverScrollY,
+                boolean isTouchEvent) {
+            // We're intentionally not calling super.scrollTo here to make testing easier.
+            AwTestContainerView.this.overScrollBy(deltaX, deltaY, scrollX, scrollY,
+                     scrollRangeX, scrollRangeY, maxOverScrollX, maxOverScrollY, isTouchEvent);
+        }
+
+        @Override
         public void onScrollChanged(int l, int t, int oldl, int oldt) {
             AwTestContainerView.super.onScrollChanged(l, t, oldl, oldt);
         }
@@ -154,6 +216,16 @@ public class AwTestContainerView extends FrameLayout {
         @Override
         public void setMeasuredDimension(int measuredWidth, int measuredHeight) {
             AwTestContainerView.super.setMeasuredDimension(measuredWidth, measuredHeight);
+        }
+
+        @Override
+        public int super_getScrollBarStyle() {
+            return AwTestContainerView.super.getScrollBarStyle();
+        }
+
+        @Override
+        public boolean requestDrawGL(Canvas canvas) {
+            return false;
         }
     }
 }

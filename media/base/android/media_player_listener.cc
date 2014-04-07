@@ -7,7 +7,7 @@
 #include "base/android/jni_android.h"
 #include "base/bind.h"
 #include "base/logging.h"
-#include "base/message_loop_proxy.h"
+#include "base/message_loop/message_loop_proxy.h"
 #include "media/base/android/media_player_bridge.h"
 
 // Auto generated jni class from MediaPlayerListener.java.
@@ -25,19 +25,19 @@ MediaPlayerListener::MediaPlayerListener(
     base::WeakPtr<MediaPlayerBridge> media_player)
     : message_loop_(message_loop),
       media_player_(media_player) {
-  DCHECK(message_loop_);
+  DCHECK(message_loop_.get());
   DCHECK(media_player_);
 }
 
 MediaPlayerListener::~MediaPlayerListener() {}
 
 void MediaPlayerListener::CreateMediaPlayerListener(
-    jobject context, jobject media_player) {
+    jobject context, jobject media_player_bridge) {
   JNIEnv* env = AttachCurrentThread();
   CHECK(env);
   j_media_player_listener_.Reset(
       Java_MediaPlayerListener_create(
-          env, reinterpret_cast<intptr_t>(this), context, media_player));
+          env, reinterpret_cast<intptr_t>(this), context, media_player_bridge));
 }
 
 

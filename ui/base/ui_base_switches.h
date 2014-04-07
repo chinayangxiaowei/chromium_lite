@@ -12,15 +12,19 @@
 
 namespace switches {
 
-UI_EXPORT extern const char kDisableNewMenuStyle[];
+UI_EXPORT extern const char kDisableDwmComposition[];
+UI_EXPORT extern const char kDisableNewDialogStyle[];
 UI_EXPORT extern const char kDisableTouchAdjustment[];
+UI_EXPORT extern const char kDisableTouchDragDrop[];
+UI_EXPORT extern const char kDisableTouchEditing[];
 UI_EXPORT extern const char kDisableViewsTextfield[];
-UI_EXPORT extern const char kEnableBezelTouch[];
 UI_EXPORT extern const char kEnableNewDialogStyle[];
+UI_EXPORT extern const char kEnableScrollPrediction[];
 UI_EXPORT extern const char kEnableTouchDragDrop[];
 UI_EXPORT extern const char kEnableTouchEditing[];
 UI_EXPORT extern const char kEnableViewsTextfield[];
 UI_EXPORT extern const char kForceDeviceScaleFactor[];
+UI_EXPORT extern const char kHighDPISupport[];
 UI_EXPORT extern const char kHighlightMissingScaledResources[];
 UI_EXPORT extern const char kLang[];
 UI_EXPORT extern const char kLocalePak[];
@@ -33,16 +37,10 @@ UI_EXPORT extern const char kTouchOptimizedUI[];
 UI_EXPORT extern const char kTouchOptimizedUIAuto[];
 UI_EXPORT extern const char kTouchOptimizedUIDisabled[];
 UI_EXPORT extern const char kTouchOptimizedUIEnabled[];
+UI_EXPORT extern const char kTouchSideBezels[];
 
 #if defined(USE_XI2_MT)
 UI_EXPORT extern const char kTouchCalibration[];
-#endif
-
-#if defined(OS_MACOSX)
-// This isn't really the right place for this switch, but is the most
-// convenient place where it can be shared between
-// src/webkit/plugins/npapi/ and src/content/plugin/ .
-UI_EXPORT extern const char kDisableCoreAnimationPlugins[];
 #endif
 
 #if defined(TOOLKIT_VIEWS) && defined(OS_LINUX)

@@ -4,16 +4,16 @@
 
 #include "base/files/file_path.h"
 #include "base/path_service.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/test/test_timeouts.h"
-#include "base/utf_string_conversions.h"
 #include "chrome/common/automation_constants.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/automation/tab_proxy.h"
 #include "chrome/test/perf/perf_test.h"
 #include "chrome/test/ui/javascript_test_util.h"
 #include "chrome/test/ui/ui_perf_test.h"
-#include "googleurl/src/gurl.h"
 #include "net/base/net_util.h"
+#include "url/gurl.h"
 
 namespace {
 
@@ -63,7 +63,8 @@ class IndexedDBTest : public UIPerfTest {
 
   bool GetResults(TabProxy* tab, ResultsMap* results) {
     std::wstring json_wide;
-    bool succeeded = tab->ExecuteAndExtractString(L"",
+    bool succeeded = tab->ExecuteAndExtractString(
+        std::wstring(),
         L"window.domAutomationController.send("
         L"    JSON.stringify(automation.getResults()));",
         &json_wide);
@@ -84,8 +85,8 @@ class IndexedDBTest : public UIPerfTest {
 
     ResultsMap::const_iterator it = results.begin();
     for (; it != results.end(); ++it)
-      perf_test::PrintResultList(it->first, "", trace_name, it->second, "ms",
-                                 false);
+      perf_test::PrintResultList(
+          it->first, std::string(), trace_name, it->second, "ms", false);
   }
 
   DISALLOW_COPY_AND_ASSIGN(IndexedDBTest);

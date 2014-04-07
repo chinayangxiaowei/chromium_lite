@@ -5,7 +5,7 @@
 #include "chrome/test/base/test_tab_strip_model_observer.h"
 
 #include "base/bind.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "chrome/browser/printing/print_preview_dialog_controller.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "content/public/browser/notification_service.h"
@@ -38,37 +38,31 @@ class TestTabStripModelObserver::RenderViewHostInitializedObserver
 TestTabStripModelObserver::TestTabStripModelObserver(
     TabStripModel* tab_strip_model,
     content::JsInjectionReadyObserver* js_injection_ready_observer)
-    : TestNavigationObserver(1),
+    : TestNavigationObserver(NULL, 1),
       tab_strip_model_(tab_strip_model),
+      rvh_created_callback_(
+          base::Bind(&TestTabStripModelObserver::RenderViewHostCreated,
+                     base::Unretained(this))),
       injection_observer_(js_injection_ready_observer) {
-  registrar_.Add(this, content::NOTIFICATION_RENDER_VIEW_HOST_CREATED,
-                 content::NotificationService::AllSources());
-
+  content::RenderViewHost::AddCreatedCallback(rvh_created_callback_);
   tab_strip_model_->AddObserver(this);
 }
 
 TestTabStripModelObserver::~TestTabStripModelObserver() {
+  content::RenderViewHost::RemoveCreatedCallback(rvh_created_callback_);
   tab_strip_model_->RemoveObserver(this);
 }
 
-void TestTabStripModelObserver::Observe(
-    int type,
-    const content::NotificationSource& source,
-    const content::NotificationDetails& details) {
-  if (type == content::NOTIFICATION_RENDER_VIEW_HOST_CREATED) {
-    rvh_observer_.reset(
-        new RenderViewHostInitializedObserver(
-            content::Source<content::RenderViewHost>(source).ptr(),
-            injection_observer_));
-  } else {
-    content::TestNavigationObserver::Observe(type, source, details);
-  }
+void TestTabStripModelObserver::RenderViewHostCreated(
+    content::RenderViewHost* rvh) {
+  rvh_observer_.reset(
+      new RenderViewHostInitializedObserver(rvh, injection_observer_));
 }
 
 void TestTabStripModelObserver::TabBlockedStateChanged(
     content::WebContents* contents, int index) {
   // Need to do this later - the print preview dialog has not been created yet.
-  MessageLoop::current()->PostTask(
+  base::MessageLoop::current()->PostTask(
       FROM_HERE,
       base::Bind(&TestTabStripModelObserver::ObservePrintPreviewDialog,
                  base::Unretained(this),
@@ -85,6 +79,5 @@ void TestTabStripModelObserver::ObservePrintPreviewDialog(
       dialog_controller->GetPrintPreviewForContents(contents);
   if (!preview_dialog)
     return;
-  RegisterAsObserver(content::Source<content::NavigationController>(
-      &preview_dialog->GetController()));
+  RegisterAsObserver(preview_dialog);
 }

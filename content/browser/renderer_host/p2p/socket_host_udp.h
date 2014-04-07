@@ -12,7 +12,7 @@
 #include "base/compiler_specific.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "content/browser/renderer_host/p2p/socket_host.h"
 #include "content/common/content_export.h"
 #include "content/common/p2p_sockets.h"
@@ -40,29 +40,33 @@ class CONTENT_EXPORT P2PSocketHostUdp : public P2PSocketHost {
   typedef std::set<net::IPEndPoint> ConnectedPeerSet;
 
   struct PendingPacket {
-    PendingPacket(const net::IPEndPoint& to, const std::vector<char>& content);
+    PendingPacket(const net::IPEndPoint& to,
+                  const std::vector<char>& content,
+                  uint64 id);
     ~PendingPacket();
     net::IPEndPoint to;
     scoped_refptr<net::IOBuffer> data;
     int size;
+    uint64 id;
   };
 
   void OnError();
-  void DoRead();
-  void DoSend(const PendingPacket& packet);
-  void DidCompleteRead(int result);
 
-  // Callbacks for RecvFrom() and SendTo().
+  void DoRead();
   void OnRecv(int result);
-  void OnSend(int result);
+  void HandleReadResult(int result);
+
+  void DoSend(const PendingPacket& packet);
+  void OnSend(uint64 packet_id, int result);
+  void HandleSendResult(uint64 packet_id, int result);
 
   scoped_ptr<net::DatagramServerSocket> socket_;
   scoped_refptr<net::IOBuffer> recv_buffer_;
   net::IPEndPoint recv_address_;
 
   std::deque<PendingPacket> send_queue_;
-  int send_queue_bytes_;
   bool send_pending_;
+  uint64 send_packet_count_;
 
   // Set of peer for which we have received STUN binding request or
   // response or relay allocation request or response.

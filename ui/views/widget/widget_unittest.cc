@@ -3,9 +3,11 @@
 // found in the LICENSE file.
 
 #include "base/basictypes.h"
+#include "base/bind.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
-#include "base/utf_string_conversions.h"
+#include "base/message_loop/message_loop.h"
+#include "base/run_loop.h"
+#include "base/strings/utf_string_conversions.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/events/event_utils.h"
 #include "ui/gfx/native_widget_types.h"
@@ -16,9 +18,14 @@
 #include "ui/views/test/views_test_base.h"
 #include "ui/views/views_delegate.h"
 #include "ui/views/widget/native_widget_delegate.h"
+#include "ui/views/widget/root_view.h"
+#include "ui/views/window/native_frame_view.h"
 
 #if defined(USE_AURA)
 #include "ui/aura/client/aura_constants.h"
+#include "ui/aura/env.h"
+#include "ui/aura/root_window.h"
+#include "ui/aura/test/test_cursor_client.h"
 #include "ui/aura/test/test_window_delegate.h"
 #include "ui/aura/window.h"
 #include "ui/views/widget/native_widget_aura.h"
@@ -30,7 +37,7 @@
 #endif
 
 namespace views {
-namespace {
+namespace test {
 
 // A generic typedef to pick up relevant NativeWidget implementations.
 #if defined(USE_AURA)
@@ -211,6 +218,21 @@ class GestureCaptureView : public View {
   DISALLOW_COPY_AND_ASSIGN(GestureCaptureView);
 };
 
+// A view that implements GetMinimumSize.
+class MinimumSizeFrameView : public NativeFrameView {
+ public:
+  explicit MinimumSizeFrameView(Widget* frame): NativeFrameView(frame) {}
+  virtual ~MinimumSizeFrameView() {}
+
+ private:
+  // Overridden from View:
+  virtual gfx::Size GetMinimumSize() OVERRIDE {
+    return gfx::Size(300, 400);
+  }
+
+  DISALLOW_COPY_AND_ASSIGN(MinimumSizeFrameView);
+};
+
 // An event handler that simply keeps a count of the different types of events
 // it receives.
 class EventCountHandler : public ui::EventHandler {
@@ -241,6 +263,54 @@ class EventCountHandler : public ui::EventHandler {
   std::map<ui::EventType, int> event_count_;
 
   DISALLOW_COPY_AND_ASSIGN(EventCountHandler);
+};
+
+// A View that shows a different widget, sets capture on that widget, and
+// initiates a nested message-loop when it receives a mouse-press event.
+class NestedLoopCaptureView : public View {
+ public:
+  explicit NestedLoopCaptureView(Widget* widget) : widget_(widget) {}
+  virtual ~NestedLoopCaptureView() {}
+
+ private:
+  // Overridden from View:
+  virtual bool OnMousePressed(const ui::MouseEvent& event) OVERRIDE {
+    // Start a nested loop.
+    widget_->Show();
+    widget_->SetCapture(widget_->GetContentsView());
+    EXPECT_TRUE(widget_->HasCapture());
+
+    base::MessageLoopForUI* loop = base::MessageLoopForUI::current();
+    base::MessageLoop::ScopedNestableTaskAllower allow(loop);
+
+    base::RunLoop run_loop;
+#if defined(USE_AURA)
+    run_loop.set_dispatcher(aura::Env::GetInstance()->GetDispatcher());
+#endif
+    run_loop.Run();
+    return true;
+  }
+
+  Widget* widget_;
+
+  DISALLOW_COPY_AND_ASSIGN(NestedLoopCaptureView);
+};
+
+// A View that closes the Widget and exits the current message-loop when it
+// receives a mouse-release event.
+class ExitLoopOnRelease : public View {
+ public:
+  ExitLoopOnRelease() {}
+  virtual ~ExitLoopOnRelease() {}
+
+ private:
+  // Overridden from View:
+  virtual void OnMouseReleased(const ui::MouseEvent& event) OVERRIDE {
+    GetWidget()->Close();
+    base::MessageLoop::current()->QuitNow();
+  }
+
+  DISALLOW_COPY_AND_ASSIGN(ExitLoopOnRelease);
 };
 
 class WidgetTest : public ViewsTestBase {
@@ -317,6 +387,18 @@ class WidgetTest : public ViewsTestBase {
   Widget* CreateChildNativeWidget() {
     return CreateChildNativeWidgetWithParent(NULL);
   }
+
+  View* GetMousePressedHandler(internal::RootView* root_view) {
+    return root_view->mouse_pressed_handler_;
+  }
+
+  View* GetMouseMoveHandler(internal::RootView* root_view) {
+    return root_view->mouse_move_handler_;
+  }
+
+  View* GetGestureHandler(internal::RootView* root_view) {
+    return root_view->gesture_handler_;
+  }
 };
 
 bool WidgetHasMouseCapture(const Widget* widget) {
@@ -338,20 +420,20 @@ TEST_F(WidgetTest, WidgetInitParams) {
 
   // Widgets are not transparent by default.
   Widget::InitParams init1;
-  EXPECT_FALSE(init1.transparent);
+  EXPECT_EQ(Widget::InitParams::INFER_OPACITY, init1.opacity);
 
   // Non-window widgets are not transparent either.
   Widget::InitParams init2(Widget::InitParams::TYPE_MENU);
-  EXPECT_FALSE(init2.transparent);
+  EXPECT_EQ(Widget::InitParams::INFER_OPACITY, init2.opacity);
 
   // A ViewsDelegate can set windows transparent by default.
   views_delegate().SetUseTransparentWindows(true);
   Widget::InitParams init3;
-  EXPECT_TRUE(init3.transparent);
+  EXPECT_EQ(Widget::InitParams::TRANSLUCENT_WINDOW, init3.opacity);
 
   // Non-window widgets stay opaque.
   Widget::InitParams init4(Widget::InitParams::TYPE_MENU);
-  EXPECT_FALSE(init4.transparent);
+  EXPECT_EQ(Widget::InitParams::INFER_OPACITY, init4.opacity);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1096,6 +1178,45 @@ TEST_F(WidgetTest, ExitFullscreenRestoreState) {
   RunPendingMessages();
 }
 
+// Checks that if a mouse-press triggers a capture on a different widget (which
+// consumes the mouse-release event), then the target of the press does not have
+// capture.
+TEST_F(WidgetTest, CaptureWidgetFromMousePress) {
+  // The test creates two widgets: |first| and |second|.
+  // The View in |first| makes |second| visible, sets capture on it, and starts
+  // a nested loop (like a menu does). The View in |second| terminates the
+  // nested loop and closes the widget.
+  // The test sends a mouse-press event to |first|, and posts a task to send a
+  // release event to |second|, to make sure that the release event is
+  // dispatched after the nested loop starts.
+
+  Widget* first = CreateTopLevelFramelessPlatformWidget();
+  Widget* second = CreateTopLevelFramelessPlatformWidget();
+
+  View* container = new NestedLoopCaptureView(second);
+  first->SetContentsView(container);
+
+  second->SetContentsView(new ExitLoopOnRelease());
+
+  first->SetSize(gfx::Size(100, 100));
+  first->Show();
+
+  gfx::Point location(20, 20);
+  base::MessageLoop::current()->PostTask(FROM_HERE,
+      base::Bind(&Widget::OnMouseEvent,
+                 base::Unretained(second),
+                 base::Owned(new ui::MouseEvent(ui::ET_MOUSE_RELEASED,
+                                                location,
+                                                location,
+                                                ui::EF_LEFT_MOUSE_BUTTON))));
+  ui::MouseEvent press(ui::ET_MOUSE_PRESSED, location, location,
+                       ui::EF_LEFT_MOUSE_BUTTON);
+  first->OnMouseEvent(&press);
+  EXPECT_FALSE(first->HasCapture());
+  first->Close();
+  RunPendingMessages();
+}
+
 TEST_F(WidgetTest, ResetCaptureOnGestureEnd) {
   Widget* toplevel = CreateTopLevelFramelessPlatformWidget();
   View* container = new View;
@@ -1171,7 +1292,9 @@ TEST_F(WidgetTest, KeyboardInputEvent) {
 }
 
 // Verifies bubbles result in a focus lost when shown.
-TEST_F(WidgetTest, FocusChangesOnBubble) {
+// TODO(msw): this tests relies on focus, it needs to be in
+// interactive_ui_tests.
+TEST_F(WidgetTest, DISABLED_FocusChangesOnBubble) {
   // Create a widget, show and activate it and focus the contents view.
   View* contents_view = new View;
   contents_view->set_focusable(true);
@@ -1209,6 +1332,26 @@ TEST_F(WidgetTest, FocusChangesOnBubble) {
 
 // Desktop native widget Aura tests are for non Chrome OS platforms.
 #if !defined(OS_CHROMEOS)
+// Test to ensure that after minimize, view width is set to zero.
+TEST_F(WidgetTest, TestViewWidthAfterMinimizingWidget) {
+  // Create a widget.
+  Widget widget;
+  Widget::InitParams init_params =
+      CreateParams(Widget::InitParams::TYPE_WINDOW);
+  init_params.show_state = ui::SHOW_STATE_NORMAL;
+  gfx::Rect initial_bounds(0, 0, 300, 400);
+  init_params.bounds = initial_bounds;
+  init_params.ownership = Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
+  init_params.native_widget = new DesktopNativeWidgetAura(&widget);
+  widget.Init(init_params);
+  NonClientView* non_client_view = widget.non_client_view();
+  NonClientFrameView* frame_view = new MinimumSizeFrameView(&widget);
+  non_client_view->SetFrameView(frame_view);
+  widget.Show();
+  widget.Minimize();
+  EXPECT_EQ(0, frame_view->width());
+}
+
 // This class validates whether paints are received for a visible Widget.
 // To achieve this it overrides the Show and Close methods on the Widget class
 // and sets state whether subsequent paints are expected.
@@ -1310,7 +1453,7 @@ class DesktopAuraFullscreenChildWindowDestructionTest
         parent_destroyed_(false),
         child_destroyed_(false) {}
 
-  ~DesktopAuraFullscreenChildWindowDestructionTest() {
+  virtual ~DesktopAuraFullscreenChildWindowDestructionTest() {
     EXPECT_TRUE(parent_destroyed_);
     EXPECT_TRUE(child_destroyed_);
     full_screen_widget_ = NULL;
@@ -1408,29 +1551,41 @@ TEST_F(WidgetTest, DesktopAuraFullscreenChildParentDestroyed) {
   RunPendingMessages();
 }
 
+// Test to ensure that the aura Window's visiblity state is set to visible if
+// the underlying widget is hidden and then shown.
+TEST_F(WidgetTest, TestWindowVisibilityAfterHide) {
+  // Create a widget.
+  Widget widget;
+  Widget::InitParams init_params =
+      CreateParams(Widget::InitParams::TYPE_WINDOW);
+  init_params.show_state = ui::SHOW_STATE_NORMAL;
+  gfx::Rect initial_bounds(0, 0, 300, 400);
+  init_params.bounds = initial_bounds;
+  init_params.ownership = Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
+  init_params.native_widget = new DesktopNativeWidgetAura(&widget);
+  widget.Init(init_params);
+  NonClientView* non_client_view = widget.non_client_view();
+  NonClientFrameView* frame_view = new MinimumSizeFrameView(&widget);
+  non_client_view->SetFrameView(frame_view);
+
+  widget.Hide();
+  EXPECT_FALSE(widget.GetNativeView()->IsVisible());
+  widget.Show();
+  EXPECT_TRUE(widget.GetNativeView()->IsVisible());
+}
+
 #endif  // !defined(OS_CHROMEOS)
 
-// Tests that wheel events generted from scroll events are targetted to the
+// Tests that wheel events generated from scroll events are targetted to the
 // views under the cursor when the focused view does not processed them.
 TEST_F(WidgetTest, WheelEventsFromScrollEventTarget) {
-  EventCountView* focused_view = new EventCountView;
-  focused_view->set_focusable(true);
-
   EventCountView* cursor_view = new EventCountView;
-
-  focused_view->SetBounds(0, 0, 50, 40);
   cursor_view->SetBounds(60, 0, 50, 40);
 
   Widget* widget = CreateTopLevelPlatformWidget();
-  widget->GetRootView()->AddChildView(focused_view);
   widget->GetRootView()->AddChildView(cursor_view);
 
-  focused_view->RequestFocus();
-  EXPECT_TRUE(focused_view->HasFocus());
-
-  // Generate a scroll event on the cursor view. The focused view will receive a
-  // wheel event, but since it doesn't process the event, the view under the
-  // cursor will receive the wheel event.
+  // Generate a scroll event on the cursor view.
   ui::ScrollEvent scroll(ui::ET_SCROLL,
                          gfx::Point(65, 5),
                          ui::EventTimeForNow(),
@@ -1440,13 +1595,9 @@ TEST_F(WidgetTest, WheelEventsFromScrollEventTarget) {
                          2);
   widget->OnScrollEvent(&scroll);
 
-  EXPECT_EQ(0, focused_view->GetEventCount(ui::ET_SCROLL));
-  EXPECT_EQ(1, focused_view->GetEventCount(ui::ET_MOUSEWHEEL));
-
   EXPECT_EQ(1, cursor_view->GetEventCount(ui::ET_SCROLL));
   EXPECT_EQ(1, cursor_view->GetEventCount(ui::ET_MOUSEWHEEL));
 
-  focused_view->ResetCounts();
   cursor_view->ResetCounts();
 
   ui::ScrollEvent scroll2(ui::ET_SCROLL,
@@ -1457,8 +1608,6 @@ TEST_F(WidgetTest, WheelEventsFromScrollEventTarget) {
                           0, 20,
                           2);
   widget->OnScrollEvent(&scroll2);
-  EXPECT_EQ(1, focused_view->GetEventCount(ui::ET_SCROLL));
-  EXPECT_EQ(1, focused_view->GetEventCount(ui::ET_MOUSEWHEEL));
 
   EXPECT_EQ(0, cursor_view->GetEventCount(ui::ET_SCROLL));
   EXPECT_EQ(0, cursor_view->GetEventCount(ui::ET_MOUSEWHEEL));
@@ -1597,6 +1746,91 @@ TEST_F(WidgetTest, EventHandlersOnRootView) {
   widget->CloseNow();
 }
 
+TEST_F(WidgetTest, SynthesizeMouseMoveEvent) {
+  Widget* widget = CreateTopLevelNativeWidget();
+  View* root_view = widget->GetRootView();
+
+  EventCountView* v1 = new EventCountView();
+  v1->SetBounds(0, 0, 10, 10);
+  root_view->AddChildView(v1);
+  EventCountView* v2 = new EventCountView();
+  v2->SetBounds(0, 10, 10, 10);
+  root_view->AddChildView(v2);
+
+  gfx::Point cursor_location(5, 5);
+  ui::MouseEvent move(ui::ET_MOUSE_MOVED, cursor_location, cursor_location,
+                      ui::EF_NONE);
+  widget->OnMouseEvent(&move);
+
+  EXPECT_EQ(1, v1->GetEventCount(ui::ET_MOUSE_ENTERED));
+  EXPECT_EQ(0, v2->GetEventCount(ui::ET_MOUSE_ENTERED));
+
+  delete v1;
+  v2->SetBounds(0, 0, 10, 10);
+  EXPECT_EQ(0, v2->GetEventCount(ui::ET_MOUSE_ENTERED));
+
+  widget->SynthesizeMouseMoveEvent();
+  EXPECT_EQ(1, v2->GetEventCount(ui::ET_MOUSE_ENTERED));
+}
+
+TEST_F(WidgetTest, MouseEventsHandled) {
+  Widget* widget = CreateTopLevelNativeWidget();
+  View* root_view = widget->GetRootView();
+
+#if defined(USE_AURA)
+  aura::test::TestCursorClient cursor_client(
+      widget->GetNativeView()->GetRootWindow());
+#endif
+
+  EventCountView* v1 = new EventCountView();
+  v1->SetBounds(0, 0, 10, 10);
+  root_view->AddChildView(v1);
+  EventCountView* v2 = new EventCountView();
+  v2->SetBounds(0, 10, 10, 10);
+  root_view->AddChildView(v2);
+
+  gfx::Point cursor_location1(5, 5);
+  ui::MouseEvent move1(ui::ET_MOUSE_MOVED, cursor_location1, cursor_location1,
+                       ui::EF_NONE);
+  widget->OnMouseEvent(&move1);
+  EXPECT_EQ(1, v1->GetEventCount(ui::ET_MOUSE_ENTERED));
+  EXPECT_EQ(0, v2->GetEventCount(ui::ET_MOUSE_ENTERED));
+  EXPECT_EQ(0, v1->GetEventCount(ui::ET_MOUSE_EXITED));
+  EXPECT_EQ(0, v2->GetEventCount(ui::ET_MOUSE_EXITED));
+  v1->ResetCounts();
+  v2->ResetCounts();
+
+  gfx::Point cursor_location2(5, 15);
+  ui::MouseEvent move2(ui::ET_MOUSE_MOVED, cursor_location2, cursor_location2,
+                       ui::EF_NONE);
+  widget->OnMouseEvent(&move2);
+  EXPECT_EQ(0, v1->GetEventCount(ui::ET_MOUSE_ENTERED));
+  EXPECT_EQ(1, v2->GetEventCount(ui::ET_MOUSE_ENTERED));
+  EXPECT_EQ(1, v1->GetEventCount(ui::ET_MOUSE_EXITED));
+  EXPECT_EQ(0, v2->GetEventCount(ui::ET_MOUSE_EXITED));
+  v1->ResetCounts();
+  v2->ResetCounts();
+
+#if defined(USE_AURA)
+  // In Aura, we suppress mouse events if mouse events are disabled.
+  cursor_client.DisableMouseEvents();
+
+  widget->OnMouseEvent(&move1);
+  EXPECT_EQ(0, v1->GetEventCount(ui::ET_MOUSE_ENTERED));
+  EXPECT_EQ(0, v2->GetEventCount(ui::ET_MOUSE_ENTERED));
+  EXPECT_EQ(0, v1->GetEventCount(ui::ET_MOUSE_EXITED));
+  EXPECT_EQ(0, v2->GetEventCount(ui::ET_MOUSE_EXITED));
+  v1->ResetCounts();
+  v2->ResetCounts();
+
+  widget->OnMouseEvent(&move2);
+  EXPECT_EQ(0, v1->GetEventCount(ui::ET_MOUSE_ENTERED));
+  EXPECT_EQ(0, v2->GetEventCount(ui::ET_MOUSE_ENTERED));
+  EXPECT_EQ(0, v1->GetEventCount(ui::ET_MOUSE_EXITED));
+  EXPECT_EQ(0, v2->GetEventCount(ui::ET_MOUSE_EXITED));
+#endif
+}
+
 // Used by SingleWindowClosing to count number of times WindowClosing() has
 // been invoked.
 class ClosingDelegate : public WidgetDelegate {
@@ -1679,5 +1913,204 @@ TEST_F(WidgetTest, SetTopLevelCorrectly) {
   EXPECT_TRUE(delegate->is_top_level());
 }
 
-}  // namespace
+// A scumbag View that deletes its owning widget OnMousePressed.
+class WidgetDeleterView : public View {
+ public:
+  WidgetDeleterView() : View() {}
+
+  // Overridden from View.
+  virtual bool OnMousePressed(const ui::MouseEvent& event) OVERRIDE {
+    delete GetWidget();
+    return true;
+  }
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(WidgetDeleterView);
+};
+
+TEST_F(WidgetTest, TestWidgetDeletedInOnMousePressed) {
+  Widget* widget = new Widget;
+  Widget::InitParams params =
+      CreateParams(views::Widget::InitParams::TYPE_POPUP);
+  params.ownership = Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
+  widget->Init(params);
+
+  widget->SetContentsView(new WidgetDeleterView);
+
+  widget->SetSize(gfx::Size(100, 100));
+  widget->Show();
+
+  gfx::Point click_location(45, 15);
+  ui::MouseEvent press(ui::ET_MOUSE_PRESSED, click_location, click_location,
+      ui::EF_LEFT_MOUSE_BUTTON);
+  widget->OnMouseEvent(&press);
+
+  // Yay we did not crash!
+}
+
+// See description of RunGetNativeThemeFromDestructor() for details.
+class GetNativeThemeFromDestructorView : public WidgetDelegateView {
+ public:
+  GetNativeThemeFromDestructorView() {}
+  virtual ~GetNativeThemeFromDestructorView() {
+    VerifyNativeTheme();
+  }
+
+  virtual View* GetContentsView() OVERRIDE {
+    return this;
+  }
+
+ private:
+  void VerifyNativeTheme() {
+    ASSERT_TRUE(GetNativeTheme() != NULL);
+  }
+
+  DISALLOW_COPY_AND_ASSIGN(GetNativeThemeFromDestructorView);
+};
+
+// Verifies GetNativeTheme() from the destructor of a WidgetDelegateView doesn't
+// crash. |is_first_run| is true if this is the first call. A return value of
+// true indicates this should be run again with a value of false.
+// First run uses DesktopNativeWidgetAura (if possible). Second run doesn't.
+bool RunGetNativeThemeFromDestructor(const Widget::InitParams& in_params,
+                                     bool is_first_run) {
+  bool needs_second_run = false;
+  // Destroyed by CloseNow() below.
+  Widget* widget = new Widget;
+  Widget::InitParams params(in_params);
+  // Deletes itself when the Widget is destroyed.
+  params.delegate = new GetNativeThemeFromDestructorView;
+#if defined(USE_AURA) && !defined(OS_CHROMEOS)
+  if (is_first_run) {
+    params.native_widget = new DesktopNativeWidgetAura(widget);
+    needs_second_run = true;
+  }
+#endif
+  widget->Init(params);
+  widget->CloseNow();
+  return needs_second_run;
+}
+
+// See description of RunGetNativeThemeFromDestructor() for details.
+TEST_F(WidgetTest, GetNativeThemeFromDestructor) {
+  Widget::InitParams params = CreateParams(Widget::InitParams::TYPE_POPUP);
+  if (RunGetNativeThemeFromDestructor(params, true))
+    RunGetNativeThemeFromDestructor(params, false);
+}
+
+// Used by HideCloseDestroy. Allows setting a boolean when the widget is
+// destroyed.
+class CloseDestroysWidget : public Widget {
+ public:
+  explicit CloseDestroysWidget(bool* destroyed)
+      : destroyed_(destroyed) {
+  }
+
+  virtual ~CloseDestroysWidget() {
+    if (destroyed_) {
+      *destroyed_ = true;
+      base::MessageLoop::current()->QuitNow();
+    }
+  }
+
+  void Detach() { destroyed_ = NULL; }
+
+ private:
+  // If non-null set to true from destructor.
+  bool* destroyed_;
+
+  DISALLOW_COPY_AND_ASSIGN(CloseDestroysWidget);
+};
+
+// Verifies Close() results in destroying.
+TEST_F(WidgetTest, CloseDestroys) {
+  bool destroyed = false;
+  CloseDestroysWidget* widget = new CloseDestroysWidget(&destroyed);
+  Widget::InitParams params =
+      CreateParams(views::Widget::InitParams::TYPE_MENU);
+  params.opacity = Widget::InitParams::OPAQUE_WINDOW;
+#if defined(USE_AURA) && !defined(OS_CHROMEOS)
+  params.native_widget = new DesktopNativeWidgetAura(widget);
+#endif
+  widget->Init(params);
+  widget->Show();
+  widget->Hide();
+  widget->Close();
+  // Run the message loop as Close() asynchronously deletes.
+  RunPendingMessages();
+  EXPECT_TRUE(destroyed);
+  // Close() should destroy the widget. If not we'll cleanup to avoid leaks.
+  if (!destroyed) {
+    widget->Detach();
+    widget->CloseNow();
+  }
+}
+
+// A view that consumes mouse-pressed event and gesture-tap-down events.
+class RootViewTestView : public View {
+ public:
+  RootViewTestView(): View() {}
+
+ private:
+  virtual bool OnMousePressed(const ui::MouseEvent& event) OVERRIDE {
+    return true;
+  }
+
+  virtual void OnGestureEvent(ui::GestureEvent* event) OVERRIDE {
+    if (event->type() == ui::ET_GESTURE_TAP_DOWN)
+      event->SetHandled();
+  }
+};
+
+// Checks if RootView::*_handler_ fields are unset when widget is hidden.
+TEST_F(WidgetTest, TestRootViewHandlersWhenHidden) {
+  Widget* widget = CreateTopLevelNativeWidget();
+  widget->SetBounds(gfx::Rect(0, 0, 300, 300));
+  View* view = new RootViewTestView();
+  view->SetBounds(0, 0, 300, 300);
+  internal::RootView* root_view =
+      static_cast<internal::RootView*>(widget->GetRootView());
+  root_view->AddChildView(view);
+
+  // Check RootView::mouse_pressed_handler_.
+  widget->Show();
+  EXPECT_EQ(NULL, GetMousePressedHandler(root_view));
+  gfx::Point click_location(45, 15);
+  ui::MouseEvent press(ui::ET_MOUSE_PRESSED, click_location, click_location,
+      ui::EF_LEFT_MOUSE_BUTTON);
+  widget->OnMouseEvent(&press);
+  EXPECT_EQ(view, GetMousePressedHandler(root_view));
+  widget->Hide();
+  EXPECT_EQ(NULL, GetMousePressedHandler(root_view));
+
+  // Check RootView::mouse_move_handler_.
+  widget->Show();
+  EXPECT_EQ(NULL, GetMouseMoveHandler(root_view));
+  gfx::Point move_location(45, 15);
+  ui::MouseEvent move(ui::ET_MOUSE_MOVED, move_location, move_location, 0);
+  widget->OnMouseEvent(&move);
+  EXPECT_EQ(view, GetMouseMoveHandler(root_view));
+  widget->Hide();
+  EXPECT_EQ(NULL, GetMouseMoveHandler(root_view));
+
+  // Check RootView::gesture_handler_.
+  widget->Show();
+  EXPECT_EQ(NULL, GetGestureHandler(root_view));
+  ui::GestureEvent tap_down(
+      ui::ET_GESTURE_TAP_DOWN,
+      15,
+      15,
+      0,
+      base::TimeDelta(),
+      ui::GestureEventDetails(ui::ET_GESTURE_TAP_DOWN, 0, 0),
+      1);
+  widget->OnGestureEvent(&tap_down);
+  EXPECT_EQ(view, GetGestureHandler(root_view));
+  widget->Hide();
+  EXPECT_EQ(NULL, GetGestureHandler(root_view));
+
+  widget->Close();
+}
+
+}  // namespace test
 }  // namespace views

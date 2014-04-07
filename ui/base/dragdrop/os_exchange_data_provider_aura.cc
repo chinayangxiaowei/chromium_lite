@@ -5,27 +5,46 @@
 #include "ui/base/dragdrop/os_exchange_data_provider_aura.h"
 
 #include "base/logging.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "net/base/net_util.h"
 #include "ui/base/clipboard/clipboard.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 
 namespace ui {
 
-OSExchangeDataProviderAura::OSExchangeDataProviderAura() : formats_(0) {}
+OSExchangeDataProviderAura::OSExchangeDataProviderAura()
+    : formats_(0) {
+}
 
 OSExchangeDataProviderAura::~OSExchangeDataProviderAura() {}
 
-void OSExchangeDataProviderAura::SetString(const string16& data) {
+OSExchangeData::Provider* OSExchangeDataProviderAura::Clone() const {
+  OSExchangeDataProviderAura* ret = new OSExchangeDataProviderAura();
+  ret->formats_ = formats_;
+  ret->string_ = string_;
+  ret->url_ = url_;
+  ret->title_ = title_;
+  ret->filenames_ = filenames_;
+  ret->pickle_data_ = pickle_data_;
+  // We skip copying the drag images.
+  ret->html_ = html_;
+  ret->base_url_ = base_url_;
+
+  return ret;
+}
+
+void OSExchangeDataProviderAura::SetString(const base::string16& data) {
   string_ = data;
   formats_ |= OSExchangeData::STRING;
 }
 
 void OSExchangeDataProviderAura::SetURL(const GURL& url,
-                                        const string16& title) {
+                                        const base::string16& title) {
   url_ = url;
   title_ = title;
   formats_ |= OSExchangeData::URL;
+
+  SetString(UTF8ToUTF16(url.spec()));
 }
 
 void OSExchangeDataProviderAura::SetFilename(const base::FilePath& path) {
@@ -41,13 +60,13 @@ void OSExchangeDataProviderAura::SetFilenames(
 }
 
 void OSExchangeDataProviderAura::SetPickledData(
-    OSExchangeData::CustomFormat format,
+    const OSExchangeData::CustomFormat& format,
     const Pickle& data) {
   pickle_data_[format] = data;
   formats_ |= OSExchangeData::PICKLED_DATA;
 }
 
-bool OSExchangeDataProviderAura::GetString(string16* data) const {
+bool OSExchangeDataProviderAura::GetString(base::string16* data) const {
   if ((formats_ & OSExchangeData::STRING) == 0)
     return false;
   *data = string_;
@@ -55,7 +74,7 @@ bool OSExchangeDataProviderAura::GetString(string16* data) const {
 }
 
 bool OSExchangeDataProviderAura::GetURLAndTitle(GURL* url,
-                                                string16* title) const {
+                                                base::string16* title) const {
   if ((formats_ & OSExchangeData::URL) == 0) {
     title->clear();
     return GetPlainTextURL(url);
@@ -86,7 +105,7 @@ bool OSExchangeDataProviderAura::GetFilenames(
 }
 
 bool OSExchangeDataProviderAura::GetPickledData(
-    OSExchangeData::CustomFormat format,
+    const OSExchangeData::CustomFormat& format,
     Pickle* data) const {
   PickleData::const_iterator i = pickle_data_.find(format);
   if (i == pickle_data_.end())
@@ -113,43 +132,18 @@ bool OSExchangeDataProviderAura::HasFile() const {
 }
 
 bool OSExchangeDataProviderAura::HasCustomFormat(
-    OSExchangeData::CustomFormat format) const {
+    const OSExchangeData::CustomFormat& format) const {
   return pickle_data_.find(format) != pickle_data_.end();
 }
 
-#if defined(OS_WIN)
-  void OSExchangeDataProviderAura::SetFileContents(
-      const base::FilePath& filename,
-      const std::string& file_contents) {
-    NOTIMPLEMENTED();
-  }
-
-  bool OSExchangeDataProviderAura::GetFileContents(
-      base::FilePath* filename,
-      std::string* file_contents) const {
-    NOTIMPLEMENTED();
-    return false;
-  }
-
-  bool OSExchangeDataProviderAura::HasFileContents() const {
-    NOTIMPLEMENTED();
-    return false;
-  }
-
-  void OSExchangeDataProviderAura::SetDownloadFileInfo(
-      const OSExchangeData::DownloadFileInfo& download) {
-    NOTIMPLEMENTED();
-  }
-#endif
-
-void OSExchangeDataProviderAura::SetHtml(const string16& html,
+void OSExchangeDataProviderAura::SetHtml(const base::string16& html,
                                          const GURL& base_url) {
   formats_ |= OSExchangeData::HTML;
   html_ = html;
   base_url_ = base_url;
 }
 
-bool OSExchangeDataProviderAura::GetHtml(string16* html,
+bool OSExchangeDataProviderAura::GetHtml(base::string16* html,
                                          GURL* base_url) const {
   if ((formats_ & OSExchangeData::HTML) == 0)
     return false;
@@ -173,7 +167,8 @@ const gfx::ImageSkia& OSExchangeDataProviderAura::GetDragImage() const {
   return drag_image_;
 }
 
-const gfx::Vector2d& OSExchangeDataProviderAura::GetDragImageOffset() const {
+const gfx::Vector2d&
+OSExchangeDataProviderAura::GetDragImageOffset() const {
   return drag_image_offset_;
 }
 
@@ -197,15 +192,5 @@ bool OSExchangeDataProviderAura::GetPlainTextURL(GURL* url) const {
 OSExchangeData::Provider* OSExchangeData::CreateProvider() {
   return new OSExchangeDataProviderAura();
 }
-
-// static
-OSExchangeData::CustomFormat
-OSExchangeData::RegisterCustomFormat(const std::string& type) {
-  // On Aura you probably want to just use the Clipboard::Get*FormatType APIs
-  // instead.  But we can also dynamically generate new CustomFormat objects
-  // here too if really necessary.
-  return Clipboard::FormatType::Deserialize(type);
-}
-
 
 }  // namespace ui

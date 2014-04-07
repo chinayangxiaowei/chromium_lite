@@ -4,7 +4,7 @@
 
 #include "net/dns/dns_response.h"
 
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "base/sys_byteorder.h"
 #include "net/base/address_list.h"
 #include "net/base/big_endian.h"
@@ -127,6 +127,20 @@ bool DnsRecordParser::ReadRecord(DnsResourceRecord* out) {
   return false;
 }
 
+bool DnsRecordParser::SkipQuestion() {
+  size_t consumed = ReadName(cur_, NULL);
+  if (!consumed)
+    return false;
+
+  const char* next = cur_ + consumed + 2 * sizeof(uint16);  // QTYPE + QCLASS
+  if (next > packet_ + length_)
+    return false;
+
+  cur_ = next;
+
+  return true;
+}
+
 DnsResponse::DnsResponse()
     : io_buffer_(new IOBufferWithSize(dns_protocol::kMaxUDPSize + 1)) {
 }
@@ -148,6 +162,7 @@ DnsResponse::~DnsResponse() {
 }
 
 bool DnsResponse::InitParse(int nbytes, const DnsQuery& query) {
+  DCHECK_GE(nbytes, 0);
   // Response includes query, it should be at least that size.
   if (nbytes < query.io_buffer()->size() || nbytes >= io_buffer_->size())
     return false;
@@ -175,6 +190,28 @@ bool DnsResponse::InitParse(int nbytes, const DnsQuery& query) {
   return true;
 }
 
+bool DnsResponse::InitParseWithoutQuery(int nbytes) {
+  DCHECK_GE(nbytes, 0);
+
+  size_t hdr_size = sizeof(dns_protocol::Header);
+
+  if (nbytes < static_cast<int>(hdr_size) || nbytes >= io_buffer_->size())
+    return false;
+
+  parser_ = DnsRecordParser(
+      io_buffer_->data(), nbytes, hdr_size);
+
+  unsigned qdcount = base::NetToHost16(header()->qdcount);
+  for (unsigned i = 0; i < qdcount; ++i) {
+    if (!parser_.SkipQuestion()) {
+      parser_ = DnsRecordParser();  // Make parser invalid again.
+      return false;
+    }
+  }
+
+  return true;
+}
+
 bool DnsResponse::IsValid() const {
   return parser_.IsValid();
 }
@@ -192,6 +229,11 @@ uint8 DnsResponse::rcode() const {
 unsigned DnsResponse::answer_count() const {
   DCHECK(parser_.IsValid());
   return base::NetToHost16(header()->ancount);
+}
+
+unsigned DnsResponse::additional_answer_count() const {
+  DCHECK(parser_.IsValid());
+  return base::NetToHost16(header()->arcount);
 }
 
 base::StringPiece DnsResponse::qname() const {

@@ -23,7 +23,7 @@ html[dir='rtl'] .form {
 .header .form {
   -webkit-margin-start: 12px;
   float: left;
-  margin-top: 22px;
+  margin-top: 4px;
 }
 
 #downloads-summary {
@@ -46,12 +46,22 @@ html[dir=rtl] #downloads-actions {
   float: left;
 }
 
-#downloads-actions > a {
+.disabled-link {
+  color: #999;
+  text-decoration: none;
+}
+
+#downloads-actions > a,
+#downloads-actions > .disabled-link {
   -webkit-margin-start: 10px;
 }
 
 #downloads-actions > a:first-child {
   -webkit-margin-start: 0;
+}
+
+#open-downloads-folder {
+  -webkit-margin-end: 16px;
 }
 
 #downloads-display {

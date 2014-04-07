@@ -9,7 +9,7 @@
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/prefs/pref_service.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/win/windows_version.h"
 #include "chrome/browser/extensions/tab_helper.h"
 #include "chrome/browser/favicon/favicon_util.h"
@@ -18,6 +18,7 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/views/constrained_window_views.h"
 #include "chrome/browser/ui/web_applications/web_app_ui.h"
 #include "chrome/browser/ui/webui/extensions/extension_icon_source.h"
 #include "chrome/common/chrome_constants.h"
@@ -26,7 +27,7 @@
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
-#include "googleurl/src/gurl.h"
+#include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "grit/locale_settings.h"
 #include "grit/theme_resources.h"
@@ -41,8 +42,8 @@
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/codec/png_codec.h"
+#include "ui/gfx/image/image_family.h"
 #include "ui/gfx/image/image_skia.h"
-#include "ui/gfx/image/image_skia_rep.h"
 #include "ui/views/controls/button/checkbox.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
@@ -50,6 +51,7 @@
 #include "ui/views/layout/layout_constants.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/dialog_client_view.h"
+#include "url/gurl.h"
 
 namespace {
 
@@ -60,13 +62,13 @@ class AppInfoView : public views::View {
  public:
   AppInfoView(const string16& title,
               const string16& description,
-              const SkBitmap& icon);
+              const gfx::ImageFamily& icon);
 
   // Updates the title/description of the web app.
   void UpdateText(const string16& title, const string16& description);
 
   // Updates the icon of the web app.
-  void UpdateIcon(const gfx::Image& image);
+  void UpdateIcon(const gfx::ImageFamily& image);
 
   // Overridden from views::View:
   virtual void OnPaint(gfx::Canvas* canvas) OVERRIDE;
@@ -74,7 +76,7 @@ class AppInfoView : public views::View {
  private:
   // Initializes the controls
   void Init(const string16& title,
-            const string16& description, const SkBitmap& icon);
+            const string16& description, const gfx::ImageFamily& icon);
 
   // Creates or updates description label.
   void PrepareDescriptionLabel(const string16& description);
@@ -89,7 +91,7 @@ class AppInfoView : public views::View {
 
 AppInfoView::AppInfoView(const string16& title,
                          const string16& description,
-                         const SkBitmap& icon)
+                         const gfx::ImageFamily& icon)
     : icon_(NULL),
       title_(NULL),
       description_(NULL) {
@@ -98,9 +100,9 @@ AppInfoView::AppInfoView(const string16& title,
 
 void AppInfoView::Init(const string16& title_text,
                        const string16& description_text,
-                       const SkBitmap& icon) {
+                       const gfx::ImageFamily& icon) {
   icon_ = new views::ImageView();
-  icon_->SetImage(gfx::ImageSkia::CreateFrom1xBitmap(icon));
+  UpdateIcon(icon);
   icon_->SetImageSize(gfx::Size(kIconPreviewSizePixels,
                                 kIconPreviewSizePixels));
 
@@ -169,44 +171,14 @@ void AppInfoView::UpdateText(const string16& title,
   SetupLayout();
 }
 
-void AppInfoView::UpdateIcon(const gfx::Image& image) {
-  if (image.IsEmpty())
+void AppInfoView::UpdateIcon(const gfx::ImageFamily& image) {
+  // Get the icon closest to the desired preview size.
+  const gfx::Image* icon = image.GetBest(kIconPreviewSizePixels,
+                                         kIconPreviewSizePixels);
+  if (!icon || icon->IsEmpty())
+    // The family has no icons. Leave the image blank.
     return;
-
-  // image contains a single ImageSkia with all of the icons at different sizes.
-  // Create a new ImageSkia with just a single icon at the preferred size.
-  const gfx::ImageSkia& multires_image_skia = *(image.ToImageSkia());
-  std::vector<gfx::ImageSkiaRep> image_reps = multires_image_skia.image_reps();
-  // Find the smallest icon bigger or equal to the desired size. If it cannot be
-  // found, find the biggest icon smaller than the desired size. An icon's size
-  // is measured as the minimum of its width and height.
-  const gfx::ImageSkiaRep* smallest_larger = NULL;
-  const gfx::ImageSkiaRep* largest_smaller = NULL;
-  int smallest_larger_size = 0;
-  int largest_smaller_size = 0;
-  for (std::vector<gfx::ImageSkiaRep>::const_iterator it = image_reps.begin();
-       it != image_reps.end(); ++it) {
-    const gfx::ImageSkiaRep& image = *it;
-    int image_size = std::min(image.pixel_width(), image.pixel_height());
-    if (image_size >= kIconPreviewSizePixels) {
-      if (!smallest_larger || image_size < smallest_larger_size) {
-        smallest_larger = &image;
-        smallest_larger_size = image_size;
-      }
-    } else {
-      if (!largest_smaller || image_size > largest_smaller_size) {
-        largest_smaller = &image;
-        largest_smaller_size = image_size;
-      }
-    }
-  }
-  if (!smallest_larger && !largest_smaller) {
-    // Should never happen unless the image has no representations.
-    return;
-  }
-  const SkBitmap& bitmap = smallest_larger ?
-                           smallest_larger->sk_bitmap() :
-                           largest_smaller->sk_bitmap();
+  const SkBitmap& bitmap = *icon->ToSkBitmap();
   if (bitmap.width() == kIconPreviewSizePixels &&
       bitmap.height() == kIconPreviewSizePixels) {
     icon_->SetImage(gfx::ImageSkia::CreateFrom1xBitmap(bitmap));
@@ -257,16 +229,18 @@ namespace chrome {
 
 void ShowCreateWebAppShortcutsDialog(gfx::NativeWindow parent_window,
                                      content::WebContents* web_contents) {
-  views::Widget::CreateWindowWithParent(
+  CreateBrowserModalDialogViews(
       new CreateUrlApplicationShortcutView(web_contents),
       parent_window)->Show();
 }
 
-void ShowCreateChromeAppShortcutsDialog(gfx::NativeWindow parent_window,
-                                        Profile* profile,
-                                        const extensions::Extension* app) {
-  views::Widget::CreateWindowWithParent(
-      new CreateChromeApplicationShortcutView(profile, app),
+void ShowCreateChromeAppShortcutsDialog(
+    gfx::NativeWindow parent_window,
+    Profile* profile,
+    const extensions::Extension* app,
+    const base::Closure& close_callback) {
+  CreateBrowserModalDialogViews(
+      new CreateChromeApplicationShortcutView(profile, app, close_callback),
       parent_window)->Show();
 }
 
@@ -285,8 +259,7 @@ CreateApplicationShortcutView::~CreateApplicationShortcutView() {}
 void CreateApplicationShortcutView::InitControls() {
   // Create controls
   app_info_ = new AppInfoView(shortcut_info_.title, shortcut_info_.description,
-      shortcut_info_.favicon.IsEmpty() ? SkBitmap() :
-                                         *shortcut_info_.favicon.ToSkBitmap());
+                              shortcut_info_.favicon);
   create_shortcuts_label_ = new views::Label(
       l10n_util::GetStringUTF16(IDS_CREATE_SHORTCUTS_LABEL));
   create_shortcuts_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
@@ -384,14 +357,6 @@ bool CreateApplicationShortcutView::IsDialogButtonEnabled(
   return true;
 }
 
-bool CreateApplicationShortcutView::CanResize() const {
-  return false;
-}
-
-bool CreateApplicationShortcutView::CanMaximize() const {
-  return false;
-}
-
 ui::ModalType CreateApplicationShortcutView::GetModalType() const {
   return ui::MODAL_TYPE_WINDOW;
 }
@@ -408,6 +373,7 @@ bool CreateApplicationShortcutView::Accept() {
   creation_locations.on_desktop = desktop_check_box_->checked();
   creation_locations.in_applications_menu = menu_check_box_ == NULL ? false :
       menu_check_box_->checked();
+  creation_locations.applications_menu_subdir = shortcut_menu_subdir_;
 
 #if defined(OS_WIN)
   creation_locations.in_quick_launch_bar = quick_launch_check_box_ == NULL ?
@@ -418,7 +384,8 @@ bool CreateApplicationShortcutView::Accept() {
   creation_locations.in_quick_launch_bar = false;
 #endif
 
-  web_app::CreateShortcuts(shortcut_info_, creation_locations);
+  web_app::CreateShortcuts(shortcut_info_, creation_locations,
+                           web_app::SHORTCUT_CREATION_BY_USER);
   return true;
 }
 
@@ -462,6 +429,9 @@ CreateUrlApplicationShortcutView::CreateUrlApplicationShortcutView(
     FetchIcon();
   }
 
+  // NOTE: Leave shortcut_menu_subdir_ blank to create URL app shortcuts in the
+  // top-level menu.
+
   InitControls();
 }
 
@@ -472,10 +442,10 @@ bool CreateUrlApplicationShortcutView::Accept() {
   if (!CreateApplicationShortcutView::Accept())
     return false;
 
-  extensions::TabHelper::FromWebContents(web_contents_)->
-      SetAppIcon(shortcut_info_.favicon.IsEmpty()
-          ? SkBitmap()
-          : *shortcut_info_.favicon.ToSkBitmap());
+  // Get the smallest icon in the icon family (should have only 1).
+  const gfx::Image* icon = shortcut_info_.favicon.GetBest(0, 0);
+  SkBitmap bitmap = icon ? icon->AsBitmap() : SkBitmap();
+  extensions::TabHelper::FromWebContents(web_contents_)->SetAppIcon(bitmap);
   Browser* browser = chrome::FindBrowserWithWebContents(web_contents_);
   if (browser)
     chrome::ConvertTabToAppWindow(browser, web_contents_);
@@ -489,11 +459,13 @@ void CreateUrlApplicationShortcutView::FetchIcon() {
   if (unprocessed_icons_.empty())  // No icons to fetch.
     return;
 
-  pending_download_id_ = web_contents_->DownloadFavicon(
+  int preferred_size = std::max(unprocessed_icons_.back().width,
+                                unprocessed_icons_.back().height);
+  pending_download_id_ = web_contents_->DownloadImage(
       unprocessed_icons_.back().url,
-      true,
-      std::max(unprocessed_icons_.back().width,
-               unprocessed_icons_.back().height),
+      true,  // is a favicon
+      preferred_size,
+      0,  // no maximum size
       base::Bind(&CreateUrlApplicationShortcutView::DidDownloadFavicon,
                  base::Unretained(this)));
 
@@ -502,6 +474,7 @@ void CreateUrlApplicationShortcutView::FetchIcon() {
 
 void CreateUrlApplicationShortcutView::DidDownloadFavicon(
     int id,
+    int http_status_code,
     const GURL& image_url,
     int requested_size,
     const std::vector<SkBitmap>& bitmaps) {
@@ -524,7 +497,7 @@ void CreateUrlApplicationShortcutView::DidDownloadFavicon(
   }
 
   if (!image.isNull()) {
-    shortcut_info_.favicon = gfx::Image::CreateFrom1xBitmap(image);
+    shortcut_info_.favicon.Add(gfx::ImageSkia::CreateFrom1xBitmap(image));
     static_cast<AppInfoView*>(app_info_)->UpdateIcon(shortcut_info_.favicon);
   } else {
     FetchIcon();
@@ -533,13 +506,18 @@ void CreateUrlApplicationShortcutView::DidDownloadFavicon(
 
 CreateChromeApplicationShortcutView::CreateChromeApplicationShortcutView(
     Profile* profile,
-    const extensions::Extension* app) :
-      CreateApplicationShortcutView(profile),
-      app_(app),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_ptr_factory_(this)) {
+    const extensions::Extension* app,
+    const base::Closure& close_callback)
+        : CreateApplicationShortcutView(profile),
+          app_(app),
+          close_callback_(close_callback),
+          weak_ptr_factory_(this) {
   // Required by InitControls().
   shortcut_info_.title = UTF8ToUTF16(app->name());
   shortcut_info_.description = UTF8ToUTF16(app->description());
+
+  // Place Chrome app shortcuts in the "Chrome Apps" submenu.
+  shortcut_menu_subdir_ = web_app::GetAppShortcutsSubdirName();
 
   InitControls();
 
@@ -551,6 +529,18 @@ CreateChromeApplicationShortcutView::CreateChromeApplicationShortcutView(
 }
 
 CreateChromeApplicationShortcutView::~CreateChromeApplicationShortcutView() {}
+
+bool CreateChromeApplicationShortcutView::Accept() {
+  if (!close_callback_.is_null())
+    close_callback_.Run();
+  return CreateApplicationShortcutView::Accept();
+}
+
+bool CreateChromeApplicationShortcutView::Cancel() {
+  if (!close_callback_.is_null())
+    close_callback_.Run();
+  return CreateApplicationShortcutView::Cancel();
+}
 
 // Called when the app's ShortcutInfo (with icon) is loaded.
 void CreateChromeApplicationShortcutView::OnShortcutInfoLoaded(

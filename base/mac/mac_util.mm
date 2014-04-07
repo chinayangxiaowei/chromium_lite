@@ -18,10 +18,10 @@
 #include "base/mac/foundation_util.h"
 #include "base/mac/mac_logging.h"
 #include "base/mac/scoped_cftyperef.h"
-#include "base/memory/scoped_generic_obj.h"
-#include "base/memory/scoped_nsobject.h"
-#include "base/string_piece.h"
+#include "base/mac/scoped_ioobject.h"
+#include "base/mac/scoped_nsobject.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_piece.h"
 #include "base/strings/sys_string_conversions.h"
 
 namespace base {
@@ -70,10 +70,12 @@ void SetUIMode() {
                       NSApplicationPresentationHideMenuBar;
   }
 
-  // Bug-fix: if the window is fullscreened (Lion-style) and
+  // Mac OS X bug: if the window is fullscreened (Lion-style) and
   // NSApplicationPresentationDefault is requested, the result is that the menu
-  // bar doesn't auto-hide. In that case, explicitly set the presentation
-  // options to the ones that are set by the system as it fullscreens a window.
+  // bar doesn't auto-hide. rdar://13576498 http://www.openradar.me/13576498
+  //
+  // As a workaround, in that case, explicitly set the presentation options to
+  // the ones that are set by the system as it fullscreens a window.
   if (desired_options == NSApplicationPresentationDefault &&
       current_options & NSApplicationPresentationFullScreen) {
     desired_options |= NSApplicationPresentationFullScreen |
@@ -97,7 +99,7 @@ LSSharedFileListItemRef GetLoginItemForApp() {
     return NULL;
   }
 
-  scoped_nsobject<NSArray> login_items_array(
+  base::scoped_nsobject<NSArray> login_items_array(
       CFToNSCast(LSSharedFileListCopySnapshot(login_items, NULL)));
 
   NSURL* url = [NSURL fileURLWithPath:[base::mac::MainBundle() bundlePath]];
@@ -142,6 +144,15 @@ bool FSRefFromPath(const std::string& path, FSRef* ref) {
   return status == noErr;
 }
 
+CGColorSpaceRef GetGenericRGBColorSpace() {
+  // Leaked. That's OK, it's scoped to the lifetime of the application.
+  static CGColorSpaceRef g_color_space_generic_rgb(
+      CGColorSpaceCreateWithName(kCGColorSpaceGenericRGB));
+  DLOG_IF(ERROR, !g_color_space_generic_rgb) <<
+      "Couldn't get the generic RGB color space";
+  return g_color_space_generic_rgb;
+}
+
 CGColorSpaceRef GetSRGBColorSpace() {
   // Leaked.  That's OK, it's scoped to the lifetime of the application.
   static CGColorSpaceRef g_color_space_sRGB =
@@ -178,6 +189,9 @@ void RequestFullScreen(FullScreenMode mode) {
     return;
 
   DCHECK_GE(g_full_screen_requests[mode], 0);
+  if (mode < 0)
+    return;
+
   g_full_screen_requests[mode] = std::max(g_full_screen_requests[mode] + 1, 1);
   SetUIMode();
 }
@@ -188,7 +202,10 @@ void ReleaseFullScreen(FullScreenMode mode) {
   if (mode >= kNumFullScreenModes)
     return;
 
-  DCHECK_GT(g_full_screen_requests[mode], 0);
+  DCHECK_GE(g_full_screen_requests[mode], 0);
+  if (mode < 0)
+    return;
+
   g_full_screen_requests[mode] = std::max(g_full_screen_requests[mode] - 1, 0);
   SetUIMode();
 }
@@ -472,17 +489,17 @@ void RemoveFromLoginItems() {
 bool WasLaunchedAsLoginOrResumeItem() {
   ProcessSerialNumber psn = { 0, kCurrentProcess };
 
-  scoped_nsobject<NSDictionary> process_info(
-      CFToNSCast(ProcessInformationCopyDictionary(&psn,
-                     kProcessDictionaryIncludeAllInformationMask)));
+  base::scoped_nsobject<NSDictionary> process_info(
+      CFToNSCast(ProcessInformationCopyDictionary(
+          &psn, kProcessDictionaryIncludeAllInformationMask)));
 
   long long temp = [[process_info objectForKey:@"ParentPSN"] longLongValue];
   ProcessSerialNumber parent_psn =
       { (temp >> 32) & 0x00000000FFFFFFFFLL, temp & 0x00000000FFFFFFFFLL };
 
-  scoped_nsobject<NSDictionary> parent_info(
-      CFToNSCast(ProcessInformationCopyDictionary(&parent_psn,
-                     kProcessDictionaryIncludeAllInformationMask)));
+  base::scoped_nsobject<NSDictionary> parent_info(
+      CFToNSCast(ProcessInformationCopyDictionary(
+          &parent_psn, kProcessDictionaryIncludeAllInformationMask)));
 
   // Check that creator process code is that of loginwindow.
   BOOL result =
@@ -639,34 +656,24 @@ bool IsOSLaterThanMountainLion_DontCallThis() {
 }
 #endif
 
-namespace {
-
-// ScopedGenericObj functor for IOObjectRelease().
-class ScopedReleaseIOObject {
- public:
-  void operator()(io_object_t x) const {
-    IOObjectRelease(x);
-  }
-};
-
-}  // namespace
-
 std::string GetModelIdentifier() {
-  ScopedGenericObj<io_service_t, ScopedReleaseIOObject>
-      platform_expert(IOServiceGetMatchingService(
-          kIOMasterPortDefault, IOServiceMatching("IOPlatformExpertDevice")));
-  if (!platform_expert)
-    return "";
-  ScopedCFTypeRef<CFDataRef> model_data(
-      static_cast<CFDataRef>(IORegistryEntryCreateCFProperty(
-          platform_expert,
-          CFSTR("model"),
-          kCFAllocatorDefault,
-          0)));
-  if (!model_data)
-    return "";
-  return reinterpret_cast<const char*>(
-      CFDataGetBytePtr(model_data));
+  std::string return_string;
+  ScopedIOObject<io_service_t> platform_expert(
+      IOServiceGetMatchingService(kIOMasterPortDefault,
+                                  IOServiceMatching("IOPlatformExpertDevice")));
+  if (platform_expert) {
+    ScopedCFTypeRef<CFDataRef> model_data(
+        static_cast<CFDataRef>(IORegistryEntryCreateCFProperty(
+            platform_expert,
+            CFSTR("model"),
+            kCFAllocatorDefault,
+            0)));
+    if (model_data) {
+      return_string =
+          reinterpret_cast<const char*>(CFDataGetBytePtr(model_data));
+    }
+  }
+  return return_string;
 }
 
 bool ParseModelIdentifier(const std::string& ident,

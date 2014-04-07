@@ -11,7 +11,7 @@
 #include "base/values.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/manifest_handler.h"
-#include "googleurl/src/gurl.h"
+#include "url/gurl.h"
 
 namespace extensions {
 
@@ -30,6 +30,14 @@ class BackgroundInfo : public Extension::ManifestData {
 
   bool has_background_page() const {
     return background_url_.is_valid() || !background_scripts_.empty();
+  }
+
+  bool has_persistent_background_page() const {
+    return has_background_page() && is_persistent_;
+  }
+
+  bool has_lazy_background_page() const {
+    return has_background_page() && !is_persistent_;
   }
 
   bool Parse(const Extension* extension, string16* error);
@@ -75,6 +83,7 @@ class BackgroundManifestHandler : public ManifestHandler {
   virtual bool Validate(const Extension* extension,
                         std::string* error,
                         std::vector<InstallWarning>* warnings) const OVERRIDE;
+  virtual bool AlwaysParseForType(Manifest::Type type) const OVERRIDE;
 
  private:
   virtual const std::vector<std::string> Keys() const OVERRIDE;

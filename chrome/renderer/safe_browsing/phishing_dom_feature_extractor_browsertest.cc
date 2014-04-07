@@ -13,16 +13,16 @@
 #include "base/callback.h"
 #include "base/compiler_specific.h"
 #include "base/memory/weak_ptr.h"
-#include "base/message_loop.h"
-#include "base/time.h"
+#include "base/message_loop/message_loop.h"
+#include "base/time/time.h"
 #include "chrome/renderer/safe_browsing/features.h"
 #include "chrome/renderer/safe_browsing/mock_feature_extractor_clock.h"
 #include "chrome/renderer/safe_browsing/test_utils.h"
 #include "content/public/test/render_view_fake_resources_test.h"
 #include "testing/gmock/include/gmock/gmock.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebString.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebFrame.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebScriptSource.h"
+#include "third_party/WebKit/public/platform/WebString.h"
+#include "third_party/WebKit/public/web/WebFrame.h"
+#include "third_party/WebKit/public/web/WebScriptSource.h"
 
 using ::testing::DoAll;
 using ::testing::Invoke;
@@ -45,7 +45,7 @@ class PhishingDOMFeatureExtractorTest
  protected:
   PhishingDOMFeatureExtractorTest()
       : content::RenderViewFakeResourcesTest(),
-        ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {}
+        weak_factory_(this) {}
 
   virtual ~PhishingDOMFeatureExtractorTest() {}
 

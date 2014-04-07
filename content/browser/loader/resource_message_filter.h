@@ -8,7 +8,7 @@
 #include "base/memory/scoped_ptr.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/browser_message_filter.h"
-#include "webkit/glue/resource_type.h"
+#include "webkit/common/resource_type.h"
 
 namespace fileapi {
 class FileSystemContext;
@@ -63,15 +63,15 @@ class CONTENT_EXPORT ResourceMessageFilter : public BrowserMessageFilter {
   }
 
   ChromeAppCacheService* appcache_service() const {
-    return appcache_service_;
+    return appcache_service_.get();
   }
 
   ChromeBlobStorageContext* blob_storage_context() const {
-    return blob_storage_context_;
+    return blob_storage_context_.get();
   }
 
   fileapi::FileSystemContext* file_system_context() const {
-    return file_system_context_;
+    return file_system_context_.get();
   }
 
   // Returns the net::URLRequestContext for the given request.

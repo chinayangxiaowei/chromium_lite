@@ -6,7 +6,7 @@
 
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"  // for debug output only.
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "base/values.h"
 // Needed only for debug output (ConnectionTypeToString).
 #include "chrome/browser/chromeos/cros/native_network_constants.h"
@@ -121,7 +121,6 @@ bool NetworkParser::UpdateStatus(const std::string& key,
   PropertyIndex found_index = mapper().Get(key);
   if (index)
     *index = found_index;
-  network->UpdatePropertyMap(found_index, &value);
   if (!ParseValue(found_index, value, network)) {
     VLOG(3) << "Unhandled key '" << key << "' in Network: " << network->name()
             << " ID: " << network->unique_id()
@@ -194,13 +193,6 @@ bool NetworkParser::ParseValue(PropertyIndex index,
       if (!value.GetAsBoolean(&auto_connect))
         return false;
       network->set_auto_connect(auto_connect);
-      return true;
-    }
-    case PROPERTY_INDEX_PROXY_CONFIG: {
-      std::string proxy_config;
-      if (!value.GetAsString(&proxy_config))
-        return false;
-      network->set_proxy_config(proxy_config);
       return true;
     }
     case PROPERTY_INDEX_UI_DATA: {

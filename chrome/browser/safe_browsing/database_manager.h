@@ -15,14 +15,14 @@
 #include <vector>
 
 #include "base/callback.h"
-#include "base/hash_tables.h"
+#include "base/containers/hash_tables.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/synchronization/lock.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "chrome/browser/safe_browsing/protocol_manager.h"
 #include "chrome/browser/safe_browsing/safe_browsing_util.h"
-#include "googleurl/src/gurl.h"
+#include "url/gurl.h"
 
 class SafeBrowsingService;
 class SafeBrowsingDatabase;
@@ -146,6 +146,13 @@ class SafeBrowsingDatabaseManager
   virtual bool CheckExtensionIDs(const std::set<std::string>& extension_ids,
                                  Client* client);
 
+  // Check if the given url is on the side-effect free whitelist.
+  // Can be called on any thread. Returns false if the check cannot be performed
+  // (e.g. because we are disabled or because of an invalid scheme in the URL).
+  // Otherwise, returns true if the URL is on the whitelist based on matching
+  // the hash prefix only (so there may be false positives).
+  virtual bool CheckSideEffectFreeWhitelistUrl(const GURL& url);
+
   // Check if the |url| matches any of the full-length hashes from the
   // client-side phishing detection whitelist.  Returns true if there was a
   // match and false otherwise.  To make sure we are conservative we will return
@@ -164,6 +171,9 @@ class SafeBrowsingDatabaseManager
   // To make sure we are conservative we will return true if an error occurs.
   // This method is expected to be called on the IO thread.
   virtual bool MatchDownloadWhitelistString(const std::string& str);
+
+  // Check if the CSD malware IP matching kill switch is turned on.
+  virtual bool IsMalwareKillSwitchOn();
 
   // Called on the IO thread to cancel a pending check if the result is no
   // longer needed.
@@ -367,6 +377,9 @@ class SafeBrowsingDatabaseManager
 
   // Indicate if the extension blacklist should be enabled.
   bool enable_extension_blacklist_;
+
+  // Indicate if the side effect free whitelist should be enabled.
+  bool enable_side_effect_free_whitelist_;
 
   // The SafeBrowsing thread that runs database operations.
   //

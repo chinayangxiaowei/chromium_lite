@@ -6,7 +6,7 @@
 #include "base/files/file_path.h"
 #include "base/path_service.h"
 #include "base/prefs/pref_service.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/extensions/crx_installer.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/extensions/extension_service.h"
@@ -20,9 +20,9 @@
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/plugin_service.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/webplugininfo.h"
 #include "content/public/test/browser_test_utils.h"
 #include "net/dns/mock_host_resolver.h"
-#include "webkit/plugins/webplugininfo.h"
 
 using content::PluginService;
 using content::WebContents;
@@ -46,6 +46,14 @@ class NaClExtensionTest : public ExtensionBrowserTest {
     INSTALL_TYPE_FROM_WEBSTORE,
     INSTALL_TYPE_NON_WEBSTORE,
   };
+  enum PluginType {
+    PLUGIN_TYPE_NONE = 0,
+    PLUGIN_TYPE_EMBED = 1,
+    PLUGIN_TYPE_CONTENT_HANDLER = 2,
+    PLUGIN_TYPE_ALL = PLUGIN_TYPE_EMBED |
+                      PLUGIN_TYPE_CONTENT_HANDLER,
+  };
+
 
   const Extension* InstallExtension(const base::FilePath& file_path,
                                     InstallType install_type) {
@@ -99,13 +107,13 @@ class NaClExtensionTest : public ExtensionBrowserTest {
   bool IsNaClPluginLoaded() {
     base::FilePath path;
     if (PathService::Get(chrome::FILE_NACL_PLUGIN, &path)) {
-      webkit::WebPluginInfo info;
+      content::WebPluginInfo info;
       return PluginService::GetInstance()->GetPluginInfoByPath(path, &info);
     }
     return false;
   }
 
-  void CheckPluginsCreated(const GURL& url, bool should_create) {
+  void CheckPluginsCreated(const GURL& url, PluginType expected_to_succeed) {
     ui_test_utils::NavigateToURL(browser(), url);
     // Don't run tests if the NaCl plugin isn't loaded.
     if (!IsNaClPluginLoaded())
@@ -124,12 +132,16 @@ class NaClExtensionTest : public ExtensionBrowserTest {
         "window.domAutomationController.send(ContentHandlerPluginCreated());",
         &content_handler_plugin_created));
 
-    EXPECT_EQ(should_create, embedded_plugin_created);
-    EXPECT_EQ(should_create, content_handler_plugin_created);
+    EXPECT_EQ(embedded_plugin_created,
+              (expected_to_succeed & PLUGIN_TYPE_EMBED) != 0);
+    EXPECT_EQ(content_handler_plugin_created,
+              (expected_to_succeed & PLUGIN_TYPE_CONTENT_HANDLER) != 0);
   }
 
-  void CheckPluginsCreated(const Extension* extension, bool should_create) {
-    CheckPluginsCreated(extension->GetResourceURL("test.html"), should_create);
+  void CheckPluginsCreated(const Extension* extension,
+                           PluginType expected_to_succeed) {
+    CheckPluginsCreated(extension->GetResourceURL("test.html"),
+                        expected_to_succeed);
   }
 
 };
@@ -140,7 +152,7 @@ IN_PROC_BROWSER_TEST_F(NaClExtensionTest, WebStoreExtension) {
 
   const Extension* extension = InstallExtension(INSTALL_TYPE_FROM_WEBSTORE);
   ASSERT_TRUE(extension);
-  CheckPluginsCreated(extension, true);
+  CheckPluginsCreated(extension, PLUGIN_TYPE_ALL);
 }
 
 // Test that the NaCl plugin is blocked for non-Webstore extensions.
@@ -149,7 +161,7 @@ IN_PROC_BROWSER_TEST_F(NaClExtensionTest, NonWebStoreExtension) {
 
   const Extension* extension = InstallExtension(INSTALL_TYPE_NON_WEBSTORE);
   ASSERT_TRUE(extension);
-  CheckPluginsCreated(extension, false);
+  CheckPluginsCreated(extension, PLUGIN_TYPE_NONE);
 }
 
 // Test that the NaCl plugin isn't blocked for component extensions.
@@ -159,7 +171,7 @@ IN_PROC_BROWSER_TEST_F(NaClExtensionTest, ComponentExtension) {
   const Extension* extension = InstallExtension(INSTALL_TYPE_COMPONENT);
   ASSERT_TRUE(extension);
   ASSERT_EQ(extension->location(), Manifest::COMPONENT);
-  CheckPluginsCreated(extension, true);
+  CheckPluginsCreated(extension, PLUGIN_TYPE_ALL);
 }
 
 // Test that the NaCl plugin isn't blocked for unpacked extensions.
@@ -169,17 +181,19 @@ IN_PROC_BROWSER_TEST_F(NaClExtensionTest, UnpackedExtension) {
   const Extension* extension = InstallExtension(INSTALL_TYPE_UNPACKED);
   ASSERT_TRUE(extension);
   ASSERT_EQ(extension->location(), Manifest::UNPACKED);
-  CheckPluginsCreated(extension, true);
+  CheckPluginsCreated(extension, PLUGIN_TYPE_ALL);
 }
 
-// Test that the NaCl plugin is blocked for non chrome-extension urls.
+// Test that the NaCl plugin is blocked for non chrome-extension urls, except
+// if it's a content (MIME type) handler.
 IN_PROC_BROWSER_TEST_F(NaClExtensionTest, NonExtensionScheme) {
   ASSERT_TRUE(test_server()->Start());
 
   const Extension* extension = InstallExtension(INSTALL_TYPE_FROM_WEBSTORE);
   ASSERT_TRUE(extension);
   CheckPluginsCreated(
-      test_server()->GetURL("files/extensions/native_client/test.html"), false);
+      test_server()->GetURL("files/extensions/native_client/test.html"),
+      PLUGIN_TYPE_CONTENT_HANDLER);
 }
 
 // Test that NaCl plugin isn't blocked for hosted app URLs.
@@ -196,7 +210,7 @@ IN_PROC_BROWSER_TEST_F(NaClExtensionTest, HostedApp) {
 
   const Extension* extension = InstallHostedApp();
   ASSERT_TRUE(extension);
-  CheckPluginsCreated(url, true);
+  CheckPluginsCreated(url, PLUGIN_TYPE_ALL);
 }
 
 }  // namespace

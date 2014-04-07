@@ -4,12 +4,11 @@
 
 #include "ash/display/output_configurator_animation.h"
 
-#include "ash/display/display_error_dialog.h"
 #include "ash/shell.h"
 #include "ash/shell_window_ids.h"
 #include "base/bind.h"
 #include "base/stl_util.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "ui/aura/root_window.h"
 #include "ui/aura/window.h"
 #include "ui/compositor/layer.h"
@@ -44,9 +43,9 @@ class CallbackRunningObserver {
   void OnSingleTaskCompleted() {
     completed_counter_++;
     if (completed_counter_ >= observer_list_.size()) {
-      MessageLoopForUI::current()->DeleteSoon(FROM_HERE, this);
+      base::MessageLoopForUI::current()->DeleteSoon(FROM_HERE, this);
       if (!animation_aborted_)
-        MessageLoopForUI::current()->PostTask(FROM_HERE, callback_);
+        base::MessageLoopForUI::current()->PostTask(FROM_HERE, callback_);
     }
   }
 
@@ -216,7 +215,7 @@ void OutputConfiguratorAnimation::OnDisplayModeChangeFailed(
 }
 
 void OutputConfiguratorAnimation::ClearHidingLayers() {
-  if (timer_.get()) {
+  if (timer_) {
     timer_->Stop();
     timer_.reset();
   }

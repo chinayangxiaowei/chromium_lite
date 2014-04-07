@@ -5,8 +5,10 @@
 #ifndef UI_APP_LIST_VIEWS_APP_LIST_MAIN_VIEW_H_
 #define UI_APP_LIST_VIEWS_APP_LIST_MAIN_VIEW_H_
 
+#include <string>
+
 #include "base/memory/scoped_vector.h"
-#include "base/timer.h"
+#include "base/timer/timer.h"
 #include "ui/app_list/apps_grid_view_delegate.h"
 #include "ui/app_list/search_box_view_delegate.h"
 #include "ui/app_list/search_result_list_view_delegate.h"
@@ -18,6 +20,7 @@ class Widget;
 
 namespace app_list {
 
+class ApplicationDragAndDropHost;
 class AppListModel;
 class AppListItemModel;
 class AppListViewDelegate;
@@ -45,7 +48,12 @@ class AppListMainView : public views::View,
 
   void Prerender();
 
-  SearchBoxView* search_box_view() { return search_box_view_; }
+  SearchBoxView* search_box_view() const { return search_box_view_; }
+
+  // If |drag_and_drop_host| is not NULL it will be called upon drag and drop
+  // operations outside the application list.
+  void SetDragAndDropHostOfCurrentAppList(
+      ApplicationDragAndDropHost* drag_and_drop_host);
 
  private:
   class IconLoader;
@@ -63,16 +71,21 @@ class AppListMainView : public views::View,
 
   // Overridden from AppsGridViewDelegate:
   virtual void ActivateApp(AppListItemModel* item, int event_flags) OVERRIDE;
+  virtual void GetShortcutPathForApp(
+      const std::string& app_id,
+      const base::Callback<void(const base::FilePath&)>& callback) OVERRIDE;
 
   // Overridden from SearchBoxViewDelegate:
   virtual void QueryChanged(SearchBoxView* sender) OVERRIDE;
 
   // Overridden from SearchResultListViewDelegate:
-  virtual void OpenResult(const SearchResult& result,
+  virtual void OpenResult(SearchResult* result,
                           int event_flags) OVERRIDE;
-  virtual void InvokeResultAction(const SearchResult& result,
+  virtual void InvokeResultAction(SearchResult* result,
                                   int action_index,
                                   int event_flags) OVERRIDE;
+  virtual void OnResultInstalled(SearchResult* result) OVERRIDE;
+  virtual void OnResultUninstalled(SearchResult* result) OVERRIDE;
 
   AppListViewDelegate* delegate_;
   AppListModel* model_;

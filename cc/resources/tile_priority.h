@@ -5,6 +5,7 @@
 #ifndef CC_RESOURCES_TILE_PRIORITY_H_
 #define CC_RESOURCES_TILE_PRIORITY_H_
 
+#include <algorithm>
 #include <limits>
 
 #include "base/memory/ref_counted.h"
@@ -41,40 +42,20 @@ scoped_ptr<base::Value> TileResolutionAsValue(
 
 struct CC_EXPORT TilePriority {
   TilePriority()
-     : is_live(false),
-       resolution(NON_IDEAL_RESOLUTION),
-       time_to_visible_in_seconds(std::numeric_limits<float>::infinity()),
-       distance_to_visible_in_pixels(std::numeric_limits<float>::infinity()) {}
+      : resolution(NON_IDEAL_RESOLUTION),
+        required_for_activation(false),
+        time_to_visible_in_seconds(std::numeric_limits<float>::infinity()),
+        distance_to_visible_in_pixels(std::numeric_limits<float>::infinity()) {}
 
-  TilePriority(
-    TileResolution resolution,
-    float time_to_visible_in_seconds,
-    float distance_to_visible_in_pixels)
-     : is_live(true),
-       resolution(resolution),
-       time_to_visible_in_seconds(time_to_visible_in_seconds),
-       distance_to_visible_in_pixels(distance_to_visible_in_pixels) {}
+  TilePriority(TileResolution resolution,
+               float time_to_visible_in_seconds,
+               float distance_to_visible_in_pixels)
+      : resolution(resolution),
+        required_for_activation(false),
+        time_to_visible_in_seconds(time_to_visible_in_seconds),
+        distance_to_visible_in_pixels(distance_to_visible_in_pixels) {}
 
   TilePriority(const TilePriority& active, const TilePriority& pending) {
-    if (!pending.is_live) {
-      if (!active.is_live) {
-        is_live = false;
-        return;
-      }
-      is_live = true;
-      resolution = active.resolution;
-      time_to_visible_in_seconds = active.time_to_visible_in_seconds;
-      distance_to_visible_in_pixels = active.distance_to_visible_in_pixels;
-      return;
-    } else if (!active.is_live) {
-      is_live = true;
-      resolution = pending.resolution;
-      time_to_visible_in_seconds = pending.time_to_visible_in_seconds;
-      distance_to_visible_in_pixels = pending.distance_to_visible_in_pixels;
-      return;
-    }
-
-    is_live = true;
     if (active.resolution == HIGH_RESOLUTION ||
         pending.resolution == HIGH_RESOLUTION)
       resolution = HIGH_RESOLUTION;
@@ -83,6 +64,9 @@ struct CC_EXPORT TilePriority {
       resolution = LOW_RESOLUTION;
     else
       resolution = NON_IDEAL_RESOLUTION;
+
+    required_for_activation =
+        active.required_for_activation || pending.required_for_activation;
 
     time_to_visible_in_seconds =
       std::min(active.time_to_visible_in_seconds,
@@ -120,8 +104,6 @@ struct CC_EXPORT TilePriority {
                                         const gfx::RectF& target_bounds);
 
   bool operator ==(const TilePriority& other) const {
-    if (is_live != other.is_live) return false;
-    if (!is_live) return true;  // All non-live priorities are the same.
     return resolution == other.resolution &&
         time_to_visible_in_seconds == other.time_to_visible_in_seconds &&
         distance_to_visible_in_pixels == other.distance_to_visible_in_pixels;
@@ -133,9 +115,8 @@ struct CC_EXPORT TilePriority {
     return !(*this == other);
   }
 
-  // If a tile is not live, then all other fields are invalid.
-  bool is_live;
   TileResolution resolution;
+  bool required_for_activation;
   float time_to_visible_in_seconds;
   float distance_to_visible_in_pixels;
 
@@ -145,18 +126,21 @@ struct CC_EXPORT TilePriority {
 
 enum TileMemoryLimitPolicy {
   // Nothing.
-  ALLOW_NOTHING,
+  ALLOW_NOTHING = 0,
 
   // You might be made visible, but you're not being interacted with.
-  ALLOW_ABSOLUTE_MINIMUM, // Tall.
+  ALLOW_ABSOLUTE_MINIMUM = 1,  // Tall.
 
   // You're being interacted with, but we're low on memory.
-  ALLOW_PREPAINT_ONLY, // Grande.
+  ALLOW_PREPAINT_ONLY = 2,  // Grande.
 
   // You're the only thing in town. Go crazy.
-  ALLOW_ANYTHING, // Venti.
+  ALLOW_ANYTHING = 3,  // Venti.
 
-  // Be sure to update TreePriorityAsValue when adding new fields.
+  NUM_TILE_MEMORY_LIMIT_POLICIES = 4,
+
+  // NOTE: Be sure to update TreePriorityAsValue and kBinPolicyMap when adding
+  // or reordering fields.
 };
 scoped_ptr<base::Value> TileMemoryLimitPolicyAsValue(
     TileMemoryLimitPolicy policy);
@@ -173,16 +157,17 @@ scoped_ptr<base::Value> TreePriorityAsValue(TreePriority prio);
 class GlobalStateThatImpactsTilePriority {
  public:
   GlobalStateThatImpactsTilePriority()
-    : memory_limit_policy(ALLOW_NOTHING)
-    , memory_limit_in_bytes(0)
-    , unused_memory_limit_in_bytes(0)
-    , tree_priority(SAME_PRIORITY_FOR_BOTH_TREES) {
-  }
+      : memory_limit_policy(ALLOW_NOTHING),
+        memory_limit_in_bytes(0),
+        unused_memory_limit_in_bytes(0),
+        num_resources_limit(0),
+        tree_priority(SAME_PRIORITY_FOR_BOTH_TREES) {}
 
   TileMemoryLimitPolicy memory_limit_policy;
 
   size_t memory_limit_in_bytes;
   size_t unused_memory_limit_in_bytes;
+  size_t num_resources_limit;
 
   TreePriority tree_priority;
 

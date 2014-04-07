@@ -4,7 +4,7 @@
 
 #include "content/renderer/media/mock_media_stream_dispatcher.h"
 
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "content/public/common/media_stream_request.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -49,7 +49,9 @@ void MockMediaStreamDispatcher::GenerateStream(
   ++request_stream_counter_;
 }
 
-void MockMediaStreamDispatcher::CancelGenerateStream(int request_id) {
+void MockMediaStreamDispatcher::CancelGenerateStream(
+  int request_id,
+  const base::WeakPtr<MediaStreamDispatcherEventHandler>& event_handler) {
   EXPECT_EQ(request_id, request_id_);
 }
 

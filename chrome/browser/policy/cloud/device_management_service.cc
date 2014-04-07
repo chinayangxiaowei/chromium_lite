@@ -8,9 +8,9 @@
 
 #include "base/bind.h"
 #include "base/compiler_specific.h"
-#include "base/message_loop.h"
-#include "base/message_loop_proxy.h"
-#include "base/stringprintf.h"
+#include "base/message_loop/message_loop.h"
+#include "base/message_loop/message_loop_proxy.h"
+#include "base/strings/stringprintf.h"
 #include "base/sys_info.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/net/basic_http_user_agent_settings.h"
@@ -18,7 +18,6 @@
 #include "chrome/common/chrome_version_info.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/common/content_client.h"
-#include "googleurl/src/gurl.h"
 #include "net/base/escape.h"
 #include "net/base/load_flags.h"
 #include "net/base/net_errors.h"
@@ -32,6 +31,7 @@
 #include "net/url_request/url_request_context.h"
 #include "net/url_request/url_request_context_getter.h"
 #include "net/url_request/url_request_status.h"
+#include "url/gurl.h"
 
 #if defined(OS_CHROMEOS)
 #include "chrome/browser/chromeos/system/statistics_provider.h"
@@ -144,8 +144,12 @@ const char* JobTypeToRequestType(DeviceManagementRequestJob::JobType type) {
       return dm_protocol::kValueRequestRegister;
     case DeviceManagementRequestJob::TYPE_POLICY_FETCH:
       return dm_protocol::kValueRequestPolicy;
+    case DeviceManagementRequestJob::TYPE_API_AUTH_CODE_FETCH:
+      return dm_protocol::kValueRequestApiAuthorization;
     case DeviceManagementRequestJob::TYPE_UNREGISTRATION:
       return dm_protocol::kValueRequestUnregister;
+    case DeviceManagementRequestJob::TYPE_UPLOAD_CERTIFICATE:
+      return dm_protocol::kValueRequestUploadCertificate;
   }
   NOTREACHED() << "Invalid job type " << type;
   return "";
@@ -357,7 +361,8 @@ void DeviceManagementRequestJobImpl::HandleResponse(
   if (status.status() != net::URLRequestStatus::SUCCESS) {
     LOG(WARNING) << "DMServer request failed, status: " << status.status()
                  << ", error: " << status.error();
-    ReportError(DM_STATUS_REQUEST_FAILED);
+    em::DeviceManagementResponse dummy_response;
+    callback_.Run(DM_STATUS_REQUEST_FAILED, status.error(), dummy_response);
     return;
   }
 
@@ -371,7 +376,7 @@ void DeviceManagementRequestJobImpl::HandleResponse(
         ReportError(DM_STATUS_RESPONSE_DECODING_ERROR);
         return;
       }
-      callback_.Run(DM_STATUS_SUCCESS, response);
+      callback_.Run(DM_STATUS_SUCCESS, net::OK, response);
       return;
     }
     case kInvalidArgument:
@@ -481,7 +486,7 @@ void DeviceManagementRequestJobImpl::PrepareRetry() {
 
 void DeviceManagementRequestJobImpl::ReportError(DeviceManagementStatus code) {
   em::DeviceManagementResponse dummy_response;
-  callback_.Run(code, dummy_response);
+  callback_.Run(code, net::OK, dummy_response);
 }
 
 DeviceManagementRequestJob::~DeviceManagementRequestJob() {}
@@ -552,7 +557,7 @@ DeviceManagementRequestJob* DeviceManagementService::CreateJob(
 void DeviceManagementService::ScheduleInitialization(int64 delay_milliseconds) {
   if (initialized_)
     return;
-  MessageLoop::current()->PostDelayedTask(
+  base::MessageLoop::current()->PostDelayedTask(
       FROM_HERE,
       base::Bind(&DeviceManagementService::Initialize,
                  weak_ptr_factory_.GetWeakPtr()),
@@ -562,7 +567,7 @@ void DeviceManagementService::ScheduleInitialization(int64 delay_milliseconds) {
 void DeviceManagementService::Initialize() {
   if (initialized_)
     return;
-  DCHECK(!request_context_getter_);
+  DCHECK(!request_context_getter_.get());
   request_context_getter_ = new DeviceManagementRequestContextGetter(
       g_browser_process->system_request_context());
   initialized_ = true;
@@ -587,7 +592,7 @@ DeviceManagementService::DeviceManagementService(
     const std::string& server_url)
     : server_url_(server_url),
       initialized_(false),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_ptr_factory_(this)) {
+      weak_ptr_factory_(this) {
 }
 
 void DeviceManagementService::StartJob(DeviceManagementRequestJobImpl* job) {

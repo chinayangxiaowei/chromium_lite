@@ -7,8 +7,9 @@
 #include <sys/system_properties.h>
 
 #include "base/logging.h"
-#include "base/string_piece.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_piece.h"
+#include "base/strings/stringprintf.h"
 
 namespace {
 
@@ -16,9 +17,9 @@ namespace {
 // cannot be acquired.
 // TODO(dfalcantara): Keep this reasonably up to date with the latest publicly
 //                    available version of Android.
-static const int kDefaultAndroidMajorVersion = 4;
-static const int kDefaultAndroidMinorVersion = 0;
-static const int kDefaultAndroidBugfixVersion = 3;
+const int kDefaultAndroidMajorVersion = 4;
+const int kDefaultAndroidMinorVersion = 3;
+const int kDefaultAndroidBugfixVersion = 0;
 
 // Parse out the OS version numbers from the system properties.
 void ParseOSVersionNumbers(const char* os_version_str,
@@ -132,6 +133,12 @@ std::string SysInfo::GetDeviceName() {
   char device_model_str[PROP_VALUE_MAX];
   __system_property_get("ro.product.model", device_model_str);
   return std::string(device_model_str);
+}
+
+std::string SysInfo::OperatingSystemVersion() {
+  int32 major, minor, bugfix;
+  OperatingSystemVersionNumbers(&major, &minor, &bugfix);
+  return StringPrintf("%d.%d.%d", major, minor, bugfix);
 }
 
 void SysInfo::OperatingSystemVersionNumbers(int32* major_version,

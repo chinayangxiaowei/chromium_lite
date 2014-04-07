@@ -6,20 +6,17 @@
 #define CHROME_BROWSER_INFOBARS_INFOBAR_DELEGATE_H_
 
 #include "base/basictypes.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
+#include "chrome/browser/infobars/infobar_service.h"
 #include "ui/base/window_open_disposition.h"
 
-class AlternateNavInfoBarDelegate;
 class AutoLoginInfoBarDelegate;
 class ConfirmInfoBarDelegate;
 class ExtensionInfoBarDelegate;
 class InfoBar;
-class InfoBarService;
 class InsecureContentInfoBarDelegate;
 class MediaStreamInfoBarDelegate;
-class PluginInstallerInfoBarDelegate;
 class RegisterProtocolHandlerInfoBarDelegate;
-class SavePasswordInfoBarDelegate;
 class ScreenCaptureInfoBarDelegate;
 class ThemeInstalledInfoBarDelegate;
 class ThreeDAPIInfoBarDelegate;
@@ -27,9 +24,6 @@ class TranslateInfoBarDelegate;
 
 namespace gfx {
 class Image;
-}
-namespace content {
-struct LoadCommittedDetails;
 }
 
 // An interface implemented by objects wishing to control an InfoBar.
@@ -48,11 +42,13 @@ class InfoBarDelegate {
 
   enum InfoBarAutomationType {
     CONFIRM_INFOBAR,
-    ONE_CLICK_LOGIN_INFOBAR,
     PASSWORD_INFOBAR,
     RPH_INFOBAR,
     UNKNOWN_INFOBAR,
   };
+
+  // Value to use when the InfoBar has no icon to show.
+  static const int kNoIconID;
 
   virtual ~InfoBarDelegate();
 
@@ -85,9 +81,9 @@ class InfoBarDelegate {
   // Called when the user clicks on the close button to dismiss the infobar.
   virtual void InfoBarDismissed();
 
-  // Return the icon to be shown for this InfoBar. If the returned Image is
-  // NULL, no icon is shown.
-  virtual gfx::Image* GetIcon() const;
+  // Return the resource ID of the icon to be shown for this InfoBar.  If the
+  // value is equal to |kNoIconID|, no icon is shown.
+  virtual int GetIconID() const;
 
   // Returns the type of the infobar.  The type determines the appearance (such
   // as background color) of the infobar.
@@ -106,10 +102,18 @@ class InfoBarDelegate {
   virtual ThreeDAPIInfoBarDelegate* AsThreeDAPIInfoBarDelegate();
   virtual TranslateInfoBarDelegate* AsTranslateInfoBarDelegate();
 
+  // Return the icon to be shown for this InfoBar. If the returned Image is
+  // empty, no icon is shown.
+  virtual gfx::Image GetIcon() const;
+
+  content::WebContents* web_contents() {
+    return owner_ ? owner_->web_contents() : NULL;
+  }
+
  protected:
   // If |contents| is non-NULL, its active entry's unique ID will be stored
   // using StoreActiveEntryUniqueID automatically.
-  explicit InfoBarDelegate(InfoBarService* infobar_service);
+  explicit InfoBarDelegate(InfoBarService* owner);
 
   // Store the unique id for the active entry in our WebContents, to be used
   // later upon navigation to determine if this InfoBarDelegate should be

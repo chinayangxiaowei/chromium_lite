@@ -5,7 +5,7 @@
 #include "content/browser/download/download_stats.h"
 
 #include "base/metrics/histogram.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "content/browser/download/download_resource_handler.h"
 #include "content/public/browser/download_interrupt_reasons.h"
 #include "net/http/http_content_disposition.h"
@@ -145,19 +145,40 @@ void RecordDownloadInterrupted(DownloadInterruptReason reason,
   UMA_HISTOGRAM_BOOLEAN("Download.InterruptedUnknownSize", unknown_size);
 }
 
+void RecordDangerousDownloadAccept(DownloadDangerType danger_type) {
+  UMA_HISTOGRAM_ENUMERATION("Download.DangerousDownloadValidated",
+                            danger_type,
+                            DOWNLOAD_DANGER_TYPE_MAX);
+}
+
+void RecordDangerousDownloadDiscard(DownloadDiscardReason reason,
+                                    DownloadDangerType danger_type) {
+  switch (reason) {
+    case DOWNLOAD_DISCARD_DUE_TO_USER_ACTION:
+      UMA_HISTOGRAM_ENUMERATION(
+          "Download.UserDiscard", danger_type, DOWNLOAD_DANGER_TYPE_MAX);
+      break;
+    case DOWNLOAD_DISCARD_DUE_TO_SHUTDOWN:
+      UMA_HISTOGRAM_ENUMERATION(
+          "Download.Discard", danger_type, DOWNLOAD_DANGER_TYPE_MAX);
+      break;
+    default:
+      NOTREACHED();
+  }
+}
+
 void RecordDownloadWriteSize(size_t data_len) {
-  RecordDownloadCount(WRITE_SIZE_COUNT);
   int max = 1024 * 1024;  // One Megabyte.
   UMA_HISTOGRAM_CUSTOM_COUNTS("Download.WriteSize", data_len, 1, max, 256);
 }
 
 void RecordDownloadWriteLoopCount(int count) {
-  RecordDownloadCount(WRITE_LOOP_COUNT);
   UMA_HISTOGRAM_ENUMERATION("Download.WriteLoopCount", count, 20);
 }
 
 void RecordAcceptsRanges(const std::string& accepts_ranges,
-                         int64 download_len) {
+                         int64 download_len,
+                         const std::string& etag) {
   int64 max = 1024 * 1024 * 1024;  // One Terabyte.
   download_len /= 1024;  // In Kilobytes
   static const int kBuckets = 50;
@@ -174,6 +195,10 @@ void RecordAcceptsRanges(const std::string& accepts_ranges,
                                 1,
                                 max,
                                 kBuckets);
+    // ETags that start with "W/" are considered weak ETags which don't imply
+    // byte-wise equality.
+    if (!StartsWithASCII(etag, "w/", false))
+      RecordDownloadCount(STRONG_ETAG_AND_ACCEPTS_RANGES);
   } else {
     UMA_HISTOGRAM_CUSTOM_COUNTS("Download.AcceptRangesMissingOrInvalid.KBytes",
                                 download_len,
@@ -305,8 +330,8 @@ void RecordDownloadContentDisposition(
     const std::string& content_disposition_string) {
   if (content_disposition_string.empty())
     return;
-  net::HttpContentDisposition content_disposition(
-      content_disposition_string, "");
+  net::HttpContentDisposition content_disposition(content_disposition_string,
+                                                  std::string());
   int result = content_disposition.parse_result_flags();
 
   bool is_valid = !content_disposition.filename().empty();

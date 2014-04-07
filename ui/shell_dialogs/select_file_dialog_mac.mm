@@ -17,8 +17,8 @@
 #include "base/mac/foundation_util.h"
 #include "base/mac/mac_util.h"
 #include "base/mac/scoped_cftyperef.h"
-#import "base/memory/scoped_nsobject.h"
-#include "base/sys_string_conversions.h"
+#import "base/mac/scoped_nsobject.h"
+#include "base/strings/sys_string_conversions.h"
 #include "base/threading/thread_restrictions.h"
 #include "grit/ui_strings.h"
 #import "ui/base/cocoa/nib_loading.h"
@@ -29,8 +29,7 @@ namespace {
 const int kFileTypePopupTag = 1234;
 
 CFStringRef CreateUTIFromExtension(const base::FilePath::StringType& ext) {
-  base::mac::ScopedCFTypeRef<CFStringRef> ext_cf(
-      base::SysUTF8ToCFStringRef(ext));
+  base::ScopedCFTypeRef<CFStringRef> ext_cf(base::SysUTF8ToCFStringRef(ext));
   return UTTypeCreatePreferredIdentifierForTag(
       kUTTagClassFilenameExtension, ext_cf.get(), NULL);
 }
@@ -83,7 +82,7 @@ class SelectFileDialogImpl : public ui::SelectFileDialog {
   // |params| is user data we pass back via the Listener interface.
   virtual void SelectFileImpl(
       Type type,
-      const string16& title,
+      const base::string16& title,
       const base::FilePath& default_path,
       const FileTypeInfo* file_types,
       int file_type_index,
@@ -101,7 +100,7 @@ class SelectFileDialogImpl : public ui::SelectFileDialog {
   virtual bool HasMultipleFileTypeChoicesImpl() OVERRIDE;
 
   // The bridge for results from Cocoa to return to us.
-  scoped_nsobject<SelectFileDialogBridge> bridge_;
+  base::scoped_nsobject<SelectFileDialogBridge> bridge_;
 
   // A map from file dialogs to the |params| user data associated with them.
   std::map<NSSavePanel*, void*> params_map_;
@@ -171,7 +170,7 @@ bool SelectFileDialogImpl::ShouldEnableFilename(NSSavePanel* dialog,
 
 void SelectFileDialogImpl::SelectFileImpl(
     Type type,
-    const string16& title,
+    const base::string16& title,
     const base::FilePath& default_path,
     const FileTypeInfo* file_types,
     int file_type_index,
@@ -179,6 +178,7 @@ void SelectFileDialogImpl::SelectFileImpl(
     gfx::NativeWindow owning_window,
     void* params) {
   DCHECK(type == SELECT_FOLDER ||
+         type == SELECT_UPLOAD_FOLDER ||
          type == SELECT_OPEN_FILE ||
          type == SELECT_OPEN_MULTI_FILE ||
          type == SELECT_SAVEAS_FILE);
@@ -201,7 +201,7 @@ void SelectFileDialogImpl::SelectFileImpl(
     // The file dialog is going to do a ton of stats anyway. Not much
     // point in eliminating this one.
     base::ThreadRestrictions::ScopedAllowIO allow_io;
-    if (file_util::DirectoryExists(default_path)) {
+    if (base::DirectoryExists(default_path)) {
       default_dir = base::SysUTF8ToNSString(default_path.value());
     } else {
       default_dir = base::SysUTF8ToNSString(default_path.DirName().value());
@@ -226,7 +226,7 @@ void SelectFileDialogImpl::SelectFileImpl(
         const std::vector<base::FilePath::StringType>& ext_list =
             file_types->extensions[i];
         for (size_t j = 0; j < ext_list.size(); ++j) {
-          base::mac::ScopedCFTypeRef<CFStringRef> uti(
+          base::ScopedCFTypeRef<CFStringRef> uti(
               CreateUTIFromExtension(ext_list[j]));
           [file_type_set addObject:base::mac::CFToNSCast(uti.get())];
 
@@ -234,7 +234,7 @@ void SelectFileDialogImpl::SelectFileImpl(
           // back to the original extension correctly. This occurs with dynamic
           // UTIs on 10.7 and 10.8.
           // See http://crbug.com/148840, http://openradar.me/12316273
-          base::mac::ScopedCFTypeRef<CFStringRef> ext_cf(
+          base::ScopedCFTypeRef<CFStringRef> ext_cf(
               base::SysUTF8ToCFStringRef(ext_list[j]));
           [file_type_set addObject:base::mac::CFToNSCast(ext_cf.get())];
         }
@@ -275,11 +275,13 @@ void SelectFileDialogImpl::SelectFileImpl(
     else
       [open_dialog setAllowsMultipleSelection:NO];
 
-    if (type == SELECT_FOLDER) {
+    if (type == SELECT_FOLDER || type == SELECT_UPLOAD_FOLDER) {
       [open_dialog setCanChooseFiles:NO];
       [open_dialog setCanChooseDirectories:YES];
       [open_dialog setCanCreateDirectories:YES];
-      NSString *prompt = l10n_util::GetNSString(IDS_SELECT_FOLDER_BUTTON_TITLE);
+      NSString *prompt = (type == SELECT_UPLOAD_FOLDER)
+          ? l10n_util::GetNSString(IDS_SELECT_UPLOAD_FOLDER_BUTTON_TITLE)
+          : l10n_util::GetNSString(IDS_SELECT_FOLDER_BUTTON_TITLE);
       [open_dialog setPrompt:prompt];
     } else {
       [open_dialog setCanChooseFiles:YES];
@@ -340,9 +342,9 @@ NSView* SelectFileDialogImpl::GetAccessoryView(const FileTypeInfo* file_types,
       const std::vector<base::FilePath::StringType>& ext_list =
           file_types->extensions[type];
       DCHECK(!ext_list.empty());
-      base::mac::ScopedCFTypeRef<CFStringRef> uti(
+      base::ScopedCFTypeRef<CFStringRef> uti(
           CreateUTIFromExtension(ext_list[0]));
-      base::mac::ScopedCFTypeRef<CFStringRef> description(
+      base::ScopedCFTypeRef<CFStringRef> description(
           UTTypeCopyDescription(uti.get()));
 
       type_description =
@@ -378,8 +380,7 @@ bool SelectFileDialogImpl::HasMultipleFileTypeChoicesImpl() {
   if (!did_cancel) {
     if (type == ui::SelectFileDialog::SELECT_SAVEAS_FILE) {
       if ([[panel URL] isFileURL]) {
-        paths.push_back(base::FilePath(
-            base::SysNSStringToUTF8([[panel URL] path])));
+        paths.push_back(base::mac::NSStringToFilePath([[panel URL] path]));
       }
 
       NSView* accessoryView = [panel accessoryView];

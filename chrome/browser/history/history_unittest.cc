@@ -34,13 +34,13 @@
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/scoped_vector.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/path_service.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/threading/platform_thread.h"
-#include "base/time.h"
-#include "base/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "chrome/browser/history/download_row.h"
 #include "chrome/browser/history/history_backend.h"
 #include "chrome/browser/history/history_database.h"
@@ -122,7 +122,7 @@ class HistoryBackendDBTest : public HistoryUnitTestBase {
                                   NULL);
     backend_->Init(std::string(), false);
     db_ = backend_->db_.get();
-    DCHECK(in_mem_backend_.get()) << "Mem backend should have been set by "
+    DCHECK(in_mem_backend_) << "Mem backend should have been set by "
         "HistoryBackend::Init";
   }
 
@@ -145,7 +145,7 @@ class HistoryBackendDBTest : public HistoryUnitTestBase {
   }
 
   void DeleteBackend() {
-    if (backend_) {
+    if (backend_.get()) {
       backend_->Closing();
       backend_ = NULL;
     }
@@ -156,34 +156,40 @@ class HistoryBackendDBTest : public HistoryUnitTestBase {
 
     // Make sure we don't have any event pending that could disrupt the next
     // test.
-    MessageLoop::current()->PostTask(FROM_HERE, MessageLoop::QuitClosure());
-    MessageLoop::current()->Run();
+    base::MessageLoop::current()->PostTask(FROM_HERE,
+                                           base::MessageLoop::QuitClosure());
+    base::MessageLoop::current()->Run();
   }
 
-  int64 AddDownload(DownloadItem::DownloadState state, const Time& time) {
+  bool AddDownload(uint32 id,
+                   DownloadItem::DownloadState state,
+                   const Time& time) {
     std::vector<GURL> url_chain;
     url_chain.push_back(GURL("foo-url"));
 
-    DownloadRow download(
-        base::FilePath(FILE_PATH_LITERAL("foo-path")),
-        base::FilePath(FILE_PATH_LITERAL("foo-path")),
-        url_chain,
-        GURL(""),
-        time,
-        time,
-        0,
-        512,
-        state,
-        content::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
-        content::DOWNLOAD_INTERRUPT_REASON_NONE,
-        0,
-        0);
+    DownloadRow download(base::FilePath(FILE_PATH_LITERAL("current-path")),
+                         base::FilePath(FILE_PATH_LITERAL("target-path")),
+                         url_chain,
+                         GURL("http://referrer.com/"),
+                         time,
+                         time,
+                         std::string(),
+                         std::string(),
+                         0,
+                         512,
+                         state,
+                         content::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
+                         content::DOWNLOAD_INTERRUPT_REASON_NONE,
+                         id,
+                         false,
+                         "by_ext_id",
+                         "by_ext_name");
     return db_->CreateDownload(download);
   }
 
   base::ScopedTempDir temp_dir_;
 
-  MessageLoopForUI message_loop_;
+  base::MessageLoopForUI message_loop_;
 
   // names of the database files
   base::FilePath history_dir_;
@@ -213,8 +219,6 @@ void BackendDelegate::BroadcastNotifications(int type,
   delete details;
 }
 
-namespace {
-
 TEST_F(HistoryBackendDBTest, ClearBrowsingData_Downloads) {
   CreateBackendAndDatabase();
 
@@ -223,13 +227,38 @@ TEST_F(HistoryBackendDBTest, ClearBrowsingData_Downloads) {
   db_->QueryDownloads(&downloads);
   EXPECT_EQ(0U, downloads.size());
 
-  // Add a download, test that it was added, remove it, test that it was
-  // removed.
-  DownloadID handle;
-  EXPECT_NE(0, handle = AddDownload(DownloadItem::COMPLETE, Time()));
+  // Add a download, test that it was added correctly, remove it, test that it
+  // was removed.
+  Time now = Time();
+  uint32 id = 1;
+  EXPECT_TRUE(AddDownload(id, DownloadItem::COMPLETE, Time()));
   db_->QueryDownloads(&downloads);
   EXPECT_EQ(1U, downloads.size());
-  db_->RemoveDownload(handle);
+
+  EXPECT_EQ(base::FilePath(FILE_PATH_LITERAL("current-path")),
+            downloads[0].current_path);
+  EXPECT_EQ(base::FilePath(FILE_PATH_LITERAL("target-path")),
+            downloads[0].target_path);
+  EXPECT_EQ(1UL, downloads[0].url_chain.size());
+  EXPECT_EQ(GURL("foo-url"), downloads[0].url_chain[0]);
+  EXPECT_EQ(std::string("http://referrer.com/"),
+            std::string(downloads[0].referrer_url.spec()));
+  EXPECT_EQ(now, downloads[0].start_time);
+  EXPECT_EQ(now, downloads[0].end_time);
+  EXPECT_EQ(0, downloads[0].received_bytes);
+  EXPECT_EQ(512, downloads[0].total_bytes);
+  EXPECT_EQ(DownloadItem::COMPLETE, downloads[0].state);
+  EXPECT_EQ(content::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
+            downloads[0].danger_type);
+  EXPECT_EQ(content::DOWNLOAD_INTERRUPT_REASON_NONE,
+            downloads[0].interrupt_reason);
+  EXPECT_FALSE(downloads[0].opened);
+  EXPECT_EQ("by_ext_id", downloads[0].by_ext_id);
+  EXPECT_EQ("by_ext_name", downloads[0].by_ext_name);
+
+  db_->QueryDownloads(&downloads);
+  EXPECT_EQ(1U, downloads.size());
+  db_->RemoveDownload(id);
   db_->QueryDownloads(&downloads);
   EXPECT_EQ(0U, downloads.size());
 }
@@ -316,10 +345,10 @@ TEST_F(HistoryBackendDBTest, MigrateDownloadsReasonPathsAndDangerType) {
         "received_bytes, total_bytes, state, end_time, opened) VALUES "
         "(?, ?, ?, ?, ?, ?, ?, ?, ?)"));
 
-    int64 db_handle = 0;
+    int64 id = 0;
     // Null path.
-    s.BindInt64(0, ++db_handle);
-    s.BindString(1, "");
+    s.BindInt64(0, ++id);
+    s.BindString(1, std::string());
     s.BindString(2, "http://whatever.com/index.html");
     s.BindInt64(3, now.ToTimeT());
     s.BindInt64(4, 100);
@@ -331,7 +360,7 @@ TEST_F(HistoryBackendDBTest, MigrateDownloadsReasonPathsAndDangerType) {
     s.Reset(true);
 
     // Non-null path.
-    s.BindInt64(0, ++db_handle);
+    s.BindInt64(0, ++id);
     s.BindString(1, "/path/to/some/file");
     s.BindString(2, "http://whatever.com/index1.html");
     s.BindInt64(3, now.ToTimeT());
@@ -413,6 +442,182 @@ TEST_F(HistoryBackendDBTest, MigrateDownloadsReasonPathsAndDangerType) {
   }
 }
 
+TEST_F(HistoryBackendDBTest, MigrateReferrer) {
+  Time now(base::Time::Now());
+  ASSERT_NO_FATAL_FAILURE(CreateDBVersion(22));
+  {
+    sql::Connection db;
+    ASSERT_TRUE(db.Open(history_dir_.Append(chrome::kHistoryFilename)));
+    sql::Statement s(db.GetUniqueStatement(
+        "INSERT INTO downloads (id, full_path, url, start_time, "
+        "received_bytes, total_bytes, state, end_time, opened) VALUES "
+        "(?, ?, ?, ?, ?, ?, ?, ?, ?)"));
+    int64 db_handle = 0;
+    s.BindInt64(0, ++db_handle);
+    s.BindString(1, "full_path");
+    s.BindString(2, "http://whatever.com/index.html");
+    s.BindInt64(3, now.ToTimeT());
+    s.BindInt64(4, 100);
+    s.BindInt64(5, 100);
+    s.BindInt(6, 1);
+    s.BindInt64(7, now.ToTimeT());
+    s.BindInt(8, 1);
+    ASSERT_TRUE(s.Run());
+  }
+  // Re-open the db using the HistoryDatabase, which should migrate to version
+  // 26, creating the referrer column.
+  CreateBackendAndDatabase();
+  DeleteBackend();
+  {
+    // Re-open the db for manual manipulation.
+    sql::Connection db;
+    ASSERT_TRUE(db.Open(history_dir_.Append(chrome::kHistoryFilename)));
+    // The version should have been updated.
+    int cur_version = HistoryDatabase::GetCurrentVersion();
+    ASSERT_LE(26, cur_version);
+    {
+      sql::Statement s(db.GetUniqueStatement(
+          "SELECT value FROM meta WHERE key = 'version'"));
+      EXPECT_TRUE(s.Step());
+      EXPECT_EQ(cur_version, s.ColumnInt(0));
+    }
+    {
+      sql::Statement s(db.GetUniqueStatement(
+          "SELECT referrer from downloads"));
+      EXPECT_TRUE(s.Step());
+      EXPECT_EQ(std::string(), s.ColumnString(0));
+    }
+  }
+}
+
+TEST_F(HistoryBackendDBTest, MigrateDownloadedByExtension) {
+  Time now(base::Time::Now());
+  ASSERT_NO_FATAL_FAILURE(CreateDBVersion(26));
+  {
+    sql::Connection db;
+    ASSERT_TRUE(db.Open(history_dir_.Append(chrome::kHistoryFilename)));
+    {
+      sql::Statement s(db.GetUniqueStatement(
+          "INSERT INTO downloads (id, current_path, target_path, start_time, "
+          "received_bytes, total_bytes, state, danger_type, interrupt_reason, "
+          "end_time, opened, referrer) VALUES "
+          "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"));
+      s.BindInt64(0, 1);
+      s.BindString(1, "current_path");
+      s.BindString(2, "target_path");
+      s.BindInt64(3, now.ToTimeT());
+      s.BindInt64(4, 100);
+      s.BindInt64(5, 100);
+      s.BindInt(6, 1);
+      s.BindInt(7, 0);
+      s.BindInt(8, 0);
+      s.BindInt64(9, now.ToTimeT());
+      s.BindInt(10, 1);
+      s.BindString(11, "referrer");
+      ASSERT_TRUE(s.Run());
+    }
+    {
+      sql::Statement s(db.GetUniqueStatement(
+          "INSERT INTO downloads_url_chains (id, chain_index, url) VALUES "
+          "(?, ?, ?)"));
+      s.BindInt64(0, 4);
+      s.BindInt64(1, 0);
+      s.BindString(2, "url");
+      ASSERT_TRUE(s.Run());
+    }
+  }
+  // Re-open the db using the HistoryDatabase, which should migrate to version
+  // 27, creating the by_ext_id and by_ext_name columns.
+  CreateBackendAndDatabase();
+  DeleteBackend();
+  {
+    // Re-open the db for manual manipulation.
+    sql::Connection db;
+    ASSERT_TRUE(db.Open(history_dir_.Append(chrome::kHistoryFilename)));
+    // The version should have been updated.
+    int cur_version = HistoryDatabase::GetCurrentVersion();
+    ASSERT_LE(27, cur_version);
+    {
+      sql::Statement s(db.GetUniqueStatement(
+          "SELECT value FROM meta WHERE key = 'version'"));
+      EXPECT_TRUE(s.Step());
+      EXPECT_EQ(cur_version, s.ColumnInt(0));
+    }
+    {
+      sql::Statement s(db.GetUniqueStatement(
+          "SELECT by_ext_id, by_ext_name from downloads"));
+      EXPECT_TRUE(s.Step());
+      EXPECT_EQ(std::string(), s.ColumnString(0));
+      EXPECT_EQ(std::string(), s.ColumnString(1));
+    }
+  }
+}
+
+TEST_F(HistoryBackendDBTest, MigrateDownloadValidators) {
+  Time now(base::Time::Now());
+  ASSERT_NO_FATAL_FAILURE(CreateDBVersion(27));
+  {
+    sql::Connection db;
+    ASSERT_TRUE(db.Open(history_dir_.Append(chrome::kHistoryFilename)));
+    {
+      sql::Statement s(db.GetUniqueStatement(
+          "INSERT INTO downloads (id, current_path, target_path, start_time, "
+          "received_bytes, total_bytes, state, danger_type, interrupt_reason, "
+          "end_time, opened, referrer, by_ext_id, by_ext_name) VALUES "
+          "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"));
+      s.BindInt64(0, 1);
+      s.BindString(1, "current_path");
+      s.BindString(2, "target_path");
+      s.BindInt64(3, now.ToTimeT());
+      s.BindInt64(4, 100);
+      s.BindInt64(5, 100);
+      s.BindInt(6, 1);
+      s.BindInt(7, 0);
+      s.BindInt(8, 0);
+      s.BindInt64(9, now.ToTimeT());
+      s.BindInt(10, 1);
+      s.BindString(11, "referrer");
+      s.BindString(12, "by extension ID");
+      s.BindString(13, "by extension name");
+      ASSERT_TRUE(s.Run());
+    }
+    {
+      sql::Statement s(db.GetUniqueStatement(
+          "INSERT INTO downloads_url_chains (id, chain_index, url) VALUES "
+          "(?, ?, ?)"));
+      s.BindInt64(0, 4);
+      s.BindInt64(1, 0);
+      s.BindString(2, "url");
+      ASSERT_TRUE(s.Run());
+    }
+  }
+  // Re-open the db using the HistoryDatabase, which should migrate to the
+  // current version, creating the etag and last_modified columns.
+  CreateBackendAndDatabase();
+  DeleteBackend();
+  {
+    // Re-open the db for manual manipulation.
+    sql::Connection db;
+    ASSERT_TRUE(db.Open(history_dir_.Append(chrome::kHistoryFilename)));
+    // The version should have been updated.
+    int cur_version = HistoryDatabase::GetCurrentVersion();
+    ASSERT_LE(28, cur_version);
+    {
+      sql::Statement s(db.GetUniqueStatement(
+          "SELECT value FROM meta WHERE key = 'version'"));
+      EXPECT_TRUE(s.Step());
+      EXPECT_EQ(cur_version, s.ColumnInt(0));
+    }
+    {
+      sql::Statement s(db.GetUniqueStatement(
+          "SELECT etag, last_modified from downloads"));
+      EXPECT_TRUE(s.Step());
+      EXPECT_EQ(std::string(), s.ColumnString(0));
+      EXPECT_EQ(std::string(), s.ColumnString(1));
+    }
+  }
+}
+
 TEST_F(HistoryBackendDBTest, ConfirmDownloadRowCreateAndDelete) {
   // Create the DB.
   CreateBackendAndDatabase();
@@ -420,11 +625,10 @@ TEST_F(HistoryBackendDBTest, ConfirmDownloadRowCreateAndDelete) {
   base::Time now(base::Time::Now());
 
   // Add some downloads.
-  AddDownload(DownloadItem::COMPLETE, now);
-  int64 did2 = AddDownload(DownloadItem::COMPLETE, now +
-                           base::TimeDelta::FromDays(2));
-  int64 did3 = AddDownload(DownloadItem::COMPLETE, now -
-                           base::TimeDelta::FromDays(2));
+  uint32 id1 = 1, id2 = 2, id3 = 3;
+  AddDownload(id1, DownloadItem::COMPLETE, now);
+  AddDownload(id2, DownloadItem::COMPLETE, now + base::TimeDelta::FromDays(2));
+  AddDownload(id3, DownloadItem::COMPLETE, now - base::TimeDelta::FromDays(2));
 
   // Confirm that resulted in the correct number of rows in the DB.
   DeleteBackend();
@@ -444,8 +648,8 @@ TEST_F(HistoryBackendDBTest, ConfirmDownloadRowCreateAndDelete) {
 
   // Delete some rows and make sure the results are still correct.
   CreateBackendAndDatabase();
-  db_->RemoveDownload(did2);
-  db_->RemoveDownload(did3);
+  db_->RemoveDownload(id2);
+  db_->RemoveDownload(id3);
   DeleteBackend();
   {
     sql::Connection db;
@@ -459,6 +663,121 @@ TEST_F(HistoryBackendDBTest, ConfirmDownloadRowCreateAndDelete) {
         "Select Count(*) from downloads_url_chains"));
     EXPECT_TRUE(statement1.Step());
     EXPECT_EQ(1, statement1.ColumnInt(0));
+  }
+}
+
+TEST_F(HistoryBackendDBTest, DownloadNukeRecordsMissingURLs) {
+  CreateBackendAndDatabase();
+  base::Time now(base::Time::Now());
+  std::vector<GURL> url_chain;
+  DownloadRow download(base::FilePath(FILE_PATH_LITERAL("foo-path")),
+                       base::FilePath(FILE_PATH_LITERAL("foo-path")),
+                       url_chain,
+                       GURL(std::string()),
+                       now,
+                       now,
+                       std::string(),
+                       std::string(),
+                       0,
+                       512,
+                       DownloadItem::COMPLETE,
+                       content::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
+                       content::DOWNLOAD_INTERRUPT_REASON_NONE,
+                       1,
+                       0,
+                       "by_ext_id",
+                       "by_ext_name");
+
+  // Creating records without any urls should fail.
+  EXPECT_FALSE(db_->CreateDownload(download));
+
+  download.url_chain.push_back(GURL("foo-url"));
+  EXPECT_TRUE(db_->CreateDownload(download));
+
+  // Pretend that the URLs were dropped.
+  DeleteBackend();
+  {
+    sql::Connection db;
+    ASSERT_TRUE(db.Open(history_dir_.Append(chrome::kHistoryFilename)));
+    sql::Statement statement(db.GetUniqueStatement(
+        "DELETE FROM downloads_url_chains WHERE id=1"));
+    ASSERT_TRUE(statement.Run());
+  }
+  CreateBackendAndDatabase();
+  std::vector<DownloadRow> downloads;
+  db_->QueryDownloads(&downloads);
+  EXPECT_EQ(0U, downloads.size());
+
+  // QueryDownloads should have nuked the corrupt record.
+  DeleteBackend();
+  {
+    sql::Connection db;
+    ASSERT_TRUE(db.Open(history_dir_.Append(chrome::kHistoryFilename)));
+    {
+      sql::Statement statement(db.GetUniqueStatement(
+            "SELECT count(*) from downloads"));
+      ASSERT_TRUE(statement.Step());
+      EXPECT_EQ(0, statement.ColumnInt(0));
+    }
+  }
+}
+
+TEST_F(HistoryBackendDBTest, ConfirmDownloadInProgressCleanup) {
+  // Create the DB.
+  CreateBackendAndDatabase();
+
+  base::Time now(base::Time::Now());
+
+  // Put an IN_PROGRESS download in the DB.
+  AddDownload(1, DownloadItem::IN_PROGRESS, now);
+
+  // Confirm that they made it into the DB unchanged.
+  DeleteBackend();
+  {
+    sql::Connection db;
+    ASSERT_TRUE(db.Open(history_dir_.Append(chrome::kHistoryFilename)));
+    sql::Statement statement(db.GetUniqueStatement(
+        "Select Count(*) from downloads"));
+    EXPECT_TRUE(statement.Step());
+    EXPECT_EQ(1, statement.ColumnInt(0));
+
+    sql::Statement statement1(db.GetUniqueStatement(
+        "Select state, interrupt_reason from downloads"));
+    EXPECT_TRUE(statement1.Step());
+    EXPECT_EQ(DownloadDatabase::kStateInProgress, statement1.ColumnInt(0));
+    EXPECT_EQ(content::DOWNLOAD_INTERRUPT_REASON_NONE, statement1.ColumnInt(1));
+    EXPECT_FALSE(statement1.Step());
+  }
+
+  // Read in the DB through query downloads, then test that the
+  // right transformation was returned.
+  CreateBackendAndDatabase();
+  std::vector<DownloadRow> results;
+  db_->QueryDownloads(&results);
+  ASSERT_EQ(1u, results.size());
+  EXPECT_EQ(content::DownloadItem::INTERRUPTED, results[0].state);
+  EXPECT_EQ(content::DOWNLOAD_INTERRUPT_REASON_CRASH,
+            results[0].interrupt_reason);
+
+  // Allow the update to propagate, shut down the DB, and confirm that
+  // the query updated the on disk database as well.
+  base::MessageLoop::current()->RunUntilIdle();
+  DeleteBackend();
+  {
+    sql::Connection db;
+    ASSERT_TRUE(db.Open(history_dir_.Append(chrome::kHistoryFilename)));
+    sql::Statement statement(db.GetUniqueStatement(
+        "Select Count(*) from downloads"));
+    EXPECT_TRUE(statement.Step());
+    EXPECT_EQ(1, statement.ColumnInt(0));
+
+    sql::Statement statement1(db.GetUniqueStatement(
+        "Select state, interrupt_reason from downloads"));
+    EXPECT_TRUE(statement1.Step());
+    EXPECT_EQ(DownloadDatabase::kStateInterrupted, statement1.ColumnInt(0));
+    EXPECT_EQ(content::DOWNLOAD_INTERRUPT_REASON_CRASH,
+              statement1.ColumnInt(1));
+    EXPECT_FALSE(statement1.Step());
   }
 }
 
@@ -574,17 +893,17 @@ class HistoryTest : public testing::Test {
   void OnSegmentUsageAvailable(CancelableRequestProvider::Handle handle,
                                std::vector<PageUsageData*>* data) {
     page_usage_data_.swap(*data);
-    MessageLoop::current()->Quit();
+    base::MessageLoop::current()->Quit();
   }
 
   void OnDeleteURLsDone(CancelableRequestProvider::Handle handle) {
-    MessageLoop::current()->Quit();
+    base::MessageLoop::current()->Quit();
   }
 
   void OnMostVisitedURLsAvailable(CancelableRequestProvider::Handle handle,
                                   MostVisitedURLList url_list) {
     most_visited_urls_.swap(url_list);
-    MessageLoop::current()->Quit();
+    base::MessageLoop::current()->Quit();
   }
 
  protected:
@@ -603,20 +922,21 @@ class HistoryTest : public testing::Test {
   }
 
   virtual void TearDown() {
-    if (history_service_.get())
+    if (history_service_)
       CleanupHistoryService();
 
     // Make sure we don't have any event pending that could disrupt the next
     // test.
-    MessageLoop::current()->PostTask(FROM_HERE, MessageLoop::QuitClosure());
-    MessageLoop::current()->Run();
+    base::MessageLoop::current()->PostTask(FROM_HERE,
+                                           base::MessageLoop::QuitClosure());
+    base::MessageLoop::current()->Run();
   }
 
   void CleanupHistoryService() {
-    DCHECK(history_service_.get());
+    DCHECK(history_service_);
 
     history_service_->NotifyRenderProcessHostDestruction(0);
-    history_service_->SetOnBackendDestroyTask(MessageLoop::QuitClosure());
+    history_service_->SetOnBackendDestroyTask(base::MessageLoop::QuitClosure());
     history_service_->Cleanup();
     history_service_.reset();
 
@@ -624,7 +944,7 @@ class HistoryTest : public testing::Test {
     // moving to the next test. Note: if this never terminates, somebody is
     // probably leaking a reference to the history backend, so it never calls
     // our destroy task.
-    MessageLoop::current()->Run();
+    base::MessageLoop::current()->Run();
   }
 
   // Fills the query_url_row_ and query_url_visits_ structures with the
@@ -634,7 +954,7 @@ class HistoryTest : public testing::Test {
     history_service_->QueryURL(url, true, &consumer_,
                                base::Bind(&HistoryTest::SaveURLAndQuit,
                                           base::Unretained(this)));
-    MessageLoop::current()->Run();  // Will be exited in SaveURLAndQuit.
+    base::MessageLoop::current()->Run();  // Will be exited in SaveURLAndQuit.
     return query_url_success_;
   }
 
@@ -651,7 +971,7 @@ class HistoryTest : public testing::Test {
       query_url_row_ = URLRow();
       query_url_visits_.clear();
     }
-    MessageLoop::current()->Quit();
+    base::MessageLoop::current()->Quit();
   }
 
   // Fills in saved_redirects_ with the redirect information for the given URL,
@@ -661,7 +981,7 @@ class HistoryTest : public testing::Test {
         url, &consumer_,
         base::Bind(&HistoryTest::OnRedirectQueryComplete,
                    base::Unretained(this)));
-    MessageLoop::current()->Run();  // Will be exited in *QueryComplete.
+    base::MessageLoop::current()->Run();  // Will be exited in *QueryComplete.
     return redirect_query_success_;
   }
 
@@ -675,12 +995,12 @@ class HistoryTest : public testing::Test {
       saved_redirects_.swap(*redirects);
     else
       saved_redirects_.clear();
-    MessageLoop::current()->Quit();
+    base::MessageLoop::current()->Quit();
   }
 
   base::ScopedTempDir temp_dir_;
 
-  MessageLoopForUI message_loop_;
+  base::MessageLoopForUI message_loop_;
 
   // PageUsageData vector to test segments.
   ScopedVector<PageUsageData> page_usage_data_;
@@ -995,7 +1315,7 @@ TEST_F(HistoryTest, DISABLED_Segments) {
                  base::Unretained(this)));
 
   // Wait for processing.
-  MessageLoop::current()->Run();
+  base::MessageLoop::current()->Run();
 
   ASSERT_EQ(1U, page_usage_data_.size());
   EXPECT_TRUE(page_usage_data_[0]->GetURL() == existing_url);
@@ -1015,7 +1335,7 @@ TEST_F(HistoryTest, DISABLED_Segments) {
                  base::Unretained(this)));
 
   // Wait for processing.
-  MessageLoop::current()->Run();
+  base::MessageLoop::current()->Run();
 
   // Make sure we still have one segment.
   ASSERT_EQ(1U, page_usage_data_.size());
@@ -1035,7 +1355,7 @@ TEST_F(HistoryTest, DISABLED_Segments) {
                  base::Unretained(this)));
 
   // Wait for processing.
-  MessageLoop::current()->Run();
+  base::MessageLoop::current()->Run();
 
   // Make sure we still have one segment.
   ASSERT_EQ(1U, page_usage_data_.size());
@@ -1070,7 +1390,7 @@ TEST_F(HistoryTest, MostVisitedURLs) {
       base::Bind(
           &HistoryTest::OnMostVisitedURLsAvailable,
           base::Unretained(this)));
-  MessageLoop::current()->Run();
+  base::MessageLoop::current()->Run();
 
   EXPECT_EQ(2U, most_visited_urls_.size());
   EXPECT_EQ(url0, most_visited_urls_[0].url);
@@ -1086,7 +1406,7 @@ TEST_F(HistoryTest, MostVisitedURLs) {
       base::Bind(
           &HistoryTest::OnMostVisitedURLsAvailable,
           base::Unretained(this)));
-  MessageLoop::current()->Run();
+  base::MessageLoop::current()->Run();
 
   EXPECT_EQ(3U, most_visited_urls_.size());
   EXPECT_EQ(url0, most_visited_urls_[0].url);
@@ -1103,7 +1423,7 @@ TEST_F(HistoryTest, MostVisitedURLs) {
       base::Bind(
           &HistoryTest::OnMostVisitedURLsAvailable,
           base::Unretained(this)));
-  MessageLoop::current()->Run();
+  base::MessageLoop::current()->Run();
 
   EXPECT_EQ(3U, most_visited_urls_.size());
   EXPECT_EQ(url2, most_visited_urls_[0].url);
@@ -1120,7 +1440,7 @@ TEST_F(HistoryTest, MostVisitedURLs) {
       base::Bind(
           &HistoryTest::OnMostVisitedURLsAvailable,
           base::Unretained(this)));
-  MessageLoop::current()->Run();
+  base::MessageLoop::current()->Run();
 
   EXPECT_EQ(3U, most_visited_urls_.size());
   EXPECT_EQ(url1, most_visited_urls_[0].url);
@@ -1142,7 +1462,7 @@ TEST_F(HistoryTest, MostVisitedURLs) {
       base::Bind(
           &HistoryTest::OnMostVisitedURLsAvailable,
           base::Unretained(this)));
-  MessageLoop::current()->Run();
+  base::MessageLoop::current()->Run();
 
   EXPECT_EQ(4U, most_visited_urls_.size());
   EXPECT_EQ(url1, most_visited_urls_[0].url);
@@ -1150,34 +1470,6 @@ TEST_F(HistoryTest, MostVisitedURLs) {
   EXPECT_EQ(url0, most_visited_urls_[2].url);
   EXPECT_EQ(url3, most_visited_urls_[3].url);
   EXPECT_EQ(2U, most_visited_urls_[3].redirects.size());
-}
-
-// The version of the history database should be current in the "typical
-// history" example file or it will be imported on startup, throwing off timing
-// measurements.
-//
-// See test/data/profiles/profile_with_default_theme/README.txt for
-// instructions on how to up the version.
-TEST(HistoryProfileTest, TypicalProfileVersion) {
-  base::FilePath file;
-  ASSERT_TRUE(PathService::Get(chrome::DIR_TEST_DATA, &file));
-  file = file.AppendASCII("profiles");
-  file = file.AppendASCII("profile_with_default_theme");
-  file = file.AppendASCII("Default");
-  file = file.AppendASCII("History");
-
-  int cur_version = HistoryDatabase::GetCurrentVersion();
-
-  sql::Connection db;
-  ASSERT_TRUE(db.Open(file));
-
-  {
-    sql::Statement s(db.GetUniqueStatement(
-        "SELECT value FROM meta WHERE key = 'version'"));
-    EXPECT_TRUE(s.Step());
-    int file_version = s.ColumnInt(0);
-    EXPECT_EQ(cur_version, file_version);
-  }
 }
 
 namespace {
@@ -1200,7 +1492,7 @@ class HistoryDBTaskImpl : public HistoryDBTask {
 
   virtual void DoneRunOnMainThread() OVERRIDE {
     done_invoked = true;
-    MessageLoop::current()->Quit();
+    base::MessageLoop::current()->Quit();
   }
 
   int invoke_count;
@@ -1225,7 +1517,7 @@ TEST_F(HistoryTest, HistoryDBTask) {
   // Run the message loop. When HistoryDBTaskImpl::DoneRunOnMainThread runs,
   // it will stop the message loop. If the test hangs here, it means
   // DoneRunOnMainThread isn't being invoked correctly.
-  MessageLoop::current()->Run();
+  base::MessageLoop::current()->Run();
   CleanupHistoryService();
   // WARNING: history has now been deleted.
   history_service_.reset();
@@ -1357,7 +1649,7 @@ void CheckDirectiveProcessingResult(
   }
 
   base::PlatformThread::Sleep(base::TimeDelta::FromMilliseconds(100));
-  MessageLoop::current()->PostTask(
+  base::MessageLoop::current()->PostTask(
       FROM_HERE,
       base::Bind(&CheckDirectiveProcessingResult, timeout,
                  change_processor, num_changes));
@@ -1393,7 +1685,7 @@ TEST_F(HistoryTest, ProcessGlobalIdDeleteDirective) {
   global_id_directive->set_start_time_usec(3);
   global_id_directive->set_end_time_usec(10);
   directives.push_back(
-      syncer::SyncData::CreateRemoteData(1, entity_specs));
+      syncer::SyncData::CreateRemoteData(1, entity_specs, base::Time()));
 
   // 2nd directive.
   global_id_directive->Clear();
@@ -1403,7 +1695,7 @@ TEST_F(HistoryTest, ProcessGlobalIdDeleteDirective) {
   global_id_directive->set_start_time_usec(13);
   global_id_directive->set_end_time_usec(19);
   directives.push_back(
-      syncer::SyncData::CreateRemoteData(2, entity_specs));
+      syncer::SyncData::CreateRemoteData(2, entity_specs, base::Time()));
 
   TestChangeProcessor change_processor;
   EXPECT_FALSE(
@@ -1416,12 +1708,12 @@ TEST_F(HistoryTest, ProcessGlobalIdDeleteDirective) {
 
   // Inject a task to check status and keep message loop filled before directive
   // processing finishes.
-  MessageLoop::current()->PostTask(
+  base::MessageLoop::current()->PostTask(
       FROM_HERE,
       base::Bind(&CheckDirectiveProcessingResult,
                  base::Time::Now() + base::TimeDelta::FromSeconds(10),
                  &change_processor, 2));
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
   EXPECT_TRUE(QueryURL(history_service_.get(), test_url));
   ASSERT_EQ(5, query_url_row_.visit_count());
   EXPECT_EQ(base::Time::UnixEpoch() + base::TimeDelta::FromMicroseconds(1),
@@ -1469,13 +1761,17 @@ TEST_F(HistoryTest, ProcessTimeRangeDeleteDirective) {
           ->mutable_time_range_directive();
   time_range_directive->set_start_time_usec(2);
   time_range_directive->set_end_time_usec(5);
-  directives.push_back(syncer::SyncData::CreateRemoteData(1, entity_specs));
+  directives.push_back(syncer::SyncData::CreateRemoteData(1,
+                                                          entity_specs,
+                                                          base::Time()));
 
   // 2nd directive.
   time_range_directive->Clear();
   time_range_directive->set_start_time_usec(8);
   time_range_directive->set_end_time_usec(10);
-  directives.push_back(syncer::SyncData::CreateRemoteData(2, entity_specs));
+  directives.push_back(syncer::SyncData::CreateRemoteData(2,
+                                                          entity_specs,
+                                                          base::Time()));
 
   TestChangeProcessor change_processor;
   EXPECT_FALSE(
@@ -1488,12 +1784,12 @@ TEST_F(HistoryTest, ProcessTimeRangeDeleteDirective) {
 
   // Inject a task to check status and keep message loop filled before
   // directive processing finishes.
-  MessageLoop::current()->PostTask(
+  base::MessageLoop::current()->PostTask(
       FROM_HERE,
       base::Bind(&CheckDirectiveProcessingResult,
                  base::Time::Now() + base::TimeDelta::FromSeconds(10),
                  &change_processor, 2));
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
   EXPECT_TRUE(QueryURL(history_service_.get(), test_url));
   ASSERT_EQ(3, query_url_row_.visit_count());
   EXPECT_EQ(base::Time::UnixEpoch() + base::TimeDelta::FromMicroseconds(1),
@@ -1580,7 +1876,5 @@ TEST_F(HistoryBackendDBTest, MigratePresentations) {
   EXPECT_EQ(title, results[0]->GetTitle());
   STLDeleteElements(&results);
 }
-
-}  // namespace
 
 }  // namespace history

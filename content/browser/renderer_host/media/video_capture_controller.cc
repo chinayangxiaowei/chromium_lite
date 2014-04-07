@@ -178,10 +178,13 @@ void VideoCaptureController::StopCapture(
     return;
 
   // Take back all buffers held by the |client|.
-  for (std::set<int>::iterator buffer_it = client->buffers.begin();
-       buffer_it != client->buffers.end(); ++buffer_it) {
-    int buffer_id = *buffer_it;
-    buffer_pool_->RelinquishConsumerHold(buffer_id, 1);
+  if (buffer_pool_.get()) {
+    for (std::set<int>::iterator buffer_it = client->buffers.begin();
+         buffer_it != client->buffers.end();
+         ++buffer_it) {
+      int buffer_id = *buffer_it;
+      buffer_pool_->RelinquishConsumerHold(buffer_id, 1);
+    }
   }
   client->buffers.clear();
 
@@ -190,7 +193,9 @@ void VideoCaptureController::StopCapture(
   controller_clients_.remove(client);
 
   // No more clients. Stop device.
-  if (controller_clients_.empty() && state_ == VIDEO_CAPTURE_STATE_STARTED) {
+  if (controller_clients_.empty() &&
+      (state_ == VIDEO_CAPTURE_STATE_STARTED ||
+       state_ == VIDEO_CAPTURE_STATE_ERROR)) {
     video_capture_manager_->Stop(session_id,
         base::Bind(&VideoCaptureController::OnDeviceStopped, this));
     frame_info_available_ = false;
@@ -209,7 +214,7 @@ void VideoCaptureController::StopSession(
 
   if (client) {
     client->session_closed = true;
-    client->event_handler->OnPaused(client->controller_id);
+    client->event_handler->OnEnded(client->controller_id);
   }
 }
 
@@ -242,9 +247,11 @@ void VideoCaptureController::ReturnBuffer(
 
 scoped_refptr<media::VideoFrame> VideoCaptureController::ReserveOutputBuffer() {
   base::AutoLock lock(buffer_pool_lock_);
-  if (!buffer_pool_)
+  if (!buffer_pool_.get())
     return NULL;
-  return buffer_pool_->ReserveForProducer(0);
+  return buffer_pool_->ReserveI420VideoFrame(gfx::Size(frame_info_.width,
+                                                       frame_info_.height),
+                                             0);
 }
 
 // Implements VideoCaptureDevice::EventHandler.
@@ -257,19 +264,21 @@ void VideoCaptureController::OnIncomingCapturedFrame(
     int rotation,
     bool flip_vert,
     bool flip_horiz) {
-  DCHECK (frame_info_.color == media::VideoCaptureCapability::kI420 ||
-          frame_info_.color == media::VideoCaptureCapability::kYV12 ||
-          (rotation == 0 && !flip_vert && !flip_horiz));
+  DCHECK(frame_info_.color == media::VideoCaptureCapability::kI420 ||
+         frame_info_.color == media::VideoCaptureCapability::kYV12 ||
+         (rotation == 0 && !flip_vert && !flip_horiz));
 
   scoped_refptr<media::VideoFrame> dst;
   {
     base::AutoLock lock(buffer_pool_lock_);
-    if (!buffer_pool_)
+    if (!buffer_pool_.get())
       return;
-    dst = buffer_pool_->ReserveForProducer(rotation);
+    dst = buffer_pool_->ReserveI420VideoFrame(gfx::Size(frame_info_.width,
+                                                        frame_info_.height),
+                                              rotation);
   }
 
-  if (!dst)
+  if (!dst.get())
     return;
 
   uint8* yplane = dst->data(media::VideoFrame::kYPlane);
@@ -363,12 +372,13 @@ void VideoCaptureController::OnIncomingCapturedVideoFrame(
   {
     base::AutoLock lock(buffer_pool_lock_);
 
-    if (!buffer_pool_)
+    if (!buffer_pool_.get())
       return;
 
     // If this is a frame that belongs to the buffer pool, we can forward it
     // directly to the IO thread and be done.
-    if (buffer_pool_->RecognizeReservedBuffer(frame)) {
+    if (buffer_pool_->RecognizeReservedBuffer(
+        frame->shared_memory_handle()) >= 0) {
       BrowserThread::PostTask(BrowserThread::IO,
           FROM_HERE,
           base::Bind(&VideoCaptureController::DoIncomingCapturedFrameOnIOThread,
@@ -377,10 +387,12 @@ void VideoCaptureController::OnIncomingCapturedVideoFrame(
     }
     // Otherwise, this is a frame that belongs to the caller, and we must copy
     // it to a frame from the buffer pool.
-    target = buffer_pool_->ReserveForProducer(0);
+    target = buffer_pool_->ReserveI420VideoFrame(gfx::Size(frame_info_.width,
+                                                           frame_info_.height),
+                                                 0);
   }
 
-  if (!target)
+  if (!target.get())
     return;
 
   // Validate the inputs.
@@ -396,6 +408,7 @@ void VideoCaptureController::OnIncomingCapturedVideoFrame(
   const int kYPlane = media::VideoFrame::kYPlane;
   const int kUPlane = media::VideoFrame::kUPlane;
   const int kVPlane = media::VideoFrame::kVPlane;
+  const int kAPlane = media::VideoFrame::kAPlane;
   const int kRGBPlane = media::VideoFrame::kRGBPlane;
 
   // Do color conversion from the camera format to I420.
@@ -417,15 +430,35 @@ void VideoCaptureController::OnIncomingCapturedVideoFrame(
       media::CopyYPlane(frame->data(kYPlane),
                         frame->stride(kYPlane),
                         frame->rows(kYPlane),
-                        target);
+                        target.get());
       media::CopyUPlane(frame->data(kUPlane),
                         frame->stride(kUPlane),
                         frame->rows(kUPlane),
-                        target);
+                        target.get());
       media::CopyVPlane(frame->data(kVPlane),
                         frame->stride(kVPlane),
                         frame->rows(kVPlane),
-                        target);
+                        target.get());
+      break;
+    }
+    case media::VideoFrame::YV12A: {
+      DCHECK(!chopped_width_ && !chopped_height_);
+      media::CopyYPlane(frame->data(kYPlane),
+                        frame->stride(kYPlane),
+                        frame->rows(kYPlane),
+                        target.get());
+      media::CopyUPlane(frame->data(kUPlane),
+                        frame->stride(kUPlane),
+                        frame->rows(kUPlane),
+                        target.get());
+      media::CopyVPlane(frame->data(kVPlane),
+                        frame->stride(kVPlane),
+                        frame->rows(kVPlane),
+                        target.get());
+      media::CopyAPlane(frame->data(kAPlane),
+                        frame->stride(kAPlane),
+                        frame->rows(kAPlane),
+                        target.get());
       break;
     }
     case media::VideoFrame::RGB32: {
@@ -475,6 +508,14 @@ void VideoCaptureController::OnFrameInfo(
       base::Bind(&VideoCaptureController::DoFrameInfoOnIOThread, this));
 }
 
+void VideoCaptureController::OnFrameInfoChanged(
+    const media::VideoCaptureCapability& info) {
+  BrowserThread::PostTask(BrowserThread::IO,
+      FROM_HERE,
+      base::Bind(&VideoCaptureController::DoFrameInfoChangedOnIOThread,
+                 this, info));
+}
+
 VideoCaptureController::~VideoCaptureController() {
   buffer_pool_ = NULL;  // Release all buffers.
   STLDeleteContainerPointers(controller_clients_.begin(),
@@ -495,11 +536,12 @@ void VideoCaptureController::DoIncomingCapturedFrameOnIOThread(
     base::Time timestamp) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
 
-  if (!buffer_pool_)
+  if (!buffer_pool_.get())
     return;
 
-  int buffer_id = buffer_pool_->RecognizeReservedBuffer(reserved_frame);
-  if (!buffer_id) {
+  int buffer_id = buffer_pool_->RecognizeReservedBuffer(
+      reserved_frame->shared_memory_handle());
+  if (buffer_id < 0) {
     NOTREACHED();
     return;
   }
@@ -518,12 +560,12 @@ void VideoCaptureController::DoIncomingCapturedFrameOnIOThread(
     }
   }
 
-  buffer_pool_->HoldForConsumers(reserved_frame, buffer_id, count);
+  buffer_pool_->HoldForConsumers(buffer_id, count);
 }
 
 void VideoCaptureController::DoFrameInfoOnIOThread() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
-  DCHECK(!buffer_pool_)
+  DCHECK(!buffer_pool_.get())
       << "Device is restarted without releasing shared memory.";
 
   // Allocate memory only when device has been started.
@@ -531,8 +573,8 @@ void VideoCaptureController::DoFrameInfoOnIOThread() {
     return;
 
   scoped_refptr<VideoCaptureBufferPool> buffer_pool =
-      new VideoCaptureBufferPool(
-          gfx::Size(frame_info_.width, frame_info_.height), kNoOfBuffers);
+      new VideoCaptureBufferPool(frame_info_.width * frame_info_.height * 3 / 2,
+                                 kNoOfBuffers);
 
   // Check whether all buffers were created successfully.
   if (!buffer_pool->Allocate()) {
@@ -553,6 +595,21 @@ void VideoCaptureController::DoFrameInfoOnIOThread() {
   for (ControllerClients::iterator client_it = controller_clients_.begin();
        client_it != controller_clients_.end(); ++client_it) {
     SendFrameInfoAndBuffers(*client_it);
+  }
+}
+
+void VideoCaptureController::DoFrameInfoChangedOnIOThread(
+    const media::VideoCaptureCapability& info) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
+  // TODO(mcasas): Here we should reallocate the VideoCaptureBufferPool, if
+  // needed, to support the new video capture format. See crbug.com/266082.
+  for (ControllerClients::iterator client_it = controller_clients_.begin();
+       client_it != controller_clients_.end(); ++client_it) {
+    (*client_it)->event_handler->OnFrameInfoChanged(
+        (*client_it)->controller_id,
+        info.width,
+        info.height,
+        info.frame_rate);
   }
 }
 
@@ -582,9 +639,8 @@ void VideoCaptureController::SendFrameInfoAndBuffers(ControllerClient* client) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
   DCHECK(frame_info_available_);
   client->event_handler->OnFrameInfo(client->controller_id,
-                                     frame_info_.width, frame_info_.height,
-                                     frame_info_.frame_rate);
-  for (int buffer_id = 1; buffer_id <= buffer_pool_->count(); ++buffer_id) {
+                                     frame_info_);
+  for (int buffer_id = 0; buffer_id < buffer_pool_->count(); ++buffer_id) {
     base::SharedMemoryHandle remote_handle =
         buffer_pool_->ShareToProcess(buffer_id, client->render_process_handle);
 
@@ -632,7 +688,8 @@ void VideoCaptureController::PostStopping() {
 
   // When clients still have some buffers, or device has not been stopped yet,
   // do nothing.
-  if (buffer_pool_->IsAnyBufferHeldForConsumers() || device_in_use_)
+  if ((buffer_pool_.get() && buffer_pool_->IsAnyBufferHeldForConsumers()) ||
+      device_in_use_)
     return;
 
   {

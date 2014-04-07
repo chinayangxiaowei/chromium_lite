@@ -12,6 +12,7 @@
 #include "chrome/browser/extensions/extension_system_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/extensions/api/events.h"
+#include "chrome/common/extensions/api/extension_api.h"
 #include "content/public/browser/browser_thread.h"
 
 using extensions::api::events::Rule;
@@ -29,7 +30,11 @@ RulesFunction::~RulesFunction() {}
 bool RulesFunction::HasPermission() {
   std::string event_name;
   EXTENSION_FUNCTION_VALIDATE(args_->GetString(0, &event_name));
-  return extension_->HasAPIPermission(event_name);
+  Feature::Availability availability =
+      ExtensionAPI::GetSharedInstance()->IsAvailable(
+          event_name, extension_, Feature::BLESSED_EXTENSION_CONTEXT,
+          source_url());
+  return availability.is_available();
 }
 
 bool RulesFunction::RunImpl() {
@@ -37,22 +42,21 @@ bool RulesFunction::RunImpl() {
   EXTENSION_FUNCTION_VALIDATE(args_->GetString(0, &event_name));
 
   RulesRegistryService* rules_registry_service =
-      ExtensionSystemFactory::GetForProfile(profile())->
-      rules_registry_service();
+      RulesRegistryService::Get(profile());
   rules_registry_ = rules_registry_service->GetRulesRegistry(event_name);
   // Raw access to this function is not available to extensions, therefore
   // there should never be a request for a nonexisting rules registry.
-  EXTENSION_FUNCTION_VALIDATE(rules_registry_);
+  EXTENSION_FUNCTION_VALIDATE(rules_registry_.get());
 
-  if (content::BrowserThread::CurrentlyOn(rules_registry_->GetOwnerThread())) {
+  if (content::BrowserThread::CurrentlyOn(rules_registry_->owner_thread())) {
     bool success = RunImplOnCorrectThread();
     SendResponse(success);
   } else {
     scoped_refptr<base::MessageLoopProxy> message_loop_proxy =
         content::BrowserThread::GetMessageLoopProxyForThread(
-            rules_registry_->GetOwnerThread());
+            rules_registry_->owner_thread());
     base::PostTaskAndReplyWithResult(
-        message_loop_proxy,
+        message_loop_proxy.get(),
         FROM_HERE,
         base::Bind(&RulesFunction::RunImplOnCorrectThread, this),
         base::Bind(&RulesFunction::SendResponse, this));

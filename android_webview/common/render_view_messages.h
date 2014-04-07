@@ -8,6 +8,7 @@
 #include "ipc/ipc_channel_handle.h"
 #include "ipc/ipc_message_macros.h"
 #include "ipc/ipc_platform_file.h"
+#include "third_party/skia/include/core/SkColor.h"
 
 // Singly-included section for enums and custom IPC traits.
 #ifndef ANDROID_WEBVIEW_COMMON_RENDER_VIEW_MESSAGES_H_
@@ -51,14 +52,6 @@ IPC_MESSAGE_ROUTED2(AwViewMsg_DoHitTest,
                     int /* view_x */,
                     int /* view_y */)
 
-// Enables receiving pictures from the renderer on every new frame.
-IPC_MESSAGE_ROUTED1(AwViewMsg_EnableCapturePictureCallback,
-                    bool /* enable */)
-
-// Requests a new picture with the latest renderer contents synchronously.
-// This message blocks the browser process on the renderer until complete.
-IPC_SYNC_MESSAGE_ROUTED0_0(AwViewMsg_CapturePictureSync)
-
 // Sets the zoom level for text only. Used in layout modes other than
 // Text Autosizing.
 IPC_MESSAGE_ROUTED1(AwViewMsg_SetTextZoomLevel,
@@ -69,16 +62,17 @@ IPC_MESSAGE_ROUTED1(AwViewMsg_SetTextZoomLevel,
 // recalculated by WebKit.
 IPC_MESSAGE_ROUTED0(AwViewMsg_ResetScrollAndScaleState)
 
-// Set whether fixed layout mode is enabled. Must be updated together
-// with WebSettings.viewport_enabled. Only WebView switches this mode
-// dynamically, thus there is no support for this in the common code.
-IPC_MESSAGE_ROUTED1(AwViewMsg_SetEnableFixedLayoutMode,
-                    bool /* enabled */)
-
 // Sets the initial page scale. This overrides initial scale set by
 // the meta viewport tag.
 IPC_MESSAGE_ROUTED1(AwViewMsg_SetInitialPageScale,
                     double /* page_scale_factor */)
+
+// Sets the base background color for this view.
+IPC_MESSAGE_ROUTED1(AwViewMsg_SetBackgroundColor,
+                    SkColor);
+
+IPC_MESSAGE_CONTROL1(AwViewMsg_SetJsOnlineProperty,
+                     bool /* network_up */)
 
 //-----------------------------------------------------------------------------
 // RenderView messages
@@ -93,13 +87,6 @@ IPC_MESSAGE_ROUTED2(AwViewHostMsg_DocumentHasImagesResponse,
 IPC_MESSAGE_ROUTED1(AwViewHostMsg_UpdateHitTestData,
                     android_webview::AwHitTestData)
 
-// Notification that a new picture becomes available. It is only sent if
-// AwViewMsg_EnableCapturePictureCallback was previously enabled.
-IPC_MESSAGE_ROUTED0(AwViewHostMsg_PictureUpdated)
-
-// Sent by the renderer when accelerated compositing is enabled, allowing the
-// browser to perform synchronous input event filtering.
-IPC_MESSAGE_ROUTED1(AwViewHostMsg_DidActivateAcceleratedCompositing,
-                    int /* input_handler_id */)
-
-
+// Sent whenever the page scale factor (as seen by RenderView) is changed.
+IPC_MESSAGE_ROUTED1(AwViewHostMsg_PageScaleFactorChanged,
+                    float /* page_scale_factor */)

@@ -6,35 +6,42 @@
 
 #include "base/bind.h"
 #include "base/stl_util.h"
+#include "chrome/browser/content_settings/host_content_settings_map.h"
+#include "chrome/browser/content_settings/tab_specific_content_settings.h"
 #include "chrome/browser/download/download_request_infobar_delegate.h"
 #include "chrome/browser/infobars/infobar_service.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/tab_contents/tab_util.h"
 #include "chrome/browser/ui/blocked_content/blocked_content_tab_helper.h"
 #include "chrome/browser/ui/blocked_content/blocked_content_tab_helper_delegate.h"
+#include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/notification_source.h"
 #include "content/public/browser/notification_types.h"
+#include "content/public/browser/render_process_host.h"
+#include "content/public/browser/resource_dispatcher_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
+#include "url/gurl.h"
 
 using content::BrowserThread;
 using content::NavigationController;
 using content::NavigationEntry;
-using content::WebContents;
 
 // TabDownloadState ------------------------------------------------------------
 
 DownloadRequestLimiter::TabDownloadState::TabDownloadState(
     DownloadRequestLimiter* host,
-    WebContents* contents,
-    WebContents* originating_web_contents)
+    content::WebContents* contents,
+    content::WebContents* originating_web_contents)
     : content::WebContentsObserver(contents),
+      web_contents_(contents),
       host_(host),
       status_(DownloadRequestLimiter::ALLOW_ONE_DOWNLOAD),
       download_count_(0),
-      factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {
+      factory_(this) {
   content::Source<NavigationController> notification_source(
       &contents->GetController());
   content::Source<content::WebContents> web_contents_source(contents);
@@ -64,15 +71,11 @@ void DownloadRequestLimiter::TabDownloadState::DidGetUserGesture() {
     return;
   }
 
-  InfoBarService* infobar_service =
-      InfoBarService::FromWebContents(web_contents());
   // See PromptUserForDownload(): if there's no InfoBarService, then
   // DOWNLOADS_NOT_ALLOWED is functionally equivalent to PROMPT_BEFORE_DOWNLOAD.
-  if ((infobar_service &&
-       status_ != DownloadRequestLimiter::ALLOW_ALL_DOWNLOADS &&
-       status_ != DownloadRequestLimiter::DOWNLOADS_NOT_ALLOWED) ||
-      (!infobar_service &&
-       status_ != DownloadRequestLimiter::ALLOW_ALL_DOWNLOADS)) {
+  if ((status_ != DownloadRequestLimiter::ALLOW_ALL_DOWNLOADS) &&
+      (!InfoBarService::FromWebContents(web_contents()) ||
+       (status_ != DownloadRequestLimiter::DOWNLOADS_NOT_ALLOWED))) {
     // Revert to default status.
     host_->Remove(this);
     // WARNING: We've been deleted.
@@ -106,30 +109,53 @@ void DownloadRequestLimiter::TabDownloadState::AboutToNavigateRenderView(
 }
 
 void DownloadRequestLimiter::TabDownloadState::PromptUserForDownload(
-    WebContents* web_contents,
     const DownloadRequestLimiter::Callback& callback) {
   callbacks_.push_back(callback);
-
+  DCHECK(web_contents_);
   if (is_showing_prompt())
-    return;  // Already showing prompt.
-
+    return;
   DownloadRequestInfoBarDelegate::Create(
-      InfoBarService::FromWebContents(web_contents), factory_.GetWeakPtr());
+      InfoBarService::FromWebContents(web_contents_), factory_.GetWeakPtr());
+}
+
+void DownloadRequestLimiter::TabDownloadState::SetContentSetting(
+    ContentSetting setting) {
+  if (!web_contents_)
+    return;
+  HostContentSettingsMap* settings =
+    DownloadRequestLimiter::GetContentSettings(web_contents_);
+  ContentSettingsPattern pattern(
+      ContentSettingsPattern::FromURL(web_contents_->GetURL()));
+  if (!settings || !pattern.IsValid())
+    return;
+  settings->SetContentSetting(
+      pattern,
+      ContentSettingsPattern::Wildcard(),
+      CONTENT_SETTINGS_TYPE_AUTOMATIC_DOWNLOADS,
+      std::string(),
+      setting);
 }
 
 void DownloadRequestLimiter::TabDownloadState::Cancel() {
+  SetContentSetting(CONTENT_SETTING_BLOCK);
+  NotifyCallbacks(false);
+}
+
+void DownloadRequestLimiter::TabDownloadState::CancelOnce() {
   NotifyCallbacks(false);
 }
 
 void DownloadRequestLimiter::TabDownloadState::Accept() {
+  SetContentSetting(CONTENT_SETTING_ALLOW);
   NotifyCallbacks(true);
 }
 
 DownloadRequestLimiter::TabDownloadState::TabDownloadState()
-    : host_(NULL),
+    : web_contents_(NULL),
+      host_(NULL),
       status_(DownloadRequestLimiter::ALLOW_ONE_DOWNLOAD),
       download_count_(0),
-      factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {
+      factory_(this) {
 }
 
 void DownloadRequestLimiter::TabDownloadState::Observe(
@@ -208,7 +234,15 @@ void DownloadRequestLimiter::TabDownloadState::NotifyCallbacks(bool allow) {
 
 // DownloadRequestLimiter ------------------------------------------------------
 
-DownloadRequestLimiter::DownloadRequestLimiter() {
+HostContentSettingsMap* DownloadRequestLimiter::content_settings_ = NULL;
+
+void DownloadRequestLimiter::SetContentSettingsForTesting(
+    HostContentSettingsMap* content_settings) {
+  content_settings_ = content_settings;
+}
+
+DownloadRequestLimiter::DownloadRequestLimiter()
+    : factory_(this) {
 }
 
 DownloadRequestLimiter::~DownloadRequestLimiter() {
@@ -218,7 +252,7 @@ DownloadRequestLimiter::~DownloadRequestLimiter() {
 }
 
 DownloadRequestLimiter::DownloadStatus
-    DownloadRequestLimiter::GetDownloadStatus(WebContents* web_contents) {
+DownloadRequestLimiter::GetDownloadStatus(content::WebContents* web_contents) {
   TabDownloadState* state = GetDownloadState(web_contents, NULL, false);
   return state ? state->download_status() : ALLOW_ONE_DOWNLOAD;
 }
@@ -241,8 +275,8 @@ void DownloadRequestLimiter::CanDownloadOnIOThread(
 
 DownloadRequestLimiter::TabDownloadState*
 DownloadRequestLimiter::GetDownloadState(
-    WebContents* web_contents,
-    WebContents* originating_web_contents,
+    content::WebContents* web_contents,
+    content::WebContents* originating_web_contents,
     bool create) {
   DCHECK(web_contents);
   StateMap::iterator i = state_map_.find(web_contents);
@@ -265,7 +299,7 @@ void DownloadRequestLimiter::CanDownload(int render_process_host_id,
                                          const Callback& callback) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
-  WebContents* originating_contents =
+  content::WebContents* originating_contents =
       tab_util::GetWebContentsByID(render_process_host_id, render_view_id);
   if (!originating_contents) {
     // The WebContents was closed, don't allow the download.
@@ -273,34 +307,66 @@ void DownloadRequestLimiter::CanDownload(int render_process_host_id,
     return;
   }
 
-  CanDownloadImpl(
-      originating_contents,
-      request_id,
-      request_method,
-      callback);
-}
-
-void DownloadRequestLimiter::CanDownloadImpl(WebContents* originating_contents,
-                                             int request_id,
-                                             const std::string& request_method,
-                                             const Callback& callback) {
-  DCHECK(originating_contents);
-
-  // FYI: Chrome Frame overrides CanDownload in ExternalTabContainer in order
-  // to cancel the download operation in chrome and let the host browser
-  // take care of it.
-  if (originating_contents->GetDelegate() &&
-      !originating_contents->GetDelegate()->CanDownload(
-          originating_contents->GetRenderViewHost(),
-          request_id,
-          request_method)) {
+  if (!originating_contents->GetDelegate()) {
     ScheduleNotification(callback, false);
     return;
   }
 
+  // Note that because |originating_contents| might go away before
+  // OnCanDownloadDecided is invoked, we look it up by |render_process_host_id|
+  // and |render_view_id|.
+  base::Callback<void(bool)> can_download_callback = base::Bind(
+      &DownloadRequestLimiter::OnCanDownloadDecided,
+      factory_.GetWeakPtr(),
+      render_process_host_id,
+      render_view_id,
+      request_id,
+      request_method,
+      callback);
+
+  originating_contents->GetDelegate()->CanDownload(
+      originating_contents->GetRenderViewHost(),
+      request_id,
+      request_method,
+      can_download_callback);
+}
+
+void DownloadRequestLimiter::OnCanDownloadDecided(
+    int render_process_host_id,
+    int render_view_id,
+    int request_id,
+    const std::string& request_method,
+    const Callback& orig_callback, bool allow) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  content::WebContents* originating_contents =
+      tab_util::GetWebContentsByID(render_process_host_id, render_view_id);
+  if (!originating_contents || !allow) {
+    ScheduleNotification(orig_callback, false);
+    return;
+  }
+
+  CanDownloadImpl(originating_contents,
+                  request_id,
+                  request_method,
+                  orig_callback);
+}
+
+HostContentSettingsMap* DownloadRequestLimiter::GetContentSettings(
+    content::WebContents* contents) {
+  return content_settings_ ? content_settings_ : Profile::FromBrowserContext(
+      contents->GetBrowserContext())->GetHostContentSettingsMap();
+}
+
+void DownloadRequestLimiter::CanDownloadImpl(
+    content::WebContents* originating_contents,
+    int request_id,
+    const std::string& request_method,
+    const Callback& callback) {
+  DCHECK(originating_contents);
+
   // If the tab requesting the download is a constrained popup that is not
   // shown, treat the request as if it came from the parent.
-  WebContents* effective_contents = originating_contents;
+  content::WebContents* effective_contents = originating_contents;
   BlockedContentTabHelper* blocked_content_tab_helper =
       BlockedContentTabHelper::FromWebContents(originating_contents);
   if (blocked_content_tab_helper &&
@@ -323,16 +389,48 @@ void DownloadRequestLimiter::CanDownloadImpl(WebContents* originating_contents,
     case ALLOW_ONE_DOWNLOAD:
       state->set_download_status(PROMPT_BEFORE_DOWNLOAD);
       ScheduleNotification(callback, true);
+      state->increment_download_count();
       break;
 
     case DOWNLOADS_NOT_ALLOWED:
       ScheduleNotification(callback, false);
       break;
 
-    case PROMPT_BEFORE_DOWNLOAD:
-      state->PromptUserForDownload(effective_contents, callback);
-      state->increment_download_count();
+    case PROMPT_BEFORE_DOWNLOAD: {
+      HostContentSettingsMap* content_settings = GetContentSettings(
+          effective_contents);
+      ContentSetting setting = CONTENT_SETTING_ASK;
+      if (content_settings)
+        setting = content_settings->GetContentSetting(
+            effective_contents->GetURL(),
+            effective_contents->GetURL(),
+            CONTENT_SETTINGS_TYPE_AUTOMATIC_DOWNLOADS,
+            std::string());
+      switch (setting) {
+        case CONTENT_SETTING_ALLOW:
+          TabSpecificContentSettings::FromWebContents(
+              effective_contents)->SetDownloadsBlocked(false);
+          ScheduleNotification(callback, true);
+          state->increment_download_count();
+          return;
+        case CONTENT_SETTING_BLOCK:
+          TabSpecificContentSettings::FromWebContents(
+              effective_contents)->SetDownloadsBlocked(true);
+          ScheduleNotification(callback, false);
+          return;
+        case CONTENT_SETTING_DEFAULT:
+        case CONTENT_SETTING_ASK:
+        case CONTENT_SETTING_SESSION_ONLY:
+          state->PromptUserForDownload(callback);
+          state->increment_download_count();
+          break;
+        case CONTENT_SETTING_NUM_SETTINGS:
+        default:
+          NOTREACHED();
+          return;
+      }
       break;
+    }
 
     default:
       NOTREACHED();

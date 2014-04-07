@@ -5,12 +5,11 @@
 #include "chrome/browser/chromeos/login/managed/managed_user_authenticator.h"
 
 #include "base/bind.h"
-#include "base/string_util.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
 #include "chrome/browser/chromeos/boot_times_loader.h"
-#include "chrome/browser/chromeos/cros/cros_library.h"
-#include "chrome/browser/chromeos/cros/cryptohome_library.h"
 #include "chromeos/cryptohome/async_method_caller.h"
+#include "chromeos/cryptohome/cryptohome_library.h"
 #include "chromeos/dbus/cryptohome_client.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
 #include "content/public/browser/browser_thread.h"
@@ -65,7 +64,6 @@ void TriggerResolveWithLoginTimeMarker(
 void Mount(ManagedUserAuthenticator::AuthAttempt* attempt,
            scoped_refptr<ManagedUserAuthenticator> resolver,
            int flags) {
-  // TODO(antrim) : use additional mount function here.
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   chromeos::BootTimesLoader::Get()->AddLoginTimeMarker(
       "CryptohomeMount-LMU-Start", false);
@@ -83,12 +81,28 @@ void Mount(ManagedUserAuthenticator::AuthAttempt* attempt,
       base::Bind(&TriggerResolveResult, attempt, resolver));
 }
 
+// Calls cryptohome's addKey method.
+void AddKey(ManagedUserAuthenticator::AuthAttempt* attempt,
+            scoped_refptr<ManagedUserAuthenticator> resolver,
+            const std::string& hashed_master_key) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  chromeos::BootTimesLoader::Get()->AddLoginTimeMarker(
+      "CryptohomeAddKey-LMU-Start", false);
+  cryptohome::AsyncMethodCaller::GetInstance()->AsyncAddKey(
+      attempt->username,
+      attempt->hashed_password,
+      hashed_master_key,
+      base::Bind(&TriggerResolveWithLoginTimeMarker,
+                 "CryptohomeAddKey-LMU-End",
+                 attempt,
+                 resolver));
+}
+
 // Returns hash of |password|, salted with the system salt.
 std::string HashPassword(const std::string& password) {
   // Get salt, ascii encode, update sha with that, then update with ascii
   // of password, then end.
-  std::string ascii_salt =
-      CrosLibrary::Get()->GetCryptohomeLibrary()->GetSystemSalt();
+  std::string ascii_salt = CryptohomeLibrary::Get()->GetSystemSalt();
   char passhash_buf[kPasswordHashLength];
 
   // Hash salt and password
@@ -105,15 +119,16 @@ std::string HashPassword(const std::string& password) {
 
 }  // namespace
 
-ManagedUserAuthenticator::ManagedUserAuthenticator(StatusConsumer* consumer)
+ManagedUserAuthenticator::ManagedUserAuthenticator(AuthStatusConsumer* consumer)
     : consumer_(consumer) {}
 
-void ManagedUserAuthenticator::AuthenticateToMount(const std::string& username,
-                                               const std::string& password) {
+void ManagedUserAuthenticator::AuthenticateToMount(
+    const std::string& username,
+    const std::string& password) {
   std::string canonicalized = gaia::CanonicalizeEmail(username);
 
   current_state_.reset(new ManagedUserAuthenticator::AuthAttempt(
-      canonicalized, password, HashPassword(password)));
+      canonicalized, password, HashPassword(password), false));
 
   BrowserThread::PostTask(BrowserThread::UI,
       FROM_HERE,
@@ -123,13 +138,13 @@ void ManagedUserAuthenticator::AuthenticateToMount(const std::string& username,
           cryptohome::MOUNT_FLAGS_NONE));
 }
 
-void ManagedUserAuthenticator::AuthenticateToCreate(const std::string& username,
-                                                const std::string& password) {
-
+void ManagedUserAuthenticator::AuthenticateToCreate(
+    const std::string& username,
+    const std::string& password) {
   std::string canonicalized = gaia::CanonicalizeEmail(username);
 
   current_state_.reset(new ManagedUserAuthenticator::AuthAttempt(
-      canonicalized, password, HashPassword(password)));
+      canonicalized, password, HashPassword(password), false));
 
   BrowserThread::PostTask(BrowserThread::UI,
       FROM_HERE,
@@ -139,13 +154,34 @@ void ManagedUserAuthenticator::AuthenticateToCreate(const std::string& username,
            cryptohome::CREATE_IF_MISSING));
 }
 
+void ManagedUserAuthenticator::AddMasterKey(
+    const std::string& username,
+    const std::string& password,
+    const std::string& master_key) {
+  std::string canonicalized = gaia::CanonicalizeEmail(username);
+
+  current_state_.reset(new ManagedUserAuthenticator::AuthAttempt(
+      canonicalized, password, HashPassword(password), true));
+
+  BrowserThread::PostTask(BrowserThread::UI,
+      FROM_HERE,
+      base::Bind(&AddKey,
+           current_state_.get(),
+           scoped_refptr<ManagedUserAuthenticator>(this),
+           HashPassword(master_key)));
+}
+
 void ManagedUserAuthenticator::OnAuthenticationSuccess(
-    const std::string& mount_hash) {
+    const std::string& mount_hash,
+    bool add_key) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   VLOG(1) << "Locally managed user authentication success";
-
-  if (consumer_)
-    consumer_->OnMountSuccess(mount_hash);
+  if (consumer_) {
+    if (add_key)
+      consumer_->OnAddKeySuccess();
+    else
+      consumer_->OnMountSuccess(mount_hash);
+  }
 }
 
 void ManagedUserAuthenticator::OnAuthenticationFailure(
@@ -202,7 +238,8 @@ void ManagedUserAuthenticator::Resolve() {
           FROM_HERE,
           base::Bind(&ManagedUserAuthenticator::OnAuthenticationSuccess,
                      this,
-                     current_state_->hash()));
+                     current_state_->hash(),
+                     current_state_->add_key));
       break;
     default:
       NOTREACHED();
@@ -219,7 +256,7 @@ ManagedUserAuthenticator::AuthState ManagedUserAuthenticator::ResolveState() {
   // This is an important invariant.
   if (!current_state_->cryptohome_complete())
     return CONTINUE;
-  if (!current_state_->hash_obtained())
+  if (!current_state_->add_key && !current_state_->hash_obtained())
     return CONTINUE;
 
   AuthState state;
@@ -230,7 +267,7 @@ ManagedUserAuthenticator::AuthState ManagedUserAuthenticator::ResolveState() {
     state = ResolveCryptohomeFailureState();
 
   DCHECK(current_state_->cryptohome_complete());
-  DCHECK(current_state_->hash_obtained());
+  DCHECK(current_state_->hash_obtained() || current_state_->add_key);
   return state;
 }
 
@@ -260,11 +297,13 @@ ManagedUserAuthenticator::AuthState
 }
 
 ManagedUserAuthenticator::AuthAttempt::AuthAttempt(const std::string& username,
-                                               const std::string& password,
-                                               const std::string& hashed)
+                                                   const std::string& password,
+                                                   const std::string& hashed,
+                                                   bool add_key_attempt)
     : username(username),
       password(password),
       hashed_password(hashed),
+      add_key(add_key_attempt),
       cryptohome_complete_(false),
       cryptohome_outcome_(false),
       hash_obtained_(false),

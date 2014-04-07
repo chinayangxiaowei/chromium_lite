@@ -5,7 +5,6 @@
 #ifndef CHROME_BROWSER_SYNC_PROFILE_SYNC_SERVICE_H_
 #define CHROME_BROWSER_SYNC_PROFILE_SYNC_SERVICE_H_
 
-#include <list>
 #include <string>
 #include <utility>
 #include <vector>
@@ -15,39 +14,41 @@
 #include "base/gtest_prod_util.h"
 #include "base/location.h"
 #include "base/memory/scoped_ptr.h"
+#include "base/memory/scoped_vector.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
-#include "base/string16.h"
-#include "base/time.h"
-#include "base/timer.h"
-#include "chrome/browser/profiles/profile_keyed_service.h"
+#include "base/strings/string16.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
+#include "chrome/browser/signin/oauth2_token_service.h"
 #include "chrome/browser/signin/signin_global_error.h"
 #include "chrome/browser/sync/backend_unrecoverable_error_handler.h"
-#include "chrome/browser/sync/failed_datatypes_handler.h"
 #include "chrome/browser/sync/glue/data_type_controller.h"
+#include "chrome/browser/sync/glue/data_type_encryption_handler.h"
 #include "chrome/browser/sync/glue/data_type_manager.h"
 #include "chrome/browser/sync/glue/data_type_manager_observer.h"
+#include "chrome/browser/sync/glue/failed_data_types_handler.h"
 #include "chrome/browser/sync/glue/sync_backend_host.h"
-#include "chrome/browser/sync/invalidation_frontend.h"
-#include "chrome/browser/sync/invalidations/invalidator_storage.h"
 #include "chrome/browser/sync/profile_sync_service_base.h"
 #include "chrome/browser/sync/profile_sync_service_observer.h"
 #include "chrome/browser/sync/sync_prefs.h"
+#include "components/browser_context_keyed_service/browser_context_keyed_service.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 #include "content/public/browser/notification_types.h"
 #include "google_apis/gaia/google_service_auth_error.h"
-#include "googleurl/src/gurl.h"
+#include "net/base/backoff_entry.h"
 #include "sync/internal_api/public/base/model_type.h"
 #include "sync/internal_api/public/engine/model_safe_worker.h"
 #include "sync/internal_api/public/sync_manager_factory.h"
 #include "sync/internal_api/public/util/experiments.h"
 #include "sync/internal_api/public/util/unrecoverable_error_handler.h"
 #include "sync/js/sync_js_controller.h"
+#include "url/gurl.h"
 
 class Profile;
 class ProfileSyncComponentsFactory;
-class SigninManager;
+class SigninManagerBase;
 class SyncGlobalError;
 
 namespace browser_sync {
@@ -63,7 +64,6 @@ namespace sessions { class SyncSessionSnapshot; }
 
 namespace syncer {
 class BaseTransaction;
-class InvalidatorRegistrar;
 struct SyncCredentials;
 struct UserShare;
 }
@@ -126,6 +126,7 @@ class EncryptedData;
 //   Additionally, the current sync configuration can be fetched by calling
 //    * GetRegisteredDataTypes()
 //    * GetPreferredDataTypes()
+//    * GetActiveDataTypes()
 //    * IsUsingSecondaryPassphrase()
 //    * EncryptEverythingEnabled()
 //    * IsPassphraseRequired()/IsPassphraseRequiredForDecryption()
@@ -161,8 +162,10 @@ class ProfileSyncService : public ProfileSyncServiceBase,
                            public SigninGlobalError::AuthStatusProvider,
                            public syncer::UnrecoverableErrorHandler,
                            public content::NotificationObserver,
-                           public ProfileKeyedService,
-                           public InvalidationFrontend {
+                           public BrowserContextKeyedService,
+                           public browser_sync::DataTypeEncryptionHandler,
+                           public OAuth2TokenService::Consumer,
+                           public OAuth2TokenService::Observer {
  public:
   typedef browser_sync::SyncBackendHost::Status Status;
 
@@ -185,6 +188,7 @@ class ProfileSyncService : public ProfileSyncServiceBase,
                                             // types and clicking OK.
     // Events resulting in the stoppage of sync service.
     STOP_FROM_OPTIONS = 20,  // Sync was stopped from Wrench->Options.
+    STOP_FROM_ADVANCED_DIALOG = 21,  // Sync was stopped via advanced settings.
 
     // Miscellaneous events caused by sync service.
 
@@ -219,7 +223,7 @@ class ProfileSyncService : public ProfileSyncServiceBase,
   // Takes ownership of |factory|.
   ProfileSyncService(ProfileSyncComponentsFactory* factory,
                      Profile* profile,
-                     SigninManager* signin,
+                     SigninManagerBase* signin,
                      StartBehavior start_behavior);
   virtual ~ProfileSyncService();
 
@@ -232,12 +236,15 @@ class ProfileSyncService : public ProfileSyncServiceBase,
   // ProfileSyncServiceBase implementation.
   virtual bool HasSyncSetupCompleted() const OVERRIDE;
   virtual bool ShouldPushChanges() OVERRIDE;
-  virtual syncer::ModelTypeSet GetPreferredDataTypes() const OVERRIDE;
-  virtual void AddObserver(Observer* observer) OVERRIDE;
-  virtual void RemoveObserver(Observer* observer) OVERRIDE;
-  virtual bool HasObserver(Observer* observer) const OVERRIDE;
+  virtual syncer::ModelTypeSet GetActiveDataTypes() const OVERRIDE;
+  virtual void AddObserver(ProfileSyncServiceBase::Observer* observer) OVERRIDE;
+  virtual void RemoveObserver(
+      ProfileSyncServiceBase::Observer* observer) OVERRIDE;
+  virtual bool HasObserver(
+      ProfileSyncServiceBase::Observer* observer) const OVERRIDE;
 
   void RegisterAuthNotifications();
+  void UnregisterAuthNotifications();
 
   // Returns true if sync is enabled/not suppressed and the user is logged in.
   // (being logged in does not mean that tokens are available - tokens may
@@ -246,9 +253,9 @@ class ProfileSyncService : public ProfileSyncServiceBase,
   // Virtual to enable mocking in tests.
   virtual bool IsSyncEnabledAndLoggedIn();
 
-  // Return whether all sync tokens are loaded and available for the backend to
-  // start up. Virtual to enable mocking in tests.
-  virtual bool IsSyncTokenAvailable();
+  // Return whether OAuth2 refresh token is loaded and available for the backend
+  // to start up. Virtual to enable mocking in tests.
+  virtual bool IsOAuthRefreshTokenAvailable();
 
   // Registers a data type controller with the sync service.  This
   // makes the data type controller available for use, it does not
@@ -268,6 +275,16 @@ class ProfileSyncService : public ProfileSyncServiceBase,
   // Return value is an empty scoped_ptr if the device info is unavailable.
   virtual scoped_ptr<browser_sync::DeviceInfo> GetLocalDeviceInfo() const;
 
+  // Returns sync's representation of the device info for a client identified
+  // by |client_id|. Return value is an empty scoped ptr if the device info
+  // is unavailable.
+  virtual scoped_ptr<browser_sync::DeviceInfo> GetDeviceInfo(
+      const std::string& client_id) const;
+
+  // Gets the device info for all devices signed into the account associated
+  // with this profile.
+  virtual ScopedVector<browser_sync::DeviceInfo> GetAllSignedInDevices() const;
+
   // Fills state_map with a map of current data types that are possible to
   // sync, as well as their states.
   void GetDataTypeControllerStates(
@@ -275,12 +292,6 @@ class ProfileSyncService : public ProfileSyncServiceBase,
 
   // Disables sync for user. Use ShowLoginDialog to enable.
   virtual void DisableForUser();
-
-  // syncer::InvalidationHandler implementation (via SyncFrontend).
-  virtual void OnInvalidatorStateChange(
-      syncer::InvalidatorState state) OVERRIDE;
-  virtual void OnIncomingInvalidation(
-      const syncer::ObjectIdInvalidationMap& invalidation_map) OVERRIDE;
 
   // SyncFrontend implementation.
   virtual void OnBackendInitialized(
@@ -309,11 +320,14 @@ class ProfileSyncService : public ProfileSyncServiceBase,
       const syncer::SyncProtocolError& error) OVERRIDE;
 
   // DataTypeManagerObserver implementation.
-  virtual void OnConfigureBlocked() OVERRIDE;
   virtual void OnConfigureDone(
       const browser_sync::DataTypeManager::ConfigureResult& result) OVERRIDE;
   virtual void OnConfigureRetry() OVERRIDE;
   virtual void OnConfigureStart() OVERRIDE;
+
+  // DataTypeEncryptionHandler implementation.
+  virtual bool IsPassphraseRequired() const OVERRIDE;
+  virtual syncer::ModelTypeSet GetEncryptedDataTypes() const OVERRIDE;
 
   // Update the last auth error and notify observers of error state.
   void UpdateAuthErrorState(const GoogleServiceAuthError& error);
@@ -369,9 +383,6 @@ class ProfileSyncService : public ProfileSyncServiceBase,
   tracked_objects::Location unrecoverable_error_location() {
     return unrecoverable_error_location_;
   }
-
-  // Returns true if OnPassphraseRequired has been called for any reason.
-  virtual bool IsPassphraseRequired() const;
 
   // Returns true if OnPassphraseRequired has been called for decryption and
   // we have an encrypted data type enabled.
@@ -492,6 +503,10 @@ class ProfileSyncService : public ProfileSyncServiceBase,
   virtual void ChangePreferredDataTypes(
       syncer::ModelTypeSet preferred_types);
 
+  // Returns the set of types which are preferred for enabling. This is a
+  // superset of the active types (see GetActiveTypes()).
+  virtual syncer::ModelTypeSet GetPreferredDataTypes() const;
+
   // Gets the set of all data types that could be allowed (the set that
   // should be advertised to the user).  These will typically only change
   // via a command-line option.  See class comment for more on what it means
@@ -547,30 +562,19 @@ class ProfileSyncService : public ProfileSyncServiceBase,
   // encryption_pending() must be checked.
   virtual bool EncryptEverythingEnabled() const;
 
-  // Fills |encrypted_types| with the set of currently encrypted types. Does
-  // not account for types pending encryption.
-  virtual syncer::ModelTypeSet GetEncryptedDataTypes() const;
-
-#if defined(OS_ANDROID)
-  // Android does not display password prompts, passwords are only allowed to be
-  // synced if Cryptographer has already been initialized and does not have
-  // pending keys.
-  bool ShouldEnablePasswordSyncForAndroid() const;
-#endif
-
   // Returns true if the syncer is waiting for new datatypes to be encrypted.
   virtual bool encryption_pending() const;
 
   const GURL& sync_service_url() const { return sync_service_url_; }
   bool auto_start_enabled() const { return auto_start_enabled_; }
-  SigninManager* signin() const { return signin_; }
+  SigninManagerBase* signin() const { return signin_; }
   bool setup_in_progress() const { return setup_in_progress_; }
 
   // Stops the sync backend and sets the flag for suppressing sync startup.
   void StopAndSuppress();
 
   // Resets the flag for suppressing sync startup and starts the sync backend.
-  void UnsuppressAndStart();
+  virtual void UnsuppressAndStart();
 
   // Marks all currently registered types as "acknowledged" so we won't prompt
   // the user about them any more.
@@ -579,7 +583,7 @@ class ProfileSyncService : public ProfileSyncServiceBase,
   SyncGlobalError* sync_global_error() { return sync_global_error_.get(); }
 
   // TODO(sync): This is only used in tests.  Can we remove it?
-  const FailedDatatypesHandler& failed_datatypes_handler() const;
+  const browser_sync::FailedDataTypesHandler& failed_data_types_handler() const;
 
   browser_sync::DataTypeManager::ConfigureStatus configure_status() {
     return configure_status_;
@@ -595,43 +599,52 @@ class ProfileSyncService : public ProfileSyncServiceBase,
   // The set of currently enabled sync experiments.
   const syncer::Experiments& current_experiments() const;
 
-  // InvalidationFrontend implementation.  It is an error to have
-  // registered handlers when Shutdown() is called.
-  virtual void RegisterInvalidationHandler(
-      syncer::InvalidationHandler* handler) OVERRIDE;
-  virtual void UpdateRegisteredInvalidationIds(
-      syncer::InvalidationHandler* handler,
-      const syncer::ObjectIdSet& ids) OVERRIDE;
-  virtual void UnregisterInvalidationHandler(
-      syncer::InvalidationHandler* handler) OVERRIDE;
-  virtual void AcknowledgeInvalidation(
-      const invalidation::ObjectId& id,
-      const syncer::AckHandle& ack_handle) OVERRIDE;
+  // OAuth2TokenService::Consumer implementation.
+  virtual void OnGetTokenSuccess(
+      const OAuth2TokenService::Request* request,
+      const std::string& access_token,
+      const base::Time& expiration_time) OVERRIDE;
+  virtual void OnGetTokenFailure(
+      const OAuth2TokenService::Request* request,
+      const GoogleServiceAuthError& error) OVERRIDE;
 
-  virtual syncer::InvalidatorState GetInvalidatorState() const OVERRIDE;
+  // OAuth2TokenService::Observer implementation.
+  virtual void OnRefreshTokenAvailable(const std::string& account_id) OVERRIDE;
+  virtual void OnRefreshTokenRevoked(
+      const std::string& account_id,
+      const GoogleServiceAuthError& error) OVERRIDE;
+  virtual void OnRefreshTokensLoaded() OVERRIDE;
+  virtual void OnRefreshTokensCleared() OVERRIDE;
 
-  // ProfileKeyedService implementation.  This must be called exactly
+  // BrowserContextKeyedService implementation.  This must be called exactly
   // once (before this object is destroyed).
   virtual void Shutdown() OVERRIDE;
 
-  // Simulate an incoming notification for the given id and payload.
-  void EmitInvalidationForTest(
-      const invalidation::ObjectId& id,
-      const std::string& payload);
+  // Called when a datatype (SyncableService) has a need for sync to start
+  // ASAP, presumably because a local change event has occurred but we're
+  // still in deferred start mode, meaning the SyncableService hasn't been
+  // told to MergeDataAndStartSyncing yet.
+  void OnDataTypeRequestsSyncStartup(syncer::ModelType type);
 
  protected:
   // Used by test classes that derive from ProfileSyncService.
   virtual browser_sync::SyncBackendHost* GetBackendForTest();
 
+  // Helper to configure the priority data types.
+  void ConfigurePriorityDataTypes();
+
   // Helper to install and configure a data type manager.
   void ConfigureDataTypeManager();
 
   // Shuts down the backend sync components.
-  // |sync_disabled| indicates if syncing is being disabled or not.
-  void ShutdownImpl(bool sync_disabled);
+  // |option| indicates if syncing is being disabled or not, and whether
+  // to claim ownership of sync thread from backend.
+  void ShutdownImpl(browser_sync::SyncBackendHost::ShutdownOption option);
 
   // Return SyncCredentials from the TokenService.
   syncer::SyncCredentials GetCredentials();
+
+  virtual syncer::WeakHandle<syncer::JsEventHandler> GetJsEventHandler();
 
   // Test need to override this to create backends that allow setting up
   // initial conditions, such as populating sync nodes.
@@ -680,8 +693,6 @@ class ProfileSyncService : public ProfileSyncServiceBase,
     ERROR_REASON_ACTIONABLE_ERROR,
     ERROR_REASON_LIMIT
   };
-  typedef std::vector<std::pair<invalidation::ObjectId,
-                                syncer::AckHandle> > AckHandleReplayQueue;
   friend class ProfileSyncServicePasswordTest;
   friend class SyncTest;
   friend class TestProfileSyncService;
@@ -711,6 +722,12 @@ class ProfileSyncService : public ProfileSyncServiceBase,
   // cached passphrase and clear it out when it is done.
   void ConsumeCachedPassphraseIfPossible();
 
+  // RequestAccessToken initiates RPC to request downscoped access token from
+  // refresh token. This happens when TokenService loads OAuth2 login token and
+  // when sync server returns AUTH_ERROR which indicates it is time to refresh
+  // token.
+  virtual void RequestAccessToken();
+
   // If |delete_sync_data_folder| is true, then this method will delete all
   // previous "Sync Data" folders. (useful if the folder is partial/corrupt).
   void InitializeBackend(bool delete_sync_data_folder);
@@ -722,6 +739,7 @@ class ProfileSyncService : public ProfileSyncServiceBase,
   void UpdateLastSyncedTime();
 
   void NotifyObservers();
+  void NotifySyncCycleCompleted();
 
   void ClearStaleErrors();
 
@@ -733,10 +751,8 @@ class ProfileSyncService : public ProfileSyncServiceBase,
   };
   void StartUp(StartUpDeferredOption deferred_option);
 
-  // Starts up the backend sync components. |deferred_option| specifies whether
-  // this is being called as part of an immediate startup or startup was
-  // originally deferred and we're finally getting around to finishing.
-  void StartUpSlowBackendComponents(StartUpDeferredOption deferred_option);
+  // Starts up the backend sync components.
+  void StartUpSlowBackendComponents();
 
   // About-flags experiment names for datatypes that aren't enabled by default
   // yet.
@@ -745,11 +761,6 @@ class ProfileSyncService : public ProfileSyncServiceBase,
 
   // Create and register a new datatype controller.
   void RegisterNewDataType(syncer::ModelType data_type);
-
-  // Helper method to process SyncConfigureDone after unwinding the stack that
-  // originally posted this SyncConfigureDone.
-  void OnSyncConfigureDone(
-      browser_sync::DataTypeManager::ConfigureResult result);
 
   // Reconfigures the data type manager with the latest enabled types.
   // Note: Does not initialize the backend if it is not already initialized.
@@ -778,19 +789,11 @@ class ProfileSyncService : public ProfileSyncServiceBase,
                                     bool delete_sync_database,
                                     UnrecoverableErrorReason reason);
 
-  // Must be called every time |backend_initialized_| or
-  // |invalidator_state_| is changed (but only if
-  // |invalidator_registrar_| is not NULL).
-  void UpdateInvalidatorRegistrarState();
+  // Returns the username (in form of an email address) that should be used in
+  // the credentials.
+  std::string GetEffectiveUsername();
 
-  // Destroys / recreates an instance of ProfileSyncService. Used exclusively by
-  // the sync integration tests so they can restart sync from scratch without
-  // tearing down and recreating the browser process. Needed because simply
-  // calling Shutdown() and Initialize() will not recreate other internal
-  // objects like SyncBackendHost, SyncManager, etc.
-  void ResetForTest();
-
-  // Factory used to create various dependent objects.
+ // Factory used to create various dependent objects.
   scoped_ptr<ProfileSyncComponentsFactory> factory_;
 
   // The profile whose data we are synchronizing.
@@ -799,9 +802,6 @@ class ProfileSyncService : public ProfileSyncServiceBase,
   // The class that handles getting, setting, and persisting sync
   // preferences.
   browser_sync::SyncPrefs sync_prefs_;
-
-  // TODO(tim): Move this to InvalidationService, once it exists. Bug 124137.
-  browser_sync::InvalidatorStorage invalidator_storage_;
 
   // TODO(ncarter): Put this in a profile, once there is UI for it.
   // This specifies where to find the sync server.
@@ -815,6 +815,12 @@ class ProfileSyncService : public ProfileSyncServiceBase,
   // never been called, and is reset to zero once OnBackendInitialized() is
   // called.
   base::Time start_up_time_;
+
+  // Whether we have received a signal from a SyncableService requesting that
+  // sync starts as soon as possible.
+  // TODO(tim): Move this and other TryStart related logic + state to separate
+  // class. Bug 80149.
+  bool data_type_requested_sync_startup_;
 
   // The time that OnConfigureStart is called. This member is zero if
   // OnConfigureStart has not yet been called, and is reset to zero once
@@ -831,13 +837,18 @@ class ProfileSyncService : public ProfileSyncServiceBase,
   // Whether the SyncBackendHost has been initialized.
   bool backend_initialized_;
 
+  // Set when sync receives DISABLED_BY_ADMIN error from server. Prevents
+  // ProfileSyncService from starting backend till browser restarted or user
+  // signed out.
+  bool sync_disabled_by_admin_;
+
   // Set to true if a signin has completed but we're still waiting for the
   // backend to refresh its credentials.
   bool is_auth_in_progress_;
 
   // Encapsulates user signin - used to set/get the user's authenticated
   // email address.
-  SigninManager* signin_;
+  SigninManagerBase* signin_;
 
   // Information describing an unrecoverable error.
   UnrecoverableErrorReason unrecoverable_error_reason_;
@@ -847,7 +858,7 @@ class ProfileSyncService : public ProfileSyncServiceBase,
   // Manages the start and stop of the various data types.
   scoped_ptr<browser_sync::DataTypeManager> data_type_manager_;
 
-  ObserverList<Observer> observers_;
+  ObserverList<ProfileSyncServiceBase::Observer> observers_;
 
   syncer::SyncJsController sync_js_controller_;
 
@@ -893,11 +904,9 @@ class ProfileSyncService : public ProfileSyncServiceBase,
   // This is used to show sync errors in the wrench menu.
   scoped_ptr<SyncGlobalError> sync_global_error_;
 
-  // keeps track of data types that failed to load.
-  FailedDatatypesHandler failed_datatypes_handler_;
-
-  scoped_ptr<browser_sync::BackendUnrecoverableErrorHandler>
-      backend_unrecoverable_error_handler_;
+  // Tracks the set of failed data types (those that encounter an error
+  // or must delay loading for some reason).
+  browser_sync::FailedDataTypesHandler failed_data_types_handler_;
 
   browser_sync::DataTypeManager::ConfigureStatus configure_status_;
 
@@ -908,24 +917,34 @@ class ProfileSyncService : public ProfileSyncServiceBase,
   // The set of currently enabled sync experiments.
   syncer::Experiments current_experiments_;
 
-  // Factory the backend will use to build the SyncManager.
-  syncer::SyncManagerFactory sync_manager_factory_;
-
-  // Holds the current invalidator state as updated by
-  // OnInvalidatorStateChange().  Note that this is different from the
-  // state known by |invalidator_registrar_| (See
-  // UpdateInvalidatorState()).
-  syncer::InvalidatorState invalidator_state_;
-
-  // Dispatches invalidations to handlers.  Set in Initialize() and
-  // unset in Shutdown().
-  scoped_ptr<syncer::InvalidatorRegistrar> invalidator_registrar_;
-  // Queues any acknowledgements received while the backend is uninitialized.
-  AckHandleReplayQueue ack_replay_queue_;
-
   // Sync's internal debug info listener. Used to record datatype configuration
   // and association information.
   syncer::WeakHandle<syncer::DataTypeDebugInfoListener> debug_info_listener_;
+
+  // A thread where all the sync operations happen.
+  // OWNERSHIP Notes:
+  //     * Created when backend starts for the first time.
+  //     * If sync is disabled, PSS claims ownership from backend.
+  //     * If sync is reenabled, PSS passes ownership to new backend.
+  scoped_ptr<base::Thread> sync_thread_;
+
+  // Specifies whenever to use oauth2 access token or ClientLogin token in
+  // communications with sync and xmpp servers.
+  // TODO(pavely): Remove once android is converted to oauth2 tokens.
+  bool use_oauth2_token_;
+
+  // ProfileSyncService needs to remember access token in order to invalidate it
+  // with OAuth2TokenService.
+  std::string access_token_;
+
+  // ProfileSyncService needs to hold reference to access_token_request_ for
+  // the duration of request in order to receive callbacks.
+  scoped_ptr<OAuth2TokenService::Request> access_token_request_;
+
+  // If RequestAccessToken fails with transient error then retry requesting
+  // access token with exponential backoff.
+  base::OneShotTimer<ProfileSyncService> request_access_token_retry_timer_;
+  net::BackoffEntry request_access_token_backoff_;
 
   DISALLOW_COPY_AND_ASSIGN(ProfileSyncService);
 };

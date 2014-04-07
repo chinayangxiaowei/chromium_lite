@@ -9,12 +9,14 @@
 
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
-#include "base/string16.h"
+#include "base/memory/weak_ptr.h"
+#include "base/strings/string16.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/ime/text_input_type.h"
 #include "ui/base/keycodes/keyboard_codes.h"
-#include "ui/gfx/font.h"
+#include "ui/gfx/font_list.h"
 #include "ui/gfx/native_widget_types.h"
 #include "ui/gfx/text_constants.h"
 #include "ui/views/controls/textfield/native_textfield_wrapper.h"
@@ -42,7 +44,7 @@ class TextfieldController;
 // This class implements a View that wraps a native text (edit) field.
 class VIEWS_EXPORT Textfield : public View {
  public:
-  // The button's class name.
+  // The textfield's class name.
   static const char kViewClassName[];
 
   enum StyleFlags {
@@ -71,6 +73,17 @@ class VIEWS_EXPORT Textfield : public View {
   bool IsObscured() const;
   void SetObscured(bool obscured);
 
+  // Gets/sets the duration to reveal the last typed char when the obscured bit
+  // is set. A duration of zero effectively disables the feature. Other values
+  // cause the last typed char to be shown for the defined duration. Note this
+  // only works with NativeTextfieldViews.
+  const base::TimeDelta& obscured_reveal_duration() const {
+    return obscured_reveal_duration_;
+  }
+  void set_obscured_reveal_duration(const base::TimeDelta& duration) {
+    obscured_reveal_duration_ = duration;
+  }
+
   // Gets/Sets the input type of this textfield.
   ui::TextInputType GetTextInputType() const;
   void SetTextInputType(ui::TextInputType type);
@@ -87,8 +100,8 @@ class VIEWS_EXPORT Textfield : public View {
   // Appends the given string to the previously-existing text in the field.
   void AppendText(const string16& text);
 
-  // Replaces the selected text with |text|.
-  void ReplaceSelection(const string16& text);
+  // Inserts |text| at the current cursor position, replacing any selected text.
+  void InsertOrReplaceText(const string16& text);
 
   // Returns the text direction.
   base::i18n::TextDirection GetTextDirection() const;
@@ -126,8 +139,10 @@ class VIEWS_EXPORT Textfield : public View {
   bool GetCursorEnabled() const;
   void SetCursorEnabled(bool enabled);
 
-  // Gets/Sets the font used when rendering the text within the Textfield.
-  const gfx::Font& font() const { return font_; }
+  // Gets/Sets the fonts used when rendering the text within the Textfield.
+  const gfx::FontList& font_list() const { return font_list_; }
+  void SetFontList(const gfx::FontList& font_list);
+  const gfx::Font& GetPrimaryFont() const;
   void SetFont(const gfx::Font& font);
 
   // Sets the left and right margin (in pixels) within the text box. On Windows
@@ -139,6 +154,12 @@ class VIEWS_EXPORT Textfield : public View {
   // NOTE: in most cases height could be changed instead.
   void SetVerticalMargins(int top, int bottom);
 
+  // Set the text vertical alignment.  Text is vertically centered by default.
+  gfx::VerticalAlignment vertical_alignment() const {
+    return vertical_alignment_;
+  }
+  void SetVerticalAlignment(gfx::VerticalAlignment alignment);
+
   // Sets the default width of the text control. See default_width_in_chars_.
   void set_default_width_in_chars(int default_width) {
     default_width_in_chars_ = default_width;
@@ -147,13 +168,6 @@ class VIEWS_EXPORT Textfield : public View {
   // Removes the border from the edit box, giving it a 2D look.
   bool draw_border() const { return draw_border_; }
   void RemoveBorder();
-
-  // Sets the border color (if one is in use).
-  void SetBorderColor(SkColor color);
-  // Reverts the textfield to the system default border color.
-  void UseDefaultBorderColor();
-  SkColor border_color() const { return border_color_; }
-  bool use_default_border_color() const { return use_default_border_color_; }
 
   // Sets the text to display when empty.
   void set_placeholder_text(const string16& text) {
@@ -170,10 +184,6 @@ class VIEWS_EXPORT Textfield : public View {
   void set_placeholder_text_color(SkColor color) {
     placeholder_text_color_ = color;
   }
-
-  // Adds an icon which displays inside the border on the right side of the view
-  // (left in RTL).
-  void SetIcon(const gfx::ImageSkia& icon);
 
   // Getter for the horizontal margins that were set. Returns false if
   // horizontal margins weren't set.
@@ -248,6 +258,9 @@ class VIEWS_EXPORT Textfield : public View {
     return native_wrapper_;
   }
 
+  // Returns whether there is a drag operation originating from the textfield.
+  bool HasTextBeingDragged();
+
   // Overridden from View:
   virtual void Layout() OVERRIDE;
   virtual int GetBaseline() const OVERRIDE;
@@ -265,22 +278,30 @@ class VIEWS_EXPORT Textfield : public View {
   virtual ui::TextInputClient* GetTextInputClient() OVERRIDE;
 
  protected:
-  virtual void ViewHierarchyChanged(bool is_add, View* parent,
-                                    View* child) OVERRIDE;
-  virtual std::string GetClassName() const OVERRIDE;
+  virtual void ViewHierarchyChanged(
+      const ViewHierarchyChangedDetails& details) OVERRIDE;
+  virtual const char* GetClassName() const OVERRIDE;
 
   // The object that actually implements the native text field.
   NativeTextfieldWrapper* native_wrapper_;
 
  private:
+  // Returns the insets to the rectangle where text is actually painted.
+  gfx::Insets GetTextInsets() const;
+
+  // Handles a request to change the value of this text field from software
+  // using an accessibility API (typically automation software, screen readers
+  // don't normally use this). Sets the value and clears the selection.
+  void AccessibilitySetValue(const string16& new_value);
+
   // This is the current listener for events from this Textfield.
   TextfieldController* controller_;
 
   // The mask of style options for this Textfield.
   StyleFlags style_;
 
-  // The font used to render the text in the Textfield.
-  gfx::Font font_;
+  // The fonts used to render the text in the Textfield.
+  gfx::FontList font_list_;
 
   // The text displayed in the Textfield.
   string16 text_;
@@ -307,16 +328,6 @@ class VIEWS_EXPORT Textfield : public View {
   // Should we use the system background color instead of |background_color_|?
   bool use_default_background_color_;
 
-  // Border color.  Only used if |use_default_border_color_| is false.
-  SkColor border_color_;
-
-  // Should we use the system border color instead of |border_color_|?
-  bool use_default_border_color_;
-
-  // TODO(beng): remove this once NativeTextfieldWin subclasses
-  //             NativeControlWin.
-  bool initialized_;
-
   // Holds inner textfield margins.
   gfx::Insets margins_;
 
@@ -324,20 +335,26 @@ class VIEWS_EXPORT Textfield : public View {
   bool horizontal_margins_were_set_;
   bool vertical_margins_were_set_;
 
+  // The vertical alignment of text in the Textfield.
+  gfx::VerticalAlignment vertical_alignment_;
+
   // Text to display when empty.
   string16 placeholder_text_;
 
   // Placeholder text color.
   SkColor placeholder_text_color_;
 
-  // When non-NULL, an icon to display inside the border of the textfield.
-  views::ImageView* icon_view_;
-
   // The accessible name of the text field.
   string16 accessible_name_;
 
   // The input type of this text field.
   ui::TextInputType text_input_type_;
+
+  // The duration to reveal the last typed char for obscured textfields.
+  base::TimeDelta obscured_reveal_duration_;
+
+  // Used to bind callback functions to this object.
+  base::WeakPtrFactory<Textfield> weak_ptr_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(Textfield);
 };

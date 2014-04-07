@@ -4,7 +4,7 @@
 
 #include "net/test/net_test_suite.h"
 
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "net/base/network_change_notifier.h"
 #include "net/http/http_stream_factory.h"
 #include "net/spdy/spdy_session.h"
@@ -63,5 +63,5 @@ void NetTestSuite::InitializeTestThreadNoNetworkChangeNotifier() {
   // the process of running these unit tests.
   host_resolver_proc_->AddRule("*", "127.0.0.1");
 
-  message_loop_.reset(new MessageLoopForIO());
+  message_loop_.reset(new base::MessageLoopForIO());
 }

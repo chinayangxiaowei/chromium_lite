@@ -16,12 +16,13 @@
 #endif
 
 #include <list>
-#include <string>
 #include <set>
+#include <string>
 #include <vector>
 
 #include "base/basictypes.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
+#include "net/base/address_family.h"
 #include "net/base/escape.h"
 #include "net/base/net_export.h"
 #include "net/base/net_log.h"
@@ -110,6 +111,13 @@ NET_EXPORT std::string GetHostAndPort(const GURL& url);
 // if it is the default for the URL's scheme.
 NET_EXPORT_PRIVATE std::string GetHostAndOptionalPort(const GURL& url);
 
+// Returns true if |hostname| contains a non-registerable or non-assignable
+// domain name (eg: a gTLD that has not been assigned by IANA)
+//
+// TODO(rsleevi): http://crbug.com/119212 - Also match internal IP
+// address ranges.
+NET_EXPORT bool IsHostnameNonUnique(const std::string& hostname);
+
 // Convenience struct for when you need a |struct sockaddr|.
 struct SockaddrStorage {
   SockaddrStorage() : addr_len(sizeof(addr_storage)),
@@ -161,8 +169,8 @@ NET_EXPORT std::string GetHostName();
 // Extracts the unescaped username/password from |url|, saving the results
 // into |*username| and |*password|.
 NET_EXPORT_PRIVATE void GetIdentityFromURL(const GURL& url,
-                        string16* username,
-                        string16* password);
+                        base::string16* username,
+                        base::string16* password);
 
 // Returns either the host from |url|, or, if the host is empty, the full spec.
 NET_EXPORT std::string GetHostOrSpecFromURL(const GURL& url);
@@ -188,7 +196,7 @@ NET_EXPORT std::string GetSpecificHeader(const std::string& headers,
 // Latin letters in the ASCII range can be mixed with a limited set of
 // script-language pairs (currently Han, Kana and Hangul for zh,ja and ko).
 // When |languages| is empty, even that mixing is not allowed.
-NET_EXPORT string16 IDNToUnicode(const std::string& host,
+NET_EXPORT base::string16 IDNToUnicode(const std::string& host,
                                  const std::string& languages);
 
 // Canonicalizes |host| and returns it.  Also fills |host_info| with
@@ -203,12 +211,12 @@ NET_EXPORT std::string CanonicalizeHost(const std::string& host,
 //   * Each component begins with an alphanumeric character or '-'
 //   * Each component contains only alphanumeric characters and '-' or '_'
 //   * Each component ends with an alphanumeric character or '-'
-//   * The last component begins with an alphabetic character
+//   * The last component begins with an alphanumeric character
 //   * Optional trailing dot after last component (means "treat as FQDN")
 // If |desired_tld| is non-NULL, the host will only be considered invalid if
 // appending it as a trailing component still results in an invalid host.  This
-// helps us avoid marking as "invalid" user attempts to open "www.401k.com" by
-// typing 4-0-1-k-<ctrl>+<enter>.
+// helps us avoid marking as "invalid" user attempts to open, say, "www.-9.com"
+// by typing -, 9, <ctrl>+<enter>.
 //
 // NOTE: You should only pass in hosts that have been returned from
 // CanonicalizeHost(), or you may not get accurate results.
@@ -217,7 +225,7 @@ NET_EXPORT bool IsCanonicalizedHostCompliant(const std::string& host,
 
 // Call these functions to get the html snippet for a directory listing.
 // The return values of both functions are in UTF-8.
-NET_EXPORT std::string GetDirectoryListingHeader(const string16& title);
+NET_EXPORT std::string GetDirectoryListingHeader(const base::string16& title);
 
 // Given the name of a file in a directory (ftp or local) and
 // other information (is_dir, size, modification time), it returns
@@ -231,17 +239,17 @@ NET_EXPORT std::string GetDirectoryListingHeader(const string16& title);
 // will be used.
 //
 // Both |name| and |raw_bytes| are escaped internally.
-NET_EXPORT std::string GetDirectoryListingEntry(const string16& name,
+NET_EXPORT std::string GetDirectoryListingEntry(const base::string16& name,
                                                 const std::string& raw_bytes,
                                                 bool is_dir, int64 size,
                                                 base::Time modified);
 
 // If text starts with "www." it is removed, otherwise text is returned
 // unmodified.
-NET_EXPORT string16 StripWWW(const string16& text);
+NET_EXPORT base::string16 StripWWW(const base::string16& text);
 
 // Runs |url|'s host through StripWWW().  |url| must be valid.
-NET_EXPORT string16 StripWWWFromHost(const GURL& url);
+NET_EXPORT base::string16 StripWWWFromHost(const GURL& url);
 
 // Generates a filename using the first successful method from the following (in
 // order):
@@ -270,12 +278,13 @@ NET_EXPORT string16 StripWWWFromHost(const GURL& url);
 //
 // Note: |mime_type| should only be specified if this function is called from a
 // thread that allows IO.
-NET_EXPORT string16 GetSuggestedFilename(const GURL& url,
-                                         const std::string& content_disposition,
-                                         const std::string& referrer_charset,
-                                         const std::string& suggested_name,
-                                         const std::string& mime_type,
-                                         const std::string& default_name);
+NET_EXPORT base::string16 GetSuggestedFilename(
+    const GURL& url,
+    const std::string& content_disposition,
+    const std::string& referrer_charset,
+    const std::string& suggested_name,
+    const std::string& mime_type,
+    const std::string& default_name);
 
 // Similar to GetSuggestedFilename(), but returns a FilePath.
 NET_EXPORT base::FilePath GenerateFileName(
@@ -285,6 +294,27 @@ NET_EXPORT base::FilePath GenerateFileName(
     const std::string& suggested_name,
     const std::string& mime_type,
     const std::string& default_name);
+
+// Valid basenames:
+// * are not empty
+// * are not Windows reserved names (CON, NUL.zip, etc.)
+// * are just basenames
+// * do not have trailing separators
+// * do not equal kCurrentDirectory
+// * do not reference the parent directory
+// * are valid path components, which:
+// - * are not the empty string
+// - * do not contain illegal characters
+// - * do not end with Windows shell-integrated extensions (even on posix)
+// - * do not begin with '.' (which would hide them in most file managers)
+// - * do not end with ' ' or '.'
+NET_EXPORT bool IsSafePortableBasename(const base::FilePath& path);
+
+// Basenames of valid relative paths are IsSafePortableBasename(), and internal
+// path components of valid relative paths are valid path components as
+// described above IsSafePortableBasename(). Valid relative paths are not
+// absolute paths.
+NET_EXPORT bool IsSafePortableRelativePath(const base::FilePath& path);
 
 // Ensures that the filename and extension is safe to use in the filesystem.
 //
@@ -326,7 +356,7 @@ NET_EXPORT int SetNonBlocking(int fd);
 // takes the same accept languages component as ElideURL().
 NET_EXPORT void AppendFormattedHost(const GURL& url,
                                     const std::string& languages,
-                                    string16* output);
+                                    base::string16* output);
 
 // Creates a string representation of |url|. The IDN host name may be in Unicode
 // if |languages| accepts the Unicode representation. |format_type| is a bitmask
@@ -348,15 +378,15 @@ NET_EXPORT void AppendFormattedHost(const GURL& url,
 // be 8.  If an offset cannot be successfully adjusted (e.g. because it points
 // into the middle of a component that was entirely removed, past the end of the
 // string, or into the middle of an encoding sequence), it will be set to
-// string16::npos.
-NET_EXPORT string16 FormatUrl(const GURL& url,
-                              const std::string& languages,
-                              FormatUrlTypes format_types,
-                              UnescapeRule::Type unescape_rules,
-                              url_parse::Parsed* new_parsed,
-                              size_t* prefix_end,
-                              size_t* offset_for_adjustment);
-NET_EXPORT string16 FormatUrlWithOffsets(
+// base::string16::npos.
+NET_EXPORT base::string16 FormatUrl(const GURL& url,
+                                    const std::string& languages,
+                                    FormatUrlTypes format_types,
+                                    UnescapeRule::Type unescape_rules,
+                                    url_parse::Parsed* new_parsed,
+                                    size_t* prefix_end,
+                                    size_t* offset_for_adjustment);
+NET_EXPORT base::string16 FormatUrlWithOffsets(
     const GURL& url,
     const std::string& languages,
     FormatUrlTypes format_types,
@@ -369,7 +399,7 @@ NET_EXPORT string16 FormatUrlWithOffsets(
 // format_types = kFormatUrlOmitAll and unescape = SPACES.  This is the typical
 // set of flags for "URLs to display to the user".  You should be cautious about
 // using this for URLs which will be parsed or sent to other applications.
-inline string16 FormatUrl(const GURL& url, const std::string& languages) {
+inline base::string16 FormatUrl(const GURL& url, const std::string& languages) {
   return FormatUrl(url, languages, kFormatUrlOmitAll, UnescapeRule::SPACES,
                    NULL, NULL, NULL);
 }
@@ -396,45 +426,14 @@ class NET_EXPORT ScopedPortException {
   DISALLOW_COPY_AND_ASSIGN(ScopedPortException);
 };
 
-// These are used for UMA histograms.  Any new values must be added to the end.
-enum IPv6SupportStatus {
-  IPV6_CANNOT_CREATE_SOCKETS,
-  IPV6_CAN_CREATE_SOCKETS,  // Obsolete
-  IPV6_GETIFADDRS_FAILED,
-  IPV6_GLOBAL_ADDRESS_MISSING,
-  IPV6_GLOBAL_ADDRESS_PRESENT,
-  IPV6_INTERFACE_ARRAY_TOO_SHORT,
-  IPV6_SUPPORT_MAX  // Bounding value for enumeration.  Also used for case
-                    // where detection is not supported.
-};
-
-// Encapsulates the results of an IPv6 probe.
-struct NET_EXPORT IPv6SupportResult {
-  IPv6SupportResult(bool ipv6_supported,
-                    IPv6SupportStatus ipv6_support_status,
-                    int os_error);
-
-  // Serializes the results to a Value.  Caller takes ownership of the returned
-  // Value.
-  base::Value* ToNetLogValue(NetLog::LogLevel log_level) const;
-
-  bool ipv6_supported;
-  // Set to IPV6_SUPPORT_MAX if detection isn't supported.
-  IPv6SupportStatus ipv6_support_status;
-
-  // Error code from the OS, or zero if there was no error.
-  int os_error;
-};
-
-// Perform a simplistic test to see if IPv6 is supported by trying to create an
-// IPv6 socket.
-// TODO(jar): Make test more in-depth as needed.
-NET_EXPORT IPv6SupportResult TestIPv6Support();
-
 // Returns true if it can determine that only loopback addresses are configured.
 // i.e. if only 127.0.0.1 and ::1 are routable.
 // Also returns false if it cannot determine this.
 bool HaveOnlyLoopbackAddresses();
+
+// Returns AddressFamily of the address.
+NET_EXPORT_PRIVATE AddressFamily GetAddressFamily(
+    const IPAddressNumber& address);
 
 // Parses an IP address literal (either IPv4 or IPv6) to its numeric value.
 // Returns true on success and fills |ip_number| with the numeric value.

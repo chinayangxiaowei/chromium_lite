@@ -8,22 +8,25 @@
 #include "base/memory/ref_counted.h"
 #include "base/synchronization/lock.h"
 #include "base/threading/thread_checker.h"
+#include "content/renderer/media/media_stream_audio_renderer.h"
 #include "content/renderer/media/webrtc_audio_device_impl.h"
 #include "media/base/audio_decoder.h"
 #include "media/base/audio_pull_fifo.h"
 #include "media/base/audio_renderer_sink.h"
-#include "webkit/media/media_stream_audio_renderer.h"
+
+namespace media {
+class AudioOutputDevice;
+}
 
 namespace content {
 
-class RendererAudioOutputDevice;
 class WebRtcAudioRendererSource;
 
 // This renderer handles calls from the pipeline and WebRtc ADM. It is used
 // for connecting WebRtc MediaStream with the audio pipeline.
 class CONTENT_EXPORT WebRtcAudioRenderer
     : NON_EXPORTED_BASE(public media::AudioRendererSink::RenderCallback),
-      NON_EXPORTED_BASE(public webkit_media::MediaStreamAudioRenderer) {
+      NON_EXPORTED_BASE(public MediaStreamAudioRenderer) {
  public:
   explicit WebRtcAudioRenderer(int source_render_view_id);
 
@@ -71,14 +74,14 @@ class CONTENT_EXPORT WebRtcAudioRenderer
   const int source_render_view_id_;
 
   // The sink (destination) for rendered audio.
-  scoped_refptr<RendererAudioOutputDevice> sink_;
+  scoped_refptr<media::AudioOutputDevice> sink_;
 
   // Audio data source from the browser process.
   WebRtcAudioRendererSource* source_;
 
   // Buffers used for temporary storage during render callbacks.
   // Allocated during initialization.
-  scoped_array<int16> buffer_;
+  scoped_ptr<int16[]> buffer_;
 
   // Protects access to |state_|, |source_| and |sink_|.
   base::Lock lock_;
@@ -94,10 +97,8 @@ class CONTENT_EXPORT WebRtcAudioRenderer
   // AEC.
   int audio_delay_milliseconds_;
 
-  // Lengh of an audio frame in milliseconds.
-  double frame_duration_milliseconds_;
-
-  double fifo_io_ratio_;
+  // Delay due to the FIFO in milliseconds.
+  int fifo_delay_milliseconds_;
 
   DISALLOW_IMPLICIT_CONSTRUCTORS(WebRtcAudioRenderer);
 };

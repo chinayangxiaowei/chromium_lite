@@ -36,6 +36,7 @@ import org.chromium.base.CalledByNative;
 import org.chromium.base.CalledByNativeUnchecked;
 import org.chromium.base.ThreadUtils;
 import org.chromium.chrome.browser.database.SQLiteCursor;
+import org.chromium.sync.notifier.SyncStatusHelper;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -67,6 +68,7 @@ public class ChromeBrowserProvider extends ContentProvider {
             "GET_MOBILE_BOOKMARKS_FOLDER_ID";
     static final String CLIENT_API_IS_BOOKMARK_IN_MOBILE_BOOKMARKS_BRANCH =
             "IS_BOOKMARK_IN_MOBILE_BOOKMARKS_BRANCH";
+    static final String CLIENT_API_DELETE_ALL_BOOKMARKS = "DELETE_ALL_BOOKMARKS";
     static final String CLIENT_API_RESULT_KEY = "result";
 
 
@@ -157,6 +159,11 @@ public class ChromeBrowserProvider extends ContentProvider {
     private int mNativeChromeBrowserProvider;
     private BookmarkNode mMobileBookmarksFolder;
 
+    /**
+     * Records whether we've received a call to one of the public ContentProvider APIs.
+     */
+    protected boolean mContentProviderApiCalled;
+
     private void ensureUriMatcherInitialized() {
         synchronized (mInitializeUriMatcherLock) {
             if (mUriMatcher != null) return;
@@ -227,11 +234,22 @@ public class ChromeBrowserProvider extends ContentProvider {
 
     @Override
     public boolean onCreate() {
-        SharedPreferences sharedPreferences =
-                PreferenceManager.getDefaultSharedPreferences(getContext());
-        mLastModifiedBookmarkFolderId = sharedPreferences.getLong(
-                LAST_MODIFIED_BOOKMARK_FOLDER_ID_KEY, INVALID_BOOKMARK_ID);
+        // Pre-load shared preferences object, this happens on a separate thread
+        PreferenceManager.getDefaultSharedPreferences(getContext());
         return true;
+    }
+
+    /**
+     * Lazily fetches the last modified bookmark folder id.
+     */
+    private long getLastModifiedBookmarkFolderId() {
+        if (mLastModifiedBookmarkFolderId == INVALID_BOOKMARK_ID) {
+            SharedPreferences sharedPreferences =
+                    PreferenceManager.getDefaultSharedPreferences(getContext());
+            mLastModifiedBookmarkFolderId = sharedPreferences.getLong(
+                    LAST_MODIFIED_BOOKMARK_FOLDER_ID_KEY, INVALID_BOOKMARK_ID);
+        }
+        return mLastModifiedBookmarkFolderId;
     }
 
     private String buildSuggestWhere(String selection, int argc) {
@@ -287,9 +305,7 @@ public class ChromeBrowserProvider extends ContentProvider {
     @Override
     public Cursor query(Uri uri, String[] projection, String selection, String[] selectionArgs,
             String sortOrder) {
-        // We can not run in UI thread, do nothing for the official release.
-        if (isInUiThread()) return null;
-        if (!ensureNativeChromeLoaded()) return null;
+        if (!canHandleContentProviderApiCall()) return null;
 
         // Check for invalid id values if provided.
         // If it represents a bookmark node then it's the root node. Don't provide access here.
@@ -352,9 +368,7 @@ public class ChromeBrowserProvider extends ContentProvider {
 
     @Override
     public Uri insert(Uri uri, ContentValues values) {
-        // We can not run in UI thread, do nothing for the official release.
-        if (isInUiThread()) return null;
-        if (!ensureNativeChromeLoaded()) return null;
+        if (!canHandleContentProviderApiCall()) return null;
 
         int match = mUriMatcher.match(uri);
         Uri res = null;
@@ -387,9 +401,7 @@ public class ChromeBrowserProvider extends ContentProvider {
 
     @Override
     public int delete(Uri uri, String selection, String[] selectionArgs) {
-        // We can not run in UI thread, do nothing for the official release.
-        if (isInUiThread()) return 0;
-        if (!ensureNativeChromeLoaded()) return 0;
+        if (!canHandleContentProviderApiCall()) return 0;
 
         // Check for invalid id values if provided.
         // If it represents a bookmark node then it's the root node and not mutable.
@@ -446,9 +458,7 @@ public class ChromeBrowserProvider extends ContentProvider {
 
     @Override
     public int update(Uri uri, ContentValues values, String selection, String[] selectionArgs) {
-        // We can not run in UI thread, do nothing for the official release.
-        if (isInUiThread()) return 0;
-        if (!ensureNativeChromeLoaded()) return 0;
+        if (!canHandleContentProviderApiCall()) return 0;
 
         // Check for invalid id values if provided.
         // If it represents a bookmark node then it's the root node and not mutable.
@@ -563,7 +573,7 @@ public class ChromeBrowserProvider extends ContentProvider {
     }
 
     private void updateLastModifiedBookmarkFolder(long id) {
-        if (mLastModifiedBookmarkFolderId == id) return;
+        if (getLastModifiedBookmarkFolderId() == id) return;
 
         mLastModifiedBookmarkFolderId = id;
         SharedPreferences sharedPreferences =
@@ -612,6 +622,13 @@ public class ChromeBrowserProvider extends ContentProvider {
 
     protected BookmarkNode getBookmarkNode(long nodeId, boolean getParent, boolean getChildren,
             boolean getFavicons, boolean getThumbnails) {
+        // Don't allow going up the hierarchy if sync is disabled and the requested node
+        // is the Mobile Bookmarks folder.
+        if (getParent && nodeId == getMobileBookmarksFolderId()
+                && !SyncStatusHelper.get(getContext()).isSyncEnabled()) {
+            getParent = false;
+        }
+
         BookmarkNode node = nativeGetBookmarkNode(mNativeChromeBrowserProvider, nodeId, getParent,
                 getChildren);
         if (!getFavicons && !getThumbnails) return node;
@@ -629,7 +646,7 @@ public class ChromeBrowserProvider extends ContentProvider {
     private BookmarkNode getDefaultBookmarkFolder() {
         // Try to access the bookmark folder last modified by us. If it doesn't exist anymore
         // then use the synced node (Mobile Bookmarks).
-        BookmarkNode lastModified = getBookmarkNode(mLastModifiedBookmarkFolderId, false, false,
+        BookmarkNode lastModified = getBookmarkNode(getLastModifiedBookmarkFolderId(), false, false,
                 false, false);
         if (lastModified == null) {
             lastModified = getMobileBookmarksFolder();
@@ -678,8 +695,7 @@ public class ChromeBrowserProvider extends ContentProvider {
         // Caller must have the READ_WRITE_BOOKMARK_FOLDERS permission.
         getContext().enforcePermission(getReadWritePermissionNameForBookmarkFolders(),
                                        Binder.getCallingPid(), Binder.getCallingUid(), TAG);
-        if (isInUiThread()) return null;
-        if (!ensureNativeChromeLoaded()) return null;
+        if (!canHandleContentProviderApiCall()) return null;
         if (method == null || extras == null) return null;
 
         Bundle result = new Bundle();
@@ -706,12 +722,26 @@ public class ChromeBrowserProvider extends ContentProvider {
         } else if (CLIENT_API_IS_BOOKMARK_IN_MOBILE_BOOKMARKS_BRANCH.equals(method)) {
             result.putBoolean(CLIENT_API_RESULT_KEY,
                     isBookmarkInMobileBookmarksBranch(extras.getLong(argKey(0))));
+        } else if(CLIENT_API_DELETE_ALL_BOOKMARKS.equals(method)) {
+            nativeRemoveAllBookmarks(mNativeChromeBrowserProvider);
         } else {
             Log.w(TAG, "Received invalid method " + method);
             return null;
         }
 
         return result;
+    }
+
+    /**
+     * Checks whether Chrome is sufficiently initialized to handle a call to the
+     * ChromeBrowserProvider.
+     */
+    private boolean canHandleContentProviderApiCall() {
+        mContentProviderApiCalled = true;
+
+        if (isInUiThread()) return false;
+        if (!ensureNativeChromeLoaded()) return false;
+        return true;
     }
 
     /**
@@ -1303,6 +1333,8 @@ public class ChromeBrowserProvider extends ContentProvider {
             String title, long parentId);
 
     private native BookmarkNode nativeGetAllBookmarkFolders(int nativeChromeBrowserProvider);
+
+    private native void nativeRemoveAllBookmarks(int nativeChromeBrowserProvider);
 
     private native BookmarkNode nativeGetBookmarkNode(int nativeChromeBrowserProvider,
             long id, boolean getParent, boolean getChildren);

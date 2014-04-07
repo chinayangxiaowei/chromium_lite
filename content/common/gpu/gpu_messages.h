@@ -8,25 +8,26 @@
 #include <string>
 #include <vector>
 
-#include "base/shared_memory.h"
+#include "base/memory/shared_memory.h"
 #include "content/common/content_export.h"
 #include "content/common/gpu/gpu_memory_allocation.h"
 #include "content/common/gpu/gpu_memory_uma_stats.h"
 #include "content/common/gpu/gpu_process_launch_causes.h"
 #include "content/common/gpu/gpu_rendering_stats.h"
 #include "content/public/common/common_param_traits.h"
-#include "content/public/common/gpu_info.h"
 #include "content/public/common/gpu_memory_stats.h"
 #include "gpu/command_buffer/common/command_buffer.h"
 #include "gpu/command_buffer/common/constants.h"
+#include "gpu/command_buffer/common/mailbox.h"
+#include "gpu/config/gpu_info.h"
 #include "gpu/ipc/gpu_command_buffer_traits.h"
 #include "ipc/ipc_channel_handle.h"
 #include "ipc/ipc_message_macros.h"
 #include "media/video/video_decode_accelerator.h"
+#include "ui/base/latency_info.h"
 #include "ui/gfx/native_widget_types.h"
 #include "ui/gfx/size.h"
 #include "ui/gl/gpu_preference.h"
-#include "ui/surface/transport_dib.h"
 
 #if defined(OS_ANDROID)
 #include "content/common/android/surface_texture_peer.h"
@@ -50,6 +51,8 @@ IPC_STRUCT_BEGIN(GpuHostMsg_AcceleratedSurfaceBuffersSwapped_Params)
   IPC_STRUCT_MEMBER(int32, route_id)
   IPC_STRUCT_MEMBER(std::string, mailbox_name)
   IPC_STRUCT_MEMBER(gfx::Size, size)
+  IPC_STRUCT_MEMBER(float, scale_factor)
+  IPC_STRUCT_MEMBER(ui::LatencyInfo, latency_info)
 IPC_STRUCT_END()
 #undef IPC_MESSAGE_EXPORT
 #define IPC_MESSAGE_EXPORT
@@ -64,6 +67,8 @@ IPC_STRUCT_BEGIN(GpuHostMsg_AcceleratedSurfacePostSubBuffer_Params)
   IPC_STRUCT_MEMBER(int, height)
   IPC_STRUCT_MEMBER(std::string, mailbox_name)
   IPC_STRUCT_MEMBER(gfx::Size, surface_size)
+  IPC_STRUCT_MEMBER(float, surface_scale_factor)
+  IPC_STRUCT_MEMBER(ui::LatencyInfo, latency_info)
 IPC_STRUCT_END()
 
 IPC_STRUCT_BEGIN(GpuHostMsg_AcceleratedSurfaceRelease_Params)
@@ -105,25 +110,25 @@ IPC_STRUCT_BEGIN(GpuStreamTextureMsg_MatrixChanged_Params)
 IPC_STRUCT_END()
 #endif
 
-IPC_STRUCT_TRAITS_BEGIN(content::DxDiagNode)
+  IPC_STRUCT_TRAITS_BEGIN(gpu::DxDiagNode)
   IPC_STRUCT_TRAITS_MEMBER(values)
   IPC_STRUCT_TRAITS_MEMBER(children)
 IPC_STRUCT_TRAITS_END()
 
-IPC_STRUCT_TRAITS_BEGIN(content::GpuPerformanceStats)
+IPC_STRUCT_TRAITS_BEGIN(gpu::GpuPerformanceStats)
   IPC_STRUCT_TRAITS_MEMBER(graphics)
   IPC_STRUCT_TRAITS_MEMBER(gaming)
   IPC_STRUCT_TRAITS_MEMBER(overall)
 IPC_STRUCT_TRAITS_END()
 
-IPC_STRUCT_TRAITS_BEGIN(content::GPUInfo::GPUDevice)
+IPC_STRUCT_TRAITS_BEGIN(gpu::GPUInfo::GPUDevice)
   IPC_STRUCT_TRAITS_MEMBER(vendor_id)
   IPC_STRUCT_TRAITS_MEMBER(device_id)
   IPC_STRUCT_TRAITS_MEMBER(vendor_string)
   IPC_STRUCT_TRAITS_MEMBER(device_string)
 IPC_STRUCT_TRAITS_END()
 
-IPC_STRUCT_TRAITS_BEGIN(content::GPUInfo)
+IPC_STRUCT_TRAITS_BEGIN(gpu::GPUInfo)
   IPC_STRUCT_TRAITS_MEMBER(finalized)
   IPC_STRUCT_TRAITS_MEMBER(initialization_time)
   IPC_STRUCT_TRAITS_MEMBER(optimus)
@@ -131,6 +136,7 @@ IPC_STRUCT_TRAITS_BEGIN(content::GPUInfo)
   IPC_STRUCT_TRAITS_MEMBER(lenovo_dcute)
   IPC_STRUCT_TRAITS_MEMBER(gpu)
   IPC_STRUCT_TRAITS_MEMBER(secondary_gpus)
+  IPC_STRUCT_TRAITS_MEMBER(adapter_luid)
   IPC_STRUCT_TRAITS_MEMBER(driver_vendor)
   IPC_STRUCT_TRAITS_MEMBER(driver_version)
   IPC_STRUCT_TRAITS_MEMBER(driver_date)
@@ -142,8 +148,11 @@ IPC_STRUCT_TRAITS_BEGIN(content::GPUInfo)
   IPC_STRUCT_TRAITS_MEMBER(gl_vendor)
   IPC_STRUCT_TRAITS_MEMBER(gl_renderer)
   IPC_STRUCT_TRAITS_MEMBER(gl_extensions)
+  IPC_STRUCT_TRAITS_MEMBER(gl_ws_vendor)
+  IPC_STRUCT_TRAITS_MEMBER(gl_ws_version)
+  IPC_STRUCT_TRAITS_MEMBER(gl_ws_extensions)
+  IPC_STRUCT_TRAITS_MEMBER(gl_reset_notification_strategy)
   IPC_STRUCT_TRAITS_MEMBER(can_lose_context)
-  IPC_STRUCT_TRAITS_MEMBER(gpu_accessible)
   IPC_STRUCT_TRAITS_MEMBER(performance_stats)
   IPC_STRUCT_TRAITS_MEMBER(software_rendering)
   IPC_STRUCT_TRAITS_MEMBER(sandboxed)
@@ -175,7 +184,6 @@ IPC_STRUCT_TRAITS_BEGIN(content::GpuMemoryAllocationForRenderer)
   IPC_STRUCT_TRAITS_MEMBER(bytes_limit_when_not_visible)
   IPC_STRUCT_TRAITS_MEMBER(priority_cutoff_when_not_visible)
   IPC_STRUCT_TRAITS_MEMBER(have_backbuffer_when_not_visible)
-  IPC_STRUCT_TRAITS_MEMBER(enforce_but_do_not_keep_as_policy)
 IPC_STRUCT_TRAITS_END()
 IPC_ENUM_TRAITS(content::GpuMemoryAllocationForRenderer::PriorityCutoff)
 
@@ -296,7 +304,7 @@ IPC_SYNC_MESSAGE_CONTROL1_3(GpuHostMsg_EstablishGpuChannel,
                             content::CauseForGpuLaunch,
                             int /* client id */,
                             IPC::ChannelHandle /* handle to channel */,
-                            content::GPUInfo /* stats about GPU process*/)
+                            gpu::GPUInfo /* stats about GPU process*/)
 
 // A renderer sends this to the browser process when it wants to
 // create a GL context associated with the given view_id.
@@ -306,8 +314,9 @@ IPC_SYNC_MESSAGE_CONTROL2_1(GpuHostMsg_CreateViewCommandBuffer,
                             int32 /* route_id */)
 
 // Response from GPU to a GputMsg_Initialize message.
-IPC_MESSAGE_CONTROL1(GpuHostMsg_Initialized,
-                     bool /* result */)
+IPC_MESSAGE_CONTROL2(GpuHostMsg_Initialized,
+                     bool /* result */,
+                     ::gpu::GPUInfo /* gpu_info */)
 
 // Response from GPU to a GpuHostMsg_EstablishChannel message.
 IPC_MESSAGE_CONTROL1(GpuHostMsg_ChannelEstablished,
@@ -342,7 +351,7 @@ IPC_MESSAGE_CONTROL1(GpuHostMsg_ImageCreated,
 
 // Response from GPU to a GpuMsg_CollectGraphicsInfo.
 IPC_MESSAGE_CONTROL1(GpuHostMsg_GraphicsInfoCollected,
-                     content::GPUInfo /* GPU logging stats */)
+                     gpu::GPUInfo /* GPU logging stats */)
 
 // Response from GPU to a GpuMsg_GetVideoMemory.
 IPC_MESSAGE_CONTROL1(GpuHostMsg_VideoMemoryUsageStats,
@@ -360,6 +369,11 @@ IPC_MESSAGE_CONTROL3(GpuHostMsg_ResizeView,
                      int32 /* surface_id */,
                      int32 /* route_id */,
                      gfx::Size /* size */)
+
+// Tells the browser that a frame with the specific latency info was drawn to
+// the screen
+IPC_MESSAGE_CONTROL1(GpuHostMsg_FrameDrawn,
+                     ui::LatencyInfo /* latency_info */)
 
 // Same as above with a rect of the part of the surface that changed.
 IPC_MESSAGE_CONTROL1(GpuHostMsg_AcceleratedSurfaceBuffersSwapped,
@@ -436,9 +450,8 @@ IPC_MESSAGE_CONTROL1(GpuChannelMsg_GenerateMailboxNamesReply,
 #if defined(OS_ANDROID)
 // Register the StreamTextureProxy class with the GPU process, so that
 // the renderer process will get notified whenever a frame becomes available.
-IPC_SYNC_MESSAGE_CONTROL2_1(GpuChannelMsg_RegisterStreamTextureProxy,
+IPC_SYNC_MESSAGE_CONTROL1_1(GpuChannelMsg_RegisterStreamTextureProxy,
                             int32, /* stream_id */
-                            gfx::Size, /* initial_size */
                             int /* route_id */)
 
 // Tells the GPU process create and send the java surface texture object to
@@ -447,6 +460,12 @@ IPC_MESSAGE_CONTROL3(GpuChannelMsg_EstablishStreamTexture,
                      int32, /* stream_id */
                      int32, /* primary_id */
                      int32 /* secondary_id */)
+
+// Tells the GPU process to set the size of StreamTexture from the given
+// stream Id.
+IPC_MESSAGE_CONTROL2(GpuChannelMsg_SetStreamTextureSize,
+                     int32, /* stream_id */
+                     gfx::Size /* size */)
 #endif
 
 // Tells the GPU process to collect rendering stats.
@@ -480,12 +499,10 @@ IPC_SYNC_MESSAGE_ROUTED1_1(GpuCommandBufferMsg_Initialize,
 IPC_SYNC_MESSAGE_ROUTED1_0(GpuCommandBufferMsg_SetGetBuffer,
                            int32 /* shm_id */)
 
-// Sets the parent command buffer. This allows the parent and child to share
-// textures.
-IPC_SYNC_MESSAGE_ROUTED2_1(GpuCommandBufferMsg_SetParent,
-                           int32 /* parent_route_id */,
-                           uint32 /* parent_texture_id */,
-                           bool /* result */)
+// Produces the front buffer into a mailbox. This allows another context to draw
+// the output of this context.
+IPC_MESSAGE_ROUTED1(GpuCommandBufferMsg_ProduceFrontBuffer,
+                    gpu::Mailbox /* mailbox */)
 
 // Get the current state of the command buffer.
 IPC_SYNC_MESSAGE_ROUTED0_1(GpuCommandBufferMsg_GetState,
@@ -501,6 +518,11 @@ IPC_SYNC_MESSAGE_ROUTED0_1(GpuCommandBufferMsg_GetStateFast,
 IPC_MESSAGE_ROUTED2(GpuCommandBufferMsg_AsyncFlush,
                     int32 /* put_offset */,
                     uint32 /* flush_count */)
+
+// Sends information about the latency of the current frame to the GPU
+// process.
+IPC_MESSAGE_ROUTED1(GpuCommandBufferMsg_SetLatencyInfo,
+                    ui::LatencyInfo /* latency_info */)
 
 // Asynchronously process any commands known to the GPU process. This is only
 // used in the event that a channel is unscheduled and needs to be flushed
@@ -531,12 +553,10 @@ IPC_SYNC_MESSAGE_ROUTED1_2(GpuCommandBufferMsg_GetTransferBuffer,
                            uint32 /* size */)
 
 // Create and initialize a hardware video decoder, returning its new route_id.
+// Created decoders should be freed with AcceleratedVideoDecoderMsg_Destroy when
+// no longer needed.
 IPC_SYNC_MESSAGE_ROUTED1_1(GpuCommandBufferMsg_CreateVideoDecoder,
                            media::VideoCodecProfile /* profile */,
-                           int /* route_id */)
-
-// Release all resources held by the named hardware video decoder.
-IPC_SYNC_MESSAGE_ROUTED1_0(GpuCommandBufferMsg_DestroyVideoDecoder,
                            int /* route_id */)
 
 // Tells the proxy that there was an error and the command buffer had to be
@@ -596,6 +616,13 @@ IPC_MESSAGE_ROUTED2(GpuCommandBufferMsg_SignalSyncPoint,
 IPC_MESSAGE_ROUTED1(GpuCommandBufferMsg_SignalSyncPointAck,
                     uint32 /* signal_id */)
 
+// Makes this command buffer signal when a query is reached, by sending
+// back a GpuCommandBufferMsg_SignalSyncPointAck message with the same
+// signal_id.
+IPC_MESSAGE_ROUTED2(GpuCommandBufferMsg_SignalQuery,
+                    uint32 /* query */,
+                    uint32 /* signal_id */)
+
 //------------------------------------------------------------------------------
 // Accelerated Video Decoder Messages
 // These messages are sent from Renderer process to GPU process.
@@ -625,7 +652,7 @@ IPC_MESSAGE_ROUTED0(AcceleratedVideoDecoderMsg_Flush)
 IPC_MESSAGE_ROUTED0(AcceleratedVideoDecoderMsg_Reset)
 
 // Send destroy request to the decoder.
-IPC_SYNC_MESSAGE_ROUTED0_0(AcceleratedVideoDecoderMsg_Destroy)
+IPC_MESSAGE_ROUTED0(AcceleratedVideoDecoderMsg_Destroy)
 
 //------------------------------------------------------------------------------
 // Accelerated Video Decoder Host Messages

@@ -8,7 +8,7 @@
 
 #include "base/bind.h"
 #include "base/memory/ref_counted_memory.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "content/public/common/content_client.h"
 #include "ui/webui/jstemplate_builder.h"
 #include "ui/webui/web_ui_util.h"
@@ -35,7 +35,7 @@ class WebUIDataSourceImpl::InternalDataSource : public URLDataSource {
   }
 
   // URLDataSource implementation.
-  virtual std::string GetSource() OVERRIDE {
+  virtual std::string GetSource() const OVERRIDE {
     return parent_->GetSource();
   }
   virtual std::string GetMimeType(const std::string& path) const OVERRIDE {
@@ -43,9 +43,11 @@ class WebUIDataSourceImpl::InternalDataSource : public URLDataSource {
   }
   virtual void StartDataRequest(
       const std::string& path,
-      bool is_incognito,
+      int render_process_id,
+      int render_view_id,
       const URLDataSource::GotDataCallback& callback) OVERRIDE {
-    return parent_->StartDataRequest(path, is_incognito, callback);
+    return parent_->StartDataRequest(path, render_process_id, render_view_id,
+                                     callback);
   }
   virtual bool ShouldAddContentSecurityPolicy() const OVERRIDE {
     return parent_->add_csp_;
@@ -71,7 +73,7 @@ class WebUIDataSourceImpl::InternalDataSource : public URLDataSource {
 WebUIDataSourceImpl::WebUIDataSourceImpl(const std::string& source_name)
     : URLDataSourceImpl(
           source_name,
-          new InternalDataSource(ALLOW_THIS_IN_INITIALIZER_LIST(this))),
+          new InternalDataSource(this)),
       source_name_(source_name),
       default_resource_(-1),
       json_js_format_v2_(false),
@@ -102,7 +104,7 @@ void WebUIDataSourceImpl::AddLocalizedString(const std::string& name,
 }
 
 void WebUIDataSourceImpl::AddLocalizedStrings(
-    const DictionaryValue& localized_strings) {
+    const base::DictionaryValue& localized_strings) {
   localized_strings_.MergeDictionary(&localized_strings);
 }
 
@@ -152,7 +154,7 @@ void WebUIDataSourceImpl::DisableDenyXFrameOptions() {
   deny_xframe_options_ = false;
 }
 
-std::string WebUIDataSourceImpl::GetSource() {
+std::string WebUIDataSourceImpl::GetSource() const {
   return source_name_;
 }
 
@@ -171,7 +173,8 @@ std::string WebUIDataSourceImpl::GetMimeType(const std::string& path) const {
 
 void WebUIDataSourceImpl::StartDataRequest(
     const std::string& path,
-    bool is_incognito,
+    int render_process_id,
+    int render_view_id,
     const URLDataSource::GotDataCallback& callback) {
   if (!filter_callback_.is_null() &&
       filter_callback_.Run(path, callback)) {
@@ -210,7 +213,7 @@ void WebUIDataSourceImpl::SendFromResourceBundle(
     const URLDataSource::GotDataCallback& callback, int idr) {
   scoped_refptr<base::RefCountedStaticMemory> response(
       GetContentClient()->GetDataResourceBytes(idr));
-  callback.Run(response);
+  callback.Run(response.get());
 }
 
 }  // namespace content

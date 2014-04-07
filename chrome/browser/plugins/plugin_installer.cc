@@ -6,32 +6,30 @@
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
-#include "base/file_util.h"
-#include "base/process.h"
+#include "base/process/process.h"
+#include "base/strings/stringprintf.h"
 #include "chrome/browser/download/download_service.h"
 #include "chrome/browser/download/download_service_factory.h"
-#include "chrome/browser/download/download_util.h"
+#include "chrome/browser/download/download_stats.h"
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/plugins/plugin_installer_observer.h"
 #include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/browser/download_id.h"
 #include "content/public/browser/download_item.h"
-#include "content/public/browser/download_manager.h"
 #include "content/public/browser/download_save_info.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/resource_context.h"
 #include "content/public/browser/resource_dispatcher_host.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/referrer.h"
 #include "net/url_request/url_request.h"
 #include "net/url_request/url_request_context.h"
 
 using content::BrowserContext;
 using content::BrowserThread;
 using content::DownloadItem;
-using content::DownloadManager;
 using content::ResourceDispatcherHost;
 
 namespace {
@@ -49,13 +47,14 @@ void BeginDownload(
       resource_context->GetRequestContext()->CreateRequest(url, NULL));
   net::Error error = rdh->BeginDownload(
       request.Pass(),
+      content::Referrer(),
       false,  // is_content_initiated
       resource_context,
       render_process_host_id,
       render_view_host_routing_id,
       true,  // prefer_cache
       scoped_ptr<content::DownloadSaveInfo>(new content::DownloadSaveInfo()),
-      content::DownloadId::Invalid(),
+      content::DownloadItem::kInvalidId,
       callback);
 
   if (error != net::OK) {
@@ -137,10 +136,7 @@ void PluginInstaller::StartInstalling(const GURL& plugin_url,
   FOR_EACH_OBSERVER(PluginInstallerObserver, observers_, DownloadStarted());
   Profile* profile =
       Profile::FromBrowserContext(web_contents->GetBrowserContext());
-  DownloadManager* download_manager =
-      BrowserContext::GetDownloadManager(profile);
-  download_util::RecordDownloadSource(
-      download_util::INITIATED_BY_PLUGIN_INSTALLER);
+  RecordDownloadSource(DOWNLOAD_INITIATED_BY_PLUGIN_INSTALLER);
   BrowserThread::PostTask(
       BrowserThread::IO, FROM_HERE,
       base::Bind(&BeginDownload,
@@ -149,14 +145,11 @@ void PluginInstaller::StartInstalling(const GURL& plugin_url,
                  web_contents->GetRenderProcessHost()->GetID(),
                  web_contents->GetRenderViewHost()->GetRoutingID(),
                  base::Bind(&PluginInstaller::DownloadStarted,
-                            base::Unretained(this),
-                            make_scoped_refptr(download_manager))));
+                            base::Unretained(this))));
 }
 
-void PluginInstaller::DownloadStarted(
-    scoped_refptr<content::DownloadManager> dlm,
-    content::DownloadItem* item,
-    net::Error error) {
+void PluginInstaller::DownloadStarted(content::DownloadItem* item,
+                                      net::Error error) {
   if (!item) {
     DCHECK_NE(net::OK, error);
     std::string msg =

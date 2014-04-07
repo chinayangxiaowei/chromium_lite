@@ -11,9 +11,9 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "content/common/content_export.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebDragOperation.h"
+#include "content/public/common/drop_data.h"
+#include "third_party/WebKit/public/web/WebDragOperation.h"
 #include "ui/base/gtk/gtk_signal.h"
-#include "webkit/glue/webdropdata.h"
 
 namespace content {
 
@@ -28,7 +28,7 @@ class CONTENT_EXPORT WebDragDestGtk {
   WebDragDestGtk(WebContents* web_contents, GtkWidget* widget);
   ~WebDragDestGtk();
 
-  WebDropData* current_drop_data() const { return drop_data_.get(); }
+  DropData* current_drop_data() const { return drop_data_.get(); }
 
   // This is called when the renderer responds to a drag motion event. We must
   // update the system drag cursor.
@@ -79,7 +79,7 @@ class CONTENT_EXPORT WebDragDestGtk {
   GdkDragContext* context_;
 
   // The data for the current drag, or NULL if |context_| is NULL.
-  scoped_ptr<WebDropData> drop_data_;
+  scoped_ptr<DropData> drop_data_;
 
   // The number of outstanding drag data requests we have sent to the drag
   // source.
@@ -96,10 +96,13 @@ class CONTENT_EXPORT WebDragDestGtk {
   // signal handlers when this WebDragDestGtk is deleted so that if, later on,
   // we re-create the drag dest with the same widget, we don't get callbacks to
   // deleted functions.
-  scoped_array<int> handlers_;
+  scoped_ptr<int[]> handlers_;
 
   // A delegate that can receive drag information about drag events.
   WebDragDestDelegate* delegate_;
+
+  // True if the drag has been canceled.
+  bool canceled_;
 
   base::WeakPtrFactory<WebDragDestGtk> method_factory_;
 

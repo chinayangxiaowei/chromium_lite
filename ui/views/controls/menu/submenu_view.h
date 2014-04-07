@@ -132,9 +132,9 @@ class VIEWS_EXPORT SubmenuView : public View,
   // references to the MenuHost as the MenuHost is about to be deleted.
   void MenuHostDestroyed();
 
-  // Max width of accelerators in child menu items. This doesn't include
-  // children's children, only direct children.
-  int max_accelerator_width() const { return max_accelerator_width_; }
+  // Max width of minor text (accelerator or subtitle) in child menu items. This
+  // doesn't include children's children, only direct children.
+  int max_minor_text_width() const { return max_minor_text_width_; }
 
   // Minimum width of menu in pixels (default 0).  This becomes the smallest
   // width returned by GetPreferredSize().
@@ -149,8 +149,8 @@ class VIEWS_EXPORT SubmenuView : public View,
   }
 
  protected:
-  // View override.
-  virtual std::string GetClassName() const OVERRIDE;
+  // Overridden from View:
+  virtual const char* GetClassName() const OVERRIDE;
 
   // View method. Overridden to schedule a paint. We do this so that when
   // scrolling occurs, everything is repainted correctly.
@@ -193,7 +193,7 @@ class VIEWS_EXPORT SubmenuView : public View,
   MenuScrollViewContainer* scroll_view_container_;
 
   // See description above getter.
-  int max_accelerator_width_;
+  int max_minor_text_width_;
 
   // Minimum width returned in GetPreferredSize().
   int minimum_preferred_width_;

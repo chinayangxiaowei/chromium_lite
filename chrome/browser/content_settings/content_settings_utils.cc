@@ -17,7 +17,7 @@
 #include "chrome/browser/content_settings/host_content_settings_map.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/content_settings_pattern.h"
-#include "googleurl/src/gurl.h"
+#include "url/gurl.h"
 
 namespace {
 
@@ -39,6 +39,8 @@ const char* kTypeNames[] = {
   "media-stream-camera",
   "register-protocol-handler",
   "ppapi-broker",
+  "multiple-automatic-downloads",
+  "midi-sysex",
 #if defined(OS_WIN)
   "metro-switch-to-desktop",
 #endif
@@ -190,10 +192,10 @@ ContentSetting GetContentSetting(const ProviderInterface* provider,
 
 void GetRendererContentSettingRules(const HostContentSettingsMap* map,
                                     RendererContentSettingRules* rules) {
-  map->GetSettingsForOneType(CONTENT_SETTINGS_TYPE_IMAGES, "",
-                             &(rules->image_rules));
-  map->GetSettingsForOneType(CONTENT_SETTINGS_TYPE_JAVASCRIPT, "",
-                             &(rules->script_rules));
+  map->GetSettingsForOneType(
+      CONTENT_SETTINGS_TYPE_IMAGES, std::string(), &(rules->image_rules));
+  map->GetSettingsForOneType(
+      CONTENT_SETTINGS_TYPE_JAVASCRIPT, std::string(), &(rules->script_rules));
 }
 
 }  // namespace content_settings

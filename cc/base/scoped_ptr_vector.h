@@ -5,6 +5,9 @@
 #ifndef CC_BASE_SCOPED_PTR_VECTOR_H_
 #define CC_BASE_SCOPED_PTR_VECTOR_H_
 
+#include <algorithm>
+#include <vector>
+
 #include "base/basictypes.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
@@ -30,7 +33,7 @@ class ScopedPtrVector {
   // to methods on the ScopedPtrVector class to appear in the vector.
   class iterator : public std::vector<T*>::iterator {
    public:
-    iterator(const typename std::vector<T*>::iterator& other)
+    iterator(const typename std::vector<T*>::iterator& other) // NOLINT
         : std::vector<T*>::iterator(other) {}
     T* const& operator*() { return std::vector<T*>::iterator::operator*(); }
   };
@@ -69,7 +72,7 @@ class ScopedPtrVector {
 
   scoped_ptr<T> take(iterator position) {
     if (position == end())
-      return scoped_ptr<T>(NULL);
+      return scoped_ptr<T>();
     DCHECK(position < end());
 
     typename std::vector<T*>::iterator writable_position = position;
@@ -126,6 +129,17 @@ class ScopedPtrVector {
     data_.insert(position, item.release());
   }
 
+  void insert_and_take(iterator position,
+                       ScopedPtrVector<T>& other) {
+    std::vector<T*> tmp_data;
+    for (ScopedPtrVector<T>::iterator it = other.begin();
+         it != other.end();
+         ++it) {
+      tmp_data.push_back(other.take(it).release());
+    }
+    data_.insert(position, tmp_data.begin(), tmp_data.end());
+  }
+
   void swap(ScopedPtrVector<T>& other) {
     data_.swap(other.data_);
   }
@@ -142,7 +156,7 @@ class ScopedPtrVector {
 
   template<class Compare>
   inline void sort(Compare comp) {
-   std::sort(data_.begin(), data_.end(), comp);
+    std::sort(data_.begin(), data_.end(), comp);
   }
 
   iterator begin() { return static_cast<iterator>(data_.begin()); }

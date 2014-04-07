@@ -27,7 +27,7 @@ media::VideoCapture* VideoCaptureImplManager::AddDevice(
   Devices::iterator it = devices_.find(id);
   if (it == devices_.end()) {
     VideoCaptureImpl* vc =
-        new VideoCaptureImpl(id, message_loop_proxy_, filter_);
+        new VideoCaptureImpl(id, message_loop_proxy_.get(), filter_.get());
     devices_[id] = new Device(vc, handler);
     vc->Init();
     return vc;
@@ -35,6 +35,12 @@ media::VideoCapture* VideoCaptureImplManager::AddDevice(
 
   devices_[id]->clients.push_front(handler);
   return it->second->vc;
+}
+
+void VideoCaptureImplManager::SuspendDevices(bool suspend) {
+  base::AutoLock auto_lock(lock_);
+  for (Devices::iterator it = devices_.begin(); it != devices_.end(); ++it)
+    it->second->vc->SuspendCapture(suspend);
 }
 
 void VideoCaptureImplManager::RemoveDevice(

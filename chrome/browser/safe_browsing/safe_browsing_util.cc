@@ -5,13 +5,13 @@
 #include "chrome/browser/safe_browsing/safe_browsing_util.h"
 
 #include "base/logging.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "chrome/browser/google/google_util.h"
 #include "crypto/sha2.h"
-#include "googleurl/src/gurl.h"
-#include "googleurl/src/url_util.h"
 #include "net/base/escape.h"
+#include "url/gurl.h"
+#include "url/url_util.h"
 
 #if defined(OS_WIN)
 #include "chrome/installer/util/browser_distribution.h"
@@ -164,6 +164,7 @@ const char kBinHashList[] = "goog-badbin-digestvar-disabled";
 const char kCsdWhiteList[] = "goog-csdwhite-sha256";
 const char kDownloadWhiteList[] = "goog-downloadwhite-digest256";
 const char kExtensionBlacklist[] = "goog-badcrxids-digestvar";
+const char kSideEffectFreeWhitelist[] = "goog-sideeffectfree-shavar";
 
 ListType GetListId(const std::string& name) {
   ListType id;
@@ -181,6 +182,8 @@ ListType GetListId(const std::string& name) {
     id = DOWNLOADWHITELIST;
   } else if (name == safe_browsing_util::kExtensionBlacklist) {
     id = EXTENSIONBLACKLIST;
+  } else if (name == safe_browsing_util::kSideEffectFreeWhitelist) {
+    id = SIDEEFFECTFREEWHITELIST;
   } else {
     id = INVALID;
   }
@@ -209,6 +212,9 @@ bool GetListName(ListType list_id, std::string* list) {
       break;
     case EXTENSIONBLACKLIST:
       *list = safe_browsing_util::kExtensionBlacklist;
+      break;
+    case SIDEEFFECTFREEWHITELIST:
+      *list = safe_browsing_util::kSideEffectFreeWhitelist;
       break;
     default:
       return false;
@@ -298,8 +304,10 @@ void CanonicalizeUrl(const GURL& url,
       url_unescaped_str.length(), &parsed);
 
   // 3. In hostname, remove all leading and trailing dots.
-  const std::string host = (parsed.host.len > 0) ? url_unescaped_str.substr(
-      parsed.host.begin, parsed.host.len) : "";
+  const std::string host =
+      (parsed.host.len > 0)
+          ? url_unescaped_str.substr(parsed.host.begin, parsed.host.len)
+          : std::string();
   const char kCharsToTrim[] = ".";
   std::string host_without_end_dots;
   TrimString(host, kCharsToTrim, &host_without_end_dots);
@@ -309,10 +317,11 @@ void CanonicalizeUrl(const GURL& url,
       host_without_end_dots, '.'));
 
   // 5. In path, replace runs of consecutive slashes with a single slash.
-  std::string path = (parsed.path.len > 0) ? url_unescaped_str.substr(
-       parsed.path.begin, parsed.path.len): "";
-  std::string path_without_consecutive_slash(RemoveConsecutiveChars(
-      path, '/'));
+  std::string path =
+      (parsed.path.len > 0)
+          ? url_unescaped_str.substr(parsed.path.begin, parsed.path.len)
+          : std::string();
+  std::string path_without_consecutive_slash(RemoveConsecutiveChars(path, '/'));
 
   url_canon::Replacements<char> hp_replacements;
   hp_replacements.SetHost(host_without_consecutive_dots.data(),

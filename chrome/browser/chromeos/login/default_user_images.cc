@@ -6,10 +6,10 @@
 
 #include "base/basictypes.h"
 #include "base/logging.h"
-#include "base/string_piece.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_piece.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -127,7 +127,7 @@ std::string GetDefaultImageUrl(int index) {
   return GetDefaultImageString(index, kDefaultUrlPrefix);
 }
 
-bool IsDefaultImageUrl(const std::string url, int* image_id) {
+bool IsDefaultImageUrl(const std::string& url, int* image_id) {
   if (url == kZeroDefaultUrl) {
     *image_id = 0;
     return true;

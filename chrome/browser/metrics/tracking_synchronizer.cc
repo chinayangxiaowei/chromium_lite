@@ -6,13 +6,12 @@
 
 #include "base/bind.h"
 #include "base/metrics/histogram.h"
-#include "base/process_util.h"
 #include "base/threading/thread.h"
 #include "base/tracked_objects.h"
 #include "chrome/browser/metrics/tracking_synchronizer_observer.h"
-#include "chrome/common/chrome_process_type.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/profiler_controller.h"
+#include "content/public/common/process_type.h"
 
 using base::TimeTicks;
 using content::BrowserThread;
@@ -132,7 +131,7 @@ class TrackingSynchronizer::RequestContext {
     bool received_process_group_count = request->received_process_group_count_;
     int unresponsive_processes = request->processes_pending_;
 
-    if (request->callback_object_)
+    if (request->callback_object_.get())
       request->callback_object_->FinishedReceivingProfilerData();
 
     delete request;
@@ -274,9 +273,9 @@ void TrackingSynchronizer::DecrementPendingProcessesAndSendData(
   if (!request)
     return;
 
-  if (request->callback_object_) {
-    request->callback_object_->ReceivedProfilerData(profiler_data,
-                                                    process_type);
+  if (request->callback_object_.get()) {
+    request->callback_object_
+        ->ReceivedProfilerData(profiler_data, process_type);
   }
 
   // Delete request if we have heard back from all child processes.

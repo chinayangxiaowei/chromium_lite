@@ -5,13 +5,14 @@
 #include "chrome/browser/extensions/requirements_checker.h"
 
 #include "base/bind.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/gpu/gpu_feature_checker.h"
 #include "chrome/common/extensions/extension_manifest_constants.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/manifest.h"
+#include "chrome/common/extensions/manifest_handlers/requirements_handler.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/common/gpu_feature_type.h"
+#include "gpu/config/gpu_feature_type.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -33,7 +34,8 @@ void RequirementsChecker::Check(scoped_refptr<const Extension> extension,
   DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
 
   callback_ = callback;
-  const Extension::Requirements& requirements = extension->requirements();
+  const RequirementsInfo& requirements =
+      RequirementsInfo::GetRequirements(extension.get());
 
   if (requirements.npapi) {
 #if defined(OS_CHROMEOS)
@@ -51,7 +53,7 @@ void RequirementsChecker::Check(scoped_refptr<const Extension> extension,
   if (requirements.webgl) {
     ++pending_requirement_checks_;
     webgl_checker_ = new GPUFeatureChecker(
-      content::GPU_FEATURE_TYPE_WEBGL,
+      gpu::GPU_FEATURE_TYPE_WEBGL,
       base::Bind(&RequirementsChecker::SetWebGLAvailability,
                  AsWeakPtr()));
   }
@@ -59,7 +61,7 @@ void RequirementsChecker::Check(scoped_refptr<const Extension> extension,
   if (requirements.css3d) {
     ++pending_requirement_checks_;
     css3d_checker_ = new GPUFeatureChecker(
-      content::GPU_FEATURE_TYPE_ACCELERATED_COMPOSITING,
+      gpu::GPU_FEATURE_TYPE_ACCELERATED_COMPOSITING,
       base::Bind(&RequirementsChecker::SetCSS3DAvailability,
                  AsWeakPtr()));
   }

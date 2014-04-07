@@ -12,7 +12,7 @@
 
 #include "base/basictypes.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "chrome/browser/ui/omnibox/omnibox_view.h"
 #include "chrome/browser/ui/toolbar/toolbar_model.h"
 #include "content/public/browser/notification_observer.h"
@@ -67,10 +67,6 @@ class OmniboxViewGtk : public OmniboxView,
 
   // Initialize, create the underlying widgets, etc.
   void Init();
-  // Returns the width in pixels needed to display the text from one character
-  // before the caret to the end of the string. See comments in
-  // LocationBarView::Layout as to why this uses -1.
-  int WidthOfTextAfterCursor();
 
   // OmniboxView:
   virtual void SaveStateToTab(content::WebContents* tab) OVERRIDE;
@@ -101,8 +97,8 @@ class OmniboxViewGtk : public OmniboxView,
   virtual bool OnAfterPossibleChange() OVERRIDE;
   virtual gfx::NativeView GetNativeView() const OVERRIDE;
   virtual gfx::NativeView GetRelativeWindowForPopup() const OVERRIDE;
-  virtual void SetInstantSuggestion(const string16& suggestion) OVERRIDE;
-  virtual string16 GetInstantSuggestion() const OVERRIDE;
+  virtual void SetGrayTextAutocompletion(const string16& suggestion) OVERRIDE;
+  virtual string16 GetGrayTextAutocompletion() const OVERRIDE;
   virtual int TextWidth() const OVERRIDE;
   virtual bool IsImeComposing() const OVERRIDE;
 
@@ -113,8 +109,8 @@ class OmniboxViewGtk : public OmniboxView,
 
   // Sets the colors of the text view according to the theme.
   void SetBaseColor();
-  // Sets the colors of the Instant suggestion view according to the theme.
-  void UpdateInstantViewColors();
+  // Sets the colors of the gray text suggestion view according to the theme.
+  void UpdateGrayTextViewColors();
 
   // Returns the text view gtk widget. May return NULL if the widget
   // has already been destroyed.
@@ -287,16 +283,16 @@ class OmniboxViewGtk : public OmniboxView,
   void UpdatePrimarySelectionIfValidURL();
 
   // Retrieves the first and last iterators in the |text_buffer_|, but excludes
-  // the anchor holding the |instant_view_| widget.
+  // the anchor holding the |gray_text_view_| widget.
   void GetTextBufferBounds(GtkTextIter* start, GtkTextIter* end) const;
 
   // Validates an iterator in the |text_buffer_|, to make sure it doesn't go
-  // beyond the anchor for holding the |instant_view_| widget.
+  // beyond the anchor for holding the |gray_text_view_| widget.
   void ValidateTextBufferIter(GtkTextIter* iter) const;
 
-  // Adjusts vertical alignment of the |instant_view_| in the |text_view_|, to
+  // Adjusts vertical alignment of the |gray_text_view_| in the |text_view_|, to
   // make sure they have the same baseline.
-  void AdjustVerticalAlignmentOfInstantView();
+  void AdjustVerticalAlignmentOfGrayTextView();
 
   // The Browser that contains this omnibox.
   Browser* browser_;
@@ -318,17 +314,17 @@ class OmniboxViewGtk : public OmniboxView,
   GtkTextTag* security_error_scheme_tag_;
   GtkTextTag* normal_text_tag_;
 
-  // Objects for the Instant suggestion text view.
-  GtkTextTag* instant_anchor_tag_;
+  // Objects for the gray suggestion text view.
+  GtkTextTag* gray_text_anchor_tag_;
 
-  // A widget for displaying Instant suggestion text. It'll be attached to a
+  // A widget for displaying gray autocompletion text. It'll be attached to a
   // child anchor in the |text_buffer_| object.
-  GtkWidget* instant_view_;
+  GtkWidget* gray_text_view_;
 
-  // A mark to split the content and the Instant anchor. Wherever the end
+  // A mark to split the content and the gray text anchor. Wherever the end
   // iterator of the text buffer is required, the iterator to this mark should
   // be used.
-  GtkTextMark* instant_mark_;
+  GtkTextMark* gray_text_mark_;
 
   scoped_ptr<OmniboxPopupView> popup_view_;
 

@@ -6,8 +6,8 @@
 #define MEDIA_AUDIO_SCOPED_LOOP_OBSERVER_H_
 
 #include "base/memory/ref_counted.h"
-#include "base/message_loop.h"
-#include "base/message_loop_proxy.h"
+#include "base/message_loop/message_loop.h"
+#include "base/message_loop/message_loop_proxy.h"
 
 namespace base {
 class WaitableEvent;
@@ -22,7 +22,7 @@ namespace media {
 // NOTE: The class that inherits from this class must implement the
 // WillDestroyCurrentMessageLoop virtual method from DestructionObserver.
 class ScopedLoopObserver
-    : public MessageLoop::DestructionObserver {
+    : public base::MessageLoop::DestructionObserver {
  public:
   explicit ScopedLoopObserver(
       const scoped_refptr<base::MessageLoopProxy>& message_loop);

@@ -12,7 +12,8 @@
 #include "base/json/json_string_value_serializer.h"
 #include "base/location.h"
 #include "base/stl_util.h"
-#include "base/string_piece.h"
+#include "base/strings/string_piece.h"
+#include "chrome/browser/invalidation/invalidation_service_factory.h"
 #include "chrome/browser/prefs/pref_model_associator.h"
 #include "chrome/browser/prefs/scoped_user_pref_update.h"
 #include "chrome/browser/signin/signin_manager.h"
@@ -33,6 +34,7 @@
 #include "sync/api/sync_data.h"
 #include "sync/internal_api/public/base/model_type.h"
 #include "sync/internal_api/public/change_record.h"
+#include "sync/internal_api/public/data_type_debug_info_listener.h"
 #include "sync/internal_api/public/read_node.h"
 #include "sync/internal_api/public/read_transaction.h"
 #include "sync/internal_api/public/write_node.h"
@@ -67,7 +69,8 @@ ACTION_P(ReturnNewDataTypeManagerWithDebugListener, debug_listener) {
       arg1,
       arg2,
       arg3,
-      arg4);
+      arg4,
+      arg5);
 }
 
 // TODO(zea): Refactor to remove the ProfileSyncService usage.
@@ -100,9 +103,9 @@ class ProfileSyncServicePreferenceTest
   }
 
   // DataTypeDebugInfoListener implementation.
-  virtual void OnDataTypeAssociationComplete(
-      const syncer::DataTypeAssociationStats& association_stats) OVERRIDE {
-    association_stats_ = association_stats;
+  virtual void OnSingleDataTypeConfigureComplete(
+      const syncer::DataTypeConfigurationStats& configuration_stats) OVERRIDE {
+    association_stats_ = configuration_stats.association_stats;
   }
   virtual void OnConfigureComplete() OVERRIDE {
     // Do nothing.
@@ -110,7 +113,7 @@ class ProfileSyncServicePreferenceTest
 
  protected:
   ProfileSyncServicePreferenceTest()
-      : debug_ptr_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)),
+      : debug_ptr_factory_(this),
         example_url0_("http://example.com/0"),
         example_url1_("http://example.com/1"),
         example_url2_("http://example.com/2"),
@@ -121,13 +124,14 @@ class ProfileSyncServicePreferenceTest
   virtual void SetUp() {
     AbstractProfileSyncServiceTest::SetUp();
     profile_.reset(new TestingProfile());
-    profile_->CreateRequestContext();
+    invalidation::InvalidationServiceFactory::GetInstance()->
+        SetBuildOnlyFakeInvalidatorsForTest(true);
     prefs_ = profile_->GetTestingPrefService();
 
     prefs_->registry()->RegisterStringPref(
         not_synced_preference_name_.c_str(),
         not_synced_preference_default_value_,
-        PrefRegistrySyncable::UNSYNCABLE_PREF);
+        user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   }
 
   virtual void TearDown() {
@@ -149,14 +153,17 @@ class ProfileSyncServicePreferenceTest
     if (sync_service_)
       return false;
 
-    SigninManager* signin = SigninManagerFactory::GetForProfile(profile_.get());
+    SigninManagerBase* signin =
+         SigninManagerFactory::GetForProfile(profile_.get());
     signin->SetAuthenticatedUsername("test");
+    ProfileOAuth2TokenServiceFactory::GetInstance()->SetTestingFactory(
+        profile_.get(), FakeOAuth2TokenService::BuildTokenService);
     sync_service_ = static_cast<TestProfileSyncService*>(
         ProfileSyncServiceFactory::GetInstance()->SetTestingFactoryAndUse(
             profile_.get(), &TestProfileSyncService::BuildAutoStartAsyncInit));
     sync_service_->set_backend_init_callback(callback);
     pref_sync_service_ = reinterpret_cast<PrefModelAssociator*>(
-        prefs_->GetSyncableService());
+        prefs_->GetSyncableService(syncer::PREFERENCES));
     if (!pref_sync_service_)
       return false;
     ProfileSyncComponentsFactoryMock* components =
@@ -164,7 +171,7 @@ class ProfileSyncServicePreferenceTest
     EXPECT_CALL(*components, GetSyncableServiceForType(syncer::PREFERENCES)).
         WillOnce(Return(pref_sync_service_->AsWeakPtr()));
 
-    EXPECT_CALL(*components, CreateDataTypeManager(_, _, _, _, _)).
+    EXPECT_CALL(*components, CreateDataTypeManager(_, _, _, _, _, _)).
         WillOnce(ReturnNewDataTypeManagerWithDebugListener(
                      syncer::MakeWeakHandle(debug_ptr_factory_.GetWeakPtr())));
     dtc_ = new UIDataTypeController(syncer::PREFERENCES,
@@ -178,10 +185,12 @@ class ProfileSyncServicePreferenceTest
                      &change_processor_));
     sync_service_->RegisterDataTypeController(dtc_);
     TokenServiceFactory::GetForProfile(profile_.get())->IssueAuthTokenForTest(
+        GaiaConstants::kGaiaOAuth2LoginRefreshToken, "oauth2_login_token");
+    TokenServiceFactory::GetForProfile(profile_.get())->IssueAuthTokenForTest(
         GaiaConstants::kSyncService, "token");
 
     sync_service_->Initialize();
-    MessageLoop::current()->Run();
+    base::MessageLoop::current()->Run();
 
     // It's possible this test triggered an unrecoverable error, in which case
     // we can't get the preference count.
@@ -223,9 +232,9 @@ class ProfileSyncServicePreferenceTest
                          const Value& value,
                          syncer::WriteNode* node) {
     syncer::SyncData sync_data;
-    if (!PrefModelAssociator::CreatePrefSyncData(name,
-                                                 value,
-                                                 &sync_data)) {
+    if (!pref_sync_service_->CreatePrefSyncData(name,
+                                                value,
+                                                &sync_data)) {
       return syncer::kInvalidId;
     }
     node->SetEntitySpecifics(sync_data.GetSpecifics());
@@ -264,10 +273,9 @@ class AddPreferenceEntriesHelper {
  public:
   AddPreferenceEntriesHelper(ProfileSyncServicePreferenceTest* test,
                              const PreferenceValues& entries)
-      : ALLOW_THIS_IN_INITIALIZER_LIST(callback_(
-            base::Bind(
-                &AddPreferenceEntriesHelper::AddPreferenceEntriesCallback,
-                base::Unretained(this), test, entries))),
+      : callback_(base::Bind(
+            &AddPreferenceEntriesHelper::AddPreferenceEntriesCallback,
+            base::Unretained(this), test, entries)),
         success_(false) {
   }
 
@@ -301,7 +309,7 @@ TEST_F(ProfileSyncServicePreferenceTest, CreatePrefSyncData) {
   const PrefService::Preference* pref =
       prefs_->FindPreference(prefs::kHomePage);
   syncer::SyncData sync_data;
-  EXPECT_TRUE(PrefModelAssociator::CreatePrefSyncData(pref->name(),
+  EXPECT_TRUE(pref_sync_service_->CreatePrefSyncData(pref->name(),
       *pref->GetValue(), &sync_data));
   EXPECT_EQ(std::string(prefs::kHomePage), sync_data.GetTag());
   const sync_pb::PreferenceSpecifics& specifics(sync_data.GetSpecifics().
@@ -595,6 +603,7 @@ TEST_F(ProfileSyncServicePreferenceTest, DynamicManagedPreferences) {
       Value::CreateStringValue("http://example.com/initial"));
   profile_->GetPrefs()->Set(prefs::kHomePage, *initial_value);
   scoped_ptr<const Value> actual(GetSyncedValue(prefs::kHomePage));
+  ASSERT_TRUE(actual.get());
   EXPECT_TRUE(initial_value->Equals(actual.get()));
 
   // Switch kHomePage to managed and set a different value.

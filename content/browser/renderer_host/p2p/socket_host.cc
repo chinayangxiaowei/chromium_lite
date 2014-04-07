@@ -10,7 +10,6 @@
 #include "content/browser/renderer_host/p2p/socket_host_udp.h"
 
 namespace {
-const int kStunHeaderSize = 20;
 const uint32 kStunMagicCookie = 0x2112A442;
 }  // namespace
 
@@ -73,16 +72,29 @@ bool P2PSocketHost::IsRequestOrResponse(StunMessageType type) {
 
 // static
 P2PSocketHost* P2PSocketHost::Create(
-    IPC::Sender* message_sender, int id, P2PSocketType type) {
+    IPC::Sender* message_sender, int id, P2PSocketType type,
+    net::URLRequestContextGetter* url_context) {
   switch (type) {
     case P2P_SOCKET_UDP:
       return new P2PSocketHostUdp(message_sender, id);
 
     case P2P_SOCKET_TCP_SERVER:
-      return new P2PSocketHostTcpServer(message_sender, id);
+      return new P2PSocketHostTcpServer(
+          message_sender, id, P2P_SOCKET_TCP_CLIENT);
+
+    case P2P_SOCKET_STUN_TCP_SERVER:
+      return new P2PSocketHostTcpServer(
+          message_sender, id, P2P_SOCKET_STUN_TCP_CLIENT);
 
     case P2P_SOCKET_TCP_CLIENT:
-      return new P2PSocketHostTcp(message_sender, id);
+    case P2P_SOCKET_SSLTCP_CLIENT:
+    case P2P_SOCKET_TLS_CLIENT:
+      return new P2PSocketHostTcp(message_sender, id, type, url_context);
+
+    case P2P_SOCKET_STUN_TCP_CLIENT:
+    case P2P_SOCKET_STUN_SSLTCP_CLIENT:
+    case P2P_SOCKET_STUN_TLS_CLIENT:
+      return new P2PSocketHostStunTcp(message_sender, id, type, url_context);
   }
 
   NOTREACHED();

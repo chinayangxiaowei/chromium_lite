@@ -10,8 +10,8 @@
 
 #include "base/basictypes.h"
 #include "base/cancelable_callback.h"
+#include "base/containers/hash_tables.h"
 #include "base/gtest_prod_util.h"
-#include "base/hash_tables.h"
 #include "base/memory/weak_ptr.h"
 #include "content/common/content_export.h"
 #include "content/common/gpu/gpu_memory_allocation.h"
@@ -229,6 +229,9 @@ class CONTENT_EXPORT GpuMemoryManager :
   // The maximum amount of memory that may be allocated for GPU resources
   uint64 bytes_available_gpu_memory_;
   bool bytes_available_gpu_memory_overridden_;
+
+  // Whether or not clients can be allocated memory when nonvisible.
+  bool allow_nonvisible_memory_;
 
   // The minimum and default allocations for a single client.
   uint64 bytes_minimum_per_client_;

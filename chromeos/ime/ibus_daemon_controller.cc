@@ -11,10 +11,11 @@
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/observer_list.h"
-#include "base/process_util.h"
+#include "base/process/launch.h"
+#include "base/process/process_handle.h"
 #include "base/rand_util.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/threading/thread_checker.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
 
@@ -77,7 +78,7 @@ class IBusDaemonControllerImpl : public IBusDaemonController {
       ibus_daemon_status_(IBUS_DAEMON_STOP),
       ui_task_runner_(ui_task_runner),
       file_task_runner_(file_task_runner),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_ptr_factory_(this)) {
+      weak_ptr_factory_(this) {
   }
 
   virtual ~IBusDaemonControllerImpl() {}

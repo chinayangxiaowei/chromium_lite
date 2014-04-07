@@ -8,15 +8,16 @@
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
 #include "base/gtest_prod_util.h"
-#include "base/string16.h"
-#include "base/time.h"
-#include "base/timer.h"
+#include "base/strings/string16.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "chrome/browser/autocomplete/autocomplete_input.h"
 #include "chrome/browser/autocomplete/autocomplete_provider.h"
 #include "chrome/browser/autocomplete/autocomplete_provider_listener.h"
 #include "chrome/browser/autocomplete/autocomplete_result.h"
 
 class AutocompleteControllerDelegate;
+class HistoryURLProvider;
 class KeywordProvider;
 class Profile;
 class SearchProvider;
@@ -76,12 +77,13 @@ class AutocompleteController : public AutocompleteProviderListener {
   // If |clear_result| is true, the controller will also erase the result set.
   void Stop(bool clear_result);
 
-  // Begin asynchronously fetching zero-suggest suggestions for |url|.
-  // |user_text| is the text entered in the omnibox, which may be non-empty if
-  // the user previously focused in the omnibox during this interaction.
-  // TODO(jered): Rip out |user_text| once the first match is decoupled from
-  // the current typing in the omnibox.
-  void StartZeroSuggest(const GURL& url, const string16& user_text);
+  // Begin asynchronously fetching zero-suggest suggestions for |url| of
+  // classification |page_classification|. |permanent_text| is the omnibox
+  // text for the current page.
+  void StartZeroSuggest(
+      const GURL& url,
+      AutocompleteInput::PageClassification page_classification,
+      const string16& permanent_text);
 
   // Cancels any pending zero-suggest fetch.
   void StopZeroSuggest();
@@ -118,8 +120,11 @@ class AutocompleteController : public AutocompleteProviderListener {
   GURL GetDestinationURL(const AutocompleteMatch& match,
                          base::TimeDelta query_formulation_time) const;
 
-  SearchProvider* search_provider() const { return search_provider_; }
+  HistoryURLProvider* history_url_provider() const {
+    return history_url_provider_;
+  }
   KeywordProvider* keyword_provider() const { return keyword_provider_; }
+  SearchProvider* search_provider() const { return search_provider_; }
 
   const AutocompleteInput& input() const { return input_; }
   const AutocompleteResult& result() const { return result_; }
@@ -175,13 +180,18 @@ class AutocompleteController : public AutocompleteProviderListener {
   // Updates |done_| to be accurate with respect to current providers' statuses.
   void CheckIfDone();
 
-  // Starts the expire timer.
+  // Starts |expire_timer_|.
   void StartExpireTimer();
+
+  // Starts |stop_timer_|.
+  void StartStopTimer();
 
   AutocompleteControllerDelegate* delegate_;
 
   // A list of all providers.
   ACProviders providers_;
+
+  HistoryURLProvider* history_url_provider_;
 
   KeywordProvider* keyword_provider_;
 
@@ -210,6 +220,13 @@ class AutocompleteController : public AutocompleteProviderListener {
   // Timer used to remove any matches copied from the last result. When run
   // invokes |ExpireCopiedEntries|.
   base::OneShotTimer<AutocompleteController> expire_timer_;
+
+  // Timer used to tell the providers to Stop() searching for matches.
+  base::OneShotTimer<AutocompleteController> stop_timer_;
+
+  // True if the user is in the "stop timer" field trial.  If so, the
+  // controller uses the |stop_timer_|.
+  const bool in_stop_timer_field_trial_;
 
   // True if a query is not currently running.
   bool done_;

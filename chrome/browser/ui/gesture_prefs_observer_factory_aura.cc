@@ -11,10 +11,11 @@
 #include "base/compiler_specific.h"
 #include "base/prefs/pref_change_registrar.h"
 #include "base/prefs/pref_service.h"
+#include "chrome/browser/chrome_notification_types.h"
+#include "chrome/browser/profiles/incognito_helpers.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_dependency_manager.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/pref_names.h"
+#include "components/browser_context_keyed_service/browser_context_dependency_manager.h"
 #include "components/user_prefs/pref_registry_syncable.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_service.h"
@@ -23,11 +24,7 @@
 #include "ui/base/gestures/gesture_configuration.h"
 
 #if defined(USE_ASH)
-#include "ash/wm/workspace/workspace_cycler_configuration.h"
-#endif  // USE_ASH
-
-#if defined(USE_ASH)
-using ash::WorkspaceCyclerConfiguration;
+#include "chrome/browser/ui/immersive_fullscreen_configuration.h"
 #endif  // USE_ASH
 
 using ui::GestureConfiguration;
@@ -53,7 +50,9 @@ const std::vector<OverscrollPref>& GetOverscrollPrefs() {
       { prefs::kOverscrollVerticalThresholdComplete,
         OVERSCROLL_CONFIG_VERT_THRESHOLD_COMPLETE },
       { prefs::kOverscrollMinimumThresholdStart,
-        OVERSCROLL_CONFIG_MIN_THRESHOLD_START },
+        OVERSCROLL_CONFIG_HORIZ_THRESHOLD_START },
+      { prefs::kOverscrollVerticalThresholdStart,
+        OVERSCROLL_CONFIG_VERT_THRESHOLD_START },
       { prefs::kOverscrollHorizontalResistThreshold,
         OVERSCROLL_CONFIG_HORIZ_RESIST_AFTER },
       { prefs::kOverscrollVerticalResistThreshold,
@@ -66,58 +65,19 @@ const std::vector<OverscrollPref>& GetOverscrollPrefs() {
 }
 
 #if defined(USE_ASH)
-struct WorkspaceCyclerPref {
-  const char* pref_name;
-  WorkspaceCyclerConfiguration::Property property;
+const char* kImmersiveModePrefs[] = {
+  prefs::kImmersiveModeRevealDelayMs,
+  prefs::kImmersiveModeRevealXThresholdPixels,
 };
-
-const std::vector<WorkspaceCyclerPref>& GetWorkspaceCyclerPrefs() {
-  CR_DEFINE_STATIC_LOCAL(std::vector<WorkspaceCyclerPref>, cycler_prefs, ());
-  if (cycler_prefs.empty()) {
-    const WorkspaceCyclerPref kCyclerPrefs[] = {
-      { prefs::kWorkspaceCyclerShallowerThanSelectedYOffsets,
-        WorkspaceCyclerConfiguration::SHALLOWER_THAN_SELECTED_Y_OFFSETS },
-      { prefs::kWorkspaceCyclerDeeperThanSelectedYOffsets,
-        WorkspaceCyclerConfiguration::DEEPER_THAN_SELECTED_Y_OFFSETS },
-      { prefs::kWorkspaceCyclerSelectedYOffset,
-        WorkspaceCyclerConfiguration::SELECTED_Y_OFFSET },
-      { prefs::kWorkspaceCyclerSelectedScale,
-        WorkspaceCyclerConfiguration::SELECTED_SCALE },
-      { prefs::kWorkspaceCyclerMinScale,
-        WorkspaceCyclerConfiguration::MIN_SCALE },
-      { prefs::kWorkspaceCyclerMaxScale,
-        WorkspaceCyclerConfiguration::MAX_SCALE },
-      { prefs::kWorkspaceCyclerMinBrightness,
-        WorkspaceCyclerConfiguration::MIN_BRIGHTNESS },
-      { prefs::kWorkspaceCyclerBackgroundOpacity,
-        WorkspaceCyclerConfiguration::BACKGROUND_OPACITY },
-      { prefs::kWorkspaceCyclerDesktopWorkspaceBrightness,
-        WorkspaceCyclerConfiguration::DESKTOP_WORKSPACE_BRIGHTNESS },
-      { prefs::kWorkspaceCyclerDistanceToInitiateCycling,
-        WorkspaceCyclerConfiguration::DISTANCE_TO_INITIATE_CYCLING },
-      { prefs::kWorkspaceCyclerScrollDistanceToCycleToNextWorkspace,
-        WorkspaceCyclerConfiguration::
-            SCROLL_DISTANCE_TO_CYCLE_TO_NEXT_WORKSPACE },
-      { prefs::kWorkspaceCyclerCyclerStepAnimationDurationRatio,
-        WorkspaceCyclerConfiguration::CYCLER_STEP_ANIMATION_DURATION_RATIO },
-      { prefs::kWorkspaceCyclerStartCyclerAnimationDuration,
-        WorkspaceCyclerConfiguration::START_CYCLER_ANIMATION_DURATION },
-      { prefs::kWorkspaceCyclerStopCyclerAnimationDuration,
-        WorkspaceCyclerConfiguration::STOP_CYCLER_ANIMATION_DURATION },
-    };
-    cycler_prefs.assign(kCyclerPrefs, kCyclerPrefs + arraysize(kCyclerPrefs));
-  }
-  return cycler_prefs;
-}
 #endif  // USE_ASH
 
 // This class manages gesture configuration preferences.
-class GesturePrefsObserver : public ProfileKeyedService {
+class GesturePrefsObserver : public BrowserContextKeyedService {
  public:
   explicit GesturePrefsObserver(PrefService* prefs);
   virtual ~GesturePrefsObserver();
 
-  // ProfileKeyedService implementation.
+  // BrowserContextKeyedService implementation.
   virtual void Shutdown() OVERRIDE;
 
  private:
@@ -133,7 +93,8 @@ class GesturePrefsObserver : public ProfileKeyedService {
   // Notification helper to push overscroll preferences into
   // content.
   void UpdateOverscrollPrefs();
-  void UpdateWorkspaceCyclerPrefs();
+
+  void UpdateImmersiveModePrefs();
 
   PrefChangeRegistrar registrar_;
   PrefService* prefs_;
@@ -190,6 +151,31 @@ GesturePrefsObserver::GesturePrefsObserver(PrefService* prefs)
   // Clear for migration.
   prefs->ClearPref(kTouchScreenFlingAccelerationAdjustment);
 
+  // TODO(mohsen): Remove following code in M32. By then, gesture prefs will
+  // have been cleared for majority of the users: crbug.com/269292.
+  // Do a one-time wipe of all gesture preferences.
+  if (!prefs->GetBoolean(prefs::kGestureConfigIsTrustworthy)) {
+    for (size_t i = 0; i < arraysize(kPrefsToObserve); ++i)
+      prefs->ClearPref(kPrefsToObserve[i]);
+
+    const std::vector<OverscrollPref>& overscroll_prefs = GetOverscrollPrefs();
+    for (size_t i = 0; i < overscroll_prefs.size(); ++i)
+      prefs->ClearPref(overscroll_prefs[i].pref_name);
+
+    for (size_t i = 0; i < arraysize(kFlingTouchpadPrefs); ++i)
+      prefs->ClearPref(kFlingTouchpadPrefs[i]);
+
+    for (size_t i = 0; i < arraysize(kFlingTouchscreenPrefs); ++i)
+      prefs->ClearPref(kFlingTouchscreenPrefs[i]);
+
+#if defined(USE_ASH)
+    for (size_t i = 0; i < arraysize(kImmersiveModePrefs); ++i)
+      prefs->ClearPref(kImmersiveModePrefs[i]);
+#endif  // USE_ASH
+
+    prefs->SetBoolean(prefs::kGestureConfigIsTrustworthy, true);
+  }
+
   registrar_.Init(prefs);
   registrar_.RemoveAll();
   base::Closure callback = base::Bind(&GesturePrefsObserver::Update,
@@ -211,10 +197,8 @@ GesturePrefsObserver::GesturePrefsObserver(PrefService* prefs)
     registrar_.Add(kFlingTouchscreenPrefs[i], notify_callback);
 
 #if defined(USE_ASH)
-  const std::vector<WorkspaceCyclerPref>& cycler_prefs =
-      GetWorkspaceCyclerPrefs();
-  for (size_t i = 0; i < cycler_prefs.size(); ++i)
-    registrar_.Add(cycler_prefs[i].pref_name, callback);
+  for (size_t i = 0; i < arraysize(kImmersiveModePrefs); ++i)
+    registrar_.Add(kImmersiveModePrefs[i], callback);
 #endif  // USE_ASH
   Update();
 }
@@ -299,9 +283,11 @@ void GesturePrefsObserver::Update() {
   GestureConfiguration::set_rail_start_proportion(
       prefs_->GetDouble(
           prefs::kRailStartProportion));
+  GestureConfiguration::set_scroll_prediction_seconds(
+      prefs_->GetDouble(prefs::kScrollPredictionSeconds));
 
   UpdateOverscrollPrefs();
-  UpdateWorkspaceCyclerPrefs();
+  UpdateImmersiveModePrefs();
 }
 
 void GesturePrefsObserver::UpdateOverscrollPrefs() {
@@ -312,21 +298,13 @@ void GesturePrefsObserver::UpdateOverscrollPrefs() {
   }
 }
 
-void GesturePrefsObserver::UpdateWorkspaceCyclerPrefs() {
+void GesturePrefsObserver::UpdateImmersiveModePrefs() {
 #if defined(USE_ASH)
-  const std::vector<WorkspaceCyclerPref>& cycler_prefs =
-      GetWorkspaceCyclerPrefs();
-  for (size_t i = 0; i < cycler_prefs.size(); ++i) {
-    WorkspaceCyclerConfiguration::Property property =
-        cycler_prefs[i].property;
-    if (WorkspaceCyclerConfiguration::IsListProperty(property)) {
-      WorkspaceCyclerConfiguration::SetListValue(property,
-          *prefs_->GetList(cycler_prefs[i].pref_name));
-    } else {
-      WorkspaceCyclerConfiguration::SetDouble(property,
-          prefs_->GetDouble(cycler_prefs[i].pref_name));
-    }
-  }
+  ImmersiveFullscreenConfiguration::set_immersive_mode_reveal_delay_ms(
+      prefs_->GetInteger(prefs::kImmersiveModeRevealDelayMs));
+  ImmersiveFullscreenConfiguration::
+      set_immersive_mode_reveal_x_threshold_pixels(
+          prefs_->GetInteger(prefs::kImmersiveModeRevealXThresholdPixels));
 #endif  // USE_ASH
 }
 
@@ -348,195 +326,205 @@ GesturePrefsObserverFactoryAura::GetInstance() {
 }
 
 GesturePrefsObserverFactoryAura::GesturePrefsObserverFactoryAura()
-    : ProfileKeyedServiceFactory("GesturePrefsObserverAura",
-                                 ProfileDependencyManager::GetInstance()) {}
+    : BrowserContextKeyedServiceFactory(
+        "GesturePrefsObserverAura",
+        BrowserContextDependencyManager::GetInstance()) {}
 
 GesturePrefsObserverFactoryAura::~GesturePrefsObserverFactoryAura() {}
 
-ProfileKeyedService* GesturePrefsObserverFactoryAura::BuildServiceInstanceFor(
-    Profile* profile) const {
-  return new GesturePrefsObserver(profile->GetPrefs());
+BrowserContextKeyedService*
+GesturePrefsObserverFactoryAura::BuildServiceInstanceFor(
+    content::BrowserContext* profile) const {
+  return new GesturePrefsObserver(static_cast<Profile*>(profile)->GetPrefs());
 }
 
 void GesturePrefsObserverFactoryAura::RegisterOverscrollPrefs(
-    PrefRegistrySyncable* registry) {
+    user_prefs::PrefRegistrySyncable* registry) {
   const std::vector<OverscrollPref>& overscroll_prefs = GetOverscrollPrefs();
 
   for (size_t i = 0; i < overscroll_prefs.size(); ++i) {
     registry->RegisterDoublePref(
         overscroll_prefs[i].pref_name,
         content::GetOverscrollConfig(overscroll_prefs[i].config),
-        PrefRegistrySyncable::UNSYNCABLE_PREF);
+        user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   }
 }
 
 void GesturePrefsObserverFactoryAura::RegisterFlingCurveParameters(
-    PrefRegistrySyncable* registry) {
+    user_prefs::PrefRegistrySyncable* registry) {
   content::RendererPreferences def_prefs;
 
   for (size_t i = 0; i < arraysize(kFlingTouchpadPrefs); i++)
-    registry->RegisterDoublePref(kFlingTouchpadPrefs[i],
-                                 def_prefs.touchpad_fling_profile[i],
-                                 PrefRegistrySyncable::UNSYNCABLE_PREF);
+    registry->RegisterDoublePref(
+        kFlingTouchpadPrefs[i],
+        def_prefs.touchpad_fling_profile[i],
+        user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
 
   for (size_t i = 0; i < arraysize(kFlingTouchscreenPrefs); i++)
-    registry->RegisterDoublePref(kFlingTouchscreenPrefs[i],
-                                 def_prefs.touchscreen_fling_profile[i],
-                                 PrefRegistrySyncable::UNSYNCABLE_PREF);
+    registry->RegisterDoublePref(
+        kFlingTouchscreenPrefs[i],
+        def_prefs.touchscreen_fling_profile[i],
+        user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
 }
 
-void GesturePrefsObserverFactoryAura::RegisterWorkspaceCyclerPrefs(
-    PrefRegistrySyncable* registry) {
+void GesturePrefsObserverFactoryAura::RegisterImmersiveModePrefs(
+    user_prefs::PrefRegistrySyncable* registry) {
 #if defined(USE_ASH)
-  const std::vector<WorkspaceCyclerPref>& cycler_prefs =
-      GetWorkspaceCyclerPrefs();
-  for (size_t i = 0; i < cycler_prefs.size(); ++i) {
-    WorkspaceCyclerConfiguration::Property property =
-        cycler_prefs[i].property;
-    if (WorkspaceCyclerConfiguration::IsListProperty(property)) {
-      registry->RegisterListPref(
-          cycler_prefs[i].pref_name,
-          WorkspaceCyclerConfiguration::GetListValue(property).DeepCopy(),
-          PrefRegistrySyncable::UNSYNCABLE_PREF);
-    } else {
-      registry->RegisterDoublePref(
-          cycler_prefs[i].pref_name,
-          WorkspaceCyclerConfiguration::GetDouble(property),
-          PrefRegistrySyncable::UNSYNCABLE_PREF);
-    }
-  }
+  registry->RegisterIntegerPref(
+      prefs::kImmersiveModeRevealDelayMs,
+      ImmersiveFullscreenConfiguration::immersive_mode_reveal_delay_ms(),
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
+  registry->RegisterIntegerPref(
+      prefs::kImmersiveModeRevealXThresholdPixels,
+      ImmersiveFullscreenConfiguration::
+          immersive_mode_reveal_x_threshold_pixels(),
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
 #endif  // USE_ASH
 }
 
-void GesturePrefsObserverFactoryAura::RegisterUserPrefs(
-    PrefRegistrySyncable* registry) {
+void GesturePrefsObserverFactoryAura::RegisterProfilePrefs(
+    user_prefs::PrefRegistrySyncable* registry) {
   registry->RegisterDoublePref(
       prefs::kFlingAccelerationCurveCoefficient0,
       GestureConfiguration::fling_acceleration_curve_coefficients(0),
-      PrefRegistrySyncable::UNSYNCABLE_PREF);
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterDoublePref(
       prefs::kFlingAccelerationCurveCoefficient1,
       GestureConfiguration::fling_acceleration_curve_coefficients(1),
-      PrefRegistrySyncable::UNSYNCABLE_PREF);
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterDoublePref(
       prefs::kFlingAccelerationCurveCoefficient2,
       GestureConfiguration::fling_acceleration_curve_coefficients(2),
-      PrefRegistrySyncable::UNSYNCABLE_PREF);
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterDoublePref(
       prefs::kFlingAccelerationCurveCoefficient3,
       GestureConfiguration::fling_acceleration_curve_coefficients(3),
-      PrefRegistrySyncable::UNSYNCABLE_PREF);
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterIntegerPref(
       prefs::kFlingMaxCancelToDownTimeInMs,
       GestureConfiguration::fling_max_cancel_to_down_time_in_ms(),
-      PrefRegistrySyncable::UNSYNCABLE_PREF);
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterIntegerPref(
       prefs::kFlingMaxTapGapTimeInMs,
       GestureConfiguration::fling_max_tap_gap_time_in_ms(),
-      PrefRegistrySyncable::UNSYNCABLE_PREF);
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterIntegerPref(
       prefs::kTabScrubActivationDelayInMS,
       GestureConfiguration::tab_scrub_activation_delay_in_ms(),
-      PrefRegistrySyncable::UNSYNCABLE_PREF);
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterDoublePref(
       prefs::kFlingVelocityCap,
       GestureConfiguration::fling_velocity_cap(),
-      PrefRegistrySyncable::UNSYNCABLE_PREF);
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterDoublePref(
       prefs::kLongPressTimeInSeconds,
       GestureConfiguration::long_press_time_in_seconds(),
-      PrefRegistrySyncable::UNSYNCABLE_PREF);
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterDoublePref(
       prefs::kSemiLongPressTimeInSeconds,
       GestureConfiguration::semi_long_press_time_in_seconds(),
-      PrefRegistrySyncable::UNSYNCABLE_PREF);
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterDoublePref(
       prefs::kMaxDistanceForTwoFingerTapInPixels,
       GestureConfiguration::max_distance_for_two_finger_tap_in_pixels(),
-      PrefRegistrySyncable::UNSYNCABLE_PREF);
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterDoublePref(
       prefs::kMaxSecondsBetweenDoubleClick,
       GestureConfiguration::max_seconds_between_double_click(),
-      PrefRegistrySyncable::UNSYNCABLE_PREF);
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterDoublePref(
       prefs::kMaxSeparationForGestureTouchesInPixels,
       GestureConfiguration::max_separation_for_gesture_touches_in_pixels(),
-      PrefRegistrySyncable::UNSYNCABLE_PREF);
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterDoublePref(
       prefs::kMaxSwipeDeviationRatio,
       GestureConfiguration::max_swipe_deviation_ratio(),
-      PrefRegistrySyncable::UNSYNCABLE_PREF);
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterDoublePref(
       prefs::kMaxTouchDownDurationInSecondsForClick,
       GestureConfiguration::max_touch_down_duration_in_seconds_for_click(),
-      PrefRegistrySyncable::UNSYNCABLE_PREF);
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterDoublePref(
       prefs::kMaxTouchMoveInPixelsForClick,
       GestureConfiguration::max_touch_move_in_pixels_for_click(),
-      PrefRegistrySyncable::UNSYNCABLE_PREF);
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterDoublePref(
       prefs::kMaxDistanceBetweenTapsForDoubleTap,
       GestureConfiguration::max_distance_between_taps_for_double_tap(),
-      PrefRegistrySyncable::UNSYNCABLE_PREF);
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterDoublePref(
       prefs::kMinDistanceForPinchScrollInPixels,
       GestureConfiguration::min_distance_for_pinch_scroll_in_pixels(),
-      PrefRegistrySyncable::UNSYNCABLE_PREF);
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterDoublePref(
       prefs::kMinFlickSpeedSquared,
       GestureConfiguration::min_flick_speed_squared(),
-      PrefRegistrySyncable::UNSYNCABLE_PREF);
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterDoublePref(
       prefs::kMinPinchUpdateDistanceInPixels,
       GestureConfiguration::min_pinch_update_distance_in_pixels(),
-      PrefRegistrySyncable::UNSYNCABLE_PREF);
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterDoublePref(
       prefs::kMinRailBreakVelocity,
       GestureConfiguration::min_rail_break_velocity(),
-      PrefRegistrySyncable::UNSYNCABLE_PREF);
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterDoublePref(
       prefs::kMinScrollDeltaSquared,
       GestureConfiguration::min_scroll_delta_squared(),
-      PrefRegistrySyncable::UNSYNCABLE_PREF);
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterDoublePref(
       prefs::kMinSwipeSpeed,
       GestureConfiguration::min_swipe_speed(),
-      PrefRegistrySyncable::UNSYNCABLE_PREF);
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterDoublePref(
       prefs::kMinTouchDownDurationInSecondsForClick,
       GestureConfiguration::min_touch_down_duration_in_seconds_for_click(),
-      PrefRegistrySyncable::UNSYNCABLE_PREF);
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterIntegerPref(
       prefs::kPointsBufferedForVelocity,
       GestureConfiguration::points_buffered_for_velocity(),
-      PrefRegistrySyncable::UNSYNCABLE_PREF);
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterDoublePref(
       prefs::kRailBreakProportion,
       GestureConfiguration::rail_break_proportion(),
-      PrefRegistrySyncable::UNSYNCABLE_PREF);
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterDoublePref(
       prefs::kRailStartProportion,
       GestureConfiguration::rail_start_proportion(),
-      PrefRegistrySyncable::UNSYNCABLE_PREF);
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
+  registry->RegisterDoublePref(
+      prefs::kScrollPredictionSeconds,
+      GestureConfiguration::scroll_prediction_seconds(),
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
 
   // Register for migration.
-  registry->RegisterDoublePref(kTouchScreenFlingAccelerationAdjustment,
-                               0.0,
-                               PrefRegistrySyncable::UNSYNCABLE_PREF);
+  registry->RegisterDoublePref(
+      kTouchScreenFlingAccelerationAdjustment,
+      0.0,
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
 
   RegisterOverscrollPrefs(registry);
   RegisterFlingCurveParameters(registry);
-  RegisterWorkspaceCyclerPrefs(registry);
+  RegisterImmersiveModePrefs(registry);
+
+  // Register pref for a one-time wipe of all gesture preferences.
+  registry->RegisterBooleanPref(
+      prefs::kGestureConfigIsTrustworthy,
+      false,
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
 }
 
-bool GesturePrefsObserverFactoryAura::ServiceIsCreatedWithProfile() const {
+bool
+GesturePrefsObserverFactoryAura::ServiceIsCreatedWithBrowserContext() const {
   // Create the observer as soon as the profile is created.
   return true;
 }
 
-bool GesturePrefsObserverFactoryAura::ServiceRedirectedInIncognito() const {
+content::BrowserContext*
+GesturePrefsObserverFactoryAura::GetBrowserContextToUse(
+    content::BrowserContext* context) const {
   // Use same gesture preferences on incognito windows.
-  return true;
+  return chrome::GetBrowserContextRedirectedInIncognito(context);
 }
 
 bool GesturePrefsObserverFactoryAura::ServiceIsNULLWhileTesting() const {

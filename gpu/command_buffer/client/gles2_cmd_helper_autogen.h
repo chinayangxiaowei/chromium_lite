@@ -923,12 +923,12 @@
   void ReadPixels(
       GLint x, GLint y, GLsizei width, GLsizei height, GLenum format,
       GLenum type, uint32 pixels_shm_id, uint32 pixels_shm_offset,
-      uint32 result_shm_id, uint32 result_shm_offset) {
+      uint32 result_shm_id, uint32 result_shm_offset, GLboolean async) {
     gles2::cmds::ReadPixels* c = GetCmdSpace<gles2::cmds::ReadPixels>();
     if (c) {
       c->Init(
           x, y, width, height, format, type, pixels_shm_id, pixels_shm_offset,
-          result_shm_id, result_shm_offset);
+          result_shm_id, result_shm_offset, async);
     }
   }
 
@@ -1577,6 +1577,16 @@
     }
   }
 
+  void FramebufferTexture2DMultisampleEXT(
+      GLenum target, GLenum attachment, GLenum textarget, GLuint texture,
+      GLint level, GLsizei samples) {
+    gles2::cmds::FramebufferTexture2DMultisampleEXT* c =
+        GetCmdSpace<gles2::cmds::FramebufferTexture2DMultisampleEXT>();
+    if (c) {
+      c->Init(target, attachment, textarget, texture, level, samples);
+    }
+  }
+
   void TexStorage2DEXT(
       GLenum target, GLsizei levels, GLenum internalFormat, GLsizei width,
       GLsizei height) {
@@ -1777,11 +1787,11 @@
     }
   }
 
-  void ResizeCHROMIUM(GLuint width, GLuint height) {
+  void ResizeCHROMIUM(GLuint width, GLuint height, GLfloat scale_factor) {
     gles2::cmds::ResizeCHROMIUM* c =
         GetCmdSpace<gles2::cmds::ResizeCHROMIUM>();
     if (c) {
-      c->Init(width, height);
+      c->Init(width, height, scale_factor);
     }
   }
 
@@ -1866,11 +1876,11 @@
 
   void CopyTextureCHROMIUM(
       GLenum target, GLenum source_id, GLenum dest_id, GLint level,
-      GLint internalformat) {
+      GLint internalformat, GLenum dest_type) {
     gles2::cmds::CopyTextureCHROMIUM* c =
         GetCmdSpace<gles2::cmds::CopyTextureCHROMIUM>();
     if (c) {
-      c->Init(target, source_id, dest_id, level, internalformat);
+      c->Init(target, source_id, dest_id, level, internalformat, dest_type);
     }
   }
 

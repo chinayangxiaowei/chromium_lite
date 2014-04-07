@@ -9,19 +9,18 @@
 #include "base/prefs/pref_service.h"
 #include "base/stl_util.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/fullscreen.h"
 #include "chrome/browser/idle.h"
 #include "chrome/browser/notifications/balloon_collection.h"
 #include "chrome/browser/notifications/notification.h"
-#include "chrome/common/chrome_notification_types.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/common/pref_names.h"
 #include "content/public/browser/notification_service.h"
 
 BalloonNotificationUIManager::BalloonNotificationUIManager(
     PrefService* local_state)
-    : NotificationUIManagerImpl(),
-      NotificationPrefsManager(local_state),
-      balloon_collection_(NULL) {
+    : NotificationUIManagerImpl(), NotificationPrefsManager(local_state) {
   position_pref_.Init(
       prefs::kDesktopNotificationPosition,
       local_state,
@@ -45,10 +44,12 @@ void BalloonNotificationUIManager::SetBalloonCollection(
   balloon_collection_->set_space_change_listener(this);
 }
 
-bool BalloonNotificationUIManager::DoesIdExist(const std::string& id) {
-  if (NotificationUIManagerImpl::DoesIdExist(id))
-    return true;
-  return balloon_collection_->DoesIdExist(id);
+const Notification* BalloonNotificationUIManager::FindById(
+    const std::string& id) const {
+  const Notification* notification = NotificationUIManagerImpl::FindById(id);
+  if (notification)
+    return notification;
+  return balloon_collection_->FindById(id);
 }
 
 bool BalloonNotificationUIManager::CancelById(const std::string& id) {
@@ -57,6 +58,26 @@ bool BalloonNotificationUIManager::CancelById(const std::string& id) {
     return true;
   // If it has been shown, remove it from the balloon collections.
   return balloon_collection_->RemoveById(id);
+}
+
+std::set<std::string>
+BalloonNotificationUIManager::GetAllIdsByProfileAndSourceOrigin(
+    Profile* profile,
+    const GURL& source) {
+  std::set<std::string> notification_ids =
+      NotificationUIManagerImpl::GetAllIdsByProfileAndSourceOrigin(profile,
+                                                                   source);
+
+  const BalloonCollection::Balloons& balloons =
+      balloon_collection_->GetActiveBalloons();
+  for (BalloonCollection::Balloons::const_iterator iter = balloons.begin();
+       iter != balloons.end(); ++iter) {
+    if (profile->IsSameProfile((*iter)->profile()) &&
+        source == (*iter)->notification().origin_url()) {
+      notification_ids.insert((*iter)->notification().notification_id());
+    }
+  }
+  return notification_ids;
 }
 
 bool BalloonNotificationUIManager::CancelAllBySourceOrigin(const GURL& source) {

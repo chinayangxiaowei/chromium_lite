@@ -14,14 +14,15 @@
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/stl_util.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/threading/sequenced_worker_pool.h"
-#include "base/utf_string_conversions.h"
 #include "base/win/scoped_co_mem.h"
 #include "base/win/scoped_comptr.h"
 #include "base/win/scoped_propvariant.h"
 #include "chrome/browser/storage_monitor/media_storage_util.h"
 #include "chrome/browser/storage_monitor/removable_device_constants.h"
+#include "chrome/browser/storage_monitor/storage_info.h"
 #include "content/public/browser/browser_thread.h"
 
 namespace chrome {
@@ -249,8 +250,8 @@ bool ConstructDeviceStorageUniqueId(const string16& device_serial_num,
     return false;
 
   DCHECK(device_storage_id);
-  *device_storage_id = MediaStorageUtil::MakeDeviceId(
-       MediaStorageUtil::MTP_OR_PTP,
+  *device_storage_id = StorageInfo::MakeDeviceId(
+       StorageInfo::MTP_OR_PTP,
        UTF16ToUTF8(storage_id + L':' + device_serial_num));
   return true;
 }
@@ -479,7 +480,7 @@ PortableDeviceWatcherWin::DeviceStorageObject::DeviceStorageObject(
 PortableDeviceWatcherWin::PortableDeviceWatcherWin()
     : notifications_(NULL),
       storage_notifications_(NULL),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_ptr_factory_(this)) {
+      weak_ptr_factory_(this) {
 }
 
 PortableDeviceWatcherWin::~PortableDeviceWatcherWin() {
@@ -521,7 +522,7 @@ bool PortableDeviceWatcherWin::GetMTPStorageInfoFromDeviceId(
     return false;
 
   MTPDeviceMap::const_iterator device_iter =
-      device_map_.find(storage_map_iter->second.location);
+      device_map_.find(storage_map_iter->second.location());
   if (device_iter == device_map_.end())
     return false;
   const StorageObjects& storage_objects = device_iter->second;
@@ -529,7 +530,7 @@ bool PortableDeviceWatcherWin::GetMTPStorageInfoFromDeviceId(
        storage_objects.begin(); storage_object_iter != storage_objects.end();
        ++storage_object_iter) {
     if (storage_device_id == storage_object_iter->object_persistent_id) {
-      *device_location = storage_map_iter->second.location;
+      *device_location = storage_map_iter->second.location();
       *storage_object_id = storage_object_iter->object_temporary_id;
       return true;
     }
@@ -549,6 +550,12 @@ string16 PortableDeviceWatcherWin::GetStoragePathFromStorageId(
 void PortableDeviceWatcherWin::SetNotifications(
     StorageMonitor::Receiver* notifications) {
   storage_notifications_ = notifications;
+}
+
+void PortableDeviceWatcherWin::EjectDevice(
+    const std::string& device_id,
+    base::Callback<void(StorageMonitor::EjectStatus)> callback) {
+  callback.Run(chrome::StorageMonitor::EJECT_FAILURE);
 }
 
 void PortableDeviceWatcherWin::EnumerateAttachedDevices() {
@@ -615,10 +622,12 @@ void PortableDeviceWatcherWin::OnDidHandleDeviceAttachEvent(
     // partition identifier to the storage name. E.g.: "Nexus 7 (s10001)"
     string16 storage_name(name + L" (" + storage_iter->object_temporary_id +
         L')');
-    storage_map_[storage_id] = StorageInfo(storage_id, storage_name, location);
+    StorageInfo info(storage_id, storage_name, location,
+                     string16(), string16(), string16(), 0);
+    storage_map_[storage_id] = info;
     if (storage_notifications_) {
-      storage_notifications_->ProcessAttach(StorageInfo(
-          storage_id, storage_name, GetStoragePathFromStorageId(storage_id)));
+      info.set_location(GetStoragePathFromStorageId(storage_id));
+      storage_notifications_->ProcessAttach(info);
     }
   }
   device_map_[location] = storage_objects;
@@ -638,8 +647,10 @@ void PortableDeviceWatcherWin::HandleDeviceDetachEvent(
     std::string storage_id = storage_object_iter->object_persistent_id;
     MTPStorageMap::iterator storage_map_iter = storage_map_.find(storage_id);
     DCHECK(storage_map_iter != storage_map_.end());
-    if (storage_notifications_)
-      storage_notifications_->ProcessDetach(storage_map_iter->second.device_id);
+    if (storage_notifications_) {
+      storage_notifications_->ProcessDetach(
+          storage_map_iter->second.device_id());
+    }
     storage_map_.erase(storage_map_iter);
   }
   device_map_.erase(device_iter);

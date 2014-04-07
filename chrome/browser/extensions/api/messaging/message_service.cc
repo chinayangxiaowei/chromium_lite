@@ -8,8 +8,11 @@
 #include "base/bind.h"
 #include "base/callback.h"
 #include "base/json/json_writer.h"
+#include "base/lazy_instance.h"
+#include "base/metrics/histogram.h"
 #include "base/stl_util.h"
 #include "base/values.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/api/messaging/extension_message_port.h"
 #include "chrome/browser/extensions/api/messaging/native_message_port.h"
 #include "chrome/browser/extensions/extension_host.h"
@@ -21,18 +24,21 @@
 #include "chrome/browser/extensions/process_map.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/tab_contents/tab_util.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/extensions/background_info.h"
 #include "chrome/common/extensions/extension.h"
+#include "chrome/common/extensions/extension_manifest_constants.h"
 #include "chrome/common/extensions/extension_messages.h"
 #include "chrome/common/extensions/incognito_handler.h"
-#include "chrome/common/view_type.h"
+#include "chrome/common/extensions/manifest_handlers/externally_connectable.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
+#include "content/public/browser/render_widget_host.h"
+#include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/web_contents.h"
+#include "url/gurl.h"
 
 using content::SiteInstance;
 using content::WebContents;
@@ -67,33 +73,42 @@ struct MessageService::MessageChannel {
 
 struct MessageService::OpenChannelParams {
   content::RenderProcessHost* source;
-  std::string tab_json;
+  base::DictionaryValue source_tab;
   scoped_ptr<MessagePort> receiver;
   int receiver_port_id;
   std::string source_extension_id;
   std::string target_extension_id;
+  GURL source_url;
   std::string channel_name;
 
   // Takes ownership of receiver.
   OpenChannelParams(content::RenderProcessHost* source,
-                    const std::string& tab_json,
+                    scoped_ptr<base::DictionaryValue> source_tab,
                     MessagePort* receiver,
                     int receiver_port_id,
                     const std::string& source_extension_id,
                     const std::string& target_extension_id,
+                    const GURL& source_url,
                     const std::string& channel_name)
       : source(source),
-        tab_json(tab_json),
         receiver(receiver),
         receiver_port_id(receiver_port_id),
         source_extension_id(source_extension_id),
         target_extension_id(target_extension_id),
-        channel_name(channel_name) {}
+        source_url(source_url),
+        channel_name(channel_name) {
+    if (source_tab)
+      this->source_tab.Swap(source_tab.get());
+  }
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(OpenChannelParams);
 };
 
 namespace {
 
 static base::StaticAtomicSequenceNumber g_next_channel_id;
+static base::StaticAtomicSequenceNumber g_channel_id_overflow_count;
 
 static content::RenderProcessHost* GetExtensionProcess(
     Profile* profile, const std::string& extension_id) {
@@ -117,9 +132,17 @@ content::RenderProcessHost*
 
 // static
 void MessageService::AllocatePortIdPair(int* port1, int* port2) {
-  int channel_id = g_next_channel_id.GetNext();
-  int port1_id = channel_id * 2;
-  int port2_id = channel_id * 2 + 1;
+  unsigned channel_id =
+      static_cast<unsigned>(g_next_channel_id.GetNext()) % (kint32max/2);
+
+  if (channel_id == 0) {
+    int overflow_count = g_channel_id_overflow_count.GetNext();
+    if (overflow_count > 0)
+      UMA_HISTOGRAM_BOOLEAN("Extensions.AllocatePortIdPairOverflow", true);
+  }
+
+  unsigned port1_id = channel_id * 2;
+  unsigned port2_id = channel_id * 2 + 1;
 
   // Sanity checks to make sure our channel<->port converters are correct.
   DCHECK(IS_OPENER_PORT_ID(port1_id));
@@ -134,9 +157,9 @@ void MessageService::AllocatePortIdPair(int* port1, int* port2) {
   *port2 = port2_id;
 }
 
-MessageService::MessageService(
-    LazyBackgroundTaskQueue* queue)
-    : lazy_background_task_queue_(queue),
+MessageService::MessageService(Profile* profile)
+    : lazy_background_task_queue_(
+          ExtensionSystem::Get(profile)->lazy_background_task_queue()),
       weak_factory_(this) {
   registrar_.Add(this, content::NOTIFICATION_RENDERER_PROCESS_TERMINATED,
                  content::NotificationService::AllBrowserContextsAndSources());
@@ -149,16 +172,85 @@ MessageService::~MessageService() {
   channels_.clear();
 }
 
+static base::LazyInstance<ProfileKeyedAPIFactory<MessageService> >
+g_factory = LAZY_INSTANCE_INITIALIZER;
+
+// static
+ProfileKeyedAPIFactory<MessageService>* MessageService::GetFactoryInstance() {
+  return &g_factory.Get();
+}
+
+// static
+MessageService* MessageService::Get(Profile* profile) {
+  return ProfileKeyedAPIFactory<MessageService>::GetForProfile(profile);
+}
+
 void MessageService::OpenChannelToExtension(
     int source_process_id, int source_routing_id, int receiver_port_id,
     const std::string& source_extension_id,
     const std::string& target_extension_id,
+    const GURL& source_url,
     const std::string& channel_name) {
   content::RenderProcessHost* source =
       content::RenderProcessHost::FromID(source_process_id);
   if (!source)
     return;
   Profile* profile = Profile::FromBrowserContext(source->GetBrowserContext());
+
+  const Extension* target_extension = ExtensionSystem::Get(profile)->
+      extension_service()->extensions()->GetByID(target_extension_id);
+  if (!target_extension) {
+    DispatchOnDisconnect(
+        source, receiver_port_id, kReceivingEndDoesntExistError);
+    return;
+  }
+
+  ExtensionService* extension_service =
+      extensions::ExtensionSystem::Get(profile)->extension_service();
+
+  if (profile->IsOffTheRecord() &&
+      !extension_service->IsIncognitoEnabled(target_extension_id)) {
+    DispatchOnDisconnect(
+        source, receiver_port_id, kReceivingEndDoesntExistError);
+    return;
+  }
+
+  if (source_extension_id != target_extension_id) {
+    // It's an external connection. Check the externally_connectable manifest
+    // key if it's present. If it's not, we allow connection from any extension
+    // but not webpages.
+    ExternallyConnectableInfo* externally_connectable =
+        static_cast<ExternallyConnectableInfo*>(
+            target_extension->GetManifestData(
+                extension_manifest_keys::kExternallyConnectable));
+    bool is_externally_connectable = false;
+
+    if (externally_connectable) {
+      if (source_extension_id.empty()) {
+        // No source extension ID so the source was a web page. Check that the
+        // URL matches.
+        is_externally_connectable =
+            externally_connectable->matches.MatchesURL(source_url);
+      } else {
+        // Source extension ID so the source was an extension. Check that the
+        // extension matches.
+        is_externally_connectable =
+            externally_connectable->IdCanConnect(source_extension_id);
+      }
+    } else {
+      // Default behaviour. Any extension, no webpages.
+      is_externally_connectable = !source_extension_id.empty();
+    }
+
+    if (!is_externally_connectable) {
+      // Important: use kReceivingEndDoesntExistError here so that we don't
+      // leak information about this extension to callers. This way it's
+      // indistinguishable from the extension just not existing.
+      DispatchOnDisconnect(
+          source, receiver_port_id, kReceivingEndDoesntExistError);
+      return;
+    }
+  }
 
   // Note: we use the source's profile here. If the source is an incognito
   // process, we will use the incognito EPM to find the right extension process,
@@ -170,27 +262,33 @@ void MessageService::OpenChannelToExtension(
       source_process_id, source_routing_id);
 
   // Include info about the opener's tab (if it was a tab).
-  std::string tab_json = "null";
-  if (source_contents) {
-    scoped_ptr<DictionaryValue> tab_value(ExtensionTabUtil::CreateTabValue(
-        source_contents));
-    base::JSONWriter::Write(tab_value.get(), &tab_json);
+  scoped_ptr<base::DictionaryValue> source_tab;
+  GURL source_url_for_tab;
+
+  if (source_contents && ExtensionTabUtil::GetTabId(source_contents) >= 0) {
+    // Platform apps can be sent messages, but don't have a Tab concept.
+    if (!target_extension->is_platform_app())
+      source_tab.reset(ExtensionTabUtil::CreateTabValue(source_contents));
+    source_url_for_tab = source_url;
   }
 
-  OpenChannelParams* params = new OpenChannelParams(source, tab_json, receiver,
+  OpenChannelParams* params = new OpenChannelParams(source,
+                                                    source_tab.Pass(),
+                                                    receiver,
                                                     receiver_port_id,
                                                     source_extension_id,
                                                     target_extension_id,
+                                                    source_url_for_tab,
                                                     channel_name);
 
   // The target might be a lazy background page. In that case, we have to check
   // if it is loaded and ready, and if not, queue up the task and load the
   // page.
-  if (MaybeAddPendingOpenChannelTask(profile, params)) {
+  if (MaybeAddPendingOpenChannelTask(profile, target_extension, params)) {
     return;
   }
 
-  OpenChannelImpl(scoped_ptr<OpenChannelParams>(params));
+  OpenChannelImpl(make_scoped_ptr(params));
 }
 
 void MessageService::OpenChannelToNativeApp(
@@ -217,29 +315,22 @@ void MessageService::OpenChannelToNativeApp(
   }
 
   if (!has_permission) {
-    ExtensionMessagePort port(source, MSG_ROUTING_CONTROL, "");
-    port.DispatchOnDisconnect(GET_OPPOSITE_PORT_ID(receiver_port_id),
-                              kMissingPermissionError);
+    DispatchOnDisconnect(source, receiver_port_id, kMissingPermissionError);
     return;
-  }
-
-  WebContents* source_contents = tab_util::GetWebContentsByID(
-      source_process_id, source_routing_id);
-
-  // Include info about the opener's tab (if it was a tab).
-  std::string tab_json = "null";
-  if (source_contents) {
-    scoped_ptr<DictionaryValue> tab_value(ExtensionTabUtil::CreateTabValue(
-        source_contents));
-    base::JSONWriter::Write(tab_value.get(), &tab_json);
   }
 
   scoped_ptr<MessageChannel> channel(new MessageChannel());
   channel->opener.reset(new ExtensionMessagePort(source, MSG_ROUTING_CONTROL,
                                                  source_extension_id));
 
+  // Get handle of the native view and pass it to the native messaging host.
+  gfx::NativeView native_view =
+      content::RenderWidgetHost::FromID(source_process_id, source_routing_id)->
+          GetView()->GetNativeView();
+
   scoped_ptr<NativeMessageProcessHost> native_process =
       NativeMessageProcessHost::Create(
+          native_view,
           base::WeakPtr<NativeMessageProcessHost::Client>(
               weak_factory_.GetWeakPtr()),
           source_extension_id, native_app_name, receiver_port_id);
@@ -247,10 +338,8 @@ void MessageService::OpenChannelToNativeApp(
   // Abandon the channel.
   if (!native_process.get()) {
     LOG(ERROR) << "Failed to create native process.";
-    // Treat it as a disconnect.
-    ExtensionMessagePort port(source, MSG_ROUTING_CONTROL, "");
-    port.DispatchOnDisconnect(GET_OPPOSITE_PORT_ID(receiver_port_id),
-                              kReceivingEndDoesntExistError);
+    DispatchOnDisconnect(
+        source, receiver_port_id, kReceivingEndDoesntExistError);
     return;
   }
   channel->receiver.reset(new NativeMessagePort(native_process.release()));
@@ -260,9 +349,8 @@ void MessageService::OpenChannelToNativeApp(
 
   AddChannel(channel.release(), receiver_port_id);
 #else  // !(defined(OS_WIN) || defined(OS_MACOSX) || defined(OS_LINUX))
-  ExtensionMessagePort port(source, MSG_ROUTING_CONTROL, "");
-  port.DispatchOnDisconnect(GET_OPPOSITE_PORT_ID(receiver_port_id),
-                            kNativeMessagingNotSupportedError);
+  DispatchOnDisconnect(
+      source, receiver_port_id, kNativeMessagingNotSupportedError);
 #endif  // !(defined(OS_WIN) || defined(OS_MACOSX) || defined(OS_LINUX))
 }
 
@@ -287,31 +375,22 @@ void MessageService::OpenChannelToTab(
   }
 
   if (contents && contents->GetController().NeedsReload()) {
-    // The tab isn't loaded yet. Don't attempt to connect. Treat this as a
-    // disconnect.
-    ExtensionMessagePort port(source, MSG_ROUTING_CONTROL, extension_id);
-    port.DispatchOnDisconnect(GET_OPPOSITE_PORT_ID(receiver_port_id),
-                              kReceivingEndDoesntExistError);
+    // The tab isn't loaded yet. Don't attempt to connect.
+    DispatchOnDisconnect(
+        source, receiver_port_id, kReceivingEndDoesntExistError);
     return;
   }
 
-  WebContents* source_contents = tab_util::GetWebContentsByID(
-      source_process_id, source_routing_id);
-
-  // Include info about the opener's tab (if it was a tab).
-  std::string tab_json = "null";
-  if (source_contents) {
-    scoped_ptr<DictionaryValue> tab_value(ExtensionTabUtil::CreateTabValue(
-        source_contents));
-    base::JSONWriter::Write(tab_value.get(), &tab_json);
-  }
-
-  scoped_ptr<OpenChannelParams> params(new OpenChannelParams(source, tab_json,
-                                                             receiver.release(),
-                                                             receiver_port_id,
-                                                             extension_id,
-                                                             extension_id,
-                                                             channel_name));
+  scoped_ptr<OpenChannelParams> params(new OpenChannelParams(
+        source,
+        scoped_ptr<base::DictionaryValue>(),  // Source tab doesn't make sense
+                                              // for opening to tabs.
+        receiver.release(),
+        receiver_port_id,
+        extension_id,
+        extension_id,
+        GURL(),  // Source URL doesn't make sense for opening to tabs.
+        channel_name));
   OpenChannelImpl(params.Pass());
 }
 
@@ -319,11 +398,10 @@ bool MessageService::OpenChannelImpl(scoped_ptr<OpenChannelParams> params) {
   if (!params->source)
     return false;  // Closed while in flight.
 
-  if (!params->receiver.get() || !params->receiver->GetRenderProcessHost()) {
-    // Treat it as a disconnect.
-    ExtensionMessagePort port(params->source, MSG_ROUTING_CONTROL, "");
-    port.DispatchOnDisconnect(GET_OPPOSITE_PORT_ID(params->receiver_port_id),
-                              kReceivingEndDoesntExistError);
+  if (!params->receiver || !params->receiver->GetRenderProcessHost()) {
+    DispatchOnDisconnect(params->source,
+                         params->receiver_port_id,
+                         kReceivingEndDoesntExistError);
     return false;
   }
 
@@ -346,9 +424,11 @@ bool MessageService::OpenChannelImpl(scoped_ptr<OpenChannelParams> params) {
   // Send the connect event to the receiver.  Give it the opener's port ID (the
   // opener has the opposite port ID).
   channel->receiver->DispatchOnConnect(params->receiver_port_id,
-                                       params->channel_name, params->tab_json,
+                                       params->channel_name,
+                                       params->source_tab,
                                        params->source_extension_id,
-                                       params->target_extension_id);
+                                       params->target_extension_id,
+                                       params->source_url);
 
   // Keep both ends of the channel alive until the channel is closed.
   channel->opener->IncrementLazyKeepaliveCount();
@@ -479,30 +559,28 @@ void MessageService::OnProcessClosed(content::RenderProcessHost* process) {
 
 bool MessageService::MaybeAddPendingOpenChannelTask(
     Profile* profile,
+    const Extension* extension,
     OpenChannelParams* params) {
-  ExtensionService* service = profile->GetExtensionService();
-  const std::string& extension_id = params->target_extension_id;
-  const Extension* extension = service->extensions()->GetByID(extension_id);
-  if (extension && BackgroundInfo::HasLazyBackgroundPage(extension)) {
-    // If the extension uses spanning incognito mode, make sure we're always
-    // using the original profile since that is what the extension process
-    // will use.
-    if (!IncognitoInfo::IsSplitMode(extension))
-      profile = profile->GetOriginalProfile();
+  if (!BackgroundInfo::HasLazyBackgroundPage(extension))
+    return false;
 
-    if (lazy_background_task_queue_->ShouldEnqueueTask(profile, extension)) {
-      pending_channels_[GET_CHANNEL_ID(params->receiver_port_id)] =
-          PendingChannel(profile, extension_id);
-      scoped_ptr<OpenChannelParams> scoped_params(params);
-      lazy_background_task_queue_->AddPendingTask(profile, extension_id,
-          base::Bind(&MessageService::PendingOpenChannel,
-                     weak_factory_.GetWeakPtr(), base::Passed(&scoped_params),
-                     params->source->GetID()));
-      return true;
-    }
-  }
+  // If the extension uses spanning incognito mode, make sure we're always
+  // using the original profile since that is what the extension process
+  // will use.
+  if (!IncognitoInfo::IsSplitMode(extension))
+    profile = profile->GetOriginalProfile();
 
-  return false;
+  if (!lazy_background_task_queue_->ShouldEnqueueTask(profile, extension))
+    return false;
+
+  pending_channels_[GET_CHANNEL_ID(params->receiver_port_id)] =
+      PendingChannel(profile, extension->id());
+  scoped_ptr<OpenChannelParams> scoped_params(params);
+  lazy_background_task_queue_->AddPendingTask(profile, extension->id(),
+      base::Bind(&MessageService::PendingOpenChannel,
+                 weak_factory_.GetWeakPtr(), base::Passed(&scoped_params),
+                 params->source->GetID()));
+  return true;
 }
 
 void MessageService::PendingOpenChannel(scoped_ptr<OpenChannelParams> params,
@@ -522,6 +600,13 @@ void MessageService::PendingOpenChannel(scoped_ptr<OpenChannelParams> params,
                                                   MSG_ROUTING_CONTROL,
                                                   params->target_extension_id));
   OpenChannelImpl(params.Pass());
+}
+
+void MessageService::DispatchOnDisconnect(content::RenderProcessHost* source,
+                                          int port_id,
+                                          const std::string& error_message) {
+  ExtensionMessagePort port(source, MSG_ROUTING_CONTROL, "");
+  port.DispatchOnDisconnect(GET_OPPOSITE_PORT_ID(port_id), error_message);
 }
 
 }  // namespace extensions

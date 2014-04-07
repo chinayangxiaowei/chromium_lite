@@ -20,10 +20,11 @@
 #include "media/base/android/media_codec_bridge.h"
 #include "media/video/video_decode_accelerator.h"
 
-namespace content {
-
+namespace gfx {
 class SurfaceTextureBridge;
+}
 
+namespace content {
 // A VideoDecodeAccelerator implementation for Android.
 // This class decodes the input encoded stream by using Android's MediaCodec
 // class. http://developer.android.com/reference/android/media/MediaCodec.html
@@ -57,7 +58,7 @@ class CONTENT_EXPORT AndroidVideoDecodeAccelerator :
   virtual ~AndroidVideoDecodeAccelerator();
 
   // Configures |media_codec_| with the given codec parameters from the client.
-  void ConfigureMediaCodec();
+  bool ConfigureMediaCodec();
 
   // Sends the current picture on the surface to the client.
   void SendCurrentSurfaceToClient(int32 bitstream_id);
@@ -107,7 +108,7 @@ class CONTENT_EXPORT AndroidVideoDecodeAccelerator :
   base::Callback<bool(void)> make_context_current_;
 
   // Codec type. Used when we configure media codec.
-  media::MediaCodecBridge::Codec codec_;
+  media::VideoCodec codec_;
 
   // The current state of this class. For now, this is used only for setting
   // error state.
@@ -123,10 +124,10 @@ class CONTENT_EXPORT AndroidVideoDecodeAccelerator :
   std::queue<int32> free_picture_ids_;
 
   // The low-level decoder which Android SDK provides.
-  scoped_ptr<media::MediaCodecBridge> media_codec_;
+  scoped_ptr<media::VideoCodecBridge> media_codec_;
 
   // A container of texture. Used to set a texture to |media_codec_|.
-  scoped_refptr<SurfaceTextureBridge> surface_texture_;
+  scoped_refptr<gfx::SurfaceTextureBridge> surface_texture_;
 
   // The texture id which is set to |surface_texture_|.
   uint32 surface_texture_id_;
@@ -161,6 +162,8 @@ class CONTENT_EXPORT AndroidVideoDecodeAccelerator :
 
   // Used for copy the texture from |surface_texture_| to picture buffers.
   scoped_ptr<gpu::CopyTextureCHROMIUMResourceManager> copier_;
+
+  friend class AndroidVideoDecodeAcceleratorTest;
 };
 
 }  // namespace content

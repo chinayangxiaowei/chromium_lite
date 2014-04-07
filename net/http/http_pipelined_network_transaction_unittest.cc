@@ -7,14 +7,14 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/scoped_vector.h"
-#include "base/stringprintf.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "net/base/address_list.h"
-#include "net/base/host_cache.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
 #include "net/base/net_util.h"
 #include "net/base/request_priority.h"
+#include "net/dns/host_cache.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/http/http_auth_handler_mock.h"
 #include "net/http/http_network_session.h"
@@ -87,7 +87,8 @@ class HttpPipelinedNetworkTransactionTest : public testing::Test {
     session_params.host_resolver = &mock_resolver_;
     session_params.ssl_config_service = ssl_config_.get();
     session_params.http_auth_handler_factory = auth_handler_factory_.get();
-    session_params.http_server_properties = &http_server_properties_;
+    session_params.http_server_properties =
+        http_server_properties_.GetWeakPtr();
     session_params.force_http_pipelining = force_http_pipelining;
     session_params.http_pipelining_enabled = true;
     session_ = new HttpNetworkSession(session_params);
@@ -722,7 +723,7 @@ TEST_F(HttpPipelinedNetworkTransactionTest, PipelinesImmediatelyIfKnownGood) {
             second_one_transaction.Start(
                 GetRequestInfo("second-pipeline-one.html"),
                 second_one_callback.callback(), BoundNetLog()));
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
 
   HttpNetworkTransaction second_two_transaction(
       DEFAULT_PRIORITY, session_.get());
@@ -745,7 +746,7 @@ TEST_F(HttpPipelinedNetworkTransactionTest, PipelinesImmediatelyIfKnownGood) {
       HttpNetworkSession::NORMAL_SOCKET_POOL, old_max_sockets);
 }
 
-class DataRunnerObserver : public MessageLoop::TaskObserver {
+class DataRunnerObserver : public base::MessageLoop::TaskObserver {
  public:
   DataRunnerObserver(DeterministicSocketData* data, int run_before_task)
       : data_(data),
@@ -756,7 +757,7 @@ class DataRunnerObserver : public MessageLoop::TaskObserver {
     ++current_task_;
     if (current_task_ == run_before_task_) {
       data_->Run();
-      MessageLoop::current()->RemoveTaskObserver(this);
+      base::MessageLoop::current()->RemoveTaskObserver(this);
     }
   }
 
@@ -827,9 +828,9 @@ TEST_F(HttpPipelinedNetworkTransactionTest, OpenPipelinesWhileBinding) {
   // is called in between when task #3 is scheduled and when it runs. The
   // DataRunnerObserver does that.
   DataRunnerObserver observer(data_vector_[0], 3);
-  MessageLoop::current()->AddTaskObserver(&observer);
+  base::MessageLoop::current()->AddTaskObserver(&observer);
   data_vector_[0]->SetStop(4);
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
   data_vector_[0]->SetStop(10);
 
   EXPECT_EQ(OK, one_callback.WaitForResult());

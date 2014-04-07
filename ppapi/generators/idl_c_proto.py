@@ -276,11 +276,16 @@ class CGen(object):
 
     # If it's an enum, or typedef then return the Enum's name
     elif typeref.IsA('Enum', 'Typedef'):
+      if not typeref.LastRelease(release):
+        first = node.first_release[release]
+        ver = '_' + node.GetVersion(first).replace('.','_')
+      else:
+        ver = ''
       # The enum may have skipped having a typedef, we need prefix with 'enum'.
       if typeref.GetProperty('notypedef'):
-        name = 'enum %s%s' % (prefix, typeref.GetName())
+        name = 'enum %s%s%s' % (prefix, typeref.GetName(), ver)
       else:
-        name = '%s%s' % (prefix, typeref.GetName())
+        name = '%s%s%s' % (prefix, typeref.GetName(), ver)
 
     else:
       raise RuntimeError('Getting name of non-type %s.' % node)
@@ -386,6 +391,8 @@ class CGen(object):
     if callnode:
       callspec = []
       for param in callnode.GetListOf('Param'):
+        if not param.IsRelease(release):
+          continue
         mode = self.GetParamMode(param)
         ptype, pname, parray, pspec = self.GetComponents(param, release, mode)
         callspec.append((ptype, pname, parray, pspec))
@@ -398,7 +405,7 @@ class CGen(object):
 
 
   def Compose(self, rtype, name, arrayspec, callspec, prefix, func_as_ptr,
-              ptr_prefix, include_name, unsized_as_ptr):
+              include_name, unsized_as_ptr):
     self.LogEnter('Compose: %s %s' % (rtype, name))
     arrayspec = ''.join(arrayspec)
 
@@ -417,10 +424,10 @@ class CGen(object):
       params = []
       for ptype, pname, parray, pspec in callspec:
         params.append(self.Compose(ptype, pname, parray, pspec, '', True,
-                                   ptr_prefix='', include_name=True,
+                                   include_name=True,
                                    unsized_as_ptr=unsized_as_ptr))
       if func_as_ptr:
-        name = '(%s*%s)' % (ptr_prefix, name)
+        name = '(*%s)' % name
       if not params:
         params = ['void']
       out = '%s %s(%s)' % (rtype, name, ', '.join(params))
@@ -433,14 +440,13 @@ class CGen(object):
   # Returns the 'C' style signature of the object
   #  prefix - A prefix for the object's name
   #  func_as_ptr - Formats a function as a function pointer
-  #  ptr_prefix - A prefix that goes before the "*" for a function pointer
   #  include_name - If true, include member name in the signature.
-  #                 If false, leave it out. In any case, prefix and ptr_prefix
-  #                 are always included.
+  #                 If false, leave it out. In any case, prefix is always
+  #                 included.
   #  include_version - if True, include version in the member name
   #
   def GetSignature(self, node, release, mode, prefix='', func_as_ptr=True,
-                   ptr_prefix='', include_name=True, include_version=False):
+                   include_name=True, include_version=False):
     self.LogEnter('GetSignature %s %s as func=%s' %
                   (node, mode, func_as_ptr))
     rtype, name, arrayspec, callspec = self.GetComponents(node, release, mode)
@@ -451,7 +457,7 @@ class CGen(object):
     unsized_as_ptr = not callspec
 
     out = self.Compose(rtype, name, arrayspec, callspec, prefix,
-                       func_as_ptr, ptr_prefix, include_name, unsized_as_ptr)
+                       func_as_ptr, include_name, unsized_as_ptr)
 
     self.LogExit('Exit GetSignature: %s' % out)
     return out
@@ -461,13 +467,15 @@ class CGen(object):
     __pychecker__ = 'unusednames=comment'
     build_list = node.GetUniqueReleases(releases)
 
-    # TODO(noelallen) : Bug 157017 finish multiversion support
-    if len(build_list) != 1:
-      node.Error('Can not support multiple versions of node: %s' % build_list)
-    assert len(build_list) == 1
-
-    out = 'typedef %s;\n' % self.GetSignature(node, build_list[0], 'return',
-                                              prefix, True)
+    out = 'typedef %s;\n' % self.GetSignature(node, build_list[-1], 'return',
+                                              prefix, True,
+                                              include_version=False)
+    # Version mangle any other versions
+    for index, rel in enumerate(build_list[:-1]):
+      out += '\n'
+      out += 'typedef %s;\n' % self.GetSignature(node, rel, 'return',
+                                                 prefix, True,
+                                                 include_version=True)
     self.Log('DefineTypedef: %s' % out)
     return out
 

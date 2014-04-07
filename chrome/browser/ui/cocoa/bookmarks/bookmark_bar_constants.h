@@ -23,21 +23,11 @@ const int kVisualHeightOffset = 2;
 // |kVisualHeightOffset|.
 const int kBookmarkBarHeight = 26;
 
-// Height of the bookmark bar on the new tab page when instant extended is
-// enabled. TODO(sail): Remove this and update chrome::kNTPBookmarkBarHeight
-// instead.
-static const int kSearchNewTabBookmarkBarHeight = 40;
-
 // The amount of space between the inner bookmark bar and the outer toolbar on
 // new tab pages.
-const int kNTPBookmarkBarPadding = (chrome::kNTPBookmarkBarHeight -
-    (kBookmarkBarHeight + kVisualHeightOffset)) / 2;
-
-// Same as |kNTPBookmarkBarPadding| except for the instant extended UI.
-// TODO(sail): Remove this this and update |kNTPBookmarkBarPadding| instead.
-const int kSearchNTPBookmarkBarPadding =
-    (kSearchNewTabBookmarkBarHeight -
-     (kBookmarkBarHeight + kVisualHeightOffset)) / 2;
+const int kNTPBookmarkBarPadding =
+    (chrome::kNTPBookmarkBarHeight -
+        (kBookmarkBarHeight + kVisualHeightOffset)) / 2;
 
 // The height of buttons in the bookmark bar.
 const int kBookmarkButtonHeight = kBookmarkBarHeight + kVisualHeightOffset;
@@ -48,6 +38,10 @@ const CGFloat kBookmarkFolderButtonHeight = 24.0;
 // The radius of the corner curves on the menu. Also used for sizing the shadow
 // window behind the menu window at times when the menu can be scrolled.
 const CGFloat kBookmarkBarMenuCornerRadius = 4.0;
+
+// Overlap (in pixels) between the toolbar and the bookmark bar (when showing in
+// normal mode).
+const CGFloat kBookmarkBarOverlap = 3.0;
 
 }  // namespace bookmarks
 

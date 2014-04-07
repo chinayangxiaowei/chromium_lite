@@ -6,15 +6,26 @@
 
 #include <algorithm>
 
-#include "base/utf_string_conversions.h"
+#include "base/command_line.h"
+#include "base/strings/string16.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/avatar_menu_model.h"
 #include "chrome/browser/profiles/profile_info_cache.h"
 #include "chrome/browser/profiles/profile_info_util.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/signin/signin_manager.h"
+#include "chrome/browser/signin/signin_manager_factory.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/chrome_pages.h"
+#include "chrome/common/chrome_switches.h"
+#include "chrome/common/url_constants.h"
+#include "content/public/browser/page_navigator.h"
+#include "content/public/browser/web_contents.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -24,10 +35,13 @@
 #include "ui/gfx/image/image.h"
 #include "ui/views/controls/button/custom_button.h"
 #include "ui/views/controls/button/image_button.h"
+#include "ui/views/controls/button/label_button.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/link.h"
 #include "ui/views/controls/separator.h"
+#include "ui/views/layout/grid_layout.h"
+#include "ui/views/layout/layout_constants.h"
 #include "ui/views/widget/widget.h"
 
 namespace {
@@ -219,7 +233,7 @@ class ProfileItemView : public views::CustomButton,
   EditProfileLink* edit_link() { return edit_link_; }
 
  private:
-  static gfx::ImageSkia GetBadgedIcon(const gfx::ImageSkia& icon);
+  gfx::ImageSkia GetBadgedIcon(const gfx::ImageSkia& icon);
 
   bool IsHighlighted();
 
@@ -242,18 +256,18 @@ ProfileItemView::ProfileItemView(const AvatarMenuModel::Item& item,
 
   image_view_ = new ProfileImageView();
   gfx::ImageSkia profile_icon = *item_.icon.ToImageSkia();
-  if (item_.active)
+  if (item_.active || item_.signin_required)
     image_view_->SetImage(GetBadgedIcon(profile_icon));
   else
     image_view_->SetImage(profile_icon);
   AddChildView(image_view_);
 
   // Add a label to show the profile name.
-  ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
+  ui::ResourceBundle* rb = &ui::ResourceBundle::GetSharedInstance();
   name_label_ = new views::Label(item_.name,
-                                 rb.GetFont(item_.active ?
-                                            ui::ResourceBundle::BoldFont :
-                                            ui::ResourceBundle::BaseFont));
+                                 rb->GetFont(item_.active ?
+                                             ui::ResourceBundle::BoldFont :
+                                             ui::ResourceBundle::BaseFont));
   name_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   AddChildView(name_label_);
 
@@ -261,7 +275,7 @@ ProfileItemView::ProfileItemView(const AvatarMenuModel::Item& item,
   sync_state_label_ = new views::Label(item_.sync_state);
   if (item_.signed_in)
     sync_state_label_->SetElideBehavior(views::Label::ELIDE_AS_EMAIL);
-  sync_state_label_->SetFont(rb.GetFont(ui::ResourceBundle::SmallFont));
+  sync_state_label_->SetFont(rb->GetFont(ui::ResourceBundle::SmallFont));
   sync_state_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   sync_state_label_->SetEnabled(false);
   AddChildView(sync_state_label_);
@@ -365,9 +379,16 @@ void ProfileItemView::OnFocusStateChanged(bool has_focus) {
 
 // static
 gfx::ImageSkia ProfileItemView::GetBadgedIcon(const gfx::ImageSkia& icon) {
-  ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
-  const gfx::ImageSkia* badge = rb.GetImageNamed(
-      IDR_PROFILE_SELECTED).ToImageSkia();
+  ui::ResourceBundle* rb = &ui::ResourceBundle::GetSharedInstance();
+  const gfx::ImageSkia* badge = NULL;
+
+  if (item_.active)
+    badge = rb->GetImageSkiaNamed(IDR_PROFILE_SELECTED);
+  else if (item_.signin_required)  // TODO(bcwhite): create new icon
+    badge = rb->GetImageSkiaNamed(IDR_OMNIBOX_HTTPS_VALID);
+  else
+    NOTREACHED();  // function should only be called if one of above is true
+
   gfx::Size icon_size = GetCenteredAndScaledRect(icon.width(), icon.height(),
       0, 0, profiles::kAvatarIconWidth, kItemHeight).size();
   gfx::CanvasImageSource* source =
@@ -386,15 +407,77 @@ bool ProfileItemView::IsHighlighted() {
 }
 
 
+// ActionButtonView -----------------------------------------------------------
+
+// A custom view that manages the "action" buttons at the bottom of the list
+// of profiles.
+class ActionButtonView : public views::View {
+ public:
+  ActionButtonView(views::ButtonListener* listener, Profile* profile);
+
+ private:
+  views::LabelButton* manage_button_;
+  views::LabelButton* signout_button_;
+
+  DISALLOW_COPY_AND_ASSIGN(ActionButtonView);
+};
+
+
+ActionButtonView::ActionButtonView(views::ButtonListener* listener,
+                                   Profile* profile)
+  : manage_button_(NULL),
+    signout_button_(NULL) {
+  std::string username;
+  SigninManagerBase* signin =
+      SigninManagerFactory::GetForProfile(profile);
+  if (signin != NULL)
+    username = signin->GetAuthenticatedUsername();
+
+  manage_button_ = new views::LabelButton(
+      listener, l10n_util::GetStringUTF16(IDS_PROFILES_MANAGE_PROFILES_BUTTON));
+  manage_button_->SetStyle(views::Button::STYLE_NATIVE_TEXTBUTTON);
+  manage_button_->SetTooltipText(
+      l10n_util::GetStringUTF16(IDS_PROFILES_MANAGE_PROFILES_BUTTON_TIP));
+  manage_button_->set_tag(IDS_PROFILES_MANAGE_PROFILES_BUTTON);
+
+  signout_button_ = new views::LabelButton(
+      listener, l10n_util::GetStringUTF16(IDS_PROFILES_PROFILE_SIGNOUT_BUTTON));
+  signout_button_->SetStyle(views::Button::STYLE_NATIVE_TEXTBUTTON);
+  if (username.empty()) {
+    signout_button_->SetTooltipText(
+        l10n_util::GetStringUTF16(
+            IDS_PROFILES_PROFILE_SIGNOUT_BUTTON_TIP_UNAVAILABLE));
+    signout_button_->SetEnabled(false);
+  } else {
+    signout_button_->SetTooltipText(
+        l10n_util::GetStringFUTF16(IDS_PROFILES_PROFILE_SIGNOUT_BUTTON_TIP,
+                                   UTF8ToUTF16(username)));
+  }
+  signout_button_->set_tag(IDS_PROFILES_PROFILE_SIGNOUT_BUTTON);
+
+  views::GridLayout* layout = new views::GridLayout(this);
+  views::ColumnSet* columns = layout->AddColumnSet(0);
+  columns->AddColumn(views::GridLayout::LEADING, views::GridLayout::FILL, 1,
+                     views::GridLayout::USE_PREF, 0, 0);
+  columns->AddColumn(views::GridLayout::TRAILING, views::GridLayout::FILL, 1,
+                     views::GridLayout::USE_PREF, 0, 0);
+  layout->StartRow(0, 0);
+  layout->AddView(signout_button_);
+  layout->AddView(manage_button_);
+  SetLayoutManager(layout);
+}
+
+
 // AvatarMenuBubbleView -------------------------------------------------------
 
 // static
 AvatarMenuBubbleView* AvatarMenuBubbleView::avatar_bubble_ = NULL;
+bool AvatarMenuBubbleView::close_on_deactivate_ = true;
 
 // static
 void AvatarMenuBubbleView::ShowBubble(
     views::View* anchor_view,
-    views::BubbleBorder::ArrowLocation arrow_location,
+    views::BubbleBorder::Arrow arrow,
     views::BubbleBorder::BubbleAlignment border_alignment,
     const gfx::Rect& anchor_rect,
     Browser* browser) {
@@ -403,8 +486,9 @@ void AvatarMenuBubbleView::ShowBubble(
 
   DCHECK(chrome::IsCommandEnabled(browser, IDC_SHOW_AVATAR_MENU));
   avatar_bubble_ = new AvatarMenuBubbleView(
-      anchor_view, arrow_location, anchor_rect, browser);
+      anchor_view, arrow, anchor_rect, browser);
   views::BubbleDelegateView::CreateBubble(avatar_bubble_);
+  avatar_bubble_->set_close_on_deactivate(close_on_deactivate_);
   avatar_bubble_->SetBackgroundColors();
   avatar_bubble_->SetAlignment(border_alignment);
   avatar_bubble_->GetWidget()->Show();
@@ -423,14 +507,17 @@ void AvatarMenuBubbleView::Hide() {
 
 AvatarMenuBubbleView::AvatarMenuBubbleView(
     views::View* anchor_view,
-    views::BubbleBorder::ArrowLocation arrow_location,
+    views::BubbleBorder::Arrow arrow,
     const gfx::Rect& anchor_rect,
     Browser* browser)
-    : BubbleDelegateView(anchor_view, arrow_location),
+    : BubbleDelegateView(anchor_view, arrow),
       anchor_rect_(anchor_rect),
       browser_(browser),
       separator_(NULL),
-      add_profile_link_(NULL) {
+      buttons_view_(NULL),
+      managed_user_info_(NULL),
+      separator_switch_users_(NULL),
+      expanded_(false) {
   avatar_menu_model_.reset(new AvatarMenuModel(
       &g_browser_process->profile_manager()->GetProfileInfoCache(),
       this, browser_));
@@ -440,29 +527,53 @@ AvatarMenuBubbleView::~AvatarMenuBubbleView() {
 }
 
 gfx::Size AvatarMenuBubbleView::GetPreferredSize() {
-  int max_width = 0;
-  int total_height = 0;
+  const int kBubbleViewMinWidth = 175;
+  gfx::Size preferred_size(kBubbleViewMinWidth, 0);
   for (size_t i = 0; i < item_views_.size(); ++i) {
     gfx::Size size = item_views_[i]->GetPreferredSize();
-    max_width = std::max(max_width, size.width());
-    total_height += size.height() + kItemMarginY;
+    preferred_size.Enlarge(0, size.height() + kItemMarginY);
+    preferred_size.SetToMax(size);
   }
 
-  if (add_profile_link_) {
-    total_height += kSeparatorPaddingY * 2 +
-                    separator_->GetPreferredSize().height();
+  if (buttons_view_) {
+    preferred_size.Enlarge(
+        0, kSeparatorPaddingY * 2 + separator_->GetPreferredSize().height());
 
-    gfx::Size add_profile_size = add_profile_link_->GetPreferredSize();
-    max_width = std::max(max_width,
-        add_profile_size.width() + profiles::kAvatarIconWidth + kIconMarginX);
-    total_height += add_profile_link_->GetPreferredSize().height();
+    gfx::Size buttons_size = buttons_view_->GetPreferredSize();
+    preferred_size.Enlarge(0, buttons_size.height());
+    preferred_size.SetToMax(buttons_size);
+  }
+
+
+  if (managed_user_info_) {
+    // First handle the switch profile link because it can still affect the
+    // preferred width.
+    gfx::Size size = switch_profile_link_->GetPreferredSize();
+    preferred_size.Enlarge(0, size.height());
+    preferred_size.SetToMax(size);
+
+    // Add the height of the two separators.
+    preferred_size.Enlarge(
+        0,
+        kSeparatorPaddingY * 4 + separator_->GetPreferredSize().height() * 2);
   }
 
   const int kBubbleViewMaxWidth = 800;
-  const int kBubbleViewMinWidth = 175;
-  int total_width = std::min(std::max(max_width, kBubbleViewMinWidth),
-                             kBubbleViewMaxWidth);
-  return gfx::Size(total_width, total_height);
+  preferred_size.SetToMin(
+      gfx::Size(kBubbleViewMaxWidth, preferred_size.height()));
+
+  // We have to do this after the final width is calculated, since the label
+  // will wrap based on the width.
+  if (managed_user_info_) {
+    int remaining_width =
+        preferred_size.width() - icon_view_->GetPreferredSize().width() -
+        views::kRelatedControlSmallHorizontalSpacing;
+    preferred_size.Enlarge(
+        0,
+        managed_user_info_->GetHeightForWidth(remaining_width) + kItemMarginY);
+  }
+
+  return preferred_size;
 }
 
 void AvatarMenuBubbleView::Layout() {
@@ -475,14 +586,32 @@ void AvatarMenuBubbleView::Layout() {
     y += item_height + kItemMarginY;
   }
 
-  if (add_profile_link_) {
+  int separator_height;
+  if (buttons_view_ || managed_user_info_) {
+    separator_height = separator_->GetPreferredSize().height();
     y += kSeparatorPaddingY;
-    int separator_height = separator_->GetPreferredSize().height();
     separator_->SetBounds(0, y, width(), separator_height);
     y += kSeparatorPaddingY + separator_height;
+  }
 
-    add_profile_link_->SetBounds(profiles::kAvatarIconWidth + kIconMarginX, y,
-        width(), add_profile_link_->GetPreferredSize().height());
+  if (buttons_view_) {
+    buttons_view_->SetBounds(0, y,
+        width(), buttons_view_->GetPreferredSize().height());
+  } else if (managed_user_info_) {
+    gfx::Size icon_size = icon_view_->GetPreferredSize();
+    gfx::Rect icon_bounds(0, y, icon_size.width(), icon_size.height());
+    icon_view_->SetBoundsRect(icon_bounds);
+    int info_width = width() - icon_bounds.right() -
+                     views::kRelatedControlSmallHorizontalSpacing;
+    int height = managed_user_info_->GetHeightForWidth(info_width);
+    managed_user_info_->SetBounds(
+        icon_bounds.right() + views::kRelatedControlSmallHorizontalSpacing,
+        y, info_width, height);
+    y += height + kItemMarginY + kSeparatorPaddingY;
+    separator_switch_users_->SetBounds(0, y, width(), separator_height);
+    y += separator_height + kSeparatorPaddingY;
+    int link_height = switch_profile_link_->GetPreferredSize().height();
+    switch_profile_link_->SetBounds(0, y, width(), link_height);
   }
 }
 
@@ -517,6 +646,15 @@ bool AvatarMenuBubbleView::AcceleratorPressed(
 
 void AvatarMenuBubbleView::ButtonPressed(views::Button* sender,
                                          const ui::Event& event) {
+  if (sender->tag() == IDS_PROFILES_MANAGE_PROFILES_BUTTON) {
+    std::string subpage = chrome::kSearchUsersSubPage;
+    chrome::ShowSettingsSubPage(browser_, subpage);
+    return;
+  } else if (sender->tag() == IDS_PROFILES_PROFILE_SIGNOUT_BUTTON) {
+    avatar_menu_model_->BeginSignOut();
+    return;
+  }
+
   for (size_t i = 0; i < item_views_.size(); ++i) {
     ProfileItemView* item_view = item_views_[i];
     if (sender == item_view) {
@@ -531,8 +669,13 @@ void AvatarMenuBubbleView::ButtonPressed(views::Button* sender,
 }
 
 void AvatarMenuBubbleView::LinkClicked(views::Link* source, int event_flags) {
-  if (source == add_profile_link_) {
+  if (source == buttons_view_) {
     avatar_menu_model_->AddNewProfile(ProfileMetrics::ADD_NEW_USER_ICON);
+    return;
+  }
+  if (source == switch_profile_link_) {
+    expanded_ = true;
+    OnAvatarMenuModelChanged(avatar_menu_model_.get());
     return;
   }
 
@@ -561,14 +704,8 @@ void AvatarMenuBubbleView::WindowClosing() {
   avatar_bubble_ = NULL;
 }
 
-void AvatarMenuBubbleView::OnAvatarMenuModelChanged(
+void AvatarMenuBubbleView::InitMenuContents(
     AvatarMenuModel* avatar_menu_model) {
-  // Unset all our child view references and call RemoveAllChildViews() which
-  // will actually delete them.
-  add_profile_link_ = NULL;
-  item_views_.clear();
-  RemoveAllChildViews(true);
-
   for (size_t i = 0; i < avatar_menu_model->GetNumberOfItems(); ++i) {
     const AvatarMenuModel::Item& item = avatar_menu_model->GetItemAt(i);
     ProfileItemView* item_view = new ProfileItemView(item, this);
@@ -579,17 +716,78 @@ void AvatarMenuBubbleView::OnAvatarMenuModelChanged(
     item_views_.push_back(item_view);
   }
 
-  if (avatar_menu_model_->ShouldShowAddNewProfileLink()) {
-    separator_ = new views::Separator();
+  if (CommandLine::ForCurrentProcess()->HasSwitch(
+      switches::kNewProfileManagement)) {
+    separator_ = new views::Separator(views::Separator::HORIZONTAL);
     AddChildView(separator_);
-
-    add_profile_link_ = new views::Link(
+    buttons_view_ = new ActionButtonView(this, browser_->profile());
+    AddChildView(buttons_view_);
+  } else if (avatar_menu_model_->ShouldShowAddNewProfileLink()) {
+    views::Link* add_profile_link = new views::Link(
         l10n_util::GetStringUTF16(IDS_PROFILES_CREATE_NEW_PROFILE_LINK));
-    add_profile_link_->set_listener(this);
-    add_profile_link_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
-    add_profile_link_->SetBackgroundColor(color());
-    AddChildView(add_profile_link_);
+    add_profile_link->set_listener(this);
+    add_profile_link->SetHorizontalAlignment(gfx::ALIGN_CENTER);
+    add_profile_link->SetBackgroundColor(color());
+    separator_ = new views::Separator(views::Separator::HORIZONTAL);
+    AddChildView(separator_);
+    buttons_view_ = add_profile_link;
+    AddChildView(buttons_view_);
   }
+}
+
+void AvatarMenuBubbleView::InitManagedUserContents(
+    AvatarMenuModel* avatar_menu_model) {
+  // Show the profile of the managed user.
+  size_t active_index = avatar_menu_model->GetActiveProfileIndex();
+  const AvatarMenuModel::Item& item =
+      avatar_menu_model->GetItemAt(active_index);
+  ProfileItemView* item_view = new ProfileItemView(item, this);
+  item_view->SetAccessibleName(l10n_util::GetStringFUTF16(
+      IDS_PROFILES_SWITCH_TO_PROFILE_ACCESSIBLE_NAME, item.name));
+  item_views_.push_back(item_view);
+  AddChildView(item_view);
+  separator_ = new views::Separator(views::Separator::HORIZONTAL);
+  AddChildView(separator_);
+
+  // Add information about managed users.
+  managed_user_info_ =
+      new views::Label(avatar_menu_model_->GetManagedUserInformation(),
+                       ui::ResourceBundle::GetSharedInstance().GetFont(
+                           ui::ResourceBundle::SmallFont));
+  managed_user_info_->SetMultiLine(true);
+  managed_user_info_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+  managed_user_info_->SetBackgroundColor(color());
+  AddChildView(managed_user_info_);
+
+  // Add the managed user icon.
+  icon_view_ = new views::ImageView();
+  icon_view_->SetImage(avatar_menu_model_->GetManagedUserIcon().ToImageSkia());
+  AddChildView(icon_view_);
+
+  // Add a link for switching profiles.
+  separator_switch_users_ = new views::Separator(views::Separator::HORIZONTAL);
+  AddChildView(separator_switch_users_);
+  switch_profile_link_ = new views::Link(
+      l10n_util::GetStringUTF16(IDS_PROFILES_SWITCH_PROFILE_LINK));
+  switch_profile_link_->set_listener(this);
+  switch_profile_link_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
+  switch_profile_link_->SetBackgroundColor(color());
+  AddChildView(switch_profile_link_);
+}
+
+void AvatarMenuBubbleView::OnAvatarMenuModelChanged(
+    AvatarMenuModel* avatar_menu_model) {
+  // Unset all our child view references and call RemoveAllChildViews() which
+  // will actually delete them.
+  buttons_view_ = NULL;
+  managed_user_info_ = NULL;
+  item_views_.clear();
+  RemoveAllChildViews(true);
+
+  if (avatar_menu_model_->GetManagedUserInformation().empty() || expanded_)
+    InitMenuContents(avatar_menu_model);
+  else
+    InitManagedUserContents(avatar_menu_model);
 
   // If the bubble has already been shown then resize and reposition the bubble.
   Layout();

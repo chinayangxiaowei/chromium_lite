@@ -16,12 +16,12 @@
 #include "base/format_macros.h"
 #include "base/location.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
-#include "base/message_loop_proxy.h"
-#include "base/string_number_conversions.h"
-#include "base/stringprintf.h"
+#include "base/message_loop/message_loop.h"
+#include "base/message_loop/message_loop_proxy.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/test/values_test_util.h"
-#include "base/utf_string_conversions.h"
 #include "base/values.h"
 #include "sync/engine/sync_scheduler.h"
 #include "sync/internal_api/public/base/model_type_test_util.h"
@@ -46,7 +46,6 @@
 #include "sync/js/js_reply_handler.h"
 #include "sync/js/js_test_util.h"
 #include "sync/notifier/fake_invalidation_handler.h"
-#include "sync/notifier/fake_invalidator.h"
 #include "sync/notifier/invalidation_handler.h"
 #include "sync/notifier/invalidator.h"
 #include "sync/protocol/bookmark_specifics.pb.h"
@@ -69,9 +68,8 @@
 #include "sync/test/engine/fake_sync_scheduler.h"
 #include "sync/test/engine/test_id_factory.h"
 #include "sync/test/fake_encryptor.h"
-#include "sync/test/fake_extensions_activity_monitor.h"
 #include "sync/util/cryptographer.h"
-#include "sync/util/extensions_activity_monitor.h"
+#include "sync/util/extensions_activity.h"
 #include "sync/util/test_unrecoverable_error_handler.h"
 #include "sync/util/time.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -231,7 +229,7 @@ class SyncApiTest : public testing::Test {
   }
 
  protected:
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
   TestUserShare test_user_share_;
 };
 
@@ -532,6 +530,8 @@ namespace {
 
 void CheckNodeValue(const BaseNode& node, const base::DictionaryValue& value,
                     bool is_detailed) {
+  size_t expected_field_count = 4;
+
   ExpectInt64Value(node.GetId(), value, "id");
   {
     bool is_folder = false;
@@ -539,28 +539,22 @@ void CheckNodeValue(const BaseNode& node, const base::DictionaryValue& value,
     EXPECT_EQ(node.GetIsFolder(), is_folder);
   }
   ExpectDictStringValue(node.GetTitle(), value, "title");
-  {
-    ModelType expected_model_type = node.GetModelType();
-    std::string type_str;
-    EXPECT_TRUE(value.GetString("type", &type_str));
-    if (expected_model_type >= FIRST_REAL_MODEL_TYPE) {
-      ModelType model_type = ModelTypeFromString(type_str);
-      EXPECT_EQ(expected_model_type, model_type);
-    } else if (expected_model_type == TOP_LEVEL_FOLDER) {
-      EXPECT_EQ("Top-level folder", type_str);
-    } else if (expected_model_type == UNSPECIFIED) {
-      EXPECT_EQ("Unspecified", type_str);
-    } else {
-      ADD_FAILURE();
-    }
+
+  ModelType expected_model_type = node.GetModelType();
+  std::string type_str;
+  EXPECT_TRUE(value.GetString("type", &type_str));
+  if (expected_model_type >= FIRST_REAL_MODEL_TYPE) {
+    ModelType model_type = ModelTypeFromString(type_str);
+    EXPECT_EQ(expected_model_type, model_type);
+  } else if (expected_model_type == TOP_LEVEL_FOLDER) {
+    EXPECT_EQ("Top-level folder", type_str);
+  } else if (expected_model_type == UNSPECIFIED) {
+    EXPECT_EQ("Unspecified", type_str);
+  } else {
+    ADD_FAILURE();
   }
+
   if (is_detailed) {
-    ExpectInt64Value(node.GetParentId(), value, "parentId");
-    ExpectTimeValue(node.GetModificationTime(), value, "modificationTime");
-    ExpectInt64Value(node.GetExternalId(), value, "externalId");
-    ExpectInt64Value(node.GetPredecessorId(), value, "predecessorId");
-    ExpectInt64Value(node.GetSuccessorId(), value, "successorId");
-    ExpectInt64Value(node.GetFirstChildId(), value, "firstChildId");
     {
       scoped_ptr<base::DictionaryValue> expected_entry(
           node.GetEntry()->ToValue(NULL));
@@ -568,10 +562,27 @@ void CheckNodeValue(const BaseNode& node, const base::DictionaryValue& value,
       EXPECT_TRUE(value.Get("entry", &entry));
       EXPECT_TRUE(base::Value::Equals(entry, expected_entry.get()));
     }
-    EXPECT_EQ(11u, value.size());
-  } else {
-    EXPECT_EQ(4u, value.size());
+
+    ExpectInt64Value(node.GetParentId(), value, "parentId");
+    ExpectTimeValue(node.GetModificationTime(), value, "modificationTime");
+    ExpectInt64Value(node.GetExternalId(), value, "externalId");
+    expected_field_count += 4;
+
+    if (value.HasKey("predecessorId")) {
+      ExpectInt64Value(node.GetPredecessorId(), value, "predecessorId");
+      expected_field_count++;
+    }
+    if (value.HasKey("successorId")) {
+      ExpectInt64Value(node.GetSuccessorId(), value, "successorId");
+      expected_field_count++;
+    }
+    if (value.HasKey("firstChildId")) {
+      ExpectInt64Value(node.GetFirstChildId(), value, "firstChildId");
+      expected_field_count++;
+    }
   }
+
+  EXPECT_EQ(expected_field_count, value.size());
 }
 
 }  // namespace
@@ -581,7 +592,7 @@ TEST_F(SyncApiTest, BaseNodeGetSummaryAsValue) {
   ReadNode node(&trans);
   node.InitByRootLookup();
   scoped_ptr<base::DictionaryValue> details(node.GetSummaryAsValue());
-  if (details.get()) {
+  if (details) {
     CheckNodeValue(node, *details, false);
   } else {
     ADD_FAILURE();
@@ -593,7 +604,7 @@ TEST_F(SyncApiTest, BaseNodeGetDetailsAsValue) {
   ReadNode node(&trans);
   node.InitByRootLookup();
   scoped_ptr<base::DictionaryValue> details(node.GetDetailsAsValue());
-  if (details.get()) {
+  if (details) {
     CheckNodeValue(node, *details, true);
   } else {
     ADD_FAILURE();
@@ -710,7 +721,7 @@ class TestHttpPostProviderInterface : public HttpPostProviderInterface {
   }
   virtual const std::string GetResponseHeaderValue(
       const std::string& name) const OVERRIDE {
-    return "";
+    return std::string();
   }
   virtual void Abort() OVERRIDE {}
 };
@@ -776,25 +787,23 @@ class SyncManagerTest : public testing::Test,
   };
 
   SyncManagerTest()
-      : fake_invalidator_(NULL),
-        sync_manager_("Test sync manager") {
+      : sync_manager_("Test sync manager") {
     switches_.encryption_method =
         InternalComponentsFactory::ENCRYPTION_KEYSTORE;
   }
 
   virtual ~SyncManagerTest() {
-    EXPECT_FALSE(fake_invalidator_);
   }
 
   // Test implementation.
   void SetUp() {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
 
+    extensions_activity_ = new ExtensionsActivity();
+
     SyncCredentials credentials;
     credentials.email = "foo@bar.com";
     credentials.sync_token = "sometoken";
-
-    fake_invalidator_ = new FakeInvalidator();
 
     sync_manager_.AddObserver(&manager_observer_);
     EXPECT_CALL(manager_observer_, OnInitializationComplete(_, _, _, _)).
@@ -807,19 +816,26 @@ class SyncManagerTest : public testing::Test,
     GetModelSafeRoutingInfo(&routing_info);
 
     // Takes ownership of |fake_invalidator_|.
-    sync_manager_.Init(temp_dir_.path(),
-                       WeakHandle<JsEventHandler>(),
-                       "bogus", 0, false,
-                       scoped_ptr<HttpPostProviderFactory>(
-                           new TestHttpPostProviderFactory()),
-                       workers, &extensions_activity_monitor_, this,
-                       credentials,
-                       scoped_ptr<Invalidator>(fake_invalidator_),
-                       "", "",  // bootstrap tokens
-                       scoped_ptr<InternalComponentsFactory>(GetFactory()),
-                       &encryptor_,
-                       &handler_,
-                       NULL);
+    sync_manager_.Init(
+        temp_dir_.path(),
+        WeakHandle<JsEventHandler>(),
+        "bogus",
+        0,
+        false,
+        scoped_ptr<HttpPostProviderFactory>(new TestHttpPostProviderFactory()),
+        workers,
+        extensions_activity_.get(),
+        this,
+        credentials,
+        "fake_invalidator_client_id",
+        std::string(),
+        std::string(),  // bootstrap tokens
+        scoped_ptr<InternalComponentsFactory>(GetFactory()).get(),
+        &encryptor_,
+        scoped_ptr<UnrecoverableErrorHandler>(
+            new TestUnrecoverableErrorHandler).Pass(),
+        NULL,
+        false);
 
     sync_manager_.GetEncryptionHandler()->AddObserver(&encryption_observer_);
 
@@ -831,17 +847,11 @@ class SyncManagerTest : public testing::Test,
           sync_manager_.GetUserShare(), i->first);
     }
     PumpLoop();
-
-    EXPECT_TRUE(fake_invalidator_->IsHandlerRegistered(&sync_manager_));
   }
 
   void TearDown() {
     sync_manager_.RemoveObserver(&manager_observer_);
     sync_manager_.ShutdownOnSyncThread();
-    // We can't assert that |sync_manager_| isn't registered with
-    // |fake_invalidator_| anymore because |fake_invalidator_| is now
-    // destroyed.
-    fake_invalidator_ = NULL;
     PumpLoop();
   }
 
@@ -997,46 +1007,21 @@ class SyncManagerTest : public testing::Test,
 
  private:
   // Needed by |sync_manager_|.
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
   // Needed by |sync_manager_|.
   base::ScopedTempDir temp_dir_;
   // Sync Id's for the roots of the enabled datatypes.
   std::map<ModelType, int64> type_roots_;
-  FakeExtensionsActivityMonitor extensions_activity_monitor_;
+  scoped_refptr<ExtensionsActivity> extensions_activity_;
 
  protected:
   FakeEncryptor encryptor_;
-  TestUnrecoverableErrorHandler handler_;
-  FakeInvalidator* fake_invalidator_;
   SyncManagerImpl sync_manager_;
   WeakHandle<JsBackend> js_backend_;
   StrictMock<SyncManagerObserverMock> manager_observer_;
   StrictMock<SyncEncryptionHandlerObserverMock> encryption_observer_;
   InternalComponentsFactory::Switches switches_;
 };
-
-TEST_F(SyncManagerTest, UpdateEnabledTypes) {
-  ModelSafeRoutingInfo routes;
-  GetModelSafeRoutingInfo(&routes);
-  const ModelTypeSet enabled_types = GetRoutingInfoTypes(routes);
-  sync_manager_.UpdateEnabledTypes(enabled_types);
-  EXPECT_EQ(ModelTypeSetToObjectIdSet(enabled_types),
-            fake_invalidator_->GetRegisteredIds(&sync_manager_));
-}
-
-TEST_F(SyncManagerTest, RegisterInvalidationHandler) {
-  FakeInvalidationHandler fake_handler;
-  sync_manager_.RegisterInvalidationHandler(&fake_handler);
-  EXPECT_TRUE(fake_invalidator_->IsHandlerRegistered(&fake_handler));
-
-  const ObjectIdSet& ids =
-      ModelTypeSetToObjectIdSet(ModelTypeSet(BOOKMARKS, PREFERENCES));
-  sync_manager_.UpdateRegisteredInvalidationIds(&fake_handler, ids);
-  EXPECT_EQ(ids, fake_invalidator_->GetRegisteredIds(&fake_handler));
-
-  sync_manager_.UnregisterInvalidationHandler(&fake_handler);
-  EXPECT_FALSE(fake_invalidator_->IsHandlerRegistered(&fake_handler));
-}
 
 TEST_F(SyncManagerTest, ProcessJsMessage) {
   const JsArgList kNoArgs;
@@ -1167,9 +1152,9 @@ class SyncManagerGetNodesByIdTest : public SyncManagerTest {
       base::ListValue args;
       base::ListValue* ids = new base::ListValue();
       args.Append(ids);
-      ids->Append(new base::StringValue(""));
-      SendJsMessage(message_name,
-                    JsArgList(&args), reply_handler.AsWeakHandle());
+      ids->Append(new base::StringValue(std::string()));
+      SendJsMessage(
+          message_name, JsArgList(&args), reply_handler.AsWeakHandle());
     }
 
     {
@@ -1259,9 +1244,9 @@ TEST_F(SyncManagerTest, GetChildNodeIdsFailure) {
 
   {
     base::ListValue args;
-    args.Append(new base::StringValue(""));
-    SendJsMessage("getChildNodeIds",
-                  JsArgList(&args), reply_handler.AsWeakHandle());
+    args.Append(new base::StringValue(std::string()));
+    SendJsMessage(
+        "getChildNodeIds", JsArgList(&args), reply_handler.AsWeakHandle());
   }
 
   {
@@ -1342,14 +1327,6 @@ TEST_F(SyncManagerTest, OnInvalidatorStateChangeJsEvents) {
   base::DictionaryValue auth_error_details;
   auth_error_details.SetString("status", "CONNECTION_AUTH_ERROR");
 
-  EXPECT_CALL(manager_observer_,
-              OnConnectionStatusChange(CONNECTION_AUTH_ERROR));
-
-  EXPECT_CALL(
-      event_handler,
-      HandleJsEvent("onConnectionStatusChange",
-                    HasDetailsAsDictionary(auth_error_details)));
-
   EXPECT_CALL(event_handler,
               HandleJsEvent("onNotificationStateChange",
                             HasDetailsAsDictionary(enabled_details)));
@@ -1385,22 +1362,6 @@ TEST_F(SyncManagerTest, OnInvalidatorStateChangeJsEvents) {
   SimulateInvalidatorStateChangeForTest(INVALIDATIONS_ENABLED);
   SimulateInvalidatorStateChangeForTest(INVALIDATION_CREDENTIALS_REJECTED);
   SimulateInvalidatorStateChangeForTest(TRANSIENT_INVALIDATION_ERROR);
-
-  // Should trigger the replies.
-  PumpLoop();
-}
-
-// Simulate the invalidator's credentials being rejected.  That should
-// also clear the sync token.
-TEST_F(SyncManagerTest, OnInvalidatorStateChangeCredentialsRejected) {
-  EXPECT_CALL(manager_observer_,
-              OnConnectionStatusChange(CONNECTION_AUTH_ERROR));
-
-  EXPECT_FALSE(sync_manager_.GetHasInvalidAuthTokenForTest());
-
-  SimulateInvalidatorStateChangeForTest(INVALIDATION_CREDENTIALS_REJECTED);
-
-  EXPECT_TRUE(sync_manager_.GetHasInvalidAuthTokenForTest());
 
   // Should trigger the replies.
   PumpLoop();
@@ -1543,12 +1504,12 @@ TEST_F(SyncManagerTest, EncryptDataTypesWithData) {
   // Next batch_size nodes are a different type and on their own.
   for (; i < 2*batch_size; ++i) {
     MakeNode(sync_manager_.GetUserShare(), SESSIONS,
-             base::StringPrintf("%"PRIuS"", i));
+             base::StringPrintf("%" PRIuS "", i));
   }
   // Last batch_size nodes are a third type that will not need encryption.
   for (; i < 3*batch_size; ++i) {
     MakeNode(sync_manager_.GetUserShare(), THEMES,
-             base::StringPrintf("%"PRIuS"", i));
+             base::StringPrintf("%" PRIuS "", i));
   }
 
   {
@@ -2660,6 +2621,57 @@ TEST_F(SyncManagerTest, SetNonBookmarkTitleWithEncryption) {
   }
 }
 
+// Ensure that titles are truncated to 255 bytes, and attempting to reset
+// them to their longer version does not set IS_UNSYNCED.
+TEST_F(SyncManagerTest, SetLongTitle) {
+  const int kNumChars = 512;
+  const std::string kClientTag = "tag";
+  std::string title(kNumChars, '0');
+  sync_pb::EntitySpecifics entity_specifics;
+  entity_specifics.mutable_preference()->set_name("name");
+  entity_specifics.mutable_preference()->set_value("value");
+  MakeServerNode(sync_manager_.GetUserShare(),
+                 PREFERENCES,
+                 "short_title",
+                 syncable::GenerateSyncableHash(PREFERENCES,
+                                                kClientTag),
+                 entity_specifics);
+  // New node shouldn't start off unsynced.
+  EXPECT_FALSE(ResetUnsyncedEntry(PREFERENCES, kClientTag));
+
+  // Manually change to the long title. Should set is_unsynced.
+  {
+    WriteTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    WriteNode node(&trans);
+    EXPECT_EQ(BaseNode::INIT_OK,
+              node.InitByClientTagLookup(PREFERENCES, kClientTag));
+    node.SetTitle(UTF8ToWide(title));
+    EXPECT_EQ(node.GetTitle(), title.substr(0, 255));
+  }
+  EXPECT_TRUE(ResetUnsyncedEntry(PREFERENCES, kClientTag));
+
+  // Manually change to the same title. Should not set is_unsynced.
+  {
+    WriteTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    WriteNode node(&trans);
+    EXPECT_EQ(BaseNode::INIT_OK,
+              node.InitByClientTagLookup(PREFERENCES, kClientTag));
+    node.SetTitle(UTF8ToWide(title));
+    EXPECT_EQ(node.GetTitle(), title.substr(0, 255));
+  }
+  EXPECT_FALSE(ResetUnsyncedEntry(PREFERENCES, kClientTag));
+
+  // Manually change to new title. Should set is_unsynced.
+  {
+    WriteTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    WriteNode node(&trans);
+    EXPECT_EQ(BaseNode::INIT_OK,
+              node.InitByClientTagLookup(PREFERENCES, kClientTag));
+    node.SetTitle(UTF8ToWide("title2"));
+  }
+  EXPECT_TRUE(ResetUnsyncedEntry(PREFERENCES, kClientTag));
+}
+
 // Create an encrypted entry when the cryptographer doesn't think the type is
 // marked for encryption. Ensure reads/writes don't break and don't unencrypt
 // the data.
@@ -2838,6 +2850,8 @@ TEST_F(SyncManagerTestWithMockScheduler, BasicConfiguration) {
   sync_manager_.ConfigureSyncer(
       reason,
       types_to_download,
+      disabled_types,
+      ModelTypeSet(),
       ModelTypeSet(),
       new_routing_info,
       base::Bind(&CallbackCounter::Callback,
@@ -2897,6 +2911,8 @@ TEST_F(SyncManagerTestWithMockScheduler, ReConfiguration) {
       reason,
       types_to_download,
       ModelTypeSet(),
+      ModelTypeSet(),
+      ModelTypeSet(),
       new_routing_info,
       base::Bind(&CallbackCounter::Callback,
                  base::Unretained(&ready_task_counter)),
@@ -2930,6 +2946,8 @@ TEST_F(SyncManagerTestWithMockScheduler, ConfigurationRetry) {
   sync_manager_.ConfigureSyncer(
       reason,
       types_to_download,
+      ModelTypeSet(),
+      ModelTypeSet(),
       ModelTypeSet(),
       new_routing_info,
       base::Bind(&CallbackCounter::Callback,
@@ -3037,7 +3055,8 @@ TEST_F(SyncManagerTest, PurgeDisabledTypes) {
 
   // Verify all the enabled types remain after cleanup, and all the disabled
   // types were purged.
-  sync_manager_.PurgeDisabledTypes(ModelTypeSet::All(), enabled_types,
+  sync_manager_.PurgeDisabledTypes(disabled_types,
+                                   ModelTypeSet(),
                                    ModelTypeSet());
   EXPECT_TRUE(enabled_types.Equals(sync_manager_.InitialSyncEndedTypes()));
   EXPECT_TRUE(disabled_types.Equals(
@@ -3050,11 +3069,155 @@ TEST_F(SyncManagerTest, PurgeDisabledTypes) {
       Difference(ModelTypeSet::All(), disabled_types);
 
   // Verify only the non-disabled types remain after cleanup.
-  sync_manager_.PurgeDisabledTypes(enabled_types, new_enabled_types,
+  sync_manager_.PurgeDisabledTypes(disabled_types,
+                                   ModelTypeSet(),
                                    ModelTypeSet());
   EXPECT_TRUE(new_enabled_types.Equals(sync_manager_.InitialSyncEndedTypes()));
   EXPECT_TRUE(disabled_types.Equals(
       sync_manager_.GetTypesWithEmptyProgressMarkerToken(ModelTypeSet::All())));
+}
+
+// Test PurgeDisabledTypes properly unapplies types by deleting their local data
+// and preserving their server data and progress marker.
+TEST_F(SyncManagerTest, PurgeUnappliedTypes) {
+  ModelSafeRoutingInfo routing_info;
+  GetModelSafeRoutingInfo(&routing_info);
+  ModelTypeSet unapplied_types = ModelTypeSet(BOOKMARKS, PREFERENCES);
+  ModelTypeSet enabled_types = GetRoutingInfoTypes(routing_info);
+  ModelTypeSet disabled_types = Difference(ModelTypeSet::All(), enabled_types);
+
+  // The harness should have initialized the enabled_types for us.
+  EXPECT_TRUE(enabled_types.Equals(sync_manager_.InitialSyncEndedTypes()));
+
+  // Set progress markers for all types.
+  ModelTypeSet protocol_types = ProtocolTypes();
+  for (ModelTypeSet::Iterator iter = protocol_types.First(); iter.Good();
+       iter.Inc()) {
+    SetProgressMarkerForType(iter.Get(), true);
+  }
+
+  // Add the following kinds of items:
+  // 1. Fully synced preference.
+  // 2. Locally created preference, server unknown, unsynced
+  // 3. Locally deleted preference, server known, unsynced
+  // 4. Server deleted preference, locally known.
+  // 5. Server created preference, locally unknown, unapplied.
+  // 6. A fully synced bookmark (no unique_client_tag).
+  UserShare* share = sync_manager_.GetUserShare();
+  sync_pb::EntitySpecifics pref_specifics;
+  AddDefaultFieldValue(PREFERENCES, &pref_specifics);
+  sync_pb::EntitySpecifics bm_specifics;
+  AddDefaultFieldValue(BOOKMARKS, &bm_specifics);
+  int pref1_meta = MakeServerNode(
+      share, PREFERENCES, "pref1", "hash1", pref_specifics);
+  int64 pref2_meta = MakeNode(share, PREFERENCES, "pref2");
+  int pref3_meta = MakeServerNode(
+      share, PREFERENCES, "pref3", "hash3", pref_specifics);
+  int pref4_meta = MakeServerNode(
+      share, PREFERENCES, "pref4", "hash4", pref_specifics);
+  int pref5_meta = MakeServerNode(
+      share, PREFERENCES, "pref5", "hash5", pref_specifics);
+  int bookmark_meta = MakeServerNode(
+      share, BOOKMARKS, "bookmark", "", bm_specifics);
+
+  {
+    syncable::WriteTransaction trans(FROM_HERE,
+                                     syncable::SYNCER,
+                                     share->directory.get());
+    // Pref's 1 and 2 are already set up properly.
+    // Locally delete pref 3.
+    syncable::MutableEntry pref3(&trans, GET_BY_HANDLE, pref3_meta);
+    pref3.Put(IS_DEL, true);
+    pref3.Put(IS_UNSYNCED, true);
+    // Delete pref 4 at the server.
+    syncable::MutableEntry pref4(&trans, GET_BY_HANDLE, pref4_meta);
+    pref4.Put(syncable::SERVER_IS_DEL, true);
+    pref4.Put(syncable::IS_UNAPPLIED_UPDATE, true);
+    pref4.Put(syncable::SERVER_VERSION, 2);
+    // Pref 5 is an new unapplied update.
+    syncable::MutableEntry pref5(&trans, GET_BY_HANDLE, pref5_meta);
+    pref5.Put(syncable::IS_UNAPPLIED_UPDATE, true);
+    pref5.Put(syncable::IS_DEL, true);
+    pref5.Put(syncable::BASE_VERSION, -1);
+    // Bookmark is already set up properly
+  }
+
+  // Take a snapshot to clear all the dirty bits.
+  share->directory.get()->SaveChanges();
+
+   // Now request a purge for the unapplied types.
+  disabled_types.PutAll(unapplied_types);
+  sync_manager_.PurgeDisabledTypes(disabled_types,
+                                   ModelTypeSet(),
+                                   unapplied_types);
+
+  // Verify the unapplied types still have progress markers and initial sync
+  // ended after cleanup.
+  EXPECT_TRUE(sync_manager_.InitialSyncEndedTypes().HasAll(unapplied_types));
+  EXPECT_TRUE(
+      sync_manager_.GetTypesWithEmptyProgressMarkerToken(unapplied_types).
+          Empty());
+
+  // Ensure the items were unapplied as necessary.
+  {
+    syncable::ReadTransaction trans(FROM_HERE, share->directory.get());
+    syncable::Entry pref_node(&trans, GET_BY_HANDLE, pref1_meta);
+    ASSERT_TRUE(pref_node.good());
+    EXPECT_TRUE(pref_node.GetKernelCopy().is_dirty());
+    EXPECT_FALSE(pref_node.Get(syncable::IS_UNSYNCED));
+    EXPECT_TRUE(pref_node.Get(syncable::IS_UNAPPLIED_UPDATE));
+    EXPECT_TRUE(pref_node.Get(IS_DEL));
+    EXPECT_GT(pref_node.Get(syncable::SERVER_VERSION), 0);
+    EXPECT_EQ(pref_node.Get(syncable::BASE_VERSION), -1);
+
+    // Pref 2 should just be locally deleted.
+    syncable::Entry pref2_node(&trans, GET_BY_HANDLE, pref2_meta);
+    ASSERT_TRUE(pref2_node.good());
+    EXPECT_TRUE(pref2_node.GetKernelCopy().is_dirty());
+    EXPECT_FALSE(pref2_node.Get(syncable::IS_UNSYNCED));
+    EXPECT_TRUE(pref2_node.Get(syncable::IS_DEL));
+    EXPECT_FALSE(pref2_node.Get(syncable::IS_UNAPPLIED_UPDATE));
+    EXPECT_TRUE(pref2_node.Get(IS_DEL));
+    EXPECT_EQ(pref2_node.Get(syncable::SERVER_VERSION), 0);
+    EXPECT_EQ(pref2_node.Get(syncable::BASE_VERSION), -1);
+
+    syncable::Entry pref3_node(&trans, GET_BY_HANDLE, pref3_meta);
+    ASSERT_TRUE(pref3_node.good());
+    EXPECT_TRUE(pref3_node.GetKernelCopy().is_dirty());
+    EXPECT_FALSE(pref3_node.Get(syncable::IS_UNSYNCED));
+    EXPECT_TRUE(pref3_node.Get(syncable::IS_UNAPPLIED_UPDATE));
+    EXPECT_TRUE(pref3_node.Get(IS_DEL));
+    EXPECT_GT(pref3_node.Get(syncable::SERVER_VERSION), 0);
+    EXPECT_EQ(pref3_node.Get(syncable::BASE_VERSION), -1);
+
+    syncable::Entry pref4_node(&trans, GET_BY_HANDLE, pref4_meta);
+    ASSERT_TRUE(pref4_node.good());
+    EXPECT_TRUE(pref4_node.GetKernelCopy().is_dirty());
+    EXPECT_FALSE(pref4_node.Get(syncable::IS_UNSYNCED));
+    EXPECT_TRUE(pref4_node.Get(syncable::IS_UNAPPLIED_UPDATE));
+    EXPECT_TRUE(pref4_node.Get(IS_DEL));
+    EXPECT_GT(pref4_node.Get(syncable::SERVER_VERSION), 0);
+    EXPECT_EQ(pref4_node.Get(syncable::BASE_VERSION), -1);
+
+    // Pref 5 should remain untouched.
+    syncable::Entry pref5_node(&trans, GET_BY_HANDLE, pref5_meta);
+    ASSERT_TRUE(pref5_node.good());
+    EXPECT_FALSE(pref5_node.GetKernelCopy().is_dirty());
+    EXPECT_FALSE(pref5_node.Get(syncable::IS_UNSYNCED));
+    EXPECT_TRUE(pref5_node.Get(syncable::IS_UNAPPLIED_UPDATE));
+    EXPECT_TRUE(pref5_node.Get(IS_DEL));
+    EXPECT_GT(pref5_node.Get(syncable::SERVER_VERSION), 0);
+    EXPECT_EQ(pref5_node.Get(syncable::BASE_VERSION), -1);
+
+    syncable::Entry bookmark_node(&trans, GET_BY_HANDLE, bookmark_meta);
+    ASSERT_TRUE(bookmark_node.good());
+    EXPECT_TRUE(bookmark_node.GetKernelCopy().is_dirty());
+    EXPECT_FALSE(bookmark_node.Get(syncable::IS_UNSYNCED));
+    EXPECT_TRUE(bookmark_node.Get(syncable::IS_UNAPPLIED_UPDATE));
+    EXPECT_TRUE(bookmark_node.Get(IS_DEL));
+    EXPECT_GT(bookmark_node.Get(syncable::SERVER_VERSION), 0);
+    EXPECT_EQ(bookmark_node.Get(syncable::BASE_VERSION), -1);
+  }
 }
 
 // A test harness to exercise the code that processes and passes changes from
@@ -3273,16 +3436,11 @@ TEST_F(SyncManagerChangeProcessingTest, MoveIntoPopulatedFolder) {
     child_a.PutPredecessor(child_b.Get(syncable::ID));
   }
 
-  EXPECT_EQ(2UL, GetChangeListSize());
+  EXPECT_EQ(1UL, GetChangeListSize());
 
-  // Verify that both child A and child B are in the change list, even though
-  // only child A was moved.  The rules state that all siblings of
-  // position-modified items must be included in the list of changes.
-  int64 child_a_pos = FindChangeInList(child_a_id, ChangeRecord::ACTION_UPDATE);
-  int64 child_b_pos = FindChangeInList(child_b_id, ChangeRecord::ACTION_UPDATE);
-
-  // Siblings should appear in left-to-right order.
-  EXPECT_LT(child_b_pos, child_a_pos);
+  // Verify that only child a is in the change list.
+  // (This function will add a failure if the lookup fails.)
+  FindChangeInList(child_a_id, ChangeRecord::ACTION_UPDATE);
 }
 
 // Tests the ordering of deletion changes.

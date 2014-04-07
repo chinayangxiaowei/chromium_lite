@@ -2,15 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/memory/shared_memory.h"
 #include "base/metrics/stats_counters.h"
 #include "base/metrics/stats_table.h"
-#include "base/shared_memory.h"
-#include "base/stringprintf.h"
-#include "base/string_piece.h"
+#include "base/process/kill.h"
+#include "base/strings/string_piece.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/test/multiprocess_test.h"
 #include "base/threading/platform_thread.h"
 #include "base/threading/simple_thread.h"
-#include "base/utf_string_conversions.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/multiprocess_func_list.h"
 
@@ -109,7 +110,7 @@ void StatsTableThread::Run() {
 
 // Create a few threads and have them poke on their counters.
 // See http://crbug.com/10611 for more information.
-#if defined(OS_MACOSX)
+#if defined(OS_MACOSX) || defined(THREAD_SANITIZER)
 #define MAYBE_MultipleThreads DISABLED_MultipleThreads
 #else
 #define MAYBE_MultipleThreads MultipleThreads

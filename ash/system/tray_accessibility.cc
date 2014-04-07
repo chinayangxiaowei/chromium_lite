@@ -14,6 +14,7 @@
 #include "ash/system/tray/tray_details_view.h"
 #include "ash/system/tray/tray_item_more.h"
 #include "ash/system/tray/tray_notification_view.h"
+#include "ash/system/tray/tray_popup_label_button.h"
 #include "grit/ash_resources.h"
 #include "grit/ash_strings.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -35,6 +36,7 @@ enum AccessibilityState {
   A11Y_SPOKEN_FEEDBACK  = 1 << 0,
   A11Y_HIGH_CONTRAST    = 1 << 1,
   A11Y_SCREEN_MAGNIFIER = 1 << 2,
+  A11Y_LARGE_CURSOR     = 1 << 3,
 };
 
 uint32 GetAccessibilityState() {
@@ -46,6 +48,8 @@ uint32 GetAccessibilityState() {
     state |= A11Y_HIGH_CONTRAST;
   if (shell_delegate->IsMagnifierEnabled())
     state |= A11Y_SCREEN_MAGNIFIER;
+  if (shell_delegate->IsLargeCursorEnabled())
+    state |= A11Y_LARGE_CURSOR;
   return state;
 }
 
@@ -64,7 +68,7 @@ class DefaultAccessibilityView : public TrayItemMore {
     ui::ResourceBundle& bundle = ui::ResourceBundle::GetSharedInstance();
     SetImage(bundle.GetImageNamed(IDR_AURA_UBER_TRAY_ACCESSIBILITY_DARK).
                     ToImageSkia());
-    string16 label = bundle.GetLocalizedString(
+    base::string16 label = bundle.GetLocalizedString(
         IDS_ASH_STATUS_TRAY_ACCESSIBILITY);
     SetLabel(label);
     SetAccessibleName(label);
@@ -106,10 +110,13 @@ AccessibilityDetailedView::AccessibilityDetailedView(
         spoken_feedback_view_(NULL),
         high_contrast_view_(NULL),
         screen_magnifier_view_(NULL),
+        large_cursor_view_(NULL),
         help_view_(NULL),
+        settings_view_(NULL),
         spoken_feedback_enabled_(false),
         high_contrast_enabled_(false),
         screen_magnifier_enabled_(false),
+        large_cursor_enabled_(false),
         login_(login) {
 
   Reset();
@@ -132,6 +139,17 @@ void AccessibilityDetailedView::AppendAccessibilityList() {
           IDS_ASH_STATUS_TRAY_ACCESSIBILITY_SPOKEN_FEEDBACK),
       spoken_feedback_enabled_ ? gfx::Font::BOLD : gfx::Font::NORMAL,
       spoken_feedback_enabled_);
+
+  // Large Cursor item is shown only in Login screen.
+  if (login_ == user::LOGGED_IN_NONE) {
+    large_cursor_enabled_ = shell_delegate->IsLargeCursorEnabled();
+    large_cursor_view_ = AddScrollListItem(
+        bundle.GetLocalizedString(
+            IDS_ASH_STATUS_TRAY_ACCESSIBILITY_LARGE_CURSOR),
+        large_cursor_enabled_ ? gfx::Font::BOLD : gfx::Font::NORMAL,
+        large_cursor_enabled_);
+  }
+
   high_contrast_enabled_ = shell_delegate->IsHighContrastEnabled();
   high_contrast_view_ = AddScrollListItem(
       bundle.GetLocalizedString(
@@ -171,14 +189,18 @@ void AccessibilityDetailedView::AppendHelpEntries() {
   bottom_row->AddChildView(help);
   help_view_ = help;
 
-  // TODO(yoshiki): Add "Customize accessibility" button when the customize is
-  // available. crbug.com/158281
+  TrayPopupLabelButton* settings = new TrayPopupLabelButton(
+      this,
+      bundle.GetLocalizedString(
+          IDS_ASH_STATUS_TRAY_ACCESSIBILITY_SETTINGS));
+  bottom_row->AddChildView(settings);
+  settings_view_ = settings;
 
   AddChildView(bottom_row);
 }
 
 HoverHighlightView* AccessibilityDetailedView::AddScrollListItem(
-    const string16& text,
+    const base::string16& text,
     gfx::Font::FontStyle style,
     bool checked) {
   HoverHighlightView* container = new HoverHighlightView(this);
@@ -197,6 +219,9 @@ void AccessibilityDetailedView::OnViewClicked(views::View* sender) {
     shell_delegate->ToggleHighContrast();
   } else if (sender == screen_magnifier_view_) {
     shell_delegate->SetMagnifierEnabled(!shell_delegate->IsMagnifierEnabled());
+  } else if (large_cursor_view_ && sender == large_cursor_view_) {
+    shell_delegate->
+        SetLargeCursorEnabled(!shell_delegate->IsLargeCursorEnabled());
   }
 }
 
@@ -206,6 +231,8 @@ void AccessibilityDetailedView::ButtonPressed(views::Button* sender,
       Shell::GetInstance()->system_tray_delegate();
   if (sender == help_view_)
     tray_delegate->ShowAccessibilityHelp();
+  else if (sender == settings_view_)
+    tray_delegate->ShowAccessibilitySettings();
 }
 
 }  // namespace tray
@@ -252,8 +279,6 @@ bool TrayAccessibility::GetInitialVisibility() {
 views::View* TrayAccessibility::CreateDefaultView(user::LoginStatus status) {
   CHECK(default_ == NULL);
 
-  login_ = status;
-
   // Shows accessibility menu if:
   // - on login screen (not logged in);
   // - "Enable accessibility menu" on chrome://settings is checked;
@@ -276,8 +301,6 @@ views::View* TrayAccessibility::CreateDefaultView(user::LoginStatus status) {
 views::View* TrayAccessibility::CreateDetailedView(user::LoginStatus status) {
   CHECK(detailed_popup_ == NULL);
   CHECK(detailed_menu_ == NULL);
-
-  login_ = status;
 
   if (request_popup_view_) {
     detailed_popup_ = new tray::AccessibilityPopupView(this);

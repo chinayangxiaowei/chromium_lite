@@ -139,11 +139,67 @@ def GenerateHeader(out, filenode, releases):
     out.Write(CommentLines(['*',' @}', '']) + '\n')
 
 
+def CheckTypedefs(filenode, releases):
+  """Checks that typedefs don't specify callbacks that take some structs.
+
+  See http://crbug.com/233439 for details.
+  """
+  cgen = CGen()
+  # TODO(teravest): Fix the following callback to pass PP_Var by pointer
+  # instead of by value.
+  node_whitelist = ['PP_Ext_Alarms_OnAlarm_Func_Dev_0_1']
+  for node in filenode.GetListOf('Typedef'):
+    if node.GetName() in node_whitelist:
+      continue
+    build_list = node.GetUniqueReleases(releases)
+    callnode = node.GetOneOf('Callspec')
+    if callnode:
+      for param in callnode.GetListOf('Param'):
+        if param.GetListOf('Array'):
+          continue
+        if cgen.GetParamMode(param) != 'in':
+          continue
+        t = param.GetType(build_list[0])
+        while t.IsA('Typedef'):
+          t = t.GetType(build_list[0])
+        if t.IsA('Struct'):
+          raise Exception('%s is a struct in callback %s. '
+                          'See http://crbug.com/233439' %
+                          (t.GetName(), node.GetName()))
+
+
+def CheckPassByValue(filenode, releases):
+  """Checks that new pass-by-value structs are not introduced.
+
+  See http://crbug.com/233439 for details.
+  """
+  cgen = CGen()
+  # DO NOT add any more entries to this whitelist.
+  # http://crbug.com/233439
+  type_whitelist = ['PP_ArrayOutput', 'PP_CompletionCallback',
+                    'PP_Ext_EventListener', 'PP_FloatPoint',
+                    'PP_Point', 'PP_TouchPoint', 'PP_Var']
+  nodes_to_check = filenode.GetListOf('Struct')
+  nodes_to_check.extend(filenode.GetListOf('Union'))
+  for node in nodes_to_check:
+    if node.GetName() in type_whitelist:
+      continue
+    build_list = node.GetUniqueReleases(releases)
+    if node.GetProperty('passByValue'):
+      raise Exception('%s is a new passByValue struct or union. '
+                      'See http://crbug.com/233439' % node.GetName())
+    if node.GetProperty('returnByValue'):
+      raise Exception('%s is a new returnByValue struct or union. '
+                      'See http://crbug.com/233439' % node.GetName())
+
+
 class HGen(GeneratorByFile):
   def __init__(self):
     Generator.__init__(self, 'C Header', 'cgen', 'Generate the C headers.')
 
   def GenerateFile(self, filenode, releases, options):
+    CheckTypedefs(filenode, releases)
+    CheckPassByValue(filenode, releases)
     savename = GetHeaderFromNode(filenode, GetOption('dstroot'))
     my_min, my_max = filenode.GetMinMax(releases)
     if my_min > releases[-1] or my_max < releases[0]:

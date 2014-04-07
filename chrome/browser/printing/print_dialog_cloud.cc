@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/printing/print_dialog_cloud.h"
-#include "chrome/browser/printing/print_dialog_cloud_internal.h"
+
 
 #include "base/base64.h"
 #include "base/bind.h"
@@ -12,11 +12,12 @@
 #include "base/file_util.h"
 #include "base/json/json_reader.h"
 #include "base/prefs/pref_service.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/devtools/devtools_window.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/printing/cloud_print/cloud_print_url.h"
+#include "chrome/browser/printing/print_dialog_cloud_internal.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser_dialogs.h"
@@ -37,7 +38,7 @@
 #include "content/public/browser/web_ui.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "webkit/glue/webpreferences.h"
+#include "webkit/common/webpreferences.h"
 
 #if defined(USE_AURA)
 #include "ui/aura/root_window.h"
@@ -212,7 +213,7 @@ CloudPrintDataSender::~CloudPrintDataSender() {}
 // needed. - 4/1/2010
 void CloudPrintDataSender::SendPrintData() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
-  if (!data_ || !data_->size())
+  if (!data_.get() || !data_->size())
     return;
 
   std::string base64_data;
@@ -336,8 +337,7 @@ void CloudPrintFlowHandler::Observe(
         // script permissions required for the web UI.
         RenderViewHost* rvh = web_ui()->GetWebContents()->GetRenderViewHost();
         if (rvh) {
-          webkit_glue::WebPreferences webkit_prefs =
-              rvh->GetWebkitPreferences();
+          WebPreferences webkit_prefs = rvh->GetWebkitPreferences();
           webkit_prefs.allow_scripts_to_close_windows = true;
           rvh->UpdateWebkitPreferences(webkit_prefs);
         } else {
@@ -373,8 +373,11 @@ CloudPrintFlowHandler::CreateCloudPrintDataSender() {
   DCHECK(web_ui());
   print_data_helper_.reset(new CloudPrintDataSenderHelper(web_ui()));
   scoped_refptr<CloudPrintDataSender> sender(
-      new CloudPrintDataSender(print_data_helper_.get(), print_job_title_,
-                               print_ticket_, file_type_, data_));
+      new CloudPrintDataSender(print_data_helper_.get(),
+                               print_job_title_,
+                               print_ticket_,
+                               file_type_,
+                               data_.get()));
   return sender;
 }
 
@@ -679,22 +682,22 @@ void CreateDialogForFileImpl(content::BrowserContext* browser_context,
                  browser_context, modal_parent, data, print_job_title,
                  print_ticket, file_type));
   if (delete_on_close)
-    file_util::Delete(path_to_file, false);
+    base::DeleteFile(path_to_file, false);
 }
 
 }  // namespace internal_cloud_print_helpers
 
 namespace print_dialog_cloud {
 
-void RegisterUserPrefs(PrefRegistrySyncable* registry) {
+void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
   registry->RegisterIntegerPref(
       prefs::kCloudPrintDialogWidth,
       kDefaultWidth,
-      PrefRegistrySyncable::UNSYNCABLE_PREF);
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterIntegerPref(
       prefs::kCloudPrintDialogHeight,
       kDefaultHeight,
-      PrefRegistrySyncable::UNSYNCABLE_PREF);
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
 }
 
 // Called on the FILE or UI thread.  This is the main entry point into creating

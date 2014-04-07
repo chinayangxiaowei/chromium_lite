@@ -7,8 +7,8 @@
 #include "base/bind.h"
 #include "chrome/browser/chromeos/policy/device_policy_decoder_chromeos.h"
 #include "chrome/browser/chromeos/policy/enterprise_install_attributes.h"
-#include "chrome/browser/chromeos/policy/proto/chrome_device_policy.pb.h"
-#include "chrome/browser/policy/cloud/proto/device_management_backend.pb.h"
+#include "chrome/browser/policy/proto/chromeos/chrome_device_policy.pb.h"
+#include "chrome/browser/policy/proto/cloud/device_management_backend.pb.h"
 
 namespace em = enterprise_management;
 
@@ -19,7 +19,7 @@ DeviceCloudPolicyStoreChromeOS::DeviceCloudPolicyStoreChromeOS(
     EnterpriseInstallAttributes* install_attributes)
     : device_settings_service_(device_settings_service),
       install_attributes_(install_attributes),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {
+      weak_factory_(this) {
   device_settings_service_->AddObserver(this);
 }
 
@@ -35,8 +35,8 @@ void DeviceCloudPolicyStoreChromeOS::Store(
   scoped_refptr<chromeos::OwnerKey> owner_key(
       device_settings_service_->GetOwnerKey());
   if (!install_attributes_->IsEnterpriseDevice() ||
-      !device_settings_service_->policy_data() ||
-      !owner_key || !owner_key->public_key()) {
+      !device_settings_service_->policy_data() || !owner_key.get() ||
+      !owner_key->public_key()) {
     status_ = STATUS_BAD_STATE;
     NotifyStoreError();
     return;

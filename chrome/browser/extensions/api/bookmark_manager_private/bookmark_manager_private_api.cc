@@ -23,13 +23,14 @@
 #include "chrome/browser/extensions/extension_web_ui.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/bookmarks/bookmark_drag_drop.h"
-#include "chrome/browser/view_type_utils.h"
+#include "chrome/common/extensions/api/bookmark_manager_private.h"
 #include "chrome/common/pref_names.h"
 #include "components/user_prefs/user_prefs.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_view.h"
 #include "content/public/browser/web_ui.h"
+#include "extensions/browser/view_type_utils.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/webui/web_ui_util.h"
@@ -41,7 +42,16 @@
 namespace extensions {
 
 namespace bookmark_keys = bookmark_api_constants;
+namespace CanPaste = api::bookmark_manager_private::CanPaste;
+namespace Copy = api::bookmark_manager_private::Copy;
+namespace Cut = api::bookmark_manager_private::Cut;
+namespace Drop = api::bookmark_manager_private::Drop;
+namespace GetSubtree = api::bookmark_manager_private::GetSubtree;
 namespace manager_keys = bookmark_manager_api_constants;
+namespace Paste = api::bookmark_manager_private::Paste;
+namespace RemoveTrees = api::bookmark_manager_private::RemoveTrees;
+namespace SortChildren = api::bookmark_manager_private::SortChildren;
+namespace StartDrag = api::bookmark_manager_private::StartDrag;
 
 using content::WebContents;
 
@@ -49,11 +59,8 @@ namespace {
 
 // Returns a single bookmark node from the argument ID.
 // This returns NULL in case of failure.
-const BookmarkNode* GetNodeFromArguments(BookmarkModel* model,
-    const ListValue* args) {
-  std::string id_string;
-  if (!args->GetString(0, &id_string))
-    return NULL;
+const BookmarkNode* GetNodeFromString(
+    BookmarkModel* model, const std::string& id_string) {
   int64 id;
   if (!base::StringToInt64(id_string, &id))
     return NULL;
@@ -62,25 +69,15 @@ const BookmarkNode* GetNodeFromArguments(BookmarkModel* model,
 
 // Gets a vector of bookmark nodes from the argument list of IDs.
 // This returns false in the case of failure.
-bool GetNodesFromArguments(BookmarkModel* model, const ListValue* args,
-    size_t args_index, std::vector<const BookmarkNode*>* nodes) {
+bool GetNodesFromVector(BookmarkModel* model,
+                        const std::vector<std::string>& id_strings,
+                        std::vector<const BookmarkNode*>* nodes) {
 
-  const ListValue* ids;
-  if (!args->GetList(args_index, &ids))
+  if (id_strings.empty())
     return false;
 
-  size_t count = ids->GetSize();
-  if (count == 0)
-    return false;
-
-  for (size_t i = 0; i < count; ++i) {
-    std::string id_string;
-    if (!ids->GetString(i, &id_string))
-      return false;
-    int64 id;
-    if (!base::StringToInt64(id_string, &id))
-      return false;
-    const BookmarkNode* node = model->GetNodeByID(id);
+  for (size_t i = 0; i < id_strings.size(); ++i) {
+    const BookmarkNode* node = GetNodeFromString(model, id_strings[i]);
     if (!node)
       return false;
     nodes->push_back(node);
@@ -92,8 +89,8 @@ bool GetNodesFromArguments(BookmarkModel* model, const ListValue* args,
 // Recursively adds a node to a list. This is by used |BookmarkNodeDataToJSON|
 // when the data comes from the current profile. In this case we have a
 // BookmarkNode since we got the data from the current profile.
-void AddNodeToList(ListValue* list, const BookmarkNode& node) {
-  DictionaryValue* dict = new DictionaryValue();
+void AddNodeToList(base::ListValue* list, const BookmarkNode& node) {
+  base::DictionaryValue* dict = new base::DictionaryValue();
 
   // Add id and parentId so we can associate the data with existing nodes on the
   // client side.
@@ -108,7 +105,7 @@ void AddNodeToList(ListValue* list, const BookmarkNode& node) {
 
   dict->SetString(bookmark_keys::kTitleKey, node.GetTitle());
 
-  ListValue* children = new ListValue();
+  base::ListValue* children = new base::ListValue();
   for (int i = 0; i < node.child_count(); ++i)
     AddNodeToList(children, *node.GetChild(i));
   dict->Set(bookmark_keys::kChildrenKey, children);
@@ -119,16 +116,16 @@ void AddNodeToList(ListValue* list, const BookmarkNode& node) {
 // Recursively adds an element to a list. This is used by
 // |BookmarkNodeDataToJSON| when the data comes from a different profile. When
 // the data comes from a different profile we do not have any IDs or parent IDs.
-void AddElementToList(ListValue* list,
+void AddElementToList(base::ListValue* list,
                       const BookmarkNodeData::Element& element) {
-  DictionaryValue* dict = new DictionaryValue();
+  base::DictionaryValue* dict = new base::DictionaryValue();
 
   if (element.is_url)
     dict->SetString(bookmark_keys::kUrlKey, element.url.spec());
 
   dict->SetString(bookmark_keys::kTitleKey, element.title);
 
-  ListValue* children = new ListValue();
+  base::ListValue* children = new base::ListValue();
   for (size_t i = 0; i < element.children.size(); ++i)
     AddElementToList(children, element.children[i]);
   dict->Set(bookmark_keys::kChildrenKey, children);
@@ -138,12 +135,12 @@ void AddElementToList(ListValue* list,
 
 // Builds the JSON structure based on the BookmarksDragData.
 void BookmarkNodeDataToJSON(Profile* profile, const BookmarkNodeData& data,
-                            ListValue* args) {
+                            base::ListValue* args) {
   bool same_profile = data.IsFromProfile(profile);
-  DictionaryValue* value = new DictionaryValue();
+  base::DictionaryValue* value = new base::DictionaryValue();
   value->SetBoolean(manager_keys::kSameProfileKey, same_profile);
 
-  ListValue* list = new ListValue();
+  base::ListValue* list = new base::ListValue();
   if (same_profile) {
     std::vector<const BookmarkNode*> nodes = data.GetNodes(profile);
     for (size_t i = 0; i < nodes.size(); ++i)
@@ -180,7 +177,7 @@ BookmarkManagerPrivateEventRouter::~BookmarkManagerPrivateEventRouter() {
 
 void BookmarkManagerPrivateEventRouter::DispatchEvent(
     const char* event_name,
-    scoped_ptr<ListValue> args) {
+    scoped_ptr<base::ListValue> args) {
   if (!ExtensionSystem::Get(profile_)->event_router())
     return;
 
@@ -194,7 +191,7 @@ void BookmarkManagerPrivateEventRouter::DispatchDragEvent(
   if (data.size() == 0)
     return;
 
-  scoped_ptr<ListValue> args(new ListValue());
+  scoped_ptr<base::ListValue> args(new base::ListValue());
   BookmarkNodeDataToJSON(profile_, data, args.get());
   DispatchEvent(event_name, args.Pass());
 }
@@ -234,30 +231,38 @@ void BookmarkManagerPrivateEventRouter::ClearBookmarkNodeData() {
   bookmark_drag_data_.Clear();
 }
 
-bool ClipboardBookmarkManagerFunction::CopyOrCut(bool cut) {
+bool ClipboardBookmarkManagerFunction::CopyOrCut(bool cut,
+    const std::vector<std::string>& id_list) {
   BookmarkModel* model = BookmarkModelFactory::GetForProfile(profile());
   std::vector<const BookmarkNode*> nodes;
-  EXTENSION_FUNCTION_VALIDATE(GetNodesFromArguments(model, args_.get(),
-                                                    0, &nodes));
+  EXTENSION_FUNCTION_VALIDATE(GetNodesFromVector(model, id_list, &nodes));
   bookmark_utils::CopyToClipboard(model, nodes, cut);
   return true;
 }
 
 bool BookmarkManagerPrivateCopyFunction::RunImpl() {
-  return CopyOrCut(false);
+  scoped_ptr<Copy::Params> params(Copy::Params::Create(*args_));
+  EXTENSION_FUNCTION_VALIDATE(params);
+  return CopyOrCut(false, params->id_list);
 }
 
 bool BookmarkManagerPrivateCutFunction::RunImpl() {
   if (!EditBookmarksEnabled())
     return false;
-  return CopyOrCut(true);
+
+  scoped_ptr<Cut::Params> params(Cut::Params::Create(*args_));
+  EXTENSION_FUNCTION_VALIDATE(params);
+  return CopyOrCut(true, params->id_list);
 }
 
 bool BookmarkManagerPrivatePasteFunction::RunImpl() {
   if (!EditBookmarksEnabled())
     return false;
+
+  scoped_ptr<Paste::Params> params(Paste::Params::Create(*args_));
+  EXTENSION_FUNCTION_VALIDATE(params);
   BookmarkModel* model = BookmarkModelFactory::GetForProfile(profile());
-  const BookmarkNode* parent_node = GetNodeFromArguments(model, args_.get());
+  const BookmarkNode* parent_node = GetNodeFromString(model, params->parent_id);
   if (!parent_node) {
     error_ = bookmark_keys::kNoParentError;
     return false;
@@ -269,7 +274,8 @@ bool BookmarkManagerPrivatePasteFunction::RunImpl() {
   // We want to use the highest index of the selected nodes as a destination.
   std::vector<const BookmarkNode*> nodes;
   // No need to test return value, if we got an empty list, we insert at end.
-  GetNodesFromArguments(model, args_.get(), 1, &nodes);
+  if (params->selected_id_list)
+    GetNodesFromVector(model, *params->selected_id_list, &nodes);
   int highest_index = -1;  // -1 means insert at end of list.
   for (size_t i = 0; i < nodes.size(); ++i) {
     // + 1 so that we insert after the selection.
@@ -285,8 +291,12 @@ bool BookmarkManagerPrivatePasteFunction::RunImpl() {
 bool BookmarkManagerPrivateCanPasteFunction::RunImpl() {
   if (!EditBookmarksEnabled())
     return false;
+
+  scoped_ptr<CanPaste::Params> params(CanPaste::Params::Create(*args_));
+  EXTENSION_FUNCTION_VALIDATE(params);
+
   BookmarkModel* model = BookmarkModelFactory::GetForProfile(profile());
-  const BookmarkNode* parent_node = GetNodeFromArguments(model, args_.get());
+  const BookmarkNode* parent_node = GetNodeFromString(model, params->parent_id);
   if (!parent_node) {
     error_ = bookmark_keys::kNoParentError;
     return false;
@@ -299,8 +309,12 @@ bool BookmarkManagerPrivateCanPasteFunction::RunImpl() {
 bool BookmarkManagerPrivateSortChildrenFunction::RunImpl() {
   if (!EditBookmarksEnabled())
     return false;
+
+  scoped_ptr<SortChildren::Params> params(SortChildren::Params::Create(*args_));
+  EXTENSION_FUNCTION_VALIDATE(params);
+
   BookmarkModel* model = BookmarkModelFactory::GetForProfile(profile());
-  const BookmarkNode* parent_node = GetNodeFromArguments(model, args_.get());
+  const BookmarkNode* parent_node = GetNodeFromString(model, params->parent_id);
   if (!parent_node) {
     error_ = bookmark_keys::kNoParentError;
     return false;
@@ -310,20 +324,18 @@ bool BookmarkManagerPrivateSortChildrenFunction::RunImpl() {
 }
 
 bool BookmarkManagerPrivateGetStringsFunction::RunImpl() {
-  DictionaryValue* localized_strings = new DictionaryValue();
+  base::DictionaryValue* localized_strings = new base::DictionaryValue();
 
   localized_strings->SetString("title",
       l10n_util::GetStringUTF16(IDS_BOOKMARK_MANAGER_TITLE));
   localized_strings->SetString("search_button",
       l10n_util::GetStringUTF16(IDS_BOOKMARK_MANAGER_SEARCH_BUTTON));
+  localized_strings->SetString("organize_menu",
+      l10n_util::GetStringUTF16(IDS_BOOKMARK_MANAGER_ORGANIZE_MENU));
   localized_strings->SetString("show_in_folder",
       l10n_util::GetStringUTF16(IDS_BOOKMARK_MANAGER_SHOW_IN_FOLDER));
   localized_strings->SetString("sort",
       l10n_util::GetStringUTF16(IDS_BOOKMARK_MANAGER_SORT));
-  localized_strings->SetString("organize_menu",
-      l10n_util::GetStringUTF16(IDS_BOOKMARK_MANAGER_ORGANIZE_MENU));
-  localized_strings->SetString("tools_menu",
-      l10n_util::GetStringUTF16(IDS_BOOKMARK_MANAGER_TOOLS_MENU));
   localized_strings->SetString("import_menu",
       l10n_util::GetStringUTF16(IDS_BOOKMARK_MANAGER_IMPORT_MENU));
   localized_strings->SetString("export_menu",
@@ -374,8 +386,6 @@ bool BookmarkManagerPrivateGetStringsFunction::RunImpl() {
       l10n_util::GetStringUTF16(IDS_BOOKMARK_MANAGER_RECENT));
   localized_strings->SetString("search",
       l10n_util::GetStringUTF16(IDS_BOOKMARK_MANAGER_SEARCH));
-  localized_strings->SetString("bookmark_all_tabs",
-      l10n_util::GetStringUTF16(IDS_BOOKMARK_MANAGER_BOOKMARK_ALL_TABS));
   localized_strings->SetString("save",
       l10n_util::GetStringUTF16(IDS_SAVE));
   localized_strings->SetString("cancel",
@@ -395,14 +405,18 @@ bool BookmarkManagerPrivateGetStringsFunction::RunImpl() {
 bool BookmarkManagerPrivateStartDragFunction::RunImpl() {
   if (!EditBookmarksEnabled())
     return false;
+
+  scoped_ptr<StartDrag::Params> params(StartDrag::Params::Create(*args_));
+  EXTENSION_FUNCTION_VALIDATE(params);
+
   BookmarkModel* model = BookmarkModelFactory::GetForProfile(profile());
   std::vector<const BookmarkNode*> nodes;
   EXTENSION_FUNCTION_VALIDATE(
-      GetNodesFromArguments(model, args_.get(), 0, &nodes));
+      GetNodesFromVector(model, params->id_list, &nodes));
 
   WebContents* web_contents =
       WebContents::FromRenderViewHost(render_view_host_);
-  if (chrome::GetViewType(web_contents) == chrome::VIEW_TYPE_TAB_CONTENTS) {
+  if (GetViewType(web_contents) == VIEW_TYPE_TAB_CONTENTS) {
     WebContents* web_contents =
         dispatcher()->delegate()->GetAssociatedWebContents();
     CHECK(web_contents);
@@ -420,32 +434,26 @@ bool BookmarkManagerPrivateDropFunction::RunImpl() {
   if (!EditBookmarksEnabled())
     return false;
 
-  BookmarkModel* model =BookmarkModelFactory::GetForProfile(profile());
+  scoped_ptr<Drop::Params> params(Drop::Params::Create(*args_));
+  EXTENSION_FUNCTION_VALIDATE(params);
 
-  int64 id;
-  std::string id_string;
-  EXTENSION_FUNCTION_VALIDATE(args_->GetString(0, &id_string));
+  BookmarkModel* model = BookmarkModelFactory::GetForProfile(profile());
 
-  if (!base::StringToInt64(id_string, &id)) {
-    error_ = bookmark_keys::kInvalidIdError;
-    return false;
-  }
-
-  const BookmarkNode* drop_parent = model->GetNodeByID(id);
+  const BookmarkNode* drop_parent = GetNodeFromString(model, params->parent_id);
   if (!drop_parent) {
     error_ = bookmark_keys::kNoParentError;
     return false;
   }
 
   int drop_index;
-  if (HasOptionalArgument(1))
-    EXTENSION_FUNCTION_VALIDATE(args_->GetInteger(1, &drop_index));
+  if (params->index)
+    drop_index = *params->index;
   else
     drop_index = drop_parent->child_count();
 
   WebContents* web_contents =
       WebContents::FromRenderViewHost(render_view_host_);
-  if (chrome::GetViewType(web_contents) == chrome::VIEW_TYPE_TAB_CONTENTS) {
+  if (GetViewType(web_contents) == VIEW_TYPE_TAB_CONTENTS) {
     WebContents* web_contents =
         dispatcher()->delegate()->GetAssociatedWebContents();
     CHECK(web_contents);
@@ -472,28 +480,30 @@ bool BookmarkManagerPrivateDropFunction::RunImpl() {
 }
 
 bool BookmarkManagerPrivateGetSubtreeFunction::RunImpl() {
+  scoped_ptr<GetSubtree::Params> params(GetSubtree::Params::Create(*args_));
+  EXTENSION_FUNCTION_VALIDATE(params);
+
   BookmarkModel* model = BookmarkModelFactory::GetForProfile(profile());
-  const BookmarkNode* node;
-  int64 id;
-  std::string id_string;
-  EXTENSION_FUNCTION_VALIDATE(args_->GetString(0, &id_string));
-  bool folders_only;
-  EXTENSION_FUNCTION_VALIDATE(args_->GetBoolean(1, &folders_only));
-  if (id_string == "") {
+  const BookmarkNode* node = NULL;
+
+  if (params->id == "") {
     node = model->root_node();
   } else {
-     if (!base::StringToInt64(id_string, &id)) {
+    int64 id;
+    if (!base::StringToInt64(params->id, &id)) {
       error_ = bookmark_keys::kInvalidIdError;
       return false;
     }
     node = model->GetNodeByID(id);
   }
+
   if (!node) {
     error_ = bookmark_keys::kNoNodeError;
     return false;
   }
-  scoped_ptr<ListValue> json(new ListValue());
-  if (folders_only)
+
+  scoped_ptr<base::ListValue> json(new base::ListValue());
+  if (params->folders_only)
     bookmark_api_helpers::AddNodeFoldersOnly(node, json.get(), true);
   else
     bookmark_api_helpers::AddNode(node, json.get(), true);
@@ -502,7 +512,7 @@ bool BookmarkManagerPrivateGetSubtreeFunction::RunImpl() {
 }
 
 bool BookmarkManagerPrivateCanEditFunction::RunImpl() {
-  PrefService* prefs = components::UserPrefs::Get(profile_);
+  PrefService* prefs = user_prefs::UserPrefs::Get(profile_);
   SetResult(new base::FundamentalValue(
       prefs->GetBoolean(prefs::kEditBookmarksEnabled)));
   return true;
@@ -522,6 +532,24 @@ bool BookmarkManagerPrivateCanOpenNewWindowsFunction::RunImpl() {
 #endif  // OS_WIN
 
   SetResult(new base::FundamentalValue(can_open_new_windows));
+  return true;
+}
+
+bool BookmarkManagerPrivateRemoveTreesFunction::RunImpl() {
+  scoped_ptr<RemoveTrees::Params> params(RemoveTrees::Params::Create(*args_));
+  EXTENSION_FUNCTION_VALIDATE(params);
+
+  BookmarkModel* model = BookmarkModelFactory::GetForProfile(profile());
+  int64 id;
+  for (size_t i = 0; i < params->id_list.size(); ++i) {
+    if (!base::StringToInt64(params->id_list[i], &id)) {
+      error_ = bookmark_api_constants::kInvalidIdError;
+      return false;
+    }
+    if (!bookmark_api_helpers::RemoveNode(model, id, true, &error_))
+      return false;
+  }
+
   return true;
 }
 

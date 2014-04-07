@@ -9,27 +9,14 @@
 #include <fileapi.h>
 
 #include "base/win/wrapped_window_proc.h"
-#include "chrome/browser/storage_monitor/media_storage_util.h"
 #include "chrome/browser/storage_monitor/portable_device_watcher_win.h"
 #include "chrome/browser/storage_monitor/removable_device_constants.h"
+#include "chrome/browser/storage_monitor/storage_info.h"
 #include "chrome/browser/storage_monitor/volume_mount_watcher_win.h"
 
 namespace chrome {
 
-namespace {
-
-const char16 kWindowClassName[] = L"Chrome_StorageMonitorWindow";
-
-}  // namespace
-
-
 // StorageMonitorWin -------------------------------------------------------
-
-// static
-StorageMonitorWin* StorageMonitorWin::Create() {
-  return new StorageMonitorWin(new VolumeMountWatcherWin(),
-                               new PortableDeviceWatcherWin());
-}
 
 StorageMonitorWin::StorageMonitorWin(
     VolumeMountWatcherWin* volume_mount_watcher,
@@ -59,7 +46,7 @@ StorageMonitorWin::~StorageMonitorWin() {
 void StorageMonitorWin::Init() {
   WNDCLASSEX window_class;
   base::win::InitializeWindowClass(
-      kWindowClassName,
+      L"Chrome_StorageMonitorWindow",
       &base::win::WrappedWindowProc<StorageMonitorWin::WndProcThunk>,
       0, 0, 0, NULL, NULL, NULL, NULL, NULL,
       &window_class);
@@ -76,62 +63,62 @@ void StorageMonitorWin::Init() {
 
 bool StorageMonitorWin::GetStorageInfoForPath(const base::FilePath& path,
                                               StorageInfo* device_info) const {
-  string16 location;
-  std::string unique_id;
-  string16 name;
-  bool removable;
-  uint64 total_size_in_bytes;
-  if (!GetDeviceInfo(path, &location, &unique_id, &name, &removable,
-                     &total_size_in_bytes)) {
-    return false;
-  }
+  DCHECK(device_info);
 
-  // To compute the device id, the device type is needed.  For removable
-  // devices, that requires knowing if there's a DCIM directory, which would
-  // require bouncing over to the file thread.  Instead, just iterate the
-  // devices.
-  std::string device_id;
-  if (removable) {
-    std::vector<StorageInfo> attached_devices = GetAttachedStorage();
-    bool found = false;
-    for (size_t i = 0; i < attached_devices.size(); i++) {
-      MediaStorageUtil::Type type;
-      std::string id;
-      MediaStorageUtil::CrackDeviceId(attached_devices[i].device_id, &type,
-                                      &id);
-      if (id == unique_id) {
-        found = true;
-        device_id = attached_devices[i].device_id;
-        break;
+  // TODO(gbillock): Move this logic up to StorageMonitor.
+  // If we already know the StorageInfo for the path, just return it.
+  // This will account for portable devices as well.
+  std::vector<StorageInfo> attached_devices = GetAllAvailableStorages();
+  size_t best_parent = attached_devices.size();
+  size_t best_length = 0;
+  for (size_t i = 0; i < attached_devices.size(); i++) {
+    if (!StorageInfo::IsRemovableDevice(attached_devices[i].device_id()))
+      continue;
+    base::FilePath relative;
+    if (base::FilePath(attached_devices[i].location()).AppendRelativePath(
+            path, &relative)) {
+      // Note: the relative path is longer for shorter shared path between
+      // the path and the device mount point, so we want the shortest
+      // relative path.
+      if (relative.value().size() < best_length) {
+        best_parent = i;
+        best_length = relative.value().size();
       }
     }
-    if (!found)
-      return false;
-  } else {
-    device_id = MediaStorageUtil::MakeDeviceId(
-        MediaStorageUtil::FIXED_MASS_STORAGE, unique_id);
+  }
+  if (best_parent != attached_devices.size()) {
+    *device_info = attached_devices[best_parent];
+    return true;
   }
 
-  if (device_info) {
-    device_info->device_id = device_id;
-    device_info->name = name;
-    device_info->location = location;
-  }
-  return true;
+  return GetDeviceInfo(path, device_info);
 }
 
-uint64 StorageMonitorWin::GetStorageSize(
-    const base::FilePath::StringType& location) const {
-  return volume_mount_watcher_->GetStorageSize(location);
+void StorageMonitorWin::EjectDevice(
+    const std::string& device_id,
+    base::Callback<void(EjectStatus)> callback) {
+  StorageInfo::Type type;
+
+  if (!StorageInfo::CrackDeviceId(device_id, &type, NULL)) {
+    callback.Run(EJECT_FAILURE);
+    return;
+  }
+
+  if (type == StorageInfo::MTP_OR_PTP)
+    portable_device_watcher_->EjectDevice(device_id, callback);
+  else if (StorageInfo::IsRemovableDevice(device_id))
+    volume_mount_watcher_->EjectDevice(device_id, callback);
+  else
+    callback.Run(EJECT_FAILURE);
 }
 
 bool StorageMonitorWin::GetMTPStorageInfoFromDeviceId(
     const std::string& storage_device_id,
-    string16* device_location,
-    string16* storage_object_id) const {
-  MediaStorageUtil::Type type;
-  MediaStorageUtil::CrackDeviceId(storage_device_id, &type, NULL);
-  return ((type == MediaStorageUtil::MTP_OR_PTP) &&
+    base::string16* device_location,
+    base::string16* storage_object_id) const {
+  StorageInfo::Type type;
+  StorageInfo::CrackDeviceId(storage_device_id, &type, NULL);
+  return ((type == StorageInfo::MTP_OR_PTP) &&
       portable_device_watcher_->GetMTPStorageInfoFromDeviceId(
           storage_device_id, device_location, storage_object_id));
 }
@@ -160,22 +147,23 @@ LRESULT CALLBACK StorageMonitorWin::WndProc(HWND hwnd, UINT message,
 }
 
 bool StorageMonitorWin::GetDeviceInfo(const base::FilePath& device_path,
-                                      string16* device_location,
-                                      std::string* unique_id,
-                                      string16* name,
-                                      bool* removable,
-                                      uint64* total_size_in_bytes) const {
+                                      StorageInfo* info) const {
+  DCHECK(info);
+
   // TODO(kmadhusu) Implement PortableDeviceWatcherWin::GetDeviceInfo()
   // function when we have the functionality to add a sub directory of
   // portable device as a media gallery.
-  return volume_mount_watcher_->GetDeviceInfo(device_path, device_location,
-                                              unique_id, name, removable,
-                                              total_size_in_bytes);
+  return volume_mount_watcher_->GetDeviceInfo(device_path, info);
 }
 
 void StorageMonitorWin::OnDeviceChange(UINT event_type, LPARAM data) {
   volume_mount_watcher_->OnWindowMessage(event_type, data);
   portable_device_watcher_->OnWindowMessage(event_type, data);
+}
+
+StorageMonitor* StorageMonitor::Create() {
+  return new StorageMonitorWin(new VolumeMountWatcherWin(),
+                               new PortableDeviceWatcherWin());
 }
 
 }  // namespace chrome

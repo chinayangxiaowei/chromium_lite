@@ -116,6 +116,28 @@ class FakeDatagramServerSocket : public net::DatagramServerSocket {
     NOTIMPLEMENTED();
   }
 
+  virtual int JoinGroup(
+      const net::IPAddressNumber& group_address) const OVERRIDE {
+    NOTIMPLEMENTED();
+    return net::ERR_NOT_IMPLEMENTED;
+  }
+
+  virtual int LeaveGroup(
+      const net::IPAddressNumber& group_address) const OVERRIDE {
+    NOTIMPLEMENTED();
+    return net::ERR_NOT_IMPLEMENTED;
+  }
+
+  virtual int SetMulticastTimeToLive(int time_to_live) OVERRIDE {
+    NOTIMPLEMENTED();
+    return net::ERR_NOT_IMPLEMENTED;
+  }
+
+  virtual int SetMulticastLoopbackMode(bool loopback) OVERRIDE {
+    NOTIMPLEMENTED();
+    return net::ERR_NOT_IMPLEMENTED;
+  }
+
  private:
   net::IPEndPoint address_;
   std::deque<UDPPacket>* sent_packets_;
@@ -164,6 +186,11 @@ class P2PSocketHostUdpTest : public testing::Test {
 // Verify that we can send STUN messages before we receive anything
 // from the other side.
 TEST_F(P2PSocketHostUdpTest, SendStunNoAuth) {
+  EXPECT_CALL(sender_, Send(
+      MatchMessage(static_cast<uint32>(P2PMsg_OnSendComplete::ID))))
+      .Times(3)
+      .WillRepeatedly(DoAll(DeleteArg<0>(), Return(true)));
+
   std::vector<char> packet1;
   CreateStunRequest(&packet1);
   socket_host_->Send(dest1_, packet1);
@@ -208,6 +235,9 @@ TEST_F(P2PSocketHostUdpTest, SendAfterStunRequest) {
   socket_->ReceivePacket(dest1_, request_packet);
 
   // Now we should be able to send any data to |dest1_|.
+  EXPECT_CALL(sender_, Send(
+      MatchMessage(static_cast<uint32>(P2PMsg_OnSendComplete::ID))))
+      .WillOnce(DoAll(DeleteArg<0>(), Return(true)));
   std::vector<char> packet;
   CreateRandomPacket(&packet);
   socket_host_->Send(dest1_, packet);
@@ -228,6 +258,9 @@ TEST_F(P2PSocketHostUdpTest, SendAfterStunResponse) {
   socket_->ReceivePacket(dest1_, request_packet);
 
   // Now we should be able to send any data to |dest1_|.
+  EXPECT_CALL(sender_, Send(
+      MatchMessage(static_cast<uint32>(P2PMsg_OnSendComplete::ID))))
+      .WillOnce(DoAll(DeleteArg<0>(), Return(true)));
   std::vector<char> packet;
   CreateRandomPacket(&packet);
   socket_host_->Send(dest1_, packet);

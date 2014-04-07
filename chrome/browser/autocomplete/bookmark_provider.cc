@@ -10,15 +10,16 @@
 
 #include "base/metrics/histogram.h"
 #include "base/prefs/pref_service.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "chrome/browser/autocomplete/autocomplete_result.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
+#include "chrome/browser/bookmarks/bookmark_title_match.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/pref_names.h"
 #include "net/base/net_util.h"
 
-typedef std::vector<bookmark_utils::TitleMatch> TitleMatches;
+typedef std::vector<BookmarkTitleMatch> TitleMatches;
 
 // BookmarkProvider ------------------------------------------------------------
 
@@ -156,11 +157,12 @@ class ScoringFunctor {
 }  // namespace
 
 AutocompleteMatch BookmarkProvider::TitleMatchToACMatch(
-    const bookmark_utils::TitleMatch& title_match) {
+    const BookmarkTitleMatch& title_match) {
   // The AutocompleteMatch we construct is non-deletable because the only
   // way to support this would be to delete the underlying bookmark, which is
   // unlikely to be what the user intends.
-  AutocompleteMatch match(this, 0, false, AutocompleteMatch::BOOKMARK_TITLE);
+  AutocompleteMatch match(this, 0, false,
+                          AutocompleteMatchType::BOOKMARK_TITLE);
   const string16& title(title_match.node->GetTitle());
   DCHECK(!title.empty());
   const GURL& url(title_match.node->url());
@@ -186,7 +188,7 @@ AutocompleteMatch BookmarkProvider::TitleMatchToACMatch(
   // use the sum to figure out a value between the base score and the maximum
   // score.
   //
-  // The factor for each term is calculated based on:
+  // The factor for each term is the product of:
   //
   //  1) how much of the bookmark's title has been matched by the term:
   //       (term length / title length).
@@ -207,8 +209,13 @@ AutocompleteMatch BookmarkProvider::TitleMatchToACMatch(
   //     a partial factor of (14-6)/14 = 0.571 ).
   //
   // Once all term factors have been calculated they are summed. The resulting
-  // sum will never be greater than 1.0. This sum is then multiplied against
-  // the scoring range available, which is 299. The 299 is calculated by
+  // sum will never be greater than 1.0 because of the way the bookmark model
+  // matches and removes overlaps. (In particular, the bookmark model only
+  // matches terms to the beginning of words and it removes all overlapping
+  // matches, keeping only the longest. Together these mean that each
+  // character is included in at most one match. This property ensures the
+  // sum of factors is at most 1.) This sum is then multiplied against the
+  // scoring range available, which is 299. The 299 is calculated by
   // subtracting the minimum possible score, 900, from the maximum possible
   // score, 1199. This product, ranging from 0 to 299, is added to the minimum
   // possible score, 900, giving the preliminary score.

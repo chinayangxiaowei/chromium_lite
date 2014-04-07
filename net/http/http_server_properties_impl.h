@@ -10,9 +10,9 @@
 #include <vector>
 
 #include "base/basictypes.h"
+#include "base/containers/hash_tables.h"
 #include "base/containers/mru_cache.h"
 #include "base/gtest_prod_util.h"
-#include "base/hash_tables.h"
 #include "base/threading/non_thread_safe.h"
 #include "base/values.h"
 #include "net/base/host_port_pair.h"
@@ -73,6 +73,9 @@ class NET_EXPORT HttpServerPropertiesImpl
   // HttpServerProperties methods:
   // -----------------------------
 
+  // Gets a weak pointer for this object.
+  virtual base::WeakPtr<HttpServerProperties> GetWeakPtr() OVERRIDE;
+
   // Deletes all data.
   virtual void Clear() OVERRIDE;
 
@@ -115,8 +118,11 @@ class NET_EXPORT HttpServerPropertiesImpl
                               SpdySettingsFlags flags,
                               uint32 value) OVERRIDE;
 
+  // Clears all entries in |spdy_settings_map_| for a host.
+  virtual void ClearSpdySettings(const HostPortPair& host_port_pair) OVERRIDE;
+
   // Clears all entries in |spdy_settings_map_|.
-  virtual void ClearSpdySettings() OVERRIDE;
+  virtual void ClearAllSpdySettings() OVERRIDE;
 
   // Returns all persistent SPDY settings.
   virtual const SpdySettingsMap& spdy_settings_map() const OVERRIDE;
@@ -138,6 +144,9 @@ class NET_EXPORT HttpServerPropertiesImpl
   // |spdy_servers_table_| has flattened representation of servers (host/port
   // pair) that either support or not support SPDY protocol.
   typedef base::hash_map<std::string, bool> SpdyServerHostPortTable;
+
+  base::WeakPtrFactory<HttpServerPropertiesImpl> weak_ptr_factory_;
+
   SpdyServerHostPortTable spdy_servers_table_;
 
   AlternateProtocolMap alternate_protocol_map_;

@@ -4,6 +4,10 @@
 
 #include "cc/quads/render_pass_draw_quad.h"
 
+#include "base/values.h"
+#include "cc/base/math_util.h"
+#include "cc/debug/traced_value.h"
+
 namespace cc {
 
 RenderPassDrawQuad::RenderPassDrawQuad()
@@ -37,11 +41,11 @@ void RenderPassDrawQuad::SetNew(
     ResourceProvider::ResourceId mask_resource_id,
     gfx::Rect contents_changed_since_last_frame,
     gfx::RectF mask_uv_rect,
-    const WebKit::WebFilterOperations& filters,
+    const FilterOperations& filters,
     skia::RefPtr<SkImageFilter> filter,
-    const WebKit::WebFilterOperations& background_filters) {
-  DCHECK(render_pass_id.layer_id > 0);
-  DCHECK(render_pass_id.index >= 0);
+    const FilterOperations& background_filters) {
+  DCHECK_GT(render_pass_id.layer_id, 0);
+  DCHECK_GE(render_pass_id.index, 0);
 
   gfx::Rect opaque_rect;
   gfx::Rect visible_rect = rect;
@@ -63,11 +67,11 @@ void RenderPassDrawQuad::SetAll(
     ResourceProvider::ResourceId mask_resource_id,
     gfx::Rect contents_changed_since_last_frame,
     gfx::RectF mask_uv_rect,
-    const WebKit::WebFilterOperations& filters,
+    const FilterOperations& filters,
     skia::RefPtr<SkImageFilter> filter,
-    const WebKit::WebFilterOperations& background_filters) {
-  DCHECK(render_pass_id.layer_id > 0);
-  DCHECK(render_pass_id.index >= 0);
+    const FilterOperations& background_filters) {
+  DCHECK_GT(render_pass_id.layer_id, 0);
+  DCHECK_GE(render_pass_id.index, 0);
 
   DrawQuad::SetAll(shared_quad_state, DrawQuad::RENDER_PASS, rect, opaque_rect,
                    visible_rect, needs_blending);
@@ -83,13 +87,29 @@ void RenderPassDrawQuad::SetAll(
 
 void RenderPassDrawQuad::IterateResources(
     const ResourceIteratorCallback& callback) {
-  mask_resource_id = callback.Run(mask_resource_id);
+  if (mask_resource_id)
+    mask_resource_id = callback.Run(mask_resource_id);
 }
 
 const RenderPassDrawQuad* RenderPassDrawQuad::MaterialCast(
     const DrawQuad* quad) {
-  DCHECK(quad->material == DrawQuad::RENDER_PASS);
+  DCHECK_EQ(quad->material, DrawQuad::RENDER_PASS);
   return static_cast<const RenderPassDrawQuad*>(quad);
+}
+
+void RenderPassDrawQuad::ExtendValue(base::DictionaryValue* value) const {
+  value->Set("render_pass_id",
+             TracedValue::CreateIDRef(render_pass_id.AsTracingId()).release());
+  value->SetBoolean("is_replica", is_replica);
+  value->SetInteger("mask_resource_id", mask_resource_id);
+  value->Set("contents_changed_since_last_frame",
+             MathUtil::AsValue(contents_changed_since_last_frame).release());
+  value->Set("mask_uv_rect", MathUtil::AsValue(mask_uv_rect).release());
+  value->Set("filters", filters.AsValue().release());
+  // TODO(piman): dump SkImageFilters rather than just indicating if there are
+  // any or not.
+  value->SetBoolean("has_filter", !!filter);
+  value->Set("background_filters", background_filters.AsValue().release());
 }
 
 }  // namespace cc

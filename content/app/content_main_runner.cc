@@ -18,11 +18,13 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/metrics/stats_table.h"
 #include "base/path_service.h"
-#include "base/process_util.h"
+#include "base/process/launch.h"
+#include "base/process/memory.h"
+#include "base/process/process_handle.h"
 #include "base/profiler/alternate_timer.h"
-#include "base/string_number_conversions.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "content/browser/browser_main.h"
 #include "content/common/set_process_title.h"
 #include "content/common/url_schemes.h"
@@ -42,7 +44,7 @@
 #include "ui/base/ui_base_paths.h"
 #include "ui/base/ui_base_switches.h"
 #include "ui/base/win/dpi.h"
-#include "webkit/user_agent/user_agent.h"
+#include "webkit/common/user_agent/user_agent.h"
 
 #if defined(USE_TCMALLOC)
 #include "third_party/tcmalloc/chromium/src/gperftools/malloc_extension.h"
@@ -66,8 +68,7 @@
 #elif defined(OS_MACOSX)
 #include "base/mac/scoped_nsautorelease_pool.h"
 #if !defined(OS_IOS)
-#include "base/mach_ipc_mac.h"
-#include "base/system_monitor/system_monitor.h"
+#include "base/power_monitor/power_monitor_device_source.h"
 #include "content/browser/mach_broker_mac.h"
 #include "content/common/sandbox_init_mac.h"
 #endif  // !OS_IOS
@@ -81,6 +82,9 @@
 
 #if !defined(OS_MACOSX)
 #include "content/public/common/zygote_fork_delegate_linux.h"
+#endif
+#if !defined(OS_MACOSX) && !defined(OS_ANDROID)
+#include "content/zygote/zygote_main.h"
 #endif
 
 #endif  // OS_POSIX
@@ -101,10 +105,6 @@ extern int PpapiBrokerMain(const MainFunctionParams&);
 extern int RendererMain(const content::MainFunctionParams&);
 extern int UtilityMain(const MainFunctionParams&);
 extern int WorkerMain(const MainFunctionParams&);
-#if defined(OS_POSIX) && !defined(OS_MACOSX) && !defined(OS_ANDROID)
-extern int ZygoteMain(const MainFunctionParams&,
-                      ZygoteForkDelegate* forkdelegate);
-#endif
 }  // namespace content
 
 namespace {
@@ -126,7 +126,11 @@ void EnableThemeSupportOnAllWindowStations() {
   DCHECK(current_station);
 
   HWINSTA winsta0 = ::OpenWindowStationA("WinSta0", FALSE, GENERIC_READ);
-  if (!winsta0 || !::SetProcessWindowStation(winsta0)) {
+  if (!winsta0) {
+    DLOG(INFO) << "Unable to open to WinSta0, we: "<< ::GetLastError();
+    return;
+  }
+  if (!::SetProcessWindowStation(winsta0)) {
     // Could not set the alternate window station. There is a possibility
     // that the theme wont be correctly initialized.
     NOTREACHED() << "Unable to switch to WinSta0, we: "<< ::GetLastError();
@@ -163,44 +167,18 @@ namespace content {
 
 base::LazyInstance<ContentBrowserClient>
     g_empty_content_browser_client = LAZY_INSTANCE_INITIALIZER;
-#if !defined(OS_IOS)
+#if !defined(OS_IOS) && !defined(CHROME_MULTIPLE_DLL_BROWSER)
 base::LazyInstance<ContentPluginClient>
     g_empty_content_plugin_client = LAZY_INSTANCE_INITIALIZER;
 base::LazyInstance<ContentRendererClient>
     g_empty_content_renderer_client = LAZY_INSTANCE_INITIALIZER;
 base::LazyInstance<ContentUtilityClient>
     g_empty_content_utility_client = LAZY_INSTANCE_INITIALIZER;
-#endif  // !OS_IOS
+#endif  // !OS_IOS && !CHROME_MULTIPLE_DLL_BROWSER
 
 #if defined(OS_WIN)
 
 static CAppModule _Module;
-
-#elif defined(OS_MACOSX) && !defined(OS_IOS)
-
-// Completes the Mach IPC handshake by sending this process' task port to the
-// parent process.  The parent is listening on the Mach port given by
-// |GetMachPortName()|.  The task port is used by the parent to get CPU/memory
-// stats to display in the task manager.
-void SendTaskPortToParentProcess() {
-  const mach_msg_timeout_t kTimeoutMs = 100;
-  const int32_t kMessageId = 0;
-  std::string mach_port_name = MachBroker::GetMachPortName();
-
-  base::MachSendMessage child_message(kMessageId);
-  if (!child_message.AddDescriptor(mach_task_self())) {
-    LOG(ERROR) << "child AddDescriptor(mach_task_self()) failed.";
-    return;
-  }
-
-  base::MachPortSender child_sender(mach_port_name.c_str());
-  kern_return_t err = child_sender.SendMessage(child_message, kTimeoutMs);
-  if (err != KERN_SUCCESS) {
-    LOG(ERROR) <<
-        base::StringPrintf("child SendMessage() failed: 0x%x %s", err,
-                           mach_error_string(err));
-  }
-}
 
 #endif  // defined(OS_WIN)
 
@@ -316,13 +294,14 @@ class ContentClientInitializer {
         content_client->browser_ = &g_empty_content_browser_client.Get();
     }
 
-#if !defined(OS_IOS)
+#if !defined(OS_IOS) && !defined(CHROME_MULTIPLE_DLL_BROWSER)
     if (process_type == switches::kPluginProcess ||
         process_type == switches::kPpapiPluginProcess) {
       if (delegate)
         content_client->plugin_ = delegate->CreateContentPluginClient();
       if (!content_client->plugin_)
         content_client->plugin_ = &g_empty_content_plugin_client.Get();
+      // Single process not supported in split dll mode.
     } else if (process_type == switches::kRendererProcess ||
                CommandLine::ForCurrentProcess()->HasSwitch(
                    switches::kSingleProcess)) {
@@ -330,13 +309,18 @@ class ContentClientInitializer {
         content_client->renderer_ = delegate->CreateContentRendererClient();
       if (!content_client->renderer_)
         content_client->renderer_ = &g_empty_content_renderer_client.Get();
-    } else if (process_type == switches::kUtilityProcess) {
+    }
+
+    if (process_type == switches::kUtilityProcess ||
+        CommandLine::ForCurrentProcess()->HasSwitch(
+            switches::kSingleProcess)) {
       if (delegate)
         content_client->utility_ = delegate->CreateContentUtilityClient();
+      // TODO(scottmg): http://crbug.com/237249 Should be in _child.
       if (!content_client->utility_)
         content_client->utility_ = &g_empty_content_utility_client.Get();
     }
-#endif  // !OS_IOS
+#endif  // !OS_IOS && !CHROME_MULTIPLE_DLL_BROWSER
   }
 };
 
@@ -424,16 +408,20 @@ int RunNamedProcessTypeMain(
     const MainFunctionParams& main_function_params,
     ContentMainDelegate* delegate) {
   static const MainFunction kMainFunctions[] = {
+#if !defined(CHROME_MULTIPLE_DLL_CHILD)
     { "",                            BrowserMain },
-    { switches::kRendererProcess,    RendererMain },
+#endif
+#if !defined(CHROME_MULTIPLE_DLL_BROWSER)
 #if defined(ENABLE_PLUGINS)
     { switches::kPluginProcess,      PluginMain },
     { switches::kWorkerProcess,      WorkerMain },
     { switches::kPpapiPluginProcess, PpapiPluginMain },
     { switches::kPpapiBrokerProcess, PpapiBrokerMain },
-#endif
+#endif  // ENABLE_PLUGINS
     { switches::kUtilityProcess,     UtilityMain },
+    { switches::kRendererProcess,    RendererMain },
     { switches::kGpuProcess,         GpuMain },
+#endif  // !CHROME_MULTIPLE_DLL_BROWSER
   };
 
   for (size_t i = 0; i < arraysize(kMainFunctions); ++i) {
@@ -531,6 +519,13 @@ class ContentMainRunnerImpl : public ContentMainRunner {
                          const char** argv,
                          ContentMainDelegate* delegate) OVERRIDE {
 
+#if defined(OS_ANDROID)
+    // See note at the initialization of ExitManager, below; basically,
+    // only Android builds have the ctor/dtor handlers set up to use
+    // TRACE_EVENT right away.
+    TRACE_EVENT0("startup", "ContentMainRunnerImpl::Initialize");
+#endif  // OS_ANDROID
+
     // NOTE(willchan): One might ask why these TCMalloc-related calls are done
     // here rather than in process_util_linux.cc with the definition of
     // EnableTerminationOnOutOfMemory().  That's because base shouldn't have a
@@ -600,6 +595,8 @@ class ContentMainRunnerImpl : public ContentMainRunner {
     // The exit manager is in charge of calling the dtors of singleton objects.
     // On Android, AtExitManager is set up when library is loaded.
     // On iOS, it's set up in main(), which can't call directly through to here.
+    // A consequence of this is that you can't use the ctor/dtor-based
+    // TRACE_EVENT methods on Linux or iOS builds till after we set this up.
 #if !defined(OS_ANDROID) && !defined(OS_IOS)
     exit_manager_.reset(new base::AtExitManager);
 #endif  // !OS_ANDROID && !OS_IOS
@@ -612,10 +609,11 @@ class ContentMainRunnerImpl : public ContentMainRunner {
     autorelease_pool_.reset(new base::mac::ScopedNSAutoreleasePool());
 #endif
 
-    // On Android, the command line is initialized when library is loaded.
+    // On Android, the command line is initialized when library is loaded and
+    // we have already started our TRACE_EVENT0.
 #if !defined(OS_ANDROID)
     CommandLine::Init(argc, argv);
-#endif
+#endif // !OS_ANDROID
 
     int exit_code;
     if (delegate && delegate->BasicStartupComplete(&exit_code))
@@ -640,16 +638,24 @@ class ContentMainRunnerImpl : public ContentMainRunner {
     // Enable startup tracing asap to avoid early TRACE_EVENT calls being
     // ignored.
     if (command_line.HasSwitch(switches::kTraceStartup)) {
+      base::debug::CategoryFilter category_filter(
+          command_line.GetSwitchValueASCII(switches::kTraceStartup));
       base::debug::TraceLog::GetInstance()->SetEnabled(
-          command_line.GetSwitchValueASCII(switches::kTraceStartup),
+          category_filter,
           base::debug::TraceLog::RECORD_UNTIL_FULL);
     }
+#if !defined(OS_ANDROID)
+    // Android tracing started at the beginning of the method.
+    // Other OSes have to wait till we get here in order for all the memory
+    // management setup to be completed.
+    TRACE_EVENT0("startup", "ContentMainRunnerImpl::Initialize");
+#endif // !OS_ANDROID
 
 #if defined(OS_MACOSX) && !defined(OS_IOS)
     // We need to allocate the IO Ports before the Sandbox is initialized or
-    // the first instance of SystemMonitor is created.
+    // the first instance of PowerMonitor is created.
     // It's important not to allocate the ports for processes which don't
-    // register with the system monitor - see crbug.com/88867.
+    // register with the power monitor - see crbug.com/88867.
     if (process_type.empty() ||
         process_type == switches::kPluginProcess ||
         process_type == switches::kRendererProcess ||
@@ -657,20 +663,17 @@ class ContentMainRunnerImpl : public ContentMainRunner {
         process_type == switches::kWorkerProcess ||
         (delegate &&
          delegate->ProcessRegistersWithSystemProcess(process_type))) {
-      base::SystemMonitor::AllocateSystemIOPorts();
+      base::PowerMonitorDeviceSource::AllocateSystemIOPorts();
     }
 
     if (!process_type.empty() &&
         (!delegate || delegate->ShouldSendMachPort(process_type))) {
-      SendTaskPortToParentProcess();
+      MachBroker::ChildSendTaskPortToParent();
     }
 #elif defined(OS_WIN)
     // This must be done early enough since some helper functions like
     // IsTouchEnabled, needed to load resources, may call into the theme dll.
     EnableThemeSupportOnAllWindowStations();
-#if defined(ENABLE_HIDPI)
-    ui::EnableHighDPISupport();
-#endif
     SetupCRT(command_line);
 #endif
 

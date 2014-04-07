@@ -9,9 +9,9 @@
 #include "base/bind.h"
 #include "base/debug/trace_event.h"
 #include "base/memory/weak_ptr.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "base/threading/thread.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "ui/gl/gl_bindings.h"
 
 namespace gpu {
@@ -128,7 +128,8 @@ class GPUTracerImpl
       public base::SupportsWeakPtr<GPUTracerImpl> {
  public:
   GPUTracerImpl()
-      : gpu_category_enabled_(TRACE_EVENT_API_GET_CATEGORY_ENABLED("gpu")),
+      : gpu_category_enabled_(
+        TRACE_EVENT_API_GET_CATEGORY_GROUP_ENABLED("gpu")),
         process_posted_(false) {
   }
   virtual ~GPUTracerImpl() {}
@@ -236,7 +237,7 @@ void GLARBTimerTrace::Process() {
 
 bool GPUTracerImpl::Begin(const std::string& name) {
   // Make sure we are not nesting trace commands.
-  if (current_trace_)
+  if (current_trace_.get())
     return false;
 
   current_trace_ = CreateTrace(name);
@@ -245,7 +246,7 @@ bool GPUTracerImpl::Begin(const std::string& name) {
 }
 
 bool GPUTracerImpl::End() {
-  if (!current_trace_)
+  if (!current_trace_.get())
     return false;
 
   current_trace_->End();
@@ -269,7 +270,7 @@ void GPUTracerImpl::Process() {
 }
 
 const std::string& GPUTracerImpl::CurrentName() const {
-  if (!current_trace_)
+  if (!current_trace_.get())
     return EmptyString();
   return current_trace_->name();
 }
@@ -283,7 +284,8 @@ void GPUTracerImpl::IssueProcessTask() {
     return;
 
   process_posted_ = true;
-  MessageLoop::current()->PostDelayedTask(FROM_HERE,
+  base::MessageLoop::current()->PostDelayedTask(
+      FROM_HERE,
       base::Bind(&GPUTracerImpl::Process, base::AsWeakPtr(this)),
       base::TimeDelta::FromMilliseconds(kProcessInterval));
 }

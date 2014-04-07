@@ -10,17 +10,17 @@
 #include <algorithm>
 
 #include "base/logging.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversion_utils.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/autocomplete/autocomplete_input.h"
 #include "chrome/browser/autocomplete/autocomplete_match.h"
 #include "chrome/browser/bookmarks/bookmark_node_data.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/command_updater.h"
 #include "chrome/browser/defaults.h"
 #include "chrome/browser/platform_util.h"
-#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search/search.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/gtk/gtk_theme_service.h"
@@ -33,24 +33,23 @@
 #include "chrome/browser/ui/omnibox/omnibox_popup_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/toolbar/toolbar_model.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "content/public/browser/notification_source.h"
 #include "content/public/browser/web_contents.h"
-#include "googleurl/src/gurl.h"
+#include "extensions/common/constants.h"
 #include "grit/generated_resources.h"
 #include "net/base/escape.h"
 #include "third_party/undoview/undo_view.h"
-#include "ui/base/clipboard/scoped_clipboard_writer.h"
+#include "ui/base/accelerators/menu_label_accelerator_util_linux.h"
 #include "ui/base/dragdrop/drag_drop_types.h"
 #include "ui/base/dragdrop/gtk_dnd_util.h"
 #include "ui/base/gtk/gtk_compat.h"
 #include "ui/base/gtk/gtk_hig_constants.h"
-#include "ui/base/gtk/menu_label_accelerator_util.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/font.h"
 #include "ui/gfx/skia_utils_gtk.h"
+#include "url/gurl.h"
 
 using content::WebContents;
 
@@ -168,12 +167,10 @@ guint GetPopupMenuIndexForStockLabel(const char* label, GtkMenu* menu) {
 }
 
 // Writes the |url| and |text| to the primary clipboard.
-void DoWriteURLToClipboard(const GURL& url,
-                           const string16& text,
-                           Profile* profile) {
+void DoWriteToClipboard(const GURL& url, const string16& text) {
   BookmarkNodeData data;
   data.ReadFromTuple(url, text);
-  data.WriteToClipboard(profile);
+  data.WriteToClipboard();
 }
 
 }  // namespace
@@ -194,9 +191,9 @@ OmniboxViewGtk::OmniboxViewGtk(OmniboxEditController* controller,
       secure_scheme_tag_(NULL),
       security_error_scheme_tag_(NULL),
       normal_text_tag_(NULL),
-      instant_anchor_tag_(NULL),
-      instant_view_(NULL),
-      instant_mark_(NULL),
+      gray_text_anchor_tag_(NULL),
+      gray_text_view_(NULL),
+      gray_text_mark_(NULL),
       popup_window_mode_(popup_window_mode),
       security_level_(ToolbarModel::NONE),
       mark_set_handler_id_(0),
@@ -365,46 +362,46 @@ void OmniboxViewGtk::Init() {
   g_signal_connect(text_view_, "destroy",
                    G_CALLBACK(&gtk_widget_destroyed), &text_view_);
 
-  // Setup for the Instant suggestion text view.
+  // Setup for the gray suggestion text view.
   // GtkLabel is used instead of GtkTextView to get transparent background.
-  instant_view_ = gtk_label_new(NULL);
-  gtk_widget_set_no_show_all(instant_view_, TRUE);
-  gtk_label_set_selectable(GTK_LABEL(instant_view_), TRUE);
+  gray_text_view_ = gtk_label_new(NULL);
+  gtk_widget_set_no_show_all(gray_text_view_, TRUE);
+  gtk_label_set_selectable(GTK_LABEL(gray_text_view_), TRUE);
 
   GtkTextIter end_iter;
   gtk_text_buffer_get_end_iter(text_buffer_, &end_iter);
 
-  // Insert a Zero Width Space character just before the Instant anchor.
+  // Insert a Zero Width Space character just before the gray text anchor.
   // It's a hack to workaround a bug of GtkTextView which can not align the
   // pre-edit string and a child anchor correctly when there is no other content
   // around the pre-edit string.
   gtk_text_buffer_insert(text_buffer_, &end_iter, "\342\200\213", -1);
-  GtkTextChildAnchor* instant_anchor =
+  GtkTextChildAnchor* gray_text_anchor =
       gtk_text_buffer_create_child_anchor(text_buffer_, &end_iter);
 
   gtk_text_view_add_child_at_anchor(GTK_TEXT_VIEW(text_view_),
-                                    instant_view_,
-                                    instant_anchor);
+                                    gray_text_view_,
+                                    gray_text_anchor);
 
-  instant_anchor_tag_ = gtk_text_buffer_create_tag(text_buffer_, NULL, NULL);
+  gray_text_anchor_tag_ = gtk_text_buffer_create_tag(text_buffer_, NULL, NULL);
 
   GtkTextIter anchor_iter;
   gtk_text_buffer_get_iter_at_child_anchor(text_buffer_, &anchor_iter,
-                                           instant_anchor);
-  gtk_text_buffer_apply_tag(text_buffer_, instant_anchor_tag_,
+                                           gray_text_anchor);
+  gtk_text_buffer_apply_tag(text_buffer_, gray_text_anchor_tag_,
                             &anchor_iter, &end_iter);
 
   GtkTextIter start_iter;
   gtk_text_buffer_get_start_iter(text_buffer_, &start_iter);
-  instant_mark_ =
+  gray_text_mark_ =
       gtk_text_buffer_create_mark(text_buffer_, NULL, &start_iter, FALSE);
 
-  // Hooking up this handler after setting up above hacks for Instant view, so
+  // Hooking up this handler after setting up above hacks for gray text view, so
   // that we won't filter out the special ZWP mark itself.
   g_signal_connect(text_buffer_, "insert-text",
                    G_CALLBACK(&HandleInsertTextThunk), this);
 
-  AdjustVerticalAlignmentOfInstantView();
+  AdjustVerticalAlignmentOfGrayTextView();
 
   registrar_.Add(this,
                  chrome::NOTIFICATION_BROWSER_THEME_CHANGED,
@@ -428,15 +425,17 @@ void OmniboxViewGtk::HandleHierarchyChanged(GtkWidget* sender,
 void OmniboxViewGtk::SetFocus() {
   DCHECK(text_view_);
   gtk_widget_grab_focus(text_view_);
+  // Restore caret visibility if focus is explicitly requested. This is
+  // necessary because if we already have invisible focus, the RequestFocus()
+  // call above will short-circuit, preventing us from reaching
+  // OmniboxEditModel::OnSetFocus(), which handles restoring visibility when the
+  // omnibox regains focus after losing focus.
+  model()->SetCaretVisibility(true);
 }
 
 void OmniboxViewGtk::ApplyCaretVisibility() {
-  // TODO(mathp): implement for Linux.
-}
-
-int OmniboxViewGtk::WidthOfTextAfterCursor() {
-  // Not used.
-  return -1;
+  gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(text_view_),
+                                   model()->is_caret_visible());
 }
 
 void OmniboxViewGtk::SaveStateToTab(WebContents* tab) {
@@ -458,7 +457,7 @@ void OmniboxViewGtk::Update(const WebContents* contents) {
       model()->UpdatePermanentText(toolbar_model()->GetText(true));
 
   ToolbarModel::SecurityLevel security_level =
-        toolbar_model()->GetSecurityLevel();
+        toolbar_model()->GetSecurityLevel(false);
   bool changed_security_level = (security_level != security_level_);
   security_level_ = security_level;
 
@@ -606,6 +605,10 @@ void OmniboxViewGtk::OnRevertTemporaryText() {
   StartUpdatingHighlightedText();
   SetSelectedRange(saved_temporary_selection_);
   FinishUpdatingHighlightedText();
+  // We got here because the user hit the Escape key. We explicitly don't call
+  // TextChanged(), since OmniboxPopupModel::ResetToDefaultMatch() has already
+  // been called by now, and it would've called TextChanged() if it was
+  // warranted.
 }
 
 void OmniboxViewGtk::OnBeforePossibleChange() {
@@ -711,23 +714,23 @@ gfx::NativeView OmniboxViewGtk::GetRelativeWindowForPopup() const {
   return toplevel;
 }
 
-void OmniboxViewGtk::SetInstantSuggestion(const string16& suggestion) {
+void OmniboxViewGtk::SetGrayTextAutocompletion(const string16& suggestion) {
   std::string suggestion_utf8 = UTF16ToUTF8(suggestion);
 
-  gtk_label_set_text(GTK_LABEL(instant_view_), suggestion_utf8.c_str());
+  gtk_label_set_text(GTK_LABEL(gray_text_view_), suggestion_utf8.c_str());
 
   if (suggestion.empty()) {
-    gtk_widget_hide(instant_view_);
+    gtk_widget_hide(gray_text_view_);
     return;
   }
 
-  gtk_widget_show(instant_view_);
-  AdjustVerticalAlignmentOfInstantView();
-  UpdateInstantViewColors();
+  gtk_widget_show(gray_text_view_);
+  AdjustVerticalAlignmentOfGrayTextView();
+  UpdateGrayTextViewColors();
 }
 
-string16 OmniboxViewGtk::GetInstantSuggestion() const {
-  const gchar* suggestion = gtk_label_get_text(GTK_LABEL(instant_view_));
+string16 OmniboxViewGtk::GetGrayTextAutocompletion() const {
+  const gchar* suggestion = gtk_label_get_text(GTK_LABEL(gray_text_view_));
   return suggestion ? UTF8ToUTF16(suggestion) : string16();
 }
 
@@ -751,8 +754,8 @@ int OmniboxViewGtk::TextWidth() const {
   GdkRectangle first_char_bounds, last_char_bounds;
   gtk_text_buffer_get_start_iter(text_buffer_, &start);
 
-  // Use the real end iterator here to take the width of Instant suggestion
-  // text into account, so that location bar can layout its children correctly.
+  // Use the real end iterator here to take the width of gray suggestion text
+  // into account, so that location bar can layout its children correctly.
   gtk_text_buffer_get_end_iter(text_buffer_, &end);
   gtk_text_view_get_iter_location(GTK_TEXT_VIEW(text_view_),
                                   &start, &first_char_bounds);
@@ -801,7 +804,7 @@ void OmniboxViewGtk::SetBaseColor() {
     gtk_widget_modify_text(text_view_, GTK_STATE_ACTIVE, NULL);
 
     gtk_util::UndoForceFontSize(text_view_);
-    gtk_util::UndoForceFontSize(instant_view_);
+    gtk_util::UndoForceFontSize(gray_text_view_);
 
     // Grab the text colors out of the style and set our tags to use them.
     GtkStyle* style = gtk_rc_get_style(text_view_);
@@ -841,26 +844,26 @@ void OmniboxViewGtk::SetBaseColor() {
 
     // Until we switch to vector graphics, force the font size.
     gtk_util::ForceFontSizePixels(text_view_, GetFont().GetFontSize());
-    gtk_util::ForceFontSizePixels(instant_view_, GetFont().GetFontSize());
+    gtk_util::ForceFontSizePixels(gray_text_view_, GetFont().GetFontSize());
 
     g_object_set(faded_text_tag_, "foreground", kTextBaseColor, NULL);
     g_object_set(normal_text_tag_, "foreground", "#000000", NULL);
   }
 
-  AdjustVerticalAlignmentOfInstantView();
-  UpdateInstantViewColors();
+  AdjustVerticalAlignmentOfGrayTextView();
+  UpdateGrayTextViewColors();
 }
 
-void OmniboxViewGtk::UpdateInstantViewColors() {
+void OmniboxViewGtk::UpdateGrayTextViewColors() {
   GdkColor faded_text;
   if (theme_service_->UsingNativeTheme()) {
-    GtkStyle* style = gtk_rc_get_style(instant_view_);
+    GtkStyle* style = gtk_rc_get_style(gray_text_view_);
     faded_text = gtk_util::AverageColors(
         style->text[GTK_STATE_NORMAL], style->base[GTK_STATE_NORMAL]);
   } else {
     gdk_color_parse(kTextBaseColor, &faded_text);
   }
-  gtk_widget_modify_fg(instant_view_, GTK_STATE_NORMAL, &faded_text);
+  gtk_widget_modify_fg(gray_text_view_, GTK_STATE_NORMAL, &faded_text);
 }
 
 void OmniboxViewGtk::HandleBeginUserAction(GtkTextBuffer* sender) {
@@ -1042,6 +1045,13 @@ gboolean OmniboxViewGtk::HandleViewButtonPress(GtkWidget* sender,
 
   DCHECK(text_view_);
 
+  // Restore caret visibility whenever the user clicks in the omnibox in a way
+  // that would give it focus.  We must handle this case separately here because
+  // if the omnibox currently has invisible focus, the mouse event won't trigger
+  // either SetFocus() or OmniboxEditModel::OnSetFocus().
+  if (event->button == 1 || event->button == 2)
+    model()->SetCaretVisibility(true);
+
   if (event->button == 1) {
     button_1_pressed_ = true;
 
@@ -1163,7 +1173,7 @@ void OmniboxViewGtk::HandleViewMoveCursor(
       OnAfterPossibleChange();
       handled = true;
     } else if (count == count_towards_end && !IsCaretAtEnd()) {
-      handled = model()->CommitSuggestedText(true);
+      handled = model()->CommitSuggestedText();
     }
   } else if (step == GTK_MOVEMENT_PAGES) {  // Page up and down.
     // Multiply by count for the direction (if we move too much that's ok).
@@ -1235,7 +1245,7 @@ void OmniboxViewGtk::HandlePopulatePopup(GtkWidget* sender, GtkMenu* menu) {
   g_free(text);
 
   // Copy URL menu item.
-  if (chrome::search::IsQueryExtractionEnabled()) {
+  if (chrome::IsQueryExtractionEnabled()) {
     GtkWidget* copy_url_menuitem = gtk_menu_item_new_with_mnemonic(
         ui::ConvertAcceleratorsFromWindowsStyle(
             l10n_util::GetStringUTF8(IDS_COPY_URL)).c_str());
@@ -1251,7 +1261,7 @@ void OmniboxViewGtk::HandlePopulatePopup(GtkWidget* sender, GtkMenu* menu) {
                      G_CALLBACK(HandleCopyURLClipboardThunk), this);
     gtk_widget_set_sensitive(
         copy_url_menuitem,
-        toolbar_model()->WouldReplaceSearchURLWithSearchTerms() &&
+        toolbar_model()->WouldReplaceSearchURLWithSearchTerms(false) &&
             !model()->user_input_in_progress());
     gtk_widget_show(copy_url_menuitem);
   }
@@ -1455,7 +1465,7 @@ void OmniboxViewGtk::HandleInsertText(GtkTextBuffer* buffer,
        p = g_utf8_next_char(p)) {
     gunichar c = g_utf8_get_char(p);
 
-    // 0x200B is Zero Width Space, which is inserted just before the Instant
+    // 0x200B is Zero Width Space, which is inserted just before the gray text
     // anchor for working around the GtkTextView's misalignment bug.
     // This character might be captured and inserted into the content by undo
     // manager, so we need to filter it out here.
@@ -1472,7 +1482,7 @@ void OmniboxViewGtk::HandleInsertText(GtkTextBuffer* buffer,
   }
 
   if (!filtered_text.empty()) {
-    // Avoid inserting the text after the Instant anchor.
+    // Avoid inserting the text after the gray text anchor.
     ValidateTextBufferIter(location);
 
     // Call the default handler to insert filtered text.
@@ -1526,7 +1536,7 @@ void OmniboxViewGtk::HandleViewMoveFocus(GtkWidget* widget,
 
   // Trigger Tab to search behavior only when Tab key is pressed.
   if (model()->is_keyword_hint() && !shift_was_pressed_) {
-    handled = model()->AcceptKeyword();
+    handled = model()->AcceptKeyword(ENTERED_KEYWORD_MODE_VIA_TAB);
   } else if (model()->popup_model()->IsOpen()) {
     if (shift_was_pressed_ &&
         model()->popup_model()->selected_line_state() ==
@@ -1541,8 +1551,8 @@ void OmniboxViewGtk::HandleViewMoveFocus(GtkWidget* widget,
   if (supports_pre_edit_ && !handled && !pre_edit_.empty())
     handled = true;
 
-  if (!handled && gtk_widget_get_visible(instant_view_))
-    handled = model()->CommitSuggestedText(true);
+  if (!handled && gtk_widget_get_visible(gray_text_view_))
+    handled = model()->CommitSuggestedText();
 
   if (handled) {
     static guint signal_id = g_signal_lookup("move-focus", GTK_TYPE_WIDGET);
@@ -1555,9 +1565,8 @@ void OmniboxViewGtk::HandleCopyClipboard(GtkWidget* sender) {
 }
 
 void OmniboxViewGtk::HandleCopyURLClipboard(GtkWidget* sender) {
-  DoWriteURLToClipboard(toolbar_model()->GetURL(),
-                        toolbar_model()->GetText(false),
-                        browser_->profile());
+  DoWriteToClipboard(toolbar_model()->GetURL(),
+                     toolbar_model()->GetText(false));
 }
 
 void OmniboxViewGtk::HandleCutClipboard(GtkWidget* sender) {
@@ -1574,43 +1583,42 @@ void OmniboxViewGtk::HandleCopyOrCutClipboard(bool copy) {
   if (!gtk_text_buffer_get_has_selection(text_buffer_))
     return;
 
-  // Stop propagating the signal.
-  static guint copy_signal_id =
-      g_signal_lookup("copy-clipboard", GTK_TYPE_TEXT_VIEW);
-  static guint cut_signal_id =
-      g_signal_lookup("cut-clipboard", GTK_TYPE_TEXT_VIEW);
-  g_signal_stop_emission(text_view_,
-                         copy ? copy_signal_id : cut_signal_id,
-                         0);
+  GtkClipboard* clipboard = gtk_clipboard_get(GDK_SELECTION_PRIMARY);
+  DCHECK(clipboard);
 
   CharRange selection = GetSelection();
   GURL url;
   string16 text(UTF8ToUTF16(GetSelectedText()));
   bool write_url;
   model()->AdjustTextForCopy(selection.selection_min(), IsSelectAll(), &text,
-                             &url, &write_url);
+                            &url, &write_url);
 
+  // On other platforms we write |text| to the clipboard regardless of
+  // |write_url|.  We don't need to do that here because we fall through to
+  // the default signal handlers.
   if (write_url) {
-    DoWriteURLToClipboard(url, text, browser_->profile());
-  } else {
-    ui::ScopedClipboardWriter scoped_clipboard_writer(
-        ui::Clipboard::GetForCurrentThread(),
-        ui::Clipboard::BUFFER_STANDARD,
-        content::BrowserContext::GetMarkerForOffTheRecordContext(
-            browser_->profile()));
-    scoped_clipboard_writer.WriteText(text);
-  }
+    DoWriteToClipboard(url, text);
+    SetSelectedRange(selection);
 
-  SetSelectedRange(selection);
-  if (!copy && gtk_text_view_get_editable(GTK_TEXT_VIEW(text_view_)))
-    gtk_text_buffer_delete_selection(text_buffer_, true, true);
+    // Stop propagating the signal.
+    static guint copy_signal_id =
+        g_signal_lookup("copy-clipboard", GTK_TYPE_TEXT_VIEW);
+    static guint cut_signal_id =
+        g_signal_lookup("cut-clipboard", GTK_TYPE_TEXT_VIEW);
+    g_signal_stop_emission(text_view_,
+                           copy ? copy_signal_id : cut_signal_id,
+                           0);
+
+    if (!copy && gtk_text_view_get_editable(GTK_TEXT_VIEW(text_view_)))
+      gtk_text_buffer_delete_selection(text_buffer_, true, true);
+  }
 
   OwnPrimarySelection(UTF16ToUTF8(text));
 }
 
 int OmniboxViewGtk::GetOmniboxTextLength() const {
   GtkTextIter end;
-  gtk_text_buffer_get_iter_at_mark(text_buffer_, &end, instant_mark_);
+  gtk_text_buffer_get_iter_at_mark(text_buffer_, &end, gray_text_mark_);
   if (supports_pre_edit_) {
     // We need to count the length of the text being composed, because we treat
     // it as part of the content in GetText().
@@ -1640,25 +1648,25 @@ void OmniboxViewGtk::EmphasizeURLComponents() {
   url_parse::Component scheme, host;
   string16 text(GetText());
   AutocompleteInput::ParseForEmphasizeComponents(text, &scheme, &host);
-  const bool emphasize = model()->CurrentTextIsURL() && (host.len > 0);
 
   // Set the baseline emphasis.
   GtkTextIter start, end;
   GetTextBufferBounds(&start, &end);
   gtk_text_buffer_remove_all_tags(text_buffer_, &start, &end);
-  if (emphasize) {
-    gtk_text_buffer_apply_tag(text_buffer_, faded_text_tag_, &start, &end);
+  bool grey_out_url = text.substr(scheme.begin, scheme.len) ==
+       UTF8ToUTF16(extensions::kExtensionScheme);
+  bool grey_base = model()->CurrentTextIsURL() &&
+      (host.is_nonempty() || grey_out_url);
+  gtk_text_buffer_apply_tag(
+      text_buffer_, grey_base ? faded_text_tag_ : normal_text_tag_ , &start,
+      &end);
 
+  if (grey_base && !grey_out_url) {
     // We've found a host name, give it more emphasis.
-    gtk_text_buffer_get_iter_at_line_index(text_buffer_, &start, 0,
-                                           GetUTF8Offset(text,
-                                                         host.begin));
-    gtk_text_buffer_get_iter_at_line_index(text_buffer_, &end, 0,
-                                           GetUTF8Offset(text,
-                                                         host.end()));
-
-    gtk_text_buffer_apply_tag(text_buffer_, normal_text_tag_, &start, &end);
-  } else {
+    gtk_text_buffer_get_iter_at_line_index(
+        text_buffer_, &start, 0, GetUTF8Offset(text, host.begin));
+    gtk_text_buffer_get_iter_at_line_index(
+        text_buffer_, &end, 0, GetUTF8Offset(text, host.end()));
     gtk_text_buffer_apply_tag(text_buffer_, normal_text_tag_, &start, &end);
   }
 
@@ -1698,30 +1706,24 @@ bool OmniboxViewGtk::OnPerformDropImpl(const string16& text) {
 }
 
 gfx::Font OmniboxViewGtk::GetFont() {
-  bool use_gtk = theme_service_->UsingNativeTheme();
-  if (use_gtk) {
-    // If we haven't initialized the text view yet, just create a temporary one
-    // whose style we can grab.
-    GtkWidget* widget = text_view_ ? text_view_ : gtk_text_view_new();
-    GtkStyle* gtk_style = gtk_widget_get_style(widget);
-    GtkRcStyle* rc_style = gtk_widget_get_modifier_style(widget);
-    gfx::Font font((rc_style && rc_style->font_desc) ?
-                   rc_style->font_desc :
-                   gtk_style->font_desc);
-    if (!text_view_)
-      g_object_unref(g_object_ref_sink(widget));
-
-    // Scaling the font down for popup windows doesn't help here, since we just
-    // use the normal unforced font size when using the GTK theme.
-    return font;
-  } else {
+  if (!theme_service_->UsingNativeTheme()) {
     return gfx::Font(
         ui::ResourceBundle::GetSharedInstance().GetFont(
             ui::ResourceBundle::BaseFont).GetFontName(),
-        popup_window_mode_ ?
-            browser_defaults::kAutocompleteEditFontPixelSizeInPopup :
-            browser_defaults::kAutocompleteEditFontPixelSize);
+            browser_defaults::kOmniboxFontPixelSize);
   }
+
+  // If we haven't initialized the text view yet, just create a temporary one
+  // whose style we can grab.
+  GtkWidget* widget = text_view_ ? text_view_ : gtk_text_view_new();
+  GtkStyle* gtk_style = gtk_widget_get_style(widget);
+  GtkRcStyle* rc_style = gtk_widget_get_modifier_style(widget);
+  gfx::Font font(
+      (rc_style && rc_style->font_desc) ?
+          rc_style->font_desc : gtk_style->font_desc);
+  if (!text_view_)
+    g_object_unref(g_object_ref_sink(widget));
+  return font;
 }
 
 void OmniboxViewGtk::OwnPrimarySelection(const std::string& text) {
@@ -1984,9 +1986,9 @@ void OmniboxViewGtk::HandleKeymapDirectionChanged(GdkKeymap* sender) {
 void OmniboxViewGtk::HandleDeleteRange(GtkTextBuffer* buffer,
                                        GtkTextIter* start,
                                        GtkTextIter* end) {
-  // Prevent the user from deleting the Instant anchor. We can't simply set the
-  // Instant anchor readonly by applying a tag with "editable" = FALSE, because
-  // it'll prevent the insert caret from blinking.
+  // Prevent the user from deleting the gray text anchor. We can't simply set
+  // the gray text anchor readonly by applying a tag with "editable" = FALSE,
+  // because it'll prevent the insert caret from blinking.
   ValidateTextBufferIter(start);
   ValidateTextBufferIter(end);
   if (!gtk_text_iter_compare(start, end)) {
@@ -1999,7 +2001,7 @@ void OmniboxViewGtk::HandleDeleteRange(GtkTextBuffer* buffer,
 void OmniboxViewGtk::HandleMarkSetAlways(GtkTextBuffer* buffer,
                                          GtkTextIter* location,
                                          GtkTextMark* mark) {
-  if (mark == instant_mark_ || !instant_mark_)
+  if (mark == gray_text_mark_ || !gray_text_mark_)
     return;
 
   GtkTextIter new_iter = *location;
@@ -2008,7 +2010,7 @@ void OmniboxViewGtk::HandleMarkSetAlways(GtkTextBuffer* buffer,
   static guint signal_id = g_signal_lookup("mark-set", GTK_TYPE_TEXT_BUFFER);
 
   // "mark-set" signal is actually emitted after the mark's location is already
-  // set, so if the location is beyond the Instant anchor, we need to move the
+  // set, so if the location is beyond the gray text anchor, we need to move the
   // mark again, which will emit the signal again. In order to prevent other
   // signal handlers from being called twice, we need to stop signal emission
   // before moving the mark again.
@@ -2032,7 +2034,7 @@ void OmniboxViewGtk::HandleMarkSetAlways(GtkTextBuffer* buffer,
                                    gtk_text_buffer_get_selection_bound(buffer));
 
   GtkTextIter end;
-  gtk_text_buffer_get_iter_at_mark(text_buffer_, &end, instant_mark_);
+  gtk_text_buffer_get_iter_at_mark(text_buffer_, &end, gray_text_mark_);
 
   if (gtk_text_iter_compare(&insert, &end) > 0 ||
       gtk_text_iter_compare(&selection_bound, &end) > 0) {
@@ -2128,26 +2130,26 @@ void OmniboxViewGtk::HandleUndoRedoAfter(GtkWidget* sender) {
 void OmniboxViewGtk::GetTextBufferBounds(GtkTextIter* start,
                                          GtkTextIter* end) const {
   gtk_text_buffer_get_start_iter(text_buffer_, start);
-  gtk_text_buffer_get_iter_at_mark(text_buffer_, end, instant_mark_);
+  gtk_text_buffer_get_iter_at_mark(text_buffer_, end, gray_text_mark_);
 }
 
 void OmniboxViewGtk::ValidateTextBufferIter(GtkTextIter* iter) const {
-  if (!instant_mark_)
+  if (!gray_text_mark_)
     return;
 
   GtkTextIter end;
-  gtk_text_buffer_get_iter_at_mark(text_buffer_, &end, instant_mark_);
+  gtk_text_buffer_get_iter_at_mark(text_buffer_, &end, gray_text_mark_);
   if (gtk_text_iter_compare(iter, &end) > 0)
     *iter = end;
 }
 
-void OmniboxViewGtk::AdjustVerticalAlignmentOfInstantView() {
+void OmniboxViewGtk::AdjustVerticalAlignmentOfGrayTextView() {
   // By default, GtkTextView layouts an anchored child widget just above the
-  // baseline, so we need to move the |instant_view_| down to make sure it
+  // baseline, so we need to move the |gray_text_view_| down to make sure it
   // has the same baseline as the |text_view_|.
-  PangoLayout* layout = gtk_label_get_layout(GTK_LABEL(instant_view_));
+  PangoLayout* layout = gtk_label_get_layout(GTK_LABEL(gray_text_view_));
   int height;
   pango_layout_get_size(layout, NULL, &height);
   int baseline = pango_layout_get_baseline(layout);
-  g_object_set(instant_anchor_tag_, "rise", baseline - height, NULL);
+  g_object_set(gray_text_anchor_tag_, "rise", baseline - height, NULL);
 }

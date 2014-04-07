@@ -4,12 +4,14 @@
 
 #include "chrome/common/extensions/extension_process_policy.h"
 
+#include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_set.h"
+#include "chrome/common/extensions/manifest_handlers/app_isolation_info.h"
 
 namespace extensions {
 
 const extensions::Extension* GetNonBookmarkAppExtension(
-    const ExtensionSet& extensions, const ExtensionURLInfo& url) {
+    const ExtensionSet& extensions, const GURL& url) {
   // Exclude bookmark apps, which do not use the app process model.
   const extensions::Extension* extension =
       extensions.GetExtensionOrAppByURL(url);
@@ -20,8 +22,8 @@ const extensions::Extension* GetNonBookmarkAppExtension(
 
 bool CrossesExtensionProcessBoundary(
     const ExtensionSet& extensions,
-    const ExtensionURLInfo& old_url,
-    const ExtensionURLInfo& new_url,
+    const GURL& old_url,
+    const GURL& new_url,
     bool should_consider_workaround) {
   const extensions::Extension* old_url_extension = GetNonBookmarkAppExtension(
       extensions,
@@ -41,10 +43,10 @@ bool CrossesExtensionProcessBoundary(
   if (should_consider_workaround) {
     bool old_url_is_hosted_app = old_url_extension &&
         !old_url_extension->web_extent().is_empty() &&
-        !old_url_extension->is_storage_isolated();
+        !AppIsolationInfo::HasIsolatedStorage(old_url_extension);
     bool new_url_is_normal_or_hosted = !new_url_extension ||
         (!new_url_extension->web_extent().is_empty() &&
-        !new_url_extension->is_storage_isolated());
+         !AppIsolationInfo::HasIsolatedStorage(new_url_extension));
     bool either_is_web_store =
         (old_url_extension &&
         old_url_extension->id() == extension_misc::kWebStoreAppId) ||

@@ -14,7 +14,6 @@ var remoting = remoting || {};
 
 /**
  * @constructor
- * @extends {remoting.HostPlugin}
  */
 remoting.HostNativeMessaging = function() {
   /**
@@ -24,26 +23,77 @@ remoting.HostNativeMessaging = function() {
   this.nextId_ = 0;
 
   /**
-   * @type {Object.<number, {callback:function(...):void, type:string}>}
+   * @type {Object.<number, remoting.HostNativeMessaging.PendingReply>}
    * @private
    */
   this.pendingReplies_ = {};
 
-  /** @private */
-  this.port_ = chrome.runtime.connectNative(
-      'chrome-remote-desktop-native-host');
-  this.port_.onMessage.addListener(this.onIncomingMessage_.bind(this));
+  /** @type {?chrome.extension.Port} @private */
+  this.port_ = null;
+
+  /** @type {string} @private */
+  this.version_ = '';
+
+  /** @type {Array.<remoting.HostController.Feature>} @private */
+  this.supportedFeatures_ = [];
 };
 
 /**
- * @return {boolean} True if native messaging is supported.
+ * Type used for entries of |pendingReplies_| list.
+ *
+ * @param {string} type Type of the originating request.
+ * @param {?function(...):void} onDone The callback, if any, to be triggered
+ *     on response. The actual parameters depend on the original request type.
+ * @param {function(remoting.Error):void} onError The callback to be triggered
+ *     on error.
+ * @constructor
  */
-remoting.HostNativeMessaging.isSupported = function() {
-  // TODO(lambroslambrou): This needs to perform an asynchronous "hello"
-  // exchange with the native host component (possibly getting its version
-  // number at the same time), and report the result via a regular callback or
-  // an error callback. For now, simply return false here.
-  return false;
+remoting.HostNativeMessaging.PendingReply = function(type, onDone, onError) {
+  this.type = type;
+  this.onDone = onDone;
+  this.onError = onError;
+};
+
+/**
+ * Sets up connection to the Native Messaging host process and exchanges
+ * 'hello' messages. If Native Messaging is not available or the host
+ * process is not installed, this returns false to the callback.
+ *
+ * @param {function(): void} onDone Called after successful initialization.
+ * @param {function(remoting.Error): void} onError Called if initialization
+ *     failed.
+ * @return {void} Nothing.
+ */
+remoting.HostNativeMessaging.prototype.initialize = function(onDone, onError) {
+  if (!chrome.runtime.connectNative) {
+    console.log('Native Messaging API not available');
+    onError(remoting.Error.UNEXPECTED);
+    return;
+  }
+
+  // NativeMessaging API exists on Chrome 26.xxx but fails to notify
+  // onDisconnect in the case where the Host components are not installed. Need
+  // to blacklist these versions of Chrome.
+  var majorVersion = navigator.appVersion.match('Chrome/(\\d+)\.')[1];
+  if (!majorVersion || majorVersion <= 26) {
+    console.log('Native Messaging not supported on this version of Chrome');
+    onError(remoting.Error.UNEXPECTED);
+    return;
+  }
+
+  try {
+    this.port_ = chrome.runtime.connectNative(
+        'com.google.chrome.remote_desktop');
+    this.port_.onMessage.addListener(this.onIncomingMessage_.bind(this));
+    this.port_.onDisconnect.addListener(this.onDisconnect_.bind(this));
+    this.postMessage_({type: 'hello'}, onDone,
+                      onError.bind(null, remoting.Error.UNEXPECTED));
+  } catch (err) {
+    console.log('Native Messaging initialization failed: ',
+                /** @type {*} */ (err));
+    onError(remoting.Error.UNEXPECTED);
+    return;
+  }
 };
 
 /**
@@ -56,8 +106,8 @@ remoting.HostNativeMessaging.isSupported = function() {
  */
 function checkType_(name, object, type) {
   if (typeof(object) !== type) {
-    console.error('NativeMessaging: "', name, '" expected to be of type "',
-                  type, '", got: ', object);
+    console.error('NativeMessaging: "' + name + '" expected to be of type "' +
+                  type + '", got: ' + object);
     return false;
   }
   return true;
@@ -71,38 +121,62 @@ function checkType_(name, object, type) {
  * @return {remoting.HostController.AsyncResult?} Converted result.
  */
 function asAsyncResult_(result) {
-  if (!checkType_('result', result, 'number')) {
+  if (!checkType_('result', result, 'string')) {
     return null;
   }
-  for (var i in remoting.HostController.AsyncResult) {
-    if (remoting.HostController.AsyncResult[i] == result) {
-      return remoting.HostController.AsyncResult[i];
-    }
+  if (!remoting.HostController.AsyncResult.hasOwnProperty(result)) {
+    console.error('NativeMessaging: unexpected result code: ', result);
+    return null;
   }
-  console.error('NativeMessaging: unexpected result code: ', result);
-  return null;
+  return remoting.HostController.AsyncResult[result];
 }
 
 /**
+ * Returns |result| as a HostController.State. If |result| is not valid,
+ * returns null and logs an error.
+ *
+ * @param {*} result
+ * @return {remoting.HostController.State?} Converted result.
+ */
+function asHostState_(result) {
+  if (!checkType_('result', result, 'string')) {
+    return null;
+  }
+  if (!remoting.HostController.State.hasOwnProperty(result)) {
+    console.error('NativeMessaging: unexpected result code: ', result);
+    return null;
+  }
+  return remoting.HostController.State[result];
+}
+
+/**
+ * @param {remoting.HostController.Feature} feature The feature to test for.
+ * @return {boolean} True if the implementation supports the named feature.
+ */
+remoting.HostNativeMessaging.prototype.hasFeature = function(feature) {
+  return this.supportedFeatures_.indexOf(feature) >= 0;
+};
+
+/**
  * Attaches a new ID to the supplied message, and posts it to the Native
- * Messaging port, adding |callback| to the list of pending replies.
+ * Messaging port, adding |onDone| to the list of pending replies.
  * |message| should have its 'type' field set, and any other fields set
  * depending on the message type.
  *
  * @param {{type: string}} message The message to post.
- * @param {function(...):void} callback The callback to be triggered on
- *     response.
+ * @param {?function(...):void} onDone The callback, if any, to be triggered
+ *     on response.
+ * @param {function(remoting.Error):void} onError The callback to be triggered
+ *     on error.
  * @return {void} Nothing.
  * @private
  */
-remoting.HostNativeMessaging.prototype.postMessage_ = function(message,
-                                                               callback) {
+remoting.HostNativeMessaging.prototype.postMessage_ =
+    function(message, onDone, onError) {
   var id = this.nextId_++;
   message['id'] = id;
-  this.pendingReplies_[id] = {
-    callback: callback,
-    type: message.type + 'Response'
-  }
+  this.pendingReplies_[id] = new remoting.HostNativeMessaging.PendingReply(
+    message.type + 'Response', onDone, onError);
   this.port_.postMessage(message);
 };
 
@@ -127,27 +201,48 @@ remoting.HostNativeMessaging.prototype.onIncomingMessage_ = function(message) {
   }
   delete this.pendingReplies_[id];
 
+  var onDone = reply.onDone;
+  var onError = reply.onError;
+
   /** @type {string} */
   var type = message['type'];
   if (!checkType_('type', type, 'string')) {
+    onError(remoting.Error.UNEXPECTED);
     return;
   }
   if (type != reply.type) {
     console.error('NativeMessaging: expected reply type: ', reply.type,
                   ', got: ', type);
+    onError(remoting.Error.UNEXPECTED);
     return;
   }
 
-  var callback = reply.callback;
-
-  // TODO(lambroslambrou): Errors here should be passed to an error-callback
-  // supplied by the caller of this interface.
   switch (type) {
+    case 'helloResponse':
+      /** @type {string} */
+      var version = message['version'];
+      if (checkType_('version', version, 'string')) {
+        this.version_ = version;
+        if (message['supportedFeatures'] instanceof Array) {
+          this.supportedFeatures_ = message['supportedFeatures'];
+        } else {
+          // Old versions of the native messaging host do not return this list.
+          // Those versions don't support any new feature.
+          this.supportedFeatures_ = [];
+        }
+        onDone();
+      } else {
+        onError(remoting.Error.UNEXPECTED);
+      }
+      break;
+
     case 'getHostNameResponse':
       /** @type {*} */
       var hostname = message['hostname'];
       if (checkType_('hostname', hostname, 'string')) {
-        callback(hostname);
+        onDone(hostname);
+      } else {
+        onError(remoting.Error.UNEXPECTED);
       }
       break;
 
@@ -155,41 +250,41 @@ remoting.HostNativeMessaging.prototype.onIncomingMessage_ = function(message) {
       /** @type {*} */
       var hash = message['hash'];
       if (checkType_('hash', hash, 'string')) {
-        callback(hash);
+        onDone(hash);
+      } else {
+        onError(remoting.Error.UNEXPECTED);
       }
       break;
 
     case 'generateKeyPairResponse':
       /** @type {*} */
-      var private_key = message['private_key'];
+      var privateKey = message['privateKey'];
       /** @type {*} */
-      var public_key = message['public_key'];
-      if (checkType_('private_key', private_key, 'string') &&
-          checkType_('public_key', public_key, 'string')) {
-        callback(private_key, public_key);
+      var publicKey = message['publicKey'];
+      if (checkType_('privateKey', privateKey, 'string') &&
+          checkType_('publicKey', publicKey, 'string')) {
+        onDone(privateKey, publicKey);
+      } else {
+        onError(remoting.Error.UNEXPECTED);
       }
       break;
 
     case 'updateDaemonConfigResponse':
       var result = asAsyncResult_(message['result']);
       if (result != null) {
-        callback(result);
+        onDone(result);
+      } else {
+        onError(remoting.Error.UNEXPECTED);
       }
       break;
 
     case 'getDaemonConfigResponse':
       /** @type {*} */
       var config = message['config'];
-      if (checkType_('config', config, 'string')) {
-        callback(config);
-      }
-      break;
-
-    case 'getDaemonVersionResponse':
-      /** @type {*} */
-      var version = message['version'];
-      if (checkType_('version', version, 'string')) {
-        callback(version);
+      if (checkType_('config', config, 'object')) {
+        onDone(config);
+      } else {
+        onError(remoting.Error.UNEXPECTED);
       }
       break;
 
@@ -199,11 +294,13 @@ remoting.HostNativeMessaging.prototype.onIncomingMessage_ = function(message) {
       /** @type {*} */
       var allowed = message['allowed'];
       /** @type {*} */
-      var set_by_policy = message['set_by_policy'];
+      var setByPolicy = message['setByPolicy'];
       if (checkType_('supported', supported, 'boolean') &&
           checkType_('allowed', allowed, 'boolean') &&
-          checkType_('set_by_policy', set_by_policy, 'boolean')) {
-        callback(supported, allowed, set_by_policy);
+          checkType_('setByPolicy', setByPolicy, 'boolean')) {
+        onDone(supported, allowed, setByPolicy);
+      } else {
+        onError(remoting.Error.UNEXPECTED);
       }
       break;
 
@@ -211,44 +308,73 @@ remoting.HostNativeMessaging.prototype.onIncomingMessage_ = function(message) {
     case 'stopDaemonResponse':
       var result = asAsyncResult_(message['result']);
       if (result != null) {
-        callback(result);
+        onDone(result);
+      } else {
+        onError(remoting.Error.UNEXPECTED);
+      }
+      break;
+
+    case 'getDaemonStateResponse':
+      var state = asHostState_(message['state']);
+      if (state != null) {
+        onDone(state);
+      } else {
+        onError(remoting.Error.UNEXPECTED);
+      }
+      break;
+
+    case 'getPairedClientsResponse':
+      var pairedClients = remoting.PairedClient.convertToPairedClientArray(
+          message['pairedClients']);
+      if (pairedClients != null) {
+        onDone(pairedClients);
+      } else {
+        onError(remoting.Error.UNEXPECTED);
+      }
+      break;
+
+    case 'clearPairedClientsResponse':
+    case 'deletePairedClientResponse':
+      /** @type {boolean} */
+      var success = message['result'];
+      if (checkType_('success', success, 'boolean')) {
+        onDone(success);
+      } else {
+        onError(remoting.Error.UNEXPECTED);
       }
       break;
 
     default:
       console.error('Unexpected native message: ', message);
+      onError(remoting.Error.UNEXPECTED);
   }
 };
 
 /**
- * @param {string} email The email address of the connector.
- * @param {string} token The access token for the connector.
  * @return {void} Nothing.
+ * @private
  */
-remoting.HostNativeMessaging.prototype.connect = function(email, token) {
-  console.error('NativeMessaging: connect() not implemented.');
-};
+remoting.HostNativeMessaging.prototype.onDisconnect_ = function() {
+  console.error('Native Message port disconnected');
 
-/** @return {void} Nothing. */
-remoting.HostNativeMessaging.prototype.disconnect = function() {
-  console.error('NativeMessaging: disconnect() not implemented.');
-};
+  // Notify the error-handlers of any requests that are still outstanding.
+  for (var id in this.pendingReplies_) {
+    this.pendingReplies_[/** @type {number} */(id)].onError(
+        remoting.Error.UNEXPECTED);
+  }
+  this.pendingReplies_ = {};
+}
 
 /**
- * @param {function(string):string} callback Pointer to chrome.i18n.getMessage.
- * @return {void} Nothing.
- */
-remoting.HostNativeMessaging.prototype.localize = function(callback) {
-  console.error('NativeMessaging: localize() not implemented.');
-};
-
-/**
- * @param {function(string):void} callback Callback to be called with the
+ * @param {function(string):void} onDone Callback to be called with the
  *     local hostname.
+ * @param {function(remoting.Error):void} onError The callback to be triggered
+ *     on error.
  * @return {void} Nothing.
  */
-remoting.HostNativeMessaging.prototype.getHostName = function(callback) {
-  this.postMessage_({type: 'getHostName'}, callback);
+remoting.HostNativeMessaging.prototype.getHostName =
+    function(onDone, onError) {
+  this.postMessage_({type: 'getHostName'}, onDone, onError);
 };
 
 /**
@@ -257,16 +383,18 @@ remoting.HostNativeMessaging.prototype.getHostName = function(callback) {
  *
  * @param {string} hostId The host ID.
  * @param {string} pin The PIN.
- * @param {function(string):void} callback Callback.
+ * @param {function(string):void} onDone Callback.
+ * @param {function(remoting.Error):void} onError The callback to be triggered
+ *     on error.
  * @return {void} Nothing.
  */
-remoting.HostNativeMessaging.prototype.getPinHash = function(hostId, pin,
-                                                             callback) {
+remoting.HostNativeMessaging.prototype.getPinHash =
+    function(hostId, pin, onDone, onError) {
   this.postMessage_({
       type: 'getPinHash',
       hostId: hostId,
       pin: pin
-  }, callback);
+  }, onDone, onError);
 };
 
 /**
@@ -274,11 +402,14 @@ remoting.HostNativeMessaging.prototype.getPinHash = function(hostId, pin,
  * when the key is generated. The key is returned in format understood by the
  * host (PublicKeyInfo structure encoded with ASN.1 DER, and then BASE64).
  *
- * @param {function(string, string):void} callback Callback.
+ * @param {function(string, string):void} onDone Callback.
+ * @param {function(remoting.Error):void} onError The callback to be triggered
+ *     on error.
  * @return {void} Nothing.
  */
-remoting.HostNativeMessaging.prototype.generateKeyPair = function(callback) {
-  this.postMessage_({type: 'generateKeyPair'}, callback);
+remoting.HostNativeMessaging.prototype.generateKeyPair =
+    function(onDone, onError) {
+  this.postMessage_({type: 'generateKeyPair'}, onDone, onError);
 };
 
 /**
@@ -289,78 +420,143 @@ remoting.HostNativeMessaging.prototype.generateKeyPair = function(callback) {
  * includes these parameters. Changes take effect before the callback
  * is called.
  *
- * @param {string} config The new config parameters, JSON encoded dictionary.
- * @param {function(remoting.HostController.AsyncResult):void} callback
+ * @param {Object} config The new config parameters.
+ * @param {function(remoting.HostController.AsyncResult):void} onDone
  *     Callback to be called when finished.
+ * @param {function(remoting.Error):void} onError The callback to be triggered
+ *     on error.
  * @return {void} Nothing.
  */
 remoting.HostNativeMessaging.prototype.updateDaemonConfig =
-    function(config, callback) {
+    function(config, onDone, onError) {
   this.postMessage_({
       type: 'updateDaemonConfig',
       config: config
-  }, callback);
+  }, onDone, onError);
 };
 
 /**
  * Loads daemon config. The config is passed as a JSON formatted string to the
  * callback.
  *
- * @param {function(string):void} callback Callback.
+ * @param {function(Object):void} onDone Callback.
+ * @param {function(remoting.Error):void} onError The callback to be triggered
+ *     on error.
  * @return {void} Nothing.
  */
-remoting.HostNativeMessaging.prototype.getDaemonConfig = function(callback) {
-  this.postMessage_({type: 'getDaemonConfig'}, callback);
+remoting.HostNativeMessaging.prototype.getDaemonConfig =
+    function(onDone, onError) {
+  this.postMessage_({type: 'getDaemonConfig'}, onDone, onError);
 };
 
 /**
- * Retrieves daemon version. The version is passed to the callback as a dotted
- * decimal string of the form major.minor.build.patch.
- *
- * @param {function(string):void} callback Callback.
- * @return {void} Nothing.
+ * Retrieves daemon version. The version is returned as a dotted decimal string
+ * of the form major.minor.build.patch.
+ * @return {string} The daemon version, or the empty string if not available.
  */
-remoting.HostNativeMessaging.prototype.getDaemonVersion = function(callback) {
-  this.postMessage_({type: 'getDaemonVersion'}, callback);
+remoting.HostNativeMessaging.prototype.getDaemonVersion = function() {
+  // Return the cached version from the 'hello' exchange.
+  return this.version_;
 };
 
 /**
  * Get the user's consent to crash reporting. The consent flags are passed to
  * the callback as booleans: supported, allowed, set-by-policy.
  *
- * @param {function(boolean, boolean, boolean):void} callback Callback.
+ * @param {function(boolean, boolean, boolean):void} onDone Callback.
+ * @param {function(remoting.Error):void} onError The callback to be triggered
+ *     on error.
  * @return {void} Nothing.
  */
 remoting.HostNativeMessaging.prototype.getUsageStatsConsent =
-    function(callback) {
-  this.postMessage_({type: 'getUsageStatsConsent'}, callback);
+    function(onDone, onError) {
+  this.postMessage_({type: 'getUsageStatsConsent'}, onDone, onError);
 };
 
 /**
  * Starts the daemon process with the specified configuration.
  *
- * @param {string} config Host configuration.
+ * @param {Object} config Host configuration.
  * @param {boolean} consent Consent to report crash dumps.
- * @param {function(remoting.HostController.AsyncResult):void} callback
+ * @param {function(remoting.HostController.AsyncResult):void} onDone
  *     Callback.
+ * @param {function(remoting.Error):void} onError The callback to be triggered
+ *     on error.
  * @return {void} Nothing.
  */
-remoting.HostNativeMessaging.prototype.startDaemon = function(
-    config, consent, callback) {
+remoting.HostNativeMessaging.prototype.startDaemon =
+    function(config, consent, onDone, onError) {
   this.postMessage_({
       type: 'startDaemon',
       config: config,
       consent: consent
-  }, callback);
+  }, onDone, onError);
 };
 
 /**
  * Stops the daemon process.
  *
- * @param {function(remoting.HostController.AsyncResult):void} callback
+ * @param {function(remoting.HostController.AsyncResult):void} onDone
  *     Callback.
+ * @param {function(remoting.Error):void} onError The callback to be triggered
+ *     on error.
  * @return {void} Nothing.
  */
-remoting.HostNativeMessaging.prototype.stopDaemon = function(callback) {
-  this.postMessage_({type: 'stopDaemon'}, callback);
+remoting.HostNativeMessaging.prototype.stopDaemon =
+    function(onDone, onError) {
+  this.postMessage_({type: 'stopDaemon'}, onDone, onError);
 };
+
+/**
+ * Gets the installed/running state of the Host process.
+ *
+ * @param {function(remoting.HostController.State):void} onDone Callback.
+ * @param {function(remoting.Error):void} onError The callback to be triggered
+ *     on error.
+ * @return {void} Nothing.
+ */
+remoting.HostNativeMessaging.prototype.getDaemonState =
+    function(onDone, onError) {
+  this.postMessage_({type: 'getDaemonState'}, onDone, onError);
+}
+
+/**
+ * Retrieves the list of paired clients.
+ *
+ * @param {function(Array.<remoting.PairedClient>):void} onDone Callback to be
+ *     called with the result.
+ * @param {function(remoting.Error):void} onError Callback to be triggered
+ *     on error.
+ */
+remoting.HostNativeMessaging.prototype.getPairedClients =
+    function(onDone, onError) {
+  this.postMessage_({type: 'getPairedClients'}, onDone, onError);
+}
+
+/**
+ * Clears all paired clients from the registry.
+ *
+ * @param {function(boolean):void} onDone Callback to be called when finished.
+ * @param {function(remoting.Error):void} onError Callback to be triggered
+ *     on error.
+ */
+remoting.HostNativeMessaging.prototype.clearPairedClients =
+    function(onDone, onError) {
+  this.postMessage_({type: 'clearPairedClients'}, onDone, onError);
+}
+
+/**
+ * Deletes a paired client referenced by client id.
+ *
+ * @param {string} client Client to delete.
+ * @param {function(boolean):void} onDone Callback to be called when finished.
+ * @param {function(remoting.Error):void} onError Callback to be triggered
+ *     on error.
+ */
+remoting.HostNativeMessaging.prototype.deletePairedClient =
+    function(client, onDone, onError) {
+  this.postMessage_({
+    type: 'deletePairedClient',
+    clientId: client
+  }, onDone, onError);
+}

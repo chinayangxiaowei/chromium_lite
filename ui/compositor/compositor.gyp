@@ -15,10 +15,10 @@
         '<(DEPTH)/base/third_party/dynamic_annotations/dynamic_annotations.gyp:dynamic_annotations',
         '<(DEPTH)/cc/cc.gyp:cc',
         '<(DEPTH)/skia/skia.gyp:skia',
-        '<(DEPTH)/third_party/WebKit/Source/WebKit/chromium/WebKit.gyp:webkit',
+        '<(DEPTH)/third_party/WebKit/public/blink.gyp:blink_minimal',
         '<(DEPTH)/ui/gl/gl.gyp:gl',
         '<(DEPTH)/ui/ui.gyp:ui',
-        '<(DEPTH)/webkit/gpu/webkit_gpu.gyp:webkit_gpu',
+        '<(DEPTH)/webkit/common/gpu/webkit_gpu.gyp:webkit_gpu',
       ],
       'defines': [
         'COMPOSITOR_IMPLEMENTATION',
@@ -28,9 +28,10 @@
         'compositor.h',
         'compositor_export.h',
         'compositor_observer.h',
-        'compositor_setup.h',
         'compositor_switches.cc',
         'compositor_switches.h',
+        'context_provider_from_context_factory.cc',
+        'context_provider_from_context_factory.h',
         'debug_utils.cc',
         'debug_utils.h',
         'dip_util.cc',
@@ -52,6 +53,7 @@
         'layer_owner.cc',
         'layer_owner.h',
         'layer_type.h',
+        'reflector.h',
         'scoped_animation_duration_scale_mode.cc',
         'scoped_animation_duration_scale_mode.h',
         'scoped_layer_animation_settings.cc',
@@ -68,8 +70,8 @@
           # IDR_BITMAP_BRUSH_IMAGE.
           'dependencies': [
             '<(DEPTH)/ui/ui.gyp:ui_resources',
-            '<(DEPTH)/third_party/angle/src/build_angle.gyp:libEGL',
-            '<(DEPTH)/third_party/angle/src/build_angle.gyp:libGLESv2',
+            '<(angle_path)/src/build_angle.gyp:libEGL',
+            '<(angle_path)/src/build_angle.gyp:libGLESv2',
           ],
         }],
       ],
@@ -79,23 +81,16 @@
       'type': 'static_library',
       'dependencies': [
         '<(DEPTH)/base/base.gyp:base',
-        '<(DEPTH)/webkit/support/webkit_support.gyp:webkit_support',
-        '<(DEPTH)/third_party/WebKit/Source/WebKit/chromium/WebKit.gyp:webkit',
+        '<(DEPTH)/skia/skia.gyp:skia',
+        '<(DEPTH)/ui/gl/gl.gyp:gl',
+        '<(DEPTH)/ui/ui.gyp:ui',
+        'compositor',
       ],
       'sources': [
-        'test/compositor_test_support.cc',
-        'test/compositor_test_support.h',
-      ],
-      'conditions': [
-        ['os_posix == 1 and OS != "mac"', {
-          'conditions': [
-            ['linux_use_tcmalloc==1', {
-              'dependencies': [
-                '<(DEPTH)/base/allocator/allocator.gyp:allocator',
-              ],
-            }],
-          ],
-        }],
+        'test/test_layers.cc',
+        'test/test_layers.h',
+        'test/test_suite.cc',
+        'test/test_suite.h',
       ],
     },
     {
@@ -123,15 +118,14 @@
         'test/layer_animator_test_controller.cc',
         'test/layer_animator_test_controller.h',
         'test/test_compositor_host.h',
-        'test/test_compositor_host_linux.cc',
         'test/test_compositor_host_mac.mm',
+        'test/test_compositor_host_ozone.cc',
         'test/test_compositor_host_win.cc',
+        'test/test_compositor_host_x11.cc',
         'test/test_layer_animation_delegate.cc',
         'test/test_layer_animation_delegate.h',
         'test/test_layer_animation_observer.cc',
         'test/test_layer_animation_observer.h',
-        'test/test_suite.cc',
-        'test/test_suite.h',
         'test/test_utils.cc',
         'test/test_utils.h',
       ],
@@ -140,6 +134,15 @@
         ['OS=="linux"', {
           'dependencies': [
             '<(DEPTH)/third_party/mesa/mesa.gyp:osmesa',
+          ],
+        }],
+        ['os_posix == 1 and OS != "mac"', {
+          'conditions': [
+            ['linux_use_tcmalloc==1', {
+              'dependencies': [
+                '<(DEPTH)/base/allocator/allocator.gyp:allocator',
+              ],
+            }],
           ],
         }],
       ],

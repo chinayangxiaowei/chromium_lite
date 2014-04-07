@@ -5,7 +5,7 @@
 #include "base/format_macros.h"
 #include "base/json/json_reader.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "base/values.h"
 #include "chrome/test/webdriver/commands/response.h"
 #include "chrome/test/webdriver/http_response.h"
@@ -158,7 +158,7 @@ class ParseRequestInfoTest : public testing::Test {
   virtual ~ParseRequestInfoTest() {}
 
   virtual void TearDown() {
-    SessionManager::GetInstance()->set_url_base("");
+    SessionManager::GetInstance()->set_url_base(std::string());
   }
 
  private:
@@ -178,7 +178,7 @@ TEST_F(ParseRequestInfoTest, ParseRequestWithEmptyUrlBase) {
   base::DictionaryValue* parameters;
   Response response;
 
-  SessionManager::GetInstance()->set_url_base("");
+  SessionManager::GetInstance()->set_url_base(std::string());
   EXPECT_TRUE(internal::ParseRequestInfo(
       &request_info,
       NULL,  // NULL is ok because GET not POST is used

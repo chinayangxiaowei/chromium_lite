@@ -6,18 +6,14 @@ import copy
 import json
 import logging
 
-import compiled_file_system as compiled_fs
-from file_system import FileNotFoundError
-from third_party.json_schema_compiler.model import UnixName
-
 class SidenavDataSource(object):
   """This class reads in and caches a JSON file representing the side navigation
   menu.
   """
   class Factory(object):
-    def __init__(self, cache_factory, json_path):
-      self._cache = cache_factory.Create(self._CreateSidenavDict,
-                                         compiled_fs.SIDENAV)
+    def __init__(self, compiled_fs_factory, json_path):
+      self._cache = compiled_fs_factory.Create(self._CreateSidenavDict,
+                                               SidenavDataSource)
       self._json_path = json_path
 
     def Create(self, path):
@@ -44,11 +40,11 @@ class SidenavDataSource(object):
   def __init__(self, cache, json_path, path):
     self._cache = cache
     self._json_path = json_path
-    self._file_name = path.split('/')[-1]
+    self._href = '/' + path
 
   def _AddSelected(self, items):
     for item in items:
-      if item.get('fileName', '') == self._file_name:
+      if item.get('href', '') == self._href:
         item['selected'] = True
         return True
       if 'items' in item:
@@ -57,11 +53,21 @@ class SidenavDataSource(object):
           return True
     return False
 
+  def _QualifyHrefs(self, items):
+    for item in items:
+      if 'items' in item:
+        self._QualifyHrefs(item['items'])
+
+      href = item.get('href')
+      if href is not None and not href.startswith(('http://', 'https://')):
+        if not href.startswith('/'):
+          logging.warn('Paths in sidenav must be qualified. %s is not.' % href)
+          href = '/' + href
+        item['href'] = href
+
   def get(self, key):
-    try:
-      sidenav = copy.deepcopy(self._cache.GetFromFile(
-          '%s/%s_sidenav.json' % (self._json_path, key)))
-      self._AddSelected(sidenav)
-      return sidenav
-    except FileNotFoundError as e:
-      logging.error('%s: Error reading sidenav "%s".' % (e, key))
+    sidenav = copy.deepcopy(self._cache.GetFromFile(
+        '%s/%s_sidenav.json' % (self._json_path, key)))
+    self._AddSelected(sidenav)
+    self._QualifyHrefs(sidenav)
+    return sidenav

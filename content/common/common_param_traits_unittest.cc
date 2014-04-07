@@ -8,7 +8,6 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/values.h"
 #include "content/public/common/common_param_traits.h"
-#include "googleurl/src/gurl.h"
 #include "ipc/ipc_message.h"
 #include "ipc/ipc_message_utils.h"
 #include "net/base/host_port_pair.h"
@@ -17,6 +16,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/gfx/rect.h"
+#include "url/gurl.h"
 
 // Tests that serialize/deserialize correctly understand each other
 TEST(IPCMessageTest, Serialize) {
@@ -113,7 +113,7 @@ TEST(IPCMessageTest, Bitmap) {
   bad_msg.WriteData(fixed_data, fixed_data_size);
   // Add some bogus pixel data.
   const size_t bogus_pixels_size = bitmap.getSize() * 2;
-  scoped_array<char> bogus_pixels(new char[bogus_pixels_size]);
+  scoped_ptr<char[]> bogus_pixels(new char[bogus_pixels_size]);
   memset(bogus_pixels.get(), 'B', bogus_pixels_size);
   bad_msg.WriteData(bogus_pixels.get(), bogus_pixels_size);
   // Make sure we don't read out the bitmap!

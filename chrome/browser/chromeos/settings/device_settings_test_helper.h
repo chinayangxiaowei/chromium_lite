@@ -12,8 +12,8 @@
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
 #include "base/memory/ref_counted.h"
-#include "base/message_loop.h"
-#include "base/string_util.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/string_util.h"
 #include "chrome/browser/chromeos/policy/device_policy_builder.h"
 #include "chrome/browser/chromeos/settings/device_settings_service.h"
 #include "chrome/browser/chromeos/settings/device_settings_test_helper.h"
@@ -92,21 +92,31 @@ class DeviceSettingsTestHelper : public SessionManagerClient {
   virtual void NotifyLockScreenShown() OVERRIDE;
   virtual void RequestUnlockScreen() OVERRIDE;
   virtual void NotifyLockScreenDismissed() OVERRIDE;
+  virtual void RetrieveActiveSessions(
+      const ActiveSessionsCallback& callback) OVERRIDE;
   virtual void RetrieveDevicePolicy(
       const RetrievePolicyCallback& callback) OVERRIDE;
-  virtual void RetrieveUserPolicy(
+  virtual void RetrievePolicyForUser(
+      const std::string& username,
       const RetrievePolicyCallback& callback) OVERRIDE;
+  virtual std::string BlockingRetrievePolicyForUser(
+      const std::string& username) OVERRIDE;
   virtual void RetrieveDeviceLocalAccountPolicy(
       const std::string& account_id,
       const RetrievePolicyCallback& callback) OVERRIDE;
   virtual void StoreDevicePolicy(const std::string& policy_blob,
                                  const StorePolicyCallback& callback) OVERRIDE;
-  virtual void StoreUserPolicy(const std::string& policy_blob,
-                               const StorePolicyCallback& callback) OVERRIDE;
+  virtual void StorePolicyForUser(const std::string& username,
+                                  const std::string& policy_blob,
+                                  const std::string& policy_key,
+                                  const StorePolicyCallback& callback) OVERRIDE;
   virtual void StoreDeviceLocalAccountPolicy(
       const std::string& account_id,
       const std::string& policy_blob,
       const StorePolicyCallback& callback) OVERRIDE;
+  virtual void SetFlagsForUser(
+      const std::string& account_id,
+      const std::vector<std::string>& flags) OVERRIDE;
 
  private:
   struct PolicyState {
@@ -159,7 +169,7 @@ class DeviceSettingsTestBase : public testing::Test {
   // |device_settings_service_| and flushes the resulting load operation.
   void ReloadDeviceSettings();
 
-  MessageLoop loop_;
+  base::MessageLoop loop_;
   content::TestBrowserThread ui_thread_;
   content::TestBrowserThread file_thread_;
 
@@ -167,6 +177,8 @@ class DeviceSettingsTestBase : public testing::Test {
 
   DeviceSettingsTestHelper device_settings_test_helper_;
   scoped_refptr<MockOwnerKeyUtil> owner_key_util_;
+  // Local DeviceSettingsService instance for tests. Avoid using in combination
+  // with the global instance (DeviceSettingsService::Get()).
   DeviceSettingsService device_settings_service_;
 
  private:

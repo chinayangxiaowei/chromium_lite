@@ -6,7 +6,7 @@
 
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "ui/base/events/event.h"
 #include "ui/base/events/event_constants.h"
 #include "ui/base/events/event_utils.h"
@@ -162,16 +162,15 @@ void GestureRecognizerImpl::TransferEventsTo(GestureConsumer* current_consumer,
     if (i->second != new_consumer &&
         (i->second != current_consumer || new_consumer == NULL) &&
         i->second != gesture_consumer_ignorer_.get()) {
-      TouchEvent touch_event(ui::ET_TOUCH_CANCELLED,
-                             gfx::Point(0, 0),
-                             i->first,
-                             ui::EventTimeForNow());
+      TouchEvent touch_event(ui::ET_TOUCH_CANCELLED, gfx::Point(0, 0),
+                             ui::EF_IS_SYNTHESIZED, i->first,
+                             ui::EventTimeForNow(), 0.0f, 0.0f, 0.0f, 0.0f);
       helper_->DispatchCancelTouchEvent(&touch_event);
-      i->second = gesture_consumer_ignorer_.get();
+      DCHECK_EQ(gesture_consumer_ignorer_.get(), i->second);
     }
   }
 
-  // Transer events from |current_consumer| to |new_consumer|.
+  // Transfer events from |current_consumer| to |new_consumer|.
   if (current_consumer && new_consumer) {
     TransferTouchIdToConsumerMap(current_consumer, new_consumer,
                                  &touch_id_target_);
@@ -214,9 +213,10 @@ GestureSequence* GestureRecognizerImpl::GetGestureSequenceForConsumer(
 
 void GestureRecognizerImpl::SetupTargets(const TouchEvent& event,
                                          GestureConsumer* target) {
-  if (event.type() == ui::ET_TOUCH_RELEASED ||
-      event.type() == ui::ET_TOUCH_CANCELLED) {
-    touch_id_target_[event.touch_id()] = NULL;
+  if (event.type() == ui::ET_TOUCH_RELEASED) {
+    touch_id_target_.erase(event.touch_id());
+  } else if (event.type() == ui::ET_TOUCH_CANCELLED) {
+    touch_id_target_[event.touch_id()] = gesture_consumer_ignorer_.get();
   } else {
     touch_id_target_[event.touch_id()] = target;
     if (target)

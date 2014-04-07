@@ -1,5 +1,10 @@
 include_rules = [
-  "+chrome/browser",  # For out of process profile import.
+  "+content/public/child",
   "+content/public/utility",
-  "+webkit/glue",
+
+  # For generated headers.
+  "+grit",
+
+  "+skia/ext",
+  "+media",
 ]

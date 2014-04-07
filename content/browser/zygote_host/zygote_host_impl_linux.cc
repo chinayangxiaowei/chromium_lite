@@ -13,6 +13,7 @@
 #include "base/command_line.h"
 #include "base/environment.h"
 #include "base/file_util.h"
+#include "base/files/file_enumerator.h"
 #include "base/linux_util.h"
 #include "base/logging.h"
 #include "base/memory/linked_ptr.h"
@@ -21,11 +22,12 @@
 #include "base/path_service.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/posix/unix_domain_socket_linux.h"
-#include "base/process_util.h"
-#include "base/string_number_conversions.h"
-#include "base/string_util.h"
-#include "base/time.h"
-#include "base/utf_string_conversions.h"
+#include "base/process/launch.h"
+#include "base/process/memory.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "content/browser/renderer_host/render_sandbox_host_linux.h"
 #include "content/common/zygote_commands_linux.h"
 #include "content/public/browser/content_browser_client.h"
@@ -101,9 +103,7 @@ void ZygoteHostImpl::Init(const std::string& sandbox_cmd) {
     switches::kV,
     switches::kVModule,
     switches::kRegisterPepperPlugins,
-    switches::kDisableSeccompSandbox,
     switches::kDisableSeccompFilterSandbox,
-    switches::kEnableSeccompSandbox,
 
     // Zygote process needs to know what resources to have loaded when it
     // becomes a renderer process.
@@ -119,7 +119,10 @@ void ZygoteHostImpl::Init(const std::string& sandbox_cmd) {
 
   sandbox_binary_ = sandbox_cmd.c_str();
 
-  if (!sandbox_cmd.empty()) {
+  // A non empty sandbox_cmd means we want a SUID sandbox.
+  using_suid_sandbox_ = !sandbox_cmd.empty();
+
+  if (using_suid_sandbox_) {
     struct stat st;
     if (stat(sandbox_binary_.c_str(), &st) != 0) {
       LOG(FATAL) << "The SUID sandbox helper binary is missing: "
@@ -130,7 +133,6 @@ void ZygoteHostImpl::Init(const std::string& sandbox_cmd) {
         (st.st_uid == 0) &&
         (st.st_mode & S_ISUID) &&
         (st.st_mode & S_IXOTH)) {
-      using_suid_sandbox_ = true;
       cmd_line.PrependWrapper(sandbox_binary_);
 
       scoped_ptr<sandbox::SetuidSandboxClient>
@@ -142,10 +144,6 @@ void ZygoteHostImpl::Init(const std::string& sandbox_cmd) {
                     "I'm aborting now. You need to make sure that "
                  << sandbox_binary_ << " is owned by root and has mode 4755.";
     }
-  } else {
-    LOG(ERROR) << "Running without the SUID sandbox! See "
-        "https://code.google.com/p/chromium/wiki/LinuxSUIDSandboxDevelopment "
-        "for more information on developing with the sandbox on.";
   }
 
   // Start up the sandbox host process and get the file descriptor for the
@@ -373,9 +371,11 @@ void ZygoteHostImpl::AdjustRendererOOMScore(base::ProcessHandle pid,
 
   if (!selinux_valid) {
     const base::FilePath kSelinuxPath("/selinux");
+    base::FileEnumerator en(kSelinuxPath, false, base::FileEnumerator::FILES);
+    bool has_selinux_files = !en.Next().empty();
+
     selinux = access(kSelinuxPath.value().c_str(), X_OK) == 0 &&
-        file_util::CountFilesCreatedAfter(kSelinuxPath,
-                                          base::Time::UnixEpoch()) > 0;
+              has_selinux_files;
     selinux_valid = true;
   }
 

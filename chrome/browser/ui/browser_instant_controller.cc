@@ -4,77 +4,62 @@
 
 #include "chrome/browser/ui/browser_instant_controller.h"
 
+#include "base/bind.h"
 #include "base/prefs/pref_service.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_web_ui.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/search/instant_service.h"
+#include "chrome/browser/search/instant_service_factory.h"
 #include "chrome/browser/search/search.h"
-#include "chrome/browser/themes/theme_properties.h"
-#include "chrome/browser/themes/theme_service.h"
-#include "chrome/browser/themes/theme_service_factory.h"
+#include "chrome/browser/search_engines/template_url.h"
+#include "chrome/browser/search_engines/template_url_service.h"
+#include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/omnibox/location_bar.h"
+#include "chrome/browser/ui/omnibox/omnibox_popup_model.h"
 #include "chrome/browser/ui/omnibox/omnibox_view.h"
+#include "chrome/browser/ui/search/instant_ntp.h"
+#include "chrome/browser/ui/search/search_model.h"
 #include "chrome/browser/ui/search/search_tab_helper.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/webui/ntp/app_launcher_handler.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
 #include "components/user_prefs/pref_registry_syncable.h"
-#include "content/public/browser/notification_service.h"
+#include "content/public/browser/render_process_host.h"
 #include "content/public/browser/user_metrics.h"
-#include "grit/theme_resources.h"
-#include "ui/gfx/color_utils.h"
-#include "ui/gfx/sys_color_change_listener.h"
+#include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_view.h"
 
 using content::UserMetricsAction;
-
-namespace chrome {
 
 ////////////////////////////////////////////////////////////////////////////////
 // BrowserInstantController, public:
 
 BrowserInstantController::BrowserInstantController(Browser* browser)
     : browser_(browser),
-      instant_(ALLOW_THIS_IN_INITIALIZER_LIST(this),
-               chrome::search::IsInstantExtendedAPIEnabled()),
-      instant_unload_handler_(browser),
-      initialized_theme_info_(false) {
-
-  // In one mode of the InstantExtended experiments, the kInstantExtendedEnabled
-  // preference's default value is set to the existing value of kInstantEnabled.
-  // Because this requires reading the value of the kInstantEnabled value, we
-  // reset the default for kInstantExtendedEnabled here.
-  chrome::search::SetInstantExtendedPrefDefault(profile());
-
+      instant_(this),
+      instant_unload_handler_(browser) {
   profile_pref_registrar_.Init(profile()->GetPrefs());
   profile_pref_registrar_.Add(
-      prefs::kInstantEnabled,
-      base::Bind(&BrowserInstantController::ResetInstant,
+      prefs::kDefaultSearchProviderID,
+      base::Bind(&BrowserInstantController::OnDefaultSearchProviderChanged,
                  base::Unretained(this)));
-  profile_pref_registrar_.Add(
-      prefs::kInstantExtendedEnabled,
-      base::Bind(&BrowserInstantController::ResetInstant,
-                 base::Unretained(this)));
-  profile_pref_registrar_.Add(
-      prefs::kSearchSuggestEnabled,
-      base::Bind(&BrowserInstantController::ResetInstant,
-                 base::Unretained(this)));
-  ResetInstant(std::string());
   browser_->search_model()->AddObserver(this);
 
-#if defined(ENABLE_THEMES)
-  // Listen for theme installation.
-  registrar_.Add(this, chrome::NOTIFICATION_BROWSER_THEME_CHANGED,
-                 content::Source<ThemeService>(
-                     ThemeServiceFactory::GetForProfile(profile())));
-#endif  // defined(ENABLE_THEMES)
+  InstantService* instant_service =
+      InstantServiceFactory::GetForProfile(profile());
+  instant_service->OnBrowserInstantControllerCreated();
 }
 
 BrowserInstantController::~BrowserInstantController() {
   browser_->search_model()->RemoveObserver(this);
+
+  InstantService* instant_service =
+      InstantServiceFactory::GetForProfile(profile());
+  instant_service->OnBrowserInstantControllerDestroyed();
 }
 
 bool BrowserInstantController::MaybeSwapInInstantNTPContents(
@@ -90,19 +75,41 @@ bool BrowserInstantController::MaybeSwapInInstantNTPContents(
     return false;
   }
 
-  scoped_ptr<content::WebContents> instant_ntp = instant_.ReleaseNTPContents();
+  InstantService* instant_service =
+      InstantServiceFactory::GetForProfile(profile());
+  scoped_ptr<content::WebContents> instant_ntp =
+      instant_service->ReleaseNTPContents();
   if (!instant_ntp)
     return false;
 
   *target_contents = instant_ntp.get();
   if (source_contents) {
-    instant_ntp->GetController().CopyStateFromAndPrune(
-        &source_contents->GetController());
-    ReplaceWebContentsAt(
-        browser_->tab_strip_model()->GetIndexOfWebContents(source_contents),
-        instant_ntp.Pass());
+    // If the Instant NTP hasn't yet committed an entry, we can't call
+    // CopyStateFromAndPrune.  Instead, load the Local NTP URL directly in the
+    // source contents.
+    // TODO(sreeram): Always using the local URL is wrong in the case of the
+    // first tab in a window where we might want to use the remote URL. Fix.
+    if (!instant_ntp->GetController().CanPruneAllButVisible()) {
+      source_contents->GetController().LoadURL(chrome::GetLocalInstantURL(
+          profile()), content::Referrer(), content::PAGE_TRANSITION_GENERATED,
+          std::string());
+      *target_contents = source_contents;
+    } else {
+      instant_ntp->GetController().CopyStateFromAndPrune(
+          &source_contents->GetController());
+      ReplaceWebContentsAt(
+          browser_->tab_strip_model()->GetIndexOfWebContents(source_contents),
+          instant_ntp.Pass());
+    }
   } else {
-    instant_ntp->GetController().PruneAllButActive();
+    // If the Instant NTP hasn't yet committed an entry, we can't call
+    // PruneAllButVisible.  In that case, there shouldn't be any entries to
+    // prune anyway.
+    if (instant_ntp->GetController().CanPruneAllButVisible())
+      instant_ntp->GetController().PruneAllButVisible();
+    else
+      CHECK(!instant_ntp->GetController().GetLastCommittedEntry());
+
     // If |source_contents| is NULL, then the caller is responsible for
     // inserting instant_ntp into the tabstrip and will take ownership.
     ignore_result(instant_ntp.release());
@@ -110,44 +117,30 @@ bool BrowserInstantController::MaybeSwapInInstantNTPContents(
   return true;
 }
 
-bool BrowserInstantController::OpenInstant(WindowOpenDisposition disposition) {
+bool BrowserInstantController::OpenInstant(WindowOpenDisposition disposition,
+                                           const GURL& url) {
   // Unsupported dispositions.
-  if (disposition == NEW_BACKGROUND_TAB || disposition == NEW_WINDOW)
+  if (disposition == NEW_BACKGROUND_TAB || disposition == NEW_WINDOW ||
+      disposition == NEW_FOREGROUND_TAB)
     return false;
 
   // The omnibox currently doesn't use other dispositions, so we don't attempt
   // to handle them. If you hit this DCHECK file a bug and I'll (sky) add
   // support for the new disposition.
-  DCHECK(disposition == CURRENT_TAB ||
-         disposition == NEW_FOREGROUND_TAB) << disposition;
+  DCHECK(disposition == CURRENT_TAB) << disposition;
 
-  return instant_.CommitIfPossible(disposition == CURRENT_TAB ?
-      INSTANT_COMMIT_PRESSED_ENTER : INSTANT_COMMIT_PRESSED_ALT_ENTER);
+  // If we will not be replacing search terms from this URL, don't send to
+  // InstantController.
+  const string16& search_terms =
+      chrome::GetSearchTermsFromURL(browser_->profile(), url);
+  if (search_terms.empty())
+    return false;
+
+  return instant_.SubmitQuery(search_terms);
 }
 
 Profile* BrowserInstantController::profile() const {
   return browser_->profile();
-}
-
-void BrowserInstantController::CommitInstant(
-    scoped_ptr<content::WebContents> overlay,
-    bool in_new_tab) {
-  const extensions::Extension* extension =
-      profile()->GetExtensionService()->GetInstalledApp(overlay->GetURL());
-  if (extension) {
-    AppLauncherHandler::RecordAppLaunchType(
-        extension_misc::APP_LAUNCH_OMNIBOX_INSTANT,
-        extension->GetType());
-  }
-  if (in_new_tab) {
-    // TabStripModel takes ownership of |overlay|.
-    browser_->tab_strip_model()->AddWebContents(overlay.release(), -1,
-        instant_.last_transition_type(), TabStripModel::ADD_ACTIVE);
-  } else {
-    ReplaceWebContentsAt(
-        browser_->tab_strip_model()->active_index(),
-        overlay.Pass());
-  }
 }
 
 void BrowserInstantController::ReplaceWebContentsAt(
@@ -160,31 +153,43 @@ void BrowserInstantController::ReplaceWebContentsAt(
                                                       index);
 }
 
-void BrowserInstantController::SetInstantSuggestion(
-    const InstantSuggestion& suggestion) {
-  browser_->window()->GetLocationBar()->SetInstantSuggestion(suggestion);
-}
-
-void BrowserInstantController::CommitSuggestedText(
-    bool skip_inline_autocomplete) {
-  browser_->window()->GetLocationBar()->GetLocationEntry()->model()->
-      CommitSuggestedText(skip_inline_autocomplete);
-}
-
-gfx::Rect BrowserInstantController::GetInstantBounds() {
-  return browser_->window()->GetInstantBounds();
-}
-
-void BrowserInstantController::InstantOverlayFocused() {
-  // NOTE: This is only invoked on aura.
-  browser_->window()->WebContentsFocused(instant_.GetOverlayContents());
-}
-
-void BrowserInstantController::FocusOmnibox(bool caret_visibility) {
+void BrowserInstantController::FocusOmnibox(OmniboxFocusState state) {
   OmniboxView* omnibox_view = browser_->window()->GetLocationBar()->
       GetLocationEntry();
-  omnibox_view->SetFocus();
-  omnibox_view->model()->SetCaretVisibility(caret_visibility);
+
+  // Do not add a default case in the switch block for the following reasons:
+  // (1) Explicitly handle the new states. If new states are added in the
+  // OmniboxFocusState, the compiler will warn the developer to handle the new
+  // states.
+  // (2) An attacker may control the renderer and sends the browser process a
+  // malformed IPC. This function responds to the invalid |state| values by
+  // doing nothing instead of crashing the browser process (intentional no-op).
+  switch (state) {
+    case OMNIBOX_FOCUS_VISIBLE:
+      omnibox_view->SetFocus();
+      omnibox_view->model()->SetCaretVisibility(true);
+      break;
+    case OMNIBOX_FOCUS_INVISIBLE:
+      omnibox_view->SetFocus();
+      omnibox_view->model()->SetCaretVisibility(false);
+      // If the user clicked on the fakebox, any text already in the omnibox
+      // should get cleared when they start typing. Selecting all the existing
+      // text is a convenient way to accomplish this. It also gives a slight
+      // visual cue to users who really understand selection state about what
+      // will happen if they start typing.
+      omnibox_view->SelectAll(false);
+      break;
+    case OMNIBOX_FOCUS_NONE:
+      // Remove focus only if the popup is closed. This will prevent someone
+      // from changing the omnibox value and closing the popup without user
+      // interaction.
+      if (!omnibox_view->model()->popup_model()->IsOpen()) {
+        content::WebContents* contents = GetActiveWebContents();
+        if (contents)
+          contents->GetView()->Focus();
+      }
+      break;
+  }
 }
 
 content::WebContents* BrowserInstantController::GetActiveWebContents() const {
@@ -199,15 +204,6 @@ void BrowserInstantController::TabDeactivated(content::WebContents* contents) {
   instant_.TabDeactivated(contents);
 }
 
-void BrowserInstantController::UpdateThemeInfo() {
-  // Update theme background info.
-  // Initialize |theme_info| if necessary.
-  if (!initialized_theme_info_)
-    OnThemeChanged(ThemeServiceFactory::GetForProfile(profile()));
-  else
-    OnThemeChanged(NULL);
-}
-
 void BrowserInstantController::OpenURL(
     const GURL& url,
     content::PageTransition transition,
@@ -219,35 +215,44 @@ void BrowserInstantController::OpenURL(
                                            false));
 }
 
+void BrowserInstantController::PasteIntoOmnibox(const string16& text) {
+  OmniboxView* omnibox_view = browser_->window()->GetLocationBar()->
+      GetLocationEntry();
+  // The first case is for right click to paste, where the text is retrieved
+  // from the clipboard already sanitized. The second case is needed to handle
+  // drag-and-drop value and it has to be sanitazed before setting it into the
+  // omnibox.
+  string16 text_to_paste = text.empty() ?
+      omnibox_view->GetClipboardText() :
+      omnibox_view->SanitizeTextForPaste(text);
+
+  if (!text_to_paste.empty()) {
+    if (!omnibox_view->model()->has_focus())
+      omnibox_view->SetFocus();
+    omnibox_view->OnBeforePossibleChange();
+    omnibox_view->model()->on_paste();
+    omnibox_view->SetUserText(text_to_paste);
+    omnibox_view->OnAfterPossibleChange();
+  }
+}
+
 void BrowserInstantController::SetOmniboxBounds(const gfx::Rect& bounds) {
   instant_.SetOmniboxBounds(bounds);
 }
 
-void BrowserInstantController::ResetInstant(const std::string& pref_name) {
-  // Update the default value of the kInstantExtendedEnabled pref to match the
-  // value of the kInstantEnabled pref, if necessary.
-  if (pref_name == prefs::kInstantEnabled)
-    chrome::search::SetInstantExtendedPrefDefault(profile());
-
-  bool instant_pref_enabled = chrome::search::IsInstantPrefEnabled(profile());
-  bool use_local_overlay_only = profile()->IsOffTheRecord() ||
-      (!instant_pref_enabled &&
-       !profile()->GetPrefs()->GetBoolean(prefs::kSearchSuggestEnabled));
-  instant_.SetInstantEnabled(instant_pref_enabled, use_local_overlay_only);
+void BrowserInstantController::ToggleVoiceSearch() {
+  instant_.ToggleVoiceSearch();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// BrowserInstantController, search::SearchModelObserver implementation:
+// BrowserInstantController, SearchModelObserver implementation:
 
 void BrowserInstantController::ModelChanged(
-    const search::SearchModel::State& old_state,
-    const search::SearchModel::State& new_state) {
-  if (old_state.mode == new_state.mode)
-    return;
+    const SearchModel::State& old_state,
+    const SearchModel::State& new_state) {
+  if (old_state.mode != new_state.mode) {
+    const SearchMode& new_mode = new_state.mode;
 
-  const search::Mode& new_mode = new_state.mode;
-
-  if (search::IsInstantExtendedAPIEnabled()) {
     // Record some actions corresponding to the mode change. Note that to get
     // the full story, it's necessary to look at other UMA actions as well,
     // such as tab switches.
@@ -255,103 +260,49 @@ void BrowserInstantController::ModelChanged(
       content::RecordAction(UserMetricsAction("InstantExtended.ShowSRP"));
     else if (new_mode.is_ntp())
       content::RecordAction(UserMetricsAction("InstantExtended.ShowNTP"));
+
+    instant_.SearchModeChanged(old_state.mode, new_mode);
   }
 
-  // If mode is now |NTP|, send theme-related information to Instant.
-  if (new_mode.is_ntp())
-    UpdateThemeInfo();
-
-  instant_.SearchModeChanged(old_state.mode, new_mode);
+  if (old_state.instant_support != new_state.instant_support)
+    instant_.InstantSupportChanged(new_state.instant_support);
 }
 
-////////////////////////////////////////////////////////////////////////////////
-// BrowserInstantController, content::NotificationObserver implementation:
+void BrowserInstantController::OnDefaultSearchProviderChanged(
+    const std::string& pref_name) {
+  DCHECK_EQ(pref_name, std::string(prefs::kDefaultSearchProviderID));
 
-void BrowserInstantController::Observe(
-    int type,
-    const content::NotificationSource& source,
-    const content::NotificationDetails& details) {
-#if defined(ENABLE_THEMES)
-  DCHECK_EQ(chrome::NOTIFICATION_BROWSER_THEME_CHANGED, type);
-  OnThemeChanged(content::Source<ThemeService>(source).ptr());
-#endif  // defined(ENABLE_THEMES)
-}
-
-void BrowserInstantController::OnThemeChanged(ThemeService* theme_service) {
-  if (theme_service) {  // Get theme information from theme service.
-    theme_info_ = ThemeBackgroundInfo();
-
-    // Set theme background color.
-    SkColor background_color =
-        theme_service->GetColor(ThemeProperties::COLOR_NTP_BACKGROUND);
-    if (gfx::IsInvertedColorScheme())
-      background_color = color_utils::InvertColor(background_color);
-    theme_info_.color_r = SkColorGetR(background_color);
-    theme_info_.color_g = SkColorGetG(background_color);
-    theme_info_.color_b = SkColorGetB(background_color);
-    theme_info_.color_a = SkColorGetA(background_color);
-
-    if (theme_service->HasCustomImage(IDR_THEME_NTP_BACKGROUND)) {
-      // Set theme id for theme background image url.
-      theme_info_.theme_id = theme_service->GetThemeID();
-
-      // Set theme background image horizontal alignment.
-      int alignment = 0;
-      theme_service->GetDisplayProperty(
-          ThemeProperties::NTP_BACKGROUND_ALIGNMENT, &alignment);
-      if (alignment & ThemeProperties::ALIGN_LEFT) {
-        theme_info_.image_horizontal_alignment = THEME_BKGRND_IMAGE_ALIGN_LEFT;
-      } else if (alignment & ThemeProperties::ALIGN_RIGHT) {
-        theme_info_.image_horizontal_alignment = THEME_BKGRND_IMAGE_ALIGN_RIGHT;
-      } else {  // ALIGN_CENTER
-        theme_info_.image_horizontal_alignment =
-            THEME_BKGRND_IMAGE_ALIGN_CENTER;
-      }
-
-      // Set theme background image vertical alignment.
-      if (alignment & ThemeProperties::ALIGN_TOP)
-        theme_info_.image_vertical_alignment = THEME_BKGRND_IMAGE_ALIGN_TOP;
-      else if (alignment & ThemeProperties::ALIGN_BOTTOM)
-        theme_info_.image_vertical_alignment = THEME_BKGRND_IMAGE_ALIGN_BOTTOM;
-      else  // ALIGN_CENTER
-        theme_info_.image_vertical_alignment = THEME_BKGRND_IMAGE_ALIGN_CENTER;
-
-      // Set theme background image tiling.
-      int tiling = 0;
-      theme_service->GetDisplayProperty(ThemeProperties::NTP_BACKGROUND_TILING,
-                                        &tiling);
-      switch (tiling) {
-        case ThemeProperties::NO_REPEAT:
-            theme_info_.image_tiling = THEME_BKGRND_IMAGE_NO_REPEAT;
-            break;
-        case ThemeProperties::REPEAT_X:
-            theme_info_.image_tiling = THEME_BKGRND_IMAGE_REPEAT_X;
-            break;
-        case ThemeProperties::REPEAT_Y:
-            theme_info_.image_tiling = THEME_BKGRND_IMAGE_REPEAT_Y;
-            break;
-        case ThemeProperties::REPEAT:
-            theme_info_.image_tiling = THEME_BKGRND_IMAGE_REPEAT;
-            break;
-      }
-
-      // Set theme background image height.
-      gfx::ImageSkia* image = theme_service->GetImageSkiaNamed(
-          IDR_THEME_NTP_BACKGROUND);
-      DCHECK(image);
-      theme_info_.image_height = image->height();
-
-      theme_info_.has_attribution =
-          theme_service->HasCustomImage(IDR_THEME_NTP_ATTRIBUTION);
-    }
-
-    initialized_theme_info_ = true;
+  Profile* browser_profile = profile();
+  const TemplateURL* template_url =
+      TemplateURLServiceFactory::GetForProfile(browser_profile)->
+          GetDefaultSearchProvider();
+  if (!template_url) {
+    // A NULL |template_url| could mean either this notification is sent during
+    // the browser start up operation or the user now has no default search
+    // provider. There is no way for the user to reach this state using the
+    // Chrome settings. Only explicitly poking at the DB or bugs in the Sync
+    // could cause that, neither of which we support.
+    return;
   }
 
-  DCHECK(initialized_theme_info_);
+  InstantService* instant_service =
+      InstantServiceFactory::GetForProfile(browser_profile);
+  if (!instant_service)
+    return;
 
-  if (browser_->search_model()->mode().is_ntp())
-    instant_.ThemeChanged(theme_info_);
+  TabStripModel* tab_model = browser_->tab_strip_model();
+  int count = tab_model->count();
+  for (int index = 0; index < count; ++index) {
+    content::WebContents* contents = tab_model->GetWebContentsAt(index);
+    if (!contents)
+      continue;
+
+    if (!instant_service->IsInstantProcess(
+            contents->GetRenderProcessHost()->GetID()))
+      continue;
+
+    // Reload the contents to ensure that it gets assigned to a non-priviledged
+    // renderer.
+    contents->GetController().Reload(false);
+  }
 }
-
-}  // namespace chrome

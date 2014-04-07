@@ -13,7 +13,7 @@
 #include "base/compiler_specific.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "content/browser/geolocation/location_provider.h"
+#include "content/browser/geolocation/location_provider_base.h"
 #include "content/common/content_export.h"
 #include "content/public/common/geoposition.h"
 
@@ -56,10 +56,6 @@ class CONTENT_EXPORT LibGps {
 };
 
 // Location provider for Linux, that uses libgps/gpsd to obtain position fixes.
-// TODO(joth): Currently this runs entirely in the client thread (i.e. Chrome's
-// IO thread). As the older libgps API is not designed to support polling,
-// there's a chance it could block, so better move this into its own worker
-// thread.
 class CONTENT_EXPORT GpsLocationProviderLinux : public LocationProviderBase {
  public:
   typedef LibGps* (*LibGpsFactory)();
@@ -82,7 +78,8 @@ class CONTENT_EXPORT GpsLocationProviderLinux : public LocationProviderBase {
   virtual bool StartProvider(bool high_accuracy) OVERRIDE;
   virtual void StopProvider() OVERRIDE;
   virtual void GetPosition(Geoposition* position) OVERRIDE;
-  virtual void UpdatePosition() OVERRIDE;
+  virtual void RequestRefresh() OVERRIDE;
+  virtual void OnPermissionGranted() OVERRIDE;
 
  private:
   // Task which run in the child thread.

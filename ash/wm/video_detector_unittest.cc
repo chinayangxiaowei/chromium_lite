@@ -9,7 +9,7 @@
 #include "ash/wm/window_util.h"
 #include "base/compiler_specific.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/client/window_types.h"
@@ -132,13 +132,52 @@ TEST_F(VideoDetectorTest, Basic) {
   EXPECT_EQ(0, observer_->num_fullscreens());
   EXPECT_EQ(1, observer_->num_not_fullscreens());
 
-  // Spread out the frames over two seconds; we shouldn't detect video.
+  // Spread out the frames over a longer period of time, but send enough
+  // over a one-second window that the observer should be notified.
   observer_->reset_stats();
   AdvanceTime(base::TimeDelta::FromSeconds(2));
-  for (int i = 0; i < VideoDetector::kMinFramesPerSecond - 1; ++i)
+  detector_->OnWindowPaintScheduled(window.get(), update_region);
+  EXPECT_EQ(0, observer_->num_invocations());
+
+  AdvanceTime(base::TimeDelta::FromMilliseconds(500));
+  const int kNumFrames = VideoDetector::kMinFramesPerSecond + 1;
+  base::TimeDelta kInterval =
+      base::TimeDelta::FromMilliseconds(1000 / kNumFrames);
+  for (int i = 0; i < kNumFrames; ++i) {
+    AdvanceTime(kInterval);
     detector_->OnWindowPaintScheduled(window.get(), update_region);
-  AdvanceTime(base::TimeDelta::FromSeconds(1));
-  for (int i = 0; i < VideoDetector::kMinFramesPerSecond - 1; ++i)
+  }
+  EXPECT_EQ(1, observer_->num_invocations());
+
+  // Keep going and check that the observer is notified again.
+  for (int i = 0; i < kNumFrames; ++i) {
+    AdvanceTime(kInterval);
+    detector_->OnWindowPaintScheduled(window.get(), update_region);
+  }
+  EXPECT_EQ(2, observer_->num_invocations());
+
+  // Send updates at a slower rate and check that the observer isn't notified.
+  base::TimeDelta kSlowInterval = base::TimeDelta::FromMilliseconds(
+      1000 / (VideoDetector::kMinFramesPerSecond - 2));
+  for (int i = 0; i < kNumFrames; ++i) {
+    AdvanceTime(kSlowInterval);
+    detector_->OnWindowPaintScheduled(window.get(), update_region);
+  }
+  EXPECT_EQ(2, observer_->num_invocations());
+}
+
+TEST_F(VideoDetectorTest, Shutdown) {
+  gfx::Rect window_bounds(gfx::Point(), gfx::Size(1024, 768));
+  scoped_ptr<aura::Window> window(
+      CreateTestWindowInShell(SK_ColorRED, 12345, window_bounds));
+  gfx::Rect update_region(
+      gfx::Point(),
+      gfx::Size(VideoDetector::kMinUpdateWidth,
+                VideoDetector::kMinUpdateHeight));
+
+  // It should not detect video during the shutdown.
+  Shell::GetInstance()->OnAppTerminating();
+  for (int i = 0; i < VideoDetector::kMinFramesPerSecond; ++i)
     detector_->OnWindowPaintScheduled(window.get(), update_region);
   EXPECT_EQ(0, observer_->num_invocations());
 }

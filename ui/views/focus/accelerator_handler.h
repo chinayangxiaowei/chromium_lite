@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "base/compiler_specific.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "ui/views/views_export.h"
 
 namespace views {
@@ -27,7 +27,7 @@ bool VIEWS_EXPORT DispatchXEvent(XEvent* xevent);
 #if defined(OS_MACOSX)
 class VIEWS_EXPORT AcceleratorHandler {
 #else
-class VIEWS_EXPORT AcceleratorHandler : public MessageLoop::Dispatcher {
+class VIEWS_EXPORT AcceleratorHandler : public base::MessageLoop::Dispatcher {
 #endif  // defined(OS_MACOSX)
  public:
   AcceleratorHandler();

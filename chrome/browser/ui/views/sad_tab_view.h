@@ -18,7 +18,7 @@ class WebContents;
 
 namespace views {
 class Label;
-class TextButton;
+class LabelButton;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -49,9 +49,6 @@ class SadTabView : public chrome::SadTab,
 
  protected:
   // Overridden from views::View:
-  virtual void ViewHierarchyChanged(bool is_add,
-                                    views::View* parent,
-                                    views::View* child) OVERRIDE;
   virtual void OnPaint(gfx::Canvas* canvas) OVERRIDE;
 
  private:
@@ -68,7 +65,7 @@ class SadTabView : public chrome::SadTab,
   views::Label* message_;
   views::Link* help_link_;
   views::Link* feedback_link_;
-  views::TextButton* reload_button_;
+  views::LabelButton* reload_button_;
 
   DISALLOW_COPY_AND_ASSIGN(SadTabView);
 };

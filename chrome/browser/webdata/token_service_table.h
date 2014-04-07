@@ -9,7 +9,7 @@
 #include <string>
 
 #include "base/compiler_specific.h"
-#include "chrome/browser/webdata/web_database_table.h"
+#include "components/webdata/common/web_database_table.h"
 
 class WebDatabase;
 
@@ -25,11 +25,13 @@ class TokenServiceTable : public WebDatabaseTable {
   virtual bool Init(sql::Connection* db, sql::MetaTable* meta_table) OVERRIDE;
   virtual bool IsSyncable() OVERRIDE;
   virtual bool MigrateToVersion(int version,
-                                const std::string& app_locale,
                                 bool* update_compatible_version) OVERRIDE;
 
   // Remove all tokens previously set with SetTokenForService.
   bool RemoveAllTokens();
+
+  // Removes a token related to the service from the token_service table.
+  bool RemoveTokenForService(const std::string& service);
 
   // Retrieves all tokens previously set with SetTokenForService.
   // Returns true if there were tokens and we decrypted them,

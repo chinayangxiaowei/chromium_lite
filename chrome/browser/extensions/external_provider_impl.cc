@@ -13,12 +13,14 @@
 #include "base/memory/linked_ptr.h"
 #include "base/metrics/field_trial.h"
 #include "base/path_service.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "base/values.h"
 #include "base/version.h"
 #include "chrome/browser/app_mode/app_mode_utils.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/extension_service.h"
+#include "chrome/browser/extensions/extension_system.h"
+#include "chrome/browser/extensions/external_component_loader.h"
 #include "chrome/browser/extensions/external_policy_loader.h"
 #include "chrome/browser/extensions/external_pref_loader.h"
 #include "chrome/browser/extensions/external_provider_interface.h"
@@ -31,12 +33,8 @@
 #include "content/public/browser/browser_thread.h"
 #include "ui/base/l10n/l10n_util.h"
 
-#if defined(ENABLE_MANAGED_USERS)
-#include "chrome/browser/managed_mode/managed_user_service.h"
-#include "chrome/browser/managed_mode/managed_user_service_factory.h"
-#endif
-
 #if defined(OS_CHROMEOS)
+#include "chrome/browser/chromeos/extensions/external_pref_cache_loader.h"
 #include "chrome/browser/chromeos/login/user_manager.h"
 #include "chrome/browser/chromeos/policy/app_pack_updater.h"
 #include "chrome/browser/policy/browser_policy_connector.h"
@@ -59,21 +57,22 @@ const char ExternalProviderImpl::kExternalUpdateUrl[] = "external_update_url";
 const char ExternalProviderImpl::kSupportedLocales[] = "supported_locales";
 const char ExternalProviderImpl::kIsBookmarkApp[] = "is_bookmark_app";
 const char ExternalProviderImpl::kIsFromWebstore[] = "is_from_webstore";
+const char ExternalProviderImpl::kKeepIfPresent[] = "keep_if_present";
 
-ExternalProviderImpl::ExternalProviderImpl(
-    VisitorInterface* service,
-    ExternalLoader* loader,
-    Manifest::Location crx_location,
-    Manifest::Location download_location,
-    int creation_flags)
-  : crx_location_(crx_location),
-    download_location_(download_location),
-    service_(service),
-    prefs_(NULL),
-    ready_(false),
-    loader_(loader),
-    creation_flags_(creation_flags),
-    auto_acknowledge_(false) {
+ExternalProviderImpl::ExternalProviderImpl(VisitorInterface* service,
+                                           ExternalLoader* loader,
+                                           Profile* profile,
+                                           Manifest::Location crx_location,
+                                           Manifest::Location download_location,
+                                           int creation_flags)
+    : crx_location_(crx_location),
+      download_location_(download_location),
+      service_(service),
+      ready_(false),
+      loader_(loader),
+      profile_(profile),
+      creation_flags_(creation_flags),
+      auto_acknowledge_(false) {
   loader_->Init(this);
 }
 
@@ -87,7 +86,7 @@ void ExternalProviderImpl::VisitRegisteredExtension() {
   loader_->StartLoading();
 }
 
-void ExternalProviderImpl::SetPrefs(DictionaryValue* prefs) {
+void ExternalProviderImpl::SetPrefs(base::DictionaryValue* prefs) {
   CHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
   // Check if the service is still alive. It is possible that it went
@@ -101,9 +100,9 @@ void ExternalProviderImpl::SetPrefs(DictionaryValue* prefs) {
   std::set<std::string> unsupported_extensions;
 
   // Notify ExtensionService about all the extensions this provider has.
-  for (DictionaryValue::Iterator i(*prefs_); !i.IsAtEnd(); i.Advance()) {
+  for (base::DictionaryValue::Iterator i(*prefs_); !i.IsAtEnd(); i.Advance()) {
     const std::string& extension_id = i.key();
-    const DictionaryValue* extension = NULL;
+    const base::DictionaryValue* extension = NULL;
 
     if (!Extension::IdIsValid(extension_id)) {
       LOG(WARNING) << "Malformed extension dictionary: key "
@@ -156,7 +155,7 @@ void ExternalProviderImpl::SetPrefs(DictionaryValue* prefs) {
     }
 
     // Check that extension supports current browser locale.
-    const ListValue* supported_locales = NULL;
+    const base::ListValue* supported_locales = NULL;
     if (extension->GetList(kSupportedLocales, &supported_locales)) {
       std::vector<std::string> browser_locales;
       l10n_util::GetParentLocales(g_browser_process->GetApplicationLocale(),
@@ -183,9 +182,9 @@ void ExternalProviderImpl::SetPrefs(DictionaryValue* prefs) {
 
       if (!locale_supported) {
         unsupported_extensions.insert(extension_id);
-        LOG(INFO) << "Skip installing (or uninstall) external extension: "
-                  << extension_id << " because the extension doesn't support "
-                  << "the browser locale.";
+        VLOG(1) << "Skip installing (or uninstall) external extension: "
+                << extension_id << " because the extension doesn't support "
+                << "the browser locale.";
         continue;
       }
     }
@@ -200,6 +199,20 @@ void ExternalProviderImpl::SetPrefs(DictionaryValue* prefs) {
     if (extension->GetBoolean(kIsFromWebstore, &is_from_webstore) &&
         is_from_webstore) {
       creation_flags |= Extension::FROM_WEBSTORE;
+    }
+    bool keep_if_present;
+    if (extension->GetBoolean(kKeepIfPresent, &keep_if_present) &&
+        keep_if_present && profile_) {
+      ExtensionServiceInterface* extension_service =
+          ExtensionSystem::Get(profile_)->extension_service();
+      const Extension* extension = extension_service ?
+          extension_service->GetExtensionById(extension_id, true) : NULL;
+      if (!extension) {
+        VLOG(1) << "Skip installing (or uninstall) external extension: "
+                << extension_id << " because the extension should be kept "
+                << "only if it is already installed.";
+        continue;
+      }
     }
 
     if (has_external_crx) {
@@ -290,7 +303,7 @@ bool ExternalProviderImpl::GetExtensionDetails(
   CHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   CHECK(prefs_.get());
   CHECK(ready_);
-  DictionaryValue* extension = NULL;
+  base::DictionaryValue* extension = NULL;
   if (!prefs_->GetDictionary(id, &extension))
     return false;
 
@@ -330,6 +343,7 @@ void ExternalProviderImpl::CreateExternalProviders(
           new ExternalProviderImpl(
               service,
               new ExternalPolicyLoader(profile),
+              profile,
               Manifest::INVALID_LOCATION,
               Manifest::EXTERNAL_POLICY_DOWNLOAD,
               Extension::NO_FLAGS)));
@@ -361,19 +375,20 @@ void ExternalProviderImpl::CreateExternalProviders(
   is_chromeos_demo_session =
       user_manager && user_manager->IsLoggedInAsDemoUser() &&
       g_browser_process->browser_policy_connector()->GetDeviceMode() ==
-          policy::DEVICE_MODE_KIOSK;
+          policy::DEVICE_MODE_RETAIL_KIOSK;
   bundled_extension_creation_flags = Extension::FROM_WEBSTORE |
       Extension::WAS_INSTALLED_BY_DEFAULT;
 #endif
 
-  bool is_managed_profile = false;
+  bool is_managed_profile = profile->IsManaged();
   int external_apps_path_id = chrome::DIR_EXTERNAL_EXTENSIONS;
-#if defined(ENABLE_MANAGED_USERS)
-  ManagedUserService* managed_user_service =
-      ManagedUserServiceFactory::GetForProfile(profile);
-  is_managed_profile = managed_user_service->ProfileIsManaged();
   if (is_managed_profile)
     external_apps_path_id = chrome::DIR_MANAGED_USERS_DEFAULT_APPS;
+
+#if defined(OS_CHROMEOS)
+  typedef chromeos::ExternalPrefCacheLoader PrefLoader;
+#else
+  typedef ExternalPrefLoader PrefLoader;
 #endif
 
   if (!is_chromeos_demo_session) {
@@ -381,8 +396,9 @@ void ExternalProviderImpl::CreateExternalProviders(
         linked_ptr<ExternalProviderInterface>(
             new ExternalProviderImpl(
                 service,
-                new ExternalPrefLoader(external_apps_path_id,
-                                       check_admin_permissions_on_mac),
+                new PrefLoader(external_apps_path_id,
+                               check_admin_permissions_on_mac),
+                profile,
                 Manifest::EXTERNAL_PREF,
                 Manifest::EXTERNAL_PREF_DOWNLOAD,
                 bundled_extension_creation_flags)));
@@ -398,6 +414,7 @@ void ExternalProviderImpl::CreateExternalProviders(
                 service,
                 new ExternalPrefLoader(chrome::DIR_USER_EXTERNAL_EXTENSIONS,
                                       ExternalPrefLoader::NONE),
+                profile,
                 Manifest::EXTERNAL_PREF,
                 Manifest::EXTERNAL_PREF_DOWNLOAD,
                 Extension::NO_FLAGS)));
@@ -409,6 +426,7 @@ void ExternalProviderImpl::CreateExternalProviders(
             new ExternalProviderImpl(
                 service,
                 new ExternalRegistryLoader,
+                profile,
                 Manifest::EXTERNAL_REGISTRY,
                 Manifest::INVALID_LOCATION,
                 Extension::NO_FLAGS)));
@@ -422,6 +440,7 @@ void ExternalProviderImpl::CreateExternalProviders(
                 new ExternalPrefLoader(
                     chrome::DIR_STANDALONE_EXTERNAL_EXTENSIONS,
                     ExternalPrefLoader::NONE),
+                profile,
                 Manifest::EXTERNAL_PREF,
                 Manifest::EXTERNAL_PREF_DOWNLOAD,
                 bundled_extension_creation_flags)));
@@ -444,20 +463,32 @@ void ExternalProviderImpl::CreateExternalProviders(
 #endif
 
 #if defined(OS_CHROMEOS)
-    policy::BrowserPolicyConnector* connector =
-        g_browser_process->browser_policy_connector();
-    if (is_chromeos_demo_session && connector->GetAppPackUpdater()) {
+    policy::AppPackUpdater* app_pack_updater =
+        g_browser_process->browser_policy_connector()->GetAppPackUpdater();
+    if (is_chromeos_demo_session && app_pack_updater &&
+        !app_pack_updater->created_external_loader()) {
       provider_list->push_back(
           linked_ptr<ExternalProviderInterface>(
             new ExternalProviderImpl(
                 service,
-                connector->GetAppPackUpdater()->CreateExternalLoader(),
+                app_pack_updater->CreateExternalLoader(),
+                profile,
                 Manifest::EXTERNAL_PREF,
                 Manifest::INVALID_LOCATION,
                 Extension::NO_FLAGS)));
     }
 #endif
   }
+
+  provider_list->push_back(
+      linked_ptr<ExternalProviderInterface>(
+        new ExternalProviderImpl(
+            service,
+            new ExternalComponentLoader(),
+            profile,
+            Manifest::INVALID_LOCATION,
+            Manifest::EXTERNAL_POLICY_DOWNLOAD,
+            Extension::FROM_WEBSTORE | Extension::WAS_INSTALLED_BY_DEFAULT)));
 }
 
 }  // namespace extensions

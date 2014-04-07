@@ -4,14 +4,15 @@
 
 #include "chrome/browser/ui/login/login_prompt.h"
 
-#include "base/string16.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string16.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/password_manager/password_manager.h"
 #include "chrome/browser/tab_contents/tab_util.h"
 #include "chrome/browser/ui/views/constrained_window_views.h"
 #include "chrome/browser/ui/views/login_view.h"
-#include "chrome/browser/ui/web_contents_modal_dialog_manager.h"
 #include "chrome/common/chrome_switches.h"
+#include "components/web_modal/web_contents_modal_dialog_manager.h"
+#include "components/web_modal/web_contents_modal_dialog_manager_delegate.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
@@ -25,6 +26,7 @@
 using content::BrowserThread;
 using content::PasswordForm;
 using content::WebContents;
+using web_modal::WebContentsModalDialogManager;
 
 // ----------------------------------------------------------------------------
 // LoginHandlerViews
@@ -47,6 +49,7 @@ class LoginHandlerViews : public LoginHandler,
                                        const string16& password) OVERRIDE {
     // Nothing to do here since LoginView takes care of autofill for win.
   }
+  virtual void OnLoginModelDestroying() OVERRIDE {}
 
   // views::DialogDelegate methods:
   virtual string16 GetDialogButtonLabel(
@@ -135,11 +138,11 @@ class LoginHandlerViews : public LoginHandler,
       const string16& explanation) OVERRIDE {
     DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
-    // Create a new LoginView and set the model for it.  The model
-    // (password manager) is owned by the view's parent WebContents,
-    // so natural destruction order means we don't have to worry about
-    // disassociating the model from the view, because the view will
-    // be deleted before the password manager.
+    // Create a new LoginView and set the model for it.  The model (password
+    // manager) is owned by the WebContents, but the view is parented to the
+    // browser window, so the view may be destroyed after the password
+    // manager. The view listens for model destruction and unobserves
+    // accordingly.
     login_view_ = new LoginView(explanation, manager);
 
     // Scary thread safety note: This can potentially be called *after* SetAuth
@@ -148,11 +151,13 @@ class LoginHandlerViews : public LoginHandler,
     // will occur via an InvokeLater on the UI thread, which is guaranteed
     // to happen after this is called (since this was InvokeLater'd first).
     WebContents* requesting_contents = GetWebContentsForLogin();
-    dialog_ = CreateWebContentsModalDialogViews(
-        this,
-        requesting_contents->GetView()->GetNativeView());
     WebContentsModalDialogManager* web_contents_modal_dialog_manager =
         WebContentsModalDialogManager::FromWebContents(requesting_contents);
+    dialog_ = CreateWebContentsModalDialogViews(
+        this,
+        requesting_contents->GetView()->GetNativeView(),
+        web_contents_modal_dialog_manager->delegate()->
+            GetWebContentsModalDialogHost());
     web_contents_modal_dialog_manager->ShowDialog(dialog_->GetNativeView());
     NotifyAuthNeeded();
   }

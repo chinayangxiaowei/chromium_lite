@@ -14,15 +14,12 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/task_manager/task_manager.h"
 #include "chrome/browser/ui/host_desktop.h"
-#include "chrome/common/chrome_notification_types.h"
-#include "content/public/browser/notification_service.h"
-#include "content/public/browser/notification_source.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/webui/web_ui_util.h"
-#include "webkit/glue/webpreferences.h"
+#include "webkit/common/webpreferences.h"
 
 namespace {
 
@@ -184,18 +181,13 @@ void TaskManagerHandler::EnableTaskManager(const ListValue* indexes) {
 
   model_->AddObserver(this);
   model_->StartUpdating();
-
-  content::NotificationService::current()->Notify(
-      chrome::NOTIFICATION_TASK_MANAGER_WINDOW_READY,
-      content::Source<TaskManagerModel>(model_),
-      content::NotificationService::NoDetails());
 }
 
 void TaskManagerHandler::OpenAboutMemory(const ListValue* indexes) {
   content::RenderViewHost* rvh =
       web_ui()->GetWebContents()->GetRenderViewHost();
   if (rvh) {
-    webkit_glue::WebPreferences webkit_prefs = rvh->GetWebkitPreferences();
+    WebPreferences webkit_prefs = rvh->GetWebkitPreferences();
     webkit_prefs.allow_scripts_to_close_windows = true;
     rvh->UpdateWebkitPreferences(webkit_prefs);
   } else {
@@ -264,10 +256,8 @@ base::DictionaryValue* TaskManagerHandler::CreateTaskGroupValue(
   int index = model_->GetResourceIndexForGroup(group_index, 0);
   int length = model_->GetGroupRangeForResource(index).second;
 
-  // Forces to set following 3 columns regardless of |enable_columns|.
+  // Forces to set following column regardless of |enable_columns|.
   val->SetInteger("index", index);
-  val->SetBoolean("isBackgroundResource",
-                  model_->IsBackgroundResource(index));
   CreateGroupColumnList("processId", index, 1, val);
   CreateGroupColumnList("type", index, length, val);
   CreateGroupColumnList("uniqueId", index, length, val);

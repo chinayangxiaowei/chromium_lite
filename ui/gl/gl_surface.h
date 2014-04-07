@@ -18,10 +18,6 @@ namespace gfx {
 class GLContext;
 class VSyncProvider;
 
-#if defined(OS_ANDROID)
-class AndroidNativeWindow;
-#endif
-
 // Encapsulates a surface that can be rendered to with GL, hiding platform
 // specific management.
 class GL_EXPORT GLSurface : public base::RefCounted<GLSurface> {
@@ -56,10 +52,6 @@ class GL_EXPORT GLSurface : public base::RefCounted<GLSurface> {
 
   // Get the size of the surface.
   virtual gfx::Size GetSize() = 0;
-
-#if defined(OS_ANDROID)
-  virtual void SetNativeWindow(AndroidNativeWindow* window) { }
-#endif
 
   // Get the underlying platform specific surface "handle".
   virtual void* GetHandle() = 0;
@@ -107,12 +99,10 @@ class GL_EXPORT GLSurface : public base::RefCounted<GLSurface> {
 
   // Create a GL surface that renders directly to a view.
   static scoped_refptr<GLSurface> CreateViewGLSurface(
-      bool software,
       gfx::AcceleratedWidget window);
 
   // Create a GL surface used for offscreen rendering.
   static scoped_refptr<GLSurface> CreateOffscreenGLSurface(
-      bool software,
       const gfx::Size& size);
 
   static GLSurface* GetCurrent();

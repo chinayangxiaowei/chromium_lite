@@ -4,20 +4,23 @@
 
 #include "chrome/browser/ui/bookmarks/bookmark_utils.h"
 
+#include "apps/app_launcher.h"
 #include "base/basictypes.h"
 #include "base/logging.h"
 #include "base/prefs/pref_service.h"
 #include "base/strings/string_number_conversions.h"
-#include "chrome/browser/bookmarks/bookmark_editor.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/search/search.h"
+#include "chrome/browser/ui/bookmarks/bookmark_editor.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/simple_message_box.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/common/url_constants.h"
 #include "components/user_prefs/user_prefs.h"
 #include "content/public/browser/web_contents.h"
 #include "grit/chromium_strings.h"
@@ -204,7 +207,7 @@ bool ConfirmDeleteBookmarkNode(const BookmarkNode* node,
 void ShowBookmarkAllTabsDialog(Browser* browser) {
   Profile* profile = browser->profile();
   BookmarkModel* model = BookmarkModelFactory::GetForProfile(profile);
-  DCHECK(model && model->IsLoaded());
+  DCHECK(model && model->loaded());
 
   const BookmarkNode* parent = model->GetParentForNewNodes();
   BookmarkEditor::EditDetails details =
@@ -233,15 +236,21 @@ bool HasBookmarkURLsAllowedInIncognitoMode(
   return false;
 }
 
+GURL GetURLToBookmark(content::WebContents* web_contents) {
+  DCHECK(web_contents);
+  return IsInstantNTP(web_contents) ?
+      GURL(kChromeUINewTabURL) : web_contents->GetURL();
+}
+
 void GetURLAndTitleToBookmark(content::WebContents* web_contents,
                               GURL* url,
                               string16* title) {
-  *url = web_contents->GetURL();
+  *url = GetURLToBookmark(web_contents);
   *title = web_contents->GetTitle();
 }
 
 void ToggleBookmarkBarWhenVisible(content::BrowserContext* browser_context) {
-  PrefService* prefs = components::UserPrefs::Get(browser_context);
+  PrefService* prefs = user_prefs::UserPrefs::Get(browser_context);
   const bool always_show = !prefs->GetBoolean(prefs::kShowBookmarkBar);
 
   // The user changed when the bookmark bar is shown, update the preferences.
@@ -262,6 +271,26 @@ string16 FormatBookmarkURLForDisplay(const GURL& url,
       url, languages,
       net::kFormatUrlOmitAll & ~net::kFormatUrlOmitUsernamePassword,
       net::UnescapeRule::SPACES, NULL, NULL, NULL);
+}
+
+bool IsAppsShortcutEnabled(const Profile* profile) {
+#if defined(USE_ASH)
+  // Don't show the apps shortcut in ash when the app launcher is enabled.
+  if (apps::IsAppLauncherEnabled())
+    return false;
+#endif
+
+  return chrome::IsInstantExtendedAPIEnabled() && !profile->IsOffTheRecord();
+}
+
+bool ShouldShowAppsShortcutInBookmarkBar(Profile* profile) {
+  // Managed users can not have apps installed currently so there's no need to
+  // show the apps shortcut.
+  if (profile->IsManaged())
+    return false;
+
+  return IsAppsShortcutEnabled(profile) &&
+      profile->GetPrefs()->GetBoolean(prefs::kShowAppsShortcutInBookmarkBar);
 }
 
 }  // namespace chrome

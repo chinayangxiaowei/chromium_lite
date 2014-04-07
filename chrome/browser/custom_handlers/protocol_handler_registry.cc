@@ -10,10 +10,10 @@
 #include "base/command_line.h"
 #include "base/logging.h"
 #include "base/prefs/pref_service.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/custom_handlers/register_protocol_handler_infobar_delegate.h"
 #include "chrome/browser/net/chrome_url_request_context.h"
 #include "chrome/browser/profiles/profile_io_data.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/custom_handlers/protocol_handler.h"
 #include "chrome/common/pref_names.h"
@@ -163,7 +163,7 @@ net::URLRequestJob* ProtocolHandlerRegistry::IOThreadDelegate::MaybeCreateJob(
 ProtocolHandlerRegistry::JobInterceptorFactory::JobInterceptorFactory(
     IOThreadDelegate* io_thread_delegate)
     : io_thread_delegate_(io_thread_delegate) {
-  DCHECK(io_thread_delegate_);
+  DCHECK(io_thread_delegate_.get());
   DetachFromThread();
 }
 
@@ -203,6 +203,12 @@ bool ProtocolHandlerRegistry::JobInterceptorFactory::IsHandledURL(
   return (url.is_valid() &&
       io_thread_delegate_->IsHandledProtocol(url.scheme())) ||
       job_factory_->IsHandledURL(url);
+}
+
+bool ProtocolHandlerRegistry::JobInterceptorFactory::IsSafeRedirectTarget(
+    const GURL& location) const {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
+  return job_factory_->IsSafeRedirectTarget(location);
 }
 
 // DefaultClientObserver ------------------------------------------------------
@@ -295,7 +301,7 @@ void ProtocolHandlerRegistry::Delegate::RegisterWithOSAsDefaultClient(
   // and it will be automatically freed once all its tasks have finished.
   scoped_refptr<ShellIntegration::DefaultProtocolClientWorker> worker;
   worker = CreateShellWorker(observer, protocol);
-  observer->SetWorker(worker);
+  observer->SetWorker(worker.get());
   registry->default_client_observers_.push_back(observer);
   worker->StartSetAsDefault();
 }
@@ -468,7 +474,7 @@ void ProtocolHandlerRegistry::InitProtocolSettings() {
       DefaultClientObserver* observer = delegate_->CreateShellObserver(this);
       scoped_refptr<ShellIntegration::DefaultProtocolClientWorker> worker;
       worker = delegate_->CreateShellWorker(observer, handler.protocol());
-      observer->SetWorker(worker);
+      observer->SetWorker(worker.get());
       default_client_observers_.push_back(observer);
       worker->StartCheckIsDefault();
     }
@@ -701,14 +707,16 @@ void ProtocolHandlerRegistry::Shutdown() {
 }
 
 // static
-void ProtocolHandlerRegistry::RegisterUserPrefs(
-    PrefRegistrySyncable* registry) {
+void ProtocolHandlerRegistry::RegisterProfilePrefs(
+    user_prefs::PrefRegistrySyncable* registry) {
   registry->RegisterListPref(prefs::kRegisteredProtocolHandlers,
-                             PrefRegistrySyncable::UNSYNCABLE_PREF);
+                             user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterListPref(prefs::kIgnoredProtocolHandlers,
-                             PrefRegistrySyncable::UNSYNCABLE_PREF);
-  registry->RegisterBooleanPref(prefs::kCustomHandlersEnabled, true,
-                                PrefRegistrySyncable::UNSYNCABLE_PREF);
+                             user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
+  registry->RegisterBooleanPref(
+      prefs::kCustomHandlersEnabled,
+      true,
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
 }
 
 ProtocolHandlerRegistry::~ProtocolHandlerRegistry() {
@@ -874,6 +882,6 @@ ProtocolHandlerRegistry::CreateJobInterceptorFactory() {
   // this is always created on the UI thread (in profile_io's
   // InitializeOnUIThread. Any method calls must be done
   // on the IO thread (this is checked).
-  return scoped_ptr<JobInterceptorFactory>(new JobInterceptorFactory(
-      io_thread_delegate_));
+  return scoped_ptr<JobInterceptorFactory>(
+      new JobInterceptorFactory(io_thread_delegate_.get()));
 }

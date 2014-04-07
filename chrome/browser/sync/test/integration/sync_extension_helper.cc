@@ -63,11 +63,14 @@ std::string SyncExtensionHelper::InstallExtension(
   scoped_refptr<Extension> extension = GetExtension(profile, name, type);
   if (!extension.get()) {
     NOTREACHED() << "Could not install extension " << name;
-    return "";
+    return std::string();
   }
-  profile->GetExtensionService()->OnExtensionInstalled(
-      extension, syncer::StringOrdinal(), false /* no requirement errors */,
-      false /* don't wait for idle to install */);
+  profile->GetExtensionService()
+      ->OnExtensionInstalled(extension.get(),
+                             syncer::StringOrdinal(),
+                             false /* no requirement errors */,
+                             extensions::Blacklist::NOT_BLACKLISTED,
+                             false /* don't wait for idle to install */);
   return extension->id();
 }
 
@@ -303,7 +306,7 @@ scoped_refptr<Extension> CreateExtension(const base::FilePath& base_dir,
   }
   const base::FilePath sub_dir = base::FilePath().AppendASCII(name);
   base::FilePath extension_dir;
-  if (!file_util::PathExists(base_dir) &&
+  if (!base::PathExists(base_dir) &&
       !file_util::CreateDirectory(base_dir)) {
     ADD_FAILURE();
     return NULL;

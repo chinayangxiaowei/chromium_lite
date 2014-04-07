@@ -8,44 +8,48 @@
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/path_service.h"
 #include "base/prefs/pref_registry_simple.h"
-#include "base/string_util.h"
+#include "base/run_loop.h"
+#include "base/strings/string_util.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/threading/sequenced_worker_pool.h"
 #include "base/threading/thread.h"
-#include "chrome/browser/chromeos/cros/cros_library.h"
-#include "chrome/browser/chromeos/cros/mock_cryptohome_library.h"
+#include "chrome/browser/chrome_notification_types.h"
+#include "chrome/browser/chromeos/cros/network_library.h"
 #include "chrome/browser/chromeos/input_method/input_method_configuration.h"
 #include "chrome/browser/chromeos/input_method/mock_input_method_manager.h"
 #include "chrome/browser/chromeos/login/authenticator.h"
 #include "chrome/browser/chromeos/login/login_status_consumer.h"
 #include "chrome/browser/chromeos/login/user_manager.h"
-#include "chrome/browser/chromeos/net/connectivity_state_helper.h"
-#include "chrome/browser/chromeos/net/mock_connectivity_state_helper.h"
 #include "chrome/browser/chromeos/policy/enterprise_install_attributes.h"
+#include "chrome/browser/chromeos/settings/cros_settings.h"
+#include "chrome/browser/chromeos/settings/device_settings_service.h"
 #include "chrome/browser/chromeos/settings/device_settings_test_helper.h"
+#include "chrome/browser/chromeos/settings/mock_owner_key_util.h"
 #include "chrome/browser/io_thread.h"
 #include "chrome/browser/net/predictor.h"
 #include "chrome/browser/policy/browser_policy_connector.h"
 #include "chrome/browser/policy/cloud/device_management_service.h"
-#include "chrome/browser/policy/cloud/proto/device_management_backend.pb.h"
 #include "chrome/browser/policy/policy_service.h"
+#include "chrome/browser/policy/proto/cloud/device_management_backend.pb.h"
+#include "chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/rlz/rlz.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/scoped_testing_local_state.h"
 #include "chrome/test/base/testing_browser_process.h"
+#include "chromeos/chromeos_switches.h"
 #include "chromeos/cryptohome/mock_async_method_caller.h"
-#include "chromeos/dbus/mock_cryptohome_client.h"
-#include "chromeos/dbus/mock_dbus_thread_manager.h"
-#include "chromeos/dbus/mock_session_manager_client.h"
+#include "chromeos/cryptohome/mock_cryptohome_library.h"
+#include "chromeos/dbus/mock_dbus_thread_manager_without_gmock.h"
 #include "chromeos/disks/disk_mount_manager.h"
 #include "chromeos/disks/mock_disk_mount_manager.h"
+#include "chromeos/login/login_state.h"
+#include "chromeos/network/network_handler.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/test/test_browser_thread.h"
 #include "content/public/test/test_utils.h"
@@ -63,6 +67,8 @@
 #include "rlz/lib/rlz_value_store.h"
 #endif
 
+using ::testing::AnyNumber;
+
 namespace chromeos {
 
 namespace {
@@ -77,6 +83,7 @@ using ::testing::_;
 using content::BrowserThread;
 
 const char kTrue[] = "true";
+const char kFalse[] = "false";
 const char kDomain[] = "domain.com";
 const char kUsername[] = "user@domain.com";
 const char kMode[] = "enterprise";
@@ -84,6 +91,7 @@ const char kDeviceId[] = "100200300";
 const char kUsernameOtherDomain[] = "user@other.com";
 const char kAttributeOwned[] = "enterprise.owned";
 const char kAttributeOwner[] = "enterprise.user";
+const char kAttributeConsumerKiosk[] = "consumer.app_kiosk_enabled";
 const char kAttrEnterpriseDomain[] = "enterprise.domain";
 const char kAttrEnterpriseMode[] = "enterprise.mode";
 const char kAttrEnterpriseDeviceId[] = "enterprise.device_id";
@@ -127,15 +135,14 @@ void BlockLoop(base::WaitableEvent* completion, base::Callback<bool()> work) {
   do {
     completion->Wait();
   } while (work.Run());
-  MessageLoop::current()->QuitNow();
+  base::MessageLoop::current()->QuitNow();
 }
 
-ACTION_P(MockSessionManagerClientRetrievePolicyCallback, policy) {
-  arg0.Run(*policy);
-}
-
-ACTION_P(MockSessionManagerClientStorePolicyCallback, success) {
-  arg1.Run(success);
+void CopyLockResult(base::RunLoop* loop,
+                    policy::EnterpriseInstallAttributes::LockResult* out,
+                    policy::EnterpriseInstallAttributes::LockResult result) {
+  *out = result;
+  loop->Quit();
 }
 
 class LoginUtilsTest : public testing::Test,
@@ -153,15 +160,15 @@ class LoginUtilsTest : public testing::Test,
   LoginUtilsTest()
       : fake_io_thread_completion_(false, false),
         fake_io_thread_("fake_io_thread"),
-        loop_(MessageLoop::TYPE_IO),
+        loop_(base::MessageLoop::TYPE_IO),
         browser_process_(TestingBrowserProcess::GetGlobal()),
         local_state_(browser_process_),
         ui_thread_(BrowserThread::UI, &loop_),
         db_thread_(BrowserThread::DB, &loop_),
         file_thread_(BrowserThread::FILE, &loop_),
+        mock_input_method_manager_(NULL),
         mock_async_method_caller_(NULL),
         connector_(NULL),
-        cryptohome_(NULL),
         prepared_profile_(NULL) {}
 
   virtual void SetUp() OVERRIDE {
@@ -178,8 +185,8 @@ class LoginUtilsTest : public testing::Test,
     // A thread is needed to create a new MessageLoop, since there can be only
     // one loop per thread.
     fake_io_thread_.StartWithOptions(
-        base::Thread::Options(MessageLoop::TYPE_IO, 0));
-    MessageLoop* fake_io_loop = fake_io_thread_.message_loop();
+        base::Thread::Options(base::MessageLoop::TYPE_IO, 0));
+    base::MessageLoop* fake_io_loop = fake_io_thread_.message_loop();
     // Make this loop enter the single task, BlockLoop(). Pass in the completion
     // event and the work callback.
     fake_io_thread_.StopSoon();
@@ -197,7 +204,8 @@ class LoginUtilsTest : public testing::Test,
     ASSERT_TRUE(scoped_temp_dir_.CreateUniqueTempDir());
 
     CommandLine* command_line = CommandLine::ForCurrentProcess();
-    command_line->AppendSwitchASCII(switches::kDeviceManagementUrl, kDMServer);
+    command_line->AppendSwitchASCII(
+        ::switches::kDeviceManagementUrl, kDMServer);
     command_line->AppendSwitchASCII(switches::kLoginProfile, "user");
 
     // DBusThreadManager should be initialized before io_thread_state_, as
@@ -205,38 +213,19 @@ class LoginUtilsTest : public testing::Test,
     // which is part of io_thread_state_.
     DBusThreadManager::InitializeForTesting(&mock_dbus_thread_manager_);
 
-    ConnectivityStateHelper::InitializeForTesting(
-        &mock_connectivity_state_helper_);
+    CryptohomeLibrary::Initialize();
+    LoginState::Initialize();
 
-    input_method::InitializeForTesting(&mock_input_method_manager_);
+    mock_input_method_manager_ = new input_method::MockInputMethodManager();
+    input_method::InitializeForTesting(mock_input_method_manager_);
     disks::DiskMountManager::InitializeForTesting(&mock_disk_mount_manager_);
     mock_disk_mount_manager_.SetupDefaultReplies();
-
-    // Likewise, SessionManagerClient should also be initialized before
-    // io_thread_state_.
-    MockSessionManagerClient* session_managed_client =
-        mock_dbus_thread_manager_.mock_session_manager_client();
-    EXPECT_CALL(*session_managed_client, RetrieveDevicePolicy(_))
-        .WillRepeatedly(
-            MockSessionManagerClientRetrievePolicyCallback(&device_policy_));
-    EXPECT_CALL(*session_managed_client, RetrieveUserPolicy(_))
-        .WillRepeatedly(
-            MockSessionManagerClientRetrievePolicyCallback(&user_policy_));
-    EXPECT_CALL(*session_managed_client, StoreUserPolicy(_, _))
-        .WillRepeatedly(
-            DoAll(SaveArg<0>(&user_policy_),
-                  MockSessionManagerClientStorePolicyCallback(true)));
 
     mock_async_method_caller_ = new cryptohome::MockAsyncMethodCaller;
     cryptohome::AsyncMethodCaller::InitializeForTesting(
         mock_async_method_caller_);
 
-    CrosLibrary::TestApi* test_api = CrosLibrary::Get()->GetTestApi();
-    ASSERT_TRUE(test_api);
-
-    cryptohome_ = new MockCryptohomeLibrary();
-    EXPECT_CALL(*cryptohome_, InstallAttributesIsReady())
-        .WillRepeatedly(Return(true));
+    cryptohome_.reset(new MockCryptohomeLibrary());
     EXPECT_CALL(*cryptohome_, InstallAttributesIsInvalid())
         .WillRepeatedly(Return(false));
     EXPECT_CALL(*cryptohome_, InstallAttributesIsFirstInstall())
@@ -262,6 +251,9 @@ class LoginUtilsTest : public testing::Test,
     EXPECT_CALL(*cryptohome_, InstallAttributesGet(kAttributeOwned, _))
         .WillRepeatedly(DoAll(SetArgPointee<1>(kTrue),
                               Return(true)));
+    EXPECT_CALL(*cryptohome_, InstallAttributesGet(kAttributeConsumerKiosk, _))
+        .WillRepeatedly(DoAll(SetArgPointee<1>(kFalse),
+                              Return(true)));
     EXPECT_CALL(*cryptohome_, InstallAttributesGet(kAttributeOwner, _))
         .WillRepeatedly(DoAll(SetArgPointee<1>(kUsername),
                               Return(true)));
@@ -274,16 +266,21 @@ class LoginUtilsTest : public testing::Test,
     EXPECT_CALL(*cryptohome_, InstallAttributesGet(kAttrEnterpriseDeviceId, _))
         .WillRepeatedly(DoAll(SetArgPointee<1>(kDeviceId),
                               Return(true)));
-    test_api->SetCryptohomeLibrary(cryptohome_, true);
+    CryptohomeLibrary::SetForTest(cryptohome_.get());
 
-    EXPECT_CALL(*mock_dbus_thread_manager_.mock_cryptohome_client(),
-                IsMounted(_));
+    test_device_settings_service_.reset(new ScopedTestDeviceSettingsService);
+    test_cros_settings_.reset(new ScopedTestCrosSettings);
+    test_user_manager_.reset(new ScopedTestUserManager);
 
     browser_process_->SetProfileManager(
         new ProfileManagerWithoutInit(scoped_temp_dir_.path()));
     connector_ = browser_process_->browser_policy_connector();
     connector_->Init(local_state_.Get(),
                      browser_process_->system_request_context());
+
+    // IOThread creates ProxyConfigServiceImpl which in turn needs
+    // NetworkHandler. Thus initialize it here before creating IOThread.
+    NetworkHandler::Initialize();
 
     io_thread_state_.reset(new IOThread(local_state_.Get(),
                                         browser_process_->policy_service(),
@@ -303,13 +300,17 @@ class LoginUtilsTest : public testing::Test,
     cryptohome::AsyncMethodCaller::Shutdown();
     mock_async_method_caller_ = NULL;
 
-    UserManager::Get()->Shutdown();
+    test_user_manager_.reset();
 
     InvokeOnIO(
         base::Bind(&LoginUtilsTest::TearDownOnIO, base::Unretained(this)));
 
     // LoginUtils instance must not outlive Profile instances.
     LoginUtils::Set(NULL);
+
+    input_method::Shutdown();
+    LoginState::Shutdown();
+    CryptohomeLibrary::Shutdown();
 
     // These trigger some tasks that have to run while BrowserThread::UI
     // exists. Delete all the profiles before deleting the connector.
@@ -318,6 +319,8 @@ class LoginUtilsTest : public testing::Test,
     browser_process_->SetBrowserPolicyConnector(NULL);
     QuitIOLoop();
     RunUntilIdle();
+
+    CryptohomeLibrary::SetForTest(NULL);
   }
 
   void TearDownOnIO() {
@@ -365,7 +368,7 @@ class LoginUtilsTest : public testing::Test,
     fake_io_thread_work_.Reset();
     BrowserThread::PostTask(
         BrowserThread::UI, FROM_HERE,
-        MessageLoop::QuitWhenIdleClosure());
+        base::MessageLoop::QuitWhenIdleClosure());
     // If there was work then keep waiting for more work.
     // If there was no work then quit the fake IO loop.
     return has_work;
@@ -386,7 +389,7 @@ class LoginUtilsTest : public testing::Test,
     FAIL() << "OnLoginFailure not expected";
   }
 
-  virtual void OnLoginSuccess(const UserCredentials& credentials,
+  virtual void OnLoginSuccess(const UserContext& user_context,
                               bool pending_requests,
                               bool using_oauth) OVERRIDE {
     FAIL() << "OnLoginSuccess not expected";
@@ -396,38 +399,55 @@ class LoginUtilsTest : public testing::Test,
     EXPECT_CALL(*cryptohome_, InstallAttributesIsFirstInstall())
         .WillOnce(Return(true))
         .WillRepeatedly(Return(false));
-    EXPECT_EQ(policy::EnterpriseInstallAttributes::LOCK_SUCCESS,
-              connector_->GetInstallAttributes()->LockDevice(
-                  username, policy::DEVICE_MODE_ENTERPRISE, kDeviceId));
+
+    base::RunLoop loop;
+    policy::EnterpriseInstallAttributes::LockResult result;
+    connector_->GetInstallAttributes()->LockDevice(
+        username, policy::DEVICE_MODE_ENTERPRISE, kDeviceId,
+        base::Bind(&CopyLockResult, &loop, &result));
+    loop.Run();
+    EXPECT_EQ(policy::EnterpriseInstallAttributes::LOCK_SUCCESS, result);
     RunUntilIdle();
   }
 
   void PrepareProfile(const std::string& username) {
-    ScopedDeviceSettingsTestHelper device_settings_test_helper;
-    MockSessionManagerClient* session_manager_client =
-        mock_dbus_thread_manager_.mock_session_manager_client();
-    EXPECT_CALL(*session_manager_client, StartSession(_));
+    // Normally this would happen during browser startup, but for tests
+    // we need to trigger creation of Profile-related services.
+    ChromeBrowserMainExtraPartsProfiles::
+        EnsureBrowserContextKeyedServiceFactoriesBuilt();
+    ProfileManager::AllowGetDefaultProfile();
+
+    DeviceSettingsTestHelper device_settings_test_helper;
+    DeviceSettingsService::Get()->SetSessionManager(
+        &device_settings_test_helper, new MockOwnerKeyUtil());
+
     EXPECT_CALL(*cryptohome_, GetSystemSalt())
         .WillRepeatedly(Return(std::string("stub_system_salt")));
     EXPECT_CALL(*mock_async_method_caller_, AsyncMount(_, _, _, _))
+        .WillRepeatedly(Return());
+    EXPECT_CALL(*mock_async_method_caller_, AsyncGetSanitizedUsername(_, _))
         .WillRepeatedly(Return());
 
     scoped_refptr<Authenticator> authenticator =
         LoginUtils::Get()->CreateAuthenticator(this);
     authenticator->CompleteLogin(ProfileManager::GetDefaultProfile(),
-                                 UserCredentials(username,
-                                                 "password",
-                                                 ""));
+                                 UserContext(username,
+                                             "password",
+                                             std::string(),
+                                             username));   // username_hash
 
     const bool kUsingOAuth = true;
     // Setting |kHasCookies| to false prevents ProfileAuthData::Transfer from
     // waiting for an IO task before proceeding.
     const bool kHasCookies = false;
+    const bool kHasActiveSession = false;
     LoginUtils::Get()->PrepareProfile(
-        UserCredentials(username, "password", std::string()),
-        std::string(), kUsingOAuth, kHasCookies, this);
+        UserContext(username, "password", std::string(), username),
+        std::string(), kUsingOAuth, kHasCookies, kHasActiveSession, this);
     device_settings_test_helper.Flush();
     RunUntilIdle();
+
+    DeviceSettingsService::Get()->UnsetSessionManager();
   }
 
   net::TestURLFetcher* PrepareOAuthFetcher(const std::string& expected_url) {
@@ -483,13 +503,13 @@ class LoginUtilsTest : public testing::Test,
   }
 
  protected:
-  ScopedStubCrosEnabler stub_cros_enabler_;
+  ScopedStubNetworkLibraryEnabler stub_network_library_enabler_;
 
   base::Closure fake_io_thread_work_;
   base::WaitableEvent fake_io_thread_completion_;
   base::Thread fake_io_thread_;
 
-  MessageLoop loop_;
+  base::MessageLoop loop_;
   TestingBrowserProcess* browser_process_;
   ScopedTestingLocalState local_state_;
 
@@ -499,16 +519,21 @@ class LoginUtilsTest : public testing::Test,
   scoped_ptr<content::TestBrowserThread> io_thread_;
   scoped_ptr<IOThread> io_thread_state_;
 
-  MockDBusThreadManager mock_dbus_thread_manager_;
-  input_method::MockInputMethodManager mock_input_method_manager_;
+  MockDBusThreadManagerWithoutGMock mock_dbus_thread_manager_;
+  input_method::MockInputMethodManager* mock_input_method_manager_;
   disks::MockDiskMountManager mock_disk_mount_manager_;
   net::TestURLFetcherFactory test_url_fetcher_factory_;
-  MockConnectivityStateHelper mock_connectivity_state_helper_;
 
   cryptohome::MockAsyncMethodCaller* mock_async_method_caller_;
 
   policy::BrowserPolicyConnector* connector_;
-  MockCryptohomeLibrary* cryptohome_;
+  scoped_ptr<MockCryptohomeLibrary> cryptohome_;
+
+  // Initialized after |mock_dbus_thread_manager_| and |cryptohome_| are set up.
+  scoped_ptr<ScopedTestDeviceSettingsService> test_device_settings_service_;
+  scoped_ptr<ScopedTestCrosSettings> test_cros_settings_;
+  scoped_ptr<ScopedTestUserManager> test_user_manager_;
+
   Profile* prepared_profile_;
 
   base::Closure rlz_initialized_cb_;
@@ -704,4 +729,4 @@ INSTANTIATE_TEST_CASE_P(
 
 }  // namespace
 
-}
+}  // namespace chromeos

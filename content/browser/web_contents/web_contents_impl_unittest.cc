@@ -3,18 +3,19 @@
 // found in the LICENSE file.
 
 #include "base/logging.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
 #include "content/browser/renderer_host/test_render_view_host.h"
 #include "content/browser/site_instance_impl.h"
+#include "content/browser/web_contents/frame_tree_node.h"
 #include "content/browser/web_contents/interstitial_page_impl.h"
 #include "content/browser/web_contents/navigation_entry_impl.h"
 #include "content/browser/webui/web_ui_controller_factory_registry.h"
 #include "content/common/view_messages.h"
+#include "content/public/browser/global_request_id.h"
 #include "content/public/browser/interstitial_page_delegate.h"
 #include "content/public/browser/navigation_details.h"
 #include "content/public/browser/notification_details.h"
-#include "content/public/browser/notification_source.h"
 #include "content/public/browser/notification_source.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents_observer.h"
@@ -29,7 +30,6 @@
 #include "content/test/test_content_client.h"
 #include "content/test/test_web_contents.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "webkit/glue/webkit_glue.h"
 
 namespace content {
 namespace {
@@ -41,10 +41,9 @@ class WebContentsImplTestWebUIControllerFactory
  public:
   virtual WebUIController* CreateWebUIControllerForURL(
       WebUI* web_ui, const GURL& url) const OVERRIDE {
-   if (!UseWebUI(url))
-     return NULL;
-
-   return new WebUIController(web_ui);
+    if (!UseWebUI(url))
+      return NULL;
+    return new WebUIController(web_ui);
   }
 
   virtual WebUI::TypeID GetWebUIType(BrowserContext* browser_context,
@@ -72,7 +71,7 @@ class TestInterstitialPage;
 
 class TestInterstitialPageDelegate : public InterstitialPageDelegate {
  public:
-  TestInterstitialPageDelegate(TestInterstitialPage* interstitial_page)
+  explicit TestInterstitialPageDelegate(TestInterstitialPage* interstitial_page)
       : interstitial_page_(interstitial_page) {}
   virtual void CommandReceived(const std::string& command) OVERRIDE;
   virtual std::string GetHTMLContents() OVERRIDE { return std::string(); }
@@ -156,8 +155,9 @@ class TestInterstitialPage : public InterstitialPageImpl {
     DidNavigate(GetRenderViewHostForTesting(), params);
   }
 
-  void TestRenderViewGone(base::TerminationStatus status, int error_code) {
-    RenderViewGone(GetRenderViewHostForTesting(), status, error_code);
+  void TestRenderViewTerminated(base::TerminationStatus status,
+                                int error_code) {
+    RenderViewTerminated(GetRenderViewHostForTesting(), status, error_code);
   }
 
   bool is_showing() const {
@@ -183,7 +183,7 @@ class TestInterstitialPage : public InterstitialPageImpl {
   virtual RenderViewHost* CreateRenderViewHost() OVERRIDE {
     return new TestRenderViewHost(
         SiteInstance::Create(web_contents()->GetBrowserContext()),
-        this, this, MSG_ROUTING_NONE, false);
+        this, this, MSG_ROUTING_NONE, MSG_ROUTING_NONE, false);
   }
 
   virtual WebContentsView* CreateWebContentsView() OVERRIDE {
@@ -232,35 +232,44 @@ class TestInterstitialPageStateGuard : public TestInterstitialPage::Delegate {
   TestInterstitialPage* interstitial_page_;
 };
 
-class WebContentsImplTest : public RenderViewHostImplTestHarness {
+class WebContentsImplTestBrowserClient : public TestContentBrowserClient {
  public:
-  WebContentsImplTest()
-      : ui_thread_(BrowserThread::UI, &message_loop_),
-        file_user_blocking_thread_(
-            BrowserThread::FILE_USER_BLOCKING, &message_loop_),
-        io_thread_(BrowserThread::IO, &message_loop_) {
+  WebContentsImplTestBrowserClient()
+      : assign_site_for_url_(false) {}
+
+  virtual ~WebContentsImplTestBrowserClient() {}
+
+  virtual bool ShouldAssignSiteForURL(const GURL& url) OVERRIDE {
+    return assign_site_for_url_;
   }
 
+  void set_assign_site_for_url(bool assign) {
+    assign_site_for_url_ = assign;
+  }
+
+ private:
+  bool assign_site_for_url_;
+};
+
+class WebContentsImplTest : public RenderViewHostImplTestHarness {
+ public:
   virtual void SetUp() {
     RenderViewHostImplTestHarness::SetUp();
     WebUIControllerFactory::RegisterFactory(&factory_);
   }
 
   virtual void TearDown() {
-    RenderViewHostImplTestHarness::TearDown();
     WebUIControllerFactory::UnregisterFactoryForTesting(&factory_);
+    RenderViewHostImplTestHarness::TearDown();
   }
 
  private:
   WebContentsImplTestWebUIControllerFactory factory_;
-  TestBrowserThread ui_thread_;
-  TestBrowserThread file_user_blocking_thread_;
-  TestBrowserThread io_thread_;
 };
 
 class TestWebContentsObserver : public WebContentsObserver {
  public:
-  TestWebContentsObserver(WebContents* contents)
+  explicit TestWebContentsObserver(WebContents* contents)
       : WebContentsObserver(contents) {
   }
   virtual ~TestWebContentsObserver() {}
@@ -295,8 +304,7 @@ TEST_F(WebContentsImplTest, UpdateTitle) {
   NavigationControllerImpl& cont =
       static_cast<NavigationControllerImpl&>(controller());
   ViewHostMsg_FrameNavigate_Params params;
-  InitNavigateParams(&params, 0, GURL(chrome::kAboutBlankURL),
-                     PAGE_TRANSITION_TYPED);
+  InitNavigateParams(&params, 0, GURL(kAboutBlankURL), PAGE_TRANSITION_TYPED);
 
   LoadCommittedDetails details;
   cont.RendererDidNavigate(params, &details);
@@ -338,19 +346,19 @@ TEST_F(WebContentsImplTest, UpdateMaxPageID) {
   // Starts at -1.
   EXPECT_EQ(-1, contents()->GetMaxPageID());
   EXPECT_EQ(-1, contents()->GetMaxPageIDForSiteInstance(instance1));
-  EXPECT_EQ(-1, contents()->GetMaxPageIDForSiteInstance(instance2));
+  EXPECT_EQ(-1, contents()->GetMaxPageIDForSiteInstance(instance2.get()));
 
   // Make sure max_page_id_ is monotonically increasing per SiteInstance.
   contents()->UpdateMaxPageID(3);
   contents()->UpdateMaxPageID(1);
   EXPECT_EQ(3, contents()->GetMaxPageID());
   EXPECT_EQ(3, contents()->GetMaxPageIDForSiteInstance(instance1));
-  EXPECT_EQ(-1, contents()->GetMaxPageIDForSiteInstance(instance2));
+  EXPECT_EQ(-1, contents()->GetMaxPageIDForSiteInstance(instance2.get()));
 
-  contents()->UpdateMaxPageIDForSiteInstance(instance2, 7);
+  contents()->UpdateMaxPageIDForSiteInstance(instance2.get(), 7);
   EXPECT_EQ(3, contents()->GetMaxPageID());
   EXPECT_EQ(3, contents()->GetMaxPageIDForSiteInstance(instance1));
-  EXPECT_EQ(7, contents()->GetMaxPageIDForSiteInstance(instance2));
+  EXPECT_EQ(7, contents()->GetMaxPageIDForSiteInstance(instance2.get()));
 }
 
 // Test simple same-SiteInstance navigation.
@@ -410,14 +418,24 @@ TEST_F(WebContentsImplTest, CrossSiteBoundaries) {
       url, Referrer(), PAGE_TRANSITION_TYPED, std::string());
   contents()->TestDidNavigate(orig_rvh, 1, url, PAGE_TRANSITION_TYPED);
 
+  // Keep the number of active views in orig_rvh's SiteInstance
+  // non-zero so that orig_rvh doesn't get deleted when it gets
+  // swapped out.
+  static_cast<SiteInstanceImpl*>(orig_rvh->GetSiteInstance())->
+      increment_active_view_count();
+
   EXPECT_FALSE(contents()->cross_navigation_pending());
   EXPECT_EQ(orig_rvh, contents()->GetRenderViewHost());
+  EXPECT_EQ(url, contents()->GetLastCommittedURL());
+  EXPECT_EQ(url, contents()->GetVisibleURL());
 
   // Navigate to new site
   const GURL url2("http://www.yahoo.com");
   controller().LoadURL(
       url2, Referrer(), PAGE_TRANSITION_TYPED, std::string());
   EXPECT_TRUE(contents()->cross_navigation_pending());
+  EXPECT_EQ(url, contents()->GetLastCommittedURL());
+  EXPECT_EQ(url2, contents()->GetVisibleURL());
   TestRenderViewHost* pending_rvh =
       static_cast<TestRenderViewHost*>(contents()->GetPendingRenderViewHost());
   int pending_rvh_delete_count = 0;
@@ -433,12 +451,21 @@ TEST_F(WebContentsImplTest, CrossSiteBoundaries) {
       pending_rvh, 1, url2, PAGE_TRANSITION_TYPED);
   SiteInstance* instance2 = contents()->GetSiteInstance();
 
+  // Keep the number of active views in pending_rvh's SiteInstance
+  // non-zero so that orig_rvh doesn't get deleted when it gets
+  // swapped out.
+  static_cast<SiteInstanceImpl*>(pending_rvh->GetSiteInstance())->
+      increment_active_view_count();
+
   EXPECT_FALSE(contents()->cross_navigation_pending());
   EXPECT_EQ(pending_rvh, contents()->GetRenderViewHost());
+  EXPECT_EQ(url2, contents()->GetLastCommittedURL());
+  EXPECT_EQ(url2, contents()->GetVisibleURL());
   EXPECT_NE(instance1, instance2);
   EXPECT_TRUE(contents()->GetPendingRenderViewHost() == NULL);
   // We keep the original RVH around, swapped out.
-  EXPECT_TRUE(contents()->GetRenderManagerForTesting()->IsSwappedOut(orig_rvh));
+  EXPECT_TRUE(contents()->GetRenderManagerForTesting()->IsOnSwappedOutList(
+      orig_rvh));
   EXPECT_EQ(orig_rvh_delete_count, 0);
 
   // Going back should switch SiteInstances again.  The first SiteInstance is
@@ -463,7 +490,7 @@ TEST_F(WebContentsImplTest, CrossSiteBoundaries) {
   EXPECT_EQ(instance1, contents()->GetSiteInstance());
   // The pending RVH should now be swapped out, not deleted.
   EXPECT_TRUE(contents()->GetRenderManagerForTesting()->
-      IsSwappedOut(pending_rvh));
+      IsOnSwappedOutList(pending_rvh));
   EXPECT_EQ(pending_rvh_delete_count, 0);
 
   // Close contents and ensure RVHs are deleted.
@@ -533,7 +560,7 @@ TEST_F(WebContentsImplTest, NavigateTwoTabsCrossSite) {
 
   // Open a new contents with the same SiteInstance, navigated to the same site.
   scoped_ptr<TestWebContents> contents2(
-      TestWebContents::Create(browser_context_.get(), instance1));
+      TestWebContents::Create(browser_context(), instance1));
   contents2->transition_cross_site = true;
   contents2->GetController().LoadURL(url, Referrer(),
                                     PAGE_TRANSITION_TYPED,
@@ -578,6 +605,93 @@ TEST_F(WebContentsImplTest, NavigateTwoTabsCrossSite) {
 
   // Both contentses should now be in the same SiteInstance.
   EXPECT_EQ(instance2a, instance2b);
+}
+
+TEST_F(WebContentsImplTest, NavigateDoesNotUseUpSiteInstance) {
+  WebContentsImplTestBrowserClient browser_client;
+  SetBrowserClientForTesting(&browser_client);
+
+  contents()->transition_cross_site = true;
+  TestRenderViewHost* orig_rvh = test_rvh();
+  int orig_rvh_delete_count = 0;
+  orig_rvh->set_delete_counter(&orig_rvh_delete_count);
+  SiteInstanceImpl* orig_instance =
+      static_cast<SiteInstanceImpl*>(contents()->GetSiteInstance());
+
+  browser_client.set_assign_site_for_url(false);
+  // Navigate to an URL that will not assign a new SiteInstance.
+  const GURL native_url("non-site-url://stuffandthings");
+  controller().LoadURL(
+      native_url, Referrer(), PAGE_TRANSITION_TYPED, std::string());
+  contents()->TestDidNavigate(orig_rvh, 1, native_url, PAGE_TRANSITION_TYPED);
+
+  EXPECT_FALSE(contents()->cross_navigation_pending());
+  EXPECT_EQ(orig_rvh, contents()->GetRenderViewHost());
+  EXPECT_EQ(native_url, contents()->GetLastCommittedURL());
+  EXPECT_EQ(native_url, contents()->GetVisibleURL());
+  EXPECT_EQ(orig_instance, contents()->GetSiteInstance());
+  EXPECT_EQ(GURL(), contents()->GetSiteInstance()->GetSiteURL());
+  EXPECT_FALSE(orig_instance->HasSite());
+
+  browser_client.set_assign_site_for_url(true);
+  // Navigate to new site (should keep same site instance).
+  const GURL url("http://www.google.com");
+  controller().LoadURL(
+      url, Referrer(), PAGE_TRANSITION_TYPED, std::string());
+  EXPECT_FALSE(contents()->cross_navigation_pending());
+  EXPECT_EQ(native_url, contents()->GetLastCommittedURL());
+  EXPECT_EQ(url, contents()->GetVisibleURL());
+  EXPECT_FALSE(contents()->GetPendingRenderViewHost());
+  contents()->TestDidNavigate(orig_rvh, 1, url, PAGE_TRANSITION_TYPED);
+
+  // Keep the number of active views in orig_rvh's SiteInstance
+  // non-zero so that orig_rvh doesn't get deleted when it gets
+  // swapped out.
+  static_cast<SiteInstanceImpl*>(orig_rvh->GetSiteInstance())->
+      increment_active_view_count();
+
+  EXPECT_EQ(orig_instance, contents()->GetSiteInstance());
+  EXPECT_TRUE(
+      contents()->GetSiteInstance()->GetSiteURL().DomainIs("google.com"));
+  EXPECT_EQ(url, contents()->GetLastCommittedURL());
+
+  // Navigate to another new site (should create a new site instance).
+  const GURL url2("http://www.yahoo.com");
+  controller().LoadURL(
+      url2, Referrer(), PAGE_TRANSITION_TYPED, std::string());
+  EXPECT_TRUE(contents()->cross_navigation_pending());
+  EXPECT_EQ(url, contents()->GetLastCommittedURL());
+  EXPECT_EQ(url2, contents()->GetVisibleURL());
+  TestRenderViewHost* pending_rvh =
+      static_cast<TestRenderViewHost*>(contents()->GetPendingRenderViewHost());
+  int pending_rvh_delete_count = 0;
+  pending_rvh->set_delete_counter(&pending_rvh_delete_count);
+
+  // Navigations should be suspended in pending_rvh until ShouldCloseACK.
+  EXPECT_TRUE(pending_rvh->are_navigations_suspended());
+  orig_rvh->SendShouldCloseACK(true);
+  EXPECT_FALSE(pending_rvh->are_navigations_suspended());
+
+  // DidNavigate from the pending page.
+  contents()->TestDidNavigate(
+      pending_rvh, 1, url2, PAGE_TRANSITION_TYPED);
+  SiteInstance* new_instance = contents()->GetSiteInstance();
+
+  EXPECT_FALSE(contents()->cross_navigation_pending());
+  EXPECT_EQ(pending_rvh, contents()->GetRenderViewHost());
+  EXPECT_EQ(url2, contents()->GetLastCommittedURL());
+  EXPECT_EQ(url2, contents()->GetVisibleURL());
+  EXPECT_NE(new_instance, orig_instance);
+  EXPECT_FALSE(contents()->GetPendingRenderViewHost());
+  // We keep the original RVH around, swapped out.
+  EXPECT_TRUE(contents()->GetRenderManagerForTesting()->IsOnSwappedOutList(
+      orig_rvh));
+  EXPECT_EQ(orig_rvh_delete_count, 0);
+
+  // Close contents and ensure RVHs are deleted.
+  DeleteContents();
+  EXPECT_EQ(orig_rvh_delete_count, 1);
+  EXPECT_EQ(pending_rvh_delete_count, 1);
 }
 
 // Test that we can find an opener RVH even if it's pending.
@@ -626,7 +740,7 @@ TEST_F(WebContentsImplTest, CrossSiteComparesAgainstCurrentPage) {
 
   // Open a related contents to a second site.
   scoped_ptr<TestWebContents> contents2(
-      TestWebContents::Create(browser_context_.get(), instance1));
+      TestWebContents::Create(browser_context(), instance1));
   contents2->transition_cross_site = true;
   const GURL url2("http://www.yahoo.com");
   contents2->GetController().LoadURL(url2, Referrer(),
@@ -682,8 +796,8 @@ TEST_F(WebContentsImplTest, CrossSiteUnloadHandlers) {
   controller().LoadURL(
       url2, Referrer(), PAGE_TRANSITION_TYPED, std::string());
   EXPECT_TRUE(orig_rvh->is_waiting_for_beforeunload_ack());
-  orig_rvh->OnMessageReceived(ViewHostMsg_ShouldClose_ACK(
-      0, false, base::TimeTicks(), base::TimeTicks()));
+  base::TimeTicks now = base::TimeTicks::Now();
+  orig_rvh->OnMessageReceived(ViewHostMsg_ShouldClose_ACK(0, false, now, now));
   EXPECT_FALSE(orig_rvh->is_waiting_for_beforeunload_ack());
   EXPECT_FALSE(contents()->cross_navigation_pending());
   EXPECT_EQ(orig_rvh, contents()->GetRenderViewHost());
@@ -692,18 +806,16 @@ TEST_F(WebContentsImplTest, CrossSiteUnloadHandlers) {
   controller().LoadURL(
       url2, Referrer(), PAGE_TRANSITION_TYPED, std::string());
   EXPECT_TRUE(orig_rvh->is_waiting_for_beforeunload_ack());
-  orig_rvh->OnMessageReceived(ViewHostMsg_ShouldClose_ACK(
-      0, true, base::TimeTicks(), base::TimeTicks()));
+  now = base::TimeTicks::Now();
+  orig_rvh->OnMessageReceived(ViewHostMsg_ShouldClose_ACK(0, true, now, now));
   EXPECT_FALSE(orig_rvh->is_waiting_for_beforeunload_ack());
   EXPECT_TRUE(contents()->cross_navigation_pending());
   TestRenderViewHost* pending_rvh = static_cast<TestRenderViewHost*>(
       contents()->GetPendingRenderViewHost());
 
   // We won't hear DidNavigate until the onunload handler has finished running.
-  // (No way to simulate that here, but it involves a call from RDH to
-  // WebContentsImpl::OnCrossSiteResponse.)
 
-  // DidNavigate from the pending page
+  // DidNavigate from the pending page.
   contents()->TestDidNavigate(
       pending_rvh, 1, url2, PAGE_TRANSITION_TYPED);
   SiteInstance* instance2 = contents()->GetSiteInstance();
@@ -734,8 +846,8 @@ TEST_F(WebContentsImplTest, CrossSiteNavigationPreempted) {
   controller().LoadURL(
       url2, Referrer(), PAGE_TRANSITION_TYPED, std::string());
   EXPECT_TRUE(orig_rvh->is_waiting_for_beforeunload_ack());
-  orig_rvh->OnMessageReceived(ViewHostMsg_ShouldClose_ACK(
-      0, true, base::TimeTicks(), base::TimeTicks()));
+  base::TimeTicks now = base::TimeTicks::Now();
+  orig_rvh->OnMessageReceived(ViewHostMsg_ShouldClose_ACK(0, true, now, now));
   EXPECT_TRUE(contents()->cross_navigation_pending());
 
   // Suppose the original renderer navigates before the new one is ready.
@@ -779,8 +891,8 @@ TEST_F(WebContentsImplTest, CrossSiteNavigationBackPreempted) {
 
   // Simulate beforeunload approval.
   EXPECT_TRUE(ntp_rvh->is_waiting_for_beforeunload_ack());
-  ntp_rvh->OnMessageReceived(ViewHostMsg_ShouldClose_ACK(
-      0, true, base::TimeTicks(), base::TimeTicks()));
+  base::TimeTicks now = base::TimeTicks::Now();
+  ntp_rvh->OnMessageReceived(ViewHostMsg_ShouldClose_ACK(0, true, now, now));
 
   // DidNavigate from the pending page.
   contents()->TestDidNavigate(
@@ -828,8 +940,8 @@ TEST_F(WebContentsImplTest, CrossSiteNavigationBackPreempted) {
 
   // Simulate beforeunload approval.
   EXPECT_TRUE(google_rvh->is_waiting_for_beforeunload_ack());
-  google_rvh->OnMessageReceived(ViewHostMsg_ShouldClose_ACK(
-      0, true, base::TimeTicks(), base::TimeTicks()));
+  now = base::TimeTicks::Now();
+  google_rvh->OnMessageReceived(ViewHostMsg_ShouldClose_ACK(0, true, now, now));
 
   // DidNavigate from the first back. This aborts the second back's pending RVH.
   contents()->TestDidNavigate(google_rvh, 1, url2, PAGE_TRANSITION_TYPED);
@@ -877,8 +989,8 @@ TEST_F(WebContentsImplTest, CrossSiteNavigationNotPreemptedByFrame) {
 
   // Now simulate the onbeforeunload approval and verify the navigation is
   // not canceled.
-  orig_rvh->OnMessageReceived(ViewHostMsg_ShouldClose_ACK(
-      0, true, base::TimeTicks(), base::TimeTicks()));
+  base::TimeTicks now = base::TimeTicks::Now();
+  orig_rvh->OnMessageReceived(ViewHostMsg_ShouldClose_ACK(0, true, now, now));
   EXPECT_FALSE(orig_rvh->is_waiting_for_beforeunload_ack());
   EXPECT_TRUE(contents()->cross_navigation_pending());
 }
@@ -941,15 +1053,16 @@ TEST_F(WebContentsImplTest, CrossSiteCantPreemptAfterUnload) {
   const GURL url2("http://www.yahoo.com");
   controller().LoadURL(
       url2, Referrer(), PAGE_TRANSITION_TYPED, std::string());
-  orig_rvh->OnMessageReceived(ViewHostMsg_ShouldClose_ACK(
-      0, true, base::TimeTicks(), base::TimeTicks()));
+  base::TimeTicks now = base::TimeTicks::Now();
+  orig_rvh->OnMessageReceived(ViewHostMsg_ShouldClose_ACK(0, true, now, now));
   EXPECT_TRUE(contents()->cross_navigation_pending());
   TestRenderViewHost* pending_rvh = static_cast<TestRenderViewHost*>(
       contents()->GetPendingRenderViewHost());
 
   // Simulate the pending renderer's response, which leads to an unload request
   // being sent to orig_rvh.
-  contents()->GetRenderManagerForTesting()->OnCrossSiteResponse(0, 0);
+  contents()->GetRenderManagerForTesting()->OnCrossSiteResponse(
+      pending_rvh, GlobalRequestID(0, 0));
 
   // Suppose the original renderer navigates now, while the unload request is in
   // flight.  We should ignore it, wait for the unload ack, and let the pending
@@ -993,8 +1106,8 @@ TEST_F(WebContentsImplTest, CrossSiteNavigationCanceled) {
   const GURL url2("http://www.yahoo.com");
   controller().LoadURL(url2, Referrer(), PAGE_TRANSITION_TYPED, std::string());
   EXPECT_TRUE(orig_rvh->is_waiting_for_beforeunload_ack());
-  orig_rvh->OnMessageReceived(ViewHostMsg_ShouldClose_ACK(
-      0, true, base::TimeTicks(), base::TimeTicks()));
+  base::TimeTicks now = base::TimeTicks::Now();
+  orig_rvh->OnMessageReceived(ViewHostMsg_ShouldClose_ACK(0, true, now, now));
   EXPECT_TRUE(contents()->cross_navigation_pending());
 
   // Simulate swap out message when the response arrives.
@@ -1015,7 +1128,7 @@ TEST_F(WebContentsImplTest, CrossSiteNavigationCanceled) {
   EXPECT_TRUE(contents()->GetPendingRenderViewHost() == NULL);
 }
 
-// Test that NavigationEntries have the correct content state after going
+// Test that NavigationEntries have the correct page state after going
 // forward and back.  Prevents regression for bug 1116137.
 TEST_F(WebContentsImplTest, NavigationEntryContentState) {
   TestRenderViewHost* orig_rvh = test_rvh();
@@ -1026,30 +1139,30 @@ TEST_F(WebContentsImplTest, NavigationEntryContentState) {
   NavigationEntry* entry = controller().GetLastCommittedEntry();
   EXPECT_TRUE(entry == NULL);
 
-  // Committed entry should have content state after DidNavigate.
+  // Committed entry should have page state after DidNavigate.
   contents()->TestDidNavigate(orig_rvh, 1, url, PAGE_TRANSITION_TYPED);
   entry = controller().GetLastCommittedEntry();
-  EXPECT_FALSE(entry->GetContentState().empty());
+  EXPECT_TRUE(entry->GetPageState().IsValid());
 
   // Navigate to same site.
   const GURL url2("http://images.google.com");
   controller().LoadURL(url2, Referrer(), PAGE_TRANSITION_TYPED, std::string());
   entry = controller().GetLastCommittedEntry();
-  EXPECT_FALSE(entry->GetContentState().empty());
+  EXPECT_TRUE(entry->GetPageState().IsValid());
 
-  // Committed entry should have content state after DidNavigate.
+  // Committed entry should have page state after DidNavigate.
   contents()->TestDidNavigate(orig_rvh, 2, url2, PAGE_TRANSITION_TYPED);
   entry = controller().GetLastCommittedEntry();
-  EXPECT_FALSE(entry->GetContentState().empty());
+  EXPECT_TRUE(entry->GetPageState().IsValid());
 
-  // Now go back.  Committed entry should still have content state.
+  // Now go back.  Committed entry should still have page state.
   controller().GoBack();
   contents()->TestDidNavigate(orig_rvh, 1, url, PAGE_TRANSITION_TYPED);
   entry = controller().GetLastCommittedEntry();
-  EXPECT_FALSE(entry->GetContentState().empty());
+  EXPECT_TRUE(entry->GetPageState().IsValid());
 }
 
-// Test that NavigationEntries have the correct content state and SiteInstance
+// Test that NavigationEntries have the correct page state and SiteInstance
 // state after opening a new window to about:blank.  Prevents regression for
 // bugs b/1116137 and http://crbug.com/111975.
 TEST_F(WebContentsImplTest, NavigationEntryContentStateNewWindow) {
@@ -1057,13 +1170,13 @@ TEST_F(WebContentsImplTest, NavigationEntryContentStateNewWindow) {
 
   // When opening a new window, it is navigated to about:blank internally.
   // Currently, this results in two DidNavigate events.
-  const GURL url(chrome::kAboutBlankURL);
+  const GURL url(kAboutBlankURL);
   contents()->TestDidNavigate(orig_rvh, 1, url, PAGE_TRANSITION_TYPED);
   contents()->TestDidNavigate(orig_rvh, 1, url, PAGE_TRANSITION_TYPED);
 
-  // Should have a content state here.
+  // Should have a page state here.
   NavigationEntry* entry = controller().GetLastCommittedEntry();
-  EXPECT_FALSE(entry->GetContentState().empty());
+  EXPECT_TRUE(entry->GetPageState().IsValid());
 
   // The SiteInstance should be available for other navigations to use.
   NavigationEntryImpl* entry_impl =
@@ -1479,7 +1592,7 @@ TEST_F(WebContentsImplTest, ShowInterstitialCrashRendererThenGoBack) {
 
   // Crash the renderer
   test_rvh()->OnMessageReceived(
-      ViewHostMsg_RenderViewGone(
+      ViewHostMsg_RenderProcessGone(
           0, base::TERMINATION_STATUS_PROCESS_CRASHED, -1));
 
   // While the interstitial is showing, go back.
@@ -1518,7 +1631,7 @@ TEST_F(WebContentsImplTest, ShowInterstitialCrashRendererThenNavigate) {
 
   // Crash the renderer
   test_rvh()->OnMessageReceived(
-      ViewHostMsg_RenderViewGone(
+      ViewHostMsg_RenderProcessGone(
           0, base::TERMINATION_STATUS_PROCESS_CRASHED, -1));
 
   interstitial->TestDidNavigate(2, interstitial_url);
@@ -1570,7 +1683,7 @@ TEST_F(WebContentsImplTest, ShowInterstitialThenCloseAndShutdown) {
   // simulate quitting the browser.  This goes through all processes and
   // tells them to destruct.
   rvh->OnMessageReceived(
-        ViewHostMsg_RenderViewGone(0, 0, 0));
+        ViewHostMsg_RenderProcessGone(0, 0, 0));
 
   RunAllPendingInMessageLoop();
   EXPECT_TRUE(deleted);
@@ -1805,7 +1918,7 @@ TEST_F(WebContentsImplTest, InterstitialCrasher) {
   TestInterstitialPageStateGuard state_guard(interstitial);
   interstitial->Show();
   // Simulate a renderer crash before the interstitial is shown.
-  interstitial->TestRenderViewGone(
+  interstitial->TestRenderViewTerminated(
       base::TERMINATION_STATUS_PROCESS_CRASHED, -1);
   // The interstitial should have been dismissed.
   EXPECT_EQ(TestInterstitialPage::CANCELED, state);
@@ -1818,7 +1931,7 @@ TEST_F(WebContentsImplTest, InterstitialCrasher) {
   interstitial->Show();
   interstitial->TestDidNavigate(1, url);
   // Simulate a renderer crash.
-  interstitial->TestRenderViewGone(
+  interstitial->TestRenderViewTerminated(
       base::TERMINATION_STATUS_PROCESS_CRASHED, -1);
   // The interstitial should have been dismissed.
   EXPECT_EQ(TestInterstitialPage::CANCELED, state);
@@ -1953,8 +2066,8 @@ TEST_F(WebContentsImplTest, CopyStateFromAndPruneSourceInterstitial) {
   EXPECT_FALSE(other_contents->ShowingInterstitialPage());
 }
 
-// Makes sure that CopyStateFromAndPrune does the right thing if the object
-// CopyStateFromAndPrune is invoked on is showing an interstitial.
+// Makes sure that CopyStateFromAndPrune cannot be called if the target is
+// showing an interstitial.
 TEST_F(WebContentsImplTest, CopyStateFromAndPruneTargetInterstitial) {
   // Navigate to a page.
   GURL url1("http://www.google.com");
@@ -1982,27 +2095,10 @@ TEST_F(WebContentsImplTest, CopyStateFromAndPruneTargetInterstitial) {
   interstitial->TestDidNavigate(1, url3);
   EXPECT_TRUE(interstitial->is_showing());
   EXPECT_EQ(2, other_controller.GetEntryCount());
-  other_contents->ExpectSetHistoryLengthAndPrune(
-      NavigationEntryImpl::FromNavigationEntry(
-          other_controller.GetEntryAtIndex(0))->site_instance(), 1,
-      other_controller.GetEntryAtIndex(0)->GetPageID());
-  other_controller.CopyStateFromAndPrune(&controller());
 
-  // The merged controller should only have two entries: url1 and url2.
-  ASSERT_EQ(2, other_controller.GetEntryCount());
-  EXPECT_EQ(1, other_controller.GetCurrentEntryIndex());
-  EXPECT_EQ(url1, other_controller.GetEntryAtIndex(0)->GetURL());
-  EXPECT_EQ(url3, other_controller.GetEntryAtIndex(1)->GetURL());
-
-  // It should have a transient entry.
-  EXPECT_TRUE(other_controller.GetTransientEntry());
-
-  // And the interstitial should be showing.
-  EXPECT_TRUE(other_contents->ShowingInterstitialPage());
-
-  // And the interstitial should do a reload on don't proceed.
-  EXPECT_TRUE(static_cast<InterstitialPageImpl*>(
-      other_contents->GetInterstitialPage())->reload_on_dont_proceed());
+  // Ensure that we do not allow calling CopyStateFromAndPrune when an
+  // interstitial is showing in the target.
+  EXPECT_FALSE(other_controller.CanPruneAllButVisible());
 }
 
 // Regression test for http://crbug.com/168611 - the URLs passed by the
@@ -2012,7 +2108,7 @@ TEST_F(WebContentsImplTest, FilterURLs) {
 
   // A navigation to about:whatever should always look like a navigation to
   // about:blank
-  GURL url_normalized("about:blank");
+  GURL url_normalized(kAboutBlankURL);
   GURL url_from_ipc("about:whatever");
 
   // We navigate the test WebContents to about:blank, since NavigateAndCommit
@@ -2046,6 +2142,84 @@ TEST_F(WebContentsImplTest, PendingContents) {
   int route_id = other_contents->GetRenderViewHost()->GetRoutingID();
   other_contents.reset();
   EXPECT_EQ(NULL, contents()->GetCreatedWindow(route_id));
+}
+
+// This test asserts the shape of the frame tree is correct, based on incoming
+// frame attached/detached messages.
+TEST_F(WebContentsImplTest, FrameTreeShape) {
+  std::string no_children_node("no children node");
+  std::string deep_subtree("node with deep subtree");
+
+  // The initial navigation will create a frame_tree_root_ node with the top
+  // level frame id. Simulate that by just creating it here.
+  contents()->frame_tree_root_.reset(
+      new FrameTreeNode(5, std::string("top-level")));
+
+  // Let's send a series of messages for frame attached and build the
+  // frame tree.
+  contents()->OnFrameAttached(5, 14, std::string());
+  contents()->OnFrameAttached(5, 15, std::string());
+  contents()->OnFrameAttached(5, 16, std::string());
+
+  contents()->OnFrameAttached(14, 244, std::string());
+  contents()->OnFrameAttached(14, 245, std::string());
+
+  contents()->OnFrameAttached(15, 255, no_children_node);
+
+  contents()->OnFrameAttached(16, 264, std::string());
+  contents()->OnFrameAttached(16, 265, std::string());
+  contents()->OnFrameAttached(16, 266, std::string());
+  contents()->OnFrameAttached(16, 267, deep_subtree);
+  contents()->OnFrameAttached(16, 268, std::string());
+
+  contents()->OnFrameAttached(267, 365, std::string());
+  contents()->OnFrameAttached(365, 455, std::string());
+  contents()->OnFrameAttached(455, 555, std::string());
+  contents()->OnFrameAttached(555, 655, std::string());
+
+  // Now, verify the tree structure is as expected.
+  FrameTreeNode* root = contents()->frame_tree_root_.get();
+  EXPECT_EQ(5, root->frame_id());
+  EXPECT_EQ(3UL, root->child_count());
+
+  EXPECT_EQ(2UL, root->child_at(0)->child_count());
+  EXPECT_EQ(0UL, root->child_at(0)->child_at(0)->child_count());
+  EXPECT_EQ(0UL, root->child_at(0)->child_at(1)->child_count());
+
+  EXPECT_EQ(1UL, root->child_at(1)->child_count());
+  EXPECT_EQ(0UL, root->child_at(1)->child_at(0)->child_count());
+  EXPECT_STREQ(no_children_node.c_str(),
+      root->child_at(1)->child_at(0)->frame_name().c_str());
+
+  EXPECT_EQ(5UL, root->child_at(2)->child_count());
+  EXPECT_EQ(0UL, root->child_at(2)->child_at(0)->child_count());
+  EXPECT_EQ(0UL, root->child_at(2)->child_at(1)->child_count());
+  EXPECT_EQ(0UL, root->child_at(2)->child_at(2)->child_count());
+  EXPECT_EQ(1UL, root->child_at(2)->child_at(3)->child_count());
+  EXPECT_STREQ(deep_subtree.c_str(),
+      root->child_at(2)->child_at(3)->frame_name().c_str());
+  EXPECT_EQ(0UL, root->child_at(2)->child_at(4)->child_count());
+
+  FrameTreeNode* deep_tree = root->child_at(2)->child_at(3)->child_at(0);
+  EXPECT_EQ(365, deep_tree->frame_id());
+  EXPECT_EQ(1UL, deep_tree->child_count());
+  EXPECT_EQ(455, deep_tree->child_at(0)->frame_id());
+  EXPECT_EQ(1UL, deep_tree->child_at(0)->child_count());
+  EXPECT_EQ(555, deep_tree->child_at(0)->child_at(0)->frame_id());
+  EXPECT_EQ(1UL, deep_tree->child_at(0)->child_at(0)->child_count());
+  EXPECT_EQ(655, deep_tree->child_at(0)->child_at(0)->child_at(0)->frame_id());
+  EXPECT_EQ(0UL,
+      deep_tree->child_at(0)->child_at(0)->child_at(0)->child_count());
+
+  // Test removing of nodes.
+  contents()->OnFrameDetached(555, 655);
+  EXPECT_EQ(0UL, deep_tree->child_at(0)->child_at(0)->child_count());
+
+  contents()->OnFrameDetached(16, 265);
+  EXPECT_EQ(4UL, root->child_at(2)->child_count());
+
+  contents()->OnFrameDetached(5, 15);
+  EXPECT_EQ(2UL, root->child_count());
 }
 
 }  // namespace content

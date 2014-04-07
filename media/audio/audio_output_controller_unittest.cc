@@ -8,7 +8,7 @@
 #include "base/logging.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/synchronization/waitable_event.h"
 #include "media/audio/audio_output_controller.h"
 #include "media/audio/audio_parameters.h"
@@ -38,12 +38,13 @@ class MockAudioOutputControllerEventHandler
  public:
   MockAudioOutputControllerEventHandler() {}
 
-  MOCK_METHOD1(OnCreated, void(AudioOutputController* controller));
-  MOCK_METHOD1(OnPlaying, void(AudioOutputController* controller));
-  MOCK_METHOD1(OnPaused, void(AudioOutputController* controller));
-  MOCK_METHOD1(OnError, void(AudioOutputController* controller));
-  MOCK_METHOD3(OnDeviceChange, void(AudioOutputController* controller,
-                                    int new_buffer_size, int new_sample_rate));
+  MOCK_METHOD0(OnCreated, void());
+  MOCK_METHOD0(OnPlaying, void());
+  MOCK_METHOD2(OnPowerMeasured, void(float power_dbfs, bool clipped));
+  MOCK_METHOD0(OnPaused, void());
+  MOCK_METHOD0(OnError, void());
+  MOCK_METHOD2(OnDeviceChange, void(int new_buffer_size, int new_sample_rate));
+
  private:
   DISALLOW_COPY_AND_ASSIGN(MockAudioOutputControllerEventHandler);
 };
@@ -54,9 +55,8 @@ class MockAudioOutputControllerSyncReader
   MockAudioOutputControllerSyncReader() {}
 
   MOCK_METHOD1(UpdatePendingBytes, void(uint32 bytes));
-  MOCK_METHOD2(Read, int(AudioBus* source, AudioBus* dest));
+  MOCK_METHOD3(Read, int(bool block, const AudioBus* source, AudioBus* dest));
   MOCK_METHOD0(Close, void());
-  MOCK_METHOD0(DataReady, bool());
 
  private:
   DISALLOW_COPY_AND_ASSIGN(MockAudioOutputControllerSyncReader);
@@ -85,10 +85,10 @@ ACTION_P(SignalEvent, event) {
 
 static const float kBufferNonZeroData = 1.0f;
 ACTION(PopulateBuffer) {
-  arg1->Zero();
+  arg2->Zero();
   // Note: To confirm the buffer will be populated in these tests, it's
   // sufficient that only the first float in channel 0 is set to the value.
-  arg1->channel(0)[0] = kBufferNonZeroData;
+  arg2->channel(0)[0] = kBufferNonZeroData;
 }
 
 class AudioOutputControllerTest : public testing::Test {
@@ -116,41 +116,41 @@ class AudioOutputControllerTest : public testing::Test {
         kSampleRate, kBitsPerSample, samples_per_packet);
 
     if (params_.IsValid()) {
-      EXPECT_CALL(mock_event_handler_, OnCreated(NotNull()))
+      EXPECT_CALL(mock_event_handler_, OnCreated())
           .WillOnce(SignalEvent(&create_event_));
     }
 
     controller_ = AudioOutputController::Create(
-        audio_manager_.get(), &mock_event_handler_, params_,
+        audio_manager_.get(), &mock_event_handler_, params_, std::string(),
         &mock_sync_reader_);
-    if (controller_)
+    if (controller_.get())
       controller_->SetVolume(kTestVolume);
 
-    EXPECT_EQ(params_.IsValid(), controller_ != NULL);
+    EXPECT_EQ(params_.IsValid(), controller_.get() != NULL);
   }
 
   void Play() {
-    // Expect the event handler to receive one OnPlaying() call.
-    EXPECT_CALL(mock_event_handler_, OnPlaying(NotNull()))
+    // Expect the event handler to receive one OnPlaying() call and one or more
+    // OnPowerMeasured() calls.
+    EXPECT_CALL(mock_event_handler_, OnPlaying())
         .WillOnce(SignalEvent(&play_event_));
+    EXPECT_CALL(mock_event_handler_, OnPowerMeasured(_, false))
+        .Times(AtLeast(1));
 
     // During playback, the mock pretends to provide audio data rendered and
     // sent from the render process.
     EXPECT_CALL(mock_sync_reader_, UpdatePendingBytes(_))
-        .Times(AtLeast(2));
-    EXPECT_CALL(mock_sync_reader_, Read(_, _))
+        .Times(AtLeast(1));
+    EXPECT_CALL(mock_sync_reader_, Read(_, _, _))
         .WillRepeatedly(DoAll(PopulateBuffer(),
                               SignalEvent(&read_event_),
                               Return(params_.frames_per_buffer())));
-    EXPECT_CALL(mock_sync_reader_, DataReady())
-        .WillRepeatedly(Return(true));
-
     controller_->Play();
   }
 
   void Pause() {
     // Expect the event handler to receive one OnPaused() call.
-    EXPECT_CALL(mock_event_handler_, OnPaused(NotNull()))
+    EXPECT_CALL(mock_event_handler_, OnPaused())
         .WillOnce(SignalEvent(&pause_event_));
 
     controller_->Pause();
@@ -159,9 +159,9 @@ class AudioOutputControllerTest : public testing::Test {
   void ChangeDevice() {
     // Expect the event handler to receive one OnPaying() call and no OnPaused()
     // call.
-    EXPECT_CALL(mock_event_handler_, OnPlaying(NotNull()))
+    EXPECT_CALL(mock_event_handler_, OnPlaying())
         .WillOnce(SignalEvent(&play_event_));
-    EXPECT_CALL(mock_event_handler_, OnPaused(NotNull()))
+    EXPECT_CALL(mock_event_handler_, OnPaused())
         .Times(0);
 
     // Simulate a device change event to AudioOutputController from the
@@ -175,7 +175,7 @@ class AudioOutputControllerTest : public testing::Test {
     if (was_playing) {
       // Expect the handler to receive one OnPlaying() call as a result of the
       // stream switching.
-      EXPECT_CALL(mock_event_handler_, OnPlaying(NotNull()))
+      EXPECT_CALL(mock_event_handler_, OnPlaying())
           .WillOnce(SignalEvent(&play_event_));
     }
 
@@ -207,7 +207,7 @@ class AudioOutputControllerTest : public testing::Test {
     if (was_playing) {
       // Expect the handler to receive one OnPlaying() call as a result of the
       // stream switching back.
-      EXPECT_CALL(mock_event_handler_, OnPlaying(NotNull()))
+      EXPECT_CALL(mock_event_handler_, OnPlaying())
           .WillOnce(SignalEvent(&play_event_));
     }
 
@@ -219,8 +219,8 @@ class AudioOutputControllerTest : public testing::Test {
   void Close() {
     EXPECT_CALL(mock_sync_reader_, Close());
 
-    controller_->Close(MessageLoop::QuitClosure());
-    MessageLoop::current()->Run();
+    controller_->Close(base::MessageLoop::QuitClosure());
+    base::MessageLoop::current()->Run();
   }
 
   // These help make test sequences more readable.
@@ -245,7 +245,7 @@ class AudioOutputControllerTest : public testing::Test {
   void WaitForPause() { pause_event_.Wait(); }
 
  private:
-  MessageLoopForIO message_loop_;
+  base::MessageLoopForIO message_loop_;
   scoped_ptr<AudioManager> audio_manager_;
   MockAudioOutputControllerEventHandler mock_event_handler_;
   MockAudioOutputControllerSyncReader mock_sync_reader_;

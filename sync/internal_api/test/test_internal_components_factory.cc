@@ -30,9 +30,8 @@ scoped_ptr<sessions::SyncSessionContext>
 TestInternalComponentsFactory::BuildContext(
     ServerConnectionManager* connection_manager,
     syncable::Directory* directory,
-    const std::vector<ModelSafeWorker*> workers,
-    ExtensionsActivityMonitor* monitor,
-    ThrottledDataTypeTracker* throttled_data_type_tracker,
+    const std::vector<ModelSafeWorker*>& workers,
+    ExtensionsActivity* monitor,
     const std::vector<SyncEngineEventListener*>& listeners,
     sessions::DebugInfoGetter* debug_info_getter,
     TrafficRecorder* traffic_recorder,
@@ -43,9 +42,11 @@ TestInternalComponentsFactory::BuildContext(
   return scoped_ptr<sessions::SyncSessionContext>(
       new sessions::SyncSessionContext(
           connection_manager, directory, workers, monitor,
-          throttled_data_type_tracker, empty_listeners, debug_info_getter,
+          empty_listeners, debug_info_getter,
           traffic_recorder,
           switches_.encryption_method == ENCRYPTION_KEYSTORE,
+          switches_.pre_commit_updates_policy ==
+              FORCE_ENABLE_PRE_COMMIT_UPDATE_AVOIDANCE,
           invalidator_client_id));
 
 }

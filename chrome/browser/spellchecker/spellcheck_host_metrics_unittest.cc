@@ -6,11 +6,11 @@
 
 #include "base/basictypes.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/metrics/histogram.h"
 #include "base/metrics/histogram_samples.h"
 #include "base/metrics/statistics_recorder.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using base::HistogramBase;
@@ -19,7 +19,7 @@ using base::StatisticsRecorder;
 
 class SpellcheckHostMetricsTest : public testing::Test {
  public:
-  SpellcheckHostMetricsTest() : loop_(MessageLoop::TYPE_DEFAULT) {
+  SpellcheckHostMetricsTest() : loop_(base::MessageLoop::TYPE_DEFAULT) {
   }
 
   virtual void SetUp() OVERRIDE {
@@ -31,8 +31,8 @@ class SpellcheckHostMetricsTest : public testing::Test {
   void RecordWordCountsForTesting() { metrics_->RecordWordCounts(); }
 
  private:
-   MessageLoop loop_;
-   scoped_ptr<SpellCheckHostMetrics> metrics_;
+  base::MessageLoop loop_;
+  scoped_ptr<SpellCheckHostMetrics> metrics_;
 };
 
 TEST_F(SpellcheckHostMetricsTest, RecordEnabledStats) {
@@ -67,14 +67,14 @@ TEST_F(SpellcheckHostMetricsTest, RecordEnabledStats) {
 }
 
 TEST_F(SpellcheckHostMetricsTest, CustomWordStats) {
-  metrics()->RecordCustomWordCountStats(123);
+  SpellCheckHostMetrics::RecordCustomWordCountStats(123);
 
   HistogramBase* histogram =
       StatisticsRecorder::FindHistogram("SpellCheck.CustomWords");
   ASSERT_TRUE(histogram != NULL);
   scoped_ptr<HistogramSamples> baseline = histogram->SnapshotSamples();
 
-  metrics()->RecordCustomWordCountStats(23);
+  SpellCheckHostMetrics::RecordCustomWordCountStats(23);
   histogram =
       StatisticsRecorder::FindHistogram("SpellCheck.CustomWords");
   ASSERT_TRUE(histogram != NULL);

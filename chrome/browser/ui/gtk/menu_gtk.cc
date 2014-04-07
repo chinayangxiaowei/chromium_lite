@@ -9,17 +9,17 @@
 #include "base/bind.h"
 #include "base/i18n/rtl.h"
 #include "base/logging.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/stl_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/ui/gtk/event_utils.h"
 #include "chrome/browser/ui/gtk/gtk_custom_menu.h"
 #include "chrome/browser/ui/gtk/gtk_custom_menu_item.h"
 #include "chrome/browser/ui/gtk/gtk_util.h"
 #include "third_party/skia/include/core/SkBitmap.h"
+#include "ui/base/accelerators/menu_label_accelerator_util_linux.h"
 #include "ui/base/accelerators/platform_accelerator_gtk.h"
-#include "ui/base/gtk/menu_label_accelerator_util.h"
 #include "ui/base/models/button_menu_item_model.h"
 #include "ui/base/models/menu_model.h"
 #include "ui/base/window_open_disposition.h"
@@ -132,6 +132,7 @@ GtkWidget* MenuGtk::Delegate::GetDefaultImageForCommandId(int command_id) {
   switch (command_id) {
     case IDC_NEW_TAB:
     case IDC_CONTENT_CONTEXT_OPENIMAGENEWTAB:
+    case IDC_CONTENT_CONTEXT_SEARCHWEBFORIMAGE:
     case IDC_CONTENT_CONTEXT_OPENLINKNEWTAB:
     case IDC_CONTENT_CONTEXT_OPENAVNEWTAB:
       stock = GTK_STOCK_NEW;
@@ -321,7 +322,7 @@ void MenuGtk::ConnectSignalHandlers() {
 GtkWidget* MenuGtk::AppendMenuItemWithLabel(int command_id,
                                             const std::string& label) {
   std::string converted_label = ui::ConvertAcceleratorsFromWindowsStyle(label);
-  GtkWidget* menu_item = BuildMenuItemWithLabel(label, command_id);
+  GtkWidget* menu_item = BuildMenuItemWithLabel(converted_label, command_id);
   return AppendMenuItem(command_id, menu_item);
 }
 
@@ -741,9 +742,8 @@ void MenuGtk::ExecuteCommand(ui::MenuModel* model, int id) {
 
 void MenuGtk::OnMenuShow(GtkWidget* widget) {
   model_->MenuWillShow();
-  MessageLoop::current()->PostTask(
-      FROM_HERE,
-      base::Bind(&MenuGtk::UpdateMenu, weak_factory_.GetWeakPtr()));
+  base::MessageLoop::current()->PostTask(
+      FROM_HERE, base::Bind(&MenuGtk::UpdateMenu, weak_factory_.GetWeakPtr()));
 }
 
 void MenuGtk::OnMenuHidden(GtkWidget* widget) {
@@ -798,7 +798,7 @@ void MenuGtk::OnSubMenuHidden(GtkWidget* submenu) {
   // the reference count again. Note that the delay is just an optimization; we
   // could use PostTask() and this would still work correctly.
   g_object_ref(G_OBJECT(submenu));
-  MessageLoop::current()->PostDelayedTask(
+  base::MessageLoop::current()->PostDelayedTask(
       FROM_HERE,
       base::Bind(&MenuGtk::OnSubMenuHiddenCallback, submenu),
       base::TimeDelta::FromSeconds(2));

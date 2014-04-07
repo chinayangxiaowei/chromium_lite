@@ -11,12 +11,13 @@
 #include "base/metrics/histogram.h"
 #include "base/pickle.h"
 #include "base/prefs/pref_service.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/bookmarks/bookmark_node_data.h"
 #include "chrome/browser/bookmarks/bookmark_utils.h"
 #include "chrome/browser/browser_shutdown.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/themes/theme_properties.h"
@@ -41,10 +42,10 @@
 #include "chrome/browser/ui/gtk/view_id_util.h"
 #include "chrome/browser/ui/ntp_background_util.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/ui/webui/ntp/app_launcher_handler.h"
-#include "chrome/common/chrome_notification_types.h"
+#include "chrome/browser/ui/webui/ntp/core_app_launcher_handler.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/common/url_constants.h"
 #include "content/public/browser/notification_details.h"
 #include "content/public/browser/notification_source.h"
 #include "content/public/browser/user_metrics.h"
@@ -132,7 +133,7 @@ void RecordAppLaunch(Profile* profile, const GURL& url) {
   if (!extension)
     return;
 
-  AppLauncherHandler::RecordAppLaunchType(
+  CoreAppLauncherHandler::RecordAppLaunchType(
       extension_misc::APP_LAUNCH_BOOKMARK_BAR,
       extension->GetType());
 }
@@ -168,6 +169,14 @@ BookmarkBarGtk::BookmarkBarGtk(BrowserWindowGtk* window,
 
   registrar_.Add(this, chrome::NOTIFICATION_BROWSER_THEME_CHANGED,
                  content::Source<ThemeService>(theme_service_));
+
+  apps_shortcut_visible_.Init(
+      prefs::kShowAppsShortcutInBookmarkBar,
+      browser_->profile()->GetPrefs(),
+      base::Bind(&BookmarkBarGtk::OnAppsPageShortcutVisibilityChanged,
+                 base::Unretained(this)));
+
+  OnAppsPageShortcutVisibilityChanged();
 
   edit_bookmarks_enabled_.Init(
       prefs::kEditBookmarksEnabled,
@@ -208,6 +217,17 @@ void BookmarkBarGtk::Init() {
 
   bookmark_hbox_ = gtk_hbox_new(FALSE, 0);
   gtk_container_add(GTK_CONTAINER(paint_box_), bookmark_hbox_);
+
+  apps_shortcut_button_ = theme_service_->BuildChromeButton();
+  bookmark_utils::ConfigureAppsShortcutButton(apps_shortcut_button_,
+                                              theme_service_);
+  g_signal_connect(apps_shortcut_button_, "clicked",
+                   G_CALLBACK(OnAppsButtonClickedThunk), this);
+  // Accept middle mouse clicking.
+  gtk_util::SetButtonClickableByMouseButtons(
+      apps_shortcut_button_, true, true, false);
+  gtk_box_pack_start(GTK_BOX(bookmark_hbox_), apps_shortcut_button_,
+                     FALSE, FALSE, 0);
 
   instructions_ = gtk_alignment_new(0, 0, 1, 1);
   gtk_alignment_set_padding(GTK_ALIGNMENT(instructions_), 0, 0,
@@ -288,7 +308,7 @@ void BookmarkBarGtk::Init() {
   // TODO(erg): Handle extensions
   model_ = BookmarkModelFactory::GetForProfile(profile);
   model_->AddObserver(this);
-  if (model_->IsLoaded())
+  if (model_->loaded())
     Loaded(model_, false);
   // else case: we'll receive notification back from the BookmarkModel when done
   // loading, then we'll populate the bar.
@@ -437,7 +457,7 @@ void BookmarkBarGtk::Show(BookmarkBar::State old_state,
     AnimationProgressed(&slide_animation_);
   }
 
-  if (model_ && model_->IsLoaded())
+  if (model_ && model_->loaded())
     UpdateOtherBookmarksVisibility();
 
   // Hide out behind the findbar. This is rather fragile code, it could
@@ -940,6 +960,11 @@ void BookmarkBarGtk::BookmarkNodeRemoved(BookmarkModel* model,
   SetChevronState();
 }
 
+void BookmarkBarGtk::BookmarkAllNodesRemoved(BookmarkModel* model) {
+  UpdateOtherBookmarksVisibility();
+  ResetButtons();
+}
+
 void BookmarkBarGtk::BookmarkNodeChanged(BookmarkModel* model,
                                          const BookmarkNode* node) {
   if (node->parent() != model_->bookmark_bar_node()) {
@@ -973,7 +998,7 @@ void BookmarkBarGtk::Observe(int type,
                              const content::NotificationSource& source,
                              const content::NotificationDetails& details) {
   if (type == chrome::NOTIFICATION_BROWSER_THEME_CHANGED) {
-    if (model_ && model_->IsLoaded()) {
+    if (model_ && model_->loaded()) {
       // Regenerate the bookmark bar with all new objects with their theme
       // properties set correctly for the new theme.
       ResetButtons();
@@ -1109,7 +1134,7 @@ const BookmarkNode* BookmarkBarGtk::GetNodeForToolButton(GtkWidget* widget) {
 void BookmarkBarGtk::PopupMenuForNode(GtkWidget* sender,
                                       const BookmarkNode* node,
                                       GdkEventButton* event) {
-  if (!model_->IsLoaded()) {
+  if (!model_->loaded()) {
     // Don't do anything if the model isn't loaded.
     return;
   }
@@ -1234,6 +1259,17 @@ void BookmarkBarGtk::OnButtonDragGet(GtkWidget* widget,
                                            browser_->profile());
 }
 
+void BookmarkBarGtk::OnAppsButtonClicked(GtkWidget* sender) {
+  content::OpenURLParams params(
+      GURL(chrome::kChromeUIAppsURL),
+      content::Referrer(),
+      event_utils::DispositionForCurrentButtonPressEvent(),
+      content::PAGE_TRANSITION_AUTO_BOOKMARK,
+      false);
+  browser_->OpenURL(params);
+  bookmark_utils::RecordAppsPageOpen(GetBookmarkLaunchLocation());
+}
+
 void BookmarkBarGtk::OnFolderClicked(GtkWidget* sender) {
   // Stop its throbbing, if any.
   HoverControllerGtk* hover_controller =
@@ -1251,6 +1287,7 @@ void BookmarkBarGtk::OnFolderClicked(GtkWidget* sender) {
     chrome::OpenAll(window_->GetNativeWindow(), page_navigator_, node,
                     NEW_BACKGROUND_TAB, browser_->profile());
   }
+  gdk_event_free(event);
 }
 
 gboolean BookmarkBarGtk::OnToolbarDragMotion(GtkWidget* toolbar,
@@ -1451,7 +1488,7 @@ void BookmarkBarGtk::OnParentSizeAllocate(GtkWidget* widget,
   // gtk_widget_queue_draw by itself does not work, despite that it claims to
   // be asynchronous.
   if (bookmark_bar_state_ == BookmarkBar::DETACHED) {
-    MessageLoop::current()->PostTask(
+    base::MessageLoop::current()->PostTask(
         FROM_HERE,
         base::Bind(&BookmarkBarGtk::PaintEventBox, weak_factory_.GetWeakPtr()));
   }
@@ -1463,6 +1500,13 @@ void BookmarkBarGtk::OnThrobbingWidgetDestroy(GtkWidget* widget) {
 
 void BookmarkBarGtk::ShowImportDialog() {
   chrome::ShowImportDialog(browser_);
+}
+
+void BookmarkBarGtk::OnAppsPageShortcutVisibilityChanged() {
+  const bool visible =
+      chrome::ShouldShowAppsShortcutInBookmarkBar(browser_->profile());
+  gtk_widget_set_visible(apps_shortcut_button_, visible);
+  gtk_widget_set_no_show_all(apps_shortcut_button_, !visible);
 }
 
 void BookmarkBarGtk::OnEditBookmarksEnabledChanged() {

@@ -7,33 +7,34 @@
 #include "base/bind.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
-#include "base/message_loop.h"
-#include "base/message_loop_proxy.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
-#include "base/sys_string_conversions.h"
+#include "base/message_loop/message_loop.h"
+#include "base/message_loop/message_loop_proxy.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/sys_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/threading/platform_thread.h"
-#include "base/utf_string_conversions.h"
 #include "base/values.h"
 #include "net/base/net_util.h"
 #include "remoting/base/auth_token_util.h"
 #include "remoting/base/auto_thread.h"
+#include "remoting/base/resources.h"
 #include "remoting/base/rsa_key_pair.h"
-#include "remoting/host/basic_desktop_environment.h"
 #include "remoting/host/chromoting_host.h"
 #include "remoting/host/chromoting_host_context.h"
 #include "remoting/host/host_config.h"
 #include "remoting/host/host_event_logger.h"
 #include "remoting/host/host_secret.h"
 #include "remoting/host/host_status_observer.h"
-#include "remoting/host/it2me_host_user_interface.h"
-#include "remoting/host/network_settings.h"
+#include "remoting/host/it2me_desktop_environment.h"
+#include "remoting/host/pairing_registry_delegate.h"
 #include "remoting/host/pin_hash.h"
 #include "remoting/host/plugin/host_log_handler.h"
 #include "remoting/host/policy_hack/policy_watcher.h"
 #include "remoting/host/register_support_host_request.h"
 #include "remoting/host/service_urls.h"
 #include "remoting/host/session_manager_factory.h"
+#include "remoting/jingle_glue/network_settings.h"
 #include "remoting/jingle_glue/xmpp_signal_strategy.h"
 #include "remoting/protocol/it2me_host_authenticator_factory.h"
 #include "third_party/npapi/bindings/npruntime.h"
@@ -57,15 +58,19 @@ const char* kAttrNameOnStateChanged = "onStateChanged";
 const char* kAttrNameXmppServerAddress = "xmppServerAddress";
 const char* kAttrNameXmppServerUseTls = "xmppServerUseTls";
 const char* kAttrNameDirectoryBotJid = "directoryBotJid";
+const char* kAttrNameSupportedFeatures = "supportedFeatures";
 const char* kFuncNameConnect = "connect";
 const char* kFuncNameDisconnect = "disconnect";
 const char* kFuncNameLocalize = "localize";
+const char* kFuncNameClearPairedClients = "clearPairedClients";
+const char* kFuncNameDeletePairedClient = "deletePairedClient";
 const char* kFuncNameGetHostName = "getHostName";
 const char* kFuncNameGetPinHash = "getPinHash";
 const char* kFuncNameGenerateKeyPair = "generateKeyPair";
 const char* kFuncNameUpdateDaemonConfig = "updateDaemonConfig";
 const char* kFuncNameGetDaemonConfig = "getDaemonConfig";
 const char* kFuncNameGetDaemonVersion = "getDaemonVersion";
+const char* kFuncNameGetPairedClients = "getPairedClients";
 const char* kFuncNameGetUsageStatsConsent = "getUsageStatsConsent";
 const char* kFuncNameStartDaemon = "startDaemon";
 const char* kFuncNameStopDaemon = "stopDaemon";
@@ -81,6 +86,9 @@ const char* kAttrNameError = "ERROR";
 const char* kAttrNameInvalidDomainError = "INVALID_DOMAIN_ERROR";
 
 const int kMaxLoginAttempts = 5;
+
+// Space separated list of features supported in addition to the base protocol.
+const char* kSupportedFeatures = "pairingRegistry";
 
 }  // namespace
 
@@ -101,8 +109,7 @@ class HostNPScriptObject::It2MeImpl
   // Creates It2Me host structures and starts the host.
   void Connect(const std::string& uid,
                const std::string& auth_token,
-               const std::string& auth_service,
-               const UiStrings& ui_strings);
+               const std::string& auth_service);
 
   // Disconnects the host, ready for tear-down.
   // Also called internally, from the network thread.
@@ -115,7 +122,6 @@ class HostNPScriptObject::It2MeImpl
   virtual void OnAccessDenied(const std::string& jid) OVERRIDE;
   virtual void OnClientAuthenticated(const std::string& jid) OVERRIDE;
   virtual void OnClientDisconnected(const std::string& jid) OVERRIDE;
-  virtual void OnShutdown() OVERRIDE;
 
  private:
   friend class base::RefCountedThreadSafe<It2MeImpl>;
@@ -143,8 +149,13 @@ class HostNPScriptObject::It2MeImpl
                            const std::string& support_id,
                            const base::TimeDelta& lifetime);
 
-  // Called when ChromotingHost::Shutdown() has completed.
-  void OnShutdownFinished();
+  // Shuts down |host_| on the network thread and posts ShutdownOnUiThread()
+  // to shut down UI thread resources.
+  void ShutdownOnNetworkThread();
+
+  // Shuts down |desktop_environment_factory_| and |policy_watcher_| on
+  // the UI thread.
+  void ShutdownOnUiThread();
 
   // Called when initial policies are read, and when they change.
   void OnPolicyUpdate(scoped_ptr<base::DictionaryValue> policies);
@@ -167,10 +178,9 @@ class HostNPScriptObject::It2MeImpl
   scoped_ptr<RegisterSupportHostRequest> register_request_;
   scoped_ptr<LogToServer> log_to_server_;
   scoped_ptr<DesktopEnvironmentFactory> desktop_environment_factory_;
-  scoped_ptr<It2MeHostUserInterface> it2me_host_user_interface_;
   scoped_ptr<HostEventLogger> host_event_logger_;
 
-  scoped_refptr<ChromotingHost> host_;
+  scoped_ptr<ChromotingHost> host_;
   int failed_login_attempts_;
 
   scoped_ptr<policy_hack::PolicyWatcher> policy_watcher_;
@@ -216,18 +226,16 @@ HostNPScriptObject::It2MeImpl::It2MeImpl(
 void HostNPScriptObject::It2MeImpl::Connect(
     const std::string& uid,
     const std::string& auth_token,
-    const std::string& auth_service,
-    const UiStrings& ui_strings) {
+    const std::string& auth_service) {
   if (!host_context_->ui_task_runner()->BelongsToCurrentThread()) {
     DCHECK(plugin_task_runner_->BelongsToCurrentThread());
     host_context_->ui_task_runner()->PostTask(
         FROM_HERE,
-        base::Bind(&It2MeImpl::Connect, this, uid, auth_token, auth_service,
-                   ui_strings));
+        base::Bind(&It2MeImpl::Connect, this, uid, auth_token, auth_service));
     return;
   }
 
-  desktop_environment_factory_.reset(new BasicDesktopEnvironmentFactory(
+  desktop_environment_factory_.reset(new It2MeDesktopEnvironmentFactory(
       host_context_->network_task_runner(),
       host_context_->input_task_runner(),
       host_context_->ui_task_runner()));
@@ -237,12 +245,6 @@ void HostNPScriptObject::It2MeImpl::Connect(
       policy_hack::PolicyWatcher::Create(host_context_->network_task_runner()));
   policy_watcher_->StartWatching(
       base::Bind(&It2MeImpl::OnPolicyUpdate, this));
-
-  // The UserInterface object needs to be created on the UI thread.
-  it2me_host_user_interface_.reset(
-      new It2MeHostUserInterface(host_context_->network_task_runner(),
-                                 host_context_->ui_task_runner(), ui_strings));
-  it2me_host_user_interface_->Init();
 
   // Switch to the network thread to start the actual connection.
   host_context_->network_task_runner()->PostTask(
@@ -261,13 +263,13 @@ void HostNPScriptObject::It2MeImpl::Disconnect() {
 
   switch (state_) {
     case kDisconnected:
-      OnShutdownFinished();
+      ShutdownOnNetworkThread();
       return;
 
     case kStarting:
       SetState(kDisconnecting);
       SetState(kDisconnected);
-      OnShutdownFinished();
+      ShutdownOnNetworkThread();
       return;
 
     case kDisconnecting:
@@ -277,18 +279,16 @@ void HostNPScriptObject::It2MeImpl::Disconnect() {
       SetState(kDisconnecting);
 
       if (!host_) {
-        OnShutdownFinished();
+        SetState(kDisconnected);
+        ShutdownOnNetworkThread();
         return;
       }
 
-      // ChromotingHost::Shutdown() may destroy SignalStrategy
-      // synchronously, but SignalStrategy::Listener handlers are not
-      // allowed to destroy SignalStrategy, so post task to call
-      // Shutdown() later.
+      // Deleting the host destroys SignalStrategy synchronously, but
+      // SignalStrategy::Listener handlers are not allowed to destroy
+      // SignalStrategy, so post task to destroy the host later.
       host_context_->network_task_runner()->PostTask(
-          FROM_HERE, base::Bind(
-              &ChromotingHost::Shutdown, host_,
-              base::Bind(&It2MeImpl::OnShutdownFinished, this)));
+          FROM_HERE, base::Bind(&It2MeImpl::ShutdownOnNetworkThread, this));
       return;
   }
 }
@@ -376,7 +376,7 @@ void HostNPScriptObject::It2MeImpl::FinishConnect(
   }
 
   // Create the host.
-  host_ = new ChromotingHost(
+  host_.reset(new ChromotingHost(
       signal_strategy_.get(),
       desktop_environment_factory_.get(),
       CreateHostSessionManager(network_settings,
@@ -386,7 +386,7 @@ void HostNPScriptObject::It2MeImpl::FinishConnect(
       host_context_->video_capture_task_runner(),
       host_context_->video_encode_task_runner(),
       host_context_->network_task_runner(),
-      host_context_->ui_task_runner());
+      host_context_->ui_task_runner()));
   host_->AddStatusObserver(this);
   log_to_server_.reset(
       new LogToServer(host_->AsWeakPtr(), ServerLogEntry::IT2ME,
@@ -398,10 +398,6 @@ void HostNPScriptObject::It2MeImpl::FinishConnect(
       protocol::CandidateSessionConfig::CreateDefault();
   protocol::CandidateSessionConfig::DisableAudioChannel(protocol_config.get());
   host_->set_protocol_config(protocol_config.Pass());
-
-  // Create user interface.
-  it2me_host_user_interface_->Start(host_.get(),
-                                    base::Bind(&It2MeImpl::Disconnect, this));
 
   // Create event logger.
   host_event_logger_ =
@@ -415,21 +411,27 @@ void HostNPScriptObject::It2MeImpl::FinishConnect(
   return;
 }
 
-void HostNPScriptObject::It2MeImpl::OnShutdownFinished() {
-  if (!host_context_->ui_task_runner()->BelongsToCurrentThread()) {
-    host_context_->ui_task_runner()->PostTask(
-        FROM_HERE, base::Bind(&It2MeImpl::OnShutdownFinished, this));
-    return;
+void HostNPScriptObject::It2MeImpl::ShutdownOnNetworkThread() {
+  DCHECK(host_context_->network_task_runner()->BelongsToCurrentThread());
+  DCHECK(state_ == kDisconnecting || state_ == kDisconnected);
+
+  if (state_ == kDisconnecting) {
+    host_event_logger_.reset();
+    host_->RemoveStatusObserver(this);
+    host_.reset();
+
+    register_request_.reset();
+    log_to_server_.reset();
+    signal_strategy_.reset();
+    SetState(kDisconnected);
   }
 
-  // Note that OnShutdownFinished() may be called more than once.
+  host_context_->ui_task_runner()->PostTask(
+      FROM_HERE, base::Bind(&It2MeImpl::ShutdownOnUiThread, this));
+}
 
-  // UI needs to be shut down on the UI thread before we destroy the
-  // host context (because it depends on the context object), but
-  // only after the host has been shut down (becase the UI object is
-  // registered as status observer for the host, and we can't
-  // unregister it from this thread).
-  it2me_host_user_interface_.reset();
+void HostNPScriptObject::It2MeImpl::ShutdownOnUiThread() {
+  DCHECK(host_context_->ui_task_runner()->BelongsToCurrentThread());
 
   // Destroy the DesktopEnvironmentFactory, to free thread references.
   desktop_environment_factory_.reset();
@@ -496,21 +498,6 @@ void HostNPScriptObject::It2MeImpl::OnClientDisconnected(
   Disconnect();
 }
 
-void HostNPScriptObject::It2MeImpl::OnShutdown() {
-  DCHECK(host_context_->network_task_runner()->BelongsToCurrentThread());
-
-  register_request_.reset();
-  log_to_server_.reset();
-  signal_strategy_.reset();
-  host_event_logger_.reset();
-  host_->RemoveStatusObserver(this);
-  host_ = NULL;
-
-  if (state_ != kDisconnected) {
-    SetState(kDisconnected);
-  }
-}
-
 void HostNPScriptObject::It2MeImpl::OnPolicyUpdate(
     scoped_ptr<base::DictionaryValue> policies) {
   DCHECK(host_context_->network_task_runner()->BelongsToCurrentThread());
@@ -570,7 +557,6 @@ void HostNPScriptObject::It2MeImpl::UpdateHostDomainPolicy(
 
 HostNPScriptObject::It2MeImpl::~It2MeImpl() {
   // Check that resources that need to be torn down on the UI thread are gone.
-  DCHECK(!it2me_host_user_interface_.get());
   DCHECK(!desktop_environment_factory_.get());
   DCHECK(!policy_watcher_.get());
 }
@@ -674,9 +660,27 @@ HostNPScriptObject::HostNPScriptObject(
       am_currently_logging_(false),
       state_(kDisconnected),
       daemon_controller_(DaemonController::Create()),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)),
+      weak_factory_(this),
       weak_ptr_(weak_factory_.GetWeakPtr()) {
   DCHECK(plugin_task_runner_->BelongsToCurrentThread());
+
+  // Set the thread task runner for the plugin thread so that timers and other
+  // code using |base::ThreadTaskRunnerHandle| could be used on the plugin
+  // thread.
+  //
+  // If component build is used, Chrome and the plugin may end up sharing base
+  // binary. This means that the instance of |base::ThreadTaskRunnerHandle|
+  // created by Chrome for the current thread is shared as well. This routinely
+  // happens in the development setting so the below check for
+  // |!base::ThreadTaskRunnerHandle::IsSet()| is a hack/workaround allowing this
+  // configuration to work. It lets the plugin to access Chrome's message loop
+  // directly via |base::ThreadTaskRunnerHandle|. This is safe as long as both
+  // Chrome and the plugin are built from the same version of the sources.
+  if (!base::ThreadTaskRunnerHandle::IsSet()) {
+    plugin_task_runner_handle_.reset(
+        new base::ThreadTaskRunnerHandle(plugin_task_runner_));
+  }
+
   ServiceUrls* service_urls = ServiceUrls::GetInstance();
   bool xmpp_server_valid = net::ParseHostAndPort(
       service_urls->xmpp_server_address(),
@@ -686,9 +690,12 @@ HostNPScriptObject::HostNPScriptObject(
   xmpp_server_config_.use_tls = service_urls->xmpp_server_use_tls();
   directory_bot_jid_ = service_urls->directory_bot_jid();
 
-  // Create worker thread for encryption key generation.
+  // Create worker thread for encryption key generation and loading the paired
+  // clients.
   worker_thread_ = AutoThread::Create("ChromotingWorkerThread",
                                       plugin_task_runner_);
+
+  pairing_registry_ = CreatePairingRegistry(worker_thread_);
 }
 
 HostNPScriptObject::~HostNPScriptObject() {
@@ -709,12 +716,15 @@ bool HostNPScriptObject::HasMethod(const std::string& method_name) {
   return (method_name == kFuncNameConnect ||
           method_name == kFuncNameDisconnect ||
           method_name == kFuncNameLocalize ||
+          method_name == kFuncNameClearPairedClients ||
+          method_name == kFuncNameDeletePairedClient ||
           method_name == kFuncNameGetHostName ||
           method_name == kFuncNameGetPinHash ||
           method_name == kFuncNameGenerateKeyPair ||
           method_name == kFuncNameUpdateDaemonConfig ||
           method_name == kFuncNameGetDaemonConfig ||
           method_name == kFuncNameGetDaemonVersion ||
+          method_name == kFuncNameGetPairedClients ||
           method_name == kFuncNameGetUsageStatsConsent ||
           method_name == kFuncNameStartDaemon ||
           method_name == kFuncNameStopDaemon);
@@ -741,6 +751,10 @@ bool HostNPScriptObject::Invoke(const std::string& method_name,
     return Disconnect(args, arg_count, result);
   } else if (method_name == kFuncNameLocalize) {
     return Localize(args, arg_count, result);
+  } else if (method_name == kFuncNameClearPairedClients) {
+    return ClearPairedClients(args, arg_count, result);
+  } else if (method_name == kFuncNameDeletePairedClient) {
+    return DeletePairedClient(args, arg_count, result);
   } else if (method_name == kFuncNameGetHostName) {
     return GetHostName(args, arg_count, result);
   } else if (method_name == kFuncNameGetPinHash) {
@@ -753,6 +767,8 @@ bool HostNPScriptObject::Invoke(const std::string& method_name,
     return GetDaemonConfig(args, arg_count, result);
   } else if (method_name == kFuncNameGetDaemonVersion) {
     return GetDaemonVersion(args, arg_count, result);
+  } else if (method_name == kFuncNameGetPairedClients) {
+    return GetPairedClients(args, arg_count, result);
   } else if (method_name == kFuncNameGetUsageStatsConsent) {
     return GetUsageStatsConsent(args, arg_count, result);
   } else if (method_name == kFuncNameStartDaemon) {
@@ -785,7 +801,8 @@ bool HostNPScriptObject::HasProperty(const std::string& property_name) {
           property_name == kAttrNameError ||
           property_name == kAttrNameXmppServerAddress ||
           property_name == kAttrNameXmppServerUseTls ||
-          property_name == kAttrNameDirectoryBotJid);
+          property_name == kAttrNameDirectoryBotJid ||
+          property_name == kAttrNameSupportedFeatures);
 }
 
 bool HostNPScriptObject::GetProperty(const std::string& property_name,
@@ -855,6 +872,9 @@ bool HostNPScriptObject::GetProperty(const std::string& property_name,
   } else if (property_name == kAttrNameDirectoryBotJid) {
     *result = NPVariantFromString(directory_bot_jid_);
     return true;
+  } else if (property_name == kAttrNameSupportedFeatures) {
+    *result = NPVariantFromString(kSupportedFeatures);
+    return true;
   } else {
     SetException("GetProperty: unsupported property " + property_name);
     return false;
@@ -869,7 +889,7 @@ bool HostNPScriptObject::SetProperty(const std::string& property_name,
   if (property_name == kAttrNameOnNatTraversalPolicyChanged) {
     if (NPVARIANT_IS_OBJECT(*value)) {
       on_nat_traversal_policy_changed_func_ = NPVARIANT_TO_OBJECT(*value);
-      if (it2me_impl_) {
+      if (it2me_impl_.get()) {
         // Ask the It2Me implementation to notify the web-app of the policy.
         it2me_impl_->RequestNatPolicy();
       }
@@ -976,12 +996,15 @@ bool HostNPScriptObject::Enumerate(std::vector<std::string>* values) {
     kFuncNameConnect,
     kFuncNameDisconnect,
     kFuncNameLocalize,
+    kFuncNameClearPairedClients,
+    kFuncNameDeletePairedClient,
     kFuncNameGetHostName,
     kFuncNameGetPinHash,
     kFuncNameGenerateKeyPair,
     kFuncNameUpdateDaemonConfig,
     kFuncNameGetDaemonConfig,
     kFuncNameGetDaemonVersion,
+    kFuncNameGetPairedClients,
     kFuncNameGetUsageStatsConsent,
     kFuncNameStartDaemon,
     kFuncNameStopDaemon
@@ -1005,7 +1028,7 @@ bool HostNPScriptObject::Connect(const NPVariant* args,
     return false;
   }
 
-  if (it2me_impl_) {
+  if (it2me_impl_.get()) {
     SetException("connect: can be called only when disconnected");
     return false;
   }
@@ -1038,7 +1061,7 @@ bool HostNPScriptObject::Connect(const NPVariant* args,
   it2me_impl_ = new It2MeImpl(
       host_context.Pass(), plugin_task_runner_, weak_ptr_,
       xmpp_server_config_, directory_bot_jid_);
-  it2me_impl_->Connect(uid, auth_token, auth_service, ui_strings_);
+  it2me_impl_->Connect(uid, auth_token, auth_service);
 
   return true;
 }
@@ -1052,7 +1075,7 @@ bool HostNPScriptObject::Disconnect(const NPVariant* args,
     return false;
   }
 
-  if (it2me_impl_) {
+  if (it2me_impl_.get()) {
     it2me_impl_->Disconnect();
     it2me_impl_ = NULL;
   }
@@ -1077,6 +1100,63 @@ bool HostNPScriptObject::Localize(const NPVariant* args,
     SetException("localize: unexpected type for argument 1");
     return false;
   }
+}
+
+bool HostNPScriptObject::ClearPairedClients(const NPVariant* args,
+                                            uint32_t arg_count,
+                                            NPVariant* result) {
+  if (arg_count != 1) {
+    SetException("clearPairedClients: bad number of arguments");
+    return false;
+  }
+
+  if (!NPVARIANT_IS_OBJECT(args[0])) {
+    SetException("clearPairedClients: invalid callback parameter");
+    return false;
+  }
+
+  ScopedRefNPObject callback_obj(ObjectFromNPVariant(args[0]));
+  if (pairing_registry_) {
+    pairing_registry_->ClearAllPairings(
+        base::Bind(&HostNPScriptObject::InvokeBooleanCallback, weak_ptr_,
+                   callback_obj));
+  } else {
+    InvokeBooleanCallback(callback_obj, false);
+  }
+
+  return true;
+}
+
+bool HostNPScriptObject::DeletePairedClient(const NPVariant* args,
+                                            uint32_t arg_count,
+                                            NPVariant* result) {
+  if (arg_count != 2) {
+    SetException("deletePairedClient: bad number of arguments");
+    return false;
+  }
+
+  if (!NPVARIANT_IS_STRING(args[0])) {
+    SetException("deletePairedClient: bad clientId parameter");
+    return false;
+  }
+
+  if (!NPVARIANT_IS_OBJECT(args[1])) {
+    SetException("deletePairedClient: invalid callback parameter");
+    return false;
+  }
+
+  std::string client_id = StringFromNPVariant(args[0]);
+  ScopedRefNPObject callback_obj(ObjectFromNPVariant(args[1]));
+  if (pairing_registry_) {
+    pairing_registry_->DeletePairing(
+        client_id,
+        base::Bind(&HostNPScriptObject::InvokeBooleanCallback,
+                   weak_ptr_, callback_obj));
+  } else {
+    InvokeBooleanCallback(callback_obj, false);
+  }
+
+  return true;
 }
 
 bool HostNPScriptObject::GetHostName(const NPVariant* args,
@@ -1244,6 +1324,31 @@ bool HostNPScriptObject::GetDaemonVersion(const NPVariant* args,
   return true;
 }
 
+bool HostNPScriptObject::GetPairedClients(const NPVariant* args,
+                                          uint32_t arg_count,
+                                          NPVariant* result) {
+  if (arg_count != 1) {
+    SetException("getPairedClients: bad number of arguments");
+    return false;
+  }
+
+  ScopedRefNPObject callback_obj(ObjectFromNPVariant(args[0]));
+  if (!callback_obj.get()) {
+    SetException("getPairedClients: invalid callback parameter");
+    return false;
+  }
+
+  if (pairing_registry_) {
+    pairing_registry_->GetAllPairings(
+        base::Bind(&HostNPScriptObject::InvokeGetPairedClientsCallback,
+                   weak_ptr_, callback_obj));
+  } else {
+    scoped_ptr<base::ListValue> no_paired_clients(new base::ListValue);
+    InvokeGetPairedClientsCallback(callback_obj, no_paired_clients.Pass());
+  }
+  return true;
+}
+
 bool HostNPScriptObject::GetUsageStatsConsent(const NPVariant* args,
                                               uint32_t arg_count,
                                               NPVariant* result) {
@@ -1396,23 +1501,13 @@ void HostNPScriptObject::SetWindow(NPWindow* np_window) {
 void HostNPScriptObject::LocalizeStrings(NPObject* localize_func) {
   DCHECK(plugin_task_runner_->BelongsToCurrentThread());
 
-  string16 direction;
-  LocalizeString(localize_func, "@@bidi_dir", &direction);
-  ui_strings_.direction = UTF16ToUTF8(direction) == "rtl" ?
-      remoting::UiStrings::RTL : remoting::UiStrings::LTR;
-  LocalizeString(localize_func, /*i18n-content*/"PRODUCT_NAME",
-                 &ui_strings_.product_name);
-  LocalizeString(localize_func, /*i18n-content*/"DISCONNECT_OTHER_BUTTON",
-                 &ui_strings_.disconnect_button_text);
-  LocalizeString(localize_func, /*i18n-content*/"CONTINUE_PROMPT",
-                 &ui_strings_.continue_prompt);
-  LocalizeString(localize_func, /*i18n-content*/"CONTINUE_BUTTON",
-                 &ui_strings_.continue_button_text);
-  LocalizeString(localize_func, /*i18n-content*/"STOP_SHARING_BUTTON",
-                 &ui_strings_.stop_sharing_button_text);
-  LocalizeStringWithSubstitution(localize_func,
-                                 /*i18n-content*/"MESSAGE_SHARED", "$1",
-                                 &ui_strings_.disconnect_message);
+  // Reload resources for the current locale. The default UI locale is used on
+  // Windows.
+#if !defined(OS_WIN)
+  string16 ui_locale;
+  LocalizeString(localize_func, "@@ui_locale", &ui_locale);
+  remoting::LoadResources(UTF16ToUTF8(ui_locale));
+#endif  // !defined(OS_WIN)
 }
 
 bool HostNPScriptObject::LocalizeString(NPObject* localize_func,
@@ -1426,7 +1521,7 @@ bool HostNPScriptObject::LocalizeStringWithSubstitution(
     const char* substitution,
     string16* result) {
   int argc = substitution ? 2 : 1;
-  scoped_array<NPVariant> args(new NPVariant[argc]);
+  scoped_ptr<NPVariant[]> args(new NPVariant[argc]);
   STRINGZ_TO_NPVARIANT(tag, args[0]);
   if (substitution) {
     STRINGZ_TO_NPVARIANT(substitution, args[1]);
@@ -1491,6 +1586,22 @@ void HostNPScriptObject::InvokeAsyncResultCallback(
   g_npnetscape_funcs->releasevariantvalue(&result_var);
 }
 
+void HostNPScriptObject::InvokeBooleanCallback(
+    const ScopedRefNPObject& callback, bool result) {
+  if (!plugin_task_runner_->BelongsToCurrentThread()) {
+    plugin_task_runner_->PostTask(
+        FROM_HERE, base::Bind(
+            &HostNPScriptObject::InvokeBooleanCallback,
+            weak_ptr_, callback, result));
+    return;
+  }
+
+  NPVariant result_var;
+  BOOLEAN_TO_NPVARIANT(result, result_var);
+  InvokeAndIgnoreResult(callback.get(), &result_var, 1);
+  g_npnetscape_funcs->releasevariantvalue(&result_var);
+}
+
 void HostNPScriptObject::InvokeGetDaemonConfigCallback(
     const ScopedRefNPObject& callback,
     scoped_ptr<base::DictionaryValue> config) {
@@ -1526,6 +1637,25 @@ void HostNPScriptObject::InvokeGetDaemonVersionCallback(
   NPVariant version_val = NPVariantFromString(version);
   InvokeAndIgnoreResult(callback.get(), &version_val, 1);
   g_npnetscape_funcs->releasevariantvalue(&version_val);
+}
+
+void HostNPScriptObject::InvokeGetPairedClientsCallback(
+    const ScopedRefNPObject& callback,
+    scoped_ptr<base::ListValue> paired_clients) {
+  if (!plugin_task_runner_->BelongsToCurrentThread()) {
+    plugin_task_runner_->PostTask(
+        FROM_HERE, base::Bind(
+            &HostNPScriptObject::InvokeGetPairedClientsCallback,
+            weak_ptr_, callback, base::Passed(&paired_clients)));
+    return;
+  }
+
+  std::string paired_clients_json;
+  base::JSONWriter::Write(paired_clients.get(), &paired_clients_json);
+
+  NPVariant paired_clients_val = NPVariantFromString(paired_clients_json);
+  InvokeAndIgnoreResult(callback.get(), &paired_clients_val, 1);
+  g_npnetscape_funcs->releasevariantvalue(&paired_clients_val);
 }
 
 void HostNPScriptObject::InvokeGetUsageStatsConsentCallback(

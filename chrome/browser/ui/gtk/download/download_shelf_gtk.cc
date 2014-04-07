@@ -7,8 +7,9 @@
 #include <string>
 
 #include "base/bind.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/download/download_item_model.h"
-#include "chrome/browser/download/download_util.h"
+#include "chrome/browser/download/download_stats.h"
 #include "chrome/browser/themes/theme_properties.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/chrome_pages.h"
@@ -19,7 +20,6 @@
 #include "chrome/browser/ui/gtk/gtk_chrome_shrinkable_hbox.h"
 #include "chrome/browser/ui/gtk/gtk_theme_service.h"
 #include "chrome/browser/ui/gtk/gtk_util.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "content/public/browser/download_item.h"
 #include "content/public/browser/notification_source.h"
 #include "content/public/browser/page_navigator.h"
@@ -39,7 +39,7 @@
 namespace {
 
 // The height of the download items.
-const int kDownloadItemHeight = download_util::kSmallProgressIconSize;
+const int kDownloadItemHeight = DownloadShelf::kSmallProgressIconSize;
 
 // Padding between the download widgets.
 const int kDownloadItemPadding = 10;
@@ -120,7 +120,7 @@ DownloadShelfGtk::DownloadShelfGtk(Browser* browser, GtkWidget* parent)
   gtk_container_add(GTK_CONTAINER(shelf_.get()), vbox);
 
   // Create and pack the close button.
-  close_button_.reset(CustomDrawButton::CloseButton(theme_service_));
+  close_button_.reset(CustomDrawButton::CloseButtonBar(theme_service_));
   gtk_util::CenterWidgetInHBox(outer_hbox, close_button_->widget(), true, 0);
   g_signal_connect(close_button_->widget(), "clicked",
                    G_CALLBACK(OnButtonClickThunk), this);
@@ -198,7 +198,7 @@ void DownloadShelfGtk::DoShow() {
   CancelAutoClose();
 }
 
-void DownloadShelfGtk::DoClose() {
+void DownloadShelfGtk::DoClose(CloseReason reason) {
   // When we are closing, we can vertically overlap the render view. Make sure
   // we are on top.
   gdk_window_raise(gtk_widget_get_window(shelf_.get()));
@@ -206,11 +206,11 @@ void DownloadShelfGtk::DoClose() {
   browser_->UpdateDownloadShelfVisibility(false);
   int num_in_progress = 0;
   for (size_t i = 0; i < download_items_.size(); ++i) {
-    if (download_items_[i]->download()->IsInProgress())
+    if (download_items_[i]->download()->GetState() == DownloadItem::IN_PROGRESS)
       ++num_in_progress;
   }
-  download_util::RecordShelfClose(
-      download_items_.size(), num_in_progress, close_on_mouse_out_);
+  RecordDownloadShelfClose(
+      download_items_.size(), num_in_progress, reason == AUTOMATIC);
   SetCloseOnMouseOut(false);
 }
 
@@ -227,9 +227,10 @@ void DownloadShelfGtk::Closed() {
   size_t i = 0;
   while (i < download_items_.size()) {
     DownloadItem* download = download_items_[i]->download();
-    bool is_transfer_done = download->IsComplete() ||
-                            download->IsCancelled() ||
-                            download->IsInterrupted();
+    DownloadItem::DownloadState state = download->GetState();
+    bool is_transfer_done = state == DownloadItem::COMPLETE ||
+                            state == DownloadItem::CANCELLED ||
+                            state == DownloadItem::INTERRUPTED;
     if (is_transfer_done && !download->IsDangerous()) {
       RemoveDownloadItem(download_items_[i]);
     } else {
@@ -268,8 +269,8 @@ void DownloadShelfGtk::Observe(int type,
     ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
     close_button_->SetBackground(
         theme_service_->GetColor(ThemeProperties::COLOR_TAB_TEXT),
-        rb.GetImageNamed(IDR_CLOSE_BAR).AsBitmap(),
-        rb.GetImageNamed(IDR_CLOSE_BAR_MASK).AsBitmap());
+        rb.GetImageNamed(IDR_CLOSE_1).AsBitmap(),
+        rb.GetImageNamed(IDR_CLOSE_1_MASK).AsBitmap());
   }
 }
 
@@ -306,7 +307,7 @@ void DownloadShelfGtk::MaybeShowMoreDownloadItems() {
 
 void DownloadShelfGtk::OnButtonClick(GtkWidget* button) {
   if (button == close_button_->widget()) {
-    Close();
+    Close(USER_ACTION);
   } else {
     // The link button was clicked.
     chrome::ShowDownloads(browser_);
@@ -339,9 +340,9 @@ void DownloadShelfGtk::SetCloseOnMouseOut(bool close) {
   close_on_mouse_out_ = close;
   mouse_in_shelf_ = close;
   if (close)
-    MessageLoopForUI::current()->AddObserver(this);
+    base::MessageLoopForUI::current()->AddObserver(this);
   else
-    MessageLoopForUI::current()->RemoveObserver(this);
+    base::MessageLoopForUI::current()->RemoveObserver(this);
 }
 
 void DownloadShelfGtk::WillProcessEvent(GdkEvent* event) {
@@ -394,9 +395,10 @@ bool DownloadShelfGtk::IsCursorInShelfZone(
 void DownloadShelfGtk::MouseLeftShelf() {
   DCHECK(close_on_mouse_out_);
 
-  MessageLoop::current()->PostDelayedTask(
+  base::MessageLoop::current()->PostDelayedTask(
       FROM_HERE,
-      base::Bind(&DownloadShelfGtk::Close, weak_factory_.GetWeakPtr()),
+      base::Bind(
+          &DownloadShelfGtk::Close, weak_factory_.GetWeakPtr(), AUTOMATIC),
       base::TimeDelta::FromMilliseconds(kAutoCloseDelayMs));
 }
 

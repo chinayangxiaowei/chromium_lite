@@ -10,10 +10,10 @@
 #include <vector>
 
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
-#include "base/string16.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/string16.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/autocomplete/autocomplete_input.h"
 #include "chrome/browser/autocomplete/autocomplete_match.h"
 #include "chrome/browser/autocomplete/autocomplete_provider.h"
@@ -66,12 +66,13 @@ class ContactProviderTest : public testing::Test {
   void StartQuery(const std::string& utf8_text) {
     contact_provider_->Start(
         AutocompleteInput(UTF8ToUTF16(utf8_text),
-                          string16::npos,  // cursor_position
-                          string16(),      // desired_tld
-                          GURL(),          // current_url
-                          false,           // prevent_inline_autocomplete
-                          false,           // prefer_keyword
-                          false,           // allow_exact_keyword_match
+                          string16::npos,
+                          string16(),
+                          GURL(),
+                          AutocompleteInput::INVALID_SPEC,
+                          false,
+                          false,
+                          false,
                           AutocompleteInput::ALL_MATCHES),
         false);  // minimal_changes
   }
@@ -123,7 +124,7 @@ class ContactProviderTest : public testing::Test {
     return result;
   }
 
-  MessageLoopForUI message_loop_;
+  base::MessageLoopForUI message_loop_;
   content::TestBrowserThread ui_thread_;
 
   scoped_ptr<TestingProfileManager> profile_manager_;
@@ -276,6 +277,7 @@ TEST_F(ContactProviderTest, Relevance) {
       EXPECT_LE(matches[i].relevance, previous_relevance)
           << "Match " << i << " has greater relevance than previous match";
     }
+    EXPECT_FALSE(matches[i].allowed_to_be_default_match);
     previous_relevance = matches[i].relevance;
   }
 }

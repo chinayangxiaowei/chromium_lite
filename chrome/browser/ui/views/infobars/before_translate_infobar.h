@@ -28,9 +28,8 @@ class BeforeTranslateInfoBar : public TranslateInfoBarBase,
   virtual void Layout() OVERRIDE;
   virtual void ButtonPressed(views::Button* sender,
                              const ui::Event& event) OVERRIDE;
-  virtual void ViewHierarchyChanged(bool is_add,
-                                    views::View* parent,
-                                    views::View* child) OVERRIDE;
+  virtual void ViewHierarchyChanged(
+      const ViewHierarchyChangedDetails& details) OVERRIDE;
   virtual int ContentMinimumWidth() const OVERRIDE;
 
   // views::MenuButtonListener:
@@ -45,10 +44,10 @@ class BeforeTranslateInfoBar : public TranslateInfoBarBase,
   views::Label* label_2_;
 
   views::MenuButton* language_menu_button_;
-  views::TextButton* accept_button_;
-  views::TextButton* deny_button_;
-  views::TextButton* never_translate_button_;
-  views::TextButton* always_translate_button_;
+  views::LabelButton* accept_button_;
+  views::LabelButton* deny_button_;
+  views::LabelButton* never_translate_button_;
+  views::LabelButton* always_translate_button_;
   views::MenuButton* options_menu_button_;
 
   scoped_ptr<TranslateLanguageMenuModel> language_menu_model_;

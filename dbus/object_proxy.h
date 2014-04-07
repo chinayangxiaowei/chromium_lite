@@ -10,11 +10,12 @@
 #include <map>
 #include <set>
 #include <string>
+#include <vector>
 
 #include "base/callback.h"
 #include "base/memory/ref_counted.h"
-#include "base/string_piece.h"
-#include "base/time.h"
+#include "base/strings/string_piece.h"
+#include "base/time/time.h"
 #include "dbus/dbus_export.h"
 #include "dbus/object_path.h"
 
@@ -222,7 +223,7 @@ class CHROME_DBUS_EXPORT ObjectProxy
 
   // Runs the method. Helper function for HandleMessage().
   void RunMethod(base::TimeTicks start_time,
-                 SignalCallback signal_callback,
+                 std::vector<SignalCallback> signal_callbacks,
                  Signal* signal);
 
   // Redirects the function call to HandleMessage().
@@ -268,8 +269,8 @@ class CHROME_DBUS_EXPORT ObjectProxy
   bool filter_added_;
 
   // The method table where keys are absolute signal names (i.e. interface
-  // name + signal name), and values are the corresponding callbacks.
-  typedef std::map<std::string, SignalCallback> MethodTable;
+  // name + signal name), and values are lists of the corresponding callbacks.
+  typedef std::map<std::string, std::vector<SignalCallback> > MethodTable;
   MethodTable method_table_;
 
   // The callback called when NameOwnerChanged signal is received.

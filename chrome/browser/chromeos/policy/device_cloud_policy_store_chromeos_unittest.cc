@@ -9,32 +9,52 @@
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
 #include "base/memory/scoped_ptr.h"
-#include "chrome/browser/chromeos/cros/mock_cryptohome_library.h"
+#include "base/run_loop.h"
 #include "chrome/browser/chromeos/policy/enterprise_install_attributes.h"
-#include "chrome/browser/chromeos/policy/proto/chrome_device_policy.pb.h"
 #include "chrome/browser/chromeos/settings/device_settings_test_helper.h"
+#include "chrome/browser/policy/proto/chromeos/chrome_device_policy.pb.h"
+#include "chromeos/cryptohome/cryptohome_library.h"
+#include "chromeos/dbus/cryptohome_client.h"
 #include "policy/policy_constants.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace policy {
 
+namespace {
+
+void CopyLockResult(base::RunLoop* loop,
+                    EnterpriseInstallAttributes::LockResult* out,
+                    EnterpriseInstallAttributes::LockResult result) {
+  *out = result;
+  loop->Quit();
+}
+
+}  // namespace
+
 class DeviceCloudPolicyStoreChromeOSTest
     : public chromeos::DeviceSettingsTestBase {
  protected:
   DeviceCloudPolicyStoreChromeOSTest()
-      : cryptohome_library_(chromeos::CryptohomeLibrary::GetImpl(true)),
-        install_attributes_(
-            new EnterpriseInstallAttributes(cryptohome_library_.get())),
+      : cryptohome_library_(chromeos::CryptohomeLibrary::GetTestImpl()),
+        stub_cryptohome_client_(chromeos::CryptohomeClient::Create(
+            chromeos::STUB_DBUS_CLIENT_IMPLEMENTATION, NULL)),
+        install_attributes_(new EnterpriseInstallAttributes(
+            cryptohome_library_.get(), stub_cryptohome_client_.get())),
         store_(new DeviceCloudPolicyStoreChromeOS(&device_settings_service_,
                                                   install_attributes_.get())) {}
 
   virtual void SetUp() OVERRIDE {
     DeviceSettingsTestBase::SetUp();
 
-    ASSERT_EQ(EnterpriseInstallAttributes::LOCK_SUCCESS,
-              install_attributes_->LockDevice(PolicyBuilder::kFakeUsername,
-                                              DEVICE_MODE_ENTERPRISE,
-                                              PolicyBuilder::kFakeDeviceId));
+    base::RunLoop loop;
+    EnterpriseInstallAttributes::LockResult result;
+    install_attributes_->LockDevice(
+        PolicyBuilder::kFakeUsername,
+        DEVICE_MODE_ENTERPRISE,
+        PolicyBuilder::kFakeDeviceId,
+        base::Bind(&CopyLockResult, &loop, &result));
+    loop.Run();
+    ASSERT_EQ(EnterpriseInstallAttributes::LOCK_SUCCESS, result);
   }
 
   void ExpectFailure(CloudPolicyStore::Status expected_status) {
@@ -62,29 +82,29 @@ class DeviceCloudPolicyStoreChromeOSTest
     FlushDeviceSettings();
     ExpectSuccess();
 
-    device_policy_.set_new_signing_key(scoped_ptr<crypto::RSAPrivateKey>());
+    device_policy_.UnsetNewSigningKey();
     device_policy_.Build();
   }
 
   void PrepareNewSigningKey() {
-    device_policy_.set_new_signing_key(
-        PolicyBuilder::CreateTestNewSigningKey());
+    device_policy_.SetDefaultNewSigningKey();
     device_policy_.Build();
     owner_key_util_->SetPublicKeyFromPrivateKey(
-        device_policy_.new_signing_key());
+        *device_policy_.GetNewSigningKey());
   }
 
   void ResetToNonEnterprise() {
     store_.reset();
     cryptohome_library_->InstallAttributesSet("enterprise.owned",
                                               std::string());
-    install_attributes_.reset(
-        new EnterpriseInstallAttributes(cryptohome_library_.get()));
+    install_attributes_.reset(new EnterpriseInstallAttributes(
+        cryptohome_library_.get(), stub_cryptohome_client_.get()));
     store_.reset(new DeviceCloudPolicyStoreChromeOS(&device_settings_service_,
                                                     install_attributes_.get()));
   }
 
   scoped_ptr<chromeos::CryptohomeLibrary> cryptohome_library_;
+  scoped_ptr<chromeos::CryptohomeClient> stub_cryptohome_client_;
   scoped_ptr<EnterpriseInstallAttributes> install_attributes_;
 
   scoped_ptr<DeviceCloudPolicyStoreChromeOS> store_;
@@ -149,12 +169,13 @@ TEST_F(DeviceCloudPolicyStoreChromeOSTest, StoreBadSignature) {
 
 TEST_F(DeviceCloudPolicyStoreChromeOSTest, StoreKeyRotation) {
   PrepareExistingPolicy();
-  device_policy_.set_new_signing_key(PolicyBuilder::CreateTestNewSigningKey());
+  device_policy_.SetDefaultNewSigningKey();
   device_policy_.Build();
   store_->Store(device_policy_.policy());
   device_settings_test_helper_.FlushLoops();
   device_settings_test_helper_.FlushStore();
-  owner_key_util_->SetPublicKeyFromPrivateKey(device_policy_.new_signing_key());
+  owner_key_util_->SetPublicKeyFromPrivateKey(
+      *device_policy_.GetNewSigningKey());
   ReloadDeviceSettings();
   ExpectSuccess();
 }

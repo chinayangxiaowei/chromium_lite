@@ -6,7 +6,7 @@
 #define SYNC_UTIL_DATA_TYPE_HISTOGRAM_H_
 
 #include "base/metrics/histogram.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "sync/internal_api/public/base/model_type.h"
 
 // For now, this just implements UMA_HISTOGRAM_LONG_TIMES. This can be adjusted
@@ -105,7 +105,13 @@
       case ::syncer::FAVICON_TRACKING: \
         PER_DATA_TYPE_MACRO("FaviconTracking"); \
         break; \
-      case ::syncer::PROXY_TABS :\
+      case ::syncer::MANAGED_USER_SETTINGS: \
+        PER_DATA_TYPE_MACRO("ManagedUserSetting"); \
+        break; \
+      case ::syncer::MANAGED_USERS: \
+        PER_DATA_TYPE_MACRO("ManagedUser"); \
+        break; \
+      case ::syncer::PROXY_TABS: \
         PER_DATA_TYPE_MACRO("Tabs"); \
         break; \
       default: \

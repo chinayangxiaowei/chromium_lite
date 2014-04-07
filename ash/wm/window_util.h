@@ -19,6 +19,7 @@ class Rect;
 }
 
 namespace ui {
+class Event;
 class Layer;
 }
 
@@ -41,9 +42,6 @@ ASH_EXPORT bool CanActivateWindow(aura::Window* window);
 // If you're looking for a function to get the activatable "top level" window,
 // this is probably what you're looking for.
 ASH_EXPORT aura::Window* GetActivatableWindow(aura::Window* window);
-
-// Returns true if the active window or one its ancestors is fullscreen.
-ASH_EXPORT bool IsActiveWindowFullscreen();
 
 // Returns true if |window| can be maximized.
 ASH_EXPORT bool CanMaximizeWindow(const aura::Window* window);
@@ -110,19 +108,24 @@ ASH_EXPORT const gfx::Rect* GetPreAutoManageWindowBounds(
 ASH_EXPORT void SetPreAutoManageWindowBounds(aura::Window* window,
                                              const gfx::Rect& bounds);
 
-// Move the given bounds inside the given work area, including a safety margin
-// given by |kMinimumOnScreenArea|.
+// Move the given bounds inside the given |visible_area|, including a
+// safety margin given by |kMinimumOnScreenArea|.
 ASH_EXPORT void AdjustBoundsToEnsureMinimumWindowVisibility(
-    const gfx::Rect& work_area,
+    const gfx::Rect& visible_area,
     gfx::Rect* bounds);
 
-// Move the given bounds inside the given work area, including a safety margin
-// given by |min_width| and |min_height|.
+// Move the given bounds inside the given |visible_area|, including a
+// safety margin given by |min_width| and |min_height|.
 ASH_EXPORT void AdjustBoundsToEnsureWindowVisibility(
-    const gfx::Rect& work_area,
+    const gfx::Rect& visible_area,
     int min_width,
     int min_height,
     gfx::Rect* bounds);
+
+// Moves |window| to the root window where the |event| occured if it is not
+// already in the same root window. Returns true if |window| was moved.
+ASH_EXPORT bool MoveWindowToEventRoot(aura::Window* window,
+                                      const ui::Event& event);
 
 }  // namespace wm
 }  // namespace ash

@@ -32,6 +32,14 @@ cr.define('options', function() {
    */
   var butterBarVisibility = {};
 
+  /**
+   * @type {Object.<string, string>} A map from extension id to last reloaded
+   *     timestamp. The timestamp is recorded when the user click the 'Reload'
+   *     link. It is used to refresh the icon of an unpacked extension.
+   *     This persists between calls to decorate.
+   */
+  var extensionReloadedTimestamp = {};
+
   ExtensionsList.prototype = {
     __proto__: HTMLDivElement.prototype,
 
@@ -55,7 +63,7 @@ cr.define('options', function() {
       this.data_.extensions.forEach(this.createNode_, this);
 
       var idToHighlight = this.getIdQueryParam_();
-      if (idToHighlight) {
+      if (idToHighlight && $(idToHighlight)) {
         // Scroll offset should be calculated slightly higher than the actual
         // offset of the element being scrolled to, so that it ends up not all
         // the way at the top. That way it is clear that there are more elements
@@ -97,16 +105,22 @@ cr.define('options', function() {
         node.classList.add('extension-highlight');
 
       var item = node.querySelector('.extension-list-item');
-      item.style.backgroundImage = 'url(' + extension.icon + ')';
+      // Prevent the image cache of extension icon by using the reloaded
+      // timestamp as a query string. The timestamp is recorded when the user
+      // clicks the 'Reload' link. http://crbug.com/159302.
+      if (extensionReloadedTimestamp[extension.id]) {
+        item.style.backgroundImage =
+            'url(' + extension.icon + '?' +
+            extensionReloadedTimestamp[extension.id] + ')';
+      } else {
+        item.style.backgroundImage = 'url(' + extension.icon + ')';
+      }
 
       var title = node.querySelector('.extension-title');
       title.textContent = extension.name;
 
       var version = node.querySelector('.extension-version');
       version.textContent = extension.version;
-
-      var disableReason = node.querySelector('.extension-disable-reason');
-      disableReason.textContent = extension.disableReason;
 
       var locationText = node.querySelector('.location-text');
       locationText.textContent = extension.locationText;
@@ -125,7 +139,7 @@ cr.define('options', function() {
 
       // The 'allow in incognito' checkbox.
       var incognito = node.querySelector('.incognito-control input');
-      incognito.disabled = !extension.incognitoCanBeEnabled;
+      incognito.disabled = !extension.incognitoCanBeToggled;
       incognito.checked = extension.enabledIncognito;
       if (!incognito.disabled) {
         incognito.addEventListener('change', function(e) {
@@ -167,23 +181,6 @@ cr.define('options', function() {
         e.preventDefault();
       });
 
-      if (extension.allow_activity) {
-        var activity = node.querySelector('.activity-link');
-        activity.addEventListener('click', function(e) {
-          chrome.send('navigateToUrl', [
-            'chrome://extension-activity?extensionId=' + extension.id,
-            '_blank',
-            e.button,
-            e.altKey,
-            e.ctrlKey,
-            e.metaKey,
-            e.shiftKey
-          ]);
-          e.preventDefault();
-        });
-        activity.hidden = false;
-      }
-
       // The 'View in Web Store/View Web Site' link.
       if (extension.homepageUrl) {
         var siteLink = node.querySelector('.site-link');
@@ -199,6 +196,7 @@ cr.define('options', function() {
         var reload = node.querySelector('.reload-link');
         reload.addEventListener('click', function(e) {
           chrome.send('extensionSettingsReload', [extension.id]);
+          extensionReloadedTimestamp[extension.id] = Date.now();
         });
         reload.hidden = false;
 
@@ -259,6 +257,7 @@ cr.define('options', function() {
       var trash = trashTemplate.cloneNode(true);
       trash.title = loadTimeData.getString('extensionUninstall');
       trash.addEventListener('click', function(e) {
+        butterBarVisibility[extension.id] = false;
         chrome.send('extensionSettingsUninstall', [extension.id]);
       });
       node.querySelector('.enable-controls').appendChild(trash);
@@ -334,6 +333,15 @@ cr.define('options', function() {
       }
 
       this.appendChild(node);
+      if (location.hash.substr(1) == extension.id) {
+        // Scroll beneath the fixed header so that the extension is not
+        // obscured.
+        var topScroll = node.offsetTop - $('page-header').offsetHeight;
+        var pad = parseInt(getComputedStyle(node, null).marginTop, 10);
+        if (!isNaN(pad))
+          topScroll -= pad / 2;
+        document.body.scrollTop = topScroll;
+      }
     }
   };
 

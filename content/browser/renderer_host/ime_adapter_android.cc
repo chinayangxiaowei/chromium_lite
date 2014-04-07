@@ -9,15 +9,15 @@
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
 #include "base/android/scoped_java_ref.h"
-#include "base/time.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "content/browser/renderer_host/render_widget_host_impl.h"
 #include "content/browser/renderer_host/render_widget_host_view_android.h"
 #include "content/common/view_messages.h"
 #include "content/public/browser/native_web_keyboard_event.h"
 #include "jni/ImeAdapter_jni.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebCompositionUnderline.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebInputEvent.h"
+#include "third_party/WebKit/public/web/WebCompositionUnderline.h"
+#include "third_party/WebKit/public/web/WebInputEvent.h"
 
 using base::android::AttachCurrentThread;
 using base::android::ConvertJavaStringToUTF16;
@@ -119,22 +119,28 @@ bool ImeAdapterAndroid::SendKeyEvent(JNIEnv* env, jobject,
   NativeWebKeyboardEvent event = NativeWebKeyboardEventFromKeyEvent(
           env, original_key_event, action, modifiers,
           time_ms, key_code, is_system_key, unicode_char);
+  bool key_down_text_insertion =
+      event.type == WebKit::WebInputEvent::RawKeyDown && event.text[0];
+  // If we are going to follow up with a synthetic Char event, then that's the
+  // one we expect to test if it's handled or unhandled, so skip handling the
+  // "real" event in the browser.
+  event.skip_in_browser = key_down_text_insertion;
   rwhva_->SendKeyEvent(event);
-  if (event.type == WebKit::WebInputEvent::RawKeyDown && event.text[0]) {
+  if (key_down_text_insertion) {
     // Send a Char event, but without an os_event since we don't want to
     // roundtrip back to java such synthetic event.
-    NativeWebKeyboardEvent char_event(event);
-    char_event.os_event = NULL;
-    event.type = WebKit::WebInputEvent::Char;
-    rwhva_->SendKeyEvent(event);
+    NativeWebKeyboardEvent char_event(WebKit::WebInputEvent::Char, modifiers,
+                                      time_ms, key_code, unicode_char,
+                                      is_system_key);
+    char_event.skip_in_browser = key_down_text_insertion;
+    rwhva_->SendKeyEvent(char_event);
   }
   return true;
 }
 
 void ImeAdapterAndroid::SetComposingText(JNIEnv* env, jobject, jstring text,
                                          int new_cursor_pos) {
-  RenderWidgetHostImpl* rwhi = RenderWidgetHostImpl::From(
-      rwhva_->GetRenderWidgetHost());
+  RenderWidgetHostImpl* rwhi = GetRenderWidgetHostImpl();
   if (!rwhi)
     return;
 
@@ -155,8 +161,7 @@ void ImeAdapterAndroid::SetComposingText(JNIEnv* env, jobject, jstring text,
 void ImeAdapterAndroid::ImeBatchStateChanged(JNIEnv* env,
                                              jobject,
                                              jboolean is_begin) {
-  RenderWidgetHostImpl* rwhi = RenderWidgetHostImpl::From(
-      rwhva_->GetRenderWidgetHost());
+  RenderWidgetHostImpl* rwhi = GetRenderWidgetHostImpl();
   if (!rwhi)
     return;
 
@@ -164,13 +169,20 @@ void ImeAdapterAndroid::ImeBatchStateChanged(JNIEnv* env,
 }
 
 void ImeAdapterAndroid::CommitText(JNIEnv* env, jobject, jstring text) {
-  RenderWidgetHostImpl* rwhi = RenderWidgetHostImpl::From(
-      rwhva_->GetRenderWidgetHost());
+  RenderWidgetHostImpl* rwhi = GetRenderWidgetHostImpl();
   if (!rwhi)
     return;
 
   string16 text16 = ConvertJavaStringToUTF16(env, text);
-  rwhi->ImeConfirmComposition(text16);
+  rwhi->ImeConfirmComposition(text16, ui::Range::InvalidRange(), false);
+}
+
+void ImeAdapterAndroid::FinishComposingText(JNIEnv* env, jobject) {
+  RenderWidgetHostImpl* rwhi = GetRenderWidgetHostImpl();
+  if (!rwhi)
+    return;
+
+  rwhi->ImeConfirmComposition(string16(), ui::Range::InvalidRange(), true);
 }
 
 void ImeAdapterAndroid::AttachImeAdapter(JNIEnv* env, jobject java_object) {
@@ -186,8 +198,7 @@ void ImeAdapterAndroid::CancelComposition() {
 
 void ImeAdapterAndroid::SetEditableSelectionOffsets(JNIEnv*, jobject,
                                                     int start, int end) {
-  RenderWidgetHostImpl* rwhi = RenderWidgetHostImpl::From(
-      rwhva_->GetRenderWidgetHost());
+  RenderWidgetHostImpl* rwhi = GetRenderWidgetHostImpl();
   if (!rwhi)
     return;
 
@@ -197,8 +208,7 @@ void ImeAdapterAndroid::SetEditableSelectionOffsets(JNIEnv*, jobject,
 
 void ImeAdapterAndroid::SetComposingRegion(JNIEnv*, jobject,
                                            int start, int end) {
-  RenderWidgetHostImpl* rwhi = RenderWidgetHostImpl::From(
-      rwhva_->GetRenderWidgetHost());
+  RenderWidgetHostImpl* rwhi = GetRenderWidgetHostImpl();
   if (!rwhi)
     return;
 
@@ -212,8 +222,7 @@ void ImeAdapterAndroid::SetComposingRegion(JNIEnv*, jobject,
 
 void ImeAdapterAndroid::DeleteSurroundingText(JNIEnv*, jobject,
                                               int before, int after) {
-  RenderWidgetHostImpl* rwhi = RenderWidgetHostImpl::From(
-      rwhva_->GetRenderWidgetHost());
+  RenderWidgetHostImpl* rwhi = GetRenderWidgetHostImpl();
   if (!rwhi)
     return;
 
@@ -222,48 +231,56 @@ void ImeAdapterAndroid::DeleteSurroundingText(JNIEnv*, jobject,
 }
 
 void ImeAdapterAndroid::Unselect(JNIEnv* env, jobject) {
-  RenderWidgetHostImpl* rwhi = RenderWidgetHostImpl::From(
-      rwhva_->GetRenderWidgetHost());
+  RenderWidgetHostImpl* rwhi = GetRenderWidgetHostImpl();
   if (!rwhi)
     return;
 
-  rwhi->Send(new ViewMsg_Unselect(rwhi->GetRoutingID()));
+  rwhi->Unselect();
 }
 
 void ImeAdapterAndroid::SelectAll(JNIEnv* env, jobject) {
-  RenderWidgetHostImpl* rwhi = RenderWidgetHostImpl::From(
-      rwhva_->GetRenderWidgetHost());
+  RenderWidgetHostImpl* rwhi = GetRenderWidgetHostImpl();
   if (!rwhi)
     return;
 
-  rwhi->Send(new ViewMsg_SelectAll(rwhi->GetRoutingID()));
+  rwhi->SelectAll();
 }
 
 void ImeAdapterAndroid::Cut(JNIEnv* env, jobject) {
-  RenderWidgetHostImpl* rwhi = RenderWidgetHostImpl::From(
-      rwhva_->GetRenderWidgetHost());
+  RenderWidgetHostImpl* rwhi = GetRenderWidgetHostImpl();
   if (!rwhi)
     return;
 
-  rwhi->Send(new ViewMsg_Cut(rwhi->GetRoutingID()));
+  rwhi->Cut();
 }
 
 void ImeAdapterAndroid::Copy(JNIEnv* env, jobject) {
-  RenderWidgetHostImpl* rwhi = RenderWidgetHostImpl::From(
-      rwhva_->GetRenderWidgetHost());
+  RenderWidgetHostImpl* rwhi = GetRenderWidgetHostImpl();
   if (!rwhi)
     return;
 
-  rwhi->Send(new ViewMsg_Copy(rwhi->GetRoutingID()));
+  rwhi->Copy();
 }
 
 void ImeAdapterAndroid::Paste(JNIEnv* env, jobject) {
-  RenderWidgetHostImpl* rwhi = RenderWidgetHostImpl::From(
-      rwhva_->GetRenderWidgetHost());
+  RenderWidgetHostImpl* rwhi = GetRenderWidgetHostImpl();
   if (!rwhi)
     return;
 
-  rwhi->Send(new ViewMsg_Paste(rwhi->GetRoutingID()));
+  rwhi->Paste();
+}
+
+void ImeAdapterAndroid::ResetImeAdapter(JNIEnv* env, jobject) {
+  java_ime_adapter_.reset();
+}
+
+RenderWidgetHostImpl* ImeAdapterAndroid::GetRenderWidgetHostImpl() {
+  DCHECK(rwhva_);
+  RenderWidgetHost* rwh = rwhva_->GetRenderWidgetHost();
+  if (!rwh)
+    return NULL;
+
+  return RenderWidgetHostImpl::From(rwh);
 }
 
 }  // namespace content

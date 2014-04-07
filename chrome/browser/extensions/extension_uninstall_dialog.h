@@ -14,8 +14,11 @@
 #include "ui/gfx/image/image_skia.h"
 
 class Browser;
-class MessageLoop;
 class Profile;
+
+namespace base {
+class MessageLoop;
+}
 
 namespace extensions {
 class Extension;
@@ -63,15 +66,6 @@ class ExtensionUninstallDialog
                            Browser* browser,
                            Delegate* delegate);
 
-#if defined(ENABLE_MANAGED_USERS)
-  // Requests authorization from a managed user's custodian if required.
-  bool ShowAuthorizationDialog();
-
-  // If custodian authorization is granted, performs the uninstall, otherwise
-  // cancels uninstall.
-  void OnAuthorizationResult(bool success);
-#endif
-
   Profile* const profile_;
 
   Browser* browser_;
@@ -110,7 +104,7 @@ class ExtensionUninstallDialog
   };
   State state_;
 
-  MessageLoop* ui_loop_;
+  base::MessageLoop* ui_loop_;
 
   content::NotificationRegistrar registrar_;
 

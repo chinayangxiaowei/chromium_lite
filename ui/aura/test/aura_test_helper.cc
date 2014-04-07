@@ -4,7 +4,7 @@
 
 #include "ui/aura/test/aura_test_helper.h"
 
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/client/default_capture_client.h"
@@ -15,19 +15,25 @@
 #include "ui/aura/test/test_activation_client.h"
 #include "ui/aura/test/test_screen.h"
 #include "ui/aura/test/test_stacking_client.h"
-#include "ui/base/test/dummy_input_method.h"
+#include "ui/base/ime/dummy_input_method.h"
+#include "ui/compositor/compositor.h"
 #include "ui/compositor/layer_animator.h"
 #include "ui/compositor/scoped_animation_duration_scale_mode.h"
 #include "ui/gfx/screen.h"
 
 #if defined(USE_X11)
+#include "ui/aura/root_window_host_x11.h"
 #include "ui/base/x/x11_util.h"
+#endif
+
+#if defined(USE_OZONE)
+#include "ui/base/ozone/surface_factory_ozone.h"
 #endif
 
 namespace aura {
 namespace test {
 
-AuraTestHelper::AuraTestHelper(MessageLoopForUI* message_loop)
+AuraTestHelper::AuraTestHelper(base::MessageLoopForUI* message_loop)
     : setup_called_(false),
       teardown_called_(false),
       owns_root_window_(false) {
@@ -36,17 +42,29 @@ AuraTestHelper::AuraTestHelper(MessageLoopForUI* message_loop)
   // Disable animations during tests.
   zero_duration_mode_.reset(new ui::ScopedAnimationDurationScaleMode(
       ui::ScopedAnimationDurationScaleMode::ZERO_DURATION));
+#if defined(USE_X11)
+  test::SetUseOverrideRedirectWindowByDefault(true);
+#endif
+#if defined(USE_OZONE)
+  surface_factory_.reset(ui::SurfaceFactoryOzone::CreateTestHelper());
+  ui::SurfaceFactoryOzone::SetInstance(surface_factory_.get());
+#endif
 }
 
 AuraTestHelper::~AuraTestHelper() {
   CHECK(setup_called_)
-      << "You have overridden SetUp but never called super class's SetUp";
+      << "AuraTestHelper::SetUp() never called.";
   CHECK(teardown_called_)
-      << "You have overridden TearDown but never called super class's TearDown";
+      << "AuraTestHelper::TearDown() never called.";
 }
 
 void AuraTestHelper::SetUp() {
   setup_called_ = true;
+
+  // The ContextFactory must exist before any Compositors are created.
+  bool allow_test_contexts = true;
+  ui::Compositor::InitializeContextFactoryForTests(allow_test_contexts);
+
   Env::GetInstance();
   test_screen_.reset(TestScreen::Create());
   gfx::Screen::SetScreenInstance(gfx::SCREEN_TYPE_NATIVE, test_screen_.get());
@@ -58,7 +76,7 @@ void AuraTestHelper::SetUp() {
   test_activation_client_.reset(
       new test::TestActivationClient(root_window_.get()));
   capture_client_.reset(new client::DefaultCaptureClient(root_window_.get()));
-  test_input_method_.reset(new ui::test::DummyInputMethod);
+  test_input_method_.reset(new ui::DummyInputMethod);
   root_window_->SetProperty(
       client::kRootWindowInputMethodKey,
       test_input_method_.get());

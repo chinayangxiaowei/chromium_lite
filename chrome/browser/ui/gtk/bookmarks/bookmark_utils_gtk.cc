@@ -5,9 +5,9 @@
 #include "chrome/browser/ui/gtk/bookmarks/bookmark_utils_gtk.h"
 
 #include "base/pickle.h"
-#include "base/string16.h"
-#include "base/stringprintf.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string16.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
 #include "chrome/browser/bookmarks/bookmark_node_data.h"
 #include "chrome/browser/bookmarks/bookmark_utils.h"
@@ -16,6 +16,8 @@
 #include "chrome/browser/ui/gtk/gtk_chrome_button.h"
 #include "chrome/browser/ui/gtk/gtk_theme_service.h"
 #include "chrome/browser/ui/gtk/gtk_util.h"
+#include "grit/generated_resources.h"
+#include "grit/theme_resources.h"
 #include "grit/ui_strings.h"
 #include "net/base/net_util.h"
 #include "ui/base/dragdrop/gtk_dnd_util.h"
@@ -253,6 +255,15 @@ void ConfigureButtonForNode(const BookmarkNode* node, BookmarkModel* model,
                     AsVoid(node));
 }
 
+void ConfigureAppsShortcutButton(GtkWidget* button, GtkThemeService* provider) {
+  GdkPixbuf* pixbuf = ui::ResourceBundle::GetSharedInstance().
+      GetNativeImageNamed(IDR_BOOKMARK_BAR_APPS_SHORTCUT,
+                          ui::ResourceBundle::RTL_ENABLED).ToGdkPixbuf();
+  const string16& label = l10n_util::GetStringUTF16(
+      IDS_BOOKMARK_BAR_APPS_SHORTCUT_NAME);
+  PackButton(pixbuf, label, false, provider, button);
+}
+
 std::string BuildTooltipFor(const BookmarkNode* node) {
   if (node->is_folder())
     return std::string();
@@ -462,7 +473,12 @@ bool CreateNewBookmarkFromNetscapeURL(GtkSelectionData* selection_data,
 
 string16 GetNameForURL(const GURL& url) {
   if (url.is_valid()) {
-    return net::GetSuggestedFilename(url, "", "", "", "", std::string());
+    return net::GetSuggestedFilename(url,
+                                     std::string(),
+                                     std::string(),
+                                     std::string(),
+                                     std::string(),
+                                     std::string());
   } else {
     return l10n_util::GetStringUTF16(IDS_APP_UNTITLED_SHORTCUT_FILE_NAME);
   }

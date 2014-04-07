@@ -35,7 +35,7 @@ const bool kEntropyFlag[] = {
   true,
 };
 
-const bool kTestFecEntropy = false;
+const bool kTestFecPacketEntropy = false;
 
 }  // namespace
 
@@ -43,7 +43,7 @@ class QuicFecGroupTest : public ::testing::Test {
  protected:
   void RunTest(size_t num_packets, size_t lost_packet, bool out_of_order) {
     size_t max_len = strlen(kData[0]);
-    scoped_array<char>redundancy(new char[max_len]);
+    scoped_ptr<char[]>redundancy(new char[max_len]);
     bool entropy_redundancy = false;
     for (size_t packet = 0; packet < num_packets; ++packet) {
       for (size_t i = 0; i < max_len; i++) {
@@ -157,7 +157,7 @@ TEST_F(QuicFecGroupTest, UpdateFecIfReceivedPacketIsNotCovered) {
   fec.redundancy = redundancy;
 
   header.packet_sequence_number = 2;
-  ASSERT_FALSE(group.UpdateFec(2, kTestFecEntropy, fec));
+  ASSERT_FALSE(group.UpdateFec(2, kTestFecPacketEntropy, fec));
 }
 
 TEST_F(QuicFecGroupTest, ProtectsPacketsBefore) {
@@ -206,7 +206,7 @@ TEST_F(QuicFecGroupTest, ProtectsPacketsBeforeWithFecData) {
   fec.redundancy = kData[0];
 
   QuicFecGroup group;
-  ASSERT_TRUE(group.UpdateFec(3, kTestFecEntropy, fec));
+  ASSERT_TRUE(group.UpdateFec(3, kTestFecPacketEntropy, fec));
 
   EXPECT_FALSE(group.ProtectsPacketsBefore(1));
   EXPECT_FALSE(group.ProtectsPacketsBefore(2));

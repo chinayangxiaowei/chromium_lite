@@ -39,10 +39,9 @@
 #include "base/bind.h"
 #include "base/debug/trace_event.h"
 #include "base/logging.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/stl_util.h"
-#include "base/time.h"
-#include "media/audio/audio_util.h"
+#include "base/time/time.h"
 #include "media/audio/linux/alsa_util.h"
 #include "media/audio/linux/alsa_wrapper.h"
 #include "media/audio/linux/audio_manager_linux.h"
@@ -152,10 +151,10 @@ AlsaPcmOutputStream::AlsaPcmOutputStream(const std::string& device_name,
       stop_stream_(false),
       wrapper_(wrapper),
       manager_(manager),
-      message_loop_(MessageLoop::current()),
+      message_loop_(base::MessageLoop::current()),
       playback_handle_(NULL),
       frames_per_packet_(packet_size_ / bytes_per_frame_),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)),
+      weak_factory_(this),
       state_(kCreated),
       volume_(1.0f),
       source_callback_(NULL),
@@ -308,8 +307,8 @@ void AlsaPcmOutputStream::Start(AudioSourceCallback* callback) {
   // Ensure the first buffer is silence to avoid startup glitches.
   int buffer_size = GetAvailableFrames() * bytes_per_output_frame_;
   scoped_refptr<DataBuffer> silent_packet = new DataBuffer(buffer_size);
-  silent_packet->SetDataSize(buffer_size);
-  memset(silent_packet->GetWritableData(), 0, silent_packet->GetDataSize());
+  silent_packet->set_data_size(buffer_size);
+  memset(silent_packet->writable_data(), 0, silent_packet->data_size());
   buffer_->Append(silent_packet);
   WritePacket();
 
@@ -379,17 +378,12 @@ void AlsaPcmOutputStream::BufferPacket(bool* source_exhausted) {
 
     // Note: If this ever changes to output raw float the data must be clipped
     // and sanitized since it may come from an untrusted source such as NaCl.
+    output_bus->Scale(volume_);
     output_bus->ToInterleaved(
-        frames_filled, bytes_per_sample_, packet->GetWritableData());
-
-    media::AdjustVolume(packet->GetWritableData(),
-                        packet_size,
-                        output_bus->channels(),
-                        bytes_per_sample_,
-                        volume_);
+        frames_filled, bytes_per_sample_, packet->writable_data());
 
     if (packet_size > 0) {
-      packet->SetDataSize(packet_size);
+      packet->set_data_size(packet_size);
       // Add the packet to the buffer.
       buffer_->Append(packet);
     } else {
@@ -529,7 +523,7 @@ std::string AlsaPcmOutputStream::FindDeviceForChannels(uint32 channels) {
 
   const char* wanted_device = GuessSpecificDeviceName(channels);
   if (!wanted_device)
-    return "";
+    return std::string();
 
   std::string guessed_device;
   void** hints = NULL;
@@ -743,17 +737,15 @@ AlsaPcmOutputStream::InternalState AlsaPcmOutputStream::state() {
 }
 
 bool AlsaPcmOutputStream::IsOnAudioThread() const {
-  return message_loop_ && message_loop_ == MessageLoop::current();
+  return message_loop_ && message_loop_ == base::MessageLoop::current();
 }
 
 int AlsaPcmOutputStream::RunDataCallback(AudioBus* audio_bus,
                                          AudioBuffersState buffers_state) {
   TRACE_EVENT0("audio", "AlsaPcmOutputStream::RunDataCallback");
 
-  if (source_callback_) {
-    source_callback_->WaitTillDataReady();
+  if (source_callback_)
     return source_callback_->OnMoreData(audio_bus, buffers_state);
-  }
 
   return 0;
 }

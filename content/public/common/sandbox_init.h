@@ -5,9 +5,14 @@
 #ifndef CONTENT_PUBLIC_COMMON_SANDBOX_INIT_H_
 #define CONTENT_PUBLIC_COMMON_SANDBOX_INIT_H_
 
-#include "base/process.h"
+#include "base/callback_forward.h"
+#include "base/process/process.h"
 #include "build/build_config.h"
 #include "content/common/content_export.h"
+
+#if defined(OS_LINUX)
+#include "sandbox/linux/seccomp-bpf/sandbox_bpf_policy_forward.h"
+#endif  // defined(OS_LINUX)
 
 class CommandLine;
 
@@ -80,18 +85,19 @@ CONTENT_EXPORT bool InitializeSandbox(int sandbox_type,
 
 #elif defined(OS_LINUX)
 
-// Initialize the sandbox (currently seccomp-legacy or seccomp-bpf, the setuid
-// sandbox works differently and is set-up in the Zygote).
-// The process sandbox type is determined at run time via the command line
-// switches. TODO(jln): switch to a model where the caller chooses a sandbox
-// type.
-// This should be called before any additional thread has been created.
-//
-// Returns true if a sandbox has been initialized successfully, false
-// otherwise.
-CONTENT_EXPORT bool InitializeSandbox();
+class SandboxInitializerDelegate;
 
-#endif
+// Initialize a seccomp-bpf sandbox. |policy| may not be NULL.
+// Returns true if the sandbox has been properly engaged.
+CONTENT_EXPORT bool InitializeSandbox(playground2::BpfSandboxPolicy policy);
+
+// Return a Callback implementing the "baseline" policy. This is used by a
+// SandboxInitializerDelegate to implement a policy that is derived from
+// the baseline.
+CONTENT_EXPORT playground2::BpfSandboxPolicyCallback
+    GetBpfSandboxBaselinePolicy();
+
+#endif  // defined(OS_LINUX)
 
 }  // namespace content
 

@@ -15,12 +15,14 @@
 #include "media/base/demuxer.h"
 #include "media/base/ranges.h"
 #include "media/base/stream_parser.h"
+#include "media/base/text_track.h"
 #include "media/filters/source_buffer_stream.h"
 
 namespace media {
 
 class ChunkDemuxerStream;
 class FFmpegURLProtocol;
+class SourceState;
 
 // Demuxer implementation that allows chunks of media data to be passed
 // from JavaScript to the media stack.
@@ -33,17 +35,22 @@ class MEDIA_EXPORT ChunkDemuxer : public Demuxer {
   };
 
   typedef base::Callback<void(const std::string& type,
-                              scoped_array<uint8> init_data,
+                              scoped_ptr<uint8[]> init_data,
                               int init_data_size)> NeedKeyCB;
 
   // |open_cb| Run when Initialize() is called to signal that the demuxer
   //   is ready to receive media data via AppenData().
   // |need_key_cb| Run when the demuxer determines that an encryption key is
   //   needed to decrypt the content.
+  // |add_text_track_cb| Run when demuxer detects the presence of an inband
+  //   text track.
   // |log_cb| Run when parsing error messages need to be logged to the error
   //   console.
-  ChunkDemuxer(const base::Closure& open_cb, const NeedKeyCB& need_key_cb,
+  ChunkDemuxer(const base::Closure& open_cb,
+               const NeedKeyCB& need_key_cb,
+               const AddTextTrackCB& add_text_track_cb,
                const LogCB& log_cb);
+  virtual ~ChunkDemuxer();
 
   // Demuxer implementation.
   virtual void Initialize(DemuxerHost* host,
@@ -51,13 +58,33 @@ class MEDIA_EXPORT ChunkDemuxer : public Demuxer {
   virtual void Stop(const base::Closure& callback) OVERRIDE;
   virtual void Seek(base::TimeDelta time, const PipelineStatusCB&  cb) OVERRIDE;
   virtual void OnAudioRendererDisabled() OVERRIDE;
-  virtual scoped_refptr<DemuxerStream> GetStream(
-      DemuxerStream::Type type) OVERRIDE;
+  virtual DemuxerStream* GetStream(DemuxerStream::Type type) OVERRIDE;
   virtual base::TimeDelta GetStartTime() const OVERRIDE;
 
   // Methods used by an external object to control this demuxer.
-  void StartWaitingForSeek();
-  void CancelPendingSeek();
+  //
+  // Indicates that a new Seek() call is on its way. Any pending Reads on the
+  // DemuxerStream objects should be aborted immediately inside this call and
+  // future Read calls should return kAborted until the Seek() call occurs.
+  // This method MUST ALWAYS be called before Seek() is called to signal that
+  // the next Seek() call represents the seek point we actually want to return
+  // data for.
+  // |seek_time| - The presentation timestamp for the seek that triggered this
+  // call. It represents the most recent position the caller is trying to seek
+  // to.
+  void StartWaitingForSeek(base::TimeDelta seek_time);
+
+  // Indicates that a Seek() call is on its way, but another seek has been
+  // requested that will override the impending Seek() call. Any pending Reads
+  // on the DemuxerStream objects should be aborted immediately inside this call
+  // and future Read calls should return kAborted until the next
+  // StartWaitingForSeek() call. This method also arranges for the next Seek()
+  // call received before a StartWaitingForSeek() call to immediately call its
+  // callback without waiting for any data.
+  // |seek_time| - The presentation timestamp for the seek request that
+  // triggered this call. It represents the most recent position the caller is
+  // trying to seek to.
+  void CancelPendingSeek(base::TimeDelta seek_time);
 
   // Registers a new |id| to use for AppendData() calls. |type| indicates
   // the MIME type for the data that we intend to append for this ID.
@@ -83,6 +110,11 @@ class MEDIA_EXPORT ChunkDemuxer : public Demuxer {
   // it can accept a new segment.
   void Abort(const std::string& id);
 
+  // Remove buffers between |start| and |end| for the source buffer
+  // associated with |id|.
+  void Remove(const std::string& id, base::TimeDelta start,
+              base::TimeDelta end);
+
   // Returns the current presentation duration.
   double GetDuration();
   double GetDuration_Locked();
@@ -92,19 +124,25 @@ class MEDIA_EXPORT ChunkDemuxer : public Demuxer {
   void SetDuration(double duration);
 
   // Sets a time |offset| to be applied to subsequent buffers appended to the
-  // source buffer assicated with |id|. Returns true if the offset is set
+  // source buffer associated with |id|. Returns true if the offset is set
   // properly, false if the offset cannot be applied because we're in the
   // middle of parsing a media segment.
   bool SetTimestampOffset(const std::string& id, base::TimeDelta offset);
 
-  // Signals an EndOfStream request.
-  // Returns false if called in an unexpected state or if there is a gap between
-  // the current position and the end of the buffered data.
-  bool EndOfStream(PipelineStatus status);
+  // Called to signal changes in the "end of stream"
+  // state. UnmarkEndOfStream() must not be called if a matching
+  // MarkEndOfStream() has not come before it.
+  void MarkEndOfStream(PipelineStatus status);
+  void UnmarkEndOfStream();
+
+  // Set the append window start and end values for the source buffer
+  // associated with |id|.
+  void SetAppendWindowStart(const std::string& id, base::TimeDelta start);
+  void SetAppendWindowEnd(const std::string& id, base::TimeDelta end);
+
   void Shutdown();
 
- protected:
-  virtual ~ChunkDemuxer();
+  void SetMemoryLimitsForTesting(int memory_limit);
 
  private:
   enum State {
@@ -123,25 +161,24 @@ class MEDIA_EXPORT ChunkDemuxer : public Demuxer {
   void ReportError_Locked(PipelineStatus error);
 
   // Returns true if any stream has seeked to a time without buffered data.
-  bool IsSeekPending_Locked() const;
+  bool IsSeekWaitingForData_Locked() const;
 
   // Returns true if all streams can successfully call EndOfStream,
   // false if any can not.
   bool CanEndOfStream_Locked() const;
 
-  // StreamParser callbacks.
-  void OnStreamParserInitDone(bool success, base::TimeDelta duration);
-  bool OnNewConfigs(bool has_audio, bool has_video,
-                    const AudioDecoderConfig& audio_config,
-                    const VideoDecoderConfig& video_config);
-  bool OnAudioBuffers(const StreamParser::BufferQueue& buffers);
-  bool OnVideoBuffers(const StreamParser::BufferQueue& buffers);
-  bool OnNeedKey(const std::string& type,
-                 scoped_array<uint8> init_data,
-                 int init_data_size);
+  // SourceState callbacks.
+  void OnSourceInitDone(bool success, base::TimeDelta duration);
+
+  // Creates a DemuxerStream for the specified |type|.
+  // Returns a new ChunkDemuxerStream instance if a stream of this type
+  // has not been created before. Returns NULL otherwise.
+  ChunkDemuxerStream* CreateDemuxerStream(DemuxerStream::Type type);
+
+  bool OnTextBuffers(TextTrack* text_track,
+                     const StreamParser::BufferQueue& buffers);
   void OnNewMediaSegment(const std::string& source_id,
                          base::TimeDelta start_timestamp);
-  void OnEndOfMediaSegment(const std::string& source_id);
 
   // Computes the intersection between the video & audio
   // buffered ranges.
@@ -154,12 +191,12 @@ class MEDIA_EXPORT ChunkDemuxer : public Demuxer {
   // Returns true if |source_id| is valid, false otherwise.
   bool IsValidId(const std::string& source_id) const;
 
-  // Increases |duration_| if the newly appended |buffers| exceed the current
-  // |duration_|. The |duration_| is set to the end buffered timestamp of
-  // |stream|.
+  // Increases |duration_| if |last_appended_buffer_timestamp| exceeds the
+  // current  |duration_|. The |duration_| is set to the end buffered timestamp
+  // of |stream|.
   void IncreaseDurationIfNecessary(
-      const StreamParser::BufferQueue& buffers,
-      const scoped_refptr<ChunkDemuxerStream>& stream);
+      base::TimeDelta last_appended_buffer_timestamp,
+      ChunkDemuxerStream* stream);
 
   // Decreases |duration_| if the buffered region is less than |duration_| when
   // EndOfStream() is called.
@@ -172,12 +209,26 @@ class MEDIA_EXPORT ChunkDemuxer : public Demuxer {
   // Returns the ranges representing the buffered data in the demuxer.
   Ranges<base::TimeDelta> GetBufferedRanges() const;
 
+  // Start returning data on all DemuxerStreams.
+  void StartReturningData();
+
+  // Aborts pending reads on all DemuxerStreams.
+  void AbortPendingReads();
+
+  // Completes any pending reads if it is possible to do so.
+  void CompletePendingReadsIfPossible();
+
+  // Seeks all SourceBufferStreams to |seek_time|.
+  void SeekAllSources(base::TimeDelta seek_time);
+
   mutable base::Lock lock_;
   State state_;
+  bool cancel_next_seek_;
 
   DemuxerHost* host_;
   base::Closure open_cb_;
   NeedKeyCB need_key_cb_;
+  AddTextTrackCB add_text_track_cb_;
   // Callback used to report error strings that can help the web developer
   // figure out what is wrong with the content.
   LogCB log_cb_;
@@ -185,8 +236,11 @@ class MEDIA_EXPORT ChunkDemuxer : public Demuxer {
   PipelineStatusCB init_cb_;
   PipelineStatusCB seek_cb_;
 
-  scoped_refptr<ChunkDemuxerStream> audio_;
-  scoped_refptr<ChunkDemuxerStream> video_;
+  scoped_ptr<ChunkDemuxerStream> audio_;
+  scoped_ptr<ChunkDemuxerStream> video_;
+
+  // Keeps |audio_| alive when audio has been disabled.
+  scoped_ptr<ChunkDemuxerStream> disabled_audio_;
 
   base::TimeDelta duration_;
 
@@ -197,16 +251,8 @@ class MEDIA_EXPORT ChunkDemuxer : public Demuxer {
   // the actual duration instead of a user specified value.
   double user_specified_duration_;
 
-  typedef std::map<std::string, StreamParser*> StreamParserMap;
-  StreamParserMap stream_parser_map_;
-
-  // Contains state belonging to a source id.
-  struct SourceInfo {
-    base::TimeDelta timestamp_offset;
-    bool can_update_offset;
-  };
-  typedef std::map<std::string, SourceInfo> SourceInfoMap;
-  SourceInfoMap source_info_map_;
+  typedef std::map<std::string, SourceState*> SourceStateMap;
+  SourceStateMap source_state_map_;
 
   // Used to ensure that (1) config data matches the type and codec provided in
   // AddId(), (2) only 1 audio and 1 video sources are added, and (3) ids may be

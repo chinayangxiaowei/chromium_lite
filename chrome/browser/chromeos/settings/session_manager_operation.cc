@@ -6,17 +6,16 @@
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/stl_util.h"
 #include "base/task_runner_util.h"
 #include "base/threading/sequenced_worker_pool.h"
-#include "base/time.h"
-#include "chrome/browser/chromeos/policy/proto/chrome_device_policy.pb.h"
+#include "base/time/time.h"
 #include "chrome/browser/chromeos/settings/owner_key_util.h"
 #include "chrome/browser/policy/cloud/cloud_policy_constants.h"
-#include "chrome/browser/policy/cloud/proto/device_management_backend.pb.h"
+#include "chrome/browser/policy/proto/chromeos/chrome_device_policy.pb.h"
+#include "chrome/browser/policy/proto/cloud/device_management_backend.pb.h"
 #include "content/public/browser/browser_thread.h"
 #include "crypto/rsa_private_key.h"
 #include "crypto/signature_creator.h"
@@ -27,7 +26,7 @@ namespace chromeos {
 
 SessionManagerOperation::SessionManagerOperation(const Callback& callback)
     : session_manager_client_(NULL),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)),
+      weak_factory_(this),
       callback_(callback),
       force_key_load_(false),
       is_loading_(false) {}
@@ -200,7 +199,7 @@ StoreSettingsOperation::StoreSettingsOperation(
     scoped_ptr<em::PolicyFetchResponse> policy)
     : SessionManagerOperation(callback),
       policy_(policy.Pass()),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {}
+      weak_factory_(this) {}
 
 StoreSettingsOperation::~StoreSettingsOperation() {}
 
@@ -225,7 +224,7 @@ SignAndStoreSettingsOperation::SignAndStoreSettingsOperation(
     : SessionManagerOperation(callback),
       new_settings_(new_settings.Pass()),
       username_(username),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {
+      weak_factory_(this) {
   DCHECK(new_settings_.get());
 }
 
@@ -237,7 +236,7 @@ void SignAndStoreSettingsOperation::Run() {
 }
 
 void SignAndStoreSettingsOperation::StartSigning() {
-  if (!owner_key() || !owner_key()->private_key() || username_.empty()) {
+  if (!owner_key().get() || !owner_key()->private_key() || username_.empty()) {
     ReportResult(DeviceSettingsService::STORE_KEY_UNAVAILABLE);
     return;
   }

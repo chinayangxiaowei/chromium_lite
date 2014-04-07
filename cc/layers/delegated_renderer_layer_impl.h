@@ -5,6 +5,7 @@
 #ifndef CC_LAYERS_DELEGATED_RENDERER_LAYER_IMPL_H_
 #define CC_LAYERS_DELEGATED_RENDERER_LAYER_IMPL_H_
 
+#include "base/containers/hash_tables.h"
 #include "base/memory/scoped_ptr.h"
 #include "cc/base/cc_export.h"
 #include "cc/base/scoped_ptr_vector.h"
@@ -12,6 +13,7 @@
 
 namespace cc {
 class DelegatedFrameData;
+class RenderPassSink;
 
 class CC_EXPORT DelegatedRendererLayerImpl : public LayerImpl {
  public:
@@ -22,21 +24,26 @@ class CC_EXPORT DelegatedRendererLayerImpl : public LayerImpl {
   virtual ~DelegatedRendererLayerImpl();
 
   // LayerImpl overrides.
-  virtual scoped_ptr<LayerImpl> CreateLayerImpl(LayerTreeImpl*) OVERRIDE;
+  virtual scoped_ptr<LayerImpl> CreateLayerImpl(LayerTreeImpl* tree_impl)
+      OVERRIDE;
   virtual bool HasDelegatedContent() const OVERRIDE;
   virtual bool HasContributingDelegatedRenderPasses() const OVERRIDE;
   virtual RenderPass::Id FirstContributingRenderPassId() const OVERRIDE;
   virtual RenderPass::Id NextContributingRenderPassId(
       RenderPass::Id previous) const OVERRIDE;
   virtual void DidLoseOutputSurface() OVERRIDE;
+  virtual bool WillDraw(DrawMode draw_mode,
+                        ResourceProvider* resource_provider) OVERRIDE;
   virtual void AppendQuads(QuadSink* quad_sink,
                            AppendQuadsData* append_quads_data) OVERRIDE;
+  virtual void PushPropertiesTo(LayerImpl* layer) OVERRIDE;
 
   void AppendContributingRenderPasses(RenderPassSink* render_pass_sink);
 
   void SetFrameData(scoped_ptr<DelegatedFrameData> frame_data,
-                    gfx::RectF damage_in_frame,
-                    TransferableResourceArray* resources_for_ack);
+                    gfx::RectF damage_in_frame);
+
+  void CollectUnusedResources(TransferableResourceArray* resources_for_ack);
 
   void SetDisplaySize(gfx::Size size);
 
@@ -79,14 +86,18 @@ class CC_EXPORT DelegatedRendererLayerImpl : public LayerImpl {
   // LayerImpl overrides.
   virtual const char* LayerTypeAsString() const OVERRIDE;
 
+  bool have_render_passes_to_push_;
   ScopedPtrVector<RenderPass> render_passes_in_draw_order_;
   base::hash_map<RenderPass::Id, int> render_passes_index_by_id_;
   ResourceProvider::ResourceIdSet resources_;
 
   gfx::Size display_size_;
   int child_id_;
+  bool own_child_id_;
+
+  DISALLOW_COPY_AND_ASSIGN(DelegatedRendererLayerImpl);
 };
 
-}
+}  // namespace cc
 
 #endif  // CC_LAYERS_DELEGATED_RENDERER_LAYER_IMPL_H_

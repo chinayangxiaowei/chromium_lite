@@ -17,18 +17,14 @@
 #include "base/path_service.h"
 #include "base/scoped_native_library.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/win/metro.h"
-#include "base/win/text_services_message_filter.h"
 #include "base/win/windows_version.h"
 #include "base/win/wrapped_window_proc.h"
 #include "chrome/browser/browser_util_win.h"
-#include "chrome/browser/first_run/first_run.h"
-#include "chrome/browser/metrics/metrics_service.h"
 #include "chrome/browser/profiles/profile_info_cache.h"
 #include "chrome/browser/profiles/profile_shortcut_manager.h"
 #include "chrome/browser/shell_integration.h"
-#include "chrome/browser/storage_monitor/storage_monitor_win.h"
 #include "chrome/browser/ui/simple_message_box.h"
 #include "chrome/browser/ui/uninstall_browser_prompt.h"
 #include "chrome/common/chrome_constants.h"
@@ -46,6 +42,7 @@
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "installer_util_strings/installer_util_strings.h"
+#include "ui/base/cursor/cursor_loader_win.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/l10n/l10n_util_win.h"
 #include "ui/base/ui_base_switches.h"
@@ -87,19 +84,6 @@ class TranslationDelegate : public installer::TranslationDelegate {
 };
 
 }  // namespace
-
-void RecordBreakpadStatusUMA(MetricsService* metrics) {
-  metrics->RecordBreakpadHasDebugger(TRUE == ::IsDebuggerPresent());
-}
-
-void WarnAboutMinimumSystemRequirements() {
-  if (base::win::GetVersion() < base::win::VERSION_XP) {
-    chrome::ShowMessageBox(NULL,
-        l10n_util::GetStringUTF16(IDS_PRODUCT_NAME),
-        l10n_util::GetStringUTF16(IDS_UNSUPPORTED_OS_PRE_WIN_XP),
-        chrome::MESSAGE_BOX_TYPE_WARNING);
-  }
-}
 
 void ShowCloseBrowserFirstMessageBox() {
   int message_id = IDS_UNINSTALL_CLOSE_APP;
@@ -144,9 +128,8 @@ int DoUninstallTasks(bool chrome_still_running) {
       };
       BrowserDistribution* dist = BrowserDistribution::GetDistribution();
       for (size_t i = 0; i < arraysize(user_shortcut_locations); ++i) {
-        if (!ShellUtil::RemoveShortcut(user_shortcut_locations[i], dist,
-                                       chrome_exe, ShellUtil::CURRENT_USER,
-                                       NULL)) {
+        if (!ShellUtil::RemoveShortcuts(user_shortcut_locations[i], dist,
+                ShellUtil::CURRENT_USER, chrome_exe)) {
           VLOG(1) << "Failed to delete shortcut at location "
                   << user_shortcut_locations[i];
         }
@@ -187,6 +170,9 @@ void ChromeBrowserMainPartsWin::ToolkitInitialized() {
   ChromeBrowserMainParts::ToolkitInitialized();
   gfx::PlatformFontWin::adjust_font_callback = &AdjustUIFont;
   gfx::PlatformFontWin::get_minimum_font_size_callback = &GetMinimumFontSize;
+#if defined(USE_AURA)
+  ui::CursorLoaderWin::SetCursorResourceModule(chrome::kBrowserResourcesDll);
+#endif
 }
 
 void ChromeBrowserMainPartsWin::PreMainMessageLoopStart() {
@@ -199,28 +185,21 @@ void ChromeBrowserMainPartsWin::PreMainMessageLoopStart() {
     // Make sure that we know how to handle exceptions from the message loop.
     InitializeWindowProcExceptions();
   }
-  storage_monitor_.reset(chrome::StorageMonitorWin::Create());
 }
 
-void ChromeBrowserMainPartsWin::PostMainMessageLoopStart() {
-  DCHECK_EQ(MessageLoop::TYPE_UI, MessageLoop::current()->type());
+int ChromeBrowserMainPartsWin::PreCreateThreads() {
+  int rv = ChromeBrowserMainParts::PreCreateThreads();
 
-  if (base::win::IsTSFAwareRequired()) {
-    // Create a TSF message filter for the message loop. MessageLoop takes
-    // ownership of the filter.
-    scoped_ptr<base::win::TextServicesMessageFilter> tsf_message_filter(
-      new base::win::TextServicesMessageFilter);
-    if (tsf_message_filter->Init()) {
-      MessageLoopForUI::current()->SetMessageFilter(
-        tsf_message_filter.PassAs<MessageLoopForUI::MessageFilter>());
-    }
+  // TODO(viettrungluu): why don't we run this earlier?
+  if (!parsed_command_line().HasSwitch(switches::kNoErrorDialogs) &&
+      base::win::GetVersion() < base::win::VERSION_XP) {
+    chrome::ShowMessageBox(NULL,
+        l10n_util::GetStringUTF16(IDS_PRODUCT_NAME),
+        l10n_util::GetStringUTF16(IDS_UNSUPPORTED_OS_PRE_WIN_XP),
+        chrome::MESSAGE_BOX_TYPE_WARNING);
   }
-}
 
-void ChromeBrowserMainPartsWin::PreMainMessageLoopRun() {
-  ChromeBrowserMainParts::PreMainMessageLoopRun();
-
-  storage_monitor_->Init();
+  return rv;
 }
 
 void ChromeBrowserMainPartsWin::ShowMissingLocaleMessageBox() {
@@ -270,7 +249,7 @@ void ChromeBrowserMainPartsWin::RegisterApplicationRestart(
   base::ScopedNativeLibrary library(base::FilePath(L"kernel32.dll"));
   // Get the function pointer for RegisterApplicationRestart.
   RegisterApplicationRestartProc register_application_restart =
-      static_cast<RegisterApplicationRestartProc>(
+      reinterpret_cast<RegisterApplicationRestartProc>(
           library.GetFunctionPointer("RegisterApplicationRestart"));
   if (!register_application_restart) {
     LOG(WARNING) << "Cannot find RegisterApplicationRestart in kernel32.dll";

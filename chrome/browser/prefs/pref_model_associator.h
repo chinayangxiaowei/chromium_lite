@@ -11,7 +11,10 @@
 
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
+#include "base/containers/hash_tables.h"
+#include "base/observer_list.h"
 #include "base/threading/non_thread_safe.h"
+#include "chrome/browser/prefs/synced_pref_observer.h"
 #include "sync/api/sync_data.h"
 #include "sync/api/syncable_service.h"
 
@@ -33,7 +36,7 @@ class PrefModelAssociator
     : public syncer::SyncableService,
       public base::NonThreadSafe {
  public:
-  PrefModelAssociator();
+  explicit PrefModelAssociator(syncer::ModelType type);
   virtual ~PrefModelAssociator();
 
   // See description above field for details.
@@ -84,14 +87,26 @@ class PrefModelAssociator
 
   // Fills |sync_data| with a sync representation of the preference data
   // provided.
-  static bool CreatePrefSyncData(const std::string& name,
-                                 const base::Value& value,
-                                 syncer::SyncData* sync_data);
+  bool CreatePrefSyncData(const std::string& name,
+                          const base::Value& value,
+                          syncer::SyncData* sync_data) const;
 
   // Extract preference value and name from sync specifics.
   base::Value* ReadPreferenceSpecifics(
       const sync_pb::PreferenceSpecifics& specifics,
       std::string* name);
+
+  // Returns true if the pref under the given name is pulled down from sync.
+  // Note this does not refer to SYNCABLE_PREF.
+  bool IsPrefSynced(const std::string& name) const;
+
+  // Adds a SyncedPrefObserver to watch for changes to a specific pref.
+  void AddSyncedPrefObserver(const std::string& name,
+                             SyncedPrefObserver* observer);
+
+  // Removes a SyncedPrefObserver from a pref's list of observers.
+  void RemoveSyncedPrefObserver(const std::string& name,
+                                SyncedPrefObserver* observer);
 
  protected:
   friend class ProfileSyncServicePreferenceTest;
@@ -148,6 +163,22 @@ class PrefModelAssociator
 
   // Sync's error handler. We use this to create sync errors.
   scoped_ptr<syncer::SyncErrorFactory> sync_error_factory_;
+
+  // The datatype that this associator is responible for, either PREFERENCES or
+  // PRIORITY_PREFERENCES.
+  syncer::ModelType type_;
+
+ private:
+  // Map prefs to lists of observers. Observers will receive notification when
+  // a pref changes, including the detail of whether or not the change came
+  // from sync.
+  typedef ObserverList<SyncedPrefObserver> SyncedPrefObserverList;
+  typedef base::hash_map<std::string, SyncedPrefObserverList*>
+      SyncedPrefObserverMap;
+
+  void NotifySyncedPrefObservers(const std::string& path, bool from_sync) const;
+
+  SyncedPrefObserverMap synced_pref_observers_;
 
   DISALLOW_COPY_AND_ASSIGN(PrefModelAssociator);
 };

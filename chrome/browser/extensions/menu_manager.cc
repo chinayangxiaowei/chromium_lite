@@ -9,18 +9,18 @@
 #include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/stl_util.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/event_names.h"
 #include "chrome/browser/extensions/event_router.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_system.h"
-#include "chrome/browser/extensions/tab_helper.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/extensions/state_store.h"
+#include "chrome/browser/extensions/tab_helper.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/extensions/background_info.h"
 #include "chrome/common/extensions/extension.h"
 #include "content/public/browser/notification_details.h"
@@ -82,7 +82,7 @@ MenuItem::List MenuItemsFromValue(const std::string& extension_id,
 }
 
 scoped_ptr<base::Value> MenuItemsToValue(const MenuItem::List& items) {
-  scoped_ptr<base::ListValue> list(new ListValue());
+  scoped_ptr<base::ListValue> list(new base::ListValue());
   for (size_t i = 0; i < items.size(); ++i)
     list->Append(items[i]->ToValue().release());
   return scoped_ptr<Value>(list.release());
@@ -94,7 +94,7 @@ bool GetStringList(const DictionaryValue& dict,
   if (!dict.HasKey(key))
     return true;
 
-  const ListValue* list = NULL;
+  const base::ListValue* list = NULL;
   if (!dict.GetListWithoutPathExpansion(key, &list))
     return false;
 
@@ -121,9 +121,7 @@ MenuItem::MenuItem(const Id& id,
       type_(type),
       checked_(checked),
       enabled_(enabled),
-      contexts_(contexts),
-      parent_id_(0) {
-}
+      contexts_(contexts) {}
 
 MenuItem::~MenuItem() {
   STLDeleteElements(&children_);
@@ -202,7 +200,7 @@ scoped_ptr<DictionaryValue> MenuItem::ToValue() const {
     value->SetBoolean(kCheckedKey, checked_);
   value->SetBoolean(kEnabledKey, enabled_);
   value->Set(kContextsKey, contexts_.ToValue().release());
-  if (parent_id_.get()) {
+  if (parent_id_) {
     DCHECK_EQ(0, parent_id_->uid);
     value->SetString(kParentUIDKey, parent_id_->string_uid);
   }
@@ -608,7 +606,7 @@ void MenuManager::ExecuteCommand(Profile* profile,
   if (item->type() == MenuItem::RADIO)
     RadioItemSelected(item);
 
-  scoped_ptr<ListValue> args(new ListValue());
+  scoped_ptr<base::ListValue> args(new base::ListValue());
 
   DictionaryValue* properties = new DictionaryValue();
   SetIdKeyValue(properties, "menuItemId", item->id());
@@ -675,8 +673,9 @@ void MenuManager::ExecuteCommand(Profile* profile,
   }
 
   {
-    scoped_ptr<Event> event(new Event(event_names::kOnContextMenus,
-                                      scoped_ptr<ListValue>(args->DeepCopy())));
+    scoped_ptr<Event> event(new Event(
+        event_names::kOnContextMenus,
+        scoped_ptr<base::ListValue>(args->DeepCopy())));
     event->restrict_to_profile = profile;
     event->user_gesture = EventRouter::USER_GESTURE_ENABLED;
     event_router->DispatchEventToExtension(item->extension_id(), event.Pass());
@@ -833,14 +832,10 @@ void MenuManager::RemoveAllIncognitoContextItems() {
     RemoveContextMenuItem(*remove_iter);
 }
 
-MenuItem::Id::Id()
-    : incognito(false), extension_id(""), uid(0), string_uid("") {
-}
+MenuItem::Id::Id() : incognito(false), uid(0) {}
 
 MenuItem::Id::Id(bool incognito, const std::string& extension_id)
-    : incognito(incognito), extension_id(extension_id), uid(0),
-      string_uid("") {
-}
+    : incognito(incognito), extension_id(extension_id), uid(0) {}
 
 MenuItem::Id::~Id() {
 }

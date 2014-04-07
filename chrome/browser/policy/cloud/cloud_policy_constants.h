@@ -29,7 +29,9 @@ extern const char kValueDeviceType[];
 extern const char kValueRequestAutoEnrollment[];
 extern const char kValueRequestPolicy[];
 extern const char kValueRequestRegister[];
+extern const char kValueRequestApiAuthorization[];
 extern const char kValueRequestUnregister[];
+extern const char kValueRequestUploadCertificate[];
 extern const char kValueUserAffiliationManaged[];
 extern const char kValueUserAffiliationNone[];
 
@@ -89,15 +91,24 @@ enum DeviceManagementStatus {
 
 // List of modes that the device can be locked into.
 enum DeviceMode {
-  DEVICE_MODE_PENDING,     // The device mode is not yet available.
-  DEVICE_MODE_NOT_SET,     // The device is not yet enrolled or owned.
-  DEVICE_MODE_CONSUMER,    // The device is locally owned as consumer device.
-  DEVICE_MODE_ENTERPRISE,  // The device is enrolled as an enterprise device.
-  DEVICE_MODE_KIOSK,       // The device is enrolled as kiosk/retail device.
+  DEVICE_MODE_PENDING,         // The device mode is not yet available.
+  DEVICE_MODE_NOT_SET,         // The device is not yet enrolled or owned.
+  DEVICE_MODE_CONSUMER,        // The device is locally owned as consumer
+                               // device.
+  DEVICE_MODE_ENTERPRISE,      // The device is enrolled as an enterprise
+                               // device.
+  DEVICE_MODE_RETAIL_KIOSK,    // The device is enrolled as retail kiosk device.
+  DEVICE_MODE_CONSUMER_KIOSK,  // The device is locally owned as consumer kiosk.
 };
 
 // A pair that combines a policy fetch type and entity ID.
 typedef std::pair<std::string, std::string> PolicyNamespaceKey;
+
+// Returns the Chrome user policy type to use. This allows overridding the
+// default user policy type on Android for testing purposes.
+// TODO(joaodasilva): remove this once the server is ready.
+// http://crbug.com/248527
+const char* GetChromeUserPolicyType();
 
 }  // namespace policy
 

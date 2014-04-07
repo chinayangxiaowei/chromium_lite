@@ -29,7 +29,7 @@ void AsyncSocketIoHandler::OnFileCanReadWithoutBlocking(int socket) {
   if (pending_buffer_) {
     int bytes_read = HANDLE_EINTR(read(socket_, pending_buffer_,
                                        pending_buffer_len_));
-    DCHECK_GT(bytes_read, 0);
+    DCHECK_GE(bytes_read, 0);
     pending_buffer_ = NULL;
     pending_buffer_len_ = 0;
     read_complete_.Run(bytes_read > 0 ? bytes_read : 0);
@@ -89,8 +89,9 @@ bool AsyncSocketIoHandler::Initialize(base::SyncSocket::Handle socket,
 void AsyncSocketIoHandler::EnsureWatchingSocket() {
   DCHECK(CalledOnValidThread());
   if (!is_watching_ && socket_ != base::SyncSocket::kInvalidHandle) {
-    is_watching_ = MessageLoopForIO::current()->WatchFileDescriptor(
-        socket_, true, MessageLoopForIO::WATCH_READ, &socket_watcher_, this);
+    is_watching_ = base::MessageLoopForIO::current()->WatchFileDescriptor(
+        socket_, true, base::MessageLoopForIO::WATCH_READ,
+        &socket_watcher_, this);
   }
 }
 

@@ -5,7 +5,7 @@
 #include "chrome/browser/ui/views/tab_contents/render_view_context_menu_views.h"
 
 #include "base/logging.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
@@ -15,7 +15,6 @@
 #include "ui/base/keycodes/keyboard_codes.h"
 #include "ui/gfx/point.h"
 #include "ui/views/controls/menu/menu_item_view.h"
-#include "ui/views/controls/menu/menu_model_adapter.h"
 #include "ui/views/controls/menu/menu_runner.h"
 
 using content::WebContents;
@@ -26,8 +25,7 @@ using content::WebContents;
 RenderViewContextMenuViews::RenderViewContextMenuViews(
     WebContents* web_contents,
     const content::ContextMenuParams& params)
-    : RenderViewContextMenu(web_contents, params),
-      menu_(NULL) {
+    : RenderViewContextMenu(web_contents, params) {
 }
 
 RenderViewContextMenuViews::~RenderViewContextMenuViews() {
@@ -42,32 +40,26 @@ RenderViewContextMenuViews* RenderViewContextMenuViews::Create(
 }
 #endif  // OS_WIN
 
-void RenderViewContextMenuViews::RunMenuAt(
-    views::Widget* parent,
-    const gfx::Point& point,
-    content::ContextMenuSourceType type) {
+void RenderViewContextMenuViews::RunMenuAt(views::Widget* parent,
+                                           const gfx::Point& point,
+                                           ui::MenuSourceType type) {
   views::MenuItemView::AnchorPosition anchor_position =
-      type == content::CONTEXT_MENU_SOURCE_TOUCH ?
+      (type == ui::MENU_SOURCE_TOUCH ||
+          type == ui::MENU_SOURCE_TOUCH_EDIT_MENU) ?
           views::MenuItemView::BOTTOMCENTER : views::MenuItemView::TOPLEFT;
+
   if (menu_runner_->RunMenuAt(parent, NULL, gfx::Rect(point, gfx::Size()),
-      anchor_position, views::MenuRunner::HAS_MNEMONICS |
+      anchor_position, type, views::MenuRunner::HAS_MNEMONICS |
           views::MenuRunner::CONTEXT_MENU) ==
       views::MenuRunner::MENU_DELETED)
     return;
-}
-
-void RenderViewContextMenuViews::UpdateMenuItemStates() {
-  menu_delegate_->BuildMenu(menu_);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 // RenderViewContextMenuViews, protected:
 
 void RenderViewContextMenuViews::PlatformInit() {
-  menu_delegate_.reset(new views::MenuModelAdapter(&menu_model_));
-  menu_ = new views::MenuItemView(menu_delegate_.get());
-  menu_runner_.reset(new views::MenuRunner(menu_));
-  UpdateMenuItemStates();
+  menu_runner_.reset(new views::MenuRunner(&menu_model_));
 }
 
 void RenderViewContextMenuViews::PlatformCancel() {
@@ -121,7 +113,8 @@ void RenderViewContextMenuViews::UpdateMenuItem(int command_id,
                                                 bool enabled,
                                                 bool hidden,
                                                 const string16& title) {
-  views::MenuItemView* item = menu_->GetMenuItemByID(command_id);
+  views::MenuItemView* item =
+      menu_runner_->GetMenu()->GetMenuItemByID(command_id);
   if (!item)
     return;
 

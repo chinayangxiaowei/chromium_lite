@@ -4,11 +4,11 @@
 
 #include <algorithm>
 
-#include "base/stringprintf.h"
-#include "crypto/sha2.h"
+#include "base/strings/stringprintf.h"
 #include "chrome/browser/safe_browsing/safe_browsing_util.h"
-#include "googleurl/src/gurl.h"
+#include "crypto/sha2.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/gurl.h"
 
 namespace {
 

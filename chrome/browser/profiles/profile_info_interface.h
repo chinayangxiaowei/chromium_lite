@@ -6,7 +6,7 @@
 #define CHROME_BROWSER_PROFILES_PROFILE_INFO_INTERFACE_H_
 
 #include "base/files/file_path.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 
 namespace gfx {
 class Image;
@@ -50,6 +50,11 @@ class ProfileInfoInterface {
   virtual bool IsUsingGAIAPictureOfProfileAtIndex(size_t index) const = 0;
 
   virtual bool ProfileIsManagedAtIndex(size_t index) const = 0;
+
+  virtual std::string GetManagedUserIdOfProfileAtIndex(size_t index) const = 0;
+
+  // This profile is associated with an account but has been signed-out.
+  virtual bool ProfileIsSigninRequiredAtIndex(size_t index) const = 0;
 
  protected:
   virtual ~ProfileInfoInterface() {}

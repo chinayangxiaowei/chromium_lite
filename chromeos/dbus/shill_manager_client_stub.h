@@ -13,9 +13,9 @@
 
 namespace chromeos {
 
-// A stub implementation of ShillManagerClient.
-// Implemented: Stub devices and services for NetworkStateManager tests.
-// Implemented: Stub cellular device entry for SMS tests.
+// A stub implementation of ShillManagerClient. This works in close coordination
+// with ShillServiceClientStub. ShillDeviceClientStub, and
+// ShillProfileClientStub, and is not intended to be used independently.
 class ShillManagerClientStub : public ShillManagerClient,
                                public ShillManagerClient::TestInterface {
  public:
@@ -28,7 +28,6 @@ class ShillManagerClientStub : public ShillManagerClient,
   virtual void RemovePropertyChangedObserver(
       ShillPropertyChangedObserver* observer) OVERRIDE;
   virtual void GetProperties(const DictionaryValueCallback& callback) OVERRIDE;
-  virtual base::DictionaryValue* CallGetPropertiesAndBlock() OVERRIDE;
   virtual void GetNetworksForGeolocation(
       const DictionaryValueCallback& callback) OVERRIDE;
   virtual void SetProperty(const std::string& name,
@@ -50,53 +49,51 @@ class ShillManagerClientStub : public ShillManagerClient,
       const base::DictionaryValue& properties,
       const ObjectPathCallback& callback,
       const ErrorCallback& error_callback) OVERRIDE;
+  virtual void ConfigureServiceForProfile(
+      const dbus::ObjectPath& profile_path,
+      const base::DictionaryValue& properties,
+      const ObjectPathCallback& callback,
+      const ErrorCallback& error_callback) OVERRIDE;
   virtual void GetService(
       const base::DictionaryValue& properties,
       const ObjectPathCallback& callback,
       const ErrorCallback& error_callback) OVERRIDE;
-  virtual void VerifyDestination(const std::string& certificate,
-                                 const std::string& public_key,
-                                 const std::string& nonce,
-                                 const std::string& signed_data,
-                                 const std::string& device_serial,
+  virtual void VerifyDestination(const VerificationProperties& properties,
                                  const BooleanCallback& callback,
                                  const ErrorCallback& error_callback) OVERRIDE;
   virtual void VerifyAndEncryptCredentials(
-      const std::string& certificate,
-      const std::string& public_key,
-      const std::string& nonce,
-      const std::string& signed_data,
-      const std::string& device_serial,
+      const VerificationProperties& properties,
       const std::string& service_path,
       const StringCallback& callback,
       const ErrorCallback& error_callback) OVERRIDE;
-  virtual void VerifyAndEncryptData(const std::string& certificate,
-                                 const std::string& public_key,
-                                 const std::string& nonce,
-                                 const std::string& signed_data,
-                                 const std::string& device_serial,
-                                 const std::string& data,
-                                 const StringCallback& callback,
-                                 const ErrorCallback& error_callback) OVERRIDE;
+  virtual void VerifyAndEncryptData(
+      const VerificationProperties& properties,
+      const std::string& data,
+      const StringCallback& callback,
+      const ErrorCallback& error_callback) OVERRIDE;
+  virtual void ConnectToBestServices(
+      const base::Closure& callback,
+      const ErrorCallback& error_callback) OVERRIDE;
   virtual ShillManagerClient::TestInterface* GetTestInterface() OVERRIDE;
 
   // ShillManagerClient::TestInterface overrides.
-
   virtual void AddDevice(const std::string& device_path) OVERRIDE;
   virtual void RemoveDevice(const std::string& device_path) OVERRIDE;
   virtual void ClearDevices() OVERRIDE;
-  virtual void ClearServices() OVERRIDE;
-  virtual void AddService(const std::string& service_path,
-                          bool add_to_watch_list) OVERRIDE;
-  virtual void AddServiceAtIndex(const std::string& service_path,
-                                 size_t index,
-                                 bool add_to_watch_list) OVERRIDE;
-  virtual void RemoveService(const std::string& service_path) OVERRIDE;
   virtual void AddTechnology(const std::string& type, bool enabled) OVERRIDE;
   virtual void RemoveTechnology(const std::string& type) OVERRIDE;
-  virtual void ClearProperties() OVERRIDE;
+  virtual void SetTechnologyInitializing(const std::string& type,
+                                         bool initializing) OVERRIDE;
   virtual void AddGeoNetwork(const std::string& technology,
                              const base::DictionaryValue& network) OVERRIDE;
+  virtual void AddProfile(const std::string& profile_path) OVERRIDE;
+  virtual void ClearProperties() OVERRIDE;
+  virtual void AddManagerService(const std::string& service_path,
+                                 bool add_to_visible_list,
+                                 bool add_to_watch_list) OVERRIDE;
+  virtual void RemoveManagerService(const std::string& service_path) OVERRIDE;
+  virtual void ClearManagerServices() OVERRIDE;
+  virtual void SortManagerServices() OVERRIDE;
 
  private:
   void AddServiceToWatchList(const std::string& service_path);
@@ -108,7 +105,12 @@ class ShillManagerClientStub : public ShillManagerClient,
   void NotifyObserversPropertyChanged(const std::string& property);
   base::ListValue* GetListProperty(const std::string& property);
   bool TechnologyEnabled(const std::string& type) const;
+  void SetTechnologyEnabled(const std::string& type,
+                            const base::Closure& callback,
+                            bool enabled);
   base::ListValue* GetEnabledServiceList(const std::string& property) const;
+  void ScanCompleted(const std::string& device_path,
+                     const base::Closure& callback);
 
   // Dictionary of property name -> property value
   base::DictionaryValue stub_properties_;

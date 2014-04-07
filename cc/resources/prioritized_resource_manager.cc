@@ -15,12 +15,13 @@
 namespace cc {
 
 PrioritizedResourceManager::PrioritizedResourceManager(const Proxy* proxy)
-    : proxy_(proxy),
-      max_memory_limit_bytes_(DefaultMemoryAllocationLimit()),
+    : max_memory_limit_bytes_(DefaultMemoryAllocationLimit()),
       external_priority_cutoff_(PriorityCalculator::AllowEverythingCutoff()),
       memory_use_bytes_(0),
       memory_above_cutoff_bytes_(0),
+      max_memory_needed_bytes_(0),
       memory_available_bytes_(0),
+      proxy_(proxy),
       backings_tail_not_sorted_(false),
       memory_visible_bytes_(0),
       memory_visible_and_nearby_bytes_(0),
@@ -120,15 +121,20 @@ void PrioritizedResourceManager::PrioritizeTextures() {
   // Only allow textures if they are higher than the cutoff. All textures
   // of the same priority are accepted or rejected together, rather than
   // being partially allowed randomly.
+  max_memory_needed_bytes_ = 0;
   memory_above_cutoff_bytes_ = 0;
   for (TextureVector::iterator it = sorted_textures.begin();
        it != sorted_textures.end();
        ++it) {
+    PrioritizedResource* resource = *it;
     bool is_above_priority_cutoff = PriorityCalculator::priority_is_higher(
-        (*it)->request_priority(), priority_cutoff_);
-    (*it)->set_above_priority_cutoff(is_above_priority_cutoff);
-    if (is_above_priority_cutoff && !(*it)->is_self_managed())
-      memory_above_cutoff_bytes_ += (*it)->bytes();
+        resource->request_priority(), priority_cutoff_);
+    resource->set_above_priority_cutoff(is_above_priority_cutoff);
+    if (!resource->is_self_managed()) {
+      max_memory_needed_bytes_ += resource->bytes();
+      if (is_above_priority_cutoff)
+        memory_above_cutoff_bytes_ += resource->bytes();
+    }
   }
   sorted_textures.clear();
 
@@ -182,10 +188,10 @@ void PrioritizedResourceManager::ClearPriorities() {
   DCHECK(proxy_->IsMainThread());
   for (TextureSet::iterator it = textures_.begin(); it != textures_.end();
        ++it) {
-    // FIXME: We should remove this and just set all priorities to
-    //        PriorityCalculator::lowestPriority() once we have priorities
-    //        for all textures (we can't currently calculate distances for
-    //        off-screen textures).
+    // TODO(reveman): We should remove this and just set all priorities to
+    // PriorityCalculator::lowestPriority() once we have priorities for all
+    // textures (we can't currently calculate distances for off-screen
+    // textures).
     (*it)->set_request_priority(
         PriorityCalculator::LingeringPriority((*it)->request_priority()));
   }
@@ -284,6 +290,7 @@ bool PrioritizedResourceManager::EvictBackingsToReduceMemory(
 
   // Destroy backings until we are below the limit,
   // or until all backings remaining are above the cutoff.
+  bool evicted_anything = false;
   while (backings_.size() > 0) {
     PrioritizedResource::Backing* backing = backings_.front();
     if (MemoryUseBytes() <= limit_bytes &&
@@ -296,8 +303,9 @@ bool PrioritizedResourceManager::EvictBackingsToReduceMemory(
     if (unlink_policy == UNLINK_BACKINGS && backing->owner())
       backing->owner()->Unlink();
     EvictFirstBackingResource(resource_provider);
+    evicted_anything = true;
   }
-  return true;
+  return evicted_anything;
 }
 
 void PrioritizedResourceManager::ReduceWastedMemory(
@@ -416,7 +424,6 @@ void PrioritizedResourceManager::RegisterTexture(PrioritizedResource* texture) {
 
   texture->set_manager_internal(this);
   textures_.insert(texture);
-
 }
 
 void PrioritizedResourceManager::UnregisterTexture(

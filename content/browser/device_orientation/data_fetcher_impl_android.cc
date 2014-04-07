@@ -4,10 +4,12 @@
 
 #include "content/browser/device_orientation/data_fetcher_impl_android.h"
 
+#include <string.h>
+
 #include "base/android/jni_android.h"
-#include "base/logging.h"
+#include "base/memory/singleton.h"
 #include "content/browser/device_orientation/orientation.h"
-#include "jni/DeviceOrientation_jni.h"
+#include "jni/DeviceMotionAndOrientation_jni.h"
 
 using base::android::AttachCurrentThread;
 
@@ -21,27 +23,25 @@ const int kPeriodInMilliseconds = 100;
 
 }  // namespace
 
-DataFetcherImplAndroid::DataFetcherImplAndroid() {
+DataFetcherImplAndroid::DataFetcherImplAndroid()
+    : number_active_device_motion_sensors_(0),
+      device_motion_buffer_(NULL),
+      is_buffer_ready_(false) {
+  memset(received_motion_data_, 0, sizeof(received_motion_data_));
   device_orientation_.Reset(
-      Java_DeviceOrientation_getInstance(AttachCurrentThread()));
-}
-
-void DataFetcherImplAndroid::Init(JNIEnv* env) {
-  bool result = RegisterNativesImpl(env);
-  DCHECK(result);
-}
-
-DataFetcher* DataFetcherImplAndroid::Create() {
-  scoped_ptr<DataFetcherImplAndroid> fetcher(new DataFetcherImplAndroid);
-  if (fetcher->Start(kPeriodInMilliseconds))
-    return fetcher.release();
-
-  LOG(ERROR) << "DataFetcherImplAndroid::Start failed!";
-  return NULL;
+      Java_DeviceMotionAndOrientation_getInstance(AttachCurrentThread()));
 }
 
 DataFetcherImplAndroid::~DataFetcherImplAndroid() {
-  Stop();
+}
+
+bool DataFetcherImplAndroid::Register(JNIEnv* env) {
+  return RegisterNativesImpl(env);
+}
+
+DataFetcherImplAndroid* DataFetcherImplAndroid::GetInstance() {
+  return Singleton<DataFetcherImplAndroid,
+                   LeakySingletonTraits<DataFetcherImplAndroid> >::get();
 }
 
 const DeviceData* DataFetcherImplAndroid::GetDeviceData(
@@ -76,17 +76,123 @@ void DataFetcherImplAndroid::GotOrientation(
   next_orientation_ = orientation;
 }
 
-bool DataFetcherImplAndroid::Start(int rate_in_milliseconds) {
-  DCHECK(!device_orientation_.is_null());
-  return Java_DeviceOrientation_start(AttachCurrentThread(),
-                                      device_orientation_.obj(),
-                                      reinterpret_cast<jint>(this),
-                                      rate_in_milliseconds);
+void DataFetcherImplAndroid::GotAcceleration(
+    JNIEnv*, jobject, double x, double y, double z) {
+  device_motion_buffer_->seqlock.WriteBegin();
+  device_motion_buffer_->data.accelerationX = x;
+  device_motion_buffer_->data.hasAccelerationX = true;
+  device_motion_buffer_->data.accelerationY = y;
+  device_motion_buffer_->data.hasAccelerationY = true;
+  device_motion_buffer_->data.accelerationZ = z;
+  device_motion_buffer_->data.hasAccelerationZ = true;
+  device_motion_buffer_->seqlock.WriteEnd();
+
+  if (!is_buffer_ready_) {
+    received_motion_data_[RECEIVED_MOTION_DATA_ACCELERATION] = 1;
+    CheckBufferReadyToRead();
+  }
 }
 
-void DataFetcherImplAndroid::Stop() {
+void DataFetcherImplAndroid::GotAccelerationIncludingGravity(
+    JNIEnv*, jobject, double x, double y, double z) {
+  device_motion_buffer_->seqlock.WriteBegin();
+  device_motion_buffer_->data.accelerationIncludingGravityX = x;
+  device_motion_buffer_->data.hasAccelerationIncludingGravityX = true;
+  device_motion_buffer_->data.accelerationIncludingGravityY = y;
+  device_motion_buffer_->data.hasAccelerationIncludingGravityY = true;
+  device_motion_buffer_->data.accelerationIncludingGravityZ = z;
+  device_motion_buffer_->data.hasAccelerationIncludingGravityZ = true;
+  device_motion_buffer_->seqlock.WriteEnd();
+
+  if (!is_buffer_ready_) {
+    received_motion_data_[RECEIVED_MOTION_DATA_ACCELERATION_INCL_GRAVITY] = 1;
+    CheckBufferReadyToRead();
+  }
+}
+
+void DataFetcherImplAndroid::GotRotationRate(
+    JNIEnv*, jobject, double alpha, double beta, double gamma) {
+  device_motion_buffer_->seqlock.WriteBegin();
+  device_motion_buffer_->data.rotationRateAlpha = alpha;
+  device_motion_buffer_->data.hasRotationRateAlpha = true;
+  device_motion_buffer_->data.rotationRateBeta = beta;
+  device_motion_buffer_->data.hasRotationRateBeta = true;
+  device_motion_buffer_->data.rotationRateGamma = gamma;
+  device_motion_buffer_->data.hasRotationRateGamma = true;
+  device_motion_buffer_->seqlock.WriteEnd();
+
+  if (!is_buffer_ready_) {
+    received_motion_data_[RECEIVED_MOTION_DATA_ROTATION_RATE] = 1;
+    CheckBufferReadyToRead();
+  }
+}
+
+bool DataFetcherImplAndroid::Start(DeviceData::Type event_type) {
   DCHECK(!device_orientation_.is_null());
-  Java_DeviceOrientation_stop(AttachCurrentThread(), device_orientation_.obj());
+  return Java_DeviceMotionAndOrientation_start(
+      AttachCurrentThread(), device_orientation_.obj(),
+      reinterpret_cast<jint>(this), static_cast<jint>(event_type),
+      kPeriodInMilliseconds);
+}
+
+void DataFetcherImplAndroid::Stop(DeviceData::Type event_type) {
+  DCHECK(!device_orientation_.is_null());
+  Java_DeviceMotionAndOrientation_stop(
+      AttachCurrentThread(), device_orientation_.obj(),
+      static_cast<jint>(event_type));
+}
+
+int DataFetcherImplAndroid::GetNumberActiveDeviceMotionSensors() {
+  DCHECK(!device_orientation_.is_null());
+  return Java_DeviceMotionAndOrientation_getNumberActiveDeviceMotionSensors(
+      AttachCurrentThread(), device_orientation_.obj());
+}
+
+
+// ----- Shared memory API methods
+
+bool DataFetcherImplAndroid::StartFetchingDeviceMotionData(
+    DeviceMotionHardwareBuffer* buffer) {
+  device_motion_buffer_ = buffer;
+  ClearInternalBuffers();
+  bool success = Start(DeviceData::kTypeMotion);
+
+  // If no motion data can ever be provided, the number of active device motion
+  // sensors will be zero. In that case flag the shared memory buffer
+  // as ready to read, as it will not change anyway.
+  number_active_device_motion_sensors_ = GetNumberActiveDeviceMotionSensors();
+  CheckBufferReadyToRead();
+  return success;
+}
+
+void DataFetcherImplAndroid::StopFetchingDeviceMotionData() {
+  Stop(DeviceData::kTypeMotion);
+  ClearInternalBuffers();
+}
+
+void DataFetcherImplAndroid::CheckBufferReadyToRead() {
+  if (received_motion_data_[RECEIVED_MOTION_DATA_ACCELERATION] +
+      received_motion_data_[RECEIVED_MOTION_DATA_ACCELERATION_INCL_GRAVITY] +
+      received_motion_data_[RECEIVED_MOTION_DATA_ROTATION_RATE] ==
+      number_active_device_motion_sensors_) {
+    device_motion_buffer_->seqlock.WriteBegin();
+    device_motion_buffer_->data.interval = kPeriodInMilliseconds;
+    device_motion_buffer_->seqlock.WriteEnd();
+    SetBufferReadyStatus(true);
+  }
+}
+
+void DataFetcherImplAndroid::SetBufferReadyStatus(bool ready) {
+  device_motion_buffer_->seqlock.WriteBegin();
+  device_motion_buffer_->data.allAvailableSensorsAreActive = ready;
+  device_motion_buffer_->seqlock.WriteEnd();
+  is_buffer_ready_ = ready;
+}
+
+void DataFetcherImplAndroid::ClearInternalBuffers() {
+  memset(received_motion_data_, 0, sizeof(received_motion_data_));
+  number_active_device_motion_sensors_ = 0;
+  SetBufferReadyStatus(false);
 }
 
 }  // namespace content

@@ -11,18 +11,18 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/observer_list.h"
 #include "base/values.h"
-#include "chrome/browser/profiles/profile_keyed_service.h"
 #include "chrome/browser/signin/signin_internals_util.h"
 #include "chrome/browser/signin/signin_manager.h"
 #include "chrome/browser/signin/signin_manager_factory.h"
 #include "chrome/common/chrome_version_info.h"
+#include "components/browser_context_keyed_service/browser_context_keyed_service.h"
 
 class Profile;
 
 // This class collects authentication, signin and token information
 // to propagate to about:signin-internals via SigninInternalsUI.
 class AboutSigninInternals
-    : public ProfileKeyedService,
+    : public BrowserContextKeyedService,
       public signin_internals_util::SigninDiagnosticsObserver {
  public:
   class Observer {
@@ -63,7 +63,7 @@ class AboutSigninInternals
 
   void Initialize(Profile* profile);
 
-  // ProfileKeyedService implementation.
+  // BrowserContextKeyedService implementation.
   virtual void Shutdown() OVERRIDE;
 
   // Returns a dictionary of values in signin_status_ for use in
@@ -81,6 +81,11 @@ class AboutSigninInternals
   //                 "status": "foo_stat", "time" : "foo_time"} elems]
   //  }
   scoped_ptr<DictionaryValue> GetSigninStatus();
+
+  // Returns the time of the last fetch/refresh for the token specified by
+  // |token_name|. See signin_internals_util::kTokenPrefsArray for valid token
+  // names. If |token_name| is invalid, returns base::Time().
+  base::Time GetTokenTime(const std::string& token_name) const;
 
  private:
   void NotifyObservers();

@@ -8,9 +8,9 @@
 #include <string>
 
 #include "base/basictypes.h"
-#include "base/time.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
+#include "base/time/time.h"
 #include "chrome/browser/extensions/extensions_quota_service.h"
 #include "chrome/browser/extensions/process_map.h"
 #include "chrome/common/extensions/extension_constants.h"
@@ -65,6 +65,14 @@ class ExtensionInfoMap : public base::RefCountedThreadSafe<ExtensionInfoMap> {
                                   int site_instance_id);
   void UnregisterAllExtensionsInProcess(int process_id);
 
+  // Returns the subset of extensions which has the same |origin| in
+  // |process_id| with the specified |permission|.
+  void GetExtensionsWithAPIPermissionForSecurityOrigin(
+      const GURL& origin,
+      int process_id,
+      extensions::APIPermission::ID permission,
+      ExtensionSet* extensions) const;
+
   // Returns true if there is exists an extension with the same origin as
   // |origin| in |process_id| with |permission|.
   bool SecurityOriginHasAPIPermission(
@@ -72,6 +80,11 @@ class ExtensionInfoMap : public base::RefCountedThreadSafe<ExtensionInfoMap> {
       extensions::APIPermission::ID permission) const;
 
   ExtensionsQuotaService* GetQuotaService();
+
+  // Keep track of the signin process, so we can restrict extension access to
+  // it.
+  void SetSigninProcess(int process_id);
+  bool IsSigninProcess(int process_id) const;
 
  private:
   friend class base::RefCountedThreadSafe<ExtensionInfoMap>;
@@ -96,6 +109,8 @@ class ExtensionInfoMap : public base::RefCountedThreadSafe<ExtensionInfoMap> {
 
   // Assignment of extensions to processes.
   extensions::ProcessMap process_map_;
+
+  int signin_process_id_;
 };
 
 #endif  // CHROME_BROWSER_EXTENSIONS_EXTENSION_INFO_MAP_H_

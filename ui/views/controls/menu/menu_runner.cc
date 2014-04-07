@@ -7,10 +7,12 @@
 #include <set>
 
 #include "base/metrics/histogram.h"
+#include "ui/base/models/menu_model.h"
 #include "ui/views/controls/button/menu_button.h"
 #include "ui/views/controls/menu/menu_controller.h"
 #include "ui/views/controls/menu/menu_controller_delegate.h"
 #include "ui/views/controls/menu/menu_delegate.h"
+#include "ui/views/controls/menu/menu_model_adapter.h"
 #include "ui/views/controls/menu/submenu_view.h"
 #include "ui/views/widget/widget.h"
 
@@ -310,6 +312,11 @@ DisplayChangeListener* DisplayChangeListener::Create(Widget* widget,
 
 }  // namespace internal
 
+MenuRunner::MenuRunner(ui::MenuModel* menu_model)
+    : menu_model_adapter_(new MenuModelAdapter(menu_model)),
+      holder_(new internal::MenuRunnerImpl(menu_model_adapter_->CreateMenu())) {
+}
+
 MenuRunner::MenuRunner(MenuItemView* menu)
     : holder_(new internal::MenuRunnerImpl(menu)) {
 }
@@ -326,6 +333,7 @@ MenuRunner::RunResult MenuRunner::RunMenuAt(Widget* parent,
                                             MenuButton* button,
                                             const gfx::Rect& bounds,
                                             MenuItemView::AnchorPosition anchor,
+                                            ui::MenuSourceType source_type,
                                             int32 types) {
   // The parent of the nested menu will have created a DisplayChangeListener, so
   // we avoid creating a DisplayChangeListener if nested. Drop menus are
@@ -334,12 +342,22 @@ MenuRunner::RunResult MenuRunner::RunMenuAt(Widget* parent,
     display_change_listener_.reset(
         internal::DisplayChangeListener::Create(parent, this));
   }
-  if ((types & MenuRunner::CONTEXT_MENU) &&
-      parent &&
-      parent->GetCurrentEvent() &&
-      !MenuItemView::IsBubble(anchor))
-    anchor = parent->GetCurrentEvent()->IsGestureEvent() ?
-        MenuItemView::BOTTOMCENTER : MenuItemView::TOPLEFT;
+
+  if (types & CONTEXT_MENU) {
+    switch (source_type) {
+      case ui::MENU_SOURCE_NONE:
+      case ui::MENU_SOURCE_KEYBOARD:
+      case ui::MENU_SOURCE_MOUSE:
+        anchor = MenuItemView::TOPLEFT;
+        break;
+      case ui::MENU_SOURCE_TOUCH:
+      case ui::MENU_SOURCE_TOUCH_EDIT_MENU:
+        anchor = MenuItemView::BOTTOMCENTER;
+        break;
+      default:
+        break;
+    }
+  }
 
   return holder_->RunMenuAt(parent, button, bounds, anchor, types);
 }

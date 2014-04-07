@@ -10,8 +10,8 @@
 
 #include <algorithm>
 
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "content/browser/renderer_host/render_view_host_factory.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
@@ -22,12 +22,12 @@
 #include "content/browser/web_contents/web_drag_source_gtk.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/browser/web_contents_view_delegate.h"
+#include "content/public/common/drop_data.h"
 #include "ui/base/gtk/gtk_expanded_container.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/point.h"
 #include "ui/gfx/rect.h"
 #include "ui/gfx/size.h"
-#include "webkit/glue/webdropdata.h"
 
 using WebKit::WebDragOperation;
 using WebKit::WebDragOperationsMask;
@@ -100,7 +100,7 @@ WebContentsViewGtk::WebContentsViewGtk(
   gtk_widget_show(expanded_.get());
   drag_source_.reset(new WebDragSourceGtk(web_contents));
 
-  if (delegate_.get())
+  if (delegate_)
     delegate_->Initialize(expanded_.get(), &focus_store_);
 }
 
@@ -109,7 +109,7 @@ WebContentsViewGtk::~WebContentsViewGtk() {
 }
 
 gfx::NativeView WebContentsViewGtk::GetNativeView() const {
-  if (delegate_.get())
+  if (delegate_)
     return delegate_->GetNativeView();
 
   return expanded_.get();
@@ -151,7 +151,7 @@ void WebContentsViewGtk::OnTabCrashed(base::TerminationStatus status,
 void WebContentsViewGtk::Focus() {
   if (web_contents_->ShowingInterstitialPage()) {
     web_contents_->GetInterstitialPage()->Focus();
-  } else if (delegate_.get()) {
+  } else if (delegate_) {
     delegate_->Focus();
   }
 }
@@ -174,7 +174,7 @@ void WebContentsViewGtk::RestoreFocus() {
     SetInitialFocus();
 }
 
-WebDropData* WebContentsViewGtk::GetDropData() const {
+DropData* WebContentsViewGtk::GetDropData() const {
   return drag_dest_->current_drop_data();
 }
 
@@ -223,12 +223,17 @@ RenderWidgetHostView* WebContentsViewGtk::CreateViewForWidget(
                         GDK_POINTER_MOTION_MASK);
   InsertIntoContentArea(content_view);
 
-  // We don't want to change any state in this class for swapped out RVHs
-  // because they will not be visible at this time.
   if (render_widget_host->IsRenderView()) {
     RenderViewHost* rvh = RenderViewHost::From(render_widget_host);
-    if (!static_cast<RenderViewHostImpl*>(rvh)->is_swapped_out())
+    // If |rvh| is already the current render view host for the web contents, we
+    // need to initialize |drag_dest_| for drags to be properly handled.
+    // Otherwise, |drag_dest_| will be updated in RenderViewSwappedIn. The
+    // reason we can't simply check that this isn't a swapped-out view is
+    // because there are navigations that create non-swapped-out views that may
+    // never be displayed, e.g. a navigation that becomes a download.
+    if (rvh == web_contents_->GetRenderViewHost()) {
       UpdateDragDest(rvh);
+    }
   }
 
   return view;
@@ -314,7 +319,7 @@ void WebContentsViewGtk::UpdateDragDest(RenderViewHost* host) {
   // Create the new drag_dest_.
   drag_dest_.reset(new WebDragDestGtk(web_contents_, content_view));
 
-  if (delegate_.get())
+  if (delegate_)
     drag_dest_->set_delegate(delegate_->GetDragDestDelegate());
 }
 
@@ -326,7 +331,7 @@ void WebContentsViewGtk::UpdateDragDest(RenderViewHost* host) {
 gboolean WebContentsViewGtk::OnFocus(GtkWidget* widget,
                                      GtkDirectionType focus) {
   // Give our view wrapper first chance at this event.
-  if (delegate_.get()) {
+  if (delegate_) {
     gboolean return_value = FALSE;
     if (delegate_->OnNativeViewFocusEvent(widget, focus, &return_value))
       return return_value;
@@ -344,11 +349,9 @@ gboolean WebContentsViewGtk::OnFocus(GtkWidget* widget,
   return TRUE;
 }
 
-void WebContentsViewGtk::ShowContextMenu(
-    const ContextMenuParams& params,
-    ContextMenuSourceType type) {
-  if (delegate_.get())
-    delegate_->ShowContextMenu(params, type);
+void WebContentsViewGtk::ShowContextMenu(const ContextMenuParams& params) {
+  if (delegate_)
+    delegate_->ShowContextMenu(params);
   else
     DLOG(ERROR) << "Cannot show context menus without a delegate.";
 }
@@ -357,7 +360,7 @@ void WebContentsViewGtk::ShowPopupMenu(const gfx::Rect& bounds,
                                        int item_height,
                                        double item_font_size,
                                        int selected_item,
-                                       const std::vector<WebMenuItem>& items,
+                                       const std::vector<MenuItem>& items,
                                        bool right_aligned,
                                        bool allow_multiple_selection) {
   // External popup menus are only used on Mac and Android.
@@ -366,7 +369,7 @@ void WebContentsViewGtk::ShowPopupMenu(const gfx::Rect& bounds,
 
 // Render view DnD -------------------------------------------------------------
 
-void WebContentsViewGtk::StartDragging(const WebDropData& drop_data,
+void WebContentsViewGtk::StartDragging(const DropData& drop_data,
                                        WebDragOperationsMask ops,
                                        const gfx::ImageSkia& image,
                                        const gfx::Vector2d& image_offset,
@@ -375,11 +378,11 @@ void WebContentsViewGtk::StartDragging(const WebDropData& drop_data,
 
   RenderWidgetHostViewGtk* view_gtk = static_cast<RenderWidgetHostViewGtk*>(
       web_contents_->GetRenderWidgetHostView());
-  if (!view_gtk || !view_gtk->GetLastMouseDown())
-    return;
-
-  drag_source_->StartDragging(drop_data, ops, view_gtk->GetLastMouseDown(),
-                              *image.bitmap(), image_offset);
+  if (!view_gtk || !view_gtk->GetLastMouseDown() ||
+      !drag_source_->StartDragging(drop_data, ops, view_gtk->GetLastMouseDown(),
+                                   *image.bitmap(), image_offset)) {
+    web_contents_->SystemDragEnded();
+  }
 }
 
 // -----------------------------------------------------------------------------

@@ -8,16 +8,16 @@
 #include "base/bind_helpers.h"
 #include "base/command_line.h"
 #include "base/logging.h"
-#include "base/message_loop.h"
-#include "base/message_loop_proxy.h"
+#include "base/message_loop/message_loop.h"
+#include "base/message_loop/message_loop_proxy.h"
 #include "base/nix/mime_util_xdg.h"
 #include "base/nix/xdg_util.h"
-#include "base/process_util.h"
-#include "base/string_number_conversions.h"
-#include "base/string_util.h"
+#include "base/process/launch.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/threading/worker_pool.h"
-#include "base/utf_string_conversions.h"
 #include "grit/ui_strings.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/shell_dialogs/gtk/select_file_dialog_impl.h"
@@ -49,7 +49,7 @@ class SelectFileDialogImplKDE : public ui::SelectFileDialogImpl {
   // |params| is user data we pass back via the Listener interface.
   virtual void SelectFileImpl(
       Type type,
-      const string16& title,
+      const base::string16& title,
       const base::FilePath& default_path,
       const FileTypeInfo* file_types,
       int file_type_index,
@@ -62,19 +62,26 @@ class SelectFileDialogImplKDE : public ui::SelectFileDialogImpl {
 
   struct KDialogParams {
     // This constructor can only be run from the UI thread.
-    KDialogParams(const std::string& type, const std::string& title,
-                  const base::FilePath& default_path, gfx::NativeWindow parent,
-                  bool file_operation, bool multiple_selection,
+    KDialogParams(const std::string& type,
+                  const std::string& title,
+                  const base::FilePath& default_path,
+                  gfx::NativeWindow parent,
+                  bool file_operation,
+                  bool multiple_selection,
                   void* kdialog_params,
-                  void (SelectFileDialogImplKDE::*callback)(const std::string&,
-                                                            int, void*))
-        : type(type), title(title), default_path(default_path), parent(parent),
+                  void(SelectFileDialogImplKDE::* callback)(const std::string&,
+                                                            int,
+                                                            void*))
+        : type(type),
+          title(title),
+          default_path(default_path),
+          parent(parent),
           file_operation(file_operation),
           multiple_selection(multiple_selection),
           kdialog_params(kdialog_params),
-          ui_loop_proxy(MessageLoopForUI::current()->message_loop_proxy()),
-          callback(callback) {
-    }
+          ui_loop_proxy(
+              base::MessageLoopForUI::current()->message_loop_proxy()),
+          callback(callback) {}
 
     std::string type;
     std::string title;
@@ -113,7 +120,8 @@ class SelectFileDialogImplKDE : public ui::SelectFileDialogImpl {
   // us when we were told to show the dialog.
   void FileNotSelected(void *params);
 
-  void CreateSelectFolderDialog(const std::string& title,
+  void CreateSelectFolderDialog(Type type,
+                                const std::string& title,
                                 const base::FilePath& default_path,
                                 gfx::NativeWindow parent, void* params);
 
@@ -163,7 +171,7 @@ SelectFileDialogImplKDE::~SelectFileDialogImplKDE() {
 // We ignore |default_extension|.
 void SelectFileDialogImplKDE::SelectFileImpl(
     Type type,
-    const string16& title,
+    const base::string16& title,
     const base::FilePath& default_path,
     const FileTypeInfo* file_types,
     int file_type_index,
@@ -187,7 +195,8 @@ void SelectFileDialogImplKDE::SelectFileImpl(
 
   switch (type) {
     case SELECT_FOLDER:
-      CreateSelectFolderDialog(title_string, default_path,
+    case SELECT_UPLOAD_FOLDER:
+      CreateSelectFolderDialog(type, title_string, default_path,
                                owning_window, params);
       return;
     case SELECT_OPEN_FILE:
@@ -324,15 +333,18 @@ void SelectFileDialogImplKDE::FileNotSelected(void* params) {
 }
 
 void SelectFileDialogImplKDE::CreateSelectFolderDialog(
-    const std::string& title, const base::FilePath& default_path,
+    Type type, const std::string& title, const base::FilePath& default_path,
     gfx::NativeWindow parent, void *params) {
+  int title_message_id = (type == SELECT_UPLOAD_FOLDER) ?
+      IDS_SELECT_UPLOAD_FOLDER_DIALOG_TITLE :
+      IDS_SELECT_FOLDER_DIALOG_TITLE;
   base::WorkerPool::PostTask(FROM_HERE,
       base::Bind(
           &SelectFileDialogImplKDE::CallKDialogOutput,
           this,
           KDialogParams(
               "--getexistingdirectory",
-              GetTitle(title, IDS_SELECT_FOLDER_DIALOG_TITLE),
+              GetTitle(title, title_message_id),
               default_path.empty() ? *last_opened_path_ : default_path,
               parent, false, false, params,
               &SelectFileDialogImplKDE::OnSelectSingleFolderDialogResponse)),
@@ -471,4 +483,3 @@ SelectFileDialogImpl* SelectFileDialogImpl::NewSelectFileDialogImplKDE(
 }
 
 }  // namespace ui
-

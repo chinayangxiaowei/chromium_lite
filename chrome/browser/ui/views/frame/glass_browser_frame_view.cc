@@ -6,16 +6,16 @@
 
 #include "base/command_line.h"
 #include "base/prefs/pref_service.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/app/chrome_dll_resource.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/themes/theme_properties.h"
 #include "chrome/browser/ui/views/avatar_menu_button.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/tabs/tab.h"
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "content/public/browser/notification_service.h"
@@ -29,6 +29,8 @@
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/icon_util.h"
 #include "ui/gfx/image/image.h"
+#include "ui/views/controls/label.h"
+#include "ui/views/layout/layout_constants.h"
 #include "ui/views/win/hwnd_util.h"
 #include "ui/views/window/client_view.h"
 
@@ -69,7 +71,7 @@ const int kNewTabCaptionMaximizedSpacing = 16;
 // is no avatar icon.
 const int kTabStripIndent = -6;
 
-}
+}  // namespace
 
 ///////////////////////////////////////////////////////////////////////////////
 // GlassBrowserFrameView, public:
@@ -200,9 +202,9 @@ int GlassBrowserFrameView::NonClientHitTest(const gfx::Point& point) {
   if (!browser_view()->IsBrowserTypeNormal() || !bounds().Contains(point))
     return HTNOWHERE;
 
-  // See if the point is within the avatar menu button.
-  if (avatar_button() &&
-      avatar_button()->GetMirroredBounds().Contains(point))
+  // See if the point is within the avatar menu button or within the avatar
+  // label.
+  if (avatar_button() && avatar_button()->GetMirroredBounds().Contains(point))
     return HTCLIENT;
 
   int frame_component = frame()->client_view()->NonClientHitTest(point);
@@ -417,7 +419,6 @@ void GlassBrowserFrameView::LayoutAvatar() {
       avatar_restored_y;
   avatar_bounds_.SetRect(avatar_x, avatar_y, incognito_icon.width(),
       browser_view()->ShouldShowAvatar() ? (avatar_bottom - avatar_y) : 0);
-
   if (avatar_button())
     avatar_button()->SetBoundsRect(avatar_bounds_);
 }

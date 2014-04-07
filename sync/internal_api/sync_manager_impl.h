@@ -13,7 +13,6 @@
 #include "sync/engine/all_status.h"
 #include "sync/engine/net/server_connection_manager.h"
 #include "sync/engine/sync_engine_event.h"
-#include "sync/engine/throttled_data_type_tracker.h"
 #include "sync/engine/traffic_recorder.h"
 #include "sync/internal_api/change_reorder_buffer.h"
 #include "sync/internal_api/debug_info_event_listener.h"
@@ -21,6 +20,7 @@
 #include "sync/internal_api/js_sync_encryption_handler_observer.h"
 #include "sync/internal_api/js_sync_manager_observer.h"
 #include "sync/internal_api/public/sync_manager.h"
+#include "sync/internal_api/public/user_share.h"
 #include "sync/internal_api/sync_encryption_handler_impl.h"
 #include "sync/js/js_backend.h"
 #include "sync/notifier/invalidation_handler.h"
@@ -51,7 +51,6 @@ class SYNC_EXPORT_PRIVATE SyncManagerImpl :
     public SyncManager,
     public net::NetworkChangeNotifier::IPAddressObserver,
     public net::NetworkChangeNotifier::ConnectionTypeObserver,
-    public InvalidationHandler,
     public JsBackend,
     public SyncEngineEventListener,
     public ServerConnectionEventListener,
@@ -71,48 +70,43 @@ class SYNC_EXPORT_PRIVATE SyncManagerImpl :
       bool use_ssl,
       scoped_ptr<HttpPostProviderFactory> post_factory,
       const std::vector<ModelSafeWorker*>& workers,
-      ExtensionsActivityMonitor* extensions_activity_monitor,
+      ExtensionsActivity* extensions_activity,
       SyncManager::ChangeDelegate* change_delegate,
       const SyncCredentials& credentials,
-      scoped_ptr<Invalidator> invalidator,
+      const std::string& invalidator_client_id,
       const std::string& restored_key_for_bootstrapping,
       const std::string& restored_keystore_key_for_bootstrapping,
-      scoped_ptr<InternalComponentsFactory> internal_components_factory,
+      InternalComponentsFactory* internal_components_factory,
       Encryptor* encryptor,
-      UnrecoverableErrorHandler* unrecoverable_error_handler,
+      scoped_ptr<UnrecoverableErrorHandler> unrecoverable_error_handler,
       ReportUnrecoverableErrorFunction
-          report_unrecoverable_error_function) OVERRIDE;
+          report_unrecoverable_error_function,
+      bool use_oauth2_token) OVERRIDE;
   virtual void ThrowUnrecoverableError() OVERRIDE;
   virtual ModelTypeSet InitialSyncEndedTypes() OVERRIDE;
   virtual ModelTypeSet GetTypesWithEmptyProgressMarkerToken(
       ModelTypeSet types) OVERRIDE;
   virtual bool PurgePartiallySyncedTypes() OVERRIDE;
   virtual void UpdateCredentials(const SyncCredentials& credentials) OVERRIDE;
-  virtual void UpdateEnabledTypes(ModelTypeSet enabled_types) OVERRIDE;
-  virtual void RegisterInvalidationHandler(
-      InvalidationHandler* handler) OVERRIDE;
-  virtual void UpdateRegisteredInvalidationIds(
-      InvalidationHandler* handler,
-      const ObjectIdSet& ids) OVERRIDE;
-  virtual void UnregisterInvalidationHandler(
-      InvalidationHandler* handler) OVERRIDE;
-  virtual void AcknowledgeInvalidation(
-      const invalidation::ObjectId& id,
-      const syncer::AckHandle& ack_handle) OVERRIDE;
   virtual void StartSyncingNormally(
       const ModelSafeRoutingInfo& routing_info) OVERRIDE;
   virtual void ConfigureSyncer(
       ConfigureReason reason,
-      ModelTypeSet types_to_config,
-      ModelTypeSet failed_types,
+      ModelTypeSet to_download,
+      ModelTypeSet to_purge,
+      ModelTypeSet to_journal,
+      ModelTypeSet to_unapply,
       const ModelSafeRoutingInfo& new_routing_info,
       const base::Closure& ready_task,
       const base::Closure& retry_task) OVERRIDE;
+  virtual void OnInvalidatorStateChange(InvalidatorState state) OVERRIDE;
+  virtual void OnIncomingInvalidation(
+      const ObjectIdInvalidationMap& invalidation_map) OVERRIDE;
   virtual void AddObserver(SyncManager::Observer* observer) OVERRIDE;
   virtual void RemoveObserver(SyncManager::Observer* observer) OVERRIDE;
   virtual SyncStatus GetDetailedStatus() const OVERRIDE;
   virtual void SaveChanges() OVERRIDE;
-  virtual void StopSyncingForShutdown(const base::Closure& callback) OVERRIDE;
+  virtual void StopSyncingForShutdown() OVERRIDE;
   virtual void ShutdownOnSyncThread() OVERRIDE;
   virtual UserShare* GetUserShare() OVERRIDE;
   virtual const std::string cache_guid() OVERRIDE;
@@ -173,11 +167,6 @@ class SYNC_EXPORT_PRIVATE SyncManagerImpl :
       syncable::BaseTransaction* trans,
       std::vector<int64>* entries_changed) OVERRIDE;
 
-  // InvalidationHandler implementation.
-  virtual void OnInvalidatorStateChange(InvalidatorState state) OVERRIDE;
-  virtual void OnIncomingInvalidation(
-      const ObjectIdInvalidationMap& invalidation_map) OVERRIDE;
-
   // Handle explicit requests to fetch updates for the given types.
   virtual void RefreshTypes(ModelTypeSet types) OVERRIDE;
 
@@ -198,6 +187,7 @@ class SYNC_EXPORT_PRIVATE SyncManagerImpl :
   FRIEND_TEST_ALL_PREFIXES(SyncManagerTest, OnNotificationStateChange);
   FRIEND_TEST_ALL_PREFIXES(SyncManagerTest, OnIncomingNotification);
   FRIEND_TEST_ALL_PREFIXES(SyncManagerTest, PurgeDisabledTypes);
+  FRIEND_TEST_ALL_PREFIXES(SyncManagerTest, PurgeUnappliedTypes);
 
   struct NotificationInfo {
     NotificationInfo();
@@ -207,7 +197,7 @@ class SYNC_EXPORT_PRIVATE SyncManagerImpl :
     std::string payload;
 
     // Returned pointer owned by the caller.
-    DictionaryValue* ToValue() const;
+    base::DictionaryValue* ToValue() const;
   };
 
   base::TimeDelta GetNudgeDelayTimeDelta(const ModelType& model_type);
@@ -219,11 +209,10 @@ class SYNC_EXPORT_PRIVATE SyncManagerImpl :
   typedef std::map<std::string, JsMessageHandler> JsMessageHandlerMap;
 
   // Determine if the parents or predecessors differ between the old and new
-  // versions of an entry stored in |a| and |b|.  Note that a node's index may
-  // change without its NEXT_ID changing if the node at NEXT_ID also moved (but
-  // the relative order is unchanged).  To handle such cases, we rely on the
-  // caller to treat a position update on any sibling as updating the positions
-  // of all siblings.
+  // versions of an entry.  Note that a node's index may change without its
+  // UNIQUE_POSITION changing if its sibling nodes were changed.  To handle such
+  // cases, we rely on the caller to treat a position update on any sibling as
+  // updating the positions of all siblings.
   bool VisiblePositionsDiffer(
       const syncable::EntryKernelMutation& mutation) const;
 
@@ -237,11 +226,13 @@ class SYNC_EXPORT_PRIVATE SyncManagerImpl :
   // Open the directory named with |username|.
   bool OpenDirectory(const std::string& username);
 
-  // Purge those types from |previously_enabled_types| that are no longer
-  // enabled in |currently_enabled_types|.
-  bool PurgeDisabledTypes(ModelTypeSet previously_enabled_types,
-                          ModelTypeSet currently_enabled_types,
-                          ModelTypeSet failed_types);
+  // Purge those disabled types as specified by |to_purge|. |to_journal| and
+  // |to_unapply| specify subsets that require special handling. |to_journal|
+  // types are saved into the delete journal, while |to_unapply| have only
+  // their local data deleted, while their server data is preserved.
+  bool PurgeDisabledTypes(ModelTypeSet to_purge,
+                          ModelTypeSet to_journal,
+                          ModelTypeSet to_unapply);
 
   void RequestNudgeForDataTypes(
       const tracked_objects::Location& nudge_location,
@@ -271,7 +262,7 @@ class SYNC_EXPORT_PRIVATE SyncManagerImpl :
     const std::string& name, UnboundJsMessageHandler unbound_message_handler);
 
   // Returned pointer is owned by the caller.
-  static DictionaryValue* NotificationInfoToValue(
+  static base::DictionaryValue* NotificationInfoToValue(
       const NotificationInfoMap& notification_info);
 
   static std::string NotificationInfoToString(
@@ -330,9 +321,6 @@ class SYNC_EXPORT_PRIVATE SyncManagerImpl :
   // Start()ed.
   scoped_ptr<SyncScheduler> scheduler_;
 
-  // The Invalidator which notifies us when updates need to be downloaded.
-  scoped_ptr<Invalidator> invalidator_;
-
   // A multi-purpose status watch object that aggregates stats from various
   // sync components.
   AllStatus allstatus_;
@@ -366,15 +354,13 @@ class SYNC_EXPORT_PRIVATE SyncManagerImpl :
   JsMutationEventObserver js_mutation_event_observer_;
   JsSyncEncryptionHandlerObserver js_sync_encryption_handler_observer_;
 
-  ThrottledDataTypeTracker throttled_data_type_tracker_;
-
   // This is for keeping track of client events to send to the server.
   DebugInfoEventListener debug_info_event_listener_;
 
   TrafficRecorder traffic_recorder_;
 
   Encryptor* encryptor_;
-  UnrecoverableErrorHandler* unrecoverable_error_handler_;
+  scoped_ptr<UnrecoverableErrorHandler> unrecoverable_error_handler_;
   ReportUnrecoverableErrorFunction report_unrecoverable_error_function_;
 
   // Sync's encryption handler. It tracks the set of encrypted types, manages

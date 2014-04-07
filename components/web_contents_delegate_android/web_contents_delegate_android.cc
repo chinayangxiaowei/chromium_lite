@@ -7,7 +7,9 @@
 #include <android/keycodes.h>
 
 #include "base/android/jni_android.h"
+#include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
+#include "components/web_contents_delegate_android/color_chooser_android.h"
 #include "content/public/browser/android/content_view_core.h"
 #include "content/public/browser/color_chooser.h"
 #include "content/public/browser/invalidate_type.h"
@@ -17,10 +19,10 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/page_transition_types.h"
 #include "content/public/common/referrer.h"
-#include "googleurl/src/gurl.h"
 #include "jni/WebContentsDelegateAndroid_jni.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/gfx/rect.h"
+#include "url/gurl.h"
 
 using base::android::AttachCurrentThread;
 using base::android::ConvertUTF8ToJavaString;
@@ -31,7 +33,7 @@ using content::ColorChooser;
 using content::WebContents;
 using content::WebContentsDelegate;
 
-namespace components {
+namespace web_contents_delegate_android {
 
 WebContentsDelegateAndroid::WebContentsDelegateAndroid(JNIEnv* env, jobject obj)
     : weak_java_delegate_(env, obj) {
@@ -49,11 +51,9 @@ WebContentsDelegateAndroid::GetJavaDelegate(JNIEnv* env) const {
 // WebContentsDelegate methods
 // ----------------------------------------------------------------------------
 
-ColorChooser* WebContentsDelegateAndroid::OpenColorChooser(
-    WebContents* source,
-    int color_chooser_id,
-    SkColor color)  {
-  return ColorChooser::Create(color_chooser_id, source, color);
+ColorChooser* WebContentsDelegateAndroid::OpenColorChooser(WebContents* source,
+                                                           SkColor color)  {
+  return new ColorChooserAndroid(source, color);
 }
 
 // OpenURLFromTab() will be called when we're performing a browser-intiated
@@ -86,10 +86,24 @@ WebContents* WebContentsDelegateAndroid::OpenURLFromTab(
     JNIEnv* env = AttachCurrentThread();
     ScopedJavaLocalRef<jstring> java_url =
         ConvertUTF8ToJavaString(env, url.spec());
+    ScopedJavaLocalRef<jstring> extra_headers =
+            ConvertUTF8ToJavaString(env, params.extra_headers);
+    ScopedJavaLocalRef<jbyteArray> post_data;
+    if (params.uses_post &&
+        params.browser_initiated_post_data.get() &&
+        params.browser_initiated_post_data.get()->size()) {
+      post_data = base::android::ToJavaByteArray(
+          env,
+          reinterpret_cast<const uint8*>(
+              params.browser_initiated_post_data.get()->front()),
+          params.browser_initiated_post_data.get()->size());
+    }
     Java_WebContentsDelegateAndroid_openNewTab(env,
                                                obj.obj(),
                                                java_url.obj(),
-                                               disposition == OFF_THE_RECORD);
+                                               extra_headers.obj(),
+                                               post_data.obj(),
+                                               disposition);
     return NULL;
   }
 
@@ -100,14 +114,14 @@ WebContents* WebContentsDelegateAndroid::OpenURLFromTab(
 
 void WebContentsDelegateAndroid::NavigationStateChanged(
     const WebContents* source, unsigned changed_flags) {
-  if (changed_flags & content::INVALIDATE_TYPE_TITLE) {
-    JNIEnv* env = AttachCurrentThread();
-    ScopedJavaLocalRef<jobject> obj = GetJavaDelegate(env);
-    if (obj.is_null())
-      return;
-    Java_WebContentsDelegateAndroid_onTitleUpdated(
-        env, obj.obj());
-  }
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> obj = GetJavaDelegate(env);
+  if (obj.is_null())
+    return;
+  Java_WebContentsDelegateAndroid_navigationStateChanged(
+      env,
+      obj.obj(),
+      changed_flags);
 }
 
 void WebContentsDelegateAndroid::AddNewContents(
@@ -135,12 +149,16 @@ void WebContentsDelegateAndroid::AddNewContents(
 }
 
 void WebContentsDelegateAndroid::ActivateContents(WebContents* contents) {
-  // TODO(dtrainor) When doing the merge I came across this.  Should we be
-  // activating this tab here?
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> obj = GetJavaDelegate(env);
+  if (obj.is_null())
+    return;
+  Java_WebContentsDelegateAndroid_activateContents(env, obj.obj());
 }
 
 void WebContentsDelegateAndroid::DeactivateContents(WebContents* contents) {
-  // Do nothing.
+  // On desktop the current window is deactivated here, bringing the next window
+  // to focus. Not implemented on Android.
 }
 
 void WebContentsDelegateAndroid::LoadingStateChanged(WebContents* source) {
@@ -200,9 +218,9 @@ void WebContentsDelegateAndroid::MoveContents(WebContents* source,
 bool WebContentsDelegateAndroid::AddMessageToConsole(
     WebContents* source,
     int32 level,
-    const string16& message,
+    const base::string16& message,
     int32 line_no,
-    const string16& source_id) {
+    const base::string16& source_id) {
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> obj = GetJavaDelegate(env);
   if (obj.is_null())
@@ -316,6 +334,16 @@ bool WebContentsDelegateAndroid::IsFullscreenForTabOrPending(
       env, obj.obj());
 }
 
+void WebContentsDelegateAndroid::DidProgrammaticallyScroll(
+    WebContents* web_contents, const gfx::Vector2d& scroll_point) {
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> obj = GetJavaDelegate(env);
+  if (obj.is_null())
+    return;
+  Java_WebContentsDelegateAndroid_didProgrammaticallyScroll(
+      env, obj.obj(), scroll_point.x(), scroll_point.y());
+}
+
 // ----------------------------------------------------------------------------
 // Native JNI methods
 // ----------------------------------------------------------------------------
@@ -330,4 +358,4 @@ bool RegisterWebContentsDelegateAndroid(JNIEnv* env) {
   return RegisterNativesImpl(env);
 }
 
-}  // namespace components
+}  // namespace web_contents_delegate_android

@@ -13,6 +13,7 @@
 #include "base/memory/scoped_ptr.h"
 #include "remoting/protocol/authentication_method.h"
 #include "remoting/protocol/authenticator.h"
+#include "remoting/protocol/third_party_host_authenticator.h"
 
 namespace remoting {
 
@@ -20,12 +21,29 @@ class RsaKeyPair;
 
 namespace protocol {
 
+class PairingRegistry;
+
 class Me2MeHostAuthenticatorFactory : public AuthenticatorFactory {
  public:
-  Me2MeHostAuthenticatorFactory(
+  // Create a factory that dispenses shared secret authenticators.
+  static scoped_ptr<AuthenticatorFactory> CreateWithSharedSecret(
       const std::string& local_cert,
       scoped_refptr<RsaKeyPair> key_pair,
-      const SharedSecretHash& shared_secret_hash);
+      const SharedSecretHash& shared_secret_hash,
+      scoped_refptr<PairingRegistry> pairing_registry);
+
+  // Create a factory that dispenses third party authenticators.
+  static scoped_ptr<AuthenticatorFactory> CreateWithThirdPartyAuth(
+      const std::string& local_cert,
+      scoped_refptr<RsaKeyPair> key_pair,
+      scoped_ptr<ThirdPartyHostAuthenticator::TokenValidatorFactory>
+          token_validator_factory);
+
+  // Create a factory that dispenses rejecting authenticators (used when the
+  // host config/policy is inconsistent)
+  static scoped_ptr<AuthenticatorFactory> CreateRejecting();
+
+  Me2MeHostAuthenticatorFactory();
   virtual ~Me2MeHostAuthenticatorFactory();
 
   // AuthenticatorFactory interface.
@@ -35,10 +53,19 @@ class Me2MeHostAuthenticatorFactory : public AuthenticatorFactory {
       const buzz::XmlElement* first_message) OVERRIDE;
 
  private:
-  std::string local_jid_prefix_;
+  // Used for all host authenticators.
   std::string local_cert_;
   scoped_refptr<RsaKeyPair> key_pair_;
+
+  // Used only for shared secret host authenticators.
   SharedSecretHash shared_secret_hash_;
+
+  // Used only for third party host authenticators.
+  scoped_ptr<ThirdPartyHostAuthenticator::TokenValidatorFactory>
+      token_validator_factory_;
+
+  // Used only for pairing host authenticators.
+  scoped_refptr<PairingRegistry> pairing_registry_;
 
   DISALLOW_COPY_AND_ASSIGN(Me2MeHostAuthenticatorFactory);
 };

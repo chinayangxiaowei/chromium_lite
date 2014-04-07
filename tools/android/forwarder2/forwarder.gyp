@@ -11,6 +11,13 @@
         'device_forwarder',
         'host_forwarder#host',
       ],
+      # For the component build, ensure dependent shared libraries are stripped
+      # and put alongside forwarder to simplify pushing to the device.
+      'variables': {
+         'output_dir': '<(PRODUCT_DIR)/forwarder_dist/',
+         'native_binary': '<(PRODUCT_DIR)/device_forwarder',
+      },
+      'includes': ['../../../build/android/native_app_dependencies.gypi'],
     },
     {
       'target_name': 'device_forwarder',
@@ -46,7 +53,6 @@
         'forwarder.cc',
         'pipe_notifier.cc',
         'socket.cc',
-        'thread.cc',
       ],
     },
     {
@@ -69,7 +75,10 @@
         'host_forwarder_main.cc',
         'pipe_notifier.cc',
         'socket.cc',
-        'thread.cc',
+        # TODO(pliard): Remove this. This is needed to avoid undefined
+        # references at link time.
+        '../../../base/message_loop/message_pump_glib.cc',
+        '../../../base/message_loop/message_pump_gtk.cc',
       ],
     },
   ],

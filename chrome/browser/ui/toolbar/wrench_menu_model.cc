@@ -8,11 +8,10 @@
 #include <cmath>
 
 #include "base/command_line.h"
-#include "base/i18n/number_formatting.h"
 #include "base/prefs/pref_service.h"
-#include "base/string_util.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/defaults.h"
@@ -56,7 +55,10 @@
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_skia.h"
-#include "ui/native_theme/native_theme.h"
+
+#if defined(OS_CHROMEOS)
+#include "chromeos/chromeos_switches.h"
+#endif
 
 #if defined(OS_WIN)
 #include "base/win/metro.h"
@@ -93,7 +95,7 @@ string16 GetUpgradeDialogMenuItemName() {
 // EncodingMenuModel
 
 EncodingMenuModel::EncodingMenuModel(Browser* browser)
-    : ALLOW_THIS_IN_INITIALIZER_LIST(ui::SimpleMenuModel(this)),
+    : ui::SimpleMenuModel(this),
       browser_(browser) {
   Build();
 }
@@ -235,15 +237,14 @@ void ToolsMenuModel::Build(Browser* browser) {
 
 WrenchMenuModel::WrenchMenuModel(ui::AcceleratorProvider* provider,
                                  Browser* browser,
-                                 bool is_new_menu,
-                                 bool supports_new_separators)
-    : ALLOW_THIS_IN_INITIALIZER_LIST(ui::SimpleMenuModel(this)),
+                                 bool is_new_menu)
+    : ui::SimpleMenuModel(this),
       provider_(provider),
       browser_(browser),
       tab_strip_model_(browser_->tab_strip_model()),
       zoom_callback_(base::Bind(&WrenchMenuModel::OnZoomLevelChanged,
                                 base::Unretained(this))) {
-  Build(is_new_menu, supports_new_separators);
+  Build(is_new_menu);
   UpdateZoomControls();
 
   HostZoomMap::GetForBrowserContext(
@@ -276,7 +277,6 @@ bool WrenchMenuModel::IsItemForCommandIdDynamic(int command_id) const {
 #elif defined(OS_WIN)
          command_id == IDC_PIN_TO_START_SCREEN ||
 #endif
-         command_id == IDC_VIEW_BACKGROUND_PAGES ||
          command_id == IDC_UPGRADE_DIALOG ||
          command_id == IDC_SHOW_SIGNIN;
 }
@@ -306,12 +306,6 @@ string16 WrenchMenuModel::GetLabelForCommandId(int command_id) const {
       return l10n_util::GetStringUTF16(string_id);
     }
 #endif
-    case IDC_VIEW_BACKGROUND_PAGES: {
-      string16 num_background_pages = base::FormatNumber(
-          TaskManager::GetBackgroundPageCount());
-      return l10n_util::GetStringFUTF16(IDS_VIEW_BACKGROUND_PAGES,
-                                        num_background_pages);
-    }
     case IDC_UPGRADE_DIALOG:
       return GetUpgradeDialogMenuItemName();
     case IDC_SHOW_SIGNIN:
@@ -375,6 +369,13 @@ void WrenchMenuModel::ExecuteCommand(int command_id, int event_flags) {
   if (command_id == IDC_HELP_PAGE_VIA_MENU)
     content::RecordAction(UserMetricsAction("ShowHelpTabViaWrenchMenu"));
 
+  if (command_id == IDC_FULLSCREEN) {
+    // We issue the UMA command here and not in BrowserCommandController or even
+    // FullscreenController since we want to be able to distinguish this event
+    // and a menu which is under development.
+    content::RecordAction(UserMetricsAction("EnterFullScreenWithWrenchMenu"));
+  }
+
   chrome::ExecuteCommand(browser_, command_id);
 }
 
@@ -406,7 +407,9 @@ bool WrenchMenuModel::IsCommandIdVisible(int command_id) const {
         EnumerateModulesModel::GetInstance();
     if (loaded_modules->confirmed_bad_modules_detected() <= 0)
       return false;
-    loaded_modules->AcknowledgeConflictNotification();
+    // We'll leave the wrench adornment on until the user clicks the link.
+    if (loaded_modules->modules_to_notify_about() <= 0)
+      loaded_modules->AcknowledgeConflictNotification();
     return true;
   } else if (command_id == IDC_PIN_TO_START_SCREEN) {
     return base::win::IsMetroProcess();
@@ -417,8 +420,6 @@ bool WrenchMenuModel::IsCommandIdVisible(int command_id) const {
 #endif
   } else if (command_id == IDC_UPGRADE_DIALOG) {
     return UpgradeDetector::GetInstance()->notify_upgrade();
-  } else if (command_id == IDC_VIEW_BACKGROUND_PAGES) {
-    return TaskManager::GetBackgroundPageCount() > 0;
   }
   return true;
 }
@@ -432,7 +433,7 @@ bool WrenchMenuModel::GetAcceleratorForCommandId(
 void WrenchMenuModel::ActiveTabChanged(WebContents* old_contents,
                                        WebContents* new_contents,
                                        int index,
-                                       bool user_gesture) {
+                                       int reason) {
   // The user has switched between tabs and the new tab may have a different
   // zoom setting.
   UpdateZoomControls();
@@ -461,38 +462,69 @@ void WrenchMenuModel::Observe(int type,
 
 // For testing.
 WrenchMenuModel::WrenchMenuModel()
-    : ALLOW_THIS_IN_INITIALIZER_LIST(ui::SimpleMenuModel(this)),
+    : ui::SimpleMenuModel(this),
       provider_(NULL),
       browser_(NULL),
       tab_strip_model_(NULL) {
 }
 
-void WrenchMenuModel::Build(bool is_new_menu, bool supports_new_separators) {
-#if defined(USE_AURA)
-  if (is_new_menu && !ui::NativeTheme::IsNewMenuStyleEnabled())
-    AddSeparator(ui::SPACING_SEPARATOR);
+bool WrenchMenuModel::ShouldShowNewIncognitoWindowMenuItem() {
+  if (browser_->profile()->IsManaged())
+    return false;
+
+#if defined(OS_WIN)
+  if (win8::IsSingleWindowMetroMode() &&
+      browser_->profile()->HasOffTheRecordProfile()) {
+    return false;
+  }
+#endif
+
+#if defined(OS_CHROMEOS)
+  if (CommandLine::ForCurrentProcess()->HasSwitch(
+      chromeos::switches::kGuestSession)) {
+    return false;
+  }
+#endif
+
+  return true;
+}
+
+bool WrenchMenuModel::ShouldShowNewWindowMenuItem() {
+#if defined(OS_WIN)
+  if (!win8::IsSingleWindowMetroMode())
+    return true;
+
+  // In Win8's single window Metro mode, we only show the New Window options
+  // if there isn't already a window of the requested type (incognito or not)
+  // that is available.
+  return browser_->profile()->IsOffTheRecord() &&
+      !chrome::FindBrowserWithProfile(
+          browser_->profile()->GetOriginalProfile(),
+          browser_->host_desktop_type());
+#else
+  return true;
+#endif
+}
+
+void WrenchMenuModel::Build(bool is_new_menu) {
+#if defined(OS_WIN)
+  AddItem(IDC_VIEW_INCOMPATIBILITIES,
+      l10n_util::GetStringUTF16(IDS_VIEW_INCOMPATIBILITIES));
+  EnumerateModulesModel* model =
+      EnumerateModulesModel::GetInstance();
+  if (model->modules_to_notify_about() > 0 ||
+      model->confirmed_bad_modules_detected() > 0)
+    AddSeparator(ui::NORMAL_SEPARATOR);
 #endif
 
   AddItemWithStringId(IDC_NEW_TAB, IDS_NEW_TAB);
-#if defined(OS_WIN)
-  if (win8::IsSingleWindowMetroMode()) {
-    // In Win8's single window Metro mode, we only show the New Window options
-    // if there isn't already a window of the requested type (incognito or not)
-    // that is available.
-    if (browser_->profile()->IsOffTheRecord()) {
-      if (chrome::FindBrowserWithProfile(
-              browser_->profile()->GetOriginalProfile(),
-              browser_->host_desktop_type()) == NULL) {
-        AddItemWithStringId(IDC_NEW_WINDOW, IDS_NEW_WINDOW);
-      }
-    } else if (!browser_->profile()->HasOffTheRecordProfile()) {
-      AddItemWithStringId(IDC_NEW_INCOGNITO_WINDOW, IDS_NEW_INCOGNITO_WINDOW);
-    }
-  } else {
+  if (ShouldShowNewWindowMenuItem())
     AddItemWithStringId(IDC_NEW_WINDOW, IDS_NEW_WINDOW);
+
+  if (ShouldShowNewIncognitoWindowMenuItem())
     AddItemWithStringId(IDC_NEW_INCOGNITO_WINDOW, IDS_NEW_INCOGNITO_WINDOW);
-  }
-#if !defined(NDEBUG) && defined(USE_ASH)
+
+#if defined(OS_WIN) && !defined(NDEBUG) && defined(USE_ASH)
   if (base::win::GetVersion() < base::win::VERSION_WIN8 &&
       chrome::HOST_DESKTOP_TYPE_NATIVE != chrome::HOST_DESKTOP_TYPE_ASH) {
     AddItemWithStringId(IDC_TOGGLE_ASH_DESKTOP,
@@ -500,22 +532,12 @@ void WrenchMenuModel::Build(bool is_new_menu, bool supports_new_separators) {
                                                     IDS_OPEN_ASH_DESKTOP);
   }
 #endif
-#else  // defined(OS_WIN)
-  AddItemWithStringId(IDC_NEW_WINDOW, IDS_NEW_WINDOW);
-#if defined(OS_CHROMEOS)
-  if (!CommandLine::ForCurrentProcess()->HasSwitch(switches::kGuestSession))
-    AddItemWithStringId(IDC_NEW_INCOGNITO_WINDOW, IDS_NEW_INCOGNITO_WINDOW);
-#else
-  AddItemWithStringId(IDC_NEW_INCOGNITO_WINDOW, IDS_NEW_INCOGNITO_WINDOW);
-#endif
-
-#endif  // else of defined(OS_WIN)
 
   bookmark_sub_menu_model_.reset(new BookmarkSubMenuModel(this, browser_));
   AddSubMenuWithStringId(IDC_BOOKMARKS_MENU, IDS_BOOKMARKS_MENU,
                          bookmark_sub_menu_model_.get());
 
-  if (chrome::search::IsInstantExtendedAPIEnabled()) {
+  if (chrome::IsInstantExtendedAPIEnabled()) {
     recent_tabs_sub_menu_model_.reset(new RecentTabsSubMenuModel(provider_,
                                                                  browser_,
                                                                  NULL));
@@ -579,36 +601,26 @@ void WrenchMenuModel::Build(bool is_new_menu, bool supports_new_separators) {
 
 #if defined(OS_CHROMEOS)
   if (CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kEnableRequestTabletSite))
+          chromeos::switches::kEnableRequestTabletSite))
     AddCheckItemWithStringId(IDC_TOGGLE_REQUEST_TABLET_SITE,
                              IDS_TOGGLE_REQUEST_TABLET_SITE);
 #endif
 
-// On ChromeOS-Touch, we don't want the about/background pages menu options.
+// On ChromeOS-Touch, we don't want the about menu option.
 #if defined(OS_CHROMEOS)
   if (!is_new_menu)
 #endif
   {
     AddItem(IDC_ABOUT, l10n_util::GetStringUTF16(IDS_ABOUT));
-    // We use the task manager to show background pages.
-    if (chrome::CanOpenTaskManager()) {
-      string16 num_background_pages = base::FormatNumber(
-          TaskManager::GetBackgroundPageCount());
-      AddItem(IDC_VIEW_BACKGROUND_PAGES, l10n_util::GetStringFUTF16(
-          IDS_VIEW_BACKGROUND_PAGES, num_background_pages));
-    }
   }
 
   if (browser_defaults::kShowUpgradeMenuItem)
     AddItem(IDC_UPGRADE_DIALOG, GetUpgradeDialogMenuItemName());
 
-  AddItem(IDC_VIEW_INCOMPATIBILITIES, l10n_util::GetStringUTF16(
-      IDS_VIEW_INCOMPATIBILITIES));
-
 #if defined(OS_WIN)
   SetIcon(GetIndexOfCommandId(IDC_VIEW_INCOMPATIBILITIES),
           ui::ResourceBundle::GetSharedInstance().
-              GetNativeImageNamed(IDR_CONFLICT_MENU));
+              GetNativeImageNamed(IDR_INPUT_ALERT_MENU));
 #endif
 
   if (!is_new_menu) {
@@ -634,29 +646,22 @@ void WrenchMenuModel::Build(bool is_new_menu, bool supports_new_separators) {
                            tools_menu_model_.get());
   }
 
+#if !defined(OS_CHROMEOS)
+  // For Send Feedback Link experiment (crbug.com/169339).
+  if (chrome::UseAlternateSendFeedbackLocation())
+    AddItemWithStringId(IDC_FEEDBACK,
+                        chrome::GetSendFeedbackMenuLabelID());
+#endif
+
   bool show_exit_menu = browser_defaults::kShowExitMenuItem;
 #if defined(OS_WIN) && defined(USE_AURA)
   if (browser_->host_desktop_type() == chrome::HOST_DESKTOP_TYPE_ASH)
     show_exit_menu = false;
 #endif
-  if (show_exit_menu)
-    AddSeparator(ui::NORMAL_SEPARATOR);
 
-#if !defined(OS_CHROMEOS)
-  // For Send Feedback Link experiment (crbug.com/169339).
-  if (chrome::UseAlternateSendFeedbackLocation()) {
-    AddItemWithStringId(IDC_FEEDBACK,
-                        chrome::GetSendFeedbackMenuLabelID());
+  if (show_exit_menu) {
     AddSeparator(ui::NORMAL_SEPARATOR);
-  }
-#endif
-
-  if (show_exit_menu)
     AddItemWithStringId(IDC_EXIT, IDS_EXIT);
-
-  if (is_new_menu && supports_new_separators &&
-      !ui::NativeTheme::IsNewMenuStyleEnabled()) {
-    AddSeparator(ui::SPACING_SEPARATOR);
   }
 }
 
@@ -672,6 +677,21 @@ void WrenchMenuModel::AddGlobalErrorMenuItems() {
        it = errors.begin(); it != errors.end(); ++it) {
     GlobalError* error = *it;
     if (error->HasMenuItem()) {
+      // Don't add a signin error if it's already being displayed elsewhere.
+#if !defined(OS_CHROMEOS)
+      std::vector<GlobalError*> errors =
+          signin_ui_util::GetSignedInServiceErrors(
+              browser_->profile()->GetOriginalProfile());
+      if (std::find(errors.begin(), errors.end(), error) != errors.end()) {
+        MenuModel* model = this;
+        int index = 0;
+        if (MenuModel::GetModelAndIndexForCommandId(
+                IDC_SHOW_SIGNIN, &model, &index)) {
+          continue;
+        }
+      }
+#endif
+
       AddItem(error->MenuItemCommandID(), error->MenuItemLabel());
       int icon_id = error->MenuItemIconResourceID();
       if (icon_id) {

@@ -10,10 +10,10 @@
 #include "base/compiler_specific.h"
 #include "base/debug/alias.h"
 #include "base/lazy_instance.h"
-#include "base/stringprintf.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_tokenizer.h"
+#include "base/strings/stringprintf.h"
 #include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
 #include "chrome/browser/metrics/metrics_service.h"
@@ -63,10 +63,6 @@ NOINLINE void ThreadUnresponsive_DB() {
   NullPointerCrash(__LINE__);
 }
 
-NOINLINE void ThreadUnresponsive_WEBKIT() {
-  NullPointerCrash(__LINE__);
-}
-
 NOINLINE void ThreadUnresponsive_FILE() {
   NullPointerCrash(__LINE__);
 }
@@ -98,8 +94,6 @@ void CrashBecauseThreadWasUnresponsive(BrowserThread::ID thread_id) {
       return ThreadUnresponsive_UI();
     case BrowserThread::DB:
       return ThreadUnresponsive_DB();
-    case BrowserThread::WEBKIT_DEPRECATED:
-      return ThreadUnresponsive_WEBKIT();
     case BrowserThread::FILE:
       return ThreadUnresponsive_FILE();
     case BrowserThread::FILE_USER_BLOCKING:
@@ -143,7 +137,7 @@ ThreadWatcher::ThreadWatcher(const WatchingParams& params)
       unresponsive_threshold_(params.unresponsive_threshold),
       crash_on_hang_(params.crash_on_hang),
       live_threads_threshold_(params.live_threads_threshold),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_ptr_factory_(this)) {
+      weak_ptr_factory_(this) {
   DCHECK(WatchDogThread::CurrentlyOnWatchDogThread());
   Initialize();
 }
@@ -184,7 +178,7 @@ void ThreadWatcher::ActivateThreadWatching() {
   active_ = true;
   ping_count_ = unresponsive_threshold_;
   ResetHangCounters();
-  MessageLoop::current()->PostTask(
+  base::MessageLoop::current()->PostTask(
       FROM_HERE,
       base::Bind(&ThreadWatcher::PostPingMessage,
                  weak_ptr_factory_.GetWeakPtr()));
@@ -240,7 +234,7 @@ void ThreadWatcher::PostPingMessage() {
           base::Bind(&ThreadWatcher::OnPingMessage, thread_id_,
                      callback))) {
       // Post a task to check the responsiveness of watched thread.
-      MessageLoop::current()->PostDelayedTask(
+      base::MessageLoop::current()->PostDelayedTask(
           FROM_HERE,
           base::Bind(&ThreadWatcher::OnCheckResponsiveness,
                      weak_ptr_factory_.GetWeakPtr(), ping_sequence_number_),
@@ -276,7 +270,7 @@ void ThreadWatcher::OnPongMessage(uint64 ping_sequence_number) {
   if (!active_ || --ping_count_ <= 0)
     return;
 
-  MessageLoop::current()->PostDelayedTask(
+  base::MessageLoop::current()->PostDelayedTask(
       FROM_HERE,
       base::Bind(&ThreadWatcher::PostPingMessage,
                  weak_ptr_factory_.GetWeakPtr()),
@@ -305,7 +299,7 @@ void ThreadWatcher::OnCheckResponsiveness(uint64 ping_sequence_number) {
   GotNoResponse();
 
   // Post a task to check the responsiveness of watched thread.
-  MessageLoop::current()->PostDelayedTask(
+  base::MessageLoop::current()->PostDelayedTask(
       FROM_HERE,
       base::Bind(&ThreadWatcher::OnCheckResponsiveness,
                  weak_ptr_factory_.GetWeakPtr(), ping_sequence_number_),
@@ -419,7 +413,7 @@ const int ThreadWatcherList::kUnresponsiveSeconds = 2;
 // static
 const int ThreadWatcherList::kUnresponsiveCount = 9;
 // static
-const int ThreadWatcherList::kLiveThreadsThreshold = 3;
+const int ThreadWatcherList::kLiveThreadsThreshold = 2;
 
 ThreadWatcherList::CrashDataThresholds::CrashDataThresholds(
     uint32 live_threads_threshold,
@@ -575,7 +569,7 @@ void ThreadWatcherList::ParseCommandLine(
   scoped_refptr<base::FieldTrial> field_trial(
       base::FieldTrialList::FactoryGetFieldTrial(
           "ThreadWatcher", 100, "default_hung_threads",
-          2013, 10, 30, NULL));
+          2013, 10, 30, base::FieldTrial::SESSION_RANDOMIZED, NULL));
   int hung_thread_group = field_trial->AppendGroup("hung_thread", 100);
   if (field_trial->group() == hung_thread_group) {
     for (CrashOnHangThreadMap::iterator it = crash_on_hang_threads->begin();
@@ -648,9 +642,6 @@ void ThreadWatcherList::InitializeAndStartWatching(
   StartWatching(BrowserThread::DB, "DB", kSleepTime, kUnresponsiveTime,
                 unresponsive_threshold, crash_on_hang_threads);
   StartWatching(BrowserThread::FILE, "FILE", kSleepTime, kUnresponsiveTime,
-                unresponsive_threshold, crash_on_hang_threads);
-  StartWatching(BrowserThread::FILE_USER_BLOCKING, "FILE_USER_BLOCKING",
-                kSleepTime, kUnresponsiveTime,
                 unresponsive_threshold, crash_on_hang_threads);
   StartWatching(BrowserThread::CACHE, "CACHE", kSleepTime, kUnresponsiveTime,
                 unresponsive_threshold, crash_on_hang_threads);
@@ -790,7 +781,7 @@ WatchDogThread::~WatchDogThread() {
 bool WatchDogThread::CurrentlyOnWatchDogThread() {
   base::AutoLock lock(g_watchdog_lock.Get());
   return g_watchdog_thread &&
-    g_watchdog_thread->message_loop() == MessageLoop::current();
+      g_watchdog_thread->message_loop() == base::MessageLoop::current();
 }
 
 // static
@@ -814,7 +805,7 @@ bool WatchDogThread::PostTaskHelper(
   {
     base::AutoLock lock(g_watchdog_lock.Get());
 
-    MessageLoop* message_loop = g_watchdog_thread ?
+    base::MessageLoop* message_loop = g_watchdog_thread ?
         g_watchdog_thread->message_loop() : NULL;
     if (message_loop) {
       message_loop->PostDelayedTask(from_here, task, delay);
@@ -936,7 +927,7 @@ void StartupTimeBomb::DeleteStartupWatchdog() {
     startup_watchdog_ = NULL;
     return;
   }
-  MessageLoop::current()->PostDelayedTask(
+  base::MessageLoop::current()->PostDelayedTask(
       FROM_HERE,
       base::Bind(&StartupTimeBomb::DeleteStartupWatchdog,
                  base::Unretained(this)),

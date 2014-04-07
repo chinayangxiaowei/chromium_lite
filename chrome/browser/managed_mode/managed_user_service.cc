@@ -4,26 +4,88 @@
 
 #include "chrome/browser/managed_mode/managed_user_service.h"
 
+#include "base/command_line.h"
 #include "base/memory/ref_counted.h"
+#include "base/metrics/field_trial.h"
 #include "base/prefs/pref_service.h"
 #include "base/sequenced_task_runner.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_system.h"
-#include "chrome/browser/managed_mode/managed_mode_navigation_observer.h"
+#include "chrome/browser/managed_mode/custodian_profile_downloader_service.h"
+#include "chrome/browser/managed_mode/custodian_profile_downloader_service_factory.h"
 #include "chrome/browser/managed_mode/managed_mode_site_list.h"
+#include "chrome/browser/managed_mode/managed_user_registration_utility.h"
+#include "chrome/browser/managed_mode/managed_user_sync_service.h"
+#include "chrome/browser/managed_mode/managed_user_sync_service_factory.h"
+#include "chrome/browser/policy/managed_mode_policy_provider.h"
+#include "chrome/browser/policy/profile_policy_connector.h"
+#include "chrome/browser/policy/profile_policy_connector_factory.h"
 #include "chrome/browser/prefs/scoped_user_pref_update.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/signin/signin_manager.h"
+#include "chrome/browser/signin/signin_manager_base.h"
+#include "chrome/browser/signin/signin_manager_factory.h"
+#include "chrome/browser/signin/token_service.h"
+#include "chrome/browser/signin/token_service_factory.h"
+#include "chrome/browser/sync/glue/session_model_associator.h"
+#include "chrome/browser/sync/profile_sync_service.h"
+#include "chrome/browser/sync/profile_sync_service_factory.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/common/chrome_notification_types.h"
+#include "chrome/common/chrome_switches.h"
+#include "chrome/common/extensions/api/managed_mode_private/managed_mode_handler.h"
 #include "chrome/common/extensions/extension_set.h"
 #include "chrome/common/pref_names.h"
 #include "components/user_prefs/pref_registry_syncable.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/notification_details.h"
+#include "content/public/browser/notification_source.h"
+#include "google_apis/gaia/gaia_constants.h"
+#include "google_apis/gaia/google_service_auth_error.h"
 #include "grit/generated_resources.h"
+#include "net/base/escape.h"
+#include "policy/policy_constants.h"
 #include "ui/base/l10n/l10n_util.h"
 
+#if defined(OS_CHROMEOS)
+#include "chrome/browser/chromeos/login/user_manager.h"
+#endif
+
+using base::DictionaryValue;
+using base::Value;
 using content::BrowserThread;
+using policy::ManagedModePolicyProvider;
+
+namespace {
+
+const char kManagedModeFinchActive[] = "Active";
+const char kManagedModeFinchName[] = "ManagedModeLaunch";
+const char kManagedUserAccessRequestKeyPrefix[] =
+    "X-ManagedUser-AccessRequests";
+const char kManagedUserAccessRequestTime[] = "timestamp";
+const char kManagedUserPseudoEmail[] = "managed_user@localhost";
+const char kOpenManagedProfileKeyPrefix[] = "X-ManagedUser-Events-OpenProfile";
+const char kQuitBrowserKeyPrefix[] = "X-ManagedUser-Events-QuitBrowser";
+const char kSwitchFromManagedProfileKeyPrefix[] =
+    "X-ManagedUser-Events-SwitchProfile";
+const char kEventTimestamp[] = "timestamp";
+
+std::string CanonicalizeHostname(const std::string& hostname) {
+  std::string canonicalized;
+  url_canon::StdStringCanonOutput output(&canonicalized);
+  url_parse::Component in_comp(0, hostname.length());
+  url_parse::Component out_comp;
+
+  url_canon::CanonicalizeHost(hostname.c_str(), in_comp, &output, &out_comp);
+  output.Complete();
+  return canonicalized;
+}
+
+}  // namespace
 
 ManagedUserService::URLFilterContext::URLFilterContext()
     : ui_url_filter_(new ManagedModeURLFilter),
@@ -89,81 +151,66 @@ void ManagedUserService::URLFilterContext::SetManualURLs(
 }
 
 ManagedUserService::ManagedUserService(Profile* profile)
-    : profile_(profile),
-      is_elevated_(false) {
+    : weak_ptr_factory_(this),
+      profile_(profile),
+      waiting_for_sync_initialization_(false),
+      is_profile_active_(false),
+      elevated_for_testing_(false),
+      did_shutdown_(false) {
 }
 
 ManagedUserService::~ManagedUserService() {
+  DCHECK(did_shutdown_);
+}
+
+void ManagedUserService::Shutdown() {
+  did_shutdown_ = true;
+  if (ProfileIsManaged()) {
+    RecordProfileAndBrowserEventsHelper(kQuitBrowserKeyPrefix);
+    BrowserList::RemoveObserver(this);
+  }
+
+  if (!waiting_for_sync_initialization_)
+    return;
+
+  ProfileSyncService* sync_service =
+        ProfileSyncServiceFactory::GetForProfile(profile_);
+  sync_service->RemoveObserver(this);
 }
 
 bool ManagedUserService::ProfileIsManaged() const {
-  return profile_->GetPrefs()->GetBoolean(prefs::kProfileIsManaged);
-}
-
-bool ManagedUserService::IsElevated() const {
-  return is_elevated_;
-}
-
-bool ManagedUserService::IsElevatedForWebContents(
-    const content::WebContents* web_contents) const {
-  const ManagedModeNavigationObserver* observer =
-      ManagedModeNavigationObserver::FromWebContents(web_contents);
-  return observer->is_elevated();
-}
-
-bool ManagedUserService::IsPassphraseEmpty() const {
-  PrefService* pref_service = profile_->GetPrefs();
-  return pref_service->GetString(prefs::kManagedModeLocalPassphrase).empty();
-}
-
-bool ManagedUserService::CanSkipPassphraseDialog() {
-  // If the profile is already elevated or there is no passphrase set, no
-  // authentication is needed.
-  return IsElevated() || IsPassphraseEmpty();
-}
-
-bool ManagedUserService::CanSkipPassphraseDialog(
-    const content::WebContents* web_contents) const {
-  return IsElevated() ||
-      IsElevatedForWebContents(web_contents) ||
-      IsPassphraseEmpty();
-}
-
-void ManagedUserService::RequestAuthorization(
-    content::WebContents* web_contents,
-    const PassphraseCheckedCallback& callback) {
-  if (CanSkipPassphraseDialog(web_contents)) {
-    callback.Run(true);
-    return;
-  }
-
-  // Is deleted automatically when the dialog is closed.
-  new ManagedUserPassphraseDialog(web_contents, callback);
-}
-
-void ManagedUserService::RequestAuthorizationUsingActiveWebContents(
-    Browser* browser,
-    const PassphraseCheckedCallback& callback) {
-  RequestAuthorization(
-      browser->tab_strip_model()->GetActiveWebContents(),
-      callback);
+  return profile_->IsManaged();
 }
 
 // static
-void ManagedUserService::RegisterUserPrefs(PrefRegistrySyncable* registry) {
-  registry->RegisterDictionaryPref(prefs::kManagedModeManualHosts,
-                                   PrefRegistrySyncable::UNSYNCABLE_PREF);
-  registry->RegisterDictionaryPref(prefs::kManagedModeManualURLs,
-                                   PrefRegistrySyncable::UNSYNCABLE_PREF);
-  registry->RegisterIntegerPref(prefs::kDefaultManagedModeFilteringBehavior,
-                                ManagedModeURLFilter::BLOCK,
-                                PrefRegistrySyncable::UNSYNCABLE_PREF);
-  registry->RegisterStringPref(prefs::kManagedModeLocalPassphrase,
-                               "",
-                               PrefRegistrySyncable::UNSYNCABLE_PREF);
-  registry->RegisterStringPref(prefs::kManagedModeLocalSalt,
-                               "",
-                               PrefRegistrySyncable::UNSYNCABLE_PREF);
+void ManagedUserService::RegisterProfilePrefs(
+    user_prefs::PrefRegistrySyncable* registry) {
+  registry->RegisterDictionaryPref(
+      prefs::kManagedModeManualHosts,
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
+  registry->RegisterDictionaryPref(
+      prefs::kManagedModeManualURLs,
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
+  registry->RegisterIntegerPref(
+      prefs::kDefaultManagedModeFilteringBehavior, ManagedModeURLFilter::ALLOW,
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
+  registry->RegisterStringPref(
+      prefs::kManagedUserCustodianEmail, std::string(),
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
+  registry->RegisterStringPref(
+      prefs::kManagedUserCustodianName, std::string(),
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
+  registry->RegisterBooleanPref(prefs::kManagedUserCreationAllowed, true,
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
+}
+
+// static
+bool ManagedUserService::AreManagedUsersEnabled() {
+  // Allow enabling by command line for now for easier development.
+  return base::FieldTrialList::FindFullName(kManagedModeFinchName) ==
+             kManagedModeFinchActive ||
+         CommandLine::ForCurrentProcess()->HasSwitch(
+             switches::kEnableManagedUsers);
 }
 
 scoped_refptr<const ManagedModeURLFilter>
@@ -192,7 +239,48 @@ int ManagedUserService::GetCategory(const GURL& url) {
 // static
 void ManagedUserService::GetCategoryNames(CategoryList* list) {
   ManagedModeSiteList::GetCategoryNames(list);
-};
+}
+
+std::string ManagedUserService::GetCustodianEmailAddress() const {
+#if defined(OS_CHROMEOS)
+  return chromeos::UserManager::Get()->
+      GetManagerDisplayEmailForManagedUser(
+          chromeos::UserManager::Get()->GetActiveUser()->email());
+#else
+  return profile_->GetPrefs()->GetString(prefs::kManagedUserCustodianEmail);
+#endif
+}
+
+std::string ManagedUserService::GetCustodianName() const {
+#if defined(OS_CHROMEOS)
+  return UTF16ToUTF8(chromeos::UserManager::Get()->
+      GetManagerDisplayNameForManagedUser(
+          chromeos::UserManager::Get()->GetActiveUser()->email()));
+#else
+  std::string name = profile_->GetPrefs()->GetString(
+      prefs::kManagedUserCustodianName);
+  return name.empty() ? GetCustodianEmailAddress() : name;
+#endif
+}
+
+void ManagedUserService::AddNavigationBlockedCallback(
+    const NavigationBlockedCallback& callback) {
+  navigation_blocked_callbacks_.push_back(callback);
+}
+
+void ManagedUserService::DidBlockNavigation(
+    content::WebContents* web_contents) {
+  for (std::vector<NavigationBlockedCallback>::iterator it =
+           navigation_blocked_callbacks_.begin();
+       it != navigation_blocked_callbacks_.end(); ++it) {
+    it->Run(web_contents);
+  }
+}
+
+void ManagedUserService::AddInitCallback(
+    const base::Closure& callback) {
+  init_callbacks_.push_back(callback);
+}
 
 std::string ManagedUserService::GetDebugPolicyProviderName() const {
   // Save the string space in official builds.
@@ -207,9 +295,7 @@ std::string ManagedUserService::GetDebugPolicyProviderName() const {
 bool ManagedUserService::UserMayLoad(const extensions::Extension* extension,
                                      string16* error) const {
   string16 tmp_error;
-  // |extension| can be NULL in unit tests.
-  if (ExtensionManagementPolicyImpl(extension ? extension->id() : "",
-                                    &tmp_error))
+  if (ExtensionManagementPolicyImpl(extension, &tmp_error))
     return true;
 
   // If the extension is already loaded, we allow it, otherwise we'd unload
@@ -248,8 +334,22 @@ bool ManagedUserService::UserMayLoad(const extensions::Extension* extension,
 bool ManagedUserService::UserMayModifySettings(
     const extensions::Extension* extension,
     string16* error) const {
-  // |extension| can be NULL in unit tests.
-  return ExtensionManagementPolicyImpl(extension ? extension->id() : "", error);
+  return ExtensionManagementPolicyImpl(extension, error);
+}
+
+void ManagedUserService::OnStateChanged() {
+  ProfileSyncService* service =
+      ProfileSyncServiceFactory::GetForProfile(profile_);
+  if (waiting_for_sync_initialization_ && service->sync_initialized()) {
+    waiting_for_sync_initialization_ = false;
+    service->RemoveObserver(this);
+    SetupSync();
+    return;
+  }
+
+  DLOG_IF(ERROR, service->GetAuthError().state() ==
+                     GoogleServiceAuthError::INVALID_GAIA_CREDENTIALS)
+      << "Credentials rejected";
 }
 
 void ManagedUserService::Observe(int type,
@@ -259,17 +359,19 @@ void ManagedUserService::Observe(int type,
     case chrome::NOTIFICATION_EXTENSION_LOADED: {
       const extensions::Extension* extension =
           content::Details<extensions::Extension>(details).ptr();
-      if (!extension->GetContentPackSiteList().empty())
+      if (!extensions::ManagedModeInfo::GetContentPackSiteList(
+              extension).empty()) {
         UpdateSiteLists();
-
+      }
       break;
     }
     case chrome::NOTIFICATION_EXTENSION_UNLOADED: {
       const extensions::UnloadedExtensionInfo* extension_info =
           content::Details<extensions::UnloadedExtensionInfo>(details).ptr();
-      if (!extension_info->extension->GetContentPackSiteList().empty())
+      if (!extensions::ManagedModeInfo::GetContentPackSiteList(
+              extension_info->extension).empty()) {
         UpdateSiteLists();
-
+      }
       break;
     }
     default:
@@ -277,20 +379,33 @@ void ManagedUserService::Observe(int type,
   }
 }
 
+void ManagedUserService::SetupSync() {
+  ProfileSyncService* service =
+      ProfileSyncServiceFactory::GetForProfile(profile_);
+  DCHECK(service->sync_initialized());
+
+  bool sync_everything = false;
+  syncer::ModelTypeSet synced_datatypes;
+  synced_datatypes.Put(syncer::MANAGED_USER_SETTINGS);
+  service->OnUserChoseDatatypes(sync_everything, synced_datatypes);
+
+  // Notify ProfileSyncService that we are done with configuration.
+  service->SetSetupInProgress(false);
+  service->SetSyncSetupCompleted();
+}
+
 bool ManagedUserService::ExtensionManagementPolicyImpl(
-    const std::string& extension_id,
+    const extensions::Extension* extension,
     string16* error) const {
-  if (!ProfileIsManaged())
+  // |extension| can be NULL in unit_tests.
+  if (!ProfileIsManaged() || (extension && extension->is_theme()))
     return true;
 
-  if (is_elevated_)
-    return true;
-
-  if (elevated_for_extensions_.count(extension_id))
+  if (elevated_for_testing_)
     return true;
 
   if (error)
-    *error = l10n_util::GetStringUTF16(IDS_EXTENSIONS_LOCKED_MANAGED_MODE);
+    *error = l10n_util::GetStringUTF16(IDS_EXTENSIONS_LOCKED_MANAGED_USER);
   return false;
 }
 
@@ -305,17 +420,23 @@ ScopedVector<ManagedModeSiteList> ManagedUserService::GetActiveSiteLists() {
   const ExtensionSet* extensions = extension_service->extensions();
   for (ExtensionSet::const_iterator it = extensions->begin();
        it != extensions->end(); ++it) {
-    const extensions::Extension* extension = *it;
+    const extensions::Extension* extension = it->get();
     if (!extension_service->IsExtensionEnabled(extension->id()))
       continue;
 
     extensions::ExtensionResource site_list =
-        extension->GetContentPackSiteList();
+        extensions::ManagedModeInfo::GetContentPackSiteList(extension);
     if (!site_list.empty())
       site_lists.push_back(new ManagedModeSiteList(extension->id(), site_list));
   }
 
   return site_lists.Pass();
+}
+
+ManagedModePolicyProvider* ManagedUserService::GetPolicyProvider() {
+  policy::ProfilePolicyConnector* connector =
+      policy::ProfilePolicyConnectorFactory::GetForProfile(profile_);
+  return connector->managed_mode_policy_provider();
 }
 
 void ManagedUserService::OnDefaultFilteringBehaviorChanged() {
@@ -332,6 +453,35 @@ void ManagedUserService::UpdateSiteLists() {
   url_filter_context_.LoadWhitelists(GetActiveSiteLists());
 }
 
+bool ManagedUserService::AccessRequestsEnabled() {
+  ProfileSyncService* service =
+      ProfileSyncServiceFactory::GetForProfile(profile_);
+  GoogleServiceAuthError::State state = service->GetAuthError().state();
+  // We allow requesting access if Sync is working or has a transient error.
+  return (state == GoogleServiceAuthError::NONE ||
+          state == GoogleServiceAuthError::CONNECTION_FAILED ||
+          state == GoogleServiceAuthError::SERVICE_UNAVAILABLE);
+}
+
+void ManagedUserService::AddAccessRequest(const GURL& url) {
+  // Normalize the URL.
+  GURL normalized_url = ManagedModeURLFilter::Normalize(url);
+
+  // Escape the URL.
+  std::string output(net::EscapeQueryParamValue(normalized_url.spec(), true));
+
+  // Add the prefix.
+  std::string key = ManagedModePolicyProvider::MakeSplitSettingKey(
+      kManagedUserAccessRequestKeyPrefix, output);
+
+  scoped_ptr<DictionaryValue> dict(new DictionaryValue);
+
+  // TODO(sergiu): Use sane time here when it's ready.
+  dict->SetDouble(kManagedUserAccessRequestTime, base::Time::Now().ToJsTime());
+
+  GetPolicyProvider()->UploadItem(key, dict.PassAs<Value>());
+}
+
 ManagedUserService::ManualBehavior ManagedUserService::GetManualBehaviorForHost(
     const std::string& hostname) {
   const DictionaryValue* dict =
@@ -341,23 +491,6 @@ ManagedUserService::ManualBehavior ManagedUserService::GetManualBehaviorForHost(
     return MANUAL_NONE;
 
   return allow ? MANUAL_ALLOW : MANUAL_BLOCK;
-}
-
-void ManagedUserService::SetManualBehaviorForHosts(
-    const std::vector<std::string>& hostnames,
-    ManualBehavior behavior) {
-  DictionaryPrefUpdate update(profile_->GetPrefs(),
-                              prefs::kManagedModeManualHosts);
-  DictionaryValue* dict = update.Get();
-  for (std::vector<std::string>::const_iterator it = hostnames.begin();
-       it != hostnames.end(); ++it) {
-    if (behavior == MANUAL_NONE)
-      dict->RemoveWithoutPathExpansion(*it, NULL);
-    else
-      dict->SetBooleanWithoutPathExpansion(*it, behavior == MANUAL_ALLOW);
-  }
-
-  UpdateManualHosts();
 }
 
 ManagedUserService::ManualBehavior ManagedUserService::GetManualBehaviorForURL(
@@ -372,45 +505,67 @@ ManagedUserService::ManualBehavior ManagedUserService::GetManualBehaviorForURL(
   return allow ? MANUAL_ALLOW : MANUAL_BLOCK;
 }
 
-void ManagedUserService::SetManualBehaviorForURLs(const std::vector<GURL>& urls,
-                                                  ManualBehavior behavior) {
-  DictionaryPrefUpdate update(profile_->GetPrefs(),
-                              prefs::kManagedModeManualURLs);
-  DictionaryValue* dict = update.Get();
-
-  for (std::vector<GURL>::const_iterator it = urls.begin(); it != urls.end();
-       ++it) {
-    GURL url = ManagedModeURLFilter::Normalize(*it);
-    if (behavior == MANUAL_NONE) {
-      dict->RemoveWithoutPathExpansion(url.spec(), NULL);
-    } else {
-      dict->SetBooleanWithoutPathExpansion(url.spec(),
-                                           behavior == MANUAL_ALLOW);
-    }
+void ManagedUserService::GetManualExceptionsForHost(const std::string& host,
+                                                    std::vector<GURL>* urls) {
+  const DictionaryValue* dict =
+      profile_->GetPrefs()->GetDictionary(prefs::kManagedModeManualURLs);
+  for (DictionaryValue::Iterator it(*dict); !it.IsAtEnd(); it.Advance()) {
+    GURL url(it.key());
+    if (url.host() == host)
+      urls->push_back(url);
   }
-
-  UpdateManualURLs();
 }
 
-// TODO(akuegel): Rename to SetElevatedForTesting when all callers are changed
-// to set elevation on the ManagedModeNavigationObserver.
-void ManagedUserService::SetElevated(bool is_elevated) {
-  is_elevated_ = is_elevated;
+void ManagedUserService::InitForTesting() {
+  DCHECK(!profile_->GetPrefs()->GetBoolean(prefs::kProfileIsManaged));
+  profile_->GetPrefs()->SetBoolean(prefs::kProfileIsManaged, true);
+  Init();
 }
 
-void ManagedUserService::AddElevationForExtension(
-    const std::string& extension_id) {
-  elevated_for_extensions_.insert(extension_id);
+void ManagedUserService::InitSync(const std::string& refresh_token) {
+  ProfileSyncService* service =
+      ProfileSyncServiceFactory::GetForProfile(profile_);
+  // Tell the sync service that setup is in progress so we don't start syncing
+  // until we've finished configuration.
+  service->SetSetupInProgress(true);
+
+  TokenService* token_service = TokenServiceFactory::GetForProfile(profile_);
+  token_service->UpdateCredentialsWithOAuth2(
+      GaiaAuthConsumer::ClientOAuthResult(refresh_token, std::string(), 0));
+
+  // Continue in SetupSync() once the Sync backend has been initialized.
+  if (service->sync_initialized()) {
+    SetupSync();
+  } else {
+    ProfileSyncServiceFactory::GetForProfile(profile_)->AddObserver(this);
+    waiting_for_sync_initialization_ = true;
+  }
 }
 
-void ManagedUserService::RemoveElevationForExtension(
-    const std::string& extension_id) {
-  elevated_for_extensions_.erase(extension_id);
+// static
+const char* ManagedUserService::GetManagedUserPseudoEmail() {
+  return kManagedUserPseudoEmail;
 }
 
 void ManagedUserService::Init() {
-  if (!ProfileIsManaged())
+  ManagedModePolicyProvider* policy_provider = GetPolicyProvider();
+  if (!ProfileIsManaged()) {
+    if (policy_provider)
+      policy_provider->Clear();
+
     return;
+  }
+
+  CommandLine* command_line = CommandLine::ForCurrentProcess();
+  if (command_line->HasSwitch(switches::kManagedUserSyncToken)) {
+    InitSync(
+        command_line->GetSwitchValueASCII(switches::kManagedUserSyncToken));
+  }
+
+  // TokenService only loads tokens automatically if we're signed in, so we have
+  // to nudge it ourselves.
+  TokenService* token_service = TokenServiceFactory::GetForProfile(profile_);
+  token_service->LoadTokensFromDB();
 
   extensions::ExtensionSystem* extension_system =
       extensions::ExtensionSystem::Get(profile_);
@@ -423,24 +578,91 @@ void ManagedUserService::Init() {
                  content::Source<Profile>(profile_));
   registrar_.Add(this, chrome::NOTIFICATION_EXTENSION_UNLOADED,
                  content::Source<Profile>(profile_));
+
   pref_change_registrar_.Init(profile_->GetPrefs());
   pref_change_registrar_.Add(
       prefs::kDefaultManagedModeFilteringBehavior,
-      base::Bind(
-          &ManagedUserService::OnDefaultFilteringBehaviorChanged,
+      base::Bind(&ManagedUserService::OnDefaultFilteringBehaviorChanged,
           base::Unretained(this)));
+  pref_change_registrar_.Add(prefs::kManagedModeManualHosts,
+      base::Bind(&ManagedUserService::UpdateManualHosts,
+                 base::Unretained(this)));
+  pref_change_registrar_.Add(prefs::kManagedModeManualURLs,
+      base::Bind(&ManagedUserService::UpdateManualURLs,
+                 base::Unretained(this)));
 
-  // TODO(bauerb): Setting the default value here does not currently trigger
-  // the proper notification. Once that is fixed use SetDefaultPrefValue
-  // instead.
-  if (!profile_->GetPrefs()->HasPrefPath(prefs::kForceSafeSearch))
-    profile_->GetPrefs()->SetBoolean(prefs::kForceSafeSearch, true);
+  BrowserList::AddObserver(this);
+
+  if (policy_provider)
+    policy_provider->InitLocalPolicies();
 
   // Initialize the filter.
   OnDefaultFilteringBehaviorChanged();
   UpdateSiteLists();
   UpdateManualHosts();
   UpdateManualURLs();
+
+  // Call the callbacks to notify that the ManagedUserService has been
+  // initialized.
+  for (std::vector<base::Closure>::iterator it = init_callbacks_.begin();
+       it != init_callbacks_.end();
+       ++it) {
+    it->Run();
+  }
+}
+
+void ManagedUserService::RegisterAndInitSync(
+    ManagedUserRegistrationUtility* registration_utility,
+    Profile* custodian_profile,
+    const std::string& managed_user_id,
+    const ProfileManager::CreateCallback& callback) {
+  DCHECK(ProfileIsManaged());
+  DCHECK(!custodian_profile->IsManaged());
+
+  string16 name = UTF8ToUTF16(
+      profile_->GetPrefs()->GetString(prefs::kProfileName));
+  ManagedUserRegistrationInfo info(name);
+  registration_utility->Register(
+      managed_user_id,
+      info,
+      base::Bind(&ManagedUserService::OnManagedUserRegistered,
+                 weak_ptr_factory_.GetWeakPtr(), callback, custodian_profile));
+
+  // Fetch the custodian's profile information, to store the name.
+  // TODO(pamg): If --gaia-profile-info (keyword: switches::kGaiaProfileInfo)
+  // is ever enabled, take the name from the ProfileInfoCache instead.
+  CustodianProfileDownloaderService* profile_downloader_service =
+      CustodianProfileDownloaderServiceFactory::GetForProfile(
+          custodian_profile);
+  profile_downloader_service->DownloadProfile(
+      base::Bind(&ManagedUserService::OnCustodianProfileDownloaded,
+                 weak_ptr_factory_.GetWeakPtr()));
+}
+
+void ManagedUserService::OnCustodianProfileDownloaded(
+    const string16& full_name) {
+  profile_->GetPrefs()->SetString(prefs::kManagedUserCustodianName,
+                                  UTF16ToUTF8(full_name));
+}
+
+void ManagedUserService::OnManagedUserRegistered(
+    const ProfileManager::CreateCallback& callback,
+    Profile* custodian_profile,
+    const GoogleServiceAuthError& auth_error,
+    const std::string& token) {
+  if (auth_error.state() != GoogleServiceAuthError::NONE) {
+    LOG(ERROR) << "Managed user OAuth error: " << auth_error.ToString();
+    DCHECK_EQ(std::string(), token);
+    callback.Run(profile_, Profile::CREATE_STATUS_REMOTE_FAIL);
+    return;
+  }
+
+  InitSync(token);
+  SigninManagerBase* signin =
+      SigninManagerFactory::GetForProfile(custodian_profile);
+  profile_->GetPrefs()->SetString(prefs::kManagedUserCustodianEmail,
+                                  signin->GetAuthenticatedUsername());
+  callback.Run(profile_, Profile::CREATE_STATUS_INITIALIZED);
 }
 
 void ManagedUserService::UpdateManualHosts() {
@@ -468,4 +690,30 @@ void ManagedUserService::UpdateManualURLs() {
     (*url_map)[GURL(it.key())] = allow;
   }
   url_filter_context_.SetManualURLs(url_map.Pass());
+}
+
+void ManagedUserService::OnBrowserSetLastActive(Browser* browser) {
+  bool profile_became_active = profile_->IsSameProfile(browser->profile());
+  if (!is_profile_active_ && profile_became_active)
+    RecordProfileAndBrowserEventsHelper(kOpenManagedProfileKeyPrefix);
+  else if (is_profile_active_ && !profile_became_active)
+    RecordProfileAndBrowserEventsHelper(kSwitchFromManagedProfileKeyPrefix);
+
+  is_profile_active_ = profile_became_active;
+}
+
+void ManagedUserService::RecordProfileAndBrowserEventsHelper(
+    const char* key_prefix) {
+  std::string key = ManagedModePolicyProvider::MakeSplitSettingKey(key_prefix,
+      base::Int64ToString(base::TimeTicks::Now().ToInternalValue()));
+
+  scoped_ptr<DictionaryValue> dict(new DictionaryValue);
+
+  // TODO(bauerb): Use sane time when ready.
+  dict->SetDouble(kEventTimestamp, base::Time::Now().ToJsTime());
+
+  ManagedModePolicyProvider* provider = GetPolicyProvider();
+  // It is NULL in tests.
+  if (provider)
+    provider->UploadItem(key, dict.PassAs<Value>());
 }

@@ -11,9 +11,6 @@
 #include "base/values.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/extensions/extension_l10n_util.h"
-#include "chrome/common/extensions/extension_manifest_constants.h"
-#include "chrome/common/extensions/incognito_handler.h"
-#include "chrome/common/extensions/manifest_handler.h"
 #include "ui/base/l10n/l10n_util.h"
 
 using extensions::Extension;
@@ -22,8 +19,8 @@ namespace {
 
 // If filename is a relative path, LoadManifestFile will treat it relative to
 // the appropriate test directory.
-DictionaryValue* LoadManifestFile(
-    const base::FilePath& filename_path, std::string* error) {
+base::DictionaryValue* LoadManifestFile(const base::FilePath& filename_path,
+                                        std::string* error) {
   base::FilePath extension_path;
   base::FilePath manifest_path;
 
@@ -31,12 +28,12 @@ DictionaryValue* LoadManifestFile(
   manifest_path = manifest_path.Append(filename_path);
   extension_path = manifest_path.DirName();
 
-  EXPECT_TRUE(file_util::PathExists(manifest_path)) <<
+  EXPECT_TRUE(base::PathExists(manifest_path)) <<
       "Couldn't find " << manifest_path.value();
 
   JSONFileValueSerializer serializer(manifest_path);
-  DictionaryValue* manifest =
-      static_cast<DictionaryValue*>(serializer.Deserialize(NULL, error));
+  base::DictionaryValue* manifest =
+      static_cast<base::DictionaryValue*>(serializer.Deserialize(NULL, error));
 
   // Most unit tests don't need localization, and they'll fail if we try to
   // localize them, since their manifests don't have a default_locale key.
@@ -58,25 +55,13 @@ ExtensionManifestTest::ExtensionManifestTest()
       // UNKNOWN == trunk.
       current_channel_(chrome::VersionInfo::CHANNEL_UNKNOWN) {}
 
-void ExtensionManifestTest::SetUp() {
-  testing::Test::SetUp();
-  // We need the IncognitoHandler registered for all tests, since
-  // Extension uses it in Extension::CheckPlatformAppFeatures() as part of the
-  // creation process.
-  (new extensions::IncognitoHandler)->Register();
-}
-
-void ExtensionManifestTest::TearDown() {
-  extensions::ManifestHandler::ClearRegistryForTesting();
-}
-
 // Helper class that simplifies creating methods that take either a filename
 // to a manifest or the manifest itself.
 ExtensionManifestTest::Manifest::Manifest(const char* name)
     : name_(name), manifest_(NULL) {
 }
 
-ExtensionManifestTest::Manifest::Manifest(DictionaryValue* manifest,
+ExtensionManifestTest::Manifest::Manifest(base::DictionaryValue* manifest,
                                           const char* name)
     : name_(name), manifest_(manifest) {
   CHECK(manifest_) << "Manifest NULL";
@@ -89,7 +74,7 @@ ExtensionManifestTest::Manifest::Manifest(const Manifest& m) {
 ExtensionManifestTest::Manifest::~Manifest() {
 }
 
-DictionaryValue* ExtensionManifestTest::Manifest::GetManifest(
+base::DictionaryValue* ExtensionManifestTest::Manifest::GetManifest(
     char const* test_data_dir, std::string* error) const {
   if (manifest_)
     return manifest_;
@@ -107,7 +92,7 @@ char const* ExtensionManifestTest::test_data_dir() {
   return "manifest_tests";
 }
 
-scoped_ptr<DictionaryValue> ExtensionManifestTest::LoadManifest(
+scoped_ptr<base::DictionaryValue> ExtensionManifestTest::LoadManifest(
     char const* manifest_name, std::string* error) {
   base::FilePath filename_path;
   filename_path = filename_path.AppendASCII("extensions")
@@ -121,7 +106,7 @@ scoped_refptr<Extension> ExtensionManifestTest::LoadExtension(
     std::string* error,
     extensions::Manifest::Location location,
     int flags) {
-  DictionaryValue* value = manifest.GetManifest(test_data_dir(), error);
+  base::DictionaryValue* value = manifest.GetManifest(test_data_dir(), error);
   if (!value)
     return NULL;
   base::FilePath path;
@@ -137,7 +122,7 @@ scoped_refptr<Extension> ExtensionManifestTest::LoadAndExpectSuccess(
   std::string error;
   scoped_refptr<Extension> extension =
       LoadExtension(manifest, &error, location, flags);
-  EXPECT_TRUE(extension) << manifest.name();
+  EXPECT_TRUE(extension.get()) << manifest.name();
   EXPECT_EQ("", error) << manifest.name();
   return extension;
 }
@@ -157,7 +142,7 @@ scoped_refptr<Extension> ExtensionManifestTest::LoadAndExpectWarning(
   std::string error;
   scoped_refptr<Extension> extension =
       LoadExtension(manifest, &error, location, flags);
-  EXPECT_TRUE(extension) << manifest.name();
+  EXPECT_TRUE(extension.get()) << manifest.name();
   EXPECT_EQ("", error) << manifest.name();
   EXPECT_EQ(1u, extension->install_warnings().size());
   EXPECT_EQ(expected_warning, extension->install_warnings()[0].message);
@@ -232,47 +217,43 @@ ExtensionManifestTest::Testcase::Testcase(std::string manifest_filename,
 
 ExtensionManifestTest::Testcase::Testcase(std::string manifest_filename)
     : manifest_filename_(manifest_filename),
-      expected_error_(""),
       location_(extensions::Manifest::INTERNAL),
-      flags_(Extension::NO_FLAGS) {
-}
+      flags_(Extension::NO_FLAGS) {}
 
 ExtensionManifestTest::Testcase::Testcase(
     std::string manifest_filename,
     extensions::Manifest::Location location,
     int flags)
     : manifest_filename_(manifest_filename),
-      expected_error_(""),
       location_(location),
-      flags_(flags) {
-}
+      flags_(flags) {}
 
 void ExtensionManifestTest::RunTestcases(const Testcase* testcases,
                                          size_t num_testcases,
-                                         EXPECT_TYPE type) {
+                                         ExpectType type) {
+  for (size_t i = 0; i < num_testcases; ++i)
+    RunTestcase(testcases[i], type);
+}
+
+void ExtensionManifestTest::RunTestcase(const Testcase& testcase,
+                                        ExpectType type) {
   switch (type) {
     case EXPECT_TYPE_ERROR:
-      for (size_t i = 0; i < num_testcases; ++i) {
-        LoadAndExpectError(testcases[i].manifest_filename_.c_str(),
-                           testcases[i].expected_error_,
-                           testcases[i].location_,
-                           testcases[i].flags_);
-      }
+      LoadAndExpectError(testcase.manifest_filename_.c_str(),
+                         testcase.expected_error_,
+                         testcase.location_,
+                         testcase.flags_);
       break;
     case EXPECT_TYPE_WARNING:
-      for (size_t i = 0; i < num_testcases; ++i) {
-        LoadAndExpectWarning(testcases[i].manifest_filename_.c_str(),
-                             testcases[i].expected_error_,
-                             testcases[i].location_,
-                             testcases[i].flags_);
-      }
+      LoadAndExpectWarning(testcase.manifest_filename_.c_str(),
+                           testcase.expected_error_,
+                           testcase.location_,
+                           testcase.flags_);
       break;
     case EXPECT_TYPE_SUCCESS:
-      for (size_t i = 0; i < num_testcases; ++i) {
-        LoadAndExpectSuccess(testcases[i].manifest_filename_.c_str(),
-                             testcases[i].location_,
-                             testcases[i].flags_);
-      }
+      LoadAndExpectSuccess(testcase.manifest_filename_.c_str(),
+                           testcase.location_,
+                           testcase.flags_);
       break;
    }
 }

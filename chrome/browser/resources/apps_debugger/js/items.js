@@ -19,18 +19,23 @@ cr.define('apps_dev_tool', function() {
      * Perform initial setup.
      */
     initialize: function() {
+      cr.ui.decorate('tabbox', cr.ui.TabBox);
+
       // Set up the three buttons (load unpacked, pack and update).
-      $('load-unpacked').addEventListener('click',
-          this.handleLoadUnpackedItem_.bind(this));
-      $('pack-item').addEventListener('click',
-          this.handlePackItem_.bind(this));
-      $('update-items-now').addEventListener('click',
-          this.handleUpdateItemNow_.bind(this));
-      $('permissions-close').addEventListener('click', function() {
-        AppsDevTool.showOverlay(null);
-      });
+      document.querySelector('#apps-tab .load-unpacked').
+          addEventListener('click', this.handleLoadUnpackedItem_.bind(this));
+      document.querySelector('#extensions-tab .load-unpacked').
+          addEventListener('click', this.handleLoadUnpackedItem_.bind(this));
+      document.querySelector('#apps-tab .update-items-now').
+          addEventListener('click', this.handleUpdateItemNow_.bind(this,
+          document.querySelector('#apps-tab .update-items-progress')));
+      document.querySelector('#extensions-tab .update-items-now').
+          addEventListener('click', this.handleUpdateItemNow_.bind(this,
+          document.querySelector('#extensions-tab .update-items-progress')));
       var packItemOverlay =
           apps_dev_tool.PackItemOverlay.getInstance().initializePage();
+
+      preventDefaultOnPoundLinkClicks();  // From webui/js/util.js
     },
 
     /**
@@ -38,27 +43,25 @@ cr.define('apps_dev_tool', function() {
      * @param {!Event} e Click event.
      * @private
      */
-    handleLoadUnpackedItem_: function(e) {
-      chrome.developerPrivate.loadUnpacked(function(success) {
-        apps_dev_tool.ItemsList.loadItemsInfo();
-      });
-    },
-
-    /** Handles the Pack Extension button.
-     * @param {Event} e Change event.
-     * @private
-     */
-    handlePackItem_: function(e) {
-      AppsDevTool.showOverlay($('packItemOverlay'));
+   handleLoadUnpackedItem_: function(e) {
+      chrome.developerPrivate.loadUnpacked();
     },
 
     /**
      * Handles the Update Extension Now Button.
+     * @param {!Element} tabNode Element containing the progress label.
      * @param {!Event} e Click event.
      * @private
      */
-    handleUpdateItemNow_: function(e) {
-      chrome.developerPrivate.autoUpdate(function(response) {});
+    handleUpdateItemNow_: function(progressLabelNode, e) {
+      progressLabelNode.classList.add('updating');
+      chrome.developerPrivate.autoUpdate(function(response) {
+        // autoUpdate() will run too fast. We wait for 2 sec
+        // before hiding the label so that the user can see it.
+        setTimeout(function() {
+          progressLabelNode.classList.remove('updating');
+        }, 2000);
+      });
     },
   };
 

@@ -2,7 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/ui/panels/base_panel_browser_test.h"
 #include "chrome/browser/ui/panels/detached_panel_collection.h"
 #include "chrome/browser/ui/panels/docked_panel_collection.h"
@@ -12,7 +13,6 @@
 #include "chrome/browser/ui/panels/panel_manager.h"
 #include "chrome/browser/ui/panels/stacked_panel_collection.h"
 #include "chrome/browser/ui/panels/test_panel_collection_squeeze_observer.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/test/test_utils.h"
 
@@ -820,47 +820,37 @@ IN_PROC_BROWSER_TEST_F(PanelDragBrowserTest, MAYBE_DragOneDetachedPanel) {
   PanelManager::GetInstance()->CloseAll();
 }
 
-IN_PROC_BROWSER_TEST_F(PanelDragBrowserTest,
-                       DISABLED_CloseDetachedPanelOnDrag) {
+IN_PROC_BROWSER_TEST_F(PanelDragBrowserTest, CloseDetachedPanelOnDrag) {
   PanelManager* panel_manager = PanelManager::GetInstance();
   PanelDragController* drag_controller = panel_manager->drag_controller();
   DetachedPanelCollection* detached_collection =
       panel_manager->detached_collection();
 
-  // Create 4 detached panels.
+  // Create 1 detached panel.
   Panel* panel1 = CreateDetachedPanel("1", gfx::Rect(100, 200, 100, 100));
-  Panel* panel2 = CreateDetachedPanel("2", gfx::Rect(200, 210, 110, 110));
-  Panel* panel3 = CreateDetachedPanel("3", gfx::Rect(300, 220, 120, 120));
-  Panel* panel4 = CreateDetachedPanel("4", gfx::Rect(400, 230, 130, 130));
-  ASSERT_EQ(4, detached_collection->num_panels());
+  ASSERT_EQ(1, detached_collection->num_panels());
 
   scoped_ptr<NativePanelTesting> panel1_testing(
       CreateNativePanelTesting(panel1));
   gfx::Point panel1_old_position = panel1->GetBounds().origin();
-  gfx::Point panel2_position = panel2->GetBounds().origin();
-  gfx::Point panel3_position = panel3->GetBounds().origin();
-  gfx::Point panel4_position = panel4->GetBounds().origin();
 
   // Test the scenario: drag a panel, close another panel, cancel the drag.
   {
-    gfx::Point panel1_new_position = panel1_old_position;
-    panel1_new_position.Offset(-51, -102);
+    // Create a panel to be closed.
+    Panel* panel2 = CreateDetachedPanel("2", gfx::Rect(300, 210, 110, 110));
 
     // Start dragging a panel.
     panel1_testing->PressLeftMouseButtonTitlebar(panel1->GetBounds().origin());
+    gfx::Point panel1_new_position = panel1_old_position;
+    panel1_new_position.Offset(-51, -102);
     panel1_testing->DragTitlebar(panel1_new_position);
     EXPECT_TRUE(drag_controller->is_dragging());
     EXPECT_EQ(panel1, drag_controller->dragging_panel());
 
-    ASSERT_EQ(4, detached_collection->num_panels());
+    ASSERT_EQ(2, detached_collection->num_panels());
     EXPECT_TRUE(detached_collection->HasPanel(panel1));
     EXPECT_TRUE(detached_collection->HasPanel(panel2));
-    EXPECT_TRUE(detached_collection->HasPanel(panel3));
-    EXPECT_TRUE(detached_collection->HasPanel(panel4));
     EXPECT_EQ(panel1_new_position, panel1->GetBounds().origin());
-    EXPECT_EQ(panel2_position, panel2->GetBounds().origin());
-    EXPECT_EQ(panel3_position, panel3->GetBounds().origin());
-    EXPECT_EQ(panel4_position, panel4->GetBounds().origin());
 
     // Closing another panel while dragging in progress will keep the dragging
     // panel intact.
@@ -868,86 +858,64 @@ IN_PROC_BROWSER_TEST_F(PanelDragBrowserTest,
     EXPECT_TRUE(drag_controller->is_dragging());
     EXPECT_EQ(panel1, drag_controller->dragging_panel());
 
-    ASSERT_EQ(3, detached_collection->num_panels());
+    ASSERT_EQ(1, detached_collection->num_panels());
     EXPECT_TRUE(detached_collection->HasPanel(panel1));
-    EXPECT_TRUE(detached_collection->HasPanel(panel3));
-    EXPECT_TRUE(detached_collection->HasPanel(panel4));
     EXPECT_EQ(panel1_new_position, panel1->GetBounds().origin());
-    EXPECT_EQ(panel3_position, panel3->GetBounds().origin());
-    EXPECT_EQ(panel4_position, panel4->GetBounds().origin());
 
     // Cancel the drag.
     panel1_testing->CancelDragTitlebar();
     WaitForBoundsAnimationFinished(panel1);
     EXPECT_FALSE(drag_controller->is_dragging());
-
-    ASSERT_EQ(3, detached_collection->num_panels());
-    EXPECT_TRUE(detached_collection->HasPanel(panel1));
-    EXPECT_TRUE(detached_collection->HasPanel(panel3));
-    EXPECT_TRUE(detached_collection->HasPanel(panel4));
     EXPECT_EQ(panel1_old_position, panel1->GetBounds().origin());
-    EXPECT_EQ(panel3_position, panel3->GetBounds().origin());
-    EXPECT_EQ(panel4_position, panel4->GetBounds().origin());
   }
 
   // Test the scenario: drag a panel, close another panel, end the drag.
   {
-    gfx::Point panel1_new_position = panel1_old_position;
-    panel1_new_position.Offset(-51, -102);
+    // Create a panel to be closed.
+    Panel* panel2 = CreateDetachedPanel("2", gfx::Rect(300, 210, 110, 110));
 
     // Start dragging a panel.
     panel1_testing->PressLeftMouseButtonTitlebar(panel1->GetBounds().origin());
+    gfx::Point panel1_new_position = panel1_old_position;
+    panel1_new_position.Offset(-51, -102);
     panel1_testing->DragTitlebar(panel1_new_position);
-    EXPECT_TRUE(drag_controller->is_dragging());
-    EXPECT_EQ(panel1, drag_controller->dragging_panel());
-
-    ASSERT_EQ(3, detached_collection->num_panels());
-    EXPECT_TRUE(detached_collection->HasPanel(panel1));
-    EXPECT_TRUE(detached_collection->HasPanel(panel3));
-    EXPECT_TRUE(detached_collection->HasPanel(panel4));
-    EXPECT_EQ(panel1_new_position, panel1->GetBounds().origin());
-    EXPECT_EQ(panel3_position, panel3->GetBounds().origin());
-    EXPECT_EQ(panel4_position, panel4->GetBounds().origin());
-
-    // Closing another panel while dragging in progress will keep the dragging
-    // panel intact.
-    CloseWindowAndWait(panel3);
     EXPECT_TRUE(drag_controller->is_dragging());
     EXPECT_EQ(panel1, drag_controller->dragging_panel());
 
     ASSERT_EQ(2, detached_collection->num_panels());
     EXPECT_TRUE(detached_collection->HasPanel(panel1));
-    EXPECT_TRUE(detached_collection->HasPanel(panel4));
+    EXPECT_TRUE(detached_collection->HasPanel(panel2));
     EXPECT_EQ(panel1_new_position, panel1->GetBounds().origin());
-    EXPECT_EQ(panel4_position, panel4->GetBounds().origin());
+
+    // Closing another panel while dragging in progress will keep the dragging
+    // panel intact.
+    CloseWindowAndWait(panel2);
+    EXPECT_TRUE(drag_controller->is_dragging());
+    EXPECT_EQ(panel1, drag_controller->dragging_panel());
+
+    ASSERT_EQ(1, detached_collection->num_panels());
+    EXPECT_TRUE(detached_collection->HasPanel(panel1));
+    EXPECT_EQ(panel1_new_position, panel1->GetBounds().origin());
 
     // Finish the drag.
     panel1_testing->FinishDragTitlebar();
     EXPECT_FALSE(drag_controller->is_dragging());
-
-    ASSERT_EQ(2, detached_collection->num_panels());
-    EXPECT_TRUE(detached_collection->HasPanel(panel1));
-    EXPECT_TRUE(detached_collection->HasPanel(panel4));
     EXPECT_EQ(panel1_new_position, panel1->GetBounds().origin());
-    EXPECT_EQ(panel4_position, panel4->GetBounds().origin());
   }
 
   // Test the scenario: drag a panel and close the dragging panel.
   {
-    gfx::Point panel1_new_position = panel1->GetBounds().origin();
-    panel1_new_position.Offset(-51, -102);
-
     // Start dragging a panel again.
     panel1_testing->PressLeftMouseButtonTitlebar(panel1->GetBounds().origin());
+    gfx::Point panel1_new_position = panel1->GetBounds().origin();
+    panel1_new_position.Offset(45, 67);
     panel1_testing->DragTitlebar(panel1_new_position);
     EXPECT_TRUE(drag_controller->is_dragging());
     EXPECT_EQ(panel1, drag_controller->dragging_panel());
 
-    ASSERT_EQ(2, detached_collection->num_panels());
+    ASSERT_EQ(1, detached_collection->num_panels());
     EXPECT_TRUE(detached_collection->HasPanel(panel1));
-    EXPECT_TRUE(detached_collection->HasPanel(panel4));
     EXPECT_EQ(panel1_new_position, panel1->GetBounds().origin());
-    EXPECT_EQ(panel4_position, panel4->GetBounds().origin());
 
     // Closing the dragging panel should make the drag controller abort.
     content::WindowedNotificationObserver signal(
@@ -962,12 +930,8 @@ IN_PROC_BROWSER_TEST_F(PanelDragBrowserTest,
 
     // Wait till the panel is fully closed.
     signal.Wait();
-    ASSERT_EQ(1, detached_collection->num_panels());
-    EXPECT_TRUE(detached_collection->HasPanel(panel4));
-    EXPECT_EQ(panel4_position, panel4->GetBounds().origin());
+    ASSERT_EQ(0, detached_collection->num_panels());
   }
-
-  panel_manager->CloseAll();
 }
 
 IN_PROC_BROWSER_TEST_F(PanelDragBrowserTest, Detach) {
@@ -1278,19 +1242,11 @@ IN_PROC_BROWSER_TEST_F(PanelDragBrowserTest, DetachAttachAndCancel) {
   panel_manager->CloseAll();
 }
 
-// http://crbug.com/175760; several panel tests failing regularly on mac.
-#if defined(OS_MACOSX)
-#define MAYBE_DetachWithSqueeze DISABLED_DetachWithSqueeze
-#else
-#define MAYBE_DetachWithSqueeze DetachWithSqueeze
-#endif
-IN_PROC_BROWSER_TEST_F(PanelDragBrowserTest, MAYBE_DetachWithSqueeze) {
+IN_PROC_BROWSER_TEST_F(PanelDragBrowserTest, DetachWithSqueeze) {
   PanelManager* panel_manager = PanelManager::GetInstance();
   DockedPanelCollection* docked_collection = panel_manager->docked_collection();
   DetachedPanelCollection* detached_collection =
       panel_manager->detached_collection();
-
-  gfx::Vector2d drag_delta_to_detach = GetDragDeltaToDetach();
 
   // Create some docked panels.
   //   docked:    P1  P2  P3  P4  P5
@@ -1307,7 +1263,8 @@ IN_PROC_BROWSER_TEST_F(PanelDragBrowserTest, MAYBE_DetachWithSqueeze) {
   //   detached:  P2
   //   docked:    P1  P3  P4 P5
   gfx::Point panel2_docked_position = panel2->GetBounds().origin();
-  DragPanelByDelta(panel2, drag_delta_to_detach);
+  gfx::Vector2d drag_delta_to_detach_panel2(-20, -100);
+  DragPanelByDelta(panel2, drag_delta_to_detach_panel2);
   ASSERT_EQ(1, detached_collection->num_panels());
   ASSERT_EQ(4, docked_collection->num_panels());
   EXPECT_EQ(PanelCollection::DOCKED, panel1->collection()->type());
@@ -1316,7 +1273,7 @@ IN_PROC_BROWSER_TEST_F(PanelDragBrowserTest, MAYBE_DetachWithSqueeze) {
   EXPECT_EQ(PanelCollection::DOCKED, panel4->collection()->type());
   EXPECT_EQ(PanelCollection::DOCKED, panel5->collection()->type());
   gfx::Point panel2_new_position =
-      panel2_docked_position + drag_delta_to_detach;
+      panel2_docked_position + drag_delta_to_detach_panel2;
   EXPECT_EQ(panel2_new_position, panel2->GetBounds().origin());
 
   // Drag to detach the left-most docked panel.
@@ -1324,7 +1281,8 @@ IN_PROC_BROWSER_TEST_F(PanelDragBrowserTest, MAYBE_DetachWithSqueeze) {
   //   detached:  P2  P4
   //   docked:    P1  P3  P5
   gfx::Point panel4_docked_position = panel4->GetBounds().origin();
-  DragPanelByDelta(panel4, drag_delta_to_detach);
+  gfx::Vector2d drag_delta_to_detach_panel4(-40, -250);
+  DragPanelByDelta(panel4, drag_delta_to_detach_panel4);
   ASSERT_EQ(2, detached_collection->num_panels());
   ASSERT_EQ(3, docked_collection->num_panels());
   EXPECT_EQ(PanelCollection::DOCKED, panel1->collection()->type());
@@ -1334,7 +1292,7 @@ IN_PROC_BROWSER_TEST_F(PanelDragBrowserTest, MAYBE_DetachWithSqueeze) {
   EXPECT_EQ(PanelCollection::DOCKED, panel5->collection()->type());
   EXPECT_EQ(panel2_new_position, panel2->GetBounds().origin());
   gfx::Point panel4_new_position =
-      panel4_docked_position + drag_delta_to_detach;
+      panel4_docked_position + drag_delta_to_detach_panel4;
   EXPECT_EQ(panel4_new_position, panel4->GetBounds().origin());
 
   // Drag to detach the right-most docked panel.
@@ -1343,8 +1301,8 @@ IN_PROC_BROWSER_TEST_F(PanelDragBrowserTest, MAYBE_DetachWithSqueeze) {
   //   docked:    P3  P5
   gfx::Point docked_position1 = panel1->GetBounds().origin();
   gfx::Point docked_position2 = panel3->GetBounds().origin();
-
-  DragPanelByDelta(panel1, drag_delta_to_detach);
+  gfx::Vector2d drag_delta_to_detach_panel1(-60, -400);
+  DragPanelByDelta(panel1, drag_delta_to_detach_panel1);
   ASSERT_EQ(3, detached_collection->num_panels());
   ASSERT_EQ(2, docked_collection->num_panels());
   EXPECT_EQ(PanelCollection::DETACHED, panel1->collection()->type());
@@ -1352,7 +1310,8 @@ IN_PROC_BROWSER_TEST_F(PanelDragBrowserTest, MAYBE_DetachWithSqueeze) {
   EXPECT_EQ(PanelCollection::DOCKED, panel3->collection()->type());
   EXPECT_EQ(PanelCollection::DETACHED, panel4->collection()->type());
   EXPECT_EQ(PanelCollection::DOCKED, panel5->collection()->type());
-  gfx::Point panel1_new_position = docked_position1 + drag_delta_to_detach;
+  gfx::Point panel1_new_position =
+      docked_position1 + drag_delta_to_detach_panel1;
   EXPECT_EQ(panel1_new_position, panel1->GetBounds().origin());
   EXPECT_EQ(panel2_new_position, panel2->GetBounds().origin());
   EXPECT_EQ(panel4_new_position, panel4->GetBounds().origin());
@@ -1366,13 +1325,7 @@ IN_PROC_BROWSER_TEST_F(PanelDragBrowserTest, MAYBE_DetachWithSqueeze) {
   panel_manager->CloseAll();
 }
 
-// http://crbug.com/143247, http://crbug.com/175760
-#if defined(OS_LINUX) || defined(OS_MACOSX)
-#define MAYBE_AttachWithSqueeze DISABLED_AttachWithSqueeze
-#else
-#define MAYBE_AttachWithSqueeze AttachWithSqueeze
-#endif
-IN_PROC_BROWSER_TEST_F(PanelDragBrowserTest, MAYBE_AttachWithSqueeze) {
+IN_PROC_BROWSER_TEST_F(PanelDragBrowserTest, AttachWithSqueeze) {
   PanelManager* panel_manager = PanelManager::GetInstance();
   DockedPanelCollection* docked_collection = panel_manager->docked_collection();
   DetachedPanelCollection* detached_collection =
@@ -1381,12 +1334,15 @@ IN_PROC_BROWSER_TEST_F(PanelDragBrowserTest, MAYBE_AttachWithSqueeze) {
   // Create some detached, docked panels.
   //   detached:  P1  P2  P3
   //   docked:    P4  P5  P6  P7
-  Panel* panel1 = CreateDetachedPanel("1", gfx::Rect(100, 300, 200, 100));
-  Panel* panel2 = CreateDetachedPanel("2", gfx::Rect(200, 300, 200, 100));
-  Panel* panel3 = CreateDetachedPanel("3", gfx::Rect(400, 300, 200, 100));
-  Panel* panel4 = CreateDockedPanel("4", gfx::Rect(0, 0, 200, 100));
-  Panel* panel5 = CreateDockedPanel("5", gfx::Rect(0, 0, 200, 100));
-  Panel* panel6 = CreateDockedPanel("6", gfx::Rect(0, 0, 200, 100));
+  Panel* panel1 = CreateInactiveDetachedPanel(
+      "1", gfx::Rect(100, 300, 200, 100));
+  Panel* panel2 = CreateInactiveDetachedPanel(
+      "2", gfx::Rect(200, 300, 200, 100));
+  Panel* panel3 = CreateInactiveDetachedPanel(
+      "3", gfx::Rect(400, 300, 200, 100));
+  Panel* panel4 = CreateInactiveDockedPanel("4", gfx::Rect(0, 0, 200, 100));
+  Panel* panel5 = CreateInactiveDockedPanel("5", gfx::Rect(0, 0, 200, 100));
+  Panel* panel6 = CreateInactiveDockedPanel("6", gfx::Rect(0, 0, 200, 100));
   Panel* panel7 = CreateDockedPanel("7", gfx::Rect(0, 0, 200, 100));
   ASSERT_EQ(3, detached_collection->num_panels());
   ASSERT_EQ(4, docked_collection->num_panels());
@@ -1423,7 +1379,7 @@ IN_PROC_BROWSER_TEST_F(PanelDragBrowserTest, MAYBE_AttachWithSqueeze) {
   EXPECT_EQ(detached_position2, panel2->GetBounds().origin());
 
   // Wait for active states to settle.
-  MessageLoopForUI::current()->RunUntilIdle();
+  base::MessageLoopForUI::current()->RunUntilIdle();
 
   // Panel positions should have shifted because of the "squeeze" mode.
   EXPECT_NE(docked_position4, panel4->GetBounds().origin());
@@ -1574,9 +1530,6 @@ IN_PROC_BROWSER_TEST_F(PanelDragBrowserTest,
   PanelManager::GetInstance()->CloseAll();
 }
 
-// TODO(jianli): to be enabled for other platforms when grouping and snapping
-// are supported.
-#if defined(OS_WIN)
 IN_PROC_BROWSER_TEST_F(PanelDragBrowserTest, GroupPanelAndPanelFromBottom) {
   PanelManager* panel_manager = PanelManager::GetInstance();
   DetachedPanelCollection* detached_collection =
@@ -1671,6 +1624,7 @@ IN_PROC_BROWSER_TEST_F(PanelDragBrowserTest, GroupPanelAndPanelFromBottom) {
   // 2) P2 moves horizontally to align with P1.
   // 3) The width of P2 is adjusted to be same as the one of P1.
   panel2_testing->FinishDragTitlebar();
+  WaitForBoundsAnimationFinished(panel2);
   ASSERT_EQ(0, detached_collection->num_panels());
   ASSERT_EQ(1, panel_manager->num_stacks());
   EXPECT_EQ(PanelCollection::STACKED, panel1->collection()->type());
@@ -1777,6 +1731,7 @@ IN_PROC_BROWSER_TEST_F(PanelDragBrowserTest, GroupPanelAndPanelFromTop) {
   // 2) P2 moves horizontally to align with P1.
   // 3) The width of P1 is adjusted to be same as the one of P2.
   panel2_testing->FinishDragTitlebar();
+  WaitForBoundsAnimationFinished(panel1);
   ASSERT_EQ(0, detached_collection->num_panels());
   ASSERT_EQ(1, panel_manager->num_stacks());
   EXPECT_EQ(PanelCollection::STACKED, panel1->collection()->type());
@@ -1886,6 +1841,7 @@ IN_PROC_BROWSER_TEST_F(PanelDragBrowserTest, GroupPanelAndStackFromBottom) {
   // Expect that P3 becomes the bottom panel of the stack.
   drag_delta_to_stack = GetDragDeltaToStackToBottom(panel3, panel2);
   DragPanelByDelta(panel3, drag_delta_to_stack);
+  WaitForBoundsAnimationFinished(panel3);
   ASSERT_EQ(0, detached_collection->num_panels());
   ASSERT_EQ(3, stack->num_panels());
   ASSERT_EQ(1, panel_manager->num_stacks());
@@ -1945,6 +1901,8 @@ IN_PROC_BROWSER_TEST_F(PanelDragBrowserTest, GroupPanelAndStackFromTop) {
   // Expect that P3 becomes the top panel of the stack.
   drag_delta_to_stack = GetDragDeltaToStackToTop(panel3, panel1);
   DragPanelByDelta(panel3, drag_delta_to_stack);
+  WaitForBoundsAnimationFinished(panel1);
+  WaitForBoundsAnimationFinished(panel2);
   ASSERT_EQ(0, detached_collection->num_panels());
   ASSERT_EQ(3, stack->num_panels());
   ASSERT_EQ(1, panel_manager->num_stacks());
@@ -2000,6 +1958,8 @@ IN_PROC_BROWSER_TEST_F(PanelDragBrowserTest, GroupStackAndPanelFromBottom) {
   gfx::Vector2d drag_delta_to_stack =
       GetDragDeltaToStackToBottom(panel1, panel3);
   DragPanelByDelta(panel1, drag_delta_to_stack);
+  WaitForBoundsAnimationFinished(panel1);
+  WaitForBoundsAnimationFinished(panel2);
   ASSERT_EQ(0, detached_collection->num_panels());
   ASSERT_EQ(1, panel_manager->num_stacks());
   StackedPanelCollection* final_stack = panel_manager->stacks().front();
@@ -2055,6 +2015,7 @@ IN_PROC_BROWSER_TEST_F(PanelDragBrowserTest, GroupStackAndPanelFromTop) {
   // width to be same as the width of P1 and P2.
   gfx::Vector2d drag_delta_to_stack = GetDragDeltaToStackToTop(panel1, panel3);
   DragPanelByDelta(panel1, drag_delta_to_stack);
+  WaitForBoundsAnimationFinished(panel3);
   ASSERT_EQ(0, detached_collection->num_panels());
   ASSERT_EQ(1, panel_manager->num_stacks());
   StackedPanelCollection* final_stack = panel_manager->stacks().front();
@@ -2123,6 +2084,8 @@ IN_PROC_BROWSER_TEST_F(PanelDragBrowserTest, GroupStackAndStackFromBottom) {
   gfx::Vector2d drag_delta_to_stack =
       GetDragDeltaToStackToBottom(panel3, panel2);
   DragPanelByDelta(panel3, drag_delta_to_stack);
+  WaitForBoundsAnimationFinished(panel3);
+  WaitForBoundsAnimationFinished(panel4);
   ASSERT_EQ(0, detached_collection->num_panels());
   ASSERT_EQ(1, panel_manager->num_stacks());
   StackedPanelCollection* final_stack = panel_manager->stacks().front();
@@ -2192,6 +2155,8 @@ IN_PROC_BROWSER_TEST_F(PanelDragBrowserTest, GroupStackAndStackFromTop) {
   // update their width to be same as the width of P1 and P2.
   gfx::Vector2d drag_delta_to_stack = GetDragDeltaToStackToTop(panel1, panel3);
   DragPanelByDelta(panel1, drag_delta_to_stack);
+  WaitForBoundsAnimationFinished(panel3);
+  WaitForBoundsAnimationFinished(panel4);
   ASSERT_EQ(0, detached_collection->num_panels());
   ASSERT_EQ(1, panel_manager->num_stacks());
   StackedPanelCollection* final_stack = panel_manager->stacks().front();
@@ -2352,6 +2317,7 @@ IN_PROC_BROWSER_TEST_F(PanelDragBrowserTest, UngroupAndCancel) {
   // Cancel the drag.
   // Expect that the P1 and P2 put back to the same stack.
   panel2_testing->CancelDragTitlebar();
+  WaitForBoundsAnimationFinished(panel2);
   ASSERT_EQ(0, detached_collection->num_panels());
   ASSERT_EQ(1, panel_manager->num_stacks());
   EXPECT_EQ(PanelCollection::STACKED, panel1->collection()->type());
@@ -2562,6 +2528,7 @@ IN_PROC_BROWSER_TEST_F(PanelDragBrowserTest, UngroupAndGroup) {
   gfx::Vector2d drag_delta_to_unstack_and_stack =
       GetDragDeltaToStackToBottom(panel2, panel3);
   DragPanelByDelta(panel2, drag_delta_to_unstack_and_stack);
+  WaitForBoundsAnimationFinished(panel2);
   ASSERT_EQ(1, detached_collection->num_panels());
   ASSERT_EQ(1, panel_manager->num_stacks());
   StackedPanelCollection* final_stack = panel_manager->stacks().front();
@@ -3133,4 +3100,3 @@ IN_PROC_BROWSER_TEST_F(PanelDragBrowserTest, SnapStackedPanelToScreenEdge) {
 
   panel_manager->CloseAll();
 }
-#endif

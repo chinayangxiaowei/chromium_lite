@@ -9,8 +9,8 @@
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/i18n/rtl.h"
-#include "base/message_loop.h"
-#include "base/utf_string_conversions.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/gtk/browser_toolbar_gtk.h"
 #include "chrome/browser/ui/gtk/browser_window_gtk.h"
@@ -85,7 +85,7 @@ void BundleInstalledBubbleGtk::ShowInternal(const BundleInstaller* bundle) {
   // Close button
   GtkWidget* close_column = gtk_vbox_new(FALSE, 0);
   gtk_box_pack_start(GTK_BOX(bubble_content), close_column, FALSE, FALSE, 0);
-  close_button_.reset(CustomDrawButton::CloseButton(theme_provider));
+  close_button_.reset(CustomDrawButton::CloseButtonBubble(theme_provider));
   g_signal_connect(close_button_->widget(), "clicked",
                    G_CALLBACK(OnButtonClick), this);
   gtk_box_pack_start(GTK_BOX(close_column), close_button_->widget(),
@@ -131,9 +131,8 @@ void BundleInstalledBubbleGtk::BubbleClosing(BubbleGtk* bubble,
   // We need to allow the bubble to close and remove the widgets from
   // the window before we call Release() because close_button_ depends
   // on all references being cleared before it is destroyed.
-  MessageLoopForUI::current()->PostTask(
-      FROM_HERE,
-      base::Bind(&BundleInstalledBubbleGtk::Close, this));
+  base::MessageLoopForUI::current()->PostTask(
+      FROM_HERE, base::Bind(&BundleInstalledBubbleGtk::Close, this));
 }
 
 void BundleInstalledBubbleGtk::Close() {

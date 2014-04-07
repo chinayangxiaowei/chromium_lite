@@ -5,6 +5,7 @@
 #include "chrome/browser/ui/views/location_bar/zoom_bubble_view.h"
 
 #include "base/i18n/rtl.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/chrome_page_zoom.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
@@ -13,12 +14,12 @@
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/browser/ui/views/location_bar/zoom_view.h"
 #include "chrome/browser/ui/zoom/zoom_controller.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "content/public/browser/notification_source.h"
 #include "content/public/browser/web_contents_view.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/views/controls/button/label_button.h"
 #include "ui/views/controls/separator.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/layout_constants.h"
@@ -45,9 +46,11 @@ void ZoomBubbleView::ShowBubble(content::WebContents* web_contents,
   DCHECK(browser && browser->window() && browser->fullscreen_controller());
 
   BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
-  bool is_fullscreen = browser->window()->IsFullscreen();
-  views::View* anchor_view = is_fullscreen ?
-      NULL : browser_view->GetLocationBarView()->zoom_view();
+  bool is_fullscreen = browser_view->IsFullscreen();
+  bool anchor_to_view = !is_fullscreen ||
+      browser_view->immersive_mode_controller()->IsRevealed();
+  views::View* anchor_view = anchor_to_view ?
+      browser_view->GetLocationBarView()->zoom_view() : NULL;
 
   // If the bubble is already showing in this window and its |auto_close_| value
   // is equal to |auto_close|, the bubble can be reused and only the label text
@@ -65,11 +68,11 @@ void ZoomBubbleView::ShowBubble(content::WebContents* web_contents,
     zoom_bubble_ = new ZoomBubbleView(anchor_view,
                                       web_contents,
                                       auto_close,
+                                      browser_view->immersive_mode_controller(),
                                       browser->fullscreen_controller());
 
-    // If we're fullscreen, there is no anchor view, so parent the bubble to
-    // the content area.
-    if (is_fullscreen) {
+    // If we do not have an anchor view, parent the bubble to the content area.
+    if (!anchor_to_view) {
       zoom_bubble_->set_parent_window(
           web_contents->GetView()->GetTopLevelNativeWindow());
     }
@@ -92,42 +95,57 @@ void ZoomBubbleView::CloseBubble() {
 
 // static
 bool ZoomBubbleView::IsShowing() {
-  return zoom_bubble_ != NULL;
+  // The bubble may be in the process of closing.
+  return zoom_bubble_ != NULL && zoom_bubble_->GetWidget()->IsVisible();
 }
 
-ZoomBubbleView::ZoomBubbleView(views::View* anchor_view,
-                               content::WebContents* web_contents,
-                               bool auto_close,
-                               FullscreenController* fullscreen_controller)
+// static
+const ZoomBubbleView* ZoomBubbleView::GetZoomBubbleForTest() {
+  return zoom_bubble_;
+}
+
+ZoomBubbleView::ZoomBubbleView(
+    views::View* anchor_view,
+    content::WebContents* web_contents,
+    bool auto_close,
+    ImmersiveModeController* immersive_mode_controller,
+    FullscreenController* fullscreen_controller)
     : BubbleDelegateView(anchor_view, anchor_view ?
           views::BubbleBorder::TOP_RIGHT : views::BubbleBorder::NONE),
       label_(NULL),
       web_contents_(web_contents),
-      auto_close_(auto_close) {
+      auto_close_(auto_close),
+      immersive_mode_controller_(immersive_mode_controller) {
   // Compensate for built-in vertical padding in the anchor view's image.
-  set_anchor_insets(gfx::Insets(5, 0, 5, 0));
+  set_anchor_view_insets(gfx::Insets(5, 0, 5, 0));
   set_use_focusless(auto_close);
   set_notify_enter_exit_on_child(true);
 
+  // Add observers to close the bubble if the fullscreen state or immersive
+  // fullscreen revealed state changes.
   registrar_.Add(this,
                  chrome::NOTIFICATION_FULLSCREEN_CHANGED,
                  content::Source<FullscreenController>(fullscreen_controller));
+  immersive_mode_controller_->AddObserver(this);
 }
 
 ZoomBubbleView::~ZoomBubbleView() {
+  if (immersive_mode_controller_)
+    immersive_mode_controller_->RemoveObserver(this);
 }
 
 void ZoomBubbleView::AdjustForFullscreen(const gfx::Rect& screen_bounds) {
-  DCHECK(!anchor_view());
+  if (anchor_view())
+    return;
 
   // TODO(dbeam): should RTL logic be done in views::BubbleDelegateView?
   const size_t bubble_half_width = width() / 2;
   const int x_pos = base::i18n::IsRTL() ?
       screen_bounds.x() + bubble_half_width + kFullscreenPaddingEnd :
       screen_bounds.right() - bubble_half_width - kFullscreenPaddingEnd;
-  set_anchor_point(gfx::Point(x_pos, screen_bounds.y()));
+  set_anchor_rect(gfx::Rect(x_pos, screen_bounds.y(), 0, 0));
 
-  // Used to update |views::BubbleDelegate::anchor_point_| in a semi-hacky way.
+  // Used to update |views::BubbleDelegate::anchor_rect_| in a semi-hacky way.
   // TODO(dbeam): update only the bounds of this view or its border or frame.
   SizeToContents();
 }
@@ -201,9 +219,10 @@ void ZoomBubbleView::Init() {
       ResourceBundle::GetSharedInstance().GetFont(ResourceBundle::MediumFont));
   AddChildView(label_);
 
-  views::NativeTextButton* set_default_button = new views::NativeTextButton(
+  views::LabelButton* set_default_button = new views::LabelButton(
       this, l10n_util::GetStringUTF16(IDS_ZOOM_SET_DEFAULT));
-  set_default_button->set_alignment(views::TextButtonBase::ALIGN_CENTER);
+  set_default_button->SetStyle(views::Button::STYLE_NATIVE_TEXTBUTTON);
+  set_default_button->SetHorizontalAlignment(gfx::ALIGN_CENTER);
   AddChildView(set_default_button);
 
   StartTimerIfNecessary();
@@ -214,6 +233,14 @@ void ZoomBubbleView::Observe(int type,
                              const content::NotificationDetails& details) {
   DCHECK_EQ(type, chrome::NOTIFICATION_FULLSCREEN_CHANGED);
   CloseBubble();
+}
+
+void ZoomBubbleView::OnImmersiveRevealStarted() {
+  CloseBubble();
+}
+
+void ZoomBubbleView::OnImmersiveModeControllerDestroyed() {
+  immersive_mode_controller_ = NULL;
 }
 
 void ZoomBubbleView::WindowClosing() {

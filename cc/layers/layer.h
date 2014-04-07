@@ -6,53 +6,53 @@
 #define CC_LAYERS_LAYER_H_
 
 #include <string>
-#include <vector>
 
+#include "base/callback.h"
 #include "base/memory/ref_counted.h"
 #include "base/observer_list.h"
 #include "cc/animation/layer_animation_controller.h"
-#include "cc/animation/layer_animation_event_observer.h"
 #include "cc/animation/layer_animation_value_observer.h"
 #include "cc/base/cc_export.h"
 #include "cc/base/region.h"
+#include "cc/base/scoped_ptr_vector.h"
+#include "cc/layers/compositing_reasons.h"
 #include "cc/layers/draw_properties.h"
+#include "cc/layers/layer_lists.h"
+#include "cc/layers/layer_position_constraint.h"
+#include "cc/layers/paint_properties.h"
 #include "cc/layers/render_surface.h"
+#include "cc/output/filter_operations.h"
 #include "cc/trees/occlusion_tracker.h"
 #include "skia/ext/refptr.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebFilterOperations.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "third_party/skia/include/core/SkImageFilter.h"
 #include "ui/gfx/rect.h"
 #include "ui/gfx/rect_f.h"
 #include "ui/gfx/transform.h"
 
-namespace WebKit {
-class WebAnimationDelegate;
-class WebLayerScrollClient;
-}
-
 namespace cc {
 
 class Animation;
+class AnimationDelegate;
 struct AnimationEvent;
+class CopyOutputRequest;
 class LayerAnimationDelegate;
+class LayerAnimationEventObserver;
 class LayerImpl;
 class LayerTreeHost;
 class LayerTreeImpl;
 class PriorityCalculator;
+class RenderingStatsInstrumentation;
 class ResourceUpdateQueue;
 class ScrollbarLayer;
 struct AnimationEvent;
-struct RenderingStats;
 
 // Base class for composited layers. Special layer types are derived from
 // this class.
 class CC_EXPORT Layer : public base::RefCounted<Layer>,
                         public LayerAnimationValueObserver {
  public:
-  typedef std::vector<scoped_refptr<Layer> > LayerList;
   enum LayerIdLabels {
-    PINCH_ZOOM_ROOT_SCROLL_LAYER_ID = -2,
     INVALID_ID = -1,
   };
 
@@ -69,9 +69,18 @@ class CC_EXPORT Layer : public base::RefCounted<Layer>,
   void RemoveFromParent();
   void RemoveAllChildren();
   void SetChildren(const LayerList& children);
+  bool HasAncestor(const Layer* ancestor) const;
 
   const LayerList& children() const { return children_; }
   Layer* child_at(size_t index) { return children_[index].get(); }
+
+  // This requests the layer and its subtree be rendered and given to the
+  // callback. If the copy is unable to be produced (the layer is destroyed
+  // first), then the callback is called with a NULL/empty result.
+  void RequestCopyOfOutput(scoped_ptr<CopyOutputRequest> request);
+  bool HasCopyRequest() const {
+    return !copy_requests_.empty();
+  }
 
   void SetAnchorPoint(gfx::PointF anchor_point);
   gfx::PointF anchor_point() const { return anchor_point_; }
@@ -81,6 +90,9 @@ class CC_EXPORT Layer : public base::RefCounted<Layer>,
 
   virtual void SetBackgroundColor(SkColor background_color);
   SkColor background_color() const { return background_color_; }
+  // If contents_opaque(), return an opaque color else return a
+  // non-opaque color.  Tries to return background_color(), if possible.
+  SkColor SafeOpaqueBackgroundColor() const;
 
   // A layer's bounds are in logical, non-page-scaled pixels (however, the
   // root layer's bounds are in physical pixels).
@@ -102,8 +114,8 @@ class CC_EXPORT Layer : public base::RefCounted<Layer>,
   bool OpacityIsAnimating() const;
   virtual bool OpacityCanAnimateOnImplThread() const;
 
-  void SetFilters(const WebKit::WebFilterOperations& filters);
-  const WebKit::WebFilterOperations& filters() const { return filters_; }
+  void SetFilters(const FilterOperations& filters);
+  const FilterOperations& filters() const { return filters_; }
 
   void SetFilter(const skia::RefPtr<SkImageFilter>& filter);
   skia::RefPtr<SkImageFilter> filter() const { return filter_; }
@@ -111,8 +123,8 @@ class CC_EXPORT Layer : public base::RefCounted<Layer>,
   // Background filters are filters applied to what is behind this layer, when
   // they are viewed through non-opaque regions in this layer. They are used
   // through the WebLayer interface, and are not exposed to HTML.
-  void SetBackgroundFilters(const WebKit::WebFilterOperations& filters);
-  const WebKit::WebFilterOperations& background_filters() const {
+  void SetBackgroundFilters(const FilterOperations& filters);
+  const FilterOperations& background_filters() const {
     return background_filters_;
   }
 
@@ -123,12 +135,12 @@ class CC_EXPORT Layer : public base::RefCounted<Layer>,
   gfx::PointF position() const { return position_; }
 
   void SetIsContainerForFixedPositionLayers(bool container);
-  bool is_container_for_fixed_position_layers() const {
-    return is_container_for_fixed_position_layers_;
-  }
+  bool IsContainerForFixedPositionLayers() const;
 
-  void SetFixedToContainerLayer(bool fixed_to_container_layer);
-  bool fixed_to_container_layer() const { return fixed_to_container_layer_; }
+  void SetPositionConstraint(const LayerPositionConstraint& constraint);
+  const LayerPositionConstraint& position_constraint() const {
+    return position_constraint_;
+  }
 
   void SetSublayerTransform(const gfx::Transform& sublayer_transform);
   const gfx::Transform& sublayer_transform() const {
@@ -192,6 +204,7 @@ class CC_EXPORT Layer : public base::RefCounted<Layer>,
 
   void SetScrollOffset(gfx::Vector2d scroll_offset);
   gfx::Vector2d scroll_offset() const { return scroll_offset_; }
+  void SetScrollOffsetFromImplSide(gfx::Vector2d scroll_offset);
 
   void SetMaxScrollOffset(gfx::Vector2d max_scroll_offset);
   gfx::Vector2d max_scroll_offset() const { return max_scroll_offset_; }
@@ -217,8 +230,8 @@ class CC_EXPORT Layer : public base::RefCounted<Layer>,
     return touch_event_handler_region_;
   }
 
-  void set_layer_scroll_client(WebKit::WebLayerScrollClient* client) {
-    layer_scroll_client_ = client;
+  void set_did_scroll_callback(const base::Closure& callback) {
+    did_scroll_callback_ = callback;
   }
 
   void SetDrawCheckerboardForMissingTiles(bool checkerboard);
@@ -229,10 +242,11 @@ class CC_EXPORT Layer : public base::RefCounted<Layer>,
   void SetForceRenderSurface(bool force_render_surface);
   bool force_render_surface() const { return force_render_surface_; }
 
-  gfx::Vector2d scroll_delta() const { return gfx::Vector2d(); }
-
-  void SetImplTransform(const gfx::Transform& transform);
-  const gfx::Transform& impl_transform() const { return impl_transform_; }
+  gfx::Vector2d ScrollDelta() const { return gfx::Vector2d(); }
+  gfx::Vector2dF TotalScrollOffset() const {
+    // Floating point to match the LayerImpl version.
+    return scroll_offset() + ScrollDelta();
+  }
 
   void SetDoubleSided(bool double_sided);
   bool double_sided() const { return double_sided_; }
@@ -254,30 +268,37 @@ class CC_EXPORT Layer : public base::RefCounted<Layer>,
 
   void SetIsDrawable(bool is_drawable);
 
+  void SetHideLayerAndSubtree(bool hide);
+  bool hide_layer_and_subtree() const { return hide_layer_and_subtree_; }
+
   void SetReplicaLayer(Layer* layer);
   Layer* replica_layer() { return replica_layer_.get(); }
   const Layer* replica_layer() const { return replica_layer_.get(); }
 
-  bool has_mask() const { return !!mask_layer_; }
-  bool has_replica() const { return !!replica_layer_; }
+  bool has_mask() const { return !!mask_layer_.get(); }
+  bool has_replica() const { return !!replica_layer_.get(); }
   bool replica_has_mask() const {
-    return replica_layer_ && (mask_layer_ || replica_layer_->mask_layer_);
+    return replica_layer_.get() &&
+           (mask_layer_.get() || replica_layer_->mask_layer_.get());
   }
 
   // These methods typically need to be overwritten by derived classes.
   virtual bool DrawsContent() const;
-  virtual void Update(ResourceUpdateQueue* queue,
-                      const OcclusionTracker* occlusion,
-                      RenderingStats* stats) {}
+  virtual void SavePaintProperties();
+  // Returns true iff any resources were updated that need to be committed.
+  virtual bool Update(ResourceUpdateQueue* queue,
+                      const OcclusionTracker* occlusion);
   virtual bool NeedMoreUpdates();
   virtual void SetIsMask(bool is_mask) {}
+  virtual void ReduceMemoryUsage() {}
 
   void SetDebugName(const std::string& debug_name);
+  void SetCompositingReasons(CompositingReasons reasons);
 
   virtual void PushPropertiesTo(LayerImpl* layer);
 
-  void ClearRenderSurface() { draw_properties_.render_surface.reset(); }
   void CreateRenderSurface();
+  void ClearRenderSurface();
 
   // The contents scale converts from logical, non-page-scaled pixels to target
   // pixels. The contents scale is 1 for the root layer as it is already in
@@ -288,31 +309,12 @@ class CC_EXPORT Layer : public base::RefCounted<Layer>,
   gfx::Size content_bounds() const { return draw_properties_.content_bounds; }
 
   virtual void CalculateContentsScale(float ideal_contents_scale,
+                                      float device_scale_factor,
+                                      float page_scale_factor,
                                       bool animating_transform_to_screen,
                                       float* contents_scale_x,
                                       float* contents_scale_y,
                                       gfx::Size* content_bounds);
-
-  // The scale at which contents should be rastered, to match the scale at
-  // which they will drawn to the screen. This scale is a component of the
-  // contentsScale() but does not include page/device scale factors.
-  void SetRasterScale(float scale);
-  float raster_scale() const { return raster_scale_; }
-
-  // When true, the RasterScale() will be set by the compositor. If false, it
-  // will use whatever value is given to it by the embedder.
-  bool automatically_compute_raster_scale() {
-    return automatically_compute_raster_scale_;
-  }
-  void SetAutomaticallyComputeRasterScale(bool automatic);
-
-  void ForceAutomaticRasterScaleToBeRecomputed();
-
-  // When true, the layer's contents are not scaled by the current page scale
-  // factor. SetBoundsContainPageScale() recursively sets the value on all
-  // child layers.
-  void SetBoundsContainPageScale(bool bounds_contain_page_scale);
-  bool bounds_contain_page_scale() const { return bounds_contain_page_scale_; }
 
   LayerTreeHost* layer_tree_host() const { return layer_tree_host_; }
 
@@ -329,20 +331,14 @@ class CC_EXPORT Layer : public base::RefCounted<Layer>,
   LayerAnimationController* layer_animation_controller() {
     return layer_animation_controller_.get();
   }
-  void SetLayerAnimationController(
+  void SetLayerAnimationControllerForTest(
       scoped_refptr<LayerAnimationController> controller);
-  scoped_refptr<LayerAnimationController> ReleaseLayerAnimationController();
 
-  void set_layer_animation_delegate(WebKit::WebAnimationDelegate* delegate) {
-    layer_animation_delegate_ = delegate;
+  void set_layer_animation_delegate(AnimationDelegate* delegate) {
+    layer_animation_controller_->set_layer_animation_delegate(delegate);
   }
 
   bool HasActiveAnimation() const;
-
-  virtual void NotifyAnimationStarted(const AnimationEvent& event,
-                                      double wall_clock_time);
-  virtual void NotifyAnimationFinished(double wall_clock_time);
-  virtual void NotifyAnimationPropertyUpdate(const AnimationEvent& event);
 
   void AddLayerAnimationEventObserver(
       LayerAnimationEventObserver* animation_observer);
@@ -367,8 +363,29 @@ class CC_EXPORT Layer : public base::RefCounted<Layer>,
   // Constructs a LayerImpl of the correct runtime type for this Layer type.
   virtual scoped_ptr<LayerImpl> CreateLayerImpl(LayerTreeImpl* tree_impl);
 
-  bool NeedsDisplayForTesting() const { return needs_display_; }
-  void ResetNeedsDisplayForTesting() { needs_display_ = false; }
+  bool NeedsDisplayForTesting() const { return !update_rect_.IsEmpty(); }
+  void ResetNeedsDisplayForTesting() { update_rect_ = gfx::RectF(); }
+
+  RenderingStatsInstrumentation* rendering_stats_instrumentation() const;
+
+  const PaintProperties& paint_properties() const {
+    return paint_properties_;
+  }
+
+  // The scale at which contents should be rastered, to match the scale at
+  // which they will drawn to the screen. This scale is a component of the
+  // contents scale but does not include page/device scale factors.
+  // TODO(danakj): This goes away when TiledLayer goes away.
+  void set_raster_scale(float scale) { raster_scale_ = scale; }
+  float raster_scale() const { return raster_scale_; }
+  bool raster_scale_is_unknown() const { return raster_scale_ == 0.f; }
+
+  virtual bool SupportsLCDText() const;
+
+  bool needs_push_properties() const { return needs_push_properties_; }
+  bool descendant_needs_push_properties() const {
+    return num_dependents_need_push_properties_ > 0;
+  }
 
  protected:
   friend class LayerImpl;
@@ -377,11 +394,38 @@ class CC_EXPORT Layer : public base::RefCounted<Layer>,
 
   Layer();
 
+  // These SetNeeds functions are in order of severity of update:
+  //
+  // Called when this layer has been modified in some way, but isn't sure
+  // that it needs a commit yet.  It needs CalcDrawProperties and UpdateLayers
+  // before it knows whether or not a commit is required.
+  void SetNeedsUpdate();
+  // Called when a property has been modified in a way that the layer
+  // knows immediately that a commit is required.  This implies SetNeedsUpdate
+  // as well as SetNeedsPushProperties to push that property.
   void SetNeedsCommit();
+  // Called when there's been a change in layer structure.  Implies both
+  // SetNeedsUpdate and SetNeedsCommit, but not SetNeedsPushProperties.
   void SetNeedsFullTreeSync();
+  bool IsPropertyChangeAllowed() const;
 
-  // This flag is set when layer need repainting/updating.
-  bool needs_display_;
+  void SetNeedsPushProperties();
+  void AddDependentNeedsPushProperties();
+  void RemoveDependentNeedsPushProperties();
+  bool parent_should_know_need_push_properties() const {
+    return needs_push_properties() || descendant_needs_push_properties();
+  }
+
+  void reset_raster_scale_to_unknown() { raster_scale_ = 0.f; }
+
+  // This flag is set when the layer needs to push properties to the impl
+  // side.
+  bool needs_push_properties_;
+
+  // The number of direct children or dependent layers that need to be recursed
+  // to in order for them or a descendent of them to push properties to the impl
+  // side.
+  int num_dependents_need_push_properties_;
 
   // Tracks whether this layer may have changed stacking order with its
   // siblings.
@@ -399,14 +443,13 @@ class CC_EXPORT Layer : public base::RefCounted<Layer>,
   int layer_id_;
 
   // When true, the layer is about to perform an update. Any commit requests
-  // will be handled implcitly after the update completes.
+  // will be handled implicitly after the update completes.
   bool ignore_set_needs_commit_;
 
  private:
   friend class base::RefCounted<Layer>;
 
   void SetParent(Layer* layer);
-  bool HasAncestor(Layer* ancestor) const;
   bool DescendantIsFixedToContainerLayer() const;
 
   // Returns the index of the child or -1 if not found.
@@ -428,8 +471,6 @@ class CC_EXPORT Layer : public base::RefCounted<Layer>,
   // updated via SetLayerTreeHost() if a layer moves between trees.
   LayerTreeHost* layer_tree_host_;
 
-  ObserverList<LayerAnimationEventObserver> layer_animation_observers_;
-
   scoped_refptr<LayerAnimationController> layer_animation_controller_;
 
   // Layer properties.
@@ -446,14 +487,16 @@ class CC_EXPORT Layer : public base::RefCounted<Layer>,
   gfx::PointF anchor_point_;
   SkColor background_color_;
   std::string debug_name_;
+  CompositingReasons compositing_reasons_;
   float opacity_;
   skia::RefPtr<SkImageFilter> filter_;
-  WebKit::WebFilterOperations filters_;
-  WebKit::WebFilterOperations background_filters_;
+  FilterOperations filters_;
+  FilterOperations background_filters_;
   float anchor_point_z_;
   bool is_container_for_fixed_position_layers_;
-  bool fixed_to_container_layer_;
+  LayerPositionConstraint position_constraint_;
   bool is_drawable_;
+  bool hide_layer_and_subtree_;
   bool masks_to_bounds_;
   bool contents_opaque_;
   bool double_sided_;
@@ -470,15 +513,14 @@ class CC_EXPORT Layer : public base::RefCounted<Layer>,
 
   // Transient properties.
   float raster_scale_;
-  bool automatically_compute_raster_scale_;
-  bool bounds_contain_page_scale_;
 
-  gfx::Transform impl_transform_;
+  ScopedPtrVector<CopyOutputRequest> copy_requests_;
 
-  WebKit::WebAnimationDelegate* layer_animation_delegate_;
-  WebKit::WebLayerScrollClient* layer_scroll_client_;
+  base::Closure did_scroll_callback_;
 
   DrawProperties<Layer, RenderSurface> draw_properties_;
+
+  PaintProperties paint_properties_;
 
   DISALLOW_COPY_AND_ASSIGN(Layer);
 };

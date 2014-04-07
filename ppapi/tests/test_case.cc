@@ -52,8 +52,8 @@ std::string StripTestCase(const std::string& full_test_name) {
 // the bool indicating whether the test should be run.
 void ParseTestFilter(const std::string& test_filter,
                      std::map<std::string, bool>* remaining_tests) {
-  // We can't use base/string_util.h::Tokenize in ppapi, so we have to do it
-  // ourselves.
+  // We can't use base/strings/string_util.h::Tokenize in ppapi, so we have to
+  // do it ourselves.
   std::istringstream filter_stream(test_filter);
   std::string current_test;
   while (std::getline(filter_stream, current_test, ',')) {
@@ -81,7 +81,7 @@ TestCase::TestCase(TestingInstance* instance)
     : instance_(instance),
       testing_interface_(NULL),
       callback_type_(PP_REQUIRED),
-      have_populated_remaining_tests_(false) {
+      have_populated_filter_tests_(false) {
   // Get the testing_interface_ if it is available, so that we can do Resource
   // and Var checks on shutdown (see CheckResourcesAndVars). If it is not
   // available, testing_interface_ will be NULL. Some tests do not require it.
@@ -181,21 +181,21 @@ bool TestCase::ShouldRunTest(const std::string& test_name,
   if (ShouldRunAllTests(filter))
     return true;
 
-  // Lazily initialize our "remaining_tests_" map.
-  if (!have_populated_remaining_tests_) {
-    ParseTestFilter(filter, &remaining_tests_);
-    have_populated_remaining_tests_ = true;
+  // Lazily initialize our "filter_tests_" map.
+  if (!have_populated_filter_tests_) {
+    ParseTestFilter(filter, &filter_tests_);
+    remaining_tests_ = filter_tests_;
+    have_populated_filter_tests_ = true;
   }
-  std::map<std::string, bool>::iterator iter = remaining_tests_.find(test_name);
-  if (iter == remaining_tests_.end()) {
+  std::map<std::string, bool>::iterator iter = filter_tests_.find(test_name);
+  if (iter == filter_tests_.end()) {
     // The test name wasn't listed in the filter. Don't run it, but store it
     // so TestingInstance::ExecuteTests can report an error later.
     skipped_tests_.insert(test_name);
     return false;
   }
-  bool should_run_test = iter->second;
-  remaining_tests_.erase(iter);
-  return should_run_test;
+  remaining_tests_.erase(test_name);
+  return iter->second;
 }
 
 PP_TimeTicks TestCase::NowInTimeTicks() {

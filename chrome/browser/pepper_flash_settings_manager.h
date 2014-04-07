@@ -12,14 +12,15 @@
 #include "ppapi/shared_impl/ppp_flash_browser_operations_shared.h"
 
 class PluginPrefs;
-class PrefRegistrySyncable;
+class PrefService;
 
 namespace content {
 class BrowserContext;
+struct WebPluginInfo;
 }
 
-namespace webkit {
-struct WebPluginInfo;
+namespace user_prefs {
+class PrefRegistrySyncable;
 }
 
 // PepperFlashSettingsManager communicates with a PPAPI broker process to
@@ -60,16 +61,16 @@ class PepperFlashSettingsManager {
   // |plugin_info| will be updated if it is not NULL and the method returns
   // true.
   static bool IsPepperFlashInUse(PluginPrefs* plugin_prefs,
-                                 webkit::WebPluginInfo* plugin_info);
+                                 content::WebPluginInfo* plugin_info);
 
-  static void RegisterUserPrefs(PrefRegistrySyncable* registry);
+  static void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
 
   // Requests to deauthorize content licenses.
   // Client::OnDeauthorizeContentLicensesCompleted() will be called when the
   // operation is completed.
   // The return value is the same as the request ID passed into
   // Client::OnDeauthorizeContentLicensesCompleted().
-  uint32 DeauthorizeContentLicenses();
+  uint32 DeauthorizeContentLicenses(PrefService* prefs);
 
   // Gets permission settings.
   // Client::OnGetPermissionSettingsCompleted() will be called when the

@@ -11,7 +11,7 @@
 #import <Foundation/NSAutoreleasePool.h>
 
 #include "base/compiler_specific.h"
-#include "base/memory/scoped_nsobject.h"
+#include "base/mac/scoped_nsobject.h"
 #include "base/memory/scoped_ptr.h"
 #include "ui/compositor/compositor.h"
 #include "ui/gfx/rect.h"
@@ -39,7 +39,7 @@
 
 - (void)drawRect:(NSRect)rect {
   DCHECK(compositor_) << "Drawing with no compositor set.";
-  compositor_->Draw(false);
+  compositor_->Draw();
 }
 @end
 
@@ -126,7 +126,8 @@ void TestCompositorHostMac::Show() {
                           styleMask:NSBorderlessWindowMask
                             backing:NSBackingStoreBuffered
                               defer:NO];
-  scoped_nsobject<AcceleratedTestView> view([[AcceleratedTestView alloc] init]);
+  base::scoped_nsobject<AcceleratedTestView> view(
+      [[AcceleratedTestView alloc] init]);
   compositor_.reset(new ui::Compositor(this, view, bounds_.size()));
   [view setCompositor:compositor_.get()];
   [window_ setContentView:view];
@@ -138,6 +139,7 @@ ui::Compositor* TestCompositorHostMac::GetCompositor() {
 }
 
 void TestCompositorHostMac::ScheduleDraw() {
+  DCHECK(!ui::Compositor::WasInitializedWithThread());
   if (!compositor_.get())
     return;
 

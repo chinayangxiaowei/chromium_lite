@@ -18,13 +18,14 @@ namespace content {
 StreamResourceHandler::StreamResourceHandler(
     net::URLRequest* request,
     StreamRegistry* registry,
-    const GURL& security_origin)
+    const GURL& origin)
     : request_(request),
       read_buffer_(NULL) {
-  // TODO(zork): Find a way to share this with the blob URL creation in WebKit.
+  // TODO(tyoshino): Find a way to share this with the blob URL creation in
+  // WebKit.
   GURL url(std::string(chrome::kBlobScheme) + ":" +
-           security_origin.spec() + base::GenerateGUID());
-  stream_ = new Stream(registry, this, security_origin, url);
+           origin.spec() + base::GenerateGUID());
+  stream_ = new Stream(registry, this, url);
 }
 
 StreamResourceHandler::~StreamResourceHandler() {
@@ -63,7 +64,7 @@ bool StreamResourceHandler::OnWillRead(int request_id,
   static const int kReadBufSize = 32768;
 
   DCHECK(buf && buf_size);
-  if (!read_buffer_)
+  if (!read_buffer_.get())
     read_buffer_ = new net::IOBuffer(kReadBufSize);
   *buf = read_buffer_.get();
   *buf_size = kReadBufSize;
@@ -78,7 +79,7 @@ bool StreamResourceHandler::OnReadCompleted(int request_id,
     return true;
 
   // We have more data to read.
-  DCHECK(read_buffer_);
+  DCHECK(read_buffer_.get());
 
   // Release the ownership of the buffer, and store a reference
   // to it. A new one will be allocated in OnWillRead().
@@ -115,4 +116,3 @@ void StreamResourceHandler::OnClose(Stream* stream) {
 }
 
 }  // namespace content
-

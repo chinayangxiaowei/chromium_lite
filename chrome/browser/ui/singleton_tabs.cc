@@ -5,6 +5,7 @@
 #include "chrome/browser/ui/singleton_tabs.h"
 
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/search/search.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -43,13 +44,14 @@ void ShowSingletonTabRespectRef(Browser* browser, const GURL& url) {
 
 void ShowSingletonTabOverwritingNTP(Browser* browser,
                                     const NavigateParams& params) {
+  DCHECK(browser);
   NavigateParams local_params(params);
   content::WebContents* contents =
       browser->tab_strip_model()->GetActiveWebContents();
   if (contents) {
     const GURL& contents_url = contents->GetURL();
-    if ((contents_url == GURL(kChromeUINewTabURL) ||
-         contents_url == GURL(kAboutBlankURL)) &&
+    if ((contents_url == GURL(kChromeUINewTabURL) || IsInstantNTP(contents) ||
+         contents_url == GURL(content::kAboutBlankURL)) &&
         GetIndexOfSingletonTab(&local_params) < 0) {
       local_params.disposition = CURRENT_TAB;
     }
@@ -93,6 +95,19 @@ int GetIndexOfSingletonTab(NavigateParams* params) {
     content::WebContents* tab =
         params->browser->tab_strip_model()->GetWebContentsAt(tab_index);
 
+    GURL tab_url = tab->GetURL();
+
+    // Skip view-source tabs. This is needed because RewriteURLIfNecessary
+    // removes the "view-source:" scheme which leads to incorrect matching.
+    if (tab_url.SchemeIs(content::kViewSourceScheme))
+      continue;
+
+    GURL rewritten_tab_url = tab_url;
+    content::BrowserURLHandler::GetInstance()->RewriteURLIfNecessary(
+      &rewritten_tab_url,
+      params->browser->profile(),
+      &reverse_on_redirect);
+
     url_canon::Replacements<char> replacements;
     if (params->ref_behavior == NavigateParams::IGNORE_REF)
       replacements.ClearRef();
@@ -101,13 +116,6 @@ int GetIndexOfSingletonTab(NavigateParams* params) {
       replacements.ClearPath();
       replacements.ClearQuery();
     }
-
-    GURL tab_url = tab->GetURL();
-    GURL rewritten_tab_url = tab_url;
-    content::BrowserURLHandler::GetInstance()->RewriteURLIfNecessary(
-        &rewritten_tab_url,
-        params->browser->profile(),
-        &reverse_on_redirect);
 
     if (CompareURLsWithReplacements(tab_url, params->url, replacements) ||
         CompareURLsWithReplacements(rewritten_tab_url,

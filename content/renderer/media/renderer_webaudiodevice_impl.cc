@@ -7,11 +7,11 @@
 #include "base/command_line.h"
 #include "base/logging.h"
 #include "content/renderer/media/audio_device_factory.h"
-#include "content/renderer/media/renderer_audio_output_device.h"
 #include "content/renderer/render_view_impl.h"
+#include "media/audio/audio_output_device.h"
 #include "media/base/media_switches.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebFrame.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebView.h"
+#include "third_party/WebKit/public/web/WebFrame.h"
+#include "third_party/WebKit/public/web/WebView.h"
 
 using WebKit::WebAudioDevice;
 using WebKit::WebFrame;
@@ -22,24 +22,23 @@ namespace content {
 
 RendererWebAudioDeviceImpl::RendererWebAudioDeviceImpl(
     const media::AudioParameters& params,
-    WebAudioDevice::RenderCallback* callback)
+    WebAudioDevice::RenderCallback* callback,
+    int session_id)
     : params_(params),
-      client_callback_(callback) {
+      client_callback_(callback),
+      session_id_(session_id) {
   DCHECK(client_callback_);
 }
 
 RendererWebAudioDeviceImpl::~RendererWebAudioDeviceImpl() {
-  DCHECK(!output_device_);
+  DCHECK(!output_device_.get());
 }
 
 void RendererWebAudioDeviceImpl::start() {
   DCHECK(thread_checker_.CalledOnValidThread());
 
-  if (output_device_)
+  if (output_device_.get())
     return;  // Already started.
-
-  output_device_ = AudioDeviceFactory::NewOutputDevice();
-  output_device_->Initialize(params_, this);
 
   // Assumption: This method is being invoked within a V8 call stack.  CHECKs
   // will fail in the call to frameForCurrentContext() otherwise.
@@ -52,10 +51,9 @@ void RendererWebAudioDeviceImpl::start() {
   WebView* const web_view = web_frame ? web_frame->view() : NULL;
   RenderViewImpl* const render_view =
       web_view ? RenderViewImpl::FromWebView(web_view) : NULL;
-  if (render_view) {
-    output_device_->SetSourceRenderView(render_view->routing_id());
-  }
-
+  output_device_ = AudioDeviceFactory::NewOutputDevice(
+      render_view ? render_view->routing_id() : MSG_ROUTING_NONE);
+  output_device_->InitializeUnifiedStream(params_, this, session_id_);
   output_device_->Start();
   // Note: Default behavior is to auto-play on start.
 }
@@ -63,7 +61,7 @@ void RendererWebAudioDeviceImpl::start() {
 void RendererWebAudioDeviceImpl::stop() {
   DCHECK(thread_checker_.CalledOnValidThread());
 
-  if (output_device_) {
+  if (output_device_.get()) {
     output_device_->Stop();
     output_device_ = NULL;
   }

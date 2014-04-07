@@ -7,14 +7,15 @@
 #include <vector>
 
 #include "ash/shell.h"
-#include "ash/wm/window_cycle_controller.h"
+#include "ash/wm/mru_window_tracker.h"
 #include "ash/wm/window_util.h"
 #include "base/file_util.h"
+#include "base/files/file_enumerator.h"
 #include "base/json/json_writer.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/path_service.h"
-#include "base/string_number_conversions.h"
-#include "base/stringprintf.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/stringprintf.h"
 #include "base/synchronization/cancellation_flag.h"
 #include "base/threading/sequenced_worker_pool.h"
 #include "base/threading/worker_pool.h"
@@ -26,17 +27,18 @@
 #include "chrome/browser/extensions/event_router.h"
 #include "chrome/browser/image_decoder.h"
 #include "chrome/common/chrome_paths.h"
+#include "chromeos/login/login_state.h"
 #include "content/public/browser/browser_thread.h"
-#include "net/url_request/url_fetcher.h"
-#include "net/url_request/url_fetcher_delegate.h"
-#include "net/url_request/url_request_status.h"
-#include "googleurl/src/gurl.h"
 #include "grit/app_locale_settings.h"
 #include "grit/generated_resources.h"
 #include "grit/platform_locale_settings.h"
+#include "net/url_request/url_fetcher.h"
+#include "net/url_request/url_fetcher_delegate.h"
+#include "net/url_request/url_request_status.h"
 #include "ui/aura/window_observer.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/webui/web_ui_util.h"
+#include "url/gurl.h"
 
 using base::BinaryValue;
 using content::BrowserThread;
@@ -54,6 +56,11 @@ const char* kWallpaperLayoutArrays[] = {
 const char kOnlineSource[] = "ONLINE";
 const char kCustomSource[] = "CUSTOM";
 
+#if defined(GOOGLE_CHROME_BUILD)
+const char kWallpaperManifestBaseURL[] = "https://commondatastorage.googleapis."
+    "com/chromeos-wallpaper-public/manifest_";
+#endif
+
 const int kWallpaperLayoutCount = arraysize(kWallpaperLayoutArrays);
 
 ash::WallpaperLayout GetLayoutEnum(const std::string& layout) {
@@ -70,13 +77,13 @@ ash::WallpaperLayout GetLayoutEnum(const std::string& layout) {
 bool SaveData(int key, const std::string& file_name, const std::string& data) {
   base::FilePath data_dir;
   CHECK(PathService::Get(key, &data_dir));
-  if (!file_util::DirectoryExists(data_dir) &&
+  if (!base::DirectoryExists(data_dir) &&
       !file_util::CreateDirectory(data_dir)) {
     return false;
   }
   base::FilePath file_path = data_dir.Append(file_name);
 
-  return file_util::PathExists(file_path) ||
+  return base::PathExists(file_path) ||
          (file_util::WriteFile(file_path, data.c_str(),
                                data.size()) != -1);
 }
@@ -87,11 +94,11 @@ bool SaveData(int key, const std::string& file_name, const std::string& data) {
 // expected that we may try to access file which did not saved yet.
 bool GetData(const base::FilePath& path, std::string* data) {
   base::FilePath data_dir = path.DirName();
-  if (!file_util::DirectoryExists(data_dir) &&
+  if (!base::DirectoryExists(data_dir) &&
       !file_util::CreateDirectory(data_dir))
     return false;
 
-  return !file_util::PathExists(path) ||
+  return !base::PathExists(path) ||
          file_util::ReadFileToString(path, data);
 }
 
@@ -134,7 +141,7 @@ class WindowStateManager : public aura::WindowObserver {
   }
 
   void BuildWindowListAndMinimizeInactive(aura::Window* active_window) {
-    windows_ = ash::WindowCycleController::BuildWindowList(NULL, false);
+    windows_ = ash::MruWindowTracker::BuildWindowList(false);
     // Remove active window.
     std::vector<aura::Window*>::iterator last =
         std::remove(windows_.begin(), windows_.end(), active_window);
@@ -215,6 +222,10 @@ bool WallpaperPrivateGetStringsFunction::RunImpl() {
   if (wallpaper_manager->GetLoggedInUserWallpaperInfo(&info))
     dict->SetString("currentWallpaper", info.file);
 
+#if defined(GOOGLE_CHROME_BUILD)
+  dict->SetString("manifestBaseURL", kWallpaperManifestBaseURL);
+#endif
+
   return true;
 }
 
@@ -226,11 +237,16 @@ class WallpaperFunctionBase::WallpaperDecoder : public ImageDecoder::Delegate {
 
   void Start(const std::string& image_data) {
     DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-    image_decoder_ = new ImageDecoder(this, image_data,
-                                      ImageDecoder::ROBUST_JPEG_CODEC);
+
+    // This function can only be called after user login. It is fine to use
+    // unsafe image decoder here. Before user login, a robust jpeg decoder will
+    // be used.
+    CHECK(chromeos::LoginState::Get()->IsUserLoggedIn());
+    unsafe_image_decoder_ = new ImageDecoder(this, image_data,
+                                             ImageDecoder::DEFAULT_CODEC);
     scoped_refptr<base::MessageLoopProxy> task_runner =
         BrowserThread::GetMessageLoopProxyForThread(BrowserThread::UI);
-    image_decoder_->Start(task_runner);
+    unsafe_image_decoder_->Start(task_runner);
   }
 
   void Cancel() {
@@ -263,7 +279,7 @@ class WallpaperFunctionBase::WallpaperDecoder : public ImageDecoder::Delegate {
 
  private:
   scoped_refptr<WallpaperFunctionBase> function_;
-  scoped_refptr<ImageDecoder> image_decoder_;
+  scoped_refptr<ImageDecoder> unsafe_image_decoder_;
   base::CancellationFlag cancel_flag_;
 
   DISALLOW_COPY_AND_ASSIGN(WallpaperDecoder);
@@ -366,10 +382,10 @@ void WallpaperPrivateSetWallpaperIfExistsFunction::
   std::string data;
   base::FilePath path = file_path;
 
-  if (!file_util::PathExists(file_path))
+  if (!base::PathExists(file_path))
     path = fallback_path;
 
-  if (file_util::PathExists(path) &&
+  if (base::PathExists(path) &&
       file_util::ReadFileToString(path, &data)) {
     BrowserThread::PostTask(BrowserThread::UI, FROM_HERE,
         base::Bind(&WallpaperPrivateSetWallpaperIfExistsFunction::StartDecode,
@@ -476,7 +492,7 @@ void WallpaperPrivateSetWallpaperFunction::SaveToFile() {
     CHECK(PathService::Get(chrome::DIR_CHROMEOS_WALLPAPERS, &wallpaper_dir));
     base::FilePath file_path = wallpaper_dir.Append(
         file_name).InsertBeforeExtension(chromeos::kSmallWallpaperSuffix);
-    if (file_util::PathExists(file_path))
+    if (base::PathExists(file_path))
       return;
     // Generates and saves small resolution wallpaper. Uses CENTER_CROPPED to
     // maintain the aspect ratio after resize.
@@ -612,7 +628,7 @@ void WallpaperPrivateSetCustomWallpaperFunction::GenerateThumbnail(
   DCHECK(BrowserThread::GetBlockingPool()->IsRunningSequenceOnCurrentThread(
       sequence_token_));
   chromeos::UserImage wallpaper(*image.get());
-  if (!file_util::PathExists(thumbnail_path.DirName()))
+  if (!base::PathExists(thumbnail_path.DirName()))
     file_util::CreateDirectory(thumbnail_path.DirName());
 
   scoped_refptr<base::RefCountedBytes> data;
@@ -872,34 +888,20 @@ void WallpaperPrivateGetOfflineWallpaperListFunction::GetList(
   DCHECK(BrowserThread::GetBlockingPool()->IsRunningSequenceOnCurrentThread(
       sequence_token_));
   std::vector<std::string> file_list;
+  // TODO(bshe): This api function is only used for ONLINE wallpapers. Remove
+  // source.
   if (source == kOnlineSource) {
     base::FilePath wallpaper_dir;
     CHECK(PathService::Get(chrome::DIR_CHROMEOS_WALLPAPERS, &wallpaper_dir));
-    if (file_util::DirectoryExists(wallpaper_dir)) {
-      file_util::FileEnumerator files(wallpaper_dir, false,
-                                      file_util::FileEnumerator::FILES);
+    if (base::DirectoryExists(wallpaper_dir)) {
+      base::FileEnumerator files(wallpaper_dir, false,
+                                 base::FileEnumerator::FILES);
       for (base::FilePath current = files.Next(); !current.empty();
            current = files.Next()) {
         std::string file_name = current.BaseName().RemoveExtension().value();
         // Do not add file name of small resolution wallpaper to the list.
         if (!EndsWith(file_name, chromeos::kSmallWallpaperSuffix, true))
           file_list.push_back(current.BaseName().value());
-      }
-    }
-  } else {
-    base::FilePath custom_thumbnails_dir = chromeos::WallpaperManager::Get()->
-        GetCustomWallpaperPath(chromeos::kThumbnailWallpaperSubDir, email, "");
-    if (file_util::DirectoryExists(custom_thumbnails_dir)) {
-      file_util::FileEnumerator files(custom_thumbnails_dir, false,
-                                      file_util::FileEnumerator::FILES);
-      std::set<std::string> file_name_set;
-      for (base::FilePath current = files.Next(); !current.empty();
-           current = files.Next()) {
-        file_name_set.insert(current.BaseName().value());
-      }
-      for (std::set<std::string>::reverse_iterator rit = file_name_set.rbegin();
-           rit != file_name_set.rend(); ++rit) {
-        file_list.push_back(*rit);
       }
     }
   }

@@ -9,14 +9,13 @@
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/callback.h"
-#include "base/compiler_specific.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_vector.h"
 #include "base/memory/weak_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
-#include "base/stringprintf.h"
-#include "base/string_number_conversions.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/stringprintf.h"
 #include "base/threading/platform_thread.h"
 #include "base/values.h"
 #include "net/base/load_timing_info.h"
@@ -62,7 +61,7 @@ void TestLoadTimingInfoConnectedReused(const ClientSocketHandle& handle) {
 }
 
 // Make sure |handle| sets load times correctly when it has been assigned a
-// fresh socket.  Also runs TestLoadTimingInfoConnectedReused, since the owner
+// fresh socket. Also runs TestLoadTimingInfoConnectedReused, since the owner
 // of a connection where |is_reused| is false may consider the connection
 // reused.
 void TestLoadTimingInfoConnectedNotReused(const ClientSocketHandle& handle) {
@@ -119,16 +118,14 @@ class MockClientSocket : public StreamSocket {
   explicit MockClientSocket(net::NetLog* net_log)
       : connected_(false),
         net_log_(BoundNetLog::Make(net_log, net::NetLog::SOURCE_SOCKET)),
-        was_used_to_convey_data_(false),
-        num_bytes_read_(0) {
+        was_used_to_convey_data_(false) {
   }
 
   // Socket implementation.
   virtual int Read(
       IOBuffer* /* buf */, int len,
       const CompletionCallback& /* callback */) OVERRIDE {
-    num_bytes_read_ += len;
-    return len;
+    return ERR_UNEXPECTED;
   }
 
   virtual int Write(
@@ -165,15 +162,9 @@ class MockClientSocket : public StreamSocket {
   virtual void SetSubresourceSpeculation() OVERRIDE {}
   virtual void SetOmniboxSpeculation() OVERRIDE {}
   virtual bool WasEverUsed() const OVERRIDE {
-    return was_used_to_convey_data_ || num_bytes_read_ > 0;
+    return was_used_to_convey_data_;
   }
   virtual bool UsingTCPFastOpen() const OVERRIDE { return false; }
-  virtual int64 NumBytesRead() const OVERRIDE { return num_bytes_read_; }
-  virtual base::TimeDelta GetConnectTimeMicros() const OVERRIDE {
-    static const base::TimeDelta kDummyConnectTimeMicros =
-        base::TimeDelta::FromMicroseconds(10);
-    return kDummyConnectTimeMicros;  // Dummy value.
-  }
   virtual bool WasNpnNegotiated() const OVERRIDE {
     return false;
   }
@@ -188,7 +179,6 @@ class MockClientSocket : public StreamSocket {
   bool connected_;
   BoundNetLog net_log_;
   bool was_used_to_convey_data_;
-  int num_bytes_read_;
 
   DISALLOW_COPY_AND_ASSIGN(MockClientSocket);
 };
@@ -230,7 +220,12 @@ class MockClientSocketFactory : public ClientSocketFactory {
   }
 
   void WaitForSignal(TestConnectJob* job) { waiting_jobs_.push_back(job); }
+
   void SignalJobs();
+
+  void SignalJob(size_t job);
+
+  void SetJobLoadState(size_t job, LoadState load_state);
 
   int allocation_count() const { return allocation_count_; }
 
@@ -247,7 +242,6 @@ class TestConnectJob : public ConnectJob {
     kMockPendingJob,
     kMockPendingFailingJob,
     kMockWaitingJob,
-    kMockAdvancingLoadStateJob,
     kMockRecoverableJob,
     kMockPendingRecoverableJob,
     kMockAdditionalErrorStateJob,
@@ -269,13 +263,17 @@ class TestConnectJob : public ConnectJob {
                    BoundNetLog::Make(net_log, NetLog::SOURCE_CONNECT_JOB)),
         job_type_(job_type),
         client_socket_factory_(client_socket_factory),
-        ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)),
+        weak_factory_(this),
         load_state_(LOAD_STATE_IDLE),
         store_additional_error_state_(false) {}
 
   void Signal() {
     DoConnect(waiting_success_, true /* async */, false /* recoverable */);
   }
+
+  void set_load_state(LoadState load_state) { load_state_ = load_state; }
+
+  // From ConnectJob:
 
   virtual LoadState GetLoadState() const OVERRIDE { return load_state_; }
 
@@ -284,13 +282,13 @@ class TestConnectJob : public ConnectJob {
       // Set all of the additional error state fields in some way.
       handle->set_is_ssl_error(true);
       HttpResponseInfo info;
-      info.headers = new HttpResponseHeaders("");
+      info.headers = new HttpResponseHeaders(std::string());
       handle->set_ssl_error_response_info(info);
     }
   }
 
  private:
-  // ConnectJob implementation.
+  // From ConnectJob:
 
   virtual int ConnectInternal() OVERRIDE {
     AddressList ignored;
@@ -318,7 +316,7 @@ class TestConnectJob : public ConnectJob {
         // abstract time for the purpose of unittests. Unfortunately, we have
         // a lot of third-party components that directly call the various
         // time functions, so this change would be rather invasive.
-        MessageLoop::current()->PostDelayedTask(
+        base::MessageLoop::current()->PostDelayedTask(
             FROM_HERE,
             base::Bind(base::IgnoreResult(&TestConnectJob::DoConnect),
                        weak_factory_.GetWeakPtr(),
@@ -329,7 +327,7 @@ class TestConnectJob : public ConnectJob {
         return ERR_IO_PENDING;
       case kMockPendingFailingJob:
         set_load_state(LOAD_STATE_CONNECTING);
-        MessageLoop::current()->PostDelayedTask(
+        base::MessageLoop::current()->PostDelayedTask(
             FROM_HERE,
             base::Bind(base::IgnoreResult(&TestConnectJob::DoConnect),
                        weak_factory_.GetWeakPtr(),
@@ -339,20 +337,16 @@ class TestConnectJob : public ConnectJob {
             base::TimeDelta::FromMilliseconds(2));
         return ERR_IO_PENDING;
       case kMockWaitingJob:
+        set_load_state(LOAD_STATE_CONNECTING);
         client_socket_factory_->WaitForSignal(this);
         waiting_success_ = true;
-        return ERR_IO_PENDING;
-      case kMockAdvancingLoadStateJob:
-        MessageLoop::current()->PostTask(
-            FROM_HERE, base::Bind(&TestConnectJob::AdvanceLoadState,
-                                  weak_factory_.GetWeakPtr(), load_state_));
         return ERR_IO_PENDING;
       case kMockRecoverableJob:
         return DoConnect(false /* error */, false /* sync */,
                          true /* recoverable */);
       case kMockPendingRecoverableJob:
         set_load_state(LOAD_STATE_CONNECTING);
-        MessageLoop::current()->PostDelayedTask(
+        base::MessageLoop::current()->PostDelayedTask(
             FROM_HERE,
             base::Bind(base::IgnoreResult(&TestConnectJob::DoConnect),
                        weak_factory_.GetWeakPtr(),
@@ -368,7 +362,7 @@ class TestConnectJob : public ConnectJob {
       case kMockPendingAdditionalErrorStateJob:
         set_load_state(LOAD_STATE_CONNECTING);
         store_additional_error_state_ = true;
-        MessageLoop::current()->PostDelayedTask(
+        base::MessageLoop::current()->PostDelayedTask(
             FROM_HERE,
             base::Bind(base::IgnoreResult(&TestConnectJob::DoConnect),
                        weak_factory_.GetWeakPtr(),
@@ -384,8 +378,6 @@ class TestConnectJob : public ConnectJob {
     }
   }
 
-  void set_load_state(LoadState load_state) { load_state_ = load_state; }
-
   int DoConnect(bool succeed, bool was_async, bool recoverable) {
     int result = OK;
     if (succeed) {
@@ -400,22 +392,6 @@ class TestConnectJob : public ConnectJob {
     if (was_async)
       NotifyDelegateOfCompletion(result);
     return result;
-  }
-
-  // This function helps simulate the progress of load states on a ConnectJob.
-  // Each time it is called it advances the load state and posts a task to be
-  // called again.  It stops at the last connecting load state (the one
-  // before LOAD_STATE_SENDING_REQUEST).
-  void AdvanceLoadState(LoadState state) {
-    int tmp = state;
-    tmp++;
-    if (tmp < LOAD_STATE_SENDING_REQUEST) {
-      state = static_cast<LoadState>(tmp);
-      set_load_state(state);
-      MessageLoop::current()->PostTask(
-          FROM_HERE, base::Bind(&TestConnectJob::AdvanceLoadState,
-                                weak_factory_.GetWeakPtr(), state));
-    }
   }
 
   bool waiting_success_;
@@ -437,7 +413,7 @@ class TestConnectJobFactory
         job_types_(NULL),
         client_socket_factory_(client_socket_factory),
         net_log_(net_log) {
-}
+  }
 
   virtual ~TestConnectJobFactory() {}
 
@@ -573,7 +549,7 @@ class TestClientSocketPool : public ClientSocketPool {
     base_.RemoveLayeredPool(pool);
   }
 
-  virtual DictionaryValue* GetInfoAsValue(
+  virtual base::DictionaryValue* GetInfoAsValue(
       const std::string& name,
       const std::string& type,
       bool include_nested_pools) const OVERRIDE {
@@ -634,6 +610,18 @@ void MockClientSocketFactory::SignalJobs() {
   waiting_jobs_.clear();
 }
 
+void MockClientSocketFactory::SignalJob(size_t job) {
+  ASSERT_LT(job, waiting_jobs_.size());
+  waiting_jobs_[job]->Signal();
+  waiting_jobs_.erase(waiting_jobs_.begin() + job);
+}
+
+void MockClientSocketFactory::SetJobLoadState(size_t job,
+                                              LoadState load_state) {
+  ASSERT_LT(job, waiting_jobs_.size());
+  waiting_jobs_[job]->set_load_state(load_state);
+}
+
 class TestConnectJobDelegate : public ConnectJob::Delegate {
  public:
   TestConnectJobDelegate()
@@ -648,14 +636,14 @@ class TestConnectJobDelegate : public ConnectJob::Delegate {
     delete job;
     have_result_ = true;
     if (waiting_for_result_)
-      MessageLoop::current()->Quit();
+      base::MessageLoop::current()->Quit();
   }
 
   int WaitForResult() {
     DCHECK(!waiting_for_result_);
     while (!have_result_) {
       waiting_for_result_ = true;
-      MessageLoop::current()->Run();
+      base::MessageLoop::current()->Run();
       waiting_for_result_ = false;
     }
     have_result_ = false;  // auto-reset for next callback
@@ -710,11 +698,17 @@ class ClientSocketPoolBaseTest : public testing::Test {
                                          connect_job_factory_));
   }
 
-  int StartRequest(const std::string& group_name,
-                   net::RequestPriority priority) {
+  int StartRequestWithParams(
+      const std::string& group_name,
+      RequestPriority priority,
+      const scoped_refptr<TestSocketParams>& params) {
     return test_base_.StartRequestUsingPool<
         TestClientSocketPool, TestSocketParams>(
-            pool_.get(), group_name, priority, params_);
+            pool_.get(), group_name, priority, params);
+  }
+
+  int StartRequest(const std::string& group_name, RequestPriority priority) {
+    return StartRequestWithParams(group_name, priority, params_);
   }
 
   int GetOrderOfRequest(size_t index) const {
@@ -744,71 +738,6 @@ class ClientSocketPoolBaseTest : public testing::Test {
   scoped_ptr<TestClientSocketPool> pool_;
   ClientSocketPoolTest test_base_;
 };
-
-TEST_F(ClientSocketPoolBaseTest, AssignIdleSocketToGroup_WarmestSocket) {
-  CreatePool(4, 4);
-  net::SetSocketReusePolicy(0);
-
-  EXPECT_EQ(OK, StartRequest("a", kDefaultPriority));
-  EXPECT_EQ(OK, StartRequest("a", kDefaultPriority));
-  EXPECT_EQ(OK, StartRequest("a", kDefaultPriority));
-  EXPECT_EQ(OK, StartRequest("a", kDefaultPriority));
-
-  std::map<int, StreamSocket*> sockets_;
-  for (size_t i = 0; i < test_base_.requests_size(); i++) {
-    TestSocketRequest* req = test_base_.request(i);
-    StreamSocket* s = req->handle()->socket();
-    MockClientSocket* sock = static_cast<MockClientSocket*>(s);
-    CHECK(sock);
-    sockets_[i] = sock;
-    sock->Read(NULL, 1024 - i, CompletionCallback());
-  }
-
-  ReleaseAllConnections(ClientSocketPoolTest::KEEP_ALIVE);
-
-  EXPECT_EQ(OK, StartRequest("a", kDefaultPriority));
-  TestSocketRequest* req = test_base_.request(test_base_.requests_size() - 1);
-
-  // First socket is warmest.
-  EXPECT_EQ(sockets_[0], req->handle()->socket());
-
-  // Test that NumBytes are as expected.
-  EXPECT_EQ(1024, sockets_[0]->NumBytesRead());
-  EXPECT_EQ(1023, sockets_[1]->NumBytesRead());
-  EXPECT_EQ(1022, sockets_[2]->NumBytesRead());
-  EXPECT_EQ(1021, sockets_[3]->NumBytesRead());
-
-  ReleaseAllConnections(ClientSocketPoolTest::NO_KEEP_ALIVE);
-}
-
-TEST_F(ClientSocketPoolBaseTest, AssignIdleSocketToGroup_LastAccessedSocket) {
-  CreatePool(4, 4);
-  net::SetSocketReusePolicy(2);
-
-  EXPECT_EQ(OK, StartRequest("a", kDefaultPriority));
-  EXPECT_EQ(OK, StartRequest("a", kDefaultPriority));
-  EXPECT_EQ(OK, StartRequest("a", kDefaultPriority));
-  EXPECT_EQ(OK, StartRequest("a", kDefaultPriority));
-
-  std::map<int, StreamSocket*> sockets_;
-  for (size_t i = 0; i < test_base_.requests_size(); i++) {
-    TestSocketRequest* req = test_base_.request(i);
-    StreamSocket* s = req->handle()->socket();
-    MockClientSocket* sock = static_cast<MockClientSocket*>(s);
-    CHECK(sock);
-    sockets_[i] = sock;
-    sock->Read(NULL, 1024 - i, CompletionCallback());
-  }
-
-  ReleaseAllConnections(ClientSocketPoolTest::KEEP_ALIVE);
-
-  EXPECT_EQ(OK, StartRequest("a", kDefaultPriority));
-  TestSocketRequest* req = test_base_.request(test_base_.requests_size() - 1);
-
-  // Last socket is most recently accessed.
-  EXPECT_EQ(sockets_[3], req->handle()->socket());
-  ReleaseAllConnections(ClientSocketPoolTest::NO_KEEP_ALIVE);
-}
 
 // Even though a timeout is specified, it doesn't time out on a synchronous
 // completion.
@@ -921,7 +850,7 @@ TEST_F(ClientSocketPoolBaseTest, InitConnectionFailure) {
   // Set the additional error state members to ensure that they get cleared.
   handle.set_is_ssl_error(true);
   HttpResponseInfo info;
-  info.headers = new HttpResponseHeaders("");
+  info.headers = new HttpResponseHeaders(std::string());
   handle.set_ssl_error_response_info(info);
   EXPECT_EQ(ERR_CONNECTION_FAILED,
             handle.Init("a",
@@ -1109,7 +1038,7 @@ TEST_F(ClientSocketPoolBaseTest, TotalLimitCountsConnectingSockets) {
   // to flush all tasks, we need to wait so that we know there are no
   // soon-to-be-pending tasks waiting.
   base::PlatformThread::Sleep(base::TimeDelta::FromMilliseconds(10));
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
 
   // The next synchronous request should wait for its turn.
   connect_job_factory_->set_job_type(TestConnectJob::kMockJob);
@@ -1344,7 +1273,7 @@ TEST_F(ClientSocketPoolBaseTest, CloseIdleSocketAtSocketLimitDeleteGroup) {
   }
 
   // Flush all the DoReleaseSocket tasks.
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
 
   // Stall a group.  Set a pending job so it'll trigger a backup job if we don't
   // reuse a socket.
@@ -1516,9 +1445,8 @@ class RequestSocketCallback : public TestCompletionCallbackBase {
         within_callback_(false),
         test_connect_job_factory_(test_connect_job_factory),
         next_job_type_(next_job_type),
-        ALLOW_THIS_IN_INITIALIZER_LIST(callback_(
-            base::Bind(&RequestSocketCallback::OnComplete,
-                       base::Unretained(this)))) {
+        callback_(base::Bind(&RequestSocketCallback::OnComplete,
+                             base::Unretained(this))) {
   }
 
   virtual ~RequestSocketCallback() {}
@@ -1541,8 +1469,9 @@ class RequestSocketCallback : public TestCompletionCallbackBase {
         // TODO: Resolve conflicting intentions of stopping recursion with the
         // |!within_callback_| test (above) and the call to |RunUntilIdle()|
         // below.  http://crbug.com/114130.
-        MessageLoop::ScopedNestableTaskAllower allow(MessageLoop::current());
-        MessageLoop::current()->RunUntilIdle();
+        base::MessageLoop::ScopedNestableTaskAllower allow(
+            base::MessageLoop::current());
+        base::MessageLoop::current()->RunUntilIdle();
       }
       within_callback_ = true;
       TestCompletionCallback next_job_callback;
@@ -1567,8 +1496,8 @@ class RequestSocketCallback : public TestCompletionCallbackBase {
           // operations that happen on timers (e.g. cleanup of idle
           // connections) can execute.
           {
-            MessageLoop::ScopedNestableTaskAllower allow(
-                MessageLoop::current());
+            base::MessageLoop::ScopedNestableTaskAllower allow(
+                base::MessageLoop::current());
             base::PlatformThread::Sleep(base::TimeDelta::FromMilliseconds(10));
             EXPECT_EQ(OK, next_job_callback.WaitForResult());
           }
@@ -1740,7 +1669,8 @@ TEST_F(ClientSocketPoolBaseTest, GroupWithPendingRequestsIsNotEmpty) {
   EXPECT_EQ(0, pool_->IdleSocketCountInGroup("a"));
   pool_->CloseIdleSockets();
 
-  MessageLoop::current()->RunUntilIdle();  // Run the released socket wakeups
+  // Run the released socket wakeups.
+  base::MessageLoop::current()->RunUntilIdle();
 }
 
 TEST_F(ClientSocketPoolBaseTest, BasicAsynchronous) {
@@ -1795,7 +1725,7 @@ TEST_F(ClientSocketPoolBaseTest,
   // Set the additional error state members to ensure that they get cleared.
   handle.set_is_ssl_error(true);
   HttpResponseInfo info;
-  info.headers = new HttpResponseHeaders("");
+  info.headers = new HttpResponseHeaders(std::string());
   handle.set_ssl_error_response_info(info);
   EXPECT_EQ(ERR_IO_PENDING, handle.Init("a",
                                         params_,
@@ -1925,7 +1855,8 @@ TEST_F(ClientSocketPoolBaseTest, ReleaseSockets) {
   // Both Requests 2 and 3 are pending.  We release socket 1 which should
   // service request 2.  Request 3 should still be waiting.
   req1.handle()->Reset();
-  MessageLoop::current()->RunUntilIdle();  // Run the released socket wakeups
+  // Run the released socket wakeups.
+  base::MessageLoop::current()->RunUntilIdle();
   ASSERT_TRUE(req2.handle()->socket());
   EXPECT_EQ(OK, req2.WaitForResult());
   EXPECT_FALSE(req3.handle()->socket());
@@ -1991,10 +1922,10 @@ TEST_F(ClientSocketPoolBaseTest, PendingJobCompletionOrder) {
   EXPECT_EQ(&req3, request_order[2]);
 }
 
-TEST_F(ClientSocketPoolBaseTest, LoadState) {
+// Test GetLoadState in the case there's only one socket request.
+TEST_F(ClientSocketPoolBaseTest, LoadStateOneRequest) {
   CreatePool(kDefaultMaxSockets, kDefaultMaxSocketsPerGroup);
-  connect_job_factory_->set_job_type(
-      TestConnectJob::kMockAdvancingLoadStateJob);
+  connect_job_factory_->set_job_type(TestConnectJob::kMockWaitingJob);
 
   ClientSocketHandle handle;
   TestCompletionCallback callback;
@@ -2005,17 +1936,165 @@ TEST_F(ClientSocketPoolBaseTest, LoadState) {
                        pool_.get(),
                        BoundNetLog());
   EXPECT_EQ(ERR_IO_PENDING, rv);
-  EXPECT_EQ(LOAD_STATE_IDLE, handle.GetLoadState());
+  EXPECT_EQ(LOAD_STATE_CONNECTING, handle.GetLoadState());
 
-  MessageLoop::current()->RunUntilIdle();
+  client_socket_factory_.SetJobLoadState(0, LOAD_STATE_SSL_HANDSHAKE);
+  EXPECT_EQ(LOAD_STATE_SSL_HANDSHAKE, handle.GetLoadState());
+
+  // No point in completing the connection, since ClientSocketHandles only
+  // expect the LoadState to be checked while connecting.
+}
+
+// Test GetLoadState in the case there are two socket requests.
+TEST_F(ClientSocketPoolBaseTest, LoadStateTwoRequests) {
+  CreatePool(2, 2);
+  connect_job_factory_->set_job_type(TestConnectJob::kMockWaitingJob);
+
+  ClientSocketHandle handle;
+  TestCompletionCallback callback;
+  int rv = handle.Init("a",
+                       params_,
+                       kDefaultPriority,
+                       callback.callback(),
+                       pool_.get(),
+                       BoundNetLog());
+  EXPECT_EQ(ERR_IO_PENDING, rv);
 
   ClientSocketHandle handle2;
   TestCompletionCallback callback2;
-  rv = handle2.Init("a", params_, kDefaultPriority, callback2.callback(),
-                    pool_.get(), BoundNetLog());
+  rv = handle2.Init("a",
+                    params_,
+                    kDefaultPriority,
+                    callback2.callback(),
+                    pool_.get(),
+                    BoundNetLog());
   EXPECT_EQ(ERR_IO_PENDING, rv);
-  EXPECT_NE(LOAD_STATE_IDLE, handle.GetLoadState());
-  EXPECT_NE(LOAD_STATE_IDLE, handle2.GetLoadState());
+
+  // If the first Job is in an earlier state than the second, the state of
+  // the second job should be used for both handles.
+  client_socket_factory_.SetJobLoadState(0, LOAD_STATE_RESOLVING_HOST);
+  EXPECT_EQ(LOAD_STATE_CONNECTING, handle.GetLoadState());
+  EXPECT_EQ(LOAD_STATE_CONNECTING, handle2.GetLoadState());
+
+  // If the second Job is in an earlier state than the second, the state of
+  // the first job should be used for both handles.
+  client_socket_factory_.SetJobLoadState(0, LOAD_STATE_SSL_HANDSHAKE);
+  // One request is farther
+  EXPECT_EQ(LOAD_STATE_SSL_HANDSHAKE, handle.GetLoadState());
+  EXPECT_EQ(LOAD_STATE_SSL_HANDSHAKE, handle2.GetLoadState());
+
+  // Farthest along job connects and the first request gets the socket.  The
+  // second handle switches to the state of the remaining ConnectJob.
+  client_socket_factory_.SignalJob(0);
+  EXPECT_EQ(OK, callback.WaitForResult());
+  EXPECT_EQ(LOAD_STATE_CONNECTING, handle2.GetLoadState());
+}
+
+// Test GetLoadState in the case the per-group limit is reached.
+TEST_F(ClientSocketPoolBaseTest, LoadStateGroupLimit) {
+  CreatePool(2, 1);
+  connect_job_factory_->set_job_type(TestConnectJob::kMockWaitingJob);
+
+  ClientSocketHandle handle;
+  TestCompletionCallback callback;
+  int rv = handle.Init("a",
+                       params_,
+                       MEDIUM,
+                       callback.callback(),
+                       pool_.get(),
+                       BoundNetLog());
+  EXPECT_EQ(ERR_IO_PENDING, rv);
+  EXPECT_EQ(LOAD_STATE_CONNECTING, handle.GetLoadState());
+
+  // Request another socket from the same pool, buth with a higher priority.
+  // The first request should now be stalled at the socket group limit.
+  ClientSocketHandle handle2;
+  TestCompletionCallback callback2;
+  rv = handle2.Init("a",
+                    params_,
+                    HIGHEST,
+                    callback2.callback(),
+                    pool_.get(),
+                    BoundNetLog());
+  EXPECT_EQ(ERR_IO_PENDING, rv);
+  EXPECT_EQ(LOAD_STATE_WAITING_FOR_AVAILABLE_SOCKET, handle.GetLoadState());
+  EXPECT_EQ(LOAD_STATE_CONNECTING, handle2.GetLoadState());
+
+  // The first handle should remain stalled as the other socket goes through
+  // the connect process.
+
+  client_socket_factory_.SetJobLoadState(0, LOAD_STATE_SSL_HANDSHAKE);
+  EXPECT_EQ(LOAD_STATE_WAITING_FOR_AVAILABLE_SOCKET, handle.GetLoadState());
+  EXPECT_EQ(LOAD_STATE_SSL_HANDSHAKE, handle2.GetLoadState());
+
+  client_socket_factory_.SignalJob(0);
+  EXPECT_EQ(OK, callback2.WaitForResult());
+  EXPECT_EQ(LOAD_STATE_WAITING_FOR_AVAILABLE_SOCKET, handle.GetLoadState());
+
+  // Closing the second socket should cause the stalled handle to finally get a
+  // ConnectJob.
+  handle2.socket()->Disconnect();
+  handle2.Reset();
+  EXPECT_EQ(LOAD_STATE_CONNECTING, handle.GetLoadState());
+}
+
+// Test GetLoadState in the case the per-pool limit is reached.
+TEST_F(ClientSocketPoolBaseTest, LoadStatePoolLimit) {
+  CreatePool(2, 2);
+  connect_job_factory_->set_job_type(TestConnectJob::kMockWaitingJob);
+
+  ClientSocketHandle handle;
+  TestCompletionCallback callback;
+  int rv = handle.Init("a",
+                       params_,
+                       kDefaultPriority,
+                       callback.callback(),
+                       pool_.get(),
+                       BoundNetLog());
+  EXPECT_EQ(ERR_IO_PENDING, rv);
+
+  // Request for socket from another pool.
+  ClientSocketHandle handle2;
+  TestCompletionCallback callback2;
+  rv = handle2.Init("b",
+                    params_,
+                    kDefaultPriority,
+                    callback2.callback(),
+                    pool_.get(),
+                    BoundNetLog());
+  EXPECT_EQ(ERR_IO_PENDING, rv);
+
+  // Request another socket from the first pool.  Request should stall at the
+  // socket pool limit.
+  ClientSocketHandle handle3;
+  TestCompletionCallback callback3;
+  rv = handle3.Init("a",
+                    params_,
+                    kDefaultPriority,
+                    callback2.callback(),
+                    pool_.get(),
+                    BoundNetLog());
+  EXPECT_EQ(ERR_IO_PENDING, rv);
+
+  // The third handle should remain stalled as the other sockets in its group
+  // goes through the connect process.
+
+  EXPECT_EQ(LOAD_STATE_CONNECTING, handle.GetLoadState());
+  EXPECT_EQ(LOAD_STATE_WAITING_FOR_STALLED_SOCKET_POOL, handle3.GetLoadState());
+
+  client_socket_factory_.SetJobLoadState(0, LOAD_STATE_SSL_HANDSHAKE);
+  EXPECT_EQ(LOAD_STATE_SSL_HANDSHAKE, handle.GetLoadState());
+  EXPECT_EQ(LOAD_STATE_WAITING_FOR_STALLED_SOCKET_POOL, handle3.GetLoadState());
+
+  client_socket_factory_.SignalJob(0);
+  EXPECT_EQ(OK, callback.WaitForResult());
+  EXPECT_EQ(LOAD_STATE_WAITING_FOR_STALLED_SOCKET_POOL, handle3.GetLoadState());
+
+  // Closing a socket should allow the stalled handle to finally get a new
+  // ConnectJob.
+  handle.socket()->Disconnect();
+  handle.Reset();
+  EXPECT_EQ(LOAD_STATE_CONNECTING, handle3.GetLoadState());
 }
 
 TEST_F(ClientSocketPoolBaseTest, Recoverable) {
@@ -2200,7 +2279,7 @@ TEST_F(ClientSocketPoolBaseTest, DisableCleanupTimerNoReuse) {
   // to flush all tasks, we need to wait so that we know there are no
   // soon-to-be-pending tasks waiting.
   base::PlatformThread::Sleep(base::TimeDelta::FromMilliseconds(10));
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
 
   // Both sockets should now be idle.
   ASSERT_EQ(2, pool_->IdleSocketCount());
@@ -2278,7 +2357,7 @@ TEST_F(ClientSocketPoolBaseTest, CleanupTimedOutIdleSockets) {
   // to flush all tasks, we need to wait so that we know there are no
   // soon-to-be-pending tasks waiting.
   base::PlatformThread::Sleep(base::TimeDelta::FromMilliseconds(10));
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
 
   ASSERT_EQ(2, pool_->IdleSocketCount());
 
@@ -2430,7 +2509,7 @@ TEST_F(ClientSocketPoolBaseTest, SocketLimitReleasingSockets) {
   handle_a[0].Reset();
 
   // Used to get stuck here.
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
 
   handle_b[1].socket()->Disconnect();
   handle_b[1].Reset();
@@ -2483,9 +2562,8 @@ class TestReleasingSocketRequest : public TestCompletionCallbackBase {
       : pool_(pool),
         expected_result_(expected_result),
         reset_releasing_handle_(reset_releasing_handle),
-        ALLOW_THIS_IN_INITIALIZER_LIST(callback_(
-            base::Bind(&TestReleasingSocketRequest::OnComplete,
-                       base::Unretained(this)))) {
+        callback_(base::Bind(&TestReleasingSocketRequest::OnComplete,
+                             base::Unretained(this))) {
   }
 
   virtual ~TestReleasingSocketRequest() {}
@@ -2587,7 +2665,7 @@ TEST_F(ClientSocketPoolBaseTest, DoNotReuseSocketAfterFlush) {
   pool_->FlushWithError(ERR_NETWORK_CHANGED);
 
   handle.Reset();
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
 
   EXPECT_EQ(ERR_IO_PENDING, handle.Init("a",
                                         params_,
@@ -2608,9 +2686,8 @@ class ConnectWithinCallback : public TestCompletionCallbackBase {
       : group_name_(group_name),
         params_(params),
         pool_(pool),
-        ALLOW_THIS_IN_INITIALIZER_LIST(callback_(
-            base::Bind(&ConnectWithinCallback::OnComplete,
-                       base::Unretained(this)))) {
+        callback_(base::Bind(&ConnectWithinCallback::OnComplete,
+                             base::Unretained(this))) {
   }
 
   virtual ~ConnectWithinCallback() {}
@@ -2698,7 +2775,7 @@ TEST_F(ClientSocketPoolBaseTest, BackupSocketCancelAtMaxSockets) {
                                   BoundNetLog()));
   }
 
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
 
   // Cancel the pending request.
   handle.Reset();
@@ -2707,7 +2784,7 @@ TEST_F(ClientSocketPoolBaseTest, BackupSocketCancelAtMaxSockets) {
   base::PlatformThread::Sleep(base::TimeDelta::FromMilliseconds(
       ClientSocketPool::kMaxConnectRetryIntervalMs / 2 * 3));
 
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
   EXPECT_EQ(kDefaultMaxSockets, client_socket_factory_.allocation_count());
 }
 
@@ -2736,7 +2813,7 @@ TEST_F(ClientSocketPoolBaseTest, CancelBackupSocketAfterCancelingAllRequests) {
   // Wait for the backup timer to fire (add some slop to ensure it fires)
   base::PlatformThread::Sleep(base::TimeDelta::FromMilliseconds(
       ClientSocketPool::kMaxConnectRetryIntervalMs / 2 * 3));
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
   ASSERT_TRUE(pool_->HasGroup("bar"));
   EXPECT_EQ(1, pool_->NumConnectJobsInGroup("bar"));
 }
@@ -2775,7 +2852,7 @@ TEST_F(ClientSocketPoolBaseTest, CancelBackupSocketAfterFinishingAllRequests) {
   // Wait for the backup timer to fire (add some slop to ensure it fires)
   base::PlatformThread::Sleep(base::TimeDelta::FromMilliseconds(
       ClientSocketPool::kMaxConnectRetryIntervalMs / 2 * 3));
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
 }
 
 // Test delayed socket binding for the case where we have two connects,
@@ -2819,7 +2896,7 @@ TEST_F(ClientSocketPoolBaseTest, DelayedSocketBindingWaitingForConnect) {
   // binding.
   handle1.Reset();
 
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
 
   // Still no idle sockets, still one pending connect job.
   EXPECT_EQ(0, pool_->IdleSocketCount());
@@ -2835,7 +2912,7 @@ TEST_F(ClientSocketPoolBaseTest, DelayedSocketBindingWaitingForConnect) {
   client_socket_factory_.SignalJobs();
   EXPECT_EQ(0, pool_->NumConnectJobsInGroup("a"));
 
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
 }
 
 // Test delayed socket binding when a group is at capacity and one
@@ -2877,7 +2954,7 @@ TEST_F(ClientSocketPoolBaseTest, DelayedSocketBindingAtGroupCapacity) {
   // binding.
   handle1.Reset();
 
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
 
   // Still no idle sockets, still one pending connect job.
   EXPECT_EQ(0, pool_->IdleSocketCount());
@@ -2893,7 +2970,7 @@ TEST_F(ClientSocketPoolBaseTest, DelayedSocketBindingAtGroupCapacity) {
   client_socket_factory_.SignalJobs();
   EXPECT_EQ(0, pool_->NumConnectJobsInGroup("a"));
 
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
 }
 
 // Test out the case where we have one socket connected, one
@@ -2937,7 +3014,7 @@ TEST_F(ClientSocketPoolBaseTest, DelayedSocketBindingAtStall) {
   // binding.
   handle1.Reset();
 
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
 
   // Still no idle sockets, still one pending connect job.
   EXPECT_EQ(0, pool_->IdleSocketCount());
@@ -2953,7 +3030,7 @@ TEST_F(ClientSocketPoolBaseTest, DelayedSocketBindingAtStall) {
   client_socket_factory_.SignalJobs();
   EXPECT_EQ(0, pool_->NumConnectJobsInGroup("a"));
 
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
 }
 
 // Cover the case where on an available socket slot, we have one pending
@@ -3594,9 +3671,11 @@ TEST_F(ClientSocketPoolBaseTest, PreconnectWithoutBackupJob) {
   // the backup job a pending job instead of a waiting job, so it
   // *would* complete if it were created.
   connect_job_factory_->set_job_type(TestConnectJob::kMockPendingJob);
-  MessageLoop::current()->PostDelayedTask(
-      FROM_HERE, MessageLoop::QuitClosure(), base::TimeDelta::FromSeconds(1));
-  MessageLoop::current()->Run();
+  base::MessageLoop::current()->PostDelayedTask(
+      FROM_HERE,
+      base::MessageLoop::QuitClosure(),
+      base::TimeDelta::FromSeconds(1));
+  base::MessageLoop::current()->Run();
   EXPECT_FALSE(pool_->HasGroup("a"));
 }
 
@@ -3610,7 +3689,7 @@ TEST_F(ClientSocketPoolBaseTest, PreconnectWithBackupJob) {
   EXPECT_EQ(1, pool_->NumConnectJobsInGroup("a"));
   EXPECT_EQ(1, pool_->NumUnassignedConnectJobsInGroup("a"));
   EXPECT_EQ(0, pool_->IdleSocketCountInGroup("a"));
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
 
   // Make the backup job be a pending job, so it completes normally.
   connect_job_factory_->set_job_type(TestConnectJob::kMockPendingJob);
@@ -3635,6 +3714,450 @@ TEST_F(ClientSocketPoolBaseTest, PreconnectWithBackupJob) {
   EXPECT_EQ(0, pool_->NumUnassignedConnectJobsInGroup("a"));
   EXPECT_EQ(0, pool_->IdleSocketCountInGroup("a"));
   EXPECT_EQ(1, pool_->NumActiveSocketsInGroup("a"));
+}
+
+class MockLayeredPool : public LayeredPool {
+ public:
+  MockLayeredPool(TestClientSocketPool* pool,
+                  const std::string& group_name)
+      : pool_(pool),
+        params_(new TestSocketParams),
+        group_name_(group_name),
+        can_release_connection_(true) {
+    pool_->AddLayeredPool(this);
+  }
+
+  ~MockLayeredPool() {
+    pool_->RemoveLayeredPool(this);
+  }
+
+  int RequestSocket(TestClientSocketPool* pool) {
+    return handle_.Init(group_name_, params_, kDefaultPriority,
+                        callback_.callback(), pool, BoundNetLog());
+  }
+
+  int RequestSocketWithoutLimits(TestClientSocketPool* pool) {
+    params_->set_ignore_limits(true);
+    return handle_.Init(group_name_, params_, kDefaultPriority,
+                        callback_.callback(), pool, BoundNetLog());
+  }
+
+  bool ReleaseOneConnection() {
+    if (!handle_.is_initialized() || !can_release_connection_) {
+      return false;
+    }
+    handle_.socket()->Disconnect();
+    handle_.Reset();
+    return true;
+  }
+
+  void set_can_release_connection(bool can_release_connection) {
+    can_release_connection_ = can_release_connection;
+  }
+
+  MOCK_METHOD0(CloseOneIdleConnection, bool());
+
+ private:
+  TestClientSocketPool* const pool_;
+  scoped_refptr<TestSocketParams> params_;
+  ClientSocketHandle handle_;
+  TestCompletionCallback callback_;
+  const std::string group_name_;
+  bool can_release_connection_;
+};
+
+TEST_F(ClientSocketPoolBaseTest, FailToCloseIdleSocketsNotHeldByLayeredPool) {
+  CreatePool(kDefaultMaxSockets, kDefaultMaxSocketsPerGroup);
+  connect_job_factory_->set_job_type(TestConnectJob::kMockJob);
+
+  MockLayeredPool mock_layered_pool(pool_.get(), "foo");
+  EXPECT_EQ(OK, mock_layered_pool.RequestSocket(pool_.get()));
+  EXPECT_CALL(mock_layered_pool, CloseOneIdleConnection())
+      .WillOnce(Return(false));
+  EXPECT_FALSE(pool_->CloseOneIdleConnectionInLayeredPool());
+}
+
+TEST_F(ClientSocketPoolBaseTest, ForciblyCloseIdleSocketsHeldByLayeredPool) {
+  CreatePool(kDefaultMaxSockets, kDefaultMaxSocketsPerGroup);
+  connect_job_factory_->set_job_type(TestConnectJob::kMockJob);
+
+  MockLayeredPool mock_layered_pool(pool_.get(), "foo");
+  EXPECT_EQ(OK, mock_layered_pool.RequestSocket(pool_.get()));
+  EXPECT_CALL(mock_layered_pool, CloseOneIdleConnection())
+      .WillOnce(Invoke(&mock_layered_pool,
+                       &MockLayeredPool::ReleaseOneConnection));
+  EXPECT_TRUE(pool_->CloseOneIdleConnectionInLayeredPool());
+}
+
+// Tests the basic case of closing an idle socket in a higher layered pool when
+// a new request is issued and the lower layer pool is stalled.
+TEST_F(ClientSocketPoolBaseTest, CloseIdleSocketsHeldByLayeredPoolWhenNeeded) {
+  CreatePool(1, 1);
+  connect_job_factory_->set_job_type(TestConnectJob::kMockJob);
+
+  MockLayeredPool mock_layered_pool(pool_.get(), "foo");
+  EXPECT_EQ(OK, mock_layered_pool.RequestSocket(pool_.get()));
+  EXPECT_CALL(mock_layered_pool, CloseOneIdleConnection())
+      .WillOnce(Invoke(&mock_layered_pool,
+                       &MockLayeredPool::ReleaseOneConnection));
+  ClientSocketHandle handle;
+  TestCompletionCallback callback;
+  EXPECT_EQ(ERR_IO_PENDING, handle.Init("a",
+                                        params_,
+                                        kDefaultPriority,
+                                        callback.callback(),
+                                        pool_.get(),
+                                        BoundNetLog()));
+  EXPECT_EQ(OK, callback.WaitForResult());
+}
+
+// Same as above, but the idle socket is in the same group as the stalled
+// socket, and closes the only other request in its group when closing requests
+// in higher layered pools.  This generally shouldn't happen, but it may be
+// possible if a higher level pool issues a request and the request is
+// subsequently cancelled.  Even if it's not possible, best not to crash.
+TEST_F(ClientSocketPoolBaseTest,
+       CloseIdleSocketsHeldByLayeredPoolWhenNeededSameGroup) {
+  CreatePool(2, 2);
+  connect_job_factory_->set_job_type(TestConnectJob::kMockJob);
+
+  // Need a socket in another group for the pool to be stalled (If a group
+  // has the maximum number of connections already, it's not stalled).
+  ClientSocketHandle handle1;
+  TestCompletionCallback callback1;
+  EXPECT_EQ(OK, handle1.Init("group1",
+                             params_,
+                             kDefaultPriority,
+                             callback1.callback(),
+                             pool_.get(),
+                             BoundNetLog()));
+
+  MockLayeredPool mock_layered_pool(pool_.get(), "group2");
+  EXPECT_EQ(OK, mock_layered_pool.RequestSocket(pool_.get()));
+  EXPECT_CALL(mock_layered_pool, CloseOneIdleConnection())
+      .WillOnce(Invoke(&mock_layered_pool,
+                       &MockLayeredPool::ReleaseOneConnection));
+  ClientSocketHandle handle;
+  TestCompletionCallback callback2;
+  EXPECT_EQ(ERR_IO_PENDING, handle.Init("group2",
+                                        params_,
+                                        kDefaultPriority,
+                                        callback2.callback(),
+                                        pool_.get(),
+                                        BoundNetLog()));
+  EXPECT_EQ(OK, callback2.WaitForResult());
+}
+
+// Tests the case when an idle socket can be closed when a new request is
+// issued, and the new request belongs to a group that was previously stalled.
+TEST_F(ClientSocketPoolBaseTest,
+       CloseIdleSocketsHeldByLayeredPoolInSameGroupWhenNeeded) {
+  CreatePool(2, 2);
+  std::list<TestConnectJob::JobType> job_types;
+  job_types.push_back(TestConnectJob::kMockJob);
+  job_types.push_back(TestConnectJob::kMockJob);
+  job_types.push_back(TestConnectJob::kMockJob);
+  job_types.push_back(TestConnectJob::kMockJob);
+  connect_job_factory_->set_job_types(&job_types);
+
+  ClientSocketHandle handle1;
+  TestCompletionCallback callback1;
+  EXPECT_EQ(OK, handle1.Init("group1",
+                             params_,
+                             kDefaultPriority,
+                             callback1.callback(),
+                             pool_.get(),
+                             BoundNetLog()));
+
+  MockLayeredPool mock_layered_pool(pool_.get(), "group2");
+  EXPECT_EQ(OK, mock_layered_pool.RequestSocket(pool_.get()));
+  EXPECT_CALL(mock_layered_pool, CloseOneIdleConnection())
+      .WillRepeatedly(Invoke(&mock_layered_pool,
+                             &MockLayeredPool::ReleaseOneConnection));
+  mock_layered_pool.set_can_release_connection(false);
+
+  // The third request is made when the socket pool is in a stalled state.
+  ClientSocketHandle handle3;
+  TestCompletionCallback callback3;
+  EXPECT_EQ(ERR_IO_PENDING, handle3.Init("group3",
+                                         params_,
+                                         kDefaultPriority,
+                                         callback3.callback(),
+                                         pool_.get(),
+                                         BoundNetLog()));
+
+  base::RunLoop().RunUntilIdle();
+  EXPECT_FALSE(callback3.have_result());
+
+  // The fourth request is made when the pool is no longer stalled.  The third
+  // request should be serviced first, since it was issued first and has the
+  // same priority.
+  mock_layered_pool.set_can_release_connection(true);
+  ClientSocketHandle handle4;
+  TestCompletionCallback callback4;
+  EXPECT_EQ(ERR_IO_PENDING, handle4.Init("group3",
+                                         params_,
+                                         kDefaultPriority,
+                                         callback4.callback(),
+                                         pool_.get(),
+                                         BoundNetLog()));
+  EXPECT_EQ(OK, callback3.WaitForResult());
+  EXPECT_FALSE(callback4.have_result());
+
+  // Closing a handle should free up another socket slot.
+  handle1.Reset();
+  EXPECT_EQ(OK, callback4.WaitForResult());
+}
+
+// Tests the case when an idle socket can be closed when a new request is
+// issued, and the new request belongs to a group that was previously stalled.
+//
+// The two differences from the above test are that the stalled requests are not
+// in the same group as the layered pool's request, and the the fourth request
+// has a higher priority than the third one, so gets a socket first.
+TEST_F(ClientSocketPoolBaseTest,
+       CloseIdleSocketsHeldByLayeredPoolInSameGroupWhenNeeded2) {
+  CreatePool(2, 2);
+  std::list<TestConnectJob::JobType> job_types;
+  job_types.push_back(TestConnectJob::kMockJob);
+  job_types.push_back(TestConnectJob::kMockJob);
+  job_types.push_back(TestConnectJob::kMockJob);
+  job_types.push_back(TestConnectJob::kMockJob);
+  connect_job_factory_->set_job_types(&job_types);
+
+  ClientSocketHandle handle1;
+  TestCompletionCallback callback1;
+  EXPECT_EQ(OK, handle1.Init("group1",
+                             params_,
+                             kDefaultPriority,
+                             callback1.callback(),
+                             pool_.get(),
+                             BoundNetLog()));
+
+  MockLayeredPool mock_layered_pool(pool_.get(), "group2");
+  EXPECT_EQ(OK, mock_layered_pool.RequestSocket(pool_.get()));
+  EXPECT_CALL(mock_layered_pool, CloseOneIdleConnection())
+      .WillRepeatedly(Invoke(&mock_layered_pool,
+                             &MockLayeredPool::ReleaseOneConnection));
+  mock_layered_pool.set_can_release_connection(false);
+
+  // The third request is made when the socket pool is in a stalled state.
+  ClientSocketHandle handle3;
+  TestCompletionCallback callback3;
+  EXPECT_EQ(ERR_IO_PENDING, handle3.Init("group3",
+                                         params_,
+                                         MEDIUM,
+                                         callback3.callback(),
+                                         pool_.get(),
+                                         BoundNetLog()));
+
+  base::RunLoop().RunUntilIdle();
+  EXPECT_FALSE(callback3.have_result());
+
+  // The fourth request is made when the pool is no longer stalled.  This
+  // request has a higher priority than the third request, so is serviced first.
+  mock_layered_pool.set_can_release_connection(true);
+  ClientSocketHandle handle4;
+  TestCompletionCallback callback4;
+  EXPECT_EQ(ERR_IO_PENDING, handle4.Init("group3",
+                                         params_,
+                                         HIGHEST,
+                                         callback4.callback(),
+                                         pool_.get(),
+                                         BoundNetLog()));
+  EXPECT_EQ(OK, callback4.WaitForResult());
+  EXPECT_FALSE(callback3.have_result());
+
+  // Closing a handle should free up another socket slot.
+  handle1.Reset();
+  EXPECT_EQ(OK, callback3.WaitForResult());
+}
+
+TEST_F(ClientSocketPoolBaseTest,
+       CloseMultipleIdleSocketsHeldByLayeredPoolWhenNeeded) {
+  CreatePool(1, 1);
+  connect_job_factory_->set_job_type(TestConnectJob::kMockJob);
+
+  MockLayeredPool mock_layered_pool1(pool_.get(), "foo");
+  EXPECT_EQ(OK, mock_layered_pool1.RequestSocket(pool_.get()));
+  EXPECT_CALL(mock_layered_pool1, CloseOneIdleConnection())
+      .WillRepeatedly(Invoke(&mock_layered_pool1,
+                             &MockLayeredPool::ReleaseOneConnection));
+  MockLayeredPool mock_layered_pool2(pool_.get(), "bar");
+  EXPECT_EQ(OK, mock_layered_pool2.RequestSocketWithoutLimits(pool_.get()));
+  EXPECT_CALL(mock_layered_pool2, CloseOneIdleConnection())
+      .WillRepeatedly(Invoke(&mock_layered_pool2,
+                             &MockLayeredPool::ReleaseOneConnection));
+  ClientSocketHandle handle;
+  TestCompletionCallback callback;
+  EXPECT_EQ(ERR_IO_PENDING, handle.Init("a",
+                                        params_,
+                                        kDefaultPriority,
+                                        callback.callback(),
+                                        pool_.get(),
+                                        BoundNetLog()));
+  EXPECT_EQ(OK, callback.WaitForResult());
+}
+
+// Test that when a socket pool and group are at their limits, a request
+// with |ignore_limits| triggers creation of a new socket, and gets the socket
+// instead of a request with the same priority that was issued earlier, but
+// that does not have |ignore_limits| set.
+TEST_F(ClientSocketPoolBaseTest, IgnoreLimits) {
+  scoped_refptr<TestSocketParams> params_ignore_limits(new TestSocketParams());
+  params_ignore_limits->set_ignore_limits(true);
+  CreatePool(1, 1);
+
+  // Issue a request to reach the socket pool limit.
+  EXPECT_EQ(OK, StartRequestWithParams("a", kDefaultPriority, params_));
+  EXPECT_EQ(0, pool_->NumConnectJobsInGroup("a"));
+
+  connect_job_factory_->set_job_type(TestConnectJob::kMockPendingJob);
+
+  EXPECT_EQ(ERR_IO_PENDING, StartRequestWithParams("a", kDefaultPriority,
+                                                   params_));
+  EXPECT_EQ(0, pool_->NumConnectJobsInGroup("a"));
+
+  EXPECT_EQ(ERR_IO_PENDING, StartRequestWithParams("a", kDefaultPriority,
+                                                   params_ignore_limits));
+  ASSERT_EQ(1, pool_->NumConnectJobsInGroup("a"));
+
+  EXPECT_EQ(OK, request(2)->WaitForResult());
+  EXPECT_FALSE(request(1)->have_result());
+}
+
+// Test that when a socket pool and group are at their limits, a request with
+// |ignore_limits| set triggers creation of a new socket, and gets the socket
+// instead of a request with a higher priority that was issued earlier, but
+// that does not have |ignore_limits| set.
+TEST_F(ClientSocketPoolBaseTest, IgnoreLimitsLowPriority) {
+  scoped_refptr<TestSocketParams> params_ignore_limits(new TestSocketParams());
+  params_ignore_limits->set_ignore_limits(true);
+  CreatePool(1, 1);
+
+  // Issue a request to reach the socket pool limit.
+  EXPECT_EQ(OK, StartRequestWithParams("a", HIGHEST, params_));
+  EXPECT_EQ(0, pool_->NumConnectJobsInGroup("a"));
+
+  connect_job_factory_->set_job_type(TestConnectJob::kMockPendingJob);
+
+  EXPECT_EQ(ERR_IO_PENDING, StartRequestWithParams("a", HIGHEST, params_));
+  EXPECT_EQ(0, pool_->NumConnectJobsInGroup("a"));
+
+  EXPECT_EQ(ERR_IO_PENDING, StartRequestWithParams("a", LOW,
+                                                   params_ignore_limits));
+  ASSERT_EQ(1, pool_->NumConnectJobsInGroup("a"));
+
+  EXPECT_EQ(OK, request(2)->WaitForResult());
+  EXPECT_FALSE(request(1)->have_result());
+}
+
+// Test that when a socket pool and group are at their limits, a request with
+// |ignore_limits| set triggers creation of a new socket, and gets the socket
+// instead of a request with a higher priority that was issued later and
+// does not have |ignore_limits| set.
+TEST_F(ClientSocketPoolBaseTest, IgnoreLimitsLowPriority2) {
+  scoped_refptr<TestSocketParams> params_ignore_limits(new TestSocketParams());
+  params_ignore_limits->set_ignore_limits(true);
+  CreatePool(1, 1);
+
+  // Issue a request to reach the socket pool limit.
+  EXPECT_EQ(OK, StartRequestWithParams("a", HIGHEST, params_));
+  EXPECT_EQ(0, pool_->NumConnectJobsInGroup("a"));
+
+  connect_job_factory_->set_job_type(TestConnectJob::kMockPendingJob);
+
+  EXPECT_EQ(ERR_IO_PENDING, StartRequestWithParams("a", LOW,
+                                                   params_ignore_limits));
+  ASSERT_EQ(1, pool_->NumConnectJobsInGroup("a"));
+
+  EXPECT_EQ(ERR_IO_PENDING, StartRequestWithParams("a", HIGHEST, params_));
+  EXPECT_EQ(1, pool_->NumConnectJobsInGroup("a"));
+
+  EXPECT_EQ(OK, request(1)->WaitForResult());
+  EXPECT_FALSE(request(2)->have_result());
+}
+
+// Test that when a socket pool and group are at their limits, a ConnectJob
+// issued for a request with |ignore_limits| set is not cancelled when a request
+// without |ignore_limits| issued to the same group is cancelled.
+TEST_F(ClientSocketPoolBaseTest, IgnoreLimitsCancelOtherJob) {
+  scoped_refptr<TestSocketParams> params_ignore_limits(new TestSocketParams());
+  params_ignore_limits->set_ignore_limits(true);
+  CreatePool(1, 1);
+
+  // Issue a request to reach the socket pool limit.
+  EXPECT_EQ(OK, StartRequestWithParams("a", HIGHEST, params_));
+  EXPECT_EQ(0, pool_->NumConnectJobsInGroup("a"));
+
+  connect_job_factory_->set_job_type(TestConnectJob::kMockPendingJob);
+
+  EXPECT_EQ(ERR_IO_PENDING, StartRequestWithParams("a", HIGHEST, params_));
+  EXPECT_EQ(0, pool_->NumConnectJobsInGroup("a"));
+
+  EXPECT_EQ(ERR_IO_PENDING, StartRequestWithParams("a", HIGHEST,
+                                                   params_ignore_limits));
+  ASSERT_EQ(1, pool_->NumConnectJobsInGroup("a"));
+
+  // Cancel the pending request without ignore_limits set. The ConnectJob
+  // should not be cancelled.
+  request(1)->handle()->Reset();
+  ASSERT_EQ(1, pool_->NumConnectJobsInGroup("a"));
+
+  EXPECT_EQ(OK, request(2)->WaitForResult());
+  EXPECT_FALSE(request(1)->have_result());
+}
+
+// More involved test of ignore limits. Issues a bunch of requests and later
+// checks the order in which they receive sockets.
+TEST_F(ClientSocketPoolBaseTest, IgnoreLimitsOrder) {
+  scoped_refptr<TestSocketParams> params_ignore_limits(new TestSocketParams());
+  params_ignore_limits->set_ignore_limits(true);
+  CreatePool(1, 1);
+
+  connect_job_factory_->set_job_type(TestConnectJob::kMockPendingJob);
+
+  // Requests 0 and 1 do not have ignore_limits set, so they finish last. Since
+  // the maximum number of sockets per pool is 1, the second requests does not
+  // trigger a ConnectJob.
+  EXPECT_EQ(ERR_IO_PENDING, StartRequestWithParams("a", HIGHEST, params_));
+  EXPECT_EQ(ERR_IO_PENDING, StartRequestWithParams("a", HIGHEST, params_));
+
+  // Requests 2 and 3 have ignore_limits set, but have a low priority, so they
+  // finish just before the first two.
+  EXPECT_EQ(ERR_IO_PENDING,
+            StartRequestWithParams("a", LOW, params_ignore_limits));
+  EXPECT_EQ(ERR_IO_PENDING,
+            StartRequestWithParams("a", LOW, params_ignore_limits));
+
+  // Request 4 finishes first, since it is high priority and ignores limits.
+  EXPECT_EQ(ERR_IO_PENDING,
+            StartRequestWithParams("a", HIGHEST, params_ignore_limits));
+
+  // Request 5 and 6 are cancelled right after starting. This should result in
+  // creating two ConnectJobs. Since only one request (Request 1) did not
+  // result in creating a ConnectJob, only one of the ConnectJobs should be
+  // cancelled when the requests are.
+  EXPECT_EQ(ERR_IO_PENDING,
+            StartRequestWithParams("a", HIGHEST, params_ignore_limits));
+  EXPECT_EQ(ERR_IO_PENDING,
+            StartRequestWithParams("a", HIGHEST, params_ignore_limits));
+  EXPECT_EQ(6, pool_->NumConnectJobsInGroup("a"));
+  request(5)->handle()->Reset();
+  EXPECT_EQ(6, pool_->NumConnectJobsInGroup("a"));
+  request(6)->handle()->Reset();
+  ASSERT_EQ(5, pool_->NumConnectJobsInGroup("a"));
+
+  // Wait for the last request to get a socket.
+  EXPECT_EQ(OK, request(1)->WaitForResult());
+
+  // Check order in which requests received sockets.
+  // These are 1-based indices, while request(x) uses 0-based indices.
+  EXPECT_EQ(1, GetOrderOfRequest(5));
+  EXPECT_EQ(2, GetOrderOfRequest(3));
+  EXPECT_EQ(3, GetOrderOfRequest(4));
+  EXPECT_EQ(4, GetOrderOfRequest(1));
+  EXPECT_EQ(5, GetOrderOfRequest(2));
 }
 
 }  // namespace

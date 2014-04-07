@@ -4,23 +4,21 @@
 
 #include "cc/test/fake_scrollbar_layer.h"
 
+#include "base/auto_reset.h"
 #include "cc/resources/resource_update_queue.h"
-#include "cc/test/fake_scrollbar_theme_painter.h"
-#include "cc/test/fake_web_scrollbar.h"
-#include "cc/test/fake_web_scrollbar_theme_geometry.h"
+#include "cc/test/fake_scrollbar.h"
 
 namespace cc {
 
 FakeScrollbarLayer::FakeScrollbarLayer(bool paint_during_update,
                                        bool has_thumb,
                                        int scrolling_layer_id)
-    : ScrollbarLayer(FakeWebScrollbar::Create().PassAs<WebKit::WebScrollbar>(),
-                     FakeScrollbarThemePainter::Create(paint_during_update).
-                         PassAs<ScrollbarThemePainter>(),
-                     FakeWebScrollbarThemeGeometry::Create(has_thumb).
-                         PassAs<WebKit::WebScrollbarThemeGeometry>(),
-                     scrolling_layer_id),
+    : ScrollbarLayer(
+          scoped_ptr<Scrollbar>(
+              new FakeScrollbar(paint_during_update, has_thumb, false)).Pass(),
+          scrolling_layer_id),
       update_count_(0),
+      push_properties_count_(0),
       last_update_full_upload_size_(0),
       last_update_partial_upload_size_(0) {
   SetAnchorPoint(gfx::PointF(0.f, 0.f));
@@ -30,15 +28,25 @@ FakeScrollbarLayer::FakeScrollbarLayer(bool paint_during_update,
 
 FakeScrollbarLayer::~FakeScrollbarLayer() {}
 
-void FakeScrollbarLayer::Update(ResourceUpdateQueue* queue,
-                                const OcclusionTracker* occlusion,
-                                RenderingStats* stats) {
+bool FakeScrollbarLayer::Update(ResourceUpdateQueue* queue,
+                                const OcclusionTracker* occlusion) {
   size_t full = queue->FullUploadSize();
   size_t partial = queue->PartialUploadSize();
-  ScrollbarLayer::Update(queue, occlusion, stats);
+  bool updated = ScrollbarLayer::Update(queue, occlusion);
   update_count_++;
   last_update_full_upload_size_ = queue->FullUploadSize() - full;
   last_update_partial_upload_size_ = queue->PartialUploadSize() - partial;
+  return updated;
+}
+
+void FakeScrollbarLayer::PushPropertiesTo(LayerImpl* layer) {
+  ScrollbarLayer::PushPropertiesTo(layer);
+  ++push_properties_count_;
+}
+
+scoped_ptr<base::AutoReset<bool> > FakeScrollbarLayer::IgnoreSetNeedsCommit() {
+  return make_scoped_ptr(
+      new base::AutoReset<bool>(&ignore_set_needs_commit_, true));
 }
 
 }  // namespace cc

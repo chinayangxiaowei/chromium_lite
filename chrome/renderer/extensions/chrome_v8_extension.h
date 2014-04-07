@@ -7,7 +7,7 @@
 
 #include "base/logging.h"
 #include "base/memory/linked_ptr.h"
-#include "base/string_piece.h"
+#include "base/strings/string_piece.h"
 #include "chrome/renderer/extensions/chrome_v8_extension_handler.h"
 #include "chrome/renderer/extensions/object_backed_native_handler.h"
 #include "v8/include/v8.h"
@@ -35,12 +35,10 @@ class Extension;
 //               Custom bindings should extend ObjectBackedNativeHandler.
 class ChromeV8Extension : public ObjectBackedNativeHandler {
  public:
-  ChromeV8Extension(Dispatcher* dispatcher, v8::Handle<v8::Context> context);
+  ChromeV8Extension(Dispatcher* dispatcher, ChromeV8Context* context);
   virtual ~ChromeV8Extension();
 
   Dispatcher* dispatcher() { return dispatcher_; }
-
-  ChromeV8Context* GetContext();
 
   // Shortcuts through to the context's render view and extension.
   content::RenderView* GetRenderView();

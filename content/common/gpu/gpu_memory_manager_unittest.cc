@@ -80,33 +80,29 @@ class FakeClient : public GpuMemoryManagerClient {
 
   // This will create a client with no surface
   FakeClient(GpuMemoryManager* memmgr, GpuMemoryManagerClient* share_group)
-      : memmgr_(memmgr)
-      , total_gpu_memory_(0)
-      , share_group_(share_group)
-      , memory_tracker_(NULL)
-      , tracking_group_(NULL) {
+      : memmgr_(memmgr),
+        total_gpu_memory_(0),
+        share_group_(share_group),
+        memory_tracker_(NULL) {
     if (!share_group_) {
       memory_tracker_ = new FakeMemoryTracker();
       tracking_group_.reset(
-          memmgr_->CreateTrackingGroup(0, memory_tracker_));
+          memmgr_->CreateTrackingGroup(0, memory_tracker_.get()));
     }
     client_state_.reset(memmgr_->CreateClientState(this, false, true));
   }
 
   // This will create a client with a surface
-  FakeClient(GpuMemoryManager* memmgr,
-             int32 surface_id,
-             bool visible)
-      : memmgr_(memmgr)
-      , total_gpu_memory_(0)
-      , share_group_(NULL)
-      , memory_tracker_(NULL)
-      , tracking_group_(NULL) {
+  FakeClient(GpuMemoryManager* memmgr, int32 surface_id, bool visible)
+      : memmgr_(memmgr),
+        total_gpu_memory_(0),
+        share_group_(NULL),
+        memory_tracker_(NULL) {
     memory_tracker_ = new FakeMemoryTracker();
     tracking_group_.reset(
-        memmgr_->CreateTrackingGroup(0, memory_tracker_));
-    client_state_.reset(memmgr_->CreateClientState(
-        this, surface_id != 0, visible));
+        memmgr_->CreateTrackingGroup(0, memory_tracker_.get()));
+    client_state_.reset(
+        memmgr_->CreateClientState(this, surface_id != 0, visible));
   }
 
   virtual ~FakeClient() {
@@ -460,44 +456,6 @@ TEST_F(GpuMemoryManagerTest, TestManageChangingImportanceShareGroup) {
   EXPECT_TRUE(IsAllocationHibernatedForSurfaceNo(stub4.allocation_));
 }
 
-// Test GpuMemoryAllocation memory allocation bonuses:
-// When the number of visible tabs is small, each tab should get a
-// gpu_resource_size_in_bytes allocation value that is greater than
-// GetMinimumClientAllocation(), and when the number of tabs is large,
-// each should get exactly GetMinimumClientAllocation() and not less.
-TEST_F(GpuMemoryManagerTest, TestForegroundStubsGetBonusAllocation) {
-  size_t max_stubs_before_no_bonus = static_cast<size_t>(
-      GetAvailableGpuMemory() / (GetMinimumClientAllocation() + 1));
-
-  std::vector<FakeClient*> stubs;
-  for (size_t i = 0; i < max_stubs_before_no_bonus; ++i) {
-    stubs.push_back(
-        new FakeClient(&memmgr_, GenerateUniqueSurfaceId(), true));
-  }
-
-  Manage();
-  for (size_t i = 0; i < stubs.size(); ++i) {
-    EXPECT_TRUE(IsAllocationForegroundForSurfaceYes(stubs[i]->allocation_));
-    EXPECT_GT(
-        stubs[i]->allocation_.renderer_allocation.bytes_limit_when_visible,
-        GetMinimumClientAllocation());
-  }
-
-  FakeClient extra_stub(&memmgr_, GenerateUniqueSurfaceId(), true);
-
-  Manage();
-  for (size_t i = 0; i < stubs.size(); ++i) {
-    EXPECT_TRUE(IsAllocationForegroundForSurfaceYes(stubs[i]->allocation_));
-    EXPECT_EQ(
-        stubs[i]->allocation_.renderer_allocation.bytes_limit_when_visible,
-        GetMinimumClientAllocation());
-  }
-
-  for (size_t i = 0; i < max_stubs_before_no_bonus; ++i) {
-    delete stubs[i];
-  }
-}
-
 // Test GpuMemoryManager::UpdateAvailableGpuMemory functionality
 TEST_F(GpuMemoryManagerTest, TestUpdateAvailableGpuMemory) {
   FakeClient stub1(&memmgr_, GenerateUniqueSurfaceId(), true),
@@ -716,9 +674,8 @@ TEST_F(GpuMemoryManagerTest, BackgroundMru) {
   memmgr_.TestingSetMinimumClientAllocation(8);
 
   uint64 bytes_when_not_visible_expected = 6u;
-#if defined (OS_ANDROID)
-  bytes_when_not_visible_expected = 0;
-#endif
+  if (!memmgr_.allow_nonvisible_memory_)
+    bytes_when_not_visible_expected = 0;
 
   FakeClient stub1(&memmgr_, GenerateUniqueSurfaceId(), true);
   FakeClient stub2(&memmgr_, GenerateUniqueSurfaceId(), true);
@@ -772,9 +729,8 @@ TEST_F(GpuMemoryManagerTest, BackgroundDiscardPersistent) {
   memmgr_.TestingSetMinimumClientAllocation(8);
 
   uint64 bytes_when_not_visible_expected = 10ul;
-#if defined (OS_ANDROID)
-  bytes_when_not_visible_expected = 0;
-#endif
+  if (!memmgr_.allow_nonvisible_memory_)
+    bytes_when_not_visible_expected = 0;
 
   FakeClient stub1(&memmgr_, GenerateUniqueSurfaceId(), true);
   FakeClient stub2(&memmgr_, GenerateUniqueSurfaceId(), true);

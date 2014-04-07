@@ -9,7 +9,8 @@
 
 #include "base/callback_forward.h"
 #include "base/memory/scoped_ptr.h"
-#include "chrome/test/chromedriver/session_map.h"
+#include "chrome/test/chromedriver/command.h"
+#include "chrome/test/chromedriver/session_thread_map.h"
 
 namespace base {
 class DictionaryValue;
@@ -18,33 +19,16 @@ class Value;
 
 struct Session;
 class Status;
-class WebView;
 
-typedef base::Callback<Status(
-    Session* session,
-    const base::DictionaryValue&,
-    scoped_ptr<base::Value>*)> SessionCommand;
-
-// Executes a given session command, after acquiring access to the appropriate
-// session.
-Status ExecuteSessionCommand(
-    SessionMap* session_map,
-    const SessionCommand& command,
-    const base::DictionaryValue& params,
-    const std::string& session_id,
-    scoped_ptr<base::Value>* out_value,
-    std::string* out_session_id);
-
-// Gets the capabilities of a particular session.
-Status ExecuteGetSessionCapabilities(
-    SessionMap* session_map,
+// Quits a session.
+Status ExecuteQuit(
+    bool allow_detach,
     Session* session,
     const base::DictionaryValue& params,
     scoped_ptr<base::Value>* value);
 
-// Quits a particular session.
-Status ExecuteQuit(
-    SessionMap* session_map,
+// Gets the capabilities of a particular session.
+Status ExecuteGetSessionCapabilities(
     Session* session,
     const base::DictionaryValue& params,
     scoped_ptr<base::Value>* value);
@@ -57,7 +41,6 @@ Status ExecuteGetCurrentWindowHandle(
 
 // Close the target window.
 Status ExecuteClose(
-    SessionMap* session_map,
     Session* session,
     const base::DictionaryValue& params,
     scoped_ptr<base::Value>* value);
@@ -94,37 +77,52 @@ Status ExecuteImplicitlyWait(
     const base::DictionaryValue& params,
     scoped_ptr<base::Value>* value);
 
-// Returns whether an alert is open.
-Status ExecuteGetAlert(
-    Session* session,
-    const base::DictionaryValue& params,
-    scoped_ptr<base::Value>* value);
-
-// Returns the text of the open alert.
-Status ExecuteGetAlertText(
-    Session* session,
-    const base::DictionaryValue& params,
-    scoped_ptr<base::Value>* value);
-
-// Sets the value of the alert prompt.
-Status ExecuteSetAlertValue(
-    Session* session,
-    const base::DictionaryValue& params,
-    scoped_ptr<base::Value>* value);
-
-// Accepts the open alert.
-Status ExecuteAcceptAlert(
-    Session* session,
-    const base::DictionaryValue& params,
-    scoped_ptr<base::Value>* value);
-
-// Dismisses the open alert.
-Status ExecuteDismissAlert(
-    Session* session,
-    const base::DictionaryValue& params,
-    scoped_ptr<base::Value>* value);
-
 Status ExecuteIsLoading(
+    Session* session,
+    const base::DictionaryValue& params,
+    scoped_ptr<base::Value>* value);
+
+Status ExecuteGetLocation(
+    Session* session,
+    const base::DictionaryValue& params,
+    scoped_ptr<base::Value>* value);
+
+Status ExecuteGetWindowPosition(
+    Session* session,
+    const base::DictionaryValue& params,
+    scoped_ptr<base::Value>* value);
+
+Status ExecuteSetWindowPosition(
+    Session* session,
+    const base::DictionaryValue& params,
+    scoped_ptr<base::Value>* value);
+
+Status ExecuteGetWindowSize(
+    Session* session,
+    const base::DictionaryValue& params,
+    scoped_ptr<base::Value>* value);
+
+Status ExecuteSetWindowSize(
+    Session* session,
+    const base::DictionaryValue& params,
+    scoped_ptr<base::Value>* value);
+
+Status ExecuteMaximizeWindow(
+    Session* session,
+    const base::DictionaryValue& params,
+    scoped_ptr<base::Value>* value);
+
+Status ExecuteGetAvailableLogTypes(
+    Session* session,
+    const base::DictionaryValue& params,
+    scoped_ptr<base::Value>* value);
+
+Status ExecuteGetLog(
+    Session* session,
+    const base::DictionaryValue& params,
+    scoped_ptr<base::Value>* value);
+
+Status ExecuteUploadFile(
     Session* session,
     const base::DictionaryValue& params,
     scoped_ptr<base::Value>* value);

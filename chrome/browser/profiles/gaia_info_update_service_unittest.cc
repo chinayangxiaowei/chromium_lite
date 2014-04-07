@@ -5,7 +5,7 @@
 #include "chrome/browser/profiles/gaia_info_update_service.h"
 
 #include "base/prefs/pref_service.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile_downloader.h"
 #include "chrome/browser/profiles/profile_info_cache.h"
@@ -184,7 +184,8 @@ TEST_F(GAIAInfoUpdateServiceTest, LogOut) {
   GAIAInfoUpdateService service(profile());
   EXPECT_FALSE(service.GetCachedPictureURL().empty());
   // Log out.
-  profile()->GetPrefs()->SetString(prefs::kGoogleServicesUsername, "");
+  profile()->GetPrefs()
+      ->SetString(prefs::kGoogleServicesUsername, std::string());
 
   // Verify that the GAIA name and picture, and picture URL are unset.
   EXPECT_TRUE(GetCache()->GetGAIANameOfProfileAtIndex(0).empty());
@@ -193,7 +194,8 @@ TEST_F(GAIAInfoUpdateServiceTest, LogOut) {
 }
 
 TEST_F(GAIAInfoUpdateServiceTest, LogIn) {
-  profile()->GetPrefs()->SetString(prefs::kGoogleServicesUsername, "");
+  profile()->GetPrefs()
+      ->SetString(prefs::kGoogleServicesUsername, std::string());
   GAIAInfoUpdateServiceMock service(profile());
 
   // Log in.

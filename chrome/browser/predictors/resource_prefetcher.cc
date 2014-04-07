@@ -130,7 +130,7 @@ void ResourcePrefetcher::SendRequest(Request* request) {
 
   url_request->set_method("GET");
   url_request->set_first_party_for_cookies(navigation_id_.main_frame_url);
-  url_request->set_referrer(navigation_id_.main_frame_url.spec());
+  url_request->SetReferrer(navigation_id_.main_frame_url.spec());
   url_request->SetPriority(net::LOW);
   StartURLRequest(url_request);
 }
@@ -167,7 +167,7 @@ void ResourcePrefetcher::ReadFullResponse(net::URLRequest* request) {
     int bytes_read = 0;
     scoped_refptr<net::IOBuffer> buffer(new net::IOBuffer(
         kResourceBufferSizeBytes));
-    status = request->Read(buffer, kResourceBufferSizeBytes, &bytes_read);
+    status = request->Read(buffer.get(), kResourceBufferSizeBytes, &bytes_read);
 
     if (status) {
       status = ShouldContinueReadingRequest(request, bytes_read);

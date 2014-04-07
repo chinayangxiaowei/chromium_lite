@@ -10,7 +10,7 @@
 #include "ash/system/tray/system_tray_item.h"
 #include "ash/system/tray/tray_bubble_wrapper.h"
 #include "ash/system/tray/tray_constants.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "ui/aura/window.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animation_observer.h"
@@ -116,7 +116,7 @@ class AnimationObserverDeleteLayer : public ui::ImplicitAnimationObserver {
   }
 
   virtual void OnImplicitAnimationsCompleted() OVERRIDE {
-    MessageLoopForUI::current()->DeleteSoon(FROM_HERE, this);
+    base::MessageLoopForUI::current()->DeleteSoon(FROM_HERE, this);
   }
 
  private:
@@ -167,9 +167,6 @@ void SystemTrayBubble::UpdateView(
     // When transitioning from detailed view to default view, animate the
     // existing view (slide out towards the right).
     if (bubble_type == BUBBLE_TYPE_DEFAULT) {
-      // Make sure the old view is visibile over the new view during the
-      // animation.
-      layer->parent()->StackAbove(layer, bubble_view_->layer());
       ui::ScopedLayerAnimationSettings settings(layer->GetAnimator());
       settings.AddObserver(
           new AnimationObserverDeleteLayer(scoped_layer.release()));
@@ -225,11 +222,16 @@ void SystemTrayBubble::UpdateView(
     bubble_view_->SetMaxHeight(0);  // Clear max height limit.
   }
 
-  if (scoped_layer.get()) {
+  if (scoped_layer) {
     // When transitioning from default view to detailed view, animate the new
     // view (slide in from the right).
     if (bubble_type == BUBBLE_TYPE_DETAILED) {
       ui::Layer* new_layer = bubble_view_->layer();
+
+      // Make sure the new layer is stacked above the old layer during the
+      // animation.
+      new_layer->parent()->StackAbove(new_layer, scoped_layer.get());
+
       gfx::Rect bounds = new_layer->bounds();
       gfx::Transform transform;
       transform.Translate(bounds.width(), 0.0);
@@ -262,6 +264,11 @@ void SystemTrayBubble::InitView(views::View* anchor,
       tray_->GetBubbleWindowContainer(), anchor, tray_, init_params);
   bubble_view_->set_adjust_if_offscreen(false);
   CreateItemViews(login_status);
+
+  if (bubble_view_->CanActivate()) {
+    bubble_view_->NotifyAccessibilityEvent(
+        ui::AccessibilityTypes::EVENT_ALERT, true);
+  }
 }
 
 void SystemTrayBubble::DestroyItemViews() {

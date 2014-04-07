@@ -20,24 +20,25 @@
 #include "base/values.h"
 #include "crypto/openssl_util.h"
 #include "net/base/address_list.h"
-#include "net/base/cert_test_util.h"
 #include "net/base/io_buffer.h"
-#include "net/base/mock_cert_verifier.h"
 #include "net/base/net_errors.h"
 #include "net/base/net_log.h"
 #include "net/base/net_log_unittest.h"
-#include "net/base/openssl_client_key_store.h"
 #include "net/base/test_completion_callback.h"
 #include "net/base/test_data_directory.h"
-#include "net/base/test_root_certs.h"
+#include "net/cert/mock_cert_verifier.h"
+#include "net/cert/test_root_certs.h"
 #include "net/dns/host_resolver.h"
+#include "net/http/transport_security_state.h"
 #include "net/socket/client_socket_factory.h"
 #include "net/socket/client_socket_handle.h"
 #include "net/socket/socket_test_util.h"
 #include "net/socket/tcp_client_socket.h"
+#include "net/ssl/openssl_client_key_store.h"
 #include "net/ssl/ssl_cert_request_info.h"
 #include "net/ssl/ssl_config_service.h"
-#include "net/test/test_server.h"
+#include "net/test/cert_test_util.h"
+#include "net/test/spawned_test_server/spawned_test_server.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/platform_test.h"
 
@@ -93,9 +94,11 @@ class SSLClientSocketOpenSSLClientAuthTest : public PlatformTest {
  public:
   SSLClientSocketOpenSSLClientAuthTest()
       : socket_factory_(net::ClientSocketFactory::GetDefaultFactory()),
-        cert_verifier_(new net::MockCertVerifier) {
+        cert_verifier_(new net::MockCertVerifier),
+        transport_security_state_(new net::TransportSecurityState) {
     cert_verifier_->set_default_result(net::OK);
     context_.cert_verifier = cert_verifier_.get();
+    context_.transport_security_state = transport_security_state_.get();
     key_store_ = net::OpenSSLClientKeyStore::GetInstance();
   }
 
@@ -115,17 +118,17 @@ class SSLClientSocketOpenSSLClientAuthTest : public PlatformTest {
   }
 
   // Connect to a HTTPS test server.
-  bool ConnectToTestServer(TestServer::SSLOptions& ssl_options) {
-    test_server_.reset(new TestServer(TestServer::TYPE_HTTPS,
-                                      ssl_options,
-                                      base::FilePath()));
+  bool ConnectToTestServer(SpawnedTestServer::SSLOptions& ssl_options) {
+    test_server_.reset(new SpawnedTestServer(SpawnedTestServer::TYPE_HTTPS,
+                                             ssl_options,
+                                             base::FilePath()));
     if (!test_server_->Start()) {
-      LOG(ERROR) << "Could not start TestServer";
+      LOG(ERROR) << "Could not start SpawnedTestServer";
       return false;
     }
 
     if (!test_server_->GetAddressList(&addr_)) {
-      LOG(ERROR) << "Could not get TestServer address list";
+      LOG(ERROR) << "Could not get SpawnedTestServer address list";
       return false;
     }
 
@@ -134,7 +137,7 @@ class SSLClientSocketOpenSSLClientAuthTest : public PlatformTest {
     int rv = callback_.GetResult(
         transport_->Connect(callback_.callback()));
     if (rv != OK) {
-      LOG(ERROR) << "Could not connect to TestServer";
+      LOG(ERROR) << "Could not connect to SpawnedTestServer";
       return false;
     }
     return true;
@@ -185,9 +188,10 @@ class SSLClientSocketOpenSSLClientAuthTest : public PlatformTest {
 
   ClientSocketFactory* socket_factory_;
   scoped_ptr<MockCertVerifier> cert_verifier_;
+  scoped_ptr<TransportSecurityState> transport_security_state_;
   SSLClientSocketContext context_;
   OpenSSLClientKeyStore* key_store_;
-  scoped_ptr<TestServer> test_server_;
+  scoped_ptr<SpawnedTestServer> test_server_;
   AddressList addr_;
   TestCompletionCallback callback_;
   CapturingNetLog log_;
@@ -198,7 +202,7 @@ class SSLClientSocketOpenSSLClientAuthTest : public PlatformTest {
 // Connect to a server requesting client authentication, do not send
 // any client certificates. It should refuse the connection.
 TEST_F(SSLClientSocketOpenSSLClientAuthTest, NoCert) {
-  TestServer::SSLOptions ssl_options;
+  SpawnedTestServer::SSLOptions ssl_options;
   ssl_options.request_client_certificate = true;
 
   ASSERT_TRUE(ConnectToTestServer(ssl_options));
@@ -216,10 +220,10 @@ TEST_F(SSLClientSocketOpenSSLClientAuthTest, NoCert) {
 // Connect to a server requesting client authentication, and send it
 // an empty certificate. It should refuse the connection.
 TEST_F(SSLClientSocketOpenSSLClientAuthTest, SendEmptyCert) {
-  TestServer::SSLOptions ssl_options;
+  SpawnedTestServer::SSLOptions ssl_options;
   ssl_options.request_client_certificate = true;
   ssl_options.client_authorities.push_back(
-      GetTestClientCertsDirectory().AppendASCII("client_1_root.pem"));
+      GetTestClientCertsDirectory().AppendASCII("client_1_ca.pem"));
 
   ASSERT_TRUE(ConnectToTestServer(ssl_options));
 
@@ -238,10 +242,10 @@ TEST_F(SSLClientSocketOpenSSLClientAuthTest, SendEmptyCert) {
 // Connect to a server requesting client authentication. Send it a
 // matching certificate. It should allow the connection.
 TEST_F(SSLClientSocketOpenSSLClientAuthTest, SendGoodCert) {
-  TestServer::SSLOptions ssl_options;
+  SpawnedTestServer::SSLOptions ssl_options;
   ssl_options.request_client_certificate = true;
   ssl_options.client_authorities.push_back(
-      GetTestClientCertsDirectory().AppendASCII("client_1_root.pem"));
+      GetTestClientCertsDirectory().AppendASCII("client_1_ca.pem"));
 
   ASSERT_TRUE(ConnectToTestServer(ssl_options));
 

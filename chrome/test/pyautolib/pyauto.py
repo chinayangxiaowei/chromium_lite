@@ -288,8 +288,9 @@ class PyUITest(pyautolib.PyUITestBase, unittest.TestCase):
         '--skip-oauth-login',
         # Enables injection of test content script for webui login automation
         '--auth-ext-path=%s' % auth_ext_path,
-        # Enable automation provider and chromeos net logs
-        '--vmodule=*/browser/automation/*=2,*/chromeos/net/*=2',
+        # Enable automation provider, chromeos net and chromeos login logs
+        '--vmodule=*/browser/automation/*=2,*/chromeos/net/*=2,' +
+            '*/chromeos/login/*=2',
       ]
     else:
       return []
@@ -636,7 +637,7 @@ class PyUITest(pyautolib.PyUITestBase, unittest.TestCase):
     """Get ftp:// url for the given path in the data dir.
 
     Args:
-      ftp_server: handle to ftp server, an instance of TestServer
+      ftp_server: handle to ftp server, an instance of SpawnedTestServer
       relative_path: any number of path elements
 
     The URL will be usable only after starting the ftp server.
@@ -849,11 +850,12 @@ class PyUITest(pyautolib.PyUITestBase, unittest.TestCase):
       data_dir: path where ftp files should be served
 
     Returns:
-      handle to FTP Server, an instance of TestServer
+      handle to FTP Server, an instance of SpawnedTestServer
     """
-    ftp_server = pyautolib.TestServer(pyautolib.TestServer.TYPE_FTP,
-                                      '127.0.0.1',
-                                      pyautolib.FilePath(data_dir))
+    ftp_server = pyautolib.SpawnedTestServer(
+        pyautolib.SpawnedTestServer.TYPE_FTP,
+        '127.0.0.1',
+        pyautolib.FilePath(data_dir))
     assert ftp_server.Start(), 'Could not start ftp server'
     logging.debug('Started ftp server at "%s".', data_dir)
     return ftp_server
@@ -865,18 +867,19 @@ class PyUITest(pyautolib.PyUITestBase, unittest.TestCase):
     logging.debug('Stopped ftp server.')
 
   def StartHTTPServer(self, data_dir):
-    """Starts a local HTTP TestServer serving files from |data_dir|.
+    """Starts a local HTTP SpawnedTestServer serving files from |data_dir|.
 
     Args:
-      data_dir: path where the TestServer should serve files from. This will be
-      appended to the source dir to get the final document root.
+      data_dir: path where the SpawnedTestServer should serve files from.
+      This will be appended to the source dir to get the final document root.
 
     Returns:
-      handle to the HTTP TestServer
+      handle to the HTTP SpawnedTestServer
     """
-    http_server = pyautolib.TestServer(pyautolib.TestServer.TYPE_HTTP,
-                                       '127.0.0.1',
-                                       pyautolib.FilePath(data_dir))
+    http_server = pyautolib.SpawnedTestServer(
+        pyautolib.SpawnedTestServer.TYPE_HTTP,
+        '127.0.0.1',
+        pyautolib.FilePath(data_dir))
     assert http_server.Start(), 'Could not start HTTP server'
     logging.debug('Started HTTP server at "%s".', data_dir)
     return http_server
@@ -887,19 +890,20 @@ class PyUITest(pyautolib.PyUITestBase, unittest.TestCase):
     logging.debug('Stopped HTTP server.')
 
   def StartHttpsServer(self, cert_type, data_dir):
-    """Starts a local HTTPS TestServer serving files from |data_dir|.
+    """Starts a local HTTPS SpawnedTestServer serving files from |data_dir|.
 
     Args:
       cert_type: An instance of SSLOptions.ServerCertificate for three
                  certificate types: ok, expired, or mismatch.
-      data_dir: The path where TestServer should serve files from. This is
-                appended to the source dir to get the final document root.
+      data_dir: The path where SpawnedTestServer should serve files from.
+                This is appended to the source dir to get the final
+                document root.
 
     Returns:
-      Handle to the HTTPS TestServer
+      Handle to the HTTPS SpawnedTestServer
     """
-    https_server = pyautolib.TestServer(
-        pyautolib.TestServer.TYPE_HTTPS,
+    https_server = pyautolib.SpawnedTestServer(
+        pyautolib.SpawnedTestServer.TYPE_HTTPS,
         pyautolib.SSLOptions(cert_type),
         pyautolib.FilePath(data_dir))
     assert https_server.Start(), 'Could not start HTTPS server.'
@@ -2992,41 +2996,6 @@ class PyUITest(pyautolib.PyUITestBase, unittest.TestCase):
     finally:
       shutil.rmtree(tempdir, ignore_errors=True)
 
-  def ImportSettings(self, import_from, first_run,
-                    import_items, windex=0):
-    """Import the specified import items from the specified browser.
-
-    Implements the features available in the "Import Settings" part of the
-    first-run UI dialog.
-
-    Args:
-      import_from: A string indicating which browser to import from. Possible
-                   strings (depending on which browsers are installed on the
-                   machine) are: 'Mozilla Firefox', 'Google Toolbar',
-                   'Microsoft Internet Explorer', 'Safari'
-      first_run: A boolean indicating whether this is the first run of
-                 the browser.
-                 If it is not the first run then:
-                 1) Bookmarks are only imported to the bookmarks bar if there
-                    aren't already bookmarks.
-                 2) The bookmark bar is shown.
-      import_items: A list of strings indicating which items to import.
-                    Strings that can be in the list are:
-                    HISTORY, FAVORITES, PASSWORDS, SEARCH_ENGINES, HOME_PAGE,
-                    ALL (note: COOKIES is not supported by the browser yet)
-      windex: window index, defaults to 0.
-
-    Raises:
-      pyauto_errors.JSONInterfaceError if the automation call returns an error.
-    """
-    cmd_dict = {  # Prepare command for the json interface
-      'command': 'ImportSettings',
-      'import_from': import_from,
-      'first_run': first_run,
-      'import_items': import_items
-    }
-    return self._GetResultFromJSONRequest(cmd_dict, windex=windex)
-
   def AddSavedPassword(self, password_dict, windex=0):
     """Adds the given username-password combination to the saved passwords.
 
@@ -3633,13 +3602,15 @@ class PyUITest(pyautolib.PyUITestBase, unittest.TestCase):
     return self.ExecuteJavascript(js, tab_index, windex)
 
   def HeapProfilerDump(self, process_type, reason, tab_index=0, windex=0):
-    """Dumps a heap profile.  It works only on Linux and ChromeOS.
+    """Dumps a heap profile. It works only on Linux and ChromeOS.
 
     We need an environment variable "HEAPPROFILE" set to a directory and a
     filename prefix, for example, "/tmp/prof".  In a case of this example,
     heap profiles will be dumped into "/tmp/prof.(pid).0002.heap",
     "/tmp/prof.(pid).0003.heap", and so on.  Nothing happens when this
     function is called without the env.
+
+    Also, this requires the --enable-memory-benchmarking command line flag.
 
     Args:
       process_type: A string which is one of 'browser' or 'renderer'.
@@ -3658,14 +3629,18 @@ class PyUITest(pyautolib.PyUITestBase, unittest.TestCase):
     """
     assert process_type in ('browser', 'renderer')
     if self.IsLinux():  # IsLinux() also implies IsChromeOS().
-      cmd_dict = {
-        'command': 'HeapProfilerDump',
-        'process_type': process_type,
-        'reason': reason,
-        'windex': windex,
-        'tab_index': tab_index,
-      }
-      self._GetResultFromJSONRequest(cmd_dict)
+      js = """
+          if (!chrome.memoryBenchmarking ||
+              !chrome.memoryBenchmarking.isHeapProfilerRunning()) {
+            domAutomationController.send('memory benchmarking disabled');
+          } else {
+            chrome.memoryBenchmarking.heapProfilerDump("%s", "%s");
+            domAutomationController.send('success');
+          }
+      """ % (process_type, reason.replace('"', '\\"'))
+      result = self.ExecuteJavascript(js, tab_index, windex)
+      if result != 'success':
+        raise JSONInterfaceError('Heap profiler dump failed: ' + result)
     else:
       logging.warn('Heap-profiling is not supported in this OS.')
 
@@ -4572,19 +4547,16 @@ class PyUITest(pyautolib.PyUITestBase, unittest.TestCase):
         u'ethernet_networks':
             { u'/service/ethernet_abcd':
                 { u'device_path': u'/device/abcdeth',
-                  u'ip_address': u'11.22.33.44',
                   u'name': u'',
                   u'service_path':
                   u'/profile/default/ethernet_abcd',
                   u'status': u'Connected'}
               u'network_type': pyautolib.TYPE_ETHERNET },
-        u'ip_address': u'11.22.33.44',
         u'remembered_wifi':
             { u'/service/wifi_abcd_1234_managed_none':
                 { u'device_path': u'',
                   u'encrypted': False,
                   u'encryption': u'',
-                  u'ip_address': '',
                   u'name': u'WifiNetworkName1',
                   u'status': u'Unknown',
                   u'strength': 0},
@@ -4597,14 +4569,12 @@ class PyUITest(pyautolib.PyUITestBase, unittest.TestCase):
                 { u'device_path': u'/device/abcdwifi',
                   u'encrypted': False,
                   u'encryption': u'',
-                  u'ip_address': u'123.123.123.123',
                   u'name': u'WifiNetworkName1',
                   u'status': u'Connected',
                   u'strength': 76},
               u'/service/wifi_abcd_1234_managed_802_1x':
                   { u'encrypted': True,
                     u'encryption': u'8021X',
-                    u'ip_address': u'',
                     u'name': u'WifiNetworkName2',
                     u'status': u'Idle',
                     u'strength': 79}
@@ -4743,217 +4713,36 @@ class PyUITest(pyautolib.PyUITestBase, unittest.TestCase):
 
     return self.WaitUntil(_GotWifiNetwork, timeout=timeout, retry_sleep=1)
 
-  def GetProxyTypeName(self, proxy_type):
-    values = { self.PROXY_TYPE_DIRECT: 'Direct Internet connection',
-               self.PROXY_TYPE_MANUAL: 'Manual proxy configuration',
-               self.PROXY_TYPE_PAC: 'Automatic proxy configuration' }
-    return values[proxy_type]
-
-  def GetProxySettingsOnChromeOS(self):
-    """Get current proxy settings on Chrome OS.
-
-    Returns:
-      A dictionary. See SetProxySetting() below
-      for the full list of possible dictionary keys.
-
-      Samples:
-      { u'ignorelist': [],
-        u'single': False,
-        u'type': 1}
-
-      { u'ignorelist': [u'www.example.com', u'www.example2.com'],
-        u'single': True,
-        u'singlehttp': u'24.27.78.152',
-        u'singlehttpport': 1728,
-        u'type': 2}
-
-      { u'ignorelist': [],
-        u'pacurl': u'http://example.com/config.pac',
-        u'single': False,
-        u'type': 3}
-
-    Raises:
-      pyauto_errors.JSONInterfaceError if the automation call returns an error.
-    """
-    cmd_dict = { 'command': 'GetProxySettings' }
-    return self._GetResultFromJSONRequest(cmd_dict, windex=None)
-
-  def _FindNamedNetwork(self, network_dict, name):
-    """Finds a network by name.
-
-    Args:
-      network_dict: network settings as returned by GetNetworkInfo.
-      name: name of network we want to set proxy settings on.
-
-    Returns:
-      A dictionary with service_path and network_type of the
-      named network, when given a dictionary with all system
-      network information as returned by GetNetworkInfo.
-
-      See GetNetworkInfo for a description of the input dictionary.
-
-      Samples:
-      { u'network_type': 'wifi_networks',
-        u'service_path': '/service/700'}
-    """
-    for (key, value) in network_dict.iteritems():
-      if isinstance(value, dict):
-        if 'name' in value:
-          if value['name'] == name:
-            network_info = {'service_path': key}
-            return network_info
-        else:
-          # if key is a dict but it doesnt have a 'name' entry, go deeper
-          network_info = self._FindNamedNetwork(value, name)
-          # if only service path set, set type from networking dictionary
-          if network_info != None and 'network_type' not in network_info:
-            network_info['network_type'] = value['network_type']
-          return network_info
-    return None
-
-  def _GetNamedNetworkInfo(self, network_name):
-    """Gets settings needed to enable shared proxies for the named network.
-
-    Args:
-      network_name: name of network we want to set proxy settings on.
-
-    Returns:
-      A dictionary with network_type and service_path.
-      Samples:
-      { u'network_type': '1',
-        u'service_path': '/service/0'}
-
-    Raises:
-      AutomationCommandFail if network name isn't found.
-    """
-    net = self.GetNetworkInfo()
-    if network_name == 'NAME_UNKNOWN':
-      if net.get('ethernet_available'):
-        service_path = net.get('connected_ethernet')
-        network_type = str(pyautolib.TYPE_ETHERNET)
-      elif net.get('wifi_available'):
-        service_path = net.get('connected_wifi')
-        network_type = str(pyautolib.TYPE_WIFI)
-      elif net.get('cellular_available'):
-        service_path = net.get('connected_cellular')
-        network_type = str(pyautolib.TYPE_CELLULAR)
-      else:
-        raise AutomationCommandFail('No network available.')
-    else:
-      named_network_info = self._FindNamedNetwork(net, network_name)
-      if named_network_info == None:
-        raise AutomationCommandFail('%s not found.' % network_name)
-      service_path = named_network_info['service_path']
-      network_type = named_network_info['network_type']
-
-    if not network_type:
-      raise AutomationCommandFail('network type not found.')
-    if not service_path:
-      raise AutomationCommandFail('service path not found.')
-    network_info = {'network type': network_type, 'service path': service_path}
-    return network_info
-
-  def SetProxySettingOnChromeOS(self, proxy_dict):
-    """Public wrapper around _SetProxySettingOnChromeOSCore, performs
-       state setup and error checking.
-
-    Args:
-      proxy_dict: dictionary of proxy settings, valid entries of which are
-      what one would supply _SetProxySettingOnChromeOSCore
-
-    Raises:
-      AutomationCommandFail if a necessary dictionary entries aren't found.
-    """
-    url_path = proxy_dict.get('url_path')
-    proxy_url = proxy_dict.get('proxy_url')
-    port_path = proxy_dict.get('port_path')
-    proxy_port = proxy_dict.get('proxy_port')
-
-    if proxy_url is not None:
-      if url_path is None:
-        raise AutomationCommandFail('url_path needed to set proxy_url.')
-        return
-      self.SetSharedProxies(True)
-      self.RefreshInternetDetails()
-      self._SetProxySettingOnChromeOSCore('type', self.PROXY_TYPE_MANUAL)
-      self._SetProxySettingOnChromeOSCore(url_path, proxy_url)
-
-    if proxy_port is not None:
-      if port_path is None:
-        raise AutomationCommandFail('port_path needed to set proxy_port.')
-        return
-      self._SetProxySettingOnChromeOSCore(port_path, proxy_port)
-
   def ResetProxySettingsOnChromeOS(self):
     """Public wrapper around proxysettings teardown functions."""
     self.SetSharedProxies(False)
-    self.RefreshInternetDetails()
-    self._SetProxySettingOnChromeOSCore('type', self.PROXY_TYPE_DIRECT)
+    proxy_dict = {
+        'mode': 'direct'
+    }
+    self.SetProxySettingOnChromeOS(proxy_dict)
 
-  def _SetProxySettingOnChromeOSCore(self, key, value):
-    """Set a proxy setting.
+  def SetProxySettingOnChromeOS(self, proxy_config):
+    """Set the proxy config of the current network.
 
     Owner must be logged in for these to persist.
     If user is not logged in or is logged in as non-owner or guest,
     proxy settings do not persist across browser restarts or login/logout.
 
     Args:
-      key: string describing type of proxy preference.
-      value: value of proxy preference.
-
-    Valid settings are:
-      'type': int - Type of proxy. Should be one of:
-                     PROXY_TYPE_DIRECT, PROXY_TYPE_MANUAL, PROXY_TYPE_PAC.
-      'ignorelist': list - The list of hosts and domains to ignore.
-
-      These settings set 'type' to PROXY_TYPE_MANUAL:
-        'single': boolean - Whether to use the same proxy for all protocols.
-
-        These settings set 'single' to True:
-          'singlehttp': string - If single is true, the proxy address to use.
-          'singlehttpport': int - If single is true, the proxy port to use.
-
-        These settings set 'single' to False:
-          'httpurl': string - HTTP proxy address.
-          'httpport': int - HTTP proxy port.
-          'httpsurl': string - Secure HTTP proxy address.
-          'httpsport': int - Secure HTTP proxy port.
-          'ftpurl': string - FTP proxy address.
-          'ftpport': int - FTP proxy port.
-          'socks': string - SOCKS host address.
-          'socksport': int - SOCKS host port.
-
-      This setting sets 'type' to PROXY_TYPE_PAC:
-        'pacurl': string - Autoconfiguration URL.
-
-    Examples:
-      # Sets direct internet connection, no proxy.
-      self.SetProxySettingOnChromeOS('type', self.PROXY_TYPE_DIRECT)
-
-      # Sets manual proxy configuration, same proxy for all protocols.
-      self.SetProxySettingOnChromeOS('singlehttp', '24.27.78.152')
-      self.SetProxySettingOnChromeOS('singlehttpport', 1728)
-      self.SetProxySettingOnChromeOS('ignorelist',
-                                     ['www.example.com', 'example2.com'])
-
-      # Sets automatic proxy configuration with the specified PAC url.
-      self.SetProxySettingOnChromeOS('pacurl', 'http://example.com/config.pac')
-
-      # Sets httpproxy with specified url
-      self.SetProxySettingOnChromeOS('httpurl', 10.10.10)
+      proxy_config:   A dictionary following the format described in
+                      prefs/proxy_config_dictionary.h.
 
     Raises:
       pyauto_errors.JSONInterfaceError if the automation call returns an error.
     """
     cmd_dict = {
         'command': 'SetProxySettings',
-        'key': key,
-        'value': value,
+        'proxy_config': json.dumps(proxy_config)
     }
     return self._GetResultFromJSONRequest(cmd_dict, windex=None)
 
   def SetSharedProxies(self, value):
-    """Allows shared proxies on the named network.
+    """Allows proxies on the shared networks.
 
     Args:
       value: True/False to set and clear respectively.
@@ -4966,22 +4755,6 @@ class PyUITest(pyautolib.PyUITestBase, unittest.TestCase):
         'value': value,
     }
     return self._GetResultFromJSONRequest(cmd_dict, windex=None)
-
-  def RefreshInternetDetails(self, network_name='NAME_UNKNOWN'):
-    """Updates network information
-
-    Args:
-      network_name: name of the network we want to refresh settings for.
-
-    Raises:
-      pyauto_errors.JSONInterfaceError if the automation call returns an error.
-    """
-    network_info = self._GetNamedNetworkInfo(network_name)
-    cmd_dict = {
-        'command': 'RefreshInternetDetails',
-        'service path': network_info.get('service path'),
-    }
-    return self._GetResultFromJSONRequest(cmd_dict, None)
 
   def ForgetAllRememberedNetworks(self):
     """Forgets all networks that the device has marked as remembered."""
@@ -5134,7 +4907,6 @@ class PyUITest(pyautolib.PyUITestBase, unittest.TestCase):
                         provider_type,
                         username,
                         password,
-                        cert_nss='',
                         cert_id='',
                         key=''):
     """Add and connect to a private network.
@@ -5152,7 +4924,6 @@ class PyUITest(pyautolib.PyUITestBase, unittest.TestCase):
                      also work.
       username: Username for connecting to the virtual network.
       password: Passphrase for connecting to the virtual network.
-      cert_nss: Certificate nss nickname for a L2TP_IPSEC_USER_CERT network.
       cert_id: Certificate id for a L2TP_IPSEC_USER_CERT network.
       key: Pre-shared key for a L2TP_IPSEC_PSK network.
 
@@ -5170,7 +4941,6 @@ class PyUITest(pyautolib.PyUITestBase, unittest.TestCase):
         'provider_type': provider_type,
         'username': username,
         'password': password,
-        'cert_nss': cert_nss,
         'cert_id': cert_id,
         'key': key,
     }
@@ -5316,27 +5086,6 @@ class PyUITest(pyautolib.PyUITestBase, unittest.TestCase):
     }
     self._GetResultFromJSONRequest(cmd_dict, windex=None)
 
-  def GetUpdateInfo(self):
-    """Gets the status of the ChromeOS updater.
-
-    Returns:
-      a dictionary.
-      Samples:
-      { u'status': u'idle',
-        u'release_track': u'beta-channel'}
-
-      { u'status': u'downloading',
-        u'release_track': u'beta-channel',
-        u'download_progress': 0.1203236708350371,   # 0.0 ~ 1.0
-        u'new_size': 152033593,                     # size of payload, in bytes
-        u'last_checked_time': 1302055709}           # seconds since UNIX epoch
-
-    Raises:
-      pyauto_errors.JSONInterfaceError if the automation call returns an error.
-    """
-    cmd_dict = { 'command': 'GetUpdateInfo' }
-    return self._GetResultFromJSONRequest(cmd_dict, windex=None)
-
   def UpdateCheck(self):
     """Checks for a ChromeOS update. Blocks until finished updating.
 
@@ -5344,23 +5093,6 @@ class PyUITest(pyautolib.PyUITestBase, unittest.TestCase):
       pyauto_errors.JSONInterfaceError if the automation call returns an error.
     """
     cmd_dict = { 'command': 'UpdateCheck' }
-    self._GetResultFromJSONRequest(cmd_dict, windex=None)
-
-  def SetReleaseTrack(self, track):
-    """Sets the release track (channel) of the ChromeOS updater.
-
-    Valid values for the track parameter are:
-      'stable-channel', 'beta-channel', 'dev-channel'
-
-    Raises:
-      pyauto_errors.JSONInterfaceError if the automation call returns an error.
-    """
-    assert track in ('stable-channel', 'beta-channel', 'dev-channel'), \
-        'Attempt to set release track to unknown release track "%s".' % track
-    cmd_dict = {
-        'command': 'SetReleaseTrack',
-        'track': track,
-    }
     self._GetResultFromJSONRequest(cmd_dict, windex=None)
 
   def GetVolumeInfo(self):
@@ -5806,9 +5538,10 @@ class PyUITestSuite(pyautolib.PyUITestSuiteBase, unittest.TestSuite):
     global _HTTP_SERVER
     assert not _HTTP_SERVER, 'HTTP Server already started'
     http_data_dir = _OPTIONS.http_data_dir
-    http_server = pyautolib.TestServer(pyautolib.TestServer.TYPE_HTTP,
-                                       '127.0.0.1',
-                                       pyautolib.FilePath(http_data_dir))
+    http_server = pyautolib.SpawnedTestServer(
+        pyautolib.SpawnedTestServer.TYPE_HTTP,
+        '127.0.0.1',
+        pyautolib.FilePath(http_data_dir))
     assert http_server.Start(), 'Could not start http server'
     _HTTP_SERVER = http_server
     logging.debug('Started http server at "%s".', http_data_dir)

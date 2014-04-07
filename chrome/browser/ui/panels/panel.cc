@@ -5,9 +5,10 @@
 #include "chrome/browser/ui/panels/panel.h"
 
 #include "base/logging.h"
-#include "base/message_loop.h"
-#include "base/utf_string_conversions.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/devtools/devtools_window.h"
 #include "chrome/browser/extensions/api/tabs/tabs_constants.h"
 #include "chrome/browser/extensions/api/tabs/tabs_windows_api.h"
@@ -28,9 +29,8 @@
 #include "chrome/browser/ui/panels/panel_manager.h"
 #include "chrome/browser/ui/panels/stacked_panel_collection.h"
 #include "chrome/browser/web_applications/web_app.h"
-#include "chrome/common/chrome_notification_types.h"
-#include "chrome/common/extensions/api/icons/icons_handler.h"
 #include "chrome/common/extensions/extension.h"
+#include "chrome/common/extensions/manifest_handlers/icons_handler.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/notification_source.h"
 #include "content/public/browser/notification_types.h"
@@ -253,6 +253,10 @@ gfx::Rect Panel::GetRestoredBounds() const {
   return bounds;
 }
 
+ui::WindowShowState Panel::GetRestoredState() const {
+  return ui::SHOW_STATE_NORMAL;
+}
+
 gfx::Rect Panel::GetBounds() const {
   return native_panel_->GetPanelBounds();
 }
@@ -304,6 +308,14 @@ void Panel::Minimize() {
 
 bool Panel::IsMinimizedBySystem() const {
   return native_panel_->IsPanelMinimizedBySystem();
+}
+
+bool Panel::IsShownOnActiveDesktop() const {
+  return native_panel_->IsPanelShownOnActiveDesktop();
+}
+
+void Panel::ShowShadow(bool show) {
+  native_panel_->ShowShadow(show);
 }
 
 void Panel::Restore() {
@@ -462,8 +474,8 @@ void Panel::OnMinimizeButtonClicked(panel::ClickModifier modifier) {
 }
 
 void Panel::OnRestoreButtonClicked(panel::ClickModifier modifier) {
-  if (collection_)
-    collection_->OnRestoreButtonClicked(this, modifier);
+  // Clicking the restore button has the same behavior as clicking the titlebar.
+  OnTitlebarClicked(modifier);
 }
 
 void Panel::OnWindowSizeAvailable() {
@@ -490,35 +502,38 @@ panel::Resizability Panel::CanResizeByMouse() const {
   return collection_->GetPanelResizability(this);
 }
 
-void Panel::Initialize(Profile* profile, const GURL& url,
-                       const gfx::Rect& bounds) {
+void Panel::Initialize(const GURL& url,
+                       const gfx::Rect& bounds,
+                       bool always_on_top) {
   DCHECK(!initialized_);
   DCHECK(!collection_);  // Cannot be added to a collection until fully created.
   DCHECK_EQ(EXPANDED, expansion_state_);
   DCHECK(!bounds.IsEmpty());
   initialized_ = true;
-  profile_ = profile;
   full_size_ = bounds.size();
-  native_panel_ = CreateNativePanel(this, bounds);
+  native_panel_ = CreateNativePanel(this, bounds, always_on_top);
 
   extension_window_controller_.reset(
-      new panel_internal::PanelExtensionWindowController(this, profile));
+      new panel_internal::PanelExtensionWindowController(this, profile_));
 
   InitCommandState();
 
   // Set up hosting for web contents.
-  panel_host_.reset(new PanelHost(this, profile));
+  panel_host_.reset(new PanelHost(this, profile_));
   panel_host_->Init(url);
-  native_panel_->AttachWebContents(GetWebContents());
+  content::WebContents* web_contents = GetWebContents();
+  // The contents might be NULL for most of our tests.
+  if (web_contents)
+    native_panel_->AttachWebContents(web_contents);
 
   // Close when the extension is unloaded or the browser is exiting.
   registrar_.Add(this, chrome::NOTIFICATION_EXTENSION_UNLOADED,
-                 content::Source<Profile>(profile));
+                 content::Source<Profile>(profile_));
   registrar_.Add(this, chrome::NOTIFICATION_APP_TERMINATING,
                  content::NotificationService::AllSources());
   registrar_.Add(this, chrome::NOTIFICATION_BROWSER_THEME_CHANGED,
                  content::Source<ThemeService>(
-                    ThemeServiceFactory::GetForProfile(profile)));
+                    ThemeServiceFactory::GetForProfile(profile_)));
 
   // Prevent the browser process from shutting down while this window is open.
   chrome::StartKeepAlive();
@@ -786,10 +801,10 @@ void Panel::MinimizeBySystem() {
   native_panel_->MinimizePanelBySystem();
 }
 
-Panel::Panel(const std::string& app_name,
+Panel::Panel(Profile* profile, const std::string& app_name,
              const gfx::Size& min_size, const gfx::Size& max_size)
     : app_name_(app_name),
-      profile_(NULL),
+      profile_(profile),
       collection_(NULL),
       initialized_(false),
       min_size_(min_size),
@@ -801,7 +816,7 @@ Panel::Panel(const std::string& app_name,
       attention_mode_(USE_PANEL_ATTENTION),
       expansion_state_(EXPANDED),
       command_updater_(this),
-      ALLOW_THIS_IN_INITIALIZER_LIST(image_loader_ptr_factory_(this)) {
+      image_loader_ptr_factory_(this) {
 }
 
 void Panel::OnImageLoaded(const gfx::Image& image) {

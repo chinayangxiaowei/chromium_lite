@@ -9,7 +9,7 @@
 
 #include "base/lazy_instance.h"
 #include "base/logging.h"
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "base/values.h"
 #include "extensions/common/error_utils.h"
 #include "extensions/common/matcher/url_matcher_constants.h"
@@ -43,6 +43,8 @@ class URLMatcherConditionFactoryMethods {
     factory_methods_[keys::kHostEqualsKey] = &F::CreateHostEqualsCondition;
     factory_methods_[keys::kHostPrefixKey] = &F::CreateHostPrefixCondition;
     factory_methods_[keys::kHostSuffixKey] = &F::CreateHostSuffixCondition;
+    factory_methods_[keys::kOriginAndPathMatchesKey] =
+        &F::CreateOriginAndPathMatchesCondition;
     factory_methods_[keys::kPathContainsKey] = &F::CreatePathContainsCondition;
     factory_methods_[keys::kPathEqualsKey] = &F::CreatePathEqualsCondition;
     factory_methods_[keys::kPathPrefixKey] = &F::CreatePathPrefixCondition;
@@ -110,7 +112,7 @@ URLMatcherFactory::CreateFromURLFilterDictionary(
   URLMatcherConditionSet::Conditions url_matcher_conditions;
 
   for (base::DictionaryValue::Iterator iter(*url_filter_dict);
-       iter.HasNext(); iter.Advance()) {
+       !iter.IsAtEnd(); iter.Advance()) {
     const std::string& condition_attribute_name = iter.key();
     const Value& condition_attribute_value = iter.value();
     if (IsURLMatcherConditionAttribute(condition_attribute_name)) {
@@ -151,7 +153,8 @@ URLMatcherFactory::CreateFromURLFilterDictionary(
   // matched.
   if (url_matcher_conditions.empty()) {
     url_matcher_conditions.insert(
-        url_matcher_condition_factory->CreateHostPrefixCondition(""));
+        url_matcher_condition_factory->CreateHostPrefixCondition(
+            std::string()));
   }
 
   scoped_refptr<URLMatcherConditionSet> url_matcher_condition_set(
@@ -200,7 +203,8 @@ URLMatcherCondition URLMatcherFactory::CreateURLMatcherCondition(
   }
 
   // Test regular expressions for validity.
-  if (condition_attribute_name == keys::kURLMatchesKey) {
+  if (condition_attribute_name == keys::kURLMatchesKey ||
+      condition_attribute_name == keys::kOriginAndPathMatchesKey) {
     re2::RE2 regex(str_value);
     if (!regex.ok()) {
       *error = ErrorUtils::FormatErrorMessage(kUnparseableRegexString,
@@ -220,14 +224,14 @@ scoped_ptr<URLMatcherSchemeFilter> URLMatcherFactory::CreateURLMatcherScheme(
   if (!helpers::GetAsStringVector(value, &schemas)) {
     *error = ErrorUtils::FormatErrorMessage(kVectorOfStringsExpected,
                                             keys::kSchemesKey);
-    return scoped_ptr<URLMatcherSchemeFilter>(NULL);
+    return scoped_ptr<URLMatcherSchemeFilter>();
   }
   for (std::vector<std::string>::const_iterator it = schemas.begin();
        it != schemas.end(); ++it) {
     if (ContainsUpperCase(*it)) {
       *error = ErrorUtils::FormatErrorMessage(kLowerCaseExpected,
                                               "Scheme");
-      return scoped_ptr<URLMatcherSchemeFilter>(NULL);
+      return scoped_ptr<URLMatcherSchemeFilter>();
     }
   }
   return scoped_ptr<URLMatcherSchemeFilter>(
@@ -242,7 +246,7 @@ scoped_ptr<URLMatcherPortFilter> URLMatcherFactory::CreateURLMatcherPorts(
   const base::ListValue* value_list = NULL;
   if (!value->GetAsList(&value_list)) {
     *error = kInvalidPortRanges;
-    return scoped_ptr<URLMatcherPortFilter>(NULL);
+    return scoped_ptr<URLMatcherPortFilter>();
   }
 
   for (ListValue::const_iterator i = value_list->begin();
@@ -258,12 +262,12 @@ scoped_ptr<URLMatcherPortFilter> URLMatcherFactory::CreateURLMatcherPorts(
           !range->GetInteger(0, &from) ||
           !range->GetInteger(1, &to)) {
         *error = kInvalidPortRanges;
-        return scoped_ptr<URLMatcherPortFilter>(NULL);
+        return scoped_ptr<URLMatcherPortFilter>();
       }
       ranges.push_back(URLMatcherPortFilter::CreateRange(from, to));
     } else {
       *error = kInvalidPortRanges;
-      return scoped_ptr<URLMatcherPortFilter>(NULL);
+      return scoped_ptr<URLMatcherPortFilter>();
     }
   }
 

@@ -7,6 +7,7 @@
 #include "base/prefs/pref_service.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/defaults.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/prefs/incognito_mode_prefs.h"
@@ -16,6 +17,7 @@
 #include "chrome/browser/sessions/tab_restore_service.h"
 #include "chrome/browser/sessions/tab_restore_service_factory.h"
 #include "chrome/browser/shell_integration.h"
+#include "chrome/browser/signin/signin_promo.h"
 #include "chrome/browser/sync/profile_sync_service.h"
 #include "chrome/browser/sync/profile_sync_service_factory.h"
 #include "chrome/browser/ui/bookmarks/bookmark_tab_helper.h"
@@ -25,8 +27,7 @@
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_utils.h"
-#include "chrome/browser/ui/webui/sync_promo/sync_promo_ui.h"
-#include "chrome/common/chrome_notification_types.h"
+#include "chrome/common/content_restriction.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/profiling.h"
 #include "content/public/browser/native_web_keyboard_event.h"
@@ -35,7 +36,6 @@
 #include "content/public/browser/user_metrics.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
-#include "content/public/common/content_restriction.h"
 #include "content/public/common/url_constants.h"
 #include "ui/base/keycodes/keyboard_codes.h"
 
@@ -46,6 +46,7 @@
 #if defined(OS_WIN)
 #include "base/win/metro.h"
 #include "base/win/windows_version.h"
+#include "chrome/browser/ui/extensions/apps_metro_handler_win.h"
 #endif
 
 #if defined(USE_ASH)
@@ -70,7 +71,7 @@ bool HasInternalURL(const NavigationEntry* entry) {
 
   // If the |virtual_url()| isn't a chrome:// URL, check if it's actually
   // view-source: of a chrome:// URL.
-  if (entry->GetVirtualURL().SchemeIs(chrome::kViewSourceScheme))
+  if (entry->GetVirtualURL().SchemeIs(content::kViewSourceScheme))
     return entry->GetURL().SchemeIs(chrome::kChromeUIScheme);
 
   return false;
@@ -87,17 +88,17 @@ bool HasInternalURL(const NavigationEntry* entry) {
 // 6- If we are not the default exit.
 //
 // Note: this class deletes itself.
-class SwichToMetroUIHandler
+class SwitchToMetroUIHandler
     : public ShellIntegration::DefaultWebClientObserver {
  public:
-  SwichToMetroUIHandler()
-      : ALLOW_THIS_IN_INITIALIZER_LIST(default_browser_worker_(
-            new ShellIntegration::DefaultBrowserWorker(this))),
+  SwitchToMetroUIHandler()
+      : default_browser_worker_(
+            new ShellIntegration::DefaultBrowserWorker(this)),
         first_check_(true) {
     default_browser_worker_->StartCheckIsDefault();
   }
 
-  virtual ~SwichToMetroUIHandler() {
+  virtual ~SwitchToMetroUIHandler() {
     default_browser_worker_->ObserverDestroyed();
   }
 
@@ -140,7 +141,7 @@ class SwichToMetroUIHandler
   scoped_refptr<ShellIntegration::DefaultBrowserWorker> default_browser_worker_;
   bool first_check_;
 
-  DISALLOW_COPY_AND_ASSIGN(SwichToMetroUIHandler);
+  DISALLOW_COPY_AND_ASSIGN(SwitchToMetroUIHandler);
 };
 #endif  // defined(OS_WIN)
 
@@ -156,7 +157,7 @@ BrowserCommandController::BrowserCommandController(
     ProfileManager* profile_manager)
     : browser_(browser),
       profile_manager_(profile_manager),
-      ALLOW_THIS_IN_INITIALIZER_LIST(command_updater_(this)),
+      command_updater_(this),
       block_command_execution_(false),
       last_blocked_command_id_(-1),
       last_blocked_command_disposition_(CURRENT_TAB) {
@@ -170,11 +171,6 @@ BrowserCommandController::BrowserCommandController(
         prefs::kAllowFileSelectionDialogs,
         base::Bind(
             &BrowserCommandController::UpdateCommandsForFileSelectionDialogs,
-            base::Unretained(this)));
-    local_pref_registrar_.Add(
-        prefs::kInManagedMode,
-        base::Bind(
-            &BrowserCommandController::UpdateCommandsForMultipleProfiles,
             base::Unretained(this)));
   }
 
@@ -375,18 +371,23 @@ void BrowserCommandController::ExecuteCommandWithDisposition(
       NewIncognitoWindow(browser_);
       break;
     case IDC_CLOSE_WINDOW:
+      content::RecordAction(content::UserMetricsAction("CloseWindowByKey"));
       CloseWindow(browser_);
       break;
     case IDC_NEW_TAB:
       NewTab(browser_);
       break;
     case IDC_CLOSE_TAB:
+      content::RecordAction(content::UserMetricsAction("CloseTabByKey"));
       CloseTab(browser_);
       break;
     case IDC_SELECT_NEXT_TAB:
+      content::RecordAction(content::UserMetricsAction("Accel_SelectNextTab"));
       SelectNextTab(browser_);
       break;
     case IDC_SELECT_PREVIOUS_TAB:
+      content::RecordAction(
+          content::UserMetricsAction("Accel_SelectPreviousTab"));
       SelectPreviousTab(browser_);
       break;
     case IDC_TABPOSE:
@@ -447,7 +448,11 @@ void BrowserCommandController::ExecuteCommandWithDisposition(
       content::RecordAction(content::UserMetricsAction("Win8DesktopRestart"));
       break;
     case IDC_WIN8_METRO_RESTART:
-      new SwichToMetroUIHandler;
+      if (!chrome::VerifySwitchToMetroForApps(window()->GetNativeWindow()))
+        break;
+
+      // SwitchToMetroUIHandler deletes itself.
+      new SwitchToMetroUIHandler;
       content::RecordAction(content::UserMetricsAction("Win8MetroRestart"));
       break;
 #endif
@@ -491,9 +496,6 @@ void BrowserCommandController::ExecuteCommandWithDisposition(
       break;
     case IDC_PRINT_TO_DESTINATION:
       PrintToDestination(browser_);
-      break;
-    case IDC_CHROME_TO_MOBILE_PAGE:
-      ShowChromeToMobileBubble(browser_);
       break;
     case IDC_ENCODING_AUTO_DETECT:
       browser_->ToggleEncodingAutoDetect();
@@ -587,6 +589,9 @@ void BrowserCommandController::ExecuteCommandWithDisposition(
     case IDC_FOCUS_BOOKMARKS:
       FocusBookmarksToolbar(browser_);
       break;
+    case IDC_FOCUS_INFOBARS:
+      FocusInfobars(browser_);
+      break;
     case IDC_FOCUS_NEXT_PANE:
       FocusNextPane(browser_);
       break;
@@ -614,10 +619,7 @@ void BrowserCommandController::ExecuteCommandWithDisposition(
       ToggleDevToolsWindow(browser_, DEVTOOLS_TOGGLE_ACTION_TOGGLE);
       break;
     case IDC_TASK_MANAGER:
-      OpenTaskManager(browser_, false);
-      break;
-    case IDC_VIEW_BACKGROUND_PAGES:
-      OpenTaskManager(browser_, true);
+      OpenTaskManager(browser_);
       break;
     case IDC_FEEDBACK:
       OpenFeedbackDialog(browser_);
@@ -682,7 +684,7 @@ void BrowserCommandController::ExecuteCommandWithDisposition(
       ShowHelp(browser_, HELP_SOURCE_MENU);
       break;
     case IDC_SHOW_SIGNIN:
-      ShowBrowserSignin(browser_, SyncPromoUI::SOURCE_MENU);
+      ShowBrowserSignin(browser_, signin::SOURCE_MENU);
       break;
     case IDC_TOGGLE_SPEECH_INPUT:
       ToggleSpeechInput(browser_);
@@ -706,19 +708,6 @@ void BrowserCommandController::OnProfileWasRemoved(
     const base::FilePath& profile_path,
     const string16& profile_name) {
   UpdateCommandsForMultipleProfiles();
-}
-
-void BrowserCommandController::OnProfileWillBeRemoved(
-    const base::FilePath& profile_path) {
-}
-
-void BrowserCommandController::OnProfileNameChanged(
-    const base::FilePath& profile_path,
-    const string16& old_profile_name) {
-}
-
-void BrowserCommandController::OnProfileAvatarChanged(
-    const base::FilePath& profile_path) {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -941,10 +930,6 @@ void BrowserCommandController::InitCommandState() {
   command_updater_.UpdateCommandEnabled(IDC_UPGRADE_DIALOG, true);
   command_updater_.UpdateCommandEnabled(IDC_VIEW_INCOMPATIBILITIES, true);
 
-  // View Background Pages entry is always enabled, but is hidden if there are
-  // no background pages.
-  command_updater_.UpdateCommandEnabled(IDC_VIEW_BACKGROUND_PAGES, true);
-
   // Toggle speech input
   command_updater_.UpdateCommandEnabled(IDC_TOGGLE_SPEECH_INPUT, true);
 
@@ -986,6 +971,7 @@ void BrowserCommandController::UpdateSharedCommandsForIncognitoAvailability(
 
   command_updater->UpdateCommandEnabled(IDC_IMPORT_SETTINGS, command_enabled);
   command_updater->UpdateCommandEnabled(IDC_OPTIONS, command_enabled);
+  command_updater->UpdateCommandEnabled(IDC_SHOW_SIGNIN, command_enabled);
 }
 
 void BrowserCommandController::UpdateCommandsForIncognitoAvailability() {
@@ -1056,11 +1042,11 @@ void BrowserCommandController::UpdateCommandsForContentRestrictionState() {
   int restrictions = GetContentRestrictions(browser_);
 
   command_updater_.UpdateCommandEnabled(
-      IDC_COPY, !(restrictions & content::CONTENT_RESTRICTION_COPY));
+      IDC_COPY, !(restrictions & CONTENT_RESTRICTION_COPY));
   command_updater_.UpdateCommandEnabled(
-      IDC_CUT, !(restrictions & content::CONTENT_RESTRICTION_CUT));
+      IDC_CUT, !(restrictions & CONTENT_RESTRICTION_CUT));
   command_updater_.UpdateCommandEnabled(
-      IDC_PASTE, !(restrictions & content::CONTENT_RESTRICTION_PASTE));
+      IDC_PASTE, !(restrictions & CONTENT_RESTRICTION_PASTE));
   UpdateSaveAsState();
   UpdatePrintingState();
 }
@@ -1125,6 +1111,8 @@ void BrowserCommandController::UpdateCommandsForFullscreenMode(
       IDC_FOCUS_PREVIOUS_PANE, main_not_fullscreen);
   command_updater_.UpdateCommandEnabled(
       IDC_FOCUS_BOOKMARKS, main_not_fullscreen);
+  command_updater_.UpdateCommandEnabled(
+      IDC_FOCUS_INFOBARS, main_not_fullscreen);
 
   // Show various bits of UI
   command_updater_.UpdateCommandEnabled(IDC_DEVELOPER_MENU, show_main_ui);
@@ -1147,11 +1135,8 @@ void BrowserCommandController::UpdateCommandsForFullscreenMode(
   command_updater_.UpdateCommandEnabled(IDC_PROFILING_ENABLED, show_main_ui);
 #endif
 
-  // Disable explicit fullscreen toggling for app-panels and when in metro snap
-  // mode.
-  bool fullscreen_enabled =
-      !(browser_->is_type_panel() && browser_->is_app()) &&
-      fullscreen_mode != FULLSCREEN_METRO_SNAP;
+  // Disable explicit fullscreen toggling when in metro snap mode.
+  bool fullscreen_enabled = fullscreen_mode != FULLSCREEN_METRO_SNAP;
 #if defined(OS_MACOSX)
   // The Mac implementation doesn't support switching to fullscreen while
   // a tab modal dialog is displayed.

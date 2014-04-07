@@ -4,10 +4,11 @@
 
 #include "chrome/browser/ui/views/ash/chrome_browser_main_extra_parts_ash.h"
 
+#include "ash/session_state_delegate.h"
+#include "ash/shell.h"
 #include "base/command_line.h"
 #include "base/lazy_instance.h"
 #include "chrome/browser/chrome_browser_main.h"
-#include "chrome/browser/toolkit_extra_parts.h"
 #include "chrome/browser/ui/ash/ash_init.h"
 #include "chrome/browser/ui/ash/ash_util.h"
 #include "chrome/browser/ui/views/ash/tab_scrubber.h"
@@ -15,6 +16,8 @@
 #include "ui/aura/env.h"
 #include "ui/gfx/screen.h"
 #include "ui/gfx/screen_type_delegate.h"
+#include "ui/keyboard/keyboard.h"
+#include "ui/keyboard/keyboard_util.h"
 #include "ui/views/widget/desktop_aura/desktop_screen.h"
 
 #if defined(FILE_MANAGER_EXTENSION)
@@ -64,10 +67,6 @@ ChromeBrowserMainExtraPartsAsh::~ChromeBrowserMainExtraPartsAsh() {
 void ChromeBrowserMainExtraPartsAsh::PreProfileInit() {
   if (chrome::ShouldOpenAshOnStartup()) {
     chrome::OpenAsh();
-    if (!CommandLine::ForCurrentProcess()->HasSwitch(
-        switches::kAshDisableTabScrubbing)) {
-      TabScrubber::GetInstance();
-    }
   } else {
 #if !defined(OS_CHROMEOS)
     gfx::Screen::SetScreenTypeDelegate(new ScreenTypeDelegateWin);
@@ -75,6 +74,13 @@ void ChromeBrowserMainExtraPartsAsh::PreProfileInit() {
         &g_shell_dialogs_delegate.Get());
 #endif
   }
+#if defined(OS_CHROMEOS)
+  // For OS_CHROMEOS, virtual keyboard needs to be initialized before profile
+  // initialized. Otherwise, virtual keyboard extension will not load at login
+  // screen.
+  if (keyboard::IsKeyboardEnabled())
+    keyboard::InitializeKeyboard();
+#endif
 
 #if defined(FILE_MANAGER_EXTENSION)
   ui::SelectFileDialog::SetFactory(new SelectFileDialogExtensionFactory);
@@ -82,16 +88,14 @@ void ChromeBrowserMainExtraPartsAsh::PreProfileInit() {
 }
 
 void ChromeBrowserMainExtraPartsAsh::PostProfileInit() {
+  // Initialize TabScrubber after the Ash Shell has been initialized.
+  if (ash::Shell::HasInstance() &&
+      !CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kAshDisableTabScrubbing)) {
+    TabScrubber::GetInstance();
+  }
 }
 
 void ChromeBrowserMainExtraPartsAsh::PostMainMessageLoopRun() {
   chrome::CloseAsh();
 }
-
-namespace chrome {
-
-void AddAshToolkitExtraParts(ChromeBrowserMainParts* main_parts) {
-  main_parts->AddParts(new ChromeBrowserMainExtraPartsAsh());
-}
-
-}  // namespace chrome

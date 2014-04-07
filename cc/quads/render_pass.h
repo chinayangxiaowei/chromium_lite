@@ -5,24 +5,29 @@
 #ifndef CC_QUADS_RENDER_PASS_H_
 #define CC_QUADS_RENDER_PASS_H_
 
-#include <vector>
+#include <utility>
 
 #include "base/basictypes.h"
+#include "base/callback.h"
+#include "base/containers/hash_tables.h"
 #include "cc/base/cc_export.h"
-#include "cc/base/hash_pair.h"
 #include "cc/base/scoped_ptr_hash_map.h"
 #include "cc/base/scoped_ptr_vector.h"
 #include "skia/ext/refptr.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebFilterOperations.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "third_party/skia/include/core/SkImageFilter.h"
 #include "ui/gfx/rect.h"
 #include "ui/gfx/rect_f.h"
 #include "ui/gfx/transform.h"
 
+namespace base {
+class Value;
+};
+
 namespace cc {
 
 class DrawQuad;
+class CopyOutputRequest;
 class SharedQuadState;
 
 // A list of DrawQuad objects, sorted internally in front-to-back order.
@@ -45,7 +50,8 @@ class CC_EXPORT RenderPass {
     int layer_id;
     int index;
 
-   Id(int layer_id, int index) : layer_id(layer_id), index(index) {}
+    Id(int layer_id, int index) : layer_id(layer_id), index(index) {}
+    void* AsTracingId() const;
 
     bool operator==(const Id& other) const {
       return layer_id == other.layer_id && index == other.index;
@@ -78,6 +84,8 @@ class CC_EXPORT RenderPass {
               bool has_transparent_background,
               bool has_occlusion_from_outside_target_surface);
 
+  scoped_ptr<base::Value> AsValue() const;
+
   // Uniquely identifies the render pass in the compositor's current frame.
   Id id;
 
@@ -96,40 +104,44 @@ class CC_EXPORT RenderPass {
   // complete, since they are occluded.
   bool has_occlusion_from_outside_target_surface;
 
+  // If non-empty, the renderer should produce a copy of the render pass'
+  // contents as a bitmap, and give a copy of the bitmap to each callback in
+  // this list. This property should not be serialized between compositors, as
+  // it only makes sense in the root compositor.
+  ScopedPtrVector<CopyOutputRequest> copy_requests;
+
   QuadList quad_list;
   SharedQuadStateList shared_quad_state_list;
 
  protected:
   RenderPass();
 
+ private:
   DISALLOW_COPY_AND_ASSIGN(RenderPass);
 };
 
-} // namespace cc
+}  // namespace cc
 
 namespace BASE_HASH_NAMESPACE {
 #if defined(COMPILER_MSVC)
-template<>
-inline size_t hash_value<cc::RenderPass::Id>(const cc::RenderPass::Id& key) {
-  return hash_value<std::pair<int, int> >(
-      std::pair<int, int>(key.layer_id, key.index));
+inline size_t hash_value(const cc::RenderPass::Id& key) {
+  return base::HashPair(key.layer_id, key.index);
 }
 #elif defined(COMPILER_GCC)
 template<>
 struct hash<cc::RenderPass::Id> {
   size_t operator()(cc::RenderPass::Id key) const {
-    return hash<std::pair<int, int> >()(
-        std::pair<int, int>(key.layer_id, key.index));
+    return base::HashPair(key.layer_id, key.index);
   }
 };
 #else
 #error define a hash function for your compiler
-#endif // COMPILER
-}
+#endif  // COMPILER
+}  // namespace BASE_HASH_NAMESPACE
 
 namespace cc {
 typedef ScopedPtrVector<RenderPass> RenderPassList;
 typedef base::hash_map<RenderPass::Id, RenderPass*> RenderPassIdHashMap;
-} // namespace cc
+}  // namespace cc
 
 #endif  // CC_QUADS_RENDER_PASS_H_

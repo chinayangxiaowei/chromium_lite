@@ -13,9 +13,9 @@
       ],
       'variables': {
         'apk_name': 'AndroidWebView',
-        'java_in_dir': '../android_webview/test/shell',
-        'native_libs_paths': ['<(SHARED_LIB_DIR)/libwebviewchromium.so'],
-        'resource_dir': 'res',
+        'java_in_dir': 'test/shell',
+        'native_lib_target': 'libwebviewchromium',
+        'resource_dir': 'test/shell/res',
         'additional_input_paths': [
           '<(PRODUCT_DIR)/android_webview_apk/assets/webviewchromium.pak',
           '<(PRODUCT_DIR)/android_webview_apk/assets/asset_file.html',
@@ -44,19 +44,7 @@
       'dependencies': [
         'android_webview_apk',
       ],
-      'all_dependent_settings': {
-        'variables': {
-          'input_jars_paths': ['>(apk_output_jar_path)'],
-        },
-      },
-      'actions': [
-        {
-          'action_name': 'fake_generate_jar',
-          'inputs': [],
-          'outputs': ['>(apk_output_jar_path)'],
-          'action': [],
-        },
-      ],
+      'includes': [ '../build/apk_fake_jar.gypi' ],
     },
     {
       'target_name': 'android_webview_test_apk',
@@ -79,10 +67,12 @@
       'type': '<(gtest_target_type)',
       'dependencies': [
         '../base/base.gyp:test_support_base',
+        '../content/content.gyp:test_support_content',
         '../net/net.gyp:net_test_support',
         '../testing/android/native_test.gyp:native_test_native_code',
         '../testing/gmock.gyp:gmock',
         '../testing/gtest.gyp:gtest',
+        '../ui/ui.gyp:ui_jni_headers',
         'android_webview_common',
       ],
       'include_dirs': [
@@ -91,6 +81,7 @@
         '<(SHARED_INTERMEDIATE_DIR)/android_webview_unittests',
       ],
       'sources': [
+        'browser/aw_form_database_service_unittest.cc',
         'browser/net/android_stream_reader_url_request_job_unittest.cc',
         'browser/net/input_stream_reader_unittest.cc',
         'lib/main/webview_tests.cc',

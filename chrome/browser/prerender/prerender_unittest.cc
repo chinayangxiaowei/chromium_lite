@@ -5,9 +5,9 @@
 #include "base/command_line.h"
 #include "base/format_macros.h"
 #include "base/memory/scoped_vector.h"
-#include "base/message_loop.h"
-#include "base/stringprintf.h"
-#include "base/time.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/stringprintf.h"
+#include "base/time/time.h"
 #include "chrome/browser/prerender/prerender_contents.h"
 #include "chrome/browser/prerender/prerender_handle.h"
 #include "chrome/browser/prerender/prerender_link_manager.h"
@@ -18,9 +18,9 @@
 #include "chrome/test/base/testing_profile.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/test/test_browser_thread.h"
-#include "googleurl/src/gurl.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gfx/size.h"
+#include "url/gurl.h"
 
 using base::Time;
 using base::TimeDelta;
@@ -94,7 +94,6 @@ class UnitTestPrerenderManager : public PrerenderManager {
       : PrerenderManager(profile, prerender_tracker),
         time_(Time::Now()),
         time_ticks_(TimeTicks::Now()),
-        next_prerender_contents_(NULL),
         prerender_tracker_(prerender_tracker) {
     set_rate_limit_enabled(false);
   }
@@ -102,7 +101,7 @@ class UnitTestPrerenderManager : public PrerenderManager {
   virtual ~UnitTestPrerenderManager() {
   }
 
-  // From ProfileKeyedService, via PrererenderManager:
+  // From BrowserContextKeyedService, via PrererenderManager:
   virtual void Shutdown() OVERRIDE {
     if (next_prerender_contents())
       next_prerender_contents_->Destroy(FINAL_STATUS_MANAGER_SHUTDOWN);
@@ -349,7 +348,7 @@ class PrerenderTest : public testing::Test {
 
   // Needed to pass PrerenderManager's DCHECKs.
   TestingProfile profile_;
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
   content::TestBrowserThread ui_thread_;
   scoped_ptr<UnitTestPrerenderManager> prerender_manager_;
   scoped_ptr<PrerenderLinkManager> prerender_link_manager_;
@@ -661,6 +660,7 @@ TEST_F(PrerenderTest, PendingPrerenderTest) {
   EXPECT_TRUE(pending_prerender_handle->IsPrerendering());
   ASSERT_EQ(pending_prerender_contents,
             prerender_manager()->FindAndUseEntry(pending_url));
+  EXPECT_FALSE(pending_prerender_handle->IsPrerendering());
 }
 
 TEST_F(PrerenderTest, InvalidPendingPrerenderTest) {

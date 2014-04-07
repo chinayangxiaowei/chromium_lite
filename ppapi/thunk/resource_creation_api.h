@@ -21,14 +21,19 @@
 #include "ppapi/c/private/pp_private_font_charset.h"
 #include "ppapi/c/private/ppb_network_monitor_private.h"
 #include "ppapi/shared_impl/api_id.h"
+#include "ppapi/shared_impl/ppb_image_data_shared.h"
 
 struct PP_Flash_Menu;
 struct PP_FontDescription_Dev;
 struct PP_BrowserFont_Trusted_Description;
+struct PP_NetAddress_IPv4;
+struct PP_NetAddress_IPv6;
+struct PP_NetAddress_Private;
 struct PP_Size;
 
 namespace ppapi {
 
+struct PPB_FileRef_CreateInfo;
 struct URLRequestInfoData;
 struct URLResponseInfoData;
 
@@ -44,10 +49,19 @@ class ResourceCreationAPI {
   virtual ~ResourceCreationAPI() {}
 
   virtual PP_Resource CreateFileIO(PP_Instance instance) = 0;
-  virtual PP_Resource CreateFileRef(PP_Resource file_system,
+  virtual PP_Resource CreateFileRef(PP_Instance instance,
+                                    PP_Resource file_system,
                                     const char* path) = 0;
+  // Like the above version but takes a serialized file ref. The resource
+  // in the serialized file ref is passed into this, which takes ownership of
+  // the reference. In the proxy, the return value will be a plugin resource.
+  // In the impl, the return value will be the same resource ID.
+  virtual PP_Resource CreateFileRef(
+      const PPB_FileRef_CreateInfo& serialized) = 0;
   virtual PP_Resource CreateFileSystem(PP_Instance instance,
                                        PP_FileSystemType type) = 0;
+  virtual PP_Resource CreateIsolatedFileSystem(PP_Instance instance,
+                                               const char* fsid) = 0;
   virtual PP_Resource CreateIMEInputEvent(PP_Instance instance,
                                           PP_InputEvent_Type type,
                                           PP_TimeTicks time_stamp,
@@ -83,19 +97,10 @@ class ResourceCreationAPI {
                                           uint32_t size) = 0;
   virtual PP_Resource CreateTrueTypeFont(
       PP_Instance instance,
-      const PP_TrueTypeFontDesc_Dev& desc) = 0;
+      const PP_TrueTypeFontDesc_Dev* desc) = 0;
   virtual PP_Resource CreateURLLoader(PP_Instance instance) = 0;
   virtual PP_Resource CreateURLRequestInfo(
-      PP_Instance instance,
-      const URLRequestInfoData& data) = 0;
-
-  // Passes a reference to the file_ref_resource, which is a process-local
-  // resource corresponding to the body_as_file_ref host resource in |data|,
-  // if there is one.
-  virtual PP_Resource CreateURLResponseInfo(
-      PP_Instance instance,
-      const URLResponseInfoData& data,
-      PP_Resource file_ref_resource) = 0;
+      PP_Instance instance) = 0;
 
   virtual PP_Resource CreateWheelInputEvent(
       PP_Instance instance,
@@ -115,9 +120,9 @@ class ResourceCreationAPI {
                                         uint32_t sample_frame_count) = 0;
   virtual PP_Resource CreateFileChooser(PP_Instance instance,
                                         PP_FileChooserMode_Dev mode,
-                                        const char* accept_types) = 0;
+                                        const PP_Var& accept_types) = 0;
   virtual PP_Resource CreateGraphics2D(PP_Instance instance,
-                                       const PP_Size& size,
+                                       const PP_Size* size,
                                        PP_Bool is_always_opaque) = 0;
   virtual PP_Resource CreateGraphics3D(PP_Instance instance,
                                        PP_Resource share_context,
@@ -125,23 +130,37 @@ class ResourceCreationAPI {
   virtual PP_Resource CreateGraphics3DRaw(PP_Instance instance,
                                           PP_Resource share_context,
                                           const int32_t* attrib_list) = 0;
+  virtual PP_Resource CreateHostResolver(PP_Instance instance) = 0;
   virtual PP_Resource CreateHostResolverPrivate(PP_Instance instance) = 0;
   virtual PP_Resource CreateImageData(PP_Instance instance,
                                       PP_ImageDataFormat format,
-                                      const PP_Size& size,
+                                      const PP_Size* size,
                                       PP_Bool init_to_zero) = 0;
-  virtual PP_Resource CreateImageDataNaCl(PP_Instance instance,
-                                          PP_ImageDataFormat format,
-                                          const PP_Size& size,
-                                          PP_Bool init_to_zero) = 0;
+  virtual PP_Resource CreateImageDataSimple(PP_Instance instance,
+                                            PP_ImageDataFormat format,
+                                            const PP_Size* size,
+                                            PP_Bool init_to_zero) = 0;
+  virtual PP_Resource CreateNetAddressFromIPv4Address(
+      PP_Instance instance,
+      const PP_NetAddress_IPv4* ipv4_addr) = 0;
+  virtual PP_Resource CreateNetAddressFromIPv6Address(
+      PP_Instance instance,
+      const PP_NetAddress_IPv6* ipv6_addr) = 0;
+  virtual PP_Resource CreateNetAddressFromNetAddressPrivate(
+      PP_Instance instance,
+      const PP_NetAddress_Private& private_addr) = 0;
   virtual PP_Resource CreateNetworkMonitor(
       PP_Instance instance,
       PPB_NetworkMonitor_Callback callback,
       void* user_data) = 0;
   virtual PP_Resource CreatePrinting(PP_Instance instance) = 0;
   virtual PP_Resource CreateTCPServerSocketPrivate(PP_Instance instance) = 0;
+  virtual PP_Resource CreateTCPSocket(PP_Instance instace) = 0;
   virtual PP_Resource CreateTCPSocketPrivate(PP_Instance instace) = 0;
+  virtual PP_Resource CreateUDPSocket(PP_Instance instace) = 0;
   virtual PP_Resource CreateUDPSocketPrivate(PP_Instance instace) = 0;
+  virtual PP_Resource CreateVideoDestination(PP_Instance instance) = 0;
+  virtual PP_Resource CreateVideoSource(PP_Instance instance) = 0;
   virtual PP_Resource CreateWebSocket(PP_Instance instance) = 0;
   virtual PP_Resource CreateX509CertificatePrivate(PP_Instance instance) = 0;
 #if !defined(OS_NACL)
@@ -151,10 +170,7 @@ class ResourceCreationAPI {
       PP_Instance instance,
       const PP_BrowserFont_Trusted_Description* description) = 0;
   virtual PP_Resource CreateBuffer(PP_Instance instance, uint32_t size) = 0;
-  virtual PP_Resource CreateDirectoryReader(
-      PP_Instance instance,
-      PP_Resource directory_ref) = 0;
-  virtual PP_Resource CreateFlashDeviceID(PP_Instance instance) = 0;
+  virtual PP_Resource CreateFlashDRM(PP_Instance instance) = 0;
   virtual PP_Resource CreateFlashFontFile(
       PP_Instance instance,
       const PP_BrowserFont_Trusted_Description* description,

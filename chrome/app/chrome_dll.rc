@@ -57,6 +57,7 @@ BEGIN
     "E",            IDC_FOCUS_SEARCH,           VIRTKEY, CONTROL
     "T",            IDC_FOCUS_TOOLBAR,          VIRTKEY, SHIFT, ALT
     "B",            IDC_FOCUS_BOOKMARKS,        VIRTKEY, SHIFT, ALT
+    "A",            IDC_FOCUS_INFOBARS,         VIRTKEY, SHIFT, ALT
     VK_RIGHT,       IDC_FORWARD,                VIRTKEY, ALT
     VK_BACK,        IDC_FORWARD,                VIRTKEY, SHIFT
     VK_F11,         IDC_FULLSCREEN,             VIRTKEY
@@ -223,17 +224,6 @@ BEGIN
     CONTROL         "",IDC_Messages,"SysListView32",LVS_ALIGNLEFT | WS_BORDER | WS_TABSTOP,7,22,170,529
     PUSHBUTTON      "All",IDC_MessagesAll,7,6,56,13
     PUSHBUTTON      "None",IDC_MessagesNone,121,7,56,13
-END
-
-IDD_SCREEN_CAPTURE_NOTIFICATION DIALOGEX 0, 0, 145, 24
-STYLE DS_SETFONT | WS_POPUP
-EXSTYLE WS_EX_TOPMOST | WS_EX_TOOLWINDOW
-FONT 9, "Microsoft Sans Serif", 400, 0, 0x0
-BEGIN
-    DEFPUSHBUTTON   "kDisconnectButton",IDC_SCREEN_CAPTURE_STOP,68,5,70,14
-    LTEXT           "kSharingWith",IDC_SCREEN_CAPTURE_TEXT,18,7,43,8
-    CONTROL         "",IDC_STATIC,"Static",SS_ETCHEDVERT,6,6,1,12
-    CONTROL         "",IDC_STATIC,"Static",SS_ETCHEDVERT,8,6,1,12
 END
 
 

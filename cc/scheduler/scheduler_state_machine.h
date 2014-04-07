@@ -8,7 +8,9 @@
 #include <string>
 
 #include "base/basictypes.h"
+#include "base/time/time.h"
 #include "cc/base/cc_export.h"
+#include "cc/output/begin_frame_args.h"
 #include "cc/scheduler/scheduler_settings.h"
 
 namespace cc {
@@ -27,7 +29,7 @@ namespace cc {
 class CC_EXPORT SchedulerStateMachine {
  public:
   // settings must be valid for the lifetime of this class.
-  SchedulerStateMachine(const SchedulerSettings& settings);
+  explicit SchedulerStateMachine(const SchedulerSettings& settings);
 
   enum CommitState {
     COMMIT_STATE_IDLE,
@@ -46,7 +48,7 @@ class CC_EXPORT SchedulerStateMachine {
   enum OutputSurfaceState {
     OUTPUT_SURFACE_ACTIVE,
     OUTPUT_SURFACE_LOST,
-    OUTPUT_SURFACE_RECREATING,
+    OUTPUT_SURFACE_CREATING,
   };
 
   bool CommitPending() const {
@@ -58,26 +60,29 @@ class CC_EXPORT SchedulerStateMachine {
 
   enum Action {
     ACTION_NONE,
-    ACTION_BEGIN_FRAME,
+    ACTION_SEND_BEGIN_FRAME_TO_MAIN_THREAD,
     ACTION_COMMIT,
-    ACTION_CHECK_FOR_COMPLETED_TILE_UPLOADS,
+    ACTION_UPDATE_VISIBLE_TILES,
     ACTION_ACTIVATE_PENDING_TREE_IF_NEEDED,
     ACTION_DRAW_IF_POSSIBLE,
     ACTION_DRAW_FORCED,
-    ACTION_BEGIN_OUTPUT_SURFACE_RECREATION,
+    ACTION_BEGIN_OUTPUT_SURFACE_CREATION,
     ACTION_ACQUIRE_LAYER_TEXTURES_FOR_MAIN_THREAD,
   };
   Action NextAction() const;
   void UpdateState(Action action);
 
-  // Indicates whether the scheduler needs a vsync callback in order to make
-  // progress.
-  bool VSyncCallbackNeeded() const;
+  // Indicates whether the main thread needs a begin frame callback in order to
+  // make progress.
+  bool BeginFrameNeededToDrawByImplThread() const;
+  bool ProactiveBeginFrameWantedByImplThread() const;
 
-  // Indicates that the system has entered and left a vsync callback.
-  // The scheduler will not draw more than once in a given vsync callback.
-  void DidEnterVSync();
-  void DidLeaveVSync();
+  // Indicates that the system has entered and left a BeginFrame callback.
+  // The scheduler will not draw more than once in a given BeginFrame
+  // callback nor send more than one BeginFrame message.
+  void DidEnterBeginFrame(const BeginFrameArgs& args);
+  void DidLeaveBeginFrame();
+  bool inside_begin_frame() const { return inside_begin_frame_; }
 
   // Indicates whether the LayerTreeHostImpl is visible.
   void SetVisible(bool visible);
@@ -102,19 +107,22 @@ class CC_EXPORT SchedulerStateMachine {
   // thread to main.
   void SetNeedsCommit();
 
-  // As SetNeedsCommit(), but ensures the BeginFrame will definitely happen even
-  // if we are not visible.  After this call we expect to go through the forced
-  // commit flow and then return to waiting for a non-forced BeginFrame to
-  // finish.
+  // As SetNeedsCommit(), but ensures the begin frame will be sent to the main
+  // thread even if we are not visible.  After this call we expect to go through
+  // the forced commit flow and then return to waiting for a non-forced
+  // begin frame to finish.
   void SetNeedsForcedCommit();
 
-  // Call this only in response to receiving an ACTION_BEGIN_FRAME
-  // from NextAction. Indicates that all painting is complete.
-  void BeginFrameComplete();
+  // Call this only in response to receiving an
+  // ACTION_SEND_BEGIN_FRAME_TO_MAIN_THREAD from NextAction.
+  // Indicates that all painting is complete.
+  void FinishCommit();
 
-  // Call this only in response to receiving an ACTION_BEGIN_FRAME
-  // from NextAction if the client rejects the BeginFrame message.
-  void BeginFrameAborted();
+  // Call this only in response to receiving an
+  // ACTION_SEND_BEGIN_FRAME_TO_MAIN_THREAD from NextAction if the client
+  // rejects the begin frame message.  If did_handle is false, then
+  // another commit will be retried soon.
+  void BeginFrameAbortedByMainThread(bool did_handle);
 
   // Request exclusive access to the textures that back single buffered
   // layers on behalf of the main thread. Upon acquisition,
@@ -122,8 +130,8 @@ class CC_EXPORT SchedulerStateMachine {
   // textures to the impl thread by committing the layers.
   void SetMainThreadNeedsLayerTextures();
 
-  // Indicates whether we can successfully begin a frame at this time.
-  void SetCanBeginFrame(bool can) { can_begin_frame_ = can; }
+  // Set that we can create the first OutputSurface and start the scheduler.
+  void SetCanStart() { can_start_ = true; }
 
   // Indicates whether drawing would, at this time, make sense.
   // CanDraw can be used to supress flashes or checkerboarding
@@ -139,52 +147,63 @@ class CC_EXPORT SchedulerStateMachine {
   bool has_pending_tree() const { return has_pending_tree_; }
 
   void DidLoseOutputSurface();
-  void DidRecreateOutputSurface();
+  void DidCreateAndInitializeOutputSurface();
+  bool HasInitializedOutputSurface() const;
 
   // Exposed for testing purposes.
   void SetMaximumNumberOfFailedDrawsBeforeDrawIsForced(int num_draws);
+
+  // False if drawing is not being prevented, true if drawing won't happen
+  // for some reason, such as not being visible.
+  bool DrawSuspendedUntilCommit() const;
 
   std::string ToString();
 
  protected:
   bool ShouldDrawForced() const;
-  bool DrawSuspendedUntilCommit() const;
   bool ScheduledToDraw() const;
   bool ShouldDraw() const;
   bool ShouldAttemptTreeActivation() const;
   bool ShouldAcquireLayerTexturesForMainThread() const;
-  bool ShouldCheckForCompletedTileUploads() const;
+  bool ShouldUpdateVisibleTiles() const;
   bool HasDrawnThisFrame() const;
   bool HasAttemptedTreeActivationThisFrame() const;
-  bool HasCheckedForCompletedTileUploadsThisFrame() const;
+  bool HasUpdatedVisibleTilesThisFrame() const;
+  void SetPostCommitFlags();
 
   const SchedulerSettings settings_;
 
   CommitState commit_state_;
+  int commit_count_;
 
   int current_frame_number_;
+  int last_frame_number_where_begin_frame_sent_to_main_thread_;
   int last_frame_number_where_draw_was_called_;
   int last_frame_number_where_tree_activation_attempted_;
-  int last_frame_number_where_check_for_completed_tile_uploads_called_;
+  int last_frame_number_where_update_visible_tiles_was_called_;
   int consecutive_failed_draws_;
   int maximum_number_of_failed_draws_before_draw_is_forced_;
   bool needs_redraw_;
   bool swap_used_incomplete_tile_;
   bool needs_forced_redraw_;
   bool needs_forced_redraw_after_next_commit_;
+  bool needs_redraw_after_next_commit_;
   bool needs_commit_;
   bool needs_forced_commit_;
-  bool expect_immediate_begin_frame_;
+  bool expect_immediate_begin_frame_for_main_thread_;
   bool main_thread_needs_layer_textures_;
-  bool inside_vsync_;
+  bool inside_begin_frame_;
+  BeginFrameArgs last_begin_frame_args_;
   bool visible_;
-  bool can_begin_frame_;
+  bool can_start_;
   bool can_draw_;
   bool has_pending_tree_;
   bool draw_if_possible_failed_;
   TextureState texture_state_;
   OutputSurfaceState output_surface_state_;
+  bool did_create_and_initialize_first_output_surface_;
 
+ private:
   DISALLOW_COPY_AND_ASSIGN(SchedulerStateMachine);
 };
 

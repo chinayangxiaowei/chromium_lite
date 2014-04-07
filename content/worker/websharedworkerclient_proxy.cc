@@ -6,11 +6,11 @@
 
 #include "base/bind.h"
 #include "base/command_line.h"
-#include "base/message_loop.h"
-#include "content/common/fileapi/file_system_dispatcher.h"
-#include "content/common/fileapi/webfilesystem_callback_dispatcher.h"
-#include "content/common/quota_dispatcher.h"
-#include "content/common/webmessageportchannel_impl.h"
+#include "base/message_loop/message_loop.h"
+#include "content/child/fileapi/file_system_dispatcher.h"
+#include "content/child/fileapi/webfilesystem_callback_adapters.h"
+#include "content/child/quota_dispatcher.h"
+#include "content/child/webmessageportchannel_impl.h"
 #include "content/common/worker_messages.h"
 #include "content/public/common/content_switches.h"
 #include "content/worker/shared_worker_devtools_agent.h"
@@ -18,12 +18,12 @@
 #include "content/worker/worker_thread.h"
 #include "content/worker/worker_webapplicationcachehost_impl.h"
 #include "ipc/ipc_logging.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebString.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebURL.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebDocument.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebFileSystemCallbacks.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebFrame.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebSecurityOrigin.h"
+#include "third_party/WebKit/public/platform/WebString.h"
+#include "third_party/WebKit/public/platform/WebURL.h"
+#include "third_party/WebKit/public/web/WebDocument.h"
+#include "third_party/WebKit/public/web/WebFileSystemCallbacks.h"
+#include "third_party/WebKit/public/web/WebFrame.h"
+#include "third_party/WebKit/public/web/WebSecurityOrigin.h"
 
 using WebKit::WebApplicationCacheHost;
 using WebKit::WebFrame;
@@ -44,7 +44,7 @@ WebSharedWorkerClientProxy::WebSharedWorkerClientProxy(
     : route_id_(route_id),
       appcache_host_id_(0),
       stub_(stub),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)),
+      weak_factory_(this),
       devtools_agent_(NULL) {
 }
 
@@ -168,7 +168,9 @@ void WebSharedWorkerClientProxy::openFileSystem(
     WebKit::WebFileSystemCallbacks* callbacks) {
   ChildThread::current()->file_system_dispatcher()->OpenFileSystem(
       stub_->url().GetOrigin(), static_cast<fileapi::FileSystemType>(type),
-      size, create, new WebFileSystemCallbackDispatcher(callbacks));
+      size, create,
+      base::Bind(&OpenFileSystemCallbackAdapter, callbacks),
+      base::Bind(&FileStatusCallbackAdapter, callbacks));
 }
 
 bool WebSharedWorkerClientProxy::allowIndexedDB(const WebKit::WebString& name) {
@@ -207,10 +209,10 @@ void WebSharedWorkerClientProxy::EnsureWorkerContextTerminates() {
   // process, and avoids the crashed worker infobar from appearing to the new
   // page. It's ok to post several of theese, because the first executed task
   // will exit the message loop and subsequent ones won't be executed.
-  MessageLoop::current()->PostDelayedTask(FROM_HERE,
-      base::Bind(
-          &WebSharedWorkerClientProxy::workerContextDestroyed,
-          weak_factory_.GetWeakPtr()),
+  base::MessageLoop::current()->PostDelayedTask(
+      FROM_HERE,
+      base::Bind(&WebSharedWorkerClientProxy::workerContextDestroyed,
+                 weak_factory_.GetWeakPtr()),
       base::TimeDelta::FromSeconds(kMaxTimeForRunawayWorkerSeconds));
 }
 

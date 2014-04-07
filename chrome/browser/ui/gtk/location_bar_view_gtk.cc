@@ -14,13 +14,14 @@
 #include "base/debug/trace_event.h"
 #include "base/i18n/rtl.h"
 #include "base/logging.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/prefs/pref_service.h"
-#include "base/string_util.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/accessibility/accessibility_events.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/command_updater.h"
 #include "chrome/browser/content_settings/tab_specific_content_settings.h"
 #include "chrome/browser/defaults.h"
@@ -46,11 +47,9 @@
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/content_settings/content_setting_bubble_model.h"
 #include "chrome/browser/ui/content_settings/content_setting_image_model.h"
-#include "chrome/browser/ui/gtk/action_box_button_gtk.h"
 #include "chrome/browser/ui/gtk/bookmarks/bookmark_bubble_gtk.h"
 #include "chrome/browser/ui/gtk/bookmarks/bookmark_utils_gtk.h"
 #include "chrome/browser/ui/gtk/browser_window_gtk.h"
-#include "chrome/browser/ui/gtk/chrome_to_mobile_bubble_gtk.h"
 #include "chrome/browser/ui/gtk/content_setting_bubble_gtk.h"
 #include "chrome/browser/ui/gtk/extensions/extension_popup_gtk.h"
 #include "chrome/browser/ui/gtk/first_run_bubble.h"
@@ -70,12 +69,11 @@
 #include "chrome/browser/ui/webui/extensions/extension_info_ui.h"
 #include "chrome/browser/ui/zoom/zoom_controller.h"
 #include "chrome/common/badge_util.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/common/extensions/api/icons/icons_handler.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_manifest_constants.h"
 #include "chrome/common/extensions/feature_switch.h"
+#include "chrome/common/extensions/manifest_handlers/icons_handler.h"
 #include "chrome/common/pref_names.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/notification_service.h"
@@ -106,10 +104,11 @@ namespace {
 // We are positioned with a little bit of extra space that we don't use now.
 const int kTopMargin = 1;
 const int kBottomMargin = 1;
-const int kLeftMargin = 1;
-const int kRightMargin = 1;
 // We draw a border on the top and bottom (but not on left or right).
 const int kBorderThickness = 1;
+
+const int kPopupEdgeThickness = 1;
+const int kNormalEdgeThickness = 2;
 
 // Spacing needed to align the bubble with the left side of the omnibox.
 const int kFirstRunBubbleLeftSpacing = 4;
@@ -264,7 +263,7 @@ void ContentSettingImageViewGtk::Update(WebContents* web_contents) {
 void ContentSettingImageViewGtk::AnimationEnded(
     const ui::Animation* animation) {
   if (animation_.IsShowing()) {
-    MessageLoop::current()->PostDelayedTask(
+    base::MessageLoop::current()->PostDelayedTask(
         FROM_HERE,
         base::Bind(&ContentSettingImageViewGtk::CloseAnimation,
                    weak_factory_.GetWeakPtr()),
@@ -312,6 +311,11 @@ void ContentSettingImageViewGtk::BubbleClosing(
     BubbleGtk* bubble,
     bool closed_by_escape) {
   content_setting_bubble_ = NULL;
+}
+
+gfx::Rect AllocationToRect(const GtkAllocation& allocation) {
+  return gfx::Rect(allocation.x, allocation.y,
+                   allocation.width, allocation.height);
 }
 
 }  // namespace
@@ -410,9 +414,9 @@ void LocationBarViewGtk::Init(bool popup_window_mode) {
 
   // Tab to search (the keyword box on the left hand side).
   tab_to_search_full_label_ =
-      theme_service_->BuildLabel("", ui::kGdkBlack);
+      theme_service_->BuildLabel(std::string(), ui::kGdkBlack);
   tab_to_search_partial_label_ =
-      theme_service_->BuildLabel("", ui::kGdkBlack);
+      theme_service_->BuildLabel(std::string(), ui::kGdkBlack);
   GtkWidget* tab_to_search_label_hbox = gtk_hbox_new(FALSE, 0);
   gtk_box_pack_start(GTK_BOX(tab_to_search_label_hbox),
                      tab_to_search_full_label_, FALSE, FALSE, 0);
@@ -458,12 +462,12 @@ void LocationBarViewGtk::Init(bool popup_window_mode) {
   tab_to_search_hint_ = gtk_hbox_new(FALSE, 0);
   gtk_widget_set_name(tab_to_search_hint_, "chrome-tab-to-search-hint");
   tab_to_search_hint_leading_label_ =
-      theme_service_->BuildLabel("", kHintTextColor);
+      theme_service_->BuildLabel(std::string(), kHintTextColor);
   gtk_widget_set_sensitive(tab_to_search_hint_leading_label_, FALSE);
   tab_to_search_hint_icon_ = gtk_image_new_from_pixbuf(
-      rb.GetNativeImageNamed(IDR_LOCATION_BAR_KEYWORD_HINT_TAB).ToGdkPixbuf());
+      rb.GetNativeImageNamed(IDR_OMNIBOX_KEYWORD_HINT_TAB).ToGdkPixbuf());
   tab_to_search_hint_trailing_label_ =
-      theme_service_->BuildLabel("", kHintTextColor);
+      theme_service_->BuildLabel(std::string(), kHintTextColor);
   gtk_widget_set_sensitive(tab_to_search_hint_trailing_label_, FALSE);
   gtk_box_pack_start(GTK_BOX(tab_to_search_hint_),
                      tab_to_search_hint_leading_label_,
@@ -480,19 +484,6 @@ void LocationBarViewGtk::Init(bool popup_window_mode) {
   // tab_to_search_hint_ gets hidden initially in OnChanged.  Hiding it here
   // doesn't work, someone is probably calling show_all on our parent box.
   gtk_box_pack_end(GTK_BOX(entry_box_), tab_to_search_hint_, FALSE, FALSE, 0);
-
-  if (extensions::FeatureSwitch::action_box()->IsEnabled()) {
-    // TODO(mpcomplete): should we hide this if ShouldOnlyShowLocation()==true?
-    action_box_button_.reset(new ActionBoxButtonGtk(browser_));
-
-    GtkWidget* alignment = gtk_alignment_new(0, 0, 1, 1);
-    gtk_alignment_set_padding(GTK_ALIGNMENT(alignment),
-                              0, 0, 0, InnerPadding());
-    gtk_container_add(GTK_CONTAINER(alignment), action_box_button_->widget());
-
-    gtk_box_pack_end(GTK_BOX(hbox_.get()), alignment,
-                     FALSE, FALSE, 0);
-  }
 
   if (browser_defaults::bookmarks_enabled && !ShouldOnlyShowLocation()) {
     // Hide the star icon in popups, app windows, etc.
@@ -841,15 +832,10 @@ InstantController* LocationBarViewGtk::GetInstant() {
 void LocationBarViewGtk::ShowFirstRunBubble() {
   // We need the browser window to be shown before we can show the bubble, but
   // we get called before that's happened.
-  MessageLoop::current()->PostTask(
+  base::MessageLoop::current()->PostTask(
       FROM_HERE,
       base::Bind(&LocationBarViewGtk::ShowFirstRunBubbleInternal,
                  weak_ptr_factory_.GetWeakPtr()));
-}
-
-void LocationBarViewGtk::SetInstantSuggestion(
-    const InstantSuggestion& suggestion) {
-  location_entry_->model()->SetInstantSuggestion(suggestion);
 }
 
 string16 LocationBarViewGtk::GetInputString() const {
@@ -956,6 +942,10 @@ void LocationBarViewGtk::UpdateOpenPDFInReaderPrompt() {
   // Not implemented on Gtk.
 }
 
+void LocationBarViewGtk::UpdateGeneratedCreditCardView() {
+  NOTIMPLEMENTED();
+}
+
 void LocationBarViewGtk::SaveStateToContents(WebContents* contents) {
   location_entry_->SaveStateToTab(contents);
 }
@@ -1018,11 +1008,6 @@ void LocationBarViewGtk::TestPageActionPressed(size_t index) {
   page_action_views_[index]->TestActivatePageAction();
 }
 
-void LocationBarViewGtk::TestActionBoxMenuItemSelected(int command_id) {
-  action_box_button_->action_box_button_controller()->
-      ExecuteCommand(command_id, 0);
-}
-
 bool LocationBarViewGtk::GetBookmarkStarVisibility() {
   return starred_;
 }
@@ -1069,15 +1054,15 @@ void LocationBarViewGtk::Observe(int type,
         // 12.1px = 9pt @ 96dpi
         gtk_util::ForceFontSizePixels(security_info_label_, 12.1);
         gtk_util::ForceFontSizePixels(tab_to_search_full_label_,
-            browser_defaults::kAutocompleteEditFontPixelSize);
+                                      browser_defaults::kOmniboxFontPixelSize);
         gtk_util::ForceFontSizePixels(tab_to_search_partial_label_,
-            browser_defaults::kAutocompleteEditFontPixelSize);
+                                      browser_defaults::kOmniboxFontPixelSize);
         gtk_util::ForceFontSizePixels(tab_to_search_hint_leading_label_,
-            browser_defaults::kAutocompleteEditFontPixelSize);
+                                      browser_defaults::kOmniboxFontPixelSize);
         gtk_util::ForceFontSizePixels(tab_to_search_hint_trailing_label_,
-            browser_defaults::kAutocompleteEditFontPixelSize);
+                                      browser_defaults::kOmniboxFontPixelSize);
 
-        const int top_bottom = popup_window_mode_ ? kBorderThickness : 0;
+        const int top_bottom = popup_window_mode_ ? kPopupEdgeThickness : 0;
         gtk_alignment_set_padding(GTK_ALIGNMENT(location_entry_alignment_),
                                   kTopMargin + kBorderThickness,
                                   kBottomMargin + kBorderThickness,
@@ -1105,20 +1090,54 @@ gboolean LocationBarViewGtk::HandleExpose(GtkWidget* widget,
                                           GdkEventExpose* event) {
   // If we're not using GTK theming, draw our own border over the edge pixels
   // of the background.
-  if (!GtkThemeService::GetFrom(browser_->profile())->UsingNativeTheme()) {
-    int left, center, right;
-    if (popup_window_mode_) {
-      left = right = IDR_LOCATIONBG_POPUPMODE_EDGE;
-      center = IDR_LOCATIONBG_POPUPMODE_CENTER;
-    } else {
-      left = IDR_LOCATIONBG_L;
-      center = IDR_LOCATIONBG_C;
-      right = IDR_LOCATIONBG_R;
+  GtkThemeService* theme_service =
+      GtkThemeService::GetFrom(browser_->profile());
+  if (!theme_service->UsingNativeTheme()) {
+    // Perform a scoped paint to fill in the background color.
+    {
+      gfx::CanvasSkiaPaint canvas(event, /*opaque=*/false);
+
+      GtkAllocation allocation;
+      gtk_widget_get_allocation(widget, &allocation);
+
+      int thickness = popup_window_mode_ ?
+          kPopupEdgeThickness : kNormalEdgeThickness;
+      gfx::Rect bounds(allocation);
+      bounds.Inset(thickness, thickness);
+
+      const SkColor color = SK_ColorWHITE;
+      if (popup_window_mode_) {
+        canvas.FillRect(bounds, color);
+      } else {
+        SkPaint paint;
+        paint.setStyle(SkPaint::kFill_Style);
+        paint.setColor(color);
+        const int kBorderCornerRadius = 2;
+        canvas.DrawRoundRect(bounds, kBorderCornerRadius, paint);
+      }
     }
 
-    NineBox background(left, center, right,
-                       0, 0, 0, 0, 0, 0);
-    background.RenderToWidget(widget);
+    if (popup_window_mode_) {
+      NineBox(IDR_OMNIBOX_POPUP_BORDER_TOP_LEFT,
+              IDR_OMNIBOX_POPUP_BORDER_TOP,
+              IDR_OMNIBOX_POPUP_BORDER_TOP_RIGHT,
+              IDR_OMNIBOX_POPUP_BORDER_LEFT,
+              IDR_OMNIBOX_POPUP_BORDER_CENTER,
+              IDR_OMNIBOX_POPUP_BORDER_RIGHT,
+              IDR_OMNIBOX_POPUP_BORDER_BOTTOM_LEFT,
+              IDR_OMNIBOX_POPUP_BORDER_BOTTOM,
+              IDR_OMNIBOX_POPUP_BORDER_BOTTOM_RIGHT).RenderToWidget(widget);
+    } else {
+      NineBox(IDR_OMNIBOX_BORDER_TOP_LEFT,
+              IDR_OMNIBOX_BORDER_TOP,
+              IDR_OMNIBOX_BORDER_TOP_RIGHT,
+              IDR_OMNIBOX_BORDER_LEFT,
+              IDR_OMNIBOX_BORDER_CENTER,
+              IDR_OMNIBOX_BORDER_RIGHT,
+              IDR_OMNIBOX_BORDER_BOTTOM_LEFT,
+              IDR_OMNIBOX_BORDER_BOTTOM,
+              IDR_OMNIBOX_BORDER_BOTTOM_RIGHT).RenderToWidget(widget);
+    }
   }
 
   // Draw ExtensionAction backgrounds and borders, if necessary.  The borders
@@ -1171,7 +1190,7 @@ void LocationBarViewGtk::UpdateSiteTypeArea() {
       GTK_IMAGE(location_icon_image_),
       theme_service_->GetImageNamed(resource_id).ToGdkPixbuf());
 
-  if (toolbar_model_->GetSecurityLevel() == ToolbarModel::EV_SECURE) {
+  if (toolbar_model_->GetSecurityLevel(false) == ToolbarModel::EV_SECURE) {
     if (!gtk_util::IsActingAsRoundedWindow(site_type_event_box_)) {
       // Fun fact: If wee try to make |site_type_event_box_| act as a
       // rounded window while it doesn't have a visible window, GTK interprets
@@ -1352,13 +1371,14 @@ gboolean LocationBarViewGtk::OnIconReleased(GtkWidget* sender,
     if (event->x == 0 && event->y == 0)
       return FALSE;
 
-    NavigationEntry* nav_entry = tab->GetController().GetActiveEntry();
+    // Important to use GetVisibleEntry to match what's showing in the omnibox.
+    NavigationEntry* nav_entry = tab->GetController().GetVisibleEntry();
     if (!nav_entry) {
       NOTREACHED();
       return FALSE;
     }
     chrome::ShowWebsiteSettings(browser_, tab, nav_entry->GetURL(),
-                                nav_entry->GetSSL(), true);
+                                nav_entry->GetSSL());
     return TRUE;
   } else if (event->button == 2) {
     // When the user middle clicks on the location icon, try to open the
@@ -1419,6 +1439,10 @@ void LocationBarViewGtk::OnHboxSizeAllocate(GtkWidget* sender,
   if (hbox_width_ != allocation->width) {
     hbox_width_ = allocation->width;
     UpdateEVCertificateLabelSize();
+  }
+  if (browser_ && browser_->instant_controller()) {
+    browser_->instant_controller()->
+        SetOmniboxBounds(AllocationToRect(*allocation));
   }
 }
 
@@ -1505,10 +1529,6 @@ void LocationBarViewGtk::ShowStarBubble(const GURL& url,
   }
 }
 
-void LocationBarViewGtk::ShowChromeToMobileBubble() {
-  ChromeToMobileBubbleGtk::Show(action_box_button_->widget(), browser_);
-}
-
 void LocationBarViewGtk::SetStarred(bool starred) {
   if (starred == starred_)
     return;
@@ -1577,14 +1597,13 @@ void LocationBarViewGtk::UpdateStarIcon() {
   command_updater_->UpdateCommandEnabled(IDC_BOOKMARK_PAGE, star_enabled);
   command_updater_->UpdateCommandEnabled(IDC_BOOKMARK_PAGE_FROM_STAR,
                                          star_enabled);
-  if (extensions::FeatureSwitch::action_box()->IsEnabled() && !starred_) {
-    star_enabled = false;
-  }
   if (star_enabled) {
     gtk_widget_show_all(star_.get());
     int id = starred_ ? IDR_STAR_LIT : IDR_STAR;
     gtk_image_set_from_pixbuf(GTK_IMAGE(star_image_),
                               theme_service_->GetImageNamed(id).ToGdkPixbuf());
+    gtk_widget_set_tooltip_text(star_.get(), l10n_util::GetStringUTF8(
+          starred_ ? IDS_TOOLTIP_STARRED : IDS_TOOLTIP_STAR).c_str());
   } else {
     gtk_widget_hide_all(star_.get());
   }
@@ -1802,10 +1821,10 @@ LocationBarViewGtk::PageActionViewGtk::PageActionViewGtk(
       window_(NULL),
       accel_group_(NULL),
       preview_enabled_(false),
-      ALLOW_THIS_IN_INITIALIZER_LIST(scoped_icon_animation_observer_(
+      scoped_icon_animation_observer_(
           page_action->GetIconAnimation(
               SessionID::IdForTab(owner->GetWebContents())),
-          this)) {
+          this) {
   event_box_.Own(gtk_event_box_new());
   gtk_widget_set_size_request(event_box_.get(),
                               extensions::IconsInfo::kPageActionIconMaxSize,
@@ -2043,7 +2062,7 @@ gboolean LocationBarViewGtk::PageActionViewGtk::OnButtonPressed(
 
     case LocationBarController::ACTION_SHOW_SCRIPT_POPUP:
       ExtensionPopupGtk::Show(
-          ExtensionInfoUI::GetURL(extension->id()),
+          extensions::ExtensionInfoUI::GetURL(extension->id()),
           owner_->browser_,
           event_box_.get(),
           ExtensionPopupGtk::SHOW);

@@ -8,18 +8,17 @@
 #include "base/mac/mac_util.h"
 #include "base/metrics/histogram.h"
 #include "base/prefs/pref_service.h"
-#include "base/sys_string_conversions.h"
-#include "chrome/browser/bookmarks/bookmark_editor.h"
+#include "base/strings/sys_string_conversions.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/bookmarks/bookmark_utils.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/prefs/incognito_mode_prefs.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/search/search.h"
 #include "chrome/browser/themes/theme_properties.h"
 #include "chrome/browser/themes/theme_service.h"
 #import "chrome/browser/themes/theme_service_factory.h"
+#include "chrome/browser/ui/bookmarks/bookmark_editor.h"
 #include "chrome/browser/ui/bookmarks/bookmark_utils.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_list.h"
@@ -38,16 +37,14 @@
 #import "chrome/browser/ui/cocoa/bookmarks/bookmark_menu_cocoa_controller.h"
 #import "chrome/browser/ui/cocoa/bookmarks/bookmark_name_folder_controller.h"
 #import "chrome/browser/ui/cocoa/browser_window_controller.h"
-#import "chrome/browser/ui/cocoa/event_utils.h"
 #import "chrome/browser/ui/cocoa/menu_button.h"
 #import "chrome/browser/ui/cocoa/presentation_mode_controller.h"
 #import "chrome/browser/ui/cocoa/themed_window.h"
 #import "chrome/browser/ui/cocoa/toolbar/toolbar_controller.h"
 #import "chrome/browser/ui/cocoa/view_id_util.h"
 #import "chrome/browser/ui/cocoa/view_resizer.h"
-#include "chrome/browser/ui/search/search_ui.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/ui/webui/ntp/app_launcher_handler.h"
+#include "chrome/browser/ui/webui/ntp/core_app_launcher_handler.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
@@ -57,6 +54,7 @@
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "grit/ui_resources.h"
+#import "ui/base/cocoa/cocoa_event_utils.h"
 #include "ui/base/l10n/l10n_util_mac.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/image/image.h"
@@ -128,10 +126,6 @@ using content::WebContents;
 
 namespace {
 
-// Overlap (in pixels) between the toolbar and the bookmark bar (when showing in
-// normal mode).
-const CGFloat kBookmarkBarOverlap = 3.0;
-
 // Duration of the bookmark bar animations.
 const NSTimeInterval kBookmarkBarAnimationDuration = 0.12;
 
@@ -142,7 +136,7 @@ void RecordAppLaunch(Profile* profile, GURL url) {
   if (!extension)
     return;
 
-  AppLauncherHandler::RecordAppLaunchType(
+  CoreAppLauncherHandler::RecordAppLaunchType(
       extension_misc::APP_LAUNCH_BOOKMARK_BAR,
       extension->GetType());
 }
@@ -476,13 +470,17 @@ void RecordAppLaunch(Profile* profile, GURL url) {
   // Add padding to the detached bookmark bar.
   // The state of our morph (if any); 1 is total bubble, 0 is the regular bar.
   CGFloat morph = [self detachedMorphProgress];
-  CGFloat padding = chrome::search::IsInstantExtendedAPIEnabled()
-                    ? bookmarks::kSearchNTPBookmarkBarPadding
-                    : bookmarks::kNTPBookmarkBarPadding;
+  CGFloat padding = bookmarks::kNTPBookmarkBarPadding;
   buttonViewFrame =
       NSInsetRect(buttonViewFrame, morph * padding, morph * padding);
 
   [buttonView_ setFrame:buttonViewFrame];
+
+  // Update bookmark button backgrounds.
+  if ([self isAnimationRunning]) {
+    for (NSButton* button in buttons_.get())
+      [button setNeedsDisplay:YES];
+  }
 }
 
 // We don't change a preference; we only change visibility. Preference changing
@@ -493,7 +491,10 @@ void RecordAppLaunch(Profile* profile, GURL url) {
 }
 
 - (void)updateAppsPageShortcutButtonVisibility {
+  if (!appsPageShortcutButton_.get())
+    return;
   [self setAppsPageShortcutButtonVisibility];
+  [self resetAllButtonPositionsWithAnimation:NO];
   [self reconfigureBookmarkBar];
 }
 
@@ -528,7 +529,8 @@ void RecordAppLaunch(Profile* profile, GURL url) {
     // If we ever need any other animation cases, code would go here.
   }
 
-  return [self isInState:BookmarkBar::SHOW] ? kBookmarkBarOverlap : 0;
+  return [self isInState:BookmarkBar::SHOW] ? bookmarks::kBookmarkBarOverlap
+                                            : 0;
 }
 
 - (CGFloat)toolbarDividerOpacity {
@@ -664,7 +666,7 @@ void RecordAppLaunch(Profile* profile, GURL url) {
   const BookmarkNode* node = [sender bookmarkNode];
   DCHECK(node);
   WindowOpenDisposition disposition =
-      event_utils::WindowOpenDispositionFromNSEvent([NSApp currentEvent]);
+      ui::WindowOpenDispositionFromNSEvent([NSApp currentEvent]);
   RecordAppLaunch(browser_->profile(), node->url());
   [self openURL:node->url() disposition:disposition];
 
@@ -738,16 +740,6 @@ void RecordAppLaunch(Profile* profile, GURL url) {
 
   int ignored = 0;
   NSRect frame = [self frameForBookmarkButtonFromCell:
-      [appsPageShortcutButton_ cell] xOffset:&ignored];
-  if (![appsPageShortcutButton_ isHidden]) {
-    right -= NSWidth(frame);
-    frame.origin.x = right;
-  } else {
-    frame.origin.x = maxX - NSWidth(frame);
-  }
-  [appsPageShortcutButton_ setFrame:frame];
-
-  frame = [self frameForBookmarkButtonFromCell:
       [otherBookmarksButton_ cell] xOffset:&ignored];
   if (![otherBookmarksButton_ isHidden]) {
     right -= NSWidth(frame);
@@ -895,7 +887,7 @@ void RecordAppLaunch(Profile* profile, GURL url) {
     // Height takes into account the extra height we have since the toolbar
     // only compresses when we're done.
     [view animateToNewHeight:(bookmarks::kBookmarkBarHeight -
-                              kBookmarkBarOverlap)
+                              bookmarks::kBookmarkBarOverlap)
                     duration:kBookmarkBarAnimationDuration];
   } else if ([self isAnimatingFromState:BookmarkBar::SHOW
                                 toState:BookmarkBar::HIDDEN]) {
@@ -909,10 +901,7 @@ void RecordAppLaunch(Profile* profile, GURL url) {
     [[self backgroundGradientView] setShowsDivider:YES];
     [[self view] setHidden:NO];
     AnimatableView* view = [self animatableView];
-    CGFloat newHeight = chrome::search::IsInstantExtendedAPIEnabled()
-                        ? bookmarks::kSearchNewTabBookmarkBarHeight
-                        : chrome::kNTPBookmarkBarHeight;
-    [view animateToNewHeight:newHeight
+    [view animateToNewHeight:chrome::kNTPBookmarkBarHeight
                     duration:kBookmarkBarAnimationDuration];
   } else if ([self isAnimatingFromState:BookmarkBar::DETACHED
                                 toState:BookmarkBar::SHOW]) {
@@ -922,7 +911,7 @@ void RecordAppLaunch(Profile* profile, GURL url) {
     // Height takes into account the extra height we have since the toolbar
     // only compresses when we're done.
     [view animateToNewHeight:(bookmarks::kBookmarkBarHeight -
-                              kBookmarkBarOverlap)
+                              bookmarks::kBookmarkBarOverlap)
                     duration:kBookmarkBarAnimationDuration];
   } else {
     // Oops! An animation we don't know how to handle.
@@ -956,8 +945,6 @@ void RecordAppLaunch(Profile* profile, GURL url) {
     case BookmarkBar::SHOW:
       return bookmarks::kBookmarkBarHeight;
     case BookmarkBar::DETACHED:
-      if (chrome::search::IsInstantExtendedAPIEnabled())
-        return bookmarks::kSearchNewTabBookmarkBarHeight;
       return chrome::kNTPBookmarkBarHeight;
     case BookmarkBar::HIDDEN:
       return 0;
@@ -1037,7 +1024,7 @@ void RecordAppLaunch(Profile* profile, GURL url) {
   int64 tag = [self nodeIdFromMenuTag:[sender tag]];
   const BookmarkNode* node = bookmarkModel_->GetNodeByID(tag);
   WindowOpenDisposition disposition =
-      event_utils::WindowOpenDispositionFromNSEvent([NSApp currentEvent]);
+      ui::WindowOpenDispositionFromNSEvent([NSApp currentEvent]);
   [self openURL:node->url() disposition:disposition];
 }
 
@@ -1058,6 +1045,15 @@ void RecordAppLaunch(Profile* profile, GURL url) {
   CGFloat maxViewX = NSMaxX([[self view] bounds]);
   int xOffset =
       bookmarks::kBookmarkLeftMargin - bookmarks::kBookmarkHorizontalPadding;
+
+  // Draw the apps bookmark if needed.
+  if (![appsPageShortcutButton_ isHidden]) {
+    NSRect frame =
+        [self frameForBookmarkButtonFromCell:[appsPageShortcutButton_ cell]
+                                     xOffset:&xOffset];
+    [appsPageShortcutButton_ setFrame:frame];
+  }
+
   for (int i = 0; i < node->child_count(); i++) {
     const BookmarkNode* child = node->GetChild(i);
     BookmarkButton* button = [self buttonForNode:child xOffset:&xOffset];
@@ -1074,8 +1070,8 @@ void RecordAppLaunch(Profile* profile, GURL url) {
   BookmarkButtonCell* cell = [self cellForBookmarkNode:node];
   NSRect frame = [self frameForBookmarkButtonFromCell:cell xOffset:xOffset];
 
-  scoped_nsobject<BookmarkButton>
-      button([[BookmarkButton alloc] initWithFrame:frame]);
+  base::scoped_nsobject<BookmarkButton> button(
+      [[BookmarkButton alloc] initWithFrame:frame]);
   DCHECK(button.get());
 
   // [NSButton setCell:] warns to NOT use setCell: other than in the
@@ -1095,8 +1091,7 @@ void RecordAppLaunch(Profile* profile, GURL url) {
   ui::ThemeProvider* themeProvider = [[[self view] window] themeProvider];
   if (themeProvider) {
     NSColor* color =
-        themeProvider->GetNSColor(ThemeProperties::COLOR_BOOKMARK_TEXT,
-                                  true);
+        themeProvider->GetNSColor(ThemeProperties::COLOR_BOOKMARK_TEXT);
     [cell setTextColor:color];
   }
 
@@ -1159,11 +1154,8 @@ void RecordAppLaunch(Profile* profile, GURL url) {
   if (!appsPageShortcutButton_.get())
     return NO;
 
-  BOOL visible = bookmarkModel_->IsLoaded() &&
-      chrome::search::IsInstantExtendedAPIEnabled() &&
-      browser_->profile()->GetPrefs()->GetBoolean(
-          prefs::kShowAppsShortcutInBookmarkBar) &&
-      !browser_->profile()->IsOffTheRecord();
+  BOOL visible = bookmarkModel_->loaded() &&
+      chrome::ShouldShowAppsShortcutInBookmarkBar(browser_->profile());
   [appsPageShortcutButton_ setHidden:!visible];
   return visible;
 }
@@ -1174,8 +1166,6 @@ void RecordAppLaunch(Profile* profile, GURL url) {
   BookmarkButton* button = [[BookmarkButton alloc] init];
   [[button draggableButton] setDraggable:NO];
   [[button draggableButton] setActsOnMouseDown:YES];
-  // Peg at right; keep same height as bar.
-  [button setAutoresizingMask:(NSViewMinXMargin)];
   [button setCell:cell];
   [button setDelegate:self];
   [button setTarget:self];
@@ -1196,6 +1186,8 @@ void RecordAppLaunch(Profile* profile, GURL url) {
 
   NSCell* cell = [self cellForBookmarkNode:bookmarkModel_->other_node()];
   otherBookmarksButton_.reset([self customBookmarkButtonForCell:cell]);
+  // Peg at right; keep same height as bar.
+  [otherBookmarksButton_ setAutoresizingMask:(NSViewMinXMargin)];
   [otherBookmarksButton_ setAction:@selector(openBookmarkFolderFromButton:)];
   view_id_util::SetID(otherBookmarksButton_.get(), VIEW_ID_OTHER_BOOKMARKS);
   [buttonView_ addSubview:otherBookmarksButton_.get()];
@@ -1214,7 +1206,8 @@ void RecordAppLaunch(Profile* profile, GURL url) {
 
   ResourceBundle& rb = ResourceBundle::GetSharedInstance();
   NSString* text = l10n_util::GetNSString(IDS_BOOKMARK_BAR_APPS_SHORTCUT_NAME);
-  NSImage* image = rb.GetNativeImageNamed(IDR_WEBSTORE_ICON_16).ToNSImage();
+  NSImage* image = rb.GetNativeImageNamed(
+      IDR_BOOKMARK_BAR_APPS_SHORTCUT).ToNSImage();
   NSCell* cell = [self cellForCustomButtonWithText:text
                                              image:image];
   appsPageShortcutButton_.reset([self customBookmarkButtonForCell:cell]);
@@ -1230,7 +1223,7 @@ void RecordAppLaunch(Profile* profile, GURL url) {
 
 - (void)openAppsPage:(id)sender {
   WindowOpenDisposition disposition =
-      event_utils::WindowOpenDispositionFromNSEvent([NSApp currentEvent]);
+      ui::WindowOpenDispositionFromNSEvent([NSApp currentEvent]);
   [self openURL:GURL(chrome::kChromeUIAppsURL) disposition:disposition];
   bookmark_utils::RecordAppsPageOpen([self bookmarkLaunchLocation]);
 }
@@ -1390,17 +1383,24 @@ void RecordAppLaunch(Profile* profile, GURL url) {
 }
 
 
-// Adjust the horizontal width and the visibility of the "For quick access"
-// text field and "Import bookmarks..." button based on the current width
-// of the containing |buttonView_| (which is affected by window width).
-- (void)adjustNoItemContainerWidthsForMaxX:(CGFloat)maxViewX {
+// Adjust the horizontal width, x position and the visibility of the "For quick
+// access" text field and "Import bookmarks..." button based on the current
+// width of the containing |buttonView_| (which is affected by window width).
+- (void)adjustNoItemContainerForMaxX:(CGFloat)maxViewX {
   if (![[buttonView_ noItemContainer] isHidden]) {
     // Reset initial frames for the two items, then adjust as necessary.
     NSTextField* noItemTextfield = [buttonView_ noItemTextfield];
-    [noItemTextfield setFrame:originalNoItemsRect_];
+    NSRect noItemsRect = originalNoItemsRect_;
+    NSRect importBookmarksRect = originalImportBookmarksRect_;
+    if (![appsPageShortcutButton_ isHidden]) {
+      float width = NSWidth([appsPageShortcutButton_ frame]);
+      noItemsRect.origin.x += width;
+      importBookmarksRect.origin.x += width;
+    }
+    [noItemTextfield setFrame:noItemsRect];
     [noItemTextfield setHidden:NO];
     NSButton* importBookmarksButton = [buttonView_ importBookmarksButton];
-    [importBookmarksButton setFrame:originalImportBookmarksRect_];
+    [importBookmarksButton setFrame:importBookmarksRect];
     [importBookmarksButton setHidden:NO];
     // Check each to see if they need to be shrunk or hidden.
     if ([self shrinkOrHideView:importBookmarksButton forMaxX:maxViewX])
@@ -1416,6 +1416,12 @@ void RecordAppLaunch(Profile* profile, GURL url) {
 - (NSRect)finalRectOfButton:(BookmarkButton*)wantedButton {
   CGFloat left = bookmarks::kBookmarkLeftMargin;
   NSRect buttonFrame = NSZeroRect;
+
+  // Draw the apps bookmark if needed.
+  if (![appsPageShortcutButton_ isHidden]) {
+    left = NSMaxX([appsPageShortcutButton_ frame]) +
+        bookmarks::kBookmarkHorizontalPadding;
+  }
 
   for (NSButton* button in buttons_.get()) {
     // Hidden buttons get no space.
@@ -1439,15 +1445,10 @@ void RecordAppLaunch(Profile* profile, GURL url) {
 
 - (CGFloat)buttonViewMaxXWithOffTheSideButtonIsVisible:(BOOL)visible {
   CGFloat maxViewX = NSMaxX([buttonView_ bounds]);
-  // If necessary, pull in the width to account for the Other Bookmarks or Apps
-  // button.
-  const BOOL otherButtonVisible = [self setOtherBookmarksButtonVisibility];
-  const BOOL appsButtonVisible = [self setAppsPageShortcutButtonVisibility];
-  if (otherButtonVisible || appsButtonVisible) {
-    BookmarkButton* leftMostRightAlignedButton = otherButtonVisible ?
-        otherBookmarksButton_.get() : appsPageShortcutButton_.get();
-    maxViewX = [leftMostRightAlignedButton frame].origin.x -
-               bookmarks::kBookmarkRightMargin;
+  // If necessary, pull in the width to account for the Other Bookmarks button.
+  if ([self setOtherBookmarksButtonVisibility]) {
+    maxViewX = [otherBookmarksButton_ frame].origin.x -
+        bookmarks::kBookmarkRightMargin;
   }
 
   [self positionRightSideButtons];
@@ -1466,8 +1467,9 @@ void RecordAppLaunch(Profile* profile, GURL url) {
 
   // Determine the current maximum extent of the visible buttons.
   [self positionRightSideButtons];
+  BOOL offTheSideButtonVisible = (barCount > displayedButtonCount_);
   CGFloat maxViewX = [self buttonViewMaxXWithOffTheSideButtonIsVisible:
-      (barCount > displayedButtonCount_)];
+      offTheSideButtonVisible];
 
   // As a result of pasting or dragging, the bar may now have more buttons
   // than will fit so remove any which overflow.  They will be shown in
@@ -1480,14 +1482,26 @@ void RecordAppLaunch(Profile* profile, GURL url) {
     [button setDelegate:nil];
     [button removeFromSuperview];
     --displayedButtonCount_;
+    // Account for the fact that the chevron might now be visible.
+    if (!offTheSideButtonVisible) {
+      offTheSideButtonVisible = YES;
+      maxViewX = [self buttonViewMaxXWithOffTheSideButtonIsVisible:YES];
+    }
   }
 
   // As a result of cutting, deleting and dragging, the bar may now have room
   // for more buttons.
-  int xOffset = displayedButtonCount_ > 0 ?
-      NSMaxX([self finalRectOfLastButton]) +
-      bookmarks::kBookmarkHorizontalPadding :
-      bookmarks::kBookmarkLeftMargin - bookmarks::kBookmarkHorizontalPadding;
+  int xOffset;
+  if (displayedButtonCount_ > 0) {
+    xOffset = NSMaxX([self finalRectOfLastButton]) +
+        bookmarks::kBookmarkHorizontalPadding;
+  } else if (![appsPageShortcutButton_ isHidden]) {
+    xOffset = NSMaxX([appsPageShortcutButton_ frame]) +
+        bookmarks::kBookmarkHorizontalPadding;
+  } else {
+    xOffset = bookmarks::kBookmarkLeftMargin -
+        bookmarks::kBookmarkHorizontalPadding;
+  }
   for (int i = displayedButtonCount_; i < barCount; ++i) {
     const BookmarkNode* child = node->GetChild(i);
     BookmarkButton* button = [self buttonForNode:child xOffset:&xOffset];
@@ -1507,7 +1521,7 @@ void RecordAppLaunch(Profile* profile, GURL url) {
   // While we're here, adjust the horizontal width and the visibility
   // of the "For quick access" and "Import bookmarks..." text fields.
   if (![buttons_ count])
-    [self adjustNoItemContainerWidthsForMaxX:maxViewX];
+    [self adjustNoItemContainerForMaxX:maxViewX];
 }
 
 #pragma mark Private Methods Exposed for Testing
@@ -1524,8 +1538,16 @@ void RecordAppLaunch(Profile* profile, GURL url) {
   return offTheSideButton_;
 }
 
+- (NSButton*)appsPageShortcutButton {
+  return appsPageShortcutButton_;
+}
+
 - (BOOL)offTheSideButtonIsHidden {
   return [offTheSideButton_ isHidden];
+}
+
+- (BOOL)appsPageShortcutButtonIsHidden {
+  return [appsPageShortcutButton_ isHidden];
 }
 
 - (BookmarkButton*)otherBookmarksButton {
@@ -1652,7 +1674,7 @@ void RecordAppLaunch(Profile* profile, GURL url) {
 
 // Called when our controlled frame has changed size.
 - (void)frameDidChange {
-  if (!bookmarkModel_->IsLoaded())
+  if (!bookmarkModel_->loaded())
     return;
   [self updateTheme:[[[self view] window] themeProvider]];
   [self reconfigureBookmarkBar];
@@ -1680,8 +1702,7 @@ void RecordAppLaunch(Profile* profile, GURL url) {
   if (!themeProvider)
     return;
   NSColor* color =
-      themeProvider->GetNSColor(ThemeProperties::COLOR_BOOKMARK_TEXT,
-                                true);
+      themeProvider->GetNSColor(ThemeProperties::COLOR_BOOKMARK_TEXT);
   for (BookmarkButton* button in buttons_.get()) {
     BookmarkButtonCell* cell = [button cell];
     [cell setTextColor:color];
@@ -1909,7 +1930,10 @@ static BOOL ValueInRangeInclusive(CGFloat low, CGFloat value, CGFloat high) {
   if (!hasInsertionPos_ || where != insertionPos_) {
     insertionPos_ = where;
     hasInsertionPos_ = YES;
-    CGFloat left = bookmarks::kBookmarkLeftMargin;
+    CGFloat left = [appsPageShortcutButton_ isHidden] ?
+        bookmarks::kBookmarkLeftMargin :
+        NSMaxX([appsPageShortcutButton_ frame]) +
+            bookmarks::kBookmarkHorizontalPadding;
     CGFloat paddingWidth = bookmarks::kDefaultBookmarkWidth;
     BookmarkButton* draggedButton = [BookmarkButton draggedButton];
     if (draggedButton) {
@@ -1941,7 +1965,18 @@ static BOOL ValueInRangeInclusive(CGFloat low, CGFloat value, CGFloat high) {
 // or without animation according to the |animate| flag.
 // This is generally useful, so is called from various places internally.
 - (void)resetAllButtonPositionsWithAnimation:(BOOL)animate {
+
+  // Position the apps bookmark if needed.
   CGFloat left = bookmarks::kBookmarkLeftMargin;
+  if (![appsPageShortcutButton_ isHidden]) {
+    int xOffset =
+        bookmarks::kBookmarkLeftMargin - bookmarks::kBookmarkHorizontalPadding;
+    NSRect frame =
+        [self frameForBookmarkButtonFromCell:[appsPageShortcutButton_ cell]
+                                     xOffset:&xOffset];
+    [appsPageShortcutButton_ setFrame:frame];
+    left = xOffset + bookmarks::kBookmarkHorizontalPadding;
+  }
   animate &= innerContentAnimationsEnabled_;
 
   for (NSButton* button in buttons_.get()) {
@@ -1973,7 +2008,7 @@ static BOOL ValueInRangeInclusive(CGFloat low, CGFloat value, CGFloat high) {
 // TODO(jrg): for now this is brute force.
 - (void)loaded:(BookmarkModel*)model {
   DCHECK(model == bookmarkModel_);
-  if (!model->IsLoaded())
+  if (!model->loaded())
     return;
 
   // If this is a rebuild request while we have a folder open, close it.
@@ -1987,9 +2022,9 @@ static BOOL ValueInRangeInclusive(CGFloat low, CGFloat value, CGFloat high) {
   savedFrameWidth_ = NSWidth([[self view] frame]);
   const BookmarkNode* node = model->bookmark_bar_node();
   [self clearBookmarkBar];
+  [self createAppsPageShortcutButton];
   [self addNodesToButtonList:node];
   [self createOtherBookmarksButton];
-  [self createAppsPageShortcutButton];
   [self updateTheme:[[[self view] window] themeProvider]];
   [self positionRightSideButtons];
   [self addButtonsToView];
@@ -2161,7 +2196,7 @@ static BOOL ValueInRangeInclusive(CGFloat low, CGFloat value, CGFloat high) {
   return NSHeight([[browserController tabContentArea] frame]);
 }
 
-- (ui::ThemeProvider*)themeProvider {
+- (ThemeService*)themeService {
   return ThemeServiceFactory::GetForProfile(browser_->profile());
 }
 
@@ -2371,10 +2406,9 @@ static BOOL ValueInRangeInclusive(CGFloat low, CGFloat value, CGFloat high) {
 - (std::vector<const BookmarkNode*>)retrieveBookmarkNodeData {
   std::vector<const BookmarkNode*> dragDataNodes;
   BookmarkNodeData dragData;
-  if(dragData.ReadFromDragClipboard()) {
-    BookmarkModel* bookmarkModel = [self bookmarkModel];
-    Profile* profile = bookmarkModel->profile();
-    std::vector<const BookmarkNode*> nodes(dragData.GetNodes(profile));
+  if (dragData.ReadFromDragClipboard()) {
+    std::vector<const BookmarkNode*> nodes(
+        dragData.GetNodes(browser_->profile()));
     dragDataNodes.assign(nodes.begin(), nodes.end());
   }
   return dragDataNodes;
@@ -2388,21 +2422,26 @@ static BOOL ValueInRangeInclusive(CGFloat low, CGFloat value, CGFloat high) {
 // Return the x position for a drop indicator.
 - (CGFloat)indicatorPosForDragToPoint:(NSPoint)point {
   CGFloat x = 0;
+  CGFloat halfHorizontalPadding = 0.5 * bookmarks::kBookmarkHorizontalPadding;
   int destIndex = [self indexForDragToPoint:point];
   int numButtons = displayedButtonCount_;
 
-  // If it's a drop strictly between existing buttons ...
+  CGFloat leftmostX;
+  if ([appsPageShortcutButton_ isHidden])
+    leftmostX = bookmarks::kBookmarkLeftMargin - halfHorizontalPadding;
+  else
+    leftmostX = NSMaxX([appsPageShortcutButton_ frame]) + halfHorizontalPadding;
 
+  // If it's a drop strictly between existing buttons ...
   if (destIndex == 0) {
-    x = bookmarks::kBookmarkLeftMargin -
-        0.5 * bookmarks::kBookmarkHorizontalPadding;
+    x = leftmostX;
   } else if (destIndex > 0 && destIndex < numButtons) {
     // ... put the indicator right between the buttons.
     BookmarkButton* button =
         [buttons_ objectAtIndex:static_cast<NSUInteger>(destIndex-1)];
     DCHECK(button);
     NSRect buttonFrame = [button frame];
-    x = NSMaxX(buttonFrame) + 0.5 * bookmarks::kBookmarkHorizontalPadding;
+    x = NSMaxX(buttonFrame) + halfHorizontalPadding;
 
     // If it's a drop at the end (past the last button, if there are any) ...
   } else if (destIndex == numButtons) {
@@ -2412,13 +2451,11 @@ static BOOL ValueInRangeInclusive(CGFloat low, CGFloat value, CGFloat high) {
       BookmarkButton* button =
           [buttons_ objectAtIndex:static_cast<NSUInteger>(destIndex - 1)];
       DCHECK(button);
-      NSRect buttonFrame = [button frame];
-      x = NSMaxX(buttonFrame) + 0.5 * bookmarks::kBookmarkHorizontalPadding;
+      x = NSMaxX([button frame]) + halfHorizontalPadding;
 
       // Otherwise, put it right at the beginning.
     } else {
-      x = bookmarks::kBookmarkLeftMargin -
-          0.5 * bookmarks::kBookmarkHorizontalPadding;
+      x = leftmostX;
     }
   } else {
     NOTREACHED();
@@ -2468,9 +2505,11 @@ static BOOL ValueInRangeInclusive(CGFloat low, CGFloat value, CGFloat high) {
 
   // Folder controller, like many window controllers, owns itself.
   folderController_ =
-      [[BookmarkBarFolderController alloc] initWithParentButton:parentButton
-                                               parentController:nil
-                                                  barController:self];
+      [[BookmarkBarFolderController alloc]
+          initWithParentButton:parentButton
+              parentController:nil
+                 barController:self
+                       profile:browser_->profile()];
   [folderController_ showWindow:self];
 
   // Only BookmarkBarController has this; the

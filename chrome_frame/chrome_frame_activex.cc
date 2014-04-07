@@ -12,15 +12,13 @@
 #include "base/basictypes.h"
 #include "base/command_line.h"
 #include "base/debug/trace_event.h"
-#include "base/file_util.h"
 #include "base/logging.h"
 #include "base/memory/singleton.h"
 #include "base/path_service.h"
-#include "base/process_util.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
 #include "base/strings/string_split.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/win/scoped_bstr.h"
 #include "base/win/scoped_variant.h"
 #include "chrome/common/automation_messages.h"
@@ -28,7 +26,7 @@
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/automation/tab_proxy.h"
 #include "chrome_frame/utils.h"
-#include "googleurl/src/gurl.h"
+#include "url/gurl.h"
 
 namespace {
 
@@ -76,7 +74,7 @@ class TopLevelWindowMapping {
 // messages on a top-level window, and passes notification to the appropriate
 // Chrome-Frame instances.
 LRESULT CALLBACK TopWindowProc(int code, WPARAM wparam, LPARAM lparam) {
-  CWPSTRUCT *info = reinterpret_cast<CWPSTRUCT*>(lparam);
+  CWPSTRUCT* info = reinterpret_cast<CWPSTRUCT*>(lparam);
   const UINT &message = info->message;
   const HWND &message_hwnd = info->hwnd;
 
@@ -87,7 +85,7 @@ LRESULT CALLBACK TopWindowProc(int code, WPARAM wparam, LPARAM lparam) {
           TopLevelWindowMapping::GetInstance()->GetInstances(message_hwnd);
       TopLevelWindowMapping::WindowList::iterator
           iter(cf_instances.begin()), end(cf_instances.end());
-      for (;iter != end; ++iter) {
+      for (; iter != end; ++iter) {
         PostMessage(*iter, WM_HOST_MOVED_NOTIFICATION, NULL, NULL);
       }
       break;

@@ -17,10 +17,10 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/threading/non_thread_safe.h"
-#include "googleurl/src/gurl.h"
 #include "net/http/http_request_headers.h"
 #include "net/url_request/url_fetcher_factory.h"
 #include "net/url_request/url_request_status.h"
+#include "url/gurl.h"
 
 namespace net {
 
@@ -91,6 +91,8 @@ class TestURLFetcher : public URLFetcher {
   virtual void SetUploadFilePath(
       const std::string& upload_content_type,
       const base::FilePath& file_path,
+      uint64 range_offset,
+      uint64 range_length,
       scoped_refptr<base::TaskRunner> file_task_runner) OVERRIDE;
   virtual void SetChunkedUpload(
       const std::string& upload_content_type) OVERRIDE;

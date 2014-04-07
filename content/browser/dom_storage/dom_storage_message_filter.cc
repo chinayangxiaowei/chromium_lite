@@ -6,25 +6,23 @@
 
 #include "base/auto_reset.h"
 #include "base/bind.h"
-#include "base/nullable_string16.h"
+#include "base/strings/nullable_string16.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/threading/sequenced_worker_pool.h"
-#include "base/utf_string_conversions.h"
+#include "content/browser/dom_storage/dom_storage_area.h"
+#include "content/browser/dom_storage/dom_storage_context_wrapper.h"
+#include "content/browser/dom_storage/dom_storage_host.h"
+#include "content/browser/dom_storage/dom_storage_namespace.h"
+#include "content/browser/dom_storage/dom_storage_task_runner.h"
+#include "content/common/dom_storage/dom_storage_messages.h"
 #include "content/public/browser/user_metrics.h"
-#include "content/browser/dom_storage/dom_storage_context_impl.h"
-#include "content/common/dom_storage_messages.h"
-#include "googleurl/src/gurl.h"
-#include "webkit/dom_storage/dom_storage_area.h"
-#include "webkit/dom_storage/dom_storage_host.h"
-#include "webkit/dom_storage/dom_storage_task_runner.h"
-
-using dom_storage::DomStorageTaskRunner;
-using WebKit::WebStorageArea;
+#include "url/gurl.h"
 
 namespace content {
 
 DOMStorageMessageFilter::DOMStorageMessageFilter(
     int unused,
-    DOMStorageContextImpl* context)
+    DOMStorageContextWrapper* context)
     : context_(context->context()),
       connection_dispatching_message_for_(0) {
 }
@@ -35,7 +33,7 @@ DOMStorageMessageFilter::~DOMStorageMessageFilter() {
 
 void DOMStorageMessageFilter::InitializeInSequence() {
   DCHECK(!BrowserThread::CurrentlyOn(BrowserThread::IO));
-  host_.reset(new dom_storage::DomStorageHost(context_));
+  host_.reset(new DOMStorageHost(context_.get()));
   context_->AddEventObserver(this);
 }
 
@@ -52,7 +50,7 @@ void DOMStorageMessageFilter::OnFilterAdded(IPC::Channel* channel) {
   BrowserMessageFilter::OnFilterAdded(channel);
   context_->task_runner()->PostShutdownBlockingTask(
       FROM_HERE,
-      DomStorageTaskRunner::PRIMARY_SEQUENCE,
+      DOMStorageTaskRunner::PRIMARY_SEQUENCE,
       base::Bind(&DOMStorageMessageFilter::InitializeInSequence, this));
 }
 
@@ -61,7 +59,7 @@ void DOMStorageMessageFilter::OnFilterRemoved() {
   BrowserMessageFilter::OnFilterRemoved();
   context_->task_runner()->PostShutdownBlockingTask(
       FROM_HERE,
-      DomStorageTaskRunner::PRIMARY_SEQUENCE,
+      DOMStorageTaskRunner::PRIMARY_SEQUENCE,
       base::Bind(&DOMStorageMessageFilter::UninitializeInSequence, this));
 }
 
@@ -109,7 +107,7 @@ void DOMStorageMessageFilter::OnCloseStorageArea(int connection_id) {
 }
 
 void DOMStorageMessageFilter::OnLoadStorageArea(int connection_id,
-                                                dom_storage::ValuesMap* map) {
+                                                DOMStorageValuesMap* map) {
   DCHECK(!BrowserThread::CurrentlyOn(BrowserThread::IO));
   if (!host_->ExtractAreaValues(connection_id, map)) {
     RecordAction(UserMetricsAction("BadMessageTerminate_DSMF_2"));
@@ -125,7 +123,7 @@ void DOMStorageMessageFilter::OnSetItem(
   DCHECK_EQ(0, connection_dispatching_message_for_);
   base::AutoReset<int> auto_reset(&connection_dispatching_message_for_,
                             connection_id);
-  NullableString16 not_used;
+  base::NullableString16 not_used;
   bool success = host_->SetAreaItem(connection_id, key, value,
                                     page_url, &not_used);
   Send(new DOMStorageMsg_AsyncOperationComplete(success));
@@ -157,44 +155,44 @@ void DOMStorageMessageFilter::OnFlushMessages() {
   // Intentionally empty method body.
 }
 
-void DOMStorageMessageFilter::OnDomStorageItemSet(
-    const dom_storage::DomStorageArea* area,
+void DOMStorageMessageFilter::OnDOMStorageItemSet(
+    const DOMStorageArea* area,
     const string16& key,
     const string16& new_value,
-    const NullableString16& old_value,
+    const base::NullableString16& old_value,
     const GURL& page_url) {
-  SendDomStorageEvent(area, page_url,
-                      NullableString16(key, false),
-                      NullableString16(new_value, false),
+  SendDOMStorageEvent(area, page_url,
+                      base::NullableString16(key, false),
+                      base::NullableString16(new_value, false),
                       old_value);
 }
 
-void DOMStorageMessageFilter::OnDomStorageItemRemoved(
-    const dom_storage::DomStorageArea* area,
+void DOMStorageMessageFilter::OnDOMStorageItemRemoved(
+    const DOMStorageArea* area,
     const string16& key,
     const string16& old_value,
     const GURL& page_url) {
-  SendDomStorageEvent(area, page_url,
-                      NullableString16(key, false),
-                      NullableString16(true),
-                      NullableString16(old_value, false));
+  SendDOMStorageEvent(area, page_url,
+                      base::NullableString16(key, false),
+                      base::NullableString16(),
+                      base::NullableString16(old_value, false));
 }
 
-void DOMStorageMessageFilter::OnDomStorageAreaCleared(
-    const dom_storage::DomStorageArea* area,
+void DOMStorageMessageFilter::OnDOMStorageAreaCleared(
+    const DOMStorageArea* area,
     const GURL& page_url) {
-  SendDomStorageEvent(area, page_url,
-                      NullableString16(true),
-                      NullableString16(true),
-                      NullableString16(true));
+  SendDOMStorageEvent(area, page_url,
+                      base::NullableString16(),
+                      base::NullableString16(),
+                      base::NullableString16());
 }
 
-void DOMStorageMessageFilter::SendDomStorageEvent(
-    const dom_storage::DomStorageArea* area,
+void DOMStorageMessageFilter::SendDOMStorageEvent(
+    const DOMStorageArea* area,
     const GURL& page_url,
-    const NullableString16& key,
-    const NullableString16& new_value,
-    const NullableString16& old_value) {
+    const base::NullableString16& key,
+    const base::NullableString16& new_value,
+    const base::NullableString16& old_value) {
   DCHECK(!BrowserThread::CurrentlyOn(BrowserThread::IO));
   // Only send mutation events to processes which have the area open.
   bool originated_in_process = connection_dispatching_message_for_ != 0;

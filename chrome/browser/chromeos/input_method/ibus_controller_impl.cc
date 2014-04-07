@@ -17,10 +17,10 @@
 #include "base/environment.h"
 #include "base/files/file_path_watcher.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/rand_util.h"
-#include "base/stringprintf.h"
 #include "base/strings/string_split.h"
+#include "base/strings/stringprintf.h"
 #include "chrome/browser/chromeos/input_method/input_method_util.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
 #include "chromeos/dbus/ibus/ibus_client.h"
@@ -29,6 +29,8 @@
 #include "chromeos/dbus/ibus/ibus_input_context_client.h"
 #include "chromeos/dbus/ibus/ibus_panel_service.h"
 #include "chromeos/dbus/ibus/ibus_property.h"
+#include "chromeos/ime/component_extension_ime_manager.h"
+#include "chromeos/ime/extension_ime_util.h"
 #include "chromeos/ime/input_method_config.h"
 #include "chromeos/ime/input_method_property.h"
 #include "ui/aura/client/aura_constants.h"
@@ -188,55 +190,12 @@ bool FlattenPropertyList(const IBusPropertyList& ibus_prop_list,
 }  // namespace
 
 IBusControllerImpl::IBusControllerImpl()
-    : ALLOW_THIS_IN_INITIALIZER_LIST(weak_ptr_factory_(this)) {
+    : weak_ptr_factory_(this) {
   IBusDaemonController::GetInstance()->AddObserver(this);
 }
 
 IBusControllerImpl::~IBusControllerImpl() {
   IBusDaemonController::GetInstance()->RemoveObserver(this);
-}
-
-bool IBusControllerImpl::ChangeInputMethod(const std::string& id) {
-  // Sanity checks.
-  DCHECK(!InputMethodUtil::IsKeyboardLayout(id));
-  if (!whitelist_.InputMethodIdIsWhitelisted(id) &&
-      !InputMethodUtil::IsExtensionInputMethod(id))
-    return false;
-
-  // Clear input method properties unconditionally if |id| is not equal to
-  // |current_input_method_id_|.
-  //
-  // When switching to another input method and no text area is focused,
-  // RegisterProperties signal for the new input method will NOT be sent
-  // until a text area is focused. Therefore, we have to clear the old input
-  // method properties here to keep the input method switcher status
-  // consistent.
-  //
-  // When |id| and |current_input_method_id_| are the same, the properties
-  // shouldn't be cleared. If we do that, something wrong happens in step #4
-  // below:
-  // 1. Enable "xkb:us::eng" and "mozc". Switch to "mozc".
-  // 2. Focus Omnibox. IME properties for mozc are sent to Chrome.
-  // 3. Switch to "xkb:us::eng". No function in this file is called.
-  // 4. Switch back to "mozc". ChangeInputMethod("mozc") is called, but it's
-  //    basically NOP since ibus-daemon's current IME is already "mozc".
-  //    IME properties are not sent to Chrome for the same reason.
-  if (id != current_input_method_id_) {
-    const IBusPropertyList empty_list;
-    RegisterProperties(empty_list);
-  }
-
-  current_input_method_id_ = id;
-
-  if (!IBusConnectionsAreAlive()) {
-    DVLOG(1) << "ChangeInputMethod: IBus connection is not alive (yet).";
-    // |id| will become usable shortly since Start() has already been called.
-    // Just return true.
-  } else {
-    SendChangeInputMethodRequest(id);
-  }
-
-  return true;
 }
 
 bool IBusControllerImpl::ActivateInputMethodProperty(const std::string& key) {
@@ -271,13 +230,6 @@ bool IBusControllerImpl::ActivateInputMethodProperty(const std::string& key) {
 bool IBusControllerImpl::IBusConnectionsAreAlive() {
   return DBusThreadManager::Get() &&
       DBusThreadManager::Get()->GetIBusBus() != NULL;
-}
-
-void IBusControllerImpl::SendChangeInputMethodRequest(const std::string& id) {
-  // Change the global engine *asynchronously*.
-  IBusClient* client = DBusThreadManager::Get()->GetIBusClient();
-  if (client)
-    client->SetGlobalEngine(id.c_str(), base::Bind(&base::DoNothing));
 }
 
 bool IBusControllerImpl::SetInputMethodConfigInternal(
@@ -331,7 +283,6 @@ bool IBusControllerImpl::SetInputMethodConfigInternal(
 
 void IBusControllerImpl::RegisterProperties(
     const IBusPropertyList& ibus_prop_list) {
-  // Note: |panel| can be NULL. See ChangeInputMethod().
   current_property_list_.clear();
   if (!FlattenPropertyList(ibus_prop_list, &current_property_list_))
     current_property_list_.clear(); // Clear properties on errors.
@@ -368,10 +319,6 @@ void IBusControllerImpl::OnConnected() {
   DCHECK(thread_checker_.CalledOnValidThread());
 
   DBusThreadManager::Get()->GetIBusPanelService()->SetUpPropertyHandler(this);
-
-  // Restore previous input method at the beggining of connection.
-  if (!current_input_method_id_.empty())
-    SendChangeInputMethodRequest(current_input_method_id_);
 
   DBusThreadManager::Get()->GetIBusConfigClient()->InitializeAsync(
       base::Bind(&IBusControllerImpl::OnIBusConfigClientInitialized,

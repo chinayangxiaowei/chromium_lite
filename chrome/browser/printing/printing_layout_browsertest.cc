@@ -4,20 +4,21 @@
 
 #include "base/command_line.h"
 #include "base/file_util.h"
+#include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/path_service.h"
-#include "base/process_util.h"
-#include "base/string_util.h"
+#include "base/process/process.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/test/test_file_util.h"
 #include "base/threading/simple_thread.h"
-#include "base/utf_string_conversions.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/printing/print_job.h"
 #include "chrome/browser/printing/print_view_manager.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -25,7 +26,7 @@
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 #include "content/public/browser/notification_service.h"
-#include "net/test/test_server.h"
+#include "net/test/spawned_test_server/spawned_test_server.h"
 #include "printing/image.h"
 #include "printing/printing_test.h"
 
@@ -52,7 +53,7 @@ class PrintingLayoutTest : public PrintingTest<InProcessBrowserTest>,
 
   virtual void TearDown() OVERRIDE {
     InProcessBrowserTest::TearDown();
-    file_util::Delete(emf_path_, true);
+    base::DeleteFile(emf_path_, true);
   }
 
   virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
@@ -78,14 +79,16 @@ class PrintingLayoutTest : public PrintingTest<InProcessBrowserTest>,
     switch (content::Details<printing::JobEventDetails>(details)->type()) {
       case printing::JobEventDetails::JOB_DONE: {
         // Succeeded.
-        MessageLoop::current()->PostTask(FROM_HERE, MessageLoop::QuitClosure());
+        base::MessageLoop::current()->PostTask(
+            FROM_HERE, base::MessageLoop::QuitClosure());
         break;
       }
       case printing::JobEventDetails::USER_INIT_CANCELED:
       case printing::JobEventDetails::FAILED: {
         // Failed.
         ASSERT_TRUE(false);
-        MessageLoop::current()->PostTask(FROM_HERE, MessageLoop::QuitClosure());
+        base::MessageLoop::current()->PostTask(
+            FROM_HERE, base::MessageLoop::QuitClosure());
         break;
       }
       case printing::JobEventDetails::NEW_DOC:
@@ -124,12 +127,12 @@ class PrintingLayoutTest : public PrintingTest<InProcessBrowserTest>,
     base::FilePath cleartype(
         base_path.Append(verification_name + L"_cleartype.png"));
     // Looks for Cleartype override.
-    if (file_util::PathExists(cleartype) && IsClearTypeEnabled())
+    if (base::PathExists(cleartype) && IsClearTypeEnabled())
       png = cleartype;
 
     if (GenerateFiles()) {
       // Copy the .emf and generate an .png.
-      file_util::CopyFile(test_result, emf);
+      base::CopyFile(test_result, emf);
       Image emf_content(emf);
       emf_content.SaveToPng(png);
       // Saving is always fine.
@@ -148,7 +151,7 @@ class PrintingLayoutTest : public PrintingTest<InProcessBrowserTest>,
         // Backup the result emf file.
         base::FilePath failed(
             base_path.Append(verification_name + L"_failed.emf"));
-        file_util::CopyFile(test_result, failed);
+        base::CopyFile(test_result, failed);
       }
 
       // This verification is only to know that the EMF rendering stays
@@ -195,8 +198,8 @@ class PrintingLayoutTest : public PrintingTest<InProcessBrowserTest>,
     bool found_emf = false;
     bool found_prn = false;
     for (int i = 0; i < 100; ++i) {
-      file_util::FileEnumerator enumerator(emf_path_, false,
-          file_util::FileEnumerator::FILES);
+      base::FileEnumerator enumerator(emf_path_, false,
+                                      base::FileEnumerator::FILES);
       emf_file.clear();
       prn_file.clear();
       found_emf = false;
@@ -218,7 +221,7 @@ class PrintingLayoutTest : public PrintingTest<InProcessBrowserTest>,
               "\" when looking for \"" << verification_name << "\"";
           prn_file = file.value();
           found_prn = true;
-          file_util::Delete(file, false);
+          base::DeleteFile(file, false);
           continue;
         }
         EXPECT_TRUE(false);

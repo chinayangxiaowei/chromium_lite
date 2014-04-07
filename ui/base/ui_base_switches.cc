@@ -6,21 +6,31 @@
 
 namespace switches {
 
-// Disables new menu UI.
-const char kDisableNewMenuStyle[] = "disable-new-menu-style";
+// Disables use of DWM composition for top level windows.
+const char kDisableDwmComposition[] = "disable-dwm-composition";
+
+// Disables the new visual style for application dialogs and controls.
+const char kDisableNewDialogStyle[] = "disable-new-dialog-style";
 
 // Disables touch adjustment.
 const char kDisableTouchAdjustment[] = "disable-touch-adjustment";
 
+// Disables touch event based drag and drop.
+const char kDisableTouchDragDrop[] = "disable-touch-drag-drop";
+
+// Disables controls that support touch base text editing.
+const char kDisableTouchEditing[] = "disable-touch-editing";
+
 // Disables the Views textfield on Windows.
 const char kDisableViewsTextfield[] = "disable-views-textfield";
 
-// Enables support for bezel touch.
-const char kEnableBezelTouch[] = "enable-bezel-touch";
-
-// Enables the new dialog style wherever it is available.
+// Enables the new visual style for application dialogs and controls.
 const char kEnableNewDialogStyle[] = "enable-new-dialog-style";
 
+// Enable scroll prediction for scroll update events.
+const char kEnableScrollPrediction[] = "enable-scroll-prediction";
+
+// Enables touch event based drag and drop.
 const char kEnableTouchDragDrop[] = "enable-touch-drag-drop";
 
 // Enables controls that support touch base text editing.
@@ -28,6 +38,9 @@ const char kEnableTouchEditing[] = "enable-touch-editing";
 
 // Enables the Views textfield on Windows.
 const char kEnableViewsTextfield[] = "enable-views-textfield";
+
+// Enables/Disables High DPI support (windows)
+const char kHighDPISupport[] = "high-dpi-support";
 
 // Overrides the device scale factor for the browser UI and the contents.
 const char kForceDeviceScaleFactor[] = "force-device-scale-factor";
@@ -77,16 +90,12 @@ const char kTouchOptimizedUIEnabled[] = "enabled";
 //   disabled: never optimized for touch.
 const char kTouchOptimizedUIDisabled[] = "disabled";
 
+// Enables touch events on the side bezels.
+const char kTouchSideBezels[] = "touch-side-bezels";
+
 #if defined(USE_XI2_MT)
 // The calibration factors given as "<left>,<right>,<top>,<bottom>".
 const char kTouchCalibration[] = "touch-calibration";
-#endif
-
-#if defined(OS_MACOSX)
-// Disables support for Core Animation plugins. This is triggered when
-// accelerated compositing is disabled. See http://crbug.com/122430 .
-const char kDisableCoreAnimationPlugins[] =
-    "disable-core-animation-plugins";
 #endif
 
 #if defined(TOOLKIT_VIEWS) && defined(OS_LINUX)

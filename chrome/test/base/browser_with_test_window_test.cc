@@ -4,7 +4,7 @@
 
 #include "chrome/test/base/browser_with_test_window_test.h"
 
-#include "base/synchronization/waitable_event.h"
+#include "base/run_loop.h"
 #include "chrome/browser/profiles/profile_destroyer.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_navigator.h"
@@ -21,79 +21,76 @@
 #include "ui/aura/test/aura_test_helper.h"
 #endif
 
-using content::BrowserThread;
+#if defined(USE_ASH)
+#include "ash/test/ash_test_helper.h"
+#endif
+
 using content::NavigationController;
 using content::RenderViewHost;
 using content::RenderViewHostTester;
 using content::WebContents;
 
 BrowserWithTestWindowTest::BrowserWithTestWindowTest()
-    : ui_thread_(BrowserThread::UI, message_loop()),
-      db_thread_(BrowserThread::DB),
-      file_thread_(BrowserThread::FILE, message_loop()),
-      file_user_blocking_thread_(
-          BrowserThread::FILE_USER_BLOCKING, message_loop()),
-      host_desktop_type_(chrome::HOST_DESKTOP_TYPE_NATIVE) {
-  db_thread_.Start();
+    : host_desktop_type_(chrome::HOST_DESKTOP_TYPE_NATIVE) {
 }
 
-BrowserWithTestWindowTest::BrowserWithTestWindowTest(
-    chrome::HostDesktopType host_desktop_type)
-    : ui_thread_(BrowserThread::UI, message_loop()),
-      db_thread_(BrowserThread::DB),
-      file_thread_(BrowserThread::FILE, message_loop()),
-      file_user_blocking_thread_(
-          BrowserThread::FILE_USER_BLOCKING, message_loop()),
-      host_desktop_type_(host_desktop_type) {
-  db_thread_.Start();
+BrowserWithTestWindowTest::~BrowserWithTestWindowTest() {
+}
+
+void BrowserWithTestWindowTest::SetHostDesktopType(
+    chrome::HostDesktopType host_desktop_type) {
+  DCHECK(!window_);
+  host_desktop_type_ = host_desktop_type;
 }
 
 void BrowserWithTestWindowTest::SetUp() {
   testing::Test::SetUp();
+#if defined(OS_CHROMEOS)
+  // TODO(jamescook): Windows Ash support. This will require refactoring
+  // AshTestHelper and AuraTestHelper so they can be used at the same time,
+  // perhaps by AshTestHelper owning an AuraTestHelper.
+  ash_test_helper_.reset(new ash::test::AshTestHelper(
+      base::MessageLoopForUI::current()));
+  ash_test_helper_->SetUp(true);
+#elif defined(USE_AURA)
+  aura_test_helper_.reset(new aura::test::AuraTestHelper(
+      base::MessageLoopForUI::current()));
+  aura_test_helper_->SetUp();
+#endif  // USE_AURA
 
-  set_profile(CreateProfile());
-
-  // Allow subclasses to specify a |window_| in their SetUp().
-  if (!window_.get())
-    window_.reset(new TestBrowserWindow);
+  // Subclasses can provide their own Profile.
+  profile_.reset(CreateProfile());
+  // Subclasses can provide their own test BrowserWindow. If they return NULL
+  // then Browser will create the a production BrowserWindow and the subclass
+  // is responsible for cleaning it up (usually by NativeWidget destruction).
+  window_.reset(CreateBrowserWindow());
 
   Browser::CreateParams params(profile(), host_desktop_type_);
   params.window = window_.get();
   browser_.reset(new Browser(params));
-#if defined(USE_AURA)
-  aura_test_helper_.reset(new aura::test::AuraTestHelper(&ui_loop_));
-  aura_test_helper_->SetUp();
-#endif  // USE_AURA
 }
 
 void BrowserWithTestWindowTest::TearDown() {
-  testing::Test::TearDown();
-#if defined(USE_AURA)
-  aura_test_helper_->TearDown();
-#endif
-}
+  // Some tests end up posting tasks to the DB thread that must be completed
+  // before the profile can be destroyed and the test safely shut down.
+  base::RunLoop().RunUntilIdle();
 
-BrowserWithTestWindowTest::~BrowserWithTestWindowTest() {
-  // A Task is leaked if we don't destroy everything, then run the message
-  // loop.
+  // Reset the profile here because some profile keyed services (like the
+  // audio service) depend on test stubs that the helpers below will remove.
   DestroyBrowserAndProfile();
 
-  // Schedule another task on the DB thread to notify us that it's safe to
-  // carry on with the test.
-  base::WaitableEvent done(false, false);
-  BrowserThread::PostTask(BrowserThread::DB, FROM_HERE,
-      base::Bind(&base::WaitableEvent::Signal, base::Unretained(&done)));
-  done.Wait();
-  db_thread_.Stop();
-  MessageLoop::current()->PostTask(FROM_HERE, MessageLoop::QuitClosure());
-  MessageLoop::current()->Run();
-}
+#if defined(OS_CHROMEOS)
+  ash_test_helper_->TearDown();
+#elif defined(USE_AURA)
+  aura_test_helper_->TearDown();
+#endif
+  testing::Test::TearDown();
 
-void BrowserWithTestWindowTest::set_profile(TestingProfile* profile) {
-  if (profile_.get() != NULL)
-    ProfileDestroyer::DestroyProfileWhenAppropriate(profile_.release());
-
-  profile_.reset(profile);
+  // A Task is leaked if we don't destroy everything, then run the message
+  // loop.
+  base::MessageLoop::current()->PostTask(FROM_HERE,
+                                         base::MessageLoop::QuitClosure());
+  base::MessageLoop::current()->Run();
 }
 
 void BrowserWithTestWindowTest::AddTab(Browser* browser, const GURL& url) {
@@ -124,6 +121,10 @@ void BrowserWithTestWindowTest::CommitPendingLoad(
   RenderViewHost* test_rvh = pending_rvh ? pending_rvh : old_rvh;
   RenderViewHostTester* test_rvh_tester = RenderViewHostTester::For(test_rvh);
 
+  // Simulate a SwapOut_ACK before the navigation commits.
+  if (pending_rvh)
+    RenderViewHostTester::For(old_rvh)->SimulateSwapOutACK();
+
   // For new navigations, we need to send a larger page ID. For renavigations,
   // we need to send the preexisting page ID. We can tell these apart because
   // renavigations will have a pending_entry_index while new ones won't (they'll
@@ -140,9 +141,6 @@ void BrowserWithTestWindowTest::CommitPendingLoad(
         controller->GetPendingEntry()->GetURL(),
         controller->GetPendingEntry()->GetTransitionType());
   }
-
-  if (pending_rvh)
-    RenderViewHostTester::For(old_rvh)->SimulateSwapOutACK();
 }
 
 void BrowserWithTestWindowTest::NavigateAndCommit(
@@ -186,4 +184,8 @@ void BrowserWithTestWindowTest::DestroyBrowserAndProfile() {
 
 TestingProfile* BrowserWithTestWindowTest::CreateProfile() {
   return new TestingProfile();
+}
+
+BrowserWindow* BrowserWithTestWindowTest::CreateBrowserWindow() {
+  return new TestBrowserWindow();
 }

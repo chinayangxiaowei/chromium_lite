@@ -8,21 +8,23 @@
 #include <string>
 
 #include "base/bind.h"
-#include "base/message_loop.h"
-#include "base/string16.h"
-#include "base/string_number_conversions.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/string16.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "content/common/browser_plugin/browser_plugin_constants.h"
+#include "content/public/renderer/v8_value_converter.h"
 #include "content/renderer/browser_plugin/browser_plugin.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebString.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebBindings.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebDOMMessageEvent.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebDocument.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebElement.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebFrame.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebNode.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebPluginContainer.h"
+#include "third_party/WebKit/public/platform/WebString.h"
+#include "third_party/WebKit/public/web/WebBindings.h"
+#include "third_party/WebKit/public/web/WebDOMMessageEvent.h"
+#include "third_party/WebKit/public/web/WebDocument.h"
+#include "third_party/WebKit/public/web/WebElement.h"
+#include "third_party/WebKit/public/web/WebFrame.h"
+#include "third_party/WebKit/public/web/WebNode.h"
+#include "third_party/WebKit/public/web/WebPluginContainer.h"
+#include "third_party/WebKit/public/web/WebView.h"
 #include "third_party/npapi/bindings/npapi.h"
 #include "v8/include/v8.h"
 
@@ -39,7 +41,7 @@ namespace {
 
 BrowserPluginBindings* GetBindings(NPObject* object) {
   return static_cast<BrowserPluginBindings::BrowserPluginNPObject*>(object)->
-      message_channel;
+      message_channel.get();
 }
 
 std::string StringFromNPVariant(const NPVariant& variant) {
@@ -226,6 +228,40 @@ class BrowserPluginMethodBinding {
   DISALLOW_COPY_AND_ASSIGN(BrowserPluginMethodBinding);
 };
 
+class BrowserPluginBindingAttach: public BrowserPluginMethodBinding {
+ public:
+  BrowserPluginBindingAttach()
+      : BrowserPluginMethodBinding(
+          browser_plugin::kMethodInternalAttach, 1) {
+  }
+
+  virtual bool Invoke(BrowserPluginBindings* bindings,
+                      const NPVariant* args,
+                      NPVariant* result) OVERRIDE {
+    if (!bindings->instance()->render_view())
+      return false;
+
+    scoped_ptr<V8ValueConverter> converter(V8ValueConverter::create());
+    v8::Handle<v8::Value> obj(WebKit::WebBindings::toV8Value(&args[0]));
+    scoped_ptr<base::Value> value(
+        converter->FromV8Value(obj, bindings->instance()->render_view()->
+            GetWebView()->mainFrame()->mainWorldScriptContext()));
+    if (!value)
+      return false;
+
+    if (!value->IsType(Value::TYPE_DICTIONARY))
+      return false;
+
+    scoped_ptr<base::DictionaryValue> extra_params(
+        static_cast<base::DictionaryValue*>(value.release()));
+    bindings->instance()->Attach(extra_params.Pass());
+    return true;
+  }
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(BrowserPluginBindingAttach);
+};
+
 class BrowserPluginBindingAttachWindowTo : public BrowserPluginMethodBinding {
  public:
   BrowserPluginBindingAttachWindowTo()
@@ -248,222 +284,47 @@ class BrowserPluginBindingAttachWindowTo : public BrowserPluginMethodBinding {
   DISALLOW_COPY_AND_ASSIGN(BrowserPluginBindingAttachWindowTo);
 };
 
-class BrowserPluginBindingBack : public BrowserPluginMethodBinding {
+// Note: This is a method that is used internally by the <webview> shim only.
+// This should not be exposed to developers.
+class BrowserPluginBindingGetGuestInstanceID :
+    public BrowserPluginMethodBinding {
  public:
-  BrowserPluginBindingBack()
-      : BrowserPluginMethodBinding(browser_plugin::kMethodBack, 0) {
+  BrowserPluginBindingGetGuestInstanceID()
+      : BrowserPluginMethodBinding(
+          browser_plugin::kMethodGetGuestInstanceId, 0) {
   }
 
   virtual bool Invoke(BrowserPluginBindings* bindings,
                       const NPVariant* args,
                       NPVariant* result) OVERRIDE {
-    bindings->instance()->Back();
+    int guest_instance_id = bindings->instance()->guest_instance_id();
+    INT32_TO_NPVARIANT(guest_instance_id, *result);
     return true;
   }
 
  private:
-  DISALLOW_COPY_AND_ASSIGN(BrowserPluginBindingBack);
-};
-
-class BrowserPluginBindingCanGoBack : public BrowserPluginMethodBinding {
- public:
-  BrowserPluginBindingCanGoBack()
-      : BrowserPluginMethodBinding(browser_plugin::kMethodCanGoBack, 0) {
-  }
-
-  virtual bool Invoke(BrowserPluginBindings* bindings,
-                      const NPVariant* args,
-                      NPVariant* result) OVERRIDE {
-    BOOLEAN_TO_NPVARIANT(bindings->instance()->CanGoBack(), *result);
-    return true;
-  }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(BrowserPluginBindingCanGoBack);
-};
-
-class BrowserPluginBindingCanGoForward : public BrowserPluginMethodBinding {
- public:
-  BrowserPluginBindingCanGoForward()
-      : BrowserPluginMethodBinding(browser_plugin::kMethodCanGoForward, 0) {
-  }
-
-  virtual bool Invoke(BrowserPluginBindings* bindings,
-                      const NPVariant* args,
-                      NPVariant* result) OVERRIDE {
-    BOOLEAN_TO_NPVARIANT(bindings->instance()->CanGoForward(), *result);
-    return true;
-  }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(BrowserPluginBindingCanGoForward);
-};
-
-class BrowserPluginBindingForward : public BrowserPluginMethodBinding {
- public:
-  BrowserPluginBindingForward()
-      : BrowserPluginMethodBinding(browser_plugin::kMethodForward, 0) {
-  }
-
-  virtual bool Invoke(BrowserPluginBindings* bindings,
-                      const NPVariant* args,
-                      NPVariant* result) OVERRIDE {
-    bindings->instance()->Forward();
-    return true;
-  }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(BrowserPluginBindingForward);
+  DISALLOW_COPY_AND_ASSIGN(BrowserPluginBindingGetGuestInstanceID);
 };
 
 // Note: This is a method that is used internally by the <webview> shim only.
 // This should not be exposed to developers.
-class BrowserPluginBindingGetRouteID : public BrowserPluginMethodBinding {
- public:
-  BrowserPluginBindingGetRouteID()
-      : BrowserPluginMethodBinding(browser_plugin::kMethodGetRouteId, 0) {
-  }
-
-  virtual bool Invoke(BrowserPluginBindings* bindings,
-                      const NPVariant* args,
-                      NPVariant* result) OVERRIDE {
-    int route_id = bindings->instance()->guest_route_id();
-    INT32_TO_NPVARIANT(route_id, *result);
-    return true;
-  }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(BrowserPluginBindingGetRouteID);
-};
-
-class BrowserPluginBindingGetProcessID : public BrowserPluginMethodBinding {
- public:
-  BrowserPluginBindingGetProcessID()
-      : BrowserPluginMethodBinding(browser_plugin::kMethodGetProcessId, 0) {
-  }
-
-  virtual bool Invoke(BrowserPluginBindings* bindings,
-                      const NPVariant* args,
-                      NPVariant* result) OVERRIDE {
-    int process_id = bindings->instance()->guest_process_id();
-    INT32_TO_NPVARIANT(process_id, *result);
-    return true;
-  }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(BrowserPluginBindingGetProcessID);
-};
-
-class BrowserPluginBindingGo : public BrowserPluginMethodBinding {
- public:
-  BrowserPluginBindingGo()
-      : BrowserPluginMethodBinding(browser_plugin::kMethodGo, 1) {
-  }
-
-  virtual bool Invoke(BrowserPluginBindings* bindings,
-                      const NPVariant* args,
-                      NPVariant* result) OVERRIDE {
-    bindings->instance()->Go(IntFromNPVariant(args[0]));
-    return true;
-  }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(BrowserPluginBindingGo);
-};
-
-// Note: This is a method that is used internally by the <webview> shim only.
-// This should not be exposed to developers.
-class BrowserPluginBindingPersistRequestObject
+class BrowserPluginBindingTrackObjectLifetime
     : public BrowserPluginMethodBinding {
  public:
-  BrowserPluginBindingPersistRequestObject()
-      : BrowserPluginMethodBinding(browser_plugin::kMethodInternalPersistObject,
-                                   3) {
-  }
-
-  virtual bool Invoke(BrowserPluginBindings* bindings,
-                      const NPVariant* args,
-                      NPVariant* result) OVERRIDE {
-    bindings->instance()->PersistRequestObject(
-        args, StringFromNPVariant(args[1]), IntFromNPVariant(args[2]));
-    return true;
-  }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(BrowserPluginBindingPersistRequestObject);
-};
-
-class BrowserPluginBindingReload : public BrowserPluginMethodBinding {
- public:
-  BrowserPluginBindingReload()
-      : BrowserPluginMethodBinding(browser_plugin::kMethodReload, 0) {
-  }
-
-  virtual bool Invoke(BrowserPluginBindings* bindings,
-                      const NPVariant* args,
-                      NPVariant* result) OVERRIDE {
-    bindings->instance()->Reload();
-    return true;
-  }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(BrowserPluginBindingReload);
-};
-
-class BrowserPluginBindingStop : public BrowserPluginMethodBinding {
- public:
-  BrowserPluginBindingStop()
-      : BrowserPluginMethodBinding(browser_plugin::kMethodStop, 0) {
-  }
-
-  virtual bool Invoke(BrowserPluginBindings* bindings,
-                      const NPVariant* args,
-                      NPVariant* result) OVERRIDE {
-    bindings->instance()->Stop();
-    return true;
-  }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(BrowserPluginBindingStop);
-};
-
-// Note: This is a method that is used internally by the <webview> shim only.
-// This should not be exposed to developers.
-class BrowserPluginBindingSetPermission : public BrowserPluginMethodBinding {
- public:
-  BrowserPluginBindingSetPermission()
+  BrowserPluginBindingTrackObjectLifetime()
       : BrowserPluginMethodBinding(
-          browser_plugin::kMethodInternalSetPermission, 2) {
+          browser_plugin::kMethodInternalTrackObjectLifetime, 2) {
   }
 
   virtual bool Invoke(BrowserPluginBindings* bindings,
                       const NPVariant* args,
                       NPVariant* result) OVERRIDE {
-    int request_id = IntFromNPVariant(args[0]);
-    bool allow = NPVARIANT_TO_BOOLEAN(args[1]);
-    bindings->instance()->OnEmbedderDecidedPermission(request_id, allow);
+    bindings->instance()->TrackObjectLifetime(args, IntFromNPVariant(args[1]));
     return true;
   }
 
  private:
-  DISALLOW_COPY_AND_ASSIGN(BrowserPluginBindingSetPermission);
-};
-
-class BrowserPluginBindingTerminate : public BrowserPluginMethodBinding {
- public:
-  BrowserPluginBindingTerminate()
-      : BrowserPluginMethodBinding(browser_plugin::kMethodTerminate, 0) {
-  }
-
-  virtual bool Invoke(BrowserPluginBindings* bindings,
-                      const NPVariant* args,
-                      NPVariant* result) OVERRIDE {
-    bindings->instance()->TerminateGuest();
-    return true;
-  }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(BrowserPluginBindingTerminate);
+  DISALLOW_COPY_AND_ASSIGN(BrowserPluginBindingTrackObjectLifetime);
 };
 
 // BrowserPluginPropertyBinding ------------------------------------------------
@@ -815,25 +676,17 @@ BrowserPluginBindings::BrowserPluginNPObject::~BrowserPluginNPObject() {
 BrowserPluginBindings::BrowserPluginBindings(BrowserPlugin* instance)
     : instance_(instance),
       np_object_(NULL),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_ptr_factory_(this)) {
+      weak_ptr_factory_(this) {
   NPObject* obj =
-      WebBindings::createObject(NULL, &browser_plugin_message_class);
+      WebBindings::createObject(instance->pluginNPP(),
+                                &browser_plugin_message_class);
   np_object_ = static_cast<BrowserPluginBindings::BrowserPluginNPObject*>(obj);
   np_object_->message_channel = weak_ptr_factory_.GetWeakPtr();
 
+  method_bindings_.push_back(new BrowserPluginBindingAttach);
   method_bindings_.push_back(new BrowserPluginBindingAttachWindowTo);
-  method_bindings_.push_back(new BrowserPluginBindingBack);
-  method_bindings_.push_back(new BrowserPluginBindingCanGoBack);
-  method_bindings_.push_back(new BrowserPluginBindingCanGoForward);
-  method_bindings_.push_back(new BrowserPluginBindingForward);
-  method_bindings_.push_back(new BrowserPluginBindingGetProcessID);
-  method_bindings_.push_back(new BrowserPluginBindingGetRouteID);
-  method_bindings_.push_back(new BrowserPluginBindingGo);
-  method_bindings_.push_back(new BrowserPluginBindingPersistRequestObject);
-  method_bindings_.push_back(new BrowserPluginBindingReload);
-  method_bindings_.push_back(new BrowserPluginBindingSetPermission);
-  method_bindings_.push_back(new BrowserPluginBindingStop);
-  method_bindings_.push_back(new BrowserPluginBindingTerminate);
+  method_bindings_.push_back(new BrowserPluginBindingGetGuestInstanceID);
+  method_bindings_.push_back(new BrowserPluginBindingTrackObjectLifetime);
 
   property_bindings_.push_back(new BrowserPluginPropertyBindingAutoSize);
   property_bindings_.push_back(new BrowserPluginPropertyBindingContentWindow);

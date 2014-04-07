@@ -9,10 +9,10 @@
 #include <set>
 #include <vector>
 
-#include "base/string16.h"
-#include "chrome/browser/history/history_types.h"
+#include "base/strings/string16.h"
 #include "chrome/browser/autocomplete/history_provider_util.h"
-#include "googleurl/src/gurl.h"
+#include "chrome/browser/history/history_types.h"
+#include "url/gurl.h"
 
 namespace history {
 

@@ -7,7 +7,7 @@
 
 #include <vector>
 
-#include "base/hash_tables.h"
+#include "base/containers/hash_tables.h"
 #include "base/memory/scoped_ptr.h"
 #include "build/build_config.h"
 #include "content/common/accessibility_node_data.h"
@@ -61,6 +61,10 @@ class CONTENT_EXPORT BrowserAccessibilityManager {
 
   virtual ~BrowserAccessibilityManager();
 
+  void Initialize(const AccessibilityNodeData src);
+
+  static AccessibilityNodeData GetEmptyDocument();
+
   // Type is enum AccessibilityNotification.
   // We pass it as int so that we don't include the message declaration
   // header here.
@@ -68,18 +72,11 @@ class CONTENT_EXPORT BrowserAccessibilityManager {
       int type,
       BrowserAccessibility* node) { }
 
-  // Returns the next unique child id.
-  static int32 GetNextChildID();
-
   // Return a pointer to the root of the tree, does not make a new reference.
   BrowserAccessibility* GetRoot();
 
   // Removes a node from the manager.
-  virtual void Remove(BrowserAccessibility* node);
-
-  // Return a pointer to the object corresponding to the given child_id,
-  // does not make a new reference.
-  BrowserAccessibility* GetFromChildID(int32 child_id);
+  virtual void RemoveNode(BrowserAccessibility* node);
 
   // Return a pointer to the object corresponding to the given renderer_id,
   // does not make a new reference.
@@ -144,6 +141,10 @@ class CONTENT_EXPORT BrowserAccessibilityManager {
   // focus event on a text box?
   bool IsOSKAllowed(const gfx::Rect& bounds);
 
+  // True by default, but some platforms want to treat the root
+  // scroll offsets separately.
+  virtual bool UseRootScrollOffsetsWhenComputingBounds();
+
   // For testing only: update the given nodes as if they were
   // received from the renderer process in OnAccessibilityNotifications.
   // Takes up to 7 nodes at once so tests don't need to create a vector
@@ -159,9 +160,17 @@ class CONTENT_EXPORT BrowserAccessibilityManager {
 
  protected:
   BrowserAccessibilityManager(
+      BrowserAccessibilityDelegate* delegate,
+      BrowserAccessibilityFactory* factory);
+
+  BrowserAccessibilityManager(
       const AccessibilityNodeData& src,
       BrowserAccessibilityDelegate* delegate,
       BrowserAccessibilityFactory* factory);
+
+  virtual void AddNodeToMap(BrowserAccessibility* node);
+
+  virtual void NotifyRootChanged() {}
 
  private:
   // The following states keep track of whether or not the
@@ -194,15 +203,14 @@ class CONTENT_EXPORT BrowserAccessibilityManager {
   // process. Returns true on success, false on fatal error.
   bool UpdateNode(const AccessibilityNodeData& src);
 
+  void SetRoot(BrowserAccessibility* root);
+
   BrowserAccessibility* CreateNode(
       BrowserAccessibility* parent,
       int32 renderer_id,
       int32 index_in_parent);
 
  protected:
-  // The next unique id for a BrowserAccessibility instance.
-  static int32 next_child_id_;
-
   // The object that can perform actions on our behalf.
   BrowserAccessibilityDelegate* delegate_;
 
@@ -217,12 +225,8 @@ class CONTENT_EXPORT BrowserAccessibilityManager {
   // The on-screen keyboard state.
   OnScreenKeyboardState osk_state_;
 
-  // A mapping from the IDs of objects in the renderer, to the child IDs
-  // we use internally here.
-  base::hash_map<int32, int32> renderer_id_to_child_id_map_;
-
-  // A mapping from child IDs to BrowserAccessibility objects.
-  base::hash_map<int32, BrowserAccessibility*> child_id_map_;
+  // A mapping from renderer IDs to BrowserAccessibility objects.
+  base::hash_map<int32, BrowserAccessibility*> renderer_id_map_;
 
   DISALLOW_COPY_AND_ASSIGN(BrowserAccessibilityManager);
 };

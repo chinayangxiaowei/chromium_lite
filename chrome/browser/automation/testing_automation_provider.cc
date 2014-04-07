@@ -18,13 +18,13 @@
 #include "base/json/string_escape.h"
 #include "base/path_service.h"
 #include "base/prefs/pref_service.h"
-#include "base/process.h"
-#include "base/process_util.h"
+#include "base/process/process.h"
+#include "base/process/process_iterator.h"
 #include "base/sequenced_task_runner.h"
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread_restrictions.h"
-#include "base/time.h"
-#include "base/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/autocomplete/autocomplete_controller.h"
 #include "chrome/browser/autocomplete/autocomplete_match.h"
@@ -41,6 +41,7 @@
 #include "chrome/browser/bookmarks/bookmark_storage.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_shutdown.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/content_settings/host_content_settings_map.h"
 #include "chrome/browser/devtools/devtools_window.h"
 #include "chrome/browser/download/download_prefs.h"
@@ -61,8 +62,6 @@
 #include "chrome/browser/extensions/updater/extension_updater.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/history/top_sites.h"
-#include "chrome/browser/importer/importer_host.h"
-#include "chrome/browser/importer/importer_list.h"
 #include "chrome/browser/infobars/confirm_infobar_delegate.h"
 #include "chrome/browser/infobars/infobar_service.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
@@ -75,10 +74,11 @@
 #include "chrome/browser/password_manager/password_store_factory.h"
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/plugins/plugin_prefs.h"
-#include "chrome/browser/printing/print_preview_dialog_controller.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_info_cache.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/profiles/profile_window.h"
+#include "chrome/browser/profiles/profiles_state.h"
 #include "chrome/browser/search_engines/template_url.h"
 #include "chrome/browser/search_engines/template_url_service.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
@@ -102,31 +102,28 @@
 #include "chrome/browser/ui/fullscreen/fullscreen_exit_bubble_type.h"
 #include "chrome/browser/ui/host_desktop.h"
 #include "chrome/browser/ui/login/login_prompt.h"
-#include "chrome/browser/ui/media_stream_infobar_delegate.h"
 #include "chrome/browser/ui/omnibox/location_bar.h"
 #include "chrome/browser/ui/omnibox/omnibox_edit_model.h"
 #include "chrome/browser/ui/omnibox/omnibox_view.h"
 #include "chrome/browser/ui/search_engines/keyword_editor_controller.h"
 #include "chrome/browser/ui/startup/startup_types.h"
-#include "chrome/browser/view_type_utils.h"
 #include "chrome/common/automation_constants.h"
-#include "chrome/common/automation_events.h"
 #include "chrome/common/automation_id.h"
 #include "chrome/common/automation_messages.h"
 #include "chrome/common/chrome_constants.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/background_info.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/manifest_url_handler.h"
 #include "chrome/common/extensions/permissions/permission_set.h"
+#include "chrome/common/extensions/permissions/permissions_data.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/render_messages.h"
 #include "content/public/browser/browser_child_process_host_iterator.h"
 #include "content/public/browser/child_process_data.h"
 #include "content/public/browser/favicon_status.h"
-#include "content/public/browser/geolocation.h"
+#include "content/public/browser/geolocation_provider.h"
 #include "content/public/browser/interstitial_page.h"
 #include "content/public/browser/interstitial_page_delegate.h"
 #include "content/public/browser/navigation_entry.h"
@@ -138,17 +135,18 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/child_process_host.h"
 #include "content/public/common/common_param_traits.h"
+#include "content/public/common/drop_data.h"
 #include "content/public/common/geoposition.h"
 #include "content/public/common/ssl_status.h"
+#include "content/public/common/webplugininfo.h"
+#include "extensions/browser/view_type_utils.h"
 #include "extensions/common/url_pattern.h"
 #include "extensions/common/url_pattern_set.h"
 #include "net/cookies/cookie_store.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebInputEvent.h"
+#include "third_party/WebKit/public/web/WebInputEvent.h"
 #include "ui/base/events/event_constants.h"
 #include "ui/base/keycodes/keyboard_codes.h"
 #include "ui/base/ui_base_types.h"
-#include "webkit/glue/webdropdata.h"
-#include "webkit/plugins/webplugininfo.h"
 
 #if defined(ENABLE_CONFIGURATION_POLICY)
 #include "chrome/browser/policy/policy_service.h"
@@ -159,12 +157,17 @@
 #endif
 
 #if defined(OS_MACOSX)
-#include "base/mach_ipc_mac.h"
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
 #endif
 
 #if !defined(NO_TCMALLOC) && (defined(OS_LINUX) || defined(OS_CHROMEOS))
 #include "third_party/tcmalloc/chromium/src/gperftools/heap-profiler.h"
 #endif  // !defined(NO_TCMALLOC) && (defined(OS_LINUX) || defined(OS_CHROMEOS))
+
+#if defined(ENABLE_FULL_PRINTING)
+#include "chrome/browser/printing/print_preview_dialog_controller.h"
+#endif
 
 using automation::Error;
 using automation::ErrorCode;
@@ -195,7 +198,7 @@ namespace {
 // Helper to reply asynchronously if |automation| is still valid.
 void SendSuccessReply(base::WeakPtr<AutomationProvider> automation,
                       IPC::Message* reply_message) {
-  if (automation)
+  if (automation.get())
     AutomationJSONReply(automation.get(), reply_message).SendSuccess(NULL);
 }
 
@@ -208,9 +211,9 @@ void DidEnablePlugin(base::WeakPtr<AutomationProvider> automation,
   if (did_enable) {
     SendSuccessReply(automation, reply_message);
   } else {
-    if (automation) {
-      AutomationJSONReply(automation.get(), reply_message).SendError(
-          base::StringPrintf(error_msg.c_str(), path.c_str()));
+    if (automation.get()) {
+      AutomationJSONReply(automation.get(), reply_message)
+          .SendError(base::StringPrintf(error_msg.c_str(), path.c_str()));
     }
   }
 }
@@ -249,11 +252,7 @@ const int TestingAutomationProvider::kSynchronousCommands[] = {
 };
 
 TestingAutomationProvider::TestingAutomationProvider(Profile* profile)
-    : AutomationProvider(profile)
-#if defined(OS_CHROMEOS)
-      , power_manager_observer_(NULL)
-#endif
-      {
+    : AutomationProvider(profile) {
   BrowserList::AddObserver(this);
   registrar_.Add(this, chrome::NOTIFICATION_SESSION_END,
                  content::NotificationService::AllSources());
@@ -295,45 +294,11 @@ void TestingAutomationProvider::OnBrowserRemoved(Browser* browser) {
           switches::kKeepAliveForTest)) {
     // If you change this, update Observer for chrome::SESSION_END
     // below.
-    MessageLoop::current()->PostTask(
+    base::MessageLoop::current()->PostTask(
         FROM_HERE,
         base::Bind(&TestingAutomationProvider::OnRemoveProvider, this));
   }
 #endif  // !defined(OS_CHROMEOS) && !defined(OS_MACOSX)
-}
-
-void TestingAutomationProvider::OnSourceProfilesLoaded() {
-  DCHECK_NE(static_cast<ImporterList*>(NULL), importer_list_.get());
-
-  // Get the correct profile based on the browser that the user provided.
-  importer::SourceProfile source_profile;
-  size_t i = 0;
-  size_t importers_count = importer_list_->count();
-  for ( ; i < importers_count; ++i) {
-    importer::SourceProfile profile = importer_list_->GetSourceProfileAt(i);
-    if (profile.importer_name == import_settings_data_.browser_name) {
-      source_profile = profile;
-      break;
-    }
-  }
-  // If we made it to the end of the loop, then the input was bad.
-  if (i == importers_count) {
-    AutomationJSONReply(this, import_settings_data_.reply_message)
-        .SendError("Invalid browser name string found.");
-    return;
-  }
-
-  scoped_refptr<ImporterHost> importer_host(new ImporterHost);
-  importer_host->SetObserver(
-      new AutomationProviderImportSettingsObserver(
-          this, import_settings_data_.reply_message));
-
-  Profile* target_profile = import_settings_data_.browser->profile();
-  importer_host->StartImportSettings(source_profile,
-                                     target_profile,
-                                     import_settings_data_.import_items,
-                                     new ProfileWriter(target_profile),
-                                     import_settings_data_.first_run);
 }
 
 void TestingAutomationProvider::Observe(
@@ -490,7 +455,29 @@ void TestingAutomationProvider::AppendTab(int handle,
 
 void TestingAutomationProvider::GetMachPortCount(int* port_count) {
 #if defined(OS_MACOSX)
-  base::mac::GetNumberOfMachPorts(mach_task_self(), port_count);
+  mach_port_name_array_t names;
+  mach_msg_type_number_t names_count;
+  mach_port_type_array_t types;
+  mach_msg_type_number_t types_count;
+
+  mach_port_t port = mach_task_self();
+
+  // A friendlier interface would allow NULL buffers to only get the counts.
+  kern_return_t kr = mach_port_names(port, &names, &names_count,
+                                     &types, &types_count);
+  if (kr != KERN_SUCCESS) {
+    *port_count = 0;
+    return;
+  }
+
+  // The documentation states this is an invariant.
+  DCHECK_EQ(names_count, types_count);
+  *port_count = names_count;
+
+  mach_vm_deallocate(port, reinterpret_cast<mach_vm_address_t>(names),
+      names_count * sizeof(mach_port_name_array_t));
+  mach_vm_deallocate(port, reinterpret_cast<mach_vm_address_t>(types),
+      types_count * sizeof(mach_port_type_array_t));
 #else
   *port_count = 0;
 #endif
@@ -921,7 +908,7 @@ void TestingAutomationProvider::DragAndDropFilePaths(
   }
 
   // Emulate drag and drop to set the file paths to the file upload control.
-  WebDropData drop_data;
+  content::DropData drop_data;
   for (size_t path_index = 0; path_index < paths->GetSize(); ++path_index) {
     string16 path;
     if (!paths->GetString(path_index, &path)) {
@@ -931,7 +918,7 @@ void TestingAutomationProvider::DragAndDropFilePaths(
     }
 
     drop_data.filenames.push_back(
-        WebDropData::FileInfo(path, string16()));
+        content::DropData::FileInfo(path, string16()));
   }
 
   const gfx::Point client(x, y);
@@ -991,7 +978,7 @@ void TestingAutomationProvider::GetTabTitle(int handle,
     NavigationController* tab = tab_tracker_->GetResource(handle);
     NavigationEntry* entry = tab->GetActiveEntry();
     if (entry != NULL) {
-      *title = UTF16ToWideHack(entry->GetTitleForDisplay(""));
+      *title = UTF16ToWideHack(entry->GetTitleForDisplay(std::string()));
     } else {
       *title = std::wstring();
     }
@@ -1064,8 +1051,7 @@ void TestingAutomationProvider::OpenNewBrowserWindowWithNewProfile(
   ProfileManager* profile_manager = g_browser_process->profile_manager();
   new BrowserOpenedWithNewProfileNotificationObserver(this, reply_message);
   profile_manager->CreateMultiProfileAsync(
-      string16(), string16(), ProfileManager::CreateCallback(),
-      chrome::HOST_DESKTOP_TYPE_NATIVE, false);
+      string16(), string16(), ProfileManager::CreateCallback(), std::string());
 }
 
 // Sample json input: { "command": "GetMultiProfileInfo" }
@@ -1076,8 +1062,7 @@ void TestingAutomationProvider::GetMultiProfileInfo(
   ProfileManager* profile_manager = g_browser_process->profile_manager();
   const ProfileInfoCache& profile_info_cache =
       profile_manager->GetProfileInfoCache();
-  return_value->SetBoolean("enabled",
-      profile_manager->IsMultipleProfilesEnabled());
+  return_value->SetBoolean("enabled", profiles::IsMultipleProfilesEnabled());
 
   ListValue* profiles = new ListValue;
   for (size_t index = 0; index < profile_info_cache.GetNumberOfProfiles();
@@ -1171,7 +1156,7 @@ void TestingAutomationProvider::OpenProfileWindow(
   }
   new BrowserOpenedWithExistingProfileNotificationObserver(
       this, reply_message, num_loads);
-  ProfileManager::FindOrCreateNewWindowForProfile(
+  profiles::FindOrCreateNewWindowForProfile(
       profile,
       chrome::startup::IS_NOT_PROCESS_STARTUP,
       chrome::startup::IS_NOT_FIRST_RUN,
@@ -1258,14 +1243,14 @@ void TestingAutomationProvider::GetBookmarksAsJSON(
   }
   BookmarkModel* bookmark_model =
       BookmarkModelFactory::GetForProfile(browser->profile());
-  if (!bookmark_model->IsLoaded()) {
+  if (!bookmark_model->loaded()) {
     reply.SendError("Bookmark model is not loaded");
     return;
   }
   scoped_refptr<BookmarkStorage> storage(
       new BookmarkStorage(browser->profile(),
                           bookmark_model,
-                          browser->profile()->GetIOTaskRunner()));
+                          browser->profile()->GetIOTaskRunner().get()));
   if (!storage->SerializeData(&bookmarks_as_json)) {
     reply.SendError("Failed to serialize bookmarks");
     return;
@@ -1285,7 +1270,7 @@ void TestingAutomationProvider::WaitForBookmarkModelToLoad(
     AutomationProviderBookmarkModelObserver* observer =
         new AutomationProviderBookmarkModelObserver(this, reply_message,
                                                     model, false);
-    if (model->IsLoaded()) {
+    if (model->loaded()) {
       observer->ReleaseReply();
       delete observer;
       AutomationMsg_WaitForBookmarkModelToLoad::WriteReplyParams(
@@ -1299,7 +1284,7 @@ void TestingAutomationProvider::WaitForBookmarkModelToLoadJSON(
     DictionaryValue* args,
     IPC::Message* reply_message) {
   Browser* browser;
-  std::string error_msg, bookmarks_as_json;
+  std::string error_msg;
   if (!GetBrowserFromJSONArgs(args, &browser, &error_msg)) {
     AutomationJSONReply(this, reply_message).SendError(error_msg);
     return;
@@ -1309,7 +1294,7 @@ void TestingAutomationProvider::WaitForBookmarkModelToLoadJSON(
   AutomationProviderBookmarkModelObserver* observer =
       new AutomationProviderBookmarkModelObserver(this, reply_message, model,
                                                   true);
-  if (model->IsLoaded()) {
+  if (model->loaded()) {
     observer->ReleaseReply();
     delete observer;
     AutomationJSONReply(this, reply_message).SendSuccess(NULL);
@@ -1352,7 +1337,7 @@ void TestingAutomationProvider::AddBookmark(
   }
   BookmarkModel* model =
       BookmarkModelFactory::GetForProfile(browser->profile());
-  if (!model->IsLoaded()) {
+  if (!model->loaded()) {
     reply.SendError("Bookmark model is not loaded");
     return;
   }
@@ -1398,7 +1383,7 @@ void TestingAutomationProvider::ReparentBookmark(DictionaryValue* args,
   }
   BookmarkModel* model =
       BookmarkModelFactory::GetForProfile(browser->profile());
-  if (!model->IsLoaded()) {
+  if (!model->loaded()) {
     reply.SendError("Bookmark model is not loaded");
     return;
   }
@@ -1437,7 +1422,7 @@ void TestingAutomationProvider::SetBookmarkTitle(DictionaryValue* args,
   }
   BookmarkModel* model =
       BookmarkModelFactory::GetForProfile(browser->profile());
-  if (!model->IsLoaded()) {
+  if (!model->loaded()) {
     reply.SendError("Bookmark model is not loaded");
     return;
   }
@@ -1470,7 +1455,7 @@ void TestingAutomationProvider::SetBookmarkURL(DictionaryValue* args,
   }
   BookmarkModel* model =
       BookmarkModelFactory::GetForProfile(browser->profile());
-  if (!model->IsLoaded()) {
+  if (!model->loaded()) {
     reply.SendError("Bookmark model is not loaded");
     return;
   }
@@ -1499,7 +1484,7 @@ void TestingAutomationProvider::RemoveBookmark(DictionaryValue* args,
   }
   BookmarkModel* model =
       BookmarkModelFactory::GetForProfile(browser->profile());
-  if (!model->IsLoaded()) {
+  if (!model->loaded()) {
     reply.SendError("Bookmark model is not loaded");
     return;
   }
@@ -1582,8 +1567,6 @@ void TestingAutomationProvider::BuildJSONHandlerMaps() {
       &TestingAutomationProvider::ActivateTabJSON;
   handler_map_["BringBrowserToFront"] =
       &TestingAutomationProvider::BringBrowserToFrontJSON;
-  handler_map_["WaitForAllTabsToStopLoading"] =
-      &TestingAutomationProvider::WaitForAllViewsToStopLoading;
   handler_map_["GetIndicesFromTab"] =
       &TestingAutomationProvider::GetIndicesFromTab;
   handler_map_["NavigateToURL"] =
@@ -1626,8 +1609,6 @@ void TestingAutomationProvider::BuildJSONHandlerMaps() {
       &TestingAutomationProvider::OpenFindInPage;
   handler_map_["IsFindInPageVisible"] =
       &TestingAutomationProvider::IsFindInPageVisible;
-  handler_map_["CaptureEntirePage"] =
-      &TestingAutomationProvider::CaptureEntirePageJSON;
   handler_map_["SetDownloadShelfVisible"] =
       &TestingAutomationProvider::SetDownloadShelfVisibleJSON;
   handler_map_["IsDownloadShelfVisible"] =
@@ -1694,8 +1675,6 @@ void TestingAutomationProvider::BuildJSONHandlerMaps() {
       &TestingAutomationProvider::DragAndDropFilePaths;
   handler_map_["SendWebkitKeyEvent"] =
       &TestingAutomationProvider::SendWebkitKeyEvent;
-  handler_map_["ProcessWebMouseEvent"] =
-      &TestingAutomationProvider::ProcessWebMouseEvent;
   handler_map_["ActivateTab"] =
       &TestingAutomationProvider::ActivateTabJSON;
   handler_map_["GetAppModalDialogMessage"] =
@@ -1744,10 +1723,6 @@ void TestingAutomationProvider::BuildJSONHandlerMaps() {
       &TestingAutomationProvider::TriggerBrowserActionById;
   handler_map_["UpdateExtensionsNow"] =
       &TestingAutomationProvider::UpdateExtensionsNow;
-#if !defined(NO_TCMALLOC) && (defined(OS_LINUX) || defined(OS_CHROMEOS))
-  handler_map_["HeapProfilerDump"] =
-      &TestingAutomationProvider::HeapProfilerDump;
-#endif  // !defined(NO_TCMALLOC) && (defined(OS_LINUX) || defined(OS_CHROMEOS))
   handler_map_["OverrideGeoposition"] =
       &TestingAutomationProvider::OverrideGeoposition;
   handler_map_["SimulateAsanMemoryBug"] =
@@ -1817,10 +1792,7 @@ void TestingAutomationProvider::BuildJSONHandlerMaps() {
   handler_map_["GetTimeInfo"] = &TestingAutomationProvider::GetTimeInfo;
   handler_map_["SetTimezone"] = &TestingAutomationProvider::SetTimezone;
 
-  handler_map_["GetUpdateInfo"] = &TestingAutomationProvider::GetUpdateInfo;
   handler_map_["UpdateCheck"] = &TestingAutomationProvider::UpdateCheck;
-  handler_map_["SetReleaseTrack"] =
-      &TestingAutomationProvider::SetReleaseTrack;
 
   handler_map_["GetVolumeInfo"] = &TestingAutomationProvider::GetVolumeInfo;
   handler_map_["SetVolume"] = &TestingAutomationProvider::SetVolume;
@@ -1829,12 +1801,8 @@ void TestingAutomationProvider::BuildJSONHandlerMaps() {
   handler_map_["OpenCrosh"] = &TestingAutomationProvider::OpenCrosh;
   handler_map_["SetProxySettings"] =
       &TestingAutomationProvider::SetProxySettings;
-  handler_map_["GetProxySettings"] =
-      &TestingAutomationProvider::GetProxySettings;
   handler_map_["SetSharedProxies"] =
       &TestingAutomationProvider::SetSharedProxies;
-  handler_map_["RefreshInternetDetails"] =
-      &TestingAutomationProvider::RefreshInternetDetails;
 
   browser_handler_map_["GetTimeInfo"] =
       &TestingAutomationProvider::GetTimeInfo;
@@ -1889,9 +1857,6 @@ void TestingAutomationProvider::BuildJSONHandlerMaps() {
 
   browser_handler_map_["SaveTabContents"] =
       &TestingAutomationProvider::SaveTabContents;
-
-  browser_handler_map_["ImportSettings"] =
-      &TestingAutomationProvider::ImportSettings;
 
   browser_handler_map_["AddSavedPassword"] =
       &TestingAutomationProvider::AddSavedPassword;
@@ -2077,15 +2042,12 @@ ListValue* TestingAutomationProvider::GetInfobarsInfo(WebContents* wc) {
   // Each infobar may have different properties depending on the type.
   ListValue* infobars = new ListValue;
   InfoBarService* infobar_service = InfoBarService::FromWebContents(wc);
-  for (size_t i = 0; i < infobar_service->GetInfoBarCount(); ++i) {
+  for (size_t i = 0; i < infobar_service->infobar_count(); ++i) {
     DictionaryValue* infobar_item = new DictionaryValue;
-    InfoBarDelegate* infobar = infobar_service->GetInfoBarDelegateAt(i);
+    InfoBarDelegate* infobar = infobar_service->infobar_at(i);
     switch (infobar->GetInfoBarAutomationType()) {
       case InfoBarDelegate::CONFIRM_INFOBAR:
         infobar_item->SetString("type", "confirm_infobar");
-        break;
-      case InfoBarDelegate::ONE_CLICK_LOGIN_INFOBAR:
-        infobar_item->SetString("type", "oneclicklogin_infobar");
         break;
       case InfoBarDelegate::PASSWORD_INFOBAR:
         infobar_item->SetString("type", "password_infobar");
@@ -2147,6 +2109,7 @@ void TestingAutomationProvider::PerformActionOnInfobar(
     reply.SendError("Invalid or missing args");
     return;
   }
+  size_t infobar_index = static_cast<size_t>(infobar_index_int);
 
   WebContents* web_contents =
       browser->tab_strip_model()->GetWebContentsAt(tab_index);
@@ -2154,37 +2117,33 @@ void TestingAutomationProvider::PerformActionOnInfobar(
     reply.SendError(base::StringPrintf("No such tab at index %d", tab_index));
     return;
   }
+
   InfoBarService* infobar_service =
       InfoBarService::FromWebContents(web_contents);
-
-  InfoBarDelegate* infobar = NULL;
-  size_t infobar_index = static_cast<size_t>(infobar_index_int);
-  if (infobar_index >= infobar_service->GetInfoBarCount()) {
+  if (infobar_index >= infobar_service->infobar_count()) {
     reply.SendError(base::StringPrintf("No such infobar at index %" PRIuS,
                                        infobar_index));
     return;
   }
-  infobar = infobar_service->GetInfoBarDelegateAt(infobar_index);
+  InfoBarDelegate* infobar_delegate =
+      infobar_service->infobar_at(infobar_index);
 
-  if ("dismiss" == action) {
-    infobar->InfoBarDismissed();
-    infobar_service->RemoveInfoBar(infobar);
+  if (action == "dismiss") {
+    infobar_delegate->InfoBarDismissed();
+    infobar_service->RemoveInfoBar(infobar_delegate);
     reply.SendSuccess(NULL);
     return;
   }
-  if ("accept" == action || "cancel" == action) {
-    ConfirmInfoBarDelegate* confirm_infobar;
-    if (!(confirm_infobar = infobar->AsConfirmInfoBarDelegate())) {
+  if ((action == "accept") || (action == "cancel")) {
+    ConfirmInfoBarDelegate* confirm_infobar_delegate =
+        infobar_delegate->AsConfirmInfoBarDelegate();
+    if (!confirm_infobar_delegate) {
       reply.SendError("Not a confirm infobar");
       return;
     }
-    if ("accept" == action) {
-      if (confirm_infobar->Accept())
-        infobar_service->RemoveInfoBar(infobar);
-    } else if ("cancel" == action) {
-      if (confirm_infobar->Cancel())
-        infobar_service->RemoveInfoBar(infobar);
-    }
+    if ((action == "accept") ?
+        confirm_infobar_delegate->Accept() : confirm_infobar_delegate->Cancel())
+      infobar_service->RemoveInfoBar(infobar_delegate);
     reply.SendSuccess(NULL);
     return;
   }
@@ -2309,9 +2268,6 @@ void TestingAutomationProvider::GetBrowserInfo(
       case Browser::TYPE_POPUP:
         type = "popup";
         break;
-      case Browser::TYPE_PANEL:
-        type = "panel";
-        break;
       default:
         type = "unknown";
         break;
@@ -2386,24 +2342,24 @@ void TestingAutomationProvider::GetBrowserInfo(
       std::string type;
       WebContents* web_contents =
           WebContents::FromRenderViewHost(render_view_host);
-      chrome::ViewType view_type = chrome::GetViewType(web_contents);
+      extensions::ViewType view_type = extensions::GetViewType(web_contents);
       switch (view_type) {
-        case chrome::VIEW_TYPE_EXTENSION_BACKGROUND_PAGE:
+        case extensions::VIEW_TYPE_EXTENSION_BACKGROUND_PAGE:
           type = "EXTENSION_BACKGROUND_PAGE";
           break;
-        case chrome::VIEW_TYPE_EXTENSION_POPUP:
+        case extensions::VIEW_TYPE_EXTENSION_POPUP:
           type = "EXTENSION_POPUP";
           break;
-        case chrome::VIEW_TYPE_EXTENSION_INFOBAR:
+        case extensions::VIEW_TYPE_EXTENSION_INFOBAR:
           type = "EXTENSION_INFOBAR";
           break;
-        case chrome::VIEW_TYPE_EXTENSION_DIALOG:
+        case extensions::VIEW_TYPE_EXTENSION_DIALOG:
           type = "EXTENSION_DIALOG";
           break;
-        case chrome::VIEW_TYPE_APP_SHELL:
+        case extensions::VIEW_TYPE_APP_SHELL:
           type = "APP_SHELL";
           break;
-        case chrome::VIEW_TYPE_PANEL:
+        case extensions::VIEW_TYPE_PANEL:
           type = "PANEL";
           break;
         default:
@@ -2535,7 +2491,7 @@ void TestingAutomationProvider::GetDownloadsInfo(Browser* browser,
   ListValue* list_of_downloads = new ListValue;
 
   DownloadService* download_service(
-      DownloadServiceFactory::GetForProfile(browser->profile()));
+      DownloadServiceFactory::GetForBrowserContext(browser->profile()));
 
   if (download_service->HasCreatedDownloadManager()) {
     std::vector<DownloadItem*> downloads;
@@ -2567,7 +2523,7 @@ void TestingAutomationProvider::WaitForAllDownloadsToComplete(
   }
 
   DownloadService* download_service =
-      DownloadServiceFactory::GetForProfile(browser->profile());
+      DownloadServiceFactory::GetForBrowserContext(browser->profile());
   if (!download_service->HasCreatedDownloadManager()) {
     // No download manager, so no downloads to wait for.
     AutomationJSONReply(this, reply_message).SendSuccess(NULL);
@@ -2591,7 +2547,7 @@ void TestingAutomationProvider::PerformActionOnDownload(
   std::string action;
 
   DownloadService* download_service =
-      DownloadServiceFactory::GetForProfile(browser->profile());
+      DownloadServiceFactory::GetForBrowserContext(browser->profile());
   if (!download_service->HasCreatedDownloadManager()) {
     AutomationJSONReply(this, reply_message).SendError("No download manager.");
     return;
@@ -2611,11 +2567,16 @@ void TestingAutomationProvider::PerformActionOnDownload(
     return;
   }
 
+  DownloadItem::DownloadState download_state = selected_item->GetState();
+
   // We need to be IN_PROGRESS for these actions.
   if ((action == "pause" || action == "resume" || action == "cancel") &&
-      !selected_item->IsInProgress()) {
+      download_state != DownloadItem::IN_PROGRESS) {
     AutomationJSONReply(this, reply_message)
-        .SendError("Selected DownloadItem is not in progress.");
+        .SendError(base::StringPrintf(
+            "Action '%s' called on download that is not in progress.",
+            action.c_str()));
+    return;
   }
 
   if (action == "open") {
@@ -2626,7 +2587,7 @@ void TestingAutomationProvider::PerformActionOnDownload(
   } else if (action == "toggle_open_files_like_this") {
     DownloadPrefs* prefs =
         DownloadPrefs::FromBrowserContext(selected_item->GetBrowserContext());
-    base::FilePath path = selected_item->GetUserVerifiedFilePath();
+    base::FilePath path = selected_item->GetTargetFilePath();
     if (!selected_item->ShouldOpenFileBasedOnExtension())
       prefs->EnableAutoOpenBasedOnExtension(path);
     else
@@ -2639,38 +2600,28 @@ void TestingAutomationProvider::PerformActionOnDownload(
   } else if (action == "decline_dangerous_download") {
     new AutomationProviderDownloadModelChangedObserver(
         this, reply_message, download_manager);
-    selected_item->Delete(DownloadItem::DELETE_DUE_TO_USER_DISCARD);
+    selected_item->Remove();
   } else if (action == "save_dangerous_download") {
     selected_item->AddObserver(new AutomationProviderDownloadUpdatedObserver(
         this, reply_message, false, browser->profile()->IsOffTheRecord()));
-    selected_item->DangerousDownloadValidated();
+    selected_item->ValidateDangerousDownload();
   } else if (action == "pause") {
-    if (!selected_item->IsInProgress() || selected_item->IsPaused()) {
+    if (selected_item->IsPaused()) {
       // Action would be a no-op; respond right from here.  No-op implies
       // the test is poorly written or failing, so make it an error return.
-      if (!selected_item->IsInProgress()) {
-        AutomationJSONReply(this, reply_message)
-            .SendError("Action 'pause' called on download in termal state.");
-      } else {
-        AutomationJSONReply(this, reply_message)
-            .SendError("Action 'pause' called on already paused download.");
-      }
+      AutomationJSONReply(this, reply_message)
+          .SendError("Action 'pause' called on already paused download.");
     } else {
       selected_item->AddObserver(new AutomationProviderDownloadUpdatedObserver(
           this, reply_message, false, browser->profile()->IsOffTheRecord()));
       selected_item->Pause();
     }
   } else if (action == "resume") {
-    if (!selected_item->IsInProgress() || !selected_item->IsPaused()) {
+    if (!selected_item->IsPaused()) {
       // Action would be a no-op; respond right from here.  No-op implies
       // the test is poorly written or failing, so make it an error return.
-      if (!selected_item->IsInProgress()) {
-        AutomationJSONReply(this, reply_message)
-            .SendError("Action 'resume' called on download in termal state.");
-      } else {
-        AutomationJSONReply(this, reply_message)
-            .SendError("Action 'resume' called on unpaused download.");
-      }
+      AutomationJSONReply(this, reply_message)
+          .SendError("Action 'resume' called on unpaused download.");
     } else {
       selected_item->AddObserver(new AutomationProviderDownloadUpdatedObserver(
           this, reply_message, false, browser->profile()->IsOffTheRecord()));
@@ -2705,7 +2656,7 @@ void TestingAutomationProvider::SetDownloadShelfVisibleJSON(
   if (is_visible) {
     browser->window()->GetDownloadShelf()->Show();
   } else {
-    browser->window()->GetDownloadShelf()->Close();
+    browser->window()->GetDownloadShelf()->Close(DownloadShelf::AUTOMATIC);
   }
   reply.SendSuccess(NULL);
 }
@@ -2992,7 +2943,7 @@ void TestingAutomationProvider::GetOmniboxInfo(Browser* browser,
        ++i) {
     const AutocompleteMatch& match = *i;
     DictionaryValue* item = new DictionaryValue;  // owned by return_value
-    item->SetString("type", AutocompleteMatch::TypeToString(match.type));
+    item->SetString("type", AutocompleteMatchType::ToString(match.type));
     item->SetBoolean("starred", match.starred);
     item->SetString("destination_url", match.destination_url.spec());
     item->SetString("contents", match.contents);
@@ -3107,10 +3058,11 @@ void TestingAutomationProvider::GetPluginsInfoCallback(
     Browser* browser,
     DictionaryValue* args,
     IPC::Message* reply_message,
-    const std::vector<webkit::WebPluginInfo>& plugins) {
-  PluginPrefs* plugin_prefs = PluginPrefs::GetForProfile(browser->profile());
+    const std::vector<content::WebPluginInfo>& plugins) {
+  PluginPrefs* plugin_prefs =
+      PluginPrefs::GetForProfile(browser->profile()).get();
   ListValue* items = new ListValue;
-  for (std::vector<webkit::WebPluginInfo>::const_iterator it =
+  for (std::vector<content::WebPluginInfo>::const_iterator it =
            plugins.begin();
        it != plugins.end();
        ++it) {
@@ -3122,7 +3074,7 @@ void TestingAutomationProvider::GetPluginsInfoCallback(
     item->SetBoolean("enabled", plugin_prefs->IsPluginEnabled(*it));
     // Add info about mime types.
     ListValue* mime_types = new ListValue();
-    for (std::vector<webkit::WebPluginMimeType>::const_iterator type_it =
+    for (std::vector<content::WebPluginMimeType>::const_iterator type_it =
              it->mime_types.begin();
          type_it != it->mime_types.end();
          ++type_it) {
@@ -3161,10 +3113,16 @@ void TestingAutomationProvider::EnablePlugin(Browser* browser,
     AutomationJSONReply(this, reply_message).SendError("path not specified.");
     return;
   }
-  PluginPrefs* plugin_prefs = PluginPrefs::GetForProfile(browser->profile());
-  plugin_prefs->EnablePlugin(true, base::FilePath(path),
-      base::Bind(&DidEnablePlugin, AsWeakPtr(), reply_message,
-                 path, "Could not enable plugin for path %s."));
+  PluginPrefs* plugin_prefs =
+      PluginPrefs::GetForProfile(browser->profile()).get();
+  plugin_prefs->EnablePlugin(
+      true,
+      base::FilePath(path),
+      base::Bind(&DidEnablePlugin,
+                 AsWeakPtr(),
+                 reply_message,
+                 path,
+                 "Could not enable plugin for path %s."));
 }
 
 // Sample json input:
@@ -3178,10 +3136,16 @@ void TestingAutomationProvider::DisablePlugin(Browser* browser,
     AutomationJSONReply(this, reply_message).SendError("path not specified.");
     return;
   }
-  PluginPrefs* plugin_prefs = PluginPrefs::GetForProfile(browser->profile());
-  plugin_prefs->EnablePlugin(false, base::FilePath(path),
-      base::Bind(&DidEnablePlugin, AsWeakPtr(), reply_message,
-                 path, "Could not disable plugin for path %s."));
+  PluginPrefs* plugin_prefs =
+      PluginPrefs::GetForProfile(browser->profile()).get();
+  plugin_prefs->EnablePlugin(
+      false,
+      base::FilePath(path),
+      base::Bind(&DidEnablePlugin,
+                 AsWeakPtr(),
+                 reply_message,
+                 path,
+                 "Could not disable plugin for path %s."));
 }
 
 // Sample json input:
@@ -3226,52 +3190,6 @@ void TestingAutomationProvider::SaveTabContents(
   new SavePackageNotificationObserver(
       BrowserContext::GetDownloadManager(browser->profile()),
       this, reply_message);
-}
-
-// Refer to ImportSettings() in chrome/test/pyautolib/pyauto.py for sample
-// json input.
-// Sample json output: "{}"
-void TestingAutomationProvider::ImportSettings(Browser* browser,
-                                               DictionaryValue* args,
-                                               IPC::Message* reply_message) {
-  // Map from the json string passed over to the import item masks.
-  std::map<std::string, importer::ImportItem> string_to_import_item;
-  string_to_import_item["HISTORY"] = importer::HISTORY;
-  string_to_import_item["FAVORITES"] = importer::FAVORITES;
-  string_to_import_item["COOKIES"] = importer::COOKIES;
-  string_to_import_item["PASSWORDS"] = importer::PASSWORDS;
-  string_to_import_item["SEARCH_ENGINES"] = importer::SEARCH_ENGINES;
-  string_to_import_item["HOME_PAGE"] = importer::HOME_PAGE;
-  string_to_import_item["ALL"] = importer::ALL;
-
-  ListValue* import_items_list = NULL;
-  if (!args->GetString("import_from", &import_settings_data_.browser_name) ||
-      !args->GetBoolean("first_run", &import_settings_data_.first_run) ||
-      !args->GetList("import_items", &import_items_list)) {
-    AutomationJSONReply(this, reply_message)
-        .SendError("Incorrect type for one or more of the arguments.");
-    return;
-  }
-
-  import_settings_data_.import_items = 0;
-  int num_items = import_items_list->GetSize();
-  for (int i = 0; i < num_items; i++) {
-    std::string item;
-    // If the provided string is not part of the map, error out.
-    if (!import_items_list->GetString(i, &item) ||
-        !ContainsKey(string_to_import_item, item)) {
-      AutomationJSONReply(this, reply_message)
-          .SendError("Invalid item string found in import_items.");
-      return;
-    }
-    import_settings_data_.import_items |= string_to_import_item[item];
-  }
-
-  import_settings_data_.browser = browser;
-  import_settings_data_.reply_message = reply_message;
-
-  importer_list_ = new ImporterList(NULL);
-  importer_list_->DetectSourceProfiles(this);
 }
 
 namespace {
@@ -3361,7 +3279,7 @@ void TestingAutomationProvider::AddSavedPassword(
 
   // Use IMPLICIT_ACCESS since new passwords aren't added in incognito mode.
   PasswordStore* password_store = PasswordStoreFactory::GetForProfile(
-      browser->profile(), Profile::IMPLICIT_ACCESS);
+      browser->profile(), Profile::IMPLICIT_ACCESS).get();
 
   // The password store does not exist for an incognito window.
   if (password_store == NULL) {
@@ -3407,7 +3325,7 @@ void TestingAutomationProvider::RemoveSavedPassword(
 
   // Use EXPLICIT_ACCESS since passwords can be removed in incognito mode.
   PasswordStore* password_store = PasswordStoreFactory::GetForProfile(
-      browser->profile(), Profile::EXPLICIT_ACCESS);
+      browser->profile(), Profile::EXPLICIT_ACCESS).get();
   if (password_store == NULL) {
     AutomationJSONReply(this, reply_message).SendError(
         "Unable to get password store.");
@@ -3417,7 +3335,7 @@ void TestingAutomationProvider::RemoveSavedPassword(
   // This observer will delete itself.
   PasswordStoreLoginsChangedObserver* observer =
       new PasswordStoreLoginsChangedObserver(
-          this, reply_message, PasswordStoreChange::REMOVE, "");
+          this, reply_message, PasswordStoreChange::REMOVE, std::string());
   observer->Init();
 
   password_store->RemoveLogin(to_remove);
@@ -3433,7 +3351,7 @@ void TestingAutomationProvider::GetSavedPasswords(
   // Use EXPLICIT_ACCESS since saved passwords can be retrieved in
   // incognito mode.
   PasswordStore* password_store = PasswordStoreFactory::GetForProfile(
-      browser->profile(), Profile::EXPLICIT_ACCESS);
+      browser->profile(), Profile::EXPLICIT_ACCESS).get();
 
   if (password_store == NULL) {
     AutomationJSONReply reply(this, reply_message);
@@ -3585,11 +3503,10 @@ void TestingAutomationProvider::InstallExtension(
     // If the given path has a 'crx' extension, assume it is a packed extension
     // and install it. Otherwise load it as an unpacked extension.
     if (extension_path.MatchesExtension(FILE_PATH_LITERAL(".crx"))) {
-      ExtensionInstallPrompt* client = (with_ui ?
-          new ExtensionInstallPrompt(tab) :
-          NULL);
+      scoped_ptr<ExtensionInstallPrompt> client(
+          with_ui ? new ExtensionInstallPrompt(tab) : NULL);
       scoped_refptr<extensions::CrxInstaller> installer(
-          extensions::CrxInstaller::Create(service, client));
+          extensions::CrxInstaller::Create(service, client.Pass()));
       if (!with_ui)
         installer->set_allow_silent_install(true);
       installer->set_install_cause(extension_misc::INSTALL_CAUSE_AUTOMATION);
@@ -3612,10 +3529,12 @@ namespace {
 
 ListValue* GetHostPermissions(const Extension* ext, bool effective_perm) {
   extensions::URLPatternSet pattern_set;
-  if (effective_perm)
-    pattern_set = ext->GetEffectiveHostPermissions();
-  else
+  if (effective_perm) {
+    pattern_set =
+        extensions::PermissionsData::GetEffectiveHostPermissions(ext);
+  } else {
     pattern_set = ext->GetActivePermissions()->explicit_hosts();
+  }
 
   ListValue* permissions = new ListValue;
   for (extensions::URLPatternSet::const_iterator perm = pattern_set.begin();
@@ -3672,7 +3591,7 @@ void TestingAutomationProvider::GetExtensionsInfo(DictionaryValue* args,
       ExtensionActionManager::Get(browser->profile());
   for (ExtensionList::const_iterator it = all.begin();
        it != all.end(); ++it) {
-    const Extension* extension = *it;
+    const Extension* extension = it->get();
     std::string id = extension->id();
     DictionaryValue* extension_value = new DictionaryValue;
     extension_value->SetString("id", id);
@@ -4033,70 +3952,12 @@ void TestingAutomationProvider::UpdateExtensionsNow(
   updater->CheckNow(params);
 }
 
-#if !defined(NO_TCMALLOC) && (defined(OS_LINUX) || defined(OS_CHROMEOS))
-// Sample json input: { "command": "HeapProfilerDump",
-//                      "process_type": "renderer",
-//                      "reason": "Perf bot",
-//                      "tab_index": 0,
-//                      "windex": 0 }
-// "auto_id" is acceptable instead of "tab_index" and "windex".
-void TestingAutomationProvider::HeapProfilerDump(
-    DictionaryValue* args,
-    IPC::Message* reply_message) {
-  AutomationJSONReply reply(this, reply_message);
-
-  std::string process_type_string;
-  if (!args->GetString("process_type", &process_type_string)) {
-    reply.SendError("No process type is specified");
-    return;
-  }
-
-  std::string reason_string;
-  if (args->GetString("reason", &reason_string))
-    reason_string += " (via PyAuto testing)";
-  else
-    reason_string = "By PyAuto testing";
-
-  if (process_type_string == "browser") {
-    if (!::IsHeapProfilerRunning()) {
-      reply.SendError("The heap profiler is not running");
-      return;
-    }
-    ::HeapProfilerDump(reason_string.c_str());
-    reply.SendSuccess(NULL);
-    return;
-  } else if (process_type_string == "renderer") {
-    WebContents* web_contents;
-    std::string error;
-
-    if (!GetTabFromJSONArgs(args, &web_contents, &error)) {
-      reply.SendError(error);
-      return;
-    }
-
-    RenderViewHost* render_view = web_contents->GetRenderViewHost();
-    if (!render_view) {
-      reply.SendError("Tab has no associated RenderViewHost");
-      return;
-    }
-
-    AutomationTabHelper* automation_tab_helper =
-        AutomationTabHelper::FromWebContents(web_contents);
-    automation_tab_helper->HeapProfilerDump(reason_string);
-    reply.SendSuccess(NULL);
-    return;
-  }
-
-  reply.SendError("Process type is not supported");
-}
-#endif  // !defined(NO_TCMALLOC) && (defined(OS_LINUX) || defined(OS_CHROMEOS))
-
 namespace {
 
 void SendSuccessIfAlive(
     base::WeakPtr<AutomationProvider> provider,
     IPC::Message* reply_message) {
-  if (provider)
+  if (provider.get())
     AutomationJSONReply(provider.get(), reply_message).SendSuccess(NULL);
 }
 
@@ -4119,7 +3980,8 @@ void TestingAutomationProvider::OverrideGeoposition(
   position.altitude = altitude;
   position.accuracy = 0.;
   position.timestamp = base::Time::Now();
-  content::OverrideLocationForTesting(
+
+  content::GeolocationProvider::OverrideLocationForTesting(
       position,
       base::Bind(&SendSuccessIfAlive, AsWeakPtr(), reply_message));
 }
@@ -4232,13 +4094,19 @@ void TestingAutomationProvider::KillRendererProcess(
     DictionaryValue* args,
     IPC::Message* reply_message) {
   int pid;
+  uint32 kAccessFlags = base::kProcessAccessTerminate |
+                        base::kProcessAccessWaitForTermination |
+                        base::kProcessAccessQueryInformation;
+
   if (!args->GetInteger("pid", &pid)) {
     AutomationJSONReply(this, reply_message)
         .SendError("'pid' key missing or invalid.");
     return;
   }
   base::ProcessHandle process;
-  if (!base::OpenProcessHandle(static_cast<base::ProcessId>(pid), &process)) {
+  if (!base::OpenProcessHandleWithAccess(static_cast<base::ProcessId>(pid),
+                                         kAccessFlags,
+                                         &process)) {
     AutomationJSONReply(this, reply_message).SendError(base::StringPrintf(
         "Failed to open process handle for pid %d", pid));
     return;
@@ -4289,7 +4157,8 @@ bool TestingAutomationProvider::BuildWebKeyEventFromArgs(
                   key_identifier.c_str(),
                   WebKit::WebKeyboardEvent::keyIdentifierLengthCap);
   } else {
-    event->setKeyIdentifierFromWindowsKeyCode();
+    *error = "'keyIdentifier' missing or invalid.";
+    return false;
   }
 
   if (type == automation::kRawKeyDownType) {
@@ -4330,35 +4199,6 @@ bool TestingAutomationProvider::BuildWebKeyEventFromArgs(
   return true;
 }
 
-void TestingAutomationProvider::BuildSimpleWebKeyEvent(
-    WebKit::WebInputEvent::Type type,
-    int windows_key_code,
-    NativeWebKeyboardEvent* event) {
-  event->nativeKeyCode = 0;
-  event->windowsKeyCode = windows_key_code;
-  event->setKeyIdentifierFromWindowsKeyCode();
-  event->type = type;
-  event->modifiers = 0;
-  event->isSystemKey = false;
-  event->timeStampSeconds = base::Time::Now().ToDoubleT();
-  event->skip_in_browser = true;
-}
-
-void TestingAutomationProvider::SendWebKeyPressEventAsync(
-    int key_code,
-    WebContents* web_contents) {
-  // Create and send a "key down" event for the specified key code.
-  NativeWebKeyboardEvent event_down;
-  BuildSimpleWebKeyEvent(WebKit::WebInputEvent::RawKeyDown, key_code,
-                         &event_down);
-  web_contents->GetRenderViewHost()->ForwardKeyboardEvent(event_down);
-
-  // Create and send a corresponding "key up" event.
-  NativeWebKeyboardEvent event_up;
-  BuildSimpleWebKeyEvent(WebKit::WebInputEvent::KeyUp, key_code, &event_up);
-  web_contents->GetRenderViewHost()->ForwardKeyboardEvent(event_up);
-}
-
 void TestingAutomationProvider::SendWebkitKeyEvent(
     DictionaryValue* args,
     IPC::Message* reply_message) {
@@ -4382,143 +4222,6 @@ void TestingAutomationProvider::SendWebkitKeyEvent(
   }
   new InputEventAckNotificationObserver(this, reply_message, event.type, 1);
   view->ForwardKeyboardEvent(event);
-}
-
-namespace {
-
-bool ReadScriptEvaluationRequestList(
-    base::Value* value,
-    std::vector<ScriptEvaluationRequest>* list,
-    std::string* error_msg) {
-  ListValue* request_list;
-  if (!value->GetAsList(&request_list))
-    return false;
-
-  for (size_t i = 0; i < request_list->GetSize(); ++i) {
-    DictionaryValue* request_dict;
-    if (!request_list->GetDictionary(i, &request_dict)) {
-      *error_msg = "Script evaluation request was not a dictionary";
-      return false;
-    }
-    ScriptEvaluationRequest request;
-    if (!request_dict->GetString("script", &request.script) ||
-        !request_dict->GetString("frame_xpath", &request.frame_xpath)) {
-      *error_msg = "Script evaluation request was invalid";
-      return false;
-    }
-    list->push_back(request);
-  }
-  return true;
-}
-
-void SendPointIfAlive(
-    base::WeakPtr<AutomationProvider> provider,
-    IPC::Message* reply_message,
-    const gfx::Point& point) {
-  if (provider) {
-    DictionaryValue dict;
-    dict.SetInteger("x", point.x());
-    dict.SetInteger("y", point.y());
-    AutomationJSONReply(provider.get(), reply_message).SendSuccess(&dict);
-  }
-}
-
-void SendErrorIfAlive(
-    base::WeakPtr<AutomationProvider> provider,
-    IPC::Message* reply_message,
-    const automation::Error& error) {
-  if (provider) {
-    AutomationJSONReply(provider.get(), reply_message).SendError(error);
-  }
-}
-
-}  // namespace
-
-void TestingAutomationProvider::ProcessWebMouseEvent(
-    DictionaryValue* args,
-    IPC::Message* reply_message) {
-  if (SendErrorIfModalDialogActive(this, reply_message))
-    return;
-
-  RenderViewHost* view;
-  std::string error;
-  if (!GetRenderViewFromJSONArgs(args, profile(), &view, &error)) {
-    AutomationJSONReply(this, reply_message).SendError(error);
-    return;
-  }
-
-  int type;
-  int button;
-  int modifiers;
-  WebKit::WebMouseEvent event;
-  if (!args->GetInteger("type", &type) ||
-      !args->GetInteger("button", &button) ||
-      !args->GetInteger("x", &event.x) ||
-      !args->GetInteger("y", &event.y) ||
-      !args->GetInteger("click_count", &event.clickCount) ||
-      !args->GetInteger("modifiers", &modifiers)) {
-    AutomationJSONReply(this, reply_message)
-        .SendError("WebMouseEvent has missing or invalid parameters");
-    return;
-  }
-  if (type == automation::kMouseDown) {
-    event.type = WebKit::WebInputEvent::MouseDown;
-  } else if (type == automation::kMouseUp) {
-    event.type = WebKit::WebInputEvent::MouseUp;
-  } else if (type == automation::kMouseMove) {
-    event.type = WebKit::WebInputEvent::MouseMove;
-  } else if (type == automation::kMouseEnter) {
-    event.type = WebKit::WebInputEvent::MouseEnter;
-  } else if (type == automation::kMouseLeave) {
-    event.type = WebKit::WebInputEvent::MouseLeave;
-  } else if (type == automation::kContextMenu) {
-    event.type = WebKit::WebInputEvent::ContextMenu;
-  } else {
-    AutomationJSONReply(this, reply_message)
-        .SendError("'type' refers to an unrecognized mouse event type");
-    return;
-  }
-  if (button == automation::kLeftButton) {
-    event.button = WebKit::WebMouseEvent::ButtonLeft;
-  } else if (button == automation::kMiddleButton) {
-    event.button = WebKit::WebMouseEvent::ButtonMiddle;
-  } else if (button == automation::kRightButton) {
-    event.button = WebKit::WebMouseEvent::ButtonRight;
-  } else if (button == automation::kNoButton) {
-    event.button = WebKit::WebMouseEvent::ButtonNone;
-  } else {
-    AutomationJSONReply(this, reply_message)
-        .SendError("'button' refers to an unrecognized button");
-    return;
-  }
-  event.modifiers = 0;
-  if (modifiers & automation::kShiftKeyMask)
-    event.modifiers |= WebKit::WebInputEvent::ShiftKey;
-  if (modifiers & automation::kControlKeyMask)
-    event.modifiers |= WebKit::WebInputEvent::ControlKey;
-  if (modifiers & automation::kAltKeyMask)
-    event.modifiers |= WebKit::WebInputEvent::AltKey;
-  if (modifiers & automation::kMetaKeyMask)
-    event.modifiers |= WebKit::WebInputEvent::MetaKey;
-
-  AutomationMouseEvent automation_event;
-  automation_event.mouse_event = event;
-  Value* location_script_chain_value;
-  if (args->Get("location_script_chain", &location_script_chain_value)) {
-    if (!ReadScriptEvaluationRequestList(
-            location_script_chain_value,
-            &automation_event.location_script_chain,
-            &error)) {
-      AutomationJSONReply(this, reply_message).SendError(error);
-      return;
-    }
-  }
-
-  new AutomationMouseEventProcessor(
-      view,
-      automation_event,
-      base::Bind(&SendPointIfAlive, AsWeakPtr(), reply_message),
-      base::Bind(&SendErrorIfAlive, AsWeakPtr(), reply_message));
 }
 
 namespace {
@@ -4690,7 +4393,6 @@ void TestingAutomationProvider::GetV8HeapStats(
     IPC::Message* reply_message) {
   WebContents* web_contents;
   int tab_index;
-  std::string error;
 
   if (!args->GetInteger("tab_index", &tab_index)) {
     AutomationJSONReply(this, reply_message).SendError(
@@ -4724,7 +4426,6 @@ void TestingAutomationProvider::GetFPS(
     IPC::Message* reply_message) {
   WebContents* web_contents;
   int tab_index;
-  std::string error;
 
   if (!args->GetInteger("tab_index", &tab_index)) {
     AutomationJSONReply(this, reply_message).SendError(
@@ -4839,20 +4540,6 @@ void TestingAutomationProvider::DenyCurrentFullscreenOrMouseLockRequest(
     IPC::Message* reply_message) {
   browser->fullscreen_controller()->OnDenyFullscreenPermission();
   AutomationJSONReply(this, reply_message).SendSuccess(NULL);
-}
-
-void TestingAutomationProvider::WaitForAllViewsToStopLoading(
-    DictionaryValue* args,
-    IPC::Message* reply_message) {
-  if (AppModalDialogQueue::GetInstance()->HasActiveDialog()) {
-    AutomationJSONReply(this, reply_message).SendSuccess(NULL);
-    return;
-  }
-
-  // This class will send the message immediately if no tab is loading.
-  new AllViewsStoppedLoadingObserver(
-      this, reply_message,
-          extensions::ExtensionSystem::Get(profile())->process_manager());
 }
 
 void TestingAutomationProvider::WaitForTabToBeRestored(
@@ -5107,7 +4794,6 @@ void TestingAutomationProvider::ExecuteJavascriptInRenderView(
     DictionaryValue* args,
     IPC::Message* reply_message) {
   string16 frame_xpath, javascript, extension_id, url_text;
-  std::string error;
   int render_process_id, render_view_id;
   if (!args->GetString("frame_xpath", &frame_xpath)) {
     AutomationJSONReply(this, reply_message)
@@ -5356,7 +5042,7 @@ void TestingAutomationProvider::GetTabInfo(
       return;
     }
     DictionaryValue dict;
-    dict.SetString("title", entry->GetTitleForDisplay(""));
+    dict.SetString("title", entry->GetTitleForDisplay(std::string()));
     dict.SetString("url", entry->GetVirtualURL().spec());
     reply.SendSuccess(&dict);
   } else {
@@ -5421,40 +5107,6 @@ void TestingAutomationProvider::ReloadJSON(
   controller.Reload(false);
 }
 
-void TestingAutomationProvider::CaptureEntirePageJSON(
-    DictionaryValue* args,
-    IPC::Message* reply_message) {
-  if (SendErrorIfModalDialogActive(this, reply_message))
-    return;
-
-  WebContents* web_contents;
-  std::string error;
-
-  if (!GetTabFromJSONArgs(args, &web_contents, &error)) {
-    AutomationJSONReply(this, reply_message).SendError(error);
-    return;
-  }
-
-  base::FilePath::StringType path_str;
-  if (!args->GetString("path", &path_str)) {
-    AutomationJSONReply(this, reply_message)
-        .SendError("'path' missing or invalid");
-    return;
-  }
-
-  RenderViewHost* render_view = web_contents->GetRenderViewHost();
-  if (render_view) {
-    base::FilePath path(path_str);
-    // This will delete itself when finished.
-    PageSnapshotTaker* snapshot_taker = new PageSnapshotTaker(
-        this, reply_message, web_contents, path);
-    snapshot_taker->Start();
-  } else {
-    AutomationJSONReply(this, reply_message)
-        .SendError("Tab has no associated RenderViewHost");
-  }
-}
-
 void TestingAutomationProvider::GetCookiesJSON(
     DictionaryValue* args, IPC::Message* reply_message) {
   automation_util::GetCookiesJSON(this, args, reply_message);
@@ -5512,7 +5164,7 @@ void TestingAutomationProvider::DeleteCookieInBrowserContext(
     IPC::Message* reply_message) {
   AutomationJSONReply reply(this, reply_message);
   WebContents* web_contents;
-  std::string cookie_name, error, url_string;
+  std::string cookie_name, url_string;
   int windex;
   bool success = false;
   if (!args->GetInteger("windex", &windex)) {
@@ -5552,7 +5204,7 @@ void TestingAutomationProvider::SetCookieInBrowserContext(
     IPC::Message* reply_message) {
   AutomationJSONReply reply(this, reply_message);
   WebContents* web_contents;
-  std::string value, error, url_string;
+  std::string value, url_string;
   int windex, response_value = -1;
   if (!args->GetInteger("windex", &windex)) {
     reply.SendError("'windex' missing or invalid.");
@@ -5604,8 +5256,10 @@ void TestingAutomationProvider::GetTabIds(
 void TestingAutomationProvider::GetViews(
     DictionaryValue* args, IPC::Message* reply_message) {
   ListValue* view_list = new ListValue();
+#if defined(ENABLE_FULL_PRINTING)
   printing::PrintPreviewDialogController* preview_controller =
       printing::PrintPreviewDialogController::GetInstance();
+#endif
   for (chrome::BrowserIterator it; !it.done(); it.Next()) {
     Browser* browser = *it;
     for (int i = 0; i < browser->tab_strip_model()->count(); ++i) {
@@ -5614,6 +5268,7 @@ void TestingAutomationProvider::GetViews(
       AutomationId id = automation_util::GetIdForTab(contents);
       dict->Set("auto_id", id.ToValue());
       view_list->Append(dict);
+#if defined(ENABLE_FULL_PRINTING)
       if (preview_controller) {
         WebContents* preview_dialog =
             preview_controller->GetPrintPreviewForContents(contents);
@@ -5624,6 +5279,7 @@ void TestingAutomationProvider::GetViews(
           view_list->Append(dict);
         }
       }
+#endif
     }
   }
 

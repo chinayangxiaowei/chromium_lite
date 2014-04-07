@@ -12,14 +12,13 @@
 #include "base/run_loop.h"
 #include "content/browser/download/download_file.h"
 #include "content/common/content_export.h"
-#include "content/public/browser/download_id.h"
 #include "content/public/browser/download_item.h"
 #include "content/public/browser/download_manager.h"
 #include "content/public/common/referrer.h"
-#include "googleurl/src/gurl.h"
 #include "net/base/file_stream.h"
 #include "ui/base/dragdrop/download_file_interface.h"
 #include "ui/base/ui_export.h"
+#include "url/gurl.h"
 
 namespace net {
 class FileStream;
@@ -63,7 +62,7 @@ class CONTENT_EXPORT DragDownloadFile : public ui::DownloadFileProvider {
 
   base::FilePath file_path_;
   scoped_ptr<net::FileStream> file_stream_;
-  MessageLoop* drag_message_loop_;
+  base::MessageLoop* drag_message_loop_;
   State state_;
   scoped_refptr<ui::DownloadFileObserver> observer_;
   base::RunLoop nested_loop_;

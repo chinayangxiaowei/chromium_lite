@@ -59,42 +59,43 @@ TEST(ExtensionSetTest, ExtensionSet) {
   scoped_refptr<Extension> ext3(CreateTestExtension(
       "b", "http://dev.chromium.org/", "http://dev.chromium.org/"));
 
-  scoped_refptr<Extension> ext4(CreateTestExtension("c", "", ""));
+  scoped_refptr<Extension> ext4(
+      CreateTestExtension("c", std::string(), std::string()));
 
-  ASSERT_TRUE(ext1 && ext2 && ext3 && ext4);
+  ASSERT_TRUE(ext1.get() && ext2.get() && ext3.get() && ext4.get());
 
   ExtensionSet extensions;
 
   // Add an extension.
-  extensions.Insert(ext1);
+  EXPECT_TRUE(extensions.Insert(ext1));
   EXPECT_EQ(1u, extensions.size());
   EXPECT_EQ(ext1, extensions.GetByID(ext1->id()));
 
   // Since extension2 has same ID, it should overwrite extension1.
-  extensions.Insert(ext2);
+  EXPECT_FALSE(extensions.Insert(ext2));
   EXPECT_EQ(1u, extensions.size());
   EXPECT_EQ(ext2, extensions.GetByID(ext1->id()));
 
   // Add the other extensions.
-  extensions.Insert(ext3);
-  extensions.Insert(ext4);
+  EXPECT_TRUE(extensions.Insert(ext3));
+  EXPECT_TRUE(extensions.Insert(ext4));
   EXPECT_EQ(3u, extensions.size());
 
   // Get extension by its chrome-extension:// URL
   EXPECT_EQ(ext2, extensions.GetExtensionOrAppByURL(
-      ExtensionURLInfo(ext2->GetResourceURL("test.html"))));
+      ext2->GetResourceURL("test.html")));
   EXPECT_EQ(ext3, extensions.GetExtensionOrAppByURL(
-      ExtensionURLInfo(ext3->GetResourceURL("test.html"))));
+      ext3->GetResourceURL("test.html")));
   EXPECT_EQ(ext4, extensions.GetExtensionOrAppByURL(
-      ExtensionURLInfo(ext4->GetResourceURL("test.html"))));
+      ext4->GetResourceURL("test.html")));
 
   // Get extension by web extent.
   EXPECT_EQ(ext2, extensions.GetExtensionOrAppByURL(
-      ExtensionURLInfo(GURL("http://code.google.com/p/chromium/monkey"))));
+      GURL("http://code.google.com/p/chromium/monkey")));
   EXPECT_EQ(ext3, extensions.GetExtensionOrAppByURL(
-      ExtensionURLInfo(GURL("http://dev.chromium.org/design-docs/"))));
+      GURL("http://dev.chromium.org/design-docs/")));
   EXPECT_FALSE(extensions.GetExtensionOrAppByURL(
-      ExtensionURLInfo(GURL("http://blog.chromium.org/"))));
+      GURL("http://blog.chromium.org/")));
 
   // Test InSameExtent().
   EXPECT_TRUE(extensions.InSameExtent(
@@ -113,19 +114,22 @@ TEST(ExtensionSetTest, ExtensionSet) {
       GURL("http://blog.chromium.org/")));
 
   // Remove one of the extensions.
-  extensions.Remove(ext2->id());
+  EXPECT_TRUE(extensions.Remove(ext2->id()));
   EXPECT_EQ(2u, extensions.size());
   EXPECT_FALSE(extensions.GetByID(ext2->id()));
 
   // Make a union of a set with 3 more extensions (only 2 are new).
-  scoped_refptr<Extension> ext5(CreateTestExtension("d", "", ""));
-  scoped_refptr<Extension> ext6(CreateTestExtension("e", "", ""));
-  ASSERT_TRUE(ext5 && ext6);
+  scoped_refptr<Extension> ext5(
+      CreateTestExtension("d", std::string(), std::string()));
+  scoped_refptr<Extension> ext6(
+      CreateTestExtension("e", std::string(), std::string()));
+  ASSERT_TRUE(ext5.get() && ext6.get());
 
   scoped_ptr<ExtensionSet> to_add(new ExtensionSet());
-  to_add->Insert(ext3);  // Already in |extensions|, should not affect size.
-  to_add->Insert(ext5);
-  to_add->Insert(ext6);
+  // |ext3| is already in |extensions|, should not affect size.
+  EXPECT_TRUE(to_add->Insert(ext3));
+  EXPECT_TRUE(to_add->Insert(ext5));
+  EXPECT_TRUE(to_add->Insert(ext6));
 
   ASSERT_TRUE(extensions.Contains(ext3->id()));
   ASSERT_TRUE(extensions.InsertAll(*to_add));

@@ -4,43 +4,87 @@
 
 #include "cc/resources/managed_tile_state.h"
 
+#include <limits>
+
 #include "cc/base/math_util.h"
 
 namespace cc {
 
+scoped_ptr<base::Value> ManagedTileBinAsValue(ManagedTileBin bin) {
+  switch (bin) {
+  case NOW_AND_READY_TO_DRAW_BIN:
+      return scoped_ptr<base::Value>(base::Value::CreateStringValue(
+          "NOW_AND_READY_TO_DRAW_BIN"));
+  case NOW_BIN:
+      return scoped_ptr<base::Value>(base::Value::CreateStringValue(
+          "NOW_BIN"));
+  case SOON_BIN:
+      return scoped_ptr<base::Value>(base::Value::CreateStringValue(
+          "SOON_BIN"));
+  case EVENTUALLY_AND_ACTIVE_BIN:
+      return scoped_ptr<base::Value>(base::Value::CreateStringValue(
+          "EVENTUALLY_AND_ACTIVE_BIN"));
+  case EVENTUALLY_BIN:
+      return scoped_ptr<base::Value>(base::Value::CreateStringValue(
+          "EVENTUALLY_BIN"));
+  case NEVER_AND_ACTIVE_BIN:
+      return scoped_ptr<base::Value>(base::Value::CreateStringValue(
+          "NEVER_AND_ACTIVE_BIN"));
+  case NEVER_BIN:
+      return scoped_ptr<base::Value>(base::Value::CreateStringValue(
+          "NEVER_BIN"));
+  default:
+      DCHECK(false) << "Unrecognized ManagedTileBin value " << bin;
+      return scoped_ptr<base::Value>(base::Value::CreateStringValue(
+          "<unknown ManagedTileBin value>"));
+  }
+}
+
+scoped_ptr<base::Value> ManagedTileBinPriorityAsValue(
+    ManagedTileBinPriority bin_priority) {
+  switch (bin_priority) {
+  case HIGH_PRIORITY_BIN:
+      return scoped_ptr<base::Value>(base::Value::CreateStringValue(
+          "HIGH_PRIORITY_BIN"));
+  case LOW_PRIORITY_BIN:
+      return scoped_ptr<base::Value>(base::Value::CreateStringValue(
+          "LOW_PRIORITY_BIN"));
+  default:
+      DCHECK(false) << "Unrecognized ManagedTileBinPriority value";
+      return scoped_ptr<base::Value>(base::Value::CreateStringValue(
+          "<unknown ManagedTileBinPriority value>"));
+  }
+}
+
 ManagedTileState::ManagedTileState()
-    : can_use_gpu_memory(false),
-      need_to_gather_pixel_refs(true),
-      raster_state(IDLE_STATE),
-      picture_pile_analyzed(false),
+    : raster_mode(LOW_QUALITY_RASTER_MODE),
       gpu_memmgr_stats_bin(NEVER_BIN),
       resolution(NON_IDEAL_RESOLUTION),
+      required_for_activation(false),
       time_to_needed_in_seconds(std::numeric_limits<float>::infinity()),
-      distance_to_visible_in_pixels(std::numeric_limits<float>::infinity()) {
+      distance_to_visible_in_pixels(std::numeric_limits<float>::infinity()),
+      visible_and_ready_to_draw(false),
+      scheduled_priority(0) {
   for (int i = 0; i < NUM_TREES; ++i) {
     tree_bin[i] = NEVER_BIN;
     bin[i] = NEVER_BIN;
   }
 }
 
-ManagedTileState::DrawingInfo::DrawingInfo()
-    : mode_(TEXTURE_MODE),
-      resource_is_being_initialized_(false),
-      can_be_freed_(true),
-      contents_swizzled_(false) {
+ManagedTileState::TileVersion::TileVersion()
+    : mode_(RESOURCE_MODE),
+      has_text_(false) {
 }
 
-ManagedTileState::DrawingInfo::~DrawingInfo() {
+ManagedTileState::TileVersion::~TileVersion() {
+  DCHECK(!resource_);
 }
 
-bool ManagedTileState::DrawingInfo::IsReadyToDraw() const {
+bool ManagedTileState::TileVersion::IsReadyToDraw() const {
   switch (mode_) {
-    case TEXTURE_MODE:
-      return resource_ &&
-             !resource_is_being_initialized_ &&
-             resource_->id();
+    case RESOURCE_MODE:
+      return !!resource_;
     case SOLID_COLOR_MODE:
-    case TRANSPARENT_MODE:
     case PICTURE_PILE_MODE:
       return true;
     default:
@@ -49,33 +93,37 @@ bool ManagedTileState::DrawingInfo::IsReadyToDraw() const {
   }
 }
 
+size_t ManagedTileState::TileVersion::GPUMemoryUsageInBytes() const {
+  if (!resource_)
+    return 0;
+  return resource_->bytes();
+}
+
 ManagedTileState::~ManagedTileState() {
-  DCHECK(!drawing_info.resource_);
-  DCHECK(!drawing_info.resource_is_being_initialized_);
 }
 
 scoped_ptr<base::Value> ManagedTileState::AsValue() const {
   scoped_ptr<base::DictionaryValue> state(new base::DictionaryValue());
-  state->SetBoolean("can_use_gpu_memory", can_use_gpu_memory);
-  state->SetBoolean("can_be_freed", drawing_info.can_be_freed_);
-  state->SetBoolean("has_resource", drawing_info.resource_.get() != 0);
-  state->SetBoolean("resource_is_being_initialized",
-      drawing_info.resource_is_being_initialized_);
-  state->Set("raster_state", TileRasterStateAsValue(raster_state).release());
-  state->Set("bin.0", TileManagerBinAsValue(bin[ACTIVE_TREE]).release());
-  state->Set("bin.1", TileManagerBinAsValue(bin[PENDING_TREE]).release());
+  state->SetBoolean("has_resource",
+                    tile_versions[raster_mode].resource_.get() != 0);
+  state->Set("bin.0", ManagedTileBinAsValue(bin[ACTIVE_TREE]).release());
+  state->Set("bin.1", ManagedTileBinAsValue(bin[PENDING_TREE]).release());
   state->Set("gpu_memmgr_stats_bin",
-      TileManagerBinAsValue(bin[ACTIVE_TREE]).release());
+      ManagedTileBinAsValue(bin[ACTIVE_TREE]).release());
   state->Set("resolution", TileResolutionAsValue(resolution).release());
   state->Set("time_to_needed_in_seconds",
       MathUtil::AsValueSafely(time_to_needed_in_seconds).release());
   state->Set("distance_to_visible_in_pixels",
       MathUtil::AsValueSafely(distance_to_visible_in_pixels).release());
-  state->SetBoolean("is_picture_pile_analyzed", picture_pile_analyzed);
-  state->SetBoolean("is_cheap_to_raster",
-      picture_pile_analysis.is_cheap_to_raster);
-  state->SetBoolean("is_transparent", picture_pile_analysis.is_transparent);
-  state->SetBoolean("is_solid_color", picture_pile_analysis.is_solid_color);
+  state->SetBoolean("required_for_activation", required_for_activation);
+  state->SetBoolean(
+      "is_solid_color",
+      tile_versions[raster_mode].mode_ == TileVersion::SOLID_COLOR_MODE);
+  state->SetBoolean(
+      "is_transparent",
+      tile_versions[raster_mode].mode_ == TileVersion::SOLID_COLOR_MODE &&
+          !SkColorGetA(tile_versions[raster_mode].solid_color_));
+  state->SetInteger("scheduled_priority", scheduled_priority);
   return state.PassAs<base::Value>();
 }
 

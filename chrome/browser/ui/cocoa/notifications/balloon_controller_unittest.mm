@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/memory/scoped_nsobject.h"
-#include "base/utf_string_conversions.h"
+#include "base/memory/scoped_ptr.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/notifications/balloon.h"
 #include "chrome/browser/notifications/balloon_collection.h"
 #include "chrome/browser/notifications/notification.h"
@@ -14,9 +14,6 @@
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "chrome/test/base/test_browser_window.h"
 #include "chrome/test/base/testing_profile.h"
-#include "content/public/test/test_browser_thread.h"
-
-using content::BrowserThread;
 
 // Subclass balloon controller and mock out the initialization of the RVH.
 @interface TestBalloonController : BalloonController {
@@ -34,7 +31,9 @@ namespace {
 class MockBalloonCollection : public BalloonCollection {
   virtual void Add(const Notification& notification,
                    Profile* profile) OVERRIDE {}
-  virtual bool DoesIdExist(const std::string& id) OVERRIDE { return false; }
+  virtual const Notification* FindById(const std::string& id) const OVERRIDE {
+    return NULL;
+  }
   virtual bool RemoveById(const std::string& id) OVERRIDE { return false; }
   virtual bool RemoveBySourceOrigin(const GURL& origin) OVERRIDE {
     return false;
@@ -58,36 +57,22 @@ class MockBalloonCollection : public BalloonCollection {
 };
 
 class BalloonControllerTest : public ChromeRenderViewHostTestHarness {
- public:
-  BalloonControllerTest() :
-      ui_thread_(BrowserThread::UI, MessageLoop::current()),
-      file_user_blocking_thread_(
-            BrowserThread::FILE_USER_BLOCKING, MessageLoop::current()),
-      io_thread_(BrowserThread::IO, MessageLoop::current()) {
-  }
-
-  virtual void SetUp() {
+  virtual void SetUp() OVERRIDE {
     ChromeRenderViewHostTestHarness::SetUp();
     CocoaTest::BootstrapCocoa();
-    profile()->CreateRequestContext();
-    Browser::CreateParams native_params(profile(),
-                                        chrome::HOST_DESKTOP_TYPE_NATIVE);
+    Browser::CreateParams native_params(profile(), chrome::GetActiveDesktop());
     browser_.reset(
         chrome::CreateBrowserWithTestWindowForParams(&native_params));
     collection_.reset(new MockBalloonCollection());
   }
 
-  virtual void TearDown() {
+  virtual void TearDown() OVERRIDE {
     collection_.reset();
     browser_.reset();
-    MessageLoop::current()->RunUntilIdle();
     ChromeRenderViewHostTestHarness::TearDown();
   }
 
  protected:
-  content::TestBrowserThread ui_thread_;
-  content::TestBrowserThread file_user_blocking_thread_;
-  content::TestBrowserThread io_thread_;
   scoped_ptr<Browser> browser_;
   scoped_ptr<BalloonCollection> collection_;
 };

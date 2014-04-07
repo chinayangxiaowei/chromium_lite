@@ -15,20 +15,21 @@
 #include "base/basictypes.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/sys_info.h"
-#include "base/utf_string_conversions.h"
-#include "content/common/child_thread.h"
+#include "content/child/child_thread.h"
+#include "content/child/npapi/plugin_instance.h"
+#include "content/child/npapi/plugin_lib.h"
 #include "content/common/view_messages.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/renderer/content_renderer_client.h"
 #include "ipc/ipc_channel.h"
 #include "ipc/ipc_message_utils.h"
 #include "skia/ext/platform_canvas.h"
+#include "third_party/WebKit/public/web/WebFrame.h"
 #include "ui/surface/transport_dib.h"
 #include "webkit/glue/webkit_glue.h"
-#include "webkit/plugins/npapi/plugin_instance.h"
-#include "webkit/plugins/npapi/plugin_lib.h"
 
 #if defined(OS_MACOSX)
 #include "base/mac/mac_util.h"
@@ -37,9 +38,9 @@
 namespace content {
 
 RenderProcessImpl::RenderProcessImpl()
-    : ALLOW_THIS_IN_INITIALIZER_LIST(shared_mem_cache_cleaner_(
+    : shared_mem_cache_cleaner_(
           FROM_HERE, base::TimeDelta::FromSeconds(5),
-          this, &RenderProcessImpl::ClearTransportDIBCache)),
+          this, &RenderProcessImpl::ClearTransportDIBCache),
       transport_dib_next_sequence_number_(0),
       enabled_bindings_(0) {
   in_process_plugins_ = InProcessPlugins();
@@ -77,10 +78,10 @@ RenderProcessImpl::RenderProcessImpl()
 }
 
 RenderProcessImpl::~RenderProcessImpl() {
-  // TODO(port): Try and limit what we pull in for our non-Win unit test bundle.
 #ifndef NDEBUG
-  // log important leaked objects
-  webkit_glue::CheckForLeaks();
+  int count = WebKit::WebFrame::instanceCount();
+  if (count)
+    DLOG(ERROR) << "WebFrame LEAKED " << count << " TIMES";
 #endif
 
   GetShutDownEvent()->Signal();
@@ -113,12 +114,8 @@ int RenderProcessImpl::GetEnabledBindings() const {
 // Platform specific code for dealing with bitmap transport...
 
 TransportDIB* RenderProcessImpl::CreateTransportDIB(size_t size) {
-#if defined(OS_WIN) || defined(OS_LINUX) || \
-    defined(OS_OPENBSD) || defined(OS_ANDROID)
-  // Windows and Linux create transport DIBs inside the renderer
-  return TransportDIB::Create(size, transport_dib_next_sequence_number_++);
-#elif defined(OS_MACOSX)
-  // Mac creates transport DIBs in the browser, so we need to do a sync IPC to
+#if defined(OS_POSIX) && !defined(TOOLKIT_GTK) && !defined(OS_ANDROID)
+  // POSIX creates transport DIBs in the browser, so we need to do a sync IPC to
   // get one.  The TransportDIB is cached in the browser.
   TransportDIB::Handle handle;
   IPC::Message* msg = new ViewHostMsg_AllocTransportDIB(size, true, &handle);
@@ -127,15 +124,19 @@ TransportDIB* RenderProcessImpl::CreateTransportDIB(size_t size) {
   if (handle.fd < 0)
     return NULL;
   return TransportDIB::Map(handle);
-#endif  // defined(OS_MACOSX)
+#else
+  // Windows, legacy GTK and Android create transport DIBs inside the
+  // renderer.
+  return TransportDIB::Create(size, transport_dib_next_sequence_number_++);
+#endif
 }
 
 void RenderProcessImpl::FreeTransportDIB(TransportDIB* dib) {
   if (!dib)
     return;
 
-#if defined(OS_MACOSX)
-  // On Mac we need to tell the browser that it can drop a reference to the
+#if defined(OS_POSIX) && !defined(TOOLKIT_GTK) && !defined(OS_ANDROID)
+  // On POSIX we need to tell the browser that it can drop a reference to the
   // shared memory.
   IPC::Message* msg = new ViewHostMsg_FreeTransportDIB(dib->id());
   main_thread()->Send(msg);

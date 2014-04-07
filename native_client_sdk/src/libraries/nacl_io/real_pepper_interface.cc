@@ -1,7 +1,6 @@
-/* Copyright (c) 2012 The Chromium Authors. All rights reserved.
- * Use of this source code is governed by a BSD-style license that can be
- * found in the LICENSE file.
- */
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
 
 #include "nacl_io/real_pepper_interface.h"
 #include <assert.h>
@@ -9,6 +8,7 @@
 
 #include <ppapi/c/pp_errors.h>
 
+namespace nacl_io {
 
 #include "nacl_io/pepper/undef_macros.h"
 #define BEGIN_INTERFACE(BaseClass, PPInterface, InterfaceString) \
@@ -104,6 +104,10 @@ void RealPepperInterface::ReleaseResource(PP_Resource resource) {
     core_interface_->ReleaseResource(resource);
 }
 
+bool RealPepperInterface::IsMainThread() {
+  return core_interface_->IsMainThread();
+}
+
 // Define getter function.
 #include "nacl_io/pepper/undef_macros.h"
 #include "nacl_io/pepper/define_empty_macros.h"
@@ -132,3 +136,6 @@ int32_t RealPepperInterface::InitializeMessageLoop() {
 
   return PP_OK;
 }
+
+}  // namespace nacl_io
+

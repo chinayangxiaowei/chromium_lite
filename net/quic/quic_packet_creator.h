@@ -13,7 +13,7 @@
 #include <vector>
 
 #include "base/memory/scoped_ptr.h"
-#include "base/string_piece.h"
+#include "base/strings/string_piece.h"
 #include "net/quic/quic_fec_group.h"
 #include "net/quic/quic_framer.h"
 #include "net/quic/quic_protocol.h"
@@ -32,13 +32,18 @@ class NET_EXPORT_PRIVATE QuicPacketCreator : public QuicFecBuilderInterface {
     Options()
         : max_packet_length(kMaxPacketSize),
           random_reorder(false),
-          max_packets_per_fec_group(0) {
+          max_packets_per_fec_group(0),
+          send_guid_length(PACKET_8BYTE_GUID),
+          send_sequence_number_length(PACKET_6BYTE_SEQUENCE_NUMBER) {
     }
 
     size_t max_packet_length;
     bool random_reorder;   // Inefficient: rewrite if used at scale.
     // 0 indicates fec is disabled.
     size_t max_packets_per_fec_group;
+    // Length of guid to send over the wire.
+    QuicGuidLength send_guid_length;
+    QuicSequenceNumberLength send_sequence_number_length;
   };
 
   // QuicRandom* required for packet entropy.
@@ -64,10 +69,15 @@ class NET_EXPORT_PRIVATE QuicPacketCreator : public QuicFecBuilderInterface {
   // Makes the framer not serialize the protocol version in sent packets.
   void StopSendingVersion();
 
-  // The overhead the framing will add for a packet with num_frames frames.
-  static size_t StreamFramePacketOverhead(int num_frames, bool include_version);
+  // The overhead the framing will add for a packet with one frame.
+  static size_t StreamFramePacketOverhead(
+      QuicVersion version,
+      QuicGuidLength guid_length,
+      bool include_version,
+      QuicSequenceNumberLength sequence_number_length,
+      InFecGroup is_in_fec_group);
 
-  bool HasRoomForStreamFrame() const;
+  bool HasRoomForStreamFrame(QuicStreamId id, QuicStreamOffset offset) const;
 
   // Converts a raw payload to a frame which fits into the currently open
   // packet if there is one.  Returns the number of bytes consumed from data.
@@ -120,7 +130,7 @@ class NET_EXPORT_PRIVATE QuicPacketCreator : public QuicFecBuilderInterface {
   // serialized packet to a random bool and returns that value as a member of
   // SerializedPacket.
   QuicEncryptedPacket* SerializeVersionNegotiationPacket(
-      const QuicVersionTagList& supported_versions);
+      const QuicVersionVector& supported_versions);
 
   QuicPacketSequenceNumber sequence_number() const {
     return sequence_number_;

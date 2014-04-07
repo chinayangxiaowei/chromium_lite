@@ -5,30 +5,35 @@
 #include <string>
 
 #include "base/basictypes.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/port.h"
 #include "base/prefs/pref_service.h"
 #include "base/prefs/testing_pref_service.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/threading/sequenced_worker_pool.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "base/tracked_objects.h"
 #include "chrome/browser/google/google_util.h"
 #include "chrome/browser/metrics/metrics_log.h"
 #include "chrome/browser/prefs/browser_prefs.h"
-#include "chrome/common/chrome_process_type.h"
 #include "chrome/common/metrics/proto/profiler_event.pb.h"
 #include "chrome/common/metrics/proto/system_profile.pb.h"
 #include "chrome/common/metrics/variations/variations_util.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/installer/util/google_update_settings.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/common/process_type.h"
+#include "content/public/common/webplugininfo.h"
 #include "content/public/test/test_utils.h"
-#include "googleurl/src/gurl.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gfx/size.h"
-#include "webkit/plugins/webplugininfo.h"
+#include "url/gurl.h"
+
+#if defined(OS_CHROMEOS)
+#include "chromeos/dbus/mock_dbus_thread_manager_without_gmock.h"
+#endif  // OS_CHROMEOS
 
 using base::TimeDelta;
 using metrics::ProfilerEventProto;
@@ -38,6 +43,8 @@ using tracked_objects::TaskSnapshot;
 namespace {
 
 const char kClientId[] = "bogus client ID";
+const int64 kInstallDate = 1373051956;
+const int64 kEnabledDate = 1373001211;
 const int kSessionId = 127;
 const int kScreenWidth = 1024;
 const int kScreenHeight = 768;
@@ -57,6 +64,9 @@ class TestMetricsLog : public MetricsLog {
         brand_for_testing_(kBrandForTesting) {
     chrome::RegisterLocalState(prefs_.registry());
 
+    prefs_.SetInt64(prefs::kInstallDate, kInstallDate);
+    prefs_.SetString(prefs::kMetricsClientIDTimestamp,
+                     base::Int64ToString(kEnabledDate));
 #if defined(OS_CHROMEOS)
     prefs_.SetInteger(prefs::kStabilityChildProcessCrashCount, 10);
     prefs_.SetInteger(prefs::kStabilityOtherUserCrashCount, 11);
@@ -79,10 +89,6 @@ class TestMetricsLog : public MetricsLog {
   }
 
  private:
-  virtual std::string GetCurrentTimeString() OVERRIDE {
-    return std::string();
-  }
-
   virtual void GetFieldTrialIds(
       std::vector<chrome_variations::ActiveGroupId>* field_trial_ids) const
       OVERRIDE {
@@ -116,17 +122,24 @@ class TestMetricsLog : public MetricsLog {
 
 class MetricsLogTest : public testing::Test {
  public:
-  MetricsLogTest() : message_loop_(MessageLoop::TYPE_IO) {}
+  MetricsLogTest() : message_loop_(base::MessageLoop::TYPE_IO) {}
+
  protected:
   void TestRecordEnvironment(bool proto_only) {
     TestMetricsLog log(kClientId, kSessionId);
 
-    std::vector<webkit::WebPluginInfo> plugins;
+    std::vector<content::WebPluginInfo> plugins;
     GoogleUpdateMetrics google_update_metrics;
     if (proto_only)
       log.RecordEnvironmentProto(plugins, google_update_metrics);
     else
-      log.RecordEnvironment(plugins, google_update_metrics, NULL);
+      log.RecordEnvironment(plugins, google_update_metrics);
+
+    // Computed from original time of 1373051956.
+    EXPECT_EQ(1373050800, log.system_profile().install_date());
+
+    // Computed from original time of 1373001211.
+    EXPECT_EQ(1373000400, log.system_profile().uma_enabled_date());
 
     const metrics::SystemProfileProto& system_profile = log.system_profile();
     ASSERT_EQ(arraysize(kFieldTrialIds),
@@ -147,8 +160,21 @@ class MetricsLogTest : public testing::Test {
     EXPECT_EQ(kScreenScaleFactor, hardware.primary_screen_scale_factor());
     EXPECT_EQ(kScreenCount, hardware.screen_count());
 
+    EXPECT_TRUE(hardware.has_cpu());
+    EXPECT_TRUE(hardware.cpu().has_vendor_name());
+    EXPECT_TRUE(hardware.cpu().has_signature());
+
     // TODO(isherman): Verify other data written into the protobuf as a result
     // of this call.
+  }
+
+  virtual void SetUp() OVERRIDE {
+#if defined(OS_CHROMEOS)
+    mock_dbus_thread_manager_ =
+        new chromeos::MockDBusThreadManagerWithoutGMock();
+    chromeos::DBusThreadManager::InitializeForTesting(
+        mock_dbus_thread_manager_);
+#endif  // OS_CHROMEOS
   }
 
   virtual void TearDown() OVERRIDE {
@@ -156,12 +182,20 @@ class MetricsLogTest : public testing::Test {
     // MetrticsLog.network_observer_.
     content::BrowserThread::GetBlockingPool()->FlushForTesting();
     content::RunAllPendingInMessageLoop();
+
+#if defined(OS_CHROMEOS)
+    chromeos::DBusThreadManager::Shutdown();
+#endif  // OS_CHROMEOS
   }
 
  private:
   // This is necessary because eventually some tests call base::RepeatingTimer
   // functions and a message loop is required for that.
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
+
+#if defined(OS_CHROMEOS)
+  chromeos::MockDBusThreadManagerWithoutGMock* mock_dbus_thread_manager_;
+#endif  // OS_CHROMEOS
 };
 
 TEST_F(MetricsLogTest, RecordEnvironment) {
@@ -301,42 +335,3 @@ TEST_F(MetricsLogTest, RecordProfilerData) {
               tracked_object->process_type());
   }
 }
-
-#if defined(OS_CHROMEOS)
-TEST_F(MetricsLogTest, ChromeOSStabilityData) {
-  TestMetricsLog log(kClientId, kSessionId);
-
-  // Expect 3 warnings about not yet being able to send the
-  // Chrome OS stability stats.
-  std::vector<webkit::WebPluginInfo> plugins;
-  PrefService* prefs = log.GetPrefService();
-  log.WriteStabilityElement(plugins, prefs);
-  log.CloseLog();
-
-  int size = log.GetEncodedLogSizeXml();
-  ASSERT_GT(size, 0);
-
-  EXPECT_EQ(0, prefs->GetInteger(prefs::kStabilityChildProcessCrashCount));
-  EXPECT_EQ(0, prefs->GetInteger(prefs::kStabilityOtherUserCrashCount));
-  EXPECT_EQ(0, prefs->GetInteger(prefs::kStabilityKernelCrashCount));
-  EXPECT_EQ(0, prefs->GetInteger(prefs::kStabilitySystemUncleanShutdownCount));
-
-  std::string encoded;
-  // Leave room for the NUL terminator.
-  bool encoding_result = log.GetEncodedLogXml(
-      WriteInto(&encoded, size + 1), size);
-  ASSERT_TRUE(encoding_result);
-
-  // Check that we can find childprocesscrashcount, but not
-  // any of the ChromeOS ones that we are not emitting until log
-  // servers can handle them.
-  EXPECT_NE(std::string::npos,
-            encoded.find(" childprocesscrashcount=\"10\""));
-  EXPECT_EQ(std::string::npos,
-            encoded.find(" otherusercrashcount="));
-  EXPECT_EQ(std::string::npos,
-            encoded.find(" kernelcrashcount="));
-  EXPECT_EQ(std::string::npos,
-            encoded.find(" systemuncleanshutdowns="));
-}
-#endif  // OS_CHROMEOS

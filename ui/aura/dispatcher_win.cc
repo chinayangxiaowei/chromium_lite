@@ -4,11 +4,11 @@
 
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 
 namespace aura {
 
-class DispatcherWin : public MessageLoop::Dispatcher {
+class DispatcherWin : public base::MessageLoop::Dispatcher {
  public:
   DispatcherWin() {}
   virtual ~DispatcherWin() {}
@@ -26,7 +26,7 @@ bool DispatcherWin::Dispatch(const base::NativeEvent& msg) {
   return true;
 }
 
-MessageLoop::Dispatcher* CreateDispatcher() {
+base::MessageLoop::Dispatcher* CreateDispatcher() {
   return new DispatcherWin;
 }
 

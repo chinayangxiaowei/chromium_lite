@@ -8,14 +8,14 @@
 #include "base/file_util.h"
 #include "base/files/file_path.h"
 #include "base/path_service.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_system.h"
 #include "chrome/browser/extensions/user_script_master.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/feature_switch.h"
@@ -37,8 +37,7 @@ using extensions::FeatureSwitch;
 class ExtensionStartupTestBase : public InProcessBrowserTest {
  public:
   ExtensionStartupTestBase() :
-      enable_extensions_(false),
-      override_sideload_wipeout_(FeatureSwitch::sideload_wipeout(), false) {
+      enable_extensions_(false) {
     num_expected_extensions_ = 3;
   }
 
@@ -71,20 +70,19 @@ class ExtensionStartupTestBase : public InProcessBrowserTest {
       PathService::Get(chrome::DIR_TEST_DATA, &src_dir);
       src_dir = src_dir.AppendASCII("extensions").AppendASCII("good");
 
-      file_util::CopyFile(src_dir.AppendASCII("Preferences"),
-                          preferences_file_);
-      file_util::CopyDirectory(src_dir.AppendASCII("Extensions"),
-                               profile_dir, true);  // recursive
+      base::CopyFile(src_dir.AppendASCII("Preferences"), preferences_file_);
+      base::CopyDirectory(src_dir.AppendASCII("Extensions"),
+                          profile_dir, true);  // recursive
     }
     return true;
   }
 
   virtual void TearDown() {
-    EXPECT_TRUE(file_util::Delete(preferences_file_, false));
+    EXPECT_TRUE(base::DeleteFile(preferences_file_, false));
 
     // TODO(phajdan.jr): Check return values of the functions below, carefully.
-    file_util::Delete(user_scripts_dir_, true);
-    file_util::Delete(extensions_dir_, true);
+    base::DeleteFile(user_scripts_dir_, true);
+    base::DeleteFile(extensions_dir_, true);
 
     InProcessBrowserTest::TearDown();
   }
@@ -149,9 +147,6 @@ class ExtensionStartupTestBase : public InProcessBrowserTest {
   // Extensions to load from the command line.
   std::vector<base::FilePath::StringType> load_extensions_;
 
-  // Disable the sideload wipeout UI.
-  FeatureSwitch::ScopedOverride override_sideload_wipeout_;
-
   int num_expected_extensions_;
 };
 
@@ -193,8 +188,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionsStartupTest, MAYBE_NoFileAccess) {
        it != service->extensions()->end(); ++it) {
     if ((*it)->location() == extensions::Manifest::COMPONENT)
       continue;
-    if (service->AllowFileAccess(*it))
-      extension_list.push_back(*it);
+    if (service->AllowFileAccess(it->get()))
+      extension_list.push_back(it->get());
   }
 
   for (size_t i = 0; i < extension_list.size(); ++i) {

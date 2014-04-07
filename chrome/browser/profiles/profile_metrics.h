@@ -10,6 +10,7 @@
 
 #include "base/basictypes.h"
 
+class Profile;
 class ProfileManager;
 
 namespace base {
@@ -22,6 +23,7 @@ class ProfileMetrics {
   enum ProfileAdd {
     ADD_NEW_USER_ICON = 0,    // User adds new user from icon menu
     ADD_NEW_USER_MENU,        // User adds new user from menu bar
+    ADD_NEW_USER_DIALOG,      // User adds new user from create-profile dialog
     NUM_PROFILE_ADD_METRICS
   };
 
@@ -65,14 +67,7 @@ class ProfileMetrics {
     NUM_PROFILE_GAIA_METRICS
   };
 
-  enum ProfileEvent {
-    STARTUP_PROFILE_EVENT = 0,
-    ADD_PROFILE_EVENT,
-    DELETE_PROFILE_EVENT
-  };
-
-  static void LogNumberOfProfiles(ProfileManager* manager,
-                                  ProfileEvent startup);
+  static void LogNumberOfProfiles(ProfileManager* manager);
   static void LogProfileAddNewUser(ProfileAdd metric);
   static void LogProfileAvatarSelection(size_t icon_index);
   static void LogProfileDeleteUser(ProfileNetUserCounts metric);
@@ -83,7 +78,7 @@ class ProfileMetrics {
 
   // These functions should only be called on the UI thread because they hook
   // into g_browser_process through a helper function.
-  static void LogProfileLaunch(const base::FilePath& profile_path);
+  static void LogProfileLaunch(Profile* profile);
   static void LogProfileSyncSignIn(const base::FilePath& profile_path);
   static void LogProfileUpdate(const base::FilePath& profile_path);
 };

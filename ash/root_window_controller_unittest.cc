@@ -4,10 +4,9 @@
 
 #include "ash/root_window_controller.h"
 
-#include "ash/display/display_controller.h"
+#include "ash/session_state_delegate.h"
 #include "ash/shelf/shelf_layout_manager.h"
 #include "ash/shell.h"
-#include "ash/shell_delegate.h"
 #include "ash/shell_window_ids.h"
 #include "ash/system/tray/system_tray_delegate.h"
 #include "ash/test/ash_test_base.h"
@@ -118,14 +117,10 @@ class RootWindowControllerTest : public test::AshTestBase {
   }
 };
 
-#if defined(OS_WIN)
-// Multiple displays are not supported on Windows Ash. http://crbug.com/165962
-#define MAYBE_MoveWindows_Basic DISABLED_MoveWindows_Basic
-#else
-#define MAYBE_MoveWindows_Basic MoveWindows_Basic
-#endif
+TEST_F(RootWindowControllerTest, MoveWindows_Basic) {
+  if (!SupportsMultipleDisplays())
+    return;
 
-TEST_F(RootWindowControllerTest, MAYBE_MoveWindows_Basic) {
   UpdateDisplay("600x600,500x500");
   Shell::RootWindowList root_windows = Shell::GetAllRootWindows();
   internal::RootWindowController* controller =
@@ -144,15 +139,9 @@ TEST_F(RootWindowControllerTest, MAYBE_MoveWindows_Basic) {
   views::Widget* maximized = CreateTestWidget(gfx::Rect(700, 10, 100, 100));
   maximized->Maximize();
   EXPECT_EQ(root_windows[1], maximized->GetNativeView()->GetRootWindow());
-  if (Shell::IsLauncherPerDisplayEnabled()) {
-    EXPECT_EQ("600,0 500x452", maximized->GetWindowBoundsInScreen().ToString());
-    EXPECT_EQ("0,0 500x452",
-              maximized->GetNativeView()->GetBoundsInRootWindow().ToString());
-  } else {
-    EXPECT_EQ("600,0 500x500", maximized->GetWindowBoundsInScreen().ToString());
-    EXPECT_EQ("0,0 500x500",
-              maximized->GetNativeView()->GetBoundsInRootWindow().ToString());
-  }
+  EXPECT_EQ("600,0 500x452", maximized->GetWindowBoundsInScreen().ToString());
+  EXPECT_EQ("0,0 500x452",
+            maximized->GetNativeView()->GetBoundsInRootWindow().ToString());
 
   views::Widget* minimized = CreateTestWidget(gfx::Rect(800, 10, 100, 100));
   minimized->Minimize();
@@ -207,10 +196,23 @@ TEST_F(RootWindowControllerTest, MAYBE_MoveWindows_Basic) {
 
   // Maximized area on primary display has 3px (given as
   // kAutoHideSize in shelf_layout_manager.cc) inset at the bottom.
+
+  // First clear fullscreen status, since both fullscreen and maximized windows
+  // share the same desktop workspace, which cancels the shelf status.
+  fullscreen->SetFullscreen(false);
   EXPECT_EQ(root_windows[0], maximized->GetNativeView()->GetRootWindow());
   EXPECT_EQ("0,0 600x597",
             maximized->GetWindowBoundsInScreen().ToString());
   EXPECT_EQ("0,0 600x597",
+            maximized->GetNativeView()->GetBoundsInRootWindow().ToString());
+
+  // Set fullscreen to true. In that case the 3px inset becomes invisible so
+  // the maximized window can also use the area fully.
+  fullscreen->SetFullscreen(true);
+  EXPECT_EQ(root_windows[0], maximized->GetNativeView()->GetRootWindow());
+  EXPECT_EQ("0,0 600x600",
+            maximized->GetWindowBoundsInScreen().ToString());
+  EXPECT_EQ("0,0 600x600",
             maximized->GetNativeView()->GetBoundsInRootWindow().ToString());
 
   EXPECT_EQ(root_windows[0], minimized->GetNativeView()->GetRootWindow());
@@ -247,14 +249,10 @@ TEST_F(RootWindowControllerTest, MAYBE_MoveWindows_Basic) {
   EXPECT_EQ(internal::kShellWindowId_PanelContainer, panel->parent()->id());
 }
 
-#if defined(OS_WIN)
-// Multiple displays are not supported on Windows Ash. http://crbug.com/165962
-#define MAYBE_MoveWindows_Modal DISABLED_MoveWindows_Modal
-#else
-#define MAYBE_MoveWindows_Modal MoveWindows_Modal
-#endif
+TEST_F(RootWindowControllerTest, MoveWindows_Modal) {
+  if (!SupportsMultipleDisplays())
+    return;
 
-TEST_F(RootWindowControllerTest, MAYBE_MoveWindows_Modal) {
   UpdateDisplay("500x500,500x500");
 
   Shell::RootWindowList root_windows = Shell::GetAllRootWindows();
@@ -301,7 +299,7 @@ TEST_F(RootWindowControllerTest, ModalContainer) {
           controller->GetSystemModalLayoutManager(
               session_modal_widget->GetNativeView()));
 
-  shell->delegate()->LockScreen();
+  shell->session_state_delegate()->LockScreen();
   EXPECT_EQ(user::LOGGED_IN_LOCKED,
             shell->system_tray_delegate()->GetUserLoginStatus());
   EXPECT_EQ(Shell::GetContainer(controller->root_window(),
@@ -322,7 +320,7 @@ TEST_F(RootWindowControllerTest, ModalContainer) {
             controller->GetSystemModalLayoutManager(
                 session_modal_widget->GetNativeView()));
 
-  shell->delegate()->UnlockScreen();
+  shell->session_state_delegate()->UnlockScreen();
 }
 
 TEST_F(RootWindowControllerTest, ModalContainerNotLoggedInLoggedIn) {
@@ -333,8 +331,8 @@ TEST_F(RootWindowControllerTest, ModalContainerNotLoggedInLoggedIn) {
   SetUserLoggedIn(false);
   EXPECT_EQ(user::LOGGED_IN_NONE,
             shell->system_tray_delegate()->GetUserLoginStatus());
-  EXPECT_FALSE(shell->delegate()->IsUserLoggedIn());
-  EXPECT_FALSE(shell->delegate()->IsSessionStarted());
+  EXPECT_EQ(0, shell->session_state_delegate()->NumberOfLoggedInUsers());
+  EXPECT_FALSE(shell->session_state_delegate()->IsActiveUserSessionStarted());
 
   internal::RootWindowController* controller =
       shell->GetPrimaryRootWindowController();
@@ -358,8 +356,8 @@ TEST_F(RootWindowControllerTest, ModalContainerNotLoggedInLoggedIn) {
   SetSessionStarted(true);
   EXPECT_EQ(user::LOGGED_IN_USER,
             shell->system_tray_delegate()->GetUserLoginStatus());
-  EXPECT_TRUE(shell->delegate()->IsUserLoggedIn());
-  EXPECT_TRUE(shell->delegate()->IsSessionStarted());
+  EXPECT_EQ(1, shell->session_state_delegate()->NumberOfLoggedInUsers());
+  EXPECT_TRUE(shell->session_state_delegate()->IsActiveUserSessionStarted());
   EXPECT_EQ(Shell::GetContainer(controller->root_window(),
       internal::kShellWindowId_SystemModalContainer)->layout_manager(),
           controller->GetSystemModalLayoutManager(NULL));
@@ -372,31 +370,126 @@ TEST_F(RootWindowControllerTest, ModalContainerNotLoggedInLoggedIn) {
               session_modal_widget->GetNativeView()));
 }
 
-// Ensure a workspace with two windows reports immersive mode even if only
-// one has the property set.
-TEST_F(RootWindowControllerTest, ImmersiveMode) {
+TEST_F(RootWindowControllerTest, ModalContainerBlockedSession) {
+  UpdateDisplay("600x600");
+  Shell* shell = Shell::GetInstance();
+  internal::RootWindowController* controller =
+      shell->GetPrimaryRootWindowController();
+  aura::Window* lock_container =
+      Shell::GetContainer(controller->root_window(),
+                          internal::kShellWindowId_LockScreenContainer);
+  for (int block_reason = FIRST_BLOCK_REASON;
+       block_reason < NUMBER_OF_BLOCK_REASONS;
+       ++block_reason) {
+    views::Widget* session_modal_widget =
+          CreateModalWidget(gfx::Rect(300, 10, 100, 100));
+    EXPECT_EQ(Shell::GetContainer(controller->root_window(),
+        internal::kShellWindowId_SystemModalContainer)->layout_manager(),
+            controller->GetSystemModalLayoutManager(
+                session_modal_widget->GetNativeView()));
+    EXPECT_EQ(Shell::GetContainer(controller->root_window(),
+        internal::kShellWindowId_SystemModalContainer)->layout_manager(),
+            controller->GetSystemModalLayoutManager(NULL));
+    session_modal_widget->Close();
+
+    BlockUserSession(static_cast<UserSessionBlockReason>(block_reason));
+
+    EXPECT_EQ(Shell::GetContainer(controller->root_window(),
+        internal::kShellWindowId_LockSystemModalContainer)->layout_manager(),
+            controller->GetSystemModalLayoutManager(NULL));
+
+    views::Widget* lock_modal_widget =
+        CreateModalWidgetWithParent(gfx::Rect(300, 10, 100, 100),
+                                    lock_container);
+    EXPECT_EQ(Shell::GetContainer(controller->root_window(),
+        internal::kShellWindowId_LockSystemModalContainer)->layout_manager(),
+              controller->GetSystemModalLayoutManager(
+                  lock_modal_widget->GetNativeView()));
+
+    session_modal_widget =
+          CreateModalWidget(gfx::Rect(300, 10, 100, 100));
+    EXPECT_EQ(Shell::GetContainer(controller->root_window(),
+        internal::kShellWindowId_SystemModalContainer)->layout_manager(),
+            controller->GetSystemModalLayoutManager(
+                session_modal_widget->GetNativeView()));
+    session_modal_widget->Close();
+
+    lock_modal_widget->Close();
+    UnblockUserSession();
+  }
+}
+
+// Test that GetFullscreenWindow() returns a fullscreen window only if the
+// fullscreen window is in the active workspace.
+TEST_F(RootWindowControllerTest, GetFullscreenWindow) {
   UpdateDisplay("600x600");
   internal::RootWindowController* controller =
       Shell::GetInstance()->GetPrimaryRootWindowController();
 
-  // Open a maximized window.
-  Widget* w1 = CreateTestWidget(gfx::Rect(0, 1, 250, 251));
+  Widget* w1 = CreateTestWidget(gfx::Rect(0, 0, 100, 100));
   w1->Maximize();
+  Widget* w2 = CreateTestWidget(gfx::Rect(0, 0, 100, 100));
+  w2->SetFullscreen(true);
+  // |w3| is a transient child of |w2|.
+  Widget* w3 = Widget::CreateWindowWithParentAndBounds(NULL,
+      w2->GetNativeWindow(), gfx::Rect(0, 0, 100, 100));
 
-  // Immersive mode off by default.
-  EXPECT_FALSE(controller->IsImmersiveMode());
+  // Test that GetFullscreenWindow() finds the fullscreen window when one of
+  // its transient children is active.
+  w3->Activate();
+  EXPECT_EQ(w2->GetNativeWindow(), controller->GetFullscreenWindow());
 
-  // Enter immersive mode.
-  w1->GetNativeWindow()->SetProperty(ash::internal::kImmersiveModeKey, true);
-  EXPECT_TRUE(controller->IsImmersiveMode());
+  // Since there's only one desktop workspace, it always returns the same
+  // fullscreen window.
+  w1->Activate();
+  EXPECT_EQ(w2->GetNativeWindow(), controller->GetFullscreenWindow());
+}
 
-  // Add a child, like a print window.  Still in immersive mode.
-  Widget* w2 =
-      Widget::CreateWindowWithParentAndBounds(NULL,
-                                              w1->GetNativeWindow(),
-                                              gfx::Rect(0, 1, 150, 151));
-  w2->Show();
-  EXPECT_TRUE(controller->IsImmersiveMode());
+// Test that user session window can't be focused if user session blocked by
+// some overlapping UI.
+TEST_F(RootWindowControllerTest, FocusBlockedWindow) {
+  UpdateDisplay("600x600");
+  internal::RootWindowController* controller =
+      Shell::GetInstance()->GetPrimaryRootWindowController();
+  aura::Window* lock_container =
+      Shell::GetContainer(controller->root_window(),
+                          internal::kShellWindowId_LockScreenContainer);
+  aura::Window* lock_window = Widget::CreateWindowWithParentAndBounds(NULL,
+      lock_container, gfx::Rect(0, 0, 100, 100))->GetNativeView();
+  lock_window->Show();
+  aura::Window* session_window =
+      CreateTestWidget(gfx::Rect(0, 0, 100, 100))->GetNativeView();
+  session_window->Show();
+
+  for (int block_reason = FIRST_BLOCK_REASON;
+       block_reason < NUMBER_OF_BLOCK_REASONS;
+       ++block_reason) {
+    BlockUserSession(static_cast<UserSessionBlockReason>(block_reason));
+    lock_window->Focus();
+    EXPECT_TRUE(lock_window->HasFocus());
+    session_window->Focus();
+    EXPECT_FALSE(session_window->HasFocus());
+    UnblockUserSession();
+  }
+}
+
+typedef test::NoSessionAshTestBase NoSessionRootWindowControllerTest;
+
+// Make sure that an event handler exists for entire display area.
+TEST_F(NoSessionRootWindowControllerTest, Event) {
+  aura::RootWindow* root = Shell::GetPrimaryRootWindow();
+  const gfx::Size size = root->bounds().size();
+  aura::Window* event_target = root->GetEventHandlerForPoint(gfx::Point(0, 0));
+  EXPECT_TRUE(event_target);
+  EXPECT_EQ(event_target,
+            root->GetEventHandlerForPoint(gfx::Point(0, size.height() - 1)));
+  EXPECT_EQ(event_target,
+            root->GetEventHandlerForPoint(gfx::Point(size.width() - 1, 0)));
+  EXPECT_EQ(event_target,
+            root->GetEventHandlerForPoint(gfx::Point(0, size.height() - 1)));
+  EXPECT_EQ(event_target,
+            root->GetEventHandlerForPoint(
+                gfx::Point(size.width() - 1, size.height() - 1)));
 }
 
 }  // namespace test

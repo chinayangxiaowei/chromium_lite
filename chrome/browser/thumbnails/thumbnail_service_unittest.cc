@@ -5,20 +5,22 @@
 #include "chrome/browser/thumbnails/thumbnail_service_impl.h"
 
 #include "base/memory/ref_counted.h"
+#include "chrome/browser/history/top_sites_impl.h"
 #include "chrome/test/base/testing_profile.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 typedef testing::Test ThumbnailServiceTest;
 
-// A mock version of TopSites, used for testing ShouldAcquirePageThumbnail().
-class MockTopSites : public history::TopSites {
+// A mock version of TopSitesImpl, used for testing
+// ShouldAcquirePageThumbnail().
+class MockTopSites : public history::TopSitesImpl {
  public:
   explicit MockTopSites(Profile* profile)
-      : history::TopSites(profile),
+      : history::TopSitesImpl(profile),
         capacity_(1) {
   }
 
-  // history::TopSites overrides.
+  // history::TopSitesImpl overrides.
   virtual bool IsFull() OVERRIDE {
     return known_url_map_.size() >= capacity_;
   }
@@ -58,7 +60,7 @@ class MockProfile : public TestingProfile {
   }
 
   virtual history::TopSites* GetTopSites() OVERRIDE {
-    return mock_top_sites_;
+    return mock_top_sites_.get();
   }
 
   void AddKnownURL(const GURL& url, const ThumbnailScore& score) {

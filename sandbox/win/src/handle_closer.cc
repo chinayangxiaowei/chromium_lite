@@ -81,7 +81,7 @@ bool HandleCloser::InitializeTargetHandles(TargetProcess* target) {
     return true;
 
   size_t bytes_needed = GetBufferSize();
-  scoped_array<size_t> local_buffer(
+  scoped_ptr<size_t[]> local_buffer(
       new size_t[bytes_needed / sizeof(size_t)]);
 
   if (!SetupHandleList(local_buffer.get(), bytes_needed))
@@ -180,11 +180,12 @@ bool GetHandleName(HANDLE handle, string16* handle_name) {
     ResolveNTFunctionPtr("NtQueryObject", &QueryObject);
 
   ULONG size = MAX_PATH;
-  scoped_ptr<UNICODE_STRING> name;
+  scoped_ptr<UNICODE_STRING, base::FreeDeleter> name;
   NTSTATUS result;
 
   do {
-    name.reset(reinterpret_cast<UNICODE_STRING*>(new BYTE[size]));
+    name.reset(static_cast<UNICODE_STRING*>(malloc(size)));
+    DCHECK(name.get());
     result = QueryObject(handle, ObjectNameInformation, name.get(),
                          size, &size);
   } while (result == STATUS_INFO_LENGTH_MISMATCH ||

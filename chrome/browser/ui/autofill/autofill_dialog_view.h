@@ -5,13 +5,20 @@
 #ifndef CHROME_BROWSER_UI_AUTOFILL_AUTOFILL_DIALOG_VIEW_H_
 #define CHROME_BROWSER_UI_AUTOFILL_AUTOFILL_DIALOG_VIEW_H_
 
-#include "chrome/browser/ui/autofill/autofill_dialog_controller.h"
+#include "chrome/browser/ui/autofill/autofill_dialog_view_delegate.h"
 
 namespace content {
 class NavigationController;
 }
 
+namespace gfx {
+class Size;
+}
+
 namespace autofill {
+
+class AutofillDialogViewDelegate;
+class TestableAutofillDialogView;
 
 // An interface for the dialog that appears when a site initiates an Autofill
 // action via the imperative autocomplete API.
@@ -22,7 +29,7 @@ class AutofillDialogView {
   // Shows the dialog.
   virtual void Show() = 0;
 
-  // Hides the dialog as if a user pressed cancel.
+  // Closes the dialog window. May self-delete.
   virtual void Hide() = 0;
 
   // Called when a different notification is available.
@@ -32,11 +39,27 @@ class AutofillDialogView {
   // a new account, etc.).
   virtual void UpdateAccountChooser() = 0;
 
+  // Updates the container displaying detailed steps for Autocheckout. Called
+  // as progress is made through the buyflow.
+  virtual void UpdateAutocheckoutStepsArea() = 0;
+
   // Updates the button strip based on the current controller state.
   virtual void UpdateButtonStrip() = 0;
 
+  // Updates the container for the detail inputs. Used to hide this container
+  // while Autocheckout is running.
+  virtual void UpdateDetailArea() = 0;
+
+  // Updates the validity status of the detail inputs.
+  virtual void UpdateForErrors() = 0;
+
   // Called when the contents of a section have changed.
   virtual void UpdateSection(DialogSection section) = 0;
+
+  // Fills the given section with Autofill data that was triggered by a user
+  // interaction with |originating_input|.
+  virtual void FillSection(DialogSection section,
+                           const DetailInput& originating_input) = 0;
 
   // Fills |output| with data the user manually input.
   virtual void GetUserInput(DialogSection section, DetailOutputMap* output) = 0;
@@ -46,12 +69,6 @@ class AutofillDialogView {
   // relevant.
   virtual string16 GetCvc() = 0;
 
-  // Returns the state of the "use billing address for shipping" checkbox.
-  virtual bool UseBillingForShipping() = 0;
-
-  // Returns true if current input should be saved in Wallet (if it differs).
-  virtual bool SaveDetailsInWallet() = 0;
-
   // Returns true if new or edited autofill details should be saved.
   virtual bool SaveDetailsLocally() = 0;
 
@@ -59,7 +76,7 @@ class AutofillDialogView {
   // Returns a NotificationSource to be used to monitor for sign-in completion.
   virtual const content::NavigationController* ShowSignIn() = 0;
 
-  // Closes out any signin UI and returns to normal operation.
+  // Closes out any sign-in UI and returns to normal operation.
   virtual void HideSignIn() = 0;
 
   // Updates the progress bar based on the Autocheckout progress. |value| should
@@ -69,15 +86,17 @@ class AutofillDialogView {
   // Called when the active suggestions data model changed.
   virtual void ModelChanged() = 0;
 
-  // Simulates the user pressing 'Submit' to accept the dialog.
-  virtual void SubmitForTesting() = 0;
+  // Returns an object that can be used to test that the view is behaving as
+  // expected.
+  virtual TestableAutofillDialogView* GetTestableView() = 0;
 
-  // Simulates the user pressing 'Cancel' to abort the dialog.
-  virtual void CancelForTesting() = 0;
+  // Called by AutofillDialogSignInDelegate when the sign-in page experiences a
+  // resize. |pref_size| is the new preferred size of the sign-in page.
+  virtual void OnSignInResize(const gfx::Size& pref_size) = 0;
 
   // Factory function to create the dialog (implemented once per view
   // implementation). |controller| will own the created dialog.
-  static AutofillDialogView* Create(AutofillDialogController* controller);
+  static AutofillDialogView* Create(AutofillDialogViewDelegate* delegate);
 };
 
 }  // namespace autofill

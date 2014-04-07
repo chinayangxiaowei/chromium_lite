@@ -27,6 +27,8 @@ namespace base {
 class FilePath;
 }
 
+class HistoryQuickProviderTest;
+
 namespace history {
 
 // Encapsulates the SQL connection for the history database. This class holds
@@ -66,11 +68,17 @@ class HistoryDatabase : public DownloadDatabase,
 
   virtual ~HistoryDatabase();
 
+  // Call before Init() to set the error callback to be used for the
+  // underlying database connection.
+  void set_error_callback(
+      const sql::Connection::ErrorCallback& error_callback) {
+    error_callback_ = error_callback;
+  }
+
   // Must call this function to complete initialization. Will return
   // sql::INIT_OK on success. Otherwise, no other function should be called. You
   // may want to call BeginExclusiveMode after this when you are ready.
-  sql::InitStatus Init(const base::FilePath& history_name,
-                       sql::ErrorDelegate* error_delegate);
+  sql::InitStatus Init(const base::FilePath& history_name);
 
   // Computes and records various metrics for the database. Should only be
   // called once and only upon successful Init.
@@ -123,6 +131,10 @@ class HistoryDatabase : public DownloadDatabase,
   // unused space in the file. It can be VERY SLOW.
   void Vacuum();
 
+  // Try to trim the cache memory used by the database.  If |aggressively| is
+  // true try to trim all unused cache, otherwise trim by half.
+  void TrimMemory(bool aggressively);
+
   // Razes the database. Returns true if successful.
   bool Raze();
 
@@ -164,14 +176,12 @@ class HistoryDatabase : public DownloadDatabase,
   friend class AndroidProviderBackend;
   FRIEND_TEST_ALL_PREFIXES(AndroidURLsMigrationTest, MigrateToVersion22);
 #endif
+  friend class ::HistoryQuickProviderTest;
   friend class InMemoryURLIndexTest;
   FRIEND_TEST_ALL_PREFIXES(IconMappingMigrationTest, TestIconMappingMigration);
 
   // Overridden from URLDatabase:
   virtual sql::Connection& GetDB() OVERRIDE;
-
-  // Overridden from DownloadDatabase:
-  virtual sql::MetaTable& GetMetaTable() OVERRIDE;
 
   // Migration -----------------------------------------------------------------
 
@@ -191,6 +201,7 @@ class HistoryDatabase : public DownloadDatabase,
 
   // ---------------------------------------------------------------------------
 
+  sql::Connection::ErrorCallback error_callback_;
   sql::Connection db_;
   sql::MetaTable meta_table_;
 

@@ -9,18 +9,54 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <unistd.h>
+
 #include <string>
 #include <vector>
 
-#if defined(OS_ANDROID)
-#include "base/android/path_utils.h"
-#endif
-#include "base/files/file_path.h"
+#include "base/basictypes.h"
 #include "base/logging.h"
+#include "base/posix/eintr_wrapper.h"
 #include "sandbox/linux/tests/unit_tests.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace sandbox {
+
+namespace {
+
+// Creates and open a temporary file on creation and closes
+// and removes it on destruction.
+// Unlike base/ helpers, this does not require JNI on Android.
+class ScopedTemporaryFile {
+ public:
+  ScopedTemporaryFile()
+      : fd_(-1) {
+#if defined(OS_ANDROID)
+    static const char file_template[] = "/data/local/tmp/ScopedTempFileXXXXXX";
+#else
+    static const char file_template[] = "/tmp/ScopedTempFileXXXXXX";
+#endif  // defined(OS_ANDROID)
+    COMPILE_ASSERT(sizeof(full_file_name_) >= sizeof(file_template),
+                   full_file_name_is_large_enough);
+    memcpy(full_file_name_, file_template, sizeof(file_template));
+    fd_ = mkstemp(full_file_name_);
+    CHECK_LE(0, fd_);
+  }
+  ~ScopedTemporaryFile() {
+    CHECK_EQ(0, unlink(full_file_name_));
+    CHECK_EQ(0, HANDLE_EINTR(close(fd_)));
+  }
+
+  int fd() const { return fd_; }
+  const char* full_file_name() const { return full_file_name_; }
+
+ private:
+  int fd_;
+  char full_file_name_[128];
+  DISALLOW_COPY_AND_ASSIGN(ScopedTemporaryFile);
+};
+
+}  // namespace
 
 #if defined(OS_ANDROID)
   #define DISABLE_ON_ANDROID(function) DISABLED_##function
@@ -45,23 +81,30 @@ TEST(BrokerProcess, CreateAndDestroy) {
   ASSERT_EQ(WEXITSTATUS(status), 0);
 }
 
-TEST(BrokerProcess, TestOpenNull) {
+TEST(BrokerProcess, TestOpenAccessNull) {
   const std::vector<std::string> empty;
   BrokerProcess open_broker(empty, empty);
   ASSERT_TRUE(open_broker.Init(NULL));
 
   int fd = open_broker.Open(NULL, O_RDONLY);
   ASSERT_EQ(fd, -EFAULT);
+
+  int ret = open_broker.Access(NULL, F_OK);
+  ASSERT_EQ(ret, -EFAULT);
 }
 
 void TestOpenFilePerms(bool fast_check_in_client) {
   const char kR_WhiteListed[] = "/proc/DOESNOTEXIST1";
+  // We can't debug the init process, and shouldn't be able to access
+  // its auxv file.
+  const char kR_WhiteListedButDenied[] = "/proc/1/auxv";
   const char kW_WhiteListed[] = "/proc/DOESNOTEXIST2";
   const char kRW_WhiteListed[] = "/proc/DOESNOTEXIST3";
   const char k_NotWhitelisted[] = "/proc/DOESNOTEXIST4";
 
   std::vector<std::string> read_whitelist;
   read_whitelist.push_back(kR_WhiteListed);
+  read_whitelist.push_back(kR_WhiteListedButDenied);
   read_whitelist.push_back(kRW_WhiteListed);
 
   std::vector<std::string> write_whitelist;
@@ -80,6 +123,46 @@ void TestOpenFilePerms(bool fast_check_in_client) {
   ASSERT_EQ(fd, -EPERM);
   fd = open_broker.Open(kR_WhiteListed, O_RDWR);
   ASSERT_EQ(fd, -EPERM);
+  int ret = -1;
+  ret = open_broker.Access(kR_WhiteListed, F_OK);
+  ASSERT_EQ(ret, -ENOENT);
+  ret = open_broker.Access(kR_WhiteListed, R_OK);
+  ASSERT_EQ(ret, -ENOENT);
+  ret = open_broker.Access(kR_WhiteListed, W_OK);
+  ASSERT_EQ(ret, -EPERM);
+  ret = open_broker.Access(kR_WhiteListed, R_OK | W_OK);
+  ASSERT_EQ(ret, -EPERM);
+  ret = open_broker.Access(kR_WhiteListed, X_OK);
+  ASSERT_EQ(ret, -EPERM);
+  ret = open_broker.Access(kR_WhiteListed, R_OK | X_OK);
+  ASSERT_EQ(ret, -EPERM);
+
+  // Android sometimes runs tests as root.
+  // This part of the test requires a process that doesn't have
+  // CAP_DAC_OVERRIDE. We check against a root euid as a proxy for that.
+  if (geteuid()) {
+    fd = open_broker.Open(kR_WhiteListedButDenied, O_RDONLY);
+    // The broker process will allow this, but the normal permission system
+    // won't.
+    ASSERT_EQ(fd, -EACCES);
+    fd = open_broker.Open(kR_WhiteListedButDenied, O_WRONLY);
+    ASSERT_EQ(fd, -EPERM);
+    fd = open_broker.Open(kR_WhiteListedButDenied, O_RDWR);
+    ASSERT_EQ(fd, -EPERM);
+    ret = open_broker.Access(kR_WhiteListedButDenied, F_OK);
+    // The normal permission system will let us check that the file exists.
+    ASSERT_EQ(ret, 0);
+    ret = open_broker.Access(kR_WhiteListedButDenied, R_OK);
+    ASSERT_EQ(ret, -EACCES);
+    ret = open_broker.Access(kR_WhiteListedButDenied, W_OK);
+    ASSERT_EQ(ret, -EPERM);
+    ret = open_broker.Access(kR_WhiteListedButDenied, R_OK | W_OK);
+    ASSERT_EQ(ret, -EPERM);
+    ret = open_broker.Access(kR_WhiteListedButDenied, X_OK);
+    ASSERT_EQ(ret, -EPERM);
+    ret = open_broker.Access(kR_WhiteListedButDenied, R_OK | X_OK);
+    ASSERT_EQ(ret, -EPERM);
+  }
 
   fd = open_broker.Open(kW_WhiteListed, O_RDONLY);
   ASSERT_EQ(fd, -EPERM);
@@ -87,6 +170,18 @@ void TestOpenFilePerms(bool fast_check_in_client) {
   ASSERT_EQ(fd, -ENOENT);
   fd = open_broker.Open(kW_WhiteListed, O_RDWR);
   ASSERT_EQ(fd, -EPERM);
+  ret = open_broker.Access(kW_WhiteListed, F_OK);
+  ASSERT_EQ(ret, -ENOENT);
+  ret = open_broker.Access(kW_WhiteListed, R_OK);
+  ASSERT_EQ(ret, -EPERM);
+  ret = open_broker.Access(kW_WhiteListed, W_OK);
+  ASSERT_EQ(ret, -ENOENT);
+  ret = open_broker.Access(kW_WhiteListed, R_OK | W_OK);
+  ASSERT_EQ(ret, -EPERM);
+  ret = open_broker.Access(kW_WhiteListed, X_OK);
+  ASSERT_EQ(ret, -EPERM);
+  ret = open_broker.Access(kW_WhiteListed, R_OK | X_OK);
+  ASSERT_EQ(ret, -EPERM);
 
   fd = open_broker.Open(kRW_WhiteListed, O_RDONLY);
   ASSERT_EQ(fd, -ENOENT);
@@ -94,6 +189,18 @@ void TestOpenFilePerms(bool fast_check_in_client) {
   ASSERT_EQ(fd, -ENOENT);
   fd = open_broker.Open(kRW_WhiteListed, O_RDWR);
   ASSERT_EQ(fd, -ENOENT);
+  ret = open_broker.Access(kRW_WhiteListed, F_OK);
+  ASSERT_EQ(ret, -ENOENT);
+  ret = open_broker.Access(kRW_WhiteListed, R_OK);
+  ASSERT_EQ(ret, -ENOENT);
+  ret = open_broker.Access(kRW_WhiteListed, W_OK);
+  ASSERT_EQ(ret, -ENOENT);
+  ret = open_broker.Access(kRW_WhiteListed, R_OK | W_OK);
+  ASSERT_EQ(ret, -ENOENT);
+  ret = open_broker.Access(kRW_WhiteListed, X_OK);
+  ASSERT_EQ(ret, -EPERM);
+  ret = open_broker.Access(kRW_WhiteListed, R_OK | X_OK);
+  ASSERT_EQ(ret, -EPERM);
 
   fd = open_broker.Open(k_NotWhitelisted, O_RDONLY);
   ASSERT_EQ(fd, -EPERM);
@@ -101,6 +208,19 @@ void TestOpenFilePerms(bool fast_check_in_client) {
   ASSERT_EQ(fd, -EPERM);
   fd = open_broker.Open(k_NotWhitelisted, O_RDWR);
   ASSERT_EQ(fd, -EPERM);
+  ret = open_broker.Access(k_NotWhitelisted, F_OK);
+  ASSERT_EQ(ret, -EPERM);
+  ret = open_broker.Access(k_NotWhitelisted, R_OK);
+  ASSERT_EQ(ret, -EPERM);
+  ret = open_broker.Access(k_NotWhitelisted, W_OK);
+  ASSERT_EQ(ret, -EPERM);
+  ret = open_broker.Access(k_NotWhitelisted, R_OK | W_OK);
+  ASSERT_EQ(ret, -EPERM);
+  ret = open_broker.Access(k_NotWhitelisted, X_OK);
+  ASSERT_EQ(ret, -EPERM);
+  ret = open_broker.Access(k_NotWhitelisted, R_OK | X_OK);
+  ASSERT_EQ(ret, -EPERM);
+
 
   // We have some extra sanity check for clearly wrong values.
   fd = open_broker.Open(kRW_WhiteListed, O_RDONLY|O_WRONLY|O_RDWR);
@@ -141,6 +261,13 @@ void TestOpenCpuinfo(bool fast_check_in_client) {
   int fd = -1;
   fd = open_broker->Open(kFileCpuInfo, O_RDWR);
   ASSERT_EQ(fd, -EPERM);
+
+  // Check we can read /proc/cpuinfo.
+  int can_access = open_broker->Access(kFileCpuInfo, R_OK);
+  ASSERT_EQ(can_access, 0);
+  can_access = open_broker->Access(kFileCpuInfo, W_OK);
+  ASSERT_EQ(can_access, -EPERM);
+  // Check we can not write /proc/cpuinfo.
 
   // Open cpuinfo via the broker.
   int cpuinfo_fd = open_broker->Open(kFileCpuInfo, O_RDONLY);
@@ -194,33 +321,19 @@ TEST(BrokerProcess, OpenCpuinfoNoClientCheck) {
   // expected.
 }
 
-// Disabled until we implement a mkstemp that doesn't require JNI.
-TEST(BrokerProcess, DISABLE_ON_ANDROID(OpenFileRW)) {
-  const char basename[] = "BrokerProcessXXXXXX";
-  char template_name[2048];
-#if defined(OS_ANDROID)
-  base::FilePath cache_directory;
-  ASSERT_TRUE(base::android::GetCacheDirectory(&cache_directory));
-  ssize_t length = snprintf(template_name, sizeof(template_name),
-                            "%s%s",
-                            cache_directory.value().c_str(), basename);
-  ASSERT_LT(length, static_cast<ssize_t>(sizeof(template_name)));
-#else
-  strncpy(template_name, basename, sizeof(basename) - 1);
-  template_name[sizeof(basename) - 1] = '\0';
-#endif
-  int tempfile = mkstemp(template_name);
-  ASSERT_GE(tempfile, 0);
-  char tempfile_name[2048];
-  int written = snprintf(tempfile_name, sizeof(tempfile_name),
-                         "/proc/self/fd/%d", tempfile);
-  ASSERT_LT(written, static_cast<int>(sizeof(tempfile_name)));
+TEST(BrokerProcess, OpenFileRW) {
+  ScopedTemporaryFile tempfile;
+  const char* tempfile_name = tempfile.full_file_name();
 
   std::vector<std::string> whitelist;
   whitelist.push_back(tempfile_name);
 
   BrokerProcess open_broker(whitelist, whitelist);
   ASSERT_TRUE(open_broker.Init(NULL));
+
+  // Check we can access that file with read or write.
+  int can_access = open_broker.Access(tempfile_name, R_OK | W_OK);
+  ASSERT_EQ(can_access, 0);
 
   int tempfile2 = -1;
   tempfile2 = open_broker.Open(tempfile_name, O_RDWR);
@@ -234,23 +347,11 @@ TEST(BrokerProcess, DISABLE_ON_ANDROID(OpenFileRW)) {
   // Read back from the original file descriptor what we wrote through
   // the descriptor provided by the broker.
   char buf[1024];
-  len = read(tempfile, buf, sizeof(buf));
+  len = read(tempfile.fd(), buf, sizeof(buf));
 
   ASSERT_EQ(len, static_cast<ssize_t>(sizeof(test_text)));
   ASSERT_EQ(memcmp(test_text, buf, sizeof(test_text)), 0);
 
-  // Cleanup the temporary file.
-  char tempfile_full_path[2048];
-  // Make sure tempfile_full_path will terminate with a 0.
-  memset(tempfile_full_path, 0, sizeof(tempfile_full_path));
-  ssize_t ret = readlink(tempfile_name, tempfile_full_path,
-                         sizeof(tempfile_full_path));
-  ASSERT_GT(ret, 0);
-  // Make sure we still have a trailing zero in tempfile_full_path.
-  ASSERT_LT(ret, static_cast<ssize_t>(sizeof(tempfile_full_path)));
-  ASSERT_EQ(unlink(tempfile_full_path), 0);
-
-  ASSERT_EQ(close(tempfile), 0);
   ASSERT_EQ(close(tempfile2), 0);
 }
 
@@ -274,36 +375,62 @@ SANDBOX_TEST(BrokerProcess, BrokerDied) {
   SANDBOX_ASSERT(WTERMSIG(status) == SIGKILL);
   // Hopefully doing Open with a dead broker won't SIGPIPE us.
   SANDBOX_ASSERT(open_broker.Open("/proc/cpuinfo", O_RDONLY) == -ENOMEM);
+  SANDBOX_ASSERT(open_broker.Access("/proc/cpuinfo", O_RDONLY) == -ENOMEM);
 }
 
-void TestComplexFlags(bool fast_check_in_client) {
+void TestOpenComplexFlags(bool fast_check_in_client) {
+  const char kCpuInfo[] = "/proc/cpuinfo";
   std::vector<std::string> whitelist;
-  whitelist.push_back("/proc/cpuinfo");
+  whitelist.push_back(kCpuInfo);
 
   BrokerProcess open_broker(whitelist,
                             whitelist,
                             fast_check_in_client);
   ASSERT_TRUE(open_broker.Init(NULL));
   // Test that we do the right thing for O_CLOEXEC and O_NONBLOCK.
-  // Presently, the right thing is to always deny them since they are not
-  // supported.
   int fd = -1;
-  fd = open_broker.Open("/proc/cpuinfo", O_RDONLY);
+  int ret = 0;
+  fd = open_broker.Open(kCpuInfo, O_RDONLY);
   ASSERT_GE(fd, 0);
-  ASSERT_EQ(close(fd), 0);
+  ret = fcntl(fd, F_GETFL);
+  ASSERT_NE(-1, ret);
+  // The descriptor shouldn't have the O_CLOEXEC attribute, nor O_NONBLOCK.
+  ASSERT_EQ(0, ret & (O_CLOEXEC | O_NONBLOCK));
+  ASSERT_EQ(0, close(fd));
 
-  ASSERT_EQ(open_broker.Open("/proc/cpuinfo", O_RDONLY | O_CLOEXEC), -EPERM);
-  ASSERT_EQ(open_broker.Open("/proc/cpuinfo", O_RDONLY | O_NONBLOCK), -EPERM);
+  fd = open_broker.Open(kCpuInfo, O_RDONLY | O_CLOEXEC);
+  ASSERT_GE(fd, 0);
+  ret = fcntl(fd, F_GETFD);
+  ASSERT_NE(-1, ret);
+  // Important: use F_GETFD, not F_GETFL. The O_CLOEXEC flag in F_GETFL
+  // is actually not used by the kernel.
+  ASSERT_TRUE(FD_CLOEXEC & ret);
+
+  // There is buggy userland code that can check for O_CLOEXEC with fcntl(2)
+  // even though it doesn't mean anything. We need to support this case.
+  // See crbug.com/237283.
+  ret = fcntl(fd, F_GETFL);
+  ASSERT_NE(-1, ret);
+  ASSERT_TRUE(O_CLOEXEC & ret);
+
+  ASSERT_EQ(0, close(fd));
+
+  fd = open_broker.Open(kCpuInfo, O_RDONLY | O_NONBLOCK);
+  ASSERT_GE(fd, 0);
+  ret = fcntl(fd, F_GETFL);
+  ASSERT_NE(-1, ret);
+  ASSERT_TRUE(O_NONBLOCK & ret);
+  ASSERT_EQ(0, close(fd));
 }
 
-TEST(BrokerProcess, ComplexFlagsWithClientCheck) {
-  TestComplexFlags(true /* fast_check_in_client */);
+TEST(BrokerProcess, OpenComplexFlagsWithClientCheck) {
+  TestOpenComplexFlags(true /* fast_check_in_client */);
   // Don't do anything here, so that ASSERT works in the subfunction as
   // expected.
 }
 
-TEST(BrokerProcess, ComplexFlagsNoClientCheck) {
-  TestComplexFlags(false /* fast_check_in_client */);
+TEST(BrokerProcess, OpenComplexFlagsNoClientCheck) {
+  TestOpenComplexFlags(false /* fast_check_in_client */);
   // Don't do anything here, so that ASSERT works in the subfunction as
   // expected.
 }

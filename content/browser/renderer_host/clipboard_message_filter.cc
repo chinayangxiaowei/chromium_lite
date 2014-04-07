@@ -9,30 +9,14 @@
 #include "base/stl_util.h"
 #include "content/common/clipboard_messages.h"
 #include "content/public/browser/browser_context.h"
-#include "googleurl/src/gurl.h"
 #include "ipc/ipc_message_macros.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/zlib/zlib.h"
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/gfx/size.h"
+#include "url/gurl.h"
 
 namespace content {
-
-namespace {
-
-// Writes objects to the clipboard with a SourceTag corresponding to
-// |browser_context|.
-void WriteObjectsWrapper(ui::Clipboard* clipboard,
-                         const ui::Clipboard::ObjectMap& objects,
-                         BrowserContext* browser_context) {
-  ui::Clipboard::SourceTag source_tag =
-      BrowserContext::GetMarkerForOffTheRecordContext(browser_context);
-  clipboard->WriteObjects(ui::Clipboard::BUFFER_STANDARD,
-                          objects,
-                          source_tag);
-}
-
-}  // namespace
 
 #if defined(OS_WIN)
 
@@ -41,20 +25,17 @@ namespace {
 // The write must be performed on the UI thread because the clipboard object
 // from the IO thread cannot create windows so it cannot be the "owner" of the
 // clipboard's contents.  // See http://crbug.com/5823.
-void WriteObjectsOnUIThread(ui::Clipboard::ObjectMap* objects,
-                            BrowserContext* browser_context) {
+void WriteObjectsOnUIThread(ui::Clipboard::ObjectMap* objects) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   static ui::Clipboard* clipboard = ui::Clipboard::GetForCurrentThread();
-  WriteObjectsWrapper(clipboard, *objects, browser_context);
+  clipboard->WriteObjects(ui::Clipboard::BUFFER_STANDARD, *objects);
 }
 
 }  // namespace
 
 #endif
 
-ClipboardMessageFilter::ClipboardMessageFilter(BrowserContext* browser_context)
-    : browser_context_(browser_context) {
-}
+ClipboardMessageFilter::ClipboardMessageFilter() {}
 
 void ClipboardMessageFilter::OverrideThreadForMessage(
     const IPC::Message& message, BrowserThread::ID* thread) {
@@ -114,7 +95,7 @@ void ClipboardMessageFilter::OnWriteObjectsSync(
   DCHECK(base::SharedMemory::IsHandleValid(bitmap_handle))
       << "Bad bitmap handle";
   // Splice the shared memory handle into the clipboard data.
-  ui::Clipboard::ReplaceSharedMemHandle(&objects, bitmap_handle, peer_handle());
+  ui::Clipboard::ReplaceSharedMemHandle(&objects, bitmap_handle, PeerHandle());
 #if defined(OS_WIN)
   // We cannot write directly from the IO thread, and cannot service the IPC
   // on the UI thread. We'll copy the relevant data and get a handle to any
@@ -126,33 +107,32 @@ void ClipboardMessageFilter::OnWriteObjectsSync(
   BrowserThread::PostTask(
       BrowserThread::UI,
       FROM_HERE,
-      base::Bind(&WriteObjectsOnUIThread, base::Owned(long_living_objects),
-                 browser_context_));
+      base::Bind(&WriteObjectsOnUIThread, base::Owned(long_living_objects)));
 #else
-  WriteObjectsWrapper(GetClipboard(), objects, browser_context_);
+  GetClipboard()->WriteObjects(ui::Clipboard::BUFFER_STANDARD, objects);
 #endif
 }
 
 void ClipboardMessageFilter::OnWriteObjectsAsync(
     const ui::Clipboard::ObjectMap& objects) {
+  // This async message doesn't support shared-memory based bitmaps; they must
+  // be removed otherwise we might dereference a rubbish pointer.
+  scoped_ptr<ui::Clipboard::ObjectMap> sanitized_objects(
+      new ui::Clipboard::ObjectMap(objects));
+  sanitized_objects->erase(ui::Clipboard::CBF_SMBITMAP);
+
 #if defined(OS_WIN)
   // We cannot write directly from the IO thread, and cannot service the IPC
   // on the UI thread. We'll copy the relevant data and post a task to preform
   // the write on the UI thread.
-  ui::Clipboard::ObjectMap* long_living_objects =
-      new ui::Clipboard::ObjectMap(objects);
-
-  // This async message doesn't support shared-memory based bitmaps; they must
-  // be removed otherwise we might dereference a rubbish pointer.
-  long_living_objects->erase(ui::Clipboard::CBF_SMBITMAP);
-
   BrowserThread::PostTask(
       BrowserThread::UI,
       FROM_HERE,
-      base::Bind(&WriteObjectsOnUIThread, base::Owned(long_living_objects),
-                 browser_context_));
+      base::Bind(
+          &WriteObjectsOnUIThread, base::Owned(sanitized_objects.release())));
 #else
-  WriteObjectsWrapper(GetClipboard(), objects, browser_context_);
+  GetClipboard()->WriteObjects(
+      ui::Clipboard::BUFFER_STANDARD, *sanitized_objects.get());
 #endif
 }
 
@@ -235,7 +215,7 @@ void ClipboardMessageFilter::OnReadImageReply(
       base::SharedMemory buffer;
       if (buffer.CreateAndMapAnonymous(png_data.size())) {
         memcpy(buffer.memory(), vector_as_array(&png_data), png_data.size());
-        if (buffer.GiveToProcess(peer_handle(), &image_handle)) {
+        if (buffer.GiveToProcess(PeerHandle(), &image_handle)) {
           image_size = png_data.size();
         }
       }

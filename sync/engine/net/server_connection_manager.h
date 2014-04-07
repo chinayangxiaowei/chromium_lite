@@ -11,7 +11,7 @@
 #include "base/atomicops.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/observer_list.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "base/synchronization/lock.h"
 #include "base/threading/non_thread_safe.h"
 #include "base/threading/thread_checker.h"
@@ -164,10 +164,12 @@ class SYNC_EXPORT_PRIVATE ServerConnectionManager {
 
     void GetServerParams(std::string* server,
                          int* server_port,
-                         bool* use_ssl) const {
+                         bool* use_ssl,
+                         bool* use_oauth2_token) const {
       server->assign(scm_->sync_server_);
       *server_port = scm_->sync_server_port_;
       *use_ssl = scm_->use_ssl_;
+      *use_oauth2_token = scm_->use_oauth2_token_;
     }
 
     std::string buffer_;
@@ -180,7 +182,8 @@ class SYNC_EXPORT_PRIVATE ServerConnectionManager {
 
   ServerConnectionManager(const std::string& server,
                           int port,
-                          bool use_ssl);
+                          bool use_ssl,
+                          bool use_oauth2_token);
 
   virtual ~ServerConnectionManager();
 
@@ -224,16 +227,8 @@ class SYNC_EXPORT_PRIVATE ServerConnectionManager {
     client_id_.assign(client_id);
   }
 
-  // Returns true if the auth token is succesfully set and false otherwise.
-  bool set_auth_token(const std::string& auth_token) {
-    DCHECK(thread_checker_.CalledOnValidThread());
-    if (previously_invalidated_token != auth_token) {
-      auth_token_.assign(auth_token);
-      previously_invalidated_token = std::string();
-      return true;
-    }
-    return false;
-  }
+  // Sets a new auth token and time.
+  bool SetAuthToken(const std::string& auth_token);
 
   // Our out-of-band invalidations channel can encounter auth errors,
   // and when it does so it tells us via this method to prevent making more
@@ -292,6 +287,11 @@ class SYNC_EXPORT_PRIVATE ServerConnectionManager {
 
   // Indicates whether or not requests should be made using HTTPS.
   bool use_ssl_;
+
+  // Indicates if token should be handled as OAuth2 token. Connection should set
+  // auth header appropriately.
+  // TODO(pavely): Remove once sync on android switches to oauth2 tokens.
+  bool use_oauth2_token_;
 
   // The paths we post to.
   std::string proto_sync_path_;

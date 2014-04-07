@@ -11,21 +11,20 @@
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/process_util.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/threading/platform_thread.h"
 #include "base/threading/thread.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/common/automation_constants.h"
 #include "chrome/test/automation/automation_handle_tracker.h"
 #include "chrome/test/automation/browser_proxy.h"
-#include "googleurl/src/gurl.h"
 #include "ipc/ipc_channel_proxy.h"
 #include "ipc/ipc_sender.h"
 #include "ipc/ipc_sync_channel.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/gfx/native_widget_types.h"
+#include "url/gurl.h"
 
 class BrowserProxy;
 class TabProxy;
@@ -153,19 +152,21 @@ class AutomationProxy : public IPC::Listener, public AutomationMessageSender {
                        int timeout_ms,
                        std::string* response) WARN_UNUSED_RESULT;
 
-  // Begin tracing specified categories on the browser instance. Blocks until
-  // browser acknowledges that tracing has begun (or failed if false is
-  // returned). |categories| is a comma-delimited list of category wildcards.
-  // A category can have an optional '-' prefix to make it an excluded category.
-  // Either all categories must be included or all must be excluded.
+  // Begin tracing specified category_patterns on the browser instance. Blocks
+  // until browser acknowledges that tracing has begun (or failed if false is
+  // returned). |category_patterns| is a comma-delimited list of category
+  // wildcards.
+  // A category pattern can have an optional '-' prefix to exclude category
+  // groups that contain matching category.
+  // Either all category_patterns must be included or all must be excluded.
   //
   // Example: BeginTracing("test_MyTest*");
   // Example: BeginTracing("test_MyTest*,test_OtherStuff");
   // Example: BeginTracing("-excluded_category1,-excluded_category2");
   //
   // See base/event_trace.h for documentation of included and excluded
-  // categories.
-  bool BeginTracing(const std::string& categories) WARN_UNUSED_RESULT;
+  // category_patterns.
+  bool BeginTracing(const std::string& category_patterns) WARN_UNUSED_RESULT;
 
   // End trace and collect the trace output as a json string.
   bool EndTracing(std::string* json_trace_output) WARN_UNUSED_RESULT;

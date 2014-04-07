@@ -5,13 +5,12 @@
 #include "chrome/browser/extensions/extension_apitest.h"
 
 #include "base/command_line.h"
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/chromeos/extensions/input_method_event_router.h"
-#include "chrome/browser/chromeos/input_method/input_method_configuration.h"
-#include "chrome/browser/chromeos/input_method/input_method_manager.h"
 #include "chrome/browser/extensions/api/test/test_api.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_switches.h"
+#include "chromeos/ime/input_method_manager.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 #include "content/public/browser/notification_service.h"
@@ -33,7 +32,7 @@ class SetInputMethodListener : public content::NotificationObserver {
   explicit SetInputMethodListener(int count) : count_(count) {
     registrar_.Add(this, chrome::NOTIFICATION_EXTENSION_TEST_MESSAGE,
                    content::NotificationService::AllSources());
-    chromeos::input_method::GetInputMethodManager()->
+    chromeos::input_method::InputMethodManager::Get()->
         EnableLayouts(kLoginScreenUILanguage, kInitialInputMethodOnLoginScreen);
   }
 
@@ -49,7 +48,7 @@ class SetInputMethodListener : public content::NotificationObserver {
     const std::string expected_message =
         base::StringPrintf("%s:%s", kSetInputMethodMessage, kNewInputMethod);
     if (content == expected_message) {
-      chromeos::input_method::GetInputMethodManager()->
+      chromeos::input_method::InputMethodManager::Get()->
           ChangeInputMethod(base::StringPrintf("xkb:%s", kNewInputMethod));
 
       extensions::TestSendMessageFunction* function =

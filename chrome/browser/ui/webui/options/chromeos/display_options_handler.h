@@ -38,15 +38,11 @@ class DisplayOptionsHandler : public ::options::OptionsPageUIHandler,
   virtual void OnDisplayConfigurationChanged() OVERRIDE;
 
  private:
-  // Updates the display section visibility based on the current display
-  // configurations.
-  void UpdateDisplaySectionVisibility();
-
   // Sends all of the current display information to the web_ui of options page.
   void SendAllDisplayInfo();
 
   // Sends the specified display information to the web_ui of options page.
-  void SendDisplayInfo(const std::vector<const gfx::Display*> displays);
+  void SendDisplayInfo(const std::vector<gfx::Display>& displays);
 
   // Called when the fade-out animation for mirroring status change is finished.
   void OnFadeOutForMirroringFinished(bool is_mirroring);
@@ -62,6 +58,9 @@ class DisplayOptionsHandler : public ::options::OptionsPageUIHandler,
   void HandleMirroring(const base::ListValue* args);
   void HandleSetPrimary(const base::ListValue* args);
   void HandleDisplayLayout(const base::ListValue* args);
+  void HandleSetUIScale(const base::ListValue* args);
+  void HandleSetResolution(const base::ListValue* args);
+  void HandleSetOrientation(const base::ListValue* args);
 
   DISALLOW_COPY_AND_ASSIGN(DisplayOptionsHandler);
 };

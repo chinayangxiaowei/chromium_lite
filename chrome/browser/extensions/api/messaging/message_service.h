@@ -13,10 +13,16 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/extensions/api/messaging/native_message_process_host.h"
+#include "chrome/browser/extensions/api/profile_keyed_api_factory.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 
+class GURL;
 class Profile;
+
+namespace base {
+class DictionaryValue;
+}
 
 namespace content {
 class RenderProcessHost;
@@ -24,6 +30,7 @@ class WebContents;
 }
 
 namespace extensions {
+class Extension;
 class ExtensionHost;
 class LazyBackgroundTaskQueue;
 
@@ -48,7 +55,8 @@ class LazyBackgroundTaskQueue;
 // port: an IPC::Message::Process interface and an optional routing_id (in the
 // case that the port is a tab).  The Process is usually either a
 // RenderProcessHost or a RenderViewHost.
-class MessageService : public content::NotificationObserver,
+class MessageService : public ProfileKeyedAPI,
+                       public content::NotificationObserver,
                        public NativeMessageProcessHost::Client {
  public:
   // A messaging channel. Note that the opening port can be the same as the
@@ -63,9 +71,10 @@ class MessageService : public content::NotificationObserver,
     // Notify the port that the channel has been opened.
     virtual void DispatchOnConnect(int dest_port_id,
                                    const std::string& channel_name,
-                                   const std::string& tab_json,
+                                   const base::DictionaryValue& source_tab,
                                    const std::string& source_extension_id,
-                                   const std::string& target_extension_id) {}
+                                   const std::string& target_extension_id,
+                                   const GURL& source_url) {}
 
     // Notify the port that the channel has been closed. If |error_message| is
     // non-empty, it indicates an error occurred while opening the connection.
@@ -95,8 +104,14 @@ class MessageService : public content::NotificationObserver,
   // NOTE: this can be called from any thread.
   static void AllocatePortIdPair(int* port1, int* port2);
 
-  explicit MessageService(LazyBackgroundTaskQueue* queue);
+  explicit MessageService(Profile* profile);
   virtual ~MessageService();
+
+  // ProfileKeyedAPI implementation.
+  static ProfileKeyedAPIFactory<MessageService>* GetFactoryInstance();
+
+  // Convenience method to get the MessageService for a profile.
+  static MessageService* Get(Profile* profile);
 
   // Given an extension's ID, opens a channel between the given renderer "port"
   // and every listening context owned by that extension. |channel_name| is
@@ -105,6 +120,7 @@ class MessageService : public content::NotificationObserver,
       int source_process_id, int source_routing_id, int receiver_port_id,
       const std::string& source_extension_id,
       const std::string& target_extension_id,
+      const GURL& source_url,
       const std::string& channel_name);
 
   // Same as above, but opens a channel to the tab with the given ID.  Messages
@@ -137,6 +153,7 @@ class MessageService : public content::NotificationObserver,
 
  private:
   friend class MockMessageService;
+  friend class ProfileKeyedAPIFactory<MessageService>;
   struct OpenChannelParams;
 
   // A map of channel ID to its channel object.
@@ -172,6 +189,7 @@ class MessageService : public content::NotificationObserver,
   // to open a channel. Returns true if a task was queued.
   // Takes ownership of |params| if true is returned.
   bool MaybeAddPendingOpenChannelTask(Profile* profile,
+                                      const Extension* extension,
                                       OpenChannelParams* params);
 
   // Callbacks for LazyBackgroundTaskQueue tasks. The queue passes in an
@@ -192,6 +210,20 @@ class MessageService : public content::NotificationObserver,
     if (host)
       PostMessage(port_id, message);
   }
+
+  // Immediate dispatches a disconnect to |source| for |port_id|. Sets source's
+  // runtime.lastMessage to |error_message|, if any.
+  void DispatchOnDisconnect(content::RenderProcessHost* source,
+                            int port_id,
+                            const std::string& error_message);
+
+  // ProfileKeyedAPI implementation.
+  static const char* service_name() {
+    return "MessageService";
+  }
+  static const bool kServiceRedirectedInIncognito = true;
+  static const bool kServiceIsCreatedWithBrowserContext = false;
+  static const bool kServiceIsNULLWhileTesting = true;
 
   content::NotificationRegistrar registrar_;
   MessageChannelMap channels_;

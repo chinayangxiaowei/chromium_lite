@@ -10,7 +10,7 @@
 #include "base/files/file_path.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "content/browser/renderer_host/media/mock_media_observer.h"
 #include "content/public/renderer/content_renderer_client.h"
 #include "ipc/ipc_listener.h"
@@ -50,7 +50,6 @@ class AudioMirroringManager;
 class AudioRendererHost;
 class ContentRendererClient;
 class MediaStreamManager;
-class MockResourceContext;
 class RenderThreadImpl;
 class ResourceContext;
 class TestBrowserThread;
@@ -113,10 +112,19 @@ class WebRTCAutoDelete {
 // Implemented and defined in the cc file.
 class ReplaceContentClientRenderer;
 
-class WebRTCAudioDeviceTest : public ::testing::Test, public IPC::Listener {
+// Temporarily disabled in LeakSanitizer builds due to memory leaks.
+// http://crbug.com/148865
+#if defined(LEAK_SANITIZER)
+#define MAYBE_WebRTCAudioDeviceTest DISABLED_WebRTCAudioDeviceTest
+#else
+#define MAYBE_WebRTCAudioDeviceTest WebRTCAudioDeviceTest
+#endif
+
+class MAYBE_WebRTCAudioDeviceTest : public ::testing::Test,
+                                    public IPC::Listener {
  public:
-  WebRTCAudioDeviceTest();
-  virtual ~WebRTCAudioDeviceTest();
+  MAYBE_WebRTCAudioDeviceTest();
+  virtual ~MAYBE_WebRTCAudioDeviceTest();
 
   virtual void SetUp() OVERRIDE;
   virtual void TearDown() OVERRIDE;
@@ -151,7 +159,7 @@ class WebRTCAudioDeviceTest : public ::testing::Test, public IPC::Listener {
   std::string GetTestDataPath(const base::FilePath::StringType& file_name);
 
   scoped_ptr<ReplaceContentClientRenderer> saved_content_renderer_;
-  MessageLoopForUI message_loop_;
+  base::MessageLoopForUI message_loop_;
   ContentRendererClient content_renderer_client_;
   RenderThreadImpl* render_thread_;  // Owned by mock_process_.
   scoped_ptr<WebRTCMockRenderProcess> mock_process_;

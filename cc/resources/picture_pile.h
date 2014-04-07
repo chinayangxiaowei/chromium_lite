@@ -11,7 +11,7 @@
 namespace cc {
 class PicturePileImpl;
 class Region;
-struct RenderingStats;
+class RenderingStatsInstrumentation;
 
 class CC_EXPORT PicturePile : public PicturePileBase {
  public:
@@ -19,12 +19,14 @@ class CC_EXPORT PicturePile : public PicturePileBase {
 
   // Re-record parts of the picture that are invalid.
   // Invalidations are in layer space.
-  void Update(
+  // Return true iff the pile was modified.
+  bool Update(
       ContentLayerClient* painter,
       SkColor background_color,
+      bool contents_opaque,
       const Region& invalidation,
       gfx::Rect visible_layer_rect,
-      RenderingStats* stats);
+      RenderingStatsInstrumentation* stats_instrumentation);
 
   void set_num_raster_threads(int num_raster_threads) {
     num_raster_threads_ = num_raster_threads;
@@ -34,8 +36,14 @@ class CC_EXPORT PicturePile : public PicturePileBase {
     slow_down_raster_scale_factor_for_debug_ = factor;
   }
 
- private:
+  void set_show_debug_picture_borders(bool show) {
+    show_debug_picture_borders_ = show;
+  }
+
+ protected:
   virtual ~PicturePile();
+
+ private:
   friend class PicturePileImpl;
 
   // Add an invalidation to this picture list.  If the list needs to be

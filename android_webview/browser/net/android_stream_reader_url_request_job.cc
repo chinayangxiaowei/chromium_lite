@@ -13,8 +13,8 @@
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/lazy_instance.h"
-#include "base/message_loop.h"
-#include "base/message_loop_proxy.h"
+#include "base/message_loop/message_loop.h"
+#include "base/message_loop/message_loop_proxy.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task_runner.h"
 #include "base/threading/sequenced_worker_pool.h"
@@ -90,7 +90,7 @@ AndroidStreamReaderURLRequestJob::AndroidStreamReaderURLRequestJob(
     scoped_ptr<Delegate> delegate)
     : URLRequestJob(request, network_delegate),
       delegate_(delegate.Pass()),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {
+      weak_factory_(this) {
   DCHECK(delegate_);
 }
 
@@ -135,7 +135,7 @@ void AndroidStreamReaderURLRequestJob::Start() {
       FROM_HERE,
       base::Bind(
           &OpenInputStreamOnWorkerThread,
-          MessageLoop::current()->message_loop_proxy(),
+          base::MessageLoop::current()->message_loop_proxy(),
           // This is intentional - the job could be deleted while the callback
           // is executing on the background thread.
           // The delegate will be "returned" to the job once the InputStream
@@ -181,7 +181,7 @@ void AndroidStreamReaderURLRequestJob::OnInputStreamOpened(
       CreateStreamReader(input_stream.get()));
   DCHECK(input_stream_reader);
 
-  DCHECK(!input_stream_reader_wrapper_);
+  DCHECK(!input_stream_reader_wrapper_.get());
   input_stream_reader_wrapper_ = new InputStreamReaderWrapper(
       input_stream.Pass(), input_stream_reader.Pass());
 
@@ -236,7 +236,7 @@ bool AndroidStreamReaderURLRequestJob::ReadRawData(net::IOBuffer* dest,
                                                    int dest_size,
                                                    int* bytes_read) {
   DCHECK(thread_checker_.CalledOnValidThread());
-  if (!input_stream_reader_wrapper_) {
+  if (!input_stream_reader_wrapper_.get()) {
     // This will happen if opening the InputStream fails in which case the
     // error is communicated by setting the HTTP response status header rather
     // than failing the request during the header fetch phase.
@@ -265,7 +265,7 @@ bool AndroidStreamReaderURLRequestJob::GetMimeType(
   JNIEnv* env = AttachCurrentThread();
   DCHECK(env);
 
-  if (!input_stream_reader_wrapper_)
+  if (!input_stream_reader_wrapper_.get())
     return false;
 
   // Since it's possible for this call to alter the InputStream a
@@ -281,7 +281,7 @@ bool AndroidStreamReaderURLRequestJob::GetCharset(std::string* charset) {
   JNIEnv* env = AttachCurrentThread();
   DCHECK(env);
 
-  if (!input_stream_reader_wrapper_)
+  if (!input_stream_reader_wrapper_.get())
     return false;
 
   // Since it's possible for this call to alter the InputStream a

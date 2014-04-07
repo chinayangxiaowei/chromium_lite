@@ -8,15 +8,17 @@
 #include <string>
 #include <vector>
 
-#include "base/string_number_conversions.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/string_split.h"
 #include "gpu/command_buffer/common/gles2_cmd_format.h"
 #include "gpu/command_buffer/common/gles2_cmd_utils.h"
 #include "gpu/command_buffer/service/cmd_buffer_engine.h"
 #include "gpu/command_buffer/service/context_group.h"
 #include "gpu/command_buffer/service/gles2_cmd_decoder_mock.h"
+#include "gpu/command_buffer/service/logger.h"
 #include "gpu/command_buffer/service/program_manager.h"
-#include "gpu/command_buffer/service/vertex_attrib_manager.h"
 #include "gpu/command_buffer/service/test_helper.h"
+#include "gpu/command_buffer/service/vertex_attrib_manager.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gl/gl_implementation.h"
 #include "ui/gl/gl_mock.h"
@@ -89,11 +91,23 @@ void GLES2DecoderTestBase::InitDecoder(
   Framebuffer::ClearFramebufferCompleteComboMap();
   gl_.reset(new StrictMock<MockGLInterface>());
   ::gfx::GLInterface::SetGLInterface(gl_.get());
+
+  // Only create stream texture manager if extension is requested.
+  std::vector<std::string> list;
+  base::SplitString(std::string(extensions), ' ', &list);
+  if (std::find(list.begin(), list.end(),
+                "GL_CHROMIUM_stream_texture") != list.end())
+      stream_texture_manager_.reset(new StrictMock<MockStreamTextureManager>);
   group_ = scoped_refptr<ContextGroup>(new ContextGroup(
       NULL,
       NULL,
       memory_tracker_,
+      stream_texture_manager_.get(),
       bind_generates_resource));
+  // These two workarounds are always turned on.
+  group_->feature_info(
+      )->workarounds_.set_texture_filter_before_generating_mipmap = true;
+  group_->feature_info()->workarounds_.clear_alpha_in_readpixels = true;
 
   InSequence sequence;
 
@@ -170,6 +184,9 @@ void GLES2DecoderTestBase::InitDecoder(
       .Times(1)
       .RetiresOnSaturation();
 
+  EXPECT_CALL(*gl_, BindFramebufferEXT(GL_FRAMEBUFFER, 0))
+      .Times(1)
+      .RetiresOnSaturation();
   EXPECT_CALL(*gl_, GetIntegerv(GL_ALPHA_BITS, _))
        .WillOnce(SetArgumentPointee<1>(has_alpha ? 8 : 0))
        .RetiresOnSaturation();
@@ -179,11 +196,6 @@ void GLES2DecoderTestBase::InitDecoder(
   EXPECT_CALL(*gl_, GetIntegerv(GL_STENCIL_BITS, _))
        .WillOnce(SetArgumentPointee<1>(has_stencil ? 8 : 0))
        .RetiresOnSaturation();
-
-  EXPECT_CALL(*gl_, Clear(
-      GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT))
-      .Times(1)
-      .RetiresOnSaturation();
 
   EXPECT_CALL(*gl_, Enable(GL_VERTEX_PROGRAM_POINT_SIZE))
       .Times(1)
@@ -208,15 +220,6 @@ void GLES2DecoderTestBase::InitDecoder(
   EXPECT_CALL(*gl_, ActiveTexture(GL_TEXTURE0))
       .Times(1)
       .RetiresOnSaturation();
-  EXPECT_CALL(*gl_, Hint(GL_GENERATE_MIPMAP_HINT, GL_DONT_CARE))
-      .Times(1)
-      .RetiresOnSaturation();
-  EXPECT_CALL(*gl_, PixelStorei(GL_PACK_ALIGNMENT, 4))
-      .Times(1)
-      .RetiresOnSaturation();
-  EXPECT_CALL(*gl_, PixelStorei(GL_UNPACK_ALIGNMENT, 4))
-      .Times(1)
-      .RetiresOnSaturation();
 
   EXPECT_CALL(*gl_, BindBuffer(GL_ARRAY_BUFFER, 0))
       .Times(1)
@@ -231,6 +234,15 @@ void GLES2DecoderTestBase::InitDecoder(
       .Times(1)
       .RetiresOnSaturation();
 
+  // TODO(boliu): Remove OS_ANDROID once crbug.com/259023 is fixed and the
+  // workaround has been reverted.
+#if !defined(OS_ANDROID)
+  EXPECT_CALL(*gl_, Clear(
+      GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT))
+      .Times(1)
+      .RetiresOnSaturation();
+#endif
+
   engine_.reset(new StrictMock<MockCommandBufferEngine>());
   gpu::Buffer buffer = engine_->GetSharedMemoryBuffer(kSharedMemoryId);
   shared_memory_offset_ = kSharedMemoryOffset;
@@ -244,7 +256,7 @@ void GLES2DecoderTestBase::InitDecoder(
 
   context_ = new gfx::GLContextStub;
 
-  context_->MakeCurrent(surface_);
+  context_->MakeCurrent(surface_.get());
 
   int32 attributes[] = {
     EGL_ALPHA_SIZE, request_alpha ? 8 : 0,
@@ -254,7 +266,7 @@ void GLES2DecoderTestBase::InitDecoder(
   std::vector<int32> attribs(attributes, attributes + arraysize(attributes));
 
   decoder_.reset(GLES2Decoder::Create(group_.get()));
-  decoder_->set_log_synthesized_gl_errors(false);
+  decoder_->GetLogger()->set_log_synthesized_gl_errors(false);
   decoder_->Initialize(
       surface_, context_, false, surface_->GetSize(), DisallowedFeatures(),
       NULL, attribs);
@@ -1136,6 +1148,40 @@ void GLES2DecoderTestBase::SetupCubemapProgram() {
     };
     static UniformInfo uniforms[] = {
       { kUniform1Name, kUniform1Size, kUniformCubemapType,
+        kUniform1FakeLocation, kUniform1RealLocation,
+        kUniform1DesiredLocation, },
+      { kUniform2Name, kUniform2Size, kUniform2Type,
+        kUniform2FakeLocation, kUniform2RealLocation,
+        kUniform2DesiredLocation, },
+      { kUniform3Name, kUniform3Size, kUniform3Type,
+        kUniform3FakeLocation, kUniform3RealLocation,
+        kUniform3DesiredLocation, },
+    };
+    SetupShader(attribs, arraysize(attribs), uniforms, arraysize(uniforms),
+                client_program_id_, kServiceProgramId,
+                client_vertex_shader_id_, kServiceVertexShaderId,
+                client_fragment_shader_id_, kServiceFragmentShaderId);
+  }
+
+  {
+    EXPECT_CALL(*gl_, UseProgram(kServiceProgramId))
+        .Times(1)
+        .RetiresOnSaturation();
+    cmds::UseProgram cmd;
+    cmd.Init(client_program_id_);
+    EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
+  }
+}
+
+void GLES2DecoderTestBase::SetupSamplerExternalProgram() {
+  {
+    static AttribInfo attribs[] = {
+      { kAttrib1Name, kAttrib1Size, kAttrib1Type, kAttrib1Location, },
+      { kAttrib2Name, kAttrib2Size, kAttrib2Type, kAttrib2Location, },
+      { kAttrib3Name, kAttrib3Size, kAttrib3Type, kAttrib3Location, },
+    };
+    static UniformInfo uniforms[] = {
+      { kUniform1Name, kUniform1Size, kUniformSamplerExternalType,
         kUniform1FakeLocation, kUniform1RealLocation,
         kUniform1DesiredLocation, },
       { kUniform2Name, kUniform2Size, kUniform2Type,

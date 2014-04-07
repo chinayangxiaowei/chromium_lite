@@ -80,6 +80,9 @@ class TestRenderWidgetHostView : public RenderWidgetHostViewBase {
   virtual GdkEventButton* GetLastMouseDown() OVERRIDE;
   virtual gfx::NativeView BuildInputMethodsGtkMenu() OVERRIDE;
 #endif  // defined(TOOLKIT_GTK)
+  virtual void OnSwapCompositorFrame(
+      uint32 output_surface_id,
+      scoped_ptr<cc::CompositorFrame> frame) OVERRIDE;
 
   // RenderWidgetHostViewPort implementation.
   virtual void InitAsPopup(RenderWidgetHostView* parent_host_view,
@@ -90,25 +93,29 @@ class TestRenderWidgetHostView : public RenderWidgetHostViewBase {
   virtual void WasHidden() OVERRIDE {}
   virtual void MovePluginWindows(
       const gfx::Vector2d& scroll_offset,
-      const std::vector<webkit::npapi::WebPluginGeometry>& moves) OVERRIDE {}
+      const std::vector<WebPluginGeometry>& moves) OVERRIDE {}
   virtual void Focus() OVERRIDE {}
   virtual void Blur() OVERRIDE {}
   virtual void SetIsLoading(bool is_loading) OVERRIDE {}
   virtual void UpdateCursor(const WebCursor& cursor) OVERRIDE {}
-  virtual void TextInputStateChanged(
-      const ViewHostMsg_TextInputState_Params& params) OVERRIDE {}
+  virtual void TextInputTypeChanged(ui::TextInputType type,
+                                    bool can_compose_inline,
+                                    ui::TextInputMode input_mode) OVERRIDE {}
   virtual void ImeCancelComposition() OVERRIDE {}
+#if defined(OS_MACOSX) || defined(OS_WIN) || defined(USE_AURA)
   virtual void ImeCompositionRangeChanged(
       const ui::Range& range,
       const std::vector<gfx::Rect>& character_bounds) OVERRIDE {}
+#endif
   virtual void DidUpdateBackingStore(
       const gfx::Rect& scroll_rect,
       const gfx::Vector2d& scroll_delta,
-      const std::vector<gfx::Rect>& rects) OVERRIDE {}
-  virtual void RenderViewGone(base::TerminationStatus status,
-                              int error_code) OVERRIDE;
+      const std::vector<gfx::Rect>& rects,
+      const ui::LatencyInfo& latency_info) OVERRIDE {}
+  virtual void RenderProcessGone(base::TerminationStatus status,
+                                 int error_code) OVERRIDE;
   virtual void WillDestroyRenderWidget(RenderWidgetHost* rwh) { }
-  virtual void Destroy() OVERRIDE {}
+  virtual void Destroy() OVERRIDE;
   virtual void SetTooltipText(const string16& tooltip_text) OVERRIDE {}
   virtual void SelectionBoundsChanged(
       const ViewHostMsg_SelectionBounds_Params& params) OVERRIDE {}
@@ -141,14 +148,6 @@ class TestRenderWidgetHostView : public RenderWidgetHostViewBase {
   virtual void ShowDisambiguationPopup(
       const gfx::Rect& target_rect,
       const SkBitmap& zoomed_bitmap) OVERRIDE {}
-  virtual void UpdateFrameInfo(const gfx::Vector2dF& scroll_offset,
-                               float page_scale_factor,
-                               const gfx::Vector2dF& page_scale_factor_limits,
-                               const gfx::SizeF& content_size,
-                               const gfx::SizeF& viewport_size,
-                               const gfx::Vector2dF& controls_offset,
-                               const gfx::Vector2dF& content_offset,
-                               float overdraw_bottom_height) OVERRIDE {}
   virtual void HasTouchEventHandlers(bool need_touch_events) OVERRIDE {}
 #elif defined(OS_WIN) && !defined(USE_AURA)
   virtual void WillWmDestroy() OVERRIDE;
@@ -167,19 +166,25 @@ class TestRenderWidgetHostView : public RenderWidgetHostViewBase {
   virtual void SetClickthroughRegion(SkRegion* region) OVERRIDE;
 #endif
 #if defined(OS_WIN) && defined(USE_AURA)
-  virtual void SetParentNativeViewAccessible(
-      gfx::NativeViewAccessible accessible_parent) OVERRIDE;
+  virtual gfx::NativeViewAccessible AccessibleObjectFromChildId(long child_id)
+      OVERRIDE;
 #endif
   virtual bool LockMouse() OVERRIDE;
   virtual void UnlockMouse() OVERRIDE;
+#if defined(OS_WIN) && defined(USE_AURA)
+  virtual void SetParentNativeViewAccessible(
+      gfx::NativeViewAccessible accessible_parent) OVERRIDE;
+#endif
 
   bool is_showing() const { return is_showing_; }
+  bool did_swap_compositor_frame() const { return did_swap_compositor_frame_; }
 
  protected:
   RenderWidgetHostImpl* rwh_;
 
  private:
   bool is_showing_;
+  bool did_swap_compositor_frame_;
 };
 
 #if defined(COMPILER_MSVC)
@@ -231,6 +236,7 @@ class TestRenderViewHost
                      RenderViewHostDelegate* delegate,
                      RenderWidgetHostDelegate* widget_delegate,
                      int routing_id,
+                     int main_frame_routing_id,
                      bool swapped_out);
   virtual ~TestRenderViewHost();
 
@@ -238,6 +244,7 @@ class TestRenderViewHost
   // is not specified since it is synonymous with the one from
   // RenderViewHostImpl, see below.
   virtual void SendNavigate(int page_id, const GURL& url) OVERRIDE;
+  virtual void SendFailedNavigate(int page_id, const GURL& url) OVERRIDE;
   virtual void SendNavigateWithTransition(int page_id, const GURL& url,
                                           PageTransition transition) OVERRIDE;
   virtual void SendShouldCloseACK(bool proceed) OVERRIDE;
@@ -253,14 +260,13 @@ class TestRenderViewHost
   void SendNavigateWithOriginalRequestURL(
       int page_id, const GURL& url, const GURL& original_request_url);
 
-  // Calls OnNavigate on the RenderViewHost with the given information.
-  // Sets the rest of the parameters in the message to the "typical" values.
-  // This is a helper function for simulating the most common types of loads.
-  void SendNavigateWithParameters(
-      int page_id, const GURL& url, PageTransition transition,
-      const GURL& original_request_url);
+  void SendNavigateWithFile(
+      int page_id, const GURL& url, const base::FilePath& file_path);
 
-  void TestOnStartDragging(const WebDropData& drop_data);
+  void TestOnUpdateStateWithFile(
+      int process_id, const base::FilePath& file_path);
+
+  void TestOnStartDragging(const DropData& drop_data);
 
   // If set, *delete_counter is incremented when this object destructs.
   void set_delete_counter(int* delete_counter) {
@@ -297,6 +303,14 @@ class TestRenderViewHost
   // False by default.
   void set_simulate_fetch_via_proxy(bool proxy);
 
+  // If set, navigations will appear to have cleared the history list in the
+  // RenderView (ViewHostMsg_FrameNavigate_Params::history_list_was_cleared).
+  // False by default.
+  void set_simulate_history_list_was_cleared(bool cleared);
+
+  // The opener route id passed to CreateRenderView().
+  int opener_route_id() const { return opener_route_id_; }
+
   // RenderViewHost overrides --------------------------------------------------
 
   virtual bool CreateRenderView(const string16& frame_name,
@@ -306,6 +320,22 @@ class TestRenderViewHost
 
  private:
   FRIEND_TEST_ALL_PREFIXES(RenderViewHostTest, FilterNavigate);
+
+  void SendNavigateWithTransitionAndResponseCode(int page_id,
+                                                 const GURL& url,
+                                                 PageTransition transition,
+                                                 int response_code);
+
+  // Calls OnNavigate on the RenderViewHost with the given information.
+  // Sets the rest of the parameters in the message to the "typical" values.
+  // This is a helper function for simulating the most common types of loads.
+  void SendNavigateWithParameters(
+      int page_id,
+      const GURL& url,
+      PageTransition transition,
+      const GURL& original_request_url,
+      int response_code,
+      const base::FilePath* file_path_for_history_item);
 
   // Tracks if the caller thinks if it created the RenderView. This is so we can
   // respond to IsRenderViewLive appropriately.
@@ -317,8 +347,14 @@ class TestRenderViewHost
   // See set_simulate_fetch_via_proxy() above.
   bool simulate_fetch_via_proxy_;
 
+  // See set_simulate_history_list_was_cleared() above.
+  bool simulate_history_list_was_cleared_;
+
   // See SetContentsMimeType() above.
   std::string contents_mime_type_;
+
+  // See opener_route_id() above.
+  int opener_route_id_;
 
   DISALLOW_COPY_AND_ASSIGN(TestRenderViewHost);
 };

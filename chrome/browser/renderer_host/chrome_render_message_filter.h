@@ -14,17 +14,15 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/content_settings.h"
 #include "content/public/browser/browser_message_filter.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebCache.h"
+#include "third_party/WebKit/public/web/WebCache.h"
 
 class CookieSettings;
+struct ExtensionHostMsg_APIActionOrEvent_Params;
 struct ExtensionHostMsg_DOMAction_Params;
 struct ExtensionHostMsg_Request_Params;
+struct ExtensionMsg_ExternalConnectionInfo;
 class ExtensionInfoMap;
 class GURL;
-
-namespace nacl {
-struct NaClLaunchParams;
-}
 
 namespace net {
 class HostResolver;
@@ -82,29 +80,21 @@ class ChromeRenderMessageFilter : public content::BrowserMessageFilter {
 
   virtual ~ChromeRenderMessageFilter();
 
-#if !defined(DISABLE_NACL)
-  void OnLaunchNaCl(const nacl::NaClLaunchParams& launch_params,
-                    IPC::Message* reply_msg);
-  void OnGetReadonlyPnaclFd(const std::string& filename,
-                            IPC::Message* reply_msg);
-  void OnNaClCreateTemporaryFile(IPC::Message* reply_msg);
-  void OnNaClErrorStatus(int render_view_id, int error_id);
-#endif
   void OnDnsPrefetch(const std::vector<std::string>& hostnames);
+  void OnPreconnect(const GURL& url);
   void OnResourceTypeStats(const WebKit::WebCache::ResourceTypeStats& stats);
   void OnUpdatedCacheStats(const WebKit::WebCache::UsageStats& stats);
   void OnFPS(int routing_id, float fps);
   void OnV8HeapStats(int v8_memory_allocated, int v8_memory_used);
   void OnOpenChannelToExtension(int routing_id,
-                                const std::string& source_extension_id,
-                                const std::string& target_extension_id,
+                                const ExtensionMsg_ExternalConnectionInfo& info,
                                 const std::string& channel_name, int* port_id);
-  void OpenChannelToExtensionOnUIThread(int source_process_id,
-                                        int source_routing_id,
-                                        int receiver_port_id,
-                                        const std::string& source_extension_id,
-                                        const std::string& target_extension_id,
-                                        const std::string& channel_name);
+  void OpenChannelToExtensionOnUIThread(
+      int source_process_id,
+      int source_routing_id,
+      int receiver_port_id,
+      const ExtensionMsg_ExternalConnectionInfo& info,
+      const std::string& channel_name);
   void OnOpenChannelToNativeApp(int routing_id,
                                 const std::string& source_extension_id,
                                 const std::string& native_app_name,
@@ -152,9 +142,18 @@ class ChromeRenderMessageFilter : public content::BrowserMessageFilter {
   void OnExtensionSuspendAck(const std::string& extension_id);
   void OnExtensionGenerateUniqueID(int* unique_id);
   void OnExtensionResumeRequests(int route_id);
+  void OnAddAPIActionToExtensionActivityLog(
+      const std::string& extension_id,
+      const ExtensionHostMsg_APIActionOrEvent_Params& params);
+  void OnAddBlockedCallToExtensionActivityLog(
+      const std::string& extension_id,
+      const std::string& function_name);
   void OnAddDOMActionToExtensionActivityLog(
       const std::string& extension_id,
       const ExtensionHostMsg_DOMAction_Params& params);
+  void OnAddEventToExtensionActivityLog(
+      const std::string& extension_id,
+      const ExtensionHostMsg_APIActionOrEvent_Params& params);
   void OnAllowDatabase(int render_view_id,
                        const GURL& origin_url,
                        const GURL& top_origin_url,

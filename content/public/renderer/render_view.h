@@ -6,19 +6,15 @@
 #define CONTENT_PUBLIC_RENDERER_RENDER_VIEW_H_
 
 #include "base/basictypes.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "content/common/content_export.h"
+#include "content/public/common/top_controls_state.h"
 #include "ipc/ipc_sender.h"
-#include "skia/ext/refptr.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebNavigationPolicy.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebPageVisibilityState.h"
+#include "third_party/WebKit/public/web/WebNavigationPolicy.h"
+#include "third_party/WebKit/public/web/WebPageVisibilityState.h"
 #include "ui/gfx/native_widget_types.h"
 
-class SkPicture;
-
-namespace webkit_glue {
 struct WebPreferences;
-}
 
 namespace WebKit {
 class WebFrame;
@@ -35,16 +31,13 @@ namespace gfx {
 class Size;
 }
 
-namespace webkit {
-struct WebPluginInfo;
-}
-
 namespace content {
 
 class ContextMenuClient;
 class RenderViewVisitor;
 struct ContextMenuParams;
 struct SSLStatus;
+struct WebPluginInfo;
 
 class CONTENT_EXPORT RenderView : public IPC::Sender {
  public:
@@ -73,12 +66,11 @@ class CONTENT_EXPORT RenderView : public IPC::Sender {
   virtual gfx::Size GetSize() const = 0;
 
   // Gets WebKit related preferences associated with this view.
-  virtual webkit_glue::WebPreferences& GetWebkitPreferences() = 0;
+  virtual WebPreferences& GetWebkitPreferences() = 0;
 
   // Overrides the WebKit related preferences associated with this view. Note
   // that the browser process may update the preferences at any time.
-  virtual void SetWebkitPreferences(
-      const webkit_glue::WebPreferences& preferences) = 0;
+  virtual void SetWebkitPreferences(const WebPreferences& preferences) = 0;
 
   // Returns the associated WebView. May return NULL when the view is closing.
   virtual WebKit::WebView* GetWebView() = 0;
@@ -97,7 +89,7 @@ class CONTENT_EXPORT RenderView : public IPC::Sender {
   // plugin was found.
   virtual WebKit::WebPlugin* CreatePlugin(
       WebKit::WebFrame* frame,
-      const webkit::WebPluginInfo& info,
+      const WebPluginInfo& info,
       const WebKit::WebPluginParams& params) = 0;
 
   // Evaluates a string of JavaScript in a particular frame.
@@ -154,6 +146,11 @@ class CONTENT_EXPORT RenderView : public IPC::Sender {
       const WebKit::WebURLRequest& request,
       WebKit::WebNavigationPolicy policy) = 0;
 
+  // Used by plugins that load data in this RenderView to update the loading
+  // notifications.
+  virtual void DidStartLoading() = 0;
+  virtual void DidStopLoading() = 0;
+
   // Notifies the renderer that a paint is to be generated for the size
   // passed in.
   virtual void Repaint(const gfx::Size& size) = 0;
@@ -167,12 +164,9 @@ class CONTENT_EXPORT RenderView : public IPC::Sender {
   virtual SSLStatus GetSSLStatusOfFrame(WebKit::WebFrame* frame) const = 0;
 
 #if defined(OS_ANDROID)
-  // Returns a SkPicture with the full contents of the current frame as part of
-  // the legacy Android WebView capture picture API. As it involves playing back
-  // all the drawing commands of the current frame it can have an important
-  // performance impact and should not be used for other purposes.
-  // Requires enabling the impl-side painting feature in the compositor.
-  virtual skia::RefPtr<SkPicture> CapturePicture() = 0;
+  virtual void UpdateTopControlsState(TopControlsState constraints,
+                                      TopControlsState current,
+                                      bool animate) = 0;
 #endif
 
  protected:

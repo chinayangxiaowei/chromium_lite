@@ -9,22 +9,21 @@
 
 #include "base/memory/scoped_ptr.h"
 #include "base/observer_list.h"
+#include "base/values.h"
 #include "chrome/browser/sync_file_system/file_status_observer.h"
 #include "chrome/browser/sync_file_system/mock_local_change_processor.h"
 #include "chrome/browser/sync_file_system/remote_change_processor.h"
 #include "chrome/browser/sync_file_system/remote_file_sync_service.h"
-#include "googleurl/src/gurl.h"
+#include "chrome/browser/sync_file_system/sync_callbacks.h"
+#include "chrome/browser/sync_file_system/sync_direction.h"
+#include "chrome/browser/sync_file_system/sync_file_metadata.h"
 #include "testing/gmock/include/gmock/gmock.h"
-#include "webkit/fileapi/syncable/sync_callbacks.h"
-#include "webkit/fileapi/syncable/sync_direction.h"
-#include "webkit/fileapi/syncable/sync_file_metadata.h"
+#include "url/gurl.h"
 
 namespace sync_file_system {
 
 class MockRemoteFileSyncService : public RemoteFileSyncService {
  public:
-  static const char kServiceName[];
-
   MockRemoteFileSyncService();
   virtual ~MockRemoteFileSyncService();
 
@@ -49,17 +48,17 @@ class MockRemoteFileSyncService : public RemoteFileSyncService {
                void(RemoteChangeProcessor* processor));
   MOCK_METHOD0(GetLocalChangeProcessor, LocalChangeProcessor*());
   MOCK_METHOD1(IsConflicting, bool(const fileapi::FileSystemURL& url));
-  MOCK_METHOD2(GetRemoteFileMetadata,
-               void(const fileapi::FileSystemURL& url,
-                    const SyncFileMetadataCallback& callback));
   MOCK_CONST_METHOD0(GetCurrentState,
                      RemoteServiceState());
-  MOCK_CONST_METHOD0(GetServiceName, const char*());
+  MOCK_METHOD1(GetOriginStatusMap,
+               void(RemoteFileSyncService::OriginStatusMap* status_map));
   MOCK_METHOD1(SetSyncEnabled, void(bool));
   MOCK_METHOD1(SetConflictResolutionPolicy,
                SyncStatusCode(ConflictResolutionPolicy));
   MOCK_CONST_METHOD0(GetConflictResolutionPolicy,
                      ConflictResolutionPolicy());
+
+  virtual scoped_ptr<base::ListValue> DumpFiles(const GURL& origin) OVERRIDE;
 
   // Send notifications to the observers.
   // Can be used in the mock implementation.
@@ -73,24 +72,7 @@ class MockRemoteFileSyncService : public RemoteFileSyncService {
       SyncAction action_taken,
       SyncDirection direction);
 
-  // Sets conflict file information.  The information is returned by
-  // the default action for GetRemoteConflictFileInfo.
-  void add_conflict_file(const fileapi::FileSystemURL& url,
-                         const SyncFileMetadata& metadata) {
-    conflict_file_urls_[url.origin()].insert(url);
-    conflict_file_metadata_[url] = metadata;
-  }
-
-  void reset_conflict_files() {
-    conflict_file_urls_.clear();
-    conflict_file_metadata_.clear();
-  }
-
  private:
-  typedef std::map<GURL, fileapi::FileSystemURLSet> OriginToURLSetMap;
-  typedef std::map<fileapi::FileSystemURL, SyncFileMetadata,
-                   fileapi::FileSystemURL::Comparator> FileMetadataMap;
-
   void AddServiceObserverStub(Observer* observer);
   void AddFileStatusObserverStub(FileStatusObserver* observer);
   void RegisterOriginForTrackingChangesStub(
@@ -100,15 +82,9 @@ class MockRemoteFileSyncService : public RemoteFileSyncService {
   void DeleteOriginDirectoryStub(
       const GURL& origin, const SyncStatusCallback& callback);
   void ProcessRemoteChangeStub(const SyncFileCallback& callback);
-  void GetRemoteFileMetadataStub(
-      const fileapi::FileSystemURL& url,
-      const SyncFileMetadataCallback& callback);
   SyncStatusCode SetConflictResolutionPolicyStub(
       ConflictResolutionPolicy policy);
   ConflictResolutionPolicy GetConflictResolutionPolicyStub() const;
-
-  OriginToURLSetMap conflict_file_urls_;
-  FileMetadataMap conflict_file_metadata_;
 
   // For default implementation.
   ::testing::NiceMock<MockLocalChangeProcessor> mock_local_change_processor_;

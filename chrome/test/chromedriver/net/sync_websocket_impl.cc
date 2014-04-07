@@ -9,9 +9,9 @@
 #include "base/location.h"
 #include "base/single_thread_task_runner.h"
 #include "base/synchronization/waitable_event.h"
-#include "googleurl/src/gurl.h"
 #include "net/base/net_errors.h"
 #include "net/url_request/url_request_context_getter.h"
+#include "url/gurl.h"
 
 SyncWebSocketImpl::SyncWebSocketImpl(
     net::URLRequestContextGetter* context_getter)
@@ -31,8 +31,9 @@ bool SyncWebSocketImpl::Send(const std::string& message) {
   return core_->Send(message);
 }
 
-bool SyncWebSocketImpl::ReceiveNextMessage(std::string* message) {
-  return core_->ReceiveNextMessage(message);
+SyncWebSocket::StatusCode SyncWebSocketImpl::ReceiveNextMessage(
+    std::string* message, const base::TimeDelta& timeout) {
+  return core_->ReceiveNextMessage(message, timeout);
 }
 
 bool SyncWebSocketImpl::HasNextMessage() {
@@ -71,14 +72,23 @@ bool SyncWebSocketImpl::Core::Send(const std::string& message) {
   return success;
 }
 
-bool SyncWebSocketImpl::Core::ReceiveNextMessage(std::string* message) {
+SyncWebSocket::StatusCode
+SyncWebSocketImpl::Core::ReceiveNextMessage(
+    std::string* message,
+    const base::TimeDelta& timeout) {
   base::AutoLock lock(lock_);
-  while (received_queue_.empty() && is_connected_) on_update_event_.Wait();
+  base::TimeTicks deadline = base::TimeTicks::Now() + timeout;
+  while (received_queue_.empty() && is_connected_) {
+    base::TimeDelta delta = deadline - base::TimeTicks::Now();
+    if (delta <= base::TimeDelta())
+      return SyncWebSocket::kTimeout;
+    on_update_event_.TimedWait(delta);
+  }
   if (!is_connected_)
-    return false;
+    return SyncWebSocket::kDisconnected;
   *message = received_queue_.front();
   received_queue_.pop_front();
-  return true;
+  return SyncWebSocket::kOk;
 }
 
 bool SyncWebSocketImpl::Core::HasNextMessage() {
@@ -108,7 +118,7 @@ void SyncWebSocketImpl::Core::ConnectOnIO(
     base::AutoLock lock(lock_);
     received_queue_.clear();
   }
-  socket_.reset(new WebSocket(context_getter_, url, this));
+  socket_.reset(new WebSocket(url, this));
   socket_->Connect(base::Bind(
       &SyncWebSocketImpl::Core::OnConnectCompletedOnIO,
       this, success, event));

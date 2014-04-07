@@ -6,14 +6,15 @@
 
 #include "base/bind.h"
 #include "base/file_util.h"
+#include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/json/json_file_value_serializer.h"
 #include "base/json/json_string_value_serializer.h"
 #include "base/logging.h"
 #include "base/metrics/histogram.h"
 #include "base/path_service.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/common/chrome_paths.h"
 #include "content/public/browser/browser_thread.h"
 
@@ -30,15 +31,15 @@ std::set<base::FilePath> GetPrefsCandidateFilesFromFolder(
 
   std::set<base::FilePath> external_extension_paths;
 
-  if (!file_util::PathExists(external_extension_search_path)) {
+  if (!base::PathExists(external_extension_search_path)) {
     // Does not have to exist.
     return external_extension_paths;
   }
 
-  file_util::FileEnumerator json_files(
+  base::FileEnumerator json_files(
       external_extension_search_path,
       false,  // Recursive.
-      file_util::FileEnumerator::FILES);
+      base::FileEnumerator::FILES);
 #if defined(OS_WIN)
   base::FilePath::StringType extension = UTF8ToWide(std::string(".json"));
 #elif defined(OS_POSIX)
@@ -111,29 +112,27 @@ void ExternalPrefLoader::StartLoading() {
 void ExternalPrefLoader::LoadOnFileThread() {
   CHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
 
+  scoped_ptr<DictionaryValue> prefs(new DictionaryValue);
+
   // TODO(skerner): Some values of base_path_id_ will cause
   // PathService::Get() to return false, because the path does
   // not exist.  Find and fix the build/install scripts so that
   // this can become a CHECK().  Known examples include chrome
   // OS developer builds and linux install packages.
   // Tracked as crbug.com/70402 .
-  if (!PathService::Get(base_path_id_, &base_path_))
-    return;
+  if (PathService::Get(base_path_id_, &base_path_)) {
+    ReadExternalExtensionPrefFile(prefs.get());
 
-  scoped_ptr<DictionaryValue> prefs(new DictionaryValue);
+    if (!prefs->empty())
+      LOG(WARNING) << "You are using an old-style extension deployment method "
+                      "(external_extensions.json), which will soon be "
+                      "deprecated. (see http://code.google.com/chrome/"
+                      "extensions/external_extensions.html )";
 
-  ReadExternalExtensionPrefFile(prefs.get());
-  if (!prefs->empty())
-    LOG(WARNING) << "You are using an old-style extension deployment method "
-                    "(external_extensions.json), which will soon be "
-                    "deprecated. (see http://code.google.com/chrome/"
-                    "extensions/external_extensions.html )";
-
-  ReadStandaloneExtensionPrefFiles(prefs.get());
+    ReadStandaloneExtensionPrefFiles(prefs.get());
+  }
 
   prefs_.swap(prefs);
-  if (!prefs_.get())
-    prefs_.reset(new DictionaryValue());
 
   if (base_path_id_ == chrome::DIR_EXTERNAL_EXTENSIONS) {
     UMA_HISTOGRAM_COUNTS_100("Extensions.ExternalJsonCount",
@@ -157,7 +156,7 @@ void ExternalPrefLoader::ReadExternalExtensionPrefFile(DictionaryValue* prefs) {
 
   base::FilePath json_file = base_path_.Append(kExternalExtensionJson);
 
-  if (!file_util::PathExists(json_file)) {
+  if (!base::PathExists(json_file)) {
     // This is not an error.  The file does not exist by default.
     return;
   }
@@ -184,7 +183,7 @@ void ExternalPrefLoader::ReadExternalExtensionPrefFile(DictionaryValue* prefs) {
   JSONFileValueSerializer serializer(json_file);
   scoped_ptr<DictionaryValue> ext_prefs(
       ExtractExtensionPrefs(&serializer, json_file));
-  if (ext_prefs.get())
+  if (ext_prefs)
     prefs->MergeDictionary(ext_prefs.get());
 }
 
@@ -222,7 +221,7 @@ void ExternalPrefLoader::ReadStandaloneExtensionPrefFiles(
     JSONFileValueSerializer serializer(extension_candidate_path);
     scoped_ptr<DictionaryValue> ext_prefs(
         ExtractExtensionPrefs(&serializer, extension_candidate_path));
-    if (ext_prefs.get()) {
+    if (ext_prefs) {
       DVLOG(1) << "Adding extension with id: " << id;
       prefs->Set(id, ext_prefs.release());
     }

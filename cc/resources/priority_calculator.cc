@@ -4,6 +4,8 @@
 
 #include "cc/resources/priority_calculator.h"
 
+#include <algorithm>
+
 #include "ui/gfx/rect.h"
 
 namespace cc {
@@ -60,9 +62,8 @@ int PriorityCalculator::RenderSurfacePriority() {
 
 // static
 int PriorityCalculator::LingeringPriority(int previous_priority) {
-  // FIXME: We should remove this once we have priorities for all
-  //        textures (we can't currently calculate distances for
-  //        off-screen textures).
+  // TODO(reveman): We should remove this once we have priorities for all
+  // textures (we can't currently calculate distances for off-screen textures).
   return std::min(kLingeringLimitPriority,
                   std::max(kLingeringBasePriority, previous_priority + 1));
 }

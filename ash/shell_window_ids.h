@@ -39,16 +39,13 @@ const int kShellWindowId_DesktopBackgroundContainer = 4;
 // TODO(sky): rename kShellWindowId_DefaultContainer.
 
 // The container for standard top-level windows.
-// WARNING: the only children of kShellWindowId_DefaultContainer are
-// kShellWindowId_WorkspaceContainer.
 const int kShellWindowId_DefaultContainer = 5;
 
-// Used by Worskpace2 for each workspace. Contains standard top-level windows.
-// WARNING: there may be more than one container with this id.
-const int kShellWindowId_WorkspaceContainer = 6;
-
 // The container for top-level windows with the 'always-on-top' flag set.
-const int kShellWindowId_AlwaysOnTopContainer = 7;
+const int kShellWindowId_AlwaysOnTopContainer = 6;
+
+// The container for windows docked to either side of the desktop.
+const int kShellWindowId_DockedContainer = 7;
 
 // The container for panel windows.
 const int kShellWindowId_PanelContainer = 8;

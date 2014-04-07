@@ -8,18 +8,23 @@
 #include <string>
 
 #include "base/gtest_prod_util.h"
-#include "chrome/browser/signin/signin_tracker.h"
-#include "chrome/browser/ui/webui/sync_promo/sync_promo_ui.h"
+#include "base/memory/weak_ptr.h"
+#include "chrome/browser/signin/signin_promo.h"
+#include "chrome/browser/sync/profile_sync_service_observer.h"
+#include "chrome/browser/ui/sync/one_click_signin_sync_starter.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 
+class Browser;
 class GURL;
 class ProfileIOData;
 
 namespace content {
 class WebContents;
+struct FrameNavigateParams;
+struct LoadCommittedDetails;
 struct PasswordForm;
 }
 
@@ -35,7 +40,6 @@ class URLRequest;
 class OneClickSigninHelper
     : public content::WebContentsObserver,
       public content::WebContentsUserData<OneClickSigninHelper>,
-      public SigninTracker::Observer,
       public ProfileSyncServiceObserver {
  public:
   // Represents user's decision about sign in process.
@@ -48,7 +52,7 @@ class OneClickSigninHelper
     AUTO_ACCEPT_ACCEPTED,
 
     // User has explicitly accepted to sign in, but wants to configure sync
-    // settings before turing it on.
+    // settings before turning it on.
     AUTO_ACCEPT_CONFIGURE,
 
     // User has explicitly rejected to sign in.  Furthermore, the user does
@@ -102,9 +106,6 @@ class OneClickSigninHelper
   static Offer CanOfferOnIOThread(net::URLRequest* request,
                                   ProfileIOData* io_data);
 
-  // Initialize a finch experiment for the infobar.
-  static void InitializeFieldTrial();
-
   // Looks for the Google-Accounts-SignIn response header, and if found,
   // tries to display an infobar in the tab contents identified by the
   // child/route id.
@@ -113,8 +114,15 @@ class OneClickSigninHelper
                                     int child_id,
                                     int route_id);
 
+  // Remove the item currently at the top of the history list if it's
+  // the Gaia redirect URL. Due to limitations of the NavigationController
+  // this cannot be done until a new page becomes "current".
+  static void RemoveSigninRedirectURLHistoryItem(
+      content::WebContents* web_contents);
+
+  static void LogConfirmHistogramValue(int action);
+
  private:
-  explicit OneClickSigninHelper(content::WebContents* web_contents);
   friend class content::WebContentsUserData<OneClickSigninHelper>;
   friend class OneClickSigninHelperTest;
   FRIEND_TEST_ALL_PREFIXES(OneClickSigninHelperTest,
@@ -123,6 +131,10 @@ class OneClickSigninHelper
                            SigninFromWebstoreWithConfigSyncfirst);
   FRIEND_TEST_ALL_PREFIXES(OneClickSigninHelperTest,
                            ShowSigninBubbleAfterSigninComplete);
+  FRIEND_TEST_ALL_PREFIXES(OneClickSigninHelperTest, SigninCancelled);
+  FRIEND_TEST_ALL_PREFIXES(OneClickSigninHelperTest, SigninFailed);
+  FRIEND_TEST_ALL_PREFIXES(OneClickSigninHelperTest,
+                           CleanTransientStateOnNavigate);
   FRIEND_TEST_ALL_PREFIXES(OneClickSigninHelperIOTest, CanOfferOnIOThread);
   FRIEND_TEST_ALL_PREFIXES(OneClickSigninHelperIOTest,
                            CanOfferOnIOThreadIncognito);
@@ -149,6 +161,13 @@ class OneClickSigninHelper
   FRIEND_TEST_ALL_PREFIXES(OneClickSigninHelperIOTest,
                            CanOfferOnIOThreadDisabledByPolicy);
 
+  // Maximum number of navigations away from the set of valid Gaia URLs before
+  // clearing the internal state of the helper.  This is necessary to support
+  // SAML-based accounts, but causes bug crbug.com/181163.
+  static const int kMaxNavigationsSince;
+
+  explicit OneClickSigninHelper(content::WebContents* web_contents);
+
   // Returns true if the one-click signin feature can be offered at this time.
   // It can be offered if the io_data is not in an incognito window and if the
   // origin of |url| is a valid Gaia sign in origin.  This function is meant
@@ -172,17 +191,22 @@ class OneClickSigninHelper
   static void ShowInfoBarUIThread(const std::string& session_index,
                                   const std::string& email,
                                   AutoAccept auto_accept,
-                                  SyncPromoUI::Source source,
+                                  signin::Source source,
                                   const GURL& continue_url,
                                   int child_id,
                                   int route_id);
 
-  void RedirectToNtpOrAppsPage(bool show_bubble);
   void RedirectToSignin();
-  void RedirectOnSigninComplete();
+  void ShowSigninErrorBubble(Browser* browser, const std::string& error);
 
   // Clear all data member of the helper, except for the error.
   void CleanTransientState();
+
+  // Unitests that use a TestingProfile should call this.
+  // Otherwise, clearing the pending e-mail crashes because the code expects
+  // a real ResourceContext rather than the MockResourceContext a
+  // TestingProfile provides.
+  void SetDoNotClearPendingEmailForTesting();
 
   // Grab Gaia password if available.
   bool OnFormSubmitted(const content::PasswordForm& form);
@@ -192,20 +216,25 @@ class OneClickSigninHelper
   virtual void NavigateToPendingEntry(
       const GURL& url,
       content::NavigationController::ReloadType reload_type) OVERRIDE;
+  virtual void DidNavigateMainFrame(
+      const content::LoadCommittedDetails& details,
+      const content::FrameNavigateParams& params) OVERRIDE;
   virtual void DidStopLoading(
       content::RenderViewHost* render_view_host) OVERRIDE;
-
-  // SigninTracker::Observer override.
-  virtual void GaiaCredentialsValid() OVERRIDE;
-  virtual void SigninFailed(const GoogleServiceAuthError& error) OVERRIDE;
-  virtual void SigninSuccess() OVERRIDE;
 
   // ProfileSyncServiceObserver.
   virtual void OnStateChanged() OVERRIDE;
 
+  OneClickSigninSyncStarter::Callback CreateSyncStarterCallback();
+
+  // Callback invoked when OneClickSigninSyncStarter completes sync setup.
+  void SyncSetupCompletedCallback(
+      OneClickSigninSyncStarter::SyncSetupResult result);
+
   // Tracks if we are in the process of showing the signin or one click
   // interstitial page. It's set to true the first time we load one of those
   // pages and set to false when transient state is cleaned.
+  // Note: This should only be used for logging purposes.
   bool showing_signin_;
 
   // Information about the account that has just logged in.
@@ -213,15 +242,30 @@ class OneClickSigninHelper
   std::string email_;
   std::string password_;
   AutoAccept auto_accept_;
-  SyncPromoUI::Source source_;
+  signin::Source source_;
   bool switched_to_advanced_;
-  // When switching to advanced settings, we want to track the original source.
-  SyncPromoUI::Source original_source_;
   GURL continue_url_;
-  // Redirect URL after sync setup is complete.
-  GURL redirect_url_;
+  // The orignal continue URL after sync setup is complete.
+  GURL original_continue_url_;
   std::string error_message_;
-  scoped_ptr<SigninTracker> signin_tracker_;
+
+  // Number of navigations since starting a sign in that is outside the
+  // the set of trusted Gaia URLs.  Sign in attempts that include visits to
+  // one more untrusted will cause a modal dialog to appear asking the user
+  // to confirm, similar to the interstitial flow.
+  int untrusted_navigations_since_signin_visit_;
+
+  // Whether a Gaia URL during the sign in process was not handled by the
+  // dedicated sign in process (e.g. SAML login, which redirects to a
+  // non-google-controlled domain).
+  // This is set to true if at least one such URL is detected.
+  bool untrusted_confirmation_required_;
+
+  // Allows unittests to avoid accessing the ResourceContext for clearing a
+  // pending e-mail.
+  bool do_not_clear_pending_email_;
+
+  base::WeakPtrFactory<OneClickSigninHelper> weak_pointer_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(OneClickSigninHelper);
 };

@@ -8,22 +8,30 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test_utils.h"
-#include "googleurl/src/gurl.h"
+#include "extensions/common/switches.h"
 #include "net/dns/mock_host_resolver.h"
+#include "url/gurl.h"
 
 class ExtensionIconSourceTest : public ExtensionApiTest {
  protected:
   virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
     ExtensionApiTest::SetUpCommandLine(command_line);
-    command_line->AppendSwitch(switches::kAllowLegacyExtensionManifests);
+    command_line->AppendSwitch(
+        extensions::switches::kAllowLegacyExtensionManifests);
   }
 };
 
-IN_PROC_BROWSER_TEST_F(ExtensionIconSourceTest, IconsLoaded) {
+// Times out on Mac and Win. http://crbug.com/238705
+#if defined(OS_WIN) || defined(OS_MACOSX)
+#define MAYBE_IconsLoaded DISABLED_IconsLoaded
+#else
+#define MAYBE_IconsLoaded IconsLoaded
+#endif
+
+IN_PROC_BROWSER_TEST_F(ExtensionIconSourceTest, MAYBE_IconsLoaded) {
   base::FilePath basedir = test_data_dir_.AppendASCII("icons");
   ASSERT_TRUE(LoadExtension(basedir.AppendASCII("extension_with_permission")));
   ASSERT_TRUE(LoadExtension(basedir.AppendASCII("extension_no_permission")));
@@ -67,7 +75,14 @@ IN_PROC_BROWSER_TEST_F(ExtensionIconSourceTest, InvalidURL) {
   EXPECT_EQ(result, "invalid (96\xC3\x97""96)");
 }
 
-IN_PROC_BROWSER_TEST_F(ExtensionIconSourceTest, IconsLoadedIncognito) {
+// Times out on Mac and Win. http://crbug.com/238705
+#if defined(OS_WIN) || defined(OS_MACOSX)
+#define MAYBE_IconsLoadedIncognito DISABLED_IconsLoadedIncognito
+#else
+#define MAYBE_IconsLoadedIncognito IconsLoadedIncognito
+#endif
+
+IN_PROC_BROWSER_TEST_F(ExtensionIconSourceTest, MAYBE_IconsLoadedIncognito) {
   base::FilePath basedir = test_data_dir_.AppendASCII("icons");
   ASSERT_TRUE(LoadExtensionIncognito(
       basedir.AppendASCII("extension_with_permission")));

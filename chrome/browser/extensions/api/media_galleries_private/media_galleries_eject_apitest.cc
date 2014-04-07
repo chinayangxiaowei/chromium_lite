@@ -5,14 +5,14 @@
 // MediaGalleriesPrivate eject API browser tests.
 
 #include "base/files/file_path.h"
-#include "base/stringprintf.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/extensions/extension_process_manager.h"
 #include "chrome/browser/extensions/extension_system.h"
 #include "chrome/browser/extensions/extension_test_message_listener.h"
 #include "chrome/browser/media_galleries/media_galleries_test_util.h"
-#include "chrome/browser/storage_monitor/media_storage_util.h"
+#include "chrome/browser/storage_monitor/storage_info.h"
 #include "chrome/browser/storage_monitor/storage_monitor.h"
 #include "chrome/browser/storage_monitor/test_storage_monitor.h"
 #include "chrome/common/chrome_switches.h"
@@ -53,7 +53,9 @@ base::FilePath::CharType kDevicePath[] = FILE_PATH_LITERAL("/qux");
 
 class MediaGalleriesPrivateEjectApiTest : public ExtensionApiTest {
  public:
-  MediaGalleriesPrivateEjectApiTest() {}
+  MediaGalleriesPrivateEjectApiTest()
+      : device_id_(GetDeviceId()),
+        monitor_(NULL) {}
   virtual ~MediaGalleriesPrivateEjectApiTest() {}
 
  protected:
@@ -62,6 +64,11 @@ class MediaGalleriesPrivateEjectApiTest : public ExtensionApiTest {
     ExtensionApiTest::SetUpCommandLine(command_line);
     command_line->AppendSwitchASCII(switches::kWhitelistedExtensionID,
                                     kTestExtensionId);
+  }
+
+  virtual void SetUpOnMainThread() OVERRIDE {
+    monitor_ = chrome::test::TestStorageMonitor::CreateForBrowserTests();
+    ExtensionApiTest::SetUpOnMainThread();
   }
 
   content::RenderViewHost* GetHost() {
@@ -81,21 +88,29 @@ class MediaGalleriesPrivateEjectApiTest : public ExtensionApiTest {
   }
 
   void Attach() {
-    std::string device_id = chrome::MediaStorageUtil::MakeDeviceId(
-        chrome::MediaStorageUtil::REMOVABLE_MASS_STORAGE_WITH_DCIM, kDeviceId);
-    chrome::StorageMonitor::GetInstance()->receiver()->
-        ProcessAttach(chrome::StorageInfo(device_id, ASCIIToUTF16(kDeviceName),
-                                          kDevicePath));
+    DCHECK(chrome::StorageMonitor::GetInstance()->IsInitialized());
+    chrome::StorageInfo info(device_id_, ASCIIToUTF16(kDeviceName), kDevicePath,
+                             string16(), string16(), string16(), 0);
+    chrome::StorageMonitor::GetInstance()->receiver()->ProcessAttach(info);
     content::RunAllPendingInMessageLoop();
   }
 
   void Detach() {
-    std::string device_id = chrome::MediaStorageUtil::MakeDeviceId(
-        chrome::MediaStorageUtil::REMOVABLE_MASS_STORAGE_WITH_DCIM, kDeviceId);
-    chrome::StorageMonitor::GetInstance()->receiver()->
-        ProcessDetach(device_id);
+    DCHECK(chrome::StorageMonitor::GetInstance()->IsInitialized());
+    chrome::StorageMonitor::GetInstance()->receiver()->ProcessDetach(
+        device_id_);
     content::RunAllPendingInMessageLoop();
   }
+
+  static std::string GetDeviceId() {
+    return chrome::StorageInfo::MakeDeviceId(
+        chrome::StorageInfo::REMOVABLE_MASS_STORAGE_WITH_DCIM, kDeviceId);
+  }
+
+ protected:
+  const std::string device_id_;
+
+  chrome::test::TestStorageMonitor* monitor_;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(MediaGalleriesPrivateEjectApiTest);
@@ -107,9 +122,6 @@ class MediaGalleriesPrivateEjectApiTest : public ExtensionApiTest {
 ///////////////////////////////////////////////////////////////////////////////
 
 IN_PROC_BROWSER_TEST_F(MediaGalleriesPrivateEjectApiTest, EjectTest) {
-  scoped_ptr<chrome::test::TestStorageMonitor> monitor(
-      chrome::test::TestStorageMonitor::CreateForBrowserTests());
-
   content::RenderViewHost* host = GetHost();
   ExecuteCmdAndCheckReply(host, kAddAttachListenerCmd, kAddAttachListenerOk);
 
@@ -122,18 +134,13 @@ IN_PROC_BROWSER_TEST_F(MediaGalleriesPrivateEjectApiTest, EjectTest) {
   EXPECT_TRUE(attach_finished_listener.WaitUntilSatisfied());
 
   ExecuteCmdAndCheckReply(host, kEjectTestCmd, kEjectListenerOk);
-  std::string device_id = chrome::MediaStorageUtil::MakeDeviceId(
-      chrome::MediaStorageUtil::REMOVABLE_MASS_STORAGE_WITH_DCIM, kDeviceId);
-  EXPECT_EQ(device_id, monitor->ejected_device());
+  EXPECT_EQ(device_id_, monitor_->ejected_device());
 
   Detach();
 }
 
 IN_PROC_BROWSER_TEST_F(MediaGalleriesPrivateEjectApiTest, EjectBadDeviceTest) {
-  scoped_ptr<chrome::test::TestStorageMonitor> monitor(
-      chrome::test::TestStorageMonitor::CreateForBrowserTests());
-
   ExecuteCmdAndCheckReply(GetHost(), kEjectFailTestCmd, kEjectFailListenerOk);
 
-  EXPECT_EQ("", monitor->ejected_device());
+  EXPECT_EQ("", monitor_->ejected_device());
 }

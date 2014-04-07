@@ -7,275 +7,520 @@
 #include <set>
 
 #include "base/bind.h"
+#include "base/i18n/rtl.h"
+#include "base/logging.h"
 #include "base/memory/weak_ptr.h"
-#include "base/timer.h"
+#include "base/run_loop.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
+#include "ui/base/accessibility/accessibility_types.h"
+#include "ui/base/animation/animation_delegate.h"
+#include "ui/base/animation/slide_animation.h"
 #include "ui/gfx/screen.h"
 #include "ui/message_center/message_center.h"
-#include "ui/message_center/message_center_constants.h"
+#include "ui/message_center/message_center_style.h"
 #include "ui/message_center/notification.h"
 #include "ui/message_center/notification_list.h"
 #include "ui/message_center/views/notification_view.h"
+#include "ui/message_center/views/toast_contents_view.h"
 #include "ui/views/background.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/view.h"
+#include "ui/views/views_delegate.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
 
 namespace message_center {
+namespace {
 
-class ToastContentsView : public views::WidgetDelegateView {
- public:
-  ToastContentsView(const Notification* notification,
-                    base::WeakPtr<MessagePopupCollection> collection)
-      : collection_(collection) {
-    DCHECK(collection_);
+// Timeout between the last user-initiated close of the toast and the moment
+// when normal layout/update of the toast stack continues. If the last toast was
+// just closed, the timeout is shorter.
+const int kMouseExitedDeferTimeoutMs = 200;
 
-    set_notify_enter_exit_on_child(true);
-    // Sets the transparent background. Then, when the message view is slid out,
-    // the whole toast seems to slide although the actual bound of the widget
-    // remains. This is hacky but easier to keep the consistency.
-    set_background(views::Background::CreateSolidBackground(0, 0, 0, 0));
-
-    int seconds = kAutocloseDefaultDelaySeconds;
-    if (notification->priority() > DEFAULT_PRIORITY)
-      seconds = kAutocloseHighPriorityDelaySeconds;
-    delay_ = base::TimeDelta::FromSeconds(seconds);
-  }
-
-  views::Widget* CreateWidget(gfx::NativeView context) {
-    views::Widget::InitParams params(
-        views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
-    params.keep_on_top = true;
-    if (context)
-      params.context = context;
-    else
-      params.top_level = true;
-    params.transparent = true;
-    params.delegate = this;
-    views::Widget* widget = new views::Widget();
-    widget->set_focus_on_creation(false);
-    widget->Init(params);
-    return widget;
-  }
-
-  void SetContents(MessageView* view) {
-    RemoveAllChildViews(true);
-    AddChildView(view);
-    views::Widget* widget = GetWidget();
-    if (widget) {
-      gfx::Rect bounds = widget->GetWindowBoundsInScreen();
-      bounds.set_width(kNotificationWidth);
-      bounds.set_height(view->GetHeightForWidth(kNotificationWidth));
-      widget->SetBounds(bounds);
-    }
-    Layout();
-  }
-
-  void SuspendTimer() {
-    timer_.Stop();
-  }
-
-  void RestartTimer() {
-    delay_ -= base::Time::Now() - start_time_;
-    if (delay_ < base::TimeDelta())
-      GetWidget()->Close();
-    else
-      StartTimer();
-  }
-
-  void StartTimer() {
-    start_time_ = base::Time::Now();
-    timer_.Start(FROM_HERE,
-                 delay_,
-                 base::Bind(&views::Widget::Close,
-                            base::Unretained(GetWidget())));
-  }
-
-  // Overridden from views::WidgetDelegate:
-  virtual views::View* GetContentsView() OVERRIDE {
-    return this;
-  }
-
-  virtual void WindowClosing() OVERRIDE {
-    if (timer_.IsRunning())
-      SuspendTimer();
-  }
-
-  virtual bool CanActivate() const OVERRIDE {
-#if defined(OS_WIN) && defined(USE_AURA)
-    return true;
+// The margin between messages (and between the anchor unless
+// first_item_has_no_margin was specified).
+const int kToastMarginY = kMarginBetweenItems;
+#if defined(OS_CHROMEOS)
+const int kToastMarginX = 3;
 #else
-    return false;
+const int kToastMarginX = kMarginBetweenItems;
 #endif
-  }
 
-  // Overridden from views::View:
-  virtual void OnMouseEntered(const ui::MouseEvent& event) OVERRIDE {
-    if (collection_)
-      collection_->OnMouseEntered();
-  }
 
-  virtual void OnMouseExited(const ui::MouseEvent& event) OVERRIDE {
-    if (collection_)
-      collection_->OnMouseExited();
-  }
+// If there should be no margin for the first item, this value needs to be
+// substracted to flush the message to the shelf (the width of the border +
+// shadow).
+const int kNoToastMarginBorderAndShadowOffset = 2;
 
-  virtual void Layout() OVERRIDE {
-    if (child_count() > 0)
-      child_at(0)->SetBounds(x(), y(), width(), height());
-  }
+}  // namespace.
 
-  virtual gfx::Size GetPreferredSize() OVERRIDE {
-    if (child_count() == 0)
-      return gfx::Size();
-
-    return gfx::Size(kNotificationWidth,
-                     child_at(0)->GetHeightForWidth(kNotificationWidth));
-  }
-
- private:
-  base::TimeDelta delay_;
-  base::Time start_time_;
-  base::OneShotTimer<views::Widget> timer_;
-  base::WeakPtr<MessagePopupCollection> collection_;
-
-  DISALLOW_COPY_AND_ASSIGN(ToastContentsView);
-};
-
-MessagePopupCollection::MessagePopupCollection(gfx::NativeView context,
-                                               MessageCenter* message_center)
-    : context_(context),
-      message_center_(message_center) {
+MessagePopupCollection::MessagePopupCollection(gfx::NativeView parent,
+                                               MessageCenter* message_center,
+                                               MessageCenterTray* tray,
+                                               bool first_item_has_no_margin)
+    : parent_(parent),
+      message_center_(message_center),
+      tray_(tray),
+      defer_counter_(0),
+      latest_toast_entered_(NULL),
+      user_is_closing_toasts_by_clicking_(false),
+      first_item_has_no_margin_(first_item_has_no_margin) {
   DCHECK(message_center_);
-  UpdatePopups();
+  defer_timer_.reset(new base::OneShotTimer<MessagePopupCollection>);
+  message_center_->AddObserver(this);
+  gfx::Screen* screen = NULL;
+  gfx::Display display;
+  if (!parent_) {
+    // On Win+Aura, we don't have a parent since the popups currently show up
+    // on the Windows desktop, not in the Aura/Ash desktop.  This code will
+    // display the popups on the primary display.
+    screen = gfx::Screen::GetNativeScreen();
+    display = screen->GetPrimaryDisplay();
+  } else {
+    screen = gfx::Screen::GetScreenFor(parent_);
+    display = screen->GetDisplayNearestWindow(parent_);
+  }
+  screen->AddObserver(this);
+
+  display_id_ = display.id();
+  work_area_ = display.work_area();
+  ComputePopupAlignment(work_area_, display.bounds());
+
+  // We should not update before work area and popup alignment are computed.
+  DoUpdateIfPossible();
 }
 
 MessagePopupCollection::~MessagePopupCollection() {
+  gfx::Screen* screen = parent_ ?
+      gfx::Screen::GetScreenFor(parent_) : gfx::Screen::GetNativeScreen();
+  screen->RemoveObserver(this);
+  message_center_->RemoveObserver(this);
   CloseAllWidgets();
 }
 
-void MessagePopupCollection::UpdatePopups() {
+void MessagePopupCollection::RemoveToast(ToastContentsView* toast) {
+  OnMouseExited(toast);
+
+  for (Toasts::iterator iter = toasts_.begin(); iter != toasts_.end(); ++iter) {
+    if ((*iter) == toast) {
+      toasts_.erase(iter);
+      break;
+    }
+  }
+}
+
+void MessagePopupCollection::UpdateWidgets() {
   NotificationList::PopupNotifications popups =
-      message_center_->notification_list()->GetPopupNotifications();
+      message_center_->GetPopupNotifications();
 
   if (popups.empty()) {
     CloseAllWidgets();
     return;
   }
 
-  gfx::Rect work_area;
-  if (!context_) {
-    // On Win+Aura, we don't have a context since the popups currently show up
-    // on the Windows desktop, not in the Aura/Ash desktop.  This code will
-    // display the popups on the primary display.
-    gfx::Screen* screen = gfx::Screen::GetNativeScreen();
-    work_area = screen->GetPrimaryDisplay().work_area();
-  } else {
-    gfx::Screen* screen = gfx::Screen::GetScreenFor(context_);
-    work_area = screen->GetDisplayNearestWindow(context_).work_area();
-  }
+  bool top_down = alignment_ & POPUP_ALIGNMENT_TOP;
+  int base = GetBaseLine(toasts_.empty() ? NULL : toasts_.back());
 
-  std::set<std::string> old_toast_ids;
-  for (ToastContainer::iterator iter = toasts_.begin(); iter != toasts_.end();
-       ++iter) {
-    old_toast_ids.insert(iter->first);
-  }
-
-  int bottom = work_area.bottom() - kMarginBetweenItems;
-  int left = work_area.right() - kNotificationWidth - kMarginBetweenItems;
   // Iterate in the reverse order to keep the oldest toasts on screen. Newer
   // items may be ignored if there are no room to place them.
   for (NotificationList::PopupNotifications::const_reverse_iterator iter =
            popups.rbegin(); iter != popups.rend(); ++iter) {
+    if (FindToast((*iter)->id()))
+      continue;
+
     MessageView* view =
-        NotificationView::Create(*(*iter), message_center_, true);
-    int view_height = view->GetHeightForWidth(kNotificationWidth);
-    if (bottom - view_height - kMarginBetweenItems < 0) {
+        NotificationView::Create(*(*iter),
+                                 message_center_,
+                                 tray_,
+                                 true,  // Create expanded.
+                                 true); // Create top-level notification.
+    int view_height = ToastContentsView::GetToastSizeForView(view).height();
+    int height_available = top_down ? work_area_.bottom() - base : base;
+
+    if (height_available - view_height - kToastMarginY < 0) {
       delete view;
       break;
     }
 
-    ToastContainer::iterator toast_iter = toasts_.find((*iter)->id());
-    views::Widget* widget = NULL;
-    if (toast_iter != toasts_.end()) {
-      widget = toast_iter->second->GetWidget();
-      old_toast_ids.erase((*iter)->id());
-      // Need to replace the contents because |view| can be updated, like
-      // image loads.
-      toast_iter->second->SetContents(view);
-    } else {
-      ToastContentsView* toast = new ToastContentsView(*iter, AsWeakPtr());
-      widget = toast->CreateWidget(context_);
-      toast->SetContents(view);
-      widget->AddObserver(this);
-      toast->StartTimer();
-      toasts_[(*iter)->id()] = toast;
+    ToastContentsView* toast = new ToastContentsView(
+        *iter, AsWeakPtr(), message_center_);
+    toast->CreateWidget(parent_);
+    toast->SetContents(view);
+    toasts_.push_back(toast);
+
+    gfx::Size preferred_size = toast->GetPreferredSize();
+    gfx::Point origin(
+        GetToastOriginX(gfx::Rect(preferred_size)) + preferred_size.width(),
+        top_down ? base + view_height : base);
+    toast->RevealWithAnimation(origin);
+
+    // Shift the base line to be a few pixels above the last added toast or (few
+    // pixels below last added toast if top-aligned).
+    if (top_down)
+      base += view_height + kToastMarginY;
+    else
+      base -= view_height + kToastMarginY;
+
+    message_center_->DisplayedNotification((*iter)->id());
+    if (views::ViewsDelegate::views_delegate) {
+      views::ViewsDelegate::views_delegate->NotifyAccessibilityEvent(
+          toast, ui::AccessibilityTypes::EVENT_ALERT);
     }
-
-    // Place/move the toast widgets. Currently it stacks the widgets from the
-    // right-bottom of the work area.
-    // TODO(mukai): allow to specify the placement policy from outside of this
-    // class. The policy should be specified from preference on Windows, or
-    // the launcher alignment on ChromeOS.
-    if (widget) {
-      gfx::Rect bounds(widget->GetWindowBoundsInScreen());
-      bounds.set_origin(gfx::Point(left, bottom - bounds.height()));
-      widget->SetBounds(bounds);
-      if (!widget->IsVisible())
-        widget->Show();
-    }
-
-    bottom -= view_height + kMarginBetweenItems;
-  }
-
-  for (std::set<std::string>::const_iterator iter = old_toast_ids.begin();
-       iter != old_toast_ids.end(); ++iter) {
-    ToastContainer::iterator toast_iter = toasts_.find(*iter);
-    DCHECK(toast_iter != toasts_.end());
-    views::Widget* widget = toast_iter->second->GetWidget();
-    widget->RemoveObserver(this);
-    widget->Close();
-    toasts_.erase(toast_iter);
   }
 }
 
-void MessagePopupCollection::OnMouseEntered() {
-  for (ToastContainer::iterator iter = toasts_.begin();
-       iter != toasts_.end(); ++iter) {
-    iter->second->SuspendTimer();
-  }
+void MessagePopupCollection::OnMouseEntered(ToastContentsView* toast_entered) {
+  // Sometimes we can get two MouseEntered/MouseExited in a row when animating
+  // toasts.  So we need to keep track of which one is the currently active one.
+  latest_toast_entered_ = toast_entered;
+
+  message_center_->PausePopupTimers();
+
+  if (user_is_closing_toasts_by_clicking_)
+    defer_timer_->Stop();
 }
 
-void MessagePopupCollection::OnMouseExited() {
-  for (ToastContainer::iterator iter = toasts_.begin();
-       iter != toasts_.end(); ++iter) {
-    iter->second->RestartTimer();
+void MessagePopupCollection::OnMouseExited(ToastContentsView* toast_exited) {
+  // If we're exiting a toast after entering a different toast, then ignore
+  // this mouse event.
+  if (toast_exited != latest_toast_entered_)
+    return;
+  latest_toast_entered_ = NULL;
+
+  if (user_is_closing_toasts_by_clicking_) {
+    defer_timer_->Start(
+        FROM_HERE,
+        base::TimeDelta::FromMilliseconds(kMouseExitedDeferTimeoutMs),
+        this,
+        &MessagePopupCollection::OnDeferTimerExpired);
+  } else {
+    message_center_->RestartPopupTimers();
   }
 }
 
 void MessagePopupCollection::CloseAllWidgets() {
-  for (ToastContainer::iterator iter = toasts_.begin();
-       iter != toasts_.end(); ++iter) {
-    iter->second->SuspendTimer();
-    views::Widget* widget = iter->second->GetWidget();
-    widget->RemoveObserver(this);
-    widget->Close();
+  for (Toasts::iterator iter = toasts_.begin(); iter != toasts_.end();) {
+    // the toast can be removed from toasts_ during CloseWithAnimation().
+    Toasts::iterator curiter = iter++;
+    (*curiter)->CloseWithAnimation(true);
   }
-  toasts_.clear();
+  DCHECK(toasts_.empty());
 }
 
-void MessagePopupCollection::OnWidgetDestroying(views::Widget* widget) {
-  widget->RemoveObserver(this);
-  for (ToastContainer::iterator iter = toasts_.begin();
-       iter != toasts_.end(); ++iter) {
-    if (iter->second->GetWidget() == widget) {
-      message_center_->notification_list()->MarkSinglePopupAsShown(
-          iter->first, false);
-      toasts_.erase(iter);
+int MessagePopupCollection::GetToastOriginX(const gfx::Rect& toast_bounds) {
+#if defined(OS_CHROMEOS)
+  // In ChromeOS, RTL UI language mirrors the whole desktop layout, so the toast
+  // widgets should be at the bottom-left instead of bottom right.
+  if (base::i18n::IsRTL())
+    return work_area_.x() + kToastMarginX;
+#endif
+  if (alignment_ & POPUP_ALIGNMENT_LEFT)
+    return work_area_.x() + kToastMarginX;
+  return work_area_.right() - kToastMarginX - toast_bounds.width();
+}
+
+void MessagePopupCollection::RepositionWidgets() {
+  bool top_down = alignment_ & POPUP_ALIGNMENT_TOP;
+  int base = GetBaseLine(NULL);  // We don't want to position relative to last
+                                 // toast - we want re-position.
+
+  for (Toasts::iterator iter = toasts_.begin(); iter != toasts_.end();) {
+    Toasts::iterator curr = iter++;
+    gfx::Rect bounds((*curr)->bounds());
+    bounds.set_x(GetToastOriginX(bounds));
+    bounds.set_y(alignment_ & POPUP_ALIGNMENT_TOP ? base
+                                                  : base - bounds.height());
+
+    // The notification may scrolls the boundary of the screen due to image
+    // load and such notifications should disappear. Do not call
+    // CloseWithAnimation, we don't want to show the closing animation, and we
+    // don't want to mark such notifications as shown. See crbug.com/233424
+    if ((top_down ? work_area_.bottom() - bounds.bottom() : bounds.y()) >= 0)
+      (*curr)->SetBoundsWithAnimation(bounds);
+    else
+      (*curr)->CloseWithAnimation(false);
+
+    // Shift the base line to be a few pixels above the last added toast or (few
+    // pixels below last added toast if top-aligned).
+    if (top_down)
+      base += bounds.height() + kToastMarginY;
+    else
+      base -= bounds.height() + kToastMarginY;
+  }
+}
+
+void MessagePopupCollection::RepositionWidgetsWithTarget() {
+  if (toasts_.empty())
+    return;
+
+  bool top_down = alignment_ & POPUP_ALIGNMENT_TOP;
+
+  // Nothing to do if there are no widgets above target if bottom-aligned or no
+  // widgets below target if top-aligned.
+  if (top_down ? toasts_.back()->origin().y() < target_top_edge_
+               : toasts_.back()->origin().y() > target_top_edge_)
+    return;
+
+  Toasts::reverse_iterator iter = toasts_.rbegin();
+  for (; iter != toasts_.rend(); ++iter) {
+    // We only reposition widgets above target if bottom-aligned or widgets
+    // below target if top-aligned.
+    if (top_down ? (*iter)->origin().y() < target_top_edge_
+                 : (*iter)->origin().y() > target_top_edge_)
+      break;
+  }
+  --iter;
+
+  // Slide length is the number of pixels the widgets should move so that their
+  // bottom edge (top-edge if top-aligned) touches the target.
+  int slide_length = std::abs(target_top_edge_ - (*iter)->origin().y());
+  for (;; --iter) {
+    gfx::Rect bounds((*iter)->bounds());
+
+    // If top-aligned, shift widgets upwards by slide_length. If bottom-aligned,
+    // shift them downwards by slide_length.
+    if (top_down)
+      bounds.set_y(bounds.y() - slide_length);
+    else
+      bounds.set_y(bounds.y() + slide_length);
+    (*iter)->SetBoundsWithAnimation(bounds);
+
+    if (iter == toasts_.rbegin())
+      break;
+  }
+}
+
+void MessagePopupCollection::ComputePopupAlignment(gfx::Rect work_area,
+                                                   gfx::Rect screen_bounds) {
+  // If the taskbar is at the top, render notifications top down. Some platforms
+  // like Gnome can have taskbars at top and bottom. In this case it's more
+  // likely that the systray is on the top one.
+  alignment_ = work_area.y() > screen_bounds.y() ? POPUP_ALIGNMENT_TOP
+                                                 : POPUP_ALIGNMENT_BOTTOM;
+
+  // If the taskbar is on the left show the notifications on the left. Otherwise
+  // show it on right since it's very likely that the systray is on the right if
+  // the taskbar is on the top or bottom.
+  // Since on some platforms like Ubuntu Unity there's also a launcher along
+  // with a taskbar (panel), we need to check that there is really nothing at
+  // the top before concluding that the taskbar is at the left.
+  alignment_ = static_cast<PopupAlignment>(
+      alignment_ |
+      ((work_area.x() > screen_bounds.x() && work_area.y() == screen_bounds.y())
+           ? POPUP_ALIGNMENT_LEFT
+           : POPUP_ALIGNMENT_RIGHT));
+}
+
+int MessagePopupCollection::GetBaseLine(ToastContentsView* last_toast) {
+  bool top_down = alignment_ & POPUP_ALIGNMENT_TOP;
+  int base;
+
+  if (top_down) {
+    if (!last_toast) {
+      base = work_area_.y();
+      if (!first_item_has_no_margin_)
+        base += kToastMarginY;
+      else
+        base -= kNoToastMarginBorderAndShadowOffset;
+    } else {
+      base = toasts_.back()->bounds().bottom() + kToastMarginY;
+    }
+  } else {
+    if (!last_toast) {
+      base = work_area_.bottom();
+      if (!first_item_has_no_margin_)
+        base -= kToastMarginY;
+      else
+        base += kNoToastMarginBorderAndShadowOffset;
+    } else {
+      base = toasts_.back()->origin().y() - kToastMarginY;
+    }
+  }
+  return base;
+}
+
+void MessagePopupCollection::OnNotificationAdded(
+    const std::string& notification_id) {
+  DoUpdateIfPossible();
+}
+
+void MessagePopupCollection::OnNotificationRemoved(
+    const std::string& notification_id,
+    bool by_user) {
+  // Find a toast.
+  Toasts::iterator iter = toasts_.begin();
+  for (; iter != toasts_.end(); ++iter) {
+    if ((*iter)->id() == notification_id)
+      break;
+  }
+  if (iter == toasts_.end())
+    return;
+
+  target_top_edge_ = (*iter)->bounds().y();
+  (*iter)->CloseWithAnimation(true);
+  if (by_user) {
+    RepositionWidgetsWithTarget();
+    // [Re] start a timeout after which the toasts re-position to their
+    // normal locations after tracking the mouse pointer for easy deletion.
+    // This provides a period of time when toasts are easy to remove because
+    // they re-position themselves to have Close button right under the mouse
+    // pointer. If the user continue to remove the toasts, the delay is reset.
+    // Once user stopped removing the toasts, the toasts re-populate/rearrange
+    // after the specified delay.
+    if (!user_is_closing_toasts_by_clicking_) {
+      user_is_closing_toasts_by_clicking_ = true;
+      IncrementDeferCounter();
+    }
+  }
+}
+
+void MessagePopupCollection::OnDeferTimerExpired() {
+  user_is_closing_toasts_by_clicking_ = false;
+  DecrementDeferCounter();
+
+  message_center_->RestartPopupTimers();
+}
+
+void MessagePopupCollection::OnNotificationUpdated(
+    const std::string& notification_id) {
+  // Find a toast.
+  Toasts::iterator toast_iter = toasts_.begin();
+  for (; toast_iter != toasts_.end(); ++toast_iter) {
+    if ((*toast_iter)->id() == notification_id)
+      break;
+  }
+  if (toast_iter == toasts_.end())
+    return;
+
+  NotificationList::PopupNotifications notifications =
+      message_center_->GetPopupNotifications();
+  bool updated = false;
+
+  for (NotificationList::PopupNotifications::iterator iter =
+           notifications.begin(); iter != notifications.end(); ++iter) {
+    if ((*iter)->id() != notification_id)
+      continue;
+
+    MessageView* view =
+        NotificationView::Create(*(*iter),
+                                 message_center_,
+                                 tray_,
+                                 true,  // Create expanded.
+                                 true); // Create top-level notification.
+    (*toast_iter)->SetContents(view);
+    updated = true;
+  }
+
+  // OnNotificationUpdated() can be called when a notification is excluded from
+  // the popup notification list but still remains in the full notification
+  // list. In that case the widget for the notification has to be closed here.
+  if (!updated)
+    (*toast_iter)->CloseWithAnimation(true);
+
+  if (user_is_closing_toasts_by_clicking_)
+    RepositionWidgetsWithTarget();
+  else
+    DoUpdateIfPossible();
+}
+
+ToastContentsView* MessagePopupCollection::FindToast(
+    const std::string& notification_id) {
+  for (Toasts::iterator iter = toasts_.begin(); iter != toasts_.end(); ++iter) {
+    if ((*iter)->id() == notification_id)
+      return *iter;
+  }
+  return NULL;
+}
+
+void MessagePopupCollection::IncrementDeferCounter() {
+  defer_counter_++;
+}
+
+void MessagePopupCollection::DecrementDeferCounter() {
+  defer_counter_--;
+  DCHECK(defer_counter_ >= 0);
+  DoUpdateIfPossible();
+}
+
+// This is the main sequencer of tasks. It does a step, then waits for
+// all started transitions to play out before doing the next step.
+// First, remove all expired toasts.
+// Then, reposition widgets (the reposition on close happens before all
+// deferred tasks are even able to run)
+// Then, see if there is vacant space for new toasts.
+void MessagePopupCollection::DoUpdateIfPossible() {
+  if (defer_counter_ > 0)
+    return;
+
+  RepositionWidgets();
+
+  if (defer_counter_ > 0)
+    return;
+
+  // Reposition could create extra space which allows additional widgets.
+  UpdateWidgets();
+
+  if (defer_counter_ > 0)
+    return;
+
+  // Test support. Quit the test run loop when no more updates are deferred,
+  // meaining th echeck for updates did not cause anything to change so no new
+  // transition animations were started.
+  if (run_loop_for_test_.get())
+    run_loop_for_test_->Quit();
+}
+
+void MessagePopupCollection::SetDisplayInfo(const gfx::Rect& work_area,
+                                            const gfx::Rect& screen_bounds) {
+  if (work_area_ == work_area)
+    return;
+
+  work_area_ = work_area;
+  ComputePopupAlignment(work_area, screen_bounds);
+  RepositionWidgets();
+}
+
+void MessagePopupCollection::OnDisplayBoundsChanged(
+    const gfx::Display& display) {
+  if (display.id() != display_id_)
+    return;
+
+  SetDisplayInfo(display.work_area(), display.bounds());
+}
+
+void MessagePopupCollection::OnDisplayAdded(const gfx::Display& new_display) {
+}
+
+void MessagePopupCollection::OnDisplayRemoved(const gfx::Display& old_display) {
+}
+
+views::Widget* MessagePopupCollection::GetWidgetForTest(const std::string& id) {
+  for (Toasts::iterator iter = toasts_.begin(); iter != toasts_.end(); ++iter) {
+    if ((*iter)->id() == id)
+      return (*iter)->GetWidget();
+  }
+  return NULL;
+}
+
+void MessagePopupCollection::RunLoopForTest() {
+  run_loop_for_test_.reset(new base::RunLoop());
+  run_loop_for_test_->Run();
+  run_loop_for_test_.reset();
+}
+
+gfx::Rect MessagePopupCollection::GetToastRectAt(size_t index) {
+  DCHECK(defer_counter_ == 0) << "Fetching the bounds with animations active.";
+  size_t i = 0;
+  for (Toasts::iterator iter = toasts_.begin(); iter != toasts_.end(); ++iter) {
+    if (i++ == index) {
+      views::Widget* widget = (*iter)->GetWidget();
+      if (widget)
+        return widget->GetWindowBoundsInScreen();
       break;
     }
   }
-  UpdatePopups();
+  return gfx::Rect();
 }
 
 }  // namespace message_center

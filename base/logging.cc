@@ -29,8 +29,8 @@ typedef HANDLE MutexHandle;
 #if defined(OS_POSIX)
 #include <errno.h>
 #include <pthread.h>
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #define MAX_PATH PATH_MAX
@@ -50,10 +50,10 @@ typedef pthread_mutex_t* MutexHandle;
 #include "base/debug/debugger.h"
 #include "base/debug/stack_trace.h"
 #include "base/posix/eintr_wrapper.h"
-#include "base/string_piece.h"
+#include "base/strings/string_piece.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/lock_impl.h"
 #include "base/threading/platform_thread.h"
-#include "base/utf_string_conversions.h"
 #include "base/vlog.h"
 #if defined(OS_POSIX)
 #include "base/safe_strerror_posix.h"
@@ -67,6 +67,14 @@ namespace logging {
 
 DcheckState g_dcheck_state = DISABLE_DCHECK_FOR_NON_OFFICIAL_RELEASE_BUILDS;
 
+DcheckState get_dcheck_state() {
+  return g_dcheck_state;
+}
+
+void set_dcheck_state(DcheckState state) {
+  g_dcheck_state = state;
+}
+
 namespace {
 
 VlogInfo* g_vlog_info = NULL;
@@ -77,15 +85,7 @@ const char* const log_severity_names[LOG_NUM_SEVERITIES] = {
 
 int min_log_level = 0;
 
-// The default set here for logging_destination will only be used if
-// InitLogging is not called.  On Windows, use a file next to the exe;
-// on POSIX platforms, where it may not even be possible to locate the
-// executable on disk, use stderr.
-#if defined(OS_WIN)
-LoggingDestination logging_destination = LOG_ONLY_TO_FILE;
-#elif defined(OS_POSIX)
-LoggingDestination logging_destination = LOG_ONLY_TO_SYSTEM_DEBUG_LOG;
-#endif
+LoggingDestination logging_destination = LOG_DEFAULT;
 
 // For LOG_ERROR and above, always print to stderr.
 const int kAlwaysPrintErrorLevel = LOG_ERROR;
@@ -152,17 +152,11 @@ uint64 TickCount() {
 #endif
 }
 
-void CloseFile(FileHandle log) {
-#if defined(OS_WIN)
-  CloseHandle(log);
-#else
-  fclose(log);
-#endif
-}
-
 void DeleteFilePath(const PathString& log_name) {
 #if defined(OS_WIN)
   DeleteFile(log_name.c_str());
+#elif defined (OS_NACL)
+  // Do nothing; unlink() isn't supported on NaCl.
 #else
   unlink(log_name.c_str());
 #endif
@@ -313,8 +307,7 @@ bool InitializeLogFileHandle() {
     log_file_name = new PathString(GetDefaultLogFile());
   }
 
-  if (logging_destination == LOG_ONLY_TO_FILE ||
-      logging_destination == LOG_TO_BOTH_FILE_AND_SYSTEM_DEBUG_LOG) {
+  if ((logging_destination & LOG_TO_FILE) != 0) {
 #if defined(OS_WIN)
     log_file = CreateFile(log_file_name->c_str(), GENERIC_WRITE,
                           FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
@@ -340,17 +333,37 @@ bool InitializeLogFileHandle() {
   return true;
 }
 
+void CloseFile(FileHandle log) {
+#if defined(OS_WIN)
+  CloseHandle(log);
+#else
+  fclose(log);
+#endif
+}
+
+void CloseLogFileUnlocked() {
+  if (!log_file)
+    return;
+
+  CloseFile(log_file);
+  log_file = NULL;
+}
+
 }  // namespace
 
+LoggingSettings::LoggingSettings()
+    : logging_dest(LOG_DEFAULT),
+      log_file(NULL),
+      lock_log(LOCK_LOG_FILE),
+      delete_old(APPEND_TO_OLD_LOG_FILE),
+      dcheck_state(DISABLE_DCHECK_FOR_NON_OFFICIAL_RELEASE_BUILDS) {}
 
-bool BaseInitLoggingImpl(const PathChar* new_log_file,
-                         LoggingDestination logging_dest,
-                         LogLockingState lock_log,
-                         OldFileDeletionState delete_old,
-                         DcheckState dcheck_state) {
-  g_dcheck_state = dcheck_state;
-// TODO(bbudge) Hook this up to NaCl logging.
-#if !defined(OS_NACL)
+bool BaseInitLoggingImpl(const LoggingSettings& settings) {
+#if defined(OS_NACL)
+  // Can log only to the system debug log.
+  CHECK_EQ(settings.logging_dest & ~LOG_TO_SYSTEM_DEBUG_LOG, 0);
+#endif
+  g_dcheck_state = settings.dcheck_state;
   CommandLine* command_line = CommandLine::ForCurrentProcess();
   // Don't bother initializing g_vlog_info unless we use one of the
   // vlog switches.
@@ -368,35 +381,26 @@ bool BaseInitLoggingImpl(const PathChar* new_log_file,
                      &min_log_level);
   }
 
-  LoggingLock::Init(lock_log, new_log_file);
+  logging_destination = settings.logging_dest;
 
+  // ignore file options unless logging to file is set.
+  if ((logging_destination & LOG_TO_FILE) == 0)
+    return true;
+
+  LoggingLock::Init(settings.lock_log, settings.log_file);
   LoggingLock logging_lock;
 
-  if (log_file) {
-    // calling InitLogging twice or after some log call has already opened the
-    // default log file will re-initialize to the new options
-    CloseFile(log_file);
-    log_file = NULL;
-  }
-
-  logging_destination = logging_dest;
-
-  // ignore file options if logging is disabled or only to system
-  if (logging_destination == LOG_NONE ||
-      logging_destination == LOG_ONLY_TO_SYSTEM_DEBUG_LOG)
-    return true;
+  // Calling InitLogging twice or after some log call has already opened the
+  // default log file will re-initialize to the new options.
+  CloseLogFileUnlocked();
 
   if (!log_file_name)
     log_file_name = new PathString();
-  *log_file_name = new_log_file;
-  if (delete_old == DELETE_OLD_LOG_FILE)
+  *log_file_name = settings.log_file;
+  if (settings.delete_old == DELETE_OLD_LOG_FILE)
     DeleteFilePath(*log_file_name);
 
   return InitializeLogFileHandle();
-#else
-  (void) g_vlog_info_prev;
-  return true;
-#endif  // !defined(OS_NACL)
 }
 
 void SetMinLogLevel(int level) {
@@ -556,9 +560,7 @@ LogMessage::LogMessage(const char* file, int line, LogSeverity severity,
 }
 
 LogMessage::~LogMessage() {
-  // TODO(port): enable stacktrace generation on LOG_FATAL once backtrace are
-  // working in Android.
-#if  !defined(NDEBUG) && !defined(OS_ANDROID) && !defined(OS_NACL)
+#if !defined(NDEBUG) && !defined(OS_NACL)
   if (severity_ == LOG_FATAL) {
     // Include a stack trace on a fatal.
     base::debug::StackTrace trace;
@@ -570,18 +572,19 @@ LogMessage::~LogMessage() {
   std::string str_newline(stream_.str());
 
   // Give any log message handler first dibs on the message.
-  if (log_message_handler && log_message_handler(severity_, file_, line_,
-          message_start_, str_newline)) {
+  if (log_message_handler &&
+      log_message_handler(severity_, file_, line_,
+                          message_start_, str_newline)) {
     // The handler took care of it, no further processing.
     return;
   }
 
-  if (logging_destination == LOG_ONLY_TO_SYSTEM_DEBUG_LOG ||
-      logging_destination == LOG_TO_BOTH_FILE_AND_SYSTEM_DEBUG_LOG) {
+  if ((logging_destination & LOG_TO_SYSTEM_DEBUG_LOG) != 0) {
 #if defined(OS_WIN)
     OutputDebugStringA(str_newline.c_str());
 #elif defined(OS_ANDROID)
-    android_LogPriority priority = ANDROID_LOG_UNKNOWN;
+    android_LogPriority priority =
+        (severity_ < 0) ? ANDROID_LOG_VERBOSE : ANDROID_LOG_UNKNOWN;
     switch (severity_) {
       case LOG_INFO:
         priority = ANDROID_LOG_INFO;
@@ -609,17 +612,16 @@ LogMessage::~LogMessage() {
     fflush(stderr);
   }
 
-  // We can have multiple threads and/or processes, so try to prevent them
-  // from clobbering each other's writes.
-  // If the client app did not call InitLogging, and the lock has not
-  // been created do it now. We do this on demand, but if two threads try
-  // to do this at the same time, there will be a race condition to create
-  // the lock. This is why InitLogging should be called from the main
-  // thread at the beginning of execution.
-  LoggingLock::Init(LOCK_LOG_FILE, NULL);
   // write to log file
-  if (logging_destination != LOG_NONE &&
-      logging_destination != LOG_ONLY_TO_SYSTEM_DEBUG_LOG) {
+  if ((logging_destination & LOG_TO_FILE) != 0) {
+    // We can have multiple threads and/or processes, so try to prevent them
+    // from clobbering each other's writes.
+    // If the client app did not call InitLogging, and the lock has not
+    // been created do it now. We do this on demand, but if two threads try
+    // to do this at the same time, there will be a race condition to create
+    // the lock. This is why InitLogging should be called from the main
+    // thread at the beginning of execution.
+    LoggingLock::Init(LOCK_LOG_FILE, NULL);
     LoggingLock logging_lock;
     if (InitializeLogFileHandle()) {
 #if defined(OS_WIN)
@@ -812,12 +814,7 @@ ErrnoLogMessage::~ErrnoLogMessage() {
 
 void CloseLogFile() {
   LoggingLock logging_lock;
-
-  if (!log_file)
-    return;
-
-  CloseFile(log_file);
-  log_file = NULL;
+  CloseLogFileUnlocked();
 }
 
 void RawLog(int level, const char* message) {

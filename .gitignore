@@ -41,12 +41,14 @@ v8.log
 /Makefile
 /_out
 /arm-sysroot
-/ash/resources/google_wallpapers/
 /breakpad/src/
 /build/Debug
+/build/Debug_x64
 /build/Release
+/build/Release_x64
+/build/gomacc.lock
 /build/ipch/
-/build/util/LASTCHANGE
+/build/util/LASTCHANGE*
 /build/util/support
 /build/x64/
 # The Chrome OS build creates a /c symlink due to http://crbug.com/54866.
@@ -72,10 +74,12 @@ v8.log
 /chrome/browser/search_engines/prepopulated_engines.xml
 /chrome/browser/spellchecker/internal
 /chrome/browser_tests_run.xml
+/chrome/chrome_run.xml
+/chrome/chrome_user32_delay_imports.xml
 /chrome/chrome_version_resources.xml
 /chrome/common/extensions/api/api.xml
 /chrome/Hammer
-/chrome/installer/linux
+/chrome/installer/linux/internal
 /chrome/installer/mac/internal
 /chrome/installer/mac/third_party/xz/xz
 /chrome/installer/mini_installer.xml
@@ -83,6 +87,7 @@ v8.log
 /chrome/installer/mini_installer/support
 /chrome/installer/mini_installer_syzygy.xml
 /chrome/installer_util_strings.xml
+/chrome/interactive_ui_tests_run.xml
 /chrome/setup.xml
 /chrome/setup_unittests.xml
 /chrome/supplement.gypi
@@ -125,12 +130,14 @@ v8.log
 /gyp-mac-tool
 /hideout
 /llvm
+/media/media_asm.xml
 /media/test/data/content
 /media/test/data/security
 /media/yuv_convert_simd_x86.xml
 /metro_driver
 /native_client
 /net/Debug
+/net/net_unittests_run.xml
 /net/Release
 /net/testserver.log
 /out
@@ -145,10 +152,12 @@ v8.log
 /remoting/host/installer/linux/internal/
 /remoting/proto/chromotocol_proto_lib.xml
 /remoting/proto/trace_proto_lib.xml
+/remoting/remoting_core_resources.xml
 /remoting/remoting_elevated_controller.xml
 /remoting/remoting_host_event_logger.xml
 /remoting/remoting_host_installation.xml
 /remoting/remoting_host_installation_unittest.xml
+/remoting/remoting_host_messages.xml
 /remoting/remoting_lib_idl.xml
 /remoting/remoting_lib_rc.xml
 /remoting/remoting_me2me_host.xml
@@ -167,6 +176,7 @@ v8.log
 /third_party/amd/
 /third_party/android_tools/
 /third_party/angle
+/third_party/angle_dx11
 /third_party/aosp
 /third_party/apache-mime4j
 /third_party/asan
@@ -222,12 +232,14 @@ v8.log
 /third_party/llvm-allocated-type
 /third_party/llvm-build
 /third_party/lss
+/third_party/mesa/src
 /third_party/mingw-w64
 /third_party/mkl
 /third_party/mt19937ar
 /third_party/mtpd/source/
 /third_party/nacl_sdk_binaries/
 /third_party/nss
+/third_party/openmax_dl/
 /third_party/openssl
 /third_party/opus/src
 /third_party/ots
@@ -236,6 +248,7 @@ v8.log
 /third_party/perl
 /third_party/platformsdk_win7
 /third_party/platformsdk_win8
+/third_party/polymer
 /third_party/ppapi
 /third_party/psyco_win32
 /third_party/pthreads-win32
@@ -249,7 +262,7 @@ v8.log
 /third_party/pywebsocket/src
 /third_party/safe_browsing/testing
 /third_party/scons-2.0.1
-/third_party/sfntly
+/third_party/sfntly/cpp
 /third_party/skia
 /third_party/smhasher
 /third_party/snappy/src
@@ -262,6 +275,7 @@ v8.log
 /third_party/tsan/
 /third_party/undoview
 /third_party/usb_ids
+/third_party/usrsctp/usrsctplib
 /third_party/v8-i18n
 /third_party/valgrind
 /third_party/webdriver/pylib
@@ -289,10 +303,10 @@ v8.log
 /tools/json_schema_compiler/test/json_schema_compiler_tests.xml
 /tools/page_cycler/acid3
 /tools/perf/data
+/tools/perf/results.html
 /tools/swarm_client
 /tools/tryserver
 /tools/win/link_limiter/build
-/ui/resources/aura/google_wallpapers
 /ui/surface/surface.xml
 /ui/surface/surface_gpu_tests.xml
 /v8
@@ -302,8 +316,8 @@ v8.log
 /webkit/data/test_shell/plugins
 /webkit/data/xbm_decoder
 /webkit/Debug
-/webkit/media/crypto/ppapi/cdm
 /webkit/Release
+/webkit/renderer/media/crypto/ppapi/cdm
 /webpagereplay_logs/
 /win8/delegate_execute/delegate_execute_version_resources.xml
 /win8/metro_driver/metro_driver_version_resources.xml

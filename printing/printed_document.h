@@ -8,15 +8,14 @@
 #include <map>
 
 #include "base/memory/ref_counted.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "base/synchronization/lock.h"
 #include "printing/print_settings.h"
 #include "ui/gfx/native_widget_types.h"
 
-class MessageLoop;
-
 namespace base {
 class FilePath;
+class MessageLoop;
 }
 
 namespace printing {
@@ -147,7 +146,7 @@ class PRINTING_EXPORT PrintedDocument
     PrintSettings settings_;
 
     // Native thread for the render source.
-    MessageLoop* source_message_loop_;
+    base::MessageLoop* source_message_loop_;
 
     // Document name. Immutable.
     string16 name_;

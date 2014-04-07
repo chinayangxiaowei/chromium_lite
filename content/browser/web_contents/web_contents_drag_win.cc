@@ -11,11 +11,11 @@
 #include "base/bind.h"
 #include "base/file_util.h"
 #include "base/files/file_path.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/pickle.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/threading/platform_thread.h"
 #include "base/threading/thread.h"
-#include "base/utf_string_conversions.h"
 #include "content/browser/download/drag_download_file.h"
 #include "content/browser/download/drag_download_util.h"
 #include "content/browser/web_contents/web_drag_dest_win.h"
@@ -26,9 +26,10 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_view.h"
 #include "content/public/browser/web_drag_dest_delegate.h"
+#include "content/public/common/drop_data.h"
 #include "net/base/net_util.h"
 #include "third_party/skia/include/core/SkBitmap.h"
-#include "ui/base/clipboard/clipboard_util_win.h"
+#include "ui/base/clipboard/clipboard.h"
 #include "ui/base/clipboard/custom_data_helper.h"
 #include "ui/base/dragdrop/drag_utils.h"
 #include "ui/base/layout.h"
@@ -36,7 +37,6 @@
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/screen.h"
 #include "ui/gfx/size.h"
-#include "webkit/glue/webdropdata.h"
 
 using WebKit::WebDragOperationsMask;
 using WebKit::WebDragOperationCopy;
@@ -45,6 +45,8 @@ using WebKit::WebDragOperationMove;
 
 namespace content {
 namespace {
+
+bool run_do_drag_drop = true;
 
 HHOOK msg_hook = NULL;
 DWORD drag_out_thread_id = 0;
@@ -153,7 +155,7 @@ WebContentsDragWin::~WebContentsDragWin() {
   DCHECK(!drag_drop_thread_.get());
 }
 
-void WebContentsDragWin::StartDragging(const WebDropData& drop_data,
+void WebContentsDragWin::StartDragging(const DropData& drop_data,
                                        WebDragOperationsMask ops,
                                        const gfx::ImageSkia& image,
                                        const gfx::Vector2d& image_offset) {
@@ -176,7 +178,7 @@ void WebContentsDragWin::StartDragging(const WebDropData& drop_data,
   DCHECK(!drag_drop_thread_.get());
   drag_drop_thread_.reset(new DragDropThread(this));
   base::Thread::Options options;
-  options.message_loop_type = MessageLoop::TYPE_UI;
+  options.message_loop_type = base::MessageLoop::TYPE_UI;
   if (drag_drop_thread_->StartWithOptions(options)) {
     drag_drop_thread_->message_loop()->PostTask(
         FROM_HERE,
@@ -189,7 +191,7 @@ void WebContentsDragWin::StartDragging(const WebDropData& drop_data,
 }
 
 void WebContentsDragWin::StartBackgroundDragging(
-    const WebDropData& drop_data,
+    const DropData& drop_data,
     WebDragOperationsMask ops,
     const GURL& page_url,
     const std::string& page_encoding,
@@ -220,7 +222,7 @@ void WebContentsDragWin::StartBackgroundDragging(
 }
 
 void WebContentsDragWin::PrepareDragForDownload(
-    const WebDropData& drop_data,
+    const DropData& drop_data,
     ui::OSExchangeData* data,
     const GURL& page_url,
     const std::string& page_encoding) {
@@ -253,15 +255,15 @@ void WebContentsDragWin::PrepareDragForDownload(
 
   // We cannot know when the target application will be done using the temporary
   // file, so schedule it to be deleted after rebooting.
-  file_util::DeleteAfterReboot(download_path);
-  file_util::DeleteAfterReboot(temp_dir_path);
+  base::DeleteFileAfterReboot(download_path);
+  base::DeleteFileAfterReboot(temp_dir_path);
 
   // Provide the data as file (CF_HDROP). A temporary download file with the
   // Zone.Identifier ADS (Alternate Data Stream) attached will be created.
   scoped_refptr<DragDownloadFile> download_file =
       new DragDownloadFile(
           download_path,
-          scoped_ptr<net::FileStream>(NULL),
+          scoped_ptr<net::FileStream>(),
           download_url,
           Referrer(page_url, drop_data.referrer_policy),
           page_encoding,
@@ -275,7 +277,7 @@ void WebContentsDragWin::PrepareDragForDownload(
 }
 
 void WebContentsDragWin::PrepareDragForFileContents(
-    const WebDropData& drop_data, ui::OSExchangeData* data) {
+    const DropData& drop_data, ui::OSExchangeData* data) {
   static const int kMaxFilenameLength = 255;  // FAT and NTFS
   base::FilePath file_name(drop_data.file_description_filename);
 
@@ -295,7 +297,7 @@ void WebContentsDragWin::PrepareDragForFileContents(
   data->SetFileContents(file_name, drop_data.file_contents);
 }
 
-void WebContentsDragWin::PrepareDragForUrl(const WebDropData& drop_data,
+void WebContentsDragWin::PrepareDragForUrl(const DropData& drop_data,
                                            ui::OSExchangeData* data) {
   if (drag_dest_->delegate() &&
       drag_dest_->delegate()->AddDragData(drop_data, data)) {
@@ -305,7 +307,7 @@ void WebContentsDragWin::PrepareDragForUrl(const WebDropData& drop_data,
   data->SetURL(drop_data.url, drop_data.url_title);
 }
 
-bool WebContentsDragWin::DoDragging(const WebDropData& drop_data,
+bool WebContentsDragWin::DoDragging(const DropData& drop_data,
                                     WebDragOperationsMask ops,
                                     const GURL& page_url,
                                     const std::string& page_encoding,
@@ -336,8 +338,7 @@ bool WebContentsDragWin::DoDragging(const WebDropData& drop_data,
   if (!drop_data.custom_data.empty()) {
     Pickle pickle;
     ui::WriteCustomDataToPickle(drop_data.custom_data, &pickle);
-    data.SetPickledData(ui::ClipboardUtil::GetWebCustomDataFormat()->cfFormat,
-                        pickle);
+    data.SetPickledData(ui::Clipboard::GetWebCustomDataFormatType(), pickle);
   }
 
   // Set drag image.
@@ -353,18 +354,22 @@ bool WebContentsDragWin::DoDragging(const WebDropData& drop_data,
 
   // We need to enable recursive tasks on the message loop so we can get
   // updates while in the system DoDragDrop loop.
-  DWORD effect;
-  {
+  DWORD effect = DROPEFFECT_NONE;
+  if (run_do_drag_drop) {
     // Keep a reference count such that |drag_source_| will not get deleted
     // if the contents view window is gone in the nested message loop invoked
     // from DoDragDrop.
-    scoped_refptr<WebDragSource> retain_this(drag_source_);
+    scoped_refptr<WebDragSource> retain_source(drag_source_);
+    retain_source->set_data(&data);
+    data.SetInDragLoop(true);
 
-    MessageLoop::ScopedNestableTaskAllower allow(MessageLoop::current());
+    base::MessageLoop::ScopedNestableTaskAllower allow(
+        base::MessageLoop::current());
     DoDragDrop(ui::OSExchangeDataProviderWin::GetIDataObject(data),
                drag_source_,
                WebDragOpMaskToWinDragOpMask(ops),
                &effect);
+    retain_source->set_data(NULL);
   }
 
   // Bail out immediately if the contents view window is gone.
@@ -428,6 +433,11 @@ void WebContentsDragWin::OnDataObjectDisposed() {
       BrowserThread::UI,
       FROM_HERE,
       base::Bind(&WebContentsDragWin::CloseThread, this));
+}
+
+// static
+void WebContentsDragWin::DisableDragDropForTesting() {
+  run_do_drag_drop = false;
 }
 
 }  // namespace content

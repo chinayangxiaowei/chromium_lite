@@ -6,16 +6,17 @@
 
 #include <algorithm>
 
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/autocomplete/autocomplete_match.h"
 #include "chrome/browser/extensions/api/omnibox/omnibox_api.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url.h"
 #include "chrome/browser/search_engines/template_url_service.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
+#include "chrome/browser/ui/omnibox/omnibox_popup_model_observer.h"
 #include "chrome/browser/ui/omnibox/omnibox_popup_view.h"
-#include "third_party/icu/public/common/unicode/ubidi.h"
+#include "third_party/icu/source/common/unicode/ubidi.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/rect.h"
 
@@ -110,13 +111,7 @@ void OmniboxPopupModel::SetSelectedLine(size_t line,
   match.GetKeywordUIState(edit_model_->profile(), &keyword, &is_keyword_hint);
 
   if (reset_to_default) {
-    string16 inline_autocomplete_text;
-    if ((match.inline_autocomplete_offset != string16::npos) &&
-        (match.inline_autocomplete_offset < match.fill_into_edit.length())) {
-      inline_autocomplete_text =
-          match.fill_into_edit.substr(match.inline_autocomplete_offset);
-    }
-    edit_model_->OnPopupDataChanged(inline_autocomplete_text, NULL,
+    edit_model_->OnPopupDataChanged(match.inline_autocompletion, NULL,
                                     keyword, is_keyword_hint);
   } else {
     edit_model_->OnPopupDataChanged(match.fill_into_edit, &current_destination,
@@ -162,7 +157,7 @@ void OmniboxPopupModel::SetSelectedLineState(LineState state) {
 }
 
 void OmniboxPopupModel::TryDeletingCurrentItem() {
-  // We could use InfoForCurrentSelection() here, but it seems better to try
+  // We could use GetInfoForCurrentText() here, but it seems better to try
   // and shift-delete the actual selection, rather than any "in progress, not
   // yet visible" one.
   if (selected_line_ == kNoMatch)
@@ -218,5 +213,19 @@ void OmniboxPopupModel::OnResultChanged() {
   if ((hovered_line_ != kNoMatch) && (result.size() <= hovered_line_))
     SetHoveredLine(kNoMatch);
 
+  bool popup_was_open = view_->IsOpen();
   view_->UpdatePopupAppearance();
+  // If popup has just been shown or hidden, notify observers.
+  if (view_->IsOpen() != popup_was_open) {
+    FOR_EACH_OBSERVER(OmniboxPopupModelObserver, observers_,
+                      OnOmniboxPopupShownOrHidden());
+  }
+}
+
+void OmniboxPopupModel::AddObserver(OmniboxPopupModelObserver* observer) {
+  observers_.AddObserver(observer);
+}
+
+void OmniboxPopupModel::RemoveObserver(OmniboxPopupModelObserver* observer) {
+  observers_.RemoveObserver(observer);
 }

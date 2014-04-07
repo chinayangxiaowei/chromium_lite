@@ -2,10 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/string16.h"
-#include "base/string_util.h"
-#include "base/time.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string16.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "content/browser/site_instance_impl.h"
 #include "content/browser/web_contents/navigation_entry_impl.h"
 #include "content/public/common/ssl_status.h"
@@ -61,23 +61,23 @@ TEST_F(NavigationEntryTest, NavigationEntryURLs) {
 
   EXPECT_EQ(GURL(), entry1_->GetURL());
   EXPECT_EQ(GURL(), entry1_->GetVirtualURL());
-  EXPECT_TRUE(entry1_->GetTitleForDisplay("").empty());
+  EXPECT_TRUE(entry1_->GetTitleForDisplay(std::string()).empty());
 
   // Setting URL affects virtual_url and GetTitleForDisplay
   entry1_->SetURL(GURL("http://www.google.com"));
   EXPECT_EQ(GURL("http://www.google.com"), entry1_->GetURL());
   EXPECT_EQ(GURL("http://www.google.com"), entry1_->GetVirtualURL());
   EXPECT_EQ(ASCIIToUTF16("www.google.com"),
-            entry1_->GetTitleForDisplay(""));
+            entry1_->GetTitleForDisplay(std::string()));
 
   // file:/// URLs should only show the filename.
   entry1_->SetURL(GURL("file:///foo/bar baz.txt"));
   EXPECT_EQ(ASCIIToUTF16("bar baz.txt"),
-            entry1_->GetTitleForDisplay(""));
+            entry1_->GetTitleForDisplay(std::string()));
 
   // Title affects GetTitleForDisplay
   entry1_->SetTitle(ASCIIToUTF16("Google"));
-  EXPECT_EQ(ASCIIToUTF16("Google"), entry1_->GetTitleForDisplay(""));
+  EXPECT_EQ(ASCIIToUTF16("Google"), entry1_->GetTitleForDisplay(std::string()));
 
   // Setting virtual_url doesn't affect URL
   entry2_->SetVirtualURL(GURL("display:url"));
@@ -86,7 +86,7 @@ TEST_F(NavigationEntryTest, NavigationEntryURLs) {
   EXPECT_EQ(GURL("display:url"), entry2_->GetVirtualURL());
 
   // Having a title set in constructor overrides virtual URL
-  EXPECT_EQ(ASCIIToUTF16("title"), entry2_->GetTitleForDisplay(""));
+  EXPECT_EQ(ASCIIToUTF16("title"), entry2_->GetTitleForDisplay(std::string()));
 
   // User typed URL is independent of the others
   EXPECT_EQ(GURL(), entry1_->GetUserTypedURL());
@@ -142,10 +142,10 @@ TEST_F(NavigationEntryTest, NavigationEntryAccessors) {
   EXPECT_EQ(ASCIIToUTF16("title2"), entry2_->GetTitle());
 
   // State
-  EXPECT_EQ(std::string(), entry1_->GetContentState());
-  EXPECT_EQ(std::string(), entry2_->GetContentState());
-  entry2_->SetContentState("state");
-  EXPECT_EQ("state", entry2_->GetContentState());
+  EXPECT_FALSE(entry1_->GetPageState().IsValid());
+  EXPECT_FALSE(entry2_->GetPageState().IsValid());
+  entry2_->SetPageState(PageState::CreateFromEncodedData("state"));
+  EXPECT_EQ("state", entry2_->GetPageState().ToEncodedData());
 
   // Page ID
   EXPECT_EQ(-1, entry1_->GetPageID());

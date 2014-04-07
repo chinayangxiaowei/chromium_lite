@@ -46,6 +46,13 @@ function FileTransferController(doc,
    * @private
    */
   this.selectedFileObjects_ = [];
+
+  /**
+   * Drag selector.
+   * @type {DragSelector}
+   * @private
+   */
+  this.dragSelector_ = new DragSelector();
 }
 
 FileTransferController.prototype = {
@@ -69,13 +76,14 @@ FileTransferController.prototype = {
    *     items could be drop targets. Otherwise any other place of the list
    *     accetps files (putting it into the current directory).
    */
-  attachDropTarget: function(list, opt_onlyIntoDirectories) {
+  attachFileListDropTarget: function(list, opt_onlyIntoDirectories) {
     list.addEventListener('dragover', this.onDragOver_.bind(this,
-                          !!opt_onlyIntoDirectories, list));
-    list.addEventListener('dragenter', this.onDragEnterList_.bind(this, list));
+        !!opt_onlyIntoDirectories, list));
+    list.addEventListener('dragenter',
+        this.onDragEnterFileList_.bind(this, list));
     list.addEventListener('dragleave', this.onDragLeave_.bind(this, list));
-    list.addEventListener('drop', this.onDrop_.bind(this,
-                          !!opt_onlyIntoDirectories));
+    list.addEventListener('drop',
+        this.onDrop_.bind(this, !!opt_onlyIntoDirectories));
   },
 
   /**
@@ -91,18 +99,16 @@ FileTransferController.prototype = {
 
   /**
    * @this {FileTransferController}
-   * @param {HTMLElement} breadcrumbsContainer Element which contains target
-   *     breadcrumbs.
+   * @param {NavigationList} tree Its sub items will could be drop target.
    */
-  attachBreadcrumbsDropTarget: function(breadcrumbsController) {
-    var container = breadcrumbsController.getContainer();
-    container.addEventListener('dragover',
-        this.onDragOver_.bind(this, true, null));
-    container.addEventListener('dragenter',
-        this.onDragEnterBreadcrumbs_.bind(this, breadcrumbsController));
-    container.addEventListener('dragleave',
-        this.onDragLeave_.bind(this, null));
-    container.addEventListener('drop', this.onDrop_.bind(this, true));
+  attachNavigationListDropTarget: function(list) {
+    list.addEventListener('dragover',
+        this.onDragOver_.bind(this, true /* onlyIntoDirectories */, list));
+    list.addEventListener('dragenter',
+        this.onDragEnterVolumesList_.bind(this, list));
+    list.addEventListener('dragleave', this.onDragLeave_.bind(this, list));
+    list.addEventListener('drop',
+        this.onDrop_.bind(this, true /* onlyIntoDirectories */));
   },
 
   /**
@@ -144,10 +150,8 @@ FileTransferController.prototype = {
 
     // Tag to check it's filemanager data.
     dataTransfer.setData('fs/tag', 'filemanager-data');
-
-    dataTransfer.setData('fs/isOnDrive', this.isOnDrive);
-    if (this.currentDirectory)
-      dataTransfer.setData('fs/sourceDir', this.currentDirectory.fullPath);
+    dataTransfer.setData('fs/sourceRoot',
+                         this.directoryModel_.getCurrentRootPath());
     dataTransfer.setData('fs/directories', directories.join('\n'));
     dataTransfer.setData('fs/files', files.join('\n'));
     dataTransfer.effectAllowed = effectAllowed;
@@ -166,15 +170,9 @@ FileTransferController.prototype = {
    * @return {string} Path or empty string (if unknown).
    */
   getSourceRoot_: function(dataTransfer) {
-    var sourceDir = dataTransfer.getData('fs/sourceDir');
-    if (sourceDir)
-      return PathUtil.getRootPath(sourceDir);
-
-    // For drive search, sourceDir will be set to null, so we should double
-    // check that we are not on drive.
-    // TODO(haruki): Investigate if this still is the case.
-    if (dataTransfer.getData('fs/isOnDrive') == 'true')
-      return RootDirectory.DRIVE;
+    var sourceRoot = dataTransfer.getData('fs/sourceRoot');
+    if (sourceRoot)
+      return sourceRoot;
 
     // |dataTransfer| in protected mode.
     if (window[DRAG_AND_DROP_GLOBAL_DATA])
@@ -204,33 +202,20 @@ FileTransferController.prototype = {
    */
   paste: function(dataTransfer, opt_destinationPath, opt_effect) {
     var destinationPath = opt_destinationPath ||
-                          this.directoryModel_.getCurrentDirPath();
+                          this.currentDirectoryContentPath;
     // effectAllowed set in copy/pase handlers stay uninitialized. DnD handlers
     // work fine.
+    var files = (dataTransfer.getData('fs/files') || '').split('\n');
+    var directories =
+        (dataTransfer.getData('fs/directories') || '').split('\n');
     var effectAllowed = dataTransfer.effectAllowed != 'uninitialized' ?
         dataTransfer.effectAllowed : dataTransfer.getData('fs/effectallowed');
-
     var toMove = effectAllowed == 'move' ||
         (effectAllowed == 'copyMove' && opt_effect == 'move');
-
-    var operationInfo = {
-      isCut: String(toMove),
-      isOnDrive: dataTransfer.getData('fs/isOnDrive'),
-      sourceDir: dataTransfer.getData('fs/sourceDir'),
-      directories: dataTransfer.getData('fs/directories'),
-      files: dataTransfer.getData('fs/files')
-    };
-
-    if (!toMove || operationInfo.sourceDir != destinationPath) {
-      var targetOnDrive = (PathUtil.getRootType(destinationPath) ===
-                           RootType.DRIVE);
-      this.copyManager_.paste(operationInfo,
-                              destinationPath,
-                              targetOnDrive);
-    } else {
-      console.log('Ignore move into the same folder');
-    }
-
+    this.copyManager_.paste(files,
+                            directories,
+                            toMove,
+                            destinationPath);
     return toMove ? 'move' : 'copy';
   },
 
@@ -288,7 +273,8 @@ FileTransferController.prototype = {
     // Option 2. Thumbnail image available, then render it without
     // a label.
     if (thumbnailImage) {
-      contents.classList.add('drag-image-thumbnail');
+      thumbnailImage.classList.add('drag-thumbnail');
+      contents.classList.add('for-image');
       contents.appendChild(this.preloadedThumbnailImageNode_);
       return container;
     }
@@ -312,6 +298,15 @@ FileTransferController.prototype = {
    * @param {Event} event A dragstart event of DOM.
    */
   onDragStart_: function(list, event) {
+    // Check if a drag selection should be initiated or not.
+    // TODO(hirono): Support drag selection on the grid view. crbug.com/247278
+    if (list.id == 'file-list' && list.parentNode.id == 'detail-table') {
+      if (list.parentNode.shouldStartDragSelection(event)) {
+        this.dragSelector_.startDragSelection(list, event);
+        return;
+      }
+    }
+
     // Nothing selected.
     if (!this.selectedEntries_.length) {
       event.preventDefault();
@@ -360,7 +355,7 @@ FileTransferController.prototype = {
   onDragOver_: function(onlyIntoDirectories, list, event) {
     event.preventDefault();
     var path = this.destinationPath_ ||
-        (!onlyIntoDirectories && this.directoryModel_.getCurrentDirPath());
+        (!onlyIntoDirectories && this.currentDirectoryContentPath);
     event.dataTransfer.dropEffect = this.selectDropEffect_(event, path);
     event.preventDefault();
   },
@@ -370,7 +365,7 @@ FileTransferController.prototype = {
    * @param {cr.ui.List} list Drop target list.
    * @param {Event} event A dragenter event of DOM.
    */
-  onDragEnterList_: function(list, event) {
+  onDragEnterFileList_: function(list, event) {
     event.preventDefault();  // Required to prevent the cursor flicker.
     this.lastEnteredTarget_ = event.target;
     var item = list.getListItemAncestor(event.target);
@@ -414,18 +409,22 @@ FileTransferController.prototype = {
 
   /**
    * @this {FileTransferController}
-   * @param {HTMLElement} breadcrumbsContainer Element which contains target
-   *     breadcrumbs.
+   * @param {NavigationList} list Drop target list.
    * @param {Event} event A dragenter event of DOM.
    */
-  onDragEnterBreadcrumbs_: function(breadcrumbsContainer, event) {
+  onDragEnterVolumesList_: function(list, event) {
     event.preventDefault();  // Required to prevent the cursor flicker.
     this.lastEnteredTarget_ = event.target;
-    var path = breadcrumbsContainer.getTargetPath(event);
-    if (!path)
+    var item = list.getListItemAncestor(event.target);
+    item = item && list.isItem(item) ? item : null;
+    if (item == this.dropTarget_)
       return;
 
-    this.setDropTarget_(event.target, true, event.dataTransfer, path);
+    var path = item && list.dataModel.item(item.listIndex);
+    if (path)
+      this.setDropTarget_(item, true /* directory */, event.dataTransfer, path);
+    else
+      this.clearDropTarget_();
   },
 
   /**
@@ -456,7 +455,7 @@ FileTransferController.prototype = {
     if (onlyIntoDirectories && !this.dropTarget_)
       return;
     var destinationPath = this.destinationPath_ ||
-                          this.directoryModel_.getCurrentDirPath();
+                          this.currentDirectoryContentPath;
     if (!this.canPasteOrDrop_(event.dataTransfer, destinationPath))
       return;
     event.preventDefault();
@@ -481,27 +480,26 @@ FileTransferController.prototype = {
     // Remove the old drop target.
     this.clearDropTarget_();
 
-    // Add accept class if the domElement can accept the drag.
-    if (isDirectory &&
-        this.canPasteOrDrop_(dataTransfer, destinationPath)) {
-      domElement.classList.add('accepts');
-      this.destinationPath_ = destinationPath;
-    }
-
     // Set the new drop target.
     this.dropTarget_ = domElement;
 
-    // Start timer changing the directory.
-    if (domElement && isDirectory && destinationPath &&
-        this.canPasteOrDrop_(dataTransfer, destinationPath)) {
-      this.navigateTimer_ = setTimeout(function() {
-        if (domElement instanceof DirectoryItem)
-          // Do custom action.
-          (/** @type {DirectoryItem} */ domElement).doDropTargetAction();
-
-        this.directoryModel_.changeDirectory(destinationPath);
-      }.bind(this), 2000);
+    if (!domElement ||
+        !isDirectory ||
+        !this.canPasteOrDrop_(dataTransfer, destinationPath)) {
+      return;
     }
+
+    // Add accept class if the domElement can accept the drag.
+    domElement.classList.add('accepts');
+    this.destinationPath_ = destinationPath;
+
+    // Start timer changing the directory.
+    this.navigateTimer_ = setTimeout(function() {
+      if (domElement instanceof DirectoryItem)
+        // Do custom action.
+        (/** @type {DirectoryItem} */ domElement).doDropTargetAction();
+      this.directoryModel_.changeDirectory(destinationPath);
+    }.bind(this), 2000);
   },
 
   /**
@@ -604,7 +602,8 @@ FileTransferController.prototype = {
   onPaste_: function(event) {
     // Need to update here since 'beforepaste' doesn't fire.
     if (!this.isDocumentWideEvent_() ||
-        !this.canPasteOrDrop_(event.clipboardData)) {
+        !this.canPasteOrDrop_(event.clipboardData,
+                              this.currentDirectoryContentPath)) {
       return;
     }
     event.preventDefault();
@@ -627,27 +626,27 @@ FileTransferController.prototype = {
     if (!this.isDocumentWideEvent_())
       return;
     // queryCommandEnabled returns true if event.returnValue is false.
-    event.returnValue = !this.canPasteOrDrop_(event.clipboardData);
+    event.returnValue = !this.canPasteOrDrop_(
+        event.clipboardData, this.currentDirectoryContentPath);
   },
 
   /**
    * @this {FileTransferController}
    * @param {DataTransfer} dataTransfer Data transfer object.
-   * @param {string=} opt_destinationPath Destination path.
-   * @return {boolean}  Returns true if items stored in {@code dataTransfer} can
-   *     be pasted to {@code opt_destinationPath}. Otherwise, returns false.
+   * @param {string?} destinationPath Destination path.
+   * @return {boolean} Returns true if items stored in {@code dataTransfer} can
+   *     be pasted to {@code destinationPath}. Otherwise, returns false.
    */
-  canPasteOrDrop_: function(dataTransfer, opt_destinationPath) {
-    var destinationPath = opt_destinationPath ||
-                          this.directoryModel_.getCurrentDirPath();
+  canPasteOrDrop_: function(dataTransfer, destinationPath) {
+    if (!destinationPath) {
+      return false;
+    }
     if (this.directoryModel_.isPathReadOnly(destinationPath)) {
       return false;
     }
-    if (this.directoryModel_.isSearching())
-      return false;
-
-    if (!dataTransfer.types || dataTransfer.types.indexOf('fs/tag') == -1)
+    if (!dataTransfer.types || dataTransfer.types.indexOf('fs/tag') == -1) {
       return false;  // Unsupported type of content.
+    }
     if (dataTransfer.getData('fs/tag') == '') {
       // Data protected. Other checks are not possible but it makes sense to
       // let the user try.
@@ -681,7 +680,8 @@ FileTransferController.prototype = {
     // should be used.
     var result;
     this.simulateCommand_('paste', function(event) {
-      result = this.canPasteOrDrop_(event.clipboardData);
+      result = this.canPasteOrDrop_(event.clipboardData,
+                                    this.currentDirectoryContentPath);
     }.bind(this));
     return result;
   },
@@ -755,16 +755,19 @@ FileTransferController.prototype = {
   },
 
   /**
+   * Path of directory that is displaying now.
+   * If search result is displaying now, this is null.
    * @this {FileTransferController}
+   * @return {string} Path of directry that is displaying now.
    */
-  get currentDirectory() {
-    if (this.directoryModel_.isSearching() && this.isOnDrive)
-      return null;
-    return this.directoryModel_.getCurrentDirEntry();
+  get currentDirectoryContentPath() {
+    return this.directoryModel_.isSearching() ?
+        null : this.directoryModel_.getCurrentDirPath();
   },
 
   /**
    * @this {FileTransferController}
+   * @return {boolean} True if the current directory is read only.
    */
   get readonly() {
     return this.directoryModel_.isReadOnly();
@@ -772,10 +775,10 @@ FileTransferController.prototype = {
 
   /**
    * @this {FileTransferController}
+   * @return {boolean} True if the current directory is on Drive.
    */
   get isOnDrive() {
-    return this.directoryModel_.getCurrentRootType() === RootType.DRIVE ||
-           this.directoryModel_.getCurrentRootType() === RootType.DRIVE_OFFLINE;
+    return PathUtil.isDriveBasedPath(this.directoryModel_.getCurrentRootPath());
   },
 
   /**
@@ -791,7 +794,7 @@ FileTransferController.prototype = {
 
   /**
    * @this {FileTransferController}
-   * @type {Array.<Entry>}
+   * @return {Array.<Entry>} Array of the selected entries.
    */
   get selectedEntries_() {
     var list = this.directoryModel_.getFileList();

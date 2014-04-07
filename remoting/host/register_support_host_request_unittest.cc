@@ -6,9 +6,9 @@
 
 #include "base/bind.h"
 #include "base/memory/ref_counted.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/observer_list.h"
-#include "base/string_number_conversions.h"
+#include "base/strings/string_number_conversions.h"
 #include "remoting/base/constants.h"
 #include "remoting/base/rsa_key_pair.h"
 #include "remoting/base/test_rsa_key_pair.h"
@@ -59,7 +59,7 @@ class RegisterSupportHostRequestTest : public testing::Test {
  protected:
   virtual void SetUp() {
     key_pair_ = RsaKeyPair::FromString(kTestRsaKeyPair);
-    ASSERT_TRUE(key_pair_);
+    ASSERT_TRUE(key_pair_.get());
 
     EXPECT_CALL(signal_strategy_, AddListener(NotNull()))
         .WillRepeatedly(AddListener(&signal_strategy_listeners_));
@@ -69,7 +69,7 @@ class RegisterSupportHostRequestTest : public testing::Test {
         .WillRepeatedly(Return(kTestJid));
   }
 
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
   MockSignalStrategy signal_strategy_;
   ObserverList<SignalStrategy::Listener, true> signal_strategy_listeners_;
   scoped_refptr<RsaKeyPair> key_pair_;
@@ -99,9 +99,9 @@ TEST_F(RegisterSupportHostRequestTest, Send) {
   scoped_ptr<XmlElement> stanza(sent_iq);
   ASSERT_TRUE(stanza != NULL);
 
-  EXPECT_EQ(stanza->Attr(buzz::QName("", "to")),
+  EXPECT_EQ(stanza->Attr(buzz::QName(std::string(), "to")),
             std::string(kTestBotJid));
-  EXPECT_EQ(stanza->Attr(buzz::QName("", "type")), "set");
+  EXPECT_EQ(stanza->Attr(buzz::QName(std::string(), "type")), "set");
 
   EXPECT_EQ(QName(kChromotingXmlNamespace, "register-support-host"),
             stanza->FirstElement()->Name());
@@ -120,7 +120,7 @@ TEST_F(RegisterSupportHostRequestTest, Send) {
   EXPECT_GE(now, time);
 
   scoped_refptr<RsaKeyPair> key_pair = RsaKeyPair::FromString(kTestRsaKeyPair);
-  ASSERT_TRUE(key_pair);
+  ASSERT_TRUE(key_pair.get());
 
   std::string expected_signature =
       key_pair->SignMessage(std::string(kTestJid) + ' ' + time_str);
@@ -131,9 +131,9 @@ TEST_F(RegisterSupportHostRequestTest, Send) {
                                     base::TimeDelta::FromSeconds(300)));
 
   scoped_ptr<XmlElement> response(new XmlElement(buzz::QN_IQ));
-  response->AddAttr(QName("", "from"), kTestBotJid);
-  response->AddAttr(QName("", "type"), "result");
-  response->AddAttr(QName("", "id"), kStanzaId);
+  response->AddAttr(QName(std::string(), "from"), kTestBotJid);
+  response->AddAttr(QName(std::string(), "type"), "result");
+  response->AddAttr(QName(std::string(), "id"), kStanzaId);
 
   XmlElement* result = new XmlElement(
       QName(kChromotingXmlNamespace, "register-support-host-result"));

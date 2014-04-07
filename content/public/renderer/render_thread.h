@@ -6,7 +6,8 @@
 #define CONTENT_PUBLIC_RENDERER_RENDER_THREAD_H_
 
 #include "base/basictypes.h"
-#include "base/shared_memory.h"
+#include "base/callback.h"
+#include "base/memory/shared_memory.h"
 #include "content/common/content_export.h"
 #include "ipc/ipc_channel_proxy.h"
 #include "ipc/ipc_sender.h"
@@ -16,9 +17,9 @@
 #endif
 
 class GURL;
-class MessageLoop;
 
 namespace base {
+class MessageLoop;
 class MessageLoopProxy;
 }
 
@@ -45,7 +46,7 @@ class CONTENT_EXPORT RenderThread : public IPC::Sender {
   RenderThread();
   virtual ~RenderThread();
 
-  virtual MessageLoop* GetMessageLoop() = 0;
+  virtual base::MessageLoop* GetMessageLoop() = 0;
   virtual IPC::SyncChannel* GetChannel() = 0;
   virtual std::string GetLocale() = 0;
   virtual IPC::SyncMessageFilter* GetSyncMessageFilter() = 0;
@@ -105,6 +106,9 @@ class CONTENT_EXPORT RenderThread : public IPC::Sender {
   virtual void ToggleWebKitSharedTimer(bool suspend) = 0;
 
   virtual void UpdateHistograms(int sequence_number) = 0;
+
+  // Post task to all worker threads. Returns number of workers.
+  virtual int PostTaskToAllWebWorkers(const base::Closure& closure) = 0;
 
   // Resolve the proxy servers to use for a given url. On success true is
   // returned and |proxy_list| is set to a PAC string containing a list of

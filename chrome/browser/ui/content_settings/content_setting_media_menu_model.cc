@@ -4,7 +4,7 @@
 
 #include "chrome/browser/ui/content_settings/content_setting_media_menu_model.h"
 
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/media/media_capture_devices_dispatcher.h"
 #include "chrome/browser/ui/content_settings/content_setting_bubble_model.h"
 
@@ -12,7 +12,7 @@ ContentSettingMediaMenuModel::ContentSettingMediaMenuModel(
     content::MediaStreamType type,
     ContentSettingBubbleModel* bubble_model,
     const MenuLabelChangedCallback& callback)
-    : ALLOW_THIS_IN_INITIALIZER_LIST(ui::SimpleMenuModel(this)),
+    : ui::SimpleMenuModel(this),
       type_(type),
       media_bubble_model_(bubble_model),
       callback_(callback) {

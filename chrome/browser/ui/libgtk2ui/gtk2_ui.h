@@ -40,14 +40,22 @@ class Gtk2UI : public ui::LinuxUI {
 
   // ui::LinuxUI:
   virtual bool UseNativeTheme() const OVERRIDE;
-  virtual gfx::Image* GetThemeImageNamed(int id) const OVERRIDE;
+  virtual gfx::Image GetThemeImageNamed(int id) const OVERRIDE;
   virtual bool GetColor(int id, SkColor* color) const OVERRIDE;
+  virtual bool HasCustomImage(int id) const OVERRIDE;
   virtual ui::NativeTheme* GetNativeTheme() const OVERRIDE;
+  virtual bool GetDefaultUsesSystemTheme() const OVERRIDE;
+  virtual void SetDownloadCount(int count) const OVERRIDE;
+  virtual void SetProgressFraction(float percentage) const OVERRIDE;
+  virtual bool IsStatusIconSupported() const OVERRIDE;
+  virtual scoped_ptr<StatusIconLinux> CreateLinuxStatusIcon(
+      const gfx::ImageSkia& image,
+      const string16& tool_tip) const OVERRIDE;
 
  private:
   typedef std::map<int, SkColor> ColorMap;
   typedef std::map<int, color_utils::HSL> TintMap;
-  typedef std::map<int, gfx::Image*> ImageCache;
+  typedef std::map<int, gfx::Image> ImageCache;
 
   // This method returns the colors webkit will use for the scrollbars. When no
   // colors are specified by the GTK+ theme, this function averages of the
@@ -102,8 +110,9 @@ class Gtk2UI : public ui::LinuxUI {
   // appropriate.
   SkBitmap GenerateGTKIcon(int base_id) const;
 
-  // Renders a GTK button border around a tinted wrench icon.
-  SkBitmap GenerateWrenchIcon(int base_id) const;
+  // Renders a GTK button border the size of the image |sizing_idr| in
+  // |gtk_state|.
+  SkBitmap GenerateToolbarBezel(int gtk_state, int sizing_idr) const;
 
   // Returns the tint for buttons that contrasts with the normal window
   // background color.

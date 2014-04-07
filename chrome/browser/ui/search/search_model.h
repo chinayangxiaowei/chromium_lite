@@ -9,35 +9,39 @@
 #include "base/observer_list.h"
 #include "chrome/common/search_types.h"
 
-namespace chrome {
-namespace search {
-
 class SearchModelObserver;
+
+// Represents whether a page supports Instant.
+enum InstantSupportState {
+  INSTANT_SUPPORT_NO,
+  INSTANT_SUPPORT_YES,
+  INSTANT_SUPPORT_UNKNOWN,
+};
 
 // An observable model for UI components that care about search model state
 // changes.
 class SearchModel {
  public:
   struct State {
-    State() : top_bars_visible(true) {}
+    State();
+    State(const SearchMode& mode,
+          InstantSupportState instant_support,
+          bool voice_search_supported);
 
-    bool operator==(const State& rhs) const {
-      return mode == rhs.mode && top_bars_visible == rhs.top_bars_visible;
-    }
+    bool operator==(const State& rhs) const;
 
     // The display mode of UI elements such as the toolbar, the tab strip, etc.
-    Mode mode;
-    // The visibility of top bars such as bookmark and info bars.
-    bool top_bars_visible;
+    SearchMode mode;
+
+    // Does the current page support Instant?
+    InstantSupportState instant_support;
+
+    // Does the current page support voice search?
+    bool voice_search_supported;
   };
 
   SearchModel();
   ~SearchModel();
-
-  // Returns true if visibility in top bars should be changed based on
-  // |old_state| and |new_state|.
-  static bool ShouldChangeTopBarsVisibility(const State& old_state,
-                                            const State& new_state);
 
   // Change the state.  Change notifications are sent to observers.
   void SetState(const State& state);
@@ -46,16 +50,26 @@ class SearchModel {
   const State& state() const { return state_; }
 
   // Change the mode.  Change notifications are sent to observers.
-  void SetMode(const Mode& mode);
+  void SetMode(const SearchMode& mode);
 
   // Get the active mode.
-  const Mode& mode() const { return state_.mode; }
+  const SearchMode& mode() const { return state_.mode; }
 
-  // Set visibility of top bars.  Change notifications are sent to observers.
-  void SetTopBarsVisible(bool visible);
+  // Sets the page instant support state. Change notifications are sent to
+  // observers.
+  void SetInstantSupportState(InstantSupportState instant_support);
 
-  // Get the visibility of top bars.
-  bool top_bars_visible() const { return state_.top_bars_visible; }
+  // Gets the instant support state of the page.
+  InstantSupportState instant_support() const {
+    return state_.instant_support;
+  }
+
+  // Sets the page voice search support state.  Change notifications are sent to
+  // observers.
+  void SetVoiceSearchSupported(bool supported);
+
+  // Gets the voice search support state of the page.
+  bool voice_search_supported() const { return state_.voice_search_supported; }
 
   // Add and remove observers.
   void AddObserver(SearchModelObserver* observer);
@@ -70,8 +84,5 @@ class SearchModel {
 
   DISALLOW_COPY_AND_ASSIGN(SearchModel);
 };
-
-}  // namespace search
-}  // namespace chrome
 
 #endif  // CHROME_BROWSER_UI_SEARCH_SEARCH_MODEL_H_

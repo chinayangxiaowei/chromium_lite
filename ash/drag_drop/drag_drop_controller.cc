@@ -9,7 +9,7 @@
 #include "ash/shell.h"
 #include "ash/wm/coordinate_conversion.h"
 #include "base/bind.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "ui/aura/client/capture_client.h"
 #include "ui/aura/client/drag_drop_delegate.h"
@@ -139,25 +139,23 @@ class DragDropTrackerDelegate : public aura::WindowDelegate {
 // DragDropController, public:
 
 DragDropController::DragDropController()
-    : drag_image_(NULL),
-      drag_data_(NULL),
+    : drag_data_(NULL),
       drag_operation_(0),
       drag_window_(NULL),
       drag_source_window_(NULL),
       should_block_during_drag_drop_(true),
-      ALLOW_THIS_IN_INITIALIZER_LIST(
-          drag_drop_window_delegate_(new DragDropTrackerDelegate(this))),
+      drag_drop_window_delegate_(new DragDropTrackerDelegate(this)),
       current_drag_event_source_(ui::DragDropTypes::DRAG_EVENT_SOURCE_MOUSE),
       weak_factory_(this) {
-  Shell::GetInstance()->AddPreTargetHandler(this);
+  Shell::GetInstance()->PrependPreTargetHandler(this);
 }
 
 DragDropController::~DragDropController() {
   Shell::GetInstance()->RemovePreTargetHandler(this);
   Cleanup();
-  if (cancel_animation_.get())
+  if (cancel_animation_)
     cancel_animation_->End();
-  if (drag_image_.get())
+  if (drag_image_)
     drag_image_.reset();
 }
 
@@ -224,15 +222,15 @@ int DragDropController::StartDragAndDrop(
   drag_window_ = NULL;
 
   // Ends cancel animation if it's in progress.
-  if (cancel_animation_.get())
+  if (cancel_animation_)
     cancel_animation_->End();
 
 #if !defined(OS_MACOSX)
   if (should_block_during_drag_drop_) {
     base::RunLoop run_loop(aura::Env::GetInstance()->GetDispatcher());
     quit_closure_ = run_loop.QuitClosure();
-    MessageLoopForUI* loop = MessageLoopForUI::current();
-    MessageLoop::ScopedNestableTaskAllower allow_nested(loop);
+    base::MessageLoopForUI* loop = base::MessageLoopForUI::current();
+    base::MessageLoop::ScopedNestableTaskAllower allow_nested(loop);
     run_loop.Run();
   }
 #endif  // !defined(OS_MACOSX)
@@ -401,13 +399,17 @@ void DragDropController::OnGestureEvent(ui::GestureEvent* event) {
   if (!IsDragDropInProgress())
     return;
 
-  // If current drag session was not started by touch, dont process this touch
-  // event, but consume it so it does not interfere with current drag session.
-  if (current_drag_event_source_ !=
-      ui::DragDropTypes::DRAG_EVENT_SOURCE_TOUCH) {
-    event->StopPropagation();
+  // No one else should handle gesture events when in drag drop. Note that it is
+  // not enough to just set ER_HANDLED because the dispatcher only stops
+  // dispatching when the event has ER_CONSUMED. If we just set ER_HANDLED, the
+  // event will still be dispatched to other handlers and we depend on
+  // individual handlers' kindness to not touch events marked ER_HANDLED (not
+  // all handlers are so kind and may cause bugs like crbug.com/236493).
+  event->StopPropagation();
+
+  // If current drag session was not started by touch, dont process this event.
+  if (current_drag_event_source_ != ui::DragDropTypes::DRAG_EVENT_SOURCE_TOUCH)
     return;
-  }
 
   // Apply kTouchDragImageVerticalOffset to the location.
   ui::GestureEvent touch_offset_event(*event,
@@ -487,15 +489,16 @@ void DragDropController::AnimationEnded(const ui::Animation* animation) {
   // started. We do not want to destroy the drag image in that case.
   if (!IsDragDropInProgress())
     drag_image_.reset();
-  if (pending_long_tap_.get()) {
+  if (pending_long_tap_) {
     // If not in a nested message loop, we can forward the long tap right now.
     if (!should_block_during_drag_drop_)
       ForwardPendingLongTap();
     else {
       // See comment about this in OnGestureEvent().
-      MessageLoopForUI::current()->PostTask(
-          FROM_HERE, base::Bind(&DragDropController::ForwardPendingLongTap,
-                                weak_factory_.GetWeakPtr()));
+      base::MessageLoopForUI::current()->PostTask(
+          FROM_HERE,
+          base::Bind(&DragDropController::ForwardPendingLongTap,
+                     weak_factory_.GetWeakPtr()));
     }
   }
 }

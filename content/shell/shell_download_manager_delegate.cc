@@ -17,14 +17,14 @@
 #include "base/command_line.h"
 #include "base/file_util.h"
 #include "base/logging.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/download_manager.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_view.h"
-#include "content/shell/shell_switches.h"
+#include "content/shell/common/shell_switches.h"
 #include "content/shell/webkit_test_controller.h"
 #include "net/base/net_util.h"
 
@@ -90,20 +90,28 @@ bool ShellDownloadManagerDelegate::DetermineDownloadTarget(
 bool ShellDownloadManagerDelegate::ShouldOpenDownload(
       DownloadItem* item,
       const DownloadOpenDelayedCallback& callback) {
-  if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kDumpRenderTree)) {
+  if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kDumpRenderTree) &&
+      WebKitTestController::Get()->IsMainWindow(item->GetWebContents()) &&
+      item->GetMimeType() == "text/html") {
     WebKitTestController::Get()->OpenURL(
         net::FilePathToFileURL(item->GetFullPath()));
   }
   return true;
 }
 
+void ShellDownloadManagerDelegate::GetNextId(
+    const DownloadIdCallback& callback) {
+  static uint32 next_id = DownloadItem::kInvalidId + 1;
+  callback.Run(next_id++);
+}
+
 void ShellDownloadManagerDelegate::GenerateFilename(
-    int32 download_id,
+    uint32 download_id,
     const DownloadTargetCallback& callback,
     const base::FilePath& generated_name,
     const base::FilePath& suggested_directory) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
-  if (!file_util::PathExists(suggested_directory))
+  if (!base::PathExists(suggested_directory))
     file_util::CreateDirectory(suggested_directory);
 
   base::FilePath suggested_path(suggested_directory.Append(generated_name));
@@ -116,7 +124,7 @@ void ShellDownloadManagerDelegate::GenerateFilename(
 }
 
 void ShellDownloadManagerDelegate::OnDownloadPathGenerated(
-    int32 download_id,
+    uint32 download_id,
     const DownloadTargetCallback& callback,
     const base::FilePath& suggested_path) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
@@ -132,7 +140,7 @@ void ShellDownloadManagerDelegate::OnDownloadPathGenerated(
 }
 
 void ShellDownloadManagerDelegate::ChooseDownloadPath(
-    int32 download_id,
+    uint32 download_id,
     const DownloadTargetCallback& callback,
     const base::FilePath& suggested_path) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
@@ -183,6 +191,7 @@ void ShellDownloadManagerDelegate::ChooseDownloadPath(
     char *filename;
     filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
     result = base::FilePath(filename);
+    g_free(filename);
   }
   gtk_widget_destroy(dialog);
 #else

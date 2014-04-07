@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "base/memory/scoped_ptr.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "chrome/browser/search_engines/template_url_service.h"
 
 class Profile;
@@ -22,6 +22,10 @@ class WebDataService;
 // Returns the short name of the default search engine, or the empty string if
 // none is set. |profile| may be NULL.
 string16 GetDefaultSearchEngineName(Profile* profile);
+
+// Returns a GURL that searches for |terms| using the default search engine of
+// |profile|.
+GURL GetDefaultSearchURLForSearchTerms(Profile* profile, const string16& terms);
 
 // Modifies |prepopulated_url| so that it contains user-modified fields from
 // |original_turl|. Both URLs must have the same prepopulate_id.
@@ -48,6 +52,21 @@ void GetSearchProvidersUsingKeywordResult(
     TemplateURLService::TemplateURLVector* template_urls,
     TemplateURL** default_search_provider,
     int* new_resource_keyword_version,
+    std::set<std::string>* removed_keyword_guids);
+
+// Like GetSearchProvidersUsingKeywordResult(), but allows the caller to pass in
+// engines in |template_urls| instead of getting them via processing a web data
+// service request.
+// |resource_keyword_version| should contain the version number of the current
+// keyword data, i.e. the version number of the most recent prepopulate data
+// that has been merged into the current keyword data.  On exit, this will be
+// set as in GetSearchProvidersUsingKeywordResult().
+void GetSearchProvidersUsingLoadedEngines(
+    WebDataService* service,
+    Profile* profile,
+    TemplateURLService::TemplateURLVector* template_urls,
+    TemplateURL** default_search_provider,
+    int* resource_keyword_version,
     std::set<std::string>* removed_keyword_guids);
 
 // Due to a bug, the |input_encodings| field of TemplateURLData could have

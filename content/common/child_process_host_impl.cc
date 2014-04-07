@@ -12,9 +12,9 @@
 #include "base/logging.h"
 #include "base/metrics/histogram.h"
 #include "base/path_service.h"
-#include "base/process_util.h"
+#include "base/process/process_metrics.h"
 #include "base/rand_util.h"
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "base/third_party/dynamic_annotations/dynamic_annotations.h"
 #include "content/common/child_process_messages.h"
 #include "content/public/common/child_process_host_delegate.h"
@@ -149,7 +149,7 @@ ChildProcessHostImpl::~ChildProcessHostImpl() {
 void ChildProcessHostImpl::AddFilter(IPC::ChannelProxy::MessageFilter* filter) {
   filters_.push_back(filter);
 
-  if (channel_.get())
+  if (channel_)
     filter->OnFilterAdded(channel_.get());
 }
 
@@ -189,7 +189,7 @@ int ChildProcessHostImpl::TakeClientFileDescriptor() {
 #endif
 
 bool ChildProcessHostImpl::Send(IPC::Message* message) {
-  if (!channel_.get()) {
+  if (!channel_) {
     delete message;
     return false;
   }
@@ -262,7 +262,7 @@ bool ChildProcessHostImpl::OnMessageReceived(const IPC::Message& msg) {
 }
 
 void ChildProcessHostImpl::OnChannelConnected(int32 peer_pid) {
-  if (!base::OpenProcessHandle(peer_pid, &peer_handle_)) {
+  if (!base::OpenPrivilegedProcessHandle(peer_pid, &peer_handle_)) {
     NOTREACHED();
   }
   opening_channel_ = false;

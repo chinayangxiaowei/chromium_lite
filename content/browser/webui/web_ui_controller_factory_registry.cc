@@ -6,7 +6,7 @@
 
 #include "base/lazy_instance.h"
 #include "content/public/common/url_constants.h"
-#include "googleurl/src/gurl.h"
+#include "url/gurl.h"
 
 namespace content {
 
@@ -85,7 +85,7 @@ bool WebUIControllerFactoryRegistry::IsURLAcceptableForWebUI(
       url.SchemeIs(chrome::kJavaScriptScheme) ||
       // It's possible to load about:blank in a Web UI renderer.
       // See http://crbug.com/42547
-      url.spec() == chrome::kAboutBlankURL ||
+      url.spec() == kAboutBlankURL ||
       // Chrome URLs crash, kill, hang, and shorthang are allowed.
       url == GURL(kChromeUICrashURL) ||
       url == GURL(kChromeUIKillURL) ||

@@ -7,12 +7,13 @@
 
 #include <vector>
 
-#include "base/string16.h"
+#include "base/memory/scoped_vector.h"
+#include "base/strings/string16.h"
 #include "chrome/renderer/spellchecker/spellcheck_provider.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebVector.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebTextCheckingCompletion.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebTextCheckingResult.h"
+#include "third_party/WebKit/public/platform/WebVector.h"
+#include "third_party/WebKit/public/web/WebTextCheckingCompletion.h"
+#include "third_party/WebKit/public/web/WebTextCheckingResult.h"
 
 namespace IPC {
   class Message;
@@ -42,13 +43,12 @@ class TestingSpellCheckProvider : public SpellCheckProvider {
   virtual bool Send(IPC::Message* message) OVERRIDE;
   void OnCallSpellingService(int route_id,
                              int identifier,
-                             int offset,
-                             const string16& text);
+                             const string16& text,
+                             const std::vector<SpellCheckMarker>& markers);
   void ResetResult();
 
-  int offset_;
   string16 text_;
-  std::vector<IPC::Message*> messages_;
+  ScopedVector<IPC::Message> messages_;
   size_t spelling_service_call_count_;
 };
 

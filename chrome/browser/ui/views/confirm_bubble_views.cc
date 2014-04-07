@@ -6,6 +6,7 @@
 
 #include "chrome/browser/ui/confirm_bubble.h"
 #include "chrome/browser/ui/confirm_bubble_model.h"
+#include "chrome/browser/ui/views/constrained_window_views.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/link.h"
 #include "ui/views/layout/grid_layout.h"
@@ -15,13 +16,7 @@
 ConfirmBubbleViews::ConfirmBubbleViews(ConfirmBubbleModel* model)
     : model_(model),
       link_(NULL) {
-  views::GridLayout* layout = new views::GridLayout(this);
-  // TODO(msw): Use layout constants and fix the new-style sizing.
-  layout->SetInsets(UseNewStyle() ? gfx::Insets(0, 0, 40, 0) :
-      gfx::Insets(views::kUnrelatedControlVerticalSpacing,
-                  views::kUnrelatedControlHorizontalSpacing,
-                  views::kUnrelatedControlVerticalSpacing,
-                  views::kUnrelatedControlHorizontalSpacing));
+  views::GridLayout* layout = views::GridLayout::CreatePanel(this);
   SetLayoutManager(layout);
 
   // Use a fixed maximum message width, so longer messages will wrap.
@@ -107,8 +102,7 @@ namespace chrome {
 void ShowConfirmBubble(gfx::NativeView view,
                        const gfx::Point& origin,
                        ConfirmBubbleModel* model) {
-  views::DialogDelegateView::CreateDialogWidget(
-      new ConfirmBubbleViews(model), NULL, view)->Show();
+  CreateBrowserModalDialogViews(new ConfirmBubbleViews(model), view)->Show();
 }
 
 }  // namespace chrome

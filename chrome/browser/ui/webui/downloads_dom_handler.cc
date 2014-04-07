@@ -13,10 +13,12 @@
 #include "base/i18n/rtl.h"
 #include "base/i18n/time_formatting.h"
 #include "base/memory/singleton.h"
+#include "base/metrics/field_trial.h"
 #include "base/metrics/histogram.h"
-#include "base/string_piece.h"
+#include "base/prefs/pref_service.h"
+#include "base/strings/string_piece.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread.h"
-#include "base/utf_string_conversions.h"
 #include "base/value_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
@@ -29,25 +31,25 @@
 #include "chrome/browser/download/download_service.h"
 #include "chrome/browser/download/download_service_factory.h"
 #include "chrome/browser/download/download_util.h"
+#include "chrome/browser/extensions/api/downloads/downloads_api.h"
+#include "chrome/browser/extensions/extension_service.h"
+#include "chrome/browser/extensions/extension_system.h"
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/fileicon_source.h"
-#include "chrome/common/time_format.h"
+#include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/download_item.h"
-#include "content/public/browser/user_metrics.h"
 #include "content/public/browser/url_data_source.h"
+#include "content/public/browser/user_metrics.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_view.h"
 #include "content/public/browser/web_ui.h"
 #include "grit/generated_resources.h"
 #include "net/base/net_util.h"
+#include "ui/base/l10n/time_format.h"
 #include "ui/gfx/image/image.h"
-
-#if defined(OS_CHROMEOS)
-#include "chrome/browser/chromeos/extensions/file_manager_util.h"
-#endif
 
 using content::BrowserContext;
 using content::BrowserThread;
@@ -97,6 +99,8 @@ const char* GetDangerTypeString(content::DownloadDangerType danger_type) {
       return "UNCOMMON_CONTENT";
     case content::DOWNLOAD_DANGER_TYPE_DANGEROUS_HOST:
       return "DANGEROUS_HOST";
+    case content::DOWNLOAD_DANGER_TYPE_POTENTIALLY_UNWANTED:
+      return "POTENTIALLY_UNWANTED";
     default:
       // Don't return a danger type string if it is NOT_DANGEROUS or
       // MAYBE_DANGEROUS_CONTENT.
@@ -120,7 +124,7 @@ DictionaryValue* CreateDownloadItemValue(
   file_value->SetInteger(
       "started", static_cast<int>(download_item->GetStartTime().ToTimeT()));
   file_value->SetString(
-      "since_string", TimeFormat::RelativeDate(
+      "since_string", ui::TimeFormat::RelativeDate(
           download_item->GetStartTime(), NULL));
   file_value->SetString(
       "date_string", base::TimeFormatShortDate(download_item->GetStartTime()));
@@ -130,6 +134,21 @@ DictionaryValue* CreateDownloadItemValue(
   file_value->Set("file_path", base::CreateFilePathValue(download_path));
   file_value->SetString("file_url",
                         net::FilePathToFileURL(download_path).spec());
+
+  DownloadedByExtension* by_ext = DownloadedByExtension::Get(download_item);
+  if (by_ext) {
+    file_value->SetString("by_ext_id", by_ext->id());
+    file_value->SetString("by_ext_name", by_ext->name());
+    // Lookup the extension's current name() in case the user changed their
+    // language. This won't work if the extension was uninstalled, so the name
+    // might be the wrong language.
+    bool include_disabled = true;
+    const extensions::Extension* extension = extensions::ExtensionSystem::Get(
+        Profile::FromBrowserContext(download_item->GetBrowserContext()))->
+      extension_service()->GetExtensionById(by_ext->id(), include_disabled);
+    if (extension)
+      file_value->SetString("by_ext_name", extension->name());
+  }
 
   // Keep file names as LTR.
   string16 file_name =
@@ -143,60 +162,86 @@ DictionaryValue* CreateDownloadItemValue(
   file_value->SetBoolean("file_externally_removed",
                          download_item->GetFileExternallyRemoved());
   file_value->SetBoolean("retry", false); // Overridden below if needed.
+  file_value->SetBoolean("resume", download_item->CanResume());
 
-  if (download_item->IsInProgress()) {
-    if (download_item->IsDangerous()) {
-      file_value->SetString("state", "DANGEROUS");
-      // These are the only danger states that the UI is equipped to handle.
-      DCHECK(download_item->GetDangerType() ==
-                 content::DOWNLOAD_DANGER_TYPE_DANGEROUS_FILE ||
-             download_item->GetDangerType() ==
-                 content::DOWNLOAD_DANGER_TYPE_DANGEROUS_URL ||
-             download_item->GetDangerType() ==
-                 content::DOWNLOAD_DANGER_TYPE_DANGEROUS_CONTENT ||
-             download_item->GetDangerType() ==
-                 content::DOWNLOAD_DANGER_TYPE_UNCOMMON_CONTENT ||
-             download_item->GetDangerType() ==
-                 content::DOWNLOAD_DANGER_TYPE_DANGEROUS_HOST);
-      const char* danger_type_value =
-          GetDangerTypeString(download_item->GetDangerType());
-      file_value->SetString("danger_type", danger_type_value);
-    } else if (download_item->IsPaused()) {
-      file_value->SetString("state", "PAUSED");
-    } else {
-      file_value->SetString("state", "IN_PROGRESS");
-    }
+  switch (download_item->GetState()) {
+    case content::DownloadItem::IN_PROGRESS:
+      if (download_item->IsDangerous()) {
+        file_value->SetString("state", "DANGEROUS");
+        // These are the only danger states that the UI is equipped to handle.
+        DCHECK(download_item->GetDangerType() ==
+                   content::DOWNLOAD_DANGER_TYPE_DANGEROUS_FILE ||
+               download_item->GetDangerType() ==
+                   content::DOWNLOAD_DANGER_TYPE_DANGEROUS_URL ||
+               download_item->GetDangerType() ==
+                   content::DOWNLOAD_DANGER_TYPE_DANGEROUS_CONTENT ||
+               download_item->GetDangerType() ==
+                   content::DOWNLOAD_DANGER_TYPE_UNCOMMON_CONTENT ||
+               download_item->GetDangerType() ==
+                   content::DOWNLOAD_DANGER_TYPE_DANGEROUS_HOST ||
+               download_item->GetDangerType() ==
+                   content::DOWNLOAD_DANGER_TYPE_POTENTIALLY_UNWANTED);
+        std::string trial_condition =
+            base::FieldTrialList::FindFullName(download_util::kFinchTrialName);
+        const char* danger_type_value =
+            GetDangerTypeString(download_item->GetDangerType());
+        file_value->SetString("danger_type", danger_type_value);
+        if (!trial_condition.empty()) {
+          base::string16 finch_string;
+          content::DownloadDangerType danger_type =
+              download_item->GetDangerType();
+          if (danger_type == content::DOWNLOAD_DANGER_TYPE_DANGEROUS_URL ||
+              danger_type == content::DOWNLOAD_DANGER_TYPE_DANGEROUS_CONTENT ||
+              danger_type == content::DOWNLOAD_DANGER_TYPE_DANGEROUS_HOST) {
+            finch_string = download_util::AssembleMalwareFinchString(
+                trial_condition, file_name);
+          }
+          file_value->SetString("finch_string", finch_string);
+        }
+      } else if (download_item->IsPaused()) {
+        file_value->SetString("state", "PAUSED");
+      } else {
+        file_value->SetString("state", "IN_PROGRESS");
+      }
 
-    file_value->SetString("progress_status_text",
-        download_util::GetProgressStatusText(download_item));
+      file_value->SetString("progress_status_text",
+          download_util::GetProgressStatusText(download_item));
 
-    file_value->SetInteger("percent",
-        static_cast<int>(download_item->PercentComplete()));
-    file_value->SetInteger("received",
-        static_cast<int>(download_item->GetReceivedBytes()));
-  } else if (download_item->IsInterrupted()) {
-    file_value->SetString("state", "INTERRUPTED");
+      file_value->SetInteger("percent",
+          static_cast<int>(download_item->PercentComplete()));
+      file_value->SetInteger("received",
+          static_cast<int>(download_item->GetReceivedBytes()));
+      break;
 
-    file_value->SetString("progress_status_text",
-        download_util::GetProgressStatusText(download_item));
+    case content::DownloadItem::INTERRUPTED:
+      file_value->SetString("state", "INTERRUPTED");
 
-    file_value->SetInteger("percent",
-        static_cast<int>(download_item->PercentComplete()));
-    file_value->SetInteger("received",
-        static_cast<int>(download_item->GetReceivedBytes()));
-    file_value->SetString("last_reason_text",
-                          download_model.GetInterruptReasonText());
-    if (content::DOWNLOAD_INTERRUPT_REASON_CRASH ==
-        download_item->GetLastReason())
+      file_value->SetString("progress_status_text",
+          download_util::GetProgressStatusText(download_item));
+
+      file_value->SetInteger("percent",
+          static_cast<int>(download_item->PercentComplete()));
+      file_value->SetInteger("received",
+          static_cast<int>(download_item->GetReceivedBytes()));
+      file_value->SetString("last_reason_text",
+                            download_model.GetInterruptReasonText());
+      if (content::DOWNLOAD_INTERRUPT_REASON_CRASH ==
+          download_item->GetLastReason() && !download_item->CanResume())
+        file_value->SetBoolean("retry", true);
+      break;
+
+    case content::DownloadItem::CANCELLED:
+      file_value->SetString("state", "CANCELLED");
       file_value->SetBoolean("retry", true);
-  } else if (download_item->IsCancelled()) {
-    file_value->SetString("state", "CANCELLED");
-    file_value->SetBoolean("retry", true);
-  } else if (download_item->IsComplete()) {
-    DCHECK(!download_item->IsDangerous());
-    file_value->SetString("state", "COMPLETE");
-  } else {
-    NOTREACHED() << "state undefined";
+      break;
+
+    case content::DownloadItem::COMPLETE:
+      DCHECK(!download_item->IsDangerous());
+      file_value->SetString("state", "COMPLETE");
+      break;
+
+    case content::DownloadItem::MAX_DOWNLOAD_STATE:
+      NOTREACHED() << "state undefined";
   }
 
   return file_value;
@@ -213,10 +258,9 @@ bool IsDownloadDisplayable(const content::DownloadItem& item) {
 }  // namespace
 
 DownloadsDOMHandler::DownloadsDOMHandler(content::DownloadManager* dlm)
-    : search_text_(),
-      ALLOW_THIS_IN_INITIALIZER_LIST(main_notifier_(dlm, this)),
+    : main_notifier_(dlm, this),
       update_scheduled_(false),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_ptr_factory_(this)) {
+      weak_ptr_factory_(this) {
   // Create our fileicon data source.
   Profile* profile = Profile::FromBrowserContext(dlm->GetBrowserContext());
   content::URLDataSource::Add(profile, new FileIconSource());
@@ -289,16 +333,14 @@ void DownloadsDOMHandler::OnDownloadUpdated(
     content::DownloadManager* manager,
     content::DownloadItem* download_item) {
   if (IsDownloadDisplayable(*download_item)) {
-    if (!search_text_.empty()) {
+    if (search_terms_ && !search_terms_->empty()) {
       // Don't CallDownloadUpdated() if download_item doesn't match
-      // search_text_.
+      // search_terms_.
       // TODO(benjhayden): Consider splitting MatchesQuery() out to a function.
       content::DownloadManager::DownloadVector all_items, filtered_items;
       all_items.push_back(download_item);
       DownloadQuery query;
-      scoped_ptr<base::Value> query_text(base::Value::CreateStringValue(
-          search_text_));
-      query.AddFilter(DownloadQuery::FILTER_QUERY, *query_text.get());
+      query.AddFilter(DownloadQuery::FILTER_QUERY, *search_terms_.get());
       query.Search(all_items.begin(), all_items.end(), &filtered_items);
       if (filtered_items.empty())
         return;
@@ -330,7 +372,7 @@ void DownloadsDOMHandler::OnDownloadRemoved(
 
 void DownloadsDOMHandler::HandleGetDownloads(const base::ListValue* args) {
   CountDownloadsDOMEvents(DOWNLOADS_DOM_EVENT_GET_DOWNLOADS);
-  search_text_ = ExtractStringValue(args);
+  search_terms_.reset((args && !args->empty()) ? args->DeepCopy() : NULL);
   SendCurrentDownloads();
 }
 
@@ -344,16 +386,24 @@ void DownloadsDOMHandler::HandleOpenFile(const base::ListValue* args) {
 void DownloadsDOMHandler::HandleDrag(const base::ListValue* args) {
   CountDownloadsDOMEvents(DOWNLOADS_DOM_EVENT_DRAG);
   content::DownloadItem* file = GetDownloadByValue(args);
+  if (!file)
+    return;
+
   content::WebContents* web_contents = GetWebUIWebContents();
   // |web_contents| is only NULL in the test.
-  if (!file || !web_contents || !file->IsComplete())
+  if (!web_contents)
     return;
-  gfx::Image* icon = g_browser_process->icon_manager()->LookupIcon(
+
+  if (file->GetState() != content::DownloadItem::COMPLETE)
+    return;
+
+  gfx::Image* icon = g_browser_process->icon_manager()->LookupIconFromFilepath(
       file->GetTargetFilePath(), IconLoader::NORMAL);
   gfx::NativeView view = web_contents->GetView()->GetNativeView();
   {
     // Enable nested tasks during DnD, while |DragDownload()| blocks.
-    MessageLoop::ScopedNestableTaskAllower allow(MessageLoop::current());
+    base::MessageLoop::ScopedNestableTaskAllower allow(
+        base::MessageLoop::current());
     download_util::DragDownload(file, icon, view);
   }
 }
@@ -369,7 +419,7 @@ void DownloadsDOMHandler::HandleDiscardDangerous(const base::ListValue* args) {
   CountDownloadsDOMEvents(DOWNLOADS_DOM_EVENT_DISCARD_DANGEROUS);
   content::DownloadItem* file = GetDownloadByValue(args);
   if (file)
-    file->Delete(content::DownloadItem::DELETE_DUE_TO_USER_DISCARD);
+    file->Remove();
 }
 
 void DownloadsDOMHandler::HandleShow(const base::ListValue* args) {
@@ -394,6 +444,9 @@ void DownloadsDOMHandler::HandleResume(const base::ListValue* args) {
 }
 
 void DownloadsDOMHandler::HandleRemove(const base::ListValue* args) {
+  if (!IsDeletingHistoryAllowed())
+    return;
+
   CountDownloadsDOMEvents(DOWNLOADS_DOM_EVENT_REMOVE);
   content::DownloadItem* file = GetDownloadByValue(args);
   if (file)
@@ -408,14 +461,17 @@ void DownloadsDOMHandler::HandleCancel(const base::ListValue* args) {
 }
 
 void DownloadsDOMHandler::HandleClearAll(const base::ListValue* args) {
-  CountDownloadsDOMEvents(DOWNLOADS_DOM_EVENT_CLEAR_ALL);
-  if (main_notifier_.GetManager())
+  if (IsDeletingHistoryAllowed()) {
+    CountDownloadsDOMEvents(DOWNLOADS_DOM_EVENT_CLEAR_ALL);
+    // IsDeletingHistoryAllowed already checked for the existence of the
+    // manager.
     main_notifier_.GetManager()->RemoveAllDownloads();
 
-  // If this is an incognito downloads page, clear All should clear main
-  // download manager as well.
-  if (original_notifier_.get() && original_notifier_->GetManager())
-    original_notifier_->GetManager()->RemoveAllDownloads();
+    // If this is an incognito downloads page, clear All should clear main
+    // download manager as well.
+    if (original_notifier_.get() && original_notifier_->GetManager())
+      original_notifier_->GetManager()->RemoveAllDownloads();
+  }
 
   // downloads.js always clears the display and relies on HandleClearAll to
   // ScheduleSendCurrentDownloads(). If any downloads are removed, then
@@ -460,10 +516,8 @@ void DownloadsDOMHandler::SendCurrentDownloads() {
     original_notifier_->GetManager()->CheckForHistoryFilesRemoval();
   }
   DownloadQuery query;
-  if (!search_text_.empty()) {
-    scoped_ptr<base::Value> query_text(base::Value::CreateStringValue(
-        search_text_));
-    query.AddFilter(DownloadQuery::FILTER_QUERY, *query_text.get());
+  if (search_terms_ && !search_terms_->empty()) {
+    query.AddFilter(DownloadQuery::FILTER_QUERY, *search_terms_.get());
   }
   query.AddFilter(base::Bind(&IsDownloadDisplayable));
   query.AddSorter(DownloadQuery::SORT_START_TIME, DownloadQuery::DESCENDING);
@@ -488,23 +542,32 @@ void DownloadsDOMHandler::ShowDangerPrompt(
       dangerous_item,
       GetWebUIWebContents(),
       false,
-      base::Bind(&DownloadsDOMHandler::DangerPromptAccepted,
-                 weak_ptr_factory_.GetWeakPtr(), dangerous_item->GetId()),
-      base::Closure());
+      base::Bind(&DownloadsDOMHandler::DangerPromptDone,
+                 weak_ptr_factory_.GetWeakPtr(), dangerous_item->GetId()));
   // danger_prompt will delete itself.
   DCHECK(danger_prompt);
 }
 
-void DownloadsDOMHandler::DangerPromptAccepted(int download_id) {
+void DownloadsDOMHandler::DangerPromptDone(
+    int download_id, DownloadDangerPrompt::Action action) {
+  if (action != DownloadDangerPrompt::ACCEPT)
+    return;
   content::DownloadItem* item = NULL;
   if (main_notifier_.GetManager())
     item = main_notifier_.GetManager()->GetDownload(download_id);
   if (!item && original_notifier_.get() && original_notifier_->GetManager())
     item = original_notifier_->GetManager()->GetDownload(download_id);
-  if (!item || (item->GetState() != content::DownloadItem::IN_PROGRESS))
+  if (!item || item->IsDone())
     return;
   CountDownloadsDOMEvents(DOWNLOADS_DOM_EVENT_SAVE_DANGEROUS);
-  item->DangerousDownloadValidated();
+  item->ValidateDangerousDownload();
+}
+
+bool DownloadsDOMHandler::IsDeletingHistoryAllowed() {
+  content::DownloadManager* manager = main_notifier_.GetManager();
+  return (manager &&
+          Profile::FromBrowserContext(manager->GetBrowserContext())->
+              GetPrefs()->GetBoolean(prefs::kAllowDeletingBrowserHistory));
 }
 
 content::DownloadItem* DownloadsDOMHandler::GetDownloadByValue(

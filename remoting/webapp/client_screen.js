@@ -28,10 +28,12 @@ remoting.clientSession = null;
  * Initiate an IT2Me connection.
  */
 remoting.connectIT2Me = function() {
-  remoting.connector = new remoting.SessionConnector(
-      document.getElementById('session-mode'),
-      remoting.onConnected,
-      showConnectError_);
+  if (!remoting.connector) {
+    remoting.connector = new remoting.SessionConnector(
+        document.getElementById('session-mode'),
+        remoting.onConnected,
+        showConnectError_);
+  }
   var accessCode = document.getElementById('access-code-entry').value;
   remoting.setMode(remoting.AppMode.CLIENT_CONNECTING);
   remoting.connector.connectIT2Me(accessCode);
@@ -222,7 +224,7 @@ remoting.connectMe2Me = function(hostId) {
       if (event.target == connect) {
         remoting.connectMe2MeHostVersionAcknowledged_(host);
       } else {
-        window.location.replace(chrome.extension.getURL('main.html'));
+        remoting.setMode(remoting.AppMode.HOME);
       }
     }
     connect.addEventListener('click', onClick, false);
@@ -241,44 +243,143 @@ remoting.connectMe2Me = function(hostId) {
  * @return {void} Nothing.
  */
 remoting.connectMe2MeHostVersionAcknowledged_ = function(host) {
-  remoting.connector = new remoting.SessionConnector(
-      document.getElementById('session-mode'),
-      remoting.onConnected,
-      showConnectError_);
+  if (!remoting.connector) {
+    remoting.connector = new remoting.SessionConnector(
+        document.getElementById('session-mode'),
+        remoting.onConnected,
+        showConnectError_);
+  }
   remoting.setMode(remoting.AppMode.CLIENT_CONNECTING);
 
-  /** @param {function(string):void} onPinFetched */
-  var requestPin = function(onPinFetched) {
+  /**
+   * @param {string} tokenUrl Token-issue URL received from the host.
+   * @param {string} scope OAuth scope to request the token for.
+   * @param {string} hostPublicKey Host public key (DER and Base64 encoded).
+   * @param {function(string, string):void} onThirdPartyTokenFetched Callback.
+   */
+  var fetchThirdPartyToken = function(
+      tokenUrl, hostPublicKey, scope, onThirdPartyTokenFetched) {
+    var thirdPartyTokenFetcher = new remoting.ThirdPartyTokenFetcher(
+        tokenUrl, hostPublicKey, scope, host.tokenUrlPatterns,
+        onThirdPartyTokenFetched);
+    thirdPartyTokenFetcher.fetchToken();
+  };
+
+  /**
+   * @param {boolean} supportsPairing
+   * @param {function(string):void} onPinFetched
+   */
+  var requestPin = function(supportsPairing, onPinFetched) {
     /** @type {Element} */
     var pinForm = document.getElementById('pin-form');
-    /** @param {Event} event */
-    var onSubmit = function(event) {
-      event.preventDefault();
-      pinForm.removeEventListener('submit', onSubmit, false);
-      var pin = document.getElementById('pin-entry').value;
-      remoting.setMode(remoting.AppMode.CLIENT_CONNECTING);
-      onPinFetched(pin);
-    };
-    pinForm.addEventListener('submit', onSubmit, false);
+    /** @type {Element} */
+    var pinCancel = document.getElementById('cancel-pin-entry-button');
+    /** @type {Element} */
+    var rememberPin = document.getElementById('remember-pin');
+    /** @type {Element} */
+    var rememberPinCheckbox = document.getElementById('remember-pin-checkbox');
+    /**
+     * Event handler for both the 'submit' and 'cancel' actions. Using
+     * a single handler for both greatly simplifies the task of making
+     * them one-shot. If separate handlers were used, each would have
+     * to unregister both itself and the other.
+     *
+     * @param {Event} event The click or submit event.
+     */
+    var onSubmitOrCancel = function(event) {
+      pinForm.removeEventListener('submit', onSubmitOrCancel, false);
+      pinCancel.removeEventListener('click', onSubmitOrCancel, false);
+      var pinField = document.getElementById('pin-entry');
+      var pin = pinField.value;
+      pinField.value = '';
+      if (event.target == pinForm) {
+        event.preventDefault();
 
+        // Set the focus away from the password field. This has to be done
+        // before the password field gets hidden, to work around a Blink
+        // clipboard-handling bug - http://crbug.com/281523.
+        document.getElementById('pin-connect-button').focus();
+
+        remoting.setMode(remoting.AppMode.CLIENT_CONNECTING);
+        onPinFetched(pin);
+        if (/** @type {boolean} */(rememberPinCheckbox.checked)) {
+          remoting.connector.pairingRequested = true;
+        }
+      } else {
+        remoting.setMode(remoting.AppMode.HOME);
+      }
+    };
+    pinForm.addEventListener('submit', onSubmitOrCancel, false);
+    pinCancel.addEventListener('click', onSubmitOrCancel, false);
+    rememberPin.hidden = !supportsPairing;
+    rememberPinCheckbox.checked = false;
     var message = document.getElementById('pin-message');
     l10n.localizeElement(message, host.hostName);
     remoting.setMode(remoting.AppMode.CLIENT_PIN_PROMPT);
   };
-  remoting.connector.connectMe2Me(host, requestPin);
+
+  /** @param {Object} settings */
+  var connectMe2MeHostSettingsRetrieved = function(settings) {
+    /** @type {string} */
+    var clientId = '';
+    /** @type {string} */
+    var sharedSecret = '';
+    var pairingInfo = /** @type {Object} */ (settings['pairingInfo']);
+    if (pairingInfo) {
+      clientId = /** @type {string} */ (pairingInfo['clientId']);
+      sharedSecret = /** @type {string} */ (pairingInfo['sharedSecret']);
+    }
+    remoting.connector.connectMe2Me(host, requestPin, fetchThirdPartyToken,
+                                    clientId, sharedSecret);
+  }
+
+  remoting.HostSettings.load(host.hostId, connectMe2MeHostSettingsRetrieved);
 };
 
 /** @param {remoting.ClientSession} clientSession */
 remoting.onConnected = function(clientSession) {
-  remoting.connector = null;
   remoting.clientSession = clientSession;
   remoting.clientSession.setOnStateChange(onClientStateChange_);
   setConnectionInterruptedButtonsText_();
   var connectedTo = document.getElementById('connected-to');
   connectedTo.innerText = clientSession.hostDisplayName;
+  document.getElementById('access-code-entry').value = '';
   remoting.setMode(remoting.AppMode.IN_SESSION);
   remoting.toolbar.center();
   remoting.toolbar.preview();
   remoting.clipboard.startSession();
   updateStatistics_();
+  if (remoting.connector.pairingRequested) {
+    /**
+     * @param {string} clientId
+     * @param {string} sharedSecret
+     */
+    var onPairingComplete = function(clientId, sharedSecret) {
+      var pairingInfo = {
+        pairingInfo: {
+          clientId: clientId,
+          sharedSecret: sharedSecret
+        }
+      };
+      remoting.HostSettings.save(clientSession.hostId, pairingInfo);
+      remoting.connector.updatePairingInfo(clientId, sharedSecret);
+    };
+    // Use the platform name as a proxy for the local computer name.
+    // TODO(jamiewalch): Use a descriptive name for the local computer, for
+    // example, its Chrome Sync name.
+    var clientName = '';
+    if (navigator.platform.indexOf('Mac') != -1) {
+      clientName = 'Mac';
+    } else if (navigator.platform.indexOf('Win32') != -1) {
+      clientName = 'Windows';
+    } else if (navigator.userAgent.match(/\bCrOS\b/)) {
+      clientName = 'ChromeOS';
+    } else if (navigator.platform.indexOf('Linux') != -1) {
+      clientName = 'Linux';
+    } else {
+      console.log('Unrecognized client platform. Using navigator.platform.');
+      clientName = navigator.platform;
+    }
+    clientSession.requestPairing(clientName, onPairingComplete);
+  }
 };

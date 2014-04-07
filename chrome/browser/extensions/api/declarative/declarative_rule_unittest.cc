@@ -4,7 +4,8 @@
 
 #include "chrome/browser/extensions/api/declarative/declarative_rule.h"
 
-#include "base/message_loop.h"
+#include "base/bind.h"
+#include "base/message_loop/message_loop.h"
 #include "base/test/values_test_util.h"
 #include "base/values.h"
 #include "extensions/common/matcher/url_matcher_constants.h"
@@ -107,7 +108,7 @@ struct FulfillableCondition {
 
   void GetURLMatcherConditionSets(
       URLMatcherConditionSet::Vector* condition_sets) const {
-    if (condition_set)
+    if (condition_set.get())
       condition_sets->push_back(condition_set);
   }
 
@@ -197,41 +198,52 @@ TEST(DeclarativeConditionTest, FulfillConditionSet) {
 
 // DeclarativeAction
 
-struct SummingAction {
+class SummingAction : public base::RefCounted<SummingAction> {
+ public:
   typedef int ApplyInfo;
 
-  int increment;
-  int min_priority;
+  SummingAction(int increment, int min_priority)
+      : increment_(increment), min_priority_(min_priority) {}
 
-  static scoped_ptr<SummingAction> Create(const base::Value& action,
-                                          std::string* error,
-                                          bool* bad_message) {
-    scoped_ptr<SummingAction> result(new SummingAction());
+  static scoped_refptr<const SummingAction> Create(const base::Value& action,
+                                                   std::string* error,
+                                                   bool* bad_message) {
+    int increment = 0;
+    int min_priority = 0;
     const base::DictionaryValue* dict = NULL;
     EXPECT_TRUE(action.GetAsDictionary(&dict));
     if (dict->HasKey("error")) {
       EXPECT_TRUE(dict->GetString("error", error));
-      return result.Pass();
+      return scoped_refptr<const SummingAction>(NULL);
     }
     if (dict->HasKey("bad")) {
       *bad_message = true;
-      return result.Pass();
+      return scoped_refptr<const SummingAction>(NULL);
     }
 
-    EXPECT_TRUE(dict->GetInteger("value", &result->increment));
-    dict->GetInteger("priority", &result->min_priority);
-    return result.Pass();
+    EXPECT_TRUE(dict->GetInteger("value", &increment));
+    dict->GetInteger("priority", &min_priority);
+    return scoped_refptr<const SummingAction>(
+        new SummingAction(increment, min_priority));
   }
 
   void Apply(const std::string& extension_id,
              const base::Time& install_time,
              int* sum) const {
-    *sum += increment;
+    *sum += increment_;
   }
 
-  int GetMinimumPriority() const {
-    return min_priority;
+  int increment() const { return increment_; }
+  int minimum_priority() const {
+    return min_priority_;
   }
+
+ private:
+  friend class base::RefCounted<SummingAction>;
+  virtual ~SummingAction() {}
+
+  int increment_;
+  int min_priority_;
 };
 typedef DeclarativeActionSet<SummingAction> SummingActionSet;
 
@@ -305,8 +317,12 @@ TEST(DeclarativeRuleTest, Create) {
 
   URLMatcher matcher;
   std::string error;
-  scoped_ptr<Rule> rule(Rule::Create(matcher.condition_factory(), kExtensionId,
-                                     install_time, json_rule, NULL, &error));
+  scoped_ptr<Rule> rule(Rule::Create(matcher.condition_factory(),
+                                     kExtensionId,
+                                     install_time,
+                                     json_rule,
+                                     Rule::ConsistencyChecker(),
+                                     &error));
   EXPECT_EQ("", error);
   ASSERT_TRUE(rule.get());
 
@@ -325,7 +341,7 @@ TEST(DeclarativeRuleTest, Create) {
   const Rule::ActionSet& action_set = rule->actions();
   const Rule::ActionSet::Actions& actions = action_set.actions();
   ASSERT_EQ(1u, actions.size());
-  EXPECT_EQ(2, actions[0]->increment);
+  EXPECT_EQ(2, actions[0]->increment());
 
   int sum = 0;
   rule->Apply(&sum);
@@ -367,7 +383,7 @@ TEST(DeclarativeRuleTest, CheckConsistency) {
       json_rule.get()));
   scoped_ptr<Rule> rule(
       Rule::Create(matcher.condition_factory(), kExtensionId, base::Time(),
-                   json_rule, &AtLeastOneCondition, &error));
+                   json_rule, base::Bind(AtLeastOneCondition), &error));
   EXPECT_TRUE(rule);
   EXPECT_EQ("", error);
 
@@ -385,7 +401,7 @@ TEST(DeclarativeRuleTest, CheckConsistency) {
                  "}"),
       json_rule.get()));
   rule = Rule::Create(matcher.condition_factory(), kExtensionId, base::Time(),
-                      json_rule, &AtLeastOneCondition, &error);
+                      json_rule, base::Bind(AtLeastOneCondition), &error);
   EXPECT_FALSE(rule);
   EXPECT_EQ("No conditions", error);
 }

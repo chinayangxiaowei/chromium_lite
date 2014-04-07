@@ -4,11 +4,11 @@
 
 #include "chrome/browser/ui/unload_controller.h"
 
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/notification_source.h"
 #include "content/public/browser/notification_types.h"
@@ -23,7 +23,7 @@ namespace chrome {
 UnloadController::UnloadController(Browser* browser)
     : browser_(browser),
       is_attempting_to_close_browser_(false),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {
+      weak_factory_(this) {
   browser_->tab_strip_model()->AddObserver(this);
 }
 
@@ -247,7 +247,7 @@ void UnloadController::ClearUnloadState(content::WebContents* web_contents,
     if (process_now) {
       ProcessPendingTabs();
     } else {
-      MessageLoop::current()->PostTask(
+      base::MessageLoop::current()->PostTask(
           FROM_HERE,
           base::Bind(&UnloadController::ProcessPendingTabs,
                      weak_factory_.GetWeakPtr()));

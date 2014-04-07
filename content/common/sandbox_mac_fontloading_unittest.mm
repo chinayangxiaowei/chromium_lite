@@ -8,7 +8,7 @@
 #include "base/logging.h"
 #include "base/mac/scoped_cftyperef.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/shared_memory.h"
+#include "base/memory/shared_memory.h"
 #include "content/common/mac/font_descriptor.h"
 #include "content/common/mac/font_loader.h"
 #include "content/common/sandbox_mac_unittest_helper.h"
@@ -44,7 +44,7 @@ bool FontLoadingTestCase::BeforeSandboxInit() {
   }
 
   font_shmem_.reset(new base::SharedMemory);
-  if (!font_shmem_.get()) {
+  if (!font_shmem_) {
     LOG(ERROR) << "Failed to create shared memory object.";
     return false;
   }
@@ -80,11 +80,11 @@ bool FontLoadingTestCase::SandboxedTest() {
     LOG(ERROR) << "Got NULL CGFontRef";
     return false;
   }
-  base::mac::ScopedCFTypeRef<CGFontRef> cgfont(cg_font_ref);
+  base::ScopedCFTypeRef<CGFontRef> cgfont(cg_font_ref);
 
   CTFontRef ct_font_ref =
       CTFontCreateWithGraphicsFont(cgfont.get(), 16.0, NULL, NULL);
-  base::mac::ScopedCFTypeRef<CTFontRef> ctfont(ct_font_ref);
+  base::ScopedCFTypeRef<CTFontRef> ctfont(ct_font_ref);
 
   if (!ct_font_ref) {
     LOG(ERROR) << "CTFontCreateWithGraphicsFont() failed";
@@ -122,7 +122,7 @@ TEST_F(MacSandboxTest, FontLoadingTest) {
   ASSERT_TRUE(RunTestInSandbox(SANDBOX_TYPE_RENDERER,
                   "FontLoadingTestCase", temp_file_path.value().c_str()));
   temp_file_closer.reset();
-  ASSERT_TRUE(file_util::Delete(temp_file_path, false));
+  ASSERT_TRUE(base::DeleteFile(temp_file_path, false));
 }
 
 }  // namespace content

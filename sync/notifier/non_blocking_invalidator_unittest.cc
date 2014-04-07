@@ -7,7 +7,7 @@
 #include "base/bind_helpers.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "base/threading/thread.h"
 #include "google/cacheinvalidation/types.pb.h"
@@ -33,12 +33,13 @@ class NonBlockingInvalidatorTestDelegate {
   }
 
   void CreateInvalidator(
+      const std::string& invalidator_client_id,
       const std::string& initial_state,
       const base::WeakPtr<InvalidationStateTracker>&
           invalidation_state_tracker) {
     DCHECK(!invalidator_.get());
     base::Thread::Options options;
-    options.message_loop_type = MessageLoop::TYPE_IO;
+    options.message_loop_type = base::MessageLoop::TYPE_IO;
     io_thread_.StartWithOptions(options);
     request_context_getter_ =
         new net::TestURLRequestContextGetter(io_thread_.message_loop_proxy());
@@ -47,6 +48,7 @@ class NonBlockingInvalidatorTestDelegate {
     invalidator_.reset(
         new NonBlockingInvalidator(
             invalidator_options,
+            invalidator_client_id,
             InvalidationStateMap(),
             initial_state,
             MakeWeakHandle(invalidation_state_tracker),
@@ -84,7 +86,7 @@ class NonBlockingInvalidatorTestDelegate {
   }
 
  private:
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
   base::Thread io_thread_;
   scoped_refptr<net::URLRequestContextGetter> request_context_getter_;
   scoped_ptr<NonBlockingInvalidator> invalidator_;

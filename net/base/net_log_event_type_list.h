@@ -59,6 +59,9 @@ EVENT_TYPE(HOST_RESOLVER_IMPL)
 //   }
 EVENT_TYPE(HOST_RESOLVER_IMPL_REQUEST)
 
+// This event is logged when IPv6 support is determined via IPv6 connect probe.
+EVENT_TYPE(HOST_RESOLVER_IMPL_IPV6_SUPPORTED)
+
 // This event is logged when a request is handled by a cache entry.
 EVENT_TYPE(HOST_RESOLVER_IMPL_CACHE_HIT)
 
@@ -569,6 +572,13 @@ EVENT_TYPE(SSL_CERTIFICATES_RECEIVED)
 //   }
 EVENT_TYPE(UDP_CONNECT)
 
+// The local address of the UDP socket, retrieved via getsockname.
+// The following parameters are attached:
+//   {
+//     "address": <Local address bound to the socket>,
+//   }
+EVENT_TYPE(UDP_LOCAL_ADDRESS)
+
 // The specified number of bytes were transferred on the socket.
 // The following parameters are attached:
 //   {
@@ -975,6 +985,12 @@ EVENT_TYPE(HTTP_TRANSACTION_RESTART_AFTER_ERROR)
 //   }
 EVENT_TYPE(SPDY_SESSION)
 
+// The SpdySession has been initilized with a socket.
+//   {
+//     "source_dependency":  <Source identifier for the underlying socket>,
+//   }
+EVENT_TYPE(SPDY_SESSION_INITIALIZED)
+
 // This event is sent for a SPDY SYN_STREAM.
 // The following parameters are attached:
 //   {
@@ -1028,6 +1044,15 @@ EVENT_TYPE(SPDY_SESSION_SYN_REPLY)
 //     "settings": <The list of setting id, flags and value>,
 //   }
 EVENT_TYPE(SPDY_SESSION_SEND_SETTINGS)
+
+// Receipt of a SPDY SETTINGS frame is received.
+// The following parameters are attached:
+//   {
+//     "host": <The host-port string>,
+//     "clear_persisted": <Boolean indicating whether to clear all persisted
+//                         settings data for the given host>,
+//   }
+EVENT_TYPE(SPDY_SESSION_RECV_SETTINGS)
 
 // Receipt of a SPDY SETTING frame.
 // The following parameters are attached:
@@ -1125,11 +1150,11 @@ EVENT_TYPE(SPDY_SESSION_SEND_DATA)
 //   }
 EVENT_TYPE(SPDY_SESSION_RECV_DATA)
 
-// Logs that a stream is stalled on the session send window being closed.
-EVENT_TYPE(SPDY_SESSION_STREAM_STALLED_ON_SESSION_SEND_WINDOW)
+// A stream is stalled by the session send window being closed.
+EVENT_TYPE(SPDY_SESSION_STREAM_STALLED_BY_SESSION_SEND_WINDOW)
 
-// Logs that a stream is stalled on its send window being closed.
-EVENT_TYPE(SPDY_SESSION_STREAM_STALLED_ON_STREAM_SEND_WINDOW)
+// A stream is stalled by its send window being closed.
+EVENT_TYPE(SPDY_SESSION_STREAM_STALLED_BY_STREAM_SEND_WINDOW)
 
 // Session is closing
 //   {
@@ -1142,11 +1167,16 @@ EVENT_TYPE(SPDY_SESSION_CLOSE)
 // the maximum number of concurrent streams.
 EVENT_TYPE(SPDY_SESSION_STALLED_MAX_STREAMS)
 
-// Received a negative value for initial window size in SETTINGS frame.
+// Received a value for initial window size in SETTINGS frame with
+// flow control turned off.
+EVENT_TYPE(SPDY_SESSION_INITIAL_WINDOW_SIZE_NO_FLOW_CONTROL)
+
+// Received an out-of-range value for initial window size in SETTINGS
+// frame.
 //   {
 //     "initial_window_size"  : <The initial window size>,
 //   }
-EVENT_TYPE(SPDY_SESSION_NEGATIVE_INITIAL_WINDOW_SIZE)
+EVENT_TYPE(SPDY_SESSION_INITIAL_WINDOW_SIZE_OUT_OF_RANGE)
 
 // Updating streams send window size by the delta window size.
 //   {
@@ -1196,8 +1226,11 @@ EVENT_TYPE(SPDY_SESSION_POOL_REMOVE_SESSION)
 // The begin and end of a SPDY STREAM.
 EVENT_TYPE(SPDY_STREAM)
 
-// Logs that a stream attached to a pushed stream.
+// A stream is attached to a pushed stream.
 EVENT_TYPE(SPDY_STREAM_ADOPTED_PUSH_STREAM)
+
+// A stream is unstalled by flow control.
+EVENT_TYPE(SPDY_STREAM_FLOW_CONTROL_UNSTALLED)
 
 // This event indicates that the send window has been updated for a stream.
 //   {
@@ -1256,6 +1289,15 @@ EVENT_TYPE(QUIC_SESSION_CLOSE_ON_ERROR)
 //   }
 EVENT_TYPE(QUIC_SESSION_PACKET_RECEIVED)
 
+// Session sent a QUIC packet.
+//   {
+//     "encryption_level": <The EncryptionLevel of the packet>
+//     "packet_sequence_number": <The packet's full 64-bit sequence number,
+//                                as a base-10 string.>,
+//     "size": <The size of the packet in bytes>
+//   }
+EVENT_TYPE(QUIC_SESSION_PACKET_SENT)
+
 // Session received a QUIC packet header for a valid packet.
 //   {
 //     "guid": <The 64-bit GUID for this connection, as a base-10 string>,
@@ -1276,6 +1318,15 @@ EVENT_TYPE(QUIC_SESSION_PACKET_HEADER_RECEIVED)
 //   }
 EVENT_TYPE(QUIC_SESSION_STREAM_FRAME_RECEIVED)
 
+// Session sent a STREAM frame.
+//   {
+//     "stream_id": <The id of the stream which this data is for>,
+//     "fin": <True if this is the final data set by the peer on this stream>,
+//     "offset": <Offset in the byte stream where this data starts>,
+//     "length": <Length of the data in this frame>,
+//   }
+EVENT_TYPE(QUIC_SESSION_STREAM_FRAME_SENT)
+
 // Session received an ACK frame.
 //   {
 //     "sent_info": <Details of packet sent by the peer>
@@ -1294,13 +1345,39 @@ EVENT_TYPE(QUIC_SESSION_STREAM_FRAME_RECEIVED)
 //   }
 EVENT_TYPE(QUIC_SESSION_ACK_FRAME_RECEIVED)
 
+// Session sent an ACK frame.
+//   {
+//     "sent_info": <Details of packet sent by the peer>
+//       {
+//         "least_unacked": <Lowest sequence number of a packet sent by the peer
+//                           for which it has not received an ACK>,
+//       }
+//     "received_info": <Details of packet received by the peer>
+//       {
+//         "largest_observed": <The largest sequence number of a packet received
+//                               by (or inferred by) the peer>,
+//         "missing": <List of sequence numbers of packets lower than
+//                     largest_observed which have not been received by the
+//                     peer>,
+//       }
+//   }
+EVENT_TYPE(QUIC_SESSION_ACK_FRAME_SENT)
+
 // Session recevied a RST_STREAM frame.
 //   {
 //     "offset": <Offset in the byte stream which triggered the reset>,
-//     "error_code": <QuicErrorCode in the frame>,
+//     "quic_rst_stream_error": <QuicRstStreamErrorCode in the frame>,
 //     "details": <Human readable description>,
 //   }
 EVENT_TYPE(QUIC_SESSION_RST_STREAM_FRAME_RECEIVED)
+
+// Session sent a RST_STREAM frame.
+//   {
+//     "offset": <Offset in the byte stream which triggered the reset>,
+//     "quic_rst_stream_error": <QuicRstStreamErrorCode in the frame>,
+//     "details": <Human readable description>,
+//   }
+EVENT_TYPE(QUIC_SESSION_RST_STREAM_FRAME_SENT)
 
 // Session received a CONGESTION_FEEDBACK frame.
 //   {
@@ -1323,12 +1400,40 @@ EVENT_TYPE(QUIC_SESSION_RST_STREAM_FRAME_RECEIVED)
 //   }
 EVENT_TYPE(QUIC_SESSION_CONGESTION_FEEDBACK_FRAME_RECEIVED)
 
+// Session received a CONGESTION_FEEDBACK frame.
+//   {
+//     "type": <The specific type of feedback being provided>,
+//     Other per-feedback type details:
+//
+//     for InterArrival:
+//     "accumulated_number_of_lost_packets": <Total number of lost packets
+//                                            over the life of this session>,
+//     "received_packets": <List of strings of the form:
+//                          <sequence_number>@<receive_time_in_ms>>,
+//
+//     for FixRate:
+//     "bitrate_in_bytes_per_second": <The configured bytes per second>,
+//
+//     for TCP:
+//     "accumulated_number_of_lost_packets": <Total number of lost packets
+//                                            over the life of this session>,
+//     "receive_window": <Number of bytes in the receive window>,
+//   }
+EVENT_TYPE(QUIC_SESSION_CONGESTION_FEEDBACK_FRAME_SENT)
+
 // Session received a CONNECTION_CLOSE frame.
 //   {
-//     "error_code": <QuicErrorCode in the frame>,
+//     "quic_error": <QuicErrorCode in the frame>,
 //     "details": <Human readable description>,
 //   }
 EVENT_TYPE(QUIC_SESSION_CONNECTION_CLOSE_FRAME_RECEIVED)
+
+// Session received a CONNECTION_CLOSE frame.
+//   {
+//     "quic_error": <QuicErrorCode in the frame>,
+//     "details": <Human readable description>,
+//   }
+EVENT_TYPE(QUIC_SESSION_CONNECTION_CLOSE_FRAME_SENT)
 
 // ------------------------------------------------------------------------
 // QuicHttpStream
@@ -1435,6 +1540,10 @@ EVENT_TYPE(APPCACHE_DELIVERING_FALLBACK_RESPONSE)
 
 // This event is emitted whenever the appcache generates an error response.
 EVENT_TYPE(APPCACHE_DELIVERING_ERROR_RESPONSE)
+
+// This event is emitted whenever the appcache executes script to compute
+// a response.
+EVENT_TYPE(APPCACHE_DELIVERING_EXECUTABLE_RESPONSE)
 
 // ------------------------------------------------------------------------
 // Global events
@@ -1716,7 +1825,8 @@ EVENT_TYPE(DOWNLOAD_URL_REQUEST)
 //                     the filename specified in the final URL>,
 //     "danger_type": <NOT_DANGEROUS, DANGEROUS_FILE, DANGEROUS_URL,
 //                     DANGEROUS_CONTENT, MAYBE_DANGEROUS_CONTENT,
-//                     UNCOMMON_CONTENT, USER_VALIDATED, DANGEROUS_HOST>,
+//                     UNCOMMON_CONTENT, USER_VALIDATED, DANGEROUS_HOST,
+//                     POTENTIALLY_UNWANTED>,
 //     "start_offset": <Where to start writing (defaults to 0)>,
 //     "has_user_gesture": <Whether or not we think the user initiated
 //                          the download>
@@ -1872,22 +1982,6 @@ EVENT_TYPE(FILE_STREAM_OPEN)
 //   }
 EVENT_TYPE(FILE_STREAM_ERROR)
 
-// ------------------------------------------------------------------------
-// IPv6 Probe events.
-// ------------------------------------------------------------------------
-
-// This event lasts from the point an IPv6ProbeJob is created until completion.
-//
-// The END contains the following parameters:
-//   {
-//     "ipv6_supported": <Boolean indicating whether or not the probe determined
-//                        IPv6 may be supported>,
-//     "ipv6_support_status": <String indicating the reason for that result>,
-//     "os_error": <Platform dependent error code, associated with the result,
-//                  if any>
-//   }
-EVENT_TYPE(IPV6_PROBE_RUNNING)
-
 // -----------------------------------------------------------------------------
 // FTP events.
 // -----------------------------------------------------------------------------
@@ -1920,3 +2014,164 @@ EVENT_TYPE(FTP_DATA_CONNECTION)
 //     "status_code": <numeric status code of the response>
 //   }
 EVENT_TYPE(FTP_CONTROL_RESPONSE)
+
+// -----------------------------------------------------------------------------
+// Simple Cache events.
+// -----------------------------------------------------------------------------
+
+// This event lasts the lifetime of a Simple Cache entry.
+// It contains the following parameter:
+//   {
+//     "entry_hash": <hash of the entry, formatted as a hex string>
+//   }
+EVENT_TYPE(SIMPLE_CACHE_ENTRY)
+
+// This event is created when the entry's key is set.
+// It contains the following parameter:
+//   {
+//     "key": <key of the entry>
+//   }
+EVENT_TYPE(SIMPLE_CACHE_ENTRY_SET_KEY)
+
+// This event is created when OpenEntry is called.  It has no parameters.
+EVENT_TYPE(SIMPLE_CACHE_ENTRY_OPEN_CALL)
+
+// This event is created when the Simple Cache actually begins opening the
+// cache entry.  It has no parameters.
+EVENT_TYPE(SIMPLE_CACHE_ENTRY_OPEN_BEGIN)
+
+// This event is created when the Simple Cache finishes the OpenEntry call.
+// It contains the following parameter:
+// {
+//   "net_error": <net error code returned from the call>
+// }
+EVENT_TYPE(SIMPLE_CACHE_ENTRY_OPEN_END)
+
+// This event is created when CreateEntry is called.  It has no parameters.
+EVENT_TYPE(SIMPLE_CACHE_ENTRY_CREATE_CALL)
+
+// This event is created when the Simple Cache optimistically returns a result
+// from a CreateEntry call before it performs the create operation.
+// It contains the following parameter:
+// {
+//   "net_error": <net error code returned from the call>
+// }
+EVENT_TYPE(SIMPLE_CACHE_ENTRY_CREATE_OPTIMISTIC)
+
+// This event is created when the Simple Cache actually begins creating the
+// cache entry.  It has no parameters.
+EVENT_TYPE(SIMPLE_CACHE_ENTRY_CREATE_BEGIN)
+
+// This event is created when the Simple Cache finishes the CreateEntry call.
+// It contains the following parameter:
+// {
+//   "net_error": <net error code returned from the call>
+// }
+EVENT_TYPE(SIMPLE_CACHE_ENTRY_CREATE_END)
+
+// This event is created when ReadEntry is called.
+// It contains the following parameters:
+//   {
+//     "index": <Index being read/written>,
+//     "offset": <Offset being read/written>,
+//     "buf_len": <Length of buffer being read to/written from>,
+//     "truncate": <If present for a write, the truncate flag is set to true.
+//                  Not present in reads or writes where it is false>,
+//   }
+EVENT_TYPE(SIMPLE_CACHE_ENTRY_READ_CALL)
+
+// This event is created when the Simple Cache actually begins reading data
+// from the cache entry.
+// It contains the following parameters:
+//   {
+//     "index": <Index being read/written>,
+//     "offset": <Offset being read/written>,
+//     "buf_len": <Length of buffer being read to/written from>,
+//     "truncate": <If present for a write, the truncate flag is set to true.
+//                  Not present in reads or writes where it is false>,
+//   }
+EVENT_TYPE(SIMPLE_CACHE_ENTRY_READ_BEGIN)
+
+// This event is created when the Simple Cache finishes a ReadEntry call.
+// It contains the following parameters:
+//   {
+//     "bytes_copied": <Number of bytes copied.  Not present on error>,
+//     "net_error": <Network error code.  Only present on error>,
+//   }
+EVENT_TYPE(SIMPLE_CACHE_ENTRY_READ_END)
+
+// This event is created when the Simple Cache begins to verify the checksum of
+// cached data it has just read.  It occurs before READ_END, and contains no
+// parameters.
+EVENT_TYPE(SIMPLE_CACHE_ENTRY_CHECKSUM_BEGIN)
+
+// This event is created when the Simple Cache finishes verifying the checksum
+// of cached data.  It occurs after CHECKSUM_BEGIN but before READ_END, and
+// contains one parameter:
+// {
+//   "net_error": <net error code returned from the internal checksum call>
+// }
+EVENT_TYPE(SIMPLE_CACHE_ENTRY_CHECKSUM_END)
+
+// This event is created when WriteEntry is called.
+// It contains the following parameters:
+//   {
+//     "index": <Index being read/written>,
+//     "offset": <Offset being read/written>,
+//     "buf_len": <Length of buffer being read to/written from>,
+//     "truncate": <If present for a write, the truncate flag is set to true.
+//                  Not present in reads or writes where it is false>,
+//   }
+EVENT_TYPE(SIMPLE_CACHE_ENTRY_WRITE_CALL)
+
+// This event is created when the Simple Cache optimistically returns a result
+// from a WriteData call before it performs the write operation.
+// It contains the following parameters:
+//   {
+//     "bytes_copied": <Number of bytes copied.  Not present on error>,
+//     "net_error": <Network error code.  Only present on error>,
+//   }
+EVENT_TYPE(SIMPLE_CACHE_ENTRY_WRITE_OPTIMISTIC)
+
+// This event is created when the Simple Cache actually begins writing data to
+// the cache entry.
+// It contains the following parameters:
+//   {
+//     "index": <Index being read/written>,
+//     "offset": <Offset being read/written>,
+//     "buf_len": <Length of buffer being read to/written from>,
+//     "truncate": <If present for a write, the truncate flag is set to true.
+//                  Not present in reads or writes where it is false>,
+//   }
+EVENT_TYPE(SIMPLE_CACHE_ENTRY_WRITE_BEGIN)
+
+// This event is created when the Simple Cache finishes a WriteEntry call.
+// It contains the following parameters:
+//   {
+//     "bytes_copied": <Number of bytes copied.  Not present on error>,
+//     "net_error": <Network error code.  Only present on error>,
+//   }
+EVENT_TYPE(SIMPLE_CACHE_ENTRY_WRITE_END)
+
+// This event is created when DoomEntry is called.  It contains no parameters.
+EVENT_TYPE(SIMPLE_CACHE_ENTRY_DOOM_CALL)
+
+// This event is created when the Simple Cache actually starts dooming a cache
+// entry.  It contains no parameters.
+EVENT_TYPE(SIMPLE_CACHE_ENTRY_DOOM_BEGIN)
+
+// This event is created when the Simple Cache finishes dooming an entry.
+EVENT_TYPE(SIMPLE_CACHE_ENTRY_DOOM_END)
+
+// This event is created when CloseEntry is called.  It contains no parameters.
+// A Close call may not result in CLOSE_BEGIN and CLOSE_END if there are still
+// more references to the entry remaining.
+EVENT_TYPE(SIMPLE_CACHE_ENTRY_CLOSE_CALL)
+
+// This event is created when the Simple Cache actually starts closing a cache
+// entry.  It contains no parameters.
+EVENT_TYPE(SIMPLE_CACHE_ENTRY_CLOSE_BEGIN)
+
+// This event is created when the Simple Cache finishes a CloseEntry call.  It
+// contains no parameters.
+EVENT_TYPE(SIMPLE_CACHE_ENTRY_CLOSE_END)

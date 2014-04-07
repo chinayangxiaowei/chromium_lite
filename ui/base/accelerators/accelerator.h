@@ -12,7 +12,7 @@
 #define UI_BASE_ACCELERATORS_ACCELERATOR_H_
 
 #include "base/memory/scoped_ptr.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "ui/base/accelerators/platform_accelerator.h"
 #include "ui/base/events/event_constants.h"
 #include "ui/base/keycodes/keyboard_codes.h"
@@ -56,7 +56,7 @@ class UI_EXPORT Accelerator {
   bool IsCmdDown() const;
 
   // Returns a string with the localized shortcut if any.
-  string16 GetShortcutText() const;
+  base::string16 GetShortcutText() const;
 
   void set_platform_accelerator(scoped_ptr<PlatformAccelerator> p) {
     platform_accelerator_ = p.Pass();

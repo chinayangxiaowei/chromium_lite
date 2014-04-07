@@ -13,9 +13,9 @@
 
 #include <string>
 
-#include "base/string16.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string16.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/autocomplete/autocomplete_match.h"
 #include "chrome/browser/ui/omnibox/omnibox_edit_model.h"
 #include "chrome/browser/ui/toolbar/toolbar_model.h"
@@ -196,11 +196,11 @@ class OmniboxView {
   // the top-most window is the relative window.
   virtual gfx::NativeView GetRelativeWindowForPopup() const = 0;
 
-  // Shows the instant suggestion text.
-  virtual void SetInstantSuggestion(const string16& input) = 0;
+  // Shows |input| as gray suggested text after what the user has typed.
+  virtual void SetGrayTextAutocompletion(const string16& input) = 0;
 
-  // Returns the current instant suggestion text.
-  virtual string16 GetInstantSuggestion() const = 0;
+  // Returns the current gray suggested text.
+  virtual string16 GetGrayTextAutocompletion() const = 0;
 
   // Returns the width in pixels needed to display the current text. The
   // returned value includes margins.
@@ -208,6 +208,17 @@ class OmniboxView {
 
   // Returns true if the user is composing something in an IME.
   virtual bool IsImeComposing() const = 0;
+
+  // Returns true if we know for sure that an IME is showing a popup window,
+  // which may overlap the omnibox's popup window.
+  virtual bool IsImeShowingPopup() const;
+
+  // Returns true if the view is displaying UI that indicates that query
+  // refinement will take place when the user selects the current match.  For
+  // search matches, this will cause the omnibox to search over the existing
+  // corpus (e.g. Images) rather than start a new Web search.  This method will
+  // only ever return true on mobile ports.
+  virtual bool IsIndicatingQueryRefinement() const;
 
 #if defined(TOOLKIT_VIEWS)
   virtual int GetMaxEditWidth(int entry_width) const = 0;
@@ -218,18 +229,19 @@ class OmniboxView {
 
   // Performs the drop of a drag and drop operation on the view.
   virtual int OnPerformDrop(const ui::DropTargetEvent& event) = 0;
-
-  // Returns the font.
-  virtual gfx::Font GetFont() = 0;
-
-  // Returns the width in pixels needed to display the text from one character
-  // before the caret to the end of the string.
-  virtual int WidthOfTextAfterCursor() = 0;
 #endif
 
-  // Returns a string with any leading javascript schemas stripped from the
-  // input text.
+  // Returns |text| with any leading javascript schemas stripped.
   static string16 StripJavascriptSchemas(const string16& text);
+
+  // First, calls StripJavascriptSchemas().  Then automatically collapses
+  // internal whitespace as follows:
+  // * If the only whitespace in |text| is newlines, users are most likely
+  // pasting in URLs split into multiple lines by terminals, email programs,
+  // etc. So all newlines are removed.
+  // * Otherwise, users may be pasting in search data, e.g. street addresses. In
+  // this case, runs of whitespace are collapsed down to single spaces.
+  static string16 SanitizeTextForPaste(const string16& text);
 
   // Returns the current clipboard contents as a string that can be pasted in.
   // In addition to just getting CF_UNICODETEXT out, this can also extract URLs

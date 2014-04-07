@@ -6,7 +6,7 @@
 #define CC_DEBUG_RENDERING_STATS_H_
 
 #include "base/basictypes.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "cc/base/cc_export.h"
 
 namespace cc {
@@ -16,11 +16,14 @@ struct CC_EXPORT RenderingStats {
   int64 screen_frame_count;
   int64 dropped_frame_count;
   base::TimeDelta total_paint_time;
+  base::TimeDelta total_record_time;
   base::TimeDelta total_rasterize_time;
   base::TimeDelta total_rasterize_time_for_now_bins_on_pending_tree;
   base::TimeDelta total_commit_time;
+  base::TimeDelta best_rasterize_time;
   int64 total_commit_count;
   int64 total_pixels_painted;
+  int64 total_pixels_recorded;
   int64 total_pixels_rasterized;
   int64 num_impl_thread_scrolls;
   int64 num_main_thread_scrolls;
@@ -29,8 +32,11 @@ struct CC_EXPORT RenderingStats {
   int64 total_deferred_image_decode_count;
   int64 total_deferred_image_cache_hit_count;
   int64 total_image_gathering_count;
+  int64 total_tiles_analyzed;
+  int64 solid_color_tiles_analyzed;
   base::TimeDelta total_deferred_image_decode_time;
   base::TimeDelta total_image_gathering_time;
+  base::TimeDelta total_tile_analysis_time;
   // Note: when adding new members, please remember to update EnumerateFields
   // and Add in rendering_stats.cc.
 

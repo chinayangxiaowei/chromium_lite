@@ -20,9 +20,9 @@
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/path_service.h"
-#include "base/string16.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string16.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/version.h"
 #include "base/win/registry.h"
 #include "base/win/scoped_comptr.h"
@@ -518,7 +518,7 @@ void AddChromeWorkItems(const InstallationState& original_state,
   // Install kVisualElementsManifest if it is present in |src_path|. No need to
   // make this a conditional work item as if the file is not there now, it will
   // never be.
-  if (file_util::PathExists(
+  if (base::PathExists(
           src_path.Append(installer::kVisualElementsManifest))) {
     install_list->AddMoveTreeWorkItem(
         src_path.Append(installer::kVisualElementsManifest).value(),
@@ -1221,6 +1221,21 @@ void AddInstallWorkItems(const InstallationState& original_state,
 
     AddActiveSetupWorkItems(installer_state, setup_path, new_version, product,
                             install_list);
+  }
+
+  // TODO(huangs): Implement actual migration code and remove the hack below.
+  // If installing Chrome without the legacy stand-alone App Launcher (to be
+  // handled later), add "shadow" App Launcher registry keys so Google Update
+  // would recognize the "dr" value in the App Launcher ClientState key.
+  // Checking .is_multi_install() excludes Chrome Canary and stand-alone Chrome.
+  if (installer_state.is_multi_install() &&
+      installer_state.FindProduct(BrowserDistribution::CHROME_BROWSER) &&
+      !installer_state.FindProduct(BrowserDistribution::CHROME_APP_HOST)) {
+    BrowserDistribution* shadow_app_launcher_dist =
+        BrowserDistribution::GetSpecificDistribution(
+            BrowserDistribution::CHROME_APP_HOST);
+    AddVersionKeyWorkItems(root, shadow_app_launcher_dist, new_version,
+                           add_language_identifier, install_list);
   }
 
   // Add any remaining work items that involve special settings for

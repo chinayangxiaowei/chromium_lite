@@ -5,7 +5,7 @@
 #include "ui/views/controls/combobox/combobox.h"
 
 #include "base/logging.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "ui/base/accessibility/accessible_view_state.h"
 #include "ui/base/events/event.h"
 #include "ui/base/keycodes/keyboard_codes.h"
@@ -13,12 +13,14 @@
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/views/controls/combobox/combobox_listener.h"
 #include "ui/views/controls/native/native_view_host.h"
+#include "ui/views/controls/prefix_selector.h"
+#include "ui/views/ime/input_method.h"
 #include "ui/views/widget/widget.h"
 
 namespace views {
 
 // static
-const char Combobox::kViewClassName[] = "views/Combobox";
+const char Combobox::kViewClassName[] = "Combobox";
 
 ////////////////////////////////////////////////////////////////////////////////
 // Combobox, public:
@@ -58,10 +60,7 @@ void Combobox::SelectionChanged() {
   selected_index_ = native_wrapper_->GetSelectedIndex();
   if (listener_)
     listener_->OnSelectedIndexChanged(this);
-  if (GetWidget()) {
-    GetWidget()->NotifyAccessibilityEvent(
-        this, ui::AccessibilityTypes::EVENT_VALUE_CHANGED, false);
-  }
+  NotifyAccessibilityEvent(ui::AccessibilityTypes::EVENT_VALUE_CHANGED, false);
 }
 
 void Combobox::SetAccessibleName(const string16& name) {
@@ -72,6 +71,28 @@ void Combobox::SetInvalid(bool invalid) {
   invalid_ = invalid;
   if (native_wrapper_)
     native_wrapper_->ValidityStateChanged();
+}
+
+ui::TextInputClient* Combobox::GetTextInputClient() {
+  if (!selector_)
+    selector_.reset(new PrefixSelector(this));
+  return selector_.get();
+}
+
+int Combobox::GetRowCount() {
+  return model()->GetItemCount();
+}
+
+int Combobox::GetSelectedRow() {
+  return selected_index_;
+}
+
+void Combobox::SetSelectedRow(int row) {
+  SetSelectedIndex(row);
+}
+
+string16 Combobox::GetTextForRow(int row) {
+  return model()->GetItemAt(row);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -120,15 +141,21 @@ bool Combobox::OnKeyReleased(const ui::KeyEvent& e) {
 }
 
 void Combobox::OnFocus() {
+  GetInputMethod()->OnFocus();
   // Forward the focus to the wrapper.
-  if (native_wrapper_)
+  if (native_wrapper_) {
     native_wrapper_->SetFocus();
-  else
+    NotifyAccessibilityEvent(ui::AccessibilityTypes::EVENT_FOCUS, true);
+  } else {
     View::OnFocus();  // Will focus the RootView window (so we still get
                       // keyboard messages).
+  }
 }
 
 void Combobox::OnBlur() {
+  GetInputMethod()->OnBlur();
+  if (selector_)
+    selector_->OnViewBlur();
   if (native_wrapper_)
     native_wrapper_->HandleBlur();
 }
@@ -141,8 +168,9 @@ void Combobox::GetAccessibleState(ui::AccessibleViewState* state) {
   state->count = model_->GetItemCount();
 }
 
-void Combobox::ViewHierarchyChanged(bool is_add, View* parent, View* child) {
-  if (is_add && !native_wrapper_ && GetWidget()) {
+void Combobox::ViewHierarchyChanged(
+    const ViewHierarchyChangedDetails& details) {
+  if (details.is_add && !native_wrapper_ && GetWidget()) {
     // The native wrapper's lifetime will be managed by the view hierarchy after
     // we call AddChildView.
     native_wrapper_ = NativeComboboxWrapper::CreateWrapper(this);
@@ -156,7 +184,7 @@ void Combobox::ViewHierarchyChanged(bool is_add, View* parent, View* child) {
   }
 }
 
-std::string Combobox::GetClassName() const {
+const char* Combobox::GetClassName() const {
   return kViewClassName;
 }
 

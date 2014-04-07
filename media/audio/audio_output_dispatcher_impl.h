@@ -19,13 +19,11 @@
 #include "base/basictypes.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
-#include "base/timer.h"
+#include "base/timer/timer.h"
 #include "media/audio/audio_io.h"
 #include "media/audio/audio_manager.h"
 #include "media/audio/audio_output_dispatcher.h"
 #include "media/audio/audio_parameters.h"
-
-class MessageLoop;
 
 namespace media {
 
@@ -37,6 +35,7 @@ class MEDIA_EXPORT AudioOutputDispatcherImpl : public AudioOutputDispatcher {
   // the audio device is closed.
   AudioOutputDispatcherImpl(AudioManager* audio_manager,
                             const AudioParameters& params,
+                            const std::string& input_device_id,
                             const base::TimeDelta& close_delay);
 
   // Opens a new physical stream if there are no pending streams in

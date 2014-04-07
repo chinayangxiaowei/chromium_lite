@@ -6,11 +6,11 @@
 #define CC_ANIMATION_LAYER_ANIMATION_CONTROLLER_H_
 
 #include "base/basictypes.h"
-#include "base/hash_tables.h"
+#include "base/containers/hash_tables.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/observer_list.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "cc/animation/animation_events.h"
 #include "cc/animation/layer_animation_event_observer.h"
 #include "cc/base/cc_export.h"
@@ -22,13 +22,13 @@ namespace gfx { class Transform; }
 namespace cc {
 
 class Animation;
+class AnimationDelegate;
 class AnimationRegistrar;
 class KeyframeValueList;
 class LayerAnimationValueObserver;
 
 class CC_EXPORT LayerAnimationController
-    : public base::RefCounted<LayerAnimationController>,
-      public LayerAnimationEventObserver {
+    : public base::RefCounted<LayerAnimationController> {
  public:
   static scoped_refptr<LayerAnimationController> Create(int id);
 
@@ -52,7 +52,9 @@ class CC_EXPORT LayerAnimationController
   void Animate(double monotonic_time);
   void AccumulatePropertyUpdates(double monotonic_time,
                                  AnimationEventsVector* events);
-  void UpdateState(AnimationEventsVector* events);
+
+  void UpdateState(bool start_ready_animations,
+                   AnimationEventsVector* events);
 
   // Returns the active animation in the given group, animating the given
   // property, if such an animation exists.
@@ -75,11 +77,6 @@ class CC_EXPORT LayerAnimationController
   // the future.
   bool IsAnimatingProperty(Animation::TargetProperty target_property) const;
 
-  // This is called in response to an animation being started on the impl
-  // thread. This function updates the corresponding main thread animation's
-  // start time.
-  virtual void OnAnimationStarted(const AnimationEvent& event) OVERRIDE;
-
   // If a sync is forced, then the next time animation updates are pushed to the
   // impl thread, all animations will be transferred.
   void set_force_sync() { force_sync_ = true; }
@@ -87,13 +84,26 @@ class CC_EXPORT LayerAnimationController
   void SetAnimationRegistrar(AnimationRegistrar* registrar);
   AnimationRegistrar* animation_registrar() { return registrar_; }
 
-  void AddObserver(LayerAnimationValueObserver* observer);
-  void RemoveObserver(LayerAnimationValueObserver* observer);
+  void NotifyAnimationStarted(const AnimationEvent& event,
+                              double wall_clock_time);
+  void NotifyAnimationFinished(const AnimationEvent& event,
+                               double wall_clock_time);
+  void NotifyAnimationPropertyUpdate(const AnimationEvent& event);
+
+  void AddValueObserver(LayerAnimationValueObserver* observer);
+  void RemoveValueObserver(LayerAnimationValueObserver* observer);
+
+  void AddEventObserver(LayerAnimationEventObserver* observer);
+  void RemoveEventObserver(LayerAnimationEventObserver* observer);
+
+  void set_layer_animation_delegate(AnimationDelegate* delegate) {
+    layer_animation_delegate_ = delegate;
+  }
 
  protected:
   friend class base::RefCounted<LayerAnimationController>;
 
-  LayerAnimationController(int id);
+  explicit LayerAnimationController(int id);
   virtual ~LayerAnimationController();
 
  private:
@@ -130,7 +140,8 @@ class CC_EXPORT LayerAnimationController
   void NotifyObserversOpacityAnimated(float opacity);
   void NotifyObserversTransformAnimated(const gfx::Transform& transform);
 
-  bool HasActiveObserver();
+  bool HasValueObserver();
+  bool HasActiveValueObserver();
 
   // If this is true, we force a sync to the impl thread.
   bool force_sync_;
@@ -144,7 +155,10 @@ class CC_EXPORT LayerAnimationController
 
   double last_tick_time_;
 
-  ObserverList<LayerAnimationValueObserver> observers_;
+  ObserverList<LayerAnimationValueObserver> value_observers_;
+  ObserverList<LayerAnimationEventObserver> event_observers_;
+
+  AnimationDelegate* layer_animation_delegate_;
 
   DISALLOW_COPY_AND_ASSIGN(LayerAnimationController);
 };

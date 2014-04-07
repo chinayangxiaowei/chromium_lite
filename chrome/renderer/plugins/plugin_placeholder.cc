@@ -7,46 +7,38 @@
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/json/string_escape.h"
-#include "base/string_piece.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_piece.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/common/prerender_messages.h"
 #include "chrome/common/render_messages.h"
 #include "chrome/renderer/chrome_content_renderer_client.h"
 #include "chrome/renderer/custom_menu_commands.h"
 #include "chrome/renderer/plugins/plugin_uma.h"
+#include "content/public/common/content_constants.h"
 #include "content/public/common/context_menu_params.h"
 #include "content/public/renderer/render_thread.h"
 #include "content/public/renderer/render_view.h"
 #include "grit/generated_resources.h"
 #include "grit/renderer_resources.h"
 #include "grit/webkit_strings.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebData.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebPoint.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebURLRequest.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebVector.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebContextMenuData.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebDocument.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebElement.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebFrame.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebInputEvent.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebMenuItemInfo.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebPluginContainer.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebRegularExpression.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebScriptSource.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebTextCaseSensitivity.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebView.h"
+#include "third_party/WebKit/public/platform/WebData.h"
+#include "third_party/WebKit/public/platform/WebPoint.h"
+#include "third_party/WebKit/public/platform/WebURLRequest.h"
+#include "third_party/WebKit/public/platform/WebVector.h"
+#include "third_party/WebKit/public/web/WebContextMenuData.h"
+#include "third_party/WebKit/public/web/WebDocument.h"
+#include "third_party/WebKit/public/web/WebElement.h"
+#include "third_party/WebKit/public/web/WebFrame.h"
+#include "third_party/WebKit/public/web/WebInputEvent.h"
+#include "third_party/WebKit/public/web/WebPluginContainer.h"
+#include "third_party/WebKit/public/web/WebScriptSource.h"
+#include "third_party/WebKit/public/web/WebView.h"
+#include "third_party/re2/re2/re2.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/webui/jstemplate_builder.h"
-#include "webkit/glue/webpreferences.h"
-#include "webkit/plugins/npapi/plugin_list.h"
-#include "webkit/plugins/webview_plugin.h"
-
-#if defined(ENABLE_MOBILE_YOUTUBE_PLUGIN)
-#include "webkit/plugins/plugin_constants.h"
-#endif
 
 using content::RenderThread;
 using content::RenderView;
@@ -54,20 +46,16 @@ using WebKit::WebContextMenuData;
 using WebKit::WebDocument;
 using WebKit::WebElement;
 using WebKit::WebFrame;
-using WebKit::WebMenuItemInfo;
 using WebKit::WebMouseEvent;
 using WebKit::WebNode;
 using WebKit::WebPlugin;
 using WebKit::WebPluginContainer;
-using webkit::WebPluginInfo;
 using WebKit::WebPluginParams;
 using WebKit::WebPoint;
-using WebKit::WebRegularExpression;
 using WebKit::WebScriptSource;
 using WebKit::WebString;
 using WebKit::WebURLRequest;
 using WebKit::WebVector;
-using webkit::WebViewPlugin;
 using webkit_glue::CppArgumentList;
 using webkit_glue::CppVariant;
 
@@ -97,7 +85,7 @@ std::string GetYoutubeVideoId(const WebPluginParams& params) {
   return video_id;
 }
 #endif
-}
+}  // namespace
 
 // static
 PluginPlaceholder* PluginPlaceholder::CreateMissingPlugin(
@@ -108,7 +96,7 @@ PluginPlaceholder* PluginPlaceholder::CreateMissingPlugin(
       ResourceBundle::GetSharedInstance().GetRawDataResource(
           IDR_BLOCKED_PLUGIN_HTML));
 
-  DictionaryValue values;
+  base::DictionaryValue values;
 #if defined(ENABLE_PLUGIN_INSTALLATION)
   values.SetString("message", l10n_util::GetStringUTF8(IDS_PLUGIN_SEARCHING));
 #else
@@ -133,7 +121,7 @@ PluginPlaceholder* PluginPlaceholder::CreateMissingPlugin(
 PluginPlaceholder* PluginPlaceholder::CreateErrorPlugin(
     RenderView* render_view,
     const base::FilePath& file_path) {
-  DictionaryValue values;
+  base::DictionaryValue values;
   values.SetString("message",
                    l10n_util::GetStringUTF8(IDS_PLUGIN_INITIALIZATION_ERROR));
 
@@ -158,12 +146,12 @@ PluginPlaceholder* PluginPlaceholder::CreateBlockedPlugin(
     RenderView* render_view,
     WebFrame* frame,
     const WebPluginParams& params,
-    const WebPluginInfo& plugin,
+    const content::WebPluginInfo& plugin,
     const std::string& identifier,
     const string16& name,
     int template_id,
     const string16& message) {
-  DictionaryValue values;
+  base::DictionaryValue values;
   values.SetString("message", message);
   values.SetString("name", name);
   values.SetString("hide", l10n_util::GetStringUTF8(IDS_PLUGIN_HIDE));
@@ -194,7 +182,7 @@ PluginPlaceholder* PluginPlaceholder::CreateMobileYoutubePlugin(
       ResourceBundle::GetSharedInstance().GetRawDataResource(
           IDR_MOBILE_YOUTUBE_PLUGIN_HTML));
 
-  DictionaryValue values;
+  base::DictionaryValue values;
   values.SetString("video_id", GetYoutubeVideoId(params));
   std::string html_data = webui::GetI18nTemplateHtml(template_html, &values);
 
@@ -315,7 +303,7 @@ bool PluginPlaceholder::OnMessageReceived(const IPC::Message& message) {
 void PluginPlaceholder::ReplacePlugin(WebPlugin* new_plugin) {
   CHECK(plugin_);
   if (!new_plugin) {
-    MissingPluginReporter::GetInstance()->ReportPluginMissing(
+    PluginUMAReporter::GetInstance()->ReportPluginMissing(
         plugin_params_.mimeType.utf8(),
         plugin_params_.url);
     return;
@@ -335,7 +323,7 @@ void PluginPlaceholder::ReplacePlugin(WebPlugin* new_plugin) {
 
   // The plug-in has been removed from the page. Destroy the old plug-in
   // (which will destroy us).
-  if (element.parentNode().isNull()) {
+  if (!element.pluginContainer()) {
     plugin_->destroy();
     return;
   }
@@ -375,8 +363,6 @@ void PluginPlaceholder::HidePlugin() {
     }
     TrimWhitespace(width_str, TRIM_TRAILING, &width_str);
     width_str += "[\\s]*px";
-    WebRegularExpression width_regex(WebString::fromUTF8(width_str.c_str()),
-                                     WebKit::WebTextCaseSensitive);
     std::string height_str("height:[\\s]*");
     height_str += element.getAttribute("height").utf8().data();
     if (EndsWith(height_str, "px", false)) {
@@ -384,8 +370,6 @@ void PluginPlaceholder::HidePlugin() {
     }
     TrimWhitespace(height_str, TRIM_TRAILING, &height_str);
     height_str += "[\\s]*px";
-    WebRegularExpression height_regex(WebString::fromUTF8(height_str.c_str()),
-                                      WebKit::WebTextCaseSensitive);
     WebNode parent = element;
     while (!parent.parentNode().isNull()) {
       parent = parent.parentNode();
@@ -393,9 +377,9 @@ void PluginPlaceholder::HidePlugin() {
         continue;
       element = parent.toConst<WebElement>();
       if (element.hasAttribute("style")) {
-        WebString style_str = element.getAttribute("style");
-        if (width_regex.match(style_str) >= 0 &&
-            height_regex.match(style_str) >= 0)
+        std::string style_str = element.getAttribute("style").utf8();
+        if (RE2::PartialMatch(style_str, width_str) &&
+            RE2::PartialMatch(style_str, height_str))
           element.setAttribute("style", "display: none;");
       }
     }
@@ -455,11 +439,8 @@ void PluginPlaceholder::PluginListChanged() {
       mime_type, &output));
   if (output.status.value == status_->value)
     return;
-  chrome::ChromeContentRendererClient* client =
-      static_cast<chrome::ChromeContentRendererClient*>(
-          content::GetContentClient()->renderer());
-  WebPlugin* new_plugin =
-      client->CreatePlugin(render_view(), frame_, plugin_params_, output);
+  WebPlugin* new_plugin = chrome::ChromeContentRendererClient::CreatePlugin(
+      render_view(), frame_, plugin_params_, output);
   ReplacePlugin(new_plugin);
 }
 
@@ -507,36 +488,28 @@ void PluginPlaceholder::ShowContextMenu(const WebMouseEvent& event) {
 
   content::ContextMenuParams params;
 
-  WebMenuItemInfo name_item;
+  content::MenuItem name_item;
   name_item.label = title_;
-  name_item.hasTextDirectionOverride = false;
-  name_item.textDirection =  WebKit::WebTextDirectionDefault;
-  params.custom_items.push_back(WebMenuItem(name_item));
+  params.custom_items.push_back(name_item);
 
-  WebMenuItemInfo separator_item;
-  separator_item.type = WebMenuItemInfo::Separator;
-  params.custom_items.push_back(WebMenuItem(separator_item));
+  content::MenuItem separator_item;
+  separator_item.type = content::MenuItem::SEPARATOR;
+  params.custom_items.push_back(separator_item);
 
   if (!plugin_info_.path.value().empty()) {
-    WebMenuItemInfo run_item;
+    content::MenuItem run_item;
     run_item.action = chrome::MENU_COMMAND_PLUGIN_RUN;
     // Disable this menu item if the plugin is blocked by policy.
     run_item.enabled = allow_loading_;
-    run_item.label = WebString::fromUTF8(
-        l10n_util::GetStringUTF8(IDS_CONTENT_CONTEXT_PLUGIN_RUN).c_str());
-    run_item.hasTextDirectionOverride = false;
-    run_item.textDirection =  WebKit::WebTextDirectionDefault;
-    params.custom_items.push_back(WebMenuItem(run_item));
+    run_item.label = l10n_util::GetStringUTF16(IDS_CONTENT_CONTEXT_PLUGIN_RUN);
+    params.custom_items.push_back(run_item);
   }
 
-  WebMenuItemInfo hide_item;
+  content::MenuItem hide_item;
   hide_item.action = chrome::MENU_COMMAND_PLUGIN_HIDE;
   hide_item.enabled = true;
-  hide_item.label = WebString::fromUTF8(
-      l10n_util::GetStringUTF8(IDS_CONTENT_CONTEXT_PLUGIN_HIDE).c_str());
-  hide_item.hasTextDirectionOverride = false;
-  hide_item.textDirection =  WebKit::WebTextDirectionDefault;
-  params.custom_items.push_back(WebMenuItem(hide_item));
+  hide_item.label = l10n_util::GetStringUTF16(IDS_CONTENT_CONTEXT_PLUGIN_HIDE);
+  params.custom_items.push_back(hide_item);
 
   params.x = event.windowX;
   params.y = event.windowY;
@@ -648,6 +621,6 @@ bool PluginPlaceholder::IsYouTubeURL(const GURL& url,
       EndsWith(host, "youtube-nocookie.com", true);
 
   return is_youtube && IsValidYouTubeVideo(url.path()) &&
-      LowerCaseEqualsASCII(mime_type, kFlashPluginSwfMimeType);
+      LowerCaseEqualsASCII(mime_type, content::kFlashPluginSwfMimeType);
 }
 #endif

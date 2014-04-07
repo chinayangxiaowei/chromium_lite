@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 // This file intentionally does not have header guards, it's included
-// inside a macro to generate enum.
+// inside a macro to generate enum values.
 
 // This file contains the list of certificate verification results returned
 // from Java side to the C++ side.
@@ -25,3 +25,7 @@ CERT_VERIFY_RESULT_ANDROID(NOT_YET_VALID, -4)
 
 // Certificate is not trusted because it could not be parsed.
 CERT_VERIFY_RESULT_ANDROID(UNABLE_TO_PARSE, -5)
+
+// Certificate is not trusted because it has an extendedKeyUsage field, but
+// its value is not correct for a web server.
+CERT_VERIFY_RESULT_ANDROID(INCORRECT_KEY_USAGE, -6)

@@ -8,7 +8,7 @@
 #include "base/basictypes.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/observer_list.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 
 namespace gfx {
 class ImageSkia;
@@ -31,7 +31,10 @@ class StatusIcon {
   // Sets the image associated with this status icon when pressed.
   virtual void SetPressedImage(const gfx::ImageSkia& image) = 0;
 
-  // Sets the hover text for this status icon.
+  // Sets the hover text for this status icon. This is also used as the label
+  // for the menu item which is created as a replacement for the status icon
+  // click action on platforms that do not support custom click actions for the
+  // status icon (e.g. Ubuntu Unity).
   virtual void SetToolTip(const string16& tool_tip) = 0;
 
   // Displays a notification balloon with the specified contents.
@@ -56,6 +59,9 @@ class StatusIcon {
 
   // Dispatches a click event to the observers.
   void DispatchClickEvent();
+#if defined(OS_WIN)
+  void DispatchBalloonClickEvent();
+#endif
 
  protected:
   // Invoked after a call to SetContextMenu() to let the platform-specific

@@ -13,11 +13,14 @@
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/prefs/pref_change_registrar.h"
-#include "chrome/browser/printing/cloud_print/cloud_print_setup_handler.h"
-#include "chrome/browser/profiles/profile_keyed_service.h"
+#include "components/browser_context_keyed_service/browser_context_keyed_service.h"
 
 class Profile;
 class ServiceProcessControl;
+
+namespace base {
+class DictionaryValue;
+}  // namespace base
 
 namespace cloud_print {
 struct CloudPrintProxyInfo;
@@ -25,9 +28,7 @@ struct CloudPrintProxyInfo;
 
 // Layer between the browser user interface and the cloud print proxy code
 // running in the service process.
-class CloudPrintProxyService
-    : public CloudPrintSetupHandlerDelegate,
-      public ProfileKeyedService {
+class CloudPrintProxyService : public BrowserContextKeyedService {
  public:
   explicit CloudPrintProxyService(Profile* profile);
   virtual ~CloudPrintProxyService();
@@ -37,13 +38,11 @@ class CloudPrintProxyService
   void Initialize();
 
   // Enables/disables cloud printing for the user
-  virtual void EnableForUser(const std::string& lsid, const std::string& email);
   virtual void EnableForUserWithRobot(
       const std::string& robot_auth_code,
       const std::string& robot_email,
       const std::string& user_email,
-      bool connect_new_printers,
-      const std::vector<std::string>& printer_blacklist);
+      const base::DictionaryValue& user_settings);
   virtual void DisableForUser();
 
   // Query the service process for the status of the cloud print proxy and
@@ -57,9 +56,6 @@ class CloudPrintProxyService
 
   std::string proxy_id() const { return proxy_id_; }
 
-  // CloudPrintSetupHandler::Delegate implementation.
-  virtual void OnCloudPrintSetupClosed() OVERRIDE;
-
   // Returns list of printer names available for registration.
   static void GetPrintersAvalibleForRegistration(
       std::vector<std::string>* printers);
@@ -69,18 +65,13 @@ class CloudPrintProxyService
   class TokenExpiredNotificationDelegate;
   friend class TokenExpiredNotificationDelegate;
 
-  Profile* profile_;
-  std::string proxy_id_;
-
   // Methods that send an IPC to the service.
   void RefreshCloudPrintProxyStatus();
-  void EnableCloudPrintProxy(const std::string& lsid, const std::string& email);
   void EnableCloudPrintProxyWithRobot(
       const std::string& robot_auth_code,
       const std::string& robot_email,
       const std::string& user_email,
-      bool connect_new_printers,
-      const std::vector<std::string>& printer_blacklist);
+      const base::DictionaryValue* user_preferences);
   void DisableCloudPrintProxy();
 
   // Callback that gets the cloud print proxy info.
@@ -96,12 +87,15 @@ class CloudPrintProxyService
   // not set or the connector is not enabled).
   bool ApplyCloudPrintConnectorPolicy();
 
+  Profile* profile_;
+  std::string proxy_id_;
+
   // Virtual for testing.
   virtual ServiceProcessControl* GetServiceProcessControl();
 
   base::WeakPtrFactory<CloudPrintProxyService> weak_factory_;
 
-  // For watching for connector enablement policy changes.
+  // For watching for connector policy changes.
   PrefChangeRegistrar pref_change_registrar_;
 
   // If set, continue trying to disable the connector, and quit the process

@@ -200,7 +200,7 @@ int SSLServerSocketNSS::Read(IOBuffer* buf, int buf_len,
                              const CompletionCallback& callback) {
   DCHECK(user_read_callback_.is_null());
   DCHECK(user_handshake_callback_.is_null());
-  DCHECK(!user_read_buf_);
+  DCHECK(!user_read_buf_.get());
   DCHECK(nss_bufs_);
   DCHECK(!callback.is_null());
 
@@ -223,7 +223,7 @@ int SSLServerSocketNSS::Read(IOBuffer* buf, int buf_len,
 int SSLServerSocketNSS::Write(IOBuffer* buf, int buf_len,
                               const CompletionCallback& callback) {
   DCHECK(user_write_callback_.is_null());
-  DCHECK(!user_write_buf_);
+  DCHECK(!user_write_buf_.get());
   DCHECK(nss_bufs_);
   DCHECK(!callback.is_null());
 
@@ -291,14 +291,6 @@ bool SSLServerSocketNSS::WasEverUsed() const {
 
 bool SSLServerSocketNSS::UsingTCPFastOpen() const {
   return transport_socket_->UsingTCPFastOpen();
-}
-
-int64 SSLServerSocketNSS::NumBytesRead() const {
-  return transport_socket_->NumBytesRead();
-}
-
-base::TimeDelta SSLServerSocketNSS::GetConnectTimeMicros() const {
-  return transport_socket_->GetConnectTimeMicros();
 }
 
 bool SSLServerSocketNSS::WasNpnNegotiated() const {
@@ -494,7 +486,7 @@ void SSLServerSocketNSS::OnSendComplete(int result) {
   if (!completed_handshake_)
     return;
 
-  if (user_write_buf_) {
+  if (user_write_buf_.get()) {
     int rv = DoWriteLoop(result);
     if (rv != ERR_IO_PENDING)
       DoWriteCallback(rv);
@@ -513,7 +505,7 @@ void SSLServerSocketNSS::OnRecvComplete(int result) {
 
   // Network layer received some data, check if client requested to read
   // decrypted data.
-  if (!user_read_buf_ || !completed_handshake_)
+  if (!user_read_buf_.get() || !completed_handshake_)
     return;
 
   int rv = DoReadLoop(result);
@@ -549,7 +541,8 @@ int SSLServerSocketNSS::BufferSend(void) {
     memcpy(send_buffer->data(), buf1, len1);
     memcpy(send_buffer->data() + len1, buf2, len2);
     rv = transport_socket_->Write(
-        send_buffer, len,
+        send_buffer.get(),
+        len,
         base::Bind(&SSLServerSocketNSS::BufferSendComplete,
                    base::Unretained(this)));
     if (rv == ERR_IO_PENDING) {
@@ -580,7 +573,8 @@ int SSLServerSocketNSS::BufferRecv(void) {
   } else {
     recv_buffer_ = new IOBuffer(nb);
     rv = transport_socket_->Read(
-        recv_buffer_, nb,
+        recv_buffer_.get(),
+        nb,
         base::Bind(&SSLServerSocketNSS::BufferRecvComplete,
                    base::Unretained(this)));
     if (rv == ERR_IO_PENDING) {
@@ -628,7 +622,7 @@ bool SSLServerSocketNSS::DoTransportIO() {
 }
 
 int SSLServerSocketNSS::DoPayloadRead() {
-  DCHECK(user_read_buf_);
+  DCHECK(user_read_buf_.get());
   DCHECK_GT(user_read_buf_len_, 0);
   int rv = PR_Read(nss_fd_, user_read_buf_->data(), user_read_buf_len_);
   if (rv >= 0)
@@ -644,7 +638,7 @@ int SSLServerSocketNSS::DoPayloadRead() {
 }
 
 int SSLServerSocketNSS::DoPayloadWrite() {
-  DCHECK(user_write_buf_);
+  DCHECK(user_write_buf_.get());
   int rv = PR_Write(nss_fd_, user_write_buf_->data(), user_write_buf_len_);
   if (rv >= 0)
     return rv;

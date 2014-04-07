@@ -15,8 +15,8 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
-#include "base/string16.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string16.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/browsing_data/browsing_data_appcache_helper.h"
 #include "chrome/browser/browsing_data/browsing_data_database_helper.h"
 #include "chrome/browser/browsing_data/browsing_data_file_system_helper.h"
@@ -110,7 +110,7 @@ class CookieTreeNode : public ui::TreeNode<CookieTreeNode> {
     DetailedInfo& InitAppCache(const GURL& origin,
                                const appcache::AppCacheInfo* appcache_info);
     DetailedInfo& InitIndexedDB(
-        const BrowsingDataIndexedDBHelper::IndexedDBInfo* indexed_db_info);
+        const content::IndexedDBInfo* indexed_db_info);
     DetailedInfo& InitFileSystem(
         const BrowsingDataFileSystemHelper::FileSystemInfo* file_system_info);
     DetailedInfo& InitQuota(
@@ -127,7 +127,7 @@ class CookieTreeNode : public ui::TreeNode<CookieTreeNode> {
     const BrowsingDataLocalStorageHelper::LocalStorageInfo*
         session_storage_info;
     const appcache::AppCacheInfo* appcache_info;
-    const BrowsingDataIndexedDBHelper::IndexedDBInfo* indexed_db_info;
+    const content::IndexedDBInfo* indexed_db_info;
     const BrowsingDataFileSystemHelper::FileSystemInfo* file_system_info;
     const BrowsingDataQuotaHelper::QuotaInfo* quota_info;
     const net::ServerBoundCertStore::ServerBoundCert* server_bound_cert;
@@ -475,7 +475,7 @@ class CookieTreeIndexedDBNode : public CookieTreeNode {
   // indexed_db_info should remain valid at least as long as the
   // CookieTreeIndexedDBNode is valid.
   explicit CookieTreeIndexedDBNode(
-      std::list<BrowsingDataIndexedDBHelper::IndexedDBInfo>::iterator
+      std::list<content::IndexedDBInfo>::iterator
           indexed_db_info);
   virtual ~CookieTreeIndexedDBNode();
 
@@ -486,7 +486,7 @@ class CookieTreeIndexedDBNode : public CookieTreeNode {
  private:
   // indexed_db_info_ is expected to remain valid as long as the
   // CookieTreeIndexedDBNode is valid.
-  std::list<BrowsingDataIndexedDBHelper::IndexedDBInfo>::iterator
+  std::list<content::IndexedDBInfo>::iterator
       indexed_db_info_;
 
   DISALLOW_COPY_AND_ASSIGN(CookieTreeIndexedDBNode);

@@ -4,8 +4,8 @@
 
 #import "chrome/browser/ui/cocoa/l10n_util.h"
 
-#include "base/string_util.h"
-#include "base/sys_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/sys_string_conversions.h"
 #import "third_party/GTM/AppKit/GTMUILocalizerAndLayoutTweaker.h"
 
 namespace cocoa_l10n_util {
@@ -73,6 +73,15 @@ NSString* ReplaceNSStringPlaceholders(NSString* formatString,
       ReplaceStringPlaceholders(base::SysNSStringToUTF16(formatString),
                                 a,
                                 offset));
+}
+
+NSString* TooltipForURLAndTitle(NSString* url, NSString* title) {
+  if ([title length] == 0)
+    return url;
+  else if ([url length] == 0 || [url isEqualToString:title])
+    return title;
+  else
+    return [NSString stringWithFormat:@"%@\n%@", title, url];
 }
 
 }  // namespace cocoa_l10n_util

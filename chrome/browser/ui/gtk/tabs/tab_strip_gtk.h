@@ -11,7 +11,7 @@
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
 #include "base/memory/weak_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "chrome/browser/ui/gtk/tabs/tab_gtk.h"
 #include "chrome/browser/ui/gtk/tabstrip_origin_provider.h"
 #include "chrome/browser/ui/gtk/view_id_util.h"
@@ -34,7 +34,7 @@ class Image;
 
 class TabStripGtk : public TabStripModelObserver,
                     public TabGtk::TabDelegate,
-                    public MessageLoopForUI::Observer,
+                    public base::MessageLoopForUI::Observer,
                     public content::NotificationObserver,
                     public TabstripOriginProvider,
                     public ViewIDUtil::Delegate {
@@ -119,7 +119,7 @@ class TabStripGtk : public TabStripModelObserver,
   virtual void ActiveTabChanged(content::WebContents* old_contents,
                                 content::WebContents* new_contents,
                                 int index,
-                                bool user_gesture) OVERRIDE;
+                                int reason) OVERRIDE;
   virtual void TabSelectionChanged(
       TabStripModel* tab_strip_model,
       const ui::ListSelectionModel& old_model) OVERRIDE;

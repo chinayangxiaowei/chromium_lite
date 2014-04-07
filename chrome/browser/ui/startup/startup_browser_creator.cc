@@ -7,6 +7,8 @@
 #include <algorithm>   // For max().
 #include <set>
 
+#include "apps/app_load_service.h"
+#include "apps/switches.h"
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/command_line.h"
@@ -21,46 +23,42 @@
 #include "base/prefs/pref_service.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread_restrictions.h"
-#include "base/utf_string_conversions.h"
 #include "chrome/browser/app_mode/app_mode_utils.h"
 #include "chrome/browser/auto_launch_trial.h"
 #include "chrome/browser/automation/automation_provider.h"
 #include "chrome/browser/automation/automation_provider_list.h"
 #include "chrome/browser/automation/testing_automation_provider.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/custom_handlers/protocol_handler_registry.h"
 #include "chrome/browser/extensions/startup_helper.h"
 #include "chrome/browser/extensions/unpacked_installer.h"
 #include "chrome/browser/first_run/first_run.h"
 #include "chrome/browser/google/google_util.h"
-#include "chrome/browser/net/url_fixer_upper.h"
 #include "chrome/browser/notifications/desktop_notification_service.h"
 #include "chrome/browser/prefs/incognito_mode_prefs.h"
 #include "chrome/browser/prefs/session_startup_pref.h"
-#include "chrome/browser/printing/cloud_print/cloud_print_proxy_service.h"
-#include "chrome/browser/printing/cloud_print/cloud_print_proxy_service_factory.h"
-#include "chrome/browser/printing/print_dialog_cloud.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/search_engines/template_url.h"
-#include "chrome/browser/search_engines/template_url_service.h"
-#include "chrome/browser/search_engines/template_url_service_factory.h"
+#include "chrome/browser/search_engines/util.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/startup/startup_browser_creator_impl.h"
 #include "chrome/common/chrome_constants.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_result_codes.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/chrome_version_info.h"
+#include "chrome/common/net/url_fixer_upper.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/installer/util/browser_distribution.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/child_process_security_policy.h"
+#include "content/public/browser/navigation_controller.h"
 #include "grit/locale_settings.h"
 #include "net/base/net_util.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -70,16 +68,23 @@
 #include "chrome/browser/chromeos/app_mode/startup_app_launcher.h"
 #include "chrome/browser/chromeos/kiosk_mode/kiosk_mode_settings.h"
 #include "chrome/browser/chromeos/login/user_manager.h"
-#include "chrome/browser/chromeos/profile_startup.h"
+#include "chrome/browser/chromeos/profiles/profile_helper.h"
+#include "chromeos/chromeos_switches.h"
 #endif
 
 #if defined(TOOLKIT_VIEWS) && defined(OS_LINUX)
-#include "ui/base/touch/touch_factory.h"
+#include "ui/base/touch/touch_factory_x11.h"
 #endif
 
 #if defined(OS_WIN)
 #include "chrome/browser/automation/chrome_frame_automation_provider_win.h"
 #include "chrome/browser/ui/startup/startup_browser_creator_win.h"
+#endif
+
+#if defined(ENABLE_FULL_PRINTING)
+#include "chrome/browser/printing/cloud_print/cloud_print_proxy_service.h"
+#include "chrome/browser/printing/cloud_print/cloud_print_proxy_service_factory.h"
+#include "chrome/browser/printing/print_dialog_cloud.h"
 #endif
 
 using content::BrowserThread;
@@ -173,10 +178,10 @@ class ProfileLaunchObserver : public content::NotificationObserver {
         BrowserThread::UI, FROM_HERE,
         base::Bind(&ProfileLaunchObserver::ActivateProfile,
                    base::Unretained(this)));
-    // Stop reacting to new windows being opened to avoid posting more than
-    // once before ActivateProfile gets called and set |profile_to_activate_|
-    // to NULL.
+    // Avoid posting more than once before ActivateProfile gets called.
     registrar_.Remove(this, chrome::NOTIFICATION_BROWSER_WINDOW_READY,
+                      content::NotificationService::AllSources());
+    registrar_.Remove(this, chrome::NOTIFICATION_PROFILE_DESTROYED,
                       content::NotificationService::AllSources());
   }
 
@@ -251,6 +256,7 @@ bool StartupBrowserCreator::LaunchBrowser(
     chrome::startup::IsProcessStartup process_startup,
     chrome::startup::IsFirstRun is_first_run,
     int* return_code) {
+
   in_synchronous_profile_launch_ =
       process_startup == chrome::startup::IS_PROCESS_STARTUP;
   DCHECK(profile);
@@ -265,23 +271,34 @@ bool StartupBrowserCreator::LaunchBrowser(
                  << "browser session.";
   }
 
-  StartupBrowserCreatorImpl lwp(cur_dir, command_line, this, is_first_run);
-  std::vector<GURL> urls_to_launch =
-      GetURLsFromCommandLine(command_line, cur_dir, profile);
-  bool launched = lwp.Launch(profile, urls_to_launch,
-                             in_synchronous_profile_launch_);
-  in_synchronous_profile_launch_ = false;
+  // Note: This check should have been done in ProcessCmdLineImpl()
+  // before calling this function. However chromeos/login/login_utils.cc
+  // calls this function directly (see comments there) so it has to be checked
+  // again.
+  const bool silent_launch = command_line.HasSwitch(switches::kSilentLaunch);
 
-  if (!launched) {
-    LOG(ERROR) << "launch error";
-    if (return_code)
-      *return_code = chrome::RESULT_CODE_INVALID_CMDLINE_URL;
-    return false;
+  if (!silent_launch) {
+    StartupBrowserCreatorImpl lwp(cur_dir, command_line, this, is_first_run);
+    const std::vector<GURL> urls_to_launch =
+        GetURLsFromCommandLine(command_line, cur_dir, profile);
+    const bool launched = lwp.Launch(profile, urls_to_launch,
+                               in_synchronous_profile_launch_,
+                               chrome::HOST_DESKTOP_TYPE_NATIVE);
+    in_synchronous_profile_launch_ = false;
+    if (!launched) {
+      LOG(ERROR) << "launch error";
+      if (return_code)
+        *return_code = chrome::RESULT_CODE_INVALID_CMDLINE_URL;
+      return false;
+    }
+  } else {
+    in_synchronous_profile_launch_ = false;
   }
+
   profile_launch_observer.Get().AddLaunched(profile);
 
 #if defined(OS_CHROMEOS)
-  chromeos::ProfileStartup(profile, process_startup);
+  chromeos::ProfileHelper::ProfileStartup(profile, process_startup);
 #endif
   return true;
 }
@@ -326,8 +343,14 @@ SessionStartupPref StartupBrowserCreator::GetSessionStartupPref(
   if (is_first_run && SessionStartupPref::TypeIsDefault(prefs))
     pref.type = SessionStartupPref::DEFAULT;
 
-  if (command_line.HasSwitch(switches::kRestoreLastSession) ||
-      StartupBrowserCreator::WasRestarted()) {
+  // The switches::kRestoreLastSession command line switch is used to restore
+  // sessions after a browser self restart (e.g. after a Chrome upgrade).
+  // However, new profiles can be created from a browser process that has this
+  // switch so do not set the session pref to SessionStartupPref::LAST for
+  // those as there is nothing to restore.
+  if ((command_line.HasSwitch(switches::kRestoreLastSession) ||
+       StartupBrowserCreator::WasRestarted()) &&
+      !profile->IsNewProfile()) {
     pref.type = SessionStartupPref::LAST;
   }
   if (pref.type == SessionStartupPref::LAST &&
@@ -362,22 +385,17 @@ std::vector<GURL> StartupBrowserCreator::GetURLsFromCommandLine(
     const base::FilePath& cur_dir,
     Profile* profile) {
   std::vector<GURL> urls;
-  const CommandLine::StringVector& params = command_line.GetArgs();
 
+  const CommandLine::StringVector& params = command_line.GetArgs();
   for (size_t i = 0; i < params.size(); ++i) {
     base::FilePath param = base::FilePath(params[i]);
     // Handle Vista way of searching - "? <search-term>"
-    if (param.value().size() > 2 &&
-        param.value()[0] == '?' && param.value()[1] == ' ') {
-      const TemplateURL* default_provider =
-          TemplateURLServiceFactory::GetForProfile(profile)->
-          GetDefaultSearchProvider();
-      if (default_provider) {
-        const TemplateURLRef& search_url = default_provider->url_ref();
-        DCHECK(search_url.SupportsReplacement());
-        string16 search_term = param.LossyDisplayName().substr(2);
-        urls.push_back(GURL(search_url.ReplaceSearchTerms(
-            TemplateURLRef::SearchTermsArgs(search_term))));
+    if ((param.value().size() > 2) && (param.value()[0] == '?') &&
+        (param.value()[1] == ' ')) {
+      GURL url(GetDefaultSearchURLForSearchTerms(
+          profile, param.LossyDisplayName().substr(2)));
+      if (url.is_valid()) {
+        urls.push_back(url);
         continue;
       }
     }
@@ -404,7 +422,7 @@ std::vector<GURL> StartupBrowserCreator::GetURLsFromCommandLine(
           // command line. See ExistingUserController::OnLoginSuccess.
           (url.spec().find(chrome::kChromeUISettingsURL) == 0) ||
 #endif
-          (url.spec().compare(chrome::kAboutBlankURL) == 0)) {
+          (url.spec().compare(content::kAboutBlankURL) == 0)) {
         urls.push_back(url);
       }
     }
@@ -414,9 +432,9 @@ std::vector<GURL> StartupBrowserCreator::GetURLsFromCommandLine(
     // If we are in Windows 8 metro mode and were launched as a result of the
     // search charm or via a url navigation in metro, then fetch the
     // corresponding url.
-    GURL url = chrome::GetURLToOpen(profile);
+    GURL url(chrome::GetURLToOpen(profile));
     if (url.is_valid())
-      urls.push_back(GURL(url));
+      urls.push_back(url);
   }
 #endif  // OS_WIN
   return urls;
@@ -456,7 +474,7 @@ bool StartupBrowserCreator::ProcessCmdLineImpl(
 #if defined(OS_CHROMEOS)
     // kLoginManager will cause Chrome to start up with the ChromeOS login
     // screen instead of a browser window, so it won't load any tabs.
-    } else if (command_line.HasSwitch(switches::kLoginManager)) {
+    } else if (command_line.HasSwitch(chromeos::switches::kLoginManager)) {
       expected_tab_count = 0;
 #endif
     } else if (command_line.HasSwitch(switches::kRestoreLastSession)) {
@@ -511,6 +529,7 @@ bool StartupBrowserCreator::ProcessCmdLineImpl(
   }
 #endif  // defined(ENABLE_AUTOMATION)
 
+#if defined(ENABLE_FULL_PRINTING)
   // If we are just displaying a print dialog we shouldn't open browser
   // windows.
   if (command_line.HasSwitch(switches::kCloudPrintFile) &&
@@ -527,6 +546,7 @@ bool StartupBrowserCreator::ProcessCmdLineImpl(
       // launching and quit.
       return false;
   }
+#endif  // defined(ENABLE_FULL_PRINTING)
 
   if (command_line.HasSwitch(switches::kExplicitlyAllowedPorts)) {
     std::string allowed_ports =
@@ -542,6 +562,24 @@ bool StartupBrowserCreator::ProcessCmdLineImpl(
     return false;
   }
 
+  if (command_line.HasSwitch(switches::kValidateCrx)) {
+    if (!process_startup) {
+      LOG(ERROR) << "chrome is already running; you must close all running "
+                 << "instances before running with the --"
+                 << switches::kValidateCrx << " flag";
+      return false;
+    }
+    extensions::StartupHelper helper;
+    std::string message;
+    std::string error;
+    if (helper.ValidateCrx(command_line, &error))
+      message = std::string("ValidateCrx Success");
+    else
+      message = std::string("ValidateCrx Failure: ") + error;
+    printf("%s\n", message.c_str());
+    return false;
+  }
+
   if (command_line.HasSwitch(switches::kLimitedInstallFromWebstore)) {
     extensions::StartupHelper helper;
     helper.LimitedInstallFromWebstore(command_line, last_used_profile,
@@ -550,8 +588,8 @@ bool StartupBrowserCreator::ProcessCmdLineImpl(
 
 #if defined(OS_CHROMEOS)
   // The browser will be launched after the user logs in.
-  if (command_line.HasSwitch(switches::kLoginManager) ||
-      command_line.HasSwitch(switches::kLoginPassword)) {
+  if (command_line.HasSwitch(chromeos::switches::kLoginManager) ||
+      command_line.HasSwitch(chromeos::switches::kLoginPassword)) {
     silent_launch = true;
   }
 
@@ -567,7 +605,7 @@ bool StartupBrowserCreator::ProcessCmdLineImpl(
   }
 #endif
 
-#if defined(TOOLKIT_VIEWS) && defined(OS_LINUX)
+#if defined(TOOLKIT_VIEWS) && defined(USE_X11)
   ui::TouchFactory::SetTouchDeviceListFromCommandLine();
 #endif
 
@@ -577,14 +615,17 @@ bool StartupBrowserCreator::ProcessCmdLineImpl(
     return true;
 
   // Check for --load-and-launch-app.
-  if (command_line.HasSwitch(switches::kLoadAndLaunchApp) &&
+  if (command_line.HasSwitch(apps::kLoadAndLaunchApp) &&
       !IncognitoModePrefs::ShouldLaunchIncognito(
           command_line, last_used_profile->GetPrefs())) {
     CommandLine::StringType path = command_line.GetSwitchValueNative(
-        switches::kLoadAndLaunchApp);
-    extensions::UnpackedInstaller::Create(
-        last_used_profile->GetExtensionService())->
-            LoadFromCommandLine(base::FilePath(path), true);
+        apps::kLoadAndLaunchApp);
+
+    if (!apps::AppLoadService::Get(last_used_profile)->LoadAndLaunch(
+            base::FilePath(path), command_line, cur_dir)) {
+      return false;
+    }
+
     // Return early here since we don't want to open a browser window.
     // The exception is when there are no browser windows, since we don't want
     // chrome to shut down.
@@ -663,7 +704,7 @@ bool StartupBrowserCreator::CreateAutomationProvider(
 
   AutomationProviderList* list = g_browser_process->GetAutomationProviderList();
   DCHECK(list);
-  list->AddProvider(automation);
+  list->AddProvider(automation.get());
 #endif  // defined(ENABLE_AUTOMATION)
 
   return true;
@@ -692,7 +733,8 @@ void StartupBrowserCreator::ProcessCommandLineAlreadyRunning(
   if (!profile) {
     profile_manager->CreateProfileAsync(profile_path,
         base::Bind(&StartupBrowserCreator::ProcessCommandLineOnProfileCreated,
-                   command_line, cur_dir), string16(), string16(), false);
+                   command_line, cur_dir), string16(), string16(),
+                   std::string());
     return;
   }
 

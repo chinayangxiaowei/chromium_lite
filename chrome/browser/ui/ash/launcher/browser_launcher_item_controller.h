@@ -12,14 +12,13 @@
 #include "base/compiler_specific.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "chrome/browser/ui/ash/launcher/launcher_favicon_loader.h"
 #include "chrome/browser/ui/ash/launcher/launcher_item_controller.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "ui/aura/window_observer.h"
 
 class Browser;
-class LauncherFaviconLoader;
 
 namespace ash {
 class LauncherModel;
@@ -29,7 +28,6 @@ class LauncherModel;
 // representation of a window up to date as the active tab changes.
 class BrowserLauncherItemController : public LauncherItemController,
                                       public TabStripModelObserver,
-                                      public LauncherFaviconLoader::Delegate,
                                       public aura::WindowObserver {
  public:
   // This API is to be used as part of testing only.
@@ -64,10 +62,6 @@ class BrowserLauncherItemController : public LauncherItemController,
   // specified browser.
   static BrowserLauncherItemController* Create(Browser* browser);
 
-  LauncherFaviconLoader* favicon_loader() const {
-    return favicon_loader_.get();
-  }
-
   // Call to indicate that the window the tabcontents are in has changed its
   // activation state.
   void BrowserActivationStateChanged();
@@ -84,13 +78,14 @@ class BrowserLauncherItemController : public LauncherItemController,
   virtual void OnRemoved() OVERRIDE;
   virtual void LauncherItemChanged(int index,
                                    const ash::LauncherItem& old_item) OVERRIDE;
-  virtual ChromeLauncherAppMenuItems GetApplicationList() OVERRIDE;
+  virtual ChromeLauncherAppMenuItems GetApplicationList(
+      int event_flags) OVERRIDE;
 
   // TabStripModel overrides:
   virtual void ActiveTabChanged(content::WebContents* old_contents,
                                 content::WebContents* new_contents,
                                 int index,
-                                bool user_gesture) OVERRIDE;
+                                int reason) OVERRIDE;
   virtual void TabInsertedAt(content::WebContents* contents,
                              int index,
                              bool foreground) OVERRIDE;
@@ -104,9 +99,6 @@ class BrowserLauncherItemController : public LauncherItemController,
                              content::WebContents* old_contents,
                              content::WebContents* new_contents,
                              int index) OVERRIDE;
-
-  // LauncherFaviconLoader::Delegate overrides:
-  virtual void FaviconUpdated() OVERRIDE;
 
   // aura::WindowObserver overrides:
   virtual void OnWindowPropertyChanged(aura::Window* window,
@@ -145,9 +137,6 @@ class BrowserLauncherItemController : public LauncherItemController,
 
   // Whether this is associated with an incognito profile.
   const bool is_incognito_;
-
-  // Loads launcher sized favicons for panels.
-  scoped_ptr<LauncherFaviconLoader> favicon_loader_;
 
   DISALLOW_COPY_AND_ASSIGN(BrowserLauncherItemController);
 };

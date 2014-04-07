@@ -10,7 +10,6 @@
 #include "base/logging.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
-#include "chrome/browser/chromeos/cros/cros_library.h"
 #include "chrome/browser/chromeos/login/auth_attempt_state.h"
 #include "chrome/browser/chromeos/login/auth_attempt_state_resolver.h"
 #include "chrome/browser/chromeos/login/user.h"
@@ -26,15 +25,6 @@
 #include "third_party/libjingle/source/talk/base/urlencode.h"
 
 using content::BrowserThread;
-
-namespace {
-
-// The service scope of the OAuth v2 token that ChromeOS login will be
-// requesting.
-const char kServiceScopeChromeOS[] =
-    "https://www.googleapis.com/auth/chromesync";
-
-}
 
 namespace chromeos {
 
@@ -138,8 +128,8 @@ void OnlineAttempt::TryClientLogin() {
       base::TimeDelta::FromMilliseconds(kClientLoginTimeoutMs));
 
   client_fetcher_->StartClientLogin(
-      attempt_->credentials.username,
-      attempt_->credentials.password,
+      attempt_->user_context.username,
+      attempt_->user_context.password,
       GaiaConstants::kSyncService,
       attempt_->login_token,
       attempt_->login_captcha,

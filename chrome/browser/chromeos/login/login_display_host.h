@@ -7,6 +7,8 @@
 
 #include <string>
 
+#include "base/callback.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/values.h"
 #include "chrome/browser/chromeos/customization_document.h"
 #include "chrome/browser/chromeos/login/login_display.h"
@@ -18,11 +20,12 @@ class Widget;
 
 namespace chromeos {
 
+class WebUILoginView;
 class WizardController;
 
 // An interface that defines OOBE/login screen host.
-// Host encapsulates implementation specific background window (views/WebUI),
-// OOBE/login controllers, views/WebUI UI implementation (such as LoginDisplay).
+// Host encapsulates WebUI window OOBE/login controllers,
+// UI implementation (such as LoginDisplay).
 class LoginDisplayHost {
  public:
   virtual ~LoginDisplayHost() {}
@@ -35,15 +38,18 @@ class LoginDisplayHost {
   // Returns corresponding native window.
   virtual gfx::NativeWindow GetNativeWindow() const = 0;
 
+  // Returns the current login view.
+  virtual WebUILoginView* GetWebUILoginView() const = 0;
+
   // Returns corresponding widget.
   virtual views::Widget* GetWidget() const = 0;
 
   // Called when browsing session starts before creating initial browser.
   virtual void BeforeSessionStart() = 0;
 
-  // Called when browsing session starts so
+  // Called when user enters or returns to browsing session so
   // LoginDisplayHost instance may delete itself.
-  virtual void OnSessionStart() = 0;
+  virtual void Finalize() = 0;
 
   // Called when a login has completed successfully.
   virtual void OnCompleteLogin() = 0;
@@ -70,11 +76,16 @@ class LoginDisplayHost {
   // Takes ownership of |screen_parameters|, which can also be NULL.
   virtual void StartWizard(
       const std::string& first_screen_name,
-      DictionaryValue* screen_parameters) = 0;
+      scoped_ptr<DictionaryValue> screen_parameters) = 0;
 
   // Returns current WizardController, if it exists.
   // Result should not be stored.
   virtual WizardController* GetWizardController() = 0;
+
+  // Starts screen for adding user into session.
+  // |completion_callback| called before display host shutdown.
+  // |completion_callback| can be null.
+  virtual void StartUserAdding(const base::Closure& completion_callback) = 0;
 
   // Starts sign in screen.
   virtual void StartSignInScreen() = 0;
@@ -84,6 +95,9 @@ class LoginDisplayHost {
 
   // Invoked when system preferences that affect the signin screen have changed.
   virtual void OnPreferencesChanged() = 0;
+
+  // Initiates authentication network prewarming.
+  virtual void PrewarmAuthentication() = 0;
 };
 
 }  // namespace chromeos

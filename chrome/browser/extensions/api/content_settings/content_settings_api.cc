@@ -40,9 +40,8 @@ namespace pref_keys = extensions::preference_api_constants;
 
 namespace {
 
-const std::vector<webkit::WebPluginInfo>* g_testing_plugins_;
-
-bool RemoveContentType(ListValue* args, ContentSettingsType* content_type) {
+bool RemoveContentType(base::ListValue* args,
+                       ContentSettingsType* content_type) {
   std::string content_type_str;
   if (!args->GetString(0, &content_type_str))
     return false;
@@ -143,10 +142,10 @@ bool ContentSettingsContentSettingGetFunction::RunImpl() {
     }
     map = profile()->GetOffTheRecordProfile()->GetHostContentSettingsMap();
     cookie_settings = CookieSettings::Factory::GetForProfile(
-        profile()->GetOffTheRecordProfile());
+        profile()->GetOffTheRecordProfile()).get();
   } else {
     map = profile()->GetHostContentSettingsMap();
-    cookie_settings = CookieSettings::Factory::GetForProfile(profile());
+    cookie_settings = CookieSettings::Factory::GetForProfile(profile()).get();
   }
 
   ContentSetting setting;
@@ -160,7 +159,7 @@ bool ContentSettingsContentSettingGetFunction::RunImpl() {
                                      resource_identifier);
   }
 
-  DictionaryValue* result = new DictionaryValue();
+  base::DictionaryValue* result = new base::DictionaryValue();
   result->SetString(keys::kContentSettingKey,
                     helpers::ContentSettingToString(setting));
 
@@ -186,7 +185,6 @@ bool ContentSettingsContentSettingSetFunction::RunImpl() {
   }
 
   ContentSettingsPattern secondary_pattern = ContentSettingsPattern::Wildcard();
-  std::string secondary_pattern_str;
   if (params->details.secondary_pattern.get()) {
     std::string secondary_error;
     secondary_pattern =
@@ -259,23 +257,19 @@ bool ContentSettingsContentSettingGetResourceIdentifiersFunction::RunImpl() {
     return true;
   }
 
-  if (!g_testing_plugins_) {
-    PluginService::GetInstance()->GetPlugins(
-        base::Bind(&ContentSettingsContentSettingGetResourceIdentifiersFunction::
-                   OnGotPlugins,
-                   this));
-  } else {
-    OnGotPlugins(*g_testing_plugins_);
-  }
+  PluginService::GetInstance()->GetPlugins(
+      base::Bind(&ContentSettingsContentSettingGetResourceIdentifiersFunction::
+                 OnGotPlugins,
+                 this));
   return true;
 }
 
 void ContentSettingsContentSettingGetResourceIdentifiersFunction::OnGotPlugins(
-    const std::vector<webkit::WebPluginInfo>& plugins) {
+    const std::vector<content::WebPluginInfo>& plugins) {
   PluginFinder* finder = PluginFinder::GetInstance();
   std::set<std::string> group_identifiers;
-  ListValue* list = new ListValue();
-  for (std::vector<webkit::WebPluginInfo>::const_iterator it = plugins.begin();
+  base::ListValue* list = new base::ListValue();
+  for (std::vector<content::WebPluginInfo>::const_iterator it = plugins.begin();
        it != plugins.end(); ++it) {
     scoped_ptr<PluginMetadata> plugin_metadata(finder->GetPluginMetadata(*it));
     const std::string& group_identifier = plugin_metadata->identifier();
@@ -283,7 +277,7 @@ void ContentSettingsContentSettingGetResourceIdentifiersFunction::OnGotPlugins(
       continue;
 
     group_identifiers.insert(group_identifier);
-    DictionaryValue* dict = new DictionaryValue();
+    base::DictionaryValue* dict = new base::DictionaryValue();
     dict->SetString(keys::kIdKey, group_identifier);
     dict->SetString(keys::kDescriptionKey, plugin_metadata->name());
     list->Append(dict);
@@ -295,12 +289,6 @@ void ContentSettingsContentSettingGetResourceIdentifiersFunction::OnGotPlugins(
           SendResponse,
           this,
           true));
-}
-
-// static
-void ContentSettingsContentSettingGetResourceIdentifiersFunction::
-    SetPluginsForTesting(const std::vector<webkit::WebPluginInfo>* plugins) {
-  g_testing_plugins_ = plugins;
 }
 
 }  // namespace extensions

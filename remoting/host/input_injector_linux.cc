@@ -34,7 +34,7 @@ using protocol::MouseEvent;
 #undef USB_KEYMAP
 
 // Pixel-to-wheel-ticks conversion ratio used by GTK.
-// From Source/WebKit/chromium/src/gtk/WebInputFactory.cc.
+// From third_party/WebKit/Source/web/gtk/WebInputEventFactory.cpp .
 const float kWheelTicksPerPixel = 3.0f / 160.0f;
 
 // A class to generate events on Linux.
@@ -340,8 +340,15 @@ void InputInjectorLinux::Core::InjectMouseEvent(const MouseEvent& event) {
                          CurrentTime);
   }
 
+  // Older client plugins always send scroll events in pixels, which
+  // must be accumulated host-side. Recent client plugins send both
+  // pixels and ticks with every scroll event, allowing the host to
+  // choose the best model on a per-platform basis. Since we can only
+  // inject ticks on Linux, use them if available.
   int ticks_y = 0;
-  if (event.has_wheel_delta_y()) {
+  if (event.has_wheel_ticks_y()) {
+    ticks_y = event.wheel_ticks_y();
+  } else if (event.has_wheel_delta_y()) {
     wheel_ticks_y_ += event.wheel_delta_y() * kWheelTicksPerPixel;
     ticks_y = static_cast<int>(wheel_ticks_y_);
     wheel_ticks_y_ -= ticks_y;
@@ -352,7 +359,9 @@ void InputInjectorLinux::Core::InjectMouseEvent(const MouseEvent& event) {
   }
 
   int ticks_x = 0;
-  if (event.has_wheel_delta_x()) {
+  if (event.has_wheel_ticks_x()) {
+    ticks_x = event.wheel_ticks_x();
+  } else if (event.has_wheel_delta_x()) {
     wheel_ticks_x_ += event.wheel_delta_x() * kWheelTicksPerPixel;
     ticks_x = static_cast<int>(wheel_ticks_x_);
     wheel_ticks_x_ -= ticks_x;
@@ -373,7 +382,7 @@ void InputInjectorLinux::Core::InitMouseButtonMap() {
   // Note that if a user has a global mapping that completely disables a button
   // (by assigning 0 to it), we won't be able to inject it.
   int num_buttons = XGetPointerMapping(display_, NULL, 0);
-  scoped_array<unsigned char> pointer_mapping(new unsigned char[num_buttons]);
+  scoped_ptr<unsigned char[]> pointer_mapping(new unsigned char[num_buttons]);
   num_buttons = XGetPointerMapping(display_, pointer_mapping.get(),
                                    num_buttons);
   for (int i = 0; i < kNumPointerButtons; i++) {
@@ -429,7 +438,7 @@ void InputInjectorLinux::Core::InitMouseButtonMap() {
   }
 
   int num_device_buttons = XGetDeviceButtonMapping(display_, device, NULL, 0);
-  scoped_array<unsigned char> button_mapping(new unsigned char[num_buttons]);
+  scoped_ptr<unsigned char[]> button_mapping(new unsigned char[num_buttons]);
   for (int i = 0; i < num_device_buttons; i++) {
     button_mapping[i] = i + 1;
   }
@@ -500,7 +509,7 @@ scoped_ptr<InputInjector> InputInjector::Create(
   scoped_ptr<InputInjectorLinux> injector(
       new InputInjectorLinux(main_task_runner));
   if (!injector->Init())
-    return scoped_ptr<InputInjector>(NULL);
+    return scoped_ptr<InputInjector>();
   return injector.PassAs<InputInjector>();
 }
 

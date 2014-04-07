@@ -10,11 +10,12 @@
 #include "base/bind.h"
 #include "base/callback.h"
 #include "base/logging.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_system.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/extensions/extension.h"
+#include "chrome/common/extensions/manifest_handlers/app_launch_info.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
 #include "chromeos/dbus/power_manager_client.h"
 #include "content/public/browser/notification_service.h"
@@ -44,7 +45,7 @@ std::string FindScreensaverExtension(ExtensionService* service,
   for (ExtensionSet::const_iterator it = extensions->begin();
       it != extensions->end();
       ++it) {
-    const extensions::Extension* extension = *it;
+    const extensions::Extension* extension = it->get();
     if (extension &&
         extension->id() != exclude_id &&
         extension->HasAPIPermission(extensions::APIPermission::kScreensaver)) {
@@ -79,7 +80,7 @@ namespace chromeos {
 
 ScreensaverController::ScreensaverController()
     : threshold_(base::TimeDelta::FromMinutes(kScreensaverTimeoutMinutes)),
-      weak_ptr_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {
+      weak_ptr_factory_(this) {
   // Register for extension changes.
   registrar_.Add(this, chrome::NOTIFICATION_EXTENSION_LOADED,
                  content::NotificationService::AllSources());
@@ -103,7 +104,8 @@ void ScreensaverController::Observe(
   switch (type) {
     case chrome::NOTIFICATION_EXTENSION_INSTALLED: {
       const extensions::Extension* extension =
-          content::Details<const extensions::Extension>(details).ptr();
+          content::Details<const extensions::InstalledExtensionInfo>(details)->
+              extension;
       // Uninstall any previously installed screensaver extensions if a new
       // screensaver extension is installed.
       if (extension->HasAPIPermission(extensions::APIPermission::kScreensaver))
@@ -133,13 +135,14 @@ void ScreensaverController::IdleNotify(int64 threshold) {
   const extensions::Extension* screensaver_extension =
       service->GetExtensionById(screensaver_extension_id_,
                                 ExtensionService::INCLUDE_ENABLED);
-  ash::ShowScreensaver(screensaver_extension->GetFullLaunchURL());
+  ash::ShowScreensaver(
+      extensions::AppLaunchInfo::GetFullLaunchURL(screensaver_extension));
 
   if (!ash::Shell::GetInstance()->user_activity_detector()->HasObserver(this))
     ash::Shell::GetInstance()->user_activity_detector()->AddObserver(this);
 }
 
-void ScreensaverController::OnUserActivity() {
+void ScreensaverController::OnUserActivity(const ui::Event* event) {
   // We don't want to handle further user notifications; we'll either login
   // the user and close out or or at least close the screensaver.
   if (ash::Shell::GetInstance()->user_activity_detector()->HasObserver(this))

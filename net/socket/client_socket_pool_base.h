@@ -33,8 +33,8 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/time.h"
-#include "base/timer.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "net/base/address_list.h"
 #include "net/base/completion_callback.h"
 #include "net/base/load_states.h"
@@ -50,13 +50,6 @@
 namespace net {
 
 class ClientSocketHandle;
-
-// Returns the client socket reuse policy.
-NET_EXPORT_PRIVATE int GetSocketReusePolicy();
-
-// Sets the client socket reuse policy.
-// NOTE: 'policy' should be a valid ClientSocketReusePolicy enum value.
-NET_EXPORT void SetSocketReusePolicy(int policy);
 
 // ConnectJob provides an abstract interface for "connecting" a socket.
 // The connection may involve host resolution, tcp connection, ssl connection,
@@ -159,17 +152,6 @@ class NET_EXPORT_PRIVATE ClientSocketPoolBaseHelper
   enum Flag {
     NORMAL = 0,  // Normal behavior.
     NO_IDLE_SOCKETS = 0x1,  // Do not return an idle socket. Create a new one.
-  };
-
-  enum ClientSocketReusePolicy {
-    // Socket with largest amount of bytes transferred.
-    USE_WARMEST_SOCKET = 0,
-
-    // Socket which scores highest on large bytes transferred and low idle time.
-    USE_WARM_SOCKET = 1,
-
-    // Socket which was most recently used.
-    USE_LAST_ACCESSED_SOCKET = 2,
   };
 
   class NET_EXPORT_PRIVATE Request {
@@ -461,6 +443,10 @@ class NET_EXPORT_PRIVATE ClientSocketPoolBaseHelper
   typedef std::map<const ClientSocketHandle*, CallbackResultPair>
       PendingCallbackMap;
 
+  // Inserts the request into the queue based on order they will receive
+  // sockets. Sockets which ignore the socket pool limits are first. Then
+  // requests are sorted by priority, with higher priorities closer to the
+  // front. Older requests are prioritized over requests of equal priority.
   static void InsertRequestIntoQueue(const Request* r,
                                      RequestQueue* pending_requests);
   static const Request* RemoveRequestFromQueue(const RequestQueue::iterator& it,
@@ -554,6 +540,10 @@ class NET_EXPORT_PRIVATE ClientSocketPoolBaseHelper
   // exist in |pending_callback_map_|.  We look up the callback and result code
   // in |pending_callback_map_|.
   void InvokeUserCallback(ClientSocketHandle* handle);
+
+  // Tries to close idle sockets in a higher level socket pool as long as this
+  // this pool is stalled.
+  void TryToCloseSocketsInLayeredPools();
 
   GroupMap group_map_;
 

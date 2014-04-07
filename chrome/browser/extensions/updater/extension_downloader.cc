@@ -16,13 +16,13 @@
 #include "base/metrics/histogram.h"
 #include "base/platform_file.h"
 #include "base/stl_util.h"
-#include "base/string_util.h"
-#include "base/time.h"
+#include "base/strings/string_util.h"
+#include "base/time/time.h"
 #include "base/version.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/updater/request_queue_impl.h"
 #include "chrome/browser/extensions/updater/safe_manifest_parser.h"
 #include "chrome/browser/metrics/metrics_service.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/chrome_version_info.h"
 #include "chrome/common/extensions/extension_constants.h"
@@ -153,12 +153,7 @@ UpdateDetails::UpdateDetails(const std::string& id, const Version& version)
 
 UpdateDetails::~UpdateDetails() {}
 
-
-ExtensionDownloader::ExtensionFetch::ExtensionFetch()
-    : id(""),
-      url(),
-      package_hash(""),
-      version("") {}
+ExtensionDownloader::ExtensionFetch::ExtensionFetch() : url() {}
 
 ExtensionDownloader::ExtensionFetch::ExtensionFetch(
     const std::string& id,
@@ -176,7 +171,7 @@ ExtensionDownloader::ExtensionDownloader(
     net::URLRequestContextGetter* request_context)
     : delegate_(delegate),
       request_context_(request_context),
-      weak_ptr_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)),
+      weak_ptr_factory_(this),
       manifests_queue_(&kDefaultBackoffPolicy,
           base::Bind(&ExtensionDownloader::CreateManifestFetcher,
                      base::Unretained(this))),
@@ -202,7 +197,7 @@ bool ExtensionDownloader::AddExtension(const Extension& extension,
   // data.  At the moment there is no extra data that an extension can
   // communicate to the the gallery update servers.
   std::string update_url_data;
-  if (!extension.UpdatesFromGallery())
+  if (!ManifestURL::UpdatesFromGallery(&extension))
     update_url_data = delegate_->GetUpdateUrlData(extension.id());
 
   return AddExtensionData(extension.id(), *extension.version(),
@@ -220,7 +215,11 @@ bool ExtensionDownloader::AddPendingExtension(const std::string& id,
   Version version("0.0.0.0");
   DCHECK(version.IsValid());
 
-  return AddExtensionData(id, version, Manifest::TYPE_UNKNOWN, update_url, "",
+  return AddExtensionData(id,
+                          version,
+                          Manifest::TYPE_UNKNOWN,
+                          update_url,
+                          std::string(),
                           request_id);
 }
 
@@ -249,7 +248,10 @@ void ExtensionDownloader::StartBlacklistUpdate(
       new ManifestFetchData(extension_urls::GetWebstoreUpdateUrl(),
                             request_id));
   DCHECK(blacklist_fetch->base_url().SchemeIsSecure());
-  blacklist_fetch->AddExtension(kBlacklistAppID, version, &ping_data, "",
+  blacklist_fetch->AddExtension(kBlacklistAppID,
+                                version,
+                                &ping_data,
+                                std::string(),
                                 kDefaultInstallSource);
   StartUpdateCheck(blacklist_fetch.Pass());
 }

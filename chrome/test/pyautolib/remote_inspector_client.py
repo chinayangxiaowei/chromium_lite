@@ -281,7 +281,8 @@ class _RemoteInspectorThread(threading.Thread):
   the lower-level work of socket communication.
   """
 
-  def __init__(self, url, tab_index, tab_filter, verbose, show_socket_messages):
+  def __init__(self, url, tab_index, tab_filter, verbose, show_socket_messages,
+               agent_name):
     """Initialize.
 
     Args:
@@ -308,6 +309,7 @@ class _RemoteInspectorThread(threading.Thread):
     self._general_callbacks = []  # General callbacks that can be long-lived.
     self._general_callbacks_lock = threading.Lock()
     self._condition_to_wait = None
+    self._agent_name = agent_name
 
     # Create a DevToolsSocket client and wait for it to complete the remote
     # debugging protocol handshake with the remote Chrome instance.
@@ -511,22 +513,22 @@ class _RemoteInspectorThread(threading.Thread):
       request: The _DevToolsSocketRequest object associated with a request
                message that is about to be sent.
     """
-    if request.method == 'Profiler.takeHeapSnapshot':
+    if request.method == self._agent_name +'.takeHeapSnapshot':
       # We always want detailed v8 heap snapshot information.
       request.params = {'detailed': True}
-    elif request.method == 'Profiler.getHeapSnapshot':
+    elif request.method == self._agent_name + '.getHeapSnapshot':
       # To actually request the snapshot data from a previously-taken snapshot,
       # we need to specify the unique uid of the snapshot we want.
       # The relevant uid should be contained in the last
       # 'Profiler.takeHeapSnapshot' request object.
       last_req = self._GetLatestRequestOfType(request,
-                                              'Profiler.takeHeapSnapshot')
+          self._agent_name + '.takeHeapSnapshot')
       if last_req and 'uid' in last_req.results:
         request.params = {'uid': last_req.results['uid']}
-    elif request.method == 'Profiler.getProfile':
+    elif request.method == self._agent_name + '.getProfile':
       # TODO(eustas): Remove this case after M27 is released.
       last_req = self._GetLatestRequestOfType(request,
-                                              'Profiler.takeHeapSnapshot')
+          self._agent_name + '.takeHeapSnapshot')
       if last_req and 'uid' in last_req.results:
         request.params = {'type': 'HEAP', 'uid': last_req.results['uid']}
 
@@ -723,84 +725,6 @@ class _V8HeapSnapshotParser(object):
     return result
 
 
-class NativeMemorySnapshot(object):
-  """Class representing native memory snapshot captured by Chromium DevTools.
-
-  It is just a convenient wrapper around the snapshot structure returned over
-  the remote debugging protocol. The raw snapshot structure is defined in
-  WebKit/Source/WebCore/inspector/Inspector.json
-
-  Public Methods:
-    GetProcessPrivateMemorySize: The process total size.
-    GetUnknownSize: Size of not instrumented parts.
-    GetInstrumentedObjectsCount: Number of instrumented objects traversed by
-        DevTools memory instrumentation.
-    GetNumberOfInstrumentedObjectsNotInHeap: Number of instrumented objects
-        visited by DevTools memory instrumentation that haven't been allocated
-        by tcmalloc.
-    FindMemoryBlock: Given an array of memory block names return the block.
-  """
-  def __init__(self, root_block):
-    self._root = root_block
-
-  def GetProcessPrivateMemorySize(self):
-    return self._root['size']
-
-  def GetUnknownSize(self):
-    """Size of the memory whose owner is unknown to DevTools."""
-    known_size = 0
-    for child in self._root['children']:
-      known_size += child['size']
-    return self.GetProcessPrivateMemorySize() - known_size
-
-  def GetInstrumentedObjectsCount(self):
-    """Returns number of objects visited by DevTools memory instrumentation.
-
-    Returns:
-      Number of known instrumented objects or None if it is not available.
-    """
-    memory_block = self.FindMemoryBlock(['ProcessPrivateMemory',
-        'InstrumentedObjectsCount'])
-    if not memory_block is None:
-      return memory_block['size']
-    return None
-
-  def GetNumberOfInstrumentedObjectsNotInHeap(self):
-    """Returns number of instrumented objects unknown to tcmalloc.
-
-    Returns:
-      Number of known instrumented objects that are not allocated by tcmalloc,
-      None if it is not available.
-    """
-    memory_block = self.FindMemoryBlock(['ProcessPrivateMemory',
-        'InstrumentedButNotAllocatedObjectsCount'])
-    if not memory_block is None:
-      return memory_block['size']
-    return None
-
-  def FindMemoryBlock(self, path):
-    """Find memory block with given path.
-
-    Args:
-      path: Array of block names, first element is the root block
-            name, last one is the name of the block to find.
-
-    Returns:
-      Memory block with given path or None.
-    """
-    result = None
-    children = [self._root]
-    for name in path:
-      if not children:
-        return None
-      result = None
-      for child in children:
-        if name == child.get('name'):
-          result = child
-          children = child.get('children')
-    return result
-
-
 # TODO(dennisjeffrey): The "verbose" option used in this file should re-use
 # pyauto's verbose flag.
 class RemoteInspectorClient(object):
@@ -823,7 +747,8 @@ class RemoteInspectorClient(object):
   # TODO(dennisjeffrey): Allow a user to specify a window index too (not just a
   # tab index), when running through PyAuto.
   def __init__(self, tab_index=0, tab_filter=None,
-               verbose=False, show_socket_messages=False):
+               verbose=False, show_socket_messages=False,
+               url='http://localhost:9222'):
     """Initialize.
 
     Args:
@@ -852,15 +777,17 @@ class RemoteInspectorClient(object):
     self._remote_inspector_thread = None
     self._remote_inspector_driver_thread = None
 
-    # TODO(dennisjeffrey): Do not assume port 9222. The port should be passed
-    # as input to this function.
-    url = 'http://localhost:9222'
+    self._version = self._GetVersion(url)
 
-    self._webkit_version = self._GetWebkitVersion(url)
+    # TODO(loislo): Remove this hack after M28 is released.
+    self._agent_name = 'Profiler'
+    if self._IsBrowserDayNumberGreaterThan(1470):
+      self._agent_name = 'HeapProfiler'
 
     # Start up a thread for long-term communication with the remote inspector.
     self._remote_inspector_thread = _RemoteInspectorThread(
-        url, tab_index, tab_filter, verbose, show_socket_messages)
+        url, tab_index, tab_filter, verbose, show_socket_messages,
+        self._agent_name)
     self._remote_inspector_thread.start()
     # At this point, a connection has already been made to the remote inspector.
 
@@ -897,18 +824,12 @@ class RemoteInspectorClient(object):
                                      # Only if |include_summary| is True.
       }
     """
-    # TODO(eustas): Remove this hack after M27 is released.
-    if self._IsWebkitVersionNotOlderThan(537, 27):
-      get_heap_snapshot_method = 'Profiler.getHeapSnapshot'
-    else:
-      get_heap_snapshot_method = 'Profiler.getProfile'
-
     HEAP_SNAPSHOT_MESSAGES = [
       ('Page.getResourceTree', {}),
       ('Debugger.enable', {}),
-      ('Profiler.clearProfiles', {}),
-      ('Profiler.takeHeapSnapshot', {}),
-      (get_heap_snapshot_method, {}),
+      (self._agent_name + '.clearProfiles', {}),
+      (self._agent_name + '.takeHeapSnapshot', {}),
+      (self._agent_name + '.getHeapSnapshot', {}),
     ]
 
     self._current_heap_snapshot = []
@@ -932,15 +853,15 @@ class RemoteInspectorClient(object):
           self._url = reply_dict['result']['frameTree']['frame']['url']
       elif 'method' in reply_dict:
         # This is an auxiliary message sent from the remote Chrome instance.
-        if reply_dict['method'] == 'Profiler.addProfileHeader':
+        if reply_dict['method'] == self._agent_name + '.addProfileHeader':
           snapshot_req = (
               self._remote_inspector_thread.GetFirstUnfulfilledRequest(
-                  'Profiler.takeHeapSnapshot'))
+                  self._agent_name + '.takeHeapSnapshot'))
           if snapshot_req:
             snapshot_req.results['uid'] = reply_dict['params']['header']['uid']
-        elif reply_dict['method'] == 'Profiler.addHeapSnapshotChunk':
+        elif reply_dict['method'] == self._agent_name + '.addHeapSnapshotChunk':
           self._current_heap_snapshot.append(reply_dict['params']['chunk'])
-        elif reply_dict['method'] == 'Profiler.finishHeapSnapshot':
+        elif reply_dict['method'] == self._agent_name + '.finishHeapSnapshot':
           # A heap snapshot has been completed.  Analyze and output the data.
           self._logger.debug('Heap snapshot taken: %s', self._url)
           # TODO(dennisjeffrey): Parse the heap snapshot on-the-fly as the data
@@ -1034,67 +955,6 @@ class RemoteInspectorClient(object):
         'EventListenerCount': integer,  # Total number of event listeners.
       }
     """
-    # TODO(yurys): Remove this hack after M27 is released.
-    if self._IsWebkitVersionNotOlderThan(537, 31):
-      return self._GetMemoryObjectCountsNew()
-
-    MEMORY_COUNT_MESSAGES = [
-      ('Memory.getDOMNodeCount', {})
-    ]
-
-    self._event_listener_count = None
-    self._dom_node_count = None
-
-    done_condition = threading.Condition()
-    def HandleReply(reply_dict):
-      """Processes a reply message received from the remote Chrome instance.
-
-      Args:
-        reply_dict: A dictionary object representing the reply message received
-                    from the remote Chrome instance.
-      """
-      if 'result' in reply_dict and 'domGroups' in reply_dict['result']:
-        event_listener_count = 0
-        dom_node_count = 0
-        dom_group_list = reply_dict['result']['domGroups']
-        for dom_group in dom_group_list:
-          listener_array = dom_group['listenerCount']
-          for listener in listener_array:
-            event_listener_count += listener['count']
-          dom_node_array = dom_group['nodeCount']
-          for dom_element in dom_node_array:
-            dom_node_count += dom_element['count']
-        self._event_listener_count = event_listener_count
-        self._dom_node_count = dom_node_count
-
-        done_condition.acquire()
-        done_condition.notify()
-        done_condition.release()
-
-    # Tell the remote inspector to collect memory count info, then wait until
-    # that information is available to return.
-    self._remote_inspector_thread.PerformAction(MEMORY_COUNT_MESSAGES,
-                                                HandleReply)
-
-    done_condition.acquire()
-    done_condition.wait()
-    done_condition.release()
-
-    return {
-      'DOMNodeCount': self._dom_node_count,
-      'EventListenerCount': self._event_listener_count,
-    }
-
-  def _GetMemoryObjectCountsNew(self):
-    """Retrieves memory object count information.
-
-    Returns:
-      A dictionary containing the memory object count information:
-      {
-        'DOMNodeCount': integer,  # Total number of DOM nodes.
-        'EventListenerCount': integer,  # Total number of event listeners.
-      }
-    """
     MEMORY_COUNT_MESSAGES = [
       ('Memory.getDOMCounters', {})
     ]
@@ -1131,52 +991,6 @@ class RemoteInspectorClient(object):
       'DOMNodeCount': self._dom_node_count,
       'EventListenerCount': self._event_listener_count,
     }
-
-  def GetProcessMemoryDistribution(self):
-    """Retrieves info about memory distribution between renderer components.
-
-    Returns:
-      An object representing the native memory snapshot.
-    """
-    MEMORY_DISTRIBUTION_MESSAGES = [
-      ('Profiler.collectGarbage', {}),
-      ('Memory.getProcessMemoryDistribution', {})
-    ]
-
-    reply_holder = [None]
-    done_condition = threading.Condition()
-    def HandleReply(reply_dict):
-      """Processes a reply message received from the remote Chrome instance.
-
-      Args:
-        reply_dict: A dictionary object representing the reply message received
-            from the remote Chrome instance.
-      """
-      request_id = reply_dict['id']
-      # GC command will have id = 0, the second command id = 1
-      if request_id == 0:
-        logging.info('Did garbage collection')
-        return
-      if request_id != 1:
-        raise RuntimeError('Unexpected request_id: %d' % request_id)
-      reply_holder[0] = reply_dict
-      done_condition.acquire()
-      done_condition.notify()
-      done_condition.release()
-
-    # Tell the remote inspector to perform garbage collection and capture native
-    # memory snapshot.
-    self._remote_inspector_thread.PerformAction(MEMORY_DISTRIBUTION_MESSAGES,
-                                                HandleReply)
-
-    done_condition.acquire()
-    done_condition.wait()
-    done_condition.release()
-    reply = reply_holder[0]
-    if 'result' in reply:
-      return NativeMemorySnapshot(reply_holder[0]['result']['distribution'])
-    raise RuntimeError('Unexpected protocol error: ' +
-                       reply['error']['message'])
 
   def CollectGarbage(self):
     """Forces a garbage collection."""
@@ -1281,21 +1095,30 @@ class RemoteInspectorClient(object):
       return '%.2f MB' % (num_bytes / 1048576.0)
 
   @staticmethod
-  def _GetWebkitVersion(endpoint):
-    """Fetches Webkit version information from a remote Chrome instance.
+  def _GetVersion(endpoint):
+    """Fetches version information from a remote Chrome instance.
 
     Args:
       endpoint: The base URL to connent to.
 
     Returns:
-      A dictionary containing Webkit version information:
+      A dictionary containing Browser and Content version information:
       {
-        'major': integer,
-        'minor': integer,
+        'Browser': {
+          'major': integer,
+          'minor': integer,
+          'fix': integer,
+          'day': integer
+        },
+        'Content': {
+          'name': string,
+          'major': integer,
+          'minor': integer
+        }
       }
 
     Raises:
-      RuntimeError: When Webkit version info can't be fetched or parsed.
+      RuntimeError: When Browser version info can't be fetched or parsed.
     """
     try:
       f = urllib2.urlopen(endpoint + '/json/version')
@@ -1305,40 +1128,61 @@ class RemoteInspectorClient(object):
       raise RuntimeError(
           'Error accessing Chrome instance debugging port: ' + str(e))
 
+    if 'Browser' not in result:
+      raise RuntimeError('Browser version is not specified.')
+
+    parsed = re.search('^Chrome\/(\d+).(\d+).(\d+).(\d+)', result['Browser'])
+    if parsed is None:
+      raise RuntimeError('Browser-Version cannot be parsed.')
+    try:
+      day = int(parsed.group(3))
+      browser_info = {
+        'major': int(parsed.group(1)),
+        'minor': int(parsed.group(2)),
+        'day': day,
+        'fix': int(parsed.group(4)),
+      }
+    except ValueError:
+      raise RuntimeError('Browser-Version cannot be parsed.')
+
     if 'WebKit-Version' not in result:
-      raise RuntimeError('WebKit-Version is not specified.')
+      raise RuntimeError('Content-Version is not specified.')
 
     parsed = re.search('^(\d+)\.(\d+)', result['WebKit-Version'])
     if parsed is None:
-      raise RuntimeError('WebKit-Version cannot be parsed.')
+      raise RuntimeError('Content-Version cannot be parsed.')
 
     try:
-      info = {
+      platform_info = {
+        'name': 'Blink' if day > 1464 else 'WebKit',
         'major': int(parsed.group(1)),
         'minor': int(parsed.group(2)),
       }
     except ValueError:
       raise RuntimeError('WebKit-Version cannot be parsed.')
 
-    return info
+    return {
+      'browser': browser_info,
+      'platform': platform_info
+    }
 
-  def _IsWebkitVersionNotOlderThan(self, major, minor):
-    """Compares remote Webkit version with specified one.
+  def _IsContentVersionNotOlderThan(self, major, minor):
+    """Compares remote Browser Content version with specified one.
 
     Args:
       major: Major Webkit version.
       minor: Minor Webkit version.
 
     Returns:
-      True if remote Webkit version is same or newer than specified,
+      True if remote Content version is same or newer than specified,
       False otherwise.
 
     Raises:
-      RuntimeError: If remote Webkit version hasn't been fetched yet.
+      RuntimeError: If remote Content version hasn't been fetched yet.
     """
-    if not hasattr(self, '_webkit_version'):
-      raise RuntimeError('WebKit version has not been fetched yet.')
-    version = self._webkit_version
+    if not hasattr(self, '_version'):
+      raise RuntimeError('Browser version has not been fetched yet.')
+    version = self._version['platform']
 
     if version['major'] < major:
       return False
@@ -1346,3 +1190,22 @@ class RemoteInspectorClient(object):
       return False
     else:
       return True
+
+  def _IsBrowserDayNumberGreaterThan(self, day_number):
+    """Compares remote Chromium day number with specified one.
+
+    Args:
+      day_number: Forth part of the chromium version.
+
+    Returns:
+      True if remote Chromium day number is same or newer than specified,
+      False otherwise.
+
+    Raises:
+      RuntimeError: If remote Chromium version hasn't been fetched yet.
+    """
+    if not hasattr(self, '_version'):
+      raise RuntimeError('Browser revision has not been fetched yet.')
+    version = self._version['browser']
+
+    return version['day'] > day_number

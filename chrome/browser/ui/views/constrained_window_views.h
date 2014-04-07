@@ -7,11 +7,16 @@
 
 #include "ui/gfx/native_widget_types.h"
 
+namespace web_modal {
+class WebContentsModalDialogHost;
+}
+
 namespace content {
 class WebContents;
 class BrowserContext;
 }
 namespace views {
+class DialogDelegate;
 class NonClientFrameView;
 class WidgetDelegate;
 class Widget;
@@ -19,7 +24,13 @@ class Widget;
 
 views::Widget* CreateWebContentsModalDialogViews(
     views::WidgetDelegate* widget_delegate,
-    gfx::NativeView parent);
+    gfx::NativeView parent,
+    web_modal::WebContentsModalDialogHost* dialog_host);
+
+// Create a widget for |dialog| that is modal to the browser window |parent|.
+// This places the dialog appropriately if |parent| is a valid browser window.
+views::Widget* CreateBrowserModalDialogViews(views::DialogDelegate* dialog,
+                                             gfx::NativeWindow parent);
 
 views::NonClientFrameView* CreateConstrainedStyleNonClientFrameView(
     views::Widget* widget,

@@ -8,10 +8,10 @@
 
 #include "base/auto_reset.h"
 #include "base/bind.h"
-#include "base/string16.h"
-#include "base/stringprintf.h"
-#include "base/time.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string16.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "chrome/browser/autocomplete/autocomplete_classifier.h"
 #include "chrome/browser/autocomplete/autocomplete_controller.h"
@@ -123,8 +123,8 @@ void OmniboxUIHandler::AddResultToDictionary(const std::string& prefix,
     output->SetInteger(item_prefix + ".relevance", it->relevance);
     output->SetBoolean(item_prefix + ".deletable", it->deletable);
     output->SetString(item_prefix + ".fill_into_edit", it->fill_into_edit);
-    output->SetInteger(item_prefix + ".inline_autocomplete_offset",
-                       it->inline_autocomplete_offset);
+    output->SetString(item_prefix + ".inline_autocompletion",
+                       it->inline_autocompletion);
     output->SetString(item_prefix + ".destination_url",
                       it->destination_url.spec());
     output->SetString(item_prefix + ".contents", it->contents);
@@ -139,7 +139,7 @@ void OmniboxUIHandler::AddResultToDictionary(const std::string& prefix,
     output->SetBoolean(item_prefix + ".is_history_what_you_typed_match",
                        it->is_history_what_you_typed_match);
     output->SetString(item_prefix + ".type",
-                      AutocompleteMatch::TypeToString(it->type));
+                      AutocompleteMatchType::ToString(it->type));
     if (it->associated_keyword.get() != NULL) {
       output->SetString(item_prefix + ".associated_keyword",
                         it->associated_keyword->keyword);
@@ -196,6 +196,7 @@ void OmniboxUIHandler::StartOmniboxQuery(const base::ListValue* input) {
       cursor_position,
       string16(),  // user's desired tld (top-level domain)
       GURL(),
+      AutocompleteInput::INVALID_SPEC,
       prevent_inline_autocomplete,
       prefer_keyword,
       true,  // allow exact keyword matches
@@ -204,7 +205,7 @@ void OmniboxUIHandler::StartOmniboxQuery(const base::ListValue* input) {
 
 void OmniboxUIHandler::ResetController() {
   controller_.reset(new AutocompleteController(profile_, this,
-      chrome::search::IsInstantExtendedAPIEnabled() ?
+      chrome::IsInstantExtendedAPIEnabled() ?
           AutocompleteClassifier::kInstantExtendedOmniboxProviders :
           AutocompleteClassifier::kDefaultOmniboxProviders));
 }

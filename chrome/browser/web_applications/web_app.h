@@ -9,15 +9,27 @@
 #include <vector>
 
 #include "base/files/file_path.h"
+#include "base/strings/string16.h"
 #include "build/build_config.h"
 #include "chrome/browser/shell_integration.h"
-#include "chrome/common/web_apps.h"
+#include "chrome/common/web_application_info.h"
 
 namespace extensions {
 class Extension;
 }
 
+namespace gfx {
+class ImageFamily;
+}
+
 namespace web_app {
+
+// This encodes the cause of shortcut creation as the correct behavior in each
+// case is implementation specific.
+enum ShortcutCreationReason {
+  SHORTCUT_CREATION_BY_USER,
+  SHORTCUT_CREATION_AUTOMATED,
+};
 
 // Gets the user data directory for given web app. The path for the directory is
 // based on |extension_id|. If |extension_id| is empty then |url| is used
@@ -51,15 +63,19 @@ std::string GetExtensionIdFromApplicationName(const std::string& app_name);
 // |creation_locations| contains information about where to create them.
 void CreateShortcuts(
     const ShellIntegration::ShortcutInfo& shortcut_info,
-    const ShellIntegration::ShortcutLocations& creation_locations);
+    const ShellIntegration::ShortcutLocations& creation_locations,
+    ShortcutCreationReason creation_reason);
 
 // Delete all the shortcuts that have been created for the given
 // |shortcut_data| in the profile with |profile_path|.
 void DeleteAllShortcuts(const ShellIntegration::ShortcutInfo& shortcut_info);
 
-// Updates shortcuts for web application based on given shortcut data.
+// Updates shortcuts for web application based on given shortcut data. This
+// refreshes existing shortcuts and their icons, but does not create new ones.
+// |old_app_title| contains the title of the app prior to this update.
 // |shortcut_info| contains information about the shortcuts to update.
-void UpdateAllShortcuts(const ShellIntegration::ShortcutInfo& shortcut_info);
+void UpdateAllShortcuts(const string16& old_app_title,
+                        const ShellIntegration::ShortcutInfo& shortcut_info);
 
 // Creates a shortcut. Must be called on the file thread. This is used to
 // implement CreateShortcuts() above, and can also be used directly from the
@@ -67,7 +83,8 @@ void UpdateAllShortcuts(const ShellIntegration::ShortcutInfo& shortcut_info);
 // |creation_locations| contains information about where to create them.
 bool CreateShortcutsOnFileThread(
     const ShellIntegration::ShortcutInfo& shortcut_info,
-    const ShellIntegration::ShortcutLocations& creation_locations);
+    const ShellIntegration::ShortcutLocations& creation_locations,
+    ShortcutCreationReason creation_reason);
 
 // Returns true if given url is a valid web app url.
 bool IsValidUrl(const GURL& url);
@@ -87,10 +104,14 @@ void GetIconsInfo(const WebApplicationInfo& app_info,
 std::string GetWMClassFromAppName(std::string app_name);
 #endif
 
+// Gets the name of the Chrome Apps menu folder in which to place app shortcuts.
+string16 GetAppShortcutsSubdirName();
+
 namespace internals {
 
 #if defined(OS_WIN)
-bool CheckAndSaveIcon(const base::FilePath& icon_file, const SkBitmap& image);
+std::vector<base::FilePath> GetShortcutPaths(
+    const ShellIntegration::ShortcutLocations& creation_locations);
 #endif
 
 // Implemented for each platform, does the platform specific parts of creating
@@ -102,7 +123,8 @@ bool CheckAndSaveIcon(const base::FilePath& icon_file, const SkBitmap& image);
 bool CreatePlatformShortcuts(
     const base::FilePath& shortcut_data_path,
     const ShellIntegration::ShortcutInfo& shortcut_info,
-    const ShellIntegration::ShortcutLocations& creation_locations);
+    const ShellIntegration::ShortcutLocations& creation_locations,
+    ShortcutCreationReason creation_reason);
 
 // Delete all the shortcuts we have added for this extension. This is the
 // platform specific implementation of the DeleteAllShortcuts function, and
@@ -116,7 +138,12 @@ void DeletePlatformShortcuts(
 // is executed on the FILE thread.
 void UpdatePlatformShortcuts(
     const base::FilePath& shortcut_data_path,
+    const string16& old_app_title,
     const ShellIntegration::ShortcutInfo& shortcut_info);
+
+// Delete all the shortcuts for an entire profile.
+// This is executed on the FILE thread.
+void DeleteAllShortcutsForProfile(const base::FilePath& profile_path);
 
 // Sanitizes |name| and returns a version of it that is safe to use as an
 // on-disk file name .

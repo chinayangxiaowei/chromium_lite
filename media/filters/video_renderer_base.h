@@ -8,6 +8,7 @@
 #include <deque>
 
 #include "base/memory/ref_counted.h"
+#include "base/memory/scoped_vector.h"
 #include "base/memory/weak_ptr.h"
 #include "base/synchronization/condition_variable.h"
 #include "base/synchronization/lock.h"
@@ -26,13 +27,10 @@ class MessageLoopProxy;
 
 namespace media {
 
-class DecryptingDemuxerStream;
-class VideoDecoderSelector;
-
 // VideoRendererBase creates its own thread for the sole purpose of timing frame
-// presentation.  It handles reading from the decoder and stores the results in
-// a queue of decoded frames and executing a callback when a frame is ready for
-// rendering.
+// presentation.  It handles reading from the VideoFrameStream and stores the
+// results in a queue of decoded frames and executing a callback when a frame is
+// ready for rendering.
 class MEDIA_EXPORT VideoRendererBase
     : public VideoRenderer,
       public base::PlatformThread::Delegate {
@@ -43,11 +41,13 @@ class MEDIA_EXPORT VideoRendererBase
   // Maximum duration of the last frame.
   static base::TimeDelta kMaxLastFrameDuration();
 
+  // |decoders| contains the VideoDecoders to use when initializing.
+  //
   // |paint_cb| is executed on the video frame timing thread whenever a new
   // frame is available for painting.
   //
   // |set_opaque_cb| is executed when the renderer is initialized to inform
-  // the player whether the decoder's output will be opaque or not.
+  // the player whether the decoded output will be opaque or not.
   //
   // Implementors should avoid doing any sort of heavy work in this method and
   // instead post a task to a common/worker thread to handle rendering.  Slowing
@@ -55,6 +55,7 @@ class MEDIA_EXPORT VideoRendererBase
   //
   // Setting |drop_frames_| to true causes the renderer to drop expired frames.
   VideoRendererBase(const scoped_refptr<base::MessageLoopProxy>& message_loop,
+                    ScopedVector<VideoDecoder> decoders,
                     const SetDecryptorReadyCB& set_decryptor_ready_cb,
                     const PaintCB& paint_cb,
                     const SetOpaqueCB& set_opaque_cb,
@@ -62,8 +63,7 @@ class MEDIA_EXPORT VideoRendererBase
   virtual ~VideoRendererBase();
 
   // VideoRenderer implementation.
-  virtual void Initialize(const scoped_refptr<DemuxerStream>& stream,
-                          const VideoDecoderList& decoders,
+  virtual void Initialize(DemuxerStream* stream,
                           const PipelineStatusCB& init_cb,
                           const StatisticsCB& statistics_cb,
                           const TimeCB& max_time_cb,
@@ -87,24 +87,22 @@ class MEDIA_EXPORT VideoRendererBase
   // Callback for |video_frame_stream_| initialization.
   void OnVideoFrameStreamInitialized(bool success, bool has_alpha);
 
-  // Callback from the video decoder delivering decoded video frames and
-  // reporting video decoder status.
-  void FrameReady(VideoDecoder::Status status,
+  // Callback for |video_frame_stream_| to deliver decoded video frames and
+  // report video decoding status.
+  void FrameReady(VideoFrameStream::Status status,
                   const scoped_refptr<VideoFrame>& frame);
 
   // Helper method for adding a frame to |ready_frames_|.
   void AddReadyFrame_Locked(const scoped_refptr<VideoFrame>& frame);
 
-  // Helper method that schedules an asynchronous read from the decoder as long
-  // as there isn't a pending read and we have capacity.
+  // Helper method that schedules an asynchronous read from the
+  // |video_frame_stream_| as long as there isn't a pending read and we have
+  // capacity.
   void AttemptRead();
   void AttemptRead_Locked();
 
   // Called when VideoFrameStream::Reset() completes.
   void OnVideoFrameStreamResetDone();
-
-  // Attempts to complete flushing and transition into the flushed state.
-  void AttemptFlush_Locked();
 
   // Calculates the duration to sleep for based on |last_timestamp_|,
   // the next frame timestamp (may be NULL), and the provided playback rate.
@@ -158,11 +156,11 @@ class MEDIA_EXPORT VideoRendererBase
   //              | Initialize()
   //        [kInitializing]
   //              |
-  //              V        All frames returned
-  //   +------[kFlushed]<-----[kFlushing]<--- OnDecoderResetDone()
-  //   |          | Preroll() or upon                  ^
-  //   |          V got first frame           [kFlushingDecoder]
-  //   |      [kPrerolling]                            ^
+  //              V
+  //   +------[kFlushed]<---------------OnVideoFrameStreamResetDone()
+  //   |          | Preroll() or upon               ^
+  //   |          V got first frame            [kFlushing]
+  //   |      [kPrerolling]                         ^
   //   |          |                                 | Flush()
   //   |          V Got enough frames               |
   //   |      [kPrerolled]---------------------->[kPaused]
@@ -174,8 +172,8 @@ class MEDIA_EXPORT VideoRendererBase
   //   |       [kEnded]-----------------------------+
   //   |                                            ^
   //   |                                            |
-  //   +-----> [kStopped]                   [Any state other than]
-  //                                        [kUninitialized/kError]
+  //   +-----> [kStopped]                 [Any state other than]
+  //                                      [kUninitialized/kError]
 
   // Simple state tracking variable.
   enum State {
@@ -183,7 +181,6 @@ class MEDIA_EXPORT VideoRendererBase
     kInitializing,
     kPrerolled,
     kPaused,
-    kFlushingDecoder,
     kFlushing,
     kFlushed,
     kPrerolling,
@@ -197,8 +194,8 @@ class MEDIA_EXPORT VideoRendererBase
   // Video thread handle.
   base::PlatformThreadHandle thread_;
 
-  // Keep track of outstanding reads on the video decoder. Flushing can only
-  // complete once reads have completed.
+  // Keep track of the outstanding read on the VideoFrameStream. Flushing can
+  // only complete once the read has completed.
   bool pending_read_;
 
   bool drop_frames_;
@@ -224,8 +221,7 @@ class MEDIA_EXPORT VideoRendererBase
   // Embedder callback for notifying a new frame is available for painting.
   PaintCB paint_cb_;
 
-  // Callback to execute to inform the player if the video decoder's output is
-  // opaque.
+  // Callback to execute to inform the player if the decoded output is opaque.
   SetOpaqueCB set_opaque_cb_;
 
   // The last natural size |size_changed_cb_| was called with.

@@ -22,7 +22,7 @@
 #include "chrome/common/extensions/extension_manifest_constants.h"
 #include "third_party/ocmock/gtest_support.h"
 #import "third_party/ocmock/OCMock/OCMock.h"
-#include "webkit/glue/image_decoder.h"
+#include "ui/gfx/codec/png_codec.h"
 
 using extensions::Extension;
 
@@ -72,9 +72,7 @@ class ExtensionInstalledBubbleControllerTest : public CocoaProfileTest {
         reinterpret_cast<const unsigned char*>(file_contents.data());
 
     SkBitmap bitmap;
-    webkit_glue::ImageDecoder decoder;
-    bitmap = decoder.Decode(data, file_contents.length());
-
+    gfx::PNGCodec::Decode(data, file_contents.length(), &bitmap);
     return bitmap;
   }
 
@@ -113,7 +111,7 @@ class ExtensionInstalledBubbleControllerTest : public CocoaProfileTest {
     scoped_refptr<Extension> extension =
         Extension::Create(path, extensions::Manifest::INVALID_LOCATION,
                           extension_input_value, Extension::NO_FLAGS, &error);
-    extension_service_->AddExtension(extension);
+    extension_service_->AddExtension(extension.get());
     return extension;
   }
 

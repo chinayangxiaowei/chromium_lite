@@ -2,7 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
-// Protocol buffer definitions for serializing Drive files and directories.
+// Protocol buffer definitions for representing Drive files and directories,
+// and serializing them for the resource metadata database.
 
 syntax = "proto2";
 
@@ -20,100 +21,89 @@ message PlatformFileInfoProto {
   optional int64 creation_time = 6;
 }
 
-// File specific info, which is a part of DriveEntryProto.
-message DriveFileSpecificInfo {
+// File specific info, which is a part of ResourceEntry.
+message FileSpecificInfo {
   // This URL points to a thumbnail image. The thumbnail URL is not permanent
   // as it's not protected by authentication. See crbug.com/127697 for how
   // stale thumbnail URLs are handled.
   optional string thumbnail_url = 1;
 
-  // This URL is used for opening hosted documents with Google Docs's web
+  // This URL is used for opening hosted documents with Google Drive's web
   // interface.
   optional string alternate_url = 2;
 
   // Content mime type like "text/plain".
   optional string content_mime_type = 3;
 
-  // The MD5 of contents of a regular file.
-  optional string file_md5 = 4;
+  // The MD5 of contents of a regular file. Hosted files don't have MD5.
+  optional string md5 = 4;
 
   // File extension, including the dot, used for hosted documents
-  // (ex. ".gsheet" for hosted spreadsheet documents).
+  // (ex. ".gsheet" for hosted spreadsheets).
   optional string document_extension = 5;
 
-  // True if the file is a hosted document.
+  // True if the file is a hosted document (i.e. document hosted on
+  // drive.google.com such as documents, spreadsheets, and presentations).
   optional bool is_hosted_document = 6;
 
-  // This URL points to a page containing Share UI for this document.
-  optional string share_url = 7;
+  // The argument with ID 7 had been used, but got deleted. Next ID to use: 8.
 }
 
-message DriveDirectorySpecificInfo {
+// Directory specific info, which is a part of ResourceEntry.
+message DirectorySpecificInfo {
   // The changestamp of this directory. This value can be larger than the
-  // changestamp of DriveResourceMetadata, if this directory was
+  // changestamp of ResourceMetadata, if this directory was
   // "fast-fetched". See crbug.com/178348 for details about the "fast-fetch"
   // feature.
   optional int64 changestamp = 1;
 }
 
-// Represents DriveEntry, DriveFile, and DriveDirectory without children.
-message DriveEntryProto {
+// Represents metadata of a resource (file or directory) on Drive.
+message ResourceEntry {
   optional PlatformFileInfoProto file_info = 1;
+  // Base name of the entry. The base name is used for file paths. Usually
+  // identical to |title|, but some extra number is inserted if multiple
+  // entries with the same title exist in the same directory, to ensure that
+  // file paths are unique. For instance, if two files titled "foo.jpg" exist
+  // in the same directory, which is allowed on drive.google.com, one of them
+  // will have a base name of "foo (2).jpg".
   optional string base_name = 2;
+
+  // Title of the entry. See the comment at |base_name|.
   optional string title = 3;
+
+  // Resource ID of the entry. Guaranteed to be unique.
   optional string resource_id = 4;
-  optional string edit_url = 5;
-  // For a file, this is URL to download the file content. It is transient and
-  // can be stale. For a directory, this is URL to edit its contents on GData
-  // WAPI, or empty on Drive API v2. (Thus, this shouldn't be used for a
-  // directory.)
-  optional string download_url = 6;
+
+  // Resource ID of the parent entry. Every entry is guaranteed to have the
+  // single parent resource ID in ResourceMetadata. This requirement is
+  // needed to represent contents in Drive as a file system tree, and
+  // achieved as follows:
+  //
+  // 1) Entries without parents are allowed on drive.google.com. These
+  // entries are collected to "drive/other", and have the resource ID of
+  // "drive/other" as the parent resource ID.
+  //
+  // 2) Entries with multiple parents are allowed on drive.google.com. For
+  // these entries, the first parent resource ID is chosen.
   optional string parent_resource_id = 7;
-  // For a file, this is "resumable-edit-media" URL, used to update an
-  // existing file. For a directory, this is "resumable-create-media" URL,
-  // used to upload a new file to that directory. See
-  // https://developers.google.com/google-apps/documents-list/
-  optional string upload_url = 8;
-  // This stores a DriveEntryKind defined in drive_entry_kinds.h.
-  optional int32 kind = 12;
-  // This field is used for processing the feeds from the server. Deleted
-  // entries won't be stored in the metadata storage.
+
+  // This field is used for processing the change list from the
+  // server. Deleted entries won't be stored in ResourceMetadata.
   optional bool deleted = 11;
 
+  // True if the entry is labeled with "shared-with-me".
+  optional bool shared_with_me = 14;
+
   // File specific information, such as MD5.
-  optional DriveFileSpecificInfo file_specific_info = 9;
+  optional FileSpecificInfo file_specific_info = 9;
 
   // Directory specific information, such as changestamp.
-  optional DriveDirectorySpecificInfo directory_specific_info = 13;
+  optional DirectorySpecificInfo directory_specific_info = 13;
 }
 
-// Represents DriveDirectory. This message type is defined to keep children
-// separate from DriveEntryProto. This design allows us to get the metadata
-// of a directory efficiently as DriveEntryProto, without carrying the
-// metadata of children.
-//
-// TODO(satorux): With the new metadata storage system, we plan to store
-// children as pairs of base name and resource ID. We should remove this
-// message type once we get there.
-message DriveDirectoryProto {
-  optional DriveEntryProto drive_entry = 1;
-  repeated DriveDirectoryProto child_directories = 7;
-  repeated DriveEntryProto child_files = 9;
-}
-
-// Container for the root directory and the largest changestamp.
-// TODO(satorux): Remove this: crbug.com/137862
-message DriveRootDirectoryProto {
-  optional DriveDirectoryProto drive_directory = 1;
-  optional int64 largest_changestamp = 4;
-  // Monotonically increasing version number, which is changed when
-  // incompatible change is made in the proto file.
-  // kProtoVersion in drive_resource_metadata.h defines the current version.
-  optional int32 version = 3;
-}
-
-// Container for the header part of DriveResourceMetadata.
-message DriveResourceMetadataHeader {
+// Container for the header part of ResourceMetadata.
+message ResourceMetadataHeader {
   // Monotonically increasing version number, which is changed when
   // incompatible change is made to the DB format. kDBVersion in
   // drive_resource_metadata_storage.h defines the current version.
@@ -122,9 +112,7 @@ message DriveResourceMetadataHeader {
 }
 
 // Message to store information of an existing cache file.
-// Cache files are stored in 'tmp' or 'persistent' directory under the
-// root cache directory. See DriveCache::GetCacheRootPath().
-message DriveCacheEntry {
+message FileCacheEntry {
   // MD5 of the cache file. "local" if the file is locally modified.
   optional string md5 = 1;
 
@@ -137,12 +125,10 @@ message DriveCacheEntry {
   // True if the file is dirty (i.e. modified locally).
   optional bool is_dirty = 4;
 
-  // True if the file is a mounted archive file.
-  optional bool is_mounted = 5;
-
+  // TODO(hashimoto): Remove this block after DB merge. crbug.com/234487
   // True if the file is in the persistent directory.
-  optional bool is_persistent = 6;
+  // optional bool is_persistent = 6;
 
-  // When adding a new state, be sure to update TestDriveCacheState and test
+  // When adding a new state, be sure to update TestFileCacheState and test
   // functions defined in drive_test_util.cc.
 }

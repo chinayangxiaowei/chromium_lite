@@ -101,6 +101,12 @@ void AddDefaultFieldValue(ModelType datatype,
     case FAVICON_TRACKING:
       specifics->mutable_favicon_tracking();
       break;
+    case MANAGED_USER_SETTINGS:
+      specifics->mutable_managed_user_setting();
+      break;
+    case MANAGED_USERS:
+      specifics->mutable_managed_user();
+      break;
     default:
       NOTREACHED() << "No known extension for model type.";
   }
@@ -187,6 +193,10 @@ int GetSpecificsFieldNumberFromModelType(ModelType model_type) {
       return sync_pb::EntitySpecifics::kFaviconImageFieldNumber;
     case FAVICON_TRACKING:
       return sync_pb::EntitySpecifics::kFaviconTrackingFieldNumber;
+    case MANAGED_USER_SETTINGS:
+      return sync_pb::EntitySpecifics::kManagedUserSettingFieldNumber;
+    case MANAGED_USERS:
+      return sync_pb::EntitySpecifics::kManagedUserFieldNumber;
     default:
       NOTREACHED() << "No known extension for model type.";
       return 0;
@@ -303,11 +313,13 @@ ModelType GetModelTypeFromSpecifics(const sync_pb::EntitySpecifics& specifics) {
   if (specifics.has_favicon_tracking())
     return FAVICON_TRACKING;
 
-  return UNSPECIFIED;
-}
+  if (specifics.has_managed_user_setting())
+    return MANAGED_USER_SETTINGS;
 
-bool ShouldMaintainPosition(ModelType model_type) {
-  return model_type == BOOKMARKS;
+  if (specifics.has_managed_user())
+    return MANAGED_USERS;
+
+  return UNSPECIFIED;
 }
 
 ModelTypeSet ProtocolTypes() {
@@ -332,7 +344,7 @@ ModelTypeSet UserSelectableTypes() {
   // Although the order doesn't technically matter here, it's clearer to keep
   // these in the same order as their definition in the ModelType enum.
   set.Put(BOOKMARKS);
-  set.Put(PREFERENCES);;
+  set.Put(PREFERENCES);
   set.Put(PASSWORDS);
   set.Put(AUTOFILL);
   set.Put(THEMES);
@@ -353,11 +365,22 @@ ModelTypeSet EncryptableUserTypes() {
   encryptable_user_types.Remove(HISTORY_DELETE_DIRECTIVES);
   // Synced notifications are not encrypted since the server must see changes.
   encryptable_user_types.Remove(SYNCED_NOTIFICATIONS);
+  // Priority preferences are not encrypted because they might be synced before
+  // encryption is ready.
+  encryptable_user_types.Remove(PRIORITY_PREFERENCES);
+  // Managed user settings are not encrypted since they are set server-side.
+  encryptable_user_types.Remove(MANAGED_USER_SETTINGS);
+  // Managed users are not encrypted since they are managed server-side.
+  encryptable_user_types.Remove(MANAGED_USERS);
   // Proxy types have no sync representation and are therefore not encrypted.
   // Note however that proxy types map to one or more protocol types, which
   // may or may not be encrypted themselves.
   encryptable_user_types.RemoveAll(ProxyTypes());
   return encryptable_user_types;
+}
+
+ModelTypeSet PriorityUserTypes() {
+  return ModelTypeSet(PRIORITY_PREFERENCES);
 }
 
 ModelTypeSet ControlTypes() {
@@ -368,9 +391,6 @@ ModelTypeSet ControlTypes() {
   for (int i = FIRST_CONTROL_MODEL_TYPE; i <= LAST_CONTROL_MODEL_TYPE; ++i) {
     set.Put(ModelTypeFromInt(i));
   }
-
-  // TODO(albertb): Re-enable this when the server supports it.
-  set.Remove(PRIORITY_PREFERENCES);
 
   return set;
 }
@@ -383,6 +403,26 @@ ModelTypeSet ProxyTypes() {
 
 bool IsControlType(ModelType model_type) {
   return ControlTypes().Has(model_type);
+}
+
+ModelTypeSet CoreTypes() {
+  syncer::ModelTypeSet result;
+  result.PutAll(PriorityCoreTypes());
+
+  // The following are low priority core types.
+  result.Put(SYNCED_NOTIFICATIONS);
+
+  return result;
+}
+
+ModelTypeSet PriorityCoreTypes() {
+  syncer::ModelTypeSet result;
+  result.PutAll(ControlTypes());
+
+  // The following are non-control core types.
+  result.Put(MANAGED_USERS);
+
+  return result;
 }
 
 const char* ModelTypeToString(ModelType model_type) {
@@ -440,6 +480,10 @@ const char* ModelTypeToString(ModelType model_type) {
       return "Favicon Images";
     case FAVICON_TRACKING:
       return "Favicon Tracking";
+    case MANAGED_USER_SETTINGS:
+      return "Managed User Settings";
+    case MANAGED_USERS:
+      return "Managed Users";
     case PROXY_TABS:
       return "Tabs";
     default:
@@ -507,6 +551,10 @@ int ModelTypeToHistogramInt(ModelType model_type) {
       return 24;
     case PROXY_TABS:
       return 25;
+    case MANAGED_USER_SETTINGS:
+      return 26;
+    case MANAGED_USERS:
+      return 27;
     // Silence a compiler warning.
     case MODEL_TYPE_COUNT:
       return 0;
@@ -523,7 +571,7 @@ base::StringValue* ModelTypeToValue(ModelType model_type) {
     return new base::StringValue("Unspecified");
   }
   NOTREACHED();
-  return new base::StringValue("");
+  return new base::StringValue(std::string());
 }
 
 ModelType ModelTypeFromValue(const base::Value& value) {
@@ -588,6 +636,10 @@ ModelType ModelTypeFromString(const std::string& model_type_string) {
     return FAVICON_IMAGES;
   else if (model_type_string == "Favicon Tracking")
     return FAVICON_TRACKING;
+  else if (model_type_string == "Managed User Settings")
+    return MANAGED_USER_SETTINGS;
+  else if (model_type_string == "Managed Users")
+    return MANAGED_USERS;
   else if (model_type_string == "Tabs")
     return PROXY_TABS;
   else
@@ -676,6 +728,10 @@ std::string ModelTypeToRootTag(ModelType type) {
       return "google_chrome_favicon_images";
     case FAVICON_TRACKING:
       return "google_chrome_favicon_tracking";
+    case MANAGED_USER_SETTINGS:
+      return "google_chrome_managed_user_settings";
+    case MANAGED_USERS:
+      return "google_chrome_managed_users";
     case PROXY_TABS:
       return std::string();
     default:
@@ -713,6 +769,8 @@ const char kPriorityPreferenceNotificationType[] = "PRIORITY_PREFERENCE";
 const char kDictionaryNotificationType[] = "DICTIONARY";
 const char kFaviconImageNotificationType[] = "FAVICON_IMAGE";
 const char kFaviconTrackingNotificationType[] = "FAVICON_TRACKING";
+const char kManagedUserSettingNotificationType[] = "MANAGED_USER_SETTING";
+const char kManagedUserNotificationType[] = "MANAGED_USER";
 }  // namespace
 
 bool RealModelTypeToNotificationType(ModelType model_type,
@@ -786,6 +844,12 @@ bool RealModelTypeToNotificationType(ModelType model_type,
       return true;
     case FAVICON_TRACKING:
       *notification_type = kFaviconTrackingNotificationType;
+      return true;
+    case MANAGED_USER_SETTINGS:
+      *notification_type = kManagedUserSettingNotificationType;
+      return true;
+    case MANAGED_USERS:
+      *notification_type = kManagedUserNotificationType;
       return true;
     default:
       break;
@@ -864,6 +928,12 @@ bool NotificationTypeToRealModelType(const std::string& notification_type,
     return true;
   } else if (notification_type == kFaviconTrackingNotificationType) {
     *model_type = FAVICON_TRACKING;
+    return true;
+  } else if (notification_type == kManagedUserSettingNotificationType) {
+    *model_type = MANAGED_USER_SETTINGS;
+    return true;
+  } else if (notification_type == kManagedUserNotificationType) {
+    *model_type = MANAGED_USERS;
     return true;
   }
   *model_type = UNSPECIFIED;

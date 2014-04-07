@@ -101,7 +101,7 @@ class NaClBrowserTestBase : public InProcessBrowserTest {
  private:
   bool StartTestServer();
 
-  scoped_ptr<net::TestServer> test_server_;
+  scoped_ptr<net::SpawnedTestServer> test_server_;
 };
 
 class NaClBrowserTestNewlib : public NaClBrowserTestBase {
@@ -121,6 +121,13 @@ class NaClBrowserTestPnacl : public NaClBrowserTestBase {
   virtual base::FilePath::StringType Variant() OVERRIDE;
 
   virtual bool IsPnacl() OVERRIDE;
+};
+
+// Temporary class for running tests with the old cache enabled. Once all the
+// pieces are stable and the old code is gone, this will go away.
+class NaClBrowserTestPnaclWithOldCache : public NaClBrowserTestPnacl {
+ public:
+  NaClBrowserTestPnaclWithOldCache();
 };
 
 // A NaCl browser test only using static files.

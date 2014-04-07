@@ -7,15 +7,22 @@ import os
 import re
 import subprocess
 import sys
-import time
 import tempfile
-
-from telemetry.core import util
 
 # TODO(nduca): This whole file is built up around making individual ssh calls
 # for each operation. It really could get away with a single ssh session built
 # around pexpect, I suspect, if we wanted it to be faster. But, this was
 # convenient.
+
+def IsRunningOnCrosDevice():
+  """Returns True if we're on a ChromeOS device."""
+  lsb_release = '/etc/lsb-release'
+  if sys.platform.startswith('linux') and os.path.exists(lsb_release):
+    with open(lsb_release, 'r') as f:
+      res = f.read()
+      if res.count('CHROMEOS_RELEASE_NAME'):
+        return True
+  return False
 
 def RunCmd(args, cwd=None, quiet=False):
   """Opens a subprocess to execute a program and returns its return value.
@@ -58,129 +65,6 @@ def GetAllCmdOutput(args, cwd=None, quiet=False):
     if not quiet:
       logging.debug(' > stdout=[%s], stderr=[%s]', stdout, stderr)
     return stdout, stderr
-
-class DeviceSideProcess(object):
-  def __init__(self,
-               cri,
-               device_side_args,
-               prevent_output=True,
-               extra_ssh_args=None,
-               leave_ssh_alive=False,
-               env=None,
-               login_shell=False):
-
-    # Init members first so that Close will always succeed.
-    self._cri = cri
-    self._proc = None
-    self._devnull = open(os.devnull, 'w')
-
-    if prevent_output:
-      out = self._devnull
-    else:
-      out = sys.stderr
-
-    cri.RmRF('/tmp/cros_interface_remote_device_pid')
-    cmd_str = ' '.join(device_side_args)
-    if env:
-      env_str = ' '.join(['%s=%s' % (k, v) for k, v in env.items()])
-      cmd = env_str + ' ' + cmd_str
-    else:
-      cmd = cmd_str
-    contents = """%s&\n""" % cmd
-    contents += 'echo $! > /tmp/cros_interface_remote_device_pid\n'
-    cri.PushContents(contents, '/tmp/cros_interface_remote_device_bootstrap.sh')
-
-    cmdline = ['/bin/bash']
-    if login_shell:
-      cmdline.append('-l')
-    cmdline.append('/tmp/cros_interface_remote_device_bootstrap.sh')
-    proc = subprocess.Popen(
-      cri.FormSSHCommandLine(cmdline,
-                              extra_ssh_args=extra_ssh_args),
-      stdout=out,
-      stderr=out,
-      stdin=self._devnull,
-      shell=False)
-
-    time.sleep(0.1)
-    def TryGetResult():
-      try:
-        self._pid = cri.GetFileContents(
-            '/tmp/cros_interface_remote_device_pid').strip()
-        return True
-      except OSError:
-        return False
-    try:
-      util.WaitFor(TryGetResult, 5)
-    except util.TimeoutException:
-      raise Exception('Something horrible has happened!')
-
-    # Killing the ssh session leaves the process running. We dont
-    # need it anymore, unless we have port-forwards.
-    if not leave_ssh_alive:
-      proc.kill()
-    else:
-      self._proc = proc
-
-    self._pid = int(self._pid)
-    if not self.IsAlive():
-      raise OSError('Process did not come up or did not stay alive very long!')
-    self._cri = cri
-
-  def Close(self, try_sigint_first=False):
-    if self.IsAlive():
-      # Try to politely shutdown, first.
-      if try_sigint_first:
-        logging.debug("kill -INT %i" % self._pid)
-        self._cri.RunCmdOnDevice(
-          ['kill', '-INT', str(self._pid)], quiet=True)
-        try:
-          self.Wait(timeout=0.5)
-        except util.TimeoutException:
-          pass
-
-      if self.IsAlive():
-        logging.debug("kill -KILL %i" % self._pid)
-        self._cri.RunCmdOnDevice(
-          ['kill', '-KILL', str(self._pid)], quiet=True)
-        try:
-          self.Wait(timeout=5)
-        except util.TimeoutException:
-          pass
-
-      if self.IsAlive():
-        raise Exception('Could not shutdown the process.')
-
-    self._cri = None
-    if self._proc:
-      self._proc.kill()
-      self._proc = None
-
-    if self._devnull:
-      self._devnull.close()
-      self._devnull = None
-
-  def __enter__(self):
-    return self
-
-  def __exit__(self, *args):
-    self.Close()
-    return
-
-  def Wait(self, timeout=1):
-    if not self._pid:
-      raise Exception('Closed')
-    def IsDone():
-      return not self.IsAlive()
-    util.WaitFor(IsDone, timeout)
-    self._pid = None
-
-  def IsAlive(self, quiet=True):
-    if not self._pid:
-      return False
-    exists = self._cri.FileExistsOnDevice('/proc/%i/cmdline' % self._pid,
-                                          quiet=quiet)
-    return exists
 
 def HasSSH():
   try:
@@ -230,7 +114,11 @@ class CrOSInterface(object):
 
   def FormSSHCommandLine(self, args, extra_ssh_args=None):
     if self.local:
-      return args
+      # We run the command through the shell locally for consistency with
+      # how commands are run through SSH (crbug.com/239161). This work
+      # around will be unnecessary once we implement a persistent SSH
+      # connection to run remote commands (crbug.com/239607).
+      return ['sh', '-c', " ".join(args)]
 
     full_args = ['ssh',
                  '-o ForwardX11=no',
@@ -290,12 +178,12 @@ class CrOSInterface(object):
         'Logged into %s, expected $USER=root, but got %s.' % (
           self._hostname, stdout))
 
-  def FileExistsOnDevice(self, file_name, quiet=False):
+  def FileExistsOnDevice(self, file_name):
     if self.local:
       return os.path.exists(file_name)
 
     stdout, stderr = self.RunCmdOnDevice([
-        'if', 'test', '-a', file_name, ';',
+        'if', 'test', '-e', file_name, ';',
         'then', 'echo', '1', ';',
         'fi'
         ], quiet=True)
@@ -305,13 +193,17 @@ class CrOSInterface(object):
                       stderr)
       raise OSError('Unepected error: %s' % stderr)
     exists = stdout == '1\n'
-    if not quiet:
-      logging.debug("FileExistsOnDevice(<text>, %s)->%s" % (
-          file_name, exists))
+    logging.debug("FileExistsOnDevice(<text>, %s)->%s" % (file_name, exists))
     return exists
 
   def PushFile(self, filename, remote_filename):
-    assert not self.local
+    if self.local:
+      args = ['cp', '-r', filename, remote_filename]
+      stdout, stderr = GetAllCmdOutput(args, quiet=True)
+      if stderr != '':
+        raise OSError('No such file or directory %s' % stderr)
+      return
+
     args = ['scp', '-r' ] + self._ssh_args
     if self._ssh_identity:
       args.extend(['-i', self._ssh_identity])
@@ -353,18 +245,19 @@ class CrOSInterface(object):
         return res
 
   def ListProcesses(self):
+    """Returns a tuple (pid, cmd, ppid) of all processes on the device."""
     stdout, stderr = self.RunCmdOnDevice([
         '/bin/ps', '--no-headers',
         '-A',
-        '-o', 'pid,args'], quiet=True)
-    assert stderr == ''
+        '-o', 'pid,ppid,args'], quiet=True)
+    assert stderr == '', stderr
     procs = []
     for l in stdout.split('\n'): # pylint: disable=E1103
       if l == '':
         continue
-      m = re.match('^\s*(\d+)\s+(.+)', l, re.DOTALL)
+      m = re.match('^\s*(\d+)\s+(\d+)\s+(.+)', l, re.DOTALL)
       assert m
-      procs.append(m.groups())
+      procs.append((int(m.group(1)), m.group(3), int(m.group(2))))
     logging.debug("ListProcesses(<predicate>)->[%i processes]" % len(procs))
     return procs
 
@@ -374,10 +267,10 @@ class CrOSInterface(object):
 
   def KillAllMatching(self, predicate):
     kills = ['kill', '-KILL']
-    for p in self.ListProcesses():
-      if predicate(p[1]):
-        logging.info('Killing %s', repr(p))
-        kills.append(p[0])
+    for pid, cmd, _ in self.ListProcesses():
+      if predicate(cmd):
+        logging.info('Killing %s, pid %d' % cmd, pid)
+        kills.append(pid)
     logging.debug("KillAllMatching(<predicate>)->%i" % (len(kills) - 2))
     if len(kills) > 2:
       self.RunCmdOnDevice(kills, quiet=True)
@@ -386,7 +279,7 @@ class CrOSInterface(object):
   def IsServiceRunning(self, service_name):
     stdout, stderr = self.RunCmdOnDevice([
         'status', service_name], quiet=True)
-    assert stderr == ''
+    assert stderr == '', stderr
     running = 'running, process' in stdout
     logging.debug("IsServiceRunning(%s)->%s" % (service_name, running))
     return running
@@ -418,3 +311,35 @@ class CrOSInterface(object):
       return False
 
     return True
+
+  def FilesystemMountedAt(self, path):
+    """Returns the filesystem mounted at |path|"""
+    df_out, _ = self.RunCmdOnDevice(['/bin/df', path])
+    df_ary = df_out.split('\n')
+    # 3 lines for title, mount info, and empty line.
+    if len(df_ary) == 3:
+      line_ary = df_ary[1].split()
+      if line_ary:
+        return line_ary[0]
+    return None
+
+  def TakeScreenShot(self, screenshot_prefix):
+    """Takes a screenshot, useful for debugging failures."""
+    # TODO(achuith): Find a better location for screenshots. Cros autotests
+    # upload everything in /var/log so use /var/log/screenshots for now.
+    SCREENSHOT_DIR = '/var/log/screenshots/'
+    SCREENSHOT_EXT = '.png'
+
+    self.RunCmdOnDevice(['mkdir', '-p', SCREENSHOT_DIR])
+    for i in xrange(25):
+      screenshot_file = ('%s%s-%d%s' %
+                         (SCREENSHOT_DIR, screenshot_prefix, i, SCREENSHOT_EXT))
+      if not self.FileExistsOnDevice(screenshot_file):
+        self.RunCmdOnDevice([
+            'DISPLAY=:0.0 XAUTHORITY=/home/chronos/.Xauthority '
+            '/usr/local/bin/import',
+            '-window root',
+            '-depth 8',
+            screenshot_file])
+        return
+    logging.warning('screenshot directory full.')

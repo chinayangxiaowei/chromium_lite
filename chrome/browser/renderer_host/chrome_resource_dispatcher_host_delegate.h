@@ -42,8 +42,7 @@ class ChromeResourceDispatcherHostDelegate
       const std::string& method,
       const GURL& url,
       ResourceType::Type resource_type,
-      content::ResourceContext* resource_context,
-      const content::Referrer& referrer) OVERRIDE;
+      content::ResourceContext* resource_context) OVERRIDE;
   virtual void RequestBeginning(
       net::URLRequest* request,
       content::ResourceContext* resource_context,
@@ -78,14 +77,15 @@ class ChromeResourceDispatcherHostDelegate
       content::ResourceContext* resource_context,
       const GURL& url,
       const std::string& mime_type,
-      GURL* security_origin,
+      GURL* origin,
       std::string* target_id) OVERRIDE;
   virtual void OnStreamCreated(
       content::ResourceContext* resource_context,
       int render_process_id,
       int render_view_id,
       const std::string& target_id,
-      scoped_ptr<content::StreamHandle> stream) OVERRIDE;
+      scoped_ptr<content::StreamHandle> stream,
+      int64 expected_content_size) OVERRIDE;
   virtual void OnResponseStarted(
       net::URLRequest* request,
       content::ResourceContext* resource_context,

@@ -12,9 +12,10 @@
 
 #include "base/debug/trace_event.h"
 #include "base/i18n/rtl.h"
-#include "base/string_util.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/themes/theme_properties.h"
 #include "chrome/browser/ui/browser.h"
@@ -32,7 +33,6 @@
 #include "chrome/browser/ui/gtk/tab_contents_container_gtk.h"
 #include "chrome/browser/ui/gtk/tabs/tab_strip_gtk.h"
 #include "chrome/browser/ui/gtk/view_id_util.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "content/public/browser/native_web_keyboard_event.h"
 #include "content/public/browser/notification_source.h"
 #include "content/public/browser/render_view_host.h"
@@ -41,7 +41,6 @@
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "grit/ui_resources.h"
-#include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "ui/base/gtk/gtk_floating_container.h"
 #include "ui/base/gtk/gtk_hig_constants.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -217,10 +216,6 @@ FindBarGtk::FindBarGtk(BrowserWindowGtk* window)
                    G_CALLBACK(OnFocusInThunk), this);
   g_signal_connect(text_entry_, "focus-out-event",
                    G_CALLBACK(OnFocusOutThunk), this);
-  g_signal_connect_after(text_entry_, "copy-clipboard",
-                         G_CALLBACK(&HandleAfterCopyOrCutClipboardThunk), this);
-  g_signal_connect_after(text_entry_, "cut-clipboard",
-                         G_CALLBACK(&HandleAfterCopyOrCutClipboardThunk), this);
   g_signal_connect(container_, "expose-event",
                    G_CALLBACK(OnExpose), this);
 }
@@ -248,10 +243,7 @@ void FindBarGtk::InitWidgets() {
                                            0, false, true, NULL));
 
   GtkWidget* close_alignment = gtk_alignment_new(0, 0.6, 1, 0);
-  close_button_.reset(new CustomDrawButton(
-      theme_service_, IDR_TAB_CLOSE,
-      IDR_TAB_CLOSE_P, IDR_TAB_CLOSE_H, IDR_TAB_CLOSE,
-      GTK_STOCK_CLOSE, GTK_ICON_SIZE_MENU));
+  close_button_.reset(CustomDrawButton::CloseButtonBar(theme_service_));
   gtk_container_add(GTK_CONTAINER(close_alignment), close_button_->widget());
   gtk_box_pack_end(GTK_BOX(hbox), close_alignment, FALSE, FALSE,
                    kCloseButtonPadding);
@@ -561,8 +553,8 @@ void FindBarGtk::Observe(int type,
     ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
     close_button_->SetBackground(
         theme_service_->GetColor(ThemeProperties::COLOR_TAB_TEXT),
-        rb.GetImageNamed(IDR_TAB_CLOSE).AsBitmap(),
-        rb.GetImageNamed(IDR_TAB_CLOSE).AsBitmap());
+        rb.GetImageNamed(IDR_CLOSE_1).AsBitmap(),
+        rb.GetImageNamed(IDR_CLOSE_1).AsBitmap());
   }
 
   UpdateMatchLabelAppearance(match_label_failure_);
@@ -1037,21 +1029,4 @@ gboolean FindBarGtk::OnFocusOut(GtkWidget* entry, GdkEventFocus* event) {
       reinterpret_cast<gpointer>(&OnKeymapDirectionChanged), this);
 
   return FALSE;  // Continue propagation.
-}
-
-void FindBarGtk::HandleAfterCopyOrCutClipboard(GtkWidget* sender) {
-  ui::Clipboard::SourceTag source_tag = content::BrowserContext::
-      GetMarkerForOffTheRecordContext(browser_->profile());
-  if (source_tag == ui::Clipboard::SourceTag())
-    return;
-
-  ui::Clipboard* clipboard = ui::Clipboard::GetForCurrentThread();
-  string16 text;
-  clipboard->ReadText(ui::Clipboard::BUFFER_STANDARD, &text);
-
-  // Overwrite clipboard with the correct source tag.
-  ui::ScopedClipboardWriter scw(clipboard,
-                                ui::Clipboard::BUFFER_STANDARD,
-                                source_tag);
-  scw.WriteText(text);
 }

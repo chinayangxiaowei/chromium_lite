@@ -7,13 +7,13 @@
 #include "base/bind.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/weak_ptr.h"
-#include "base/message_loop.h"
-#include "base/message_loop.h"
-#include "base/message_loop_proxy.h"
+#include "base/message_loop/message_loop.h"
+#include "base/message_loop/message_loop_proxy.h"
 #include "chrome/browser/browsing_data/browsing_data_quota_helper_impl.h"
 #include "content/public/test/test_browser_thread.h"
-#include "webkit/quota/mock_storage_client.h"
-#include "webkit/quota/quota_manager.h"
+#include "content/public/test/test_browser_thread_bundle.h"
+#include "webkit/browser/quota/mock_storage_client.h"
+#include "webkit/browser/quota/quota_manager.h"
 
 using content::BrowserThread;
 
@@ -23,33 +23,31 @@ class BrowsingDataQuotaHelperTest : public testing::Test {
   typedef BrowsingDataQuotaHelper::QuotaInfoArray QuotaInfoArray;
 
   BrowsingDataQuotaHelperTest()
-      : ui_thread_(BrowserThread::UI, &message_loop_),
-        db_thread_(BrowserThread::DB, &message_loop_),
-        io_thread_(BrowserThread::IO, &message_loop_),
-        fetching_completed_(true),
+      : fetching_completed_(true),
         quota_(-1),
-        weak_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {}
+        weak_factory_(this) {}
 
   virtual ~BrowsingDataQuotaHelperTest() {}
 
   virtual void SetUp() OVERRIDE {
     EXPECT_TRUE(dir_.CreateUniqueTempDir());
     quota_manager_ = new quota::QuotaManager(
-        false, dir_.path(),
-        BrowserThread::GetMessageLoopProxyForThread(BrowserThread::IO),
-        BrowserThread::GetMessageLoopProxyForThread(BrowserThread::DB),
+        false,
+        dir_.path(),
+        BrowserThread::GetMessageLoopProxyForThread(BrowserThread::IO).get(),
+        BrowserThread::GetMessageLoopProxyForThread(BrowserThread::DB).get(),
         NULL);
     helper_ = new BrowsingDataQuotaHelperImpl(
-        BrowserThread::GetMessageLoopProxyForThread(BrowserThread::UI),
-        BrowserThread::GetMessageLoopProxyForThread(BrowserThread::IO),
-        quota_manager_);
+        BrowserThread::GetMessageLoopProxyForThread(BrowserThread::UI).get(),
+        BrowserThread::GetMessageLoopProxyForThread(BrowserThread::IO).get(),
+        quota_manager_.get());
   }
 
   virtual void TearDown() OVERRIDE {
     helper_ = NULL;
     quota_manager_ = NULL;
     quota_info_.clear();
-    MessageLoop::current()->RunUntilIdle();
+    base::MessageLoop::current()->RunUntilIdle();
   }
 
  protected:
@@ -113,10 +111,7 @@ class BrowsingDataQuotaHelperTest : public testing::Test {
     fetching_completed_ = true;
   }
 
-  MessageLoop message_loop_;
-  content::TestBrowserThread ui_thread_;
-  content::TestBrowserThread db_thread_;
-  content::TestBrowserThread io_thread_;
+  content::TestBrowserThreadBundle thread_bundle_;
   scoped_refptr<quota::QuotaManager> quota_manager_;
 
   base::ScopedTempDir dir_;
@@ -132,7 +127,7 @@ class BrowsingDataQuotaHelperTest : public testing::Test {
 
 TEST_F(BrowsingDataQuotaHelperTest, Empty) {
   StartFetching();
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
   EXPECT_TRUE(fetching_completed());
   EXPECT_TRUE(quota_info().empty());
 }
@@ -142,18 +137,19 @@ TEST_F(BrowsingDataQuotaHelperTest, FetchData) {
     {"http://example.com/", quota::kStorageTypeTemporary, 1},
     {"https://example.com/", quota::kStorageTypeTemporary, 10},
     {"http://example.com/", quota::kStorageTypePersistent, 100},
+    {"https://example.com/", quota::kStorageTypeSyncable, 1},
     {"http://example2.com/", quota::kStorageTypeTemporary, 1000},
   };
 
   RegisterClient(kOrigins, arraysize(kOrigins));
   StartFetching();
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
   EXPECT_TRUE(fetching_completed());
 
   std::set<QuotaInfo> expected, actual;
   actual.insert(quota_info().begin(), quota_info().end());
-  expected.insert(QuotaInfo("example.com", 11, 100));
-  expected.insert(QuotaInfo("example2.com", 1000, 0));
+  expected.insert(QuotaInfo("example.com", 11, 100, 1));
+  expected.insert(QuotaInfo("example2.com", 1000, 0, 0));
   EXPECT_TRUE(expected == actual);
 }
 
@@ -162,6 +158,7 @@ TEST_F(BrowsingDataQuotaHelperTest, IgnoreExtensionsAndDevTools) {
     {"http://example.com/", quota::kStorageTypeTemporary, 1},
     {"https://example.com/", quota::kStorageTypeTemporary, 10},
     {"http://example.com/", quota::kStorageTypePersistent, 100},
+    {"https://example.com/", quota::kStorageTypeSyncable, 1},
     {"http://example2.com/", quota::kStorageTypeTemporary, 1000},
     {"chrome-extension://abcdefghijklmnopqrstuvwxyz/",
         quota::kStorageTypeTemporary, 10000},
@@ -175,13 +172,13 @@ TEST_F(BrowsingDataQuotaHelperTest, IgnoreExtensionsAndDevTools) {
 
   RegisterClient(kOrigins, arraysize(kOrigins));
   StartFetching();
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
   EXPECT_TRUE(fetching_completed());
 
   std::set<QuotaInfo> expected, actual;
   actual.insert(quota_info().begin(), quota_info().end());
-  expected.insert(QuotaInfo("example.com", 11, 100));
-  expected.insert(QuotaInfo("example2.com", 1000, 0));
+  expected.insert(QuotaInfo("example.com", 11, 100, 1));
+  expected.insert(QuotaInfo("example2.com", 1000, 0, 0));
   EXPECT_TRUE(expected == actual);
 }
 
@@ -191,16 +188,16 @@ TEST_F(BrowsingDataQuotaHelperTest, RevokeHostQuota) {
 
   SetPersistentHostQuota(kHost1, 1);
   SetPersistentHostQuota(kHost2, 10);
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
 
   RevokeHostQuota(kHost1);
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
 
   GetPersistentHostQuota(kHost1);
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
   EXPECT_EQ(0, quota());
 
   GetPersistentHostQuota(kHost2);
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
   EXPECT_EQ(10, quota());
 }

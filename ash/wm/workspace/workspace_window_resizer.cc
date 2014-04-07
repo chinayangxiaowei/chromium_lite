@@ -9,12 +9,14 @@
 #include <utility>
 #include <vector>
 
-#include "ash/display/display_controller.h"
+#include "ash/ash_switches.h"
+#include "ash/root_window_controller.h"
 #include "ash/screen_ash.h"
 #include "ash/shell.h"
 #include "ash/shell_window_ids.h"
 #include "ash/wm/coordinate_conversion.h"
 #include "ash/wm/default_window_resizer.h"
+#include "ash/wm/dock/docked_window_resizer.h"
 #include "ash/wm/drag_window_resizer.h"
 #include "ash/wm/panels/panel_window_resizer.h"
 #include "ash/wm/property_util.h"
@@ -22,7 +24,9 @@
 #include "ash/wm/window_util.h"
 #include "ash/wm/workspace/phantom_window_controller.h"
 #include "ash/wm/workspace/snap_sizer.h"
+#include "base/command_line.h"
 #include "ui/aura/client/aura_constants.h"
+#include "ui/aura/client/screen_position_client.h"
 #include "ui/aura/client/window_types.h"
 #include "ui/aura/root_window.h"
 #include "ui/aura/window.h"
@@ -34,17 +38,32 @@
 
 namespace ash {
 
-scoped_ptr<WindowResizer> CreateWindowResizer(aura::Window* window,
-                                              const gfx::Point& point_in_parent,
-                                              int window_component) {
+scoped_ptr<WindowResizer> CreateWindowResizer(
+    aura::Window* window,
+    const gfx::Point& point_in_parent,
+    int window_component,
+    aura::client::WindowMoveSource source) {
   DCHECK(window);
   // No need to return a resizer when the window cannot get resized.
   if (!wm::CanResizeWindow(window) && window_component != HTCAPTION)
     return scoped_ptr<WindowResizer>();
 
+  // TODO(varkha): The chaining of window resizers causes some of the logic
+  // to be repeated and the logic flow difficult to control. With some windows
+  // classes using reparenting during drag operations it becomes challenging to
+  // implement proper transition from one resizer to another during or at the
+  // end of the drag. This also causes http://crbug.com/247085.
+  // It seems the only thing the panel or dock resizer needs to do is notify the
+  // layout manager when a docked window is being dragged. We should have a
+  // better way of doing this, perhaps by having a way of observing drags or
+  // having a generic drag window wrapper which informs a layout manager that a
+  // drag has started or stopped.
+  // It may be possible to refactor and eliminate chaining.
   WindowResizer* window_resizer = NULL;
   if (window->parent() &&
-      window->parent()->id() == internal::kShellWindowId_WorkspaceContainer) {
+      (window->parent()->id() == internal::kShellWindowId_DefaultContainer ||
+       window->parent()->id() == internal::kShellWindowId_DockedContainer ||
+       window->parent()->id() == internal::kShellWindowId_PanelContainer)) {
     // Allow dragging maximized windows if it's not tracked by workspace. This
     // is set by tab dragging code.
     if (!wm::IsWindowNormal(window) &&
@@ -54,18 +73,23 @@ scoped_ptr<WindowResizer> CreateWindowResizer(aura::Window* window,
         window,
         point_in_parent,
         window_component,
+        source,
         std::vector<aura::Window*>());
   } else if (wm::IsWindowNormal(window)) {
     window_resizer = DefaultWindowResizer::Create(
-        window, point_in_parent, window_component);
+        window, point_in_parent, window_component, source);
   }
   if (window_resizer) {
     window_resizer = internal::DragWindowResizer::Create(
-        window_resizer, window, point_in_parent, window_component);
+        window_resizer, window, point_in_parent, window_component, source);
   }
   if (window_resizer && window->type() == aura::client::WINDOW_TYPE_PANEL) {
     window_resizer = PanelWindowResizer::Create(
-        window_resizer, window, point_in_parent, window_component);
+        window_resizer, window, point_in_parent, window_component, source);
+  }
+  if (window_resizer) {
+    window_resizer = DockedWindowResizer::Create(
+        window_resizer, window, point_in_parent, window_component, source);
   }
   return make_scoped_ptr<WindowResizer>(window_resizer);
 }
@@ -74,13 +98,25 @@ namespace internal {
 
 namespace {
 
-// Duration of the animation when snapping the window into place.
-const int kSnapDurationMS = 100;
+// Distance in pixels that the cursor must move past an edge for a window
+// to move or resize beyond that edge.
+const int kStickyDistancePixels = 64;
 
-// Returns true if should snap to the edge.
-bool ShouldSnapToEdge(int distance_from_edge, int grid_size) {
-  return distance_from_edge < grid_size &&
-      distance_from_edge > -grid_size * 2;
+// Snapping distance used instead of WorkspaceWindowResizer::kScreenEdgeInset
+// when resizing a window using touchscreen.
+const int kScreenEdgeInsetForTouchResize = 32;
+
+// Returns true if the window should stick to the edge.
+bool ShouldStickToEdge(int distance_from_edge, int sticky_size) {
+  if (CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kAshEnableStickyEdges) ||
+      CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kAshEnableDockedWindows)) {
+    return distance_from_edge < 0 &&
+           distance_from_edge > -sticky_size;
+  }
+  return distance_from_edge < sticky_size &&
+                              distance_from_edge > -sticky_size * 2;
 }
 
 // Returns the coordinate along the secondary axis to snap to.
@@ -187,7 +223,7 @@ gfx::Rect BoundsForMagneticResizeAttach(const gfx::Rect& src,
   return gfx::Rect(x, y, w, h);
 }
 
-// Converts a window comopnent edge to the magnetic edge to snap to.
+// Converts a window component edge to the magnetic edge to snap to.
 uint32 WindowComponentToMagneticEdge(int window_component) {
   switch (window_component) {
     case HTTOPLEFT:
@@ -302,8 +338,9 @@ WorkspaceWindowResizer* WorkspaceWindowResizer::Create(
     aura::Window* window,
     const gfx::Point& location_in_parent,
     int window_component,
+    aura::client::WindowMoveSource source,
     const std::vector<aura::Window*>& attached_windows) {
-  Details details(window, location_in_parent, window_component);
+  Details details(window, location_in_parent, window_component, source);
   return details.is_resizable ?
       new WorkspaceWindowResizer(details, attached_windows) : NULL;
 }
@@ -312,13 +349,25 @@ void WorkspaceWindowResizer::Drag(const gfx::Point& location_in_parent,
                                   int event_flags) {
   last_mouse_location_ = location_in_parent;
 
-  const int snap_size =
-      event_flags & ui::EF_CONTROL_DOWN ? 0 : kScreenEdgeInset;
+  int sticky_size;
+  if (event_flags & ui::EF_CONTROL_DOWN) {
+    sticky_size = 0;
+  } else if (CommandLine::ForCurrentProcess()->HasSwitch(
+      switches::kAshEnableStickyEdges) ||
+      CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kAshEnableDockedWindows)) {
+    sticky_size = kStickyDistancePixels;
+  } else if ((details_.bounds_change & kBoundsChange_Resizes) &&
+      details_.source == aura::client::WINDOW_MOVE_SOURCE_TOUCH) {
+    sticky_size = kScreenEdgeInsetForTouchResize;
+  } else {
+    sticky_size = kScreenEdgeInset;
+  }
   // |bounds| is in |window()->parent()|'s coordinates.
   gfx::Rect bounds = CalculateBoundsForDrag(details_, location_in_parent);
 
   if (wm::IsWindowNormal(window()))
-    AdjustBoundsForMainWindow(snap_size, &bounds);
+    AdjustBoundsForMainWindow(sticky_size, &bounds);
 
   if (bounds != window()->bounds()) {
     if (!did_move_or_resize_) {
@@ -353,7 +402,7 @@ void WorkspaceWindowResizer::CompleteDrag(int event_flags) {
   if (!did_move_or_resize_ || details_.window_component != HTCAPTION)
     return;
 
-  // When the window is not in the normal show state, we do not snap thw window.
+  // When the window is not in the normal show state, we do not snap the window.
   // This happens when the user minimizes or maximizes the window by keyboard
   // shortcut while dragging it. If the window is the result of dragging a tab
   // out of a maximized window, it's already in the normal show state when this
@@ -407,6 +456,10 @@ void WorkspaceWindowResizer::RevertDrag() {
 
 aura::Window* WorkspaceWindowResizer::GetTarget() {
   return details_.window;
+}
+
+const gfx::Point& WorkspaceWindowResizer::GetInitialLocation() const {
+  return details_.initial_location_in_parent;
 }
 
 WorkspaceWindowResizer::WorkspaceWindowResizer(
@@ -598,9 +651,13 @@ void WorkspaceWindowResizer::CreateBucketsForAttached(
 
 void WorkspaceWindowResizer::MagneticallySnapToOtherWindows(gfx::Rect* bounds) {
   if (UpdateMagnetismWindow(*bounds, kAllMagnetismEdges)) {
-    bounds->set_origin(
-        OriginForMagneticAttach(*bounds, magnetism_window_->bounds(),
-                                magnetism_edge_));
+    gfx::Point point = OriginForMagneticAttach(
+        ScreenAsh::ConvertRectToScreen(window()->parent(), *bounds),
+        magnetism_window_->GetBoundsInScreen(),
+        magnetism_edge_);
+    aura::client::GetScreenPositionClient(window()->GetRootWindow())->
+        ConvertPointFromScreen(window()->parent(), &point);
+    bounds->set_origin(point);
   }
 }
 
@@ -608,44 +665,67 @@ void WorkspaceWindowResizer::MagneticallySnapResizeToOtherWindows(
     gfx::Rect* bounds) {
   const uint32 edges = WindowComponentToMagneticEdge(details_.window_component);
   if (UpdateMagnetismWindow(*bounds, edges)) {
-    *bounds = BoundsForMagneticResizeAttach(
-          *bounds, magnetism_window_->bounds(), magnetism_edge_);
+    *bounds = ScreenAsh::ConvertRectFromScreen(
+        window()->parent(),
+        BoundsForMagneticResizeAttach(
+            ScreenAsh::ConvertRectToScreen(window()->parent(), *bounds),
+            magnetism_window_->GetBoundsInScreen(),
+            magnetism_edge_));
   }
 }
 
 bool WorkspaceWindowResizer::UpdateMagnetismWindow(const gfx::Rect& bounds,
-                                                    uint32 edges) {
-  MagnetismMatcher matcher(bounds, edges);
+                                                   uint32 edges) {
+  // |bounds| are in coordinates of original window's parent.
+  gfx::Rect bounds_in_screen =
+      ScreenAsh::ConvertRectToScreen(window()->parent(), bounds);
+  MagnetismMatcher matcher(bounds_in_screen, edges);
 
   // If we snapped to a window then check it first. That way we don't bounce
   // around when close to multiple edges.
   if (magnetism_window_) {
     if (window_tracker_.Contains(magnetism_window_) &&
-        matcher.ShouldAttach(magnetism_window_->bounds(), &magnetism_edge_)) {
+        matcher.ShouldAttach(magnetism_window_->GetBoundsInScreen(),
+                             &magnetism_edge_)) {
       return true;
     }
     window_tracker_.Remove(magnetism_window_);
     magnetism_window_ = NULL;
   }
 
-  aura::Window* parent = window()->parent();
-  const aura::Window::Windows& windows(parent->children());
-  for (aura::Window::Windows::const_reverse_iterator i = windows.rbegin();
-       i != windows.rend() && !matcher.AreEdgesObscured(); ++i) {
-    aura::Window* other = *i;
-    if (other == window() || !other->IsVisible())
-      continue;
-    if (matcher.ShouldAttach(other->bounds(), &magnetism_edge_)) {
-      magnetism_window_ = other;
-      window_tracker_.Add(magnetism_window_);
-      return true;
+  // Avoid magnetically snapping to popups, menus, tooltips, controls and
+  // windows that are not tracked by workspace.
+  if (!wm::CanResizeWindow(window()) || !GetTrackedByWorkspace(window()))
+    return false;
+
+  Shell::RootWindowList root_windows = Shell::GetAllRootWindows();
+  for (Shell::RootWindowList::iterator iter = root_windows.begin();
+       iter != root_windows.end(); ++iter) {
+    const aura::RootWindow* root_window = *iter;
+    // Test all children from the desktop in each root window.
+    const aura::Window::Windows& children = Shell::GetContainer(
+        root_window, kShellWindowId_DefaultContainer)->children();
+    for (aura::Window::Windows::const_reverse_iterator i = children.rbegin();
+         i != children.rend() && !matcher.AreEdgesObscured(); ++i) {
+      aura::Window* other = *i;
+      if (other == window() ||
+          !other->IsVisible() ||
+          !wm::IsWindowNormal(other) ||
+          !wm::CanResizeWindow(other)) {
+        continue;
+      }
+      if (matcher.ShouldAttach(other->GetBoundsInScreen(), &magnetism_edge_)) {
+        magnetism_window_ = other;
+        window_tracker_.Add(magnetism_window_);
+        return true;
+      }
     }
   }
   return false;
 }
 
 void WorkspaceWindowResizer::AdjustBoundsForMainWindow(
-    int snap_size,
+    int sticky_size,
     gfx::Rect* bounds) {
   gfx::Point last_mouse_location_in_screen = last_mouse_location_;
   wm::ConvertPointToScreen(window()->parent(), &last_mouse_location_in_screen);
@@ -665,14 +745,14 @@ void WorkspaceWindowResizer::AdjustBoundsForMainWindow(
       bounds->set_y(work_area.y());
     }
 
-    if (snap_size > 0) {
-      SnapToWorkAreaEdges(work_area, snap_size, bounds);
-      MagneticallySnapToOtherWindows(bounds);
+    if (sticky_size > 0) {
+      if (!StickToWorkAreaOnMove(work_area, sticky_size, bounds))
+        MagneticallySnapToOtherWindows(bounds);
     }
-  } else if (snap_size > 0) {
+  } else if (sticky_size > 0) {
     MagneticallySnapResizeToOtherWindows(bounds);
-    if (!magnetism_window_ && snap_size > 0)
-      SnapResizeToWorkAreaBounds(work_area, snap_size, bounds);
+    if (!magnetism_window_ && sticky_size > 0)
+      StickToWorkAreaOnResize(work_area, sticky_size, bounds);
   }
 
   if (attached_windows_.empty())
@@ -688,34 +768,38 @@ void WorkspaceWindowResizer::AdjustBoundsForMainWindow(
   }
 }
 
-void WorkspaceWindowResizer::SnapToWorkAreaEdges(
+bool WorkspaceWindowResizer::StickToWorkAreaOnMove(
     const gfx::Rect& work_area,
-    int snap_size,
+    int sticky_size,
     gfx::Rect* bounds) const {
   const int left_edge = work_area.x();
   const int right_edge = work_area.right();
   const int top_edge = work_area.y();
   const int bottom_edge = work_area.bottom();
-  if (ShouldSnapToEdge(bounds->x() - left_edge, snap_size)) {
+  if (ShouldStickToEdge(bounds->x() - left_edge, sticky_size)) {
     bounds->set_x(left_edge);
-  } else if (ShouldSnapToEdge(right_edge - bounds->right(),
-                              snap_size)) {
+    return true;
+  } else if (ShouldStickToEdge(right_edge - bounds->right(), sticky_size)) {
     bounds->set_x(right_edge - bounds->width());
+    return true;
   }
-  if (ShouldSnapToEdge(bounds->y() - top_edge, snap_size)) {
+  if (ShouldStickToEdge(bounds->y() - top_edge, sticky_size)) {
     bounds->set_y(top_edge);
-  } else if (ShouldSnapToEdge(bottom_edge - bounds->bottom(), snap_size) &&
+    return true;
+  } else if (ShouldStickToEdge(bottom_edge - bounds->bottom(), sticky_size) &&
              bounds->height() < (bottom_edge - top_edge)) {
     // Only snap to the bottom if the window is smaller than the work area.
     // Doing otherwise can lead to window snapping in weird ways as it bounces
     // between snapping to top then bottom.
     bounds->set_y(bottom_edge - bounds->height());
+    return true;
   }
+  return false;
 }
 
-void WorkspaceWindowResizer::SnapResizeToWorkAreaBounds(
+void WorkspaceWindowResizer::StickToWorkAreaOnResize(
     const gfx::Rect& work_area,
-    int snap_size,
+    int sticky_size,
     gfx::Rect* bounds) const {
   const uint32 edges = WindowComponentToMagneticEdge(details_.window_component);
   const int left_edge = work_area.x();
@@ -723,21 +807,21 @@ void WorkspaceWindowResizer::SnapResizeToWorkAreaBounds(
   const int top_edge = work_area.y();
   const int bottom_edge = work_area.bottom();
   if (edges & MAGNETISM_EDGE_TOP &&
-      ShouldSnapToEdge(bounds->y() - top_edge, snap_size)) {
+      ShouldStickToEdge(bounds->y() - top_edge, sticky_size)) {
     bounds->set_height(bounds->bottom() - top_edge);
     bounds->set_y(top_edge);
   }
   if (edges & MAGNETISM_EDGE_LEFT &&
-      ShouldSnapToEdge(bounds->x() - left_edge, snap_size)) {
+      ShouldStickToEdge(bounds->x() - left_edge, sticky_size)) {
     bounds->set_width(bounds->right() - left_edge);
     bounds->set_x(left_edge);
   }
   if (edges & MAGNETISM_EDGE_BOTTOM &&
-      ShouldSnapToEdge(bottom_edge - bounds->bottom(), snap_size)) {
+      ShouldStickToEdge(bottom_edge - bounds->bottom(), sticky_size)) {
     bounds->set_height(bottom_edge - bounds->y());
   }
   if (edges & MAGNETISM_EDGE_RIGHT &&
-      ShouldSnapToEdge(right_edge - bounds->right(), snap_size)) {
+      ShouldStickToEdge(right_edge - bounds->right(), sticky_size)) {
     bounds->set_width(right_edge - bounds->x());
   }
 }
@@ -766,6 +850,11 @@ void WorkspaceWindowResizer::UpdateSnapPhantomWindow(const gfx::Point& location,
   if (!wm::CanSnapWindow(window()))
     return;
 
+  if (window()->type() == aura::client::WINDOW_TYPE_PANEL &&
+      window()->GetProperty(kPanelAttachedKey)) {
+    return;
+  }
+
   SnapType last_type = snap_type_;
   snap_type_ = GetSnapType(location);
   if (snap_type_ == SNAP_NONE || snap_type_ != last_type) {
@@ -774,7 +863,7 @@ void WorkspaceWindowResizer::UpdateSnapPhantomWindow(const gfx::Point& location,
     if (snap_type_ == SNAP_NONE)
       return;
   }
-  if (!snap_sizer_.get()) {
+  if (!snap_sizer_) {
     SnapSizer::Edge edge = (snap_type_ == SNAP_LEFT_EDGE) ?
         SnapSizer::LEFT_EDGE : SnapSizer::RIGHT_EDGE;
     snap_sizer_.reset(new SnapSizer(window(),
@@ -784,7 +873,7 @@ void WorkspaceWindowResizer::UpdateSnapPhantomWindow(const gfx::Point& location,
   } else {
     snap_sizer_->Update(location);
   }
-  if (!snap_phantom_window_controller_.get()) {
+  if (!snap_phantom_window_controller_) {
     snap_phantom_window_controller_.reset(
         new PhantomWindowController(window()));
   }

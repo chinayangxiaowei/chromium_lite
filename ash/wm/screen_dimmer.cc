@@ -5,7 +5,7 @@
 #include "ash/wm/screen_dimmer.h"
 
 #include "ash/shell.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "ui/aura/root_window.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
@@ -28,18 +28,18 @@ const int kDimmingTransitionMs = 200;
 ScreenDimmer::ScreenDimmer(aura::RootWindow* root_window)
     : root_window_(root_window),
       currently_dimming_(false) {
-  root_window_->AddRootWindowObserver(this);
+  root_window_->AddObserver(this);
 }
 
 ScreenDimmer::~ScreenDimmer() {
-  root_window_->RemoveRootWindowObserver(this);
+  root_window_->RemoveObserver(this);
 }
 
 void ScreenDimmer::SetDimming(bool should_dim) {
   if (should_dim == currently_dimming_)
     return;
 
-  if (!dimming_layer_.get()) {
+  if (!dimming_layer_) {
     dimming_layer_.reset(new ui::Layer(ui::LAYER_SOLID_COLOR));
     dimming_layer_->SetColor(SK_ColorBLACK);
     dimming_layer_->SetOpacity(0.0f);
@@ -58,9 +58,10 @@ void ScreenDimmer::SetDimming(bool should_dim) {
   dimming_layer_->SetOpacity(should_dim ? kDimmingLayerOpacity : 0.0f);
 }
 
-void ScreenDimmer::OnRootWindowResized(const aura::RootWindow* root,
-                                       const gfx::Size& old_size) {
-  if (dimming_layer_.get())
+void ScreenDimmer::OnWindowBoundsChanged(aura::Window* root,
+                                         const gfx::Rect& old_bounds,
+                                         const gfx::Rect& new_bounds) {
+  if (dimming_layer_)
     dimming_layer_->SetBounds(gfx::Rect(root->bounds().size()));
 }
 

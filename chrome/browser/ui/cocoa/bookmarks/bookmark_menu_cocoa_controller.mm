@@ -4,7 +4,7 @@
 
 #import "chrome/browser/ui/cocoa/bookmarks/bookmark_menu_cocoa_controller.h"
 
-#include "base/sys_string_conversions.h"
+#include "base/strings/sys_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"  // IDC_BOOKMARK_MENU
 #import "chrome/browser/app_controller_mac.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
@@ -13,10 +13,11 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
 #import "chrome/browser/ui/cocoa/bookmarks/bookmark_menu_bridge.h"
-#include "chrome/browser/ui/cocoa/event_utils.h"
-#include "chrome/browser/ui/cocoa/menu_controller.h"
+#import "chrome/browser/ui/cocoa/l10n_util.h"
 #include "chrome/browser/ui/host_desktop.h"
 #include "content/public/browser/user_metrics.h"
+#import "ui/base/cocoa/cocoa_event_utils.h"
+#import "ui/base/cocoa/menu_controller.h"
 
 using content::OpenURLParams;
 using content::Referrer;
@@ -40,14 +41,9 @@ const NSUInteger kMaximumMenuPixelsWide = 300;
 
 + (NSString*)tooltipForNode:(const BookmarkNode*)node {
   NSString* title = base::SysUTF16ToNSString(node->GetTitle());
-  std::string url_string = node->url().possibly_invalid_spec();
-  NSString* url = [NSString stringWithUTF8String:url_string.c_str()];
-  if ([title length] == 0)
-    return url;
-  else if ([url length] == 0 || [url isEqualToString:title])
-    return title;
-  else
-    return [NSString stringWithFormat:@"%@\n%@", title, url];
+  std::string urlString = node->url().possibly_invalid_spec();
+  NSString* url = base::SysUTF8ToNSString(urlString);
+  return cocoa_l10n_util::TooltipForURLAndTitle(url, title);
 }
 
 - (id)initWithBridge:(BookmarkMenuBridge*)bridge
@@ -98,7 +94,7 @@ const NSUInteger kMaximumMenuPixelsWide = 300;
         bridge_->GetProfile(), chrome::HOST_DESKTOP_TYPE_NATIVE));
   }
   WindowOpenDisposition disposition =
-      event_utils::WindowOpenDispositionFromNSEvent([NSApp currentEvent]);
+      ui::WindowOpenDispositionFromNSEvent([NSApp currentEvent]);
   OpenURLParams params(
       node->url(), Referrer(), disposition,
       content::PAGE_TRANSITION_AUTO_BOOKMARK, false);

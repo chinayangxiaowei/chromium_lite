@@ -8,27 +8,15 @@
 #include <vector>
 
 #include "ppapi/c/pp_var.h"
-#include "ppapi/cpp/dev/var_array_dev.h"
 #include "ppapi/cpp/extensions/from_var_converter.h"
 #include "ppapi/cpp/logging.h"
 #include "ppapi/cpp/pass_ref.h"
 #include "ppapi/cpp/var.h"
+#include "ppapi/cpp/var_array.h"
 
 namespace pp {
 namespace ext {
 namespace internal {
-
-// Base class for all those types within the pp::ext namespace that are used
-// with CompletionCallbackWithOutput. This class doesn't do anything itself,
-// but it affects the behavior of CallbackOutputTraits for all its subclasses.
-//
-// TODO(yzshen): Within pp::ext, basic types such as std::string or double may
-// be used with CompletionCallbackWithOutput as well. This approach doesn't
-// work for them. One way is to refactor CallbackOutputTraits to consider not
-// only the output C++ object type, but also the output parameter type that the
-// C interface uses. And then we can remove this class.
-class OutputObjectBase {
-};
 
 template <class T>
 class VarOutputAdapterWithStorage {
@@ -59,8 +47,15 @@ class VarOutputAdapterWithStorage {
       const VarOutputAdapterWithStorage<T>&);
 };
 
+// ExtCallbackOutputTraits is used with ExtCompletionCallbackWithOutput. Unlike
+// pp::internal::CallbackOutputTraits, it always uses PP_Var* as output
+// parameter type to interact with the browser.
+//
+// For example, CompletionCallbackWithOutput<double> (using
+// pp::internal::CallbackOutputTraits) uses double* as the output parameter
+// type; while ExtCompletionCallbackWithOutput<double> uses PP_Var*.
 template <class T>
-struct ExtensionsCallbackOutputTraits {
+struct ExtCallbackOutputTraits {
   typedef PP_Var* APIArgType;
   typedef VarOutputAdapterWithStorage<T> StorageType;
 
@@ -73,10 +68,12 @@ struct ExtensionsCallbackOutputTraits {
   static inline T& StorageToPluginArg(StorageType& t) {
     return t.output();
   }
+
+  static inline void Initialize(StorageType* /* t */) {}
 };
 
 // This class provides storage for a PP_Var and a vector of objects which are
-// of type T. The PP_Var is used as an output parameter to recevie an array var
+// of type T. The PP_Var is used as an output parameter to receive an array var
 // from the browser. Each element in the array var is converted to a T object,
 // using FromVarConverter, and stores in the vector.
 template <class T>
@@ -97,7 +94,7 @@ class ArrayVarOutputAdapterWithStorage {
     Var var(PASS_REF, pp_var_);
     pp_var_ = PP_MakeUndefined();
     if (var.is_array()) {
-      VarArray_Dev array(var);
+      VarArray array(var);
 
       uint32_t length = array.GetLength();
       output_storage_.reserve(length);
@@ -121,7 +118,7 @@ class ArrayVarOutputAdapterWithStorage {
 };
 
 template <class T>
-struct ExtensionsVectorCallbackOutputTraits {
+struct ExtCallbackOutputTraits< std::vector<T> > {
   typedef PP_Var* APIArgType;
   typedef ArrayVarOutputAdapterWithStorage<T> StorageType;
 
@@ -134,6 +131,8 @@ struct ExtensionsVectorCallbackOutputTraits {
   static inline std::vector<T>& StorageToPluginArg(StorageType& t) {
     return t.output();
   }
+
+  static inline void Initialize(StorageType* /* t */) {}
 };
 
 }  // namespace internal

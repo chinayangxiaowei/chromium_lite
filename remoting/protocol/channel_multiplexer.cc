@@ -164,14 +164,6 @@ class ChannelMultiplexer::MuxSocket : public net::StreamSocket,
   virtual bool UsingTCPFastOpen() const OVERRIDE {
     return false;
   }
-  virtual int64 NumBytesRead() const OVERRIDE {
-    NOTIMPLEMENTED();
-    return 0;
-  }
-  virtual base::TimeDelta GetConnectTimeMicros() const OVERRIDE {
-    NOTIMPLEMENTED();
-    return base::TimeDelta();
-  }
   virtual bool WasNpnNegotiated() const OVERRIDE {
     return false;
   }
@@ -352,7 +344,7 @@ void ChannelMultiplexer::MuxSocket::OnWriteFailed() {
 
 void ChannelMultiplexer::MuxSocket::OnPacketReceived() {
   if (!read_callback_.is_null()) {
-    int result = channel_->DoRead(read_buffer_, read_buffer_size_);
+    int result = channel_->DoRead(read_buffer_.get(), read_buffer_size_);
     read_buffer_ = NULL;
     DCHECK_GT(result, 0);
     net::CompletionCallback cb;
@@ -366,7 +358,7 @@ ChannelMultiplexer::ChannelMultiplexer(ChannelFactory* factory,
     : base_channel_factory_(factory),
       base_channel_name_(base_channel_name),
       next_channel_id_(0),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {
+      weak_factory_(this) {
 }
 
 ChannelMultiplexer::~ChannelMultiplexer() {

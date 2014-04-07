@@ -8,9 +8,8 @@
 
 #include "base/format_macros.h"
 #include "base/logging.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
-#include "googleurl/src/gurl.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "net/base/net_errors.h"
 #include "net/base/net_log.h"
 #include "net/base/net_log_unittest.h"
@@ -22,6 +21,7 @@
 #include "net/proxy/proxy_resolver.h"
 #include "net/proxy/proxy_script_fetcher.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/gurl.h"
 
 // TODO(eroman): Write a test which exercises
 //              ProxyService::SuspendAllPendingRequests().
@@ -1723,7 +1723,7 @@ TEST_F(ProxyServiceTest, FallbackFromAutodetectToCustomPac) {
   // the script download.
   EXPECT_TRUE(fetcher->has_pending_request());
   EXPECT_EQ(GURL("http://wpad/wpad.dat"), fetcher->pending_request_url());
-  fetcher->NotifyFetchCompletion(ERR_FAILED, "");
+  fetcher->NotifyFetchCompletion(ERR_FAILED, std::string());
 
   // Next it should be trying the custom PAC url.
   EXPECT_TRUE(fetcher->has_pending_request());
@@ -1872,12 +1872,12 @@ TEST_F(ProxyServiceTest, FallbackFromAutodetectToCustomToManual) {
   // It should be trying to auto-detect first -- fail the download.
   EXPECT_TRUE(fetcher->has_pending_request());
   EXPECT_EQ(GURL("http://wpad/wpad.dat"), fetcher->pending_request_url());
-  fetcher->NotifyFetchCompletion(ERR_FAILED, "");
+  fetcher->NotifyFetchCompletion(ERR_FAILED, std::string());
 
   // Next it should be trying the custom PAC url -- fail the download.
   EXPECT_TRUE(fetcher->has_pending_request());
   EXPECT_EQ(GURL("http://foopy/proxy.pac"), fetcher->pending_request_url());
-  fetcher->NotifyFetchCompletion(ERR_FAILED, "");
+  fetcher->NotifyFetchCompletion(ERR_FAILED, std::string());
 
   // Since we never managed to initialize a ProxyResolver, nothing should have
   // been sent to it.
@@ -2156,7 +2156,7 @@ TEST_F(ProxyServiceTest, NetworkChangeTriggersPacRefetch) {
   // going to return the same PAC URL as before, but this URL needs to be
   // refetched on the new network.
   NetworkChangeNotifier::NotifyObserversOfIPAddressChangeForTests();
-  MessageLoop::current()->RunUntilIdle();  // Notification happens async.
+  base::MessageLoop::current()->RunUntilIdle();  // Notification happens async.
 
   // Start a second request.
   ProxyInfo info2;
@@ -2251,7 +2251,7 @@ TEST_F(ProxyServiceTest, PACScriptRefetchAfterFailure) {
   //
   // We simulate a failed download attempt, the proxy service should now
   // fall-back to DIRECT connections.
-  fetcher->NotifyFetchCompletion(ERR_FAILED, "");
+  fetcher->NotifyFetchCompletion(ERR_FAILED, std::string());
 
   ASSERT_TRUE(resolver->pending_requests().empty());
 
@@ -2278,7 +2278,7 @@ TEST_F(ProxyServiceTest, PACScriptRefetchAfterFailure) {
   EXPECT_EQ(GURL("http://foopy/proxy.pac"), fetcher->pending_request_url());
   fetcher->NotifyFetchCompletion(OK, kValidPacScript1);
 
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
 
   // Now that the PAC script is downloaded, it should be used to initialize the
   // ProxyResolver. Simulate a successful parse.
@@ -2390,7 +2390,7 @@ TEST_F(ProxyServiceTest, PACScriptRefetchAfterContentChange) {
   EXPECT_EQ(GURL("http://foopy/proxy.pac"), fetcher->pending_request_url());
   fetcher->NotifyFetchCompletion(OK, kValidPacScript2);
 
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
 
   // Now that the PAC script is downloaded, it should be used to initialize the
   // ProxyResolver. Simulate a successful parse.
@@ -2500,7 +2500,7 @@ TEST_F(ProxyServiceTest, PACScriptRefetchAfterContentUnchanged) {
   EXPECT_EQ(GURL("http://foopy/proxy.pac"), fetcher->pending_request_url());
   fetcher->NotifyFetchCompletion(OK, kValidPacScript1);
 
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
 
   ASSERT_FALSE(resolver->has_pending_set_pac_script_request());
 
@@ -2604,9 +2604,9 @@ TEST_F(ProxyServiceTest, PACScriptRefetchAfterSuccess) {
   // to download the script.
   EXPECT_TRUE(fetcher->has_pending_request());
   EXPECT_EQ(GURL("http://foopy/proxy.pac"), fetcher->pending_request_url());
-  fetcher->NotifyFetchCompletion(ERR_FAILED, "");
+  fetcher->NotifyFetchCompletion(ERR_FAILED, std::string());
 
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
 
   // At this point the ProxyService should have re-configured itself to use
   // DIRECT connections rather than the given proxy resolver.
@@ -2771,11 +2771,11 @@ TEST_F(ProxyServiceTest, PACScriptRefetchAfterActivity) {
   EXPECT_EQ(GURL("http://foopy/proxy.pac"), fetcher->pending_request_url());
 
   // This time we will fail the download, to simulate a PAC script change.
-  fetcher->NotifyFetchCompletion(ERR_FAILED, "");
+  fetcher->NotifyFetchCompletion(ERR_FAILED, std::string());
 
   // Drain the message loop, so ProxyService is notified of the change
   // and has a chance to re-configure itself.
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
 
   // Start a third request -- this time we expect to get a direct connection
   // since the PAC script poller experienced a failure.

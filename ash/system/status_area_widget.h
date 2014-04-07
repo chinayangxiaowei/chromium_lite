@@ -22,6 +22,8 @@ class StatusAreaWidgetDelegate;
 
 class ASH_EXPORT StatusAreaWidget : public views::Widget {
  public:
+  static const char kNativeViewName[];
+
   explicit StatusAreaWidget(aura::Window* status_container);
   virtual ~StatusAreaWidget();
 
@@ -34,9 +36,6 @@ class ASH_EXPORT StatusAreaWidget : public views::Widget {
 
   // Update the alignment of the widget and tray views.
   void SetShelfAlignment(ShelfAlignment alignment);
-
-  // Set the visibility state of web notifications.
-  void SetHideWebNotifications(bool hide);
 
   // Set the visibility of system notifications.
   void SetHideSystemNotifications(bool hide);
@@ -66,6 +65,9 @@ class ASH_EXPORT StatusAreaWidget : public views::Widget {
 
   // True if any message bubble is shown.
   bool IsMessageBubbleShown() const;
+
+  // Overridden from views::Widget:
+  virtual void OnNativeWidgetActivationChanged(bool active) OVERRIDE;
 
  private:
   void AddSystemTray();

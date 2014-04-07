@@ -6,16 +6,19 @@
 
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/singleton.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/profiles/incognito_helpers.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_dependency_manager.h"
 #include "chrome/browser/webdata/web_data_service_factory.h"
-#include "components/autofill/browser/personal_data_manager.h"
+#include "components/autofill/core/browser/personal_data_manager.h"
+#include "components/browser_context_keyed_service/browser_context_dependency_manager.h"
 
+namespace autofill {
 namespace {
 
 class PersonalDataManagerServiceImpl : public PersonalDataManagerService {
  public:
-  PersonalDataManagerServiceImpl(Profile* profile);
+  explicit PersonalDataManagerServiceImpl(Profile* profile);
   virtual ~PersonalDataManagerServiceImpl();
 
   // PersonalDataManagerService:
@@ -28,7 +31,8 @@ class PersonalDataManagerServiceImpl : public PersonalDataManagerService {
 
 PersonalDataManagerServiceImpl::PersonalDataManagerServiceImpl(
     Profile* profile) {
-  personal_data_manager_.reset(new PersonalDataManager());
+  personal_data_manager_.reset(new PersonalDataManager(
+      g_browser_process->GetApplicationLocale()));
   personal_data_manager_->Init(profile);
 }
 
@@ -49,7 +53,7 @@ PersonalDataManager* PersonalDataManagerFactory::GetForProfile(
     Profile* profile) {
   PersonalDataManagerService* service =
       static_cast<PersonalDataManagerService*>(
-          GetInstance()->GetServiceForProfile(profile, true));
+          GetInstance()->GetServiceForBrowserContext(profile, true));
 
   if (service)
     return service->GetPersonalDataManager();
@@ -64,17 +68,25 @@ PersonalDataManagerFactory* PersonalDataManagerFactory::GetInstance() {
 }
 
 PersonalDataManagerFactory::PersonalDataManagerFactory()
-    : ProfileKeyedServiceFactory("PersonalDataManager",
-                                 ProfileDependencyManager::GetInstance()) {
+    : BrowserContextKeyedServiceFactory(
+        "PersonalDataManager",
+        BrowserContextDependencyManager::GetInstance()) {
   DependsOn(WebDataServiceFactory::GetInstance());
 }
 
 PersonalDataManagerFactory::~PersonalDataManagerFactory() {
 }
 
-ProfileKeyedService* PersonalDataManagerFactory::BuildServiceInstanceFor(
-    Profile* profile) const {
+BrowserContextKeyedService* PersonalDataManagerFactory::BuildServiceInstanceFor(
+    content::BrowserContext* profile) const {
   PersonalDataManagerService* service =
-      new PersonalDataManagerServiceImpl(profile);
+      new PersonalDataManagerServiceImpl(static_cast<Profile*>(profile));
   return service;
 }
+
+content::BrowserContext* PersonalDataManagerFactory::GetBrowserContextToUse(
+    content::BrowserContext* context) const {
+  return chrome::GetBrowserContextOwnInstanceInIncognito(context);
+}
+
+}  // namespace autofill

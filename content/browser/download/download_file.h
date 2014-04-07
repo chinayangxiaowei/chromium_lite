@@ -64,7 +64,6 @@ class CONTENT_EXPORT DownloadFile {
 
   virtual base::FilePath FullPath() const = 0;
   virtual bool InProgress() const = 0;
-  virtual int64 BytesSoFar() const = 0;
   virtual int64 CurrentSpeed() const = 0;
 
   // Set |hash| with sha256 digest for the file.
@@ -73,6 +72,11 @@ class CONTENT_EXPORT DownloadFile {
 
   // Returns the current (intermediate) state of the hash as a byte string.
   virtual std::string GetHashState() = 0;
+
+  // Set the application GUID to be used to identify the app to the
+  // system AV function when scanning downloaded files. Should be called
+  // before RenameAndAnnotate() to take effect.
+  virtual void SetClientGuid(const std::string& guid) = 0;
 
   // For testing.  Must be called on FILE thread.
   // TODO(rdsmith): Replace use of EnsureNoPendingDownloads()

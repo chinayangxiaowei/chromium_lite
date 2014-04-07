@@ -27,32 +27,8 @@ namespace chromeos {
 // LP instance ownership. LP waits for online login result.
 // If auth is succeeded, cookie fetcher is executed, LP instance deletes itself.
 //
-// If online login operation fails that means:
-// (1) User password has changed. Ask user for the new password.
-// (2) User password has changed and/or CAPTCHA input is required.
-// (3) User account is deleted/disabled/not signed up.
-// (4) Timeout/service unavailable/connection failed.
-//
-// Actions:
-// (1)-(3): Request screen lock.
-// (1) Ask for new user password.
-// (2) Ask for new user password and/or CAPTCHA.
-// (3) Display error message and allow "Sign Out" as the only action.
-// (4) Delete LP instance since offline auth was OK.
-//
-// If |delegate_| is not NULL it will handle error messages,
-// CAPTCHA dialog, password input.
-// If |delegate_| is NULL that does mean that LoginPerformer instance
-// is waiting for successful online login or blocked on online login failure.
-// In case of failure password/captcha
-// input & error messages display is dedicated to ScreenLocker instance.
-//
-// 2 things make LoginPerfrormer instance exist longer:
-// 1. ScreenLock active (pending correct new password input)
-// 2. Pending online auth request.
-// TODO(nkostylev): Cleanup ClientLogin related code, update class description.
+// If |delegate_| is not NULL it will handle error messages, password input.
 class LoginPerformer : public LoginStatusConsumer,
-                       public content::NotificationObserver,
                        public OnlineAttemptHost::Delegate {
  public:
   typedef enum AuthorizationMode {
@@ -74,36 +50,25 @@ class LoginPerformer : public LoginStatusConsumer,
   explicit LoginPerformer(Delegate* delegate);
   virtual ~LoginPerformer();
 
-  // Returns the default instance if it has been created.
-  // This instance is owned by delegate_ till it's destroyed.
-  // When LP instance lives by itself it's used by ScreenLocker instance.
-  static LoginPerformer* default_performer() {
-    return default_performer_;
-  }
-
   // LoginStatusConsumer implementation:
   virtual void OnLoginFailure(const LoginFailure& error) OVERRIDE;
-  virtual void OnRetailModeLoginSuccess() OVERRIDE;
+  virtual void OnRetailModeLoginSuccess(
+      const UserContext& user_context) OVERRIDE;
   virtual void OnLoginSuccess(
-      const UserCredentials& credentials,
+      const UserContext& user_context,
       bool pending_requests,
       bool using_oauth) OVERRIDE;
   virtual void OnOffTheRecordLoginSuccess() OVERRIDE;
   virtual void OnPasswordChangeDetected() OVERRIDE;
 
-  // Performs a login for |credentials|.
+  // Performs a login for |user_context|.
   // If auth_mode is AUTH_MODE_EXTENSION, there are no further auth checks,
   // AUTH_MODE_INTERNAL will perform auth checks.
-  void PerformLogin(const UserCredentials& credentials,
+  void PerformLogin(const UserContext& user_context,
                     AuthorizationMode auth_mode);
 
-  // Performs locally managed user creation and login.
-  void CreateLocallyManagedUser(const string16& display_name,
-                                const std::string& password);
-
-  // Performs locally managed user login with a given |username| and |password|.
-  // Managed user creation should be done with CreateLocallyManagedUser().
-  void LoginAsLocallyManagedUser(const UserCredentials& credentials);
+  // Performs locally managed user login with a given |user_context|.
+  void LoginAsLocallyManagedUser(const UserContext& user_context);
 
   // Performs retail mode login.
   void LoginRetailMode();
@@ -123,11 +88,6 @@ class LoginPerformer : public LoginStatusConsumer,
   // Returns latest auth error.
   const GoogleServiceAuthError& error() const {
     return last_login_failure_.error();
-  }
-
-  // True if last login operation has timed out.
-  bool login_timed_out() {
-    return last_login_failure_.reason() == LoginFailure::LOGIN_TIMED_OUT;
   }
 
   // True if password change has been detected.
@@ -151,40 +111,11 @@ class LoginPerformer : public LoginStatusConsumer,
   virtual void OnChecked(const std::string& username, bool success) OVERRIDE;
 
  private:
-  // content::NotificationObserver implementation:
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
-
-  // Requests screen lock and subscribes to screen lock notifications.
-  void RequestScreenLock();
-
-  // Requests screen unlock.
-  void RequestScreenUnlock();
-
-  // Resolves initial LoginFailure::NETWORK_AUTH_FAILED error i.e.
-  // when screen is not locked yet.
-  void ResolveInitialNetworkAuthFailure();
-
-  // Resolves LoginFailure when screen is locked.
-  void ResolveLockLoginFailure();
-
-  // Resolves LoginFailure::NETWORK_AUTH_FAILED error when screen is locked.
-  // Uses ScreenLocker to show error message based on |last_login_failure_|.
-  void ResolveLockNetworkAuthFailure();
-
-  // Resolve ScreenLock changed state.
-  void ResolveScreenLocked();
-  void ResolveScreenUnlocked();
-
   // Starts login completion of externally authenticated user.
   void StartLoginCompletion();
 
   // Starts authentication.
   void StartAuthentication();
-
-  // Default performer. Will be used by ScreenLocker.
-  static LoginPerformer* default_performer_;
 
   // Used for logging in.
   scoped_refptr<Authenticator> authenticator_;
@@ -197,7 +128,7 @@ class LoginPerformer : public LoginStatusConsumer,
   LoginFailure last_login_failure_;
 
   // User credentials for the current login attempt.
-  UserCredentials credentials_;
+  UserContext user_context_;
 
   // Notifications receiver.
   Delegate* delegate_;
@@ -206,18 +137,6 @@ class LoginPerformer : public LoginStatusConsumer,
   // Once correct password is entered homedir migration is executed.
   bool password_changed_;
   int password_changed_callback_count_;
-
-  // Used for ScreenLock notifications.
-  content::NotificationRegistrar registrar_;
-
-  // True if LoginPerformer has requested screen lock. Used to distinguish
-  // such requests with cases when screen is locked on its own.
-  bool screen_lock_requested_;
-
-  // True if LoginPerformer instance is waiting for the initial (very first one)
-  // online authentication response. Used to distinguish cases when screen
-  // is locked during that stage. No need to resolve screen lock action then.
-  bool initial_online_auth_pending_;
 
   // Authorization mode type.
   AuthorizationMode auth_mode_;

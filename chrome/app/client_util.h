@@ -10,7 +10,7 @@
 
 #include <windows.h>
 
-#include "base/string16.h"
+#include "base/strings/string16.h"
 
 namespace sandbox {
   struct SandboxInterfaceInfo;
@@ -18,6 +18,10 @@ namespace sandbox {
 
 // Gets the path of the current exe with a trailing backslash.
 string16 GetExecutablePath();
+
+// Returns the version in the current module's version resource or the empty
+// string if none found.
+string16 GetCurrentModuleVersion();
 
 // Implements the common aspects of loading chrome.dll for both chrome and
 // chromium scenarios, which are in charge of implementing two abstract
@@ -33,9 +37,6 @@ class MainDllLoader {
   // The return value is what the main entry point of chrome.dll returns
   // upon termination.
   int Launch(HINSTANCE instance, sandbox::SandboxInterfaceInfo* sbox_info);
-
-  // Look into the registry to find the latest version.
-  string16 GetVersion();
 
   // Launches a new instance of the browser if the current instance in
   // persistent mode an upgrade is detected.

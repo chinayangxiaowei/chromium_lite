@@ -20,13 +20,13 @@ class MockCloudPolicyClient : public CloudPolicyClient {
   virtual ~MockCloudPolicyClient();
 
   MOCK_METHOD2(SetupRegistration, void(const std::string&, const std::string&));
-  MOCK_METHOD4(Register, void(
+  MOCK_METHOD5(Register, void(
       enterprise_management::DeviceRegisterRequest::Type type,
-      const std::string&,
-      const std::string&,
-      bool));
+      const std::string&, const std::string&, bool, const std::string&));
   MOCK_METHOD0(FetchPolicy, void(void));
   MOCK_METHOD0(Unregister, void(void));
+  MOCK_METHOD2(UploadCertificate,
+               void(const std::string&, const StatusCallback&));
 
   // Sets the DMToken.
   void SetDMToken(const std::string& token);
@@ -50,6 +50,9 @@ class MockCloudPolicyClient : public CloudPolicyClient {
   using CloudPolicyClient::public_key_version_;
   using CloudPolicyClient::public_key_version_valid_;
   using CloudPolicyClient::namespaces_to_fetch_;
+  using CloudPolicyClient::invalidation_version_;
+  using CloudPolicyClient::invalidation_payload_;
+  using CloudPolicyClient::fetched_invalidation_version_;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(MockCloudPolicyClient);
@@ -62,6 +65,7 @@ class MockCloudPolicyClientObserver : public CloudPolicyClient::Observer {
 
   MOCK_METHOD1(OnPolicyFetched, void(CloudPolicyClient*));
   MOCK_METHOD1(OnRegistrationStateChanged, void(CloudPolicyClient*));
+  MOCK_METHOD1(OnRobotAuthCodesFetched, void(CloudPolicyClient*));
   MOCK_METHOD1(OnClientError, void(CloudPolicyClient*));
 
  private:

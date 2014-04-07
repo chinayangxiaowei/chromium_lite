@@ -7,8 +7,6 @@
 
 #include "ui/gfx/native_widget_types.h"
 
-class AutofillPopupController;
-
 namespace gfx {
 class Rect;
 }
@@ -17,12 +15,20 @@ namespace ui {
 class KeyEvent;
 }
 
+namespace autofill {
+
+class AutofillPopupController;
+
 // The interface for creating and controlling a platform-dependent
 // AutofillPopupView.
 class AutofillPopupView {
  public:
   // The size of the border around the entire results popup, in pixels.
   static const int kBorderThickness = 1;
+
+  // The minimum amount of padding between the Autofill name and subtext,
+  // in pixels.
+  static const size_t kNamePadding = 15;
 
   // The amount of padding between icons in pixels.
   static const int kIconPadding = 5;
@@ -46,9 +52,7 @@ class AutofillPopupView {
   virtual void Show() = 0;
 
   // Hides the popup from view. This will cause the popup to be deleted.
-  // TODO(csharp): Make Hide a pure virtual function again, once hide_call_ is
-  // removed.
-  virtual void Hide();
+  virtual void Hide() = 0;
 
   // Invalidates the given row and redraw it.
   virtual void InvalidateRow(size_t row) = 0;
@@ -60,14 +64,9 @@ class AutofillPopupView {
   static AutofillPopupView* Create(AutofillPopupController* controller);
 
  protected:
-  AutofillPopupView();
-  virtual ~AutofillPopupView();
-
- private:
-  // Used to check that the hide function was called, to check that the class
-  // is only destroyed through the Hide function. Remove after Dev channel
-  // release.
-  bool hide_called_;
+  virtual ~AutofillPopupView() {}
 };
+
+}  // namespace autofill
 
 #endif  // CHROME_BROWSER_UI_AUTOFILL_AUTOFILL_POPUP_VIEW_H_

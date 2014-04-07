@@ -8,15 +8,14 @@
 
 #include "base/json/json_string_value_serializer.h"
 #include "base/logging.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/threading/platform_thread.h"
-#include "base/utf_string_conversions.h"
 #include "chrome/common/automation_constants.h"
 #include "chrome/common/automation_messages.h"
-#include "chrome/test/automation/automation_json_requests.h"
 #include "chrome/test/automation/automation_proxy.h"
 #include "chrome/test/automation/browser_proxy.h"
-#include "googleurl/src/gurl.h"
+#include "url/gurl.h"
 
 TabProxy::TabProxy(AutomationMessageSender* sender,
                    AutomationHandleTracker* tracker,
@@ -369,22 +368,6 @@ bool TabProxy::OverrideEncoding(const std::string& encoding) {
   return succeeded;
 }
 
-bool TabProxy::CaptureEntirePageAsPNG(const base::FilePath& path) {
-  if (!is_valid())
-    return false;
-
-  int browser_index, tab_index;
-  automation::Error error;
-  if (!SendGetIndicesFromTabHandleJSONRequest(
-         sender_, handle_, &browser_index, &tab_index, &error)) {
-    return false;
-  }
-
-  return SendCaptureEntirePageJSONRequest(
-      sender_, WebViewLocator::ForIndexPair(browser_index, tab_index),
-      path, &error);
-}
-
 #if defined(OS_WIN)
 void TabProxy::Reposition(HWND window, HWND window_insert_after, int left,
                           int top, int width, int height, int flags,
@@ -426,10 +409,6 @@ void TabProxy::Copy() {
 
 void TabProxy::Paste() {
   sender_->Send(new AutomationMsg_Paste(handle_));
-}
-
-void TabProxy::SimulateKeyPress(ui::KeyboardCode key) {
-  sender_->Send(new AutomationMsg_KeyPress(handle_, key));
 }
 
 void TabProxy::ReloadAsync() {

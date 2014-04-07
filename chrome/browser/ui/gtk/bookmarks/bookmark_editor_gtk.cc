@@ -11,14 +11,13 @@
 #include "base/basictypes.h"
 #include "base/logging.h"
 #include "base/prefs/pref_service.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/bookmarks/bookmark_expanded_state_tracker.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/bookmarks/bookmark_utils.h"
 #include "chrome/browser/history/history_service.h"
-#include "chrome/browser/net/url_fixer_upper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/bookmarks/bookmark_utils.h"
 #include "chrome/browser/ui/gtk/bookmarks/bookmark_tree_model.h"
@@ -26,8 +25,8 @@
 #include "chrome/browser/ui/gtk/gtk_theme_service.h"
 #include "chrome/browser/ui/gtk/gtk_util.h"
 #include "chrome/browser/ui/gtk/menu_gtk.h"
+#include "chrome/common/net/url_fixer_upper.h"
 #include "components/user_prefs/user_prefs.h"
-#include "googleurl/src/gurl.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "grit/locale_settings.h"
@@ -37,6 +36,7 @@
 #include "ui/gfx/gtk_util.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/point.h"
+#include "url/gurl.h"
 
 namespace {
 
@@ -360,9 +360,8 @@ void BookmarkEditorGtk::Init(GtkWindow* parent_window) {
   GtkWidget* table;
   if (details_.GetNodeType() != BookmarkNode::FOLDER) {
     url_entry_ = gtk_entry_new();
-    PrefService* prefs = profile_ ?
-        components::UserPrefs::Get(profile_) :
-        NULL;
+    PrefService* prefs =
+      profile_ ? user_prefs::UserPrefs::Get(profile_) :  NULL;
     gtk_entry_set_text(
         GTK_ENTRY(url_entry_),
         UTF16ToUTF8(chrome::FormatBookmarkURLForDisplay(url, prefs)).c_str());
@@ -497,6 +496,10 @@ void BookmarkEditorGtk::BookmarkNodeRemoved(BookmarkModel* model,
   }
 }
 
+void BookmarkEditorGtk::BookmarkAllNodesRemoved(BookmarkModel* model) {
+  Reset();
+}
+
 void BookmarkEditorGtk::BookmarkNodeChildrenReordered(
     BookmarkModel* model, const BookmarkNode* node) {
   Reset();
@@ -520,7 +523,7 @@ string16 BookmarkEditorGtk::GetInputTitle() const {
 }
 
 void BookmarkEditorGtk::ApplyEdits() {
-  DCHECK(bb_model_->IsLoaded());
+  DCHECK(bb_model_->loaded());
 
   GtkTreeIter currently_selected_iter;
   if (show_tree_) {
@@ -546,7 +549,7 @@ void BookmarkEditorGtk::ApplyEdits(GtkTreeIter* selected_parent) {
   if (!show_tree_ || !selected_parent) {
     // TODO: this is wrong. Just because there is no selection doesn't mean new
     // folders weren't added.
-    bookmark_utils::ApplyEditsWithNoFolderChange(
+    BookmarkEditor::ApplyEditsWithNoFolderChange(
         bb_model_, parent_, details_, new_title, new_url);
     return;
   }
@@ -569,7 +572,7 @@ void BookmarkEditorGtk::ApplyEdits(GtkTreeIter* selected_parent) {
     return;
   }
 
-  bookmark_utils::ApplyEditsWithPossibleFolderChange(
+  BookmarkEditor::ApplyEditsWithPossibleFolderChange(
       bb_model_, new_parent, details_, new_title, new_url);
 
   // Remove the folders that were removed. This has to be done after all the
@@ -615,7 +618,7 @@ gboolean BookmarkEditorGtk::OnWindowDeleteEvent(GtkWidget* widget,
 }
 
 void BookmarkEditorGtk::OnWindowDestroy(GtkWidget* widget) {
-  MessageLoop::current()->DeleteSoon(FROM_HERE, this);
+  base::MessageLoop::current()->DeleteSoon(FROM_HERE, this);
 }
 
 void BookmarkEditorGtk::OnEntryChanged(GtkWidget* entry) {

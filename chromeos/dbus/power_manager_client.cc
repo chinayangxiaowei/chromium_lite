@@ -8,25 +8,26 @@
 
 #include "base/bind.h"
 #include "base/callback.h"
+#include "base/command_line.h"
 #include "base/format_macros.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/observer_list.h"
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "base/threading/platform_thread.h"
-#include "base/time.h"
-#include "base/timer.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
+#include "chromeos/chromeos_switches.h"
 #include "chromeos/dbus/power_manager/input_event.pb.h"
+#include "chromeos/dbus/power_manager/peripheral_battery_status.pb.h"
 #include "chromeos/dbus/power_manager/policy.pb.h"
+#include "chromeos/dbus/power_manager/power_supply_properties.pb.h"
 #include "chromeos/dbus/power_manager/suspend.pb.h"
-#include "chromeos/dbus/power_supply_properties.pb.h"
-#include "chromeos/dbus/video_activity_update.pb.h"
 #include "dbus/bus.h"
 #include "dbus/message.h"
 #include "dbus/object_path.h"
 #include "dbus/object_proxy.h"
-#include "third_party/cros_system_api/dbus/service_constants.h"
 
 namespace chromeos {
 
@@ -48,6 +49,7 @@ class PowerManagerClientImpl : public PowerManagerClient {
         pending_suspend_id_(-1),
         suspend_is_pending_(false),
         num_pending_suspend_readiness_callbacks_(0),
+        last_is_projecting_(false),
         weak_ptr_factory_(this) {
     power_manager_proxy_ = bus->GetObjectProxy(
         power_manager::kPowerManagerServiceName,
@@ -70,6 +72,14 @@ class PowerManagerClientImpl : public PowerManagerClient {
 
     power_manager_proxy_->ConnectToSignal(
         power_manager::kPowerManagerInterface,
+        power_manager::kPeripheralBatteryStatusSignal,
+        base::Bind(&PowerManagerClientImpl::PeripheralBatteryStatusReceived,
+                   weak_ptr_factory_.GetWeakPtr()),
+        base::Bind(&PowerManagerClientImpl::SignalConnected,
+                   weak_ptr_factory_.GetWeakPtr()));
+
+    power_manager_proxy_->ConnectToSignal(
+        power_manager::kPowerManagerInterface,
         power_manager::kPowerSupplyPollSignal,
         base::Bind(&PowerManagerClientImpl::PowerSupplyPollReceived,
                    weak_ptr_factory_.GetWeakPtr()),
@@ -81,15 +91,6 @@ class PowerManagerClientImpl : public PowerManagerClient {
         power_manager::kIdleNotifySignal,
         base::Bind(&PowerManagerClientImpl::IdleNotifySignalReceived,
                    weak_ptr_factory_.GetWeakPtr()),
-        base::Bind(&PowerManagerClientImpl::SignalConnected,
-                   weak_ptr_factory_.GetWeakPtr()));
-
-    power_manager_proxy_->ConnectToSignal(
-        power_manager::kPowerManagerInterface,
-        power_manager::kSoftwareScreenDimmingRequestedSignal,
-        base::Bind(
-            &PowerManagerClientImpl::SoftwareScreenDimmingRequestedReceived,
-            weak_ptr_factory_.GetWeakPtr()),
         base::Bind(&PowerManagerClientImpl::SignalConnected,
                    weak_ptr_factory_.GetWeakPtr()));
 
@@ -215,7 +216,7 @@ class PowerManagerClientImpl : public PowerManagerClient {
                    weak_ptr_factory_.GetWeakPtr(), callback));
   }
 
-  virtual void RequestStatusUpdate(UpdateRequestType update_type) OVERRIDE {
+  virtual void RequestStatusUpdate() OVERRIDE {
     dbus::MethodCall method_call(
         power_manager::kPowerManagerInterface,
         power_manager::kGetPowerSupplyPropertiesMethod);
@@ -246,27 +247,27 @@ class PowerManagerClientImpl : public PowerManagerClient {
         dbus::ObjectProxy::EmptyResponseCallback());
   }
 
-  virtual void NotifyUserActivity() OVERRIDE {
-    SimpleMethodCallToPowerManager(power_manager::kHandleUserActivityMethod);
+  virtual void NotifyUserActivity(
+      power_manager::UserActivityType type) OVERRIDE {
+    dbus::MethodCall method_call(
+        power_manager::kPowerManagerInterface,
+        power_manager::kHandleUserActivityMethod);
+    dbus::MessageWriter writer(&method_call);
+    writer.AppendInt32(type);
+
+    power_manager_proxy_->CallMethod(
+        &method_call,
+        dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
+        dbus::ObjectProxy::EmptyResponseCallback());
   }
 
-  virtual void NotifyVideoActivity(
-      const base::TimeTicks& last_activity_time,
-      bool is_fullscreen) OVERRIDE {
+  virtual void NotifyVideoActivity(bool is_fullscreen) OVERRIDE {
     dbus::MethodCall method_call(
         power_manager::kPowerManagerInterface,
         power_manager::kHandleVideoActivityMethod);
     dbus::MessageWriter writer(&method_call);
+    writer.AppendBool(is_fullscreen);
 
-    VideoActivityUpdate protobuf;
-    protobuf.set_last_activity_time(last_activity_time.ToInternalValue());
-    protobuf.set_is_fullscreen(is_fullscreen);
-
-    if (!writer.AppendProtoAsArrayOfBytes(protobuf)) {
-      LOG(ERROR) << "Error calling "
-                 << power_manager::kHandleVideoActivityMethod;
-      return;
-    }
     power_manager_proxy_->CallMethod(
         &method_call,
         dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
@@ -299,6 +300,7 @@ class PowerManagerClientImpl : public PowerManagerClient {
         &method_call,
         dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
         dbus::ObjectProxy::EmptyResponseCallback());
+    last_is_projecting_ = is_projecting;
   }
 
   virtual base::Closure GetSuspendReadinessCallback() OVERRIDE {
@@ -336,6 +338,7 @@ class PowerManagerClientImpl : public PowerManagerClient {
   void NameOwnerChangedReceived(dbus::Signal* signal) {
     VLOG(1) << "Power manager restarted";
     RegisterSuspendDelay();
+    SetIsProjecting(last_is_projecting_);
     FOR_EACH_OBSERVER(Observer, observers_, PowerManagerRestarted());
   }
 
@@ -355,9 +358,36 @@ class PowerManagerClientImpl : public PowerManagerClient {
                       BrightnessChanged(brightness_level, user_initiated));
   }
 
-  void PowerSupplyPollReceived(dbus::Signal* unused_signal) {
+  void PeripheralBatteryStatusReceived(dbus::Signal* signal) {
+    dbus::MessageReader reader(signal);
+    power_manager::PeripheralBatteryStatus protobuf_status;
+    if (!reader.PopArrayOfBytesAsProto(&protobuf_status)) {
+      LOG(ERROR) << "Unable to decode protocol buffer from "
+                 << power_manager::kPeripheralBatteryStatusSignal << " signal";
+      return;
+    }
+
+    std::string path = protobuf_status.path();
+    std::string name = protobuf_status.name();
+    int level = protobuf_status.has_level() ? protobuf_status.level() : -1;
+
+    VLOG(1) << "Device battery status received " << level
+            << " for " << name << " at " << path;
+
+    FOR_EACH_OBSERVER(Observer, observers_,
+                      PeripheralBatteryStatusReceived(path, name, level));
+  }
+
+  void PowerSupplyPollReceived(dbus::Signal* signal) {
     VLOG(1) << "Received power supply poll signal.";
-    RequestStatusUpdate(UPDATE_POLL);
+    dbus::MessageReader reader(signal);
+    power_manager::PowerSupplyProperties protobuf;
+    if (reader.PopArrayOfBytesAsProto(&protobuf)) {
+      FOR_EACH_OBSERVER(Observer, observers_, PowerChanged(protobuf));
+    } else {
+      LOG(ERROR) << "Unable to decode "
+                 << power_manager::kPowerSupplyPollSignal << "signal";
+    }
   }
 
   void OnGetPowerSupplyPropertiesMethod(dbus::Response* response) {
@@ -368,30 +398,14 @@ class PowerManagerClientImpl : public PowerManagerClient {
     }
 
     dbus::MessageReader reader(response);
-    PowerSupplyProperties protobuf;
-    if (!reader.PopArrayOfBytesAsProto(&protobuf)) {
-      LOG(ERROR) << "Error calling "
+    power_manager::PowerSupplyProperties protobuf;
+    if (reader.PopArrayOfBytesAsProto(&protobuf)) {
+      FOR_EACH_OBSERVER(Observer, observers_, PowerChanged(protobuf));
+    } else {
+      LOG(ERROR) << "Unable to decode "
                  << power_manager::kGetPowerSupplyPropertiesMethod
-                 << response->ToString();
-      return;
+                 << " response";
     }
-
-    PowerSupplyStatus status;
-    status.line_power_on = protobuf.line_power_on();
-    status.battery_seconds_to_empty = protobuf.battery_time_to_empty();
-    status.battery_seconds_to_full = protobuf.battery_time_to_full();
-    status.averaged_battery_time_to_empty =
-        protobuf.averaged_battery_time_to_empty();
-    status.averaged_battery_time_to_full =
-        protobuf.averaged_battery_time_to_full();
-    status.battery_percentage = protobuf.battery_percentage();
-    status.battery_is_present = protobuf.battery_is_present();
-    status.battery_is_full = protobuf.battery_is_charged();
-    status.is_calculating_battery_time = protobuf.is_calculating_battery_time();
-    status.battery_energy_rate = protobuf.battery_energy_rate();
-
-    VLOG(1) << "Power status: " << status.ToString();
-    FOR_EACH_OBSERVER(Observer, observers_, PowerChanged(status));
   }
 
   void OnGetScreenBrightnessPercent(
@@ -442,29 +456,6 @@ class PowerManagerClientImpl : public PowerManagerClient {
 
     VLOG(1) << "Idle Notify: " << threshold;
     FOR_EACH_OBSERVER(Observer, observers_, IdleNotify(threshold));
-  }
-
-  void SoftwareScreenDimmingRequestedReceived(dbus::Signal* signal) {
-    dbus::MessageReader reader(signal);
-    int32 signal_state = 0;
-    if (!reader.PopInt32(&signal_state)) {
-      LOG(ERROR) << "Screen dimming signal had incorrect parameters: "
-                 << signal->ToString();
-      return;
-    }
-
-    Observer::ScreenDimmingState state = Observer::SCREEN_DIMMING_NONE;
-    switch (signal_state) {
-      case power_manager::kSoftwareScreenDimmingNone:
-        state = Observer::SCREEN_DIMMING_NONE;
-        break;
-      case power_manager::kSoftwareScreenDimmingIdle:
-        state = Observer::SCREEN_DIMMING_IDLE;
-        break;
-      default:
-        LOG(ERROR) << "Unhandled screen dimming state " << signal_state;
-    }
-    FOR_EACH_OBSERVER(Observer, observers_, ScreenDimmingRequested(state));
   }
 
   void SuspendImminentReceived(dbus::Signal* signal) {
@@ -660,6 +651,9 @@ class PowerManagerClientImpl : public PowerManagerClient {
   // suspend to memory.
   base::Time last_suspend_wall_time_;
 
+  // Last state passed to SetIsProjecting().
+  bool last_is_projecting_;
+
   // Note: This should remain the last member so it'll be destroyed and
   // invalidate its weak pointers before any other members are destroyed.
   base::WeakPtrFactory<PowerManagerClientImpl> weak_ptr_factory_;
@@ -675,7 +669,16 @@ class PowerManagerClientStubImpl : public PowerManagerClient {
       : discharging_(true),
         battery_percentage_(40),
         brightness_(50.0),
-        pause_count_(2) {
+        pause_count_(2),
+        cycle_count_(0),
+        weak_ptr_factory_(this) {
+    if (CommandLine::ForCurrentProcess()->HasSwitch(
+        chromeos::switches::kEnableStubInteractive)) {
+      const int kStatusUpdateMs = 1000;
+      update_timer_.Start(FROM_HERE,
+          base::TimeDelta::FromMilliseconds(kStatusUpdateMs), this,
+          &PowerManagerClientStubImpl::UpdateStatus);
+    }
   }
 
   virtual ~PowerManagerClientStubImpl() {}
@@ -724,38 +727,26 @@ class PowerManagerClientStubImpl : public PowerManagerClient {
     VLOG(1) << "Requested to increase keyboard brightness";
   }
 
-  virtual void RequestStatusUpdate(UpdateRequestType update_type) OVERRIDE {
-    if (update_type == UPDATE_INITIAL) {
-      Update();
-      return;
-    }
-    if (!timer_.IsRunning() && update_type == UPDATE_USER) {
-      timer_.Start(
-          FROM_HERE,
-          base::TimeDelta::FromMilliseconds(1000),
-          this,
-          &PowerManagerClientStubImpl::Update);
-    } else {
-      timer_.Stop();
-    }
+  virtual void RequestStatusUpdate() OVERRIDE {
+    base::MessageLoop::current()->PostTask(FROM_HERE,
+        base::Bind(&PowerManagerClientStubImpl::UpdateStatus,
+                   weak_ptr_factory_.GetWeakPtr()));
   }
 
   virtual void RequestRestart() OVERRIDE {}
   virtual void RequestShutdown() OVERRIDE {}
 
   virtual void RequestIdleNotification(int64 threshold) OVERRIDE {
-    MessageLoop::current()->PostDelayedTask(
+    base::MessageLoop::current()->PostDelayedTask(
         FROM_HERE,
         base::Bind(&PowerManagerClientStubImpl::TriggerIdleNotify,
-                   base::Unretained(this),
-                   threshold),
+                   weak_ptr_factory_.GetWeakPtr(), threshold),
         base::TimeDelta::FromMilliseconds(threshold));
   }
 
-  virtual void NotifyUserActivity() OVERRIDE {}
-  virtual void NotifyVideoActivity(
-      const base::TimeTicks& last_activity_time,
-      bool is_fullscreen) OVERRIDE {}
+  virtual void NotifyUserActivity(
+      power_manager::UserActivityType type) OVERRIDE {}
+  virtual void NotifyVideoActivity(bool is_fullscreen) OVERRIDE {}
   virtual void SetPolicy(
       const power_manager::PowerManagementPolicy& policy) OVERRIDE {}
   virtual void SetIsProjecting(bool is_projecting) OVERRIDE {}
@@ -764,35 +755,72 @@ class PowerManagerClientStubImpl : public PowerManagerClient {
   }
 
  private:
-  void Update() {
+  void UpdateStatus() {
     if (pause_count_ > 0) {
       pause_count_--;
+      if (pause_count_ == 2)
+        discharging_ = !discharging_;
     } else {
-      int discharge_amt = battery_percentage_ <= 10 ? 1 : 10;
-      battery_percentage_ += (discharging_ ? -discharge_amt : discharge_amt);
+      if (discharging_)
+        battery_percentage_ -= (battery_percentage_ <= 10 ? 1 : 10);
+      else
+        battery_percentage_ += (battery_percentage_ >= 10 ? 10 : 1);
       battery_percentage_ = std::min(std::max(battery_percentage_, 0), 100);
       // We pause at 0 and 100% so that it's easier to check those conditions.
       if (battery_percentage_ == 0 || battery_percentage_ == 100) {
-        discharging_ = !discharging_;
         pause_count_ = 4;
+        if (battery_percentage_ == 100)
+          cycle_count_ = (cycle_count_ + 1) % 3;
       }
     }
-    const int kSecondsToEmptyFullBattery(3 * 60 * 60);  // 3 hours.
 
-    status_.is_calculating_battery_time = (pause_count_ > 1);
-    status_.line_power_on = !discharging_;
-    status_.battery_is_present = true;
-    status_.battery_percentage = battery_percentage_;
-    status_.battery_seconds_to_empty =
+    const int kSecondsToEmptyFullBattery = 3 * 60 * 60;  // 3 hours.
+    int64 remaining_battery_time =
         std::max(1, battery_percentage_ * kSecondsToEmptyFullBattery / 100);
-    status_.battery_seconds_to_full =
-        std::max(static_cast<int64>(1),
-                 kSecondsToEmptyFullBattery - status_.battery_seconds_to_empty);
 
-    status_.averaged_battery_time_to_empty = status_.battery_seconds_to_empty;
-    status_.averaged_battery_time_to_full = status_.battery_seconds_to_full;
+    props_.Clear();
 
-    FOR_EACH_OBSERVER(Observer, observers_, PowerChanged(status_));
+    switch (cycle_count_) {
+      case 0:
+        // Say that the system is charging with AC connected and
+        // discharging without any charger connected.
+        props_.set_external_power(discharging_ ?
+            power_manager::PowerSupplyProperties_ExternalPower_DISCONNECTED :
+            power_manager::PowerSupplyProperties_ExternalPower_AC);
+        break;
+      case 1:
+        // Say that the system is both charging and discharging on USB
+        // (i.e. a low-power charger).
+        props_.set_external_power(
+            power_manager::PowerSupplyProperties_ExternalPower_USB);
+        break;
+      case 2:
+        // Say that the system is both charging and discharging on AC.
+        props_.set_external_power(
+            power_manager::PowerSupplyProperties_ExternalPower_AC);
+        break;
+      default:
+        NOTREACHED() << "Unhandled cycle " << cycle_count_;
+    }
+
+    if (battery_percentage_ == 100 && !discharging_) {
+      props_.set_battery_state(
+          power_manager::PowerSupplyProperties_BatteryState_FULL);
+    } else if (!discharging_) {
+      props_.set_battery_state(
+          power_manager::PowerSupplyProperties_BatteryState_CHARGING);
+      props_.set_battery_time_to_full_sec(std::max(static_cast<int64>(1),
+          kSecondsToEmptyFullBattery - remaining_battery_time));
+    } else {
+      props_.set_battery_state(
+          power_manager::PowerSupplyProperties_BatteryState_DISCHARGING);
+      props_.set_battery_time_to_empty_sec(remaining_battery_time);
+    }
+
+    props_.set_battery_percent(battery_percentage_);
+    props_.set_is_calculating_battery_time(pause_count_ > 1);
+
+    FOR_EACH_OBSERVER(Observer, observers_, PowerChanged(props_));
   }
 
   void SetBrightness(double percent, bool user_initiated) {
@@ -810,9 +838,14 @@ class PowerManagerClientStubImpl : public PowerManagerClient {
   int battery_percentage_;
   double brightness_;
   int pause_count_;
+  int cycle_count_;
   ObserverList<Observer> observers_;
-  base::RepeatingTimer<PowerManagerClientStubImpl> timer_;
-  PowerSupplyStatus status_;
+  base::RepeatingTimer<PowerManagerClientStubImpl> update_timer_;
+  power_manager::PowerSupplyProperties props_;
+
+  // Note: This should remain the last member so it'll be destroyed and
+  // invalidate its weak pointers before any other members are destroyed.
+  base::WeakPtrFactory<PowerManagerClientStubImpl> weak_ptr_factory_;
 };
 
 PowerManagerClient::PowerManagerClient() {

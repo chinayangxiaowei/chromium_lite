@@ -33,13 +33,9 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/metrics/histogram.h"
 #include "base/native_library.h"
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
-
-#if defined(OS_CHROMEOS)
-#include "crypto/symmetric_key.h"
-#endif
 
 // USE_NSS means we use NSS for everything crypto-related.  If USE_NSS is not
 // defined, such as on Mac and Windows, we use NSS for SSL only -- we don't
@@ -69,7 +65,7 @@ static const base::FilePath::CharType kReadOnlyCertDB[] =
 std::string GetNSSErrorMessage() {
   std::string result;
   if (PR_GetErrorTextLength()) {
-    scoped_array<char> error_text(new char[PR_GetErrorTextLength() + 1]);
+    scoped_ptr<char[]> error_text(new char[PR_GetErrorTextLength() + 1]);
     PRInt32 copied = PR_GetErrorText(error_text.get());
     result = std::string(error_text.get(), copied);
   } else {
@@ -92,15 +88,6 @@ base::FilePath GetDefaultConfigDirectory() {
   }
   return dir;
 }
-
-#if defined(OS_CHROMEOS)
-// Supplemental user key id.
-unsigned char kSupplementalUserKeyId[] = {
-  0xCC, 0x13, 0x19, 0xDE, 0x75, 0x5E, 0xFE, 0xFA,
-  0x5E, 0x71, 0xD4, 0xA6, 0xFB, 0x00, 0x00, 0xCC
-};
-#endif  // defined(OS_CHROMEOS)
-
 
 // On non-chromeos platforms, return the default config directory.
 // On chromeos, return a read-only directory with fake root CA certs for testing
@@ -318,41 +305,6 @@ class NSSInitSingleton {
     GetTPMTokenInfo(&token_name, NULL);
     return FindSlotWithTokenName(token_name);
   }
-
-  SymmetricKey* GetSupplementalUserKey() {
-    DCHECK(chromeos_user_logged_in_);
-
-    PK11SlotInfo* slot = NULL;
-    PK11SymKey* key = NULL;
-    SECItem keyID;
-    CK_MECHANISM_TYPE type = CKM_AES_ECB;
-
-    slot = GetPublicNSSKeySlot();
-    if (!slot)
-      goto done;
-
-    if (PK11_Authenticate(slot, PR_TRUE, NULL) != SECSuccess)
-      goto done;
-
-    keyID.type = siBuffer;
-    keyID.data = kSupplementalUserKeyId;
-    keyID.len = static_cast<int>(sizeof(kSupplementalUserKeyId));
-
-    // Find/generate AES key.
-    key = PK11_FindFixedKey(slot, type, &keyID, NULL);
-    if (!key) {
-      const int kKeySizeInBytes = 32;
-      key = PK11_TokenKeyGen(slot, type, NULL,
-                             kKeySizeInBytes,
-                             &keyID, PR_TRUE, NULL);
-    }
-
-  done:
-    if (slot)
-      PK11_FreeSlot(slot);
-
-    return key ? SymmetricKey::CreateFromKey(key) : NULL;
-  }
 #endif  // defined(OS_CHROMEOS)
 
 
@@ -361,19 +313,19 @@ class NSSInitSingleton {
       return true;
     if (!g_test_nss_db_dir.Get().CreateUniqueTempDir())
       return false;
-    test_slot_ = OpenUserDB(g_test_nss_db_dir.Get().path(), "Test DB");
+    test_slot_ = OpenUserDB(g_test_nss_db_dir.Get().path(), kTestTPMTokenName);
     return !!test_slot_;
   }
 
   void CloseTestNSSDB() {
-    if (test_slot_) {
-      SECStatus status = SECMOD_CloseUserDB(test_slot_);
-      if (status != SECSuccess)
-        PLOG(ERROR) << "SECMOD_CloseUserDB failed: " << PORT_GetError();
-      PK11_FreeSlot(test_slot_);
-      test_slot_ = NULL;
-      ignore_result(g_test_nss_db_dir.Get().Delete());
-    }
+    if (!test_slot_)
+      return;
+    SECStatus status = SECMOD_CloseUserDB(test_slot_);
+    if (status != SECSuccess)
+      PLOG(ERROR) << "SECMOD_CloseUserDB failed: " << PORT_GetError();
+    PK11_FreeSlot(test_slot_);
+    test_slot_ = NULL;
+    ignore_result(g_test_nss_db_dir.Get().Delete());
   }
 
   PK11SlotInfo* GetPublicNSSKeySlot() {
@@ -432,23 +384,17 @@ class NSSInitSingleton {
     base::TimeTicks start_time = base::TimeTicks::Now();
     EnsureNSPRInit();
 
-    // We *must* have NSS >= 3.12.3.  See bug 26448.
+    // We *must* have NSS >= 3.14.3.
     COMPILE_ASSERT(
-        (NSS_VMAJOR == 3 && NSS_VMINOR == 12 && NSS_VPATCH >= 3) ||
-        (NSS_VMAJOR == 3 && NSS_VMINOR > 12) ||
+        (NSS_VMAJOR == 3 && NSS_VMINOR == 14 && NSS_VPATCH >= 3) ||
+        (NSS_VMAJOR == 3 && NSS_VMINOR > 14) ||
         (NSS_VMAJOR > 3),
         nss_version_check_failed);
     // Also check the run-time NSS version.
     // NSS_VersionCheck is a >= check, not strict equality.
-    if (!NSS_VersionCheck("3.12.3")) {
-      // It turns out many people have misconfigured NSS setups, where
-      // their run-time NSPR doesn't match the one their NSS was compiled
-      // against.  So rather than aborting, complain loudly.
-      LOG(ERROR) << "NSS_VersionCheck(\"3.12.3\") failed.  "
-                    "We depend on NSS >= 3.12.3, and this error is not fatal "
-                    "only because many people have busted NSS setups (for "
-                    "example, using the wrong version of NSPR). "
-                    "Please upgrade to the latest NSS and NSPR, and if you "
+    if (!NSS_VersionCheck("3.14.3")) {
+      LOG(FATAL) << "NSS_VersionCheck(\"3.14.3\") failed. NSS >= 3.14.3 is "
+                    "required. Please upgrade to the latest NSS, and if you "
                     "still get this error, contact your distribution "
                     "maintainer.";
     }
@@ -648,6 +594,8 @@ base::LazyInstance<NSSInitSingleton>::Leaky
     g_nss_singleton = LAZY_INSTANCE_INITIALIZER;
 }  // namespace
 
+const char kTestTPMTokenName[] = "Test DB";
+
 #if defined(USE_NSS)
 void EarlySetupForNSSInit() {
   base::FilePath database_dir = GetInitialConfigDirectory();
@@ -700,13 +648,15 @@ void LoadNSSLibraries() {
   // For Debian derivatives NSS libraries are located here.
   paths.push_back(base::FilePath("/usr/lib/nss"));
 
-  // Ubuntu 11.10 (Oneiric) places the libraries here.
+  // Ubuntu 11.10 (Oneiric) and Debian Wheezy place the libraries here.
 #if defined(ARCH_CPU_X86_64)
   paths.push_back(base::FilePath("/usr/lib/x86_64-linux-gnu/nss"));
 #elif defined(ARCH_CPU_X86)
   paths.push_back(base::FilePath("/usr/lib/i386-linux-gnu/nss"));
 #elif defined(ARCH_CPU_ARMEL)
   paths.push_back(base::FilePath("/usr/lib/arm-linux-gnueabi/nss"));
+#elif defined(ARCH_CPU_MIPSEL)
+  paths.push_back(base::FilePath("/usr/lib/mipsel-linux-gnu/nss"));
 #endif
 
   // A list of library files to load.
@@ -746,9 +696,12 @@ ScopedTestNSSDB::ScopedTestNSSDB()
 }
 
 ScopedTestNSSDB::~ScopedTestNSSDB() {
-  // TODO(mattm): Close the dababase once NSS 3.14 is required,
-  // which fixes https://bugzilla.mozilla.org/show_bug.cgi?id=588269
-  // Resource leaks are suppressed. http://crbug.com/156433 .
+  // Don't close when NSS is < 3.15.1, because it would require an additional
+  // sleep for 1 second after closing the database, due to
+  // http://bugzil.la/875601.
+  if (NSS_VersionCheck("3.15.1")) {
+    g_nss_singleton.Get().CloseTestNSSDB();
+  }
 }
 
 base::Lock* GetNSSWriteLock() {
@@ -799,10 +752,6 @@ bool IsTPMTokenReady() {
 bool InitializeTPMToken(const std::string& token_name,
                         const std::string& user_pin) {
   return g_nss_singleton.Get().InitializeTPMToken(token_name, user_pin);
-}
-
-SymmetricKey* GetSupplementalUserKey() {
-  return g_nss_singleton.Get().GetSupplementalUserKey();
 }
 #endif  // defined(OS_CHROMEOS)
 

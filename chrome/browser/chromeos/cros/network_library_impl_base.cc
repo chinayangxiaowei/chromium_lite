@@ -5,27 +5,23 @@
 #include "chrome/browser/chromeos/cros/network_library_impl_base.h"
 
 #include "base/bind.h"
-#include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/memory/scoped_vector.h"
-#include "base/metrics/histogram.h"
 #include "base/stl_util.h"
+#include "base/strings/string_util.h"
 #include "chrome/browser/chromeos/cros/network_constants.h"
 #include "chrome/browser/chromeos/login/user_manager.h"
 #include "chrome/browser/chromeos/net/onc_utils.h"
-#include "chrome/browser/chromeos/network_login_observer.h"
-#include "chromeos/network/onc/onc_certificate_importer.h"
+#include "chromeos/network/network_state_handler.h"
+#include "chromeos/network/network_ui_data.h"
 #include "chromeos/network/onc/onc_constants.h"
 #include "chromeos/network/onc/onc_normalizer.h"
 #include "chromeos/network/onc/onc_signature.h"
 #include "chromeos/network/onc/onc_translator.h"
 #include "chromeos/network/onc/onc_utils.h"
-#include "chromeos/network/onc/onc_validator.h"
 #include "content/public/browser/browser_thread.h"
 #include "crypto/nss_util.h"  // crypto::GetTPMTokenInfo() for 802.1X and VPN.
-#include "grit/generated_resources.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
-#include "ui/base/l10n/l10n_util.h"
 
 using content::BrowserThread;
 
@@ -66,19 +62,15 @@ NetworkLibraryImplBase::NetworkLibraryImplBase()
       enabled_devices_(0),
       busy_devices_(0),
       wifi_scanning_(false),
-      offline_mode_(false),
       is_locked_(false),
       sim_operation_(SIM_OPERATION_NONE),
-      ALLOW_THIS_IN_INITIALIZER_LIST(notify_manager_weak_factory_(this)) {
-  network_login_observer_.reset(new NetworkLoginObserver());
-  AddNetworkManagerObserver(network_login_observer_.get());
+      notify_manager_weak_factory_(this) {
 }
 
 NetworkLibraryImplBase::~NetworkLibraryImplBase() {
   network_profile_observers_.Clear();
   network_manager_observers_.Clear();
   pin_operation_observers_.Clear();
-  user_action_observers_.Clear();
   STLDeleteValues(&network_map_);
   ClearNetworks();
   DeleteRememberedNetworks();
@@ -199,27 +191,6 @@ void NetworkLibraryImplBase::DeleteDeviceFromDeviceObserversMap(
 
 //////////////////////////////////////////////////////////////////////////////
 
-void NetworkLibraryImplBase::Lock() {
-  if (is_locked_)
-    return;
-  is_locked_ = true;
-  NotifyNetworkManagerChanged(true);  // Forced update.
-}
-
-void NetworkLibraryImplBase::Unlock() {
-  DCHECK(is_locked_);
-  if (!is_locked_)
-    return;
-  is_locked_ = false;
-  NotifyNetworkManagerChanged(true);  // Forced update.
-}
-
-bool NetworkLibraryImplBase::IsLocked() {
-  return is_locked_;
-}
-
-//////////////////////////////////////////////////////////////////////////////
-
 void NetworkLibraryImplBase::AddPinOperationObserver(
     PinOperationObserver* observer) {
   if (!pin_operation_observers_.HasObserver(observer))
@@ -229,17 +200,6 @@ void NetworkLibraryImplBase::AddPinOperationObserver(
 void NetworkLibraryImplBase::RemovePinOperationObserver(
     PinOperationObserver* observer) {
   pin_operation_observers_.RemoveObserver(observer);
-}
-
-void NetworkLibraryImplBase::AddUserActionObserver(
-    UserActionObserver* observer) {
-  if (!user_action_observers_.HasObserver(observer))
-    user_action_observers_.AddObserver(observer);
-}
-
-void NetworkLibraryImplBase::RemoveUserActionObserver(
-    UserActionObserver* observer) {
-  user_action_observers_.RemoveObserver(observer);
 }
 
 const EthernetNetwork* NetworkLibraryImplBase::ethernet_network() const {
@@ -279,17 +239,6 @@ bool NetworkLibraryImplBase::wimax_connecting() const {
 bool NetworkLibraryImplBase::wimax_connected() const {
   return active_wimax_ ? active_wimax_->connected() : false;
 }
-const Network* NetworkLibraryImplBase::mobile_network() const {
-  return active_cellular_ ?
-      static_cast<Network*>(active_cellular_) :
-      static_cast<Network*>(active_wimax_);
-}
-bool NetworkLibraryImplBase::mobile_connecting() const {
-  return cellular_connecting() || wimax_connecting();
-}
-bool NetworkLibraryImplBase::mobile_connected() const {
-  return wimax_connecting() || wimax_connected();
-}
 const VirtualNetwork* NetworkLibraryImplBase::virtual_network() const {
   return active_virtual_;
 }
@@ -328,10 +277,11 @@ const VirtualNetworkVector&
   return remembered_virtual_networks_;
 }
 
+namespace {
+
 // Use shill's ordering of the services to determine which type of
 // network to return (i.e. don't assume priority of network types).
 // Note: This does not include any virtual networks.
-namespace {
 const Network* highest_priority(const Network* a, const Network*b) {
   if (!a)
     return b;
@@ -341,7 +291,8 @@ const Network* highest_priority(const Network* a, const Network*b) {
     return b;
   return a;
 }
-}
+
+}  // namespace
 
 const Network* NetworkLibraryImplBase::active_network() const {
   const Network* result = active_nonvirtual_network();
@@ -405,10 +356,6 @@ bool NetworkLibraryImplBase::cellular_available() const {
   return available_devices_ & (1 << TYPE_CELLULAR);
 }
 
-bool NetworkLibraryImplBase::mobile_available() const {
-  return cellular_available() || wimax_available();
-}
-
 bool NetworkLibraryImplBase::ethernet_enabled() const {
   return enabled_devices_ & (1 << TYPE_ETHERNET);
 }
@@ -425,30 +372,6 @@ bool NetworkLibraryImplBase::cellular_enabled() const {
   return enabled_devices_ & (1 << TYPE_CELLULAR);
 }
 
-bool NetworkLibraryImplBase::mobile_enabled() const {
-  return cellular_enabled() || wimax_enabled();
-}
-
-bool NetworkLibraryImplBase::ethernet_busy() const {
-  return busy_devices_ & (1 << TYPE_ETHERNET);
-}
-
-bool NetworkLibraryImplBase::wifi_busy() const {
-  return busy_devices_ & (1 << TYPE_WIFI);
-}
-
-bool NetworkLibraryImplBase::wimax_busy() const {
-  return busy_devices_ & (1 << TYPE_WIMAX);
-}
-
-bool NetworkLibraryImplBase::cellular_busy() const {
-  return busy_devices_ & (1 << TYPE_CELLULAR);
-}
-
-bool NetworkLibraryImplBase::mobile_busy() const {
-  return cellular_busy() || wimax_busy();
-}
-
 bool NetworkLibraryImplBase::wifi_scanning() const {
   return wifi_scanning_;
 }
@@ -460,26 +383,6 @@ bool NetworkLibraryImplBase::cellular_initializing() const {
   if (device && device->scanning())
     return true;
   return false;
-}
-
-bool NetworkLibraryImplBase::offline_mode() const { return offline_mode_; }
-
-std::string NetworkLibraryImplBase::GetCheckPortalList() const {
-  return check_portal_list_;
-}
-
-// Returns the IP address for the active network.
-// TODO(stevenjb): Fix this for VPNs. See chromium-os:13972.
-const std::string& NetworkLibraryImplBase::IPAddress() const {
-  const Network* result = active_network();
-  if (!result)
-    result = connected_network();  // happens if we are connected to a VPN.
-  if (!result)
-    result = ethernet_;  // Use non active ethernet addr if no active network.
-  if (result)
-    return result->ip_address();
-  CR_DEFINE_STATIC_LOCAL(std::string, null_address, ("0.0.0.0"));
-  return null_address;
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -504,18 +407,6 @@ NetworkDevice* NetworkLibraryImplBase::FindNetworkDeviceByPath(
 
 const NetworkDevice* NetworkLibraryImplBase::FindCellularDevice() const {
   return FindDeviceByType(TYPE_CELLULAR);
-}
-
-const NetworkDevice* NetworkLibraryImplBase::FindEthernetDevice() const {
-  return FindDeviceByType(TYPE_ETHERNET);
-}
-
-const NetworkDevice* NetworkLibraryImplBase::FindWifiDevice() const {
-  return FindDeviceByType(TYPE_WIFI);
-}
-
-const NetworkDevice* NetworkLibraryImplBase::FindWimaxDevice() const {
-  return FindDeviceByType(TYPE_WIMAX);
 }
 
 const NetworkDevice* NetworkLibraryImplBase::FindMobileDevice() const {
@@ -623,6 +514,11 @@ const std::string& NetworkLibraryImplBase::GetCellularHomeCarrierId() const {
   if (cellular)
     return cellular->home_provider_id();
   return EmptyString();
+}
+
+bool NetworkLibraryImplBase::CellularDeviceUsesDirectActivation() const {
+  const NetworkDevice* cellular = FindCellularDevice();
+  return cellular && (cellular->carrier() == shill::kCarrierSprint);
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -821,7 +717,6 @@ void NetworkLibraryImplBase::NetworkConnectCompleted(
 
   // Notify observers.
   NotifyNetworkManagerChanged(true);  // Forced update.
-  NotifyUserConnectionInitiated(network);
   NotifyNetworkChanged(network);
 }
 
@@ -849,8 +744,7 @@ void NetworkLibraryImplBase::ConnectToUnconfiguredWifiNetwork(
     connect_data_.service_name = ssid;
     connect_data_.eap_method = eap_config->method;
     connect_data_.eap_auth = eap_config->auth;
-    connect_data_.server_ca_cert_nss_nickname =
-        eap_config->server_ca_cert_nss_nickname;
+    connect_data_.server_ca_cert_pem = eap_config->server_ca_cert_pem;
     connect_data_.eap_use_system_cas = eap_config->use_system_cas;
     connect_data_.client_cert_pkcs11_id =
         eap_config->client_cert_pkcs11_id;
@@ -871,8 +765,7 @@ void NetworkLibraryImplBase::ConnectToUnconfiguredVirtualNetwork(
   connect_data_.service_name = service_name;
   connect_data_.server_hostname = server_hostname;
   connect_data_.psk_key = config.psk;
-  connect_data_.server_ca_cert_nss_nickname =
-      config.server_ca_cert_nss_nickname;
+  connect_data_.server_ca_cert_pem = config.server_ca_cert_pem;
   connect_data_.client_cert_pkcs11_id = config.client_cert_pkcs11_id;
   connect_data_.username = config.username;
   connect_data_.passphrase = config.user_passphrase;
@@ -910,7 +803,7 @@ void NetworkLibraryImplBase::ConnectToWifiNetworkUsingConnectData(
     // Enterprise 802.1X EAP network.
     wifi->SetEAPMethod(data.eap_method);
     wifi->SetEAPPhase2Auth(data.eap_auth);
-    wifi->SetEAPServerCaCertNssNickname(data.server_ca_cert_nss_nickname);
+    wifi->SetEAPServerCaCertPEM(data.server_ca_cert_pem);
     wifi->SetEAPUseSystemCAs(data.eap_use_system_cas);
     wifi->SetEAPClientCertPkcs11Id(data.client_cert_pkcs11_id);
     wifi->SetEAPIdentity(data.eap_identity);
@@ -956,7 +849,7 @@ void NetworkLibraryImplBase::ConnectToVirtualNetworkUsingConnectData(
   if (!data.server_hostname.empty())
     vpn->set_server_hostname(data.server_hostname);
 
-  vpn->SetCACertNSS(data.server_ca_cert_nss_nickname);
+  vpn->SetCACertPEM(data.server_ca_cert_pem);
   switch (vpn->provider_type()) {
     case PROVIDER_TYPE_L2TP_IPSEC_PSK:
       vpn->SetL2TPIPsecPSKCredentials(
@@ -1005,11 +898,6 @@ void NetworkLibraryImplBase::EnableWifiNetworkDevice(bool enable) {
   CallEnableNetworkDeviceType(TYPE_WIFI, enable);
 }
 
-void NetworkLibraryImplBase::EnableMobileNetworkDevice(bool enable) {
-  EnableWimaxNetworkDevice(enable);
-  EnableCellularNetworkDevice(enable);
-}
-
 void NetworkLibraryImplBase::EnableWimaxNetworkDevice(bool enable) {
   if (is_locked_)
     return;
@@ -1047,7 +935,7 @@ namespace {
 class UserStringSubstitution : public onc::StringSubstitution {
  public:
   UserStringSubstitution() {}
-  virtual bool GetSubstitute(std::string placeholder,
+  virtual bool GetSubstitute(const std::string& placeholder,
                              std::string* substitute) const OVERRIDE {
     if (!UserManager::Get()->IsUserLoggedIn())
       return false;
@@ -1064,11 +952,10 @@ class UserStringSubstitution : public onc::StringSubstitution {
 
 }  // namespace
 
-bool NetworkLibraryImplBase::LoadOncNetworks(const std::string& onc_blob,
-                                             const std::string& passphrase,
-                                             onc::ONCSource source,
-                                             bool allow_web_trust_from_policy) {
-  VLOG(2) << __func__ << ": called on " << onc_blob;
+void NetworkLibraryImplBase::LoadOncNetworks(
+    const base::ListValue& network_configs,
+    onc::ONCSource source) {
+  VLOG(2) << __func__ << ": called on " << network_configs;
   NetworkProfile* profile = NULL;
   bool from_policy = (source == onc::ONC_SOURCE_USER_POLICY ||
                       source == onc::ONC_SOURCE_DEVICE_POLICY);
@@ -1082,193 +969,100 @@ bool NetworkLibraryImplBase::LoadOncNetworks(const std::string& onc_blob,
     if (profile == NULL) {
       VLOG(2) << "Profile for ONC source " << onc::GetSourceAsString(source)
               << " doesn't exist.";
-      return true;
-    }
-  }
-
-  scoped_ptr<base::DictionaryValue> root_dict =
-      onc::ReadDictionaryFromJson(onc_blob);
-  if (root_dict.get() == NULL) {
-    LOG(ERROR) << "ONC loaded from " << onc::GetSourceAsString(source)
-               << " is not a valid JSON dictionary.";
-    return false;
-  }
-
-  // Check and see if this is an encrypted ONC file. If so, decrypt it.
-  std::string onc_type;
-  root_dict->GetStringWithoutPathExpansion(onc::toplevel_config::kType,
-                                           &onc_type);
-  if (onc_type == onc::toplevel_config::kEncryptedConfiguration) {
-    root_dict = onc::Decrypt(passphrase, *root_dict);
-    if (root_dict.get() == NULL) {
-      LOG(ERROR) << "Couldn't decrypt the ONC from "
-                 << onc::GetSourceAsString(source);
-      return false;
-    }
-  }
-
-  // Validate the ONC dictionary. We are liberal and ignore unknown field
-  // names and ignore invalid field names in kRecommended arrays.
-  onc::Validator validator(false,  // Ignore unknown fields.
-                           false,  // Ignore invalid recommended field names.
-                           true,  // Fail on missing fields.
-                           from_policy);
-  validator.SetOncSource(source);
-
-  onc::Validator::Result validation_result;
-  root_dict = validator.ValidateAndRepairObject(
-      &onc::kToplevelConfigurationSignature,
-      *root_dict,
-      &validation_result);
-
-  if (from_policy) {
-    UMA_HISTOGRAM_BOOLEAN("Enterprise.ONC.PolicyValidation",
-                          validation_result == onc::Validator::VALID);
-  }
-
-  bool success = true;
-  if (validation_result == onc::Validator::VALID_WITH_WARNINGS) {
-    LOG(WARNING) << "ONC from " << onc::GetSourceAsString(source)
-                 << " produced warnings.";
-    success = false;
-  } else if (validation_result == onc::Validator::INVALID ||
-             root_dict == NULL) {
-    LOG(ERROR) << "ONC from " << onc::GetSourceAsString(source)
-               << " is invalid and couldn't be repaired.";
-    return false;
-  }
-
-  const base::ListValue* certificates;
-  bool has_certificates =
-      root_dict->GetListWithoutPathExpansion(
-          onc::toplevel_config::kCertificates,
-          &certificates);
-
-  const base::ListValue* network_configs;
-  bool has_network_configurations = root_dict->GetListWithoutPathExpansion(
-      onc::toplevel_config::kNetworkConfigurations,
-      &network_configs);
-
-  if (has_certificates) {
-    VLOG(2) << "ONC file has " << certificates->GetSize() << " certificates";
-
-    // Web trust is only granted to certificates imported for a managed user
-    // on a managed device and for user imports.
-    bool allow_web_trust =
-        (source == onc::ONC_SOURCE_USER_IMPORT) ||
-        (source == onc::ONC_SOURCE_USER_POLICY && allow_web_trust_from_policy);
-    onc::CertificateImporter cert_importer(allow_web_trust);
-    if (cert_importer.ParseAndStoreCertificates(*certificates) !=
-        onc::CertificateImporter::IMPORT_OK) {
-      LOG(ERROR) << "Cannot parse some of the certificates in the ONC from "
-                 << onc::GetSourceAsString(source);
-      success = false;
+      return;
     }
   }
 
   std::set<std::string> removal_ids;
   std::set<std::string>& network_ids(network_source_map_[source]);
   network_ids.clear();
-  if (has_network_configurations) {
-    VLOG(2) << "ONC file has " << network_configs->GetSize() << " networks";
-    for (base::ListValue::const_iterator it(network_configs->begin());
-         it != network_configs->end(); ++it) {
-      const base::DictionaryValue* network;
-      (*it)->GetAsDictionary(&network);
+  VLOG(2) << "ONC file has " << network_configs.GetSize() << " networks";
+  for (base::ListValue::const_iterator it(network_configs.begin());
+       it != network_configs.end(); ++it) {
+    const base::DictionaryValue* network;
+    (*it)->GetAsDictionary(&network);
 
-      bool marked_for_removal = false;
-      network->GetBooleanWithoutPathExpansion(onc::kRemove,
-                                              &marked_for_removal);
+    bool marked_for_removal = false;
+    network->GetBooleanWithoutPathExpansion(onc::kRemove,
+                                            &marked_for_removal);
 
-      std::string type;
-      network->GetStringWithoutPathExpansion(onc::network_config::kType, &type);
+    std::string type;
+    network->GetStringWithoutPathExpansion(onc::network_config::kType, &type);
 
-      std::string guid;
-      network->GetStringWithoutPathExpansion(onc::network_config::kGUID, &guid);
+    std::string guid;
+    network->GetStringWithoutPathExpansion(onc::network_config::kGUID, &guid);
 
-      if (source == onc::ONC_SOURCE_USER_IMPORT && marked_for_removal) {
-        // User import supports the removal of networks by ID.
-        removal_ids.insert(guid);
-        continue;
-      }
+    if (source == onc::ONC_SOURCE_USER_IMPORT && marked_for_removal) {
+      // User import supports the removal of networks by ID.
+      removal_ids.insert(guid);
+      continue;
+    }
 
-      // Don't configure a network that is supposed to be removed. For
-      // policy-managed networks, the "remove" functionality of ONC is
-      // irrelevant. Instead, in general, all previously configured networks
-      // that are no longer configured are removed.
-      if (marked_for_removal)
-        continue;
+    // Don't configure a network that is supposed to be removed. For
+    // policy-managed networks, the "remove" functionality of ONC is
+    // irrelevant. Instead, in general, all previously configured networks
+    // that are no longer configured are removed.
+    if (marked_for_removal)
+      continue;
 
-      // Expand strings like LoginID
-      base::DictionaryValue* expanded_network = network->DeepCopy();
-      UserStringSubstitution substitution;
-      onc::ExpandStringsInOncObject(onc::kNetworkConfigurationSignature,
-                                    substitution,
-                                    expanded_network);
+    // Store the network's identifier. The identifiers are later used to clean
+    // out any previously-existing networks that had been configured through
+    // policy but are no longer specified in the updated ONC blob.
+    network_ids.insert(guid);
 
-      // Update the ONC map.
-      const base::DictionaryValue*& entry = network_onc_map_[guid];
-      delete entry;
-      entry = expanded_network;
+    // Expand strings like LoginID
+    base::DictionaryValue* expanded_network = network->DeepCopy();
+    UserStringSubstitution substitution;
+    onc::ExpandStringsInOncObject(onc::kNetworkConfigurationSignature,
+                                  substitution,
+                                  expanded_network);
 
-      // Normalize the ONC: Remove irrelevant fields.
-      onc::Normalizer normalizer(true /* remove recommended fields */);
-      scoped_ptr<base::DictionaryValue> normalized_network =
-          normalizer.NormalizeObject(&onc::kNetworkConfigurationSignature,
-                                     *expanded_network);
+    // Update the ONC map.
+    const base::DictionaryValue*& entry = network_onc_map_[guid];
+    if (entry && entry->Equals(expanded_network))
+      continue;
 
-      // Configure the network.
-      scoped_ptr<base::DictionaryValue> shill_dict =
-          onc::TranslateONCObjectToShill(&onc::kNetworkConfigurationSignature,
-                                         *normalized_network);
+    delete entry;
+    entry = expanded_network;
 
-      // Set the ProxyConfig.
-      const base::DictionaryValue* proxy_settings;
-      if (normalized_network->GetDictionaryWithoutPathExpansion(
-              onc::network_config::kProxySettings,
-              &proxy_settings)) {
-        scoped_ptr<base::DictionaryValue> proxy_config =
-            onc::ConvertOncProxySettingsToProxyConfig(*proxy_settings);
-        std::string proxy_json;
-        base::JSONWriter::Write(proxy_config.get(), &proxy_json);
-        shill_dict->SetStringWithoutPathExpansion(
-            flimflam::kProxyConfigProperty,
-            proxy_json);
-      }
+    // Normalize the ONC: Remove irrelevant fields.
+    onc::Normalizer normalizer(true /* remove recommended fields */);
+    scoped_ptr<base::DictionaryValue> normalized_network =
+        normalizer.NormalizeObject(&onc::kNetworkConfigurationSignature,
+                                   *expanded_network);
 
-      // Set the UIData.
-      scoped_ptr<NetworkUIData> ui_data =
-          onc::CreateUIData(source, *normalized_network);
-      base::DictionaryValue ui_data_dict;
-      ui_data->FillDictionary(&ui_data_dict);
-      std::string ui_data_json;
-      base::JSONWriter::Write(&ui_data_dict, &ui_data_json);
-      shill_dict->SetStringWithoutPathExpansion(flimflam::kUIDataProperty,
-                                                ui_data_json);
+    // Configure the network.
+    scoped_ptr<base::DictionaryValue> shill_dict =
+        onc::TranslateONCObjectToShill(&onc::kNetworkConfigurationSignature,
+                                       *normalized_network);
 
-      // Set the appropriate profile for |source|.
-      if (profile != NULL) {
-        shill_dict->SetStringWithoutPathExpansion(flimflam::kProfileProperty,
-                                                  profile->path);
-      }
+    // Set the UIData.
+    scoped_ptr<NetworkUIData> ui_data =
+        NetworkUIData::CreateFromONC(source, *normalized_network);
+    base::DictionaryValue ui_data_dict;
+    ui_data->FillDictionary(&ui_data_dict);
+    std::string ui_data_json;
+    base::JSONWriter::Write(&ui_data_dict, &ui_data_json);
+    shill_dict->SetStringWithoutPathExpansion(flimflam::kUIDataProperty,
+                                              ui_data_json);
 
-      // For Ethernet networks, apply them to the current Ethernet service.
-      if (type == onc::network_type::kEthernet) {
-        const EthernetNetwork* ethernet = ethernet_network();
-        if (ethernet) {
-          CallConfigureService(ethernet->unique_id(), shill_dict.get());
-        } else {
-          LOG(WARNING) << "Tried to import ONC with an Ethernet network when "
-                       << "there is no active Ethernet connection.";
-        }
+    // Set the appropriate profile for |source|.
+    if (profile != NULL) {
+      shill_dict->SetStringWithoutPathExpansion(flimflam::kProfileProperty,
+                                                profile->path);
+    }
+
+    // For Ethernet networks, apply them to the current Ethernet service.
+    if (type == onc::network_type::kEthernet) {
+      const EthernetNetwork* ethernet = ethernet_network();
+      if (ethernet) {
+        CallConfigureService(ethernet->unique_id(), shill_dict.get());
       } else {
-        CallConfigureService(guid, shill_dict.get());
+        LOG(WARNING) << "Tried to import ONC with an Ethernet network when "
+                     << "there is no active Ethernet connection.";
       }
-
-      // Store the network's identifier. The identifiers are later used to clean
-      // out any previously-existing networks that had been configured through
-      // policy but are no longer specified in the updated ONC blob.
-      network_ids.insert(guid);
+    } else {
+      CallConfigureService(guid, shill_dict.get());
     }
   }
 
@@ -1281,8 +1075,11 @@ bool NetworkLibraryImplBase::LoadOncNetworks(const std::string& onc_blob,
   } else if (source == onc::ONC_SOURCE_USER_IMPORT && !removal_ids.empty()) {
     ForgetNetworksById(source, removal_ids, true);
   }
-
-  return success;
+  // Ensure NetworkStateHandler properties are up-to-date.
+  if (NetworkHandler::IsInitialized()) {
+    NetworkHandler::Get()->network_state_handler()->
+        RequestUpdateForAllNetworks();
+  }
 }
 
 ////////////////////////////////////////////////////////////////////////////
@@ -1749,9 +1546,6 @@ void NetworkLibraryImplBase::NotifyNetworkDeviceChanged(
                         *device_observer_list,
                         OnNetworkDeviceSimLockChanged(this, device));
     }
-    FOR_EACH_OBSERVER(NetworkDeviceObserver,
-                      *device_observer_list,
-                      OnNetworkDeviceChanged(this, device));
   } else {
     LOG(ERROR) << "Unexpected signal for unobserved device: "
                << device->name();
@@ -1764,13 +1558,6 @@ void NetworkLibraryImplBase::NotifyPinOperationCompleted(
                     pin_operation_observers_,
                     OnPinOperationCompleted(this, error));
   sim_operation_ = SIM_OPERATION_NONE;
-}
-
-void NetworkLibraryImplBase::NotifyUserConnectionInitiated(
-    const Network* network) {
-  FOR_EACH_OBSERVER(UserActionObserver,
-                    user_action_observers_,
-                    OnConnectionInitiated(this, network));
 }
 
 //////////////////////////////////////////////////////////////////////////////

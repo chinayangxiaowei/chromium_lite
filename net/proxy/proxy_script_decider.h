@@ -9,15 +9,15 @@
 #include <vector>
 
 #include "base/memory/ref_counted.h"
-#include "base/string16.h"
-#include "base/time.h"
-#include "base/timer.h"
-#include "googleurl/src/gurl.h"
+#include "base/strings/string16.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "net/base/completion_callback.h"
 #include "net/base/net_export.h"
 #include "net/base/net_log.h"
 #include "net/proxy/proxy_config.h"
 #include "net/proxy/proxy_resolver.h"
+#include "url/gurl.h"
 
 namespace net {
 
@@ -155,7 +155,7 @@ class NET_EXPORT_PRIVATE ProxyScriptDecider {
   size_t current_pac_source_index_;
 
   // Filled when the PAC script fetch completes.
-  string16 pac_script_;
+  base::string16 pac_script_;
 
   // Flag indicating whether the caller requested a mandatory pac script
   // (i.e. fallback to direct connections are prohibited).

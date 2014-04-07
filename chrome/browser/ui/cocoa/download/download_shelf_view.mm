@@ -4,7 +4,6 @@
 
 #import "chrome/browser/ui/cocoa/download/download_shelf_view.h"
 
-#include "base/memory/scoped_nsobject.h"
 #include "chrome/browser/themes/theme_properties.h"
 #include "chrome/browser/themes/theme_service.h"
 #import "chrome/browser/ui/cocoa/nsview_additions.h"
@@ -12,6 +11,7 @@
 #import "chrome/browser/ui/cocoa/themed_window.h"
 #import "chrome/browser/ui/cocoa/view_id_util.h"
 #include "grit/theme_resources.h"
+#import "ui/base/cocoa/nsgraphics_context_additions.h"
 #include "ui/gfx/scoped_ns_graphics_context_save_gstate_mac.h"
 
 @implementation DownloadShelfView
@@ -37,7 +37,7 @@
   ui::ThemeProvider* themeProvider = [[self window] themeProvider];
   return themeProvider ? themeProvider->GetNSColor(
       isActive ? ThemeProperties::COLOR_TOOLBAR_STROKE :
-                 ThemeProperties::COLOR_TOOLBAR_STROKE_INACTIVE, true) :
+                 ThemeProperties::COLOR_TOOLBAR_STROKE_INACTIVE) :
       [NSColor blackColor];
 }
 
@@ -49,7 +49,7 @@
   // background matches the toolbar background.
   NSPoint phase = NSMakePoint(
       0, NSHeight([self bounds]) + [TabStripController defaultTabHeight]);
-  [[NSGraphicsContext currentContext] setPatternPhase:phase];
+  [[NSGraphicsContext currentContext] cr_setPatternPhase:phase forView:self];
   [self drawBackgroundWithOpaque:YES];
 
   // Draw top stroke
@@ -65,7 +65,7 @@
   if (themeProvider) {
     int resourceName = themeProvider->UsingDefaultTheme() ?
         ThemeProperties::COLOR_TOOLBAR_BEZEL : ThemeProperties::COLOR_TOOLBAR;
-    NSColor* highlightColor = themeProvider->GetNSColor(resourceName, true);
+    NSColor* highlightColor = themeProvider->GetNSColor(resourceName);
     if (highlightColor) {
       [highlightColor set];
       borderRect.origin.y -= [self cr_lineWidth];

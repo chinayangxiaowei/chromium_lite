@@ -5,7 +5,7 @@
 #include "media/audio/null_audio_sink.h"
 
 #include "base/bind.h"
-#include "base/message_loop_proxy.h"
+#include "base/message_loop/message_loop_proxy.h"
 #include "media/audio/fake_audio_consumer.h"
 #include "media/base/audio_hash.h"
 
@@ -54,7 +54,7 @@ void NullAudioSink::Play() {
   playing_ = true;
 }
 
-void NullAudioSink::Pause(bool /* flush */) {
+void NullAudioSink::Pause() {
   DCHECK(message_loop_->BelongsToCurrentThread());
 
   if (!playing_)
@@ -85,7 +85,7 @@ void NullAudioSink::StartAudioHashForTesting() {
 }
 
 std::string NullAudioSink::GetAudioHashForTesting() {
-  return audio_hash_ ? audio_hash_->ToString() : "";
+  return audio_hash_ ? audio_hash_->ToString() : std::string();
 }
 
 }  // namespace media

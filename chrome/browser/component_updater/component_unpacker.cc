@@ -10,23 +10,25 @@
 #include "base/file_util.h"
 #include "base/json/json_file_value_serializer.h"
 #include "base/memory/scoped_handle.h"
-#include "base/stringprintf.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/stringprintf.h"
+#include "chrome/browser/component_updater/component_patcher.h"
 #include "chrome/browser/component_updater/component_updater_service.h"
 #include "chrome/common/extensions/extension_constants.h"
-#include "chrome/common/zip.h"
 #include "crypto/secure_hash.h"
 #include "crypto/signature_verifier.h"
 #include "extensions/common/crx_file.h"
+#include "third_party/zlib/google/zip.h"
 
 using crypto::SecureHash;
 
 namespace {
+
 // This class makes sure that the CRX digital signature is valid
 // and well formed.
 class CRXValidator {
  public:
-  explicit CRXValidator(FILE* crx_file) : valid_(false) {
+  explicit CRXValidator(FILE* crx_file) : valid_(false), delta_(false) {
     extensions::CrxFile::Header header;
     size_t len = fread(&header, 1, sizeof(header), crx_file);
     if (len < sizeof(header))
@@ -37,6 +39,7 @@ class CRXValidator {
         extensions::CrxFile::Parse(header, &error));
     if (!crx.get())
       return;
+    delta_ = extensions::CrxFile::HeaderIsDelta(header);
 
     std::vector<uint8> key(header.key_size);
     len = fread(&key[0], sizeof(uint8), header.key_size, crx_file);
@@ -59,7 +62,7 @@ class CRXValidator {
     }
 
     const size_t kBufSize = 8 * 1024;
-    scoped_array<uint8> buf(new uint8[kBufSize]);
+    scoped_ptr<uint8[]> buf(new uint8[kBufSize]);
     while ((len = fread(buf.get(), 1, kBufSize, crx_file)) > 0)
       verifier.VerifyUpdate(buf.get(), len);
 
@@ -72,10 +75,13 @@ class CRXValidator {
 
   bool valid() const { return valid_; }
 
+  bool delta() const { return delta_; }
+
   const std::vector<uint8>& public_key() const { return public_key_; }
 
  private:
   bool valid_;
+  bool delta_;
   std::vector<uint8> public_key_;
 };
 
@@ -86,7 +92,7 @@ class CRXValidator {
 base::DictionaryValue* ReadManifest(const base::FilePath& unpack_path) {
   base::FilePath manifest =
       unpack_path.Append(FILE_PATH_LITERAL("manifest.json"));
-  if (!file_util::PathExists(manifest))
+  if (!base::PathExists(manifest))
     return NULL;
   JSONFileValueSerializer serializer(manifest);
   std::string error;
@@ -102,8 +108,11 @@ base::DictionaryValue* ReadManifest(const base::FilePath& unpack_path) {
 
 ComponentUnpacker::ComponentUnpacker(const std::vector<uint8>& pk_hash,
                                      const base::FilePath& path,
+                                     const std::string& fingerprint,
+                                     ComponentPatcher* patcher,
                                      ComponentInstaller* installer)
-  : error_(kNone) {
+    : error_(kNone),
+      extended_error_(0) {
   if (pk_hash.empty() || path.empty()) {
     error_ = kInvalidParams;
     return;
@@ -134,33 +143,57 @@ ComponentUnpacker::ComponentUnpacker(const std::vector<uint8>& pk_hash,
     error_ = kInvalidId;
     return;
   }
-  // We want the temporary directory to be unique and yet predictable, so
-  // we can easily find the package in a end user machine.
-  std::string dir(
-      base::StringPrintf("CRX_%s", base::HexEncode(hash, 6).c_str()));
-  unpack_path_ = path.DirName().AppendASCII(dir.c_str());
-  if (file_util::DirectoryExists(unpack_path_)) {
-    if (!file_util::Delete(unpack_path_, true)) {
-      unpack_path_.clear();
-      error_ = kUzipPathError;
+  if (!file_util::CreateNewTempDirectory(FILE_PATH_LITERAL(""),
+                                         &unpack_path_)) {
+    error_ = kUnzipPathError;
+    return;
+  }
+  if (validator.delta()) {  // Package is a diff package.
+    // We want a different temp directory for the delta files; we'll put the
+    // patch output into unpack_path_.
+    base::FilePath unpack_diff_path;
+    if (!file_util::CreateNewTempDirectory(FILE_PATH_LITERAL(""),
+                                           &unpack_diff_path)) {
+      error_ = kUnzipPathError;
       return;
     }
-  }
-  if (!file_util::CreateDirectory(unpack_path_)) {
-    unpack_path_.clear();
-    error_ = kUzipPathError;
-    return;
-  }
-  if (!zip::Unzip(path, unpack_path_)) {
-    error_ = kUnzipFailed;
-    return;
+    if (!zip::Unzip(path, unpack_diff_path)) {
+      error_ = kUnzipFailed;
+      return;
+    }
+    ComponentUnpacker::Error result = DifferentialUpdatePatch(unpack_diff_path,
+                                                              unpack_path_,
+                                                              patcher,
+                                                              installer,
+                                                              &extended_error_);
+    base::DeleteFile(unpack_diff_path, true);
+    unpack_diff_path.clear();
+    error_ = result;
+    if (error_ != kNone) {
+      return;
+    }
+  } else {
+    // Package is a normal update/install; unzip it into unpack_path_ directly.
+    if (!zip::Unzip(path, unpack_path_)) {
+      error_ = kUnzipFailed;
+      return;
+    }
   }
   scoped_ptr<base::DictionaryValue> manifest(ReadManifest(unpack_path_));
   if (!manifest.get()) {
     error_ = kBadManifest;
     return;
   }
-  if (!installer->Install(manifest.release(), unpack_path_)) {
+  // Write the fingerprint to disk.
+  if (static_cast<int>(fingerprint.size()) !=
+      file_util::WriteFile(
+          unpack_path_.Append(FILE_PATH_LITERAL("manifest.fingerprint")),
+          fingerprint.c_str(),
+          fingerprint.size())) {
+    error_ = kFingerprintWriteFailed;
+    return;
+  }
+  if (!installer->Install(*manifest, unpack_path_)) {
     error_ = kInstallerError;
     return;
   }
@@ -169,7 +202,6 @@ ComponentUnpacker::ComponentUnpacker(const std::vector<uint8>& pk_hash,
 }
 
 ComponentUnpacker::~ComponentUnpacker() {
-  if (!unpack_path_.empty()) {
-    file_util::Delete(unpack_path_, true);
-  }
+  if (!unpack_path_.empty())
+    base::DeleteFile(unpack_path_, true);
 }

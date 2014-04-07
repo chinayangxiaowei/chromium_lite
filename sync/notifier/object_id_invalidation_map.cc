@@ -22,10 +22,11 @@ ObjectIdSet ObjectIdInvalidationMapToSet(
 }
 
 ObjectIdInvalidationMap ObjectIdSetToInvalidationMap(
-    const ObjectIdSet& ids, const std::string& payload) {
+    const ObjectIdSet& ids, int64 version, const std::string& payload) {
   ObjectIdInvalidationMap invalidation_map;
   for (ObjectIdSet::const_iterator it = ids.begin(); it != ids.end(); ++it) {
     // TODO(dcheng): Do we need to provide a way to set AckHandle?
+    invalidation_map[*it].version = version;
     invalidation_map[*it].payload = payload;
   }
   return invalidation_map;
@@ -56,10 +57,10 @@ bool ObjectIdInvalidationMapEquals(
 
 scoped_ptr<base::ListValue> ObjectIdInvalidationMapToValue(
     const ObjectIdInvalidationMap& invalidation_map) {
-  scoped_ptr<ListValue> value(new ListValue());
+  scoped_ptr<base::ListValue> value(new base::ListValue());
   for (ObjectIdInvalidationMap::const_iterator it = invalidation_map.begin();
        it != invalidation_map.end(); ++it) {
-    DictionaryValue* entry = new DictionaryValue();
+    base::DictionaryValue* entry = new base::DictionaryValue();
     entry->Set("objectId", ObjectIdToValue(it->first).release());
     entry->Set("state", it->second.ToValue().release());
     value->Append(entry);

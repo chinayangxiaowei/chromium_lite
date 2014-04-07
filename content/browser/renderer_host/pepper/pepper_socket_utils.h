@@ -20,6 +20,14 @@ SocketPermissionRequest CreateSocketPermissionRequest(
     const PP_NetAddress_Private& net_addr);
 
 bool CanUseSocketAPIs(bool external_plugin,
+                      bool private_api,
+                      const SocketPermissionRequest& params,
+                      int render_process_id,
+                      int render_view_id);
+
+// TODO (ygorshenin@): remove this method.
+bool CanUseSocketAPIs(bool external_plugin,
+                      bool private_api,
                       const SocketPermissionRequest& params,
                       RenderViewHost* render_view_host);
 

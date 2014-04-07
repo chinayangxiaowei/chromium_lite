@@ -95,55 +95,18 @@ void ConflictResolver::ProcessSimpleConflict(WriteTransaction* trans,
                           entry.Get(syncable::SERVER_PARENT_ID);
     bool entry_deleted = entry.Get(syncable::IS_DEL);
 
-    // This positional check is meant to be necessary but not sufficient. As a
-    // result, it may be false even when the position hasn't changed, possibly
-    // resulting in unnecessary commits, but if it's true the position has
-    // definitely not changed. The check works by verifying that the prev id
-    // as calculated from the server position (which will ignore any
-    // unsynced/unapplied predecessors and be root for non-bookmark datatypes)
-    // matches the client prev id. Because we traverse chains of conflicting
-    // items in predecessor -> successor order, we don't need to also verify the
-    // successor matches (If it's in conflict, we'll verify it next. If it's
-    // not, then it should be taken into account already in the
-    // ComputePrevIdFromServerPosition calculation). This works even when there
-    // are chains of conflicting items.
+    // The position check might fail spuriously if one of the positions was
+    // based on a legacy random suffix, rather than a deterministic one based on
+    // originator_cache_guid and originator_item_id.  If an item is being
+    // modified regularly, it shouldn't take long for the suffix and position to
+    // be updated, so such false failures shouldn't be a problem for long.
     //
-    // Example: Original sequence was abcde. Server changes to aCDbe, while
-    // client changes to aDCbe (C and D are in conflict). Locally, D's prev id
-    // is a, while C's prev id is D. On the other hand, the server prev id will
-    // ignore unsynced/unapplied items, so D's server prev id will also be a,
-    // just like C's. Because we traverse in client predecessor->successor
-    // order, we evaluate D first. Since prev id and server id match, we
-    // consider the position to have remained the same for D, and will unset
-    // it's UNSYNCED/UNAPPLIED bits. When we evaluate C though, we'll see that
-    // the prev id is D locally while the server's prev id is a. C will
-    // therefore count as a positional conflict (and the local data will be
-    // overwritten by the server data typically). The final result will be
-    // aCDbe (the same as the server's view). Even though both C and D were
-    // modified, only one counted as being in actual conflict and was resolved
-    // with local/server wins.
-    //
-    // In general, when there are chains of positional conflicts, only the first
-    // item in chain (based on the clients point of view) will have both its
-    // server prev id and local prev id match. For all the rest the server prev
-    // id will be the predecessor of the first item in the chain, and therefore
-    // not match the local prev id.
-    //
-    // Similarly, chains of conflicts where the server and client info are the
-    // same are supported due to the predecessor->successor ordering. In this
-    // case, from the first item onward, we unset the UNSYNCED/UNAPPLIED bits as
-    // we decide that nothing changed. The subsequent item's server prev id will
-    // accurately match the local prev id because the predecessor is no longer
-    // UNSYNCED/UNAPPLIED.
-    // TODO(zea): simplify all this once we can directly compare server position
-    // to client position.
-    syncable::Id server_prev_id = entry.ComputePrevIdFromServerPosition(
-        entry.Get(syncable::SERVER_PARENT_ID));
-    bool needs_reinsertion = !parent_matches ||
-         server_prev_id != entry.GetPredecessorId();
-    DVLOG_IF(1, needs_reinsertion) << "Insertion needed, server prev id "
-        << " is " << server_prev_id << ", local prev id is "
-        << entry.GetPredecessorId();
+    // Lucky for us, it's OK to be wrong here.  The position_matches check is
+    // allowed to return false negatives, as long as it returns no false
+    // positives.
+    bool position_matches = parent_matches &&
+         entry.Get(syncable::SERVER_UNIQUE_POSITION).Equals(
+             entry.Get(syncable::UNIQUE_POSITION));
     const sync_pb::EntitySpecifics& specifics =
         entry.Get(syncable::SPECIFICS);
     const sync_pb::EntitySpecifics& server_specifics =
@@ -189,7 +152,7 @@ void ConflictResolver::ProcessSimpleConflict(WriteTransaction* trans,
     }
 
     if (!entry_deleted && name_matches && parent_matches && specifics_match &&
-        !needs_reinsertion) {
+        position_matches) {
       DVLOG(1) << "Resolving simple conflict, everything matches, ignoring "
                << "changes for: " << entry;
       conflict_util::IgnoreConflict(&entry);
@@ -230,7 +193,7 @@ void ConflictResolver::ProcessSimpleConflict(WriteTransaction* trans,
     entry.Put(syncable::BASE_SERVER_SPECIFICS, sync_pb::EntitySpecifics());
   } else {  // SERVER_IS_DEL is true
     if (entry.Get(syncable::IS_DIR)) {
-      Directory::ChildHandles children;
+      Directory::Metahandles children;
       trans->directory()->GetChildHandlesById(trans,
                                               entry.Get(syncable::ID),
                                               &children);
@@ -259,47 +222,19 @@ void ConflictResolver::ResolveConflicts(
     const std::set<syncable::Id>& simple_conflict_ids,
     sessions::StatusController* status) {
   // Iterate over simple conflict items.
-  set<Id>::const_iterator conflicting_item_it;
-  set<Id> processed_items;
-  for (conflicting_item_it = simple_conflict_ids.begin();
-       conflicting_item_it != simple_conflict_ids.end();
-       ++conflicting_item_it) {
-    Id id = *conflicting_item_it;
-    if (processed_items.count(id) > 0)
-      continue;
-
+  set<Id>::const_iterator it;
+  for (it = simple_conflict_ids.begin();
+       it != simple_conflict_ids.end();
+       ++it) {
     // We don't resolve conflicts for control types here.
-    Entry conflicting_node(trans, syncable::GET_BY_ID, id);
+    Entry conflicting_node(trans, syncable::GET_BY_ID, *it);
     CHECK(conflicting_node.good());
     if (IsControlType(
         GetModelTypeFromSpecifics(conflicting_node.Get(syncable::SPECIFICS)))) {
       continue;
     }
 
-    // We have a simple conflict. In order check if positions have changed,
-    // we need to process conflicting predecessors before successors. Traverse
-    // backwards through all continuous conflicting predecessors, building a
-    // stack of items to resolve in predecessor->successor order, then process
-    // each item individually.
-    list<Id> predecessors;
-    Id prev_id = id;
-    do {
-      predecessors.push_back(prev_id);
-      Entry entry(trans, syncable::GET_BY_ID, prev_id);
-      // Any entry in conflict must be valid.
-      CHECK(entry.good());
-      Id new_prev_id = entry.GetPredecessorId();
-      if (new_prev_id == prev_id)
-        break;
-      prev_id = new_prev_id;
-    } while (processed_items.count(prev_id) == 0 &&
-             simple_conflict_ids.count(prev_id) > 0);  // Excludes root.
-    while (!predecessors.empty()) {
-      id = predecessors.back();
-      predecessors.pop_back();
-      ProcessSimpleConflict(trans, id, cryptographer, status);
-      processed_items.insert(id);
-    }
+    ProcessSimpleConflict(trans, *it, cryptographer, status);
   }
   return;
 }

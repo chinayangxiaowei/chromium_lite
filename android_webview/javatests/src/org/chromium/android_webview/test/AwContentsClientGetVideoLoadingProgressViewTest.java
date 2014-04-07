@@ -1,11 +1,10 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.android_webview.test;
 
 import android.test.suitebuilder.annotation.SmallTest;
-import android.test.TouchUtils;
 import android.view.View;
 
 import org.chromium.android_webview.AwContents;
@@ -13,6 +12,7 @@ import org.chromium.android_webview.test.util.VideoTestWebServer;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
 import org.chromium.content.browser.test.util.CallbackHelper;
+import org.chromium.content.browser.test.util.TouchCommon;
 
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -45,10 +45,12 @@ public class AwContentsClientGetVideoLoadingProgressViewTest extends AwTestBase
         mViewAttachedCallbackHelper.waitForCallback(0, 1, 20, TimeUnit.SECONDS);
     }
 
-    /*
+
+    /**
      * @Feature({"AndroidWebView"})
      * @SmallTest
-     * http://crbug.com/180575
+     *
+     * http://crbug.com/238735
      */
     @DisabledTest
     public void testGetVideoLoadingProgressView() throws Throwable {
@@ -72,8 +74,8 @@ public class AwContentsClientGetVideoLoadingProgressViewTest extends AwTestBase
             loadUrlSync(awContents, contentsClient.getOnPageFinishedHelper(),
                     webServer.getFullScreenVideoTestURL());
             Thread.sleep(5 * 1000);
-            TouchUtils.clickView(AwContentsClientGetVideoLoadingProgressViewTest.this,
-                    testContainerView);
+            TouchCommon touchCommon = new TouchCommon(this);
+            touchCommon.singleClickView(testContainerView);
             waitForViewAttached();
         } finally {
             if (webServer != null) webServer.getTestWebServer().shutdown();

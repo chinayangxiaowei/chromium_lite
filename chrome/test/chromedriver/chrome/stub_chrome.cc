@@ -11,7 +11,11 @@ StubChrome::StubChrome() {}
 StubChrome::~StubChrome() {}
 
 std::string StubChrome::GetVersion() {
-  return "";
+  return std::string();
+}
+
+int StubChrome::GetBuildNo() {
+  return 9999;
 }
 
 Status StubChrome::GetWebViewIds(std::list<std::string>* web_view_ids) {
@@ -22,22 +26,16 @@ Status StubChrome::GetWebViewById(const std::string& id, WebView** web_view) {
   return Status(kOk);
 }
 
-Status StubChrome::IsJavaScriptDialogOpen(bool* is_open) {
+Status StubChrome::CloseWebView(const std::string& id) {
   return Status(kOk);
 }
 
-Status StubChrome::GetJavaScriptDialogMessage(std::string* message) {
-  return Status(kOk);
-}
-
-Status StubChrome::HandleJavaScriptDialog(
-    bool accept,
-    const std::string& prompt_text) {
+Status StubChrome::GetAutomationExtension(AutomationExtension** extension) {
   return Status(kOk);
 }
 
 std::string StubChrome::GetOperatingSystemName() {
-  return "";
+  return std::string();
 }
 
 Status StubChrome::Quit() {

@@ -10,8 +10,8 @@
 #include "base/bind_helpers.h"
 #include "base/command_line.h"
 #include "base/i18n/time_formatting.h"
-#include "base/stringprintf.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/stringprintf.h"
 #include "base/sys_info.h"
 #include "base/values.h"
 #include "cc/base/switches.h"
@@ -25,10 +25,11 @@
 #include "content/public/browser/web_ui_message_handler.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/content_switches.h"
-#include "content/public/common/gpu_info.h"
 #include "content/public/common/url_constants.h"
+#include "gpu/config/gpu_feature_type.h"
+#include "gpu/config/gpu_info.h"
 #include "grit/content_resources.h"
-#include "third_party/angle/src/common/version.h"
+#include "third_party/angle_dx11/src/common/version.h"
 
 namespace content {
 namespace {
@@ -42,7 +43,7 @@ struct GpuFeatureInfo {
 };
 
 WebUIDataSource* CreateGpuHTMLSource() {
-  WebUIDataSource* source = WebUIDataSource::Create(chrome::kChromeUIGpuHost);
+  WebUIDataSource* source = WebUIDataSource::Create(kChromeUIGpuHost);
 
   source->SetJsonPath("strings.js");
   source->AddResourcePath("gpu_internals.js", IDR_GPU_INTERNALS_JS);
@@ -59,7 +60,7 @@ base::DictionaryValue* NewDescriptionValuePair(const std::string& desc,
 }
 
 base::DictionaryValue* NewDescriptionValuePair(const std::string& desc,
-    Value* value) {
+    base::Value* value) {
   base::DictionaryValue* dict = new base::DictionaryValue();
   dict->SetString("description", desc);
   dict->Set("value", value);
@@ -75,8 +76,8 @@ base::Value* NewStatusValue(const char* name, const char* status) {
 
 #if defined(OS_WIN)
 // Output DxDiagNode tree as nested array of {description,value} pairs
-base::ListValue* DxDiagNodeToList(const DxDiagNode& node) {
-  base::ListValue* list = new ListValue();
+base::ListValue* DxDiagNodeToList(const gpu::DxDiagNode& node) {
+  base::ListValue* list = new base::ListValue();
   for (std::map<std::string, std::string>::const_iterator it =
       node.values.begin();
       it != node.values.end();
@@ -84,7 +85,7 @@ base::ListValue* DxDiagNodeToList(const DxDiagNode& node) {
     list->Append(NewDescriptionValuePair(it->first, it->second));
   }
 
-  for (std::map<std::string, DxDiagNode>::const_iterator it =
+  for (std::map<std::string, gpu::DxDiagNode>::const_iterator it =
       node.children.begin();
       it != node.children.end();
       ++it) {
@@ -95,7 +96,7 @@ base::ListValue* DxDiagNodeToList(const DxDiagNode& node) {
 }
 #endif
 
-std::string GPUDeviceToString(const GPUInfo::GPUDevice& gpu) {
+std::string GPUDeviceToString(const gpu::GPUInfo::GPUDevice& gpu) {
   std::string vendor = base::StringPrintf("0x%04x", gpu.vendor_id);
   if (!gpu.vendor_string.empty())
     vendor += " [" + gpu.vendor_string + "]";
@@ -107,7 +108,7 @@ std::string GPUDeviceToString(const GPUInfo::GPUDevice& gpu) {
 }
 
 base::DictionaryValue* GpuInfoAsDictionaryValue() {
-  GPUInfo gpu_info = GpuDataManagerImpl::GetInstance()->GetGPUInfo();
+  gpu::GPUInfo gpu_info = GpuDataManagerImpl::GetInstance()->GetGPUInfo();
   base::ListValue* basic_info = new base::ListValue();
   basic_info->Append(NewDescriptionValuePair(
       "Initialization time",
@@ -155,6 +156,16 @@ base::DictionaryValue* GpuInfoAsDictionaryValue() {
                                              gpu_info.gl_version_string));
   basic_info->Append(NewDescriptionValuePair("GL_EXTENSIONS",
                                              gpu_info.gl_extensions));
+  basic_info->Append(NewDescriptionValuePair("Window system binding vendor",
+                                             gpu_info.gl_ws_vendor));
+  basic_info->Append(NewDescriptionValuePair("Window system binding version",
+                                             gpu_info.gl_ws_version));
+  basic_info->Append(NewDescriptionValuePair("Window system binding extensions",
+                                             gpu_info.gl_ws_extensions));
+  std::string reset_strategy =
+      base::StringPrintf("0x%04x", gpu_info.gl_reset_notification_strategy);
+  basic_info->Append(NewDescriptionValuePair(
+      "Reset notification strategy", reset_strategy));
 
   base::DictionaryValue* info = new base::DictionaryValue();
   info->Set("basic_info", basic_info);
@@ -191,16 +202,18 @@ bool SupportsAccelerated2dCanvas() {
 
 base::Value* GetFeatureStatus() {
   const CommandLine& command_line = *CommandLine::ForCurrentProcess();
+  GpuDataManagerImpl* manager = GpuDataManagerImpl::GetInstance();
+  std::string gpu_access_blocked_reason;
   bool gpu_access_blocked =
-      !GpuDataManagerImpl::GetInstance()->GpuAccessAllowed();
+      !manager->GpuAccessAllowed(&gpu_access_blocked_reason);
 
-  uint32 flags = GpuDataManagerImpl::GetInstance()->GetBlacklistedFeatures();
   base::DictionaryValue* status = new base::DictionaryValue();
 
   const GpuFeatureInfo kGpuFeatureInfo[] = {
       {
           "2d_canvas",
-          flags & GPU_FEATURE_TYPE_ACCELERATED_2D_CANVAS,
+          manager->IsFeatureBlacklisted(
+              gpu::GPU_FEATURE_TYPE_ACCELERATED_2D_CANVAS),
           command_line.HasSwitch(switches::kDisableAccelerated2dCanvas) ||
           !SupportsAccelerated2dCanvas(),
           "Accelerated 2D canvas is unavailable: either disabled at the command"
@@ -209,7 +222,8 @@ base::Value* GetFeatureStatus() {
       },
       {
           "compositing",
-          flags & GPU_FEATURE_TYPE_ACCELERATED_COMPOSITING,
+          manager->IsFeatureBlacklisted(
+              gpu::GPU_FEATURE_TYPE_ACCELERATED_COMPOSITING),
           command_line.HasSwitch(switches::kDisableAcceleratedCompositing),
           "Accelerated compositing has been disabled, either via about:flags or"
           " command line. This adversely affects performance of all hardware"
@@ -218,16 +232,18 @@ base::Value* GetFeatureStatus() {
       },
       {
           "3d_css",
-          flags & (GPU_FEATURE_TYPE_ACCELERATED_COMPOSITING |
-                   GPU_FEATURE_TYPE_3D_CSS),
+          manager->IsFeatureBlacklisted(
+              gpu::GPU_FEATURE_TYPE_ACCELERATED_COMPOSITING) ||
+          manager->IsFeatureBlacklisted(gpu::GPU_FEATURE_TYPE_3D_CSS),
           command_line.HasSwitch(switches::kDisableAcceleratedLayers),
           "Accelerated layers have been disabled at the command line.",
           false
       },
       {
           "css_animation",
-          flags & (GPU_FEATURE_TYPE_ACCELERATED_COMPOSITING |
-                   GPU_FEATURE_TYPE_3D_CSS),
+          manager->IsFeatureBlacklisted(
+              gpu::GPU_FEATURE_TYPE_ACCELERATED_COMPOSITING) ||
+          manager->IsFeatureBlacklisted(gpu::GPU_FEATURE_TYPE_3D_CSS),
           command_line.HasSwitch(cc::switches::kDisableThreadedAnimation) ||
           command_line.HasSwitch(switches::kDisableAcceleratedCompositing) ||
           command_line.HasSwitch(switches::kDisableAcceleratedLayers),
@@ -236,18 +252,14 @@ base::Value* GetFeatureStatus() {
       },
       {
           "webgl",
-          flags & GPU_FEATURE_TYPE_WEBGL,
-#if defined(OS_ANDROID)
-          !command_line.HasSwitch(switches::kEnableExperimentalWebGL),
-#else
+          manager->IsFeatureBlacklisted(gpu::GPU_FEATURE_TYPE_WEBGL),
           command_line.HasSwitch(switches::kDisableExperimentalWebGL),
-#endif
           "WebGL has been disabled, either via about:flags or command line.",
           false
       },
       {
           "multisampling",
-          flags & GPU_FEATURE_TYPE_MULTISAMPLING,
+          manager->IsFeatureBlacklisted(gpu::GPU_FEATURE_TYPE_MULTISAMPLING),
           command_line.HasSwitch(switches::kDisableGLMultisampling),
           "Multisampling has been disabled, either via about:flags or command"
           " line.",
@@ -255,7 +267,7 @@ base::Value* GetFeatureStatus() {
       },
       {
           "flash_3d",
-          flags & GPU_FEATURE_TYPE_FLASH3D,
+          manager->IsFeatureBlacklisted(gpu::GPU_FEATURE_TYPE_FLASH3D),
           command_line.HasSwitch(switches::kDisableFlash3d),
           "Using 3d in flash has been disabled, either via about:flags or"
           " command line.",
@@ -263,7 +275,7 @@ base::Value* GetFeatureStatus() {
       },
       {
           "flash_stage3d",
-          flags & GPU_FEATURE_TYPE_FLASH_STAGE3D,
+          manager->IsFeatureBlacklisted(gpu::GPU_FEATURE_TYPE_FLASH_STAGE3D),
           command_line.HasSwitch(switches::kDisableFlashStage3d),
           "Using Stage3d in Flash has been disabled, either via about:flags or"
           " command line.",
@@ -271,8 +283,9 @@ base::Value* GetFeatureStatus() {
       },
       {
           "flash_stage3d_baseline",
-          flags & (content::GPU_FEATURE_TYPE_FLASH_STAGE3D_BASELINE |
-                   content::GPU_FEATURE_TYPE_FLASH_STAGE3D),
+          manager->IsFeatureBlacklisted(
+              gpu::GPU_FEATURE_TYPE_FLASH_STAGE3D_BASELINE) ||
+          manager->IsFeatureBlacklisted(gpu::GPU_FEATURE_TYPE_FLASH_STAGE3D),
           command_line.HasSwitch(switches::kDisableFlashStage3d),
           "Using Stage3d Baseline profile in Flash has been disabled, either"
           " via about:flags or command line.",
@@ -280,7 +293,7 @@ base::Value* GetFeatureStatus() {
       },
       {
           "texture_sharing",
-          flags & GPU_FEATURE_TYPE_TEXTURE_SHARING,
+          manager->IsFeatureBlacklisted(gpu::GPU_FEATURE_TYPE_TEXTURE_SHARING),
           command_line.HasSwitch(switches::kDisableImageTransportSurface),
           "Sharing textures between processes has been disabled, either via"
           " about:flags or command line.",
@@ -288,7 +301,8 @@ base::Value* GetFeatureStatus() {
       },
       {
           "video_decode",
-          flags & GPU_FEATURE_TYPE_ACCELERATED_VIDEO_DECODE,
+          manager->IsFeatureBlacklisted(
+              gpu::GPU_FEATURE_TYPE_ACCELERATED_VIDEO_DECODE),
           command_line.HasSwitch(switches::kDisableAcceleratedVideoDecode),
           "Accelerated video decode has been disabled, either via about:flags"
           " or command line.",
@@ -296,43 +310,36 @@ base::Value* GetFeatureStatus() {
       },
       {
           "video",
-          flags & GPU_FEATURE_TYPE_ACCELERATED_VIDEO,
+          manager->IsFeatureBlacklisted(
+              gpu::GPU_FEATURE_TYPE_ACCELERATED_VIDEO),
           command_line.HasSwitch(switches::kDisableAcceleratedVideo) ||
           command_line.HasSwitch(switches::kDisableAcceleratedCompositing),
           "Accelerated video presentation has been disabled, either via"
           " about:flags or command line.",
           true
       },
+#if defined(OS_CHROMEOS)
       {
           "panel_fitting",
-          flags & GPU_FEATURE_TYPE_PANEL_FITTING,
-#if defined(OS_CHROMEOS)
+          manager->IsFeatureBlacklisted(gpu::GPU_FEATURE_TYPE_PANEL_FITTING),
           command_line.HasSwitch(switches::kDisablePanelFitting),
-#else
-          true,
-#endif
-          "Panel fitting is unavailable, either disabled at the command"
-          " line or not supported by the current system.",
+          "Panel fitting has been disabled, either via about:flags or command"
+          " line.",
           false
       },
+#endif
       {
           "force_compositing_mode",
-          (flags & GPU_FEATURE_TYPE_FORCE_COMPOSITING_MODE) &&
+          manager->IsFeatureBlacklisted(
+              gpu::GPU_FEATURE_TYPE_FORCE_COMPOSITING_MODE) &&
           !IsForceCompositingModeEnabled(),
           !IsForceCompositingModeEnabled() &&
-          !(flags & GPU_FEATURE_TYPE_FORCE_COMPOSITING_MODE),
+          !manager->IsFeatureBlacklisted(
+              gpu::GPU_FEATURE_TYPE_FORCE_COMPOSITING_MODE),
           "Force compositing mode is off, either disabled at the command"
           " line or not supported by the current system.",
           false
       },
-      {
-          "raster",
-          false,
-          !command_line.HasSwitch(switches::kEnableAcceleratedPainting),
-          "Accelerated rasterization has not been enabled or"
-          " is not supported by the current system.",
-          true
-      }
   };
   const size_t kNumFeatures = sizeof(kGpuFeatureInfo) / sizeof(GpuFeatureInfo);
 
@@ -361,8 +368,7 @@ base::Value* GetFeatureStatus() {
           else
             status += "_off";
         }
-      } else if (GpuDataManagerImpl::GetInstance()->
-            ShouldUseSoftwareRendering()) {
+      } else if (GpuDataManagerImpl::GetInstance()->ShouldUseSwiftShader()) {
         status = "unavailable_software";
       } else if (kGpuFeatureInfo[i].blocked ||
                  gpu_access_blocked) {
@@ -375,7 +381,8 @@ base::Value* GetFeatureStatus() {
         status = "enabled";
         if (kGpuFeatureInfo[i].name == "webgl" &&
             (command_line.HasSwitch(switches::kDisableAcceleratedCompositing) ||
-             (flags & GPU_FEATURE_TYPE_ACCELERATED_COMPOSITING)))
+             manager->IsFeatureBlacklisted(
+                 gpu::GPU_FEATURE_TYPE_ACCELERATED_COMPOSITING)))
           status += "_readback";
         bool has_thread = IsThreadedCompositingEnabled();
         if (kGpuFeatureInfo[i].name == "compositing") {
@@ -400,18 +407,18 @@ base::Value* GetFeatureStatus() {
       feature_status_list->Append(
           NewStatusValue(kGpuFeatureInfo[i].name.c_str(), status.c_str()));
     }
-    GpuSwitchingOption gpu_switching_option =
+    gpu::GpuSwitchingOption gpu_switching_option =
         GpuDataManagerImpl::GetInstance()->GetGpuSwitchingOption();
-    if (gpu_switching_option != GPU_SWITCHING_OPTION_UNKNOWN) {
+    if (gpu_switching_option != gpu::GPU_SWITCHING_OPTION_UNKNOWN) {
       std::string gpu_switching;
       switch (gpu_switching_option) {
-        case GPU_SWITCHING_OPTION_AUTOMATIC:
+      case gpu::GPU_SWITCHING_OPTION_AUTOMATIC:
           gpu_switching = "gpu_switching_automatic";
           break;
-        case GPU_SWITCHING_OPTION_FORCE_DISCRETE:
+      case gpu::GPU_SWITCHING_OPTION_FORCE_DISCRETE:
           gpu_switching = "gpu_switching_force_discrete";
           break;
-        case GPU_SWITCHING_OPTION_FORCE_INTEGRATED:
+      case gpu::GPU_SWITCHING_OPTION_FORCE_INTEGRATED:
           gpu_switching = "gpu_switching_force_integrated";
           break;
         default:
@@ -425,16 +432,16 @@ base::Value* GetFeatureStatus() {
 
   // Build the problems list.
   {
-    base::ListValue* problem_list =
-        GpuDataManagerImpl::GetInstance()->GetBlacklistReasons();
+    base::ListValue* problem_list = new base::ListValue();
+    GpuDataManagerImpl::GetInstance()->GetBlacklistReasons(problem_list);
 
     if (gpu_access_blocked) {
       base::DictionaryValue* problem = new base::DictionaryValue();
       problem->SetString("description",
-          "GPU process was unable to boot. Access to GPU disallowed.");
+          "GPU process was unable to boot: " + gpu_access_blocked_reason);
       problem->Set("crBugs", new base::ListValue());
       problem->Set("webkitBugs", new base::ListValue());
-      problem_list->Append(problem);
+      problem_list->Insert(0, problem);
     }
 
     for (size_t i = 0; i < kNumFeatures; ++i) {
@@ -449,6 +456,13 @@ base::Value* GetFeatureStatus() {
     }
 
     status->Set("problems", problem_list);
+  }
+
+  // Build driver bug workaround list.
+  {
+    base::ListValue* workaround_list = new base::ListValue();
+    GpuDataManagerImpl::GetInstance()->GetDriverBugWorkarounds(workaround_list);
+    status->Set("workarounds", workaround_list);
   }
 
   return status;
@@ -470,6 +484,7 @@ class GpuMessageHandler
 
   // GpuDataManagerObserver implementation.
   virtual void OnGpuInfoUpdate() OVERRIDE;
+  virtual void OnGpuSwitching() OVERRIDE;
 
   // Messages
   void OnBrowserBridgeInitialized(const base::ListValue* list);
@@ -594,6 +609,8 @@ base::Value* GpuMessageHandler::OnRequestClientInfo(
   dict->SetString("graphics_backend", "Skia");
   dict->SetString("blacklist_version",
       GpuDataManagerImpl::GetInstance()->GetBlacklistVersion());
+  dict->SetString("driver_bug_list_version",
+      GpuDataManagerImpl::GetInstance()->GetDriverBugListVersion());
 
   return dict;
 }
@@ -616,6 +633,10 @@ void GpuMessageHandler::OnGpuInfoUpdate() {
   // Send GPU Info to javascript.
   web_ui()->CallJavascriptFunction("browserBridge.onGpuInfoUpdate",
       *(gpu_info_val.get()));
+}
+
+void GpuMessageHandler::OnGpuSwitching() {
+  GpuDataManagerImpl::GetInstance()->RequestCompleteGpuInfoIfNeeded();
 }
 
 }  // namespace

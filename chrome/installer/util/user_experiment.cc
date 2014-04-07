@@ -11,12 +11,12 @@
 
 #include "base/command_line.h"
 #include "base/files/file_path.h"
-#include "base/process_util.h"
+#include "base/process/launch.h"
 #include "base/rand_util.h"
-#include "base/string_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/win/scoped_handle.h"
 #include "base/win/windows_version.h"
 #include "chrome/common/attrition_experiments.h"
@@ -395,7 +395,7 @@ void LaunchBrowserUserExperiment(const CommandLine& base_cmd_line,
       return;
     }
   } else {
-    if ((NEW_VERSION_UPDATED != status) && (REENTRY_SYS_UPDATE != status)) {
+    if (status != NEW_VERSION_UPDATED && status != REENTRY_SYS_UPDATE) {
       // We are not updating or in re-launch. Exit.
       return;
     }
@@ -484,7 +484,7 @@ void LaunchBrowserUserExperiment(const CommandLine& base_cmd_line,
 // as a parameter to chrome.exe.
 void InactiveUserToastExperiment(int flavor,
                                  const string16& experiment_group,
-                                 const Product& installation,
+                                 const Product& product,
                                  const base::FilePath& application_path) {
   // Add the 'welcome back' url for chrome to show.
   CommandLine options(CommandLine::NO_PROGRAM);
@@ -501,7 +501,7 @@ void InactiveUserToastExperiment(int flavor,
 
   // Launch chrome now. It will show the toast UI.
   int32 exit_code = 0;
-  if (!installation.LaunchChromeAndWait(application_path, options, &exit_code))
+  if (!product.LaunchChromeAndWait(application_path, options, &exit_code))
     return;
 
   // The chrome process has exited, figure out what happened.
@@ -530,8 +530,8 @@ void InactiveUserToastExperiment(int flavor,
   bool system_level_toast = CommandLine::ForCurrentProcess()->HasSwitch(
       switches::kSystemLevelToast);
 
-  CommandLine cmd(InstallUtil::GetChromeUninstallCmd(system_level_toast,
-                      installation.distribution()->GetType()));
+  CommandLine cmd(InstallUtil::GetChromeUninstallCmd(
+                      system_level_toast, product.distribution()->GetType()));
   base::LaunchProcess(cmd, base::LaunchOptions(), NULL);
 }
 

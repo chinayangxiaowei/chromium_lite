@@ -2,17 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/message_loop.h"
-#include "media/video/capture/screen/screen_capturer_fake.h"
-#include "media/video/capture/screen/screen_capturer_mock_objects.h"
+#include "base/message_loop/message_loop.h"
 #include "remoting/base/auto_thread_task_runner.h"
 #include "remoting/base/constants.h"
 #include "remoting/host/audio_capturer.h"
 #include "remoting/host/client_session.h"
 #include "remoting/host/desktop_environment.h"
 #include "remoting/host/host_mock_objects.h"
+#include "remoting/host/screen_capturer_fake.h"
 #include "remoting/protocol/protocol_mock_objects.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/webrtc/modules/desktop_capture/desktop_region.h"
+#include "third_party/webrtc/modules/desktop_capture/screen_capturer_mock_objects.h"
 
 namespace remoting {
 
@@ -26,6 +27,7 @@ using protocol::SessionConfig;
 
 using testing::_;
 using testing::AnyNumber;
+using testing::AtMost;
 using testing::DeleteArg;
 using testing::DoAll;
 using testing::Expectation;
@@ -67,7 +69,7 @@ class ClientSessionTest : public testing::Test {
   void StopClientSession();
 
  protected:
-  // Creates a DesktopEnvironment with a fake media::ScreenCapturer, to mock
+  // Creates a DesktopEnvironment with a fake webrtc::ScreenCapturer, to mock
   // DesktopEnvironmentFactory::Create().
   DesktopEnvironment* CreateDesktopEnvironment();
 
@@ -75,9 +77,9 @@ class ClientSessionTest : public testing::Test {
   // DesktopEnvironment::CreateInputInjector().
   InputInjector* CreateInputInjector();
 
-  // Creates a fake media::ScreenCapturer, to mock
+  // Creates a fake webrtc::ScreenCapturer, to mock
   // DesktopEnvironment::CreateVideoCapturer().
-  media::ScreenCapturer* CreateVideoCapturer();
+  webrtc::ScreenCapturer* CreateVideoCapturer();
 
   // Notifies the client session that the client connection has been
   // authenticated and channels have been connected. This effectively enables
@@ -89,7 +91,7 @@ class ClientSessionTest : public testing::Test {
   void QuitMainMessageLoop();
 
   // Message loop passed to |client_session_| to perform all functions on.
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
 
   // ClientSession instance under test.
   scoped_ptr<ClientSession> client_session_;
@@ -162,7 +164,8 @@ void ClientSessionTest::SetUp() {
       ui_task_runner, // UI thread.
       connection.PassAs<protocol::ConnectionToClient>(),
       desktop_environment_factory_.get(),
-      base::TimeDelta()));
+      base::TimeDelta(),
+      NULL));
 }
 
 void ClientSessionTest::TearDown() {
@@ -190,9 +193,13 @@ DesktopEnvironment* ClientSessionTest::CreateDesktopEnvironment() {
   EXPECT_CALL(*desktop_environment, CreateInputInjectorPtr())
       .WillOnce(Invoke(this, &ClientSessionTest::CreateInputInjector));
   EXPECT_CALL(*desktop_environment, CreateScreenControlsPtr())
-      .Times(1);
+      .Times(AtMost(1));
   EXPECT_CALL(*desktop_environment, CreateVideoCapturerPtr())
       .WillOnce(Invoke(this, &ClientSessionTest::CreateVideoCapturer));
+  EXPECT_CALL(*desktop_environment, GetCapabilities())
+      .Times(AtMost(1));
+  EXPECT_CALL(*desktop_environment, SetCapabilities(_))
+      .Times(AtMost(1));
 
   return desktop_environment;
 }
@@ -202,8 +209,8 @@ InputInjector* ClientSessionTest::CreateInputInjector() {
   return input_injector_.release();
 }
 
-media::ScreenCapturer* ClientSessionTest::CreateVideoCapturer() {
-  return new media::ScreenCapturerFake();
+webrtc::ScreenCapturer* ClientSessionTest::CreateVideoCapturer() {
+  return new ScreenCapturerFake();
 }
 
 void ClientSessionTest::ConnectClientSession() {
@@ -212,7 +219,7 @@ void ClientSessionTest::ConnectClientSession() {
 }
 
 void ClientSessionTest::QuitMainMessageLoop() {
-  message_loop_.PostTask(FROM_HERE, MessageLoop::QuitClosure());
+  message_loop_.PostTask(FROM_HERE, base::MessageLoop::QuitClosure());
 }
 
 MATCHER_P2(EqualsClipboardEvent, m, d, "") {
@@ -234,7 +241,8 @@ TEST_F(ClientSessionTest, ClipboardStubFilter) {
   clipboard_event3.set_data("c");
 
   Expectation authenticated =
-      EXPECT_CALL(session_event_handler_, OnSessionAuthenticated(_));
+      EXPECT_CALL(session_event_handler_, OnSessionAuthenticated(_))
+          .WillOnce(Return(true));
   EXPECT_CALL(*input_injector_, StartPtr(_))
       .After(authenticated);
   EXPECT_CALL(session_event_handler_, OnSessionChannelsConnected(_))
@@ -269,6 +277,8 @@ TEST_F(ClientSessionTest, ClipboardStubFilter) {
   message_loop_.Run();
 }
 
+namespace {
+
 MATCHER_P2(EqualsUsbEvent, usb_keycode, pressed, "") {
   return arg.usb_keycode() == (unsigned int)usb_keycode &&
          arg.pressed() == pressed;
@@ -280,6 +290,8 @@ MATCHER_P2(EqualsMouseEvent, x, y, "") {
 
 MATCHER_P2(EqualsMouseButtonEvent, button, down, "") {
   return arg.button() == button && arg.button_down() == down;
+}
+
 }
 
 TEST_F(ClientSessionTest, InputStubFilter) {
@@ -312,7 +324,8 @@ TEST_F(ClientSessionTest, InputStubFilter) {
   mouse_event3.set_y(301);
 
   Expectation authenticated =
-      EXPECT_CALL(session_event_handler_, OnSessionAuthenticated(_));
+      EXPECT_CALL(session_event_handler_, OnSessionAuthenticated(_))
+          .WillOnce(Return(true));
   EXPECT_CALL(*input_injector_, StartPtr(_))
       .After(authenticated);
   EXPECT_CALL(session_event_handler_, OnSessionChannelsConnected(_))
@@ -366,7 +379,8 @@ TEST_F(ClientSessionTest, LocalInputTest) {
   mouse_event3.set_y(301);
 
   Expectation authenticated =
-      EXPECT_CALL(session_event_handler_, OnSessionAuthenticated(_));
+      EXPECT_CALL(session_event_handler_, OnSessionAuthenticated(_))
+          .WillOnce(Return(true));
   EXPECT_CALL(*input_injector_, StartPtr(_))
       .After(authenticated);
   EXPECT_CALL(session_event_handler_, OnSessionChannelsConnected(_))
@@ -422,7 +436,8 @@ TEST_F(ClientSessionTest, RestoreEventState) {
   mousedown.set_button_down(true);
 
   Expectation authenticated =
-      EXPECT_CALL(session_event_handler_, OnSessionAuthenticated(_));
+      EXPECT_CALL(session_event_handler_, OnSessionAuthenticated(_))
+          .WillOnce(Return(true));
   EXPECT_CALL(*input_injector_, StartPtr(_))
       .After(authenticated);
   EXPECT_CALL(session_event_handler_, OnSessionChannelsConnected(_))
@@ -464,7 +479,8 @@ TEST_F(ClientSessionTest, RestoreEventState) {
 
 TEST_F(ClientSessionTest, ClampMouseEvents) {
   Expectation authenticated =
-      EXPECT_CALL(session_event_handler_, OnSessionAuthenticated(_));
+      EXPECT_CALL(session_event_handler_, OnSessionAuthenticated(_))
+          .WillOnce(Return(true));
   EXPECT_CALL(*input_injector_, StartPtr(_))
       .After(authenticated);
   EXPECT_CALL(session_event_handler_, OnSessionChannelsConnected(_))
@@ -475,9 +491,9 @@ TEST_F(ClientSessionTest, ClampMouseEvents) {
   Expectation connected = authenticated;
 
   int input_x[3] = { -999, 100, 999 };
-  int expected_x[3] = { 0, 100, media::ScreenCapturerFake::kWidth - 1 };
+  int expected_x[3] = { 0, 100, ScreenCapturerFake::kWidth - 1 };
   int input_y[3] = { -999, 50, 999 };
-  int expected_y[3] = { 0, 50, media::ScreenCapturerFake::kHeight - 1 };
+  int expected_y[3] = { 0, 50, ScreenCapturerFake::kHeight - 1 };
 
   protocol::MouseEvent expected_event;
   for (int j = 0; j < 3; j++) {

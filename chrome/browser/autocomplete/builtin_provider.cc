@@ -4,18 +4,19 @@
 
 #include "chrome/browser/autocomplete/builtin_provider.h"
 
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include <algorithm>
+
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/autocomplete/autocomplete_input.h"
-#include "chrome/browser/browser_about_handler.h"
-#include "chrome/browser/net/url_fixer_upper.h"
+#include "chrome/common/net/url_fixer_upper.h"
 #include "chrome/common/url_constants.h"
 
 namespace {
 
 // This list should be kept in sync with chrome/common/url_constants.h.
 // Only include useful sub-pages, confirmation alerts are not useful.
-const char* kChromeSettingsSubPages[] = {
+const char* const kChromeSettingsSubPages[] = {
   chrome::kAutofillSubPage,
   chrome::kClearBrowserDataSubPage,
   chrome::kContentSettingsSubPage,
@@ -32,15 +33,18 @@ const char* kChromeSettingsSubPages[] = {
 
 }  // namespace
 
-const int BuiltinProvider::kRelevance = 575;
+const int BuiltinProvider::kRelevance = 860;
 
 BuiltinProvider::BuiltinProvider(AutocompleteProviderListener* listener,
                                  Profile* profile)
     : AutocompleteProvider(listener, profile,
           AutocompleteProvider::TYPE_BUILTIN) {
-  std::vector<std::string> builtins(ChromePaths());
+  std::vector<std::string> builtins(
+      chrome::kChromeHostURLs,
+      chrome::kChromeHostURLs + chrome::kNumberOfChromeHostURLs);
+  std::sort(builtins.begin(), builtins.end());
   for (std::vector<std::string>::iterator i(builtins.begin());
-      i != builtins.end(); ++i)
+       i != builtins.end(); ++i)
     builtins_.push_back(ASCIIToUTF16(*i));
   string16 settings(ASCIIToUTF16(chrome::kChromeUISettingsHost) +
                     ASCIIToUTF16("/"));
@@ -113,7 +117,7 @@ BuiltinProvider::~BuiltinProvider() {}
 void BuiltinProvider::AddMatch(const string16& match_string,
                                const ACMatchClassifications& styles) {
   AutocompleteMatch match(this, kRelevance, false,
-                          AutocompleteMatch::NAVSUGGEST);
+                          AutocompleteMatchType::NAVSUGGEST);
   match.fill_into_edit = match_string;
   match.destination_url = GURL(match_string);
   match.contents = match_string;

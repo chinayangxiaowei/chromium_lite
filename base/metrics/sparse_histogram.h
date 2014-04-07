@@ -64,9 +64,10 @@ class BASE_EXPORT_PRIVATE SparseHistogram : public HistogramBase {
 
   // HistogramBase implementation:
   virtual HistogramType GetHistogramType() const OVERRIDE;
-  virtual bool HasConstructionArguments(Sample minimum,
-                                        Sample maximum,
-                                        size_t bucket_count) const OVERRIDE;
+  virtual bool HasConstructionArguments(
+      Sample expected_minimum,
+      Sample expected_maximum,
+      size_t expected_bucket_count) const OVERRIDE;
   virtual void Add(Sample value) OVERRIDE;
   virtual void AddSamples(const HistogramSamples& samples) OVERRIDE;
   virtual bool AddSamplesFromPickle(PickleIterator* iter) OVERRIDE;
@@ -88,7 +89,17 @@ class BASE_EXPORT_PRIVATE SparseHistogram : public HistogramBase {
 
   virtual void GetParameters(DictionaryValue* params) const OVERRIDE;
   virtual void GetCountAndBucketData(Count* count,
+                                     int64* sum,
                                      ListValue* buckets) const OVERRIDE;
+
+  // Helpers for emitting Ascii graphic.  Each method appends data to output.
+  void WriteAsciiImpl(bool graph_it,
+                      const std::string& newline,
+                      std::string* output) const;
+
+  // Write a common header message describing this histogram.
+  void WriteAsciiHeader(const Count total_count,
+                        std::string* output) const;
 
   // For constuctor calling.
   friend class SparseHistogramTest;

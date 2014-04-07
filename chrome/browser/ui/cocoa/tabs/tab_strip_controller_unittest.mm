@@ -93,7 +93,7 @@ class TabStripControllerTest : public CocoaProfileTest {
     // Create the "switch view" (view that gets changed out when a tab
     // switches).
     NSRect switch_frame = NSMakeRect(0, 0, content_frame.size.width, 500);
-    scoped_nsobject<NSView> switch_view(
+    base::scoped_nsobject<NSView> switch_view(
         [[NSView alloc] initWithFrame:switch_frame]);
     [parent addSubview:switch_view.get()];
 
@@ -105,7 +105,7 @@ class TabStripControllerTest : public CocoaProfileTest {
         [[TabStripView alloc] initWithFrame:strip_frame]);
     [parent addSubview:tab_strip_.get()];
     NSRect button_frame = NSMakeRect(0, 0, 15, 15);
-    scoped_nsobject<NewTabButton> new_tab_button(
+    base::scoped_nsobject<NewTabButton> new_tab_button(
         [[NewTabButton alloc] initWithFrame:button_frame]);
     [tab_strip_ addSubview:new_tab_button.get()];
     [tab_strip_ setNewTabButton:new_tab_button.get()];
@@ -152,9 +152,9 @@ class TabStripControllerTest : public CocoaProfileTest {
 
   scoped_ptr<TestTabStripModelDelegate> delegate_;
   TabStripModel* model_;
-  scoped_nsobject<TestTabStripControllerDelegate> controller_delegate_;
-  scoped_nsobject<TabStripController> controller_;
-  scoped_nsobject<TabStripView> tab_strip_;
+  base::scoped_nsobject<TestTabStripControllerDelegate> controller_delegate_;
+  base::scoped_nsobject<TabStripController> controller_;
+  base::scoped_nsobject<TabStripView> tab_strip_;
 };
 
 // Test adding and removing tabs and making sure that views get added to
@@ -188,7 +188,7 @@ TEST_F(TabStripControllerTest, CorrectToolTipText) {
   // Check that there's no tooltip yet.
   EXPECT_FALSE([controller_ view:nil
                 stringForToolTip:nil
-                           point:NSMakePoint(0,0)
+                           point:NSZeroPoint
                         userData:nil]);
 
   // Set up mouse event on overlap of tab1 + tab2.
@@ -202,7 +202,7 @@ TEST_F(TabStripControllerTest, CorrectToolTipText) {
   EXPECT_STREQ("Tab2",
       [[controller_ view:nil
         stringForToolTip:nil
-                   point:NSMakePoint(0,0)
+                   point:NSZeroPoint
                 userData:nil] cStringUsingEncoding:NSASCIIStringEncoding]);
 
 
@@ -213,7 +213,7 @@ TEST_F(TabStripControllerTest, CorrectToolTipText) {
   EXPECT_STREQ("Tab1",
       [[controller_ view:nil
         stringForToolTip:nil
-                   point:NSMakePoint(0,0)
+                   point:NSZeroPoint
                 userData:nil] cStringUsingEncoding:NSASCIIStringEncoding]);
 
   // Hover over tab 2.
@@ -223,7 +223,7 @@ TEST_F(TabStripControllerTest, CorrectToolTipText) {
   EXPECT_STREQ("Tab2",
       [[controller_ view:nil
         stringForToolTip:nil
-                   point:NSMakePoint(0,0)
+                   point:NSZeroPoint
                 userData:nil] cStringUsingEncoding:NSASCIIStringEncoding]);
 }
 
@@ -240,14 +240,13 @@ TEST_F(TabStripControllerTest, TabCloseDuringDrag) {
   // Schedule a task to close all the tabs and stop the drag, before the call to
   // -maybeStartDrag:forTab:, which starts a nested event loop. This task will
   // run in that nested event loop, which shouldn't crash.
-  scoped_nsobject<TestClosureRunner> runner(
-      [[TestClosureRunner alloc] initWithClosure:
-          base::Bind(&TabStripControllerTest::CloseTabsAndEndDrag,
-                     base::Unretained(this))]);
+  base::scoped_nsobject<TestClosureRunner> runner([[TestClosureRunner alloc]
+      initWithClosure:base::Bind(&TabStripControllerTest::CloseTabsAndEndDrag,
+                                 base::Unretained(this))]);
   [runner scheduleDelayedRun];
 
   NSEvent* event =
-      cocoa_test_event_utils::LeftMouseDownAtPoint(NSMakePoint(0, 0));
+      cocoa_test_event_utils::LeftMouseDownAtPoint(NSZeroPoint);
   [[controller_ dragController] maybeStartDrag:event forTab:tab];
 }
 

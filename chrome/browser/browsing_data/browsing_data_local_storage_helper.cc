@@ -5,12 +5,12 @@
 #include "chrome/browser/browsing_data/browsing_data_local_storage_helper.h"
 
 #include "base/bind.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "chrome/browser/browsing_data/browsing_data_helper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/local_storage_usage_info.h"
 #include "content/public/browser/storage_partition.h"
-#include "webkit/dom_storage/dom_storage_types.h"
 
 using content::BrowserContext;
 using content::BrowserThread;
@@ -53,12 +53,12 @@ void BrowsingDataLocalStorageHelper::DeleteOrigin(const GURL& origin) {
 }
 
 void BrowsingDataLocalStorageHelper::GetUsageInfoCallback(
-    const std::vector<dom_storage::LocalStorageUsageInfo>& infos) {
+    const std::vector<content::LocalStorageUsageInfo>& infos) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
   for (size_t i = 0; i < infos.size(); ++i) {
     // Non-websafe state is not considered browsing data.
-    const dom_storage::LocalStorageUsageInfo& info = infos[i];
+    const content::LocalStorageUsageInfo& info = infos[i];
     if (BrowsingDataHelper::HasWebScheme(info.origin)) {
       local_storage_info_.push_back(
           LocalStorageInfo(info.origin, info.data_size, info.last_modified));
@@ -128,10 +128,10 @@ void CannedBrowsingDataLocalStorageHelper::StartFetching(
   completion_callback_ = callback;
 
   // We post a task to emulate async fetching behavior.
-  MessageLoop::current()->PostTask(
+  base::MessageLoop::current()->PostTask(
       FROM_HERE,
-      base::Bind(&CannedBrowsingDataLocalStorageHelper::
-          ConvertPendingInfo, this));
+      base::Bind(&CannedBrowsingDataLocalStorageHelper::ConvertPendingInfo,
+                 this));
 }
 
 CannedBrowsingDataLocalStorageHelper::~CannedBrowsingDataLocalStorageHelper() {}
@@ -144,7 +144,7 @@ void CannedBrowsingDataLocalStorageHelper::ConvertPendingInfo() {
     local_storage_info_.push_back(
         LocalStorageInfo(*iter, 0,  base::Time()));
   }
-  MessageLoop::current()->PostTask(
+  base::MessageLoop::current()->PostTask(
       FROM_HERE,
       base::Bind(&CannedBrowsingDataLocalStorageHelper::CallCompletionCallback,
                  this));

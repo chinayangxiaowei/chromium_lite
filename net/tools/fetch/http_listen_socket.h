@@ -5,9 +5,9 @@
 #ifndef NET_BASE_TOOLS_HTTP_LISTEN_SOCKET_H_
 #define NET_BASE_TOOLS_HTTP_LISTEN_SOCKET_H_
 
-#include "base/message_loop.h"
-#include "net/base/stream_listen_socket.h"
-#include "net/base/tcp_listen_socket.h"
+#include "base/message_loop/message_loop.h"
+#include "net/socket/stream_listen_socket.h"
+#include "net/socket/tcp_listen_socket.h"
 
 class HttpServerRequestInfo;
 class HttpServerResponseInfo;

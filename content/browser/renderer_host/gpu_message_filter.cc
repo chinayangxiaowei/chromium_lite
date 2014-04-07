@@ -10,7 +10,6 @@
 
 #include "base/bind.h"
 #include "base/command_line.h"
-#include "base/process_util.h"
 #include "content/browser/gpu/browser_gpu_channel_host_factory.h"
 #include "content/browser/gpu/gpu_process_host.h"
 #include "content/browser/gpu/gpu_surface_tracker.h"
@@ -18,6 +17,7 @@
 #include "content/common/gpu/gpu_messages.h"
 #include "content/port/browser/render_widget_host_view_frame_subscriber.h"
 #include "content/public/common/content_switches.h"
+#include "gpu/command_buffer/service/gpu_switches.h"
 
 namespace content {
 
@@ -65,9 +65,12 @@ GpuMessageFilter::GpuMessageFilter(int render_process_id,
   // contexts with the compositor context.
   share_contexts_ = true;
 #else
-  // Share contexts when compositing webview plugin.
+  // Share contexts when compositing webview plugin or using share groups
+  // for asynchronous texture uploads.
   if (!CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kDisableBrowserPluginCompositing))
+          switches::kDisableBrowserPluginCompositing) ||
+      CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kEnableShareGroupAsyncTextureUpload))
     share_contexts_ = true;
 #endif
 }
@@ -221,7 +224,7 @@ void GpuMessageFilter::OnCreateViewCommandBuffer(
 void GpuMessageFilter::EstablishChannelCallback(
     IPC::Message* reply,
     const IPC::ChannelHandle& channel,
-    const GPUInfo& gpu_info) {
+    const gpu::GPUInfo& gpu_info) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
 
   GpuHostMsg_EstablishGpuChannel::WriteReplyParams(

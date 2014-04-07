@@ -6,13 +6,13 @@
 
 #include "base/logging.h"
 #include "content/browser/android/content_view_core_impl.h"
-#include "content/browser/android/media_player_manager_android.h"
 #include "content/browser/renderer_host/render_widget_host_view_android.h"
 #include "content/browser/renderer_host/render_view_host_factory.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
 #include "content/browser/web_contents/interstitial_page_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/browser/web_contents_delegate.h"
+#include "media/base/android/media_player_manager.h"
 
 namespace content {
 WebContentsViewPort* CreateWebContentsView(
@@ -54,21 +54,24 @@ void WebContentsViewAndroid::SetContentViewCore(
   }
 }
 
-void WebContentsViewAndroid::RequestExternalVideoSurface(int player_id) {
+#if defined(GOOGLE_TV)
+void WebContentsViewAndroid::NotifyExternalSurface(
+    int player_id, bool is_request, const gfx::RectF& rect) {
   if (content_view_core_)
-    content_view_core_->RequestExternalVideoSurface(player_id);
+    content_view_core_->NotifyExternalSurface(player_id, is_request, rect);
 }
+#endif
 
 gfx::NativeView WebContentsViewAndroid::GetNativeView() const {
-  return content_view_core_;
+  return content_view_core_ ? content_view_core_->GetViewAndroid() : NULL;
 }
 
 gfx::NativeView WebContentsViewAndroid::GetContentNativeView() const {
-  return content_view_core_;
+  return content_view_core_ ? content_view_core_->GetViewAndroid() : NULL;
 }
 
 gfx::NativeWindow WebContentsViewAndroid::GetTopLevelNativeWindow() const {
-  return content_view_core_->GetWindowAndroid();
+  return content_view_core_ ? content_view_core_->GetWindowAndroid() : NULL;
 }
 
 void WebContentsViewAndroid::GetContainerBounds(gfx::Rect* out) const {
@@ -121,7 +124,7 @@ void WebContentsViewAndroid::RestoreFocus() {
   NOTIMPLEMENTED();
 }
 
-WebDropData* WebContentsViewAndroid::GetDropData() const {
+DropData* WebContentsViewAndroid::GetDropData() const {
   NOTIMPLEMENTED();
   return NULL;
 }
@@ -175,10 +178,9 @@ void WebContentsViewAndroid::SetOverscrollControllerEnabled(bool enabled) {
 }
 
 void WebContentsViewAndroid::ShowContextMenu(
-    const ContextMenuParams& params,
-    ContextMenuSourceType type) {
-  if (delegate_.get())
-    delegate_->ShowContextMenu(params, type);
+    const ContextMenuParams& params) {
+  if (delegate_)
+    delegate_->ShowContextMenu(params);
 }
 
 void WebContentsViewAndroid::ShowPopupMenu(
@@ -186,7 +188,7 @@ void WebContentsViewAndroid::ShowPopupMenu(
     int item_height,
     double item_font_size,
     int selected_item,
-    const std::vector<WebMenuItem>& items,
+    const std::vector<MenuItem>& items,
     bool right_aligned,
     bool allow_multiple_selection) {
   if (content_view_core_) {
@@ -196,7 +198,7 @@ void WebContentsViewAndroid::ShowPopupMenu(
 }
 
 void WebContentsViewAndroid::StartDragging(
-    const WebDropData& drop_data,
+    const DropData& drop_data,
     WebKit::WebDragOperationsMask allowed_ops,
     const gfx::ImageSkia& image,
     const gfx::Vector2d& image_offset,

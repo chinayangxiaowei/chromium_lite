@@ -5,8 +5,8 @@
 #include "chrome/browser/sync/sync_prefs.h"
 
 #include "base/command_line.h"
-#include "base/message_loop.h"
-#include "base/time.h"
+#include "base/message_loop/message_loop.h"
+#include "base/time/time.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_pref_service_syncable.h"
@@ -24,15 +24,13 @@ using ::testing::StrictMock;
 class SyncPrefsTest : public testing::Test {
  protected:
   virtual void SetUp() OVERRIDE {
-    CommandLine::ForCurrentProcess()->AppendSwitch(
-        switches::kHistoryEnableFullHistorySync);
-    SyncPrefs::RegisterUserPrefs(pref_service_.registry());
+    SyncPrefs::RegisterProfilePrefs(pref_service_.registry());
   }
 
   TestingPrefServiceSyncable pref_service_;
 
  private:
-  MessageLoop loop_;
+  base::MessageLoop loop_;
 };
 
 TEST_F(SyncPrefsTest, Basic) {
@@ -145,6 +143,7 @@ TEST_F(SyncPrefsTest, PreferredTypesNotKeepEverythingSynced) {
     }
     if (it.Get() == syncer::PREFERENCES) {
       expected_preferred_types.Put(syncer::DICTIONARY);
+      expected_preferred_types.Put(syncer::PRIORITY_PREFERENCES);
       expected_preferred_types.Put(syncer::SEARCH_ENGINES);
     }
     if (it.Get() == syncer::APPS) {

@@ -213,6 +213,7 @@ class HandshakeTask(object):
     '  <mechanisms xmlns="urn:ietf:params:xml:ns:xmpp-sasl">'
     '    <mechanism>PLAIN</mechanism>'
     '    <mechanism>X-GOOGLE-TOKEN</mechanism>'
+    '    <mechanism>X-OAUTH2</mechanism>'
     '  </mechanisms>'
     '</stream:features>')
 
@@ -573,6 +574,14 @@ class XmppServer(asyncore.dispatcher):
 
   def SetAuthenticated(self, auth_valid):
     self._authenticated = auth_valid
+
+    # We check authentication only when establishing new connections.  We close
+    # all existing connections here to make sure previously connected clients
+    # pick up on the change.  It's a hack, but it works well enough for our
+    # purposes.
+    if not self._authenticated:
+      for connection in self._handshake_done_connections:
+        connection.close()
 
   def GetAuthenticated(self):
     return self._authenticated

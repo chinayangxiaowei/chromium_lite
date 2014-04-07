@@ -9,7 +9,7 @@
 #include "base/format_macros.h"
 #include "base/logging.h"
 #include "base/pickle.h"
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "base/threading/thread_restrictions.h"
 #include "content/browser/download/download_interrupt_reasons_impl.h"
 #include "content/browser/download/download_net_log_parameters.h"
@@ -67,7 +67,7 @@ DownloadInterruptReason BaseFile::Initialize(
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
   DCHECK(!detached_);
 
-  if (file_stream_.get()) {
+  if (file_stream_) {
     file_stream_->SetBoundNetLogSource(bound_net_log_);
     file_stream_->EnableErrorStatistics();
   }
@@ -103,7 +103,7 @@ DownloadInterruptReason BaseFile::AppendDataToFile(const char* data,
   if (detached_)
     RecordDownloadCount(APPEND_TO_DETACHED_FILE_COUNT);
 
-  if (!file_stream_.get())
+  if (!file_stream_)
     return LogInterruptReason("No file stream on append", 0,
                               DOWNLOAD_INTERRUPT_REASON_FILE_FAILED);
 
@@ -198,7 +198,7 @@ void BaseFile::Cancel() {
   if (!full_path_.empty()) {
     bound_net_log_.AddEvent(net::NetLog::TYPE_DOWNLOAD_FILE_DELETED);
 
-    file_util::Delete(full_path_, false);
+    base::DeleteFile(full_path_, false);
   }
 }
 
@@ -211,17 +211,16 @@ void BaseFile::Finish() {
   Close();
 }
 
+void BaseFile::SetClientGuid(const std::string& guid) {
+  client_guid_ = guid;
+}
+
 // OS_WIN, OS_MACOSX and OS_LINUX have specialized implementations.
 #if !defined(OS_WIN) && !defined(OS_MACOSX) && !defined(OS_LINUX)
 DownloadInterruptReason BaseFile::AnnotateWithSourceInformation() {
   return DOWNLOAD_INTERRUPT_REASON_NONE;
 }
 #endif
-
-int64 BaseFile::CurrentSpeed() const {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
-  return CurrentSpeedAtTime(base::TimeTicks::Now());
-}
 
 bool BaseFile::GetHash(std::string* hash) {
   DCHECK(!detached_);
@@ -232,11 +231,11 @@ bool BaseFile::GetHash(std::string* hash) {
 
 std::string BaseFile::GetHashState() {
   if (!calculate_hash_)
-    return "";
+    return std::string();
 
   Pickle hash_state;
   if (!secure_hash_->Serialize(&hash_state))
-    return "";
+    return std::string();
 
   return std::string(reinterpret_cast<const char*>(hash_state.data()),
                      hash_state.size());
@@ -274,7 +273,7 @@ DownloadInterruptReason BaseFile::Open() {
       base::Bind(&FileOpenedNetLogCallback, &full_path_, bytes_so_far_));
 
   // Create a new file stream if it is not provided.
-  if (!file_stream_.get()) {
+  if (!file_stream_) {
     CreateFileStream();
     file_stream_->EnableErrorStatistics();
     int open_result = file_stream_->OpenSync(
@@ -322,7 +321,7 @@ void BaseFile::Close() {
 
   bound_net_log_.AddEvent(net::NetLog::TYPE_DOWNLOAD_FILE_CLOSED);
 
-  if (file_stream_.get()) {
+  if (file_stream_) {
 #if defined(OS_CHROMEOS)
     // Currently we don't really care about the return value, since if it fails
     // theres not much we can do.  But we might in the future.
@@ -337,12 +336,6 @@ void BaseFile::ClearStream() {
   DCHECK(file_stream_.get() != NULL);
   file_stream_.reset();
   bound_net_log_.EndEvent(net::NetLog::TYPE_DOWNLOAD_FILE_OPENED);
-}
-
-int64 BaseFile::CurrentSpeedAtTime(base::TimeTicks current_time) const {
-  base::TimeDelta diff = current_time - start_tick_;
-  int64 diff_ms = diff.InMilliseconds();
-  return diff_ms == 0 ? 0 : bytes_so_far() * 1000 / diff_ms;
 }
 
 DownloadInterruptReason BaseFile::LogNetError(

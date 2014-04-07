@@ -6,8 +6,8 @@
 
 #import <QuartzCore/QuartzCore.h>
 
-#include "base/memory/ref_counted.h"
-#include "base/message_pump_mac.h"
+#include "base/memory/scoped_ptr.h"
+#include "base/message_loop/message_pump_mac.h"
 #import "chrome/browser/ui/cocoa/cocoa_test_helper.h"
 #import "third_party/ocmock/gtest_support.h"
 #import "third_party/ocmock/OCMock/OCMock.h"
@@ -28,7 +28,7 @@ class HistoryOverlayControllerTest : public CocoaTest {
   }
 
  private:
-  scoped_nsobject<NSView> test_view_;
+  base::scoped_nsobject<NSView> test_view_;
 };
 
 // Tests that the controller's view gets removed from the hierarchy when the
@@ -37,7 +37,7 @@ TEST_F(HistoryOverlayControllerTest, RemovedViewWhenDeallocated) {
   NSView* content_view = [test_window() contentView];
   EXPECT_EQ(1u, [[content_view subviews] count]);
 
-  scoped_nsobject<HistoryOverlayController> controller(
+  base::scoped_nsobject<HistoryOverlayController> controller(
       [[HistoryOverlayController alloc] initForMode:kHistoryOverlayModeBack]);
   [controller showPanelForView:test_view()];
   EXPECT_EQ(2u, [[content_view subviews] count]);
@@ -49,11 +49,11 @@ TEST_F(HistoryOverlayControllerTest, RemovedViewWhenDeallocated) {
 // Tests that when the controller is |-dismiss|ed, the animation runs and then
 // is removed when the animation completes.
 TEST_F(HistoryOverlayControllerTest, DismissClearsAnimations) {
-  scoped_nsobject<HistoryOverlayController> controller(
+  base::scoped_nsobject<HistoryOverlayController> controller(
       [[HistoryOverlayController alloc] initForMode:kHistoryOverlayModeBack]);
   [controller showPanelForView:test_view()];
 
-  scoped_refptr<base::MessagePumpNSRunLoop> message_pump(
+  scoped_ptr<base::MessagePumpNSRunLoop> message_pump(
       new base::MessagePumpNSRunLoop);
 
   id mock = [OCMockObject partialMockForObject:controller];
@@ -61,8 +61,9 @@ TEST_F(HistoryOverlayControllerTest, DismissClearsAnimations) {
   [[[mock expect] andForwardToRealObject] dismiss];
 
   // Called after |-animationDidStop:finished:|.
+  base::MessagePumpNSRunLoop* weak_message_pump = message_pump.get();
   void (^quit_loop)(NSInvocation* invocation) = ^(NSInvocation* invocation) {
-      message_pump->Quit();
+      weak_message_pump->Quit();
   };
   // Set up the mock to first forward to the real implementation and then call
   // the above block to quit the run loop.

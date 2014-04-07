@@ -10,6 +10,10 @@
 #include "base/stl_util.h"
 #include "chrome/browser/download/download_util.h"
 
+#if defined(OS_LINUX) && !defined(OS_CHROMEOS)
+#include "ui/linux_ui/linux_ui.h"
+#endif
+
 namespace {
 
 // DownloadStatusUpdater::UpdateAppIconDownloadProgress() expects to only be
@@ -67,7 +71,7 @@ bool DownloadStatusUpdater::GetProgress(float* progress,
       (*it)->GetManager()->GetAllDownloads(&items);
       for (content::DownloadManager::DownloadVector::const_iterator it =
           items.begin(); it != items.end(); ++it) {
-        if ((*it)->IsInProgress()) {
+        if ((*it)->GetState() == content::DownloadItem::IN_PROGRESS) {
           ++*download_count;
           if ((*it)->GetTotalBytes() <= 0) {
             // There may or may not be more data coming down this pipe.
@@ -101,7 +105,7 @@ void DownloadStatusUpdater::OnDownloadCreated(
   // Ignore downloads loaded from history, which are in a terminal state.
   // TODO(benjhayden): Use the Observer interface to distinguish between
   // historical and started downloads.
-  if (item->IsInProgress()) {
+  if (item->GetState() == content::DownloadItem::IN_PROGRESS) {
     UpdateAppIconDownloadProgress(item);
     new WasInProgressData(item);
   }
@@ -111,7 +115,7 @@ void DownloadStatusUpdater::OnDownloadCreated(
 
 void DownloadStatusUpdater::OnDownloadUpdated(
     content::DownloadManager* manager, content::DownloadItem* item) {
-  if (item->IsInProgress()) {
+  if (item->GetState() == content::DownloadItem::IN_PROGRESS) {
     // If the item was interrupted/cancelled and then resumed/restarted, then
     // set WasInProgress so that UpdateAppIconDownloadProgress() will be called
     // when it completes.
@@ -133,7 +137,16 @@ void DownloadStatusUpdater::OnDownloadUpdated(
 #if defined(USE_AURA) || defined(OS_ANDROID)
 void DownloadStatusUpdater::UpdateAppIconDownloadProgress(
     content::DownloadItem* download) {
-  // TODO(davemoore): Implement once UX for aura download is decided <104742>
+#if defined(OS_LINUX) && !defined(OS_CHROMEOS)
+  const ui::LinuxUI* linux_ui = ui::LinuxUI::instance();
+  if (linux_ui) {
+    float progress = 0;
+    int download_count = 0;
+    GetProgress(&progress, &download_count);
+    linux_ui->SetDownloadCount(download_count);
+    linux_ui->SetProgressFraction(progress);
+  }
+#endif
   // TODO(avi): Implement for Android?
 }
 #endif

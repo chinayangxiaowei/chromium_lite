@@ -19,6 +19,7 @@
 #include "chrome/browser/io_thread.h"
 #include "chrome/browser/net/chrome_url_request_context.h"
 #include "chrome/browser/profiles/storage_partition_descriptor.h"
+#include "chrome/common/content_settings_types.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/resource_context.h"
 #include "net/cookies/cookie_monster.h"
@@ -43,8 +44,11 @@ class ResourcePrefetchPredictorObserver;
 }
 
 namespace net {
+class CertTrustAnchorProvider;
+class CertVerifier;
 class CookieStore;
 class FraudulentCertificateReporter;
+class FtpTransactionFactory;
 class HttpServerProperties;
 class HttpTransactionFactory;
 class ServerBoundCertService;
@@ -111,6 +115,7 @@ class ProfileIOData {
   // that profile.
   ExtensionInfoMap* GetExtensionInfoMap() const;
   CookieSettings* GetCookieSettings() const;
+  HostContentSettingsMap* GetHostContentSettingsMap() const;
 
 #if defined(ENABLE_NOTIFICATIONS)
   DesktopNotificationService* GetNotificationService() const;
@@ -242,6 +247,7 @@ class ProfileIOData {
     base::FilePath path;
     IOThread* io_thread;
     scoped_refptr<CookieSettings> cookie_settings;
+    scoped_refptr<HostContentSettingsMap> host_content_settings_map;
     scoped_refptr<net::SSLConfigService> ssl_config_service;
     scoped_refptr<net::CookieMonster::Delegate> cookie_monster_delegate;
     scoped_refptr<ExtensionInfoMap> extension_info_map;
@@ -268,6 +274,12 @@ class ProfileIOData {
     scoped_refptr<const ManagedModeURLFilter> managed_mode_url_filter;
 #endif
 
+#if defined(OS_CHROMEOS)
+    // This is used to build the CertVerifier on the IO thread, and is a shared
+    // provider used by all profiles for now.
+    net::CertTrustAnchorProvider* trust_anchor_provider;
+#endif
+
     // The profile this struct was populated from. It's passed as a void* to
     // ensure it's not accidently used on the IO thread. Before using it on the
     // UI thread, call ProfileManager::IsValidProfile to ensure it's alive.
@@ -286,8 +298,7 @@ class ProfileIOData {
       scoped_ptr<ProtocolHandlerRegistry::JobInterceptorFactory>
           protocol_handler_interceptor,
       net::NetworkDelegate* network_delegate,
-      net::FtpTransactionFactory* ftp_transaction_factory,
-      net::FtpAuthCache* ftp_auth_cache) const;
+      net::FtpTransactionFactory* ftp_transaction_factory) const;
 
   // Called when the profile is destroyed.
   void ShutdownOnUIThread();
@@ -311,10 +322,10 @@ class ProfileIOData {
     return proxy_service_.get();
   }
 
-  net::HttpServerProperties* http_server_properties() const;
+  base::WeakPtr<net::HttpServerProperties> http_server_properties() const;
 
   void set_http_server_properties(
-      net::HttpServerProperties* http_server_properties) const;
+      scoped_ptr<net::HttpServerProperties> http_server_properties) const;
 
   ChromeURLRequestContext* main_request_context() const {
     return main_request_context_.get();
@@ -352,9 +363,15 @@ class ProfileIOData {
     // ResourceContext implementation:
     virtual net::HostResolver* GetHostResolver() OVERRIDE;
     virtual net::URLRequestContext* GetRequestContext() OVERRIDE;
+    virtual bool AllowMicAccess(const GURL& origin) OVERRIDE;
+    virtual bool AllowCameraAccess(const GURL& origin) OVERRIDE;
 
    private:
     friend class ProfileIOData;
+
+    // Helper method that returns true if |type| is allowed for |origin|, false
+    // otherwise.
+    bool AllowContentAccess(const GURL& origin, ContentSettingsType type);
 
     ProfileIOData* const io_data_;
 
@@ -481,6 +498,9 @@ class ProfileIOData {
   mutable scoped_ptr<net::TransportSecurityState> transport_security_state_;
   mutable scoped_ptr<net::HttpServerProperties>
       http_server_properties_;
+#if defined(OS_CHROMEOS)
+  mutable scoped_ptr<net::CertVerifier> cert_verifier_;
+#endif
 
 #if defined(ENABLE_NOTIFICATIONS)
   mutable DesktopNotificationService* notification_service_;
@@ -500,6 +520,8 @@ class ProfileIOData {
   mutable scoped_ptr<ResourceContext> resource_context_;
 
   mutable scoped_refptr<CookieSettings> cookie_settings_;
+
+  mutable scoped_refptr<HostContentSettingsMap> host_content_settings_map_;
 
   mutable scoped_ptr<chrome_browser_net::ResourcePrefetchPredictorObserver>
       resource_prefetch_predictor_observer_;

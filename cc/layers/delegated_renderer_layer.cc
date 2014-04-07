@@ -4,18 +4,22 @@
 
 #include "cc/layers/delegated_renderer_layer.h"
 
+#include "cc/layers/delegated_renderer_layer_client.h"
 #include "cc/layers/delegated_renderer_layer_impl.h"
 #include "cc/output/delegated_frame_data.h"
 
 namespace cc {
 
-scoped_refptr<DelegatedRendererLayer> DelegatedRendererLayer::Create() {
-  return scoped_refptr<DelegatedRendererLayer>(new DelegatedRendererLayer());
+scoped_refptr<DelegatedRendererLayer> DelegatedRendererLayer::Create(
+    DelegatedRendererLayerClient* client) {
+  return scoped_refptr<DelegatedRendererLayer>(
+      new DelegatedRendererLayer(client));
 }
 
-DelegatedRendererLayer::DelegatedRendererLayer()
-    : Layer() {
-}
+DelegatedRendererLayer::DelegatedRendererLayer(
+    DelegatedRendererLayerClient* client)
+    : Layer(),
+    client_(client) {}
 
 DelegatedRendererLayer::~DelegatedRendererLayer() {}
 
@@ -37,22 +41,21 @@ void DelegatedRendererLayer::PushPropertiesTo(LayerImpl* impl) {
 
   delegated_impl->SetDisplaySize(display_size_);
 
-  if (!frame_data_) {
-    delegated_impl->SetFrameData(scoped_ptr<DelegatedFrameData>(),
-                                 gfx::Rect(),
-                                 &unused_resources_for_child_compositor_);
-  } else if (frame_size_.IsEmpty()) {
-    scoped_ptr<DelegatedFrameData> empty_frame(new DelegatedFrameData);
-    delegated_impl->SetFrameData(empty_frame.Pass(),
-                                 gfx::Rect(),
-                                 &unused_resources_for_child_compositor_);
-  } else {
-    delegated_impl->SetFrameData(frame_data_.Pass(),
-                                 damage_in_frame_,
-                                 &unused_resources_for_child_compositor_);
-  }
+  if (frame_data_)
+    delegated_impl->SetFrameData(frame_data_.Pass(), damage_in_frame_);
   frame_data_.reset();
   damage_in_frame_ = gfx::RectF();
+
+  delegated_impl->CollectUnusedResources(
+      &unused_resources_for_child_compositor_);
+
+  if (client_)
+    client_->DidCommitFrameData();
+
+  // TODO(danakj): TakeUnusedResourcesForChildCompositor requires a push
+  // properties to happen in order to collect unused resources returned
+  // from the parent compositor. crbug.com/259090
+  needs_push_properties_ = true;
 }
 
 void DelegatedRendererLayer::SetDisplaySize(gfx::Size size) {
@@ -98,6 +101,14 @@ void DelegatedRendererLayer::TakeUnusedResourcesForChildCompositor(
   array->clear();
 
   array->swap(unused_resources_for_child_compositor_);
+}
+
+bool DelegatedRendererLayer::BlocksPendingCommit() const {
+  // The active frame needs to be replaced and resources returned before the
+  // commit is called complete. This is true even whenever there may be
+  // resources to return, regardless of if the layer will draw in its new
+  // state.
+  return true;
 }
 
 }  // namespace cc

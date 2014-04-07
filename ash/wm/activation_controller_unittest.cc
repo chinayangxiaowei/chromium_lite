@@ -411,7 +411,7 @@ TEST_F(ActivationControllerTest, CanActivateWindowIteselfTest)
       &wd, -51, gfx::Rect(50, 50)));
   w5->AddTransientChild(w51.get());
   w51->SetProperty(aura::client::kModalKey, ui::MODAL_TYPE_SYSTEM);
-  EXPECT_TRUE(wm::CanActivateWindow(w5.get()));
+  EXPECT_FALSE(wm::CanActivateWindow(w5.get()));
   EXPECT_TRUE(wm::CanActivateWindow(w51.get()));
 }
 
@@ -533,18 +533,12 @@ TEST_F(ActivationControllerTest, ActivateLockScreen) {
   EXPECT_TRUE(w1->HasFocus());
 }
 
-#if defined(OS_WIN)
-// Multiple displays are not supported on Windows Ash. http://crbug.com/165962
-#define MAYBE_NextActiveWindowOnMultipleDisplays \
-        DISABLED_NextActiveWindowOnMultipleDisplays
-#else
-#define MAYBE_NextActiveWindowOnMultipleDisplays \
-        NextActiveWindowOnMultipleDisplays
-#endif
-
 // Verifies that a next active window is chosen from current
 // active display.
-TEST_F(ActivationControllerTest, MAYBE_NextActiveWindowOnMultipleDisplays) {
+TEST_F(ActivationControllerTest, NextActiveWindowOnMultipleDisplays) {
+  if (!SupportsMultipleDisplays())
+    return;
+
   UpdateDisplay("300x300,300x300");
   Shell::RootWindowList root_windows = Shell::GetAllRootWindows();
 

@@ -4,13 +4,21 @@
 
 #include "chrome/browser/search/instant_service_factory.h"
 
-#include "chrome/browser/profiles/profile_dependency_manager.h"
+#include "chrome/browser/profiles/incognito_helpers.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search/instant_service.h"
+#include "chrome/browser/search/search.h"
+#include "chrome/browser/search_engines/template_url_service_factory.h"
+#include "chrome/browser/themes/theme_service_factory.h"
+#include "components/browser_context_keyed_service/browser_context_dependency_manager.h"
 
 // static
 InstantService* InstantServiceFactory::GetForProfile(Profile* profile) {
+  if (!chrome::IsInstantExtendedAPIEnabled())
+    return NULL;
+
   return static_cast<InstantService*>(
-      GetInstance()->GetServiceForProfile(profile, true));
+      GetInstance()->GetServiceForBrowserContext(profile, true));
 }
 
 // static
@@ -19,19 +27,25 @@ InstantServiceFactory* InstantServiceFactory::GetInstance() {
 }
 
 InstantServiceFactory::InstantServiceFactory()
-    : ProfileKeyedServiceFactory("InstantService",
-                                 ProfileDependencyManager::GetInstance()) {
-  // No dependencies.
+    : BrowserContextKeyedServiceFactory(
+        "InstantService",
+        BrowserContextDependencyManager::GetInstance()) {
+  DependsOn(TemplateURLServiceFactory::GetInstance());
+#if defined(ENABLE_THEMES)
+  DependsOn(ThemeServiceFactory::GetInstance());
+#endif
 }
 
 InstantServiceFactory::~InstantServiceFactory() {
 }
 
-bool InstantServiceFactory::ServiceHasOwnInstanceInIncognito() const {
-  return true;
+content::BrowserContext* InstantServiceFactory::GetBrowserContextToUse(
+    content::BrowserContext* context) const {
+  return chrome::GetBrowserContextOwnInstanceInIncognito(context);
 }
 
-ProfileKeyedService* InstantServiceFactory::BuildServiceInstanceFor(
-    Profile* profile) const {
-  return new InstantService(profile);
+BrowserContextKeyedService* InstantServiceFactory::BuildServiceInstanceFor(
+    content::BrowserContext* profile) const {
+  return chrome::IsInstantExtendedAPIEnabled() ?
+      new InstantService(static_cast<Profile*>(profile)) : NULL;
 }

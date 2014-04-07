@@ -59,7 +59,7 @@ class ClipboardBookmarkManagerFunction : public extensions::BookmarksFunction {
  protected:
   virtual ~ClipboardBookmarkManagerFunction() {}
 
-  bool CopyOrCut(bool cut);
+  bool CopyOrCut(bool cut, const std::vector<std::string>& id_list);
 };
 
 class BookmarkManagerPrivateCopyFunction
@@ -212,6 +212,19 @@ class BookmarkManagerPrivateCanOpenNewWindowsFunction
 
  protected:
   virtual ~BookmarkManagerPrivateCanOpenNewWindowsFunction() {}
+
+  // ExtensionFunction:
+  virtual bool RunImpl() OVERRIDE;
+};
+
+class BookmarkManagerPrivateRemoveTreesFunction
+    : public extensions::BookmarksFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION("bookmarkManagerPrivate.removeTrees",
+                             BOOKMARKMANAGERPRIVATE_REMOVETREES)
+
+ protected:
+  virtual ~BookmarkManagerPrivateRemoveTreesFunction() {}
 
   // ExtensionFunction:
   virtual bool RunImpl() OVERRIDE;

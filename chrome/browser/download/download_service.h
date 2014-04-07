@@ -5,13 +5,11 @@
 #ifndef CHROME_BROWSER_DOWNLOAD_DOWNLOAD_SERVICE_H_
 #define CHROME_BROWSER_DOWNLOAD_DOWNLOAD_SERVICE_H_
 
-#include <vector>
-
 #include "base/basictypes.h"
 #include "base/callback_forward.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
-#include "chrome/browser/profiles/profile_keyed_service.h"
+#include "components/browser_context_keyed_service/browser_context_keyed_service.h"
 
 class ChromeDownloadManagerDelegate;
 class DownloadHistory;
@@ -24,7 +22,7 @@ class DownloadManager;
 }
 
 // Owning class for ChromeDownloadManagerDelegate.
-class DownloadService : public ProfileKeyedService {
+class DownloadService : public BrowserContextKeyedService {
  public:
   explicit DownloadService(Profile* profile);
   virtual ~DownloadService();
@@ -61,6 +59,10 @@ class DownloadService : public ProfileKeyedService {
   // Will be called to release references on other services as part
   // of Profile shutdown.
   virtual void Shutdown() OVERRIDE;
+
+  // Returns false if at least one extension has disabled the shelf, true
+  // otherwise.
+  bool IsShelfEnabled();
 
  private:
   bool download_manager_created_;

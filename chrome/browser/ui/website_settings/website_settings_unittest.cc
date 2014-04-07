@@ -5,9 +5,9 @@
 #include "chrome/browser/ui/website_settings/website_settings.h"
 
 #include "base/at_exit.h"
-#include "base/message_loop.h"
-#include "base/string16.h"
-#include "base/utf_string_conversions.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/string16.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/content_settings/content_settings_provider.h"
 #include "chrome/browser/content_settings/content_settings_utils.h"
 #include "chrome/browser/content_settings/host_content_settings_map.h"
@@ -21,16 +21,18 @@
 #include "chrome/test/base/testing_profile.h"
 #include "content/public/browser/cert_store.h"
 #include "content/public/common/ssl_status.h"
-#include "content/public/test/test_browser_thread.h"
-#include "net/base/cert_status_flags.h"
-#include "net/base/test_certificate_data.h"
-#include "net/base/x509_certificate.h"
+#include "net/cert/cert_status_flags.h"
+#include "net/cert/x509_certificate.h"
 #include "net/ssl/ssl_connection_status_flags.h"
+#include "net/test/test_certificate_data.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using content::SSLStatus;
-using namespace testing;
+using testing::_;
+using testing::AnyNumber;
+using testing::Return;
+using testing::SetArgPointee;
 
 namespace {
 
@@ -72,13 +74,7 @@ class MockWebsiteSettingsUI : public WebsiteSettingsUI {
 
 class WebsiteSettingsTest : public ChromeRenderViewHostTestHarness {
  public:
-  WebsiteSettingsTest()
-      : website_settings_(NULL),
-        mock_ui_(NULL),
-        cert_id_(0),
-        browser_thread_(content::BrowserThread::UI, &message_loop_),
-        url_("http://www.example.com") {
-  }
+  WebsiteSettingsTest() : cert_id_(0), url_("http://www.example.com") {}
 
   virtual ~WebsiteSettingsTest() {
   }
@@ -153,7 +149,6 @@ class WebsiteSettingsTest : public ChromeRenderViewHostTestHarness {
   scoped_ptr<MockWebsiteSettingsUI> mock_ui_;
   int cert_id_;
   scoped_refptr<net::X509Certificate> cert_;
-  content::TestBrowserThread browser_thread_;
   MockCertStore cert_store_;
   GURL url_;
 };
@@ -165,22 +160,22 @@ TEST_F(WebsiteSettingsTest, OnPermissionsChanged) {
   HostContentSettingsMap* content_settings =
       profile()->GetHostContentSettingsMap();
   ContentSetting setting = content_settings->GetContentSetting(
-      url(), url(), CONTENT_SETTINGS_TYPE_POPUPS, "");
+      url(), url(), CONTENT_SETTINGS_TYPE_POPUPS, std::string());
   EXPECT_EQ(setting, CONTENT_SETTING_BLOCK);
   setting = content_settings->GetContentSetting(
-      url(), url(), CONTENT_SETTINGS_TYPE_PLUGINS, "");
+      url(), url(), CONTENT_SETTINGS_TYPE_PLUGINS, std::string());
   EXPECT_EQ(setting, CONTENT_SETTING_ALLOW);
   setting = content_settings->GetContentSetting(
-      url(), url(), CONTENT_SETTINGS_TYPE_GEOLOCATION, "");
+      url(), url(), CONTENT_SETTINGS_TYPE_GEOLOCATION, std::string());
   EXPECT_EQ(setting, CONTENT_SETTING_ASK);
   setting = content_settings->GetContentSetting(
-      url(), url(), CONTENT_SETTINGS_TYPE_NOTIFICATIONS, "");
+      url(), url(), CONTENT_SETTINGS_TYPE_NOTIFICATIONS, std::string());
   EXPECT_EQ(setting, CONTENT_SETTING_ASK);
   setting = content_settings->GetContentSetting(
-      url(), url(), CONTENT_SETTINGS_TYPE_MEDIASTREAM_MIC, "");
+      url(), url(), CONTENT_SETTINGS_TYPE_MEDIASTREAM_MIC, std::string());
   EXPECT_EQ(setting, CONTENT_SETTING_ASK);
   setting = content_settings->GetContentSetting(
-      url(), url(), CONTENT_SETTINGS_TYPE_MEDIASTREAM_CAMERA, "");
+      url(), url(), CONTENT_SETTINGS_TYPE_MEDIASTREAM_CAMERA, std::string());
   EXPECT_EQ(setting, CONTENT_SETTING_ASK);
 
   EXPECT_CALL(*mock_ui(), SetIdentityInfo(_));
@@ -212,22 +207,22 @@ TEST_F(WebsiteSettingsTest, OnPermissionsChanged) {
 
   // Verify that the site permissions were changed correctly.
   setting = content_settings->GetContentSetting(
-      url(), url(), CONTENT_SETTINGS_TYPE_POPUPS, "");
+      url(), url(), CONTENT_SETTINGS_TYPE_POPUPS, std::string());
   EXPECT_EQ(setting, CONTENT_SETTING_ALLOW);
   setting = content_settings->GetContentSetting(
-      url(), url(), CONTENT_SETTINGS_TYPE_PLUGINS, "");
+      url(), url(), CONTENT_SETTINGS_TYPE_PLUGINS, std::string());
   EXPECT_EQ(setting, CONTENT_SETTING_BLOCK);
   setting = content_settings->GetContentSetting(
-      url(), url(), CONTENT_SETTINGS_TYPE_GEOLOCATION, "");
+      url(), url(), CONTENT_SETTINGS_TYPE_GEOLOCATION, std::string());
   EXPECT_EQ(setting, CONTENT_SETTING_ALLOW);
   setting = content_settings->GetContentSetting(
-      url(), url(), CONTENT_SETTINGS_TYPE_NOTIFICATIONS, "");
+      url(), url(), CONTENT_SETTINGS_TYPE_NOTIFICATIONS, std::string());
   EXPECT_EQ(setting, CONTENT_SETTING_ALLOW);
   setting = content_settings->GetContentSetting(
-      url(), url(), CONTENT_SETTINGS_TYPE_MEDIASTREAM_MIC, "");
+      url(), url(), CONTENT_SETTINGS_TYPE_MEDIASTREAM_MIC, std::string());
   EXPECT_EQ(setting, CONTENT_SETTING_ALLOW);
   setting = content_settings->GetContentSetting(
-      url(), url(), CONTENT_SETTINGS_TYPE_MEDIASTREAM_CAMERA, "");
+      url(), url(), CONTENT_SETTINGS_TYPE_MEDIASTREAM_CAMERA, std::string());
   EXPECT_EQ(setting, CONTENT_SETTING_ALLOW);
 }
 
@@ -368,9 +363,9 @@ TEST_F(WebsiteSettingsTest, NoInfoBar) {
   SetDefaultUIExpectations(mock_ui());
   EXPECT_CALL(*mock_ui(), SetSelectedTab(
       WebsiteSettingsUI::TAB_ID_PERMISSIONS));
-  EXPECT_EQ(0u, infobar_service()->GetInfoBarCount());
+  EXPECT_EQ(0u, infobar_service()->infobar_count());
   website_settings()->OnUIClosing();
-  EXPECT_EQ(0u, infobar_service()->GetInfoBarCount());
+  EXPECT_EQ(0u, infobar_service()->infobar_count());
 }
 
 TEST_F(WebsiteSettingsTest, ShowInfoBar) {
@@ -390,16 +385,15 @@ TEST_F(WebsiteSettingsTest, ShowInfoBar) {
 
   EXPECT_CALL(*mock_ui(), SetSelectedTab(
       WebsiteSettingsUI::TAB_ID_PERMISSIONS));
-  EXPECT_EQ(0u, infobar_service()->GetInfoBarCount());
+  EXPECT_EQ(0u, infobar_service()->infobar_count());
   website_settings()->OnSitePermissionChanged(
       CONTENT_SETTINGS_TYPE_GEOLOCATION, CONTENT_SETTING_ALLOW);
   website_settings()->OnUIClosing();
-  EXPECT_EQ(1u, infobar_service()->GetInfoBarCount());
+  ASSERT_EQ(1u, infobar_service()->infobar_count());
 
   // Removing an |InfoBarDelegate| from the |InfoBarService| does not delete
   // it. Hence the |delegate| must be cleaned up after it was removed from the
   // |infobar_service|.
-  scoped_ptr<InfoBarDelegate> delegate(
-      infobar_service()->GetInfoBarDelegateAt(0));
+  scoped_ptr<InfoBarDelegate> delegate(infobar_service()->infobar_at(0));
   infobar_service()->RemoveInfoBar(delegate.get());
 }

@@ -5,9 +5,9 @@
 #include "ui/oak/oak_aura_window_display.h"
 
 #include "base/logging.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "ui/aura/window.h"
 #include "ui/base/models/table_model_observer.h"
 #include "ui/oak/oak_pretty_print.h"
@@ -40,7 +40,7 @@ ROW_COUNT
 };
 
 // aura::Window-specific pretty printing.
-string16 PropertyWithWindowType(int type) {
+base::string16 PropertyWithWindowType(int type) {
   std::string property = "Type: ";
   switch (type) {
     case aura::client::WINDOW_TYPE_UNKNOWN:
@@ -97,11 +97,11 @@ int OakAuraWindowDisplay::RowCount() {
   return ROW_COUNT;
 }
 
-string16 OakAuraWindowDisplay::GetText(int row, int column_id) {
+base::string16 OakAuraWindowDisplay::GetText(int row, int column_id) {
   if (!window_)
     return EmptyString16();
 
-  string16 text;
+  base::string16 text;
   switch (row) {
     case ROW_ID:
       return PropertyWithInteger("Id: ", window_->id());

@@ -7,7 +7,7 @@
 #include "base/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
-#include "base/message_loop_proxy.h"
+#include "base/message_loop/message_loop_proxy.h"
 #include "jingle/notifier/listener/push_client_observer.h"
 
 namespace notifier {
@@ -156,7 +156,7 @@ NonBlockingPushClient::NonBlockingPushClient(
     const scoped_refptr<base::SingleThreadTaskRunner>& delegate_task_runner,
     const CreateBlockingPushClientCallback&
         create_blocking_push_client_callback)
-    : weak_ptr_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)),
+    : weak_ptr_factory_(this),
       delegate_task_runner_(delegate_task_runner),
       core_(new Core(delegate_task_runner_,
                      weak_ptr_factory_.GetWeakPtr())) {

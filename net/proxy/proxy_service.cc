@@ -11,12 +11,11 @@
 #include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/memory/weak_ptr.h"
-#include "base/message_loop.h"
-#include "base/message_loop_proxy.h"
-#include "base/string_util.h"
+#include "base/message_loop/message_loop.h"
+#include "base/message_loop/message_loop_proxy.h"
+#include "base/strings/string_util.h"
 #include "base/thread_task_runner_handle.h"
 #include "base/values.h"
-#include "googleurl/src/gurl.h"
 #include "net/base/completion_callback.h"
 #include "net/base/net_errors.h"
 #include "net/base/net_log.h"
@@ -29,6 +28,7 @@
 #include "net/proxy/proxy_script_decider.h"
 #include "net/proxy/proxy_script_fetcher.h"
 #include "net/url_request/url_request_context.h"
+#include "url/gurl.h"
 
 #if defined(OS_WIN)
 #include "net/proxy/proxy_config_service_win.h"
@@ -477,7 +477,7 @@ class ProxyService::InitProxyResolver {
   }
 
   int DoSetPacScript() {
-    DCHECK(script_data_);
+    DCHECK(script_data_.get());
     // TODO(eroman): Should log this latency to the NetLog.
     next_state_ = STATE_SET_PAC_SCRIPT_COMPLETE;
     return proxy_resolver_->SetPacScript(
@@ -552,7 +552,7 @@ class ProxyService::ProxyScriptDeciderPoller {
                            int init_net_error,
                            ProxyResolverScriptData* init_script_data,
                            NetLog* net_log)
-      : ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)),
+      : weak_factory_(this),
         change_callback_(callback),
         config_(config),
         proxy_resolver_expects_pac_bytes_(proxy_resolver_expects_pac_bytes),
@@ -591,7 +591,7 @@ class ProxyService::ProxyScriptDeciderPoller {
   void StartPollTimer() {
     DCHECK(!decider_.get());
 
-    MessageLoop::current()->PostDelayedTask(
+    base::MessageLoop::current()->PostDelayedTask(
         FROM_HERE,
         base::Bind(&ProxyScriptDeciderPoller::DoPoll,
                    weak_factory_.GetWeakPtr()),
@@ -638,14 +638,13 @@ class ProxyService::ProxyScriptDeciderPoller {
       // rather than calling it directly -- this is done to avoid an ugly
       // destruction sequence, since |this| might be destroyed as a result of
       // the notification.
-      MessageLoop::current()->PostTask(
-        FROM_HERE,
-        base::Bind(
-            &ProxyScriptDeciderPoller::NotifyProxyServiceOfChange,
-            weak_factory_.GetWeakPtr(),
-            result,
-            make_scoped_refptr(decider_->script_data()),
-            decider_->effective_config()));
+      base::MessageLoop::current()->PostTask(
+          FROM_HERE,
+          base::Bind(&ProxyScriptDeciderPoller::NotifyProxyServiceOfChange,
+                     weak_factory_.GetWeakPtr(),
+                     result,
+                     make_scoped_refptr(decider_->script_data()),
+                     decider_->effective_config()));
       return;
     }
 
@@ -675,7 +674,7 @@ class ProxyService::ProxyScriptDeciderPoller {
     // Otherwise if it succeeded both this time and last time, we need to look
     // closer and see if we ended up downloading different content for the PAC
     // script.
-    return !script_data->Equals(last_script_data_);
+    return !script_data->Equals(last_script_data_.get());
   }
 
   void NotifyProxyServiceOfChange(
@@ -683,7 +682,7 @@ class ProxyService::ProxyScriptDeciderPoller {
       const scoped_refptr<ProxyResolverScriptData>& script_data,
       const ProxyConfig& effective_config) {
     // Note that |this| may be deleted after calling into the ProxyService.
-    change_callback_.Run(result, script_data, effective_config);
+    change_callback_.Run(result, script_data.get(), effective_config);
   }
 
   base::WeakPtrFactory<ProxyScriptDeciderPoller> weak_factory_;
@@ -994,7 +993,7 @@ int ProxyService::ResolveProxy(const GURL& raw_url,
   }
 
   DCHECK_EQ(ERR_IO_PENDING, rv);
-  DCHECK(!ContainsPendingRequest(req));
+  DCHECK(!ContainsPendingRequest(req.get()));
   pending_requests_.push_back(req);
 
   // Completion will be notified through |callback|, unless the caller cancels
@@ -1336,7 +1335,7 @@ void ProxyService::ForceReloadProxyConfig() {
 // static
 ProxyConfigService* ProxyService::CreateSystemProxyConfigService(
     base::SingleThreadTaskRunner* io_thread_task_runner,
-    MessageLoop* file_loop) {
+    base::MessageLoop* file_loop) {
 #if defined(OS_WIN)
   return new ProxyConfigServiceWin();
 #elif defined(OS_IOS)
@@ -1359,21 +1358,22 @@ ProxyConfigService* ProxyService::CreateSystemProxyConfigService(
       base::ThreadTaskRunnerHandle::Get();
 
   // The file loop should be a MessageLoopForIO on Linux.
-  DCHECK_EQ(MessageLoop::TYPE_IO, file_loop->type());
+  DCHECK_EQ(base::MessageLoop::TYPE_IO, file_loop->type());
 
   // Synchronously fetch the current proxy config (since we are
   // running on glib_default_loop). Additionally register for
   // notifications (delivered in either |glib_default_loop| or
   // |file_loop|) to keep us updated when the proxy config changes.
   linux_config_service->SetupAndFetchInitialConfig(
-      glib_thread_task_runner, io_thread_task_runner,
-      static_cast<MessageLoopForIO*>(file_loop));
+      glib_thread_task_runner.get(),
+      io_thread_task_runner,
+      static_cast<base::MessageLoopForIO*>(file_loop));
 
   return linux_config_service;
 #elif defined(OS_ANDROID)
   return new ProxyConfigServiceAndroid(
       io_thread_task_runner,
-      MessageLoop::current()->message_loop_proxy());
+      base::MessageLoop::current()->message_loop_proxy());
 #else
   LOG(WARNING) << "Failed to choose a system proxy settings fetcher "
                   "for this platform.";
@@ -1502,21 +1502,21 @@ void ProxyService::OnDNSChanged() {
   OnIPAddressChanged();
 }
 
-SyncProxyServiceHelper::SyncProxyServiceHelper(MessageLoop* io_message_loop,
-                                               ProxyService* proxy_service)
+SyncProxyServiceHelper::SyncProxyServiceHelper(
+    base::MessageLoop* io_message_loop,
+    ProxyService* proxy_service)
     : io_message_loop_(io_message_loop),
       proxy_service_(proxy_service),
       event_(false, false),
-      ALLOW_THIS_IN_INITIALIZER_LIST(callback_(
-          base::Bind(&SyncProxyServiceHelper::OnCompletion,
-                     base::Unretained(this)))) {
-  DCHECK(io_message_loop_ != MessageLoop::current());
+      callback_(base::Bind(&SyncProxyServiceHelper::OnCompletion,
+                           base::Unretained(this))) {
+  DCHECK(io_message_loop_ != base::MessageLoop::current());
 }
 
 int SyncProxyServiceHelper::ResolveProxy(const GURL& url,
                                          ProxyInfo* proxy_info,
                                          const BoundNetLog& net_log) {
-  DCHECK(io_message_loop_ != MessageLoop::current());
+  DCHECK(io_message_loop_ != base::MessageLoop::current());
 
   io_message_loop_->PostTask(
       FROM_HERE,
@@ -1533,7 +1533,7 @@ int SyncProxyServiceHelper::ResolveProxy(const GURL& url,
 
 int SyncProxyServiceHelper::ReconsiderProxyAfterError(
     const GURL& url, ProxyInfo* proxy_info, const BoundNetLog& net_log) {
-  DCHECK(io_message_loop_ != MessageLoop::current());
+  DCHECK(io_message_loop_ != base::MessageLoop::current());
 
   io_message_loop_->PostTask(
       FROM_HERE,

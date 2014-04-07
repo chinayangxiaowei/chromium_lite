@@ -12,15 +12,6 @@
 #include "base/memory/scoped_ptr.h"
 #include "chrome/test/chromedriver/chrome/web_view.h"
 
-namespace base {
-class ListValue;
-class Value;
-}
-
-struct KeyEvent;
-struct MouseEvent;
-class Status;
-
 class StubWebView : public WebView {
  public:
   explicit StubWebView(const std::string& id);
@@ -29,7 +20,7 @@ class StubWebView : public WebView {
   // Overridden from WebView:
   virtual std::string GetId() OVERRIDE;
   virtual Status ConnectIfNecessary() OVERRIDE;
-  virtual Status Close() OVERRIDE;
+  virtual Status HandleReceivedEvents() OVERRIDE;
   virtual Status Load(const std::string& url) OVERRIDE;
   virtual Status Reload() OVERRIDE;
   virtual Status EvaluateScript(const std::string& frame,
@@ -39,23 +30,40 @@ class StubWebView : public WebView {
                               const std::string& function,
                               const base::ListValue& args,
                               scoped_ptr<base::Value>* result) OVERRIDE;
+  virtual Status CallAsyncFunction(const std::string& frame,
+                                   const std::string& function,
+                                   const base::ListValue& args,
+                                   const base::TimeDelta& timeout,
+                                   scoped_ptr<base::Value>* result) OVERRIDE;
+  virtual Status CallUserAsyncFunction(
+      const std::string& frame,
+      const std::string& function,
+      const base::ListValue& args,
+      const base::TimeDelta& timeout,
+      scoped_ptr<base::Value>* result) OVERRIDE;
   virtual Status GetFrameByFunction(const std::string& frame,
                                     const std::string& function,
                                     const base::ListValue& args,
                                     std::string* out_frame) OVERRIDE;
   virtual Status DispatchMouseEvents(
-      const std::list<MouseEvent>& events) OVERRIDE;
+      const std::list<MouseEvent>& events, const std::string& frame) OVERRIDE;
+  virtual Status DispatchTouchEvents(
+      const std::list<TouchEvent>& events) OVERRIDE;
   virtual Status DispatchKeyEvents(const std::list<KeyEvent>& events) OVERRIDE;
   virtual Status GetCookies(scoped_ptr<base::ListValue>* cookies) OVERRIDE;
   virtual Status DeleteCookie(const std::string& name,
                               const std::string& url) OVERRIDE;
-  virtual Status WaitForPendingNavigations(
-      const std::string& frame_id) OVERRIDE;
+  virtual Status WaitForPendingNavigations(const std::string& frame_id,
+                                           int timeout) OVERRIDE;
   virtual Status IsPendingNavigation(
       const std::string& frame_id, bool* is_pending) OVERRIDE;
-  virtual Status GetMainFrame(std::string* frame_id) OVERRIDE;
   virtual JavaScriptDialogManager* GetJavaScriptDialogManager() OVERRIDE;
+  virtual Status OverrideGeolocation(const Geoposition& geoposition) OVERRIDE;
   virtual Status CaptureScreenshot(std::string* screenshot) OVERRIDE;
+  virtual Status SetFileInputFiles(
+      const std::string& frame,
+      const base::DictionaryValue& element,
+      const std::vector<base::FilePath>& files) OVERRIDE;
 
  private:
   std::string id_;

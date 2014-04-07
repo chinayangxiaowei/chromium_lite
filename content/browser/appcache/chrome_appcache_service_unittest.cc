@@ -6,17 +6,17 @@
 #include "base/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/ref_counted.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "content/browser/appcache/chrome_appcache_service.h"
 #include "content/browser/browser_thread_impl.h"
 #include "content/public/browser/resource_context.h"
 #include "content/public/test/test_browser_context.h"
 #include "net/url_request/url_request_context_getter.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "webkit/appcache/appcache_database.h"
-#include "webkit/appcache/appcache_storage_impl.h"
-#include "webkit/appcache/appcache_test_helper.h"
-#include "webkit/quota/mock_special_storage_policy.h"
+#include "webkit/browser/appcache/appcache_database.h"
+#include "webkit/browser/appcache/appcache_storage_impl.h"
+#include "webkit/browser/appcache/appcache_test_helper.h"
+#include "webkit/browser/quota/mock_special_storage_policy.h"
 
 #include <set>
 
@@ -63,16 +63,15 @@ class MockURLRequestContextGetter : public net::URLRequestContextGetter {
 class ChromeAppCacheServiceTest : public testing::Test {
  public:
   ChromeAppCacheServiceTest()
-      : message_loop_(MessageLoop::TYPE_IO),
+      : message_loop_(base::MessageLoop::TYPE_IO),
         kProtectedManifestURL(kProtectedManifest),
         kNormalManifestURL(kNormalManifest),
         kSessionOnlyManifestURL(kSessionOnlyManifest),
         file_thread_(BrowserThread::FILE, &message_loop_),
-        file_user_blocking_thread_(
-            BrowserThread::FILE_USER_BLOCKING, &message_loop_),
+        file_user_blocking_thread_(BrowserThread::FILE_USER_BLOCKING,
+                                   &message_loop_),
         cache_thread_(BrowserThread::CACHE, &message_loop_),
-        io_thread_(BrowserThread::IO, &message_loop_) {
-  }
+        io_thread_(BrowserThread::IO, &message_loop_) {}
 
  protected:
   scoped_refptr<ChromeAppCacheService> CreateAppCacheService(
@@ -80,7 +79,7 @@ class ChromeAppCacheServiceTest : public testing::Test {
       bool init_storage);
   void InsertDataIntoAppCache(ChromeAppCacheService* appcache_service);
 
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
   base::ScopedTempDir temp_dir_;
   const GURL kProtectedManifestURL;
   const GURL kNormalManifestURL;
@@ -107,11 +106,13 @@ ChromeAppCacheServiceTest::CreateAppCacheService(
   scoped_refptr<MockURLRequestContextGetter> mock_request_context_getter =
       new MockURLRequestContextGetter(
           browser_context_.GetResourceContext()->GetRequestContext(),
-          message_loop_.message_loop_proxy());
+          message_loop_.message_loop_proxy().get());
   BrowserThread::PostTask(
-      BrowserThread::IO, FROM_HERE,
+      BrowserThread::IO,
+      FROM_HERE,
       base::Bind(&ChromeAppCacheService::InitializeOnIOThread,
-                 appcache_service.get(), appcache_path,
+                 appcache_service.get(),
+                 appcache_path,
                  browser_context_.GetResourceContext(),
                  mock_request_context_getter,
                  mock_policy));
@@ -153,9 +154,9 @@ TEST_F(ChromeAppCacheServiceTest, KeepOnDestruction) {
   // Create a ChromeAppCacheService and insert data into it
   scoped_refptr<ChromeAppCacheService> appcache_service =
       CreateAppCacheService(appcache_path, true);
-  ASSERT_TRUE(file_util::PathExists(appcache_path));
-  ASSERT_TRUE(file_util::PathExists(appcache_path.AppendASCII("Index")));
-  InsertDataIntoAppCache(appcache_service);
+  ASSERT_TRUE(base::PathExists(appcache_path));
+  ASSERT_TRUE(base::PathExists(appcache_path.AppendASCII("Index")));
+  InsertDataIntoAppCache(appcache_service.get());
 
   // Test: delete the ChromeAppCacheService
   appcache_service = NULL;
@@ -165,12 +166,12 @@ TEST_F(ChromeAppCacheServiceTest, KeepOnDestruction) {
   appcache_service = CreateAppCacheService(appcache_path, false);
 
   // The directory is still there
-  ASSERT_TRUE(file_util::PathExists(appcache_path));
+  ASSERT_TRUE(base::PathExists(appcache_path));
 
   // The appcache data is also there, except the session-only origin.
   AppCacheTestHelper appcache_helper;
   std::set<GURL> origins;
-  appcache_helper.GetOriginsWithCaches(appcache_service, &origins);
+  appcache_helper.GetOriginsWithCaches(appcache_service.get(), &origins);
   EXPECT_EQ(2UL, origins.size());
   EXPECT_TRUE(origins.find(kProtectedManifestURL.GetOrigin()) != origins.end());
   EXPECT_TRUE(origins.find(kNormalManifestURL.GetOrigin()) != origins.end());
@@ -190,9 +191,9 @@ TEST_F(ChromeAppCacheServiceTest, SaveSessionState) {
   // Create a ChromeAppCacheService and insert data into it
   scoped_refptr<ChromeAppCacheService> appcache_service =
       CreateAppCacheService(appcache_path, true);
-  ASSERT_TRUE(file_util::PathExists(appcache_path));
-  ASSERT_TRUE(file_util::PathExists(appcache_path.AppendASCII("Index")));
-  InsertDataIntoAppCache(appcache_service);
+  ASSERT_TRUE(base::PathExists(appcache_path));
+  ASSERT_TRUE(base::PathExists(appcache_path.AppendASCII("Index")));
+  InsertDataIntoAppCache(appcache_service.get());
 
   // Save session state. This should bypass the destruction-time deletion.
   appcache_service->set_force_keep_session_state();
@@ -205,12 +206,12 @@ TEST_F(ChromeAppCacheServiceTest, SaveSessionState) {
   appcache_service = CreateAppCacheService(appcache_path, false);
 
   // The directory is still there
-  ASSERT_TRUE(file_util::PathExists(appcache_path));
+  ASSERT_TRUE(base::PathExists(appcache_path));
 
   // No appcache data was deleted.
   AppCacheTestHelper appcache_helper;
   std::set<GURL> origins;
-  appcache_helper.GetOriginsWithCaches(appcache_service, &origins);
+  appcache_helper.GetOriginsWithCaches(appcache_service.get(), &origins);
   EXPECT_EQ(3UL, origins.size());
   EXPECT_TRUE(origins.find(kProtectedManifestURL.GetOrigin()) != origins.end());
   EXPECT_TRUE(origins.find(kNormalManifestURL.GetOrigin()) != origins.end());

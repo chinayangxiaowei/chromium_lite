@@ -12,12 +12,13 @@
 #include "base/logging.h"
 #include "base/prefs/pref_registry_simple.h"
 #include "base/prefs/pref_service.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/background/background_application_list_model.h"
 #include "chrome/browser/background/background_mode_manager.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_shutdown.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_system.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
@@ -33,7 +34,6 @@
 #include "chrome/browser/ui/extensions/application_launch.h"
 #include "chrome/browser/ui/host_desktop.h"
 #include "chrome/common/chrome_constants.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_constants.h"
@@ -123,8 +123,8 @@ void BackgroundModeManager::BackgroundModeData::BuildProfileMenu(
              applications_->begin();
          cursor != applications_->end();
          ++cursor, ++position) {
-      const gfx::ImageSkia* icon = applications_->GetIcon(*cursor);
-      DCHECK(position == applications_->GetPosition(*cursor));
+      const gfx::ImageSkia* icon = applications_->GetIcon(cursor->get());
+      DCHECK(position == applications_->GetPosition(cursor->get()));
       const std::string& name = (*cursor)->name();
       menu->AddItem(position, UTF8ToUTF16(name));
       if (icon)
@@ -225,8 +225,11 @@ BackgroundModeManager::~BackgroundModeManager() {
 
 // static
 void BackgroundModeManager::RegisterPrefs(PrefRegistrySimple* registry) {
-  registry->RegisterBooleanPref(prefs::kUserCreatedLoginItem, false);
+#if defined(OS_MACOSX)
   registry->RegisterBooleanPref(prefs::kUserRemovedLoginItem, false);
+  registry->RegisterBooleanPref(prefs::kChromeCreatedLoginItem, false);
+  registry->RegisterBooleanPref(prefs::kMigratedLoginItemPref, false);
+#endif
   registry->RegisterBooleanPref(prefs::kBackgroundModeEnabled, true);
 }
 
@@ -306,7 +309,12 @@ void BackgroundModeManager::Observe(
           // treated as new installs.
           if (extensions::ExtensionSystem::Get(profile)->extension_service()->
                   is_ready()) {
-            OnBackgroundAppInstalled(extension);
+            bool is_being_reloaded = false;
+            CheckReloadStatus(extension, &is_being_reloaded);
+            // No need to show the notification if we showed to the user
+            // previously for this app.
+            if (!is_being_reloaded)
+              OnBackgroundAppInstalled(extension);
           }
         }
       }
@@ -382,16 +390,10 @@ void BackgroundModeManager::OnApplicationListChanged(Profile* profile) {
     // background mode.
     if (!in_background_mode_) {
       // We're entering background mode - make sure we have launch-on-startup
-      // enabled.
-      // On a Mac, we use 'login items' mechanism which has user-facing UI so we
-      // don't want to stomp on user choice every time we start and load
-      // registered extensions. This means that if a background app is removed
-      // or added while Chrome is not running, we could leave Chrome in the
-      // wrong state, but this is better than constantly forcing Chrome to
-      // launch on startup even after the user removes the LoginItem manually.
-#if !defined(OS_MACOSX)
+      // enabled. On Mac, the platform-specific code tracks whether the user
+      // has deleted a login item in the past, and if so, no login item will
+      // be created (to avoid overriding the specific user action).
       EnableLaunchOnStartup(true);
-#endif
 
       StartBackgroundMode();
     }
@@ -438,11 +440,6 @@ void BackgroundModeManager::OnProfileWillBeRemoved(
   }
 }
 
-void BackgroundModeManager::OnProfileWasRemoved(
-    const base::FilePath& profile_path,
-    const string16& profile_name) {
-}
-
 void BackgroundModeManager::OnProfileNameChanged(
     const base::FilePath& profile_path,
     const string16& old_profile_name) {
@@ -461,10 +458,6 @@ void BackgroundModeManager::OnProfileNameChanged(
   }
 }
 
-void BackgroundModeManager::OnProfileAvatarChanged(
-    const base::FilePath& profile_path) {
-
-}
 ///////////////////////////////////////////////////////////////////////////////
 //  BackgroundModeManager::BackgroundModeData, ui::SimpleMenuModel overrides
 bool BackgroundModeManager::IsCommandIdChecked(
@@ -499,7 +492,7 @@ void BackgroundModeManager::ExecuteCommand(int command_id, int event_flags) {
       chrome::ShowAboutChrome(bmd->GetBrowserWindow());
       break;
     case IDC_TASK_MANAGER:
-      chrome::OpenTaskManager(bmd->GetBrowserWindow(), true);
+      chrome::OpenTaskManager(bmd->GetBrowserWindow());
       break;
     case IDC_EXIT:
       content::RecordAction(UserMetricsAction("Exit"));
@@ -533,8 +526,8 @@ void BackgroundModeManager::EndKeepAliveForStartup() {
     // We call this via the message queue to make sure we don't try to end
     // keep-alive (which can shutdown Chrome) before the message loop has
     // started.
-    MessageLoop::current()->PostTask(FROM_HERE,
-                                     base::Bind(&chrome::EndKeepAlive));
+    base::MessageLoop::current()->PostTask(FROM_HERE,
+                                           base::Bind(&chrome::EndKeepAlive));
   }
 }
 
@@ -630,22 +623,30 @@ void BackgroundModeManager::OnBackgroundAppInstalled(
   if (!IsBackgroundModePrefEnabled())
     return;
 
-  // Special behavior for the Mac: We enable "launch-on-startup" only on new app
-  // installation rather than every time we go into background mode. This is
-  // because the Mac exposes "Open at Login" UI to the user and we don't want to
-  // clobber the user's selection on every browser launch.
-  // Other platforms enable launch-on-startup in OnApplicationListChanged().
-#if defined(OS_MACOSX)
-  EnableLaunchOnStartup(true);
-#endif
-
   // Check if we need a status tray icon and make one if we do (needed so we
   // can display the app-installed notification below).
   CreateStatusTrayIcon();
 
   // Notify the user that a background app has been installed.
-  if (extension)  // NULL when called by unit tests.
+  if (extension) {  // NULL when called by unit tests.
     DisplayAppInstalledNotification(extension);
+  }
+}
+
+void BackgroundModeManager::CheckReloadStatus(
+    const Extension* extension,
+    bool* is_being_reloaded) {
+    // Walk the BackgroundModeData for all profiles to see if one of their
+    // extensions is being reloaded.
+    for (BackgroundModeInfoMap::const_iterator it =
+             background_mode_data_.begin();
+         it != background_mode_data_.end();
+         ++it) {
+      Profile* profile = it->first;
+      // If the extension is being reloaded, no need to show a notification.
+      if (profile->GetExtensionService()->IsBeingReloaded(extension->id()))
+        *is_being_reloaded = true;
+    }
 }
 
 void BackgroundModeManager::CreateStatusTrayIcon() {
@@ -664,16 +665,16 @@ void BackgroundModeManager::CreateStatusTrayIcon() {
   if (!status_tray_ || status_icon_)
     return;
 
-  status_icon_ = status_tray_->CreateStatusIcon();
-  if (!status_icon_)
-    return;
-
-  // Set the image and add ourselves as a click observer on it.
   // TODO(rlp): Status tray icon should have submenus for each profile.
   gfx::ImageSkia* image_skia = ui::ResourceBundle::GetSharedInstance().
       GetImageSkiaNamed(IDR_STATUS_TRAY_ICON);
-  status_icon_->SetImage(*image_skia);
-  status_icon_->SetToolTip(l10n_util::GetStringUTF16(IDS_PRODUCT_NAME));
+
+  status_icon_ = status_tray_->CreateStatusIcon(
+      StatusTray::BACKGROUND_MODE_ICON,
+      *image_skia,
+      l10n_util::GetStringUTF16(IDS_PRODUCT_NAME));
+  if (!status_icon_)
+    return;
   UpdateStatusTrayIconContextMenu();
 }
 

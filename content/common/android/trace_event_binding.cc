@@ -28,7 +28,7 @@ class TraceEventDataConverter {
         name_(env->GetStringUTFChars(jname, NULL)),
         arg_(jarg ? env->GetStringUTFChars(jarg, NULL) : NULL) {
   }
-  virtual ~TraceEventDataConverter() {
+  ~TraceEventDataConverter() {
     env_->ReleaseStringUTFChars(jname_, name_);
     if (jarg_)
       env_->ReleaseStringUTFChars(jarg_, arg_);
@@ -39,35 +39,14 @@ class TraceEventDataConverter {
   const char* arg_name() { return arg_ ? "arg" : NULL; }
   const char* arg() { return arg_; }
 
- protected:
-  JNIEnv* env_;
-
  private:
+  JNIEnv* env_;
   jstring jname_;
   jstring jarg_;
   const char* name_;
   const char* arg_;
 
   DISALLOW_COPY_AND_ASSIGN(TraceEventDataConverter);
-};
-
-class AsyncTraceEventDataConverter : public TraceEventDataConverter {
- public:
-  AsyncTraceEventDataConverter(JNIEnv* env,
-                               jstring jname,
-                               jlong jid,
-                               jstring jarg)
-    : TraceEventDataConverter(env, jname, jarg),
-      id_(jid) {
-  }
-
-  virtual ~AsyncTraceEventDataConverter() {
-  }
-
-  const long long id() { return id_; }
-
- private:
-  long long id_;
 };
 
 }  // namespace
@@ -89,9 +68,11 @@ static void Instant(JNIEnv* env, jclass clazz,
   TraceEventDataConverter converter(env, jname, jarg);
   if (converter.arg()) {
     TRACE_EVENT_COPY_INSTANT1(kJavaCategory, converter.name(),
+                              TRACE_EVENT_SCOPE_THREAD,
                               converter.arg_name(), converter.arg());
   } else {
-    TRACE_EVENT_COPY_INSTANT0(kJavaCategory, converter.name());
+    TRACE_EVENT_COPY_INSTANT0(kJavaCategory, converter.name(),
+                              TRACE_EVENT_SCOPE_THREAD);
   }
 }
 
@@ -119,33 +100,33 @@ static void End(JNIEnv* env, jclass clazz,
 
 static void StartAsync(JNIEnv* env, jclass clazz,
                        jstring jname, jlong jid, jstring jarg) {
-  AsyncTraceEventDataConverter converter(env, jname, jid, jarg);
+  TraceEventDataConverter converter(env, jname, jarg);
   if (converter.arg()) {
     TRACE_EVENT_COPY_ASYNC_BEGIN1(kJavaCategory,
                                   converter.name(),
-                                  converter.id(),
+                                  jid,
                                   converter.arg_name(),
                                   converter.arg());
   } else {
     TRACE_EVENT_COPY_ASYNC_BEGIN0(kJavaCategory,
                                   converter.name(),
-                                  converter.id());
+                                  jid);
   }
 }
 
 static void FinishAsync(JNIEnv* env, jclass clazz,
                         jstring jname, jlong jid, jstring jarg) {
-  AsyncTraceEventDataConverter converter(env, jname, jid, jarg);
+  TraceEventDataConverter converter(env, jname, jarg);
   if (converter.arg()) {
     TRACE_EVENT_COPY_ASYNC_END1(kJavaCategory,
                                 converter.name(),
-                                converter.id(),
+                                jid,
                                 converter.arg_name(),
                                 converter.arg());
   } else {
     TRACE_EVENT_COPY_ASYNC_END0(kJavaCategory,
                                 converter.name(),
-                                converter.id());
+                                jid);
   }
 }
 

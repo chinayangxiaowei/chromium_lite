@@ -5,14 +5,19 @@
 #include "content/public/test/fake_speech_recognition_manager.h"
 
 #include "base/bind.h"
-#include "base/message_loop.h"
-#include "base/utf_string_conversions.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/utf_string_conversions.h"
 #include "content/public/browser/speech_recognition_event_listener.h"
 #include "content/public/common/speech_recognition_result.h"
+#include "content/public/test/test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
 const char kTestResult[] = "Pictures of the moon";
+
+void RunCallback(const base::Closure recognition_started_closure) {
+  recognition_started_closure.Run();
+}
 }  // namespace
 
 namespace content {
@@ -22,11 +27,18 @@ FakeSpeechRecognitionManager::FakeSpeechRecognitionManager()
       listener_(NULL),
       fake_result_(kTestResult),
       did_cancel_all_(false),
-      should_send_fake_response_(true),
-      recognition_started_event_(false, false) {
+      should_send_fake_response_(true) {
 }
 
 FakeSpeechRecognitionManager::~FakeSpeechRecognitionManager() {
+}
+
+void FakeSpeechRecognitionManager::WaitForRecognitionStarted() {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  scoped_refptr<MessageLoopRunner> runner = new MessageLoopRunner;
+  recognition_started_closure_ = runner->QuitClosure();
+  runner->Run();
+  recognition_started_closure_.Reset();
 }
 
 void FakeSpeechRecognitionManager::SetFakeResult(const std::string& value) {
@@ -54,16 +66,23 @@ void FakeSpeechRecognitionManager::StartSession(int session_id) {
 
   if (should_send_fake_response_) {
     // Give the fake result in a short while.
-    MessageLoop::current()->PostTask(FROM_HERE, base::Bind(
-        &FakeSpeechRecognitionManager::SetFakeRecognitionResult,
-        // This class does not need to be refcounted (typically done by
-        // PostTask) since it will outlive the test and gets released only
-        // when the test shuts down. Disabling refcounting here saves a bit
-        // of unnecessary code and the factory method can return a plain
-        // pointer below as required by the real code.
-        base::Unretained(this)));
+    base::MessageLoop::current()->PostTask(
+        FROM_HERE,
+        base::Bind(
+            &FakeSpeechRecognitionManager::SetFakeRecognitionResult,
+            // This class does not need to be refcounted (typically done by
+            // PostTask) since it will outlive the test and gets released only
+            // when the test shuts down. Disabling refcounting here saves a bit
+            // of unnecessary code and the factory method can return a plain
+            // pointer below as required by the real code.
+            base::Unretained(this)));
   }
-  recognition_started_event_.Signal();
+  if (!recognition_started_closure_.is_null()) {
+    BrowserThread::PostTask(
+        BrowserThread::UI,
+        FROM_HERE,
+        base::Bind(&RunCallback, recognition_started_closure_));
+  }
 }
 
 void FakeSpeechRecognitionManager::AbortSession(int session_id) {
@@ -95,8 +114,6 @@ void FakeSpeechRecognitionManager::AbortAllSessionsForRenderView(
 }
 
 bool FakeSpeechRecognitionManager::HasAudioInputDevices() { return true; }
-
-bool FakeSpeechRecognitionManager::IsCapturingAudio() { return true; }
 
 string16 FakeSpeechRecognitionManager::GetAudioInputDeviceModel() {
   return string16();

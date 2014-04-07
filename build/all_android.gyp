@@ -22,12 +22,21 @@
         'android_builder_tests',
         '../android_webview/android_webview.gyp:android_webview_apk',
         '../chrome/chrome.gyp:chromium_testshell',
+        '../remoting/remoting.gyp:remoting_apk',
         # TODO(nyquist) This should instead by a target for sync when all of
         # the sync-related code for Android has been upstreamed.
         # See http://crbug.com/159203
         '../third_party/cacheinvalidation/cacheinvalidation.gyp:cacheinvalidation_javalib',
       ],
     }, # target_name: All
+    {
+      'target_name': 'all_webkit',
+      'type': 'none',
+      'dependencies': [
+        '../third_party/WebKit/public/all.gyp:all_blink',
+        '../content/content.gyp:content_shell_apk',
+      ],
+    }, # target_name: all_webkit
     {
       # The current list of tests for android.  This is temporary
       # until the full set supported.  If adding a new test here,
@@ -43,6 +52,14 @@
         '../android_webview/android_webview.gyp:android_webview_unittests',
         '../base/android/jni_generator/jni_generator.gyp:jni_generator_tests',
         '../base/base.gyp:base_unittests',
+        '../breakpad/breakpad.gyp:breakpad_unittests',
+        # Also compile the tools needed to deal with minidumps, they are
+        # needed to run minidump tests upstream.
+        '../breakpad/breakpad.gyp:dump_syms#host',
+        '../breakpad/breakpad.gyp:symupload#host',
+        '../breakpad/breakpad.gyp:minidump_dump#host',
+        '../breakpad/breakpad.gyp:minidump_stackwalk#host',
+        '../build/android/tests/multiple_proguards/multiple_proguards.gyp:multiple_proguards_test_apk',
         '../cc/cc_tests.gyp:cc_perftests_apk',
         '../cc/cc_tests.gyp:cc_unittests',
         '../chrome/chrome.gyp:unit_tests',
@@ -58,7 +75,7 @@
         '../sandbox/sandbox.gyp:sandbox_linux_unittests',
         '../sql/sql.gyp:sql_unittests',
         '../sync/sync.gyp:sync_unit_tests',
-        '../third_party/WebKit/Source/WebKit/chromium/All.gyp:*',
+        '../third_party/WebKit/public/all.gyp:*',
         '../tools/android/android_tools.gyp:android_tools',
         '../tools/android/device_stats_monitor/device_stats_monitor.gyp:device_stats_monitor',
         '../tools/android/findbugs_plugin/findbugs_plugin.gyp:findbugs_plugin_test',
@@ -70,24 +87,8 @@
         '../chrome/chrome_resources.gyp:packed_resources',
       ],
       'conditions': [
-        ['linux_breakpad==1', {
-          'dependencies': [
-            '../breakpad/breakpad.gyp:breakpad_unittests',
-            # Also compile the tools needed to deal with minidumps, they are
-            # needed to run minidump tests upstream.
-            '../breakpad/breakpad.gyp:dump_syms#host',
-            '../breakpad/breakpad.gyp:symupload#host',
-            '../breakpad/breakpad.gyp:minidump_dump#host',
-            '../breakpad/breakpad.gyp:minidump_stackwalk#host'
-          ],
-        }],
         ['"<(gtest_target_type)"=="shared_library"', {
           'dependencies': [
-            # The first item is simply the template.  We add as a dep
-            # to make sure it builds in ungenerated form.  TODO(jrg):
-            # once stable, transition to a test-only (optional)
-            # target.
-            '../testing/android/native_test.gyp:native_test_apk',
             # Unit test bundles packaged as an apk.
             '../android_webview/android_webview.gyp:android_webview_unittests_apk',
             '../base/base.gyp:base_unittests_apk',
@@ -96,6 +97,7 @@
             '../components/components.gyp:components_unittests_apk',
             '../content/content.gyp:content_browsertests_apk',
             '../content/content.gyp:content_unittests_apk',
+            '../content/content.gyp:video_decode_accelerator_unittest_apk',
             '../gpu/gpu.gyp:gl_tests_apk',
             '../gpu/gpu.gyp:gpu_unittests_apk',
             '../ipc/ipc.gyp:ipc_tests_apk',
@@ -107,7 +109,8 @@
             '../ui/ui.gyp:ui_unittests_apk',
             '../android_webview/android_webview.gyp:android_webview_test_apk',
             '../chrome/chrome.gyp:chromium_testshell_test_apk',
-            '../webkit/compositor_bindings/compositor_bindings_tests.gyp:webkit_compositor_bindings_unittests_apk'
+            '../chrome/chrome.gyp:chromium_testshell_uiautomator_tests',
+            '../webkit/renderer/compositor_bindings/compositor_bindings_tests.gyp:webkit_compositor_bindings_unittests_apk'
           ],
         }],
       ],

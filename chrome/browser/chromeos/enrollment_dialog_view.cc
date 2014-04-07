@@ -5,11 +5,12 @@
 #include "chrome/browser/chromeos/enrollment_dialog_view.h"
 
 #include "base/bind.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/chromeos/cros/network_library.h"
 #include "chrome/browser/extensions/extension_host.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_navigator.h"
+#include "chromeos/network/network_event_log.h"
 #include "content/public/common/page_transition_types.h"
 #include "extensions/common/constants.h"
 #include "grit/generated_resources.h"
@@ -45,7 +46,7 @@ class EnrollmentDialogView : public views::DialogDelegateView {
   // views::DialogDelegateView overrides
   virtual int GetDialogButtons() const OVERRIDE;
   virtual bool Accept() OVERRIDE;
-  virtual void OnClose() OVERRIDE;
+  virtual void OnClosed() OVERRIDE;
   virtual string16 GetDialogButtonLabel(ui::DialogButton button) const OVERRIDE;
 
   // views::WidgetDelegate overrides
@@ -96,7 +97,7 @@ void EnrollmentDialogView::ShowDialog(gfx::NativeWindow owning_window,
                                       const base::Closure& connect) {
   EnrollmentDialogView* dialog_view =
       new EnrollmentDialogView(network_name, profile, target_uri, connect);
-  views::Widget::CreateWindowWithParent(dialog_view, owning_window);
+  views::DialogDelegate::CreateDialogWidget(dialog_view, NULL, owning_window);
   dialog_view->InitDialog();
   views::Widget* widget = dialog_view->GetWidget();
   DCHECK(widget);
@@ -112,7 +113,7 @@ bool EnrollmentDialogView::Accept() {
   return true;
 }
 
-void EnrollmentDialogView::OnClose() {
+void EnrollmentDialogView::OnClosed() {
   if (!accepted_)
     return;
   chrome::NavigateParams params(profile_,
@@ -192,7 +193,7 @@ class DialogEnrollmentDelegate : public EnrollmentDelegate {
   virtual ~DialogEnrollmentDelegate();
 
   // EnrollmentDelegate overrides
-  virtual void Enroll(const std::vector<std::string>& uri_list,
+  virtual bool Enroll(const std::vector<std::string>& uri_list,
                       const base::Closure& connect) OVERRIDE;
 
  private:
@@ -212,8 +213,8 @@ DialogEnrollmentDelegate::DialogEnrollmentDelegate(
 
 DialogEnrollmentDelegate::~DialogEnrollmentDelegate() {}
 
-void DialogEnrollmentDelegate::Enroll(const std::vector<std::string>& uri_list,
-                                      const base::Closure& connect) {
+bool DialogEnrollmentDelegate::Enroll(const std::vector<std::string>& uri_list,
+                                      const base::Closure& post_action) {
   // Keep the closure for later activation if we notice that
   // a certificate has been added.
 
@@ -229,16 +230,14 @@ void DialogEnrollmentDelegate::Enroll(const std::vector<std::string>& uri_list,
       EnrollmentDialogView::ShowDialog(owning_window_,
                                        network_name_,
                                        profile_,
-                                       uri, connect);
-      return;
+                                       uri, post_action);
+      return true;
     }
   }
 
-  // If we didn't find a scheme we could handle, then don't continue connecting.
-  // TODO(gspencer): provide a path to display this failure to the user. (but
-  // for the most part they won't know what it means, since it's probably coming
-  // from a policy-pushed ONC file).
-  VLOG(1) << "Couldn't find usable scheme in enrollment URI(s)";
+  // No appropriate scheme was found.
+  NET_LOG_EVENT("No usable enrollment URI", network_name_);
+  return false;
 }
 
 }  // namespace

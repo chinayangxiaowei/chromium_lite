@@ -17,7 +17,7 @@
 #include "base/lazy_instance.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "chrome/test/base/test_switches.h"
 #include "chrome/test/logging/win/file_logger.h"
 #include "chrome/test/logging/win/log_file_printer.h"
@@ -262,7 +262,7 @@ void TestLogCollector::ProcessSessionForTest(
       std::cerr.flush();
     }
 
-    if (!file_util::Delete(log_file_, false))
+    if (!base::DeleteFile(log_file_, false))
       LOG(ERROR) << "Failed to delete log file " << log_file_.value();
   }
 

@@ -9,9 +9,9 @@
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/debug/trace_event.h"
-#include "base/message_loop.h"
-#include "base/process_util.h"
-#include "base/string_number_conversions.h"
+#include "base/message_loop/message_loop.h"
+#include "base/process/process_handle.h"
+#include "base/strings/string_number_conversions.h"
 #include "content/common/gpu/gpu_channel_manager.h"
 #include "content/common/gpu/gpu_memory_allocation.h"
 #include "content/common/gpu/gpu_memory_manager_client.h"
@@ -68,11 +68,22 @@ GpuMemoryManager::GpuMemoryManager(
   CommandLine* command_line = CommandLine::ForCurrentProcess();
 
 #if defined(OS_ANDROID)
-  bytes_default_per_client_ = 32 * 1024 * 1024;
-  bytes_minimum_per_client_ = 32 * 1024 * 1024;
+  bytes_default_per_client_ = 16 * 1024 * 1024;
+  bytes_minimum_per_client_ = 16 * 1024 * 1024;
+#elif defined(OS_CHROMEOS)
+  bytes_default_per_client_ = 64 * 1024 * 1024;
+  bytes_minimum_per_client_ = 4 * 1024 * 1024;
 #else
   bytes_default_per_client_ = 64 * 1024 * 1024;
   bytes_minimum_per_client_ = 64 * 1024 * 1024;
+#endif
+
+  // On Android, always discard everything that is nonvisible.
+  // On Mac, use as little memory as possible to avoid stability issues.
+#if defined(OS_ANDROID) || defined(OS_MACOSX)
+  allow_nonvisible_memory_ = false;
+#else
+  allow_nonvisible_memory_ = true;
 #endif
 
   if (command_line->HasSwitch(switches::kForceGpuMemAvailableMb)) {
@@ -106,7 +117,7 @@ uint64 GpuMemoryManager::GetAvailableGpuMemory() const {
 
 uint64 GpuMemoryManager::GetDefaultAvailableGpuMemory() const {
 #if defined(OS_ANDROID)
-  return 32 * 1024 * 1024;
+  return 16 * 1024 * 1024;
 #elif defined(OS_CHROMEOS)
   return 1024 * 1024 * 1024;
 #else
@@ -207,9 +218,8 @@ void GpuMemoryManager::ScheduleManage(
   if (manage_immediate_scheduled_)
     return;
   if (schedule_manage_time == kScheduleManageNow) {
-    MessageLoop::current()->PostTask(
-      FROM_HERE,
-      base::Bind(&GpuMemoryManager::Manage, AsWeakPtr()));
+    base::MessageLoop::current()->PostTask(
+        FROM_HERE, base::Bind(&GpuMemoryManager::Manage, AsWeakPtr()));
     manage_immediate_scheduled_ = true;
     if (!delayed_manage_callback_.IsCancelled())
       delayed_manage_callback_.Cancel();
@@ -218,10 +228,10 @@ void GpuMemoryManager::ScheduleManage(
       return;
     delayed_manage_callback_.Reset(base::Bind(&GpuMemoryManager::Manage,
                                               AsWeakPtr()));
-    MessageLoop::current()->PostDelayedTask(
-      FROM_HERE,
-      delayed_manage_callback_.callback(),
-      base::TimeDelta::FromMilliseconds(kDelayedScheduleManageTimeoutMs));
+    base::MessageLoop::current()->PostDelayedTask(
+        FROM_HERE,
+        delayed_manage_callback_.callback(),
+        base::TimeDelta::FromMilliseconds(kDelayedScheduleManageTimeoutMs));
   }
 }
 
@@ -634,10 +644,9 @@ void GpuMemoryManager::ComputeNonvisibleSurfacesAllocations() {
         bytes_available_total - bytes_allocated_visible);
   }
 
-  // On Android, always discard everything that is nonvisible.
-#if defined(OS_ANDROID)
-  bytes_available_nonvisible = 0;
-#endif
+  // Clamp the amount of memory available to non-visible clients.
+  if (!allow_nonvisible_memory_)
+    bytes_available_nonvisible = 0;
 
   // Determine which now-visible clients should keep their contents when
   // they are made nonvisible.
@@ -765,6 +774,9 @@ void GpuMemoryManager::AssignSurfacesAllocations() {
 
     allocation.renderer_allocation.bytes_limit_when_visible =
         client_state->bytes_allocation_when_visible_;
+    // Use a more conservative memory allocation policy on Mac because the
+    // platform is unstable when under memory pressure.
+    // http://crbug.com/141377
     allocation.renderer_allocation.priority_cutoff_when_visible =
 #if defined(OS_MACOSX)
         GpuMemoryAllocationForRenderer::kPriorityCutoffAllowNiceToHave;

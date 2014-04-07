@@ -12,7 +12,7 @@
 
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/process_util.h"
+#include "base/process/process_handle.h"
 #include "base/win/scoped_handle.h"
 #include "base/win/windows_version.h"
 #include "rlz/lib/assert.h"
@@ -40,7 +40,7 @@ HRESULT GetCurrentUser(std::wstring* name,
 
   // (Following call will fail with ERROR_INSUFFICIENT_BUFFER and give us the
   // required size.)
-  scoped_array<char> token_user_bytes;
+  scoped_ptr<char[]> token_user_bytes;
   DWORD token_user_size;
   DWORD token_user_size2;
   BOOL result = ::GetTokenInformation(token, TokenUser, NULL, 0,

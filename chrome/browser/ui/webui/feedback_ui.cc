@@ -10,19 +10,21 @@
 #include "base/base64.h"
 #include "base/bind.h"
 #include "base/bind_helpers.h"
+#include "base/files/file_enumerator.h"
 #include "base/logging.h"
 #include "base/memory/weak_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/prefs/pref_service.h"
-#include "base/string_util.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/time.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/download/download_prefs.h"
 #include "chrome/browser/feedback/feedback_data.h"
 #include "chrome/browser/feedback/feedback_util.h"
+#include "chrome/browser/feedback/tracing_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/signin/signin_manager.h"
@@ -59,13 +61,12 @@
 #include "ash/shell_delegate.h"
 #include "base/file_util.h"
 #include "base/path_service.h"
-#include "chrome/browser/chromeos/cros/cros_library.h"
 #include "chrome/browser/chromeos/drive/drive.pb.h"
-#include "chrome/browser/chromeos/drive/drive_file_system_interface.h"
-#include "chrome/browser/chromeos/drive/drive_file_system_util.h"
-#include "chrome/browser/chromeos/drive/drive_system_service.h"
+#include "chrome/browser/chromeos/drive/drive_integration_service.h"
+#include "chrome/browser/chromeos/drive/file_system_interface.h"
+#include "chrome/browser/chromeos/drive/file_system_util.h"
 #include "chrome/browser/chromeos/login/user_manager.h"
-#include "chrome/browser/chromeos/system_logs/system_logs_fetcher.h"
+#include "chrome/browser/chromeos/system_logs/system_logs_fetcher_base.h"
 #include "ui/aura/root_window.h"
 #include "ui/aura/window.h"
 #endif
@@ -86,6 +87,7 @@ const char kCustomPageUrlParameter[] = "customPageUrl=";
 #if defined(OS_CHROMEOS)
 
 const char kTimestampParameter[] = "timestamp=";
+const char kTraceIdParameter[] = "traceId=";
 
 const size_t kMaxSavedScreenshots = 2;
 size_t kMaxNumScanFiles = 1000;
@@ -106,8 +108,8 @@ std::string GetUserEmail() {
     return manager->GetLoggedInUser()->display_email();
 }
 
-bool ScreenshotDriveTimestampComp(const drive::DriveEntryProto& entry1,
-                                  const drive::DriveEntryProto& entry2) {
+bool ScreenshotDriveTimestampComp(const drive::ResourceEntry& entry1,
+                                  const drive::ResourceEntry& entry2) {
   return entry1.file_info().last_modified() >
       entry2.file_info().last_modified();
 }
@@ -115,18 +117,17 @@ bool ScreenshotDriveTimestampComp(const drive::DriveEntryProto& entry1,
 void ReadDirectoryCallback(size_t max_saved,
                            std::vector<std::string>* saved_screenshots,
                            base::Closure callback,
-                           drive::DriveFileError error,
-                           bool hide_hosted_documents,
-                           scoped_ptr<drive::DriveEntryProtoVector> entries) {
-  if (error != drive::DRIVE_FILE_OK) {
+                           drive::FileError error,
+                           scoped_ptr<drive::ResourceEntryVector> entries) {
+  if (error != drive::FILE_ERROR_OK) {
     callback.Run();
     return;
   }
 
   size_t max_scan = std::min(kMaxNumScanFiles, entries->size());
-  std::vector<drive::DriveEntryProto> screenshot_entries;
+  std::vector<drive::ResourceEntry> screenshot_entries;
   for (size_t i = 0; i < max_scan; ++i) {
-    const drive::DriveEntryProto& entry = (*entries)[i];
+    const drive::ResourceEntry& entry = (*entries)[i];
     if (StartsWithASCII(entry.base_name(),
                         ScreenshotSource::kScreenshotPrefix, true) &&
         EndsWith(entry.base_name(),
@@ -141,11 +142,11 @@ void ReadDirectoryCallback(size_t max_saved,
                     screenshot_entries.end(),
                     ScreenshotDriveTimestampComp);
   for (size_t i = 0; i < sort_size; ++i) {
-    const drive::DriveEntryProto& entry = screenshot_entries[i];
+    const drive::ResourceEntry& entry = screenshot_entries[i];
     saved_screenshots->push_back(
         std::string(ScreenshotSource::kScreenshotUrlRoot) +
         std::string(ScreenshotSource::kScreenshotSaved) +
-        entry.resource_id());
+        entry.base_name());
   }
   callback.Run();
 }
@@ -237,6 +238,13 @@ void ShowFeedbackPage(Browser* browser,
 #if defined(OS_CHROMEOS)
   feedback_url = feedback_url + "&" + kTimestampParameter +
                  net::EscapeUrlEncodedData(timestamp, false);
+
+  // The manager is only available if tracing is enabled.
+  if (TracingManager* manager = TracingManager::Get()) {
+    int trace_id = manager->RequestTrace();
+    feedback_url = feedback_url + "&" + kTraceIdParameter +
+                   base::IntToString(trace_id);
+  }
 #endif
   chrome::ShowSingletonTab(browser, GURL(feedback_url));
 }
@@ -308,6 +316,8 @@ content::WebUIDataSource* CreateFeedbackUIHTMLSource(bool successful_init) {
   source->AddLocalizedString("user-email", IDS_FEEDBACK_USER_EMAIL_LABEL);
 
 #if defined(OS_CHROMEOS)
+  source->AddLocalizedString("performance-trace",
+                             IDS_FEEDBACK_INCLUDE_PERFORMANCE_TRACE_CHECKBOX);
   source->AddLocalizedString("sysinfo",
                              IDS_FEEDBACK_INCLUDE_SYSTEM_INFORMATION_CHKBOX);
   source->AddLocalizedString("currentscreenshots",
@@ -318,7 +328,7 @@ content::WebUIDataSource* CreateFeedbackUIHTMLSource(bool successful_init) {
                              IDS_FEEDBACK_CHOOSE_DIFFERENT_SCREENSHOT);
   source->AddLocalizedString("choose-original-screenshot",
                              IDS_FEEDBACK_CHOOSE_ORIGINAL_SCREENSHOT);
-  source->AddLocalizedString("attach-file-custom-label",
+  source->AddLocalizedString("attach-file-label",
                              IDS_FEEDBACK_ATTACH_FILE_LABEL);
   source->AddLocalizedString("attach-file-note",
                              IDS_FEEDBACK_ATTACH_FILE_NOTE);
@@ -409,23 +419,23 @@ bool FeedbackHandler::Init() {
       std::string query_str = *it;
       if (StartsWithASCII(query_str, std::string(kSessionIDParameter), true)) {
         ReplaceFirstSubstringAfterOffset(
-            &query_str, 0, kSessionIDParameter, "");
+            &query_str, 0, kSessionIDParameter, std::string());
         if (!base::StringToInt(query_str, &session_id))
           return false;
       } else if (StartsWithASCII(*it, std::string(kTabIndexParameter), true)) {
         ReplaceFirstSubstringAfterOffset(
-            &query_str, 0, kTabIndexParameter, "");
+            &query_str, 0, kTabIndexParameter, std::string());
         if (!base::StringToInt(query_str, &index))
           return false;
       } else if (StartsWithASCII(*it, std::string(kCustomPageUrlParameter),
                                  true)) {
         ReplaceFirstSubstringAfterOffset(
-            &query_str, 0, kCustomPageUrlParameter, "");
+            &query_str, 0, kCustomPageUrlParameter, std::string());
         custom_page_url = query_str;
       } else if (StartsWithASCII(*it, std::string(kCategoryTagParameter),
                                  true)) {
         ReplaceFirstSubstringAfterOffset(
-            &query_str, 0, kCategoryTagParameter, "");
+            &query_str, 0, kCategoryTagParameter, std::string());
         category_tag_ = query_str;
 #if defined(OS_CHROMEOS)
       } else if (StartsWithASCII(*it, std::string(kTimestampParameter), true)) {
@@ -569,8 +579,8 @@ void FeedbackHandler::RefreshSavedScreenshotsCallback(
 void FeedbackHandler::GetMostRecentScreenshotsDrive(
     const base::FilePath& filepath, std::vector<std::string>* saved_screenshots,
     size_t max_saved, base::Closure callback) {
-  drive::DriveFileSystemInterface* file_system =
-      drive::DriveSystemServiceFactory::GetForProfile(
+  drive::FileSystemInterface* file_system =
+      drive::DriveIntegrationServiceFactory::GetForProfile(
           Profile::FromWebUI(web_ui()))->file_system();
   file_system->ReadDirectoryByPath(
       drive::util::ExtractDrivePath(filepath),
@@ -581,7 +591,7 @@ void FeedbackHandler::GetMostRecentScreenshotsDrive(
 
 
 void FeedbackHandler::HandleSendReport(const ListValue* list_value) {
-  if (!feedback_data_) {
+  if (!feedback_data_.get()) {
     LOG(ERROR) << "Bug report hasn't been intialized yet.";
     return;
   }
@@ -608,6 +618,11 @@ void FeedbackHandler::HandleSendReport(const ListValue* list_value) {
   std::string sys_info_checkbox;
   (*i++)->GetAsString(&sys_info_checkbox);
   bool send_sys_info = (sys_info_checkbox == "true");
+
+  std::string trace_id_str;
+  (*i++)->GetAsString(&trace_id_str);
+  int trace_id = 0;
+  base::StringToInt(trace_id_str, &trace_id);
 
   std::string attached_filename;
   scoped_ptr<std::string> attached_filedata;
@@ -646,6 +661,7 @@ void FeedbackHandler::HandleSendReport(const ListValue* list_value) {
   feedback_data_->set_attached_filename(attached_filename);
   feedback_data_->set_send_sys_info(send_sys_info);
   feedback_data_->set_timestamp(timestamp_);
+  feedback_data_->set_trace_id(trace_id);
 #endif
 
   // Signal the feedback object that the data from the feedback page has been
@@ -704,9 +720,8 @@ void FeedbackUI::GetMostRecentScreenshots(
   std::string pattern =
       std::string(ScreenshotSource::kScreenshotPrefix) + "*" +
                   ScreenshotSource::kScreenshotSuffix;
-  file_util::FileEnumerator screenshots(filepath, false,
-                                        file_util::FileEnumerator::FILES,
-                                        pattern);
+  base::FileEnumerator screenshots(filepath, false,
+                                   base::FileEnumerator::FILES, pattern);
   base::FilePath screenshot = screenshots.Next();
 
   std::vector<std::string> screenshot_filepaths;

@@ -22,7 +22,7 @@
 
 class ChromeNetLog;
 class CommandLine;
-class PrefProxyConfigTrackerImpl;
+class PrefProxyConfigTracker;
 class PrefService;
 class PrefRegistrySimple;
 class SystemURLRequestContextGetter;
@@ -48,6 +48,7 @@ class HttpServerProperties;
 class HttpTransactionFactory;
 class HttpUserAgentSettings;
 class NetworkDelegate;
+class NetworkTimeNotifier;
 class ServerBoundCertService;
 class ProxyConfigService;
 class ProxyService;
@@ -56,6 +57,7 @@ class SSLConfigService;
 class TransportSecurityState;
 class URLRequestContext;
 class URLRequestContextGetter;
+class URLRequestJobFactory;
 class URLRequestThrottlerManager;
 class URLSecurityManager;
 }  // namespace net
@@ -123,6 +125,8 @@ class IOThread : public content::BrowserThreadDelegate {
         proxy_script_fetcher_http_transaction_factory;
     scoped_ptr<net::FtpTransactionFactory>
         proxy_script_fetcher_ftp_transaction_factory;
+    scoped_ptr<net::URLRequestJobFactory>
+        proxy_script_fetcher_url_request_job_factory;
     scoped_ptr<net::URLRequestThrottlerManager> throttler_manager;
     scoped_ptr<net::URLSecurityManager> url_security_manager;
     // TODO(willchan): Remove proxy script fetcher context since it's not
@@ -134,7 +138,6 @@ class IOThread : public content::BrowserThreadDelegate {
     scoped_ptr<net::URLRequestContext> proxy_script_fetcher_context;
     scoped_ptr<net::ProxyService> system_proxy_service;
     scoped_ptr<net::HttpTransactionFactory> system_http_transaction_factory;
-    scoped_ptr<net::FtpTransactionFactory> system_ftp_transaction_factory;
     scoped_ptr<net::URLRequestContext> system_request_context;
     SystemRequestContextLeakChecker system_request_context_leak_checker;
     // |system_cookie_store| and |system_server_bound_cert_service| are shared
@@ -151,7 +154,6 @@ class IOThread : public content::BrowserThreadDelegate {
     bool http_pipelining_enabled;
     uint16 testing_fixed_http_port;
     uint16 testing_fixed_https_port;
-    Optional<size_t> max_spdy_sessions_per_domain;
     Optional<size_t> initial_max_spdy_concurrent_streams;
     Optional<size_t> max_spdy_concurrent_streams_limit;
     Optional<bool> force_spdy_single_domain;
@@ -160,13 +162,16 @@ class IOThread : public content::BrowserThreadDelegate {
     Optional<bool> enable_spdy_compression;
     Optional<bool> enable_spdy_ping_based_connection_checking;
     Optional<net::NextProto> spdy_default_protocol;
+    Optional<string> trusted_spdy_proxy;
     Optional<bool> enable_quic;
-    Optional<uint16> origin_port_to_force_quic_on;
+    Optional<bool> enable_quic_https;
+    Optional<net::HostPortPair> origin_to_force_quic_on;
     bool enable_user_alternate_protocol_ports;
     // NetErrorTabHelper uses |dns_probe_service| to send DNS probes when a
     // main frame load fails with a DNS error in order to provide more useful
     // information to the renderer so it can show a more specific error page.
     scoped_ptr<chrome_browser_net::DnsProbeService> dns_probe_service;
+    scoped_ptr<net::NetworkTimeNotifier> network_time_notifier;
   };
 
   // |net_log| must either outlive the IOThread or be NULL.
@@ -181,6 +186,11 @@ class IOThread : public content::BrowserThreadDelegate {
 
   // Can only be called on the IO thread.
   Globals* globals();
+
+  // Allows overriding Globals in tests where IOThread::Init() and
+  // IOThread::CleanUp() are not called.  This allows for injecting mocks into
+  // IOThread global objects.
+  void SetGlobalsForTesting(Globals* globals);
 
   ChromeNetLog* net_log();
 
@@ -206,6 +216,7 @@ class IOThread : public content::BrowserThreadDelegate {
   // This handles initialization and destruction of state that must
   // live on the IO thread.
   virtual void Init() OVERRIDE;
+  virtual void InitAsync() OVERRIDE;
   virtual void CleanUp() OVERRIDE;
 
   void InitializeNetworkOptions(const CommandLine& parsed_command_line);
@@ -246,6 +257,14 @@ class IOThread : public content::BrowserThreadDelegate {
   void ChangedToOnTheRecordOnIOThread();
 
   void UpdateDnsClientEnabled();
+
+  // Returns true if QUIC should be enabled, either as a result
+  // of a field trial or a command line flag.
+  bool ShouldEnableQuic(const CommandLine& command_line);
+
+  // Returns true if HTTPS over QUIC should be enabled, either as a result
+  // of a field trial or a command line flag.
+  bool ShouldEnableQuicHttps(const CommandLine& command_line);
 
   // The NetLog is owned by the browser process, to allow logging from other
   // threads during shutdown, but is used most frequently on the IOThread.
@@ -290,7 +309,7 @@ class IOThread : public content::BrowserThreadDelegate {
   // which gets posted by calling certain member functions of IOThread.
   scoped_ptr<net::ProxyConfigService> system_proxy_config_service_;
 
-  scoped_ptr<PrefProxyConfigTrackerImpl> pref_proxy_config_tracker_;
+  scoped_ptr<PrefProxyConfigTracker> pref_proxy_config_tracker_;
 
   scoped_refptr<net::URLRequestContextGetter>
       system_url_request_context_getter_;

@@ -4,13 +4,14 @@
 
 #include "chrome/browser/chromeos/drive/file_system/update_operation.h"
 
-#include "base/file_util.h"
+#include "base/platform_file.h"
 #include "chrome/browser/chromeos/drive/drive.pb.h"
-#include "chrome/browser/chromeos/drive/drive_cache.h"
-#include "chrome/browser/chromeos/drive/drive_file_system_util.h"
-#include "chrome/browser/chromeos/drive/drive_scheduler.h"
+#include "chrome/browser/chromeos/drive/file_cache.h"
 #include "chrome/browser/chromeos/drive/file_system/operation_observer.h"
+#include "chrome/browser/chromeos/drive/file_system_util.h"
+#include "chrome/browser/chromeos/drive/job_scheduler.h"
 #include "chrome/browser/chromeos/drive/resource_entry_conversion.h"
+#include "chrome/browser/chromeos/drive/resource_metadata.h"
 #include "content/public/browser/browser_thread.h"
 
 using content::BrowserThread;
@@ -18,18 +19,90 @@ using content::BrowserThread;
 namespace drive {
 namespace file_system {
 
+struct UpdateOperation::LocalState {
+  LocalState() : content_is_same(false) {
+  }
+
+  ResourceEntry entry;
+  base::FilePath drive_file_path;
+  base::FilePath cache_file_path;
+  bool content_is_same;
+};
+
+namespace {
+
+// Gets locally stored information about the specified file.
+FileError GetFileLocalState(internal::ResourceMetadata* metadata,
+                            internal::FileCache* cache,
+                            const std::string& resource_id,
+                            UpdateOperation::ContentCheckMode check,
+                            UpdateOperation::LocalState* local_state) {
+  FileError error = metadata->GetResourceEntryById(resource_id,
+                                                   &local_state->entry);
+  if (error != FILE_ERROR_OK)
+    return error;
+
+  if (local_state->entry.file_info().is_directory())
+    return FILE_ERROR_NOT_A_FILE;
+
+  local_state->drive_file_path = metadata->GetFilePath(resource_id);
+  if (local_state->drive_file_path.empty())
+    return FILE_ERROR_NOT_FOUND;
+
+  error = cache->GetFile(resource_id, &local_state->cache_file_path);
+  if (error != FILE_ERROR_OK)
+    return error;
+
+  if (check == UpdateOperation::RUN_CONTENT_CHECK) {
+    const std::string& md5 = util::GetMd5Digest(local_state->cache_file_path);
+    local_state->content_is_same =
+        (md5 == local_state->entry.file_specific_info().md5());
+    if (local_state->content_is_same)
+      cache->ClearDirty(resource_id, md5);
+  } else {
+    local_state->content_is_same = false;
+  }
+
+  return FILE_ERROR_OK;
+}
+
+// Updates locally stored information about the specified file.
+FileError UpdateFileLocalState(
+    internal::ResourceMetadata* metadata,
+    internal::FileCache* cache,
+    scoped_ptr<google_apis::ResourceEntry> resource_entry,
+    base::FilePath* drive_file_path) {
+  ResourceEntry entry;
+  if (!ConvertToResourceEntry(*resource_entry, &entry))
+    return FILE_ERROR_NOT_A_FILE;
+
+  FileError error = metadata->RefreshEntry(entry);
+  if (error != FILE_ERROR_OK)
+    return error;
+
+  *drive_file_path = metadata->GetFilePath(entry.resource_id());
+  if (drive_file_path->empty())
+    return FILE_ERROR_NOT_FOUND;
+
+  // Clear the dirty bit if we have updated an existing file.
+  return cache->ClearDirty(entry.resource_id(),
+                           entry.file_specific_info().md5());
+}
+
+}  // namespace
+
 UpdateOperation::UpdateOperation(
-    DriveCache* cache,
-    DriveResourceMetadata* metadata,
-    DriveScheduler* scheduler,
-    scoped_refptr<base::SequencedTaskRunner> blocking_task_runner,
-    OperationObserver* observer)
-    : cache_(cache),
-      metadata_(metadata),
-      scheduler_(scheduler),
-      blocking_task_runner_(blocking_task_runner),
+    base::SequencedTaskRunner* blocking_task_runner,
+    OperationObserver* observer,
+    JobScheduler* scheduler,
+    internal::ResourceMetadata* metadata,
+    internal::FileCache* cache)
+    : blocking_task_runner_(blocking_task_runner),
       observer_(observer),
-      weak_ptr_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {
+      scheduler_(scheduler),
+      metadata_(metadata),
+      cache_(cache),
+      weak_ptr_factory_(this) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 }
 
@@ -39,125 +112,95 @@ UpdateOperation::~UpdateOperation() {
 
 void UpdateOperation::UpdateFileByResourceId(
     const std::string& resource_id,
-    DriveClientContext context,
+    const ClientContext& context,
+    ContentCheckMode check,
     const FileOperationCallback& callback) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   DCHECK(!callback.is_null());
 
-  // TODO(satorux): GetEntryInfoByResourceId() is called twice for
-  // UpdateFileByResourceId(). crbug.com/143873
-  metadata_->GetEntryInfoByResourceId(
-      resource_id,
-      base::Bind(&UpdateOperation::UpdateFileByEntryInfo,
+  LocalState* local_state = new LocalState;
+  base::PostTaskAndReplyWithResult(
+      blocking_task_runner_.get(),
+      FROM_HERE,
+      base::Bind(&GetFileLocalState,
+                 metadata_,
+                 cache_,
+                 resource_id,
+                 check,
+                 local_state),
+      base::Bind(&UpdateOperation::UpdateFileAfterGetLocalState,
                  weak_ptr_factory_.GetWeakPtr(),
                  context,
-                 callback));
+                 callback,
+                 base::Owned(local_state)));
 }
 
-void UpdateOperation::UpdateFileByEntryInfo(
-    DriveClientContext context,
+void UpdateOperation::UpdateFileAfterGetLocalState(
+    const ClientContext& context,
     const FileOperationCallback& callback,
-    DriveFileError error,
-    const base::FilePath& drive_file_path,
-    scoped_ptr<DriveEntryProto> entry_proto) {
+    const LocalState* local_state,
+    FileError error) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   DCHECK(!callback.is_null());
 
-  if (error != DRIVE_FILE_OK) {
-    callback.Run(error);
-    return;
-  }
-
-  DCHECK(entry_proto.get());
-  if (entry_proto->file_info().is_directory()) {
-    callback.Run(DRIVE_FILE_ERROR_NOT_FOUND);
-    return;
-  }
-
-  // Extract a pointer before we call Pass() so we can use it below.
-  DriveEntryProto* entry_proto_ptr = entry_proto.get();
-  cache_->GetFile(entry_proto_ptr->resource_id(),
-                  entry_proto_ptr->file_specific_info().file_md5(),
-                  base::Bind(&UpdateOperation::OnGetFileCompleteForUpdateFile,
-                             weak_ptr_factory_.GetWeakPtr(),
-                             context,
-                             callback,
-                             drive_file_path,
-                             base::Passed(&entry_proto)));
-}
-
-void UpdateOperation::OnGetFileCompleteForUpdateFile(
-    DriveClientContext context,
-    const FileOperationCallback& callback,
-    const base::FilePath& drive_file_path,
-    scoped_ptr<DriveEntryProto> entry_proto,
-    DriveFileError error,
-    const base::FilePath& cache_file_path) {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  DCHECK(!callback.is_null());
-
-  if (error != DRIVE_FILE_OK) {
+  if (error != FILE_ERROR_OK || local_state->content_is_same) {
     callback.Run(error);
     return;
   }
 
   scheduler_->UploadExistingFile(
-      entry_proto->resource_id(),
-      drive_file_path,
-      cache_file_path,
-      entry_proto->file_specific_info().content_mime_type(),
+      local_state->entry.resource_id(),
+      local_state->drive_file_path,
+      local_state->cache_file_path,
+      local_state->entry.file_specific_info().content_mime_type(),
       "",  // etag
       context,
-      base::Bind(&UpdateOperation::OnUpdatedFileUploaded,
+      base::Bind(&UpdateOperation::UpdateFileAfterUpload,
                  weak_ptr_factory_.GetWeakPtr(),
                  callback));
 }
 
-void UpdateOperation::OnUpdatedFileUploaded(
+void UpdateOperation::UpdateFileAfterUpload(
     const FileOperationCallback& callback,
-    google_apis::DriveUploadError error,
-    const base::FilePath& drive_path,
-    const base::FilePath& file_path,
+    google_apis::GDataErrorCode error,
     scoped_ptr<google_apis::ResourceEntry> resource_entry) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   DCHECK(!callback.is_null());
 
-  DriveFileError drive_error = DriveUploadErrorToDriveFileError(error);
-  if (drive_error != DRIVE_FILE_OK) {
+  FileError drive_error = GDataToFileError(error);
+  if (drive_error != FILE_ERROR_OK) {
     callback.Run(drive_error);
     return;
   }
 
-  metadata_->RefreshEntry(
-      ConvertResourceEntryToDriveEntryProto(*resource_entry),
-      base::Bind(&UpdateOperation::OnUpdatedFileRefreshed,
-                 weak_ptr_factory_.GetWeakPtr(), callback));
+  base::FilePath* drive_file_path = new base::FilePath;
+  base::PostTaskAndReplyWithResult(
+      blocking_task_runner_.get(),
+      FROM_HERE,
+      base::Bind(&UpdateFileLocalState,
+                 metadata_,
+                 cache_,
+                 base::Passed(&resource_entry),
+                 drive_file_path),
+      base::Bind(&UpdateOperation::UpdateFileAfterUpdateLocalState,
+                 weak_ptr_factory_.GetWeakPtr(),
+                 callback,
+                 base::Owned(drive_file_path)));
 }
 
-void UpdateOperation::OnUpdatedFileRefreshed(
+void UpdateOperation::UpdateFileAfterUpdateLocalState(
     const FileOperationCallback& callback,
-    DriveFileError error,
-    const base::FilePath& drive_file_path,
-    scoped_ptr<DriveEntryProto> entry_proto) {
+    const base::FilePath* drive_file_path,
+    FileError error) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   DCHECK(!callback.is_null());
 
-  if (error != DRIVE_FILE_OK) {
+  if (error != FILE_ERROR_OK) {
     callback.Run(error);
     return;
   }
-
-  DCHECK(entry_proto.get());
-  DCHECK(entry_proto->has_resource_id());
-  DCHECK(entry_proto->has_file_specific_info());
-  DCHECK(entry_proto->file_specific_info().has_file_md5());
-
-  observer_->OnDirectoryChangedByOperation(drive_file_path.DirName());
-
-  // Clear the dirty bit if we have updated an existing file.
-  cache_->ClearDirty(entry_proto->resource_id(),
-                     entry_proto->file_specific_info().file_md5(),
-                     callback);
+  observer_->OnDirectoryChangedByOperation(drive_file_path->DirName());
+  callback.Run(FILE_ERROR_OK);
 }
 
 }  // namespace file_system

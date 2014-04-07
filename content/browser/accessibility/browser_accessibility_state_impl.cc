@@ -6,8 +6,10 @@
 
 #include "base/command_line.h"
 #include "base/metrics/histogram.h"
-#include "base/timer.h"
+#include "base/timer/timer.h"
+#include "content/browser/renderer_host/render_widget_host_impl.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/render_process_host.h"
 #include "content/public/common/content_switches.h"
 #include "ui/gfx/sys_color_change_listener.h"
 
@@ -80,9 +82,13 @@ void BrowserAccessibilityStateImpl::OnScreenReaderDetected() {
   SetAccessibilityMode(AccessibilityModeComplete);
 }
 
-void BrowserAccessibilityStateImpl::OnAccessibilityEnabledManually() {
+void BrowserAccessibilityStateImpl::EnableAccessibility() {
   // We may want to do something different with this later.
   SetAccessibilityMode(AccessibilityModeComplete);
+}
+
+void BrowserAccessibilityStateImpl::DisableAccessibility() {
+  SetAccessibilityMode(AccessibilityModeOff);
 }
 
 bool BrowserAccessibilityStateImpl::IsAccessibleBrowser() {
@@ -117,13 +123,25 @@ void BrowserAccessibilityStateImpl::UpdatePlatformSpecificHistograms() {
 }
 #endif
 
-AccessibilityMode BrowserAccessibilityStateImpl::GetAccessibilityMode() {
-  return accessibility_mode_;
-}
-
 void BrowserAccessibilityStateImpl::SetAccessibilityMode(
     AccessibilityMode mode) {
+  if (accessibility_mode_ == mode)
+    return;
   accessibility_mode_ = mode;
+
+  // Iterate over all RenderWidgetHosts, even swapped out ones in case
+  // they become active again.
+  RenderWidgetHost::List widgets =
+      RenderWidgetHostImpl::GetAllRenderWidgetHosts();
+  for (size_t i = 0; i < widgets.size(); ++i) {
+    // Ignore processes that don't have a connection, such as crashed tabs.
+    if (!widgets[i]->GetProcess()->HasConnection())
+      continue;
+    if (!widgets[i]->IsRenderView())
+      continue;
+
+    RenderWidgetHostImpl::From(widgets[i])->SetAccessibilityMode(mode);
+  }
 }
 
 }  // namespace content

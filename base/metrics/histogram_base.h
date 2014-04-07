@@ -10,7 +10,7 @@
 #include "base/base_export.h"
 #include "base/basictypes.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/time.h"
+#include "base/time/time.h"
 
 class Pickle;
 class PickleIterator;
@@ -94,11 +94,11 @@ class BASE_EXPORT HistogramBase {
   virtual HistogramType GetHistogramType() const = 0;
 
   // Whether the histogram has construction arguments as parameters specified.
-  // For histograms that don't have the concept of |minimum|, |maximum| or
-  // |bucket_count|, this function always returns false.
-  virtual bool HasConstructionArguments(Sample minimum,
-                                        Sample maximum,
-                                        size_t bucket_count) const = 0;
+  // For histograms that don't have the concept of minimum, maximum or
+  // bucket_count, this function always returns false.
+  virtual bool HasConstructionArguments(Sample expected_minimum,
+                                        Sample expected_maximum,
+                                        size_t expected_bucket_count) const = 0;
 
   virtual void Add(Sample value) = 0;
 
@@ -139,9 +139,26 @@ protected:
   virtual void GetParameters(DictionaryValue* params) const = 0;
 
   // Writes information about the current (non-empty) buckets and their sample
-  // counts to |buckets| and the total sample count to |count|.
+  // counts to |buckets|, the total sample count to |count| and the total sum
+  // to |sum|.
   virtual void GetCountAndBucketData(Count* count,
+                                     int64* sum,
                                      ListValue* buckets) const = 0;
+
+  //// Produce actual graph (set of blank vs non blank char's) for a bucket.
+  void WriteAsciiBucketGraph(double current_size,
+                             double max_size,
+                             std::string* output) const;
+
+  // Return a string description of what goes in a given bucket.
+  const std::string GetSimpleAsciiBucketRange(Sample sample) const;
+
+  // Write textual description of the bucket contents (relative to histogram).
+  // Output is the count in the buckets, as well as the percentage.
+  void WriteAsciiBucketValue(Count current,
+                             double scaled_sum,
+                             std::string* output) const;
+
  private:
   const std::string histogram_name_;
   int32 flags_;

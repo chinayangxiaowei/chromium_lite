@@ -9,12 +9,12 @@
 #include <cerrno>
 
 #include "base/compiler_specific.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "media/base/audio_decoder_config.h"
 #include "media/base/channel_layout.h"
 #include "media/base/media_export.h"
-#include "media/base/video_frame.h"
 #include "media/base/video_decoder_config.h"
+#include "media/base/video_frame.h"
 
 // Include FFmpeg header files.
 extern "C" {
@@ -74,14 +74,16 @@ MEDIA_EXPORT int64 ConvertToTimeBase(const AVRational& time_base,
 
 void AVStreamToAudioDecoderConfig(
     const AVStream* stream,
-    AudioDecoderConfig* config);
+    AudioDecoderConfig* config,
+    bool record_stats);
 void AudioDecoderConfigToAVCodecContext(
     const AudioDecoderConfig& config,
     AVCodecContext* codec_context);
 
 void AVStreamToVideoDecoderConfig(
     const AVStream* stream,
-    VideoDecoderConfig* config);
+    VideoDecoderConfig* config,
+    bool record_stats);
 void VideoDecoderConfigToAVCodecContext(
     const VideoDecoderConfig& config,
     AVCodecContext* codec_context);
@@ -92,17 +94,14 @@ void VideoDecoderConfigToAVCodecContext(
 ChannelLayout ChannelLayoutToChromeChannelLayout(int64_t layout,
                                                  int channels);
 
+// Converts FFmpeg's audio sample format to Chrome's SampleFormat.
+SampleFormat AVSampleFormatToSampleFormat(AVSampleFormat sample_format);
+
 // Converts FFmpeg's pixel formats to its corresponding supported video format.
 VideoFrame::Format PixelFormatToVideoFormat(PixelFormat pixel_format);
 
 // Converts video formats to its corresponding FFmpeg's pixel formats.
 PixelFormat VideoFormatToPixelFormat(VideoFrame::Format video_format);
-
-// Converts an FFmpeg video codec ID into its corresponding supported codec id.
-VideoCodec CodecIDToVideoCodec(CodecID codec_id);
-
-// Converts an FFmpeg audio codec ID into its corresponding supported codec id.
-AudioCodec CodecIDToAudioCodec(CodecID codec_id);
 
 }  // namespace media
 

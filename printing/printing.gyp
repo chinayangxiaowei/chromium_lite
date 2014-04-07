@@ -14,11 +14,11 @@
         '../base/base.gyp:base',
         '../base/base.gyp:base_i18n',
         '../base/third_party/dynamic_annotations/dynamic_annotations.gyp:dynamic_annotations',
-        '../build/temp_gyp/googleurl.gyp:googleurl',
         '../skia/skia.gyp:skia',
         '../third_party/icu/icu.gyp:icui18n',
         '../third_party/icu/icu.gyp:icuuc',
         '../ui/ui.gyp:ui',
+        '../url/url.gyp:url_lib',
       ],
       'defines': [
         'PRINTING_IMPLEMENTATION',
@@ -37,6 +37,7 @@
         'emf_win.cc',
         'emf_win.h',
         'image.cc',
+        'image_android.cc',
         'image_linux.cc',
         'image_mac.cc',
         'image_win.cc',
@@ -92,11 +93,16 @@
         ],
       },
       'conditions': [
-        ['enable_printing!=1', {
+        ['enable_printing==0', {
           'sources/': [
             ['exclude', '.'],
           ],
         }],
+        ['use_aura==1', {
+          'dependencies': [
+            '<(DEPTH)/ui/aura/aura.gyp:aura',
+          ],
+        }], 
         ['toolkit_uses_gtk == 0',{
             'sources/': [['exclude', '_cairo\\.cc$']]
         }],
@@ -132,10 +138,9 @@
             '../win8/win8.gyp:win8_util',
           ],
           'conditions': [
-            ['use_aura==0', {
-              'sources': [
-                'printing_context_win.cc',
-                'printing_context_win.h',
+            ['use_aura==1', {
+              'dependencies': [
+                '<(DEPTH)/ui/aura/aura.gyp:aura',
               ],
           }]],
           'defines': [
@@ -147,12 +152,14 @@
             'backend/win_helper.cc',
             'backend/win_helper.h',
             'backend/print_backend_win.cc',
+            'printing_context_win.cc',
+            'printing_context_win.h',
           ],
           'sources!': [
             'print_destination_none.cc',
           ],
         }],
-        ['chromeos==1 or use_aura==1',{
+        ['chromeos==1 or (use_aura==1 and OS!="win")',{
           'sources': [
             'printing_context_no_system_dialog.cc',
             'printing_context_no_system_dialog.h',
@@ -162,11 +169,37 @@
           'dependencies': [
             'cups',
           ],
+          'variables': {
+            'cups_version': '<!(cups-config --api-version)',
+          },
           'conditions': [
             ['OS!="mac"', {
               'dependencies': [
                 '../build/linux/system.gyp:libgcrypt',
               ],
+            }],
+            ['cups_version in ["1.6", "1.7"]', {
+              'cflags': [
+                # CUPS 1.6 deprecated the PPD APIs, but we will stay with this
+                # API for now as supported Linux and Mac OS'es are still using
+                # older versions of CUPS. More info: crbug.com/226176
+                '-Wno-deprecated-declarations',
+                # CUPS 1.7 deprecates httpConnectEncrypt(), see the mac section
+                # below.
+              ],
+            }],
+            ['OS=="mac" and mac_sdk=="10.9"', {
+              # The 10.9 SDK includes cups 1.7, which deprecates
+              # httpConnectEncrypt() in favor of httpConnect2(). hhttpConnect2()
+              # is new in 1.7, so it doesn't exist on OS X 10.6-10.8 and we
+              # can't use it until 10.9 is our minimum system version.
+              # (cups_version isn't reliable on OS X, so key the check off of
+              # mac_sdk).
+              'xcode_settings': {
+                'WARNING_CFLAGS':  [
+                  '-Wno-deprecated-declarations',
+                ],
+              },
             }],
           ],
           'defines': [
@@ -196,6 +229,11 @@
             'printing_context_gtk.h',
           ],
         }],
+        ['OS=="android"', {
+          'sources': [
+            'printing_context_android.h',
+          ],
+        }],
       ],
     },
     {
@@ -220,7 +258,7 @@
         'units_unittest.cc',
       ],
       'conditions': [
-        ['enable_printing!=1', {
+        ['enable_printing==0', {
           'sources/': [
             ['exclude', '.'],
             ['include', 'run_all_unittests.cc'],

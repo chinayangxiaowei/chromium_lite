@@ -26,7 +26,9 @@ class MockTextInputClient : public TextInputClient {
   MOCK_METHOD0(ClearCompositionText, void());
   MOCK_METHOD1(InsertText, void(const string16&));
   MOCK_METHOD2(InsertChar, void(char16, int));
+  MOCK_CONST_METHOD0(GetAttachedWindow, gfx::NativeWindow());
   MOCK_CONST_METHOD0(GetTextInputType, ui::TextInputType());
+  MOCK_CONST_METHOD0(GetTextInputMode, ui::TextInputMode());
   MOCK_CONST_METHOD0(CanComposeInline, bool());
   MOCK_METHOD0(GetCaretBounds, gfx::Rect());
   MOCK_METHOD2(GetCompositionCharacterBounds, bool(uint32, gfx::Rect*));
@@ -41,6 +43,7 @@ class MockTextInputClient : public TextInputClient {
   MOCK_METHOD1(ChangeTextDirectionAndLayoutAlignment,
                bool(base::i18n::TextDirection));
   MOCK_METHOD2(ExtendSelectionAndDelete, void(size_t, size_t));
+  MOCK_METHOD1(EnsureCaretInRect, void(const gfx::Rect&));
 };
 
 class MockStoreACPSink : public ITextStoreACPSink {

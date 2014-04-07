@@ -4,20 +4,28 @@
 
 #include "base/at_exit.h"
 #include "base/command_line.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #if defined(OS_MACOSX)
 #include "base/mac/scoped_nsautorelease_pool.h"
 #endif
 #include "gpu/command_buffer/client/gles2_lib.h"
 #include "gpu/command_buffer/tests/gl_test_utils.h"
+#include "gpu/config/gpu_util.h"
 #include "ui/gl/gl_surface.h"
+
+#if defined(OS_ANDROID)
+#include "base/android/jni_android.h"
+#include "ui/gl/android/gl_jni_registrar.h"
+#endif
 
 #if defined(TOOLKIT_GTK)
 #include "ui/gfx/gtk_util.h"
 #endif
 
 int main(int argc, char** argv) {
-#if !defined(OS_ANDROID)
+#if defined(OS_ANDROID)
+  ui::gl::android::RegisterJni(base::android::AttachCurrentThread());
+#else
   base::AtExitManager exit_manager;
 #endif
   CommandLine::Init(argc, argv);
@@ -29,8 +37,9 @@ int main(int argc, char** argv) {
 #endif
   gfx::GLSurface::InitializeOneOff();
   ::gles2::Initialize();
-  MessageLoop::Type message_loop_type = MessageLoop::TYPE_UI;
-  MessageLoop main_message_loop(message_loop_type);
+  gpu::ApplyGpuDriverBugWorkarounds(CommandLine::ForCurrentProcess());
+  base::MessageLoop::Type message_loop_type = base::MessageLoop::TYPE_UI;
+  base::MessageLoop main_message_loop(message_loop_type);
   return GLTestHelper::RunTests(argc, argv);
 }
 

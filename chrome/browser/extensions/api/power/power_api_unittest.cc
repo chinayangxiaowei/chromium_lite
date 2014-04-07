@@ -11,11 +11,13 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/api/power/power_api_manager.h"
 #include "chrome/browser/extensions/extension_function_test_utils.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
+#include "content/public/browser/notification_details.h"
+#include "content/public/browser/notification_source.h"
 #include "content/public/browser/power_save_blocker.h"
 
 namespace utils = extension_function_test_utils;
@@ -155,7 +157,7 @@ class PowerApiTest : public BrowserWithTestWindowTest {
         static_cast<UIThreadExtensionFunction*>(
             new PowerReleaseKeepAwakeFunction));
     function->set_extension(extension);
-    return utils::RunFunction(function, args, browser(), utils::NONE);
+    return utils::RunFunction(function.get(), args, browser(), utils::NONE);
   }
 
   // Send a notification to PowerApiManager saying that |extension| has

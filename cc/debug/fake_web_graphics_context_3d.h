@@ -5,16 +5,18 @@
 #ifndef CC_DEBUG_FAKE_WEB_GRAPHICS_CONTEXT_3D_H_
 #define CC_DEBUG_FAKE_WEB_GRAPHICS_CONTEXT_3D_H_
 
+#include <string>
+
 #include "base/compiler_specific.h"
 #include "cc/base/cc_export.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebGraphicsContext3D.h"
+#include "third_party/WebKit/public/platform/WebGraphicsContext3D.h"
 
 namespace cc {
 
 // WebGraphicsContext3D base class for use in unit tests.
 // All operations are no-ops (returning 0 if necessary).
-class CC_EXPORT FakeWebGraphicsContext3D :
-    public NON_EXPORTED_BASE(WebKit::WebGraphicsContext3D) {
+class CC_EXPORT FakeWebGraphicsContext3D
+    : public NON_EXPORTED_BASE(WebKit::WebGraphicsContext3D) {
  public:
   FakeWebGraphicsContext3D();
   virtual ~FakeWebGraphicsContext3D();
@@ -27,13 +29,6 @@ class CC_EXPORT FakeWebGraphicsContext3D :
   virtual void reshape(int width, int height);
 
   virtual bool isGLES2Compliant();
-
-  virtual bool readBackFramebuffer(
-      unsigned char* pixels,
-      size_t buffer_size,
-      WebKit::WebGLId framebuffer,
-      int width,
-      int height);
 
   virtual WebKit::WebGLId getPlatformTextureId();
 
@@ -71,7 +66,6 @@ class CC_EXPORT FakeWebGraphicsContext3D :
       WebKit::WGC3Denum target,
       WebKit::WGC3Dsizei num_attachments,
       const WebKit::WGC3Denum* attachments) {}
-  virtual void ensureFramebufferCHROMIUM() {}
 
   virtual void setMemoryAllocationChangedCallbackCHROMIUM(
       WebGraphicsMemoryAllocationChangedCallbackCHROMIUM* callback) {}
@@ -289,7 +283,7 @@ class CC_EXPORT FakeWebGraphicsContext3D :
       WebKit::WGC3Denum shadertype,
       WebKit::WGC3Denum precisiontype,
       WebKit::WGC3Dint* range,
-      WebKit::WGC3Dint* precision) {}
+      WebKit::WGC3Dint* precision);
   virtual WebKit::WebString getShaderSource(WebKit::WebGLId shader);
   virtual WebKit::WebString getString(WebKit::WGC3Denum name);
   virtual void getTexParameterfv(
@@ -589,6 +583,27 @@ class CC_EXPORT FakeWebGraphicsContext3D :
 
   virtual void drawBuffersEXT(WebKit::WGC3Dsizei m,
                               const WebKit::WGC3Denum* bufs) {}
+
+  virtual void bindTexImage2DCHROMIUM(WebKit::WGC3Denum target,
+                                      WebKit::WGC3Dint image_id) {}
+
+  // GL_CHROMIUM_gpu_memory_buffer
+  virtual WebKit::WGC3Duint createImageCHROMIUM(
+      WebKit::WGC3Dsizei width,
+      WebKit::WGC3Dsizei height,
+      WebKit::WGC3Denum internalformat);
+  virtual void destroyImageCHROMIUM(WebKit::WGC3Duint image_id) {}
+  virtual void getImageParameterivCHROMIUM(
+      WebKit::WGC3Duint image_id,
+      WebKit::WGC3Denum pname,
+      WebKit::WGC3Dint* params) {}
+  virtual void* mapImageCHROMIUM(
+      WebKit::WGC3Duint image_id,
+      WebKit::WGC3Denum access);
+  virtual void unmapImageCHROMIUM(WebKit::WGC3Duint image_id) {}
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(FakeWebGraphicsContext3D);
 };
 
 }  // namespace cc

@@ -12,8 +12,6 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 
-using base::ListValue;
-
 namespace content {
 
 WebRTCInternalsMessageHandler::WebRTCInternalsMessageHandler() {
@@ -32,6 +30,14 @@ void WebRTCInternalsMessageHandler::RegisterMessages() {
   web_ui()->RegisterMessageCallback("getAllStats",
       base::Bind(&WebRTCInternalsMessageHandler::OnGetAllStats,
                  base::Unretained(this)));
+
+  web_ui()->RegisterMessageCallback("startRtpRecording",
+      base::Bind(&WebRTCInternalsMessageHandler::OnStartRtpRecording,
+                 base::Unretained(this)));
+
+  web_ui()->RegisterMessageCallback("stopRtpRecording",
+      base::Bind(&WebRTCInternalsMessageHandler::OnStopRtpRecording,
+                 base::Unretained(this)));
 }
 
 void WebRTCInternalsMessageHandler::OnGetAllUpdates(
@@ -39,7 +45,7 @@ void WebRTCInternalsMessageHandler::OnGetAllUpdates(
   WebRTCInternals::GetInstance()->SendAllUpdates();
 }
 
-void WebRTCInternalsMessageHandler::OnGetAllStats(const ListValue* list) {
+void WebRTCInternalsMessageHandler::OnGetAllStats(const base::ListValue* list) {
   for (RenderProcessHost::iterator i(
        content::RenderProcessHost::AllHostsIterator());
        !i.IsAtEnd(); i.Advance()) {
@@ -47,10 +53,20 @@ void WebRTCInternalsMessageHandler::OnGetAllStats(const ListValue* list) {
   }
 }
 
+void WebRTCInternalsMessageHandler::OnStartRtpRecording(
+    const base::ListValue* list) {
+  WebRTCInternals::GetInstance()->StartRtpRecording();
+}
+
+void WebRTCInternalsMessageHandler::OnStopRtpRecording(
+    const base::ListValue* list) {
+  WebRTCInternals::GetInstance()->StopRtpRecording();
+}
+
 void WebRTCInternalsMessageHandler::OnUpdate(const std::string& command,
                                             const base::Value* args) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  std::vector<const Value*> args_vector;
+  std::vector<const base::Value*> args_vector;
   args_vector.push_back(args);
   string16 update = WebUI::GetJavascriptCall(command, args_vector);
 

@@ -11,7 +11,7 @@
 #include "base/gtest_prod_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/timer.h"
+#include "base/timer/timer.h"
 #include "remoting/base/rsa_key_pair.h"
 #include "remoting/jingle_glue/signal_strategy.h"
 
@@ -82,6 +82,10 @@ class HeartbeatSender : public SignalStrategy::Listener {
   class Listener {
    public:
     virtual ~Listener() { }
+
+    // Invoked after the first successful heartbeat.
+    virtual void OnHeartbeatSuccessful() = 0;
+
     // Invoked when the host ID is permanently not recognized by the server.
     virtual void OnUnknownHostIdError() = 0;
   };

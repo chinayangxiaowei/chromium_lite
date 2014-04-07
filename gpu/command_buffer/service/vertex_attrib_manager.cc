@@ -9,12 +9,13 @@
 #include "base/command_line.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/string_number_conversions.h"
+#include "base/strings/string_number_conversions.h"
 #include "build/build_config.h"
 #define GLES2_GPU_SERVICE 1
 #include "gpu/command_buffer/common/gles2_cmd_format.h"
 #include "gpu/command_buffer/common/gles2_cmd_utils.h"
 #include "gpu/command_buffer/service/buffer_manager.h"
+#include "gpu/command_buffer/service/error_state.h"
 #include "gpu/command_buffer/service/feature_info.h"
 #include "gpu/command_buffer/service/gl_utils.h"
 #include "gpu/command_buffer/service/gles2_cmd_decoder.h"
@@ -61,7 +62,7 @@ void VertexAttrib::SetInfo(
 }
 
 void VertexAttrib::Unbind(Buffer* buffer) {
-  if (buffer_ == buffer) {
+  if (buffer_.get() == buffer) {
     buffer_ = NULL;
   }
 }
@@ -71,7 +72,7 @@ bool VertexAttrib::CanAccess(GLuint index) const {
     return true;
   }
 
-  if (!buffer_ || buffer_->IsDeleted()) {
+  if (!buffer_.get() || buffer_->IsDeleted()) {
     return false;
   }
 
@@ -151,7 +152,7 @@ bool VertexAttribManager::Enable(GLuint index, bool enable) {
 }
 
 void VertexAttribManager::Unbind(Buffer* buffer) {
-  if (element_array_buffer_ == buffer) {
+  if (element_array_buffer_.get() == buffer) {
     element_array_buffer_ = NULL;
   }
   for (uint32 vv = 0; vv < vertex_attribs_.size(); ++vv) {
@@ -166,6 +167,7 @@ bool VertexAttribManager::ValidateBindings(
     Program* current_program,
     GLuint max_vertex_accessed,
     GLsizei primcount) {
+  ErrorState* error_state = decoder->GetErrorState();
   // true if any enabled, used divisor is zero
   bool divisor0 = false;
   const GLuint kInitialBufferId = 0xFFFFFFFFU;
@@ -186,8 +188,8 @@ bool VertexAttribManager::ValidateBindings(
       GLuint count = attrib->MaxVertexAccessed(primcount, max_vertex_accessed);
       // This attrib is used in the current program.
       if (!attrib->CanAccess(count)) {
-        GLESDECODER_SET_GL_ERROR(
-            decoder, GL_INVALID_OPERATION, function_name,
+        ERRORSTATE_SET_GL_ERROR(
+            error_state, GL_INVALID_OPERATION, function_name,
             (std::string(
                  "attempt to access out of range vertices in attribute ") +
              base::IntToString(attrib->index())).c_str());
@@ -231,8 +233,8 @@ bool VertexAttribManager::ValidateBindings(
     } else {
       // This attrib is not used in the current program.
       if (!attrib->buffer()) {
-        GLESDECODER_SET_GL_ERROR(
-            decoder, GL_INVALID_OPERATION, function_name,
+        ERRORSTATE_SET_GL_ERROR(
+            error_state, GL_INVALID_OPERATION, function_name,
             (std::string(
                  "attempt to render with no buffer attached to "
                  "enabled attribute ") +
@@ -253,8 +255,8 @@ bool VertexAttribManager::ValidateBindings(
   }
 
   if (primcount && !divisor0) {
-    GLESDECODER_SET_GL_ERROR(
-        decoder, GL_INVALID_OPERATION, function_name,
+    ERRORSTATE_SET_GL_ERROR(
+        error_state, GL_INVALID_OPERATION, function_name,
         "attempt instanced render with all attributes having "
         "non-zero divisors");
     return false;

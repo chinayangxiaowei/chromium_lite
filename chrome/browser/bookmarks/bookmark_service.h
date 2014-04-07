@@ -7,8 +7,8 @@
 
 #include <vector>
 
-#include "base/string16.h"
-#include "googleurl/src/gurl.h"
+#include "base/strings/string16.h"
+#include "url/gurl.h"
 
 namespace content {
 class BrowserContext;

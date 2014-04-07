@@ -2,6 +2,7 @@
 <html i18n-values="dir:textdirection">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, user-scalable=no">
 <title i18n-content="title"></title>
 
 <link rel="stylesheet" href="chrome://resources/css/chrome_shared.css">
@@ -10,6 +11,7 @@
 
 <script src="chrome://resources/js/cr.js"></script>
 <script src="chrome://resources/js/cr/ui.js"></script>
+<script src="chrome://resources/js/cr/ui/focus_outline_manager.js"></script>
 <script src="chrome://resources/js/load_time_data.js"></script>
 <script src="chrome://resources/js/util.js"></script>
 <script src="chrome://policy/uber_utils.js"></script>
@@ -29,33 +31,23 @@
     <header>
       <h1 i18n-content="title"></h1>
     </header>
-    <section>
-      <button id="reload-policies" i18n-content="reloadPolicies"></button>
-    </section>
-    <section id="status" hidden>
-      <h3 i18n-content="status"></h3>
-      <div id="status-box-container"></span>
-    </section>
-    <section class="empty">
-      <h3 i18n-content="title"></h3>
-      <div id="show-unset-container">
+    <section class="reload-show-unset-section">
+      <div class="reload-policies-button">
+        <button id="reload-policies" i18n-content="reloadPolicies"></button>
+      </div>
+      <div id="show-unset-container" class="show-unset-checkbox">
         <label>
           <input id="show-unset" type="checkbox"></input>
           <span i18n-content="showUnset"></span>
         </label>
       </div>
-      <div class="no-policies-set" i18n-content="noPoliciesSet"></div>
-      <table id="policy-table">
-        <thead>
-          <tr>
-            <th i18n-content="headerScope"></th>
-            <th i18n-content="headerLevel"></th>
-            <th i18n-content="headerName"></th>
-            <th i18n-content="headerValue"></th>
-            <th i18n-content="headerStatus"></th>
-          </tr>
-        </thead>
-      </table>
+    </section>
+    <section id="status-section" class="status-box-section" hidden>
+      <h3 i18n-content="status"></h3>
+      <div id="status-box-container"></div>
+    </section>
+    <section id="main-section" class="empty">
+      <!--  This is where policy tables get dynamically added. -->
     </section>
   </div>
   <div hidden>
@@ -89,22 +81,22 @@
     <table>
       <tbody id="policy-template">
         <tr>
-          <td>
+          <td class="scope-column">
             <div class="scope elide"></div>
           </td>
-          <td>
+          <td class="level-column">
             <div class="level elide"></div>
           </td>
-          <td>
+          <td class="name-column">
             <div class="name elide"></div>
           </td>
-          <td>
+          <td class="value-column">
             <div class="value-container">
               <span class="value"></span>
               <button class="toggle-expanded-value link-button"></button>
             </div>
           </td>
-          <td>
+          <td class="status-column">
             <div class="status elide"></div>
           </td>
         </tr>

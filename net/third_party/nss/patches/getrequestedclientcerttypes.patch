@@ -1,17 +1,17 @@
-diff -pu -r a/net/third_party/nss/ssl/ssl3con.c b/net/third_party/nss/ssl/ssl3con.c
---- a/net/third_party/nss/ssl/ssl3con.c	2012-11-09 15:39:36.842891686 -0800
-+++ b/net/third_party/nss/ssl/ssl3con.c	2012-11-09 15:47:24.309734248 -0800
-@@ -5946,6 +5946,9 @@ ssl3_HandleCertificateRequest(sslSocket 
+diff -pu a/nss/lib/ssl/ssl3con.c b/nss/lib/ssl/ssl3con.c
+--- a/nss/lib/ssl/ssl3con.c	2013-07-31 12:40:14.493586151 -0700
++++ b/nss/lib/ssl/ssl3con.c	2013-07-31 12:42:42.035748760 -0700
+@@ -6544,6 +6544,9 @@ ssl3_HandleCertificateRequest(sslSocket
      if (rv != SECSuccess)
      	goto loser;		/* malformed, alert has been sent */
  
 +    PORT_Assert(!ss->requestedCertTypes);
 +    ss->requestedCertTypes = &cert_types;
 +
-     arena = ca_list.arena = PORT_NewArena(DER_DEFAULT_CHUNKSIZE);
-     if (arena == NULL)
-     	goto no_mem;
-@@ -6135,6 +6138,7 @@ loser:
+     if (isTLS12) {
+ 	rv = ssl3_ConsumeHandshakeVariable(ss, &algorithms, 2, &b, &length);
+ 	if (rv != SECSuccess)
+@@ -6743,6 +6746,7 @@ loser:
      PORT_SetError(errCode);
      rv = SECFailure;
  done:
@@ -19,10 +19,10 @@ diff -pu -r a/net/third_party/nss/ssl/ssl3con.c b/net/third_party/nss/ssl/ssl3co
      if (arena != NULL)
      	PORT_FreeArena(arena, PR_FALSE);
  #ifdef NSS_PLATFORM_CLIENT_AUTH
-diff -pu -r a/net/third_party/nss/ssl/ssl.h b/net/third_party/nss/ssl/ssl.h
---- a/net/third_party/nss/ssl/ssl.h	2012-11-09 15:44:43.337377864 -0800
-+++ b/net/third_party/nss/ssl/ssl.h	2012-11-09 15:47:24.309734248 -0800
-@@ -709,6 +709,16 @@ SSL_IMPORT SECStatus SSL_ReHandshakeWith
+diff -pu a/nss/lib/ssl/ssl.h b/nss/lib/ssl/ssl.h
+--- a/nss/lib/ssl/ssl.h	2013-07-31 12:40:53.784162112 -0700
++++ b/nss/lib/ssl/ssl.h	2013-07-31 12:41:57.515096255 -0700
+@@ -732,6 +732,16 @@ SSL_IMPORT SECStatus SSL_ReHandshakeWith
                                                  PRBool flushCache,
                                                  PRIntervalTime timeout);
  
@@ -39,10 +39,10 @@ diff -pu -r a/net/third_party/nss/ssl/ssl.h b/net/third_party/nss/ssl/ssl.h
  
  #ifdef SSL_DEPRECATED_FUNCTION 
  /* deprecated!
-diff -pu -r a/net/third_party/nss/ssl/sslimpl.h b/net/third_party/nss/ssl/sslimpl.h
---- a/net/third_party/nss/ssl/sslimpl.h	2012-11-09 15:39:36.942893150 -0800
-+++ b/net/third_party/nss/ssl/sslimpl.h	2012-11-09 15:47:24.309734248 -0800
-@@ -1141,6 +1141,10 @@ struct sslSocketStr {
+diff -pu a/nss/lib/ssl/sslimpl.h b/nss/lib/ssl/sslimpl.h
+--- a/nss/lib/ssl/sslimpl.h	2013-07-31 12:40:14.503586299 -0700
++++ b/nss/lib/ssl/sslimpl.h	2013-07-31 12:41:57.515096255 -0700
+@@ -1168,6 +1168,10 @@ struct sslSocketStr {
      unsigned int     sizeCipherSpecs;
  const unsigned char *  preferredCipher;
  
@@ -53,10 +53,10 @@ diff -pu -r a/net/third_party/nss/ssl/sslimpl.h b/net/third_party/nss/ssl/sslimp
      ssl3KeyPair *         stepDownKeyPair;	/* RSA step down keys */
  
      /* Callbacks */
-diff -pu -r a/net/third_party/nss/ssl/sslsock.c b/net/third_party/nss/ssl/sslsock.c
---- a/net/third_party/nss/ssl/sslsock.c	2012-11-09 15:44:43.337377864 -0800
-+++ b/net/third_party/nss/ssl/sslsock.c	2012-11-09 15:47:24.309734248 -0800
-@@ -1926,6 +1926,20 @@ SSL_HandshakeResumedSession(PRFileDesc *
+diff -pu a/nss/lib/ssl/sslsock.c b/nss/lib/ssl/sslsock.c
+--- a/nss/lib/ssl/sslsock.c	2013-07-31 12:40:53.784162112 -0700
++++ b/nss/lib/ssl/sslsock.c	2013-07-31 12:41:57.515096255 -0700
+@@ -1933,6 +1933,20 @@ SSL_HandshakeResumedSession(PRFileDesc *
      return SECSuccess;
  }
  
@@ -77,9 +77,9 @@ diff -pu -r a/net/third_party/nss/ssl/sslsock.c b/net/third_party/nss/ssl/sslsoc
  /************************************************************************/
  /* The following functions are the TOP LEVEL SSL functions.
  ** They all get called through the NSPRIOMethods table below.
-@@ -2957,6 +2971,7 @@ ssl_NewSocket(PRBool makeLocks, SSLProto
- 	    sc->serverKeyPair   = NULL;
+@@ -2995,6 +3009,7 @@ ssl_NewSocket(PRBool makeLocks, SSLProto
  	    sc->serverKeyBits   = 0;
+ 	    ss->certStatusArray[i] = NULL;
  	}
 +	ss->requestedCertTypes = NULL;
  	ss->stepDownKeyPair    = NULL;

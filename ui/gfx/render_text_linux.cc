@@ -72,8 +72,7 @@ RenderTextLinux::RenderTextLinux()
       current_line_(NULL),
       log_attrs_(NULL),
       num_log_attrs_(0),
-      layout_text_(NULL),
-      layout_text_len_(0) {
+      layout_text_(NULL) {
 }
 
 RenderTextLinux::~RenderTextLinux() {
@@ -84,12 +83,21 @@ Size RenderTextLinux::GetStringSize() {
   EnsureLayout();
   int width = 0, height = 0;
   pango_layout_get_pixel_size(layout_, &width, &height);
-  return Size(width, height);
+  // Keep a consistent height between this particular string's PangoLayout and
+  // potentially larger text supported by the FontList.
+  // For example, if a text field contains a Japanese character, which is
+  // smaller than Latin ones, and then later a Latin one is inserted, this
+  // ensures that the text baseline does not shift.
+  return Size(width, std::max(height, font_list().GetHeight()));
 }
 
 int RenderTextLinux::GetBaseline() {
   EnsureLayout();
-  return PANGO_PIXELS(pango_layout_get_baseline(layout_));
+  // Keep a consistent baseline between this particular string's PangoLayout and
+  // potentially larger text supported by the FontList.
+  // See the example in GetStringSize().
+  return std::max(PANGO_PIXELS(pango_layout_get_baseline(layout_)),
+                  font_list().GetBaseline());
 }
 
 SelectionModel RenderTextLinux::FindCursorPosition(const Point& point) {
@@ -103,7 +111,7 @@ SelectionModel RenderTextLinux::FindCursorPosition(const Point& point) {
   // When the point is outside of text, return HOME/END position.
   if (p.x() < 0)
     return EdgeSelectionModel(CURSOR_LEFT);
-  else if (p.x() > GetStringSize().width())
+  if (p.x() > GetStringSize().width())
     return EdgeSelectionModel(CURSOR_RIGHT);
 
   int caret_pos = 0, trailing = 0;
@@ -114,7 +122,7 @@ SelectionModel RenderTextLinux::FindCursorPosition(const Point& point) {
   if (trailing > 0) {
     caret_pos = g_utf8_offset_to_pointer(layout_text_ + caret_pos,
                                          trailing) - layout_text_;
-    DCHECK_LE(static_cast<size_t>(caret_pos), layout_text_len_);
+    DCHECK_LE(static_cast<size_t>(caret_pos), strlen(layout_text_));
   }
 
   return SelectionModel(LayoutIndexToTextIndex(caret_pos),
@@ -206,38 +214,47 @@ SelectionModel RenderTextLinux::AdjacentWordSelectionModel(
   return cur;
 }
 
-void RenderTextLinux::SetSelectionModel(const SelectionModel& model) {
-  if (selection() != model.selection())
-    selection_visual_bounds_.clear();
-
-  RenderText::SetSelectionModel(model);
-}
-
-void RenderTextLinux::GetGlyphBounds(size_t index,
-                                     ui::Range* xspan,
-                                     int* height) {
+ui::Range RenderTextLinux::GetGlyphBounds(size_t index) {
   PangoRectangle pos;
   pango_layout_index_to_pos(layout_, TextIndexToLayoutIndex(index), &pos);
   // TODO(derat): Support fractional ranges for subpixel positioning?
-  *xspan = ui::Range(PANGO_PIXELS(pos.x), PANGO_PIXELS(pos.x + pos.width));
-  *height = PANGO_PIXELS(pos.height);
+  return ui::Range(PANGO_PIXELS(pos.x), PANGO_PIXELS(pos.x + pos.width));
 }
 
 std::vector<Rect> RenderTextLinux::GetSubstringBounds(const ui::Range& range) {
   DCHECK_LE(range.GetMax(), text().length());
-
   if (range.is_empty())
     return std::vector<Rect>();
 
   EnsureLayout();
-  if (range == selection())
-    return GetSelectionBounds();
-  return CalculateSubstringBounds(range);
+  int* ranges = NULL;
+  int n_ranges = 0;
+  pango_layout_line_get_x_ranges(current_line_,
+                                 TextIndexToLayoutIndex(range.GetMin()),
+                                 TextIndexToLayoutIndex(range.GetMax()),
+                                 &ranges,
+                                 &n_ranges);
+
+  const int height = GetStringSize().height();
+
+  std::vector<Rect> bounds;
+  for (int i = 0; i < n_ranges; ++i) {
+    // TODO(derat): Support fractional bounds for subpixel positioning?
+    int x = PANGO_PIXELS(ranges[2 * i]);
+    int width = PANGO_PIXELS(ranges[2 * i + 1]) - x;
+    Rect rect(x, 0, width, height);
+    rect.set_origin(ToViewPoint(rect.origin()));
+    bounds.push_back(rect);
+  }
+  g_free(ranges);
+  return bounds;
 }
 
 size_t RenderTextLinux::TextIndexToLayoutIndex(size_t index) const {
   DCHECK(layout_);
-  const ptrdiff_t offset = ui::UTF16IndexToOffset(text(), 0, index);
+  ptrdiff_t offset = ui::UTF16IndexToOffset(text(), 0, index);
+  // Clamp layout indices to the length of the text actually used for layout.
+  offset = std::min<size_t>(offset, g_utf8_strlen(layout_text_, -1));
   const char* layout_pointer = g_utf8_offset_to_pointer(layout_text_, offset);
   return (layout_pointer - layout_text_);
 }
@@ -259,7 +276,11 @@ bool RenderTextLinux::IsCursorablePosition(size_t position) {
 
   EnsureLayout();
   ptrdiff_t offset = ui::UTF16IndexToOffset(text(), 0, position);
-  return (offset < num_log_attrs_ && log_attrs_[offset].is_cursor_position);
+  // Check that the index corresponds with a valid text code point, that it is
+  // marked as a legitimate cursor position by Pango, and that it is not
+  // truncated from layout text (its glyph is shown on screen).
+  return (offset < num_log_attrs_ && log_attrs_[offset].is_cursor_position &&
+          offset < g_utf8_strlen(layout_text_, -1));
 }
 
 void RenderTextLinux::ResetLayout() {
@@ -278,10 +299,7 @@ void RenderTextLinux::ResetLayout() {
     log_attrs_ = NULL;
     num_log_attrs_ = 0;
   }
-  if (!selection_visual_bounds_.empty())
-    selection_visual_bounds_.clear();
   layout_text_ = NULL;
-  layout_text_len_ = 0;
 }
 
 void RenderTextLinux::EnsureLayout() {
@@ -309,10 +327,7 @@ void RenderTextLinux::EnsureLayout() {
     // label, we will need to remove the single-line-mode setting.
     pango_layout_set_single_paragraph_mode(layout_, true);
 
-    // These are used by SetupPangoAttributes.
     layout_text_ = pango_layout_get_text(layout_);
-    layout_text_len_ = strlen(layout_text_);
-
     SetupPangoAttributes(layout_);
 
     current_line_ = pango_layout_get_line_readonly(layout_, 0);
@@ -360,9 +375,8 @@ void RenderTextLinux::SetupPangoAttributes(PangoLayout* layout) {
 void RenderTextLinux::DrawVisualText(Canvas* canvas) {
   DCHECK(layout_);
 
-  Vector2d offset(GetOffsetForDrawing());
   // Skia will draw glyphs with respect to the baseline.
-  offset += Vector2d(0, PANGO_PIXELS(pango_layout_get_baseline(layout_)));
+  Vector2d offset(GetTextOffset() + Vector2d(0, GetBaseline()));
 
   SkScalar x = SkIntToScalar(offset.x());
   SkScalar y = SkIntToScalar(offset.y());
@@ -391,6 +405,7 @@ void RenderTextLinux::DrawVisualText(Canvas* canvas) {
   for (GSList* it = current_line_->runs; it; it = it->next) {
     PangoLayoutRun* run = reinterpret_cast<PangoLayoutRun*>(it->data);
     int glyph_count = run->glyphs->num_glyphs;
+    // TODO(msw): Skip painting runs outside the display rect area, like Win.
     if (glyph_count == 0)
       continue;
 
@@ -483,40 +498,6 @@ SelectionModel RenderTextLinux::LastSelectionModelInsideRun(
   size_t caret = IndexOfAdjacentGrapheme(
       LayoutIndexToTextIndex(item->offset + item->length), CURSOR_BACKWARD);
   return SelectionModel(caret, CURSOR_FORWARD);
-}
-
-std::vector<Rect> RenderTextLinux::CalculateSubstringBounds(ui::Range range) {
-  int* ranges;
-  int n_ranges;
-  pango_layout_line_get_x_ranges(
-      current_line_,
-      TextIndexToLayoutIndex(range.GetMin()),
-      TextIndexToLayoutIndex(range.GetMax()),
-      &ranges,
-      &n_ranges);
-
-  int height;
-  pango_layout_get_pixel_size(layout_, NULL, &height);
-
-  int y = (display_rect().height() - height) / 2;
-
-  std::vector<Rect> bounds;
-  for (int i = 0; i < n_ranges; ++i) {
-    // TODO(derat): Support fractional bounds for subpixel positioning?
-    int x = PANGO_PIXELS(ranges[2 * i]);
-    int width = PANGO_PIXELS(ranges[2 * i + 1]) - x;
-    Rect rect(x, y, width, height);
-    rect.set_origin(ToViewPoint(rect.origin()));
-    bounds.push_back(rect);
-  }
-  g_free(ranges);
-  return bounds;
-}
-
-std::vector<Rect> RenderTextLinux::GetSelectionBounds() {
-  if (selection_visual_bounds_.empty())
-    selection_visual_bounds_ = CalculateSubstringBounds(selection());
-  return selection_visual_bounds_;
 }
 
 size_t RenderTextLinux::GetGlyphTextIndex(PangoLayoutRun* run,

@@ -7,14 +7,13 @@
 #include <vector>
 
 #include "base/bind.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "content/browser/devtools/devtools_netlog_observer.h"
 #include "content/browser/devtools/render_view_devtools_agent_host.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/devtools_client_host.h"
-#include "googleurl/src/gurl.h"
 
 namespace content {
 
@@ -37,9 +36,7 @@ DevToolsManagerImpl::~DevToolsManagerImpl() {
 }
 
 DevToolsClientHost* DevToolsManagerImpl::GetDevToolsClientHostFor(
-    DevToolsAgentHost* agent_host) {
-  DevToolsAgentHostImpl* agent_host_impl =
-      static_cast<DevToolsAgentHostImpl*>(agent_host);
+    DevToolsAgentHostImpl* agent_host_impl) {
   AgentToClientHostMap::iterator it =
       agent_to_client_host_.find(agent_host_impl);
   if (it != agent_to_client_host_.end())
@@ -51,7 +48,7 @@ DevToolsAgentHost* DevToolsManagerImpl::GetDevToolsAgentHostFor(
     DevToolsClientHost* client_host) {
   ClientToAgentHostMap::iterator it = client_to_agent_host_.find(client_host);
   if (it != client_to_agent_host_.end())
-    return it->second;
+    return it->second.get();
   return NULL;
 }
 
@@ -60,6 +57,12 @@ void DevToolsManagerImpl::RegisterDevToolsClientHostFor(
     DevToolsClientHost* client_host) {
   DevToolsAgentHostImpl* agent_host_impl =
       static_cast<DevToolsAgentHostImpl*>(agent_host);
+  DevToolsClientHost* old_client_host =
+      GetDevToolsClientHostFor(agent_host_impl);
+  if (old_client_host) {
+    old_client_host->ReplacedWithAnotherClient();
+    UnregisterDevToolsClientHostFor(agent_host_impl);
+  }
   BindClientHost(agent_host_impl, client_host);
   agent_host_impl->Attach();
 }
@@ -79,7 +82,9 @@ bool DevToolsManagerImpl::DispatchOnInspectorBackend(
 void DevToolsManagerImpl::DispatchOnInspectorFrontend(
     DevToolsAgentHost* agent_host,
     const std::string& message) {
-  DevToolsClientHost* client_host = GetDevToolsClientHostFor(agent_host);
+  DevToolsAgentHostImpl* agent_host_impl =
+      static_cast<DevToolsAgentHostImpl*>(agent_host);
+  DevToolsClientHost* client_host = GetDevToolsClientHostFor(agent_host_impl);
   if (!client_host) {
     // Client window was closed while there were messages
     // being sent to it.
@@ -102,12 +107,10 @@ void DevToolsManagerImpl::AgentHostClosing(DevToolsAgentHostImpl* agent_host) {
 }
 
 void DevToolsManagerImpl::UnregisterDevToolsClientHostFor(
-    DevToolsAgentHost* agent_host) {
-  DevToolsClientHost* client_host = GetDevToolsClientHostFor(agent_host);
+    DevToolsAgentHostImpl* agent_host_impl) {
+  DevToolsClientHost* client_host = GetDevToolsClientHostFor(agent_host_impl);
   if (!client_host)
     return;
-  DevToolsAgentHostImpl* agent_host_impl =
-      static_cast<DevToolsAgentHostImpl*>(agent_host);
   UnbindClientHost(agent_host_impl, client_host);
   client_host->InspectedContentsClosing();
 }
@@ -137,8 +140,7 @@ void DevToolsManagerImpl::UnbindClientHost(DevToolsAgentHostImpl* agent_host,
   scoped_refptr<DevToolsAgentHostImpl> protect(agent_host);
   DCHECK(agent_to_client_host_.find(agent_host)->second ==
       client_host);
-  DCHECK(client_to_agent_host_.find(client_host)->second ==
-      agent_host);
+  DCHECK(client_to_agent_host_.find(client_host)->second.get() == agent_host);
   agent_host->set_close_listener(NULL);
 
   agent_to_client_host_.erase(agent_host);
@@ -156,16 +158,34 @@ void DevToolsManagerImpl::UnbindClientHost(DevToolsAgentHostImpl* agent_host,
 }
 
 void DevToolsManagerImpl::CloseAllClientHosts() {
-  std::vector<DevToolsAgentHost*> agents;
+  std::vector<DevToolsAgentHostImpl*> agents;
   for (AgentToClientHostMap::iterator it =
            agent_to_client_host_.begin();
        it != agent_to_client_host_.end(); ++it) {
     agents.push_back(it->first);
   }
-  for (std::vector<DevToolsAgentHost*>::iterator it = agents.begin();
+  for (std::vector<DevToolsAgentHostImpl*>::iterator it = agents.begin();
        it != agents.end(); ++it) {
     UnregisterDevToolsClientHostFor(*it);
   }
+}
+
+void DevToolsManagerImpl::AddAgentStateCallback(const Callback& callback) {
+  callbacks_.push_back(&callback);
+}
+
+void DevToolsManagerImpl::RemoveAgentStateCallback(const Callback& callback) {
+  CallbackContainer::iterator it =
+      std::find(callbacks_.begin(), callbacks_.end(), &callback);
+  DCHECK(it != callbacks_.end());
+  callbacks_.erase(it);
+}
+
+void DevToolsManagerImpl::NotifyObservers(DevToolsAgentHost* agent_host,
+                                          bool attached) {
+  CallbackContainer copy(callbacks_);
+  for (CallbackContainer::iterator it = copy.begin(); it != copy.end(); ++it)
+     (*it)->Run(agent_host, attached);
 }
 
 }  // namespace content

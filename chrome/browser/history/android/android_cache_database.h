@@ -7,7 +7,7 @@
 
 #include "base/files/file_path.h"
 #include "base/gtest_prod_util.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "chrome/browser/history/android/android_history_types.h"
 #include "sql/connection.h"
 #include "sql/init_status.h"
@@ -42,7 +42,7 @@ class AndroidCacheDatabase {
 
   // Set the given |url_id|'s favicon column to |favicon_id|. Returns true on
   // success.
-  bool SetFaviconID(URLID url_id, FaviconID favicon_id);
+  bool SetFaviconID(URLID url_id, chrome::FaviconID favicon_id);
 
   // The search_terms table -------------------------------------------------
   //

@@ -10,16 +10,17 @@
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
 #include "base/run_loop.h"
+#include "base/strings/string16.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_instant_controller.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/omnibox/location_bar.h"
 #include "chrome/browser/ui/search/instant_controller.h"
-#include "chrome/browser/ui/search/instant_overlay_model_observer.h"
 #include "chrome/common/search_types.h"
-#include "googleurl/src/gurl.h"
-#include "net/test/test_server.h"
+#include "net/test/spawned_test_server/spawned_test_server.h"
+#include "url/gurl.h"
 
+class BrowserInstantController;
 class InstantController;
 class InstantModel;
 class OmniboxView;
@@ -28,32 +29,13 @@ namespace content {
 class WebContents;
 };
 
-class InstantTestModelObserver : public InstantOverlayModelObserver {
- public:
-  InstantTestModelObserver(InstantOverlayModel* model,
-                           chrome::search::Mode::Type desired_mode_type);
-  ~InstantTestModelObserver();
-
-  void WaitForDesiredOverlayState();
-
-  // Overridden from InstantOverlayModelObserver:
-  virtual void OverlayStateChanged(const InstantOverlayModel& model) OVERRIDE;
-
- private:
-  InstantOverlayModel* const model_;
-  const chrome::search::Mode::Type desired_mode_type_;
-  base::RunLoop run_loop_;
-
-  DISALLOW_COPY_AND_ASSIGN(InstantTestModelObserver);
-};
-
 // This utility class is meant to be used in a "mix-in" fashion, giving the
 // derived test class additional Instant-related functionality.
 class InstantTestBase {
  protected:
   InstantTestBase()
       : https_test_server_(
-            net::TestServer::TYPE_HTTPS,
+            net::SpawnedTestServer::TYPE_HTTPS,
             net::BaseTestServer::SSLOptions(),
             base::FilePath(FILE_PATH_LITERAL("chrome/test/data"))) {
   }
@@ -69,6 +51,10 @@ class InstantTestBase {
     browser_ = browser;
   }
 
+  BrowserInstantController* browser_instant() {
+    return browser_->instant_controller();
+  }
+
   InstantController* instant() {
     return browser_->instant_controller()->instant();
   }
@@ -79,17 +65,16 @@ class InstantTestBase {
 
   const GURL& instant_url() const { return instant_url_; }
 
-  net::TestServer& https_test_server() { return https_test_server_; }
+  net::SpawnedTestServer& https_test_server() { return https_test_server_; }
 
   void KillInstantRenderView();
 
   void FocusOmnibox();
-  void FocusOmniboxAndWaitForInstantSupport();
-  void FocusOmniboxAndWaitForInstantExtendedSupport();
+  void FocusOmniboxAndWaitForInstantNTPSupport();
 
   void SetOmniboxText(const std::string& text);
-  void SetOmniboxTextAndWaitForOverlayToShow(const std::string& text);
-  void SetOmniboxTextAndWaitForSuggestion(const std::string& text);
+
+  void PressEnterAndWaitForNavigation();
 
   bool GetBoolFromJS(content::WebContents* contents,
                      const std::string& script,
@@ -103,8 +88,8 @@ class InstantTestBase {
   bool ExecuteScript(const std::string& script) WARN_UNUSED_RESULT;
   bool CheckVisibilityIs(content::WebContents* contents,
                          bool expected) WARN_UNUSED_RESULT;
-  bool HasUserInputInProgress();
-  bool HasTemporaryText();
+
+  std::string GetOmniboxText();
 
   // Loads a named image from url |image| from the given |rvh| host.  |loaded|
   // returns whether the image was able to load without error.
@@ -113,13 +98,16 @@ class InstantTestBase {
                  const std::string& image,
                  bool* loaded);
 
+  // Returns the omnibox's inline autocompletion (shown in blue highlight).
+  string16 GetBlueText();
+
  private:
   GURL instant_url_;
 
   Browser* browser_;
 
   // HTTPS Testing server, started on demand.
-  net::TestServer https_test_server_;
+  net::SpawnedTestServer https_test_server_;
 
   DISALLOW_COPY_AND_ASSIGN(InstantTestBase);
 };

@@ -65,7 +65,7 @@
         }],
         ['OS == "ios"', {
           'dependencies' : [
-            '<(DEPTH)/testing/iossim/iossim.gyp:iossim',
+            '<(DEPTH)/testing/iossim/iossim.gyp:iossim#host',
           ],
           'direct_dependent_settings': {
             'target_conditions': [
@@ -90,6 +90,30 @@
                 ],
                 'mac_bundle_resources!': [
                   '<(ios_unittest_info_plist_path)',
+                ],
+              }],
+            ],
+          },
+        }],
+        ['OS=="ios" and asan==1', {
+          'direct_dependent_settings': {
+            'target_conditions': [
+              # Package the ASan runtime dylib into the test app bundles.
+              ['_type=="executable"', {
+                'postbuilds': [
+                  {
+                    'variables': {
+                      # Define copy_asan_dylib_path in a variable ending in
+                      # _path so that gyp understands it's a path and
+                      # performs proper relativization during dict merging.
+                      'copy_asan_dylib_path':
+                        '<(DEPTH)/build/mac/copy_asan_runtime_dylib.sh',
+                    },
+                    'postbuild_name': 'Copy ASan runtime dylib',
+                    'action': [
+                      '>(copy_asan_dylib_path)',
+                    ],
+                  },
                 ],
               }],
             ],

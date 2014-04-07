@@ -10,15 +10,15 @@
 #include <string>
 #include <vector>
 
-#include "base/command_line.h"
+#include "base/metrics/histogram.h"
 #include "build/build_config.h"
-#include "googleurl/src/gurl.h"
 #include "net/base/net_errors.h"
 #include "net/http/http_status_code.h"
 #include "sync/engine/net/url_translator.h"
 #include "sync/engine/syncer.h"
 #include "sync/protocol/sync.pb.h"
 #include "sync/syncable/directory.h"
+#include "url/gurl.h"
 
 namespace syncer {
 
@@ -118,7 +118,7 @@ ServerConnectionManager::ScopedConnectionHelper::ScopedConnectionHelper(
     : manager_(manager), connection_(connection) {}
 
 ServerConnectionManager::ScopedConnectionHelper::~ScopedConnectionHelper() {
-  if (connection_.get())
+  if (connection_)
     manager_->OnConnectionDestroyed(connection_.get());
   connection_.reset();
 }
@@ -176,10 +176,12 @@ ScopedServerStatusWatcher::~ScopedServerStatusWatcher() {
 ServerConnectionManager::ServerConnectionManager(
     const string& server,
     int port,
-    bool use_ssl)
+    bool use_ssl,
+    bool use_oauth2_token)
     : sync_server_(server),
       sync_server_port_(port),
       use_ssl_(use_ssl),
+      use_oauth2_token_(use_oauth2_token),
       proto_sync_path_(kSyncServerSyncPath),
       server_status_(HttpResponse::NONE),
       terminated_(false),
@@ -210,6 +212,16 @@ void ServerConnectionManager::OnConnectionDestroyed(Connection* connection) {
     return;
 
   active_connection_ = NULL;
+}
+
+bool ServerConnectionManager::SetAuthToken(const std::string& auth_token) {
+  DCHECK(thread_checker_.CalledOnValidThread());
+  if (previously_invalidated_token != auth_token) {
+    auth_token_.assign(auth_token);
+    previously_invalidated_token = std::string();
+    return true;
+  }
+  return false;
 }
 
 void ServerConnectionManager::OnInvalidationCredentialsRejected() {
@@ -255,7 +267,11 @@ bool ServerConnectionManager::PostBufferToPath(PostBufferParams* params,
   DCHECK(thread_checker_.CalledOnValidThread());
   DCHECK(watcher != NULL);
 
-  if (auth_token.empty()) {
+  // TODO(pavely): crbug.com/273096. Check for "credentials_lost" is added as
+  // workaround for M29 blocker to avoid sending RPC to sync with known invalid
+  // token but instead to trigger refreshing token in ProfileSyncService. Need
+  // to clean it.
+  if (auth_token.empty() || auth_token == "credentials_lost") {
     params->response.server_status = HttpResponse::SYNC_AUTH_ERROR;
     return false;
   }
@@ -273,8 +289,9 @@ bool ServerConnectionManager::PostBufferToPath(PostBufferParams* params,
   bool ok = post.get()->Init(
       path.c_str(), auth_token, params->buffer_in, &params->response);
 
-  if (params->response.server_status == HttpResponse::SYNC_AUTH_ERROR)
+  if (params->response.server_status == HttpResponse::SYNC_AUTH_ERROR) {
     InvalidateAndClearAuthToken();
+  }
 
   if (!ok || net::HTTP_OK != params->response.response_code)
     return false;

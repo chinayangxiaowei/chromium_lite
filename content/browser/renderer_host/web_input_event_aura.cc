@@ -20,13 +20,32 @@ WebKit::WebKeyboardEvent MakeWebKeyboardEventFromNativeEvent(
     base::NativeEvent native_event);
 WebKit::WebGestureEvent MakeWebGestureEventFromNativeEvent(
     base::NativeEvent native_event);
-#else
+#elif defined(USE_X11)
 WebKit::WebMouseWheelEvent MakeWebMouseWheelEventFromAuraEvent(
     ui::ScrollEvent* event);
 WebKit::WebKeyboardEvent MakeWebKeyboardEventFromAuraEvent(
     ui::KeyEvent* event);
 WebKit::WebGestureEvent MakeWebGestureEventFromAuraEvent(
     ui::ScrollEvent* event);
+#else
+WebKit::WebMouseWheelEvent MakeWebMouseWheelEventFromAuraEvent(
+    ui::ScrollEvent* event) {
+  WebKit::WebMouseWheelEvent webkit_event;
+  return webkit_event;
+}
+
+WebKit::WebKeyboardEvent MakeWebKeyboardEventFromAuraEvent(
+    ui::KeyEvent* event) {
+  WebKit::WebKeyboardEvent webkit_event;
+  return webkit_event;
+}
+
+WebKit::WebGestureEvent MakeWebGestureEventFromAuraEvent(
+    ui::ScrollEvent* event) {
+  WebKit::WebGestureEvent webkit_event;
+  return webkit_event;
+}
+
 #endif
 
 WebKit::WebMouseEvent MakeWebMouseEventFromAuraEvent(
@@ -74,6 +93,10 @@ WebKit::WebMouseEvent MakeWebMouseEvent(ui::MouseEvent* event) {
   webkit_event.windowX = webkit_event.x = event->x();
   webkit_event.windowY = webkit_event.y = event->y();
 
+#if defined(OS_WIN)
+  if (event->native_event().message)
+    return webkit_event;
+#endif
   const gfx::Point root_point = event->root_location();
   webkit_event.globalX = root_point.x();
   webkit_event.globalY = root_point.y();
@@ -234,7 +257,9 @@ WebKit::WebMouseWheelEvent MakeWebMouseWheelEventFromAuraEvent(
   webkit_event.button = WebKit::WebMouseEvent::ButtonNone;
   webkit_event.modifiers = EventFlagsToWebEventModifiers(event->flags());
   webkit_event.timeStampSeconds = event->time_stamp().InSecondsF();
-  webkit_event.deltaY = event->offset();
+  webkit_event.deltaX = event->x_offset();
+  webkit_event.deltaY = event->y_offset();
+  webkit_event.wheelTicksX = webkit_event.deltaX / kPixelsPerTick;
   webkit_event.wheelTicksY = webkit_event.deltaY / kPixelsPerTick;
 
   return webkit_event;

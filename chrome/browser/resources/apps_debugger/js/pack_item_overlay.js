@@ -27,14 +27,13 @@ cr.define('apps_dev_tool', function() {
     initializePage: function() {
       var overlay = $('overlay');
       cr.ui.overlay.setupOverlay(overlay);
+      cr.ui.overlay.globalInitialization();
       overlay.addEventListener('cancelOverlay', hideOverlay.bind(this));
 
       $('pack-item-dismiss').addEventListener('click',
           hideOverlay.bind(this));
       $('pack-item-commit').addEventListener('click',
           this.handleCommit_.bind(this));
-      $('browse-item-dir').addEventListener('click',
-          this.handleBrowseItemDir_.bind(this));
       $('browse-private-key').addEventListener('click',
           this.handleBrowsePrivateKey_.bind(this));
     },
@@ -63,17 +62,6 @@ cr.define('apps_dev_tool', function() {
         PackItemOverlay.showError(response);
       else
         PackItemOverlay.showWarningMessage(response);
-    },
-
-    /**
-     * Handles the showing of the item directory browser.
-     * @param {Event} e Change event.
-     * @private
-     */
-    handleBrowseItemDir_: function(e) {
-      chrome.developerPrivate.choosePath('FOLDER', 'LOAD', function(filePath) {
-        $('item-root-dir').value = filePath;
-      });
     },
 
     /**

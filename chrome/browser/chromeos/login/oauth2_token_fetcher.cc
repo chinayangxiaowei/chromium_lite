@@ -5,12 +5,14 @@
 #include "chrome/browser/chromeos/login/oauth2_token_fetcher.h"
 
 #include "base/logging.h"
-#include "base/string_util.h"
-#include "chrome/browser/chromeos/cros/cros_library.h"
-#include "chrome/browser/chromeos/net/connectivity_state_helper.h"
+#include "base/strings/string_util.h"
+#include "chromeos/network/network_handler.h"
+#include "chromeos/network/network_state.h"
+#include "chromeos/network/network_state_handler.h"
 #include "content/public/browser/browser_thread.h"
 #include "google_apis/gaia/gaia_constants.h"
 #include "google_apis/gaia/google_service_auth_error.h"
+#include "third_party/cros_system_api/dbus/service_constants.h"
 
 using content::BrowserThread;
 
@@ -20,11 +22,6 @@ namespace {
 const int kMaxRequestAttemptCount = 5;
 // OAuth token request retry delay in milliseconds.
 const int kRequestRestartDelay = 3000;
-
-// The service scope of the OAuth v2 token that ChromeOS login will be
-// requesting.
-const char kServiceScopeChromeOS[] =
-    "https://www.googleapis.com/auth/chromesync";
 
 }  // namespace
 
@@ -47,8 +44,10 @@ void OAuth2TokenFetcher::StartExchangeFromCookies() {
 
   // Delay the verification if the network is not connected or on a captive
   // portal.
-  ConnectivityStateHelper* csh = ConnectivityStateHelper::Get();
-  if (!csh->DefaultNetworkOnline()) {
+  const NetworkState* default_network =
+      NetworkHandler::Get()->network_state_handler()->DefaultNetwork();
+  if (!default_network ||
+      default_network->connection_state() == flimflam::kStatePortal) {
     // If network is offline, defer the token fetching until online.
     VLOG(1) << "Network is offline.  Deferring OAuth2 token fetch.";
     BrowserThread::PostDelayedTask(
@@ -67,8 +66,10 @@ void OAuth2TokenFetcher::StartExchangeFromAuthCode(
   auth_code_ = auth_code;
   // Delay the verification if the network is not connected or on a captive
   // portal.
-  ConnectivityStateHelper* csh = ConnectivityStateHelper::Get();
-  if (!csh->DefaultNetworkOnline()) {
+  const NetworkState* default_network =
+      NetworkHandler::Get()->network_state_handler()->DefaultNetwork();
+  if (!default_network ||
+      default_network->connection_state() == flimflam::kStatePortal) {
     // If network is offline, defer the token fetching until online.
     VLOG(1) << "Network is offline.  Deferring OAuth2 token fetch.";
     BrowserThread::PostDelayedTask(
@@ -119,7 +120,9 @@ void OAuth2TokenFetcher::RetryOnError(const GoogleServiceAuthError& error,
         base::TimeDelta::FromMilliseconds(kRequestRestartDelay));
     return;
   }
-  LOG(INFO) << "Unrecoverable error or retry count max reached.";
+  LOG(ERROR) << "Unrecoverable error or retry count max reached. State: "
+             << error.state() << ", network error: " << error.network_error()
+             << ", message: " << error.error_message();
   error_handler.Run();
 }
 

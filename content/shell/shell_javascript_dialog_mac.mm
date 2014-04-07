@@ -6,15 +6,15 @@
 
 #import <Cocoa/Cocoa.h>
 
-#import "base/memory/scoped_nsobject.h"
-#include "base/sys_string_conversions.h"
+#import "base/mac/scoped_nsobject.h"
+#include "base/strings/sys_string_conversions.h"
 #include "content/shell/shell_javascript_dialog_manager.h"
 
 // Helper object that receives the notification that the dialog/sheet is
 // going away. Is responsible for cleaning itself up.
 @interface ShellJavaScriptDialogHelper : NSObject<NSAlertDelegate> {
  @private
-  scoped_nsobject<NSAlert> alert_;
+  base::scoped_nsobject<NSAlert> alert_;
   NSTextField* textField_;  // WEAK; owned by alert_
 
   // Copies of the fields in ShellJavaScriptDialog because they're private.

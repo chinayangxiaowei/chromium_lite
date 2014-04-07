@@ -8,8 +8,8 @@
 #include <vector>
 
 #include "base/memory/scoped_ptr.h"
-#include "base/time.h"
-#include "chrome/test/base/testing_profile.h"
+#include "base/message_loop/message_loop.h"
+#include "base/time/time.h"
 #include "google_apis/gaia/gaia_urls.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "google_apis/gaia/oauth2_access_token_consumer.h"
@@ -23,6 +23,7 @@
 #include "net/url_request/url_fetcher_factory.h"
 #include "net/url_request/url_request.h"
 #include "net/url_request/url_request_status.h"
+#include "net/url_request/url_request_test_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -57,7 +58,7 @@ class MockUrlFetcherFactory : public ScopedURLFetcherFactory,
                               public URLFetcherFactory {
  public:
   MockUrlFetcherFactory()
-      : ScopedURLFetcherFactory(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {
+      : ScopedURLFetcherFactory(this) {
   }
   virtual ~MockUrlFetcherFactory() {}
 
@@ -108,10 +109,6 @@ class MockApiCallFlow : public OAuth2ApiCallFlow {
 }  // namespace
 
 class OAuth2ApiCallFlowTest : public testing::Test {
- public:
-  OAuth2ApiCallFlowTest() {}
-  virtual ~OAuth2ApiCallFlowTest() {}
-
  protected:
   void SetupAccessTokenFetcher(
       const std::string& rt, const std::vector<std::string>& scopes) {
@@ -144,13 +141,13 @@ class OAuth2ApiCallFlowTest : public testing::Test {
   void CreateFlow(const std::string& refresh_token,
                   const std::string& access_token,
                   const std::vector<std::string>& scopes) {
+    scoped_refptr<net::TestURLRequestContextGetter> request_context_getter =
+        new net::TestURLRequestContextGetter(
+            message_loop_.message_loop_proxy());
     flow_.reset(new MockApiCallFlow(
-        profile_.GetRequestContext(),
-        refresh_token,
-        access_token,
-        scopes));
-    access_token_fetcher_.reset(new MockAccessTokenFetcher(
-        flow_.get(), profile_.GetRequestContext()));
+        request_context_getter, refresh_token, access_token, scopes));
+    access_token_fetcher_.reset(
+        new MockAccessTokenFetcher(flow_.get(), request_context_getter));
   }
 
   TestURLFetcher* SetupApiCall(bool succeeds, net::HttpStatusCode status) {
@@ -158,8 +155,8 @@ class OAuth2ApiCallFlowTest : public testing::Test {
     GURL url(CreateApiUrl());
     EXPECT_CALL(*flow_, CreateApiCallBody()).WillOnce(Return(body));
     EXPECT_CALL(*flow_, CreateApiCallUrl()).WillOnce(Return(url));
-    TestURLFetcher* url_fetcher = CreateURLFetcher(
-        url, succeeds, status, "");
+    TestURLFetcher* url_fetcher =
+        CreateURLFetcher(url, succeeds, status, std::string());
     EXPECT_CALL(factory_, CreateURLFetcher(_, url, _, _))
         .WillOnce(Return(url_fetcher));
     return url_fetcher;
@@ -168,7 +165,7 @@ class OAuth2ApiCallFlowTest : public testing::Test {
   MockUrlFetcherFactory factory_;
   scoped_ptr<MockApiCallFlow> flow_;
   scoped_ptr<MockAccessTokenFetcher> access_token_fetcher_;
-  TestingProfile profile_;
+  base::MessageLoop message_loop_;
 };
 
 TEST_F(OAuth2ApiCallFlowTest, FirstApiCallSucceeds) {
@@ -240,7 +237,7 @@ TEST_F(OAuth2ApiCallFlowTest, EmptyAccessTokenFirstApiCallSucceeds) {
   std::string at = "access_token";
   std::vector<std::string> scopes(CreateTestScopes());
 
-  CreateFlow(rt, "", scopes);
+  CreateFlow(rt, std::string(), scopes);
   SetupAccessTokenFetcher(rt, scopes);
   TestURLFetcher* url_fetcher = SetupApiCall(true, net::HTTP_OK);
   EXPECT_CALL(*flow_, ProcessApiCallSuccess(url_fetcher));
@@ -256,7 +253,7 @@ TEST_F(OAuth2ApiCallFlowTest, EmptyAccessTokenApiCallFails) {
   std::string at = "access_token";
   std::vector<std::string> scopes(CreateTestScopes());
 
-  CreateFlow(rt, "", scopes);
+  CreateFlow(rt, std::string(), scopes);
   SetupAccessTokenFetcher(rt, scopes);
   TestURLFetcher* url_fetcher = SetupApiCall(false, net::HTTP_BAD_GATEWAY);
   EXPECT_CALL(*flow_, ProcessApiCallFailure(url_fetcher));
@@ -272,7 +269,7 @@ TEST_F(OAuth2ApiCallFlowTest, EmptyAccessTokenNewTokenGenerationFails) {
   std::string at = "access_token";
   std::vector<std::string> scopes(CreateTestScopes());
 
-  CreateFlow(rt, "", scopes);
+  CreateFlow(rt, std::string(), scopes);
   SetupAccessTokenFetcher(rt, scopes);
   GoogleServiceAuthError error(
       GoogleServiceAuthError::INVALID_GAIA_CREDENTIALS);

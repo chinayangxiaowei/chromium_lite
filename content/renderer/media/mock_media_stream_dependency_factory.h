@@ -10,6 +10,7 @@
 
 #include "base/compiler_specific.h"
 #include "content/renderer/media/media_stream_dependency_factory.h"
+#include "third_party/libjingle/source/talk/app/webrtc/mediaconstraintsinterface.h"
 
 namespace content {
 
@@ -29,18 +30,24 @@ class MockVideoSource : public webrtc::VideoSourceInterface {
   void SetLive();
   // Changes the state of the source to ended and notifies the observer.
   void SetEnded();
+  // Set the video capturer.
+  void SetVideoCapturer(cricket::VideoCapturer* capturer);
 
  protected:
   virtual ~MockVideoSource();
 
  private:
-   webrtc::ObserverInterface* observer_;
-   MediaSourceInterface::SourceState state_;
+  void FireOnChanged();
+
+  std::vector<webrtc::ObserverInterface*> observers_;
+  MediaSourceInterface::SourceState state_;
+  scoped_ptr<cricket::VideoCapturer> capturer_;
 };
 
 class MockAudioSource : public webrtc::AudioSourceInterface {
  public:
-  MockAudioSource(const webrtc::MediaConstraintsInterface* constraints);
+  explicit MockAudioSource(
+      const webrtc::MediaConstraintsInterface* constraints);
 
   virtual void RegisterObserver(webrtc::ObserverInterface* observer) OVERRIDE;
   virtual void UnregisterObserver(webrtc::ObserverInterface* observer) OVERRIDE;
@@ -94,31 +101,9 @@ class MockLocalVideoTrack : public webrtc::VideoTrackInterface {
  private:
   bool enabled_;
   std::string id_;
+  TrackState state_;
   scoped_refptr<webrtc::VideoSourceInterface> source_;
-};
-
-class MockLocalAudioTrack : public webrtc::AudioTrackInterface {
- public:
-  explicit MockLocalAudioTrack(const std::string& id)
-    : enabled_(false),
-      id_(id) {
-  }
-  virtual std::string kind() const OVERRIDE;
-  virtual std::string id() const OVERRIDE;
-  virtual bool enabled() const OVERRIDE;
-  virtual TrackState state() const OVERRIDE;
-  virtual bool set_enabled(bool enable) OVERRIDE;
-  virtual bool set_state(TrackState new_state) OVERRIDE;
-  virtual void RegisterObserver(webrtc::ObserverInterface* observer) OVERRIDE;
-  virtual void UnregisterObserver(webrtc::ObserverInterface* observer) OVERRIDE;
-  virtual webrtc::AudioSourceInterface* GetSource() const OVERRIDE;
-
- protected:
-  virtual ~MockLocalAudioTrack() {}
-
- private:
-  bool enabled_;
-  std::string id_;
+  webrtc::ObserverInterface* observer_;
 };
 
 // A mock factory for creating different objects for
@@ -141,17 +126,19 @@ class MockMediaStreamDependencyFactory : public MediaStreamDependencyFactory {
           int video_session_id,
           bool is_screencast,
           const webrtc::MediaConstraintsInterface* constraints) OVERRIDE;
-  virtual bool InitializeAudioSource(
-      const StreamDeviceInfo& device_info) OVERRIDE;
-  virtual bool CreateWebAudioSource(
+  virtual scoped_refptr<WebRtcAudioCapturer> CreateWebAudioSource(
       WebKit::WebMediaStreamSource* source) OVERRIDE;
   virtual scoped_refptr<webrtc::MediaStreamInterface>
       CreateLocalMediaStream(const std::string& label) OVERRIDE;
   virtual scoped_refptr<webrtc::VideoTrackInterface>
       CreateLocalVideoTrack(const std::string& id,
                             webrtc::VideoSourceInterface* source) OVERRIDE;
+  virtual scoped_refptr<webrtc::VideoTrackInterface>
+      CreateLocalVideoTrack(const std::string& id,
+                            cricket::VideoCapturer* capturer) OVERRIDE;
   virtual scoped_refptr<webrtc::AudioTrackInterface>
       CreateLocalAudioTrack(const std::string& id,
+                            const scoped_refptr<WebRtcAudioCapturer>& capturer,
                             webrtc::AudioSourceInterface* source) OVERRIDE;
   virtual webrtc::SessionDescriptionInterface* CreateSessionDescription(
       const std::string& type,
@@ -165,8 +152,11 @@ class MockMediaStreamDependencyFactory : public MediaStreamDependencyFactory {
   virtual bool EnsurePeerConnectionFactory() OVERRIDE;
   virtual bool PeerConnectionFactoryCreated() OVERRIDE;
 
-  MockAudioSource* last_audio_source() { return last_audio_source_; }
-  MockVideoSource* last_video_source() { return last_video_source_; }
+  virtual scoped_refptr<WebRtcAudioCapturer> MaybeCreateAudioCapturer(
+      int render_view_id, const StreamDeviceInfo& device_info) OVERRIDE;
+
+  MockAudioSource* last_audio_source() { return last_audio_source_.get(); }
+  MockVideoSource* last_video_source() { return last_video_source_.get(); }
 
  private:
   bool mock_pc_factory_created_;

@@ -7,16 +7,14 @@
 
 #include "base/basictypes.h"
 #include "base/memory/ref_counted.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "content/common/content_export.h"
 #include "content/common/view_message_enums.h"
 
+struct WebPreferences;
+
 namespace WebKit {
 struct WebScreenInfo;
-}
-
-namespace webkit_glue {
-struct WebPreferences;
 }
 
 namespace content {
@@ -28,9 +26,10 @@ typedef base::RefCountedData<int> SharedRenderViewCounter;
 struct CONTENT_EXPORT RenderViewImplParams {
   RenderViewImplParams(int32 opener_id,
                        const RendererPreferences& renderer_prefs,
-                       const webkit_glue::WebPreferences& webkit_prefs,
+                       const WebPreferences& webkit_prefs,
                        SharedRenderViewCounter* counter,
                        int32 routing_id,
+                       int32 main_frame_routing_id,
                        int32 surface_id,
                        int64 session_storage_namespace_id,
                        const string16& frame_name,
@@ -44,9 +43,10 @@ struct CONTENT_EXPORT RenderViewImplParams {
 
   int32 opener_id;
   const RendererPreferences& renderer_prefs;
-  const webkit_glue::WebPreferences& webkit_prefs;
+  const WebPreferences& webkit_prefs;
   SharedRenderViewCounter* counter;
   int32 routing_id;
+  int32 main_frame_routing_id;
   int32 surface_id;
   int64 session_storage_namespace_id;
   const string16& frame_name;

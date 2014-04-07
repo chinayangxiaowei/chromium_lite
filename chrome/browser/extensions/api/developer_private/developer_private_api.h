@@ -5,18 +5,22 @@
 #ifndef CHROME_BROWSER_EXTENSIONS_API_DEVELOPER_PRIVATE_DEVELOPER_PRIVATE_API_H_
 #define CHROME_BROWSER_EXTENSIONS_API_DEVELOPER_PRIVATE_DEVELOPER_PRIVATE_API_H_
 
+#include "base/platform_file.h"
 #include "chrome/browser/extensions/api/developer_private/entry_picker.h"
 #include "chrome/browser/extensions/api/file_system/file_system_api.h"
+#include "chrome/browser/extensions/event_router.h"
 #include "chrome/browser/extensions/extension_function.h"
 #include "chrome/browser/extensions/extension_install_prompt.h"
 #include "chrome/browser/extensions/extension_uninstall_dialog.h"
 #include "chrome/browser/extensions/pack_extension_job.h"
 #include "chrome/browser/extensions/requirements_checker.h"
-#include "chrome/browser/profiles/profile_keyed_service.h"
+#include "components/browser_context_keyed_service/browser_context_keyed_service.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 #include "content/public/browser/render_view_host.h"
 #include "ui/shell_dialogs/select_file_dialog.h"
+#include "webkit/browser/fileapi/file_system_context.h"
+#include "webkit/browser/fileapi/file_system_operation.h"
 
 class ExtensionService;
 
@@ -34,6 +38,7 @@ namespace developer_private {
 
 struct ItemInfo;
 struct ItemInspectView;
+struct ProjectInfo;
 
 }
 
@@ -44,14 +49,33 @@ struct ItemInspectView;
 namespace developer = extensions::api::developer_private;
 
 typedef std::vector<linked_ptr<developer::ItemInfo> > ItemInfoList;
+typedef std::vector<linked_ptr<developer::ProjectInfo> > ProjectInfoList;
 typedef std::vector<linked_ptr<developer::ItemInspectView> >
     ItemInspectViewList;
 
 namespace extensions {
 
+class DeveloperPrivateEventRouter : public content::NotificationObserver {
+ public:
+  explicit DeveloperPrivateEventRouter(Profile* profile);
+  virtual ~DeveloperPrivateEventRouter();
+
+ private:
+  // content::NotificationObserver implementation
+  virtual void Observe(int type,
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE;
+
+  content::NotificationRegistrar registrar_;
+
+  Profile* profile_;
+
+  DISALLOW_COPY_AND_ASSIGN(DeveloperPrivateEventRouter);
+};
+
 // The profile-keyed service that manages the DeveloperPrivate API.
-class DeveloperPrivateAPI : public ProfileKeyedService,
-                            public content::NotificationObserver {
+class DeveloperPrivateAPI : public BrowserContextKeyedService,
+                            public extensions::EventRouter::Observer {
  public:
   // Convenience method to get the DeveloperPrivateAPI for a profile.
   static DeveloperPrivateAPI* Get(Profile* profile);
@@ -65,22 +89,28 @@ class DeveloperPrivateAPI : public ProfileKeyedService,
     return last_unpacked_directory_;
   }
 
-  // ProfileKeyedService implementation
+  // BrowserContextKeyedService implementation
   virtual void Shutdown() OVERRIDE;
 
-  // content::NotificationObserver implementation.
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+  // EventRouter::Observer implementation.
+  virtual void OnListenerAdded(const extensions::EventListenerInfo& details)
+      OVERRIDE;
+  virtual void OnListenerRemoved(const extensions::EventListenerInfo& details)
+      OVERRIDE;
 
  private:
   void RegisterNotifications();
+
+  Profile* profile_;
 
   // Used to start the load |load_extension_dialog_| in the last directory that
   // was loaded.
   base::FilePath last_unpacked_directory_;
 
-  content::NotificationRegistrar registrar_;
+  // Created lazily upon OnListenerAdded.
+  scoped_ptr<DeveloperPrivateEventRouter> developer_private_event_router_;
+
+  DISALLOW_COPY_AND_ASSIGN(DeveloperPrivateAPI);
 
 };
 
@@ -185,6 +215,29 @@ class DeveloperPrivateReloadFunction : public SyncExtensionFunction {
 
   // ExtensionFunction:
   virtual bool RunImpl() OVERRIDE;
+};
+
+class DeveloperPrivateShowPermissionsDialogFunction
+    : public SyncExtensionFunction,
+      public ExtensionInstallPrompt::Delegate {
+ public:
+  DECLARE_EXTENSION_FUNCTION("developerPrivate.showPermissionsDialog",
+                             DEVELOPERPRIVATE_PERMISSIONS);
+
+  DeveloperPrivateShowPermissionsDialogFunction();
+ protected:
+  virtual ~DeveloperPrivateShowPermissionsDialogFunction();
+
+  // ExtensionFunction:
+  virtual bool RunImpl() OVERRIDE;
+
+  // Overridden from ExtensionInstallPrompt::Delegate
+  virtual void InstallUIProceed() OVERRIDE;
+  virtual void InstallUIAbort(bool user_initiated) OVERRIDE;
+
+  scoped_ptr<ExtensionInstallPrompt> prompt_;
+  std::string extension_id_;
+
 };
 
 class DeveloperPrivateRestartFunction : public SyncExtensionFunction {
@@ -305,6 +358,69 @@ class DeveloperPrivateGetStringsFunction : public SyncExtensionFunction {
 
    // ExtensionFunction
    virtual bool RunImpl() OVERRIDE;
+};
+
+class DeveloperPrivateExportSyncfsFolderToLocalfsFunction
+    : public AsyncExtensionFunction {
+  public:
+   DECLARE_EXTENSION_FUNCTION("developerPrivate.exportSyncfsFolderToLocalfs",
+                              DEVELOPERPRIVATE_LOADUNPACKEDCROS);
+
+   DeveloperPrivateExportSyncfsFolderToLocalfsFunction();
+
+  protected:
+   virtual ~DeveloperPrivateExportSyncfsFolderToLocalfsFunction();
+
+   // ExtensionFunction
+   virtual bool RunImpl() OVERRIDE;
+
+   void ClearPrexistingDirectoryContent(const base::FilePath& project_path);
+
+   void ReadSyncFileSystemDirectory(const base::FilePath& project_path,
+                                    const base::FilePath& destination_path);
+
+   void ReadSyncFileSystemDirectoryCb(
+       const base::FilePath& project_path,
+       const base::FilePath& destination_path,
+       base::PlatformFileError result,
+       const fileapi::FileSystemOperation::FileEntryList& file_list,
+       bool has_more);
+
+   void SnapshotFileCallback(
+       const base::FilePath& target_path,
+       base::PlatformFileError result,
+       const base::PlatformFileInfo& file_info,
+       const base::FilePath& platform_path,
+       const scoped_refptr<webkit_blob::ShareableFileReference>& file_ref);
+
+   void CopyFile(const base::FilePath& src_path,
+                 const base::FilePath& dest_path);
+
+   scoped_refptr<fileapi::FileSystemContext> context_;
+
+  private:
+   int pendingCopyOperationsCount_;
+
+   // This is set to false if any of the copyFile operations fail on
+   // call of the API. It is returned as a response of the API call.
+   bool success_;
+};
+
+class DeveloperPrivateLoadProjectFunction : public AsyncExtensionFunction {
+  public:
+   DECLARE_EXTENSION_FUNCTION("developerPrivate.loadProject",
+                              DEVELOPERPRIVATE_LOADPROJECT);
+
+   DeveloperPrivateLoadProjectFunction();
+
+  protected:
+   virtual ~DeveloperPrivateLoadProjectFunction();
+
+   // ExtensionFunction
+   virtual bool RunImpl() OVERRIDE;
+
+   void GetUnpackedExtension(const base::FilePath& path,
+                             const ExtensionSet* extensions);
 };
 
 }  // namespace api

@@ -7,7 +7,7 @@
 
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "net/base/net_errors.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/http/http_auth.h"
@@ -304,7 +304,7 @@ TEST(HttpAuthTest, ChallengeTokenizerMismatchedQuotesNoValue) {
   EXPECT_TRUE(parameters.GetNext());
   EXPECT_TRUE(parameters.valid());
   EXPECT_EQ(std::string("realm"), parameters.name());
-  EXPECT_EQ(std::string(""), parameters.value());
+  EXPECT_EQ(std::string(), parameters.value());
   EXPECT_FALSE(parameters.GetNext());
 }
 

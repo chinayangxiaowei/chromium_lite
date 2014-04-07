@@ -11,18 +11,18 @@
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/i18n/rtl.h"
-#include "base/stringprintf.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/chromeos/input_method/input_method_configuration.h"
-#include "chrome/browser/chromeos/input_method/input_method_manager.h"
 #include "chrome/browser/chromeos/input_method/input_method_util.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
+#include "chromeos/ime/component_extension_ime_manager.h"
+#include "chromeos/ime/input_method_manager.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/user_metrics.h"
 #include "content/public/browser/web_contents.h"
@@ -32,13 +32,29 @@
 
 using content::UserMetricsAction;
 
+namespace {
+// TODO(zork): Remove this blacklist when fonts are added to Chrome OS.
+// see: crbug.com/240586
+
+bool IsBlacklisted(const std::string& language_code) {
+  return language_code == "si"; // Sinhala
+}
+
+} // namespace
+
 namespace chromeos {
 namespace options {
 
-CrosLanguageOptionsHandler::CrosLanguageOptionsHandler() {
+CrosLanguageOptionsHandler::CrosLanguageOptionsHandler()
+    : composition_extension_appended_(false),
+      is_page_initialized_(false) {
+  input_method::InputMethodManager::Get()->GetComponentExtensionIMEManager()->
+      AddObserver(this);
 }
 
 CrosLanguageOptionsHandler::~CrosLanguageOptionsHandler() {
+  input_method::InputMethodManager::Get()->GetComponentExtensionIMEManager()->
+      RemoveObserver(this);
 }
 
 void CrosLanguageOptionsHandler::GetLocalizedValues(
@@ -48,41 +64,65 @@ void CrosLanguageOptionsHandler::GetLocalizedValues(
 
   RegisterTitle(localized_strings, "languagePage",
                 IDS_OPTIONS_SETTINGS_LANGUAGES_AND_INPUT_DIALOG_TITLE);
-  localized_strings->SetString("ok_button", l10n_util::GetStringUTF16(IDS_OK));
+  localized_strings->SetString("okButton", l10n_util::GetStringUTF16(IDS_OK));
   localized_strings->SetString("configure",
       l10n_util::GetStringUTF16(IDS_OPTIONS_SETTINGS_LANGUAGES_CONFIGURE));
-  localized_strings->SetString("input_method",
+  localized_strings->SetString("inputMethod",
       l10n_util::GetStringUTF16(IDS_OPTIONS_SETTINGS_LANGUAGES_INPUT_METHOD));
-  localized_strings->SetString("please_add_another_input_method",
+  localized_strings->SetString("pleaseAddAnotherInputMethod",
       l10n_util::GetStringUTF16(
           IDS_OPTIONS_SETTINGS_LANGUAGES_PLEASE_ADD_ANOTHER_INPUT_METHOD));
-  localized_strings->SetString("input_method_instructions",
+  localized_strings->SetString("inputMethodInstructions",
       l10n_util::GetStringUTF16(
           IDS_OPTIONS_SETTINGS_LANGUAGES_INPUT_METHOD_INSTRUCTIONS));
-  localized_strings->SetString("switch_input_methods_hint",
+  localized_strings->SetString("switchInputMethodsHint",
       l10n_util::GetStringUTF16(
           IDS_OPTIONS_SETTINGS_LANGUAGES_SWITCH_INPUT_METHODS_HINT));
-  localized_strings->SetString("select_previous_input_method_hint",
+  localized_strings->SetString("selectPreviousInputMethodHint",
       l10n_util::GetStringUTF16(
           IDS_OPTIONS_SETTINGS_LANGUAGES_SELECT_PREVIOUS_INPUT_METHOD_HINT));
-  localized_strings->SetString("restart_button",
+  localized_strings->SetString("restartButton",
       l10n_util::GetStringUTF16(
           IDS_OPTIONS_SETTINGS_LANGUAGES_SIGN_OUT_BUTTON));
-  localized_strings->SetString("extension_ime_label",
+  localized_strings->SetString("extensionImeLable",
       l10n_util::GetStringUTF16(
           IDS_OPTIONS_SETTINGS_LANGUAGES_INPUT_METHOD_EXTENSION_IME));
-  localized_strings->SetString("extension_ime_description",
+  localized_strings->SetString("extensionImeDescription",
       l10n_util::GetStringUTF16(
           IDS_OPTIONS_SETTINGS_LANGUAGES_INPUT_METHOD_EXTENSION_DESCRIPTION));
+  localized_strings->SetString("noInputMethods",
+      l10n_util::GetStringUTF16(
+          IDS_OPTIONS_SETTINGS_LANGUAGES_NO_INPUT_METHODS));
 
   input_method::InputMethodManager* manager =
-      input_method::GetInputMethodManager();
+      input_method::InputMethodManager::Get();
   // GetSupportedInputMethods() never return NULL.
   scoped_ptr<input_method::InputMethodDescriptors> descriptors(
       manager->GetSupportedInputMethods());
-  localized_strings->Set("languageList", GetLanguageList(*descriptors));
+  localized_strings->Set("languageList", GetAcceptLanguageList(*descriptors));
   localized_strings->Set("inputMethodList", GetInputMethodList(*descriptors));
-  localized_strings->Set("extensionImeList", GetExtensionImeList());
+
+  input_method::InputMethodDescriptors ext_ime_descriptors;
+  manager->GetInputMethodExtensions(&ext_ime_descriptors);
+  localized_strings->Set("extensionImeList",
+                         ConvertInputMethodDescriptosToIMEList(
+                             ext_ime_descriptors));
+
+  ComponentExtensionIMEManager* component_extension_manager =
+      input_method::InputMethodManager::Get()
+          ->GetComponentExtensionIMEManager();
+  if (component_extension_manager->IsInitialized()) {
+    localized_strings->Set(
+        "componentExtensionImeList",
+        ConvertInputMethodDescriptosToIMEList(
+            component_extension_manager->GetAllIMEAsInputMethodDescriptor()));
+    composition_extension_appended_ = true;
+  } else {
+    // If component extension IME manager is not ready for use, it will be
+    // added in |InitializePage()|.
+    localized_strings->Set("componentExtensionImeList",
+                           new ListValue());
+  }
 }
 
 void CrosLanguageOptionsHandler::RegisterMessages() {
@@ -105,14 +145,13 @@ void CrosLanguageOptionsHandler::RegisterMessages() {
 ListValue* CrosLanguageOptionsHandler::GetInputMethodList(
     const input_method::InputMethodDescriptors& descriptors) {
   input_method::InputMethodManager* manager =
-      input_method::GetInputMethodManager();
+      input_method::InputMethodManager::Get();
 
   ListValue* input_method_list = new ListValue();
 
   for (size_t i = 0; i < descriptors.size(); ++i) {
     const input_method::InputMethodDescriptor& descriptor =
         descriptors[i];
-    const std::string language_code = descriptor.language_code();
     const std::string display_name =
         manager->GetInputMethodUtil()->GetInputMethodDisplayNameFromId(
             descriptor.id());
@@ -122,16 +161,18 @@ ListValue* CrosLanguageOptionsHandler::GetInputMethodList(
 
     // One input method can be associated with multiple languages, hence
     // we use a dictionary here.
-    DictionaryValue* language_codes = new DictionaryValue();
-    language_codes->SetBoolean(language_code, true);
+    DictionaryValue* languages = new DictionaryValue();
+    for (size_t i = 0; i < descriptor.language_codes().size(); ++i) {
+      languages->SetBoolean(descriptor.language_codes().at(i), true);
+    }
     // Check extra languages to see if there are languages associated with
     // this input method. If these are present, add these.
     const std::vector<std::string> extra_language_codes =
         manager->GetInputMethodUtil()->GetExtraLanguageCodesFromId(
             descriptor.id());
     for (size_t j = 0; j < extra_language_codes.size(); ++j)
-      language_codes->SetBoolean(extra_language_codes[j], true);
-    dictionary->Set("languageCodeSet", language_codes);
+      languages->SetBoolean(extra_language_codes[j], true);
+    dictionary->Set("languageCodeSet", languages);
 
     input_method_list->Append(dictionary);
   }
@@ -139,18 +180,24 @@ ListValue* CrosLanguageOptionsHandler::GetInputMethodList(
   return input_method_list;
 }
 
-ListValue* CrosLanguageOptionsHandler::GetLanguageList(
-    const input_method::InputMethodDescriptors& descriptors) {
+// static
+ListValue* CrosLanguageOptionsHandler::GetLanguageListInternal(
+    const input_method::InputMethodDescriptors& descriptors,
+    const std::vector<std::string>& base_language_codes) {
+  const std::string app_locale = g_browser_process->GetApplicationLocale();
+
   std::set<std::string> language_codes;
   // Collect the language codes from the supported input methods.
   for (size_t i = 0; i < descriptors.size(); ++i) {
     const input_method::InputMethodDescriptor& descriptor = descriptors[i];
-    const std::string language_code = descriptor.language_code();
-    language_codes.insert(language_code);
+    const std::vector<std::string>& languages =
+        descriptor.language_codes();
+    for (size_t i = 0; i < languages.size(); ++i)
+      language_codes.insert(languages[i]);
   }
   // Collect the language codes from extra languages.
   const std::vector<std::string> extra_language_codes =
-      input_method::GetInputMethodManager()->GetInputMethodUtil()
+      input_method::InputMethodManager::Get()->GetInputMethodUtil()
           ->GetExtraLanguageCodeList();
   for (size_t i = 0; i < extra_language_codes.size(); ++i)
     language_codes.insert(extra_language_codes[i]);
@@ -168,22 +215,49 @@ ListValue* CrosLanguageOptionsHandler::GetLanguageList(
   // Build the list of display names, and build the language map.
   for (std::set<std::string>::const_iterator iter = language_codes.begin();
        iter != language_codes.end(); ++iter) {
-    input_method::InputMethodUtil* input_method_util =
-        input_method::GetInputMethodManager()->GetInputMethodUtil();
+     // Exclude the language which is not in |base_langauge_codes| even it has
+     // input methods.
+    if (std::find(base_language_codes.begin(),
+                  base_language_codes.end(),
+                  *iter) == base_language_codes.end()) {
+      continue;
+    }
+
     const string16 display_name =
-        input_method_util->GetLanguageDisplayNameFromCode(*iter);
+        l10n_util::GetDisplayNameForLocale(*iter, app_locale, true);
     const string16 native_display_name =
-        input_method::InputMethodUtil::GetLanguageNativeDisplayNameFromCode(
-            *iter);
+        l10n_util::GetDisplayNameForLocale(*iter, *iter, true);
+
     display_names.push_back(display_name);
     language_map[display_name] =
         std::make_pair(*iter, native_display_name);
   }
   DCHECK_EQ(display_names.size(), language_map.size());
 
+  // Build the list of display names, and build the language map.
+  for (size_t i = 0; i < base_language_codes.size(); ++i) {
+    // Skip this language if it was already added.
+    if (language_codes.find(base_language_codes[i]) != language_codes.end())
+      continue;
+
+    // TODO(zork): Remove this blacklist when fonts are added to Chrome OS.
+    // see: crbug.com/240586
+    if (IsBlacklisted(base_language_codes[i]))
+      continue;
+
+    string16 display_name =
+        l10n_util::GetDisplayNameForLocale(
+            base_language_codes[i], app_locale, false);
+    string16 native_display_name =
+        l10n_util::GetDisplayNameForLocale(
+            base_language_codes[i], base_language_codes[i], false);
+    display_names.push_back(display_name);
+    language_map[display_name] =
+        std::make_pair(base_language_codes[i], native_display_name);
+  }
+
   // Sort display names using locale specific sorter.
-  l10n_util::SortStrings16(g_browser_process->GetApplicationLocale(),
-                           &display_names);
+  l10n_util::SortStrings16(app_locale, &display_names);
 
   // Build the language list from the language map.
   ListValue* language_list = new ListValue();
@@ -208,24 +282,40 @@ ListValue* CrosLanguageOptionsHandler::GetLanguageList(
   return language_list;
 }
 
-base::ListValue* CrosLanguageOptionsHandler::GetExtensionImeList() {
-  input_method::InputMethodManager* manager =
-      input_method::GetInputMethodManager();
+// static
+base::ListValue* CrosLanguageOptionsHandler::GetAcceptLanguageList(
+    const input_method::InputMethodDescriptors& descriptors) {
+  // Collect the language codes from the supported accept-languages.
+  const std::string app_locale = g_browser_process->GetApplicationLocale();
+  std::vector<std::string> accept_language_codes;
+  l10n_util::GetAcceptLanguagesForLocale(app_locale, &accept_language_codes);
+  return GetLanguageListInternal(descriptors, accept_language_codes);
+}
 
-  input_method::InputMethodDescriptors descriptors;
-  manager->GetInputMethodExtensions(&descriptors);
+// static
+base::ListValue* CrosLanguageOptionsHandler::GetUILanguageList(
+    const input_method::InputMethodDescriptors& descriptors) {
+  // Collect the language codes from the available locales.
+  return GetLanguageListInternal(descriptors, l10n_util::GetAvailableLocales());
+}
 
-  ListValue* extension_ime_ids_list = new ListValue();
-
+base::ListValue*
+    CrosLanguageOptionsHandler::ConvertInputMethodDescriptosToIMEList(
+        const input_method::InputMethodDescriptors& descriptors) {
+  scoped_ptr<ListValue> ime_ids_list(new ListValue());
   for (size_t i = 0; i < descriptors.size(); ++i) {
     const input_method::InputMethodDescriptor& descriptor = descriptors[i];
-    DictionaryValue* dictionary = new DictionaryValue();
+    scoped_ptr<DictionaryValue> dictionary(new DictionaryValue());
     dictionary->SetString("id", descriptor.id());
     dictionary->SetString("displayName", descriptor.name());
-    extension_ime_ids_list->Append(dictionary);
+    dictionary->SetString("optionsPage", descriptor.options_page_url().spec());
+    scoped_ptr<DictionaryValue> language_codes(new DictionaryValue());
+    for (size_t i = 0; i < descriptor.language_codes().size(); ++i)
+      language_codes->SetBoolean(descriptor.language_codes().at(i), true);
+    dictionary->Set("languageCodeSet", language_codes.release());
+    ime_ids_list->Append(dictionary.release());
   }
-
-  return extension_ime_ids_list;
+  return ime_ids_list.release();
 }
 
 string16 CrosLanguageOptionsHandler::GetProductName() {
@@ -265,6 +355,50 @@ void CrosLanguageOptionsHandler::InputMethodOptionsOpenCallback(
   const std::string action = base::StringPrintf(
       "InputMethodOptions_Open_%s", input_method_id.c_str());
   content::RecordComputedAction(action);
+}
+
+void CrosLanguageOptionsHandler::OnInitialized() {
+  if (composition_extension_appended_ || !is_page_initialized_) {
+    // If an option page is not ready to call JavaScript, appending component
+    // extension IMEs will be done in InitializePage function later.
+    return;
+  }
+
+  ComponentExtensionIMEManager* manager =
+      input_method::InputMethodManager::Get()
+          ->GetComponentExtensionIMEManager();
+
+  DCHECK(manager->IsInitialized());
+  scoped_ptr<ListValue> ime_list(
+      ConvertInputMethodDescriptosToIMEList(
+          manager->GetAllIMEAsInputMethodDescriptor()));
+  web_ui()->CallJavascriptFunction(
+      "options.LanguageOptions.onComponentManagerInitialized",
+      *ime_list);
+  composition_extension_appended_ = true;
+}
+
+void CrosLanguageOptionsHandler::InitializePage() {
+  is_page_initialized_ = true;
+  if (composition_extension_appended_)
+    return;
+
+  ComponentExtensionIMEManager* component_extension_manager =
+      input_method::InputMethodManager::Get()
+          ->GetComponentExtensionIMEManager();
+  if (!component_extension_manager->IsInitialized()) {
+    // If the component extension IME manager is not available yet, append the
+    // component extension list in |OnInitialized()|.
+    return;
+  }
+
+  scoped_ptr<ListValue> ime_list(
+      ConvertInputMethodDescriptosToIMEList(
+          component_extension_manager->GetAllIMEAsInputMethodDescriptor()));
+  web_ui()->CallJavascriptFunction(
+      "options.LanguageOptions.onComponentManagerInitialized",
+      *ime_list);
+  composition_extension_appended_ = true;
 }
 
 }  // namespace options

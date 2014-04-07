@@ -4,8 +4,9 @@
 
 #include "ppapi/host/resource_message_filter.h"
 
-#include "base/message_loop.h"
-#include "base/message_loop_proxy.h"
+#include "base/bind.h"
+#include "base/message_loop/message_loop.h"
+#include "base/message_loop/message_loop_proxy.h"
 #include "base/task_runner.h"
 #include "ipc/ipc_message.h"
 #include "ppapi/c/pp_errors.h"
@@ -17,9 +18,8 @@ namespace host {
 
 ResourceMessageFilter::ResourceMessageFilter()
     : reply_thread_message_loop_proxy_(
-           MessageLoop::current()->message_loop_proxy()),
-      resource_host_(NULL) {
-}
+          base::MessageLoop::current()->message_loop_proxy()),
+      resource_host_(NULL) {}
 
 ResourceMessageFilter::ResourceMessageFilter(
     scoped_refptr<base::MessageLoopProxy> reply_thread_message_loop_proxy)
@@ -41,12 +41,17 @@ void ResourceMessageFilter::OnFilterDestroyed() {
 bool ResourceMessageFilter::HandleMessage(const IPC::Message& msg,
                                           HostMessageContext* context) {
   scoped_refptr<base::TaskRunner> runner = OverrideTaskRunnerForMessage(msg);
-  if (runner) {
-    // TODO(raymes): We need to make a copy so the context can be used on other
-    // threads. It would be better to have a thread-safe refcounted context.
-    HostMessageContext context_copy = *context;
-    runner->PostTask(FROM_HERE, base::Bind(
-        &ResourceMessageFilter::DispatchMessage, this, msg, context_copy));
+  if (runner.get()) {
+    if (runner->RunsTasksOnCurrentThread()) {
+      DispatchMessage(msg, *context);
+    } else {
+      // TODO(raymes): We need to make a copy so the context can be used on
+      // other threads. It would be better to have a thread-safe refcounted
+      // context.
+      HostMessageContext context_copy = *context;
+      runner->PostTask(FROM_HERE, base::Bind(
+          &ResourceMessageFilter::DispatchMessage, this, msg, context_copy));
+    }
     return true;
   }
 

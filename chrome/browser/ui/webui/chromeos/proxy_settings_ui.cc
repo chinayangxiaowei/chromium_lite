@@ -6,14 +6,14 @@
 
 #include "base/memory/ref_counted_memory.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
 #include "base/values.h"
-#include "chrome/browser/chromeos/proxy_config_service_impl.h"
-#include "chrome/browser/chromeos/settings/cros_settings.h"
+#include "chrome/browser/chromeos/system/input_device_settings.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/options/chromeos/core_chromeos_options_handler.h"
 #include "chrome/browser/ui/webui/options/chromeos/proxy_handler.h"
+#include "chrome/common/chrome_constants.h"
 #include "chrome/common/url_constants.h"
+#include "chromeos/chromeos_constants.h"
 #include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
@@ -33,10 +33,11 @@ class ProxySettingsHTMLSource : public content::URLDataSource {
   explicit ProxySettingsHTMLSource(DictionaryValue* localized_strings);
 
   // content::URLDataSource implementation.
-  virtual std::string GetSource() OVERRIDE;
+  virtual std::string GetSource() const OVERRIDE;
   virtual void StartDataRequest(
       const std::string& path,
-      bool is_incognito,
+      int render_process_id,
+      int render_view_id,
       const content::URLDataSource::GotDataCallback& callback) OVERRIDE;
   virtual std::string GetMimeType(const std::string&) const OVERRIDE {
     return "text/html";
@@ -59,13 +60,14 @@ ProxySettingsHTMLSource::ProxySettingsHTMLSource(
     : localized_strings_(localized_strings) {
 }
 
-std::string ProxySettingsHTMLSource::GetSource() {
+std::string ProxySettingsHTMLSource::GetSource() const {
   return chrome::kChromeUIProxySettingsHost;
 }
 
 void ProxySettingsHTMLSource::StartDataRequest(
     const std::string& path,
-    bool is_incognito,
+    int render_process_id,
+    int render_view_id,
     const content::URLDataSource::GotDataCallback& callback) {
   webui::SetFontAndTextDirection(localized_strings_.get());
 
@@ -84,6 +86,7 @@ namespace chromeos {
 
 ProxySettingsUI::ProxySettingsUI(content::WebUI* web_ui)
     : WebUIController(web_ui),
+      initialized_handlers_(false),
       proxy_handler_(new options::ProxyHandler()),
       core_handler_(new options::CoreChromeOSOptionsHandler()) {
   // |localized_strings| will be owned by ProxySettingsHTMLSource.
@@ -95,6 +98,11 @@ ProxySettingsUI::ProxySettingsUI(content::WebUI* web_ui)
 
   proxy_handler_->GetLocalizedValues(localized_strings);
   web_ui->AddMessageHandler(proxy_handler_);
+
+  bool keyboard_driven_oobe =
+      system::keyboard_settings::ForceKeyboardDrivenUINavigation();
+  localized_strings->SetString("highlightStrength",
+                               keyboard_driven_oobe ? "strong" : "normal");
 
   ProxySettingsHTMLSource* source =
       new ProxySettingsHTMLSource(localized_strings);
@@ -110,15 +118,16 @@ ProxySettingsUI::~ProxySettingsUI() {
 }
 
 void ProxySettingsUI::InitializeHandlers() {
-  core_handler_->InitializeHandler();
-  proxy_handler_->InitializeHandler();
+  // A new web page DOM has been brought up in an existing renderer, causing
+  // this method to be called twice. In that case, don't initialize the handlers
+  // again. Compare with options_ui.cc.
+  if (!initialized_handlers_) {
+    core_handler_->InitializeHandler();
+    proxy_handler_->InitializeHandler();
+    initialized_handlers_ = true;
+  }
   core_handler_->InitializePage();
   proxy_handler_->InitializePage();
-  Profile* profile = Profile::FromWebUI(web_ui());
-  PrefProxyConfigTracker* proxy_tracker = profile->GetProxyConfigTracker();
-  proxy_tracker->UIMakeActiveNetworkCurrent();
-  std::string network_name;
-  proxy_tracker->UIGetCurrentNetworkName(&network_name);
 }
 
 }  // namespace chromeos

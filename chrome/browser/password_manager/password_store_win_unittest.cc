@@ -11,20 +11,20 @@
 #include "base/bind_helpers.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/prefs/pref_service.h"
 #include "base/stl_util.h"
 #include "base/synchronization/waitable_event.h"
-#include "base/time.h"
-#include "chrome/browser/password_manager/ie7_password.h"
+#include "base/time/time.h"
 #include "chrome/browser/password_manager/password_form_data.h"
 #include "chrome/browser/password_manager/password_store_consumer.h"
 #include "chrome/browser/password_manager/password_store_win.h"
 #include "chrome/browser/webdata/logins_table.h"
 #include "chrome/browser/webdata/web_data_service.h"
-#include "chrome/browser/webdata/web_database_service.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_profile.h"
+#include "components/webdata/common/web_database_service.h"
+#include "components/webdata/encryptor/ie7_password.h"
 #include "content/public/test/test_browser_thread.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -117,10 +117,12 @@ class PasswordStoreWinTest : public testing::Test {
     ASSERT_TRUE(login_db_->Init(temp_dir_.path().Append(
         FILE_PATH_LITERAL("login_test"))));
     base::FilePath path = temp_dir_.path().AppendASCII("web_data_test");
-    wdbs_ = new WebDatabaseService(path);
+    wdbs_ = new WebDatabaseService(path,
+        BrowserThread::GetMessageLoopProxyForThread(BrowserThread::UI),
+        BrowserThread::GetMessageLoopProxyForThread(BrowserThread::DB));
     // Need to add at least one table so the database gets created.
     wdbs_->AddTable(scoped_ptr<WebDatabaseTable>(new LoginsTable()));
-    wdbs_->LoadDatabase(WebDatabaseService::InitCallback());
+    wdbs_->LoadDatabase();
     wds_ = new WebDataService(wdbs_,
                               WebDataServiceBase::ProfileErrorCallback());
     wds_->Init();
@@ -137,12 +139,13 @@ class PasswordStoreWinTest : public testing::Test {
     BrowserThread::PostTask(BrowserThread::DB, FROM_HERE,
         base::Bind(&base::WaitableEvent::Signal, base::Unretained(&done)));
     done.Wait();
-    MessageLoop::current()->PostTask(FROM_HERE, MessageLoop::QuitClosure());
-    MessageLoop::current()->Run();
+    base::MessageLoop::current()->PostTask(FROM_HERE,
+                                           base::MessageLoop::QuitClosure());
+    base::MessageLoop::current()->Run();
     db_thread_.Stop();
   }
 
-  MessageLoopForUI message_loop_;
+  base::MessageLoopForUI message_loop_;
   content::TestBrowserThread ui_thread_;
   // PasswordStore, WDS schedule work on this thread.
   content::TestBrowserThread db_thread_;
@@ -161,7 +164,7 @@ ACTION(STLDeleteElements0) {
 
 ACTION(QuitUIMessageLoop) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  MessageLoop::current()->Quit();
+  base::MessageLoop::current()->Quit();
 }
 
 MATCHER(EmptyWDResult, "") {
@@ -234,7 +237,7 @@ TEST_F(PasswordStoreWinTest, DISABLED_ConvertIE7Login) {
       .WillOnce(QuitUIMessageLoop());
 
   store_->GetLogins(*form, &consumer);
-  MessageLoop::current()->Run();
+  base::MessageLoop::current()->Run();
 
   STLDeleteElements(&forms);
 }
@@ -267,7 +270,7 @@ TEST_F(PasswordStoreWinTest, DISABLED_OutstandingWDSQueries) {
   store_ = NULL;
   wds_ = NULL;
 
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
 }
 
 // Hangs flakily, see http://crbug.com/43836.
@@ -341,8 +344,8 @@ TEST_F(PasswordStoreWinTest, DISABLED_MultipleWDSQueriesOnDifferentThreads) {
   // Run the MessageLoop twice: once for the GetIE7Login that PasswordStoreWin
   // schedules on the DB thread and once for the one we just scheduled on the UI
   // thread.
-  MessageLoop::current()->Run();
-  MessageLoop::current()->Run();
+  base::MessageLoop::current()->Run();
+  base::MessageLoop::current()->Run();
 
   STLDeleteElements(&forms);
 }
@@ -379,7 +382,7 @@ TEST_F(PasswordStoreWinTest, EmptyLogins) {
       .WillOnce(DoAll(WithArg<0>(STLDeleteElements0()), QuitUIMessageLoop()));
 
   store_->GetLogins(*form, &consumer);
-  MessageLoop::current()->Run();
+  base::MessageLoop::current()->Run();
 }
 
 TEST_F(PasswordStoreWinTest, EmptyBlacklistLogins) {
@@ -401,7 +404,7 @@ TEST_F(PasswordStoreWinTest, EmptyBlacklistLogins) {
       .WillOnce(DoAll(WithArg<1>(STLDeleteElements0()), QuitUIMessageLoop()));
 
   store_->GetBlacklistLogins(&consumer);
-  MessageLoop::current()->Run();
+  base::MessageLoop::current()->Run();
 }
 
 TEST_F(PasswordStoreWinTest, EmptyAutofillableLogins) {
@@ -423,5 +426,5 @@ TEST_F(PasswordStoreWinTest, EmptyAutofillableLogins) {
       .WillOnce(DoAll(WithArg<1>(STLDeleteElements0()), QuitUIMessageLoop()));
 
   store_->GetAutofillableLogins(&consumer);
-  MessageLoop::current()->Run();
+  base::MessageLoop::current()->Run();
 }

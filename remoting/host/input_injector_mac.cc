@@ -15,13 +15,13 @@
 #include "base/mac/scoped_cftyperef.h"
 #include "base/memory/ref_counted.h"
 #include "base/single_thread_task_runner.h"
-#include "media/video/capture/screen/mac/desktop_configuration.h"
 #include "remoting/host/clipboard.h"
 #include "remoting/proto/internal.pb.h"
 #include "remoting/protocol/message_decoder.h"
 #include "skia/ext/skia_utils_mac.h"
 #include "third_party/skia/include/core/SkPoint.h"
 #include "third_party/skia/include/core/SkRect.h"
+#include "third_party/webrtc/modules/desktop_capture/mac/desktop_configuration.h"
 
 namespace remoting {
 
@@ -166,14 +166,18 @@ void InputInjectorMac::Core::InjectKeyEvent(const KeyEvent& event) {
   if (keycode == InvalidNativeKeycode())
     return;
 
-  // We use the deprecated event injection API because the new one doesn't
-  // work with switched-out sessions (curtain mode).
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-  CGError error = CGPostKeyboardEvent(0, keycode, event.pressed());
-#pragma clang diagnostic pop
-  if (error != kCGErrorSuccess)
-    LOG(WARNING) << "CGPostKeyboardEvent error " << error;
+  base::ScopedCFTypeRef<CGEventRef> eventRef(
+      CGEventCreateKeyboardEvent(NULL, keycode, event.pressed()));
+
+  if (eventRef) {
+    // We only need to manually set CapsLock: Mac ignores NumLock.
+    // Modifier keys work correctly already via press/release event injection.
+    if (event.lock_states() & protocol::KeyEvent::LOCK_STATES_CAPSLOCK)
+      CGEventSetFlags(eventRef, kCGEventFlagMaskAlphaShift);
+
+    // Post the event to the current session.
+    CGEventPost(kCGSessionEventTap, eventRef);
+  }
 }
 
 void InputInjectorMac::Core::InjectMouseEvent(const MouseEvent& event) {
@@ -191,9 +195,9 @@ void InputInjectorMac::Core::InjectMouseEvent(const MouseEvent& event) {
     // response to display-changed events. VideoFrameCapturer's VideoFrames
     // could be augmented to include native cursor coordinates for use by
     // MouseClampingFilter, removing the need for translation here.
-    media::MacDesktopConfiguration desktop_config =
-        media::MacDesktopConfiguration::GetCurrent(
-            media::MacDesktopConfiguration::TopLeftOrigin);
+    webrtc::MacDesktopConfiguration desktop_config =
+        webrtc::MacDesktopConfiguration::GetCurrent(
+            webrtc::MacDesktopConfiguration::TopLeftOrigin);
 
     // Translate the mouse position into desktop coordinates.
     mouse_pos_ += SkIPoint::Make(desktop_config.pixel_bounds.left(),
@@ -251,9 +255,8 @@ void InputInjectorMac::Core::InjectMouseEvent(const MouseEvent& event) {
   if (event.has_wheel_delta_x() && event.has_wheel_delta_y()) {
     int delta_x = static_cast<int>(event.wheel_delta_x());
     int delta_y = static_cast<int>(event.wheel_delta_y());
-    base::mac::ScopedCFTypeRef<CGEventRef> event(
-        CGEventCreateScrollWheelEvent(
-            NULL, kCGScrollEventUnitPixel, 2, delta_y, delta_x));
+    base::ScopedCFTypeRef<CGEventRef> event(CGEventCreateScrollWheelEvent(
+        NULL, kCGScrollEventUnitPixel, 2, delta_y, delta_x));
     if (event)
       CGEventPost(kCGSessionEventTap, event);
   }

@@ -4,11 +4,11 @@
 
 #include "chrome/browser/extensions/extension_function_registry.h"
 
-#include "chrome/browser/extensions/api/browsing_data/browsing_data_api.h"
+#include "chrome/browser/extensions/api/identity/experimental_identity_api.h"
+#include "chrome/browser/extensions/api/preference/chrome_direct_setting.h"
 #include "chrome/browser/extensions/api/preference/preference_api.h"
 #include "chrome/browser/extensions/api/runtime/runtime_api.h"
 #include "chrome/browser/extensions/api/web_request/web_request_api.h"
-#include "chrome/browser/extensions/api/webstore_private/webstore_private_api.h"
 #include "chrome/browser/rlz/rlz_extension_api.h"
 #include "chrome/common/extensions/api/generated_api.h"
 
@@ -29,22 +29,6 @@ void ExtensionFunctionRegistry::ResetFunctions() {
 
   // Register all functions here.
 
-  // Browsing Data.
-  RegisterFunction<BrowsingDataSettingsFunction>();
-  RegisterFunction<RemoveBrowsingDataFunction>();
-  RegisterFunction<RemoveAppCacheFunction>();
-  RegisterFunction<RemoveCacheFunction>();
-  RegisterFunction<RemoveCookiesFunction>();
-  RegisterFunction<RemoveDownloadsFunction>();
-  RegisterFunction<RemoveFileSystemsFunction>();
-  RegisterFunction<RemoveFormDataFunction>();
-  RegisterFunction<RemoveHistoryFunction>();
-  RegisterFunction<RemoveIndexedDBFunction>();
-  RegisterFunction<RemoveLocalStorageFunction>();
-  RegisterFunction<RemovePluginDataFunction>();
-  RegisterFunction<RemovePasswordsFunction>();
-  RegisterFunction<RemoveWebSQLFunction>();
-
   // RLZ (not supported on ChromeOS yet).
 #if defined(ENABLE_RLZ) && !defined(OS_CHROMEOS)
   RegisterFunction<RlzRecordProductEventFunction>();
@@ -62,20 +46,21 @@ void ExtensionFunctionRegistry::ResetFunctions() {
   RegisterFunction<extensions::SetPreferenceFunction>();
   RegisterFunction<extensions::ClearPreferenceFunction>();
 
-  // WebstorePrivate.
-  RegisterFunction<extensions::GetBrowserLoginFunction>();
-  RegisterFunction<extensions::GetStoreLoginFunction>();
-  RegisterFunction<extensions::SetStoreLoginFunction>();
-  RegisterFunction<extensions::InstallBundleFunction>();
-  RegisterFunction<extensions::BeginInstallWithManifestFunction>();
-  RegisterFunction<extensions::CompleteInstallFunction>();
-  RegisterFunction<extensions::GetWebGLStatusFunction>();
-  RegisterFunction<extensions::GetIsLauncherEnabledFunction>();
+  // Direct Preference Access for Component Extensions.
+  RegisterFunction<extensions::chromedirectsetting::GetDirectSettingFunction>();
+  RegisterFunction<extensions::chromedirectsetting::SetDirectSettingFunction>();
+  RegisterFunction<
+      extensions::chromedirectsetting::ClearDirectSettingFunction>();
 
   // Runtime
   RegisterFunction<extensions::RuntimeGetBackgroundPageFunction>();
+  RegisterFunction<extensions::RuntimeSetUninstallUrlFunction>();
   RegisterFunction<extensions::RuntimeReloadFunction>();
   RegisterFunction<extensions::RuntimeRequestUpdateCheckFunction>();
+
+  // ExperimentalIdentity.
+  RegisterFunction<extensions::ExperimentalIdentityGetAuthTokenFunction>();
+  RegisterFunction<extensions::ExperimentalIdentityLaunchWebAuthFlowFunction>();
 
   // Generated APIs
   extensions::api::GeneratedFunctionRegistry::RegisterAll(this);

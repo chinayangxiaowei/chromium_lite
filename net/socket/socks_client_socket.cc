@@ -164,22 +164,6 @@ bool SOCKSClientSocket::UsingTCPFastOpen() const {
   return false;
 }
 
-int64 SOCKSClientSocket::NumBytesRead() const {
-  if (transport_.get() && transport_->socket()) {
-    return transport_->socket()->NumBytesRead();
-  }
-  NOTREACHED();
-  return -1;
-}
-
-base::TimeDelta SOCKSClientSocket::GetConnectTimeMicros() const {
-  if (transport_.get() && transport_->socket()) {
-    return transport_->socket()->GetConnectTimeMicros();
-  }
-  NOTREACHED();
-  return base::TimeDelta::FromMicroseconds(-1);
-}
-
 bool SOCKSClientSocket::WasNpnNegotiated() const {
   if (transport_.get() && transport_->socket()) {
     return transport_->socket()->WasNpnNegotiated();
@@ -359,7 +343,8 @@ int SOCKSClientSocket::DoHandshakeWrite() {
   memcpy(handshake_buf_->data(), &buffer_[bytes_sent_],
          handshake_buf_len);
   return transport_->socket()->Write(
-      handshake_buf_, handshake_buf_len,
+      handshake_buf_.get(),
+      handshake_buf_len,
       base::Bind(&SOCKSClientSocket::OnIOComplete, base::Unretained(this)));
 }
 
@@ -392,9 +377,10 @@ int SOCKSClientSocket::DoHandshakeRead() {
 
   int handshake_buf_len = kReadHeaderSize - bytes_received_;
   handshake_buf_ = new IOBuffer(handshake_buf_len);
-  return transport_->socket()->Read(handshake_buf_, handshake_buf_len,
-                                    base::Bind(&SOCKSClientSocket::OnIOComplete,
-                                               base::Unretained(this)));
+  return transport_->socket()->Read(
+      handshake_buf_.get(),
+      handshake_buf_len,
+      base::Bind(&SOCKSClientSocket::OnIOComplete, base::Unretained(this)));
 }
 
 int SOCKSClientSocket::DoHandshakeReadComplete(int result) {

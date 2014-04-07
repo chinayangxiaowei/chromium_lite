@@ -12,11 +12,11 @@
 #include "base/prefs/pref_registry_simple.h"
 #include "base/prefs/pref_service.h"
 #include "base/rand_util.h"
-#include "base/string_util.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
 #include "base/sys_info.h"
 #include "base/threading/thread_restrictions.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/web_resource/promo_resource_service.h"
@@ -24,8 +24,8 @@
 #include "chrome/common/pref_names.h"
 #include "components/user_prefs/pref_registry_syncable.h"
 #include "content/public/browser/user_metrics.h"
-#include "googleurl/src/gurl.h"
 #include "net/base/url_util.h"
+#include "url/gurl.h"
 
 #if defined(OS_ANDROID)
 #include "base/command_line.h"
@@ -316,12 +316,13 @@ void NotificationPromo::RegisterPrefs(PrefRegistrySimple* registry) {
 }
 
 // static
-void NotificationPromo::RegisterUserPrefs(PrefRegistrySyncable* registry) {
+void NotificationPromo::RegisterProfilePrefs(
+    user_prefs::PrefRegistrySyncable* registry) {
   // TODO(dbeam): Registered only for migration. Remove in M28 when
   // we're reasonably sure all prefs are gone.
   // http://crbug.com/168887
-  registry->RegisterDictionaryPref(kPrefPromoObject,
-                                   PrefRegistrySyncable::UNSYNCABLE_PREF);
+  registry->RegisterDictionaryPref(
+      kPrefPromoObject, user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
 }
 
 // static
@@ -397,12 +398,16 @@ void NotificationPromo::InitFromPrefs(PromoType promo_type) {
 }
 
 bool NotificationPromo::CheckAppLauncher() const {
+#if defined(OS_IOS)
+  return true;
+#else
   bool is_app_launcher_promo = false;
   if (!promo_payload_->GetBoolean("is_app_launcher_promo",
                                   &is_app_launcher_promo))
     return true;
   return !is_app_launcher_promo ||
          !prefs_->GetBoolean(apps::prefs::kAppLauncherIsEnabled);
+#endif  // defined(OS_IOS)
 }
 
 bool NotificationPromo::CanShow() const {

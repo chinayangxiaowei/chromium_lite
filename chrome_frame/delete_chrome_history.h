@@ -11,7 +11,7 @@
 
 #include <deletebrowsinghistory.h>
 
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "chrome_frame/bho.h"
 #include "chrome_frame/chrome_frame_plugin.h"
 #include "chrome_frame/chrome_tab.h"
@@ -57,7 +57,7 @@ END_MSG_MAP()
 
  private:
   unsigned long remove_mask_;
-  MessageLoopForUI loop_;
+  base::MessageLoopForUI loop_;
 };
 
 #endif  // CHROME_FRAME_DELETE_CHROME_HISTORY_H_

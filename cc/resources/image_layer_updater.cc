@@ -17,8 +17,7 @@ ImageLayerUpdater::Resource::~Resource() {}
 void ImageLayerUpdater::Resource::Update(ResourceUpdateQueue* queue,
                                          gfx::Rect source_rect,
                                          gfx::Vector2d dest_offset,
-                                         bool partial_update,
-                                         RenderingStats*) {
+                                         bool partial_update) {
   updater_->UpdateTexture(
       queue, texture(), source_rect, dest_offset, partial_update);
 }
@@ -57,4 +56,13 @@ void ImageLayerUpdater::UpdateTexture(ResourceUpdateQueue* queue,
     queue->AppendFullUpload(upload);
 }
 
+void ImageLayerUpdater::SetBitmap(const SkBitmap& bitmap) {
+  DCHECK(bitmap.pixelRef());
+  bitmap_ = bitmap;
 }
+
+bool ImageLayerUpdater::UsingBitmap(const SkBitmap& bitmap) const {
+  return bitmap.pixelRef() == bitmap_.pixelRef();
+}
+
+}  // namespace cc

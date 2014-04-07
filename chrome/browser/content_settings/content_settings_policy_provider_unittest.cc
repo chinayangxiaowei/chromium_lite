@@ -9,7 +9,7 @@
 #include "base/auto_reset.h"
 #include "base/command_line.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/prefs/pref_service.h"
 #include "chrome/browser/content_settings/content_settings_mock_observer.h"
 #include "chrome/browser/content_settings/content_settings_rule.h"
@@ -20,8 +20,8 @@
 #include "chrome/test/base/testing_pref_service_syncable.h"
 #include "chrome/test/base/testing_profile.h"
 #include "content/public/test/test_browser_thread.h"
-#include "googleurl/src/gurl.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/gurl.h"
 
 using ::testing::_;
 using content::BrowserThread;
@@ -41,7 +41,7 @@ class PolicyProviderTest : public testing::Test {
   // from NonThreadSafe and to use native thread identifiers instead of
   // BrowserThread IDs. Then we could get rid of the message_loop and ui_thread
   // fields.
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
   content::TestBrowserThread ui_thread_;
 };
 
@@ -150,22 +150,34 @@ TEST_F(PolicyProviderTest, GettingManagedContentSettings) {
   GURL google_url("http://mail.google.com");
 
   EXPECT_EQ(CONTENT_SETTING_DEFAULT,
-            GetContentSetting(
-                &provider, youtube_url, youtube_url,
-                CONTENT_SETTINGS_TYPE_COOKIES, "", false));
+            GetContentSetting(&provider,
+                              youtube_url,
+                              youtube_url,
+                              CONTENT_SETTINGS_TYPE_COOKIES,
+                              std::string(),
+                              false));
   EXPECT_EQ(NULL,
-            GetContentSettingValue(
-                &provider, youtube_url, youtube_url,
-                CONTENT_SETTINGS_TYPE_COOKIES, "", false));
+            GetContentSettingValue(&provider,
+                                   youtube_url,
+                                   youtube_url,
+                                   CONTENT_SETTINGS_TYPE_COOKIES,
+                                   std::string(),
+                                   false));
 
   EXPECT_EQ(CONTENT_SETTING_BLOCK,
-            GetContentSetting(
-                &provider, google_url, google_url,
-                CONTENT_SETTINGS_TYPE_IMAGES, "", false));
+            GetContentSetting(&provider,
+                              google_url,
+                              google_url,
+                              CONTENT_SETTINGS_TYPE_IMAGES,
+                              std::string(),
+                              false));
   scoped_ptr<Value> value_ptr(
-      GetContentSettingValue(
-          &provider, google_url, google_url,
-          CONTENT_SETTINGS_TYPE_IMAGES, "", false));
+      GetContentSettingValue(&provider,
+                             google_url,
+                             google_url,
+                             CONTENT_SETTINGS_TYPE_IMAGES,
+                             std::string(),
+                             false));
 
   int int_value = -1;
   value_ptr->GetAsInteger(&int_value);
@@ -176,17 +188,19 @@ TEST_F(PolicyProviderTest, GettingManagedContentSettings) {
   // SetWebsiteSetting does nothing.
   scoped_ptr<base::Value> value_block(
       Value::CreateIntegerValue(CONTENT_SETTING_BLOCK));
-  bool owned = provider.SetWebsiteSetting(
-      yt_url_pattern,
-      yt_url_pattern,
-      CONTENT_SETTINGS_TYPE_COOKIES,
-      "",
-      value_block.get());
+  bool owned = provider.SetWebsiteSetting(yt_url_pattern,
+                                          yt_url_pattern,
+                                          CONTENT_SETTINGS_TYPE_COOKIES,
+                                          std::string(),
+                                          value_block.get());
   EXPECT_FALSE(owned);
   EXPECT_EQ(CONTENT_SETTING_DEFAULT,
-            GetContentSetting(
-                &provider, youtube_url, youtube_url,
-                CONTENT_SETTINGS_TYPE_COOKIES, "", false));
+            GetContentSetting(&provider,
+                              youtube_url,
+                              youtube_url,
+                              CONTENT_SETTINGS_TYPE_COOKIES,
+                              std::string(),
+                              false));
 
   provider.ShutdownOnUIThread();
 }
@@ -213,9 +227,12 @@ TEST_F(PolicyProviderTest, ResourceIdentifier) {
   // There is currently no policy support for resource content settings.
   // Resource identifiers are simply ignored by the PolicyProvider.
   EXPECT_EQ(CONTENT_SETTING_ALLOW,
-            GetContentSetting(
-                &provider, google_url, google_url,
-                CONTENT_SETTINGS_TYPE_PLUGINS, "", false));
+            GetContentSetting(&provider,
+                              google_url,
+                              google_url,
+                              CONTENT_SETTINGS_TYPE_PLUGINS,
+                              std::string(),
+                              false));
 
   EXPECT_EQ(CONTENT_SETTING_DEFAULT,
             GetContentSetting(
@@ -232,10 +249,14 @@ TEST_F(PolicyProviderTest, AutoSelectCertificateList) {
   PolicyProvider provider(prefs);
   GURL google_url("https://mail.google.com");
   // Tests the default setting for auto selecting certificates
-  EXPECT_EQ(NULL,
-            GetContentSettingValue(
-                &provider, google_url, google_url,
-                CONTENT_SETTINGS_TYPE_AUTO_SELECT_CERTIFICATE, "", false));
+  EXPECT_EQ(
+      NULL,
+      GetContentSettingValue(&provider,
+                             google_url,
+                             google_url,
+                             CONTENT_SETTINGS_TYPE_AUTO_SELECT_CERTIFICATE,
+                             std::string(),
+                             false));
 
   // Set the content settings pattern list for origins to auto select
   // certificates.
@@ -247,13 +268,21 @@ TEST_F(PolicyProviderTest, AutoSelectCertificateList) {
   prefs->SetManagedPref(prefs::kManagedAutoSelectCertificateForUrls,
                         value);
   GURL youtube_url("https://www.youtube.com");
-  EXPECT_EQ(NULL,
-            GetContentSettingValue(
-                &provider, youtube_url, youtube_url,
-                CONTENT_SETTINGS_TYPE_AUTO_SELECT_CERTIFICATE, "", false));
-  scoped_ptr<Value> cert_filter(GetContentSettingValue(
-      &provider, google_url, google_url,
-      CONTENT_SETTINGS_TYPE_AUTO_SELECT_CERTIFICATE, "", false));
+  EXPECT_EQ(
+      NULL,
+      GetContentSettingValue(&provider,
+                             youtube_url,
+                             youtube_url,
+                             CONTENT_SETTINGS_TYPE_AUTO_SELECT_CERTIFICATE,
+                             std::string(),
+                             false));
+  scoped_ptr<Value> cert_filter(
+      GetContentSettingValue(&provider,
+                             google_url,
+                             google_url,
+                             CONTENT_SETTINGS_TYPE_AUTO_SELECT_CERTIFICATE,
+                             std::string(),
+                             false));
 
   ASSERT_EQ(Value::TYPE_DICTIONARY, cert_filter->GetType());
   DictionaryValue* dict_value =

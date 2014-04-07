@@ -9,14 +9,15 @@
 
 #include "base/gtest_prod_util.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/shared_memory.h"
-#include "base/time.h"
+#include "base/memory/shared_memory.h"
+#include "base/memory/weak_ptr.h"
+#include "base/time/time.h"
 #include "content/public/renderer/render_view_observer.h"
 #include "content/public/renderer/render_view_observer_tracker.h"
 #include "printing/metafile_impl.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebCanvas.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebNode.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebPrintParams.h"
+#include "third_party/WebKit/public/platform/WebCanvas.h"
+#include "third_party/WebKit/public/web/WebNode.h"
+#include "third_party/WebKit/public/web/WebPrintParams.h"
 #include "ui/gfx/size.h"
 
 struct PrintMsg_Print_Params;
@@ -37,6 +38,24 @@ namespace printing {
 struct PageSizeMargins;
 class PrepareFrameAndViewForPrint;
 
+// Stores reference to frame using WebVew and unique name.
+// Workaround to modal dialog issue on Linux. crbug.com/236147.
+class FrameReference {
+ public:
+  explicit FrameReference(const WebKit::WebFrame* frame);
+  FrameReference();
+  ~FrameReference();
+
+  void Reset(const WebKit::WebFrame* frame);
+
+  WebKit::WebFrame* GetFrame();
+  WebKit::WebView* view();
+
+ private:
+  WebKit::WebView* view_;
+  WebKit::WebString frame_name_;
+};
+
 // PrintWebViewHelper handles most of the printing grunt work for RenderView.
 // We plan on making print asynchronous and that will require copying the DOM
 // of the document and creating a new WebView with the contents.
@@ -46,6 +65,8 @@ class PrintWebViewHelper
  public:
   explicit PrintWebViewHelper(content::RenderView* render_view);
   virtual ~PrintWebViewHelper();
+
+  bool IsPrintingEnabled();
 
   void PrintNode(const WebKit::WebNode& node);
 
@@ -92,6 +113,8 @@ class PrintWebViewHelper
   // RenderViewObserver implementation.
   virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE;
   virtual void PrintPage(WebKit::WebFrame* frame, bool user_initiated) OVERRIDE;
+  virtual void DidStartLoading() OVERRIDE;
+  virtual void DidStopLoading() OVERRIDE;
 
   // Message handlers ---------------------------------------------------------
 
@@ -211,7 +234,7 @@ class PrintWebViewHelper
   void FinishFramePrinting();
 
   // Prints the page listed in |params|.
-#if defined(USE_X11)
+#if defined(OS_LINUX) || defined(OS_ANDROID)
   void PrintPageInternal(const PrintMsg_PrintPage_Params& params,
                          const gfx::Size& canvas_size,
                          WebKit::WebFrame* frame,
@@ -306,6 +329,9 @@ class PrintWebViewHelper
   // Scripted printing will be blocked for a limited amount of time.
   void IncrementScriptedPrintCount();
 
+  // Shows scripted print preview when options from plugin are availible.
+  void ShowScriptedPrintPreview();
+
   void RequestPrintPreview(PrintPreviewRequestType type);
 
   // Checks whether print preview should continue or not.
@@ -387,8 +413,8 @@ class PrintWebViewHelper
     // Helper functions
     int GetNextPageNumber();
     bool IsRendering() const;
-    bool IsModifiable() const;
-    bool HasSelection() const;
+    bool IsModifiable();
+    bool HasSelection();
     bool IsLastPageOfPrintReadyMetafile() const;
     bool IsFinalPageRendered() const;
 
@@ -427,7 +453,7 @@ class PrintWebViewHelper
     void ClearContext();
 
     // Specifies what to render for print preview.
-    WebKit::WebFrame* source_frame_;
+    FrameReference source_frame_;
     WebKit::WebNode source_node_;
 
     scoped_ptr<PrepareFrameAndViewForPrint> prep_frame_view_;
@@ -458,6 +484,9 @@ class PrintWebViewHelper
 
   bool print_node_in_progress_;
   PrintPreviewContext print_preview_context_;
+  bool is_loading_;
+  bool is_scripted_preview_delayed_;
+  base::WeakPtrFactory<PrintWebViewHelper> weak_ptr_factory_;
   DISALLOW_COPY_AND_ASSIGN(PrintWebViewHelper);
 };
 

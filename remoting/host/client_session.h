@@ -5,14 +5,14 @@
 #ifndef REMOTING_HOST_CLIENT_SESSION_H_
 #define REMOTING_HOST_CLIENT_SESSION_H_
 
-#include <list>
+#include <string>
 
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequenced_task_runner_helpers.h"
 #include "base/threading/non_thread_safe.h"
-#include "base/time.h"
-#include "base/timer.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "remoting/host/client_session_control.h"
 #include "remoting/host/mouse_clamping_filter.h"
 #include "remoting/host/remote_input_filter.h"
@@ -24,6 +24,7 @@
 #include "remoting/protocol/input_event_tracker.h"
 #include "remoting/protocol/input_filter.h"
 #include "remoting/protocol/input_stub.h"
+#include "remoting/protocol/pairing_registry.h"
 #include "third_party/skia/include/core/SkPoint.h"
 #include "third_party/skia/include/core/SkSize.h"
 
@@ -53,8 +54,9 @@ class ClientSession
   // Callback interface for passing events to the ChromotingHost.
   class EventHandler {
    public:
-    // Called after authentication has finished successfully.
-    virtual void OnSessionAuthenticated(ClientSession* client) = 0;
+    // Called after authentication has finished successfully. Returns true if
+    // the connection is allowed, or false otherwise.
+    virtual bool OnSessionAuthenticated(ClientSession* client) = 0;
 
     // Called after we've finished connecting all channels.
     virtual void OnSessionChannelsConnected(ClientSession* client) = 0;
@@ -94,7 +96,8 @@ class ClientSession
       scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner,
       scoped_ptr<protocol::ConnectionToClient> connection,
       DesktopEnvironmentFactory* desktop_environment_factory,
-      const base::TimeDelta& max_duration);
+      const base::TimeDelta& max_duration,
+      scoped_refptr<protocol::PairingRegistry> pairing_registry);
   virtual ~ClientSession();
 
   // protocol::HostStub interface.
@@ -104,6 +107,12 @@ class ClientSession
       const protocol::VideoControl& video_control) OVERRIDE;
   virtual void ControlAudio(
       const protocol::AudioControl& audio_control) OVERRIDE;
+  virtual void SetCapabilities(
+      const protocol::Capabilities& capabilities) OVERRIDE;
+  virtual void RequestPairing(
+      const remoting::protocol::PairingRequest& pairing_request) OVERRIDE;
+  virtual void DeliverClientMessage(
+      const protocol::ExtensionMessage& message) OVERRIDE;
 
   // protocol::ConnectionToClient::EventHandler interface.
   virtual void OnConnectionAuthenticated(
@@ -209,11 +218,20 @@ class ClientSession
   scoped_refptr<AudioScheduler> audio_scheduler_;
   scoped_refptr<VideoScheduler> video_scheduler_;
 
+  // The set of all capabilities supported by the client.
+  scoped_ptr<std::string> client_capabilities_;
+
+  // The set of all capabilities supported by the host.
+  std::string host_capabilities_;
+
   // Used to inject mouse and keyboard input and handle clipboard events.
   scoped_ptr<InputInjector> input_injector_;
 
   // Used to apply client-requested changes in screen resolution.
   scoped_ptr<ScreenControls> screen_controls_;
+
+  // The pairing registry for PIN-less authentication.
+  scoped_refptr<protocol::PairingRegistry> pairing_registry_;
 
   DISALLOW_COPY_AND_ASSIGN(ClientSession);
 };

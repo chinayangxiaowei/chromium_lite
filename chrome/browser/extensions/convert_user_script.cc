@@ -13,17 +13,17 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/json/json_file_value_serializer.h"
 #include "base/path_service.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/extensions/user_script_master.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_file_util.h"
 #include "chrome/common/extensions/extension_manifest_constants.h"
-#include "chrome/common/extensions/user_script.h"
 #include "crypto/sha2.h"
 #include "extensions/common/constants.h"
-#include "googleurl/src/gurl.h"
+#include "extensions/common/user_script.h"
+#include "url/gurl.h"
 
 namespace keys = extension_manifest_keys;
 namespace values = extension_manifest_values;
@@ -101,12 +101,12 @@ scoped_refptr<Extension> ConvertUserScriptToExtension(
   root->SetString(keys::kPublicKey, key);
   root->SetBoolean(keys::kConvertedFromUserScript, true);
 
-  ListValue* js_files = new ListValue();
+  base::ListValue* js_files = new base::ListValue();
   js_files->Append(Value::CreateStringValue("script.js"));
 
   // If the script provides its own match patterns, we use those. Otherwise, we
   // generate some using the include globs.
-  ListValue* matches = new ListValue();
+  base::ListValue* matches = new base::ListValue();
   if (!script.url_patterns().is_empty()) {
     for (URLPatternSet::const_iterator i = script.url_patterns().begin();
          i != script.url_patterns().end(); ++i) {
@@ -119,7 +119,7 @@ scoped_refptr<Extension> ConvertUserScriptToExtension(
   }
 
   // Read the exclude matches, if any are present.
-  ListValue* exclude_matches = new ListValue();
+  base::ListValue* exclude_matches = new base::ListValue();
   if (!script.exclude_url_patterns().is_empty()) {
     for (URLPatternSet::const_iterator i =
          script.exclude_url_patterns().begin();
@@ -128,11 +128,11 @@ scoped_refptr<Extension> ConvertUserScriptToExtension(
     }
   }
 
-  ListValue* includes = new ListValue();
+  base::ListValue* includes = new base::ListValue();
   for (size_t i = 0; i < script.globs().size(); ++i)
     includes->Append(Value::CreateStringValue(script.globs().at(i)));
 
-  ListValue* excludes = new ListValue();
+  base::ListValue* excludes = new base::ListValue();
   for (size_t i = 0; i < script.exclude_globs().size(); ++i)
     excludes->Append(Value::CreateStringValue(script.exclude_globs().at(i)));
 
@@ -151,7 +151,7 @@ scoped_refptr<Extension> ConvertUserScriptToExtension(
     // This is the default, but store it just in case we change that.
     content_script->SetString(keys::kRunAt, values::kRunAtDocumentIdle);
 
-  ListValue* content_scripts = new ListValue();
+  base::ListValue* content_scripts = new base::ListValue();
   content_scripts->Append(content_script);
 
   root->Set(keys::kContentScripts, content_scripts);
@@ -164,8 +164,8 @@ scoped_refptr<Extension> ConvertUserScriptToExtension(
   }
 
   // Write the script file.
-  if (!file_util::CopyFile(user_script_path,
-                           temp_dir.path().AppendASCII("script.js"))) {
+  if (!base::CopyFile(user_script_path,
+                      temp_dir.path().AppendASCII("script.js"))) {
     *error = ASCIIToUTF16("Could not copy script file.");
     return NULL;
   }
@@ -180,7 +180,7 @@ scoped_refptr<Extension> ConvertUserScriptToExtension(
       Extension::NO_FLAGS,
       &utf8_error);
   *error = UTF8ToUTF16(utf8_error);
-  if (!extension) {
+  if (!extension.get()) {
     NOTREACHED() << "Could not init extension " << *error;
     return NULL;
   }

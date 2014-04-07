@@ -11,18 +11,17 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/process.h"
+#include "base/process/process.h"
 #include "base/sequenced_task_runner_helpers.h"
 #include "ipc/ipc_listener.h"
 #include "ipc/ipc_platform_file.h"
-#include "media/video/capture/screen/screen_capturer.h"
-#include "media/video/capture/screen/shared_buffer.h"
 #include "remoting/host/audio_capturer.h"
 #include "remoting/host/desktop_environment.h"
 #include "remoting/host/screen_resolution.h"
 #include "remoting/proto/event.pb.h"
 #include "remoting/protocol/clipboard_stub.h"
 #include "third_party/skia/include/core/SkRegion.h"
+#include "third_party/webrtc/modules/desktop_capture/screen_capturer.h"
 
 namespace base {
 class SingleThreadTaskRunner;
@@ -33,7 +32,7 @@ class ChannelProxy;
 class Message;
 }  // namespace IPC
 
-struct SerializedCapturedData;
+struct SerializedDesktopFrame;
 
 namespace remoting {
 
@@ -70,13 +69,17 @@ class DesktopSessionProxy
       scoped_refptr<base::SingleThreadTaskRunner> caller_task_runner,
       scoped_refptr<base::SingleThreadTaskRunner> io_task_runner,
       scoped_refptr<base::SingleThreadTaskRunner> video_capture_task_runner,
-      base::WeakPtr<ClientSessionControl> client_session_control);
+      base::WeakPtr<ClientSessionControl> client_session_control,
+      base::WeakPtr<DesktopSessionConnector> desktop_session_connector,
+      bool virtual_terminal);
 
   // Mirrors DesktopEnvironment.
   scoped_ptr<AudioCapturer> CreateAudioCapturer();
   scoped_ptr<InputInjector> CreateInputInjector();
   scoped_ptr<ScreenControls> CreateScreenControls();
-  scoped_ptr<media::ScreenCapturer> CreateVideoCapturer();
+  scoped_ptr<webrtc::ScreenCapturer> CreateVideoCapturer();
+  std::string GetCapabilities() const;
+  void SetCapabilities(const std::string& capabilities);
 
   // IPC::Listener implementation.
   virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE;
@@ -86,11 +89,6 @@ class DesktopSessionProxy
   // Connects to the desktop session agent.
   bool AttachToDesktop(base::ProcessHandle desktop_process,
                        IPC::PlatformFileForTransit desktop_pipe);
-
-  // Binds |this| to a desktop session.
-  void ConnectToDesktopSession(
-      base::WeakPtr<DesktopSessionConnector> desktop_session_connector,
-      bool virtual_terminal);
 
   // Closes the connection to the desktop session agent and cleans up
   // the associated resources.
@@ -103,7 +101,7 @@ class DesktopSessionProxy
   // on the |audio_capture_task_runner_| thread.
   void SetAudioCapturer(const base::WeakPtr<IpcAudioCapturer>& audio_capturer);
 
-  // APIs used to implement the media::ScreenCapturer interface. These must be
+  // APIs used to implement the webrtc::ScreenCapturer interface. These must be
   // called on the |video_capture_task_runner_| thread.
   void InvalidateRegion(const SkRegion& invalid_region);
   void CaptureFrame();
@@ -125,10 +123,15 @@ class DesktopSessionProxy
  private:
   friend class base::DeleteHelper<DesktopSessionProxy>;
   friend struct DesktopSessionProxyTraits;
+
+  class IpcSharedBufferCore;
+  class IpcSharedBuffer;
+  typedef std::map<int, scoped_refptr<IpcSharedBufferCore> > SharedBuffers;
+
   virtual ~DesktopSessionProxy();
 
   // Returns a shared buffer from the list of known buffers.
-  scoped_refptr<media::SharedBuffer> GetSharedBuffer(int id);
+  scoped_refptr<IpcSharedBufferCore> GetSharedBufferCore(int id);
 
   // Handles AudioPacket notification from the desktop session agent.
   void OnAudioPacket(const std::string& serialized_packet);
@@ -142,22 +145,21 @@ class DesktopSessionProxy
   void OnReleaseSharedBuffer(int id);
 
   // Handles CaptureCompleted notification from the desktop session agent.
-  void OnCaptureCompleted(const SerializedCapturedData& serialized_data);
+  void OnCaptureCompleted(const SerializedDesktopFrame& serialized_frame);
 
   // Handles CursorShapeChanged notification from the desktop session agent.
-  void OnCursorShapeChanged(const media::MouseCursorShape& cursor_shape);
+  void OnCursorShapeChanged(const webrtc::MouseCursorShape& cursor_shape);
 
   // Handles InjectClipboardEvent request from the desktop integration process.
   void OnInjectClipboardEvent(const std::string& serialized_event);
 
   // Posts OnCaptureCompleted() to |video_capturer_| on the video thread,
-  // passing |capture_data|.
-  void PostCaptureCompleted(
-      scoped_refptr<media::ScreenCaptureData> capture_data);
+  // passing |frame|.
+  void PostCaptureCompleted(scoped_ptr<webrtc::DesktopFrame> frame);
 
   // Posts OnCursorShapeChanged() to |video_capturer_| on the video thread,
   // passing |cursor_shape|.
-  void PostCursorShape(scoped_ptr<media::MouseCursorShape> cursor_shape);
+  void PostCursorShape(scoped_ptr<webrtc::MouseCursorShape> cursor_shape);
 
   // Sends a message to the desktop session agent. The message is silently
   // deleted if the channel is broken.
@@ -183,7 +185,7 @@ class DesktopSessionProxy
   // Used to disconnect the client session.
   base::WeakPtr<ClientSessionControl> client_session_control_;
 
-  // Used to bind to a desktop session and receive notifications every time
+  // Used to create a desktop session and receive notifications every time
   // the desktop process is replaced.
   base::WeakPtr<DesktopSessionConnector> desktop_session_connector_;
 
@@ -198,12 +200,18 @@ class DesktopSessionProxy
 
   int pending_capture_frame_requests_;
 
-  typedef std::map<int, scoped_refptr<media::SharedBuffer> > SharedBuffers;
+  // Shared memory buffers by Id. Each buffer is owned by the corresponding
+  // frame.
   SharedBuffers shared_buffers_;
 
   // Keeps the desired screen resolution so it can be passed to a newly attached
   // desktop session agent.
   ScreenResolution screen_resolution_;
+
+  // True if |this| has been connected to the desktop session.
+  bool is_desktop_session_connected_;
+
+  bool virtual_terminal_;
 
   DISALLOW_COPY_AND_ASSIGN(DesktopSessionProxy);
 };

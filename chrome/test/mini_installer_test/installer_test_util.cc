@@ -6,9 +6,10 @@
 
 #include "base/file_util.h"
 #include "base/path_service.h"
-#include "base/process.h"
-#include "base/process_util.h"
-#include "base/string_util.h"
+#include "base/process/kill.h"
+#include "base/process/launch.h"
+#include "base/process/process.h"
+#include "base/strings/string_util.h"
 #include "base/threading/platform_thread.h"
 #include "chrome/common/chrome_result_codes.h"
 #include "chrome/installer/util/google_update_constants.h"
@@ -59,10 +60,10 @@ bool DeleteInstallDirectory(bool system_level,
   bool has_install_dir = GetInstallDirectory(system_level,
                                              ToBrowserDistributionType(type),
                                              &path);
-  if (!has_install_dir || !file_util::PathExists(path))
+  if (!has_install_dir || !base::PathExists(path))
     return false;
   path = path.AppendASCII(version);
-  return file_util::Delete(path, true);
+  return base::DeleteFile(path, true);
 }
 
 bool DeleteRegistryKey(bool system_level,
@@ -87,13 +88,11 @@ bool GetInstallDirectory(bool system_level,
       BrowserDistribution::GetSpecificDistribution(type);
   *path = installer::GetChromeInstallPath(system_level, dist);
   base::FilePath parent;
-  if (system_level) {
+  if (system_level)
     PathService::Get(base::DIR_PROGRAM_FILES, &parent);
-    return file_util::ContainsPath(parent, *path);
-  } else {
+  else
     PathService::Get(base::DIR_LOCAL_APP_DATA, &parent);
-    return file_util::ContainsPath(parent, *path);
-  }
+  return parent.IsParent(*path);
 }
 
 bool GetInstalledProducts(
@@ -156,7 +155,7 @@ std::string GetVersion(InstallationValidator::InstallationType product) {
 }
 
 bool Install(const base::FilePath& installer) {
-  if (!file_util::PathExists(installer)) {
+  if (!base::PathExists(installer)) {
     LOG(ERROR) << "Installer does not exist: " << installer.MaybeAsASCII();
     return false;
   }
@@ -167,7 +166,7 @@ bool Install(const base::FilePath& installer) {
 }
 
 bool Install(const base::FilePath& installer, const SwitchBuilder& switches) {
-  if (!file_util::PathExists(installer)) {
+  if (!base::PathExists(installer)) {
     LOG(ERROR) << "Installer does not exist: " << installer.MaybeAsASCII();
     return false;
   }
@@ -281,7 +280,7 @@ bool Uninstall(bool system_level,
 
 
 bool RunAndWaitForCommandToFinish(CommandLine command) {
-  if (!file_util::PathExists(command.GetProgram())) {
+  if (!base::PathExists(command.GetProgram())) {
     LOG(ERROR) << "Command executable does not exist: "
                << command.GetProgram().MaybeAsASCII();
     return false;

@@ -8,13 +8,13 @@
 #include <queue>
 #include <string>
 
-#include "base/file_util.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/message_loop.h"
-#include "base/process.h"
+#include "base/message_loop/message_loop.h"
+#include "base/process/process.h"
 #include "chrome/browser/extensions/api/messaging/native_process_launcher.h"
 #include "content/public/browser/browser_thread.h"
+#include "ui/gfx/native_widget_types.h"
 
 namespace net {
 
@@ -35,9 +35,9 @@ namespace extensions {
 // thread.
 class NativeMessageProcessHost
 #if defined(OS_POSIX)
-    : public MessageLoopForIO::Watcher
+    : public base::MessageLoopForIO::Watcher
 #endif  // !defined(OS_POSIX)
- {
+{
  public:
   // Interface for the object that receives messages from the native process.
   class Client {
@@ -53,6 +53,7 @@ class NativeMessageProcessHost
   virtual ~NativeMessageProcessHost();
 
   static scoped_ptr<NativeMessageProcessHost> Create(
+      gfx::NativeView native_view,
       base::WeakPtr<Client> weak_client_ui,
       const std::string& source_extension_id,
       const std::string& native_host_name,
@@ -135,7 +136,7 @@ class NativeMessageProcessHost
   scoped_ptr<net::FileStream> read_stream_;
 
 #if defined(OS_POSIX)
-  MessageLoopForIO::FileDescriptorWatcher read_watcher_;
+  base::MessageLoopForIO::FileDescriptorWatcher read_watcher_;
 #endif  // !defined(OS_POSIX)
 
   // Write stream.

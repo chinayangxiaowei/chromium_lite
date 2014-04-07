@@ -7,7 +7,7 @@
 #include "ash/screen_ash.h"
 #include "ash/shell.h"
 #include "ash/wm/panels/panel_frame_view.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "ui/aura/root_window.h"
 #include "ui/aura/window.h"
 #include "ui/gfx/canvas.h"
@@ -65,7 +65,7 @@ void PanelWindow::OnPaint(gfx::Canvas* canvas) {
   canvas->FillRect(GetLocalBounds(), SK_ColorGREEN);
 }
 
-string16 PanelWindow::GetWindowTitle() const {
+base::string16 PanelWindow::GetWindowTitle() const {
   return ASCIIToUTF16(name_);
 }
 

@@ -5,7 +5,7 @@
 #ifndef CONTENT_PUBLIC_TEST_FAKE_SPEECH_RECOGNTION_MANAGER_H_
 #define CONTENT_PUBLIC_TEST_FAKE_SPEECH_RECOGNTION_MANAGER_H_
 
-#include "base/synchronization/waitable_event.h"
+#include "base/callback_forward.h"
 #include "content/public/browser/speech_recognition_manager.h"
 #include "content/public/browser/speech_recognition_session_config.h"
 #include "content/public/browser/speech_recognition_session_context.h"
@@ -37,9 +37,7 @@ class FakeSpeechRecognitionManager : public SpeechRecognitionManager {
     return should_send_fake_response_;
   }
 
-  base::WaitableEvent& recognition_started_event() {
-    return recognition_started_event_;
-  }
+  void WaitForRecognitionStarted();
 
   void SetFakeResult(const std::string& result);
 
@@ -54,7 +52,6 @@ class FakeSpeechRecognitionManager : public SpeechRecognitionManager {
   virtual void AbortAllSessionsForRenderView(int render_process_id,
                                              int render_view_id) OVERRIDE;
   virtual bool HasAudioInputDevices() OVERRIDE;
-  virtual bool IsCapturingAudio() OVERRIDE;
   virtual string16 GetAudioInputDeviceModel() OVERRIDE;
   virtual void ShowAudioInputSettings() OVERRIDE {}
   virtual int GetSession(int render_process_id,
@@ -76,7 +73,7 @@ class FakeSpeechRecognitionManager : public SpeechRecognitionManager {
   std::string grammar_;
   bool did_cancel_all_;
   bool should_send_fake_response_;
-  base::WaitableEvent recognition_started_event_;
+  base::Closure recognition_started_closure_;
 
   DISALLOW_COPY_AND_ASSIGN(FakeSpeechRecognitionManager);
 };

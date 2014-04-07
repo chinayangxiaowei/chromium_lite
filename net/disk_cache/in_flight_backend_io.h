@@ -8,8 +8,8 @@
 #include <list>
 #include <string>
 
-#include "base/message_loop_proxy.h"
-#include "base/time.h"
+#include "base/message_loop/message_loop_proxy.h"
+#include "base/time/time.h"
 #include "net/base/completion_callback.h"
 #include "net/base/io_buffer.h"
 #include "net/disk_cache/in_flight_io.h"

@@ -17,14 +17,14 @@
 #include "base/file_version_info.h"
 #include "base/logging.h"
 #include "base/logging_win.h"
-#include "base/metrics/field_trial.h"
 #include "base/path_service.h"
-#include "base/string16.h"
-#include "base/string_number_conversions.h"
-#include "base/string_piece.h"
-#include "base/string_util.h"
-#include "base/sys_string_conversions.h"
-#include "base/utf_string_conversions.h"
+#include "base/process/launch.h"
+#include "base/strings/string16.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/string_piece.h"
+#include "base/strings/string_util.h"
+#include "base/strings/sys_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/win/registry.h"
 #include "base/win/windows_version.h"
 #include "chrome/common/chrome_constants.h"
@@ -40,12 +40,11 @@
 #include "chrome_frame/chrome_protocol.h"
 #include "chrome_frame/dll_redirector.h"
 #include "chrome_frame/exception_barrier.h"
-#include "chrome_frame/metrics_service.h"
 #include "chrome_frame/pin_module.h"
 #include "chrome_frame/resource.h"
 #include "chrome_frame/utils.h"
-#include "googleurl/src/url_util.h"
 #include "grit/chrome_frame_resources.h"
+#include "url/url_util.h"
 
 using base::win::RegKey;
 
@@ -233,7 +232,6 @@ class ChromeTabModule : public CAtlDllModuleT<ChromeTabModule> {
 ChromeTabModule _AtlModule;
 
 base::AtExitManager* g_exit_manager = NULL;
-base::FieldTrialList* g_field_trial_list = NULL;
 
 HRESULT RefreshElevationPolicy() {
   const wchar_t kIEFrameDll[] = L"ieframe.dll";
@@ -347,12 +345,12 @@ HRESULT SetupUserLevelHelper() {
   if (PathService::Get(base::FILE_MODULE, &module_path)) {
     module_path = module_path.DirName();
     helper_path = module_path.Append(kChromeFrameHelperExe);
-    if (!file_util::PathExists(helper_path)) {
+    if (!base::PathExists(helper_path)) {
       // If we can't find the helper in the current directory, try looking
       // one up (this is the layout in the build output folder).
       module_path = module_path.DirName();
       helper_path = module_path.Append(kChromeFrameHelperExe);
-      DCHECK(file_util::PathExists(helper_path)) <<
+      DCHECK(base::PathExists(helper_path)) <<
           "Could not find chrome_frame_helper.exe.";
     }
 
@@ -360,7 +358,7 @@ HRESULT SetupUserLevelHelper() {
     HWND old_window = FindWindow(kChromeFrameHelperWindowClassName,
                                  kChromeFrameHelperWindowName);
 
-    if (file_util::PathExists(helper_path)) {
+    if (base::PathExists(helper_path)) {
       std::wstring helper_path_cmd(L"\"");
       helper_path_cmd += helper_path.value();
       helper_path_cmd += L"\" ";
@@ -871,12 +869,9 @@ extern "C" BOOL WINAPI DllMain(HINSTANCE instance,
 
     g_exit_manager = new base::AtExitManager();
     CommandLine::Init(0, NULL);
-    logging::InitLogging(
-        NULL,
-        logging::LOG_ONLY_TO_SYSTEM_DEBUG_LOG,
-        logging::LOCK_LOG_FILE,
-        logging::DELETE_OLD_LOG_FILE,
-        logging::DISABLE_DCHECK_FOR_NON_OFFICIAL_RELEASE_BUILDS);
+    logging::LoggingSettings settings;
+    settings.logging_dest = logging::LOG_TO_SYSTEM_DEBUG_LOG;
+    logging::InitLogging(settings);
 
     // Log the same items as Chrome.
     logging::SetLogItems(true,  // enable_process_id
@@ -899,18 +894,10 @@ extern "C" BOOL WINAPI DllMain(HINSTANCE instance,
     // Enable trace control and transport through event tracing for Windows.
     logging::LogEventProvider::Initialize(kChromeFrameProvider);
 
-    // Initialize the field test infrastructure. Must be done somewhere that
-    // can only get called once. For Chrome Frame, that is here.
-    g_field_trial_list = new base::FieldTrialList(
-        new metrics::SHA1EntropyProvider(MetricsService::GetClientID()));
-
     // Set a callback so that crash reporting can be pinned when the module is
     // pinned.
     chrome_frame::SetPinModuleCallback(&OnPinModule);
   } else if (reason == DLL_PROCESS_DETACH) {
-    delete g_field_trial_list;
-    g_field_trial_list = NULL;
-
     DllRedirector* dll_redirector = DllRedirector::GetInstance();
     DCHECK(dll_redirector);
     dll_redirector->UnregisterAsFirstCFModule();

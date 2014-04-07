@@ -7,7 +7,7 @@
 
 #include "base/callback.h"
 #include "base/files/file_path.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "chrome/browser/profiles/profile_info_cache.h"
 
 class ProfileManager;
@@ -15,6 +15,12 @@ class ProfileManager;
 class ProfileShortcutManager {
  public:
   virtual ~ProfileShortcutManager();
+
+  // Create a profile icon for the profile with path |profile_path|.
+  // |callback| is called only on creation success.
+  virtual void CreateOrUpdateProfileIcon(
+      const base::FilePath& profile_path,
+      const base::Closure& callback) = 0;
 
   // Create a profile shortcut for the profile with path |profile_path|, plus
   // update the original profile shortcut if |profile_path| is the second

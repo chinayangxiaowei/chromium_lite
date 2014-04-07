@@ -10,12 +10,14 @@
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/constrained_window_views.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/web_contents_modal_dialog_manager.h"
 #include "chrome/browser/ui/webui/constrained_web_dialog_ui.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/web_modal/web_contents_modal_dialog_manager.h"
+#include "components/web_modal/web_contents_modal_dialog_manager_delegate.h"
 #include "content/public/browser/native_web_keyboard_event.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_view.h"
@@ -32,6 +34,8 @@
 #include <X11/Xlib.h>
 #include "ui/base/x/x11_util.h"
 #endif
+
+using web_modal::WebContentsModalDialogManager;
 
 namespace {
 
@@ -141,7 +145,9 @@ IN_PROC_BROWSER_TEST_F(ConstrainedWindowViewTest, FocusTest) {
   scoped_ptr<TestConstrainedDialog> test_dialog1(new TestConstrainedDialog);
   views::Widget* window1 = CreateWebContentsModalDialogViews(
       test_dialog1.get(),
-      web_contents->GetView()->GetNativeView());
+      web_contents->GetView()->GetNativeView(),
+      web_contents_modal_dialog_manager->delegate()->
+          GetWebContentsModalDialogHost());
   web_contents_modal_dialog_manager->ShowDialog(window1->GetNativeView());
 
   views::FocusManager* focus_manager = window1->GetFocusManager();
@@ -157,7 +163,9 @@ IN_PROC_BROWSER_TEST_F(ConstrainedWindowViewTest, FocusTest) {
   scoped_ptr<TestConstrainedDialog> test_dialog2(new TestConstrainedDialog);
   views::Widget* window2 = CreateWebContentsModalDialogViews(
       test_dialog2.get(),
-      web_contents->GetView()->GetNativeView());
+      web_contents->GetView()->GetNativeView(),
+      web_contents_modal_dialog_manager->delegate()->
+          GetWebContentsModalDialogHost());
   web_contents_modal_dialog_manager->ShowDialog(window2->GetNativeView());
   // Should be the same focus_manager.
   ASSERT_EQ(focus_manager, window2->GetFocusManager());
@@ -220,7 +228,9 @@ IN_PROC_BROWSER_TEST_F(ConstrainedWindowViewTest, TabCloseTest) {
   scoped_ptr<TestConstrainedDialog> test_dialog(new TestConstrainedDialog);
   views::Widget* window = CreateWebContentsModalDialogViews(
       test_dialog.get(),
-      web_contents->GetView()->GetNativeView());
+      web_contents->GetView()->GetNativeView(),
+      web_contents_modal_dialog_manager->delegate()->
+          GetWebContentsModalDialogHost());
   web_contents_modal_dialog_manager->ShowDialog(window->GetNativeView());
 
   bool closed =
@@ -241,11 +251,13 @@ IN_PROC_BROWSER_TEST_F(ConstrainedWindowViewTest, TabSwitchTest) {
 
   // Create a constrained dialog.  It will attach itself to web_contents.
   scoped_ptr<TestConstrainedDialog> test_dialog(new TestConstrainedDialog);
-  views::Widget* window = CreateWebContentsModalDialogViews(
-      test_dialog.get(),
-      web_contents->GetView()->GetNativeView());
   WebContentsModalDialogManager* web_contents_modal_dialog_manager =
       WebContentsModalDialogManager::FromWebContents(web_contents);
+  views::Widget* window = CreateWebContentsModalDialogViews(
+      test_dialog.get(),
+      web_contents->GetView()->GetNativeView(),
+      web_contents_modal_dialog_manager->delegate()->
+          GetWebContentsModalDialogHost());
   web_contents_modal_dialog_manager->ShowDialog(window->GetNativeView());
   EXPECT_TRUE(window->IsVisible());
 
@@ -297,8 +309,8 @@ void ForwardKeyEvent(content::RenderViewHost* host, ui::KeyboardCode key_code) {
 }
 
 // Tests that backspace is not processed before it's sent to the web contents.
-// Flaky on win aura. crbug.com/170331
-#if defined(OS_WIN) && defined(USE_AURA)
+// Flaky on Win Aura and Linux ChromiumOS. See http://crbug.com/170331
+#if defined(USE_AURA)
 #define MAYBE_BackspaceSentToWebContent DISABLED_BackspaceSentToWebContent
 #else
 #define MAYBE_BackspaceSentToWebContent BackspaceSentToWebContent
@@ -320,21 +332,31 @@ IN_PROC_BROWSER_TEST_F(ConstrainedWindowViewTest,
       NULL,
       web_contents);
 
+  content::WindowedNotificationObserver back_observer(
+      content::NOTIFICATION_LOAD_STOP,
+      content::Source<content::NavigationController>(
+          &web_contents->GetController()));
   content::RenderViewHost* render_view_host =
       cwdd->GetWebContents()->GetRenderViewHost();
   ForwardKeyEvent(render_view_host, ui::VKEY_BACK);
 
   // Backspace is not processed as accelerator before it's sent to web contents.
+  EXPECT_FALSE(web_contents->GetController().GetPendingEntry());
   EXPECT_EQ(about_url.spec(), web_contents->GetURL().spec());
 
-  content::RunAllPendingInMessageLoop();
-
   // Backspace is processed as accelerator after it's sent to web contents.
+  content::RunAllPendingInMessageLoop();
+  EXPECT_TRUE(web_contents->GetController().GetPendingEntry());
+
+  // Wait for the navigation to commit, since the URL will not be visible
+  // until then.
+  back_observer.Wait();
   EXPECT_EQ(new_tab_url.spec(), web_contents->GetURL().spec());
 }
 
 // Fails flakily (once per 10-20 runs) on Win Aura only. http://crbug.com/177482
-#if defined(OS_WIN)
+// Also fails on CrOS.
+#if defined(OS_WIN) || defined(OS_CHROMEOS)
 #define MAYBE_EscapeCloseConstrainedWindow DISABLED_EscapeCloseConstrainedWindow
 #else
 #define MAYBE_EscapeCloseConstrainedWindow EscapeCloseConstrainedWindow

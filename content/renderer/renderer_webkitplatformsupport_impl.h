@@ -8,24 +8,38 @@
 #include "base/compiler_specific.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/platform_file.h"
+#include "content/child/webkitplatformsupport_impl.h"
 #include "content/common/content_export.h"
-#include "content/common/webkitplatformsupport_impl.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebGraphicsContext3D.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebIDBFactory.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebSharedWorkerRepository.h"
+#include "third_party/WebKit/public/web/WebSharedWorkerRepository.h"
+#include "third_party/WebKit/public/platform/WebGraphicsContext3D.h"
+#include "third_party/WebKit/public/platform/WebIDBFactory.h"
+#include "webkit/renderer/compositor_bindings/web_compositor_support_impl.h"
+
+namespace base {
+class MessageLoopProxy;
+}
 
 namespace cc {
 class ContextProvider;
 }
 
-namespace webkit_glue {
-class WebClipboardImpl;
+namespace IPC {
+class SyncMessageFilter;
+}
+
+namespace WebKit {
+class WebDeviceMotionData;
+class WebGraphicsContext3DProvider;
 }
 
 namespace content {
-class GamepadSharedMemoryReader;
+class DeviceMotionEventPump;
+class DeviceOrientationEventPump;
+class QuotaMessageFilter;
 class RendererClipboardClient;
 class ThreadSafeSender;
+class WebClipboardImpl;
+class WebCryptoImpl;
 class WebFileSystemImpl;
 class WebSharedWorkerRepositoryImpl;
 
@@ -44,20 +58,20 @@ class CONTENT_EXPORT RendererWebKitPlatformSupportImpl
   virtual WebKit::WebFileUtilities* fileUtilities();
   virtual WebKit::WebSandboxSupport* sandboxSupport();
   virtual WebKit::WebCookieJar* cookieJar();
-  virtual WebKit::WebHyphenator* hyphenator();
   virtual WebKit::WebThemeEngine* themeEngine();
+  virtual WebKit::WebSpeechSynthesizer* createSpeechSynthesizer(
+      WebKit::WebSpeechSynthesizerClient* client);
   virtual bool sandboxEnabled();
   virtual unsigned long long visitedLinkHash(
       const char* canonicalURL, size_t length);
   virtual bool isLinkVisited(unsigned long long linkHash);
   virtual WebKit::WebMessagePortChannel* createMessagePortChannel();
-  virtual void prefetchHostName(const WebKit::WebString&);
+  virtual WebKit::WebPrescientNetworking* prescientNetworking();
   virtual void cacheMetadata(
       const WebKit::WebURL&, double, const char*, size_t);
   virtual WebKit::WebString defaultLocale();
   virtual void suddenTerminationChanged(bool enabled);
-  virtual WebKit::WebStorageNamespace* createLocalStorageNamespace(
-      const WebKit::WebString& path, unsigned quota);
+  virtual WebKit::WebStorageNamespace* createLocalStorageNamespace();
   virtual WebKit::Platform::FileHandle databaseOpenFile(
       const WebKit::WebString& vfs_file_name, int desired_flags);
   virtual int databaseDeleteFile(const WebKit::WebString& vfs_file_name,
@@ -72,6 +86,8 @@ class CONTENT_EXPORT RendererWebKitPlatformSupportImpl
       unsigned key_size_index,
       const WebKit::WebString& challenge,
       const WebKit::WebURL& url);
+  virtual void getPluginList(bool refresh,
+                             WebKit::WebPluginListBuilder* builder);
   virtual void screenColorProfile(WebKit::WebVector<char>* to_profile);
   virtual WebKit::WebIDBFactory* idbFactory();
   virtual WebKit::WebFileSystem* fileSystem();
@@ -96,11 +112,18 @@ class CONTENT_EXPORT RendererWebKitPlatformSupportImpl
       double sample_rate, WebKit::WebAudioDevice::RenderCallback* callback,
       const WebKit::WebString& input_device_id);
 
+  virtual bool loadAudioResource(
+      WebKit::WebAudioBus* destination_bus, const char* audio_file_data,
+      size_t data_size, double sample_rate);
+
+  virtual WebKit::WebContentDecryptionModule* createContentDecryptionModule(
+      const WebKit::WebString& key_system);
+  virtual WebKit::WebMIDIAccessor*
+      createMIDIAccessor(WebKit::WebMIDIAccessorClient* client);
+
   virtual WebKit::WebBlobRegistry* blobRegistry();
   virtual void sampleGamepads(WebKit::WebGamepads&);
   virtual WebKit::WebString userAgent(const WebKit::WebURL& url);
-  virtual void GetPlugins(bool refresh,
-                          std::vector<webkit::WebPluginInfo>* plugins) OVERRIDE;
   virtual WebKit::WebRTCPeerConnectionHandler* createRTCPeerConnectionHandler(
       WebKit::WebRTCPeerConnectionHandlerClient* client);
   virtual WebKit::WebMediaStreamCenter* createMediaStreamCenter(
@@ -109,8 +132,25 @@ class CONTENT_EXPORT RendererWebKitPlatformSupportImpl
       size_t* private_bytes, size_t* shared_bytes);
   virtual WebKit::WebGraphicsContext3D* createOffscreenGraphicsContext3D(
       const WebKit::WebGraphicsContext3D::Attributes& attributes);
-  virtual WebKit::WebGraphicsContext3D* sharedOffscreenGraphicsContext3D();
-  virtual GrContext* sharedOffscreenGrContext();
+  virtual WebKit::WebGraphicsContext3DProvider*
+      createSharedOffscreenGraphicsContext3DProvider();
+  virtual WebKit::WebCompositorSupport* compositorSupport();
+  virtual WebKit::WebString convertIDNToUnicode(
+      const WebKit::WebString& host, const WebKit::WebString& languages);
+  virtual void setDeviceMotionListener(
+      WebKit::WebDeviceMotionListener* listener) OVERRIDE;
+  virtual void setDeviceOrientationListener(
+      WebKit::WebDeviceOrientationListener* listener) OVERRIDE;
+  virtual WebKit::WebCrypto* crypto() OVERRIDE;
+  virtual void queryStorageUsageAndQuota(
+      const WebKit::WebURL& storage_partition,
+      WebKit::WebStorageQuotaType,
+      WebKit::WebStorageQuotaCallbacks*) OVERRIDE;
+
+#if defined(OS_ANDROID)
+  virtual void vibrate(unsigned int milliseconds);
+  virtual void cancelVibration();
+#endif  // defined(OS_ANDROID)
 
   // Disables the WebSandboxSupport implementation for testing.
   // Tests that do not set up a full sandbox environment should call
@@ -123,12 +163,15 @@ class CONTENT_EXPORT RendererWebKitPlatformSupportImpl
 
   // Set WebGamepads to return when sampleGamepads() is invoked.
   static void SetMockGamepadsForTesting(const WebKit::WebGamepads& pads);
+  // Set WebDeviceMotionData to return when setDeviceMotionListener is invoked.
+  static void SetMockDeviceMotionDataForTesting(
+      const WebKit::WebDeviceMotionData& data);
 
  private:
   bool CheckPreparsedJsCachingEnabled() const;
 
   scoped_ptr<RendererClipboardClient> clipboard_client_;
-  scoped_ptr<webkit_glue::WebClipboardImpl> clipboard_;
+  scoped_ptr<WebClipboardImpl> clipboard_;
 
   class FileUtilities;
   scoped_ptr<FileUtilities> file_utilities_;
@@ -138,9 +181,6 @@ class CONTENT_EXPORT RendererWebKitPlatformSupportImpl
 
   class SandboxSupport;
   scoped_ptr<SandboxSupport> sandbox_support_;
-
-  class Hyphenator;
-  scoped_ptr<Hyphenator> hyphenator_;
 
   // This counter keeps track of the number of times sudden termination is
   // enabled or disabled. It starts at 0 (enabled) and for every disable
@@ -161,11 +201,19 @@ class CONTENT_EXPORT RendererWebKitPlatformSupportImpl
 
   scoped_ptr<WebKit::WebBlobRegistry> blob_registry_;
 
-  scoped_ptr<GamepadSharedMemoryReader> gamepad_shared_memory_reader_;
+  scoped_ptr<DeviceMotionEventPump> device_motion_event_pump_;
+  scoped_ptr<DeviceOrientationEventPump> device_orientation_event_pump_;
 
+  scoped_refptr<base::MessageLoopProxy> child_thread_loop_;
+  scoped_refptr<IPC::SyncMessageFilter> sync_message_filter_;
   scoped_refptr<ThreadSafeSender> thread_safe_sender_;
+  scoped_refptr<QuotaMessageFilter> quota_message_filter_;
 
   scoped_refptr<cc::ContextProvider> shared_offscreen_context_;
+
+  webkit::WebCompositorSupportImpl compositor_support_;
+
+  scoped_ptr<WebCryptoImpl> web_crypto_;
 };
 
 }  // namespace content

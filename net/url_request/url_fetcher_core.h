@@ -15,19 +15,20 @@
 #include "base/lazy_instance.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/timer.h"
-#include "googleurl/src/gurl.h"
+#include "base/timer/timer.h"
 #include "net/base/host_port_pair.h"
 #include "net/http/http_request_headers.h"
 #include "net/url_request/url_fetcher.h"
 #include "net/url_request/url_request.h"
 #include "net/url_request/url_request_status.h"
+#include "url/gurl.h"
 
 namespace base {
 class SingleThreadTaskRunner;
 }  // namespace base
 
 namespace net {
+class DrainableIOBuffer;
 class HttpResponseHeaders;
 class IOBuffer;
 class URLFetcherDelegate;
@@ -65,6 +66,8 @@ class URLFetcherCore
                      const std::string& upload_content);
   void SetUploadFilePath(const std::string& upload_content_type,
                          const base::FilePath& file_path,
+                         uint64 range_offset,
+                         uint64 range_length,
                          scoped_refptr<base::TaskRunner> file_task_runner);
   void SetChunkedUpload(const std::string& upload_content_type);
   // Adds a block of data to be uploaded in a POST body. This can only be
@@ -191,14 +194,16 @@ class URLFetcherCore
   void CompleteAddingUploadDataChunk(const std::string& data,
                                      bool is_last_chunk);
 
-  // Handles the result of WriteBuffer.
-  void DidWriteBuffer(int result);
+  // Writes all bytes stored in |data| with |response_writer_|.
+  // Returns OK if all bytes in |data| get written synchronously. Otherwise,
+  // returns ERR_IO_PENDING or a network error code.
+  int WriteBuffer(scoped_refptr<DrainableIOBuffer> data);
+
+  // Used to implement WriteBuffer().
+  void DidWriteBuffer(scoped_refptr<DrainableIOBuffer> data, int result);
 
   // Read response bytes from the request.
   void ReadResponse();
-
-  // Drop ownership of any file managed by |file_path_|.
-  void DisownFile();
 
   // Notify Delegate about the progress of upload/download.
   void InformDelegateUploadProgress();
@@ -245,6 +250,10 @@ class URLFetcherCore
   bool upload_content_set_;          // SetUploadData has been called
   std::string upload_content_;       // HTTP POST payload
   base::FilePath upload_file_path_;  // Path to file containing POST payload
+  uint64 upload_range_offset_;       // Offset from the beginning of the file
+                                     // to be uploaded.
+  uint64 upload_range_length_;       // The length of the part of file to be
+                                     // uploaded.
   std::string upload_content_type_;  // MIME type of POST payload
   std::string referrer_;             // HTTP Referer header value
   bool is_chunked_upload_;           // True if using chunked transfer encoding

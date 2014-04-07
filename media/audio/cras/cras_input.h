@@ -12,7 +12,7 @@
 #include "base/compiler_specific.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "media/audio/audio_input_stream_impl.h"
+#include "media/audio/agc_audio_stream.h"
 #include "media/audio/audio_io.h"
 #include "media/audio/audio_parameters.h"
 
@@ -23,11 +23,12 @@ class AudioManagerCras;
 // Provides an input stream for audio capture based on CRAS, the ChromeOS Audio
 // Server.  This object is not thread safe and all methods should be invoked in
 // the thread that created the object.
-class CrasInputStream : public AudioInputStreamImpl {
+class CrasInputStream : public AgcAudioStream<AudioInputStream> {
  public:
   // The ctor takes all the usual parameters, plus |manager| which is the
   // audio manager who is creating this object.
-  CrasInputStream(const AudioParameters& params, AudioManagerCras* manager);
+  CrasInputStream(const AudioParameters& params, AudioManagerCras* manager,
+                  const std::string& device_id);
 
   // The dtor is typically called by the AudioManager only and it is usually
   // triggered by calling AudioOutputStream::Close().
@@ -76,7 +77,7 @@ class CrasInputStream : public AudioInputStreamImpl {
   // want circular references.  Additionally, stream objects live on the audio
   // thread, which is owned by the audio manager and we don't want to addref
   // the manager from that thread.
-  AudioManagerCras* audio_manager_;
+  AudioManagerCras* const audio_manager_;
 
   // Size of frame in bytes.
   uint32 bytes_per_frame_;
@@ -88,13 +89,16 @@ class CrasInputStream : public AudioInputStreamImpl {
   cras_client* client_;
 
   // PCM parameters for the stream.
-  AudioParameters params_;
+  const AudioParameters params_;
 
   // True if the stream has been started.
   bool started_;
 
   // ID of the playing stream.
   cras_stream_id_t stream_id_;
+
+  // Direction of the stream.
+  const CRAS_STREAM_DIRECTION stream_direction_;
 
   DISALLOW_COPY_AND_ASSIGN(CrasInputStream);
 };

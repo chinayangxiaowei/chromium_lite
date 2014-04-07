@@ -25,6 +25,7 @@
 #include "base/command_line.h"
 #include "base/file_util.h"
 #include "base/file_version_info.h"
+#include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/i18n/time_formatting.h"
 #include "base/path_service.h"
@@ -32,12 +33,11 @@
 #include "base/prefs/pref_registry_simple.h"
 #include "base/prefs/pref_service.h"
 #include "base/prefs/pref_value_store.h"
-#include "base/string_number_conversions.h"
-#include "base/string_util.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/test/test_file_util.h"
-#include "base/time.h"
-#include "base/utf_string_conversions.h"
-#include "chrome/browser/net/url_fixer_upper.h"
+#include "base/time/time.h"
 #include "chrome/browser/prefs/pref_service_mock_builder.h"
 #include "chrome/common/automation_messages.h"
 #include "chrome/common/chrome_constants.h"
@@ -45,6 +45,7 @@
 #include "chrome/common/chrome_paths_internal.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/logging_chrome.h"
+#include "chrome/common/net/url_fixer_upper.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/automation/automation_proxy.h"
 #include "chrome/test/automation/browser_proxy.h"
@@ -332,9 +333,9 @@ class PageLoadTest : public testing::Test {
   virtual void SetUp() {
     // Initialize crash_dumps_dir_path_.
     PathService::Get(chrome::DIR_CRASH_DUMPS, &crash_dumps_dir_path_);
-    file_util::FileEnumerator enumerator(crash_dumps_dir_path_,
-                                         false,  // not recursive
-                                         file_util::FileEnumerator::FILES);
+    base::FileEnumerator enumerator(crash_dumps_dir_path_,
+                                    false,  // not recursive
+                                    base::FileEnumerator::FILES);
     for (base::FilePath path = enumerator.Next(); !path.value().empty();
          path = enumerator.Next()) {
       if (path.MatchesExtension(FILE_PATH_LITERAL(".dmp")))
@@ -368,7 +369,7 @@ class PageLoadTest : public testing::Test {
     if (!log_path.empty()) {
       base::FilePath saved_log_file_path =
           ConstructSavedDebugLogPath(log_path, index);
-      if (file_util::Move(log_path, saved_log_file_path)) {
+      if (base::Move(log_path, saved_log_file_path)) {
         log_file << " " << log_id << "=" << saved_log_file_path.value();
       }
     }
@@ -411,9 +412,9 @@ class PageLoadTest : public testing::Test {
                                 NavigationMetrics* metrics) {
     int num_dumps = 0;
 
-    file_util::FileEnumerator enumerator(crash_dumps_dir_path_,
-                                         false,  // not recursive
-                                         file_util::FileEnumerator::FILES);
+    base::FileEnumerator enumerator(crash_dumps_dir_path_,
+                                    false,  // not recursive
+                                    base::FileEnumerator::FILES);
     for (base::FilePath path = enumerator.Next(); !path.value().empty();
          path = enumerator.Next()) {
       if (path.MatchesExtension(FILE_PATH_LITERAL(".dmp")) &&
@@ -587,9 +588,8 @@ void SetPageRange(const CommandLine& parsed_command_line) {
         CommandLine v8_command_line(
             parsed_command_line.GetSwitchValuePath(switches::kJavaScriptFlags));
         if (v8_command_line.HasSwitch(kV8LogFileSwitch)) {
-          g_v8_log_path = v8_command_line.GetSwitchValuePath(kV8LogFileSwitch);
-          if (!file_util::AbsolutePath(&g_v8_log_path))
-            g_v8_log_path = base::FilePath();
+          g_v8_log_path = base::MakeAbsoluteFilePath(
+              v8_command_line.GetSwitchValuePath(kV8LogFileSwitch));
         }
       }
     }

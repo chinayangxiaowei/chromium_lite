@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 #include "base/json/json_file_value_serializer.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/path_service.h"
 #include "base/values.h"
 #include "chrome/browser/extensions/extension_icon_manager.h"
@@ -35,14 +35,14 @@ class ExtensionIconManagerTest : public testing::Test {
   void ImageLoadObserved() {
     unwaited_image_loads_++;
     if (waiting_) {
-      MessageLoop::current()->Quit();
+      base::MessageLoop::current()->Quit();
     }
   }
 
   void WaitForImageLoad() {
     if (unwaited_image_loads_ == 0) {
       waiting_ = true;
-      MessageLoop::current()->Run();
+      base::MessageLoop::current()->Run();
       waiting_ = false;
     }
     ASSERT_GT(unwaited_image_loads_, 0);
@@ -61,7 +61,7 @@ class ExtensionIconManagerTest : public testing::Test {
   // Whether we are currently waiting for an image load.
   bool waiting_;
 
-  MessageLoop ui_loop_;
+  base::MessageLoop ui_loop_;
   content::TestBrowserThread ui_thread_;
   content::TestBrowserThread file_thread_;
   content::TestBrowserThread io_thread_;
@@ -142,6 +142,7 @@ TEST_F(ExtensionIconManagerTest, LoadRemoveLoad) {
 #if defined(FILE_MANAGER_EXTENSION)
 // Tests loading an icon for a component extension.
 TEST_F(ExtensionIconManagerTest, LoadComponentExtensionResource) {
+  scoped_ptr<Profile> profile(new TestingProfile());
   SkBitmap default_icon = GetDefaultIcon();
 
   base::FilePath test_dir;
@@ -160,7 +161,6 @@ TEST_F(ExtensionIconManagerTest, LoadComponentExtensionResource) {
       Extension::NO_FLAGS, &error));
   ASSERT_TRUE(extension.get());
 
-  scoped_ptr<Profile> profile(new TestingProfile());
   TestIconManager icon_manager(this);
   // Load the icon and grab the bitmap.
   icon_manager.LoadIcon(profile.get(), extension.get());

@@ -5,8 +5,11 @@
 #ifndef CC_BASE_SCOPED_PTR_HASH_MAP_H_
 #define CC_BASE_SCOPED_PTR_HASH_MAP_H_
 
+#include <algorithm>
+#include <utility>
+
 #include "base/basictypes.h"
-#include "base/hash_tables.h"
+#include "base/containers/hash_tables.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/stl_util.h"
@@ -14,11 +17,12 @@
 namespace cc {
 
 // This type acts like a hash_map<K, scoped_ptr<V> >, based on top of
-// std::hash_map. The ScopedPtrHashMap has ownership of all values in the data
+// base::hash_map. The ScopedPtrHashMap has ownership of all values in the data
 // structure.
 template <typename Key, typename Value>
 class ScopedPtrHashMap {
   typedef base::hash_map<Key, Value*> Container;
+
  public:
   typedef typename Container::iterator iterator;
   typedef typename Container::const_iterator const_iterator;
@@ -27,7 +31,7 @@ class ScopedPtrHashMap {
 
   ~ScopedPtrHashMap() { clear(); }
 
-  void swap(ScopedPtrHashMap<Key, Value*>& other) {
+  void swap(ScopedPtrHashMap<Key, Value>& other) {
     data_.swap(other.data_);
   }
 
@@ -69,7 +73,7 @@ class ScopedPtrHashMap {
   scoped_ptr<Value> take(iterator it) {
     DCHECK(it != data_.end());
     if (it == data_.end())
-      return scoped_ptr<Value>(NULL);
+      return scoped_ptr<Value>();
 
     Key key = it->first;
     scoped_ptr<Value> ret(it->second);
@@ -81,7 +85,7 @@ class ScopedPtrHashMap {
   scoped_ptr<Value> take(const Key& k) {
     iterator it = find(k);
     if (it == data_.end())
-      return scoped_ptr<Value>(NULL);
+      return scoped_ptr<Value>();
 
     return take(it);
   }
@@ -89,7 +93,7 @@ class ScopedPtrHashMap {
   scoped_ptr<Value> take_and_erase(iterator it) {
     DCHECK(it != data_.end());
     if (it == data_.end())
-      return scoped_ptr<Value>(NULL);
+      return scoped_ptr<Value>();
 
     scoped_ptr<Value> ret(it->second);
     data_.erase(it);
@@ -99,7 +103,7 @@ class ScopedPtrHashMap {
   scoped_ptr<Value> take_and_erase(const Key& k) {
     iterator it = find(k);
     if (it == data_.end())
-      return scoped_ptr<Value>(NULL);
+      return scoped_ptr<Value>();
 
     return take_and_erase(it);
   }
@@ -113,7 +117,7 @@ class ScopedPtrHashMap {
     return it->second;
   }
 
-  inline bool contains(const Key& k) const { return data_.count(k); }
+  inline bool contains(const Key& k) const { return data_.count(k) > 0; }
 
   inline void clear() { STLDeleteValues(&data_); }
 

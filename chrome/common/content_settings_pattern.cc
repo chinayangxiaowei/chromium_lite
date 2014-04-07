@@ -7,17 +7,17 @@
 #include <vector>
 
 #include "base/memory/scoped_ptr.h"
-#include "base/string_util.h"
 #include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
 #include "chrome/common/content_settings_pattern_parser.h"
 #include "chrome/common/render_messages.h"
 #include "chrome/common/url_constants.h"
 #include "extensions/common/constants.h"
-#include "googleurl/src/gurl.h"
-#include "googleurl/src/url_canon.h"
 #include "ipc/ipc_message_utils.h"
 #include "net/base/dns_util.h"
 #include "net/base/net_util.h"
+#include "url/gurl.h"
+#include "url/url_canon.h"
 
 namespace {
 
@@ -26,7 +26,7 @@ std::string GetDefaultPort(const std::string& scheme) {
     return "80";
   if (scheme == chrome::kHttpsScheme)
     return "443";
-  return "";
+  return std::string();
 }
 
 // Returns true if |sub_domain| is a sub domain or equls |domain|.  E.g.
@@ -156,6 +156,20 @@ ContentSettingsPattern ContentSettingsPattern::Builder::Build() {
   } else {
     is_valid_ = Validate(parts_);
   }
+  if (!is_valid_)
+    return ContentSettingsPattern();
+
+  // A pattern is invalid if canonicalization is not idempotent.
+  // This check is here because it should be checked no matter
+  // use_legacy_validate_ is.
+  PatternParts parts(parts_);
+  if (!Canonicalize(&parts))
+    return ContentSettingsPattern();
+  if (ContentSettingsPattern(parts_, true) !=
+      ContentSettingsPattern(parts, true)) {
+    return ContentSettingsPattern();
+  }
+
   return ContentSettingsPattern(parts_, is_valid_);
 }
 
@@ -487,7 +501,7 @@ const std::string ContentSettingsPattern::ToString() const {
   if (IsValid())
     return content_settings::PatternParser::ToString(parts_);
   else
-    return "";
+    return std::string();
 }
 
 ContentSettingsPattern::Relation ContentSettingsPattern::Compare(

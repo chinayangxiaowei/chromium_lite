@@ -10,17 +10,18 @@
 #include "base/environment.h"
 #include "base/file_util.h"
 #include "base/file_version_info.h"
+#include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/i18n/time_formatting.h"
 #include "base/logging.h"
 #include "base/path_service.h"
 #include "base/rand_util.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/threading/platform_thread.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/character_encoding.h"
@@ -35,8 +36,8 @@
 #include "chrome/test/automation/window_proxy.h"
 #include "chrome/test/reliability/automated_ui_tests.h"
 #include "chrome/test/ui/ui_test.h"
-#include "googleurl/src/gurl.h"
 #include "ui/base/keycodes/keyboard_codes.h"
+#include "url/gurl.h"
 
 #if defined(TOOLKIT_VIEWS)
 #include "ui/views/view.h"
@@ -299,7 +300,7 @@ void AutomatedUITest::RunAutomatedUITest() {
         // Try and start up again.
         CloseBrowserAndServer();
         LaunchBrowserAndServer();
-        set_active_browser(automation()->GetBrowserWindow(0));
+        set_active_browser(automation()->GetBrowserWindow(0).get());
         if (DidCrash(true)) {
           no_errors = false;
           // We crashed again, so skip to the end of the this command.
@@ -387,8 +388,6 @@ bool AutomatedUITest::DoAction(const std::string& action) {
     did_complete_action = ForceCrash();
   } else if (LowerCaseEqualsASCII(action, "dialog")) {
     did_complete_action = ExerciseDialog();
-  } else if (LowerCaseEqualsASCII(action, "downarrow")) {
-    did_complete_action = PressDownArrow();
   } else if (LowerCaseEqualsASCII(action, "downloads")) {
     did_complete_action = ShowDownloads();
   } else if (LowerCaseEqualsASCII(action, "duplicatetab")) {
@@ -410,7 +409,7 @@ bool AutomatedUITest::DoAction(const std::string& action) {
   } else if (LowerCaseEqualsASCII(action, "javascriptconsole")) {
     did_complete_action = JavaScriptConsole();
   } else if (LowerCaseEqualsASCII(action, "navigate")) {
-    std::string url = chrome::kAboutBlankURL;
+    std::string url = content::kAboutBlankURL;
     if (init_reader_.NodeAttribute("url", &url)) {
       xml_writer_.AddAttribute("url", url);
     }
@@ -422,18 +421,6 @@ bool AutomatedUITest::DoAction(const std::string& action) {
     did_complete_action = OpenAndActivateNewBrowserWindow(NULL);
   } else if (LowerCaseEqualsASCII(action, "options")) {
     did_complete_action = Options();
-  } else if (LowerCaseEqualsASCII(action, "pagedown")) {
-    did_complete_action = PressPageDown();
-  } else if (LowerCaseEqualsASCII(action, "pageup")) {
-    did_complete_action = PressPageUp();
-  } else if (LowerCaseEqualsASCII(action, "pressenterkey")) {
-    did_complete_action = PressEnterKey();
-  } else if (LowerCaseEqualsASCII(action, "pressescapekey")) {
-    did_complete_action = PressEscapeKey();
-  } else if (LowerCaseEqualsASCII(action, "pressspacebar")) {
-    did_complete_action = PressSpaceBar();
-  } else if (LowerCaseEqualsASCII(action, "presstabkey")) {
-    did_complete_action = PressTabKey();
   } else if (LowerCaseEqualsASCII(action, "reload")) {
     did_complete_action = ReloadPage();
   } else if (LowerCaseEqualsASCII(action, "restoretab")) {
@@ -471,8 +458,6 @@ bool AutomatedUITest::DoAction(const std::string& action) {
     did_complete_action = TestTaskManager();
   } else if (LowerCaseEqualsASCII(action, "testviewpasswords")) {
     did_complete_action = TestViewPasswords();
-  } else if (LowerCaseEqualsASCII(action, "uparrow")) {
-    did_complete_action = PressUpArrow();
   } else if (LowerCaseEqualsASCII(action, "viewpasswords")) {
     did_complete_action = OpenViewPasswordsDialog();
   } else if (LowerCaseEqualsASCII(action, "viewsource")) {
@@ -505,7 +490,7 @@ bool AutomatedUITest::ChangeEncoding() {
   std::string cur_locale = g_browser_process->GetApplicationLocale();
   const std::vector<CharacterEncoding::EncodingInfo>* encodings =
       CharacterEncoding::GetCurrentDisplayEncodings(
-          cur_locale, "ISO-8859-1,windows-1252", "");
+          cur_locale, "ISO-8859-1,windows-1252", std::string());
   DCHECK(encodings);
   DCHECK(!encodings->empty());
   unsigned len = static_cast<unsigned>(encodings->size());
@@ -550,38 +535,6 @@ bool AutomatedUITest::OpenViewPasswordsDialog() {
 
 bool AutomatedUITest::Options() {
   return RunCommandAsync(IDC_OPTIONS);
-}
-
-bool AutomatedUITest::PressDownArrow() {
-  return SimulateKeyPress(ui::VKEY_DOWN);
-}
-
-bool AutomatedUITest::PressEnterKey() {
-  return SimulateKeyPress(ui::VKEY_RETURN);
-}
-
-bool AutomatedUITest::PressEscapeKey() {
-  return SimulateKeyPress(ui::VKEY_ESCAPE);
-}
-
-bool AutomatedUITest::PressPageDown() {
-  return SimulateKeyPress(ui::VKEY_PRIOR);
-}
-
-bool AutomatedUITest::PressPageUp() {
-  return SimulateKeyPress(ui::VKEY_NEXT);
-}
-
-bool AutomatedUITest::PressSpaceBar() {
-  return SimulateKeyPress(ui::VKEY_SPACE);
-}
-
-bool AutomatedUITest::PressTabKey() {
-  return SimulateKeyPress(ui::VKEY_TAB);
-}
-
-bool AutomatedUITest::PressUpArrow() {
-  return SimulateKeyPress(ui::VKEY_UP);
 }
 
 bool AutomatedUITest::StarPage() {
@@ -668,12 +621,6 @@ bool AutomatedUITest::ForceCrash() {
     AddErrorAttribute("navigation_failed");
     return false;
   }
-  return true;
-}
-
-bool AutomatedUITest::SimulateKeyPress(ui::KeyboardCode key) {
-  scoped_refptr<TabProxy> tab(GetActiveTab());
-  tab->SimulateKeyPress(key);
   return true;
 }
 
@@ -771,9 +718,9 @@ base::FilePath AutomatedUITest::GetMostRecentCrashDump() {
 
   bool first_file = true;
 
-  file_util::FileEnumerator enumerator(crash_dump_path,
-                                       false,  // not recursive
-                                       file_util::FileEnumerator::FILES);
+  base::FileEnumerator enumerator(crash_dump_path,
+                                  false,  // not recursive
+                                  base::FileEnumerator::FILES);
   for (base::FilePath path = enumerator.Next(); !path.value().empty();
        path = enumerator.Next()) {
     base::PlatformFileInfo file_info;

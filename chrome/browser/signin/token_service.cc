@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,12 @@
 #include "base/basictypes.h"
 #include "base/command_line.h"
 #include "base/prefs/pref_service.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/signin_manager.h"
 #include "chrome/browser/signin/signin_manager_factory.h"
-#include "chrome/browser/webdata/web_data_service.h"
-#include "chrome/common/chrome_notification_types.h"
+#include "chrome/browser/webdata/token_web_data.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "content/public/browser/browser_thread.h"
@@ -59,10 +59,14 @@ TokenService::TokenService()
 }
 
 TokenService::~TokenService() {
+}
+
+void TokenService::Shutdown() {
   if (!source_.empty()) {
     DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
     ResetCredentialsInMemory();
   }
+  token_web_data_ = NULL;
 }
 
 void TokenService::Initialize(const char* const source,
@@ -77,7 +81,7 @@ void TokenService::Initialize(const char* const source,
   getter_ = profile->GetRequestContext();
   // Since the user can create a bookmark in incognito, sync may be running.
   // Thus we have to go for explicit access.
-  web_data_service_ = WebDataService::FromBrowserContext(profile);
+  token_web_data_ = TokenWebData::FromBrowserContext(profile);
   source_ = std::string(source);
 
   CommandLine* cmd_line = CommandLine::ForCurrentProcess();
@@ -116,6 +120,10 @@ void TokenService::AddAuthTokenManually(const std::string& service,
   if (service == GaiaConstants::kLSOService && !HasOAuthLoginToken()) {
     int index = GetServiceIndex(service);
     CHECK_GE(index, 0);
+    // iOS fetches the service tokens outside of the TokenService.
+    if (!fetchers_[index].get()) {
+      fetchers_[index].reset(new GaiaAuthFetcher(this, source_, getter_.get()));
+    }
     fetchers_[index]->StartLsoForOAuthLoginTokenExchange(auth_token);
   }
 #endif
@@ -132,7 +140,7 @@ void TokenService::ResetCredentialsInMemory() {
 
   // Cancel pending loads. Callbacks will not return.
   if (token_loading_query_) {
-    web_data_service_->CancelRequest(token_loading_query_);
+    token_web_data_->CancelRequest(token_loading_query_);
     token_loading_query_ = 0;
   }
 
@@ -167,28 +175,21 @@ void TokenService::UpdateCredentialsWithOAuth2(
 
 void TokenService::LoadTokensFromDB() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  if (web_data_service_.get())
-    token_loading_query_ = web_data_service_->GetAllTokens(this);
+  if (token_web_data_.get())
+    token_loading_query_ = token_web_data_->GetAllTokens(this);
 }
 
 void TokenService::SaveAuthTokenToDB(const std::string& service,
                                      const std::string& auth_token) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  if (web_data_service_.get())
-    web_data_service_->SetTokenForService(service, auth_token);
+  if (token_web_data_.get())
+    token_web_data_->SetTokenForService(service, auth_token);
 }
 
 void TokenService::EraseTokensFromDB() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  // Try to track down http://crbug.com/121755 - we should never clear the
-  // token DB while we're still logged in.
-  if (profile_) {
-    std::string user = profile_->GetPrefs()->GetString(
-        prefs::kGoogleServicesUsername);
-    CHECK(user.empty());
-  }
-  if (web_data_service_.get())
-    web_data_service_->RemoveAllTokens();
+  if (token_web_data_.get())
+    token_web_data_->RemoveAllTokens();
 
   content::NotificationService::current()->Notify(
       chrome::NOTIFICATION_TOKENS_CLEARED,
@@ -226,10 +227,9 @@ void TokenService::StartFetchingTokens() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   DCHECK(AreCredentialsValid());
   for (size_t i = 0; i < arraysize(kServices); i++) {
-    fetchers_[i].reset(new GaiaAuthFetcher(this, source_, getter_));
-    fetchers_[i]->StartIssueAuthToken(credentials_.sid,
-                                      credentials_.lsid,
-                                      kServices[i]);
+    fetchers_[i].reset(new GaiaAuthFetcher(this, source_, getter_.get()));
+    fetchers_[i]->StartIssueAuthToken(
+        credentials_.sid, credentials_.lsid, kServices[i]);
   }
 }
 
@@ -258,7 +258,7 @@ const std::string& TokenService::GetOAuth2LoginRefreshToken() const {
 }
 
 // static
-void TokenService::GetServiceNamesForTesting(std::vector<std::string>* names) {
+void TokenService::GetServiceNames(std::vector<std::string>* names) {
   names->resize(arraysize(kServices));
   std::copy(kServices, kServices + arraysize(kServices), names->begin());
 }
@@ -362,7 +362,7 @@ void TokenService::OnClientOAuthFailure(
       GaiaConstants::kGaiaOAuth2LoginRefreshToken, error);
 }
 
-void TokenService::OnWebDataServiceRequestDone(WebDataService::Handle h,
+void TokenService::OnWebDataServiceRequestDone(WebDataServiceBase::Handle h,
                                                const WDTypedResult* result) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   DCHECK(token_loading_query_);

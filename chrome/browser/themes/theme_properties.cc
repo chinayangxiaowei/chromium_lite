@@ -5,8 +5,8 @@
 #include "chrome/browser/themes/theme_properties.h"
 
 #include "base/memory/scoped_ptr.h"
-#include "base/string_util.h"
 #include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
 #include "chrome/browser/themes/browser_theme_pack.h"
 #include "grit/theme_resources.h"
 #include "grit/ui_resources.h"
@@ -117,12 +117,12 @@ const int kToolbarButtonIDs[] = {
   IDR_HOME, IDR_HOME_H, IDR_HOME_P,
   IDR_RELOAD, IDR_RELOAD_H, IDR_RELOAD_P,
   IDR_STOP, IDR_STOP_D, IDR_STOP_H, IDR_STOP_P,
-  IDR_LOCATIONBG_C, IDR_LOCATIONBG_L, IDR_LOCATIONBG_R,
   IDR_BROWSER_ACTIONS_OVERFLOW, IDR_BROWSER_ACTIONS_OVERFLOW_H,
   IDR_BROWSER_ACTIONS_OVERFLOW_P,
   IDR_TOOLS, IDR_TOOLS_H, IDR_TOOLS_P,
   IDR_MENU_DROPARROW,
   IDR_THROBBER, IDR_THROBBER_WAITING, IDR_THROBBER_LIGHT,
+  IDR_TOOLBAR_BEZEL_HOVER, IDR_TOOLBAR_BEZEL_PRESSED, IDR_TOOLS_BAR,
 };
 
 SkColor TintForUnderline(SkColor input) {

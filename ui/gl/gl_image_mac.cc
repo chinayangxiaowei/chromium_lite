@@ -5,6 +5,7 @@
 #include "ui/gl/gl_image.h"
 
 #include "base/debug/trace_event.h"
+#include "ui/gl/gl_image_shm.h"
 #include "ui/gl/gl_image_stub.h"
 #include "ui/gl/gl_implementation.h"
 
@@ -15,9 +16,35 @@ scoped_refptr<GLImage> GLImage::CreateGLImage(gfx::PluginWindowHandle window) {
   switch (GetGLImplementation()) {
     case kGLImplementationOSMesaGL:
     case kGLImplementationDesktopGL:
-    case kGLImplementationAppleGL: {
+    case kGLImplementationAppleGL:
       return NULL;
-    }
+    case kGLImplementationMockGL:
+      return new GLImageStub;
+    default:
+      NOTREACHED();
+      return NULL;
+  }
+}
+
+scoped_refptr<GLImage> GLImage::CreateGLImageForGpuMemoryBuffer(
+    gfx::GpuMemoryBufferHandle buffer, gfx::Size size) {
+  TRACE_EVENT0("gpu", "GLImage::CreateGLImageForGpuMemoryBuffer");
+  switch (GetGLImplementation()) {
+    case kGLImplementationOSMesaGL:
+    case kGLImplementationDesktopGL:
+    case kGLImplementationAppleGL:
+      switch (buffer.type) {
+        case SHARED_MEMORY_BUFFER: {
+          scoped_refptr<GLImageShm> image(new GLImageShm(size));
+          if (!image->Initialize(buffer))
+            return NULL;
+
+          return image;
+        }
+        default:
+          NOTREACHED();
+          return NULL;
+      }
     case kGLImplementationMockGL:
       return new GLImageStub;
     default:

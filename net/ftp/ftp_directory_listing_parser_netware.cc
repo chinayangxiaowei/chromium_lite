@@ -6,16 +6,16 @@
 
 #include <vector>
 
-#include "base/string_number_conversions.h"
-#include "base/string_util.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
 #include "base/strings/string_split.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "net/ftp/ftp_directory_listing_parser.h"
 #include "net/ftp/ftp_util.h"
 
 namespace {
 
-bool LooksLikeNetwarePermissionsListing(const string16& text) {
+bool LooksLikeNetwarePermissionsListing(const base::string16& text) {
   if (text.length() != 10)
     return false;
 
@@ -36,7 +36,7 @@ bool LooksLikeNetwarePermissionsListing(const string16& text) {
 namespace net {
 
 bool ParseFtpDirectoryListingNetware(
-    const std::vector<string16>& lines,
+    const std::vector<base::string16>& lines,
     const base::Time& current_time,
     std::vector<FtpDirectoryListingEntry>* entries) {
   if (!lines.empty() && !StartsWith(lines[0], ASCIIToUTF16("total "), true))
@@ -46,7 +46,7 @@ bool ParseFtpDirectoryListingNetware(
     if (lines[i].empty())
       continue;
 
-    std::vector<string16> columns;
+    std::vector<base::string16> columns;
     base::SplitString(CollapseWhitespace(lines[i], false), ' ', &columns);
 
     if (columns.size() < 8)

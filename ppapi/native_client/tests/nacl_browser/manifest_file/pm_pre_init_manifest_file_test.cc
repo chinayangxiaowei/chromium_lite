@@ -20,6 +20,8 @@
 #include <pthread.h>
 
 #include "native_client/src/include/nacl_base.h"
+#include "native_client/src/public/imc_syscalls.h"
+#include "native_client/src/public/name_service.h"
 #include "native_client/src/shared/platform/nacl_sync.h"
 #include "native_client/src/shared/platform/nacl_sync_checked.h"
 #include "native_client/src/shared/platform/nacl_sync_raii.h"
@@ -27,19 +29,15 @@
 
 // TODO(bsy): move weak_ref module to the shared directory
 #include "native_client/src/trusted/weak_ref/weak_ref.h"
-#include "native_client/src/trusted/weak_ref/call_on_main_thread.h"
-
-#include "native_client/src/untrusted/nacl_ppapi_util/nacl_ppapi_util.h"
-#include "native_client/src/untrusted/nacl_ppapi_util/string_buffer.h"
-
-#include <sys/nacl_syscalls.h>
-#include <sys/nacl_name_service.h>
-
-#include "native_client/src/shared/ppapi_proxy/ppruntime.h"
 
 #include "ppapi/cpp/instance.h"
 #include "ppapi/cpp/module.h"
 #include "ppapi/cpp/var.h"
+
+#include "ppapi/native_client/src/shared/ppapi_proxy/ppruntime.h"
+#include "ppapi/native_client/src/trusted/weak_ref/call_on_main_thread.h"
+#include "ppapi/native_client/src/untrusted/nacl_ppapi_util/nacl_ppapi_util.h"
+#include "ppapi/native_client/src/untrusted/nacl_ppapi_util/string_buffer.h"
 
 std::string *manifest_contents = NULL;
 

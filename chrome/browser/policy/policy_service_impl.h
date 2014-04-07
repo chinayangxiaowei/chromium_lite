@@ -39,29 +39,17 @@ class PolicyServiceImpl : public PolicyService,
   virtual void RemoveObserver(PolicyDomain domain,
                               PolicyService::Observer* observer) OVERRIDE;
   virtual void RegisterPolicyDomain(
-      PolicyDomain domain,
-      const std::set<std::string>& components) OVERRIDE;
+      scoped_refptr<const PolicyDomainDescriptor> descriptor) OVERRIDE;
   virtual const PolicyMap& GetPolicies(
       const PolicyNamespace& ns) const OVERRIDE;
+  virtual scoped_refptr<const PolicyDomainDescriptor> GetPolicyDomainDescriptor(
+      PolicyDomain domain) const OVERRIDE;
   virtual bool IsInitializationComplete(PolicyDomain domain) const OVERRIDE;
   virtual void RefreshPolicies(const base::Closure& callback) OVERRIDE;
 
  private:
   typedef ObserverList<PolicyService::Observer, true> Observers;
   typedef std::map<PolicyDomain, Observers*> ObserverMap;
-
-  // Information about policy changes sent to observers.
-  class PolicyChangeInfo {
-   public:
-    PolicyChangeInfo(const PolicyNamespace& policy_namespace,
-                     const PolicyMap& previous,
-                     const PolicyMap& current);
-    ~PolicyChangeInfo();
-
-    PolicyNamespace policy_namespace_;
-    PolicyMap previous_;
-    PolicyMap current_;
-  };
 
   // ConfigurationPolicyProvider::Observer overrides:
   virtual void OnUpdatePolicy(ConfigurationPolicyProvider* provider) OVERRIDE;
@@ -71,11 +59,6 @@ class PolicyServiceImpl : public PolicyService,
   void NotifyNamespaceUpdated(const PolicyNamespace& ns,
                               const PolicyMap& previous,
                               const PolicyMap& current);
-
-  // Helper function invoked by NotifyNamespaceUpdated() to notify observers
-  // via a queued task, to deal with reentrancy issues caused by observers
-  // generating policy changes.
-  void NotifyNamespaceUpdatedTask(scoped_ptr<PolicyChangeInfo> info);
 
   // Combines the policies from all the providers, and notifies the observers
   // of namespaces whose policies have been modified.
@@ -94,6 +77,10 @@ class PolicyServiceImpl : public PolicyService,
   // Maps each policy namespace to its current policies.
   PolicyBundle policy_bundle_;
 
+  // Maps each policy domain to its current descriptor.
+  scoped_refptr<const PolicyDomainDescriptor>
+      domain_descriptors_[POLICY_DOMAIN_SIZE];
+
   // Maps each policy domain to its observer list.
   ObserverMap observers_;
 
@@ -110,7 +97,7 @@ class PolicyServiceImpl : public PolicyService,
 
   // Used to create tasks to delay new policy updates while we may be already
   // processing previous policy updates.
-  base::WeakPtrFactory<PolicyServiceImpl> weak_ptr_factory_;
+  base::WeakPtrFactory<PolicyServiceImpl> update_task_ptr_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(PolicyServiceImpl);
 };

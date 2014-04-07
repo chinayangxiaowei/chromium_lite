@@ -6,9 +6,10 @@
 #define CC_TREES_DAMAGE_TRACKER_H_
 
 #include <vector>
-#include "base/hash_tables.h"
+#include "base/containers/hash_tables.h"
 #include "base/memory/scoped_ptr.h"
 #include "cc/base/cc_export.h"
+#include "cc/layers/layer_lists.h"
 #include "ui/gfx/rect_f.h"
 
 class SkImageFilter;
@@ -17,12 +18,9 @@ namespace gfx {
 class Rect;
 }
 
-namespace WebKit {
-class WebFilterOperations;
-}
-
 namespace cc {
 
+class FilterOperations;
 class LayerImpl;
 class RenderSurfaceImpl;
 
@@ -35,14 +33,14 @@ class CC_EXPORT DamageTracker {
   ~DamageTracker();
 
   void DidDrawDamagedArea() { current_damage_rect_ = gfx::RectF(); }
-  void ForceFullDamageNextUpdate() { force_full_damage_next_update_ = true; }
+  void AddDamageNextUpdate(gfx::RectF dmg) { current_damage_rect_.Union(dmg); }
   void UpdateDamageTrackingState(
-      const std::vector<LayerImpl*>& layer_list,
+      const LayerImplList& layer_list,
       int target_surface_layer_id,
       bool target_surface_property_changed_only_from_descendant,
       gfx::Rect target_surface_content_rect,
       LayerImpl* target_surface_mask_layer,
-      const WebKit::WebFilterOperations& filters,
+      const FilterOperations& filters,
       SkImageFilter* filter);
 
   gfx::RectF current_damage_rect() { return current_damage_rect_; }
@@ -51,7 +49,7 @@ class CC_EXPORT DamageTracker {
   DamageTracker();
 
   gfx::RectF TrackDamageFromActiveLayers(
-      const std::vector<LayerImpl*>& layer_list,
+      const LayerImplList& layer_list,
       int target_surface_layer_id);
   gfx::RectF TrackDamageFromSurfaceMask(LayerImpl* target_surface_mask_layer);
   gfx::RectF TrackDamageFromLeftoverRects();
@@ -73,7 +71,6 @@ class CC_EXPORT DamageTracker {
   scoped_ptr<RectMap> next_rect_history_;
 
   gfx::RectF current_damage_rect_;
-  bool force_full_damage_next_update_;
 
   DISALLOW_COPY_AND_ASSIGN(DamageTracker);
 };

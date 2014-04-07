@@ -7,14 +7,14 @@
 #include "chrome/browser/search_engines/template_url_fetcher.h"
 
 #include "base/strings/string_number_conversions.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url.h"
 #include "chrome/browser/search_engines/template_url_fetcher_callbacks.h"
 #include "chrome/browser/search_engines/template_url_parser.h"
 #include "chrome/browser/search_engines/template_url_service.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 #include "content/public/browser/notification_source.h"
@@ -86,8 +86,8 @@ TemplateURLFetcher::RequestDelegate::RequestDelegate(
     content::WebContents* web_contents,
     TemplateURLFetcherCallbacks* callbacks,
     ProviderType provider_type)
-    : ALLOW_THIS_IN_INITIALIZER_LIST(url_fetcher_(net::URLFetcher::Create(
-          osdd_url, net::URLFetcher::GET, this))),
+    : url_fetcher_(net::URLFetcher::Create(
+          osdd_url, net::URLFetcher::GET, this)),
       fetcher_(fetcher),
       keyword_(keyword),
       osdd_url_(osdd_url),

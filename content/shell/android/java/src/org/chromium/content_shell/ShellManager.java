@@ -13,7 +13,7 @@ import org.chromium.base.CalledByNative;
 import org.chromium.base.JNINamespace;
 import org.chromium.content.browser.ContentView;
 import org.chromium.content.browser.ContentViewRenderView;
-import org.chromium.ui.gfx.NativeWindow;
+import org.chromium.ui.WindowAndroid;
 
 /**
  * Container and generator of ShellViews.
@@ -23,7 +23,7 @@ public class ShellManager extends FrameLayout {
 
     public static final String DEFAULT_SHELL_URL = "http://www.google.com";
     private static boolean sStartup = true;
-    private NativeWindow mWindow;
+    private WindowAndroid mWindow;
     private Shell mActiveShell;
 
     private String mStartupUrl = DEFAULT_SHELL_URL;
@@ -51,14 +51,14 @@ public class ShellManager extends FrameLayout {
     /**
      * @param window The window used to generate all shells.
      */
-    public void setWindow(NativeWindow window) {
+    public void setWindow(WindowAndroid window) {
         mWindow = window;
     }
 
     /**
      * @return The window used to generate all shells.
      */
-    public NativeWindow getWindow() {
+    public WindowAndroid getWindow() {
         return mWindow;
     }
 
@@ -92,12 +92,7 @@ public class ShellManager extends FrameLayout {
         Shell shellView = (Shell) inflater.inflate(R.layout.shell_view, null);
         shellView.setWindow(mWindow);
 
-        removeAllViews();
-        if (mActiveShell != null) {
-            ContentView contentView = mActiveShell.getContentView();
-            if (contentView != null) contentView.onHide();
-            mActiveShell.setContentViewRenderView(null);
-        }
+        if (mActiveShell != null) closeShell(mActiveShell);
 
         shellView.setContentViewRenderView(mContentViewRenderView);
         addView(shellView, new FrameLayout.LayoutParams(
@@ -110,6 +105,17 @@ public class ShellManager extends FrameLayout {
         }
 
         return shellView;
+    }
+
+    @SuppressWarnings("unused")
+    @CalledByNative
+    private void closeShell(Shell shellView) {
+        if (shellView == mActiveShell) mActiveShell = null;
+        ContentView contentView = shellView.getContentView();
+        if (contentView != null) contentView.onHide();
+        shellView.setContentViewRenderView(null);
+        shellView.setWindow(null);
+        removeView(shellView);
     }
 
     private static native void nativeInit(Object shellManagerInstance);

@@ -29,10 +29,10 @@
 #include "base/memory/singleton.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/posix/global_descriptors.h"
-#include "base/process_util.h"
+#include "base/process/process_handle.h"
 #include "base/rand_util.h"
 #include "base/stl_util.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "base/synchronization/lock.h"
 #include "ipc/file_descriptor_set_posix.h"
 #include "ipc/ipc_descriptors.h"
@@ -335,10 +335,10 @@ bool Channel::ChannelImpl::Connect() {
   if (server_listen_pipe_ != -1) {
     // Watch the pipe for connections, and turn any connections into
     // active sockets.
-    MessageLoopForIO::current()->WatchFileDescriptor(
+    base::MessageLoopForIO::current()->WatchFileDescriptor(
         server_listen_pipe_,
         true,
-        MessageLoopForIO::WATCH_READ,
+        base::MessageLoopForIO::WATCH_READ,
         &server_listen_connection_watcher_,
         this);
   } else {
@@ -469,10 +469,10 @@ bool Channel::ChannelImpl::ProcessOutgoingMessages() {
 
       // Tell libevent to call us back once things are unblocked.
       is_blocked_on_write_ = true;
-      MessageLoopForIO::current()->WatchFileDescriptor(
+      base::MessageLoopForIO::current()->WatchFileDescriptor(
           pipe_,
           false,  // One shot
-          MessageLoopForIO::WATCH_WRITE,
+          base::MessageLoopForIO::WATCH_WRITE,
           &write_watcher_,
           this);
       return true;
@@ -580,7 +580,7 @@ void Channel::ChannelImpl::ResetToAcceptingConnectionState() {
 // static
 bool Channel::ChannelImpl::IsNamedServerInitialized(
     const std::string& channel_id) {
-  return file_util::PathExists(base::FilePath(channel_id));
+  return base::PathExists(base::FilePath(channel_id));
 }
 
 #if defined(OS_LINUX)
@@ -667,11 +667,8 @@ void Channel::ChannelImpl::OnFileCanWriteWithoutBlocking(int fd) {
 }
 
 bool Channel::ChannelImpl::AcceptConnection() {
-  MessageLoopForIO::current()->WatchFileDescriptor(pipe_,
-                                                   true,
-                                                   MessageLoopForIO::WATCH_READ,
-                                                   &read_watcher_,
-                                                   this);
+  base::MessageLoopForIO::current()->WatchFileDescriptor(
+      pipe_, true, base::MessageLoopForIO::WATCH_READ, &read_watcher_, this);
   QueueHelloMessage();
 
   if (mode_ & MODE_CLIENT_FLAG) {
@@ -844,11 +841,6 @@ bool Channel::ChannelImpl::WillDispatchInputMessage(Message* msg) {
                  << " channel:" << this
                  << " message-type:" << msg->type()
                  << " header()->num_fds:" << header_fds;
-#if defined(CHROMIUM_SELINUX)
-    LOG(WARNING) << "In the case of SELinux this can be caused when "
-                    "using a --user-data-dir to which the default "
-                    "policy doesn't give the renderer access to. ";
-#endif  // CHROMIUM_SELINUX
     // Abort the connection.
     ClearInputFDs();
     return false;

@@ -17,11 +17,14 @@
 
 class GURL;
 class PageUsageData;
-class PrefRegistrySyncable;
 
 namespace base {
 class ListValue;
 class Value;
+}
+
+namespace user_prefs {
+class PrefRegistrySyncable;
 }
 
 // The handler for Javascript messages related to the "most visited" view.
@@ -67,7 +70,7 @@ class MostVisitedHandler : public content::WebUIMessageHandler,
     return most_visited_urls_;
   }
 
-  static void RegisterUserPrefs(PrefRegistrySyncable* registry);
+  static void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
 
  private:
   struct MostVisitedPage;
@@ -87,7 +90,12 @@ class MostVisitedHandler : public content::WebUIMessageHandler,
   // Returns the key used in url_blacklist_ for the passed |url|.
   std::string GetDictionaryKeyForUrl(const std::string& url);
 
-  // Sends pages_value_ to the javascript side to and resets page_value_.
+  // Removes recommended URLs if a matching URL is already open in the Browser,
+  // if the Most Visited Tile Placement experiment is enabled, and the client is
+  // in the experiment group.
+  void MaybeRemovePageValues();
+
+  // Sends pages_value_ to the javascript side and resets page_value_.
   void SendPagesValue();
 
   content::NotificationRegistrar registrar_;

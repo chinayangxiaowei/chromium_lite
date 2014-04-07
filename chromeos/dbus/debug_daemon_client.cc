@@ -9,12 +9,11 @@
 
 #include "base/bind.h"
 #include "base/callback.h"
-#include "base/chromeos/chromeos_version.h"
 #include "base/memory/ref_counted_memory.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/platform_file.h"
 #include "base/posix/eintr_wrapper.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "base/threading/worker_pool.h"
 #include "dbus/bus.h"
 #include "dbus/message.h"
@@ -44,8 +43,7 @@ class PipeReader {
   typedef base::Callback<void(void)>IOCompleteCallback;
 
   explicit PipeReader(IOCompleteCallback callback)
-      : data_stream_(NULL),
-        io_buffer_(new net::IOBufferWithSize(4096)),
+      : io_buffer_(new net::IOBufferWithSize(4096)),
         callback_(callback),
         weak_ptr_factory_(this) {
     pipe_fd_[0] = pipe_fd_[1] = -1;
@@ -143,7 +141,6 @@ class DebugDaemonClientImpl : public DebugDaemonClient {
  public:
   explicit DebugDaemonClientImpl(dbus::Bus* bus)
       : debugdaemon_proxy_(NULL),
-        pipe_reader_(NULL),
         weak_ptr_factory_(this) {
     debugdaemon_proxy_ = bus->GetObjectProxy(
         debugd::kDebugdServiceName,
@@ -233,6 +230,18 @@ class DebugDaemonClientImpl : public DebugDaemonClient {
                    callback));
   }
 
+  virtual void GetWiMaxStatus(const GetWiMaxStatusCallback& callback)
+      OVERRIDE {
+    dbus::MethodCall method_call(debugd::kDebugdInterface,
+                                 debugd::kGetWiMaxStatus);
+    debugdaemon_proxy_->CallMethod(
+        &method_call,
+        dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
+        base::Bind(&DebugDaemonClientImpl::OnGetWiMaxStatus,
+                   weak_ptr_factory_.GetWeakPtr(),
+                   callback));
+  }
+
   virtual void GetNetworkInterfaces(
       const GetNetworkInterfacesCallback& callback) OVERRIDE {
     dbus::MethodCall method_call(debugd::kDebugdInterface,
@@ -256,6 +265,17 @@ class DebugDaemonClientImpl : public DebugDaemonClient {
         &method_call,
         dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
         base::Bind(&DebugDaemonClientImpl::OnGetPerfData,
+                   weak_ptr_factory_.GetWeakPtr(),
+                   callback));
+  }
+
+  virtual void GetScrubbedLogs(const GetLogsCallback& callback) OVERRIDE {
+    dbus::MethodCall method_call(debugd::kDebugdInterface,
+                                 debugd::kGetFeedbackLogs);
+    debugdaemon_proxy_->CallMethod(
+        &method_call,
+        dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
+        base::Bind(&DebugDaemonClientImpl::OnGetAllLogs,
                    weak_ptr_factory_.GetWeakPtr(),
                    callback));
   }
@@ -349,6 +369,39 @@ class DebugDaemonClientImpl : public DebugDaemonClient {
                    callback));
   }
 
+  virtual void TestICMPWithOptions(
+      const std::string& ip_address,
+      const std::map<std::string, std::string>& options,
+      const TestICMPCallback& callback) OVERRIDE {
+    dbus::MethodCall method_call(debugd::kDebugdInterface,
+                                 debugd::kTestICMPWithOptions);
+    dbus::MessageWriter writer(&method_call);
+    dbus::MessageWriter sub_writer(NULL);
+    dbus::MessageWriter elem_writer(NULL);
+
+    // Write the host.
+    writer.AppendString(ip_address);
+
+    // Write the options.
+    writer.OpenArray("{ss}", &sub_writer);
+    std::map<std::string, std::string>::const_iterator it;
+    for (it = options.begin(); it != options.end(); ++it) {
+      sub_writer.OpenDictEntry(&elem_writer);
+      elem_writer.AppendString(it->first);
+      elem_writer.AppendString(it->second);
+      sub_writer.CloseContainer(&elem_writer);
+    }
+    writer.CloseContainer(&sub_writer);
+
+    // Call the function.
+    debugdaemon_proxy_->CallMethod(
+        &method_call,
+        dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
+        base::Bind(&DebugDaemonClientImpl::OnTestICMP,
+                   weak_ptr_factory_.GetWeakPtr(),
+                   callback));
+  }
+
  private:
   // Called to check descriptor validity on a thread where i/o is permitted.
   static void CheckValidity(dbus::FileDescriptor* file_descriptor) {
@@ -421,6 +474,15 @@ class DebugDaemonClientImpl : public DebugDaemonClient {
   }
 
   void OnGetModemStatus(const GetModemStatusCallback& callback,
+                        dbus::Response* response) {
+    std::string status;
+    if (response && dbus::MessageReader(response).PopString(&status))
+      callback.Run(true, status);
+    else
+      callback.Run(false, "");
+  }
+
+  void OnGetWiMaxStatus(const GetWiMaxStatusCallback& callback,
                         dbus::Response* response) {
     std::string status;
     if (response && dbus::MessageReader(response).PopString(&status))
@@ -575,44 +637,68 @@ class DebugDaemonClientStubImpl : public DebugDaemonClient {
   virtual void GetRoutes(bool numeric, bool ipv6,
                          const GetRoutesCallback& callback) OVERRIDE {
     std::vector<std::string> empty;
-    MessageLoop::current()->PostTask(FROM_HERE,
-                                     base::Bind(callback, false, empty));
+    base::MessageLoop::current()->PostTask(FROM_HERE,
+                                           base::Bind(callback, false, empty));
   }
   virtual void GetNetworkStatus(const GetNetworkStatusCallback& callback)
       OVERRIDE {
-    MessageLoop::current()->PostTask(FROM_HERE,
-                                     base::Bind(callback, false, ""));
+    base::MessageLoop::current()->PostTask(FROM_HERE,
+                                           base::Bind(callback, false, ""));
   }
   virtual void GetModemStatus(const GetModemStatusCallback& callback)
       OVERRIDE {
-    MessageLoop::current()->PostTask(FROM_HERE,
-                                     base::Bind(callback, false, ""));
+    base::MessageLoop::current()->PostTask(FROM_HERE,
+                                           base::Bind(callback, false, ""));
+  }
+  virtual void GetWiMaxStatus(const GetWiMaxStatusCallback& callback)
+      OVERRIDE {
+    base::MessageLoop::current()->PostTask(FROM_HERE,
+                                           base::Bind(callback, false, ""));
   }
   virtual void GetNetworkInterfaces(
       const GetNetworkInterfacesCallback& callback) OVERRIDE {
-    MessageLoop::current()->PostTask(FROM_HERE,
-                                     base::Bind(callback, false, ""));
+    base::MessageLoop::current()->PostTask(FROM_HERE,
+                                           base::Bind(callback, false, ""));
   }
   virtual void GetPerfData(uint32_t duration,
                            const GetPerfDataCallback& callback) OVERRIDE {
     std::vector<uint8> data;
-    MessageLoop::current()->PostTask(FROM_HERE, base::Bind(callback, data));
+    base::MessageLoop::current()->PostTask(FROM_HERE,
+    base::Bind(callback, data));
+  }
+  virtual void GetScrubbedLogs(const GetLogsCallback& callback) OVERRIDE {
+    std::map<std::string, std::string> sample;
+    sample["Sample Scrubbed Log"] = "Your email address is xxxxxxxx";
+    base::MessageLoop::current()->PostTask(
+        FROM_HERE, base::Bind(callback, false, sample));
   }
   virtual void GetAllLogs(const GetLogsCallback& callback) OVERRIDE {
-    std::map<std::string, std::string> empty;
-    MessageLoop::current()->PostTask(FROM_HERE,
-                                     base::Bind(callback, false, empty));
+    std::map<std::string, std::string> sample;
+    sample["Sample Log"] = "Your email address is abc@abc.com";
+    base::MessageLoop::current()->PostTask(
+        FROM_HERE, base::Bind(callback, false, sample));
   }
   virtual void GetUserLogFiles(const GetLogsCallback& callback) OVERRIDE {
-    std::map<std::string, std::string> empty;
-    MessageLoop::current()->PostTask(FROM_HERE,
-                                     base::Bind(callback, false, empty));
+    std::map<std::string, std::string> user_logs;
+    user_logs["preferences"] = "Preferences";
+    user_logs["invalid_file"] = "Invalid File";
+    base::MessageLoop::current()->PostTask(
+        FROM_HERE,
+        base::Bind(callback, true, user_logs));
   }
 
   virtual void TestICMP(const std::string& ip_address,
                         const TestICMPCallback& callback) OVERRIDE {
-    MessageLoop::current()->PostTask(FROM_HERE,
-                                     base::Bind(callback, false, ""));
+    base::MessageLoop::current()->PostTask(FROM_HERE,
+                                           base::Bind(callback, false, ""));
+  }
+
+  virtual void TestICMPWithOptions(
+      const std::string& ip_address,
+      const std::map<std::string, std::string>& options,
+      const TestICMPCallback& callback) OVERRIDE {
+    base::MessageLoop::current()->PostTask(FROM_HERE,
+                                           base::Bind(callback, false, ""));
   }
 };
 

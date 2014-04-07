@@ -25,45 +25,38 @@ class VolumeMountWatcherWin;
 
 class StorageMonitorWin : public StorageMonitor {
  public:
-  // Creates an instance of StorageMonitorWin. Should only be called by browser
-  // start up code. Use GetInstance() instead.
-  static StorageMonitorWin* Create();
-
   virtual ~StorageMonitorWin();
 
   // Must be called after the file thread is created.
-  void Init();
+  virtual void Init() OVERRIDE;
 
   // StorageMonitor:
   virtual bool GetStorageInfoForPath(const base::FilePath& path,
                                      StorageInfo* device_info) const OVERRIDE;
   virtual bool GetMTPStorageInfoFromDeviceId(
       const std::string& storage_device_id,
-      string16* device_location,
-      string16* storage_object_id) const OVERRIDE;
+      base::string16* device_location,
+      base::string16* storage_object_id) const OVERRIDE;
 
-  virtual uint64 GetStorageSize(
-      const base::FilePath::StringType& location) const OVERRIDE;
+  virtual void EjectDevice(
+      const std::string& device_id,
+      base::Callback<void(EjectStatus)> callback) OVERRIDE;
 
  private:
   class PortableDeviceNotifications;
   friend class test::TestStorageMonitorWin;
+  friend StorageMonitor* StorageMonitor::Create();
 
   // To support unit tests, this constructor takes |volume_mount_watcher| and
   // |portable_device_watcher| objects. These params are either constructed in
-  // unit tests or in StorageMonitorWin::Create() function.
+  // unit tests or in StorageMonitorWin Create() function.
   StorageMonitorWin(VolumeMountWatcherWin* volume_mount_watcher,
                     PortableDeviceWatcherWin* portable_device_watcher);
 
   // Gets the removable storage information given a |device_path|. On success,
-  // returns true and fills in |device_location|, |unique_id|, |name| and
-  // |removable|, and |total_size_in_bytes|.
+  // returns true and fills in |info|.
   bool GetDeviceInfo(const base::FilePath& device_path,
-                     string16* device_location,
-                     std::string* unique_id,
-                     string16* name,
-                     bool* removable,
-                     uint64* total_size_in_bytes) const;
+                     StorageInfo* info) const;
 
   static LRESULT CALLBACK WndProcThunk(HWND hwnd, UINT message, WPARAM wparam,
                                        LPARAM lparam);

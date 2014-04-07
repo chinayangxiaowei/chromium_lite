@@ -294,6 +294,8 @@ cr.define('cr.ui', function() {
              e.keyCode == DropDown.KEYCODE_DOWN)) {
           this.opening = true;
           this.controller.isShown = true;
+          e.stopPropagation();
+          e.preventDefault();
         }
       });
       return el;
@@ -308,6 +310,7 @@ cr.define('cr.ui', function() {
       if (!this.isShown)
         return;
       var selected = this.container.selectedItem;
+      var handled = false;
       switch (e.keyCode) {
         case DropDown.KEYCODE_UP: {
           do {
@@ -316,6 +319,7 @@ cr.define('cr.ui', function() {
               selected = this.container.lastElementChild;
           } while (selected.iid < 0);
           this.container.selectItem(selected, false);
+          handled = true;
           break;
         }
         case DropDown.KEYCODE_DOWN: {
@@ -325,14 +329,17 @@ cr.define('cr.ui', function() {
               selected = this.container.firstItem;
           } while (selected.iid < 0);
           this.container.selectItem(selected, false);
+          handled = true;
           break;
         }
         case DropDown.KEYCODE_ESC: {
           this.isShown = false;
+          handled = true;
           break;
         }
         case DropDown.KEYCODE_TAB: {
           this.isShown = false;
+          handled = true;
           break;
         }
         case DropDown.KEYCODE_ENTER: {
@@ -344,8 +351,13 @@ cr.define('cr.ui', function() {
             if (item.iid >= 0 && !item.classList.contains('disabled-item'))
               chrome.send('networkItemChosen', [item.iid]);
           }
+          handled = true;
           break;
         }
+      }
+      if (handled) {
+        e.stopPropagation();
+        e.preventDefault();
       }
       this.title_.opening = false;
     }
@@ -376,14 +388,12 @@ cr.define('cr.ui', function() {
    * the previous one.
    * @param {string} elementId Id of network drop-down element.
    * @param {boolean} isOobe Whether drop-down is used by an Oobe screen.
-   * @param {integer} lastNetworkType Last active network type. Pass -1 if it
-   *   isn't known.
    */
-  DropDown.show = function(elementId, isOobe, lastNetworkType) {
+  DropDown.show = function(elementId, isOobe) {
     $(elementId).isShown = false;
     if (DropDown.activeElementId_ != elementId) {
       DropDown.activeElementId_ = elementId;
-      chrome.send('networkDropdownShow', [elementId, isOobe, lastNetworkType]);
+      chrome.send('networkDropdownShow', [elementId, isOobe]);
     }
   };
 

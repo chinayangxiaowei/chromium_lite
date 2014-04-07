@@ -4,10 +4,12 @@
 
 #include <vector>
 
+#include "base/callback.h"
 #include "base/json/json_reader.h"
 #include "base/run_loop.h"
 #include "base/values.h"
 #include "chrome/browser/policy/browser_policy_connector.h"
+#include "chrome/browser/policy/external_data_fetcher.h"
 #include "chrome/browser/policy/mock_configuration_policy_provider.h"
 #include "chrome/browser/policy/policy_map.h"
 #include "chrome/browser/policy/policy_types.h"
@@ -17,12 +19,12 @@
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test_utils.h"
-#include "googleurl/src/gurl.h"
 #include "grit/generated_resources.h"
 #include "policy/policy_constants.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "url/gurl.h"
 
 using testing::AnyNumber;
 using testing::Return;
@@ -43,7 +45,7 @@ std::vector<std::string> PopulateExpectedPolicy(
         metadata->scope == policy::POLICY_SCOPE_MACHINE ?
             IDS_POLICY_SCOPE_DEVICE : IDS_POLICY_SCOPE_USER));
   } else {
-    expected_policy.push_back("");
+    expected_policy.push_back(std::string());
   }
 
   // Populate expected level.
@@ -52,7 +54,7 @@ std::vector<std::string> PopulateExpectedPolicy(
         metadata->level == policy::POLICY_LEVEL_RECOMMENDED ?
             IDS_POLICY_LEVEL_RECOMMENDED : IDS_POLICY_LEVEL_MANDATORY));
   } else {
-    expected_policy.push_back("");
+    expected_policy.push_back(std::string());
   }
 
   // Populate expected policy name.
@@ -105,7 +107,7 @@ PolicyUITest::~PolicyUITest() {
 void PolicyUITest::SetUpInProcessBrowserTestFixture() {
   EXPECT_CALL(provider_, IsInitializationComplete(_))
       .WillRepeatedly(Return(true));
-  EXPECT_CALL(provider_, RegisterPolicyDomain(_, _)).Times(AnyNumber());
+  EXPECT_CALL(provider_, RegisterPolicyDomain(_)).Times(AnyNumber());
   policy::BrowserPolicyConnector::SetPolicyProviderForTesting(&provider_);
 }
 
@@ -122,7 +124,7 @@ void PolicyUITest::VerifyPolicies(
   // Retrieve the text contents of the policy table cells for all policies.
   const std::string javascript =
       "var entries = document.querySelectorAll("
-      "    'table#policy-table > tbody');"
+      "    'section.policy-table-section > * > tbody');"
       "var policies = [];"
       "for (var i = 0; i < entries.length; ++i) {"
       "  var items = entries[i].querySelectorAll('tr > td');"
@@ -178,7 +180,7 @@ IN_PROC_BROWSER_TEST_F(PolicyUITest, SendPolicyNames) {
   for (const policy::PolicyDefinitionList::Entry* policy = policies->begin;
       policy != policies->end; ++policy) {
     expected_policies.push_back(
-        PopulateExpectedPolicy(policy->name, "", NULL, false));
+        PopulateExpectedPolicy(policy->name, std::string(), NULL, false));
   }
 
   // Retrieve the contents of the policy table from the UI and verify that it
@@ -202,29 +204,34 @@ IN_PROC_BROWSER_TEST_F(PolicyUITest, SendPolicyValues) {
   values.Set(policy::key::kRestoreOnStartupURLs,
              policy::POLICY_LEVEL_MANDATORY,
              policy::POLICY_SCOPE_USER,
-             restore_on_startup_urls);
+             restore_on_startup_urls,
+             NULL);
   expected_values[policy::key::kRestoreOnStartupURLs] = "aaa,bbb,ccc";
   values.Set(policy::key::kHomepageLocation,
              policy::POLICY_LEVEL_MANDATORY,
              policy::POLICY_SCOPE_MACHINE,
-             base::Value::CreateStringValue("http://google.com"));
+             base::Value::CreateStringValue("http://google.com"),
+             NULL);
   expected_values[policy::key::kHomepageLocation] = "http://google.com";
   values.Set(policy::key::kRestoreOnStartup,
              policy::POLICY_LEVEL_RECOMMENDED,
              policy::POLICY_SCOPE_USER,
-             base::Value::CreateIntegerValue(4));
+             base::Value::CreateIntegerValue(4),
+             NULL);
   expected_values[policy::key::kRestoreOnStartup] = "4";
   values.Set(policy::key::kShowHomeButton,
              policy::POLICY_LEVEL_RECOMMENDED,
              policy::POLICY_SCOPE_MACHINE,
-             base::Value::CreateBooleanValue(true));
+             base::Value::CreateBooleanValue(true),
+             NULL);
   expected_values[policy::key::kShowHomeButton] = "true";
   // Set the value of a policy that does not exist.
   const std::string kUnknownPolicy = "NoSuchThing";
   values.Set(kUnknownPolicy,
              policy::POLICY_LEVEL_MANDATORY,
              policy::POLICY_SCOPE_USER,
-             base::Value::CreateBooleanValue(true));
+             base::Value::CreateBooleanValue(true),
+             NULL);
   expected_values[kUnknownPolicy] = "true";
   UpdateProviderPolicy(values);
 
@@ -240,7 +247,8 @@ IN_PROC_BROWSER_TEST_F(PolicyUITest, SendPolicyValues) {
        policy != policies->end; ++policy) {
     std::map<std::string, std::string>::const_iterator it =
         expected_values.find(policy->name);
-    const std::string value = it == expected_values.end() ? "" : it->second;
+    const std::string value =
+        it == expected_values.end() ? std::string() : it->second;
     const policy::PolicyMap::Entry* metadata = values.Get(policy->name);
     expected_policies.insert(
         metadata ? expected_policies.begin() + first_unset_position++ :

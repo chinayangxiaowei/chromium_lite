@@ -4,8 +4,9 @@
 
 #include "base/command_line.h"
 #include "base/path_service.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/extensions/extension_test_message_listener.h"
 #include "chrome/browser/profiles/profile.h"
@@ -16,7 +17,6 @@
 #include "chrome/browser/ui/panels/panel_constants.h"
 #include "chrome/browser/ui/panels/panel_manager.h"
 #include "chrome/browser/web_applications/web_app.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/extension.h"
@@ -76,6 +76,8 @@ class PanelExtensionBrowserTest : public ExtensionBrowserTest {
   }
 };
 
+// TODO(jschuh): Hanging plugin tests. crbug.com/244653
+#if !defined(OS_WIN) && !defined(ARCH_CPU_X86_64)
 IN_PROC_BROWSER_TEST_F(PanelExtensionBrowserTest, PanelAppIcon) {
   const Extension* extension =
       LoadExtension(test_data_dir_.AppendASCII("test_extension"));
@@ -98,18 +100,10 @@ IN_PROC_BROWSER_TEST_F(PanelExtensionBrowserTest, PanelAppIcon) {
 
   panel->Close();
 }
-
-// Tests that icon loading might not be completed when the panel is closed.
-// (crbug.com/151484)
-//
-// TODO(linux_aura) http://crbug.com/163931
-#if defined(OS_LINUX) && !defined(OS_CHROMEOS) && defined(USE_AURA)
-#define MAYBE_ClosePanelBeforeIconLoadingCompleted DISABLED_ClosePanelBeforeIconLoadingCompleted
-#else
-#define MAYBE_ClosePanelBeforeIconLoadingCompleted ClosePanelBeforeIconLoadingCompleted
 #endif
+
 IN_PROC_BROWSER_TEST_F(PanelExtensionBrowserTest,
-                       MAYBE_ClosePanelBeforeIconLoadingCompleted) {
+                       ClosePanelBeforeIconLoadingCompleted) {
   const Extension* extension =
       LoadExtension(test_data_dir_.AppendASCII("test_extension"));
   Panel* panel = CreatePanelFromExtension(extension);
@@ -152,13 +146,11 @@ IN_PROC_BROWSER_TEST_F(PanelExtensionBrowserTest, BasicContextMenu) {
   content::WebContents* web_contents = panel->GetWebContents();
   ASSERT_TRUE(web_contents);
 
-  WebKit::WebContextMenuData data;
-
   // Verify basic menu contents. The basic extension does not add any
   // context menu items so the panel's menu should include only the
   // developer tools.
   {
-    content::ContextMenuParams params(data);
+    content::ContextMenuParams params;
     params.page_url = web_contents->GetURL();
     // Ensure context menu isn't swallowed by WebContentsDelegate (the panel).
     EXPECT_FALSE(web_contents->GetDelegate()->HandleContextMenu(params));
@@ -178,7 +170,7 @@ IN_PROC_BROWSER_TEST_F(PanelExtensionBrowserTest, BasicContextMenu) {
 
   // Verify expected menu contents for editable item.
   {
-    content::ContextMenuParams params(data);
+    content::ContextMenuParams params;
     params.is_editable = true;
     params.page_url = web_contents->GetURL();
     // Ensure context menu isn't swallowed by WebContentsDelegate (the panel).
@@ -199,7 +191,7 @@ IN_PROC_BROWSER_TEST_F(PanelExtensionBrowserTest, BasicContextMenu) {
 
   // Verify expected menu contents for text selection.
   {
-    content::ContextMenuParams params(data);
+    content::ContextMenuParams params;
     params.page_url = web_contents->GetURL();
     params.selection_text = ASCIIToUTF16("Select me");
     // Ensure context menu isn't swallowed by WebContentsDelegate (the panel).
@@ -220,7 +212,7 @@ IN_PROC_BROWSER_TEST_F(PanelExtensionBrowserTest, BasicContextMenu) {
 
   // Verify expected menu contexts for a link.
   {
-    content::ContextMenuParams params(data);
+    content::ContextMenuParams params;
     params.page_url = web_contents->GetURL();
     params.unfiltered_link_url = GURL("http://google.com/");
     // Ensure context menu isn't swallowed by WebContentsDelegate (the panel).
@@ -257,8 +249,7 @@ IN_PROC_BROWSER_TEST_F(PanelExtensionBrowserTest, CustomContextMenu) {
   content::WebContents* web_contents = panel->GetWebContents();
   ASSERT_TRUE(web_contents);
 
-  WebKit::WebContextMenuData data;
-  content::ContextMenuParams params(data);
+  content::ContextMenuParams params;
   params.page_url = web_contents->GetURL();
 
   // Ensure context menu isn't swallowed by WebContentsDelegate (the panel).

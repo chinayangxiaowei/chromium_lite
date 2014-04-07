@@ -5,8 +5,8 @@
 #include "chrome/test/webdriver/http_response.h"
 
 #include "base/format_macros.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 
 namespace webdriver {
 
@@ -124,8 +124,7 @@ void HttpResponse::GetData(std::string* data) const {
   std::string length;
   if (!GetHeader(kContentLengthHeader, &length)) {
     *data += base::StringPrintf(
-        "%s:%"PRIuS"\r\n",
-        kContentLengthHeader, body_.length());
+        "%s:%" PRIuS "\r\n", kContentLengthHeader, body_.length());
   }
   *data += "\r\n";
 

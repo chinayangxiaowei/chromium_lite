@@ -16,6 +16,10 @@
 #include "chrome/common/pref_names.h"
 #include "ui/base/ui_base_switches.h"
 
+#if defined(OS_CHROMEOS)
+#include "chromeos/chromeos_switches.h"
+#endif
+
 const CommandLinePrefStore::StringSwitchToPreferenceMapEntry
     CommandLinePrefStore::string_switch_map_[] = {
       { switches::kLang, prefs::kApplicationLocale },
@@ -53,6 +57,8 @@ const CommandLinePrefStore::BooleanSwitchToPreferenceMapEntry
       { switches::kDisableTLSChannelID, prefs::kEnableOriginBoundCerts, false },
       { switches::kDisableSSLFalseStart, prefs::kDisableSSLRecordSplitting,
           true },
+      { switches::kEnableUnrestrictedSSL3Fallback,
+          prefs::kEnableUnrestrictedSSL3Fallback, true },
       { switches::kEnableMemoryInfo, prefs::kEnableMemoryInfo, true },
 #if defined(GOOGLE_CHROME_BUILD)
       { switches::kDisablePrintPreview, prefs::kPrintPreviewDisabled, true },
@@ -60,11 +66,9 @@ const CommandLinePrefStore::BooleanSwitchToPreferenceMapEntry
       { switches::kEnablePrintPreview, prefs::kPrintPreviewDisabled, false },
 #endif
 #if defined(OS_CHROMEOS)
-      { switches::kDisableDrive, prefs::kDisableDrive, true },
-      { switches::kEnableTouchpadThreeFingerClick,
+      { chromeos::switches::kDisableDrive, prefs::kDisableDrive, true },
+      { chromeos::switches::kEnableTouchpadThreeFingerClick,
           prefs::kEnableTouchpadThreeFingerClick, true },
-      { switches::kEnableTouchpadThreeFingerSwipe,
-          prefs::kEnableTouchpadThreeFingerSwipe, true },
 #endif
       { switches::kDisableCloudPolicyOnSignin,
           prefs::kDisableCloudPolicyOnSignin, true },

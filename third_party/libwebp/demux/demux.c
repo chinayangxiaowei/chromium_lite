@@ -1,8 +1,10 @@
 // Copyright 2012 Google Inc. All Rights Reserved.
 //
-// This code is licensed under the same terms as WebM:
-//  Software License Agreement:  http://www.webmproject.org/license/software/
-//  Additional IP Rights Grant:  http://www.webmproject.org/license/additional/
+// Use of this source code is governed by a BSD-style license
+// that can be found in the COPYING file in the root of the source
+// tree. An additional intellectual property rights grant can be found
+// in the file PATENTS. All contributing project authors may
+// be found in the AUTHORS file in the root of the source tree.
 // -----------------------------------------------------------------------------
 //
 //  WebP container demux.
@@ -27,7 +29,7 @@ extern "C" {
 
 #define DMUX_MAJ_VERSION 0
 #define DMUX_MIN_VERSION 1
-#define DMUX_REV_VERSION 0
+#define DMUX_REV_VERSION 1
 
 typedef struct {
   size_t start_;        // start location of the data
@@ -69,6 +71,7 @@ struct WebPDemuxer {
   uint32_t bgcolor_;
   int num_frames_;
   Frame* frames_;
+  Frame** frames_tail_;
   Chunk* chunks_;  // non-image chunks
 };
 
@@ -183,15 +186,12 @@ static void AddChunk(WebPDemuxer* const dmux, Chunk* const chunk) {
 // Add a frame to the end of the list, ensuring the last frame is complete.
 // Returns true on success, false otherwise.
 static int AddFrame(WebPDemuxer* const dmux, Frame* const frame) {
-  const Frame* last_frame = NULL;
-  Frame** f = &dmux->frames_;
-  while (*f != NULL) {
-    last_frame = *f;
-    f = &(*f)->next_;
-  }
+  const Frame* const last_frame = *dmux->frames_tail_;
   if (last_frame != NULL && !last_frame->complete_) return 0;
-  *f = frame;
+
+  *dmux->frames_tail_ = frame;
   frame->next_ = NULL;
+  dmux->frames_tail_ = &frame->next_;
   return 1;
 }
 
@@ -319,6 +319,7 @@ static ParseStatus ParseAnimationFrame(
   frame->duration_       = ReadLE24s(mem);
   frame->dispose_method_ = (WebPMuxAnimDispose)(ReadByte(mem) & 1);
   if (frame->width_ * (uint64_t)frame->height_ >= MAX_IMAGE_AREA) {
+    free(frame);
     return PARSE_ERROR;
   }
 
@@ -596,6 +597,25 @@ static int IsValidSimpleFormat(const WebPDemuxer* const dmux) {
   return 1;
 }
 
+// If 'exact' is true, check that the image resolution matches the canvas.
+// If 'exact' is false, check that the x/y offsets do not exceed the canvas.
+static int CheckFrameBounds(const Frame* const frame, int exact,
+                            int canvas_width, int canvas_height) {
+  if (exact) {
+    if (frame->x_offset_ != 0 || frame->y_offset_ != 0) {
+      return 0;
+    }
+    if (frame->width_ != canvas_width || frame->height_ != canvas_height) {
+      return 0;
+    }
+  } else {
+    if (frame->x_offset_ < 0 || frame->y_offset_ < 0) return 0;
+    if (frame->width_ + frame->x_offset_ > canvas_width) return 0;
+    if (frame->height_ + frame->y_offset_ > canvas_height) return 0;
+  }
+  return 1;
+}
+
 static int IsValidExtendedFormat(const WebPDemuxer* const dmux) {
   const int has_fragments = !!(dmux->feature_flags_ & FRAGMENTS_FLAG);
   const int has_frames = !!(dmux->feature_flags_ & ANIMATION_FLAG);
@@ -619,7 +639,6 @@ static int IsValidExtendedFormat(const WebPDemuxer* const dmux) {
 
       if (!has_fragments && f->is_fragment_) return 0;
       if (!has_frames && f->frame_num_ > 1) return 0;
-      if (f->x_offset_ < 0 || f->y_offset_ < 0) return 0;
       if (f->complete_) {
         if (alpha->size_ == 0 && image->size_ == 0) return 0;
         // Ensure alpha precedes image bitstream.
@@ -641,6 +660,12 @@ static int IsValidExtendedFormat(const WebPDemuxer* const dmux) {
         if (f->next_ != NULL) return 0;
       }
 
+      if (f->width_ > 0 && f->height_ > 0 &&
+          !CheckFrameBounds(f, !(has_frames || has_fragments),
+                            dmux->canvas_width_, dmux->canvas_height_)) {
+        return 0;
+      }
+
       fragment_count += f->is_fragment_;
       ++frame_count;
     }
@@ -660,6 +685,7 @@ static void InitDemux(WebPDemuxer* const dmux, const MemBuffer* const mem) {
   dmux->bgcolor_ = 0xFFFFFFFF;  // White background by default.
   dmux->canvas_width_ = -1;
   dmux->canvas_height_ = -1;
+  dmux->frames_tail_ = &dmux->frames_;
   dmux->mem_ = *mem;
 }
 

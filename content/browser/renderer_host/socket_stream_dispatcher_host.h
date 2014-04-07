@@ -41,8 +41,9 @@ class SocketStreamDispatcherHost
   virtual bool OnMessageReceived(const IPC::Message& message,
                                  bool* message_was_ok) OVERRIDE;
 
-  // The object died, so cancel and detach all requests associated with it.
-  void CancelRequestsForProcess(int host_id);
+  // Make this object inactive.
+  // Remove all active SocketStreamHost objects.
+  void Shutdown();
 
   // SocketStream::Delegate:
   virtual void OnConnected(net::SocketStream* socket,
@@ -51,6 +52,7 @@ class SocketStreamDispatcherHost
   virtual void OnReceivedData(net::SocketStream* socket,
                               const char* data, int len) OVERRIDE;
   virtual void OnClose(net::SocketStream* socket) OVERRIDE;
+  virtual void OnError(const net::SocketStream* socket, int error) OVERRIDE;
   virtual void OnSSLCertificateError(net::SocketStream* socket,
                                      const net::SSLInfo& ssl_info,
                                      bool fatal) OVERRIDE;
@@ -87,6 +89,7 @@ class SocketStreamDispatcherHost
   ResourceContext* resource_context_;
 
   base::WeakPtrFactory<SocketStreamDispatcherHost> weak_ptr_factory_;
+  bool on_shutdown_;
 
   DISALLOW_COPY_AND_ASSIGN(SocketStreamDispatcherHost);
 };

@@ -6,7 +6,7 @@
 #define CHROME_TEST_BASE_TEST_LOCATION_BAR_H_
 
 #include "base/compiler_specific.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "chrome/browser/ui/omnibox/location_bar.h"
 #include "content/public/common/page_transition_types.h"
 #include "ui/base/window_open_disposition.h"
@@ -28,8 +28,6 @@ class TestLocationBar : public LocationBar {
 
   // Overridden from LocationBar:
   virtual void ShowFirstRunBubble() OVERRIDE {}
-  virtual void SetInstantSuggestion(
-      const InstantSuggestion& suggestion) OVERRIDE {}
   virtual string16 GetInputString() const OVERRIDE;
   virtual WindowOpenDisposition GetWindowOpenDisposition() const OVERRIDE;
   virtual content::PageTransition GetPageTransition() const OVERRIDE;
@@ -40,6 +38,7 @@ class TestLocationBar : public LocationBar {
   virtual void UpdatePageActions() OVERRIDE {}
   virtual void InvalidatePageActions() OVERRIDE {}
   virtual void UpdateOpenPDFInReaderPrompt() OVERRIDE {}
+  virtual void UpdateGeneratedCreditCardView() OVERRIDE {}
   virtual void SaveStateToContents(content::WebContents* contents) OVERRIDE {}
   virtual void Revert() OVERRIDE {}
   virtual const OmniboxView* GetLocationEntry() const OVERRIDE;

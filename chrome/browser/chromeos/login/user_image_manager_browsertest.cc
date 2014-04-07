@@ -10,16 +10,17 @@
 #include "base/path_service.h"
 #include "base/prefs/pref_service.h"
 #include "base/values.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/chromeos/cros/cros_in_process_browser_test.h"
 #include "chrome/browser/chromeos/login/default_user_images.h"
 #include "chrome/browser/chromeos/login/mock_user_manager.h"
 #include "chrome/browser/chromeos/login/user_image_manager_impl.h"
 #include "chrome/browser/chromeos/login/user_manager.h"
 #include "chrome/browser/prefs/scoped_user_pref_update.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/testing_browser_process.h"
+#include "chromeos/chromeos_switches.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 #include "content/public/browser/notification_service.h"
@@ -61,12 +62,12 @@ class UserImageManagerTest : public CrosInProcessBrowserTest,
     DCHECK(type == chrome::NOTIFICATION_LOGIN_USER_IMAGE_CHANGED);
     registrar_.Remove(this, chrome::NOTIFICATION_LOGIN_USER_IMAGE_CHANGED,
                       content::NotificationService::AllSources());
-    MessageLoopForUI::current()->Quit();
+    base::MessageLoopForUI::current()->Quit();
   }
 
   // UserManager::Observer overrides:
   virtual void LocalStateChanged(UserManager* user_manager) OVERRIDE {
-    MessageLoopForUI::current()->Quit();
+    base::MessageLoopForUI::current()->Quit();
   }
 
   // Adds given user to Local State, if not there.
@@ -77,7 +78,7 @@ class UserImageManagerTest : public CrosInProcessBrowserTest,
 
   // Logs in |username|.
   void LogIn(const std::string& username) {
-    UserManager::Get()->UserLoggedIn(username, false);
+    UserManager::Get()->UserLoggedIn(username, username, false);
   }
 
   // Subscribes for image change notification.
@@ -182,7 +183,7 @@ class UserImageManagerTest : public CrosInProcessBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(UserImageManagerTest, PRE_DefaultUserImagePreserved) {
   // Setup an old default (stock) user image.
-  ScopedMockUserManagerEnabler mock_user_manager;
+  ScopedUserManagerEnabler(new MockUserManager);
   SetOldUserImageInfo(kTestUser1, kFirstDefaultImageIndex, base::FilePath());
 }
 
@@ -199,7 +200,7 @@ IN_PROC_BROWSER_TEST_F(UserImageManagerTest, DefaultUserImagePreserved) {
 
 IN_PROC_BROWSER_TEST_F(UserImageManagerTest, PRE_OtherUsersUnaffected) {
   // Setup two users with stock images.
-  ScopedMockUserManagerEnabler mock_user_manager;
+  ScopedUserManagerEnabler(new MockUserManager);
   SetOldUserImageInfo(kTestUser1, kFirstDefaultImageIndex, base::FilePath());
   SetOldUserImageInfo(kTestUser2, kFirstDefaultImageIndex + 1,
                       base::FilePath());
@@ -222,7 +223,7 @@ IN_PROC_BROWSER_TEST_F(UserImageManagerTest, OtherUsersUnaffected) {
 
 IN_PROC_BROWSER_TEST_F(UserImageManagerTest, PRE_PRE_NonJPEGImageFromFile) {
   // Setup a user with non-JPEG image.
-  ScopedMockUserManagerEnabler mock_user_manager;
+  ScopedUserManagerEnabler(new MockUserManager);
   SaveUserImagePNG(
       kTestUser1, kDefaultImageResourceIDs[kFirstDefaultImageIndex]);
 }
@@ -249,7 +250,8 @@ IN_PROC_BROWSER_TEST_F(UserImageManagerTest, PRE_NonJPEGImageFromFile) {
   EXPECT_EQ(saved_image.height(), user->image().height());
 }
 
-IN_PROC_BROWSER_TEST_F(UserImageManagerTest, NonJPEGImageFromFile) {
+// http://crbug.com/257009.
+IN_PROC_BROWSER_TEST_F(UserImageManagerTest, DISABLED_NonJPEGImageFromFile) {
   ExpectImageChange();
   UserManager::Get()->GetUsers();  // Load users.
   // Wait for image load.

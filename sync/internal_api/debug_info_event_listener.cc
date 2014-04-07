@@ -14,7 +14,7 @@ DebugInfoEventListener::DebugInfoEventListener()
     : events_dropped_(false),
       cryptographer_has_pending_keys_(false),
       cryptographer_ready_(false),
-      weak_ptr_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {
+      weak_ptr_factory_(this) {
 }
 
 DebugInfoEventListener::~DebugInfoEventListener() {
@@ -39,29 +39,9 @@ void DebugInfoEventListener::OnSyncCycleCompleted(
   sync_completed_event_info->set_num_reflected_updates_downloaded(
       snapshot.model_neutral_state().num_reflected_updates_downloaded_total);
   sync_completed_event_info->mutable_caller_info()->set_source(
-      snapshot.source().updates_source);
+      snapshot.legacy_updates_source());
   sync_completed_event_info->mutable_caller_info()->set_notifications_enabled(
       snapshot.notifications_enabled());
-
-  // Log the sources and per-type payloads coalesced into this session.
-  const std::vector<sessions::SyncSourceInfo>& snap_sources =
-      snapshot.debug_info_sources_list();
-  for (std::vector<sessions::SyncSourceInfo>::const_iterator source_iter =
-       snap_sources.begin(); source_iter != snap_sources.end(); ++source_iter) {
-    sync_pb::SourceInfo* pb_source_info =
-        sync_completed_event_info->add_source_info();
-
-    pb_source_info->set_source(source_iter->updates_source);
-
-    for (ModelTypeInvalidationMap::const_iterator type_iter =
-         source_iter->types.begin();
-         type_iter != source_iter->types.end(); ++type_iter) {
-      sync_pb::TypeHint* pb_type_hint = pb_source_info->add_type_hint();
-      pb_type_hint->set_data_type_id(
-          GetSpecificsFieldNumberFromModelType(type_iter->first));
-      pb_type_hint->set_has_valid_hint(!type_iter->second.payload.empty());
-    }
-  }
 
   AddEventToQueue(event_info);
 }
@@ -191,15 +171,19 @@ base::WeakPtr<DataTypeDebugInfoListener> DebugInfoEventListener::GetWeakPtr() {
   return weak_ptr_factory_.GetWeakPtr();
 }
 
-void DebugInfoEventListener::OnDataTypeAssociationComplete(
-    const DataTypeAssociationStats& association_stats) {
+void DebugInfoEventListener::OnSingleDataTypeConfigureComplete(
+    const DataTypeConfigurationStats& configuration_stats) {
   DCHECK(thread_checker_.CalledOnValidThread());
-  DCHECK(ProtocolTypes().Has(association_stats.model_type));
+  DCHECK(ProtocolTypes().Has(configuration_stats.model_type));
+
+  const DataTypeAssociationStats& association_stats =
+      configuration_stats.association_stats;
+
   sync_pb::DebugEventInfo association_event;
   sync_pb::DatatypeAssociationStats* datatype_stats =
       association_event.mutable_datatype_association_stats();
   datatype_stats->set_data_type_id(
-      GetSpecificsFieldNumberFromModelType(association_stats.model_type));
+      GetSpecificsFieldNumberFromModelType(configuration_stats.model_type));
   datatype_stats->set_num_local_items_before_association(
       association_stats.num_local_items_before_association);
   datatype_stats->set_num_sync_items_before_association(
@@ -220,7 +204,36 @@ void DebugInfoEventListener::OnDataTypeAssociationComplete(
       association_stats.num_sync_items_deleted);
   datatype_stats->set_num_sync_items_modified(
       association_stats.num_sync_items_modified);
+  datatype_stats->set_local_version_pre_association(
+      association_stats.local_version_pre_association);
+  datatype_stats->set_sync_version_pre_association(
+      association_stats.sync_version_pre_association);
   datatype_stats->set_had_error(association_stats.had_error);
+  datatype_stats->set_association_wait_time_for_same_priority_us(
+        association_stats.association_wait_time.InMicroseconds());
+  datatype_stats->set_association_time_us(
+      association_stats.association_time.InMicroseconds());
+  datatype_stats->set_download_wait_time_us(
+      configuration_stats.download_wait_time.InMicroseconds());
+  datatype_stats->set_download_time_us(
+      configuration_stats.download_time.InMicroseconds());
+  datatype_stats->set_association_wait_time_for_high_priority_us(
+      configuration_stats.association_wait_time_for_high_priority
+          .InMicroseconds());
+
+  for (ModelTypeSet::Iterator it =
+      configuration_stats.high_priority_types_configured_before.First();
+      it.Good(); it.Inc()) {
+    datatype_stats->add_high_priority_type_configured_before(
+        GetSpecificsFieldNumberFromModelType(it.Get()));
+  }
+
+  for (ModelTypeSet::Iterator it =
+      configuration_stats.same_priority_types_configured_before.First();
+      it.Good(); it.Inc()) {
+    datatype_stats->add_same_priority_type_configured_before(
+        GetSpecificsFieldNumberFromModelType(it.Get()));
+  }
 
   AddEventToQueue(association_event);
 }

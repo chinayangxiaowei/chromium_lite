@@ -6,7 +6,7 @@
 #include "base/bind.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/scoped_vector.h"
-#include "base/string_number_conversions.h"
+#include "base/strings/string_number_conversions.h"
 #include "device/bluetooth/bluetooth_device_win.h"
 #include "device/bluetooth/bluetooth_service_record.h"
 #include "device/bluetooth/bluetooth_task_manager_win.h"
@@ -85,7 +85,7 @@ class BluetoothDeviceWinTest : public testing::Test {
 };
 
 TEST_F(BluetoothDeviceWinTest, GetServices) {
-  const BluetoothDevice::ServiceList& service_list = device_->GetServices();
+  BluetoothDevice::ServiceList service_list = device_->GetServices();
 
   EXPECT_EQ(2, service_list.size());
   EXPECT_STREQ(kTestAudioSdpUuid, service_list[0].c_str());
@@ -101,6 +101,23 @@ TEST_F(BluetoothDeviceWinTest, GetServiceRecords) {
   EXPECT_EQ(2, service_records_->size());
   EXPECT_STREQ(kTestAudioSdpUuid, (*service_records_)[0]->uuid().c_str());
   EXPECT_STREQ(kTestVideoSdpUuid, (*service_records_)[1]->uuid().c_str());
+
+  BluetoothDeviceWin* device_win =
+      reinterpret_cast<BluetoothDeviceWin*>(device_.get());
+
+  const BluetoothServiceRecord* audio_device =
+      device_win->GetServiceRecord(kTestAudioSdpUuid);
+  ASSERT_TRUE(audio_device != NULL);
+  EXPECT_EQ((*service_records_)[0], audio_device);
+
+  const BluetoothServiceRecord* video_device =
+      device_win->GetServiceRecord(kTestVideoSdpUuid);
+  ASSERT_TRUE(video_device != NULL);
+  EXPECT_EQ((*service_records_)[1], video_device);
+
+  const BluetoothServiceRecord* invalid_device =
+      device_win->GetServiceRecord(kTestVideoSdpAddress);
+  EXPECT_TRUE(invalid_device == NULL);
 }
 
 TEST_F(BluetoothDeviceWinTest, ProvidesServiceWithName) {

@@ -19,24 +19,23 @@ class MenuButton;
 // use.
 class TranslateInfoBarBase : public InfoBarView {
  public:
-  TranslateInfoBarBase(InfoBarService* owner,
-                       TranslateInfoBarDelegate* delegate);
-  virtual ~TranslateInfoBarBase();
-
   // Sets the text of the provided language menu button.
   void UpdateLanguageButtonText(views::MenuButton* button,
                                 const string16& text);
 
  protected:
-  static const int kButtonInLabelSpacing;
+  TranslateInfoBarBase(InfoBarService* owner,
+                       TranslateInfoBarDelegate* delegate);
+  virtual ~TranslateInfoBarBase();
 
   // InfoBarView:
-  virtual void ViewHierarchyChanged(bool is_add,
-                                    View* parent,
-                                    View* child) OVERRIDE;
+  virtual void ViewHierarchyChanged(
+      const ViewHierarchyChangedDetails& details) OVERRIDE;
 
   // Convenience to retrieve the TranslateInfoBarDelegate for this infobar.
   TranslateInfoBarDelegate* GetDelegate();
+
+  static const int kButtonInLabelSpacing;
 
  private:
   // InfoBarView:

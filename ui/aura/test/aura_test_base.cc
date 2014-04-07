@@ -8,20 +8,27 @@
 #include "ui/aura/test/test_window_delegate.h"
 #include "ui/aura/window.h"
 #include "ui/base/gestures/gesture_configuration.h"
-#include "ui/base/ime/text_input_test_support.h"
+#include "ui/base/ime/input_method_initializer.h"
 
 namespace aura {
 namespace test {
 
-AuraTestBase::AuraTestBase() {
+AuraTestBase::AuraTestBase()
+    : setup_called_(false),
+      teardown_called_(false) {
 }
 
 AuraTestBase::~AuraTestBase() {
+  CHECK(setup_called_)
+      << "You have overridden SetUp but never called super class's SetUp";
+  CHECK(teardown_called_)
+      << "You have overridden TearDown but never called super class's TearDown";
 }
 
 void AuraTestBase::SetUp() {
+  setup_called_ = true;
   testing::Test::SetUp();
-  ui::TextInputTestSupport::Initialize();
+  ui::InitializeInputMethodForTesting();
 
   // Changing the parameters for gesture recognition shouldn't cause
   // tests to fail, so we use a separate set of parameters for unit
@@ -46,6 +53,7 @@ void AuraTestBase::SetUp() {
   ui::GestureConfiguration::set_points_buffered_for_velocity(10);
   ui::GestureConfiguration::set_rail_break_proportion(15);
   ui::GestureConfiguration::set_rail_start_proportion(2);
+  ui::GestureConfiguration::set_scroll_prediction_seconds(0);
   ui::GestureConfiguration::set_default_radius(0);
   ui::GestureConfiguration::set_fling_acceleration_curve_coefficients(
       0, 0.0166667f);
@@ -62,12 +70,14 @@ void AuraTestBase::SetUp() {
 }
 
 void AuraTestBase::TearDown() {
+  teardown_called_ = true;
+
   // Flush the message loop because we have pending release tasks
   // and these tasks if un-executed would upset Valgrind.
   RunAllPendingInMessageLoop();
 
   helper_->TearDown();
-  ui::TextInputTestSupport::Shutdown();
+  ui::ShutdownInputMethodForTesting();
   testing::Test::TearDown();
 }
 

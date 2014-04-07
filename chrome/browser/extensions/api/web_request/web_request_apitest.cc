@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "base/command_line.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/api/web_request/web_request_api.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/extensions/extension_service.h"
@@ -12,8 +13,6 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/login/login_prompt.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/common/chrome_notification_types.h"
-#include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/features/feature.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/notification_registrar.h"
@@ -22,7 +21,8 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test_utils.h"
 #include "net/dns/mock_host_resolver.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebInputEvent.h"
+#include "net/test/embedded_test_server/embedded_test_server.h"
+#include "third_party/WebKit/public/web/WebInputEvent.h"
 
 using content::WebContents;
 using extensions::Feature;
@@ -58,13 +58,8 @@ class CancelLoginDialog : public content::NotificationObserver {
 class ExtensionWebRequestApiTest : public ExtensionApiTest {
  public:
   virtual void SetUpInProcessBrowserTestFixture() OVERRIDE {
-    // TODO(battre): remove this when declarative webRequest API becomes stable.
-    CommandLine::ForCurrentProcess()->AppendSwitch(
-        switches::kEnableExperimentalExtensionApis);
-
     ExtensionApiTest::SetUpInProcessBrowserTestFixture();
     host_resolver()->AddRule("*", "127.0.0.1");
-    ASSERT_TRUE(StartTestServer());
   }
 
   void RunPermissionTest(
@@ -76,15 +71,24 @@ class ExtensionWebRequestApiTest : public ExtensionApiTest {
 };
 
 IN_PROC_BROWSER_TEST_F(ExtensionWebRequestApiTest, WebRequestApi) {
+  ASSERT_TRUE(StartEmbeddedTestServer());
   ASSERT_TRUE(RunExtensionSubtest("webrequest", "test_api.html")) << message_;
 }
 
-IN_PROC_BROWSER_TEST_F(ExtensionWebRequestApiTest, WebRequestSimple) {
+// Fails often on Windows dbg bots. http://crbug.com/177163
+#if defined(OS_WIN)
+#define MAYBE_WebRequestSimple DISABLED_WebRequestSimple
+#else
+#define MAYBE_WebRequestSimple WebRequestSimple
+#endif  // defined(OS_WIN)
+IN_PROC_BROWSER_TEST_F(ExtensionWebRequestApiTest, MAYBE_WebRequestSimple) {
+  ASSERT_TRUE(StartEmbeddedTestServer());
   ASSERT_TRUE(RunExtensionSubtest("webrequest", "test_simple.html")) <<
       message_;
 }
 
 IN_PROC_BROWSER_TEST_F(ExtensionWebRequestApiTest, WebRequestComplex) {
+  ASSERT_TRUE(StartEmbeddedTestServer());
   ASSERT_TRUE(RunExtensionSubtest("webrequest", "test_complex.html")) <<
       message_;
 }
@@ -94,6 +98,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionWebRequestApiTest,
                        DISABLED_WebRequestAuthRequired) {
   CancelLoginDialog login_dialog_helper;
 
+  ASSERT_TRUE(StartEmbeddedTestServer());
   ASSERT_TRUE(RunExtensionSubtest("webrequest", "test_auth_required.html")) <<
       message_;
 }
@@ -105,11 +110,19 @@ IN_PROC_BROWSER_TEST_F(ExtensionWebRequestApiTest,
 #define MAYBE_WebRequestBlocking WebRequestBlocking
 #endif
 IN_PROC_BROWSER_TEST_F(ExtensionWebRequestApiTest, MAYBE_WebRequestBlocking) {
+  ASSERT_TRUE(StartEmbeddedTestServer());
   ASSERT_TRUE(RunExtensionSubtest("webrequest", "test_blocking.html")) <<
       message_;
 }
 
-IN_PROC_BROWSER_TEST_F(ExtensionWebRequestApiTest, WebRequestNewTab) {
+// Fails often on Windows dbg bots. http://crbug.com/177163
+#if defined(OS_WIN)
+#define MAYBE_WebRequestNewTab DISABLED_WebRequestNewTab
+#else
+#define MAYBE_WebRequestNewTab WebRequestNewTab
+#endif  // defined(OS_WIN)
+IN_PROC_BROWSER_TEST_F(ExtensionWebRequestApiTest, MAYBE_WebRequestNewTab) {
+  ASSERT_TRUE(StartEmbeddedTestServer());
   // Wait for the extension to set itself up and return control to us.
   ASSERT_TRUE(RunExtensionSubtest("webrequest", "test_newTab.html"))
       << message_;
@@ -143,6 +156,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionWebRequestApiTest, WebRequestNewTab) {
 }
 
 IN_PROC_BROWSER_TEST_F(ExtensionWebRequestApiTest, WebRequestDeclarative1) {
+  ASSERT_TRUE(StartEmbeddedTestServer());
   ASSERT_TRUE(RunExtensionSubtest("webrequest", "test_declarative1.html"))
       << message_;
 }
@@ -155,19 +169,9 @@ IN_PROC_BROWSER_TEST_F(ExtensionWebRequestApiTest, WebRequestDeclarative1) {
 #endif
 IN_PROC_BROWSER_TEST_F(ExtensionWebRequestApiTest,
                        MAYBE_WebRequestDeclarative2) {
+  ASSERT_TRUE(StartEmbeddedTestServer());
   ASSERT_TRUE(RunExtensionSubtest("webrequest", "test_declarative2.html"))
       << message_;
-}
-
-IN_PROC_BROWSER_TEST_F(ExtensionWebRequestApiTest,
-                       WebRequestDeclarativePermissions) {
-  ExtensionTestMessageListener listener("rules all registered", false);
-  ASSERT_TRUE(LoadExtension(test_data_dir_.AppendASCII(
-      "webrequest/permissionless")));
-  EXPECT_TRUE(listener.WaitUntilSatisfied());
-  ASSERT_TRUE(RunExtensionSubtest(
-      "webrequest", "test_declarative_permissions.html")) <<
-      message_;
 }
 
 void ExtensionWebRequestApiTest::RunPermissionTest(
@@ -199,7 +203,7 @@ void ExtensionWebRequestApiTest::RunPermissionTest(
   // This navigation should be redirected.
   ui_test_utils::NavigateToURL(
       browser(),
-      test_server()->GetURL("files/extensions/test_file.html"));
+      embedded_test_server()->GetURL("/extensions/test_file.html"));
 
   std::string body;
   WebContents* tab = browser()->tab_strip_model()->GetActiveWebContents();
@@ -220,7 +224,7 @@ void ExtensionWebRequestApiTest::RunPermissionTest(
   // load_extension_with_incognito_permission is true.
   ui_test_utils::NavigateToURL(
       otr_browser,
-      test_server()->GetURL("files/extensions/test_file.html"));
+      embedded_test_server()->GetURL("/extensions/test_file.html"));
 
   body.clear();
   WebContents* otr_tab = otr_browser->tab_strip_model()->GetActiveWebContents();
@@ -234,12 +238,14 @@ void ExtensionWebRequestApiTest::RunPermissionTest(
 IN_PROC_BROWSER_TEST_F(ExtensionWebRequestApiTest,
                        WebRequestDeclarativePermissionSpanning1) {
   // Test spanning with incognito permission.
+  ASSERT_TRUE(StartEmbeddedTestServer());
   RunPermissionTest("spanning", true, false, "redirected1", "redirected1");
 }
 
 IN_PROC_BROWSER_TEST_F(ExtensionWebRequestApiTest,
                        WebRequestDeclarativePermissionSpanning2) {
   // Test spanning without incognito permission.
+  ASSERT_TRUE(StartEmbeddedTestServer());
   RunPermissionTest("spanning", false, false, "redirected1", "");
 }
 
@@ -247,28 +253,70 @@ IN_PROC_BROWSER_TEST_F(ExtensionWebRequestApiTest,
 IN_PROC_BROWSER_TEST_F(ExtensionWebRequestApiTest,
                        WebRequestDeclarativePermissionSplit1) {
   // Test split with incognito permission.
+  ASSERT_TRUE(StartEmbeddedTestServer());
   RunPermissionTest("split", true, true, "redirected1", "redirected2");
 }
 
 IN_PROC_BROWSER_TEST_F(ExtensionWebRequestApiTest,
                        WebRequestDeclarativePermissionSplit2) {
   // Test split without incognito permission.
+  ASSERT_TRUE(StartEmbeddedTestServer());
   RunPermissionTest("split", false, false, "redirected1", "");
 }
 
-IN_PROC_BROWSER_TEST_F(ExtensionWebRequestApiTest, PostData1) {
+// TODO(vabr): Cure these flaky tests, http://crbug.com/238179.
+#if !defined(NDEBUG)
+#define MAYBE_PostData1 DISABLED_PostData1
+#define MAYBE_PostData2 DISABLED_PostData2
+#else
+#define MAYBE_PostData1 PostData1
+#define MAYBE_PostData2 PostData2
+#endif
+IN_PROC_BROWSER_TEST_F(ExtensionWebRequestApiTest, MAYBE_PostData1) {
   // Test HTML form POST data access with the default and "url" encoding.
+  ASSERT_TRUE(StartEmbeddedTestServer());
   ASSERT_TRUE(RunExtensionSubtest("webrequest", "test_post1.html")) <<
       message_;
 }
 
-IN_PROC_BROWSER_TEST_F(ExtensionWebRequestApiTest, PostData2) {
+IN_PROC_BROWSER_TEST_F(ExtensionWebRequestApiTest, MAYBE_PostData2) {
   // Test HTML form POST data access with the multipart and plaintext encoding.
+  ASSERT_TRUE(StartEmbeddedTestServer());
   ASSERT_TRUE(RunExtensionSubtest("webrequest", "test_post2.html")) <<
       message_;
 }
 
 IN_PROC_BROWSER_TEST_F(ExtensionWebRequestApiTest,
                        DeclarativeSendMessage) {
+  ASSERT_TRUE(StartEmbeddedTestServer());
   ASSERT_TRUE(RunExtensionTest("webrequest_sendmessage")) << message_;
+}
+
+// Check that reloading an extension that runs in incognito split mode and
+// has two active background pages with registered events does not crash the
+// browser. Regression test for http://crbug.com/224094
+IN_PROC_BROWSER_TEST_F(ExtensionWebRequestApiTest, IncognitoSplitModeReload) {
+  ASSERT_TRUE(StartEmbeddedTestServer());
+  // Wait for rules to be set up.
+  ExtensionTestMessageListener listener("done", true);
+  ExtensionTestMessageListener listener_incognito("done_incognito", true);
+
+  const extensions::Extension* extension = LoadExtensionWithFlags(
+      test_data_dir_.AppendASCII("webrequest_reload"),
+      kFlagEnableIncognito);
+  ASSERT_TRUE(extension);
+  ui_test_utils::OpenURLOffTheRecord(browser()->profile(), GURL("about:blank"));
+
+  EXPECT_TRUE(listener.WaitUntilSatisfied());
+  EXPECT_TRUE(listener_incognito.WaitUntilSatisfied());
+
+  // Reload extension and wait for rules to be set up again. This should not
+  // crash the browser.
+  ExtensionTestMessageListener listener2("done", true);
+  ExtensionTestMessageListener listener_incognito2("done_incognito", true);
+
+  ReloadExtension(extension->id());
+
+  EXPECT_TRUE(listener2.WaitUntilSatisfied());
+  EXPECT_TRUE(listener_incognito2.WaitUntilSatisfied());
 }

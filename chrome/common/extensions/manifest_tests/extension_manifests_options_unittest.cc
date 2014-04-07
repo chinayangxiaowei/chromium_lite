@@ -10,10 +10,6 @@
 namespace errors = extension_manifest_errors;
 
 class OptionsPageManifestTest : public ExtensionManifestTest {
-  virtual void SetUp() OVERRIDE {
-    ExtensionManifestTest::SetUp();
-    (new extensions::OptionsPageHandler)->Register();
-  }
 };
 
 TEST_F(OptionsPageManifestTest, OptionsPageInApps) {
@@ -21,16 +17,19 @@ TEST_F(OptionsPageManifestTest, OptionsPageInApps) {
 
   // Allow options page with absolute URL in hosted apps.
   extension = LoadAndExpectSuccess("hosted_app_absolute_options.json");
-  EXPECT_STREQ(
-      "http",
-      extensions::ManifestURL::GetOptionsPage(extension).scheme().c_str());
+  EXPECT_STREQ("http",
+               extensions::ManifestURL::GetOptionsPage(extension.get())
+                   .scheme().c_str());
   EXPECT_STREQ(
       "example.com",
-      extensions::ManifestURL::GetOptionsPage(extension).host().c_str());
-  EXPECT_STREQ(
-      "options.html",
-      extensions::ManifestURL::
-          GetOptionsPage(extension).ExtractFileName().c_str());
+      extensions::ManifestURL::GetOptionsPage(extension.get()).host().c_str());
+  EXPECT_STREQ("options.html",
+               extensions::ManifestURL::GetOptionsPage(extension.get())
+                   .ExtractFileName().c_str());
+
+  extension = LoadAndExpectSuccess("platform_app_with_options_page.json");
+  EXPECT_TRUE(extensions::ManifestURL::GetOptionsPage(extension.get())
+                  .is_empty());
 
   Testcase testcases[] = {
     // Forbid options page with relative URL in hosted apps.

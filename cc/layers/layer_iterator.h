@@ -18,8 +18,9 @@ namespace cc {
 // See below for details.
 //
 // void DoStuffOnLayers(
-//     const std::vector<scoped_refptr<Layer> >& render_surface_layer_list) {
+//     const RenderSurfaceLayerList& render_surface_layer_list) {
 //   typedef LayerIterator<Layer,
+//                         RenderSurfaceLayerList,
 //                         RenderSurface,
 //                         LayerIteratorActions::FrontToBack>
 //       LayerIteratorType;
@@ -84,7 +85,7 @@ namespace cc {
 // is representing, and you can query the iterator to decide
 // what actions to perform with the layer given what it represents.
 
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 // Non-templated constants
 struct LayerIteratorValue {
@@ -156,8 +157,7 @@ class LayerIterator {
   }
 
   LayerType* target_render_surface_layer() const {
-    return get_raw_ptr(
-        (*render_surface_layer_list_)[target_render_surface_layer_index_]);
+    return render_surface_layer_list_->at(target_render_surface_layer_index_);
   }
 
   operator const LayerIteratorPosition<LayerType>() const {
@@ -177,7 +177,7 @@ class LayerIterator {
       : render_surface_layer_list_(render_surface_layer_list),
         target_render_surface_layer_index_(0) {
     for (size_t i = 0; i < render_surface_layer_list->size(); ++i) {
-      if (!(*render_surface_layer_list)[i]->render_surface()) {
+      if (!render_surface_layer_list->at(i)->render_surface()) {
         NOTREACHED();
         actions_.End(this);
         return;
@@ -190,16 +190,10 @@ class LayerIterator {
       actions_.End(this);
   }
 
-  inline static Layer* get_raw_ptr(const scoped_refptr<Layer>& ptr) {
-    return ptr.get();
-  }
-  inline static LayerImpl* get_raw_ptr(LayerImpl* ptr) { return ptr; }
-
   inline LayerType* current_layer() const {
     return current_layer_represents_target_render_surface()
            ? target_render_surface_layer()
-           : get_raw_ptr(
-                 target_render_surface_children()[current_layer_index_]);
+           : target_render_surface_children().at(current_layer_index_);
   }
 
   inline bool current_layer_represents_contributing_render_surface() const {

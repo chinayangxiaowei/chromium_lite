@@ -4,7 +4,7 @@
 
 #include "ui/views/corewm/compound_event_filter.h"
 
-#include "base/hash_tables.h"
+#include "base/containers/hash_tables.h"
 #include "ui/aura/client/activation_client.h"
 #include "ui/aura/client/cursor_client.h"
 #include "ui/aura/client/drag_drop_client.h"
@@ -171,6 +171,7 @@ void CompoundEventFilter::SetCursorVisibilityOnEvent(aura::Window* target,
                                                      bool show) {
   if (event->flags() & ui::EF_IS_SYNTHESIZED)
     return;
+
   aura::client::CursorClient* client =
       aura::client::GetCursorClient(target->GetRootWindow());
   if (!client)

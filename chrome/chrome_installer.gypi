@@ -5,6 +5,7 @@
 {
   'variables': {
     'lastchange_path': '../build/util/LASTCHANGE',
+    'libpeer_target_type%': 'static_library',
     # 'branding_dir' is set in the 'conditions' section at the bottom.
   },
   'conditions': [
@@ -104,7 +105,6 @@
             'installer/util/duplicate_tree_detector_unittest.cc',
             'installer/util/fake_installation_state.h',
             'installer/util/fake_product_state.h',
-            'installer/util/google_chrome_distribution_unittest.cc',
             'installer/util/google_update_settings_unittest.cc',
             'installer/util/install_util_unittest.cc',
             'installer/util/installation_validation_helper.cc',
@@ -130,13 +130,16 @@
             'installer/util/self_cleaning_temp_dir_unittest.cc',
             'installer/util/set_reg_value_work_item_unittest.cc',
             'installer/util/shell_util_unittest.cc',
+            'installer/util/uninstall_metrics_unittest.cc',
             'installer/util/wmi_unittest.cc',
             'installer/util/work_item_list_unittest.cc',
             '<(SHARED_INTERMEDIATE_DIR)/chrome_version/other_version.rc',
           ],
           'msvs_settings': {
             'VCManifestTool': {
-              'AdditionalManifestFiles': '$(ProjectDir)\\installer\\mini_installer\\mini_installer.exe.manifest',
+              'AdditionalManifestFiles': [
+                '$(ProjectDir)\\installer\\mini_installer\\mini_installer.exe.manifest',
+              ],
             },
           },
           # TODO(jschuh): crbug.com/167187 fix size_t to int truncations.
@@ -232,7 +235,9 @@
           ],
           'msvs_settings': {
             'VCManifestTool': {
-              'AdditionalManifestFiles': '$(ProjectDir)\\installer\\mini_installer\\mini_installer.exe.manifest',
+              'AdditionalManifestFiles': [
+                '$(ProjectDir)\\installer\\mini_installer\\mini_installer.exe.manifest',
+              ],
             },
           },
         },
@@ -263,6 +268,8 @@
           },
           'sources': [
             'installer/mini_installer/chrome.release',
+            'installer/setup/archive_patch_helper.cc',
+            'installer/setup/archive_patch_helper.h',
             'installer/setup/chrome_frame_quick_enable.cc',
             'installer/setup/chrome_frame_quick_enable.h',
             'installer/setup/chrome_frame_ready_mode.cc',
@@ -272,6 +279,7 @@
             'installer/setup/install_worker.cc',
             'installer/setup/install_worker.h',
             'installer/setup/setup_main.cc',
+            'installer/setup/setup_main.h',
             'installer/setup/setup.ico',
             'installer/setup/setup.rc',
             'installer/setup/setup_constants.cc',
@@ -288,7 +296,9 @@
               'SubSystem': '2',     # Set /SUBSYSTEM:WINDOWS
             },
             'VCManifestTool': {
-              'AdditionalManifestFiles': '$(ProjectDir)\\installer\\setup\\setup.exe.manifest',
+              'AdditionalManifestFiles': [
+                '$(ProjectDir)\\installer\\setup\\setup.exe.manifest',
+              ],
             },
           },
           # TODO(jschuh): crbug.com/167187 fix size_t to int truncations.
@@ -350,10 +360,8 @@
           ],
           'conditions': [
             ['component == "shared_library"', {
-              'msvs_settings': {
-                'VCManifestTool': {
-                  'EmbedManifest': 'false',
-                },
+              'variables': {
+                'win_use_external_manifest': 1,
               },
             }],
             # TODO(mark):  <(branding_dir) should be defined by the
@@ -419,6 +427,9 @@
             'installer/mini_installer/mini_string.cc',
             'installer/mini_installer/mini_string.h',
             'installer/mini_installer/mini_string_test.cc',
+            'installer/setup/archive_patch_helper.cc',  # Move to lib
+            'installer/setup/archive_patch_helper.h',   # Move to lib
+            'installer/setup/archive_patch_helper_unittest.cc',
             'installer/setup/install.cc',               # Move to lib
             'installer/setup/install.h',                # Move to lib
             'installer/setup/install_unittest.cc',
@@ -432,6 +443,7 @@
             'installer/setup/setup_unittests_resource.h',
             'installer/setup/setup_util.cc',
             'installer/setup/setup_util_unittest.cc',
+            'installer/setup/setup_util_unittest.h',
           ],
           'rules': [
             {
@@ -505,35 +517,37 @@
         'version' : '<!(python <(version_py_path) -f ../chrome/VERSION -t "@MAJOR@.@MINOR@.@BUILD@.@PATCH@")',
         'revision' : '<!(python ../build/util/lastchange.py --revision-only)',
         'packaging_files_common': [
-          'installer/linux/internal/common/apt.include',
-          'installer/linux/internal/common/default-app.template',
-          'installer/linux/internal/common/default-app-block.template',
-          'installer/linux/internal/common/desktop.template',
-          'installer/linux/internal/common/google-chrome/google-chrome.info',
-          'installer/linux/internal/common/installer.include',
-          'installer/linux/internal/common/postinst.include',
-          'installer/linux/internal/common/prerm.include',
-          'installer/linux/internal/common/repo.cron',
-          'installer/linux/internal/common/rpm.include',
-          'installer/linux/internal/common/rpmrepo.cron',
-          'installer/linux/internal/common/symlinks.include',
-          'installer/linux/internal/common/updater',
-          'installer/linux/internal/common/variables.include',
-          'installer/linux/internal/common/wrapper',
+          'installer/linux/common/apt.include',
+          'installer/linux/common/default-app.template',
+          'installer/linux/common/default-app-block.template',
+          'installer/linux/common/desktop.template',
+          'installer/linux/common/google-chrome/google-chrome.info',
+          'installer/linux/common/installer.include',
+          'installer/linux/common/postinst.include',
+          'installer/linux/common/prerm.include',
+          'installer/linux/common/repo.cron',
+          'installer/linux/common/rpm.include',
+          'installer/linux/common/rpmrepo.cron',
+          'installer/linux/common/symlinks.include',
+          'installer/linux/common/updater',
+          'installer/linux/common/variables.include',
+          'installer/linux/common/wrapper',
         ],
         'packaging_files_deb': [
-          'installer/linux/internal/debian/build.sh',
-          'installer/linux/internal/debian/changelog.template',
-          'installer/linux/internal/debian/control.template',
-          'installer/linux/internal/debian/debian.menu',
-          'installer/linux/internal/debian/expected_deps',
-          'installer/linux/internal/debian/postinst',
-          'installer/linux/internal/debian/postrm',
-          'installer/linux/internal/debian/prerm',
+          'installer/linux/debian/build.sh',
+          'installer/linux/debian/changelog.template',
+          'installer/linux/debian/control.template',
+          'installer/linux/debian/debian.menu',
+          'installer/linux/debian/expected_deps',
+          'installer/linux/debian/postinst',
+          'installer/linux/debian/postrm',
+          'installer/linux/debian/prerm',
         ],
         'packaging_files_rpm': [
-          'installer/linux/internal/rpm/build.sh',
-          'installer/linux/internal/rpm/chrome.spec.template',
+          'installer/linux/rpm/build.sh',
+          'installer/linux/rpm/chrome.spec.template',
+          'installer/linux/rpm/expected_deps_i386',
+          'installer/linux/rpm/expected_deps_x86_64',
         ],
         'packaging_files_binaries': [
           # TODO(mmoss) Any convenient way to get all the relevant build
@@ -585,6 +599,11 @@
           ['internal_pdf', {
             'packaging_files_binaries': [
               '<(PRODUCT_DIR)/libpdf.so',
+            ],
+          }],
+          ['libpeer_target_type!="static_library"', {
+            'packaging_files_binaries': [
+              '<(PRODUCT_DIR)/lib/libpeerconnection.so',
             ],
           }],
         ],
@@ -772,7 +791,7 @@
                 '<@(packaging_files_deb)',
               ],
               'outputs': [
-                '<(PRODUCT_DIR)/google-chrome-<(channel)_<(version)-r<(revision)_<(deb_arch).deb',
+                '<(PRODUCT_DIR)/google-chrome-<(channel)_<(version)-1_<(deb_arch).deb',
               ],
               'action': [ '<@(deb_cmd)', '-c', '<(channel)', ],
             },
@@ -800,7 +819,7 @@
                 '<@(packaging_files_deb)',
               ],
               'outputs': [
-                '<(PRODUCT_DIR)/google-chrome-<(channel)_<(version)-r<(revision)_<(deb_arch).deb',
+                '<(PRODUCT_DIR)/google-chrome-<(channel)_<(version)-1_<(deb_arch).deb',
               ],
               'action': [ '<@(deb_cmd)', '-c', '<(channel)', ],
             },
@@ -828,7 +847,7 @@
                 '<@(packaging_files_deb)',
               ],
               'outputs': [
-                '<(PRODUCT_DIR)/google-chrome-<(channel)_<(version)-r<(revision)_<(deb_arch).deb',
+                '<(PRODUCT_DIR)/google-chrome-<(channel)_<(version)-1_<(deb_arch).deb',
               ],
               'action': [ '<@(deb_cmd)', '-c', '<(channel)', ],
             },
@@ -856,7 +875,7 @@
                 '<@(packaging_files_deb)',
               ],
               'outputs': [
-                '<(PRODUCT_DIR)/google-chrome-<(channel)_<(version)-r<(revision)_<(deb_arch).deb',
+                '<(PRODUCT_DIR)/google-chrome-<(channel)_<(version)-1_<(deb_arch).deb',
               ],
               'action': [ '<@(deb_cmd)', '-c', '<(channel)', ],
             },
@@ -884,7 +903,7 @@
                 '<@(packaging_files_deb)',
               ],
               'outputs': [
-                '<(PRODUCT_DIR)/google-chrome-<(channel)_<(version)-r<(revision)_<(deb_arch).deb',
+                '<(PRODUCT_DIR)/google-chrome-<(channel)_<(version)-1_<(deb_arch).deb',
               ],
               'action': [ '<@(deb_cmd)', '-c', '<(channel)', ],
             },
@@ -913,7 +932,7 @@
                 '<@(packaging_files_rpm)',
               ],
               'outputs': [
-                '<(PRODUCT_DIR)/google-chrome-<(channel)-<(version)-<(revision).<(rpm_arch).rpm',
+                '<(PRODUCT_DIR)/google-chrome-<(channel)-<(version)-1.<(rpm_arch).rpm',
               ],
               'action': [ '<@(rpm_cmd)', '-c', '<(channel)', ],
             },
@@ -942,7 +961,7 @@
                 '<@(packaging_files_rpm)',
               ],
               'outputs': [
-                '<(PRODUCT_DIR)/google-chrome-<(channel)-<(version)-<(revision).<(rpm_arch).rpm',
+                '<(PRODUCT_DIR)/google-chrome-<(channel)-<(version)-1.<(rpm_arch).rpm',
               ],
               'action': [ '<@(rpm_cmd)', '-c', '<(channel)', ],
             },
@@ -971,7 +990,7 @@
                 '<@(packaging_files_rpm)',
               ],
               'outputs': [
-                '<(PRODUCT_DIR)/google-chrome-<(channel)-<(version)-<(revision).<(rpm_arch).rpm',
+                '<(PRODUCT_DIR)/google-chrome-<(channel)-<(version)-1.<(rpm_arch).rpm',
               ],
               'action': [ '<@(rpm_cmd)', '-c', '<(channel)', ],
             },
@@ -1000,7 +1019,7 @@
                 '<@(packaging_files_rpm)',
               ],
               'outputs': [
-                '<(PRODUCT_DIR)/google-chrome-<(channel)-<(version)-<(revision).<(rpm_arch).rpm',
+                '<(PRODUCT_DIR)/google-chrome-<(channel)-<(version)-1.<(rpm_arch).rpm',
               ],
               'action': [ '<@(rpm_cmd)', '-c', '<(channel)', ],
             },
@@ -1029,7 +1048,7 @@
                 '<@(packaging_files_rpm)',
               ],
               'outputs': [
-                '<(PRODUCT_DIR)/google-chrome-<(channel)-<(version)-<(revision).<(rpm_arch).rpm',
+                '<(PRODUCT_DIR)/google-chrome-<(channel)-<(version)-1.<(rpm_arch).rpm',
               ],
               'action': [ '<@(rpm_cmd)', '-c', '<(channel)', ],
             },

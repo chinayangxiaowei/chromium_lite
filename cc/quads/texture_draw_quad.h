@@ -23,6 +23,7 @@ class CC_EXPORT TextureDrawQuad : public DrawQuad {
               bool premultiplied_alpha,
               gfx::PointF uv_top_left,
               gfx::PointF uv_bottom_right,
+              SkColor background_color,
               const float vertex_opacity[4],
               bool flipped);
 
@@ -35,6 +36,7 @@ class CC_EXPORT TextureDrawQuad : public DrawQuad {
               bool premultiplied_alpha,
               gfx::PointF uv_top_left,
               gfx::PointF uv_bottom_right,
+              SkColor background_color,
               const float vertex_opacity[4],
               bool flipped);
 
@@ -42,6 +44,7 @@ class CC_EXPORT TextureDrawQuad : public DrawQuad {
   bool premultiplied_alpha;
   gfx::PointF uv_top_left;
   gfx::PointF uv_bottom_right;
+  SkColor background_color;
   float vertex_opacity[4];
   bool flipped;
 
@@ -51,10 +54,12 @@ class CC_EXPORT TextureDrawQuad : public DrawQuad {
   static const TextureDrawQuad* MaterialCast(const DrawQuad*);
 
   bool PerformClipping();
+
  private:
   TextureDrawQuad();
+  virtual void ExtendValue(base::DictionaryValue* value) const OVERRIDE;
 };
 
-}
+}  // namespace cc
 
 #endif  // CC_QUADS_TEXTURE_DRAW_QUAD_H_

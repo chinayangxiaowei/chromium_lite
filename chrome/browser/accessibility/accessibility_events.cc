@@ -7,9 +7,9 @@
 #include "base/values.h"
 
 #include "chrome/browser/accessibility/accessibility_extension_api_constants.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/notification_types.h"
 
@@ -166,7 +166,6 @@ AccessibilityTextBoxInfo::AccessibilityTextBoxInfo(Profile* profile,
                                                    const std::string& context,
                                                    bool password)
     : AccessibilityControlInfo(profile, name),
-      value_(""),
       password_(password),
       selection_start_(0),
       selection_end_(0) {

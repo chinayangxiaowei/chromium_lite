@@ -10,7 +10,7 @@
 
 #include "ash/wm/user_activity_observer.h"
 #include "base/compiler_specific.h"
-#include "base/timer.h"
+#include "base/timer/timer.h"
 #include "chrome/browser/chromeos/login/login_display.h"
 #include "chrome/browser/chromeos/login/user.h"
 #include "chrome/browser/ui/webui/chromeos/login/native_window_delegate.h"
@@ -28,6 +28,7 @@ class WebUILoginDisplay : public LoginDisplay,
   virtual ~WebUILoginDisplay();
 
   // LoginDisplay implementation:
+  virtual void ClearAndEnablePassword() OVERRIDE;
   virtual void Init(const UserList& users,
                     bool show_guest,
                     bool show_users,
@@ -53,11 +54,10 @@ class WebUILoginDisplay : public LoginDisplay,
 
   // SigninScreenHandlerDelegate implementation:
   virtual void CancelPasswordChangedFlow() OVERRIDE;
+  virtual void CancelUserAdding() OVERRIDE;
   virtual void CreateAccount() OVERRIDE;
-  virtual void CreateLocallyManagedUser(const string16& display_name,
-                                        const std::string password) OVERRIDE;
-  virtual void CompleteLogin(const UserCredentials& credentials) OVERRIDE;
-  virtual void Login(const UserCredentials& credentials) OVERRIDE;
+  virtual void CompleteLogin(const UserContext& user_context) OVERRIDE;
+  virtual void Login(const UserContext& user_context) OVERRIDE;
   virtual void LoginAsRetailModeUser() OVERRIDE;
   virtual void LoginAsGuest() OVERRIDE;
   virtual void MigrateUserData(const std::string& old_password) OVERRIDE;
@@ -68,7 +68,9 @@ class WebUILoginDisplay : public LoginDisplay,
   virtual void RemoveUser(const std::string& username) OVERRIDE;
   virtual void ResyncUserData() OVERRIDE;
   virtual void ShowEnterpriseEnrollmentScreen() OVERRIDE;
+  virtual void ShowKioskEnableScreen() OVERRIDE;
   virtual void ShowResetScreen() OVERRIDE;
+  virtual void ShowKioskAutolaunchScreen() OVERRIDE;
   virtual void ShowWrongHWIDScreen() OVERRIDE;
   virtual void SetWebUIHandler(
       LoginDisplayWebUIHandler* webui_handler) OVERRIDE;
@@ -78,11 +80,13 @@ class WebUILoginDisplay : public LoginDisplay,
   virtual bool IsShowGuest() const OVERRIDE;
   virtual bool IsShowUsers() const OVERRIDE;
   virtual bool IsShowNewUser() const OVERRIDE;
+  virtual bool IsSigninInProgress() const OVERRIDE;
+  virtual bool IsUserSigninCompleted() const OVERRIDE;
   virtual void SetDisplayEmail(const std::string& email) OVERRIDE;
   virtual void Signout() OVERRIDE;
 
   // UserActivityDetector implementation:
-  virtual void OnUserActivity() OVERRIDE;
+  virtual void OnUserActivity(const ui::Event* event) OVERRIDE;
 
  private:
   void StartPasswordClearTimer();

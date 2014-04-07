@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/extensions/blacklist.h"
@@ -20,9 +20,8 @@ class StandardManagementPolicyProviderTest : public testing::Test {
   StandardManagementPolicyProviderTest()
       : ui_thread_(content::BrowserThread::UI, &message_loop_),
         file_thread_(content::BrowserThread::FILE, &message_loop_),
-        prefs_(message_loop_.message_loop_proxy()),
-        provider_(prefs()) {
-  }
+        prefs_(message_loop_.message_loop_proxy().get()),
+        provider_(prefs()) {}
 
  protected:
   ExtensionPrefs* prefs() {
@@ -41,7 +40,7 @@ class StandardManagementPolicyProviderTest : public testing::Test {
     return extension;
   }
 
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
   content::TestBrowserThread ui_thread_;
   content::TestBrowserThread file_thread_;
 

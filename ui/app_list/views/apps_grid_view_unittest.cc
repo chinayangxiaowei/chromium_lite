@@ -9,8 +9,8 @@
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
-#include "base/timer.h"
+#include "base/message_loop/message_loop.h"
+#include "base/timer/timer.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/app_list/app_list_item_model.h"
 #include "ui/app_list/app_list_model.h"
@@ -34,12 +34,8 @@ const int kHeight = 240;
 
 class PageFlipWaiter : public PaginationModelObserver {
  public:
-  PageFlipWaiter(MessageLoopForUI* ui_loop,
-                 PaginationModel* model)
-      : ui_loop_(ui_loop),
-        model_(model),
-        wait_(false),
-        page_changed_(false) {
+  PageFlipWaiter(base::MessageLoopForUI* ui_loop, PaginationModel* model)
+      : ui_loop_(ui_loop), model_(model), wait_(false), page_changed_(false) {
     model_->AddObserver(this);
   }
 
@@ -74,10 +70,12 @@ class PageFlipWaiter : public PaginationModelObserver {
     if (wait_)
       ui_loop_->Quit();
   }
+  virtual void TransitionStarted() OVERRIDE {
+  }
   virtual void TransitionChanged() OVERRIDE {
   }
 
-  MessageLoopForUI* ui_loop_;
+  base::MessageLoopForUI* ui_loop_;
   PaginationModel* model_;
   bool wait_;
   bool page_changed_;
@@ -152,7 +150,7 @@ class AppsGridViewTest : public testing::Test {
 
     ui::MouseEvent drag_event(ui::ET_MOUSE_DRAGGED,
                               translated_to, to, 0);
-    apps_grid_view_->UpdateDrag(view, pointer, drag_event);
+    apps_grid_view_->UpdateDragFromItem(pointer, drag_event);
   }
 
   void SimulateKeyPress(ui::KeyboardCode key_code) {
@@ -165,7 +163,7 @@ class AppsGridViewTest : public testing::Test {
   scoped_ptr<AppsGridView> apps_grid_view_;
   scoped_ptr<AppsGridViewTestApi> test_api_;
 
-  MessageLoopForUI message_loop_;
+  base::MessageLoopForUI message_loop_;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(AppsGridViewTest);
@@ -262,7 +260,15 @@ TEST_F(AppsGridViewTest, MouseDrag) {
   test_api_->LayoutToIdealBounds();
 }
 
-TEST_F(AppsGridViewTest, MouseDragFlipPage) {
+// Test fails sometimes on chrome os.
+// http://crbug.com/242248
+#if defined(OS_CHROMEOS)
+#define MAYBE_MouseDragFlipPage DISABLED_MouseDragFlipPage
+#else
+#define MAYBE_MouseDragFlipPage MouseDragFlipPage
+#endif  // defined(OS_CHROMEOS)
+
+TEST_F(AppsGridViewTest, MAYBE_MouseDragFlipPage) {
   test_api_->SetPageFlipDelay(10);
   pagination_model_->SetTransitionDurations(10, 10);
 
@@ -343,13 +349,17 @@ TEST_F(AppsGridViewTest, SimultaneousDrag) {
 }
 
 TEST_F(AppsGridViewTest, HighlightWithKeyboard) {
-  const int kPages = 2;
-  model_->PopulateApps(kPages * kTilesPerPage);
+  const int kPages = 3;
+  const int kItems = (kPages - 1) * kTilesPerPage + 1;
+  model_->PopulateApps(kItems);
 
   const int first_index = 0;
-  const int last_index = kPages * kTilesPerPage - 1;
+  const int last_index = kItems - 1;
+  const int last_index_on_page1_first_row = kRows - 1;
   const int last_index_on_page1 = kTilesPerPage - 1;
   const int first_index_on_page2 = kTilesPerPage;
+  const int first_index_on_page2_last_row = 2 * kTilesPerPage - kRows;
+  const int last_index_on_page2_last_row = 2 * kTilesPerPage - 1;
 
   // Try moving off the item beyond the first one.
   apps_grid_view_->SetSelectedView(GetItemViewAt(first_index));
@@ -365,24 +375,50 @@ TEST_F(AppsGridViewTest, HighlightWithKeyboard) {
   SimulateKeyPress(ui::VKEY_RIGHT);
   EXPECT_TRUE(apps_grid_view_->IsSelectedView(GetItemViewAt(last_index)));
 
-  // Move right on last item on page 1 should get to first item on page 2
-  // and vice vesa.
+  // Move right on last item on page 1 should get to first item on page 2's last
+  // row and vice versa.
   apps_grid_view_->SetSelectedView(GetItemViewAt(last_index_on_page1));
   SimulateKeyPress(ui::VKEY_RIGHT);
   EXPECT_TRUE(apps_grid_view_->IsSelectedView(GetItemViewAt(
-      first_index_on_page2)));
+      first_index_on_page2_last_row)));
   SimulateKeyPress(ui::VKEY_LEFT);
   EXPECT_TRUE(apps_grid_view_->IsSelectedView(GetItemViewAt(
       last_index_on_page1)));
 
-  // Up/down changes page similarly to the above left/right cases.
+  // Up/down on page boundary does nothing.
   apps_grid_view_->SetSelectedView(GetItemViewAt(last_index_on_page1));
   SimulateKeyPress(ui::VKEY_DOWN);
   EXPECT_TRUE(apps_grid_view_->IsSelectedView(GetItemViewAt(
-      last_index_on_page1 + kCols)));
+      last_index_on_page1)));
+  apps_grid_view_->SetSelectedView(
+      GetItemViewAt(first_index_on_page2_last_row));
+  apps_grid_view_->
+      SetSelectedView(GetItemViewAt(last_index_on_page1_first_row));
   SimulateKeyPress(ui::VKEY_UP);
   EXPECT_TRUE(apps_grid_view_->IsSelectedView(GetItemViewAt(
-      last_index_on_page1)));
+      last_index_on_page1_first_row)));
+
+  // Page up and down should go to the same item on the next and last page.
+  apps_grid_view_->SetSelectedView(GetItemViewAt(first_index_on_page2));
+  SimulateKeyPress(ui::VKEY_PRIOR);
+  EXPECT_TRUE(apps_grid_view_->IsSelectedView(GetItemViewAt(
+      first_index)));
+  SimulateKeyPress(ui::VKEY_NEXT);
+  EXPECT_TRUE(apps_grid_view_->IsSelectedView(GetItemViewAt(
+      first_index_on_page2)));
+
+  // Moving onto a a page with too few apps to support the expected index snaps
+  // to the last available index.
+  apps_grid_view_->SetSelectedView(GetItemViewAt(last_index_on_page2_last_row));
+  SimulateKeyPress(ui::VKEY_RIGHT);
+  EXPECT_TRUE(apps_grid_view_->IsSelectedView(GetItemViewAt(
+      last_index)));
+  apps_grid_view_->SetSelectedView(GetItemViewAt(last_index_on_page2_last_row));
+  SimulateKeyPress(ui::VKEY_NEXT);
+  EXPECT_TRUE(apps_grid_view_->IsSelectedView(GetItemViewAt(
+      last_index)));
+
+
 
   // After page switch, arrow keys select first item on current page.
   apps_grid_view_->SetSelectedView(GetItemViewAt(first_index));

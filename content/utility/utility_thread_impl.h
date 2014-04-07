@@ -10,7 +10,7 @@
 
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
-#include "content/common/child_thread.h"
+#include "content/child/child_thread.h"
 #include "content/common/content_export.h"
 #include "content/public/utility/utility_thread.h"
 
@@ -26,7 +26,10 @@ class UtilityThreadImpl : public UtilityThread,
                           public ChildThread {
  public:
   UtilityThreadImpl();
+  // Constructor that's used when running in single process mode.
+  explicit UtilityThreadImpl(const std::string& channel_name);
   virtual ~UtilityThreadImpl();
+  virtual void Shutdown() OVERRIDE;
 
   virtual bool Send(IPC::Message* msg) OVERRIDE;
   virtual void ReleaseProcessIfNeeded() OVERRIDE;
@@ -36,6 +39,8 @@ class UtilityThreadImpl : public UtilityThread,
 #endif
 
  private:
+  void Init();
+
   // ChildThread implementation.
   virtual bool OnControlMessageReceived(const IPC::Message& msg) OVERRIDE;
 
@@ -49,6 +54,9 @@ class UtilityThreadImpl : public UtilityThread,
 
   // True when we're running in batch mode.
   bool batch_mode_;
+
+  // True if running in single process mode.
+  bool single_process_;
 
   scoped_ptr<WebKitPlatformSupportImpl> webkit_platform_support_;
 

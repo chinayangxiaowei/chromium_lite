@@ -25,6 +25,9 @@ const OncValueSignature kIntegerSignature = {
 const OncValueSignature kStringListSignature = {
   Value::TYPE_LIST, NULL, &kStringSignature
 };
+const OncValueSignature kIntegerListSignature = {
+  Value::TYPE_LIST, NULL, &kIntegerSignature
+};
 const OncValueSignature kIPConfigListSignature = {
   Value::TYPE_LIST, NULL, &kIPConfigSignature
 };
@@ -42,6 +45,7 @@ const OncFieldSignature certificate_pattern_fields[] = {
   { certificate::kEnrollmentURI, &kStringListSignature },
   { certificate::kIssuer, &kIssuerSubjectPatternSignature },
   { certificate::kIssuerCARef, &kStringListSignature },
+  { certificate::kIssuerCAPEMs, &kStringListSignature },
   { certificate::kSubject, &kIssuerSubjectPatternSignature },
   { NULL }
 };
@@ -57,6 +61,7 @@ const OncFieldSignature eap_fields[] = {
   { eap::kOuter, &kStringSignature },
   { eap::kPassword, &kStringSignature },
   { eap::kSaveCredentials, &kBoolSignature },
+  { eap::kServerCAPEMs, &kStringListSignature },
   { eap::kServerCARef, &kStringSignature },
   { eap::kUseSystemCAs, &kBoolSignature },
   { NULL }
@@ -64,18 +69,19 @@ const OncFieldSignature eap_fields[] = {
 
 const OncFieldSignature ipsec_fields[] = {
   { kRecommended, &kRecommendedSignature },
-  { vpn::kAuthenticationType, &kStringSignature },
+  { ipsec::kAuthenticationType, &kStringSignature },
   { vpn::kClientCertPattern, &kCertificatePatternSignature },
   { vpn::kClientCertRef, &kStringSignature },
   { vpn::kClientCertType, &kStringSignature },
-  { vpn::kGroup, &kStringSignature },
-  { vpn::kIKEVersion, &kIntegerSignature },
-  { vpn::kPSK, &kStringSignature },
+  { ipsec::kGroup, &kStringSignature },
+  { ipsec::kIKEVersion, &kIntegerSignature },
+  { ipsec::kPSK, &kStringSignature },
   { vpn::kSaveCredentials, &kBoolSignature },
-  { vpn::kServerCARef, &kStringSignature },
+  { ipsec::kServerCAPEMs, &kStringSignature },
+  { ipsec::kServerCARef, &kStringSignature },
   // Not yet supported.
-  //  { vpn::kEAP, &kEAPSignature },
-  //  { vpn::kXAUTH, &kXAUTHSignature },
+  //  { ipsec::kEAP, &kEAPSignature },
+  //  { ipsec::kXAUTH, &kXAUTHSignature },
   { NULL }
 };
 
@@ -89,37 +95,39 @@ const OncFieldSignature l2tp_fields[] = {
 
 const OncFieldSignature openvpn_fields[] = {
   { kRecommended, &kRecommendedSignature },
-  { vpn::kAuth, &kStringSignature },
-  { vpn::kAuthNoCache, &kBoolSignature },
-  { vpn::kAuthRetry, &kStringSignature },
-  { vpn::kCipher, &kStringSignature },
+  { openvpn::kAuth, &kStringSignature },
+  { openvpn::kAuthNoCache, &kBoolSignature },
+  { openvpn::kAuthRetry, &kStringSignature },
+  { openvpn::kCipher, &kStringSignature },
   { vpn::kClientCertPattern, &kCertificatePatternSignature },
   { vpn::kClientCertRef, &kStringSignature },
   { vpn::kClientCertType, &kStringSignature },
-  { vpn::kCompLZO, &kStringSignature },
-  { vpn::kCompNoAdapt, &kBoolSignature },
-  { vpn::kKeyDirection, &kStringSignature },
-  { vpn::kNsCertType, &kStringSignature },
+  { openvpn::kCompLZO, &kStringSignature },
+  { openvpn::kCompNoAdapt, &kBoolSignature },
+  { openvpn::kKeyDirection, &kStringSignature },
+  { openvpn::kNsCertType, &kStringSignature },
   { vpn::kPassword, &kStringSignature },
-  { vpn::kPort, &kIntegerSignature },
-  { vpn::kProto, &kStringSignature },
-  { vpn::kPushPeerInfo, &kBoolSignature },
-  { vpn::kRemoteCertEKU, &kStringSignature },
-  { vpn::kRemoteCertKU, &kStringListSignature },
-  { vpn::kRemoteCertTLS, &kStringSignature },
-  { vpn::kRenegSec, &kIntegerSignature },
+  { openvpn::kPort, &kIntegerSignature },
+  { openvpn::kProto, &kStringSignature },
+  { openvpn::kPushPeerInfo, &kBoolSignature },
+  { openvpn::kRemoteCertEKU, &kStringSignature },
+  { openvpn::kRemoteCertKU, &kStringListSignature },
+  { openvpn::kRemoteCertTLS, &kStringSignature },
+  { openvpn::kRenegSec, &kIntegerSignature },
   { vpn::kSaveCredentials, &kBoolSignature },
-  { vpn::kServerCARef, &kStringSignature },
+  { openvpn::kServerCAPEMs, &kStringListSignature },
+  { openvpn::kServerCARef, &kStringSignature },
   // Not supported, yet.
-  { vpn::kServerCertRef, &kStringSignature },
-  { vpn::kServerPollTimeout, &kIntegerSignature },
-  { vpn::kShaper, &kIntegerSignature },
-  { vpn::kStaticChallenge, &kStringSignature },
-  { vpn::kTLSAuthContents, &kStringSignature },
-  { vpn::kTLSRemote, &kStringSignature },
+  { openvpn::kServerCertPEM, &kStringSignature },
+  { openvpn::kServerCertRef, &kStringSignature },
+  { openvpn::kServerPollTimeout, &kIntegerSignature },
+  { openvpn::kShaper, &kIntegerSignature },
+  { openvpn::kStaticChallenge, &kStringSignature },
+  { openvpn::kTLSAuthContents, &kStringSignature },
+  { openvpn::kTLSRemote, &kStringSignature },
   { vpn::kUsername, &kStringSignature },
   // Not supported, yet.
-  { vpn::kVerb, &kStringSignature },
+  { openvpn::kVerb, &kStringSignature },
   { NULL }
 };
 
@@ -189,13 +197,15 @@ const OncFieldSignature wifi_fields[] = {
 
 const OncFieldSignature wifi_with_state_fields[] = {
   { wifi::kBSSID, &kStringSignature },
+  { wifi::kFrequency, &kIntegerSignature },
+  { wifi::kFrequencyList, &kIntegerListSignature },
   { wifi::kSignalStrength, &kIntegerSignature },
   { NULL }
 };
 
 const OncFieldSignature cellular_with_state_fields[] = {
   { kRecommended, &kRecommendedSignature },
-  { cellular::kActivateOverNonCellularNetwork, &kStringSignature },
+  { cellular::kActivateOverNonCellularNetwork, &kBoolSignature },
   { cellular::kActivationState, &kStringSignature },
   { cellular::kAllowRoaming, &kStringSignature },
   { cellular::kAPN, &kStringSignature },
@@ -259,7 +269,7 @@ const OncFieldSignature certificate_fields[] = {
   { certificate::kGUID, &kStringSignature },
   { certificate::kPKCS12, &kStringSignature },
   { kRemove, &kBoolSignature },
-  { certificate::kTrust, &kStringListSignature },
+  { certificate::kTrustBits, &kStringListSignature },
   { certificate::kType, &kStringSignature },
   { certificate::kX509, &kStringSignature },
   { NULL }
@@ -365,6 +375,37 @@ const OncFieldSignature* GetFieldSignature(const OncValueSignature& signature,
   if (signature.base_signature)
     return GetFieldSignature(*signature.base_signature, onc_field_name);
   return NULL;
+}
+
+namespace {
+
+struct CredentialEntry {
+  const OncValueSignature* value_signature;
+  const char* field_name;
+};
+
+const CredentialEntry credentials[] = {
+  { &kEAPSignature, onc::eap::kPassword },
+  { &kIPsecSignature, onc::ipsec::kPSK },
+  { &kL2TPSignature, onc::vpn::kPassword },
+  { &kOpenVPNSignature, onc::vpn::kPassword },
+  { &kOpenVPNSignature, onc::openvpn::kTLSAuthContents },
+  { &kWiFiSignature, onc::wifi::kPassphrase },
+  { NULL }
+};
+
+}  // namespace
+
+bool FieldIsCredential(const OncValueSignature& signature,
+                       const std::string& onc_field_name) {
+  for (const CredentialEntry* entry = credentials;
+       entry->value_signature != NULL; ++entry) {
+    if (&signature == entry->value_signature &&
+        onc_field_name == entry->field_name) {
+      return true;
+    }
+  }
+  return false;
 }
 
 }  // namespace onc

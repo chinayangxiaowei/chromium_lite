@@ -43,6 +43,11 @@ public class InvalidationControllerTest extends InstrumentationTestCase {
     protected void setUp() throws Exception {
         mContext = new IntentSavingContext(getInstrumentation().getTargetContext());
         mController = InvalidationController.get(mContext);
+        // We don't want to use the system content resolver, so we override it.
+        MockSyncContentResolverDelegate delegate = new MockSyncContentResolverDelegate();
+        // Android master sync can safely always be on.
+        delegate.setMasterSyncAutomatically(true);
+        SyncStatusHelper.overrideSyncStatusHelperForTests(mContext, delegate);
     }
 
     @SmallTest
@@ -112,11 +117,6 @@ public class InvalidationControllerTest extends InstrumentationTestCase {
     }
 
     private void setupSync(boolean syncEnabled) {
-        MockSyncContentResolverDelegate contentResolver = new MockSyncContentResolverDelegate();
-        // Android master sync can safely always be on.
-        contentResolver.setMasterSyncAutomatically(true);
-        // We don't want to use the system content resolver, so we override it.
-        SyncStatusHelper.overrideSyncStatusHelperForTests(mContext, contentResolver);
         Account account = AccountManagerHelper.createAccountFromName("test@gmail.com");
         ChromeSigninController chromeSigninController = ChromeSigninController.get(mContext);
         chromeSigninController.setSignedInAccountName(account.name);
@@ -285,19 +285,12 @@ public class InvalidationControllerTest extends InstrumentationTestCase {
         assertEquals(mContext.getPackageName(), mController.getContractAuthority());
     }
 
-    @SmallTest
-    @Feature({"Sync"})
-    public void testGetIntentDestination() {
-        assertEquals("org.chromium.sync.notifier.TEST_VALUE",
-                InvalidationController.getDestinationClassName(mContext));
-    }
-
     /**
      * Asserts that {@code intent} is destined for the correct component.
      */
     private static void validateIntentComponent(Intent intent) {
         assertNotNull(intent.getComponent());
-        assertEquals("org.chromium.sync.notifier.TEST_VALUE",
+        assertEquals(InvalidationService.class.getName(),
                 intent.getComponent().getClassName());
     }
 

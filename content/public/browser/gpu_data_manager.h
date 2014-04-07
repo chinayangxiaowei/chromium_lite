@@ -9,10 +9,8 @@
 #include <string>
 
 #include "base/callback_forward.h"
-#include "base/process.h"
+#include "base/process/process.h"
 #include "content/common/content_export.h"
-#include "content/public/common/gpu_feature_type.h"
-#include "content/public/common/gpu_switching_option.h"
 
 class GURL;
 
@@ -21,10 +19,13 @@ class FilePath;
 class ListValue;
 }
 
+namespace gpu {
+struct GPUInfo;
+}
+
 namespace content {
 
 class GpuDataManagerObserver;
-struct GPUInfo;
 
 // This class is fully thread-safe.
 class GpuDataManager {
@@ -36,11 +37,11 @@ class GpuDataManager {
   CONTENT_EXPORT static GpuDataManager* GetInstance();
 
   virtual void InitializeForTesting(const std::string& gpu_blacklist_json,
-                                    const content::GPUInfo& gpu_info) = 0;
+                                    const gpu::GPUInfo& gpu_info) = 0;
 
-  virtual GpuFeatureType GetBlacklistedFeatures() const = 0;
+  virtual bool IsFeatureBlacklisted(int feature) const = 0;
 
-  virtual GPUInfo GetGPUInfo() const = 0;
+  virtual gpu::GPUInfo GetGPUInfo() const = 0;
 
   // Retrieves a list of process handles for all gpu processes.
   virtual void GetGpuProcessHandles(
@@ -52,7 +53,9 @@ class GpuDataManager {
   // process, establish GPU channel, and GPU info collection, should be
   // blocked.
   // Can be called on any thread.
-  virtual bool GpuAccessAllowed() const = 0;
+  // If |reason| is not NULL and GPU access is blocked, upon return, |reason|
+  // contains a description of the reason why GPU access is blocked.
+  virtual bool GpuAccessAllowed(std::string* reason) const = 0;
 
   // Requests complete GPUinfo if it has not already been requested
   virtual void RequestCompleteGpuInfoIfNeeded() = 0;
@@ -63,10 +66,10 @@ class GpuDataManager {
   // which can be retrieved via the GPU data manager's on-update function.
   virtual void RequestVideoMemoryUsageStatsUpdate() const = 0;
 
-  // Returns true if the software rendering should currently be used.
-  virtual bool ShouldUseSoftwareRendering() const = 0;
+  // Returns true if SwiftShader should be used.
+  virtual bool ShouldUseSwiftShader() const = 0;
 
-  // Register a path to the SwiftShader software renderer.
+  // Register a path to SwiftShader.
   virtual void RegisterSwiftShaderPath(const base::FilePath& path) = 0;
 
   // Registers/unregister |observer|.

@@ -6,15 +6,16 @@
 
 #include "base/memory/singleton.h"
 #include "base/metrics/histogram.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/infobars/confirm_infobar_delegate.h"
 #include "chrome/browser/infobars/infobar_service.h"
 #include "chrome/browser/password_manager/password_form_manager.h"
 #include "chrome/browser/password_manager/password_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/sync/one_click_signin_helper.h"
-#include "components/autofill/browser/autofill_manager.h"
-#include "components/autofill/common/autofill_messages.h"
+#include "components/autofill/content/browser/autofill_driver_impl.h"
+#include "components/autofill/core/browser/autofill_manager.h"
+#include "components/autofill/core/common/autofill_messages.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
@@ -24,11 +25,11 @@
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
-#include "net/base/cert_status_flags.h"
+#include "net/cert/cert_status_flags.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/resource/resource_bundle.h"
 
-DEFINE_WEB_CONTENTS_USER_DATA_KEY(PasswordManagerDelegateImpl);
+
+// SavePasswordInfoBarDelegate ------------------------------------------------
 
 // After a successful *new* login attempt, we take the PasswordFormManager in
 // provisional_save_manager_ and move it to a SavePasswordInfoBarDelegate while
@@ -39,7 +40,8 @@ DEFINE_WEB_CONTENTS_USER_DATA_KEY(PasswordManagerDelegateImpl);
 class SavePasswordInfoBarDelegate : public ConfirmInfoBarDelegate {
  public:
   // If we won't be showing the one-click signin infobar, creates a save
-  // password delegate and adds it to the InfoBarService for |web_contents|.
+  // password infobar delegate and adds it to the InfoBarService for
+  // |web_contents|.
   static void Create(content::WebContents* web_contents,
                      PasswordFormManager* form_to_save);
 
@@ -56,7 +58,7 @@ class SavePasswordInfoBarDelegate : public ConfirmInfoBarDelegate {
   virtual ~SavePasswordInfoBarDelegate();
 
   // ConfirmInfoBarDelegate
-  virtual gfx::Image* GetIcon() const OVERRIDE;
+  virtual int GetIconID() const OVERRIDE;
   virtual Type GetInfoBarType() const OVERRIDE;
   virtual string16 GetMessageText() const OVERRIDE;
   virtual string16 GetButtonLabel(InfoBarButton button) const OVERRIDE;
@@ -80,19 +82,16 @@ void SavePasswordInfoBarDelegate::Create(content::WebContents* web_contents,
                                          PasswordFormManager* form_to_save) {
 #if defined(ENABLE_ONE_CLICK_SIGNIN)
   // Don't show the password manager infobar if this form is for a google
-  // account and we are going to show the one-click singin infobar.
-  // For now, one-click signin is fully implemented only on windows.
+  // account and we are going to show the one-click signin infobar.
   GURL realm(form_to_save->realm());
   // TODO(mathp): Checking only against associated_username() causes a bug
   // referenced here: crbug.com/133275
-  if ((realm == GURL(GaiaUrls::GetInstance()->gaia_login_form_realm()) ||
-       realm == GURL("https://www.google.com/")) &&
+  if (((realm == GURL(GaiaUrls::GetInstance()->gaia_login_form_realm())) ||
+       (realm == GURL("https://www.google.com/"))) &&
       OneClickSigninHelper::CanOffer(
-          web_contents,
-          OneClickSigninHelper::CAN_OFFER_FOR_INTERSTITAL_ONLY,
-          UTF16ToUTF8(form_to_save->associated_username()), NULL)) {
+          web_contents, OneClickSigninHelper::CAN_OFFER_FOR_INTERSTITAL_ONLY,
+          UTF16ToUTF8(form_to_save->associated_username()), NULL))
     return;
-  }
 #endif
 
   InfoBarService* infobar_service =
@@ -114,9 +113,8 @@ SavePasswordInfoBarDelegate::~SavePasswordInfoBarDelegate() {
                             infobar_response_, NUM_RESPONSE_TYPES);
 }
 
-gfx::Image* SavePasswordInfoBarDelegate::GetIcon() const {
-  return &ResourceBundle::GetSharedInstance().GetNativeImageNamed(
-      IDR_INFOBAR_SAVE_PASSWORD);
+int SavePasswordInfoBarDelegate::GetIconID() const {
+  return IDR_INFOBAR_SAVE_PASSWORD;
 }
 
 InfoBarDelegate::Type SavePasswordInfoBarDelegate::GetInfoBarType() const {
@@ -152,7 +150,10 @@ InfoBarDelegate::InfoBarAutomationType
   return PASSWORD_INFOBAR;
 }
 
+
 // PasswordManagerDelegateImpl ------------------------------------------------
+
+DEFINE_WEB_CONTENTS_USER_DATA_KEY(PasswordManagerDelegateImpl);
 
 PasswordManagerDelegateImpl::PasswordManagerDelegateImpl(
     content::WebContents* web_contents)
@@ -163,17 +164,11 @@ PasswordManagerDelegateImpl::~PasswordManagerDelegateImpl() {
 }
 
 void PasswordManagerDelegateImpl::FillPasswordForm(
-    const PasswordFormFillData& form_data) {
-  AutofillManager* autofill_manager =
-      AutofillManager::FromWebContents(web_contents_);
-  // Browser process will own popup UI, so renderer should not show the popup.
-  bool disable_popup = autofill_manager->IsNativeUiEnabled();
-
+    const autofill::PasswordFormFillData& form_data) {
   web_contents_->GetRenderViewHost()->Send(
       new AutofillMsg_FillPasswordForm(
           web_contents_->GetRenderViewHost()->GetRoutingID(),
-          form_data,
-          disable_popup));
+          form_data));
 }
 
 void PasswordManagerDelegateImpl::AddSavePasswordInfoBarIfPermitted(

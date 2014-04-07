@@ -62,11 +62,7 @@ bool BrowserGpuChannelHostFactory::IsMainThread() {
   return BrowserThread::CurrentlyOn(BrowserThread::UI);
 }
 
-bool BrowserGpuChannelHostFactory::IsIOThread() {
-  return BrowserThread::CurrentlyOn(BrowserThread::IO);
-}
-
-MessageLoop* BrowserGpuChannelHostFactory::GetMainLoop() {
+base::MessageLoop* BrowserGpuChannelHostFactory::GetMainLoop() {
   return BrowserThread::UnsafeGetMessageLoopForThread(BrowserThread::UI);
 }
 
@@ -237,7 +233,7 @@ void BrowserGpuChannelHostFactory::EstablishGpuChannelOnIO(
 void BrowserGpuChannelHostFactory::GpuChannelEstablishedOnIO(
     EstablishRequest* request,
     const IPC::ChannelHandle& channel_handle,
-    const GPUInfo& gpu_info) {
+    const gpu::GPUInfo& gpu_info) {
   if (channel_handle.name.empty() && request->reused_gpu_process) {
     // We failed after re-using the GPU process, but it may have died in the
     // mean time. Retry to have a chance to create a fresh GPU process.
@@ -253,7 +249,7 @@ GpuChannelHost* BrowserGpuChannelHostFactory::EstablishGpuChannelSync(
     CauseForGpuLaunch cause_for_gpu_launch) {
   if (gpu_channel_.get()) {
     // Recreate the channel if it has been lost.
-    if (gpu_channel_->state() == GpuChannelHost::kLost)
+    if (gpu_channel_->IsLost())
       gpu_channel_ = NULL;
     else
       return gpu_channel_.get();
@@ -281,13 +277,10 @@ GpuChannelHost* BrowserGpuChannelHostFactory::EstablishGpuChannelSync(
   if (request.channel_handle.name.empty())
     return NULL;
 
-  gpu_channel_ = new GpuChannelHost(this, request.gpu_host_id, gpu_client_id_);
-  gpu_channel_->set_gpu_info(request.gpu_info);
   GetContentClient()->SetGpuInfo(request.gpu_info);
-
-  // Connect to the GPU process if a channel name was received.
-  gpu_channel_->Connect(request.channel_handle);
-
+  gpu_channel_ = GpuChannelHost::Create(
+      this, request.gpu_host_id, gpu_client_id_,
+      request.gpu_info, request.channel_handle);
   return gpu_channel_.get();
 }
 
@@ -296,9 +289,10 @@ void BrowserGpuChannelHostFactory::AddFilterOnIO(
     int host_id,
     scoped_refptr<IPC::ChannelProxy::MessageFilter> filter) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
+
   GpuProcessHost* host = GpuProcessHost::FromID(host_id);
   if (host)
-    host->AddFilter(filter);
+    host->AddFilter(filter.get());
 }
 
 void BrowserGpuChannelHostFactory::SetHandlerForControlMessages(
@@ -306,6 +300,11 @@ void BrowserGpuChannelHostFactory::SetHandlerForControlMessages(
       size_t num_messages,
       const base::Callback<void(const IPC::Message&)>& handler,
       base::TaskRunner* target_task_runner) {
+  DCHECK(gpu_host_id_)
+      << "Do not call"
+      << " BrowserGpuChannelHostFactory::SetHandlerForControlMessages()"
+      << " until the GpuProcessHost has been set up.";
+
   scoped_refptr<IPC::ForwardingMessageFilter> filter =
       new IPC::ForwardingMessageFilter(message_ids,
                                        num_messages,

@@ -20,18 +20,17 @@ class ExtensionInfoBar : public InfoBarView,
                          public ExtensionInfoBarDelegate::DelegateObserver,
                          public views::MenuButtonListener {
  public:
-  ExtensionInfoBar(Browser* browser,
-                   InfoBarService* owner,
-                   ExtensionInfoBarDelegate* delegate);
+  ExtensionInfoBar(InfoBarService* owner,
+                   ExtensionInfoBarDelegate* delegate,
+                   Browser* browser);
 
  private:
   virtual ~ExtensionInfoBar();
 
   // InfoBarView:
   virtual void Layout() OVERRIDE;
-  virtual void ViewHierarchyChanged(bool is_add,
-                                    views::View* parent,
-                                    views::View* child) OVERRIDE;
+  virtual void ViewHierarchyChanged(
+      const ViewHierarchyChangedDetails& details) OVERRIDE;
   virtual int ContentMinimumWidth() const OVERRIDE;
 
   // ExtensionInfoBarDelegate::DelegateObserver:

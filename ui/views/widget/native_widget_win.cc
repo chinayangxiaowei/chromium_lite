@@ -10,7 +10,7 @@
 #include <algorithm>
 
 #include "base/bind.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "base/win/scoped_gdi_object.h"
 #include "base/win/win_util.h"
 #include "base/win/windows_version.h"
@@ -19,18 +19,21 @@
 #include "ui/base/dragdrop/os_exchange_data.h"
 #include "ui/base/dragdrop/os_exchange_data_provider_win.h"
 #include "ui/base/events/event.h"
+#include "ui/base/ime/input_method_factory.h"
 #include "ui/base/keycodes/keyboard_code_conversion_win.h"
 #include "ui/base/l10n/l10n_util_win.h"
 #include "ui/base/theme_provider.h"
 #include "ui/base/view_prop.h"
+#include "ui/base/win/dpi.h"
 #include "ui/base/win/hwnd_util.h"
 #include "ui/base/win/mouse_wheel_util.h"
 #include "ui/base/win/shell.h"
 #include "ui/gfx/canvas.h"
-#include "ui/gfx/canvas_paint.h"
 #include "ui/gfx/canvas_skia_paint.h"
 #include "ui/gfx/path.h"
+#include "ui/gfx/point_conversions.h"
 #include "ui/gfx/screen.h"
+#include "ui/gfx/size_conversions.h"
 #include "ui/native_theme/native_theme.h"
 #include "ui/views/controls/native_control_win.h"
 #include "ui/views/controls/textfield/textfield.h"
@@ -38,7 +41,7 @@
 #include "ui/views/focus/accelerator_handler.h"
 #include "ui/views/focus/view_storage.h"
 #include "ui/views/focus/widget_focus_manager.h"
-#include "ui/views/ime/input_method_win.h"
+#include "ui/views/ime/input_method_bridge.h"
 #include "ui/views/widget/aero_tooltip_manager.h"
 #include "ui/views/widget/drop_target_win.h"
 #include "ui/views/widget/monitor_win.h"
@@ -82,9 +85,10 @@ const int kDragFrameWindowAlpha = 200;
 NativeWidgetWin::NativeWidgetWin(internal::NativeWidgetDelegate* delegate)
     : delegate_(delegate),
       ownership_(Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET),
+      drag_frame_saved_window_style_(0),
+      drag_frame_saved_window_ex_style_(0),
       has_non_client_view_(false),
-      ALLOW_THIS_IN_INITIALIZER_LIST(
-          message_handler_(new HWNDMessageHandler(this))) {
+      message_handler_(new HWNDMessageHandler(this)) {
 }
 
 NativeWidgetWin::~NativeWidgetWin() {
@@ -112,8 +116,11 @@ void NativeWidgetWin::Show(int show_state) {
 // NativeWidgetWin, NativeWidget implementation:
 
 void NativeWidgetWin::InitNativeWidget(const Widget::InitParams& params) {
-  SetInitParams(params);
-  message_handler_->Init(params.parent, params.bounds);
+  gfx::Rect pixel_bounds = ui::win::DIPToScreenRect(params.bounds);
+  Widget::InitParams params_in_pixel(params);
+  params_in_pixel.bounds = pixel_bounds;
+  SetInitParams(params_in_pixel);
+  message_handler_->Init(params.parent, pixel_bounds);
 }
 
 NonClientFrameView* NativeWidgetWin::CreateNonClientFrameView() {
@@ -158,9 +165,11 @@ ui::Compositor* NativeWidgetWin::GetCompositor() {
   return NULL;
 }
 
-gfx::Vector2d NativeWidgetWin::CalculateOffsetToAncestorWithLayer(
-    ui::Layer** layer_parent) {
-  return gfx::Vector2d();
+ui::Layer* NativeWidgetWin::GetLayer() {
+  return NULL;
+}
+
+void NativeWidgetWin::ReorderNativeViews() {
 }
 
 void NativeWidgetWin::ViewRemoved(View* view) {
@@ -202,8 +211,8 @@ bool NativeWidgetWin::HasCapture() const {
 }
 
 InputMethod* NativeWidgetWin::CreateInputMethod() {
-  return views::Textfield::IsViewsTextfieldEnabled() ?
-      new InputMethodWin(GetMessageHandler(), GetNativeWindow(), NULL) : NULL;
+  return new InputMethodBridge(GetMessageHandler(), ui::GetSharedInputMethod(),
+                               true);
 }
 
 internal::InputMethodDelegate* NativeWidgetWin::GetInputMethodDelegate() {
@@ -211,13 +220,15 @@ internal::InputMethodDelegate* NativeWidgetWin::GetInputMethodDelegate() {
 }
 
 void NativeWidgetWin::CenterWindow(const gfx::Size& size) {
-  message_handler_->CenterWindow(size);
+  gfx::Size size_in_pixels = ui::win::DIPToScreenSize(size);
+  message_handler_->CenterWindow(size_in_pixels);
 }
 
 void NativeWidgetWin::GetWindowPlacement(
     gfx::Rect* bounds,
     ui::WindowShowState* show_state) const {
   message_handler_->GetWindowPlacement(bounds, show_state);
+  *bounds = ui::win::ScreenToDIPRect(*bounds);
 }
 
 void NativeWidgetWin::SetWindowTitle(const string16& title) {
@@ -234,19 +245,26 @@ void NativeWidgetWin::InitModalType(ui::ModalType modal_type) {
 }
 
 gfx::Rect NativeWidgetWin::GetWindowBoundsInScreen() const {
-  return message_handler_->GetWindowBoundsInScreen();
+  gfx::Rect bounds_in_pixels = message_handler_->GetWindowBoundsInScreen();
+  return ui::win::ScreenToDIPRect(bounds_in_pixels);
 }
 
 gfx::Rect NativeWidgetWin::GetClientAreaBoundsInScreen() const {
-  return message_handler_->GetClientAreaBoundsInScreen();
+  gfx::Rect bounds_in_pixels = message_handler_->GetClientAreaBoundsInScreen();
+  return ui::win::ScreenToDIPRect(bounds_in_pixels);
 }
 
 gfx::Rect NativeWidgetWin::GetRestoredBounds() const {
-  return message_handler_->GetRestoredBounds();
+  gfx::Rect bounds_in_pixels = message_handler_->GetRestoredBounds();
+  return ui::win::ScreenToDIPRect(bounds_in_pixels);
 }
 
 void NativeWidgetWin::SetBounds(const gfx::Rect& bounds) {
-  message_handler_->SetBounds(bounds);
+  float scale = ui::win::GetDeviceScaleFactor();
+  gfx::Rect bounds_in_pixels(
+      gfx::ToCeiledPoint(gfx::ScalePoint(bounds.origin(), scale)),
+      gfx::ToFlooredSize(gfx::ScaleSize(bounds.size(), scale)));
+  message_handler_->SetBounds(bounds_in_pixels);
 }
 
 void NativeWidgetWin::SetSize(const gfx::Size& size) {
@@ -287,7 +305,8 @@ void NativeWidgetWin::Hide() {
 
 void NativeWidgetWin::ShowMaximizedWithBounds(
     const gfx::Rect& restored_bounds) {
-  message_handler_->ShowMaximizedWithBounds(restored_bounds);
+  gfx::Rect pixel_bounds = ui::win::DIPToScreenRect(restored_bounds);
+  message_handler_->ShowMaximizedWithBounds(pixel_bounds);
 }
 
 void NativeWidgetWin::ShowWithWindowState(ui::WindowShowState show_state) {
@@ -393,11 +412,16 @@ void NativeWidgetWin::RunShellDrag(View* view,
 }
 
 void NativeWidgetWin::SchedulePaintInRect(const gfx::Rect& rect) {
-  message_handler_->SchedulePaintInRect(rect);
+  gfx::Rect pixel_rect = ui::win::DIPToScreenRect(rect);
+  message_handler_->SchedulePaintInRect(pixel_rect);
 }
 
 void NativeWidgetWin::SetCursor(gfx::NativeCursor cursor) {
   message_handler_->SetCursor(cursor);
+}
+
+bool NativeWidgetWin::IsMouseEventsEnabled() const {
+  return true;
 }
 
 void NativeWidgetWin::ClearNativeFocus() {
@@ -405,8 +429,9 @@ void NativeWidgetWin::ClearNativeFocus() {
 }
 
 gfx::Rect NativeWidgetWin::GetWorkAreaBoundsInScreen() const {
-  return gfx::Screen::GetNativeScreen()->GetDisplayNearestWindow(
-      GetNativeView()).work_area();
+  return ui::win::ScreenToDIPRect(
+      gfx::Screen::GetNativeScreen()->GetDisplayNearestWindow(
+      GetNativeView()).work_area());
 }
 
 void NativeWidgetWin::SetInactiveRenderingDisabled(bool value) {
@@ -429,6 +454,14 @@ void NativeWidgetWin::SetVisibilityChangedAnimationsEnabled(bool value) {
 
 ui::NativeTheme* NativeWidgetWin::GetNativeTheme() const {
   return ui::NativeTheme::instance();
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// NativeWidgetWin, NativeWidget implementation:
+
+ui::EventHandler* NativeWidgetWin::GetEventHandler() {
+  NOTIMPLEMENTED();
+  return NULL;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -506,7 +539,8 @@ void NativeWidgetWin::RestoreFocusOnActivate() {
   // to a child hwnd when restoring its top level window from the minimized
   // state. If we don't do this, then ::SetFocus() to that child HWND returns
   // ERROR_INVALID_PARAMETER, despite both HWNDs being of the same thread.
-  // See http://crbug.com/125976
+  // See http://crbug.com/125976 and
+  // chrome/browser/ui/views/native_widget_win_interactive_uitest.cc .
   {
     // Since this is a synthetic reset, we don't need to tell anyone about it.
     AutoNativeNotificationDisabler disabler;
@@ -532,7 +566,8 @@ bool NativeWidgetWin::WillProcessWorkAreaChange() const {
 }
 
 int NativeWidgetWin::GetNonClientComponent(const gfx::Point& point) const {
-  return delegate_->GetNonClientComponent(point);
+  gfx::Point point_in_dip = ui::win::ScreenToDIPPoint(point);
+  return delegate_->GetNonClientComponent(point_in_dip);
 }
 
 void NativeWidgetWin::GetWindowMask(const gfx::Size& size, gfx::Path* path) {
@@ -546,12 +581,13 @@ bool NativeWidgetWin::GetClientAreaInsets(gfx::Insets* insets) const {
 
 void NativeWidgetWin::GetMinMaxSize(gfx::Size* min_size,
                                     gfx::Size* max_size) const {
-  *min_size = delegate_->GetMinimumSize();
-  *max_size = delegate_->GetMaximumSize();
+  *min_size = ui::win::ScreenToDIPSize(delegate_->GetMinimumSize());
+  *max_size = ui::win::ScreenToDIPSize(delegate_->GetMaximumSize());
 }
 
 gfx::Size NativeWidgetWin::GetRootViewSize() const {
-  return GetWidget()->GetRootView()->size();
+  gfx::Size pixel_size = GetWidget()->GetRootView()->size();
+  return ui::win::ScreenToDIPSize(pixel_size);
 }
 
 void NativeWidgetWin::ResetWindowControls() {
@@ -642,7 +678,7 @@ void NativeWidgetWin::HandleCreate() {
     tooltip_manager_.reset();
   }
 
-  delegate_->OnNativeWidgetCreated();
+  delegate_->OnNativeWidgetCreated(true);
 }
 
 void NativeWidgetWin::HandleDestroying() {
@@ -686,7 +722,8 @@ void NativeWidgetWin::HandleVisibilityChanged(bool visible) {
 }
 
 void NativeWidgetWin::HandleClientSizeChanged(const gfx::Size& new_size) {
-  delegate_->OnNativeWidgetSizeChanged(new_size);
+  gfx::Size size_in_dip = ui::win::ScreenToDIPSize(new_size);
+  delegate_->OnNativeWidgetSizeChanged(size_in_dip);
 }
 
 void NativeWidgetWin::HandleFrameChanged() {
@@ -709,8 +746,26 @@ void NativeWidgetWin::HandleNativeBlur(HWND focused_window) {
 }
 
 bool NativeWidgetWin::HandleMouseEvent(const ui::MouseEvent& event) {
-  delegate_->OnMouseEvent(const_cast<ui::MouseEvent*>(&event));
-  return event.handled();
+  static gfx::Transform scale_transform(
+    1/ui::win::GetDeviceScaleFactor(), 0.0,
+    0.0, 1/ui::win::GetDeviceScaleFactor(),
+    0.0, 0.0);
+  if (event.IsMouseWheelEvent()) {
+    ui::MouseWheelEvent dpi_event(
+        static_cast<const ui::MouseWheelEvent&>(event));
+    dpi_event.UpdateForRootTransform(scale_transform);
+    delegate_->OnMouseEvent(&dpi_event);
+    return dpi_event.handled();
+  } else if (event.IsMouseEvent()) {
+    CHECK(!event.IsScrollEvent()); // Scroll events don't happen in Windows.
+    ui::MouseEvent dpi_event(event);
+    if (!(dpi_event.flags() & ui::EF_IS_NON_CLIENT))
+      dpi_event.UpdateForRootTransform(scale_transform);
+    delegate_->OnMouseEvent(&dpi_event);
+    return dpi_event.handled();
+  }
+  NOTREACHED();
+  return false;
 }
 
 bool NativeWidgetWin::HandleKeyEvent(const ui::KeyEvent& event) {
@@ -740,23 +795,25 @@ bool NativeWidgetWin::HandleIMEMessage(UINT message,
     return false;
   }
 
-  InputMethodWin* ime_win = static_cast<InputMethodWin*>(input_method);
-  BOOL handled = FALSE;
-  *result = ime_win->OnImeMessages(message, w_param, l_param, &handled);
-  return !!handled;
+  MSG msg = {};
+  msg.hwnd = message_handler_->hwnd();
+  msg.message = message;
+  msg.wParam = w_param;
+  msg.lParam = l_param;
+  return input_method->OnUntranslatedIMEMessage(msg, result);
 }
 
 void NativeWidgetWin::HandleInputLanguageChange(DWORD character_set,
                                                 HKL input_language_id) {
   InputMethod* input_method = GetInputMethod();
   if (input_method && !input_method->IsMock()) {
-    static_cast<InputMethodWin*>(input_method)->OnInputLangChange(
-        character_set, input_language_id);
+    input_method->OnInputLocaleChanged();
   }
 }
 
 bool NativeWidgetWin::HandlePaintAccelerated(const gfx::Rect& invalid_rect) {
-  return delegate_->OnNativeWidgetPaintAccelerated(gfx::Rect(invalid_rect));
+  gfx::Rect dpi_rect = ui::win::ScreenToDIPRect(invalid_rect);
+  return delegate_->OnNativeWidgetPaintAccelerated(dpi_rect);
 }
 
 void NativeWidgetWin::HandlePaint(gfx::Canvas* canvas) {
@@ -845,11 +902,11 @@ bool Widget::ConvertRect(const Widget* source,
   if (source_hwnd == target_hwnd)
     return true;
 
-  RECT win_rect = rect->ToRECT();
+  RECT win_rect = ui::win::DIPToScreenRect(*rect).ToRECT();
   if (::MapWindowPoints(source_hwnd, target_hwnd,
                         reinterpret_cast<LPPOINT>(&win_rect),
                         sizeof(RECT)/sizeof(POINT))) {
-    *rect = gfx::Rect(win_rect);
+    *rect = ui::win::ScreenToDIPRect(gfx::Rect(win_rect));
     return true;
   }
   return false;

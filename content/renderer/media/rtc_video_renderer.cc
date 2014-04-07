@@ -8,10 +8,9 @@
 #include "base/debug/trace_event.h"
 #include "base/location.h"
 #include "base/logging.h"
-#include "base/message_loop_proxy.h"
+#include "base/message_loop/message_loop_proxy.h"
 #include "media/base/video_frame.h"
 #include "media/base/video_util.h"
-#include "third_party/libjingle/source/talk/base/timeutils.h"
 #include "third_party/libjingle/source/talk/media/base/videoframe.h"
 
 using media::CopyYPlane;
@@ -38,7 +37,7 @@ void RTCVideoRenderer::Start() {
   DCHECK(message_loop_proxy_->BelongsToCurrentThread());
   DCHECK_EQ(state_, kStopped);
 
-  if (video_track_) {
+  if (video_track_.get()) {
     video_track_->AddRenderer(this);
     video_track_->RegisterObserver(this);
   }
@@ -48,7 +47,7 @@ void RTCVideoRenderer::Start() {
 
 void RTCVideoRenderer::Stop() {
   DCHECK(message_loop_proxy_->BelongsToCurrentThread());
-  if (video_track_) {
+  if (video_track_.get()) {
     state_ = kStopped;
     video_track_->RemoveRenderer(this);
     video_track_->UnregisterObserver(this);
@@ -58,14 +57,14 @@ void RTCVideoRenderer::Stop() {
 
 void RTCVideoRenderer::Play() {
   DCHECK(message_loop_proxy_->BelongsToCurrentThread());
-  if (video_track_ && state_ == kPaused) {
+  if (video_track_.get() && state_ == kPaused) {
     state_ = kStarted;
   }
 }
 
 void RTCVideoRenderer::Pause() {
   DCHECK(message_loop_proxy_->BelongsToCurrentThread());
-  if (video_track_ && state_ == kStarted) {
+  if (video_track_.get() && state_ == kStarted) {
     state_ = kPaused;
   }
 }
@@ -76,6 +75,15 @@ void RTCVideoRenderer::SetSize(int width, int height) {
 void RTCVideoRenderer::RenderFrame(const cricket::VideoFrame* frame) {
   base::TimeDelta timestamp = base::TimeDelta::FromMilliseconds(
       frame->GetTimeStamp() / talk_base::kNumNanosecsPerMillisec);
+
+  TRACE_EVENT_INSTANT2("rtc_video_renderer",
+                       "RenderFrame",
+                       TRACE_EVENT_SCOPE_THREAD,
+                       "elapsed time",
+                       frame->GetElapsedTime(),
+                       "timestamp_ms",
+                       timestamp.InMilliseconds());
+
   gfx::Size size(frame->GetWidth(), frame->GetHeight());
   scoped_refptr<media::VideoFrame> video_frame =
       media::VideoFrame::CreateFrame(media::VideoFrame::YV12,
@@ -90,9 +98,11 @@ void RTCVideoRenderer::RenderFrame(const cricket::VideoFrame* frame) {
 
   int y_rows = frame->GetHeight();
   int uv_rows = frame->GetHeight() / 2;  // YV12 format.
-  CopyYPlane(frame->GetYPlane(), frame->GetYPitch(), y_rows, video_frame);
-  CopyUPlane(frame->GetUPlane(), frame->GetUPitch(), uv_rows, video_frame);
-  CopyVPlane(frame->GetVPlane(), frame->GetVPitch(), uv_rows, video_frame);
+  CopyYPlane(frame->GetYPlane(), frame->GetYPitch(), y_rows, video_frame.get());
+  CopyUPlane(
+      frame->GetUPlane(), frame->GetUPitch(), uv_rows, video_frame.get());
+  CopyVPlane(
+      frame->GetVPlane(), frame->GetVPitch(), uv_rows, video_frame.get());
 
   message_loop_proxy_->PostTask(
       FROM_HERE, base::Bind(&RTCVideoRenderer::DoRenderFrameOnMainThread,

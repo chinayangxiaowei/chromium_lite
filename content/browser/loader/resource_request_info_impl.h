@@ -14,7 +14,7 @@
 #include "content/public/browser/resource_request_info.h"
 #include "content/public/common/referrer.h"
 #include "net/base/load_states.h"
-#include "webkit/glue/resource_type.h"
+#include "webkit/common/resource_type.h"
 
 namespace webkit_blob {
 class BlobData;
@@ -24,6 +24,7 @@ namespace content {
 class CrossSiteResourceHandler;
 class ResourceContext;
 struct GlobalRequestID;
+struct GlobalRoutingID;
 
 // Holds the data ResourceDispatcherHost associates with each request.
 // Retrieve this data by calling ResourceDispatcherHost::InfoForRequest.
@@ -82,6 +83,7 @@ class ResourceRequestInfoImpl : public ResourceRequestInfo,
   CONTENT_EXPORT void AssociateWithRequest(net::URLRequest* request);
 
   CONTENT_EXPORT GlobalRequestID GetGlobalRequestID() const;
+  GlobalRoutingID GetGlobalRoutingID() const;
 
   // CrossSiteResourceHandler for this request.  May be null.
   CrossSiteResourceHandler* cross_site_handler() {

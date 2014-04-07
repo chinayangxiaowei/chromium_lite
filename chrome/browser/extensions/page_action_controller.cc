@@ -4,6 +4,7 @@
 
 #include "chrome/browser/extensions/page_action_controller.h"
 
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/browser_event_router.h"
 #include "chrome/browser/extensions/component_loader.h"
 #include "chrome/browser/extensions/extension_action.h"
@@ -14,7 +15,6 @@
 #include "chrome/browser/extensions/tab_helper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sessions/session_id.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/extensions/extension_set.h"
 #include "content/public/browser/invalidate_type.h"
 #include "content/public/browser/navigation_details.h"
@@ -41,7 +41,8 @@ std::vector<ExtensionAction*> PageActionController::GetCurrentActions() const {
 
   for (ExtensionSet::const_iterator i = service->extensions()->begin();
        i != service->extensions()->end(); ++i) {
-    ExtensionAction* action = extension_action_manager->GetPageAction(**i);
+    ExtensionAction* action =
+        extension_action_manager->GetPageAction(*i->get());
     if (action)
       current_actions.push_back(action);
   }

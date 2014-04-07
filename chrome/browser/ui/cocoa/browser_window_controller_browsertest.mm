@@ -6,27 +6,33 @@
 
 #import "base/mac/mac_util.h"
 #include "base/run_loop.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/infobars/confirm_infobar_delegate.h"
 #include "chrome/browser/infobars/infobar_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/search/search.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_tabstrip.cc"
 #include "chrome/browser/ui/browser_window.h"
 #import "chrome/browser/ui/cocoa/browser/avatar_button_controller.h"
 #include "chrome/browser/ui/cocoa/browser_window_cocoa.h"
 #import "chrome/browser/ui/cocoa/browser_window_controller_private.h"
 #import "chrome/browser/ui/cocoa/fast_resize_view.h"
+#import "chrome/browser/ui/cocoa/history_overlay_controller.h"
 #import "chrome/browser/ui/cocoa/infobars/infobar_container_controller.h"
 #import "chrome/browser/ui/cocoa/nsview_additions.h"
 #import "chrome/browser/ui/cocoa/tab_contents/overlayable_contents_controller.h"
-#include "chrome/browser/ui/search/search_model.h"
+#include "chrome/browser/ui/extensions/application_launch.h"
+#include "chrome/browser/ui/find_bar/find_bar_controller.h"
+#include "chrome/browser/ui/find_bar/find_bar.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "chrome/test/base/testing_profile.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_view.h"
 #import "testing/gtest_mac.h"
 
 namespace {
@@ -43,7 +49,8 @@ void CreateProfileCallback(const base::Closure& quit_closure,
                            Profile* profile,
                            Profile::CreateStatus status) {
   EXPECT_TRUE(profile);
-  EXPECT_NE(Profile::CREATE_STATUS_FAIL, status);
+  EXPECT_NE(Profile::CREATE_STATUS_LOCAL_FAIL, status);
+  EXPECT_NE(Profile::CREATE_STATUS_REMOTE_FAIL, status);
   // This will be called multiple times. Wait until the profile is initialized
   // fully to quit the loop.
   if (status == Profile::CREATE_STATUS_INITIALIZED)
@@ -95,28 +102,6 @@ class BrowserWindowControllerTest : public InProcessBrowserTest {
   BrowserWindowController* controller() const {
     return [BrowserWindowController browserWindowControllerForWindow:
         browser()->window()->GetNativeWindow()];
-  }
-
-  void ShowInstantResults() {
-    chrome::search::EnableInstantExtendedAPIForTesting();
-    chrome::search::Mode mode(chrome::search::Mode::MODE_SEARCH_SUGGESTIONS,
-                              chrome::search::Mode::ORIGIN_SEARCH);
-    browser()->search_model()->SetMode(mode);
-    browser()->search_model()->SetTopBarsVisible(false);
-    EXPECT_TRUE(browser()->search_model()->mode().is_search_suggestions());
-    EXPECT_EQ(browser_window_controller::kInstantUIFullPageResults,
-              [controller() currentInstantUIState]);
-  }
-
-  void ShowInstantNTP() {
-    chrome::search::EnableInstantExtendedAPIForTesting();
-    chrome::search::Mode mode(chrome::search::Mode::MODE_NTP,
-                              chrome::search::Mode::ORIGIN_NTP);
-    browser()->search_model()->SetMode(mode);
-    browser()->search_model()->SetTopBarsVisible(true);
-    EXPECT_TRUE(browser()->search_model()->mode().is_ntp());
-    EXPECT_EQ(browser_window_controller::kInstantUINone,
-              [controller() currentInstantUIState]);
   }
 
   void ShowInfoBar() {
@@ -225,7 +210,7 @@ IN_PROC_BROWSER_TEST_F(BrowserWindowControllerTest,
       create_callback,
       ASCIIToUTF16("avatar_test"),
       string16(),
-      false);
+      std::string());
 
   run_loop.Run();
 
@@ -279,45 +264,6 @@ IN_PROC_BROWSER_TEST_F(BrowserWindowControllerTest,
   VerifyZOrder(view_list);
 }
 
-// Normal mode with Instant results showing. Should be same z-order as normal
-// mode except find bar is below content area.
-IN_PROC_BROWSER_TEST_F(BrowserWindowControllerTest, ZOrderNormalInstant) {
-  ShowInstantResults();
-  browser()->GetFindBarController();  // add find bar
-
-  std::vector<ViewID> view_list;
-  view_list.push_back(VIEW_ID_BOOKMARK_BAR);
-  view_list.push_back(VIEW_ID_TOOLBAR);
-  view_list.push_back(VIEW_ID_INFO_BAR);
-  view_list.push_back(VIEW_ID_FIND_BAR);
-  view_list.push_back(VIEW_ID_TAB_CONTENT_AREA);
-  view_list.push_back(VIEW_ID_DOWNLOAD_SHELF);
-  VerifyZOrder(view_list);
-}
-
-// Presentation mode with Instant results showing. Should be exact same as
-// non-Instant presentation mode.
-IN_PROC_BROWSER_TEST_F(BrowserWindowControllerTest,
-                       DISABLED_ZOrderInstantPresentationMode) {
-  // TODO(kbr): re-enable: http://crbug.com/222296
-  if (base::mac::IsOSMountainLionOrLater())
-    return;
-
-  chrome::ToggleFullscreenMode(browser());
-  ShowInstantResults();
-  browser()->GetFindBarController();  // add find bar
-
-  std::vector<ViewID> view_list;
-  view_list.push_back(VIEW_ID_INFO_BAR);
-  view_list.push_back(VIEW_ID_TAB_CONTENT_AREA);
-  view_list.push_back(VIEW_ID_FULLSCREEN_FLOATING_BAR);
-  view_list.push_back(VIEW_ID_BOOKMARK_BAR);
-  view_list.push_back(VIEW_ID_TOOLBAR);
-  view_list.push_back(VIEW_ID_FIND_BAR);
-  view_list.push_back(VIEW_ID_DOWNLOAD_SHELF);
-  VerifyZOrder(view_list);
-}
-
 // Verify that if the fullscreen floating bar view is below the tab content area
 // then calling |updateSubviewZOrder:| will correctly move back above.
 IN_PROC_BROWSER_TEST_F(BrowserWindowControllerTest,
@@ -346,121 +292,108 @@ IN_PROC_BROWSER_TEST_F(BrowserWindowControllerTest,
   VerifyZOrder(view_list);
 }
 
-// Verify that in non-Instant presentation mode the content area is beneath
-// the bookmark bar and info bar.
-IN_PROC_BROWSER_TEST_F(BrowserWindowControllerTest, ContentOffset) {
-  OverlayableContentsController* overlay =
-      [controller() overlayableContentsController];
+IN_PROC_BROWSER_TEST_F(BrowserWindowControllerTest, SheetPosition) {
+  ASSERT_TRUE([controller() isKindOfClass:[BrowserWindowController class]]);
+  EXPECT_TRUE([controller() isTabbedWindow]);
+  EXPECT_TRUE([controller() hasTabStrip]);
+  EXPECT_FALSE([controller() hasTitleBar]);
+  EXPECT_TRUE([controller() hasToolbar]);
+  EXPECT_FALSE([controller() isBookmarkBarVisible]);
 
-  // Just toolbar.
-  EXPECT_EQ(0, [overlay activeContainerOffset]);
+  NSRect defaultAlertFrame = NSMakeRect(0, 0, 300, 200);
+  NSWindow* window = browser()->window()->GetNativeWindow();
+  NSRect alertFrame = [controller() window:window
+                         willPositionSheet:nil
+                                 usingRect:defaultAlertFrame];
+  NSRect toolbarFrame = [[[controller() toolbarController] view] frame];
+  EXPECT_EQ(NSMinY(alertFrame), NSMinY(toolbarFrame));
 
-  // Plus bookmark bar.
+  // Open sheet with normal browser window, persistent bookmark bar.
   browser()->window()->ToggleBookmarkBar();
-  EXPECT_EQ(GetViewHeight(VIEW_ID_BOOKMARK_BAR),
-            [overlay activeContainerOffset]);
+  EXPECT_TRUE([controller() isBookmarkBarVisible]);
+  alertFrame = [controller() window:window
+                  willPositionSheet:nil
+                          usingRect:defaultAlertFrame];
+  NSRect bookmarkBarFrame = [[[controller() bookmarkBarController] view] frame];
+  EXPECT_EQ(NSMinY(alertFrame), NSMinY(bookmarkBarFrame));
 
-  // Plus info bar.
-  ShowInfoBar();
-  EXPECT_EQ(GetViewHeight(VIEW_ID_BOOKMARK_BAR) +
-                GetViewHeight(VIEW_ID_INFO_BAR),
-            [overlay activeContainerOffset]);
-
-  // Minus bookmark bar.
+  // Make sure the profile does not have the bookmark visible so that
+  // we'll create the shortcut window without the bookmark bar.
   browser()->window()->ToggleBookmarkBar();
-  EXPECT_EQ(GetViewHeight(VIEW_ID_INFO_BAR), [overlay activeContainerOffset]);
+  // Open application mode window.
+  gfx::Rect initial_bounds(0, 0, 400, 400);
+  chrome::OpenAppShortcutWindow(
+      browser()->profile(), GURL("about:blank"), initial_bounds);
+  Browser* popup_browser = BrowserList::GetInstance(
+      chrome::GetActiveDesktop())->GetLastActive();
+  NSWindow* popupWindow = popup_browser->window()->GetNativeWindow();
+  BrowserWindowController* popupController =
+      [BrowserWindowController browserWindowControllerForWindow:popupWindow];
+  ASSERT_TRUE([popupController isKindOfClass:[BrowserWindowController class]]);
+  EXPECT_FALSE([popupController isTabbedWindow]);
+  EXPECT_FALSE([popupController hasTabStrip]);
+  EXPECT_TRUE([popupController hasTitleBar]);
+  EXPECT_FALSE([popupController isBookmarkBarVisible]);
+  EXPECT_FALSE([popupController hasToolbar]);
+
+  // Open sheet in an application window.
+  [popupController showWindow:nil];
+  alertFrame = [popupController window:popupWindow
+                     willPositionSheet:nil
+                             usingRect:defaultAlertFrame];
+  EXPECT_EQ(NSMinY(alertFrame),
+            NSHeight([[popupWindow contentView] frame]) -
+            defaultAlertFrame.size.height);
+
+  // Close the application window.
+  popup_browser->tab_strip_model()->CloseSelectedTabs();
+  [popupController close];
 }
 
-// Verify that in non-Instant presentation mode the content area is beneath
-// the info bar.
+// Verify that the info bar tip is hidden when the toolbar is not visible.
 IN_PROC_BROWSER_TEST_F(BrowserWindowControllerTest,
-                       DISABLED_ContentOffsetPresentationMode) {
-  // TODO(kbr): re-enable: http://crbug.com/222296
-  if (base::mac::IsOSMountainLionOrLater())
-    return;
-
-  chrome::ToggleFullscreenMode(browser());
-  OverlayableContentsController* overlay =
-      [controller() overlayableContentsController];
-
-  // Just toolbar.
-  EXPECT_EQ(0, [overlay activeContainerOffset]);
-
-  // Plus bookmark bar.
-  browser()->window()->ToggleBookmarkBar();
-  EXPECT_EQ(0, [overlay activeContainerOffset]);
-
-  // Plus info bar.
+                       InfoBarTipHiddenForWindowWithoutToolbar) {
   ShowInfoBar();
-  EXPECT_EQ(0, [overlay activeContainerOffset]);
+  EXPECT_FALSE(
+      [[controller() infoBarContainerController] shouldSuppressTopInfoBarTip]);
 
-  // Minus bookmark bar.
-  browser()->window()->ToggleBookmarkBar();
-  EXPECT_EQ(0, [overlay activeContainerOffset]);
+  gfx::Rect initial_bounds(0, 0, 400, 400);
+  chrome::OpenAppShortcutWindow(
+      browser()->profile(), GURL("about:blank"), initial_bounds);
+  Browser* popup_browser = BrowserList::GetInstance(
+      chrome::HOST_DESKTOP_TYPE_NATIVE)->GetLastActive();
+  NSWindow* popupWindow = popup_browser->window()->GetNativeWindow();
+  BrowserWindowController* popupController =
+      [BrowserWindowController browserWindowControllerForWindow:popupWindow];
+  EXPECT_FALSE([popupController hasToolbar]);
+
+  // Show infobar for controller.
+  content::WebContents* web_contents =
+      popup_browser->tab_strip_model()->GetActiveWebContents();
+  InfoBarService* service = InfoBarService::FromWebContents(web_contents);
+  scoped_ptr<InfoBarDelegate> info_bar_delegate(new DummyInfoBar(service));
+  [[popupController infoBarContainerController]
+      addInfoBar:info_bar_delegate->CreateInfoBar(service)
+         animate:NO];
+
+  EXPECT_TRUE(
+      [[popupController infoBarContainerController]
+          shouldSuppressTopInfoBarTip]);
 }
 
-// Verify that when showing Instant results the content area overlaps the
-// bookmark bar and info bar.
-IN_PROC_BROWSER_TEST_F(BrowserWindowControllerTest, ContentOffsetInstant) {
-  ShowInstantResults();
-  OverlayableContentsController* overlay =
-      [controller() overlayableContentsController];
-
-  // Just toolbar.
-  EXPECT_EQ(0, [overlay activeContainerOffset]);
-
-  // Plus bookmark bar.
-  browser()->window()->ToggleBookmarkBar();
-  EXPECT_EQ(0, [overlay activeContainerOffset]);
-
-  // Plus info bar.
-  ShowInfoBar();
-  EXPECT_EQ(0, [overlay activeContainerOffset]);
-
-  // Minus bookmark bar.
-  browser()->window()->ToggleBookmarkBar();
-  EXPECT_EQ(0, [overlay activeContainerOffset]);
-}
-
-// The Instant NTP case is same as normal case except that the overlay is
-// also shifted down.
-IN_PROC_BROWSER_TEST_F(BrowserWindowControllerTest, ContentOffsetInstantNPT) {
-  ShowInstantNTP();
-  OverlayableContentsController* overlay =
-      [controller() overlayableContentsController];
-
-  // Just toolbar.
-  EXPECT_EQ(0, [overlay activeContainerOffset]);
-
-  // Plus bookmark bar.
-  browser()->window()->ToggleBookmarkBar();
-  EXPECT_EQ(GetViewHeight(VIEW_ID_BOOKMARK_BAR),
-            [overlay activeContainerOffset]);
-
-  // Plus info bar.
-  ShowInfoBar();
-  EXPECT_EQ(GetViewHeight(VIEW_ID_BOOKMARK_BAR) +
-                GetViewHeight(VIEW_ID_INFO_BAR),
-            [overlay activeContainerOffset]);
-
-  // Minus bookmark bar.
-  browser()->window()->ToggleBookmarkBar();
-  EXPECT_EQ(GetViewHeight(VIEW_ID_INFO_BAR), [overlay activeContainerOffset]);
-}
-
-// Verify that if bookmark bar is underneath Instant search results then
-// clicking on Instant search results still works.
+// Verify that AllowOverlappingViews is set while the history overlay is
+// visible.
 IN_PROC_BROWSER_TEST_F(BrowserWindowControllerTest,
-                       InstantSearchResultsHitTest) {
-  browser()->window()->ToggleBookmarkBar();
-  ShowInstantResults();
+                       AllowOverlappingViewsHistoryOverlay) {
+  content::WebContentsView* web_contents_view =
+      browser()->tab_strip_model()->GetActiveWebContents()->GetView();
+  EXPECT_TRUE(web_contents_view->GetAllowOverlappingViews());
 
-  NSView* bookmarkView = [[controller() bookmarkBarController] view];
-  NSView* contentView = [[controller() window] contentView];
-  NSPoint point = [bookmarkView convertPoint:NSMakePoint(1, 1)
-                                      toView:[contentView superview]];
+  base::scoped_nsobject<HistoryOverlayController> overlay(
+      [[HistoryOverlayController alloc] initForMode:kHistoryOverlayModeBack]);
+  [overlay showPanelForView:web_contents_view->GetNativeView()];
+  EXPECT_TRUE(web_contents_view->GetAllowOverlappingViews());
 
-  EXPECT_FALSE([[contentView hitTest:point] isDescendantOf:bookmarkView]);
-  EXPECT_TRUE([[contentView hitTest:point]
-      isDescendantOf:[controller() tabContentArea]]);
+  overlay.reset();
+  EXPECT_TRUE(web_contents_view->GetAllowOverlappingViews());
 }

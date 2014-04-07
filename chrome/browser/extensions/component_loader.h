@@ -10,12 +10,10 @@
 
 #include "base/files/file_path.h"
 #include "base/gtest_prod_util.h"
-#include "base/prefs/pref_change_registrar.h"
 #include "base/values.h"
 
 class ExtensionServiceInterface;
 class PrefService;
-class PrefRegistrySyncable;
 
 namespace extensions {
 
@@ -80,8 +78,6 @@ class ComponentLoader {
   // platforms this |skip_session_components| is expected to be unset.
   void AddDefaultComponentExtensions(bool skip_session_components);
 
-  static void RegisterUserPrefs(PrefRegistrySyncable* registry);
-
   // Parse the given JSON manifest. Returns NULL if it cannot be parsed, or if
   // if the result is not a DictionaryValue.
   DictionaryValue* ParseManifest(const std::string& manifest_contents) const;
@@ -119,14 +115,12 @@ class ComponentLoader {
   void AddFileManagerExtension();
   void AddImageLoaderExtension();
 
-#if defined(OS_CHROMEOS)
-  void AddGaiaAuthExtension();
-#endif
-
-  // Add the enterprise webstore extension, or reload it if already loaded.
-  void AddOrReloadEnterpriseWebStore();
-
+  void AddWithName(int manifest_resource_id,
+                   const base::FilePath& root_directory,
+                   const std::string& name);
   void AddChromeApp();
+  void AddKeyboardApp();
+  void AddWebStoreApp();
 
   // Unloads |component| from the memory.
   void UnloadComponent(ComponentExtensionInfo* component);
@@ -139,8 +133,6 @@ class ComponentLoader {
   // List of registered component extensions (see Manifest::Location).
   typedef std::vector<ComponentExtensionInfo> RegisteredComponentExtensions;
   RegisteredComponentExtensions component_extensions_;
-
-  PrefChangeRegistrar pref_change_registrar_;
 
   DISALLOW_COPY_AND_ASSIGN(ComponentLoader);
 };

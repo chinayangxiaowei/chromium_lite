@@ -5,14 +5,20 @@
 #include "content/renderer/media/media_stream_dispatcher.h"
 
 #include "base/logging.h"
-#include "base/message_loop_proxy.h"
+#include "base/message_loop/message_loop_proxy.h"
 #include "content/common/media/media_stream_messages.h"
 #include "content/renderer/media/media_stream_dispatcher_eventhandler.h"
+#include "content/renderer/render_thread_impl.h"
 #include "content/renderer/render_view_impl.h"
-#include "googleurl/src/gurl.h"
+#include "url/gurl.h"
 
 namespace content {
 
+// A request is identified by pair (request_id, handler), or ipc_request.
+// There could be multiple clients making requests and each has its own
+// request_id sequence.
+// The ipc_request is garanteed to be unique when it's created in
+// MediaStreamDispatcher.
 struct MediaStreamDispatcher::Request {
   Request(const base::WeakPtr<MediaStreamDispatcherEventHandler>& handler,
           int request_id,
@@ -20,6 +26,11 @@ struct MediaStreamDispatcher::Request {
       : handler(handler),
         request_id(request_id),
         ipc_request(ipc_request) {
+  }
+  bool IsThisRequest(
+      int request_id1,
+      const base::WeakPtr<MediaStreamDispatcherEventHandler>& handler1) {
+    return (request_id1 == request_id && handler1.get() == handler.get());
   }
   base::WeakPtr<MediaStreamDispatcherEventHandler> handler;
   int request_id;
@@ -42,6 +53,12 @@ MediaStreamDispatcher::EnumerationRequest::EnumerationRequest(
 }
 
 MediaStreamDispatcher::EnumerationRequest::~EnumerationRequest() {}
+
+bool MediaStreamDispatcher::EnumerationRequest::IsThisRequest(
+    int request_id1,
+    const base::WeakPtr<MediaStreamDispatcherEventHandler>& handler1) {
+  return (request_id1 == request_id && handler1.get() == handler.get());
+}
 
 MediaStreamDispatcher::EnumerationState::EnumerationState()
     : ipc_id(-1) {
@@ -84,18 +101,20 @@ void MediaStreamDispatcher::GenerateStream(
                                              security_origin));
 }
 
-void MediaStreamDispatcher::CancelGenerateStream(int request_id) {
+void MediaStreamDispatcher::CancelGenerateStream(
+    int request_id,
+    const base::WeakPtr<MediaStreamDispatcherEventHandler>& event_handler) {
   DCHECK(main_loop_->BelongsToCurrentThread());
   DVLOG(1) << "MediaStreamDispatcher::CancelGenerateStream"
            << ", {request_id = " << request_id << "}";
 
   RequestList::iterator it = requests_.begin();
   for (; it != requests_.end(); ++it) {
-    Request& request = *it;
-    if (request.request_id == request_id) {
+    if (it->IsThisRequest(request_id, event_handler)) {
+      int ipc_request = it->ipc_request;
       requests_.erase(it);
       Send(new MediaStreamHostMsg_CancelGenerateStream(routing_id(),
-                                                       request_id));
+                                                       ipc_request));
       break;
     }
   }
@@ -130,7 +149,7 @@ void MediaStreamDispatcher::EnumerateDevices(
        &audio_enumeration_state_ : &video_enumeration_state_);
   state->requests.push_back(EnumerationRequest(event_handler, request_id));
 
-  if (state->cached_devices.get()) {
+  if (state->cached_devices) {
     event_handler->OnDevicesEnumerated(
         request_id, state->cached_devices->devices);
   } else if (state->ipc_id < 0) {
@@ -163,9 +182,9 @@ void MediaStreamDispatcher::RemoveEnumerationRequest(
   EnumerationRequestList* requests = &state->requests;
   for (EnumerationRequestList::iterator it = requests->begin();
        it != requests->end(); ++it) {
-    if (it->request_id == request_id && it->handler == event_handler) {
+    if (it->IsThisRequest(request_id, event_handler)) {
       requests->erase(it);
-      if (requests->empty() && state->cached_devices.get()) {
+      if (requests->empty() && state->cached_devices) {
         // No more request and has a label, try to stop the label
         // and invalidate the state.
         Send(new MediaStreamHostMsg_StopGeneratedStream(
@@ -195,12 +214,27 @@ void MediaStreamDispatcher::OpenDevice(
                                          security_origin));
 }
 
+void MediaStreamDispatcher::CancelOpenDevice(
+    int request_id,
+    const base::WeakPtr<MediaStreamDispatcherEventHandler>& event_handler) {
+  CancelGenerateStream(request_id, event_handler);
+}
+
 void MediaStreamDispatcher::CloseDevice(const std::string& label) {
   DCHECK(main_loop_->BelongsToCurrentThread());
   DVLOG(1) << "MediaStreamDispatcher::CloseDevice"
            << ", {label = " << label << "}";
 
   StopStream(label);
+}
+
+bool MediaStreamDispatcher::Send(IPC::Message* message) {
+  if (!RenderThread::Get()) {
+    delete message;
+    return false;
+  }
+
+  return RenderThread::Get()->Send(message);
 }
 
 bool MediaStreamDispatcher::OnMessageReceived(const IPC::Message& message) {
@@ -210,6 +244,8 @@ bool MediaStreamDispatcher::OnMessageReceived(const IPC::Message& message) {
                         OnStreamGenerated)
     IPC_MESSAGE_HANDLER(MediaStreamMsg_StreamGenerationFailed,
                         OnStreamGenerationFailed)
+    IPC_MESSAGE_HANDLER(MediaStreamMsg_StopGeneratedStream,
+                        OnStopGeneratedStream)
     IPC_MESSAGE_HANDLER(MediaStreamMsg_DevicesEnumerated,
                         OnDevicesEnumerated)
     IPC_MESSAGE_HANDLER(MediaStreamMsg_DevicesEnumerationFailed,
@@ -239,9 +275,9 @@ void MediaStreamDispatcher::OnStreamGenerated(
       new_stream.audio_array = audio_array;
       new_stream.video_array = video_array;
       label_stream_map_[label] = new_stream;
-      if (request.handler) {
-        request.handler->OnStreamGenerated(request.request_id, label,
-                                           audio_array, video_array);
+      if (request.handler.get()) {
+        request.handler->OnStreamGenerated(
+            request.request_id, label, audio_array, video_array);
         DVLOG(1) << "MediaStreamDispatcher::OnStreamGenerated("
                  << request.request_id << ", " << label << ")";
       }
@@ -257,7 +293,7 @@ void MediaStreamDispatcher::OnStreamGenerationFailed(int request_id) {
        it != requests_.end(); ++it) {
     Request& request = *it;
     if (request.ipc_request == request_id) {
-      if (request.handler) {
+      if (request.handler.get()) {
         request.handler->OnStreamGenerationFailed(request.request_id);
         DVLOG(1) << "MediaStreamDispatcher::OnStreamGenerationFailed("
                  << request.request_id << ")\n";
@@ -266,6 +302,20 @@ void MediaStreamDispatcher::OnStreamGenerationFailed(int request_id) {
       break;
     }
   }
+}
+
+void MediaStreamDispatcher::OnStopGeneratedStream(const std::string& label) {
+  DCHECK(main_loop_->BelongsToCurrentThread());
+  LabelStreamMap::iterator it = label_stream_map_.find(label);
+  if (it == label_stream_map_.end())
+    return;
+
+  if (it->second.handler.get()) {
+    it->second.handler->OnStopGeneratedStream(label);
+    DVLOG(1) << "MediaStreamDispatcher::OnStopGeneratedStream("
+             << label << ")\n";
+  }
+  label_stream_map_.erase(it);
 }
 
 void MediaStreamDispatcher::OnDevicesEnumerated(
@@ -295,7 +345,7 @@ void MediaStreamDispatcher::OnDevicesEnumerated(
 
   for (EnumerationRequestList::iterator it = state->requests.begin();
        it != state->requests.end(); ++it) {
-    if (it->handler) {
+    if (it->handler.get()) {
       it->handler->OnDevicesEnumerated(it->request_id, device_array);
       DVLOG(1) << "MediaStreamDispatcher::OnDevicesEnumerated("
                << it->request_id << ")";
@@ -309,7 +359,7 @@ void MediaStreamDispatcher::OnDevicesEnumerationFailed(int request_id) {
        it != requests_.end(); ++it) {
     Request& request = *it;
     if (request.ipc_request == request_id) {
-      if (request.handler) {
+      if (request.handler.get()) {
         request.handler->OnDevicesEnumerationFailed(request.request_id);
         DVLOG(1) << "MediaStreamDispatcher::OnDevicesEnumerationFailed("
                  << request.request_id << ")\n";
@@ -339,9 +389,8 @@ void MediaStreamDispatcher::OnDeviceOpened(
         NOTREACHED();
       }
       label_stream_map_[label] = new_stream;
-      if (request.handler) {
-        request.handler->OnDeviceOpened(request.request_id, label,
-                                        device_info);
+      if (request.handler.get()) {
+        request.handler->OnDeviceOpened(request.request_id, label, device_info);
         DVLOG(1) << "MediaStreamDispatcher::OnDeviceOpened("
                  << request.request_id << ", " << label << ")";
       }
@@ -357,7 +406,7 @@ void MediaStreamDispatcher::OnDeviceOpenFailed(int request_id) {
        it != requests_.end(); ++it) {
     Request& request = *it;
     if (request.ipc_request == request_id) {
-      if (request.handler) {
+      if (request.handler.get()) {
         request.handler->OnDeviceOpenFailed(request.request_id);
         DVLOG(1) << "MediaStreamDispatcher::OnDeviceOpenFailed("
                  << request.request_id << ")\n";

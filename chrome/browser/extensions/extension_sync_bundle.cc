@@ -9,13 +9,14 @@
 #include "chrome/browser/extensions/extension_sorting.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_set.h"
+#include "chrome/common/extensions/sync_helper.h"
 #include "sync/api/sync_change_processor.h"
 #include "sync/api/sync_error_factory.h"
 
 namespace extensions {
 
 ExtensionSyncBundle::ExtensionSyncBundle(ExtensionService* extension_service)
-    : extension_service_(extension_service), sync_processor_(NULL) {}
+    : extension_service_(extension_service) {}
 
 ExtensionSyncBundle::~ExtensionSyncBundle() {}
 
@@ -121,9 +122,8 @@ void ExtensionSyncBundle::AddPendingExtension(
   pending_sync_data_[id] = extension_sync_data;
 }
 
-bool ExtensionSyncBundle::HandlesExtension(const Extension& extension) const {
-  return sync_processor_ != NULL &&
-      extension.GetSyncType() == Extension::SYNC_TYPE_EXTENSION;
+bool ExtensionSyncBundle::IsSyncing() const {
+  return sync_processor_ != NULL;
 }
 
 std::vector<ExtensionSyncData> ExtensionSyncBundle::GetPendingData() const {
@@ -143,11 +143,11 @@ void ExtensionSyncBundle::GetExtensionSyncDataListHelper(
     std::vector<ExtensionSyncData>* sync_data_list) const {
   for (ExtensionSet::const_iterator it = extensions.begin();
        it != extensions.end(); ++it) {
-    const Extension& extension = **it;
+    const Extension& extension = *it->get();
     // If we have pending extension data for this extension, then this
     // version is out of date.  We'll sync back the version we got from
     // sync.
-    if (HandlesExtension(extension) &&
+    if (IsSyncing() && sync_helper::IsSyncableExtension(&extension) &&
         !HasPendingExtensionId(extension.id())) {
       sync_data_list->push_back(
           extension_service_->GetExtensionSyncData(extension));

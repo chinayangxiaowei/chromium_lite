@@ -7,12 +7,12 @@
 #include "base/i18n/number_formatting.h"
 #include "base/i18n/time_formatting.h"
 #include "base/prefs/pref_service.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/signin/signin_global_error.h"
-#include "chrome/browser/signin/signin_manager.h"
+#include "chrome/browser/signin/signin_manager_base.h"
 #include "chrome/browser/signin/signin_ui_util.h"
 #include "chrome/browser/sync/profile_sync_service.h"
 #include "chrome/browser/sync/profile_sync_service_factory.h"
@@ -45,7 +45,7 @@ namespace {
 // and can connect to the sync server. If the user hasn't yet authenticated, an
 // empty string is returned.
 string16 GetSyncedStateStatusLabel(ProfileSyncService* service,
-                                   const SigninManager& signin,
+                                   const SigninManagerBase& signin,
                                    StatusLabelStyle style) {
   string16 user_name = UTF8ToUTF16(signin.GetAuthenticatedUsername());
 
@@ -55,6 +55,7 @@ string16 GetSyncedStateStatusLabel(ProfileSyncService* service,
       return l10n_util::GetStringFUTF16(IDS_SIGNED_IN_WITH_SYNC_DISABLED,
                                         user_name);
     } else if (service->IsStartSuppressed()) {
+      // User is signed in, but sync has been stopped.
       return l10n_util::GetStringFUTF16(IDS_SIGNED_IN_WITH_SYNC_SUPPRESSED,
                                         user_name);
     }
@@ -115,7 +116,7 @@ void GetStatusForActionableError(
 
 // status_label and link_label must either be both NULL or both non-NULL.
 MessageType GetStatusInfo(ProfileSyncService* service,
-                          const SigninManager& signin,
+                          const SigninManagerBase& signin,
                           StatusLabelStyle style,
                           string16* status_label,
                           string16* link_label) {
@@ -149,21 +150,22 @@ MessageType GetStatusInfo(ProfileSyncService* service,
       return PRE_SYNCED;
     }
 
-    // No auth in progress check for an auth error.
-    AuthError auth_error = signin.signin_global_error()->GetLastAuthError();
-    if (auth_error.state() != AuthError::NONE) {
-      if (status_label && link_label)
-        signin_ui_util::GetStatusLabelsForAuthError(
-            signin, status_label, link_label);
-      return SYNC_ERROR;
-    }
-
-    // We dont have an auth error. Check for sync errors if the sync service
-    // is enabled.
+    // Check for sync errors if the sync service is enabled.
     if (service) {
+      // Since there is no auth in progress, check for an auth error first.
+      AuthError auth_error =
+          SigninGlobalError::GetForProfile(service->profile())->
+              GetLastAuthError();
+      if (auth_error.state() != AuthError::NONE) {
+        if (status_label && link_label)
+          signin_ui_util::GetStatusLabelsForAuthError(
+              service->profile(), signin, status_label, link_label);
+        return SYNC_ERROR;
+      }
+
+      // We don't have an auth error. Check for an actionable error.
       ProfileSyncService::Status status;
       service->QueryDetailedSyncStatus(&status);
-
       if (ShouldShowActionOnUI(status.sync_protocol_error)) {
         if (status_label) {
           GetStatusForActionableError(status.sync_protocol_error,
@@ -214,7 +216,9 @@ MessageType GetStatusInfo(ProfileSyncService* service,
       result_type = PRE_SYNCED;
       ProfileSyncService::Status status;
       service->QueryDetailedSyncStatus(&status);
-      AuthError auth_error = signin.signin_global_error()->GetLastAuthError();
+      AuthError auth_error =
+          SigninGlobalError::GetForProfile(
+              service->profile())->GetLastAuthError();
       if (status_label) {
         status_label->assign(
             l10n_util::GetStringUTF16(IDS_SYNC_NTP_SETUP_IN_PROGRESS));
@@ -226,10 +230,10 @@ MessageType GetStatusInfo(ProfileSyncService* service,
         }
       } else if (auth_error.state() != AuthError::NONE &&
                  auth_error.state() != AuthError::TWO_FACTOR) {
-        if (status_label) {
+        if (status_label && link_label) {
           status_label->clear();
           signin_ui_util::GetStatusLabelsForAuthError(
-              signin, status_label, NULL);
+              service->profile(), signin, status_label, link_label);
         }
         result_type = SYNC_ERROR;
       }
@@ -245,6 +249,15 @@ MessageType GetStatusInfo(ProfileSyncService* service,
       } else if (status_label) {
         status_label->assign(l10n_util::GetStringUTF16(IDS_SYNC_SETUP_ERROR));
       }
+    } else if (!signin.GetAuthenticatedUsername().empty()) {
+      // The user is signed in, but sync has been stopped.
+      if (status_label) {
+        string16 label = l10n_util::GetStringFUTF16(
+                             IDS_SIGNED_IN_WITH_SYNC_SUPPRESSED,
+                             UTF8ToUTF16(signin.GetAuthenticatedUsername()));
+        status_label->assign(label);
+        result_type = PRE_SYNCED;
+      }
     }
   }
   return result_type;
@@ -253,7 +266,7 @@ MessageType GetStatusInfo(ProfileSyncService* service,
 // Returns the status info for use on the new tab page, where we want slightly
 // different information than in the settings panel.
 MessageType GetStatusInfoForNewTabPage(ProfileSyncService* service,
-                                       const SigninManager& signin,
+                                       const SigninManagerBase& signin,
                                        string16* status_label,
                                        string16* link_label) {
   DCHECK(status_label);
@@ -291,7 +304,7 @@ MessageType GetStatusInfoForNewTabPage(ProfileSyncService* service,
 }  // namespace
 
 MessageType GetStatusLabels(ProfileSyncService* service,
-                            const SigninManager& signin,
+                            const SigninManagerBase& signin,
                             StatusLabelStyle style,
                             string16* status_label,
                             string16* link_label) {
@@ -302,7 +315,7 @@ MessageType GetStatusLabels(ProfileSyncService* service,
 }
 
 MessageType GetStatusLabelsForNewTabPage(ProfileSyncService* service,
-                                         const SigninManager& signin,
+                                         const SigninManagerBase& signin,
                                          string16* status_label,
                                          string16* link_label) {
   DCHECK(status_label);
@@ -312,7 +325,7 @@ MessageType GetStatusLabelsForNewTabPage(ProfileSyncService* service,
 }
 
 void GetStatusLabelsForSyncGlobalError(ProfileSyncService* service,
-                                       const SigninManager& signin,
+                                       const SigninManagerBase& signin,
                                        string16* menu_label,
                                        string16* bubble_message,
                                        string16* bubble_accept_label) {
@@ -343,7 +356,7 @@ void GetStatusLabelsForSyncGlobalError(ProfileSyncService* service,
 }
 
 MessageType GetStatus(
-    ProfileSyncService* service, const SigninManager& signin) {
+    ProfileSyncService* service, const SigninManagerBase& signin) {
   return sync_ui_util::GetStatusInfo(service, signin, WITH_HTML, NULL, NULL);
 }
 

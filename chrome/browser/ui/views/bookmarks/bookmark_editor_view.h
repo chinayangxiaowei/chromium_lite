@@ -9,10 +9,10 @@
 
 #include "base/compiler_specific.h"
 #include "base/gtest_prod_util.h"
-#include "base/string16.h"
-#include "chrome/browser/bookmarks/bookmark_editor.h"
+#include "base/strings/string16.h"
 #include "chrome/browser/bookmarks/bookmark_expanded_state_tracker.h"
 #include "chrome/browser/bookmarks/bookmark_model_observer.h"
+#include "chrome/browser/ui/bookmarks/bookmark_editor.h"
 #include "ui/base/models/simple_menu_model.h"
 #include "ui/base/models/tree_node_model.h"
 #include "ui/views/context_menu_controller.h"
@@ -116,12 +116,10 @@ class BookmarkEditorView : public BookmarkEditor,
   // closed the BookmarkEditorView is deleted.
   void Show(gfx::NativeWindow parent);
 
-  // Closes the dialog.
-  void Close();
-
   // views::ContextMenuController:
   virtual void ShowContextMenuForView(views::View* source,
-                                      const gfx::Point& point) OVERRIDE;
+                                      const gfx::Point& point,
+                                      ui::MenuSourceType source_type) OVERRIDE;
 
  private:
   friend class BookmarkEditorViewTest;
@@ -145,6 +143,7 @@ class BookmarkEditorView : public BookmarkEditor,
                                    const BookmarkNode* parent,
                                    int index,
                                    const BookmarkNode* node) OVERRIDE;
+  virtual void BookmarkAllNodesRemoved(BookmarkModel* model) OVERRIDE;
   virtual void BookmarkNodeChanged(BookmarkModel* model,
                                    const BookmarkNode* node) OVERRIDE {}
   virtual void BookmarkNodeChildrenReordered(BookmarkModel* model,

@@ -7,7 +7,7 @@
 
 #include <vector>
 
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "net/ftp/ftp_directory_listing_parser.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -30,8 +30,8 @@ class FtpDirectoryListingParserTest : public testing::Test {
  protected:
   FtpDirectoryListingParserTest() {}
 
-  std::vector<string16> GetSingleLineTestCase(const std::string& text) {
-    std::vector<string16> lines;
+  std::vector<base::string16> GetSingleLineTestCase(const std::string& text) {
+    std::vector<base::string16> lines;
     lines.push_back(UTF8ToUTF16(text));
     return lines;
   }

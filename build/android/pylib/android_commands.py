@@ -27,7 +27,7 @@ except:
   pexpect = None
 
 sys.path.append(os.path.join(
-    constants.CHROME_DIR, 'third_party', 'android_testrunner'))
+    constants.DIR_SOURCE_ROOT, 'third_party', 'android_testrunner'))
 import adb_interface
 import am_instrument_parser
 import errors
@@ -61,23 +61,9 @@ KEYCODE_DPAD_RIGHT = 22
 KEYCODE_ENTER = 66
 KEYCODE_MENU = 82
 
-MD5SUM_DEVICE_PATH = '/data/local/tmp/md5sum_bin'
-
-def GetEmulators():
-  """Returns a list of emulators.  Does not filter by status (e.g. offline).
-
-  Both devices starting with 'emulator' will be returned in below output:
-
-    * daemon not running. starting it now on port 5037 *
-    * daemon started successfully *
-    List of devices attached
-    027c10494100b4d7        device
-    emulator-5554   offline
-    emulator-5558   device
-  """
-  re_device = re.compile('^emulator-[0-9]+', re.MULTILINE)
-  devices = re_device.findall(cmd_helper.GetCmdOutput(['adb', 'devices']))
-  return devices
+MD5SUM_DEVICE_FOLDER = constants.TEST_EXECUTABLE_DIR + '/md5sum/'
+MD5SUM_DEVICE_PATH = MD5SUM_DEVICE_FOLDER + 'md5sum_bin'
+MD5SUM_LD_LIBRARY_PATH = 'LD_LIBRARY_PATH=%s' % MD5SUM_DEVICE_FOLDER
 
 
 def GetAVDs():
@@ -87,11 +73,11 @@ def GetAVDs():
   return avds
 
 
-def GetAttachedDevices():
-  """Returns a list of attached, online android devices.
+def GetAttachedDevices(hardware=True, emulator=True, offline=False):
+  """Returns a list of attached, android devices and emulators.
 
   If a preferred device has been set with ANDROID_SERIAL, it will be first in
-  the returned list.
+  the returned list. The arguments specify what devices to include in the list.
 
   Example output:
 
@@ -100,17 +86,50 @@ def GetAttachedDevices():
     List of devices attached
     027c10494100b4d7        device
     emulator-5554   offline
+
+  Args:
+    hardware: Include attached actual devices that are online.
+    emulator: Include emulators (i.e. AVD's) currently on host.
+    offline: Include devices and emulators that are offline.
+
+  Returns: List of devices.
   """
+  adb_devices_output = cmd_helper.GetCmdOutput([constants.ADB_PATH, 'devices'])
+
   re_device = re.compile('^([a-zA-Z0-9_:.-]+)\tdevice$', re.MULTILINE)
-  devices = re_device.findall(cmd_helper.GetCmdOutput(['adb', 'devices']))
+  online_devices = re_device.findall(adb_devices_output)
+
+  re_device = re.compile('^(emulator-[0-9]+)\tdevice', re.MULTILINE)
+  emulator_devices = re_device.findall(adb_devices_output)
+
+  re_device = re.compile('^([a-zA-Z0-9_:.-]+)\toffline$', re.MULTILINE)
+  offline_devices = re_device.findall(adb_devices_output)
+
+  devices = []
+  # First determine list of online devices (e.g. hardware and/or emulator).
+  if hardware and emulator:
+    devices = online_devices
+  elif hardware:
+    devices = [device for device in online_devices
+               if device not in emulator_devices]
+  elif emulator:
+    devices = emulator_devices
+
+  # Now add offline devices if offline is true
+  if offline:
+    devices = devices + offline_devices
+
   preferred_device = os.environ.get('ANDROID_SERIAL')
   if preferred_device in devices:
     devices.remove(preferred_device)
     devices.insert(0, preferred_device)
   return devices
 
+
 def IsDeviceAttached(device):
+  """Return true if the device is attached and online."""
   return device in GetAttachedDevices()
+
 
 def _GetFilesFromRecursiveLsOutput(path, ls_output, re_file, utc_offset=None):
   """Gets a list of files from `ls` command output.
@@ -164,20 +183,35 @@ def _GetFilesFromRecursiveLsOutput(path, ls_output, re_file, utc_offset=None):
       files[filename] = (int(file_match.group('size')), lastmod)
   return files
 
-def _ComputeFileListHash(md5sum_output):
-  """Returns a list of MD5 strings from the provided md5sum output."""
-  return [line.split('  ')[0] for line in md5sum_output]
+
+def _ParseMd5SumOutput(md5sum_output):
+  """Returns a list of tuples from the provided md5sum output.
+
+  Args:
+    md5sum_output: output directly from md5sum binary.
+
+  Returns:
+    List of namedtuples with attributes |hash| and |path|, where |path| is the
+    absolute path to the file with an Md5Sum of |hash|.
+  """
+  HashAndPath = collections.namedtuple('HashAndPath', ['hash', 'path'])
+  split_lines = [line.split('  ') for line in md5sum_output]
+  return [HashAndPath._make(s) for s in split_lines if len(s) == 2]
+
 
 def _HasAdbPushSucceeded(command_output):
   """Returns whether adb push has succeeded from the provided output."""
+  # TODO(frankf): We should look at the return code instead of the command
+  # output for many of the commands in this file.
   if not command_output:
-    return False
+    return True
   # Success looks like this: "3035 KB/s (12512056 bytes in 4.025s)"
   # Errors look like this: "failed to copy  ... "
   if not re.search('^[0-9]', command_output.splitlines()[-1]):
     logging.critical('PUSH FAILED: ' + command_output)
     return False
   return True
+
 
 def GetLogTimestamp(log_line, year):
   """Returns the timestamp of the given |log_line| in the given year."""
@@ -198,6 +232,10 @@ class AndroidCommands(object):
   """
 
   def __init__(self, device=None):
+    adb_dir = os.path.dirname(constants.ADB_PATH)
+    if adb_dir and adb_dir not in os.environ['PATH'].split(os.pathsep):
+      # Required by third_party/android_testrunner to call directly 'adb'.
+      os.environ['PATH'] += os.pathsep + adb_dir
     self._adb = adb_interface.AdbInterface()
     if device:
       self._adb.SetTargetSerial(device)
@@ -206,14 +244,28 @@ class AndroidCommands(object):
     self.logcat_process = None
     self._logcat_tmpoutfile = None
     self._pushed_files = []
-    self._device_utc_offset = self.RunShellCommand('date +%z')[0]
-    self._md5sum_path = ''
+    self._device_utc_offset = None
+    self._potential_push_size = 0
+    self._actual_push_size = 0
+    self._md5sum_build_dir = ''
     self._external_storage = ''
     self._util_wrapper = ''
+
+  def _LogShell(self, cmd):
+    """Logs the adb shell command."""
+    if self._device:
+      device_repr = self._device[-4:]
+    else:
+      device_repr = '????'
+    logging.info('[%s]> %s', device_repr, cmd)
 
   def Adb(self):
     """Returns our AdbInterface to avoid us wrapping all its methods."""
     return self._adb
+
+  def GetDevice(self):
+    """Returns the device serial."""
+    return self._device
 
   def IsOnline(self):
     """Checks whether the device is online.
@@ -298,6 +350,11 @@ class AndroidCommands(object):
     if full_reboot or not self.IsRootEnabled():
       self._adb.SendCommand('reboot')
       timeout = 300
+      retries = 1
+      # Wait for the device to disappear.
+      while retries < 10 and self.IsOnline():
+        time.sleep(1)
+        retries += 1
     else:
       self.RestartShell()
       timeout = 120
@@ -305,6 +362,10 @@ class AndroidCommands(object):
     # other external storage) to be ready.
     self.WaitForDevicePm()
     self.WaitForSdCardReady(timeout)
+
+  def Shutdown(self):
+    """Shuts down the device."""
+    self._adb.SendCommand('reboot -p')
 
   def Uninstall(self, package):
     """Uninstalls the specified package from the device.
@@ -317,7 +378,7 @@ class AndroidCommands(object):
     """
     uninstall_command = 'uninstall %s' % package
 
-    logging.info('>>> $' + uninstall_command)
+    self._LogShell(uninstall_command)
     return self._adb.SendCommand(uninstall_command, timeout_time=60)
 
   def Install(self, package_file_path, reinstall=False):
@@ -341,7 +402,7 @@ class AndroidCommands(object):
     install_cmd.append(package_file_path)
     install_cmd = ' '.join(install_cmd)
 
-    logging.info('>>> $' + install_cmd)
+    self._LogShell(install_cmd)
     return self._adb.SendCommand(install_cmd,
                                  timeout_time=2 * 60,
                                  retry_count=0)
@@ -350,16 +411,25 @@ class AndroidCommands(object):
                      reboots_on_failure=2):
     """Installs specified package and reboots device on timeouts.
 
+    If package_name is supplied, checks if the package is already installed and
+    doesn't reinstall if the apk md5sums match.
+
     Args:
       apk_path: Path to .apk file to install.
       keep_data: Reinstalls instead of uninstalling first, preserving the
         application data.
       package_name: Package name (only needed if keep_data=False).
       reboots_on_failure: number of time to reboot if package manager is frozen.
-
-    Returns:
-      A status string returned by adb install
     """
+    # Check if package is already installed and up to date.
+    if package_name:
+      installed_apk_path = self.GetApplicationPath(package_name)
+      if (installed_apk_path and
+          not self.GetFilesChanged(apk_path, installed_apk_path)):
+        logging.info('Skipped install: identical %s APK already installed' %
+            package_name)
+        return
+    # Install.
     reboots_left = reboots_on_failure
     while True:
       try:
@@ -368,10 +438,11 @@ class AndroidCommands(object):
           self.Uninstall(package_name)
         install_status = self.Install(apk_path, reinstall=keep_data)
         if 'Success' in install_status:
-          return install_status
+          return
       except errors.WaitForResponseTimedOutError:
         print '@@@STEP_WARNINGS@@@'
-        logging.info('Timeout on installing %s' % apk_path)
+        logging.info('Timeout on installing %s on device %s', apk_path,
+                     self._device)
 
       if reboots_left <= 0:
         raise Exception('Install failure')
@@ -393,12 +464,12 @@ class AndroidCommands(object):
 
   def KillAdbServer(self):
     """Kill adb server."""
-    adb_cmd = ['adb', 'kill-server']
+    adb_cmd = [constants.ADB_PATH, 'kill-server']
     return cmd_helper.RunCmd(adb_cmd)
 
   def StartAdbServer(self):
     """Start adb server."""
-    adb_cmd = ['adb', 'start-server']
+    adb_cmd = [constants.ADB_PATH, 'start-server']
     return cmd_helper.RunCmd(adb_cmd)
 
   def WaitForSystemBootCompleted(self, wait_time):
@@ -472,14 +543,14 @@ class AndroidCommands(object):
     Returns:
       list containing the lines of output received from running the command
     """
-    logging.info('>>> $' + command)
+    self._LogShell(command)
     if "'" in command: logging.warning(command + " contains ' quotes")
     result = self._adb.SendShellCommand(
         "'%s'" % command, timeout_time).splitlines()
     if ['error: device not found'] == result:
       raise errors.DeviceUnresponsiveError('device not found')
     if log_result:
-      logging.info('\n>>> '.join(result))
+      self._LogShell('\n'.join(result))
     return result
 
   def GetShellCommandStatusAndOutput(self, command, timeout_time=20,
@@ -512,7 +583,7 @@ class AndroidCommands(object):
     """
     pids = self.ExtractPid(process)
     if pids:
-      self.RunShellCommand('kill ' + ' '.join(pids))
+      self.RunShellCommand('kill -9 ' + ' '.join(pids))
     return len(pids)
 
   def KillAllBlocking(self, process, timeout_sec):
@@ -639,6 +710,24 @@ class AndroidCommands(object):
     """
     self.RunShellCommand('am force-stop ' + package)
 
+  def GetApplicationPath(self, package):
+    """Get the installed apk path on the device for the given package.
+
+    Args:
+      package: Name of the package.
+
+    Returns:
+      Path to the apk on the device if it exists, None otherwise.
+    """
+    pm_path_output  = self.RunShellCommand('pm path ' + package)
+    # The path output contains anything if and only if the package
+    # exists.
+    if pm_path_output:
+      # pm_path_output is of the form: "package:/path/to/foo.apk"
+      return pm_path_output[0].split(':')[1]
+    else:
+      return None
+
   def ClearApplicationState(self, package):
     """Closes and clears all state for the given |package|."""
     # Check that the package exists before clearing it. Necessary because
@@ -646,7 +735,6 @@ class AndroidCommands(object):
     pm_path_output  = self.RunShellCommand('pm path ' + package)
     # The path output only contains anything if and only if the package exists.
     if pm_path_output:
-      self.CloseApplication(package)
       self.RunShellCommand('pm clear ' + package)
 
   def SendKeyEvent(self, keycode):
@@ -657,51 +745,148 @@ class AndroidCommands(object):
     """
     self.RunShellCommand('input keyevent %d' % keycode)
 
-  def PushIfNeeded(self, local_path, device_path):
-    """Pushes |local_path| to |device_path|.
+  def _RunMd5Sum(self, host_path, device_path):
+    """Gets the md5sum of a host path and device path.
+
+    Args:
+      host_path: Path (file or directory) on the host.
+      device_path: Path on the device.
+
+    Returns:
+      A tuple containing lists of the host and device md5sum results as
+      created by _ParseMd5SumOutput().
+    """
+    if not self._md5sum_build_dir:
+      default_build_type = os.environ.get('BUILD_TYPE', 'Debug')
+      build_dir = '%s/%s/' % (
+          cmd_helper.OutDirectory().get(), default_build_type)
+      md5sum_dist_path = '%s/md5sum_dist' % build_dir
+      if not os.path.exists(md5sum_dist_path):
+        build_dir = '%s/Release/' % cmd_helper.OutDirectory().get()
+        md5sum_dist_path = '%s/md5sum_dist' % build_dir
+        assert os.path.exists(md5sum_dist_path), 'Please build md5sum.'
+      command = 'push %s %s' % (md5sum_dist_path, MD5SUM_DEVICE_FOLDER)
+      assert _HasAdbPushSucceeded(self._adb.SendCommand(command))
+      self._md5sum_build_dir = build_dir
+
+    cmd = (MD5SUM_LD_LIBRARY_PATH + ' ' + self._util_wrapper + ' ' +
+           MD5SUM_DEVICE_PATH + ' ' + device_path)
+    device_hash_tuples = _ParseMd5SumOutput(
+        self.RunShellCommand(cmd, timeout_time=2 * 60))
+    assert os.path.exists(host_path), 'Local path not found %s' % host_path
+    md5sum_output = cmd_helper.GetCmdOutput(
+        ['%s/md5sum_bin_host' % self._md5sum_build_dir, host_path])
+    host_hash_tuples = _ParseMd5SumOutput(md5sum_output.splitlines())
+    return (host_hash_tuples, device_hash_tuples)
+
+  def GetFilesChanged(self, host_path, device_path):
+    """Compares the md5sum of a host path against a device path.
+
+    Note: Ignores extra files on the device.
+
+    Args:
+      host_path: Path (file or directory) on the host.
+      device_path: Path on the device.
+
+    Returns:
+      A list of tuples of the form (host_path, device_path) for files whose
+      md5sums do not match.
+    """
+    host_hash_tuples, device_hash_tuples = self._RunMd5Sum(
+        host_path, device_path)
+
+    # Ignore extra files on the device.
+    if len(device_hash_tuples) > len(host_hash_tuples):
+      host_files = [os.path.relpath(os.path.normpath(p.path),
+                    os.path.normpath(host_path)) for p in host_hash_tuples]
+
+      def HostHas(fname):
+        return any(path in fname for path in host_files)
+
+      device_hash_tuples = [h for h in device_hash_tuples if HostHas(h.path)]
+
+    # Constructs the target device path from a given host path. Don't use when
+    # only a single file is given as the base name given in device_path may
+    # differ from that in host_path.
+    def HostToDevicePath(host_file_path):
+      return os.path.join(os.path.dirname(device_path), os.path.relpath(
+          host_file_path, os.path.dirname(os.path.normpath(host_path))))
+
+    device_hashes = [h.hash for h in device_hash_tuples]
+    return [(t.path, HostToDevicePath(t.path) if os.path.isdir(host_path) else
+             device_path)
+            for t in host_hash_tuples if t.hash not in device_hashes]
+
+  def PushIfNeeded(self, host_path, device_path):
+    """Pushes |host_path| to |device_path|.
 
     Works for files and directories. This method skips copying any paths in
     |test_data_paths| that already exist on the device with the same hash.
 
     All pushed files can be removed by calling RemovePushedFiles().
     """
-    assert os.path.exists(local_path), 'Local path not found %s' % local_path
+    MAX_INDIVIDUAL_PUSHES = 50
+    assert os.path.exists(host_path), 'Local path not found %s' % host_path
 
-    if not self._md5sum_path:
-      default_build_type = os.environ.get('BUILD_TYPE', 'Debug')
-      md5sum_path = '%s/%s/md5sum_bin' % (cmd_helper.OutDirectory.get(),
-          default_build_type)
-      if not os.path.exists(md5sum_path):
-        md5sum_path = '%s/Release/md5sum_bin' % cmd_helper.OutDirectory.get()
-        assert os.path.exists(md5sum_path), 'Please build md5sum.'
-      command = 'push %s %s' % (md5sum_path, MD5SUM_DEVICE_PATH)
-      assert _HasAdbPushSucceeded(self._adb.SendCommand(command))
-      self._md5sum_path = md5sum_path
+    def GetHostSize(path):
+      return int(cmd_helper.GetCmdOutput(['du', '-sb', path]).split()[0])
 
+    size = GetHostSize(host_path)
     self._pushed_files.append(device_path)
-    hashes_on_device = _ComputeFileListHash(
-        self.RunShellCommand(self._util_wrapper + ' ' + MD5SUM_DEVICE_PATH +
-                             ' ' + device_path))
-    assert os.path.exists(local_path), 'Local path not found %s' % local_path
-    hashes_on_host = _ComputeFileListHash(
-        subprocess.Popen(
-            '%s_host %s' % (self._md5sum_path, local_path),
-            stdout=subprocess.PIPE, shell=True).stdout)
-    if hashes_on_device == hashes_on_host:
+    self._potential_push_size += size
+
+    changed_files = self.GetFilesChanged(host_path, device_path)
+    if not changed_files:
       return
 
-    # They don't match, so remove everything first and then create it.
-    if os.path.isdir(local_path):
-      self.RunShellCommand('rm -r %s' % device_path, timeout_time=2 * 60)
-      self.RunShellCommand('mkdir -p %s' % device_path)
+    def Push(host, device):
+      # NOTE: We can't use adb_interface.Push() because it hardcodes a timeout
+      # of 60 seconds which isn't sufficient for a lot of users of this method.
+      push_command = 'push %s %s' % (host, device)
+      self._LogShell(push_command)
 
-    # NOTE: We can't use adb_interface.Push() because it hardcodes a timeout of
-    # 60 seconds which isn't sufficient for a lot of users of this method.
-    push_command = 'push %s %s' % (local_path, device_path)
-    logging.info('>>> $' + push_command)
-    output = self._adb.SendCommand(push_command, timeout_time=30 * 60)
-    assert _HasAdbPushSucceeded(output)
+      # Retry push with increasing backoff if the device is busy.
+      retry = 0
+      while True:
+        output = self._adb.SendCommand(push_command, timeout_time=30 * 60)
+        if _HasAdbPushSucceeded(output):
+          return
+        if retry < 3:
+          retry += 1
+          wait_time = 5 * retry
+          logging.error('Push failed, retrying in %d seconds: %s' %
+                        (wait_time, output))
+          time.sleep(wait_time)
+        else:
+          raise Exception('Push failed: %s' % output)
 
+    diff_size = 0
+    if len(changed_files) <= MAX_INDIVIDUAL_PUSHES:
+      diff_size = sum(GetHostSize(f[0]) for f in changed_files)
+
+    # TODO(craigdh): Replace this educated guess with a heuristic that
+    # approximates the push time for each method.
+    if len(changed_files) > MAX_INDIVIDUAL_PUSHES or diff_size > 0.5 * size:
+      # We're pushing everything, remove everything first and then create it.
+      self._actual_push_size += size
+      if os.path.isdir(host_path):
+        self.RunShellCommand('rm -r %s' % device_path, timeout_time=2 * 60)
+        self.RunShellCommand('mkdir -p %s' % device_path)
+      Push(host_path, device_path)
+    else:
+      for f in changed_files:
+        Push(f[0], f[1])
+      self._actual_push_size += diff_size
+
+  def GetPushSizeInfo(self):
+    """Get total size of pushes to the device done via PushIfNeeded()
+
+    Returns:
+      A tuple:
+        1. Total size of push requests to PushIfNeeded (MB)
+        2. Total size that was actually pushed (MB)
+    """
+    return (self._potential_push_size, self._actual_push_size)
 
   def GetFileContents(self, filename, log_result=False):
     """Gets contents from the file specified by |filename|."""
@@ -789,7 +974,12 @@ class AndroidCommands(object):
                          '(?P<filename>[^\s]+)$')
     return _GetFilesFromRecursiveLsOutput(
         path, self.RunShellCommand('ls -lR %s' % path), re_file,
-        self._device_utc_offset)
+        self.GetUtcOffset())
+
+  def GetUtcOffset(self):
+    if not self._device_utc_offset:
+      self._device_utc_offset = self.RunShellCommand('date +%z')[0]
+    return self._device_utc_offset
 
   def SetJavaAssertsEnabled(self, enable):
     """Sets or removes the device java assertions property.
@@ -839,11 +1029,62 @@ class AndroidCommands(object):
     assert build_type
     return build_type
 
+  def GetBuildProduct(self):
+    """Returns the build product of the device (e.g. maguro)."""
+    build_product = self.RunShellCommand('getprop ro.build.product')[0]
+    assert build_product
+    return build_product
+
+  def GetProductName(self):
+    """Returns the product name of the device (e.g. takju)."""
+    name = self.RunShellCommand('getprop ro.product.name')[0]
+    assert name
+    return name
+
+  def GetBuildFingerprint(self):
+    """Returns the build fingerprint of the device."""
+    build_fingerprint = self.RunShellCommand('getprop ro.build.fingerprint')[0]
+    assert build_fingerprint
+    return build_fingerprint
+
+  def GetDescription(self):
+    """Returns the description of the system.
+
+    For example, "yakju-userdebug 4.1 JRN54F 364167 dev-keys".
+    """
+    description = self.RunShellCommand('getprop ro.build.description')[0]
+    assert description
+    return description
+
   def GetProductModel(self):
-    """Returns the namve of the product model (e.g. "Galaxy Nexus") """
+    """Returns the name of the product model (e.g. "Galaxy Nexus") """
     model = self.RunShellCommand('getprop ro.product.model')[0]
     assert model
     return model
+
+  def GetWifiIP(self):
+    """Returns the wifi IP on the device."""
+    wifi_ip = self.RunShellCommand('getprop dhcp.wlan0.ipaddress')[0]
+    # Do not assert here. Devices (e.g. emulators) may not have a WifiIP.
+    return wifi_ip
+
+  def GetSubscriberInfo(self):
+    """Returns the device subscriber info (e.g. GSM and device ID) as string."""
+    iphone_sub = self.RunShellCommand('dumpsys iphonesubinfo')
+    assert iphone_sub
+    return '\n'.join(iphone_sub)
+
+  def GetBatteryInfo(self):
+    """Returns the device battery info (e.g. status, level, etc) as string."""
+    battery = self.RunShellCommand('dumpsys battery')
+    assert battery
+    return '\n'.join(battery)
+
+  def GetSetupWizardStatus(self):
+    """Returns the status of the device setup wizard (e.g. DISABLED)."""
+    status = self.RunShellCommand('getprop ro.setupwizard.mode')[0]
+    assert status
+    return status
 
   def StartMonitoringLogcat(self, clear=True, logfile=None, filters=None):
     """Starts monitoring the output of logcat, for use with WaitForLogMatch.
@@ -869,7 +1110,8 @@ class AndroidCommands(object):
 
     # Spawn logcat and syncronize with it.
     for _ in range(4):
-      self._logcat = pexpect.spawn('adb', args, timeout=10, logfile=logfile)
+      self._logcat = pexpect.spawn(constants.ADB_PATH, args, timeout=10,
+                                   logfile=logfile)
       self.RunShellCommand('log startup_sync')
       if self._logcat.expect(['startup_sync', pexpect.EOF,
                               pexpect.TIMEOUT]) == 0:
@@ -938,7 +1180,7 @@ class AndroidCommands(object):
         logging.critical('Found EOF in adb logcat. Restarting...')
         # Rerun spawn with original arguments. Note that self._logcat.args[0] is
         # the path of adb, so we don't want it in the arguments.
-        self._logcat = pexpect.spawn('adb',
+        self._logcat = pexpect.spawn(constants.ADB_PATH,
                                      self._logcat.args[1:],
                                      timeout=self._logcat.timeout,
                                      logfile=self._logcat.logfile)
@@ -1254,12 +1496,15 @@ class AndroidCommands(object):
       An instance of am_instrument_parser.TestResult object.
     """
     cmd = 'uiautomator runtest %s -e class %s' % (test_package, test)
-    logging.info('>>> $' + cmd)
+    self._LogShell(cmd)
     output = self._adb.SendShellCommand(cmd, timeout_time=timeout)
     # uiautomator doesn't fully conform to the instrumenation test runner
     # convention and doesn't terminate with INSTRUMENTATION_CODE.
     # Just assume the first result is valid.
     (test_results, _) = am_instrument_parser.ParseAmInstrumentOutput(output)
+    if not test_results:
+      raise errors.InstrumentationError(
+          'no test results... device setup correctly?')
     return test_results[0]
 
 

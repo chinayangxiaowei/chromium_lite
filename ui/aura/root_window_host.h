@@ -7,7 +7,7 @@
 
 #include <vector>
 
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "ui/aura/aura_export.h"
 #include "ui/base/cursor/cursor.h"
 #include "ui/gfx/native_widget_types.h"
@@ -105,12 +105,6 @@ class AURA_EXPORT RootWindowHost {
   virtual bool CopyAreaToSkCanvas(const gfx::Rect& source_bounds,
                                   const gfx::Point& dest_offset,
                                   SkCanvas* canvas) = 0;
-
-  // Grabs the snapshot of the root window by using the platform-dependent APIs.
-  // The bounds need to be in physical pixels.
-  virtual bool GrabSnapshot(
-      const gfx::Rect& snapshot_bounds,
-      std::vector<unsigned char>* png_representation) = 0;
 
   // Posts |native_event| to the platform's event queue.
 #if !defined(OS_MACOSX)

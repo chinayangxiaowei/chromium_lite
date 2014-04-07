@@ -6,16 +6,14 @@
 #define CHROME_BROWSER_UI_AUTOFILL_AUTOFILL_POPUP_CONTROLLER_IMPL_H_
 
 #include "base/gtest_prod_util.h"
+#include "base/i18n/rtl.h"
 #include "base/memory/weak_ptr.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "chrome/browser/ui/autofill/autofill_popup_controller.h"
 #include "content/public/browser/keyboard_listener.h"
 #include "ui/gfx/font.h"
 #include "ui/gfx/rect.h"
 #include "ui/gfx/rect_f.h"
-
-class AutofillPopupDelegate;
-class AutofillPopupView;
 
 namespace gfx {
 class Display;
@@ -24,6 +22,11 @@ class Display;
 namespace ui {
 class KeyEvent;
 }
+
+namespace autofill {
+
+class AutofillPopupDelegate;
+class AutofillPopupView;
 
 // This class is a controller for an AutofillPopupView. It implements
 // AutofillPopupController to allow calls from AutofillPopupView. The
@@ -36,15 +39,20 @@ class AutofillPopupControllerImpl : public AutofillPopupController,
   // this call.
   static base::WeakPtr<AutofillPopupControllerImpl> GetOrCreate(
       base::WeakPtr<AutofillPopupControllerImpl> previous,
-      AutofillPopupDelegate* delegate,
+      base::WeakPtr<AutofillPopupDelegate> delegate,
       gfx::NativeView container_view,
-      const gfx::RectF& element_bounds);
+      const gfx::RectF& element_bounds,
+      base::i18n::TextDirection text_direction);
 
   // Shows the popup, or updates the existing popup with the given values.
   void Show(const std::vector<string16>& names,
             const std::vector<string16>& subtexts,
             const std::vector<string16>& icons,
             const std::vector<int>& identifiers);
+
+  // Updates the data list values currently shown with the popup.
+  void UpdateDataListValues(const std::vector<base::string16>& values,
+                            const std::vector<base::string16>& labels);
 
   // Hides the popup and destroys the controller. This also invalidates
   // |delegate_|.
@@ -60,10 +68,13 @@ class AutofillPopupControllerImpl : public AutofillPopupController,
  protected:
   FRIEND_TEST_ALL_PREFIXES(AutofillExternalDelegateBrowserTest,
                            CloseWidgetAndNoLeaking);
+  FRIEND_TEST_ALL_PREFIXES(AutofillPopupControllerUnitTest,
+                           ProperlyResetController);
 
-  AutofillPopupControllerImpl(AutofillPopupDelegate* delegate,
+  AutofillPopupControllerImpl(base::WeakPtr<AutofillPopupDelegate> delegate,
                               gfx::NativeView container_view,
-                              const gfx::RectF& element_bounds);
+                              const gfx::RectF& element_bounds,
+                              base::i18n::TextDirection text_direction);
   virtual ~AutofillPopupControllerImpl();
 
   // AutofillPopupController implementation.
@@ -74,11 +85,13 @@ class AutofillPopupControllerImpl : public AutofillPopupController,
   virtual void AcceptSuggestion(size_t index) OVERRIDE;
   virtual int GetIconResourceID(const string16& resource_name) OVERRIDE;
   virtual bool CanDelete(size_t index) const OVERRIDE;
+  virtual bool IsWarning(size_t index) const OVERRIDE;
   virtual gfx::Rect GetRowBounds(size_t index) OVERRIDE;
   virtual void SetPopupBounds(const gfx::Rect& bounds) OVERRIDE;
   virtual const gfx::Rect& popup_bounds() const OVERRIDE;
   virtual gfx::NativeView container_view() const OVERRIDE;
   virtual const gfx::RectF& element_bounds() const OVERRIDE;
+  virtual bool IsRTL() const OVERRIDE;
 
   virtual const std::vector<string16>& names() const OVERRIDE;
   virtual const std::vector<string16>& subtexts() const OVERRIDE;
@@ -117,6 +130,13 @@ class AutofillPopupControllerImpl : public AutofillPopupController,
   // Returns true if the popup still has non-options entries to show the user.
   bool HasSuggestions();
 
+  // Set the Autofill entry values. Exposed to allow tests to set these values
+  // without showing the popup.
+  void SetValues(const std::vector<string16>& names,
+                 const std::vector<string16>& subtexts,
+                 const std::vector<string16>& icons,
+                 const std::vector<int>& identifier);
+
   AutofillPopupView* view() { return view_; }
 
   // |view_| pass throughs (virtual for testing).
@@ -130,18 +150,22 @@ class AutofillPopupControllerImpl : public AutofillPopupController,
 
   // Calculates the desired height of the popup based on its contents.
   int GetDesiredPopupHeight() const;
+
+  // Calculate the width of the row, excluding all the text. This provides
+  // the size of the row that won't be reducible (since all the text can be
+  // elided if there isn't enough space).
+  int RowWidthWithoutText(int row) const;
 #endif
 
   base::WeakPtr<AutofillPopupControllerImpl> GetWeakPtr();
 
  private:
+  // Clear the internal state of the controller. This is needed to ensure that
+  // when the popup is reused it doesn't leak values between uses.
+  void ClearState();
+
   const gfx::Rect RoundedElementBounds() const;
 #if !defined(OS_ANDROID)
-  // Calculate the width of the row, excluding all the text. This provides
-  // the size of the row that won't be reducible (since all the text can be
-  // elided if there isn't enough space).
-  int RowWidthWithoutText(int row) const;
-
   // Calculates and sets the bounds of the popup, including placing it properly
   // to prevent it from going off the screen.
   void UpdatePopupBounds();
@@ -166,7 +190,7 @@ class AutofillPopupControllerImpl : public AutofillPopupController,
       int popup_required_height) const;
 
   AutofillPopupView* view_;  // Weak reference.
-  AutofillPopupDelegate* delegate_;  // Weak reference.
+  base::WeakPtr<AutofillPopupDelegate> delegate_;
   gfx::NativeView container_view_;  // Weak reference.
 
   // The bounds of the text element that is the focus of the Autofill.
@@ -175,6 +199,9 @@ class AutofillPopupControllerImpl : public AutofillPopupController,
 
   // The bounds of the Autofill popup.
   gfx::Rect popup_bounds_;
+
+  // The text direction of the popup.
+  base::i18n::TextDirection text_direction_;
 
   // The current Autofill query values.
   std::vector<string16> names_;
@@ -199,5 +226,7 @@ class AutofillPopupControllerImpl : public AutofillPopupController,
 
   base::WeakPtrFactory<AutofillPopupControllerImpl> weak_ptr_factory_;
 };
+
+}  // namespace autofill
 
 #endif  // CHROME_BROWSER_UI_AUTOFILL_AUTOFILL_POPUP_CONTROLLER_IMPL_H_

@@ -6,9 +6,13 @@
 #define CHROME_BROWSER_POLICY_CLOUD_USER_POLICY_SIGNIN_SERVICE_FACTORY_H_
 
 #include "base/memory/singleton.h"
-#include "chrome/browser/profiles/profile_keyed_service_factory.h"
+#include "components/browser_context_keyed_service/browser_context_keyed_service_factory.h"
 
+class Profile;
+
+namespace user_prefs {
 class PrefRegistrySyncable;
+}
 
 namespace policy {
 
@@ -16,7 +20,8 @@ class UserPolicySigninService;
 
 // Singleton that owns all UserPolicySigninServices and creates/deletes them as
 // new Profiles are created/shutdown.
-class UserPolicySigninServiceFactory : public ProfileKeyedServiceFactory {
+class UserPolicySigninServiceFactory
+    : public BrowserContextKeyedServiceFactory {
  public:
   // Returns an instance of the UserPolicySigninServiceFactory singleton.
   static UserPolicySigninServiceFactory* GetInstance();
@@ -26,15 +31,16 @@ class UserPolicySigninServiceFactory : public ProfileKeyedServiceFactory {
   static UserPolicySigninService* GetForProfile(Profile* profile);
 
  protected:
-  // ProfileKeyedServiceFactory implementation.
-  virtual ProfileKeyedService* BuildServiceInstanceFor(
-      Profile* profile) const OVERRIDE;
+  // BrowserContextKeyedServiceFactory implementation.
+  virtual BrowserContextKeyedService* BuildServiceInstanceFor(
+      content::BrowserContext* profile) const OVERRIDE;
 
   // Overridden to cause this object to be created when the profile is created.
-  virtual bool ServiceIsCreatedWithProfile() const OVERRIDE;
+  virtual bool ServiceIsCreatedWithBrowserContext() const OVERRIDE;
 
   // Register the preferences related to cloud-based user policy.
-  virtual void RegisterUserPrefs(PrefRegistrySyncable* registry) OVERRIDE;
+  virtual void RegisterProfilePrefs(
+      user_prefs::PrefRegistrySyncable* registry) OVERRIDE;
 
  private:
   friend struct DefaultSingletonTraits<UserPolicySigninServiceFactory>;

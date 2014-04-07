@@ -9,9 +9,9 @@
 #include <vector>
 
 #include "base/debug/trace_event.h"
-#include "base/string_util.h"
 #include "base/strings/string_split.h"
-#include "cc/output/compositor_frame.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "cc/output/compositor_frame_ack.h"
 #include "cc/quads/checkerboard_draw_quad.h"
 #include "cc/quads/debug_border_draw_quad.h"
@@ -22,6 +22,7 @@
 #include "cc/quads/tile_draw_quad.h"
 #include "cc/quads/yuv_video_draw_quad.h"
 #include "cc/resources/resource_provider.h"
+#include "third_party/WebKit/public/platform/WebGraphicsContext3D.h"
 #include "third_party/khronos/GLES2/gl2ext.h"
 
 using WebKit::WebGraphicsContext3D;
@@ -52,13 +53,10 @@ DelegatingRenderer::DelegatingRenderer(
 
 bool DelegatingRenderer::Initialize() {
   capabilities_.using_partial_swap = false;
-  // TODO(danakj): Throttling - we may want to only allow 1 outstanding frame,
-  // but the parent compositor may pipeline for us.
-  // TODO(danakj): Can we use this in single-thread mode?
-  capabilities_.using_swap_complete_callback = true;
   capabilities_.max_texture_size = resource_provider_->max_texture_size();
   capabilities_.best_texture_format = resource_provider_->best_texture_format();
   capabilities_.allow_partial_texture_updates = false;
+  capabilities_.using_offscreen_context3d = false;
 
   WebGraphicsContext3D* context3d = resource_provider_->GraphicsContext3D();
 
@@ -70,8 +68,11 @@ bool DelegatingRenderer::Initialize() {
   if (!context3d->makeContextCurrent())
     return false;
 
-  context3d->setContextLostCallback(this);
-  context3d->pushGroupMarkerEXT("CompositorContext");
+  std::string unique_context_name = base::StringPrintf(
+      "%s-%p",
+      Settings().compositor_name.c_str(),
+      context3d);
+  context3d->pushGroupMarkerEXT(unique_context_name.c_str());
 
   std::string extensions_string =
       UTF16ToASCII(context3d->getString(GL_EXTENSIONS));
@@ -81,55 +82,44 @@ bool DelegatingRenderer::Initialize() {
 
   // TODO(danakj): We need non-GPU-specific paths for these things. This
   // renderer shouldn't need to use context3d extensions directly.
-  bool has_read_bgra = true;
-  bool has_set_visibility = true;
-  bool has_io_surface = true;
-  bool has_arb_texture_rect = true;
-  bool has_gpu_memory_manager = true;
-  bool has_egl_image = true;
+  bool has_set_visibility = false;
+  bool has_io_surface = false;
+  bool has_arb_texture_rect = false;
+  bool has_egl_image = false;
+  bool has_map_image = false;
   for (size_t i = 0; i < extensions.size(); ++i) {
-    if (extensions[i] == "GL_EXT_read_format_bgra")
-      has_read_bgra = true;
-    else if (extensions[i] == "GL_CHROMIUM_set_visibility")
+    if (extensions[i] == "GL_CHROMIUM_set_visibility") {
       has_set_visibility = true;
-    else if (extensions[i] == "GL_CHROMIUM_iosurface")
+    } else if (extensions[i] == "GL_CHROMIUM_iosurface") {
       has_io_surface = true;
-    else if (extensions[i] == "GL_ARB_texture_rectangle")
-      has_arb_texture_rect = true;
-    else if (extensions[i] == "GL_CHROMIUM_gpu_memory_manager")
-      has_gpu_memory_manager = true;
-    else if (extensions[i] == "GL_OES_EGL_image_external")
-      has_egl_image = true;
+    } else if (extensions[i] == "GL_ARB_texture_rectangle") {
+        has_arb_texture_rect = true;
+    } else if (extensions[i] == "GL_OES_EGL_image_external") {
+        has_egl_image = true;
+    } else if (extensions[i] == "GL_CHROMIUM_map_image") {
+      has_map_image = true;
+    }
   }
 
   if (has_io_surface)
     DCHECK(has_arb_texture_rect);
 
-  capabilities_.using_accelerated_painting =
-      Settings().accelerate_painting &&
-      capabilities_.best_texture_format == GL_BGRA_EXT &&
-      has_read_bgra;
-
-  // TODO(piman): loop visibility to GPU process?
   capabilities_.using_set_visibility = has_set_visibility;
 
-  // TODO(danakj): Support GpuMemoryManager.
-  capabilities_.using_gpu_memory_manager = false;
-
   capabilities_.using_egl_image = has_egl_image;
+
+  capabilities_.using_map_image = has_map_image;
 
   return true;
 }
 
-DelegatingRenderer::~DelegatingRenderer() {
-  WebGraphicsContext3D* context3d = resource_provider_->GraphicsContext3D();
-  if (context3d)
-    context3d->setContextLostCallback(NULL);
-}
+DelegatingRenderer::~DelegatingRenderer() {}
 
 const RendererCapabilities& DelegatingRenderer::Capabilities() const {
   return capabilities_;
 }
+
+bool DelegatingRenderer::CanReadPixels() const { return false; }
 
 static ResourceProvider::ResourceId AppendToArray(
     ResourceProvider::ResourceIdArray* array,
@@ -139,47 +129,46 @@ static ResourceProvider::ResourceId AppendToArray(
 }
 
 void DelegatingRenderer::DrawFrame(
-    RenderPassList& render_passes_in_draw_order) {
+    RenderPassList* render_passes_in_draw_order) {
   TRACE_EVENT0("cc", "DelegatingRenderer::DrawFrame");
 
-  CompositorFrame out_frame;
-  out_frame.metadata = client_->MakeCompositorFrameMetadata();
+  DCHECK(!frame_for_swap_buffers_.delegated_frame_data);
 
-  out_frame.delegated_frame_data = make_scoped_ptr(new DelegatedFrameData);
+  frame_for_swap_buffers_.metadata = client_->MakeCompositorFrameMetadata();
+
+  frame_for_swap_buffers_.delegated_frame_data =
+      make_scoped_ptr(new DelegatedFrameData);
+  DelegatedFrameData& out_data = *frame_for_swap_buffers_.delegated_frame_data;
+  // Move the render passes and resources into the |out_frame|.
+  out_data.render_pass_list.swap(*render_passes_in_draw_order);
 
   // Collect all resource ids in the render passes into a ResourceIdArray.
   ResourceProvider::ResourceIdArray resources;
   DrawQuad::ResourceIteratorCallback append_to_array =
       base::Bind(&AppendToArray, &resources);
-  for (size_t i = 0; i < render_passes_in_draw_order.size(); ++i) {
-    RenderPass* render_pass = render_passes_in_draw_order[i];
+  for (size_t i = 0; i < out_data.render_pass_list.size(); ++i) {
+    RenderPass* render_pass = out_data.render_pass_list.at(i);
     for (size_t j = 0; j < render_pass->quad_list.size(); ++j)
       render_pass->quad_list[j]->IterateResources(append_to_array);
   }
-
-  // Move the render passes and resources into the |out_frame|.
-  DelegatedFrameData& out_data = *out_frame.delegated_frame_data;
-  out_data.render_pass_list.swap(render_passes_in_draw_order);
   resource_provider_->PrepareSendToParent(resources, &out_data.resource_list);
-
-  output_surface_->SendFrameToParentCompositor(&out_frame);
 }
 
-bool DelegatingRenderer::SwapBuffers() {
-  return true;
+void DelegatingRenderer::SwapBuffers() {
+  TRACE_EVENT0("cc", "DelegatingRenderer::SwapBuffers");
+
+  output_surface_->SwapBuffers(&frame_for_swap_buffers_);
+  frame_for_swap_buffers_.delegated_frame_data.reset();
 }
 
 void DelegatingRenderer::GetFramebufferPixels(void* pixels, gfx::Rect rect) {
-  NOTIMPLEMENTED();
+  NOTREACHED();
 }
 
-void DelegatingRenderer::ReceiveCompositorFrameAck(
+void DelegatingRenderer::ReceiveSwapBuffersAck(
     const CompositorFrameAck& ack) {
   resource_provider_->ReceiveFromParent(ack.resources);
-  if (client_->HasImplThread())
-    client_->OnSwapBuffersComplete();
 }
-
 
 bool DelegatingRenderer::IsContextLost() {
   WebGraphicsContext3D* context3d = resource_provider_->GraphicsContext3D();
@@ -189,11 +178,45 @@ bool DelegatingRenderer::IsContextLost() {
 }
 
 void DelegatingRenderer::SetVisible(bool visible) {
+  if (visible == visible_)
+    return;
+
   visible_ = visible;
+  WebGraphicsContext3D* context = resource_provider_->GraphicsContext3D();
+  if (!visible_) {
+    TRACE_EVENT0("cc", "DelegatingRenderer::SetVisible dropping resources");
+    resource_provider_->ReleaseCachedData();
+    if (context)
+      context->flush();
+  }
+  if (capabilities_.using_set_visibility) {
+    // We loop visibility to the GPU process, since that's what manages memory.
+    // That will allow it to feed us with memory allocations that we can act
+    // upon.
+    DCHECK(context);
+    context->setVisibilityCHROMIUM(visible);
+  }
 }
 
-void DelegatingRenderer::onContextLost() {
-  client_->DidLoseOutputSurface();
+void DelegatingRenderer::SendManagedMemoryStats(size_t bytes_visible,
+                                                size_t bytes_visible_and_nearby,
+                                                size_t bytes_allocated) {
+  WebGraphicsContext3D* context = resource_provider_->GraphicsContext3D();
+  if (!context) {
+    // TODO(piman): software path.
+    NOTIMPLEMENTED();
+    return;
+  }
+  WebKit::WebGraphicsManagedMemoryStats stats;
+  stats.bytesVisible = bytes_visible;
+  stats.bytesVisibleAndNearby = bytes_visible_and_nearby;
+  stats.bytesAllocated = bytes_allocated;
+  stats.backbufferRequested = false;
+  context->sendManagedMemoryStatsCHROMIUM(&stats);
+}
+
+void DelegatingRenderer::SetDiscardBackBufferWhenNotVisible(bool discard) {
+  // Nothing to do, we don't have a back buffer.
 }
 
 }  // namespace cc

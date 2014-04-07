@@ -6,7 +6,7 @@
 #define CONTENT_RENDERER_MEDIA_RTC_MEDIA_CONSTRAINTS_H_
 
 #include "base/compiler_specific.h"
-#include "third_party/libjingle/source/talk/app/webrtc/mediastreaminterface.h"
+#include "third_party/libjingle/source/talk/app/webrtc/mediaconstraintsinterface.h"
 
 namespace WebKit {
 class WebMediaConstraints;
@@ -24,6 +24,7 @@ class RTCMediaConstraints : public webrtc::MediaConstraintsInterface {
   virtual ~RTCMediaConstraints();
   virtual const Constraints& GetMandatory() const OVERRIDE;
   virtual const Constraints& GetOptional() const OVERRIDE;
+  void AddOptional(const std::string& key, const std::string& value);
 
  protected:
   Constraints mandatory_;

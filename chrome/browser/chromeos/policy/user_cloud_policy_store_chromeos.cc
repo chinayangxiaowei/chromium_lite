@@ -12,10 +12,10 @@
 #include "base/memory/ref_counted.h"
 #include "base/metrics/histogram.h"
 #include "base/stl_util.h"
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "chrome/browser/chromeos/policy/user_policy_disk_cache.h"
 #include "chrome/browser/chromeos/policy/user_policy_token_loader.h"
-#include "chrome/browser/policy/cloud/proto/device_management_local.pb.h"
+#include "chrome/browser/policy/proto/cloud/device_management_local.pb.h"
 #include "chromeos/dbus/cryptohome_client.h"
 #include "chromeos/dbus/session_manager_client.h"
 #include "content/public/browser/browser_thread.h"
@@ -103,7 +103,7 @@ class LegacyPolicyCacheLoader : public UserPolicyTokenLoader::Delegate,
 LegacyPolicyCacheLoader::LegacyPolicyCacheLoader(
     const base::FilePath& token_cache_file,
     const base::FilePath& policy_cache_file)
-    : ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)),
+    : weak_factory_(this),
       has_policy_(false),
       status_(CloudPolicyStore::STATUS_OK) {
   token_loader_ = new UserPolicyTokenLoader(weak_factory_.GetWeakPtr(),
@@ -173,7 +173,7 @@ UserCloudPolicyStoreChromeOS::UserCloudPolicyStoreChromeOS(
       session_manager_client_(session_manager_client),
       username_(username),
       user_policy_key_dir_(user_policy_key_dir),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)),
+      weak_factory_(this),
       legacy_cache_dir_(legacy_token_cache_file.DirName()),
       legacy_loader_(new LegacyPolicyCacheLoader(legacy_token_cache_file,
                                                  legacy_policy_cache_file)),
@@ -197,9 +197,58 @@ void UserCloudPolicyStoreChromeOS::Store(
 void UserCloudPolicyStoreChromeOS::Load() {
   // Cancel all pending requests.
   weak_factory_.InvalidateWeakPtrs();
-  session_manager_client_->RetrieveUserPolicy(
+  session_manager_client_->RetrievePolicyForUser(
+      username_,
       base::Bind(&UserCloudPolicyStoreChromeOS::OnPolicyRetrieved,
                  weak_factory_.GetWeakPtr()));
+}
+
+void UserCloudPolicyStoreChromeOS::LoadImmediately() {
+  // This blocking DBus call is in the startup path and will block the UI
+  // thread. This only happens when the Profile is created synchronously, which
+  // on ChromeOS happens whenever the browser is restarted into the same
+  // session. That happens when the browser crashes, or right after signin if
+  // the user has flags configured in about:flags.
+  // However, on those paths we must load policy synchronously so that the
+  // Profile initialization never sees unmanaged prefs, which would lead to
+  // data loss. http://crbug.com/263061
+  std::string policy_blob =
+      session_manager_client_->BlockingRetrievePolicyForUser(username_);
+  if (policy_blob.empty()) {
+    // The session manager doesn't have policy, or the call failed.
+    // Just notify that the load is done, and don't bother with the legacy
+    // caches in this case.
+    NotifyStoreLoaded();
+    return;
+  }
+
+  scoped_ptr<em::PolicyFetchResponse> policy(new em::PolicyFetchResponse());
+  if (!policy->ParseFromString(policy_blob)) {
+    status_ = STATUS_PARSE_ERROR;
+    NotifyStoreError();
+    return;
+  }
+
+  std::string sanitized_username =
+      cryptohome_client_->BlockingGetSanitizedUsername(username_);
+  if (sanitized_username.empty()) {
+    status_ = STATUS_LOAD_ERROR;
+    NotifyStoreError();
+    return;
+  }
+
+  policy_key_path_ = user_policy_key_dir_.Append(
+      base::StringPrintf(kPolicyKeyFile, sanitized_username.c_str()));
+  LoadPolicyKey(policy_key_path_, &policy_key_);
+  policy_key_loaded_ = true;
+
+  scoped_ptr<UserCloudPolicyValidator> validator =
+      CreateValidator(policy.Pass());
+  validator->ValidateUsername(username_);
+  const bool allow_rotation = false;
+  validator->ValidateSignature(policy_key_, allow_rotation);
+  validator->RunValidation();
+  OnRetrievedPolicyValidated(validator.get());
 }
 
 void UserCloudPolicyStoreChromeOS::ValidatePolicyForStore(
@@ -244,8 +293,10 @@ void UserCloudPolicyStoreChromeOS::OnPolicyToStoreValidated(
     return;
   }
 
-  session_manager_client_->StoreUserPolicy(
+  session_manager_client_->StorePolicyForUser(
+      username_,
       policy_blob,
+      validator->policy()->new_public_key(),
       base::Bind(&UserCloudPolicyStoreChromeOS::OnPolicyStored,
                  weak_factory_.GetWeakPtr()));
 }
@@ -406,7 +457,7 @@ void UserCloudPolicyStoreChromeOS::InstallLegacyTokens(
 // static
 void UserCloudPolicyStoreChromeOS::RemoveLegacyCacheDir(
     const base::FilePath& dir) {
-  if (file_util::PathExists(dir) && !file_util::Delete(dir, true))
+  if (base::PathExists(dir) && !base::DeleteFile(dir, true))
     LOG(ERROR) << "Failed to remove cache dir " << dir.value();
 }
 
@@ -427,7 +478,7 @@ void UserCloudPolicyStoreChromeOS::ReloadPolicyKey(
 // static
 void UserCloudPolicyStoreChromeOS::LoadPolicyKey(const base::FilePath& path,
                                                  std::vector<uint8>* key) {
-  if (!file_util::PathExists(path)) {
+  if (!base::PathExists(path)) {
     // There is no policy key the first time that a user fetches policy. If
     // |path| does not exist then that is the most likely scenario, so there's
     // no need to sample a failure.

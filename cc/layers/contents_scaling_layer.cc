@@ -22,6 +22,8 @@ ContentsScalingLayer::~ContentsScalingLayer() {
 
 void ContentsScalingLayer::CalculateContentsScale(
     float ideal_contents_scale,
+    float device_scale_factor,
+    float page_scale_factor,
     bool animating_transform_to_screen,
     float* contents_scale_x,
     float* contents_scale_y,
@@ -33,18 +35,20 @@ void ContentsScalingLayer::CalculateContentsScale(
       ideal_contents_scale);
 }
 
-void ContentsScalingLayer::Update(
+bool ContentsScalingLayer::Update(
     ResourceUpdateQueue* queue,
-    const OcclusionTracker* occlusion,
-    RenderingStats* stats) {
+    const OcclusionTracker* occlusion) {
+  bool updated = Layer::Update(queue, occlusion);
+
   if (draw_properties().contents_scale_x == last_update_contents_scale_x_ &&
       draw_properties().contents_scale_y == last_update_contents_scale_y_)
-    return;
+    return updated;
 
   last_update_contents_scale_x_ = draw_properties().contents_scale_x;
   last_update_contents_scale_y_ = draw_properties().contents_scale_y;
   // Invalidate the whole layer if scale changed.
-  SetNeedsDisplayRect(gfx::Rect(bounds()));
+  SetNeedsDisplayRect(gfx::Rect(paint_properties().bounds));
+  return updated;
 }
 
 }  // namespace cc

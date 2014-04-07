@@ -51,9 +51,16 @@ class ConnectionToHost : public SignalStrategy::Listener,
                          public Session::EventHandler,
                          public base::NonThreadSafe {
  public:
+  // The UI implementations maintain corresponding definitions of this
+  // enumeration in webapp/client_session.js and
+  // android/java/res/values/strings.xml. The Android app also includes a
+  // constant in android/java/src/org/chromium/chromoting/jni/JniInterface.java
+  // that tracks the numeric value of the CONNECTED state. Be sure to update
+  // these locations to match this one if you make any changes to the ordering.
   enum State {
     INITIALIZING,
     CONNECTING,
+    AUTHENTICATED,
     CONNECTED,
     FAILED,
     CLOSED,
@@ -76,8 +83,9 @@ class ConnectionToHost : public SignalStrategy::Listener,
   ConnectionToHost(bool allow_nat_traversal);
   virtual ~ConnectionToHost();
 
-  virtual void Connect(scoped_refptr<XmppProxy> xmpp_proxy,
-                       const std::string& local_jid,
+  // |signal_strategy| must outlive connection. |audio_stub| may be
+  // null, in which case audio will not be requested.
+  virtual void Connect(SignalStrategy* signal_strategy,
                        const std::string& host_jid,
                        const std::string& host_public_key,
                        scoped_ptr<TransportFactory> transport_factory,
@@ -87,8 +95,6 @@ class ConnectionToHost : public SignalStrategy::Listener,
                        ClipboardStub* clipboard_stub,
                        VideoStub* video_stub,
                        AudioStub* audio_stub);
-
-  virtual void Disconnect(const base::Closure& shutdown_task);
 
   virtual const SessionConfig& config();
 
@@ -146,7 +152,7 @@ class ConnectionToHost : public SignalStrategy::Listener,
   VideoStub* video_stub_;
   AudioStub* audio_stub_;
 
-  scoped_ptr<SignalStrategy> signal_strategy_;
+  SignalStrategy* signal_strategy_;
   scoped_ptr<SessionManager> session_manager_;
   scoped_ptr<Session> session_;
 

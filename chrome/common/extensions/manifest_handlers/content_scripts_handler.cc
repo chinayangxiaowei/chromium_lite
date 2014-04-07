@@ -7,19 +7,21 @@
 #include "base/file_util.h"
 #include "base/lazy_instance.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/string_number_conversions.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_manifest_constants.h"
+#include "chrome/common/extensions/permissions/permissions_data.h"
 #include "content/public/common/url_constants.h"
 #include "extensions/common/error_utils.h"
 #include "extensions/common/extension_resource.h"
 #include "extensions/common/url_pattern.h"
-#include "googleurl/src/gurl.h"
+#include "extensions/common/url_pattern_set.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "url/gurl.h"
 
 namespace extensions {
 
@@ -31,7 +33,7 @@ namespace {
 
 // Helper method that loads either the include_globs or exclude_globs list
 // from an entry in the content_script lists of the manifest.
-bool LoadGlobsHelper(const DictionaryValue* content_script,
+bool LoadGlobsHelper(const base::DictionaryValue* content_script,
                      int content_script_index,
                      const char* globs_property_name,
                      string16* error,
@@ -40,7 +42,7 @@ bool LoadGlobsHelper(const DictionaryValue* content_script,
   if (!content_script->HasKey(globs_property_name))
     return true;  // they are optional
 
-  const ListValue* list = NULL;
+  const base::ListValue* list = NULL;
   if (!content_script->GetList(globs_property_name, &list)) {
     *error = ErrorUtils::FormatErrorMessageUTF16(
         errors::kInvalidGlobList,
@@ -68,7 +70,7 @@ bool LoadGlobsHelper(const DictionaryValue* content_script,
 
 // Helper method that loads a UserScript object from a dictionary in the
 // content_script list of the manifest.
-bool LoadUserScriptFromDictionary(const DictionaryValue* content_script,
+bool LoadUserScriptFromDictionary(const base::DictionaryValue* content_script,
                                   int definition_index,
                                   Extension* extension,
                                   string16* error,
@@ -109,7 +111,7 @@ bool LoadUserScriptFromDictionary(const DictionaryValue* content_script,
   }
 
   // matches (required)
-  const ListValue* matches = NULL;
+  const base::ListValue* matches = NULL;
   if (!content_script->GetList(keys::kMatches, &matches)) {
     *error = ErrorUtils::FormatErrorMessageUTF16(
         errors::kInvalidMatches,
@@ -135,7 +137,7 @@ bool LoadUserScriptFromDictionary(const DictionaryValue* content_script,
     }
 
     URLPattern pattern(UserScript::ValidUserScriptSchemes(
-        extension->CanExecuteScriptEverywhere()));
+        PermissionsData::CanExecuteScriptEverywhere(extension)));
 
     URLPattern::ParseResult parse_result = pattern.Parse(match_str);
     if (parse_result != URLPattern::PARSE_SUCCESS) {
@@ -148,7 +150,7 @@ bool LoadUserScriptFromDictionary(const DictionaryValue* content_script,
     }
 
     // TODO(aboxhall): check for webstore
-    if (!extension->CanExecuteScriptEverywhere() &&
+    if (!PermissionsData::CanExecuteScriptEverywhere(extension) &&
         pattern.scheme() != chrome::kChromeUIScheme) {
       // Exclude SCHEME_CHROMEUI unless it's been explicitly requested.
       // If the --extensions-on-chrome-urls flag has not been passed, requesting
@@ -159,7 +161,7 @@ bool LoadUserScriptFromDictionary(const DictionaryValue* content_script,
     }
 
     if (pattern.MatchesScheme(chrome::kFileScheme) &&
-        !extension->CanExecuteScriptEverywhere()) {
+        !PermissionsData::CanExecuteScriptEverywhere(extension)) {
       extension->set_wants_file_access(true);
       if (!(extension->creation_flags() & Extension::ALLOW_FILE_ACCESS)) {
         pattern.SetValidSchemes(
@@ -172,7 +174,7 @@ bool LoadUserScriptFromDictionary(const DictionaryValue* content_script,
 
   // exclude_matches
   if (content_script->HasKey(keys::kExcludeMatches)) {  // optional
-    const ListValue* exclude_matches = NULL;
+    const base::ListValue* exclude_matches = NULL;
     if (!content_script->GetList(keys::kExcludeMatches, &exclude_matches)) {
       *error = ErrorUtils::FormatErrorMessageUTF16(
           errors::kInvalidExcludeMatches,
@@ -192,7 +194,7 @@ bool LoadUserScriptFromDictionary(const DictionaryValue* content_script,
       }
 
       int valid_schemes = UserScript::ValidUserScriptSchemes(
-          extension->CanExecuteScriptEverywhere());
+          PermissionsData::CanExecuteScriptEverywhere(extension));
       URLPattern pattern(valid_schemes);
 
       URLPattern::ParseResult parse_result = pattern.Parse(match_str);
@@ -220,7 +222,7 @@ bool LoadUserScriptFromDictionary(const DictionaryValue* content_script,
   }
 
   // js and css keys
-  const ListValue* js = NULL;
+  const base::ListValue* js = NULL;
   if (content_script->HasKey(keys::kJs) &&
       !content_script->GetList(keys::kJs, &js)) {
     *error = ErrorUtils::FormatErrorMessageUTF16(
@@ -229,7 +231,7 @@ bool LoadUserScriptFromDictionary(const DictionaryValue* content_script,
     return false;
   }
 
-  const ListValue* css = NULL;
+  const base::ListValue* css = NULL;
   if (content_script->HasKey(keys::kCss) &&
       !content_script->GetList(keys::kCss, &css)) {
     *error = ErrorUtils::
@@ -294,7 +296,7 @@ static bool IsScriptValid(const base::FilePath& path,
                           int message_id,
                           std::string* error) {
   std::string content;
-  if (!file_util::PathExists(path) ||
+  if (!base::PathExists(path) ||
       !file_util::ReadFileToString(path, &content)) {
     *error = l10n_util::GetStringFUTF8(
         message_id,
@@ -348,6 +350,23 @@ bool ContentScriptsInfo::ExtensionHasScriptAtURL(const Extension* extension,
   return false;
 }
 
+// static
+URLPatternSet ContentScriptsInfo::GetScriptableHosts(
+    const Extension* extension) {
+  const UserScriptList& content_scripts = GetContentScripts(extension);
+  URLPatternSet scriptable_hosts;
+  for (UserScriptList::const_iterator content_script =
+           content_scripts.begin();
+       content_script != content_scripts.end();
+       ++content_script) {
+    URLPatternSet::const_iterator pattern =
+        content_script->url_patterns().begin();
+    for (; pattern != content_script->url_patterns().end(); ++pattern)
+      scriptable_hosts.AddPattern(*pattern);
+  }
+  return scriptable_hosts;
+}
+
 ContentScriptsHandler::ContentScriptsHandler() {
 }
 
@@ -363,14 +382,14 @@ const std::vector<std::string> ContentScriptsHandler::Keys() const {
 
 bool ContentScriptsHandler::Parse(Extension* extension, string16* error) {
   scoped_ptr<ContentScriptsInfo> content_scripts_info(new ContentScriptsInfo);
-  const ListValue* scripts_list = NULL;
+  const base::ListValue* scripts_list = NULL;
   if (!extension->manifest()->GetList(keys::kContentScripts, &scripts_list)) {
     *error = ASCIIToUTF16(errors::kInvalidContentScriptsList);
     return false;
   }
 
   for (size_t i = 0; i < scripts_list->GetSize(); ++i) {
-    const DictionaryValue* script_dict = NULL;
+    const base::DictionaryValue* script_dict = NULL;
     if (!scripts_list->GetDictionary(i, &script_dict)) {
       *error = ErrorUtils::FormatErrorMessageUTF16(
           errors::kInvalidContentScript,
@@ -397,6 +416,9 @@ bool ContentScriptsHandler::Parse(Extension* extension, string16* error) {
   }
   extension->SetManifestData(keys::kContentScripts,
                              content_scripts_info.release());
+  PermissionsData::SetInitialScriptableHosts(
+      extension,
+      ContentScriptsInfo::GetScriptableHosts(extension));
   return true;
 }
 
@@ -414,13 +436,13 @@ bool ContentScriptsHandler::Validate(
     symlink_policy = ExtensionResource::SYMLINKS_MUST_RESOLVE_WITHIN_ROOT;
   }
 
-  const extensions::UserScriptList& content_scripts =
-      extensions::ContentScriptsInfo::GetContentScripts(extension);
+  const UserScriptList& content_scripts =
+      ContentScriptsInfo::GetContentScripts(extension);
   for (size_t i = 0; i < content_scripts.size(); ++i) {
-    const extensions::UserScript& script = content_scripts[i];
+    const UserScript& script = content_scripts[i];
 
     for (size_t j = 0; j < script.js_scripts().size(); j++) {
-      const extensions::UserScript::File& js_script = script.js_scripts()[j];
+      const UserScript::File& js_script = script.js_scripts()[j];
       const base::FilePath& path = ExtensionResource::GetFilePath(
           js_script.extension_root(), js_script.relative_path(),
           symlink_policy);
@@ -430,7 +452,7 @@ bool ContentScriptsHandler::Validate(
     }
 
     for (size_t j = 0; j < script.css_scripts().size(); j++) {
-      const extensions::UserScript::File& css_script = script.css_scripts()[j];
+      const UserScript::File& css_script = script.css_scripts()[j];
       const base::FilePath& path = ExtensionResource::GetFilePath(
           css_script.extension_root(), css_script.relative_path(),
           symlink_policy);

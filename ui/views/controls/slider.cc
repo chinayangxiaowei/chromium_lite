@@ -5,9 +5,9 @@
 #include "ui/views/controls/slider.h"
 
 #include "base/logging.h"
-#include "base/message_loop.h"
-#include "base/stringprintf.h"
-#include "base/utf_string_conversions.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "grit/ui_resources.h"
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "third_party/skia/include/core/SkColor.h"
@@ -91,7 +91,7 @@ void Slider::SetValueInternal(float value, SliderChangeReason reason) {
   if (listener_)
     listener_->SliderValueChanged(this, value_, old_value, reason);
 
-  if (old_value_valid && MessageLoop::current()) {
+  if (old_value_valid && base::MessageLoop::current()) {
     // Do not animate when setting the value of the slider for the first time.
     // There is no message-loop when running tests. So we cannot animate then.
     animating_value_ = old_value;
@@ -103,8 +103,8 @@ void Slider::SetValueInternal(float value, SliderChangeReason reason) {
     SchedulePaint();
   }
   if (accessibility_events_enabled_ && GetWidget()) {
-    GetWidget()->NotifyAccessibilityEvent(
-        this, ui::AccessibilityTypes::EVENT_VALUE_CHANGED, true);
+    NotifyAccessibilityEvent(
+        ui::AccessibilityTypes::EVENT_VALUE_CHANGED, true);
   }
 }
 

@@ -6,13 +6,13 @@
 
 #include "base/logging.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/chromeos/contacts/contact.pb.h"
 #include "chrome/browser/chromeos/contacts/contact_manager_observer.h"
 #include "chrome/browser/chromeos/contacts/contact_store.h"
 #include "chrome/browser/chromeos/contacts/google_contact_store.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_service.h"
 
@@ -38,7 +38,7 @@ ContactManager::ContactManager()
     : profile_observers_deleter_(&profile_observers_),
       contact_store_factory_(new GoogleContactStoreFactory),
       contact_stores_deleter_(&contact_stores_),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_ptr_factory_(this)) {
+      weak_ptr_factory_(this) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   DCHECK(!g_instance);
   g_instance = this;

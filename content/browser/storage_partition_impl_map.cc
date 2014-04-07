@@ -7,11 +7,12 @@
 #include "base/bind.h"
 #include "base/callback.h"
 #include "base/file_util.h"
+#include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/stl_util.h"
-#include "base/string_number_conversions.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/threading/sequenced_worker_pool.h"
 #include "content/browser/appcache/chrome_appcache_service.h"
 #include "content/browser/fileapi/browser_file_system_helper.h"
@@ -33,9 +34,9 @@
 #include "crypto/sha2.h"
 #include "net/url_request/url_request_context.h"
 #include "net/url_request/url_request_context_getter.h"
-#include "webkit/blob/blob_data.h"
-#include "webkit/blob/blob_url_request_job_factory.h"
-#include "webkit/fileapi/file_system_url_request_job_factory.h"
+#include "webkit/browser/blob/blob_url_request_job_factory.h"
+#include "webkit/browser/fileapi/file_system_url_request_job_factory.h"
+#include "webkit/common/blob/blob_data.h"
 
 using appcache::AppCacheService;
 using fileapi::FileSystemContext;
@@ -63,8 +64,8 @@ class BlobProtocolHandler : public net::URLRequestJobFactory::ProtocolHandler {
     if (!webkit_blob_protocol_handler_impl_) {
       webkit_blob_protocol_handler_impl_.reset(
           new WebKitBlobProtocolHandlerImpl(blob_storage_context_->controller(),
-                                            stream_context_,
-                                            file_system_context_));
+                                            stream_context_.get(),
+                                            file_system_context_.get()));
     }
     return webkit_blob_protocol_handler_impl_->MaybeCreateJob(request,
                                                               network_delegate);
@@ -81,19 +82,20 @@ class BlobProtocolHandler : public net::URLRequestJobFactory::ProtocolHandler {
         StreamContext* stream_context,
         fileapi::FileSystemContext* file_system_context)
         : webkit_blob::BlobProtocolHandler(
-              blob_storage_controller, file_system_context,
-              BrowserThread::GetMessageLoopProxyForThread(
-                  BrowserThread::FILE)),
+              blob_storage_controller,
+              file_system_context,
+              BrowserThread::GetMessageLoopProxyForThread(BrowserThread::FILE)
+                  .get()),
           stream_context_(stream_context) {}
 
     virtual ~WebKitBlobProtocolHandlerImpl() {}
 
     virtual net::URLRequestJob* MaybeCreateJob(
         net::URLRequest* request,
-        net::NetworkDelegate* network_delegate) const {
+        net::NetworkDelegate* network_delegate) const OVERRIDE {
       scoped_refptr<Stream> stream =
           stream_context_->registry()->GetStream(request->url());
-      if (stream)
+      if (stream.get())
         return new StreamURLRequestJob(request, network_delegate, stream);
 
       return webkit_blob::BlobProtocolHandler::MaybeCreateJob(
@@ -182,12 +184,12 @@ const int kPartitionNameHashBytes = 6;
 
 // Needed for selecting all files in ObliterateOneDirectory() below.
 #if defined(OS_POSIX)
-const int kAllFileTypes = file_util::FileEnumerator::FILES |
-                          file_util::FileEnumerator::DIRECTORIES |
-                          file_util::FileEnumerator::SHOW_SYM_LINKS;
+const int kAllFileTypes = base::FileEnumerator::FILES |
+                          base::FileEnumerator::DIRECTORIES |
+                          base::FileEnumerator::SHOW_SYM_LINKS;
 #else
-const int kAllFileTypes = file_util::FileEnumerator::FILES |
-                          file_util::FileEnumerator::DIRECTORIES;
+const int kAllFileTypes = base::FileEnumerator::FILES |
+                          base::FileEnumerator::DIRECTORIES;
 #endif
 
 base::FilePath GetStoragePartitionDomainPath(
@@ -208,7 +210,7 @@ void ObliterateOneDirectory(const base::FilePath& current_dir,
                             std::vector<base::FilePath>* paths_to_consider) {
   CHECK(current_dir.IsAbsolute());
 
-  file_util::FileEnumerator enumerator(current_dir, false, kAllFileTypes);
+  base::FileEnumerator enumerator(current_dir, false, kAllFileTypes);
   for (base::FilePath to_delete = enumerator.Next(); !to_delete.empty();
        to_delete = enumerator.Next()) {
     // Enum tracking which of the 3 possible actions to take for |to_delete|.
@@ -231,7 +233,7 @@ void ObliterateOneDirectory(const base::FilePath& current_dir,
 
     switch (action) {
       case kDelete:
-        file_util::Delete(to_delete, true);
+        base::DeleteFile(to_delete, true);
         break;
 
       case kEnqueue:
@@ -254,28 +256,28 @@ void BlockingObliteratePath(
     const std::vector<base::FilePath>& paths_to_keep,
     const scoped_refptr<base::TaskRunner>& closure_runner,
     const base::Closure& on_gc_required) {
-  // Early exit required because file_util::AbsolutePath() will fail on POSIX
+  // Early exit required because MakeAbsoluteFilePath() will fail on POSIX
   // if |unnormalized_root| does not exist. This is safe because there is
   // nothing to do in this situation anwyays.
-  if (!file_util::PathExists(unnormalized_root)) {
+  if (!base::PathExists(unnormalized_root)) {
     return;
   }
 
   // Never try to obliterate things outside of the browser context root or the
   // browser context root itself. Die hard.
-  base::FilePath root = unnormalized_root;
-  base::FilePath browser_context_root = unnormalized_browser_context_root;
-  CHECK(file_util::AbsolutePath(&root));
-  CHECK(file_util::AbsolutePath(&browser_context_root));
-  CHECK(file_util::ContainsPath(browser_context_root, root) &&
-        browser_context_root != root);
+  base::FilePath root = base::MakeAbsoluteFilePath(unnormalized_root);
+  base::FilePath browser_context_root =
+      base::MakeAbsoluteFilePath(unnormalized_browser_context_root);
+  CHECK(!root.empty());
+  CHECK(!browser_context_root.empty());
+  CHECK(browser_context_root.IsParent(root) && browser_context_root != root);
 
   // Reduce |paths_to_keep| set to those under the root and actually on disk.
   std::vector<base::FilePath> valid_paths_to_keep;
   for (std::vector<base::FilePath>::const_iterator it = paths_to_keep.begin();
        it != paths_to_keep.end();
        ++it) {
-    if (root.IsParent(*it) && file_util::PathExists(*it))
+    if (root.IsParent(*it) && base::PathExists(*it))
       valid_paths_to_keep.push_back(*it);
   }
 
@@ -283,7 +285,7 @@ void BlockingObliteratePath(
   // root and be done with it.  Otherwise, signal garbage collection and do
   // a best-effort delete of the on-disk structures.
   if (valid_paths_to_keep.empty()) {
-    file_util::Delete(root, true);
+    base::DeleteFile(root, true);
     return;
   }
   closure_runner->PostTask(FROM_HERE, on_gc_required);
@@ -322,7 +324,7 @@ void BlockingGarbageCollect(
     scoped_ptr<base::hash_set<base::FilePath> > active_paths) {
   CHECK(storage_root.IsAbsolute());
 
-  file_util::FileEnumerator enumerator(storage_root, false, kAllFileTypes);
+  base::FileEnumerator enumerator(storage_root, false, kAllFileTypes);
   base::FilePath trash_directory;
   if (!file_util::CreateTemporaryDirInDir(storage_root, kTrashDirname,
                                           &trash_directory)) {
@@ -335,14 +337,13 @@ void BlockingGarbageCollect(
         path != trash_directory) {
       // Since |trash_directory| is unique for each run of this function there
       // can be no colllisions on the move.
-      file_util::Move(path, trash_directory.Append(path.BaseName()));
+      base::Move(path, trash_directory.Append(path.BaseName()));
     }
   }
 
   file_access_runner->PostTask(
       FROM_HERE,
-      base::Bind(base::IgnoreResult(&file_util::Delete), trash_directory,
-                 true));
+      base::Bind(base::IgnoreResult(&base::DeleteFile), trash_directory, true));
 }
 
 }  // namespace
@@ -426,8 +427,9 @@ StoragePartitionImpl* StoragePartitionImplMap::Get(
               browser_context_->IsOffTheRecord(),
               partition->GetAppCacheService(),
               blob_storage_context));
-  std::vector<std::string> additional_webui_schemes =
-      GetContentClient()->browser()->GetAdditionalWebUISchemes();
+  std::vector<std::string> additional_webui_schemes;
+  GetContentClient()->browser()->GetAdditionalWebUISchemes(
+      &additional_webui_schemes);
   for (std::vector<std::string>::const_iterator it =
            additional_webui_schemes.begin();
        it != additional_webui_schemes.end();
@@ -494,7 +496,11 @@ void StoragePartitionImplMap::AsyncObliterate(
        ++it) {
     const StoragePartitionConfig& config = it->first;
     if (config.partition_domain == partition_domain) {
-      it->second->AsyncClearData(StoragePartition::kAllStorage);
+      it->second->ClearDataForUnboundedRange(
+          // All except shader cache.
+          StoragePartition::REMOVE_DATA_MASK_ALL &
+            (~StoragePartition::REMOVE_DATA_MASK_SHADER_CACHE),
+          StoragePartition::QUOTA_MANAGED_STORAGE_MASK_ALL);
       if (!config.in_memory) {
         paths_to_keep.push_back(it->second->GetPath());
       }

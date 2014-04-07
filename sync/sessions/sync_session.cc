@@ -15,26 +15,28 @@
 namespace syncer {
 namespace sessions {
 
+// static
+SyncSession* SyncSession::Build(SyncSessionContext* context,
+                                Delegate* delegate) {
+  return new SyncSession(context, delegate);
+}
+
 SyncSession::SyncSession(
     SyncSessionContext* context,
-    Delegate* delegate,
-    const SyncSourceInfo& source)
+    Delegate* delegate)
     : context_(context),
-      source_(source),
       delegate_(delegate) {
   status_controller_.reset(new StatusController());
-  debug_info_sources_list_.push_back(source_);
 }
 
 SyncSession::~SyncSession() {}
 
-void SyncSession::CoalesceSources(const SyncSourceInfo& source) {
-  debug_info_sources_list_.push_back(source);
-  CoalesceStates(source.types, &source_.types);
-  source_.updates_source = source.updates_source;
+SyncSessionSnapshot SyncSession::TakeSnapshot() const {
+  return TakeSnapshotWithSource(sync_pb::GetUpdatesCallerInfo::UNKNOWN);
 }
 
-SyncSessionSnapshot SyncSession::TakeSnapshot() const {
+SyncSessionSnapshot SyncSession::TakeSnapshotWithSource(
+  sync_pb::GetUpdatesCallerInfo::GetUpdatesSource legacy_updates_source) const {
   syncable::Directory* dir = context_->directory();
 
   ProgressMarkerMap download_progress_markers;
@@ -51,19 +53,28 @@ SyncSessionSnapshot SyncSession::TakeSnapshot() const {
   SyncSessionSnapshot snapshot(
       status_controller_->model_neutral_state(),
       download_progress_markers,
-      delegate_->IsSyncingCurrentlySilenced(),
+      delegate_->IsCurrentlyThrottled(),
       status_controller_->num_encryption_conflicts(),
       status_controller_->num_hierarchy_conflicts(),
       status_controller_->num_server_conflicts(),
-      source_,
-      debug_info_sources_list_,
       context_->notifications_enabled(),
       dir->GetEntriesCount(),
       status_controller_->sync_start_time(),
       num_entries_by_type,
-      num_to_delete_entries_by_type);
+      num_to_delete_entries_by_type,
+      legacy_updates_source);
 
   return snapshot;
+}
+
+void SyncSession::SendSyncCycleEndEventNotification(
+    sync_pb::GetUpdatesCallerInfo::GetUpdatesSource source) {
+  SyncEngineEvent event(SyncEngineEvent::SYNC_CYCLE_ENDED);
+  event.snapshot = TakeSnapshotWithSource(source);
+
+  DVLOG(1) << "Sending cycle end event with snapshot: "
+      << event.snapshot.ToString();
+  context()->NotifyListeners(event);
 }
 
 void SyncSession::SendEventNotification(SyncEngineEvent::EventCause cause) {

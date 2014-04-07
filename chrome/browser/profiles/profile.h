@@ -10,9 +10,8 @@
 #include <string>
 
 #include "base/basictypes.h"
-#include "base/hash_tables.h"
+#include "base/containers/hash_tables.h"
 #include "base/logging.h"
-#include "chrome/browser/net/pref_proxy_config_tracker.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/content_browser_client.h"
 #include "net/url_request/url_request_job_factory.h"
@@ -23,7 +22,8 @@ class ExtensionSpecialStoragePolicy;
 class FaviconService;
 class HostContentSettingsMap;
 class PasswordStore;
-class PrefRegistrySyncable;
+class PrefProxyConfigTracker;
+class PrefService;
 class PromoCounter;
 class ProtocolHandlerRegistry;
 class TestingProfile;
@@ -64,11 +64,13 @@ namespace net {
 class SSLConfigService;
 }
 
-namespace policy {
-class ManagedModePolicyProvider;
-class PolicyService;
+namespace user_prefs {
+class PrefRegistrySyncable;
 }
 
+// Instead of adding more members to Profile, consider creating a
+// BrowserContextKeyedService. See
+// http://dev.chromium.org/developers/design-documents/profile-architecture
 class Profile : public content::BrowserContext {
  public:
   // Profile services are accessed with the following parameter. This parameter
@@ -97,12 +99,19 @@ class Profile : public content::BrowserContext {
   };
 
   enum CreateStatus {
-    // Profile services were not created.
-    CREATE_STATUS_FAIL,
+    // Profile services were not created due to a local error (e.g., disk full).
+    CREATE_STATUS_LOCAL_FAIL,
+    // Profile services were not created due to a remote error (e.g., network
+    // down during limited-user registration).
+    CREATE_STATUS_REMOTE_FAIL,
     // Profile created but before initializing extensions and promo resources.
     CREATE_STATUS_CREATED,
     // Profile is created, extensions and promo resources are initialized.
     CREATE_STATUS_INITIALIZED,
+    // Profile creation (managed-user registration, generally) was canceled
+    // by the user.
+    CREATE_STATUS_CANCELED,
+    MAX_CREATE_STATUS  // For histogram display.
   };
 
   enum CreateMode {
@@ -123,6 +132,8 @@ class Profile : public content::BrowserContext {
 
   class Delegate {
    public:
+    virtual ~Delegate();
+
     // Called when creation of the profile is finished.
     virtual void OnProfileCreated(Profile* profile,
                                   bool success,
@@ -130,14 +141,14 @@ class Profile : public content::BrowserContext {
   };
 
   // Key used to bind profile to the widget with which it is associated.
-  static const char* const kProfileKey;
+  static const char kProfileKey[];
 
   Profile();
-  virtual ~Profile() {}
+  virtual ~Profile();
 
   // Profile prefs are registered as soon as the prefs are loaded for the first
   // time.
-  static void RegisterUserPrefs(PrefRegistrySyncable* registry);
+  static void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
 
   // Gets task runner for I/O operations associated with |profile|.
   static scoped_refptr<base::SequencedTaskRunner> GetTaskRunnerForProfile(
@@ -187,6 +198,9 @@ class Profile : public content::BrowserContext {
   // profile is not incognito.
   virtual Profile* GetOriginalProfile() = 0;
 
+  // Returns whether the profile is managed (see ManagedUserService).
+  virtual bool IsManaged() = 0;
+
   // Returns a pointer to the TopSites (thumbnail manager) instance
   // for this profile.
   virtual history::TopSites* GetTopSites() = 0;
@@ -203,12 +217,6 @@ class Profile : public content::BrowserContext {
   // Accessor. The instance is created upon first access.
   virtual ExtensionSpecialStoragePolicy*
       GetExtensionSpecialStoragePolicy() = 0;
-
-  // Returns the ManagedModePolicyProvider for this profile, if it exists.
-  virtual policy::ManagedModePolicyProvider* GetManagedModePolicyProvider() = 0;
-
-  // Returns the PolicyService that provides policies for this profile.
-  virtual policy::PolicyService* GetPolicyService() = 0;
 
   // Retrieves a pointer to the PrefService that manages the
   // preferences for this user profile.
@@ -231,10 +239,6 @@ class Profile : public content::BrowserContext {
 
   // Returns the Hostname <-> Content settings map for this profile.
   virtual HostContentSettingsMap* GetHostContentSettingsMap() = 0;
-
-  // Returns the ProtocolHandlerRegistry, creating if not yet created.
-  // TODO(smckay): replace this with access via ProtocolHandlerRegistryFactory.
-  virtual ProtocolHandlerRegistry* GetProtocolHandlerRegistry() = 0;
 
   // Return whether 2 profiles are the same. 2 profiles are the same if they
   // represent the same profile. This can happen if there is pointer equality
@@ -325,7 +329,7 @@ class Profile : public content::BrowserContext {
   std::string GetDebugName();
 
   // Returns whether it is a guest session.
-  bool IsGuestSession() const;
+  virtual bool IsGuestSession() const;
 
   // Did the user restore the last session? This is set by SessionRestore.
   void set_restored_last_session(bool restored_last_session) {
@@ -364,6 +368,10 @@ class Profile : public content::BrowserContext {
     return 0 == accessibility_pause_level_;
   }
 
+  // Returns whether the profile is new.  A profile is new if the browser has
+  // not been shut down since the profile was created.
+  bool IsNewProfile();
+
   // Checks whether sync is configurable by the user. Returns false if sync is
   // disabled or controlled by configuration management.
   bool IsSyncAccessible();
@@ -375,11 +383,6 @@ class Profile : public content::BrowserContext {
 
   // Creates an OffTheRecordProfile which points to this Profile.
   Profile* CreateOffTheRecordProfile();
-
- protected:
-  // TODO(erg, willchan): Remove friendship once |ProfileIOData| is made into
-  //     a |ProfileKeyedService|.
-  friend class OffTheRecordProfileImpl;
 
  private:
   bool restored_last_session_;
@@ -393,6 +396,8 @@ class Profile : public content::BrowserContext {
   // increment and decrement the level, respectively, rather than set it to
   // true or false, so that calls can be nested.
   int accessibility_pause_level_;
+
+  DISALLOW_COPY_AND_ASSIGN(Profile);
 };
 
 #if defined(COMPILER_GCC)

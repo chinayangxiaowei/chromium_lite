@@ -5,14 +5,19 @@
 #ifndef CHROME_BROWSER_SYNC_FILE_SYSTEM_REMOTE_FILE_SYNC_SERVICE_H_
 #define CHROME_BROWSER_SYNC_FILE_SYSTEM_REMOTE_FILE_SYNC_SERVICE_H_
 
+#include <map>
 #include <string>
 
 #include "base/basictypes.h"
 #include "chrome/browser/sync_file_system/conflict_resolution_policy.h"
-#include "webkit/fileapi/file_system_url.h"
-#include "webkit/fileapi/syncable/sync_callbacks.h"
+#include "chrome/browser/sync_file_system/sync_callbacks.h"
+#include "webkit/browser/fileapi/file_system_url.h"
 
 class GURL;
+
+namespace base {
+class ListValue;
+}
 
 namespace sync_file_system {
 
@@ -100,6 +105,8 @@ class RemoteFileSyncService {
       const GURL& origin,
       const SyncStatusCallback& callback) = 0;
 
+  // Re-enables |origin| that was previously disabled. If |origin| is not a
+  // SyncFS app, then the origin is effectively ignored.
   virtual void EnableOriginForTrackingChanges(
       const GURL& origin,
       const SyncStatusCallback& callback) = 0;
@@ -132,17 +139,17 @@ class RemoteFileSyncService {
   // Returns true if the file |url| is marked conflicted in the remote service.
   virtual bool IsConflicting(const fileapi::FileSystemURL& url) = 0;
 
-  // Returns the metadata of a remote file pointed by |url|.
-  virtual void GetRemoteFileMetadata(
-      const fileapi::FileSystemURL& url,
-      const SyncFileMetadataCallback& callback) = 0;
-
   // Returns the current remote service state (should equal to the value
   // returned by the last OnRemoteServiceStateUpdated notification.
   virtual RemoteServiceState GetCurrentState() const = 0;
 
-  // Returns the service name that backs this remote_file_sync_service.
-  virtual const char* GetServiceName() const = 0;
+  // Returns all origins along with an arbitrary string description of their
+  // corresponding sync statuses.
+  typedef std::map<GURL, std::string> OriginStatusMap;
+  virtual void GetOriginStatusMap(OriginStatusMap* status_map) = 0;
+
+  // Returns file metadata for |origin|.
+  virtual scoped_ptr<base::ListValue> DumpFiles(const GURL& origin) = 0;
 
   // Enables or disables the background sync.
   // Setting this to false should disable the synchronization (and make

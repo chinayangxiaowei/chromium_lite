@@ -11,7 +11,7 @@
 #include "base/logging.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/path_service.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "net/base/big_endian.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -83,7 +83,8 @@ class MockResourceBundleDelegate : public ui::ResourceBundle::Delegate {
     *value = GetLocalizedStringMock(message_id);
     return true;
   }
-  MOCK_METHOD1(GetFontMock, gfx::Font*(ui::ResourceBundle::FontStyle style));
+  MOCK_METHOD1(GetFontMock,
+               gfx::Font*(ui::ResourceBundle::FontStyle style));
   virtual scoped_ptr<gfx::Font> GetFont(
       ui::ResourceBundle::FontStyle style) OVERRIDE {
     return scoped_ptr<gfx::Font>(GetFontMock(style));
@@ -265,8 +266,7 @@ TEST_F(ResourceBundleTest, DelegateLoadDataResourceBytes) {
   ui::ScaleFactor scale_factor = ui::SCALE_FACTOR_NONE;
 
   EXPECT_CALL(delegate, LoadDataResourceBytes(resource_id, scale_factor))
-      .Times(1)
-      .WillOnce(Return(static_memory));
+      .Times(1).WillOnce(Return(static_memory.get()));
 
   scoped_refptr<base::RefCountedStaticMemory> result =
       resource_bundle->LoadDataResourceBytesForScale(resource_id, scale_factor);
@@ -308,7 +308,7 @@ TEST_F(ResourceBundleTest, DelegateGetLocalizedString) {
   EXPECT_EQ(data, result);
 }
 
-TEST_F(ResourceBundleTest, DelegateGetFont) {
+TEST_F(ResourceBundleTest, DelegateGetFontList) {
   MockResourceBundleDelegate delegate;
   ResourceBundle* resource_bundle = CreateResourceBundle(&delegate);
 
@@ -318,6 +318,10 @@ TEST_F(ResourceBundleTest, DelegateGetFont) {
   EXPECT_CALL(delegate, GetFontMock(_))
       .Times(8)
       .WillRepeatedly(Return(test_font));
+
+  const gfx::FontList* font_list =
+      &resource_bundle->GetFontList(ui::ResourceBundle::BaseFont);
+  EXPECT_TRUE(font_list);
 
   const gfx::Font* font =
       &resource_bundle->GetFont(ui::ResourceBundle::BaseFont);
@@ -334,8 +338,7 @@ TEST_F(ResourceBundleTest, LocaleDataPakExists) {
 
 class ResourceBundleImageTest : public ResourceBundleTest {
  public:
-  ResourceBundleImageTest() : locale_pack_(NULL) {
-  }
+  ResourceBundleImageTest() {}
 
   virtual ~ResourceBundleImageTest() {
   }
@@ -497,6 +500,39 @@ TEST_F(ResourceBundleImageTest, GetImageNamedFallback1x) {
   EXPECT_EQ(20, image_rep.pixel_width());
   EXPECT_EQ(20, image_rep.pixel_height());
 }
+
+#if defined(OS_WIN)
+// Tests GetImageNamed() behaves properly when the size of a scaled image
+// requires rounding as a result of using a non-integer scale factor.
+// Scale factors of 140 and 1805 are Windows specific.
+TEST_F(ResourceBundleImageTest, GetImageNamedFallback1xRounding) {
+  base::FilePath data_path = dir_path().AppendASCII("sample.pak");
+  base::FilePath data_140P_path = dir_path().AppendASCII("sample_140P.pak");
+  base::FilePath data_180P_path = dir_path().AppendASCII("sample_180P.pak");
+
+  CreateDataPackWithSingleBitmap(data_path, 8, base::StringPiece());
+  // Mark 140% and 180% images as requiring 1x fallback.
+  CreateDataPackWithSingleBitmap(data_140P_path, 8, base::StringPiece(
+    reinterpret_cast<const char*>(kPngScaleChunk),
+    arraysize(kPngScaleChunk)));
+  CreateDataPackWithSingleBitmap(data_180P_path, 8, base::StringPiece(
+    reinterpret_cast<const char*>(kPngScaleChunk),
+    arraysize(kPngScaleChunk)));
+
+  ResourceBundle* resource_bundle = CreateResourceBundleWithEmptyLocalePak();
+  resource_bundle->AddDataPackFromPath(data_path, SCALE_FACTOR_100P);
+  resource_bundle->AddDataPackFromPath(data_140P_path, SCALE_FACTOR_140P);
+  resource_bundle->AddDataPackFromPath(data_180P_path, SCALE_FACTOR_180P);
+
+  // Non-integer dimensions should be rounded up.
+  gfx::ImageSkia* image_skia = resource_bundle->GetImageSkiaNamed(3);
+  gfx::ImageSkiaRep image_rep =
+    image_skia->GetRepresentation(ui::SCALE_FACTOR_140P);
+  EXPECT_EQ(12, image_rep.pixel_width());
+  image_rep = image_skia->GetRepresentation(ui::SCALE_FACTOR_180P);
+  EXPECT_EQ(15, image_rep.pixel_width());
+}
+#endif
 
 TEST_F(ResourceBundleImageTest, FallbackToNone) {
   base::FilePath data_default_path = dir_path().AppendASCII("sample.pak");

@@ -6,13 +6,11 @@
 
 #include <string>
 
+#include "ash/session_state_delegate.h"
 #include "ash/shell.h"
-#include "ash/shell_delegate.h"
 #include "ash/volume_control_delegate.h"
-#include "base/utf_string_conversions.h"
-#include "base/message_loop.h"
-#include "base/string16.h"
-#include "base/time.h"
+#include "base/message_loop/message_loop.h"
+#include "base/time/time.h"
 
 namespace ash {
 namespace test {
@@ -33,18 +31,6 @@ class TestVolumeControlDelegate : public VolumeControlDelegate {
   virtual bool HandleVolumeUp(const ui::Accelerator& accelerator) OVERRIDE {
     return true;
   }
-  virtual void SetVolumePercent(double percent) OVERRIDE {
-  }
-  virtual bool IsAudioMuted() const OVERRIDE {
-    return true;
-  }
-  virtual void SetAudioMuted(bool muted) OVERRIDE {
-  }
-  virtual float GetVolumeLevel() const OVERRIDE {
-    return 0.0;
-  }
-  virtual void SetVolumeLevel(float level) OVERRIDE {
-  }
 
  private:
   DISALLOW_COPY_AND_ASSIGN(TestVolumeControlDelegate);
@@ -53,12 +39,10 @@ class TestVolumeControlDelegate : public VolumeControlDelegate {
 }  // namespace
 
 TestSystemTrayDelegate::TestSystemTrayDelegate()
-    : wifi_enabled_(true),
-      cellular_enabled_(true),
-      bluetooth_enabled_(true),
+    : bluetooth_enabled_(true),
       caps_lock_enabled_(false),
-      volume_control_delegate_(
-          ALLOW_THIS_IN_INITIALIZER_LIST(new TestVolumeControlDelegate)) {
+      should_show_display_notification_(false),
+      volume_control_delegate_(new TestVolumeControlDelegate) {
 }
 
 TestSystemTrayDelegate::~TestSystemTrayDelegate() {
@@ -75,24 +59,15 @@ bool TestSystemTrayDelegate::GetTrayVisibilityOnStartup() {
 }
 
 // Overridden from SystemTrayDelegate:
-const string16 TestSystemTrayDelegate::GetUserDisplayName() const {
-  return UTF8ToUTF16("Über tray Über tray Über tray Über tray");
-}
-
-const std::string TestSystemTrayDelegate::GetUserEmail() const {
-  return "über@tray";
-}
-
-const gfx::ImageSkia& TestSystemTrayDelegate::GetUserImage() const {
-  return null_image_;
-}
-
 user::LoginStatus TestSystemTrayDelegate::GetUserLoginStatus() const {
   // At new user image screen manager->IsUserLoggedIn() would return true
   // but there's no browser session available yet so use SessionStarted().
-  if (!Shell::GetInstance()->delegate()->IsSessionStarted())
+  SessionStateDelegate* delegate =
+      Shell::GetInstance()->session_state_delegate();
+
+  if (!delegate->IsActiveUserSessionStarted())
     return ash::user::LOGGED_IN_NONE;
-  if (Shell::GetInstance()->IsScreenLocked())
+  if (delegate->IsScreenLocked())
     return user::LOGGED_IN_LOCKED;
   // TODO(nkostylev): Support LOGGED_IN_OWNER, LOGGED_IN_GUEST, LOGGED_IN_KIOSK,
   //                  LOGGED_IN_PUBLIC.
@@ -110,7 +85,21 @@ const std::string TestSystemTrayDelegate::GetEnterpriseDomain() const {
   return std::string();
 }
 
-const string16 TestSystemTrayDelegate::GetEnterpriseMessage() const {
+const base::string16 TestSystemTrayDelegate::GetEnterpriseMessage() const {
+  return string16();
+}
+
+const std::string TestSystemTrayDelegate::GetLocallyManagedUserManager() const {
+  return std::string();
+}
+
+const base::string16 TestSystemTrayDelegate::GetLocallyManagedUserManagerName()
+    const {
+  return string16();
+}
+
+const base::string16 TestSystemTrayDelegate::GetLocallyManagedUserMessage()
+    const {
   return string16();
 }
 
@@ -122,26 +111,31 @@ base::HourClockType TestSystemTrayDelegate::GetHourClockType() const {
   return base::k24HourClock;
 }
 
-PowerSupplyStatus TestSystemTrayDelegate::GetPowerSupplyStatus() const {
-  return PowerSupplyStatus();
-}
-
-void TestSystemTrayDelegate::RequestStatusUpdate() const {
-}
-
 void TestSystemTrayDelegate::ShowSettings() {
+}
+
+bool TestSystemTrayDelegate::ShouldShowSettings() {
+  return true;
 }
 
 void TestSystemTrayDelegate::ShowDateSettings() {
 }
 
-void TestSystemTrayDelegate::ShowNetworkSettings() {
+void TestSystemTrayDelegate::ShowNetworkSettings(
+    const std::string& service_path) {
 }
 
 void TestSystemTrayDelegate::ShowBluetoothSettings() {
 }
 
 void TestSystemTrayDelegate::ShowDisplaySettings() {
+}
+
+void TestSystemTrayDelegate::ShowChromeSlow() {
+}
+
+bool TestSystemTrayDelegate::ShouldShowDisplayNotification() {
+  return should_show_display_notification_;
 }
 
 void TestSystemTrayDelegate::ShowDriveSettings() {
@@ -156,24 +150,33 @@ void TestSystemTrayDelegate::ShowHelp() {
 void TestSystemTrayDelegate::ShowAccessibilityHelp() {
 }
 
+void TestSystemTrayDelegate::ShowAccessibilitySettings() {
+}
+
 void TestSystemTrayDelegate::ShowPublicAccountInfo() {
 }
 
 void TestSystemTrayDelegate::ShowEnterpriseInfo() {
 }
 
+void TestSystemTrayDelegate::ShowLocallyManagedUserInfo() {
+}
+
+void TestSystemTrayDelegate::ShowUserLogin() {
+}
+
 void TestSystemTrayDelegate::ShutDown() {
-  MessageLoop::current()->Quit();
+  base::MessageLoop::current()->Quit();
 }
 
 void TestSystemTrayDelegate::SignOut() {
-  MessageLoop::current()->Quit();
+  base::MessageLoop::current()->Quit();
 }
 
 void TestSystemTrayDelegate::RequestLockScreen() {
 }
 
-void TestSystemTrayDelegate::RequestRestart() {
+void TestSystemTrayDelegate::RequestRestartForUpdate() {
 }
 
 void TestSystemTrayDelegate::GetAvailableBluetoothDevices(
@@ -186,7 +189,7 @@ void TestSystemTrayDelegate::BluetoothStartDiscovering() {
 void TestSystemTrayDelegate::BluetoothStopDiscovering() {
 }
 
-void TestSystemTrayDelegate::ToggleBluetoothConnection(
+void TestSystemTrayDelegate::ConnectToBluetoothDevice(
     const std::string& address) {
 }
 
@@ -206,55 +209,22 @@ void TestSystemTrayDelegate::SwitchIME(const std::string& ime_id) {
 void TestSystemTrayDelegate::ActivateIMEProperty(const std::string& key) {
 }
 
-void TestSystemTrayDelegate::CancelDriveOperation(const base::FilePath&) {
+void TestSystemTrayDelegate::CancelDriveOperation(int32 operation_id) {
 }
 
 void TestSystemTrayDelegate::GetDriveOperationStatusList(
     ash::DriveOperationStatusList*) {
 }
 
-void TestSystemTrayDelegate::GetMostRelevantNetworkIcon(NetworkIconInfo* info,
-                                                        bool large) {
+void TestSystemTrayDelegate::ConfigureNetwork(const std::string& network_id) {
 }
 
-void TestSystemTrayDelegate::GetVirtualNetworkIcon(ash::NetworkIconInfo* info) {
+void TestSystemTrayDelegate::EnrollOrConfigureNetwork(
+    const std::string& network_id,
+    gfx::NativeWindow parent_window) {
 }
 
-void TestSystemTrayDelegate::GetAvailableNetworks(
-    std::vector<NetworkIconInfo>* list) {
-}
-
-void TestSystemTrayDelegate::GetVirtualNetworks(
-    std::vector<NetworkIconInfo>* list) {
-}
-
-void TestSystemTrayDelegate::ConnectToNetwork(const std::string& network_id) {
-}
-
-void TestSystemTrayDelegate::GetNetworkAddresses(
-    std::string* ip_address,
-    std::string* ethernet_mac_address,
-    std::string* wifi_mac_address) {
-  *ip_address = "127.0.0.1";
-  *ethernet_mac_address = "00:11:22:33:44:55";
-  *wifi_mac_address = "66:77:88:99:00:11";
-}
-
-void TestSystemTrayDelegate::RequestNetworkScan() {
-}
-
-void TestSystemTrayDelegate::AddBluetoothDevice() {
-}
-
-void TestSystemTrayDelegate::ToggleAirplaneMode() {
-}
-
-void TestSystemTrayDelegate::ToggleWifi() {
-  wifi_enabled_ = !wifi_enabled_;
-}
-
-void TestSystemTrayDelegate::ToggleMobile() {
-  cellular_enabled_ = !cellular_enabled_;
+void TestSystemTrayDelegate::ManageBluetoothDevices() {
 }
 
 void TestSystemTrayDelegate::ToggleBluetooth() {
@@ -263,6 +233,12 @@ void TestSystemTrayDelegate::ToggleBluetooth() {
 
 bool TestSystemTrayDelegate::IsBluetoothDiscovering() {
   return false;
+}
+
+void TestSystemTrayDelegate::ShowMobileSimDialog() {
+}
+
+void TestSystemTrayDelegate::ShowMobileSetup(const std::string& network_id) {
 }
 
 void TestSystemTrayDelegate::ShowOtherWifi() {
@@ -274,49 +250,17 @@ void TestSystemTrayDelegate::ShowOtherVPN() {
 void TestSystemTrayDelegate::ShowOtherCellular() {
 }
 
-bool TestSystemTrayDelegate::IsNetworkConnected() {
-  return true;
-}
-
-bool TestSystemTrayDelegate::GetWifiAvailable() {
-  return true;
-}
-
-bool TestSystemTrayDelegate::GetMobileAvailable() {
-  return true;
-}
-
 bool TestSystemTrayDelegate::GetBluetoothAvailable() {
   return true;
-}
-
-bool TestSystemTrayDelegate::GetWifiEnabled() {
-  return wifi_enabled_;
-}
-
-bool TestSystemTrayDelegate::GetMobileEnabled() {
-  return cellular_enabled_;
 }
 
 bool TestSystemTrayDelegate::GetBluetoothEnabled() {
   return bluetooth_enabled_;
 }
 
-bool TestSystemTrayDelegate::GetMobileScanSupported() {
-  return true;
-}
-
 bool TestSystemTrayDelegate::GetCellularCarrierInfo(std::string* carrier_id,
                                                     std::string* topup_url,
                                                     std::string* setup_url) {
-  return false;
-}
-
-bool TestSystemTrayDelegate::GetWifiScanning() {
-  return false;
-}
-
-bool TestSystemTrayDelegate::GetCellularInitializing() {
   return false;
 }
 
@@ -351,9 +295,9 @@ int TestSystemTrayDelegate::GetSystemTrayMenuWidth() {
   return 300;
 }
 
-string16 TestSystemTrayDelegate::FormatTimeDuration(
+base::string16 TestSystemTrayDelegate::FormatTimeDuration(
     const base::TimeDelta& delta) const {
-  return string16();
+  return base::string16();
 }
 
 void TestSystemTrayDelegate::MaybeSpeak(const std::string& utterance) const {

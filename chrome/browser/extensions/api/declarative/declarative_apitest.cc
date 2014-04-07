@@ -13,7 +13,6 @@
 #include "chrome/browser/extensions/extension_system_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/browser_thread.h"
@@ -23,14 +22,6 @@ using extensions::RulesRegistryService;
 using extensions::WebRequestRulesRegistry;
 
 class DeclarativeApiTest : public ExtensionApiTest {
- public:
-  DeclarativeApiTest() {}
-  virtual ~DeclarativeApiTest() {}
-
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
-    ExtensionApiTest::SetUpCommandLine(command_line);
-    command_line->AppendSwitch(switches::kEnableExperimentalExtensionApis);
-  }
 };
 
 IN_PROC_BROWSER_TEST_F(DeclarativeApiTest, DeclarativeApi) {
@@ -45,8 +36,7 @@ IN_PROC_BROWSER_TEST_F(DeclarativeApiTest, DeclarativeApi) {
   // is therefore processed after the UnloadExtension task has been executed.
 
   RulesRegistryService* rules_registry_service =
-      extensions::ExtensionSystemFactory::GetForProfile(browser()->profile())->
-      rules_registry_service();
+      extensions::RulesRegistryService::Get(browser()->profile());
   scoped_refptr<RulesRegistry> rules_registry =
       rules_registry_service->GetRulesRegistry(
           extensions::declarative_webrequest_constants::kOnRequest);
@@ -54,12 +44,12 @@ IN_PROC_BROWSER_TEST_F(DeclarativeApiTest, DeclarativeApi) {
   std::vector<linked_ptr<RulesRegistry::Rule> > known_rules;
 
   content::BrowserThread::PostTask(
-      rules_registry->GetOwnerThread(),
+      rules_registry->owner_thread(),
       FROM_HERE,
       base::Bind(base::IgnoreResult(&RulesRegistry::GetAllRules),
                  rules_registry, extension_id, &known_rules));
 
-  content::RunAllPendingInMessageLoop(rules_registry->GetOwnerThread());
+  content::RunAllPendingInMessageLoop(rules_registry->owner_thread());
 
   EXPECT_TRUE(known_rules.empty());
 }

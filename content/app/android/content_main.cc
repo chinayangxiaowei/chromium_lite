@@ -7,6 +7,7 @@
 #include "base/at_exit.h"
 #include "base/base_switches.h"
 #include "base/command_line.h"
+#include "base/debug/trace_event.h"
 #include "base/lazy_instance.h"
 #include "content/public/app/content_main.h"
 #include "content/public/app/content_main_delegate.h"
@@ -35,16 +36,7 @@ static void InitApplicationContext(JNIEnv* env, jclass clazz, jobject context) {
 }
 
 static jint Start(JNIEnv* env, jclass clazz) {
-  const CommandLine& parsed_command_line = *CommandLine::ForCurrentProcess();
-
-  // This is only for browser process. We want to start waiting as early as
-  // possible though here is the common initialization code.
-  if (parsed_command_line.HasSwitch(switches::kWaitForDebugger) &&
-      "" == parsed_command_line.GetSwitchValueASCII(switches::kProcessType)) {
-    LOG(ERROR) << "Browser waiting for GDB because flag "
-               << switches::kWaitForDebugger << " was supplied.";
-    base::debug::WaitForDebugger(24*60*60, false);
-  }
+  TRACE_EVENT0("startup", "content::Start");
 
   DCHECK(!g_content_runner.Get().get());
   g_content_runner.Get().reset(ContentMainRunner::Create());

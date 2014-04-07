@@ -11,11 +11,12 @@
 #include "base/bind.h"
 #include "base/i18n/rtl.h"
 #include "base/logging.h"
-#include "base/message_loop.h"
-#include "base/string_util.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/string_util.h"
 #include "base/win/scoped_hdc.h"
 #include "base/win/scoped_select_object.h"
 #include "ui/base/l10n/l10n_util_win.h"
+#include "ui/base/win/dpi.h"
 #include "ui/base/win/hwnd_util.h"
 #include "ui/base/win/scoped_set_map_mode.h"
 #include "ui/gfx/font.h"
@@ -29,7 +30,7 @@ namespace views {
 static int tooltip_height_ = 0;
 
 // Default timeout for the tooltip displayed using keyboard.
-// Timeout is mentioned in milliseconds.
+// Timeout is measured in milliseconds.
 static const int kDefaultTimeout = 4000;
 
 // static
@@ -78,7 +79,7 @@ TooltipManagerWin::TooltipManagerWin(Widget* widget)
       last_view_out_of_sync_(false),
       tooltip_width_(0),
       keyboard_tooltip_hwnd_(NULL),
-      ALLOW_THIS_IN_INITIALIZER_LIST(keyboard_tooltip_factory_(this)) {
+      keyboard_tooltip_factory_(this) {
   DCHECK(widget);
   DCHECK(widget->GetNativeView());
 }
@@ -153,7 +154,7 @@ LRESULT TooltipManagerWin::OnNotify(int w_param,
           // View under the mouse is out of sync, determine it now.
           View* root_view = widget_->GetRootView();
           last_tooltip_view_ =
-              root_view->GetEventHandlerForPoint(last_mouse_pos_);
+              root_view->GetTooltipHandlerForPoint(last_mouse_pos_);
           last_view_out_of_sync_ = false;
         }
         // Tooltip control is asking for the tooltip to display.
@@ -226,6 +227,7 @@ bool TooltipManagerWin::SetTooltipPosition(int text_x, int text_y) {
   // Calculate the bounds the tooltip will get.
   gfx::Point view_loc;
   View::ConvertPointToScreen(last_tooltip_view_, &view_loc);
+  view_loc = ui::win::DIPToScreenPoint(view_loc);
   RECT bounds = { view_loc.x() + text_x,
                   view_loc.y() + text_y,
                   view_loc.x() + text_x + tooltip_width_,
@@ -272,7 +274,7 @@ int TooltipManagerWin::CalcTooltipHeight() {
 
 void TooltipManagerWin::UpdateTooltip(const gfx::Point& mouse_pos) {
   View* root_view = widget_->GetRootView();
-  View* view = root_view->GetEventHandlerForPoint(mouse_pos);
+  View* view = root_view->GetTooltipHandlerForPoint(mouse_pos);
   if (view != last_tooltip_view_) {
     // NOTE: This *must* be sent regardless of the visibility of the tooltip.
     // It triggers Windows to ask for the tooltip again.
@@ -298,13 +300,15 @@ void TooltipManagerWin::UpdateTooltip(const gfx::Point& mouse_pos) {
 }
 
 void TooltipManagerWin::OnMouse(UINT u_msg, WPARAM w_param, LPARAM l_param) {
-  gfx::Point mouse_pos(l_param);
+  gfx::Point mouse_pos_in_pixels(l_param);
+  gfx::Point mouse_pos = ui::win::ScreenToDIPPoint(mouse_pos_in_pixels);
 
   if (u_msg >= WM_NCMOUSEMOVE && u_msg <= WM_NCXBUTTONDBLCLK) {
     // NC message coordinates are in screen coordinates.
-    POINT temp = mouse_pos.ToPOINT();
+    POINT temp = mouse_pos_in_pixels.ToPOINT();
     ::MapWindowPoints(HWND_DESKTOP, GetParent(), &temp, 1);
-    mouse_pos.SetPoint(temp.x, temp.y);
+    mouse_pos_in_pixels.SetPoint(temp.x, temp.y);
+    mouse_pos = ui::win::ScreenToDIPPoint(mouse_pos_in_pixels);
   }
 
   if (u_msg != WM_MOUSEMOVE || last_mouse_pos_ != mouse_pos) {
@@ -372,7 +376,7 @@ void TooltipManagerWin::ShowKeyboardTooltip(View* focused_view) {
   ::SetWindowPos(keyboard_tooltip_hwnd_, NULL, rect_bounds.left,
                  rect_bounds.top, 0, 0,
                  SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOSIZE);
-  MessageLoop::current()->PostDelayedTask(
+  base::MessageLoop::current()->PostDelayedTask(
       FROM_HERE,
       base::Bind(&TooltipManagerWin::DestroyKeyboardTooltipWindow,
                  keyboard_tooltip_factory_.GetWeakPtr(),

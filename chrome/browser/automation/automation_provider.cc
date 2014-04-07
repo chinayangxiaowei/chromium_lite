@@ -15,16 +15,15 @@
 #include "base/json/json_string_value_serializer.h"
 #include "base/json/json_writer.h"
 #include "base/json/string_escape.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/path_service.h"
 #include "base/prefs/pref_service.h"
-#include "base/process_util.h"
 #include "base/stl_util.h"
-#include "base/string_util.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/threading/thread.h"
-#include "base/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/automation/automation_browser_tracker.h"
@@ -74,10 +73,11 @@
 #include "net/proxy/proxy_service.h"
 #include "net/url_request/url_request_context.h"
 #include "net/url_request/url_request_context_getter.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebFindOptions.h"
+#include "third_party/WebKit/public/web/WebFindOptions.h"
 
 #if defined(OS_CHROMEOS)
-#include "chrome/browser/chromeos/login/user_manager.h"
+#include "chromeos/chromeos_switches.h"
+#include "chromeos/login/login_state.h"
 #endif  // defined(OS_CHROMEOS)
 
 using WebKit::WebFindOptions;
@@ -209,15 +209,16 @@ bool AutomationProvider::InitializeChannel(const std::string& channel_id) {
       effective_channel_id,
       GetChannelMode(use_named_interface),
       this,
-      BrowserThread::GetMessageLoopProxyForThread(BrowserThread::IO)));
-  channel_->AddFilter(automation_resource_message_filter_);
+      BrowserThread::GetMessageLoopProxyForThread(BrowserThread::IO).get()));
+  channel_->AddFilter(automation_resource_message_filter_.get());
 
 #if defined(OS_CHROMEOS)
   if (use_initial_load_observers_) {
     // Wait for webui login to be ready.
     // Observer will delete itself.
-    if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kLoginManager) &&
-        !chromeos::UserManager::Get()->IsUserLoggedIn()) {
+    if (CommandLine::ForCurrentProcess()->HasSwitch(
+            chromeos::switches::kLoginManager) &&
+        !chromeos::LoginState::Get()->IsUserLoggedIn()) {
       login_webui_ready_ = false;
       new OOBEWebuiReadyObserver(this);
     }
@@ -349,6 +350,9 @@ DictionaryValue* AutomationProvider::GetDictionaryFromDownloadItem(
     case content::DOWNLOAD_DANGER_TYPE_DANGEROUS_HOST:
       download_danger_type_string = "DANGEROUS_HOST";
       break;
+    case content::DOWNLOAD_DANGER_TYPE_POTENTIALLY_UNWANTED:
+      download_danger_type_string = "POTENTIALLY_UNWANTED";
+      break;
     case content::DOWNLOAD_DANGER_TYPE_MAX:
       NOTREACHED();
       download_danger_type_string = "UNKNOWN";
@@ -415,7 +419,6 @@ bool AutomationProvider::OnMessageReceived(const IPC::Message& message) {
     IPC_MESSAGE_HANDLER(AutomationMsg_Cut, Cut)
     IPC_MESSAGE_HANDLER(AutomationMsg_Copy, Copy)
     IPC_MESSAGE_HANDLER(AutomationMsg_Paste, Paste)
-    IPC_MESSAGE_HANDLER(AutomationMsg_KeyPress, KeyPress)
     IPC_MESSAGE_HANDLER(AutomationMsg_ReloadAsync, ReloadAsync)
     IPC_MESSAGE_HANDLER(AutomationMsg_StopAsync, StopAsync)
     IPC_MESSAGE_HANDLER(AutomationMsg_SetPageFontSize, OnSetPageFontSize)
@@ -664,38 +667,6 @@ void AutomationProvider::Paste(int tab_handle) {
   view->Paste();
 }
 
-
-
-void AutomationProvider::KeyPress(int tab_handle, int key) {
-  RenderViewHost* view = GetViewForTab(tab_handle);
-  if (!view) {
-    NOTREACHED();
-    return;
-  }
-
-  content::NativeWebKeyboardEvent event;
-  event.nativeKeyCode = 0;
-  event.windowsKeyCode = key;
-  event.setKeyIdentifierFromWindowsKeyCode();
-  event.modifiers = 0;
-  event.isSystemKey = false;
-  event.timeStampSeconds = base::Time::Now().ToDoubleT();
-  event.skip_in_browser = true;
-
-  event.text[0] = key;
-  event.unmodifiedText[0] = key;
-  event.type = WebKit::WebInputEvent::RawKeyDown;
-  view->ForwardKeyboardEvent(event);
-
-  event.type = WebKit::WebInputEvent::Char;
-  view->ForwardKeyboardEvent(event);
-
-  event.type = WebKit::WebInputEvent::KeyUp;
-  event.text[0] = 0;
-  event.unmodifiedText[0] = 0;
-  view->ForwardKeyboardEvent(event);
-}
-
 void AutomationProvider::ReloadAsync(int tab_handle) {
   if (tab_tracker_->ContainsHandle(tab_handle)) {
     NavigationController* tab = tab_tracker_->GetResource(tab_handle);
@@ -765,12 +736,12 @@ void AutomationProvider::JavaScriptStressTestControl(int tab_handle,
       view->GetRoutingID(), cmd, param));
 }
 
-void AutomationProvider::BeginTracing(const std::string& categories,
+void AutomationProvider::BeginTracing(const std::string& category_patterns,
                                       bool* success) {
   tracing_data_.trace_output.clear();
   *success = TraceController::GetInstance()->BeginTracing(
       this,
-      categories,
+      category_patterns,
       base::debug::TraceLog::RECORD_UNTIL_FULL);
 }
 

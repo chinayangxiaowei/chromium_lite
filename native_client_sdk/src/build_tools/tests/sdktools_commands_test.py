@@ -46,7 +46,7 @@ class TestCommands(SdkToolsTestCase):
     try:
       dummy_path = os.path.join(temp_dir, filename)
       with open(dummy_path, 'w') as stream:
-        stream.write('Dummy stuff for %s' % (bundle_name,))
+        stream.write('Dummy stuff for %s' % bundle_name)
 
       # Build the tarfile directly into the server's directory.
       tar_path = os.path.join(self.basedir, tarname)
@@ -98,6 +98,18 @@ class TestCommands(SdkToolsTestCase):
     self.assertTrue('pepper_23' in output)
     self.assertTrue('pepper_24' in output)
     self.assertFalse(re.search(r'[uU]nknown', output))
+
+  def testInfoMultipleArchives(self):
+    """The info command should display multiple archives."""
+    bundle = self._AddDummyBundle(self.manifest, 'pepper_26')
+    archive2 = self._MakeDummyArchive('pepper_26', tarname='pepper_26_more',
+                                      filename='dummy2.txt')
+    archive2.host_os = 'all'
+    bundle.AddArchive(archive2)
+    self._WriteManifest()
+    output = self._Run(['info', 'pepper_26'])
+    self.assertTrue('pepper_26' in output)
+    self.assertTrue('pepper_26_more' in output)
 
   def testListBasic(self):
     """The list command should display basic information about remote
@@ -179,7 +191,7 @@ class TestCommands(SdkToolsTestCase):
     """The update command should install the contents of a bundle to the SDK."""
     self._AddDummyBundle(self.manifest, 'pepper_23')
     self._WriteManifest()
-    output = self._Run(['update', 'pepper_23'])
+    self._Run(['update', 'pepper_23'])
     self.assertTrue(os.path.exists(
         os.path.join(self.basedir, 'nacl_sdk', 'pepper_23', 'dummy.txt')))
 
@@ -189,7 +201,7 @@ class TestCommands(SdkToolsTestCase):
     self._AddDummyBundle(self.manifest, 'pepper_23')
     self._WriteCacheManifest(self.manifest)
     self._WriteManifest()
-    output = self._Run(['update', 'pepper_23'])
+    self._Run(['update', 'pepper_23'])
     self.assertTrue(os.path.exists(
         os.path.join(self.basedir, 'nacl_sdk', 'pepper_23', 'dummy.txt')))
 
@@ -216,6 +228,10 @@ class TestCommands(SdkToolsTestCase):
     # Now update using --force.
     output = self._Run(['update', 'pepper_23', '--force'])
     self.assertTrue('Updating bundle' in output)
+
+    cache_manifest = self._ReadCacheManifest()
+    num_archives = len(cache_manifest.GetBundle('pepper_23').GetArchives())
+    self.assertEqual(num_archives, 1)
 
   def testUpdateUnknownBundles(self):
     """The update command should ignore unknown bundles and notify the user."""
@@ -317,6 +333,42 @@ class TestCommands(SdkToolsTestCase):
     with open(dummy_txt) as f:
       self.assertEqual(f.read(), 'Dummy stuff for pepper_23')
 
+    cache_manifest = self._ReadCacheManifest()
+    num_archives = len(cache_manifest.GetBundle('pepper_23').GetArchives())
+    self.assertEqual(num_archives, 1)
+
+  def testReinstallWithDuplicatedArchives(self):
+    """The reinstall command should only use the most recent archive if there
+    are duplicated archives.
+
+    NOTE: There was a bug where the sdk_cache/naclsdk_manifest2.json file was
+    duplicating archives from different revisions. Make sure that reinstall
+    ignores old archives in the bundle.
+    """
+    # First install the bundle.
+    self._AddDummyBundle(self.manifest, 'pepper_23')
+    self._WriteManifest()
+    self._Run(['update', 'pepper_23'])
+
+    manifest = self._ReadCacheManifest()
+    bundle = manifest.GetBundle('pepper_23')
+    self.assertEqual(len(bundle.GetArchives()), 1)
+
+    # Now add a bogus duplicate archive
+    archive2 = self._MakeDummyArchive('pepper_23', tarname='pepper_23',
+                                      filename='dummy2.txt')
+    bundle.AddArchive(archive2)
+    self._WriteCacheManifest(manifest)
+
+    output = self._Run(['reinstall', 'pepper_23'])
+    # When updating just one file, there is no (file 1/2 - "...") output.
+    self.assertFalse('file 1/' in output)
+    # Should be using the last archive.
+    self.assertFalse(os.path.exists(
+        os.path.join(self.basedir, 'nacl_sdk', 'pepper_23', 'dummy.txt')))
+    self.assertTrue(os.path.exists(
+        os.path.join(self.basedir, 'nacl_sdk', 'pepper_23', 'dummy2.txt')))
+
   def testReinstallDoesntUpdate(self):
     """The reinstall command should not update a bundle that has an update."""
     # First install the bundle.
@@ -349,6 +401,54 @@ class TestCommands(SdkToolsTestCase):
     output = self._Run(['list', '-r'])
     self.assertTrue(re.search('I\*\s+pepper_23.*?r1337.*?r1338', output))
 
+  def testArchiveCacheBasic(self):
+    """Downloaded archives should be stored in the cache by default."""
+    self._AddDummyBundle(self.manifest, 'pepper_23')
+    self._WriteManifest()
+    self._Run(['update', 'pepper_23'])
+    archive_cache = os.path.join(self.cache_dir, 'archives')
+    cache_contents = os.listdir(archive_cache)
+    self.assertEqual(cache_contents, ['pepper_23'])
+    cache_contents = os.listdir(os.path.join(archive_cache, 'pepper_23'))
+    self.assertEqual(cache_contents, ['pepper_23.tar.bz2'])
+
+  def testArchiveCacheEviction(self):
+    archive_cache = os.path.join(self.cache_dir, 'archives')
+    self._AddDummyBundle(self.manifest, 'pepper_23')
+    self._AddDummyBundle(self.manifest, 'pepper_22')
+    self._WriteManifest()
+
+    # First install pepper_23
+    self._Run(['update', 'pepper_23'])
+    archive = os.path.join(archive_cache, 'pepper_23', 'pepper_23.tar.bz2')
+    archive_size = os.path.getsize(archive)
+
+    # Set the mtime on the pepper_23 bundle to be a few seconds in the past.
+    # This is needed so that the two bundles don't end up with the same
+    # timestamp which can happen on systems that don't report sub-second
+    # timestamps.
+    atime = os.path.getatime(archive)
+    mtime = os.path.getmtime(archive)
+    os.utime(archive, (atime, mtime-10))
+
+    # Set cache limit to size of pepper archive * 1.5
+    self._WriteConfig('{ "cache_max": %d }' % int(archive_size * 1.5))
+
+    # Now install pepper_22, which should cause pepper_23 to be evicted
+    self._Run(['update', 'pepper_22'])
+    cache_contents = os.listdir(archive_cache)
+    self.assertEqual(cache_contents, ['pepper_22'])
+
+  def testArchiveCacheZero(self):
+    """Archives should not be cached when cache_max is zero."""
+    self._AddDummyBundle(self.manifest, 'pepper_23')
+    self._WriteConfig('{ "cache_max": 0 }')
+    self._AddDummyBundle(self.manifest, 'pepper_23')
+    self._WriteManifest()
+    self._Run(['update', 'pepper_23'])
+    archive_cache = os.path.join(self.cache_dir, 'archives')
+    # Archive folder should be completely remove by cache cleanup
+    self.assertFalse(os.path.exists(archive_cache))
 
 if __name__ == '__main__':
   unittest.main()

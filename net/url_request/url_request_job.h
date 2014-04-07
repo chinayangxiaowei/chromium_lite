@@ -11,8 +11,8 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/system_monitor/system_monitor.h"
-#include "googleurl/src/gurl.h"
+#include "base/message_loop/message_loop.h"
+#include "base/power_monitor/power_observer.h"
 #include "net/base/filter.h"
 #include "net/base/host_port_pair.h"
 #include "net/base/load_states.h"
@@ -20,6 +20,7 @@
 #include "net/base/request_priority.h"
 #include "net/base/upload_progress.h"
 #include "net/cookies/canonical_cookie.h"
+#include "url/gurl.h"
 
 namespace net {
 
@@ -38,8 +39,9 @@ class UploadDataStream;
 class URLRequestStatus;
 class X509Certificate;
 
-class NET_EXPORT URLRequestJob : public base::RefCounted<URLRequestJob>,
-                                 public base::SystemMonitor::PowerObserver {
+class NET_EXPORT URLRequestJob
+    : public base::RefCounted<URLRequestJob>,
+      public base::PowerObserver {
  public:
   explicit URLRequestJob(URLRequest* request,
                          NetworkDelegate* network_delegate);
@@ -103,6 +105,8 @@ class NET_EXPORT URLRequestJob : public base::RefCounted<URLRequestJob>,
   // URLRequest::StopCaching().
   virtual void StopCaching();
 
+  virtual bool GetFullRequestHeaders(HttpRequestHeaders* headers) const;
+
   // Called to fetch the current load state for the job.
   virtual LoadState GetLoadState() const;
 
@@ -117,6 +121,9 @@ class NET_EXPORT URLRequestJob : public base::RefCounted<URLRequestJob>,
   // Called to get response info.
   virtual void GetResponseInfo(HttpResponseInfo* info);
 
+  // This returns the times when events actually occurred, rather than the time
+  // each event blocked the request.  See FixupLoadTimingInfo in url_request.h
+  // for more information on the difference.
   virtual void GetLoadTimingInfo(LoadTimingInfo* load_timing_info) const;
 
   // Returns the cookie values included in the response, if applicable.
@@ -195,7 +202,7 @@ class NET_EXPORT URLRequestJob : public base::RefCounted<URLRequestJob>,
   // See url_request.h for details.
   virtual HostPortPair GetSocketAddress() const;
 
-  // base::SystemMonitor::PowerObserver methods:
+  // base::PowerObserver methods:
   // We invoke URLRequestJob::Kill on suspend (crbug.com/4606).
   virtual void OnSuspend() OVERRIDE;
 
@@ -221,6 +228,9 @@ class NET_EXPORT URLRequestJob : public base::RefCounted<URLRequestJob>,
   // Delegates to URLRequest::Delegate.
   bool CanSetCookie(const std::string& cookie_line,
                     CookieOptions* options) const;
+
+  // Delegates to URLRequest::Delegate.
+  bool CanEnablePrivacyMode() const;
 
   // Notifies the job that headers have been received.
   void NotifyHeadersComplete();

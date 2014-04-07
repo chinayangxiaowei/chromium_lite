@@ -9,17 +9,17 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
-#include "base/stringprintf.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/stringprintf.h"
 #include "base/test/trace_event_analyzer.h"
 #include "base/values.h"
-#include "chrome/browser/net/url_fixer_upper.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/window_snapshot/window_snapshot.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
+#include "chrome/common/net/url_fixer_upper.h"
 #include "chrome/test/base/test_switches.h"
 #include "chrome/test/base/tracing.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -30,8 +30,7 @@
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_utils.h"
-#include "content/test/gpu/gpu_test_config.h"
-#include "googleurl/src/gurl.h"
+#include "gpu/config/gpu_test_config.h"
 #include "net/base/net_util.h"
 #include "net/dns/mock_host_resolver.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -39,6 +38,7 @@
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/gl/gl_switches.h"
+#include "url/gurl.h"
 
 #if defined(OS_WIN)
 #include "base/win/windows_version.h"
@@ -208,8 +208,9 @@ class ThroughputTest : public BrowserPerfTest {
 
   void Wait(int ms) {
     base::RunLoop run_loop;
-    MessageLoop::current()->PostDelayedTask(
-        FROM_HERE, run_loop.QuitClosure(),
+    base::MessageLoop::current()->PostDelayedTask(
+        FROM_HERE,
+        run_loop.QuitClosure(),
         base::TimeDelta::FromMilliseconds(ms));
     content::RunThisRunLoop(&run_loop);
   }
@@ -270,7 +271,7 @@ class ThroughputTest : public BrowserPerfTest {
     test_path = test_path.Append(FILE_PATH_LITERAL("throughput"));
     test_path = test_path.AppendASCII(test_name);
     test_path = test_path.Append(FILE_PATH_LITERAL("index.html"));
-    ASSERT_TRUE(file_util::PathExists(test_path))
+    ASSERT_TRUE(base::PathExists(test_path))
         << "Missing test file: " << test_path.value();
 
     gurl_ = net::FilePathToFileURL(test_path);
@@ -285,7 +286,7 @@ class ThroughputTest : public BrowserPerfTest {
     test_path = test_path.Append(FILE_PATH_LITERAL("perf"));
     test_path = test_path.Append(FILE_PATH_LITERAL("canvas_bench"));
     test_path = test_path.AppendASCII(test_name + ".html");
-    ASSERT_TRUE(file_util::PathExists(test_path))
+    ASSERT_TRUE(base::PathExists(test_path))
         << "Missing test file: " << test_path.value();
 
     gurl_ = net::FilePathToFileURL(test_path);
@@ -383,8 +384,12 @@ class ThroughputTest : public BrowserPerfTest {
                              ran_on_gpu ? "gpu" : "software";
     std::string mean_and_error = base::StringPrintf("%f,%f", mean_ms,
                                                     std_dev_ms);
-    perf_test::PrintResultMeanAndError(test_name, "", trace_name,
-                                       mean_and_error, "frame_time", true);
+    perf_test::PrintResultMeanAndError(test_name,
+                                       std::string(),
+                                       trace_name,
+                                       mean_and_error,
+                                       "frame_time",
+                                       true);
 
     if (flags & kAllowExternalDNS)
       ResetAllowExternalDNS();
@@ -540,21 +545,22 @@ IN_PROC_BROWSER_TEST_F(ThroughputTestThread, DrawImageShadowGPU) {
 
 IN_PROC_BROWSER_TEST_F(ThroughputTestSW, CanvasToCanvasDrawSW) {
   if (IsGpuAvailable() &&
-      GPUTestBotConfig::CurrentConfigMatches("MAC AMD"))
+      gpu::GPUTestBotConfig::CurrentConfigMatches("MAC AMD"))
     return;
   RunTest("canvas2d_balls_draw_from_canvas", kNone);
 }
 
 IN_PROC_BROWSER_TEST_F(ThroughputTestGPU, CanvasToCanvasDrawGPU) {
   if (IsGpuAvailable() &&
-      GPUTestBotConfig::CurrentConfigMatches("MAC AMD"))
+      gpu::GPUTestBotConfig::CurrentConfigMatches("MAC AMD"))
     return;
   RunTest("canvas2d_balls_draw_from_canvas", kNone | kIsGpuCanvasTest);
 }
 
-IN_PROC_BROWSER_TEST_F(ThroughputTestSW, CanvasTextSW) {
+// Failing on windows GPU bots: crbug.com/255192
+IN_PROC_BROWSER_TEST_F(ThroughputTestSW, DISABLED_CanvasTextSW) {
   if (IsGpuAvailable() &&
-      GPUTestBotConfig::CurrentConfigMatches("MAC AMD"))
+      gpu::GPUTestBotConfig::CurrentConfigMatches("MAC AMD"))
     return;
   RunTest("canvas2d_balls_text", kNone);
 }
@@ -577,7 +583,7 @@ IN_PROC_BROWSER_TEST_F(ThroughputTestSW, CanvasSingleImageSW) {
 
 IN_PROC_BROWSER_TEST_F(ThroughputTestGPU, CanvasSingleImageGPU) {
   if (IsGpuAvailable() &&
-      GPUTestBotConfig::CurrentConfigMatches("MAC AMD"))
+      gpu::GPUTestBotConfig::CurrentConfigMatches("MAC AMD"))
     return;
   RunCanvasBenchTest("single_image", kNone | kIsGpuCanvasTest);
 }

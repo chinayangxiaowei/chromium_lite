@@ -9,22 +9,27 @@
 #include "base/run_loop.h"
 #include "base/stl_util.h"
 #include "base/synchronization/waitable_event.h"
-#include "chrome/browser/sync_file_system/local_file_sync_service.h"
+#include "chrome/browser/sync_file_system/local/canned_syncable_file_system.h"
+#include "chrome/browser/sync_file_system/local/local_file_sync_context.h"
+#include "chrome/browser/sync_file_system/local/local_file_sync_service.h"
+#include "chrome/browser/sync_file_system/local/mock_sync_status_observer.h"
+#include "chrome/browser/sync_file_system/local/sync_file_system_backend.h"
 #include "chrome/browser/sync_file_system/mock_remote_file_sync_service.h"
+#include "chrome/browser/sync_file_system/sync_callbacks.h"
 #include "chrome/browser/sync_file_system/sync_event_observer.h"
+#include "chrome/browser/sync_file_system/sync_file_metadata.h"
 #include "chrome/browser/sync_file_system/sync_file_system_service.h"
 #include "chrome/browser/sync_file_system/sync_file_system_test_util.h"
+#include "chrome/browser/sync_file_system/sync_status_code.h"
+#include "chrome/browser/sync_file_system/syncable_file_system_util.h"
 #include "chrome/test/base/testing_profile.h"
+#include "content/public/browser/browser_thread.h"
+#include "content/public/test/test_browser_thread_bundle.h"
+#include "content/public/test/test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "webkit/fileapi/file_system_context.h"
-#include "webkit/fileapi/syncable/canned_syncable_file_system.h"
-#include "webkit/fileapi/syncable/local_file_sync_context.h"
-#include "webkit/fileapi/syncable/mock_sync_status_observer.h"
-#include "webkit/fileapi/syncable/sync_callbacks.h"
-#include "webkit/fileapi/syncable/sync_file_metadata.h"
-#include "webkit/fileapi/syncable/sync_status_code.h"
-#include "webkit/fileapi/syncable/syncable_file_system_util.h"
+#include "webkit/browser/fileapi/file_system_context.h"
 
+using content::BrowserThread;
 using fileapi::FileSystemURL;
 using fileapi::FileSystemURLSet;
 using ::testing::AnyNumber;
@@ -40,7 +45,6 @@ namespace sync_file_system {
 namespace {
 
 const char kOrigin[] = "http://example.com";
-const char kServiceName[] = "test";
 
 template <typename R> struct AssignTrait {
   typedef const R& ArgumentType;
@@ -64,11 +68,11 @@ void AssignValueAndQuit(base::RunLoop* run_loop,
 }
 
 // This is called on IO thread.
-void VerifyFileError(base::WaitableEvent* event,
+void VerifyFileError(base::RunLoop* run_loop,
                      base::PlatformFileError error) {
-  DCHECK(event);
+  DCHECK(run_loop);
   EXPECT_EQ(base::PLATFORM_FILE_OK, error);
-  event->Signal();
+  run_loop->Quit();
 }
 
 }  // namespace
@@ -113,16 +117,15 @@ ACTION_P2(MockSyncFileCallback, status, url) {
 
 class SyncFileSystemServiceTest : public testing::Test {
  protected:
-  SyncFileSystemServiceTest() {}
-  virtual ~SyncFileSystemServiceTest() {}
+  SyncFileSystemServiceTest()
+      : thread_bundle_(content::TestBrowserThreadBundle::REAL_FILE_THREAD |
+                       content::TestBrowserThreadBundle::REAL_IO_THREAD) {}
 
   virtual void SetUp() OVERRIDE {
-    thread_helper_.SetUp();
-
     file_system_.reset(new CannedSyncableFileSystem(
-        GURL(kOrigin), kServiceName,
-        thread_helper_.io_task_runner(),
-        thread_helper_.file_task_runner()));
+        GURL(kOrigin),
+        BrowserThread::GetMessageLoopProxyForThread(BrowserThread::IO),
+        BrowserThread::GetMessageLoopProxyForThread(BrowserThread::FILE)));
 
     local_service_ = new LocalFileSyncService(&profile_);
     remote_service_ = new StrictMock<MockRemoteFileSyncService>;
@@ -151,10 +154,9 @@ class SyncFileSystemServiceTest : public testing::Test {
 
   virtual void TearDown() OVERRIDE {
     sync_service_->Shutdown();
-
     file_system_->TearDown();
-    RevokeSyncableFileSystem(kServiceName);
-    thread_helper_.TearDown();
+    RevokeSyncableFileSystem();
+    content::RunAllPendingInMessageLoop(BrowserThread::FILE);
   }
 
   void InitializeApp() {
@@ -166,7 +168,7 @@ class SyncFileSystemServiceTest : public testing::Test {
 
     sync_service_->InitializeForApp(
         file_system_->file_system_context(),
-        kServiceName, GURL(kOrigin),
+        GURL(kOrigin),
         AssignAndQuitCallback(&run_loop, &status));
     run_loop.Run();
 
@@ -188,9 +190,8 @@ class SyncFileSystemServiceTest : public testing::Test {
   void InitializeAppForObserverTest(
       RemoteServiceState state_to_notify,
       SyncStatusCode status_to_return,
-      const std::vector<SyncEventObserver::SyncServiceState> expected_states,
-      SyncStatusCode expected_status,
-      int expected_current_state_calls) {
+      const std::vector<SyncServiceState>& expected_states,
+      SyncStatusCode expected_status) {
     StrictMock<MockSyncEventObserver> event_observer;
     sync_service_->AddSyncEventObserver(&event_observer);
 
@@ -202,13 +203,7 @@ class SyncFileSystemServiceTest : public testing::Test {
                                          state_to_notify,
                                          status_to_return));
 
-    if (expected_current_state_calls > 0) {
-      EXPECT_CALL(*mock_remote_service(), GetCurrentState())
-          .Times(AtLeast(expected_current_state_calls))
-          .WillRepeatedly(Return(REMOTE_SERVICE_OK));
-    }
-
-    std::vector<SyncEventObserver::SyncServiceState> actual_states;
+    std::vector<SyncServiceState> actual_states;
     EXPECT_CALL(event_observer, OnSyncStateUpdated(GURL(), _, _))
         .WillRepeatedly(RecordState(&actual_states));
 
@@ -216,7 +211,7 @@ class SyncFileSystemServiceTest : public testing::Test {
     base::RunLoop run_loop;
     sync_service_->InitializeForApp(
         file_system_->file_system_context(),
-        kServiceName, GURL(kOrigin),
+        GURL(kOrigin),
         AssignAndQuitCallback(&run_loop, &actual_status));
     run_loop.Run();
 
@@ -243,7 +238,9 @@ class SyncFileSystemServiceTest : public testing::Test {
     sync_service_->SetSyncEnabledForTesting(true);
   }
 
-  MultiThreadTestHelper thread_helper_;
+  ScopedEnableSyncFSDirectoryOperation enable_directory_operation_;
+
+  content::TestBrowserThreadBundle thread_bundle_;
   TestingProfile profile_;
   scoped_ptr<CannedSyncableFileSystem> file_system_;
 
@@ -260,21 +257,19 @@ TEST_F(SyncFileSystemServiceTest, InitializeForApp) {
 }
 
 TEST_F(SyncFileSystemServiceTest, InitializeForAppSuccess) {
-  std::vector<SyncEventObserver::SyncServiceState> expected_states;
-  expected_states.push_back(SyncEventObserver::SYNC_SERVICE_RUNNING);
+  std::vector<SyncServiceState> expected_states;
+  expected_states.push_back(SYNC_SERVICE_RUNNING);
 
   InitializeAppForObserverTest(
       REMOTE_SERVICE_OK,
       SYNC_STATUS_OK,
       expected_states,
-      SYNC_STATUS_OK,
-      2);
+      SYNC_STATUS_OK);
 }
 
 TEST_F(SyncFileSystemServiceTest, InitializeForAppWithNetworkFailure) {
-  std::vector<SyncEventObserver::SyncServiceState> expected_states;
-  expected_states.push_back(
-      SyncEventObserver::SYNC_SERVICE_TEMPORARY_UNAVAILABLE);
+  std::vector<SyncServiceState> expected_states;
+  expected_states.push_back(SYNC_SERVICE_TEMPORARY_UNAVAILABLE);
 
   // Notify REMOTE_SERVICE_TEMPORARY_UNAVAILABLE and callback with
   // SYNC_STATUS_NETWORK_ERROR.  This should let the
@@ -283,13 +278,12 @@ TEST_F(SyncFileSystemServiceTest, InitializeForAppWithNetworkFailure) {
       REMOTE_SERVICE_TEMPORARY_UNAVAILABLE,
       SYNC_STATUS_NETWORK_ERROR,
       expected_states,
-      SYNC_STATUS_NETWORK_ERROR,
-      0);
+      SYNC_STATUS_NETWORK_ERROR);
 }
 
 TEST_F(SyncFileSystemServiceTest, InitializeForAppWithError) {
-  std::vector<SyncEventObserver::SyncServiceState> expected_states;
-  expected_states.push_back(SyncEventObserver::SYNC_SERVICE_DISABLED);
+  std::vector<SyncServiceState> expected_states;
+  expected_states.push_back(SYNC_SERVICE_DISABLED);
 
   // Notify REMOTE_SERVICE_DISABLED and callback with
   // SYNC_STATUS_FAILED.  This should let the InitializeApp fail.
@@ -297,17 +291,17 @@ TEST_F(SyncFileSystemServiceTest, InitializeForAppWithError) {
       REMOTE_SERVICE_DISABLED,
       SYNC_STATUS_FAILED,
       expected_states,
-      SYNC_STATUS_FAILED,
-      0);
+      SYNC_STATUS_FAILED);
 }
 
-TEST_F(SyncFileSystemServiceTest, SimpleLocalSyncFlow) {
+// Flaky.  http://crbug.com/237710
+TEST_F(SyncFileSystemServiceTest, DISABLED_SimpleLocalSyncFlow) {
   InitializeApp();
 
   StrictMock<MockSyncStatusObserver> status_observer;
 
   EnableSync();
-  file_system_->file_system_context()->sync_context()->
+  file_system_->backend()->sync_context()->
       set_mock_notify_changes_duration_in_sec(0);
   file_system_->AddSyncStatusObserver(&status_observer);
 
@@ -350,7 +344,7 @@ TEST_F(SyncFileSystemServiceTest, SimpleRemoteSyncFlow) {
 
   // We expect a set of method calls for starting a remote sync.
   EXPECT_CALL(*mock_remote_service(), GetCurrentState())
-      .Times(AtLeast(2))
+      .Times(AtLeast(1))
       .WillRepeatedly(Return(REMOTE_SERVICE_OK));
   EXPECT_CALL(*mock_remote_service(), ProcessRemoteChange(_))
       .WillOnce(InvokeWithoutArgs(&run_loop, &base::RunLoop::Quit));
@@ -365,7 +359,7 @@ TEST_F(SyncFileSystemServiceTest, SimpleSyncFlowWithFileBusy) {
   InitializeApp();
 
   EnableSync();
-  file_system_->file_system_context()->sync_context()->
+  file_system_->backend()->sync_context()->
       set_mock_notify_changes_duration_in_sec(0);
 
   const FileSystemURL kFile(file_system_->URL("foo"));
@@ -401,17 +395,20 @@ TEST_F(SyncFileSystemServiceTest, SimpleSyncFlowWithFileBusy) {
   mock_remote_service()->NotifyRemoteChangeQueueUpdated(1);
 
   // Start a local operation on the same file (to make it BUSY).
-  base::WaitableEvent event(false, false);
-  thread_helper_.io_task_runner()->PostTask(
-      FROM_HERE, base::Bind(&CannedSyncableFileSystem::DoCreateFile,
-                            base::Unretained(file_system_.get()),
-                            kFile, base::Bind(&VerifyFileError, &event)));
+  base::RunLoop verify_file_error_run_loop;
+  BrowserThread::PostTask(
+      BrowserThread::IO,
+      FROM_HERE,
+      base::Bind(&CannedSyncableFileSystem::DoCreateFile,
+                 base::Unretained(file_system_.get()),
+                 kFile, base::Bind(&VerifyFileError,
+                                   &verify_file_error_run_loop)));
 
   run_loop.Run();
 
   mock_remote_service()->NotifyRemoteChangeQueueUpdated(0);
 
-  event.Wait();
+  verify_file_error_run_loop.Run();
 }
 
 TEST_F(SyncFileSystemServiceTest, GetFileSyncStatus) {

@@ -7,7 +7,7 @@
 #include "base/auto_reset.h"
 #include "base/command_line.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/prefs/default_pref_store.h"
 #include "base/prefs/overlay_user_pref_store.h"
 #include "base/prefs/pref_change_registrar.h"
@@ -28,8 +28,8 @@
 #include "chrome/test/base/testing_profile.h"
 #include "components/user_prefs/pref_registry_syncable.h"
 #include "content/public/test/test_browser_thread.h"
-#include "googleurl/src/gurl.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/gurl.h"
 
 using ::testing::_;
 using content::BrowserThread;
@@ -79,7 +79,7 @@ class DeadlockCheckerObserver {
     // Check whether |provider_| holds its lock. For this, we need a
     // separate thread.
     DeadlockCheckerThread thread(provider_);
-    base::PlatformThreadHandle handle = base::kNullThreadHandle;
+    base::PlatformThreadHandle handle;
     ASSERT_TRUE(base::PlatformThread::Create(0, &thread, &handle));
     base::PlatformThread::Join(handle);
     notification_received_ = true;
@@ -98,7 +98,7 @@ class PrefProviderTest : public testing::Test {
   }
 
  protected:
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
   content::TestBrowserThread ui_thread_;
 };
 
@@ -121,7 +121,7 @@ TEST_F(PrefProviderTest, Observer) {
       pattern,
       ContentSettingsPattern::Wildcard(),
       CONTENT_SETTINGS_TYPE_IMAGES,
-      "",
+      std::string(),
       Value::CreateIntegerValue(CONTENT_SETTING_ALLOW));
 
   pref_content_settings_provider.ShutdownOnUIThread();
@@ -136,16 +136,18 @@ TEST_F(PrefProviderTest, Incognito) {
 
   PrefServiceMockBuilder builder;
   builder.WithUserPrefs(user_prefs);
-  scoped_refptr<PrefRegistrySyncable> registry(new PrefRegistrySyncable);
-  PrefServiceSyncable* regular_prefs = builder.CreateSyncable(registry);
+  scoped_refptr<user_prefs::PrefRegistrySyncable> registry(
+      new user_prefs::PrefRegistrySyncable);
+  PrefServiceSyncable* regular_prefs = builder.CreateSyncable(registry.get());
 
-  chrome::RegisterUserPrefs(registry);
+  chrome::RegisterUserProfilePrefs(registry.get());
 
   builder.WithUserPrefs(otr_user_prefs);
-  scoped_refptr<PrefRegistrySyncable> otr_registry(new PrefRegistrySyncable);
-  PrefServiceSyncable* otr_prefs = builder.CreateSyncable(otr_registry);
+  scoped_refptr<user_prefs::PrefRegistrySyncable> otr_registry(
+      new user_prefs::PrefRegistrySyncable);
+  PrefServiceSyncable* otr_prefs = builder.CreateSyncable(otr_registry.get());
 
-  chrome::RegisterUserPrefs(otr_registry);
+  chrome::RegisterUserProfilePrefs(otr_registry.get());
 
   TestingProfile::Builder profile_builder;
   profile_builder.SetPrefService(make_scoped_ptr(regular_prefs));
@@ -166,20 +168,26 @@ TEST_F(PrefProviderTest, Incognito) {
       pattern,
       pattern,
       CONTENT_SETTINGS_TYPE_IMAGES,
-      "",
+      std::string(),
       Value::CreateIntegerValue(CONTENT_SETTING_ALLOW));
 
   GURL host("http://example.com/");
   // The value should of course be visible in the regular PrefProvider.
   EXPECT_EQ(CONTENT_SETTING_ALLOW,
-            GetContentSetting(
-                &pref_content_settings_provider,
-                host, host, CONTENT_SETTINGS_TYPE_IMAGES, "", false));
+            GetContentSetting(&pref_content_settings_provider,
+                              host,
+                              host,
+                              CONTENT_SETTINGS_TYPE_IMAGES,
+                              std::string(),
+                              false));
   // And also in the OTR version.
   EXPECT_EQ(CONTENT_SETTING_ALLOW,
-            GetContentSetting(
-                &pref_content_settings_provider_incognito,
-                host, host, CONTENT_SETTINGS_TYPE_IMAGES, "", false));
+            GetContentSetting(&pref_content_settings_provider_incognito,
+                              host,
+                              host,
+                              CONTENT_SETTINGS_TYPE_IMAGES,
+                              std::string(),
+                              false));
   // But the value should not be overridden in the OTR user prefs accidentally.
   EXPECT_FALSE(otr_user_prefs->IsSetInOverlay(
       prefs::kContentSettingsPatternPairs));
@@ -197,26 +205,40 @@ TEST_F(PrefProviderTest, GetContentSettingsValue) {
       ContentSettingsPattern::FromString("[*.]example.com");
 
   EXPECT_EQ(CONTENT_SETTING_DEFAULT,
-            GetContentSetting(&provider, primary_url, primary_url,
-                              CONTENT_SETTINGS_TYPE_IMAGES, "", false));
+            GetContentSetting(&provider,
+                              primary_url,
+                              primary_url,
+                              CONTENT_SETTINGS_TYPE_IMAGES,
+                              std::string(),
+                              false));
 
   EXPECT_EQ(NULL,
-            GetContentSettingValue(
-                &provider, primary_url, primary_url,
-                CONTENT_SETTINGS_TYPE_IMAGES, "", false));
+            GetContentSettingValue(&provider,
+                                   primary_url,
+                                   primary_url,
+                                   CONTENT_SETTINGS_TYPE_IMAGES,
+                                   std::string(),
+                                   false));
 
-  provider.SetWebsiteSetting(
-      primary_pattern,
-      primary_pattern,
-      CONTENT_SETTINGS_TYPE_IMAGES,
-      "",
-      Value::CreateIntegerValue(CONTENT_SETTING_BLOCK));
+  provider.SetWebsiteSetting(primary_pattern,
+                             primary_pattern,
+                             CONTENT_SETTINGS_TYPE_IMAGES,
+                             std::string(),
+                             Value::CreateIntegerValue(CONTENT_SETTING_BLOCK));
   EXPECT_EQ(CONTENT_SETTING_BLOCK,
-            GetContentSetting(&provider, primary_url, primary_url,
-                              CONTENT_SETTINGS_TYPE_IMAGES, "", false));
+            GetContentSetting(&provider,
+                              primary_url,
+                              primary_url,
+                              CONTENT_SETTINGS_TYPE_IMAGES,
+                              std::string(),
+                              false));
   scoped_ptr<Value> value_ptr(
-      GetContentSettingValue(&provider, primary_url, primary_url,
-                             CONTENT_SETTINGS_TYPE_IMAGES, "", false));
+      GetContentSettingValue(&provider,
+                             primary_url,
+                             primary_url,
+                             CONTENT_SETTINGS_TYPE_IMAGES,
+                             std::string(),
+                             false));
   int int_value = -1;
   value_ptr->GetAsInteger(&int_value);
   EXPECT_EQ(CONTENT_SETTING_BLOCK, IntToContentSetting(int_value));
@@ -224,12 +246,15 @@ TEST_F(PrefProviderTest, GetContentSettingsValue) {
   provider.SetWebsiteSetting(primary_pattern,
                              primary_pattern,
                              CONTENT_SETTINGS_TYPE_IMAGES,
-                             "",
+                             std::string(),
                              NULL);
   EXPECT_EQ(NULL,
-            GetContentSettingValue(
-                &provider, primary_url, primary_url,
-                CONTENT_SETTINGS_TYPE_IMAGES, "", false));
+            GetContentSettingValue(&provider,
+                                   primary_url,
+                                   primary_url,
+                                   CONTENT_SETTINGS_TYPE_IMAGES,
+                                   std::string(),
+                                   false));
   provider.ShutdownOnUIThread();
 }
 
@@ -250,53 +275,74 @@ TEST_F(PrefProviderTest, Patterns) {
       ContentSettingsPattern::FromString("file:///tmp/test.html");
 
   EXPECT_EQ(CONTENT_SETTING_DEFAULT,
-            GetContentSetting(
-                &pref_content_settings_provider,
-                host1, host1, CONTENT_SETTINGS_TYPE_IMAGES, "", false));
+            GetContentSetting(&pref_content_settings_provider,
+                              host1,
+                              host1,
+                              CONTENT_SETTINGS_TYPE_IMAGES,
+                              std::string(),
+                              false));
   pref_content_settings_provider.SetWebsiteSetting(
       pattern1,
       pattern1,
       CONTENT_SETTINGS_TYPE_IMAGES,
-      "",
+      std::string(),
       Value::CreateIntegerValue(CONTENT_SETTING_BLOCK));
   EXPECT_EQ(CONTENT_SETTING_BLOCK,
-            GetContentSetting(
-                &pref_content_settings_provider,
-                host1, host1, CONTENT_SETTINGS_TYPE_IMAGES, "", false));
+            GetContentSetting(&pref_content_settings_provider,
+                              host1,
+                              host1,
+                              CONTENT_SETTINGS_TYPE_IMAGES,
+                              std::string(),
+                              false));
   EXPECT_EQ(CONTENT_SETTING_BLOCK,
-            GetContentSetting(
-                &pref_content_settings_provider,
-                host2, host2, CONTENT_SETTINGS_TYPE_IMAGES, "", false));
-
-  EXPECT_EQ(CONTENT_SETTING_DEFAULT,
-            GetContentSetting(
-                &pref_content_settings_provider,
-                host3, host3, CONTENT_SETTINGS_TYPE_IMAGES, "", false));
-  pref_content_settings_provider.SetWebsiteSetting(
-      pattern2,
-      pattern2,
-      CONTENT_SETTINGS_TYPE_IMAGES,
-      "",
-      Value::CreateIntegerValue(CONTENT_SETTING_BLOCK));
-  EXPECT_EQ(CONTENT_SETTING_BLOCK,
-            GetContentSetting(
-                &pref_content_settings_provider,
-                host3, host3, CONTENT_SETTINGS_TYPE_IMAGES, "", false));
+            GetContentSetting(&pref_content_settings_provider,
+                              host2,
+                              host2,
+                              CONTENT_SETTINGS_TYPE_IMAGES,
+                              std::string(),
+                              false));
 
   EXPECT_EQ(CONTENT_SETTING_DEFAULT,
             GetContentSetting(&pref_content_settings_provider,
-                              host4, host4, CONTENT_SETTINGS_TYPE_IMAGES, "",
+                              host3,
+                              host3,
+                              CONTENT_SETTINGS_TYPE_IMAGES,
+                              std::string(),
+                              false));
+  pref_content_settings_provider.SetWebsiteSetting(
+      pattern2,
+      pattern2,
+      CONTENT_SETTINGS_TYPE_IMAGES,
+      std::string(),
+      Value::CreateIntegerValue(CONTENT_SETTING_BLOCK));
+  EXPECT_EQ(CONTENT_SETTING_BLOCK,
+            GetContentSetting(&pref_content_settings_provider,
+                              host3,
+                              host3,
+                              CONTENT_SETTINGS_TYPE_IMAGES,
+                              std::string(),
+                              false));
+
+  EXPECT_EQ(CONTENT_SETTING_DEFAULT,
+            GetContentSetting(&pref_content_settings_provider,
+                              host4,
+                              host4,
+                              CONTENT_SETTINGS_TYPE_IMAGES,
+                              std::string(),
                               false));
   pref_content_settings_provider.SetWebsiteSetting(
       pattern3,
       pattern3,
       CONTENT_SETTINGS_TYPE_IMAGES,
-      "",
+      std::string(),
       Value::CreateIntegerValue(CONTENT_SETTING_BLOCK));
   EXPECT_EQ(CONTENT_SETTING_BLOCK,
-            GetContentSetting(
-                &pref_content_settings_provider,
-                host4, host4, CONTENT_SETTINGS_TYPE_IMAGES, "", false));
+            GetContentSetting(&pref_content_settings_provider,
+                              host4,
+                              host4,
+                              CONTENT_SETTINGS_TYPE_IMAGES,
+                              std::string(),
+                              false));
 
   pref_content_settings_provider.ShutdownOnUIThread();
 }
@@ -374,7 +420,7 @@ TEST_F(PrefProviderTest, AutoSubmitCertificateContentSetting) {
 // http://crosbug.com/17760
 TEST_F(PrefProviderTest, Deadlock) {
   TestingPrefServiceSyncable prefs;
-  PrefProvider::RegisterUserPrefs(prefs.registry());
+  PrefProvider::RegisterProfilePrefs(prefs.registry());
 
   // Chain of events: a preference changes, |PrefProvider| notices it, and reads
   // and writes the preference. When the preference is written, a notification

@@ -14,7 +14,6 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/common/url_constants.h"
-#include "googleurl/src/gurl.h"
 #include "grit/ui_resources.h"
 #include "jni/NavigationPopup_jni.h"
 #include "third_party/skia/include/core/SkBitmap.h"
@@ -22,6 +21,7 @@
 #include "ui/gfx/android/java_bitmap.h"
 #include "ui/gfx/favicon_size.h"
 #include "ui/gfx/image/image.h"
+#include "url/gurl.h"
 
 using base::android::ConvertUTF8ToJavaString;
 using base::android::ScopedJavaLocalRef;
@@ -51,7 +51,7 @@ void NavigationPopup::FetchFaviconForUrl(JNIEnv* env,
   favicon_service->GetFaviconImageForURL(
       FaviconService::FaviconForURLParams(profile,
                                           url,
-                                          history::FAVICON,
+                                          chrome::FAVICON,
                                           gfx::kFaviconSize),
       base::Bind(&NavigationPopup::OnFaviconDataAvailable,
                  base::Unretained(this),
@@ -61,7 +61,7 @@ void NavigationPopup::FetchFaviconForUrl(JNIEnv* env,
 
 void NavigationPopup::OnFaviconDataAvailable(
     GURL navigation_entry_url,
-    const history::FaviconImageResult& image_result) {
+    const chrome::FaviconImageResult& image_result) {
   gfx::Image image(image_result.image);
   if (image.IsEmpty()) {
     ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();

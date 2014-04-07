@@ -27,14 +27,13 @@
 #include <string>
 
 #include "base/basictypes.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/ref_counted.h"
-#include "base/message_loop.h"
+#include "base/memory/scoped_ptr.h"
+#include "base/message_loop/message_loop.h"
 #include "base/system_monitor/system_monitor.h"
 #include "content/browser/renderer_host/media/media_stream_provider.h"
-#include "content/browser/renderer_host/media/media_stream_settings_requester.h"
-#include "content/common/media/media_stream_options.h"
 #include "content/common/content_export.h"
+#include "content/common/media/media_stream_options.h"
 
 namespace base {
 class Thread;
@@ -47,9 +46,10 @@ class AudioManager;
 namespace content {
 
 class AudioInputDeviceManager;
+class FakeMediaStreamUIProxy;
 class MediaStreamDeviceSettings;
 class MediaStreamRequester;
-class MediaStreamUIController;
+class MediaStreamUIProxy;
 class VideoCaptureManager;
 
 // MediaStreamManager is used to generate and close new media devices, not to
@@ -58,10 +58,15 @@ class VideoCaptureManager;
 // MediaStreamManager::Listener.
 class CONTENT_EXPORT MediaStreamManager
     : public MediaStreamProviderListener,
-      public MessageLoop::DestructionObserver,
-      public SettingsRequester,
+      public base::MessageLoop::DestructionObserver,
       public base::SystemMonitor::DevicesChangedObserver {
  public:
+  // Callback to deliver the result of a media request. |label| is the string
+  // to identify the request,
+  typedef base::Callback<void(const MediaStreamDevices& devices,
+                              scoped_ptr<MediaStreamUIProxy> ui)>
+      MediaRequestResponseCallback;
+
   explicit MediaStreamManager(media::AudioManager* audio_manager);
   virtual ~MediaStreamManager();
 
@@ -80,6 +85,7 @@ class CONTENT_EXPORT MediaStreamManager
   std::string MakeMediaAccessRequest(
       int render_process_id,
       int render_view_id,
+      int page_request_id,
       const StreamOptions& components,
       const GURL& security_origin,
       const MediaRequestResponseCallback& callback);
@@ -91,13 +97,14 @@ class CONTENT_EXPORT MediaStreamManager
   std::string GenerateStream(MediaStreamRequester* requester,
                              int render_process_id,
                              int render_view_id,
+                             int page_request_id,
                              const StreamOptions& components,
                              const GURL& security_origin);
 
   void CancelRequest(const std::string& label);
 
   // Closes generated stream.
-  void StopGeneratedStream(const std::string& label);
+  virtual void StopGeneratedStream(const std::string& label);
 
   // Gets a list of devices of |type|, which must be MEDIA_DEVICE_AUDIO_CAPTURE
   // or MEDIA_DEVICE_VIDEO_CAPTURE.
@@ -106,11 +113,12 @@ class CONTENT_EXPORT MediaStreamManager
   // and video devices and also start monitoring device changes, such as
   // plug/unplug. The new device lists will be delivered via media observer to
   // MediaCaptureDevicesDispatcher.
-  std::string EnumerateDevices(MediaStreamRequester* requester,
-                               int render_process_id,
-                               int render_view_id,
-                               MediaStreamType type,
-                               const GURL& security_origin);
+  virtual std::string EnumerateDevices(MediaStreamRequester* requester,
+                                       int render_process_id,
+                                       int render_view_id,
+                                       int page_request_id,
+                                       MediaStreamType type,
+                                       const GURL& security_origin);
 
   // Open a device identified by |device_id|.  |type| must be either
   // MEDIA_DEVICE_AUDIO_CAPTURE or MEDIA_DEVICE_VIDEO_CAPTURE.
@@ -118,22 +126,10 @@ class CONTENT_EXPORT MediaStreamManager
   std::string OpenDevice(MediaStreamRequester* requester,
                          int render_process_id,
                          int render_view_id,
+                         int page_request_id,
                          const std::string& device_id,
                          MediaStreamType type,
                          const GURL& security_origin);
-
-  // Signals the UI that the devices are opened.
-  // Users are responsible for calling NotifyUIDevicesClosed when the devices
-  // are not used anymore, otherwise UI will leak.
-  void NotifyUIDevicesOpened(const std::string& label,
-                             int render_process_id,
-                             int render_view_id,
-                             const MediaStreamDevices& devices);
-
-  // Signals the UI that the devices are being closed.
-  void NotifyUIDevicesClosed(int render_process_id,
-                             int render_view_id,
-                             const MediaStreamDevices& devices);
 
   // Implements MediaStreamProviderListener.
   virtual void Opened(MediaStreamType stream_type,
@@ -146,25 +142,30 @@ class CONTENT_EXPORT MediaStreamManager
                      int capture_session_id,
                      MediaStreamProviderError error) OVERRIDE;
 
-  // Implements SettingsRequester.
-  virtual void DevicesAccepted(const std::string& label,
-                               const StreamDeviceInfoArray& devices) OVERRIDE;
-  virtual void SettingsError(const std::string& label) OVERRIDE;
-  virtual void StopStreamFromUI(const std::string& label) OVERRIDE;
-  virtual void GetAvailableDevices(MediaStreamDevices* devices) OVERRIDE;
-
   // Implements base::SystemMonitor::DevicesChangedObserver.
   virtual void OnDevicesChanged(
       base::SystemMonitor::DeviceType device_type) OVERRIDE;
 
   // Used by unit test to make sure fake devices are used instead of a real
-  // devices, which is needed for server based testing.
+  // devices, which is needed for server based testing or certain tests (which
+  // can pass --use-fake-device-for-media-stream).
   void UseFakeDevice();
+
+  // Called by the tests to specify a fake UI that should be used for next
+  // generated stream (or when using --use-fake-ui-for-media-stream).
+  void UseFakeUI(scoped_ptr<FakeMediaStreamUIProxy> fake_ui);
 
   // This object gets deleted on the UI thread after the IO thread has been
   // destroyed. So we need to know when IO thread is being destroyed so that
   // we can delete VideoCaptureManager and AudioInputDeviceManager.
+  // We also must call this function explicitly in tests which use
+  // TestBrowserThreadBundle, because the notification happens too late in that
+  // case (see http://crbug.com/247525#c14).
   virtual void WillDestroyCurrentMessageLoop() OVERRIDE;
+
+ protected:
+  // Used for testing.
+  MediaStreamManager();
 
  private:
   // Contains all data needed to keep track of requests.
@@ -185,18 +186,15 @@ class CONTENT_EXPORT MediaStreamManager
   // thread and registers this as a listener with the device managers.
   void InitializeDeviceManagersOnIOThread();
 
-  // Helpers for signaling the media observer that new capture devices are
-  // opened/closed.
-  void NotifyDevicesOpened(const std::string& label,
-                           const DeviceRequest& request);
-  void NotifyDevicesClosed(const DeviceRequest& request);
-  void DevicesFromRequest(const DeviceRequest& request,
-                          MediaStreamDevices* devices);
-
   // Helper for sending up-to-date device lists to media observer when a
   // capture device is plugged in or unplugged.
   void NotifyDevicesChanged(MediaStreamType stream_type,
                             const StreamDeviceInfoArray& devices);
+
+
+  void HandleAccessRequestResponse(const std::string& label,
+                                   const MediaStreamDevices& devices);
+  void StopStreamFromUI(const std::string& label);
 
   // Helpers.
   bool RequestDone(const DeviceRequest& request) const;
@@ -219,14 +217,17 @@ class CONTENT_EXPORT MediaStreamManager
   void StartMonitoring();
   void StopMonitoring();
 
-  // Callback for UI called when the user requests stream with the specified
-  // |label| to be stopped.
-  void OnStopStreamRequested(const std::string& label);
+  // Finds and returns the raw device id corresponding to the given
+  // |device_guid|. Returns true if there was a raw device id that matched the
+  // given |device_guid|, false if nothing matched it.
+  bool TranslateGUIDToRawId(
+      MediaStreamType stream_type,
+      const GURL& security_origin,
+      const std::string& device_guid,
+      std::string* raw_device_id);
 
   // Device thread shared by VideoCaptureManager and AudioInputDeviceManager.
   scoped_ptr<base::Thread> device_thread_;
-
-  scoped_ptr<MediaStreamUIController> ui_controller_;
 
   media::AudioManager* const audio_manager_;  // not owned
   scoped_refptr<AudioInputDeviceManager> audio_input_device_manager_;
@@ -249,9 +250,12 @@ class CONTENT_EXPORT MediaStreamManager
 
   // Hold a pointer to the IO loop to check we delete the device thread and
   // managers on the right thread.
-  MessageLoop* io_loop_;
+  base::MessageLoop* io_loop_;
 
   bool screen_capture_active_;
+
+  bool use_fake_ui_;
+  scoped_ptr<FakeMediaStreamUIProxy> fake_ui_;
 
   DISALLOW_COPY_AND_ASSIGN(MediaStreamManager);
 };

@@ -9,9 +9,8 @@
 #include <map>
 
 #include "base/location.h"
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "sync/engine/syncer_proto_util.h"
-#include "sync/test/engine/test_id_factory.h"
 #include "sync/protocol/bookmark_specifics.pb.h"
 #include "sync/syncable/directory.h"
 #include "sync/syncable/syncable_write_transaction.h"
@@ -32,9 +31,10 @@ namespace syncer {
 using syncable::WriteTransaction;
 
 static char kValidAuthToken[] = "AuthToken";
+static char kCacheGuid[] = "kqyg7097kro6GSUod+GSg==";
 
 MockConnectionManager::MockConnectionManager(syncable::Directory* directory)
-    : ServerConnectionManager("unused", 0, false),
+    : ServerConnectionManager("unused", 0, false, false),
       server_reachable_(true),
       conflict_all_commits_(false),
       conflict_n_commits_(0),
@@ -42,20 +42,17 @@ MockConnectionManager::MockConnectionManager(syncable::Directory* directory)
       store_birthday_("Store BDay!"),
       store_birthday_sent_(false),
       client_stuck_(false),
-      commit_time_rename_prepended_string_(""),
       countdown_to_postbuffer_fail_(0),
       directory_(directory),
       mid_commit_observer_(NULL),
       throttling_(false),
       fail_with_auth_invalid_(false),
       fail_non_periodic_get_updates_(false),
-      gu_client_command_(NULL),
-      commit_client_command_(NULL),
       next_position_in_parent_(2),
       use_legacy_bookmarks_protocol_(false),
       num_get_updates_requests_(0) {
   SetNewTimestamp(0);
-  set_auth_token(kValidAuthToken);
+  SetAuthToken(kValidAuthToken);
 }
 
 MockConnectionManager::~MockConnectionManager() {
@@ -343,6 +340,19 @@ sync_pb::SyncEntity* MockConnectionManager::AddUpdateMeta(
   ent->set_mtime(sync_ts);
   ent->set_ctime(1);
   ent->set_position_in_parent(GeneratePositionInParent());
+
+  // This isn't perfect, but it works well enough.  This is an update, which
+  // means the ID is a server ID, which means it never changes.  By making
+  // kCacheGuid also never change, we guarantee that the same item always has
+  // the same originator_cache_guid and originator_client_item_id.
+  //
+  // Unfortunately, neither this class nor the tests that use it explicitly
+  // track sync entitites, so supporting proper cache guids and client item IDs
+  // would require major refactoring.  The ID used here ought to be the "c-"
+  // style ID that was sent up on the commit.
+  ent->set_originator_cache_guid(kCacheGuid);
+  ent->set_originator_client_item_id(id);
+
   return ent;
 }
 
@@ -395,9 +405,20 @@ sync_pb::SyncEntity* MockConnectionManager::AddUpdateFromLastCommit() {
         last_commit_response().entryresponse(0).version());
     ent->set_id_string(
         last_commit_response().entryresponse(0).id_string());
+
+    // This is the same hack as in AddUpdateMeta.  See the comment in that
+    // function for more information.
+    ent->set_originator_cache_guid(kCacheGuid);
+    ent->set_originator_client_item_id(
+        last_commit_response().entryresponse(0).id_string());
+
+    if (last_sent_commit().entries(0).has_unique_position()) {
+      ent->mutable_unique_position()->CopyFrom(
+          last_sent_commit().entries(0).unique_position());
+    }
+
     // Tests don't currently care about the following:
-    // originator_cache_guid, originator_client_item_id, parent_id_string,
-    // name, non_unique_name.
+    // parent_id_string, name, non_unique_name.
   }
   return GetMutableLastUpdate();
 }
@@ -528,7 +549,7 @@ void MockConnectionManager::ProcessGetUpdates(
 
   update_queue_.pop_front();
 
-  if (gu_client_command_.get()) {
+  if (gu_client_command_) {
     response->mutable_client_command()->CopyFrom(*gu_client_command_.get());
   }
 }
@@ -615,7 +636,7 @@ void MockConnectionManager::ProcessCommit(
   }
   commit_responses_.push_back(new CommitResponse(*commit_response));
 
-  if (commit_client_command_.get()) {
+  if (commit_client_command_) {
     response_buffer->mutable_client_command()->CopyFrom(
         *commit_client_command_.get());
   }
@@ -710,6 +731,11 @@ void MockConnectionManager::UpdateConnectionStatus() {
   } else {
     server_status_ = HttpResponse::SERVER_CONNECTION_OK;
   }
+}
+
+void MockConnectionManager::SetServerStatus(
+    HttpResponse::ServerConnectionCode server_status) {
+  server_status_ = server_status;
 }
 
 }  // namespace syncer

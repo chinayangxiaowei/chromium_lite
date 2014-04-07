@@ -9,14 +9,17 @@
 
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "chrome/browser/profiles/profile_metrics.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
+#include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_observer.h"
 #include "ui/gfx/image/image.h"
 
 class AvatarMenuModelObserver;
 class Browser;
+class Profile;
 class ProfileInfoInterface;
 
 // This class is the model for the menu-like interface that appears when the
@@ -46,6 +49,9 @@ class AvatarMenuModel : public content::NotificationObserver {
     // expected to be the email of the signed in user.
     bool signed_in;
 
+    // Whether or not the current profile requires sign-in before use.
+    bool signin_required;
+
     // The index in the |profile_cache| that this Item represents.
     size_t model_index;
   };
@@ -68,6 +74,11 @@ class AvatarMenuModel : public content::NotificationObserver {
   void EditProfile(size_t index);
   // Creates a new profile.
   void AddNewProfile(ProfileMetrics::ProfileAdd type);
+  // Creates a new guest user window.
+  static void SwitchToGuestProfileWindow(Browser* browser);
+
+  // Gets the path associated with the profile at |index|.
+  base::FilePath GetProfilePath(size_t index);
 
   // Gets the number of profiles.
   size_t GetNumberOfItems();
@@ -81,6 +92,15 @@ class AvatarMenuModel : public content::NotificationObserver {
   // Returns true if the add profile link should be shown.
   bool ShouldShowAddNewProfileLink() const;
 
+  // Returns information about a managed user which will be displayed in the
+  // avatar menu. If the profile does not belong to a managed user, an empty
+  // string will be returned.
+  base::string16 GetManagedUserInformation() const;
+
+  // Returns the icon for the managed user which will be displayed in the
+  // avatar menu.
+  const gfx::Image& GetManagedUserIcon() const;
+
   // This model is also used for the always-present Mac system menubar. As the
   // last active browser changes, the model needs to update accordingly.
   void set_browser(Browser* browser) { browser_ = browser; }
@@ -92,6 +112,17 @@ class AvatarMenuModel : public content::NotificationObserver {
 
   // True if avatar menu should be displayed.
   static bool ShouldShowAvatarMenu();
+
+  // Start the sign-out process for this profile.
+  // Parameter |logout_override| alows changing the destination URL for the
+  // sign-out process and return value (the WebContents executing the sign-out)
+  // are for testing; pass NULL for normal use.
+  content::WebContents* BeginSignOut();
+
+  // Use a different URL for logout (for testing only).
+  void SetLogoutURL(const std::string& logout_url) {
+    logout_override_ = logout_url;
+  }
 
  private:
   // Rebuilds the menu from the cache and notifies the |observer_|.
@@ -114,6 +145,9 @@ class AvatarMenuModel : public content::NotificationObserver {
 
   // Listens for notifications from the ProfileInfoCache.
   content::NotificationRegistrar registrar_;
+
+  // Special "override" logout URL used to let tests work.
+  std::string logout_override_;
 
   DISALLOW_COPY_AND_ASSIGN(AvatarMenuModel);
 };

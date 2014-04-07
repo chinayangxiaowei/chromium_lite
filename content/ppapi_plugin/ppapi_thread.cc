@@ -9,19 +9,21 @@
 #include "base/command_line.h"
 #include "base/debug/crash_logging.h"
 #include "base/logging.h"
-#include "base/process_util.h"
+#include "base/metrics/histogram.h"
 #include "base/rand_util.h"
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/threading/platform_thread.h"
-#include "base/time.h"
-#include "base/utf_string_conversions.h"
-#include "content/common/child_process.h"
+#include "base/time/time.h"
+#include "content/child/browser_font_resource_trusted.h"
+#include "content/child/child_process.h"
 #include "content/common/child_process_messages.h"
 #include "content/common/sandbox_util.h"
 #include "content/ppapi_plugin/broker_process_dispatcher.h"
 #include "content/ppapi_plugin/plugin_process_dispatcher.h"
 #include "content/ppapi_plugin/ppapi_webkitplatformsupport_impl.h"
 #include "content/public/common/content_client.h"
+#include "content/public/common/content_switches.h"
 #include "content/public/common/pepper_plugin_info.h"
 #include "content/public/common/sandbox_init.h"
 #include "content/public/plugin/content_plugin_client.h"
@@ -32,16 +34,16 @@
 #include "ppapi/c/dev/ppp_network_state_dev.h"
 #include "ppapi/c/pp_errors.h"
 #include "ppapi/c/ppp.h"
+#include "ppapi/proxy/interface_list.h"
 #include "ppapi/proxy/plugin_globals.h"
 #include "ppapi/proxy/ppapi_messages.h"
-#include "ppapi/proxy/interface_list.h"
 #include "ppapi/shared_impl/api_id.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebKit.h"
+#include "third_party/WebKit/public/web/WebKit.h"
 #include "ui/base/ui_base_switches.h"
-#include "webkit/plugins/plugin_switches.h"
 
 #if defined(OS_WIN)
 #include "base/win/win_util.h"
+#include "base/win/windows_version.h"
 #include "sandbox/win/src/sandbox.h"
 #elif defined(OS_MACOSX)
 #include "content/common/sandbox_init_mac.h"
@@ -88,24 +90,20 @@ PpapiThread::PpapiThread(const CommandLine& command_line, bool is_broker)
       local_pp_module_(
           base::RandInt(0, std::numeric_limits<PP_Module>::max())),
       next_plugin_dispatcher_id_(1),
-      ALLOW_THIS_IN_INITIALIZER_LIST(dispatcher_message_listener_(this)) {
+      dispatcher_message_listener_(this) {
   ppapi::proxy::PluginGlobals* globals = ppapi::proxy::PluginGlobals::Get();
   globals->set_plugin_proxy_delegate(this);
   globals->set_command_line(
       command_line.GetSwitchValueASCII(switches::kPpapiFlashArgs));
-  globals->set_enable_threading(
-      !command_line.HasSwitch(switches::kDisablePepperThreading));
 
   webkit_platform_support_.reset(new PpapiWebKitPlatformSupportImpl);
   WebKit::initialize(webkit_platform_support_.get());
 
   // Register interfaces that expect messages from the browser process. Please
   // note that only those InterfaceProxy-based ones require registration.
-  AddRoute(ppapi::API_ID_PPB_TCPSERVERSOCKET_PRIVATE,
+  AddRoute(ppapi::API_ID_PPB_TCPSOCKET,
            &dispatcher_message_listener_);
   AddRoute(ppapi::API_ID_PPB_TCPSOCKET_PRIVATE,
-           &dispatcher_message_listener_);
-  AddRoute(ppapi::API_ID_PPB_UDPSOCKET_PRIVATE,
            &dispatcher_message_listener_);
   AddRoute(ppapi::API_ID_PPB_HOSTRESOLVER_PRIVATE,
            &dispatcher_message_listener_);
@@ -114,6 +112,9 @@ PpapiThread::PpapiThread(const CommandLine& command_line, bool is_broker)
 }
 
 PpapiThread::~PpapiThread() {
+}
+
+void PpapiThread::Shutdown() {
   ppapi::proxy::PluginGlobals::Get()->set_plugin_proxy_delegate(NULL);
   if (plugin_entry_points_.shutdown_module)
     plugin_entry_points_.shutdown_module();
@@ -127,7 +128,7 @@ PpapiThread::~PpapiThread() {
 
 bool PpapiThread::Send(IPC::Message* msg) {
   // Allow access from multiple threads.
-  if (MessageLoop::current() == message_loop())
+  if (base::MessageLoop::current() == message_loop())
     return ChildThread::Send(msg);
 
   return sync_message_filter()->Send(msg);
@@ -206,6 +207,17 @@ void PpapiThread::SetActiveURL(const std::string& url) {
   GetContentClient()->SetActiveURL(GURL(url));
 }
 
+PP_Resource PpapiThread::CreateBrowserFont(
+    ppapi::proxy::Connection connection,
+    PP_Instance instance,
+    const PP_BrowserFont_Trusted_Description& desc,
+    const ppapi::Preferences& prefs) {
+  if (!BrowserFontResource_Trusted::IsPPFontDescriptionValid(desc))
+    return 0;
+  return (new BrowserFontResource_Trusted(
+        connection, instance, desc, prefs))->GetReference();
+}
+
 uint32 PpapiThread::Register(ppapi::proxy::PluginDispatcher* plugin_dispatcher) {
   if (!plugin_dispatcher ||
       plugin_dispatchers_.size() >= std::numeric_limits<uint32>::max()) {
@@ -261,6 +273,7 @@ void PpapiThread::OnLoadPlugin(const base::FilePath& path,
     if (!library.is_valid()) {
       LOG(ERROR) << "Failed to load Pepper module from "
         << path.value() << " (error: " << error << ")";
+      ReportLoadResult(path, LOAD_FAILED);
       return;
     }
 
@@ -270,6 +283,7 @@ void PpapiThread::OnLoadPlugin(const base::FilePath& path,
             library.GetFunctionPointer("PPP_GetInterface"));
     if (!plugin_entry_points_.get_interface) {
       LOG(WARNING) << "No PPP_GetInterface in plugin library";
+      ReportLoadResult(path, ENTRY_POINT_MISSING);
       return;
     }
 
@@ -288,6 +302,7 @@ void PpapiThread::OnLoadPlugin(const base::FilePath& path,
               library.GetFunctionPointer("PPP_InitializeModule"));
       if (!plugin_entry_points_.initialize_module) {
         LOG(WARNING) << "No PPP_InitializeModule in plugin library";
+        ReportLoadResult(path, ENTRY_POINT_MISSING);
         return;
       }
     }
@@ -307,6 +322,13 @@ void PpapiThread::OnLoadPlugin(const base::FilePath& path,
   // can be loaded. TODO(cpu): consider changing to the loading style of
   // regular plugins.
   if (g_target_services) {
+    // Let Flash load DRM before lockdown on Vista+.
+    if (permissions.HasPermission(ppapi::PERMISSION_FLASH) &&
+        base::win::OSInfo::GetInstance()->version() >=
+        base::win::VERSION_VISTA ) {
+      LoadLibrary(L"dxva2.dll");
+    }
+
     // Cause advapi32 to load before the sandbox is turned on.
     unsigned int dummy_rand;
     rand_s(&dummy_rand);
@@ -325,16 +347,19 @@ void PpapiThread::OnLoadPlugin(const base::FilePath& path,
             library.GetFunctionPointer("PPP_InitializeBroker"));
     if (!init_broker) {
       LOG(WARNING) << "No PPP_InitializeBroker in plugin library";
+      ReportLoadResult(path, ENTRY_POINT_MISSING);
       return;
     }
 
     int32_t init_error = init_broker(&connect_instance_func_);
     if (init_error != PP_OK) {
       LOG(WARNING) << "InitBroker failed with error " << init_error;
+      ReportLoadResult(path, INIT_FAILED);
       return;
     }
     if (!connect_instance_func_) {
       LOG(WARNING) << "InitBroker did not provide PP_ConnectInstance_Func";
+      ReportLoadResult(path, INIT_FAILED);
       return;
     }
   } else {
@@ -350,12 +375,15 @@ void PpapiThread::OnLoadPlugin(const base::FilePath& path,
         &ppapi::proxy::PluginDispatcher::GetBrowserInterface);
     if (init_error != PP_OK) {
       LOG(WARNING) << "InitModule failed with error " << init_error;
+      ReportLoadResult(path, INIT_FAILED);
       return;
     }
   }
 
   // Initialization succeeded, so keep the plugin DLL loaded.
   library_.Reset(library.Release());
+
+  ReportLoadResult(path, LOAD_SUCCESS);
 }
 
 void PpapiThread::OnCreateChannel(base::ProcessId renderer_pid,
@@ -461,12 +489,32 @@ void PpapiThread::SavePluginName(const base::FilePath& path) {
   ppapi::proxy::PluginGlobals::Get()->set_plugin_name(
       path.BaseName().AsUTF8Unsafe());
 
-  // plugin() is NULL when in-process.  Which is fine, because this is
+  // plugin() is NULL when in-process, which is fine, because this is
   // just a hook for setting the process name.
   if (GetContentClient()->plugin()) {
     GetContentClient()->plugin()->PluginProcessStarted(
         path.BaseName().RemoveExtension().LossyDisplayName());
   }
+}
+
+void PpapiThread::ReportLoadResult(const base::FilePath& path,
+                                   LoadResult result) {
+  DCHECK_LT(result, LOAD_RESULT_MAX);
+
+  std::ostringstream histogram_name;
+  histogram_name << "Plugin.Ppapi" << (is_broker_ ? "Broker" : "Plugin")
+                 << "LoadResult_" << path.BaseName().MaybeAsASCII();
+
+  // Note: This leaks memory, which is expected behavior.
+  base::HistogramBase* histogram =
+      base::LinearHistogram::FactoryGet(
+          histogram_name.str(),
+          1,
+          LOAD_RESULT_MAX,
+          LOAD_RESULT_MAX + 1,
+          base::HistogramBase::kUmaTargetedHistogramFlag);
+
+  histogram->Add(result);
 }
 
 }  // namespace content

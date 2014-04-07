@@ -4,6 +4,9 @@
 
 #include "cc/layers/contents_scaling_layer.h"
 
+#include <vector>
+
+#include "cc/test/fake_layer_tree_host.h"
 #include "cc/test/geometry_test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -20,22 +23,8 @@ class MockContentsScalingLayer : public ContentsScalingLayer {
     ContentsScalingLayer::SetNeedsDisplayRect(dirty_rect);
   }
 
-  void ResetNeedsDisplay() {
-      needs_display_ = false;
-  }
-
   const gfx::RectF& LastNeedsDisplayRect() const {
-     return last_needs_display_rect_;
-  }
-
-  void UpdateContentsScale(float contents_scale) {
-      // Simulate CalcDrawProperties.
-      CalculateContentsScale(
-          contents_scale,
-          false,  // animating_transform_to_screen
-          &draw_properties().contents_scale_x,
-          &draw_properties().contents_scale_y,
-          &draw_properties().content_bounds);
+    return last_needs_display_rect_;
   }
 
  private:
@@ -44,42 +33,42 @@ class MockContentsScalingLayer : public ContentsScalingLayer {
   gfx::RectF last_needs_display_rect_;
 };
 
-void CalcDrawProps(Layer* root, float device_scale) {
-    std::vector<scoped_refptr<Layer> > render_surface_layer_list;
-    LayerTreeHostCommon::CalculateDrawProperties(
-        root,
-        gfx::Size(500, 500),
-        device_scale,
-        1.f,
-        1024,
-        false,
-        &render_surface_layer_list);
+static void CalcDrawProps(FakeLayerTreeHost* host, float device_scale_factor) {
+  RenderSurfaceLayerList render_surface_layer_list;
+  LayerTreeHostCommon::CalcDrawPropsMainInputsForTesting inputs(
+      host->root_layer(), gfx::Size(500, 500), &render_surface_layer_list);
+  inputs.device_scale_factor = device_scale_factor;
+  LayerTreeHostCommon::CalculateDrawProperties(&inputs);
 }
 
 TEST(ContentsScalingLayerTest, CheckContentsBounds) {
+  scoped_ptr<FakeLayerTreeHost> host = FakeLayerTreeHost::Create();
+
   scoped_refptr<MockContentsScalingLayer> test_layer =
       make_scoped_refptr(new MockContentsScalingLayer());
 
   scoped_refptr<Layer> root = Layer::Create();
   root->AddChild(test_layer);
+  host->SetRootLayer(root);
 
   test_layer->SetBounds(gfx::Size(320, 240));
-  CalcDrawProps(root, 1.f);
+
+  CalcDrawProps(host.get(), 1.f);
   EXPECT_FLOAT_EQ(1.f, test_layer->contents_scale_x());
   EXPECT_FLOAT_EQ(1.f, test_layer->contents_scale_y());
   EXPECT_EQ(320, test_layer->content_bounds().width());
   EXPECT_EQ(240, test_layer->content_bounds().height());
 
-  CalcDrawProps(root, 2.f);
+  CalcDrawProps(host.get(), 2.f);
   EXPECT_EQ(640, test_layer->content_bounds().width());
   EXPECT_EQ(480, test_layer->content_bounds().height());
 
   test_layer->SetBounds(gfx::Size(10, 20));
-  CalcDrawProps(root, 2.f);
+  CalcDrawProps(host.get(), 2.f);
   EXPECT_EQ(20, test_layer->content_bounds().width());
   EXPECT_EQ(40, test_layer->content_bounds().height());
 
-  CalcDrawProps(root, 1.33f);
+  CalcDrawProps(host.get(), 1.33f);
   EXPECT_EQ(14, test_layer->content_bounds().width());
   EXPECT_EQ(27, test_layer->content_bounds().height());
 }

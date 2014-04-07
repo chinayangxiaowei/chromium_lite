@@ -11,18 +11,16 @@
 #include <vector>
 
 #include "base/basictypes.h"
+#include "base/containers/hash_tables.h"
 #include "base/files/file_path.h"
 #include "base/gtest_prod_util.h"
-#include "base/hash_tables.h"
 #include "base/memory/linked_ptr.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/threading/non_thread_safe.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_shortcut_manager.h"
 #include "chrome/browser/ui/browser_list_observer.h"
-#include "chrome/browser/ui/host_desktop.h"
-#include "chrome/browser/ui/startup/startup_types.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 
@@ -47,12 +45,21 @@ class ProfileManager : public base::NonThreadSafe,
   // Physically remove deleted profile directories from disk.
   static void NukeDeletedProfilesFromDisk();
 
+  // The following DEPRECATED functions should be removed: crbug.com/83792.
+
   // DEPRECATED: DO NOT USE unless in ChromeOS.
   // Returns the default profile.  This adds the profile to the
   // ProfileManager if it doesn't already exist.  This method returns NULL if
   // the profile doesn't exist and we can't create it.
   // The profile used can be overridden by using --login-profile on cros.
   Profile* GetDefaultProfile(const base::FilePath& user_data_dir);
+
+  // DEPRECATED: Temporary measure to ensure that GetDefaultProfile() is not
+  // called before CreateProfile() is called in chrome_browser_main.cc.
+  // If GetDefaultProfile() or GetDefaultProfileOrOffTheRecord() is called
+  // before this, a CHECK will be triggered.
+  static void AllowGetDefaultProfile();
+  static bool IsGetDefaultProfileAllowed();
 
   // DEPRECATED: DO NOT USE unless in ChromeOS.
   // Same as instance method but provides the default user_data_dir as well.
@@ -78,11 +85,13 @@ class ProfileManager : public base::NonThreadSafe,
                           const CreateCallback& callback,
                           const string16& name,
                           const string16& icon_url,
-                          bool is_managed);
+                          const std::string& managed_user_id);
 
-  // Initiates default profile creation. If default profile has already been
-  // created then the callback is called immediately. Should be called on the
-  // UI thread.
+  // Initiates profile creation identified by |active_profile_username_hash_|.
+  // If profile has already been created then the callback is called
+  // immediately. Should be called on the UI thread.
+  // This method is only used on Chrome OS where every user profile
+  // has username_hash associated with it.
   static void CreateDefaultProfileAsync(const CreateCallback& callback);
 
   // Returns true if the profile pointer is known to point to an existing
@@ -99,7 +108,14 @@ class ProfileManager : public base::NonThreadSafe,
   Profile* GetLastUsedProfile(const base::FilePath& user_data_dir);
 
   // Same as instance method but provides the default user_data_dir as well.
+  // If the Profile is going to be used to open a new window then consider using
+  // GetLastUsedProfileAllowedByPolicy() instead.
   static Profile* GetLastUsedProfile();
+
+  // Same as GetLastUsedProfile() but returns the incognito Profile if
+  // incognito mode is forced. This should be used if the last used Profile
+  // will be used to open new browser windows.
+  static Profile* GetLastUsedProfileAllowedByPolicy();
 
   // Get the path of the last used profile, or if that's undefined, the default
   // profile.
@@ -125,44 +141,10 @@ class ProfileManager : public base::NonThreadSafe,
                        const content::NotificationSource& source,
                        const content::NotificationDetails& details) OVERRIDE;
 
-  // Returns true if the given command line indicates that this is a short-lived
-  // profile import process.
-  static bool IsImportProcess(const CommandLine& command_line);
-
-  // Indicate that an import process will run for the next created Profile.
-  void SetWillImport();
-  bool will_import() { return will_import_; }
-
-  // Indicate that the import process for |profile| has completed.
-  void OnImportFinished(Profile* profile);
-
-  // ------------------ static utility functions -------------------
-
-  // Returns the path to the default profile directory, based on the given
-  // user data directory.
-  static base::FilePath GetDefaultProfileDir(
-      const base::FilePath& user_data_dir);
-
-  // Returns the path to the preferences file given the user profile directory.
-  static base::FilePath GetProfilePrefsPath(const base::FilePath& profile_dir);
-
   // If a profile with the given path is currently managed by this object,
   // return a pointer to the corresponding Profile object;
   // otherwise return NULL.
   Profile* GetProfileByPath(const base::FilePath& path) const;
-
-  // Activates a window for |profile| on the desktop specified by
-  // |desktop_type|. If no such window yet exists, or if |always_create| is
-  // true, this first creates a new window, then activates
-  // that. If activating an exiting window and multiple windows exists then the
-  // window that was most recently active is activated. This is used for
-  // creation of a window from the multi-profile dropdown menu.
-  static void FindOrCreateNewWindowForProfile(
-      Profile* profile,
-      chrome::startup::IsProcessStartup process_startup,
-      chrome::startup::IsFirstRun is_first_run,
-      chrome::HostDesktopType desktop_type,
-      bool always_create);
 
   // Profile::Delegate implementation:
   virtual void OnProfileCreated(Profile* profile,
@@ -180,16 +162,16 @@ class ProfileManager : public base::NonThreadSafe,
   // that at some point the list of numbered profiles is not continuous.)
   // |callback| may be invoked multiple times (for CREATE_STATUS_INITIALIZED
   // and CREATE_STATUS_CREATED) so binding parameters with bind::Passed() is
-  // prohibited.
-  static void CreateMultiProfileAsync(
+  // prohibited. Returns the file path to the profile that will be created
+  // asynchronously.
+  static base::FilePath CreateMultiProfileAsync(
       const string16& name,
       const string16& icon_url,
       const CreateCallback& callback,
-      chrome::HostDesktopType desktop_type,
-      bool is_managed);
+      const std::string& managed_user_id);
 
-  // Register multi-profile related preferences in Local State.
-  static void RegisterPrefs(PrefRegistrySimple* registry);
+  // Returns the full path to be used for guest profiles.
+  static base::FilePath GetGuestProfilePath();
 
   // Returns a ProfileInfoCache object which can be used to get information
   // about profiles without having to load them from disk.
@@ -199,22 +181,31 @@ class ProfileManager : public base::NonThreadSafe,
   // profile specfic desktop shortcuts.
   ProfileShortcutManager* profile_shortcut_manager();
 
-  // Schedules the profile at the given path to be deleted on shutdown.
+  // Schedules the profile at the given path to be deleted on shutdown. If we're
+  // deleting the last profile, a new one will be created in its place, and in
+  // that case the callback will be called when profile creation is complete.
   void ScheduleProfileForDeletion(const base::FilePath& profile_dir,
-                                  chrome::HostDesktopType desktop_type);
-
-  // Checks if multiple profiles is enabled.
-  static bool IsMultipleProfilesEnabled();
+                                  const CreateCallback& callback);
 
   // Autoloads profiles if they are running background apps.
   void AutoloadProfiles();
 
+  // Sign-Out a profile against use until re-authentication.
+  void SignOutProfile(Profile* profile);
+
   // Register and add testing profile to the ProfileManager. Use ONLY in tests.
   // This allows the creation of Profiles outside of the standard creation path
-  // for testing. If |addToCache|, add to ProfileInfoCache as well.
-  void RegisterTestingProfile(Profile* profile, bool addToCache);
+  // for testing. If |addToCache|, adds to ProfileInfoCache as well.
+  // If |start_deferred_task_runners|, starts the deferred task runners.
+  // Use ONLY in tests.
+  void RegisterTestingProfile(Profile* profile,
+                              bool addToCache,
+                              bool start_deferred_task_runners);
 
   const base::FilePath& user_data_dir() const { return user_data_dir_; }
+
+  // For ChromeOS, determines if the user has logged in to a real profile.
+  bool IsLoggedIn() const { return logged_in_; }
 
  protected:
   // Does final initial actions.
@@ -236,6 +227,7 @@ class ProfileManager : public base::NonThreadSafe,
  private:
   friend class TestingProfileManager;
   FRIEND_TEST_ALL_PREFIXES(ProfileManagerBrowserTest, DeleteAllProfiles);
+  FRIEND_TEST_ALL_PREFIXES(ProfileManagerBrowserTest, SwitchToProfile);
 
   // This struct contains information about profiles which are being loaded or
   // were loaded.
@@ -263,6 +255,9 @@ class ProfileManager : public base::NonThreadSafe,
   // Returns true if the profile was added, false otherwise.
   bool AddProfile(Profile* profile);
 
+  // Schedules the profile at the given path to be deleted on shutdown.
+  void FinishDeletingProfile(const base::FilePath& profile_dir);
+
   // Registers profile with given info. Returns pointer to created ProfileInfo
   // entry.
   ProfileInfo* RegisterProfile(Profile* profile, bool created);
@@ -287,7 +282,7 @@ class ProfileManager : public base::NonThreadSafe,
   void InitProfileUserPrefs(Profile* profile);
 
   // For ChromeOS, determines if profile should be otr.
-  bool ShouldGoOffTheRecord();
+  bool ShouldGoOffTheRecord(Profile* profile);
 
   // Get the path of the next profile directory and increment the internal
   // count.
@@ -300,6 +295,17 @@ class ProfileManager : public base::NonThreadSafe,
                     Profile* profile,
                     Profile::CreateStatus status);
 
+  // If the |loaded_profile| has been loaded succesfully (according to |status|)
+  // and isn't already scheduled for deletion, then finishes adding
+  // |profile_to_delete_dir| to the queue of profiles to be deleted, and updates
+  // the kProfileLastUsed preference based on |last_non_managed_profile_path|.
+  void OnNewActiveProfileLoaded(
+      const base::FilePath& profile_to_delete_path,
+      const base::FilePath& last_non_managed_profile_path,
+      const CreateCallback& original_callback,
+      Profile* loaded_profile,
+      Profile::CreateStatus status);
+
   content::NotificationRegistrar registrar_;
 
   // The path to the user data directory (DIR_USER_DATA).
@@ -309,9 +315,6 @@ class ProfileManager : public base::NonThreadSafe,
   // in the --login-profile command line argument should be used as the
   // default.
   bool logged_in_;
-
-  // True if an import process will be run.
-  bool will_import_;
 
   // Maps profile path to ProfileInfo (if profile has been created). Use
   // RegisterProfile() to add into this map. This map owns all loaded profile

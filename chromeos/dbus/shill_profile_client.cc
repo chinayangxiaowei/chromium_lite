@@ -5,9 +5,10 @@
 #include "chromeos/dbus/shill_profile_client.h"
 
 #include "base/bind.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/stl_util.h"
 #include "base/values.h"
+#include "chromeos/dbus/dbus_thread_manager.h"
 #include "chromeos/dbus/shill_profile_client_stub.h"
 #include "chromeos/dbus/shill_property_changed_observer.h"
 #include "dbus/bus.h"
@@ -20,12 +21,10 @@ namespace chromeos {
 
 namespace {
 
-// The ShillProfileClient implementation.
 class ShillProfileClientImpl : public ShillProfileClient {
  public:
   explicit ShillProfileClientImpl(dbus::Bus* bus);
 
-  /////////////////////////////////////
   // ShillProfileClient overrides.
   virtual void AddPropertyChangedObserver(
       const dbus::ObjectPath& profile_path,
@@ -50,6 +49,10 @@ class ShillProfileClientImpl : public ShillProfileClient {
                            const std::string& entry_path,
                            const base::Closure& callback,
                            const ErrorCallback& error_callback) OVERRIDE;
+
+  virtual TestInterface* GetTestInterface() OVERRIDE {
+    return NULL;
+  }
 
  private:
   typedef std::map<std::string, ShillClientHelper*> HelperMap;

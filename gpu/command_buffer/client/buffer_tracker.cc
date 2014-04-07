@@ -2,11 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "../client/buffer_tracker.h"
+#include "gpu/command_buffer/client/buffer_tracker.h"
 
-#include "../client/atomicops.h"
-#include "../client/cmd_buffer_helper.h"
-#include "../client/mapped_memory.h"
+#include "gpu/command_buffer/client/atomicops.h"
+#include "gpu/command_buffer/client/cmd_buffer_helper.h"
+#include "gpu/command_buffer/client/mapped_memory.h"
 
 namespace gpu {
 namespace gles2 {
@@ -28,12 +28,8 @@ BufferTracker::Buffer* BufferTracker::CreateBuffer(
   int32 shm_id = -1;
   uint32 shm_offset = 0;
   void* address = NULL;
-  if (size) {
+  if (size)
     address = mapped_memory_->Alloc(size, &shm_id, &shm_offset);
-    if (!address) {
-      return NULL;
-    }
-  }
 
   Buffer* buffer = new Buffer(id, size, shm_id, shm_offset, address);
   std::pair<BufferMap::iterator, bool> result =

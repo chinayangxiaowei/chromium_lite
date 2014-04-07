@@ -7,13 +7,15 @@
 #include "base/i18n/rtl.h"
 #include "base/mac/bundle_locations.h"
 #include "base/mac/mac_util.h"
-#include "base/sys_string_conversions.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/sys_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/api/commands/command_service.h"
 #include "chrome/browser/extensions/bundle_installer.h"
 #include "chrome/browser/extensions/extension_action.h"
 #include "chrome/browser/extensions/extension_action_manager.h"
 #include "chrome/browser/extensions/extension_install_ui.h"
+#include "chrome/browser/signin/signin_promo.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/browser_window.h"
@@ -29,12 +31,12 @@
 #include "chrome/browser/ui/cocoa/tabs/tab_strip_view.h"
 #include "chrome/browser/ui/cocoa/toolbar/toolbar_controller.h"
 #include "chrome/browser/ui/singleton_tabs.h"
-#include "chrome/browser/ui/webui/sync_promo/sync_promo_ui.h"
-#include "chrome/common/chrome_notification_types.h"
+#include "chrome/browser/ui/sync/sync_promo_ui.h"
 #include "chrome/common/extensions/api/commands/commands_handler.h"
 #include "chrome/common/extensions/api/extension_action/action_info.h"
 #include "chrome/common/extensions/api/omnibox/omnibox_handler.h"
 #include "chrome/common/extensions/extension.h"
+#include "chrome/common/extensions/sync_helper.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/browser/notification_details.h"
 #include "content/public/browser/notification_registrar.h"
@@ -120,18 +122,15 @@ class ExtensionLoadedNotificationObserver
     icon_.reset([gfx::SkBitmapToNSImage(icon) retain]);
     pageActionPreviewShowing_ = NO;
 
-    extensions::ExtensionActionManager* extension_action_manager =
-        extensions::ExtensionActionManager::Get(browser_->profile());
-
     if (bundle_) {
       type_ = extension_installed_bubble::kBundle;
     } else if (extension->is_app()) {
       type_ = extension_installed_bubble::kApp;
     } else if (!extensions::OmniboxInfo::GetKeyword(extension).empty()) {
       type_ = extension_installed_bubble::kOmniboxKeyword;
-    } else if (extension_action_manager->GetBrowserAction(*extension)) {
+    } else if (extensions::ActionInfo::GetBrowserActionInfo(extension)) {
       type_ = extension_installed_bubble::kBrowserAction;
-    } else if (extension_action_manager->GetPageAction(*extension) &&
+    } else if (extensions::ActionInfo::GetPageActionInfo(extension) &&
                extensions::ActionInfo::IsVerboseInstallMessage(extension)) {
       type_ = extension_installed_bubble::kPageAction;
     } else {
@@ -166,7 +165,7 @@ class ExtensionLoadedNotificationObserver
 
 // Returns YES if the sync promo should be shown in the bubble.
 - (BOOL)showSyncPromo {
-  return extension_->GetSyncType() == Extension::SYNC_TYPE_EXTENSION &&
+  return extensions::sync_helper::IsSyncableExtension(extension_) &&
          SyncPromoUI::ShouldShowSyncPromo(browser_->profile());
 }
 
@@ -199,11 +198,10 @@ class ExtensionLoadedNotificationObserver
    clickedOnLink:(id)link
          atIndex:(NSUInteger)charIndex {
   DCHECK_EQ(promo_.get(), aTextView);
-  std::string promo_url =
-      SyncPromoUI::GetSyncPromoURL(
-            GURL(), SyncPromoUI::SOURCE_EXTENSION_INSTALL_BUBBLE, false).spec();
-  chrome::NavigateParams params(chrome::GetSingletonTabNavigateParams(
-      browser_, GURL(promo_url)));
+  GURL promo_url =
+      signin::GetPromoURL(signin::SOURCE_EXTENSION_INSTALL_BUBBLE, false);
+  chrome::NavigateParams params(
+      chrome::GetSingletonTabNavigateParams(browser_, promo_url));
   chrome::Navigate(&params);
   return YES;
 }

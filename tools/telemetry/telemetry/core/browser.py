@@ -1,17 +1,18 @@
 # Copyright (c) 2012 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-import collections
+
 import os
 
 from telemetry.core import browser_credentials
 from telemetry.core import extension_dict
+from telemetry.core import platform
 from telemetry.core import tab_list
 from telemetry.core import temporary_http_server
 from telemetry.core import wpr_modes
 from telemetry.core import wpr_server
-from telemetry.core.chrome import browser_backend
-from telemetry.core.chrome import platform
+from telemetry.core.backends import browser_backend
+from telemetry.core.platform.profiler import profiler_finder
 
 class Browser(object):
   """A running browser instance that can be controlled in a limited way.
@@ -37,6 +38,7 @@ class Browser(object):
           backend.extension_dict_backend)
     self.credentials = browser_credentials.BrowserCredentials()
     self._platform.SetFullPerformanceModeEnabled(True)
+    self._active_profilers = []
 
   def __enter__(self):
     return self
@@ -81,6 +83,53 @@ class Browser(object):
   def supports_tracing(self):
     return self._browser_backend.supports_tracing
 
+  def is_profiler_active(self, profiler_name):
+    return profiler_name in [profiler.name() for
+                             profiler in self._active_profilers]
+
+  def _GetStatsCommon(self, pid_stats_function):
+    browser_pid = self._browser_backend.pid
+    result = {
+        'Browser': dict(pid_stats_function(browser_pid), **{'ProcessCount': 1}),
+        'Renderer': {'ProcessCount': 0},
+        'Gpu': {'ProcessCount': 0}
+    }
+    child_process_count = 0
+    for child_pid in self._platform_backend.GetChildPids(browser_pid):
+      child_process_count += 1
+      # Process type detection is causing exceptions.
+      # http://crbug.com/240951
+      try:
+        child_cmd_line = self._platform_backend.GetCommandLine(child_pid)
+        child_process_name = self._browser_backend.GetProcessName(
+            child_cmd_line)
+      except Exception:
+        # The cmd line was unavailable, assume it'll be impossible to track
+        # any further stats about this process.
+        continue
+      process_name_type_key_map = {'gpu-process': 'Gpu', 'renderer': 'Renderer'}
+      if child_process_name in process_name_type_key_map:
+        child_process_type_key = process_name_type_key_map[child_process_name]
+      else:
+        # TODO: identify other process types (zygote, plugin, etc), instead of
+        # lumping them in with renderer processes.
+        child_process_type_key = 'Renderer'
+      child_stats = pid_stats_function(child_pid)
+      result[child_process_type_key]['ProcessCount'] += 1
+      for k, v in child_stats.iteritems():
+        if k in result[child_process_type_key]:
+          result[child_process_type_key][k] += v
+        else:
+          result[child_process_type_key][k] = v
+    for v in result.itervalues():
+      if v['ProcessCount'] > 1:
+        for k in v.keys():
+          if k.endswith('Peak'):
+            del v[k]
+      del v['ProcessCount']
+    result['ProcessCount'] = child_process_count
+    return result
+
   @property
   def memory_stats(self):
     """Returns a dict of memory statistics for the browser:
@@ -92,6 +141,14 @@ class Browser(object):
         'ProportionalSetSize': W,
         'PrivateDirty': X
       },
+      'Gpu': {
+        'VM': S,
+        'VMPeak': T,
+        'WorkingSetSize': U,
+        'WorkingSetSizePeak': V,
+        'ProportionalSetSize': W,
+        'PrivateDirty': X
+      },
       'Renderer': {
         'VM': S,
         'VMPeak': T,
@@ -99,30 +156,27 @@ class Browser(object):
         'WorkingSetSizePeak': V,
         'ProportionalSetSize': W,
         'PrivateDirty': X
-      }
+      },
       'SystemCommitCharge': Y,
-      'ProcessCount': Z
+      'ProcessCount': Z,
     }
     Any of the above keys may be missing on a per-platform basis.
     """
-    browser_pid = self._browser_backend.pid
-    renderer_totals = collections.defaultdict(int)
-    process_count = 1
-    for renderer_pid in self._platform_backend.GetChildPids(browser_pid):
-      process_count += 1
-      for k, v in self._platform_backend.GetMemoryStats(
-          renderer_pid).iteritems():
-        renderer_totals[k] += v
-    return {'Browser': self._platform_backend.GetMemoryStats(browser_pid),
-            'Renderer': renderer_totals,
-            'SystemCommitCharge':
-                self._platform_backend.GetSystemCommitCharge(),
-            'ProcessCount': process_count}
+    result = self._GetStatsCommon(self._platform_backend.GetMemoryStats)
+    result['SystemCommitCharge'] = \
+        self._platform_backend.GetSystemCommitCharge()
+    return result
 
   @property
   def io_stats(self):
     """Returns a dict of IO statistics for the browser:
     { 'Browser': {
+        'ReadOperationCount': W,
+        'WriteOperationCount': X,
+        'ReadTransferCount': Y,
+        'WriteTransferCount': Z
+      },
+      'Gpu': {
         'ReadOperationCount': W,
         'WriteOperationCount': X,
         'ReadTransferCount': Y,
@@ -136,16 +190,39 @@ class Browser(object):
       }
     }
     """
-    browser_pid = self._browser_backend.pid
-    renderer_totals = collections.defaultdict(int)
-    for renderer_pid in self._platform_backend.GetChildPids(browser_pid):
-      for k, v in self._platform_backend.GetIOStats(renderer_pid).iteritems():
-        renderer_totals[k] += v
-    return {'Browser': self._platform_backend.GetIOStats(browser_pid),
-            'Renderer': renderer_totals}
+    result = self._GetStatsCommon(self._platform_backend.GetIOStats)
+    del result['ProcessCount']
+    return result
 
-  def StartTracing(self):
-    return self._browser_backend.StartTracing()
+  def StartProfiling(self, profiler_name, base_output_file):
+    """Starts profiling using |profiler_name|. Results are saved to
+    |base_output_file|.<process_name>."""
+    assert not self._active_profilers, 'Already profiling. Must stop first.'
+
+    profiler_class = profiler_finder.FindProfiler(profiler_name)
+
+    if not profiler_class.is_supported(self._browser_backend.options):
+      raise Exception('The %s profiler is not '
+                      'supported on this platform.' % profiler_name)
+
+    self._active_profilers.append(
+        profiler_class(self._browser_backend, self._platform_backend,
+            base_output_file))
+
+  def StopProfiling(self):
+    """Stops all active profilers and saves their results.
+
+    Returns:
+      A list of filenames produced by the profiler.
+    """
+    output_files = []
+    for profiler in self._active_profilers:
+      output_files.extend(profiler.CollectProfile())
+    self._active_profilers = []
+    return output_files
+
+  def StartTracing(self, custom_categories=None, timeout=10):
+    return self._browser_backend.StartTracing(custom_categories, timeout)
 
   def StopTracing(self):
     return self._browser_backend.StopTracing()
@@ -153,6 +230,20 @@ class Browser(object):
   def GetTraceResultAndReset(self):
     """Returns the result of the trace, as TraceResult object."""
     return self._browser_backend.GetTraceResultAndReset()
+
+  def Start(self):
+    options = self._browser_backend.options
+    if options.clear_sytem_cache_for_browser_and_profile_on_start:
+      if self._platform.CanFlushIndividualFilesFromSystemCache():
+        self._platform.FlushSystemCacheForDirectory(
+            self._browser_backend.profile_directory)
+        self._platform.FlushSystemCacheForDirectory(
+            self._browser_backend.browser_directory)
+      else:
+        self._platform.FlushEntireSystemCache()
+
+    self._browser_backend.Start()
+    self._browser_backend.SetBrowser(self)
 
   def Close(self):
     """Closes this browser."""
@@ -173,20 +264,28 @@ class Browser(object):
     return self._http_server
 
   def SetHTTPServerDirectories(self, paths):
+    """Returns True if the HTTP server was started, False otherwise."""
+    if not isinstance(paths, list):
+      paths = [paths]
+    paths = [os.path.abspath(p) for p in paths]
+
     if paths and self._http_server and self._http_server.paths == paths:
-      return
+      return False
 
     if self._http_server:
       self._http_server.Close()
       self._http_server = None
 
     if not paths:
-      return
+      return False
 
     self._http_server = temporary_http_server.TemporaryHTTPServer(
       self._browser_backend, paths)
 
-  def SetReplayArchivePath(self, archive_path):
+    return True
+
+  def SetReplayArchivePath(self, archive_path, append_to_existing_wpr=False,
+                           make_javascript_deterministic=True):
     if self._wpr_server:
       self._wpr_server.Close()
       self._wpr_server = None
@@ -205,6 +304,8 @@ class Browser(object):
         self._browser_backend,
         archive_path,
         use_record_mode,
+        append_to_existing_wpr,
+        make_javascript_deterministic,
         self._browser_backend.WEBPAGEREPLAY_HOST,
         self._browser_backend.webpagereplay_local_http_port,
         self._browser_backend.webpagereplay_local_https_port,
@@ -213,3 +314,6 @@ class Browser(object):
 
   def GetStandardOutput(self):
     return self._browser_backend.GetStandardOutput()
+
+  def GetStackTrace(self):
+    return self._browser_backend.GetStackTrace()

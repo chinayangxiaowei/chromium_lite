@@ -9,16 +9,17 @@ import android.os.Bundle;
 import android.util.AttributeSet;
 import android.view.View;
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityNodeProvider;
 
-import org.chromium.ui.gfx.NativeWindow;
+import org.chromium.ui.WindowAndroid;
 
 /**
  * A version of {@link ContentView} that supports JellyBean features.
  */
 class JellyBeanContentView extends ContentView {
-    JellyBeanContentView(Context context, int nativeWebContents, NativeWindow nativeWindow,
-            AttributeSet attrs, int defStyle, int personality) {
-        super(context, nativeWebContents, nativeWindow, attrs, defStyle, personality);
+    JellyBeanContentView(Context context, int nativeWebContents, WindowAndroid windowAndroid,
+            AttributeSet attrs, int defStyle) {
+        super(context, nativeWebContents, windowAndroid, attrs, defStyle);
     }
 
     @Override
@@ -28,5 +29,15 @@ class JellyBeanContentView extends ContentView {
         }
 
         return super.performAccessibilityAction(action, arguments);
+    }
+
+    @Override
+    public AccessibilityNodeProvider getAccessibilityNodeProvider() {
+        AccessibilityNodeProvider provider = getContentViewCore().getAccessibilityNodeProvider();
+        if (provider != null) {
+            return provider;
+        } else {
+            return super.getAccessibilityNodeProvider();
+        }
     }
 }

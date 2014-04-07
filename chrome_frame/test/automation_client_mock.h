@@ -8,7 +8,7 @@
 #include <windows.h>
 #include <string>
 
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "chrome_frame/chrome_frame_automation.h"
 #include "chrome_frame/test/chrome_frame_test_utils.h"
 #include "chrome_frame/test/proxy_factory_mock.h"
@@ -169,7 +169,7 @@ class CFACMockTest : public testing::Test {
 
  protected:
   CFACMockTest()
-    : tracker_(NULL), timeout_(500),
+    : timeout_(500),
       returned_proxy_(static_cast<ChromeFrameAutomationProxy*>(&mock_proxy_)) {
     GetChromeFrameProfilePath(L"Adam.N.Epilinter", &profile_path_);
     id_ = reinterpret_cast<void*>(5);

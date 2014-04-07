@@ -8,7 +8,7 @@
 #include <map>
 #include <string>
 
-#include "base/time.h"
+#include "base/time/time.h"
 #include "chrome/browser/sessions/session_id.h"
 #include "chrome/browser/sessions/session_types.h"
 
@@ -74,7 +74,7 @@ struct SyncedSession {
       case SyncedSession::TYPE_TABLET:
         return "tablet";
       default:
-        return "";
+        return std::string();
     }
   }
 

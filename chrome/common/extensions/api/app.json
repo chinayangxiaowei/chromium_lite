@@ -5,9 +5,7 @@
 [
   {
     "namespace": "app",
-    "nodoc": true,
-    "unprivileged": true,
-    "matches": [ "<all_urls>" ],
+    "description": "none",
     "types": [
       {
         "id": "Details",

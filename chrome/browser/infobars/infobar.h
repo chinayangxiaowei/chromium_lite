@@ -27,7 +27,7 @@ typedef std::pair<InfoBarDelegate*, bool> InfoBarRemovedDetails;
 typedef std::pair<InfoBarDelegate*, InfoBarDelegate*> InfoBarReplacedDetails;
 
 // TODO(pkasting): Port Mac to use this.
-#if defined(TOOLKIT_VIEWS) || defined(TOOLKIT_GTK)
+#if defined(TOOLKIT_VIEWS) || defined(TOOLKIT_GTK) || defined(OS_ANDROID)
 
 class InfoBarContainer;
 class InfoBarService;
@@ -89,7 +89,7 @@ class InfoBar : public ui::AnimationDelegate {
   // out) as we animate open and closed.
   int OffsetY(const gfx::Size& prefsize) const;
 
-  bool owned() const { return !!owner_; }
+  InfoBarService* owner() const { return owner_; }
   const InfoBarContainer* container() const { return container_; }
   InfoBarContainer* container() { return container_; }
   ui::SlideAnimation* animation() { return &animation_; }

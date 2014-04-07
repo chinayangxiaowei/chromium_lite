@@ -7,11 +7,11 @@
 #include "base/bind.h"
 #include "base/prefs/pref_service.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/password_manager/password_store_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/browser/notification_details.h"
@@ -26,8 +26,8 @@
 namespace options {
 
 PasswordManagerHandler::PasswordManagerHandler()
-    : ALLOW_THIS_IN_INITIALIZER_LIST(populater_(this)),
-      ALLOW_THIS_IN_INITIALIZER_LIST(exception_populater_(this)) {
+    : populater_(this),
+      exception_populater_(this) {
 }
 
 PasswordManagerHandler::~PasswordManagerHandler() {
@@ -108,7 +108,7 @@ void PasswordManagerHandler::OnLoginsChanged() {
 
 PasswordStore* PasswordManagerHandler::GetPasswordStore() {
   return PasswordStoreFactory::GetForProfile(Profile::FromWebUI(web_ui()),
-                                             Profile::EXPLICIT_ACCESS);
+                                             Profile::EXPLICIT_ACCESS).get();
 }
 
 void PasswordManagerHandler::UpdatePasswordLists(const ListValue* args) {

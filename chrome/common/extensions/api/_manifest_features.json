@@ -2,6 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+// See c/c/e/features/* to understand this file, in particular feature.h,
+// simple_feature.h, and base_feature_provider.h.
+
 {
   "app": {
     "channel": "stable",
@@ -29,14 +32,14 @@
     "extension_types": ["platform_app"],
     "min_manifest_version": 2
   },
-  "app.launch": {
-    "channel": "stable",
-    "extension_types": ["packaged_app", "hosted_app"]
-  },
   "app.isolation": {
     "channel": "stable",
     // Platform apps always have isolated storage, thus they cannot specify it
     // via the manifest.
+    "extension_types": ["packaged_app", "hosted_app"]
+  },
+  "app.launch": {
+    "channel": "stable",
     "extension_types": ["packaged_app", "hosted_app"]
   },
   "author": {
@@ -74,7 +77,7 @@
   },
   "commands": {
     "channel": "stable",
-    "extension_types": ["extension", "packaged_app", "platform_app"],
+    "extension_types": ["extension"],
     "min_manifest_version": 2
   },
   "content_pack": {
@@ -143,13 +146,29 @@
       ]
     }
   ],
+  "export": [
+    {
+      "channel": "stable",
+      "extension_types": ["shared_module"],
+      "whitelist": [
+        "6EAED1924DB611B6EEF2A664BD077BE7EAD33B8F",
+        "4EB74897CB187C7633357C2FE832E0AD6A44883A"
+      ]
+    },
+    {
+      "channel": "dev",
+      "extension_types": ["shared_module"]
+    }
+  ],
+  "externally_connectable": {
+    "channel": "stable",
+    "extension_types": [
+      "extension", "hosted_app", "packaged_app", "platform_app"
+    ]
+  },
   "file_browser_handlers": {
     "channel": "stable",
     "extension_types": ["extension", "packaged_app"]
-  },
-  "media_galleries_handlers": {
-    "channel": "stable",
-    "extension_types": ["packaged_app", "platform_app"]
   },
   "file_handlers": {
     "channel": "stable",
@@ -163,6 +182,10 @@
     "channel": "stable",
     "extension_types": "all"
   },
+  "import": {
+    "channel": "stable",
+    "extension_types": "all"
+  },
   "incognito": {
     "channel": "stable",
     "extension_types": ["extension", "packaged_app"]
@@ -171,19 +194,23 @@
     "channel": "stable",
     "extension_types": ["extension", "packaged_app"]
   },
-  "intents": {
-    "channel": "stable",
-    "extension_types": [
-      "extension", "packaged_app", "hosted_app", "platform_app"
-    ]
-  },
   "key": {
     "channel": "stable",
     "extension_types": "all"
   },
+  "kiosk_enabled": {
+    "channel": "stable",
+    "extension_types": [
+      "platform_app"
+    ]
+  },
   "manifest_version": {
     "channel": "stable",
     "extension_types": "all"
+  },
+  "media_galleries_handlers": {
+    "channel": "dev",
+    "extension_types": ["platform_app"]
   },
   "mime_types": {
     "channel": "stable",
@@ -212,10 +239,26 @@
     "channel": "stable",
     "extension_types": "all"
   },
-  "kiosk_enabled": {
+  "oauth2": {
     "channel": "stable",
     "extension_types": [
-      "platform_app"
+      "extension", "packaged_app", "platform_app"
+    ]
+  },
+  "oauth2.auto_approve": {
+    "channel": "stable",
+    "extension_types": [
+      "extension", "platform_app"
+    ],
+    "whitelist": [
+      "mdbihdcgjmagbcapkhhkjbbdlkflmbfo",  // unit_tests
+      "pmofbkohncoogjjhahejjfbppikbjigm",  // Google Now
+      "hkhhlkdconhgemhegnplaldnmnmkaemd",  // Get Started App
+      "nmmhkkegccagdldgiimedpiccmgmieda",  // In-app payments support app.
+      "4B1D0E19C6C43C008C44A8278C8B5BFE15ABEB3C",
+      "F7FA7ABC1ECB89BA8EE6656847EFABBF43BB9BCA",
+      "1A26E32DE447A17CBE5E9750CDBA78F58539B39C", // TODO(rockot): Kill these.
+      "E61F841D8210B6A9891E5384CB665FBED31FCD7B"  // See http://crbug.com/281715
     ]
   },
   "offline_enabled": {
@@ -237,13 +280,7 @@
   "options_page": {
     "channel": "stable",
     "extension_types": [
-      "extension", "packaged_app", "hosted_app", "platform_app"
-    ]
-  },
-  "oauth2": {
-    "channel": "stable",
-    "extension_types": [
-      "extension", "packaged_app", "platform_app"
+      "extension", "packaged_app", "hosted_app"
     ]
   },
   "page_action": {
@@ -255,15 +292,15 @@
     "extension_types": ["extension"],
     "max_manifest_version": 1
   },
-  "page_launcher": {
-    "channel": "dev",
-    "extension_types": ["platform_app"]
-  },
   "permissions": {
     "channel": "stable",
     "extension_types": [
       "extension", "packaged_app", "hosted_app", "platform_app"
     ]
+  },
+  "platforms": {
+    "channel": "stable",
+    "extension_types": "all"
   },
   "plugins": {
     "channel": "stable",
@@ -289,6 +326,20 @@
   "signature": {
     "channel": "stable",
     "extension_types": "all"
+  },
+  "spellcheck": {
+    "channel": "dev",
+    "extension_types": ["extension"]
+  },
+  "storage": {
+    "channel": "dev",
+    "extension_types": ["extension", "packaged_app", "platform_app"],
+    "min_manifest_version": 2
+  },
+  "storage.managed_schema": {
+    "channel": "dev",
+    "extension_types": ["extension", "packaged_app", "platform_app"],
+    "min_manifest_version": 2
   },
   "system_indicator": {
     "channel": "dev",

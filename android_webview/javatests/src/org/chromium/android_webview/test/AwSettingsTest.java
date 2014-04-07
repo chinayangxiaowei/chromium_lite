@@ -5,6 +5,7 @@
 package org.chromium.android_webview.test;
 
 import android.content.Context;
+import android.graphics.Point;
 import android.os.Build;
 import android.os.SystemClock;
 import android.test.suitebuilder.annotation.LargeTest;
@@ -12,12 +13,14 @@ import android.test.suitebuilder.annotation.MediumTest;
 import android.test.suitebuilder.annotation.SmallTest;
 import android.util.Pair;
 import android.view.MotionEvent;
+import android.view.WindowManager;
 import android.webkit.WebSettings;
 
 import org.apache.http.Header;
 import org.apache.http.HttpRequest;
 import org.chromium.android_webview.AndroidProtocolHandler;
 import org.chromium.android_webview.AwContents;
+import org.chromium.android_webview.AwSettings.LayoutAlgorithm;
 import org.chromium.android_webview.AwSettings;
 import org.chromium.android_webview.InterceptedRequestData;
 import org.chromium.android_webview.test.util.CommonResources;
@@ -28,8 +31,6 @@ import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.TestFileUtil;
 import org.chromium.base.test.util.UrlUtils;
-import org.chromium.content.browser.ContentSettings;
-import org.chromium.content.browser.ContentSettings.LayoutAlgorithm;
 import org.chromium.content.browser.ContentViewCore;
 import org.chromium.content.browser.test.util.CallbackHelper;
 import org.chromium.content.browser.test.util.Criteria;
@@ -46,7 +47,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * A test suite for ContentSettings class. The key objective is to verify that each
+ * A test suite for AwSettings class. The key objective is to verify that each
  * settings applies either to each individual view or to all views of the
  * application
  */
@@ -58,7 +59,7 @@ public class AwSettingsTest extends AwTestBase {
     private static final boolean DISABLED = false;
 
     /**
-     * A helper class for testing a particular preference from ContentSettings.
+     * A helper class for testing a particular preference from AwSettings.
      * The generic type T is the type of the setting. Usually, to test an
      * effect of the preference, JS code is executed that sets document's title.
      * In this case, requiresJsEnabled constructor argument must be set to true.
@@ -66,16 +67,16 @@ public class AwSettingsTest extends AwTestBase {
     abstract class AwSettingsTestHelper<T> {
         protected final AwContents mAwContents;
         protected final TestAwContentsClient mContentViewClient;
-        protected final ContentSettings mContentSettings;
+        protected final AwSettings mAwSettings;
 
         AwSettingsTestHelper(AwContents awContents,
                              TestAwContentsClient contentViewClient,
                              boolean requiresJsEnabled) throws Throwable {
             mAwContents = awContents;
             mContentViewClient = contentViewClient;
-            mContentSettings = getContentSettingsOnUiThread(mAwContents);
+            mAwSettings = AwSettingsTest.this.getAwSettingsOnUiThread(awContents);
             if (requiresJsEnabled) {
-                mContentSettings.setJavaScriptEnabled(true);
+                mAwSettings.setJavaScriptEnabled(true);
             }
         }
 
@@ -165,12 +166,12 @@ public class AwSettingsTest extends AwTestBase {
 
         @Override
         protected Boolean getCurrentValue() {
-            return mContentSettings.getJavaScriptEnabled();
+            return mAwSettings.getJavaScriptEnabled();
         }
 
         @Override
         protected void setCurrentValue(Boolean value) {
-            mContentSettings.setJavaScriptEnabled(value);
+            mAwSettings.setJavaScriptEnabled(value);
         }
 
         @Override
@@ -233,12 +234,12 @@ public class AwSettingsTest extends AwTestBase {
 
         @Override
         protected Boolean getCurrentValue() {
-            return mContentSettings.getPluginsEnabled();
+            return mAwSettings.getPluginsEnabled();
         }
 
         @Override
         protected void setCurrentValue(Boolean value) {
-            mContentSettings.setPluginsEnabled(value);
+            mAwSettings.setPluginsEnabled(value);
         }
 
         @Override
@@ -274,12 +275,12 @@ public class AwSettingsTest extends AwTestBase {
 
         @Override
         protected String getCurrentValue() {
-            return mContentSettings.getStandardFontFamily();
+            return mAwSettings.getStandardFontFamily();
         }
 
         @Override
         protected void setCurrentValue(String value) {
-            mContentSettings.setStandardFontFamily(value);
+            mAwSettings.setStandardFontFamily(value);
         }
 
         @Override
@@ -314,12 +315,12 @@ public class AwSettingsTest extends AwTestBase {
 
         @Override
         protected Integer getCurrentValue() {
-            return mContentSettings.getDefaultFontSize();
+            return mAwSettings.getDefaultFontSize();
         }
 
         @Override
         protected void setCurrentValue(Integer value) {
-            mContentSettings.setDefaultFontSize(value);
+            mAwSettings.setDefaultFontSize(value);
         }
 
         @Override
@@ -358,12 +359,12 @@ public class AwSettingsTest extends AwTestBase {
 
         @Override
         protected Boolean getCurrentValue() {
-            return mContentSettings.getLoadsImagesAutomatically();
+            return mAwSettings.getLoadsImagesAutomatically();
         }
 
         @Override
         protected void setCurrentValue(Boolean value) {
-            mContentSettings.setLoadsImagesAutomatically(value);
+            mAwSettings.setLoadsImagesAutomatically(value);
         }
 
         @Override
@@ -395,12 +396,12 @@ public class AwSettingsTest extends AwTestBase {
 
         @Override
         protected String getCurrentValue() {
-            return mContentSettings.getDefaultTextEncodingName();
+            return mAwSettings.getDefaultTextEncodingName();
         }
 
         @Override
         protected void setCurrentValue(String value) {
-            mContentSettings.setDefaultTextEncodingName(value);
+            mAwSettings.setDefaultTextEncodingName(value);
         }
 
         @Override
@@ -423,7 +424,7 @@ public class AwSettingsTest extends AwTestBase {
                 AwContents awContents,
                 TestAwContentsClient contentViewClient) throws Throwable {
             super(awContents, contentViewClient, true);
-            mDefaultUa = mContentSettings.getUserAgentString();
+            mDefaultUa = mAwSettings.getUserAgentString();
         }
 
         @Override
@@ -443,13 +444,13 @@ public class AwSettingsTest extends AwTestBase {
             // and getUserAgentString returns the default UA string afterwards.
             // To align with the framework, we return an empty string instead of
             // the default UA.
-            String currentUa = mContentSettings.getUserAgentString();
+            String currentUa = mAwSettings.getUserAgentString();
             return mDefaultUa.equals(currentUa) ? DEFAULT_UA : currentUa;
         }
 
         @Override
         protected void setCurrentValue(String value) {
-            mContentSettings.setUserAgentString(value);
+            mAwSettings.setUserAgentString(value);
         }
 
         @Override
@@ -487,12 +488,12 @@ public class AwSettingsTest extends AwTestBase {
 
         @Override
         protected Boolean getCurrentValue() {
-            return mContentSettings.getDomStorageEnabled();
+            return mAwSettings.getDomStorageEnabled();
         }
 
         @Override
         protected void setCurrentValue(Boolean value) {
-            mContentSettings.setDomStorageEnabled(value);
+            mAwSettings.setDomStorageEnabled(value);
         }
 
         @Override
@@ -528,12 +529,12 @@ public class AwSettingsTest extends AwTestBase {
 
         @Override
         protected Boolean getCurrentValue() {
-            return mContentSettings.getDatabaseEnabled();
+            return mAwSettings.getDatabaseEnabled();
         }
 
         @Override
         protected void setCurrentValue(Boolean value) {
-            mContentSettings.setDatabaseEnabled(value);
+            mAwSettings.setDatabaseEnabled(value);
         }
 
         @Override
@@ -549,9 +550,7 @@ public class AwSettingsTest extends AwTestBase {
     }
 
     class AwSettingsUniversalAccessFromFilesTestHelper extends AwSettingsTestHelper<Boolean> {
-        // TODO(mnaganov): Change to "Exception" once
-        // https://bugs.webkit.org/show_bug.cgi?id=43504 is fixed.
-        private static final String ACCESS_DENIED_TITLE = "undefined";
+        private static final String ACCESS_DENIED_TITLE = "Exception";
 
         AwSettingsUniversalAccessFromFilesTestHelper(
                 AwContents awContents,
@@ -560,11 +559,11 @@ public class AwSettingsTest extends AwTestBase {
             mIframeContainerUrl = UrlUtils.getTestFileUrl("webview/iframe_access.html");
             mIframeUrl = UrlUtils.getTestFileUrl("webview/hello_world.html");
             // The value of the setting depends on the SDK version.
-            mContentSettings.setAllowUniversalAccessFromFileURLs(false);
+            mAwSettings.setAllowUniversalAccessFromFileURLs(false);
             // If universal access is true, the value of file access doesn't
             // matter. While if universal access is false, having file access
             // enabled will allow file loading.
-            mContentSettings.setAllowFileAccessFromFileURLs(false);
+            mAwSettings.setAllowFileAccessFromFileURLs(false);
         }
 
         @Override
@@ -579,12 +578,12 @@ public class AwSettingsTest extends AwTestBase {
 
         @Override
         protected Boolean getCurrentValue() {
-            return mContentSettings.getAllowUniversalAccessFromFileURLs();
+            return mAwSettings.getAllowUniversalAccessFromFileURLs();
         }
 
         @Override
         protected void setCurrentValue(Boolean value) {
-            mContentSettings.setAllowUniversalAccessFromFileURLs(value);
+            mAwSettings.setAllowUniversalAccessFromFileURLs(value);
         }
 
         @Override
@@ -600,9 +599,7 @@ public class AwSettingsTest extends AwTestBase {
     }
 
     class AwSettingsFileAccessFromFilesIframeTestHelper extends AwSettingsTestHelper<Boolean> {
-        // TODO(mnaganov): Change to "Exception" once
-        // https://bugs.webkit.org/show_bug.cgi?id=43504 is fixed.
-        private static final String ACCESS_DENIED_TITLE = "undefined";
+        private static final String ACCESS_DENIED_TITLE = "Exception";
 
         AwSettingsFileAccessFromFilesIframeTestHelper(
                 AwContents awContents,
@@ -610,9 +607,9 @@ public class AwSettingsTest extends AwTestBase {
             super(awContents, contentViewClient, true);
             mIframeContainerUrl = UrlUtils.getTestFileUrl("webview/iframe_access.html");
             mIframeUrl = UrlUtils.getTestFileUrl("webview/hello_world.html");
-            mContentSettings.setAllowUniversalAccessFromFileURLs(false);
+            mAwSettings.setAllowUniversalAccessFromFileURLs(false);
             // The value of the setting depends on the SDK version.
-            mContentSettings.setAllowFileAccessFromFileURLs(false);
+            mAwSettings.setAllowFileAccessFromFileURLs(false);
         }
 
         @Override
@@ -627,12 +624,12 @@ public class AwSettingsTest extends AwTestBase {
 
         @Override
         protected Boolean getCurrentValue() {
-            return mContentSettings.getAllowFileAccessFromFileURLs();
+            return mAwSettings.getAllowFileAccessFromFileURLs();
         }
 
         @Override
         protected void setCurrentValue(Boolean value) {
-            mContentSettings.setAllowFileAccessFromFileURLs(value);
+            mAwSettings.setAllowFileAccessFromFileURLs(value);
         }
 
         @Override
@@ -656,9 +653,9 @@ public class AwSettingsTest extends AwTestBase {
                 TestAwContentsClient contentViewClient) throws Throwable {
             super(awContents, contentViewClient, true);
             mXhrContainerUrl = UrlUtils.getTestFileUrl("webview/xhr_access.html");
-            mContentSettings.setAllowUniversalAccessFromFileURLs(false);
+            mAwSettings.setAllowUniversalAccessFromFileURLs(false);
             // The value of the setting depends on the SDK version.
-            mContentSettings.setAllowFileAccessFromFileURLs(false);
+            mAwSettings.setAllowFileAccessFromFileURLs(false);
         }
 
         @Override
@@ -673,12 +670,12 @@ public class AwSettingsTest extends AwTestBase {
 
         @Override
         protected Boolean getCurrentValue() {
-            return mContentSettings.getAllowFileAccessFromFileURLs();
+            return mAwSettings.getAllowFileAccessFromFileURLs();
         }
 
         @Override
         protected void setCurrentValue(Boolean value) {
-            mContentSettings.setAllowFileAccessFromFileURLs(value);
+            mAwSettings.setAllowFileAccessFromFileURLs(value);
         }
 
         @Override
@@ -692,20 +689,7 @@ public class AwSettingsTest extends AwTestBase {
         private final String mXhrContainerUrl;
     }
 
-    // A helper super class for test cases that need to access AwSettings.
-    abstract class AwSettingsWithSettingsTestHelper<T> extends AwSettingsTestHelper<T> {
-        protected AwSettings mAwSettings;
-
-        AwSettingsWithSettingsTestHelper(
-                AwContents awContents,
-                TestAwContentsClient contentViewClient,
-                boolean requiresJsEnabled) throws Throwable {
-            super(awContents, contentViewClient, requiresJsEnabled);
-            mAwSettings = AwSettingsTest.this.getAwSettingsOnUiThread(awContents);
-        }
-    }
-
-    class AwSettingsFileUrlAccessTestHelper extends AwSettingsWithSettingsTestHelper<Boolean> {
+    class AwSettingsFileUrlAccessTestHelper extends AwSettingsTestHelper<Boolean> {
         private static final String ACCESS_GRANTED_TITLE = "Hello, World!";
 
         AwSettingsFileUrlAccessTestHelper(
@@ -752,7 +736,7 @@ public class AwSettingsTest extends AwTestBase {
         private int mIndex;
     }
 
-    class AwSettingsContentUrlAccessTestHelper extends AwSettingsWithSettingsTestHelper<Boolean> {
+    class AwSettingsContentUrlAccessTestHelper extends AwSettingsTestHelper<Boolean> {
 
         AwSettingsContentUrlAccessTestHelper(
                 AwContents awContents,
@@ -796,8 +780,7 @@ public class AwSettingsTest extends AwTestBase {
         private final String mTarget;
     }
 
-    class AwSettingsContentUrlAccessFromFileTestHelper
-            extends AwSettingsWithSettingsTestHelper<Boolean> {
+    class AwSettingsContentUrlAccessFromFileTestHelper extends AwSettingsTestHelper<Boolean> {
         private static final String TARGET = "content_from_file";
 
         AwSettingsContentUrlAccessFromFileTestHelper(
@@ -859,8 +842,7 @@ public class AwSettingsTest extends AwTestBase {
 
     // This class provides helper methods for testing of settings related to
     // the text autosizing feature.
-    abstract class AwSettingsTextAutosizingTestHelper<T>
-            extends AwSettingsWithSettingsTestHelper<T> {
+    abstract class AwSettingsTextAutosizingTestHelper<T> extends AwSettingsTestHelper<T> {
         protected static final float PARAGRAPH_FONT_SIZE = 14.0f;
 
         AwSettingsTextAutosizingTestHelper(
@@ -937,8 +919,7 @@ public class AwSettingsTest extends AwTestBase {
                 TestAwContentsClient contentViewClient) throws Throwable {
             super(awContents, contentViewClient);
             // Font autosizing doesn't step in for narrow layout widths.
-            mContentSettings.setUseWideViewPort(true);
-            mAwSettings.setEnableFixedLayoutMode(true);
+            mAwSettings.setUseWideViewPort(true);
         }
 
         @Override
@@ -953,13 +934,13 @@ public class AwSettingsTest extends AwTestBase {
 
         @Override
         protected LayoutAlgorithm getCurrentValue() {
-            return mContentSettings.getLayoutAlgorithm();
+            return mAwSettings.getLayoutAlgorithm();
         }
 
         @Override
         protected void setCurrentValue(LayoutAlgorithm value) throws Throwable {
             super.setCurrentValue(value);
-            mContentSettings.setLayoutAlgorithm(value);
+            mAwSettings.setLayoutAlgorithm(value);
         }
 
         @Override
@@ -998,13 +979,12 @@ public class AwSettingsTest extends AwTestBase {
 
         @Override
         protected Integer getCurrentValue() {
-            return mContentSettings.getTextZoom();
+            return mAwSettings.getTextZoom();
         }
 
         @Override
         protected void setCurrentValue(Integer value) throws Throwable {
             super.setCurrentValue(value);
-            mContentSettings.setTextZoom(value);
             mAwSettings.setTextZoom(value);
         }
 
@@ -1032,7 +1012,7 @@ public class AwSettingsTest extends AwTestBase {
                 AwContents awContents,
                 TestAwContentsClient contentViewClient) throws Throwable {
             super(awContents, contentViewClient);
-            mContentSettings.setLayoutAlgorithm(LayoutAlgorithm.TEXT_AUTOSIZING);
+            mAwSettings.setLayoutAlgorithm(LayoutAlgorithm.TEXT_AUTOSIZING);
             // The initial font size can be adjusted by font autosizer depending on the page's
             // viewport width.
             mInitialActualFontSize = getActualFontSize();
@@ -1050,15 +1030,13 @@ public class AwSettingsTest extends AwTestBase {
 
         @Override
         protected Integer getCurrentValue() {
-            return mContentSettings.getTextZoom();
+            return mAwSettings.getTextZoom();
         }
 
         @Override
         protected void setCurrentValue(Integer value) throws Throwable {
             super.setCurrentValue(value);
-            mContentSettings.setTextZoom(value);
-            // This is to verify that AwSettings will not affect font boosting by Autosizer.
-            mAwSettings.setTextZoom(-1);
+            mAwSettings.setTextZoom(value);
         }
 
         @Override
@@ -1098,12 +1076,12 @@ public class AwSettingsTest extends AwTestBase {
 
         @Override
         protected Boolean getCurrentValue() {
-            return mContentSettings.getJavaScriptCanOpenWindowsAutomatically();
+            return mAwSettings.getJavaScriptCanOpenWindowsAutomatically();
         }
 
         @Override
         protected void setCurrentValue(Boolean value) {
-            mContentSettings.setJavaScriptCanOpenWindowsAutomatically(value);
+            mAwSettings.setJavaScriptCanOpenWindowsAutomatically(value);
         }
 
         @Override
@@ -1141,7 +1119,7 @@ public class AwSettingsTest extends AwTestBase {
         }
     }
 
-    class AwSettingsCacheModeTestHelper extends AwSettingsWithSettingsTestHelper<Integer> {
+    class AwSettingsCacheModeTestHelper extends AwSettingsTestHelper<Integer> {
 
         AwSettingsCacheModeTestHelper(
                 AwContents awContents,
@@ -1198,7 +1176,7 @@ public class AwSettingsTest extends AwTestBase {
     // "viewport" tag is ignored, and the layout width is set to device width in DIP pixels.
     // We specify a very high width value to make sure that it doesn't intersect with
     // device screen widths (in DIP pixels).
-    class AwSettingsUseWideViewportTestHelper extends AwSettingsWithSettingsTestHelper<Boolean> {
+    class AwSettingsUseWideViewportTestHelper extends AwSettingsTestHelper<Boolean> {
         static private final String VIEWPORT_TAG_LAYOUT_WIDTH = "3000";
 
         AwSettingsUseWideViewportTestHelper(
@@ -1219,13 +1197,12 @@ public class AwSettingsTest extends AwTestBase {
 
         @Override
         protected Boolean getCurrentValue() {
-            return mContentSettings.getUseWideViewPort();
+            return mAwSettings.getUseWideViewPort();
         }
 
         @Override
         protected void setCurrentValue(Boolean value) {
-            mContentSettings.setUseWideViewPort(value);
-            mAwSettings.setEnableFixedLayoutMode(value);
+            mAwSettings.setUseWideViewPort(value);
         }
 
         @Override
@@ -1256,8 +1233,7 @@ public class AwSettingsTest extends AwTestBase {
                 boolean withViewPortTag) throws Throwable {
             super(awContents, contentViewClient, true);
             mWithViewPortTag = withViewPortTag;
-            mContentSettings.setUseWideViewPort(true);
-            mAwContents.getSettings().setEnableFixedLayoutMode(true);
+            mAwSettings.setUseWideViewPort(true);
         }
 
         @Override
@@ -1272,18 +1248,17 @@ public class AwSettingsTest extends AwTestBase {
 
         @Override
         protected Boolean getCurrentValue() {
-            return mContentSettings.getLoadWithOverviewMode();
+            return mAwSettings.getLoadWithOverviewMode();
         }
 
         @Override
         protected void setCurrentValue(Boolean value) {
-            mExpectScaleChange = mContentSettings.getLoadWithOverviewMode() != value;
+            mExpectScaleChange = mAwSettings.getLoadWithOverviewMode() != value;
             if (mExpectScaleChange) {
                 mOnScaleChangedCallCount =
                         mContentViewClient.getOnScaleChangedHelper().getCallCount();
             }
-            mContentSettings.setLoadWithOverviewMode(value);
-            mAwContents.getSettings().resetScrollAndScaleState();
+            mAwSettings.setLoadWithOverviewMode(value);
         }
 
         @Override
@@ -1316,7 +1291,7 @@ public class AwSettingsTest extends AwTestBase {
     }
 
     // The test verifies that JavaScript is disabled upon WebView
-    // creation without accessing ContentSettings. If the test passes,
+    // creation without accessing AwSettings. If the test passes,
     // it means that WebView-specific web preferences configuration
     // is applied on WebView creation. JS state is used, because it is
     // enabled by default in Chrome, but must be disabled by default
@@ -1388,77 +1363,6 @@ public class AwSettingsTest extends AwTestBase {
             new AwSettingsDefaultFontSizeTestHelper(views.getContents1(), views.getClient1()));
     }
 
-    // The test verifies that disabling images loading by setting
-    // setLoadsImagesAutomatically to false doesn't prevent images already
-    // contained in the memory cache to be displayed.  The cache is shared among
-    // all views, so the image can be put there by another view.
-    @Feature({"AndroidWebView", "Preferences"})
-    @SmallTest
-    public void testLoadsImagesAutomaticallyWithCachedImage() throws Throwable {
-        ViewPair views = createViews();
-        ContentSettings settings0 = getContentSettingsOnUiThread(views.getContents0());
-        settings0.setJavaScriptEnabled(true);
-        ContentSettings settings1 = getContentSettingsOnUiThread(views.getContents1());
-        settings1.setJavaScriptEnabled(true);
-        ImagePageGenerator generator = new ImagePageGenerator(0, false);
-
-        // First disable images loading and verify it.
-        settings0.setLoadsImagesAutomatically(false);
-        settings1.setLoadsImagesAutomatically(false);
-        loadDataSync(views.getContents0(),
-                     views.getClient0().getOnPageFinishedHelper(),
-                     generator.getPageSource(),
-                     "text/html", false);
-        loadDataSync(views.getContents1(),
-                     views.getClient1().getOnPageFinishedHelper(),
-                     generator.getPageSource(),
-                     "text/html", false);
-        assertEquals(ImagePageGenerator.IMAGE_NOT_LOADED_STRING,
-                getTitleOnUiThread(views.getContents0()));
-        assertEquals(ImagePageGenerator.IMAGE_NOT_LOADED_STRING,
-                getTitleOnUiThread(views.getContents1()));
-
-        // Now enable images loading only for view 0.
-        settings0.setLoadsImagesAutomatically(true);
-        loadDataSync(views.getContents0(),
-                     views.getClient0().getOnPageFinishedHelper(),
-                     generator.getPageSource(),
-                     "text/html", false);
-        loadDataSync(views.getContents1(),
-                     views.getClient1().getOnPageFinishedHelper(),
-                     generator.getPageSource(),
-                     "text/html", false);
-
-        // Once the image has been cached by contentView0, it is available to contentView1.
-        assertEquals(ImagePageGenerator.IMAGE_LOADED_STRING,
-                getTitleOnUiThread(views.getContents0()));
-        assertEquals(ImagePageGenerator.IMAGE_LOADED_STRING,
-                getTitleOnUiThread(views.getContents1()));
-        ImagePageGenerator generator1 = new ImagePageGenerator(1, false);
-
-        // This is a new image. view 1 can't load it.
-        loadDataSync(views.getContents1(),
-                     views.getClient1().getOnPageFinishedHelper(),
-                     generator1.getPageSource(),
-                     "text/html", false);
-        assertEquals(ImagePageGenerator.IMAGE_NOT_LOADED_STRING,
-                     getTitleOnUiThread(views.getContents1()));
-        loadDataSync(views.getContents0(),
-                     views.getClient0().getOnPageFinishedHelper(),
-                     generator1.getPageSource(),
-                     "text/html", false);
-        loadDataSync(views.getContents1(),
-                     views.getClient1().getOnPageFinishedHelper(),
-                     generator1.getPageSource(),
-                     "text/html", false);
-
-        // Once the image has been cached by contentViewCore0, it is available to contentViewCore1.
-        assertEquals(ImagePageGenerator.IMAGE_LOADED_STRING,
-                getTitleOnUiThread(views.getContents0()));
-        assertEquals(ImagePageGenerator.IMAGE_LOADED_STRING,
-                getTitleOnUiThread(views.getContents1()));
-    }
-
     // The test verifies that after changing the LoadsImagesAutomatically
     // setting value from false to true previously skipped images are
     // automatically loaded.
@@ -1469,7 +1373,7 @@ public class AwSettingsTest extends AwTestBase {
         final AwTestContainerView testContainerView =
                 createAwTestContainerViewOnMainSync(contentClient);
         final AwContents awContents = testContainerView.getAwContents();
-        ContentSettings settings = getContentSettingsOnUiThread(awContents);
+        AwSettings settings = getAwSettingsOnUiThread(awContents);
         settings.setJavaScriptEnabled(true);
         ImagePageGenerator generator = new ImagePageGenerator(0, false);
         settings.setLoadsImagesAutomatically(false);
@@ -1495,6 +1399,7 @@ public class AwSettingsTest extends AwTestBase {
         }, TEST_TIMEOUT, CHECK_INTERVAL));
         assertEquals(ImagePageGenerator.IMAGE_LOADED_STRING, getTitleOnUiThread(awContents));
     }
+
 
     @SmallTest
     @Feature({"AndroidWebView", "Preferences"})
@@ -1529,7 +1434,7 @@ public class AwSettingsTest extends AwTestBase {
         final AwTestContainerView testContainerView =
                 createAwTestContainerViewOnMainSync(contentClient);
         final AwContents awContents = testContainerView.getAwContents();
-        ContentSettings settings = getContentSettingsOnUiThread(awContents);
+        AwSettings settings = getAwSettingsOnUiThread(awContents);
         final String actualUserAgentString = settings.getUserAgentString();
         final String patternString =
                 "Mozilla/5\\.0 \\(Linux;( U;)? Android ([^;]+);( (\\w+)-(\\w+);)?" +
@@ -1558,7 +1463,7 @@ public class AwSettingsTest extends AwTestBase {
         final AwTestContainerView testContainerView =
                 createAwTestContainerViewOnMainSync(contentClient);
         final AwContents awContents = testContainerView.getAwContents();
-        ContentSettings settings = getContentSettingsOnUiThread(awContents);
+        AwSettings settings = getAwSettingsOnUiThread(awContents);
         final String defaultUserAgentString = settings.getUserAgentString();
 
         // Check that an attempt to reset the default UA string has no effect.
@@ -1572,7 +1477,7 @@ public class AwSettingsTest extends AwTestBase {
         assertEquals(defaultUserAgentString, settings.getUserAgentString());
 
         // Set a custom UA string, verify that it can be reset back to default.
-        final String customUserAgentString = "ContentSettingsTest";
+        final String customUserAgentString = "AwSettingsTest";
         settings.setUserAgentString(customUserAgentString);
         assertEquals(customUserAgentString, settings.getUserAgentString());
         settings.setUserAgentString(null);
@@ -1590,10 +1495,10 @@ public class AwSettingsTest extends AwTestBase {
         final AwContents awContents = testContainerView.getAwContents();
         final ContentViewCore contentView = testContainerView.getContentViewCore();
         CallbackHelper onPageFinishedHelper = contentClient.getOnPageFinishedHelper();
-        ContentSettings settings = getContentSettingsOnUiThread(awContents);
+        AwSettings settings = getAwSettingsOnUiThread(awContents);
         settings.setJavaScriptEnabled(true);
         final String defaultUserAgentString = settings.getUserAgentString();
-        final String customUserAgentString = "ContentSettingsTest";
+        final String customUserAgentString = "AwSettingsTest";
         // We are using different page titles to make sure that we are really
         // going back and forward between them.
         final String pageTemplate =
@@ -1637,7 +1542,7 @@ public class AwSettingsTest extends AwTestBase {
         final AwTestContainerView testContainerView =
                 createAwTestContainerViewOnMainSync(contentClient);
         AwContents awContents = testContainerView.getAwContents();
-        ContentSettings settings = getContentSettingsOnUiThread(awContents);
+        AwSettings settings = getAwSettingsOnUiThread(awContents);
         final String customUserAgentString =
                 "testUserAgentWithTestServerUserAgent";
 
@@ -1734,7 +1639,7 @@ public class AwSettingsTest extends AwTestBase {
         final AwTestContainerView testContainerView =
                 createAwTestContainerViewOnMainSync(contentClient);
         final AwContents awContents = testContainerView.getAwContents();
-        ContentSettings settings = getContentSettingsOnUiThread(awContents);
+        AwSettings settings = getAwSettingsOnUiThread(awContents);
         settings.setJavaScriptEnabled(true);
         settings.setAllowUniversalAccessFromFileURLs(false);
         settings.setAllowFileAccessFromFileURLs(false);
@@ -1822,7 +1727,7 @@ public class AwSettingsTest extends AwTestBase {
         final AwTestContainerView testContainerView =
                 createAwTestContainerViewOnMainSync(contentClient);
         final AwContents awContents = testContainerView.getAwContents();
-        final ContentSettings settings = getContentSettingsOnUiThread(awContents);
+        final AwSettings settings = getAwSettingsOnUiThread(awContents);
         ImagePageGenerator generator = new ImagePageGenerator(0, false);
 
         settings.setJavaScriptEnabled(true);
@@ -1842,7 +1747,7 @@ public class AwSettingsTest extends AwTestBase {
         final AwTestContainerView testContainerView =
                 createAwTestContainerViewOnMainSync(contentClient);
         final AwContents awContents = testContainerView.getAwContents();
-        final ContentSettings settings = getContentSettingsOnUiThread(awContents);
+        final AwSettings settings = getAwSettingsOnUiThread(awContents);
         settings.setJavaScriptEnabled(true);
         ImagePageGenerator generator = new ImagePageGenerator(0, false);
 
@@ -1867,7 +1772,7 @@ public class AwSettingsTest extends AwTestBase {
                 @Override
                 public boolean isSatisfied() {
                     try {
-                        return ImagePageGenerator.IMAGE_NOT_LOADED_STRING.equals(
+                        return ImagePageGenerator.IMAGE_LOADED_STRING.equals(
                             getTitleOnUiThread(awContents));
                     } catch (Throwable t) {
                         t.printStackTrace();
@@ -1888,9 +1793,8 @@ public class AwSettingsTest extends AwTestBase {
         final AwTestContainerView testContainer =
                 createAwTestContainerViewOnMainSync(contentClient);
         final AwContents awContents = testContainer.getAwContents();
-        final ContentSettings contentSettings = getContentSettingsOnUiThread(awContents);
-        final AwSettings awSettings = getAwSettingsOnUiThread(testContainer.getAwContents());
-        contentSettings.setJavaScriptEnabled(true);
+        final AwSettings awSettings = getAwSettingsOnUiThread(awContents);
+        awSettings.setJavaScriptEnabled(true);
         ImagePageGenerator generator = new ImagePageGenerator(0, false);
 
         TestWebServer webServer = null;
@@ -2216,7 +2120,7 @@ public class AwSettingsTest extends AwTestBase {
         final AwTestContainerView testContainer =
                 createAwTestContainerViewOnMainSync(contentClient);
         final AwContents awContents = testContainer.getAwContents();
-        final ContentSettings settings = getContentSettingsOnUiThread(awContents);
+        final AwSettings settings = getAwSettingsOnUiThread(awContents);
         settings.setJavaScriptEnabled(true);
         // Note that the cache isn't actually enabled until the call to setAppCachePath.
         settings.setAppCacheEnabled(true);
@@ -2258,11 +2162,11 @@ public class AwSettingsTest extends AwTestBase {
         // will take about 20 seconds.
         ViewPair views = createViews();
 
-        ContentSettings settings0 = getContentSettingsOnUiThread(views.getContents0());
+        AwSettings settings0 = getAwSettingsOnUiThread(views.getContents0());
         settings0.setJavaScriptEnabled(true);
         settings0.setAppCachePath("whatever");
         settings0.setAppCacheEnabled(true);
-        ContentSettings settings1 = getContentSettingsOnUiThread(views.getContents1());
+        AwSettings settings1 = getAwSettingsOnUiThread(views.getContents1());
         settings1.setJavaScriptEnabled(true);
         // AppCachePath setting is global, no need to set it for the second view.
         settings1.setAppCacheEnabled(true);
@@ -2319,13 +2223,16 @@ public class AwSettingsTest extends AwTestBase {
 
     @SmallTest
     @Feature({"AndroidWebView", "Preferences"})
-    public void testUseWideViewportLayoutWidth() throws Throwable {
-        final TestAwContentsClient contentClient = new TestAwContentsClient();
-        final AwTestContainerView testContainerView =
-                createAwTestContainerViewOnMainSync(contentClient);
-        final AwContents awContents = testContainerView.getAwContents();
-        ContentSettings settings = getContentSettingsOnUiThread(awContents);
-        CallbackHelper onPageFinishedHelper = contentClient.getOnPageFinishedHelper();
+    public void testUseWideViewportWithTwoViewsNoQuirks() throws Throwable {
+        ViewPair views = createViews(false);
+        runPerViewSettingsTest(
+            new AwSettingsUseWideViewportTestHelper(views.getContents0(), views.getClient0()),
+            new AwSettingsUseWideViewportTestHelper(views.getContents1(), views.getClient1()));
+    }
+
+    private void useWideViewportLayoutWidthTest(
+            final AwContents awContents, CallbackHelper onPageFinishedHelper) throws Throwable {
+        AwSettings settings = getAwSettingsOnUiThread(awContents);
 
         final String pageTemplate = "<html><head>%s</head>" +
                 "<body onload='document.title=document.body.clientWidth'></body></html>";
@@ -2344,8 +2251,8 @@ public class AwSettingsTest extends AwTestBase {
 
         settings.setJavaScriptEnabled(true);
         assertFalse(settings.getUseWideViewPort());
-        // When UseWideViewPort is off, "meta viewport" tags are ignored,
-        // and the layout width is set to device width in CSS pixels.
+        // When UseWideViewPort is off, "width" setting of "meta viewport"
+        // tags is ignored, and the layout width is set to device width in CSS pixels.
         // Thus, all 3 pages will have the same body width.
         loadDataSync(awContents, onPageFinishedHelper, pageNoViewport, "text/html", false);
         int actualWidth = Integer.parseInt(getTitleOnUiThread(awContents));
@@ -2363,7 +2270,6 @@ public class AwSettingsTest extends AwTestBase {
                 Math.abs(displayWidth - actualWidth) <= 1);
 
         settings.setUseWideViewPort(true);
-        awContents.getSettings().setEnableFixedLayoutMode(true);
         // When UseWideViewPort is on, "meta viewport" tag is used.
         // If there is no viewport tag, or width isn't specified,
         // then layout width is set to max(980, <device-width-in-DIP-pixels>)
@@ -2379,19 +2285,38 @@ public class AwSettingsTest extends AwTestBase {
         assertEquals(viewportTagSpecifiedWidth, getTitleOnUiThread(awContents));
     }
 
+    @SmallTest
+    @Feature({"AndroidWebView", "Preferences"})
+    public void testUseWideViewportLayoutWidth() throws Throwable {
+        TestAwContentsClient contentClient = new TestAwContentsClient();
+        AwTestContainerView testContainerView =
+                createAwTestContainerViewOnMainSync(contentClient);
+        useWideViewportLayoutWidthTest(testContainerView.getAwContents(),
+                contentClient.getOnPageFinishedHelper());
+    }
 
-    /* Started failing after http://trac.webkit.org/changeset/146378
-     * http://crbug.com/222584
-     * @MediumTest
-     * @Feature({"AndroidWebView", "Preferences"})
-     */
+    @SmallTest
+    @Feature({"AndroidWebView", "Preferences"})
+    public void testUseWideViewportLayoutWidthNoQuirks() throws Throwable {
+        TestAwContentsClient contentClient = new TestAwContentsClient();
+        AwTestContainerView testContainerView =
+                createAwTestContainerViewOnMainSync(contentClient, false);
+        useWideViewportLayoutWidthTest(testContainerView.getAwContents(),
+                contentClient.getOnPageFinishedHelper());
+    }
+
+    /*
+    @MediumTest
+    @Feature({"AndroidWebView", "Preferences"})
+    http://crbug.com/239144
+    */
     @DisabledTest
     public void testUseWideViewportControlsDoubleTabToZoom() throws Throwable {
         final TestAwContentsClient contentClient = new TestAwContentsClient();
         final AwTestContainerView testContainerView =
                 createAwTestContainerViewOnMainSync(contentClient);
         final AwContents awContents = testContainerView.getAwContents();
-        ContentSettings settings = getContentSettingsOnUiThread(awContents);
+        AwSettings settings = getAwSettingsOnUiThread(awContents);
         CallbackHelper onPageFinishedHelper = contentClient.getOnPageFinishedHelper();
 
         final String page = "<html><body>Page Text</body></html>";
@@ -2403,7 +2328,6 @@ public class AwSettingsTest extends AwTestBase {
         assertEquals(initialScale, getScaleOnUiThread(awContents));
 
         settings.setUseWideViewPort(true);
-        awContents.getSettings().setEnableFixedLayoutMode(true);
         loadDataSync(awContents, onPageFinishedHelper, page, "text/html", false);
         int onScaleChangedCallCount = contentClient.getOnScaleChangedHelper().getCallCount();
         simulateDoubleTapCenterOfWebViewOnUiThread(testContainerView);
@@ -2413,8 +2337,12 @@ public class AwSettingsTest extends AwTestBase {
                 zoomedOutScale < initialScale);
     }
 
+    /*
     @SmallTest
     @Feature({"AndroidWebView", "Preferences"})
+    http://crbug.com/239144
+    */
+    @DisabledTest
     public void testLoadWithOverviewModeWithTwoViews() throws Throwable {
         ViewPair views = createViews();
         runPerViewSettingsTest(
@@ -2424,8 +2352,12 @@ public class AwSettingsTest extends AwTestBase {
                         views.getContents1(), views.getClient1(), false));
     }
 
-    @SmallTest
-    @Feature({"AndroidWebView", "Preferences"})
+    /*
+     @SmallTest
+     @Feature({"AndroidWebView", "Preferences"})
+     http://crbug.com/239144
+     */
+    @DisabledTest
     public void testLoadWithOverviewModeViewportTagWithTwoViews() throws Throwable {
         ViewPair views = createViews();
         runPerViewSettingsTest(
@@ -2433,39 +2365,6 @@ public class AwSettingsTest extends AwTestBase {
                         views.getContents0(), views.getClient0(), true),
                 new AwSettingsLoadWithOverviewModeTestHelper(
                         views.getContents1(), views.getClient1(), true));
-    }
-
-    @SmallTest
-    @Feature({"AndroidWebView", "Preferences"})
-    // Verify that LoadViewOverviewMode doesn't affect pages with initial scale
-    // set in the viewport tag.
-    public void testLoadWithOverviewModeViewportScale() throws Throwable {
-        final TestAwContentsClient contentClient = new TestAwContentsClient();
-        final AwTestContainerView testContainerView =
-                createAwTestContainerViewOnMainSync(contentClient);
-        final AwContents awContents = testContainerView.getAwContents();
-        ContentSettings settings = getContentSettingsOnUiThread(awContents);
-        CallbackHelper onPageFinishedHelper = contentClient.getOnPageFinishedHelper();
-
-        final int pageScale = 2;
-        final String page = "<html><head>" +
-                "<meta name='viewport' content='width=3000, initial-scale=" + pageScale +
-                "' /></head>" +
-                "<body></body></html>";
-
-        assertFalse(settings.getUseWideViewPort());
-        assertFalse(settings.getLoadWithOverviewMode());
-        loadDataSync(awContents, onPageFinishedHelper, page, "text/html", false);
-        assertEquals(1.0f, getScaleOnUiThread(awContents));
-
-        settings.setUseWideViewPort(true);
-        awContents.getSettings().setEnableFixedLayoutMode(true);
-        settings.setLoadWithOverviewMode(true);
-        awContents.getSettings().resetScrollAndScaleState();
-        int onScaleChangedCallCount = contentClient.getOnScaleChangedHelper().getCallCount();
-        loadDataSync(awContents, onPageFinishedHelper, page, "text/html", false);
-        contentClient.getOnScaleChangedHelper().waitForCallback(onScaleChangedCallCount);
-        assertEquals((float)pageScale, getScaleOnUiThread(awContents));
     }
 
     @SmallTest
@@ -2478,9 +2377,16 @@ public class AwSettingsTest extends AwTestBase {
         final AwSettings awSettings = getAwSettingsOnUiThread(awContents);
         CallbackHelper onPageFinishedHelper = contentClient.getOnPageFinishedHelper();
 
+        WindowManager wm = (WindowManager) getInstrumentation().getTargetContext()
+                .getSystemService(Context.WINDOW_SERVICE);
+        Point screenSize = new Point();
+        wm.getDefaultDisplay().getSize(screenSize);
+        // Make sure after 50% scale, page width still larger than screen.
+        int height = screenSize.y * 2 + 1;
+        int width = screenSize.x * 2 + 1;
         final String page = "<html><body>" +
-                "<p style='height:1000px;width:1000px'>testSetInitialScale</p>" +
-                "</body></html>";
+                "<p style='height:"+ height + "px;width:" + width + "px'>" +
+                "testSetInitialScale</p></body></html>";
         final float defaultScale =
             getInstrumentation().getTargetContext().getResources().getDisplayMetrics().density;
 
@@ -2522,10 +2428,9 @@ public class AwSettingsTest extends AwTestBase {
         getInstrumentation().runOnMainSync(new Runnable() {
             @Override
             public void run() {
-                ContentSettings contentSettings =
-                        awContents.getContentViewCore().getContentSettings();
-                contentSettings.setJavaScriptEnabled(true);
-                contentSettings.setMediaPlaybackRequiresUserGesture(requiredUserGesture);
+                AwSettings awSettings = awContents.getSettings();
+                awSettings.setJavaScriptEnabled(true);
+                awSettings.setMediaPlaybackRequiresUserGesture(requiredUserGesture);
                 observer.register(awContents.getContentViewCore(), "javaObserver");
             }
         });
@@ -2554,14 +2459,22 @@ public class AwSettingsTest extends AwTestBase {
         }
     }
 
+    /*
     @LargeTest
     @Feature({"AndroidWebView", "Preferences"})
+    Disabled until video is working. crbug.com/239760
+    */
+    @DisabledTest
     public void testMediaPlaybackWithoutUserGesture() throws Throwable {
         assertTrue(runVideoTest(false, -1));
     }
 
+    /*
     @SmallTest
     @Feature({"AndroidWebView", "Preferences"})
+    Disabled until video is working. crbug.com/239760
+    */
+    @DisabledTest
     public void testMediaPlaybackWithUserGesture() throws Throwable {
         // Wait for 5 second to see if video played.
         assertFalse(runVideoTest(true, 5000));
@@ -2585,9 +2498,8 @@ public class AwSettingsTest extends AwTestBase {
         getInstrumentation().runOnMainSync(new Runnable() {
             @Override
             public void run() {
-                ContentSettings contentSettings =
-                        awContents.getContentViewCore().getContentSettings();
-                contentSettings.setDefaultVideoPosterURL(DEFAULT_VIDEO_POSTER_URL);
+                AwSettings awSettings = awContents.getSettings();
+                awSettings.setDefaultVideoPosterURL(DEFAULT_VIDEO_POSTER_URL);
             }
         });
         VideoTestWebServer webServer = new VideoTestWebServer(
@@ -2602,6 +2514,36 @@ public class AwSettingsTest extends AwTestBase {
             if (webServer.getTestWebServer() != null)
                 webServer.getTestWebServer().shutdown();
         }
+    }
+
+    @SmallTest
+    @Feature({"AndroidWebView", "Preferences"})
+    // background shorthand property must not override background-size when
+    // it's already set.
+    public void testUseLegacyBackgroundSizeShorthandBehavior() throws Throwable {
+        final TestAwContentsClient contentClient = new TestAwContentsClient();
+        final AwTestContainerView testContainerView =
+                createAwTestContainerViewOnMainSync(contentClient);
+        final AwContents awContents = testContainerView.getAwContents();
+        AwSettings settings = getAwSettingsOnUiThread(awContents);
+        CallbackHelper onPageFinishedHelper = contentClient.getOnPageFinishedHelper();
+        final String expectedBackgroundSize = "cover";
+        final String page = "<html><head>" +
+                "<script>" +
+                "function getBackgroundSize() {" +
+                "  var e = document.getElementById('test'); " +
+                "  e.style.backgroundSize = '" + expectedBackgroundSize + "';" +
+                "  e.style.background = 'center red url(dummy://test.png) no-repeat border-box'; " +
+                "  return e.style.backgroundSize; " +
+                "}" +
+                "</script></head>" +
+                "<body onload='document.title=getBackgroundSize()'>" +
+                "  <div id='test'> </div>" +
+                "</body></html>";
+        settings.setJavaScriptEnabled(true);
+        loadDataSync(awContents, onPageFinishedHelper, page, "text/html", false);
+        String actualBackgroundSize = getTitleOnUiThread(awContents);
+        assertEquals(expectedBackgroundSize, actualBackgroundSize);
     }
 
     static class ViewPair {
@@ -2685,12 +2627,16 @@ public class AwSettingsTest extends AwTestBase {
     }
 
     private ViewPair createViews() throws Throwable {
+        return createViews(true);
+    }
+
+    private ViewPair createViews(boolean supportsLegacyQuirks) throws Throwable {
         TestAwContentsClient client0 = new TestAwContentsClient();
         TestAwContentsClient client1 = new TestAwContentsClient();
         return new ViewPair(
-            createAwTestContainerViewOnMainSync(client0).getAwContents(),
+            createAwTestContainerViewOnMainSync(client0, supportsLegacyQuirks).getAwContents(),
             client0,
-            createAwTestContainerViewOnMainSync(client1).getAwContents(),
+            createAwTestContainerViewOnMainSync(client1, supportsLegacyQuirks).getAwContents(),
             client1);
     }
 
@@ -2712,30 +2658,6 @@ public class AwSettingsTest extends AwTestBase {
 
     private String createContentUrl(final String target) {
         return TestContentProvider.createContentUrl(target);
-    }
-
-    /**
-     * Returns pure page scale.
-     */
-    private float getScaleOnUiThread(final AwContents awContents) throws Throwable {
-        return runTestOnUiThreadAndGetResult(new Callable<Float>() {
-            @Override
-            public Float call() throws Exception {
-                return awContents.getContentViewCore().getScale();
-            }
-        });
-    }
-
-    /**
-     * Returns page scale multiplied by the screen density.
-     */
-    private float getPixelScaleOnUiThread(final AwContents awContents) throws Throwable {
-        return runTestOnUiThreadAndGetResult(new Callable<Float>() {
-            @Override
-            public Float call() throws Exception {
-                return awContents.getScale();
-            }
-        });
     }
 
     private void simulateDoubleTapCenterOfWebViewOnUiThread(final AwTestContainerView webView)

@@ -9,9 +9,9 @@
 
 #include "base/bind.h"
 #include "base/logging.h"
-#include "base/string_util.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/time.h"
+#include "base/strings/string_util.h"
+#include "base/time/time.h"
 #include "chrome/browser/chromeos/contacts/contact_map.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkCanvas.h"

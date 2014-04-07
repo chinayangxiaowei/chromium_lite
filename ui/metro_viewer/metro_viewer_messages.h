@@ -54,34 +54,41 @@ IPC_MESSAGE_CONTROL4(MetroViewerHostMsg_Character,
 IPC_MESSAGE_CONTROL1(MetroViewerHostMsg_VisibilityChanged,
                      bool          /* visible */);
 
-IPC_MESSAGE_CONTROL3(MetroViewerHostMsg_TouchDown,
+IPC_MESSAGE_CONTROL4(MetroViewerHostMsg_TouchDown,
                      int32,           /* x-coordinate */
                      int32,           /* y-coordinate */
-                     uint64)          /* timestamp */
-IPC_MESSAGE_CONTROL3(MetroViewerHostMsg_TouchUp,
+                     uint64,          /* timestamp */
+                     uint32)          /* pointer_id */
+IPC_MESSAGE_CONTROL4(MetroViewerHostMsg_TouchUp,
                      int32,           /* x-coordinate */
                      int32,           /* y-coordinate */
-                     uint64)          /* timestamp */
-IPC_MESSAGE_CONTROL3(MetroViewerHostMsg_TouchMoved,
+                     uint64,          /* timestamp */
+                     uint32)          /* pointer_id */
+IPC_MESSAGE_CONTROL4(MetroViewerHostMsg_TouchMoved,
                      int32,           /* x-coordinate */
                      int32,           /* y-coordinate */
-                     uint64)          /* timestamp */
+                     uint64,          /* timestamp */
+                     uint32)          /* pointer_id */
 
 // Informs the browser of the result of a file save as operation.
 IPC_MESSAGE_CONTROL3(MetroViewerHostMsg_FileSaveAsDone,
                      bool,           /* success */
-                     string16,       /* filename */
+                     base::FilePath, /* filename */
                      int)            /* filter_index */
 
 // Informs the browser of the result of a file open operation.
 IPC_MESSAGE_CONTROL2(MetroViewerHostMsg_FileOpenDone,
                      bool,           /* success */
-                     string16)       /* filename */
+                     base::FilePath) /* filename */
 
 IPC_MESSAGE_CONTROL2(MetroViewerHostMsg_MultiFileOpenDone,
                      bool,                    /* success */
                      std::vector<base::FilePath>)   /* filenames */
 
+// Informs the browser of the result of a select folder operation.
+IPC_MESSAGE_CONTROL2(MetroViewerHostMsg_SelectFolderDone,
+                     bool,           /* success */
+                     base::FilePath) /* filepath*/
 
 // Messages sent from the browser to the viewer:
 
@@ -97,7 +104,7 @@ IPC_STRUCT_BEGIN(MetroViewerHostMsg_SaveAsDialogParams)
   IPC_STRUCT_MEMBER(string16, title)
 
   // The suggested file name.
-  IPC_STRUCT_MEMBER(string16, suggested_name)
+  IPC_STRUCT_MEMBER(base::FilePath, suggested_name)
 
   // The save as filter to be used.
   IPC_STRUCT_MEMBER(string16, filter)
@@ -116,8 +123,37 @@ IPC_MESSAGE_CONTROL1(MetroViewerHostMsg_DisplayFileSaveAs,
 
 // Requests the viewer to display the file open dialog.
 IPC_MESSAGE_CONTROL4(MetroViewerHostMsg_DisplayFileOpen,
-                     string16,   /* title */
-                     string16,   /* filter */
-                     string16,   /* Default path */
-                     bool)       /* allow_multi_select */
+                     string16,       /* title */
+                     string16,       /* filter */
+                     base::FilePath, /* Default path */
+                     bool)           /* allow_multi_select */
 
+// Requests the viewer to display the select folder dialog.
+IPC_MESSAGE_CONTROL1(MetroViewerHostMsg_DisplaySelectFolder,
+                     string16)   /* title */
+
+// Informs the browser about the viewer activation state, i.e. active, lost
+// activation etc.
+IPC_MESSAGE_CONTROL1(MetroViewerHostMsg_WindowActivated,
+                     bool) /* active */
+
+// Sent to the viewer process to set the cursor position.
+IPC_MESSAGE_CONTROL2(MetroViewerHostMsg_SetCursorPos,
+                     int,  /* x */
+                     int)  /* y */
+
+// Ack sent by the viewer process indicating that the SetCursorPos operation
+// was completed.
+IPC_MESSAGE_CONTROL0(MetroViewerHostMsg_SetCursorPosAck)
+
+IPC_MESSAGE_CONTROL1(MetroViewerHostMsg_OpenURL,
+                     string16)  /* url */
+
+IPC_MESSAGE_CONTROL1(MetroViewerHostMsg_SearchRequest,
+                     string16)  /* search_string */
+
+// Sent from the metro viewer process to the browser process to indicate that
+// the viewer window size has changed.
+IPC_MESSAGE_CONTROL2(MetroViewerHostMsg_WindowSizeChanged,
+                     uint32,   /* width */
+                     uint32)   /* height */

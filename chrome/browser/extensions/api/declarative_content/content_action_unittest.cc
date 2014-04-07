@@ -9,6 +9,7 @@
 #include "chrome/browser/extensions/extension_action_manager.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/extensions/test_extension_environment.h"
+#include "chrome/test/base/testing_profile.h"
 #include "content/public/browser/web_contents.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -23,21 +24,21 @@ TEST(DeclarativeContentActionTest, InvalidCreation) {
   TestExtensionEnvironment env;
   std::string error;
   bool bad_message = false;
-  scoped_ptr<ContentAction> result;
+  scoped_refptr<const ContentAction> result;
 
   // Test wrong data type passed.
   error.clear();
   result = ContentAction::Create(*ParseJson("[]"), &error, &bad_message);
   EXPECT_TRUE(bad_message);
   EXPECT_EQ("", error);
-  EXPECT_FALSE(result);
+  EXPECT_FALSE(result.get());
 
   // Test missing instanceType element.
   error.clear();
   result = ContentAction::Create(*ParseJson("{}"), &error, &bad_message);
   EXPECT_TRUE(bad_message);
   EXPECT_EQ("", error);
-  EXPECT_FALSE(result);
+  EXPECT_FALSE(result.get());
 
   // Test wrong instanceType element.
   error.clear();
@@ -47,7 +48,7 @@ TEST(DeclarativeContentActionTest, InvalidCreation) {
       "}"),
                                  &error, &bad_message);
   EXPECT_THAT(error, HasSubstr("invalid instanceType"));
-  EXPECT_FALSE(result);
+  EXPECT_FALSE(result.get());
 }
 
 TEST(DeclarativeContentActionTest, ShowPageAction) {
@@ -55,14 +56,14 @@ TEST(DeclarativeContentActionTest, ShowPageAction) {
 
   std::string error;
   bool bad_message = false;
-  scoped_ptr<ContentAction> result = ContentAction::Create(
+  scoped_refptr<const ContentAction> result = ContentAction::Create(
       *ParseJson("{\n"
                  "  \"instanceType\": \"declarativeContent.ShowPageAction\",\n"
                  "}"),
       &error, &bad_message);
   EXPECT_EQ("", error);
   EXPECT_FALSE(bad_message);
-  ASSERT_TRUE(result);
+  ASSERT_TRUE(result.get());
   EXPECT_EQ(ContentAction::ACTION_SHOW_PAGE_ACTION, result->GetType());
 
   const Extension* extension = env.MakeExtension(

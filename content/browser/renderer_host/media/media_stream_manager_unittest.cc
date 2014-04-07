@@ -5,10 +5,13 @@
 #include <string>
 
 #include "base/bind.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
+#include "base/run_loop.h"
 #include "content/browser/browser_thread_impl.h"
 #include "content/browser/renderer_host/media/media_stream_manager.h"
+#include "content/browser/renderer_host/media/media_stream_ui_proxy.h"
 #include "content/common/media/media_stream_options.h"
+#include "content/public/test/test_browser_thread_bundle.h"
 #include "media/audio/audio_manager_base.h"
 #if defined(OS_ANDROID)
 #include "media/audio/android/audio_manager_android.h"
@@ -61,25 +64,9 @@ class MockAudioManager : public AudioManagerPlatform {
 
 class MediaStreamManagerTest : public ::testing::Test {
  public:
-  MediaStreamManagerTest() {}
-
-  MOCK_METHOD1(Response, void(const std::string&));
-  void ResponseCallback(const std::string& label,
-                        const MediaStreamDevices& devices) {
-    Response(label);
-    message_loop_->PostTask(FROM_HERE, MessageLoop::QuitClosure());
-  }
-
-  void WaitForResult() { message_loop_->Run(); }
-
- protected:
-  virtual void SetUp() {
-    message_loop_.reset(new MessageLoop(MessageLoop::TYPE_IO));
-    ui_thread_.reset(new BrowserThreadImpl(BrowserThread::UI,
-                                           message_loop_.get()));
-    io_thread_.reset(new BrowserThreadImpl(BrowserThread::IO,
-                                           message_loop_.get()));
-
+  MediaStreamManagerTest()
+      : thread_bundle_(content::TestBrowserThreadBundle::IO_MAINLOOP),
+        message_loop_(base::MessageLoopProxy::current()) {
     // Create our own MediaStreamManager.
     audio_manager_.reset(new MockAudioManager());
     media_stream_manager_.reset(new MediaStreamManager(audio_manager_.get()));
@@ -88,69 +75,79 @@ class MediaStreamManagerTest : public ::testing::Test {
     media_stream_manager_->UseFakeDevice();
   }
 
-  virtual void TearDown() {
-    message_loop_->RunUntilIdle();
-
-    // Delete the IO message loop to clean up the MediaStreamManager.
-    message_loop_.reset();
+  virtual ~MediaStreamManagerTest() {
+    media_stream_manager_->WillDestroyCurrentMessageLoop();
   }
 
-  std::string MakeMediaAccessRequest() {
+  MOCK_METHOD1(Response, void(int index));
+  void ResponseCallback(int index,
+                        const MediaStreamDevices& devices,
+                        scoped_ptr<MediaStreamUIProxy> ui_proxy) {
+    Response(index);
+    message_loop_->PostTask(FROM_HERE, run_loop_.QuitClosure());
+  }
+
+ protected:
+  std::string MakeMediaAccessRequest(int index) {
     const int render_process_id = 1;
     const int render_view_id = 1;
+    const int page_request_id = 1;
     StreamOptions components(MEDIA_DEVICE_AUDIO_CAPTURE,
                              MEDIA_DEVICE_VIDEO_CAPTURE);
     const GURL security_origin;
-    MediaRequestResponseCallback callback =
+    MediaStreamManager::MediaRequestResponseCallback callback =
         base::Bind(&MediaStreamManagerTest::ResponseCallback,
-                   base::Unretained(this));
+                   base::Unretained(this), index);
     return media_stream_manager_->MakeMediaAccessRequest(render_process_id,
                                                          render_view_id,
+                                                         page_request_id,
                                                          components,
                                                          security_origin,
                                                          callback);
   }
 
-  scoped_ptr<MessageLoop> message_loop_;
-  scoped_ptr<BrowserThreadImpl> ui_thread_;
-  scoped_ptr<BrowserThreadImpl> io_thread_;
   scoped_ptr<media::AudioManager> audio_manager_;
   scoped_ptr<MediaStreamManager> media_stream_manager_;
+  content::TestBrowserThreadBundle thread_bundle_;
+  scoped_refptr<base::MessageLoopProxy> message_loop_;
+  base::RunLoop run_loop_;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(MediaStreamManagerTest);
 };
 
 TEST_F(MediaStreamManagerTest, MakeMediaAccessRequest) {
-  std::string label = MakeMediaAccessRequest();
+  MakeMediaAccessRequest(0);
 
   // Expecting the callback will be triggered and quit the test.
-  EXPECT_CALL(*this, Response(label));
-  WaitForResult();
+  EXPECT_CALL(*this, Response(0));
+  run_loop_.Run();
 }
 
 TEST_F(MediaStreamManagerTest, MakeAndCancelMediaAccessRequest) {
-  std::string label = MakeMediaAccessRequest();
+  std::string label = MakeMediaAccessRequest(0);
   // No callback is expected.
   media_stream_manager_->CancelRequest(label);
 }
 
 TEST_F(MediaStreamManagerTest, MakeMultipleRequests) {
   // First request.
-  std::string label1 =  MakeMediaAccessRequest();
+  std::string label1 =  MakeMediaAccessRequest(0);
 
   // Second request.
   int render_process_id = 2;
   int render_view_id = 2;
+  int page_request_id = 2;
   StreamOptions components(MEDIA_DEVICE_AUDIO_CAPTURE,
                            MEDIA_DEVICE_VIDEO_CAPTURE);
   GURL security_origin;
-  MediaRequestResponseCallback callback =
+  MediaStreamManager::MediaRequestResponseCallback callback =
       base::Bind(&MediaStreamManagerTest::ResponseCallback,
-                 base::Unretained(this));
+                 base::Unretained(this), 1);
   std::string label2 = media_stream_manager_->MakeMediaAccessRequest(
       render_process_id,
       render_view_id,
+      page_request_id,
       components,
       security_origin,
       callback);
@@ -158,19 +155,20 @@ TEST_F(MediaStreamManagerTest, MakeMultipleRequests) {
   // Expecting the callbackS from requests will be triggered and quit the test.
   // Note, the callbacks might come in a different order depending on the
   // value of labels.
-  EXPECT_CALL(*this, Response(_)).Times(2);
-  WaitForResult();
+  EXPECT_CALL(*this, Response(0));
+  EXPECT_CALL(*this, Response(1));
+  run_loop_.Run();
 }
 
 TEST_F(MediaStreamManagerTest, MakeAndCancelMultipleRequests) {
-  std::string label1 = MakeMediaAccessRequest();
-  std::string label2 = MakeMediaAccessRequest();
+  std::string label1 = MakeMediaAccessRequest(0);
+  std::string label2 = MakeMediaAccessRequest(1);
   media_stream_manager_->CancelRequest(label1);
 
   // Expecting the callback from the second request will be triggered and
   // quit the test.
-  EXPECT_CALL(*this, Response(label2));
-  WaitForResult();
+  EXPECT_CALL(*this, Response(1));
+  run_loop_.Run();
 }
 
 }  // namespace content

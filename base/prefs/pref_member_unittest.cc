@@ -5,7 +5,7 @@
 #include "base/prefs/pref_member.h"
 
 #include "base/bind.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/prefs/pref_registry_simple.h"
 #include "base/prefs/testing_pref_service.h"
 #include "base/synchronization/waitable_event.h"
@@ -25,7 +25,7 @@ void RegisterTestPrefs(PrefRegistrySimple* registry) {
   registry->RegisterIntegerPref(kIntPref, 0);
   registry->RegisterDoublePref(kDoublePref, 0.0);
   registry->RegisterStringPref(kStringPref, "default");
-  registry->RegisterListPref(kStringListPref, new ListValue());
+  registry->RegisterListPref(kStringListPref, new base::ListValue());
 }
 
 class GetPrefValueHelper
@@ -189,7 +189,7 @@ TEST(PrefMemberTest, BasicGetAndSet) {
   EXPECT_EQ("bar", *string);
 
   // Test string list
-  ListValue expected_list;
+  base::ListValue expected_list;
   std::vector<std::string> expected_vector;
   StringListPrefMember string_list;
   string_list.Init(kStringListPref, &prefs);
@@ -233,7 +233,7 @@ TEST(PrefMemberTest, InvalidList) {
   expected_vector.push_back("foo");
 
   // Try to add a valid list first.
-  ListValue list;
+  base::ListValue list;
   list.AppendString("foo");
   std::vector<std::string> vector;
   EXPECT_TRUE(subtle::PrefMemberVectorStringUpdate(list, &vector));

@@ -5,25 +5,25 @@
 #include "net/proxy/proxy_resolver_v8_tracing.h"
 
 #include "base/file_util.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/path_service.h"
 #include "base/stl_util.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/threading/platform_thread.h"
-#include "base/utf_string_conversions.h"
 #include "base/values.h"
-#include "googleurl/src/gurl.h"
-#include "net/base/host_cache.h"
 #include "net/base/net_errors.h"
 #include "net/base/net_log.h"
 #include "net/base/net_log_unittest.h"
 #include "net/base/test_completion_callback.h"
+#include "net/dns/host_cache.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/proxy/proxy_info.h"
 #include "net/proxy/proxy_resolver_error_observer.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/gurl.h"
 
 namespace net {
 
@@ -35,7 +35,7 @@ class ProxyResolverV8TracingTest : public testing::Test {
     // Drain any pending messages, which may be left over from cancellation.
     // This way they get reliably run as part of the current test, rather than
     // spilling into the next test's execution.
-    MessageLoop::current()->RunUntilIdle();
+    base::MessageLoop::current()->RunUntilIdle();
   }
 };
 
@@ -71,7 +71,7 @@ class MockErrorObserver : public ProxyResolverErrorObserver {
   MockErrorObserver() : event_(true, false) {}
 
   virtual void OnPACScriptError(int line_number,
-                                const string16& error) OVERRIDE {
+                                const base::string16& error) OVERRIDE {
     {
       base::AutoLock l(lock_);
       output += base::StringPrintf("Error: line %d: %s\n", line_number,
@@ -282,7 +282,8 @@ TEST_F(ProxyResolverV8TracingTest, Dns) {
 
   host_resolver.rules()->AddRuleForAddressFamily(
       "host1", ADDRESS_FAMILY_IPV4, "166.155.144.44");
-  host_resolver.rules()->AddIPLiteralRule("host1", "::1,192.168.1.1", "");
+  host_resolver.rules()
+      ->AddIPLiteralRule("host1", "::1,192.168.1.1", std::string());
   host_resolver.rules()->AddSimulatedFailure("host2");
   host_resolver.rules()->AddRule("host3", "166.155.144.33");
   host_resolver.rules()->AddRule("host5", "166.155.144.55");
@@ -775,7 +776,7 @@ class BlockableHostResolver : public HostResolver {
 
     // Indicate to the caller that a request was received.
     EXPECT_TRUE(waiting_for_resolve_);
-    MessageLoop::current()->Quit();
+    base::MessageLoop::current()->Quit();
 
     // This line is intentionally after action_.Run(), since one of the
     // tests does a cancellation inside of Resolve(), and it is more
@@ -806,7 +807,7 @@ class BlockableHostResolver : public HostResolver {
   // Waits until Resolve() has been called.
   void WaitUntilRequestIsReceived() {
     waiting_for_resolve_ = true;
-    MessageLoop::current()->Run();
+    base::MessageLoop::current()->Run();
     DCHECK(waiting_for_resolve_);
     waiting_for_resolve_ = false;
   }
@@ -995,7 +996,8 @@ TEST_F(ProxyResolverV8TracingTest, MultipleResolvers) {
   MockHostResolver host_resolver0;
   host_resolver0.rules()->AddRuleForAddressFamily(
       "host1", ADDRESS_FAMILY_IPV4, "166.155.144.44");
-  host_resolver0.rules()->AddIPLiteralRule("host1", "::1,192.168.1.1", "");
+  host_resolver0.rules()
+      ->AddIPLiteralRule("host1", "::1,192.168.1.1", std::string());
   host_resolver0.rules()->AddSimulatedFailure("host2");
   host_resolver0.rules()->AddRule("host3", "166.155.144.33");
   host_resolver0.rules()->AddRule("host5", "166.155.144.55");

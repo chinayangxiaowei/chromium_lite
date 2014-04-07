@@ -5,12 +5,12 @@
 #include "net/quic/quic_bandwidth.h"
 
 #include "base/logging.h"
-#include "base/time.h"
+#include "base/time/time.h"
 
 namespace net {
 
 // Highest number that QuicBandwidth can hold.
-const int64 kQuicInfiniteBandwidth = 0x7fffffffffffffffll;
+const int64 kQuicInfiniteBandwidth = GG_INT64_C(0x7fffffffffffffff);
 
 // static
 QuicBandwidth QuicBandwidth::Zero() {

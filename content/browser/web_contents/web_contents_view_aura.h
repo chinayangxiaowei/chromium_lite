@@ -27,7 +27,8 @@ class DropTargetEvent;
 
 namespace content {
 class OverscrollNavigationOverlay;
-class ShadowWindow;
+class ShadowLayerDelegate;
+class TouchEditableImplAura;
 class WebContentsViewDelegate;
 class WebContentsImpl;
 class WebDragDestDelegate;
@@ -44,6 +45,8 @@ class CONTENT_EXPORT WebContentsViewAura
                       WebContentsViewDelegate* delegate);
 
   void SetupOverlayWindowForTesting();
+
+  void SetTouchEditableForTest(TouchEditableImplAura* touch_editable);
 
  private:
   class WindowObserver;
@@ -92,6 +95,10 @@ class CONTENT_EXPORT WebContentsViewAura
   // overscroll (|delta_x|, in pixels).
   void UpdateOverscrollWindowBrightness(float delta_x);
 
+  void AttachTouchEditableToRenderView();
+
+  void OverscrollUpdateForWebContentsDelegate(int delta_y);
+
   // Overridden from WebContentsView:
   virtual gfx::NativeView GetNativeView() const OVERRIDE;
   virtual gfx::NativeView GetContentNativeView() const OVERRIDE;
@@ -104,7 +111,7 @@ class CONTENT_EXPORT WebContentsViewAura
   virtual void SetInitialFocus() OVERRIDE;
   virtual void StoreFocus() OVERRIDE;
   virtual void RestoreFocus() OVERRIDE;
-  virtual WebDropData* GetDropData() const OVERRIDE;
+  virtual DropData* GetDropData() const OVERRIDE;
   virtual gfx::Rect GetViewBounds() const OVERRIDE;
 
   // Overridden from WebContentsViewPort:
@@ -120,17 +127,15 @@ class CONTENT_EXPORT WebContentsViewAura
   virtual void SetOverscrollControllerEnabled(bool enabled) OVERRIDE;
 
   // Overridden from RenderViewHostDelegateView:
-  virtual void ShowContextMenu(
-      const ContextMenuParams& params,
-      ContextMenuSourceType type) OVERRIDE;
+  virtual void ShowContextMenu(const ContextMenuParams& params) OVERRIDE;
   virtual void ShowPopupMenu(const gfx::Rect& bounds,
                              int item_height,
                              double item_font_size,
                              int selected_item,
-                             const std::vector<WebMenuItem>& items,
+                             const std::vector<MenuItem>& items,
                              bool right_aligned,
                              bool allow_multiple_selection) OVERRIDE;
-  virtual void StartDragging(const WebDropData& drop_data,
+  virtual void StartDragging(const DropData& drop_data,
                              WebKit::WebDragOperationsMask operations,
                              const gfx::ImageSkia& image,
                              const gfx::Vector2d& image_offset,
@@ -197,7 +202,7 @@ class CONTENT_EXPORT WebContentsViewAura
 
   WebKit::WebDragOperationsMask current_drag_op_;
 
-  scoped_ptr<WebDropData> current_drop_data_;
+  scoped_ptr<DropData> current_drop_data_;
 
   WebDragDestDelegate* drag_dest_delegate_;
 
@@ -206,10 +211,6 @@ class CONTENT_EXPORT WebContentsViewAura
   // this pointer should never be dereferenced.  We only use it for comparing
   // pointers.
   void* current_rvh_for_drag_;
-
-  // The container for the content-window. The doc for ShadowWindow explains its
-  // lifetime and ownership.
-  ShadowWindow* content_container_;
 
   bool overscroll_change_brightness_;
 
@@ -223,6 +224,10 @@ class CONTENT_EXPORT WebContentsViewAura
   // This manages the overlay window that shows the screenshot during a history
   // navigation triggered by the overscroll gesture.
   scoped_ptr<OverscrollNavigationOverlay> navigation_overlay_;
+
+  scoped_ptr<ShadowLayerDelegate> overscroll_shadow_;
+
+  scoped_ptr<TouchEditableImplAura> touch_editable_;
 
   DISALLOW_COPY_AND_ASSIGN(WebContentsViewAura);
 };

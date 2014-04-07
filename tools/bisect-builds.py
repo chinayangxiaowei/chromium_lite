@@ -20,7 +20,8 @@ OFFICIAL_BASE_URL = 'http://master.chrome.corp.google.com/official_builds'
 
 # Changelogs URL.
 CHANGELOG_URL = 'http://build.chromium.org/f/chromium/' \
-                'perf/dashboard/ui/changelog.html?url=/trunk/src&range=%d%%3A%d'
+                'perf/dashboard/ui/changelog.html?' \
+                'url=/trunk/src&range=%d%%3A%d'
 
 # Official Changelogs URL.
 OFFICIAL_CHANGELOG_URL = 'http://omahaproxy.appspot.com/'\
@@ -28,9 +29,10 @@ OFFICIAL_CHANGELOG_URL = 'http://omahaproxy.appspot.com/'\
 
 # DEPS file URL.
 DEPS_FILE= 'http://src.chromium.org/viewvc/chrome/trunk/src/DEPS?revision=%d'
-# WebKit Changelogs URL.
-WEBKIT_CHANGELOG_URL = 'http://trac.webkit.org/log/' \
-                       'trunk/?rev=%d&stop_rev=%d&verbose=on&limit=10000'
+# Blink Changelogs URL.
+BLINK_CHANGELOG_URL = 'http://build.chromium.org/f/chromium/' \
+                      'perf/dashboard/ui/changelog_blink.html?' \
+                      'url=/trunk&range=%d%%3A%d'
 
 DONE_MESSAGE_GOOD_MIN = 'You are probably looking for a change made after %s ' \
                         '(known good), but no later than %s (first known bad).'
@@ -73,7 +75,7 @@ class PathContext(object):
     #   _listing_platform_dir = Directory that holds revisions. Ends with a '/'.
     #   _archive_extract_dir = Uncompressed directory in the archive_name file.
     #   _binary_name = The name of the executable to run.
-    if self.platform == 'linux' or self.platform == 'linux64':
+    if self.platform in ('linux', 'linux64', 'linux-arm'):
       self._binary_name = 'chrome'
     elif self.platform == 'mac':
       self.archive_name = 'chrome-mac.zip'
@@ -100,13 +102,15 @@ class PathContext(object):
       elif self.platform == 'win':
         self._listing_platform_dir = 'win/'
     else:
-      if self.platform == 'linux' or self.platform == 'linux64':
+      if self.platform in ('linux', 'linux64', 'linux-arm'):
         self.archive_name = 'chrome-linux.zip'
         self._archive_extract_dir = 'chrome-linux'
         if self.platform == 'linux':
           self._listing_platform_dir = 'Linux/'
         elif self.platform == 'linux64':
           self._listing_platform_dir = 'Linux_x64/'
+        elif self.platform == 'linux-arm':
+          self._listing_platform_dir = 'Linux_ARM_Cross-Compile/'
       elif self.platform == 'mac':
         self._listing_platform_dir = 'Mac/'
         self._binary_name = 'Chromium.app/Contents/MacOS/Chromium'
@@ -297,7 +301,7 @@ def FetchRevision(context, rev, filename, quit_event=None, progress_event=None):
     pass
 
 
-def RunRevision(context, revision, zipfile, profile, num_runs, args):
+def RunRevision(context, revision, zipfile, profile, num_runs, command, args):
   """Given a zipped revision, unzip it and run the test."""
   print "Trying revision %s..." % str(revision)
 
@@ -308,14 +312,22 @@ def RunRevision(context, revision, zipfile, profile, num_runs, args):
   os.chdir(tempdir)
 
   # Run the build as many times as specified.
-  testargs = [context.GetLaunchPath(), '--user-data-dir=%s' % profile] + args
+  testargs = ['--user-data-dir=%s' % profile] + args
   # The sandbox must be run as root on Official Chrome, so bypass it.
-  if context.is_official and (context.platform == 'linux' or
-      context.platform == 'linux64'):
+  if context.is_official and context.platform.startswith('linux'):
     testargs.append('--no-sandbox')
 
+  runcommand = []
+  for token in command.split():
+    if token == "%a":
+      runcommand.extend(testargs)
+    else:
+      runcommand.append( \
+          token.replace('%p', context.GetLaunchPath()) \
+               .replace('%s', ' '.join(testargs)))
+
   for i in range(0, num_runs):
-    subproc = subprocess.Popen(testargs,
+    subproc = subprocess.Popen(runcommand,
                                bufsize=-1,
                                stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE)
@@ -385,6 +397,7 @@ def Bisect(platform,
            good_rev=0,
            bad_rev=0,
            num_runs=1,
+           command="%p %a",
            try_args=(),
            profile=None,
            evaluate=AskIsGoodBuild):
@@ -487,6 +500,7 @@ def Bisect(platform,
                                              fetch.zipfile,
                                              profile,
                                              num_runs,
+                                             command,
                                              try_args)
     except Exception, e:
       print >>sys.stderr, e
@@ -561,18 +575,18 @@ def Bisect(platform,
   return (revlist[minrev], revlist[maxrev])
 
 
-def GetWebKitRevisionForChromiumRevision(rev):
-  """Returns the webkit revision that was in chromium's DEPS file at
+def GetBlinkRevisionForChromiumRevision(rev):
+  """Returns the blink revision that was in chromium's DEPS file at
   chromium revision |rev|."""
   # . doesn't match newlines without re.DOTALL, so this is safe.
-  webkit_re = re.compile(r'webkit_revision.:\D*(\d+)')
+  blink_re = re.compile(r'webkit_revision.:\D*(\d+)')
   url = urllib.urlopen(DEPS_FILE % rev)
-  m = webkit_re.search(url.read())
+  m = blink_re.search(url.read())
   url.close()
   if m:
     return int(m.group(1))
   else:
-    raise Exception('Could not get webkit revision for cr rev %d' % rev)
+    raise Exception('Could not get blink revision for cr rev %d' % rev)
 
 
 def GetChromiumRevision(url):
@@ -604,7 +618,7 @@ def main():
            'Tip: add "-- --no-first-run" to bypass the first run prompts.')
   parser = optparse.OptionParser(usage=usage)
   # Strangely, the default help output doesn't include the choice list.
-  choices = ['mac', 'win', 'linux', 'linux64']
+  choices = ['mac', 'win', 'linux', 'linux64', 'linux-arm']
             # linux-chromiumos lacks a continuous archive http://crbug.com/78158
   parser.add_option('-a', '--archive',
                     choices = choices,
@@ -629,6 +643,13 @@ def main():
                     help = 'Number of times to run each build before asking ' +
                     'if it\'s good or bad. Temporary profiles are reused.',
                     default = 1)
+  parser.add_option('-c', '--command', type = 'str',
+                    help = 'Command to execute. %p and %a refer to Chrome ' +
+                    'executable and specified extra arguments respectively. ' +
+                    'Use %s to specify all extra arguments as one string. ' +
+                    'Defaults to "%p %a". Note that any extra paths ' +
+                    'specified should be absolute.',
+                    default = '%p %a');
   (opts, args) = parser.parse_args()
 
   if opts.archive is None:
@@ -667,16 +688,16 @@ def main():
     return 1
 
   (min_chromium_rev, max_chromium_rev) = Bisect(
-      opts.archive, opts.official_builds, good_rev, bad_rev, opts.times, args,
-      opts.profile)
+      opts.archive, opts.official_builds, good_rev, bad_rev, opts.times,
+      opts.command, args, opts.profile)
 
-  # Get corresponding webkit revisions.
+  # Get corresponding blink revisions.
   try:
-    min_webkit_rev = GetWebKitRevisionForChromiumRevision(min_chromium_rev)
-    max_webkit_rev = GetWebKitRevisionForChromiumRevision(max_chromium_rev)
+    min_blink_rev = GetBlinkRevisionForChromiumRevision(min_chromium_rev)
+    max_blink_rev = GetBlinkRevisionForChromiumRevision(max_chromium_rev)
   except Exception, e:
     # Silently ignore the failure.
-    min_webkit_rev, max_webkit_rev = 0, 0
+    min_blink_rev, max_blink_rev = 0, 0
 
   # We're done. Let the user know the results in an official manner.
   if good_rev > bad_rev:
@@ -684,9 +705,9 @@ def main():
   else:
     print DONE_MESSAGE_GOOD_MIN % (str(min_chromium_rev), str(max_chromium_rev))
 
-  if min_webkit_rev != max_webkit_rev:
-    print 'WEBKIT CHANGELOG URL:'
-    print '  ' + WEBKIT_CHANGELOG_URL % (max_webkit_rev, min_webkit_rev)
+  if min_blink_rev != max_blink_rev:
+    print 'BLINK CHANGELOG URL:'
+    print '  ' + BLINK_CHANGELOG_URL % (max_blink_rev, min_blink_rev)
   print 'CHANGELOG URL:'
   if opts.official_builds:
     print OFFICIAL_CHANGELOG_URL % (min_chromium_rev, max_chromium_rev)

@@ -8,13 +8,12 @@
 #include <vector>
 
 #include "base/command_line.h"
+#include "base/containers/hash_tables.h"
 #include "base/debug/alias.h"
-#include "base/hash_tables.h"
 #include "base/logging.h"
+#include "base/memory/shared_memory.h"
 #include "base/metrics/histogram.h"
-#include "base/process_util.h"
-#include "base/shared_memory.h"
-#include "base/string_number_conversions.h"
+#include "base/strings/string_number_conversions.h"
 #include "content/browser/devtools/devtools_netlog_observer.h"
 #include "content/browser/host_zoom_map_impl.h"
 #include "content/browser/loader/resource_buffer.h"
@@ -31,7 +30,6 @@
 #include "net/base/load_flags.h"
 #include "net/base/net_log.h"
 #include "net/base/net_util.h"
-#include "webkit/glue/resource_loader_bridge.h"
 
 using base::TimeTicks;
 
@@ -91,12 +89,15 @@ AsyncResourceHandler::AsyncResourceHandler(
       pending_data_count_(0),
       allocation_size_(0),
       did_defer_(false),
+      has_checked_for_sufficient_resources_(false),
       sent_received_response_msg_(false),
       sent_first_data_msg_(false) {
   InitializeResourceBufferConstants();
 }
 
 AsyncResourceHandler::~AsyncResourceHandler() {
+  if (has_checked_for_sufficient_resources_)
+    rdh_->FinishedWithResourcesForRequest(request_);
 }
 
 bool AsyncResourceHandler::OnMessageReceived(const IPC::Message& message,
@@ -126,11 +127,13 @@ void AsyncResourceHandler::OnFollowRedirect(
 }
 
 void AsyncResourceHandler::OnDataReceivedACK(int request_id) {
-  --pending_data_count_;
+  if (pending_data_count_) {
+    --pending_data_count_;
 
-  buffer_->RecycleLeastRecentlyAllocated();
-  if (buffer_->CanAllocate())
-    ResumeIfDeferred();
+    buffer_->RecycleLeastRecentlyAllocated();
+    if (buffer_->CanAllocate())
+      ResumeIfDeferred();
+  }
 }
 
 bool AsyncResourceHandler::OnUploadProgress(int request_id,
@@ -170,8 +173,8 @@ bool AsyncResourceHandler::OnResponseStarted(int request_id,
 
   ResourceContext* resource_context = filter_->resource_context();
   if (rdh_->delegate()) {
-    rdh_->delegate()->OnResponseStarted(request_, resource_context, response,
-                                        filter_);
+    rdh_->delegate()->OnResponseStarted(
+        request_, resource_context, response, filter_.get());
   }
 
   DevToolsNetLogObserver::PopulateResponseInfo(request_, response);
@@ -195,10 +198,10 @@ bool AsyncResourceHandler::OnResponseStarted(int request_id,
       routing_id_, request_id, response->head));
   sent_received_response_msg_ = true;
 
-  if (request_->response_info().metadata) {
+  if (request_->response_info().metadata.get()) {
     std::vector<char> copy(request_->response_info().metadata->data(),
                            request_->response_info().metadata->data() +
-                           request_->response_info().metadata->size());
+                               request_->response_info().metadata->size());
     filter_->Send(new ResourceMsg_ReceivedCachedMetadata(
         routing_id_, request_id, copy));
   }
@@ -223,7 +226,7 @@ bool AsyncResourceHandler::OnWillRead(int request_id, net::IOBuffer** buf,
   char* memory = buffer_->Allocate(&allocation_size_);
   CHECK(memory);
 
-  *buf = new DependentIOBuffer(buffer_, memory);
+  *buf = new DependentIOBuffer(buffer_.get(), memory);
   *buf_size = allocation_size_;
 
   UMA_HISTOGRAM_CUSTOM_COUNTS(
@@ -249,11 +252,11 @@ bool AsyncResourceHandler::OnReadCompleted(int request_id, int bytes_read,
   if (!sent_first_data_msg_) {
     base::SharedMemoryHandle handle;
     int size;
-    if (!buffer_->ShareToProcess(filter_->peer_handle(), &handle, &size))
+    if (!buffer_->ShareToProcess(filter_->PeerHandle(), &handle, &size))
       return false;
     filter_->Send(
         new ResourceMsg_SetDataBuffer(routing_id_, request_id, handle, size,
-                                      base::GetProcId(filter_->peer_handle())));
+                                      filter_->peer_pid()));
     sent_first_data_msg_ = true;
   }
 
@@ -335,8 +338,16 @@ bool AsyncResourceHandler::OnResponseCompleted(
 }
 
 bool AsyncResourceHandler::EnsureResourceBufferIsInitialized() {
-  if (buffer_ && buffer_->IsInitialized())
+  if (buffer_.get() && buffer_->IsInitialized())
     return true;
+
+  if (!has_checked_for_sufficient_resources_) {
+    has_checked_for_sufficient_resources_ = true;
+    if (!rdh_->HasSufficientResourcesForRequest(request_)) {
+      controller()->CancelWithError(net::ERR_INSUFFICIENT_RESOURCES);
+      return false;
+    }
+  }
 
   buffer_ = new ResourceBuffer();
   return buffer_->Initialize(kBufferSize,

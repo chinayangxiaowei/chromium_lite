@@ -12,13 +12,14 @@
 #include "chrome/browser/defaults.h"
 #include "chrome/browser/extensions/extension_system_factory.h"
 #include "chrome/browser/history/history_service_factory.h"
+#include "chrome/browser/invalidation/invalidation_service_factory.h"
 #include "chrome/browser/password_manager/password_store_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_dependency_manager.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/sessions/tab_restore_service_factory.h"
 #include "chrome/browser/signin/about_signin_internals_factory.h"
+#include "chrome/browser/signin/profile_oauth2_token_service_factory.h"
 #include "chrome/browser/signin/signin_manager.h"
 #include "chrome/browser/signin/signin_manager_factory.h"
 #include "chrome/browser/sync/profile_sync_components_factory_impl.h"
@@ -27,6 +28,7 @@
 #include "chrome/browser/ui/global_error/global_error_service_factory.h"
 #include "chrome/browser/webdata/web_data_service_factory.h"
 #include "chrome/common/pref_names.h"
+#include "components/browser_context_keyed_service/browser_context_dependency_manager.h"
 
 // static
 ProfileSyncServiceFactory* ProfileSyncServiceFactory::GetInstance() {
@@ -39,39 +41,38 @@ ProfileSyncService* ProfileSyncServiceFactory::GetForProfile(
   if (!ProfileSyncService::IsSyncEnabled())
     return NULL;
 
-  // Do not start sync on the import process.
-  if (ProfileManager::IsImportProcess(*CommandLine::ForCurrentProcess()))
-    return NULL;
-
   return static_cast<ProfileSyncService*>(
-      GetInstance()->GetServiceForProfile(profile, true));
+      GetInstance()->GetServiceForBrowserContext(profile, true));
 }
 
 ProfileSyncServiceFactory::ProfileSyncServiceFactory()
-    : ProfileKeyedServiceFactory("ProfileSyncService",
-                                 ProfileDependencyManager::GetInstance()) {
+    : BrowserContextKeyedServiceFactory(
+        "ProfileSyncService",
+        BrowserContextDependencyManager::GetInstance()) {
 
   // The ProfileSyncService depends on various SyncableServices being around
   // when it is shut down.  Specify those dependencies here to build the proper
   // destruction order.
+  DependsOn(AboutSigninInternalsFactory::GetInstance());
+  DependsOn(autofill::PersonalDataManagerFactory::GetInstance());
+  DependsOn(BookmarkModelFactory::GetInstance());
+  DependsOn(extensions::ExtensionSystemFactory::GetInstance());
+  DependsOn(GlobalErrorServiceFactory::GetInstance());
+  DependsOn(HistoryServiceFactory::GetInstance());
+  DependsOn(invalidation::InvalidationServiceFactory::GetInstance());
+  DependsOn(PasswordStoreFactory::GetInstance());
+  DependsOn(ProfileOAuth2TokenServiceFactory::GetInstance());
+  DependsOn(SigninManagerFactory::GetInstance());
   DependsOn(TemplateURLServiceFactory::GetInstance());
-  DependsOn(PersonalDataManagerFactory::GetInstance());
 #if defined(ENABLE_THEMES)
   DependsOn(ThemeServiceFactory::GetInstance());
 #endif
-  DependsOn(GlobalErrorServiceFactory::GetInstance());
-  DependsOn(SigninManagerFactory::GetInstance());
-  DependsOn(PasswordStoreFactory::GetInstance());
-  DependsOn(extensions::ExtensionSystemFactory::GetInstance());
   DependsOn(WebDataServiceFactory::GetInstance());
-  DependsOn(HistoryServiceFactory::GetInstance());
-  DependsOn(BookmarkModelFactory::GetInstance());
-  DependsOn(AboutSigninInternalsFactory::GetInstance());
 
-  // The following have not been converted to ProfileKeyedServices yet, and for
-  // now they are explicitly destroyed after the ProfileDependencyManager is
-  // told to DestroyProfileServices, so they will be around when the
-  // ProfileSyncService is destroyed.
+  // The following have not been converted to BrowserContextKeyedServices yet,
+  // and for now they are explicitly destroyed after the
+  // BrowserContextDependencyManager is told to DestroyBrowserContextServices,
+  // so they will be around when the ProfileSyncService is destroyed.
 
   // DependsOn(FaviconServiceFactory::GetInstance());
 }
@@ -79,13 +80,15 @@ ProfileSyncServiceFactory::ProfileSyncServiceFactory()
 ProfileSyncServiceFactory::~ProfileSyncServiceFactory() {
 }
 
-ProfileKeyedService* ProfileSyncServiceFactory::BuildServiceInstanceFor(
-    Profile* profile) const {
+BrowserContextKeyedService* ProfileSyncServiceFactory::BuildServiceInstanceFor(
+    content::BrowserContext* context) const {
+  Profile* profile = static_cast<Profile*>(context);
+
   ProfileSyncService::StartBehavior behavior =
       browser_defaults::kSyncAutoStarts ? ProfileSyncService::AUTO_START
                                         : ProfileSyncService::MANUAL_START;
 
-  SigninManager* signin = SigninManagerFactory::GetForProfile(profile);
+  SigninManagerBase* signin = SigninManagerFactory::GetForProfile(profile);
 
   // TODO(atwilson): Change AboutSigninInternalsFactory to load on startup
   // once http://crbug.com/171406 has been fixed.
@@ -111,5 +114,5 @@ ProfileKeyedService* ProfileSyncServiceFactory::BuildServiceInstanceFor(
 
 // static
 bool ProfileSyncServiceFactory::HasProfileSyncService(Profile* profile) {
-  return GetInstance()->GetServiceForProfile(profile, false) != NULL;
+  return GetInstance()->GetServiceForBrowserContext(profile, false) != NULL;
 }

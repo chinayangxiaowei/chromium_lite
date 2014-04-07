@@ -4,10 +4,16 @@
 
 #include "base/compiler_specific.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/download/download_item_model.h"
+#include "chrome/browser/download/download_service.h"
+#include "chrome/browser/download/download_service_factory.h"
 #include "chrome/browser/download/test_download_shelf.h"
+#include "chrome/common/extensions/extension.h"
+#include "chrome/test/base/testing_profile.h"
+#include "content/public/browser/notification_service.h"
 #include "content/public/test/mock_download_item.h"
 #include "content/public/test/mock_download_manager.h"
 #include "content/public/test/test_browser_thread.h"
@@ -21,6 +27,11 @@ using ::testing::_;
 using content::DownloadItem;
 
 namespace {
+
+BrowserContextKeyedService* CreateDownloadService(
+    content::BrowserContext* context) {
+  return new DownloadService(Profile::FromBrowserContext(context));
+}
 
 class DownloadShelfTest : public testing::Test {
  public:
@@ -36,19 +47,32 @@ class DownloadShelfTest : public testing::Test {
   TestDownloadShelf* shelf() {
     return &shelf_;
   }
+  Profile* profile() { return profile_.get(); }
+
+  virtual void SetUp() OVERRIDE {
+    DownloadServiceFactory::GetInstance()->SetTestingFactory(
+        profile(), &CreateDownloadService);
+  }
+
+  virtual void TearDown() OVERRIDE {
+    DownloadServiceFactory::GetInstance()->SetTestingFactory(
+        profile(), NULL);
+  }
 
  private:
   scoped_ptr<content::MockDownloadItem> GetInProgressMockDownload();
 
-  MessageLoopForUI message_loop_;
+  base::MessageLoopForUI message_loop_;
   content::TestBrowserThread ui_thread_;
   scoped_ptr<content::MockDownloadItem> download_item_;
-  scoped_refptr<content::MockDownloadManager> download_manager_;
+  scoped_ptr<content::MockDownloadManager> download_manager_;
   TestDownloadShelf shelf_;
+  scoped_ptr<TestingProfile> profile_;
 };
 
 DownloadShelfTest::DownloadShelfTest()
-    : ui_thread_(content::BrowserThread::UI, &message_loop_) {
+    : ui_thread_(content::BrowserThread::UI, &message_loop_),
+      profile_(new TestingProfile()) {
   download_item_.reset(new ::testing::NiceMock<content::MockDownloadItem>());
   ON_CALL(*download_item_, GetAutoOpened()).WillByDefault(Return(false));
   ON_CALL(*download_item_, GetMimeType()).WillByDefault(Return("text/plain"));
@@ -57,15 +81,20 @@ DownloadShelfTest::DownloadShelfTest()
       .WillByDefault(Return(DownloadItem::TARGET_DISPOSITION_OVERWRITE));
   ON_CALL(*download_item_, GetURL())
       .WillByDefault(ReturnRefOfCopy(GURL("http://example.com/foo")));
-  ON_CALL(*download_item_, IsComplete()).WillByDefault(Return(false));
-  ON_CALL(*download_item_, IsInProgress()).WillByDefault(Return(true));
+  ON_CALL(*download_item_, GetState())
+      .WillByDefault(Return(DownloadItem::IN_PROGRESS));
   ON_CALL(*download_item_, IsTemporary()).WillByDefault(Return(false));
   ON_CALL(*download_item_, ShouldOpenFileBasedOnExtension())
       .WillByDefault(Return(false));
+  ON_CALL(*download_item_, GetBrowserContext())
+      .WillByDefault(Return(profile()));
 
-  download_manager_ = new ::testing::NiceMock<content::MockDownloadManager>();
+  download_manager_.reset(
+      new ::testing::NiceMock<content::MockDownloadManager>());
   ON_CALL(*download_manager_, GetDownload(_))
       .WillByDefault(Return(download_item_.get()));
+  ON_CALL(*download_manager_, GetBrowserContext())
+      .WillByDefault(Return(profile()));
 
   shelf_.set_download_manager(download_manager_.get());
 }
@@ -84,7 +113,7 @@ TEST_F(DownloadShelfTest, ClosesShelfWhenHidden) {
 TEST_F(DownloadShelfTest, CloseWhileHiddenPreventsShowOnUnhide) {
   shelf()->Show();
   shelf()->Hide();
-  shelf()->Close();
+  shelf()->Close(DownloadShelf::AUTOMATIC);
   shelf()->Unhide();
   EXPECT_FALSE(shelf()->IsShowing());
 }
@@ -148,7 +177,9 @@ TEST_F(DownloadShelfTest, AddDelayedCompletedDownload) {
   EXPECT_FALSE(shelf()->did_add_download());
   EXPECT_FALSE(shelf()->IsShowing());
 
-  EXPECT_CALL(*download_item(), IsComplete())
+  EXPECT_CALL(*download_item(), GetState())
+      .WillRepeatedly(Return(DownloadItem::COMPLETE));
+  EXPECT_CALL(*download_item(), GetAutoOpened())
       .WillRepeatedly(Return(true));
 
   base::RunLoop run_loop;
@@ -170,8 +201,8 @@ TEST_F(DownloadShelfTest, AddDelayedCompleteNonTransientDownload) {
   EXPECT_FALSE(shelf()->did_add_download());
   EXPECT_FALSE(shelf()->IsShowing());
 
-  EXPECT_CALL(*download_item(), IsComplete())
-      .WillRepeatedly(Return(true));
+  EXPECT_CALL(*download_item(), GetState())
+      .WillRepeatedly(Return(DownloadItem::COMPLETE));
   EXPECT_CALL(*download_item(), ShouldOpenFileBasedOnExtension())
       .WillRepeatedly(Return(false));
   ASSERT_FALSE(DownloadItemModel(download_item())

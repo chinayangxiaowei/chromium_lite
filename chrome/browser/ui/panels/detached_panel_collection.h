@@ -50,12 +50,15 @@ class DetachedPanelCollection : public PanelCollection {
   virtual bool CanShowMinimizeButton(const Panel* panel) const OVERRIDE;
   virtual bool CanShowRestoreButton(const Panel* panel) const OVERRIDE;
   virtual bool IsPanelMinimized(const Panel* panel) const OVERRIDE;
+  virtual bool UsesAlwaysOnTopPanels() const OVERRIDE;
   virtual void SavePanelPlacement(Panel* panel) OVERRIDE;
   virtual void RestorePanelToSavedPlacement() OVERRIDE;
   virtual void DiscardSavedPanelPlacement() OVERRIDE;
   virtual void UpdatePanelOnCollectionChange(Panel* panel) OVERRIDE;
   virtual void OnPanelExpansionStateChanged(Panel* panel) OVERRIDE;
   virtual void OnPanelActiveStateChanged(Panel* panel) OVERRIDE;
+  virtual gfx::Rect GetInitialPanelBounds(
+      const gfx::Rect& requested_bounds) const OVERRIDE;
 
   bool HasPanel(Panel* panel) const;
 

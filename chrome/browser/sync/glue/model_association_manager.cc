@@ -9,7 +9,7 @@
 
 #include "base/debug/trace_event.h"
 #include "base/logging.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/metrics/histogram.h"
 #include "sync/internal_api/public/base/model_type.h"
 
@@ -30,6 +30,9 @@ static const syncer::ModelType kStartOrder[] = {
   syncer::EXPERIMENTS,          //  Listed for completeness.
   syncer::PROXY_TABS,           //  Listed for completeness.
   syncer::BOOKMARKS,            //  UI thread datatypes.
+  syncer::MANAGED_USERS,        //  Syncing managed users on initial login might
+                                //  block creating a new managed user, so we
+                                //  want to do it early.
   syncer::PREFERENCES,
   syncer::PRIORITY_PREFERENCES,
   syncer::EXTENSIONS,
@@ -41,6 +44,7 @@ static const syncer::ModelType kStartOrder[] = {
   syncer::DICTIONARY,
   syncer::FAVICON_IMAGES,
   syncer::FAVICON_TRACKING,
+  syncer::MANAGED_USER_SETTINGS,
   syncer::AUTOFILL,             // Non-UI thread datatypes.
   syncer::AUTOFILL_PROFILE,
   syncer::EXTENSION_SETTINGS,
@@ -74,10 +78,11 @@ class SortComparator : public std::binary_function<DataTypeController*,
 
 syncer::DataTypeAssociationStats BuildAssociationStatsFromMergeResults(
     const syncer::SyncMergeResult& local_merge_result,
-    const syncer::SyncMergeResult& syncer_merge_result) {
+    const syncer::SyncMergeResult& syncer_merge_result,
+    const base::TimeDelta& association_wait_time,
+    const base::TimeDelta& association_time) {
   DCHECK_EQ(local_merge_result.model_type(), syncer_merge_result.model_type());
   syncer::DataTypeAssociationStats stats;
-  stats.model_type = local_merge_result.model_type();
   stats.had_error = local_merge_result.error().IsSet() ||
                     syncer_merge_result.error().IsSet();
   stats.num_local_items_before_association =
@@ -94,28 +99,31 @@ syncer::DataTypeAssociationStats BuildAssociationStatsFromMergeResults(
       local_merge_result.num_items_deleted();
   stats.num_local_items_modified =
       local_merge_result.num_items_modified();
+  stats.local_version_pre_association =
+      local_merge_result.pre_association_version();
   stats.num_sync_items_added =
       syncer_merge_result.num_items_added();
   stats.num_sync_items_deleted =
       syncer_merge_result.num_items_deleted();
   stats.num_sync_items_modified =
       syncer_merge_result.num_items_modified();
+  stats.sync_version_pre_association =
+      syncer_merge_result.pre_association_version();
+  stats.association_wait_time = association_wait_time;
+  stats.association_time = association_time;
   return stats;
 }
 
 }  // namespace
 
 ModelAssociationManager::ModelAssociationManager(
-    const syncer::WeakHandle<syncer::DataTypeDebugInfoListener>&
-        debug_info_listener,
     const DataTypeController::TypeMap* controllers,
     ModelAssociationResultProcessor* processor)
     : state_(IDLE),
       currently_associating_(NULL),
       controllers_(controllers),
       result_processor_(processor),
-      debug_info_listener_(debug_info_listener),
-      weak_ptr_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {
+      weak_ptr_factory_(this) {
 
   // Ensure all data type controllers are stopped.
   for (DataTypeController::TypeMap::const_iterator it = controllers_->begin();
@@ -137,11 +145,13 @@ void ModelAssociationManager::Initialize(syncer::ModelTypeSet desired_types) {
   CHECK_EQ(state_, IDLE);
   needs_start_.clear();
   needs_stop_.clear();
-  failed_datatypes_info_.clear();
-  desired_types_ = desired_types;
+  failed_data_types_info_.clear();
+  associating_types_.Clear();
+  needs_crypto_types_.Clear();
   state_ = INITIALIZED_TO_CONFIGURE;
 
-  DVLOG(1) << "ModelAssociationManager: Initializing";
+  DVLOG(1) << "ModelAssociationManager: Initializing for "
+           << syncer::ModelTypeSetToString(desired_types);
 
   // Stop the types that are still loading from the previous configuration.
   // If they are enabled we will start them here once again.
@@ -159,23 +169,16 @@ void ModelAssociationManager::Initialize(syncer::ModelTypeSet desired_types) {
   waiting_to_associate_.clear();
   currently_associating_ = NULL;
 
-  // We need to calculate our |needs_start_| and |needs_stop_| list.
-  GetControllersNeedingStart(&needs_start_);
-  // Sort these according to kStartOrder.
-  std::sort(needs_start_.begin(),
-            needs_start_.end(),
-            SortComparator(&start_order_));
-
   // Add any data type controllers into that needs_stop_ list that are
   // currently MODEL_STARTING, ASSOCIATING, RUNNING or DISABLED.
   for (DataTypeController::TypeMap::const_iterator it = controllers_->begin();
        it != controllers_->end(); ++it) {
-    DataTypeController* dtc = (*it).second;
-    if (!desired_types.Has(dtc->type()) && (
-            dtc->state() == DataTypeController::MODEL_STARTING ||
-            dtc->state() == DataTypeController::ASSOCIATING ||
-            dtc->state() == DataTypeController::RUNNING ||
-            dtc->state() == DataTypeController::DISABLED)) {
+    DataTypeController* dtc = (*it).second.get();
+    if (!desired_types.Has(dtc->type()) &&
+        (dtc->state() == DataTypeController::MODEL_STARTING ||
+         dtc->state() == DataTypeController::ASSOCIATING ||
+         dtc->state() == DataTypeController::RUNNING ||
+         dtc->state() == DataTypeController::DISABLED)) {
       needs_stop_.push_back(dtc);
       DVLOG(1) << "ModelTypeToString: Will stop " << dtc->name();
     }
@@ -186,24 +189,35 @@ void ModelAssociationManager::Initialize(syncer::ModelTypeSet desired_types) {
             SortComparator(&start_order_));
 }
 
-void ModelAssociationManager::StartAssociationAsync() {
-  DCHECK_EQ(state_, INITIALIZED_TO_CONFIGURE);
+void ModelAssociationManager::StartAssociationAsync(
+    const syncer::ModelTypeSet& types_to_associate) {
+  DCHECK(state_ == INITIALIZED_TO_CONFIGURE || state_ == IDLE);
   state_ = CONFIGURING;
+
+  // Calculate |needs_start_| list.
+  associating_types_ = types_to_associate;
+  GetControllersNeedingStart(&needs_start_);
+  // Sort these according to kStartOrder.
+  std::sort(needs_start_.begin(),
+            needs_start_.end(),
+            SortComparator(&start_order_));
+
   DVLOG(1) << "ModelAssociationManager: Going to start model association";
+  association_start_time_ = base::Time::Now();
   LoadModelForNextType();
 }
 
 void ModelAssociationManager::ResetForReconfiguration() {
-  DCHECK_EQ(state_, INITIALIZED_TO_CONFIGURE);
   state_ = IDLE;
   DVLOG(1) << "ModelAssociationManager: Reseting for reconfiguration";
   needs_start_.clear();
   needs_stop_.clear();
-  failed_datatypes_info_.clear();
+  associating_types_.Clear();
+  failed_data_types_info_.clear();
+  needs_crypto_types_.Clear();
 }
 
 void ModelAssociationManager::StopDisabledTypes() {
-  DCHECK_EQ(state_, INITIALIZED_TO_CONFIGURE);
   DVLOG(1) << "ModelAssociationManager: Stopping disabled types.";
   // Stop requested data types.
   for (size_t i = 0; i < needs_stop_.size(); ++i) {
@@ -217,7 +231,7 @@ void ModelAssociationManager::Stop() {
   bool need_to_call_model_association_done = false;
   DVLOG(1) << "ModelAssociationManager: Stopping MAM";
   if (state_ == CONFIGURING) {
-    DVLOG(1) << "ModelAssociationManager: In the middle of configuratio while"
+    DVLOG(1) << "ModelAssociationManager: In the middle of configuration while"
              << " stopping";
     state_ = ABORTED;
     DCHECK(currently_associating_ != NULL ||
@@ -247,7 +261,7 @@ void ModelAssociationManager::Stop() {
          state_ == INITIALIZED_TO_CONFIGURE);
   for (DataTypeController::TypeMap::const_iterator it = controllers_->begin();
        it != controllers_->end(); ++it) {
-    DataTypeController* dtc = (*it).second;
+    DataTypeController* dtc = (*it).second.get();
     if (dtc->state() != DataTypeController::NOT_RUNNING &&
         dtc->state() != DataTypeController::STOPPING) {
       dtc->Stop();
@@ -255,16 +269,17 @@ void ModelAssociationManager::Stop() {
     }
   }
 
+  DataTypeManager::ConfigureResult result(DataTypeManager::ABORTED,
+                                          associating_types_,
+                                          failed_data_types_info_,
+                                          syncer::ModelTypeSet(),
+                                          needs_crypto_types_);
+  failed_data_types_info_.clear();
+  needs_crypto_types_.Clear();
   if (need_to_call_model_association_done) {
     DVLOG(1) << "ModelAssociationManager: Calling OnModelAssociationDone";
-    DataTypeManager::ConfigureResult result(DataTypeManager::ABORTED,
-                                            desired_types_,
-                                            failed_datatypes_info_,
-                                            syncer::ModelTypeSet());
     result_processor_->OnModelAssociationDone(result);
   }
-
-  failed_datatypes_info_.clear();
 }
 
 bool ModelAssociationManager::GetControllersNeedingStart(
@@ -273,7 +288,7 @@ bool ModelAssociationManager::GetControllersNeedingStart(
   // Add any data type controllers into the needs_start_ list that are
   // currently NOT_RUNNING or STOPPING.
   bool found_any = false;
-  for (ModelTypeSet::Iterator it = desired_types_.First();
+  for (ModelTypeSet::Iterator it = associating_types_.First();
        it.Good(); it.Inc()) {
     DataTypeController::TypeMap::const_iterator dtc =
         controllers_->find(it.Get());
@@ -296,11 +311,11 @@ bool ModelAssociationManager::GetControllersNeedingStart(
 void ModelAssociationManager::AppendToFailedDatatypesAndLogError(
     DataTypeController::StartResult result,
     const syncer::SyncError& error) {
-  failed_datatypes_info_.push_back(error);
+  failed_data_types_info_[error.model_type()] = error;
   LOG(ERROR) << "Failed to associate models for "
-             << syncer::ModelTypeToString(error.type());
+             << syncer::ModelTypeToString(error.model_type());
   UMA_HISTOGRAM_ENUMERATION("Sync.ConfigureFailed",
-                            ModelTypeToHistogramInt(error.type()),
+                            ModelTypeToHistogramInt(error.model_type()),
                             syncer::MODEL_TYPE_COUNT);
 }
 
@@ -331,21 +346,27 @@ void ModelAssociationManager::TypeStartCallback(
     DVLOG(1) << "ModelAssociationManager: Encountered a failed type";
     AppendToFailedDatatypesAndLogError(start_result,
                                        local_merge_result.error());
+  } else if (start_result == DataTypeController::NEEDS_CRYPTO) {
+    DVLOG(1) << "ModelAssociationManager: Encountered an undecryptable type";
+    needs_crypto_types_.Put(started_dtc->type());
   }
 
   // Track the merge results if we succeeded or an association failure
   // occurred.
   if ((DataTypeController::IsSuccessfulResult(start_result) ||
        start_result == DataTypeController::ASSOCIATION_FAILED) &&
-      debug_info_listener_.IsInitialized() &&
       syncer::ProtocolTypes().Has(local_merge_result.model_type())) {
+    base::TimeDelta association_wait_time =
+        current_type_association_start_time_ - association_start_time_;
+    base::TimeDelta association_time =
+        base::Time::Now() - current_type_association_start_time_;
     syncer::DataTypeAssociationStats stats =
         BuildAssociationStatsFromMergeResults(local_merge_result,
-                                              syncer_merge_result);
-    debug_info_listener_.Call(
-        FROM_HERE,
-        &syncer::DataTypeDebugInfoListener::OnDataTypeAssociationComplete,
-        stats);
+                                              syncer_merge_result,
+                                              association_wait_time,
+                                              association_time);
+    result_processor_->OnSingleDataTypeAssociationDone(
+        local_merge_result.model_type(), stats);
   }
 
   // If the type started normally, continue to the next type.
@@ -365,7 +386,7 @@ void ModelAssociationManager::TypeStartCallback(
   // Any other result requires reconfiguration. Pass it on through the callback.
   LOG(ERROR) << "Failed to configure " << started_dtc->name();
   DCHECK(local_merge_result.error().IsSet());
-  DCHECK_EQ(started_dtc->type(), local_merge_result.error().type());
+  DCHECK_EQ(started_dtc->type(), local_merge_result.error().model_type());
   DataTypeManager::ConfigureStatus configure_status =
       DataTypeManager::ABORTED;
   switch (start_result) {
@@ -380,16 +401,17 @@ void ModelAssociationManager::TypeStartCallback(
       break;
   }
 
-  std::list<syncer::SyncError> errors;
-  errors.push_back(local_merge_result.error());
+  std::map<syncer::ModelType, syncer::SyncError> errors;
+  errors[local_merge_result.model_type()] = local_merge_result.error();
 
   // Put our state to idle.
   state_ = IDLE;
 
   DataTypeManager::ConfigureResult configure_result(configure_status,
-                                                    desired_types_,
+                                                    associating_types_,
                                                     errors,
-                                                    syncer::ModelTypeSet());
+                                                    syncer::ModelTypeSet(),
+                                                    needs_crypto_types_);
   result_processor_->OnModelAssociationDone(configure_result);
 }
 
@@ -413,7 +435,7 @@ void ModelAssociationManager::LoadModelForNextType() {
     return;
   }
 
-  DVLOG(1) << "ModelAssociationManager: All types have models loaded."
+  DVLOG(1) << "ModelAssociationManager: All types have models loaded. "
           << "Moving on to StartAssociatingNextType.";
 
   // If all controllers have their |LoadModels| invoked then pass onto
@@ -468,7 +490,7 @@ void ModelAssociationManager::ModelLoadCallback(
     NOTREACHED();
     return;
   } else if (state_ == IDLE) {
-    DVLOG(1) << "ModelAssociationManager: Models loaded after configure cycle"
+    DVLOG(1) << "ModelAssociationManager: Models loaded after configure cycle. "
             << "Informing DTM";
     // This datatype finished loading after the deadline imposed by the
     // originating configuration cycle. Inform the DataTypeManager that the
@@ -497,35 +519,33 @@ void ModelAssociationManager::StartAssociatingNextType() {
     DataTypeController* dtc = waiting_to_associate_[0];
     waiting_to_associate_.erase(waiting_to_associate_.begin());
     currently_associating_ = dtc;
+    current_type_association_start_time_ = base::Time::Now();
     dtc->StartAssociating(base::Bind(
         &ModelAssociationManager::TypeStartCallback,
         weak_ptr_factory_.GetWeakPtr()));
     return;
   }
 
-  // We are done with this cycle of association.
-  state_ = IDLE;
-  // Do a fresh calculation to see if controllers need starting to account for
-  // things like encryption, which may still need to be sorted out before we
-  // can announce we're "Done" configuration entirely.
-  if (GetControllersNeedingStart(NULL)) {
-    DVLOG(1) << "ModelAssociationManager: GetControllersNeedingStart"
-             << " returned true. Blocking DataTypeManager";
-
-    DataTypeManager::ConfigureResult configure_result(
-        DataTypeManager::CONFIGURE_BLOCKED,
-        desired_types_,
-        failed_datatypes_info_,
-        syncer::ModelTypeSet());
-    state_ = IDLE;
-    result_processor_->OnModelAssociationDone(configure_result);
-    return;
+  // We are done with this cycle of association. Stop any failed types now.
+  needs_stop_.clear();
+  for (DataTypeController::TypeMap::const_iterator it = controllers_->begin();
+       it != controllers_->end(); ++it) {
+    DataTypeController* dtc = (*it).second.get();
+    if (failed_data_types_info_.count(dtc->type()) > 0 &&
+        dtc->state() != DataTypeController::NOT_RUNNING) {
+      needs_stop_.push_back(dtc);
+      DVLOG(1) << "ModelTypeToString: Will stop " << dtc->name();
+    }
   }
+  StopDisabledTypes();
+
+  state_ = IDLE;
 
   DataTypeManager::ConfigureStatus configure_status = DataTypeManager::OK;
 
-  if (!failed_datatypes_info_.empty() ||
-      !GetTypesWaitingToLoad().Empty()) {
+  if (!failed_data_types_info_.empty() ||
+      !GetTypesWaitingToLoad().Empty() ||
+      !needs_crypto_types_.Empty()) {
     // We have not configured all types that we have been asked to configure.
     // Either we have failed types or types that have not completed loading
     // yet.
@@ -534,9 +554,10 @@ void ModelAssociationManager::StartAssociatingNextType() {
   }
 
   DataTypeManager::ConfigureResult result(configure_status,
-                                          desired_types_,
-                                          failed_datatypes_info_,
-                                          GetTypesWaitingToLoad());
+                                          associating_types_,
+                                          failed_data_types_info_,
+                                          GetTypesWaitingToLoad(),
+                                          needs_crypto_types_);
   result_processor_->OnModelAssociationDone(result);
   return;
 }

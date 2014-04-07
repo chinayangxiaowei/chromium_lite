@@ -9,10 +9,10 @@
 #include "base/debug/stack_trace.h"
 #import "base/logging.h"
 #import "base/mac/scoped_nsexception_enabler.h"
-#import "base/memory/scoped_nsobject.h"
+#import "base/mac/scoped_nsobject.h"
 #import "base/metrics/histogram.h"
-#include "base/stringprintf.h"
-#import "base/sys_string_conversions.h"
+#include "base/strings/stringprintf.h"
+#import "base/strings/sys_string_conversions.h"
 #import "chrome/browser/app_controller_mac.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_iterator.h"
 #include "chrome/common/crash_keys.h"
@@ -406,7 +406,7 @@ void SwizzleInit() {
   }
 
   // Minimize the window by keeping this close to the super call.
-  scoped_ptr<base::mac::ScopedNSExceptionEnabler> enabler(NULL);
+  scoped_ptr<base::mac::ScopedNSExceptionEnabler> enabler;
   if (enableNSExceptions)
     enabler.reset(new base::mac::ScopedNSExceptionEnabler());
   return [super sendAction:anAction to:aTarget from:sender];

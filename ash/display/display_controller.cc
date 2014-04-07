@@ -6,37 +6,44 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map>
 
 #include "ash/ash_switches.h"
+#include "ash/display/display_layout_store.h"
 #include "ash/display/display_manager.h"
+#include "ash/display/mirror_window_controller.h"
+#include "ash/display/root_window_transformers.h"
 #include "ash/host/root_window_host_factory.h"
 #include "ash/root_window_controller.h"
 #include "ash/screen_ash.h"
 #include "ash/shell.h"
 #include "ash/wm/coordinate_conversion.h"
 #include "ash/wm/property_util.h"
+#include "ash/wm/window_properties.h"
 #include "ash/wm/window_util.h"
 #include "base/command_line.h"
-#include "base/json/json_value_converter.h"
-#include "base/string_piece.h"
-#include "base/stringprintf.h"
-#include "base/values.h"
+#include "base/strings/stringprintf.h"
 #include "third_party/skia/include/utils/SkMatrix44.h"
+#include "ui/aura/client/activation_client.h"
+#include "ui/aura/client/capture_client.h"
+#include "ui/aura/client/cursor_client.h"
+#include "ui/aura/client/focus_client.h"
 #include "ui/aura/client/screen_position_client.h"
-#include "ui/aura/env.h"
 #include "ui/aura/root_window.h"
+#include "ui/aura/root_window_transformer.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_property.h"
+#include "ui/aura/window_tracker.h"
 #include "ui/compositor/compositor.h"
 #include "ui/compositor/dip_util.h"
 #include "ui/gfx/display.h"
 #include "ui/gfx/screen.h"
 
 #if defined(OS_CHROMEOS)
-#include "ash/display/output_configurator_animation.h"
 #include "base/chromeos/chromeos_version.h"
-#include "base/string_number_conversions.h"
-#include "base/time.h"
+#include "base/time/time.h"
+#if defined(USE_X11)
+#include "ash/display/output_configurator_animation.h"
 #include "chromeos/display/output_configurator.h"
 #include "ui/base/x/x11_util.h"
 
@@ -44,15 +51,13 @@
 // potential conflict with chrome headers.
 #include <X11/extensions/Xrandr.h>
 #undef RootWindow
+#endif  // defined(USE_X11)
 #endif  // defined(OS_CHROMEOS)
 
-DECLARE_WINDOW_PROPERTY_TYPE(gfx::Display::Rotation);
+DECLARE_WINDOW_PROPERTY_TYPE(int64);
 
 namespace ash {
 namespace {
-
-DEFINE_WINDOW_PROPERTY_KEY(gfx::Display::Rotation, kRotationPropertyKey,
-                           gfx::Display::ROTATE_0);
 
 // Primary display stored in global object as it can be
 // accessed after Shell is deleted. A separate display instance is created
@@ -64,14 +69,6 @@ gfx::Display* primary_display_for_shutdown = NULL;
 // ash::Shell:: is deleted.
 int num_displays_for_shutdown = -1;
 
-// The maximum value for 'offset' in DisplayLayout in case of outliers.  Need
-// to change this value in case to support even larger displays.
-const int kMaxValidOffset = 10000;
-
-// The number of pixels to overlap between the primary and secondary displays,
-// in case that the offset value is too large.
-const int kMinimumOverlapForInvalidOffset = 100;
-
 // Specifies how long the display change should have been disabled
 // after each display change operations.
 // |kCycleDisplayThrottleTimeoutMs| is set to be longer to avoid
@@ -82,104 +79,15 @@ const int64 kAfterDisplayChangeThrottleTimeoutMs = 500;
 const int64 kCycleDisplayThrottleTimeoutMs = 4000;
 const int64 kSwapDisplayThrottleTimeoutMs = 500;
 
-// Persistent key names
-const char kPositionKey[] = "position";
-const char kOffsetKey[] = "offset";
-const char kMirroredKey[] = "mirrored";
-
-bool GetPositionFromString(const base::StringPiece& position,
-                           DisplayLayout::Position* field) {
-  if (position == "top") {
-    *field = DisplayLayout::TOP;
-    return true;
-  } else if (position == "bottom") {
-    *field = DisplayLayout::BOTTOM;
-    return true;
-  } else if (position == "right") {
-    *field = DisplayLayout::RIGHT;
-    return true;
-  } else if (position == "left") {
-    *field = DisplayLayout::LEFT;
-    return true;
-  }
-  LOG(ERROR) << "Invalid position value: " << position;
-  return false;
-}
-
-std::string GetStringFromPosition(DisplayLayout::Position position) {
-  switch (position) {
-    case DisplayLayout::TOP:
-      return std::string("top");
-    case DisplayLayout::BOTTOM:
-      return std::string("bottom");
-    case DisplayLayout::RIGHT:
-      return std::string("right");
-    case DisplayLayout::LEFT:
-      return std::string("left");
-  }
-  return std::string("unknown");
-}
-
 internal::DisplayManager* GetDisplayManager() {
   return Shell::GetInstance()->display_manager();
-}
-
-// Round near zero value to zero.
-void RoundNearZero(gfx::Transform* transform) {
-  const float kEpsilon = 0.001f;
-  SkMatrix44& matrix = transform->matrix();
-  for (int x = 0; x < 4; ++x) {
-    for (int y = 0; y < 4; ++y) {
-      if (std::abs(SkMScalarToFloat(matrix.get(x, y))) < kEpsilon)
-        matrix.set(x, y, SkFloatToMScalar(0.0f));
-    }
-  }
-}
-
-void RotateRootWindow(aura::RootWindow* root_window,
-                      const gfx::Display& display,
-                      const internal::DisplayInfo& info) {
-  // TODO(oshima): Add animation. (crossfade+rotation, or just cross-fade)
-#if defined(OS_WIN)
-  // Windows 8 bots refused to resize the host window, and
-  // updating the transform results in incorrectly resizing
-  // the root window. Don't apply the transform unless
-  // necessary so that unit tests pass on win8 bots.
-  if (info.rotation() == root_window->GetProperty(kRotationPropertyKey))
-    return;
-  root_window->SetProperty(kRotationPropertyKey, info.rotation());
-#endif
-  gfx::Transform rotate;
-  // The origin is (0, 0), so the translate width/height must be reduced by
-  // 1 pixel.
-  float one_pixel = 1.0f / display.device_scale_factor();
-
-  switch (info.rotation()) {
-    case gfx::Display::ROTATE_0:
-      break;
-    case gfx::Display::ROTATE_90:
-      rotate.Translate(display.bounds().height() - one_pixel, 0);
-      rotate.Rotate(90);
-      break;
-    case gfx::Display::ROTATE_270:
-      rotate.Translate(0, display.bounds().width() - one_pixel);
-      rotate.Rotate(270);
-      break;
-    case gfx::Display::ROTATE_180:
-      rotate.Translate(display.bounds().width() - one_pixel,
-                       display.bounds().height() - one_pixel);
-      rotate.Rotate(180);
-      break;
-  }
-  RoundNearZero(&rotate);
-  root_window->SetTransform(rotate);
 }
 
 void SetDisplayPropertiesOnHostWindow(aura::RootWindow* root,
                                       const gfx::Display& display) {
   internal::DisplayInfo info =
       GetDisplayManager()->GetDisplayInfo(display.id());
-#if defined(OS_CHROMEOS)
+#if defined(OS_CHROMEOS) && defined(USE_X11)
   // Native window property (Atom in X11) that specifies the display's
   // rotation, scale factor and if it's internal display.  They are
   // read and used by touchpad/mouse driver directly on X (contact
@@ -216,94 +124,82 @@ void SetDisplayPropertiesOnHostWindow(aura::RootWindow* root,
                      kCARDINAL,
                      100 * display.device_scale_factor());
 #endif
-  RotateRootWindow(root, display, info);
+  scoped_ptr<aura::RootWindowTransformer> transformer(
+      internal::CreateRootWindowTransformerForDisplay(root, display));
+  root->SetRootWindowTransformer(transformer.Pass());
 }
 
 }  // namespace
 
-////////////////////////////////////////////////////////////////////////////////
-// DisplayLayout
+namespace internal {
 
-// static
-DisplayLayout DisplayLayout::FromInts(int position, int offsets) {
-  return DisplayLayout(static_cast<Position>(position), offsets);
-}
+DEFINE_WINDOW_PROPERTY_KEY(int64, kDisplayIdKey,
+                           gfx::Display::kInvalidDisplayID);
 
-DisplayLayout::DisplayLayout()
-    : position(RIGHT),
-      offset(0),
-      mirrored(false) {}
-
-DisplayLayout::DisplayLayout(DisplayLayout::Position position, int offset)
-    : position(position),
-      offset(offset),
-      mirrored(false) {
-  DCHECK_LE(TOP, position);
-  DCHECK_GE(LEFT, position);
-
-  // Set the default value to |position| in case position is invalid.  DCHECKs
-  // above doesn't stop in Release builds.
-  if (TOP > position || LEFT < position)
-    this->position = RIGHT;
-
-  DCHECK_GE(kMaxValidOffset, abs(offset));
-}
-
-DisplayLayout DisplayLayout::Invert() const {
-  Position inverted_position = RIGHT;
-  switch (position) {
-    case TOP:
-      inverted_position = BOTTOM;
-      break;
-    case BOTTOM:
-      inverted_position = TOP;
-      break;
-    case RIGHT:
-      inverted_position = LEFT;
-      break;
-    case LEFT:
-      inverted_position = RIGHT;
-      break;
+// A utility class to store/restore focused/active window
+// when the display configuration has changed.
+class FocusActivationStore {
+ public:
+  FocusActivationStore()
+      : activation_client_(NULL),
+        capture_client_(NULL),
+        focus_client_(NULL),
+        focused_(NULL),
+        active_(NULL) {
   }
-  return DisplayLayout(inverted_position, -offset);
-}
 
-// static
-bool DisplayLayout::ConvertFromValue(const base::Value& value,
-                                     DisplayLayout* layout) {
-  base::JSONValueConverter<DisplayLayout> converter;
-  return converter.Convert(value, layout);
-}
+  void Store() {
+    if (!activation_client_) {
+      aura::RootWindow* root = Shell::GetPrimaryRootWindow();
+      activation_client_ = aura::client::GetActivationClient(root);
+      capture_client_ = aura::client::GetCaptureClient(root);
+      focus_client_ = aura::client::GetFocusClient(root);
+    }
+    focused_ = focus_client_->GetFocusedWindow();
+    if (focused_)
+      tracker_.Add(focused_);
+    active_ = activation_client_->GetActiveWindow();
+    if (active_ && focused_ != active_)
+      tracker_.Add(active_);
 
-// static
-bool DisplayLayout::ConvertToValue(const DisplayLayout& layout,
-                                   base::Value* value) {
-  base::DictionaryValue* dict_value = NULL;
-  if (!value->GetAsDictionary(&dict_value) || dict_value == NULL)
-    return false;
+    // Deactivate the window to close menu / bubble windows.
+    activation_client_->DeactivateWindow(active_);
+    // Release capture if any.
+    capture_client_->SetCapture(NULL);
+    // Clear the focused window if any. This is necessary because a
+    // window may be deleted when losing focus (fullscreen flash for
+    // example).  If the focused window is still alive after move, it'll
+    // be re-focused below.
+    focus_client_->FocusWindow(NULL);
+  }
 
-  const std::string position_str = GetStringFromPosition(layout.position);
-  dict_value->SetString(kPositionKey, position_str);
-  dict_value->SetInteger(kOffsetKey, layout.offset);
-  dict_value->SetBoolean(kMirroredKey, layout.mirrored);
-  return true;
-}
+  void Restore() {
+    // Restore focused or active window if it's still alive.
+    if (focused_ && tracker_.Contains(focused_)) {
+      focus_client_->FocusWindow(focused_);
+    } else if (active_ && tracker_.Contains(active_)) {
+      activation_client_->ActivateWindow(active_);
+    }
+    if (focused_)
+      tracker_.Remove(focused_);
+    if (active_)
+      tracker_.Remove(active_);
+    focused_ = NULL;
+    active_ = NULL;
+  }
 
-std::string DisplayLayout::ToString() const {
-  const std::string position_str = GetStringFromPosition(position);
-  return base::StringPrintf(
-      "%s, %d%s",
-      position_str.c_str(), offset, mirrored ? ", mirrored" : "");
-}
+ private:
+  aura::client::ActivationClient* activation_client_;
+  aura::client::CaptureClient* capture_client_;
+  aura::client::FocusClient* focus_client_;
+  aura::WindowTracker tracker_;
+  aura::Window* focused_;
+  aura::Window* active_;
 
-// static
-void DisplayLayout::RegisterJSONConverter(
-    base::JSONValueConverter<DisplayLayout>* converter) {
-  converter->RegisterCustomField<Position>(
-      kPositionKey, &DisplayLayout::position, &GetPositionFromString);
-  converter->RegisterIntField(kOffsetKey, &DisplayLayout::offset);
-  converter->RegisterBoolField(kMirroredKey, &DisplayLayout::mirrored);
-}
+  DISALLOW_COPY_AND_ASSIGN(FocusActivationStore);
+};
+
+}  // namespace internal
 
 ////////////////////////////////////////////////////////////////////////////////
 // DisplayChangeLimiter
@@ -326,31 +222,15 @@ bool DisplayController::DisplayChangeLimiter::IsThrottled() const {
 // DisplayController
 
 DisplayController::DisplayController()
-    : desired_primary_display_id_(gfx::Display::kInvalidDisplayID),
-      primary_root_window_for_replace_(NULL) {
+    : primary_root_window_for_replace_(NULL),
+      focus_activation_store_(new internal::FocusActivationStore()),
+      mirror_window_controller_(new internal::MirrorWindowController) {
   CommandLine* command_line = CommandLine::ForCurrentProcess();
 #if defined(OS_CHROMEOS)
   if (!command_line->HasSwitch(switches::kAshDisableDisplayChangeLimiter) &&
       base::chromeos::IsRunningOnChromeOS())
     limiter_.reset(new DisplayChangeLimiter);
 #endif
-  if (command_line->HasSwitch(switches::kAshSecondaryDisplayLayout)) {
-    std::string value = command_line->GetSwitchValueASCII(
-        switches::kAshSecondaryDisplayLayout);
-    char layout;
-    int offset = 0;
-    if (sscanf(value.c_str(), "%c,%d", &layout, &offset) == 2) {
-      if (layout == 't')
-        default_display_layout_.position = DisplayLayout::TOP;
-      else if (layout == 'b')
-        default_display_layout_.position = DisplayLayout::BOTTOM;
-      else if (layout == 'r')
-        default_display_layout_.position = DisplayLayout::RIGHT;
-      else if (layout == 'l')
-        default_display_layout_.position = DisplayLayout::LEFT;
-      default_display_layout_.offset = offset;
-    }
-  }
   // Reset primary display to make sure that tests don't use
   // stale display info from previous tests.
   primary_display_id = gfx::Display::kInvalidDisplayID;
@@ -365,9 +245,16 @@ DisplayController::~DisplayController() {
 
 void DisplayController::Start() {
   Shell::GetScreen()->AddObserver(this);
+  Shell::GetInstance()->display_manager()->set_delegate(this);
 }
 
 void DisplayController::Shutdown() {
+  // Unset the display manager's delegate here because
+  // DisplayManager outlives DisplayController.
+  Shell::GetInstance()->display_manager()->set_delegate(NULL);
+
+  mirror_window_controller_.reset();
+
   DCHECK(!primary_display_for_shutdown);
   primary_display_for_shutdown = new gfx::Display(
       GetDisplayManager()->GetDisplayForId(primary_display_id));
@@ -400,31 +287,31 @@ int DisplayController::GetNumDisplays() {
   return GetDisplayManager()->GetNumDisplays();
 }
 
-// static
-bool DisplayController::HasPrimaryDisplay() {
-  return primary_display_id != gfx::Display::kInvalidDisplayID;
-}
-
 void DisplayController::InitPrimaryDisplay() {
   const gfx::Display* primary_candidate =
       GetDisplayManager()->GetPrimaryDisplayCandidate();
   primary_display_id = primary_candidate->id();
   AddRootWindowForDisplay(*primary_candidate);
-  UpdateDisplayBoundsForLayout();
 }
 
 void DisplayController::InitSecondaryDisplays() {
   internal::DisplayManager* display_manager = GetDisplayManager();
+  UpdateDisplayBoundsForLayout();
   for (size_t i = 0; i < display_manager->GetNumDisplays(); ++i) {
-    const gfx::Display* display = display_manager->GetDisplayAt(i);
-    if (primary_display_id != display->id()) {
-      aura::RootWindow* root = AddRootWindowForDisplay(*display);
-      if (desired_primary_display_id_ == display->id())
-        SetPrimaryDisplay(*display);
+    const gfx::Display& display = display_manager->GetDisplayAt(i);
+    if (primary_display_id != display.id()) {
+      aura::RootWindow* root = AddRootWindowForDisplay(display);
       Shell::GetInstance()->InitRootWindowForSecondaryDisplay(root);
     }
   }
-  UpdateDisplayBoundsForLayout();
+  if (display_manager->GetNumDisplays() > 1) {
+    DisplayIdPair pair = GetCurrentDisplayIdPair();
+    DisplayLayout layout = GetCurrentDisplayLayout();
+    SetPrimaryDisplayId(
+        layout.primary_id == gfx::Display::kInvalidDisplayID ?
+        pair.first : layout.primary_id);
+  }
+  UpdateHostWindowNames();
 }
 
 void DisplayController::AddObserver(Observer* observer) {
@@ -481,10 +368,6 @@ void DisplayController::SetOverscanInsets(int64 display_id,
   GetDisplayManager()->SetOverscanInsets(display_id, insets_in_dip);
 }
 
-void DisplayController::ClearCustomOverscanInsets(int64 display_id) {
-  GetDisplayManager()->ClearCustomOverscanInsets(display_id);
-}
-
 std::vector<internal::RootWindowController*>
 DisplayController::GetAllRootWindowControllers() {
   std::vector<internal::RootWindowController*> controllers;
@@ -498,39 +381,6 @@ DisplayController::GetAllRootWindowControllers() {
   return controllers;
 }
 
-void DisplayController::SetDefaultDisplayLayout(const DisplayLayout& layout) {
-  CommandLine* command_line = CommandLine::ForCurrentProcess();
-  if (!command_line->HasSwitch(switches::kAshSecondaryDisplayLayout) &&
-      (default_display_layout_.position != layout.position ||
-       default_display_layout_.offset != layout.offset)) {
-    default_display_layout_ = layout;
-    NotifyDisplayConfigurationChanging();
-    UpdateDisplayBoundsForLayout();
-    NotifyDisplayConfigurationChanged();
-  }
-}
-
-void DisplayController::RegisterLayoutForDisplayIdPair(
-    int64 id1,
-    int64 id2,
-    const DisplayLayout& layout) {
-  RegisterLayoutForDisplayIdPairInternal(id1, id2, layout, true);
-}
-
-void DisplayController::RegisterLayoutForDisplayId(
-    int64 id,
-    const DisplayLayout& layout) {
-  int64 first_id = gfx::Display::InternalDisplayId();
-  if (first_id == gfx::Display::kInvalidDisplayID)
-    first_id = GetDisplayManager()->first_display_id();
-  // Caveat: This doesn't work if the machine booted with
-  // no display.
-  // Ignore if the layout was registered for the internal or
-  // 1st display.
-  if (first_id != id)
-    RegisterLayoutForDisplayIdPairInternal(first_id, id, layout, false);
-}
-
 void DisplayController::SetLayoutForCurrentDisplays(
     const DisplayLayout& layout_relative_to_primary) {
   DCHECK_EQ(2U, GetDisplayManager()->GetNumDisplays());
@@ -542,36 +392,49 @@ void DisplayController::SetLayoutForCurrentDisplays(
   DisplayLayout to_set = pair.first == primary.id() ?
       layout_relative_to_primary : layout_relative_to_primary.Invert();
 
-  const DisplayLayout& current_layout = paired_layouts_[pair];
+  internal::DisplayLayoutStore* layout_store =
+      GetDisplayManager()->layout_store();
+  DisplayLayout current_layout =
+      layout_store->GetRegisteredDisplayLayout(pair);
   if (to_set.position != current_layout.position ||
       to_set.offset != current_layout.offset) {
-    paired_layouts_[pair] = to_set;
-    NotifyDisplayConfigurationChanging();
+    to_set.primary_id = primary.id();
+    layout_store->RegisterLayoutForDisplayIdPair(
+        pair.first, pair.second, to_set);
+    PreDisplayConfigurationChange();
+    // TODO(oshima): Call UpdateDisplays instead.
     UpdateDisplayBoundsForLayout();
-    NotifyDisplayConfigurationChanged();
+    // Primary's bounds stay the same. Just notify bounds change
+    // on the secondary.
+    Shell::GetInstance()->screen()->NotifyBoundsChanged(
+        ScreenAsh::GetSecondaryDisplay());
+    PostDisplayConfigurationChange();
   }
 }
 
-DisplayLayout DisplayController::GetCurrentDisplayLayout() const {
+DisplayLayout DisplayController::GetCurrentDisplayLayout() {
   DCHECK_EQ(2U, GetDisplayManager()->num_connected_displays());
   // Invert if the primary was swapped.
   if (GetDisplayManager()->num_connected_displays() > 1) {
     DisplayIdPair pair = GetCurrentDisplayIdPair();
-    DisplayLayout layout = GetRegisteredDisplayLayout(pair);
-    const gfx::Display& primary = GetPrimaryDisplay();
-    // Invert if the primary was swapped. If mirrored, first is always
-    // primary.
-    return pair.first == primary.id() ? layout : layout.Invert();
+    return GetDisplayManager()->layout_store()->
+        ComputeDisplayLayoutForDisplayIdPair(pair);
   }
+  NOTREACHED() << "DisplayLayout is requested for single display";
   // On release build, just fallback to default instead of blowing up.
-  return default_display_layout_;
+  DisplayLayout layout =
+      GetDisplayManager()->layout_store()->default_display_layout();
+  layout.primary_id = primary_display_id;
+  return layout;
 }
 
 DisplayIdPair DisplayController::GetCurrentDisplayIdPair() const {
   internal::DisplayManager* display_manager = GetDisplayManager();
   const gfx::Display& primary = GetPrimaryDisplay();
-  if (display_manager->IsMirrored())
-    return std::make_pair(primary.id(), display_manager->mirrored_display_id());
+  if (display_manager->IsMirrored()) {
+    return std::make_pair(primary.id(),
+                          display_manager->mirrored_display().id());
+  }
 
   const gfx::Display& secondary = ScreenAsh::GetSecondaryDisplay();
   if (primary.IsInternal() ||
@@ -583,46 +446,36 @@ DisplayIdPair DisplayController::GetCurrentDisplayIdPair() const {
   }
 }
 
-DisplayLayout DisplayController::GetRegisteredDisplayLayout(
-    const DisplayIdPair& pair) const {
-  std::map<DisplayIdPair, DisplayLayout>::const_iterator iter =
-      paired_layouts_.find(pair);
-  return iter != paired_layouts_.end() ? iter->second : default_display_layout_;
-}
+void DisplayController::ToggleMirrorMode() {
+  internal::DisplayManager* display_manager = GetDisplayManager();
+  if (display_manager->num_connected_displays() <= 1)
+    return;
 
-void DisplayController::CycleDisplayMode() {
-  if (limiter_.get()) {
+  if (limiter_) {
     if  (limiter_->IsThrottled())
       return;
     limiter_->SetThrottleTimeout(kCycleDisplayThrottleTimeoutMs);
   }
-#if defined(OS_CHROMEOS)
+#if defined(OS_CHROMEOS) && defined(USE_X11)
   Shell* shell = Shell::GetInstance();
-  internal::DisplayManager* display_manager = GetDisplayManager();
-  if (!base::chromeos::IsRunningOnChromeOS()) {
-    internal::DisplayManager::CycleDisplay();
-  } else if (display_manager->num_connected_displays() > 1) {
-    chromeos::OutputState new_state = display_manager->IsMirrored() ?
-       chromeos::STATE_DUAL_EXTENDED : chromeos::STATE_DUAL_MIRROR;
-    internal::OutputConfiguratorAnimation* animation =
-        shell->output_configurator_animation();
-    animation->StartFadeOutAnimation(base::Bind(
-        base::IgnoreResult(&chromeos::OutputConfigurator::SetDisplayMode),
-        base::Unretained(shell->output_configurator()),
-        new_state));
-  }
+  internal::OutputConfiguratorAnimation* animation =
+      shell->output_configurator_animation();
+  animation->StartFadeOutAnimation(base::Bind(
+      base::IgnoreResult(&internal::DisplayManager::SetMirrorMode),
+      base::Unretained(display_manager),
+      !display_manager->IsMirrored()));
 #endif
 }
 
 void DisplayController::SwapPrimaryDisplay() {
-  if (limiter_.get()) {
+  if (limiter_) {
     if  (limiter_->IsThrottled())
       return;
     limiter_->SetThrottleTimeout(kSwapDisplayThrottleTimeoutMs);
   }
 
   if (Shell::GetScreen()->GetNumDisplays() > 1) {
-#if defined(OS_CHROMEOS)
+#if defined(OS_CHROMEOS) && defined(USE_X11)
     internal::OutputConfiguratorAnimation* animation =
         Shell::GetInstance()->output_configurator_animation();
     if (animation) {
@@ -639,19 +492,13 @@ void DisplayController::SwapPrimaryDisplay() {
 }
 
 void DisplayController::SetPrimaryDisplayId(int64 id) {
-  desired_primary_display_id_ = id;
-
-  if (desired_primary_display_id_ == primary_display_id)
+  DCHECK_NE(gfx::Display::kInvalidDisplayID, id);
+  if (id == gfx::Display::kInvalidDisplayID || primary_display_id == id)
     return;
 
-  internal::DisplayManager* display_manager = GetDisplayManager();
-  for (size_t i = 0; i < display_manager->GetNumDisplays(); ++i) {
-    gfx::Display* display = display_manager->GetDisplayAt(i);
-    if (display->id() == id) {
-      SetPrimaryDisplay(*display);
-      break;
-    }
-  }
+  const gfx::Display& display = GetDisplayManager()->GetDisplayForId(id);
+  if (display.is_valid())
+    SetPrimaryDisplay(display);
 }
 
 void DisplayController::SetPrimaryDisplay(
@@ -694,11 +541,12 @@ void DisplayController::SetPrimaryDisplay(
                                 old_primary_display.id());
 
   primary_display_id = new_primary_display.id();
-  desired_primary_display_id_ = primary_display_id;
+  GetDisplayManager()->layout_store()->UpdatePrimaryDisplayId(
+      GetCurrentDisplayIdPair(), primary_display_id);
 
-  display_manager->UpdateWorkAreaOfDisplayNearestWindow(
+  UpdateWorkAreaOfDisplayNearestWindow(
       primary_root, old_primary_display.GetWorkAreaInsets());
-  display_manager->UpdateWorkAreaOfDisplayNearestWindow(
+  UpdateWorkAreaOfDisplayNearestWindow(
       non_primary_root, new_primary_display.GetWorkAreaInsets());
 
   // Update the dispay manager with new display info.
@@ -706,39 +554,128 @@ void DisplayController::SetPrimaryDisplay(
   display_info_list.push_back(display_manager->GetDisplayInfo(
       primary_display_id));
   display_info_list.push_back(display_manager->GetDisplayInfo(
-      GetSecondaryDisplay()->id()));
+      ScreenAsh::GetSecondaryDisplay().id()));
   GetDisplayManager()->set_force_bounds_changed(true);
   GetDisplayManager()->UpdateDisplays(display_info_list);
   GetDisplayManager()->set_force_bounds_changed(false);
 }
 
-gfx::Display* DisplayController::GetSecondaryDisplay() {
+void DisplayController::EnsurePointerInDisplays() {
+  // If the mouse is currently on a display in native location,
+  // use the same native location. Otherwise find the display closest
+  // to the current cursor location in screen coordinates.
+
+  gfx::Point point_in_screen = Shell::GetScreen()->GetCursorScreenPoint();
+  gfx::Point target_location_in_native;
+  int64 closest_distance_squared = -1;
   internal::DisplayManager* display_manager = GetDisplayManager();
-  CHECK_EQ(2U, display_manager->GetNumDisplays());
-  return display_manager->GetDisplayAt(0)->id() == primary_display_id ?
-      display_manager->GetDisplayAt(1) : display_manager->GetDisplayAt(0);
+
+  aura::RootWindow* dst_root_window = NULL;
+  for (size_t i = 0; i < display_manager->GetNumDisplays(); ++i) {
+    const gfx::Display& display = display_manager->GetDisplayAt(i);
+    const internal::DisplayInfo display_info =
+        display_manager->GetDisplayInfo(display.id());
+    aura::RootWindow* root_window = GetRootWindowForDisplayId(display.id());
+    if (display_info.bounds_in_pixel().Contains(
+            cursor_location_in_native_coords_for_restore_)) {
+      dst_root_window = root_window;
+      target_location_in_native = cursor_location_in_native_coords_for_restore_;
+      break;
+    }
+    gfx::Point center = display.bounds().CenterPoint();
+    // Use the distance squared from the center of the dislay. This is not
+    // exactly "closest" display, but good enough to pick one
+    // appropriate (and there are at most two displays).
+    // We don't care about actual distance, only relative to other displays, so
+    // using the LengthSquared() is cheaper than Length().
+
+    int64 distance_squared = (center - point_in_screen).LengthSquared();
+    if (closest_distance_squared < 0 ||
+        closest_distance_squared > distance_squared) {
+      aura::RootWindow* root_window = GetRootWindowForDisplayId(display.id());
+      aura::client::ScreenPositionClient* client =
+          aura::client::GetScreenPositionClient(root_window);
+      client->ConvertPointFromScreen(root_window, &center);
+      root_window->ConvertPointToNativeScreen(&center);
+      dst_root_window = root_window;
+      target_location_in_native = center;
+      closest_distance_squared = distance_squared;
+    }
+  }
+  dst_root_window->ConvertPointFromNativeScreen(&target_location_in_native);
+  dst_root_window->MoveCursorTo(target_location_in_native);
+}
+
+bool DisplayController::UpdateWorkAreaOfDisplayNearestWindow(
+    const aura::Window* window,
+    const gfx::Insets& insets) {
+  const aura::RootWindow* root_window = window->GetRootWindow();
+  int64 id = root_window->GetProperty(internal::kDisplayIdKey);
+  // if id is |kInvaildDisplayID|, it's being deleted.
+  DCHECK(id != gfx::Display::kInvalidDisplayID);
+  return GetDisplayManager()->UpdateWorkAreaOfDisplay(id, insets);
+}
+
+const gfx::Display& DisplayController::GetDisplayNearestWindow(
+    const aura::Window* window) const {
+  if (!window)
+    return GetPrimaryDisplay();
+  const aura::RootWindow* root_window = window->GetRootWindow();
+  if (!root_window)
+    return GetPrimaryDisplay();
+  int64 id = root_window->GetProperty(internal::kDisplayIdKey);
+  // if id is |kInvaildDisplayID|, it's being deleted.
+  DCHECK(id != gfx::Display::kInvalidDisplayID);
+
+  internal::DisplayManager* display_manager = GetDisplayManager();
+  // RootWindow needs Display to determine its device scale factor.
+  // TODO(oshima): We don't need full display info for mirror
+  // window. Refactor so that RootWindow doesn't use it.
+  if (display_manager->mirrored_display().id() == id)
+    return display_manager->mirrored_display();
+
+  return display_manager->GetDisplayForId(id);
+}
+
+const gfx::Display& DisplayController::GetDisplayNearestPoint(
+    const gfx::Point& point) const {
+  // Fallback to the primary display if there is no root display containing
+  // the |point|.
+  const gfx::Display& display =
+      GetDisplayManager()->FindDisplayContainingPoint(point);
+  return display.is_valid() ? display : GetPrimaryDisplay();
+}
+
+const gfx::Display& DisplayController::GetDisplayMatching(
+    const gfx::Rect& rect) const {
+  if (rect.IsEmpty())
+    return GetDisplayNearestPoint(rect.origin());
+
+  int max_area = 0;
+  const gfx::Display* matching = NULL;
+  for (size_t i = 0; i < GetDisplayManager()->GetNumDisplays(); ++i) {
+    const gfx::Display& display = GetDisplayManager()->GetDisplayAt(i);
+    gfx::Rect intersect = gfx::IntersectRects(display.bounds(), rect);
+    int area = intersect.width() * intersect.height();
+    if (area > max_area) {
+      max_area = area;
+      matching = &display;
+    }
+  }
+  // Fallback to the primary display if there is no matching display.
+  return matching ? *matching : GetPrimaryDisplay();
 }
 
 void DisplayController::OnDisplayBoundsChanged(const gfx::Display& display) {
-  if (limiter_.get())
-    limiter_->SetThrottleTimeout(kAfterDisplayChangeThrottleTimeoutMs);
   const internal::DisplayInfo& display_info =
       GetDisplayManager()->GetDisplayInfo(display.id());
   DCHECK(!display_info.bounds_in_pixel().IsEmpty());
-
-  UpdateDisplayBoundsForLayout();
   aura::RootWindow* root = root_windows_[display.id()];
-  root->SetHostBoundsAndInsetsAndRootWindowScale(
-      display_info.bounds_in_pixel(),
-      display_info.GetOverscanInsetsInPixel(),
-      display_info.ui_scale());
+  root->SetHostBounds(display_info.bounds_in_pixel());
   SetDisplayPropertiesOnHostWindow(root, display);
 }
 
 void DisplayController::OnDisplayAdded(const gfx::Display& display) {
-  if (limiter_.get())
-    limiter_->SetThrottleTimeout(kAfterDisplayChangeThrottleTimeoutMs);
-
   if (primary_root_window_for_replace_) {
     DCHECK(root_windows_.empty());
     primary_display_id = display.id();
@@ -746,27 +683,20 @@ void DisplayController::OnDisplayAdded(const gfx::Display& display) {
     primary_root_window_for_replace_->SetProperty(
         internal::kDisplayIdKey, display.id());
     primary_root_window_for_replace_ = NULL;
-    UpdateDisplayBoundsForLayout();
     const internal::DisplayInfo& display_info =
         GetDisplayManager()->GetDisplayInfo(display.id());
-    root_windows_[display.id()]->SetHostBoundsAndInsetsAndRootWindowScale(
-        display_info.bounds_in_pixel(),
-        display_info.GetOverscanInsetsInPixel(),
-        display_info.ui_scale());
+    root_windows_[display.id()]->SetHostBounds(
+        display_info.bounds_in_pixel());
   } else {
+    if (primary_display_id == gfx::Display::kInvalidDisplayID)
+      primary_display_id = display.id();
     DCHECK(!root_windows_.empty());
     aura::RootWindow* root = AddRootWindowForDisplay(display);
-    UpdateDisplayBoundsForLayout();
-    if (desired_primary_display_id_ == display.id())
-      SetPrimaryDisplay(display);
     Shell::GetInstance()->InitRootWindowForSecondaryDisplay(root);
   }
 }
 
 void DisplayController::OnDisplayRemoved(const gfx::Display& display) {
-  if (limiter_.get())
-    limiter_->SetThrottleTimeout(kAfterDisplayChangeThrottleTimeoutMs);
-
   aura::RootWindow* root_to_delete = root_windows_[display.id()];
   DCHECK(root_to_delete) << display.ToString();
 
@@ -785,7 +715,7 @@ void DisplayController::OnDisplayRemoved(const gfx::Display& display) {
       return;
     }
     DCHECK_EQ(1U, root_windows_.size());
-    primary_display_id = GetSecondaryDisplay()->id();
+    primary_display_id = ScreenAsh::GetSecondaryDisplay().id();
     aura::RootWindow* primary_root = root_to_delete;
 
     // Delete the other root instead.
@@ -806,10 +736,75 @@ void DisplayController::OnDisplayRemoved(const gfx::Display& display) {
   // Delete most of root window related objects, but don't delete
   // root window itself yet because the stack may be using it.
   controller->Shutdown();
-  MessageLoop::current()->DeleteSoon(FROM_HERE, controller);
+  base::MessageLoop::current()->DeleteSoon(FROM_HERE, controller);
 }
 
-aura::RootWindow* DisplayController::CreateRootWindowForDisplay(
+void DisplayController::OnRootWindowHostResized(const aura::RootWindow* root) {
+  internal::DisplayManager* display_manager = GetDisplayManager();
+  gfx::Display display = GetDisplayNearestWindow(root);
+  if (display_manager->UpdateDisplayBounds(
+          display.id(),
+          gfx::Rect(root->GetHostOrigin(), root->GetHostSize()))) {
+    mirror_window_controller_->UpdateWindow();
+  }
+}
+
+void DisplayController::CreateOrUpdateMirrorWindow(
+    const internal::DisplayInfo& info) {
+  mirror_window_controller_->UpdateWindow(info);
+}
+
+void DisplayController::CloseMirrorWindow() {
+  mirror_window_controller_->Close();
+}
+
+void DisplayController::PreDisplayConfigurationChange() {
+  FOR_EACH_OBSERVER(Observer, observers_, OnDisplayConfigurationChanging());
+  focus_activation_store_->Store();
+
+  gfx::Point point_in_screen = Shell::GetScreen()->GetCursorScreenPoint();
+  gfx::Display display =
+      Shell::GetScreen()->GetDisplayNearestPoint(point_in_screen);
+  aura::RootWindow* root_window = GetRootWindowForDisplayId(display.id());
+
+  aura::client::ScreenPositionClient* client =
+      aura::client::GetScreenPositionClient(root_window);
+  client->ConvertPointFromScreen(root_window, &point_in_screen);
+  root_window->ConvertPointToNativeScreen(&point_in_screen);
+  cursor_location_in_native_coords_for_restore_ = point_in_screen;
+}
+
+void DisplayController::PostDisplayConfigurationChange() {
+  if (limiter_)
+    limiter_->SetThrottleTimeout(kAfterDisplayChangeThrottleTimeoutMs);
+
+  focus_activation_store_->Restore();
+
+  internal::DisplayManager* display_manager = GetDisplayManager();
+  internal::DisplayLayoutStore* layout_store = display_manager->layout_store();
+  if (display_manager->num_connected_displays() > 1) {
+    DisplayIdPair pair = GetCurrentDisplayIdPair();
+    layout_store->UpdateMirrorStatus(pair, display_manager->IsMirrored());
+    DisplayLayout layout = layout_store->GetRegisteredDisplayLayout(pair);
+
+    if (Shell::GetScreen()->GetNumDisplays() > 1 ) {
+      int64 primary_id = layout.primary_id;
+      SetPrimaryDisplayId(
+          primary_id == gfx::Display::kInvalidDisplayID ?
+          pair.first : primary_id);
+      // Update the primary_id in case the above call is
+      // ignored. Happens when a) default layout's primary id
+      // doesn't exist, or b) the primary_id has already been
+      // set to the same and didn't update it.
+      layout_store->UpdatePrimaryDisplayId(pair, GetPrimaryDisplay().id());
+    }
+  }
+  FOR_EACH_OBSERVER(Observer, observers_, OnDisplayConfigurationChanged());
+  UpdateHostWindowNames();
+  EnsurePointerInDisplays();
+}
+
+aura::RootWindow* DisplayController::AddRootWindowForDisplay(
     const gfx::Display& display) {
   static int root_window_count = 0;
   const internal::DisplayInfo& display_info =
@@ -818,34 +813,27 @@ aura::RootWindow* DisplayController::CreateRootWindowForDisplay(
   aura::RootWindow::CreateParams params(bounds_in_pixel);
   params.host = Shell::GetInstance()->root_window_host_factory()->
       CreateRootWindowHost(bounds_in_pixel);
-  params.initial_insets = display_info.GetOverscanInsetsInPixel();
-  params.initial_root_window_scale = display_info.ui_scale();
   aura::RootWindow* root_window = new aura::RootWindow(params);
   root_window->SetName(
       base::StringPrintf("RootWindow-%d", root_window_count++));
   root_window->compositor()->SetBackgroundColor(SK_ColorBLACK);
   // No need to remove RootWindowObserver because
-  // the DisplayManager object outlives RootWindow objects.
-  root_window->AddRootWindowObserver(GetDisplayManager());
+  // the DisplayController object outlives RootWindow objects.
+  root_window->AddRootWindowObserver(this);
   root_window->SetProperty(internal::kDisplayIdKey, display.id());
   root_window->Init();
-  return root_window;
-}
 
-aura::RootWindow* DisplayController::AddRootWindowForDisplay(
-    const gfx::Display& display) {
-  aura::RootWindow* root = CreateRootWindowForDisplay(display);
-  root_windows_[display.id()] = root;
-  SetDisplayPropertiesOnHostWindow(root, display);
+  root_windows_[display.id()] = root_window;
+  SetDisplayPropertiesOnHostWindow(root_window, display);
 
 #if defined(OS_CHROMEOS)
   static bool force_constrain_pointer_to_root =
       CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kAshConstrainPointerToRoot);
   if (base::chromeos::IsRunningOnChromeOS() || force_constrain_pointer_to_root)
-    root->ConfineCursorToWindow();
+    root_window->ConfineCursorToWindow();
 #endif
-  return root;
+  return root_window;
 }
 
 void DisplayController::UpdateDisplayBoundsForLayout() {
@@ -853,83 +841,34 @@ void DisplayController::UpdateDisplayBoundsForLayout() {
       GetDisplayManager()->num_connected_displays() < 2) {
     return;
   }
-
   DCHECK_EQ(2, Shell::GetScreen()->GetNumDisplays());
-  const gfx::Rect& primary_bounds = GetPrimaryDisplay().bounds();
-
-  gfx::Display* secondary_display = GetSecondaryDisplay();
-  const gfx::Rect& secondary_bounds = secondary_display->bounds();
-  gfx::Point new_secondary_origin = primary_bounds.origin();
 
   const DisplayLayout layout = GetCurrentDisplayLayout();
-  DisplayLayout::Position position = layout.position;
-
-  // Ignore the offset in case the secondary display doesn't share edges with
-  // the primary display.
-  int offset = layout.offset;
-  if (position == DisplayLayout::TOP || position == DisplayLayout::BOTTOM) {
-    offset = std::min(
-        offset, primary_bounds.width() - kMinimumOverlapForInvalidOffset);
-    offset = std::max(
-        offset, -secondary_bounds.width() + kMinimumOverlapForInvalidOffset);
-  } else {
-    offset = std::min(
-        offset, primary_bounds.height() - kMinimumOverlapForInvalidOffset);
-    offset = std::max(
-        offset, -secondary_bounds.height() + kMinimumOverlapForInvalidOffset);
-  }
-  switch (position) {
-    case DisplayLayout::TOP:
-      new_secondary_origin.Offset(offset, -secondary_bounds.height());
-      break;
-    case DisplayLayout::RIGHT:
-      new_secondary_origin.Offset(primary_bounds.width(), offset);
-      break;
-    case DisplayLayout::BOTTOM:
-      new_secondary_origin.Offset(offset, primary_bounds.height());
-      break;
-    case DisplayLayout::LEFT:
-      new_secondary_origin.Offset(-secondary_bounds.width(), offset);
-      break;
-  }
-  gfx::Insets insets = secondary_display->GetWorkAreaInsets();
-  secondary_display->set_bounds(
-      gfx::Rect(new_secondary_origin, secondary_bounds.size()));
-  secondary_display->UpdateWorkAreaFromInsets(insets);
-}
-
-void DisplayController::NotifyDisplayConfigurationChanging() {
-  FOR_EACH_OBSERVER(Observer, observers_, OnDisplayConfigurationChanging());
-}
-
-void DisplayController::NotifyDisplayConfigurationChanged() {
-  internal::DisplayManager* display_manager = GetDisplayManager();
-  if (display_manager->num_connected_displays() > 1) {
-    DisplayIdPair pair = GetCurrentDisplayIdPair();
-    bool exists = paired_layouts_.find(pair) != paired_layouts_.end();
-    if (exists || display_manager->IsMirrored()) {
-      if (!exists)
-        paired_layouts_[pair] = default_display_layout_;
-      paired_layouts_[pair].mirrored = display_manager->IsMirrored();
-    }
-  }
-  FOR_EACH_OBSERVER(Observer, observers_, OnDisplayConfigurationChanged());
-}
-
-void DisplayController::RegisterLayoutForDisplayIdPairInternal(
-    int64 id1,
-    int64 id2,
-    const DisplayLayout& layout,
-    bool override) {
-  DisplayIdPair pair = std::make_pair(id1, id2);
-  if (override || paired_layouts_.find(pair) == paired_layouts_.end())
-    paired_layouts_[pair] = layout;
+  Shell::GetInstance()->display_manager()->UpdateDisplayBoundsForLayoutById(
+      layout, GetPrimaryDisplay(),
+      ScreenAsh::GetSecondaryDisplay().id());
 }
 
 void DisplayController::OnFadeOutForSwapDisplayFinished() {
-#if defined(OS_CHROMEOS)
+#if defined(OS_CHROMEOS) && defined(USE_X11)
   SetPrimaryDisplay(ScreenAsh::GetSecondaryDisplay());
   Shell::GetInstance()->output_configurator_animation()->StartFadeInAnimation();
+#endif
+}
+
+void DisplayController::UpdateHostWindowNames() {
+#if defined(USE_X11)
+  // crbug.com/120229 - set the window title for the primary dislpay
+  // to "aura_root_0" so gtalk can find the primary root window to broadcast.
+  // TODO(jhorwich) Remove this once Chrome supports window-based broadcasting.
+  aura::RootWindow* primary = Shell::GetPrimaryRootWindow();
+  Shell::RootWindowList root_windows = Shell::GetAllRootWindows();
+  for (size_t i = 0; i < root_windows.size(); ++i) {
+    std::string name =
+        root_windows[i] == primary ? "aura_root_0" : "aura_root_x";
+    gfx::AcceleratedWidget xwindow = root_windows[i]->GetAcceleratedWidget();
+    XStoreName(ui::GetXDisplay(), xwindow, name.c_str());
+  }
 #endif
 }
 

@@ -9,6 +9,8 @@
 
 #include "base/compiler_specific.h"
 #include "base/memory/scoped_ptr.h"
+#include "base/memory/weak_ptr.h"
+#include "chrome/browser/chromeos/app_mode/kiosk_app_manager.h"
 #include "chrome/browser/chromeos/app_mode/kiosk_app_manager_observer.h"
 #include "content/public/browser/web_ui_message_handler.h"
 
@@ -34,16 +36,20 @@ class KioskAppMenuHandler : public content::WebUIMessageHandler,
 
   // JS callbacks.
   void HandleInitializeKioskApps(const base::ListValue* args);
+  void HandleKioskAppsLoaded(const base::ListValue* args);
   void HandleLaunchKioskApps(const base::ListValue* args);
   void HandleCheckKioskAppLaunchError(const base::ListValue* args);
 
   // KioskAppManagerObserver overrides:
-  virtual void OnKioskAutoLaunchAppChanged() OVERRIDE;
-  virtual void OnKioskAppsChanged() OVERRIDE;
+  virtual void OnKioskAppsSettingsChanged() OVERRIDE;
   virtual void OnKioskAppDataChanged(const std::string& app_id) OVERRIDE;
-  virtual void OnKioskAppDataLoadFailure(const std::string& app_id) OVERRIDE;
+
+  // Callback for KioskAppManager::GetConsumerKioskModeStatus().
+  void OnGetConsumerKioskModeStatus(
+      KioskAppManager::ConsumerKioskModeStatus status);
 
   bool initialized_;
+  base::WeakPtrFactory<KioskAppMenuHandler> weak_ptr_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(KioskAppMenuHandler);
 };

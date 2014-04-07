@@ -3,16 +3,16 @@
 // found in the LICENSE file.
 
 #include "base/file_util.h"
+#include "base/files/file_enumerator.h"
 #include "base/hash.h"
 #include "base/path_service.h"
-#include "base/string_util.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/browser/ui/snapshot_tab_helper.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -21,7 +21,7 @@
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test_utils.h"
-#include "net/test/test_server.h"
+#include "net/test/embedded_test_server/embedded_test_server.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/clipboard/clipboard.h"
 #include "ui/gfx/codec/png_codec.h"
@@ -44,16 +44,19 @@ class PDFBrowserTest : public InProcessBrowserTest,
   PDFBrowserTest()
       : snapshot_different_(true),
         next_dummy_search_value_(0),
-        load_stop_notification_count_(0) {
-    pdf_test_server_.reset(new net::TestServer(
-        net::TestServer::TYPE_HTTP,
-        net::TestServer::kLocalhost,
-        base::FilePath(FILE_PATH_LITERAL("pdf/test"))));
+        load_stop_notification_count_(0),
+        pdf_test_server_(
+            content::BrowserThread::GetMessageLoopProxyForThread(
+                content::BrowserThread::IO)) {
+    pdf_test_server_.ServeFilesFromDirectory(
+        base::FilePath(FILE_PATH_LITERAL("pdf/test")));
   }
 
  protected:
   // Use our own TestServer so that we can serve files from the pdf directory.
-  net::TestServer* pdf_test_server() { return pdf_test_server_.get(); }
+  net::test_server::EmbeddedTestServer* pdf_test_server() {
+    return &pdf_test_server_;
+  }
 
   int load_stop_notification_count() const {
     return load_stop_notification_count_;
@@ -87,11 +90,14 @@ class PDFBrowserTest : public InProcessBrowserTest,
     expected_filename_ = expected_filename;
     WebContents* web_contents =
         browser()->tab_strip_model()->GetActiveWebContents();
-    SnapshotTabHelper::FromWebContents(web_contents)->CaptureSnapshot();
-    ui_test_utils::RegisterAndWait(
-        this,
-        chrome::NOTIFICATION_TAB_SNAPSHOT_TAKEN,
-        content::Source<WebContents>(web_contents));
+    DCHECK(web_contents);
+
+    content::RenderWidgetHost* rwh = web_contents->GetRenderViewHost();
+    rwh->GetSnapshotFromRenderer(gfx::Rect(), base::Bind(
+        &PDFBrowserTest::GetSnapshotFromRendererCallback, this));
+
+    content::RunMessageLoop();
+
     if (snapshot_different_) {
       LOG(INFO) << "Rendering didn't match, see result " <<
           snapshot_filename_.value().c_str();
@@ -118,74 +124,77 @@ class PDFBrowserTest : public InProcessBrowserTest,
   }
 
  private:
+  void GetSnapshotFromRendererCallback(bool success,
+                                       const SkBitmap& bitmap) {
+    base::MessageLoopForUI::current()->Quit();
+    ASSERT_EQ(success, true);
+    base::FilePath reference = ui_test_utils::GetTestFilePath(
+        GetPDFTestDir(),
+        base::FilePath().AppendASCII(expected_filename_));
+    base::PlatformFileInfo info;
+    ASSERT_TRUE(file_util::GetFileInfo(reference, &info));
+    int size = static_cast<size_t>(info.size);
+    scoped_ptr<char[]> data(new char[size]);
+    ASSERT_EQ(size, file_util::ReadFile(reference, data.get(), size));
+
+    int w, h;
+    std::vector<unsigned char> decoded;
+    ASSERT_TRUE(gfx::PNGCodec::Decode(
+        reinterpret_cast<unsigned char*>(data.get()), size,
+        gfx::PNGCodec::FORMAT_BGRA, &decoded, &w, &h));
+    int32* ref_pixels = reinterpret_cast<int32*>(&decoded[0]);
+
+    int32* pixels = static_cast<int32*>(bitmap.getPixels());
+
+    // Get the background color, and use it to figure out the x-offsets in
+    // each image.  The reason is that depending on the theme in the OS, the
+    // same browser width can lead to slightly different plugin sizes, so the
+    // pdf content will start at different x offsets.
+    // Also note that the images we saved are cut off before the scrollbar, as
+    // that'll change depending on the theme, and also cut off vertically so
+    // that the ui controls don't show up, as those fade-in and so the timing
+    // will affect their transparency.
+    int32 bg_color = ref_pixels[0];
+    int ref_x_offset, snapshot_x_offset;
+    for (ref_x_offset = 0; ref_x_offset < w; ++ref_x_offset) {
+      if (ref_pixels[ref_x_offset] != bg_color)
+        break;
+    }
+
+    for (snapshot_x_offset = 0; snapshot_x_offset < bitmap.width();
+         ++snapshot_x_offset) {
+      if (pixels[snapshot_x_offset] != bg_color)
+        break;
+    }
+
+    int x_max = std::min(
+        w - ref_x_offset, bitmap.width() - snapshot_x_offset);
+    int y_max = std::min(h, bitmap.height());
+    int stride = bitmap.rowBytes();
+    snapshot_different_ = false;
+    for (int y = 0; y < y_max && !snapshot_different_; ++y) {
+      for (int x = 0; x < x_max && !snapshot_different_; ++x) {
+        if (pixels[y * stride / sizeof(int32) + x + snapshot_x_offset] !=
+            ref_pixels[y * w + x + ref_x_offset])
+          snapshot_different_ = true;
+      }
+    }
+
+    if (snapshot_different_) {
+      std::vector<unsigned char> png_data;
+      gfx::PNGCodec::EncodeBGRASkBitmap(bitmap, false, &png_data);
+      if (file_util::CreateTemporaryFile(&snapshot_filename_)) {
+        file_util::WriteFile(snapshot_filename_,
+            reinterpret_cast<char*>(&png_data[0]), png_data.size());
+      }
+    }
+  }
+
   // content::NotificationObserver
   virtual void Observe(int type,
                        const content::NotificationSource& source,
                        const content::NotificationDetails& details) {
-    if (type == chrome::NOTIFICATION_TAB_SNAPSHOT_TAKEN) {
-      MessageLoopForUI::current()->Quit();
-      base::FilePath reference = ui_test_utils::GetTestFilePath(
-          GetPDFTestDir(),
-          base::FilePath().AppendASCII(expected_filename_));
-      base::PlatformFileInfo info;
-      ASSERT_TRUE(file_util::GetFileInfo(reference, &info));
-      int size = static_cast<size_t>(info.size);
-      scoped_array<char> data(new char[size]);
-      ASSERT_EQ(size, file_util::ReadFile(reference, data.get(), size));
-
-      int w, h;
-      std::vector<unsigned char> decoded;
-      ASSERT_TRUE(gfx::PNGCodec::Decode(
-          reinterpret_cast<unsigned char*>(data.get()), size,
-          gfx::PNGCodec::FORMAT_BGRA, &decoded, &w, &h));
-      int32* ref_pixels = reinterpret_cast<int32*>(&decoded[0]);
-
-      const SkBitmap* bitmap = content::Details<const SkBitmap>(details).ptr();
-      int32* pixels = static_cast<int32*>(bitmap->getPixels());
-
-      // Get the background color, and use it to figure out the x-offsets in
-      // each image.  The reason is that depending on the theme in the OS, the
-      // same browser width can lead to slightly different plugin sizes, so the
-      // pdf content will start at different x offsets.
-      // Also note that the images we saved are cut off before the scrollbar, as
-      // that'll change depending on the theme, and also cut off vertically so
-      // that the ui controls don't show up, as those fade-in and so the timing
-      // will affect their transparency.
-      int32 bg_color = ref_pixels[0];
-      int ref_x_offset, snapshot_x_offset;
-      for (ref_x_offset = 0; ref_x_offset < w; ++ref_x_offset) {
-        if (ref_pixels[ref_x_offset] != bg_color)
-          break;
-      }
-
-      for (snapshot_x_offset = 0; snapshot_x_offset < bitmap->width();
-           ++snapshot_x_offset) {
-        if (pixels[snapshot_x_offset] != bg_color)
-          break;
-      }
-
-      int x_max = std::min(
-          w - ref_x_offset, bitmap->width() - snapshot_x_offset);
-      int y_max = std::min(h, bitmap->height());
-      int stride = bitmap->rowBytes();
-      snapshot_different_ = false;
-      for (int y = 0; y < y_max && !snapshot_different_; ++y) {
-        for (int x = 0; x < x_max && !snapshot_different_; ++x) {
-          if (pixels[y * stride / sizeof(int32) + x + snapshot_x_offset] !=
-              ref_pixels[y * w + x + ref_x_offset])
-            snapshot_different_ = true;
-        }
-      }
-
-      if (snapshot_different_) {
-        std::vector<unsigned char> png_data;
-        gfx::PNGCodec::EncodeBGRASkBitmap(*bitmap, false, &png_data);
-        if (file_util::CreateTemporaryFile(&snapshot_filename_)) {
-          file_util::WriteFile(snapshot_filename_,
-              reinterpret_cast<char*>(&png_data[0]), png_data.size());
-        }
-      }
-    } else if (type == content::NOTIFICATION_LOAD_STOP) {
+    if (type == content::NOTIFICATION_LOAD_STOP) {
       load_stop_notification_count_++;
     }
   }
@@ -201,7 +210,7 @@ class PDFBrowserTest : public InProcessBrowserTest,
   // How many times we've seen chrome::LOAD_STOP.
   int load_stop_notification_count_;
 
-  scoped_ptr<net::TestServer> pdf_test_server_;
+  net::test_server::EmbeddedTestServer pdf_test_server_;
 };
 
 #if defined(OS_CHROMEOS)
@@ -279,9 +288,7 @@ IN_PROC_BROWSER_TEST_F(PDFBrowserTest, MAYBE_FindAndCopy) {
   ui::Clipboard::ObjectMapParams params;
   params.push_back(std::vector<char>());
   objects[ui::Clipboard::CBF_TEXT] = params;
-  clipboard->WriteObjects(ui::Clipboard::BUFFER_STANDARD,
-                          objects,
-                          ui::Clipboard::SourceTag());
+  clipboard->WriteObjects(ui::Clipboard::BUFFER_STANDARD, objects);
 
   browser()->tab_strip_model()->GetActiveWebContents()->
       GetRenderViewHost()->Copy();
@@ -299,7 +306,7 @@ const int kLoadingNumberOfParts = 10;
 // regressions.
 // If it flakes, reopen http://crbug.com/74548.
 IN_PROC_BROWSER_TEST_P(PDFBrowserTest, Loading) {
-  ASSERT_TRUE(pdf_test_server()->Start());
+  ASSERT_TRUE(pdf_test_server()->InitializeAndWaitUntilReady());
 
   NavigationController* controller =
       &(browser()->tab_strip_model()->GetActiveWebContents()->GetController());
@@ -307,12 +314,12 @@ IN_PROC_BROWSER_TEST_P(PDFBrowserTest, Loading) {
   registrar.Add(this,
                 content::NOTIFICATION_LOAD_STOP,
                 content::Source<NavigationController>(controller));
-  std::string base_url = std::string("files/");
+  std::string base_url = std::string("/");
 
-  file_util::FileEnumerator file_enumerator(
+  base::FileEnumerator file_enumerator(
       ui_test_utils::GetTestFilePath(GetPDFTestDir(), base::FilePath()),
       false,
-      file_util::FileEnumerator::FILES,
+      base::FileEnumerator::FILES,
       FILE_PATH_LITERAL("*.pdf"));
   for (base::FilePath file_path = file_enumerator.Next();
        !file_path.empty();
@@ -392,9 +399,9 @@ IN_PROC_BROWSER_TEST_F(PDFBrowserTest, Action) {
 
 // Flaky as per http://crbug.com/74549.
 IN_PROC_BROWSER_TEST_F(PDFBrowserTest, DISABLED_OnLoadAndReload) {
-  ASSERT_TRUE(pdf_test_server()->Start());
+  ASSERT_TRUE(pdf_test_server()->InitializeAndWaitUntilReady());
 
-  GURL url = pdf_test_server()->GetURL("files/onload_reload.html");
+  GURL url = pdf_test_server()->GetURL("/onload_reload.html");
   ui_test_utils::NavigateToURL(browser(), url);
 
   content::WindowedNotificationObserver observer(

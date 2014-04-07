@@ -5,21 +5,8 @@
 #ifndef CHROME_BROWSER_FIRST_RUN_FIRST_RUN_INTERNAL_H_
 #define CHROME_BROWSER_FIRST_RUN_FIRST_RUN_INTERNAL_H_
 
-#include <vector>
-
-#include "base/basictypes.h"
-#include "base/compiler_specific.h"
-#include "base/gtest_prod_util.h"
-#include "base/memory/ref_counted.h"
-#include "ui/gfx/native_widget_types.h"
-
-class CommandLine;
-class GURL;
-class ImporterHost;
-class ImporterList;
+class MasterPrefs;
 class Profile;
-class ProcessSingleton;
-class TemplateURLService;
 
 namespace base {
 class FilePath;
@@ -30,12 +17,15 @@ class MasterPreferences;
 }
 
 namespace first_run {
+
 namespace internal {
 
 enum FirstRunState {
   FIRST_RUN_UNKNOWN,  // The state is not tested or set yet.
   FIRST_RUN_TRUE,
-  FIRST_RUN_FALSE
+  FIRST_RUN_FALSE,
+  FIRST_RUN_CANCEL,  // This shouldn't be considered first run but the sentinel
+                     // should be created anyways.
 };
 
 // This variable should only be accessed through IsChromeFirstRun().
@@ -45,7 +35,8 @@ extern FirstRunState first_run_;
 // master preferences. Passes the master preference file path out in
 // master_prefs_path. Returns the pointer to installer::MasterPreferences object
 // if successful; otherwise, returns NULL.
-installer::MasterPreferences* LoadMasterPrefs(base::FilePath* master_prefs_path);
+installer::MasterPreferences* LoadMasterPrefs(
+    base::FilePath* master_prefs_path);
 
 // Copies user preference file to master preference file. Returns true if
 // successful.
@@ -59,13 +50,12 @@ void SetupMasterPrefsFromInstallPrefs(
 
 void SetDefaultBrowser(installer::MasterPreferences* install_prefs);
 
-// Sets ping_delay.
-void SetRLZPref(first_run::MasterPrefs* out_prefs,
-                installer::MasterPreferences* install_prefs);
+// Creates the sentinel file that signals that chrome has been configured.
+bool CreateSentinel();
 
 // -- Platform-specific functions --
 
-void DoPostImportPlatformSpecificTasks();
+void DoPostImportPlatformSpecificTasks(Profile* profile);
 
 // Gives the full path to the sentinel file. The file might not exist.
 // This function has a common implementation on OS_POSIX and a windows specific
@@ -76,32 +66,13 @@ bool GetFirstRunSentinelFilePath(base::FilePath* path);
 // a linux specific implementation.
 bool IsOrganicFirstRun();
 
-// Imports settings. This may be done in a separate process depending on the
-// platform, but it will always block until done. The return value indicates
-// success.
-// This functions has a common implementation for OS_POSIX, and a
-// windows specific implementation.
-bool ImportSettings(Profile* profile,
-                    scoped_refptr<ImporterHost> importer_host,
-                    scoped_refptr<ImporterList> importer_list,
-                    int items_to_import);
-
-// Sets import preferences and launch the import process.
-void SetImportPreferencesAndLaunchImport(
-    MasterPrefs* out_prefs,
-    installer::MasterPreferences* install_prefs);
-
-int ImportBookmarkFromFileIfNeeded(Profile* profile,
-                                   const CommandLine& cmdline);
-
-#if !defined(OS_WIN)
-bool ImportBookmarks(const base::FilePath& import_bookmarks_path);
-#endif
-
 // Shows the EULA dialog if required. Returns true if the EULA is accepted,
 // returns false if the EULA has not been accepted, in which case the browser
 // should exit.
 bool ShowPostInstallEULAIfNeeded(installer::MasterPreferences* install_prefs);
+
+// Returns the path for the master preferences file.
+base::FilePath MasterPrefsPath();
 
 }  // namespace internal
 }  // namespace first_run

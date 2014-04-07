@@ -15,9 +15,9 @@
 
 #include "base/files/file_path.h"
 #include "base/memory/linked_ptr.h"
+#include "base/memory/shared_memory.h"
 #include "base/sequenced_task_runner_helpers.h"
-#include "base/shared_memory.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "build/build_config.h"
 #include "content/common/pepper_renderer_instance_data.h"
 #include "content/public/browser/browser_message_filter.h"
@@ -25,12 +25,16 @@
 #include "media/audio/audio_parameters.h"
 #include "media/base/channel_layout.h"
 #include "net/cookies/canonical_cookie.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebPopupType.h"
+#include "third_party/WebKit/public/web/WebPopupType.h"
 #include "ui/gfx/native_widget_types.h"
 #include "ui/surface/transport_dib.h"
 
 #if defined(OS_MACOSX)
 #include "content/common/mac/font_loader.h"
+#endif
+
+#if defined(OS_ANDROID)
+#include "base/threading/worker_pool.h"
 #endif
 
 struct FontDescriptor;
@@ -51,6 +55,7 @@ class Rect;
 }
 
 namespace media {
+class AudioManager;
 struct MediaLogEvent;
 }
 
@@ -59,19 +64,16 @@ class URLRequestContext;
 class URLRequestContextGetter;
 }
 
-namespace webkit {
-struct WebPluginInfo;
-}
-
 namespace content {
 class BrowserContext;
-class DOMStorageContextImpl;
+class DOMStorageContextWrapper;
 class MediaInternals;
 class PluginServiceImpl;
 class RenderWidgetHelper;
 class ResourceContext;
 class ResourceDispatcherHostImpl;
 struct Referrer;
+struct WebPluginInfo;
 
 // This class filters out incoming IPC messages for the renderer process on the
 // IPC thread.
@@ -79,12 +81,14 @@ class RenderMessageFilter : public BrowserMessageFilter {
  public:
   // Create the filter.
   RenderMessageFilter(int render_process_id,
+                      bool is_guest,
                       PluginServiceImpl * plugin_service,
                       BrowserContext* browser_context,
                       net::URLRequestContextGetter* request_context,
                       RenderWidgetHelper* render_widget_helper,
+                      media::AudioManager* audio_manager,
                       MediaInternals* media_internals,
-                      DOMStorageContextImpl* dom_storage_context);
+                      DOMStorageContextWrapper* dom_storage_context);
 
   // IPC::ChannelProxy::MessageFilter methods:
   virtual void OnChannelClosing() OVERRIDE;
@@ -117,6 +121,7 @@ class RenderMessageFilter : public BrowserMessageFilter {
   void OnGetProcessMemorySizes(size_t* private_bytes, size_t* shared_bytes);
   void OnCreateWindow(const ViewHostMsg_CreateWindow_Params& params,
                       int* route_id,
+                      int* main_frame_route_id,
                       int* surface_id,
                       int64* cloned_session_storage_namespace_id);
   void OnCreateWidget(int opener_id,
@@ -155,13 +160,13 @@ class RenderMessageFilter : public BrowserMessageFilter {
 
   void OnGetPlugins(bool refresh, IPC::Message* reply_msg);
   void GetPluginsCallback(IPC::Message* reply_msg,
-                          const std::vector<webkit::WebPluginInfo>& plugins);
+                          const std::vector<WebPluginInfo>& plugins);
   void OnGetPluginInfo(int routing_id,
                        const GURL& url,
                        const GURL& policy_url,
                        const std::string& mime_type,
                        bool* found,
-                       webkit::WebPluginInfo* info,
+                       WebPluginInfo* info,
                        std::string* actual_mime_type);
   void OnOpenChannelToPlugin(int routing_id,
                              const GURL& url,
@@ -179,7 +184,6 @@ class RenderMessageFilter : public BrowserMessageFilter {
                                              int32 pp_instance,
                                              bool is_external);
   void OnOpenChannelToPpapiBroker(int routing_id,
-                                  int request_id,
                                   const base::FilePath& path);
   void OnGenerateRoutingID(int* route_id);
   void OnDownloadUrl(const IPC::Message& message,
@@ -205,7 +209,7 @@ class RenderMessageFilter : public BrowserMessageFilter {
   void OnResolveProxy(const GURL& url, IPC::Message* reply_msg);
 
   // Browser side transport DIB allocation
-  void OnAllocTransportDIB(size_t size,
+  void OnAllocTransportDIB(uint32 size,
                            bool cache_in_browser,
                            TransportDIB::Handle* result);
   void OnFreeTransportDIB(TransportDIB::Id dib_id);
@@ -219,15 +223,11 @@ class RenderMessageFilter : public BrowserMessageFilter {
       const std::string& challenge_string,
       const GURL& url,
       IPC::Message* reply_msg);
-  void OnAsyncOpenFile(const IPC::Message& msg,
-                       const base::FilePath& path,
-                       int flags,
-                       int message_id);
-  void AsyncOpenFileOnFileThread(const base::FilePath& path,
-                                 int flags,
-                                 int message_id,
-                                 int routing_id);
-  void OnMediaLogEvent(const media::MediaLogEvent&);
+  void OnAsyncOpenPepperFile(int routing_id,
+                             const base::FilePath& path,
+                             int pp_open_flags,
+                             int message_id);
+  void OnMediaLogEvents(const std::vector<media::MediaLogEvent>&);
 
   // Check the policy for getting cookies. Gets the cookies if allowed.
   void CheckPolicyForCookies(const GURL& url,
@@ -256,6 +256,12 @@ class RenderMessageFilter : public BrowserMessageFilter {
                           ThreeDAPIType context_type,
                           int arb_robustness_status_code);
 
+#if defined(OS_ANDROID)
+  void OnWebAudioMediaCodec(base::SharedMemoryHandle encoded_data_handle,
+                            base::FileDescriptor pcm_output,
+                            uint32_t data_size);
+#endif
+
   // Cached resource request dispatcher host and plugin service, guaranteed to
   // be non-null if Init succeeds. We do not own the objects, they are managed
   // by the BrowserProcess, which has a wider scope than we do.
@@ -278,9 +284,11 @@ class RenderMessageFilter : public BrowserMessageFilter {
   // Initialized to 0, accessed on FILE thread only.
   base::TimeTicks last_plugin_refresh_time_;
 
-  scoped_refptr<DOMStorageContextImpl> dom_storage_context_;
+  scoped_refptr<DOMStorageContextWrapper> dom_storage_context_;
 
   int render_process_id_;
+
+  bool is_guest_;
 
   std::set<OpenChannelToNpapiPluginCallback*> plugin_host_clients_;
 
@@ -291,6 +299,7 @@ class RenderMessageFilter : public BrowserMessageFilter {
   // Used for sampling CPU usage of the renderer process.
   scoped_ptr<base::ProcessMetrics> process_metrics_;
 
+  media::AudioManager* audio_manager_;
   MediaInternals* media_internals_;
 
   DISALLOW_COPY_AND_ASSIGN(RenderMessageFilter);

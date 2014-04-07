@@ -5,10 +5,10 @@
 #include "remoting/protocol/me2me_host_authenticator_factory.h"
 
 #include "base/base64.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "remoting/base/rsa_key_pair.h"
 #include "remoting/protocol/channel_authenticator.h"
-#include "remoting/protocol/negotiating_authenticator.h"
+#include "remoting/protocol/negotiating_host_authenticator.h"
 #include "third_party/libjingle/source/talk/xmllite/xmlelement.h"
 
 namespace remoting {
@@ -43,13 +43,13 @@ class RejectingAuthenticator : public Authenticator {
 
   virtual scoped_ptr<buzz::XmlElement> GetNextMessage() OVERRIDE {
     NOTREACHED();
-    return scoped_ptr<buzz::XmlElement>(NULL);
+    return scoped_ptr<buzz::XmlElement>();
   }
 
   virtual scoped_ptr<ChannelAuthenticator>
   CreateChannelAuthenticator() const OVERRIDE {
     NOTREACHED();
-    return scoped_ptr<ChannelAuthenticator>(NULL);
+    return scoped_ptr<ChannelAuthenticator>();
   }
 
  protected:
@@ -58,13 +58,45 @@ class RejectingAuthenticator : public Authenticator {
 
 }  // namespace
 
-Me2MeHostAuthenticatorFactory::Me2MeHostAuthenticatorFactory(
+// static
+scoped_ptr<AuthenticatorFactory>
+Me2MeHostAuthenticatorFactory::CreateWithSharedSecret(
     const std::string& local_cert,
     scoped_refptr<RsaKeyPair> key_pair,
-    const SharedSecretHash& shared_secret_hash)
-    : local_cert_(local_cert),
-      key_pair_(key_pair),
-      shared_secret_hash_(shared_secret_hash) {
+    const SharedSecretHash& shared_secret_hash,
+    scoped_refptr<PairingRegistry> pairing_registry) {
+  scoped_ptr<Me2MeHostAuthenticatorFactory> result(
+      new Me2MeHostAuthenticatorFactory());
+  result->local_cert_ = local_cert;
+  result->key_pair_ = key_pair;
+  result->shared_secret_hash_ = shared_secret_hash;
+  result->pairing_registry_ = pairing_registry;
+  return scoped_ptr<AuthenticatorFactory>(result.Pass());
+}
+
+
+// static
+scoped_ptr<AuthenticatorFactory>
+Me2MeHostAuthenticatorFactory::CreateWithThirdPartyAuth(
+    const std::string& local_cert,
+    scoped_refptr<RsaKeyPair> key_pair,
+    scoped_ptr<ThirdPartyHostAuthenticator::TokenValidatorFactory>
+        token_validator_factory) {
+  scoped_ptr<Me2MeHostAuthenticatorFactory> result(
+      new Me2MeHostAuthenticatorFactory());
+  result->local_cert_ = local_cert;
+  result->key_pair_ = key_pair;
+  result->token_validator_factory_ = token_validator_factory.Pass();
+  return scoped_ptr<AuthenticatorFactory>(result.Pass());
+}
+
+// static
+scoped_ptr<AuthenticatorFactory>
+    Me2MeHostAuthenticatorFactory::CreateRejecting() {
+  return scoped_ptr<AuthenticatorFactory>(new Me2MeHostAuthenticatorFactory());
+}
+
+Me2MeHostAuthenticatorFactory::Me2MeHostAuthenticatorFactory() {
 }
 
 Me2MeHostAuthenticatorFactory::~Me2MeHostAuthenticatorFactory() {
@@ -91,9 +123,20 @@ scoped_ptr<Authenticator> Me2MeHostAuthenticatorFactory::CreateAuthenticator(
     return scoped_ptr<Authenticator>(new RejectingAuthenticator());
   }
 
-  return NegotiatingAuthenticator::CreateForHost(
-      local_cert_, key_pair_, shared_secret_hash_.value,
-      shared_secret_hash_.hash_function);
+  if (!local_cert_.empty() && key_pair_.get()) {
+    if (token_validator_factory_) {
+      return NegotiatingHostAuthenticator::CreateWithThirdPartyAuth(
+          local_cert_, key_pair_,
+          token_validator_factory_->CreateTokenValidator(
+              local_jid, remote_jid));
+    }
+
+    return NegotiatingHostAuthenticator::CreateWithSharedSecret(
+        local_cert_, key_pair_, shared_secret_hash_.value,
+        shared_secret_hash_.hash_function, pairing_registry_);
+  }
+
+  return scoped_ptr<Authenticator>(new RejectingAuthenticator());
 }
 
 }  // namespace protocol

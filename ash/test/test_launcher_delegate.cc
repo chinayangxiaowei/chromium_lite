@@ -7,7 +7,7 @@
 #include "ash/launcher/launcher_model.h"
 #include "ash/launcher/launcher_util.h"
 #include "ash/wm/window_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "grit/ash_resources.h"
 #include "ui/aura/window.h"
 
@@ -42,13 +42,10 @@ void TestLauncherDelegate::AddLauncherItem(
   window_to_id_[window] = model_->next_id();
   item.status = status;
   model_->Add(item);
-  if (observed_windows_.find(window->parent()) == observed_windows_.end()) {
-    window->parent()->AddObserver(this);
-    observed_windows_.insert(window->parent());
-  }
+  window->AddObserver(this);
 }
 
-void TestLauncherDelegate::OnWillRemoveWindow(aura::Window* window) {
+void TestLauncherDelegate::RemoveLauncherItemForWindow(aura::Window* window) {
   ash::LauncherID id = GetIDByWindow(window);
   if (id == 0)
     return;
@@ -56,31 +53,34 @@ void TestLauncherDelegate::OnWillRemoveWindow(aura::Window* window) {
   DCHECK_NE(-1, index);
   model_->RemoveItemAt(index);
   window_to_id_.erase(window);
-  ObservedWindows::iterator it = observed_windows_.find(window->parent());
-  if (it != observed_windows_.end()) {
-    window->parent()->RemoveObserver(this);
-    observed_windows_.erase(it);
-  }
+  window->RemoveObserver(this);
 }
 
-void TestLauncherDelegate::OnBrowserShortcutClicked(int event_flags) {
+void TestLauncherDelegate::OnWindowDestroying(aura::Window* window) {
+  RemoveLauncherItemForWindow(window);
 }
 
-void TestLauncherDelegate::ItemClicked(const ash::LauncherItem& item,
+void TestLauncherDelegate::OnWindowHierarchyChanging(
+      const HierarchyChangeParams& params) {
+  // The window may be legitimately reparented while staying open if it moves
+  // to another display or container. If the window does not have a new parent
+  // then remove the launcher item.
+  if (!params.new_parent)
+    RemoveLauncherItemForWindow(params.target);
+}
+
+void TestLauncherDelegate::ItemSelected(const ash::LauncherItem& item,
                                        const ui::Event& event) {
   aura::Window* window = GetWindowByID(item.id);
-  launcher::MoveToEventRootIfPanel(window, event);
+  if (window->type() == aura::client::WINDOW_TYPE_PANEL)
+    ash::wm::MoveWindowToEventRoot(window, event);
   window->Show();
   ash::wm::ActivateWindow(window);
 }
 
-int TestLauncherDelegate::GetBrowserShortcutResourceId() {
-  return IDR_AURA_LAUNCHER_BROWSER_SHORTCUT;
-}
-
-string16 TestLauncherDelegate::GetTitle(const ash::LauncherItem& item) {
+base::string16 TestLauncherDelegate::GetTitle(const ash::LauncherItem& item) {
   aura::Window* window = GetWindowByID(item.id);
-  return window ? window->title() : string16();
+  return window ? window->title() : base::string16();
 }
 
 ui::MenuModel* TestLauncherDelegate::CreateContextMenu(
@@ -118,6 +118,31 @@ bool TestLauncherDelegate::IsDraggable(const ash::LauncherItem& item) {
 
 bool TestLauncherDelegate::ShouldShowTooltip(const ash::LauncherItem& item) {
   return true;
+}
+
+void TestLauncherDelegate::OnLauncherCreated(Launcher* launcher) {
+}
+
+void TestLauncherDelegate::OnLauncherDestroyed(Launcher* launcher) {
+}
+
+bool TestLauncherDelegate::IsPerAppLauncher() {
+  return true;
+}
+
+LauncherID TestLauncherDelegate::GetLauncherIDForAppID(
+    const std::string& app_id) {
+  return 0;
+}
+
+void TestLauncherDelegate::PinAppWithID(const std::string& app_id) {
+}
+
+bool TestLauncherDelegate::IsAppPinned(const std::string& app_id) {
+  return false;
+}
+
+void TestLauncherDelegate::UnpinAppsWithID(const std::string& app_id) {
 }
 
 }  // namespace test

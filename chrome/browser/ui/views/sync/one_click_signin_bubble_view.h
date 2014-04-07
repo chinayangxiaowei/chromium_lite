@@ -9,18 +9,23 @@
 #include "base/callback.h"
 #include "base/compiler_specific.h"
 #include "base/gtest_prod_util.h"
-#include "base/string16.h"
+#include "base/memory/scoped_ptr.h"
+#include "base/strings/string16.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/browser/ui/views/toolbar_view.h"
+#include "chrome/browser/ui/sync/one_click_signin_bubble_delegate.h"
 #include "ui/views/bubble/bubble_delegate.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/link_listener.h"
 
+namespace base {
 class MessageLoop;
+}
 
 namespace views {
 class GridLayout;
-class TextButton;
+class ImageButton;
+class LabelButton;
+class View;
 }
 
 // OneClickSigninBubbleView is a view intended to be used as the content of an
@@ -34,7 +39,10 @@ class OneClickSigninBubbleView : public views::BubbleDelegateView,
   // will be placed visually beneath |anchor_view|.  |start_sync| is called
   // to start sync.
   static void ShowBubble(BrowserWindow::OneClickSigninBubbleType type,
-                         ToolbarView* toolbar_view,
+                         const string16& email,
+                         const string16& error_message,
+                         scoped_ptr<OneClickSigninBubbleDelegate> delegate,
+                         views::View* anchor_view,
                          const BrowserWindow::StartSyncCallback& start_sync);
 
   static bool IsShowing();
@@ -48,10 +56,29 @@ class OneClickSigninBubbleView : public views::BubbleDelegateView,
  protected:
   // Creates a OneClickSigninBubbleView.
   OneClickSigninBubbleView(
+      const string16& error_message,
+      const string16& email,
+      scoped_ptr<OneClickSigninBubbleDelegate> delegate,
       views::View* anchor_view,
-      const BrowserWindow::StartSyncCallback& start_sync_callback);
+      const BrowserWindow::StartSyncCallback& start_sync_callback,
+      bool is_sync_dialog);
 
   virtual ~OneClickSigninBubbleView();
+
+ private:
+  friend class OneClickSigninBubbleViewTest;
+
+  FRIEND_TEST_ALL_PREFIXES(OneClickSigninBubbleViewTest, BubbleOkButton);
+  FRIEND_TEST_ALL_PREFIXES(OneClickSigninBubbleViewTest, DialogOkButton);
+  FRIEND_TEST_ALL_PREFIXES(OneClickSigninBubbleViewTest, DialogUndoButton);
+  FRIEND_TEST_ALL_PREFIXES(OneClickSigninBubbleViewTest, BubbleAdvancedLink);
+  FRIEND_TEST_ALL_PREFIXES(OneClickSigninBubbleViewTest, DialogAdvancedLink);
+  FRIEND_TEST_ALL_PREFIXES(OneClickSigninBubbleViewTest, BubbleLearnMoreLink);
+  FRIEND_TEST_ALL_PREFIXES(OneClickSigninBubbleViewTest, DialogLearnMoreLink);
+
+  // Overridden from views::BubbleDelegateView:
+  virtual void AnimationEnded(const ui::Animation* animation) OVERRIDE;
+  virtual void Init() OVERRIDE;
 
   // Overridden from views::LinkListener:
   virtual void LinkClicked(views::Link* source, int event_flags) OVERRIDE;
@@ -60,55 +87,66 @@ class OneClickSigninBubbleView : public views::BubbleDelegateView,
   virtual void ButtonPressed(views::Button* sender,
                              const ui::Event& event) OVERRIDE;
 
- private:
-  friend class OneClickSigninBubbleViewBrowserTest;
-
-  FRIEND_TEST_ALL_PREFIXES(OneClickSigninBubbleViewBrowserTest, OkButton);
-  FRIEND_TEST_ALL_PREFIXES(OneClickSigninBubbleViewBrowserTest, UndoButton);
-  FRIEND_TEST_ALL_PREFIXES(OneClickSigninBubbleViewBrowserTest, AdvancedLink);
-
-  // views::BubbleDelegateView methods:
-  virtual void AnimationEnded(const ui::Animation* animation) OVERRIDE;
-  virtual void Init() OVERRIDE;
-
-  // Method to build the main part of the bubble.  Derived classes should
-  // reimplement this function.
-  virtual void InitContent(views::GridLayout* layout);
-
-  // Creates OK and Undo buttons to be used at the bottom of the bubble.
-  // Derived classes can reimplement to have buttons with different labels,
-  // colours, or sizes.  The caller of this function owns the returned buttons.
-  virtual void GetButtons(views::TextButton** ok_button,
-                          views::TextButton** undo_button);
-
-  // Creates advanced link to be used at the bottom of the bubble.
-  // Derived classes can reimplement.  The caller of this function owns the
-  // returned link.
-  virtual views::Link* GetAdvancedLink();
-
-  // views::WidgetDelegate method:
-  virtual void WindowClosing() OVERRIDE;
-
-  // views::View method:
+  // Overridden from views::View:
   virtual bool AcceleratorPressed(const ui::Accelerator& accelerator) OVERRIDE;
 
-  // The bubble, if we're showing one.
-  static OneClickSigninBubbleView* bubble_view_;
+  // Overridden from views::WidgetDelegate:
+  virtual void WindowClosing() OVERRIDE;
+  virtual ui::ModalType GetModalType() const OVERRIDE;
 
-  // Link to sync setup advanced page.
-  views::Link* advanced_link_;
+  // Builds a popup bubble anchored under the wrench menu
+  void InitBubbleContent(views::GridLayout* layout);
 
-  // Controls at bottom of bubble.
-  views::TextButton* ok_button_;
-  views::TextButton* undo_button_;
+  // Builds a modal dialog aligned center top
+  void InitDialogContent(views::GridLayout* layout);
+
+  // Initializes the OK/Undo buttons to be used at the bottom of the bubble.
+  void InitButtons(views::GridLayout* layout);
+  void GetButtons(views::LabelButton** ok_button,
+                          views::LabelButton** undo_button);
+
+  // Creates learn more link to be used at the bottom of the bubble.
+  void InitLearnMoreLink();
+
+  // Creates advanced link to be used at the bottom of the bubble.
+  void InitAdvancedLink();
+
+  // Delegate to handle clicking on links in the bubble.
+  scoped_ptr<OneClickSigninBubbleDelegate> delegate_;
+
+  // Alternate error message to be displayed.
+  const string16 error_message_;
+
+  // The user's email address to be used for sync.
+  const string16 email_;
 
   // This callback is nulled once its called, so that it is called only once.
   // It will be called when the bubble is closed if it has not been called
   // and nulled earlier.
   BrowserWindow::StartSyncCallback start_sync_callback_;
 
+  const bool is_sync_dialog_;
+
+  // Link to sync setup advanced page.
+  views::Link* advanced_link_;
+
+  // Link to the Learn More details page
+  views::Link* learn_more_link_;
+
+  // Controls at bottom of bubble.
+  views::LabelButton* ok_button_;
+  views::LabelButton* undo_button_;
+
+  // Close button for the modal dialog
+  views::ImageButton* close_button_;
+
+  bool clicked_learn_more_;
+
   // A message loop used only with unit tests.
-  MessageLoop* message_loop_for_testing_;
+  base::MessageLoop* message_loop_for_testing_;
+
+  // The bubble, if we're showing one.
+  static OneClickSigninBubbleView* bubble_view_;
 
   DISALLOW_COPY_AND_ASSIGN(OneClickSigninBubbleView);
 };

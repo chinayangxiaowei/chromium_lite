@@ -11,171 +11,165 @@
 // permission API would only be available for channels CHANNEL_DEV and
 // CHANNEL_CANARY.
 
+var createEvent = require('webView').CreateEvent;
+var WebRequestEvent = require('webRequestInternal').WebRequestEvent;
+var webRequestSchema =
+    requireNative('schema_registry').GetSchema('webRequest');
 var WebView = require('webView').WebView;
 
-var forEach = require('utils').forEach;
-
-/** @type {Array.<string>} */
-var PERMISSION_TYPES = ['media', 'geolocation', 'pointerLock'];
-
-/** @type {string} */
-var REQUEST_TYPE_NEW_WINDOW = 'newwindow';
-
-/** @type {string} */
-var ERROR_MSG_PERMISSION_ALREADY_DECIDED = '<webview>: ' +
-    'Permission has already been decided for this "permissionrequest" event.';
-
-var EXPOSED_PERMISSION_EVENT_ATTRIBS = [
-    'lastUnlockedBySelf',
-    'permission',
-    'url',
-    'userGesture'
-];
-
-/** @type {string} */
-var ERROR_MSG_NEWWINDOW_ACTION_ALREADY_TAKEN = '<webview>: ' +
-    'An action has already been taken for this "newwindow" event.';
-
-/** @type {string} */
-var ERROR_MSG_WEBVIEW_EXPECTED = '<webview> element expected.';
-
-/**
- * @param {!Object} detail The event details, originated from <object>.
- * @private
- */
-WebView.prototype.maybeSetupPermissionEvent_ = function() {
-  var node = this.node_;
-  var objectNode = this.objectNode_;
-  this.objectNode_.addEventListener('-internal-permissionrequest', function(e) {
-    var evt = new Event('permissionrequest', {bubbles: true, cancelable: true});
-    var detail = e.detail ? JSON.parse(e.detail) : {};
-    forEach(EXPOSED_PERMISSION_EVENT_ATTRIBS, function(i, attribName) {
-      if (detail[attribName] !== undefined)
-        evt[attribName] = detail[attribName];
-    });
-    var requestId = detail.requestId;
-
-    if (detail.requestId !== undefined &&
-        PERMISSION_TYPES.indexOf(detail.permission) >= 0) {
-      // TODO(lazyboy): Also fill in evt.details (see webview specs).
-      // http://crbug.com/141197.
-      var decisionMade = false;
-      // Construct the event.request object.
-      var request = {
-        allow: function() {
-          if (decisionMade) {
-            throw new Error(ERROR_MSG_PERMISSION_ALREADY_DECIDED);
-          } else {
-            objectNode['-internal-setPermission'](requestId, true);
-            decisionMade = true;
-          }
-        },
-        deny: function() {
-          if (decisionMade) {
-            throw new Error(ERROR_MSG_PERMISSION_ALREADY_DECIDED);
-          } else {
-            objectNode['-internal-setPermission'](requestId, false);
-            decisionMade = true;
-          }
-        }
-      };
-      evt.request = request;
-
-      // Make browser plugin track lifetime of |request|.
-      objectNode['-internal-persistObject'](
-          request, detail.permission, requestId);
-
-      var defaultPrevented = !node.dispatchEvent(evt);
-      if (!decisionMade && !defaultPrevented) {
-        decisionMade = true;
-        objectNode['-internal-setPermission'](requestId, false);
-      }
-    }
-  });
-};
-
-/**
- * @private
- */
-WebView.prototype.maybeSetupExecuteScript_ = function() {
-  var self = this;
-  this.node_['executeScript'] = function(var_args) {
-    var args = [self.objectNode_.getProcessId(),
-                self.objectNode_.getRouteId()].concat(
-                    Array.prototype.slice.call(arguments));
-    chrome.webview.executeScript.apply(null, args);
+var WEB_VIEW_EXPERIMENTAL_EXT_EVENTS = {
+  'dialog': {
+    cancelable: true,
+    customHandler: function(webview, event, webviewEvent) {
+      webview.maybeSetupExtDialogEvent_(event, webviewEvent);
+    },
+    evt: createEvent('webview.onDialog'),
+    fields: ['defaultPromptText', 'messageText', 'messageType', 'url']
   }
 };
 
 /**
  * @private
  */
-WebView.prototype.maybeSetupNewWindowEvent_ = function() {
-  var NEW_WINDOW_EVENT_ATTRIBUTES = [
-    'initialHeight',
-    'initialWidth',
-    'targetUrl',
-    'windowOpenDisposition',
-    'name'
-  ];
+WebView.prototype.maybeSetupExperimentalAPI_ = function() {
+  this.setupWebRequestEvents_();
+};
 
-  var node = this.node_;
-  var objectNode = this.objectNode_;
-  objectNode.addEventListener('-internal-newwindow', function(e) {
-    var evt = new Event('newwindow', { bubbles: true, cancelable: true });
-    var detail = e.detail ? JSON.parse(e.detail) : {};
-
-    NEW_WINDOW_EVENT_ATTRIBUTES.forEach(function(attribName) {
-      evt[attribName] = detail[attribName];
-    });
-    var requestId = detail.requestId;
-    var actionTaken = false;
-
-    var validateCall = function () {
-      if (actionTaken)
-        throw new Error(ERROR_MSG_NEWWINDOW_ACTION_ALREADY_TAKEN);
-      actionTaken = true;
-    };
-
-    var window = {
-      attach: function(webview) {
-        validateCall();
-        if (!webview)
-          throw new Error(ERROR_MSG_WEBVIEW_EXPECTED);
-        // Attach happens asynchronously to give the tagWatcher an opportunity
-        // to pick up the new webview before attach operates on it, if it hasn't
-        // been attached to the DOM already.
-        // Note: Any subsequent errors cannot be exceptions because they happen
-        // asynchronously.
-        setTimeout(function() {
-          var attached =
-              objectNode['-internal-attachWindowTo'](webview, detail.windowId);
-          if (!attached) {
-            console.error('Unable to attach the new window to the provided ' +
-                'webview.');
-          }
-          // If the object being passed into attach is not a valid <webview>
-          // then we will fail and it will be treated as if the new window
-          // was rejected. The permission API plumbing is used here to clean
-          // up the state created for the new window if attaching fails.
-          objectNode['-internal-setPermission'](requestId, attached);
-        }, 0);
-      },
-      discard: function() {
-        validateCall();
-        objectNode['-internal-setPermission'](requestId, false);
+/**
+ * @private
+ */
+WebView.prototype.setupWebRequestEvents_ = function() {
+  var self = this;
+  var request = {};
+  var createWebRequestEvent = function(webRequestEvent) {
+    return function() {
+      if (!self[webRequestEvent.name + '_']) {
+        self[webRequestEvent.name + '_'] =
+            new WebRequestEvent(
+                'webview.' + webRequestEvent.name,
+                webRequestEvent.parameters,
+                webRequestEvent.extraParameters, null,
+                self.viewInstanceId_);
       }
+      return self[webRequestEvent.name + '_'];
     };
-    evt.window = window;
-    // Make browser plugin track lifetime of |window|.
-    objectNode['-internal-persistObject'](
-        window, detail.permission, requestId);
+  };
 
-    var defaultPrevented = !node.dispatchEvent(evt);
-    if (!actionTaken && !defaultPrevented) {
-      actionTaken = true;
-      // The default action is to discard the window.
-      objectNode['-internal-setPermission'](requestId, false);
+  // Populate the WebRequest events from the API definition.
+  for (var i = 0; i < webRequestSchema.events.length; ++i) {
+    var webRequestEvent = createWebRequestEvent(webRequestSchema.events[i]);
+    Object.defineProperty(
+        request,
+        webRequestSchema.events[i].name,
+        {
+          get: webRequestEvent,
+          enumerable: true
+        }
+    );
+    Object.defineProperty(
+        this.webviewNode_,
+        webRequestSchema.events[i].name,
+        {
+          get: webRequestEvent,
+          enumerable: true
+        }
+    );
+  }
+  Object.defineProperty(
+      this.webviewNode_,
+      'request',
+      {
+        value: request,
+        enumerable: true,
+        writable: false
+      }
+  );
+};
+
+/**
+ * @private
+ */
+WebView.prototype.maybeSetupExtDialogEvent_ = function(event, webviewEvent) {
+  var showWarningMessage = function(dialogType) {
+    var VOWELS = ['a', 'e', 'i', 'o', 'u'];
+    var WARNING_MSG_DIALOG_BLOCKED = '<webview>: %1 %2 dialog was blocked.';
+    var article = (VOWELS.indexOf(dialogType.charAt(0)) >= 0) ? 'An' : 'A';
+    var output = WARNING_MSG_DIALOG_BLOCKED.replace('%1', article);
+    output = output.replace('%2', dialogType);
+    console.warn(output);
+  };
+
+  var self = this;
+  var browserPluginNode = this.browserPluginNode_;
+  var webviewNode = this.webviewNode_;
+
+  var requestId = event.requestId;
+  var actionTaken = false;
+
+  var onTrackedObjectGone = function(requestId, dialogType, e) {
+    var detail = e.detail ? JSON.parse(e.detail) : {};
+    if (detail.id != requestId) {
+      return;
     }
-  });
+
+    // Avoid showing a warning message if the decision has already been made.
+    if (actionTaken) {
+      return;
+    }
+
+    chrome.webview.setPermission(self.instanceId_, requestId, false, '');
+    showWarningMessage(dialogType);
+  }
+
+  var validateCall = function() {
+    var ERROR_MSG_DIALOG_ACTION_ALREADY_TAKEN = '<webview>: ' +
+        'An action has already been taken for this "dialog" event.';
+
+    if (actionTaken) {
+      throw new Error(ERROR_MSG_DIALOG_ACTION_ALREADY_TAKEN);
+    }
+    actionTaken = true;
+  };
+
+  var dialog = {
+    ok: function(user_input) {
+      validateCall();
+      user_input = user_input || '';
+      chrome.webview.setPermission(
+          self.instanceId_, requestId, true, user_input);
+    },
+    cancel: function() {
+      validateCall();
+      chrome.webview.setPermission(self.instanceId_, requestId, false, '');
+    }
+  };
+  webviewEvent.dialog = dialog;
+
+  var defaultPrevented = !webviewNode.dispatchEvent(webviewEvent);
+  if (actionTaken) {
+    return;
+  }
+
+  if (defaultPrevented) {
+    // Tell the JavaScript garbage collector to track lifetime of |dialog| and
+    // call back when the dialog object has been collected.
+    var onTrackedObjectGoneWithRequestId =
+        $Function.bind(
+            onTrackedObjectGone, self, requestId, event.messageType);
+    browserPluginNode.addEventListener('-internal-trackedobjectgone',
+        onTrackedObjectGoneWithRequestId);
+    browserPluginNode['-internal-trackObjectLifetime'](dialog, requestId);
+  } else {
+    actionTaken = true;
+    // The default action is equivalent to canceling the dialog.
+    chrome.webview.setPermission(self.instanceId_, requestId, false, '');
+    showWarningMessage(event.messageType);
+  }
+};
+
+/**
+ * @private
+ */
+WebView.prototype.maybeGetWebviewExperimentalExtEvents_ = function() {
+  return WEB_VIEW_EXPERIMENTAL_EXT_EVENTS;
 };

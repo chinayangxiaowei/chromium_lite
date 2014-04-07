@@ -8,7 +8,7 @@
 #include <deque>
 #include <string>
 
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/prefs/testing_pref_service.h"
 #include "chrome/browser/notifications/balloon_collection_impl.h"
 #include "chrome/browser/notifications/balloon_notification_ui_manager.h"
@@ -96,7 +96,7 @@ class DesktopNotificationsTest : public testing::Test {
 
   // Create a message loop to allow notifications code to post tasks,
   // and a thread so that notifications code runs on the expected thread.
-  MessageLoopForUI message_loop_;
+  base::MessageLoopForUI message_loop_;
   content::TestBrowserThread ui_thread_;
 
   // Local state mock.
@@ -113,13 +113,6 @@ class DesktopNotificationsTest : public testing::Test {
 
   // Real DesktopNotificationService
   scoped_ptr<DesktopNotificationService> service_;
-
-#if defined(USE_ASH)
-  content::RenderViewTest::RendererWebKitPlatformSupportImplNoSandbox
-      webkit_platform_support_;
-
-  scoped_ptr<ActiveDesktopMonitor> active_desktop_monitor_;
-#endif
 
   // Contains the cumulative output of the unit test.
   static std::string log_output_;

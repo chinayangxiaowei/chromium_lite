@@ -7,8 +7,8 @@
 #include "base/logging.h"
 #include "base/mac/bundle_locations.h"
 #include "base/mac/mac_util.h"
-#include "base/memory/scoped_nsobject.h"
-#include "base/string_util.h"
+#include "base/mac/scoped_nsobject.h"
+#include "base/strings/string_util.h"
 #import "chrome/browser/ui/cocoa/browser_window_controller.h"
 #import "chrome/browser/ui/cocoa/info_bubble_view.h"
 #import "chrome/browser/ui/cocoa/tabs/tab_strip_model_observer_bridge.h"
@@ -20,7 +20,7 @@
 - (void)activateTabWithContents:(content::WebContents*)newContents
                previousContents:(content::WebContents*)oldContents
                         atIndex:(NSInteger)index
-                    userGesture:(bool)wasUserGesture;
+                         reason:(int)reason;
 @end
 
 @implementation BaseBubbleController
@@ -28,6 +28,7 @@
 @synthesize parentWindow = parentWindow_;
 @synthesize anchorPoint = anchor_;
 @synthesize bubble = bubble_;
+@synthesize shouldOpenAsKeyWindow = shouldOpenAsKeyWindow_;
 
 - (id)initWithWindowNibPath:(NSString*)nibPath
                parentWindow:(NSWindow*)parentWindow
@@ -37,6 +38,7 @@
   if ((self = [super initWithWindowNibPath:nibPath owner:self])) {
     parentWindow_ = parentWindow;
     anchor_ = anchoredAt;
+    shouldOpenAsKeyWindow_ = YES;
 
     // Watch to see if the parent window closes, and if so, close this one.
     NSNotificationCenter* center = [NSNotificationCenter defaultCenter];
@@ -69,12 +71,13 @@
   if ((self = [super initWithWindow:theWindow])) {
     parentWindow_ = parentWindow;
     anchor_ = anchoredAt;
+    shouldOpenAsKeyWindow_ = YES;
 
     DCHECK(![[self window] delegate]);
     [theWindow setDelegate:self];
 
-    scoped_nsobject<InfoBubbleView> contentView(
-        [[InfoBubbleView alloc] initWithFrame:NSMakeRect(0, 0, 0, 0)]);
+    base::scoped_nsobject<InfoBubbleView> contentView(
+        [[InfoBubbleView alloc] initWithFrame:NSZeroRect]);
     [theWindow setContentView:contentView.get()];
     bubble_ = contentView.get();
 
@@ -120,7 +123,7 @@
 
 - (NSBox*)separatorWithFrame:(NSRect)frame {
   frame.size.height = 1.0;
-  scoped_nsobject<NSBox> spacer([[NSBox alloc] initWithFrame:frame]);
+  base::scoped_nsobject<NSBox> spacer([[NSBox alloc] initWithFrame:frame]);
   [spacer setBoxType:NSBoxSeparator];
   [spacer setBorderType:NSLineBorder];
   [spacer setAlphaValue:0.2];
@@ -148,7 +151,10 @@
   NSWindow* window = [self window];  // Completes nib load.
   [self updateOriginFromAnchor];
   [parentWindow_ addChildWindow:window ordered:NSWindowAbove];
-  [window makeKeyAndOrderFront:self];
+  if (shouldOpenAsKeyWindow_)
+    [window makeKeyAndOrderFront:self];
+  else
+    [window orderFront:nil];
   [self registerKeyStateEventTap];
 }
 
@@ -279,7 +285,7 @@
 - (void)activateTabWithContents:(content::WebContents*)newContents
                previousContents:(content::WebContents*)oldContents
                         atIndex:(NSInteger)index
-                    userGesture:(bool)wasUserGesture {
+                         reason:(int)reason {
   // The user switched tabs; close.
   [self close];
 }

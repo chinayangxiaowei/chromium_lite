@@ -11,8 +11,8 @@
 #include "ash/shell_window_ids.h"
 #include "ash/test/ash_test_base.h"
 #include "ash/wm/window_util.h"
-#include "base/string16.h"
-#include "base/time.h"
+#include "base/strings/string16.h"
+#include "base/time/time.h"
 #include "ui/aura/root_window.h"
 #include "ui/base/events/event.h"
 #include "ui/base/events/event_constants.h"
@@ -54,12 +54,12 @@ class LauncherTooltipManagerTest : public AshTestBase {
 
   void ShowDelayed() {
     CreateWidget();
-    tooltip_manager_->ShowDelayed(dummy_anchor_.get(), string16());
+    tooltip_manager_->ShowDelayed(dummy_anchor_.get(), base::string16());
   }
 
   void ShowImmediately() {
     CreateWidget();
-    tooltip_manager_->ShowImmediately(dummy_anchor_.get(), string16());
+    tooltip_manager_->ShowImmediately(dummy_anchor_.get(), base::string16());
   }
 
   bool TooltipIsVisible() {
@@ -90,7 +90,7 @@ class LauncherTooltipManagerTest : public AshTestBase {
     widget_.reset(new views::Widget);
     views::Widget::InitParams params(
         views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
-    params.transparent = true;
+    params.opacity = views::Widget::InitParams::TRANSLUCENT_WINDOW;
     params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
     params.parent = Shell::GetContainer(
         Shell::GetPrimaryRootWindow(),

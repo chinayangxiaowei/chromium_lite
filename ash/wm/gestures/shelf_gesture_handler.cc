@@ -5,13 +5,14 @@
 #include "ash/wm/gestures/shelf_gesture_handler.h"
 
 #include "ash/root_window_controller.h"
+#include "ash/session_state_delegate.h"
 #include "ash/shelf/shelf_layout_manager.h"
 #include "ash/shelf/shelf_types.h"
 #include "ash/shelf/shelf_widget.h"
 #include "ash/shell.h"
-#include "ash/shell_delegate.h"
 #include "ash/system/status_area_widget.h"
 #include "ash/wm/gestures/tray_gesture_handler.h"
+#include "ash/wm/window_properties.h"
 #include "ash/wm/window_util.h"
 #include "ui/aura/window.h"
 #include "ui/compositor/layer.h"
@@ -31,20 +32,23 @@ ShelfGestureHandler::~ShelfGestureHandler() {
 
 bool ShelfGestureHandler::ProcessGestureEvent(const ui::GestureEvent& event) {
   Shell* shell = Shell::GetInstance();
-  if (!shell->delegate()->IsUserLoggedIn() ||
-      shell->delegate()->IsScreenLocked()) {
+  if (!shell->session_state_delegate()->NumberOfLoggedInUsers() ||
+      shell->session_state_delegate()->IsScreenLocked()) {
     // The gestures are disabled in the lock/login screen.
     return false;
   }
 
-  // The gesture are disabled for fullscreen windows.
-  aura::Window* active = wm::GetActiveWindow();
-  if (active && wm::IsWindowFullscreen(active))
+  // TODO(oshima): Find the root window controller from event's location.
+  RootWindowController* controller = Shell::GetPrimaryRootWindowController();
+
+  ShelfLayoutManager* shelf = controller->GetShelfLayoutManager();
+
+  // The gesture are disabled for fullscreen windows that are not in immersive
+  // mode.
+  const aura::Window* fullscreen = controller->GetFullscreenWindow();
+  if (fullscreen && !shelf->FullscreenWithMinimalChrome())
     return false;
 
-  // TODO(oshima): Find the root window controller from event's location.
-  ShelfLayoutManager* shelf =
-      Shell::GetPrimaryRootWindowController()->GetShelfLayoutManager();
   if (event.type() == ui::ET_GESTURE_SCROLL_BEGIN) {
     drag_in_progress_ = true;
     shelf->StartGestureDrag(event);
@@ -55,7 +59,7 @@ bool ShelfGestureHandler::ProcessGestureEvent(const ui::GestureEvent& event) {
     return false;
 
   if (event.type() == ui::ET_GESTURE_SCROLL_UPDATE) {
-    if (tray_handler_.get()) {
+    if (tray_handler_) {
       if (!tray_handler_->UpdateGestureDrag(event))
         tray_handler_.reset();
     } else if (shelf->UpdateGestureDrag(event) ==
@@ -70,7 +74,7 @@ bool ShelfGestureHandler::ProcessGestureEvent(const ui::GestureEvent& event) {
 
   if (event.type() == ui::ET_GESTURE_SCROLL_END ||
       event.type() == ui::ET_SCROLL_FLING_START) {
-    if (tray_handler_.get()) {
+    if (tray_handler_) {
       tray_handler_->CompleteGestureDrag(event);
       tray_handler_.reset();
     }

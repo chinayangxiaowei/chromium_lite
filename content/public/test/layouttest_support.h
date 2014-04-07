@@ -8,6 +8,7 @@
 #include "base/callback_forward.h"
 
 namespace WebKit {
+class WebDeviceMotionData;
 class WebGamepads;
 struct WebSize;
 }
@@ -20,6 +21,15 @@ namespace content {
 
 class RenderView;
 
+// Turn the browser process into layout test mode.
+void EnableBrowserLayoutTestMode();
+
+///////////////////////////////////////////////////////////////////////////////
+// The following methods are meant to be used from a renderer.
+
+// Turn a renderer into layout test mode.
+void EnableRendererLayoutTestMode();
+
 // Enable injecting of a WebTestProxy between WebViews and RenderViews.
 // |callback| is invoked with a pointer to WebTestProxyBase for each created
 // WebTestProxy.
@@ -30,19 +40,12 @@ void EnableWebTestProxyCreation(const base::Callback<
 // WebKitPlatformSupport::sampleGamepads().
 void SetMockGamepads(const WebKit::WebGamepads& pads);
 
-// Disable logging to the console from the appcache system.
-void DisableAppCacheLogging();
-
-// Enable testing support in the devtools client.
-void EnableDevToolsFrontendTesting();
+// Sets WebDeviceMotionData that should be used when registering
+// a listener through WebKitPlatformSupport::setDeviceMotionListener().
+void SetMockDeviceMotionData(const WebKit::WebDeviceMotionData& data);
 
 // Returns the length of the local session history of a render view.
 int GetLocalSessionHistoryLength(RenderView* render_view);
-
-void SetAllowOSMesaImageTransportForTesting();
-
-// Suppress sending focus events from the renderer to the browser.
-void DoNotSendFocusEvents();
 
 // Sync the current session history to the browser process.
 void SyncNavigationState(RenderView* render_view);
@@ -52,19 +55,22 @@ void SyncNavigationState(RenderView* render_view);
 // process.
 void SetFocusAndActivate(RenderView* render_view, bool enable);
 
-// When WebKit requests a size change, immediately report the new sizes back to
-// WebKit instead of waiting for the browser to acknowledge the new size.
-void EnableShortCircuitSizeUpdates();
-
 // Changes the window rect of the given render view.
 void ForceResizeRenderView(RenderView* render_view,
                            const WebKit::WebSize& new_size);
 
-// Never display error pages when a navigation fails.
-void DisableNavigationErrorPages();
-
 // Set the device scale factor and force the compositor to resize.
 void SetDeviceScaleFactor(RenderView* render_view, float factor);
+
+// Control auto resize mode.
+void EnableAutoResizeMode(RenderView* render_view,
+                          const WebKit::WebSize& min_size,
+                          const WebKit::WebSize& max_size);
+void DisableAutoResizeMode(RenderView* render_view,
+                           const WebKit::WebSize& new_size);
+
+// Forces the |render_view| to use mock media streams.
+void UseMockMediaStreams(RenderView* render_view);
 
 }  // namespace content
 

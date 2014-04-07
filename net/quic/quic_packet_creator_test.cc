@@ -30,14 +30,8 @@ namespace {
 class QuicPacketCreatorTest : public ::testing::TestWithParam<bool> {
  protected:
   QuicPacketCreatorTest()
-      : server_framer_(kQuicVersion1,
-                       QuicDecrypter::Create(kNULL),
-                       QuicEncrypter::Create(kNULL),
-                       true),
-        client_framer_(kQuicVersion1,
-                       QuicDecrypter::Create(kNULL),
-                       QuicEncrypter::Create(kNULL),
-                       false),
+      : server_framer_(QuicVersionMax(), QuicTime::Zero(), true),
+        client_framer_(QuicVersionMax(), QuicTime::Zero(), false),
         id_(1),
         sequence_number_(0),
         guid_(2),
@@ -51,7 +45,8 @@ class QuicPacketCreatorTest : public ::testing::TestWithParam<bool> {
 
   void ProcessPacket(QuicPacket* packet) {
     scoped_ptr<QuicEncryptedPacket> encrypted(
-        server_framer_.EncryptPacket(sequence_number_, *packet));
+        server_framer_.EncryptPacket(ENCRYPTION_NONE, sequence_number_,
+                                     *packet));
     server_framer_.ProcessPacket(*encrypted);
   }
 
@@ -178,13 +173,43 @@ TEST_F(QuicPacketCreatorTest, CreateStreamFrameFinOnly) {
   QuicFrame frame;
   size_t consumed = creator_.CreateStreamFrame(1u, "", 0u, true, &frame);
   EXPECT_EQ(0u, consumed);
-  CheckStreamFrame(frame, 1u, "", 0u, true);
+  CheckStreamFrame(frame, 1u, string(), 0u, true);
   delete frame.stream_frame;
 }
 
+TEST_F(QuicPacketCreatorTest, CreateAllFreeBytesForStreamFrames) {
+  QuicStreamId kStreamId = 1u;
+  QuicStreamOffset kOffset = 1u;
+  for (int i = 0; i < 100; ++i) {
+    creator_.options()->max_packet_length = i;
+    const size_t max_plaintext_size = client_framer_.GetMaxPlaintextSize(i);
+    const bool should_have_room = max_plaintext_size >
+        (QuicFramer::GetMinStreamFrameSize(
+             client_framer_.version(), kStreamId, kOffset, true) +
+         GetPacketHeaderSize(creator_.options()->send_guid_length,
+                             kIncludeVersion,
+                             creator_.options()->send_sequence_number_length,
+                             NOT_IN_FEC_GROUP));
+    ASSERT_EQ(should_have_room,
+              creator_.HasRoomForStreamFrame(kStreamId, kOffset));
+    if (should_have_room) {
+      QuicFrame frame;
+      size_t bytes_consumed = creator_.CreateStreamFrame(
+          kStreamId, "testdata", kOffset, false, &frame);
+      EXPECT_LT(0u, bytes_consumed);
+      ASSERT_TRUE(creator_.AddSavedFrame(frame));
+      SerializedPacket serialized_packet = creator_.SerializePacket();
+      ASSERT_TRUE(serialized_packet.packet);
+      delete serialized_packet.packet;
+      delete serialized_packet.retransmittable_frames;
+    }
+  }
+}
+
 TEST_F(QuicPacketCreatorTest, SerializeVersionNegotiationPacket) {
-  QuicVersionTagList versions;
-  versions.push_back(kQuicVersion1);
+  QuicPacketCreatorPeer::SetIsServer(&creator_, true);
+  QuicVersionVector versions;
+  versions.push_back(QuicVersionMax());
   scoped_ptr<QuicEncryptedPacket> encrypted(
       creator_.SerializeVersionNegotiationPacket(versions));
 
@@ -228,12 +253,18 @@ TEST_P(QuicPacketCreatorTest, CreateStreamFrameTooLarge) {
     creator_.StopSendingVersion();
   }
   // A string larger than fits into a frame.
+  size_t payload_length;
   creator_.options()->max_packet_length = GetPacketLengthForOneStream(
-      QuicPacketCreatorPeer::SendVersionInPacket(&creator_), 1);
+      client_framer_.version(),
+      QuicPacketCreatorPeer::SendVersionInPacket(&creator_),
+      NOT_IN_FEC_GROUP, &payload_length);
   QuicFrame frame;
-  size_t consumed = creator_.CreateStreamFrame(1u, "test", 0u, true, &frame);
-  EXPECT_EQ(1u, consumed);
-  CheckStreamFrame(frame, 1u, "t", 0u, false);
+  const string too_long_payload(payload_length * 2, 'a');
+  size_t consumed = creator_.CreateStreamFrame(
+      1u, too_long_payload, 0u, true, &frame);
+  EXPECT_EQ(payload_length, consumed);
+  const string payload(payload_length, 'a');
+  CheckStreamFrame(frame, 1u, payload, 0u, false);
   delete frame.stream_frame;
 }
 
@@ -246,7 +277,10 @@ TEST_P(QuicPacketCreatorTest, AddFrameAndSerialize) {
   EXPECT_FALSE(creator_.HasPendingFrames());
   EXPECT_EQ(max_plaintext_size -
             GetPacketHeaderSize(
-                QuicPacketCreatorPeer::SendVersionInPacket(&creator_)),
+                creator_.options()->send_guid_length,
+                QuicPacketCreatorPeer::SendVersionInPacket(&creator_),
+                PACKET_6BYTE_SEQUENCE_NUMBER,
+                NOT_IN_FEC_GROUP),
             creator_.BytesFree());
 
   // Add a variety of frame types and then a padding frame.
@@ -287,7 +321,10 @@ TEST_P(QuicPacketCreatorTest, AddFrameAndSerialize) {
   EXPECT_FALSE(creator_.HasPendingFrames());
   EXPECT_EQ(max_plaintext_size -
             GetPacketHeaderSize(
-                QuicPacketCreatorPeer::SendVersionInPacket(&creator_)),
+                creator_.options()->send_guid_length,
+                QuicPacketCreatorPeer::SendVersionInPacket(&creator_),
+                PACKET_6BYTE_SEQUENCE_NUMBER,
+                NOT_IN_FEC_GROUP),
             creator_.BytesFree());
 }
 

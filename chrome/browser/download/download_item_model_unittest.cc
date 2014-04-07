@@ -8,10 +8,11 @@
 
 #include "base/i18n/rtl.h"
 #include "base/logging.h"
-#include "base/message_loop.h"
-#include "base/string16.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/string16.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
+#include "chrome/common/extensions/extension.h"
 #include "content/public/test/mock_download_item.h"
 #include "grit/generated_resources.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -66,7 +67,6 @@ class DownloadItemModelTest : public testing::Test {
   void SetupDownloadItemDefaults() {
     ON_CALL(item_, GetReceivedBytes()).WillByDefault(Return(1));
     ON_CALL(item_, GetTotalBytes()).WillByDefault(Return(2));
-    ON_CALL(item_, IsInProgress()).WillByDefault(Return(true));
     ON_CALL(item_, TimeRemaining(_)).WillByDefault(Return(false));
     ON_CALL(item_, GetMimeType()).WillByDefault(Return("text/html"));
     ON_CALL(item_, AllDataSaved()).WillByDefault(Return(false));
@@ -93,9 +93,6 @@ class DownloadItemModelTest : public testing::Test {
             (reason == content::DOWNLOAD_INTERRUPT_REASON_NONE) ?
                 DownloadItem::IN_PROGRESS :
                 DownloadItem::INTERRUPTED));
-    EXPECT_CALL(item_, IsInProgress())
-        .WillRepeatedly(Return(
-            reason == content::DOWNLOAD_INTERRUPT_REASON_NONE));
   }
 
   content::MockDownloadItem& item() {
@@ -362,30 +359,35 @@ TEST_F(DownloadItemModelTest, ShouldShowInShelf) {
 TEST_F(DownloadItemModelTest, ShouldRemoveFromShelfWhenComplete) {
   const struct TestCase {
     DownloadItem::DownloadState state;
-    bool is_dangerous;
-    bool is_auto_open;  // Either an extension install, temporary, open when
-                        // complete or open based on extension.
+    bool is_dangerous;  // Expectation for IsDangerous().
+    bool is_auto_open;  // Expectation for GetOpenWhenComplete().
+    bool auto_opened;   // Whether the download was successfully
+                        // auto-opened. Expecation for GetAutoOpened().
     bool expected_result;
   } kTestCases[] = {
-    // All the valid combinations of state, is_dangerous and is_auto_open.
+    // All the valid combinations of state, is_dangerous, is_auto_open and
+    // auto_opened.
     //
     //                              .--- Is dangerous.
     //                             |       .--- Auto open or temporary.
-    //                             |      |      .--- Expected result.
-    { DownloadItem::IN_PROGRESS, false, false, false },
-    { DownloadItem::IN_PROGRESS, false, true , true  },
-    { DownloadItem::IN_PROGRESS, true , false, false },
-    { DownloadItem::IN_PROGRESS, true , true , false },
-    { DownloadItem::COMPLETE,    false, false, false },
-    { DownloadItem::COMPLETE,    false, true , true  },
-    { DownloadItem::CANCELLED,   false, false, false },
-    { DownloadItem::CANCELLED,   false, true , false },
-    { DownloadItem::CANCELLED,   true , false, false },
-    { DownloadItem::CANCELLED,   true , true , false },
-    { DownloadItem::INTERRUPTED, false, false, false },
-    { DownloadItem::INTERRUPTED, false, true , false },
-    { DownloadItem::INTERRUPTED, true , false, false },
-    { DownloadItem::INTERRUPTED, true , true , false }
+    //                             |      |      .--- Auto opened.
+    //                             |      |      |      .--- Expected result.
+    { DownloadItem::IN_PROGRESS, false, false, false, false},
+    { DownloadItem::IN_PROGRESS, false, true , false, true },
+    { DownloadItem::IN_PROGRESS, true , false, false, false},
+    { DownloadItem::IN_PROGRESS, true , true , false, false},
+    { DownloadItem::COMPLETE,    false, false, false, false},
+    { DownloadItem::COMPLETE,    false, true , false, false},
+    { DownloadItem::COMPLETE,    false, false, true , true },
+    { DownloadItem::COMPLETE,    false, true , true , true },
+    { DownloadItem::CANCELLED,   false, false, false, false},
+    { DownloadItem::CANCELLED,   false, true , false, false},
+    { DownloadItem::CANCELLED,   true , false, false, false},
+    { DownloadItem::CANCELLED,   true , true , false, false},
+    { DownloadItem::INTERRUPTED, false, false, false, false},
+    { DownloadItem::INTERRUPTED, false, true , false, false},
+    { DownloadItem::INTERRUPTED, true , false, false, false},
+    { DownloadItem::INTERRUPTED, true , true , false, false}
   };
 
   SetupDownloadItemDefaults();
@@ -396,16 +398,10 @@ TEST_F(DownloadItemModelTest, ShouldRemoveFromShelfWhenComplete) {
         .WillRepeatedly(Return(test_case.is_auto_open));
     EXPECT_CALL(item(), GetState())
         .WillRepeatedly(Return(test_case.state));
-    EXPECT_CALL(item(), IsCancelled())
-        .WillRepeatedly(Return(test_case.state == DownloadItem::CANCELLED));
-    EXPECT_CALL(item(), IsComplete())
-        .WillRepeatedly(Return(test_case.state == DownloadItem::COMPLETE));
-    EXPECT_CALL(item(), IsInProgress())
-        .WillRepeatedly(Return(test_case.state == DownloadItem::IN_PROGRESS));
-    EXPECT_CALL(item(), IsInterrupted())
-        .WillRepeatedly(Return(test_case.state == DownloadItem::INTERRUPTED));
     EXPECT_CALL(item(), IsDangerous())
         .WillRepeatedly(Return(test_case.is_dangerous));
+    EXPECT_CALL(item(), GetAutoOpened())
+        .WillRepeatedly(Return(test_case.auto_opened));
 
     EXPECT_EQ(test_case.expected_result,
               model().ShouldRemoveFromShelfWhenComplete())

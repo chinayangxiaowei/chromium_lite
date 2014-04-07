@@ -4,14 +4,14 @@
 
 #include "chrome/common/startup_metric_utils.h"
 
-#include "base/hash_tables.h"
+#include "base/containers/hash_tables.h"
 #include "base/logging.h"
 #include "base/metrics/histogram.h"
 #include "base/metrics/histogram_base.h"
 #include "base/metrics/statistics_recorder.h"
 #include "base/synchronization/lock.h"
 #include "base/sys_info.h"
-#include "base/time.h"
+#include "base/time/time.h"
 
 namespace {
 
@@ -65,7 +65,7 @@ const base::Time MainEntryStartTime() {
   return *MainEntryPointTimeInternal();
 }
 
-void OnBrowserStartupComplete() {
+void OnBrowserStartupComplete(bool is_first_run) {
   // Bail if uptime < 7 minutes, to filter out cases where Chrome may have been
   // autostarted and the machine is under io pressure.
   const int64 kSevenMinutesInMilliseconds =
@@ -85,9 +85,15 @@ void OnBrowserStartupComplete() {
   //   cases where Chrome is auto-started and IO is heavily loaded.
   base::TimeDelta startup_time_from_main_entry =
       base::Time::Now() - MainEntryStartTime();
-  UMA_HISTOGRAM_LONG_TIMES(
-      "Startup.BrowserMessageLoopStartTimeFromMainEntry",
-      startup_time_from_main_entry);
+  if (is_first_run) {
+    UMA_HISTOGRAM_LONG_TIMES(
+        "Startup.BrowserMessageLoopStartTimeFromMainEntry.FirstRun",
+        startup_time_from_main_entry);
+  } else {
+    UMA_HISTOGRAM_LONG_TIMES(
+        "Startup.BrowserMessageLoopStartTimeFromMainEntry",
+        startup_time_from_main_entry);
+  }
 
   // Record histograms for the subsystem times for startups > 10 seconds.
   const base::TimeDelta kTenSeconds = base::TimeDelta::FromSeconds(10);

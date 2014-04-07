@@ -13,7 +13,7 @@
 #include "base/file_util.h"
 #include "base/logging.h"
 #include "base/path_service.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "content/common/edit_command.h"
 #include "content/public/browser/native_web_keyboard_event.h"
 #include "content/public/common/content_paths.h"
@@ -34,7 +34,7 @@ class GtkKeyBindingsHandlerTest : public testing::Test {
     base::FilePath gtkrc;
     PathService::Get(DIR_TEST_DATA, &gtkrc);
     gtkrc = gtkrc.AppendASCII("gtk_key_bindings_test_gtkrc");
-    EXPECT_TRUE(file_util::PathExists(gtkrc));
+    EXPECT_TRUE(base::PathExists(gtkrc));
 
     gtk_rc_parse(gtkrc.value().c_str());
 

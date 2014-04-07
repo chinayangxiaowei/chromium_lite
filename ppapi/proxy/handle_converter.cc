@@ -5,6 +5,7 @@
 #include "ppapi/proxy/handle_converter.h"
 
 #include <vector>
+#include "base/bind.h"
 #include "ipc/ipc_message.h"
 #include "ipc/ipc_message_macros.h"
 #include "ppapi/proxy/ppapi_messages.h"
@@ -44,18 +45,24 @@ void ConvertHandlesInParam(const ppapi::proxy::SerializedHandle& handle,
     WriteHandle((*handle_index)++, handle, msg);
 }
 
+void HandleWriter(int* handle_index,
+                  IPC::Message* m,
+                  const ppapi::proxy::SerializedHandle& handle) {
+  WriteHandle((*handle_index)++, handle, m);
+}
+
 void ConvertHandlesInParam(const ppapi::proxy::SerializedVar& var,
                            Handles* handles,
                            IPC::Message* msg,
                            int* handle_index) {
-  ppapi::proxy::SerializedHandle *handle = var.GetPluginShmemHandle();
-  if (handle) {
-    handles->push_back(*handle);
-    if (msg) {
-      var.WriteRawVarHeader(msg);
-      WriteHandle((*handle_index)++, *handle, msg);
-    }
-  }
+  std::vector<ppapi::proxy::SerializedHandle*> var_handles = var.GetHandles();
+  if (var_handles.empty())
+    return;
+
+  for (size_t i = 0; i < var_handles.size(); ++i)
+    handles->push_back(*var_handles[i]);
+  if (msg)
+    var.WriteDataToMessage(msg, base::Bind(&HandleWriter, handle_index));
 }
 
 // For PpapiMsg_ResourceReply and the reply to PpapiHostMsg_ResourceSyncCall,
@@ -249,7 +256,7 @@ bool HandleConverter::ConvertNativeHandlesToPosix(
       pending_sync_msgs_.erase(iter);
       switch (type) {
         CASE_FOR_REPLY(PpapiHostMsg_PPBGraphics3D_GetTransferBuffer)
-        CASE_FOR_REPLY(PpapiHostMsg_PPBImageData_CreateNaCl)
+        CASE_FOR_REPLY(PpapiHostMsg_PPBImageData_CreateSimple)
         CASE_FOR_REPLY(PpapiHostMsg_ResourceSyncCall)
         CASE_FOR_REPLY(PpapiHostMsg_SharedMemory_CreateSharedMemory)
         default:

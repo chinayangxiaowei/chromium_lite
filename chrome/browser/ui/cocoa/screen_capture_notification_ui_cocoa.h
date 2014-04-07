@@ -7,7 +7,7 @@
 #include <string>
 
 #include "base/callback.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "chrome/browser/ui/screen_capture_notification_ui.h"
 
 // Controller for the screen capture notification window which allows the user
@@ -15,13 +15,13 @@
 @interface ScreenCaptureNotificationController : NSWindowController {
  @private
   base::Closure stop_callback_;
-  string16 title_;
+  string16 text_;
   IBOutlet NSTextField* statusField_;
   IBOutlet NSButton* stopButton_;
 }
 
 - (id)initWithCallback:(const base::Closure&)stop_callback
-                 title:(const string16&)title;
+                  text:(const string16&)text;
 - (IBAction)stopSharing:(id)sender;
 @end
 

@@ -18,13 +18,14 @@ class JniDependencyFactory;
 
 class AwContentBrowserClient : public content::ContentBrowserClient {
  public:
-  static AwContentBrowserClient* FromContentBrowserClient(
-      content::ContentBrowserClient* client);
+  // This is what AwContentBrowserClient::GetAcceptLangs uses.
+  static std::string GetAcceptLangsImpl();
+
+  // Deprecated: use AwBrowserContext::GetDefault() instead.
+  static AwBrowserContext* GetAwBrowserContext();
 
   AwContentBrowserClient(JniDependencyFactory* native_factory);
   virtual ~AwContentBrowserClient();
-
-  AwBrowserContext* GetAwBrowserContext();
 
   // Overriden methods from ContentBrowserClient.
   virtual void AddCertificate(net::URLRequest* request,
@@ -98,7 +99,7 @@ class AwContentBrowserClient : public content::ContentBrowserClient {
       bool overridable,
       bool strict_enforcement,
       const base::Callback<void(bool)>& callback,
-      bool* cancel_request) OVERRIDE;
+      content::CertificateRequestResultType* result) OVERRIDE;
   virtual WebKit::WebNotificationPresenter::Permission
       CheckDesktopNotificationPermission(
           const GURL& source_url,
@@ -113,13 +114,21 @@ class AwContentBrowserClient : public content::ContentBrowserClient {
       int render_process_id,
       int render_view_id,
       int notification_id) OVERRIDE;
-  virtual bool CanCreateWindow(
-      const GURL& opener_url,
-      const GURL& source_origin,
-      WindowContainerType container_type,
-      content::ResourceContext* context,
-      int render_process_id,
-      bool* no_javascript_access) OVERRIDE;
+  virtual bool CanCreateWindow(const GURL& opener_url,
+                               const GURL& opener_top_level_frame_url,
+                               const GURL& source_origin,
+                               WindowContainerType container_type,
+                               const GURL& target_url,
+                               const content::Referrer& referrer,
+                               WindowOpenDisposition disposition,
+                               const WebKit::WebWindowFeatures& features,
+                               bool user_gesture,
+                               bool opener_suppressed,
+                               content::ResourceContext* context,
+                               int render_process_id,
+                               bool is_guest,
+                               int opener_id,
+                               bool* no_javascript_access) OVERRIDE;
   virtual std::string GetWorkerProcessTitle(
       const GURL& url,
       content::ResourceContext* context) OVERRIDE;
@@ -130,7 +139,6 @@ class AwContentBrowserClient : public content::ContentBrowserClient {
   virtual void UpdateInspectorSetting(content::RenderViewHost* rvh,
                                       const std::string& key,
                                       const std::string& value) OVERRIDE;
-  virtual void ClearInspectorSettings(content::RenderViewHost* rvh) OVERRIDE;
   virtual void ClearCache(content::RenderViewHost* rvh) OVERRIDE;
   virtual void ClearCookies(content::RenderViewHost* rvh) OVERRIDE;
   virtual base::FilePath GetDefaultDownloadDirectory() OVERRIDE;
@@ -140,6 +148,7 @@ class AwContentBrowserClient : public content::ContentBrowserClient {
   virtual bool AllowPepperSocketAPI(
       content::BrowserContext* browser_context,
       const GURL& url,
+      bool private_api,
       const content::SocketPermissionRequest& params) OVERRIDE;
 
  private:

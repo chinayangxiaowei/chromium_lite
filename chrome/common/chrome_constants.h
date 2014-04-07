@@ -40,15 +40,12 @@ extern const base::FilePath::CharType* const kHelperFlavorSuffixes[];
 extern const base::FilePath::CharType kMetroDriverDll[];
 extern const wchar_t kStatusTrayWindowClass[];
 #endif  // defined(OS_WIN)
-extern const wchar_t kMessageWindowClass[];
 extern const wchar_t kCrashReportLog[];
 extern const wchar_t kTestingInterfaceDLL[];
 extern const char    kInitialProfile[];
 extern const char    kMultiProfileDirPrefix[];
+extern const base::FilePath::CharType kGuestProfileDir[];
 extern const wchar_t kBrowserResourcesDll[];
-extern const wchar_t kNaClAppName[];
-extern const base::FilePath::CharType kExtensionFileExtension[];
-extern const base::FilePath::CharType kExtensionKeyFileExtension[];
 
 // filenames
 #if defined(OS_ANDROID)
@@ -93,21 +90,16 @@ extern const base::FilePath::CharType kPepperFlashPluginFilename[];
 // directory names
 extern const wchar_t kUserDataDirname[];
 
-#if defined(OS_CHROMEOS)
-extern const base::FilePath::CharType kDriveCacheDirname[];
-#endif  // defined(OS_CHROMEOS)
-
 extern const bool kRecordModeEnabled;
 
 // The language code used when the language of a page could not be detected.
 // (Matches what the CLD -Compact Language Detection- library reports.)
 extern const char* const kUnknownLanguageCode;
 
-// If another javascript message box is displayed within
-// kJavascriptMessageExpectedDelay of a previous javascript message box being
-// dismissed, display an option to suppress future message boxes from this
-// contents.
-extern const int kJavascriptMessageExpectedDelay;
+// If a WebContents is impolite and displays a second JavaScript alert within
+// kJavaScriptMessageExpectedDelay of a previous JavaScript alert being
+// dismissed, display an option to suppress future alerts from this WebContents.
+extern const int kJavaScriptMessageExpectedDelay;
 
 // Are touch icons enabled? False by default.
 extern const bool kEnableTouchIcon;
@@ -139,6 +131,16 @@ extern const wchar_t kMetroGetCurrentTabInfoMessage[];
 extern const wchar_t kMetroRegistryPath[];
 extern const wchar_t kLaunchModeValue[];
 #endif
+
+#if defined(OS_CHROMEOS)
+// Chrome OS profile directories have custom prefix.
+// Profile path format: [user_data_dir]/u-[$hash]
+// Ex.: /home/chronos/u-0123456789
+extern const char kProfileDirPrefix[];
+#endif
+
+// Used to identify the application to the system AV function in Windows.
+extern const char kApplicationClientIDStringForAVScanning[];
 
 }  // namespace chrome
 

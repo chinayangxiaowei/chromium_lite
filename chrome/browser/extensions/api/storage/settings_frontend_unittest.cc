@@ -6,14 +6,14 @@
 #include "base/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
-#include "base/stringprintf.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/stringprintf.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/api/storage/leveldb_settings_storage_factory.h"
 #include "chrome/browser/extensions/api/storage/settings_frontend.h"
 #include "chrome/browser/extensions/api/storage/settings_namespace.h"
 #include "chrome/browser/extensions/api/storage/settings_test_util.h"
 #include "chrome/browser/value_store/value_store.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "content/public/test/test_browser_thread.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -40,7 +40,7 @@ scoped_ptr<Value> CreateKilobyte() {
 
 // Creates a megabyte of data.
 scoped_ptr<Value> CreateMegabyte() {
-  ListValue* megabyte = new ListValue();
+  base::ListValue* megabyte = new base::ListValue();
   for (int i = 0; i < 1000; ++i) {
     megabyte->Append(CreateKilobyte().release());
   }
@@ -51,10 +51,10 @@ scoped_ptr<Value> CreateMegabyte() {
 
 class ExtensionSettingsFrontendTest : public testing::Test {
  public:
-   ExtensionSettingsFrontendTest()
+  ExtensionSettingsFrontendTest()
       : storage_factory_(new util::ScopedSettingsStorageFactory()),
-        ui_thread_(BrowserThread::UI, MessageLoop::current()),
-        file_thread_(BrowserThread::FILE, MessageLoop::current()) {}
+        ui_thread_(BrowserThread::UI, base::MessageLoop::current()),
+        file_thread_(BrowserThread::FILE, base::MessageLoop::current()) {}
 
   virtual void SetUp() OVERRIDE {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
@@ -82,7 +82,7 @@ class ExtensionSettingsFrontendTest : public testing::Test {
   scoped_refptr<util::ScopedSettingsStorageFactory> storage_factory_;
 
  private:
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
   content::TestBrowserThread ui_thread_;
   content::TestBrowserThread file_thread_;
 };
@@ -141,7 +141,7 @@ TEST_F(ExtensionSettingsFrontendTest, SettingsClearedOnUninstall) {
 
   // This would be triggered by extension uninstall via a DataDeleter.
   frontend_->DeleteStorageSoon(id);
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
 
   // The storage area may no longer be valid post-uninstall, so re-request.
   storage = util::GetStorage(id, frontend_.get());
@@ -165,7 +165,7 @@ TEST_F(ExtensionSettingsFrontendTest, LeveldbDatabaseDeletedFromDiskOnClear) {
     StringValue bar("bar");
     ValueStore::WriteResult result = storage->Set(DEFAULTS, "foo", bar);
     ASSERT_FALSE(result->HasError());
-    EXPECT_TRUE(file_util::PathExists(temp_dir_.path()));
+    EXPECT_TRUE(base::PathExists(temp_dir_.path()));
   }
 
   // Should need to both clear the database and delete the frontend for the
@@ -173,15 +173,15 @@ TEST_F(ExtensionSettingsFrontendTest, LeveldbDatabaseDeletedFromDiskOnClear) {
   {
     ValueStore::WriteResult result = storage->Clear();
     ASSERT_FALSE(result->HasError());
-    EXPECT_TRUE(file_util::PathExists(temp_dir_.path()));
+    EXPECT_TRUE(base::PathExists(temp_dir_.path()));
   }
 
   frontend_.reset();
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
   // TODO(kalman): Figure out why this fails, despite appearing to work.
   // Leaving this commented out rather than disabling the whole test so that the
   // deletion code paths are at least exercised.
-  //EXPECT_FALSE(file_util::PathExists(temp_dir_.path()));
+  //EXPECT_FALSE(base::PathExists(temp_dir_.path()));
 }
 
 TEST_F(ExtensionSettingsFrontendTest,
@@ -257,8 +257,17 @@ static void UnlimitedLocalStorageTestCallback(ValueStore* local_storage) {
       ValueStore::DEFAULTS, "WontError", *megabyte)->HasError());
 }
 
+#if defined(OS_WIN)
+// See: http://crbug.com/227296
+#define MAYBE_UnlimitedStorageForLocalButNotSync \
+    DISABLED_UnlimitedStorageForLocalButNotSync
+#else
+#define MAYBE_UnlimitedStorageForLocalButNotSync \
+    UnlimitedStorageForLocalButNotSync
+#endif
+
 TEST_F(ExtensionSettingsFrontendTest,
-       UnlimitedStorageForLocalButNotSync) {
+       MAYBE_UnlimitedStorageForLocalButNotSync) {
   const std::string id = "ext";
   std::set<std::string> permissions;
   permissions.insert("unlimitedStorage");
@@ -273,7 +282,7 @@ TEST_F(ExtensionSettingsFrontendTest,
   frontend_->RunWithStorage(
       id, settings::LOCAL, base::Bind(&UnlimitedLocalStorageTestCallback));
 
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
 }
 
 }  // namespace extensions

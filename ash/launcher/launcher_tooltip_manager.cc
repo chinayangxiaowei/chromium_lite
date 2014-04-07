@@ -10,9 +10,9 @@
 #include "ash/shell_window_ids.h"
 #include "ash/wm/window_animations.h"
 #include "base/bind.h"
-#include "base/message_loop.h"
-#include "base/time.h"
-#include "base/timer.h"
+#include "base/message_loop/message_loop.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "ui/aura/root_window.h"
 #include "ui/aura/window.h"
 #include "ui/base/events/event.h"
@@ -50,10 +50,10 @@ class LauncherTooltipManager::LauncherTooltipBubble
     : public views::BubbleDelegateView {
  public:
   LauncherTooltipBubble(views::View* anchor,
-                        views::BubbleBorder::ArrowLocation arrow_location,
+                        views::BubbleBorder::Arrow arrow,
                         LauncherTooltipManager* host);
 
-  void SetText(const string16& text);
+  void SetText(const base::string16& text);
   void Close();
 
  private:
@@ -71,10 +71,12 @@ class LauncherTooltipManager::LauncherTooltipBubble
 
 LauncherTooltipManager::LauncherTooltipBubble::LauncherTooltipBubble(
     views::View* anchor,
-    views::BubbleBorder::ArrowLocation arrow_location,
+    views::BubbleBorder::Arrow arrow,
     LauncherTooltipManager* host)
-    : views::BubbleDelegateView(anchor, arrow_location),
+    : views::BubbleDelegateView(anchor, arrow),
       host_(host) {
+  // Make sure that the bubble follows the animation of the shelf.
+  set_move_with_anchor(true);
   gfx::Insets insets = gfx::Insets(kArrowOffsetTopBottom,
                                    kArrowOffsetLeftRight,
                                    kArrowOffsetTopBottom,
@@ -84,7 +86,7 @@ LauncherTooltipManager::LauncherTooltipBubble::LauncherTooltipBubble(
   if (anchor->border())
     insets += anchor->border()->GetInsets();
 
-  set_anchor_insets(insets);
+  set_anchor_view_insets(insets);
   set_close_on_esc(false);
   set_close_on_deactivate(false);
   set_use_focusless(true);
@@ -103,13 +105,12 @@ LauncherTooltipManager::LauncherTooltipBubble::LauncherTooltipBubble(
   label_ = new views::Label;
   label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   label_->SetEnabledColor(kTooltipTextColor);
-  label_->SetElideBehavior(views::Label::ELIDE_AT_END);
   AddChildView(label_);
   views::BubbleDelegateView::CreateBubble(this);
 }
 
 void LauncherTooltipManager::LauncherTooltipBubble::SetText(
-    const string16& text) {
+    const base::string16& text) {
   label_->SetText(text);
   SizeToContents();
 }
@@ -143,7 +144,8 @@ LauncherTooltipManager::LauncherTooltipManager(
       widget_(NULL),
       anchor_(NULL),
       shelf_layout_manager_(shelf_layout_manager),
-      launcher_view_(launcher_view) {
+      launcher_view_(launcher_view),
+      weak_factory_(this) {
   if (shelf_layout_manager)
     shelf_layout_manager->AddObserver(this);
   if (Shell::HasInstance())
@@ -160,7 +162,7 @@ LauncherTooltipManager::~LauncherTooltipManager() {
 }
 
 void LauncherTooltipManager::ShowDelayed(views::View* anchor,
-                                         const string16& text) {
+                                         const base::string16& text) {
   if (view_) {
     if (timer_.get() && timer_->IsRunning()) {
       return;
@@ -178,7 +180,7 @@ void LauncherTooltipManager::ShowDelayed(views::View* anchor,
 }
 
 void LauncherTooltipManager::ShowImmediately(views::View* anchor,
-                                             const string16& text) {
+                                             const base::string16& text) {
   if (view_) {
     if (timer_.get() && timer_->IsRunning())
       StopTimer();
@@ -209,7 +211,7 @@ void LauncherTooltipManager::OnBubbleClosed(views::BubbleDelegateView* view) {
   }
 }
 
-void LauncherTooltipManager::UpdateArrowLocation() {
+void LauncherTooltipManager::UpdateArrow() {
   if (view_) {
     CancelHidingAnimation();
     Close();
@@ -227,14 +229,7 @@ void LauncherTooltipManager::ResetTimer() {
   if (shelf_layout_manager_ && !shelf_layout_manager_->IsVisible())
     return;
 
-  base::OneShotTimer<LauncherTooltipManager>* new_timer =
-      new base::OneShotTimer<LauncherTooltipManager>();
-  new_timer->Start(
-      FROM_HERE,
-      base::TimeDelta::FromMilliseconds(kTooltipAppearanceDelay),
-      this,
-      &LauncherTooltipManager::ShowInternal);
-  timer_.reset(new_timer);
+  CreateTimer(kTooltipAppearanceDelay);
 }
 
 void LauncherTooltipManager::StopTimer() {
@@ -248,9 +243,13 @@ bool LauncherTooltipManager::IsVisible() {
   return widget_ && widget_->IsVisible();
 }
 
+void LauncherTooltipManager::CreateZeroDelayTimerForTest() {
+  CreateTimer(0);
+}
+
 void LauncherTooltipManager::OnMouseEvent(ui::MouseEvent* event) {
-  DCHECK(event->target());
   DCHECK(event);
+  DCHECK(event->target());
   if (!widget_ || !widget_->IsVisible())
     return;
 
@@ -268,13 +267,7 @@ void LauncherTooltipManager::OnMouseEvent(ui::MouseEvent* event) {
       target, launcher_view_->GetWidget()->GetNativeWindow(),
       &location_in_launcher_view);
 
-  gfx::Point location_on_screen = event->location();
-  aura::Window::ConvertPointToTarget(
-      target, target->GetRootWindow(), &location_on_screen);
-  gfx::Rect bubble_rect = widget_->GetWindowBoundsInScreen();
-
-  if (launcher_view_->ShouldHideTooltip(location_in_launcher_view) &&
-      !bubble_rect.Contains(location_on_screen)) {
+  if (launcher_view_->ShouldHideTooltip(location_in_launcher_view)) {
     // Because this mouse event may arrive to |view_|, here we just schedule
     // the closing event rather than directly calling Close().
     CloseSoon();
@@ -332,9 +325,9 @@ void LauncherTooltipManager::CancelHidingAnimation() {
 }
 
 void LauncherTooltipManager::CloseSoon() {
-  MessageLoopForUI::current()->PostTask(
+  base::MessageLoopForUI::current()->PostTask(
       FROM_HERE,
-      base::Bind(&LauncherTooltipManager::Close, base::Unretained(this)));
+      base::Bind(&LauncherTooltipManager::Close, weak_factory_.GetWeakPtr()));
 }
 
 void LauncherTooltipManager::ShowInternal() {
@@ -345,19 +338,19 @@ void LauncherTooltipManager::ShowInternal() {
 }
 
 void LauncherTooltipManager::CreateBubble(views::View* anchor,
-                                          const string16& text) {
+                                          const base::string16& text) {
   DCHECK(!view_);
 
   anchor_ = anchor;
   text_ = text;
-  views::BubbleBorder::ArrowLocation arrow_location =
+  views::BubbleBorder::Arrow arrow =
       shelf_layout_manager_->SelectValueForShelfAlignment(
           views::BubbleBorder::BOTTOM_CENTER,
           views::BubbleBorder::LEFT_CENTER,
           views::BubbleBorder::RIGHT_CENTER,
           views::BubbleBorder::TOP_CENTER);
 
-  view_ = new LauncherTooltipBubble(anchor, arrow_location, this);
+  view_ = new LauncherTooltipBubble(anchor, arrow, this);
   widget_ = view_->GetWidget();
   view_->SetText(text_);
 
@@ -366,6 +359,17 @@ void LauncherTooltipManager::CreateBubble(views::View* anchor,
       native_view, views::corewm::WINDOW_VISIBILITY_ANIMATION_TYPE_VERTICAL);
   views::corewm::SetWindowVisibilityAnimationTransition(
       native_view, views::corewm::ANIMATE_HIDE);
+}
+
+void LauncherTooltipManager::CreateTimer(int delay_in_ms) {
+  base::OneShotTimer<LauncherTooltipManager>* new_timer =
+      new base::OneShotTimer<LauncherTooltipManager>();
+  new_timer->Start(
+      FROM_HERE,
+      base::TimeDelta::FromMilliseconds(delay_in_ms),
+      this,
+      &LauncherTooltipManager::ShowInternal);
+  timer_.reset(new_timer);
 }
 
 }  // namespace internal

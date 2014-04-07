@@ -53,10 +53,11 @@ class BrowserNonClientFrameViewAsh
   // views::View overrides:
   virtual void OnPaint(gfx::Canvas* canvas) OVERRIDE;
   virtual void Layout() OVERRIDE;
-  virtual std::string GetClassName() const OVERRIDE;
+  virtual const char* GetClassName() const OVERRIDE;
   virtual bool HitTestRect(const gfx::Rect& rect) const OVERRIDE;
   virtual void GetAccessibleState(ui::AccessibleViewState* state) OVERRIDE;
   virtual gfx::Size GetMinimumSize() OVERRIDE;
+  virtual void OnThemeChanged() OVERRIDE;
 
   // views::ButtonListener overrides:
   virtual void ButtonPressed(views::Button* sender,
@@ -68,13 +69,21 @@ class BrowserNonClientFrameViewAsh
 
  private:
   FRIEND_TEST_ALL_PREFIXES(BrowserNonClientFrameViewAshTest, WindowHeader);
-  FRIEND_TEST_ALL_PREFIXES(BrowserNonClientFrameViewAshTest, ImmersiveMode);
+  FRIEND_TEST_ALL_PREFIXES(BrowserNonClientFrameViewAshTest,
+                           NonImmersiveFullscreen);
+  FRIEND_TEST_ALL_PREFIXES(BrowserNonClientFrameViewAshTest,
+                           ImmersiveFullscreen);
 
   // Distance between top of window and client area.
   int NonClientTopBorderHeight(bool force_restored) const;
 
   // Returns true if we should use a short header, such as for popup windows.
   bool UseShortHeader() const;
+
+  // Returns true if we should use a super short header with light bars instead
+  // of regular tabs. This header is used in immersive fullscreen when the
+  // top-of-window views are not revealed.
+  bool UseImmersiveLightbarHeaderStyle() const;
 
   // Layout the incognito icon.
   void LayoutAvatar();
@@ -83,16 +92,24 @@ class BrowserNonClientFrameViewAsh
   // need their frames painted.
   bool ShouldPaint() const;
 
+  // Paints the header background when the frame is in immersive fullscreen and
+  // tab light bar is visible.
+  void PaintImmersiveLightbarStyleHeader(gfx::Canvas* canvas);
+
   void PaintToolbarBackground(gfx::Canvas* canvas);
 
   // Windows without a toolbar need to draw their own line under the header,
   // above the content area.
   void PaintContentEdge(gfx::Canvas* canvas);
 
-  // Returns the correct image id for the frame header based on activation
-  // state and incognito mode.
+  // Returns the id of the header frame image based on the browser type,
+  // activation state and incognito mode.
   int GetThemeFrameImageId() const;
-  const gfx::ImageSkia* GetThemeFrameOverlayImage() const;
+
+  // Returns the id of the header frame overlay image based on the activation
+  // state and incognito mode.
+  // Returns 0 if no overlay image should be used.
+  int GetThemeFrameOverlayImageId() const;
 
   // Window controls. The |size_button_| either toggles maximized or toggles
   // minimized. The exact behavior is determined by |size_button_minimizes_|.

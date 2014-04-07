@@ -3,11 +3,11 @@
 // found in the LICENSE file.
 
 #include "base/callback.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/test/base/interactive_test_utils.h"
-#include "chrome/test/base/ui_controls.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chrome/test/base/view_event_test_base.h"
+#include "ui/base/test/ui_controls.h"
 #include "ui/views/controls/button/menu_button.h"
 #include "ui/views/controls/button/menu_button_listener.h"
 #include "ui/views/controls/menu/menu_controller.h"
@@ -81,6 +81,7 @@ class MenuItemViewTestBase : public ViewEventTestBase,
         button_,
         bounds,
         views::MenuItemView::TOPLEFT,
+        ui::MENU_SOURCE_NONE,
         views::MenuRunner::HAS_MNEMONICS));
   }
 
@@ -216,6 +217,7 @@ class MenuItemViewTestInsert : public MenuItemViewTestBase {
     inserted_item_ = menu_->AddMenuItemAt(INSERT_INDEX,
                                           1000,
                                           ASCIIToUTF16("inserted item"),
+                                          string16(),
                                           gfx::ImageSkia(),
                                           views::MenuItemView::NORMAL,
                                           ui::NORMAL_SEPARATOR);
@@ -327,6 +329,7 @@ class MenuItemViewTestInsertWithSubmenu : public MenuItemViewTestBase {
     inserted_item_ = menu_->AddMenuItemAt(INSERT_INDEX,
                                           1000,
                                           ASCIIToUTF16("inserted item"),
+                                          string16(),
                                           gfx::ImageSkia(),
                                           views::MenuItemView::NORMAL,
                                           ui::NORMAL_SEPARATOR);

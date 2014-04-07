@@ -5,7 +5,7 @@
 #include "jingle/glue/fake_socket_factory.h"
 
 #include "base/bind.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "jingle/glue/utils.h"
 #include "third_party/libjingle/source/talk/base/asyncsocket.h"
 
@@ -115,15 +115,14 @@ void FakeUDPPacketSocket::DeliverPacket(const net::IPEndPoint& from,
 }
 
 FakeSocketManager::FakeSocketManager()
-    : message_loop_(MessageLoop::current()) {
-}
+    : message_loop_(base::MessageLoop::current()) {}
 
 FakeSocketManager::~FakeSocketManager() { }
 
 void FakeSocketManager::SendPacket(const net::IPEndPoint& from,
                                    const net::IPEndPoint& to,
                                    const std::vector<char>& data) {
-  DCHECK_EQ(MessageLoop::current(), message_loop_);
+  DCHECK_EQ(base::MessageLoop::current(), message_loop_);
 
   message_loop_->PostTask(
       FROM_HERE,
@@ -133,7 +132,7 @@ void FakeSocketManager::SendPacket(const net::IPEndPoint& from,
 void FakeSocketManager::DeliverPacket(const net::IPEndPoint& from,
                                       const net::IPEndPoint& to,
                                       const std::vector<char>& data) {
-  DCHECK_EQ(MessageLoop::current(), message_loop_);
+  DCHECK_EQ(base::MessageLoop::current(), message_loop_);
 
   std::map<net::IPEndPoint, FakeUDPPacketSocket*>::iterator it =
       endpoints_.find(to);
@@ -146,13 +145,13 @@ void FakeSocketManager::DeliverPacket(const net::IPEndPoint& from,
 }
 
 void FakeSocketManager::AddSocket(FakeUDPPacketSocket* socket_factory) {
-  DCHECK_EQ(MessageLoop::current(), message_loop_);
+  DCHECK_EQ(base::MessageLoop::current(), message_loop_);
 
   endpoints_[socket_factory->endpoint()] = socket_factory;
 }
 
 void FakeSocketManager::RemoveSocket(FakeUDPPacketSocket* socket_factory) {
-  DCHECK_EQ(MessageLoop::current(), message_loop_);
+  DCHECK_EQ(base::MessageLoop::current(), message_loop_);
 
   endpoints_.erase(socket_factory->endpoint());
 }
@@ -172,12 +171,12 @@ talk_base::AsyncPacketSocket* FakeSocketFactory::CreateUdpSocket(
   CHECK_EQ(min_port, 0);
   CHECK_EQ(max_port, 0);
   return new FakeUDPPacketSocket(
-      socket_manager_, net::IPEndPoint(address_, ++last_allocated_port_));
+      socket_manager_.get(), net::IPEndPoint(address_, ++last_allocated_port_));
 }
 
 talk_base::AsyncPacketSocket* FakeSocketFactory::CreateServerTcpSocket(
     const talk_base::SocketAddress& local_address, int min_port, int max_port,
-    bool ssl) {
+    int opts) {
   // TODO(sergeyu): Implement fake TCP sockets.
   NOTIMPLEMENTED();
   return NULL;
@@ -187,7 +186,7 @@ talk_base::AsyncPacketSocket* FakeSocketFactory::CreateClientTcpSocket(
     const talk_base::SocketAddress& local_address,
     const talk_base::SocketAddress& remote_address,
     const talk_base::ProxyInfo& proxy_info, const std::string& user_agent,
-    bool ssl) {
+    int opts) {
   // TODO(sergeyu): Implement fake TCP sockets.
   NOTIMPLEMENTED();
   return NULL;

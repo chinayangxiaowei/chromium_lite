@@ -19,13 +19,13 @@
 #include <string>
 
 #include "base/basictypes.h"
+#include "base/containers/hash_tables.h"
 #include "base/files/file_path.h"
-#include "base/hash_tables.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/message_loop_proxy.h"
+#include "base/message_loop/message_loop_proxy.h"
 #include "base/threading/non_thread_safe.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "net/base/cache_type.h"
 #include "net/base/completion_callback.h"
 #include "net/base/load_states.h"
@@ -33,7 +33,6 @@
 #include "net/base/request_priority.h"
 #include "net/http/http_network_session.h"
 #include "net/http/http_transaction_factory.h"
-#include "net/http/infinite_cache.h"
 
 class GURL;
 
@@ -90,7 +89,7 @@ class NET_EXPORT HttpCache : public HttpTransactionFactory,
     // The implementation must not access the factory object after invoking the
     // |callback| because the object can be deleted from within the callback.
     virtual int CreateBackend(NetLog* net_log,
-                              disk_cache::Backend** backend,
+                              scoped_ptr<disk_cache::Backend>* backend,
                               const CompletionCallback& callback) = 0;
   };
 
@@ -100,7 +99,8 @@ class NET_EXPORT HttpCache : public HttpTransactionFactory,
     // |path| is the destination for any files used by the backend, and
     // |cache_thread| is the thread where disk operations should take place. If
     // |max_bytes| is  zero, a default value will be calculated automatically.
-    DefaultBackend(CacheType type, const base::FilePath& path, int max_bytes,
+    DefaultBackend(CacheType type, BackendType backend_type,
+                   const base::FilePath& path, int max_bytes,
                    base::MessageLoopProxy* thread);
     virtual ~DefaultBackend();
 
@@ -109,11 +109,12 @@ class NET_EXPORT HttpCache : public HttpTransactionFactory,
 
     // BackendFactory implementation.
     virtual int CreateBackend(NetLog* net_log,
-                              disk_cache::Backend** backend,
+                              scoped_ptr<disk_cache::Backend>* backend,
                               const CompletionCallback& callback) OVERRIDE;
 
    private:
     CacheType type_;
+    BackendType backend_type_;
     const base::FilePath path_;
     int max_bytes_;
     scoped_refptr<base::MessageLoopProxy> thread_;
@@ -188,9 +189,6 @@ class NET_EXPORT HttpCache : public HttpTransactionFactory,
   // Initializes the Infinite Cache, if selected by the field trial.
   void InitializeInfiniteCache(const base::FilePath& path);
 
-  // Returns a pointer to the Infinite Cache.
-  InfiniteCache* infinite_cache() { return &infinite_cache_; }
-
   // HttpTransactionFactory implementation:
   virtual int CreateTransaction(RequestPriority priority,
                                 scoped_ptr<HttpTransaction>* trans,
@@ -217,7 +215,6 @@ class NET_EXPORT HttpCache : public HttpTransactionFactory,
   class Transaction;
   class WorkItem;
   friend class Transaction;
-  friend class InfiniteCache;
   struct PendingOp;  // Info for an entry under construction.
 
   typedef std::list<Transaction*> TransactionList;
@@ -398,8 +395,6 @@ class NET_EXPORT HttpCache : public HttpTransactionFactory,
   PendingOpsMap pending_ops_;
 
   scoped_ptr<PlaybackCacheMap> playback_cache_map_;
-
-  InfiniteCache infinite_cache_;
 
   DISALLOW_COPY_AND_ASSIGN(HttpCache);
 };

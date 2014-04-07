@@ -6,15 +6,15 @@
 #define CHROME_BROWSER_UI_WEBSITE_SETTINGS_WEBSITE_SETTINGS_H_
 
 #include "base/memory/scoped_ptr.h"
-#include "base/string16.h"
-#include "base/time.h"
+#include "base/strings/string16.h"
+#include "base/time/time.h"
 #include "chrome/browser/common/cancelable_request.h"
 #include "chrome/browser/content_settings/tab_specific_content_settings.h"
 #include "chrome/browser/history/history_service.h"
 #include "chrome/common/content_settings.h"
 #include "chrome/common/content_settings_types.h"
-#include "googleurl/src/gurl.h"
 #include "ui/gfx/native_widget_types.h"
+#include "url/gurl.h"
 
 namespace content {
 class CertStore;
@@ -61,6 +61,9 @@ class WebsiteSettings : public TabSpecificContentSettings::SiteDataObserver {
     SITE_IDENTITY_STATUS_ERROR,
     // The site is a trusted internal chrome page.
     SITE_IDENTITY_STATUS_INTERNAL_PAGE,
+    // The profile has accessed data using an administrator-provided
+    // certificate, so the site might be able to intercept data.
+    SITE_IDENTITY_STATUS_ADMIN_PROVIDED_CERT,
   };
 
   // Creates a WebsiteSettings for the passed |url| using the given |ssl| status
@@ -141,7 +144,7 @@ class WebsiteSettings : public TabSpecificContentSettings::SiteDataObserver {
   WebsiteSettingsUI* ui_;
 
   // The infobar service of the active tab.
-  InfoBarService* infobar_service_;  // Owned by the active tab contents.
+  InfoBarService* infobar_service_;
 
   // The flag that controls whether an infobar is displayed after the website
   // settings UI is closed or not.

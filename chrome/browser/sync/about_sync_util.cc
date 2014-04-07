@@ -6,7 +6,7 @@
 
 #include <string>
 
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "base/values.h"
 #include "chrome/browser/signin/signin_manager.h"
 #include "chrome/browser/sync/profile_sync_service.h"
@@ -296,7 +296,7 @@ scoped_ptr<DictionaryValue> ConstructAboutInformation(
     invalidator_id.SetValue(full_status.invalidator_client_id);
   if (service->signin())
     username.SetValue(service->signin()->GetAuthenticatedUsername());
-  is_token_available.SetValue(service->IsSyncTokenAvailable());
+  is_token_available.SetValue(service->IsOAuthRefreshTokenAvailable());
 
   last_synced.SetValue(service->GetLastSyncedTimeString());
   is_setup_complete.SetValue(service->HasSyncSetupCompleted());
@@ -335,8 +335,11 @@ scoped_ptr<DictionaryValue> ConstructAboutInformation(
   }
 
   if (snapshot.is_initialized()) {
-    session_source.SetValue(
-        syncer::GetUpdatesSourceString(snapshot.source().updates_source));
+    if (snapshot.legacy_updates_source() !=
+        sync_pb::GetUpdatesCallerInfo::UNKNOWN) {
+      session_source.SetValue(
+          syncer::GetUpdatesSourceString(snapshot.legacy_updates_source()));
+    }
     get_key_result.SetValue(
         GetSyncerErrorString(
             snapshot.model_neutral_state().last_get_key_result));

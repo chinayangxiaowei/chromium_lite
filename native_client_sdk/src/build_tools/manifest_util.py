@@ -156,7 +156,7 @@ class Archive(dict):
     """Update the size and checksum information for this archive
     based on the content currently at the URL.
 
-    This allows the template mandifest to be maintained without
+    This allows the template manifest to be maintained without
     the need to size and checksums to be present.
     """
     template = string.Template(self['url'])
@@ -337,6 +337,10 @@ class Bundle(dict):
   def AddArchive(self, archive):
     """Add an archive to this bundle."""
     self[ARCHIVES_KEY].append(archive)
+
+  def RemoveAllArchives(self):
+    """Remove all archives from this Bundle."""
+    del self[ARCHIVES_KEY][:]
 
   def RemoveAllArchivesForHostOS(self, host_os_name):
     """Remove an archive from this Bundle."""
@@ -528,7 +532,7 @@ class SDKManifest(object):
       local_bundle.MergeWithBundle(bundle)
 
   def MergeManifest(self, manifest):
-    '''Merge another manifest into this manifest, disallowing overiding.
+    '''Merge another manifest into this manifest, disallowing overriding.
 
     Args
       manifest: The manifest to merge.

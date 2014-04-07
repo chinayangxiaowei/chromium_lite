@@ -7,14 +7,11 @@
 #include <string>
 
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
-#include "chrome/test/base/testing_profile.h"
-#include "content/public/test/test_browser_thread.h"
+#include "content/public/test/test_browser_thread_bundle.h"
 #include "google_apis/gaia/gaia_urls.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "google_apis/gaia/oauth2_access_token_consumer.h"
 #include "google_apis/gaia/oauth2_access_token_fetcher.h"
-#include "googleurl/src/gurl.h"
 #include "net/http/http_status_code.h"
 #include "net/url_request/test_url_fetcher_factory.h"
 #include "net/url_request/url_fetcher.h"
@@ -22,10 +19,11 @@
 #include "net/url_request/url_fetcher_factory.h"
 #include "net/url_request/url_request.h"
 #include "net/url_request/url_request_status.h"
+#include "net/url_request/url_request_test_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/gurl.h"
 
-using content::BrowserThread;
 using net::ResponseCookies;
 using net::ScopedURLFetcherFactory;
 using net::TestURLFetcher;
@@ -56,7 +54,7 @@ class MockUrlFetcherFactory : public ScopedURLFetcherFactory,
                               public URLFetcherFactory {
 public:
   MockUrlFetcherFactory()
-      : ScopedURLFetcherFactory(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {
+      : ScopedURLFetcherFactory(this) {
   }
   virtual ~MockUrlFetcherFactory() {}
 
@@ -84,11 +82,12 @@ class MockOAuth2AccessTokenConsumer : public OAuth2AccessTokenConsumer {
 class OAuth2AccessTokenFetcherTest : public testing::Test {
  public:
   OAuth2AccessTokenFetcherTest()
-    : ui_thread_(BrowserThread::UI, &message_loop_),
-      fetcher_(&consumer_, profile_.GetRequestContext()) {
+    : request_context_getter_(new net::TestURLRequestContextGetter(
+          base::MessageLoopProxy::current())),
+      fetcher_(&consumer_, request_context_getter_) {
   }
 
-  virtual ~OAuth2AccessTokenFetcherTest() { }
+  virtual ~OAuth2AccessTokenFetcherTest() {}
 
   virtual TestURLFetcher* SetupGetAccessToken(
       bool fetch_succeeds, int response_code, const std::string& body) {
@@ -110,17 +109,16 @@ class OAuth2AccessTokenFetcherTest : public testing::Test {
   }
 
  protected:
-  MessageLoop message_loop_;
-  content::TestBrowserThread ui_thread_;
+  content::TestBrowserThreadBundle thread_bundle_;
   MockUrlFetcherFactory factory_;
   MockOAuth2AccessTokenConsumer consumer_;
-  TestingProfile profile_;
+  scoped_refptr<net::TestURLRequestContextGetter> request_context_getter_;
   OAuth2AccessTokenFetcher fetcher_;
 };
 
 // These four tests time out, see http://crbug.com/113446.
 TEST_F(OAuth2AccessTokenFetcherTest, DISABLED_GetAccessTokenRequestFailure) {
-  TestURLFetcher* url_fetcher = SetupGetAccessToken(false, 0, "");
+  TestURLFetcher* url_fetcher = SetupGetAccessToken(false, 0, std::string());
   EXPECT_CALL(consumer_, OnGetTokenFailure(_)).Times(1);
   fetcher_.Start("client_id", "client_secret", "refresh_token", ScopeList());
   fetcher_.OnURLFetchComplete(url_fetcher);
@@ -129,7 +127,7 @@ TEST_F(OAuth2AccessTokenFetcherTest, DISABLED_GetAccessTokenRequestFailure) {
 TEST_F(OAuth2AccessTokenFetcherTest,
        DISABLED_GetAccessTokenResponseCodeFailure) {
   TestURLFetcher* url_fetcher =
-      SetupGetAccessToken(true, net::HTTP_FORBIDDEN, "");
+      SetupGetAccessToken(true, net::HTTP_FORBIDDEN, std::string());
   EXPECT_CALL(consumer_, OnGetTokenFailure(_)).Times(1);
   fetcher_.Start("client_id", "client_secret", "refresh_token", ScopeList());
   fetcher_.OnURLFetchComplete(url_fetcher);

@@ -2,7 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
-// This file declares util functions for setup project.
+// This file declares util functions for setup project. It also declares a
+// few functions that the Chrome component updater uses for patching binary
+// deltas.
 
 #ifndef CHROME_INSTALLER_SETUP_SETUP_UTIL_H_
 #define CHROME_INSTALLER_SETUP_SETUP_UTIL_H_
@@ -10,16 +12,16 @@
 #include <windows.h>
 
 #include "base/basictypes.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "base/win/scoped_handle.h"
 #include "chrome/installer/util/browser_distribution.h"
 #include "chrome/installer/util/util_constants.h"
 
 class CommandLine;
-class Version;
 
 namespace base {
 class FilePath;
+class Version;
 }
 
 namespace installer {
@@ -28,19 +30,30 @@ class InstallationState;
 class InstallerState;
 class ProductState;
 
-// Apply a diff patch to source file. First tries to apply it using courgette
-// since it checks for courgette header and fails quickly. If that fails
-// tries to apply the patch using regular bsdiff. Returns status code.
-// The installer stage is updated if |installer_state| is non-NULL.
-int ApplyDiffPatch(const base::FilePath& src,
-                   const base::FilePath& patch,
-                   const base::FilePath& dest,
-                   const InstallerState* installer_state);
+// Applies a patch file to source file using Courgette. Returns 0 in case of
+// success. In case of errors, it returns kCourgetteErrorOffset + a Courgette
+// status code, as defined in courgette/courgette.h
+int CourgettePatchFiles(const base::FilePath& src,
+                        const base::FilePath& patch,
+                        const base::FilePath& dest);
+
+// Applies a patch file to source file using bsdiff. This function uses
+// Courgette's flavor of bsdiff. Returns 0 in case of success, or
+// kBsdiffErrorOffset + a bsdiff status code in case of errors.
+// See courgette/third_party/bsdiff.h for details.
+int BsdiffPatchFiles(const base::FilePath& src,
+                     const base::FilePath& patch,
+                     const base::FilePath& dest);
 
 // Find the version of Chrome from an install source directory.
 // Chrome_path should contain at least one version folder.
 // Returns the maximum version found or NULL if no version is found.
 Version* GetMaxVersionFromArchiveDir(const base::FilePath& chrome_path);
+
+// Returns the uncompressed archive of the installed version that serves as the
+// source for patching.
+base::FilePath FindArchiveToPatch(const InstallationState& original_state,
+                                  const InstallerState& installer_state);
 
 // Spawns a new process that waits for a specified amount of time before
 // attempting to delete |path|.  This is useful for setup to delete the
@@ -57,7 +70,7 @@ bool DeleteFileFromTempProcess(const base::FilePath& path,
 // (|installer_version|).
 bool GetExistingHigherInstaller(const InstallationState& original_state,
                                 bool system_install,
-                                const Version& installer_version,
+                                const base::Version& installer_version,
                                 base::FilePath* setup_exe);
 
 // Invokes the pre-existing |setup_exe| to handle the current operation (as
@@ -80,6 +93,19 @@ bool WillProductBePresentAfterSetup(
     const installer::InstallerState& installer_state,
     const installer::InstallationState& machine_state,
     BrowserDistribution::Type type);
+
+// Drops the process down to background processing mode on supported OSes if it
+// was launched below the normal process priority. Returns true when background
+// procesing mode is entered.
+bool AdjustProcessPriority();
+
+// Makes registry adjustments to migrate the Google Update state of |to_migrate|
+// from multi-install to single-install. This includes copying the usagestats
+// value and adjusting the ap values of all multi-install products.
+void MigrateGoogleUpdateStateMultiToSingle(
+    bool system_level,
+    BrowserDistribution::Type to_migrate,
+    const installer::InstallationState& machine_state);
 
 // This class will enable the privilege defined by |privilege_name| on the
 // current process' token. The privilege will be disabled upon the

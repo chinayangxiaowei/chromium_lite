@@ -2,29 +2,29 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-require('json_schema');
-require('event_bindings');
-var chrome = requireNative('chrome').GetChrome();
-var chromeHidden = requireNative('chrome_hidden').GetChromeHidden();
+var Event = require('event_bindings').Event;
 var forEach = require('utils').forEach;
 var GetAvailability = requireNative('v8_context').GetAvailability;
+var logActivity = requireNative('activityLogger');
 var logging = requireNative('logging');
 var process = requireNative('process');
+var schemaRegistry = requireNative('schema_registry');
+var schemaUtils = require('schemaUtils');
+var utils = require('utils');
+var sendRequestHandler = require('sendRequest');
+
 var contextType = process.GetContextType();
 var extensionId = process.GetExtensionId();
 var manifestVersion = process.GetManifestVersion();
-var schemaRegistry = requireNative('schema_registry');
-var schemaUtils = require('schemaUtils');
-var sendRequest = require('sendRequest').sendRequest;
-var utils = require('utils');
-var CHECK = requireNative('logging').CHECK;
+var sendRequest = sendRequestHandler.sendRequest;
 
 // Stores the name and definition of each API function, with methods to
 // modify their behaviour (such as a custom way to handle requests to the
 // API, a custom callback, etc).
-function APIFunctions() {
+function APIFunctions(namespace) {
   this.apiFunctions_ = {};
   this.unavailableApiFunctions_ = {};
+  this.namespace = namespace;
 }
 
 APIFunctions.prototype.register = function(apiName, apiFunction) {
@@ -40,16 +40,26 @@ APIFunctions.prototype.registerUnavailable = function(apiName) {
 
 APIFunctions.prototype.setHook_ =
     function(apiName, propertyName, customizedFunction) {
-  if (this.unavailableApiFunctions_.hasOwnProperty(apiName))
+  if ($Object.hasOwnProperty(this.unavailableApiFunctions_, apiName))
     return;
-  if (!this.apiFunctions_.hasOwnProperty(apiName))
+  if (!$Object.hasOwnProperty(this.apiFunctions_, apiName))
     throw new Error('Tried to set hook for unknown API "' + apiName + '"');
   this.apiFunctions_[apiName][propertyName] = customizedFunction;
 };
 
 APIFunctions.prototype.setHandleRequest =
     function(apiName, customizedFunction) {
-  return this.setHook_(apiName, 'handleRequest', customizedFunction);
+  var prefix = this.namespace;
+  return this.setHook_(apiName, 'handleRequest',
+    function() {
+      var ret = $Function.apply(customizedFunction, this, arguments);
+      // Logs API calls to the Activity Log if it doesn't go through an
+      // ExtensionFunction.
+      if (!sendRequestHandler.getCalledSendRequest())
+        logActivity.LogAPICall(extensionId, prefix + "." + apiName,
+            $Array.slice(arguments));
+      return ret;
+    });
 };
 
 APIFunctions.prototype.setUpdateArgumentsPostValidate =
@@ -77,7 +87,7 @@ CustomBindingsObject.prototype.setSchema = function(schema) {
   // dictionary for easier access.
   var self = this;
   self.functionSchemas = {};
-  schema.functions.forEach(function(f) {
+  $Array.forEach(schema.functions, function(f) {
     self.functionSchemas[f.name] = {
       name: f.name,
       definition: f
@@ -96,7 +106,7 @@ function getPlatform() {
   ];
 
   for (var i = 0; i < platforms.length; i++) {
-    if (platforms[i][0].test(navigator.appVersion)) {
+    if ($RegExp.test(platforms[i][0], navigator.appVersion)) {
       return platforms[i][1];
     }
   }
@@ -120,12 +130,13 @@ function isSchemaNodeSupported(schemaNode, platform, manifestVersion) {
 
 function createCustomType(type) {
   var jsModuleName = type.js_module;
-  CHECK(jsModuleName, 'Custom type ' + type.id +
-      ' has no "js_module" property.');
+  logging.CHECK(jsModuleName, 'Custom type ' + type.id +
+                ' has no "js_module" property.');
   var jsModule = require(jsModuleName);
-  CHECK(jsModule, 'No module ' + jsModuleName + ' found for ' + type.id + '.');
+  logging.CHECK(jsModule, 'No module ' + jsModuleName + ' found for ' +
+                type.id + '.');
   var customType = jsModule[jsModuleName];
-  CHECK(customType, jsModuleName + ' must export itself.');
+  logging.CHECK(customType, jsModuleName + ' must export itself.');
   customType.prototype = new CustomBindingsObject();
   customType.prototype.setSchema(type);
   return customType;
@@ -135,7 +146,7 @@ var platform = getPlatform();
 
 function Binding(schema) {
   this.schema_ = schema;
-  this.apiFunctions_ = new APIFunctions();
+  this.apiFunctions_ = new APIFunctions(schema.namespace);
   this.customEvent_ = null;
   this.customHooks_ = [];
 };
@@ -164,12 +175,12 @@ Binding.prototype = {
   // interact with, and second the current extension ID. See where
   // |customHooks| is used.
   registerCustomHook: function(fn) {
-    this.customHooks_.push(fn);
+    $Array.push(this.customHooks_, fn);
   },
 
   // TODO(kalman/cduvall): Refactor this so |runHooks_| is not needed.
   runHooks_: function(api) {
-    forEach(this.customHooks_, function(i, hook) {
+    $Array.forEach(this.customHooks_, function(hook) {
       if (!isSchemaNodeSupported(this.schema_, platform, manifestVersion))
         return;
 
@@ -189,6 +200,33 @@ Binding.prototype = {
   generate: function() {
     var schema = this.schema_;
 
+    function shouldCheckUnprivileged() {
+      var shouldCheck = 'unprivileged' in schema;
+      if (shouldCheck)
+        return shouldCheck;
+
+      $Array.forEach(['functions', 'events'], function(type) {
+        if ($Object.hasOwnProperty(schema, type)) {
+          $Array.forEach(schema[type], function(node) {
+            if ('unprivileged' in node)
+              shouldCheck = true;
+          });
+        }
+      });
+      if (shouldCheck)
+        return shouldCheck;
+
+      for (var property in schema.properties) {
+        if ($Object.hasOwnProperty(schema, property) &&
+            'unprivileged' in schema.properties[property]) {
+          shouldCheck = true;
+          break;
+        }
+      }
+      return shouldCheck;
+    }
+    var checkUnprivileged = shouldCheckUnprivileged();
+
     // TODO(kalman/cduvall): Make GetAvailability handle this, then delete the
     // supporting code.
     if (!isSchemaNodeSupported(schema, platform, manifestVersion)) {
@@ -197,17 +235,9 @@ Binding.prototype = {
       return undefined;
     }
 
-    var availability = GetAvailability(schema.namespace);
-    if (!availability.is_available) {
-      console.error('chrome.' + schema.namespace + ' is not available: ' +
-                    availability.message);
-      return undefined;
-    }
-
-    // See comment on internalAPIs at the top.
     var mod = {};
 
-    var namespaces = schema.namespace.split('.');
+    var namespaces = $String.split(schema.namespace, '.');
     for (var index = 0, name; name = namespaces[index]; index++) {
       mod[name] = mod[name] || {};
       mod = mod[name];
@@ -216,14 +246,14 @@ Binding.prototype = {
     // Add types to global schemaValidator, the types we depend on from other
     // namespaces will be added as needed.
     if (schema.types) {
-      forEach(schema.types, function(i, t) {
+      $Array.forEach(schema.types, function(t) {
         if (!isSchemaNodeSupported(t, platform, manifestVersion))
           return;
-
         schemaUtils.schemaValidator.addTypes(t);
       }, this);
     }
 
+    // TODO(cduvall): Take out when all APIs have been converted to features.
     // Returns whether access to the content of a schema should be denied,
     // based on the presence of "unprivileged" and whether this is an
     // extension process (versus e.g. a content script).
@@ -233,19 +263,9 @@ Binding.prototype = {
              itemSchema.unprivileged;
     };
 
-    // Adds a getter that throws an access denied error to object |mod|
-    // for property |name|.
-    function addUnprivilegedAccessGetter(mod, name) {
-      mod.__defineGetter__(name, function() {
-        throw new Error(
-            '"' + name + '" can only be used in extension processes. See ' +
-            'the content scripts documentation for more details.');
-      });
-    }
-
     // Setup Functions.
     if (schema.functions) {
-      forEach(schema.functions, function(i, functionDef) {
+      $Array.forEach(schema.functions, function(functionDef) {
         if (functionDef.name in mod) {
           throw new Error('Function ' + functionDef.name +
                           ' already defined in ' + schema.namespace);
@@ -255,22 +275,22 @@ Binding.prototype = {
           this.apiFunctions_.registerUnavailable(functionDef.name);
           return;
         }
-        if (!isSchemaAccessAllowed(functionDef)) {
-          this.apiFunctions_.registerUnavailable(functionDef.name);
-          addUnprivilegedAccessGetter(mod, functionDef.name);
-          return;
-        }
 
         var apiFunction = {};
         apiFunction.definition = functionDef;
         apiFunction.name = schema.namespace + '.' + functionDef.name;
 
+        if (!GetAvailability(apiFunction.name).is_available ||
+            (checkUnprivileged && !isSchemaAccessAllowed(functionDef))) {
+          this.apiFunctions_.registerUnavailable(functionDef.name);
+          return;
+        }
+
         // TODO(aa): It would be best to run this in a unit test, but in order
         // to do that we would need to better factor this code so that it
         // doesn't depend on so much v8::Extension machinery.
-        if (chromeHidden.validateAPI &&
-            schemaUtils.isFunctionSignatureAmbiguous(
-                apiFunction.definition)) {
+        if (logging.DCHECK_IS_ON() &&
+            schemaUtils.isFunctionSignatureAmbiguous(apiFunction.definition)) {
           throw new Error(
               apiFunction.name + ' has ambiguous optional arguments. ' +
               'To implement custom disambiguation logic, add ' +
@@ -279,18 +299,23 @@ Binding.prototype = {
 
         this.apiFunctions_.register(functionDef.name, apiFunction);
 
-        mod[functionDef.name] = (function() {
-          var args = Array.prototype.slice.call(arguments);
+        mod[functionDef.name] = $Function.bind(function() {
+          var args = $Array.slice(arguments);
           if (this.updateArgumentsPreValidate)
-            args = this.updateArgumentsPreValidate.apply(this, args);
+            args = $Function.apply(this.updateArgumentsPreValidate, this, args);
 
           args = schemaUtils.normalizeArgumentsAndValidate(args, this);
-          if (this.updateArgumentsPostValidate)
-            args = this.updateArgumentsPostValidate.apply(this, args);
+          if (this.updateArgumentsPostValidate) {
+            args = $Function.apply(this.updateArgumentsPostValidate,
+                                   this,
+                                   args);
+          }
+
+          sendRequestHandler.clearCalledSendRequest();
 
           var retval;
           if (this.handleRequest) {
-            retval = this.handleRequest.apply(this, args);
+            retval = $Function.apply(this.handleRequest, this, args);
           } else {
             var optArgs = {
               customCallback: this.customCallback
@@ -299,46 +324,42 @@ Binding.prototype = {
                                  this.definition.parameters,
                                  optArgs);
           }
+          sendRequestHandler.clearCalledSendRequest();
 
-          // Validate return value if defined - only in debug.
-          if (chromeHidden.validateCallbacks &&
-              this.definition.returns) {
+          // Validate return value if in sanity check mode.
+          if (logging.DCHECK_IS_ON() && this.definition.returns)
             schemaUtils.validate([retval], [this.definition.returns]);
-          }
           return retval;
-        }).bind(apiFunction);
+        }, apiFunction);
       }, this);
     }
 
     // Setup Events
     if (schema.events) {
-      forEach(schema.events, function(i, eventDef) {
+      $Array.forEach(schema.events, function(eventDef) {
         if (eventDef.name in mod) {
           throw new Error('Event ' + eventDef.name +
                           ' already defined in ' + schema.namespace);
         }
         if (!isSchemaNodeSupported(eventDef, platform, manifestVersion))
           return;
-        if (!isSchemaAccessAllowed(eventDef)) {
-          addUnprivilegedAccessGetter(mod, eventDef.name);
+
+        var eventName = schema.namespace + "." + eventDef.name;
+        if (!GetAvailability(eventName).is_available ||
+            (checkUnprivileged && !isSchemaAccessAllowed(eventDef))) {
           return;
         }
 
-        var eventName = schema.namespace + "." + eventDef.name;
         var options = eventDef.options || {};
-
         if (eventDef.filters && eventDef.filters.length > 0)
           options.supportsFilters = true;
 
+        var parameters = eventDef.parameters;
         if (this.customEvent_) {
           mod[eventDef.name] = new this.customEvent_(
-              eventName, eventDef.parameters, eventDef.extraParameters,
-              options);
-        } else if (eventDef.anonymous) {
-          mod[eventDef.name] = new chrome.Event();
+              eventName, parameters, eventDef.extraParameters, options);
         } else {
-          mod[eventDef.name] = new chrome.Event(
-              eventName, eventDef.parameters, options);
+          mod[eventDef.name] = new Event(eventName, parameters, options);
         }
       }, this);
     }
@@ -353,8 +374,9 @@ Binding.prototype = {
           return;  // TODO(kalman): be strict like functions/events somehow.
         if (!isSchemaNodeSupported(propertyDef, platform, manifestVersion))
           return;
-        if (!isSchemaAccessAllowed(propertyDef)) {
-          addUnprivilegedAccessGetter(m, propertyName);
+        if (!GetAvailability(schema.namespace + "." +
+              propertyName).is_available ||
+            (checkUnprivileged && !isSchemaAccessAllowed(propertyDef))) {
           return;
         }
 
@@ -372,7 +394,7 @@ Binding.prototype = {
           } else if (propertyDef['$ref']) {
             var ref = propertyDef['$ref'];
             var type = utils.loadTypeSchema(propertyDef['$ref'], schema);
-            CHECK(type, 'Schema for $ref type ' + ref + ' not found');
+            logging.CHECK(type, 'Schema for $ref type ' + ref + ' not found');
             var constructor = createCustomType(type);
             var args = value;
             // For an object propertyDef, |value| is an array of constructor
@@ -380,7 +402,7 @@ Binding.prototype = {
             // not as an array), so we have to fake calling |new| on the
             // constructor.
             value = { __proto__: constructor.prototype };
-            constructor.apply(value, args);
+            $Function.apply(constructor, value, args);
             // Recursively add properties.
             addProperties(value, propertyDef);
           } else if (type === 'object') {
@@ -396,6 +418,17 @@ Binding.prototype = {
     };
 
     addProperties(mod, schema);
+
+    var availability = GetAvailability(schema.namespace);
+    if (!availability.is_available && $Object.keys(mod).length == 0) {
+      console.error('chrome.' + schema.namespace + ' is not available: ' +
+                        availability.message);
+      logActivity.LogBlockedCall(extensionId,
+                                 schema.namespace,
+                                 availability.result);
+      return;
+    }
+
     this.runHooks_(mod);
     return mod;
   }

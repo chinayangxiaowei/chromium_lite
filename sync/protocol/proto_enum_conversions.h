@@ -33,6 +33,9 @@ SYNC_EXPORT_PRIVATE const char* GetPageTransitionRedirectTypeString(
 SYNC_EXPORT const char* GetUpdatesSourceString(
     sync_pb::GetUpdatesCallerInfo::GetUpdatesSource updates_source);
 
+SYNC_EXPORT const char* GetUpdatesOriginString(
+    sync_pb::SyncEnums::GetUpdatesOrigin origin);
+
 SYNC_EXPORT_PRIVATE const char* GetResponseTypeString(
     sync_pb::CommitResponse::ResponseType response_type);
 
@@ -42,17 +45,16 @@ SYNC_EXPORT_PRIVATE const char* GetErrorTypeString(
 SYNC_EXPORT_PRIVATE const char* GetActionString(
     sync_pb::SyncEnums::Action action);
 
-const char* GetDeviceTypeString(
-    sync_pb::SyncEnums::DeviceType device_type);
+const char* GetDeviceTypeString(sync_pb::SyncEnums::DeviceType device_type);
 
-const char* GetFaviconTypeString(
-    sync_pb::SessionTab::FaviconType favicon_type);
+const char* GetFaviconTypeString(sync_pb::SessionTab::FaviconType favicon_type);
 
-const char* PassphraseTypeString(
-    sync_pb::NigoriSpecifics::PassphraseType type);
+const char* PassphraseTypeString(sync_pb::NigoriSpecifics::PassphraseType type);
 
 const char* SingletonEventTypeString(
     sync_pb::DebugEventInfo::SingletonEventType type);
+
+const char* GetBlockedStateString(sync_pb::TabNavigation::BlockedState state);
 
 }  // namespace syncer
 

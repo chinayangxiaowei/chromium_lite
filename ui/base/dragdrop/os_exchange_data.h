@@ -19,12 +19,9 @@
 #include "base/basictypes.h"
 #include "base/files/file_path.h"
 #include "base/memory/scoped_ptr.h"
+#include "ui/base/clipboard/clipboard.h"
 #include "ui/base/dragdrop/download_file_interface.h"
 #include "ui/base/ui_export.h"
-
-#if defined(USE_AURA)
-#include "ui/base/clipboard/clipboard.h"
-#endif
 
 class GURL;
 class Pickle;
@@ -54,17 +51,8 @@ class UI_EXPORT OSExchangeData {
  public:
   // CustomFormats are used for non-standard data types. For example, bookmark
   // nodes are written using a CustomFormat.
-#if defined(OS_WIN)
-  typedef CLIPFORMAT CustomFormat;
-#elif defined(USE_AURA)
-  // Use the same type as the clipboard (why do we want two different
-  // definitions of this on other platforms?).
+  // TODO(dcheng): Remove this completely and just use Clipboard::FormatType.
   typedef Clipboard::FormatType CustomFormat;
-#elif defined(TOOLKIT_GTK)
-  typedef GdkAtom CustomFormat;
-#else
-  typedef void* CustomFormat;
-#endif
 
   // Enumeration of the known formats.
   enum Format {
@@ -108,25 +96,28 @@ class UI_EXPORT OSExchangeData {
     Provider() {}
     virtual ~Provider() {}
 
-    virtual void SetString(const string16& data) = 0;
-    virtual void SetURL(const GURL& url, const string16& title) = 0;
+    virtual Provider* Clone() const = 0;
+
+    virtual void SetString(const base::string16& data) = 0;
+    virtual void SetURL(const GURL& url, const base::string16& title) = 0;
     virtual void SetFilename(const base::FilePath& path) = 0;
     virtual void SetFilenames(
         const std::vector<FileInfo>& file_names) = 0;
-    virtual void SetPickledData(CustomFormat format, const Pickle& data) = 0;
+    virtual void SetPickledData(const CustomFormat& format,
+                                const Pickle& data) = 0;
 
-    virtual bool GetString(string16* data) const = 0;
-    virtual bool GetURLAndTitle(GURL* url, string16* title) const = 0;
+    virtual bool GetString(base::string16* data) const = 0;
+    virtual bool GetURLAndTitle(GURL* url, base::string16* title) const = 0;
     virtual bool GetFilename(base::FilePath* path) const = 0;
     virtual bool GetFilenames(
         std::vector<FileInfo>* file_names) const = 0;
-    virtual bool GetPickledData(CustomFormat format, Pickle* data) const = 0;
+    virtual bool GetPickledData(const CustomFormat& format,
+                                Pickle* data) const = 0;
 
     virtual bool HasString() const = 0;
     virtual bool HasURL() const = 0;
     virtual bool HasFile() const = 0;
-    virtual bool HasCustomFormat(
-        OSExchangeData::CustomFormat format) const = 0;
+    virtual bool HasCustomFormat(const CustomFormat& format) const = 0;
 
 #if defined(OS_WIN)
     virtual void SetFileContents(const base::FilePath& filename,
@@ -135,11 +126,12 @@ class UI_EXPORT OSExchangeData {
                                  std::string* file_contents) const = 0;
     virtual bool HasFileContents() const = 0;
     virtual void SetDownloadFileInfo(const DownloadFileInfo& download) = 0;
+    virtual void SetInDragLoop(bool in_drag_loop) = 0;
 #endif
 
 #if defined(OS_WIN) || defined(USE_AURA)
-    virtual void SetHtml(const string16& html, const GURL& base_url) = 0;
-    virtual bool GetHtml(string16* html, GURL* base_url) const = 0;
+    virtual void SetHtml(const base::string16& html, const GURL& base_url) = 0;
+    virtual bool GetHtml(base::string16* html, GURL* base_url) const = 0;
     virtual bool HasHtml() const = 0;
 #endif
 
@@ -161,9 +153,6 @@ class UI_EXPORT OSExchangeData {
 
   ~OSExchangeData();
 
-  // Registers the specific string as a possible format for data.
-  static CustomFormat RegisterCustomFormat(const std::string& type);
-
   // Returns the Provider, which actually stores and manages the data.
   const Provider& provider() const { return *provider_; }
   Provider& provider() { return *provider_; }
@@ -178,35 +167,35 @@ class UI_EXPORT OSExchangeData {
   //            the order of enumeration in our IEnumFORMATETC implementation!
   //            This comes into play when selecting the best (most preferable)
   //            data type for insertion into a DropTarget.
-  void SetString(const string16& data);
+  void SetString(const base::string16& data);
   // A URL can have an optional title in some exchange formats.
-  void SetURL(const GURL& url, const string16& title);
+  void SetURL(const GURL& url, const base::string16& title);
   // A full path to a file.
   void SetFilename(const base::FilePath& path);
   // Full path to one or more files. See also SetFilenames() in Provider.
   void SetFilenames(
       const std::vector<FileInfo>& file_names);
   // Adds pickled data of the specified format.
-  void SetPickledData(CustomFormat format, const Pickle& data);
+  void SetPickledData(const CustomFormat& format, const Pickle& data);
 
   // These functions retrieve data of the specified type. If data exists, the
   // functions return and the result is in the out parameter. If the data does
   // not exist, the out parameter is not touched. The out parameter cannot be
   // NULL.
-  bool GetString(string16* data) const;
-  bool GetURLAndTitle(GURL* url, string16* title) const;
+  bool GetString(base::string16* data) const;
+  bool GetURLAndTitle(GURL* url, base::string16* title) const;
   // Return the path of a file, if available.
   bool GetFilename(base::FilePath* path) const;
   bool GetFilenames(
       std::vector<FileInfo>* file_names) const;
-  bool GetPickledData(CustomFormat format, Pickle* data) const;
+  bool GetPickledData(const CustomFormat& format, Pickle* data) const;
 
   // Test whether or not data of certain types is present, without actually
   // returning anything.
   bool HasString() const;
   bool HasURL() const;
   bool HasFile() const;
-  bool HasCustomFormat(CustomFormat format) const;
+  bool HasCustomFormat(const CustomFormat& format) const;
 
   // Returns true if this OSExchangeData has data for ALL the formats in
   // |formats| and ALL the custom formats in |custom_formats|.
@@ -227,13 +216,15 @@ class UI_EXPORT OSExchangeData {
 
   // Adds a download file with full path (CF_HDROP).
   void SetDownloadFileInfo(const DownloadFileInfo& download);
+
+  void SetInDragLoop(bool in_drag_loop);
 #endif
 
 #if defined(OS_WIN) || defined(USE_AURA)
   // Adds a snippet of HTML.  |html| is just raw html but this sets both
   // text/html and CF_HTML.
-  void SetHtml(const string16& html, const GURL& base_url);
-  bool GetHtml(string16* html, GURL* base_url) const;
+  void SetHtml(const base::string16& html, const GURL& base_url);
+  bool GetHtml(base::string16* html, GURL* base_url) const;
 #endif
 
  private:

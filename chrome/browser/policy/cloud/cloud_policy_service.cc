@@ -5,7 +5,7 @@
 #include "chrome/browser/policy/cloud/cloud_policy_service.h"
 
 #include "base/callback.h"
-#include "chrome/browser/policy/cloud/proto/device_management_backend.pb.h"
+#include "chrome/browser/policy/proto/cloud/device_management_backend.pb.h"
 
 namespace em = enterprise_management;
 
@@ -68,7 +68,7 @@ void CloudPolicyService::OnPolicyFetched(CloudPolicyClient* client) {
   if (policy) {
     if (refresh_state_ != REFRESH_NONE)
       refresh_state_ = REFRESH_POLICY_STORE;
-    store_->Store(*policy);
+    store_->Store(*policy, client->fetched_invalidation_version());
   } else {
     RefreshCompleted(false);
   }

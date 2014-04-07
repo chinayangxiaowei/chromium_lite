@@ -4,6 +4,7 @@
 
 #include <map>
 
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_system.h"
@@ -15,7 +16,6 @@
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_iterator.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/manifest.h"
 #include "content/public/test/test_utils.h"
@@ -108,6 +108,11 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementApiTest, Basics) {
   ASSERT_TRUE(RunExtensionSubtest("management/test", "basics.html"));
 }
 
+IN_PROC_BROWSER_TEST_F(ExtensionManagementApiTest, NoPermission) {
+  LoadExtensions();
+  ASSERT_TRUE(RunExtensionSubtest("management/no_permission", "test.html"));
+}
+
 // Disabled: http://crbug.com/174411
 #if defined(OS_WIN)
 #define MAYBE_Uninstall DISABLED_Uninstall
@@ -120,8 +125,15 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementApiTest, MAYBE_Uninstall) {
   ASSERT_TRUE(RunExtensionSubtest("management/test", "uninstall.html"));
 }
 
+// Fails often on Windows dbg bots. http://crbug.com/177163
+#if defined(OS_WIN)
+#define MAYBE_ManagementPolicyAllowed DISABLED_ManagementPolicyAllowed
+#else
+#define MAYBE_ManagementPolicyAllowed ManagementPolicyAllowed
+#endif  // defined(OS_WIN)
 // Tests actions on extensions when no management policy is in place.
-IN_PROC_BROWSER_TEST_F(ExtensionManagementApiTest, ManagementPolicyAllowed) {
+IN_PROC_BROWSER_TEST_F(ExtensionManagementApiTest,
+                       MAYBE_ManagementPolicyAllowed) {
   LoadExtensions();
   ExtensionService* service = extensions::ExtensionSystem::Get(
       browser()->profile())->extension_service();
@@ -139,8 +151,15 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementApiTest, ManagementPolicyAllowed) {
                                          true));
 }
 
+// Fails often on Windows dbg bots. http://crbug.com/177163
+#if defined(OS_WIN)
+#define MAYBE_ManagementPolicyProhibited DISABLED_ManagementPolicyProhibited
+#else
+#define MAYBE_ManagementPolicyProhibited ManagementPolicyProhibited
+#endif  // defined(OS_WIN)
 // Tests actions on extensions when management policy prohibits those actions.
-IN_PROC_BROWSER_TEST_F(ExtensionManagementApiTest, ManagementPolicyProhibited) {
+IN_PROC_BROWSER_TEST_F(ExtensionManagementApiTest,
+                       MAYBE_ManagementPolicyProhibited) {
   LoadExtensions();
   ExtensionService* service = extensions::ExtensionSystem::Get(
       browser()->profile())->extension_service();
@@ -218,7 +237,13 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementApiTest, DISABLED_LaunchPanelApp) {
   ASSERT_TRUE(app_browser->is_app());
 }
 
-IN_PROC_BROWSER_TEST_F(ExtensionManagementApiTest, LaunchTabApp) {
+// Disabled: http://crbug.com/230165
+#if defined(OS_WIN)
+#define MAYBE_LaunchTabApp DISABLED_LaunchTabApp
+#else
+#define MAYBE_LaunchTabApp LaunchTabApp
+#endif
+IN_PROC_BROWSER_TEST_F(ExtensionManagementApiTest, MAYBE_LaunchTabApp) {
   ExtensionService* service = extensions::ExtensionSystem::Get(
       browser()->profile())->extension_service();
 
@@ -275,6 +300,5 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementApiTest, LaunchTabApp) {
                                         browser()->host_desktop_type()));
   Browser* app_browser = FindOtherBrowser(browser());
   ASSERT_TRUE(app_browser->is_app());
-  ASSERT_FALSE(app_browser->is_type_panel());
 #endif
 }

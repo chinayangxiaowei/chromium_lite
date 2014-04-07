@@ -5,24 +5,17 @@
 'use strict';
 
 /**
- * The amount of time, before a butter bar will hide after the last update.
- */
-var HIDE_DELAY_TIME_MS = 2000;
-
-/**
  * Butter bar is shown on top of the file list and is used to show the copy
  * progress and other messages.
  * @param {HTMLElement} dialogDom FileManager top-level div.
  * @param {FileCopyManagerWrapper} copyManager The copy manager.
- * @param {MetadataCache} metadataCache The metadata cache.
  * @constructor
  */
-function ButterBar(dialogDom, copyManager, metadataCache) {
+function ButterBar(dialogDom, copyManager) {
   this.dialogDom_ = dialogDom;
   this.butter_ = this.dialogDom_.querySelector('#butter-bar');
   this.document_ = this.butter_.ownerDocument;
   this.copyManager_ = copyManager;
-  this.metadataCache_ = metadataCache;
   this.hideTimeout_ = null;
   this.showTimeout_ = null;
   this.lastShowTime_ = 0;
@@ -30,12 +23,23 @@ function ButterBar(dialogDom, copyManager, metadataCache) {
   this.currentMode_ = null;
   this.totalDeleted_ = 0;
   this.lastProgressValue_ = 0;
+  this.alert_ = new ErrorDialog(this.dialogDom_);
 
-  this.copyManager_.addEventListener('copy-progress',
-                                     this.onCopyProgress_.bind(this));
-  this.copyManager_.addEventListener('delete',
-                                     this.onDelete_.bind(this));
+  this.onCopyProgressBound_ = this.onCopyProgress_.bind(this);
+  this.copyManager_.addEventListener(
+      'copy-progress', this.onCopyProgressBound_);
+  this.onDeleteBound_ = this.onDelete_.bind(this);
+  this.copyManager_.addEventListener('delete', this.onDeleteBound_);
 }
+
+/**
+ * The default amount of milliseconds time, before a butter bar will hide after
+ * the last update.
+ * @type {number}
+ * @private
+ * @const
+ */
+ButterBar.HIDE_DELAY_TIME_MS_ = 2000;
 
 /**
  * Name of action which should be displayed as an 'x' button instead of
@@ -50,8 +54,18 @@ ButterBar.ACTION_X = '--action--x--';
  */
 ButterBar.Mode = {
   COPY: 1,
-  DELETE: 2,
-  ERROR: 3
+  DELETE: 2
+};
+
+/**
+ * Disposes the instance. No methods should be called after this method's
+ * invocation.
+ */
+ButterBar.prototype.dispose = function() {
+  // Unregister listeners from FileCopyManager.
+  this.copyManager_.removeEventListener(
+      'copy-progress', this.onCopyProgressBound_);
+  this.copyManager_.removeEventListener('delete', this.onDeleteBound_);
 };
 
 /**
@@ -63,18 +77,12 @@ ButterBar.prototype.isVisible_ = function() {
 };
 
 /**
- * @return {boolean} True if displaying an error.
- * @private
- */
-ButterBar.prototype.isError_ = function() {
-  return this.butter_.classList.contains('error');
-};
-
-/**
  * Show butter bar.
  * @param {ButterBar.Mode} mode Butter bar mode.
  * @param {string} message The message to be shown.
- * @param {Object=} opt_options Options: 'actions', 'progress', 'timeout'.
+ * @param {Object=} opt_options Options: 'actions', 'progress', 'timeout'. If
+ *     'timeout' is not specified, HIDE_DELAY_TIME_MS_ is used. If 'timeout' is
+ *     false, the butter bar will not be hidden.
  */
 ButterBar.prototype.show = function(mode, message, opt_options) {
   this.currentMode_ = mode;
@@ -112,14 +120,17 @@ ButterBar.prototype.show = function(mode, message, opt_options) {
 };
 
 /**
- * Show error message in butter bar.
+ * Show an error message in a popup dialog.
  * @param {string} message Message.
- * @param {Object=} opt_options Same as in show().
  * @private
  */
-ButterBar.prototype.showError_ = function(message, opt_options) {
-  this.show(ButterBar.Mode.ERROR, message, opt_options);
-  this.butter_.classList.add('error');
+ButterBar.prototype.showError_ = function(message) {
+  // Wait in case there are previous dialogs being closed.
+  setTimeout(function() {
+    this.alert_.showHtml('',  // Title.
+                         message);
+    this.hide_();
+  }.bind(this), cr.ui.dialogs.BaseDialog.ANIMATE_STABLE_DURATION);
 };
 
 /**
@@ -133,14 +144,6 @@ ButterBar.prototype.update_ = function(message, opt_options) {
     opt_options = {};
 
   this.clearHideTimeout_();
-
-  var timeout = ('timeout' in opt_options) ? opt_options.timeout : 10 * 1000;
-  if (timeout) {
-    this.hideTimeout_ = setTimeout(function() {
-      this.hideTimeout_ = null;
-      this.hide_();
-    }.bind(this), timeout);
-  }
 
   var butterMessage = this.butter_.querySelector('.butter-message');
    butterMessage.textContent = message;
@@ -162,22 +165,28 @@ ButterBar.prototype.update_ = function(message, opt_options) {
   } else {
     butterMessage.classList.remove('single-line');
   }
+
+  if (opt_options.timeout !== false)
+    this.hide_(opt_options.timeout);
 };
 
 /**
- * Hide butter bar. There might be some delay before hiding so that butter bar
+ * Hide butter bar. There might be the delay before hiding so that butter bar
  * would be shown for no less than the minimal time.
- * @param {boolean=} opt_force If true hide immediately, default false.
+ * @param {number=} opt_timeout Delay time in milliseconds before hidding. If it
+ *     is zero, butter bar is hidden immediatelly. If it is not specified,
+ *     HIDE_DELAY_TIME_MS_ is used.
  * @private
  */
-ButterBar.prototype.hide_ = function(opt_force) {
+ButterBar.prototype.hide_ = function(opt_timeout) {
   this.clearHideTimeout_();
 
   if (!this.isVisible_())
     return;
 
-  var delay = HIDE_DELAY_TIME_MS;
-  if (opt_force || delay <= 0) {
+  var delay = typeof opt_timeout != 'undefined' ?
+    opt_timeout : ButterBar.HIDE_DELAY_TIME_MS_;
+  if (delay <= 0) {
     this.currentMode_ = null;
     this.butter_.classList.remove('visible');
     this.butter_.querySelector('.progress-bar').hidden = true;
@@ -185,21 +194,8 @@ ButterBar.prototype.hide_ = function(opt_force) {
     // Reschedule hide to comply with the minimal display time.
     this.hideTimeout_ = setTimeout(function() {
       this.hideTimeout_ = null;
-      this.hide_(true);
+      this.hide_(0);
     }.bind(this), delay);
-  }
-};
-
-/**
- * If butter bar shows an error message, close it.
- * @return {boolean} True if butter bar was closed.
- */
-ButterBar.prototype.hideError = function() {
-  if (this.isVisible_() && this.isError_()) {
-    this.hide_(true /* force */);
-    return true;
-  } else {
-    return false;
   }
 };
 
@@ -251,16 +247,24 @@ ButterBar.prototype.transferType_ = function() {
 
 /**
  * Set up butter bar for showing copy progress.
+ *
+ * @param {Object} progress Copy status object created by
+ *     FileCopyManager.getStatus().
  * @private
  */
-ButterBar.prototype.showProgress_ = function() {
-  this.progress_ = this.copyManager_.getStatus();
-  var options = {progress: this.progress_.percentage, actions: {}, timeout: 0};
+ButterBar.prototype.showProgress_ = function(progress) {
+  this.progress_ = progress;
+  var options = {
+    progress: progress.completedBytes / progress.totalBytes,
+    actions: {},
+    timeout: false
+  };
 
+  var pendingItems = progress.totalItems - progress.completedItems;
   var type = this.transferType_();
-  var progressString = (this.progress_.pendingItems === 1) ?
-          strf(type + '_FILE_NAME', this.progress_.filename) :
-          strf(type + '_ITEMS_REMAINING', this.progress_.pendingItems);
+  var progressString = (pendingItems === 1) ?
+          strf(type + '_FILE_NAME', progress.filename) :
+          strf(type + '_ITEMS_REMAINING', pendingItems);
 
   if (this.currentMode_ == ButterBar.Mode.COPY) {
     this.update_(progressString, options);
@@ -288,12 +292,12 @@ ButterBar.prototype.onCopyProgress_ = function(event) {
     case 'BEGIN':
       this.showTimeout_ = setTimeout(function() {
         this.showTimeout_ = null;
-        this.showProgress_();
+        this.showProgress_(event.status);
       }.bind(this), 500);
       break;
 
     case 'PROGRESS':
-      this.showProgress_();
+      this.showProgress_(event.status);
       break;
 
     case 'SUCCESS':
@@ -302,34 +306,35 @@ ButterBar.prototype.onCopyProgress_ = function(event) {
 
     case 'CANCELLED':
       this.show(ButterBar.Mode.DELETE,
-                str(this.transferType_() + '_CANCELLED'), { timeout: 1000 });
+                str(this.transferType_() + '_CANCELLED'));
       break;
 
     case 'ERROR':
-      this.progress_ = this.copyManager_.getStatus();
-      if (event.error.reason === 'TARGET_EXISTS') {
-        var name = event.error.data.name;
-        if (event.error.data.isDirectory)
+      this.progress_ = event.status;
+      var error = event.error;
+      if (error.code === util.FileOperationErrorType.TARGET_EXISTS) {
+        var name = error.data.name;
+        if (error.data.isDirectory)
           name += '/';
-        this.showError_(strf(this.transferType_() +
-                             '_TARGET_EXISTS_ERROR', name));
-      } else if (event.error.reason === 'FILESYSTEM_ERROR') {
-        if (event.error.data.toDrive &&
-            event.error.data.code === FileError.QUOTA_EXCEEDED_ERR) {
+        this.showError_(
+            strf(this.transferType_() + '_TARGET_EXISTS_ERROR', name));
+      } else if (error.code === util.FileOperationErrorType.FILESYSTEM_ERROR) {
+        if (error.data.toDrive &&
+            error.data.code === FileError.QUOTA_EXCEEDED_ERR) {
           // The alert will be shown in FileManager.onCopyProgress_.
           this.hide_();
         } else {
           this.showError_(strf(this.transferType_() + '_FILESYSTEM_ERROR',
-                               util.getFileErrorString(event.error.data.code)));
+                               util.getFileErrorString(error.data.code)));
           }
       } else {
-        this.showError_(strf(this.transferType_() + '_UNEXPECTED_ERROR',
-                             event.error));
+        this.showError_(
+            strf(this.transferType_() + '_UNEXPECTED_ERROR', error));
       }
       break;
 
     default:
-      console.log('Unknown "copy-progress" event reason: ' + event.reason);
+      console.warn('Unknown "copy-progress" event reason: ' + event.code);
   }
 };
 
@@ -339,22 +344,16 @@ ButterBar.prototype.onCopyProgress_ = function(event) {
  * @private
  */
 ButterBar.prototype.onDelete_ = function(event) {
-  var urls = Array.prototype.slice.call(event.urls);
   switch (event.reason) {
     case 'BEGIN':
       if (this.currentMode_ != ButterBar.Mode.DELETE)
         this.totalDeleted_ = 0;
-    case 'PROGRESS':
-      var props = [];
-      for (var i = 0; i < urls.length; i++) {
-        props[i] = { deleted: true };
-      }
-      this.metadataCache_.set(urls, 'internal', props);
 
-      this.totalDeleted_ += urls.length;
+    case 'PROGRESS':
+      this.totalDeleted_ += event.urls.length;
       var title = strf('DELETED_MESSAGE_PLURAL', this.totalDeleted_);
       if (this.totalDeleted_ == 1) {
-        var fullPath = util.extractFilePath(urls[0]);
+        var fullPath = util.extractFilePath(event.urls[0]);
         var fileName = PathUtil.split(fullPath).pop();
         title = strf('DELETED_MESSAGE', fileName);
       }
@@ -362,20 +361,17 @@ ButterBar.prototype.onDelete_ = function(event) {
       if (this.currentMode_ == ButterBar.Mode.DELETE)
         this.update_(title);
       else
-        this.show(ButterBar.Mode.DELETE, title, { timeout: 0 });
+        this.show(ButterBar.Mode.DELETE, title);
       break;
 
     case 'SUCCESS':
-      var props = [];
-      for (var i = 0; i < urls.length; i++) {
-        props[i] = { deleted: false };
-      }
-      this.metadataCache_.set(urls, 'internal', props);
+      break;
 
-      this.hide_();
+    case 'ERROR':
+      this.showError_(str('DELETE_ERROR'));
       break;
 
     default:
-      console.log('Unknown "delete" event reason: ' + event.reason);
+      console.warn('Unknown "delete" event reason: ' + event.reason);
   }
 };

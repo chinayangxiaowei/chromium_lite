@@ -7,11 +7,13 @@
 #include "apps/app_launcher.h"
 #include "base/bind.h"
 #include "base/command_line.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/extension_install_prompt.h"
 #include "chrome/browser/extensions/theme_installed_infobar_delegate.h"
 #include "chrome/browser/infobars/confirm_infobar_delegate.h"
 #include "chrome/browser/infobars/infobar_service.h"
+#include "chrome/browser/prefs/incognito_mode_prefs.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search/search.h"
 #include "chrome/browser/themes/theme_service.h"
@@ -27,7 +29,6 @@
 #include "chrome/browser/ui/simple_message_box.h"
 #include "chrome/browser/ui/singleton_tabs.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/url_constants.h"
@@ -49,61 +50,16 @@ using extensions::Extension;
 
 namespace {
 
+
+// Helpers --------------------------------------------------------------------
+
 bool disable_failure_ui_for_tests = false;
 
-// Helper class to put up an infobar when installation fails.
-class ErrorInfobarDelegate : public ConfirmInfoBarDelegate {
- public:
-  // Creates an error delegate and adds it to |infobar_service|.
-  static void Create(InfoBarService* infobar_service,
-                     Browser* browser,
-                     const extensions::CrxInstallerError& error);
-
- private:
-  ErrorInfobarDelegate(InfoBarService* infobar_service,
-                       Browser* browser,
-                       const extensions::CrxInstallerError& error)
-      : ConfirmInfoBarDelegate(infobar_service),
-        browser_(browser),
-        error_(error) {
-  }
-
-  virtual string16 GetMessageText() const OVERRIDE {
-    return error_.message();
-  }
-
-  virtual int GetButtons() const OVERRIDE {
-    return BUTTON_OK;
-  }
-
-  virtual string16 GetLinkText() const OVERRIDE {
-    return error_.type() == extensions::CrxInstallerError::ERROR_OFF_STORE ?
-        l10n_util::GetStringUTF16(IDS_LEARN_MORE) : ASCIIToUTF16("");
-  }
-
-  virtual bool LinkClicked(WindowOpenDisposition disposition) OVERRIDE {
-    chrome::NavigateParams params(
-        browser_,
-        GURL("http://support.google.com/chrome_webstore/?p=crx_warning"),
-        content::PAGE_TRANSITION_LINK);
-    params.disposition = NEW_FOREGROUND_TAB;
-    chrome::Navigate(&params);
-    return false;
-  }
-
-  Browser* browser_;
-  extensions::CrxInstallerError error_;
-};
-
-// static
-void ErrorInfobarDelegate::Create(InfoBarService* infobar_service,
-                                  Browser* browser,
-                                  const extensions::CrxInstallerError& error) {
-  infobar_service->AddInfoBar(scoped_ptr<InfoBarDelegate>(
-      new ErrorInfobarDelegate(infobar_service, browser, error)));
-}
-
 Browser* FindOrCreateVisibleBrowser(Profile* profile) {
+  // TODO(mpcomplete): remove this workaround for http://crbug.com/244246
+  // after fixing http://crbug.com/38676.
+  if (!IncognitoModePrefs::CanOpenBrowser(profile))
+    return NULL;
   Browser* browser =
       chrome::FindOrCreateTabbedBrowser(profile, chrome::GetActiveDesktop());
   if (browser->tab_strip_model()->count() == 0)
@@ -116,33 +72,136 @@ void ShowExtensionInstalledBubble(const extensions::Extension* extension,
                                   Profile* profile,
                                   const SkBitmap& icon) {
   Browser* browser = FindOrCreateVisibleBrowser(profile);
-  chrome::ShowExtensionInstalledBubble(extension, browser, icon);
+  if (browser)
+    chrome::ShowExtensionInstalledBubble(extension, browser, icon);
 }
 
-void OnAppLauncherEnabledCompleted(const extensions::Extension* extension,
-                                   Profile* profile,
-                                   SkBitmap* icon,
-                                   bool use_bubble,
-                                   bool use_launcher) {
-  if (use_launcher) {
-    AppListService::Get()->ShowAppList(profile);
 
-    content::NotificationService::current()->Notify(
-        chrome::NOTIFICATION_APP_INSTALLED_TO_APPLIST,
-        content::Source<Profile>(profile),
-        content::Details<const std::string>(&extension->id()));
-    return;
-  }
+// ErrorInfoBarDelegate -------------------------------------------------------
 
-  if (use_bubble) {
-    ShowExtensionInstalledBubble(extension, profile, *icon);
-    return;
-  }
+// Helper class to put up an infobar when installation fails.
+class ErrorInfoBarDelegate : public ConfirmInfoBarDelegate {
+ public:
+  // Creates an error infobar delegate and adds it to |infobar_service|.
+  static void Create(InfoBarService* infobar_service,
+                     const extensions::CrxInstallerError& error);
 
-  ExtensionInstallUI::OpenAppInstalledUI(profile, extension->id());
+ private:
+  ErrorInfoBarDelegate(InfoBarService* infobar_service,
+                       const extensions::CrxInstallerError& error);
+  virtual ~ErrorInfoBarDelegate();
+
+  // ConfirmInfoBarDelegate:
+  virtual string16 GetMessageText() const OVERRIDE;
+  virtual int GetButtons() const OVERRIDE;
+  virtual string16 GetLinkText() const OVERRIDE;
+  virtual bool LinkClicked(WindowOpenDisposition disposition) OVERRIDE;
+
+  extensions::CrxInstallerError error_;
+
+  DISALLOW_COPY_AND_ASSIGN(ErrorInfoBarDelegate);
+};
+
+// static
+void ErrorInfoBarDelegate::Create(InfoBarService* infobar_service,
+                                  const extensions::CrxInstallerError& error) {
+  infobar_service->AddInfoBar(scoped_ptr<InfoBarDelegate>(
+      new ErrorInfoBarDelegate(infobar_service, error)));
+}
+
+ErrorInfoBarDelegate::ErrorInfoBarDelegate(
+    InfoBarService* infobar_service,
+    const extensions::CrxInstallerError& error)
+    : ConfirmInfoBarDelegate(infobar_service),
+      error_(error) {
+}
+
+ErrorInfoBarDelegate::~ErrorInfoBarDelegate() {
+}
+
+string16 ErrorInfoBarDelegate::GetMessageText() const {
+  return error_.message();
+}
+
+int ErrorInfoBarDelegate::GetButtons() const {
+  return BUTTON_OK;
+}
+
+string16 ErrorInfoBarDelegate::GetLinkText() const {
+  return (error_.type() == extensions::CrxInstallerError::ERROR_OFF_STORE) ?
+      l10n_util::GetStringUTF16(IDS_LEARN_MORE) : string16();
+}
+
+bool ErrorInfoBarDelegate::LinkClicked(WindowOpenDisposition disposition) {
+  web_contents()->OpenURL(content::OpenURLParams(
+      GURL("http://support.google.com/chrome_webstore/?p=crx_warning"),
+      content::Referrer(),
+      (disposition == CURRENT_TAB) ? NEW_FOREGROUND_TAB : disposition,
+      content::PAGE_TRANSITION_LINK, false));
+  return false;
 }
 
 }  // namespace
+
+
+// ExtensionInstallUI ---------------------------------------------------------
+
+// static
+ExtensionInstallUI* ExtensionInstallUI::Create(Profile* profile) {
+  return new ExtensionInstallUIDefault(profile);
+}
+
+// static
+void ExtensionInstallUI::OpenAppInstalledUI(Profile* profile,
+                                            const std::string& app_id) {
+#if defined(OS_CHROMEOS)
+  AppListService::Get()->ShowForProfile(profile);
+
+  content::NotificationService::current()->Notify(
+      chrome::NOTIFICATION_APP_INSTALLED_TO_APPLIST,
+      content::Source<Profile>(profile),
+      content::Details<const std::string>(&app_id));
+#else
+  Browser* browser = FindOrCreateVisibleBrowser(profile);
+  if (browser) {
+    GURL url(chrome::IsInstantExtendedAPIEnabled() ?
+             chrome::kChromeUIAppsURL : chrome::kChromeUINewTabURL);
+    chrome::NavigateParams params(
+        chrome::GetSingletonTabNavigateParams(browser, url));
+    chrome::Navigate(&params);
+
+    content::NotificationService::current()->Notify(
+        chrome::NOTIFICATION_APP_INSTALLED_TO_NTP,
+        content::Source<WebContents>(params.target_contents),
+        content::Details<const std::string>(&app_id));
+  }
+#endif
+}
+
+// static
+void ExtensionInstallUI::DisableFailureUIForTests() {
+  disable_failure_ui_for_tests = true;
+}
+
+// static
+ExtensionInstallPrompt* ExtensionInstallUI::CreateInstallPromptWithBrowser(
+    Browser* browser) {
+  content::WebContents* web_contents = NULL;
+  if (browser)
+    web_contents = browser->tab_strip_model()->GetActiveWebContents();
+  return new ExtensionInstallPrompt(web_contents);
+}
+
+// static
+ExtensionInstallPrompt* ExtensionInstallUI::CreateInstallPromptWithProfile(
+    Profile* profile) {
+  Browser* browser = chrome::FindLastActiveWithProfile(profile,
+      chrome::GetActiveDesktop());
+  return CreateInstallPromptWithBrowser(browser);
+}
+
+
+// ExtensionInstallUIDefault --------------------------------------------------
 
 ExtensionInstallUIDefault::ExtensionInstallUIDefault(Profile* profile)
     : skip_post_install_ui_(false),
@@ -195,9 +254,22 @@ void ExtensionInstallUIDefault::OnInstallSuccess(const Extension* extension,
                   cmdline->HasSwitch(switches::kAppsNewInstallBubble));
 #endif
 
-    apps::GetIsAppLauncherEnabled(
-        base::Bind(&OnAppLauncherEnabledCompleted, extension, current_profile,
-                   icon, use_bubble));
+    if (apps::IsAppLauncherEnabled()) {
+      AppListService::Get()->ShowForProfile(current_profile);
+
+      content::NotificationService::current()->Notify(
+          chrome::NOTIFICATION_APP_INSTALLED_TO_APPLIST,
+          content::Source<Profile>(current_profile),
+          content::Details<const std::string>(&extension->id()));
+      return;
+    }
+
+    if (use_bubble) {
+      ShowExtensionInstalledBubble(extension, current_profile, *icon);
+      return;
+    }
+
+    ExtensionInstallUI::OpenAppInstalledUI(current_profile, extension->id());
     return;
   }
 
@@ -212,14 +284,14 @@ void ExtensionInstallUIDefault::OnInstallFailure(
 
   Browser* browser = chrome::FindLastActiveWithProfile(profile_,
       chrome::GetActiveDesktop());
-  if (!browser)  // unit tests
+  if (!browser)  // Can be NULL in unittests.
     return;
   WebContents* web_contents =
       browser->tab_strip_model()->GetActiveWebContents();
   if (!web_contents)
     return;
-  ErrorInfobarDelegate::Create(InfoBarService::FromWebContents(web_contents),
-                               browser, error);
+  ErrorInfoBarDelegate::Create(InfoBarService::FromWebContents(web_contents),
+                               error);
 }
 
 void ExtensionInstallUIDefault::SetSkipPostInstallUI(bool skip_ui) {
@@ -228,56 +300,4 @@ void ExtensionInstallUIDefault::SetSkipPostInstallUI(bool skip_ui) {
 
 void ExtensionInstallUIDefault::SetUseAppInstalledBubble(bool use_bubble) {
   use_app_installed_bubble_ = use_bubble;
-}
-
-// static
-ExtensionInstallUI* ExtensionInstallUI::Create(Profile* profile) {
-  return new ExtensionInstallUIDefault(profile);
-}
-
-// static
-void ExtensionInstallUI::OpenAppInstalledUI(Profile* profile,
-                                            const std::string& app_id) {
-#if defined(OS_CHROMEOS)
-  AppListService::Get()->ShowAppList(profile);
-
-  content::NotificationService::current()->Notify(
-      chrome::NOTIFICATION_APP_INSTALLED_TO_APPLIST,
-      content::Source<Profile>(profile),
-      content::Details<const std::string>(&app_id));
-#else
-  Browser* browser = FindOrCreateVisibleBrowser(profile);
-  GURL url(chrome::search::IsInstantExtendedAPIEnabled() ?
-           chrome::kChromeUIAppsURL : chrome::kChromeUINewTabURL);
-  chrome::NavigateParams params(
-      chrome::GetSingletonTabNavigateParams(browser, url));
-  chrome::Navigate(&params);
-
-  content::NotificationService::current()->Notify(
-      chrome::NOTIFICATION_APP_INSTALLED_TO_NTP,
-      content::Source<WebContents>(params.target_contents),
-      content::Details<const std::string>(&app_id));
-#endif
-}
-
-// static
-void ExtensionInstallUI::DisableFailureUIForTests() {
-  disable_failure_ui_for_tests = true;
-}
-
-// static
-ExtensionInstallPrompt* ExtensionInstallUI::CreateInstallPromptWithBrowser(
-    Browser* browser) {
-  content::WebContents* web_contents = NULL;
-  if (browser)
-    web_contents = browser->tab_strip_model()->GetActiveWebContents();
-  return new ExtensionInstallPrompt(web_contents);
-}
-
-// static
-ExtensionInstallPrompt* ExtensionInstallUI::CreateInstallPromptWithProfile(
-    Profile* profile) {
-  Browser* browser = chrome::FindLastActiveWithProfile(profile,
-      chrome::GetActiveDesktop());
-  return CreateInstallPromptWithBrowser(browser);
 }

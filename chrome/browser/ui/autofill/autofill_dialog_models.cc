@@ -6,12 +6,12 @@
 
 #include "base/bind.h"
 #include "base/prefs/pref_service.h"
-#include "base/stringprintf.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/time.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "chrome/common/pref_names.h"
-#include "components/autofill/browser/autofill_country.h"
+#include "components/autofill/core/browser/autofill_country.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -25,34 +25,39 @@ SuggestionsMenuModelDelegate::~SuggestionsMenuModelDelegate() {}
 
 SuggestionsMenuModel::SuggestionsMenuModel(
     SuggestionsMenuModelDelegate* delegate)
-    : ALLOW_THIS_IN_INITIALIZER_LIST(ui::SimpleMenuModel(this)),
+    : ui::SimpleMenuModel(this),
       delegate_(delegate),
       checked_item_(0) {}
 
 SuggestionsMenuModel::~SuggestionsMenuModel() {}
 
 void SuggestionsMenuModel::AddKeyedItem(
-    const std::string& key, const string16& item) {
-  items_.push_back(std::make_pair(key, item));
-  AddCheckItem(items_.size() - 1, item);
+    const std::string& key, const string16& display_label) {
+  Item item = { key, true };
+  items_.push_back(item);
+  AddCheckItem(items_.size() - 1, display_label);
 }
 
 void SuggestionsMenuModel::AddKeyedItemWithIcon(
-    const std::string& key, const string16& item, const gfx::Image& icon) {
-  AddKeyedItem(key, item);
+    const std::string& key,
+    const string16& display_label,
+    const gfx::Image& icon) {
+  AddKeyedItem(key, display_label);
   SetIcon(items_.size() - 1, icon);
 }
 
 void SuggestionsMenuModel::AddKeyedItemWithSublabel(
     const std::string& key,
-    const string16& display_label, const string16& display_sublabel) {
+    const string16& display_label,
+    const string16& display_sublabel) {
   AddKeyedItem(key, display_label);
   SetSublabel(items_.size() - 1, display_sublabel);
 }
 
 void SuggestionsMenuModel::AddKeyedItemWithSublabelAndIcon(
     const std::string& key,
-    const string16& display_label, const string16& display_sublabel,
+    const string16& display_label,
+    const string16& display_sublabel,
     const gfx::Image& icon) {
   AddKeyedItemWithIcon(key, display_label, icon);
   SetSublabel(items_.size() - 1, display_sublabel);
@@ -65,14 +70,39 @@ void SuggestionsMenuModel::Reset() {
 }
 
 std::string SuggestionsMenuModel::GetItemKeyAt(int index) const {
-  return items_[index].first;
+  return items_[index].key;
 }
 
 std::string SuggestionsMenuModel::GetItemKeyForCheckedItem() const {
   if (items_.empty())
     return std::string();
 
-  return items_[checked_item_].first;
+  return items_[checked_item_].key;
+}
+
+void SuggestionsMenuModel::SetCheckedItem(const std::string& item_key) {
+  SetCheckedItemNthWithKey(item_key, 1);
+}
+
+void SuggestionsMenuModel::SetCheckedIndex(size_t index) {
+  DCHECK_LT(index, items_.size());
+  checked_item_ = index;
+}
+
+void SuggestionsMenuModel::SetCheckedItemNthWithKey(const std::string& item_key,
+                                                    size_t n) {
+  for (size_t i = 0; i < items_.size(); ++i) {
+    if (items_[i].key == item_key) {
+      checked_item_ = i;
+      if (n-- <= 1)
+        return;
+    }
+  }
+}
+
+void SuggestionsMenuModel::SetEnabled(const std::string& item_key,
+                                      bool enabled) {
+  items_[GetItemIndex(item_key)].enabled = enabled;
 }
 
 bool SuggestionsMenuModel::IsCommandIdChecked(
@@ -82,7 +112,10 @@ bool SuggestionsMenuModel::IsCommandIdChecked(
 
 bool SuggestionsMenuModel::IsCommandIdEnabled(
     int command_id) const {
-  return true;
+  // Please note: command_id is same as the 0-based index in |items_|.
+  DCHECK_GE(command_id, 0);
+  DCHECK_LT(static_cast<size_t>(command_id), items_.size());
+  return items_[command_id].enabled;
 }
 
 bool SuggestionsMenuModel::GetAcceleratorForCommandId(
@@ -92,89 +125,17 @@ bool SuggestionsMenuModel::GetAcceleratorForCommandId(
 }
 
 void SuggestionsMenuModel::ExecuteCommand(int command_id, int event_flags) {
-  checked_item_ = command_id;
-  delegate_->SuggestionItemSelected(*this);
+  delegate_->SuggestionItemSelected(this, command_id);
 }
 
-// AccountChooserModel ---------------------------------------------------------
+size_t SuggestionsMenuModel::GetItemIndex(const std::string& item_key) {
+  for (size_t i = 0; i < items_.size(); ++i) {
+    if (items_[i].key == item_key)
+      return i;
+  }
 
-const int AccountChooserModel::kWalletItemId = 0;
-const int AccountChooserModel::kAutofillItemId = 1;
-
-AccountChooserModelDelegate::~AccountChooserModelDelegate() {}
-
-AccountChooserModel::AccountChooserModel(
-    AccountChooserModelDelegate* delegate,
-    PrefService* prefs)
-    : ALLOW_THIS_IN_INITIALIZER_LIST(ui::SimpleMenuModel(this)),
-      account_delegate_(delegate),
-      prefs_(prefs),
-      checked_item_(kWalletItemId),
-      had_wallet_error_(false) {
-  pref_change_registrar_.Init(prefs);
-  pref_change_registrar_.Add(
-      prefs::kAutofillDialogPayWithoutWallet,
-      base::Bind(&AccountChooserModel::PrefChanged, base::Unretained(this)));
-
-  // TODO(estade): proper strings and l10n.
-  AddCheckItem(kWalletItemId, ASCIIToUTF16("Google Wallet"));
-  SetIcon(
-      kWalletItemId,
-      ui::ResourceBundle::GetSharedInstance().GetImageNamed(IDR_WALLET_ICON));
-  AddCheckItemWithStringId(kAutofillItemId,
-                           IDS_AUTOFILL_DIALOG_PAY_WITHOUT_WALLET);
-  UpdateCheckmarkFromPref();
-}
-
-AccountChooserModel::~AccountChooserModel() {
-}
-
-bool AccountChooserModel::IsCommandIdChecked(int command_id) const {
-  return command_id == checked_item_;
-}
-
-bool AccountChooserModel::IsCommandIdEnabled(int command_id) const {
-  if (command_id == kWalletItemId && had_wallet_error_)
-    return false;
-
-  return true;
-}
-
-bool AccountChooserModel::GetAcceleratorForCommandId(
-    int command_id,
-    ui::Accelerator* accelerator) {
-  return false;
-}
-
-void AccountChooserModel::ExecuteCommand(int command_id, int event_flags) {
-  if (checked_item_ == command_id)
-    return;
-
-  checked_item_ = command_id;
-  account_delegate_->AccountChoiceChanged();
-}
-
-void AccountChooserModel::SetHadWalletError() {
-  had_wallet_error_ = true;
-  checked_item_ = kAutofillItemId;
-  account_delegate_->AccountChoiceChanged();
-}
-
-bool AccountChooserModel::WalletIsSelected() const {
-  return checked_item_ == kWalletItemId;
-}
-
-void AccountChooserModel::PrefChanged(const std::string& pref) {
-  DCHECK(pref == prefs::kAutofillDialogPayWithoutWallet);
-  UpdateCheckmarkFromPref();
-  account_delegate_->AccountChoiceChanged();
-}
-
-void AccountChooserModel::UpdateCheckmarkFromPref() {
-  if (prefs_->GetBoolean(prefs::kAutofillDialogPayWithoutWallet))
-    checked_item_ = kAutofillItemId;
-  else
-    checked_item_ = kWalletItemId;
+  NOTREACHED();
+  return 0;
 }
 
 // MonthComboboxModel ----------------------------------------------------------
@@ -190,11 +151,13 @@ int MonthComboboxModel::GetItemCount() const {
 
 // static
 string16 MonthComboboxModel::FormatMonth(int index) {
-  return ASCIIToUTF16(base::StringPrintf("%2d", index));
+  return ASCIIToUTF16(base::StringPrintf("%.2d", index));
 }
 
 string16 MonthComboboxModel::GetItemAt(int index) {
-  return index == 0 ? string16() : FormatMonth(index);
+  return index == 0 ?
+      l10n_util::GetStringUTF16(IDS_AUTOFILL_DIALOG_PLACEHOLDER_EXPIRY_MONTH) :
+      FormatMonth(index);
 }
 
 // YearComboboxModel -----------------------------------------------------------
@@ -214,10 +177,12 @@ int YearComboboxModel::GetItemCount() const {
 }
 
 string16 YearComboboxModel::GetItemAt(int index) {
-  if (index == 0)
-    return string16();
+  if (index == 0) {
+    return l10n_util::GetStringUTF16(
+        IDS_AUTOFILL_DIALOG_PLACEHOLDER_EXPIRY_YEAR);
+  }
 
   return base::IntToString16(this_year_ + index - 1);
 }
 
-}  // autofill
+}  // namespace autofill

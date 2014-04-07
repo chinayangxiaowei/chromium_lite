@@ -10,9 +10,9 @@
 
 #include "base/compiler_specific.h"
 #include "base/gtest_prod_util.h"
-#include "base/string16.h"
-#include "chrome/browser/webdata/web_database_table.h"
+#include "base/strings/string16.h"
 #include "chrome/browser/search_engines/template_url_id.h"
+#include "components/webdata/common/web_database_table.h"
 
 struct TemplateURLData;
 class WebDatabase;
@@ -57,6 +57,16 @@ class Statement;
 //   search_terms_replacement_key
 //                          See TemplateURLData::search_terms_replacement_key.
 //                          This was added in version 49.
+//   image_url              See TemplateURLData::image_url. This was added in
+//                          version 52.
+//   search_url_post_params See TemplateURLData::search_url_post_params. This
+//                          was added in version 52.
+//   suggest_url_post_params See TemplateURLData::suggestions_url_post_params.
+//                          This was added in version 52.
+//   instant_url_post_params See TemplateURLData::instant_url_post_params. This
+//                          was added in version 52.
+//   image_url_post_params  See TemplateURLData::image_url_post_params. This
+//                          was added in version 52.
 //
 //
 // This class also manages some fields in the |meta| table:
@@ -82,7 +92,6 @@ class KeywordTable : public WebDatabaseTable {
   virtual bool Init(sql::Connection* db, sql::MetaTable* meta_table) OVERRIDE;
   virtual bool IsSyncable() OVERRIDE;
   virtual bool MigrateToVersion(int version,
-                                const std::string& app_locale,
                                 bool* update_compatible_version) OVERRIDE;
 
   // Adds a new keyword, updating the id field on success.
@@ -127,6 +136,7 @@ class KeywordTable : public WebDatabaseTable {
   bool MigrateToVersion47AddAlternateURLsColumn();
   bool MigrateToVersion48RemoveKeywordsBackup();
   bool MigrateToVersion49AddSearchTermsReplacementKeyColumn();
+  bool MigrateToVersion52AddImageSearchAndPOSTSupport();
 
  private:
   FRIEND_TEST_ALL_PREFIXES(KeywordTableTest, GetTableContents);

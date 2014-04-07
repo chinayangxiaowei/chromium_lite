@@ -18,12 +18,16 @@
 #include "ppapi/proxy/browser_font_singleton_resource.h"
 #include "ppapi/proxy/content_decryptor_private_serializer.h"
 #include "ppapi/proxy/enter_proxy.h"
+#include "ppapi/proxy/ext_crx_file_system_private_resource.h"
+#include "ppapi/proxy/extensions_common_resource.h"
 #include "ppapi/proxy/flash_clipboard_resource.h"
 #include "ppapi/proxy/flash_file_resource.h"
 #include "ppapi/proxy/flash_fullscreen_resource.h"
 #include "ppapi/proxy/flash_resource.h"
 #include "ppapi/proxy/gamepad_resource.h"
 #include "ppapi/proxy/host_dispatcher.h"
+#include "ppapi/proxy/network_proxy_resource.h"
+#include "ppapi/proxy/pdf_resource.h"
 #include "ppapi/proxy/plugin_dispatcher.h"
 #include "ppapi/proxy/ppapi_messages.h"
 #include "ppapi/proxy/serialized_var.h"
@@ -52,6 +56,10 @@ namespace ppapi {
 namespace proxy {
 
 namespace {
+
+const char kSerializationError[] = "Failed to convert a PostMessage "
+    "argument from a PP_Var to a Javascript value. It may have cycles or be of "
+    "an unsupported type.";
 
 InterfaceProxy* CreateInstanceProxy(Dispatcher* dispatcher) {
   return new PPB_Instance_Proxy(dispatcher);
@@ -82,7 +90,7 @@ void RequestSurroundingText(PP_Instance instance) {
 
 PPB_Instance_Proxy::PPB_Instance_Proxy(Dispatcher* dispatcher)
     : InterfaceProxy(dispatcher),
-      callback_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {
+      callback_factory_(this) {
 }
 
 PPB_Instance_Proxy::~PPB_Instance_Proxy() {
@@ -322,6 +330,14 @@ void PPB_Instance_Proxy::SelectedFindResultChanged(PP_Instance instance,
   NOTIMPLEMENTED();  // Not proxied yet.
 }
 
+PP_Bool PPB_Instance_Proxy::IsFullscreen(PP_Instance instance) {
+  InstanceData* data = static_cast<PluginDispatcher*>(dispatcher())->
+      GetInstanceData(instance);
+  if (!data)
+    return PP_FALSE;
+  return PP_FromBool(data->view.is_fullscreen);
+}
+
 PP_Bool PPB_Instance_Proxy::SetFullscreen(PP_Instance instance,
                                           PP_Bool fullscreen) {
   PP_Bool result = PP_FALSE;
@@ -355,8 +371,17 @@ Resource* PPB_Instance_Proxy::GetSingletonResource(PP_Instance instance,
     case BROKER_SINGLETON_ID:
       new_singleton = new BrokerResource(connection, instance);
       break;
+    case CRX_FILESYSTEM_SINGLETON_ID:
+      new_singleton = new ExtCrxFileSystemPrivateResource(connection, instance);
+      break;
+    case EXTENSIONS_COMMON_SINGLETON_ID:
+      new_singleton = new ExtensionsCommonResource(connection, instance);
+      break;
     case GAMEPAD_SINGLETON_ID:
       new_singleton = new GamepadResource(connection, instance);
+      break;
+    case NETWORK_PROXY_SINGLETON_ID:
+      new_singleton = new NetworkProxyResource(connection, instance);
       break;
     case TRUETYPE_FONT_SINGLETON_ID:
       new_singleton = new TrueTypeFontSingletonResource(connection, instance);
@@ -380,7 +405,7 @@ Resource* PPB_Instance_Proxy::GetSingletonResource(PP_Instance instance,
           static_cast<PluginDispatcher*>(dispatcher()));
       break;
     case PDF_SINGLETON_ID:
-      // TODO(raymes): fill this in.
+      new_singleton = new PDFResource(connection, instance);
       break;
 #else
     case BROWSER_FONT_SINGLETON_ID:
@@ -394,7 +419,7 @@ Resource* PPB_Instance_Proxy::GetSingletonResource(PP_Instance instance,
 #endif  // !defined(OS_NACL) && !defined(NACL_WIN64)
   }
 
-  if (!new_singleton) {
+  if (!new_singleton.get()) {
     // Getting here implies that a constructor is missing in the above switch.
     NOTREACHED();
     return NULL;
@@ -774,7 +799,7 @@ void PPB_Instance_Proxy::SelectionChanged(PP_Instance instance) {
   data->should_do_request_surrounding_text = true;
 
   if (!data->is_request_surrounding_text_pending) {
-    MessageLoop::current()->PostTask(
+    base::MessageLoop::current()->PostTask(
         FROM_HERE,
         RunWhileLocked(base::Bind(&RequestSurroundingText, instance)));
     data->is_request_surrounding_text_pending = true;
@@ -916,6 +941,12 @@ void PPB_Instance_Proxy::OnHostMsgPostMessage(
     PP_Instance instance,
     SerializedVarReceiveInput message) {
   EnterInstanceNoLock enter(instance);
+  if (!message.is_valid_var()) {
+    PpapiGlobals::Get()->LogWithSource(
+        instance, PP_LOGLEVEL_ERROR, std::string(), kSerializationError);
+    return;
+  }
+
   if (enter.succeeded())
     enter.functions()->PostMessage(instance,
                                    message.GetForInstance(dispatcher(),

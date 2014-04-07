@@ -4,7 +4,7 @@
 
 #include "sync/js/sync_js_controller.h"
 
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/values.h"
 #include "sync/js/js_arg_list.h"
 #include "sync/js/js_event_details.h"
@@ -27,7 +27,7 @@ class SyncJsControllerTest : public testing::Test {
   }
 
  private:
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
 };
 
 TEST_F(SyncJsControllerTest, Messages) {

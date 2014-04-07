@@ -4,14 +4,13 @@
 
 #include "chrome/browser/browsing_data/browsing_data_helper.h"
 
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "chrome/browser/extensions/mock_extension_special_storage_policy.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/common/url_constants.h"
 #include "extensions/common/constants.h"
-#include "googleurl/src/gurl.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebString.h"
+#include "url/gurl.h"
 
 namespace {
 
@@ -39,17 +38,13 @@ class BrowsingDataHelperTest : public testing::Test {
   bool IsWebScheme(const std::string& scheme) {
     GURL test(scheme + "://example.com");
     return (BrowsingDataHelper::HasWebScheme(test) &&
-            BrowsingDataHelper::IsWebScheme(scheme) &&
-            BrowsingDataHelper::IsWebScheme(
-                WebKit::WebString::fromUTF8(scheme)));
+            BrowsingDataHelper::IsWebScheme(scheme));
   }
 
   bool IsExtensionScheme(const std::string& scheme) {
     GURL test(scheme + "://example.com");
     return (BrowsingDataHelper::HasExtensionScheme(test) &&
-            BrowsingDataHelper::IsExtensionScheme(scheme) &&
-            BrowsingDataHelper::IsExtensionScheme(
-                WebKit::WebString::fromUTF8(scheme)));
+            BrowsingDataHelper::IsExtensionScheme(scheme));
   }
 
   bool Match(const GURL& origin,
@@ -80,10 +75,10 @@ TEST_F(BrowsingDataHelperTest, ChromeSchemesAreNotWebSafe) {
   EXPECT_FALSE(IsWebScheme(chrome::kChromeInternalScheme));
   EXPECT_FALSE(IsWebScheme(chrome::kChromeUIScheme));
   EXPECT_FALSE(IsWebScheme(chrome::kJavaScriptScheme));
-  EXPECT_FALSE(IsWebScheme(chrome::kMailToScheme));
-  EXPECT_FALSE(IsWebScheme(chrome::kMetadataScheme));
-  EXPECT_FALSE(IsWebScheme(chrome::kSwappedOutScheme));
-  EXPECT_FALSE(IsWebScheme(chrome::kViewSourceScheme));
+  EXPECT_FALSE(IsWebScheme(content::kMailToScheme));
+  EXPECT_FALSE(IsWebScheme(content::kMetadataScheme));
+  EXPECT_FALSE(IsWebScheme(content::kSwappedOutScheme));
+  EXPECT_FALSE(IsWebScheme(content::kViewSourceScheme));
 }
 
 TEST_F(BrowsingDataHelperTest, WebSafeSchemesAreNotExtensions) {
@@ -105,10 +100,10 @@ TEST_F(BrowsingDataHelperTest, ChromeSchemesAreNotAllExtension) {
   EXPECT_FALSE(IsExtensionScheme(chrome::kChromeInternalScheme));
   EXPECT_FALSE(IsExtensionScheme(chrome::kChromeUIScheme));
   EXPECT_FALSE(IsExtensionScheme(chrome::kJavaScriptScheme));
-  EXPECT_FALSE(IsExtensionScheme(chrome::kMailToScheme));
-  EXPECT_FALSE(IsExtensionScheme(chrome::kMetadataScheme));
-  EXPECT_FALSE(IsExtensionScheme(chrome::kSwappedOutScheme));
-  EXPECT_FALSE(IsExtensionScheme(chrome::kViewSourceScheme));
+  EXPECT_FALSE(IsExtensionScheme(content::kMailToScheme));
+  EXPECT_FALSE(IsExtensionScheme(content::kMetadataScheme));
+  EXPECT_FALSE(IsExtensionScheme(content::kSwappedOutScheme));
+  EXPECT_FALSE(IsExtensionScheme(content::kViewSourceScheme));
 }
 
 TEST_F(BrowsingDataHelperTest, TestMatches) {
@@ -117,44 +112,48 @@ TEST_F(BrowsingDataHelperTest, TestMatches) {
   // Protect kOrigin1.
   mock_policy->AddProtected(kOrigin1.GetOrigin());
 
-  EXPECT_FALSE(Match(kOrigin1, kUnprotected, mock_policy));
-  EXPECT_TRUE(Match(kOrigin2, kUnprotected, mock_policy));
-  EXPECT_FALSE(Match(kOriginExt, kUnprotected, mock_policy));
-  EXPECT_FALSE(Match(kOriginDevTools, kUnprotected, mock_policy));
+  EXPECT_FALSE(Match(kOrigin1, kUnprotected, mock_policy.get()));
+  EXPECT_TRUE(Match(kOrigin2, kUnprotected, mock_policy.get()));
+  EXPECT_FALSE(Match(kOriginExt, kUnprotected, mock_policy.get()));
+  EXPECT_FALSE(Match(kOriginDevTools, kUnprotected, mock_policy.get()));
 
-  EXPECT_TRUE(Match(kOrigin1, kProtected, mock_policy));
-  EXPECT_FALSE(Match(kOrigin2, kProtected, mock_policy));
-  EXPECT_FALSE(Match(kOriginExt, kProtected, mock_policy));
-  EXPECT_FALSE(Match(kOriginDevTools, kProtected, mock_policy));
+  EXPECT_TRUE(Match(kOrigin1, kProtected, mock_policy.get()));
+  EXPECT_FALSE(Match(kOrigin2, kProtected, mock_policy.get()));
+  EXPECT_FALSE(Match(kOriginExt, kProtected, mock_policy.get()));
+  EXPECT_FALSE(Match(kOriginDevTools, kProtected, mock_policy.get()));
 
-  EXPECT_FALSE(Match(kOrigin1, kExtension, mock_policy));
-  EXPECT_FALSE(Match(kOrigin2, kExtension, mock_policy));
-  EXPECT_TRUE(Match(kOriginExt, kExtension, mock_policy));
-  EXPECT_FALSE(Match(kOriginDevTools, kExtension, mock_policy));
+  EXPECT_FALSE(Match(kOrigin1, kExtension, mock_policy.get()));
+  EXPECT_FALSE(Match(kOrigin2, kExtension, mock_policy.get()));
+  EXPECT_TRUE(Match(kOriginExt, kExtension, mock_policy.get()));
+  EXPECT_FALSE(Match(kOriginDevTools, kExtension, mock_policy.get()));
 
-  EXPECT_TRUE(Match(kOrigin1, kUnprotected | kProtected, mock_policy));
-  EXPECT_TRUE(Match(kOrigin2, kUnprotected | kProtected, mock_policy));
-  EXPECT_FALSE(Match(kOriginExt, kUnprotected | kProtected, mock_policy));
-  EXPECT_FALSE(Match(kOriginDevTools, kUnprotected | kProtected, mock_policy));
+  EXPECT_TRUE(Match(kOrigin1, kUnprotected | kProtected, mock_policy.get()));
+  EXPECT_TRUE(Match(kOrigin2, kUnprotected | kProtected, mock_policy.get()));
+  EXPECT_FALSE(Match(kOriginExt, kUnprotected | kProtected, mock_policy.get()));
+  EXPECT_FALSE(
+      Match(kOriginDevTools, kUnprotected | kProtected, mock_policy.get()));
 
-  EXPECT_FALSE(Match(kOrigin1, kUnprotected | kExtension, mock_policy));
-  EXPECT_TRUE(Match(kOrigin2, kUnprotected | kExtension, mock_policy));
-  EXPECT_TRUE(Match(kOriginExt, kUnprotected | kExtension, mock_policy));
-  EXPECT_FALSE(Match(kOriginDevTools, kUnprotected | kExtension, mock_policy));
+  EXPECT_FALSE(Match(kOrigin1, kUnprotected | kExtension, mock_policy.get()));
+  EXPECT_TRUE(Match(kOrigin2, kUnprotected | kExtension, mock_policy.get()));
+  EXPECT_TRUE(Match(kOriginExt, kUnprotected | kExtension, mock_policy.get()));
+  EXPECT_FALSE(
+      Match(kOriginDevTools, kUnprotected | kExtension, mock_policy.get()));
 
-  EXPECT_TRUE(Match(kOrigin1, kProtected | kExtension, mock_policy));
-  EXPECT_FALSE(Match(kOrigin2, kProtected | kExtension, mock_policy));
-  EXPECT_TRUE(Match(kOriginExt, kProtected | kExtension, mock_policy));
-  EXPECT_FALSE(Match(kOriginDevTools, kProtected | kExtension, mock_policy));
+  EXPECT_TRUE(Match(kOrigin1, kProtected | kExtension, mock_policy.get()));
+  EXPECT_FALSE(Match(kOrigin2, kProtected | kExtension, mock_policy.get()));
+  EXPECT_TRUE(Match(kOriginExt, kProtected | kExtension, mock_policy.get()));
+  EXPECT_FALSE(
+      Match(kOriginDevTools, kProtected | kExtension, mock_policy.get()));
 
-  EXPECT_TRUE(Match(kOrigin1, kUnprotected | kProtected | kExtension,
-      mock_policy));
-  EXPECT_TRUE(Match(kOrigin2, kUnprotected | kProtected | kExtension,
-      mock_policy));
-  EXPECT_TRUE(Match(kOriginExt, kUnprotected | kProtected | kExtension,
-      mock_policy));
-  EXPECT_FALSE(Match(kOriginDevTools, kUnprotected | kProtected | kExtension,
-      mock_policy));
+  EXPECT_TRUE(Match(
+      kOrigin1, kUnprotected | kProtected | kExtension, mock_policy.get()));
+  EXPECT_TRUE(Match(
+      kOrigin2, kUnprotected | kProtected | kExtension, mock_policy.get()));
+  EXPECT_TRUE(Match(
+      kOriginExt, kUnprotected | kProtected | kExtension, mock_policy.get()));
+  EXPECT_FALSE(Match(kOriginDevTools,
+                     kUnprotected | kProtected | kExtension,
+                     mock_policy.get()));
 }
 
 }  // namespace

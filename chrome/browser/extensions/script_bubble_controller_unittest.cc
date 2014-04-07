@@ -7,7 +7,7 @@
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "chrome/browser/extensions/component_loader.h"
 #include "chrome/browser/extensions/extension_action.h"
 #include "chrome/browser/extensions/extension_action_manager.h"
@@ -25,21 +25,26 @@
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/test/test_browser_thread.h"
 
-using content::BrowserThread;
+#if defined(OS_CHROMEOS)
+#include "chrome/browser/chromeos/login/user_manager.h"
+#include "chrome/browser/chromeos/settings/cros_settings.h"
+#include "chrome/browser/chromeos/settings/device_settings_service.h"
+#endif
 
 namespace extensions {
 namespace {
 
 class ScriptBubbleControllerTest : public ChromeRenderViewHostTestHarness {
- public:
+ protected:
   ScriptBubbleControllerTest()
-      : ui_thread_(BrowserThread::UI, MessageLoop::current()),
-        file_thread_(BrowserThread::FILE, MessageLoop::current()),
-        enable_script_bubble_(FeatureSwitch::script_bubble(), true) {
+      : enable_script_bubble_(FeatureSwitch::script_bubble(), true) {
   }
 
   virtual void SetUp() OVERRIDE {
     ChromeRenderViewHostTestHarness::SetUp();
+#if defined OS_CHROMEOS
+  test_user_manager_.reset(new chromeos::ScopedTestUserManager());
+#endif
     CommandLine command_line(CommandLine::NO_PROGRAM);
     Profile* profile =
         Profile::FromBrowserContext(web_contents()->GetBrowserContext());
@@ -54,7 +59,13 @@ class ScriptBubbleControllerTest : public ChromeRenderViewHostTestHarness {
         TabHelper::FromWebContents(web_contents())->script_bubble_controller();
   }
 
- protected:
+  virtual void TearDown() OVERRIDE {
+#if defined OS_CHROMEOS
+    test_user_manager_.reset();
+#endif
+    ChromeRenderViewHostTestHarness::TearDown();
+  }
+
   int tab_id() {
     return ExtensionTabUtil::GetTabId(web_contents());
   }
@@ -63,9 +74,13 @@ class ScriptBubbleControllerTest : public ChromeRenderViewHostTestHarness {
   ScriptBubbleController* script_bubble_controller_;
 
  private:
-  content::TestBrowserThread ui_thread_;
-  content::TestBrowserThread file_thread_;
   FeatureSwitch::ScopedOverride enable_script_bubble_;
+
+#if defined OS_CHROMEOS
+  chromeos::ScopedTestDeviceSettingsService test_device_settings_service_;
+  chromeos::ScopedTestCrosSettings test_cros_settings_;
+  scoped_ptr<chromeos::ScopedTestUserManager> test_user_manager_;
+#endif
 };
 
 TEST_F(ScriptBubbleControllerTest, Basics) {
@@ -107,9 +122,9 @@ TEST_F(ScriptBubbleControllerTest, Basics) {
                         .Append("activeTab")))
       .Build();
 
-  extension_service_->AddExtension(extension1);
-  extension_service_->AddExtension(extension2);
-  extension_service_->AddExtension(extension3);
+  extension_service_->AddExtension(extension1.get());
+  extension_service_->AddExtension(extension2.get());
+  extension_service_->AddExtension(extension3.get());
 
   EXPECT_EQ(0u, script_bubble_controller_->extensions_running_scripts().size());
 

@@ -142,9 +142,9 @@ class IBusEngineServiceImpl : public IBusEngineService {
   }
 
   // IBusEngineService override.
-  virtual void UnsetEngine() OVERRIDE {
-    LOG_IF(ERROR, engine_handler_ == NULL) << "There is no engine.";
-    engine_handler_ = NULL;
+  virtual void UnsetEngine(IBusEngineHandlerInterface* handler) OVERRIDE {
+    if (engine_handler_ == handler)
+      engine_handler_ = NULL;
   }
 
   // IBusEngineService override.
@@ -222,11 +222,22 @@ class IBusEngineServiceImpl : public IBusEngineService {
     exported_object_->SendSignal(&signal);
   }
 
+  // IBusEngineService override.
   virtual void CommitText(const std::string& text) OVERRIDE {
     dbus::Signal signal(ibus::engine::kServiceInterface,
                         ibus::engine::kCommitTextSignal);
     dbus::MessageWriter writer(&signal);
     AppendStringAsIBusText(text, &writer);
+    exported_object_->SendSignal(&signal);
+  }
+
+  // IBusEngineService override.
+  virtual void DeleteSurroundingText(int32 offset, uint32 length) OVERRIDE {
+    dbus::Signal signal(ibus::engine::kServiceInterface,
+                        ibus::engine::kDeleteSurroundingTextSignal);
+    dbus::MessageWriter writer(&signal);
+    writer.AppendInt32(offset);
+    writer.AppendUint32(length);
     exported_object_->SendSignal(&signal);
   }
 
@@ -486,8 +497,9 @@ class IBusEngineServiceDaemonlessImpl : public IBusEngineService {
   }
 
   // IBusEngineService override.
-  virtual void UnsetEngine() OVERRIDE {
-    IBusBridge::Get()->SetEngineHandler(NULL);
+  virtual void UnsetEngine(IBusEngineHandlerInterface* handler) OVERRIDE {
+    if (IBusBridge::Get()->GetEngineHandler() == handler)
+      IBusBridge::Get()->SetEngineHandler(NULL);
   }
 
   // IBusEngineService override.
@@ -561,6 +573,13 @@ class IBusEngineServiceDaemonlessImpl : public IBusEngineService {
     }
   }
 
+  // IBusEngineService override.
+  virtual void DeleteSurroundingText(int32 offset, uint32 length) OVERRIDE {
+    IBusInputContextHandlerInterface* input_context =
+        IBusBridge::Get()->GetInputContextHandler();
+    if (input_context)
+      input_context->DeleteSurroundingText(offset, length);
+  }
  private:
   DISALLOW_COPY_AND_ASSIGN(IBusEngineServiceDaemonlessImpl);
 };

@@ -16,11 +16,11 @@
 #include "base/format_macros.h"
 #include "base/logging.h"
 #include "base/rand_util.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
-#include "base/time.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
+#include "base/time/time.h"
 #include "crypto/hmac.h"
-#include "googleurl/src/gurl.h"
+#include "url/gurl.h"
 
 namespace {
 
@@ -89,7 +89,7 @@ std::string BuildBaseString(const GURL& request_base_url,
 
 std::string BuildBaseStringParameters(
     const OAuthRequestSigner::Parameters& parameters) {
-  std::string result = "";
+  std::string result;
   OAuthRequestSigner::Parameters::const_iterator cursor;
   OAuthRequestSigner::Parameters::const_iterator limit;
   bool first = true;
@@ -297,7 +297,7 @@ bool SignParameters(const GURL& request_base_url,
 // static
 bool OAuthRequestSigner::Decode(const std::string& text,
                                 std::string* decoded_text) {
-  std::string accumulator = "";
+  std::string accumulator;
   std::string::const_iterator cursor;
   std::string::const_iterator limit;
   for (limit = text.end(), cursor = text.begin(); cursor != limit; ++cursor) {
@@ -335,7 +335,7 @@ bool OAuthRequestSigner::Decode(const std::string& text,
 
 // static
 std::string OAuthRequestSigner::Encode(const std::string& text) {
-  std::string result = "";
+  std::string result;
   std::string::const_iterator cursor;
   std::string::const_iterator limit;
   for (limit = text.end(), cursor = text.begin(); cursor != limit; ++cursor) {

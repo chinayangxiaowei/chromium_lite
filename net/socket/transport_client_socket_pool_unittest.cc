@@ -9,7 +9,7 @@
 #include "base/callback.h"
 #include "base/compiler_specific.h"
 #include "base/logging.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/threading/platform_thread.h"
 #include "net/base/capturing_net_log.h"
 #include "net/base/ip_endpoint.h"
@@ -125,10 +125,6 @@ class MockClientSocket : public StreamSocket {
   virtual void SetOmniboxSpeculation() OVERRIDE {}
   virtual bool WasEverUsed() const OVERRIDE { return false; }
   virtual bool UsingTCPFastOpen() const OVERRIDE { return false; }
-  virtual int64 NumBytesRead() const OVERRIDE { return -1; }
-  virtual base::TimeDelta GetConnectTimeMicros() const OVERRIDE {
-    return base::TimeDelta::FromMicroseconds(-1);
-  }
   virtual bool WasNpnNegotiated() const OVERRIDE {
     return false;
   }
@@ -191,10 +187,6 @@ class MockFailingClientSocket : public StreamSocket {
   virtual void SetOmniboxSpeculation() OVERRIDE {}
   virtual bool WasEverUsed() const OVERRIDE { return false; }
   virtual bool UsingTCPFastOpen() const OVERRIDE { return false; }
-  virtual int64 NumBytesRead() const OVERRIDE { return -1; }
-  virtual base::TimeDelta GetConnectTimeMicros() const OVERRIDE {
-    return base::TimeDelta::FromMicroseconds(-1);
-  }
   virtual bool WasNpnNegotiated() const OVERRIDE {
     return false;
   }
@@ -235,7 +227,7 @@ class MockPendingClientSocket : public StreamSocket {
       bool should_stall,
       base::TimeDelta delay,
       net::NetLog* net_log)
-      : ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)),
+      : weak_factory_(this),
         should_connect_(should_connect),
         should_stall_(should_stall),
         delay_(delay),
@@ -246,7 +238,7 @@ class MockPendingClientSocket : public StreamSocket {
 
   // StreamSocket implementation.
   virtual int Connect(const CompletionCallback& callback) OVERRIDE {
-    MessageLoop::current()->PostDelayedTask(
+    base::MessageLoop::current()->PostDelayedTask(
         FROM_HERE,
         base::Bind(&MockPendingClientSocket::DoCallback,
                    weak_factory_.GetWeakPtr(), callback),
@@ -282,10 +274,6 @@ class MockPendingClientSocket : public StreamSocket {
   virtual void SetOmniboxSpeculation() OVERRIDE {}
   virtual bool WasEverUsed() const OVERRIDE { return false; }
   virtual bool UsingTCPFastOpen() const OVERRIDE { return false; }
-  virtual int64 NumBytesRead() const OVERRIDE { return -1; }
-  virtual base::TimeDelta GetConnectTimeMicros() const OVERRIDE {
-    return base::TimeDelta::FromMicroseconds(-1);
-  }
   virtual bool WasNpnNegotiated() const OVERRIDE {
     return false;
   }
@@ -841,9 +829,8 @@ class RequestSocketCallback : public TestCompletionCallbackBase {
       : handle_(handle),
         pool_(pool),
         within_callback_(false),
-        ALLOW_THIS_IN_INITIALIZER_LIST(callback_(
-            base::Bind(&RequestSocketCallback::OnComplete,
-                       base::Unretained(this)))) {
+        callback_(base::Bind(&RequestSocketCallback::OnComplete,
+                             base::Unretained(this))) {
   }
 
   virtual ~RequestSocketCallback() {}
@@ -861,8 +848,9 @@ class RequestSocketCallback : public TestCompletionCallbackBase {
       handle_->socket()->Disconnect();
       handle_->Reset();
       {
-        MessageLoop::ScopedNestableTaskAllower allow(MessageLoop::current());
-        MessageLoop::current()->RunUntilIdle();
+        base::MessageLoop::ScopedNestableTaskAllower allow(
+            base::MessageLoop::current());
+        base::MessageLoop::current()->RunUntilIdle();
       }
       within_callback_ = true;
       scoped_refptr<TransportSocketParams> dest(new TransportSocketParams(
@@ -964,7 +952,7 @@ TEST_F(TransportClientSocketPoolTest, IdleSocketLoadTiming) {
 
   handle.Reset();
   // Need to run all pending to release the socket back to the pool.
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
 
   // Now we should have 1 idle socket.
   EXPECT_EQ(1, pool_.IdleSocketCount());
@@ -992,14 +980,14 @@ TEST_F(TransportClientSocketPoolTest, ResetIdleSocketsOnIPAddressChange) {
   handle.Reset();
 
   // Need to run all pending to release the socket back to the pool.
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
 
   // Now we should have 1 idle socket.
   EXPECT_EQ(1, pool_.IdleSocketCount());
 
   // After an IP address change, we should have 0 idle sockets.
   NetworkChangeNotifier::NotifyObserversOfIPAddressChangeForTests();
-  MessageLoop::current()->RunUntilIdle();  // Notification happens async.
+  base::MessageLoop::current()->RunUntilIdle();  // Notification happens async.
 
   EXPECT_EQ(0, pool_.IdleSocketCount());
 }
@@ -1042,14 +1030,14 @@ TEST_F(TransportClientSocketPoolTest, BackupSocketConnect) {
     EXPECT_FALSE(handle.socket());
 
     // Create the first socket, set the timer.
-    MessageLoop::current()->RunUntilIdle();
+    base::MessageLoop::current()->RunUntilIdle();
 
     // Wait for the backup socket timer to fire.
     base::PlatformThread::Sleep(base::TimeDelta::FromMilliseconds(
         ClientSocketPool::kMaxConnectRetryIntervalMs + 50));
 
     // Let the appropriate socket connect.
-    MessageLoop::current()->RunUntilIdle();
+    base::MessageLoop::current()->RunUntilIdle();
 
     EXPECT_EQ(OK, callback.WaitForResult());
     EXPECT_TRUE(handle.is_initialized());
@@ -1084,7 +1072,7 @@ TEST_F(TransportClientSocketPoolTest, BackupSocketCancel) {
     EXPECT_FALSE(handle.socket());
 
     // Create the first socket, set the timer.
-    MessageLoop::current()->RunUntilIdle();
+    base::MessageLoop::current()->RunUntilIdle();
 
     if (index == CANCEL_AFTER_WAIT) {
       // Wait for the backup socket timer to fire.
@@ -1093,7 +1081,7 @@ TEST_F(TransportClientSocketPoolTest, BackupSocketCancel) {
     }
 
     // Let the appropriate socket connect.
-    MessageLoop::current()->RunUntilIdle();
+    base::MessageLoop::current()->RunUntilIdle();
 
     handle.Reset();
 
@@ -1130,7 +1118,7 @@ TEST_F(TransportClientSocketPoolTest, BackupSocketFailAfterStall) {
   EXPECT_FALSE(handle.socket());
 
   // Create the first socket, set the timer.
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
 
   // Wait for the backup socket timer to fire.
   base::PlatformThread::Sleep(base::TimeDelta::FromMilliseconds(
@@ -1141,7 +1129,7 @@ TEST_F(TransportClientSocketPoolTest, BackupSocketFailAfterStall) {
   host_resolver_->set_synchronous_mode(true);
 
   // Let the appropriate socket connect.
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
 
   EXPECT_EQ(ERR_CONNECTION_FAILED, callback.WaitForResult());
   EXPECT_FALSE(handle.is_initialized());
@@ -1178,7 +1166,7 @@ TEST_F(TransportClientSocketPoolTest, BackupSocketFailAfterDelay) {
   EXPECT_FALSE(handle.socket());
 
   // Create the first socket, set the timer.
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
 
   // Wait for the backup socket timer to fire.
   base::PlatformThread::Sleep(base::TimeDelta::FromMilliseconds(
@@ -1189,7 +1177,7 @@ TEST_F(TransportClientSocketPoolTest, BackupSocketFailAfterDelay) {
   host_resolver_->set_synchronous_mode(true);
 
   // Let the appropriate socket connect.
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
 
   EXPECT_EQ(ERR_CONNECTION_FAILED, callback.WaitForResult());
   EXPECT_FALSE(handle.is_initialized());
@@ -1222,8 +1210,8 @@ TEST_F(TransportClientSocketPoolTest, IPv6FallbackSocketIPv4FinishesFirst) {
   client_socket_factory_.set_client_socket_types(case_types, 2);
 
   // Resolve an AddressList with a IPv6 address first and then a IPv4 address.
-  host_resolver_->rules()->AddIPLiteralRule(
-      "*", "2:abcd::3:4:ff,2.2.2.2", "");
+  host_resolver_->rules()
+      ->AddIPLiteralRule("*", "2:abcd::3:4:ff,2.2.2.2", std::string());
 
   TestCompletionCallback callback;
   ClientSocketHandle handle;
@@ -1267,8 +1255,8 @@ TEST_F(TransportClientSocketPoolTest, IPv6FallbackSocketIPv6FinishesFirst) {
       TransportConnectJob::kIPv6FallbackTimerInMs + 50));
 
   // Resolve an AddressList with a IPv6 address first and then a IPv4 address.
-  host_resolver_->rules()->AddIPLiteralRule(
-      "*", "2:abcd::3:4:ff,2.2.2.2", "");
+  host_resolver_->rules()
+      ->AddIPLiteralRule("*", "2:abcd::3:4:ff,2.2.2.2", std::string());
 
   TestCompletionCallback callback;
   ClientSocketHandle handle;
@@ -1301,8 +1289,8 @@ TEST_F(TransportClientSocketPoolTest, IPv6NoIPv4AddressesToFallbackTo) {
       MockClientSocketFactory::MOCK_DELAYED_CLIENT_SOCKET);
 
   // Resolve an AddressList with only IPv6 addresses.
-  host_resolver_->rules()->AddIPLiteralRule(
-      "*", "2:abcd::3:4:ff,3:abcd::3:4:ff", "");
+  host_resolver_->rules()
+      ->AddIPLiteralRule("*", "2:abcd::3:4:ff,3:abcd::3:4:ff", std::string());
 
   TestCompletionCallback callback;
   ClientSocketHandle handle;
@@ -1335,8 +1323,7 @@ TEST_F(TransportClientSocketPoolTest, IPv4HasNoFallback) {
       MockClientSocketFactory::MOCK_DELAYED_CLIENT_SOCKET);
 
   // Resolve an AddressList with only IPv4 addresses.
-  host_resolver_->rules()->AddIPLiteralRule(
-      "*", "1.1.1.1", "");
+  host_resolver_->rules()->AddIPLiteralRule("*", "1.1.1.1", std::string());
 
   TestCompletionCallback callback;
   ClientSocketHandle handle;

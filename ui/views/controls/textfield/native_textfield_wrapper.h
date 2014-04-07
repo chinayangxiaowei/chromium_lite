@@ -5,8 +5,8 @@
 #ifndef UI_VIEWS_CONTROLS_TEXTFIELD_NATIVE_TEXTFIELD_WRAPPER_H_
 #define UI_VIEWS_CONTROLS_TEXTFIELD_NATIVE_TEXTFIELD_WRAPPER_H_
 
-#include "base/string16.h"
 #include "base/i18n/rtl.h"
+#include "base/strings/string16.h"
 #include "ui/base/range/range.h"
 #include "ui/gfx/native_widget_types.h"
 #include "ui/gfx/selection_model.h"
@@ -45,8 +45,8 @@ class VIEWS_EXPORT NativeTextfieldWrapper {
   // text field.
   virtual void AppendText(const string16& text) = 0;
 
-  // Replaces the selected text with |text|.
-  virtual void ReplaceSelection(const string16& text) = 0;
+  // Inserts |text| at the current cursor position, replacing any selected text.
+  virtual void InsertOrReplaceText(const string16& text) = 0;
 
   // Returns the text direction.
   virtual base::i18n::TextDirection GetTextDirection() const = 0;
@@ -62,12 +62,8 @@ class VIEWS_EXPORT NativeTextfieldWrapper {
   // Clears the selection within the edit field and sets the caret to the end.
   virtual void ClearSelection() = 0;
 
-  // Updates the border display for the native text field with the state desired
-  // by the Textfield.
+  // Updates whether there is a visible border.
   virtual void UpdateBorder() = 0;
-
-  // Updates the color of the border with the state desired by the Textfield.
-  virtual void UpdateBorderColor() = 0;
 
   // Updates the text color used when painting the native text field.
   virtual void UpdateTextColor() = 0;
@@ -95,6 +91,9 @@ class VIEWS_EXPORT NativeTextfieldWrapper {
 
   // Updates the vertical margins for the native text field.
   virtual void UpdateVerticalMargins() = 0;
+
+  // Updates the vertical alignment for the native text field.
+  virtual void UpdateVerticalAlignment() = 0;
 
   // Sets the focus to the text field. Returns false if the wrapper
   // didn't take focus.
@@ -168,9 +167,16 @@ class VIEWS_EXPORT NativeTextfieldWrapper {
   // any insets.
   virtual int GetTextfieldBaseline() const = 0;
 
+  // Returns the width necessary to display the current text, including any
+  // necessary space for the cursor or border/margin.
+  virtual int GetWidthNeededForText() const = 0;
+
   // Performs the action associated with the specified command id. Not called
   // ExecuteCommand to avoid name clash.
   virtual void ExecuteTextCommand(int command_id) = 0;
+
+  // Returns whether there is a drag operation originating from the textfield.
+  virtual bool HasTextBeingDragged() = 0;
 
   // Creates an appropriate NativeTextfieldWrapper for the platform.
   static NativeTextfieldWrapper* CreateWrapper(Textfield* field);

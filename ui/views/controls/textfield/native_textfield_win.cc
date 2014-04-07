@@ -8,8 +8,8 @@
 
 #include "base/i18n/case_conversion.h"
 #include "base/i18n/rtl.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/win/metro.h"
 #include "base/win/windows_version.h"
 #include "grit/ui_strings.h"
@@ -23,6 +23,7 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/l10n/l10n_util_win.h"
 #include "ui/base/range/range.h"
+#include "ui/base/win/hwnd_util.h"
 #include "ui/base/win/mouse_wheel_util.h"
 #include "ui/native_theme/native_theme_win.h"
 #include "ui/views/controls/label.h"
@@ -97,9 +98,8 @@ NativeTextfieldWin::NativeTextfieldWin(Textfield* textfield)
       ime_composition_length_(0),
       container_view_(new NativeViewHost),
       bg_color_(0),
-      ALLOW_THIS_IN_INITIALIZER_LIST(
-          tsf_event_router_(base::win::IsTSFAwareRequired() ?
-              new ui::TSFEventRouter(this) : NULL)) {
+      tsf_event_router_(base::win::IsTSFAwareRequired() ?
+          new ui::TSFEventRouter(this) : NULL) {
   if (!loaded_libarary_module_) {
     // msftedit.dll is RichEdit ver 4.1.
     // This version is available from WinXP SP1 and has TSF support.
@@ -196,7 +196,7 @@ void NativeTextfieldWin::AppendText(const string16& text) {
                 reinterpret_cast<LPARAM>(text.c_str()));
 }
 
-void NativeTextfieldWin::ReplaceSelection(const string16& text) {
+void NativeTextfieldWin::InsertOrReplaceText(const string16& text) {
   // Currently not needed.
   NOTIMPLEMENTED();
 }
@@ -232,10 +232,6 @@ void NativeTextfieldWin::UpdateBorder() {
                SWP_NOOWNERZORDER | SWP_NOSIZE);
 }
 
-void NativeTextfieldWin::UpdateBorderColor() {
-  // TODO(estade): implement.
-}
-
 void NativeTextfieldWin::UpdateTextColor() {
   CHARFORMAT cf = {0};
   cf.dwMask = CFM_COLOR;
@@ -255,7 +251,8 @@ void NativeTextfieldWin::UpdateReadOnly() {
 
 void NativeTextfieldWin::UpdateFont() {
   SendMessage(m_hWnd, WM_SETFONT,
-              reinterpret_cast<WPARAM>(textfield_->font().GetNativeFont()),
+              reinterpret_cast<WPARAM>(
+                  textfield_->GetPrimaryFont().GetNativeFont()),
               TRUE);
   // Setting the font blows away any text color we've set, so reset it.
   UpdateTextColor();
@@ -303,6 +300,12 @@ void NativeTextfieldWin::UpdateVerticalMargins() {
   }
   // Non-zero margins case.
   NOTIMPLEMENTED();
+}
+
+void NativeTextfieldWin::UpdateVerticalAlignment() {
+  // Default alignment is vertically centered.
+  if (textfield_->vertical_alignment() != gfx::ALIGN_VCENTER)
+    NOTIMPLEMENTED();
 }
 
 bool NativeTextfieldWin::SetFocus() {
@@ -417,15 +420,25 @@ void NativeTextfieldWin::ClearEditHistory() {
 }
 
 int NativeTextfieldWin::GetFontHeight() {
-  return textfield_->font().GetHeight();
+  return textfield_->font_list().GetHeight();
 }
 
 int NativeTextfieldWin::GetTextfieldBaseline() const {
-  return textfield_->font().GetBaseline();
+  return textfield_->font_list().GetBaseline();
+}
+
+int NativeTextfieldWin::GetWidthNeededForText() const {
+  NOTIMPLEMENTED();
+  return 0;
 }
 
 void NativeTextfieldWin::ExecuteTextCommand(int command_id) {
   ExecuteCommand(command_id, 0);
+}
+
+bool NativeTextfieldWin::HasTextBeingDragged() {
+  NOTIMPLEMENTED();
+  return false;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -546,7 +559,7 @@ void NativeTextfieldWin::InitializeAccessibilityInfo() {
     // We expect it to be a Label preceeding this view (if it exists).
     string16 name;
     View* label_view = parent->child_at(label_index);
-    if (label_view->GetClassName() == Label::kViewClassName) {
+    if (!strcmp(label_view->GetClassName(), Label::kViewClassName)) {
       ui::AccessibleViewState state;
       label_view->GetAccessibleState(&state);
       hr = pAccPropServices->SetHwndPropStr(m_hWnd, OBJID_CLIENT,
@@ -597,7 +610,9 @@ void NativeTextfieldWin::OnChar(TCHAR ch, UINT repeat_count, UINT flags) {
 
 void NativeTextfieldWin::OnContextMenu(HWND window, const POINT& point) {
   POINT p(point);
+  ui::MenuSourceType source_type = ui::MENU_SOURCE_MOUSE;
   if (point.x == -1 || point.y == -1) {
+    source_type = ui::MENU_SOURCE_KEYBOARD;
     GetCaretPos(&p);
     MapWindowPoints(HWND_DESKTOP, &p, 1);
   }
@@ -608,7 +623,7 @@ void NativeTextfieldWin::OnContextMenu(HWND window, const POINT& point) {
 
   ignore_result(context_menu_runner_->RunMenuAt(textfield_->GetWidget(), NULL,
       gfx::Rect(gfx::Point(p), gfx::Size()), MenuItemView::TOPLEFT,
-      MenuRunner::HAS_MNEMONICS));
+      source_type, MenuRunner::HAS_MNEMONICS));
 }
 
 void NativeTextfieldWin::OnCopy() {
@@ -617,8 +632,9 @@ void NativeTextfieldWin::OnCopy() {
 
   const string16 text(GetSelectedText());
   if (!text.empty()) {
-    ui::ScopedClipboardWriter(ui::Clipboard::GetForCurrentThread(),
-                              ui::Clipboard::BUFFER_STANDARD).WriteText(text);
+    ui::ScopedClipboardWriter(
+        ui::Clipboard::GetForCurrentThread(),
+        ui::Clipboard::BUFFER_STANDARD).WriteText(text);
     if (TextfieldController* controller = textfield_->GetController())
       controller->OnAfterCutOrCopy();
   }
@@ -1046,6 +1062,8 @@ void NativeTextfieldWin::OnPaste() {
     textfield_->SyncText();
     text_before_change_.clear();
     ReplaceSel(collapsed.c_str(), true);
+    if (TextfieldController* controller = textfield_->GetController())
+      controller->OnAfterPaste();
   }
 }
 
@@ -1079,15 +1097,15 @@ void NativeTextfieldWin::OnKillFocus(HWND hwnd) {
 }
 
 void NativeTextfieldWin::OnSysChar(TCHAR ch, UINT repeat_count, UINT flags) {
-  // Nearly all alt-<xxx> combos result in beeping rather than doing something
-  // useful, so we discard most.  Exceptions:
-  //   * ctrl-alt-<xxx>, which is sometimes important, generates WM_CHAR instead
-  //     of WM_SYSCHAR, so it doesn't need to be handled here.
-  //   * alt-space gets translated by the default WM_SYSCHAR handler to a
-  //     WM_SYSCOMMAND to open the application context menu, so we need to allow
-  //     it through.
-  if (ch == VK_SPACE)
-    SetMsgHandled(false);
+  DCHECK(flags & KF_ALTDOWN);
+  // Explicitly show the system menu at a good location on [Alt]+[Space].
+  // Nearly all other [Alt]+<xxx> combos result in beeping rather than doing
+  // something useful, so discard those. Note that [Ctrl]+[Alt]+<xxx> generates
+  // WM_CHAR instead of WM_SYSCHAR, so it is not handled here.
+  if (ch == VK_SPACE) {
+    ui::ShowSystemMenu(
+        container_view_->GetWidget()->GetTopLevelWidget()->GetNativeWindow());
+  }
 }
 
 void NativeTextfieldWin::OnFinalMessage(HWND hwnd) {
@@ -1096,16 +1114,11 @@ void NativeTextfieldWin::OnFinalMessage(HWND hwnd) {
 
 void NativeTextfieldWin::HandleKeystroke() {
   const MSG* msg = GetCurrentMessage();
+  ui::KeyEvent event(*msg, msg->message == WM_CHAR);
   ScopedFreeze freeze(this, GetTextObjectModel());
 
   TextfieldController* controller = textfield_->GetController();
-  bool handled = false;
-  if (controller) {
-    ui::KeyEvent event(*msg, msg->message == WM_CHAR);
-    handled = controller->HandleKeyEvent(textfield_, event);
-  }
-
-  if (!handled) {
+  if (!controller || !controller->HandleKeyEvent(textfield_, event)) {
     OnBeforePossibleChange();
 
     if (msg->wParam == ui::VKEY_HOME || msg->wParam == ui::VKEY_END) {

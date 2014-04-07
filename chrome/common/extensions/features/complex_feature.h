@@ -14,8 +14,6 @@
 
 namespace extensions {
 
-class SimpleFeature;
-
 // A ComplexFeature is composed of one or many Features. A ComplexFeature
 // is available if any Feature (i.e. permission rule) that composes it is
 // available, but not if only some combination of Features is available.
@@ -38,6 +36,8 @@ class ComplexFeature : public Feature {
                                             const GURL& url,
                                             Platform platform) const OVERRIDE;
 
+  virtual bool IsIdInWhitelist(const std::string& extension_id) const OVERRIDE;
+
  protected:
   // extensions::Feature:
   virtual std::string GetAvailabilityMessage(
@@ -46,6 +46,8 @@ class ComplexFeature : public Feature {
       const GURL& url) const OVERRIDE;
 
   virtual std::set<Context>* GetContexts() OVERRIDE;
+
+  virtual bool IsInternal() const OVERRIDE;
 
  private:
   FeatureList features_;

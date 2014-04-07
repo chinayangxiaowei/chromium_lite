@@ -11,6 +11,7 @@
 #include "base/basictypes.h"
 #include "base/callback.h"
 #include "base/compiler_specific.h"
+#include "base/memory/ref_counted.h"
 #include "base/values.h"
 
 namespace content {
@@ -21,58 +22,74 @@ class DevToolsProtocol {
  public:
   typedef base::Callback<void(const std::string& message)> Notifier;
 
-  // JSON RPC 2.0 spec: http://www.jsonrpc.org/specification#error_object
-  enum Error {
-    kErrorParseError = -32700,
-    kErrorInvalidRequest = -32600,
-    kErrorNoSuchMethod = -32601,
-    kErrorInvalidParams = -32602,
-    kErrorInternalError = -32603
-  };
-
   class Response;
 
-  class Command {
+  class Message : public base::RefCountedThreadSafe<Message> {
    public:
-    ~Command();
-
-    int id() { return id_; }
     std::string domain() { return domain_; }
     std::string method() { return method_; }
     base::DictionaryValue* params() { return params_.get(); }
+    virtual std::string Serialize() = 0;
 
-    // Creates success response. Takes ownership of |result|.
-    scoped_ptr<Response> SuccessResponse(base::DictionaryValue* result);
-
-    // Creates error response. Caller takes ownership of the return value.
-    scoped_ptr<Response> ErrorResponse(int error_code,
-                                       const std::string& error_message);
-
-    // Creates error response. Caller takes ownership of the return value.
-    scoped_ptr<Response> NoSuchMethodErrorResponse();
-
-   private:
-    friend class DevToolsProtocol;
-    Command(int id, const std::string& domain, const std::string& method,
+   protected:
+    friend class base::RefCountedThreadSafe<Message>;
+    virtual ~Message();
+    Message(const std::string& method,
             base::DictionaryValue* params);
 
-    int id_;
     std::string domain_;
     std::string method_;
     scoped_ptr<base::DictionaryValue> params_;
 
+   private:
+    DISALLOW_COPY_AND_ASSIGN(Message);
+  };
+
+  class Command : public Message {
+   public:
+    int id() { return id_; }
+
+    virtual std::string Serialize() OVERRIDE;
+
+    // Creates success response. Takes ownership of |result|.
+    scoped_refptr<Response> SuccessResponse(base::DictionaryValue* result);
+
+    // Creates error response.
+    scoped_refptr<Response> InternalErrorResponse(const std::string& message);
+
+    // Creates error response.
+    scoped_refptr<Response> InvalidParamResponse(const std::string& param);
+
+    // Creates error response.
+    scoped_refptr<Response> NoSuchMethodErrorResponse();
+
+    // Creates async response promise.
+    scoped_refptr<Response> AsyncResponsePromise();
+
+   protected:
+    virtual  ~Command();
+
+   private:
+    friend class DevToolsProtocol;
+    Command(int id, const std::string& method,
+            base::DictionaryValue* params);
+
+    int id_;
+
     DISALLOW_COPY_AND_ASSIGN(Command);
   };
 
-  class Response {
+  class Response : public base::RefCountedThreadSafe<Response> {
    public:
-    ~Response();
-
     std::string Serialize();
 
+    bool is_async_promise() { return is_async_promise_; }
+
    private:
+    friend class base::RefCountedThreadSafe<Response>;
     friend class Command;
     friend class DevToolsProtocol;
+    virtual  ~Response();
 
     Response(int id, base::DictionaryValue* result);
     Response(int id, int error_code, const std::string& error_message);
@@ -81,52 +98,36 @@ class DevToolsProtocol {
     scoped_ptr<base::DictionaryValue> result_;
     int error_code_;
     std::string error_message_;
+    bool is_async_promise_;
 
     DISALLOW_COPY_AND_ASSIGN(Response);
   };
 
-  class Notification {
+  class Notification : public Message {
    public:
-    // Takes ownership of |params|.
-    Notification(const std::string& method, base::DictionaryValue* params);
-    ~Notification();
 
-    std::string Serialize();
+    virtual std::string Serialize() OVERRIDE;
 
    private:
-    std::string method_;
-    scoped_ptr<base::DictionaryValue> params_;
+    friend class DevToolsProtocol;
+    virtual ~Notification();
+
+    // Takes ownership of |params|.
+    Notification(const std::string& method,
+                 base::DictionaryValue* params);
 
     DISALLOW_COPY_AND_ASSIGN(Notification);
   };
 
-  class Event {
-   public:
-    ~Event();
-
-    std::string Serialize();
-
-   private:
-    friend class DevToolsProtocol;
-
-    // Takes ownership over |params|.
-    Event(const std::string& method, base::DictionaryValue* params);
-
-    std::string method_;
-    scoped_ptr<base::DictionaryValue> params_;
-
-    DISALLOW_COPY_AND_ASSIGN(Event);
-  };
-
   class Handler {
    public:
-    typedef base::Callback<scoped_ptr<DevToolsProtocol::Response>(
-        DevToolsProtocol::Command* command)> CommandHandler;
+    typedef base::Callback<scoped_refptr<DevToolsProtocol::Response>(
+        scoped_refptr<DevToolsProtocol::Command> command)> CommandHandler;
 
     virtual ~Handler();
 
-    virtual scoped_ptr<DevToolsProtocol::Response> HandleCommand(
-        DevToolsProtocol::Command* command);
+    virtual scoped_refptr<DevToolsProtocol::Response> HandleCommand(
+        scoped_refptr<DevToolsProtocol::Command> command);
 
     void SetNotifier(const Notifier& notifier);
 
@@ -140,6 +141,10 @@ class DevToolsProtocol {
     void SendNotification(const std::string& method,
                           base::DictionaryValue* params);
 
+    // Sends message to client, the caller is presumed to properly
+    // format the message.
+    void SendRawMessage(const std::string& message);
+
    private:
     typedef std::map<std::string, CommandHandler> CommandHandlers;
 
@@ -149,13 +154,19 @@ class DevToolsProtocol {
     DISALLOW_COPY_AND_ASSIGN(Handler);
   };
 
-  static Command* ParseCommand(const std::string& json,
-                               std::string* error_response);
+  static scoped_refptr<Command> ParseCommand(const std::string& json,
+                                             std::string* error_response);
 
-  static Event* CreateEvent(const std::string& method,
-                            base::DictionaryValue* params);
+  static scoped_refptr<Notification> ParseNotification(
+      const std::string& json);
+
+  static scoped_refptr<Notification> CreateNotification(
+      const std::string& method, base::DictionaryValue* params);
 
  private:
+  static base::DictionaryValue* ParseMessage(const std::string& json,
+                                             std::string* error_response);
+
   DevToolsProtocol() {}
   ~DevToolsProtocol() {}
 };

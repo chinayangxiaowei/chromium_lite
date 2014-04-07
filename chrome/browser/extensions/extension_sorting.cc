@@ -7,10 +7,9 @@
 #include <algorithm>
 #include <vector>
 
-#include "base/prefs/pref_service.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/extension_scoped_prefs.h"
 #include "chrome/browser/extensions/extension_service.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/extensions/extension.h"
 #include "content/public/browser/notification_service.h"
 
@@ -46,12 +45,10 @@ ExtensionSorting::AppOrdinals::~AppOrdinals() {}
 ////////////////////////////////////////////////////////////////////////////////
 // ExtensionSorting
 
-ExtensionSorting::ExtensionSorting(ExtensionScopedPrefs* extension_scoped_prefs,
-                                   PrefService* pref_service)
+ExtensionSorting::ExtensionSorting(ExtensionScopedPrefs* extension_scoped_prefs)
     : extension_scoped_prefs_(extension_scoped_prefs),
-      pref_service_(pref_service),
-      extension_service_(NULL) {
-  CreateDefaultOrdinals();
+      extension_service_(NULL),
+      default_ordinals_created_(false) {
 }
 
 ExtensionSorting::~ExtensionSorting() {
@@ -98,7 +95,7 @@ void ExtensionSorting::MigrateAppIndex(
            extension_ids.begin(); ext_id != extension_ids.end(); ++ext_id) {
     int old_page_index = 0;
     syncer::StringOrdinal page = GetPageOrdinal(*ext_id);
-    if (extension_scoped_prefs_->ReadExtensionPrefInteger(
+    if (extension_scoped_prefs_->ReadPrefAsInteger(
             *ext_id,
             kPrefPageIndexDeprecated,
             &old_page_index)) {
@@ -120,7 +117,7 @@ void ExtensionSorting::MigrateAppIndex(
     }
 
     int old_app_launch_index = 0;
-    if (extension_scoped_prefs_->ReadExtensionPrefInteger(
+    if (extension_scoped_prefs_->ReadPrefAsInteger(
             *ext_id,
             kPrefAppLaunchIndexDeprecated,
             &old_app_launch_index)) {
@@ -289,7 +286,7 @@ syncer::StringOrdinal ExtensionSorting::GetAppLaunchOrdinal(
   // If the preference read fails then raw_value will still be unset and we
   // will return an invalid StringOrdinal to signal that no app launch ordinal
   // was found.
-  extension_scoped_prefs_->ReadExtensionPrefString(
+  extension_scoped_prefs_->ReadPrefAsString(
       extension_id, kPrefAppLaunchOrdinal, &raw_value);
   return syncer::StringOrdinal(raw_value);
 }
@@ -344,10 +341,6 @@ syncer::StringOrdinal ExtensionSorting::CreateNextAppLaunchOrdinal(
 }
 
 syncer::StringOrdinal ExtensionSorting::CreateFirstAppPageOrdinal() const {
-  const DictionaryValue* extensions = pref_service_->GetDictionary(
-          ExtensionPrefs::kExtensionsPref);
-  CHECK(extensions);
-
   if (ntp_ordinal_map_.empty())
     return syncer::StringOrdinal::CreateInitialOrdinal();
 
@@ -355,10 +348,6 @@ syncer::StringOrdinal ExtensionSorting::CreateFirstAppPageOrdinal() const {
 }
 
 syncer::StringOrdinal ExtensionSorting::GetNaturalAppPageOrdinal() const {
-  const DictionaryValue* extensions = pref_service_->GetDictionary(
-          ExtensionPrefs::kExtensionsPref);
-  CHECK(extensions);
-
   if (ntp_ordinal_map_.empty())
     return syncer::StringOrdinal::CreateInitialOrdinal();
 
@@ -378,7 +367,7 @@ syncer::StringOrdinal ExtensionSorting::GetPageOrdinal(
   std::string raw_data;
   // If the preference read fails then raw_data will still be unset and we will
   // return an invalid StringOrdinal to signal that no page ordinal was found.
-  extension_scoped_prefs_->ReadExtensionPrefString(
+  extension_scoped_prefs_->ReadPrefAsString(
       extension_id, kPrefPageOrdinal, &raw_data);
   return syncer::StringOrdinal(raw_data);
 }
@@ -429,12 +418,6 @@ int ExtensionSorting::PageStringOrdinalAsInteger(
 
 syncer::StringOrdinal ExtensionSorting::PageIntegerAsStringOrdinal(
     size_t page_index) {
-  const DictionaryValue* extensions = pref_service_->GetDictionary(
-          ExtensionPrefs::kExtensionsPref);
-
-  if (!extensions)
-    return syncer::StringOrdinal();
-
   if (page_index < ntp_ordinal_map_.size()) {
     PageOrdinalMap::const_iterator it = ntp_ordinal_map_.begin();
     std::advance(it, page_index);
@@ -484,6 +467,7 @@ void ExtensionSorting::InitializePageOrdinalMap(
     // Ensure that the web store app still isn't found in this list, since
     // it is added after this loop.
     DCHECK(*ext_it != extension_misc::kWebStoreAppId);
+    DCHECK(*ext_it != extension_misc::kChromeAppId);
   }
 
   // Include the Web Store App since it is displayed on the NTP.
@@ -493,6 +477,14 @@ void ExtensionSorting::InitializePageOrdinalMap(
     AddOrdinalMapping(extension_misc::kWebStoreAppId,
                       web_store_app_page,
                       GetAppLaunchOrdinal(extension_misc::kWebStoreAppId));
+  }
+  // Include the Chrome App since it is displayed in the app launcher.
+  syncer::StringOrdinal chrome_app_page =
+      GetPageOrdinal(extension_misc::kChromeAppId);
+  if (chrome_app_page.IsValid()) {
+    AddOrdinalMapping(extension_misc::kChromeAppId,
+                      chrome_app_page,
+                      GetAppLaunchOrdinal(extension_misc::kChromeAppId));
   }
 }
 
@@ -547,12 +539,17 @@ void ExtensionSorting::SyncIfNeeded(const std::string& extension_id) {
 }
 
 void ExtensionSorting::CreateDefaultOrdinals() {
+  if (default_ordinals_created_)
+    return;
+  default_ordinals_created_ = true;
+
   // The following defines the default order of apps.
 #if defined(OS_CHROMEOS)
   std::vector<std::string> app_ids;
   chromeos::default_app_order::Get(&app_ids);
 #else
   const char* kDefaultAppOrder[] = {
+    extension_misc::kChromeAppId,
     extension_misc::kWebStoreAppId,
   };
   const std::vector<const char*> app_ids(
@@ -573,7 +570,8 @@ void ExtensionSorting::CreateDefaultOrdinals() {
 bool ExtensionSorting::GetDefaultOrdinals(
     const std::string& extension_id,
     syncer::StringOrdinal* page_ordinal,
-    syncer::StringOrdinal* app_launch_ordinal) const {
+    syncer::StringOrdinal* app_launch_ordinal) {
+  CreateDefaultOrdinals();
   AppOrdinalsMap::const_iterator it = default_ordinals_.find(extension_id);
   if (it == default_ordinals_.end())
     return false;

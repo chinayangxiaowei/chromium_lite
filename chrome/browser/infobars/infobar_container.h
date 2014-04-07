@@ -8,9 +8,7 @@
 #include <vector>
 
 #include "base/compiler_specific.h"
-#include "base/time.h"
-#include "chrome/browser/ui/search/search_model_observer.h"
-#include "chrome/common/search_types.h"
+#include "base/time/time.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 #include "third_party/skia/include/core/SkColor.h"
@@ -19,12 +17,6 @@ class InfoBar;
 class InfoBarDelegate;
 class InfoBarService;
 
-namespace chrome {
-namespace search {
-class SearchModel;
-}
-}
-
 // InfoBarContainer is a cross-platform base class to handle the visibility-
 // related aspects of InfoBars.  While InfoBars own themselves, the
 // InfoBarContainer is responsible for telling particular InfoBars that they
@@ -32,24 +24,7 @@ class SearchModel;
 //
 // Platforms need to subclass this to implement a few platform-specific
 // functions, which are pure virtual here.
-//
-// This class also observes changes to the SearchModel modes.  It hides infobars
-// temporarily if the user changes into |SEARCH_SUGGESTIONS| mode (refer to
-// chrome::search::Mode in chrome/common/search_types.h for all search modes)
-// when on a :
-// - |DEFAULT| page: when Instant overlay is ready;
-// - |NTP| or |SEARCH_RESULTS| page: immediately;
-//   TODO(kuan): this scenario requires more complex synchronization with
-//   renderer SearchBoxAPI and will be implemented as the next step;
-//   for now, hiding is immediate.
-// When the user changes back out of |SEARCH_SUGGESTIONS| mode, it reshows any
-// infobars, and starts a 50 ms window during which any attempts to re-hide any
-// infobars are handled without animation.  This prevents glitchy-looking
-// behavior when the user navigates following a mode change, which otherwise
-// would re-show the infobars only to instantly animate them closed.  The window
-// to re-hide infobars without animation is canceled if a tab change occurs.
-class InfoBarContainer : public content::NotificationObserver,
-                         public chrome::search::SearchModelObserver {
+class InfoBarContainer : public content::NotificationObserver {
  public:
   class Delegate {
    public:
@@ -68,16 +43,12 @@ class InfoBarContainer : public content::NotificationObserver,
     virtual ~Delegate();
   };
 
-  // |search_model| may be NULL if this class is used in a window that does not
-  // support Instant Extended.
-  InfoBarContainer(Delegate* delegate,
-                   chrome::search::SearchModel* search_model);
+  explicit InfoBarContainer(Delegate* delegate);
   virtual ~InfoBarContainer();
 
-  // Changes the InfoBarService for which this container is showing
-  // infobars.  This will remove all current infobars from the container, add
-  // the infobars from |infobar_service|, and show them all.  |infobar_service|
-  // may be NULL.
+  // Changes the InfoBarService for which this container is showing infobars.
+  // This will remove all current infobars from the container, add the infobars
+  // from |infobar_service|, and show them all.  |infobar_service| may be NULL.
   void ChangeInfoBarService(InfoBarService* infobar_service);
 
   // Returns the amount by which to overlap the toolbar above, and, when
@@ -101,9 +72,9 @@ class InfoBarContainer : public content::NotificationObserver,
   // anything necessary to respond, e.g. re-layout.
   void OnInfoBarStateChanged(bool is_animating);
 
-  // Called by |infobar| to request that it be removed from the container, as it
-  // is about to delete itself.  At this point, |infobar| should already be
-  // hidden.
+  // Called by |infobar| to request that it be removed from the container.  At
+  // this point, |infobar| should already be hidden.  Once the infobar is
+  // removed, it is guaranteed to delete itself and will not be re-added again.
   void RemoveInfoBar(InfoBar* infobar);
 
   const Delegate* delegate() const { return delegate_; }
@@ -115,10 +86,19 @@ class InfoBarContainer : public content::NotificationObserver,
   void RemoveAllInfoBarsForDestruction();
 
   // These must be implemented on each platform to e.g. adjust the visible
-  // object hierarchy.
+  // object hierarchy.  The first two functions should each be called exactly
+  // once during an infobar's life (see comments on RemoveInfoBar() and
+  // AddInfoBar()).
   virtual void PlatformSpecificAddInfoBar(InfoBar* infobar,
                                           size_t position) = 0;
   virtual void PlatformSpecificRemoveInfoBar(InfoBar* infobar) = 0;
+#if defined(OS_ANDROID)
+  // This is a temporary hook that can be removed once infobar code for
+  // Android is upstreamed and the translate infobar implemented as three
+  // different infobars like GTK does.
+  virtual void PlatformSpecificReplaceInfoBar(InfoBar* old_infobar,
+                                              InfoBar* new_infobar) {}
+#endif
   virtual void PlatformSpecificInfoBarStateChanged(bool is_animating) {}
 
  private:
@@ -129,28 +109,32 @@ class InfoBarContainer : public content::NotificationObserver,
                        const content::NotificationSource& source,
                        const content::NotificationDetails& details) OVERRIDE;
 
-  // chrome::search::SearchModelObserver:
-  virtual void ModelChanged(
-      const chrome::search::SearchModel::State& old_state,
-      const chrome::search::SearchModel::State& new_state) OVERRIDE;
-
   // Hides an InfoBar for the specified delegate, in response to a notification
   // from the selected InfoBarService.  The InfoBar's disappearance will be
-  // animated if |use_animation| is true and it has been more than 50ms since
-  // infobars were reshown due to an Instant Extended mode change. The InfoBar
-  // will call back to RemoveInfoBar() to remove itself once it's hidden (which
-  // may mean synchronously).  Returns the position within |infobars_| the
-  // infobar was previously at.
-  size_t HideInfoBar(InfoBarDelegate* delegate, bool use_animation);
+  // animated if |use_animation| is true. The InfoBar will call back to
+  // RemoveInfoBar() to remove itself once it's hidden (which may mean
+  // synchronously).  Returns the position within |infobars_| the infobar was
+  // previously at.
+  size_t HideInfoBar(InfoBar* infobar, bool use_animation);
+
+  // Find an existing infobar in the container.
+  InfoBar* FindInfoBar(InfoBarDelegate* delegate);
 
   // Hides all infobars in this container without animation.
   void HideAllInfoBars();
+
+  void ReplaceInfoBar(InfoBarDelegate* old_delegate,
+                      InfoBarDelegate* new_delegate);
 
   // Adds |infobar| to this container before the existing infobar at position
   // |position| and calls Show() on it.  |animate| is passed along to
   // infobar->Show().  Depending on the value of |callback_status|, this calls
   // infobar->set_container(this) either before or after the call to Show() so
   // that OnInfoBarStateChanged() either will or won't be called as a result.
+  //
+  // This should be called only once for an infobar -- once it's added, it can
+  // be repeatedly shown and hidden, but not removed and then re-added (see
+  // comments on RemoveInfoBar()).
   enum CallbackStatus { NO_CALLBACK, WANT_CALLBACK };
   void AddInfoBar(InfoBar* infobar,
                   size_t position,
@@ -164,17 +148,6 @@ class InfoBarContainer : public content::NotificationObserver,
   Delegate* delegate_;
   InfoBarService* infobar_service_;
   InfoBars infobars_;
-
-  // Tracks whether infobars in the container are shown or hidden.
-  bool infobars_shown_;
-
-  // Tracks the most recent time infobars were re-shown after being hidden due
-  // to Instant Extended's ModeChanged.
-  base::TimeTicks infobars_shown_time_;
-
-  // Tracks which search mode is active, as well as mode changes, for Instant
-  // Extended.
-  chrome::search::SearchModel* search_model_;
 
   // Calculated in SetMaxTopArrowHeight().
   int top_arrow_target_height_;

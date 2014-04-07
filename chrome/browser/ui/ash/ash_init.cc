@@ -11,10 +11,9 @@
 #include "ash/magnifier/partial_magnification_controller.h"
 #include "ash/shell.h"
 #include "ash/wm/event_rewriter_event_filter.h"
-#include "ash/wm/property_util.h"
 #include "base/command_line.h"
 #include "chrome/browser/browser_shutdown.h"
-#include "chrome/browser/chromeos/accessibility/accessibility_util.h"
+#include "chrome/browser/chromeos/accessibility/accessibility_manager.h"
 #include "chrome/browser/chromeos/accessibility/magnification_manager.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/ui/ash/chrome_shell_delegate.h"
@@ -23,14 +22,14 @@
 #include "chrome/common/chrome_switches.h"
 #include "ui/aura/env.h"
 #include "ui/aura/root_window.h"
-#include "ui/compositor/compositor_setup.h"
 
 #if defined(OS_CHROMEOS)
 #include "base/chromeos/chromeos_version.h"
-#include "chrome/browser/chromeos/login/user_manager.h"
 #include "chrome/browser/ui/ash/brightness_controller_chromeos.h"
 #include "chrome/browser/ui/ash/ime_controller_chromeos.h"
 #include "chrome/browser/ui/ash/volume_controller_chromeos.h"
+#include "chromeos/chromeos_switches.h"
+#include "chromeos/login/login_state.h"
 #include "ui/base/x/x11_util.h"
 #endif
 
@@ -44,16 +43,6 @@ bool ShouldOpenAshOnStartup() {
   return CommandLine::ForCurrentProcess()->HasSwitch(switches::kOpenAsh);
 }
 
-#if defined(OS_CHROMEOS)
-// Returns true if the cursor should be initially hidden.
-bool ShouldInitiallyHideCursor() {
-  if (base::chromeos::IsRunningOnChromeOS())
-    return !chromeos::UserManager::Get()->IsUserLoggedIn();
-  else
-    return CommandLine::ForCurrentProcess()->HasSwitch(switches::kLoginManager);
-}
-#endif
-
 void OpenAsh() {
 #if defined(OS_CHROMEOS)
   if (base::chromeos::IsRunningOnChromeOS()) {
@@ -64,13 +53,9 @@ void OpenAsh() {
   }
 
   // Hide the mouse cursor completely at boot.
-  if (ShouldInitiallyHideCursor())
+  if (!chromeos::LoginState::Get()->IsUserLoggedIn())
     ash::Shell::set_initially_hide_cursor(true);
 #endif
-
-  // Its easier to mark all windows as persisting and exclude the ones we care
-  // about (browser windows), rather than explicitly excluding certain windows.
-  ash::SetDefaultPersistsAcrossAllWorkspaces(true);
 
   // Shell takes ownership of ChromeShellDelegate.
   ash::Shell* shell = ash::Shell::CreateInstance(new ChromeShellDelegate);
@@ -85,7 +70,7 @@ void OpenAsh() {
   shell->accelerator_controller()->SetImeControlDelegate(
       scoped_ptr<ash::ImeControlDelegate>(new ImeController).Pass());
   ash::Shell::GetInstance()->high_contrast_controller()->SetEnabled(
-      chromeos::accessibility::IsHighContrastEnabled());
+      chromeos::AccessibilityManager::Get()->IsHighContrastEnabled());
 
   DCHECK(chromeos::MagnificationManager::Get());
   bool magnifier_enabled =

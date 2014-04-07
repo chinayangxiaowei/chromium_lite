@@ -4,9 +4,8 @@
 
 #include "base/file_util.h"
 #include "base/memory/ref_counted.h"
-#include "base/string_util.h"
 #include "base/strings/string_split.h"
-#include "chrome/browser/diagnostics/sqlite_diagnostics.h"
+#include "base/strings/string_util.h"
 #include "chrome/browser/history/history_types.h"
 #include "chrome/browser/history/top_sites.h"
 #include "chrome/browser/history/top_sites_database.h"
@@ -26,13 +25,13 @@ TopSitesDatabase::~TopSitesDatabase() {
 }
 
 bool TopSitesDatabase::Init(const base::FilePath& db_name) {
-  bool file_existed = file_util::PathExists(db_name);
+  bool file_existed = base::PathExists(db_name);
 
   if (!file_existed)
     may_need_history_migration_ = true;
 
   db_.reset(CreateDB(db_name));
-  if (!db_.get())
+  if (!db_)
     return false;
 
   bool does_meta_exist = sql::MetaTable::DoesTableExist(db_.get());
@@ -43,14 +42,12 @@ bool TopSitesDatabase::Init(const base::FilePath& db_name) {
     // the entries as they are no longer applicable, but it's safest to just
     // remove the file and start over.
     db_.reset(NULL);
-    if (!file_util::Delete(db_name, false) &&
-        !file_util::Delete(db_name, false)) {
-      // Try to delete twice. If we can't, fail.
+    if (!sql::Connection::Delete(db_name)) {
       LOG(ERROR) << "unable to delete old TopSites file";
       return false;
     }
     db_.reset(CreateDB(db_name));
-    if (!db_.get())
+    if (!db_)
       return false;
   }
 
@@ -374,7 +371,7 @@ bool TopSitesDatabase::RemoveURL(const MostVisitedURL& url) {
 sql::Connection* TopSitesDatabase::CreateDB(const base::FilePath& db_name) {
   scoped_ptr<sql::Connection> db(new sql::Connection());
   // Settings copied from ThumbnailDatabase.
-  db->set_error_histogram_name("Sqlite.Thumbnail.Error");
+  db->set_histogram_tag("TopSites");
   db->set_page_size(4096);
   db->set_cache_size(32);
 

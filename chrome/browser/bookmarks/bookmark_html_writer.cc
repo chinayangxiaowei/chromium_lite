@@ -9,18 +9,18 @@
 #include "base/bind_helpers.h"
 #include "base/callback.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/platform_file.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "chrome/browser/bookmarks/bookmark_codec.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/favicon/favicon_service.h"
 #include "chrome/browser/favicon/favicon_service_factory.h"
-#include "chrome/browser/history/history_types.h"
-#include "chrome/common/chrome_notification_types.h"
+#include "chrome/common/favicon/favicon_types.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_source.h"
 #include "grit/generated_resources.h"
@@ -417,7 +417,7 @@ void BookmarkFaviconFetcher::Observe(
     const content::NotificationSource& source,
     const content::NotificationDetails& details) {
   if (chrome::NOTIFICATION_PROFILE_DESTROYED == type && fetcher != NULL) {
-    MessageLoop::current()->DeleteSoon(FROM_HERE, fetcher);
+    base::MessageLoop::current()->DeleteSoon(FROM_HERE, fetcher);
     fetcher = NULL;
   }
 }
@@ -445,7 +445,7 @@ void BookmarkFaviconFetcher::ExecuteWriter() {
                                 profile_)),
                             path_, favicons_map_.release(), observer_)));
   if (fetcher != NULL) {
-    MessageLoop::current()->DeleteSoon(FROM_HERE, fetcher);
+    base::MessageLoop::current()->DeleteSoon(FROM_HERE, fetcher);
     fetcher = NULL;
   }
 }
@@ -463,7 +463,7 @@ bool BookmarkFaviconFetcher::FetchNextFavicon() {
           profile_, Profile::EXPLICIT_ACCESS);
       favicon_service->GetRawFaviconForURL(
           FaviconService::FaviconForURLParams(
-              profile_, GURL(url), history::FAVICON, gfx::kFaviconSize),
+              profile_, GURL(url), chrome::FAVICON, gfx::kFaviconSize),
           ui::SCALE_FACTOR_100P,
           base::Bind(&BookmarkFaviconFetcher::OnFaviconDataAvailable,
                      base::Unretained(this)),
@@ -477,7 +477,7 @@ bool BookmarkFaviconFetcher::FetchNextFavicon() {
 }
 
 void BookmarkFaviconFetcher::OnFaviconDataAvailable(
-    const history::FaviconBitmapResult& bitmap_result) {
+    const chrome::FaviconBitmapResult& bitmap_result) {
   GURL url;
   if (!bookmark_urls_.empty()) {
     url = GURL(bookmark_urls_.front());

@@ -6,46 +6,45 @@
 
 var binding = require('binding').Binding.create('syncFileSystem');
 
-var chromeHidden = requireNative('chrome_hidden').GetChromeHidden();
+var eventBindings = require('event_bindings');
 var fileSystemNatives = requireNative('file_system_natives');
-var forEach = require('utils').forEach;
 var syncFileSystemNatives = requireNative('sync_file_system');
 
 binding.registerCustomHook(function(bindingsAPI) {
   var apiFunctions = bindingsAPI.apiFunctions;
 
   // Functions which take in an [instanceOf=FileEntry].
-  function bindFileEntryFunction(i, functionName) {
+  function bindFileEntryFunction(functionName) {
     apiFunctions.setUpdateArgumentsPostValidate(
         functionName, function(entry, callback) {
       var fileSystemUrl = entry.toURL();
       return [fileSystemUrl, callback];
     });
   }
-  forEach(['getFileStatus'], bindFileEntryFunction);
+  $Array.forEach(['getFileStatus'], bindFileEntryFunction);
 
-  // Functions which take in an [instanceOf=EntryArray].
-  function bindFileEntryArrayFunction(i, functionName) {
+  // Functions which take in a FileEntry array.
+  function bindFileEntryArrayFunction(functionName) {
     apiFunctions.setUpdateArgumentsPostValidate(
         functionName, function(entries, callback) {
       var fileSystemUrlArray = [];
       for (var i=0; i < entries.length; i++) {
-        fileSystemUrlArray.push(entries[i].toURL());
+        $Array.push(fileSystemUrlArray, entries[i].toURL());
       }
       return [fileSystemUrlArray, callback];
     });
   }
-  forEach(['getFileStatuses'], bindFileEntryArrayFunction);
+  $Array.forEach(['getFileStatuses'], bindFileEntryArrayFunction);
 
   // Functions which take in an [instanceOf=DOMFileSystem].
-  function bindFileSystemFunction(i, functionName) {
+  function bindFileSystemFunction(functionName) {
     apiFunctions.setUpdateArgumentsPostValidate(
         functionName, function(filesystem, callback) {
       var fileSystemUrl = filesystem.root.toURL();
       return [fileSystemUrl, callback];
     });
   }
-  forEach(['getUsageAndQuota'], bindFileSystemFunction);
+  $Array.forEach(['getUsageAndQuota'], bindFileSystemFunction);
 
   // Functions which return an [instanceOf=DOMFileSystem].
   apiFunctions.setCustomCallback('requestFileSystem',
@@ -68,15 +67,16 @@ binding.registerCustomHook(function(bindingsAPI) {
     if (response) {
       for (var i = 0; i < response.length; i++) {
         var result = {};
+        var entry = response[i].entry;
         result.fileEntry = fileSystemNatives.GetFileEntry(
-            response[i].fileSystemType,
-            response[i].fileSystemName,
-            response[i].rootUrl,
-            response[i].filePath,
-            false /* isDirectory */);
+            entry.fileSystemType,
+            entry.fileSystemName,
+            entry.rootUrl,
+            entry.filePath,
+            entry.isDirectory);
         result.status = response[i].status;
         result.error = response[i].error;
-        results.push(result);
+        $Array.push(results, result);
       }
     }
     if (request.callback)
@@ -85,23 +85,23 @@ binding.registerCustomHook(function(bindingsAPI) {
   });
 });
 
-chromeHidden.Event.registerArgumentMassager(
+eventBindings.registerArgumentMassager(
     'syncFileSystem.onFileStatusChanged', function(args, dispatch) {
   // Make FileEntry object using all the base string fields.
-  var fileSystemType = args[0];
-  var fileSystemName = args[1];
-  var rootUrl = args[2];
-  var filePath = args[3];
-  var fileEntry = fileSystemNatives.GetFileEntry(fileSystemType,
-      fileSystemName, rootUrl, filePath, false);
+  var fileEntry = fileSystemNatives.GetFileEntry(
+      args[0].fileSystemType,
+      args[0].fileSystemName,
+      args[0].rootUrl,
+      args[0].filePath,
+      args[0].isDirectory);
 
   // Combine into a single dictionary.
   var fileInfo = new Object();
   fileInfo.fileEntry = fileEntry;
-  fileInfo.status = args[4];
+  fileInfo.status = args[1];
   if (fileInfo.status == "synced") {
-    fileInfo.action = args[5];
-    fileInfo.direction = args[6];
+    fileInfo.action = args[2];
+    fileInfo.direction = args[3];
   }
   dispatch([fileInfo]);
 });

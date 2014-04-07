@@ -5,6 +5,7 @@
 #ifndef CHROME_BROWSER_POLICY_CONFIGURATION_POLICY_HANDLER_H_
 #define CHROME_BROWSER_POLICY_CONFIGURATION_POLICY_HANDLER_H_
 
+#include <string>
 #include <vector>
 
 #include "base/basictypes.h"
@@ -24,6 +25,8 @@ class PolicyMap;
 // their corresponding preferences, and to check whether the policies are valid.
 class ConfigurationPolicyHandler {
  public:
+  static std::string ValueTypeToString(Value::Type type);
+
   ConfigurationPolicyHandler();
   virtual ~ConfigurationPolicyHandler();
 
@@ -317,6 +320,8 @@ class AutofillPolicyHandler : public TypeCheckingPolicyHandler {
   DISALLOW_COPY_AND_ASSIGN(AutofillPolicyHandler);
 };
 
+#if !defined(OS_ANDROID)
+
 // ConfigurationPolicyHandler for the DownloadDirectory policy.
 class DownloadDirPolicyHandler : public TypeCheckingPolicyHandler {
  public:
@@ -344,6 +349,8 @@ class DiskCacheDirPolicyHandler : public TypeCheckingPolicyHandler {
  private:
   DISALLOW_COPY_AND_ASSIGN(DiskCacheDirPolicyHandler);
 };
+
+#endif  // !defined(OS_ANDROID)
 
 // ConfigurationPolicyHandler for the FileSelectionDialogsHandler policy.
 class FileSelectionDialogsHandler : public TypeCheckingPolicyHandler {
@@ -500,12 +507,11 @@ class JavascriptPolicyHandler : public ConfigurationPolicyHandler {
   DISALLOW_COPY_AND_ASSIGN(JavascriptPolicyHandler);
 };
 
-// Handles the (deprecated) ClearSiteDataOnExit policy.
-// TODO(mnissler): Remove the policy eventually (http://crbug.com/133291).
-class ClearSiteDataOnExitPolicyHandler : public TypeCheckingPolicyHandler {
+// Handles URLBlacklist policies.
+class URLBlacklistPolicyHandler : public ConfigurationPolicyHandler {
  public:
-  ClearSiteDataOnExitPolicyHandler();
-  virtual ~ClearSiteDataOnExitPolicyHandler();
+  URLBlacklistPolicyHandler();
+  virtual ~URLBlacklistPolicyHandler();
 
   // ConfigurationPolicyHandler methods:
   virtual bool CheckPolicySettings(const PolicyMap& policies,
@@ -514,15 +520,7 @@ class ClearSiteDataOnExitPolicyHandler : public TypeCheckingPolicyHandler {
                                    PrefValueMap* prefs) OVERRIDE;
 
  private:
-  // Checks whether the clear site data policy is enabled in |policies|.
-  bool ClearSiteDataEnabled(const PolicyMap& policies);
-
-  // Checks |policies| for the cookies setting and returns it in
-  // |content_setting|. Returns true if the setting is found, false if not.
-  static bool GetContentSetting(const PolicyMap& policies,
-                                ContentSetting* content_setting);
-
-  DISALLOW_COPY_AND_ASSIGN(ClearSiteDataOnExitPolicyHandler);
+  DISALLOW_COPY_AND_ASSIGN(URLBlacklistPolicyHandler);
 };
 
 // Handles RestoreOnStartup policy.

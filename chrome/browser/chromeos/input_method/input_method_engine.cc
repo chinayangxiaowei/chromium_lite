@@ -38,8 +38,9 @@ InputMethodEngine* InputMethodEngine::CreateEngine(
     const char* extension_id,
     const char* engine_id,
     const char* description,
-    const char* language,
+    const std::vector<std::string>& languages,
     const std::vector<std::string>& layouts,
+    const GURL& options_page,
     std::string* error) {
 
   InputMethodEngineIBus* engine = new InputMethodEngineIBus();
@@ -48,8 +49,9 @@ InputMethodEngine* InputMethodEngine::CreateEngine(
                      extension_id,
                      engine_id,
                      description,
-                     language,
+                     languages,
                      layouts,
+                     options_page,
                      error);
   return engine;
 }

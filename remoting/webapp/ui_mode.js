@@ -31,6 +31,7 @@ remoting.AppMode = {
     CLIENT: 'home.client',
       CLIENT_UNCONNECTED: 'home.client.unconnected',
       CLIENT_PIN_PROMPT: 'home.client.pin-prompt',
+      CLIENT_THIRD_PARTY_AUTH: 'home.client.third-party-auth',
       CLIENT_CONNECTING: 'home.client.connecting',
       CLIENT_CONNECT_FAILED_IT2ME: 'home.client.connect-failed.it2me',
       CLIENT_CONNECT_FAILED_ME2ME: 'home.client.connect-failed.me2me',
@@ -46,8 +47,14 @@ remoting.AppMode = {
       HOST_SETUP_PROCESSING: 'home.host-setup.processing',
       HOST_SETUP_DONE: 'home.host-setup.done',
       HOST_SETUP_ERROR: 'home.host-setup.error',
+    HOME_MANAGE_PAIRINGS: 'home.manage-pairings',
   IN_SESSION: 'in-session'
 };
+
+/** @const */
+remoting.kIT2MeVisitedStorageKey = 'it2me-visited';
+/** @const */
+remoting.kMe2MeVisitedStorageKey = 'me2me-visited';
 
 /**
  * @param {Element} element The element to check.
@@ -122,6 +129,10 @@ remoting.setMode = function(mode) {
                               false);
     document.removeEventListener('webkitvisibilitychange',
                                  remoting.onVisibilityChanged, false);
+    // TODO(jamiewalch): crbug.com/252796: Remove this once crbug.com/240772
+    // is fixed.
+    var htmlNode = /** @type {HTMLElement} */ (document.body.parentNode);
+    htmlNode.classList.remove('no-scroll');
   }
 };
 
@@ -151,32 +162,32 @@ remoting.showOrHideCallback = function(mode, items) {
 };
 
 remoting.showOrHideIT2MeUi = function() {
-  remoting.storage.local.get('it2me-visited',
-                             remoting.showOrHideCallback.bind(null, 'it2me'));
+  chrome.storage.local.get(remoting.kIT2MeVisitedStorageKey,
+                           remoting.showOrHideCallback.bind(null, 'it2me'));
 };
 
 remoting.showOrHideMe2MeUi = function() {
-  remoting.storage.local.get('me2me-visited',
-                             remoting.showOrHideCallback.bind(null, 'me2me'));
+  chrome.storage.local.get(remoting.kMe2MeVisitedStorageKey,
+                           remoting.showOrHideCallback.bind(null, 'me2me'));
 };
 
 remoting.showIT2MeUiAndSave = function() {
   var items = {};
-  items['it2me-visited'] = true;
-  remoting.storage.local.set(items);
+  items[remoting.kIT2MeVisitedStorageKey] = true;
+  chrome.storage.local.set(items);
   remoting.showOrHideCallback('it2me', [true]);
 };
 
 remoting.showMe2MeUiAndSave = function() {
   var items = {};
-  items['me2me-visited'] = true;
-  remoting.storage.local.set(items);
+  items[remoting.kMe2MeVisitedStorageKey] = true;
+  chrome.storage.local.set(items);
   remoting.showOrHideCallback('me2me', [true]);
 };
 
 remoting.resetInfographics = function() {
-  remoting.storage.local.remove('it2me-visited');
-  remoting.storage.local.remove('me2me-visited');
+  chrome.storage.local.remove(remoting.kIT2MeVisitedStorageKey);
+  chrome.storage.local.remove(remoting.kMe2MeVisitedStorageKey);
   remoting.showOrHideCallback('it2me', [false]);
   remoting.showOrHideCallback('me2me', [false]);
 }
@@ -189,7 +200,7 @@ remoting.resetInfographics = function() {
  */
 remoting.initModalDialogs = function() {
   var dialogs = document.querySelectorAll('.kd-modaldialog');
-  var observer = new WebKitMutationObserver(confineOrRestoreFocus_);
+  var observer = new MutationObserver(confineOrRestoreFocus_);
   var options = {
     subtree: false,
     attributes: true

@@ -35,8 +35,6 @@ const char kOnFileBrowserMountCompleted[] =
     "fileBrowserPrivate.onMountCompleted";
 const char kOnFileTransfersUpdated[] =
     "fileBrowserPrivate.onFileTransfersUpdated";
-const char kOnDocumentFeedFetched[] =
-    "fileBrowserPrivate.onDocumentFeedFetched";
 const char kOnFileBrowserPreferencesChanged[] =
     "fileBrowserPrivate.onPreferencesChanged";
 const char kOnFileBrowserDriveConnectionStatusChanged[] =
@@ -65,6 +63,7 @@ const char kOnTabCaptureStatusChanged[] = "tabCapture.onStatusChanged";
 
 const char kBluetoothOnAdapterStateChanged[] =
     "bluetooth.onAdapterStateChanged";
+const char kBluetoothOnConnection[] = "bluetooth.onConnection";
 const char kBluetoothOnDeviceDiscovered[] = "bluetooth.onDeviceDiscovered";
 const char kBluetoothOnDeviceSearchFinished[] =
     "bluetooth.onDeviceSearchFinished";
@@ -72,12 +71,11 @@ const char kBluetoothOnDeviceSearchResult[] = "bluetooth.onDeviceSearchResult";
 
 const char kOnPushMessage[] = "pushMessaging.onMessage";
 
-const char kOnCpuUpdated[] = "experimental.systemInfo.cpu.onUpdated";
-const char kOnDisplayChanged[] = "systemInfo.display.onDisplayChanged";
+const char kOnDisplayChanged[] = "system.display.onDisplayChanged";
 const char kOnStorageAvailableCapacityChanged[] =
-    "experimental.systemInfo.storage.onAvailableCapacityChanged";
-const char kOnStorageAttached[] = "experimental.systemInfo.storage.onAttached";
-const char kOnStorageDetached[] = "experimental.systemInfo.storage.onDetached";
+    "system.storage.onAvailableCapacityChanged";
+const char kOnStorageAttached[] = "system.storage.onAttached";
+const char kOnStorageDetached[] = "system.storage.onDetached";
 
 const char kOnSystemIndicatorClicked[] = "systemIndicator.onClicked";
 
@@ -97,6 +95,20 @@ const char kOnNotificationButtonClicked[] = "notifications.onButtonClicked";
 
 const char kOnNetworksChanged[] = "networkingPrivate.onNetworksChanged";
 const char kOnNetworkListChanged[] = "networkingPrivate.onNetworkListChanged";
+
+const char kOnAudioDeviceChanged[] = "audio.onDeviceChanged";
+
+const char kOnLaunched[] = "app.runtime.onLaunched";
+const char kOnRestarted[] = "app.runtime.onRestarted";
+
+const char kOnFeedbackRequested[] = "feedbackPrivate.onFeedbackRequested";
+
+const char kDeveloperPrivateOnItemStateChanged[] =
+    "developerPrivate.onItemStateChanged";
+
+const char kRecoveryOnWriteProgress[] = "recoveryPrivate.onWriteProgress";
+const char kRecoveryOnWriteComplete[] = "recoveryPrivate.onWriteComplete";
+const char kRecoveryOnWriteError[] = "recoveryPrivate.onWriteError";
 
 }  // namespace event_names
 

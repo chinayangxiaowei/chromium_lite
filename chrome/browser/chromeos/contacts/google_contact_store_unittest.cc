@@ -6,8 +6,8 @@
 
 #include "base/bind.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
-#include "base/time.h"
+#include "base/message_loop/message_loop.h"
+#include "base/time/time.h"
 #include "chrome/browser/chromeos/contacts/contact.pb.h"
 #include "chrome/browser/chromeos/contacts/contact_store_observer.h"
 #include "chrome/browser/chromeos/contacts/contact_test_util.h"
@@ -76,7 +76,7 @@ class GoogleContactStoreTest : public testing::Test {
     test_api_->SetGDataService(gdata_service_);
   }
 
-  MessageLoopForUI message_loop_;
+  base::MessageLoopForUI message_loop_;
   content::TestBrowserThread ui_thread_;
 
   TestContactStoreObserver observer_;

@@ -5,16 +5,21 @@
 #ifndef CONTENT_RENDERER_GPU_RENDER_WIDGET_COMPOSITOR_H_
 #define CONTENT_RENDERER_GPU_RENDER_WIDGET_COMPOSITOR_H_
 
-#include "base/time.h"
+#include "base/memory/weak_ptr.h"
+#include "base/time/time.h"
 #include "cc/debug/rendering_stats.h"
+#include "cc/input/top_controls_state.h"
 #include "cc/trees/layer_tree_host_client.h"
 #include "cc/trees/layer_tree_settings.h"
-#include "skia/ext/refptr.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebLayerTreeView.h"
+#include "third_party/WebKit/public/platform/WebLayerTreeView.h"
+#include "ui/gfx/rect.h"
 
-class SkPicture;
+namespace ui {
+struct LatencyInfo;
+}
 
 namespace cc {
+class InputHandler;
 class LayerTreeHost;
 }
 
@@ -26,24 +31,33 @@ class RenderWidgetCompositor : public WebKit::WebLayerTreeView,
  public:
   // Attempt to construct and initialize a compositor instance for the widget
   // with the given settings. Returns NULL if initialization fails.
-  static scoped_ptr<RenderWidgetCompositor> Create(RenderWidget* widget);
+  static scoped_ptr<RenderWidgetCompositor> Create(RenderWidget* widget,
+                                                   bool threaded);
 
   virtual ~RenderWidgetCompositor();
 
+  const base::WeakPtr<cc::InputHandler>& GetInputHandler();
   void SetSuppressScheduleComposite(bool suppress);
   void Animate(base::TimeTicks time);
   void Composite(base::TimeTicks frame_begin_time);
+  void SetNeedsDisplayOnAllLayers();
+  void SetRasterizeOnlyVisibleContent();
   void GetRenderingStats(cc::RenderingStats* stats);
-  skia::RefPtr<SkPicture> CapturePicture();
-  void EnableHidingTopControls(bool enable);
+  void UpdateTopControlsState(cc::TopControlsState constraints,
+                              cc::TopControlsState current,
+                              bool animate);
   void SetOverdrawBottomHeight(float overdraw_bottom_height);
+  void SetNeedsRedrawRect(gfx::Rect damage_rect);
+  void SetLatencyInfo(const ui::LatencyInfo& latency_info);
+  int GetLayerTreeId() const;
+  void NotifyInputThrottledUntilCommit();
 
   // WebLayerTreeView implementation.
   virtual void setSurfaceReady();
   virtual void setRootLayer(const WebKit::WebLayer& layer);
   virtual void clearRootLayer();
   virtual void setViewportSize(
-      const WebKit::WebSize& layout_viewport_size,
+      const WebKit::WebSize& unused_deprecated,
       const WebKit::WebSize& device_viewport_size);
   virtual WebKit::WebSize layoutViewportSize() const;
   virtual WebKit::WebSize deviceViewportSize() const;
@@ -74,6 +88,7 @@ class RenderWidgetCompositor : public WebKit::WebLayerTreeView,
   virtual void setShowPaintRects(bool show);
   virtual void setShowDebugBorders(bool show);
   virtual void setContinuousPaintingEnabled(bool enabled);
+  virtual void setShowScrollBottleneckRects(bool show);
 
   // cc::LayerTreeHostClient implementation.
   virtual void WillBeginFrame() OVERRIDE;
@@ -82,9 +97,9 @@ class RenderWidgetCompositor : public WebKit::WebLayerTreeView,
   virtual void Layout() OVERRIDE;
   virtual void ApplyScrollAndScale(gfx::Vector2d scroll_delta,
                                    float page_scale) OVERRIDE;
-  virtual scoped_ptr<cc::OutputSurface> CreateOutputSurface() OVERRIDE;
-  virtual void DidRecreateOutputSurface(bool success) OVERRIDE;
-  virtual scoped_ptr<cc::InputHandler> CreateInputHandler() OVERRIDE;
+  virtual scoped_ptr<cc::OutputSurface> CreateOutputSurface(bool fallback)
+      OVERRIDE;
+  virtual void DidInitializeOutputSurface(bool success) OVERRIDE;
   virtual void WillCommit() OVERRIDE;
   virtual void DidCommit() OVERRIDE;
   virtual void DidCommitAndDrawFrame() OVERRIDE;
@@ -95,8 +110,8 @@ class RenderWidgetCompositor : public WebKit::WebLayerTreeView,
   virtual scoped_refptr<cc::ContextProvider>
       OffscreenContextProviderForCompositorThread() OVERRIDE;
 
-private:
-  explicit RenderWidgetCompositor(RenderWidget* widget);
+ private:
+  RenderWidgetCompositor(RenderWidget* widget, bool threaded);
 
   bool initialize(cc::LayerTreeSettings settings);
 
@@ -109,4 +124,3 @@ private:
 }  // namespace content
 
 #endif  // CONTENT_RENDERER_GPU_RENDER_WIDGET_COMPOSITOR_H_
-

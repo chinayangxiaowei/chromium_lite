@@ -4,16 +4,17 @@
 
 #include "base/environment.h"
 #include "base/file_util.h"
+#include "base/files/file_enumerator.h"
 #include "base/path_service.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/sys_info.h"
 #include "base/test/test_file_util.h"
 #include "base/test/test_timeouts.h"
-#include "base/time.h"
-#include "base/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
@@ -23,6 +24,7 @@
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chrome/test/perf/perf_test.h"
+#include "chrome/test/perf/perf_ui_test_suite.h"
 #include "chrome/test/ui/ui_perf_test.h"
 #include "content/public/common/content_switches.h"
 #include "net/base/net_util.h"
@@ -34,7 +36,7 @@ namespace {
 
 class StartupTest : public UIPerfTest {
  public:
-  StartupTest() : tracing_enabled_(false) {
+  StartupTest() {
     show_window_ = true;
   }
   virtual void SetUp() {
@@ -58,7 +60,7 @@ class StartupTest : public UIPerfTest {
     const base::FilePath file_url = ui_test_utils::GetTestFilePath(
         base::FilePath(base::FilePath::kCurrentDirectory),
         base::FilePath(FILE_PATH_LITERAL("simple.html")));
-    ASSERT_TRUE(file_util::PathExists(file_url));
+    ASSERT_TRUE(base::PathExists(file_url));
     launch_arguments_.AppendArgPath(file_url);
   }
 
@@ -70,32 +72,6 @@ class StartupTest : public UIPerfTest {
     launch_arguments_.AppendSwitchPath(switches::kProfilingOutputFile,
                                        profiling_file_);
     collect_profiling_stats_ = true;
-  }
-
-  // Set the command line arguments to enable tracing.
-  void SetUpWithTracing(std::string trace_file_prefix) {
-    tracing_enabled_ = true;
-    trace_file_prefix_ = trace_file_prefix;
-    launch_arguments_.AppendSwitch(switches::kTraceStartup);
-    launch_arguments_.AppendSwitchASCII(switches::kTraceStartupDuration,
-                                        "1");
-  }
-
-  // Pause after running a test with tracing, to wait for the trace to
-  // be written.
-  void PauseForTracing() {
-    if (tracing_enabled_) {
-#if defined(OS_MACOSX)
-      sleep(1);
-#else
-      NOTREACHED();
-#endif
-    }
-  }
-
-  // Set the command line arguments to use force-compositing-mode.
-  void SetUpWithForceCompositingMode() {
-    launch_arguments_.AppendSwitch(switches::kForceCompositingMode);
   }
 
   // Load a complex html file on startup represented by |which_tab|.
@@ -129,7 +105,7 @@ class StartupTest : public UIPerfTest {
   // Rewrite the preferences file to point to the proper image directory.
   virtual void SetUpProfile() OVERRIDE {
     UIPerfTest::SetUpProfile();
-    if (profile_type_ != UITestBase::COMPLEX_THEME)
+    if (profile_type_ != PerfUITestSuite::COMPLEX_THEME)
       return;
 
     const base::FilePath pref_template_path(user_data_dir().
@@ -174,16 +150,16 @@ class StartupTest : public UIPerfTest {
 
   void RunStartupTest(const char* graph, const char* trace,
                       TestColdness test_cold, TestImportance test_importance,
-                      UITestBase::ProfileType profile_type,
+                      PerfUITestSuite::ProfileType profile_type,
                       int num_tabs, int nth_timed_tab) {
     bool important = (test_importance == IMPORTANT);
     profile_type_ = profile_type;
 
     // Sets the profile data for the run.  For now, this is only used for
     // the non-default themes test.
-    if (profile_type != UITestBase::DEFAULT_THEME) {
-      set_template_user_data(UITest::ComputeTypicalUserDataSource(
-          profile_type));
+    if (profile_type != PerfUITestSuite::DEFAULT_THEME) {
+      set_template_user_data(
+          PerfUITestSuite::GetPathForProfileType(profile_type));
     }
 
 #if defined(NDEBUG)
@@ -220,24 +196,17 @@ class StartupTest : public UIPerfTest {
 
     CommandLine launch_arguments_without_trace_file(launch_arguments_);
     for (int i = 0; i < numCycles; ++i) {
-      if (tracing_enabled_) {
-        std::stringstream tracing_enabled_file;
-        tracing_enabled_file << trace_file_prefix_ << i;
-        launch_arguments_ = launch_arguments_without_trace_file;
-        launch_arguments_.AppendSwitchASCII(switches::kTraceStartupFile,
-                                            tracing_enabled_file.str());
-      }
       if (test_cold == COLD) {
         base::FilePath dir_app;
         ASSERT_TRUE(PathService::Get(chrome::DIR_APP, &dir_app));
 
         base::FilePath chrome_exe(dir_app.Append(GetExecutablePath()));
-        ASSERT_TRUE(EvictFileFromSystemCacheWrapper(chrome_exe));
+        ASSERT_TRUE(base::EvictFileFromSystemCacheWithRetry(chrome_exe));
 #if defined(OS_WIN)
         // chrome.dll is windows specific.
         base::FilePath chrome_dll(
             dir_app.Append(FILE_PATH_LITERAL("chrome.dll")));
-        ASSERT_TRUE(EvictFileFromSystemCacheWrapper(chrome_dll));
+        ASSERT_TRUE(base::EvictFileFromSystemCacheWithRetry(chrome_dll));
 #endif
       }
       UITest::SetUp();
@@ -270,7 +239,6 @@ class StartupTest : public UIPerfTest {
         }
       }
       timings[i].end_to_end = end_time - browser_launch_time();
-      PauseForTracing();
       UITest::TearDown();
 
       if (i == 0) {
@@ -289,7 +257,8 @@ class StartupTest : public UIPerfTest {
                           "%.2f,",
                           timings[i].end_to_end.InMillisecondsF());
     }
-    perf_test::PrintResultList(graph, "", trace, times, "ms", important);
+    perf_test::PrintResultList(
+        graph, std::string(), trace, times, "ms", important);
 
     if (num_tabs > 0) {
       std::string name_base = trace;
@@ -299,15 +268,15 @@ class StartupTest : public UIPerfTest {
       name = name_base + "-start";
       for (int i = 0; i < numCycles; ++i)
         base::StringAppendF(&times, "%.2f,", timings[i].first_start_ms);
-      perf_test::PrintResultList(graph, "", name.c_str(), times, "ms",
-                                 important);
+      perf_test::PrintResultList(
+          graph, std::string(), name.c_str(), times, "ms", important);
 
       times.clear();
       name = name_base + "-first";
       for (int i = 0; i < numCycles; ++i)
         base::StringAppendF(&times, "%.2f,", timings[i].first_stop_ms);
-      perf_test::PrintResultList(graph, "", name.c_str(), times, "ms",
-                                 important);
+      perf_test::PrintResultList(
+          graph, std::string(), name.c_str(), times, "ms", important);
 
       if (nth_timed_tab > 0) {
         // Display only the time necessary to load the first n tabs.
@@ -315,8 +284,8 @@ class StartupTest : public UIPerfTest {
         name = name_base + "-" + base::IntToString(nth_timed_tab);
         for (int i = 0; i < numCycles; ++i)
           base::StringAppendF(&times, "%.2f,", timings[i].nth_tab_stop_ms);
-        perf_test::PrintResultList(graph, "", name.c_str(), times, "ms",
-                                   important);
+        perf_test::PrintResultList(
+            graph, std::string(), name.c_str(), times, "ms", important);
       }
 
       if (num_tabs > 1) {
@@ -325,27 +294,29 @@ class StartupTest : public UIPerfTest {
         name = name_base + "-all";
         for (int i = 0; i < numCycles; ++i)
           base::StringAppendF(&times, "%.2f,", timings[i].last_stop_ms);
-        perf_test::PrintResultList(graph, "", name.c_str(), times, "ms",
-                                   important);
+        perf_test::PrintResultList(
+            graph, std::string(), name.c_str(), times, "ms", important);
       }
     }
   }
 
   base::FilePath profiling_file_;
   bool collect_profiling_stats_;
-  bool tracing_enabled_;
   std::string trace_file_prefix_;
+
+  // Are we using a profile with a complex theme?
+  PerfUITestSuite::ProfileType profile_type_;
 };
 
 TEST_F(StartupTest, PerfWarm) {
   RunStartupTest("warm", "t", WARM, IMPORTANT,
-                 UITestBase::DEFAULT_THEME, 0, 0);
+                 PerfUITestSuite::DEFAULT_THEME, 0, 0);
 }
 
 TEST_F(StartupTest, PerfReferenceWarm) {
   UseReferenceBuild();
   RunStartupTest("warm", "t_ref", WARM, IMPORTANT,
-                 UITestBase::DEFAULT_THEME, 0, 0);
+                 PerfUITestSuite::DEFAULT_THEME, 0, 0);
 }
 
 // TODO(mpcomplete): Should we have reference timings for all these?
@@ -359,7 +330,7 @@ TEST_F(StartupTest, PerfReferenceWarm) {
 
 TEST_F(StartupTest, MAYBE_PerfCold) {
   RunStartupTest("cold", "t", COLD, NOT_IMPORTANT,
-                 UITestBase::DEFAULT_THEME, 0, 0);
+                 PerfUITestSuite::DEFAULT_THEME, 0, 0);
 }
 
 void StartupTest::RunPerfTestWithManyTabs(const char* graph, const char* trace,
@@ -395,7 +366,7 @@ void StartupTest::RunPerfTestWithManyTabs(const char* graph, const char* trace,
     launch_arguments_ = new_launch_arguments;
   }
   RunStartupTest(graph, trace, WARM, NOT_IMPORTANT,
-                 UITestBase::DEFAULT_THEME, tab_count, nth_timed_tab);
+                 PerfUITestSuite::DEFAULT_THEME, tab_count, nth_timed_tab);
 }
 
 // http://crbug.com/101591
@@ -478,52 +449,33 @@ TEST_F(StartupTest, PerfExtensionEmpty) {
   SetUpWithFileURL();
   SetUpWithExtensionsProfile("empty");
   RunStartupTest("warm", "extension_empty", WARM, NOT_IMPORTANT,
-                 UITestBase::DEFAULT_THEME, 1, 0);
+                 PerfUITestSuite::DEFAULT_THEME, 1, 0);
 }
 
 TEST_F(StartupTest, PerfExtensionContentScript1) {
   SetUpWithFileURL();
   SetUpWithExtensionsProfile("content_scripts1");
   RunStartupTest("warm", "extension_content_scripts1", WARM, NOT_IMPORTANT,
-                 UITestBase::DEFAULT_THEME, 1, 0);
+                 PerfUITestSuite::DEFAULT_THEME, 1, 0);
 }
 
 TEST_F(StartupTest, MAYBE_PerfExtensionContentScript50) {
   SetUpWithFileURL();
   SetUpWithExtensionsProfile("content_scripts50");
   RunStartupTest("warm", "extension_content_scripts50", WARM, NOT_IMPORTANT,
-                 UITestBase::DEFAULT_THEME, 1, 0);
+                 PerfUITestSuite::DEFAULT_THEME, 1, 0);
 }
 
 TEST_F(StartupTest, MAYBE_PerfComplexTheme) {
   RunStartupTest("warm", "t-theme", WARM, NOT_IMPORTANT,
-                 UITestBase::COMPLEX_THEME, 0, 0);
+                 PerfUITestSuite::COMPLEX_THEME, 0, 0);
 }
 
 TEST_F(StartupTest, ProfilingScript1) {
   SetUpWithFileURL();
   SetUpWithProfiling();
   RunStartupTest("warm", "profiling_scripts1", WARM, NOT_IMPORTANT,
-                 UITestBase::DEFAULT_THEME, 1, 0);
+                 PerfUITestSuite::DEFAULT_THEME, 1, 0);
 }
-
-#if defined(OS_MACOSX)
-TEST_F(StartupTest, TracedProfilingScript1) {
-  SetUpWithFileURL();
-  SetUpWithProfiling();
-  SetUpWithTracing("startup_trace_sw_");
-  RunStartupTest("warm", "traced_profiling_scripts1", WARM, NOT_IMPORTANT,
-                 UITestBase::DEFAULT_THEME, 1, 0);
-}
-
-TEST_F(StartupTest, TracedProfilingScript1FCM) {
-  SetUpWithFileURL();
-  SetUpWithProfiling();
-  SetUpWithForceCompositingMode();
-  SetUpWithTracing("startup_trace_fcm_");
-  RunStartupTest("warm", "traced_profiling_scripts1_fcm", WARM, NOT_IMPORTANT,
-                 UITestBase::DEFAULT_THEME, 1, 0);
-}
-#endif
 
 }  // namespace

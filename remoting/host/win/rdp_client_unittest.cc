@@ -5,14 +5,15 @@
 // ATL headers have to go first.
 #include <atlbase.h>
 #include <atlhost.h>
+#include <string>
 
 #include "base/basictypes.h"
 #include "base/bind.h"
 #include "base/bind_helpers.h"
-#include "base/message_loop.h"
+#include "base/guid.h"
+#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "base/win/scoped_com_initializer.h"
-#include "net/base/ip_endpoint.h"
 #include "remoting/base/auto_thread_task_runner.h"
 #include "remoting/host/win/rdp_client.h"
 #include "remoting/host/win/wts_terminal_monitor.h"
@@ -37,7 +38,7 @@ class MockRdpClientEventHandler : public RdpClient::EventHandler {
   MockRdpClientEventHandler() {}
   virtual ~MockRdpClientEventHandler() {}
 
-  MOCK_METHOD1(OnRdpConnected, void(const net::IPEndPoint&));
+  MOCK_METHOD0(OnRdpConnected, void());
   MOCK_METHOD0(OnRdpClosed, void());
 
  private:
@@ -83,7 +84,7 @@ class RdpClientTest : public testing::Test {
   virtual void TearDown() OVERRIDE;
 
   // Caaled when an RDP connection is established.
-  void OnRdpConnected(const net::IPEndPoint& endpoint);
+  void OnRdpConnected();
 
   // Tears down |rdp_client_|.
   void CloseRdpClient();
@@ -94,7 +95,7 @@ class RdpClientTest : public testing::Test {
 
   // The UI message loop used by RdpClient. The loop is stopped once there is no
   // more references to |task_runner_|.
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
   base::RunLoop run_loop_;
   scoped_refptr<AutoThreadTaskRunner> task_runner_;
 
@@ -103,9 +104,13 @@ class RdpClientTest : public testing::Test {
 
   // Points to the object being tested.
   scoped_ptr<RdpClient> rdp_client_;
+
+  // Unique terminal identifier passed to RdpClient.
+  std::string terminal_id_;
 };
 
-RdpClientTest::RdpClientTest() : message_loop_(MessageLoop::TYPE_UI) {
+RdpClientTest::RdpClientTest()
+    : message_loop_(base::MessageLoop::TYPE_UI) {
 }
 
 RdpClientTest::~RdpClientTest() {
@@ -125,13 +130,12 @@ void RdpClientTest::TearDown() {
   module_.reset();
 }
 
-void RdpClientTest::OnRdpConnected(const net::IPEndPoint& endpoint) {
-  uint32 session_id = WtsTerminalMonitor::GetSessionIdForEndpoint(endpoint);
+void RdpClientTest::OnRdpConnected() {
+  uint32 session_id = WtsTerminalMonitor::LookupSessionId(terminal_id_);
 
-  net::IPEndPoint session_endpoint;
-  EXPECT_TRUE(WtsTerminalMonitor::GetEndpointForSessionId(session_id,
-                                                          &session_endpoint));
-  EXPECT_EQ(endpoint, session_endpoint);
+  std::string id;
+  EXPECT_TRUE(WtsTerminalMonitor::LookupTerminalId(session_id, &id));
+  EXPECT_EQ(id, terminal_id_);
 
   message_loop_.PostTask(FROM_HERE, base::Bind(&RdpClientTest::CloseRdpClient,
                                                base::Unretained(this)));
@@ -145,10 +149,12 @@ void RdpClientTest::CloseRdpClient() {
 
 // Creates a loopback RDP connection.
 TEST_F(RdpClientTest, Basic) {
+  terminal_id_ = base::GenerateGUID();
+
   // An ability to establish a loopback RDP connection depends on many factors
   // including OS SKU and having RDP enabled. Accept both successful connection
   // and a connection error as a successful outcome.
-  EXPECT_CALL(event_handler_, OnRdpConnected(_))
+  EXPECT_CALL(event_handler_, OnRdpConnected())
       .Times(AtMost(1))
       .WillOnce(Invoke(this, &RdpClientTest::OnRdpConnected));
   EXPECT_CALL(event_handler_, OnRdpClosed())
@@ -157,7 +163,7 @@ TEST_F(RdpClientTest, Basic) {
 
   rdp_client_.reset(new RdpClient(task_runner_, task_runner_,
                                   SkISize::Make(kDefaultWidth, kDefaultHeight),
-                                  &event_handler_));
+                                  terminal_id_, &event_handler_));
   task_runner_ = NULL;
 
   run_loop_.Run();

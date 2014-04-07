@@ -5,6 +5,8 @@
 #include "chrome/browser/ui/toolbar/wrench_menu_model.h"
 
 #include "chrome/app/chrome_command_ids.h"
+#include "chrome/browser/prefs/browser_prefs.h"
+#include "chrome/browser/signin/profile_oauth2_token_service_factory.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/global_error/global_error.h"
 #include "chrome/browser/ui/global_error/global_error_service.h"
@@ -12,6 +14,9 @@
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
 #include "chrome/test/base/menu_model_test.h"
+#include "chrome/test/base/testing_browser_process.h"
+#include "chrome/test/base/testing_io_thread_state.h"
+#include "chrome/test/base/testing_pref_service_syncable.h"
 #include "chrome/test/base/testing_profile.h"
 #include "grit/generated_resources.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -28,29 +33,19 @@ class MenuError : public GlobalError {
 
   int execute_count() { return execute_count_; }
 
-  virtual bool HasBadge() OVERRIDE { return false; }
-  virtual int GetBadgeResourceID() OVERRIDE {
-    ADD_FAILURE();
-    return 0;
-  }
-
   virtual bool HasMenuItem() OVERRIDE { return true; }
   virtual int MenuItemCommandID() OVERRIDE { return command_id_; }
   virtual string16 MenuItemLabel() OVERRIDE { return string16(); }
   virtual void ExecuteMenuItem(Browser* browser) OVERRIDE { execute_count_++; }
 
   virtual bool HasBubbleView() OVERRIDE { return false; }
-  virtual int GetBubbleViewIconResourceID() OVERRIDE {
-    ADD_FAILURE();
-    return 0;
-  }
   virtual string16 GetBubbleViewTitle() OVERRIDE {
     ADD_FAILURE();
     return string16();
   }
-  virtual string16 GetBubbleViewMessage() OVERRIDE {
+  virtual std::vector<string16> GetBubbleViewMessages() OVERRIDE {
     ADD_FAILURE();
-    return string16();
+    return std::vector<string16>();
   }
   virtual string16 GetBubbleViewAcceptButtonLabel() OVERRIDE {
     ADD_FAILURE();
@@ -86,6 +81,27 @@ class WrenchMenuModelTest : public BrowserWithTestWindowTest,
   virtual bool GetAcceleratorForCommandId(
       int command_id,
       ui::Accelerator* accelerator) OVERRIDE { return false; }
+
+ protected:
+  virtual void SetUp() OVERRIDE {
+    prefs_.reset(new TestingPrefServiceSimple());
+    chrome::RegisterLocalState(prefs_->registry());
+
+    TestingBrowserProcess::GetGlobal()->SetLocalState(prefs_.get());
+    testing_io_thread_state_.reset(new chrome::TestingIOThreadState());
+    BrowserWithTestWindowTest::SetUp();
+  }
+
+  virtual void TearDown() OVERRIDE {
+    BrowserWithTestWindowTest::TearDown();
+    testing_io_thread_state_.reset();
+    TestingBrowserProcess::GetGlobal()->SetLocalState(NULL);
+    DestroyBrowserAndProfile();
+  }
+
+ private:
+  scoped_ptr<TestingPrefServiceSimple> prefs_;
+  scoped_ptr<chrome::TestingIOThreadState> testing_io_thread_state_;
 };
 
 // Copies parts of MenuModelTest::Delegate and combines them with the
@@ -95,7 +111,7 @@ class TestWrenchMenuModel : public WrenchMenuModel {
  public:
   TestWrenchMenuModel(ui::AcceleratorProvider* provider,
                       Browser* browser)
-      : WrenchMenuModel(provider, browser, false, false),
+      : WrenchMenuModel(provider, browser, false),
         execute_count_(0),
         checked_count_(0),
         enable_count_(0) {
@@ -169,8 +185,10 @@ TEST_F(WrenchMenuModelTest, Basics) {
 
 // Tests global error menu items in the wrench menu.
 TEST_F(WrenchMenuModelTest, GlobalError) {
+  // Make sure services required for tests are initialized.
   GlobalErrorService* service =
       GlobalErrorServiceFactory::GetForProfile(browser()->profile());
+  ProfileOAuth2TokenServiceFactory::GetForProfile(browser()->profile());
   const int command1 = 1234567;
   // AddGlobalError takes ownership of error1.
   MenuError* error1 = new MenuError(command1);
@@ -180,7 +198,7 @@ TEST_F(WrenchMenuModelTest, GlobalError) {
   MenuError* error2 = new MenuError(command2);
   service->AddGlobalError(error2);
 
-  WrenchMenuModel model(this, browser(), false, false);
+  WrenchMenuModel model(this, browser(), false);
   int index1 = model.GetIndexOfCommandId(command1);
   EXPECT_GT(index1, -1);
   int index2 = model.GetIndexOfCommandId(command2);

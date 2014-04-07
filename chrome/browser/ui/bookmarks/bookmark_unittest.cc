@@ -25,7 +25,7 @@ TEST_F(BookmarkTest, DetachedBookmarkBarOnCustomNTP) {
   content::WebContents* web_contents = content::WebContents::Create(
       content::WebContents::CreateParams(browser()->profile()));
   web_contents->GetController().LoadURL(
-        GURL(chrome::kAboutBlankURL), content::Referrer(),
+        GURL(content::kAboutBlankURL), content::Referrer(),
         content::PAGE_TRANSITION_LINK, std::string());
 
   // Give it a NTP virtual URL.
@@ -42,7 +42,7 @@ TEST_F(BookmarkTest, DetachedBookmarkBarOnCustomNTP) {
 class BookmarkInstantExtendedTest : public BrowserWithTestWindowTest {
  public:
   BookmarkInstantExtendedTest() {
-    chrome::search::EnableInstantExtendedAPIForTesting();
+    chrome::EnableInstantExtendedAPIForTesting();
   }
 
  protected:
@@ -56,8 +56,9 @@ class BookmarkInstantExtendedTest : public BrowserWithTestWindowTest {
   }
 
  private:
-  static ProfileKeyedService* CreateTemplateURLService(Profile* profile) {
-    return new TemplateURLService(profile);
+  static BrowserContextKeyedService* CreateTemplateURLService(
+      content::BrowserContext* profile) {
+    return new TemplateURLService(static_cast<Profile*>(profile));
   }
 
   DISALLOW_COPY_AND_ASSIGN(BookmarkInstantExtendedTest);

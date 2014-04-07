@@ -6,11 +6,12 @@
 #include "base/command_line.h"
 #include "base/i18n/icu_util.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "third_party/skia/include/core/SkXfermode.h"
 #include "ui/aura/client/default_capture_client.h"
 #include "ui/aura/client/stacking_client.h"
 #include "ui/aura/env.h"
+#include "ui/aura/focus_manager.h"
 #include "ui/aura/root_window.h"
 #include "ui/aura/test/test_screen.h"
 #include "ui/aura/window.h"
@@ -19,12 +20,11 @@
 #include "ui/base/hit_test.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/ui_base_paths.h"
-#include "ui/compositor/test/compositor_test_support.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/rect.h"
 
 #if defined(USE_X11)
-#include "base/message_pump_aurax11.h"
+#include "base/message_loop/message_pump_aurax11.h"
 #endif
 
 namespace {
@@ -92,7 +92,7 @@ class DemoStackingClient : public aura::client::StackingClient {
   virtual aura::Window* GetDefaultParent(aura::Window* context,
                                          aura::Window* window,
                                          const gfx::Rect& bounds) OVERRIDE {
-    if (!capture_client_.get()) {
+    if (!capture_client_) {
       capture_client_.reset(
           new aura::client::DefaultCaptureClient(root_window_));
     }
@@ -109,8 +109,7 @@ class DemoStackingClient : public aura::client::StackingClient {
 
 int DemoMain() {
   // Create the message-loop here before creating the root window.
-  MessageLoop message_loop(MessageLoop::TYPE_UI);
-  ui::CompositorTestSupport::Initialize();
+  base::MessageLoop message_loop(base::MessageLoop::TYPE_UI);
   aura::Env::GetInstance();
   scoped_ptr<aura::TestScreen> test_screen(aura::TestScreen::Create());
   gfx::Screen::SetScreenInstance(gfx::SCREEN_TYPE_NATIVE, test_screen.get());
@@ -118,6 +117,8 @@ int DemoMain() {
       test_screen->CreateRootWindowForPrimaryDisplay());
   scoped_ptr<DemoStackingClient> stacking_client(new DemoStackingClient(
       root_window.get()));
+  aura::FocusManager focus_manager;
+  aura::client::SetFocusClient(root_window.get(), &focus_manager);
 
   // Create a hierarchy of test windows.
   DemoWindowDelegate window_delegate1(SK_ColorBLUE);
@@ -145,9 +146,7 @@ int DemoMain() {
   window2.AddChild(&window3);
 
   root_window->ShowRootWindow();
-  MessageLoopForUI::current()->Run();
-
-  ui::CompositorTestSupport::Terminate();
+  base::MessageLoopForUI::current()->Run();
 
   return 0;
 }

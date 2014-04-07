@@ -13,10 +13,10 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/common/content_client.h"
-#include "googleurl/src/gurl.h"
 #include "jni/AwQuotaManagerBridge_jni.h"
-#include "webkit/quota/quota_manager.h"
-#include "webkit/quota/quota_types.h"
+#include "url/gurl.h"
+#include "webkit/browser/quota/quota_manager.h"
+#include "webkit/common/quota/quota_types.h"
 
 using base::android::AttachCurrentThread;
 using content::BrowserThread;
@@ -146,14 +146,8 @@ void GetOriginsTask::DoneOnUIThread() {
 
 // static
 jint GetDefaultNativeAwQuotaManagerBridge(JNIEnv* env, jclass clazz) {
-  content::ContentBrowserClient* browser_client =
-      content::GetContentClient()->browser();
-  DCHECK(browser_client);
-
-  AwContentBrowserClient* aw_browser_client =
-      AwContentBrowserClient::FromContentBrowserClient(browser_client);
-  AwBrowserContext* browser_context = aw_browser_client->GetAwBrowserContext();
-  DCHECK(browser_context);
+  AwBrowserContext* browser_context =
+      AwContentBrowserClient::GetAwBrowserContext();
 
   AwQuotaManagerBridgeImpl* bridge = static_cast<AwQuotaManagerBridgeImpl*>(
       browser_context->GetQuotaManagerBridge());
@@ -163,7 +157,7 @@ jint GetDefaultNativeAwQuotaManagerBridge(JNIEnv* env, jclass clazz) {
 
 AwQuotaManagerBridgeImpl::AwQuotaManagerBridgeImpl(
     AwBrowserContext* browser_context)
-    : weak_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)),
+    : weak_factory_(this),
       browser_context_(browser_context) {
 }
 
@@ -191,22 +185,29 @@ QuotaManager* AwQuotaManagerBridgeImpl::GetQuotaManager() const {
   return quota_manager;
 }
 
-// Cannot directly call StoragePartition clear data methods because cookies are
-// controlled separately.
 void AwQuotaManagerBridgeImpl::DeleteAllData(JNIEnv* env, jobject object) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  GetStoragePartition()->AsyncClearData(
-      StoragePartition::kQuotaManagedTemporaryStorage |
-      StoragePartition::kLocalDomStorage |
-      StoragePartition::kSessionDomStorage);
+  GetStoragePartition()->ClearDataForUnboundedRange(
+      // Clear all web storage data except cookies.
+      StoragePartition::REMOVE_DATA_MASK_APPCACHE |
+          StoragePartition::REMOVE_DATA_MASK_FILE_SYSTEMS |
+          StoragePartition::REMOVE_DATA_MASK_INDEXEDDB |
+          StoragePartition::REMOVE_DATA_MASK_LOCAL_STORAGE |
+          StoragePartition::REMOVE_DATA_MASK_WEBSQL,
+      StoragePartition::QUOTA_MANAGED_STORAGE_MASK_TEMPORARY);
 }
 
 void AwQuotaManagerBridgeImpl::DeleteOrigin(
     JNIEnv* env, jobject object, jstring origin) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   StoragePartition* storage_partition = GetStoragePartition();
-  storage_partition->AsyncClearDataForOrigin(
-      StoragePartition::kQuotaManagedTemporaryStorage,
+  storage_partition->ClearDataForOrigin(
+      // All (temporary) QuotaClient types.
+      StoragePartition::REMOVE_DATA_MASK_APPCACHE |
+          StoragePartition::REMOVE_DATA_MASK_FILE_SYSTEMS |
+          StoragePartition::REMOVE_DATA_MASK_INDEXEDDB |
+          StoragePartition::REMOVE_DATA_MASK_WEBSQL,
+      StoragePartition::QUOTA_MANAGED_STORAGE_MASK_TEMPORARY,
       GURL(base::android::ConvertJavaStringToUTF16(env, origin)),
       storage_partition->GetURLRequestContext());
 }

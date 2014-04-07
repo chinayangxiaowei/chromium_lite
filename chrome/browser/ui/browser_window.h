@@ -7,12 +7,12 @@
 
 #include "base/callback_forward.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
-#include "chrome/browser/ui/base_window.h"
 #include "chrome/browser/ui/bookmarks/bookmark_bar.h"
 #include "chrome/browser/ui/fullscreen/fullscreen_exit_bubble_type.h"
 #include "chrome/browser/ui/host_desktop.h"
 #include "chrome/browser/ui/sync/one_click_signin_sync_starter.h"
 #include "chrome/common/content_settings_types.h"
+#include "ui/base/base_window.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/gfx/native_widget_types.h"
 
@@ -48,20 +48,24 @@ class Rect;
 class Size;
 }
 
+namespace web_modal {
+class WebContentsModalDialogHost;
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // BrowserWindow interface
 //  An interface implemented by the "view" of the Browser window.
-//  This interface includes BaseWindow methods as well as Browser window
+//  This interface includes ui::BaseWindow methods as well as Browser window
 //  specific methods.
 //
 // NOTE: All getters may return NULL.
 //
-class BrowserWindow : public BaseWindow {
+class BrowserWindow : public ui::BaseWindow {
  public:
   virtual ~BrowserWindow() {}
 
   //////////////////////////////////////////////////////////////////////////////
-  // BaseWindow interface notes:
+  // ui::BaseWindow interface notes:
 
   // Closes the window as soon as possible. If the window is not in a drag
   // session, it will close immediately; otherwise, it will move offscreen (so
@@ -161,6 +165,9 @@ class BrowserWindow : public BaseWindow {
   // Focuses the bookmarks toolbar (for accessibility).
   virtual void FocusBookmarksToolbar() = 0;
 
+  // Focuses an infobar, if shown (for accessibility).
+  virtual void FocusInfobars() = 0;
+
   // Moves keyboard focus to the next pane.
   virtual void RotatePaneFocus(bool forwards) = 0;
 
@@ -181,11 +188,6 @@ class BrowserWindow : public BaseWindow {
   // rect to identify that there shouldn't be a resize corner (in the cases
   // where we take care of it ourselves at the browser level).
   virtual gfx::Rect GetRootWindowResizerRect() const = 0;
-
-  // Returns whether the window is a panel. This is not always synonomous
-  // with the associated browser having type panel since some environments
-  // may draw popups in panel windows.
-  virtual bool IsPanel() const = 0;
 
   // Tells the frame not to render as inactive until the next activation change.
   // This is required on Windows when dropdown selects are shown to prevent the
@@ -212,13 +214,11 @@ class BrowserWindow : public BaseWindow {
   // TODO(yosin): Make ShowBookmarkPrompt pure virtual.
   virtual void ShowBookmarkPrompt() {}
 
-  // Shows the Chrome To Mobile bubble.
-  virtual void ShowChromeToMobileBubble() = 0;
-
 #if defined(ENABLE_ONE_CLICK_SIGNIN)
   enum OneClickSigninBubbleType {
     ONE_CLICK_SIGNIN_BUBBLE_TYPE_BUBBLE,
-    ONE_CLICK_SIGNIN_BUBBLE_TYPE_MODAL_DIALOG
+    ONE_CLICK_SIGNIN_BUBBLE_TYPE_MODAL_DIALOG,
+    ONE_CLICK_SIGNIN_BUBBLE_TYPE_SAML_MODAL_DIALOG
   };
 
   // Callback type used with the ShowOneClickSigninBubble() method.  If the
@@ -227,11 +227,14 @@ class BrowserWindow : public BaseWindow {
   typedef base::Callback<void(OneClickSigninSyncStarter::StartSyncMode)>
       StartSyncCallback;
 
-  // Shows the one-click sign in bubble.
+  // Shows the one-click sign in bubble.  |email| holds the full email address
+  // of the account that has signed in.
   virtual void ShowOneClickSigninBubble(
       OneClickSigninBubbleType type,
+      const string16& email,
+      const string16& error_message,
       const StartSyncCallback& start_sync_callback) = 0;
-#endif
+  #endif
 
   // Whether or not the shelf view is visible.
   virtual bool IsDownloadShelfVisible() const = 0;
@@ -266,8 +269,7 @@ class BrowserWindow : public BaseWindow {
   virtual void ShowWebsiteSettings(Profile* profile,
                                    content::WebContents* web_contents,
                                    const GURL& url,
-                                   const content::SSLStatus& ssl,
-                                   bool show_history) = 0;
+                                   const content::SSLStatus& ssl) = 0;
 
   // Shows the app menu (for accessibility).
   virtual void ShowAppMenu() = 0;
@@ -309,11 +311,6 @@ class BrowserWindow : public BaseWindow {
   virtual bool IsFullscreenWithoutChrome() = 0;
 #endif
 
-  // Returns the desired bounds for Instant in screen coordinates. Note that if
-  // Instant isn't currently visible this returns the bounds Instant would be
-  // placed at.
-  virtual gfx::Rect GetInstantBounds() = 0;
-
   // Return the correct disposition for a popup window based on |bounds|.
   virtual WindowOpenDisposition GetDispositionForPopupBounds(
       const gfx::Rect& bounds) = 0;
@@ -321,11 +318,10 @@ class BrowserWindow : public BaseWindow {
   // Construct a FindBar implementation for the |browser|.
   virtual FindBar* CreateFindBar() = 0;
 
-  // Updates the |top_y| where the top of the constrained window should be
-  // positioned. When implemented, the method returns true and the value of
-  // |top_y| is non-negative. When not implemented, the method returns false and
-  // the value of |top_y| is not defined.
-  virtual bool GetConstrainedWindowTopY(int* top_y) = 0;
+  // Return the WebContentsModalDialogHost for use in positioning web contents
+  // modal dialogs within the browser window.
+  virtual web_modal::WebContentsModalDialogHost*
+      GetWebContentsModalDialogHost() = 0;
 
   // Invoked when the preferred size of the contents in current tab has been
   // changed. We might choose to update the window size to accomodate this
@@ -358,6 +354,10 @@ class BrowserWindow : public BaseWindow {
       const gfx::Rect& rect,
       const content::PasswordForm& form,
       autofill::PasswordGenerator* password_generator) = 0;
+
+  // Invoked when the amount of vertical overscroll changes. |delta_y| is the
+  // amount of overscroll that has occured in the y-direction.
+  virtual void OverscrollUpdate(int delta_y) {}
 
  protected:
   friend void chrome::CloseAllBrowsers();

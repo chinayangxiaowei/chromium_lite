@@ -5,27 +5,30 @@
 #include "chrome/test/base/testing_browser_process.h"
 
 #include "base/prefs/pref_service.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "build/build_config.h"
+#include "chrome/browser/background/background_mode_manager.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/browser_process_impl.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/bookmarks/bookmark_prompt_controller.h"
+#include "chrome/test/base/testing_browser_process_platform_part.h"
 #include "content/public/browser/notification_service.h"
 #include "net/url_request/url_request_context_getter.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/message_center/message_center.h"
 
 #if !defined(OS_IOS)
-#include "chrome/browser/media_galleries/media_file_system_registry.h"
 #include "chrome/browser/notifications/notification_ui_manager.h"
 #include "chrome/browser/prerender/prerender_tracker.h"
-#include "chrome/browser/printing/background_printing_manager.h"
-#include "chrome/browser/printing/print_preview_dialog_controller.h"
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
 #include "chrome/browser/thumbnails/render_widget_snapshot_taker.h"
 #endif
 
-#if defined(OS_CHROMEOS)
-#include "chrome/browser/chromeos/settings/device_settings_service.h"
+#if !defined(OS_IOS) && !defined(OS_ANDROID)
+#include "chrome/browser/media_galleries/media_file_system_registry.h"
+#include "chrome/browser/storage_monitor/storage_monitor.h"
+#include "chrome/browser/storage_monitor/test_storage_monitor.h"
 #endif
 
 #if defined(ENABLE_CONFIGURATION_POLICY)
@@ -34,8 +37,9 @@
 #include "chrome/browser/policy/policy_service_stub.h"
 #endif  // defined(ENABLE_CONFIGURATION_POLICY)
 
-#if defined(ENABLE_MESSAGE_CENTER)
-#include "ui/message_center/message_center.h"
+#if defined(ENABLE_FULL_PRINTING)
+#include "chrome/browser/printing/background_printing_manager.h"
+#include "chrome/browser/printing/print_preview_dialog_controller.h"
 #endif
 
 // static
@@ -52,7 +56,8 @@ TestingBrowserProcess::TestingBrowserProcess()
 #endif
       local_state_(NULL),
       io_thread_(NULL),
-      system_request_context_(NULL) {
+      system_request_context_(NULL),
+      platform_part_(new TestingBrowserProcessPlatformPart()) {
 }
 
 TestingBrowserProcess::~TestingBrowserProcess() {
@@ -60,6 +65,10 @@ TestingBrowserProcess::~TestingBrowserProcess() {
 #if defined(ENABLE_CONFIGURATION_POLICY)
   SetBrowserPolicyConnector(NULL);
 #endif
+
+  // Destructors for some objects owned by TestingBrowserProcess will use
+  // g_browser_process if it is not NULL, so it must be NULL before proceeding.
+  DCHECK_EQ(static_cast<BrowserProcess*>(NULL), g_browser_process);
 }
 
 void TestingBrowserProcess::ResourceDispatcherHostCreated() {
@@ -154,6 +163,11 @@ BackgroundModeManager* TestingBrowserProcess::background_mode_manager() {
   return NULL;
 }
 
+void TestingBrowserProcess::set_background_mode_manager_for_test(
+    scoped_ptr<BackgroundModeManager> manager) {
+  NOTREACHED();
+}
+
 StatusTray* TestingBrowserProcess::status_tray() {
   return NULL;
 }
@@ -176,11 +190,9 @@ net::URLRequestContextGetter* TestingBrowserProcess::system_request_context() {
   return system_request_context_;
 }
 
-#if defined(OS_CHROMEOS)
-chromeos::OomPriorityManager* TestingBrowserProcess::oom_priority_manager() {
-  return NULL;
+BrowserProcessPlatformPart* TestingBrowserProcess::platform_part() {
+  return platform_part_.get();
 }
-#endif  // defined(OS_CHROMEOS)
 
 extensions::EventRouterForwarder*
 TestingBrowserProcess::extension_event_router_forwarder() {
@@ -199,11 +211,9 @@ NotificationUIManager* TestingBrowserProcess::notification_ui_manager() {
 #endif
 }
 
-#if defined(ENABLE_MESSAGE_CENTER)
 message_center::MessageCenter* TestingBrowserProcess::message_center() {
   return message_center::MessageCenter::Get();
 }
-#endif
 
 IntranetRedirectDetector* TestingBrowserProcess::intranet_redirect_detector() {
   return NULL;
@@ -214,7 +224,6 @@ AutomationProviderList* TestingBrowserProcess::GetAutomationProviderList() {
 }
 
 void TestingBrowserProcess::CreateDevToolsHttpProtocolHandler(
-    Profile* profile,
     chrome::HostDesktopType host_desktop_type,
     const std::string& ip,
     int port,
@@ -240,7 +249,7 @@ printing::PrintJobManager* TestingBrowserProcess::print_job_manager() {
 
 printing::PrintPreviewDialogController*
 TestingBrowserProcess::print_preview_dialog_controller() {
-#if defined(ENABLE_PRINTING)
+#if defined(ENABLE_FULL_PRINTING)
   if (!print_preview_dialog_controller_.get())
     print_preview_dialog_controller_ =
         new printing::PrintPreviewDialogController();
@@ -253,7 +262,7 @@ TestingBrowserProcess::print_preview_dialog_controller() {
 
 printing::BackgroundPrintingManager*
 TestingBrowserProcess::background_printing_manager() {
-#if defined(ENABLE_PRINTING)
+#if defined(ENABLE_FULL_PRINTING)
   if (!background_printing_manager_.get()) {
     background_printing_manager_.reset(
         new printing::BackgroundPrintingManager());
@@ -305,6 +314,10 @@ CRLSetFetcher* TestingBrowserProcess::crl_set_fetcher() {
   return NULL;
 }
 
+PnaclComponentInstaller* TestingBrowserProcess::pnacl_component_installer() {
+  return NULL;
+}
+
 BookmarkPromptController* TestingBrowserProcess::bookmark_prompt_controller() {
 #if defined(OS_IOS)
   NOTIMPLEMENTED();
@@ -314,9 +327,18 @@ BookmarkPromptController* TestingBrowserProcess::bookmark_prompt_controller() {
 #endif
 }
 
+chrome::StorageMonitor* TestingBrowserProcess::storage_monitor() {
+#if defined(OS_IOS) || defined(OS_ANDROID)
+  NOTIMPLEMENTED();
+  return NULL;
+#else
+  return storage_monitor_.get();
+#endif
+}
+
 chrome::MediaFileSystemRegistry*
 TestingBrowserProcess::media_file_system_registry() {
-#if defined(OS_IOS)
+#if defined(OS_IOS) || defined(OS_ANDROID)
   NOTIMPLEMENTED();
   return NULL;
 #else
@@ -326,13 +348,15 @@ TestingBrowserProcess::media_file_system_registry() {
 #endif
 }
 
-void TestingBrowserProcess::PlatformSpecificCommandLineProcessing(
-    const CommandLine& command_line) {
-}
-
 bool TestingBrowserProcess::created_local_state() const {
     return (local_state_ != NULL);
 }
+
+#if defined(ENABLE_WEBRTC)
+WebRtcLogUploader* TestingBrowserProcess::webrtc_log_uploader() {
+  return NULL;
+}
+#endif
 
 void TestingBrowserProcess::SetBookmarkPromptController(
     BookmarkPromptController* controller) {
@@ -376,13 +400,6 @@ void TestingBrowserProcess::SetBrowserPolicyConnector(
 #if defined(ENABLE_CONFIGURATION_POLICY)
   if (browser_policy_connector_) {
     browser_policy_connector_->Shutdown();
-#if defined(OS_CHROMEOS)
-    if (!connector) {
-      // If the connector was created then it accessed this global singleton.
-      // It must also be Shutdown() for a clean teardown.
-      chromeos::DeviceSettingsService::Get()->Shutdown();
-    }
-#endif
   }
   browser_policy_connector_.reset(connector);
 #else
@@ -395,5 +412,12 @@ void TestingBrowserProcess::SetSafeBrowsingService(
 #if !defined(OS_IOS)
   NOTIMPLEMENTED();
   sb_service_ = sb_service;
+#endif
+}
+
+void TestingBrowserProcess::SetStorageMonitor(
+    scoped_ptr<chrome::StorageMonitor> storage_monitor) {
+#if !defined(OS_IOS) && !defined(OS_ANDROID)
+  storage_monitor_ = storage_monitor.Pass();
 #endif
 }

@@ -60,7 +60,7 @@ class ShillDeviceClientTest : public ShillClientUnittestBase {
     ShillClientUnittestBase::SetUp();
     // Create a client with the mock bus.
     client_.reset(ShillDeviceClient::Create(REAL_DBUS_CLIENT_IMPLEMENTATION,
-                                               mock_bus_));
+                                            mock_bus_.get()));
     // Run the message loop to run the signal connection result callback.
     message_loop_.RunUntilIdle();
   }
@@ -138,34 +138,6 @@ TEST_F(ShillDeviceClientTest, GetProperties) {
                          base::Bind(&ExpectDictionaryValueResult, &value));
   // Run the message loop.
   message_loop_.RunUntilIdle();
-}
-
-TEST_F(ShillDeviceClientTest, CallGetPropertiesAndBlock) {
-  const bool kValue = true;
-  // Create response.
-  scoped_ptr<dbus::Response> response(dbus::Response::CreateEmpty());
-  dbus::MessageWriter writer(response.get());
-  dbus::MessageWriter array_writer(NULL);
-  writer.OpenArray("{sv}", &array_writer);
-  dbus::MessageWriter entry_writer(NULL);
-  array_writer.OpenDictEntry(&entry_writer);
-  entry_writer.AppendString(flimflam::kCellularAllowRoamingProperty);
-  entry_writer.AppendVariantOfBool(kValue);
-  array_writer.CloseContainer(&entry_writer);
-  writer.CloseContainer(&array_writer);
-
-  // Set expectations.
-  base::DictionaryValue value;
-  value.SetWithoutPathExpansion(flimflam::kCellularAllowRoamingProperty,
-                                base::Value::CreateBooleanValue(kValue));
-  PrepareForMethodCall(flimflam::kGetPropertiesFunction,
-                       base::Bind(&ExpectNoArgument),
-                       response.get());
-  // Call method.
-  scoped_ptr<base::DictionaryValue> result(
-      client_->CallGetPropertiesAndBlock(dbus::ObjectPath(kExampleDevicePath)));
-  ASSERT_TRUE(result.get());
-  EXPECT_TRUE(result->Equals(&value));
 }
 
 TEST_F(ShillDeviceClientTest, ProposeScan) {

@@ -9,15 +9,17 @@
 #include "base/files/file_path.h"
 #include "base/memory/ref_counted.h"
 #include "content/browser/appcache/chrome_appcache_service.h"
-#include "content/browser/dom_storage/dom_storage_context_impl.h"
-#include "content/browser/in_process_webkit/indexed_db_context_impl.h"
+#include "content/browser/dom_storage/dom_storage_context_wrapper.h"
+#include "content/browser/indexed_db/indexed_db_context_impl.h"
+#include "content/browser/media/webrtc_identity_store.h"
+#include "content/common/content_export.h"
 #include "content/public/browser/storage_partition.h"
 
 namespace content {
 
 class StoragePartitionImpl : public StoragePartition {
  public:
-  virtual ~StoragePartitionImpl();
+  CONTENT_EXPORT virtual ~StoragePartitionImpl();
 
   // StoragePartition interface.
   virtual base::FilePath GetPath() OVERRIDE;
@@ -27,16 +29,31 @@ class StoragePartitionImpl : public StoragePartition {
   virtual ChromeAppCacheService* GetAppCacheService() OVERRIDE;
   virtual fileapi::FileSystemContext* GetFileSystemContext() OVERRIDE;
   virtual webkit_database::DatabaseTracker* GetDatabaseTracker() OVERRIDE;
-  virtual DOMStorageContextImpl* GetDOMStorageContext() OVERRIDE;
+  virtual DOMStorageContextWrapper* GetDOMStorageContext() OVERRIDE;
   virtual IndexedDBContextImpl* GetIndexedDBContext() OVERRIDE;
-  virtual void AsyncClearDataForOrigin(
-      uint32 storage_mask,
+
+  virtual void ClearDataForOrigin(
+      uint32 remove_mask,
+      uint32 quota_storage_remove_mask,
       const GURL& storage_origin,
       net::URLRequestContextGetter* request_context_getter) OVERRIDE;
-  virtual void AsyncClearData(uint32 storage_mask) OVERRIDE;
+  virtual void ClearDataForUnboundedRange(
+      uint32 remove_mask,
+      uint32 quota_storage_remove_mask) OVERRIDE;
+  virtual void ClearDataForRange(uint32 remove_mask,
+                                 uint32 quota_storage_remove_mask,
+                                 const base::Time& begin,
+                                 const base::Time& end,
+                                 const base::Closure& callback) OVERRIDE;
+
+  WebRTCIdentityStore* GetWebRTCIdentityStore();
+
+  struct DataDeletionHelper;
+  struct QuotaManagedDataDeletionHelper;
 
  private:
   friend class StoragePartitionImplMap;
+  FRIEND_TEST_ALL_PREFIXES(StoragePartitionShaderClearTest, ClearShaderCache);
 
   // The |partition_path| is the absolute path to the root of this
   // StoragePartition's on-disk storage.
@@ -48,14 +65,27 @@ class StoragePartitionImpl : public StoragePartition {
                                       bool in_memory,
                                       const base::FilePath& profile_path);
 
-  StoragePartitionImpl(
+  // Quota managed data uses a different bitmask for types than
+  // StoragePartition uses. This method generates that mask.
+  static int GenerateQuotaClientMask(uint32 remove_mask);
+
+  CONTENT_EXPORT StoragePartitionImpl(
       const base::FilePath& partition_path,
       quota::QuotaManager* quota_manager,
       ChromeAppCacheService* appcache_service,
       fileapi::FileSystemContext* filesystem_context,
       webkit_database::DatabaseTracker* database_tracker,
-      DOMStorageContextImpl* dom_storage_context,
-      IndexedDBContextImpl* indexed_db_context);
+      DOMStorageContextWrapper* dom_storage_context,
+      IndexedDBContextImpl* indexed_db_context,
+      WebRTCIdentityStore* webrtc_identity_store);
+
+  void ClearDataImpl(uint32 remove_mask,
+                     uint32 quota_storage_remove_mask,
+                     const GURL& remove_origin,
+                     net::URLRequestContextGetter* rq_context,
+                     const base::Time begin,
+                     const base::Time end,
+                     const base::Closure& callback);
 
   // Used by StoragePartitionImplMap.
   //
@@ -80,8 +110,9 @@ class StoragePartitionImpl : public StoragePartition {
   scoped_refptr<ChromeAppCacheService> appcache_service_;
   scoped_refptr<fileapi::FileSystemContext> filesystem_context_;
   scoped_refptr<webkit_database::DatabaseTracker> database_tracker_;
-  scoped_refptr<DOMStorageContextImpl> dom_storage_context_;
+  scoped_refptr<DOMStorageContextWrapper> dom_storage_context_;
   scoped_refptr<IndexedDBContextImpl> indexed_db_context_;
+  scoped_refptr<WebRTCIdentityStore> webrtc_identity_store_;
 
   DISALLOW_COPY_AND_ASSIGN(StoragePartitionImpl);
 };

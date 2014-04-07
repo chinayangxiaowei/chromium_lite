@@ -11,24 +11,27 @@
 #include "base/bind_helpers.h"
 #include "base/command_line.h"
 #include "base/prefs/pref_service.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/content_settings/content_settings_details.h"
 #include "chrome/browser/content_settings/content_settings_utils.h"
 #include "chrome/browser/content_settings/host_content_settings_map.h"
 #include "chrome/browser/custom_handlers/protocol_handler_registry.h"
+#include "chrome/browser/custom_handlers/protocol_handler_registry_factory.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_special_storage_policy.h"
+#include "chrome/browser/google/google_util.h"
 #include "chrome/browser/notifications/desktop_notification_service.h"
 #include "chrome/browser/notifications/desktop_notification_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_list.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/content_settings.h"
 #include "chrome/common/content_settings_pattern.h"
 #include "chrome/common/extensions/extension_set.h"
+#include "chrome/common/extensions/manifest_handlers/app_launch_info.h"
 #include "chrome/common/extensions/permissions/api_permission.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
@@ -69,6 +72,9 @@ typedef std::map<std::pair<ContentSettingsPattern, std::string>,
 // extensions which should have their extent displayed.
 typedef bool (*AppFilter)(const extensions::Extension& app, Profile* profile);
 
+const char kExceptionsLearnMoreUrl[] =
+    "https://support.google.com/chrome/?p=settings_manage_exceptions";
+
 const char* kSetting = "setting";
 const char* kOrigin = "origin";
 const char* kSource = "source";
@@ -94,6 +100,8 @@ const ContentSettingsTypeNameEntry kContentSettingsTypeGroupNames[] = {
   {CONTENT_SETTINGS_TYPE_MEDIASTREAM_MIC, "media-stream-mic"},
   {CONTENT_SETTINGS_TYPE_MEDIASTREAM_CAMERA, "media-stream-camera"},
   {CONTENT_SETTINGS_TYPE_PPAPI_BROKER, "ppapi-broker"},
+  {CONTENT_SETTINGS_TYPE_AUTOMATIC_DOWNLOADS, "multiple-automatic-downloads"},
+  {CONTENT_SETTINGS_TYPE_MIDI_SYSEX, "midi-sysex"},
 };
 
 ContentSettingsType ContentSettingsTypeFromGroupName(const std::string& name) {
@@ -122,7 +130,7 @@ std::string ContentSettingToString(ContentSetting setting) {
       NOTREACHED();
   }
 
-  return "";
+  return std::string();
 }
 
 ContentSetting ContentSettingFromString(const std::string& name) {
@@ -150,8 +158,9 @@ DictionaryValue* GetExceptionForPage(
   DictionaryValue* exception = new DictionaryValue();
   exception->SetString(kOrigin, pattern.ToString());
   exception->SetString(kEmbeddingOrigin,
-      secondary_pattern == ContentSettingsPattern::Wildcard() ? "" :
-          secondary_pattern.ToString());
+                       secondary_pattern == ContentSettingsPattern::Wildcard()
+                           ? std::string()
+                           : secondary_pattern.ToString());
   exception->SetString(kSetting, ContentSettingToString(setting));
   exception->SetString(kSource, provider_name);
   return exception;
@@ -218,21 +227,23 @@ void AddExceptionsGrantedByHostedApps(
 
   for (ExtensionSet::const_iterator extension = extensions->begin();
        extension != extensions->end(); ++extension) {
-    if (!app_filter(**extension, profile)) continue;
+    if (!app_filter(*extension->get(), profile))
+      continue;
 
     extensions::URLPatternSet web_extent = (*extension)->web_extent();
     // Add patterns from web extent.
     for (extensions::URLPatternSet::const_iterator pattern = web_extent.begin();
          pattern != web_extent.end(); ++pattern) {
       std::string url_pattern = pattern->GetAsString();
-      AddExceptionForHostedApp(url_pattern, **extension, exceptions);
+      AddExceptionForHostedApp(url_pattern, *extension->get(), exceptions);
     }
     // Retrieve the launch URL.
-    std::string launch_url_string = (*extension)->launch_web_url();
-    GURL launch_url(launch_url_string);
+    GURL launch_url =
+        extensions::AppLaunchInfo::GetLaunchWebURL(extension->get());
     // Skip adding the launch URL if it is part of the web extent.
-    if (web_extent.MatchesURL(launch_url)) continue;
-    AddExceptionForHostedApp(launch_url_string, **extension, exceptions);
+    if (web_extent.MatchesURL(launch_url))
+      continue;
+    AddExceptionForHostedApp(launch_url.spec(), *extension->get(), exceptions);
   }
 }
 
@@ -290,6 +301,10 @@ void ContentSettingsHandler::GetLocalizedValues(
     { "cookies_show_cookies", IDS_COOKIES_SHOW_COOKIES_BUTTON },
     { "flash_storage_settings", IDS_FLASH_STORAGE_SETTINGS },
     { "flash_storage_url", IDS_FLASH_STORAGE_URL },
+#if defined(ENABLE_GOOGLE_NOW)
+    { "googleGeolocationAccessEnable",
+       IDS_GEOLOCATION_GOOGLE_ACCESS_ENABLE_CHKBOX },
+#endif
     // Image filter.
     { "images_tab_label", IDS_IMAGES_TAB_LABEL },
     { "images_header", IDS_IMAGES_HEADER },
@@ -334,12 +349,12 @@ void ContentSettingsHandler::GetLocalizedValues(
     { "mouselock_allow", IDS_MOUSE_LOCK_ALLOW_RADIO },
     { "mouselock_ask", IDS_MOUSE_LOCK_ASK_RADIO },
     { "mouselock_block", IDS_MOUSE_LOCK_BLOCK_RADIO },
-#if defined(OS_CHROMEOS)
+#if defined(OS_CHROMEOS) || defined(OS_WIN)
     // Protected Content filter
     { "protectedContentTabLabel", IDS_PROTECTED_CONTENT_TAB_LABEL },
     { "protectedContentInfo", IDS_PROTECTED_CONTENT_INFO },
     { "protectedContentEnable", IDS_PROTECTED_CONTENT_ENABLE},
-#endif  // defined(OS_CHROMEOS)
+#endif  // defined(OS_CHROMEOS) || defined(OS_WIN)
     // Media stream capture device filter.
     { "mediaStreamTabLabel", IDS_MEDIA_STREAM_TAB_LABEL },
     { "media-stream_header", IDS_MEDIA_STREAM_HEADER },
@@ -367,18 +382,21 @@ void ContentSettingsHandler::GetLocalizedValues(
     { "ppapi_broker_allow", IDS_PPAPI_BROKER_ALLOW_RADIO },
     { "ppapi_broker_ask", IDS_PPAPI_BROKER_ASK_RADIO },
     { "ppapi_broker_block", IDS_PPAPI_BROKER_BLOCK_RADIO },
+    // Multiple automatic downloads
+    { "multiple-automatic-downloads_header",
+      IDS_AUTOMATIC_DOWNLOADS_TAB_LABEL },
+    { "multiple-automatic-downloads_allow",
+      IDS_AUTOMATIC_DOWNLOADS_ALLOW_RADIO },
+    { "multiple-automatic-downloads_ask",
+      IDS_AUTOMATIC_DOWNLOADS_ASK_RADIO },
+    { "multiple-automatic-downloads_block",
+      IDS_AUTOMATIC_DOWNLOADS_BLOCK_RADIO },
+    // MIDI system exclusive messages
+    { "midi-sysex_header", IDS_MIDI_SYSEX_TAB_LABEL },
+    { "midiSysExAllow", IDS_MIDI_SYSEX_ALLOW_RADIO },
+    { "midiSysExAsk", IDS_MIDI_SYSEX_ASK_RADIO },
+    { "midiSysExBlock", IDS_MIDI_SYSEX_BLOCK_RADIO },
   };
-
-#if defined(ENABLE_SETTINGS_APP)
-  static OptionsStringResource app_resources[] = {
-    { "notifications_allow", IDS_SETTINGS_APP_NOTIFICATIONS_ALLOW_RADIO },
-    { "notifications_ask", IDS_SETTINGS_APP_NOTIFICATIONS_ASK_RADIO },
-    { "notifications_block", IDS_SETTINGS_APP_NOTIFICATIONS_BLOCK_RADIO },
-  };
-  DictionaryValue* app_values = NULL;
-  CHECK(localized_strings->GetDictionary(kSettingsAppKey, &app_values));
-  RegisterStrings(app_values, app_resources, arraysize(app_resources));
-#endif
 
   RegisterStrings(localized_strings, resources, arraysize(resources));
   RegisterTitle(localized_strings, "contentSettingsPage",
@@ -408,9 +426,17 @@ void ContentSettingsHandler::GetLocalizedValues(
                 IDS_MEDIA_STREAM_TAB_LABEL);
   RegisterTitle(localized_strings, "ppapi-broker",
                 IDS_PPAPI_BROKER_TAB_LABEL);
+  RegisterTitle(localized_strings, "multiple-automatic-downloads",
+                IDS_AUTOMATIC_DOWNLOADS_TAB_LABEL);
+  RegisterTitle(localized_strings, "midi-sysex",
+                IDS_MIDI_SYSEX_TAB_LABEL);
 
   localized_strings->SetBoolean("newContentSettings",
       CommandLine::ForCurrentProcess()->HasSwitch(switches::kContentSettings2));
+  localized_strings->SetString(
+      "exceptionsLearnMoreUrl",
+      google_util::StringAppendGoogleLocaleParam(
+          kExceptionsLearnMoreUrl));
 }
 
 void ContentSettingsHandler::InitializeHandler() {
@@ -603,7 +629,7 @@ void ContentSettingsHandler::UpdateMediaSettingsView() {
   media_ui_settings.SetString("askText", "mediaStreamAsk");
   media_ui_settings.SetString("blockText", "mediaStreamBlock");
   media_ui_settings.SetBoolean("showBubble", false);
-  media_ui_settings.SetString("bubbleText", "");
+  media_ui_settings.SetString("bubbleText", std::string());
 
   web_ui()->CallJavascriptFunction("ContentSettings.updateMediaUI",
                                    media_ui_settings);
@@ -676,6 +702,9 @@ void ContentSettingsHandler::UpdateExceptionsViewFromModel(
     case CONTENT_SETTINGS_TYPE_PROTOCOL_HANDLERS:
       // The RPH settings are retrieved separately.
       break;
+    case CONTENT_SETTINGS_TYPE_MIDI_SYSEX:
+      UpdateMIDISysExExceptionsView();
+      break;
 #if defined(OS_WIN)
     case CONTENT_SETTINGS_TYPE_METRO_SWITCH_TO_DESKTOP:
       break;
@@ -699,6 +728,8 @@ void ContentSettingsHandler::UpdateOTRExceptionsViewFromModel(
     case CONTENT_SETTINGS_TYPE_MEDIASTREAM:
     case CONTENT_SETTINGS_TYPE_MEDIASTREAM_MIC:
     case CONTENT_SETTINGS_TYPE_MEDIASTREAM_CAMERA:
+    case CONTENT_SETTINGS_TYPE_AUTOMATIC_DOWNLOADS:
+    case CONTENT_SETTINGS_TYPE_MIDI_SYSEX:
       break;
     default:
       UpdateExceptionsViewFromOTRHostContentSettingsMap(type);
@@ -904,6 +935,18 @@ void ContentSettingsHandler::UpdateMediaExceptionsView() {
   UpdateSettingDefaultFromModel(CONTENT_SETTINGS_TYPE_MEDIASTREAM);
 }
 
+void ContentSettingsHandler::UpdateMIDISysExExceptionsView() {
+  if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kEnableWebMIDI)) {
+    web_ui()->CallJavascriptFunction(
+        "ContentSettings.showExperimentalWebMIDISettings",
+        base::FundamentalValue(true));
+  }
+
+  UpdateSettingDefaultFromModel(CONTENT_SETTINGS_TYPE_MIDI_SYSEX);
+  UpdateExceptionsViewFromHostContentSettingsMap(
+      CONTENT_SETTINGS_TYPE_MIDI_SYSEX);
+}
+
 void ContentSettingsHandler::UpdateExceptionsViewFromHostContentSettingsMap(
     ContentSettingsType type) {
   ListValue exceptions;
@@ -1051,18 +1094,16 @@ void ContentSettingsHandler::RemoveMediaException(
       mode == "normal" ? GetContentSettingsMap() :
                          GetOTRContentSettingsMap();
   if (settings_map) {
-    settings_map->SetWebsiteSetting(
-        ContentSettingsPattern::FromString(pattern),
-        ContentSettingsPattern::Wildcard(),
-        CONTENT_SETTINGS_TYPE_MEDIASTREAM_MIC,
-        "",
-        NULL);
-    settings_map->SetWebsiteSetting(
-        ContentSettingsPattern::FromString(pattern),
-        ContentSettingsPattern::Wildcard(),
-        CONTENT_SETTINGS_TYPE_MEDIASTREAM_CAMERA,
-        "",
-        NULL);
+    settings_map->SetWebsiteSetting(ContentSettingsPattern::FromString(pattern),
+                                    ContentSettingsPattern::Wildcard(),
+                                    CONTENT_SETTINGS_TYPE_MEDIASTREAM_MIC,
+                                    std::string(),
+                                    NULL);
+    settings_map->SetWebsiteSetting(ContentSettingsPattern::FromString(pattern),
+                                    ContentSettingsPattern::Wildcard(),
+                                    CONTENT_SETTINGS_TYPE_MEDIASTREAM_CAMERA,
+                                    std::string(),
+                                    NULL);
   }
 }
 
@@ -1087,10 +1128,11 @@ void ContentSettingsHandler::RemoveExceptionFromHostContentSettingsMap(
   if (settings_map) {
     settings_map->SetWebsiteSetting(
         ContentSettingsPattern::FromString(pattern),
-        secondary_pattern.empty() ? ContentSettingsPattern::Wildcard() :
-            ContentSettingsPattern::FromString(secondary_pattern),
+        secondary_pattern.empty()
+            ? ContentSettingsPattern::Wildcard()
+            : ContentSettingsPattern::FromString(secondary_pattern),
         type,
-        "",
+        std::string(),
         NULL);
   }
 }
@@ -1204,6 +1246,14 @@ void ContentSettingsHandler::SetContentFilter(const ListValue* args) {
       content::RecordAction(
           UserMetricsAction("Options_DefaultMediaStreamMicSettingChanged"));
       break;
+    case CONTENT_SETTINGS_TYPE_AUTOMATIC_DOWNLOADS:
+      content::RecordAction(UserMetricsAction(
+          "Options_DefaultMultipleAutomaticDownloadsSettingChanged"));
+      break;
+    case CONTENT_SETTINGS_TYPE_MIDI_SYSEX:
+      content::RecordAction(
+          UserMetricsAction("Options_DefaultMIDISysExSettingChanged"));
+      break;
     default:
       break;
   }
@@ -1258,7 +1308,7 @@ void ContentSettingsHandler::SetException(const ListValue* args) {
     settings_map->SetContentSetting(ContentSettingsPattern::FromString(pattern),
                                     ContentSettingsPattern::Wildcard(),
                                     type,
-                                    "",
+                                    std::string(),
                                     ContentSettingFromString(setting));
   }
 }
@@ -1301,7 +1351,8 @@ HostContentSettingsMap* ContentSettingsHandler::GetContentSettingsMap() {
 }
 
 ProtocolHandlerRegistry* ContentSettingsHandler::GetProtocolHandlerRegistry() {
-  return Profile::FromWebUI(web_ui())->GetProtocolHandlerRegistry();
+  return ProtocolHandlerRegistryFactory::GetForProfile(
+      Profile::FromWebUI(web_ui()));
 }
 
 HostContentSettingsMap*

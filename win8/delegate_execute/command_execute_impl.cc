@@ -11,7 +11,10 @@
 
 #include "base/file_util.h"
 #include "base/path_service.h"
-#include "base/utf_string_conversions.h"
+#include "base/process/launch.h"
+#include "base/process/process_handle.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/win/message_window.h"
 #include "base/win/registry.h"
 #include "base/win/scoped_co_mem.h"
 #include "base/win/scoped_handle.h"
@@ -59,6 +62,7 @@ HRESULT GetUrlFromShellItem(IShellItem* shell_item, string16* url) {
   return S_OK;
 }
 
+#if defined(USE_AURA)
 bool LaunchChromeBrowserProcess() {
   base::FilePath delegate_exe_path;
   if (!PathService::Get(base::FILE_EXE, &delegate_exe_path))
@@ -69,7 +73,7 @@ bool LaunchChromeBrowserProcess() {
       delegate_exe_path.DirName()
                        .DirName()
                        .Append(chrome::kBrowserProcessExecutableName);
-  if (!file_util::PathExists(chrome_exe_path)) {
+  if (!base::PathExists(chrome_exe_path)) {
     // Try looking in the current directory if we couldn't find it one up in
     // order to support developer installs.
     chrome_exe_path =
@@ -77,7 +81,7 @@ bool LaunchChromeBrowserProcess() {
                          .Append(chrome::kBrowserProcessExecutableName);
   }
 
-  if (!file_util::PathExists(chrome_exe_path)) {
+  if (!base::PathExists(chrome_exe_path)) {
     AtlTrace("Could not locate chrome.exe at: %ls\n",
              chrome_exe_path.value().c_str());
     return false;
@@ -88,16 +92,15 @@ bool LaunchChromeBrowserProcess() {
   // Prevent a Chrome window from showing up on the desktop.
   cl.AppendSwitch(switches::kSilentLaunch);
 
-  // Tell Chrome the IPC channel name to use.
-  // TODO(robertshield): Figure out how to get this name to both the launched
-  // desktop browser process and the resulting activated metro process.
-  cl.AppendSwitchASCII(switches::kViewerConnection, "viewer");
+  // Tell Chrome to connect to the Metro viewer process.
+  cl.AppendSwitch(switches::kViewerConnect);
 
   base::LaunchOptions launch_options;
   launch_options.start_hidden = true;
 
   return base::LaunchProcess(cl, launch_options, NULL);
 }
+#endif  // defined(USE_AURA)
 
 }  // namespace
 
@@ -134,7 +137,7 @@ bool CommandExecuteImpl::path_provider_initialized_ = false;
 //    c) else we return what GetLaunchMode() tells us, which is:
 //       i) if the command line --force-xxx is present return that
 //       ii) if the registry 'launch_mode' exists return that
-//       iii) if IsMachineATablet() is true return AHE_IMMERSIVE
+//       iii) if IsTouchEnabledDevice() is true return AHE_IMMERSIVE
 //       iv) else return AHE_DESKTOP
 // 6- If we returned AHE_IMMERSIVE in step 5 windows might not call us back
 //    and simply activate chrome in metro by itself, however in some cases
@@ -154,7 +157,7 @@ bool CommandExecuteImpl::path_provider_initialized_ = false;
 // in the registry so next time the logic reaches 5c-ii it will use the same
 // mode again.
 //
-// Also note that if we are not the default browser and IsMachineATablet()
+// Also note that if we are not the default browser and IsTouchEnabledDevice()
 // returns true, launching chrome can go all the way to 7c, which might be
 // a slow way to start chrome.
 //
@@ -249,9 +252,12 @@ STDMETHODIMP CommandExecuteImpl::GetValue(enum AHE_TYPE* pahe) {
   }
 
   bool decision_made = false;
-  HWND chrome_window = ::FindWindowEx(HWND_MESSAGE, NULL,
-                                      chrome::kMessageWindowClass,
-                                      user_data_dir.value().c_str());
+
+  // New Aura/Ash world we don't want to go throgh FindWindow path
+  // and instead take decision based on launch mode.
+#if !defined(USE_AURA)
+  HWND chrome_window = base::win::MessageWindow::FindWindow(
+      user_data_dir.value());
   if (chrome_window) {
     AtlTrace("Found chrome window %p\n", chrome_window);
     // The failure cases below are deemed to happen due to the inherently racy
@@ -283,6 +289,7 @@ STDMETHODIMP CommandExecuteImpl::GetValue(enum AHE_TYPE* pahe) {
 
     decision_made = true;
   }
+#endif
 
   if (!decision_made) {
     EC_HOST_UI_MODE mode = GetLaunchMode();
@@ -387,9 +394,9 @@ bool CommandExecuteImpl::FindChromeExe(base::FilePath* chrome_exe) {
   }
 
   *chrome_exe = dir_exe.DirName().Append(chrome::kBrowserProcessExecutableName);
-  if (!file_util::PathExists(*chrome_exe)) {
+  if (!base::PathExists(*chrome_exe)) {
     *chrome_exe = dir_exe.Append(chrome::kBrowserProcessExecutableName);
-    if (!file_util::PathExists(*chrome_exe)) {
+    if (!base::PathExists(*chrome_exe)) {
       AtlTrace("Failed to find chrome exe file\n");
       return false;
     }
@@ -515,6 +522,30 @@ EC_HOST_UI_MODE CommandExecuteImpl::GetLaunchMode() {
     parameters_ = CommandLine(CommandLine::NO_PROGRAM);
   }
 
+#if defined(USE_AURA)
+  if (launch_mode_determined)
+    return launch_mode;
+
+  CComPtr<IExecuteCommandHost> host;
+  CComQIPtr<IServiceProvider> service_provider = m_spUnkSite;
+  if (service_provider) {
+    service_provider->QueryService(IID_IExecuteCommandHost, &host);
+    if (host) {
+      host->GetUIMode(&launch_mode);
+    }
+  }
+
+  if (launch_mode >= ECHUIM_SYSTEM_LAUNCHER) {
+    // At the end if launch mode is not proper apply heuristics.
+    launch_mode = base::win::IsTouchEnabledDevice() ?
+                          ECHUIM_IMMERSIVE : ECHUIM_DESKTOP;
+  }
+
+  AtlTrace("Launching mode is %d\n", launch_mode);
+  launch_mode_determined = true;
+  return launch_mode;
+#endif
+
   base::win::RegKey reg_key;
   LONG key_result = reg_key.Create(HKEY_CURRENT_USER,
                                    chrome::kMetroRegistryPath,
@@ -540,15 +571,15 @@ EC_HOST_UI_MODE CommandExecuteImpl::GetLaunchMode() {
   DWORD reg_value;
   if (reg_key.ReadValueDW(chrome::kLaunchModeValue,
                           &reg_value) != ERROR_SUCCESS) {
-    launch_mode = base::win::IsMachineATablet() ?
+    launch_mode = base::win::IsTouchEnabledDevice() ?
                       ECHUIM_IMMERSIVE : ECHUIM_DESKTOP;
     AtlTrace("Launch mode forced by heuristics to %s\n", modes[launch_mode]);
   } else if (reg_value >= ECHUIM_SYSTEM_LAUNCHER) {
     AtlTrace("Invalid registry launch mode value %u\n", reg_value);
     launch_mode = ECHUIM_DESKTOP;
   } else {
-    AtlTrace("Launch mode forced by registry to %s\n", modes[launch_mode]);
     launch_mode = static_cast<EC_HOST_UI_MODE>(reg_value);
+    AtlTrace("Launch mode forced by registry to %s\n", modes[launch_mode]);
   }
 
   launch_mode_determined = true;

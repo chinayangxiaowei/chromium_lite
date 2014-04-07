@@ -6,8 +6,8 @@
 
 #include <map>
 #include "base/logging.h"
-#include "base/message_loop.h"
-#include "base/utf_string_conversions.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/panels/panel.h"
@@ -107,6 +107,7 @@ class NativePanelTestingWin : public NativePanelTesting {
   virtual bool IsButtonVisible(
       panel::TitlebarButtonType button_type) const OVERRIDE;
   virtual panel::CornerStyle GetWindowCornerStyle() const OVERRIDE;
+  virtual bool EnsureApplicationRunOnForeground() OVERRIDE;
 
   PanelView* panel_view_;
 };
@@ -138,7 +139,7 @@ void NativePanelTestingWin::FinishDragTitlebar() {
 }
 
 bool NativePanelTestingWin::VerifyDrawingAttention() const {
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
   return panel_view_->GetFrameView()->GetPaintState() ==
          PanelFrameView::PAINT_FOR_ATTENTION;
 }
@@ -222,27 +223,31 @@ panel::CornerStyle NativePanelTestingWin::GetWindowCornerStyle() const {
   return panel_view_->GetFrameView()->corner_style();
 }
 
+bool NativePanelTestingWin::EnsureApplicationRunOnForeground() {
+  // Not needed on views.
+  return true;
+}
+
 }  // namespace
 
 // static
-NativePanel* Panel::CreateNativePanel(Panel* panel, const gfx::Rect& bounds) {
-  return new PanelView(panel, bounds);
+NativePanel* Panel::CreateNativePanel(Panel* panel,
+                                      const gfx::Rect& bounds,
+                                      bool always_on_top) {
+  return new PanelView(panel, bounds, always_on_top);
 }
 
 // The panel window has to be created as always-on-top. We cannot create it
 // as non-always-on-top and then change it to always-on-top because Windows
 // system might deny making a window always-on-top if the application is not
-// a foreground application. In addition, we do not know if the panel should
-// be created as always-on-top at its creation time. To solve this issue,
-// always_on_top_ is default to true because we can always change from
-// always-on-top to not always-on-top but not the other way around.
-PanelView::PanelView(Panel* panel, const gfx::Rect& bounds)
+// a foreground application.
+PanelView::PanelView(Panel* panel, const gfx::Rect& bounds, bool always_on_top)
     : panel_(panel),
       bounds_(bounds),
       window_(NULL),
       window_closed_(false),
       web_view_(NULL),
-      always_on_top_(true),
+      always_on_top_(always_on_top),
       focused_(false),
       user_resizing_(false),
 #if defined(OS_WIN)
@@ -257,7 +262,7 @@ PanelView::PanelView(Panel* panel, const gfx::Rect& bounds)
   views::Widget::InitParams params(views::Widget::InitParams::TYPE_WINDOW);
   params.delegate = this;
   params.remove_standard_frame = true;
-  params.keep_on_top = true;
+  params.keep_on_top = always_on_top;
   params.bounds = bounds;
   window_->Init(params);
   window_->set_frame_type(views::Widget::FRAME_TYPE_FORCE_CUSTOM);
@@ -520,8 +525,29 @@ void PanelView::DrawAttention(bool draw_attention) {
   is_drawing_attention_ = draw_attention;
   GetFrameView()->SchedulePaint();
 
-  if ((panel_->attention_mode() & Panel::USE_SYSTEM_ATTENTION) != 0)
+  if ((panel_->attention_mode() & Panel::USE_SYSTEM_ATTENTION) != 0) {
+#if defined(OS_WIN)
+    // The default implementation of Widget::FlashFrame only flashes 5 times.
+    // We need more than that.
+    FLASHWINFO fwi;
+    fwi.cbSize = sizeof(fwi);
+    fwi.hwnd = views::HWNDForWidget(window_);
+    if (draw_attention) {
+      fwi.dwFlags = FLASHW_ALL;
+      fwi.uCount = panel::kNumberOfTimesToFlashPanelForAttention;
+      fwi.dwTimeout = 0;
+    } else {
+      // TODO(jianli): calling FlashWindowEx with FLASHW_STOP flag for the
+      // panel window has the same problem as the stack window. However,
+      // we cannot take the similar fix since there is no background window
+      // to replace for the regular panel window. More investigation is needed.
+      fwi.dwFlags = FLASHW_STOP;
+    }
+    ::FlashWindowEx(&fwi);
+#else
     window_->FlashFrame(draw_attention);
+#endif
+  }
 }
 
 bool PanelView::IsDrawingAttention() const {
@@ -548,6 +574,16 @@ void PanelView::FullScreenModeChanged(bool is_full_screen) {
       window_->Hide();
   } else {
     ShowPanelInactive();
+
+#if defined(OS_WIN)
+    // When hiding and showing again a top-most window that belongs to a
+    // background application (i.e. the application is not a foreground one),
+    // the window may loose top-most placement even though its WS_EX_TOPMOST
+    // bit is still set. Re-issuing SetWindowsPos() returns the window to its
+    // top-most placement.
+    if (always_on_top_)
+      window_->SetAlwaysOnTop(true);
+#endif
   }
 }
 
@@ -584,6 +620,9 @@ void PanelView::PanelExpansionStateChanging(Panel::ExpansionState old_state,
   if (base::win::GetVersion() < base::win::VERSION_WIN7)
     return;
 
+  if (panel_->collection()->type() != PanelCollection::DOCKED)
+    return;
+
   bool is_minimized = old_state != Panel::EXPANDED;
   bool will_be_minimized = new_state != Panel::EXPANDED;
   if (is_minimized == will_be_minimized)
@@ -593,8 +632,7 @@ void PanelView::PanelExpansionStateChanging(Panel::ExpansionState old_state,
 
   if (!thumbnailer_.get()) {
     DCHECK(native_window);
-    thumbnailer_.reset(new TaskbarWindowThumbnailerWin(native_window));
-    ui::HWNDSubclass::AddFilterToTarget(native_window, thumbnailer_.get());
+    thumbnailer_.reset(new TaskbarWindowThumbnailerWin(native_window, NULL));
   }
 
   // Cache the image at this point.
@@ -608,8 +646,9 @@ void PanelView::PanelExpansionStateChanging(Panel::ExpansionState old_state,
                      RDW_NOCHILDREN | RDW_INVALIDATE | RDW_UPDATENOW);
     }
 
-    std::vector<HWND> snapshot_hwnds;
-    thumbnailer_->Start(snapshot_hwnds);
+    // Start the thumbnailer and capture the snapshot now.
+    thumbnailer_->Start();
+    thumbnailer_->CaptureSnapshot();
   } else {
     force_to_paint_as_inactive_ = false;
     thumbnailer_->Stop();
@@ -642,6 +681,29 @@ void PanelView::MinimizePanelBySystem() {
 
 bool PanelView::IsPanelMinimizedBySystem() const {
   return window_->IsMinimized();
+}
+
+bool PanelView::IsPanelShownOnActiveDesktop() const {
+#if defined(OS_WIN)
+  // Virtual desktop is not supported by the native Windows system.
+  return true;
+#else
+  NOTIMPLEMENTED();
+  return true;
+#endif
+}
+
+void PanelView::ShowShadow(bool show) {
+#if defined(OS_WIN)
+  // The overlapped window has the shadow while the popup window does not have
+  // the shadow.
+  int overlap_style = WS_OVERLAPPED | WS_THICKFRAME | WS_SYSMENU;
+  int popup_style = WS_POPUP;
+  UpdateWindowAttribute(GWL_STYLE,
+                        show ? overlap_style : popup_style,
+                        show ? popup_style : overlap_style,
+                        true);
+#endif
 }
 
 void PanelView::AttachWebContents(content::WebContents* contents) {
@@ -832,10 +894,10 @@ void PanelView::Layout() {
 
 gfx::Size PanelView::GetMinimumSize() {
   // If the panel is minimized, it can be rendered to very small size, like
-  // 4-pixel lines when it is docked. Otherwise, its height should not be less
-  // than its titlebar height.
+  // 4-pixel lines when it is docked. Otherwise, its size should not be less
+  // than its minimum size.
   return panel_->IsMinimized() ? gfx::Size() :
-      gfx::Size(panel_->min_size().width(), panel::kTitlebarHeight);
+      gfx::Size(panel::kPanelMinWidth, panel::kPanelMinHeight);
 }
 
 gfx::Size PanelView::GetMaximumSize() {
@@ -880,6 +942,11 @@ void PanelView::OnWidgetDestroying(views::Widget* widget) {
 
 void PanelView::OnWidgetActivationChanged(views::Widget* widget, bool active) {
 #if defined(OS_WIN)
+  // WM_NCACTIVATED could be sent when an active window is being destroyed on
+  // Windows. We need to guard against this.
+  if (window_closed_)
+    return;
+
   // The panel window is in focus (actually accepting keystrokes) if it is
   // active and belongs to a foreground application.
   bool focused = active &&
@@ -901,12 +968,14 @@ void PanelView::OnWidgetActivationChanged(views::Widget* widget, bool active) {
   // bring up the panel with the above alternatives.
   // When the user clicks on the minimized panel, the panel expansion will be
   // done when we process the mouse button pressed message.
+#if defined(OS_WIN)
   if (focused_ && panel_->IsMinimized() &&
       panel_->collection()->type() == PanelCollection::DOCKED &&
       gfx::Screen::GetScreenFor(widget->GetNativeWindow())->
           GetWindowAtCursorScreenPoint() != widget->GetNativeWindow()) {
     panel_->Restore();
   }
+#endif
 
   panel()->OnActiveStateChanged(focused);
 }
@@ -1011,7 +1080,12 @@ PanelFrameView* PanelView::GetFrameView() const {
 }
 
 bool PanelView::IsAnimatingBounds() const {
-  return bounds_animator_.get() && bounds_animator_->is_animating();
+  if (bounds_animator_.get() && bounds_animator_->is_animating())
+    return true;
+  StackedPanelCollection* stack = panel_->stack();
+  if (!stack)
+    return false;
+  return stack->IsAnimatingPanelBounds(panel_.get());
 }
 
 bool PanelView::IsWithinResizingArea(const gfx::Point& mouse_location) const {

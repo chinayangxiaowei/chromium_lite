@@ -12,6 +12,8 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/platform_file.h"
 #include "content/public/browser/content_browser_client.h"
+#include "content/public/browser/notification_observer.h"
+#include "content/public/browser/notification_registrar.h"
 
 namespace content {
 
@@ -19,8 +21,14 @@ class ShellBrowserContext;
 class ShellBrowserMainParts;
 class ShellResourceDispatcherHostDelegate;
 
-class ShellContentBrowserClient : public ContentBrowserClient {
+class ShellContentBrowserClient : public ContentBrowserClient,
+                                  public NotificationObserver {
  public:
+  // Gets the current instance.
+  static ShellContentBrowserClient* Get();
+
+  static void SetSwapProcessesForRedirect(bool swap);
+
   ShellContentBrowserClient();
   virtual ~ShellContentBrowserClient();
 
@@ -36,11 +44,12 @@ class ShellContentBrowserClient : public ContentBrowserClient {
       const base::FilePath& partition_path,
       bool in_memory,
       ProtocolHandlerMap* protocol_handlers) OVERRIDE;
+  virtual bool IsHandledURL(const GURL& url) OVERRIDE;
   virtual void AppendExtraCommandLineSwitches(CommandLine* command_line,
                                               int child_process_id) OVERRIDE;
   virtual void OverrideWebkitPrefs(RenderViewHost* render_view_host,
                                    const GURL& url,
-                                   webkit_glue::WebPreferences* prefs) OVERRIDE;
+                                   WebPreferences* prefs) OVERRIDE;
   virtual void ResourceDispatcherHostCreated() OVERRIDE;
   virtual AccessTokenStore* CreateAccessTokenStore() OVERRIDE;
   virtual std::string GetDefaultDownloadName() OVERRIDE;
@@ -49,6 +58,10 @@ class ShellContentBrowserClient : public ContentBrowserClient {
   virtual WebContentsViewDelegate* GetWebContentsViewDelegate(
       WebContents* web_contents) OVERRIDE;
   virtual QuotaPermissionContext* CreateQuotaPermissionContext() OVERRIDE;
+  virtual net::NetLog* GetNetLog() OVERRIDE;
+  virtual bool ShouldSwapProcessesForRedirect(ResourceContext* resource_context,
+                                              const GURL& current_url,
+                                              const GURL& new_url) OVERRIDE;
 
 #if defined(OS_ANDROID)
   virtual void GetAdditionalMappedFilesForChildProcess(
@@ -56,6 +69,11 @@ class ShellContentBrowserClient : public ContentBrowserClient {
       int child_process_id,
       std::vector<content::FileDescriptorInfo>* mappings) OVERRIDE;
 #endif
+
+  // NotificationObserver implementation.
+  virtual void Observe(int type,
+                       const NotificationSource& source,
+                       const NotificationDetails& details) OVERRIDE;
 
   ShellBrowserContext* browser_context();
   ShellBrowserContext* off_the_record_browser_context();
@@ -75,9 +93,9 @@ class ShellContentBrowserClient : public ContentBrowserClient {
 
   base::FilePath webkit_source_dir_;
 
-  base::PlatformFile hyphen_dictionary_file_;
-
   ShellBrowserMainParts* shell_browser_main_parts_;
+
+  NotificationRegistrar registrar_;
 };
 
 }  // namespace content

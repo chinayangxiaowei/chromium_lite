@@ -11,8 +11,9 @@
 
 #include "base/memory/scoped_ptr.h"
 #include "chrome/browser/search_engines/template_url.h"
+#include "chrome/common/autocomplete_match_type.h"
 #include "content/public/common/page_transition_types.h"
-#include "googleurl/src/gurl.h"
+#include "url/gurl.h"
 
 class AutocompleteProvider;
 class Profile;
@@ -74,25 +75,7 @@ struct AutocompleteMatch {
   typedef std::map<std::string, std::string> AdditionalInfo;
 
   // The type of this match.
-  enum Type {
-    URL_WHAT_YOU_TYPED = 0,  // The input as a URL.
-    HISTORY_URL,             // A past page whose URL contains the input.
-    HISTORY_TITLE,           // A past page whose title contains the input.
-    HISTORY_BODY,            // A past page whose body contains the input.
-    HISTORY_KEYWORD,         // A past page whose keyword contains the input.
-    NAVSUGGEST,              // A suggested URL.
-    SEARCH_WHAT_YOU_TYPED,   // The input as a search query (with the default
-                             // engine).
-    SEARCH_HISTORY,          // A past search (with the default engine)
-                             // containing the input.
-    SEARCH_SUGGEST,          // A suggested search (with the default engine).
-    SEARCH_OTHER_ENGINE,     // A search with a non-default engine.
-    EXTENSION_APP,           // An Extension App with a title/url that contains
-                             // the input.
-    CONTACT,                 // One of the user's contacts.
-    BOOKMARK_TITLE,          // A bookmark whose title contains the input.
-    NUM_TYPES,
-  };
+  typedef AutocompleteMatchType::Type Type;
 
   // Null-terminated array of characters that are not valid within |contents|
   // and |description| strings.
@@ -108,9 +91,6 @@ struct AutocompleteMatch {
 
   // Converts |type| to a string representation.  Used in logging and debugging.
   AutocompleteMatch& operator=(const AutocompleteMatch& match);
-
-  // Converts |type| to a string representation.  Used in logging.
-  static std::string TypeToString(Type type);
 
   // Converts |type| to a resource identifier for the appropriate icon for this
   // type to show in the completion popup.
@@ -234,6 +214,20 @@ struct AutocompleteMatch {
   void RecordAdditionalInfo(const std::string& property,
                             const base::Time& value);
 
+  // Returns the value recorded for |property| in the |additional_info|
+  // dictionary.  Returns the empty string if no such value exists.
+  std::string GetAdditionalInfo(const std::string& property) const;
+
+  // Returns whether this match is a "verbatim" match: a URL navigation directly
+  // to the user's input, a search for the user's input with the default search
+  // engine, or a "keyword mode" search for the query portion of the user's
+  // input.  Note that rare or unusual types that could be considered verbatim,
+  // such as keyword engine matches or extension-provided matches, aren't
+  // detected by this IsVerbatimType, as the user will not be able to infer
+  // what will happen when he or she presses enter in those cases if the match
+  // is not shown.
+  bool IsVerbatimType() const;
+
   // The provider of this match, used to remember which provider the user had
   // selected when the input changes. This may be NULL, in which case there is
   // no provider (or memory of the user's selection).
@@ -262,10 +256,20 @@ struct AutocompleteMatch {
   // for search suggestions, this would just be the search terms.
   string16 fill_into_edit;
 
-  // The position within fill_into_edit from which we'll display the inline
-  // autocomplete string.  This will be string16::npos if this match should
-  // not be inline autocompleted.
-  size_t inline_autocomplete_offset;
+  // The inline autocompletion to display after the user's typing in the
+  // omnibox, if this match becomes the default match.  It may be empty.
+  string16 inline_autocompletion;
+
+  // If false, the omnibox should prevent this match from being the
+  // default match.  Providers should set this to true only if the
+  // user's input, plus any inline autocompletion on this match, would
+  // lead the user to expect a navigation to this match's destination.
+  // For example, with input "foo", a search for "bar" or navigation
+  // to "bar.com" should not set this flag; a navigation to "foo.com"
+  // should only set this flag if ".com" will be inline autocompleted;
+  // and a navigation to "foo/" (an intranet host) or search for "foo"
+  // should set this flag.
+  bool allowed_to_be_default_match;
 
   // The URL to actually load when the autocomplete item is selected. This URL
   // should be canonical so we can compare URLs with strcmp to avoid dupes.

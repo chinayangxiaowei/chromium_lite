@@ -7,20 +7,20 @@
 #include "base/command_line.h"
 #include "base/logging.h"
 #include "base/stl_util.h"
-#include "base/sys_string_conversions.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/sys_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/content_settings/host_content_settings_map.h"
 #include "chrome/browser/plugins/plugin_finder.h"
 #include "chrome/browser/plugins/plugin_metadata.h"
-#include "chrome/browser/ui/content_settings/content_setting_bubble_model.h"
-#include "chrome/browser/ui/content_settings/content_setting_media_menu_model.h"
-#import "chrome/browser/ui/cocoa/hyperlink_button_cell.h"
 #import "chrome/browser/ui/cocoa/info_bubble_view.h"
 #import "chrome/browser/ui/cocoa/l10n_util.h"
+#include "chrome/browser/ui/content_settings/content_setting_bubble_model.h"
+#include "chrome/browser/ui/content_settings/content_setting_media_menu_model.h"
 #include "content/public/browser/plugin_service.h"
 #include "grit/generated_resources.h"
 #include "skia/ext/skia_utils_mac.h"
 #import "third_party/GTM/AppKit/GTMUILocalizerAndLayoutTweaker.h"
+#import "ui/base/cocoa/controls/hyperlink_button_cell.h"
 #include "ui/base/l10n/l10n_util.h"
 
 using content::PluginService;
@@ -59,7 +59,7 @@ const int kGeoHostPadding = 4;
 const int kManageDonePadding = 8;
 
 // Padding between radio buttons and media menus buttons in the media bubble.
-const int kMediaMenuVerticalPadding = 20;
+const int kMediaMenuVerticalPadding = 25;
 
 // Padding between media menu elements in the media bubble.
 const int kMediaMenuElementVerticalPadding = 5;
@@ -69,6 +69,18 @@ const int kMediaMenuTitleHorizontalPadding = 10;
 
 // The minimum width of the media menu buttons.
 const CGFloat kMinMediaMenuButtonWidth = 100;
+
+// Height of each of the labels in the MIDI bubble.
+const int kMIDISysExLabelHeight = 14;
+
+// Height of the "Clear" button in the MIDI bubble.
+const int kMIDISysExClearButtonHeight = 17;
+
+// General padding between elements in the MIDI bubble.
+const int kMIDISysExPadding = 8;
+
+// Padding between host names in the MIDI bubble.
+const int kMIDISysExHostPadding = 4;
 
 void SetControlSize(NSControl* control, NSControlSize controlSize) {
   CGFloat fontSize = [NSFont systemFontSizeForControlSize:controlSize];
@@ -90,7 +102,7 @@ NSTextField* LabelWithFrame(NSString* text, const NSRect& frame) {
 
 // Sets the title for the popup button.
 void SetTitleForPopUpButton(NSPopUpButton* button, NSString* title) {
-  scoped_nsobject<NSMenuItem> titleItem([[NSMenuItem alloc] init]);
+  base::scoped_nsobject<NSMenuItem> titleItem([[NSMenuItem alloc] init]);
   [titleItem setTitle:title];
   [[button cell] setUsesItemFromMenu:NO];
   [[button cell] setMenuItem:titleItem.get()];
@@ -171,11 +183,13 @@ MediaMenuParts::~MediaMenuParts() {}
 - (void)initializePopupList;
 - (void)initializeGeoLists;
 - (void)initializeMediaMenus;
+- (void)initializeMIDISysExLists;
 - (void)sizeToFitLoadButton;
 - (void)initManageDoneButtons;
 - (void)removeInfoButton;
 - (void)popupLinkClicked:(id)sender;
 - (void)clearGeolocationForCurrentHost:(id)sender;
+- (void)clearMIDISysExForCurrentHost:(id)sender;
 @end
 
 @implementation ContentSettingBubbleController
@@ -219,6 +233,10 @@ MediaMenuParts::~MediaMenuParts() {}
       nibPath = @"ContentProtocolHandlers"; break;
     case CONTENT_SETTINGS_TYPE_MEDIASTREAM:
       nibPath = @"ContentBlockedMedia"; break;
+    case CONTENT_SETTINGS_TYPE_AUTOMATIC_DOWNLOADS:
+      nibPath = @"ContentBlockedDownloads"; break;
+    case CONTENT_SETTINGS_TYPE_MIDI_SYSEX:
+      nibPath = @"ContentBlockedMIDISysEx"; break;
     // These content types have no bubble:
     case CONTENT_SETTINGS_TYPE_DEFAULT:
     case CONTENT_SETTINGS_TYPE_NOTIFICATIONS:
@@ -293,8 +311,8 @@ MediaMenuParts::~MediaMenuParts() {}
                                 title:(NSString*)title
                                  icon:(NSImage*)icon
                        referenceFrame:(NSRect)referenceFrame {
-  scoped_nsobject<HyperlinkButtonCell> cell([[HyperlinkButtonCell alloc]
-      initTextCell:title]);
+  base::scoped_nsobject<HyperlinkButtonCell> cell(
+      [[HyperlinkButtonCell alloc] initTextCell:title]);
   [cell.get() setAlignment:NSNaturalTextAlignment];
   if (icon) {
     [cell.get() setImagePosition:NSImageLeft];
@@ -410,7 +428,7 @@ MediaMenuParts::~MediaMenuParts() {}
 
   // "Clear" button / text field.
   if (!content.custom_link.empty()) {
-    scoped_nsobject<NSControl> control;
+    base::scoped_nsobject<NSControl> control;
     if(content.custom_link_enabled) {
       NSRect buttonFrame = NSMakeRect(0, 0,
                                       NSWidth(containerFrame),
@@ -446,14 +464,10 @@ MediaMenuParts::~MediaMenuParts() {}
     frame.origin.y = NSMaxY([control frame]) + kGeoPadding;
   }
 
-  typedef
-      std::vector<ContentSettingBubbleModel::DomainList>::const_reverse_iterator
-      GeolocationGroupIterator;
-  for (GeolocationGroupIterator i = content.domain_lists.rbegin();
+  for (auto i = content.domain_lists.rbegin();
        i != content.domain_lists.rend(); ++i) {
     // Add all hosts in the current domain list.
-    for (std::set<std::string>::const_reverse_iterator j = i->hosts.rbegin();
-         j != i->hosts.rend(); ++j) {
+    for (auto j = i->hosts.rbegin(); j != i->hosts.rend(); ++j) {
       NSTextField* title = LabelWithFrame(base::SysUTF8ToNSString(*j), frame);
       SetControlSize(title, NSSmallControlSize);
       [contentsContainer_ addSubview:title];
@@ -496,12 +510,11 @@ MediaMenuParts::~MediaMenuParts() {}
   CGFloat maxLabelWidth = 0;
   CGFloat maxMenuWidth = 0;
   CGFloat maxMenuHeight = 0;
-  NSRect mediaMenusFrame = [mediaMenusContainer_ frame];
-  CGFloat topMenuY = NSMaxY(mediaMenusFrame) - kMediaMenuVerticalPadding;
+  NSRect radioFrame = [allowBlockRadioGroup_ frame];
   for (ContentSettingBubbleModel::MediaMenuMap::const_iterator it(
        media_menus.begin()); it != media_menus.end(); ++it) {
     // |labelFrame| will be resized later on in this function.
-    NSRect labelFrame = NSMakeRect(NSMinX(mediaMenusFrame), topMenuY, 0, 0);
+    NSRect labelFrame = NSMakeRect(NSMinX(radioFrame), 0, 0, 0);
     NSTextField* label =
         LabelWithFrame(base::SysUTF8ToNSString(it->second.label), labelFrame);
     SetControlSize(label, NSSmallControlSize);
@@ -512,8 +525,8 @@ MediaMenuParts::~MediaMenuParts() {}
     [[self bubble]  addSubview:label];
 
     // |buttonFrame| will be resized and repositioned later on.
-    NSRect buttonFrame = NSMakeRect(NSMinX(mediaMenusFrame), topMenuY, 0, 0);
-    scoped_nsobject<NSPopUpButton> button(
+    NSRect buttonFrame = NSMakeRect(NSMinX(radioFrame), 0, 0, 0);
+    base::scoped_nsobject<NSPopUpButton> button(
         [[NSPopUpButton alloc] initWithFrame:buttonFrame]);
     [button setTarget:self];
 
@@ -535,33 +548,128 @@ MediaMenuParts::~MediaMenuParts() {}
                    relativeTo:nil];
 
     maxMenuHeight = std::max(maxMenuHeight, [button frame].size.height);
-    topMenuY -= (maxMenuHeight + kMediaMenuElementVerticalPadding);
   }
 
+  // Make room for the media menu(s) and enlarege the windows to fit the views.
+  // The bubble view and its subviews autosize themselves when the window is
+  // enlarged.
+  int delta = media_menus.size() * maxMenuHeight +
+      (media_menus.size() - 1) * kMediaMenuElementVerticalPadding;
+  NSSize deltaSize = NSMakeSize(0, delta);
+  deltaSize = [[[self window] contentView] convertSize:deltaSize toView:nil];
+  NSRect windowFrame = [[self window] frame];
+  windowFrame.size.height += deltaSize.height;
+  // If the media menus are wider than the window, widen the window.
+  CGFloat widthNeeded = maxLabelWidth + maxMenuWidth + 2 * NSMinX(radioFrame);
+  if (widthNeeded > windowFrame.size.width)
+    windowFrame.size.width = widthNeeded;
+  [[self window] setFrame:windowFrame display:NO];
+
+  // The radio group lies above the media menus, move the radio group up.
+  radioFrame.origin.y += delta;
+  [allowBlockRadioGroup_ setFrame:radioFrame];
+
   // Resize and reposition the media menus layout.
+  CGFloat topMenuY = NSMinY(radioFrame) - kMediaMenuVerticalPadding;
   maxMenuWidth = std::max(maxMenuWidth, kMinMediaMenuButtonWidth);
   for (content_setting_bubble::MediaMenuPartsMap::const_iterator i =
        mediaMenus_.begin(); i != mediaMenus_.end(); ++i) {
     NSRect labelFrame = [i->second->label frame];
     // Align the label text with the button text.
-    labelFrame.origin.y += (maxMenuHeight - labelFrame.size.height) / 2 + 1;
+    labelFrame.origin.y =
+        topMenuY + (maxMenuHeight - labelFrame.size.height) / 2 + 1;
     labelFrame.size.width = maxLabelWidth;
     [i->second->label setFrame:labelFrame];
     NSRect menuFrame = [i->first frame];
-    menuFrame.origin.x = NSMinX(mediaMenusFrame) + maxLabelWidth;
+    menuFrame.origin.y = topMenuY;
+    menuFrame.origin.x = NSMinX(radioFrame) + maxLabelWidth;
     menuFrame.size.width = maxMenuWidth;
     menuFrame.size.height = maxMenuHeight;
     [i->first setFrame:menuFrame];
+    topMenuY -= (maxMenuHeight + kMediaMenuElementVerticalPadding);
+  }
+}
+
+- (void)initializeMIDISysExLists {
+  const ContentSettingBubbleModel::BubbleContent& content =
+      contentSettingBubbleModel_->bubble_content();
+  NSRect containerFrame = [contentsContainer_ frame];
+  NSRect frame =
+      NSMakeRect(0, 0, NSWidth(containerFrame), kMIDISysExLabelHeight);
+
+  // "Clear" button / text field.
+  if (!content.custom_link.empty()) {
+    base::scoped_nsobject<NSControl> control;
+    if (content.custom_link_enabled) {
+      NSRect buttonFrame = NSMakeRect(0, 0,
+                                      NSWidth(containerFrame),
+                                      kMIDISysExClearButtonHeight);
+      NSButton* button = [[NSButton alloc] initWithFrame:buttonFrame];
+      control.reset(button);
+      [button setTitle:base::SysUTF8ToNSString(content.custom_link)];
+      [button setTarget:self];
+      [button setAction:@selector(clearMIDISysExForCurrentHost:)];
+      [button setBezelStyle:NSRoundRectBezelStyle];
+      SetControlSize(button, NSSmallControlSize);
+      [button sizeToFit];
+    } else {
+      // Add the notification that settings will be cleared on next reload.
+      control.reset([LabelWithFrame(
+          base::SysUTF8ToNSString(content.custom_link), frame) retain]);
+      SetControlSize(control.get(), NSSmallControlSize);
+    }
+
+    // If the new control is wider than the container, widen the window.
+    CGFloat controlWidth = NSWidth([control frame]);
+    if (controlWidth > NSWidth(containerFrame)) {
+      NSRect windowFrame = [[self window] frame];
+      windowFrame.size.width += controlWidth - NSWidth(containerFrame);
+      [[self window] setFrame:windowFrame display:NO];
+      // Fetch the updated sizes.
+      containerFrame = [contentsContainer_ frame];
+      frame = NSMakeRect(0, 0, NSWidth(containerFrame), kMIDISysExLabelHeight);
+    }
+
+    DCHECK(control);
+    [contentsContainer_ addSubview:control];
+    frame.origin.y = NSMaxY([control frame]) + kMIDISysExPadding;
   }
 
-  // If the media menus are wider than the window, widen the window.
-  NSRect frame = [[self window] frame];
-  CGFloat widthNeeded = maxLabelWidth + maxMenuWidth +
-      2 * NSMinX([mediaMenusContainer_ frame]);
-  if (widthNeeded > frame.size.width) {
-    frame.size.width = widthNeeded;
-    [[self window] setFrame:frame display:NO];
+  for (auto i = content.domain_lists.rbegin();
+       i != content.domain_lists.rend(); ++i) {
+    // Add all hosts in the current domain list.
+    for (auto j = i->hosts.rbegin(); j != i->hosts.rend(); ++j) {
+      NSTextField* title = LabelWithFrame(base::SysUTF8ToNSString(*j), frame);
+      SetControlSize(title, NSSmallControlSize);
+      [contentsContainer_ addSubview:title];
+
+      frame.origin.y = NSMaxY(frame) + kMIDISysExHostPadding +
+          [GTMUILocalizerAndLayoutTweaker sizeToFitFixedWidthTextField:title];
+    }
+    if (!i->hosts.empty())
+      frame.origin.y += kMIDISysExPadding - kMIDISysExHostPadding;
+
+    // Add the domain list's title.
+    NSTextField* title =
+        LabelWithFrame(base::SysUTF8ToNSString(i->title), frame);
+    SetControlSize(title, NSSmallControlSize);
+    [contentsContainer_ addSubview:title];
+
+    frame.origin.y = NSMaxY(frame) + kMIDISysExPadding +
+        [GTMUILocalizerAndLayoutTweaker sizeToFitFixedWidthTextField:title];
   }
+
+  CGFloat containerHeight = frame.origin.y;
+  // Undo last padding.
+  if (!content.domain_lists.empty())
+    containerHeight -= kMIDISysExPadding;
+
+  // Resize container to fit its subviews, and window to fit the container.
+  NSRect windowFrame = [[self window] frame];
+  windowFrame.size.height += containerHeight - NSHeight(containerFrame);
+  [[self window] setFrame:windowFrame display:NO];
+  containerFrame.size.height = containerHeight;
+  [contentsContainer_ setFrame:containerFrame];
 }
 
 - (void)sizeToFitLoadButton {
@@ -616,9 +724,6 @@ MediaMenuParts::~MediaMenuParts() {}
     [self initializeBlockedPluginsList];
   }
 
-  if (type == CONTENT_SETTINGS_TYPE_MEDIASTREAM)
-    [self initializeMediaMenus];
-
   if (allowBlockRadioGroup_)  // not bound in cookie bubble xib
     [self initializeRadioGroup];
 
@@ -626,6 +731,10 @@ MediaMenuParts::~MediaMenuParts() {}
     [self initializePopupList];
   if (type == CONTENT_SETTINGS_TYPE_GEOLOCATION)
     [self initializeGeoLists];
+  if (type == CONTENT_SETTINGS_TYPE_MEDIASTREAM)
+    [self initializeMediaMenus];
+  if (type == CONTENT_SETTINGS_TYPE_MIDI_SYSEX)
+    [self initializeMIDISysExLists];
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -643,6 +752,11 @@ MediaMenuParts::~MediaMenuParts() {}
 }
 
 - (void)clearGeolocationForCurrentHost:(id)sender {
+  contentSettingBubbleModel_->OnCustomLinkClicked();
+  [self close];
+}
+
+- (void)clearMIDISysExForCurrentHost:(id)sender {
   contentSettingBubbleModel_->OnCustomLinkClicked();
   [self close];
 }

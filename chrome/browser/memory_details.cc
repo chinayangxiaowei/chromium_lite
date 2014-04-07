@@ -7,17 +7,15 @@
 #include "base/bind.h"
 #include "base/file_version_info.h"
 #include "base/metrics/histogram.h"
-#include "base/process_util.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/extensions/extension_process_manager.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/view_type_utils.h"
-#include "chrome/common/chrome_process_type.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/url_constants.h"
+#include "components/nacl/common/nacl_process_type.h"
 #include "content/public/browser/browser_child_process_host_iterator.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/child_process_data.h"
@@ -27,6 +25,7 @@
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/bindings_policy.h"
+#include "extensions/browser/view_type_utils.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -161,9 +160,14 @@ std::string MemoryDetails::ToLogString() {
       }
       log += "]";
     }
-    log += StringPrintf(" %d MB private, %d MB shared\n",
+    log += StringPrintf(" %d MB private, %d MB shared",
                         static_cast<int>(iter1->working_set.priv) / 1024,
                         static_cast<int>(iter1->working_set.shared) / 1024);
+#if defined(OS_CHROMEOS)
+    log += StringPrintf(", %d MB swapped",
+                        static_cast<int>(iter1->working_set.swapped) / 1024);
+#endif
+    log += "\n";
   }
   return log;
 }
@@ -214,11 +218,10 @@ void MemoryDetails::CollectChildInfoOnUIThread() {
     ProcessMemoryInformation& process =
         chrome_browser->processes[index];
 
-    for (content::RenderProcessHost::iterator renderer_iter(
-            content::RenderProcessHost::AllHostsIterator());
-         !renderer_iter.IsAtEnd(); renderer_iter.Advance()) {
+    RenderWidgetHost::List widgets = RenderWidgetHost::GetRenderWidgetHosts();
+    for (size_t i = 0; i < widgets.size(); ++i) {
       content::RenderProcessHost* render_process_host =
-          renderer_iter.GetCurrentValue();
+          widgets[i]->GetProcess();
       DCHECK(render_process_host);
       // Ignore processes that don't have a connection, such as crashed tabs.
       if (!render_process_host->HasConnection() ||
@@ -238,106 +241,104 @@ void MemoryDetails::CollectChildInfoOnUIThread() {
       // The RenderProcessHost may host multiple WebContentses.  Any
       // of them which contain diagnostics information make the whole
       // process be considered a diagnostics process.
-      content::RenderProcessHost::RenderWidgetHostsIterator iter(
-          render_process_host->GetRenderWidgetHostsIterator());
-      for (; !iter.IsAtEnd(); iter.Advance()) {
-        const RenderWidgetHost* widget = iter.GetCurrentValue();
-        DCHECK(widget);
-        if (!widget || !widget->IsRenderView())
-          continue;
+      if (!widgets[i]->IsRenderView())
+        continue;
 
-        RenderViewHost* host =
-            RenderViewHost::From(const_cast<RenderWidgetHost*>(widget));
-        WebContents* contents = WebContents::FromRenderViewHost(host);
-        GURL url;
-        if (contents)
-          url = contents->GetURL();
-        chrome::ViewType type = chrome::GetViewType(contents);
-        if (host->GetEnabledBindings() & content::BINDINGS_POLICY_WEB_UI) {
-          process.renderer_type = ProcessMemoryInformation::RENDERER_CHROME;
-        } else if (extension_process_map &&
-            extension_process_map->Contains(host->GetProcess()->GetID())) {
-          // For our purposes, don't count processes containing only hosted apps
-          // as extension processes. See also: crbug.com/102533.
-          std::set<std::string> extension_ids =
-              extension_process_map->GetExtensionsInProcess(
-                  host->GetProcess()->GetID());
-          for (std::set<std::string>::iterator iter = extension_ids.begin();
-               iter != extension_ids.end(); ++iter) {
-            const Extension* extension =
-                extension_service->GetExtensionById(*iter, false);
-            if (extension && !extension->is_hosted_app()) {
-              process.renderer_type =
-                  ProcessMemoryInformation::RENDERER_EXTENSION;
-              break;
-            }
-          }
-        }
-        if (extension_process_map &&
-            extension_process_map->Contains(host->GetProcess()->GetID())) {
+      RenderViewHost* host = RenderViewHost::From(widgets[i]);
+      WebContents* contents = WebContents::FromRenderViewHost(host);
+      GURL url;
+      if (contents) {
+        url = contents->GetURL();
+        SiteData* site_data =
+            &chrome_browser->site_data[contents->GetBrowserContext()];
+        SiteDetails::CollectSiteInfo(contents, site_data);
+      }
+      extensions::ViewType type = extensions::GetViewType(contents);
+      if (host->GetEnabledBindings() & content::BINDINGS_POLICY_WEB_UI) {
+        process.renderer_type = ProcessMemoryInformation::RENDERER_CHROME;
+      } else if (extension_process_map &&
+                 extension_process_map->Contains(host->GetProcess()->GetID())) {
+        // For our purposes, don't count processes containing only hosted apps
+        // as extension processes. See also: crbug.com/102533.
+        std::set<std::string> extension_ids =
+            extension_process_map->GetExtensionsInProcess(
+            host->GetProcess()->GetID());
+        for (std::set<std::string>::iterator iter = extension_ids.begin();
+             iter != extension_ids.end(); ++iter) {
           const Extension* extension =
-              extension_service->extensions()->GetByID(url.host());
-          if (extension) {
-            string16 title = UTF8ToUTF16(extension->name());
-            process.titles.push_back(title);
+              extension_service->GetExtensionById(*iter, false);
+          if (extension && !extension->is_hosted_app()) {
             process.renderer_type =
                 ProcessMemoryInformation::RENDERER_EXTENSION;
-            continue;
+            break;
           }
         }
-
-        if (!contents) {
+      }
+      if (extension_process_map &&
+          extension_process_map->Contains(host->GetProcess()->GetID())) {
+        const Extension* extension =
+            extension_service->extensions()->GetByID(url.host());
+        if (extension) {
+          string16 title = UTF8ToUTF16(extension->name());
+          process.titles.push_back(title);
           process.renderer_type =
-                ProcessMemoryInformation::RENDERER_INTERSTITIAL;
+              ProcessMemoryInformation::RENDERER_EXTENSION;
           continue;
         }
+      }
 
-        if (type == chrome::VIEW_TYPE_BACKGROUND_CONTENTS) {
-          process.titles.push_back(UTF8ToUTF16(url.spec()));
-          process.renderer_type =
-                    ProcessMemoryInformation::RENDERER_BACKGROUND_APP;
-          continue;
-        }
+      if (!contents) {
+        process.renderer_type =
+            ProcessMemoryInformation::RENDERER_INTERSTITIAL;
+        continue;
+      }
 
-        if (type == chrome::VIEW_TYPE_NOTIFICATION) {
-          process.titles.push_back(UTF8ToUTF16(url.spec()));
-          process.renderer_type =
-                    ProcessMemoryInformation::RENDERER_NOTIFICATION;
-          continue;
-        }
+      if (type == extensions::VIEW_TYPE_BACKGROUND_CONTENTS) {
+        process.titles.push_back(UTF8ToUTF16(url.spec()));
+        process.renderer_type =
+            ProcessMemoryInformation::RENDERER_BACKGROUND_APP;
+        continue;
+      }
 
-        // Since we have a WebContents and and the renderer type hasn't been
-        // set yet, it must be a normal tabbed renderer.
-        if (process.renderer_type == ProcessMemoryInformation::RENDERER_UNKNOWN)
-          process.renderer_type = ProcessMemoryInformation::RENDERER_NORMAL;
+      if (type == extensions::VIEW_TYPE_NOTIFICATION) {
+        process.titles.push_back(UTF8ToUTF16(url.spec()));
+        process.renderer_type =
+            ProcessMemoryInformation::RENDERER_NOTIFICATION;
+        continue;
+      }
 
-        string16 title = contents->GetTitle();
-        if (!title.length())
-          title = l10n_util::GetStringUTF16(IDS_DEFAULT_TAB_TITLE);
-        process.titles.push_back(title);
+      // Since we have a WebContents and and the renderer type hasn't been
+      // set yet, it must be a normal tabbed renderer.
+      if (process.renderer_type == ProcessMemoryInformation::RENDERER_UNKNOWN)
+        process.renderer_type = ProcessMemoryInformation::RENDERER_NORMAL;
 
-        // We need to check the pending entry as well as the virtual_url to
-        // see if it's a chrome://memory URL (we don't want to count these in
-        // the total memory usage of the browser).
-        //
-        // When we reach here, chrome://memory will be the pending entry since
-        // we haven't responded with any data such that it would be committed.
-        // If you have another chrome://memory tab open (which would be
-        // committed), we don't want to count it either, so we also check the
-        // last committed entry.
-        //
-        // Either the pending or last committed entries can be NULL.
-        const NavigationEntry* pending_entry =
-            contents->GetController().GetPendingEntry();
-        const NavigationEntry* last_committed_entry =
-            contents->GetController().GetLastCommittedEntry();
-        if ((last_committed_entry &&
-             LowerCaseEqualsASCII(last_committed_entry->GetVirtualURL().spec(),
-                                  chrome::kChromeUIMemoryURL)) ||
-            (pending_entry &&
-             LowerCaseEqualsASCII(pending_entry->GetVirtualURL().spec(),
-                                  chrome::kChromeUIMemoryURL)))
-          process.is_diagnostics = true;
+      string16 title = contents->GetTitle();
+      if (!title.length())
+        title = l10n_util::GetStringUTF16(IDS_DEFAULT_TAB_TITLE);
+      process.titles.push_back(title);
+
+      // We need to check the pending entry as well as the virtual_url to
+      // see if it's a chrome://memory URL (we don't want to count these in
+      // the total memory usage of the browser).
+      //
+      // When we reach here, chrome://memory will be the pending entry since
+      // we haven't responded with any data such that it would be committed.
+      // If you have another chrome://memory tab open (which would be
+      // committed), we don't want to count it either, so we also check the
+      // last committed entry.
+      //
+      // Either the pending or last committed entries can be NULL.
+      const NavigationEntry* pending_entry =
+          contents->GetController().GetPendingEntry();
+      const NavigationEntry* last_committed_entry =
+          contents->GetController().GetLastCommittedEntry();
+      if ((last_committed_entry &&
+           LowerCaseEqualsASCII(last_committed_entry->GetVirtualURL().spec(),
+                                chrome::kChromeUIMemoryURL)) ||
+          (pending_entry &&
+           LowerCaseEqualsASCII(pending_entry->GetVirtualURL().spec(),
+                                chrome::kChromeUIMemoryURL))) {
+        process.is_diagnostics = true;
       }
     }
 
@@ -381,13 +382,14 @@ void MemoryDetails::UpdateHistograms() {
   int renderer_count = 0;
   int other_count = 0;
   int worker_count = 0;
+  int process_limit = content::RenderProcessHost::GetMaxRendererProcessCount();
   for (size_t index = 0; index < browser.processes.size(); index++) {
     int sample = static_cast<int>(browser.processes[index].working_set.priv);
     aggregate_memory += sample;
     switch (browser.processes[index].process_type) {
       case content::PROCESS_TYPE_BROWSER:
         UMA_HISTOGRAM_MEMORY_KB("Memory.Browser", sample);
-        break;
+        continue;
       case content::PROCESS_TYPE_RENDERER: {
         ProcessMemoryInformation::RendererProcessType renderer_type =
             browser.processes[index].renderer_type;
@@ -395,66 +397,65 @@ void MemoryDetails::UpdateHistograms() {
           case ProcessMemoryInformation::RENDERER_EXTENSION:
             UMA_HISTOGRAM_MEMORY_KB("Memory.Extension", sample);
             extension_count++;
-            break;
+            continue;
           case ProcessMemoryInformation::RENDERER_CHROME:
             UMA_HISTOGRAM_MEMORY_KB("Memory.Chrome", sample);
             chrome_count++;
-            break;
+            continue;
           case ProcessMemoryInformation::RENDERER_UNKNOWN:
             NOTREACHED() << "Unknown renderer process type.";
-            break;
+            continue;
           case ProcessMemoryInformation::RENDERER_NORMAL:
           default:
             // TODO(erikkay): Should we bother splitting out the other subtypes?
             UMA_HISTOGRAM_MEMORY_KB("Memory.Renderer", sample);
             renderer_count++;
-            break;
+            continue;
         }
-        break;
       }
       case content::PROCESS_TYPE_PLUGIN:
         UMA_HISTOGRAM_MEMORY_KB("Memory.Plugin", sample);
         plugin_count++;
-        break;
+        continue;
       case content::PROCESS_TYPE_WORKER:
         UMA_HISTOGRAM_MEMORY_KB("Memory.Worker", sample);
         worker_count++;
-        break;
+        continue;
       case content::PROCESS_TYPE_UTILITY:
         UMA_HISTOGRAM_MEMORY_KB("Memory.Utility", sample);
         other_count++;
-        break;
+        continue;
       case content::PROCESS_TYPE_ZYGOTE:
         UMA_HISTOGRAM_MEMORY_KB("Memory.Zygote", sample);
         other_count++;
-        break;
+        continue;
       case content::PROCESS_TYPE_SANDBOX_HELPER:
         UMA_HISTOGRAM_MEMORY_KB("Memory.SandboxHelper", sample);
         other_count++;
-        break;
+        continue;
       case content::PROCESS_TYPE_GPU:
         UMA_HISTOGRAM_MEMORY_KB("Memory.Gpu", sample);
         other_count++;
-        break;
+        continue;
       case content::PROCESS_TYPE_PPAPI_PLUGIN:
         UMA_HISTOGRAM_MEMORY_KB("Memory.PepperPlugin", sample);
         pepper_plugin_count++;
-        break;
+        continue;
       case content::PROCESS_TYPE_PPAPI_BROKER:
         UMA_HISTOGRAM_MEMORY_KB("Memory.PepperPluginBroker", sample);
         pepper_plugin_broker_count++;
-        break;
+        continue;
       case PROCESS_TYPE_NACL_LOADER:
         UMA_HISTOGRAM_MEMORY_KB("Memory.NativeClient", sample);
         other_count++;
-        break;
+        continue;
       case PROCESS_TYPE_NACL_BROKER:
         UMA_HISTOGRAM_MEMORY_KB("Memory.NativeClientBroker", sample);
         other_count++;
-        break;
+        continue;
       default:
         NOTREACHED();
-        break;
+        continue;
     }
   }
   UMA_HISTOGRAM_MEMORY_KB("Memory.BackingStore",
@@ -467,6 +468,7 @@ void MemoryDetails::UpdateHistograms() {
     UMA_HISTOGRAM_MEMORY_MB("Memory.Graphics", meminfo.gem_size / 1024 / 1024);
 #endif
 
+  UMA_HISTOGRAM_COUNTS_100("Memory.ProcessLimit", process_limit);
   UMA_HISTOGRAM_COUNTS_100("Memory.ProcessCount",
       static_cast<int>(browser.processes.size()));
   UMA_HISTOGRAM_COUNTS_100("Memory.ChromeProcessCount", chrome_count);
@@ -484,4 +486,116 @@ void MemoryDetails::UpdateHistograms() {
 
   int total_sample = static_cast<int>(aggregate_memory / 1000);
   UMA_HISTOGRAM_MEMORY_MB("Memory.Total", total_sample);
+
+  // Predict the number of processes needed when isolating all sites and when
+  // isolating only HTTPS sites.
+  int all_renderer_count = renderer_count + chrome_count + extension_count;
+  int non_renderer_count = browser.processes.size() - all_renderer_count;
+  SiteDetails::UpdateHistograms(browser.site_data, all_renderer_count,
+                                non_renderer_count);
+#if defined(OS_CHROMEOS)
+  UpdateSwapHistograms();
+#endif
+
 }
+
+#if defined(OS_CHROMEOS)
+void MemoryDetails::UpdateSwapHistograms() {
+  UMA_HISTOGRAM_BOOLEAN("Memory.Swap.HaveSwapped", swap_data_.num_writes > 0);
+  if (swap_data_.num_writes == 0)
+    return;
+
+  // Only record swap info when any swaps have happened, to give us more
+  // detail in the histograms.
+  const ProcessData& browser = *ChromeBrowser();
+  size_t aggregate_memory = 0;
+  for (size_t index = 0; index < browser.processes.size(); index++) {
+    int sample = static_cast<int>(browser.processes[index].working_set.swapped);
+    aggregate_memory += sample;
+    switch (browser.processes[index].process_type) {
+      case content::PROCESS_TYPE_BROWSER:
+        UMA_HISTOGRAM_MEMORY_KB("Memory.Swap.Browser", sample);
+        continue;
+      case content::PROCESS_TYPE_RENDERER: {
+        ProcessMemoryInformation::RendererProcessType renderer_type =
+            browser.processes[index].renderer_type;
+        switch (renderer_type) {
+          case ProcessMemoryInformation::RENDERER_EXTENSION:
+            UMA_HISTOGRAM_MEMORY_KB("Memory.Swap.Extension", sample);
+            continue;
+          case ProcessMemoryInformation::RENDERER_CHROME:
+            UMA_HISTOGRAM_MEMORY_KB("Memory.Swap.Chrome", sample);
+            continue;
+          case ProcessMemoryInformation::RENDERER_UNKNOWN:
+            NOTREACHED() << "Unknown renderer process type.";
+            continue;
+          case ProcessMemoryInformation::RENDERER_NORMAL:
+          default:
+            UMA_HISTOGRAM_MEMORY_KB("Memory.Swap.Renderer", sample);
+            continue;
+        }
+      }
+      case content::PROCESS_TYPE_PLUGIN:
+        UMA_HISTOGRAM_MEMORY_KB("Memory.Swap.Plugin", sample);
+        continue;
+      case content::PROCESS_TYPE_WORKER:
+        UMA_HISTOGRAM_MEMORY_KB("Memory.Swap.Worker", sample);
+        continue;
+      case content::PROCESS_TYPE_UTILITY:
+        UMA_HISTOGRAM_MEMORY_KB("Memory.Swap.Utility", sample);
+        continue;
+      case content::PROCESS_TYPE_ZYGOTE:
+        UMA_HISTOGRAM_MEMORY_KB("Memory.Swap.Zygote", sample);
+        continue;
+      case content::PROCESS_TYPE_SANDBOX_HELPER:
+        UMA_HISTOGRAM_MEMORY_KB("Memory.Swap.SandboxHelper", sample);
+        continue;
+      case content::PROCESS_TYPE_GPU:
+        UMA_HISTOGRAM_MEMORY_KB("Memory.Swap.Gpu", sample);
+        continue;
+      case content::PROCESS_TYPE_PPAPI_PLUGIN:
+        UMA_HISTOGRAM_MEMORY_KB("Memory.Swap.PepperPlugin", sample);
+        continue;
+      case content::PROCESS_TYPE_PPAPI_BROKER:
+        UMA_HISTOGRAM_MEMORY_KB("Memory.Swap.PepperPluginBroker", sample);
+        continue;
+      case PROCESS_TYPE_NACL_LOADER:
+        UMA_HISTOGRAM_MEMORY_KB("Memory.Swap.NativeClient", sample);
+        continue;
+      case PROCESS_TYPE_NACL_BROKER:
+        UMA_HISTOGRAM_MEMORY_KB("Memory.Swap.NativeClientBroker", sample);
+        continue;
+      default:
+        NOTREACHED();
+        continue;
+    }
+  }
+
+  int total_sample = static_cast<int>(aggregate_memory / 1000);
+  UMA_HISTOGRAM_MEMORY_MB("Memory.Swap.Total", total_sample);
+
+  UMA_HISTOGRAM_CUSTOM_COUNTS("Memory.Swap.CompressedDataSize",
+                              swap_data_.compr_data_size / (1024 * 1024),
+                              1, 4096, 50);
+  UMA_HISTOGRAM_CUSTOM_COUNTS("Memory.Swap.OriginalDataSize",
+                              swap_data_.orig_data_size / (1024 * 1024),
+                              1, 4096, 50);
+  UMA_HISTOGRAM_CUSTOM_COUNTS("Memory.Swap.MemUsedTotal",
+                              swap_data_.mem_used_total / (1024 * 1024),
+                              1, 4096, 50);
+  UMA_HISTOGRAM_CUSTOM_COUNTS("Memory.Swap.NumReads",
+                              swap_data_.num_reads,
+                              1, 100000000, 100);
+  UMA_HISTOGRAM_CUSTOM_COUNTS("Memory.Swap.NumWrites",
+                              swap_data_.num_writes,
+                              1, 100000000, 100);
+
+  if (swap_data_.orig_data_size > 0 && swap_data_.compr_data_size > 0) {
+    UMA_HISTOGRAM_CUSTOM_COUNTS(
+        "Memory.Swap.CompressionRatio",
+        swap_data_.orig_data_size / swap_data_.compr_data_size,
+        1, 20, 20);
+  }
+}
+
+#endif

@@ -11,13 +11,16 @@
 #include "base/observer_list.h"
 #include "base/prefs/pref_member.h"
 #include "base/threading/non_thread_safe.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "sync/internal_api/public/base/model_type.h"
 #include "sync/notifier/invalidation_state_tracker.h"
 
-class PrefRegistrySyncable;
 class PrefService;
 class ProfileIOData;
+
+namespace user_prefs {
+class PrefRegistrySyncable;
+}
 
 namespace browser_sync {
 
@@ -54,12 +57,7 @@ class SyncPrefs : NON_EXPORTED_BASE(public base::NonThreadSafe),
 
   virtual ~SyncPrefs();
 
-  static void RegisterUserPrefs(PrefRegistrySyncable* registry);
-
-  // Checks if sync is enabled for the profile that owns |io_data|. This must
-  // be invoked on the IO thread, and can be used to check if sync is enabled
-  // on that thread.
-  static bool IsSyncAccessibleOnIOThread(ProfileIOData* io_data);
+  static void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
 
   void AddSyncPrefObserver(SyncPrefObserver* sync_pref_observer);
   void RemoveSyncPrefObserver(SyncPrefObserver* sync_pref_observer);
@@ -136,7 +134,9 @@ class SyncPrefs : NON_EXPORTED_BASE(public base::NonThreadSafe),
   void RegisterPrefGroups();
 
   static void RegisterDataTypePreferredPref(
-      PrefRegistrySyncable* prefs, syncer::ModelType type, bool is_preferred);
+      user_prefs::PrefRegistrySyncable* prefs,
+      syncer::ModelType type,
+      bool is_preferred);
   bool GetDataTypePreferred(syncer::ModelType type) const;
   void SetDataTypePreferred(syncer::ModelType type, bool is_preferred);
 

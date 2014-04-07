@@ -51,7 +51,7 @@ ChannelProxy::Context::Context(Listener* listener,
       ipc_task_runner_(ipc_task_runner),
       channel_connected_called_(false),
       peer_pid_(base::kNullProcessId) {
-  DCHECK(ipc_task_runner_);
+  DCHECK(ipc_task_runner_.get());
 }
 
 ChannelProxy::Context::~Context() {
@@ -210,6 +210,9 @@ void ChannelProxy::Context::OnAddFilter() {
 
 // Called on the IPC::Channel thread
 void ChannelProxy::Context::OnRemoveFilter(MessageFilter* filter) {
+  if (!channel_.get())
+    return;  // The filters have already been deleted.
+
   for (size_t i = 0; i < filters_.size(); ++i) {
     if (filters_[i].get() == filter) {
       filter->OnFilterRemoved();

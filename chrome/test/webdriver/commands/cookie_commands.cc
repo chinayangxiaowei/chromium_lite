@@ -8,8 +8,8 @@
 #include <vector>
 
 #include "base/memory/scoped_ptr.h"
-#include "base/string_util.h"
 #include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
 #include "base/values.h"
 #include "chrome/test/webdriver/commands/response.h"
 #include "chrome/test/webdriver/webdriver_session.h"
@@ -37,14 +37,14 @@ bool CookieCommand::DoesPost() {
 void CookieCommand::ExecuteGet(Response* const response) {
   std::string url;
   Error* error = session_->GetURL(&url);
-  ListValue* cookies;
+  scoped_ptr<ListValue> cookies;
   if (!error)
     error = session_->GetCookies(url, &cookies);
   if (error) {
     response->SetError(error);
     return;
   }
-  response->SetValue(cookies);
+  response->SetValue(cookies.release());
 }
 
 void CookieCommand::ExecutePost(Response* const response) {
@@ -83,10 +83,9 @@ void CookieCommand::ExecutePost(Response* const response) {
 void CookieCommand::ExecuteDelete(Response* const response) {
   std::string url;
   Error* error = session_->GetURL(&url);
-  ListValue* unscoped_cookies = NULL;
+  scoped_ptr<ListValue> cookies;
   if (!error)
-    error = session_->GetCookies(url, &unscoped_cookies);
-  scoped_ptr<ListValue> cookies(unscoped_cookies);
+    error = session_->GetCookies(url, &cookies);
   if (error) {
     response->SetError(error);
     return;

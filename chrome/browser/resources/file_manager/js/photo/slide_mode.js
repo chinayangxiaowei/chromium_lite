@@ -18,14 +18,13 @@
  * @param {cr.ui.ListSelectionModel} selectionModel Selection model.
  * @param {Object} context Context.
  * @param {function(function())} toggleMode Function to toggle the Gallery mode.
- * @param {function} onThumbnailError Thumbnail load error handler.
  * @param {function(string):string} displayStringFunction String formatting
  *     function.
  * @constructor
  */
 function SlideMode(container, content, toolbar, prompt,
                    dataModel, selectionModel, context,
-                   toggleMode, onThumbnailError, displayStringFunction) {
+                   toggleMode, displayStringFunction) {
   this.container_ = container;
   this.document_ = container.ownerDocument;
   this.content = content;
@@ -36,7 +35,6 @@ function SlideMode(container, content, toolbar, prompt,
   this.context_ = context;
   this.metadataCache_ = context.metadataCache;
   this.toggleMode_ = toggleMode;
-  this.onThumbnailError_ = onThumbnailError;
   this.displayStringFunction_ = displayStringFunction;
 
   this.onSelectionBound_ = this.onSelection_.bind(this);
@@ -65,14 +63,21 @@ SlideMode.editorModes = [
   new ImageEditor.Mode.InstantAutofix(),
   new ImageEditor.Mode.Crop(),
   new ImageEditor.Mode.Exposure(),
-  new ImageEditor.Mode.OneClick('rotate_left', new Command.Rotate(-1)),
-  new ImageEditor.Mode.OneClick('rotate_right', new Command.Rotate(1))
+  new ImageEditor.Mode.OneClick(
+      'rotate_left', 'GALLERY_ROTATE_LEFT', new Command.Rotate(-1)),
+  new ImageEditor.Mode.OneClick(
+      'rotate_right', 'GALLERY_ROTATE_RIGHT', new Command.Rotate(1))
 ];
 
 /**
  * @return {string} Mode name.
  */
 SlideMode.prototype.getName = function() { return 'slide' };
+
+/**
+ * @return {string} Mode title.
+ */
+SlideMode.prototype.getTitle = function() { return 'GALLERY_SLIDE' };
 
 /**
  * Initialize the listeners.
@@ -99,7 +104,7 @@ SlideMode.prototype.initDom_ = function() {
       this.toolbar_.querySelector('.filename-spacer'), 'options');
 
   this.savedLabel_ = util.createChild(this.options_, 'saved');
-  this.savedLabel_.textContent = this.displayStringFunction_('saved');
+  this.savedLabel_.textContent = this.displayStringFunction_('GALLERY_SAVED');
 
   var overwriteOriginalBox =
       util.createChild(this.options_, 'overwrite-original');
@@ -118,14 +123,15 @@ SlideMode.prototype.initDom_ = function() {
 
   var overwriteLabel = util.createChild(overwriteOriginalBox, '', 'label');
   overwriteLabel.textContent =
-      this.displayStringFunction_('overwrite_original');
+      this.displayStringFunction_('GALLERY_OVERWRITE_ORIGINAL');
   overwriteLabel.setAttribute('for', 'overwrite-checkbox');
 
   this.bubble_ = util.createChild(this.toolbar_, 'bubble');
   this.bubble_.hidden = true;
 
   var bubbleContent = util.createChild(this.bubble_);
-  bubbleContent.innerHTML = this.displayStringFunction_('overwrite_bubble');
+  bubbleContent.innerHTML = this.displayStringFunction_(
+      'GALLERY_OVERWRITE_BUBBLE');
 
   util.createChild(this.bubble_, 'pointer bottom', 'span');
 
@@ -138,8 +144,9 @@ SlideMode.prototype.initDom_ = function() {
   this.mediaToolbar_ = util.createChild(this.mediaSpacer_, 'tool');
   this.mediaControls_ = new VideoControls(
       this.mediaToolbar_,
-      this.showErrorBanner_.bind(this, 'VIDEO_ERROR'),
-      Gallery.toggleFullscreen,
+      this.showErrorBanner_.bind(this, 'GALLERY_VIDEO_ERROR'),
+      this.displayStringFunction_.bind(this),
+      this.toggleFullScreen_.bind(this),
       this.container_);
 
   // Ribbon and related controls.
@@ -161,8 +168,7 @@ SlideMode.prototype.initDom_ = function() {
 
   this.ribbonSpacer_ = util.createChild(this.toolbar_, 'ribbon-spacer');
   this.ribbon_ = new Ribbon(this.document_,
-      this.metadataCache_, this.dataModel_, this.selectionModel_,
-      this.onThumbnailError_);
+      this.metadataCache_, this.dataModel_, this.selectionModel_);
   this.ribbonSpacer_.appendChild(this.ribbon_);
 
   // Error indicator.
@@ -175,7 +181,7 @@ SlideMode.prototype.initDom_ = function() {
 
   var slideShowButton = util.createChild(this.toolbar_,
       'button slideshow', 'button');
-  slideShowButton.title = this.displayStringFunction_('slideshow');
+  slideShowButton.title = this.displayStringFunction_('GALLERY_SLIDESHOW');
   slideShowButton.addEventListener('click',
       this.startSlideshow.bind(this, SlideMode.SLIDESHOW_INTERVAL_FIRST));
 
@@ -189,7 +195,7 @@ SlideMode.prototype.initDom_ = function() {
   // Editor.
 
   this.editButton_ = util.createChild(this.toolbar_, 'button edit', 'button');
-  this.editButton_.title = this.displayStringFunction_('edit');
+  this.editButton_.title = this.displayStringFunction_('GALLERY_EDIT');
   this.editButton_.addEventListener('click', this.toggleEditor.bind(this));
 
   this.editBarSpacer_ = util.createChild(this.toolbar_, 'edit-bar-spacer');
@@ -258,7 +264,7 @@ SlideMode.prototype.enter = function(
   if (this.getItemCount_() == 0) {
     this.displayedIndex_ = -1;
     //TODO(kaznacheev) Show this message in the grid mode too.
-    this.showErrorBanner_('NO_IMAGES');
+    this.showErrorBanner_('GALLERY_NO_IMAGES');
     loadDone();
   } else {
     // Remember the selection if it is empty or multiple. It will be restored
@@ -374,6 +380,15 @@ SlideMode.prototype.getSelectedImageRect = function() {
  */
 SlideMode.prototype.getSelectedItem = function() {
   return this.getItem(this.getSelectedIndex());
+};
+
+/**
+ * Toggles the full screen mode.
+ * @private
+ */
+SlideMode.prototype.toggleFullScreen_ = function() {
+  util.toggleFullScreen(this.context_.appWindow,
+                        !util.isFullScreen(this.context_.appWindow));
 };
 
 /**
@@ -527,7 +542,7 @@ SlideMode.prototype.onSplice_ = function(event) {
       // No items left. Unload the image and show the banner.
       this.commitItem_(function() {
         this.unloadImage_();
-        this.showErrorBanner_('NO_IMAGES');
+        this.showErrorBanner_('GALLERY_NO_IMAGES');
       }.bind(this));
     }
   }.bind(this), 0);
@@ -630,13 +645,15 @@ SlideMode.prototype.loadItem_ = function(
     if (loadType == ImageView.LOAD_TYPE_ERROR) {
       // if we have a specific error, then display it
       if (error) {
-        this.showErrorBanner_(error);
+        this.showErrorBanner_('GALLERY_' + error);
       } else {
         // otherwise try to infer general error
-        this.showErrorBanner_(video ? 'VIDEO_ERROR' : 'IMAGE_ERROR');
+        this.showErrorBanner_(
+            video ? 'GALLERY_VIDEO_ERROR' : 'GALLERY_IMAGE_ERROR');
       }
     } else if (loadType == ImageView.LOAD_TYPE_OFFLINE) {
-      this.showErrorBanner_(video ? 'VIDEO_OFFLINE' : 'IMAGE_OFFLINE');
+      this.showErrorBanner_(
+          video ? 'GALLERY_VIDEO_OFFLINE' : 'GALLERY_IMAGE_OFFLINE');
     }
 
     if (video) {
@@ -703,10 +720,16 @@ SlideMode.prototype.commitItem_ = function(callback) {
   this.showSpinner_(false);
   this.showErrorBanner_(false);
   this.editor_.getPrompt().hide();
-  if (this.isShowingVideo_()) {
-    this.mediaControls_.pause();
+
+  // Detach any media attached to the controls.
+  if (this.mediaControls_.getMedia())
     this.mediaControls_.detachMedia();
-  }
+
+  // If showing the video, then pause it. Note, that it may not be attached
+  // to the media controls yet.
+  if (this.isShowingVideo_())
+    this.imageView_.getVideo().pause();
+
   this.editor_.closeSession(callback);
 };
 
@@ -743,17 +766,26 @@ SlideMode.prototype.onUnload = function(exiting) {
  */
 SlideMode.prototype.onBeforeUnload = function() {
   if (this.editor_.isBusy())
-    return this.displayStringFunction_('unsaved_changes');
+    return this.displayStringFunction_('GALLERY_UNSAVED_CHANGES');
   return null;
 };
 
 /**
  * Click handler for the image container.
+ *
+ * @param {Event} event Mouse click event.
  * @private
  */
-SlideMode.prototype.onClick_ = function() {
-  if (this.isShowingVideo_())
+SlideMode.prototype.onClick_ = function(event) {
+  if (!this.isShowingVideo_())
+    return;
+  if (event.ctrlKey) {
+    this.mediaControls_.toggleLoopedModeWithFeedback(true);
+    if (!this.mediaControls_.isPlaying())
+      this.mediaControls_.togglePlayStateWithFeedback();
+  } else {
     this.mediaControls_.togglePlayStateWithFeedback();
+  }
 };
 
 /**
@@ -811,7 +843,7 @@ SlideMode.prototype.onKeyDown = function(event) {
       }
       break;
 
-    case 'U+0045':  // 'e' toggles the editor
+    case 'U+0045':  // 'e' toggles the editor.
       this.toggleEditor(event);
       break;
 
@@ -1040,17 +1072,16 @@ SlideMode.prototype.startSlideshow = function(opt_interval, opt_event) {
   if (opt_event)  // Caused by user action, notify the Gallery.
     cr.dispatchSimpleEvent(this, 'useraction');
 
-  this.fullscreenBeforeSlideshow_ = false;
-  Gallery.getFileBrowserPrivate().isFullscreen(function(fullscreen) {
-    this.fullscreenBeforeSlideshow_ = fullscreen;
-    if (!fullscreen) {
-      // Wait until the zoom animation from the mosaic mode is done.
-      setTimeout(Gallery.toggleFullscreen, ImageView.ZOOM_ANIMATION_DURATION);
-      opt_interval = (opt_interval || SlideMode.SLIDESHOW_INTERVAL) +
-          SlideMode.FULLSCREEN_TOGGLE_DELAY;
-    }
-    this.resumeSlideshow_(opt_interval);
-  }.bind(this));
+  this.fullscreenBeforeSlideshow_ = util.isFullScreen(this.context_.appWindow);
+  if (!this.fullscreenBeforeSlideshow_) {
+    // Wait until the zoom animation from the mosaic mode is done.
+    setTimeout(this.toggleFullScreen_.bind(this),
+               ImageView.ZOOM_ANIMATION_DURATION);
+    opt_interval = (opt_interval || SlideMode.SLIDESHOW_INTERVAL) +
+        SlideMode.FULLSCREEN_TOGGLE_DELAY;
+  }
+
+  this.resumeSlideshow_(opt_interval);
 };
 
 /**
@@ -1067,18 +1098,18 @@ SlideMode.prototype.stopSlideshow_ = function(opt_event) {
 
   this.pauseSlideshow_();
   this.container_.removeAttribute('slideshow');
-  Gallery.getFileBrowserPrivate().isFullscreen(function(fullscreen) {
-    // Do not restore fullscreen if we exited fullscreen while in slideshow.
-    var toggleModeDelay = 0;
-    if (!this.fullscreenBeforeSlideshow_ && fullscreen) {
-      Gallery.toggleFullscreen();
-      toggleModeDelay = SlideMode.FULLSCREEN_TOGGLE_DELAY;
-    }
-    if (this.leaveAfterSlideshow_) {
-      this.leaveAfterSlideshow_ = false;
-      setTimeout(this.toggleMode_.bind(this), toggleModeDelay);
-    }
-  }.bind(this));
+
+  // Do not restore fullscreen if we exited fullscreen while in slideshow.
+  var fullscreen = util.isFullScreen(this.context_.appWindow);
+  var toggleModeDelay = 0;
+  if (!this.fullscreenBeforeSlideshow_ && fullscreen) {
+    this.toggleFullScreen_();
+    toggleModeDelay = SlideMode.FULLSCREEN_TOGGLE_DELAY;
+  }
+  if (this.leaveAfterSlideshow_) {
+    this.leaveAfterSlideshow_ = false;
+    setTimeout(this.toggleMode_.bind(this), toggleModeDelay);
+  }
 };
 
 /**

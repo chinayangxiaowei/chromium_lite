@@ -12,17 +12,17 @@
 #include "base/bind.h"
 #include "base/i18n/time_formatting.h"
 #include "base/logging.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/certificate_viewer.h"
 #include "chrome/browser/ssl/ssl_client_auth_observer.h"
 #include "chrome/browser/ui/crypto_module_password_dialog.h"
 #include "chrome/browser/ui/gtk/constrained_window_gtk.h"
 #include "chrome/browser/ui/gtk/gtk_util.h"
-#include "chrome/browser/ui/web_contents_modal_dialog_manager.h"
 #include "chrome/common/net/x509_certificate_model.h"
+#include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/browser/browser_thread.h"
 #include "grit/generated_resources.h"
-#include "net/base/x509_certificate.h"
+#include "net/cert/x509_certificate.h"
 #include "net/ssl/ssl_cert_request_info.h"
 #include "ui/base/gtk/gtk_compat.h"
 #include "ui/base/gtk/gtk_hig_constants.h"
@@ -33,6 +33,7 @@
 
 using content::BrowserThread;
 using content::WebContents;
+using web_modal::WebContentsModalDialogManager;
 
 namespace {
 
@@ -240,7 +241,7 @@ net::X509Certificate* SSLClientCertificateSelector::GetSelectedCert() {
   if (selected >= 0 &&
       selected < static_cast<int>(
           cert_request_info()->client_certs.size()))
-    return cert_request_info()->client_certs[selected];
+    return cert_request_info()->client_certs[selected].get();
   return NULL;
 }
 
@@ -249,7 +250,7 @@ std::string SSLClientCertificateSelector::FormatComboBoxText(
     net::X509Certificate::OSCertHandle cert, const std::string& nickname) {
   std::string rv(nickname);
   rv += " [";
-  rv += x509_certificate_model::GetSerialNumberHexified(cert, "");
+  rv += x509_certificate_model::GetSerialNumberHexified(cert, std::string());
   rv += ']';
   return rv;
 }
@@ -266,8 +267,8 @@ std::string SSLClientCertificateSelector::FormatDetailsText(
   rv += "\n  ";
   rv += l10n_util::GetStringFUTF8(
       IDS_CERT_SERIAL_NUMBER_FORMAT,
-      UTF8ToUTF16(
-          x509_certificate_model::GetSerialNumberHexified(cert, "")));
+      UTF8ToUTF16(x509_certificate_model::GetSerialNumberHexified(
+          cert, std::string())));
 
   base::Time issued, expires;
   if (x509_certificate_model::GetTimes(cert, &issued, &expires)) {

@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 // This file intentionally does not have header guards, it's included
-// inside a macro to generate enum.
+// inside a macro to generate enum values.
 
 // This file contains the list of network errors.
 
@@ -90,6 +90,9 @@ NET_ERROR(NETWORK_CHANGED, -21)
 // The request was blocked by the URL blacklist configured by the domain
 // administrator.
 NET_ERROR(BLOCKED_BY_ADMINISTRATOR, -22)
+
+// The socket is already connected.
+NET_ERROR(SOCKET_IS_CONNECTED, -23)
 
 // A connection was closed (corresponding to a TCP FIN).
 NET_ERROR(CONNECTION_CLOSED, -100)
@@ -284,6 +287,19 @@ NET_ERROR(CLIENT_AUTH_CERT_TYPE_UNSUPPORTED, -151)
 // first was still being generated.
 NET_ERROR(ORIGIN_BOUND_CERT_GENERATION_TYPE_MISMATCH, -152)
 
+// An SSL peer sent us a fatal decrypt_error alert. This typically occurs when
+// a peer could not correctly verify a signature (in CertificateVerify or
+// ServerKeyExchange) or validate a Finished message.
+NET_ERROR(SSL_DECRYPT_ERROR_ALERT, -153)
+
+// There are too many pending WebSocketJob instances, so the new job was not
+// pushed to the queue.
+NET_ERROR(WS_THROTTLE_QUEUE_TOO_LARGE, -154)
+
+// There are too many active SocketStream instances, so the new connect request
+// was rejected.
+NET_ERROR(TOO_MANY_SOCKET_STREAMS, -155)
+
 // Certificate error codes
 //
 // The values of certificate error codes must be consecutive.
@@ -465,7 +481,7 @@ NET_ERROR(INVALID_SPDY_STREAM, -335)
 // There are no supported proxies in the provided list.
 NET_ERROR(NO_SUPPORTED_PROXIES, -336)
 
-// There is a SPDY protocol framing error.
+// There is a SPDY protocol error.
 NET_ERROR(SPDY_PROTOCOL_ERROR, -337)
 
 // Credentials could not be established during HTTP Authentication.
@@ -533,6 +549,9 @@ NET_ERROR(INCOMPLETE_CHUNKED_ENCODING, -355)
 // There is a QUIC protocol error.
 NET_ERROR(QUIC_PROTOCOL_ERROR, -356)
 
+// The HTTP headers were truncated by an EOF.
+NET_ERROR(RESPONSE_HEADERS_TRUNCATED, -357)
+
 // The cache does not have the requested entry.
 NET_ERROR(CACHE_MISS, -400)
 
@@ -556,6 +575,17 @@ NET_ERROR(CACHE_CREATE_FAILURE, -405)
 // tells the transaction to restart the entry-creation logic because the state
 // of the cache has changed.
 NET_ERROR(CACHE_RACE, -406)
+
+// The cache was unable to read a checksum record on an entry. This can be
+// returned from attempts to read from the cache. It is an internal error,
+// returned by the SimpleCache backend, but not by any URLRequest methods
+// or members.
+NET_ERROR(CACHE_CHECKSUM_READ_FAILURE, -407)
+
+// The cache found an entry with an invalid checksum. This can be returned from
+// attempts to read from the cache. It is an internal error, returned by the
+// SimpleCache backend, but not by any URLRequest methods or members.
+NET_ERROR(CACHE_CHECKSUM_MISMATCH, -408)
 
 // The server's response was insecure (e.g. there was a cert error).
 NET_ERROR(INSECURE_RESPONSE, -501)
@@ -637,6 +667,9 @@ NET_ERROR(ORIGIN_BOUND_CERT_GENERATION_FAILED, -711)
 
 // Failure to export private key.
 NET_ERROR(PRIVATE_KEY_EXPORT_FAILED, -712)
+
+// Self-signed certificate generation failed.
+NET_ERROR(SELF_SIGNED_CERT_GENERATION_FAILED, -713)
 
 // DNS error codes.
 

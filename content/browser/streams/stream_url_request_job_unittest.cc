@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/test/test_simple_task_runner.h"
 #include "content/browser/streams/stream.h"
 #include "content/browser/streams/stream_registry.h"
@@ -40,7 +40,7 @@ class StreamURLRequestJobTest : public testing::Test {
         net::URLRequest* request,
         net::NetworkDelegate* network_delegate) const OVERRIDE {
       scoped_refptr<Stream> stream = registry_->GetStream(request->url());
-      if (stream)
+      if (stream.get())
         return new StreamURLRequestJob(request, network_delegate, stream);
       return NULL;
     }
@@ -49,9 +49,7 @@ class StreamURLRequestJobTest : public testing::Test {
     StreamRegistry* registry_;
   };
 
-  StreamURLRequestJobTest()
-      : message_loop_(MessageLoop::TYPE_IO) {
-  }
+  StreamURLRequestJobTest() : message_loop_(base::MessageLoop::TYPE_IO) {}
 
   virtual void SetUp() {
     registry_.reset(new StreamRegistry());
@@ -81,7 +79,7 @@ class StreamURLRequestJobTest : public testing::Test {
       request_->SetExtraRequestHeaders(extra_headers);
     request_->Start();
 
-    MessageLoop::current()->RunUntilIdle();
+    base::MessageLoop::current()->RunUntilIdle();
 
     // Verify response.
     EXPECT_TRUE(request_->status().is_success());
@@ -91,7 +89,7 @@ class StreamURLRequestJobTest : public testing::Test {
   }
 
  protected:
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
   scoped_ptr<StreamRegistry> registry_;
 
   net::URLRequestContext url_request_context_;
@@ -101,7 +99,7 @@ class StreamURLRequestJobTest : public testing::Test {
 
 TEST_F(StreamURLRequestJobTest, TestGetSimpleDataRequest) {
   scoped_refptr<Stream> stream(
-      new Stream(registry_.get(), NULL, GURL(), kStreamURL));
+      new Stream(registry_.get(), NULL, kStreamURL));
 
   scoped_refptr<net::StringIOBuffer> buffer(
       new net::StringIOBuffer(kTestData1));
@@ -114,7 +112,7 @@ TEST_F(StreamURLRequestJobTest, TestGetSimpleDataRequest) {
 
 TEST_F(StreamURLRequestJobTest, TestGetLargeStreamRequest) {
   scoped_refptr<Stream> stream(
-      new Stream(registry_.get(), NULL, GURL(), kStreamURL));
+      new Stream(registry_.get(), NULL, kStreamURL));
 
   std::string large_data;
   large_data.reserve(kBufferSize * 5);
@@ -135,7 +133,7 @@ TEST_F(StreamURLRequestJobTest, TestGetNonExistentStreamRequest) {
   request_->set_method("GET");
   request_->Start();
 
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
 
   // Verify response.
   EXPECT_FALSE(request_->status().is_success());
@@ -143,7 +141,7 @@ TEST_F(StreamURLRequestJobTest, TestGetNonExistentStreamRequest) {
 
 TEST_F(StreamURLRequestJobTest, TestRangeDataRequest) {
   scoped_refptr<Stream> stream(
-      new Stream(registry_.get(), NULL, GURL(), kStreamURL));
+      new Stream(registry_.get(), NULL, kStreamURL));
 
   scoped_refptr<net::StringIOBuffer> buffer(
       new net::StringIOBuffer(kTestData2));
@@ -159,7 +157,7 @@ TEST_F(StreamURLRequestJobTest, TestRangeDataRequest) {
 
 TEST_F(StreamURLRequestJobTest, TestInvalidRangeDataRequest) {
   scoped_refptr<Stream> stream(
-      new Stream(registry_.get(), NULL, GURL(), kStreamURL));
+      new Stream(registry_.get(), NULL, kStreamURL));
 
   scoped_refptr<net::StringIOBuffer> buffer(
       new net::StringIOBuffer(kTestData2));
@@ -169,7 +167,7 @@ TEST_F(StreamURLRequestJobTest, TestInvalidRangeDataRequest) {
 
   net::HttpRequestHeaders extra_headers;
   extra_headers.SetHeader(net::HttpRequestHeaders::kRange, "bytes=1-3");
-  TestRequest("GET", kStreamURL, extra_headers, 405, "");
+  TestRequest("GET", kStreamURL, extra_headers, 405, std::string());
 }
 
 }  // namespace content

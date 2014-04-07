@@ -8,12 +8,14 @@
 #include <string>
 
 #include "net/quic/crypto/crypto_handshake.h"
+#include "net/quic/quic_config.h"
 #include "net/quic/quic_crypto_stream.h"
 
 namespace net {
 
+class CryptoHandshakeMessage;
+class QuicCryptoServerConfig;
 class QuicSession;
-struct CryptoHandshakeMessage;
 
 namespace test {
 class CryptoTestUtils;
@@ -21,6 +23,8 @@ class CryptoTestUtils;
 
 class NET_EXPORT_PRIVATE QuicCryptoServerStream : public QuicCryptoStream {
  public:
+  QuicCryptoServerStream(const QuicCryptoServerConfig& crypto_config,
+                         QuicSession* session);
   explicit QuicCryptoServerStream(QuicSession* session);
   virtual ~QuicCryptoServerStream();
 
@@ -28,18 +32,24 @@ class NET_EXPORT_PRIVATE QuicCryptoServerStream : public QuicCryptoStream {
   virtual void OnHandshakeMessage(
       const CryptoHandshakeMessage& message) OVERRIDE;
 
+  // GetBase64SHA256ClientChannelID sets |*output| to the base64 encoded,
+  // SHA-256 hash of the client's ChannelID key and returns true, if the client
+  // presented a ChannelID. Otherwise it returns false.
+  bool GetBase64SHA256ClientChannelID(std::string* output) const;
+
+ protected:
+  virtual QuicErrorCode ProcessClientHello(
+      const CryptoHandshakeMessage& message,
+      CryptoHandshakeMessage* reply,
+      std::string* error_details);
+
+  const QuicCryptoServerConfig* crypto_config() { return &crypto_config_; }
+
  private:
   friend class test::CryptoTestUtils;
 
-  // config_ contains non-crypto parameters that are negotiated in the crypto
-  // handshake.
-  QuicConfig config_;
   // crypto_config_ contains crypto parameters for the handshake.
-  QuicCryptoServerConfig crypto_config_;
-  std::string server_nonce_;
-
-  QuicNegotiatedParameters negotiated_params_;
-  QuicCryptoNegotiatedParams crypto_negotiated_params_;
+  const QuicCryptoServerConfig& crypto_config_;
 };
 
 }  // namespace net

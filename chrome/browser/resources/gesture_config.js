@@ -52,9 +52,10 @@ GeneralConfig.prototype = {
       var label = row.querySelector('.row-label');
       var input = row.querySelector('.input');
       var units = row.querySelector('.row-units');
+      var reset = row.querySelector('.row-reset');
 
       label.setAttribute('for', field.key);
-      label.textContent = field.label;
+      label.innerHTML = field.label;
       input.id = field.key;
       input.min = field.min || 0;
 
@@ -66,13 +67,16 @@ GeneralConfig.prototype = {
       if (field.units)
         units.innerHTML = field.units;
 
+      reset.id = field.key + '-reset';
+      gesture_config.updateResetButton(reset, true);
+
       section.querySelector('.section-properties').appendChild(row);
     }
     $('gesture-form').appendChild(section);
   },
 
   /**
-   * Initializes the form by adding 'onChange' listeners to all fields.
+   * Initializes the form by adding appropriate event listeners to elements.
    */
   initForm: function() {
     for (var i = 0; i < this.fields.length; i++) {
@@ -80,6 +84,11 @@ GeneralConfig.prototype = {
       var config = this;
       $(field.key).onchange = (function(key) {
         config.setPreferenceValue(key, $(key).value);
+        gesture_config.updateResetButton($(key + '-reset'), false);
+        gesture_config.updateResetAllButton(false);
+      }).bind(null, field.key);
+      $(field.key + '-reset').onclick = (function(key) {
+        config.resetPreferenceValue(key);
       }).bind(null, field.key);
     }
   },
@@ -89,13 +98,13 @@ GeneralConfig.prototype = {
    */
   loadForm: function() {
     for (var i = 0; i < this.fields.length; i++)
-      this.getPreferenceValue(this.fields[i].key);
+      this.updatePreferenceValue(this.fields[i].key);
   },
 
   /**
-   * Handles processing of "Reset" button.
+   * Handles processing of "Reset All" button.
    * Causes all form values to be updated based on current preference values.
-   * @return {bool} Returns false.
+   * @return {boolean} Returns false.
    */
   onReset: function() {
     for (var i = 0; i < this.fields.length; i++) {
@@ -108,11 +117,11 @@ GeneralConfig.prototype = {
   /**
    * Requests a preference setting's value.
    * This method is asynchronous; the result is provided by a call to
-   * getPreferenceValueResult.
+   * updatePreferenceValueResult.
    * @param {string} prefName The name of the preference value being requested.
    */
-  getPreferenceValue: function(prefName) {
-    chrome.send('getPreferenceValue', [this.prefix + prefName]);
+  updatePreferenceValue: function(prefName) {
+    chrome.send('updatePreferenceValue', [this.prefix + prefName]);
   },
 
   /**
@@ -127,7 +136,7 @@ GeneralConfig.prototype = {
 
   /**
    * Resets a preference to its default value and get that callback
-   * to getPreferenceValueResult with the new value of the preference.
+   * to updatePreferenceValueResult with the new value of the preference.
    * @param {string} prefName The name of the requested preference.
    */
   resetPreferenceValue: function(prefName) {
@@ -227,6 +236,14 @@ function GestureConfig() {
       units: ''
     },
     {
+      key: 'scroll_prediction_seconds',
+      label: 'Scroll prediction interval<br>' +
+          '(Enable scroll prediction in ' +
+              '<a href="chrome://flags">chrome://flags</a>)',
+      units: 'seconds',
+      step: 0.01
+    },
+    {
       key: 'min_swipe_speed',
       label: 'Minimum Swipe Speed',
       units: 'pixels/sec.'
@@ -314,7 +331,12 @@ function OverscrollConfig() {
     },
     {
       key: 'minimum_threshold_start',
-      label: 'Start overscroll gesture after scrolling',
+      label: 'Start overscroll gesture (horizontal)',
+      units: 'pixels'
+    },
+    {
+      key: 'vertical_threshold_start',
+      label: 'Start overscroll gesture (vertical)',
       units: 'pixels'
     },
     {
@@ -335,74 +357,31 @@ function OverscrollConfig() {
 }
 
 /**
- * Returns a GeneralConfig for configuring workspace_cycler.* preferences.
+ * Returns a GeneralConfig for configuring immersive.* preferences for
+ * immersive fullscreen in Ash.
  * @return {object} A GeneralConfig object.
  */
-function WorkspaceCyclerConfig() {
-  /** @const */ var WORKSPACE_CYCLER_TITLE = 'Workspace Cycler Configuration';
+function ImmersiveConfig() {
+  /** @const */ var IMMERSIVE_TITLE = 'Immersive Fullscreen Configuration';
 
-  /** @const */ var WORKSPACE_CYCLER_PREFIX = 'workspace_cycler.';
+  /** @const */ var IMMERSIVE_PREFIX = 'immersive_mode.';
 
-  var WORKSPACE_CYCLER_FIELDS = [
+  var IMMERSIVE_FIELDS = [
     {
-      key: 'selected_scale',
-      label: 'Scale of the selected workspace',
-      units: '%'
+      key: 'reveal_delay_ms',
+      label: 'Top-of-screen reveal delay',
+      units: 'milliseconds'
     },
     {
-      key: 'min_scale',
-      label: 'Minimum workspace scale (scale of deepest workspace)',
-      units: '%'
-    },
-    {
-      key: 'max_scale',
-      label: 'Maximimum workspace scale (scale of shallowest workspace)',
-      units: '%'
-    },
-    {
-      key: 'min_brightness',
-      label: 'Minimum workspace brightness (deepest & shallowest workspace)',
-      units: '%',
-      min: '-1'
-    },
-    {
-      key: 'background_opacity',
-      label: 'Desktop background opacity when cycling through workspaces',
-      units: '%'
-    },
-    {
-      key: 'desktop_workspace_brightness',
-      label: 'Desktop workspace brightness when cycling through workspaces',
-      units: '%',
-      min: '-1'
-    },
-    {
-      key: 'distance_to_initiate_cycling',
-      label: 'Vertical distance to scroll to initiate cycling',
+      key: 'reveal_x_threshold_pixels',
+      label: 'Top-of-screen mouse x threshold',
       units: 'pixels'
     },
-    {
-      key: 'scroll_distance_to_cycle_to_next_workspace',
-      label: 'Vertical distance to scroll to cycle to the next workspace',
-      units: 'pixels'
-    },
-    { key: 'cycler_step_animation_duration_ratio',
-      label: 'Cycler step animation duration ratio',
-      units: 'ms / pixels vertical scroll'
-    },
-    { key: 'start_cycler_animation_duration',
-      label: 'Duration of the animations to start cycling',
-      units: 'ms'
-    },
-    { key: 'stop_cycler_animation_duration',
-      label: 'Duration of the animations to stop cycling',
-      units: 'ms'
-    }
   ];
 
-  return new GeneralConfig(WORKSPACE_CYCLER_TITLE,
-                           WORKSPACE_CYCLER_PREFIX,
-                           WORKSPACE_CYCLER_FIELDS);
+  return new GeneralConfig(IMMERSIVE_TITLE,
+                           IMMERSIVE_PREFIX,
+                           IMMERSIVE_FIELDS);
 }
 
 /**
@@ -457,8 +436,7 @@ function FlingConfig() {
 }
 
 /**
- * WebUI instance for configuring gesture.* and overscroll.* preference values
- * used by Chrome's gesture recognition system.
+ * WebUI instance for configuring preference values related to gesture input.
  */
 window.gesture_config = {
   /**
@@ -474,25 +452,72 @@ window.gesture_config = {
     var f = FlingConfig();
     f.buildAll();
 
-    var c = WorkspaceCyclerConfig();
-    c.buildAll();
+    var i = ImmersiveConfig();
+    i.buildAll();
 
-    $('reset-button').onclick = function() {
+    $('reset-all-button').onclick = function() {
       g.onReset();
       o.onReset();
       f.onReset();
-      c.onReset();
+      i.onReset();
     };
   },
 
   /**
-   * Handle callback from call to getPreferenceValue.
+   * Checks if all gesture preferences are set to default by checking the status
+   * of the reset button associated with each preference.
+   * @return {boolean} True if all gesture preferences are set to default.
+   */
+  areAllPrefsSetToDefault: function() {
+    var resets = $('gesture-form').querySelectorAll('.row-reset');
+    for (var i = 0; i < resets.length; i++) {
+      if (!resets[i].disabled)
+        return false;
+    }
+    return true;
+  },
+
+  /**
+   * Updates the status and label of a preference reset button.
+   * @param {HTMLInputElement} resetButton Reset button for the preference.
+   * @param {boolean} isDefault Whether the preference is set to the default
+   *     value.
+   */
+  updateResetButton: function(resetButton, isDefault) {
+    /** @const */ var TITLE_DEFAULT = 'Default';
+
+    /** @const */ var TITLE_NOT_DEFAULT = 'Reset';
+
+    resetButton.innerHTML = isDefault ? TITLE_DEFAULT : TITLE_NOT_DEFAULT;
+    resetButton.disabled = isDefault;
+  },
+
+  /**
+   * Updates the status and label of "Reset All" button.
+   * @param {boolean} isDefault Whether all preference are set to their default
+   *     values.
+   */
+  updateResetAllButton: function(isDefault) {
+    /** @const */ var TITLE_DEFAULT = 'Everything is set to default';
+
+    /** @const */ var TITLE_NOT_DEFAULT = 'Reset All To Default';
+
+    var button = $('reset-all-button');
+    button.innerHTML = isDefault ? TITLE_DEFAULT : TITLE_NOT_DEFAULT;
+    button.disabled = isDefault;
+  },
+
+  /**
+   * Handle callback from call to updatePreferenceValue.
    * @param {string} prefName The name of the requested preference value.
    * @param {value} value The current value associated with prefName.
+   * @param {boolean} isDefault Whether the value is the default value.
    */
-  getPreferenceValueResult: function(prefName, value) {
+  updatePreferenceValueResult: function(prefName, value, isDefault) {
     prefName = prefName.substring(prefName.indexOf('.') + 1);
     $(prefName).value = value;
+    this.updateResetButton($(prefName + '-reset'), isDefault);
+    this.updateResetAllButton(this.areAllPrefsSetToDefault());
   },
 };
 

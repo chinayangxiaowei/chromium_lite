@@ -10,10 +10,11 @@
 #include "base/id_map.h"
 #include "content/public/renderer/render_view_observer.h"
 #include "content/public/renderer/render_view_observer_tracker.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebSpellCheckClient.h"
+#include "third_party/WebKit/public/web/WebSpellCheckClient.h"
 
 class RenderView;
 class SpellCheck;
+class SpellCheckMarker;
 struct SpellCheckResult;
 
 namespace WebKit {
@@ -38,8 +39,9 @@ class SpellCheckProvider
   // Requests async spell and grammar checker to the platform text
   // checker, which is available on the browser process.
   void RequestTextChecking(
-      const WebKit::WebString& text,
-      WebKit::WebTextCheckingCompletion* completion);
+      const string16& text,
+      WebKit::WebTextCheckingCompletion* completion,
+      const std::vector<SpellCheckMarker>& markers);
 
   // The number of ongoing IPC requests.
   size_t pending_text_request_size() const {
@@ -62,7 +64,7 @@ class SpellCheckProvider
   // Tries to satisfy a spell check request from the cache in |last_request_|.
   // Returns true (and cancels/finishes the completion) if it can, false
   // if the provider should forward the query on.
-  bool SatisfyRequestFromCache(const WebKit::WebString& text,
+  bool SatisfyRequestFromCache(const string16& text,
                                WebKit::WebTextCheckingCompletion* completion);
 
   // WebKit::WebSpellCheckClient implementation.
@@ -75,9 +77,13 @@ class SpellCheckProvider
       const WebKit::WebString& text,
       WebKit::WebTextCheckingTypeMask mask,
       WebKit::WebVector<WebKit::WebTextCheckingResult>* results) OVERRIDE;
+
   virtual void requestCheckingOfText(
       const WebKit::WebString& text,
+      const WebKit::WebVector<uint32>& markers,
+      const WebKit::WebVector<unsigned>& marker_offsets,
       WebKit::WebTextCheckingCompletion* completion) OVERRIDE;
+
   virtual WebKit::WebString autoCorrectWord(
       const WebKit::WebString& misspelled_word) OVERRIDE;
   virtual void showSpellingUI(bool show) OVERRIDE;
@@ -88,7 +94,6 @@ class SpellCheckProvider
 #if !defined(OS_MACOSX)
   void OnRespondSpellingService(
       int identifier,
-      int offset,
       bool succeeded,
       const string16& text,
       const std::vector<SpellCheckResult>& results);
@@ -96,7 +101,7 @@ class SpellCheckProvider
 
   // Returns whether |text| has word characters, i.e. whether a spellchecker
   // needs to check this text.
-  bool HasWordCharacters(const WebKit::WebString& text, int index) const;
+  bool HasWordCharacters(const string16& text, int index) const;
 
 #if defined(OS_MACOSX)
   void OnAdvanceToNextMisspelling();

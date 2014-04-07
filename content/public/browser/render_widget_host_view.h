@@ -6,11 +6,11 @@
 #define CONTENT_PUBLIC_BROWSER_RENDER_WIDGET_HOST_VIEW_H_
 
 #include "base/basictypes.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "content/common/content_export.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkRegion.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebInputEvent.h"
+#include "third_party/WebKit/public/web/WebInputEvent.h"
 #include "ui/gfx/native_widget_types.h"
 
 #if defined(TOOLKIT_GTK)
@@ -165,9 +165,8 @@ class CONTENT_EXPORT RenderWidgetHostView {
 #endif
 
 #if defined(OS_WIN) && defined(USE_AURA)
-  // Set the parent native accessible view for this View.
-  virtual void SetParentNativeViewAccessible(
-      gfx::NativeViewAccessible accessible_parent) = 0;
+  virtual gfx::NativeViewAccessible AccessibleObjectFromChildId(long child_id)
+      = 0;
 #endif
 };
 

@@ -6,9 +6,10 @@
 
 #include <algorithm>
 
+#include "base/command_line.h"
+#include "base/memory/shared_memory.h"
 #include "base/metrics/histogram.h"
-#include "base/process_util.h"
-#include "base/shared_memory.h"
+#include "content/public/common/content_switches.h"
 #include "media/audio/audio_buffers_state.h"
 #include "media/audio/audio_parameters.h"
 #include "media/audio/shared_memory_util.h"
@@ -22,6 +23,8 @@ AudioSyncReader::AudioSyncReader(base::SharedMemory* shared_memory,
                                  int input_channels)
     : shared_memory_(shared_memory),
       input_channels_(input_channels),
+      mute_audio_(CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kMuteAudio)),
       renderer_callback_count_(0),
       renderer_missed_callback_count_(0) {
   packet_size_ = media::PacketSizeInBytes(shared_memory_->requested_size());
@@ -63,22 +66,34 @@ void AudioSyncReader::UpdatePendingBytes(uint32 bytes) {
     media::SetUnknownDataSize(shared_memory_, packet_size_);
   }
 
-  if (socket_.get()) {
+  if (socket_) {
     socket_->Send(&bytes, sizeof(bytes));
   }
 }
 
-int AudioSyncReader::Read(AudioBus* source, AudioBus* dest) {
+int AudioSyncReader::Read(bool block, const AudioBus* source, AudioBus* dest) {
   ++renderer_callback_count_;
-  if (!DataReady())
+  if (!DataReady()) {
     ++renderer_missed_callback_count_;
+
+    if (block)
+      WaitTillDataReady();
+  }
 
   // Copy optional synchronized live audio input for consumption by renderer
   // process.
-  if (source && input_bus_.get()) {
+  if (source && input_bus_) {
     DCHECK_EQ(source->channels(), input_bus_->channels());
-    DCHECK_LE(source->frames(), input_bus_->frames());
-    source->CopyTo(input_bus_.get());
+    // TODO(crogers): In some cases with device and sample-rate changes
+    // it's possible for an AOR to insert a resampler in the path.
+    // Because this is used with the Web Audio API, it'd be better
+    // to bypass the device change handling in AOR and instead let
+    // the renderer-side Web Audio code deal with this.
+    if (source->frames() == input_bus_->frames() &&
+        source->channels() == input_bus_->channels())
+      source->CopyTo(input_bus_.get());
+    else
+      input_bus_->Zero();
   }
 
   // Retrieve the actual number of bytes available from the shared memory.  If
@@ -100,11 +115,15 @@ int AudioSyncReader::Read(AudioBus* source, AudioBus* dest) {
   else if (frames > output_bus_->frames())
     frames = output_bus_->frames();
 
-  // Copy data from the shared memory into the caller's AudioBus.
-  output_bus_->CopyTo(dest);
+  if (mute_audio_) {
+    dest->Zero();
+  } else {
+    // Copy data from the shared memory into the caller's AudioBus.
+    output_bus_->CopyTo(dest);
 
-  // Zero out any unfilled frames in the destination bus.
-  dest->ZeroFramesPartial(frames, dest->frames() - frames);
+    // Zero out any unfilled frames in the destination bus.
+    dest->ZeroFramesPartial(frames, dest->frames() - frames);
+  }
 
   // Zero out the entire output buffer to avoid stuttering/repeating-buffers
   // in the anomalous case if the renderer is unable to keep up with real-time.
@@ -119,7 +138,7 @@ int AudioSyncReader::Read(AudioBus* source, AudioBus* dest) {
 }
 
 void AudioSyncReader::Close() {
-  if (socket_.get()) {
+  if (socket_) {
     socket_->Close();
   }
 }
@@ -153,5 +172,29 @@ bool AudioSyncReader::PrepareForeignSocketHandle(
   return false;
 }
 #endif
+
+void AudioSyncReader::WaitTillDataReady() {
+  base::TimeTicks start = base::TimeTicks::Now();
+  const base::TimeDelta kMaxWait = base::TimeDelta::FromMilliseconds(20);
+#if defined(OS_WIN)
+  // Sleep(0) on Windows lets the other threads run.
+  const base::TimeDelta kSleep = base::TimeDelta::FromMilliseconds(0);
+#else
+  // We want to sleep for a bit here, as otherwise a backgrounded renderer won't
+  // get enough cpu to send the data and the high priority thread in the browser
+  // will use up a core causing even more skips.
+  const base::TimeDelta kSleep = base::TimeDelta::FromMilliseconds(2);
+#endif
+  base::TimeDelta time_since_start;
+  do {
+    base::PlatformThread::Sleep(kSleep);
+    time_since_start = base::TimeTicks::Now() - start;
+  } while (!DataReady() && time_since_start < kMaxWait);
+  UMA_HISTOGRAM_CUSTOM_TIMES("Media.AudioOutputControllerDataNotReady",
+                             time_since_start,
+                             base::TimeDelta::FromMilliseconds(1),
+                             base::TimeDelta::FromMilliseconds(1000),
+                             50);
+}
 
 }  // namespace content

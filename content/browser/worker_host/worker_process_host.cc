@@ -13,9 +13,9 @@
 #include "base/bind_helpers.h"
 #include "base/callback.h"
 #include "base/command_line.h"
-#include "base/message_loop.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "content/browser/appcache/appcache_dispatcher_host.h"
 #include "content/browser/appcache/chrome_appcache_service.h"
 #include "content/browser/browser_child_process_host_impl.h"
@@ -23,11 +23,11 @@
 #include "content/browser/devtools/worker_devtools_manager.h"
 #include "content/browser/devtools/worker_devtools_message_filter.h"
 #include "content/browser/fileapi/fileapi_message_filter.h"
-#include "content/browser/in_process_webkit/indexed_db_dispatcher_host.h"
+#include "content/browser/indexed_db/indexed_db_dispatcher_host.h"
 #include "content/browser/mime_registry_message_filter.h"
+#include "content/browser/quota_dispatcher_host.h"
 #include "content/browser/renderer_host/database_message_filter.h"
 #include "content/browser/renderer_host/file_utilities_message_filter.h"
-#include "content/browser/renderer_host/quota_dispatcher_host.h"
 #include "content/browser/renderer_host/render_view_host_delegate.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
 #include "content/browser/renderer_host/socket_stream_dispatcher_host.h"
@@ -48,9 +48,9 @@
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "net/url_request/url_request_context_getter.h"
 #include "ui/base/ui_base_switches.h"
-#include "webkit/fileapi/file_system_context.h"
-#include "webkit/fileapi/sandbox_mount_point_provider.h"
-#include "webkit/glue/resource_type.h"
+#include "webkit/browser/fileapi/file_system_context.h"
+#include "webkit/browser/fileapi/sandbox_file_system_backend.h"
+#include "webkit/common/resource_type.h"
 
 #if defined(OS_WIN)
 #include "content/common/sandbox_win.h"
@@ -114,7 +114,8 @@ WorkerProcessHost::WorkerProcessHost(
     ResourceContext* resource_context,
     const WorkerStoragePartition& partition)
     : resource_context_(resource_context),
-      partition_(partition) {
+      partition_(partition),
+      process_launched_(false) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
   DCHECK(resource_context_);
   process_.reset(
@@ -174,7 +175,7 @@ bool WorkerProcessHost::Init(int render_process_id) {
 #endif
     switches::kDisableFileSystem,
     switches::kDisableSeccompFilterSandbox,
-    switches::kDisableWebSockets,
+    switches::kEnableExperimentalWebPlatformFeatures,
 #if defined(OS_MACOSX)
     switches::kEnableSandboxLogging,
 #endif
@@ -228,6 +229,8 @@ bool WorkerProcessHost::Init(int render_process_id) {
 void WorkerProcessHost::CreateMessageFilters(int render_process_id) {
   ChromeBlobStorageContext* blob_storage_context =
       GetChromeBlobStorageContextForResourceContext(resource_context_);
+  StreamContext* stream_context =
+      GetStreamContextForResourceContext(resource_context_);
 
   net::URLRequestContextGetter* url_request_context =
       partition_.url_request_context();
@@ -247,15 +250,15 @@ void WorkerProcessHost::CreateMessageFilters(int render_process_id) {
       render_process_id, resource_context_, partition_,
       base::Bind(&WorkerServiceImpl::next_worker_route_id,
                  base::Unretained(WorkerServiceImpl::GetInstance())));
-  process_->GetHost()->AddFilter(worker_message_filter_);
+  process_->GetHost()->AddFilter(worker_message_filter_.get());
   process_->GetHost()->AddFilter(new AppCacheDispatcherHost(
-      partition_.appcache_service(),
-      process_->GetData().id));
+      partition_.appcache_service(), process_->GetData().id));
   process_->GetHost()->AddFilter(new FileAPIMessageFilter(
       process_->GetData().id,
       url_request_context,
       partition_.filesystem_context(),
-      blob_storage_context));
+      blob_storage_context,
+      stream_context));
   process_->GetHost()->AddFilter(new FileUtilitiesMessageFilter(
       process_->GetData().id));
   process_->GetHost()->AddFilter(new MimeRegistryMessageFilter());
@@ -272,6 +275,7 @@ void WorkerProcessHost::CreateMessageFilters(int render_process_id) {
           new URLRequestContextSelector(url_request_context,
                                         media_url_request_context),
           resource_context_);
+  socket_stream_dispatcher_host_ = socket_stream_dispatcher_host;
   process_->GetHost()->AddFilter(socket_stream_dispatcher_host);
   process_->GetHost()->AddFilter(
       new WorkerDevToolsMessageFilter(process_->GetData().id));
@@ -310,7 +314,7 @@ bool WorkerProcessHost::FilterMessage(const IPC::Message& message,
                                       WorkerMessageFilter* filter) {
   for (Instances::iterator i = instances_.begin(); i != instances_.end(); ++i) {
     if (!i->closed() && i->HasFilter(filter, message.routing_id())) {
-      RelayMessage(message, worker_message_filter_, i->worker_route_id());
+      RelayMessage(message, worker_message_filter_.get(), i->worker_route_id());
       return true;
     }
   }
@@ -319,6 +323,9 @@ bool WorkerProcessHost::FilterMessage(const IPC::Message& message,
 }
 
 void WorkerProcessHost::OnProcessLaunched() {
+  process_launched_ = true;
+
+  WorkerServiceImpl::GetInstance()->NotifyWorkerProcessCreated();
 }
 
 bool WorkerProcessHost::OnMessageReceived(const IPC::Message& message) {
@@ -464,6 +471,19 @@ void WorkerProcessHost::RelayMessage(
   }
 }
 
+void WorkerProcessHost::ShutdownSocketStreamDispatcherHostIfNecessary() {
+  if (!instances_.size() && socket_stream_dispatcher_host_.get()) {
+    // We can assume that this object is going to delete, because
+    // currently a WorkerInstance will never be added to a WorkerProcessHost
+    // once it is initialized.
+
+    // SocketStreamDispatcherHost should be notified now that the worker
+    // process will shutdown soon.
+    socket_stream_dispatcher_host_->Shutdown();
+    socket_stream_dispatcher_host_ = NULL;
+  }
+}
+
 void WorkerProcessHost::FilterShutdown(WorkerMessageFilter* filter) {
   for (Instances::iterator i = instances_.begin(); i != instances_.end();) {
     bool shutdown = false;
@@ -480,6 +500,7 @@ void WorkerProcessHost::FilterShutdown(WorkerMessageFilter* filter) {
       ++i;
     }
   }
+  ShutdownSocketStreamDispatcherHostIfNecessary();
 }
 
 bool WorkerProcessHost::CanShutdown() {
@@ -494,8 +515,9 @@ void WorkerProcessHost::UpdateTitle() {
         GetWorkerProcessTitle(i->url(), resource_context_);
 
     if (title.empty()) {
-      title = net::RegistryControlledDomainService::GetDomainAndRegistry(
-          i->url());
+      title = net::registry_controlled_domains::GetDomainAndRegistry(
+          i->url(),
+          net::registry_controlled_domains::EXCLUDE_PRIVATE_REGISTRIES);
     }
 
     // Use the host name if the domain is empty, i.e. localhost or IP address.
@@ -532,10 +554,15 @@ void WorkerProcessHost::DocumentDetached(WorkerMessageFilter* filter,
       ++i;
     }
   }
+  ShutdownSocketStreamDispatcherHostIfNecessary();
 }
 
 void WorkerProcessHost::TerminateWorker(int worker_route_id) {
   Send(new WorkerMsg_TerminateWorkerContext(worker_route_id));
+}
+
+void WorkerProcessHost::SetBackgrounded(bool backgrounded) {
+  process_->SetBackgrounded(backgrounded);
 }
 
 const ChildProcessData& WorkerProcessHost::GetData() {

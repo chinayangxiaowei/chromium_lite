@@ -6,7 +6,7 @@
 
 #include "base/bind.h"
 #include "base/location.h"
-#include "base/message_loop_proxy.h"
+#include "base/message_loop/message_loop_proxy.h"
 #include "content/browser/streams/stream_handle_impl.h"
 #include "content/browser/streams/stream_read_observer.h"
 #include "content/browser/streams/stream_registry.h"
@@ -22,18 +22,16 @@ namespace content {
 
 Stream::Stream(StreamRegistry* registry,
                StreamWriteObserver* write_observer,
-               const GURL& security_origin,
                const GURL& url)
     : data_bytes_read_(0),
       can_add_data_(true),
-      security_origin_(security_origin),
       url_(url),
       data_length_(0),
       registry_(registry),
       read_observer_(NULL),
       write_observer_(write_observer),
       stream_handle_(NULL),
-      weak_ptr_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {
+      weak_ptr_factory_(this) {
   CreateByteStream(base::MessageLoopProxy::current(),
                    base::MessageLoopProxy::current(),
                    kDeferSizeThreshold,
@@ -73,8 +71,14 @@ void Stream::AddData(scoped_refptr<net::IOBuffer> buffer, size_t size) {
   can_add_data_ = writer_->Write(buffer, size);
 }
 
+void Stream::AddData(const char* data, size_t size) {
+  scoped_refptr<net::IOBuffer> io_buffer(new net::IOBuffer(size));
+  memcpy(io_buffer->data(), data, size);
+  can_add_data_ = writer_->Write(io_buffer, size);
+}
+
 void Stream::Finalize() {
-  writer_->Close(DOWNLOAD_INTERRUPT_REASON_NONE);
+  writer_->Close(0);
   writer_.reset(NULL);
 
   // Continue asynchronously.
@@ -87,7 +91,7 @@ Stream::StreamState Stream::ReadRawData(net::IOBuffer* buf,
                                         int buf_size,
                                         int* bytes_read) {
   *bytes_read = 0;
-  if (!data_) {
+  if (!data_.get()) {
     data_length_ = 0;
     data_bytes_read_ = 0;
     ByteStreamReader::StreamState state = reader_->Read(&data_, &data_length_);
@@ -125,6 +129,9 @@ scoped_ptr<StreamHandle> Stream::CreateHandle(const GURL& original_url,
 }
 
 void Stream::CloseHandle() {
+  // Prevent deletion until this function ends.
+  scoped_refptr<Stream> ref(this);
+
   CHECK(stream_handle_);
   stream_handle_ = NULL;
   registry_->UnregisterStream(url());
@@ -144,4 +151,3 @@ void Stream::OnDataAvailable() {
 }
 
 }  // namespace content
-

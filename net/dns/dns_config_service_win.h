@@ -15,7 +15,7 @@
 
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "net/base/net_export.h"
 #include "net/dns/dns_config_service.h"
 
@@ -51,7 +51,7 @@ base::FilePath GetHostsPath();
 // a registry key and stores it in |out|. Returns true on success. Empty
 // entries (e.g., "chromium.org,,org") terminate the list. Non-ascii hostnames
 // are converted to punycode.
-bool NET_EXPORT_PRIVATE ParseSearchList(const string16& value,
+bool NET_EXPORT_PRIVATE ParseSearchList(const base::string16& value,
                                         std::vector<std::string>* out);
 
 // All relevant settings read from registry and IP Helper. This isolates our
@@ -61,7 +61,7 @@ struct NET_EXPORT_PRIVATE DnsSystemSettings {
   // The |set| flag distinguishes between empty and unset values.
   struct RegString {
     bool set;
-    string16 value;
+    base::string16 value;
   };
 
   struct RegDword {

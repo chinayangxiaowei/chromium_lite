@@ -4,6 +4,8 @@
 
 #include "chrome/browser/policy/test/local_policy_test_server.h"
 
+#include <ctype.h>
+
 #include <algorithm>
 #include <vector>
 
@@ -11,12 +13,12 @@
 #include "base/json/json_writer.h"
 #include "base/path_service.h"
 #include "base/stl_util.h"
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "chrome/browser/policy/cloud/cloud_policy_constants.h"
 #include "chrome/common/chrome_paths.h"
 #include "crypto/rsa_private_key.h"
-#include "net/test/base_test_server.h"
 #include "net/test/python_utils.h"
+#include "net/test/spawned_test_server/base_test_server.h"
 
 namespace policy {
 
@@ -178,8 +180,8 @@ bool LocalPolicyTestServer::SetPythonPath() const {
                      .AppendASCII("chrome")
                      .AppendASCII("browser")
                      .AppendASCII("policy")
-                     .AppendASCII("cloud")
-                     .AppendASCII("proto"));
+                     .AppendASCII("proto")
+                     .AppendASCII("cloud"));
   AppendToPythonPath(pyproto_dir
                      .AppendASCII("policy")
                      .AppendASCII("proto"));
@@ -187,9 +189,9 @@ bool LocalPolicyTestServer::SetPythonPath() const {
   AppendToPythonPath(pyproto_dir
                      .AppendASCII("chrome")
                      .AppendASCII("browser")
-                     .AppendASCII("chromeos")
                      .AppendASCII("policy")
-                     .AppendASCII("proto"));
+                     .AppendASCII("proto")
+                     .AppendASCII("chromeos"));
 #endif
 
   return true;
@@ -247,4 +249,4 @@ std::string LocalPolicyTestServer::GetSelector(const std::string& type,
   return selector;
 }
 
-}  // namespace policy;
+}  // namespace policy

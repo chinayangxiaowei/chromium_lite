@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "cc/base/region.h"
+#include "base/values.h"
 
 namespace cc {
 
@@ -30,8 +31,8 @@ const Region& Region::operator=(const Region& region) {
   return *this;
 }
 
-void Region::Swap(Region& region) {
-  region.skregion_.swap(skregion_);
+void Region::Swap(Region* region) {
+  region->skregion_.swap(skregion_);
 }
 
 void Region::Clear() {
@@ -40,6 +41,10 @@ void Region::Clear() {
 
 bool Region::IsEmpty() const {
   return skregion_.isEmpty();
+}
+
+int Region::GetRegionComplexity() const {
+  return skregion_.computeRegionComplexity();
 }
 
 bool Region::Contains(gfx::Point point) const {
@@ -101,6 +106,18 @@ std::string Region::ToString() const {
     result += it.rect().ToString();
   }
   return result;
+}
+
+scoped_ptr<base::Value> Region::AsValue() const {
+  scoped_ptr<base::ListValue> result(new base::ListValue());
+  for (Iterator it(*this); it.has_rect(); it.next()) {
+    gfx::Rect rect(it.rect());
+    result->AppendInteger(rect.x());
+    result->AppendInteger(rect.y());
+    result->AppendInteger(rect.width());
+    result->AppendInteger(rect.height());
+  }
+  return result.PassAs<base::Value>();
 }
 
 Region::Iterator::Iterator() {

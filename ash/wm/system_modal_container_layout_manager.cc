@@ -4,25 +4,24 @@
 
 #include "ash/wm/system_modal_container_layout_manager.h"
 
+#include "ash/session_state_delegate.h"
 #include "ash/shell.h"
-#include "ash/shell_delegate.h"
 #include "ash/shell_window_ids.h"
 #include "ash/wm/system_modal_container_event_filter.h"
 #include "ash/wm/window_animations.h"
 #include "ash/wm/window_util.h"
 #include "base/bind.h"
-#include "base/command_line.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/client/capture_client.h"
 #include "ui/aura/root_window.h"
-#include "ui/views/corewm/compound_event_filter.h"
 #include "ui/aura/window.h"
 #include "ui/base/events/event.h"
-#include "ui/base/ui_base_switches.h"
+#include "ui/base/ui_base_switches_util.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animator.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
 #include "ui/gfx/screen.h"
+#include "ui/views/corewm/compound_event_filter.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
 
@@ -67,8 +66,7 @@ void SystemModalContainerLayoutManager::OnWindowAddedToLayout(
          child->type() == aura::client::WINDOW_TYPE_POPUP);
   DCHECK(
       container_->id() != internal::kShellWindowId_LockSystemModalContainer ||
-      Shell::GetInstance()->delegate()->IsScreenLocked() ||
-      !Shell::GetInstance()->delegate()->IsSessionStarted());
+      Shell::GetInstance()->session_state_delegate()->IsUserSessionBlocked());
 
   child->AddObserver(this);
   if (child->GetProperty(aura::client::kModalKey) != ui::MODAL_TYPE_NONE)
@@ -121,11 +119,6 @@ void SystemModalContainerLayoutManager::OnWindowDestroying(
     modal_background_ = NULL;
 }
 
-
-////////////////////////////////////////////////////////////////////////////////
-// SystemModalContainerLayoutManager,
-//     SystemModalContainerEventFilter::Delegate implementation:
-
 bool SystemModalContainerLayoutManager::CanWindowReceiveEvents(
     aura::Window* window) {
   // We could get when we're at lock screen and there is modal window at
@@ -138,7 +131,7 @@ bool SystemModalContainerLayoutManager::CanWindowReceiveEvents(
     return true;
   // This container can not handle events if the screen is locked and it is not
   // above the lock screen layer (crbug.com/110920).
-  if (ash::Shell::GetInstance()->IsScreenLocked() &&
+  if (Shell::GetInstance()->session_state_delegate()->IsUserSessionBlocked() &&
       container_->id() < ash::internal::kShellWindowId_LockScreenContainer)
     return true;
   return wm::GetActivatableWindow(window) == modal_window();
@@ -162,9 +155,10 @@ void SystemModalContainerLayoutManager::CreateModalBackground() {
     modal_background_->GetNativeView()->SetName(
         "SystemModalContainerLayoutManager.ModalBackground");
     views::View* contents_view = new views::View();
-    contents_view->set_background(views::Background::CreateSolidBackground(
-        CommandLine::ForCurrentProcess()->HasSwitch(
-            switches::kEnableNewDialogStyle) ? SK_ColorWHITE : SK_ColorBLACK));
+    // TODO(jamescook): This could also be SK_ColorWHITE if using the new
+    // dialog style via switches::IsNewDialogStyleEnabled().
+    contents_view->set_background(
+        views::Background::CreateSolidBackground(SK_ColorBLACK));
     modal_background_->SetContentsView(contents_view);
     modal_background_->GetNativeView()->layer()->SetOpacity(0.0f);
   }

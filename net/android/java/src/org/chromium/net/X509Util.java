@@ -27,7 +27,7 @@ import javax.net.ssl.X509TrustManager;
 
 public class X509Util {
 
-    private static final String TAG = X509Util.class.getName();
+    private static final String TAG = "X509Util";
 
     private static CertificateFactory sCertificateFactory;
 
@@ -203,7 +203,7 @@ public class X509Util {
         try {
             serverCertificates[0].checkValidity();
             if (!verifyKeyUsage(serverCertificates[0]))
-                return CertVerifyResultAndroid.VERIFY_FAILED;
+                return CertVerifyResultAndroid.VERIFY_INCORRECT_KEY_USAGE;
         } catch (CertificateExpiredException e) {
             return CertVerifyResultAndroid.VERIFY_EXPIRED;
         } catch (CertificateNotYetValidException e) {

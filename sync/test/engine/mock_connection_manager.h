@@ -18,6 +18,7 @@
 #include "sync/engine/net/server_connection_manager.h"
 #include "sync/internal_api/public/base/model_type.h"
 #include "sync/internal_api/public/base/model_type_invalidation_map.h"
+#include "sync/internal_api/public/base/unique_position.h"
 #include "sync/protocol/sync.pb.h"
 
 namespace syncer {
@@ -246,6 +247,8 @@ class MockConnectionManager : public ServerConnectionManager {
   // cases where we're mocking out most of the code that performs network
   // requests.
   void UpdateConnectionStatus();
+
+  void SetServerStatus(HttpResponse::ServerConnectionCode server_status);
 
   // Return by copy to be thread-safe.
   const std::string store_birthday() {

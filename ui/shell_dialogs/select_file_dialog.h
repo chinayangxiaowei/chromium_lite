@@ -13,7 +13,7 @@
 #include "base/files/file_path.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "ui/gfx/native_widget_types.h"
 #include "ui/shell_dialogs/base_shell_dialog.h"
 #include "ui/shell_dialogs/shell_dialogs_export.h"
@@ -27,13 +27,25 @@ class ShellDialogsDelegate;
 // Shows a dialog box for selecting a file or a folder.
 class SHELL_DIALOGS_EXPORT SelectFileDialog
     : public base::RefCountedThreadSafe<SelectFileDialog>,
-      public ui::BaseShellDialog {
+      public BaseShellDialog {
  public:
   enum Type {
     SELECT_NONE,
+
+    // For opening a folder.
     SELECT_FOLDER,
+
+    // Like SELECT_FOLDER, but the dialog UI should explicitly show it's
+    // specifically for "upload".
+    SELECT_UPLOAD_FOLDER,
+
+    // For saving into a file, allowing a nonexistent file to be selected.
     SELECT_SAVEAS_FILE,
+
+    // For opening a file.
     SELECT_OPEN_FILE,
+
+    // Like SELECT_OPEN_FILE, but allowing multiple files to open.
     SELECT_OPEN_MULTI_FILE
   };
 
@@ -54,7 +66,7 @@ class SHELL_DIALOGS_EXPORT SelectFileDialog
     //
     // If not overridden, calls FileSelected() with path from |file|.
     virtual void FileSelectedWithExtraInfo(
-        const ui::SelectedFileInfo& file,
+        const SelectedFileInfo& file,
         int index,
         void* params);
 
@@ -68,7 +80,7 @@ class SHELL_DIALOGS_EXPORT SelectFileDialog
     //
     // If not overridden, calls MultiFilesSelected() with paths from |files|.
     virtual void MultiFilesSelectedWithExtraInfo(
-        const std::vector<ui::SelectedFileInfo>& files,
+        const std::vector<SelectedFileInfo>& files,
         void* params);
 
     // Notifies the Listener that the file/folder selection was aborted (via
@@ -86,13 +98,13 @@ class SHELL_DIALOGS_EXPORT SelectFileDialog
   // This is optional and should only be used by components that have to live
   // elsewhere in the tree due to layering violations. (For example, because of
   // a dependency on chrome's extension system.)
-  static void SetFactory(ui::SelectFileDialogFactory* factory);
+  static void SetFactory(SelectFileDialogFactory* factory);
 
   // Creates a dialog box helper. This is an inexpensive wrapper around the
   // platform-native file selection dialog. |policy| is an optional class that
   // can prevent showing a dialog.
   static scoped_refptr<SelectFileDialog> Create(Listener* listener,
-                                                ui::SelectFilePolicy* policy);
+                                                SelectFilePolicy* policy);
 
   // Holds information about allowed extensions on a file save dialog.
   struct SHELL_DIALOGS_EXPORT FileTypeInfo {
@@ -110,12 +122,16 @@ class SHELL_DIALOGS_EXPORT SelectFileDialog
     // Overrides the system descriptions of the specified extensions. Entries
     // correspond to |extensions|; if left blank the system descriptions will
     // be used.
-    std::vector<string16> extension_description_overrides;
+    std::vector<base::string16> extension_description_overrides;
 
     // Specifies whether there will be a filter added for all files (i.e. *.*).
     bool include_all_files;
 
-    // Specifies whether the caller can support files/folders that are on Drive.
+    // Specifies whether the caller can directly support file paths pointing to
+    // files/folders on Google Drive. If the flag is true, the file dialog does
+    // nothing special; just returns a Drive path. If it is false, the dialog
+    // creates a local replica of the Drive file and returns its path, so that
+    // the caller can use it without any difference than when it were local.
     bool support_drive;
   };
 
@@ -147,7 +163,7 @@ class SHELL_DIALOGS_EXPORT SelectFileDialog
   // NOTE: only one instance of any shell dialog can be shown per owning_window
   //       at a time (for obvious reasons).
   void SelectFile(Type type,
-                  const string16& title,
+                  const base::string16& title,
                   const base::FilePath& default_path,
                   const FileTypeInfo* file_types,
                   int file_type_index,
@@ -161,8 +177,7 @@ class SHELL_DIALOGS_EXPORT SelectFileDialog
 
  protected:
   friend class base::RefCountedThreadSafe<SelectFileDialog>;
-  explicit SelectFileDialog(Listener* listener,
-                            ui::SelectFilePolicy* policy);
+  explicit SelectFileDialog(Listener* listener, SelectFilePolicy* policy);
   virtual ~SelectFileDialog();
 
   // Displays the actual file-selection dialog.
@@ -171,7 +186,7 @@ class SHELL_DIALOGS_EXPORT SelectFileDialog
   // AllowFileSelectionDialogs-Policy.
   virtual void SelectFileImpl(
       Type type,
-      const string16& title,
+      const base::string16& title,
       const base::FilePath& default_path,
       const FileTypeInfo* file_types,
       int file_type_index,
@@ -198,7 +213,7 @@ class SHELL_DIALOGS_EXPORT SelectFileDialog
   // Returns true if the dialog has multiple file type choices.
   virtual bool HasMultipleFileTypeChoicesImpl() = 0;
 
-  scoped_ptr<ui::SelectFilePolicy> select_file_policy_;
+  scoped_ptr<SelectFilePolicy> select_file_policy_;
 
   DISALLOW_COPY_AND_ASSIGN(SelectFileDialog);
 };
@@ -206,4 +221,3 @@ class SHELL_DIALOGS_EXPORT SelectFileDialog
 }  // namespace ui
 
 #endif  // UI_SHELL_DIALOGS_SELECT_FILE_DIALOG_H_
-

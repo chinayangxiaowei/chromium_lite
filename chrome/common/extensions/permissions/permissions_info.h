@@ -10,19 +10,21 @@
 #include <string>
 
 #include "base/callback.h"
-#include "base/memory/singleton.h"
+#include "base/lazy_instance.h"
 #include "chrome/common/extensions/permissions/api_permission.h"
 #include "chrome/common/extensions/permissions/api_permission_set.h"
 #include "chrome/common/extensions/permissions/permission_message.h"
+#include "extensions/common/permissions/permissions_provider.h"
 
 namespace extensions {
 
-// Singleton that holds the extension permission instances and provides static
+// A global object that holds the extension permission instances and provides
 // methods for accessing them.
 class PermissionsInfo {
  public:
-  // Returns a pointer to the singleton instance.
   static PermissionsInfo* GetInstance();
+
+  virtual ~PermissionsInfo();
 
   // Returns the permission with the given |id|, and NULL if it doesn't exist.
   const APIPermissionInfo* GetByID(APIPermission::ID id) const;
@@ -46,22 +48,18 @@ class PermissionsInfo {
   size_t get_permission_count() const { return permission_count_; }
 
  private:
-  friend class APIPermissionInfo;
+  friend struct base::DefaultLazyInstanceTraits<PermissionsInfo>;
 
-  ~PermissionsInfo();
   PermissionsInfo();
+
+  // Initializes the permissions from the provider.
+  void InitializeWithProvider(const PermissionsProvider& provider);
 
   // Registers an |alias| for a given permission |name|.
   void RegisterAlias(const char* name, const char* alias);
 
   // Registers a permission with the specified attributes and flags.
-  const APIPermissionInfo* RegisterPermission(
-      APIPermission::ID id,
-      const char* name,
-      int l10n_message_id,
-      PermissionMessage::ID message_id,
-      int flags,
-      const APIPermissionInfo::APIPermissionConstructor constructor);
+  void RegisterPermission(APIPermissionInfo* permission);
 
   // Maps permission ids to permissions.
   typedef std::map<APIPermission::ID, APIPermissionInfo*> IDMap;
@@ -75,7 +73,6 @@ class PermissionsInfo {
   size_t hosted_app_permission_count_;
   size_t permission_count_;
 
-  friend struct DefaultSingletonTraits<PermissionsInfo>;
   DISALLOW_COPY_AND_ASSIGN(PermissionsInfo);
 };
 

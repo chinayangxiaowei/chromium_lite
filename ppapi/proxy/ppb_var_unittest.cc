@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-#include "base/string_number_conversions.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/threading/platform_thread.h"
 #include "ppapi/c/pp_var.h"
 #include "ppapi/c/ppb_var.h"
@@ -164,11 +164,7 @@ class RemoveRefVarThreadDelegate : public base::PlatformThread::Delegate {
 
 }  // namespace
 
-#ifdef ENABLE_PEPPER_THREADING
 TEST_F(PPB_VarTest, Threads) {
-#else
-TEST_F(PPB_VarTest, DISABLED_Threads) {
-#endif
   std::vector<base::PlatformThreadHandle> create_var_threads(kNumThreads);
   std::vector<CreateVarThreadDelegate> create_var_delegates;
   // The strings that the threads will re-extract from Vars (so we can check

@@ -6,11 +6,11 @@
 
 #include "base/logging.h"
 #include "base/pickle.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "net/base/auth.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
-#include "net/base/x509_certificate.h"
+#include "net/cert/x509_certificate.h"
 #include "net/http/http_response_headers.h"
 #include "net/ssl/ssl_cert_request_info.h"
 
@@ -84,6 +84,9 @@ enum {
   // This bit is set if the response info has connection info.
   RESPONSE_INFO_HAS_CONNECTION_INFO = 1 << 18,
 
+  // This bit is set if the request has http authentication.
+  RESPONSE_INFO_USE_HTTP_AUTHENTICATION = 1 << 19,
+
   // TODO(darin): Add other bits to indicate alternate request methods.
   // For now, we don't support storing those.
 };
@@ -91,18 +94,22 @@ enum {
 HttpResponseInfo::HttpResponseInfo()
     : was_cached(false),
       server_data_unavailable(false),
+      network_accessed(false),
       was_fetched_via_spdy(false),
       was_npn_negotiated(false),
       was_fetched_via_proxy(false),
+      did_use_http_auth(false),
       connection_info(CONNECTION_INFO_UNKNOWN) {
 }
 
 HttpResponseInfo::HttpResponseInfo(const HttpResponseInfo& rhs)
     : was_cached(rhs.was_cached),
       server_data_unavailable(rhs.server_data_unavailable),
+      network_accessed(rhs.network_accessed),
       was_fetched_via_spdy(rhs.was_fetched_via_spdy),
       was_npn_negotiated(rhs.was_npn_negotiated),
       was_fetched_via_proxy(rhs.was_fetched_via_proxy),
+      did_use_http_auth(rhs.did_use_http_auth),
       socket_address(rhs.socket_address),
       npn_negotiated_protocol(rhs.npn_negotiated_protocol),
       connection_info(rhs.connection_info),
@@ -122,11 +129,14 @@ HttpResponseInfo::~HttpResponseInfo() {
 HttpResponseInfo& HttpResponseInfo::operator=(const HttpResponseInfo& rhs) {
   was_cached = rhs.was_cached;
   server_data_unavailable = rhs.server_data_unavailable;
+  network_accessed = rhs.network_accessed;
   was_fetched_via_spdy = rhs.was_fetched_via_spdy;
   was_npn_negotiated = rhs.was_npn_negotiated;
   was_fetched_via_proxy = rhs.was_fetched_via_proxy;
+  did_use_http_auth = rhs.did_use_http_auth;
   socket_address = rhs.socket_address;
   npn_negotiated_protocol = rhs.npn_negotiated_protocol;
+  connection_info = rhs.connection_info;
   request_time = rhs.request_time;
   response_time = rhs.response_time;
   auth_challenge = rhs.auth_challenge;
@@ -174,7 +184,7 @@ bool HttpResponseInfo::InitFromPickle(const Pickle& pickle,
   if (flags & RESPONSE_INFO_HAS_CERT) {
     X509Certificate::PickleType type = GetPickleTypeForVersion(version);
     ssl_info.cert = X509Certificate::CreateFromPickle(pickle, &iter, type);
-    if (!ssl_info.cert)
+    if (!ssl_info.cert.get())
       return false;
   }
   if (flags & RESPONSE_INFO_HAS_CERT_STATUS) {
@@ -243,6 +253,8 @@ bool HttpResponseInfo::InitFromPickle(const Pickle& pickle,
 
   *response_truncated = (flags & RESPONSE_INFO_TRUNCATED) != 0;
 
+  did_use_http_auth = (flags & RESPONSE_INFO_USE_HTTP_AUTHENTICATION) != 0;
+
   return true;
 }
 
@@ -272,6 +284,8 @@ void HttpResponseInfo::Persist(Pickle* pickle,
     flags |= RESPONSE_INFO_WAS_PROXY;
   if (connection_info != CONNECTION_INFO_UNKNOWN)
     flags |= RESPONSE_INFO_HAS_CONNECTION_INFO;
+  if (did_use_http_auth)
+    flags |= RESPONSE_INFO_USE_HTTP_AUTHENTICATION;
 
   pickle->WriteInt(flags);
   pickle->WriteInt64(request_time.ToInternalValue());
@@ -312,6 +326,57 @@ void HttpResponseInfo::Persist(Pickle* pickle,
 
   if (connection_info != CONNECTION_INFO_UNKNOWN)
     pickle->WriteInt(static_cast<int>(connection_info));
+}
+
+HttpResponseInfo::ConnectionInfo HttpResponseInfo::ConnectionInfoFromNextProto(
+    NextProto next_proto) {
+  switch (next_proto) {
+    case kProtoSPDY2:
+      return CONNECTION_INFO_SPDY2;
+    case kProtoSPDY3:
+    case kProtoSPDY31:
+      return CONNECTION_INFO_SPDY3;
+    case kProtoSPDY4a2:
+      return CONNECTION_INFO_SPDY4A2;
+    case kProtoHTTP2Draft04:
+      return CONNECTION_INFO_HTTP2_DRAFT_04;
+    case kProtoQUIC1SPDY3:
+      return CONNECTION_INFO_QUIC1_SPDY3;
+
+    case kProtoUnknown:
+    case kProtoHTTP11:
+    case kProtoSPDY1:
+    case kProtoSPDY21:
+      break;
+  }
+
+  NOTREACHED();
+  return CONNECTION_INFO_UNKNOWN;
+}
+
+// static
+std::string HttpResponseInfo::ConnectionInfoToString(
+    ConnectionInfo connection_info) {
+  switch (connection_info) {
+    case CONNECTION_INFO_UNKNOWN:
+      return "unknown";
+    case CONNECTION_INFO_HTTP1:
+      return "http/1";
+    case CONNECTION_INFO_SPDY2:
+      return "spdy/2";
+    case CONNECTION_INFO_SPDY3:
+      return "spdy/3";
+    case CONNECTION_INFO_SPDY4A2:
+      return "spdy/4a2";
+    case CONNECTION_INFO_HTTP2_DRAFT_04:
+      return "HTTP-draft-04/2.0";
+    case CONNECTION_INFO_QUIC1_SPDY3:
+      return "quic/1+spdy/3";
+    case NUM_OF_CONNECTION_INFOS:
+      break;
+  }
+  NOTREACHED();
+  return "";
 }
 
 }  // namespace net

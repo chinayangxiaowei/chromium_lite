@@ -11,7 +11,7 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/stl_util.h"
-#include "base/string_number_conversions.h"
+#include "base/strings/string_number_conversions.h"
 #include "sql/connection.h"
 #include "sql/statement.h"
 #include "sync/base/sync_export.h"
@@ -46,11 +46,12 @@ class MigrationTest : public testing::TestWithParam<int> {
   }
 
   static bool LoadAndIgnoreReturnedData(DirectoryBackingStore *dbs) {
-    MetahandlesIndex metas;
-    JournalIndex  delete_journals;;
-    STLElementDeleter<MetahandlesIndex> index_deleter(&metas);
+    Directory::MetahandlesMap tmp_handles_map;
+    JournalIndex  delete_journals;
+    STLValueDeleter<Directory::MetahandlesMap> deleter(&tmp_handles_map);
     Directory::KernelLoadInfo kernel_load_info;
-    return dbs->Load(&metas, &delete_journals, &kernel_load_info) == OPENED;
+    return dbs->Load(&tmp_handles_map, &delete_journals, &kernel_load_info) ==
+        OPENED;
   }
 
   void SetUpVersion67Database(sql::Connection* connection);
@@ -72,15 +73,16 @@ class MigrationTest : public testing::TestWithParam<int> {
   void SetUpVersion83Database(sql::Connection* connection);
   void SetUpVersion84Database(sql::Connection* connection);
   void SetUpVersion85Database(sql::Connection* connection);
+  void SetUpVersion86Database(sql::Connection* connection);
 
   void SetUpCurrentDatabaseAndCheckVersion(sql::Connection* connection) {
-    SetUpVersion85Database(connection);  // Prepopulates data.
+    SetUpVersion86Database(connection);  // Prepopulates data.
     scoped_ptr<TestDirectoryBackingStore> dbs(
         new TestDirectoryBackingStore(GetUsername(), connection));
+    ASSERT_EQ(kCurrentDBVersion, dbs->GetVersion());
 
     ASSERT_TRUE(LoadAndIgnoreReturnedData(dbs.get()));
     ASSERT_FALSE(dbs->needs_column_refresh_);
-    ASSERT_EQ(kCurrentDBVersion, dbs->GetVersion());
   }
 
  private:
@@ -359,13 +361,13 @@ void ExpectTime(const EntryKernel& entry_kernel,
                       expected_time, entry_kernel.ref(SERVER_MTIME));
 }
 
-// Expect that all the entries in |index| have times matching those in
+// Expect that all the entries in |entries| have times matching those in
 // the given map (from metahandle to expect time).
-void ExpectTimes(const MetahandlesIndex& index,
+void ExpectTimes(const Directory::MetahandlesMap& handles_map,
                  const std::map<int64, base::Time>& expected_times) {
-  for (MetahandlesIndex::const_iterator it = index.begin();
-       it != index.end(); ++it) {
-    int64 meta_handle = (*it)->ref(META_HANDLE);
+  for (Directory::MetahandlesMap::const_iterator it = handles_map.begin();
+       it != handles_map.end(); ++it) {
+    int64 meta_handle = it->first;
     SCOPED_TRACE(meta_handle);
     std::map<int64, base::Time>::const_iterator it2 =
         expected_times.find(meta_handle);
@@ -373,7 +375,7 @@ void ExpectTimes(const MetahandlesIndex& index,
       ADD_FAILURE() << "Could not find expected time for " << meta_handle;
       continue;
     }
-    ExpectTime(**it, it2->second);
+    ExpectTime(*it->second, it2->second);
   }
 }
 
@@ -2426,6 +2428,96 @@ void MigrationTest::SetUpVersion85Database(sql::Connection* connection) {
   ASSERT_TRUE(connection->CommitTransaction());
 }
 
+void MigrationTest::SetUpVersion86Database(sql::Connection* connection) {
+  ASSERT_TRUE(connection->is_open());
+  ASSERT_TRUE(connection->BeginTransaction());
+  ASSERT_TRUE(connection->Execute(
+      "CREATE TABLE share_version (id VARCHAR(128) primary key, data INT);"
+      "INSERT INTO 'share_version' VALUES('nick@chromium.org',86);"
+      "CREATE TABLE models (model_id BLOB primary key, progress_marker BLOB,"
+         " transaction_version BIGINT default 0);"
+      "INSERT INTO 'models' VALUES(X'C2881000',X'0888810218B605',1);"
+      "CREATE TABLE 'metas'(metahandle bigint primary key ON CONFLICT FAIL,b"
+         "ase_version bigint default -1,server_version bigint default 0,local_e"
+         "xternal_id bigint default 0,transaction_version bigint default 0,mtim"
+         "e bigint default 0,server_mtime bigint default 0,ctime bigint default"
+         " 0,server_ctime bigint default 0,id varchar(255) default 'r',parent_i"
+         "d varchar(255) default 'r',server_parent_id varchar(255) default 'r',"
+         "is_unsynced bit default 0,is_unapplied_update bit default 0,is_del bi"
+         "t default 0,is_dir bit default 0,server_is_dir bit default 0,server_i"
+         "s_del bit default 0,non_unique_name varchar,server_non_unique_name va"
+         "rchar(255),unique_server_tag varchar,unique_client_tag varchar,specif"
+         "ics blob,server_specifics blob,base_server_specifics blob,server_uniq"
+         "ue_position blob,unique_position blob,unique_bookmark_tag blob);"
+      "INSERT INTO 'metas' VALUES(1,-1,0,0,0,"
+         META_PROTO_TIMES_VALS(1)
+         ",'r','r','r',0,0,0,1,0,0,NULL,NULL,NULL,NULL,"
+         "X'',X'',NULL,X'',X'',X'');"
+      "INSERT INTO 'metas' VALUES(6,694,694,6,0,"
+         META_PROTO_TIMES_VALS(6) ",'s_ID_6','s_ID_9','s_ID_9',0,0,0,1,1,0,'T"
+         "he Internet','The Internet',NULL,NULL,X'C2881000',X'C2881000',NULL,X'"
+         "',X'',X'');"
+      "INSERT INTO 'metas' VALUES(7,663,663,0,0,"
+         META_PROTO_TIMES_VALS(7) ",'s_ID_7','r','r',0,0,0,1,1,0,'Google Chro"
+         "me','Google Chrome','google_chrome',NULL,NULL,NULL,NULL,X'',X'',X'');"
+      "INSERT INTO 'metas' VALUES(8,664,664,0,0,"
+         META_PROTO_TIMES_VALS(8) ",'s_ID_8','s_ID_7','s_ID_7',0,0,0,1,1,0,'B"
+         "ookmarks','Bookmarks','google_chrome_bookmarks',NULL,X'C2881000',X'C2"
+         "881000',NULL,X'',X'',X'');"
+      "INSERT INTO 'metas' VALUES(9,665,665,1,0,"
+         META_PROTO_TIMES_VALS(9) ",'s_ID_9','s_ID_8','s_ID_8',0,0,0,1,1,0,'B"
+         "ookmark Bar','Bookmark Bar','bookmark_bar',NULL,X'C2881000',X'C288100"
+         "0',NULL,X'',X'',X'');"
+      "INSERT INTO 'metas' VALUES(10,666,666,2,0,"
+         META_PROTO_TIMES_VALS(10) ",'s_ID_10','s_ID_8','s_ID_8',0,0,0,1,1,0,"
+         "'Other Bookmarks','Other Bookmarks','other_bookmarks',NULL,X'C2881000"
+         "',X'C2881000',NULL,X'',X'',X'');"
+      "INSERT INTO 'metas' VALUES(11,683,683,8,0,"
+         META_PROTO_TIMES_VALS(11) ",'s_ID_11','s_ID_6','s_ID_6',0,0,0,0,0,0,"
+         "'Home (The Chromium Projects)','Home (The Chromium Projects)',NULL,NU"
+         "LL,X'C28810220A18687474703A2F2F6465762E6368726F6D69756D2E6F72672F1206"
+         "414741545741',X'C28810290A1D687474703A2F2F6465762E6368726F6D69756D2E6"
+         "F72672F6F7468657212084146414756415346',NULL,X'',X'',X'');"
+      "INSERT INTO 'metas' VALUES(12,685,685,9,0,"
+         META_PROTO_TIMES_VALS(12) ",'s_ID_12','s_ID_6','s_ID_6',0,0,0,1,1,0,"
+         "'Extra Bookmarks','Extra Bookmarks',NULL,NULL,X'C2881000',X'C2881000'"
+         ",NULL,X'',X'',X'');"
+      "INSERT INTO 'metas' VALUES(13,687,687,10,0,"
+         META_PROTO_TIMES_VALS(13) ",'s_ID_13','s_ID_6','s_ID_6',0,0,0,0,0,0"
+         ",'ICANN | Internet Corporation for Assigned Names and Numbers','ICANN"
+         " | Internet Corporation for Assigned Names and Numbers',NULL,NULL,X'C"
+         "28810240A15687474703A2F2F7777772E6963616E6E2E636F6D2F120B504E47415846"
+         "3041414646',X'C28810200A15687474703A2F2F7777772E6963616E6E2E636F6D2F1"
+         "20744414146415346',NULL,X'',X'',X'');"
+      "INSERT INTO 'metas' VALUES(14,692,692,11,0,"
+         META_PROTO_TIMES_VALS(14) ",'s_ID_14','s_ID_6','s_ID_6',0,0,0,0,0,0"
+         ",'The WebKit Open Source Project','The WebKit Open Source Project',NU"
+         "LL,NULL,X'C288101A0A12687474703A2F2F7765626B69742E6F72672F1204504E475"
+         "8',X'C288101C0A13687474703A2F2F7765626B69742E6F72672F781205504E473259"
+         "',NULL,X'',X'',X'');"
+      "CREATE TABLE deleted_metas (metahandle bigint primary key ON CONFLICT"
+         " FAIL,base_version bigint default -1,server_version bigint default 0,"
+         "local_external_id bigint default 0,transaction_version bigint default"
+         " 0,mtime bigint default 0,server_mtime bigint default 0,ctime bigint "
+         "default 0,server_ctime bigint default 0,id varchar(255) default 'r',p"
+         "arent_id varchar(255) default 'r',server_parent_id varchar(255) defau"
+         "lt 'r',is_unsynced bit default 0,is_unapplied_update bit default 0,is"
+         "_del bit default 0,is_dir bit default 0,server_is_dir bit default 0,s"
+         "erver_is_del bit default 0,non_unique_name varchar,server_non_unique_"
+         "name varchar(255),unique_server_tag varchar,unique_client_tag varchar"
+         ",specifics blob,server_specifics blob,base_server_specifics blob,serv"
+         "er_unique_position blob,unique_position blob,unique_bookmark_tag blob"
+         ");"
+      "CREATE TABLE 'share_info' (id TEXT primary key, name TEXT, store_birt"
+         "hday TEXT, db_create_version TEXT, db_create_time INT, next_id INT de"
+         "fault -2, cache_guid TEXT, notification_state BLOB, bag_of_chips BLOB"
+         ");"
+      "INSERT INTO 'share_info' VALUES('nick@chromium.org','nick@chromium.or"
+         "g','c27e9f59-08ca-46f8-b0cc-f16a2ed778bb','Unknown',1263522064,-13107"
+         "8,'9010788312004066376x-6609234393368420856x',NULL,NULL);"));
+  ASSERT_TRUE(connection->CommitTransaction());
+}
+
 TEST_F(DirectoryBackingStoreTest, MigrateVersion67To68) {
   sql::Connection connection;
   ASSERT_TRUE(connection.OpenInMemory());
@@ -2747,13 +2839,13 @@ TEST_F(DirectoryBackingStoreTest, MigrateVersion78To79) {
   ASSERT_FALSE(dbs->needs_column_refresh_);
 
   // Ensure the next_id has been incremented.
-  MetahandlesIndex entry_bucket;
+  Directory::MetahandlesMap handles_map;
   JournalIndex  delete_journals;;
-  STLElementDeleter<MetahandlesIndex> deleter(&entry_bucket);
+  STLValueDeleter<Directory::MetahandlesMap> deleter(&handles_map);
   Directory::KernelLoadInfo load_info;
 
   s.Clear();
-  ASSERT_TRUE(dbs->Load(&entry_bucket, &delete_journals, &load_info));
+  ASSERT_TRUE(dbs->Load(&handles_map, &delete_journals, &load_info));
   EXPECT_LE(load_info.kernel_info.next_id, kInitialNextId - 65536);
 }
 
@@ -2770,12 +2862,12 @@ TEST_F(DirectoryBackingStoreTest, MigrateVersion79To80) {
   ASSERT_FALSE(dbs->needs_column_refresh_);
 
   // Ensure the bag_of_chips has been set.
-  MetahandlesIndex entry_bucket;
+  Directory::MetahandlesMap handles_map;
   JournalIndex  delete_journals;;
-  STLElementDeleter<MetahandlesIndex> deleter(&entry_bucket);
+  STLValueDeleter<Directory::MetahandlesMap> deleter(&handles_map);
   Directory::KernelLoadInfo load_info;
 
-  ASSERT_TRUE(dbs->Load(&entry_bucket, &delete_journals, &load_info));
+  ASSERT_TRUE(dbs->Load(&handles_map, &delete_journals, &load_info));
   // Check that the initial value is the serialization of an empty ChipBag.
   sync_pb::ChipBag chip_bag;
   std::string serialized_chip_bag;
@@ -2810,34 +2902,6 @@ TEST_F(DirectoryBackingStoreTest, MigrateVersion80To81) {
   std::string actual_ordinal;
   new_s.ColumnBlobAsString(1, &actual_ordinal);
   ASSERT_EQ(expected_ordinal, actual_ordinal);
-}
-
-TEST_F(DirectoryBackingStoreTest, DetectInvalidOrdinal) {
-  sql::Connection connection;
-  ASSERT_TRUE(connection.OpenInMemory());
-  SetUpVersion81Database(&connection);
-
-  scoped_ptr<TestDirectoryBackingStore> dbs(
-      new TestDirectoryBackingStore(GetUsername(), &connection));
-  ASSERT_EQ(81, dbs->GetVersion());
-
-  // Insert row with bad ordinal.
-  const int64 now = TimeToProtoTime(base::Time::Now());
-  sql::Statement s(connection.GetUniqueStatement(
-      "INSERT INTO metas "
-      "( id, metahandle, is_dir, ctime, mtime, server_ordinal_in_parent) "
-      "VALUES( \"c-invalid\", 9999, 1, ?, ?, \" \")"));
-  s.BindInt64(0, now);
-  s.BindInt64(1, now);
-  ASSERT_TRUE(s.Run());
-
-  // Trying to unpack this entry should signal that the DB is corrupted.
-  MetahandlesIndex entry_bucket;
-  JournalIndex  delete_journals;;
-  STLElementDeleter<MetahandlesIndex> deleter(&entry_bucket);
-  Directory::KernelLoadInfo kernel_load_info;
-  ASSERT_EQ(FAILED_DATABASE_CORRUPT,
-            dbs->Load(&entry_bucket, &delete_journals, &kernel_load_info));
 }
 
 TEST_F(DirectoryBackingStoreTest, MigrateVersion81To82) {
@@ -2895,6 +2959,125 @@ TEST_F(DirectoryBackingStoreTest, MigrateVersion84To85) {
   ASSERT_TRUE(dbs->MigrateVersion84To85());
   ASSERT_EQ(85, dbs->GetVersion());
   ASSERT_FALSE(connection.DoesColumnExist("models", "initial_sync_ended"));
+}
+
+TEST_F(DirectoryBackingStoreTest, MigrateVersion85To86) {
+  sql::Connection connection;
+  ASSERT_TRUE(connection.OpenInMemory());
+  SetUpVersion85Database(&connection);
+  EXPECT_TRUE(connection.DoesColumnExist("metas", "next_id"));
+  EXPECT_TRUE(connection.DoesColumnExist("metas", "prev_id"));
+  EXPECT_TRUE(connection.DoesColumnExist("metas", "server_ordinal_in_parent"));
+  EXPECT_FALSE(connection.DoesColumnExist("metas", "unique_position"));
+  EXPECT_FALSE(connection.DoesColumnExist("metas", "server_unique_position"));
+  EXPECT_FALSE(connection.DoesColumnExist("metas", "unique_bookmark_tag"));
+
+  scoped_ptr<TestDirectoryBackingStore> dbs(
+      new TestDirectoryBackingStore(GetUsername(), &connection));
+  ASSERT_TRUE(dbs->MigrateVersion85To86());
+  EXPECT_EQ(86, dbs->GetVersion());
+  EXPECT_TRUE(connection.DoesColumnExist("metas", "unique_position"));
+  EXPECT_TRUE(connection.DoesColumnExist("metas", "server_unique_position"));
+  EXPECT_TRUE(connection.DoesColumnExist("metas", "unique_bookmark_tag"));
+  ASSERT_TRUE(dbs->needs_column_refresh_);
+  ASSERT_TRUE(dbs->RefreshColumns());
+  EXPECT_FALSE(connection.DoesColumnExist("metas", "next_id"));
+  EXPECT_FALSE(connection.DoesColumnExist("metas", "prev_id"));
+  EXPECT_FALSE(connection.DoesColumnExist("metas", "server_ordinal_in_parent"));
+
+  {
+    Directory::MetahandlesMap handles_map;
+    STLValueDeleter<Directory::MetahandlesMap> deleter(&handles_map);
+    dbs->LoadEntries(&handles_map);
+
+    // Grab a bookmark and examine it.
+    Directory::MetahandlesMap::iterator i = handles_map.find(5);
+    ASSERT_FALSE(i == handles_map.end());
+    EntryKernel* bm = i->second;
+    ASSERT_EQ(bm->ref(ID).value(), "s_ID_5");
+
+    EXPECT_TRUE(bm->ref(UNIQUE_POSITION).IsValid());
+    EXPECT_TRUE(bm->ref(SERVER_UNIQUE_POSITION).IsValid());
+    EXPECT_EQ(UniquePosition::kSuffixLength,
+              bm->ref(UNIQUE_BOOKMARK_TAG).length());
+
+    // Grab a non-bookmark and examine it.
+    Directory::MetahandlesMap::iterator j = handles_map.find(1);
+
+    ASSERT_FALSE(j == handles_map.end());
+    EntryKernel* root = j->second;
+    ASSERT_EQ(root->ref(ID).value(), "r");
+
+    EXPECT_FALSE(root->ref(UNIQUE_POSITION).IsValid());
+    EXPECT_FALSE(root->ref(SERVER_UNIQUE_POSITION).IsValid());
+    EXPECT_TRUE(root->ref(UNIQUE_BOOKMARK_TAG).empty());
+
+    // Make sure we didn't mistake the bookmark root node for a real bookmark.
+    Directory::MetahandlesMap::iterator k = handles_map.find(8);
+    ASSERT_FALSE(k == handles_map.end());
+    EntryKernel* bm_root = k->second;
+    ASSERT_EQ(bm_root->ref(ID).value(), "s_ID_8");
+    ASSERT_EQ(bm_root->ref(UNIQUE_SERVER_TAG), "google_chrome_bookmarks");
+
+    EXPECT_FALSE(bm_root->ref(UNIQUE_POSITION).IsValid());
+    EXPECT_FALSE(bm_root->ref(SERVER_UNIQUE_POSITION).IsValid());
+    EXPECT_TRUE(bm_root->ref(UNIQUE_BOOKMARK_TAG).empty());
+
+    // Make sure we didn't assign positions to server-created folders, either.
+    Directory::MetahandlesMap::iterator l = handles_map.find(10);
+    ASSERT_FALSE(l == handles_map.end());
+    EntryKernel* perm_folder = l->second;
+    ASSERT_EQ(perm_folder->ref(ID).value(), "s_ID_10");
+    ASSERT_EQ(perm_folder->ref(UNIQUE_SERVER_TAG), "other_bookmarks");
+
+    EXPECT_FALSE(perm_folder->ref(UNIQUE_POSITION).IsValid());
+    EXPECT_FALSE(perm_folder->ref(SERVER_UNIQUE_POSITION).IsValid());
+    EXPECT_TRUE(perm_folder->ref(UNIQUE_BOOKMARK_TAG).empty());
+
+    // Make sure that the syncable::Directory and the migration code agree on
+    // which items should or should not have unique position values.  This test
+    // may become obsolete if the directory's definition of that function
+    // changes, but, until then, this is a useful test.
+    for (Directory::MetahandlesMap::iterator it = handles_map.begin();
+         it != handles_map.end(); it++) {
+      SCOPED_TRACE(it->second->ref(ID));
+      if (it->second->ShouldMaintainPosition()) {
+        EXPECT_TRUE(it->second->ref(UNIQUE_POSITION).IsValid());
+        EXPECT_TRUE(it->second->ref(SERVER_UNIQUE_POSITION).IsValid());
+        EXPECT_FALSE(it->second->ref(UNIQUE_BOOKMARK_TAG).empty());
+      } else {
+        EXPECT_FALSE(it->second->ref(UNIQUE_POSITION).IsValid());
+        EXPECT_FALSE(it->second->ref(SERVER_UNIQUE_POSITION).IsValid());
+        EXPECT_TRUE(it->second->ref(UNIQUE_BOOKMARK_TAG).empty());
+      }
+    }
+  }
+}
+
+TEST_F(DirectoryBackingStoreTest, DetectInvalidPosition) {
+  sql::Connection connection;
+  ASSERT_TRUE(connection.OpenInMemory());
+  SetUpVersion86Database(&connection);
+
+  scoped_ptr<TestDirectoryBackingStore> dbs(
+      new TestDirectoryBackingStore(GetUsername(), &connection));
+  ASSERT_EQ(86, dbs->GetVersion());
+
+  // Insert row with bad position.
+  sql::Statement s(connection.GetUniqueStatement(
+      "INSERT INTO metas "
+      "( id, metahandle, is_dir, ctime, mtime,"
+      "  unique_position, server_unique_position) "
+      "VALUES('c-invalid', 9999, 1, 0, 0, 'BAD_POS', 'BAD_POS')"));
+  ASSERT_TRUE(s.Run());
+
+  // Trying to unpack this entry should signal that the DB is corrupted.
+  Directory::MetahandlesMap handles_map;
+  JournalIndex  delete_journals;;
+  STLValueDeleter<Directory::MetahandlesMap> deleter(&handles_map);
+  Directory::KernelLoadInfo kernel_load_info;
+  ASSERT_EQ(FAILED_DATABASE_CORRUPT,
+            dbs->Load(&handles_map, &delete_journals, &kernel_load_info));
 }
 
 TEST_P(MigrationTest, ToCurrentVersion) {
@@ -2955,6 +3138,12 @@ TEST_P(MigrationTest, ToCurrentVersion) {
     case 84:
       SetUpVersion84Database(&connection);
       break;
+    case 85:
+      SetUpVersion85Database(&connection);
+      break;
+    case 86:
+      SetUpVersion86Database(&connection);
+      break;
     default:
       // If you see this error, it may mean that you've increased the
       // database version number but you haven't finished adding unit tests
@@ -2976,14 +3165,14 @@ TEST_P(MigrationTest, ToCurrentVersion) {
   }
 
   syncable::Directory::KernelLoadInfo dir_info;
-  MetahandlesIndex index;
+  Directory::MetahandlesMap handles_map;
   JournalIndex  delete_journals;;
-  STLElementDeleter<MetahandlesIndex> index_deleter(&index);
+  STLValueDeleter<Directory::MetahandlesMap> index_deleter(&handles_map);
 
   {
     scoped_ptr<TestDirectoryBackingStore> dbs(
         new TestDirectoryBackingStore(GetUsername(), &connection));
-    ASSERT_EQ(OPENED, dbs->Load(&index, &delete_journals, &dir_info));
+    ASSERT_EQ(OPENED, dbs->Load(&handles_map, &delete_journals, &dir_info));
     ASSERT_FALSE(dbs->needs_column_refresh_);
     ASSERT_EQ(kCurrentDBVersion, dbs->GetVersion());
   }
@@ -3073,103 +3262,104 @@ TEST_P(MigrationTest, ToCurrentVersion) {
   // Check metas
   EXPECT_EQ(GetExpectedMetaProtoTimes(DONT_INCLUDE_DELETED_ITEMS),
             GetMetaProtoTimes(&connection));
-  ExpectTimes(index, GetExpectedMetaTimes());
+  ExpectTimes(handles_map, GetExpectedMetaTimes());
 
-  MetahandlesIndex::iterator it = index.begin();
-  ASSERT_TRUE(it != index.end());
-  ASSERT_EQ(1, (*it)->ref(META_HANDLE));
-  EXPECT_TRUE((*it)->ref(ID).IsRoot());
+  Directory::MetahandlesMap::iterator it = handles_map.find(1);
+  ASSERT_TRUE(it != handles_map.end());
+  ASSERT_EQ(1, it->second->ref(META_HANDLE));
+  EXPECT_TRUE(it->second->ref(ID).IsRoot());
 
-  ASSERT_TRUE(++it != index.end());
-  ASSERT_EQ(6, (*it)->ref(META_HANDLE));
-  EXPECT_TRUE((*it)->ref(IS_DIR));
-  EXPECT_TRUE((*it)->ref(SERVER_IS_DIR));
+  it = handles_map.find(6);
+  ASSERT_EQ(6, it->second->ref(META_HANDLE));
+  EXPECT_TRUE(it->second->ref(IS_DIR));
+  EXPECT_TRUE(it->second->ref(SERVER_IS_DIR));
   EXPECT_FALSE(
-      (*it)->ref(SPECIFICS).bookmark().has_url());
+      it->second->ref(SPECIFICS).bookmark().has_url());
   EXPECT_FALSE(
-      (*it)->ref(SERVER_SPECIFICS).bookmark().has_url());
+      it->second->ref(SERVER_SPECIFICS).bookmark().has_url());
   EXPECT_FALSE(
-      (*it)->ref(SPECIFICS).bookmark().has_favicon());
-  EXPECT_FALSE((*it)->ref(SERVER_SPECIFICS).bookmark().has_favicon());
+      it->second->ref(SPECIFICS).bookmark().has_favicon());
+  EXPECT_FALSE(it->second->ref(SERVER_SPECIFICS).bookmark().has_favicon());
 
-  ASSERT_TRUE(++it != index.end());
-  ASSERT_EQ(7, (*it)->ref(META_HANDLE));
-  EXPECT_EQ("google_chrome", (*it)->ref(UNIQUE_SERVER_TAG));
-  EXPECT_FALSE((*it)->ref(SPECIFICS).has_bookmark());
-  EXPECT_FALSE((*it)->ref(SERVER_SPECIFICS).has_bookmark());
+  it = handles_map.find(7);
+  ASSERT_EQ(7, it->second->ref(META_HANDLE));
+  EXPECT_EQ("google_chrome", it->second->ref(UNIQUE_SERVER_TAG));
+  EXPECT_FALSE(it->second->ref(SPECIFICS).has_bookmark());
+  EXPECT_FALSE(it->second->ref(SERVER_SPECIFICS).has_bookmark());
 
-  ASSERT_TRUE(++it != index.end());
-  ASSERT_EQ(8, (*it)->ref(META_HANDLE));
-  EXPECT_EQ("google_chrome_bookmarks", (*it)->ref(UNIQUE_SERVER_TAG));
-  EXPECT_TRUE((*it)->ref(SPECIFICS).has_bookmark());
-  EXPECT_TRUE((*it)->ref(SERVER_SPECIFICS).has_bookmark());
+  it = handles_map.find(8);
+  ASSERT_EQ(8, it->second->ref(META_HANDLE));
+  EXPECT_EQ("google_chrome_bookmarks", it->second->ref(UNIQUE_SERVER_TAG));
+  EXPECT_TRUE(it->second->ref(SPECIFICS).has_bookmark());
+  EXPECT_TRUE(it->second->ref(SERVER_SPECIFICS).has_bookmark());
 
-  ASSERT_TRUE(++it != index.end());
-  ASSERT_EQ(9, (*it)->ref(META_HANDLE));
-  EXPECT_EQ("bookmark_bar", (*it)->ref(UNIQUE_SERVER_TAG));
-  EXPECT_TRUE((*it)->ref(SPECIFICS).has_bookmark());
-  EXPECT_TRUE((*it)->ref(SERVER_SPECIFICS).has_bookmark());
+  it = handles_map.find(9);
+  ASSERT_EQ(9, it->second->ref(META_HANDLE));
+  EXPECT_EQ("bookmark_bar", it->second->ref(UNIQUE_SERVER_TAG));
+  EXPECT_TRUE(it->second->ref(SPECIFICS).has_bookmark());
+  EXPECT_TRUE(it->second->ref(SERVER_SPECIFICS).has_bookmark());
 
-  ASSERT_TRUE(++it != index.end());
-  ASSERT_EQ(10, (*it)->ref(META_HANDLE));
-  EXPECT_FALSE((*it)->ref(IS_DEL));
-  EXPECT_TRUE((*it)->ref(SPECIFICS).has_bookmark());
-  EXPECT_TRUE((*it)->ref(SERVER_SPECIFICS).has_bookmark());
-  EXPECT_FALSE((*it)->ref(SPECIFICS).bookmark().has_url());
+  it = handles_map.find(10);
+  ASSERT_EQ(10, it->second->ref(META_HANDLE));
+  EXPECT_FALSE(it->second->ref(IS_DEL));
+  EXPECT_TRUE(it->second->ref(SPECIFICS).has_bookmark());
+  EXPECT_TRUE(it->second->ref(SERVER_SPECIFICS).has_bookmark());
+  EXPECT_FALSE(it->second->ref(SPECIFICS).bookmark().has_url());
   EXPECT_FALSE(
-      (*it)->ref(SPECIFICS).bookmark().has_favicon());
+      it->second->ref(SPECIFICS).bookmark().has_favicon());
   EXPECT_FALSE(
-      (*it)->ref(SERVER_SPECIFICS).bookmark().has_url());
-  EXPECT_FALSE((*it)->ref(SERVER_SPECIFICS).bookmark().has_favicon());
-  EXPECT_EQ("other_bookmarks", (*it)->ref(UNIQUE_SERVER_TAG));
-  EXPECT_EQ("Other Bookmarks", (*it)->ref(NON_UNIQUE_NAME));
-  EXPECT_EQ("Other Bookmarks", (*it)->ref(SERVER_NON_UNIQUE_NAME));
+      it->second->ref(SERVER_SPECIFICS).bookmark().has_url());
+  EXPECT_FALSE(it->second->ref(SERVER_SPECIFICS).bookmark().has_favicon());
+  EXPECT_EQ("other_bookmarks", it->second->ref(UNIQUE_SERVER_TAG));
+  EXPECT_EQ("Other Bookmarks", it->second->ref(NON_UNIQUE_NAME));
+  EXPECT_EQ("Other Bookmarks", it->second->ref(SERVER_NON_UNIQUE_NAME));
 
-  ASSERT_TRUE(++it != index.end());
-  ASSERT_EQ(11, (*it)->ref(META_HANDLE));
-  EXPECT_FALSE((*it)->ref(IS_DEL));
-  EXPECT_FALSE((*it)->ref(IS_DIR));
-  EXPECT_TRUE((*it)->ref(SPECIFICS).has_bookmark());
-  EXPECT_TRUE((*it)->ref(SERVER_SPECIFICS).has_bookmark());
+  it = handles_map.find(11);
+  ASSERT_EQ(11, it->second->ref(META_HANDLE));
+  EXPECT_FALSE(it->second->ref(IS_DEL));
+  EXPECT_FALSE(it->second->ref(IS_DIR));
+  EXPECT_TRUE(it->second->ref(SPECIFICS).has_bookmark());
+  EXPECT_TRUE(it->second->ref(SERVER_SPECIFICS).has_bookmark());
   EXPECT_EQ("http://dev.chromium.org/",
-      (*it)->ref(SPECIFICS).bookmark().url());
+      it->second->ref(SPECIFICS).bookmark().url());
   EXPECT_EQ("AGATWA",
-      (*it)->ref(SPECIFICS).bookmark().favicon());
+      it->second->ref(SPECIFICS).bookmark().favicon());
   EXPECT_EQ("http://dev.chromium.org/other",
-      (*it)->ref(SERVER_SPECIFICS).bookmark().url());
+      it->second->ref(SERVER_SPECIFICS).bookmark().url());
   EXPECT_EQ("AFAGVASF",
-      (*it)->ref(SERVER_SPECIFICS).bookmark().favicon());
-  EXPECT_EQ("", (*it)->ref(UNIQUE_SERVER_TAG));
-  EXPECT_EQ("Home (The Chromium Projects)", (*it)->ref(NON_UNIQUE_NAME));
-  EXPECT_EQ("Home (The Chromium Projects)", (*it)->ref(SERVER_NON_UNIQUE_NAME));
+      it->second->ref(SERVER_SPECIFICS).bookmark().favicon());
+  EXPECT_EQ("", it->second->ref(UNIQUE_SERVER_TAG));
+  EXPECT_EQ("Home (The Chromium Projects)", it->second->ref(NON_UNIQUE_NAME));
+  EXPECT_EQ("Home (The Chromium Projects)",
+            it->second->ref(SERVER_NON_UNIQUE_NAME));
 
-  ASSERT_TRUE(++it != index.end());
-  ASSERT_EQ(12, (*it)->ref(META_HANDLE));
-  EXPECT_FALSE((*it)->ref(IS_DEL));
-  EXPECT_TRUE((*it)->ref(IS_DIR));
-  EXPECT_EQ("Extra Bookmarks", (*it)->ref(NON_UNIQUE_NAME));
-  EXPECT_EQ("Extra Bookmarks", (*it)->ref(SERVER_NON_UNIQUE_NAME));
-  EXPECT_TRUE((*it)->ref(SPECIFICS).has_bookmark());
-  EXPECT_TRUE((*it)->ref(SERVER_SPECIFICS).has_bookmark());
+  it = handles_map.find(12);
+  ASSERT_EQ(12, it->second->ref(META_HANDLE));
+  EXPECT_FALSE(it->second->ref(IS_DEL));
+  EXPECT_TRUE(it->second->ref(IS_DIR));
+  EXPECT_EQ("Extra Bookmarks", it->second->ref(NON_UNIQUE_NAME));
+  EXPECT_EQ("Extra Bookmarks", it->second->ref(SERVER_NON_UNIQUE_NAME));
+  EXPECT_TRUE(it->second->ref(SPECIFICS).has_bookmark());
+  EXPECT_TRUE(it->second->ref(SERVER_SPECIFICS).has_bookmark());
   EXPECT_FALSE(
-      (*it)->ref(SPECIFICS).bookmark().has_url());
+      it->second->ref(SPECIFICS).bookmark().has_url());
   EXPECT_FALSE(
-      (*it)->ref(SERVER_SPECIFICS).bookmark().has_url());
+      it->second->ref(SERVER_SPECIFICS).bookmark().has_url());
   EXPECT_FALSE(
-      (*it)->ref(SPECIFICS).bookmark().has_favicon());
-  EXPECT_FALSE((*it)->ref(SERVER_SPECIFICS).bookmark().has_favicon());
+      it->second->ref(SPECIFICS).bookmark().has_favicon());
+  EXPECT_FALSE(it->second->ref(SERVER_SPECIFICS).bookmark().has_favicon());
 
-  ASSERT_TRUE(++it != index.end());
-  ASSERT_EQ(13, (*it)->ref(META_HANDLE));
+  it = handles_map.find(13);
+  ASSERT_EQ(13, it->second->ref(META_HANDLE));
 
-  ASSERT_TRUE(++it != index.end());
-  ASSERT_EQ(14, (*it)->ref(META_HANDLE));
+  it = handles_map.find(14);
+  ASSERT_EQ(14, it->second->ref(META_HANDLE));
 
-  ASSERT_TRUE(++it == index.end());
+  ASSERT_EQ(static_cast<size_t>(10), handles_map.size());
 }
 
 INSTANTIATE_TEST_CASE_P(DirectoryBackingStore, MigrationTest,
-                        testing::Range(67, kCurrentDBVersion));
+                        testing::Range(67, kCurrentDBVersion + 1));
 
 TEST_F(DirectoryBackingStoreTest, ModelTypeIds) {
   ModelTypeSet protocol_types = ProtocolTypes();
@@ -3256,28 +3446,28 @@ TEST_F(DirectoryBackingStoreTest, DeleteEntries) {
   SetUpCurrentDatabaseAndCheckVersion(&connection);
   scoped_ptr<TestDirectoryBackingStore> dbs(
       new TestDirectoryBackingStore(GetUsername(), &connection));
-  MetahandlesIndex index;
+  Directory::MetahandlesMap handles_map;
   JournalIndex  delete_journals;
   Directory::KernelLoadInfo kernel_load_info;
-  STLElementDeleter<MetahandlesIndex> index_deleter(&index);
+  STLValueDeleter<Directory::MetahandlesMap> index_deleter(&handles_map);
 
-  dbs->Load(&index, &delete_journals, &kernel_load_info);
-  size_t initial_size = index.size();
-  ASSERT_LT(0U, initial_size) << "Test requires entries to delete.";
-  int64 first_to_die = (*index.begin())->ref(META_HANDLE);
+  dbs->Load(&handles_map, &delete_journals, &kernel_load_info);
+  size_t initial_size = handles_map.size();
+  ASSERT_LT(0U, initial_size) << "Test requires handles_map to delete.";
+  int64 first_to_die = handles_map.begin()->second->ref(META_HANDLE);
   MetahandleSet to_delete;
   to_delete.insert(first_to_die);
   EXPECT_TRUE(dbs->DeleteEntries(TestDirectoryBackingStore::METAS_TABLE,
                                  to_delete));
 
-  STLDeleteElements(&index);
-  dbs->LoadEntries(&index);
+  STLDeleteValues(&handles_map);
+  dbs->LoadEntries(&handles_map);
 
-  EXPECT_EQ(initial_size - 1, index.size());
+  EXPECT_EQ(initial_size - 1, handles_map.size());
   bool delete_failed = false;
-  for (MetahandlesIndex::iterator it = index.begin(); it != index.end();
-       ++it) {
-    if ((*it)->ref(META_HANDLE) == first_to_die) {
+  for (Directory::MetahandlesMap::iterator it = handles_map.begin();
+       it != handles_map.end(); ++it) {
+    if (it->first == first_to_die) {
       delete_failed = true;
       break;
     }
@@ -3285,17 +3475,17 @@ TEST_F(DirectoryBackingStoreTest, DeleteEntries) {
   EXPECT_FALSE(delete_failed);
 
   to_delete.clear();
-  for (MetahandlesIndex::iterator it = index.begin(); it != index.end();
-       ++it) {
-    to_delete.insert((*it)->ref(META_HANDLE));
+  for (Directory::MetahandlesMap::iterator it = handles_map.begin();
+       it != handles_map.end(); ++it) {
+    to_delete.insert(it->first);
   }
 
   EXPECT_TRUE(dbs->DeleteEntries(TestDirectoryBackingStore::METAS_TABLE,
                                  to_delete));
 
-  STLDeleteElements(&index);
-  dbs->LoadEntries(&index);
-  EXPECT_EQ(0U, index.size());
+  STLDeleteValues(&handles_map);
+  dbs->LoadEntries(&handles_map);
+  EXPECT_EQ(0U, handles_map.size());
 }
 
 TEST_F(DirectoryBackingStoreTest, GenerateCacheGUID) {

@@ -8,7 +8,7 @@
 
 #include <utility>
 
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "chrome/browser/infobars/infobar_delegate.h"
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/ui/browser_window.h"
@@ -22,11 +22,9 @@
 #include "ui/gfx/rect.h"
 #include "ui/gfx/skia_utils_gtk.h"
 
-InfoBarContainerGtk::InfoBarContainerGtk(
-    InfoBarContainer::Delegate* delegate,
-    chrome::search::SearchModel* search_model,
-    Profile* profile)
-    : InfoBarContainer(delegate, search_model),
+InfoBarContainerGtk::InfoBarContainerGtk(InfoBarContainer::Delegate* delegate,
+                                         Profile* profile)
+    : InfoBarContainer(delegate),
       profile_(profile),
       container_(gtk_vbox_new(FALSE, 0)) {
   gtk_widget_show(widget());
@@ -55,6 +53,7 @@ bool InfoBarContainerGtk::ContainsInfobars() const {
 void InfoBarContainerGtk::PlatformSpecificAddInfoBar(InfoBar* infobar,
                                                      size_t position) {
   InfoBarGtk* infobar_gtk = static_cast<InfoBarGtk*>(infobar);
+  infobar_gtk->InitWidgets();
   infobars_gtk_.insert(infobars_gtk_.begin() + position, infobar_gtk);
 
   if (infobars_gtk_.back() == infobar_gtk) {
@@ -83,7 +82,7 @@ void InfoBarContainerGtk::PlatformSpecificRemoveInfoBar(InfoBar* infobar) {
   if (it != infobars_gtk_.end())
     infobars_gtk_.erase(it);
 
-  MessageLoop::current()->DeleteSoon(FROM_HERE, infobar);
+  base::MessageLoop::current()->DeleteSoon(FROM_HERE, infobar);
 }
 
 void InfoBarContainerGtk::PlatformSpecificInfoBarStateChanged(

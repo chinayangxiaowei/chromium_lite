@@ -4,13 +4,14 @@
 
 #include "chrome/browser/extensions/extension_system_factory.h"
 
-#include "chrome/browser/extensions/extension_prefs.h"
-#include "chrome/browser/extensions/extension_service.h"
+#include "chrome/browser/extensions/extension_prefs_factory.h"
 #include "chrome/browser/extensions/extension_system.h"
+#include "chrome/browser/policy/profile_policy_connector_factory.h"
+#include "chrome/browser/profiles/incognito_helpers.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_dependency_manager.h"
 #include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/browser/ui/global_error/global_error_service_factory.h"
+#include "components/browser_context_keyed_service/browser_context_dependency_manager.h"
 
 namespace extensions {
 
@@ -20,7 +21,7 @@ namespace extensions {
 ExtensionSystemImpl::Shared*
 ExtensionSystemSharedFactory::GetForProfile(Profile* profile) {
   return static_cast<ExtensionSystemImpl::Shared*>(
-      GetInstance()->GetServiceForProfile(profile, true));
+      GetInstance()->GetServiceForBrowserContext(profile, true));
 }
 
 // static
@@ -29,25 +30,29 @@ ExtensionSystemSharedFactory* ExtensionSystemSharedFactory::GetInstance() {
 }
 
 ExtensionSystemSharedFactory::ExtensionSystemSharedFactory()
-    : ProfileKeyedServiceFactory(
+    : BrowserContextKeyedServiceFactory(
         "ExtensionSystemShared",
-        ProfileDependencyManager::GetInstance()) {
+        BrowserContextDependencyManager::GetInstance()) {
+  DependsOn(ExtensionPrefsFactory::GetInstance());
   DependsOn(GlobalErrorServiceFactory::GetInstance());
 #if defined(ENABLE_THEMES)
   DependsOn(ThemeServiceFactory::GetInstance());
 #endif
+  DependsOn(policy::ProfilePolicyConnectorFactory::GetInstance());
 }
 
 ExtensionSystemSharedFactory::~ExtensionSystemSharedFactory() {
 }
 
-ProfileKeyedService* ExtensionSystemSharedFactory::BuildServiceInstanceFor(
-    Profile* profile) const {
-  return new ExtensionSystemImpl::Shared(profile);
+BrowserContextKeyedService*
+ExtensionSystemSharedFactory::BuildServiceInstanceFor(
+    content::BrowserContext* profile) const {
+  return new ExtensionSystemImpl::Shared(static_cast<Profile*>(profile));
 }
 
-bool ExtensionSystemSharedFactory::ServiceRedirectedInIncognito() const {
-  return true;
+content::BrowserContext* ExtensionSystemSharedFactory::GetBrowserContextToUse(
+    content::BrowserContext* context) const {
+  return chrome::GetBrowserContextRedirectedInIncognito(context);
 }
 
 // ExtensionSystemFactory
@@ -55,7 +60,7 @@ bool ExtensionSystemSharedFactory::ServiceRedirectedInIncognito() const {
 // static
 ExtensionSystem* ExtensionSystemFactory::GetForProfile(Profile* profile) {
   return static_cast<ExtensionSystem*>(
-      GetInstance()->GetServiceForProfile(profile, true));
+      GetInstance()->GetServiceForBrowserContext(profile, true));
 }
 
 // static
@@ -64,25 +69,26 @@ ExtensionSystemFactory* ExtensionSystemFactory::GetInstance() {
 }
 
 ExtensionSystemFactory::ExtensionSystemFactory()
-    : ProfileKeyedServiceFactory(
+    : BrowserContextKeyedServiceFactory(
         "ExtensionSystem",
-        ProfileDependencyManager::GetInstance()) {
+        BrowserContextDependencyManager::GetInstance()) {
   DependsOn(ExtensionSystemSharedFactory::GetInstance());
 }
 
 ExtensionSystemFactory::~ExtensionSystemFactory() {
 }
 
-ProfileKeyedService* ExtensionSystemFactory::BuildServiceInstanceFor(
-    Profile* profile) const {
-  return new ExtensionSystemImpl(profile);
+BrowserContextKeyedService* ExtensionSystemFactory::BuildServiceInstanceFor(
+    content::BrowserContext* profile) const {
+  return new ExtensionSystemImpl(static_cast<Profile*>(profile));
 }
 
-bool ExtensionSystemFactory::ServiceHasOwnInstanceInIncognito() const {
-  return true;
+content::BrowserContext* ExtensionSystemFactory::GetBrowserContextToUse(
+    content::BrowserContext* context) const {
+  return chrome::GetBrowserContextOwnInstanceInIncognito(context);
 }
 
-bool ExtensionSystemFactory::ServiceIsCreatedWithProfile() const {
+bool ExtensionSystemFactory::ServiceIsCreatedWithBrowserContext() const {
   return true;
 }
 

@@ -3,12 +3,12 @@
 // found in the LICENSE file.
 
 #include <string>
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
 #include "chrome/browser/ui/gtk/bookmarks/bookmark_utils_gtk.h"
-#include "googleurl/src/gurl.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/dragdrop/gtk_dnd_util.h"
+#include "url/gurl.h"
 
 TEST(BookmarkUtilsGtkTest, GetNodesFromSelectionInvalid) {
   std::vector<const BookmarkNode*> nodes;

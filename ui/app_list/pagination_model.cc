@@ -41,7 +41,7 @@ void PaginationModel::SelectPage(int page, bool animate) {
     // -1 and |total_pages_| are valid target page for animation.
     DCHECK(page >= -1 && page <= total_pages_);
 
-    if (!transition_animation_.get()) {
+    if (!transition_animation_) {
       if (page == selected_page_)
         return;
 
@@ -166,7 +166,7 @@ void PaginationModel::EndScroll(bool cancel) {
 
 bool PaginationModel::IsRevertingCurrentTransition() const {
   // Use !IsShowing() so that we return true at the end of hide animation.
-  return transition_animation_.get() && !transition_animation_->IsShowing();
+  return transition_animation_ && !transition_animation_->IsShowing();
 }
 
 void PaginationModel::AddObserver(PaginationModelObserver* observer) {
@@ -184,6 +184,10 @@ void PaginationModel::NotifySelectedPageChanged(int old_selected,
                     SelectedPageChanged(old_selected, new_selected));
 }
 
+void PaginationModel::NotifyTransitionStarted() {
+  FOR_EACH_OBSERVER(PaginationModelObserver, observers_, TransitionStarted());
+}
+
 void PaginationModel::NotifyTransitionChanged() {
   FOR_EACH_OBSERVER(PaginationModelObserver, observers_, TransitionChanged());
 }
@@ -192,7 +196,7 @@ int PaginationModel::CalculateTargetPage(int delta) const {
   DCHECK_GT(total_pages_, 0);
 
   int current_page = selected_page_;
-  if (transition_animation_.get() && transition_animation_->IsShowing()) {
+  if (transition_animation_ && transition_animation_->IsShowing()) {
     current_page = pending_selected_page_ >= 0 ?
         pending_selected_page_ : transition_.target_page;
   }
@@ -214,6 +218,7 @@ int PaginationModel::CalculateTargetPage(int delta) const {
 void PaginationModel::StartTransitionAnimation(const Transition& transition) {
   DCHECK(selected_page_ != transition.target_page);
 
+  NotifyTransitionStarted();
   SetTransition(transition);
 
   transition_animation_.reset(new ui::SlideAnimation(this));

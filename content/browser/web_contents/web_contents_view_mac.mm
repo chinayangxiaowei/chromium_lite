@@ -9,8 +9,8 @@
 #include <string>
 
 #import "base/mac/scoped_sending_event.h"
-#include "base/message_loop.h"
-#import "base/message_pump_mac.h"
+#include "base/message_loop/message_loop.h"
+#import "base/message_loop/message_pump_mac.h"
 #include "content/browser/renderer_host/popup_menu_helper_mac.h"
 #include "content/browser/renderer_host/render_view_host_factory.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
@@ -30,6 +30,7 @@
 
 using WebKit::WebDragOperation;
 using WebKit::WebDragOperationsMask;
+using content::DropData;
 using content::PopupMenuHelper;
 using content::RenderViewHostFactory;
 using content::RenderWidgetHostView;
@@ -55,8 +56,8 @@ COMPILE_ASSERT_MATCHING_ENUM(DragOperationEvery);
 - (id)initWithWebContentsViewMac:(WebContentsViewMac*)w;
 - (void)registerDragTypes;
 - (void)setCurrentDragOperation:(NSDragOperation)operation;
-- (WebDropData*)dropData;
-- (void)startDragWithDropData:(const WebDropData&)dropData
+- (DropData*)dropData;
+- (void)startDragWithDropData:(const DropData&)dropData
             dragOperationMask:(NSDragOperation)operationMask
                         image:(NSImage*)image
                        offset:(NSPoint)offset;
@@ -124,7 +125,7 @@ void WebContentsViewMac::GetContainerBounds(gfx::Rect* out) const {
 }
 
 void WebContentsViewMac::StartDragging(
-    const WebDropData& drop_data,
+    const DropData& drop_data,
     WebDragOperationsMask allowed_operations,
     const gfx::ImageSkia& image,
     const gfx::Vector2d& image_offset,
@@ -138,7 +139,8 @@ void WebContentsViewMac::StartDragging(
 
   // The drag invokes a nested event loop, arrange to continue
   // processing events.
-  MessageLoop::ScopedNestableTaskAllower allow(MessageLoop::current());
+  base::MessageLoop::ScopedNestableTaskAllower allow(
+      base::MessageLoop::current());
   NSDragOperation mask = static_cast<NSDragOperation>(allowed_operations);
   NSPoint offset = NSPointFromCGPoint(
       gfx::PointAtOffsetFromOrigin(image_offset).ToCGPoint());
@@ -203,7 +205,7 @@ void WebContentsViewMac::RestoreFocus() {
   focus_tracker_.reset(nil);
 }
 
-WebDropData* WebContentsViewMac::GetDropData() const {
+DropData* WebContentsViewMac::GetDropData() const {
   return [cocoa_view_ dropData];
 }
 
@@ -226,8 +228,7 @@ void WebContentsViewMac::TakeFocus(bool reverse) {
   }
 }
 
-void WebContentsViewMac::ShowContextMenu(const ContextMenuParams& params,
-                                         ContextMenuSourceType type) {
+void WebContentsViewMac::ShowContextMenu(const ContextMenuParams& params) {
   // Allow delegates to handle the context menu operation first.
   if (web_contents_->GetDelegate() &&
       web_contents_->GetDelegate()->HandleContextMenu(params)) {
@@ -235,7 +236,7 @@ void WebContentsViewMac::ShowContextMenu(const ContextMenuParams& params,
   }
 
   if (delegate())
-    delegate()->ShowContextMenu(params, type);
+    delegate()->ShowContextMenu(params);
   else
     DLOG(ERROR) << "Cannot show context menus without a delegate.";
 }
@@ -246,7 +247,7 @@ void WebContentsViewMac::ShowPopupMenu(
     int item_height,
     double item_font_size,
     int selected_item,
-    const std::vector<WebMenuItem>& items,
+    const std::vector<MenuItem>& items,
     bool right_aligned,
     bool allow_multiple_selection) {
   PopupMenuHelper popup_menu_helper(web_contents_->GetRenderViewHost());
@@ -270,6 +271,10 @@ void WebContentsViewMac::SetAllowOverlappingViews(bool overlapping) {
       web_contents_->GetRenderWidgetHostView());
   if (view)
     view->SetAllowOverlappingViews(allow_overlapping_views_);
+}
+
+bool WebContentsViewMac::GetAllowOverlappingViews() const {
+  return allow_overlapping_views_;
 }
 
 void WebContentsViewMac::CreateView(
@@ -421,7 +426,7 @@ void WebContentsViewMac::CloseTab() {
   [dragDest_ setCurrentOperation:operation];
 }
 
-- (WebDropData*)dropData {
+- (DropData*)dropData {
   return [dragDest_ currentDropData];
 }
 
@@ -463,7 +468,7 @@ void WebContentsViewMac::CloseTab() {
                              forType:type];
 }
 
-- (void)startDragWithDropData:(const WebDropData&)dropData
+- (void)startDragWithDropData:(const DropData&)dropData
             dragOperationMask:(NSDragOperation)operationMask
                         image:(NSImage*)image
                        offset:(NSPoint)offset {
@@ -483,7 +488,7 @@ void WebContentsViewMac::CloseTab() {
 // Returns what kind of drag operations are available. This is a required
 // method for NSDraggingSource.
 - (NSDragOperation)draggingSourceOperationMaskForLocal:(BOOL)isLocal {
-  if (dragSource_.get())
+  if (dragSource_)
     return [dragSource_ draggingSourceOperationMaskForLocal:isLocal];
   // No web drag source - this is the case for dragging a file from the
   // downloads manager. Default to copy operation. Note: It is desirable to
@@ -505,18 +510,6 @@ void WebContentsViewMac::CloseTab() {
 // Called when a drag initiated in our view moves.
 - (void)draggedImage:(NSImage*)draggedImage movedTo:(NSPoint)screenPoint {
   [dragSource_ moveDragTo:screenPoint];
-}
-
-// Called when we're informed where a file should be dropped.
-- (NSArray*)namesOfPromisedFilesDroppedAtDestination:(NSURL*)dropDest {
-  if (![dropDest isFileURL])
-    return nil;
-
-  NSString* file_name = [dragSource_ dragPromisedFileTo:[dropDest path]];
-  if (!file_name)
-    return nil;
-
-  return [NSArray arrayWithObject:file_name];
 }
 
 // NSDraggingDestination methods

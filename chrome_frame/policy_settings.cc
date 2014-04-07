@@ -7,8 +7,8 @@
 #include <algorithm>
 
 #include "base/logging.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/win/registry.h"
 #include "chrome_frame/utils.h"
 #include "policy/policy_constants.h"
@@ -74,7 +74,7 @@ void PolicySettings::ReadUrlSettings(
   std::wstring settings_value(
       ASCIIToWide(policy::key::kChromeFrameRendererSettings));
   for (int i = 0; i < arraysize(kRootKeys); ++i) {
-    if ((config_key.Open(kRootKeys[i], policy::kRegistryMandatorySubKey,
+    if ((config_key.Open(kRootKeys[i], policy::kRegistryChromePolicyKey,
                          KEY_READ) == ERROR_SUCCESS) &&
         (config_key.ReadValueDW(settings_value.c_str(),
                                 &value) == ERROR_SUCCESS)) {
@@ -109,7 +109,7 @@ void PolicySettings::ReadContentTypeSetting(
     std::vector<std::wstring>* content_type_list) {
   DCHECK(content_type_list);
 
-  std::wstring sub_key(policy::kRegistryMandatorySubKey);
+  std::wstring sub_key(policy::kRegistryChromePolicyKey);
   sub_key += L"\\";
   sub_key += ASCIIToWide(policy::key::kChromeFrameContentTypes);
 
@@ -128,10 +128,27 @@ void PolicySettings::ReadStringSetting(const char* value_name,
   base::win::RegKey config_key;
   std::wstring value_name_str(ASCIIToWide(value_name));
   for (int i = 0; i < arraysize(kRootKeys); ++i) {
-    if ((config_key.Open(kRootKeys[i], policy::kRegistryMandatorySubKey,
+    if ((config_key.Open(kRootKeys[i], policy::kRegistryChromePolicyKey,
                          KEY_READ) == ERROR_SUCCESS) &&
         (config_key.ReadValue(value_name_str.c_str(),
                               value) == ERROR_SUCCESS)) {
+      break;
+    }
+  }
+}
+
+// static
+void PolicySettings::ReadBoolSetting(const char* value_name, bool* value) {
+  DCHECK(value);
+  base::win::RegKey config_key;
+  string16 value_name_str(ASCIIToWide(value_name));
+  DWORD dword_value = 0;
+  for (int i = 0; i < arraysize(kRootKeys); ++i) {
+    if ((config_key.Open(kRootKeys[i], policy::kRegistryChromePolicyKey,
+                         KEY_QUERY_VALUE) == ERROR_SUCCESS) &&
+        (config_key.ReadValueDW(value_name_str.c_str(),
+                                &dword_value) == ERROR_SUCCESS)) {
+      *value = (dword_value != 0);
       break;
     }
   }
@@ -144,6 +161,7 @@ void PolicySettings::RefreshFromRegistry() {
   std::wstring application_locale;
   CommandLine additional_launch_parameters(CommandLine::NO_PROGRAM);
   std::wstring additional_parameters_str;
+  bool suppress_turndown_prompt = false;
 
   // Read the latest settings from the registry
   ReadUrlSettings(&default_renderer, &renderer_exclusion_list);
@@ -155,6 +173,8 @@ void PolicySettings::RefreshFromRegistry() {
     additional_parameters_str.insert(0, L"fake.exe ");
     additional_launch_parameters.ParseFromString(additional_parameters_str);
   }
+  ReadBoolSetting(policy::key::kSuppressChromeFrameTurndownPrompt,
+                  &suppress_turndown_prompt);
 
   // Nofail swap in the new values.  (Note: this is all that need be protected
   // under a mutex if/when this becomes thread safe.)
@@ -165,6 +185,7 @@ void PolicySettings::RefreshFromRegistry() {
   swap(content_type_list_, content_type_list);
   swap(application_locale_, application_locale);
   swap(additional_launch_parameters_, additional_launch_parameters);
+  swap(suppress_turndown_prompt_, suppress_turndown_prompt);
 }
 
 // static

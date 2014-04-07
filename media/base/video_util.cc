@@ -62,6 +62,16 @@ void CopyVPlane(const uint8* source, int stride, int rows, VideoFrame* frame) {
   CopyPlane(VideoFrame::kVPlane, source, stride, rows, frame);
 }
 
+void CopyAPlane(const uint8* source, int stride, int rows, VideoFrame* frame) {
+  CopyPlane(VideoFrame::kAPlane, source, stride, rows, frame);
+}
+
+void MakeOpaqueAPlane(int stride, int rows, VideoFrame* frame) {
+  int rows_to_clear = std::min(frame->rows(VideoFrame::kAPlane), rows);
+  memset(frame->data(VideoFrame::kAPlane), 255,
+         frame->stride(VideoFrame::kAPlane) * rows_to_clear);
+}
+
 void FillYUV(VideoFrame* frame, uint8 y, uint8 u, uint8 v) {
   // Fill the Y plane.
   uint8* y_plane = frame->data(VideoFrame::kYPlane);
@@ -133,7 +143,8 @@ void LetterboxYUV(VideoFrame* frame, const gfx::Rect& view_area) {
   DCHECK(!(view_area.y() & 1));
   DCHECK(!(view_area.width() & 1));
   DCHECK(!(view_area.height() & 1));
-  DCHECK_EQ(frame->format(), VideoFrame::YV12);
+  DCHECK(frame->format() == VideoFrame::YV12 ||
+         frame->format() == VideoFrame::I420);
   LetterboxPlane(frame, VideoFrame::kYPlane, view_area, 0x00);
   gfx::Rect half_view_area(view_area.x() / 2,
                            view_area.y() / 2,
@@ -246,6 +257,11 @@ void RotatePlaneByPixels(
 
 gfx::Rect ComputeLetterboxRegion(const gfx::Rect& bounds,
                                  const gfx::Size& content) {
+  // If |content| has an undefined aspect ratio, let's not try to divide by
+  // zero.
+  if (content.IsEmpty())
+    return gfx::Rect();
+
   int64 x = static_cast<int64>(content.width()) * bounds.height();
   int64 y = static_cast<int64>(content.height()) * bounds.width();
 

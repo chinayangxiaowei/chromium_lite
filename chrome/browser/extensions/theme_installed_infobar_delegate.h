@@ -26,18 +26,12 @@ class Extension;
 class ThemeInstalledInfoBarDelegate : public ConfirmInfoBarDelegate,
                                       public content::NotificationObserver {
  public:
-  // Creates a theme installed delegate and adds it to the last active tab on
-  // |profile|.
+  // Creates a theme installed infobar delegate and adds it to the last active
+  // tab on |profile|.
   static void Create(const extensions::Extension* new_theme,
                      Profile* profile,
                      const std::string& previous_theme_id,
                      bool previous_using_native_theme);
-
- protected:
-  ThemeService* theme_service() { return theme_service_; }
-
-  // ConfirmInfoBarDelegate:
-  virtual bool Cancel() OVERRIDE;
 
  private:
   ThemeInstalledInfoBarDelegate(InfoBarService* infobar_service,
@@ -49,13 +43,14 @@ class ThemeInstalledInfoBarDelegate : public ConfirmInfoBarDelegate,
   virtual ~ThemeInstalledInfoBarDelegate();
 
   // ConfirmInfoBarDelegate:
-  virtual gfx::Image* GetIcon() const OVERRIDE;
+  virtual int GetIconID() const OVERRIDE;
   virtual Type GetInfoBarType() const OVERRIDE;
   virtual ThemeInstalledInfoBarDelegate*
       AsThemePreviewInfobarDelegate() OVERRIDE;
   virtual string16 GetMessageText() const OVERRIDE;
   virtual int GetButtons() const OVERRIDE;
   virtual string16 GetButtonLabel(InfoBarButton button) const OVERRIDE;
+  virtual bool Cancel() OVERRIDE;
 
   // content::NotificationObserver:
   virtual void Observe(int type,

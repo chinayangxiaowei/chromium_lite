@@ -98,6 +98,18 @@ bool QuicDataWriter::WriteBytes(const void* data, size_t data_len) {
   return true;
 }
 
+bool QuicDataWriter::WriteRepeatedByte(uint8 byte, size_t count) {
+  char* dest = BeginWrite(count);
+  if (!dest) {
+    return false;
+  }
+
+  memset(dest, byte, count);
+
+  length_ += count;
+  return true;
+}
+
 void QuicDataWriter::WritePadding() {
   DCHECK_LE(length_, capacity_);
   if (length_ > capacity_) {
@@ -109,18 +121,30 @@ void QuicDataWriter::WritePadding() {
 
 bool QuicDataWriter::WriteUInt8ToOffset(uint8 value, size_t offset) {
   DCHECK_LT(offset, capacity_);
-  int latched_length = length_;
+  size_t latched_length = length_;
   length_ = offset;
   bool success = WriteUInt8(value);
+  DCHECK_LE(length_, latched_length);
+  length_ = latched_length;
+  return success;
+}
+
+bool QuicDataWriter::WriteUInt32ToOffset(uint32 value, size_t offset) {
+  DCHECK_LT(offset, capacity_);
+  size_t latched_length = length_;
+  length_ = offset;
+  bool success = WriteUInt32(value);
+  DCHECK_LE(length_, latched_length);
   length_ = latched_length;
   return success;
 }
 
 bool QuicDataWriter::WriteUInt48ToOffset(uint64 value, size_t offset) {
   DCHECK_LT(offset, capacity_);
-  int latched_length = length_;
+  size_t latched_length = length_;
   length_ = offset;
   bool success = WriteUInt48(value);
+  DCHECK_LE(length_, latched_length);
   length_ = latched_length;
   return success;
 }

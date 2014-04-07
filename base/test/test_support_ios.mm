@@ -7,9 +7,9 @@
 #include "base/debug/debugger.h"
 #include "base/logging.h"
 #include "base/mac/scoped_nsautorelease_pool.h"
-#include "base/memory/scoped_nsobject.h"
-#include "base/message_loop.h"
-#include "base/message_pump_default.h"
+#include "base/mac/scoped_nsobject.h"
+#include "base/message_loop/message_loop.h"
+#include "base/message_loop/message_pump_default.h"
 #include "base/test/test_suite.h"
 
 // Springboard will kill any iOS app that fails to check in after launch within
@@ -36,7 +36,7 @@ static char** g_argv;
 
 @interface ChromeUnitTestDelegate : NSObject {
  @private
-  scoped_nsobject<UIWindow> window_;
+  base::scoped_nsobject<UIWindow> window_;
 }
 - (void)runTests;
 @end
@@ -55,7 +55,7 @@ static char** g_argv;
   // Add a label with the app name.
   UILabel* label = [[[UILabel alloc] initWithFrame:bounds] autorelease];
   label.text = [[NSProcessInfo processInfo] processName];
-  label.textAlignment = UITextAlignmentCenter;
+  label.textAlignment = NSTextAlignmentCenter;
   [window_ addSubview:label];
 
   if ([self shouldRedirectOutputToFile])

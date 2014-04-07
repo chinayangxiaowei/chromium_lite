@@ -24,9 +24,10 @@ const int kWindowContainerIds[] = {
     internal::kShellWindowId_AppListContainer,
     internal::kShellWindowId_DefaultContainer,
 
-    // Panel, launcher and status are intentionally checked after other
+    // Docked, panel, launcher and status are intentionally checked after other
     // containers even though these layers are higher. The user expects their
     // windows to be focused before these elements.
+    internal::kShellWindowId_DockedContainer,
     internal::kShellWindowId_PanelContainer,
     internal::kShellWindowId_ShelfContainer,
     internal::kShellWindowId_StatusContainer,
@@ -56,11 +57,8 @@ AshFocusRules::~AshFocusRules() {
 // AshFocusRules, views::corewm::FocusRules:
 
 bool AshFocusRules::SupportsChildActivation(aura::Window* window) const {
-  if (window->id() == internal::kShellWindowId_WorkspaceContainer)
-    return true;
-
   if (window->id() == internal::kShellWindowId_DefaultContainer)
-    return false;
+    return true;
 
   for (size_t i = 0; i < arraysize(kWindowContainerIds); i++) {
     if (window->id() == kWindowContainerIds[i])
@@ -80,7 +78,7 @@ bool AshFocusRules::IsWindowConsideredVisibleForActivation(
     return true;
 
   return window->TargetVisibility() && (window->parent()->id() ==
-      internal::kShellWindowId_WorkspaceContainer || window->parent()->id() ==
+      internal::kShellWindowId_DefaultContainer || window->parent()->id() ==
       internal::kShellWindowId_LockScreenContainer);
 }
 
@@ -152,20 +150,6 @@ aura::Window* AshFocusRules::GetTopmostWindowToActivateForContainerIndex(
 aura::Window* AshFocusRules::GetTopmostWindowToActivateInContainer(
     aura::Window* container,
     aura::Window* ignore) const {
-  // Workspace has an extra level of windows that needs to be special cased.
-  if (container->id() == internal::kShellWindowId_DefaultContainer) {
-    for (aura::Window::Windows::const_reverse_iterator i =
-             container->children().rbegin();
-         i != container->children().rend(); ++i) {
-      if ((*i)->IsVisible()) {
-        aura::Window* window =
-            GetTopmostWindowToActivateInContainer(*i, ignore);
-        if (window)
-          return window;
-      }
-    }
-    return NULL;
-  }
   for (aura::Window::Windows::const_reverse_iterator i =
            container->children().rbegin();
        i != container->children().rend();

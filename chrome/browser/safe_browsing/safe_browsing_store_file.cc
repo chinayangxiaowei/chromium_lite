@@ -179,14 +179,14 @@ void SafeBrowsingStoreFile::CheckForOriginalAndDelete(
     const base::FilePath& current_filename) {
   const base::FilePath original_filename(
       current_filename.DirName().AppendASCII("Safe Browsing"));
-  if (file_util::PathExists(original_filename)) {
+  if (base::PathExists(original_filename)) {
     int64 size = 0;
     if (file_util::GetFileSize(original_filename, &size)) {
       UMA_HISTOGRAM_COUNTS("SB2.OldDatabaseKilobytes",
                            static_cast<int>(size / 1024));
     }
 
-    if (file_util::Delete(original_filename, false)) {
+    if (base::DeleteFile(original_filename, false)) {
       RecordFormatEvent(FORMAT_EVENT_DELETED_ORIGINAL);
     } else {
       RecordFormatEvent(FORMAT_EVENT_DELETED_ORIGINAL_FAILED);
@@ -196,16 +196,12 @@ void SafeBrowsingStoreFile::CheckForOriginalAndDelete(
     // the weeds.
     const base::FilePath journal_filename(
         current_filename.DirName().AppendASCII("Safe Browsing-journal"));
-    file_util::Delete(journal_filename, false);
+    base::DeleteFile(journal_filename, false);
   }
 }
 
 SafeBrowsingStoreFile::SafeBrowsingStoreFile()
-    : chunks_written_(0),
-      file_(NULL),
-      empty_(false),
-      corruption_seen_(false) {
-}
+    : chunks_written_(0), empty_(false), corruption_seen_(false) {}
 
 SafeBrowsingStoreFile::~SafeBrowsingStoreFile() {
   Close();
@@ -219,28 +215,7 @@ bool SafeBrowsingStoreFile::Delete() {
     return false;
   }
 
-  if (!file_util::Delete(filename_, false) &&
-      file_util::PathExists(filename_)) {
-    NOTREACHED();
-    return false;
-  }
-
-  const base::FilePath new_filename = TemporaryFileForFilename(filename_);
-  if (!file_util::Delete(new_filename, false) &&
-      file_util::PathExists(new_filename)) {
-    NOTREACHED();
-    return false;
-  }
-
-  // With SQLite support gone, one way to get to this code is if the
-  // existing file is a SQLite file.  Make sure the journal file is
-  // also removed.
-  const base::FilePath journal_filename(
-      filename_.value() + FILE_PATH_LITERAL("-journal"));
-  if (file_util::PathExists(journal_filename))
-    file_util::Delete(journal_filename, false);
-
-  return true;
+  return DeleteStore(filename_);
 }
 
 bool SafeBrowsingStoreFile::CheckValidity() {
@@ -431,7 +406,7 @@ bool SafeBrowsingStoreFile::BeginUpdate() {
   if (empty_) {
     // If the file exists but cannot be opened, try to delete it (not
     // deleting directly, the bloom filter needs to be deleted, too).
-    if (file_util::PathExists(filename_))
+    if (base::PathExists(filename_))
       return OnCorruptDatabase();
 
     new_file_.swap(new_file);
@@ -679,12 +654,12 @@ bool SafeBrowsingStoreFile::DoUpdate(
 
   // Close the file handle and swizzle the file into place.
   new_file_.reset();
-  if (!file_util::Delete(filename_, false) &&
-      file_util::PathExists(filename_))
+  if (!base::DeleteFile(filename_, false) &&
+      base::PathExists(filename_))
     return false;
 
   const base::FilePath new_filename = TemporaryFileForFilename(filename_);
-  if (!file_util::Move(new_filename, filename_))
+  if (!base::Move(new_filename, filename_))
     return false;
 
   // Record counts before swapping to caller.
@@ -756,4 +731,30 @@ void SafeBrowsingStoreFile::DeleteAddChunk(int32 chunk_id) {
 
 void SafeBrowsingStoreFile::DeleteSubChunk(int32 chunk_id) {
   sub_del_cache_.insert(chunk_id);
+}
+
+// static
+bool SafeBrowsingStoreFile::DeleteStore(const base::FilePath& basename) {
+  if (!base::DeleteFile(basename, false) &&
+      base::PathExists(basename)) {
+    NOTREACHED();
+    return false;
+  }
+
+  const base::FilePath new_filename = TemporaryFileForFilename(basename);
+  if (!base::DeleteFile(new_filename, false) &&
+      base::PathExists(new_filename)) {
+    NOTREACHED();
+    return false;
+  }
+
+  // With SQLite support gone, one way to get to this code is if the
+  // existing file is a SQLite file.  Make sure the journal file is
+  // also removed.
+  const base::FilePath journal_filename(
+      basename.value() + FILE_PATH_LITERAL("-journal"));
+  if (base::PathExists(journal_filename))
+    base::DeleteFile(journal_filename, false);
+
+  return true;
 }

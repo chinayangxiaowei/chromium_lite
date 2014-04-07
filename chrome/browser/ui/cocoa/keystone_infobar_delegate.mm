@@ -11,7 +11,7 @@
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/memory/weak_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/prefs/pref_service.h"
 #include "chrome/browser/first_run/first_run.h"
 #include "chrome/browser/infobars/confirm_infobar_delegate.h"
@@ -29,7 +29,6 @@
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/resource/resource_bundle.h"
 
 class SkBitmap;
 
@@ -53,7 +52,7 @@ class KeystonePromotionInfoBarDelegate : public ConfirmInfoBarDelegate {
   void SetCanExpire() { can_expire_ = true; }
 
   // ConfirmInfoBarDelegate
-  virtual gfx::Image* GetIcon() const OVERRIDE;
+  virtual int GetIconID() const OVERRIDE;
   virtual string16 GetMessageText() const OVERRIDE;
   virtual string16 GetButtonLabel(InfoBarButton button) const OVERRIDE;
   virtual bool Accept() OVERRIDE;
@@ -76,20 +75,19 @@ class KeystonePromotionInfoBarDelegate : public ConfirmInfoBarDelegate {
 // static
 void KeystonePromotionInfoBarDelegate::Create() {
   Browser* browser = chrome::GetLastActiveBrowser();
-  if (browser) {
-    content::WebContents* webContents =
-        browser->tab_strip_model()->GetActiveWebContents();
-
-    if (webContents) {
-      InfoBarService* infobar_service =
-          InfoBarService::FromWebContents(webContents);
-      infobar_service->AddInfoBar(scoped_ptr<InfoBarDelegate>(
-          new KeystonePromotionInfoBarDelegate(
-              infobar_service,
-              Profile::FromBrowserContext(
-                  webContents->GetBrowserContext())->GetPrefs())));
-    }
-  }
+  if (!browser)
+    return;
+  content::WebContents* webContents =
+      browser->tab_strip_model()->GetActiveWebContents();
+  if (!webContents)
+    return;
+  InfoBarService* infobar_service =
+      InfoBarService::FromWebContents(webContents);
+  infobar_service->AddInfoBar(scoped_ptr<InfoBarDelegate>(
+      new KeystonePromotionInfoBarDelegate(
+          infobar_service,
+          Profile::FromBrowserContext(
+              webContents->GetBrowserContext())->GetPrefs())));
 }
 
 KeystonePromotionInfoBarDelegate::KeystonePromotionInfoBarDelegate(
@@ -98,10 +96,10 @@ KeystonePromotionInfoBarDelegate::KeystonePromotionInfoBarDelegate(
     : ConfirmInfoBarDelegate(infobar_service),
       prefs_(prefs),
       can_expire_(false),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_ptr_factory_(this)) {
+      weak_ptr_factory_(this) {
   const base::TimeDelta kCanExpireOnNavigationAfterDelay =
       base::TimeDelta::FromSeconds(8);
-  MessageLoop::current()->PostDelayedTask(FROM_HERE,
+  base::MessageLoop::current()->PostDelayedTask(FROM_HERE,
       base::Bind(&KeystonePromotionInfoBarDelegate::SetCanExpire,
                  weak_ptr_factory_.GetWeakPtr()),
       kCanExpireOnNavigationAfterDelay);
@@ -110,9 +108,8 @@ KeystonePromotionInfoBarDelegate::KeystonePromotionInfoBarDelegate(
 KeystonePromotionInfoBarDelegate::~KeystonePromotionInfoBarDelegate() {
 }
 
-gfx::Image* KeystonePromotionInfoBarDelegate::GetIcon() const {
-  return &ResourceBundle::GetSharedInstance().GetNativeImageNamed(
-      IDR_PRODUCT_LOGO_32);
+int KeystonePromotionInfoBarDelegate::GetIconID() const {
+  return IDR_PRODUCT_LOGO_32;
 }
 
 string16 KeystonePromotionInfoBarDelegate::GetMessageText() const {

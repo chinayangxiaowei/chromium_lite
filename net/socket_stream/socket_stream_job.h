@@ -49,11 +49,12 @@ class NET_EXPORT SocketStreamJob
   virtual SocketStream::UserData* GetUserData(const void* key) const;
   virtual void SetUserData(const void* key, SocketStream::UserData* data);
 
-  const URLRequestContext* context() const {
-    return socket_->context();
+  URLRequestContext* context() const {
+    return socket_.get() ? socket_->context() : 0;
   }
-  void set_context(const URLRequestContext* context) {
-    socket_->set_context(context);
+  void set_context(URLRequestContext* context) {
+    if (socket_.get())
+      socket_->set_context(context);
   }
 
   virtual void Connect();
@@ -73,8 +74,7 @@ class NET_EXPORT SocketStreamJob
   virtual void DetachDelegate();
 
  protected:
-  friend class WebSocketJobSpdy2Test;
-  friend class WebSocketJobSpdy3Test;
+  friend class WebSocketJobTest;
   friend class base::RefCountedThreadSafe<SocketStreamJob>;
   virtual ~SocketStreamJob();
 

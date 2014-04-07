@@ -9,7 +9,7 @@
 #include "base/bind.h"
 #include "base/compiler_specific.h"
 #include "base/memory/weak_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
 #include "net/base/test_completion_callback.h"
@@ -40,7 +40,7 @@ class CloseResultWaiter {
     CHECK(!waiting_for_result_);
     while (!have_result_) {
       waiting_for_result_ = true;
-      MessageLoop::current()->Run();
+      base::MessageLoop::current()->Run();
       waiting_for_result_ = false;
     }
     return result_;
@@ -50,7 +50,7 @@ class CloseResultWaiter {
     result_ = result;
     have_result_ = true;
     if (waiting_for_result_)
-      MessageLoop::current()->Quit();
+      base::MessageLoop::current()->Quit();
   }
 
  private:
@@ -72,7 +72,7 @@ class MockHttpStream : public HttpStream {
         is_sync_(false),
         is_last_chunk_zero_size_(false),
         is_complete_(false),
-        ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {}
+        weak_factory_(this) {}
   virtual ~MockHttpStream() {}
 
   // HttpStream implementation.
@@ -121,8 +121,6 @@ class MockHttpStream : public HttpStream {
   virtual bool IsResponseBodyComplete() const OVERRIDE { return is_complete_; }
 
   virtual bool IsSpdyHttpStream() const OVERRIDE { return false; }
-
-  virtual void LogNumRttVsBytesMetrics() const OVERRIDE {}
 
   virtual bool GetLoadTimingInfo(
       LoadTimingInfo* load_timing_info) const OVERRIDE { return false; }
@@ -174,7 +172,7 @@ int MockHttpStream::ReadResponseBody(IOBuffer* buf,
     user_buf_ = buf;
     buf_len_ = buf_len;
     callback_ = callback;
-    MessageLoop::current()->PostTask(
+    base::MessageLoop::current()->PostTask(
         FROM_HERE,
         base::Bind(&MockHttpStream::CompleteRead, weak_factory_.GetWeakPtr()));
     return ERR_IO_PENDING;
@@ -199,7 +197,7 @@ int MockHttpStream::ReadResponseBodyImpl(IOBuffer* buf, int buf_len) {
 }
 
 void MockHttpStream::CompleteRead() {
-  int result = ReadResponseBodyImpl(user_buf_, buf_len_);
+  int result = ReadResponseBodyImpl(user_buf_.get(), buf_len_);
   user_buf_ = NULL;
   CompletionCallback callback = callback_;
   callback_.Reset();
@@ -211,7 +209,7 @@ class HttpResponseBodyDrainerTest : public testing::Test {
   HttpResponseBodyDrainerTest()
       : proxy_service_(ProxyService::CreateDirect()),
         ssl_config_service_(new SSLConfigServiceDefaults),
-        http_server_properties_(new HttpServerPropertiesImpl),
+        http_server_properties_(new HttpServerPropertiesImpl()),
         session_(CreateNetworkSession()),
         mock_stream_(new MockHttpStream(&result_waiter_)),
         drainer_(new HttpResponseBodyDrainer(mock_stream_)) {}
@@ -221,8 +219,8 @@ class HttpResponseBodyDrainerTest : public testing::Test {
   HttpNetworkSession* CreateNetworkSession() const {
     HttpNetworkSession::Params params;
     params.proxy_service = proxy_service_.get();
-    params.ssl_config_service = ssl_config_service_;
-    params.http_server_properties = http_server_properties_.get();
+    params.ssl_config_service = ssl_config_service_.get();
+    params.http_server_properties = http_server_properties_->GetWeakPtr();
     return new HttpNetworkSession(params);
   }
 
@@ -238,20 +236,20 @@ class HttpResponseBodyDrainerTest : public testing::Test {
 TEST_F(HttpResponseBodyDrainerTest, DrainBodySyncSingleOK) {
   mock_stream_->set_num_chunks(1);
   mock_stream_->set_sync();
-  drainer_->Start(session_);
+  drainer_->Start(session_.get());
   EXPECT_FALSE(result_waiter_.WaitForResult());
 }
 
 TEST_F(HttpResponseBodyDrainerTest, DrainBodySyncOK) {
   mock_stream_->set_num_chunks(3);
   mock_stream_->set_sync();
-  drainer_->Start(session_);
+  drainer_->Start(session_.get());
   EXPECT_FALSE(result_waiter_.WaitForResult());
 }
 
 TEST_F(HttpResponseBodyDrainerTest, DrainBodyAsyncOK) {
   mock_stream_->set_num_chunks(3);
-  drainer_->Start(session_);
+  drainer_->Start(session_.get());
   EXPECT_FALSE(result_waiter_.WaitForResult());
 }
 
@@ -261,7 +259,7 @@ TEST_F(HttpResponseBodyDrainerTest, DrainBodyAsyncOK) {
 TEST_F(HttpResponseBodyDrainerTest, DrainBodyAsyncEmptyChunk) {
   mock_stream_->set_num_chunks(4);
   mock_stream_->set_is_last_chunk_zero_size();
-  drainer_->Start(session_);
+  drainer_->Start(session_.get());
   EXPECT_FALSE(result_waiter_.WaitForResult());
 }
 
@@ -269,28 +267,28 @@ TEST_F(HttpResponseBodyDrainerTest, DrainBodySyncEmptyChunk) {
   mock_stream_->set_num_chunks(4);
   mock_stream_->set_sync();
   mock_stream_->set_is_last_chunk_zero_size();
-  drainer_->Start(session_);
+  drainer_->Start(session_.get());
   EXPECT_FALSE(result_waiter_.WaitForResult());
 }
 
 TEST_F(HttpResponseBodyDrainerTest, DrainBodySizeEqualsDrainBuffer) {
   mock_stream_->set_num_chunks(
       HttpResponseBodyDrainer::kDrainBodyBufferSize / kMagicChunkSize);
-  drainer_->Start(session_);
+  drainer_->Start(session_.get());
   EXPECT_FALSE(result_waiter_.WaitForResult());
 }
 
 TEST_F(HttpResponseBodyDrainerTest, DrainBodyTimeOut) {
   mock_stream_->set_num_chunks(2);
   mock_stream_->set_stall_reads_forever();
-  drainer_->Start(session_);
+  drainer_->Start(session_.get());
   EXPECT_TRUE(result_waiter_.WaitForResult());
 }
 
 TEST_F(HttpResponseBodyDrainerTest, CancelledBySession) {
   mock_stream_->set_num_chunks(2);
   mock_stream_->set_stall_reads_forever();
-  drainer_->Start(session_);
+  drainer_->Start(session_.get());
   // HttpNetworkSession should delete |drainer_|.
 }
 
@@ -300,7 +298,7 @@ TEST_F(HttpResponseBodyDrainerTest, DrainBodyTooLarge) {
   too_many_chunks += 1;  // Now it's too large.
 
   mock_stream_->set_num_chunks(too_many_chunks);
-  drainer_->Start(session_);
+  drainer_->Start(session_.get());
   EXPECT_TRUE(result_waiter_.WaitForResult());
 }
 
@@ -310,13 +308,13 @@ TEST_F(HttpResponseBodyDrainerTest, StartBodyTooLarge) {
   too_many_chunks += 1;  // Now it's too large.
 
   mock_stream_->set_num_chunks(0);
-  drainer_->StartWithSize(session_, too_many_chunks * kMagicChunkSize);
+  drainer_->StartWithSize(session_.get(), too_many_chunks * kMagicChunkSize);
   EXPECT_TRUE(result_waiter_.WaitForResult());
 }
 
 TEST_F(HttpResponseBodyDrainerTest, StartWithNothingToDo) {
   mock_stream_->set_num_chunks(0);
-  drainer_->StartWithSize(session_, 0);
+  drainer_->StartWithSize(session_.get(), 0);
   EXPECT_FALSE(result_waiter_.WaitForResult());
 }
 

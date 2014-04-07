@@ -1,14 +1,14 @@
 /* Copyright (c) 2012 The Chromium Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style license that can be
- * found in the LICENSE file.
- */
+ * found in the LICENSE file. */
+
 #ifndef LIBRARIES_NACL_IO_OSDIRENT_H_
 #define LIBRARIES_NACL_IO_OSDIRENT_H_
 
 #if defined(WIN32)
 
 #include <sys/types.h>
-#include "utils/macros.h"
+#include "sdk_util/macros.h"
 
 struct dirent {
   _ino_t d_ino;
@@ -23,4 +23,4 @@ struct dirent {
 
 #endif
 
-#endif  // LIBRARIES_NACL_IO_OSDIRENT_H_
+#endif  /* LIBRARIES_NACL_IO_OSDIRENT_H_ */

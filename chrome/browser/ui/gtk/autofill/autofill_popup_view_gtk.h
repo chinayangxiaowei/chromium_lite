@@ -9,14 +9,13 @@
 #include <vector>
 
 #include "base/compiler_specific.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "chrome/browser/ui/autofill/autofill_popup_view.h"
 #include "ui/base/glib/glib_integers.h"
 #include "ui/base/gtk/gtk_signal.h"
 #include "ui/base/gtk/gtk_signal_registrar.h"
 #include "ui/gfx/font.h"
 
-class AutofillPopupController;
 class Profile;
 
 namespace content {
@@ -35,6 +34,10 @@ typedef struct _GdkEventKey GdkEventKey;
 typedef struct _GdkEventMotion GdkEventMotion;
 typedef struct _GdkColor GdkColor;
 typedef struct _GtkWidget GtkWidget;
+
+namespace autofill {
+
+class AutofillPopupController;
 
 // Gtk implementation for AutofillPopupView interface.
 class AutofillPopupViewGtk : public AutofillPopupView {
@@ -91,5 +94,7 @@ class AutofillPopupViewGtk : public AutofillPopupView {
 
   DISALLOW_COPY_AND_ASSIGN(AutofillPopupViewGtk);
 };
+
+}  // namespace autofill
 
 #endif  // CHROME_BROWSER_UI_GTK_AUTOFILL_AUTOFILL_POPUP_VIEW_GTK_H_

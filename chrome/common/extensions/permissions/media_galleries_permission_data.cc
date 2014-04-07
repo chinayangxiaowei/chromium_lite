@@ -4,7 +4,7 @@
 
 #include "chrome/common/extensions/permissions/media_galleries_permission_data.h"
 
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "base/values.h"
 #include "chrome/common/extensions/permissions/media_galleries_permission.h"
 
@@ -39,7 +39,8 @@ bool MediaGalleriesPermissionData::FromValue(const base::Value* value) {
   TrimWhitespaceASCII(raw_permission, TRIM_ALL, &permission);
 
   if (permission == MediaGalleriesPermission::kAllAutoDetectedPermission ||
-      permission == MediaGalleriesPermission::kReadPermission) {
+      permission == MediaGalleriesPermission::kReadPermission ||
+      permission == MediaGalleriesPermission::kCopyToPermission) {
     permission_ = permission;
     return true;
   }

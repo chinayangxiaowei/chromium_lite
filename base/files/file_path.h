@@ -108,9 +108,9 @@
 
 #include "base/base_export.h"
 #include "base/compiler_specific.h"
-#include "base/hash_tables.h"
-#include "base/string16.h"
-#include "base/string_piece.h"  // For implicit conversions.
+#include "base/containers/hash_tables.h"
+#include "base/strings/string16.h"
+#include "base/strings/string_piece.h"  // For implicit conversions.
 #include "build/build_config.h"
 
 // Windows-style drive letter support and pathname separator characters can be
@@ -149,6 +149,9 @@ class BASE_EXPORT FilePath {
   // but kSeparators[0] is treated as the canonical separator and will be used
   // when composing pathnames.
   static const CharType kSeparators[];
+
+  // arraysize(kSeparators).
+  static const size_t kSeparatorsLength;
 
   // A special path component meaning "this directory."
   static const CharType kCurrentDirectory[];
@@ -285,6 +288,13 @@ class BASE_EXPORT FilePath {
   // platforms, an absolute path begins with a separator character.
   bool IsAbsolute() const;
 
+  // Returns true if the patch ends with a path separator character.
+  bool EndsWithSeparator() const WARN_UNUSED_RESULT;
+
+  // Returns a copy of this FilePath that ends with a trailing separator. If
+  // the input path is empty, an empty FilePath will be returned.
+  FilePath AsEndingWithSeparator() const WARN_UNUSED_RESULT;
+
   // Returns a copy of this FilePath that does not end with a trailing
   // separator.
   FilePath StripTrailingSeparators() const WARN_UNUSED_RESULT;
@@ -319,6 +329,9 @@ class BASE_EXPORT FilePath {
   // with "Unsafe" in the function name.
   std::string AsUTF8Unsafe() const;
 
+  // Similar to AsUTF8Unsafe, but returns UTF-16 instead.
+  string16 AsUTF16Unsafe() const;
+
   // Older Chromium code assumes that paths are always wstrings.
   // This function converts wstrings to FilePaths, and is
   // useful to smooth porting that old code to the FilePath API.
@@ -346,6 +359,9 @@ class BASE_EXPORT FilePath {
   // and Chrome OS, to mitigate the encoding issue. See the comment at
   // AsUTF8Unsafe() for details.
   static FilePath FromUTF8Unsafe(const std::string& utf8);
+
+  // Similar to FromUTF8Unsafe, but accepts UTF-16 instead.
+  static FilePath FromUTF16Unsafe(const string16& utf16);
 
   void WriteToPickle(Pickle* pickle) const;
   bool ReadFromPickle(PickleIterator* iter);

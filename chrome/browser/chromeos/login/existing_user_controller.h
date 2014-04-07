@@ -13,9 +13,10 @@
 #include "base/gtest_prod_util.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/string16.h"
-#include "base/time.h"
-#include "base/timer.h"
+#include "base/strings/string16.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
+#include "chrome/browser/chromeos/app_mode/kiosk_app_manager.h"
 #include "chrome/browser/chromeos/login/login_display.h"
 #include "chrome/browser/chromeos/login/login_performer.h"
 #include "chrome/browser/chromeos/login/login_utils.h"
@@ -23,13 +24,17 @@
 #include "chrome/browser/chromeos/settings/device_settings_service.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
-#include "googleurl/src/gurl.h"
 #include "ui/gfx/rect.h"
+#include "url/gurl.h"
 
 namespace chromeos {
 
 class CrosSettings;
 class LoginDisplayHost;
+
+namespace login {
+class NetworkStateHelper;
+}
 
 // ExistingUserController is used to handle login when someone has
 // already logged into the machine.
@@ -74,11 +79,10 @@ class ExistingUserController : public LoginDisplay::Delegate,
   // LoginDisplay::Delegate: implementation
   virtual void CancelPasswordChangedFlow() OVERRIDE;
   virtual void CreateAccount() OVERRIDE;
-  virtual void CreateLocallyManagedUser(const string16& display_name,
-                                        const std::string& password) OVERRIDE;
-  virtual void CompleteLogin(const UserCredentials& credentials) OVERRIDE;
+  virtual void CompleteLogin(const UserContext& user_context) OVERRIDE;
   virtual string16 GetConnectedNetworkName() OVERRIDE;
-  virtual void Login(const UserCredentials& credentials) OVERRIDE;
+  virtual bool IsSigninInProgress() const OVERRIDE;
+  virtual void Login(const UserContext& user_context) OVERRIDE;
   virtual void MigrateUserData(const std::string& old_password) OVERRIDE;
   virtual void LoginAsRetailModeUser() OVERRIDE;
   virtual void LoginAsGuest() OVERRIDE;
@@ -86,7 +90,9 @@ class ExistingUserController : public LoginDisplay::Delegate,
   virtual void OnSigninScreenReady() OVERRIDE;
   virtual void OnUserSelected(const std::string& username) OVERRIDE;
   virtual void OnStartEnterpriseEnrollment() OVERRIDE;
+  virtual void OnStartKioskEnableScreen() OVERRIDE;
   virtual void OnStartDeviceReset() OVERRIDE;
+  virtual void OnStartKioskAutolaunchScreen() OVERRIDE;
   virtual void ResetPublicSessionAutoLoginTimer() OVERRIDE;
   virtual void ResyncUserData() OVERRIDE;
   virtual void SetDisplayEmail(const std::string& email) OVERRIDE;
@@ -130,7 +136,7 @@ class ExistingUserController : public LoginDisplay::Delegate,
   // LoginPerformer::Delegate implementation:
   virtual void OnLoginFailure(const LoginFailure& error) OVERRIDE;
   virtual void OnLoginSuccess(
-      const UserCredentials& credentials,
+      const UserContext& user_context,
       bool pending_requests,
       bool using_oauth) OVERRIDE;
   virtual void OnOffTheRecordLoginSuccess() OVERRIDE;
@@ -152,9 +158,6 @@ class ExistingUserController : public LoginDisplay::Delegate,
   // Adds first-time login URLs.
   void InitializeStartUrls() const;
 
-  // Shows "Release Notes"/"What's new"/Getting started guide on update.
-  void OptionallyShowReleaseNotes(Profile* profile) const;
-
   // Show error message. |error_id| error message ID in resources.
   // If |details| string is not empty, it specify additional error text
   // provided by authenticator, it is not localized.
@@ -163,11 +166,16 @@ class ExistingUserController : public LoginDisplay::Delegate,
   // Shows Gaia page because password change was detected.
   void ShowGaiaPasswordChanged(const std::string& username);
 
-  // Handles result of ownership check and starts enterprise enrollment if
-  // applicable.
+  // Handles result of ownership check and starts enterprise or kiosk enrollment
+  // if applicable.
   void OnEnrollmentOwnershipCheckCompleted(
       DeviceSettingsService::OwnershipStatus status,
       bool current_user_is_owner);
+
+  // Handles result of consumer kiosk configurability check and starts
+  // enable kiosk screen if applicable.
+  void OnConsumerKioskModeCheckCompleted(
+      KioskAppManager::ConsumerKioskModeStatus status);
 
   // Enters the enterprise enrollment screen. |forced| is true if this is the
   // result of an auto-enrollment check, and the user shouldn't be able to
@@ -178,20 +186,26 @@ class ExistingUserController : public LoginDisplay::Delegate,
   // Shows "reset device" screen.
   void ShowResetScreen();
 
+  // Shows kiosk feature enable screen.
+  void ShowKioskEnableScreen();
+
+  // Shows "kiosk auto-launch permission" screen.
+  void ShowKioskAutolaunchScreen();
+
   // Shows "critical TPM error" screen.
   void ShowTPMError();
 
   // Invoked to complete login. Login might be suspended if auto-enrollment
   // has to be performed, and will resume once auto-enrollment completes.
   void CompleteLoginInternal(
-      const UserCredentials& credentials,
+      const UserContext& user_context,
       DeviceSettingsService::OwnershipStatus ownership_status,
       bool is_owner);
 
   // Creates |login_performer_| if necessary and calls login() on it.
   // The string arguments aren't passed by const reference because this is
   // posted as |resume_login_callback_| and resets it.
-  void PerformLogin(const UserCredentials& credentials,
+  void PerformLogin(const UserContext& user_context,
                     LoginPerformer::AuthorizationMode auth_mode);
 
   void set_login_performer_delegate(LoginPerformer::Delegate* d) {
@@ -285,6 +299,8 @@ class ExistingUserController : public LoginDisplay::Delegate,
 
   // Timer for the interval to wait for the reboot after TPM error UI was shown.
   base::OneShotTimer<ExistingUserController> reboot_timer_;
+
+  scoped_ptr<login::NetworkStateHelper> network_state_helper_;
 
   FRIEND_TEST_ALL_PREFIXES(ExistingUserControllerTest, ExistingUserLogin);
 

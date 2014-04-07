@@ -9,8 +9,8 @@
 #include "base/compiler_specific.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/timer.h"
 #include "base/threading/non_thread_safe.h"
+#include "base/timer/timer.h"
 #include "net/base/net_log.h"
 #include "net/socket/stream_socket.h"
 #include "third_party/libjingle/source/talk/p2p/base/pseudotcp.h"
@@ -49,8 +49,6 @@ class PseudoTcpAdapter : public net::StreamSocket, base::NonThreadSafe {
   virtual void SetOmniboxSpeculation() OVERRIDE;
   virtual bool WasEverUsed() const OVERRIDE;
   virtual bool UsingTCPFastOpen() const OVERRIDE;
-  virtual int64 NumBytesRead() const OVERRIDE;
-  virtual base::TimeDelta GetConnectTimeMicros() const OVERRIDE;
   virtual bool WasNpnNegotiated() const OVERRIDE;
   virtual net::NextProto GetNegotiatedProtocol() const OVERRIDE;
   virtual bool GetSSLInfo(net::SSLInfo* ssl_info) OVERRIDE;

@@ -15,8 +15,8 @@
 #include "content/shell/shell.h"
 #include "content/test/content_browser_test.h"
 #include "content/test/content_browser_test_utils.h"
-#include "content/test/gpu/gpu_test_config.h"
 #include "gpu/command_buffer/service/gpu_switches.h"
+#include "gpu/config/gpu_test_config.h"
 #include "net/base/net_util.h"
 
 namespace content {
@@ -116,12 +116,8 @@ class GpuMemoryTest : public ContentBrowserTest {
     js_call << mb_to_use;
     js_call << ");";
     std::string message;
-    ASSERT_TRUE(
-        ExecuteScriptInFrameAndExtractString(
-        tab_to_load->web_contents(),
-        "",
-        js_call.str(),
-        &message));
+    ASSERT_TRUE(ExecuteScriptInFrameAndExtractString(
+        tab_to_load->web_contents(), std::string(), js_call.str(), &message));
     EXPECT_EQ("DONE_USE_GPU_MEMORY", message);
   }
 
@@ -196,12 +192,8 @@ class GpuMemoryTest : public ContentBrowserTest {
             "  domAutomationController.send(\"DONE_RAF\");"
             "})");
         std::string message;
-        ASSERT_TRUE(
-            ExecuteScriptInFrameAndExtractString(
-            (*it)->web_contents(),
-            "",
-            js_call,
-            &message));
+        ASSERT_TRUE(ExecuteScriptInFrameAndExtractString(
+            (*it)->web_contents(), std::string(), js_call, &message));
         EXPECT_EQ("DONE_RAF", message);
       }
       // TODO(ccameron): send an IPC from Browser -> Renderer (delay it until
@@ -223,9 +215,17 @@ class GpuMemoryTest : public ContentBrowserTest {
   base::FilePath gpu_test_dir_;
 };
 
+#if defined(OS_LINUX) && !defined(NDEBUG)
+// http://crbug.com/254724
+#define IF_NOT_DEBUG_LINUX(x) DISABLED_ ## x
+#else
+#define IF_NOT_DEBUG_LINUX(x) x
+#endif
+
 // When trying to load something that doesn't fit into our total GPU memory
 // limit, we shouldn't exceed that limit.
-IN_PROC_BROWSER_TEST_F(GpuMemoryTest, SingleWindowDoesNotExceedLimit) {
+IN_PROC_BROWSER_TEST_F(GpuMemoryTest,
+                       IF_NOT_DEBUG_LINUX(SingleWindowDoesNotExceedLimit)) {
   if (!AllowTestsToRun())
     return;
 

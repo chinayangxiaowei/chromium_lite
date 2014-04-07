@@ -7,13 +7,12 @@
 #include "base/json/json_file_value_serializer.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/path_service.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/bookmarks/bookmark_codec.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
 #include "chrome/browser/bookmarks/bookmark_model_test_utils.h"
-#include "chrome/browser/bookmarks/bookmark_utils.h"
 #include "chrome/common/chrome_paths.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -301,7 +300,7 @@ TEST_F(BookmarkCodecTest, CanDecodeModelWithoutMobileBookmarks) {
   ASSERT_TRUE(PathService::Get(chrome::DIR_TEST_DATA, &test_data_directory));
   base::FilePath test_file = test_data_directory.AppendASCII(
       "bookmarks/model_without_sync.json");
-  ASSERT_TRUE(file_util::PathExists(test_file));
+  ASSERT_TRUE(base::PathExists(test_file));
 
   JSONFileValueSerializer serializer(test_file);
   scoped_ptr<Value> root(serializer.Deserialize(NULL, NULL));

@@ -9,16 +9,17 @@
 #include "ash/shell_observer.h"
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
-#include "base/timer.h"
+#include "base/timer/timer.h"
 #include "ui/app_list/pagination_model_observer.h"
 #include "ui/aura/client/focus_change_observer.h"
-#include "ui/aura/root_window_observer.h"
+#include "ui/aura/window_observer.h"
 #include "ui/base/events/event_handler.h"
 #include "ui/compositor/layer_animation_observer.h"
 #include "ui/gfx/rect.h"
 #include "ui/views/widget/widget_observer.h"
 
 namespace app_list {
+class ApplicationDragAndDropHost;
 class AppListView;
 class PaginationModel;
 }
@@ -36,7 +37,7 @@ namespace internal {
 // activation state and desktop mouse click to auto dismiss the UI.
 class AppListController : public ui::EventHandler,
                           public aura::client::FocusChangeObserver,
-                          public aura::RootWindowObserver,
+                          public aura::WindowObserver,
                           public ui::ImplicitAnimationObserver,
                           public views::WidgetObserver,
                           public ShellObserver,
@@ -62,6 +63,11 @@ class AppListController : public ui::EventHandler,
   aura::Window* GetWindow();
 
  private:
+  // If |drag_and_drop_host| is not NULL it will be called upon drag and drop
+  // operations outside the application list.
+  void SetDragAndDropHostOfCurrentAppList(
+      app_list::ApplicationDragAndDropHost* drag_and_drop_host);
+
   // Sets the app list view and attempts to show it.
   void SetView(app_list::AppListView* view);
 
@@ -84,9 +90,10 @@ class AppListController : public ui::EventHandler,
   virtual void OnWindowFocused(aura::Window* gained_focus,
                                aura::Window* lost_focus) OVERRIDE;
 
-  // aura::RootWindowObserver overrides:
-  virtual void OnRootWindowResized(const aura::RootWindow* root,
-                                   const gfx::Size& old_size) OVERRIDE;
+  // aura::WindowObserver overrides:
+  virtual void OnWindowBoundsChanged(aura::Window* root,
+                                     const gfx::Rect& old_bounds,
+                                     const gfx::Rect& new_bounds) OVERRIDE;
 
   // ui::ImplicitAnimationObserver overrides:
   virtual void OnImplicitAnimationsCompleted() OVERRIDE;
@@ -103,6 +110,7 @@ class AppListController : public ui::EventHandler,
   // app_list::PaginationModelObserver overrides:
   virtual void TotalPagesChanged() OVERRIDE;
   virtual void SelectedPageChanged(int old_selected, int new_selected) OVERRIDE;
+  virtual void TransitionStarted() OVERRIDE;
   virtual void TransitionChanged() OVERRIDE;
 
   scoped_ptr<app_list::PaginationModel> pagination_model_;

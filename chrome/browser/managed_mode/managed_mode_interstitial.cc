@@ -7,17 +7,18 @@
 #include "base/i18n/rtl.h"
 #include "base/metrics/histogram.h"
 #include "base/prefs/pref_service.h"
-#include "chrome/browser/managed_mode/managed_mode_navigation_observer.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/values.h"
 #include "chrome/browser/managed_mode/managed_user_service.h"
 #include "chrome/browser/managed_mode/managed_user_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/tab_contents/tab_util.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/interstitial_page.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
+#include "content/public/browser/web_ui.h"
 #include "grit/browser_resources.h"
 #include "grit/generated_resources.h"
 #include "net/base/net_util.h"
@@ -28,93 +29,61 @@
 
 using content::BrowserThread;
 
-namespace {
-
-void ShowInterstitialOnUIThread(int render_process_host_id,
-                                int render_view_id,
-                                const GURL& url,
-                                const base::Callback<void(bool)>& callback) {
-  // The tab might have been closed.
-  content::WebContents* web_contents =
-      tab_util::GetWebContentsByID(render_process_host_id, render_view_id);
-  if (!web_contents) {
-    BrowserThread::PostTask(
-        BrowserThread::IO, FROM_HERE, base::Bind(callback, true));
-    return;
-  }
-
-  ManagedModeNavigationObserver* navigation_observer =
-      ManagedModeNavigationObserver::FromWebContents(web_contents);
-  if (navigation_observer)
-    navigation_observer->SetStateToRecordingAfterPreview();
-
-  new ManagedModeInterstitial(web_contents, url, callback);
-}
-
-}  // namespace
-
-// static
-void ManagedModeInterstitial::ShowInterstitial(
-    int render_process_host_id,
-    int render_view_id,
-    const GURL& url,
-    const base::Callback<void(bool)>& callback) {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
-  BrowserThread::PostTask(
-      BrowserThread::UI, FROM_HERE,
-      base::Bind(&ShowInterstitialOnUIThread, render_process_host_id,
-                                              render_view_id, url, callback));
-}
-
 ManagedModeInterstitial::ManagedModeInterstitial(
     content::WebContents* web_contents,
     const GURL& url,
     const base::Callback<void(bool)>& callback)
     : web_contents_(web_contents),
       url_(url),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_ptr_factory_(this)),
+      weak_ptr_factory_(this),
       callback_(callback) {
   Profile* profile =
       Profile::FromBrowserContext(web_contents->GetBrowserContext());
   languages_ = profile->GetPrefs()->GetString(prefs::kAcceptLanguages);
 
-  interstitial_page_ = content::InterstitialPage::Create(
-      web_contents, true, url_, this);
+  interstitial_page_ =
+      content::InterstitialPage::Create(web_contents, true, url_, this);
   interstitial_page_->Show();
 }
 
 ManagedModeInterstitial::~ManagedModeInterstitial() {}
 
-void ManagedModeInterstitial::GoToNewTabPage() {
-  web_contents_->GetDelegate()->OpenURLFromTab(
-      web_contents_,
-      content::OpenURLParams(GURL(chrome::kChromeUINewTabURL),
-                             content::Referrer(),
-                             CURRENT_TAB,
-                             content::PAGE_TRANSITION_LINK,
-                             false));
-}
-
 std::string ManagedModeInterstitial::GetHTMLContents() {
   DictionaryValue strings;
   strings.SetString("blockPageTitle",
                     l10n_util::GetStringUTF16(IDS_BLOCK_INTERSTITIAL_TITLE));
-  strings.SetString("blockPageMessage",
-                    l10n_util::GetStringUTF16(IDS_BLOCK_INTERSTITIAL_MESSAGE));
-  strings.SetString("blockedUrl", net::FormatUrl(url_, languages_));
-  strings.SetString("bypassBlockMessage",
-                    l10n_util::GetStringUTF16(IDS_BYPASS_BLOCK_MESSAGE));
-  strings.SetString("bypassBlockButton",
-                    l10n_util::GetStringUTF16(IDS_BYPASS_BLOCK_BUTTON));
+
+  Profile* profile =
+      Profile::FromBrowserContext(web_contents_->GetBrowserContext());
+  ManagedUserService* managed_user_service =
+      ManagedUserServiceFactory::GetForProfile(profile);
+
+  bool allow_access_requests = managed_user_service->AccessRequestsEnabled();
+  strings.SetBoolean("allowAccessRequests", allow_access_requests);
+
+  string16 custodian = UTF8ToUTF16(managed_user_service->GetCustodianName());
+  strings.SetString(
+      "blockPageMessage",
+      allow_access_requests
+          ? l10n_util::GetStringFUTF16(IDS_BLOCK_INTERSTITIAL_MESSAGE,
+                                       custodian)
+          : l10n_util::GetStringUTF16(
+                IDS_BLOCK_INTERSTITIAL_MESSAGE_ACCESS_REQUESTS_DISABLED));
+
   strings.SetString("backButton", l10n_util::GetStringUTF16(IDS_BACK_BUTTON));
   strings.SetString(
-      "contentPacksSectionButton",
-      l10n_util::GetStringUTF16(IDS_CONTENT_PACKS_SECTION_BUTTON));
+      "requestAccessButton",
+      l10n_util::GetStringUTF16(IDS_BLOCK_INTERSTITIAL_REQUEST_ACCESS_BUTTON));
+
+  strings.SetString(
+      "requestSentMessage",
+      l10n_util::GetStringFUTF16(IDS_BLOCK_INTERSTITIAL_REQUEST_SENT_MESSAGE,
+                                 custodian));
+
   webui::SetFontAndTextDirection(&strings);
 
-  base::StringPiece html(
-      ResourceBundle::GetSharedInstance().GetRawDataResource(
-          IDR_MANAGED_MODE_BLOCK_INTERSTITIAL_HTML));
+  base::StringPiece html(ResourceBundle::GetSharedInstance().GetRawDataResource(
+      IDR_MANAGED_MODE_BLOCK_INTERSTITIAL_HTML));
 
   webui::UseVersion2 version;
   return webui::GetI18nTemplateHtml(html, &strings);
@@ -126,23 +95,9 @@ void ManagedModeInterstitial::CommandReceived(const std::string& command) {
     PREVIEW,
     BACK,
     NTP,
+    ACCESS_REQUEST,
     HISTOGRAM_BOUNDING_VALUE
   };
-
-  if (command == "\"preview\"") {
-    UMA_HISTOGRAM_ENUMERATION("ManagedMode.BlockingInterstitialCommand",
-                              PREVIEW,
-                              HISTOGRAM_BOUNDING_VALUE);
-    Profile* profile =
-        Profile::FromBrowserContext(web_contents_->GetBrowserContext());
-    ManagedUserService* service =
-        ManagedUserServiceFactory::GetForProfile(profile);
-    service->RequestAuthorization(
-        web_contents_,
-        base::Bind(&ManagedModeInterstitial::OnAuthorizationResult,
-                   weak_ptr_factory_.GetWeakPtr()));
-    return;
-  }
 
   if (command == "\"back\"") {
     UMA_HISTOGRAM_ENUMERATION("ManagedMode.BlockingInterstitialCommand",
@@ -152,32 +107,31 @@ void ManagedModeInterstitial::CommandReceived(const std::string& command) {
     return;
   }
 
-  if (command == "\"ntp\"") {
+  if (command == "\"request\"") {
     UMA_HISTOGRAM_ENUMERATION("ManagedMode.BlockingInterstitialCommand",
-                              NTP,
+                              ACCESS_REQUEST,
                               HISTOGRAM_BOUNDING_VALUE);
-    GoToNewTabPage();
+
+    Profile* profile =
+        Profile::FromBrowserContext(web_contents_->GetBrowserContext());
+    ManagedUserService* managed_user_service =
+        ManagedUserServiceFactory::GetForProfile(profile);
+    managed_user_service->AddAccessRequest(url_);
+    DVLOG(1) << "Sent access request for " << url_.spec();
+
     return;
   }
 
   NOTREACHED();
 }
 
-void ManagedModeInterstitial::OnProceed() {
-  DispatchContinueRequest(true);
-}
+void ManagedModeInterstitial::OnProceed() { NOTREACHED(); }
 
 void ManagedModeInterstitial::OnDontProceed() {
   DispatchContinueRequest(false);
 }
 
-void ManagedModeInterstitial::OnAuthorizationResult(bool success) {
-  if (success)
-    interstitial_page_->Proceed();
-}
-
 void ManagedModeInterstitial::DispatchContinueRequest(bool continue_request) {
-  BrowserThread::PostTask(BrowserThread::IO, FROM_HERE,
-                          base::Bind(callback_, continue_request));
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE, base::Bind(callback_, continue_request));
 }
-

@@ -22,7 +22,7 @@
 
 #include "base/basictypes.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "sync/base/sync_export.h"
 #include "sync/internal_api/public/base/model_type.h"
 #include "sync/internal_api/public/engine/model_safe_worker.h"
@@ -36,6 +36,8 @@ class ModelSafeWorker;
 
 namespace sessions {
 
+class NudgeTracker;
+
 class SYNC_EXPORT_PRIVATE SyncSession {
  public:
   // The Delegate services events that occur during the session requiring an
@@ -45,7 +47,12 @@ class SYNC_EXPORT_PRIVATE SyncSession {
    public:
     // The client was throttled and should cease-and-desist syncing activity
     // until the specified time.
-    virtual void OnSilencedUntil(const base::TimeTicks& silenced_until) = 0;
+    virtual void OnThrottled(const base::TimeDelta& throttle_duration) = 0;
+
+    // Some of the client's types were throttled.
+    virtual void OnTypesThrottled(
+        ModelTypeSet types,
+        const base::TimeDelta& throttle_duration) = 0;
 
     // Silenced intervals can be out of phase with individual sessions, so the
     // delegate is the only thing that can give an authoritative answer for
@@ -56,7 +63,7 @@ class SYNC_EXPORT_PRIVATE SyncSession {
     // solely based on absolute time values. So, this cannot be used to infer
     // that any given session _instance_ is silenced.  An example of reasonable
     // use is for UI reporting.
-    virtual bool IsSyncingCurrentlySilenced() = 0;
+    virtual bool IsCurrentlyThrottled() = 0;
 
     // The client has been instructed to change its short poll interval.
     virtual void OnReceivedShortPollIntervalUpdate(
@@ -86,24 +93,30 @@ class SYNC_EXPORT_PRIVATE SyncSession {
     virtual void OnSyncProtocolError(
         const sessions::SyncSessionSnapshot& snapshot) = 0;
 
+    // Called when the server wants to change the number of hints the client
+    // will buffer locally.
+    virtual void OnReceivedClientInvalidationHintBufferSize(int size) = 0;
+
    protected:
     virtual ~Delegate() {}
   };
 
-  SyncSession(SyncSessionContext* context,
-              Delegate* delegate,
-              const SyncSourceInfo& source);
+  // Build a session without a nudge tracker.  Used for poll or configure type
+  // sync cycles.
+  static SyncSession* Build(SyncSessionContext* context,
+                            Delegate* delegate);
   ~SyncSession();
 
   // Builds a thread-safe and read-only copy of the current session state.
   SyncSessionSnapshot TakeSnapshot() const;
+  SyncSessionSnapshot TakeSnapshotWithSource(
+      sync_pb::GetUpdatesCallerInfo::GetUpdatesSource legacy_updates_source)
+      const;
 
   // Builds and sends a snapshot to the session context's listeners.
+  void SendSyncCycleEndEventNotification(
+      sync_pb::GetUpdatesCallerInfo::GetUpdatesSource source);
   void SendEventNotification(SyncEngineEvent::EventCause cause);
-
-  // Overwrite the sync update source with the most recent and merge the
-  // type/state map.
-  void CoalesceSources(const SyncSourceInfo& source);
 
   // TODO(akalin): Split this into context() and mutable_context().
   SyncSessionContext* context() const { return context_; }
@@ -115,18 +128,11 @@ class SYNC_EXPORT_PRIVATE SyncSession {
     return status_controller_.get();
   }
 
-  const SyncSourceInfo& source() const { return source_; }
-
  private:
+  SyncSession(SyncSessionContext* context, Delegate* delegate);
+
   // The context for this session, guaranteed to outlive |this|.
   SyncSessionContext* const context_;
-
-  // The source for initiating this sync session.
-  SyncSourceInfo source_;
-
-  // A list of sources for sessions that have been merged with this one.
-  // Currently used only for logging.
-  std::vector<SyncSourceInfo> debug_info_sources_list_;
 
   // The delegate for this session, must never be NULL.
   Delegate* const delegate_;

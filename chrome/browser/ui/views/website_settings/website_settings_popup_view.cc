@@ -5,7 +5,7 @@
 #include "chrome/browser/ui/views/website_settings/website_settings_popup_view.h"
 
 #include "base/strings/string_number_conversions.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/certificate_viewer.h"
 #include "chrome/browser/infobars/infobar_service.h"
 #include "chrome/browser/profiles/profile.h"
@@ -18,7 +18,6 @@
 #include "chrome/common/url_constants.h"
 #include "content/public/browser/cert_store.h"
 #include "content/public/browser/user_metrics.h"
-#include "googleurl/src/gurl.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
@@ -45,6 +44,7 @@
 #include "ui/views/layout/layout_manager.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
+#include "url/gurl.h"
 
 namespace {
 
@@ -181,11 +181,11 @@ PopupHeaderView::PopupHeaderView(views::ButtonListener* close_button_listener)
       new views::ImageButton(close_button_listener);
   ResourceBundle& rb = ResourceBundle::GetSharedInstance();
   close_button->SetImage(views::CustomButton::STATE_NORMAL,
-                         rb.GetImageNamed(IDR_CLOSE_BAR).ToImageSkia());
+                         rb.GetImageNamed(IDR_CLOSE_2).ToImageSkia());
   close_button->SetImage(views::CustomButton::STATE_HOVERED,
-                         rb.GetImageNamed(IDR_CLOSE_BAR_H).ToImageSkia());
+                         rb.GetImageNamed(IDR_CLOSE_2_H).ToImageSkia());
   close_button->SetImage(views::CustomButton::STATE_PRESSED,
-                         rb.GetImageNamed(IDR_CLOSE_BAR_P).ToImageSkia());
+                         rb.GetImageNamed(IDR_CLOSE_2_P).ToImageSkia());
   layout->AddView(close_button, 1, 1, views::GridLayout::TRAILING,
                   views::GridLayout::LEADING);
 
@@ -222,8 +222,8 @@ void PopupHeaderView::SetIdentityStatus(const string16& status,
 InternalPageInfoPopupView::InternalPageInfoPopupView(views::View* anchor_view)
     : BubbleDelegateView(anchor_view, views::BubbleBorder::TOP_LEFT) {
   // Compensate for built-in vertical padding in the anchor view's image.
-  set_anchor_insets(gfx::Insets(kLocationIconVerticalMargin, 0,
-                                kLocationIconVerticalMargin, 0));
+  set_anchor_view_insets(gfx::Insets(kLocationIconVerticalMargin, 0,
+                                     kLocationIconVerticalMargin, 0));
 
   const int kSpacing = 4;
   SetLayoutManager(new views::BoxLayout(views::BoxLayout::kHorizontal, kSpacing,
@@ -261,11 +261,12 @@ void WebsiteSettingsPopupView::ShowPopup(views::View* anchor_view,
                                          const GURL& url,
                                          const content::SSLStatus& ssl,
                                          Browser* browser) {
-  if (InternalChromePage(url))
+  if (InternalChromePage(url)) {
     new InternalPageInfoPopupView(anchor_view);
-  else
+  } else {
     new WebsiteSettingsPopupView(anchor_view, profile, web_contents, url, ssl,
                                  browser);
+  }
 }
 
 WebsiteSettingsPopupView::WebsiteSettingsPopupView(
@@ -291,8 +292,8 @@ WebsiteSettingsPopupView::WebsiteSettingsPopupView(
       connection_info_content_(NULL),
       page_info_content_(NULL) {
   // Compensate for built-in vertical padding in the anchor view's image.
-  set_anchor_insets(gfx::Insets(kLocationIconVerticalMargin, 0,
-                                kLocationIconVerticalMargin, 0));
+  set_anchor_view_insets(gfx::Insets(kLocationIconVerticalMargin, 0,
+                                     kLocationIconVerticalMargin, 0));
 
   views::GridLayout* layout = new views::GridLayout(this);
   SetLayoutManager(layout);
@@ -310,7 +311,7 @@ WebsiteSettingsPopupView::WebsiteSettingsPopupView(
   layout->AddView(header_);
 
   layout->AddPaddingRow(1, kHeaderMarginBottom);
-  tabbed_pane_ = new views::TabbedPane();
+  tabbed_pane_ = new views::TabbedPane(false);
   layout->StartRow(1, content_column);
   layout->AddView(tabbed_pane_);
   // Tabs must be added after the tabbed_pane_ was added to the views
@@ -336,16 +337,11 @@ WebsiteSettingsPopupView::WebsiteSettingsPopupView(
   views::BubbleDelegateView::CreateBubble(this)->Show();
   SizeToContents();
 
-  TabSpecificContentSettings* content_settings =
-      TabSpecificContentSettings::FromWebContents(web_contents);
-  InfoBarService* infobar_service =
-      InfoBarService::FromWebContents(web_contents);
-  presenter_.reset(new WebsiteSettings(this, profile,
-                                       content_settings,
-                                       infobar_service,
-                                       url,
-                                       ssl,
-                                       content::CertStore::GetInstance()));
+  presenter_.reset(new WebsiteSettings(
+      this, profile,
+      TabSpecificContentSettings::FromWebContents(web_contents),
+      InfoBarService::FromWebContents(web_contents), url, ssl,
+      content::CertStore::GetInstance()));
 }
 
 void WebsiteSettingsPopupView::OnPermissionChanged(
@@ -515,6 +511,10 @@ void WebsiteSettingsPopupView::SetIdentityInfo(
           l10n_util::GetStringUTF16(IDS_WEBSITE_SETTINGS_IDENTITY_VERIFIED);
       text_color = kIdentityVerifiedTextColor;
       break;
+    case WebsiteSettings::SITE_IDENTITY_STATUS_ADMIN_PROVIDED_CERT:
+      identity_status_text =
+          l10n_util::GetStringUTF16(IDS_CERT_POLICY_PROVIDED_CERT_HEADER);
+      break;
     default:
       identity_status_text =
          l10n_util::GetStringUTF16(IDS_WEBSITE_SETTINGS_IDENTITY_NOT_VERIFIED);
@@ -606,17 +606,17 @@ views::View* WebsiteSettingsPopupView::CreateConnectionTab() {
   pane->AddChildView(identity_info_content_);
 
   // Add connection section.
-  pane->AddChildView(new views::Separator());
+  pane->AddChildView(new views::Separator(views::Separator::HORIZONTAL));
   connection_info_content_ = new views::View();
   pane->AddChildView(connection_info_content_);
 
   // Add page info section.
-  pane->AddChildView(new views::Separator());
+  pane->AddChildView(new views::Separator(views::Separator::HORIZONTAL));
   page_info_content_ = new views::View();
   pane->AddChildView(page_info_content_);
 
   // Add help center link.
-  pane->AddChildView(new views::Separator());
+  pane->AddChildView(new views::Separator(views::Separator::HORIZONTAL));
   help_center_link_ = new views::Link(
       l10n_util::GetStringUTF16(IDS_PAGE_INFO_HELP_CENTER_LINK));
   help_center_link_->set_listener(this);

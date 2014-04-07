@@ -8,17 +8,17 @@
 #include "base/json/json_string_value_serializer.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/path_service.h"
-#include "base/string_util.h"
 #include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/test/test_timeouts.h"
-#include "base/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/automation/tab_proxy.h"
 #include "chrome/test/ui/ui_test.h"
-#include "googleurl/src/gurl.h"
 #include "net/base/net_util.h"
+#include "url/gurl.h"
 
 namespace {
 
@@ -143,20 +143,24 @@ class DomCheckerTest : public UITest {
   }
 
   bool WaitUntilTestCompletes(TabProxy* tab) {
-    return WaitUntilJavaScriptCondition(tab, L"",
+    return WaitUntilJavaScriptCondition(
+        tab,
+        std::wstring(),
         L"window.domAutomationController.send(automation.IsDone());",
         TestTimeouts::large_test_timeout());
   }
 
   bool GetTestCount(TabProxy* tab, int* test_count) {
-    return tab->ExecuteAndExtractInt(L"",
+    return tab->ExecuteAndExtractInt(
+        std::wstring(),
         L"window.domAutomationController.send(automation.GetTestCount());",
         test_count);
   }
 
   bool GetTestsFailed(TabProxy* tab, ResultsSet* tests_failed) {
     std::wstring json_wide;
-    bool succeeded = tab->ExecuteAndExtractString(L"",
+    bool succeeded = tab->ExecuteAndExtractString(
+        std::wstring(),
         L"window.domAutomationController.send("
         L"    JSON.stringify(automation.GetFailures()));",
         &json_wide);

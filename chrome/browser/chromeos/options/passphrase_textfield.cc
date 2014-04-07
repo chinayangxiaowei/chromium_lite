@@ -4,16 +4,22 @@
 
 #include "chrome/browser/chromeos/options/passphrase_textfield.h"
 
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 
 namespace chromeos {
 
-PassphraseTextfield::PassphraseTextfield(bool show_fake)
+PassphraseTextfield::PassphraseTextfield()
     : Textfield(views::Textfield::STYLE_OBSCURED),
-      show_fake_(show_fake),
+      show_fake_(false),
       changed_(true) {
+}
+
+void PassphraseTextfield::SetShowFake(bool show_fake) {
+  show_fake_ = show_fake;
   if (show_fake_)
     SetFakePassphrase();
+  else
+    ClearFakePassphrase();
 }
 
 void PassphraseTextfield::OnFocus() {

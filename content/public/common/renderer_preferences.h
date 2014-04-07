@@ -37,6 +37,14 @@ enum RendererPreferencesSubpixelRenderingEnum {
   RENDERER_PREFERENCES_SUBPIXEL_RENDERING_VBGR,
 };
 
+enum TapMultipleTargetsStrategy {
+  TAP_MULTIPLE_TARGETS_STRATEGY_ZOOM = 0,
+  TAP_MULTIPLE_TARGETS_STRATEGY_POPUP,
+  TAP_MULTIPLE_TARGETS_STRATEGY_NONE,
+
+  TAP_MULTIPLE_TARGETS_STRATEGY_MAX = TAP_MULTIPLE_TARGETS_STRATEGY_NONE,
+};
+
 struct CONTENT_EXPORT RendererPreferences {
   RendererPreferences();
   ~RendererPreferences();
@@ -110,8 +118,8 @@ struct CONTENT_EXPORT RendererPreferences {
   // being overridden for the current navigation.
   std::string user_agent_override;
 
-  // Specifies whether renderer input event throttle is enabled.
-  bool throttle_input_events;
+  // The accept-languages of the browser, comma-separated.
+  std::string accept_languages;
 
   // Specifies whether the renderer reports frame name changes to the browser
   // process.
@@ -126,6 +134,9 @@ struct CONTENT_EXPORT RendererPreferences {
 
   // Controls deacceleration of touchscreen-initiated flings.
   std::vector<float> touchscreen_fling_profile;
+
+  // How to handle a tap gesture touching multiple targets
+  TapMultipleTargetsStrategy tap_multiple_targets_strategy;
 };
 
 }  // namespace content

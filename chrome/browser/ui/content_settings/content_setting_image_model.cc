@@ -33,7 +33,7 @@ class ContentSettingGeolocationImageModel : public ContentSettingImageModel {
 // Image model for displaying media icons in the location bar.
 class ContentSettingMediaImageModel : public ContentSettingImageModel {
  public:
-  ContentSettingMediaImageModel();
+  explicit ContentSettingMediaImageModel(ContentSettingsType type);
 
   virtual void UpdateFromWebContents(WebContents* web_contents) OVERRIDE;
 };
@@ -48,6 +48,13 @@ class ContentSettingRPHImageModel : public ContentSettingImageModel {
 class ContentSettingNotificationsImageModel : public ContentSettingImageModel {
  public:
   ContentSettingNotificationsImageModel();
+
+  virtual void UpdateFromWebContents(WebContents* web_contents) OVERRIDE;
+};
+
+class ContentSettingMIDISysExImageModel : public ContentSettingImageModel {
+ public:
+  ContentSettingMIDISysExImageModel();
 
   virtual void UpdateFromWebContents(WebContents* web_contents) OVERRIDE;
 };
@@ -90,6 +97,7 @@ void ContentSettingBlockedImageModel::UpdateFromWebContents(
     {CONTENT_SETTINGS_TYPE_POPUPS, IDR_BLOCKED_POPUPS},
     {CONTENT_SETTINGS_TYPE_MIXEDSCRIPT, IDR_BLOCKED_MIXED_CONTENT},
     {CONTENT_SETTINGS_TYPE_PPAPI_BROKER, IDR_BLOCKED_PPAPI_BROKER},
+    {CONTENT_SETTINGS_TYPE_AUTOMATIC_DOWNLOADS, IDR_BLOCKED_DOWNLOADS},
   };
   static const ContentSettingsTypeIdEntry kBlockedTooltipIDs[] = {
     {CONTENT_SETTINGS_TYPE_COOKIES, IDS_BLOCKED_COOKIES_TITLE},
@@ -100,9 +108,12 @@ void ContentSettingBlockedImageModel::UpdateFromWebContents(
     {CONTENT_SETTINGS_TYPE_MIXEDSCRIPT,
         IDS_BLOCKED_DISPLAYING_INSECURE_CONTENT},
     {CONTENT_SETTINGS_TYPE_PPAPI_BROKER, IDS_BLOCKED_PPAPI_BROKER_TITLE},
+    {CONTENT_SETTINGS_TYPE_AUTOMATIC_DOWNLOADS, IDS_BLOCKED_DOWNLOAD_TITLE},
   };
   static const ContentSettingsTypeIdEntry kBlockedExplanatoryTextIDs[] = {
     {CONTENT_SETTINGS_TYPE_POPUPS, IDS_BLOCKED_POPUPS_EXPLANATORY_TEXT},
+    {CONTENT_SETTINGS_TYPE_AUTOMATIC_DOWNLOADS,
+        IDS_BLOCKED_DOWNLOADS_EXPLANATION},
   };
 
   ContentSettingsType type = get_content_settings_type();
@@ -136,10 +147,12 @@ void ContentSettingBlockedImageModel::UpdateFromWebContents(
     static const ContentSettingsTypeIdEntry kAccessedIconIDs[] = {
       {CONTENT_SETTINGS_TYPE_COOKIES, IDR_ACCESSED_COOKIES},
       {CONTENT_SETTINGS_TYPE_PPAPI_BROKER, IDR_BLOCKED_PPAPI_BROKER},
+      {CONTENT_SETTINGS_TYPE_AUTOMATIC_DOWNLOADS, IDR_ALLOWED_DOWNLOADS},
     };
     static const ContentSettingsTypeIdEntry kAccessedTooltipIDs[] = {
       {CONTENT_SETTINGS_TYPE_COOKIES, IDS_ACCESSED_COOKIES_TITLE},
       {CONTENT_SETTINGS_TYPE_PPAPI_BROKER, IDS_ALLOWED_PPAPI_BROKER_TITLE},
+      {CONTENT_SETTINGS_TYPE_AUTOMATIC_DOWNLOADS, IDS_ALLOWED_DOWNLOAD_TITLE},
     };
     icon_id = GetIdForContentType(
         kAccessedIconIDs, arraysize(kAccessedIconIDs), type);
@@ -168,31 +181,53 @@ void ContentSettingGeolocationImageModel::UpdateFromWebContents(
       TabSpecificContentSettings::FromWebContents(web_contents);
   if (!content_settings)
     return;
-  const GeolocationSettingsState& settings_state = content_settings->
-      geolocation_settings_state();
-  if (settings_state.state_map().empty())
+  const ContentSettingsUsagesState& usages_state = content_settings->
+      geolocation_usages_state();
+  if (usages_state.state_map().empty())
     return;
   set_visible(true);
 
   // If any embedded site has access the allowed icon takes priority over the
   // blocked icon.
-  unsigned int tab_state_flags = 0;
-  settings_state.GetDetailedInfo(NULL, &tab_state_flags);
+  unsigned int state_flags = 0;
+  usages_state.GetDetailedInfo(NULL, &state_flags);
   bool allowed =
-      !!(tab_state_flags & GeolocationSettingsState::TABSTATE_HAS_ANY_ALLOWED);
-  set_icon(allowed ? IDR_GEOLOCATION_ALLOWED_LOCATIONBAR_ICON :
-      IDR_GEOLOCATION_DENIED_LOCATIONBAR_ICON);
+      !!(state_flags & ContentSettingsUsagesState::TABSTATE_HAS_ANY_ALLOWED);
+  set_icon(allowed ? IDR_ALLOWED_LOCATION : IDR_BLOCKED_LOCATION);
   set_tooltip(l10n_util::GetStringUTF8(allowed ?
       IDS_GEOLOCATION_ALLOWED_TOOLTIP : IDS_GEOLOCATION_BLOCKED_TOOLTIP));
 }
 
-ContentSettingMediaImageModel::ContentSettingMediaImageModel()
-    : ContentSettingImageModel(CONTENT_SETTINGS_TYPE_MEDIASTREAM) {
+ContentSettingMediaImageModel::ContentSettingMediaImageModel(
+    ContentSettingsType type)
+    : ContentSettingImageModel(type) {
 }
 
 void ContentSettingMediaImageModel::UpdateFromWebContents(
     WebContents* web_contents) {
   set_visible(false);
+
+  // As long as a single icon is used to display the status of the camera and
+  // microphone usage only display an icon for the
+  // CONTENT_SETTINGS_TYPE_MEDIASTREAM. Don't display anything for
+  // CONTENT_SETTINGS_TYPE_MEDIASTREAM_MIC,
+  // CONTENT_SETTINGS_TYPE_MEDIASTREAM_CAMERA.
+  // FIXME: Remove this hack and either display a two omnibox icons (one for
+  // camera and one for microphone), or don't create one image model per
+  // content type but per icon to display. The later is probably the right
+  // thing to do, bebacuse this also allows to add more content settings type
+  // for which no omnibox icon exists.
+  if (get_content_settings_type() == CONTENT_SETTINGS_TYPE_MEDIASTREAM_MIC ||
+      get_content_settings_type() == CONTENT_SETTINGS_TYPE_MEDIASTREAM_CAMERA) {
+    return;
+  }
+
+  // The ContentSettingMediaImageModel must not be used with a content type
+  // other then: CONTENT_SETTINGS_TYPE_MEDIASTREAM,
+  // CONTENT_SETTINGS_TYPE_MEDIASTREAM_MIC,
+  // CONTENT_SETTINGS_TYPE_MEDIASTREAM_CAMERA.
+  DCHECK_EQ(get_content_settings_type(), CONTENT_SETTINGS_TYPE_MEDIASTREAM);
+
   if (!web_contents)
     return;
 
@@ -200,24 +235,46 @@ void ContentSettingMediaImageModel::UpdateFromWebContents(
       TabSpecificContentSettings::FromWebContents(web_contents);
   if (!content_settings)
     return;
+  TabSpecificContentSettings::MicrophoneCameraState state =
+      content_settings->GetMicrophoneCameraState();
 
-  bool blocked =
-      content_settings->IsContentBlocked(CONTENT_SETTINGS_TYPE_MEDIASTREAM);
-  if (!blocked &&
-      !content_settings->IsContentAllowed(get_content_settings_type()))
-    return;
-
-  set_tooltip(
-      l10n_util::GetStringUTF8(blocked ?
-          IDS_MEDIASTREAM_BLOCKED_TOOLTIP : IDS_MEDIASTREAM_ALLOWED_TOOLTIP));
-  set_icon(blocked ? IDR_BLOCKED_MEDIA : IDR_ASK_MEDIA);
+  switch (state) {
+    case TabSpecificContentSettings::MICROPHONE_CAMERA_NOT_ACCESSED:
+      // If neither the microphone nor the camera stream was accessed then no
+      // icon is displayed in the omnibox.
+      return;
+    case TabSpecificContentSettings::MICROPHONE_ACCESSED:
+      set_icon(IDR_ASK_MEDIA);
+      set_tooltip(l10n_util::GetStringUTF8(IDS_MICROPHONE_ACCESSED));
+      break;
+    case TabSpecificContentSettings::CAMERA_ACCESSED:
+      set_icon(IDR_ASK_MEDIA);
+      set_tooltip(l10n_util::GetStringUTF8(IDS_CAMERA_ACCESSED));
+      break;
+    case TabSpecificContentSettings::MICROPHONE_CAMERA_ACCESSED:
+      set_icon(IDR_ASK_MEDIA);
+      set_tooltip(l10n_util::GetStringUTF8(IDS_MICROPHONE_CAMERA_ALLOWED));
+      break;
+    case TabSpecificContentSettings::MICROPHONE_BLOCKED:
+      set_icon(IDR_BLOCKED_MEDIA);
+      set_tooltip(l10n_util::GetStringUTF8(IDS_MICROPHONE_BLOCKED));
+      break;
+    case TabSpecificContentSettings::CAMERA_BLOCKED:
+      set_icon(IDR_BLOCKED_MEDIA);
+      set_tooltip(l10n_util::GetStringUTF8(IDS_CAMERA_BLOCKED));
+      break;
+    case TabSpecificContentSettings::MICROPHONE_CAMERA_BLOCKED:
+      set_icon(IDR_BLOCKED_MEDIA);
+      set_tooltip(l10n_util::GetStringUTF8(IDS_MICROPHONE_CAMERA_BLOCKED));
+      break;
+  }
   set_visible(true);
 }
 
 ContentSettingRPHImageModel::ContentSettingRPHImageModel()
     : ContentSettingImageModel(
         CONTENT_SETTINGS_TYPE_PROTOCOL_HANDLERS) {
-  set_icon(IDR_REGISTER_PROTOCOL_HANDLER_LOCATIONBAR_ICON);
+  set_icon(IDR_REGISTER_PROTOCOL_HANDLER);
   set_tooltip(l10n_util::GetStringUTF8(IDS_REGISTER_PROTOCOL_HANDLER_TOOLTIP));
 }
 
@@ -247,6 +304,36 @@ void ContentSettingNotificationsImageModel::UpdateFromWebContents(
   set_visible(false);
 }
 
+ContentSettingMIDISysExImageModel::ContentSettingMIDISysExImageModel()
+    : ContentSettingImageModel(CONTENT_SETTINGS_TYPE_MIDI_SYSEX) {
+}
+
+void ContentSettingMIDISysExImageModel::UpdateFromWebContents(
+    WebContents* web_contents) {
+  set_visible(false);
+  if (!web_contents)
+    return;
+  TabSpecificContentSettings* content_settings =
+      TabSpecificContentSettings::FromWebContents(web_contents);
+  if (!content_settings)
+    return;
+  const ContentSettingsUsagesState& usages_state =
+      content_settings->midi_usages_state();
+  if (usages_state.state_map().empty())
+    return;
+  set_visible(true);
+
+  // If any embedded site has access the allowed icon takes priority over the
+  // blocked icon.
+  unsigned int state_flags = 0;
+  usages_state.GetDetailedInfo(NULL, &state_flags);
+  bool allowed =
+      !!(state_flags & ContentSettingsUsagesState::TABSTATE_HAS_ANY_ALLOWED);
+  set_icon(allowed ? IDR_ALLOWED_MIDI_SYSEX : IDR_BLOCKED_MIDI_SYSEX);
+  set_tooltip(l10n_util::GetStringUTF8(allowed ?
+      IDS_MIDI_SYSEX_ALLOWED_TOOLTIP : IDS_MIDI_SYSEX_BLOCKED_TOOLTIP));
+}
+
 ContentSettingImageModel::ContentSettingImageModel(
     ContentSettingsType content_settings_type)
     : content_settings_type_(content_settings_type),
@@ -267,7 +354,11 @@ ContentSettingImageModel*
     case CONTENT_SETTINGS_TYPE_PROTOCOL_HANDLERS:
       return new ContentSettingRPHImageModel();
     case CONTENT_SETTINGS_TYPE_MEDIASTREAM:
-      return new ContentSettingMediaImageModel();
+    case CONTENT_SETTINGS_TYPE_MEDIASTREAM_MIC:
+    case CONTENT_SETTINGS_TYPE_MEDIASTREAM_CAMERA:
+      return new ContentSettingMediaImageModel(content_settings_type);
+    case CONTENT_SETTINGS_TYPE_MIDI_SYSEX:
+      return new ContentSettingMIDISysExImageModel();
     default:
       return new ContentSettingBlockedImageModel(content_settings_type);
   }

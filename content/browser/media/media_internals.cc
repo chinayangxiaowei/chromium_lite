@@ -5,8 +5,8 @@
 #include "content/browser/media/media_internals.h"
 
 #include "base/memory/scoped_ptr.h"
-#include "base/string16.h"
-#include "base/stringprintf.h"
+#include "base/strings/string16.h"
+#include "base/strings/stringprintf.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_ui.h"
 #include "media/base/media_log.h"
@@ -48,18 +48,26 @@ void MediaInternals::OnSetAudioStreamVolume(
                     "volume", new base::FundamentalValue(volume));
 }
 
-void MediaInternals::OnMediaEvent(
-    int render_process_id, const media::MediaLogEvent& event) {
+void MediaInternals::OnMediaEvents(
+    int render_process_id, const std::vector<media::MediaLogEvent>& events) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
 
   // Notify observers that |event| has occured.
-  base::DictionaryValue dict;
-  dict.SetInteger("renderer", render_process_id);
-  dict.SetInteger("player", event.id);
-  dict.SetString("type", media::MediaLog::EventTypeToString(event.type));
-  dict.SetDouble("time", event.time.ToDoubleT());
-  dict.Set("params", event.params.DeepCopy());
-  SendUpdate("media.onMediaEvent", &dict);
+  for (std::vector<media::MediaLogEvent>::const_iterator event = events.begin();
+      event != events.end(); ++event) {
+    base::DictionaryValue dict;
+    dict.SetInteger("renderer", render_process_id);
+    dict.SetInteger("player", event->id);
+    dict.SetString("type", media::MediaLog::EventTypeToString(event->type));
+
+    int64 ticks = event->time.ToInternalValue();
+    double ticks_millis =
+        ticks / static_cast<double>(base::Time::kMicrosecondsPerMillisecond);
+
+    dict.SetDouble("ticksMillis", ticks_millis);
+    dict.Set("params", event->params.DeepCopy());
+    SendUpdate("media.onMediaEvent", &dict);
+  }
 }
 
 void MediaInternals::AddUpdateCallback(const UpdateCallback& callback) {

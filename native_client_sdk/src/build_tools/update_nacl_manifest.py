@@ -16,6 +16,8 @@ import cStringIO
 import difflib
 import email
 import json
+import logging
+import logging.handlers
 import manifest_util
 import optparse
 import os
@@ -28,17 +30,20 @@ import time
 import traceback
 import urllib2
 
-
 MANIFEST_BASENAME = 'naclsdk_manifest2.json'
 SCRIPT_DIR = os.path.dirname(__file__)
 REPO_MANIFEST = os.path.join(SCRIPT_DIR, 'json', MANIFEST_BASENAME)
 GS_BUCKET_PATH = 'gs://nativeclient-mirror/nacl/nacl_sdk/'
 GS_SDK_MANIFEST = GS_BUCKET_PATH + MANIFEST_BASENAME
+GS_SDK_MANIFEST_LOG = GS_BUCKET_PATH + MANIFEST_BASENAME + '.log'
 GS_MANIFEST_BACKUP_DIR = GS_BUCKET_PATH + 'manifest_backups/'
 
 CANARY_BUNDLE_NAME = 'pepper_canary'
 CANARY = 'canary'
 NACLPORTS_ARCHIVE_NAME = 'naclports.tar.bz2'
+
+
+logger = logging.getLogger(__name__)
 
 
 def SplitVersion(version_string):
@@ -172,16 +177,22 @@ class Delegate(object):
           effect is that text in stdin is copied to |dest|."""
     raise NotImplementedError()
 
-  def Print(self, *args):
-    """Print a message."""
+  def SendMail(self, subject, text):
+    """Send an email.
+
+    Args:
+      subject: The subject of the email.
+      text: The text of the email.
+    """
     raise NotImplementedError()
 
 
 class RealDelegate(Delegate):
-  def __init__(self, dryrun=False, gsutil=None, verbose=False):
+  def __init__(self, dryrun=False, gsutil=None, mailfrom=None, mailto=None):
     super(RealDelegate, self).__init__()
     self.dryrun = dryrun
-    self.verbose = verbose
+    self.mailfrom = mailfrom
+    self.mailto = mailto
     if gsutil:
       self.gsutil = gsutil
     else:
@@ -211,7 +222,7 @@ class RealDelegate(Delegate):
   def GsUtil_ls(self, url):
     """See Delegate.GsUtil_ls"""
     try:
-      stdout = self._RunGsUtil(None, 'ls', url)
+      stdout = self._RunGsUtil(None, False, 'ls', url)
     except subprocess.CalledProcessError:
       return []
 
@@ -220,34 +231,43 @@ class RealDelegate(Delegate):
 
   def GsUtil_cat(self, url):
     """See Delegate.GsUtil_cat"""
-    return self._RunGsUtil(None, 'cat', url)
+    return self._RunGsUtil(None, True, 'cat', url)
 
   def GsUtil_cp(self, src, dest, stdin=None):
     """See Delegate.GsUtil_cp"""
     if self.dryrun:
-      self.Trace("Skipping upload: %s -> %s" % (src, dest))
+      logger.info("Skipping upload: %s -> %s" % (src, dest))
+      if src == '-':
+        logger.info('  contents = """%s"""' % stdin)
       return
 
-    return self._RunGsUtil(stdin, 'cp', '-a', 'public-read', src, dest)
+    return self._RunGsUtil(stdin, True, 'cp', '-a', 'public-read', src, dest)
 
-  def Print(self, *args):
-    sys.stdout.write(' '.join(map(str, args)) + '\n')
+  def SendMail(self, subject, text):
+    """See Delegate.SendMail"""
+    if self.mailfrom and self.mailto:
+      msg = email.MIMEMultipart.MIMEMultipart()
+      msg['From'] = self.mailfrom
+      msg['To'] = ', '.join(self.mailto)
+      msg['Date'] = email.Utils.formatdate(localtime=True)
+      msg['Subject'] = subject
+      msg.attach(email.MIMEText.MIMEText(text))
+      smtp_obj = smtplib.SMTP('localhost')
+      smtp_obj.sendmail(self.mailfrom, self.mailto, msg.as_string())
+      smtp_obj.close()
 
-  def Trace(self, *args):
-    if self.verbose:
-      self.Print(*args)
-
-  def _RunGsUtil(self, stdin, *args):
+  def _RunGsUtil(self, stdin, log_errors, *args):
     """Run gsutil as a subprocess.
 
     Args:
       stdin: If non-None, used as input to the process.
+      log_errors: If True, write errors to stderr.
       *args: Arguments to pass to gsutil. The first argument should be an
           operation such as ls, cp or cat.
     Returns:
       The stdout from the process."""
     cmd = [self.gsutil] + list(args)
-    self.Trace("Running: %s" % str(cmd))
+    logger.debug("Running: %s" % str(cmd))
     if stdin:
       stdin_pipe = subprocess.PIPE
     else:
@@ -261,9 +281,39 @@ class RealDelegate(Delegate):
       raise manifest_util.Error("Unable to run '%s': %s" % (cmd[0], str(e)))
 
     if process.returncode:
-      sys.stderr.write(stderr)
+      if log_errors:
+        logger.error(stderr)
       raise subprocess.CalledProcessError(process.returncode, ' '.join(cmd))
     return stdout
+
+
+class GsutilLoggingHandler(logging.handlers.BufferingHandler):
+  def __init__(self, delegate):
+    logging.handlers.BufferingHandler.__init__(self, capacity=0)
+    self.delegate = delegate
+
+  def shouldFlush(self, record):
+    # BufferingHandler.shouldFlush automatically flushes if the length of the
+    # buffer is greater than self.capacity. We don't want that behavior, so
+    # return False here.
+    return False
+
+  def flush(self):
+    # Do nothing here. We want to be explicit about uploading the log.
+    pass
+
+  def upload(self):
+    output_list = []
+    for record in self.buffer:
+      output_list.append(self.format(record))
+    output = '\n'.join(output_list)
+    self.delegate.GsUtil_cp('-', GS_SDK_MANIFEST_LOG, stdin=output)
+
+    logging.handlers.BufferingHandler.flush(self)
+
+
+class NoSharedVersionException(Exception):
+  pass
 
 
 class VersionFinder(object):
@@ -398,13 +448,19 @@ class VersionFinder(object):
           for version, channel, missing_archives in skipped_versions:
             archive_msg = '(missing %s)' % (', '.join(missing_archives))
           msg += '  %s (%s) %s\n' % (version, channel, archive_msg)
-        raise Exception(msg)
+        raise NoSharedVersionException(msg)
+
+      logger.info('Found shared version: %s, channel: %s' % (
+          version, channel))
 
       archives, missing_archives = self.GetAvailablePlatformArchivesFor(
           version, allow_trunk_revisions)
 
       if not missing_archives:
         return version, channel, archives
+
+      logger.info('  skipping. Missing archives: %s' % (
+          ', '.join(missing_archives)))
 
       skipped_versions.append((version, channel, missing_archives))
 
@@ -465,14 +521,17 @@ class VersionFinder(object):
       platform_generators.append(generator_func(platform))
 
     shared_version = None
-    platform_versions = [(tuple(), '')] * len(platforms)
+    platform_versions = []
+    for platform_gen in platform_generators:
+      platform_versions.append(platform_gen.next())
+
     while True:
-      try:
-        for i, platform_gen in enumerate(platform_generators):
-          if platform_versions[i][1] != shared_version:
-            platform_versions[i] = platform_gen.next()
-      except StopIteration:
-        return
+      if logger.isEnabledFor(logging.INFO):
+        msg_info = []
+        for i, platform in enumerate(platforms):
+          msg_info.append('%s: %s' % (
+              platform, JoinVersion(platform_versions[i][1])))
+        logger.info('Checking versions: %s' % ', '.join(msg_info))
 
       shared_version = min(v for c, v in platform_versions)
 
@@ -484,6 +543,15 @@ class VersionFinder(object):
 
         # force increment to next version for all platforms
         shared_version = None
+
+      # Find the next version for any platform that isn't at the shared version.
+      try:
+        for i, platform_gen in enumerate(platform_generators):
+          if platform_versions[i][1] != shared_version:
+            platform_versions[i] = platform_gen.next()
+      except StopIteration:
+        return
+
 
   def _GetAvailableArchivesFor(self, version_string):
     """Downloads a list of all available archives for a given version.
@@ -507,10 +575,15 @@ class VersionFinder(object):
     return filter(lambda a: a + '.json' in manifests, archives)
 
 
+class UnknownLockedBundleException(Exception):
+  pass
+
+
 class Updater(object):
   def __init__(self, delegate):
     self.delegate = delegate
     self.versions_to_update = []
+    self.locked_bundles = []
     self.online_manifest = manifest_util.SDKManifest()
     self._FetchOnlineManifest()
 
@@ -523,6 +596,18 @@ class Updater(object):
       channel: The stability of the pepper bundle, e.g. 'beta'
       archives: A sequence of archive URLs for this bundle."""
     self.versions_to_update.append((bundle_name, version, channel, archives))
+
+  def AddLockedBundle(self, bundle_name):
+    """Add a "locked" bundle to the updater.
+
+    A locked bundle is a bundle that wasn't found in the history. When this
+    happens, the bundle is now "locked" to whatever was last found. We want to
+    ensure that the online manifest has this bundle.
+
+    Args:
+      bundle_name: The name of the locked bundle.
+    """
+    self.locked_bundles.append(bundle_name)
 
   def Update(self, manifest):
     """Update a manifest and upload it.
@@ -541,8 +626,31 @@ class Updater(object):
     # Add 0 in case there are no stable versions.
     max_stable_version = max([0] + stable_major_versions)
 
+    # Ensure that all locked bundles exist in the online manifest.
+    for bundle_name in self.locked_bundles:
+      online_bundle = self.online_manifest.GetBundle(bundle_name)
+      if online_bundle:
+        manifest.SetBundle(online_bundle)
+      else:
+        msg = ('Attempted to update bundle "%s", but no shared versions were '
+            'found, and there is no online bundle with that name.')
+        raise UnknownLockedBundleException(msg % bundle_name)
+
+    if self.locked_bundles:
+      # Send a nagging email that we shouldn't be wasting time looking for
+      # bundles that are no longer in the history.
+      scriptname = os.path.basename(sys.argv[0])
+      subject = '[%s] Reminder: remove bundles from %s' % (scriptname,
+                                                           MANIFEST_BASENAME)
+      text = 'These bundles are not in the omahaproxy history anymore: ' + \
+              ', '.join(self.locked_bundles)
+      self.delegate.SendMail(subject, text)
+
+
+    # Update all versions.
+    logger.info('>>> Updating bundles...')
     for bundle_name, version, channel, archives in self.versions_to_update:
-      self.delegate.Print('Updating %s to %s...' % (bundle_name, version))
+      logger.info('Updating %s to %s...' % (bundle_name, version))
       bundle = manifest.GetBundle(bundle_name)
       for archive in archives:
         platform_bundle = self._GetPlatformArchiveBundle(archive)
@@ -552,18 +660,9 @@ class Updater(object):
         platform_bundle.name = bundle_name
         bundle.MergeWithBundle(platform_bundle)
 
-      # Check to ensure this bundle is newer than the online bundle.
-      online_bundle = self.online_manifest.GetBundle(bundle_name)
-      if online_bundle and online_bundle.revision >= bundle.revision:
-        self.delegate.Print(
-            '  Revision %s is not newer than than online revision %s. '
-            'Skipping.' % (bundle.revision, online_bundle.revision))
-
-        manifest.SetBundle(online_bundle)
-        continue
-
+      # Fix the stability and recommended values
       major_version = SplitVersion(version)[0]
-      if major_version < max_stable_version and channel == 'stable':
+      if major_version < max_stable_version:
         bundle.stability = 'post_stable'
       else:
         bundle.stability = channel
@@ -572,8 +671,23 @@ class Updater(object):
         bundle.recommended = 'yes'
       else:
         bundle.recommended = 'no'
+
+      # Check to ensure this bundle is newer than the online bundle.
+      online_bundle = self.online_manifest.GetBundle(bundle_name)
+      if online_bundle:
+        # This test used to be online_bundle.revision >= bundle.revision.
+        # That doesn't do quite what we want: sometimes the metadata changes
+        # but the revision stays the same -- we still want to push those
+        # changes.
+        if online_bundle.revision > bundle.revision or online_bundle == bundle:
+          logger.info(
+              '  Revision %s is not newer than than online revision %s. '
+              'Skipping.' % (bundle.revision, online_bundle.revision))
+
+          manifest.SetBundle(online_bundle)
+          continue
     self._UploadManifest(manifest)
-    self.delegate.Print('Done.')
+    logger.info('Done.')
 
   def _GetPlatformArchiveBundle(self, archive):
     """Downloads the manifest "snippet" for an archive, and reads it as a
@@ -612,7 +726,7 @@ class Updater(object):
     online_manifest_string = self.online_manifest.GetDataAsString()
 
     if self.delegate.dryrun:
-      self.delegate.Print(''.join(list(difflib.unified_diff(
+      logger.info(''.join(list(difflib.unified_diff(
           online_manifest_string.splitlines(1),
           new_manifest_string.splitlines(1)))))
       return
@@ -621,7 +735,7 @@ class Updater(object):
       online_manifest.LoadDataFromString(online_manifest_string)
 
       if online_manifest == manifest:
-        self.delegate.Print('New manifest doesn\'t differ from online manifest.'
+        logger.info('New manifest doesn\'t differ from online manifest.'
             'Skipping upload.')
         return
 
@@ -673,30 +787,39 @@ def Run(delegate, platforms, extra_archives, fixed_bundle_versions=None):
       auto_update_bundles.append(bundle)
 
   if not auto_update_bundles:
-    delegate.Print('No versions need auto-updating.')
+    logger.info('No versions need auto-updating.')
     return
 
   version_finder = VersionFinder(delegate, platforms, extra_archives)
   updater = Updater(delegate)
 
   for bundle in auto_update_bundles:
-    if bundle.name == CANARY_BUNDLE_NAME:
-      version, channel, archives = version_finder.GetMostRecentSharedCanary()
-    else:
-      version, channel, archives = version_finder.GetMostRecentSharedVersion(
-          bundle.version)
+    try:
+      if bundle.name == CANARY_BUNDLE_NAME:
+        logger.info('>>> Looking for most recent pepper_canary...')
+        version, channel, archives = version_finder.GetMostRecentSharedCanary()
+      else:
+        logger.info('>>> Looking for most recent pepper_%s...' %
+            bundle.version)
+        version, channel, archives = version_finder.GetMostRecentSharedVersion(
+            bundle.version)
+    except NoSharedVersionException:
+      # If we can't find a shared version, make sure that there is an uploaded
+      # bundle with that name already.
+      updater.AddLockedBundle(bundle.name)
+      continue
 
     if bundle.name in fixed_bundle_versions:
       # Ensure this version is valid for all platforms.
       # If it is, use the channel found above (because the channel for this
       # version may not be in the history.)
       version = fixed_bundle_versions[bundle.name]
-      delegate.Print('Fixed bundle version: %s, %s' % (bundle.name, version))
+      logger.info('Fixed bundle version: %s, %s' % (bundle.name, version))
       allow_trunk_revisions = bundle.name == CANARY_BUNDLE_NAME
       archives, missing = version_finder.GetAvailablePlatformArchivesFor(
           version, allow_trunk_revisions)
       if missing:
-        delegate.Print(
+        logger.warn(
             'Some archives for version %s of bundle %s don\'t exist: '
             'Missing %s' % (version, bundle.name, ', '.join(missing)))
         return
@@ -704,27 +827,6 @@ def Run(delegate, platforms, extra_archives, fixed_bundle_versions=None):
     updater.AddVersionToUpdate(bundle.name, version, channel, archives)
 
   updater.Update(manifest)
-
-
-def SendMail(send_from, send_to, subject, text, smtp='localhost'):
-  """Send an email.
-
-  Args:
-    send_from: The sender's email address.
-    send_to: A list of addresses to send to.
-    subject: The subject of the email.
-    text: The text of the email.
-    smtp: The smtp server to use. Default is localhost.
-  """
-  msg = email.MIMEMultipart.MIMEMultipart()
-  msg['From'] = send_from
-  msg['To'] = ', '.join(send_to)
-  msg['Date'] = email.Utils.formatdate(localtime=True)
-  msg['Subject'] = subject
-  msg.attach(email.MIMEText.MIMEText(text))
-  smtp_obj = smtplib.SMTP(smtp)
-  smtp_obj.sendmail(send_from, send_to, msg.as_string())
-  smtp_obj.close()
 
 
 class CapturedFile(object):
@@ -752,8 +854,12 @@ def main(args):
   parser.add_option('--mailto', help='send error mails to...', action='append')
   parser.add_option('-n', '--dryrun', help="don't upload the manifest.",
       action='store_true')
-  parser.add_option('-v', '--verbose', help='print more diagnotic messages.',
-      action='store_true')
+  parser.add_option('-v', '--verbose', help='print more diagnotic messages. '
+      'Use more than once for more info.',
+      action='count')
+  parser.add_option('--log-file', metavar='FILE', help='log to FILE')
+  parser.add_option('--upload-log', help='Upload log alongside the manifest.',
+                    action='store_true')
   parser.add_option('--bundle-version',
       help='Manually set a bundle version. This can be passed more than once. '
       'format: --bundle-version pepper_24=24.0.1312.25', action='append')
@@ -762,8 +868,15 @@ def main(args):
   if (options.mailfrom is None) != (not options.mailto):
     options.mailfrom = None
     options.mailto = None
-    sys.stderr.write('warning: Disabling email, one of --mailto or --mailfrom '
+    logger.warning('Disabling email, one of --mailto or --mailfrom '
         'was missing.\n')
+
+  if options.verbose >= 2:
+    logging.basicConfig(level=logging.DEBUG, filename=options.log_file)
+  elif options.verbose:
+    logging.basicConfig(level=logging.INFO, filename=options.log_file)
+  else:
+    logging.basicConfig(level=logging.WARNING, filename=options.log_file)
 
   # Parse bundle versions.
   fixed_bundle_versions = {}
@@ -778,11 +891,19 @@ def main(args):
 
   try:
     try:
-      delegate = RealDelegate(options.dryrun, options.gsutil, options.verbose)
-      # Only look for naclports archives > 26.0.1391.0 = r178222
-      extra_archives = [('naclports.tar.bz2', '26.0.1391.0')]
+      delegate = RealDelegate(options.dryrun, options.gsutil,
+                              options.mailfrom, options.mailto)
+
+      if options.upload_log:
+        gsutil_logging_handler = GsutilLoggingHandler(delegate)
+        logger.addHandler(gsutil_logging_handler)
+
+      # Only look for naclports archives >= 27. The old ports bundles don't
+      # include license information.
+      extra_archives = [('naclports.tar.bz2', '27.0.0.0')]
       Run(delegate, ('mac', 'win', 'linux'), extra_archives,
           fixed_bundle_versions)
+      return 0
     except Exception:
       if options.mailfrom and options.mailto:
         traceback.print_exc()
@@ -790,15 +911,18 @@ def main(args):
         subject = '[%s] Failed to update manifest' % (scriptname,)
         text = '%s failed.\n\nSTDERR:\n%s\n' % (scriptname,
                                                 sys.stderr.getvalue())
-        SendMail(options.mailfrom, options.mailto, subject, text)
-        sys.exit(1)
+        delegate.SendMail(subject, text)
+        return 1
       else:
         raise
+    finally:
+      if options.upload_log:
+        gsutil_logging_handler.upload()
   except manifest_util.Error as e:
     if options.debug:
       raise
-    print e
-    sys.exit(1)
+    sys.stderr.write(str(e) + '\n')
+    return 1
 
 
 if __name__ == '__main__':

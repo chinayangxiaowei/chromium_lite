@@ -7,7 +7,7 @@
 #include "base/bind.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/browser_thread.h"
 #include "net/ssl/server_bound_cert_service.h"
@@ -198,7 +198,7 @@ void CannedBrowsingDataServerBoundCertHelper::StartFetching(
     return;
   // We post a task to emulate async fetching behavior.
   completion_callback_ = callback;
-  MessageLoop::current()->PostTask(
+  base::MessageLoop::current()->PostTask(
       FROM_HERE,
       base::Bind(&CannedBrowsingDataServerBoundCertHelper::FinishFetching,
                  this));

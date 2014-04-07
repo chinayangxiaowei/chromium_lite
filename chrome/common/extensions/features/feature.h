@@ -9,13 +9,13 @@
 #include <string>
 
 #include "base/values.h"
-#include "chrome/common/chrome_version_info.h"
-#include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/manifest.h"
 
 class GURL;
 
 namespace extensions {
+
+class Extension;
 
 // Represents a single feature accessible to an extension developer, such as a
 // top-level manifest key, a permission, or a programmatic API. A feature can
@@ -88,42 +88,17 @@ class Feature {
     const std::string message_;
   };
 
+  Feature();
   virtual ~Feature();
 
   // Used by ChromeV8Context until the feature system is fully functional.
   static Availability CreateAvailability(AvailabilityResult result,
                                          const std::string& message);
 
-  // Gets the current channel as seen by the Feature system.
-  static chrome::VersionInfo::Channel GetCurrentChannel();
-
-  // Sets the current channel as seen by the Feature system. In the browser
-  // process this should be chrome::VersionInfo::GetChannel(), and in the
-  // renderer this will need to come from an IPC.
-  static void SetCurrentChannel(chrome::VersionInfo::Channel channel);
-
-  // Gets the default channel as seen by the Feature system.
-  static chrome::VersionInfo::Channel GetDefaultChannel();
-
-  // Scoped channel setter. Use for tests.
-  class ScopedCurrentChannel {
-   public:
-    explicit ScopedCurrentChannel(chrome::VersionInfo::Channel channel)
-        : original_channel_(chrome::VersionInfo::CHANNEL_UNKNOWN) {
-      original_channel_ = GetCurrentChannel();
-      SetCurrentChannel(channel);
-    }
-
-    ~ScopedCurrentChannel() {
-      SetCurrentChannel(original_channel_);
-    }
-
-   private:
-    chrome::VersionInfo::Channel original_channel_;
-  };
-
   const std::string& name() const { return name_; }
   void set_name(const std::string& name) { name_ = name; }
+  const std::set<std::string>& dependencies() { return dependencies_; }
+  bool no_parent() const { return no_parent_; }
 
   // Gets the platform the code is currently running on.
   static Platform GetCurrentPlatform();
@@ -131,8 +106,10 @@ class Feature {
   // Gets the Feature::Location value for the specified Manifest::Location.
   static Location ConvertLocation(Manifest::Location extension_location);
 
-  // TODO(justinlin): Remove and move to APIFeature when it exists.
   virtual std::set<Context>* GetContexts() = 0;
+
+  // Tests whether this is an internal API or not.
+  virtual bool IsInternal() const = 0;
 
   // Returns true if the feature is available to be parsed into a new extension
   // manifest.
@@ -165,8 +142,12 @@ class Feature {
                                              Manifest::Type type,
                                              const GURL& url) const = 0;
 
+  virtual bool IsIdInWhitelist(const std::string& extension_id) const = 0;
+
  protected:
   std::string name_;
+  std::set<std::string> dependencies_;
+  bool no_parent_;
 };
 
 }  // namespace extensions

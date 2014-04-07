@@ -7,10 +7,11 @@
 
 #include <windows.h>
 
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "ui/base/ui_export.h"
 
 namespace gfx {
+class Point;
 class Size;
 }
 
@@ -42,9 +43,9 @@ UI_EXPORT void CenterAndSizeWindow(HWND parent,
 // CreateWindow.
 UI_EXPORT void CheckWindowCreated(HWND hwnd);
 
-// Shows the system menu for |window| and sends the selected command (if the
-// user selected something.
-UI_EXPORT void ShowSystemMenu(HWND window, int screen_x, int screen_y);
+// Shows |window|'s system menu (at a specified |point| in screen coordinates).
+UI_EXPORT void ShowSystemMenu(HWND window);
+UI_EXPORT void ShowSystemMenuAtPoint(HWND window, const gfx::Point& point);
 
 // Returns the window you can use to parent a top level window.
 // Note that in some cases we create child windows not parented to its final

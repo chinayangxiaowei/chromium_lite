@@ -1,5 +1,5 @@
-# Do NOT add chrome to the list below.  We shouldn't be including files from
-# src/chrome in src/content.
+# Do NOT add chrome or components to the list below.  We shouldn't be
+# including files from src/chrome or src/components in src/content.
 include_rules = [
   # The subdirectories in content/ will manually allow their own include
   # directories in content/ so we disallow all of them.
@@ -17,10 +17,20 @@ include_rules = [
   "-base/prefs",
 
   "+cc",
+  "-cc/base/thread.h",  # http://crbug.com/249172
+  "!cc/base/thread_impl.h",  # http://crbug.com/249172
+  # If you want to use any of these files, move them to src/base first.
+  "-cc/base/hash_pair.h",
+  "-cc/base/scoped_ptr_algorithm.h",
+  "-cc/base/scoped_ptr_deque.h",
+  "-cc/base/scoped_ptr_hash_map.h",
+  "-cc/base/scoped_ptr_vector.h",
+
   "+crypto",
+  "+grit/blink_resources.h",
   "+grit/content_resources.h",
   "+grit/ui_resources.h",
-  "+grit/webkit_chromium_resources.h",
+  "+grit/ui_strings.h",
   "+grit/webkit_resources.h",
   "+grit/webkit_strings.h",
   "+grit/webui_resources_map.h",
@@ -50,9 +60,10 @@ include_rules = [
   "-tools",
 
   # Allow inclusion of third-party code:
-  "+third_party/angle",
+  "+third_party/angle_dx11",
   "+third_party/flac",
   "+third_party/gpsd",
+  "+third_party/libjingle",
   "+third_party/mozilla",
   "+third_party/npapi/bindings",
   "+third_party/skia",
@@ -60,8 +71,9 @@ include_rules = [
   "+third_party/tcmalloc",
   "+third_party/khronos",
   "+third_party/webrtc",
-  "+third_party/WebKit/Source/Platform/chromium",
-  "+third_party/WebKit/Source/WebKit/chromium",
+  "+third_party/zlib/google",
+  "+third_party/WebKit/public/platform",
+  "+third_party/WebKit/public/web",
 
   "+ui/android",
   # Aura is analogous to Win32 or a Gtk, so it is allowed.
@@ -87,8 +99,6 @@ include_rules = [
   "-ui/views",
 
   "+webkit",
-  "-webkit/dom_storage",
-  "+webkit/dom_storage/dom_storage_types.h",
 
   # For generated JNI includes.
   "+jni",

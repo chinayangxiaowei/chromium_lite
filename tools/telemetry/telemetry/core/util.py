@@ -2,11 +2,30 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 import inspect
+import os
 import socket
+import sys
 import time
 
 class TimeoutException(Exception):
   pass
+
+def GetBaseDir():
+  main_module = sys.modules['__main__']
+  if hasattr(main_module, '__file__'):
+    return os.path.dirname(os.path.abspath(main_module.__file__))
+  else:
+    return os.getcwd()
+
+def GetTelemetryDir():
+  return os.path.normpath(os.path.join(
+      __file__, os.pardir, os.pardir, os.pardir))
+
+def GetUnittestDataDir():
+  return os.path.join(GetTelemetryDir(), 'unittest_data')
+
+def GetChromiumSrcDir():
+  return os.path.normpath(os.path.join(GetTelemetryDir(), os.pardir, os.pardir))
 
 def WaitFor(condition,
             timeout, poll_interval=0.1,
@@ -66,3 +85,24 @@ def GetAvailableLocalPort():
   tmp.close()
 
   return port
+
+def CloseConnections(tab):
+  """Closes all TCP sockets held open by the browser."""
+  try:
+    tab.ExecuteJavaScript("""window.chrome && chrome.benchmarking &&
+                             chrome.benchmarking.closeConnections()""")
+  except Exception:
+    pass
+
+def GetBuildDirectories():
+  """Yields all combination of Chromium build output directories."""
+  build_dirs = ['build',
+                'out',
+                'sconsbuild',
+                'xcodebuild']
+
+  build_types = ['Debug', 'Debug_x64', 'Release', 'Release_x64']
+
+  for build_dir in build_dirs:
+    for build_type in build_types:
+      yield build_dir, build_type

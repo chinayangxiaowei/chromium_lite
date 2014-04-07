@@ -10,7 +10,7 @@
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/resource/resource_bundle.h"
+
 
 // static
 void CollectedCookiesInfoBarDelegate::Create(InfoBarService* infobar_service) {
@@ -23,9 +23,11 @@ CollectedCookiesInfoBarDelegate::CollectedCookiesInfoBarDelegate(
     : ConfirmInfoBarDelegate(infobar_service) {
 }
 
-gfx::Image* CollectedCookiesInfoBarDelegate::GetIcon() const {
-  return &ResourceBundle::GetSharedInstance().GetNativeImageNamed(
-      IDR_INFOBAR_COOKIE);
+CollectedCookiesInfoBarDelegate::~CollectedCookiesInfoBarDelegate() {
+}
+
+int CollectedCookiesInfoBarDelegate::GetIconID() const {
+  return IDR_INFOBAR_COOKIE;
 }
 
 InfoBarDelegate::Type CollectedCookiesInfoBarDelegate::GetInfoBarType() const {
@@ -47,6 +49,6 @@ string16 CollectedCookiesInfoBarDelegate::GetButtonLabel(
 }
 
 bool CollectedCookiesInfoBarDelegate::Accept() {
-  owner()->GetWebContents()->GetController().Reload(true);
+  web_contents()->GetController().Reload(true);
   return true;
 }

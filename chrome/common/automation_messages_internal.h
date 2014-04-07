@@ -14,8 +14,8 @@
 //       builds.  Since we now define the IDs based on __LINE__, to allow these
 //       IPC messages to be used to control an old version of Chrome we need
 //       the message IDs to remain the same.  This means that you should not
-//       change the line number of these types of messages. You can, however,
-//       change the browser <--> renderer messages.
+//       change the line number of these types of messages.
+
 
 #define IPC_MESSAGE_START AutomationMsgStart
 
@@ -928,7 +928,7 @@ IPC_MESSAGE_ROUTED1(AutomationMsg_MoveWindow,
 // Call BeginTracing on the browser TraceController. This will tell all
 // processes to start collecting trace events via base/debug/trace_event.h.
 IPC_SYNC_MESSAGE_CONTROL1_1(AutomationMsg_BeginTracing,
-                            std::string /* categories */,
+                            std::string /* category_patterns */,
                             bool /* success */)
 
 // End tracing (called after BeginTracing). This blocks until tracing has
@@ -957,62 +957,3 @@ IPC_SYNC_MESSAGE_CONTROL2_2(AutomationMsg_SendJSONRequest,
                             std::string /* JSON request */,
                             std::string /* JSON response */,
                             bool /* success */)
-
-// This message requests that a key press be performed.
-// Request:
-//   int - tab handle
-//   int - the ui::KeyboardCode of the key that was pressed.
-IPC_MESSAGE_CONTROL2(AutomationMsg_KeyPress,
-                     int /* tab_handle */,
-                     int /* key */)
-
-// Browser -> renderer messages.
-
-// Requests a snapshot.
-IPC_MESSAGE_ROUTED0(AutomationMsg_SnapshotEntirePage)
-
-#if !defined(NO_TCMALLOC) && (defined(OS_LINUX) || defined(OS_CHROMEOS))
-// Requests to dump a heap profile.
-IPC_MESSAGE_ROUTED1(AutomationMsg_HeapProfilerDump,
-                    std::string /* reason */)
-#endif  // !defined(NO_TCMALLOC) && (defined(OS_LINUX) || defined(OS_CHROMEOS))
-
-// Requests processing of the given mouse event.
-IPC_MESSAGE_ROUTED1(AutomationMsg_ProcessMouseEvent,
-                    AutomationMouseEvent)
-
-// Renderer -> browser messages.
-
-// Sent as a response to |AutomationMsg_Snapshot|.
-IPC_MESSAGE_ROUTED3(AutomationMsg_SnapshotEntirePageACK,
-                    bool /* success */,
-                    std::vector<unsigned char> /* png bytes */,
-                    std::string /* error message */)
-
-// Sent when the renderer has scheduled a client redirect to occur.
-IPC_MESSAGE_ROUTED2(AutomationMsg_WillPerformClientRedirect,
-                    int64 /* frame_id */,
-                    double /* # of seconds till redirect will be performed */)
-
-// Sent when the renderer has completed or canceled a client redirect for a
-// particular frame. This message may be sent multiple times for the same
-// redirect.
-IPC_MESSAGE_ROUTED1(AutomationMsg_DidCompleteOrCancelClientRedirect,
-                    int64 /* frame_id */)
-
-// Sent right before processing a mouse event at the given point.
-// This is needed in addition to AutomationMsg_ProcessMouseEventACK so that
-// the client knows where the event occurred even if the event causes a modal
-// dialog to appear which blocks further messages.
-IPC_MESSAGE_ROUTED1(AutomationMsg_WillProcessMouseEventAt,
-                    gfx::Point)
-
-// Sent when the automation mouse event has been processed.
-IPC_MESSAGE_ROUTED2(AutomationMsg_ProcessMouseEventACK,
-                    bool /* success */,
-                    std::string /* error message */)
-
-// YOUR NEW MESSAGE MIGHT NOT BELONG HERE.
-// This is the section for renderer -> browser automation messages. If it is
-// an automation <-> browser message, put it above this section. The "no line
-// number change" applies only to the automation <-> browser messages.

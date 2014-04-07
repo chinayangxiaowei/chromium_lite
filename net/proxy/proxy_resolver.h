@@ -7,12 +7,12 @@
 
 #include "base/logging.h"
 #include "base/memory/ref_counted.h"
-#include "base/string16.h"
-#include "googleurl/src/gurl.h"
+#include "base/strings/string16.h"
 #include "net/base/completion_callback.h"
 #include "net/base/load_states.h"
 #include "net/base/net_export.h"
 #include "net/proxy/proxy_resolver_script_data.h"
+#include "url/gurl.h"
 
 namespace net {
 

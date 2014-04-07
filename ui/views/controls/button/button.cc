@@ -4,7 +4,7 @@
 
 #include "ui/views/controls/button/button.h"
 
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "ui/base/accessibility/accessible_view_state.h"
 
 namespace views {
@@ -17,6 +17,8 @@ Button::~Button() {
 
 void Button::SetTooltipText(const string16& tooltip_text) {
   tooltip_text_ = tooltip_text;
+  if (accessible_name_.empty())
+    accessible_name_ = tooltip_text_;
   TooltipTextChanged();
 }
 

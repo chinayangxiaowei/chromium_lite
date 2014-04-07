@@ -7,52 +7,50 @@ import json
 import logging
 import re
 
-import compiled_file_system as compiled_fs
+from compiled_file_system import CompiledFileSystem
 from file_system import FileNotFoundError
 import third_party.json_schema_compiler.json_comment_eater as json_comment_eater
 import third_party.json_schema_compiler.model as model
 import url_constants
 
-DEFAULT_ICON_PATH = '/images/sample-default-icon.png'
-
-# See api_data_source.py for more info on _VERSION.
-_VERSION = 3
+DEFAULT_ICON_PATH = 'images/sample-default-icon.png'
 
 class SamplesDataSource(object):
-  """Constructs a list of samples and their respective files and api calls.
-  """
-
+  '''Constructs a list of samples and their respective files and api calls.
+  '''
   class Factory(object):
-    """A factory to create SamplesDataSource instances bound to individual
+    '''A factory to create SamplesDataSource instances bound to individual
     Requests.
-    """
+    '''
     def __init__(self,
-                 channel,
-                 file_system,
-                 github_file_system,
-                 cache_factory,
-                 github_cache_factory,
+                 host_file_system,
+                 compiled_host_fs_factory,
+                 app_samples_file_system,
+                 compiled_app_samples_fs_factory,
                  ref_resolver_factory,
-                 samples_path):
-      self._file_system = file_system
-      self._github_file_system = github_file_system
-      self._static_path = '/%s/static' % channel
-      self._extensions_cache = cache_factory.Create(self._MakeSamplesList,
-                                                    compiled_fs.EXTENSIONS,
-                                                    version=_VERSION)
-      self._apps_cache = github_cache_factory.Create(
-          lambda x, y: self._MakeSamplesList(x, y, is_apps=True),
-          compiled_fs.APPS,
-          version=_VERSION)
+                 extension_samples_path,
+                 base_path):
+      self._host_file_system = host_file_system
+      self._app_samples_file_system = app_samples_file_system
       self._ref_resolver = ref_resolver_factory.Create()
-      self._samples_path = samples_path
+      self._extension_samples_path = extension_samples_path
+      self._base_path = base_path
+      self._extensions_cache = compiled_host_fs_factory.Create(
+          self._MakeSamplesList,
+          SamplesDataSource,
+          category='extensions')
+      self._apps_cache = compiled_app_samples_fs_factory.Create(
+          lambda *args: self._MakeSamplesList(*args, is_apps=True),
+          SamplesDataSource,
+          category='apps')
 
     def Create(self, request):
-      """Returns a new SamplesDataSource bound to |request|.
-      """
+      '''Returns a new SamplesDataSource bound to |request|.
+      '''
       return SamplesDataSource(self._extensions_cache,
                                self._apps_cache,
-                               self._samples_path,
+                               self._extension_samples_path,
+                               self._base_path,
                                request)
 
     def _GetAPIItems(self, js_file):
@@ -99,23 +97,22 @@ class SamplesDataSource(object):
       return l10n_data
 
     def _MakeSamplesList(self, base_dir, files, is_apps=False):
-      file_system = self._github_file_system if is_apps else self._file_system
+      # HACK(kalman): The code here (for legacy reasons) assumes that |files| is
+      # prefixed by |base_dir|, so make it true.
+      files = ['%s%s' % (base_dir, f) for f in files]
+      file_system = (self._app_samples_file_system if is_apps else
+                     self._host_file_system)
       samples_list = []
       for filename in sorted(files):
         if filename.rsplit('/')[-1] != 'manifest.json':
           continue
+
         # This is a little hacky, but it makes a sample page.
         sample_path = filename.rsplit('/', 1)[-2]
         sample_files = [path for path in files
                         if path.startswith(sample_path + '/')]
         js_files = [path for path in sample_files if path.endswith('.js')]
-        try:
-          js_contents = file_system.Read(js_files).Get()
-        except FileNotFoundError as e:
-          logging.warning('Error fetching samples files: %s. Was a file '
-                          'deleted from a sample? This warning should go away '
-                          'in 5 minutes.' % e)
-          continue
+        js_contents = file_system.Read(js_files).Get()
         api_items = set()
         for js in js_contents.values():
           api_items.update(self._GetAPIItems(js))
@@ -130,22 +127,13 @@ class SamplesDataSource(object):
             item = item[:-len('.addListener')]
           if item.startswith('chrome.'):
             item = item[len('chrome.'):]
-          ref_data = self._ref_resolver.GetLink(item, 'samples')
+          ref_data = self._ref_resolver.GetLink(item)
           if ref_data is None:
             continue
           api_calls.append({
             'name': ref_data['text'],
             'link': ref_data['href']
           })
-        try:
-          manifest_data = self._GetDataFromManifest(sample_path, file_system)
-        except FileNotFoundError as e:
-          logging.warning('Error getting data from samples manifest: %s. If '
-                          'this file was deleted from a sample this message '
-                          'should go away in 5 minutes.' % e)
-          continue
-        if manifest_data is None:
-          continue
 
         sample_base_path = sample_path.split('/', 1)[1]
         if is_apps:
@@ -157,10 +145,11 @@ class SamplesDataSource(object):
           icon_base = sample_base_path
           download_url = sample_base_path + '.zip'
 
+        manifest_data = self._GetDataFromManifest(sample_path, file_system)
         if manifest_data['icon'] is None:
-          icon_path = self._static_path + DEFAULT_ICON_PATH
+          icon_path = '%s/static/%s' % (self._base_path, DEFAULT_ICON_PATH)
         else:
-          icon_path = icon_base + '/' + manifest_data['icon']
+          icon_path = '%s/%s' % (icon_base, manifest_data['icon'])
         manifest_data.update({
           'icon': icon_path,
           'id': hashlib.md5(url).hexdigest(),
@@ -173,10 +162,16 @@ class SamplesDataSource(object):
 
       return samples_list
 
-  def __init__(self, extensions_cache, apps_cache, samples_path, request):
+  def __init__(self,
+               extensions_cache,
+               apps_cache,
+               extension_samples_path,
+               base_path,
+               request):
     self._extensions_cache = extensions_cache
     self._apps_cache = apps_cache
-    self._samples_path = samples_path
+    self._extension_samples_path = extension_samples_path
+    self._base_path = base_path
     self._request = request
 
   def _GetAcceptedLanguages(self):
@@ -187,10 +182,10 @@ class SamplesDataSource(object):
             for lang_with_q in accept_language.split(',')]
 
   def FilterSamples(self, key, api_name):
-    """Fetches and filters the list of samples specified by |key|, returning
+    '''Fetches and filters the list of samples specified by |key|, returning
     only the samples that use the API |api_name|. |key| is either 'apps' or
     'extensions'.
-    """
+    '''
     api_search = api_name + '_'
     samples_list = []
     try:
@@ -212,7 +207,7 @@ class SamplesDataSource(object):
       samples_list = self._apps_cache.GetFromFileListing('/')
     else:
       samples_list = self._extensions_cache.GetFromFileListing(
-          self._samples_path + '/')
+          self._extension_samples_path + '/')
     return_list = []
     for dict_ in samples_list:
       name = dict_['name']

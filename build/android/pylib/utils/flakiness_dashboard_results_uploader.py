@@ -32,6 +32,7 @@ from webkitpy.layout_tests.layout_package import json_results_generator
 #TODO(craigdh): pylib/utils/ should not depend on pylib/.
 from pylib import cmd_helper
 from pylib import constants
+from pylib.utils import repo_utils
 
 
 # The JSONResultsGenerator gets the filesystem.join operation from the Port
@@ -87,25 +88,15 @@ class JSONResultsGenerator(json_results_generator.JSONResultsGeneratorBase):
       if os.path.exists(os.path.join(in_directory, '.git')):
         return True
       parent = os.path.dirname(in_directory)
-      if parent == constants.CHROME_DIR or parent == in_directory:
+      if parent == constants.DIR_SOURCE_ROOT or parent == in_directory:
         return False
       return _is_git_directory(parent)
 
-    def _get_git_revision(in_directory):
-      """Returns the git hash tag for the given directory.
-
-      Args:
-        in_directory: The directory where git is to be run.
-      """
-      command_line = ['git', 'log', '-1', '--pretty=format:%H']
-      output = cmd_helper.GetCmdOutput(command_line, cwd=in_directory)
-      return output[0:40]
-
-    in_directory = os.path.join(constants.CHROME_DIR, in_directory)
+    in_directory = os.path.join(constants.DIR_SOURCE_ROOT, in_directory)
 
     if not os.path.exists(os.path.join(in_directory, '.svn')):
       if _is_git_directory(in_directory):
-        return _get_git_revision(in_directory)
+        return repo_utils.GetGitHeadSHA1(in_directory)
       else:
         return ''
 
@@ -135,7 +126,7 @@ class ResultsUploader(object):
       # This requires passing the actual master name (e.g. 'ChromiumFYI' not
       # 'chromium.fyi').
       from slave import slave_utils
-      self._build_name = slave_utils.SlaveBuildName(constants.CHROME_DIR)
+      self._build_name = slave_utils.SlaveBuildName(constants.DIR_SOURCE_ROOT)
       self._master_name = slave_utils.GetActiveMaster()
     else:
       self._build_name = 'chromium-android'

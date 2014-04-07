@@ -4,7 +4,7 @@
 
 #include "content/renderer/browser_plugin/mock_browser_plugin_manager.h"
 
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "content/common/browser_plugin/browser_plugin_messages.h"
 #include "content/renderer/browser_plugin/mock_browser_plugin.h"
 #include "ipc/ipc_message.h"
@@ -14,7 +14,7 @@ namespace content {
 MockBrowserPluginManager::MockBrowserPluginManager(
     RenderViewImpl* render_view)
     : BrowserPluginManager(render_view),
-      browser_plugin_counter_(0) {
+      guest_instance_id_counter_(0) {
 }
 
 MockBrowserPluginManager::~MockBrowserPluginManager() {
@@ -29,19 +29,21 @@ BrowserPlugin* MockBrowserPluginManager::CreateBrowserPlugin(
 
 void MockBrowserPluginManager::AllocateInstanceID(
     BrowserPlugin* browser_plugin) {
-  int instance_id = ++browser_plugin_counter_;
-  MessageLoop::current()->PostTask(
+  int guest_instance_id = ++guest_instance_id_counter_;
+  base::MessageLoop::current()->PostTask(
       FROM_HERE,
       base::Bind(&MockBrowserPluginManager::AllocateInstanceIDACK,
                  this,
                  base::Unretained(browser_plugin),
-                 instance_id));
+                 guest_instance_id));
 }
 
 void MockBrowserPluginManager::AllocateInstanceIDACK(
     BrowserPlugin* browser_plugin,
-    int instance_id) {
-  browser_plugin->SetInstanceID(instance_id, true);
+    int guest_instance_id) {
+  browser_plugin->OnInstanceIDAllocated(guest_instance_id);
+  scoped_ptr<base::DictionaryValue> extra_params(new base::DictionaryValue());
+  browser_plugin->Attach(extra_params.Pass());
 }
 
 bool MockBrowserPluginManager::Send(IPC::Message* msg) {
@@ -50,7 +52,7 @@ bool MockBrowserPluginManager::Send(IPC::Message* msg) {
   // through this function messages, messages with reply and reply messages.
   // We can only handle one synchronous message at a time.
   if (msg->is_reply()) {
-    if (reply_deserializer_.get()) {
+    if (reply_deserializer_) {
       reply_deserializer_->SerializeOutputParameters(*msg);
       reply_deserializer_.reset();
     }

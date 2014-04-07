@@ -6,7 +6,7 @@
 
 #include <gtk/gtk.h>
 
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "chrome/browser/ui/gtk/gtk_util.h"
 #include "grit/chromium_strings.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -33,10 +33,10 @@ ProcessSingletonDialog::ProcessSingletonDialog(const std::string& message) {
   g_signal_connect(dialog_, "response", G_CALLBACK(OnResponseThunk), this);
 
   gtk_widget_show_all(dialog_);
-  MessageLoop::current()->Run();
+  base::MessageLoop::current()->Run();
 }
 
 void ProcessSingletonDialog::OnResponse(GtkWidget* dialog, int response_id) {
   gtk_widget_destroy(dialog_);
-  MessageLoop::current()->Quit();
+  base::MessageLoop::current()->Quit();
 }

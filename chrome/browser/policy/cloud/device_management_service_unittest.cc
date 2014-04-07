@@ -6,12 +6,12 @@
 #include <vector>
 
 #include "base/bind.h"
-#include "base/message_loop.h"
+#include "base/run_loop.h"
 #include "base/strings/string_split.h"
 #include "chrome/browser/policy/cloud/cloud_policy_constants.h"
 #include "chrome/browser/policy/cloud/device_management_service.h"
 #include "chrome/test/base/testing_browser_process.h"
-#include "content/public/test/test_browser_thread.h"
+#include "content/public/test/test_browser_thread_bundle.h"
 #include "net/base/escape.h"
 #include "net/base/load_flags.h"
 #include "net/base/net_errors.h"
@@ -22,7 +22,6 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-using content::BrowserThread;
 using testing::Mock;
 using testing::_;
 
@@ -42,22 +41,21 @@ const char kGaiaAuthToken[] = "gaia-auth-token";
 const char kOAuthToken[] = "oauth-token";
 const char kDMToken[] = "device-management-token";
 const char kClientID[] = "device-id";
+const char kRobotAuthCode[] = "robot-oauth-auth-code";
 
 // Unit tests for the device management policy service. The tests are run
 // against a TestURLFetcherFactory that is used to short-circuit the request
 // without calling into the actual network stack.
 class DeviceManagementServiceTestBase : public testing::Test {
  protected:
-  DeviceManagementServiceTestBase()
-      : ui_thread_(BrowserThread::UI, &loop_),
-        io_thread_(BrowserThread::IO, &loop_) {
+  DeviceManagementServiceTestBase() {
     ResetService();
     InitializeService();
   }
 
-  virtual void TearDown() {
+  ~DeviceManagementServiceTestBase() {
     service_.reset();
-    loop_.RunUntilIdle();
+    base::RunLoop().RunUntilIdle();
   }
 
   void ResetService() {
@@ -66,7 +64,7 @@ class DeviceManagementServiceTestBase : public testing::Test {
 
   void InitializeService() {
     service_->ScheduleInitialization(0);
-    loop_.RunUntilIdle();
+    base::RunLoop().RunUntilIdle();
   }
 
   net::TestURLFetcher* GetFetcher() {
@@ -80,6 +78,20 @@ class DeviceManagementServiceTestBase : public testing::Test {
     job->SetOAuthToken(kOAuthToken);
     job->SetClientID(kClientID);
     job->GetRequest()->mutable_register_request();
+    job->SetRetryCallback(base::Bind(
+        &DeviceManagementServiceTestBase::OnJobRetry, base::Unretained(this)));
+    job->Start(base::Bind(&DeviceManagementServiceTestBase::OnJobDone,
+                          base::Unretained(this)));
+    return job;
+  }
+
+  DeviceManagementRequestJob* StartApiAuthCodeFetchJob() {
+    DeviceManagementRequestJob* job = service_->CreateJob(
+        DeviceManagementRequestJob::TYPE_API_AUTH_CODE_FETCH);
+    job->SetGaiaToken(kGaiaAuthToken);
+    job->SetOAuthToken(kOAuthToken);
+    job->SetClientID(kClientID);
+    job->GetRequest()->mutable_service_api_access_request();
     job->SetRetryCallback(base::Bind(
         &DeviceManagementServiceTestBase::OnJobRetry, base::Unretained(this)));
     job->Start(base::Bind(&DeviceManagementServiceTestBase::OnJobDone,
@@ -142,7 +154,7 @@ class DeviceManagementServiceTestBase : public testing::Test {
     fetcher->delegate()->OnURLFetchComplete(fetcher);
   }
 
-  MOCK_METHOD2(OnJobDone, void(DeviceManagementStatus,
+  MOCK_METHOD3(OnJobDone, void(DeviceManagementStatus, int,
                                const em::DeviceManagementResponse&));
 
   MOCK_METHOD1(OnJobRetry, void(DeviceManagementRequestJob*));
@@ -151,9 +163,7 @@ class DeviceManagementServiceTestBase : public testing::Test {
   scoped_ptr<DeviceManagementService> service_;
 
  private:
-  MessageLoopForUI loop_;
-  content::TestBrowserThread ui_thread_;
-  content::TestBrowserThread io_thread_;
+  content::TestBrowserThreadBundle thread_bundle_;
 };
 
 struct FailedRequestParams {
@@ -186,7 +196,7 @@ class DeviceManagementServiceFailedRequestTest
 };
 
 TEST_P(DeviceManagementServiceFailedRequestTest, RegisterRequest) {
-  EXPECT_CALL(*this, OnJobDone(GetParam().expected_status_, _));
+  EXPECT_CALL(*this, OnJobDone(GetParam().expected_status_, _, _));
   EXPECT_CALL(*this, OnJobRetry(_)).Times(0);
   scoped_ptr<DeviceManagementRequestJob> request_job(StartRegistrationJob());
   net::TestURLFetcher* fetcher = GetFetcher();
@@ -196,8 +206,20 @@ TEST_P(DeviceManagementServiceFailedRequestTest, RegisterRequest) {
                GetParam().response_);
 }
 
+TEST_P(DeviceManagementServiceFailedRequestTest, ApiAuthCodeFetchRequest) {
+  EXPECT_CALL(*this, OnJobDone(GetParam().expected_status_, _, _));
+  EXPECT_CALL(*this, OnJobRetry(_)).Times(0);
+  scoped_ptr<DeviceManagementRequestJob> request_job(
+      StartApiAuthCodeFetchJob());
+  net::TestURLFetcher* fetcher = GetFetcher();
+  ASSERT_TRUE(fetcher);
+
+  SendResponse(fetcher, GetParam().request_status_, GetParam().http_status_,
+               GetParam().response_);
+}
+
 TEST_P(DeviceManagementServiceFailedRequestTest, UnregisterRequest) {
-  EXPECT_CALL(*this, OnJobDone(GetParam().expected_status_, _));
+  EXPECT_CALL(*this, OnJobDone(GetParam().expected_status_, _, _));
   EXPECT_CALL(*this, OnJobRetry(_)).Times(0);
   scoped_ptr<DeviceManagementRequestJob> request_job(StartUnregistrationJob());
   net::TestURLFetcher* fetcher = GetFetcher();
@@ -208,7 +230,7 @@ TEST_P(DeviceManagementServiceFailedRequestTest, UnregisterRequest) {
 }
 
 TEST_P(DeviceManagementServiceFailedRequestTest, PolicyRequest) {
-  EXPECT_CALL(*this, OnJobDone(GetParam().expected_status_, _));
+  EXPECT_CALL(*this, OnJobDone(GetParam().expected_status_, _, _));
   EXPECT_CALL(*this, OnJobRetry(_)).Times(0);
   scoped_ptr<DeviceManagementRequestJob> request_job(StartPolicyFetchJob());
   net::TestURLFetcher* fetcher = GetFetcher();
@@ -219,7 +241,7 @@ TEST_P(DeviceManagementServiceFailedRequestTest, PolicyRequest) {
 }
 
 TEST_P(DeviceManagementServiceFailedRequestTest, AutoEnrollmentRequest) {
-  EXPECT_CALL(*this, OnJobDone(GetParam().expected_status_, _));
+  EXPECT_CALL(*this, OnJobDone(GetParam().expected_status_, _, _));
   EXPECT_CALL(*this, OnJobRetry(_)).Times(0);
   scoped_ptr<DeviceManagementRequestJob> request_job(StartAutoEnrollmentJob());
   net::TestURLFetcher* fetcher = GetFetcher();
@@ -368,7 +390,7 @@ TEST_F(DeviceManagementServiceTest, RegisterRequest) {
   em::DeviceManagementResponse expected_response;
   expected_response.mutable_register_response()->
       set_device_management_token(kDMToken);
-  EXPECT_CALL(*this, OnJobDone(DM_STATUS_SUCCESS,
+  EXPECT_CALL(*this, OnJobDone(DM_STATUS_SUCCESS, _,
                                MessageEquals(expected_response)));
   EXPECT_CALL(*this, OnJobRetry(_)).Times(0);
   scoped_ptr<DeviceManagementRequestJob> request_job(StartRegistrationJob());
@@ -390,10 +412,37 @@ TEST_F(DeviceManagementServiceTest, RegisterRequest) {
   SendResponse(fetcher, status, 200, response_data);
 }
 
+TEST_F(DeviceManagementServiceTest, ApiAuthCodeFetchRequest) {
+  em::DeviceManagementResponse expected_response;
+  expected_response.mutable_service_api_access_response()->set_auth_code(
+      kRobotAuthCode);
+  EXPECT_CALL(*this, OnJobDone(DM_STATUS_SUCCESS, _,
+                               MessageEquals(expected_response)));
+  EXPECT_CALL(*this, OnJobRetry(_)).Times(0);
+  scoped_ptr<DeviceManagementRequestJob> request_job(
+      StartApiAuthCodeFetchJob());
+  net::TestURLFetcher* fetcher = GetFetcher();
+  ASSERT_TRUE(fetcher);
+
+  CheckURLAndQueryParams(fetcher->GetOriginalURL(),
+                         dm_protocol::kValueRequestApiAuthorization,
+                         kClientID);
+
+  std::string expected_data;
+  ASSERT_TRUE(request_job->GetRequest()->SerializeToString(&expected_data));
+  EXPECT_EQ(expected_data, fetcher->upload_data());
+
+  // Generate the response.
+  std::string response_data;
+  ASSERT_TRUE(expected_response.SerializeToString(&response_data));
+  net::URLRequestStatus status(net::URLRequestStatus::SUCCESS, 0);
+  SendResponse(fetcher, status, 200, response_data);
+}
+
 TEST_F(DeviceManagementServiceTest, UnregisterRequest) {
   em::DeviceManagementResponse expected_response;
   expected_response.mutable_unregister_response();
-  EXPECT_CALL(*this, OnJobDone(DM_STATUS_SUCCESS,
+  EXPECT_CALL(*this, OnJobDone(DM_STATUS_SUCCESS, _,
                                MessageEquals(expected_response)));
   EXPECT_CALL(*this, OnJobRetry(_)).Times(0);
   scoped_ptr<DeviceManagementRequestJob> request_job(StartUnregistrationJob());
@@ -424,7 +473,7 @@ TEST_F(DeviceManagementServiceTest, UnregisterRequest) {
 }
 
 TEST_F(DeviceManagementServiceTest, CancelRegisterRequest) {
-  EXPECT_CALL(*this, OnJobDone(_, _)).Times(0);
+  EXPECT_CALL(*this, OnJobDone(_, _, _)).Times(0);
   EXPECT_CALL(*this, OnJobRetry(_)).Times(0);
   scoped_ptr<DeviceManagementRequestJob> request_job(StartRegistrationJob());
   net::TestURLFetcher* fetcher = GetFetcher();
@@ -434,8 +483,20 @@ TEST_F(DeviceManagementServiceTest, CancelRegisterRequest) {
   request_job.reset();
 }
 
+TEST_F(DeviceManagementServiceTest, CancelApiAuthCodeFetch) {
+  EXPECT_CALL(*this, OnJobDone(_, _, _)).Times(0);
+  EXPECT_CALL(*this, OnJobRetry(_)).Times(0);
+  scoped_ptr<DeviceManagementRequestJob> request_job(
+      StartApiAuthCodeFetchJob());
+  net::TestURLFetcher* fetcher = GetFetcher();
+  ASSERT_TRUE(fetcher);
+
+  // There shouldn't be any callbacks.
+  request_job.reset();
+}
+
 TEST_F(DeviceManagementServiceTest, CancelUnregisterRequest) {
-  EXPECT_CALL(*this, OnJobDone(_, _)).Times(0);
+  EXPECT_CALL(*this, OnJobDone(_, _, _)).Times(0);
   EXPECT_CALL(*this, OnJobRetry(_)).Times(0);
   scoped_ptr<DeviceManagementRequestJob> request_job(StartUnregistrationJob());
   net::TestURLFetcher* fetcher = GetFetcher();
@@ -446,7 +507,7 @@ TEST_F(DeviceManagementServiceTest, CancelUnregisterRequest) {
 }
 
 TEST_F(DeviceManagementServiceTest, CancelPolicyRequest) {
-  EXPECT_CALL(*this, OnJobDone(_, _)).Times(0);
+  EXPECT_CALL(*this, OnJobDone(_, _, _)).Times(0);
   EXPECT_CALL(*this, OnJobRetry(_)).Times(0);
   scoped_ptr<DeviceManagementRequestJob> request_job(StartPolicyFetchJob());
   net::TestURLFetcher* fetcher = GetFetcher();
@@ -463,7 +524,7 @@ TEST_F(DeviceManagementServiceTest, JobQueueing) {
   em::DeviceManagementResponse expected_response;
   expected_response.mutable_register_response()->
       set_device_management_token(kDMToken);
-  EXPECT_CALL(*this, OnJobDone(DM_STATUS_SUCCESS,
+  EXPECT_CALL(*this, OnJobDone(DM_STATUS_SUCCESS, _,
                                MessageEquals(expected_response)));
   EXPECT_CALL(*this, OnJobRetry(_)).Times(0);
 
@@ -486,7 +547,7 @@ TEST_F(DeviceManagementServiceTest, JobQueueing) {
 }
 
 TEST_F(DeviceManagementServiceTest, CancelRequestAfterShutdown) {
-  EXPECT_CALL(*this, OnJobDone(_, _)).Times(0);
+  EXPECT_CALL(*this, OnJobDone(_, _, _)).Times(0);
   EXPECT_CALL(*this, OnJobRetry(_)).Times(0);
   scoped_ptr<DeviceManagementRequestJob> request_job(StartPolicyFetchJob());
   net::TestURLFetcher* fetcher = GetFetcher();
@@ -507,13 +568,13 @@ TEST_F(DeviceManagementServiceTest, CancelDuringCallback) {
   net::TestURLFetcher* fetcher = GetFetcher();
   ASSERT_TRUE(fetcher);
 
-  EXPECT_CALL(*this, OnJobDone(_, _))
+  EXPECT_CALL(*this, OnJobDone(_, _, _))
       .WillOnce(ResetPointer(&request_job));
   EXPECT_CALL(*this, OnJobRetry(_)).Times(0);
 
   // Generate a callback.
   net::URLRequestStatus status(net::URLRequestStatus::SUCCESS, 0);
-  SendResponse(fetcher, status, 500, "");
+  SendResponse(fetcher, status, 500, std::string());
 
   // Job should have been reset.
   EXPECT_FALSE(request_job.get());
@@ -521,7 +582,7 @@ TEST_F(DeviceManagementServiceTest, CancelDuringCallback) {
 
 TEST_F(DeviceManagementServiceTest, RetryOnProxyError) {
   // Make a request.
-  EXPECT_CALL(*this, OnJobDone(_, _)).Times(0);
+  EXPECT_CALL(*this, OnJobDone(_, _, _)).Times(0);
   EXPECT_CALL(*this, OnJobRetry(_));
 
   scoped_ptr<DeviceManagementRequestJob> request_job(StartRegistrationJob());
@@ -534,7 +595,7 @@ TEST_F(DeviceManagementServiceTest, RetryOnProxyError) {
   // Generate a callback with a proxy failure.
   net::URLRequestStatus status(net::URLRequestStatus::FAILED,
                                net::ERR_PROXY_CONNECTION_FAILED);
-  SendResponse(fetcher, status, 200, "");
+  SendResponse(fetcher, status, 200, std::string());
 
   // Verify that a new URLFetcher was started that bypasses the proxy.
   fetcher = GetFetcher();
@@ -546,7 +607,7 @@ TEST_F(DeviceManagementServiceTest, RetryOnProxyError) {
 
 TEST_F(DeviceManagementServiceTest, RetryOnBadResponseFromProxy) {
   // Make a request.
-  EXPECT_CALL(*this, OnJobDone(_, _)).Times(0);
+  EXPECT_CALL(*this, OnJobDone(_, _, _)).Times(0);
   EXPECT_CALL(*this, OnJobRetry(_));
 
   scoped_ptr<DeviceManagementRequestJob> request_job(StartRegistrationJob());
@@ -564,7 +625,7 @@ TEST_F(DeviceManagementServiceTest, RetryOnBadResponseFromProxy) {
   // Generate a callback with a valid http response, that was generated by
   // a bad/wrong proxy.
   net::URLRequestStatus status;
-  SendResponse(fetcher, status, 200, "");
+  SendResponse(fetcher, status, 200, std::string());
 
   // Verify that a new URLFetcher was started that bypasses the proxy.
   fetcher = GetFetcher();
@@ -576,7 +637,7 @@ TEST_F(DeviceManagementServiceTest, RetryOnBadResponseFromProxy) {
 
 TEST_F(DeviceManagementServiceTest, RetryOnNetworkChanges) {
   // Make a request.
-  EXPECT_CALL(*this, OnJobDone(_, _)).Times(0);
+  EXPECT_CALL(*this, OnJobDone(_, _, _)).Times(0);
   EXPECT_CALL(*this, OnJobRetry(_));
 
   scoped_ptr<DeviceManagementRequestJob> request_job(StartRegistrationJob());
@@ -609,7 +670,7 @@ TEST_F(DeviceManagementServiceTest, RetryLimit) {
     // Make the current fetcher fail with ERR_NETWORK_CHANGED.
     net::TestURLFetcher* fetcher = GetFetcher();
     ASSERT_TRUE(fetcher);
-    EXPECT_CALL(*this, OnJobDone(_, _)).Times(0);
+    EXPECT_CALL(*this, OnJobDone(_, _, _)).Times(0);
     EXPECT_CALL(*this, OnJobRetry(_));
     fetcher->set_status(net::URLRequestStatus(net::URLRequestStatus::FAILED,
                                               net::ERR_NETWORK_CHANGED));
@@ -622,7 +683,7 @@ TEST_F(DeviceManagementServiceTest, RetryLimit) {
   // pass the error code to the job's owner.
   net::TestURLFetcher* fetcher = GetFetcher();
   ASSERT_TRUE(fetcher);
-  EXPECT_CALL(*this, OnJobDone(DM_STATUS_REQUEST_FAILED, _));
+  EXPECT_CALL(*this, OnJobDone(DM_STATUS_REQUEST_FAILED, _, _));
   EXPECT_CALL(*this, OnJobRetry(_)).Times(0);
   fetcher->set_status(net::URLRequestStatus(net::URLRequestStatus::FAILED,
                                             net::ERR_NETWORK_CHANGED));

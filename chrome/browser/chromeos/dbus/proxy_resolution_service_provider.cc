@@ -29,8 +29,7 @@ class ProxyResolverImpl : public ProxyResolverInterface {
   class Request {
    public:
     explicit Request(const std::string& source_url)
-        : ALLOW_THIS_IN_INITIALIZER_LIST(callback_(
-            base::Bind(&Request::OnCompletion, base::Unretained(this)))),
+        : callback_(base::Bind(&Request::OnCompletion, base::Unretained(this))),
           source_url_(source_url) {
     }
 
@@ -117,7 +116,7 @@ class ProxyResolverImpl : public ProxyResolverInterface {
     DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
 
     // Check if we have the URLRequestContextGetter.
-    if (!getter) {
+    if (!getter.get()) {
       request->error_ = "No URLRequestContextGetter";
       request->OnCompletion(net::ERR_UNEXPECTED);
       return;

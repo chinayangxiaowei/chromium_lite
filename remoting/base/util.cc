@@ -7,10 +7,11 @@
 #include <math.h>
 
 #include "base/logging.h"
-#include "base/stringprintf.h"
-#include "base/time.h"
+#include "base/strings/stringprintf.h"
+#include "base/time/time.h"
 #include "media/base/video_frame.h"
 #include "media/base/yuv_convert.h"
+#include "third_party/libyuv/include/libyuv/convert.h"
 #include "third_party/skia/include/core/SkRegion.h"
 
 #if defined(OS_POSIX)
@@ -65,15 +66,11 @@ void ConvertRGB32ToYUVWithRect(const uint8* rgb_plane,
   int y_offset = CalculateYOffset(x, y, y_stride);
   int uv_offset = CalculateUVOffset(x, y, uv_stride);;
 
-  media::ConvertRGB32ToYUV(rgb_plane + rgb_offset,
-                           y_plane + y_offset,
-                           u_plane + uv_offset,
-                           v_plane + uv_offset,
-                           width,
-                           height,
-                           rgb_stride,
-                           y_stride,
-                           uv_stride);
+  libyuv::ARGBToI420(rgb_plane + rgb_offset, rgb_stride,
+                     y_plane + y_offset, y_stride,
+                     u_plane + uv_offset, uv_stride,
+                     v_plane + uv_offset, uv_stride,
+                     width, height);
 }
 
 void ConvertAndScaleYUVToRGB32Rect(const uint8* source_yplane,
@@ -111,7 +108,7 @@ void ConvertAndScaleYUVToRGB32Rect(const uint8* source_yplane,
   // See if scaling is needed.
   if (source_size == dest_size) {
     // Calculate the inner rectangle that can be copied by the optimized
-    // ConvertYUVToRGB32().
+    // libyuv::I420ToARGB().
     SkIRect inner_rect =
         SkIRect::MakeLTRB(RoundToTwosMultiple(dest_rect.left() + 1),
                           RoundToTwosMultiple(dest_rect.top() + 1),
@@ -126,16 +123,11 @@ void ConvertAndScaleYUVToRGB32Rect(const uint8* source_yplane,
     rgb_offset += CalculateRGBOffset(inner_rect.x(), inner_rect.y(),
                                      dest_stride);
 
-    media::ConvertYUVToRGB32(source_yplane + y_offset,
-                             source_uplane + uv_offset,
-                             source_vplane + uv_offset,
-                             dest_buffer + rgb_offset,
-                             inner_rect.width(),
-                             inner_rect.height(),
-                             source_ystride,
-                             source_uvstride,
-                             dest_stride,
-                             media::YV12);
+    libyuv::I420ToARGB(source_yplane + y_offset, source_ystride,
+                       source_uplane + uv_offset, source_uvstride,
+                       source_vplane + uv_offset, source_uvstride,
+                       dest_buffer + rgb_offset, dest_stride,
+                       inner_rect.width(), inner_rect.height());
 
     // Now see if some pixels weren't copied due to alignment.
     if (dest_rect != inner_rect) {
@@ -318,17 +310,19 @@ bool StringIsUtf8(const char* data, size_t length) {
 }
 
 std::string GetUsername() {
-#if defined(OS_POSIX)
+#if defined(OS_ANDROID)
+  struct passwd* passwd = getpwuid(getuid());
+  return passwd ? passwd->pw_name : std::string();
+#elif defined(OS_POSIX)
   long buf_size = sysconf(_SC_GETPW_R_SIZE_MAX);
   if (buf_size <= 0)
     return std::string();
-  scoped_array<char> buf(new char[buf_size]);
+
+  scoped_ptr<char[]> buf(new char[buf_size]);
   struct passwd passwd;
   struct passwd* passwd_result = NULL;
   getpwuid_r(getuid(), &passwd, buf.get(), buf_size, &passwd_result);
-  if (!passwd_result)
-    return std::string();
-  return std::string(passwd_result->pw_name);
+  return passwd_result ? passwd_result->pw_name : std::string();
 #else  // !defined(OS_POSIX)
   return std::string();
 #endif  // defined(OS_POSIX)

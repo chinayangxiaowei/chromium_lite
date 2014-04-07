@@ -7,8 +7,9 @@
 #include "base/debug/trace_event.h"
 #include "base/logging.h"
 #include "gpu/command_buffer/common/gles2_cmd_utils.h"
+#include "gpu/command_buffer/service/context_state.h"
+#include "gpu/command_buffer/service/error_state.h"
 #include "gpu/command_buffer/service/feature_info.h"
-#include "gpu/command_buffer/service/gles2_cmd_decoder.h"
 #include "gpu/command_buffer/service/memory_tracking.h"
 #include "ui/gl/gl_bindings.h"
 
@@ -50,13 +51,13 @@ void BufferManager::CreateBuffer(GLuint client_id, GLuint service_id) {
 Buffer* BufferManager::GetBuffer(
     GLuint client_id) {
   BufferMap::iterator it = buffers_.find(client_id);
-  return it != buffers_.end() ? it->second : NULL;
+  return it != buffers_.end() ? it->second.get() : NULL;
 }
 
 void BufferManager::RemoveBuffer(GLuint client_id) {
   BufferMap::iterator it = buffers_.find(client_id);
   if (it != buffers_.end()) {
-    Buffer* buffer = it->second;
+    Buffer* buffer = it->second.get();
     buffer->MarkAsDeleted();
     buffers_.erase(it);
   }
@@ -99,10 +100,10 @@ void Buffer::SetInfo(
     bool is_client_side_array) {
   usage_ = usage;
   is_client_side_array_ = is_client_side_array;
+  ClearCache();
   if (size != size_ || shadow != shadowed_) {
     shadowed_ = shadow;
     size_ = size;
-    ClearCache();
     if (shadowed_) {
       shadow_.reset(new int8[size]);
     } else {
@@ -240,6 +241,12 @@ bool BufferManager::IsUsageClientSideArray(GLenum usage) {
   return usage == GL_STREAM_DRAW && use_client_side_arrays_for_stream_buffers_;
 }
 
+bool BufferManager::UseNonZeroSizeForClientSideArrayBuffer() {
+  return feature_info_.get() &&
+         feature_info_->workarounds()
+             .use_non_zero_size_for_client_side_stream_buffers;
+}
+
 void BufferManager::SetInfo(
     Buffer* buffer, GLsizeiptr size, GLenum usage, const GLvoid* data) {
   DCHECK(buffer);
@@ -252,27 +259,65 @@ void BufferManager::SetInfo(
   memory_tracker_->TrackMemAlloc(buffer->size());
 }
 
+void BufferManager::ValidateAndDoBufferData(
+    ContextState* context_state, GLenum target, GLsizeiptr size,
+    const GLvoid * data, GLenum usage) {
+  ErrorState* error_state = context_state->GetErrorState();
+  if (!feature_info_->validators()->buffer_target.IsValid(target)) {
+    ERRORSTATE_SET_GL_ERROR_INVALID_ENUM(
+        error_state, "glBufferData", target, "target");
+    return;
+  }
+  if (!feature_info_->validators()->buffer_usage.IsValid(usage)) {
+    ERRORSTATE_SET_GL_ERROR_INVALID_ENUM(
+        error_state, "glBufferData", usage, "usage");
+    return;
+  }
+  if (size < 0) {
+    ERRORSTATE_SET_GL_ERROR(
+        error_state, GL_INVALID_VALUE, "glBufferData", "size < 0");
+    return;
+  }
+
+  Buffer* buffer = GetBufferInfoForTarget(context_state, target);
+  if (!buffer) {
+    ERRORSTATE_SET_GL_ERROR(
+        error_state, GL_INVALID_VALUE, "glBufferData", "unknown buffer");
+    return;
+  }
+
+  if (!memory_tracker_->EnsureGPUMemoryAvailable(size)) {
+    ERRORSTATE_SET_GL_ERROR(
+        error_state, GL_OUT_OF_MEMORY, "glBufferData", "out of memory");
+    return;
+  }
+
+  DoBufferData(error_state, buffer, size, usage, data);
+}
+
+
 void BufferManager::DoBufferData(
-    GLES2Decoder* decoder,
+    ErrorState* error_state,
     Buffer* buffer,
     GLsizeiptr size,
     GLenum usage,
     const GLvoid* data) {
   // Clear the buffer to 0 if no initial data was passed in.
-  scoped_array<int8> zero;
+  scoped_ptr<int8[]> zero;
   if (!data) {
     zero.reset(new int8[size]);
     memset(zero.get(), 0, size);
     data = zero.get();
   }
 
-  GLESDECODER_COPY_REAL_GL_ERRORS_TO_WRAPPER(decoder, "glBufferData");
+  ERRORSTATE_COPY_REAL_GL_ERRORS_TO_WRAPPER(error_state, "glBufferData");
   if (IsUsageClientSideArray(usage)) {
-    glBufferData(buffer->target(), 0, NULL, usage);
+    GLsizei empty_size = UseNonZeroSizeForClientSideArrayBuffer() ? 1 : 0;
+    glBufferData(buffer->target(), empty_size, NULL, usage);
   } else {
     glBufferData(buffer->target(), size, data, usage);
   }
-  GLenum error = GLESDECODER_PEEK_GL_ERROR(decoder, "glBufferData");
+  GLenum error = ERRORSTATE_PEEK_GL_ERROR(error_state, "glBufferData");
   if (error == GL_NO_ERROR) {
     SetInfo(buffer, size, usage, data);
   } else {
@@ -280,20 +325,55 @@ void BufferManager::DoBufferData(
   }
 }
 
+void BufferManager::ValidateAndDoBufferSubData(
+  ContextState* context_state, GLenum target, GLintptr offset, GLsizeiptr size,
+  const GLvoid * data) {
+  ErrorState* error_state = context_state->GetErrorState();
+  Buffer* buffer = GetBufferInfoForTarget(context_state, target);
+  if (!buffer) {
+    ERRORSTATE_SET_GL_ERROR(error_state, GL_INVALID_VALUE, "glBufferSubData",
+                            "unknown buffer");
+    return;
+  }
+
+  DoBufferSubData(error_state, buffer, offset, size, data);
+}
+
 void BufferManager::DoBufferSubData(
-    GLES2Decoder* decoder,
+    ErrorState* error_state,
     Buffer* buffer,
     GLintptr offset,
     GLsizeiptr size,
     const GLvoid* data) {
   if (!buffer->SetRange(offset, size, data)) {
-    GLESDECODER_SET_GL_ERROR(
-        decoder, GL_INVALID_VALUE, "glBufferSubData", "out of range");
+    ERRORSTATE_SET_GL_ERROR(
+        error_state, GL_INVALID_VALUE, "glBufferSubData", "out of range");
     return;
   }
 
   if (!buffer->IsClientSideArray()) {
     glBufferSubData(buffer->target(), offset, size, data);
+  }
+}
+
+void BufferManager::ValidateAndDoGetBufferParameteriv(
+    ContextState* context_state, GLenum target, GLenum pname, GLint* params) {
+  Buffer* buffer = GetBufferInfoForTarget(context_state, target);
+  if (!buffer) {
+    ERRORSTATE_SET_GL_ERROR(
+        context_state->GetErrorState(), GL_INVALID_OPERATION,
+        "glGetBufferParameteriv", "no buffer bound for target");
+    return;
+  }
+  switch (pname) {
+    case GL_BUFFER_SIZE:
+      *params = buffer->size();
+      break;
+    case GL_BUFFER_USAGE:
+      *params = buffer->usage();
+      break;
+    default:
+      NOTREACHED();
   }
 }
 
@@ -307,6 +387,18 @@ bool BufferManager::SetTarget(Buffer* buffer, GLenum target) {
     buffer->set_target(target);
   }
   return true;
+}
+
+// Since one BufferManager can be shared by multiple decoders, ContextState is
+// passed in each time and not just passed in during initialization.
+Buffer* BufferManager::GetBufferInfoForTarget(
+    ContextState* state, GLenum target) {
+  DCHECK(target == GL_ARRAY_BUFFER || target == GL_ELEMENT_ARRAY_BUFFER);
+  if (target == GL_ARRAY_BUFFER) {
+    return state->bound_array_buffer.get();
+  } else {
+    return state->vertex_attrib_manager->element_array_buffer();
+  }
 }
 
 }  // namespace gles2

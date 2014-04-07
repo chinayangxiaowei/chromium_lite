@@ -8,10 +8,15 @@
 #include <string>
 
 #include "base/logging.h"
+#include "base/memory/scoped_ptr.h"
 #include "cc/base/cc_export.h"
 #include "third_party/skia/include/core/SkRegion.h"
 #include "ui/gfx/rect.h"
 #include "ui/gfx/skia_util.h"
+
+namespace base {
+class Value;
+}
 
 namespace cc {
 
@@ -19,15 +24,16 @@ class CC_EXPORT Region {
  public:
   Region();
   Region(const Region& region);
-  Region(gfx::Rect rect);
+  Region(gfx::Rect rect);  // NOLINT(runtime/explicit)
   ~Region();
 
   const Region& operator=(gfx::Rect rect);
   const Region& operator=(const Region& region);
 
-  void Swap(Region& region);
+  void Swap(Region* region);
   void Clear();
   bool IsEmpty() const;
+  int GetRegionComplexity() const;
 
   bool Contains(gfx::Point point) const;
   bool Contains(gfx::Rect rect) const;
@@ -52,11 +58,12 @@ class CC_EXPORT Region {
   }
 
   std::string ToString() const;
+  scoped_ptr<base::Value> AsValue() const;
 
   class CC_EXPORT Iterator {
    public:
     Iterator();
-    Iterator(const Region& region);
+    explicit Iterator(const Region& region);
     ~Iterator();
 
     gfx::Rect rect() const {

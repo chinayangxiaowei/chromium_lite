@@ -8,19 +8,19 @@
 
 #include "base/bind.h"
 #include "base/logging.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "ppapi/c/dev/ppb_var_deprecated.h"
 #include "ppapi/c/pp_var.h"
-#include "ppapi/c/ppb_var.h"
 #include "ppapi/c/ppb_core.h"
+#include "ppapi/c/ppb_var.h"
 #include "ppapi/proxy/host_dispatcher.h"
 #include "ppapi/proxy/plugin_dispatcher.h"
 #include "ppapi/proxy/plugin_globals.h"
 #include "ppapi/proxy/plugin_resource_tracker.h"
 #include "ppapi/proxy/plugin_var_tracker.h"
-#include "ppapi/proxy/proxy_object_var.h"
 #include "ppapi/proxy/ppapi_messages.h"
 #include "ppapi/proxy/ppp_class_proxy.h"
+#include "ppapi/proxy/proxy_object_var.h"
 #include "ppapi/proxy/serialized_var.h"
 #include "ppapi/shared_impl/ppb_var_shared.h"
 #include "ppapi/shared_impl/proxy_lock.h"
@@ -285,7 +285,7 @@ InterfaceProxy* CreateVarDeprecatedProxy(Dispatcher* dispatcher) {
 PPB_Var_Deprecated_Proxy::PPB_Var_Deprecated_Proxy(
     Dispatcher* dispatcher)
     : InterfaceProxy(dispatcher),
-      task_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)),
+      task_factory_(this),
       ppb_var_impl_(NULL) {
   if (!dispatcher->IsPlugin()) {
     ppb_var_impl_ = static_cast<const PPB_Var_Deprecated*>(
@@ -392,10 +392,11 @@ void PPB_Var_Deprecated_Proxy::OnMsgReleaseObject(int64 object_id) {
   // spurious warning).
   // TODO(piman): See if we can fix the IPC code to enforce strict ordering, and
   // then remove this.
-  MessageLoop::current()->PostNonNestableTask(FROM_HERE,
+  base::MessageLoop::current()->PostNonNestableTask(
+      FROM_HERE,
       RunWhileLocked(base::Bind(&PPB_Var_Deprecated_Proxy::DoReleaseObject,
-                     task_factory_.GetWeakPtr(),
-                     object_id)));
+                                task_factory_.GetWeakPtr(),
+                                object_id)));
 }
 
 void PPB_Var_Deprecated_Proxy::OnMsgHasProperty(

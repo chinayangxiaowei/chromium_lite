@@ -32,9 +32,5 @@ NativeMessagingTest.*
 # Timing out all over the place. Disabling for now. http://crbug.com/164589
 StorageInfoProviderTest.*
 
-# Crashing. http://crbug.com/222681
-MergeSessionLoadPageTest.*
-
-# Speculative disabling to see if it stops unit_tests hangs.
-# http://crbug.com/180467
-TopSitesTest.CreateTopSitesThenHistory
+# Fails under Valgrind, probably timing-related. http://crbug.com/259679
+WhitelistManagerTest.DownloadWhitelistRetry

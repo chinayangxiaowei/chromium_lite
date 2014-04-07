@@ -8,19 +8,18 @@
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/memory/ref_counted.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/path_service.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "base/threading/sequenced_worker_pool.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/extensions/requirements_checker.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_file_util.h"
-#include "chrome/test/base/test_launcher_utils.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/gpu_data_manager.h"
-#include "content/public/common/gpu_info.h"
+#include "gpu/config/gpu_info.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gl/gl_switches.h"
@@ -29,16 +28,6 @@ namespace extensions {
 
 class RequirementsCheckerBrowserTest : public ExtensionBrowserTest {
  public:
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
-    // We need to launch GPU process to decide if WebGL is allowed.
-    // Run it on top of osmesa to avoid bot driver issues.
-#if !defined(OS_MACOSX)
-    CHECK(test_launcher_utils::OverrideGLImplementation(
-        command_line, gfx::kGLImplementationOSMesaName)) <<
-        "kUseGL must not be set multiple times!";
-#endif
-  }
-
   scoped_refptr<const Extension> LoadExtensionFromDirName(
       const std::string& extension_dir_name) {
     base::FilePath extension_path;
@@ -74,7 +63,7 @@ class RequirementsCheckerBrowserTest : public ExtensionBrowserTest {
       "    }\n"
       "  ]\n"
       "}";
-    content::GPUInfo gpu_info;
+    gpu::GPUInfo gpu_info;
     content::GpuDataManager::GetInstance()->InitializeForTesting(
         json_blacklist, gpu_info);
   }
@@ -190,4 +179,4 @@ IN_PROC_BROWSER_TEST_F(RequirementsCheckerBrowserTest, Check3DExtension) {
   content::BrowserThread::GetBlockingPool()->FlushForTesting();
 }
 
-}  // extensions
+}  // namespace extensions

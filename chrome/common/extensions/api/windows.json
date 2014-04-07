@@ -5,6 +5,7 @@
 [
   {
     "namespace": "windows",
+    "description": "Use the <code>chrome.windows</code> API to interact with browser windows. You can use this API to create, modify, and rearrange windows in the browser.",
     "compiler_options": {
       "implemented_in": "chrome/browser/extensions/api/tabs/tabs_api.h"
     },
@@ -159,8 +160,7 @@
             "name": "createData",
             "properties": {
               "url": {
-                "type": "string",
-                "description": "A URL or list of URLs to open as tabs in the window. Fully-qualified URLs must include a scheme (i.e. 'http://www.google.com', not 'www.google.com'). Relative URLs will be relative to the current page within the extension. Defaults to the New Tab Page.",
+                "description": "A URL or array of URLs to open as tabs in the window. Fully-qualified URLs must include a scheme (i.e. 'http://www.google.com', not 'www.google.com'). Relative URLs will be relative to the current page within the extension. Defaults to the New Tab Page.",
                 "optional": true,
                 "choices": [
                   {"type": "string"},

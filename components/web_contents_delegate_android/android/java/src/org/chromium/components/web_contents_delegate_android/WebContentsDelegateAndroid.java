@@ -14,7 +14,7 @@ import org.chromium.content.browser.ContentViewCore;
 /**
  * Java peer of the native class of the same name.
  */
-@JNINamespace("components")
+@JNINamespace("web_contents_delegate_android")
 public class WebContentsDelegateAndroid {
 
     // Equivalent of WebCore::WebConsoleMessage::LevelTip.
@@ -25,6 +25,20 @@ public class WebContentsDelegateAndroid {
     public static final int LOG_LEVEL_WARNING = 2;
     // Equivalent of WebCore::WebConsoleMessage::LevelError.
     public static final int LOG_LEVEL_ERROR = 3;
+
+    // Flags passed to the WebContentsDelegateAndroid.navigationStateChanged to tell it
+    // what has changed. Should match the values in invalidate_type.h.
+    // Equivalent of InvalidateTypes::INVALIDATE_TYPE_URL.
+    public static final int INVALIDATE_TYPE_URL = 1 << 0;
+    // Equivalent of InvalidateTypes::INVALIDATE_TYPE_TAB.
+    public static final int INVALIDATE_TYPE_TAB = 1 << 1;
+    // Equivalent of InvalidateTypes::INVALIDATE_TYPE_LOAD.
+    public static final int INVALIDATE_TYPE_LOAD = 1 << 2;
+    // Equivalent of InvalidateTypes::INVALIDATE_TYPE_PAGE_ACTIONS.
+    public static final int INVALIDATE_TYPE_PAGE_ACTIONS = 1 << 3;
+    // Equivalent of InvalidateTypes::INVALIDATE_TYPE_TITLE.
+    public static final int INVALIDATE_TYPE_TITLE = 1 << 4;
+
     // The most recent load progress callback received from WebContents, as a percentage.
     // Initialize to 100 to indicate that we're not in a loading state.
     private int mMostRecentProgress = 100;
@@ -33,14 +47,23 @@ public class WebContentsDelegateAndroid {
         return mMostRecentProgress;
     }
 
+    /**
+     * @param disposition The new tab disposition as per the constants in
+     *                    org.chromium.ui.WindowOpenDisposition (See window_open_disposition_list.h
+     *                    for the enumeration definitions).
+     */
     @CalledByNative
-    public void openNewTab(String url, boolean incognito) {
+    public void openNewTab(String url, String extraHeaders, byte[] postData, int disposition) {
     }
 
     @CalledByNative
     public boolean addNewContents(int nativeSourceWebContents, int nativeWebContents,
             int disposition, Rect initialPosition, boolean userGesture) {
         return false;
+    }
+
+    @CalledByNative
+    public void activateContents() {
     }
 
     @CalledByNative
@@ -56,7 +79,7 @@ public class WebContentsDelegateAndroid {
     }
 
     @CalledByNative
-    public void onTitleUpdated() {
+    public void navigationStateChanged(int flags) {
     }
 
     @SuppressWarnings("unused")
@@ -131,5 +154,14 @@ public class WebContentsDelegateAndroid {
     @CalledByNative
     public boolean isFullscreenForTabOrPending() {
         return false;
+    }
+
+    /**
+     * Called from WebKit to request that the top controls be shown or hidden.
+     * The implementation should call ContentViewCore.showTopControls to actually
+     * show or hide the top controls.
+     */
+    @CalledByNative
+    public void didProgrammaticallyScroll(int scrollX, int scrollY) {
     }
 }

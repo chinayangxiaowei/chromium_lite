@@ -13,6 +13,7 @@
 #include "base/callback.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
+#include "base/strings/string16.h"
 
 class Profile;
 
@@ -45,9 +46,11 @@ class DevToolsFileHelper {
   typedef base::Callback<
       void(const std::vector<DevToolsFileHelper::FileSystem>&)>
       RequestFileSystemsCallback;
-  typedef base::Callback<
-      void(std::string, const DevToolsFileHelper::FileSystem&)>
+  typedef base::Callback<void(const DevToolsFileHelper::FileSystem&)>
       AddFileSystemCallback;
+  typedef base::Callback<void(const string16&,
+                              const base::Callback<void(bool)>&)>
+      ShowInfoBarCallback;
 
   // Saves |content| to the file and associates its path with given |url|.
   // If client is calling this method with given |url| for the first time
@@ -73,7 +76,8 @@ class DevToolsFileHelper {
   // struct to |callback|. Saves file system path to prefs.
   // If selected folder does not contain magic file, passes error string to
   // |callback|.
-  void AddFileSystem(const AddFileSystemCallback& callback);
+  void AddFileSystem(const AddFileSystemCallback& callback,
+                     const ShowInfoBarCallback& show_info_bar_callback);
 
   // Loads file system paths from prefs, grants permissions and registers
   // isolated file system for those of them that contain magic file and passes
@@ -83,17 +87,24 @@ class DevToolsFileHelper {
   // Removes isolated file system for given |file_system_path|.
   void RemoveFileSystem(const std::string& file_system_path);
 
+  // Returns whether access to the folder on given |file_system_path| was
+  // granted.
+  bool IsFileSystemAdded(const std::string& file_system_path);
+
  private:
   void SaveAsFileSelected(const std::string& url,
                           const std::string& content,
                           const SaveCallback& callback,
                           const base::FilePath& path);
   void SaveAsFileSelectionCanceled();
-  void InnerAddFileSystem(const AddFileSystemCallback& callback,
-                          const base::FilePath& path);
-  void AddValidatedFileSystem(
+  void InnerAddFileSystem(
       const AddFileSystemCallback& callback,
-      const std::vector<base::FilePath>& permitted_paths);
+      const ShowInfoBarCallback& show_info_bar_callback,
+      const base::FilePath& path);
+  void AddUserConfirmedFileSystem(
+      const AddFileSystemCallback& callback,
+      const base::FilePath& path,
+      bool allowed);
   void RestoreValidatedFileSystems(
       const RequestFileSystemsCallback& callback,
       const std::vector<base::FilePath>& file_paths);

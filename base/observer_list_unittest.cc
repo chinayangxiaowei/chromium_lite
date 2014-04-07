@@ -9,7 +9,7 @@
 
 #include "base/compiler_specific.h"
 #include "base/memory/weak_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "base/threading/platform_thread.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -106,7 +106,7 @@ class AddRemoveThread : public PlatformThread::Delegate,
         count_observes_(0),
         count_addtask_(0),
         do_notifies_(notify),
-        ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {
+        weak_factory_(this) {
   }
 
   virtual ~AddRemoveThread() {
@@ -348,7 +348,7 @@ TEST(ObserverListThreadSafeTest, RemoveMultipleObservers) {
   scoped_refptr<ObserverListThreadSafe<Foo> > observer_list(
       new ObserverListThreadSafe<Foo>);
 
-  FooRemover a(observer_list);
+  FooRemover a(observer_list.get());
   Adder b(1);
 
   observer_list->AddObserver(&a);

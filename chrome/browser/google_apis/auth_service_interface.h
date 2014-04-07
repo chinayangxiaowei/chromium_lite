@@ -10,12 +10,9 @@
 #include "base/callback_forward.h"
 #include "chrome/browser/google_apis/gdata_errorcode.h"
 
-class Profile;
-
 namespace google_apis {
 
 class AuthServiceObserver;
-class OperationRegistry;
 
 // Called when fetching of access token is complete.
 typedef base::Callback<void(GDataErrorCode error,
@@ -23,23 +20,19 @@ typedef base::Callback<void(GDataErrorCode error,
     AuthStatusCallback;
 
 // This defines an interface for the authentication service which is required
-// by authenticated operations (AuthenticatedOperationInterface).
+// by authenticated requests (AuthenticatedRequestInterface).
 // All functions must be called on UI thread.
 class AuthServiceInterface {
  public:
-  // Adds and removes the observer. AddObserver() should be called before
-  // Initialize() as it can change the refresh token.
+  virtual ~AuthServiceInterface() {}
+
+  // Adds and removes the observer.
   virtual void AddObserver(AuthServiceObserver* observer) = 0;
   virtual void RemoveObserver(AuthServiceObserver* observer) = 0;
 
-  // Initializes the auth service. Starts TokenService to retrieve the
-  // refresh token.
-  virtual void Initialize(Profile* profile) = 0;
-
   // Starts fetching OAuth2 access token from the refresh token.
   // |callback| must not be null.
-  virtual void StartAuthentication(OperationRegistry* registry,
-                                   const AuthStatusCallback& callback) = 0;
+  virtual void StartAuthentication(const AuthStatusCallback& callback) = 0;
 
   // True if an OAuth2 access token is retrieved and believed to be fresh.
   // The access token is used to access the Drive server.

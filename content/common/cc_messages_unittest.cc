@@ -6,15 +6,21 @@
 
 #include <string.h>
 
+#include "base/command_line.h"
 #include "cc/output/compositor_frame.h"
+#include "content/public/common/content_switches.h"
 #include "ipc/ipc_message.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/skia/include/effects/SkBlurImageFilter.h"
 
 using cc::CheckerboardDrawQuad;
 using cc::DelegatedFrameData;
 using cc::DebugBorderDrawQuad;
 using cc::DrawQuad;
+using cc::FilterOperation;
+using cc::FilterOperations;
 using cc::IOSurfaceDrawQuad;
+using cc::PictureDrawQuad;
 using cc::RenderPass;
 using cc::RenderPassDrawQuad;
 using cc::ResourceProvider;
@@ -27,8 +33,6 @@ using cc::StreamVideoDrawQuad;
 using cc::VideoLayerImpl;
 using cc::YUVVideoDrawQuad;
 using gfx::Transform;
-using WebKit::WebFilterOperation;
-using WebKit::WebFilterOperations;
 
 namespace content {
 namespace {
@@ -77,6 +81,10 @@ class CCMessagesTest : public testing::Test {
         Compare(IOSurfaceDrawQuad::MaterialCast(a),
                 IOSurfaceDrawQuad::MaterialCast(b));
         break;
+      case DrawQuad::PICTURE_CONTENT:
+        Compare(PictureDrawQuad::MaterialCast(a),
+                PictureDrawQuad::MaterialCast(b));
+        break;
       case DrawQuad::RENDER_PASS:
         Compare(RenderPassDrawQuad::MaterialCast(a),
                 RenderPassDrawQuad::MaterialCast(b));
@@ -117,27 +125,32 @@ class CCMessagesTest : public testing::Test {
 
   void Compare(const IOSurfaceDrawQuad* a, const IOSurfaceDrawQuad* b) {
     EXPECT_EQ(a->io_surface_size.ToString(), b->io_surface_size.ToString());
-    EXPECT_EQ(a->io_surface_texture_id, b->io_surface_texture_id);
+    EXPECT_EQ(a->io_surface_resource_id, b->io_surface_resource_id);
     EXPECT_EQ(a->orientation, b->orientation);
   }
 
   void Compare(const RenderPassDrawQuad* a, const RenderPassDrawQuad* b) {
+    EXPECT_EQ(a->render_pass_id, b->render_pass_id);
     EXPECT_EQ(a->is_replica, b->is_replica);
     EXPECT_EQ(a->mask_resource_id, b->mask_resource_id);
     EXPECT_EQ(a->contents_changed_since_last_frame,
               b->contents_changed_since_last_frame);
     EXPECT_EQ(a->mask_uv_rect.ToString(), b->mask_uv_rect.ToString());
     EXPECT_EQ(a->filters, b->filters);
-    EXPECT_EQ(a->filter, b->filter);
+    if (!a->filter || !b->filter)
+        EXPECT_EQ(a->filter, b->filter);
+    else
+        EXPECT_EQ(a->filter->countInputs(), b->filter->countInputs());
     EXPECT_EQ(a->background_filters, b->background_filters);
   }
 
   void Compare(const SolidColorDrawQuad* a, const SolidColorDrawQuad* b) {
     EXPECT_EQ(a->color, b->color);
+    EXPECT_EQ(a->force_anti_aliasing_off, b->force_anti_aliasing_off);
   }
 
   void Compare(const StreamVideoDrawQuad* a, const StreamVideoDrawQuad* b) {
-    EXPECT_EQ(a->texture_id, b->texture_id);
+    EXPECT_EQ(a->resource_id, b->resource_id);
     EXPECT_EQ(a->matrix, b->matrix);
   }
 
@@ -146,6 +159,7 @@ class CCMessagesTest : public testing::Test {
     EXPECT_EQ(a->premultiplied_alpha, b->premultiplied_alpha);
     EXPECT_EQ(a->uv_top_left, b->uv_top_left);
     EXPECT_EQ(a->uv_bottom_right, b->uv_bottom_right);
+    EXPECT_EQ(a->background_color, b->background_color);
     EXPECT_EQ(a->vertex_opacity[0], b->vertex_opacity[0]);
     EXPECT_EQ(a->vertex_opacity[1], b->vertex_opacity[1]);
     EXPECT_EQ(a->vertex_opacity[2], b->vertex_opacity[2]);
@@ -162,15 +176,10 @@ class CCMessagesTest : public testing::Test {
 
   void Compare(const YUVVideoDrawQuad* a, const YUVVideoDrawQuad* b) {
     EXPECT_EQ(a->tex_scale, b->tex_scale);
-    EXPECT_EQ(a->y_plane.resource_id, b->y_plane.resource_id);
-    EXPECT_EQ(a->y_plane.size.ToString(), b->y_plane.size.ToString());
-    EXPECT_EQ(a->y_plane.format, b->y_plane.format);
-    EXPECT_EQ(a->u_plane.resource_id, b->u_plane.resource_id);
-    EXPECT_EQ(a->u_plane.size.ToString(), b->u_plane.size.ToString());
-    EXPECT_EQ(a->u_plane.format, b->u_plane.format);
-    EXPECT_EQ(a->v_plane.resource_id, b->v_plane.resource_id);
-    EXPECT_EQ(a->v_plane.size.ToString(), b->v_plane.size.ToString());
-    EXPECT_EQ(a->v_plane.format, b->v_plane.format);
+    EXPECT_EQ(a->y_plane_resource_id, b->y_plane_resource_id);
+    EXPECT_EQ(a->u_plane_resource_id, b->u_plane_resource_id);
+    EXPECT_EQ(a->v_plane_resource_id, b->v_plane_resource_id);
+    EXPECT_EQ(a->a_plane_resource_id, b->a_plane_resource_id);
   }
 
   void Compare(const TransferableResource& a, const TransferableResource& b) {
@@ -185,6 +194,10 @@ class CCMessagesTest : public testing::Test {
 };
 
 TEST_F(CCMessagesTest, AllQuads) {
+  CommandLine& command_line = *CommandLine::ForCurrentProcess();
+  if (!command_line.HasSwitch(switches::kAllowFiltersOverIPC))
+    command_line.AppendSwitch(switches::kAllowFiltersOverIPC);
+
   IPC::Message msg(1, 2, IPC::Message::PRIORITY_NORMAL);
 
   Transform arbitrary_matrix;
@@ -213,33 +226,22 @@ TEST_F(CCMessagesTest, AllQuads) {
   IOSurfaceDrawQuad::Orientation arbitrary_orientation =
       IOSurfaceDrawQuad::UNFLIPPED;
   RenderPass::Id arbitrary_id(10, 14);
-  ResourceProvider::ResourceId arbitrary_resourceid = 55;
+  ResourceProvider::ResourceId arbitrary_resourceid1 = 55;
+  ResourceProvider::ResourceId arbitrary_resourceid2 = 47;
+  ResourceProvider::ResourceId arbitrary_resourceid3 = 23;
+  ResourceProvider::ResourceId arbitrary_resourceid4 = 16;
+  SkScalar arbitrary_sigma = SkFloatToScalar(2.0f);
 
-  VideoLayerImpl::FramePlane arbitrary_plane1;
-  arbitrary_plane1.resource_id = arbitrary_resourceid;
-  arbitrary_plane1.size = arbitrary_size1;
-  arbitrary_plane1.format = arbitrary_int;
-
-  VideoLayerImpl::FramePlane arbitrary_plane2;
-  arbitrary_plane2.resource_id = arbitrary_resourceid;
-  arbitrary_plane2.size = arbitrary_size2;
-  arbitrary_plane2.format = arbitrary_int;
-
-  VideoLayerImpl::FramePlane arbitrary_plane3;
-  arbitrary_plane3.resource_id = arbitrary_resourceid;
-  arbitrary_plane3.size = arbitrary_size3;
-  arbitrary_plane3.format = arbitrary_int;
-
-  WebFilterOperations arbitrary_filters1;
-  arbitrary_filters1.append(WebFilterOperation::createGrayscaleFilter(
+  FilterOperations arbitrary_filters1;
+  arbitrary_filters1.Append(FilterOperation::CreateGrayscaleFilter(
       arbitrary_float1));
 
-  WebFilterOperations arbitrary_filters2;
-  arbitrary_filters2.append(WebFilterOperation::createBrightnessFilter(
+  FilterOperations arbitrary_filters2;
+  arbitrary_filters2.Append(FilterOperation::CreateBrightnessFilter(
       arbitrary_float2));
 
-  // TODO(danakj): filter is not serialized.
-  skia::RefPtr<SkImageFilter> arbitrary_filter;
+  skia::RefPtr<SkImageFilter> arbitrary_filter = skia::AdoptRef(
+    new SkBlurImageFilter(arbitrary_sigma, arbitrary_sigma));
 
   scoped_ptr<SharedQuadState> shared_state1_in = SharedQuadState::Create();
   shared_state1_in->SetAll(arbitrary_matrix,
@@ -281,7 +283,7 @@ TEST_F(CCMessagesTest, AllQuads) {
                        arbitrary_rect1,
                        arbitrary_bool1,
                        arbitrary_size1,
-                       arbitrary_int,
+                       arbitrary_resourceid3,
                        arbitrary_orientation);
   scoped_ptr<DrawQuad> iosurface_cmp = iosurface_in->Copy(
       iosurface_in->shared_quad_state);
@@ -295,11 +297,11 @@ TEST_F(CCMessagesTest, AllQuads) {
                         arbitrary_bool1,
                         arbitrary_id,
                         arbitrary_bool2,
-                        arbitrary_resourceid,
+                        arbitrary_resourceid2,
                         arbitrary_rect1,
                         arbitrary_rectf1,
                         arbitrary_filters1,
-                        arbitrary_filter, // TODO(piman): not serialized.
+                        arbitrary_filter,
                         arbitrary_filters2);
   scoped_ptr<RenderPassDrawQuad> renderpass_cmp = renderpass_in->Copy(
       renderpass_in->shared_quad_state, renderpass_in->render_pass_id);
@@ -329,7 +331,8 @@ TEST_F(CCMessagesTest, AllQuads) {
                         arbitrary_rect1,
                         arbitrary_rect2,
                         arbitrary_bool1,
-                        arbitrary_color);
+                        arbitrary_color,
+                        arbitrary_bool2);
   scoped_ptr<DrawQuad> solidcolor_cmp = solidcolor_in->Copy(
       solidcolor_in->shared_quad_state);
 
@@ -340,7 +343,7 @@ TEST_F(CCMessagesTest, AllQuads) {
                          arbitrary_rect3,
                          arbitrary_rect1,
                          arbitrary_bool1,
-                         arbitrary_int,
+                         arbitrary_resourceid2,
                          arbitrary_matrix);
   scoped_ptr<DrawQuad> streamvideo_cmp = streamvideo_in->Copy(
       streamvideo_in->shared_quad_state);
@@ -351,10 +354,11 @@ TEST_F(CCMessagesTest, AllQuads) {
                      arbitrary_rect3,
                      arbitrary_rect1,
                      arbitrary_bool1,
-                     arbitrary_resourceid,
+                     arbitrary_resourceid1,
                      arbitrary_bool2,
                      arbitrary_pointf1,
                      arbitrary_pointf2,
+                     arbitrary_color,
                      arbitrary_float_array,
                      arbitrary_bool3);
   scoped_ptr<DrawQuad> texture_cmp = texture_in->Copy(
@@ -366,7 +370,7 @@ TEST_F(CCMessagesTest, AllQuads) {
                   arbitrary_rect3,
                   arbitrary_rect1,
                   arbitrary_bool1,
-                  arbitrary_resourceid,
+                  arbitrary_resourceid3,
                   arbitrary_rectf1,
                   arbitrary_size1,
                   arbitrary_bool2);
@@ -381,9 +385,10 @@ TEST_F(CCMessagesTest, AllQuads) {
                       arbitrary_rect3,
                       arbitrary_bool1,
                       arbitrary_sizef1,
-                      arbitrary_plane1,
-                      arbitrary_plane2,
-                      arbitrary_plane3);
+                      arbitrary_resourceid1,
+                      arbitrary_resourceid2,
+                      arbitrary_resourceid3,
+                      arbitrary_resourceid4);
   scoped_ptr<DrawQuad> yuvvideo_cmp = yuvvideo_in->Copy(
       yuvvideo_in->shared_quad_state);
 

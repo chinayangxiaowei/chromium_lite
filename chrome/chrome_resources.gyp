@@ -12,7 +12,7 @@
       'target_name': 'chrome_extra_resources',
       'type': 'none',
       # These resources end up in resources.pak because they are resources
-      # used by internal pages.  Putting them in a spearate pak file makes
+      # used by internal pages.  Putting them in a separate pak file makes
       # it easier for us to reference them internally.
       'actions': [
         {
@@ -43,12 +43,20 @@
           },
           'includes': [ '../build/grit_action.gypi' ],
         },
+        {
+          'action_name': 'translate_internals_resources',
+          'variables': {
+            'grit_grd_file': 'browser/resources/translate_internals_resources.grd',
+          },
+          'includes': [ '../build/grit_action.gypi' ],
+        },
       ],
       'includes': [ '../build/grit_target.gypi' ],
       'conditions': [
         ['OS != "ios"', {
           'dependencies': [
             '../content/browser/devtools/devtools_resources.gyp:devtools_resources',
+            '../content/browser/tracing/tracing_resources.gyp:tracing_resources',
           ],
           'actions': [
             {
@@ -79,6 +87,13 @@
                    'browser/devtools/frontend/devtools_discovery_page_resources.grd',
               },
               'includes': [ '../build/grit_action.gypi' ]
+            },
+            {
+              'action_name': 'sync_file_system_internals_resources',
+              'variables': {
+                'grit_grd_file': 'browser/resources/sync_file_system_internals_resources.grd',
+              },
+              'includes': [ '../build/grit_action.gypi' ],
             },
           ],
           'copies': [
@@ -297,6 +312,7 @@
         'chrome_strings',
         'platform_locale_settings',
         'theme_resources',
+        '<(DEPTH)/components/component_strings.gyp:component_strings',
         '<(DEPTH)/net/net.gyp:net_resources',
         '<(DEPTH)/ui/base/strings/ui_strings.gyp:ui_strings',
         '<(DEPTH)/ui/ui.gyp:ui_resources',
@@ -333,15 +349,14 @@
             # TODO(zork): Protect this with if use_aura==1
             '<(DEPTH)/ash/ash_strings.gyp:ash_strings',
             '<(DEPTH)/content/content_resources.gyp:content_resources',
-            '<(DEPTH)/device/device_bluetooth_strings.gyp:device_bluetooth_strings',
-            '<(DEPTH)/webkit/support/webkit_support.gyp:webkit_resources',
-            '<(DEPTH)/webkit/support/webkit_support.gyp:webkit_strings',
+            '<(DEPTH)/device/bluetooth/bluetooth_strings.gyp:device_bluetooth_strings',
+            '<(DEPTH)/webkit/webkit_resources.gyp:webkit_resources',
+            '<(DEPTH)/webkit/webkit_resources.gyp:webkit_strings',
           ],
         }],
         ['use_ash==1', {
           'dependencies': [
              '<(DEPTH)/ash/ash.gyp:ash_resources',
-             '<(DEPTH)/ash/ash.gyp:ash_wallpaper_resources',
           ],
         }],
         ['OS != "mac" and OS != "ios"', {

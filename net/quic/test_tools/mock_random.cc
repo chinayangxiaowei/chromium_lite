@@ -6,12 +6,16 @@
 
 namespace net {
 
+MockRandom::MockRandom()
+    : increment_(0) {
+}
+
 void MockRandom::RandBytes(void* data, size_t len) {
-  memset(data, 'r', len);
+  memset(data, 'r' + increment_, len);
 }
 
 uint64 MockRandom::RandUint64() {
-  return 0xDEADBEEF;
+  return 0xDEADBEEF + increment_;
 }
 
 bool MockRandom::RandBool() {
@@ -19,6 +23,10 @@ bool MockRandom::RandBool() {
 }
 
 void MockRandom::Reseed(const void* additional_entropy, size_t entropy_len) {
+}
+
+void MockRandom::ChangeValue() {
+  increment_++;
 }
 
 }  // namespace net

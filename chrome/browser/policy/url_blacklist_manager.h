@@ -11,7 +11,7 @@
 #include "base/basictypes.h"
 #include "base/callback_forward.h"
 #include "base/compiler_specific.h"
-#include "base/hash_tables.h"
+#include "base/containers/hash_tables.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/prefs/pref_change_registrar.h"
@@ -19,7 +19,6 @@
 
 class GURL;
 class PrefService;
-class PrefRegistrySyncable;
 
 namespace base {
 class ListValue;
@@ -27,6 +26,10 @@ class ListValue;
 
 namespace net {
 class URLRequest;
+}
+
+namespace user_prefs {
+class PrefRegistrySyncable;
 }
 
 namespace policy {
@@ -55,10 +58,6 @@ class URLBlacklist {
 
   // Returns the number of items in the list.
   size_t Size() const;
-
-  // Returns true if the URL has a standard scheme. Only URLs with standard
-  // schemes are filtered.
-  static bool HasStandardScheme(const GURL& url);
 
   // Splits a URL filter into its components. A GURL isn't used because these
   // can be invalid URLs e.g. "google.com".
@@ -145,7 +144,7 @@ class URLBlacklistManager {
   virtual void SetBlacklist(scoped_ptr<URLBlacklist> blacklist);
 
   // Registers the preferences related to blacklisting in the given PrefService.
-  static void RegisterUserPrefs(PrefRegistrySyncable* registry);
+  static void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
 
  protected:
   // Used to delay updating the blacklist while the preferences are

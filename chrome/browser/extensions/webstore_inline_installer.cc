@@ -4,30 +4,29 @@
 
 #include "chrome/browser/extensions/webstore_inline_installer.h"
 
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/web_contents.h"
 
 using content::WebContents;
 
-
 namespace extensions {
 
 const char kVerifiedSiteKey[] = "verified_site";
+const char kVerifiedSitesKey[] = "verified_sites";
 const char kInlineInstallNotSupportedKey[] = "inline_install_not_supported";
 const char kRedirectUrlKey[] = "redirect_url";
 
 const char kInvalidWebstoreResponseError[] = "Invalid Chrome Web Store reponse";
-const char kNoVerifiedSiteError[] =
+const char kNoVerifiedSitesError[] =
     "Inline installs can only be initiated for Chrome Web Store items that "
-    "have a verified site";
-const char kNotFromVerifiedSiteError[] =
-    "Installs can only be initiated by the Chrome Web Store item's verified "
-    "site";
+    "have one or more verified sites";
+const char kNotFromVerifiedSitesError[] =
+    "Installs can only be initiated by one of the Chrome Web Store item's "
+    "verified sites";
 const char kInlineInstallSupportedError[] =
     "Inline installation is not supported for this item. The user will be "
     "redirected to the Chrome Web Store.";
-
 
 WebstoreInlineInstaller::WebstoreInlineInstaller(
     content::WebContents* web_contents,
@@ -58,9 +57,14 @@ WebstoreInlineInstaller::CreateInstallPrompt() const {
   scoped_ptr<ExtensionInstallPrompt::Prompt> prompt(
       new ExtensionInstallPrompt::Prompt(
           ExtensionInstallPrompt::INLINE_INSTALL_PROMPT));
+
+  // crbug.com/260742: Don't display the user count if it's zero. The reason
+  // it's zero is very often that the number isn't actually being counted
+  // (intentionally), which means that it's unlikely to be correct.
   prompt->SetInlineInstallWebstoreData(localized_user_count(),
-                                      average_rating(),
-                                      rating_count());
+                                       show_user_count(),
+                                       average_rating(),
+                                       rating_count());
   return prompt.Pass();
 }
 
@@ -112,21 +116,45 @@ bool WebstoreInlineInstaller::CheckInlineInstallPermitted(
 bool WebstoreInlineInstaller::CheckRequestorPermitted(
     const base::DictionaryValue& webstore_data,
     std::string* error) const {
-  // Check for a verified site.
-  if (!webstore_data.HasKey(kVerifiedSiteKey)) {
-    *error = kNoVerifiedSiteError;
+  // Ensure that there is at least one verified site present.
+  const bool data_has_single_site = webstore_data.HasKey(kVerifiedSiteKey);
+  const bool data_has_site_list = webstore_data.HasKey(kVerifiedSitesKey);
+  if (!data_has_single_site && !data_has_site_list) {
+    *error = kNoVerifiedSitesError;
     return false;
   }
-  std::string verified_site;
-  if (!webstore_data.GetString(kVerifiedSiteKey, &verified_site)) {
-    *error = kInvalidWebstoreResponseError;
+  bool requestor_is_ok = false;
+  // Handle the deprecated single-site case.
+  if (!data_has_site_list) {
+    std::string verified_site;
+    if (!webstore_data.GetString(kVerifiedSiteKey, &verified_site)) {
+      *error = kInvalidWebstoreResponseError;
+      return false;
+    }
+    requestor_is_ok = IsRequestorURLInVerifiedSite(requestor_url_,
+                                                   verified_site);
+  } else {
+    const base::ListValue* verified_sites = NULL;
+    if (!webstore_data.GetList(kVerifiedSitesKey, &verified_sites)) {
+      *error = kInvalidWebstoreResponseError;
+      return false;
+    }
+    for (base::ListValue::const_iterator it = verified_sites->begin();
+         it != verified_sites->end() && !requestor_is_ok; ++it) {
+      std::string verified_site;
+      if (!(*it)->GetAsString(&verified_site)) {
+        *error = kInvalidWebstoreResponseError;
+        return false;
+      }
+      if (IsRequestorURLInVerifiedSite(requestor_url_, verified_site)) {
+        requestor_is_ok = true;
+      }
+    }
+  }
+  if (!requestor_is_ok) {
+    *error = kNotFromVerifiedSitesError;
     return false;
   }
-  if (!IsRequestorURLInVerifiedSite(requestor_url_, verified_site)) {
-    *error = kNotFromVerifiedSiteError;
-    return false;
-  }
-
   *error = "";
   return true;
 }
@@ -144,20 +172,44 @@ void WebstoreInlineInstaller::WebContentsDestroyed(
 bool WebstoreInlineInstaller::IsRequestorURLInVerifiedSite(
     const GURL& requestor_url,
     const std::string& verified_site) {
-  // Turn the verified site (which may be a bare domain, or have a port and/or a
-  // path) into a URL that can be parsed by URLPattern.
-  std::string verified_site_url =
-      base::StringPrintf(
-          "http://*.%s%s",
-          verified_site.c_str(),
-          verified_site.find('/') == std::string::npos ? "/*" : "*");
+  // Turn the verified site into a URL that can be parsed by URLPattern.
+  // |verified_site| must follow the format:
+  //
+  // [scheme://]host[:port][/path/specifier]
+  //
+  // If scheme is omitted, URLPattern will match against either an
+  // HTTP or HTTPS requestor. If scheme is specified, it must be either HTTP
+  // or HTTPS, and URLPattern will only match the scheme specified.
+  GURL verified_site_url(verified_site);
+  int valid_schemes = URLPattern::SCHEME_HTTP | URLPattern::SCHEME_HTTPS;
+  if (!verified_site_url.is_valid() || !verified_site_url.IsStandard())
+    // If no scheme is specified, GURL will fail to parse the string correctly.
+    // It will either determine that the URL is invalid, or parse a
+    // host:port/path as scheme:host/path.
+    verified_site_url = GURL("http://" + verified_site);
+  else if (verified_site_url.SchemeIs("http"))
+    valid_schemes = URLPattern::SCHEME_HTTP;
+  else if (verified_site_url.SchemeIs("https"))
+    valid_schemes = URLPattern::SCHEME_HTTPS;
+  else
+    return false;
 
-  URLPattern verified_site_pattern(
-      URLPattern::SCHEME_HTTP | URLPattern::SCHEME_HTTPS);
+  std::string port_spec =
+      verified_site_url.has_port() ? ":" + verified_site_url.port() : "";
+  std::string path_spec = verified_site_url.path() + "*";
+  std::string verified_site_pattern_spec =
+      base::StringPrintf(
+          "%s://*.%s%s%s",
+          verified_site_url.scheme().c_str(),
+          verified_site_url.host().c_str(),
+          port_spec.c_str(),
+          path_spec.c_str());
+
+  URLPattern verified_site_pattern(valid_schemes);
   URLPattern::ParseResult parse_result =
-      verified_site_pattern.Parse(verified_site_url);
+      verified_site_pattern.Parse(verified_site_pattern_spec);
   if (parse_result != URLPattern::PARSE_SUCCESS) {
-    DLOG(WARNING) << "Could not parse " << verified_site_url <<
+    DLOG(WARNING) << "Could not parse " << verified_site_pattern_spec <<
         " as URL pattern " << parse_result;
     return false;
   }

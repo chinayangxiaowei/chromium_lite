@@ -9,8 +9,8 @@
 #include "base/basictypes.h"
 #include "base/format_macros.h"
 #include "base/logging.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "dbus/object_path.h"
 
 #if defined(USE_SYSTEM_PROTOBUF)
@@ -87,7 +87,7 @@ std::string Message::GetMessageTypeAsString() {
       return "MESSAGE_ERROR";
   }
   NOTREACHED();
-  return "";
+  return std::string();
 }
 
 std::string Message::ToStringInternal(const std::string& indent,
@@ -173,7 +173,7 @@ std::string Message::ToStringInternal(const std::string& indent,
         } else {
           std::string truncated;
           TruncateUTF8ToByteSize(value, kTruncateLength, &truncated);
-          base::StringAppendF(&truncated, "... (%"PRIuS" bytes in total)",
+          base::StringAppendF(&truncated, "... (%" PRIuS " bytes in total)",
                               value.size());
           output += indent + "string \"" + truncated + "\"\n";
         }
@@ -251,7 +251,7 @@ std::string Message::ToStringInternal(const std::string& indent,
 // ...
 std::string Message::ToString() {
   if (!raw_message_)
-    return "";
+    return std::string();
 
   // Generate headers first.
   std::string headers;
@@ -268,7 +268,7 @@ std::string Message::ToString() {
 
   // Generate the payload.
   MessageReader reader(this);
-  return headers + "\n" + ToStringInternal("", &reader);
+  return headers + "\n" + ToStringInternal(std::string(), &reader);
 }
 
 bool Message::SetDestination(const std::string& destination) {
@@ -452,9 +452,9 @@ scoped_ptr<ErrorResponse> ErrorResponse::FromMethodCall(
 // MessageWriter implementation.
 //
 
-MessageWriter::MessageWriter(Message* message) :
-    message_(message),
-    container_is_open_(false) {
+MessageWriter::MessageWriter(Message* message)
+    : message_(message),
+      container_is_open_(false) {
   memset(&raw_message_iter_, 0, sizeof(raw_message_iter_));
   if (message)
     dbus_message_iter_init_append(message_->raw_message(), &raw_message_iter_);
@@ -966,7 +966,7 @@ bool MessageReader::PopContainer(int dbus_type, MessageReader* sub_reader) {
 }
 
 bool MessageReader::PopVariantOfBasic(int dbus_type, void* value) {
-  dbus::MessageReader variant_reader(message_);
+  MessageReader variant_reader(message_);
   if (!PopVariant(&variant_reader))
     return false;
   return variant_reader.PopBasic(dbus_type, value);

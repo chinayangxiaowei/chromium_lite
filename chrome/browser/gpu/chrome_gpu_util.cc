@@ -5,6 +5,9 @@
 #include "chrome/browser/gpu/chrome_gpu_util.h"
 
 #include "base/command_line.h"
+#if defined(OS_MACOSX)
+#include "base/mac/mac_util.h"
+#endif
 #include "base/metrics/field_trial.h"
 #include "base/metrics/histogram.h"
 #include "base/version.h"
@@ -49,6 +52,20 @@ bool ShouldRunCompositingFieldTrial() {
     return false;
 #endif
 
+#if defined(OS_MACOSX)
+  // Browser and content shell tests hang on 10.7 when the Apple software
+  // renderer is used. These tests ignore the blacklist (which disables
+  // compositing both on 10.7 and when the Apple software renderer is used)
+  // by specifying the kSkipGpuDataLoading switch, so disable forced
+  // compositing here based on the switch and OS version.
+  // http://crbug.com/230931
+  if (base::mac::IsOSLion() &&
+      CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kSkipGpuDataLoading)) {
+    return false;
+  }
+#endif
+
   // Don't activate the field trial if force-compositing-mode has been
   // explicitly disabled from the command line.
   if (CommandLine::ForCurrentProcess()->HasSwitch(
@@ -82,11 +99,8 @@ void InitializeCompositingFieldTrial() {
   const base::FieldTrial::Probability kDivisor = 3;
   scoped_refptr<base::FieldTrial> trial(
     base::FieldTrialList::FactoryGetFieldTrial(
-        content::kGpuCompositingFieldTrialName, kDivisor,
-        "disable", 2013, 12, 31, NULL));
-
-  // Produce the same result on every run of this client.
-  trial->UseOneTimeRandomization();
+        content::kGpuCompositingFieldTrialName, kDivisor,  "disable",
+        2013, 12, 31, base::FieldTrial::ONE_TIME_RANDOMIZED, NULL));
 
   base::FieldTrial::Probability force_compositing_mode_probability = 0;
   base::FieldTrial::Probability threaded_compositing_probability = 0;
@@ -95,16 +109,9 @@ void InitializeCompositingFieldTrial() {
   // http://crbug.com/133602 for mac
   // http://crbug.com/140866 for linux
 
-#if defined(OS_WIN)
-    // Enable threaded compositing on Windows.
+#if defined(OS_WIN) || defined(OS_MACOSX)
+  // Enable threaded compositing on Windows and Mac.
   threaded_compositing_probability = kDivisor;
-#elif defined(OS_MACOSX)
-  chrome::VersionInfo::Channel channel = chrome::VersionInfo::GetChannel();
-  if (channel == chrome::VersionInfo::CHANNEL_CANARY ||
-      channel == chrome::VersionInfo::CHANNEL_DEV) {
-    // Enable force-compositing-mode on the Mac.
-    force_compositing_mode_probability = kDivisor;
-  }
 #endif
 
   int force_compositing_group = trial->AppendGroup(
@@ -121,5 +128,5 @@ void InitializeCompositingFieldTrial() {
   UMA_HISTOGRAM_BOOLEAN("GPU.InCompositorThreadFieldTrial", thread);
 }
 
-}  // namespace gpu_util;
+}  // namespace gpu_util
 

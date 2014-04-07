@@ -7,19 +7,21 @@
 
 #include <string>
 
-#include "ash/shell.h"
 #include "base/compiler_specific.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
+#include "base/threading/thread.h"
+#include "content/public/test/test_browser_thread_bundle.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/aura/client/window_types.h"
 #include "ui/views/test/test_views_delegate.h"
 
 #if defined(OS_WIN)
-#include "base/memory/scoped_ptr.h"
+#include "ui/base/win/scoped_ole_initializer.h"
 #endif
 
 namespace aura {
+class RootWindow;
 class Window;
 class WindowDelegate;
 
@@ -28,10 +30,6 @@ class EventGenerator;
 }  // namespace test
 }  // namespace aura
 
-namespace ui {
-class ScopedAnimationDurationScaleMode;
-}  // namespace ui
-
 namespace ash {
 namespace internal {
 class DisplayManager;
@@ -39,8 +37,10 @@ class DisplayManager;
 
 namespace test {
 
+class AshTestHelper;
+#if defined(OS_WIN)
 class TestMetroViewerProcessHost;
-class TestShellDelegate;
+#endif
 
 class AshTestViewsDelegate : public views::TestViewsDelegate {
  public:
@@ -54,8 +54,6 @@ class AshTestBase : public testing::Test {
  public:
   AshTestBase();
   virtual ~AshTestBase();
-
-  MessageLoopForUI* message_loop() { return &message_loop_; }
 
   // testing::Test:
   virtual void SetUp() OVERRIDE;
@@ -96,6 +94,24 @@ class AshTestBase : public testing::Test {
   aura::test::EventGenerator& GetEventGenerator();
 
  protected:
+  enum UserSessionBlockReason {
+    FIRST_BLOCK_REASON,
+    BLOCKED_BY_LOCK_SCREEN = FIRST_BLOCK_REASON,
+    BLOCKED_BY_LOGIN_SCREEN,
+    BLOCKED_BY_USER_ADDING_SCREEN,
+    NUMBER_OF_BLOCK_REASONS
+  };
+
+  // True if the running environment supports multiple displays,
+  // or false otherwise (e.g. win8 bot).
+  static bool SupportsMultipleDisplays();
+
+  // True if the running environment supports host window resize,
+  // or false otherwise (e.g. win8 bot).
+  static bool SupportsHostWindowResize();
+
+  void set_start_session(bool start_session) { start_session_ = start_session; }
+
   void RunAllPendingInMessageLoop();
 
   // Utility methods to emulate user logged in or not, session started or not
@@ -103,20 +119,41 @@ class AshTestBase : public testing::Test {
   void SetSessionStarted(bool session_started);
   void SetUserLoggedIn(bool user_logged_in);
   void SetCanLockScreen(bool can_lock_screen);
+  void SetUserAddingScreenRunning(bool user_adding_screen_running);
+
+  // Methods to emulate blocking and unblocking user session with given
+  // |block_reason|.
+  void BlockUserSession(UserSessionBlockReason block_reason);
+  void UnblockUserSession();
 
  private:
-  MessageLoopForUI message_loop_;
-
-  TestShellDelegate* test_shell_delegate_;
-
+  bool setup_called_;
+  bool teardown_called_;
+  // |SetUp()| doesn't activate session if this is set to false.
+  bool start_session_;
+  content::TestBrowserThreadBundle thread_bundle_;
+  scoped_ptr<AshTestHelper> ash_test_helper_;
   scoped_ptr<aura::test::EventGenerator> event_generator_;
 #if defined(OS_WIN)
+  // Note that the order is important here as ipc_thread_ should be destroyed
+  // after metro_viewer_host_->channel_.
+  scoped_ptr<base::Thread> ipc_thread_;
   scoped_ptr<TestMetroViewerProcessHost> metro_viewer_host_;
+  ui::ScopedOleInitializer ole_initializer_;
 #endif
 
-  scoped_ptr<ui::ScopedAnimationDurationScaleMode> zero_duration_mode_;
-
   DISALLOW_COPY_AND_ASSIGN(AshTestBase);
+};
+
+class NoSessionAshTestBase : public AshTestBase {
+ public:
+  NoSessionAshTestBase() {
+    set_start_session(false);
+  }
+  virtual ~NoSessionAshTestBase() {}
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(NoSessionAshTestBase);
 };
 
 }  // namespace test

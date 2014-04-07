@@ -141,7 +141,8 @@ class MockTransferBuffer : public TransferBufferInterface {
   }
 
   bool InSync() {
-    return expected_buffer_index_ == actual_buffer_index_;
+    return expected_buffer_index_ == actual_buffer_index_ &&
+           expected_offset_ == actual_offset_;
   }
 
   ExpectedMemoryInfo GetExpectedMemory(size_t size) {
@@ -302,7 +303,7 @@ class GLES2ImplementationTest : public testing::Test {
   static const int32 kNumCommandEntries = 500;
   static const int32 kCommandBufferSizeBytes =
       kNumCommandEntries * sizeof(CommandBufferEntry);
-  static const size_t kTransferBufferSize = 256;
+  static const size_t kTransferBufferSize = 512;
 
   static const GLint kMaxCombinedTextureImageUnits = 8;
   static const GLint kMaxCubeMapTextureSize = 64;
@@ -352,7 +353,7 @@ class GLES2ImplementationTest : public testing::Test {
     return gl_->query_tracker_->GetQuery(id);
   }
 
-  void Initialize(bool shared_resources, bool bind_generates_resource) {
+  void Initialize(bool bind_generates_resource) {
     command_buffer_.reset(new StrictMock<MockClientCommandBuffer>());
     ASSERT_TRUE(command_buffer_->Initialize());
 
@@ -383,7 +384,9 @@ class GLES2ImplementationTest : public testing::Test {
     // This just happens to work for now because IntState has 1 GLint per state.
     // If IntState gets more complicated this code will need to get more
     // complicated.
-    ExpectedMemoryInfo mem1 = GetExpectedMemory(sizeof(int_state) * 2);
+    ExpectedMemoryInfo mem1 = GetExpectedMemory(
+        sizeof(GLES2Implementation::GLStaticState::IntState) * 2 +
+        sizeof(cmds::GetShaderPrecisionFormat::Result) * 12);
 
     {
       InSequence sequence;
@@ -397,8 +400,8 @@ class GLES2ImplementationTest : public testing::Test {
           helper_.get(),
           NULL,
           transfer_buffer_.get(),
-          shared_resources,
-          bind_generates_resource));
+          bind_generates_resource,
+          NULL));
       ASSERT_TRUE(gl_->Initialize(
           kTransferBufferSize,
           kTransferBufferSize,
@@ -478,7 +481,7 @@ class GLES2ImplementationTest : public testing::Test {
 };
 
 void GLES2ImplementationTest::SetUp() {
-  Initialize(false, true);
+  Initialize(true);
 }
 
 void GLES2ImplementationTest::TearDown() {
@@ -496,7 +499,7 @@ class GLES2ImplementationStrictSharedTest : public GLES2ImplementationTest {
 };
 
 void GLES2ImplementationStrictSharedTest::SetUp() {
-  Initialize(true, false);
+  Initialize(false);
 }
 
 // GCC requires these declarations, but MSVC requires they not be present
@@ -535,7 +538,7 @@ TEST_F(GLES2ImplementationTest, GetBucketContents) {
   const uint32 kBucketId = GLES2Implementation::kResultBucketId;
   const uint32 kTestSize = MaxTransferBufferSize() + 32;
 
-  scoped_array<uint8> buf(new uint8 [kTestSize]);
+  scoped_ptr<uint8[]> buf(new uint8 [kTestSize]);
   uint8* expected_data = buf.get();
   for (uint32 ii = 0; ii < kTestSize; ++ii) {
     expected_data[ii] = ii * 3;
@@ -1434,13 +1437,14 @@ TEST_F(GLES2ImplementationTest, ReadPixels2Reads) {
   Cmds expected;
   expected.read1.Init(
       0, 0, kWidth, kHeight / 2, kFormat, kType,
-      mem1.id, mem1.offset, result1.id, result1.offset);
+      mem1.id, mem1.offset, result1.id, result1.offset,
+      false);
   expected.set_token1.Init(GetNextToken());
   expected.read2.Init(
       0, kHeight / 2, kWidth, kHeight / 2, kFormat, kType,
-      mem2.id, mem2.offset, result2.id, result2.offset);
+      mem2.id, mem2.offset, result2.id, result2.offset, false);
   expected.set_token2.Init(GetNextToken());
-  scoped_array<int8> buffer(new int8[kWidth * kHeight * kBytesPerPixel]);
+  scoped_ptr<int8[]> buffer(new int8[kWidth * kHeight * kBytesPerPixel]);
 
   EXPECT_CALL(*command_buffer(), OnFlush())
       .WillOnce(SetMemory(result1.ptr, static_cast<uint32>(1)))
@@ -1470,9 +1474,9 @@ TEST_F(GLES2ImplementationTest, ReadPixelsBadFormatType) {
   Cmds expected;
   expected.read.Init(
       0, 0, kWidth, kHeight, kFormat, kType,
-      mem1.id, mem1.offset, result1.id, result1.offset);
+      mem1.id, mem1.offset, result1.id, result1.offset, false);
   expected.set_token.Init(GetNextToken());
-  scoped_array<int8> buffer(new int8[kWidth * kHeight * kBytesPerPixel]);
+  scoped_ptr<int8[]> buffer(new int8[kWidth * kHeight * kBytesPerPixel]);
 
   EXPECT_CALL(*command_buffer(), OnFlush())
       .Times(1)
@@ -2142,7 +2146,7 @@ TEST_F(GLES2ImplementationTest, TexImage2D2Writes) {
       kWidth, kHeight / 2, kFormat, kType, kPixelStoreUnpackAlignment,
       &half_size, NULL, NULL));
 
-  scoped_array<uint8> pixels(new uint8[size]);
+  scoped_ptr<uint8[]> pixels(new uint8[size]);
   for (uint32 ii = 0; ii < size; ++ii) {
     pixels[ii] = static_cast<uint8>(ii);
   }
@@ -2266,7 +2270,7 @@ TEST_F(GLES2ImplementationTest, TexSubImage2DFlipY) {
       kTarget, kLevel, kFormat, kTextureWidth, kTextureHeight, kBorder, kFormat,
       kType, NULL);
   gl_->PixelStorei(GL_UNPACK_FLIP_Y_CHROMIUM, GL_TRUE);
-  scoped_array<uint32> pixels(new uint32[kSubImageWidth * kSubImageHeight]);
+  scoped_ptr<uint32[]> pixels(new uint32[kSubImageWidth * kSubImageHeight]);
   for (int y = 0; y < kSubImageHeight; ++y) {
     for (int x = 0; x < kSubImageWidth; ++x) {
       pixels.get()[kSubImageWidth * y + x] = x | (y << 16);
@@ -2323,7 +2327,7 @@ TEST_F(GLES2ImplementationTest, SubImageUnpack) {
   uint32 src_size;
   ASSERT_TRUE(GLES2Util::ComputeImageDataSizes(
       kSrcWidth, kSrcSubImageY1, kFormat, kType, 8, &src_size, NULL, NULL));
-  scoped_array<uint8> src_pixels;
+  scoped_ptr<uint8[]> src_pixels;
   src_pixels.reset(new uint8[src_size]);
   for (size_t i = 0; i < src_size; ++i) {
     src_pixels[i] = static_cast<int8>(i);
@@ -2870,4 +2874,3 @@ TEST_F(GLES2ImplementationTest, Enable) {
 
 }  // namespace gles2
 }  // namespace gpu
-

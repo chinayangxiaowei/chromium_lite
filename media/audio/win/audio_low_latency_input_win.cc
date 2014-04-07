@@ -6,7 +6,7 @@
 
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "media/audio/audio_util.h"
 #include "media/audio/win/audio_manager_win.h"
 #include "media/audio/win/avrt_wrapper_win.h"
@@ -127,6 +127,10 @@ void WASAPIAudioInputStream::Start(AudioInputCallback* callback) {
 
   sink_ = callback;
 
+  // Starts periodic AGC microphone measurements if the AGC has been enabled
+  // using SetAutomaticGainControl().
+  StartAgc();
+
   // Create and start the thread that will drive the capturing by waiting for
   // capture events.
   capture_thread_ =
@@ -145,6 +149,9 @@ void WASAPIAudioInputStream::Stop() {
   DVLOG(1) << "WASAPIAudioInputStream::Stop()";
   if (!started_)
     return;
+
+  // Stops periodic AGC microphone measurements.
+  StopAgc();
 
   // Shut down the capture thread.
   if (stop_capture_event_.IsValid()) {
@@ -259,11 +266,8 @@ HRESULT WASAPIAudioInputStream::GetMixFormat(const std::string& device_id,
   // It is assumed that this static method is called from a COM thread, i.e.,
   // CoInitializeEx() is not called here to avoid STA/MTA conflicts.
   ScopedComPtr<IMMDeviceEnumerator> enumerator;
-  HRESULT hr =  CoCreateInstance(__uuidof(MMDeviceEnumerator),
-                                 NULL,
-                                 CLSCTX_INPROC_SERVER,
-                                 __uuidof(IMMDeviceEnumerator),
-                                 enumerator.ReceiveVoid());
+  HRESULT hr = enumerator.CreateInstance(__uuidof(MMDeviceEnumerator), NULL,
+                                         CLSCTX_INPROC_SERVER);
   if (FAILED(hr))
     return hr;
 
@@ -318,7 +322,7 @@ void WASAPIAudioInputStream::Run() {
   size_t capture_buffer_size = std::max(
       2 * endpoint_buffer_size_frames_ * frame_size_,
       2 * packet_size_frames_ * frame_size_);
-  scoped_array<uint8> capture_buffer(new uint8[capture_buffer_size]);
+  scoped_ptr<uint8[]> capture_buffer(new uint8[capture_buffer_size]);
 
   LARGE_INTEGER now_count;
   bool recording = true;
@@ -390,10 +394,10 @@ void WASAPIAudioInputStream::Run() {
                 first_audio_frame_timestamp) / 10000.0) * ms_to_frame_count_ +
                 buffer_frame_index - num_frames_to_read;
 
-          // Update the AGC volume level once every second. Note that,
-          // |volume| is also updated each time SetVolume() is called
-          // through IPC by the render-side AGC.
-          QueryAgcVolume(&volume);
+          // Get a cached AGC volume level which is updated once every second
+          // on the audio manager thread. Note that, |volume| is also updated
+          // each time SetVolume() is called through IPC by the render-side AGC.
+          GetAgcVolume(&volume);
 
           // Deliver captured data to the registered consumer using a packet
           // size which was specified at construction.

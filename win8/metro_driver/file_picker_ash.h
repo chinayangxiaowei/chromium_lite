@@ -8,7 +8,8 @@
 
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
-#include "base/string16.h"
+#include "base/files/file_path.h"
+#include "base/strings/string16.h"
 
 class ChromeAppViewAsh;
 struct MetroViewerHostMsg_SaveAsDialogParams;
@@ -24,7 +25,7 @@ class FilePickerSessionBase {
   explicit FilePickerSessionBase(ChromeAppViewAsh* app_view,
                                  const string16& title,
                                  const string16& filter,
-                                 const string16& default_path);
+                                 const base::FilePath& default_path);
 
   virtual ~FilePickerSessionBase() {
   }
@@ -56,7 +57,7 @@ class FilePickerSessionBase {
   string16 filter_;
 
   // The starting directory/file name.
-  string16 default_path_;
+  base::FilePath default_path_;
 
   // Pointer to the ChromeAppViewAsh instance. We notify the ChromeAppViewAsh
   // instance when the file open/save operations complete.
@@ -79,7 +80,7 @@ class OpenFilePickerSession : public FilePickerSessionBase {
   explicit OpenFilePickerSession(ChromeAppViewAsh* app_view,
                                  const string16& title,
                                  const string16& filter,
-                                 const string16& default_path,
+                                 const base::FilePath& default_path,
                                  bool allow_multi_select);
 
   const std::vector<base::FilePath>& filenames() const {
@@ -142,6 +143,24 @@ class SaveFilePickerSession : public FilePickerSessionBase {
   int filter_index_;
 
   DISALLOW_COPY_AND_ASSIGN(SaveFilePickerSession);
+};
+
+// Provides functionality to display the folder picker.
+class FolderPickerSession : public FilePickerSessionBase {
+ public:
+  explicit FolderPickerSession(ChromeAppViewAsh* app_view,
+                               const string16& title);
+
+ private:
+  virtual HRESULT StartFilePicker() OVERRIDE;
+
+  typedef winfoundtn::IAsyncOperation<winstorage::StorageFolder*>
+      FolderPickerAsyncOp;
+
+  // Called asynchronously when the folder picker is done.
+  HRESULT FolderPickerDone(FolderPickerAsyncOp* async, AsyncStatus status);
+
+  DISALLOW_COPY_AND_ASSIGN(FolderPickerSession);
 };
 
 #endif  // CHROME_BROWSER_UI_METRO_DRIVER_FILE_PICKER_ASH_H_

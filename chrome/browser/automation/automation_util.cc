@@ -10,17 +10,16 @@
 #include "ash/shell_delegate.h"
 #include "base/bind.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/stringprintf.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/stringprintf.h"
 #include "base/synchronization/waitable_event.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "chrome/browser/automation/automation_provider.h"
 #include "chrome/browser/automation/automation_provider_json.h"
 #include "chrome/browser/extensions/extension_process_manager.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_system.h"
-#include "chrome/browser/printing/print_preview_dialog_controller.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sessions/session_id.h"
 #include "chrome/browser/sessions/session_tab_helper.h"
@@ -30,14 +29,15 @@
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/host_desktop.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/view_type_utils.h"
 #include "chrome/common/automation_id.h"
 #include "chrome/common/extensions/extension.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
+#include "extensions/browser/view_type_utils.h"
 #include "net/cookies/canonical_cookie.h"
+#include "net/cookies/cookie_constants.h"
 #include "net/cookies/cookie_monster.h"
 #include "net/cookies/cookie_store.h"
 #include "net/url_request/url_request_context.h"
@@ -46,10 +46,13 @@
 #if defined(OS_CHROMEOS)
 #include "chrome/browser/chromeos/login/existing_user_controller.h"
 #include "chrome/browser/chromeos/login/login_display.h"
-#include "chrome/browser/chromeos/login/login_display_host.h"
+#include "chrome/browser/chromeos/login/login_display_host_impl.h"
 #include "chrome/browser/chromeos/login/webui_login_display.h"
-#include "chrome/browser/chromeos/login/webui_login_display_host.h"
 #include "chrome/browser/ui/webui/chromeos/login/oobe_ui.h"
+#endif
+
+#if defined(ENABLE_FULL_PRINTING)
+#include "chrome/browser/printing/print_preview_dialog_controller.h"
 #endif
 
 using content::BrowserThread;
@@ -132,7 +135,7 @@ void SetCookieWithDetailsOnIOThread(
   cookie_monster->SetCookieWithDetailsAsync(
       url, cookie.Name(), cookie.Value(), original_domain,
       cookie.Path(), cookie.ExpiryDate(), cookie.IsSecure(),
-      cookie.IsHttpOnly(),
+      cookie.IsHttpOnly(), cookie.Priority(),
       base::Bind(&SetCookieCallback, event, success));
 }
 
@@ -186,10 +189,10 @@ Profile* GetCurrentProfileOnChromeOS(std::string* error_message) {
       *error_message = "Cannot get controller though user is not logged in.";
       return NULL;
     }
-    chromeos::WebUILoginDisplayHost* webui_login_display_host =
-        static_cast<chromeos::WebUILoginDisplayHost*>(
+    chromeos::LoginDisplayHostImpl* webui_host =
+        static_cast<chromeos::LoginDisplayHostImpl*>(
             controller->login_display_host());
-    content::WebUI* web_ui = webui_login_display_host->GetOobeUI()->web_ui();
+    content::WebUI* web_ui = webui_host->GetOobeUI()->web_ui();
     if (!web_ui) {
       *error_message = "Unable to get webui from login display host.";
       return NULL;
@@ -325,6 +328,10 @@ void GetCookiesJSON(AutomationProvider* provider,
     cookie_dict->SetBoolean("http_only", cookie.IsHttpOnly());
     if (cookie.IsPersistent())
       cookie_dict->SetDouble("expiry", cookie.ExpiryDate().ToDoubleT());
+    if (cookie.Priority() != net::COOKIE_PRIORITY_DEFAULT) {
+      cookie_dict->SetString("priority",
+                             net::CookiePriorityToString(cookie.Priority()));
+    }
     list->Append(cookie_dict);
   }
   DictionaryValue dict;
@@ -382,6 +389,8 @@ void SetCookieJSON(AutomationProvider* provider,
   bool secure = false;
   double expiry = 0;
   bool http_only = false;
+  net::CookiePriority priority = net::COOKIE_PRIORITY_DEFAULT;
+
   if (!cookie_dict->GetString("name", &name)) {
     reply.SendError("'name' missing or invalid");
     return;
@@ -416,11 +425,19 @@ void SetCookieJSON(AutomationProvider* provider,
     reply.SendError("optional 'http_only' invalid");
     return;
   }
+  if (cookie_dict->HasKey("priority")) {
+    std::string priority_string;
+    if (!cookie_dict->GetString("priority", &priority_string)) {
+      reply.SendError("optional 'priority' invalid");
+      return;
+    }
+    priority = net::StringToCookiePriority(priority_string);
+  }
 
   scoped_ptr<net::CanonicalCookie> cookie(
       net::CanonicalCookie::Create(
           GURL(url), name, value, domain, path, base::Time(),
-          base::Time::FromDoubleT(expiry), secure, http_only));
+          base::Time::FromDoubleT(expiry), secure, http_only, priority));
   if (!cookie.get()) {
     reply.SendError("given 'cookie' parameters are invalid");
     return;
@@ -470,17 +487,17 @@ AutomationId GetIdForExtensionView(
     const content::RenderViewHost* render_view_host) {
   AutomationId::Type type;
   WebContents* web_contents = WebContents::FromRenderViewHost(render_view_host);
-  switch (chrome::GetViewType(web_contents)) {
-    case chrome::VIEW_TYPE_EXTENSION_POPUP:
+  switch (extensions::GetViewType(web_contents)) {
+    case extensions::VIEW_TYPE_EXTENSION_POPUP:
       type = AutomationId::kTypeExtensionPopup;
       break;
-    case chrome::VIEW_TYPE_EXTENSION_BACKGROUND_PAGE:
+    case extensions::VIEW_TYPE_EXTENSION_BACKGROUND_PAGE:
       type = AutomationId::kTypeExtensionBgPage;
       break;
-    case chrome::VIEW_TYPE_EXTENSION_INFOBAR:
+    case extensions::VIEW_TYPE_EXTENSION_INFOBAR:
       type = AutomationId::kTypeExtensionInfobar;
       break;
-    case chrome::VIEW_TYPE_APP_SHELL:
+    case extensions::VIEW_TYPE_APP_SHELL:
       type = AutomationId::kTypeAppShell;
       break;
     default:
@@ -503,8 +520,10 @@ bool GetTabForId(const AutomationId& id, WebContents** tab) {
   if (id.type() != AutomationId::kTypeTab)
     return false;
 
+#if defined(ENABLE_FULL_PRINTING)
   printing::PrintPreviewDialogController* preview_controller =
       printing::PrintPreviewDialogController::GetInstance();
+#endif
   for (chrome::BrowserIterator it; !it.done(); it.Next()) {
     Browser* browser = *it;
     for (int tab_index = 0;
@@ -519,6 +538,8 @@ bool GetTabForId(const AutomationId& id, WebContents** tab) {
         *tab = web_contents;
         return true;
       }
+
+#if defined(ENABLE_FULL_PRINTING)
       if (preview_controller) {
         WebContents* print_preview_contents =
             preview_controller->GetPrintPreviewForContents(web_contents);
@@ -533,6 +554,7 @@ bool GetTabForId(const AutomationId& id, WebContents** tab) {
           }
         }
       }
+#endif
     }
   }
   return false;

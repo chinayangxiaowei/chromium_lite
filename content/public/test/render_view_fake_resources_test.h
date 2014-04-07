@@ -46,7 +46,7 @@
 #include <string>
 
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "content/public/renderer/content_renderer_client.h"
 #include "content/public/renderer/render_view_visitor.h"
 #include "ipc/ipc_listener.h"
@@ -127,7 +127,7 @@ class RenderViewFakeResourcesTest : public ::testing::Test,
 
   static const int32 kViewId;  // arbitrary id for our testing view
 
-  MessageLoopForIO message_loop_;
+  base::MessageLoopForIO message_loop_;
   ContentRendererClient content_renderer_client_;
   // channel that the renderer uses to talk to the browser.
   // For this test, we will handle the browser end of the channel.

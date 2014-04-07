@@ -5,10 +5,10 @@
 #include "base/environment.h"
 #include "base/file_util.h"
 #include "base/path_service.h"
-#include "base/stringprintf.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/stringprintf.h"
 #include "base/sys_info.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/env_vars.h"
@@ -57,7 +57,7 @@ class ShutdownTest : public UIPerfTest {
     };
 
     for (size_t i = 0; i < arraysize(test_cases); i++) {
-      ASSERT_TRUE(file_util::PathExists(test_cases[i]));
+      ASSERT_TRUE(base::PathExists(test_cases[i]));
       for (size_t j = 0; j < 5; j++) {
         ASSERT_TRUE(browser_proxy->AppendTab(
             net::FilePathToFileURL(test_cases[i])));
@@ -114,7 +114,8 @@ class ShutdownTest : public UIPerfTest {
     std::string times;
     for (int i = 0; i < numCycles; ++i)
       base::StringAppendF(&times, "%.2f,", timings[i].InMillisecondsF());
-    perf_test::PrintResultList(graph, "", trace, times, "ms", important);
+    perf_test::PrintResultList(
+        graph, std::string(), trace, times, "ms", important);
   }
 };
 

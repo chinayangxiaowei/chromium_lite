@@ -11,24 +11,45 @@
 #include "grit/theme_resources.h"
 
 @interface BackgroundGradientView (Private)
+- (void)commonInit;
 - (NSColor*)backgroundImageColor;
 @end
 
 @implementation BackgroundGradientView
+
 @synthesize showsDivider = showsDivider_;
 
 - (id)initWithFrame:(NSRect)frameRect {
   if ((self = [super initWithFrame:frameRect])) {
-    showsDivider_ = YES;
+    [self commonInit];
   }
   return self;
 }
 
 - (id)initWithCoder:(NSCoder*)decoder {
   if ((self = [super initWithCoder:decoder])) {
-    showsDivider_ = YES;
+    [self commonInit];
   }
   return self;
+}
+
+- (void)dealloc {
+  [[NSNotificationCenter defaultCenter] removeObserver:self];
+  [super dealloc];
+}
+
+- (void)commonInit {
+  showsDivider_ = YES;
+  [[NSNotificationCenter defaultCenter]
+      addObserver:self
+         selector:@selector(windowFocusDidChange:)
+             name:NSApplicationWillBecomeActiveNotification
+           object:NSApp];
+  [[NSNotificationCenter defaultCenter]
+      addObserver:self
+         selector:@selector(windowFocusDidChange:)
+             name:NSApplicationWillResignActiveNotification
+           object:NSApp];
 }
 
 - (void)setShowsDivider:(BOOL)show {
@@ -62,13 +83,17 @@
 }
 
 - (NSColor*)strokeColor {
-  BOOL isActive = [[self window] isMainWindow];
-  ui::ThemeProvider* themeProvider = [[self window] themeProvider];
+  NSWindow* window = [self window];
+  if ([window parentWindow])
+    window = [window parentWindow];
+
+  BOOL isActive = [window isMainWindow];
+  ui::ThemeProvider* themeProvider = [window themeProvider];
   if (!themeProvider)
     return [NSColor blackColor];
   return themeProvider->GetNSColor(
       isActive ? ThemeProperties::COLOR_TOOLBAR_STROKE :
-                 ThemeProperties::COLOR_TOOLBAR_STROKE_INACTIVE, true);
+                 ThemeProperties::COLOR_TOOLBAR_STROKE_INACTIVE);
 }
 
 - (NSColor*)backgroundImageColor {
@@ -81,12 +106,51 @@
   // theme.
   if (![[self window] isMainWindow] && themeProvider->UsingDefaultTheme()) {
     NSColor* color = themeProvider->GetNSImageColorNamed(
-        IDR_THEME_TOOLBAR_INACTIVE, true);
+        IDR_THEME_TOOLBAR_INACTIVE);
     if (color)
       return color;
   }
 
-  return themeProvider->GetNSImageColorNamed(IDR_THEME_TOOLBAR, true);
+  return themeProvider->GetNSImageColorNamed(IDR_THEME_TOOLBAR);
+}
+
+- (void)windowFocusDidChange:(NSNotification*)notification {
+  // The background color depends on the window's focus state.
+  [self cr_recursivelySetNeedsDisplay:YES];
+}
+
+- (void)viewWillMoveToWindow:(NSWindow*)window {
+  if ([self window]) {
+    [[NSNotificationCenter defaultCenter]
+        removeObserver:self
+                  name:NSWindowDidBecomeKeyNotification
+                object:[self window]];
+    [[NSNotificationCenter defaultCenter]
+        removeObserver:self
+                  name:NSWindowDidBecomeMainNotification
+                object:[self window]];
+  }
+  if (window) {
+    [[NSNotificationCenter defaultCenter]
+        addObserver:self
+           selector:@selector(windowFocusDidChange:)
+               name:NSWindowDidBecomeKeyNotification
+             object:[self window]];
+    [[NSNotificationCenter defaultCenter]
+        addObserver:self
+           selector:@selector(windowFocusDidChange:)
+               name:NSWindowDidBecomeMainNotification
+             object:[self window]];
+  }
+  [super viewWillMoveToWindow:window];
+}
+
+- (void)setFrameOrigin:(NSPoint)origin {
+  // The background color depends on the view's vertical position.
+  if (NSMinY([self frame]) != origin.y)
+    [self setNeedsDisplay:YES];
+
+  [super setFrameOrigin:origin];
 }
 
 @end

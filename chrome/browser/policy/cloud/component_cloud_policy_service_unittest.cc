@@ -4,8 +4,9 @@
 
 #include "chrome/browser/policy/cloud/component_cloud_policy_service.h"
 
+#include "base/callback.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/pickle.h"
 #include "base/run_loop.h"
 #include "base/sha1.h"
@@ -16,11 +17,14 @@
 #include "chrome/browser/policy/cloud/mock_cloud_policy_client.h"
 #include "chrome/browser/policy/cloud/mock_cloud_policy_store.h"
 #include "chrome/browser/policy/cloud/policy_builder.h"
-#include "chrome/browser/policy/cloud/proto/chrome_extension_policy.pb.h"
-#include "chrome/browser/policy/cloud/proto/device_management_backend.pb.h"
 #include "chrome/browser/policy/cloud/resource_cache.h"
+#include "chrome/browser/policy/external_data_fetcher.h"
+#include "chrome/browser/policy/policy_domain_descriptor.h"
 #include "chrome/browser/policy/policy_map.h"
 #include "chrome/browser/policy/policy_types.h"
+#include "chrome/browser/policy/proto/cloud/chrome_extension_policy.pb.h"
+#include "chrome/browser/policy/proto/cloud/device_management_backend.pb.h"
+#include "chrome/common/policy/policy_schema.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/test/test_browser_thread.h"
 #include "net/url_request/test_url_fetcher_factory.h"
@@ -43,6 +47,7 @@ const char kTestExtension2[] = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const char kTestExtension3[] = "cccccccccccccccccccccccccccccccc";
 const char kTestDownload[] = "http://example.com/getpolicy?id=123";
 const char kTestDownload2[] = "http://example.com/getpolicy?id=456";
+
 const char kTestPolicy[] =
     "{"
     "  \"Name\": {"
@@ -51,6 +56,16 @@ const char kTestPolicy[] =
     "  \"Second\": {"
     "    \"Value\": \"maybe\","
     "    \"Level\": \"Recommended\""
+    "  }"
+    "}";
+
+const char kTestSchema[] =
+    "{"
+    "  \"$schema\": \"http://json-schema.org/draft-03/schema#\","
+    "  \"type\": \"object\","
+    "  \"properties\": {"
+    "    \"Name\": { \"type\": \"string\" },"
+    "    \"Second\": { \"type\": \"string\" }"
     "  }"
     "}";
 
@@ -93,7 +108,6 @@ class ComponentCloudPolicyServiceTest : public testing::Test {
   virtual void SetUp() OVERRIDE {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
     cache_ = new ResourceCache(temp_dir_.path());
-    ASSERT_TRUE(cache_->IsOpen());
     service_.reset(new ComponentCloudPolicyService(
         &delegate_, &store_, make_scoped_ptr(cache_)));
 
@@ -104,9 +118,9 @@ class ComponentCloudPolicyServiceTest : public testing::Test {
     builder_.payload().set_secure_hash(base::SHA1HashString(kTestPolicy));
 
     expected_policy_.Set("Name", POLICY_LEVEL_MANDATORY, POLICY_SCOPE_USER,
-                         base::Value::CreateStringValue("disabled"));
+                         base::Value::CreateStringValue("disabled"), NULL);
     expected_policy_.Set("Second", POLICY_LEVEL_RECOMMENDED, POLICY_SCOPE_USER,
-                         base::Value::CreateStringValue("maybe"));
+                         base::Value::CreateStringValue("maybe"), NULL);
 
     // A NULL |request_context_| is enough to construct the updater, but
     // ComponentCloudPolicyService::Backend::LoadStore() tests the pointer when
@@ -176,7 +190,14 @@ class ComponentCloudPolicyServiceTest : public testing::Test {
     return builder_.GetBlob();
   }
 
-  MessageLoop loop_;
+  scoped_ptr<PolicySchema> CreateTestSchema() {
+    std::string error;
+    scoped_ptr<PolicySchema> schema = PolicySchema::Parse(kTestSchema, &error);
+    EXPECT_TRUE(schema) << error;
+    return schema.Pass();
+  }
+
+  base::MessageLoop loop_;
   content::TestBrowserThread ui_thread_;
   content::TestBrowserThread file_thread_;
   base::ScopedTempDir temp_dir_;
@@ -250,10 +271,11 @@ TEST_F(ComponentCloudPolicyServiceTest, InitializationWithCachedComponents) {
 
 TEST_F(ComponentCloudPolicyServiceTest, ConnectAfterRegister) {
   // Add some components.
-  std::set<std::string> components;
-  components.insert(kTestExtension);
-  components.insert(kTestExtension2);
-  service_->RegisterPolicyDomain(POLICY_DOMAIN_EXTENSIONS, components);
+  scoped_refptr<PolicyDomainDescriptor> descriptor = new PolicyDomainDescriptor(
+      POLICY_DOMAIN_EXTENSIONS);
+  descriptor->RegisterComponent(kTestExtension, CreateTestSchema());
+  descriptor->RegisterComponent(kTestExtension2, CreateTestSchema());
+  service_->RegisterPolicyDomain(descriptor);
 
   // Now connect the client.
   EXPECT_TRUE(client_.namespaces_to_fetch_.empty());
@@ -288,7 +310,12 @@ TEST_F(ComponentCloudPolicyServiceTest, ConnectAfterRegister) {
   std::set<std::string> unpickled;
   unpickled.insert(value0);
   unpickled.insert(value1);
-  EXPECT_EQ(components, unpickled);
+
+  std::set<std::string> expected_components;
+  expected_components.insert(kTestExtension);
+  expected_components.insert(kTestExtension2);
+
+  EXPECT_EQ(expected_components, unpickled);
 }
 
 TEST_F(ComponentCloudPolicyServiceTest, StoreReadyAfterConnectAndRegister) {
@@ -296,9 +323,10 @@ TEST_F(ComponentCloudPolicyServiceTest, StoreReadyAfterConnectAndRegister) {
   PopulateCache();
 
   // Add some components.
-  std::set<std::string> components;
-  components.insert(kTestExtension);
-  service_->RegisterPolicyDomain(POLICY_DOMAIN_EXTENSIONS, components);
+  scoped_refptr<PolicyDomainDescriptor> descriptor = new PolicyDomainDescriptor(
+      POLICY_DOMAIN_EXTENSIONS);
+  descriptor->RegisterComponent(kTestExtension, CreateTestSchema());
+  service_->RegisterPolicyDomain(descriptor);
 
   // And connect the client. Make the client have some policies, with a new
   // download_url.
@@ -334,9 +362,10 @@ TEST_F(ComponentCloudPolicyServiceTest, ConnectThenRegisterThenStoreReady) {
   // Now register the current components, before the backend has been
   // initialized.
   EXPECT_TRUE(client_.namespaces_to_fetch_.empty());
-  std::set<std::string> components;
-  components.insert(kTestExtension);
-  service_->RegisterPolicyDomain(POLICY_DOMAIN_EXTENSIONS, components);
+  scoped_refptr<PolicyDomainDescriptor> descriptor = new PolicyDomainDescriptor(
+      POLICY_DOMAIN_EXTENSIONS);
+  descriptor->RegisterComponent(kTestExtension, CreateTestSchema());
+  service_->RegisterPolicyDomain(descriptor);
   EXPECT_TRUE(client_.namespaces_to_fetch_.empty());
 
   // Now load the store. The client gets the namespaces.
@@ -356,10 +385,11 @@ TEST_F(ComponentCloudPolicyServiceTest, FetchPolicy) {
   Mock::VerifyAndClearExpectations(&delegate_);
 
   // Register the components to fetch.
-  std::set<std::string> components;
-  components.insert(kTestExtension);
+  scoped_refptr<PolicyDomainDescriptor> descriptor = new PolicyDomainDescriptor(
+      POLICY_DOMAIN_EXTENSIONS);
+  descriptor->RegisterComponent(kTestExtension, CreateTestSchema());
   EXPECT_CALL(delegate_, OnComponentCloudPolicyRefreshNeeded());
-  service_->RegisterPolicyDomain(POLICY_DOMAIN_EXTENSIONS, components);
+  service_->RegisterPolicyDomain(descriptor);
   Mock::VerifyAndClearExpectations(&delegate_);
 
   // Send back a fake policy fetch response.
@@ -410,9 +440,10 @@ TEST_F(ComponentCloudPolicyServiceTest, LoadAndPurgeCache) {
   EXPECT_CALL(delegate_, OnComponentCloudPolicyUpdated());
   // The service will start updating the components that are registered, which
   // starts by fetching policy for them.
-  std::set<std::string> keep;
-  keep.insert(kTestExtension2);
-  service_->RegisterPolicyDomain(POLICY_DOMAIN_EXTENSIONS, keep);
+  scoped_refptr<PolicyDomainDescriptor> descriptor = new PolicyDomainDescriptor(
+      POLICY_DOMAIN_EXTENSIONS);
+  descriptor->RegisterComponent(kTestExtension2, CreateTestSchema());
+  service_->RegisterPolicyDomain(descriptor);
   RunUntilIdle();
   Mock::VerifyAndClearExpectations(&delegate_);
 
@@ -443,9 +474,10 @@ TEST_F(ComponentCloudPolicyServiceTest, UpdateCredentials) {
   // Connect the client and register an extension.
   service_->Connect(&client_, request_context_);
   EXPECT_CALL(delegate_, OnComponentCloudPolicyRefreshNeeded());
-  std::set<std::string> components;
-  components.insert(kTestExtension);
-  service_->RegisterPolicyDomain(POLICY_DOMAIN_EXTENSIONS, components);
+  scoped_refptr<PolicyDomainDescriptor> descriptor = new PolicyDomainDescriptor(
+      POLICY_DOMAIN_EXTENSIONS);
+  descriptor->RegisterComponent(kTestExtension, CreateTestSchema());
+  service_->RegisterPolicyDomain(descriptor);
   Mock::VerifyAndClearExpectations(&delegate_);
 
   // Send the response to the service. The response data will be rejected,

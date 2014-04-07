@@ -7,7 +7,7 @@
 
 #include <set>
 
-#include "content/common/child_thread.h"
+#include "content/child/child_thread.h"
 
 struct WorkerProcessMsg_CreateWorker_Params;
 
@@ -23,6 +23,7 @@ class WorkerThread : public ChildThread {
  public:
   WorkerThread();
   virtual ~WorkerThread();
+  virtual void Shutdown() OVERRIDE;
 
   // Returns the one worker thread.
   static WorkerThread* current();

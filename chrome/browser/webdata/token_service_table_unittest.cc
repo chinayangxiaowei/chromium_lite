@@ -2,13 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/path_service.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "chrome/browser/webdata/token_service_table.h"
-#include "chrome/browser/webdata/web_database.h"
+#include "components/webdata/common/web_database.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using base::Time;
@@ -26,7 +25,7 @@ class TokenServiceTableTest : public testing::Test {
     table_.reset(new TokenServiceTable);
     db_.reset(new WebDatabase);
     db_->AddTable(table_.get());
-    ASSERT_EQ(sql::INIT_OK, db_->Init(file_, std::string()));
+    ASSERT_EQ(sql::INIT_OK, db_->Init(file_));
   }
 
   base::FilePath file_;
@@ -37,7 +36,18 @@ class TokenServiceTableTest : public testing::Test {
   DISALLOW_COPY_AND_ASSIGN(TokenServiceTableTest);
 };
 
-TEST_F(TokenServiceTableTest, TokenServiceGetAllRemoveAll) {
+// Flaky on mac_rel. See http://crbug.com/228943
+#if defined(OS_MACOSX)
+#define MAYBE_TokenServiceGetAllRemoveAll DISABLED_TokenServiceGetAllRemoveAll
+#define MAYBE_TokenServiceGetSet DISABLED_TokenServiceGetSet
+#define MAYBE_TokenServiceRemove DISABLED_TokenServiceRemove
+#else
+#define MAYBE_TokenServiceGetAllRemoveAll TokenServiceGetAllRemoveAll
+#define MAYBE_TokenServiceGetSet TokenServiceGetSet
+#define MAYBE_TokenServiceRemove TokenServiceRemove
+#endif
+
+TEST_F(TokenServiceTableTest, MAYBE_TokenServiceGetAllRemoveAll) {
   std::map<std::string, std::string> out_map;
   std::string service;
   std::string service2;
@@ -51,8 +61,8 @@ TEST_F(TokenServiceTableTest, TokenServiceGetAllRemoveAll) {
   EXPECT_TRUE(table_->SetTokenForService(service, "pepperoni"));
   EXPECT_TRUE(table_->SetTokenForService(service2, "steak"));
   EXPECT_TRUE(table_->GetAllTokens(&out_map));
-  EXPECT_EQ(out_map.find(service)->second, "pepperoni");
-  EXPECT_EQ(out_map.find(service2)->second, "steak");
+  EXPECT_EQ("pepperoni", out_map.find(service)->second);
+  EXPECT_EQ("steak", out_map.find(service2)->second);
   out_map.clear();
 
   // Purge
@@ -63,10 +73,10 @@ TEST_F(TokenServiceTableTest, TokenServiceGetAllRemoveAll) {
   // Check that you can still add it back in
   EXPECT_TRUE(table_->SetTokenForService(service, "cheese"));
   EXPECT_TRUE(table_->GetAllTokens(&out_map));
-  EXPECT_EQ(out_map.find(service)->second, "cheese");
+  EXPECT_EQ("cheese", out_map.find(service)->second);
 }
 
-TEST_F(TokenServiceTableTest, TokenServiceGetSet) {
+TEST_F(TokenServiceTableTest, MAYBE_TokenServiceGetSet) {
   std::map<std::string, std::string> out_map;
   std::string service;
   service = "testservice";
@@ -76,17 +86,32 @@ TEST_F(TokenServiceTableTest, TokenServiceGetSet) {
 
   EXPECT_TRUE(table_->SetTokenForService(service, "pepperoni"));
   EXPECT_TRUE(table_->GetAllTokens(&out_map));
-  EXPECT_EQ(out_map.find(service)->second, "pepperoni");
+  EXPECT_EQ("pepperoni", out_map.find(service)->second);
   out_map.clear();
 
   // try blanking it - won't remove it from the db though!
-  EXPECT_TRUE(table_->SetTokenForService(service, ""));
+  EXPECT_TRUE(table_->SetTokenForService(service, std::string()));
   EXPECT_TRUE(table_->GetAllTokens(&out_map));
-  EXPECT_EQ(out_map.find(service)->second, "");
+  EXPECT_EQ("", out_map.find(service)->second);
   out_map.clear();
 
   // try mutating it
   EXPECT_TRUE(table_->SetTokenForService(service, "ham"));
   EXPECT_TRUE(table_->GetAllTokens(&out_map));
-  EXPECT_EQ(out_map.find(service)->second, "ham");
+  EXPECT_EQ("ham", out_map.find(service)->second);
+}
+
+TEST_F(TokenServiceTableTest, MAYBE_TokenServiceRemove) {
+  std::map<std::string, std::string> out_map;
+  std::string service;
+  std::string service2;
+  service = "testservice";
+  service2 = "othertestservice";
+
+  EXPECT_TRUE(table_->SetTokenForService(service, "pepperoni"));
+  EXPECT_TRUE(table_->SetTokenForService(service2, "steak"));
+  EXPECT_TRUE(table_->RemoveTokenForService(service));
+  EXPECT_TRUE(table_->GetAllTokens(&out_map));
+  EXPECT_EQ(0u, out_map.count(service));
+  EXPECT_EQ("steak", out_map.find(service2)->second);
 }

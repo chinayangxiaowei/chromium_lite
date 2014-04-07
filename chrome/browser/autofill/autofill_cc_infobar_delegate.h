@@ -9,9 +9,9 @@
 #include "base/callback.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "chrome/browser/infobars/confirm_infobar_delegate.h"
-#include "components/autofill/browser/autofill_metrics.h"
+#include "components/autofill/core/browser/autofill_metrics.h"
 #include "ui/base/window_open_disposition.h"
 
 class CreditCard;
@@ -21,18 +21,26 @@ namespace content {
 struct LoadCommittedDetails;
 }
 
+namespace autofill {
+
 // An InfoBar delegate that enables the user to allow or deny storing credit
 // card information gathered from a form submission.
 class AutofillCCInfoBarDelegate : public ConfirmInfoBarDelegate {
  public:
-  // Creates an AutofillCCInfoBarDelegate and adds it to |infobar_service|.
+  // Creates an autofill credit card infobar delegate and adds it to
+  // |infobar_service|.
   static void Create(InfoBarService* infobar_service,
                      const AutofillMetrics* metric_logger,
                      const base::Closure& save_card_callback);
 
-  static scoped_ptr<ConfirmInfoBarDelegate> CreateForTesting(
+#if defined(UNIT_TEST)
+  static scoped_ptr<ConfirmInfoBarDelegate> Create(
       const AutofillMetrics* metric_logger,
-      const base::Closure& save_card_callback);
+      const base::Closure& save_card_callback) {
+    return scoped_ptr<ConfirmInfoBarDelegate>(
+        new AutofillCCInfoBarDelegate(NULL, metric_logger, save_card_callback));
+  }
+#endif
 
  private:
   AutofillCCInfoBarDelegate(InfoBarService* infobar_service,
@@ -44,7 +52,7 @@ class AutofillCCInfoBarDelegate : public ConfirmInfoBarDelegate {
 
   // ConfirmInfoBarDelegate:
   virtual void InfoBarDismissed() OVERRIDE;
-  virtual gfx::Image* GetIcon() const OVERRIDE;
+  virtual int GetIconID() const OVERRIDE;
   virtual Type GetInfoBarType() const OVERRIDE;
   virtual bool ShouldExpireInternal(
       const content::LoadCommittedDetails& details) const OVERRIDE;
@@ -69,5 +77,7 @@ class AutofillCCInfoBarDelegate : public ConfirmInfoBarDelegate {
 
   DISALLOW_COPY_AND_ASSIGN(AutofillCCInfoBarDelegate);
 };
+
+}  // namespace autofill
 
 #endif  // CHROME_BROWSER_AUTOFILL_AUTOFILL_CC_INFOBAR_DELEGATE_H_

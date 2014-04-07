@@ -4,7 +4,6 @@
 
 #include "content/browser/renderer_host/pepper/browser_ppapi_host_test.h"
 
-#include "base/process_util.h"
 #include "content/browser/renderer_host/pepper/browser_ppapi_host_impl.h"
 
 namespace content {
@@ -16,7 +15,9 @@ BrowserPpapiHostTest::BrowserPpapiHostTest()
                         ppapi::PpapiPermissions::AllPermissions(),
                         std::string(),
                         base::FilePath(),
-                        false));
+                        base::FilePath(),
+                        false,
+                        NULL));
   ppapi_host_->set_plugin_process_handle(base::GetCurrentProcessHandle());
 }
 

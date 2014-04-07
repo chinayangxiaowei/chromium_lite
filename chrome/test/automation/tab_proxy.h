@@ -22,7 +22,7 @@
 #include "content/public/browser/save_page_type.h"
 #include "content/public/common/page_type.h"
 #include "content/public/common/security_style.h"
-#include "net/base/cert_status_flags.h"
+#include "net/cert/cert_status_flags.h"
 #include "ui/base/keycodes/keyboard_codes.h"
 #include "ui/base/window_open_disposition.h"
 
@@ -202,10 +202,6 @@ class TabProxy : public AutomationResourceProxy {
   // Uses the specified encoding to override encoding of the page in the tab.
   bool OverrideEncoding(const std::string& encoding) WARN_UNUSED_RESULT;
 
-  // Captures the entire page and saves as a PNG at the given path. Returns
-  // true on success.
-  bool CaptureEntirePageAsPNG(const base::FilePath& path) WARN_UNUSED_RESULT;
-
 #if defined(OS_WIN)
   // Resizes the tab window.
   // The parent_window parameter allows a parent to be specified for the window
@@ -227,9 +223,6 @@ class TabProxy : public AutomationResourceProxy {
   void Cut();
   void Copy();
   void Paste();
-
-  // Simulates a key press. |key| is the virtual key code of the key pressed.
-  void SimulateKeyPress(ui::KeyboardCode key);
 
   // These handlers issue asynchronous Reload, Stop and SaveAs notifications to
   // the chrome instance.

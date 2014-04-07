@@ -10,17 +10,17 @@
 #include "base/location.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
-#include "base/message_loop_proxy.h"
+#include "base/message_loop/message_loop.h"
+#include "base/message_loop/message_loop_proxy.h"
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
 #include "base/threading/thread.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "chrome/test/chromedriver/net/test_http_server.h"
 #include "chrome/test/chromedriver/net/websocket.h"
-#include "googleurl/src/gurl.h"
 #include "net/url_request/url_request_test_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/gurl.h"
 
 namespace {
 
@@ -29,7 +29,7 @@ void OnConnectFinished(base::RunLoop* run_loop, int* save_error, int error) {
   run_loop->Quit();
 }
 
-void RunPending(MessageLoop* loop) {
+void RunPending(base::MessageLoop* loop) {
   base::RunLoop run_loop;
   loop->PostTask(FROM_HERE, run_loop.QuitClosure());
   run_loop.Run();
@@ -49,7 +49,7 @@ class Listener : public WebSocketListener {
     EXPECT_EQ(messages_[0], message);
     messages_.erase(messages_.begin());
     if (messages_.empty())
-      MessageLoop::current()->Quit();
+      base::MessageLoop::current()->Quit();
   }
 
   virtual void OnClose() OVERRIDE {
@@ -84,9 +84,7 @@ class CloseListener : public WebSocketListener {
 
 class WebSocketTest : public testing::Test {
  public:
-  WebSocketTest()
-      : context_getter_(
-            new net::TestURLRequestContextGetter(loop_.message_loop_proxy())) {}
+  WebSocketTest() {}
   virtual ~WebSocketTest() {}
 
   virtual void SetUp() OVERRIDE {
@@ -101,8 +99,7 @@ class WebSocketTest : public testing::Test {
   scoped_ptr<WebSocket> CreateWebSocket(const GURL& url,
                                         WebSocketListener* listener) {
     int error;
-    scoped_ptr<WebSocket> sock(new WebSocket(
-        context_getter_, url, listener));
+    scoped_ptr<WebSocket> sock(new WebSocket(url, listener));
     base::RunLoop run_loop;
     sock->Connect(base::Bind(&OnConnectFinished, &run_loop, &error));
     loop_.PostDelayedTask(
@@ -132,16 +129,15 @@ class WebSocketTest : public testing::Test {
     run_loop.Run();
   }
 
-  MessageLoopForIO loop_;
+  base::MessageLoopForIO loop_;
   TestHttpServer server_;
-  scoped_refptr<net::URLRequestContextGetter> context_getter_;
 };
 
 }  // namespace
 
 TEST_F(WebSocketTest, CreateDestroy) {
   CloseListener listener(NULL);
-  WebSocket sock(context_getter_, GURL("http://ok"), &listener);
+  WebSocket sock(GURL("ws://127.0.0.1:2222"), &listener);
 }
 
 TEST_F(WebSocketTest, Connect) {

@@ -8,9 +8,9 @@
 
 #include "base/mac/bundle_locations.h"
 #import "base/mac/mac_util.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/prefs/pref_service.h"
-#include "base/sys_string_conversions.h"
+#include "base/strings/sys_string_conversions.h"
 #include "chrome/browser/browsing_data/browsing_data_appcache_helper.h"
 #include "chrome/browser/browsing_data/browsing_data_cookie_helper.h"
 #include "chrome/browser/browsing_data/browsing_data_database_helper.h"
@@ -18,6 +18,7 @@
 #include "chrome/browser/browsing_data/browsing_data_indexed_db_helper.h"
 #include "chrome/browser/browsing_data/browsing_data_local_storage_helper.h"
 #include "chrome/browser/browsing_data/browsing_data_server_bound_cert_helper.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/content_settings/cookie_settings.h"
 #include "chrome/browser/content_settings/local_shared_objects_container.h"
 #include "chrome/browser/content_settings/tab_specific_content_settings.h"
@@ -28,7 +29,6 @@
 #import "chrome/browser/ui/cocoa/content_settings/cookie_details_view_controller.h"
 #import "chrome/browser/ui/cocoa/vertical_gradient_view.h"
 #include "chrome/browser/ui/collected_cookies_infobar_delegate.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/pref_names.h"
 #include "content/public/browser/notification_details.h"
 #include "content/public/browser/notification_source.h"
@@ -82,7 +82,7 @@ CollectedCookiesMac::CollectedCookiesMac(content::WebContents* web_contents) {
       initWithWebContents:web_contents
       collectedCookiesMac:this]);
 
-  scoped_nsobject<CustomConstrainedWindowSheet> sheet(
+  base::scoped_nsobject<CustomConstrainedWindowSheet> sheet(
       [[CustomConstrainedWindowSheet alloc]
           initWithCustomWindow:[sheet_controller_ window]]);
   window_.reset(new ConstrainedWindowMac(
@@ -105,7 +105,7 @@ void CollectedCookiesMac::PerformClose() {
 
 void CollectedCookiesMac::OnConstrainedWindowClosed(
     ConstrainedWindowMac* window) {
-  MessageLoop::current()->DeleteSoon(FROM_HERE, this);
+  base::MessageLoop::current()->DeleteSoon(FROM_HERE, this);
 }
 
 #pragma mark Window Controller
@@ -170,7 +170,7 @@ void CollectedCookiesMac::OnConstrainedWindowClosed(
                                 green:kBannerGradientColorBottom[1]
                                  blue:kBannerGradientColorBottom[2]
                                 alpha:1.0];
-  scoped_nsobject<NSGradient> bannerGradient(
+  base::scoped_nsobject<NSGradient> bannerGradient(
       [[NSGradient alloc] initWithStartingColor:bannerStartingColor
                                     endingColor:bannerEndingColor]);
   [infoBar_ setGradient:bannerGradient];
@@ -243,7 +243,7 @@ void CollectedCookiesMac::OnConstrainedWindowClosed(
     CookieTreeHostNode* host_node =
         static_cast<CookieTreeHostNode*>(cookie);
     host_node->CreateContentException(
-        CookieSettings::Factory::GetForProfile(profile), setting);
+        CookieSettings::Factory::GetForProfile(profile).get(), setting);
     if (!lastDomain.empty())
       multipleDomainsChanged = YES;
     lastDomain = host_node->GetTitle();
@@ -382,7 +382,7 @@ void CollectedCookiesMac::OnConstrainedWindowClosed(
   // Create the Cocoa model.
   CookieTreeNode* root =
       static_cast<CookieTreeNode*>(allowedTreeModel_->GetRoot());
-  scoped_nsobject<CocoaCookieTreeNode> model(
+  base::scoped_nsobject<CocoaCookieTreeNode> model(
       [[CocoaCookieTreeNode alloc] initWithNode:root]);
   [self setCocoaAllowedTreeModel:model.get()];  // Takes ownership.
   root = static_cast<CookieTreeNode*>(blockedTreeModel_->GetRoot());

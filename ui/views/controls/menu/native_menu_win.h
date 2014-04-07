@@ -12,7 +12,7 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "ui/views/controls/menu/menu_wrapper.h"
 #include "ui/views/views_export.h"
 
@@ -35,7 +35,7 @@ class VIEWS_EXPORT NativeMenuWin : public MenuWrapper {
   // Overridden from MenuWrapper:
   virtual void RunMenuAt(const gfx::Point& point, int alignment) OVERRIDE;
   virtual void CancelMenu() OVERRIDE;
-  virtual void Rebuild(InsertionDelegate* delegate) OVERRIDE;
+  virtual void Rebuild(MenuInsertionDelegateWin* delegate) OVERRIDE;
   virtual void UpdateStates() OVERRIDE;
   virtual HMENU GetNativeMenu() const OVERRIDE;
   virtual MenuAction GetMenuAction() const OVERRIDE;

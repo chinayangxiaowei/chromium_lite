@@ -7,8 +7,12 @@
 #include "base/bind.h"
 #include "base/debug/trace_event.h"
 #include "base/logging.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "content/public/renderer/renderer_ppapi_host.h"
+#include "content/renderer/pepper/common.h"
+#include "content/renderer/pepper/gfx_conversion.h"
+#include "content/renderer/pepper/pepper_plugin_instance_impl.h"
+#include "content/renderer/pepper/ppb_image_data_impl.h"
 #include "ppapi/c/pp_bool.h"
 #include "ppapi/c/pp_errors.h"
 #include "ppapi/c/pp_rect.h"
@@ -28,11 +32,6 @@
 #include "ui/gfx/scoped_ns_graphics_context_save_gstate_mac.h"
 #include "ui/gfx/size_conversions.h"
 #include "ui/gfx/skia_util.h"
-#include "webkit/plugins/ppapi/common.h"
-#include "webkit/plugins/ppapi/gfx_conversion.h"
-#include "webkit/plugins/ppapi/ppapi_plugin_instance.h"
-#include "webkit/plugins/ppapi/ppb_image_data_impl.h"
-#include "webkit/plugins/ppapi/resource_helper.h"
 
 #if defined(OS_MACOSX)
 #include "base/mac/mac_util.h"
@@ -41,8 +40,6 @@
 
 using ppapi::thunk::EnterResourceNoLock;
 using ppapi::thunk::PPB_ImageData_API;
-using webkit::ppapi::ImageDataAutoMapper;
-using webkit::ppapi::PPB_ImageData_Impl;
 
 namespace content {
 
@@ -189,7 +186,7 @@ PepperGraphics2DHost::PepperGraphics2DHost(RendererPpapiHost* host,
       offscreen_flush_pending_(false),
       is_always_opaque_(false),
       scale_(1.0f),
-      weak_ptr_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)),
+      weak_ptr_factory_(this),
       is_running_in_process_(host->IsRunningInProcess()) {
 }
 
@@ -240,6 +237,10 @@ int32_t PepperGraphics2DHost::OnResourceMessageReceived(
   return PP_ERROR_FAILED;
 }
 
+bool PepperGraphics2DHost::IsGraphics2DHost() {
+  return true;
+}
+
 bool PepperGraphics2DHost::ReadImageData(PP_Resource image,
                                          const PP_Point* top_left) {
   // Get and validate the image object to paint into.
@@ -278,7 +279,7 @@ bool PepperGraphics2DHost::ReadImageData(PP_Resource image,
 
   if (image_resource->format() != image_data_->format()) {
     // Convert the image data if the format does not match.
-    ConvertImageData(image_data_, src_irect, image_resource, dest_rect);
+    ConvertImageData(image_data_.get(), src_irect, image_resource, dest_rect);
   } else {
     SkCanvas* dest_canvas = image_resource->GetCanvas();
 
@@ -292,7 +293,7 @@ bool PepperGraphics2DHost::ReadImageData(PP_Resource image,
 }
 
 bool PepperGraphics2DHost::BindToInstance(
-    webkit::ppapi::PluginInstance* new_instance) {
+    PepperPluginInstanceImpl* new_instance) {
   if (new_instance && new_instance->pp_instance() != pp_instance())
     return false;  // Can't bind other instance's contexts.
   if (bound_instance_ == new_instance)
@@ -322,7 +323,7 @@ void PepperGraphics2DHost::Paint(WebKit::WebCanvas* canvas,
                                  const gfx::Rect& plugin_rect,
                                  const gfx::Rect& paint_rect) {
   TRACE_EVENT0("pepper", "PepperGraphics2DHost::Paint");
-  ImageDataAutoMapper auto_mapper(image_data_);
+  ImageDataAutoMapper auto_mapper(image_data_.get());
   const SkBitmap& backing_bitmap = *image_data_->GetMappedBitmap();
 
   gfx::Rect invalidate_rect = plugin_rect;
@@ -334,7 +335,7 @@ void PepperGraphics2DHost::Paint(WebKit::WebCanvas* canvas,
   gfx::Size image_size = gfx::ToFlooredSize(
       gfx::ScaleSize(pixel_image_size, scale_));
 
-  webkit::ppapi::PluginInstance* plugin_instance =
+  PepperPluginInstance* plugin_instance =
       renderer_ppapi_host_->GetPluginInstance(pp_instance());
   if (!plugin_instance)
     return;
@@ -409,12 +410,8 @@ bool PepperGraphics2DHost::IsAlwaysOpaque() const {
   return is_always_opaque_;
 }
 
-webkit::ppapi::PPB_ImageData_Impl* PepperGraphics2DHost::ImageData() {
+PPB_ImageData_Impl* PepperGraphics2DHost::ImageData() {
   return image_data_.get();
-}
-
-bool PepperGraphics2DHost::IsGraphics2DHost() const {
-  return true;
 }
 
 int32_t PepperGraphics2DHost::OnHostMsgPaintImageData(
@@ -563,8 +560,9 @@ int32_t PepperGraphics2DHost::Flush(PP_Resource* old_image_data) {
     gfx::Rect op_rect;
     switch (operation.type) {
       case QueuedOperation::PAINT:
-        ExecutePaintImageData(operation.paint_image,
-                              operation.paint_x, operation.paint_y,
+        ExecutePaintImageData(operation.paint_image.get(),
+                              operation.paint_x,
+                              operation.paint_y,
                               operation.paint_src_rect,
                               &op_rect);
         break;
@@ -578,7 +576,8 @@ int32_t PepperGraphics2DHost::Flush(PP_Resource* old_image_data) {
         // reference, if there are more than one ReplaceContents calls queued
         // the first |old_image_data| will get overwritten and leaked. So we
         // only supply this for the first call.
-        ExecuteReplaceContents(operation.replace_image, &op_rect,
+        ExecuteReplaceContents(operation.replace_image.get(),
+                               &op_rect,
                                done_replace_contents ? NULL : old_image_data);
         done_replace_contents = true;
         break;
@@ -600,8 +599,7 @@ int32_t PepperGraphics2DHost::Flush(PP_Resource* old_image_data) {
         operation.type = QueuedOperation::PAINT;
       }
 
-      gfx::Rect clip = webkit::ppapi::PP_ToGfxRect(
-          bound_instance_->view_data().clip_rect);
+      gfx::Rect clip = PP_ToGfxRect(bound_instance_->view_data().clip_rect);
       is_plugin_visible = !clip.IsEmpty();
 
       // Set |no_update_visible| to false if the change overlaps the visible
@@ -660,7 +658,7 @@ void PepperGraphics2DHost::ExecutePaintImageData(PPB_ImageData_Impl* image,
 
   if (image->format() != image_data_->format()) {
     // Convert the image data if the format does not match.
-    ConvertImageData(image, src_irect, image_data_, dest_rect);
+    ConvertImageData(image, src_irect, image_data_.get(), dest_rect);
   } else {
     // We're guaranteed to have a mapped canvas since we mapped it in Init().
     SkCanvas* backing_canvas = image_data_->GetCanvas();
@@ -693,7 +691,7 @@ void PepperGraphics2DHost::ExecuteReplaceContents(PPB_ImageData_Impl* image,
                          SkIntToScalar(0),
                          SkIntToScalar(image_data_->width()),
                          SkIntToScalar(image_data_->height()) };
-    ConvertImageData(image, src_irect, image_data_, dest_rect);
+    ConvertImageData(image, src_irect, image_data_.get(), dest_rect);
   } else {
     // The passed-in image may not be mapped in our process, and we need to
     // guarantee that the current backing store is always mapped.
@@ -725,7 +723,7 @@ void PepperGraphics2DHost::SendOffscreenFlushAck() {
 
 void PepperGraphics2DHost::ScheduleOffscreenFlushAck() {
   offscreen_flush_pending_ = true;
-  MessageLoop::current()->PostDelayedTask(
+  base::MessageLoop::current()->PostDelayedTask(
       FROM_HERE,
       base::Bind(&PepperGraphics2DHost::SendOffscreenFlushAck,
                  weak_ptr_factory_.GetWeakPtr()),

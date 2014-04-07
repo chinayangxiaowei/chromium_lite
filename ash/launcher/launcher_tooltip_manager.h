@@ -6,10 +6,11 @@
 #define ASH_LAUNCHER_LAUNCHER_TOOLTIP_MANAGER_H_
 
 #include "ash/ash_export.h"
-#include "ash/shelf/shelf_layout_manager.h"
+#include "ash/shelf/shelf_layout_manager_observer.h"
 #include "ash/shelf/shelf_types.h"
 #include "base/basictypes.h"
-#include "base/string16.h"
+#include "base/memory/weak_ptr.h"
+#include "base/strings/string16.h"
 #include "ui/base/events/event_handler.h"
 #include "ui/gfx/rect.h"
 #include "ui/views/bubble/bubble_border.h"
@@ -32,11 +33,12 @@ class LauncherViewTest;
 
 namespace internal {
 class LauncherView;
+class ShelfLayoutManager;
 
 // LauncherTooltipManager manages the tooltip balloon poping up on launcher
 // items.
 class ASH_EXPORT LauncherTooltipManager : public ui::EventHandler,
-                                          public ShelfLayoutManager::Observer {
+                                          public ShelfLayoutManagerObserver {
  public:
   LauncherTooltipManager(ShelfLayoutManager* shelf_layout_manager,
                          LauncherView* launcher_view);
@@ -50,17 +52,17 @@ class ASH_EXPORT LauncherTooltipManager : public ui::EventHandler,
   void OnBubbleClosed(views::BubbleDelegateView* view);
 
   // Shows the tooltip after a delay.  It also has the appearing animation.
-  void ShowDelayed(views::View* anchor, const string16& text);
+  void ShowDelayed(views::View* anchor, const base::string16& text);
 
   // Shows the tooltip immediately.  It omits the appearing animation.
-  void ShowImmediately(views::View* anchor, const string16& text);
+  void ShowImmediately(views::View* anchor, const base::string16& text);
 
   // Closes the tooltip.
   void Close();
 
   // Changes the arrow location of the tooltip in case that the launcher
   // arrangement has changed.
-  void UpdateArrowLocation();
+  void UpdateArrow();
 
   // Resets the timer for the delayed showing |view_|.  If the timer isn't
   // running, it starts a new timer.
@@ -72,6 +74,9 @@ class ASH_EXPORT LauncherTooltipManager : public ui::EventHandler,
   // Returns true if the tooltip is currently visible.
   bool IsVisible();
 
+  // Create an instant timer for test purposes.
+  void CreateZeroDelayTimerForTest();
+
 protected:
   // ui::EventHandler overrides:
   virtual void OnMouseEvent(ui::MouseEvent* event) OVERRIDE;
@@ -79,7 +84,7 @@ protected:
   virtual void OnGestureEvent(ui::GestureEvent* event) OVERRIDE;
   virtual void OnCancelMode(ui::CancelModeEvent* event) OVERRIDE;
 
-  // ShelfLayoutManager::Observer overrides:
+  // ShelfLayoutManagerObserver overrides:
   virtual void WillDeleteShelf() OVERRIDE;
   virtual void WillChangeVisibilityState(
       ShelfVisibilityState new_state) OVERRIDE;
@@ -93,16 +98,19 @@ protected:
   void CancelHidingAnimation();
   void CloseSoon();
   void ShowInternal();
-  void CreateBubble(views::View* anchor, const string16& text);
+  void CreateBubble(views::View* anchor, const base::string16& text);
+  void CreateTimer(int delay_in_ms);
 
   LauncherTooltipBubble* view_;
   views::Widget* widget_;
   views::View* anchor_;
-  string16 text_;
+  base::string16 text_;
   scoped_ptr<base::Timer> timer_;
 
   ShelfLayoutManager* shelf_layout_manager_;
   LauncherView* launcher_view_;
+
+  base::WeakPtrFactory<LauncherTooltipManager> weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(LauncherTooltipManager);
 };

@@ -13,6 +13,10 @@
 #include "ui/gfx/size.h"
 #include "ui/views/widget/widget_observer.h"
 
+namespace app_list {
+class ApplicationDragAndDropHost;
+}
+
 namespace aura {
 class Window;
 }
@@ -40,6 +44,8 @@ class ShelfWidget;
 
 class ASH_EXPORT Launcher {
  public:
+  static const char kNativeViewName[];
+
   Launcher(LauncherModel* launcher_model,
            LauncherDelegate* launcher_delegate,
            ShelfWidget* shelf_widget);
@@ -78,19 +84,18 @@ class ASH_EXPORT Launcher {
   // Returns true if the Launcher is showing a context menu.
   bool IsShowingMenu() const;
 
-  // Show the context menu for the Launcher.
-  void ShowContextMenu(const gfx::Point& location);
-
   bool IsShowingOverflowBubble() const;
 
   void SetVisible(bool visible) const;
   bool IsVisible() const;
 
+  void SchedulePaint();
+
   views::View* GetAppListButtonView() const;
 
-  // Switches to a 0-indexed (in order of creation) window.
-  // A negative index switches to the last window in the list.
-  void SwitchToWindow(int window_index);
+  // Launch a 0-indexed launcher item in the Launcher.
+  // A negative index launches the last launcher item in the launcher.
+  void LaunchAppIndexAt(int item_index);
 
   // Only to be called for testing. Retrieves the LauncherView.
   // TODO(sky): remove this!
@@ -103,6 +108,9 @@ class ASH_EXPORT Launcher {
   // Set the bounds of the launcher view.
   void SetLauncherViewBounds(gfx::Rect bounds);
   gfx::Rect GetLauncherViewBounds() const;
+
+  // Returns ApplicationDragAndDropHost for this Launcher.
+  app_list::ApplicationDragAndDropHost* GetDragAndDropHostForAppList();
 
  private:
   // LauncherView used to display icons.

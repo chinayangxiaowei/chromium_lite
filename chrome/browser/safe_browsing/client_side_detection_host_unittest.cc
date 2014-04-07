@@ -5,7 +5,8 @@
 #include "base/files/file_path.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/stringprintf.h"
+#include "base/run_loop.h"
+#include "base/strings/stringprintf.h"
 #include "base/synchronization/waitable_event.h"
 #include "chrome/browser/safe_browsing/browser_feature_extractor.h"
 #include "chrome/browser/safe_browsing/client_side_detection_host.h"
@@ -22,10 +23,10 @@
 #include "content/public/test/mock_render_process_host.h"
 #include "content/public/test/test_browser_thread.h"
 #include "content/public/test/test_renderer_host.h"
-#include "googleurl/src/gurl.h"
 #include "ipc/ipc_test_sink.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/gurl.h"
 
 using ::testing::_;
 using ::testing::DeleteArg;
@@ -74,7 +75,7 @@ MATCHER(CallbackIsNull, "") {
 
 ACTION(QuitUIMessageLoop) {
   EXPECT_TRUE(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  MessageLoopForUI::current()->Quit();
+  base::MessageLoopForUI::current()->Quit();
 }
 
 // It's kind of insane that InvokeArgument doesn't work with callbacks, but it
@@ -102,7 +103,7 @@ class MockClientSideDetectionService : public ClientSideDetectionService {
   MOCK_CONST_METHOD1(IsPrivateIPAddress, bool(const std::string&));
   MOCK_METHOD2(GetValidCachedResult, bool(const GURL&, bool*));
   MOCK_METHOD1(IsInCache, bool(const GURL&));
-  MOCK_METHOD0(OverReportLimit, bool());
+  MOCK_METHOD0(OverPhishingReportLimit, bool());
 
  private:
   DISALLOW_COPY_AND_ASSIGN(MockClientSideDetectionService);
@@ -172,13 +173,6 @@ class MockBrowserFeatureExtractor : public BrowserFeatureExtractor {
                     ClientMalwareRequest*));
 };
 
-// Helper function which quits the UI message loop from the IO message loop.
-void QuitUIMessageLoopFromIO() {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
-  BrowserThread::PostTask(BrowserThread::UI,
-                          FROM_HERE,
-                          MessageLoop::QuitClosure());
-}
 }  // namespace
 
 class ClientSideDetectionHostTest : public ChromeRenderViewHostTestHarness {
@@ -186,22 +180,6 @@ class ClientSideDetectionHostTest : public ChromeRenderViewHostTestHarness {
   typedef SafeBrowsingUIManager::UnsafeResource UnsafeResource;
 
   virtual void SetUp() {
-    // Set custom profile object so that we can mock calls to IsOffTheRecord.
-    // This needs to happen before we call the parent SetUp() function.  We use
-    // a nice mock because other parts of the code are calling IsOffTheRecord.
-    mock_profile_ = new NiceMock<MockTestingProfile>();
-    browser_context_.reset(mock_profile_);
-
-    ui_thread_.reset(new content::TestBrowserThread(BrowserThread::UI,
-                                                    &message_loop_));
-    file_user_blocking_thread_.reset(
-        new content::TestBrowserThread(BrowserThread::FILE_USER_BLOCKING,
-        &message_loop_));
-    // Note: we're starting a real IO thread to make sure our DCHECKs that
-    // verify which thread is running are actually tested.
-    io_thread_.reset(new content::TestBrowserThread(BrowserThread::IO));
-    ASSERT_TRUE(io_thread_->Start());
-
     ChromeRenderViewHostTestHarness::SetUp();
 
     // Inject service classes.
@@ -215,15 +193,15 @@ class ClientSideDetectionHostTest : public ChromeRenderViewHostTestHarness {
     csd_host_.reset(safe_browsing::ClientSideDetectionHost::Create(
         web_contents()));
     csd_host_->set_client_side_detection_service(csd_service_.get());
-    csd_host_->set_safe_browsing_managers(ui_manager_, database_manager_);
+    csd_host_->set_safe_browsing_managers(ui_manager_.get(),
+                                          database_manager_.get());
     // We need to create this here since we don't call
     // DidNavigateMainFramePostCommit in this test.
     csd_host_->browse_info_.reset(new BrowseInfo);
-  }
 
-  static void RunAllPendingOnIO(base::WaitableEvent* event) {
-    MessageLoop::current()->RunUntilIdle();
-    event->Signal();
+    // By default this is set to false. Turn it on as if we are in canary or
+    // dev channel
+    csd_host_->malware_report_enabled_ = true;
   }
 
   virtual void TearDown() {
@@ -233,40 +211,28 @@ class ClientSideDetectionHostTest : public ChromeRenderViewHostTestHarness {
                               csd_host_.release());
     database_manager_ = NULL;
     ui_manager_ = NULL;
-    message_loop_.RunUntilIdle();
+    base::RunLoop().RunUntilIdle();
     ChromeRenderViewHostTestHarness::TearDown();
+  }
 
-    // Let the tasks on the IO thread run to avoid memory leaks.
-    base::WaitableEvent done(false, false);
-    BrowserThread::PostTask(BrowserThread::IO, FROM_HERE,
-        base::Bind(RunAllPendingOnIO, &done));
-    done.Wait();
-    io_thread_.reset();
-    message_loop_.RunUntilIdle();
-    file_user_blocking_thread_.reset();
-    ui_thread_.reset();
+  virtual content::BrowserContext* CreateBrowserContext() OVERRIDE {
+    // Set custom profile object so that we can mock calls to IsOffTheRecord.
+    // This needs to happen before we call the parent SetUp() function.  We use
+    // a nice mock because other parts of the code are calling IsOffTheRecord.
+    mock_profile_ = new NiceMock<MockTestingProfile>();
+    return mock_profile_;
   }
 
   void OnPhishingDetectionDone(const std::string& verdict_str) {
     csd_host_->OnPhishingDetectionDone(verdict_str);
   }
 
-  void UpdateIPHostMap(const std::string& ip, const std::string& host) {
-    csd_host_->UpdateIPHostMap(ip, host);
+  void UpdateIPUrlMap(const std::string& ip, const std::string& host) {
+    csd_host_->UpdateIPUrlMap(ip, host);
   }
 
   BrowseInfo* GetBrowseInfo() {
     return csd_host_->browse_info_.get();
-  }
-
-  void FlushIOMessageLoop() {
-    // If there was a message posted on the IO thread to display the
-    // interstitial page we know that it would have been posted before
-    // we put the quit message there.
-    BrowserThread::PostTask(BrowserThread::IO,
-                            FROM_HERE,
-                            base::Bind(&QuitUIMessageLoopFromIO));
-    MessageLoop::current()->Run();
   }
 
   void ExpectPreClassificationChecks(const GURL& url,
@@ -285,7 +251,7 @@ class ClientSideDetectionHostTest : public ChromeRenderViewHostTestHarness {
           .WillRepeatedly(Return(*is_incognito));
     }
     if (match_csd_whitelist) {
-      EXPECT_CALL(*database_manager_, MatchCsdWhitelistUrl(url))
+      EXPECT_CALL(*database_manager_.get(), MatchCsdWhitelistUrl(url))
           .WillOnce(Return(*match_csd_whitelist));
     }
     if (get_valid_cached_result) {
@@ -297,16 +263,14 @@ class ClientSideDetectionHostTest : public ChromeRenderViewHostTestHarness {
       EXPECT_CALL(*csd_service_, IsInCache(url)).WillOnce(Return(*is_in_cache));
     }
     if (over_report_limit) {
-      EXPECT_CALL(*csd_service_, OverReportLimit())
+      EXPECT_CALL(*csd_service_, OverPhishingReportLimit())
           .WillOnce(Return(*over_report_limit));
     }
   }
 
   void WaitAndCheckPreClassificationChecks() {
-    // Wait for CheckCsdWhitelist to be called if at all.
-    FlushIOMessageLoop();
-    // Checks for CheckCache() to be called if at all.
-    MessageLoop::current()->RunUntilIdle();
+    // Wait for CheckCsdWhitelist and CheckCache() to be called if at all.
+    base::RunLoop().RunUntilIdle();
     EXPECT_TRUE(Mock::VerifyAndClear(csd_service_.get()));
     EXPECT_TRUE(Mock::VerifyAndClear(ui_manager_.get()));
     EXPECT_TRUE(Mock::VerifyAndClear(database_manager_.get()));
@@ -355,11 +319,6 @@ class ClientSideDetectionHostTest : public ChromeRenderViewHostTestHarness {
   scoped_refptr<StrictMock<MockSafeBrowsingUIManager> > ui_manager_;
   scoped_refptr<StrictMock<MockSafeBrowsingDatabaseManager> > database_manager_;
   MockTestingProfile* mock_profile_;  // We don't own this object
-
- private:
-  scoped_ptr<content::TestBrowserThread> ui_thread_;
-  scoped_ptr<content::TestBrowserThread> file_user_blocking_thread_;
-  scoped_ptr<content::TestBrowserThread> io_thread_;
 };
 
 
@@ -401,9 +360,9 @@ TEST_F(ClientSideDetectionHostTest, OnPhishingDetectionDoneNotPhishing) {
   ASSERT_FALSE(cb.is_null());
 
   // Make sure DoDisplayBlockingPage is not going to be called.
-  EXPECT_CALL(*ui_manager_, DoDisplayBlockingPage(_)).Times(0);
+  EXPECT_CALL(*ui_manager_.get(), DoDisplayBlockingPage(_)).Times(0);
   cb.Run(GURL(verdict.url()), false);
-  MessageLoop::current()->RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
   EXPECT_TRUE(Mock::VerifyAndClear(ui_manager_.get()));
 }
 
@@ -433,9 +392,9 @@ TEST_F(ClientSideDetectionHostTest, OnPhishingDetectionDoneDisabled) {
   ASSERT_FALSE(cb.is_null());
 
   // Make sure DoDisplayBlockingPage is not going to be called.
-  EXPECT_CALL(*ui_manager_, DoDisplayBlockingPage(_)).Times(0);
+  EXPECT_CALL(*ui_manager_.get(), DoDisplayBlockingPage(_)).Times(0);
   cb.Run(GURL(verdict.url()), false);
-  MessageLoop::current()->RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
   EXPECT_TRUE(Mock::VerifyAndClear(ui_manager_.get()));
 }
 
@@ -466,11 +425,11 @@ TEST_F(ClientSideDetectionHostTest, OnPhishingDetectionDoneShowInterstitial) {
   ASSERT_FALSE(cb.is_null());
 
   UnsafeResource resource;
-  EXPECT_CALL(*ui_manager_, DoDisplayBlockingPage(_))
+  EXPECT_CALL(*ui_manager_.get(), DoDisplayBlockingPage(_))
       .WillOnce(SaveArg<0>(&resource));
   cb.Run(phishing_url, true);
 
-  MessageLoop::current()->RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
   EXPECT_TRUE(Mock::VerifyAndClear(ui_manager_.get()));
   EXPECT_EQ(phishing_url, resource.url);
   EXPECT_EQ(phishing_url, resource.original_url);
@@ -487,10 +446,6 @@ TEST_F(ClientSideDetectionHostTest, OnPhishingDetectionDoneShowInterstitial) {
       FROM_HERE,
       base::Bind(&MockSafeBrowsingUIManager::InvokeOnBlockingPageComplete,
                  ui_manager_, resource.callback));
-  // Since the CsdClient object will be deleted on the UI thread I need
-  // to run the UI message loop.  Post a task to stop the UI message loop
-  // after the client object destructor is called.
-  FlushIOMessageLoop();
 }
 
 TEST_F(ClientSideDetectionHostTest, OnPhishingDetectionDoneMultiplePings) {
@@ -548,20 +503,20 @@ TEST_F(ClientSideDetectionHostTest, OnPhishingDetectionDoneMultiplePings) {
   redirect_chain.push_back(other_phishing_url);
   SetRedirectChain(redirect_chain);
   OnPhishingDetectionDone(verdict.SerializeAsString());
-  MessageLoop::current()->Run();
+  base::MessageLoop::current()->Run();
   EXPECT_TRUE(Mock::VerifyAndClear(csd_service_.get()));
   ASSERT_FALSE(cb_other.is_null());
 
   // We expect that the interstitial is shown for the second phishing URL and
   // not for the first phishing URL.
   UnsafeResource resource;
-  EXPECT_CALL(*ui_manager_, DoDisplayBlockingPage(_))
+  EXPECT_CALL(*ui_manager_.get(), DoDisplayBlockingPage(_))
       .WillOnce(SaveArg<0>(&resource));
 
   cb.Run(phishing_url, true);  // Should have no effect.
   cb_other.Run(other_phishing_url, true);  // Should show interstitial.
 
-  MessageLoop::current()->RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
   EXPECT_TRUE(Mock::VerifyAndClear(ui_manager_.get()));
   EXPECT_EQ(other_phishing_url, resource.url);
   EXPECT_EQ(other_phishing_url, resource.original_url);
@@ -578,10 +533,6 @@ TEST_F(ClientSideDetectionHostTest, OnPhishingDetectionDoneMultiplePings) {
       FROM_HERE,
       base::Bind(&MockSafeBrowsingUIManager::InvokeOnBlockingPageComplete,
                  ui_manager_, resource.callback));
-  // Since the CsdClient object will be deleted on the UI thread I need
-  // to run the UI message loop.  Post a task to stop the UI message loop
-  // after the client object destructor is called.
-  FlushIOMessageLoop();
 }
 
 TEST_F(ClientSideDetectionHostTest,
@@ -627,61 +578,61 @@ TEST_F(ClientSideDetectionHostTest,
   redirect_chain.push_back(url);
   SetRedirectChain(redirect_chain);
   OnPhishingDetectionDone(verdict.SerializeAsString());
-  MessageLoop::current()->Run();
+  base::MessageLoop::current()->Run();
   EXPECT_TRUE(Mock::VerifyAndClear(csd_service_.get()));
 }
 
-TEST_F(ClientSideDetectionHostTest, UpdateIPHostMap) {
+TEST_F(ClientSideDetectionHostTest, UpdateIPUrlMap) {
   BrowseInfo* browse_info = GetBrowseInfo();
 
   // Empty IP or host are skipped
-  UpdateIPHostMap("250.10.10.10", "");
+  UpdateIPUrlMap("250.10.10.10", std::string());
   ASSERT_EQ(0U, browse_info->ips.size());
-  UpdateIPHostMap("", "google.com/");
+  UpdateIPUrlMap(std::string(), "http://google.com/a");
   ASSERT_EQ(0U, browse_info->ips.size());
-  UpdateIPHostMap("", "");
+  UpdateIPUrlMap(std::string(), std::string());
   ASSERT_EQ(0U, browse_info->ips.size());
 
-  std::set<std::string> expected_hosts;
+  std::set<std::string> expected_urls;
   for (int i = 0; i < 20; i++) {
-    std::string host = base::StringPrintf("%d.com/", i);
-    expected_hosts.insert(host);
-    UpdateIPHostMap("250.10.10.10", host);
+    std::string url = base::StringPrintf("http://%d.com/", i);
+    expected_urls.insert(url);
+    UpdateIPUrlMap("250.10.10.10", url);
   }
   ASSERT_EQ(1U, browse_info->ips.size());
   ASSERT_EQ(20U, browse_info->ips["250.10.10.10"].size());
-  EXPECT_EQ(expected_hosts, browse_info->ips["250.10.10.10"]);
+  EXPECT_EQ(expected_urls, browse_info->ips["250.10.10.10"]);
 
-  // Add more hosts for this ip, it exceeds max limit and won't be added
-  UpdateIPHostMap("250.10.10.10", "21.com/");
+  // Add more urls for this ip, it exceeds max limit and won't be added
+  UpdateIPUrlMap("250.10.10.10", "http://21.com/");
   ASSERT_EQ(1U, browse_info->ips.size());
   ASSERT_EQ(20U, browse_info->ips["250.10.10.10"].size());
-  EXPECT_EQ(expected_hosts, browse_info->ips["250.10.10.10"]);
+  EXPECT_EQ(expected_urls, browse_info->ips["250.10.10.10"]);
 
   // Add 199 more IPs
   for (int i = 0; i < 199; i++) {
     std::string ip = base::StringPrintf("%d.%d.%d.256", i, i, i);
-    expected_hosts.clear();
-    expected_hosts.insert("test.com/");
-    UpdateIPHostMap(ip, "test.com/");
+    expected_urls.clear();
+    expected_urls.insert("test.com/");
+    UpdateIPUrlMap(ip, "test.com/");
     ASSERT_EQ(1U, browse_info->ips[ip].size());
-    EXPECT_EQ(expected_hosts, browse_info->ips[ip]);
+    EXPECT_EQ(expected_urls, browse_info->ips[ip]);
   }
   ASSERT_EQ(200U, browse_info->ips.size());
 
   // Exceeding max ip limit 200, these won't be added
-  UpdateIPHostMap("250.250.250.250", "goo.com/");
-  UpdateIPHostMap("250.250.250.250", "bar.com/");
-  UpdateIPHostMap("250.250.0.250", "foo.com/");
+  UpdateIPUrlMap("250.250.250.250", "goo.com/");
+  UpdateIPUrlMap("250.250.250.250", "bar.com/");
+  UpdateIPUrlMap("250.250.0.250", "foo.com/");
   ASSERT_EQ(200U, browse_info->ips.size());
 
-  // Add host to existing IPs succeed
-  UpdateIPHostMap("100.100.100.256", "more.com/");
+  // Add url to existing IPs succeed
+  UpdateIPUrlMap("100.100.100.256", "more.com/");
   ASSERT_EQ(2U, browse_info->ips["100.100.100.256"].size());
-  expected_hosts.clear();
-  expected_hosts.insert("test.com/");
-  expected_hosts.insert("more.com/");
-  EXPECT_EQ(expected_hosts, browse_info->ips["100.100.100.256"]);
+  expected_urls.clear();
+  expected_urls.insert("test.com/");
+  expected_urls.insert("more.com/");
+  EXPECT_EQ(expected_urls, browse_info->ips["100.100.100.256"]);
 }
 
 TEST_F(ClientSideDetectionHostTest,
@@ -947,14 +898,12 @@ TEST_F(ClientSideDetectionHostTest, ShouldClassifyUrl) {
                                 NULL);
 
   UnsafeResource resource;
-  EXPECT_CALL(*ui_manager_, DoDisplayBlockingPage(_))
+  EXPECT_CALL(*ui_manager_.get(), DoDisplayBlockingPage(_))
       .WillOnce(SaveArg<0>(&resource));
 
   NavigateAndCommit(url);
-  // Wait for CheckCsdWhitelist to be called on the IO thread.
-  FlushIOMessageLoop();
-  // Wait for CheckCache() to be called on the UI thread.
-  MessageLoop::current()->RunUntilIdle();
+  // Wait for CheckCsdWhitelist and CheckCache() to be called.
+  base::RunLoop().RunUntilIdle();
   // Now we check that all expected functions were indeed called on the two
   // service objects.
   EXPECT_TRUE(Mock::VerifyAndClear(csd_service_.get()));

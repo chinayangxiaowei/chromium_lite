@@ -4,6 +4,7 @@
 
 #include "chrome/browser/chromeos/login/user_manager.h"
 
+#include "base/logging.h"
 #include "chrome/browser/chromeos/login/user_manager_impl.h"
 
 namespace chromeos {
@@ -12,64 +13,92 @@ namespace chromeos {
 const char UserManager::kStubUser[] = "stub-user@example.com";
 
 // static
+// Should match cros constant in platform/libchromeos/chromeos/cryptohome.h
+const char UserManager::kGuestUserName[] = "$guest";
+
+// static
 const char UserManager::kLocallyManagedUserDomain[] =
     "locally-managed.localhost";
 
+
 // static
-const char UserManager::kKioskAppUserDomain[] = "kiosk-apps.localhost";
+const char UserManager::kRetailModeUserName[] = "demouser@";
+static UserManager* g_user_manager = NULL;
 
-// Class that is holds pointer to UserManager instance.
-// One could set UserManager mock instance through it (see UserManager::Set).
-class UserManagerImplWrapper {
- public:
-  static UserManagerImplWrapper* GetInstance() {
-    return Singleton<UserManagerImplWrapper>::get();
-  }
+UserManager::Observer::~Observer() {
+}
 
- protected:
-  ~UserManagerImplWrapper() {
-  }
+void UserManager::Observer::LocalStateChanged(UserManager* user_manager) {
+}
 
-  UserManager* get() {
-    if (!ptr_.get())
-      reset(new UserManagerImpl);
-    return ptr_.get();
-  }
+void UserManager::Observer::MergeSessionStateChanged(MergeSessionState state) {
+}
 
-  void reset(UserManager* ptr) {
-    ptr_.reset(ptr);
-  }
+void UserManager::UserSessionStateObserver::ActiveUserChanged(
+    const User* active_user) {
+}
 
-  UserManager* release() {
-    return ptr_.release();
-  }
+void UserManager::UserSessionStateObserver::ActiveUserHashChanged(
+    const std::string& hash) {
+}
 
- private:
-  friend struct DefaultSingletonTraits<UserManagerImplWrapper>;
+void UserManager::UserSessionStateObserver::
+PendingUserSessionsRestoreFinished() {
+}
 
-  friend class UserManager;
+UserManager::UserSessionStateObserver::~UserSessionStateObserver() {
+}
 
-  UserManagerImplWrapper() {
-  }
+// static
+void UserManager::Initialize() {
+  CHECK(!g_user_manager);
+  g_user_manager = new UserManagerImpl();
+}
 
-  scoped_ptr<UserManager> ptr_;
+// static
+bool UserManager::IsInitialized() {
+  return g_user_manager;
+}
 
-  DISALLOW_COPY_AND_ASSIGN(UserManagerImplWrapper);
-};
+void UserManager::Destroy() {
+  DCHECK(g_user_manager);
+  delete g_user_manager;
+  g_user_manager = NULL;
+}
 
 // static
 UserManager* UserManager::Get() {
-  return UserManagerImplWrapper::GetInstance()->get();
-}
-
-// static
-UserManager* UserManager::Set(UserManager* mock) {
-  UserManager* old_manager = UserManagerImplWrapper::GetInstance()->release();
-  UserManagerImplWrapper::GetInstance()->reset(mock);
-  return old_manager;
+  CHECK(g_user_manager);
+  return g_user_manager;
 }
 
 UserManager::~UserManager() {
+}
+
+// static
+UserManager* UserManager::SetForTesting(UserManager* user_manager) {
+  UserManager* previous_user_manager = g_user_manager;
+  g_user_manager = user_manager;
+  return previous_user_manager;
+}
+
+ScopedUserManagerEnabler::ScopedUserManagerEnabler(UserManager* user_manager)
+    : previous_user_manager_(UserManager::SetForTesting(user_manager)) {
+}
+
+ScopedUserManagerEnabler::~ScopedUserManagerEnabler() {
+  UserManager::Get()->Shutdown();
+  UserManager::Destroy();
+  UserManager::SetForTesting(previous_user_manager_);
+}
+
+ScopedTestUserManager::ScopedTestUserManager() {
+  UserManager::Initialize();
+}
+
+ScopedTestUserManager::~ScopedTestUserManager() {
+  UserManager::Get()->Shutdown();
+  UserManager::Destroy();
 }
 
 }  // namespace chromeos

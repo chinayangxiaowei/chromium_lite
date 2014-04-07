@@ -13,13 +13,14 @@
 #include <string>
 
 #include "base/basictypes.h"
+#include "base/memory/scoped_ptr.h"
+#include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/browser/ui/host_desktop.h"
 
 class AutomationProviderList;
 class BackgroundModeManager;
 class BookmarkPromptController;
 class ChromeNetLog;
-class CommandLine;
 class CRLSetFetcher;
 class ComponentUpdateService;
 class DownloadRequestLimiter;
@@ -31,6 +32,7 @@ class IntranetRedirectDetector;
 class IOThread;
 class MetricsService;
 class NotificationUIManager;
+class PnaclComponentInstaller;
 class PrefRegistrySimple;
 class PrefService;
 class Profile;
@@ -39,16 +41,14 @@ class RenderWidgetSnapshotTaker;
 class SafeBrowsingService;
 class StatusTray;
 class WatchDogThread;
+#if defined(ENABLE_WEBRTC)
+class WebRtcLogUploader;
+#endif
 
 namespace chrome {
 class MediaFileSystemRegistry;
+class StorageMonitor;
 }
-
-#if defined(OS_CHROMEOS)
-namespace chromeos {
-class OomPriorityManager;
-}
-#endif  // defined(OS_CHROMEOS)
 
 namespace chrome_variations {
 class VariationsService;
@@ -58,11 +58,9 @@ namespace extensions {
 class EventRouterForwarder;
 }
 
-#if defined(ENABLE_MESSAGE_CENTER)
 namespace message_center {
 class MessageCenter;
 }
-#endif
 
 namespace net {
 class URLRequestContextGetter;
@@ -110,10 +108,7 @@ class BrowserProcess {
   virtual net::URLRequestContextGetter* system_request_context() = 0;
   virtual chrome_variations::VariationsService* variations_service() = 0;
 
-#if defined(OS_CHROMEOS)
-  // Returns the out-of-memory priority manager.
-  virtual chromeos::OomPriorityManager* oom_priority_manager() = 0;
-#endif  // defined(OS_CHROMEOS)
+  virtual BrowserProcessPlatformPart* platform_part() = 0;
 
   virtual extensions::EventRouterForwarder*
       extension_event_router_forwarder() = 0;
@@ -121,10 +116,8 @@ class BrowserProcess {
   // Returns the manager for desktop notifications.
   virtual NotificationUIManager* notification_ui_manager() = 0;
 
-#if defined(ENABLE_MESSAGE_CENTER)
   // MessageCenter is a global list of currently displayed notifications.
   virtual message_center::MessageCenter* message_center() = 0;
-#endif
 
   // Returns the state object for the thread that we perform I/O
   // coordination on (network requests, communication with renderers,
@@ -157,7 +150,6 @@ class BrowserProcess {
   virtual AutomationProviderList* GetAutomationProviderList() = 0;
 
   virtual void CreateDevToolsHttpProtocolHandler(
-      Profile* profile,
       chrome::HostDesktopType host_desktop_type,
       const std::string& ip,
       int port,
@@ -185,6 +177,8 @@ class BrowserProcess {
 
   // Returns the object that manages background applications.
   virtual BackgroundModeManager* background_mode_manager() = 0;
+  virtual void set_background_mode_manager_for_test(
+      scoped_ptr<BackgroundModeManager> manager) = 0;
 
   // Returns the StatusTray, which provides an API for displaying status icons
   // in the system status tray. Returns NULL if status icons are not supported
@@ -218,14 +212,19 @@ class BrowserProcess {
 
   virtual CRLSetFetcher* crl_set_fetcher() = 0;
 
+  virtual PnaclComponentInstaller* pnacl_component_installer() = 0;
+
   virtual BookmarkPromptController* bookmark_prompt_controller() = 0;
 
   virtual chrome::MediaFileSystemRegistry* media_file_system_registry() = 0;
 
-  virtual void PlatformSpecificCommandLineProcessing(
-      const CommandLine& command_line) = 0;
+  virtual chrome::StorageMonitor* storage_monitor() = 0;
 
   virtual bool created_local_state() const = 0;
+
+#if defined(ENABLE_WEBRTC)
+  virtual WebRtcLogUploader* webrtc_log_uploader() = 0;
+#endif
 
  private:
   DISALLOW_COPY_AND_ASSIGN(BrowserProcess);

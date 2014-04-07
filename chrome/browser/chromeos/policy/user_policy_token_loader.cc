@@ -8,7 +8,7 @@
 #include "base/file_util.h"
 #include "base/metrics/histogram.h"
 #include "chrome/browser/policy/cloud/enterprise_metrics.h"
-#include "chrome/browser/policy/cloud/proto/device_management_local.pb.h"
+#include "chrome/browser/policy/proto/cloud/device_management_local.pb.h"
 #include "content/public/browser/browser_thread.h"
 
 using content::BrowserThread;
@@ -58,7 +58,7 @@ void UserPolicyTokenLoader::LoadOnFileThread() {
   std::string device_token;
   std::string device_id;
 
-  if (file_util::PathExists(cache_file_)) {
+  if (base::PathExists(cache_file_)) {
     std::string data;
     em::DeviceCredentials device_credentials;
     if (file_util::ReadFileToString(cache_file_, &data) &&

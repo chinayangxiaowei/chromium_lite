@@ -2,41 +2,43 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import os
 from io import BytesIO
-import re
 from zipfile import ZipFile
 
-import compiled_file_system as compiled_fs
-
 class ExampleZipper(object):
-  """This class creates a zip file given a samples directory.
-  """
-  def __init__(self, file_system, cache_factory, base_path):
-    self._base_path = base_path
-    self._zip_cache = cache_factory.Create(self._MakeZipFile,
-                                           compiled_fs.ZIP)
+  '''This class creates a zip file given a samples directory.
+  '''
+  def __init__(self, compiled_fs_factory, file_system, base_path):
+    self._base_path = base_path.rstrip('/')
     self._file_system = file_system
+    self._zip_cache = compiled_fs_factory.Create(self._MakeZipFile,
+                                                 ExampleZipper)
 
   def _MakeZipFile(self, base_dir, files):
-    zip_path = os.path.commonprefix(files).rsplit('/', 1)[-2]
-    prefix = zip_path.rsplit('/', 1)[-2]
-    if zip_path + '/manifest.json' not in files:
+    if 'manifest.json' not in files:
       return None
     zip_bytes = BytesIO()
     zip_file = ZipFile(zip_bytes, mode='w')
     try:
-      for name, file_contents in (
-          self._file_system.Read(files, binary=True).Get().iteritems()):
-        zip_file.writestr(name[len(prefix):].strip('/'), file_contents)
+      for file_name in files:
+        file_path = '%s%s' % (base_dir, file_name)
+        file_contents = self._file_system.ReadSingle(file_path, binary=True)
+        if isinstance(file_contents, unicode):
+          # Data is sometimes already cached as unicode.
+          file_contents = file_contents.encode('utf8')
+        # We want e.g. basic.zip to expand to basic/manifest.json etc, not
+        # chrome/common/extensions/.../basic/manifest.json, so only use the
+        # end of the path component when writing into the zip file.
+        redundant_prefix = '%s/' % base_dir.rstrip('/').rsplit('/', 1)[0]
+        zip_file.writestr(file_path[len(redundant_prefix):], file_contents)
     finally:
       zip_file.close()
     return zip_bytes.getvalue()
 
   def Create(self, path):
-    """ Creates a new zip file from the recursive contents of |path|
+    ''' Creates a new zip file from the recursive contents of |path|
     as returned by |_zip_cache|.
     Paths within the zip file are given relative to and including |path|.
-    """
+    '''
     return self._zip_cache.GetFromFileListing(
-        self._base_path + '/' + path)
+        '%s/%s' % (self._base_path, path.strip('/')))

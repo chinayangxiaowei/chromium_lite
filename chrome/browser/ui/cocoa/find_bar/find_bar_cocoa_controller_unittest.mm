@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/string_util.h"
-#include "base/sys_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/sys_string_conversions.h"
 #include "chrome/browser/ui/browser_window.h"
 #import "chrome/browser/ui/cocoa/cocoa_test_helper.h"
 #import "chrome/browser/ui/cocoa/find_bar/find_bar_cocoa_controller.h"
@@ -15,15 +15,10 @@
 
 // Expose private variables to make testing easier.
 @interface FindBarCocoaController(Testing)
-- (NSView*)findBarView;
 - (FindBarTextField*)findTextField;
 @end
 
 @implementation FindBarCocoaController(Testing)
-- (NSView*)findBarView {
-  return findBarView_;
-}
-
 - (FindBarTextField*)findTextField {
   return findText_;
 }
@@ -53,7 +48,7 @@ class FindBarCocoaControllerTest : public CocoaTest {
   }
 
  protected:
-  scoped_nsobject<FindBarCocoaController> controller_;
+  base::scoped_nsobject<FindBarCocoaController> controller_;
 };
 
 TEST_VIEW(FindBarCocoaControllerTest, [controller_ view])
@@ -110,7 +105,7 @@ TEST_F(FindBarCocoaControllerTest, ResultLabelUpdatesCorrectly) {
 }
 
 TEST_F(FindBarCocoaControllerTest, FindTextIsGlobal) {
-  scoped_nsobject<FindBarCocoaController> otherController(
+  base::scoped_nsobject<FindBarCocoaController> otherController(
       [[FindBarCocoaController alloc] initWithBrowser:nil]);
   [[test_window() contentView] addSubview:[otherController view]];
 

@@ -21,9 +21,9 @@
 #include "base/basictypes.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/string_util.h"
-#include "base/time.h"
-#include "base/timer.h"
+#include "base/strings/string_util.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "chrome/browser/download/download_item_model.h"
 #include "chrome/browser/icon_manager.h"
 #include "chrome/common/cancelable_task_tracker.h"
@@ -49,7 +49,7 @@ class SlideAnimation;
 
 namespace views {
 class Label;
-class TextButton;
+class LabelButton;
 }
 
 class DownloadItemView : public views::ButtonListener,
@@ -98,7 +98,8 @@ class DownloadItemView : public views::ButtonListener,
 
   // Overridden from views::ContextMenuController.
   virtual void ShowContextMenuForView(View* source,
-                                      const gfx::Point& point) OVERRIDE;
+                                      const gfx::Point& point,
+                                      ui::MenuSourceType source_type) OVERRIDE;
 
   // ButtonListener implementation.
   virtual void ButtonPressed(views::Button* sender,
@@ -146,6 +147,11 @@ class DownloadItemView : public views::ButtonListener,
 
   void OpenDownload();
 
+  // Submit the downloaded file to the safebrowsing download feedback service.
+  // If true is returned, the DownloadItem and |this| have been deleted.  If
+  // false is returned, nothing has changed.
+  bool BeginDownloadFeedback();
+
   void LoadIcon();
   void LoadIconIfItemPathChanged();
 
@@ -154,7 +160,8 @@ class DownloadItemView : public views::ButtonListener,
 
   // Shows the context menu at the specified location. |point| is in the view's
   // coordinate system.
-  void ShowContextMenuImpl(const gfx::Point& point, bool is_mouse_gesture);
+  void ShowContextMenuImpl(const gfx::Point& point,
+                           ui::MenuSourceType source_type);
 
   // Common code for handling pointer events (i.e. mouse or gesture).
   void HandlePressEvent(const ui::LocatedEvent& event, bool active_event);
@@ -293,8 +300,8 @@ class DownloadItemView : public views::ButtonListener,
   base::RepeatingTimer<DownloadItemView> progress_timer_;
 
   // Dangerous mode buttons.
-  views::TextButton* save_button_;
-  views::TextButton* discard_button_;
+  views::LabelButton* save_button_;
+  views::LabelButton* discard_button_;
 
   // Dangerous mode label.
   views::Label* dangerous_download_label_;

@@ -12,16 +12,16 @@
 #include "base/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/scoped_handle.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 #include "chrome/browser/extensions/extension_creator_filter.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_file_util.h"
-#include "chrome/common/zip.h"
 #include "crypto/rsa_private_key.h"
 #include "crypto/signature_creator.h"
 #include "extensions/common/crx_file.h"
 #include "extensions/common/id_util.h"
 #include "grit/generated_resources.h"
+#include "third_party/zlib/google/zip.h"
 #include "ui/base/l10n/l10n_util.h"
 
 namespace {
@@ -41,14 +41,15 @@ bool ExtensionCreator::InitializeInput(
     int run_flags) {
   // Validate input |extension_dir|.
   if (extension_dir.value().empty() ||
-      !file_util::DirectoryExists(extension_dir)) {
+      !base::DirectoryExists(extension_dir)) {
     error_message_ =
         l10n_util::GetStringUTF8(IDS_EXTENSION_DIRECTORY_NO_EXISTS);
     return false;
   }
 
-  base::FilePath absolute_extension_dir = extension_dir;
-  if (!file_util::AbsolutePath(&absolute_extension_dir)) {
+  base::FilePath absolute_extension_dir =
+      base::MakeAbsoluteFilePath(extension_dir);
+  if (absolute_extension_dir.empty()) {
     error_message_ =
         l10n_util::GetStringUTF8(IDS_EXTENSION_CANT_GET_ABSOLUTE_PATH);
     return false;
@@ -56,7 +57,7 @@ bool ExtensionCreator::InitializeInput(
 
   // Validate input |private_key| (if provided).
   if (!private_key_path.value().empty() &&
-      !file_util::PathExists(private_key_path)) {
+      !base::PathExists(private_key_path)) {
     error_message_ =
         l10n_util::GetStringUTF8(IDS_EXTENSION_PRIVATE_KEY_INVALID_PATH);
     return false;
@@ -66,7 +67,7 @@ bool ExtensionCreator::InitializeInput(
   // an existing private key.
   if (private_key_path.value().empty() &&
       !private_key_output_path.value().empty() &&
-      file_util::PathExists(private_key_output_path)) {
+      base::PathExists(private_key_output_path)) {
       error_message_ =
           l10n_util::GetStringUTF8(IDS_EXTENSION_PRIVATE_KEY_EXISTS);
       return false;
@@ -74,7 +75,7 @@ bool ExtensionCreator::InitializeInput(
 
   // Check whether crx file already exists. Should be last check, as this is
   // a warning only.
-  if (!(run_flags & kOverwriteCRX) && file_util::PathExists(crx_path)) {
+  if (!(run_flags & kOverwriteCRX) && base::PathExists(crx_path)) {
     error_message_ = l10n_util::GetStringUTF8(IDS_EXTENSION_CRX_EXISTS);
     error_type_ = kCRXExists;
 
@@ -119,7 +120,7 @@ bool ExtensionCreator::ValidateManifest(const base::FilePath& extension_dir,
 
 crypto::RSAPrivateKey* ExtensionCreator::ReadInputKey(const base::FilePath&
     private_key_path) {
-  if (!file_util::PathExists(private_key_path)) {
+  if (!base::PathExists(private_key_path)) {
     error_message_ =
         l10n_util::GetStringUTF8(IDS_EXTENSION_PRIVATE_KEY_NO_EXISTS);
     return NULL;
@@ -149,7 +150,7 @@ crypto::RSAPrivateKey* ExtensionCreator::GenerateKey(const base::FilePath&
     output_private_key_path) {
   scoped_ptr<crypto::RSAPrivateKey> key_pair(
       crypto::RSAPrivateKey::Create(kRSAKeySize));
-  if (!key_pair.get()) {
+  if (!key_pair) {
     error_message_ =
         l10n_util::GetStringUTF8(IDS_EXTENSION_PRIVATE_KEY_FAILED_TO_GENERATE);
     return NULL;
@@ -215,7 +216,7 @@ bool ExtensionCreator::SignZip(const base::FilePath& zip_path,
       crypto::SignatureCreator::Create(private_key));
   ScopedStdioHandle zip_handle(file_util::OpenFile(zip_path, "rb"));
   size_t buffer_size = 1 << 16;
-  scoped_array<uint8> buffer(new uint8[buffer_size]);
+  scoped_ptr<uint8[]> buffer(new uint8[buffer_size]);
   int bytes_read = -1;
   while ((bytes_read = fread(buffer.get(), 1, buffer_size,
        zip_handle.get())) > 0) {
@@ -227,7 +228,11 @@ bool ExtensionCreator::SignZip(const base::FilePath& zip_path,
   }
   zip_handle.Close();
 
-  signature_creator->Final(signature);
+  if (!signature_creator->Final(signature)) {
+    error_message_ =
+        l10n_util::GetStringUTF8(IDS_EXTENSION_ERROR_WHILE_SIGNING);
+    return false;
+  }
   return true;
 }
 
@@ -235,8 +240,8 @@ bool ExtensionCreator::WriteCRX(const base::FilePath& zip_path,
                                 crypto::RSAPrivateKey* private_key,
                                 const std::vector<uint8>& signature,
                                 const base::FilePath& crx_path) {
-  if (file_util::PathExists(crx_path))
-    file_util::Delete(crx_path, false);
+  if (base::PathExists(crx_path))
+    base::DeleteFile(crx_path, false);
   ScopedStdioHandle crx_handle(file_util::OpenFile(crx_path, "wb"));
   if (!crx_handle.get()) {
     error_message_ = l10n_util::GetStringUTF8(IDS_EXTENSION_SHARING_VIOLATION);
@@ -249,7 +254,7 @@ bool ExtensionCreator::WriteCRX(const base::FilePath& zip_path,
   CrxFile::Error error;
   scoped_ptr<CrxFile> crx(
       CrxFile::Create(public_key.size(), signature.size(), &error));
-  if (!crx.get()) {
+  if (!crx) {
     LOG(ERROR) << "cannot create CrxFileHeader: " << error;
   }
   const CrxFile::Header header = crx->header();
@@ -267,7 +272,7 @@ bool ExtensionCreator::WriteCRX(const base::FilePath& zip_path,
   }
 
   size_t buffer_size = 1 << 16;
-  scoped_array<uint8> buffer(new uint8[buffer_size]);
+  scoped_ptr<uint8[]> buffer(new uint8[buffer_size]);
   size_t bytes_read = 0;
   ScopedStdioHandle zip_handle(file_util::OpenFile(zip_path, "rb"));
   while ((bytes_read = fread(buffer.get(), 1, buffer_size,
@@ -298,7 +303,7 @@ bool ExtensionCreator::Run(const base::FilePath& extension_dir,
     key_pair.reset(ReadInputKey(private_key_path));
   else
     key_pair.reset(GenerateKey(output_private_key_path));
-  if (!key_pair.get())
+  if (!key_pair)
     return false;
 
   // Perform some extra validation by loading the extension.
@@ -321,7 +326,7 @@ bool ExtensionCreator::Run(const base::FilePath& extension_dir,
     result = true;
   }
 
-  file_util::Delete(zip_path, false);
+  base::DeleteFile(zip_path, false);
   return result;
 }
 

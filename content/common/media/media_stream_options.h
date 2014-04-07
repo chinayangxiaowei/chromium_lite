@@ -8,7 +8,6 @@
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
 #include "content/common/content_export.h"
 #include "content/public/common/media_stream_request.h"
 
@@ -17,13 +16,10 @@ namespace content {
 // MediaStreamConstraint keys for constraints that are passed to getUserMedia.
 CONTENT_EXPORT extern const char kMediaStreamSource[];
 CONTENT_EXPORT extern const char kMediaStreamSourceId[];
+CONTENT_EXPORT extern const char kMediaStreamSourceInfoId[];
 CONTENT_EXPORT extern const char kMediaStreamSourceTab[];
 CONTENT_EXPORT extern const char kMediaStreamSourceScreen[];
-
-// Callback to deliver the result of a media request. |label| is the string
-// to identify the request,
-typedef base::Callback< void(const std::string&, const MediaStreamDevices&) >
-    MediaRequestResponseCallback;
+CONTENT_EXPORT extern const char kMediaStreamSourceSystem[];
 
 // StreamOptions is a Chromium representation of WebKit's
 // WebUserMediaRequest Options. It describes the components

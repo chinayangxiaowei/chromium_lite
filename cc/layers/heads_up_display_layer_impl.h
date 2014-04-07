@@ -5,8 +5,10 @@
 #ifndef CC_LAYERS_HEADS_UP_DISPLAY_LAYER_IMPL_H_
 #define CC_LAYERS_HEADS_UP_DISPLAY_LAYER_IMPL_H_
 
+#include <string>
+
 #include "base/memory/scoped_ptr.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "cc/base/cc_export.h"
 #include "cc/layers/layer_impl.h"
 #include "cc/resources/memory_history.h"
@@ -34,11 +36,11 @@ class CC_EXPORT HeadsUpDisplayLayerImpl : public LayerImpl {
   virtual scoped_ptr<LayerImpl> CreateLayerImpl(LayerTreeImpl* tree_impl)
       OVERRIDE;
 
-  virtual void WillDraw(ResourceProvider* resource_provider) OVERRIDE;
+  virtual bool WillDraw(DrawMode draw_mode,
+                        ResourceProvider* resource_provider) OVERRIDE;
   virtual void AppendQuads(QuadSink* quad_sink,
                            AppendQuadsData* append_quads_data) OVERRIDE;
   void UpdateHudTexture(ResourceProvider* resource_provider);
-  virtual void DidDraw(ResourceProvider* resource_provider) OVERRIDE;
 
   virtual void DidLoseOutputSurface() OVERRIDE;
 
@@ -91,7 +93,6 @@ class CC_EXPORT HeadsUpDisplayLayerImpl : public LayerImpl {
                       const SkRect& bounds,
                       const Graph& graph) const;
 
-  void DrawPlatformLayerTree(SkCanvas* canvas) const;
   SkRect DrawFPSDisplay(SkCanvas* canvas,
                         const FrameRateCounter* fps_counter,
                         int right,
@@ -107,7 +108,7 @@ class CC_EXPORT HeadsUpDisplayLayerImpl : public LayerImpl {
   void DrawDebugRects(SkCanvas* canvas,
                       DebugRectHistory* debug_rect_history) const;
 
-  scoped_ptr<ScopedResource> hud_texture_;
+  scoped_ptr<ScopedResource> hud_resource_;
   scoped_ptr<SkCanvas> hud_canvas_;
 
   skia::RefPtr<SkTypeface> typeface_;

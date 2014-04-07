@@ -6,23 +6,29 @@
 
 #include "base/command_line.h"
 #include "base/logging.h"
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/common/extensions/api/icons/icons_handler.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_set.h"
+#include "chrome/common/extensions/manifest_handlers/icons_handler.h"
 #include "chrome/common/extensions/manifest_url_handler.h"
 #include "chrome/common/extensions/web_accessible_resources_handler.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/common/page_transition_types.h"
 #include "extensions/common/constants.h"
-#include "googleurl/src/gurl.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebString.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebConsoleMessage.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebDocument.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebFrame.h"
+#include "third_party/WebKit/public/platform/WebString.h"
+#include "third_party/WebKit/public/web/WebConsoleMessage.h"
+#include "third_party/WebKit/public/web/WebDocument.h"
+#include "third_party/WebKit/public/web/WebFrame.h"
+#include "url/gurl.h"
 
 namespace extensions {
+
+// This method does a security check whether chrome-extension:// URLs can be
+// requested by the renderer. Since this is in an untrusted process, the browser
+// has a similar check to enforce the policy, in case this process is exploited.
+// If you are changing this function, ensure equivalent checks are added to
+// extension_protocols.cc's AllowExtensionResourceLoad.
 
 // static
 bool ResourceRequestPolicy::CanRequestResource(
@@ -33,7 +39,7 @@ bool ResourceRequestPolicy::CanRequestResource(
   CHECK(resource_url.SchemeIs(extensions::kExtensionScheme));
 
   const Extension* extension =
-      loaded_extensions->GetExtensionOrAppByURL(ExtensionURLInfo(resource_url));
+      loaded_extensions->GetExtensionOrAppByURL(resource_url);
   if (!extension) {
     // Allow the load in the case of a non-existent extension. We'll just get a
     // 404 from the browser process.
@@ -45,7 +51,8 @@ bool ResourceRequestPolicy::CanRequestResource(
   // some extensions want to be able to do things like create their own
   // launchers.
   std::string resource_root_relative_path =
-      resource_url.path().empty() ? "" : resource_url.path().substr(1);
+      resource_url.path().empty() ? std::string()
+                                  : resource_url.path().substr(1);
   if (extension->is_hosted_app() &&
       !IconsInfo::GetIcons(extension)
           .ContainsPath(resource_root_relative_path)) {

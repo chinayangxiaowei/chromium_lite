@@ -6,10 +6,11 @@
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
-#include "base/message_loop.h"
-#include "base/message_loop_proxy.h"
+#include "base/message_loop/message_loop.h"
+#include "base/message_loop/message_loop_proxy.h"
 #include "chrome/browser/policy/async_policy_loader.h"
 #include "chrome/browser/policy/policy_bundle.h"
+#include "chrome/browser/policy/policy_domain_descriptor.h"
 #include "content/public/browser/browser_thread.h"
 
 using content::BrowserThread;
@@ -18,7 +19,7 @@ namespace policy {
 
 AsyncPolicyProvider::AsyncPolicyProvider(scoped_ptr<AsyncPolicyLoader> loader)
     : loader_(loader.release()),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {
+      weak_factory_(this) {
   // Make an immediate synchronous load on startup.
   OnLoaderReloaded(loader_->InitialLoad());
 }
@@ -79,11 +80,22 @@ void AsyncPolicyProvider::RefreshPolicies() {
   // refresh task has been posted, it is invalidated now.
   refresh_callback_.Reset(
       base::Bind(&AsyncPolicyProvider::ReloadAfterRefreshSync,
-                 base::Unretained(this)));
+                 weak_factory_.GetWeakPtr()));
   BrowserThread::PostTaskAndReply(
       BrowserThread::FILE, FROM_HERE,
       base::Bind(base::DoNothing),
       refresh_callback_.callback());
+}
+
+void AsyncPolicyProvider::RegisterPolicyDomain(
+    scoped_refptr<const PolicyDomainDescriptor> descriptor) {
+  if (loader_) {
+    BrowserThread::PostTask(BrowserThread::FILE,
+                            FROM_HERE,
+                            base::Bind(&AsyncPolicyLoader::RegisterPolicyDomain,
+                                       base::Unretained(loader_),
+                                       descriptor));
+  }
 }
 
 void AsyncPolicyProvider::ReloadAfterRefreshSync() {

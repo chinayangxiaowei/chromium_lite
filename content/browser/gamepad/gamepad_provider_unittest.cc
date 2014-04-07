@@ -4,7 +4,6 @@
 
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/process_util.h"
 #include "content/browser/gamepad/gamepad_data_fetcher.h"
 #include "content/browser/gamepad/gamepad_provider.h"
 #include "content/browser/gamepad/gamepad_test_helpers.h"
@@ -22,7 +21,7 @@ using WebKit::WebGamepads;
 class UserGestureListener {
  public:
   UserGestureListener()
-      : weak_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)),
+      : weak_factory_(this),
         has_user_gesture_(false) {
   }
 

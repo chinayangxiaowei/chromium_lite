@@ -21,7 +21,7 @@ class Rect;
 }  // namespace gfx
 
 // An interface for a class that implements platform-specific behavior for panel
-// windows to provide additional methods not found in BaseWindow.
+// windows to provide additional methods not found in ui::BaseWindow.
 class NativePanel {
   friend class BasePanelBrowserTest;  // for CreateNativePanelTesting
   friend class Panel;
@@ -88,6 +88,13 @@ class NativePanel {
   // iconic.
   virtual bool IsPanelMinimizedBySystem() const = 0;
 
+  // Returns true if the panel is shown in the active desktop. The user could
+  // create and use multiple virtual desktops or workspaces.
+  virtual bool IsPanelShownOnActiveDesktop() const = 0;
+
+  // Turns on/off the shadow effect around the window shape.
+  virtual void ShowShadow(bool show) = 0;
+
   // Create testing interface for native panel. (Keep this last to separate
   // it from regular API.)
   virtual NativePanelTesting* CreateNativePanelTesting() = 0;
@@ -133,6 +140,10 @@ class NativePanelTesting {
   virtual bool IsButtonVisible(panel::TitlebarButtonType button_type) const = 0;
 
   virtual panel::CornerStyle GetWindowCornerStyle() const = 0;
+
+  // Makes sure that the application is running on foreground. Returns false
+  // if the effort fails.
+  virtual bool EnsureApplicationRunOnForeground() = 0;
 };
 
 #endif  // CHROME_BROWSER_UI_PANELS_NATIVE_PANEL_H_

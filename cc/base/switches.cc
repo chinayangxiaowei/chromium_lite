@@ -16,8 +16,9 @@ const char kBackgroundColorInsteadOfCheckerboard[] =
 
 const char kDisableThreadedAnimation[] = "disable-threaded-animation";
 
-// Send a message for every frame from the impl thread to the parent compositor.
-const char kEnableCompositorFrameMessage[] = "enable-compositor-frame-message";
+// Disables layer-edge anti-aliasing in the compositor.
+const char kDisableCompositedAntialiasing[] =
+    "disable-composited-antialiasing";
 
 // Paint content on the main thread instead of the compositor thread.
 // Overrides the kEnableImplSidePainting flag.
@@ -26,14 +27,13 @@ const char kDisableImplSidePainting[] = "disable-impl-side-painting";
 // Paint content on the compositor thread instead of the main thread.
 const char kEnableImplSidePainting[] = "enable-impl-side-painting";
 
-// Try to finish display pipeline before vsync tick
-const char kEnableRightAlignedScheduling[] = "enable-right-aligned-scheduling";
-
 const char kEnableTopControlsPositionCalculation[] =
     "enable-top-controls-position-calculation";
 
-// Enable solid tile color, transparent tile, and cheapness prediction metrics.
-const char kEnablePredictionBenchmarking[] = "enable-prediction-benchmarking";
+// For any layers that can get drawn directly to screen, draw them with the Skia
+// GPU backend.  Only valid with gl rendering + threaded compositing + impl-side
+// painting.
+const char kForceDirectLayerDrawing[] = "force-direct-layer-drawing";
 
 // The height of the movable top controls.
 const char kTopControlsHeight[] = "top-controls-height";
@@ -51,27 +51,14 @@ const char kNumRasterThreads[] = "num-raster-threads";
 // of pixels culled, and the number of pixels drawn, for each frame.
 const char kTraceOverdraw[] = "trace-overdraw";
 
-// Logs all rendered frames.
-const char kTraceAllRenderedFrames[] = "trace-all-rendered-frames";
-
 // Re-rasters everything multiple times to simulate a much slower machine.
 // Give a scale factor to cause raster to take that many times longer to
 // complete, such as --slow-down-raster-scale-factor=25.
 const char kSlowDownRasterScaleFactor[] = "slow-down-raster-scale-factor";
 
-// Disable scheduling of rasterization jobs according to their estimated
-// processing cost.
-const char kDisableCheapnessEstimator[] = "disable-cheapness-estimator";
-
-// Predict whether the tile will be either solid color or transparent.
-const char kUseColorEstimator[] = "use-color-estimator";
-
 // The scale factor for low resolution tile contents.
 const char kLowResolutionContentsScaleFactor[] =
     "low-resolution-contents-scale-factor";
-
-// Max distance from visible for prepaint tiles.
-const char kMaxPrepaintTileDistance[] = "max-prepaint-tile-distance";
 
 // Max tiles allowed for each tilings interest area.
 const char kMaxTilesForInterestArea[] = "max-tiles-for-interest-area";
@@ -85,8 +72,16 @@ const char kMaxUnusedResourceMemoryUsagePercentage[] =
 // Requires --enable-compositor-frame-message.
 const char kCompositeToMailbox[] = "composite-to-mailbox";
 
+// Check that property changes during paint do not occur.
+const char kStrictLayerPropertyChangeChecking[] =
+    "strict-layer-property-change-checking";
+
+// Virtual viewport for fixed-position elements, scrollbars during pinch.
+const char kEnablePinchVirtualViewport[] = "enable-pinch-virtual-viewport";
+
 const char kEnablePartialSwap[] = "enable-partial-swap";
-const char kUIEnablePartialSwap[] = "ui-enable-partial-swap";
+// Disable partial swap which is needed for some OpenGL drivers / emulators.
+const char kUIDisablePartialSwap[] = "ui-disable-partial-swap";
 
 const char kEnablePerTilePainting[] = "enable-per-tile-painting";
 const char kUIEnablePerTilePainting[] = "ui-enable-per-tile-painting";
@@ -95,11 +90,6 @@ const char kUIEnablePerTilePainting[] = "ui-enable-per-tile-painting";
 // layer compositing.
 const char kShowCompositedLayerBorders[] = "show-composited-layer-borders";
 const char kUIShowCompositedLayerBorders[] = "ui-show-layer-borders";
-
-// Draws a textual dump of the compositor layer tree to help debug and study
-// layer compositing.
-const char kShowCompositedLayerTree[] = "show-composited-layer-tree";
-const char kUIShowCompositedLayerTree[] = "ui-show-layer-tree";
 
 // Draws a FPS indicator
 const char kShowFPSCounter[] = "show-fps-counter";
@@ -134,6 +124,12 @@ const char kUIShowOccludingRects[] = "ui-show-occluding-rects";
 // is not considered to be occluding the pixels behind it.
 const char kShowNonOccludingRects[] = "show-nonoccluding-rects";
 const char kUIShowNonOccludingRects[] = "ui-show-nonoccluding-rects";
+
+// Enable the codepath that uses images within TileManager.
+const char kUseMapImage[] = "use-map-image";
+
+// Prevents the layer tree unit tests from timing out.
+const char kCCLayerTreeTestNoTimeout[] = "cc-layer-tree-test-no-timeout";
 
 bool IsImplSidePaintingEnabled() {
   const CommandLine& command_line = *CommandLine::ForCurrentProcess();

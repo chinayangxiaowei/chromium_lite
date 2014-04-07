@@ -10,7 +10,7 @@
 
 #include "base/basictypes.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/timer.h"
+#include "base/timer/timer.h"
 #include "chrome/browser/ui/panels/native_panel.h"
 #include "chrome/browser/ui/panels/panel_constants.h"
 #include "ui/base/gtk/gtk_signal.h"
@@ -37,7 +37,7 @@ class PanelGtk : public NativePanel,
     PAINT_FOR_ATTENTION
   };
 
-  PanelGtk(Panel* panel, const gfx::Rect& bounds);
+  PanelGtk(Panel* panel, const gfx::Rect& bounds, bool always_on_top);
   virtual ~PanelGtk();
 
   void Init();
@@ -83,6 +83,8 @@ class PanelGtk : public NativePanel,
   virtual void SetWindowCornerStyle(panel::CornerStyle corner_style) OVERRIDE;
   virtual void MinimizePanelBySystem() OVERRIDE;
   virtual bool IsPanelMinimizedBySystem() const OVERRIDE;
+  virtual bool IsPanelShownOnActiveDesktop() const OVERRIDE;
+  virtual void ShowShadow(bool show) OVERRIDE;
 
   virtual NativePanelTesting* CreateNativePanelTesting() OVERRIDE;
 
@@ -139,6 +141,7 @@ class PanelGtk : public NativePanel,
                        GdkEvent*);
   CHROMEGTK_CALLBACK_0(PanelGtk, void, OnMainWindowDestroy);
   CHROMEGTK_CALLBACK_1(PanelGtk, gboolean, OnConfigure, GdkEventConfigure*);
+  CHROMEGTK_CALLBACK_1(PanelGtk, gboolean, OnWindowState, GdkEventWindowState*);
   // Callback for when the custom frame alignment needs to be redrawn.
   CHROMEGTK_CALLBACK_1(PanelGtk, gboolean, OnCustomFrameExpose,
                        GdkEventExpose*);
@@ -187,6 +190,11 @@ class PanelGtk : public NativePanel,
   // managers keep track of this state (_NET_ACTIVE_WINDOW), in which case
   // this will always be true.
   bool is_active_;
+
+  // True if the window manager thinks the window is minimized (iconified).
+  // Not all window managers support this, in which case this will always be
+  // false.
+  bool is_minimized_;
 
   // Top level window.
   GtkWindow* window_;

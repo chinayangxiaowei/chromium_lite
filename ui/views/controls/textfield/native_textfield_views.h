@@ -6,7 +6,8 @@
 #define UI_VIEWS_CONTROLS_TEXTFIELD_NATIVE_TEXTFIELD_VIEWS_H_
 
 #include "base/memory/weak_ptr.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
+#include "base/timer/timer.h"
 #include "ui/base/events/event_constants.h"
 #include "ui/base/ime/text_input_client.h"
 #include "ui/base/models/simple_menu_model.h"
@@ -69,6 +70,7 @@ class VIEWS_EXPORT NativeTextfieldViews : public View,
       std::set<ui::OSExchangeData::CustomFormat>* custom_formats) OVERRIDE;
   virtual bool CanDrop(const ui::OSExchangeData& data) OVERRIDE;
   virtual int OnDragUpdated(const ui::DropTargetEvent& event) OVERRIDE;
+  virtual void OnDragExited() OVERRIDE;
   virtual int OnPerformDrop(const ui::DropTargetEvent& event) OVERRIDE;
   virtual void OnDragDone() OVERRIDE;
   virtual bool OnKeyReleased(const ui::KeyEvent& event) OVERRIDE;
@@ -87,11 +89,12 @@ class VIEWS_EXPORT NativeTextfieldViews : public View,
   virtual void ConvertPointToScreen(gfx::Point* point) OVERRIDE;
   virtual void ConvertPointFromScreen(gfx::Point* point) OVERRIDE;
   virtual bool DrawsHandles() OVERRIDE;
-  virtual void OpenContextMenu(const gfx::Point anchor) OVERRIDE;
+  virtual void OpenContextMenu(const gfx::Point& anchor) OVERRIDE;
 
   // ContextMenuController overrides:
   virtual void ShowContextMenuForView(View* source,
-                                      const gfx::Point& point) OVERRIDE;
+                                      const gfx::Point& point,
+                                      ui::MenuSourceType source_type) OVERRIDE;
 
   // Overridden from DragController:
   virtual void WriteDragDataForView(View* sender,
@@ -107,13 +110,12 @@ class VIEWS_EXPORT NativeTextfieldViews : public View,
   virtual string16 GetText() const OVERRIDE;
   virtual void UpdateText() OVERRIDE;
   virtual void AppendText(const string16& text) OVERRIDE;
-  virtual void ReplaceSelection(const string16& text) OVERRIDE;
+  virtual void InsertOrReplaceText(const string16& text) OVERRIDE;
   virtual base::i18n::TextDirection GetTextDirection() const OVERRIDE;
   virtual string16 GetSelectedText() const OVERRIDE;
   virtual void SelectAll(bool reversed) OVERRIDE;
   virtual void ClearSelection() OVERRIDE;
   virtual void UpdateBorder() OVERRIDE;
-  virtual void UpdateBorderColor() OVERRIDE;
   virtual void UpdateTextColor() OVERRIDE;
   virtual void UpdateBackgroundColor() OVERRIDE;
   virtual void UpdateReadOnly() OVERRIDE;
@@ -123,6 +125,7 @@ class VIEWS_EXPORT NativeTextfieldViews : public View,
   virtual gfx::Insets CalculateInsets() OVERRIDE;
   virtual void UpdateHorizontalMargins() OVERRIDE;
   virtual void UpdateVerticalMargins() OVERRIDE;
+  virtual void UpdateVerticalAlignment() OVERRIDE;
   virtual bool SetFocus() OVERRIDE;
   virtual View* GetView() OVERRIDE;
   virtual gfx::NativeView GetTestingHandle() const OVERRIDE;
@@ -148,7 +151,9 @@ class VIEWS_EXPORT NativeTextfieldViews : public View,
   virtual void ClearEditHistory() OVERRIDE;
   virtual int GetFontHeight() OVERRIDE;
   virtual int GetTextfieldBaseline() const OVERRIDE;
+  virtual int GetWidthNeededForText() const OVERRIDE;
   virtual void ExecuteTextCommand(int command_id) OVERRIDE;
+  virtual bool HasTextBeingDragged() OVERRIDE;
 
   // ui::SimpleMenuModel::Delegate overrides
   virtual bool IsCommandIdChecked(int command_id) const OVERRIDE;
@@ -178,7 +183,9 @@ class VIEWS_EXPORT NativeTextfieldViews : public View,
   virtual void ClearCompositionText() OVERRIDE;
   virtual void InsertText(const string16& text) OVERRIDE;
   virtual void InsertChar(char16 ch, int flags) OVERRIDE;
+  virtual gfx::NativeWindow GetAttachedWindow() const OVERRIDE;
   virtual ui::TextInputType GetTextInputType() const OVERRIDE;
+  virtual ui::TextInputMode GetTextInputMode() const OVERRIDE;
   virtual bool CanComposeInline() const OVERRIDE;
   virtual gfx::Rect GetCaretBounds() OVERRIDE;
   virtual bool GetCompositionCharacterBounds(uint32 index,
@@ -195,6 +202,7 @@ class VIEWS_EXPORT NativeTextfieldViews : public View,
   virtual bool ChangeTextDirectionAndLayoutAlignment(
       base::i18n::TextDirection direction) OVERRIDE;
   virtual void ExtendSelectionAndDelete(size_t before, size_t after) OVERRIDE;
+  virtual void EnsureCaretInRect(const gfx::Rect& rect) OVERRIDE;
 
   // Overridden from TextfieldViewsModel::Delegate:
   virtual void OnCompositionTextConfirmedOrCleared() OVERRIDE;
@@ -281,19 +289,28 @@ class VIEWS_EXPORT NativeTextfieldViews : public View,
   // Platform specific gesture event handling.
   void PlatformGestureEventHandling(const ui::GestureEvent* event);
 
+  // Reveals the obscured char at |index| for the given |duration|. If |index|
+  // is -1, existing revealed index will be cleared.
+  void RevealObscuredChar(int index, const base::TimeDelta& duration);
+
   // The parent textfield, the owner of this object.
   Textfield* textfield_;
 
   // The text model.
   scoped_ptr<TextfieldViewsModel> model_;
 
-  // The reference to the border class. The object is owned by View::border_.
+  // The focusable border.  This is always non-NULL, but may not actually be
+  // drawn.  If it is not drawn, then by default it's also zero-sized unless the
+  // Textfield has explicitly-set margins.
   FocusableBorder* text_border_;
 
   // The textfield's text and drop cursor visibility.
   bool is_cursor_visible_;
+
   // The drop cursor is a visual cue for where dragged text will be dropped.
   bool is_drop_cursor_visible_;
+  // Position of the drop cursor, if it is visible.
+  gfx::SelectionModel drop_cursor_position_;
 
   // True if InputMethod::CancelComposition() should not be called.
   bool skip_input_method_cancel_composition_;
@@ -308,6 +325,7 @@ class VIEWS_EXPORT NativeTextfieldViews : public View,
   size_t aggregated_clicks_;
   base::TimeDelta last_click_time_;
   gfx::Point last_click_location_;
+  ui::Range double_click_word_;
 
   // Context menu and its content list for the textfield.
   scoped_ptr<ui::SimpleMenuModel> context_menu_contents_;
@@ -315,6 +333,11 @@ class VIEWS_EXPORT NativeTextfieldViews : public View,
   scoped_ptr<views::MenuRunner> context_menu_runner_;
 
   scoped_ptr<ui::TouchSelectionController> touch_selection_controller_;
+
+  // A timer to control the duration of showing the last typed char in
+  // obscured text. When the timer is running, the last typed char is shown
+  // and when the time expires, the last typed char is obscured.
+  base::OneShotTimer<NativeTextfieldViews> obscured_reveal_timer_;
 
   DISALLOW_COPY_AND_ASSIGN(NativeTextfieldViews);
 };

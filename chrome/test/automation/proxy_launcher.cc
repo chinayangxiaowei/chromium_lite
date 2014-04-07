@@ -8,12 +8,15 @@
 
 #include "base/environment.h"
 #include "base/file_util.h"
-#include "base/stringprintf.h"
+#include "base/files/file_enumerator.h"
+#include "base/process/kill.h"
+#include "base/process/launch.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/test/test_file_util.h"
 #include "base/test/test_timeouts.h"
-#include "base/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/common/automation_constants.h"
 #include "chrome/common/chrome_constants.h"
@@ -39,6 +42,38 @@ namespace {
 // Passed as value of kTestType.
 const char kUITestType[] = "ui";
 
+// Copies the contents of the given source directory to the given dest
+// directory. This is somewhat different than CopyDirectory in base which will
+// copies "source/" to "dest/source/". This version will copy "source/*" to
+// "dest/*", overwriting existing files as necessary.
+//
+// This also kicks the files out of the memory cache for the startup tests.
+// TODO(brettw) bug 237904: This is the wrong place for this code. It means all
+// startup tests other than the "cold" ones run more slowly than necessary.
+bool CopyDirectoryContentsNoCache(const base::FilePath& source,
+                                  const base::FilePath& dest) {
+  base::FileEnumerator en(source, false,
+      base::FileEnumerator::FILES | base::FileEnumerator::DIRECTORIES);
+  for (base::FilePath cur = en.Next(); !cur.empty(); cur = en.Next()) {
+    base::FileEnumerator::FileInfo info = en.GetInfo();
+    if (info.IsDirectory()) {
+      if (!base::CopyDirectory(cur, dest, true))
+        return false;
+    } else {
+      if (!base::CopyFile(cur, dest.Append(cur.BaseName())))
+        return false;
+    }
+  }
+
+  // Kick out the profile files, this must happen after SetUp which creates the
+  // profile. It might be nicer to use EvictFileFromSystemCacheWrapper from
+  // UITest which will retry on failure.
+  base::FileEnumerator kickout(dest, true, base::FileEnumerator::FILES);
+  for (base::FilePath cur = kickout.Next(); !cur.empty(); cur = kickout.Next())
+    base::EvictFileFromSystemCacheWithRetry(cur);
+  return true;
+}
+
 // We want to have a current history database when we start the browser so
 // things like the NTP will have thumbnails.  This method updates the dates
 // in the history to be more recent.
@@ -49,7 +84,7 @@ void UpdateHistoryDates(const base::FilePath& user_data_dir) {
   base::FilePath history =
       user_data_dir.AppendASCII("Default").AppendASCII("History");
   // Not all test profiles have a history file.
-  if (!file_util::PathExists(history))
+  if (!base::PathExists(history))
     return;
 
   ASSERT_TRUE(db.Open(history));
@@ -86,8 +121,6 @@ ProxyLauncher::ProxyLauncher()
                             switches::kFullMemoryCrashReport)),
       show_error_dialogs_(CommandLine::ForCurrentProcess()->HasSwitch(
                               switches::kEnableErrorDialogs)),
-      dump_histograms_on_exit_(CommandLine::ForCurrentProcess()->HasSwitch(
-                                   switches::kDumpHistogramsOnExit)),
       enable_dcheck_(CommandLine::ForCurrentProcess()->HasSwitch(
                          switches::kEnableDCHECK)),
       silent_dump_on_dcheck_(CommandLine::ForCurrentProcess()->HasSwitch(
@@ -186,8 +219,8 @@ bool ProxyLauncher::LaunchBrowser(const LaunchState& state) {
 
   if (!state.template_user_data.empty()) {
     // Recursively copy the template directory to the user_data_dir.
-    if (!file_util::CopyRecursiveDirNoCache(
-            state.template_user_data, user_data_dir())) {
+    if (!CopyDirectoryContentsNoCache(state.template_user_data,
+                                      user_data_dir())) {
       LOG(ERROR) << "Failed to copy user data directory template.";
       return false;
     }
@@ -262,6 +295,8 @@ void ProxyLauncher::QuitBrowser() {
     NOTREACHED() << "Invalid shutdown type " << shutdown_type_;
   }
 
+  ChromeProcessList processes = GetRunningChromeProcesses(process_id_);
+
   // Now, drop the automation IPC channel so that the automation provider in
   // the browser notices and drops its reference to the browser process.
   if (automation_proxy_.get())
@@ -275,6 +310,9 @@ void ProxyLauncher::QuitBrowser() {
   EXPECT_EQ(0, exit_code);  // Expect a clean shutdown.
 
   browser_quit_time_ = base::TimeTicks::Now() - quit_start;
+
+  // Ensure no child processes are left dangling.
+  TerminateAllChromeProcesses(processes);
 }
 
 void ProxyLauncher::TerminateBrowser() {
@@ -291,6 +329,8 @@ void ProxyLauncher::TerminateBrowser() {
   ASSERT_TRUE(browser->TerminateSession());
 #endif  // defined(OS_WIN)
 
+  ChromeProcessList processes = GetRunningChromeProcesses(process_id_);
+
   // Now, drop the automation IPC channel so that the automation provider in
   // the browser notices and drops its reference to the browser process.
   if (automation_proxy_.get())
@@ -306,6 +346,9 @@ void ProxyLauncher::TerminateBrowser() {
   EXPECT_EQ(0, exit_code);  // Expect a clean shutdown.
 
   browser_quit_time_ = base::TimeTicks::Now() - quit_start;
+
+  // Ensure no child processes are left dangling.
+  TerminateAllChromeProcesses(processes);
 }
 
 void ProxyLauncher::AssertAppNotRunning(const std::string& error_message) {
@@ -335,9 +378,6 @@ bool ProxyLauncher::WaitForBrowserProcessToQuit(
   // chance of making it through.
   if (!automation_proxy_->channel_disconnected_on_failure())
     success = base::WaitForExitCodeWithTimeout(process_, exit_code, timeout);
-
-  if (!success)
-    TerminateAllChromeProcesses(process_id_);
 
   base::CloseProcessHandle(process_);
   process_ = base::kNullProcessHandle;
@@ -410,9 +450,6 @@ void ProxyLauncher::PrepareTestCommandline(CommandLine* command_line,
   if (!CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kEnableErrorDialogs))
     command_line->AppendSwitch(switches::kEnableLogging);
-
-  if (dump_histograms_on_exit_)
-    command_line->AppendSwitch(switches::kDumpHistogramsOnExit);
 
 #ifdef WAIT_FOR_DEBUGGER_ON_OPEN
   command_line->AppendSwitch(switches::kDebugOnStart);
@@ -524,7 +561,7 @@ bool NamedProxyLauncher::InitializeConnection(const LaunchState& state,
 #if defined(OS_POSIX)
     // Because we are waiting on the existence of the testing file below,
     // make sure there isn't one already there before browser launch.
-    if (!file_util::Delete(base::FilePath(channel_id_), false)) {
+    if (!base::DeleteFile(base::FilePath(channel_id_), false)) {
       LOG(ERROR) << "Failed to delete " << channel_id_;
       return false;
     }

@@ -13,13 +13,11 @@
 #include "chrome/browser/ui/host_desktop.h"
 #include "content/public/browser/devtools_http_handler_delegate.h"
 
-class Profile;
-
 class BrowserListTabContentsProvider
     : public content::DevToolsHttpHandlerDelegate {
  public:
-  BrowserListTabContentsProvider(Profile* profile,
-                                 chrome::HostDesktopType host_desktop_type);
+  explicit BrowserListTabContentsProvider(
+      chrome::HostDesktopType host_desktop_type);
   virtual ~BrowserListTabContentsProvider();
 
   // DevToolsHttpProtocolHandler::Delegate overrides.
@@ -30,9 +28,11 @@ class BrowserListTabContentsProvider
   virtual content::RenderViewHost* CreateNewTarget() OVERRIDE;
   virtual TargetType GetTargetType(content::RenderViewHost*) OVERRIDE;
   virtual std::string GetViewDescription(content::RenderViewHost*) OVERRIDE;
+  virtual scoped_refptr<net::StreamListenSocket> CreateSocketForTethering(
+      net::StreamListenSocket::Delegate* delegate,
+      std::string* name) OVERRIDE;
 
  private:
-  Profile* profile_;
   chrome::HostDesktopType host_desktop_type_;
   DISALLOW_COPY_AND_ASSIGN(BrowserListTabContentsProvider);
 };

@@ -6,6 +6,8 @@
 
 #include "ash/screen_ash.h"
 #include "ash/shell.h"
+#include "ash/shell_window_ids.h"
+#include "ash/wm/dock/docked_window_layout_manager.h"
 #include "ash/wm/property_util.h"
 #include "ash/wm/window_util.h"
 #include "ui/aura/client/aura_constants.h"
@@ -107,12 +109,14 @@ WindowResizer::Details::Details()
       bounds_change(0),
       position_change_direction(0),
       size_change_direction(0),
-      is_resizable(false) {
+      is_resizable(false),
+      source(aura::client::WINDOW_MOVE_SOURCE_MOUSE) {
 }
 
 WindowResizer::Details::Details(aura::Window* window,
                                 const gfx::Point& location,
-                                int window_component)
+                                int window_component,
+                                aura::client::WindowMoveSource source)
     : window(window),
       initial_bounds_in_parent(window->bounds()),
       restore_bounds(gfx::Rect()),
@@ -124,7 +128,8 @@ WindowResizer::Details::Details(aura::Window* window,
           GetPositionChangeDirectionForWindowComponent(window_component)),
       size_change_direction(
           GetSizeChangeDirectionForWindowComponent(window_component)),
-      is_resizable(bounds_change != kBoundsChangeDirection_None) {
+      is_resizable(bounds_change != kBoundsChangeDirection_None),
+      source(source) {
   if (wm::IsWindowNormal(window) &&
       GetRestoreBoundsInScreen(window) &&
       window_component == HTCAPTION)
@@ -175,11 +180,18 @@ gfx::Rect WindowResizer::CalculateBoundsForDrag(
     return details.initial_bounds_in_parent;
 
   gfx::Point location = passed_location;
-  gfx::Rect work_area =
-      ScreenAsh::GetDisplayWorkAreaBoundsInParent(details.window);
+  aura::Window* dock_container = Shell::GetContainer(
+      details.window->GetRootWindow(),
+      internal::kShellWindowId_DockedContainer);
+  DCHECK_EQ(dock_container->id(), internal::kShellWindowId_DockedContainer);
+  internal::DockedWindowLayoutManager* dock_layout =
+      static_cast<internal::DockedWindowLayoutManager*>(
+          dock_container->layout_manager());
 
   int delta_x = location.x() - details.initial_location_in_parent.x();
   int delta_y = location.y() - details.initial_location_in_parent.y();
+
+  AdjustDeltaForTouchResize(details, &delta_x, &delta_y);
 
   // The minimize size constraint may limit how much we change the window
   // position.  For example, dragging the left edge to the right should stop
@@ -192,6 +204,11 @@ gfx::Rect WindowResizer::CalculateBoundsForDrag(
   // has to come first since it might have an impact on the origin as well as
   // on the size.
   if (details.bounds_change & kBoundsChange_Resizes) {
+    gfx::Rect work_area =
+        Shell::GetScreen()->GetDisplayNearestWindow(details.window).work_area();
+    work_area.Union(dock_layout->docked_bounds());
+    work_area = ScreenAsh::ConvertRectFromScreen(details.window->parent(),
+                                                 work_area);
     if (details.size_change_direction & kBoundsChangeDirection_Horizontal) {
       if (IsRightEdge(details.window_component) &&
           new_bounds.right() < work_area.x() + kMinimumOnScreenArea) {
@@ -249,6 +266,7 @@ gfx::Rect WindowResizer::CalculateBoundsForDrag(
     const gfx::Display& display =
         Shell::GetScreen()->GetDisplayMatching(new_bounds_in_screen);
     gfx::Rect screen_work_area = display.work_area();
+    screen_work_area.Union(dock_layout->docked_bounds());
     screen_work_area.Inset(kMinimumOnScreenArea, 0);
     if (!screen_work_area.Intersects(new_bounds_in_screen)) {
       // Make sure that the x origin does not leave the current display.
@@ -270,6 +288,34 @@ bool WindowResizer::IsBottomEdge(int window_component) {
       window_component == HTBOTTOM ||
       window_component == HTBOTTOMRIGHT ||
       window_component == HTGROWBOX;
+}
+
+// static
+void WindowResizer::AdjustDeltaForTouchResize(const Details& details,
+                                              int* delta_x,
+                                              int* delta_y) {
+  if (details.source != aura::client::WINDOW_MOVE_SOURCE_TOUCH ||
+      !(details.bounds_change & kBoundsChange_Resizes))
+    return;
+
+  if (details.size_change_direction & kBoundsChangeDirection_Horizontal) {
+    if (IsRightEdge(details.window_component)) {
+      *delta_x += details.initial_location_in_parent.x() -
+          details.initial_bounds_in_parent.right();
+    } else {
+      *delta_x += details.initial_location_in_parent.x() -
+          details.initial_bounds_in_parent.x();
+    }
+  }
+  if (details.size_change_direction & kBoundsChangeDirection_Vertical) {
+    if (IsBottomEdge(details.window_component)) {
+      *delta_y += details.initial_location_in_parent.y() -
+          details.initial_bounds_in_parent.bottom();
+    } else {
+      *delta_y += details.initial_location_in_parent.y() -
+          details.initial_bounds_in_parent.y();
+    }
+  }
 }
 
 // static

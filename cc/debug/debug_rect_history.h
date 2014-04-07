@@ -8,6 +8,7 @@
 #include <vector>
 #include "base/basictypes.h"
 #include "base/memory/scoped_ptr.h"
+#include "cc/layers/layer_lists.h"
 #include "ui/gfx/rect.h"
 #include "ui/gfx/rect_f.h"
 
@@ -49,6 +50,9 @@ enum DebugRectType {
   REPLICA_SCREEN_SPACE_RECT_TYPE,
   OCCLUDING_RECT_TYPE,
   NONOCCLUDING_RECT_TYPE,
+  TOUCH_EVENT_HANDLER_RECT_TYPE,
+  WHEEL_EVENT_HANDLER_RECT_TYPE,
+  NON_FAST_SCROLLABLE_RECT_TYPE,
 };
 
 struct DebugRect {
@@ -72,7 +76,7 @@ class DebugRectHistory {
   // reset.
   void SaveDebugRectsForCurrentFrame(
       LayerImpl* root_layer,
-      const std::vector<LayerImpl*>& render_surface_layer_list,
+      const LayerImplList& render_surface_layer_list,
       const std::vector<gfx::Rect>& occluding_screen_space_rects,
       const std::vector<gfx::Rect>& non_occluding_screen_space_rects,
       const LayerTreeDebugState& debug_state);
@@ -84,15 +88,21 @@ class DebugRectHistory {
 
   void SavePaintRects(LayerImpl* layer);
   void SavePropertyChangedRects(
-      const std::vector<LayerImpl*>& render_surface_layer_list);
+      const LayerImplList& render_surface_layer_list);
   void SaveSurfaceDamageRects(
-      const std::vector<LayerImpl*>& render_surface_layer_list);
+      const LayerImplList& render_surface_layer_list);
   void SaveScreenSpaceRects(
-      const std::vector<LayerImpl*>& render_surface_layer_list);
+      const LayerImplList& render_surface_layer_list);
   void SaveOccludingRects(
       const std::vector<gfx::Rect>& occluding_screen_space_rects);
   void SaveNonOccludingRects(
       const std::vector<gfx::Rect>& non_occluding_screen_space_rects);
+  void SaveTouchEventHandlerRects(LayerImpl* layer);
+  void SaveTouchEventHandlerRectsCallback(LayerImpl* layer);
+  void SaveWheelEventHandlerRects(LayerImpl* layer);
+  void SaveWheelEventHandlerRectsCallback(LayerImpl* layer);
+  void SaveNonFastScrollableRects(LayerImpl* layer);
+  void SaveNonFastScrollableRectsCallback(LayerImpl* layer);
 
   std::vector<DebugRect> debug_rects_;
 

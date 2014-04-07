@@ -4,11 +4,10 @@
 
 #include "media/audio/pulse/pulse_unified.h"
 
-#include "base/message_loop.h"
-#include "base/time.h"
+#include "base/message_loop/message_loop.h"
+#include "base/time/time.h"
 #include "media/audio/audio_manager_base.h"
 #include "media/audio/audio_parameters.h"
-#include "media/audio/audio_util.h"
 #include "media/audio/pulse/pulse_util.h"
 #include "media/base/seekable_buffer.h"
 
@@ -42,9 +41,12 @@ void PulseAudioUnifiedStream::ReadCallback(pa_stream* handle, size_t length,
   static_cast<PulseAudioUnifiedStream*>(user_data)->ReadData();
 }
 
-PulseAudioUnifiedStream::PulseAudioUnifiedStream(const AudioParameters& params,
-                                                 AudioManagerBase* manager)
+PulseAudioUnifiedStream::PulseAudioUnifiedStream(
+    const AudioParameters& params,
+    const std::string& input_device_id,
+    AudioManagerBase* manager)
     : params_(params),
+      input_device_id_(input_device_id),
       manager_(manager),
       pa_context_(NULL),
       pa_mainloop_(NULL),
@@ -78,9 +80,8 @@ bool PulseAudioUnifiedStream::Open() {
                                  params_, &StreamNotifyCallback, NULL, this))
     return false;
 
-  // TODO(xians): Add support for non-default device.
   if (!pulse::CreateInputStream(pa_mainloop_, pa_context_, &input_stream_,
-                                params_, AudioManagerBase::kDefaultDeviceId,
+                                params_, input_device_id_,
                                 &StreamNotifyCallback, this))
     return false;
 
@@ -156,7 +157,6 @@ void PulseAudioUnifiedStream::WriteData(size_t requested_bytes) {
     uint32 hardware_delay = pulse::GetHardwareLatencyInBytes(
         output_stream_, params_.sample_rate(),
         params_.GetBytesPerFrame());
-    source_callback_->WaitTillDataReady();
     fifo_->Read(input_data_buffer_.get(), requested_bytes);
     input_bus_->FromInterleaved(
         input_data_buffer_.get(), params_.frames_per_buffer(), 2);
@@ -175,10 +175,9 @@ void PulseAudioUnifiedStream::WriteData(size_t requested_bytes) {
 
   // Note: If this ever changes to output raw float the data must be clipped
   // and sanitized since it may come from an untrusted source such as NaCl.
+  output_bus_->Scale(volume_);
   output_bus_->ToInterleaved(
       output_bus_->frames(), params_.bits_per_sample() / 8, buffer);
-  media::AdjustVolume(buffer, requested_bytes, params_.channels(),
-                      params_.bits_per_sample() / 8, volume_);
 
   if (pa_stream_write(output_stream_, buffer, requested_bytes, NULL, 0LL,
                       PA_SEEK_RELATIVE) < 0) {

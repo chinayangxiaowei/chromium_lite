@@ -28,7 +28,10 @@ QuicPacketCreator::QuicPacketCreator(QuicGuid guid,
       fec_group_number_(0),
       is_server_(is_server),
       send_version_in_packet_(!is_server),
-      packet_size_(GetPacketHeaderSize(send_version_in_packet_)) {
+      packet_size_(GetPacketHeaderSize(options_.send_guid_length,
+                                       send_version_in_packet_,
+                                       options_.send_sequence_number_length,
+                                       NOT_IN_FEC_GROUP)) {
   framer_->set_fec_builder(this);
 }
 
@@ -43,16 +46,22 @@ void QuicPacketCreator::OnBuiltFecProtectedPayload(
 }
 
 bool QuicPacketCreator::ShouldSendFec(bool force_close) const {
-  return fec_group_.get() != NULL &&
+  return fec_group_.get() != NULL && fec_group_->NumReceivedPackets() > 0 &&
       (force_close ||
        fec_group_->NumReceivedPackets() >= options_.max_packets_per_fec_group);
 }
 
 void QuicPacketCreator::MaybeStartFEC() {
   if (options_.max_packets_per_fec_group > 0 && fec_group_.get() == NULL) {
+    DCHECK(queued_frames_.empty());
     // Set the fec group number to the sequence number of the next packet.
     fec_group_number_ = sequence_number() + 1;
     fec_group_.reset(new QuicFecGroup());
+    packet_size_ = GetPacketHeaderSize(options_.send_guid_length,
+                                       send_version_in_packet_,
+                                       options_.send_sequence_number_length,
+                                       IN_FEC_GROUP);
+    DCHECK_LE(packet_size_, options_.max_packet_length);
   }
 }
 
@@ -68,15 +77,23 @@ void QuicPacketCreator::StopSendingVersion() {
   }
 }
 
-bool QuicPacketCreator::HasRoomForStreamFrame() const {
-  return BytesFree() > QuicFramer::GetMinStreamFrameSize();
+bool QuicPacketCreator::HasRoomForStreamFrame(QuicStreamId id,
+                                              QuicStreamOffset offset) const {
+  return BytesFree() >
+      QuicFramer::GetMinStreamFrameSize(framer_->version(), id, offset, true);
 }
 
 // static
-size_t QuicPacketCreator::StreamFramePacketOverhead(int num_frames,
-                                                    bool include_version) {
-  return GetPacketHeaderSize(include_version) +
-      QuicFramer::GetMinStreamFrameSize() * num_frames;
+size_t QuicPacketCreator::StreamFramePacketOverhead(
+    QuicVersion version,
+    QuicGuidLength guid_length,
+    bool include_version,
+    QuicSequenceNumberLength sequence_number_length,
+    InFecGroup is_in_fec_group) {
+  return GetPacketHeaderSize(guid_length, include_version,
+                             sequence_number_length, is_in_fec_group) +
+      // Assumes this is a stream with a single lone packet.
+      QuicFramer::GetMinStreamFrameSize(version, 1u, 0u, true);
 }
 
 size_t QuicPacketCreator::CreateStreamFrame(QuicStreamId id,
@@ -85,15 +102,36 @@ size_t QuicPacketCreator::CreateStreamFrame(QuicStreamId id,
                                             bool fin,
                                             QuicFrame* frame) {
   DCHECK_GT(options_.max_packet_length,
-            StreamFramePacketOverhead(1, kIncludeVersion));
-  DCHECK(HasRoomForStreamFrame());
+            StreamFramePacketOverhead(
+                framer_->version(), PACKET_8BYTE_GUID, kIncludeVersion,
+                PACKET_6BYTE_SEQUENCE_NUMBER, IN_FEC_GROUP));
+  DCHECK(HasRoomForStreamFrame(id, offset));
 
   const size_t free_bytes = BytesFree();
   size_t bytes_consumed = 0;
 
   if (data.size() != 0) {
-    size_t max_data_len = free_bytes - QuicFramer::GetMinStreamFrameSize();
-    bytes_consumed = min<size_t>(max_data_len, data.size());
+    // When a STREAM frame is the last frame in a packet, it consumes two fewer
+    // bytes of framing overhead.
+    // Anytime more data is available than fits in with the extra two bytes,
+    // the frame will be the last, and up to two extra bytes are consumed.
+    // TODO(ianswett): If QUIC pads, the 1 byte PADDING frame does not fit when
+    // 1 byte is available, because then the STREAM frame isn't the last.
+
+    // The minimum frame size(0 bytes of data) if it's not the last frame.
+    size_t min_frame_size = QuicFramer::GetMinStreamFrameSize(
+        framer_->version(), id, offset, false);
+    // Check if it's the last frame in the packet.
+    if (data.size() + min_frame_size > free_bytes) {
+      // The minimum frame size(0 bytes of data) if it is the last frame.
+      size_t min_last_frame_size = QuicFramer::GetMinStreamFrameSize(
+          framer_->version(), id, offset, true);
+      bytes_consumed =
+          min<size_t>(free_bytes - min_last_frame_size, data.size());
+    } else {
+      DCHECK_LT(data.size(), BytesFree());
+      bytes_consumed = data.size();
+    }
 
     bool set_fin = fin && bytes_consumed == data.size();  // Last frame.
     StringPiece data_frame(data.data(), bytes_consumed);
@@ -144,10 +182,14 @@ SerializedPacket QuicPacketCreator::SerializePacket() {
   QuicPacketHeader header;
   FillPacketHeader(fec_group_number_, false, false, &header);
 
-  SerializedPacket serialized = framer_->ConstructFrameDataPacket(
+  SerializedPacket serialized = framer_->BuildDataPacket(
       header, queued_frames_, packet_size_);
   queued_frames_.clear();
-  packet_size_ = GetPacketHeaderSize(send_version_in_packet_);
+  packet_size_ = GetPacketHeaderSize(options_.send_guid_length,
+                                     send_version_in_packet_,
+                                     options_.send_sequence_number_length,
+                                     fec_group_.get() != NULL ?
+                                         IN_FEC_GROUP : NOT_IN_FEC_GROUP);
   serialized.retransmittable_frames = queued_retransmittable_frames_.release();
   return serialized;
 }
@@ -161,9 +203,14 @@ SerializedPacket QuicPacketCreator::SerializeFec() {
   QuicFecData fec_data;
   fec_data.fec_group = fec_group_->min_protected_packet();
   fec_data.redundancy = fec_group_->payload_parity();
-  SerializedPacket serialized = framer_->ConstructFecPacket(header, fec_data);
+  SerializedPacket serialized = framer_->BuildFecPacket(header, fec_data);
   fec_group_.reset(NULL);
   fec_group_number_ = 0;
+  // Reset packet_size_, since the next packet may not have an FEC group.
+  packet_size_ = GetPacketHeaderSize(options_.send_guid_length,
+                                     send_version_in_packet_,
+                                     options_.send_sequence_number_length,
+                                     NOT_IN_FEC_GROUP);
   DCHECK(serialized.packet);
   DCHECK_GE(options_.max_packet_length, serialized.packet->length());
   return serialized;
@@ -177,15 +224,15 @@ SerializedPacket QuicPacketCreator::SerializeConnectionClose(
 }
 
 QuicEncryptedPacket* QuicPacketCreator::SerializeVersionNegotiationPacket(
-    const QuicVersionTagList& supported_versions) {
-  DCHECK(!is_server_);
+    const QuicVersionVector& supported_versions) {
+  DCHECK(is_server_);
   QuicPacketPublicHeader header;
   header.guid = guid_;
   header.reset_flag = false;
   header.version_flag = true;
   header.versions = supported_versions;
   QuicEncryptedPacket* encrypted =
-      framer_->ConstructVersionNegotiationPacket(header, supported_versions);
+      framer_->BuildVersionNegotiationPacket(header, supported_versions);
   DCHECK(encrypted);
   DCHECK_GE(options_.max_packet_length, encrypted->length());
   return encrypted;
@@ -199,15 +246,23 @@ void QuicPacketCreator::FillPacketHeader(QuicFecGroupNumber fec_group,
   header->public_header.reset_flag = false;
   header->public_header.version_flag = send_version_in_packet_;
   header->fec_flag = fec_flag;
-  header->fec_entropy_flag = fec_entropy_flag;
   header->packet_sequence_number = ++sequence_number_;
+
+  bool entropy_flag;
   if (header->packet_sequence_number == 1) {
+    DCHECK(!fec_flag);
     // TODO(satyamshekhar): No entropy in the first message.
     // For crypto tests to pass. Fix this by using deterministic QuicRandom.
-    header->entropy_flag = 0;
+    entropy_flag = 0;
+  } else if (fec_flag) {
+    // FEC packets don't have an entropy of their own. Entropy flag for FEC
+    // packets is the XOR of entropy of previous packets.
+    entropy_flag = fec_entropy_flag;
   } else {
-    header->entropy_flag = random_generator_->RandBool();
+    entropy_flag = random_generator_->RandBool();
   }
+  header->entropy_flag = entropy_flag;
+  header->is_in_fec_group = fec_group == 0 ? NOT_IN_FEC_GROUP : IN_FEC_GROUP;
   header->fec_group = fec_group;
 }
 

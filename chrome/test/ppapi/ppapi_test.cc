@@ -8,10 +8,11 @@
 #include "base/file_util.h"
 #include "base/logging.h"
 #include "base/path_service.h"
-#include "base/string_util.h"
-#include "base/stringprintf.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/test/test_timeouts.h"
 #include "build/build_config.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/content_settings/host_content_settings_map.h"
 #include "chrome/browser/infobars/confirm_infobar_delegate.h"
 #include "chrome/browser/infobars/infobar.h"
@@ -19,10 +20,8 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/test/base/test_launcher_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/dom_operation_notification_details.h"
 #include "content/public/browser/notification_service.h"
@@ -36,7 +35,10 @@
 #include "net/base/test_data_directory.h"
 #include "ppapi/shared_impl/ppapi_switches.h"
 #include "ui/gl/gl_switches.h"
-#include "webkit/plugins/plugin_switches.h"
+
+#if defined(OS_WIN) && defined(USE_ASH)
+#include "base/win/windows_version.h"
+#endif
 
 using content::DomOperationNotificationDetails;
 using content::RenderViewHost;
@@ -88,17 +90,17 @@ void PPAPITestBase::InfoBarObserver::Observe(
     const content::NotificationSource& source,
     const content::NotificationDetails& details) {
   ASSERT_EQ(chrome::NOTIFICATION_TAB_CONTENTS_INFOBAR_ADDED, type);
-  InfoBarDelegate* info_bar_delegate =
+  InfoBarDelegate* infobar =
       content::Details<InfoBarAddedDetails>(details).ptr();
-  ConfirmInfoBarDelegate* confirm_info_bar_delegate =
-      info_bar_delegate->AsConfirmInfoBarDelegate();
-  ASSERT_TRUE(confirm_info_bar_delegate);
+  ConfirmInfoBarDelegate* confirm_infobar_delegate =
+      infobar->AsConfirmInfoBarDelegate();
+  ASSERT_TRUE(confirm_infobar_delegate);
 
   ASSERT_FALSE(expected_infobars_.empty()) << "Unexpected infobar";
   if (expected_infobars_.front())
-    confirm_info_bar_delegate->Accept();
+    confirm_infobar_delegate->Accept();
   else
-    confirm_info_bar_delegate->Cancel();
+    confirm_infobar_delegate->Cancel();
   expected_infobars_.pop_front();
 
   // TODO(bauerb): We should close the infobar.
@@ -113,15 +115,6 @@ PPAPITestBase::PPAPITestBase() {
 }
 
 void PPAPITestBase::SetUpCommandLine(CommandLine* command_line) {
-  // Do not use mesa if real GPU is required.
-  if (!command_line->HasSwitch(switches::kUseGpuInTests)) {
-#if !defined(OS_MACOSX)
-    CHECK(test_launcher_utils::OverrideGLImplementation(
-        command_line, gfx::kGLImplementationOSMesaName)) <<
-        "kUseGL must not be set by test framework code!";
-#endif
-  }
-
   // The test sends us the result via a cookie.
   command_line->AppendSwitch(switches::kEnableFileCookies);
 
@@ -131,6 +124,11 @@ void PPAPITestBase::SetUpCommandLine(CommandLine* command_line) {
 
   // Smooth scrolling confuses the scrollbar test.
   command_line->AppendSwitch(switches::kDisableSmoothScrolling);
+
+  // For TestRequestOSFileHandle.
+  command_line->AppendSwitch(switches::kUnlimitedStorage);
+  command_line->AppendSwitchASCII(switches::kAllowNaClFileHandleAPI,
+                                  "127.0.0.1");
 }
 
 void PPAPITestBase::SetUpOnMainThread() {
@@ -147,12 +145,12 @@ GURL PPAPITestBase::GetTestFileUrl(const std::string& test_case) {
   test_path = test_path.Append(FILE_PATH_LITERAL("test_case.html"));
 
   // Sanity check the file name.
-  EXPECT_TRUE(file_util::PathExists(test_path));
+  EXPECT_TRUE(base::PathExists(test_path));
 
   GURL test_url = net::FilePathToFileURL(test_path);
 
   GURL::Replacements replacements;
-  std::string query = BuildQuery("", test_case);
+  std::string query = BuildQuery(std::string(), test_case);
   replacements.SetQuery(query.c_str(), url_parse::Component(0, query.size()));
   return test_url.ReplaceComponents(replacements);
 }
@@ -174,22 +172,22 @@ void PPAPITestBase::RunTestViaHTTP(const std::string& test_case) {
   ASSERT_TRUE(ui_test_utils::GetRelativeBuildDirectory(&document_root));
   base::FilePath http_document_root;
   ASSERT_TRUE(ui_test_utils::GetRelativeBuildDirectory(&http_document_root));
-  net::TestServer http_server(net::TestServer::TYPE_HTTP,
-                              net::TestServer::kLocalhost,
-                              document_root);
+  net::SpawnedTestServer http_server(net::SpawnedTestServer::TYPE_HTTP,
+                                     net::SpawnedTestServer::kLocalhost,
+                                     document_root);
   ASSERT_TRUE(http_server.Start());
-  RunTestURL(GetTestURL(http_server, test_case, ""));
+  RunTestURL(GetTestURL(http_server, test_case, std::string()));
 }
 
 void PPAPITestBase::RunTestWithSSLServer(const std::string& test_case) {
   base::FilePath http_document_root;
   ASSERT_TRUE(ui_test_utils::GetRelativeBuildDirectory(&http_document_root));
-  net::TestServer http_server(net::TestServer::TYPE_HTTP,
-                              net::TestServer::kLocalhost,
-                              http_document_root);
-  net::TestServer ssl_server(net::TestServer::TYPE_HTTPS,
-                             net::BaseTestServer::SSLOptions(),
-                             http_document_root);
+  net::SpawnedTestServer http_server(net::SpawnedTestServer::TYPE_HTTP,
+                                     net::SpawnedTestServer::kLocalhost,
+                                     http_document_root);
+  net::SpawnedTestServer ssl_server(net::SpawnedTestServer::TYPE_HTTPS,
+                                    net::BaseTestServer::SSLOptions(),
+                                    http_document_root);
   // Start the servers in parallel.
   ASSERT_TRUE(http_server.StartInBackground());
   ASSERT_TRUE(ssl_server.StartInBackground());
@@ -206,12 +204,12 @@ void PPAPITestBase::RunTestWithSSLServer(const std::string& test_case) {
 void PPAPITestBase::RunTestWithWebSocketServer(const std::string& test_case) {
   base::FilePath http_document_root;
   ASSERT_TRUE(ui_test_utils::GetRelativeBuildDirectory(&http_document_root));
-  net::TestServer http_server(net::TestServer::TYPE_HTTP,
-                              net::TestServer::kLocalhost,
-                              http_document_root);
-  net::TestServer ws_server(net::TestServer::TYPE_WS,
-                            net::TestServer::kLocalhost,
-                            net::GetWebSocketTestDataDirectory());
+  net::SpawnedTestServer http_server(net::SpawnedTestServer::TYPE_HTTP,
+                                     net::SpawnedTestServer::kLocalhost,
+                                     http_document_root);
+  net::SpawnedTestServer ws_server(net::SpawnedTestServer::TYPE_WS,
+                                   net::SpawnedTestServer::kLocalhost,
+                                   net::GetWebSocketTestDataDirectory());
   // Start the servers in parallel.
   ASSERT_TRUE(http_server.StartInBackground());
   ASSERT_TRUE(ws_server.StartInBackground());
@@ -249,6 +247,14 @@ std::string PPAPITestBase::StripPrefixes(const std::string& test_name) {
 }
 
 void PPAPITestBase::RunTestURL(const GURL& test_url) {
+#if defined(OS_WIN) && defined(USE_ASH)
+  // PPAPITests are broken in Ash browser tests (http://crbug.com/263548).
+  if (base::win::GetVersion() >= base::win::VERSION_WIN8) {
+    LOG(WARNING) << "PPAPITests are disabled for Ash browser tests.";
+    return;
+  }
+#endif
+
   // See comment above TestingInstance in ppapi/test/testing_instance.h.
   // Basically it sends messages using the DOM automation controller. The
   // value of "..." means it's still working and we should continue to wait,
@@ -266,7 +272,7 @@ void PPAPITestBase::RunTestURL(const GURL& test_url) {
 }
 
 GURL PPAPITestBase::GetTestURL(
-    const net::TestServer& http_server,
+    const net::SpawnedTestServer& http_server,
     const std::string& test_case,
     const std::string& extra_params) {
   std::string query = BuildQuery("files/test_case.html?", test_case);
@@ -289,7 +295,7 @@ void PPAPITest::SetUpCommandLine(CommandLine* command_line) {
   EXPECT_TRUE(PathService::Get(base::DIR_MODULE, &plugin_dir));
 
   base::FilePath plugin_lib = plugin_dir.Append(library_name);
-  EXPECT_TRUE(file_util::PathExists(plugin_lib));
+  EXPECT_TRUE(base::PathExists(plugin_lib));
   base::FilePath::StringType pepper_plugin = plugin_lib.value();
   pepper_plugin.append(FILE_PATH_LITERAL(";application/x-ppapi-tests"));
   command_line->AppendSwitchNative(switches::kRegisterPepperPlugins,
@@ -311,6 +317,8 @@ OutOfProcessPPAPITest::OutOfProcessPPAPITest() {
 
 void OutOfProcessPPAPITest::SetUpCommandLine(CommandLine* command_line) {
   PPAPITest::SetUpCommandLine(command_line);
+  command_line->AppendSwitch(switches::kUseFakeDeviceForMediaStream);
+  command_line->AppendSwitch(switches::kUseFakeUIForMediaStream);
 }
 
 void PPAPINaClTest::SetUpCommandLine(CommandLine* command_line) {
@@ -318,12 +326,14 @@ void PPAPINaClTest::SetUpCommandLine(CommandLine* command_line) {
 
   base::FilePath plugin_lib;
   EXPECT_TRUE(PathService::Get(chrome::FILE_NACL_PLUGIN, &plugin_lib));
-  EXPECT_TRUE(file_util::PathExists(plugin_lib));
+  EXPECT_TRUE(base::PathExists(plugin_lib));
 
   // Enable running NaCl outside of the store.
   command_line->AppendSwitch(switches::kEnableNaCl);
   command_line->AppendSwitch(switches::kEnablePnacl);
   command_line->AppendSwitchASCII(switches::kAllowNaClSocketAPI, "127.0.0.1");
+  command_line->AppendSwitch(switches::kUseFakeDeviceForMediaStream);
+  command_line->AppendSwitch(switches::kUseFakeUIForMediaStream);
 }
 
 // Append the correct mode and testcase string
@@ -353,7 +363,7 @@ void PPAPINaClTestDisallowedSockets::SetUpCommandLine(
 
   base::FilePath plugin_lib;
   EXPECT_TRUE(PathService::Get(chrome::FILE_NACL_PLUGIN, &plugin_lib));
-  EXPECT_TRUE(file_util::PathExists(plugin_lib));
+  EXPECT_TRUE(base::PathExists(plugin_lib));
 
   // Enable running NaCl outside of the store.
   command_line->AppendSwitch(switches::kEnableNaCl);

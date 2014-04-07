@@ -11,15 +11,15 @@
 #include "base/compiler_specific.h"
 #include "base/i18n/case_conversion.h"
 #include "base/logging.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/metrics/histogram.h"
-#include "base/time.h"
-#include "base/utf_string_conversions.h"
-#include "crypto/sha2.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "chrome/renderer/safe_browsing/feature_extractor_clock.h"
 #include "chrome/renderer/safe_browsing/features.h"
 #include "chrome/renderer/safe_browsing/murmurhash3_util.h"
-#include "third_party/icu/public/common/unicode/ubrk.h"
+#include "crypto/sha2.h"
+#include "third_party/icu/source/common/unicode/ubrk.h"
 #include "ui/base/l10n/l10n_util.h"
 
 namespace safe_browsing {
@@ -102,7 +102,7 @@ PhishingTermFeatureExtractor::PhishingTermFeatureExtractor(
       murmurhash3_seed_(murmurhash3_seed),
       negative_word_cache_(kMaxNegativeWordCacheSize),
       clock_(clock),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {
+      weak_factory_(this) {
   Clear();
 }
 
@@ -128,7 +128,7 @@ void PhishingTermFeatureExtractor::ExtractFeatures(
   done_callback_ = done_callback;
 
   state_.reset(new ExtractionState(*page_text_, clock_->Now()));
-  MessageLoop::current()->PostTask(
+  base::MessageLoop::current()->PostTask(
       FROM_HERE,
       base::Bind(&PhishingTermFeatureExtractor::ExtractFeaturesWithTimeout,
                  weak_factory_.GetWeakPtr()));
@@ -195,7 +195,7 @@ void PhishingTermFeatureExtractor::ExtractFeaturesWithTimeout() {
         // clock granularity.
         UMA_HISTOGRAM_TIMES("SBClientPhishing.TermFeatureChunkTime",
                             chunk_elapsed);
-        MessageLoop::current()->PostTask(
+        base::MessageLoop::current()->PostTask(
             FROM_HERE,
             base::Bind(
                 &PhishingTermFeatureExtractor::ExtractFeaturesWithTimeout,

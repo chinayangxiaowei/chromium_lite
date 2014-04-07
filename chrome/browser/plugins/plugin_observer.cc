@@ -6,10 +6,10 @@
 
 #include "base/auto_reset.h"
 #include "base/bind.h"
+#include "base/debug/crash_logging.h"
 #include "base/metrics/histogram.h"
-#include "base/process_util.h"
 #include "base/stl_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/content_settings/host_content_settings_map.h"
 #include "chrome/browser/infobars/confirm_infobar_delegate.h"
@@ -27,11 +27,11 @@
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
+#include "content/public/browser/web_contents_view.h"
+#include "content/public/common/webplugininfo.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/resource/resource_bundle.h"
-#include "webkit/plugins/webplugininfo.h"
 
 #if defined(ENABLE_PLUGIN_INSTALLATION)
 #if defined(OS_WIN)
@@ -118,7 +118,6 @@ void ConfirmInstallDialogDelegate::OnlyWeakObserversLeft() {
   Cancel();
 }
 #endif  // defined(ENABLE_PLUGIN_INSTALLATION)
-
 }  // namespace
 
 // PluginObserver -------------------------------------------------------------
@@ -174,7 +173,7 @@ class PluginObserver::PluginPlaceholderHost : public PluginInstallerObserver {
 
 PluginObserver::PluginObserver(content::WebContents* web_contents)
     : content::WebContentsObserver(web_contents),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_ptr_factory_(this)) {
+      weak_ptr_factory_(this) {
 }
 
 PluginObserver::~PluginObserver() {
@@ -225,11 +224,9 @@ void PluginObserver::PluginCrashed(const base::FilePath& plugin_path,
   UMA_HISTOGRAM_COUNTS("Plugin.ShowCrashedInfobar", 1);
 #endif
 
-  gfx::Image* icon = &ResourceBundle::GetSharedInstance().GetNativeImageNamed(
-      IDR_INFOBAR_PLUGIN_CRASHED);
   SimpleAlertInfoBarDelegate::Create(
-      InfoBarService::FromWebContents(web_contents()), icon, infobar_text,
-      true);
+      InfoBarService::FromWebContents(web_contents()),
+      IDR_INFOBAR_PLUGIN_CRASHED, infobar_text, true);
 }
 
 bool PluginObserver::OnMessageReceived(const IPC::Message& message) {
@@ -257,6 +254,31 @@ bool PluginObserver::OnMessageReceived(const IPC::Message& message) {
   return true;
 }
 
+void PluginObserver::AboutToNavigateRenderView(
+    content::RenderViewHost* render_view_host) {
+#if defined(USE_AURA) && defined(OS_WIN)
+  // If the window belongs to the Ash desktop, before we navigate we need
+  // to tell the renderview that NPAPI plugins are not supported so it does
+  // not try to instantiate them. The final decision is actually done in
+  // the IO thread by PluginInfoMessageFilter of this proces,s but it's more
+  // complex to manage a map of Ash views in PluginInfoMessageFilter than
+  // just telling the renderer via IPC.
+  if (!web_contents())
+    return;
+
+  content::WebContentsView* wcv = web_contents()->GetView();
+  if (!wcv)
+    return;
+
+  aura::Window* window = wcv->GetNativeView();
+  if (chrome::GetHostDesktopTypeForNativeView(window) ==
+      chrome::HOST_DESKTOP_TYPE_ASH) {
+    int routing_id = render_view_host->GetRoutingID();
+    render_view_host->Send(new ChromeViewMsg_NPAPINotSupported(routing_id));
+  }
+#endif
+}
+
 void PluginObserver::OnBlockedUnauthorizedPlugin(
     const string16& name,
     const std::string& identifier) {
@@ -274,10 +296,8 @@ void PluginObserver::OnBlockedOutdatedPlugin(int placeholder_id,
   // Find plugin to update.
   PluginInstaller* installer = NULL;
   scoped_ptr<PluginMetadata> plugin;
-  if (!finder->FindPluginWithIdentifier(identifier, &installer, &plugin)) {
-    NOTREACHED();
-    return;
-  }
+  bool ret = finder->FindPluginWithIdentifier(identifier, &installer, &plugin);
+  DCHECK(ret);
 
   plugin_placeholders_[placeholder_id] =
       new PluginPlaceholderHost(this, placeholder_id,
@@ -308,8 +328,7 @@ void PluginObserver::OnFindMissingPlugin(int placeholder_id,
   DCHECK(plugin_metadata.get());
 
   plugin_placeholders_[placeholder_id] =
-      new PluginPlaceholderHost(this, placeholder_id,
-                                plugin_metadata->name(),
+      new PluginPlaceholderHost(this, placeholder_id, plugin_metadata->name(),
                                 installer);
   PluginInstallerInfoBarDelegate::Create(
       InfoBarService::FromWebContents(web_contents()), installer,
@@ -357,16 +376,18 @@ void PluginObserver::OnCouldNotLoadPlugin(const base::FilePath& plugin_path) {
       PluginService::GetInstance()->GetPluginDisplayNameByPath(plugin_path);
   SimpleAlertInfoBarDelegate::Create(
       InfoBarService::FromWebContents(web_contents()),
-      &ResourceBundle::GetSharedInstance().GetNativeImageNamed(
-          IDR_INFOBAR_PLUGIN_CRASHED),
+      IDR_INFOBAR_PLUGIN_CRASHED,
       l10n_util::GetStringFUTF16(IDS_PLUGIN_INITIALIZATION_ERROR_PROMPT,
                                  plugin_name),
-      true  /* auto_expire */);
+      true);
 }
 
 void PluginObserver::OnNPAPINotSupported(const std::string& identifier) {
 #if defined(OS_WIN) && defined(ENABLE_PLUGIN_INSTALLATION)
+#if !defined(USE_AURA)
   DCHECK(base::win::IsMetroProcess());
+#endif
+
   Profile* profile =
       Profile::FromBrowserContext(web_contents()->GetBrowserContext());
   if (profile->IsOffTheRecord())
@@ -381,16 +402,12 @@ void PluginObserver::OnNPAPINotSupported(const std::string& identifier) {
     return;
 
   scoped_ptr<PluginMetadata> plugin;
-  if (!PluginFinder::GetInstance()->FindPluginWithIdentifier(
-          identifier, NULL, &plugin)) {
-    NOTREACHED();
-    return;
-  }
+  bool ret = PluginFinder::GetInstance()->FindPluginWithIdentifier(
+      identifier, NULL, &plugin);
+  DCHECK(ret);
 
   PluginMetroModeInfoBarDelegate::Create(
       InfoBarService::FromWebContents(web_contents()),
       PluginMetroModeInfoBarDelegate::DESKTOP_MODE_REQUIRED, plugin->name());
-#else
-  NOTREACHED();
 #endif
 }

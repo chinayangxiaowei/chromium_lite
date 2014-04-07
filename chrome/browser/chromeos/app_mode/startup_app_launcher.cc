@@ -9,26 +9,28 @@
 #include "base/files/file_path.h"
 #include "base/json/json_file_value_serializer.h"
 #include "base/path_service.h"
-#include "base/prefs/pref_service.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "base/values.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/chromeos/app_mode/kiosk_app_update_service.h"
+#include "chrome/browser/chrome_notification_types.h"
+#include "chrome/browser/chromeos/app_mode/app_session_lifetime.h"
+#include "chrome/browser/chromeos/app_mode/kiosk_app_manager.h"
 #include "chrome/browser/chromeos/login/user_manager.h"
 #include "chrome/browser/chromeos/ui/app_launch_view.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_system.h"
 #include "chrome/browser/extensions/webstore_startup_installer.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
-#include "chrome/browser/policy/browser_policy_connector.h"
+#include "chrome/browser/signin/profile_oauth2_token_service.h"
+#include "chrome/browser/signin/profile_oauth2_token_service_factory.h"
 #include "chrome/browser/signin/token_service.h"
 #include "chrome/browser/signin/token_service_factory.h"
 #include "chrome/browser/ui/extensions/application_launch.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/extension.h"
-#include "chrome/common/pref_names.h"
+#include "chrome/common/extensions/manifest_handlers/kiosk_enabled_info.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/notification_service.h"
 #include "google_apis/gaia/gaia_auth_consumer.h"
 #include "google_apis/gaia/gaia_constants.h"
 
@@ -40,7 +42,6 @@ namespace chromeos {
 
 namespace {
 
-
 const char kOAuthRefreshToken[] = "refresh_token";
 const char kOAuthClientId[] = "client_id";
 const char kOAuthClientSecret[] = "client_secret";
@@ -50,13 +51,6 @@ const base::FilePath::CharType kOAuthFileName[] =
 
 // Application install splash screen minimum show time in milliseconds.
 const int kAppInstallSplashScreenMinTimeMS = 3000;
-
-// Initial delay that gives an app 30 seconds during which the main app window
-// must be created. If app fails to create the main window in this timeframe,
-// chrome will exit.
-// TODO(xiyuan): Find a nicer way to trace process lifetime management at
-// startup. This just fixes a race that happens on faster machines.
-const int kInitialEndKeepAliveDelayinSec = 30;
 
 bool IsAppInstalled(Profile* profile, const std::string& app_id) {
   return extensions::ExtensionSystem::Get(profile)->extension_service()->
@@ -156,23 +150,30 @@ void StartupAppLauncher::InitializeNetwork() {
 void StartupAppLauncher::InitializeTokenService() {
   chromeos::UpdateAppLaunchSplashScreenState(
       chromeos::APP_LAUNCH_STATE_LOADING_TOKEN_SERVICE);
-  TokenService* token_service =
-      TokenServiceFactory::GetForProfile(profile_);
-  if (token_service->HasOAuthLoginToken()) {
+  ProfileOAuth2TokenService* profile_token_service =
+      ProfileOAuth2TokenServiceFactory::GetForProfile(profile_);
+  if (profile_token_service->RefreshTokenIsAvailable()) {
     InitializeNetwork();
     return;
   }
 
-  registrar_.Add(this,
-                 chrome::NOTIFICATION_TOKEN_LOADING_FINISHED,
-                 content::Source<TokenService>(token_service));
-  registrar_.Add(this,
-                 chrome::NOTIFICATION_TOKEN_AVAILABLE,
-                 content::Source<TokenService>(token_service));
+  // At the end of this method, the execution will be put on hold until
+  // ProfileOAuth2TokenService triggers either OnRefreshTokenAvailable or
+  // OnRefreshTokensLoaded. Given that we want to handle exactly one event,
+  // whichever comes first, both handlers call RemoveObserver on PO2TS. Handling
+  // any of the two events is the only way to resume the execution and enable
+  // Cleanup method to be called, self-invoking a destructor. In destructor
+  // StartupAppLauncher is no longer an observer of PO2TS and there is no need
+  // to call RemoveObserver again.
+  profile_token_service->AddObserver(this);
 
+  TokenService* token_service = TokenServiceFactory::GetForProfile(profile_);
   token_service->Initialize(GaiaConstants::kChromeSource, profile_);
+
   // Pass oauth2 refresh token from the auth file.
   // TODO(zelidrag): We should probably remove this option after M27.
+  // TODO(fgorski): This can go when we have persistence implemented on PO2TS.
+  // Unless the code is no longer needed.
   if (!auth_params_.refresh_token.empty()) {
     token_service->UpdateCredentialsWithOAuth2(
         GaiaAuthConsumer::ClientOAuthResult(
@@ -185,45 +186,21 @@ void StartupAppLauncher::InitializeTokenService() {
   }
 }
 
-void StartupAppLauncher::Observe(
-    int type,
-    const content::NotificationSource& source,
-    const content::NotificationDetails& details) {
-  switch (type) {
-    case chrome::NOTIFICATION_TOKEN_LOADING_FINISHED: {
-      registrar_.RemoveAll();
-      InitializeNetwork();
-      break;
-    }
-    case chrome::NOTIFICATION_TOKEN_AVAILABLE: {
-      TokenService::TokenAvailableDetails* token_details =
-          content::Details<TokenService::TokenAvailableDetails>(
-              details).ptr();
-      if (token_details->service() ==
-              GaiaConstants::kGaiaOAuth2LoginRefreshToken) {
-        registrar_.RemoveAll();
-        InitializeNetwork();
-      }
-      break;
-    }
-    default:
-      NOTREACHED();
-      break;
-  }
+void StartupAppLauncher::OnRefreshTokenAvailable(
+    const std::string& account_id) {
+  ProfileOAuth2TokenServiceFactory::GetForProfile(profile_)
+      ->RemoveObserver(this);
+  InitializeNetwork();
+}
+
+void StartupAppLauncher::OnRefreshTokensLoaded() {
+  ProfileOAuth2TokenServiceFactory::GetForProfile(profile_)
+      ->RemoveObserver(this);
+  InitializeNetwork();
 }
 
 void StartupAppLauncher::Cleanup() {
   chromeos::CloseAppLaunchSplashScreen();
-
-  // Ends OpenAsh() keep alive since the session should either be bound with
-  // the just launched app on success or should be ended on failure.
-  // Invoking it via a PostNonNestableTask because Cleanup() could be called
-  // before main message loop starts.
-  BrowserThread::PostNonNestableDelayedTask(
-      BrowserThread::UI,
-      FROM_HERE,
-      base::Bind(&chrome::EndKeepAlive),
-      base::TimeDelta::FromSeconds(kInitialEndKeepAliveDelayinSec));
 
   delete this;
 }
@@ -263,17 +240,9 @@ void StartupAppLauncher::Launch() {
       extension_service()->GetInstalledExtension(app_id_);
   CHECK(extension);
 
-  // Set the app_id for the current instance of KioskAppUpdateService.
-  KioskAppUpdateService* update_service =
-      KioskAppUpdateServiceFactory::GetForProfile(profile_);
-  DCHECK(update_service);
-  if (update_service)
-    update_service->set_app_id(app_id_);
-
-  // If the device is not enterprise managed, set prefs to reboot after update.
-  if (!g_browser_process->browser_policy_connector()->IsEnterpriseManaged()) {
-    PrefService* local_state = g_browser_process->local_state();
-    local_state->SetBoolean(prefs::kRebootAfterUpdate, true);
+  if (!extensions::KioskEnabledInfo::IsKioskEnabled(extension)) {
+    OnLaunchFailure(KioskAppLaunchError::NOT_KIOSK_ENABLED);
+    return;
   }
 
   // Always open the app in a window.
@@ -281,6 +250,13 @@ void StartupAppLauncher::Launch() {
                                                   extension,
                                                   extension_misc::LAUNCH_WINDOW,
                                                   NEW_WINDOW));
+  InitAppSession(profile_, app_id_);
+
+  content::NotificationService::current()->Notify(
+      chrome::NOTIFICATION_KIOSK_APP_LAUNCHED,
+      content::NotificationService::AllSources(),
+      content::NotificationService::NoDetails());
+
   OnLaunchSuccess();
 }
 
@@ -290,6 +266,7 @@ void StartupAppLauncher::BeginInstall() {
 
   chromeos::UpdateAppLaunchSplashScreenState(
       chromeos::APP_LAUNCH_STATE_INSTALLING_APPLICATION);
+
   if (IsAppInstalled(profile_, app_id_)) {
     Launch();
     return;
@@ -305,6 +282,7 @@ void StartupAppLauncher::BeginInstall() {
 
 void StartupAppLauncher::InstallCallback(bool success,
                                          const std::string& error) {
+  installer_ = NULL;
   if (success) {
     // Schedules Launch() to be called after the callback returns.
     // So that the app finishes its installation.
@@ -344,6 +322,9 @@ void StartupAppLauncher::OnNetworkChanged(
 
 void StartupAppLauncher::OnKeyEvent(ui::KeyEvent* event) {
   if (event->type() != ui::ET_KEY_PRESSED)
+    return;
+
+  if (KioskAppManager::Get()->GetDisableBailoutShortcut())
     return;
 
   if (event->key_code() != ui::VKEY_S ||

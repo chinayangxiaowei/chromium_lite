@@ -6,7 +6,7 @@
 
 #include "base/bind.h"
 #include "base/location.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
 
@@ -27,7 +27,7 @@ BufferedWriteStreamSocket::BufferedWriteStreamSocket(
     : wrapped_socket_(socket_to_wrap),
       io_buffer_(new GrowableIOBuffer()),
       backup_buffer_(new GrowableIOBuffer()),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)),
+      weak_factory_(this),
       callback_pending_(false),
       wrapped_write_in_progress_(false),
       error_(0) {
@@ -50,7 +50,7 @@ int BufferedWriteStreamSocket::Write(IOBuffer* buf, int buf_len,
       wrapped_write_in_progress_ ? backup_buffer_.get() : io_buffer_.get();
   AppendBuffer(idle_buffer, buf, buf_len);
   if (!callback_pending_) {
-    MessageLoop::current()->PostTask(
+    base::MessageLoop::current()->PostTask(
         FROM_HERE,
         base::Bind(&BufferedWriteStreamSocket::DoDelayedWrite,
                    weak_factory_.GetWeakPtr()));
@@ -111,14 +111,6 @@ bool BufferedWriteStreamSocket::UsingTCPFastOpen() const {
   return wrapped_socket_->UsingTCPFastOpen();
 }
 
-int64 BufferedWriteStreamSocket::NumBytesRead() const {
-  return wrapped_socket_->NumBytesRead();
-}
-
-base::TimeDelta BufferedWriteStreamSocket::GetConnectTimeMicros() const {
-  return wrapped_socket_->GetConnectTimeMicros();
-}
-
 bool BufferedWriteStreamSocket::WasNpnNegotiated() const {
   return wrapped_socket_->WasNpnNegotiated();
 }
@@ -133,7 +125,8 @@ bool BufferedWriteStreamSocket::GetSSLInfo(SSLInfo* ssl_info) {
 
 void BufferedWriteStreamSocket::DoDelayedWrite() {
   int result = wrapped_socket_->Write(
-      io_buffer_, io_buffer_->RemainingCapacity(),
+      io_buffer_.get(),
+      io_buffer_->RemainingCapacity(),
       base::Bind(&BufferedWriteStreamSocket::OnIOComplete,
                  base::Unretained(this)));
   if (result == ERR_IO_PENDING) {

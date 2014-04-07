@@ -4,12 +4,12 @@
 
 #include "base/base_switches.h"
 #include "base/command_line.h"
-#include "base/hi_res_timer_manager.h"
-#include "base/message_loop.h"
-#include "base/string_util.h"
-#include "base/system_monitor/system_monitor.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/string_util.h"
 #include "base/threading/platform_thread.h"
-#include "content/common/child_process.h"
+#include "base/timer/hi_res_timer_manager.h"
+#include "content/child/child_process.h"
+#include "content/common/sandbox_linux.h"
 #include "content/public/common/main_function_params.h"
 #include "content/public/common/sandbox_init.h"
 #include "content/worker/worker_thread.h"
@@ -27,11 +27,8 @@ namespace content {
 // Mainline routine for running as the worker process.
 int WorkerMain(const MainFunctionParams& parameters) {
   // The main message loop of the worker process.
-  MessageLoop main_message_loop;
+  base::MessageLoop main_message_loop;
   base::PlatformThread::SetName("CrWorkerMain");
-
-  base::SystemMonitor system_monitor;
-  HighResolutionTimerManager hi_res_timer_manager;
 
 #if defined(OS_WIN)
   sandbox::TargetServices* target_services =
@@ -53,11 +50,13 @@ int WorkerMain(const MainFunctionParams& parameters) {
 #elif defined(OS_LINUX)
   // On Linux, the sandbox must be initialized early, before any thread is
   // created.
-  InitializeSandbox();
+  LinuxSandbox::InitializeSandbox();
 #endif
 
   ChildProcess worker_process;
   worker_process.set_main_thread(new WorkerThread());
+
+  base::HighResolutionTimerManager hi_res_timer_manager;
 
   const CommandLine& parsed_command_line = parameters.command_line;
   if (parsed_command_line.HasSwitch(switches::kWaitForDebugger)) {
@@ -66,7 +65,7 @@ int WorkerMain(const MainFunctionParams& parameters) {
 
   // Load the accelerator table from the browser executable and tell the
   // message loop to use it when translating messages.
-  MessageLoop::current()->Run();
+  base::MessageLoop::current()->Run();
 
   return 0;
 }

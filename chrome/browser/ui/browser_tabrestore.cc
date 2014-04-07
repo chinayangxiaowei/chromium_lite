@@ -21,6 +21,7 @@
 using content::WebContents;
 using content::NavigationController;
 using content::NavigationEntry;
+using sessions::SerializedNavigationEntry;
 
 namespace chrome {
 
@@ -37,7 +38,7 @@ NavigationController::RestoreType GetRestoreType(Browser* browser,
 
 WebContents* CreateRestoredTab(
     Browser* browser,
-    const std::vector<TabNavigation>& navigations,
+    const std::vector<SerializedNavigationEntry>& navigations,
     int selected_navigation,
     const std::string& extension_app_id,
     bool from_last_session,
@@ -50,7 +51,7 @@ WebContents* CreateRestoredTab(
   // session_storage_namespace.h include since we only need that to assign
   // into the map.
   content::SessionStorageNamespaceMap session_storage_namespace_map;
-  session_storage_namespace_map[""] = session_storage_namespace;
+  session_storage_namespace_map[std::string()] = session_storage_namespace;
   WebContents::CreateParams create_params(
       browser->profile(),
       tab_util::GetSiteInstanceForNewTab(browser->profile(), restore_url));
@@ -67,7 +68,7 @@ WebContents* CreateRestoredTab(
   extensions::TabHelper::FromWebContents(web_contents)->
       SetExtensionAppById(extension_app_id);
   std::vector<NavigationEntry*> entries =
-      TabNavigation::CreateNavigationEntriesFromTabNavigations(
+      SerializedNavigationEntry::ToNavigationEntries(
           navigations, browser->profile());
   web_contents->SetUserAgentOverride(user_agent_override);
   web_contents->GetController().Restore(
@@ -82,7 +83,7 @@ WebContents* CreateRestoredTab(
 
 content::WebContents* AddRestoredTab(
     Browser* browser,
-    const std::vector<TabNavigation>& navigations,
+    const std::vector<SerializedNavigationEntry>& navigations,
     int tab_index,
     int selected_navigation,
     const std::string& extension_app_id,
@@ -129,9 +130,9 @@ content::WebContents* AddRestoredTab(
   return web_contents;
 }
 
-void ReplaceRestoredTab(
+content::WebContents* ReplaceRestoredTab(
     Browser* browser,
-    const std::vector<TabNavigation>& navigations,
+    const std::vector<SerializedNavigationEntry>& navigations,
     int selected_navigation,
     bool from_last_session,
     const std::string& extension_app_id,
@@ -154,6 +155,7 @@ void ReplaceRestoredTab(
                                  TabStripModel::ADD_ACTIVE |
                                  TabStripModel::ADD_INHERIT_GROUP);
   tab_strip->CloseWebContentsAt(insertion_index, TabStripModel::CLOSE_NONE);
+  return web_contents;
 }
 
 }  // namespace chrome

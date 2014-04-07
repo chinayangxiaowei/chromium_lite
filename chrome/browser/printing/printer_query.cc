@@ -6,7 +6,7 @@
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/values.h"
 #include "chrome/browser/printing/print_job_worker.h"
@@ -14,12 +14,12 @@
 namespace printing {
 
 PrinterQuery::PrinterQuery()
-    : io_message_loop_(MessageLoop::current()),
-      ALLOW_THIS_IN_INITIALIZER_LIST(worker_(new PrintJobWorker(this))),
+    : io_message_loop_(base::MessageLoop::current()),
+      worker_(new PrintJobWorker(this)),
       is_print_dialog_box_shown_(false),
       cookie_(PrintSettings::NewCookie()),
       last_status_(PrintingContext::FAILED) {
-  DCHECK_EQ(io_message_loop_->type(), MessageLoop::TYPE_IO);
+  DCHECK_EQ(io_message_loop_->type(), base::MessageLoop::TYPE_IO);
 }
 
 PrinterQuery::~PrinterQuery() {
@@ -56,7 +56,7 @@ PrintJobWorker* PrinterQuery::DetachWorker(PrintJobWorkerOwner* new_owner) {
   return worker_.release();
 }
 
-MessageLoop* PrinterQuery::message_loop() {
+base::MessageLoop* PrinterQuery::message_loop() {
   return io_message_loop_;
 }
 
@@ -74,7 +74,7 @@ void PrinterQuery::GetSettings(GetSettingsAskParam ask_user_for_settings,
                                bool has_selection,
                                MarginType margin_type,
                                const base::Closure& callback) {
-  DCHECK_EQ(io_message_loop_, MessageLoop::current());
+  DCHECK_EQ(io_message_loop_, base::MessageLoop::current());
   DCHECK(!is_print_dialog_box_shown_);
 
   StartWorker(callback);

@@ -47,10 +47,10 @@ public class WebKitHitTestTest extends AwTestBase {
     }
 
     private void setServerResponseAndLoad(String response) throws Throwable {
-      String url = mWebServer.setResponse("/hittest.html", response, null);
-      loadUrlSync(mAwContents,
-                  mContentsClient.getOnPageFinishedHelper(),
-                  url);
+        String url = mWebServer.setResponse("/hittest.html", response, null);
+        loadUrlSync(mAwContents,
+                    mContentsClient.getOnPageFinishedHelper(),
+                    url);
     }
 
     private static String fullPageLink(String href, String anchorText) {
@@ -238,12 +238,13 @@ public class WebKitHitTestTest extends AwTestBase {
     }
 
     private void srcPhoneTypeTestBody(boolean byTouch) throws Throwable {
-        String phone_num = "1234567890";
+        String phone_num = "%2B1234567890";
+        String expected_phone_num = "+1234567890";
         String prefix = "tel:";
         String page = fullPageLink("tel:" + phone_num, ANCHOR_TEXT);
         setServerResponseAndLoad(page);
         simulateInput(byTouch);
-        assertTrue(pollForHitTestDataOnUiThread(HitTestResult.PHONE_TYPE, phone_num));
+        assertTrue(pollForHitTestDataOnUiThread(HitTestResult.PHONE_TYPE, expected_phone_num));
         assertTrue(pollForHrefAndImageSrcOnUiThread(prefix + phone_num, ANCHOR_TEXT, null));
     }
 
@@ -376,6 +377,7 @@ public class WebKitHitTestTest extends AwTestBase {
       String relImageSrc = "/nonexistent3.jpg";
       String fullImageSrc = mWebServer.getResponseUrl(relImageSrc);
       String html = CommonResources.makeHtmlPageFrom(
+          "<meta name=\"viewport\" content=\"width=device-width,height=device-height\" />" +
           "<style type=\"text/css\">" +
           ".full_width { width:100%; position:absolute; }" +
           "</style>",

@@ -10,9 +10,9 @@
 #include "base/json/json_reader.h"
 #include "base/prefs/pref_service.h"
 #include "base/values.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/content_settings/content_settings_rule.h"
 #include "chrome/browser/content_settings/content_settings_utils.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/content_settings_pattern.h"
 #include "chrome/common/pref_names.h"
 #include "components/user_prefs/pref_registry_syncable.h"
@@ -42,6 +42,8 @@ const char* kPrefToManageType[] = {
   NULL,  // No policy for default value of media stream camera
   NULL,  // No policy for default value of protocol handlers
   NULL,  // No policy for default value of PPAPI broker
+  NULL,  // No policy for default value of multiple automatic downloads
+  NULL,  // No policy for default value of MIDI system exclusive requests
 #if defined(OS_WIN)
   NULL,  // No policy for default value of "switch to desktop"
 #endif
@@ -117,61 +119,70 @@ const PrefsForManagedContentSettingsMapEntry
 namespace content_settings {
 
 // static
-void PolicyProvider::RegisterUserPrefs(PrefRegistrySyncable* registry) {
+void PolicyProvider::RegisterProfilePrefs(
+    user_prefs::PrefRegistrySyncable* registry) {
   registry->RegisterListPref(prefs::kManagedAutoSelectCertificateForUrls,
-                             PrefRegistrySyncable::UNSYNCABLE_PREF);
+                             user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterListPref(prefs::kManagedCookiesAllowedForUrls,
-                             PrefRegistrySyncable::UNSYNCABLE_PREF);
+                             user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterListPref(prefs::kManagedCookiesBlockedForUrls,
-                             PrefRegistrySyncable::UNSYNCABLE_PREF);
+                             user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterListPref(prefs::kManagedCookiesSessionOnlyForUrls,
-                             PrefRegistrySyncable::UNSYNCABLE_PREF);
+                             user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterListPref(prefs::kManagedImagesAllowedForUrls,
-                             PrefRegistrySyncable::UNSYNCABLE_PREF);
+                             user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterListPref(prefs::kManagedImagesBlockedForUrls,
-                             PrefRegistrySyncable::UNSYNCABLE_PREF);
+                             user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterListPref(prefs::kManagedJavaScriptAllowedForUrls,
-                             PrefRegistrySyncable::UNSYNCABLE_PREF);
+                             user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterListPref(prefs::kManagedJavaScriptBlockedForUrls,
-                             PrefRegistrySyncable::UNSYNCABLE_PREF);
+                             user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterListPref(prefs::kManagedPluginsAllowedForUrls,
-                             PrefRegistrySyncable::UNSYNCABLE_PREF);
+                             user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterListPref(prefs::kManagedPluginsBlockedForUrls,
-                             PrefRegistrySyncable::UNSYNCABLE_PREF);
+                             user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterListPref(prefs::kManagedPopupsAllowedForUrls,
-                             PrefRegistrySyncable::UNSYNCABLE_PREF);
+                             user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterListPref(prefs::kManagedPopupsBlockedForUrls,
-                             PrefRegistrySyncable::UNSYNCABLE_PREF);
+                             user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterListPref(prefs::kManagedNotificationsAllowedForUrls,
-                             PrefRegistrySyncable::UNSYNCABLE_PREF);
+                             user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterListPref(prefs::kManagedNotificationsBlockedForUrls,
-                             PrefRegistrySyncable::UNSYNCABLE_PREF);
+                             user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   // Preferences for default content setting policies. If a policy is not set of
   // the corresponding preferences below is set to CONTENT_SETTING_DEFAULT.
-  registry->RegisterIntegerPref(prefs::kManagedDefaultCookiesSetting,
-                                CONTENT_SETTING_DEFAULT,
-                                PrefRegistrySyncable::UNSYNCABLE_PREF);
-  registry->RegisterIntegerPref(prefs::kManagedDefaultImagesSetting,
-                                CONTENT_SETTING_DEFAULT,
-                                PrefRegistrySyncable::UNSYNCABLE_PREF);
-  registry->RegisterIntegerPref(prefs::kManagedDefaultJavaScriptSetting,
-                                CONTENT_SETTING_DEFAULT,
-                                PrefRegistrySyncable::UNSYNCABLE_PREF);
-  registry->RegisterIntegerPref(prefs::kManagedDefaultPluginsSetting,
-                                CONTENT_SETTING_DEFAULT,
-                                PrefRegistrySyncable::UNSYNCABLE_PREF);
-  registry->RegisterIntegerPref(prefs::kManagedDefaultPopupsSetting,
-                                CONTENT_SETTING_DEFAULT,
-                                PrefRegistrySyncable::UNSYNCABLE_PREF);
-  registry->RegisterIntegerPref(prefs::kManagedDefaultGeolocationSetting,
-                                CONTENT_SETTING_DEFAULT,
-                                PrefRegistrySyncable::UNSYNCABLE_PREF);
-  registry->RegisterIntegerPref(prefs::kManagedDefaultNotificationsSetting,
-                                CONTENT_SETTING_DEFAULT,
-                                PrefRegistrySyncable::UNSYNCABLE_PREF);
-  registry->RegisterIntegerPref(prefs::kManagedDefaultMediaStreamSetting,
-                                CONTENT_SETTING_DEFAULT,
-                                PrefRegistrySyncable::UNSYNCABLE_PREF);
+  registry->RegisterIntegerPref(
+      prefs::kManagedDefaultCookiesSetting,
+      CONTENT_SETTING_DEFAULT,
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
+  registry->RegisterIntegerPref(
+      prefs::kManagedDefaultImagesSetting,
+      CONTENT_SETTING_DEFAULT,
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
+  registry->RegisterIntegerPref(
+      prefs::kManagedDefaultJavaScriptSetting,
+      CONTENT_SETTING_DEFAULT,
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
+  registry->RegisterIntegerPref(
+      prefs::kManagedDefaultPluginsSetting,
+      CONTENT_SETTING_DEFAULT,
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
+  registry->RegisterIntegerPref(
+      prefs::kManagedDefaultPopupsSetting,
+      CONTENT_SETTING_DEFAULT,
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
+  registry->RegisterIntegerPref(
+      prefs::kManagedDefaultGeolocationSetting,
+      CONTENT_SETTING_DEFAULT,
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
+  registry->RegisterIntegerPref(
+      prefs::kManagedDefaultNotificationsSetting,
+      CONTENT_SETTING_DEFAULT,
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
+  registry->RegisterIntegerPref(
+      prefs::kManagedDefaultMediaStreamSetting,
+      CONTENT_SETTING_DEFAULT,
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
 }
 
 PolicyProvider::PolicyProvider(PrefService* prefs) : prefs_(prefs) {
@@ -276,7 +287,7 @@ void PolicyProvider::GetContentSettingsFromPreferences(
           pattern_pair.first,
           secondary_pattern,
           content_type,
-          ResourceIdentifier(NO_RESOURCE_IDENTIFIER),
+          NO_RESOURCE_IDENTIFIER,
           base::Value::CreateIntegerValue(
               kPrefsForManagedContentSettingsMap[i].setting));
     }
@@ -328,9 +339,9 @@ void PolicyProvider::GetAutoSelectCertificateSettingsFromPreferences(
 
     scoped_ptr<base::Value> value(base::JSONReader::Read(pattern_filter_json,
         base::JSON_ALLOW_TRAILING_COMMAS));
-    if (!value.get()) {
+    if (!value || !value->IsType(base::Value::TYPE_DICTIONARY)) {
       VLOG(1) << "Ignoring invalid certificate auto select setting. Reason:"
-                 " Invalid JSON format: " << pattern_filter_json;
+                 " Invalid JSON object: " << pattern_filter_json;
       continue;
     }
 
@@ -338,10 +349,10 @@ void PolicyProvider::GetAutoSelectCertificateSettingsFromPreferences(
         static_cast<base::DictionaryValue*>(value.release()));
     std::string pattern_str;
     bool pattern_read = pattern_filter_pair->GetString("pattern", &pattern_str);
-    base::Value* cert_filter_ptr = NULL;
-    bool filter_read = pattern_filter_pair->Remove("filter", &cert_filter_ptr);
-    scoped_ptr<base::Value> cert_filter(cert_filter_ptr);
-    if (!pattern_read || !filter_read) {
+    scoped_ptr<base::Value> cert_filter;
+    bool filter_read = pattern_filter_pair->Remove("filter", &cert_filter);
+    if (!pattern_read || !filter_read ||
+        !cert_filter->IsType(base::Value::TYPE_DICTIONARY)) {
       VLOG(1) << "Ignoring invalid certificate auto select setting. Reason:"
                  " Missing pattern or filter.";
       continue;
@@ -356,7 +367,6 @@ void PolicyProvider::GetAutoSelectCertificateSettingsFromPreferences(
       continue;
     }
 
-    DCHECK(cert_filter->IsType(base::Value::TYPE_DICTIONARY));
     value_map->SetValue(pattern,
                         ContentSettingsPattern::Wildcard(),
                         CONTENT_SETTINGS_TYPE_AUTO_SELECT_CERTIFICATE,

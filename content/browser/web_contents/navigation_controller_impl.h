@@ -5,23 +5,23 @@
 #ifndef CONTENT_BROWSER_WEB_CONTENTS_NAVIGATION_CONTROLLER_IMPL_H_
 #define CONTENT_BROWSER_WEB_CONTENTS_NAVIGATION_CONTROLLER_IMPL_H_
 
-#include "build/build_config.h"
 #include "base/callback.h"
 #include "base/compiler_specific.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/linked_ptr.h"
-#include "base/time.h"
+#include "base/time/time.h"
+#include "build/build_config.h"
 #include "content/browser/ssl/ssl_manager.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_type.h"
 
-class SkBitmap;
 struct ViewHostMsg_FrameNavigate_Params;
 
 namespace content {
 class NavigationEntryImpl;
 class RenderViewHost;
 class WebContentsImpl;
+class WebContentsScreenshotManager;
 class SiteInstance;
 struct LoadCommittedDetails;
 
@@ -69,7 +69,7 @@ class CONTENT_EXPORT NavigationControllerImpl
   virtual void GoForward() OVERRIDE;
   virtual void GoToIndex(int index) OVERRIDE;
   virtual void GoToOffset(int offset) OVERRIDE;
-  virtual void RemoveEntryAtIndex(int index) OVERRIDE;
+  virtual bool RemoveEntryAtIndex(int index) OVERRIDE;
   virtual const SessionStorageNamespaceMap&
       GetSessionStorageNamespaceMap() const OVERRIDE;
   virtual SessionStorageNamespace*
@@ -89,7 +89,8 @@ class CONTENT_EXPORT NavigationControllerImpl
       const NavigationController& source) OVERRIDE;
   virtual void CopyStateFromAndPrune(
       NavigationController* source) OVERRIDE;
-  virtual void PruneAllButActive() OVERRIDE;
+  virtual bool CanPruneAllButVisible() OVERRIDE;
+  virtual void PruneAllButVisible() OVERRIDE;
   virtual void ClearAllScreenshots() OVERRIDE;
 
   // The session storage namespace that all child RenderViews belonging to
@@ -119,6 +120,10 @@ class CONTENT_EXPORT NavigationControllerImpl
   }
 
   // For use by WebContentsImpl ------------------------------------------------
+
+  // Allow renderer-initiated navigations to create a pending entry when the
+  // provisional load starts.
+  void SetPendingEntry(content::NavigationEntryImpl* entry);
 
   // Handles updating the navigation state after the renderer has navigated.
   // This is used by the WebContentsImpl.
@@ -150,7 +155,7 @@ class CONTENT_EXPORT NavigationControllerImpl
   // be a reload, while only a different ref would be in-page (pages can't clear
   // refs without reload, only change to "#" which we don't count as empty).
   bool IsURLInPageNavigation(const GURL& url) const {
-    return IsURLInPageNavigation(url, false);
+    return IsURLInPageNavigation(url, false, NAVIGATION_TYPE_UNKNOWN);
   }
 
   // The situation is made murkier by history.replaceState(), which could
@@ -158,7 +163,10 @@ class CONTENT_EXPORT NavigationControllerImpl
   // we need this form which lets the (untrustworthy) renderer resolve the
   // ambiguity, but only when the URLs are equal. This should be safe since the
   // origin isn't changing.
-  bool IsURLInPageNavigation(const GURL& url, bool renderer_says_in_page) const;
+  bool IsURLInPageNavigation(
+      const GURL& url,
+      bool renderer_says_in_page,
+      NavigationType navigation_type) const;
 
   // Sets the SessionStorageNamespace for the given |partition_id|. This is
   // used during initialization of a new NavigationController to allow
@@ -188,8 +196,12 @@ class CONTENT_EXPORT NavigationControllerImpl
   // Takes a screenshot of the page at the current state.
   void TakeScreenshot();
 
-  void SetTakeScreenshotCallbackForTest(
-      const base::Callback<void(RenderViewHost*)>& take_screenshot_callback);
+  // Sets the screenshot manager for this NavigationControllerImpl. The
+  // controller takes ownership of the screenshot manager and destroys it when
+  // a new screenshot-manager is set, or when the controller is destroyed.
+  // Setting a NULL manager recreates the default screenshot manager and uses
+  // that.
+  void SetScreenshotManager(WebContentsScreenshotManager* manager);
 
  private:
   friend class RestoreHelper;
@@ -204,8 +216,6 @@ class CONTENT_EXPORT NavigationControllerImpl
 
   // Helper class to smooth out runs of duplicate timestamps while still
   // allowing time to jump backwards.
-  //
-  // TODO(akalin): Use CONTENT_EXPORT_PRIVATE once we have that.
   class CONTENT_EXPORT TimeSmoother {
    public:
     // Returns |t| with possibly some time added on.
@@ -279,20 +289,24 @@ class CONTENT_EXPORT NavigationControllerImpl
   // Removes the entry at |index|, as long as it is not the current entry.
   void RemoveEntryAtIndexInternal(int index);
 
-  // Discards the pending and transient entries.
+  // Discards both the pending and transient entries.
   void DiscardNonCommittedEntriesInternal();
 
-  // Discards the transient entry.
+  // Discards only the pending entry.
+  void DiscardPendingEntry();
+
+  // Discards only the transient entry.
   void DiscardTransientEntry();
 
   // If we have the maximum number of entries, remove the oldest one in
   // preparation to add another.
   void PruneOldestEntryIfFull();
 
-  // Removes all the entries except the active entry. If there is a new pending
-  // navigation it is preserved. In contrast to PruneAllButActive() this does
-  // not update the session history of the RenderView.
-  void PruneAllButActiveInternal();
+  // Removes all entries except the last committed entry.  If there is a new
+  // pending navigation it is preserved. In contrast to PruneAllButVisible()
+  // this does not update the session history of the RenderView.  Callers
+  // must ensure that |CanPruneAllButVisible| returns true before calling this.
+  void PruneAllButVisibleInternal();
 
   // Returns true if the navigation is redirect.
   bool IsRedirect(const ViewHostMsg_FrameNavigate_Params& params);
@@ -310,24 +324,6 @@ class CONTENT_EXPORT NavigationControllerImpl
   // Returns the navigation index that differs from the current entry by the
   // specified |offset|.  The index returned is not guaranteed to be valid.
   int GetIndexForOffset(int offset) const;
-
-  // The callback invoked when taking the screenshot of the page is complete.
-  // This sets the screenshot on the navigation entry.
-  void OnScreenshotTaken(int unique_id,
-                         bool success,
-                         const SkBitmap& bitmap);
-
-  // Removes the screenshot for the entry, returning true if the entry had a
-  // screenshot.
-  bool ClearScreenshot(NavigationEntryImpl* entry);
-
-  // The screenshots in the NavigationEntryImpls can accumulate and consume a
-  // large amount of memory. This function makes sure that the memory
-  // consumption is within a certain limit.
-  void PurgeScreenshotsIfNecessary();
-
-  // Returns the number of entries with screenshots.
-  int GetScreenshotCount() const;
 
   // ---------------------------------------------------------------------------
 
@@ -399,21 +395,14 @@ class CONTENT_EXPORT NavigationControllerImpl
   // Used to get timestamps for newly-created navigation entries.
   base::Callback<base::Time()> get_timestamp_callback_;
 
-  // A callback that gets called before taking the screenshot of the page. This
-  // is used only for testing.
-  base::Callback<void(RenderViewHost*)> take_screenshot_callback_;
-
-  // Taking a screenshot can be async. So use a weakptr for the callback to make
-  // sure that the screenshot completion callback does not trigger on a
-  // destroyed NavigationControllerImpl.
-  base::WeakPtrFactory<NavigationControllerImpl> take_screenshot_factory_;
-
   // Used to smooth out timestamps from |get_timestamp_callback_|.
   // Without this, whenever there is a run of redirects or
   // code-generated navigations, those navigations may occur within
   // the timer resolution, leading to things sometimes showing up in
   // the wrong order in the history view.
   TimeSmoother time_smoother_;
+
+  scoped_ptr<WebContentsScreenshotManager> screenshot_manager_;
 
   DISALLOW_COPY_AND_ASSIGN(NavigationControllerImpl);
 };

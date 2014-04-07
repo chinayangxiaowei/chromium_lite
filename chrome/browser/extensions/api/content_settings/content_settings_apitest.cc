@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 #include "base/prefs/pref_service.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/content_settings/cookie_settings.h"
 #include "chrome/browser/content_settings/host_content_settings_map.h"
 #include "chrome/browser/extensions/api/content_settings/content_settings_api.h"
@@ -12,20 +12,18 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
-#include "webkit/plugins/npapi/mock_plugin_list.h"
+#include "content/public/browser/plugin_service.h"
+#include "content/public/common/webplugininfo.h"
 
 namespace extensions {
 
 IN_PROC_BROWSER_TEST_F(ExtensionApiTest, ContentSettings) {
-  CommandLine::ForCurrentProcess()->AppendSwitch(
-      switches::kEnableExperimentalExtensionApis);
-
   EXPECT_TRUE(RunExtensionTest("content_settings/standard")) << message_;
 
   HostContentSettingsMap* map =
       browser()->profile()->GetHostContentSettingsMap();
   CookieSettings* cookie_settings =
-      CookieSettings::Factory::GetForProfile(browser()->profile());
+      CookieSettings::Factory::GetForProfile(browser()->profile()).get();
 
   // Check default content settings by using an unknown URL.
   GURL example_url("http://www.example.com");
@@ -74,16 +72,16 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, ContentSettings) {
   EXPECT_FALSE(cookie_settings->IsReadingCookieAllowed(url, url));
   EXPECT_EQ(CONTENT_SETTING_ALLOW,
             map->GetContentSetting(
-                url, url, CONTENT_SETTINGS_TYPE_IMAGES, ""));
+                url, url, CONTENT_SETTINGS_TYPE_IMAGES, std::string()));
   EXPECT_EQ(CONTENT_SETTING_BLOCK,
             map->GetContentSetting(
-                url, url, CONTENT_SETTINGS_TYPE_JAVASCRIPT, ""));
+                url, url, CONTENT_SETTINGS_TYPE_JAVASCRIPT, std::string()));
   EXPECT_EQ(CONTENT_SETTING_BLOCK,
             map->GetContentSetting(
-                url, url, CONTENT_SETTINGS_TYPE_PLUGINS, ""));
+                url, url, CONTENT_SETTINGS_TYPE_PLUGINS, std::string()));
   EXPECT_EQ(CONTENT_SETTING_ALLOW,
             map->GetContentSetting(
-                url, url, CONTENT_SETTINGS_TYPE_POPUPS, ""));
+                url, url, CONTENT_SETTINGS_TYPE_POPUPS, std::string()));
 #if 0
   EXPECT_EQ(CONTENT_SETTING_BLOCK,
             map->GetContentSetting(
@@ -91,15 +89,20 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, ContentSettings) {
 #endif
   EXPECT_EQ(CONTENT_SETTING_BLOCK,
             map->GetContentSetting(
-                url, url, CONTENT_SETTINGS_TYPE_NOTIFICATIONS, ""));
+                url, url, CONTENT_SETTINGS_TYPE_NOTIFICATIONS, std::string()));
 }
 
-// Flaky on the trybots. See http://crbug.com/96725.
-IN_PROC_BROWSER_TEST_F(ExtensionApiTest,
-                       DISABLED_ContentSettingsGetResourceIdentifiers) {
-  CommandLine::ForCurrentProcess()->AppendSwitch(
-      switches::kEnableExperimentalExtensionApis);
+class ContentSettingsGetResourceIdentifiersTest : public ExtensionApiTest {
+ public:
+  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+    ExtensionApiTest::SetUpCommandLine(command_line);
+    command_line->AppendSwitch(switches::kDisablePluginsDiscovery);
+  }
+};
 
+// Flaky on the trybots. See http://crbug.com/96725.
+IN_PROC_BROWSER_TEST_F(ContentSettingsGetResourceIdentifiersTest,
+                       DISABLED_Test) {
   base::FilePath::CharType kFooPath[] =
       FILE_PATH_LITERAL("/plugins/foo.plugin");
   base::FilePath::CharType kBarPath[] =
@@ -107,29 +110,21 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest,
   const char* kFooName = "Foo Plugin";
   const char* kBarName = "Bar Plugin";
 
-  webkit::npapi::MockPluginList plugin_list;
-  plugin_list.AddPluginToLoad(
-      webkit::WebPluginInfo(ASCIIToUTF16(kFooName),
-                            base::FilePath(kFooPath),
-                            ASCIIToUTF16("1.2.3"),
-                            ASCIIToUTF16("foo")));
-  plugin_list.AddPluginToLoad(
-      webkit::WebPluginInfo(ASCIIToUTF16(kBarName),
-                            base::FilePath(kBarPath),
-                            ASCIIToUTF16("2.3.4"),
-                            ASCIIToUTF16("bar")));
-
-  std::vector<webkit::WebPluginInfo> plugins;
-  plugin_list.GetPlugins(&plugins);
-
-  ContentSettingsContentSettingGetResourceIdentifiersFunction::
-      SetPluginsForTesting(&plugins);
+  content::PluginService::GetInstance()->RegisterInternalPlugin(
+      content::WebPluginInfo(ASCIIToUTF16(kFooName),
+                             base::FilePath(kFooPath),
+                             ASCIIToUTF16("1.2.3"),
+                             ASCIIToUTF16("foo")),
+      false);
+  content::PluginService::GetInstance()->RegisterInternalPlugin(
+    content::WebPluginInfo(ASCIIToUTF16(kBarName),
+                           base::FilePath(kBarPath),
+                           ASCIIToUTF16("2.3.4"),
+                           ASCIIToUTF16("bar")),
+      false);
 
   EXPECT_TRUE(RunExtensionTest("content_settings/getresourceidentifiers"))
       << message_;
-
-  ContentSettingsContentSettingGetResourceIdentifiersFunction::
-      SetPluginsForTesting(NULL);
 }
 
 }  // namespace extensions

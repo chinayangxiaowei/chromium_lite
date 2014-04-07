@@ -5,7 +5,7 @@
 #include "chrome/browser/ui/ash/launcher/launcher_item_controller.h"
 
 #include "base/basictypes.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/launcher/chrome_launcher_controller.h"
@@ -45,7 +45,6 @@ ash::LauncherItemType LauncherItemController::GetLauncherItemType() const {
     case LauncherItemController::TYPE_WINDOWED_APP:
       return ash::TYPE_APP_SHORTCUT;
     case LauncherItemController::TYPE_APP:
-    case LauncherItemController::TYPE_EXTENSION_PANEL:
       return ash::TYPE_PLATFORM_APP;
     case LauncherItemController::TYPE_APP_PANEL:
       return ash::TYPE_APP_PANEL;

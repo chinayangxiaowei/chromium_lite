@@ -8,7 +8,7 @@
 #include "ash/launcher/launcher_model.h"
 #include "ash/launcher/launcher_view.h"
 #include "ash/launcher/overflow_button.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "ui/views/animation/bounds_animator.h"
 #include "ui/views/view_model.h"
 
@@ -24,7 +24,7 @@ class TestAPIAnimationObserver : public views::BoundsAnimatorObserver {
   virtual void OnBoundsAnimatorProgressed(
       views::BoundsAnimator* animator) OVERRIDE {}
   virtual void OnBoundsAnimatorDone(views::BoundsAnimator* animator) OVERRIDE {
-    MessageLoop::current()->Quit();
+    base::MessageLoop::current()->Quit();
   }
 
  private:
@@ -90,9 +90,14 @@ void LauncherViewTestAPI::RunMessageLoopUntilAnimationsDone() {
 
   // This nested loop will quit when TestAPIAnimationObserver's
   // OnBoundsAnimatorDone is called.
-  MessageLoop::current()->Run();
+  base::MessageLoop::current()->Run();
 
   launcher_view_->bounds_animator_->RemoveObserver(observer.get());
+}
+
+bool LauncherViewTestAPI::SameDragType(LauncherItemType typea,
+                                       LauncherItemType typeb) const {
+  return launcher_view_->SameDragType(typea, typeb);
 }
 
 }  // namespace test

@@ -9,14 +9,13 @@
 #include <string>
 #include <vector>
 
-#include "base/id_map.h"
+#include "base/memory/scoped_vector.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "content/common/content_export.h"
 #include "content/common/gpu/gpu_memory_allocation.h"
 #include "content/common/gpu/gpu_memory_manager.h"
 #include "content/common/gpu/gpu_memory_manager_client.h"
-#include "googleurl/src/gurl.h"
 #include "gpu/command_buffer/common/constants.h"
 #include "gpu/command_buffer/service/command_buffer_service.h"
 #include "gpu/command_buffer/service/context_group.h"
@@ -24,13 +23,15 @@
 #include "ipc/ipc_listener.h"
 #include "ipc/ipc_sender.h"
 #include "media/base/video_decoder_config.h"
+#include "ui/base/latency_info.h"
 #include "ui/gfx/native_widget_types.h"
 #include "ui/gfx/size.h"
 #include "ui/gl/gl_surface.h"
 #include "ui/gl/gpu_preference.h"
-#include "ui/surface/transport_dib.h"
+#include "url/gurl.h"
 
 namespace gpu {
+struct Mailbox;
 namespace gles2 {
 class ImageManager;
 class MailboxManager;
@@ -52,11 +53,14 @@ class GpuCommandBufferStub
   class DestructionObserver {
    public:
     // Called in Destroy(), before the context/surface are released.
-    virtual void OnWillDestroyStub(GpuCommandBufferStub* stub) = 0;
+    virtual void OnWillDestroyStub() = 0;
 
    protected:
     virtual ~DestructionObserver() {}
   };
+
+  typedef base::Callback<void(const ui::LatencyInfo&)>
+      LatencyInfoCallback;
 
   GpuCommandBufferStub(
       GpuChannel* channel,
@@ -69,6 +73,7 @@ class GpuCommandBufferStub
       const std::string& allowed_extensions,
       const std::vector<int32>& attribs,
       gfx::GpuPreference gpu_preference,
+      bool use_virtualized_gl_context,
       int32 route_id,
       int32 surface_id,
       GpuWatchdog* watchdog,
@@ -119,7 +124,7 @@ class GpuCommandBufferStub
 
   void SendCachedShader(const std::string& key, const std::string& shader);
 
-  gfx::GLSurface* surface() const { return surface_; }
+  gfx::GLSurface* surface() const { return surface_.get(); }
 
   void AddDestructionObserver(DestructionObserver* observer);
   void RemoveDestructionObserver(DestructionObserver* observer);
@@ -129,6 +134,10 @@ class GpuCommandBufferStub
   void AddSyncPoint(uint32 sync_point);
 
   void SetPreemptByFlag(scoped_refptr<gpu::PreemptionFlag> flag);
+
+  void SetLatencyInfoCallback(const LatencyInfoCallback& callback);
+
+  void MarkContextLost();
 
  private:
   GpuMemoryManager* GetMemoryManager();
@@ -142,9 +151,7 @@ class GpuCommandBufferStub
   void OnInitialize(base::SharedMemoryHandle shared_state_shm,
                     IPC::Message* reply_message);
   void OnSetGetBuffer(int32 shm_id, IPC::Message* reply_message);
-  void OnSetParent(int32 parent_route_id,
-                   uint32 parent_texture_id,
-                   IPC::Message* reply_message);
+  void OnProduceFrontBuffer(const gpu::Mailbox& mailbox);
   void OnGetState(IPC::Message* reply_message);
   void OnGetStateFast(IPC::Message* reply_message);
   void OnAsyncFlush(int32 put_offset, uint32 flush_count);
@@ -159,7 +166,6 @@ class GpuCommandBufferStub
   void OnCreateVideoDecoder(
       media::VideoCodecProfile profile,
       IPC::Message* reply_message);
-  void OnDestroyVideoDecoder(int32 decoder_route_id);
 
   void OnSetSurfaceVisible(bool visible);
 
@@ -171,12 +177,14 @@ class GpuCommandBufferStub
   void OnSyncPointRetired();
   void OnSignalSyncPoint(uint32 sync_point, uint32 id);
   void OnSignalSyncPointAck(uint32 id);
+  void OnSignalQuery(uint32 query, uint32 id);
 
   void OnReceivedClientManagedMemoryStats(const GpuManagedMemoryStats& stats);
   void OnSetClientHasMemoryAllocationChangedCallback(bool has_callback);
 
   void OnCommandProcessed();
   void OnParseError();
+  void OnSetLatencyInfo(const ui::LatencyInfo& latency_info);
 
   void ReportState();
 
@@ -190,6 +198,8 @@ class GpuCommandBufferStub
   bool HasMoreWork();
 
   void ScheduleDelayedWork(int64 delay);
+
+  bool CheckContextLost();
 
   // The lifetime of objects of this class is managed by a GpuChannel. The
   // GpuChannels destroy all the GpuCommandBufferStubs that they own when they
@@ -205,6 +215,7 @@ class GpuCommandBufferStub
   std::string allowed_extensions_;
   std::vector<int32> requested_attribs_;
   gfx::GpuPreference gpu_preference_;
+  bool use_virtualized_gl_context_;
   int32 route_id_;
   int32 surface_id_;
   bool software_;
@@ -221,16 +232,7 @@ class GpuCommandBufferStub
   bool last_memory_allocation_valid_;
   GpuMemoryAllocation last_memory_allocation_;
 
-  // SetParent may be called before Initialize, in which case we need to keep
-  // around the parent stub, so that Initialize can set the parent correctly.
-  base::WeakPtr<GpuCommandBufferStub> parent_stub_for_initialization_;
-  uint32 parent_texture_for_initialization_;
-
   GpuWatchdog* watchdog_;
-
-  // Zero or more video decoders owned by this stub, keyed by their
-  // decoder_route_id.
-  IDMap<GpuVideoDecodeAccelerator, IDMapOwnPointer> video_decoders_;
 
   ObserverList<DestructionObserver> destruction_observers_;
 
@@ -243,6 +245,8 @@ class GpuCommandBufferStub
   base::TimeTicks last_idle_time_;
 
   scoped_refptr<gpu::PreemptionFlag> preemption_flag_;
+
+  LatencyInfoCallback latency_info_callback_;
 
   GURL active_url_;
   size_t active_url_hash_;

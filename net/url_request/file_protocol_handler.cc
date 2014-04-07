@@ -34,7 +34,7 @@ URLRequestJob* FileProtocolHandler::MaybeCreateJob(
   // which doesn't end with a slash, should really be treated as a directory,
   // and it then redirects to the URLRequestFileDirJob.
   if (is_file &&
-      file_util::EndsWithSeparator(file_path) &&
+      file_path.EndsWithSeparator() &&
       file_path.IsAbsolute()) {
     return new URLRequestFileDirJob(request, network_delegate, file_path);
   }
@@ -42,6 +42,10 @@ URLRequestJob* FileProtocolHandler::MaybeCreateJob(
   // Use a regular file request job for all non-directories (including invalid
   // file names).
   return new URLRequestFileJob(request, network_delegate, file_path);
+}
+
+bool FileProtocolHandler::IsSafeRedirectTarget(const GURL& location) const {
+  return false;
 }
 
 }  // namespace net

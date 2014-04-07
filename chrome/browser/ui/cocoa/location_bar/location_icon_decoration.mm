@@ -4,7 +4,7 @@
 
 #import "chrome/browser/ui/cocoa/location_bar/location_icon_decoration.h"
 
-#include "base/sys_string_conversions.h"
+#include "base/strings/sys_string_conversions.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_finder.h"
@@ -98,14 +98,15 @@ bool LocationIconDecoration::OnMousePressed(NSRect frame) {
 
   WebContents* tab = owner_->GetWebContents();
   const NavigationController& controller = tab->GetController();
-  NavigationEntry* nav_entry = controller.GetActiveEntry();
+  // Important to use GetVisibleEntry to match what's showing in the omnibox.
+  NavigationEntry* nav_entry = controller.GetVisibleEntry();
   if (!nav_entry) {
     NOTREACHED();
     return true;
   }
   Browser* browser = chrome::FindBrowserWithWebContents(tab);
   chrome::ShowWebsiteSettings(browser, tab, nav_entry->GetURL(),
-                              nav_entry->GetSSL(), true);
+                              nav_entry->GetSSL());
   return true;
 }
 

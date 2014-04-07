@@ -10,6 +10,35 @@
 namespace chromeos {
 namespace system {
 
+// Developer switch value.
+extern const char kDevSwitchBootMode[];
+
+// HWID key.
+extern const char kHardwareClass[];
+
+// Machine board key.
+extern const char kMachineInfoBoard[];
+
+// OEM customization flag that permits exiting enterprise enrollment flow in
+// OOBE when 'oem_enterprise_managed' flag is set.
+extern const char kOemCanExitEnterpriseEnrollmentKey[];
+
+// OEM customization directive that specified intended device purpose.
+extern const char kOemDeviceRequisitionKey[];
+
+// OEM customization flag that enforces enterprise enrollment flow in OOBE.
+extern const char kOemIsEnterpriseManagedKey[];
+
+// OEM customization flag that specifies if OOBE flow should be enhanced for
+// keyboard driven control.
+extern const char kOemKeyboardDrivenOobeKey[];
+
+// Offer coupon code key.
+extern const char kOffersCouponCodeKey[];
+
+// Offer group key.
+extern const char kOffersGroupCodeKey[];
+
 // This interface provides access to Chrome OS statistics.
 class StatisticsProvider {
  public:
@@ -24,6 +53,13 @@ class StatisticsProvider {
   // preserves old value.
   virtual bool GetMachineStatistic(const std::string& name,
                                    std::string* result) = 0;
+
+  // Retrieve boolean value for named machine flag.
+  virtual bool GetMachineFlag(const std::string& name,
+                              bool* result) = 0;
+
+  // Loads kiosk oem manifest file.
+  virtual void LoadOemManifest() = 0;
 
   static StatisticsProvider* GetInstance();
 

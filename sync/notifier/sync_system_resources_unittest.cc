@@ -9,7 +9,7 @@
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/callback.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 
 #include "google/cacheinvalidation/include/types.h"
 #include "jingle/notifier/listener/fake_push_client.h"
@@ -83,7 +83,7 @@ class SyncSystemResourcesTest : public testing::Test {
   }
 
   // Needed by |sync_system_resources_|.
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
   MockStateWriter mock_state_writer_;
   SyncSystemResources sync_system_resources_;
 
@@ -168,9 +168,10 @@ TEST_F(SyncSystemResourcesTest, WriteState) {
   EXPECT_CALL(mock_storage_callback, Run(_))
       .WillOnce(SaveArg<0>(&results));
   sync_system_resources_.storage()->WriteKey(
-      "", "state", mock_storage_callback.CreateCallback());
+      std::string(), "state", mock_storage_callback.CreateCallback());
   message_loop_.RunUntilIdle();
-  EXPECT_EQ(invalidation::Status(invalidation::Status::SUCCESS, ""), results);
+  EXPECT_EQ(invalidation::Status(invalidation::Status::SUCCESS, std::string()),
+            results);
 }
 
 }  // namespace

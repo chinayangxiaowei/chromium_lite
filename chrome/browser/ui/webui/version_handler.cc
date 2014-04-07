@@ -7,17 +7,17 @@
 #include "base/command_line.h"
 #include "base/file_util.h"
 #include "base/metrics/field_trial.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/plugins/plugin_prefs.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/metrics/variations/variations_util.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/plugin_service.h"
 #include "content/public/browser/web_ui.h"
-#include "googleurl/src/gurl.h"
+#include "content/public/common/content_constants.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "webkit/plugins/plugin_constants.h"
+#include "url/gurl.h"
 
 namespace {
 
@@ -27,17 +27,17 @@ void GetFilePaths(const base::FilePath& profile_path,
                   string16* profile_path_out) {
   DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::FILE));
 
-  base::FilePath executable_path =
-      CommandLine::ForCurrentProcess()->GetProgram();
-  if (file_util::AbsolutePath(&executable_path)) {
+  base::FilePath executable_path = base::MakeAbsoluteFilePath(
+      CommandLine::ForCurrentProcess()->GetProgram());
+  if (!executable_path.empty()) {
     *exec_path_out = executable_path.LossyDisplayName();
   } else {
     *exec_path_out =
         l10n_util::GetStringUTF16(IDS_ABOUT_VERSION_PATH_NOTFOUND);
   }
 
-  base::FilePath profile_path_copy(profile_path);
-  if (!profile_path.empty() && file_util::AbsolutePath(&profile_path_copy)) {
+  base::FilePath profile_path_copy(base::MakeAbsoluteFilePath(profile_path));
+  if (!profile_path.empty() && !profile_path_copy.empty()) {
     *profile_path_out = profile_path.LossyDisplayName();
   } else {
     *profile_path_out =
@@ -48,7 +48,7 @@ void GetFilePaths(const base::FilePath& profile_path,
 }  // namespace
 
 VersionHandler::VersionHandler()
-    : weak_ptr_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {
+    : weak_ptr_factory_(this) {
 }
 
 VersionHandler::~VersionHandler() {
@@ -129,15 +129,15 @@ void VersionHandler::OnGotFilePaths(string16* executable_path_data,
 
 #if defined(ENABLE_PLUGINS)
 void VersionHandler::OnGotPlugins(
-    const std::vector<webkit::WebPluginInfo>& plugins) {
+    const std::vector<content::WebPluginInfo>& plugins) {
   // Obtain the version of the first enabled Flash plugin.
-  std::vector<webkit::WebPluginInfo> info_array;
+  std::vector<content::WebPluginInfo> info_array;
   content::PluginService::GetInstance()->GetPluginInfoArray(
-      GURL(), kFlashPluginSwfMimeType, false, &info_array, NULL);
+      GURL(), content::kFlashPluginSwfMimeType, false, &info_array, NULL);
   string16 flash_version =
       l10n_util::GetStringUTF16(IDS_PLUGINS_DISABLED_PLUGIN);
   PluginPrefs* plugin_prefs =
-      PluginPrefs::GetForProfile(Profile::FromWebUI(web_ui()));
+      PluginPrefs::GetForProfile(Profile::FromWebUI(web_ui())).get();
   if (plugin_prefs) {
     for (size_t i = 0; i < info_array.size(); ++i) {
       if (plugin_prefs->IsPluginEnabled(info_array[i])) {

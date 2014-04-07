@@ -5,7 +5,7 @@
 [
   {
     "namespace":"webstorePrivate",
-    "nodoc": "true",
+    "description": "none",
     "functions": [
       {
         "name": "install",
@@ -124,7 +124,7 @@
               {
                 "name": "result",
                 "type": "string",
-                "description": "A string result code, which will be empty upon success. The possible values in the case of errors include 'unknown_error', 'user_cancelled', 'manifest_error', 'icon_error', 'invalid_id', 'permission_denied', and 'invalid_icon_url'."
+                "description": "A string result code, which will be empty upon success. The possible values in the case of errors include 'unknown_error', 'user_cancelled', 'manifest_error', 'icon_error', 'invalid_id', 'permission_denied', 'invalid_icon_url', 'signin_failed', and 'already_installed'."
               }
             ]
           }
@@ -140,6 +140,18 @@
             "type": "string",
             "description": "The id of the extension to be installed. This should match a previous call to beginInstallWithManifest3."
           },
+          {
+            "name": "callback",
+            "type": "function",
+            "optional": "true",
+            "parameters": []
+          }
+        ]
+      },
+      {
+        "name": "enableAppLauncher",
+        "description": "",
+        "parameters": [
           {
             "name": "callback",
             "type": "function",
@@ -223,6 +235,20 @@
             "optional": "false",
             "parameters": [
               { "name": "is_enabled", "type": "boolean" }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "isInIncognitoMode",
+        "description": "Returns whether the browser is in incognito mode or not.",
+        "parameters": [
+          {
+            "name": "callback",
+            "type": "function",
+            "optional": "false",
+            "parameters": [
+              { "name": "is_incognito", "type": "boolean" }
             ]
           }
         ]

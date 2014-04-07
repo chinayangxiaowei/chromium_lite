@@ -2,16 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/prefs/testing_pref_service.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/profiles/profile_info_cache.h"
 #include "chrome/browser/signin/signin_manager.h"
 #include "chrome/browser/signin/signin_names_io_thread.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
+#include "content/public/browser/notification_service.h"
 #include "content/public/test/test_browser_thread.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -28,7 +29,7 @@ class SigninNamesOnIOThreadTest : public testing::Test {
   void SimulateSignout(const string16& email);
   void AddNewProfile(const string16& name, const string16& email);
 
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
   content::TestBrowserThread ui_thread_;
   content::TestBrowserThread io_thread_;
   TestingProfileManager testing_profile_manager_;
@@ -75,7 +76,7 @@ void SigninNamesOnIOThreadTest::AddNewProfile(const string16& name,
 #else
   const base::FilePath profile_dir = user_data_dir.Append(name);
 #endif
-  cache->AddProfileToCache(profile_dir, name, email, 0, false);
+  cache->AddProfileToCache(profile_dir, name, email, 0, std::string());
 }
 
 }  // namespace

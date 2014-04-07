@@ -11,9 +11,9 @@
 #include "base/gtest_prod_util.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/scoped_vector.h"
-#include "base/string_piece.h"
-#include "base/time.h"
-#include "googleurl/src/gurl.h"
+#include "base/strings/string_piece.h"
+#include "base/time/time.h"
+#include "url/gurl.h"
 // TODO(kochi): Eliminate this dependency once dependency to EntryKind is gone.
 // http://crbug.com/142293
 #include "chrome/browser/google_apis/gdata_wapi_parser.h"
@@ -98,14 +98,14 @@ class AboutResource {
 };
 
 // DriveAppIcon represents an icon for Drive Application.
-// https://developers.google.com/drive/v2/reference/apps/list
+// https://developers.google.com/drive/v2/reference/apps
 class DriveAppIcon {
  public:
   enum IconCategory {
-    UNKNOWN,          // Uninitialized state
-    DOCUMENT,         // Document icon for various MIME types
-    APPLICATION,      // Application icon for various MIME types
-    SHARED_DOCUMENT,  // Icon for documents that are shared from other users.
+    UNKNOWN,          // Uninitialized state.
+    DOCUMENT,         // Icon for a file associated with the app.
+    APPLICATION,      // Icon for the application.
+    SHARED_DOCUMENT,  // Icon for a shared file associated with the app.
   };
 
   DriveAppIcon();
@@ -164,7 +164,7 @@ class DriveAppIcon {
 };
 
 // AppResource represents a Drive Application.
-// https://developers.google.com/drive/v2/reference/apps/list
+// https://developers.google.com/drive/v2/reference/apps
 class AppResource {
  public:
   ~AppResource();
@@ -453,6 +453,12 @@ class FileLabels {
 // https://developers.google.com/drive/v2/reference/files
 class FileResource {
  public:
+  // Link to open a file resource on a web app with |app_id|.
+  struct OpenWithLink {
+    std::string app_id;
+    GURL open_url;
+  };
+
   FileResource();
   ~FileResource();
 
@@ -495,12 +501,20 @@ class FileResource {
   // Returns created time of this file.
   const base::Time& created_date() const { return created_date_; }
 
+  // Returns modified time of this file.
+  const base::Time& modified_date() const { return modified_date_; }
+
   // Returns modification time by the user.
   const base::Time& modified_by_me_date() const { return modified_by_me_date_; }
 
   // Returns last access time by the user.
   const base::Time& last_viewed_by_me_date() const {
     return last_viewed_by_me_date_;
+  }
+
+  // Returns time when the file was shared with the user.
+  const base::Time& shared_with_me_date() const {
+    return shared_with_me_date_;
   }
 
   // Returns the short-lived download URL for the file.  This field exists
@@ -533,6 +547,11 @@ class FileResource {
   // authentication.
   const GURL& web_content_link() const { return web_content_link_; }
 
+  // Returns the list of links to open the resource with a web app.
+  const std::vector<OpenWithLink>& open_with_links() const {
+    return open_with_links_;
+  }
+
   void set_file_id(const std::string& file_id) {
     file_id_ = file_id;
   }
@@ -553,6 +572,9 @@ class FileResource {
   }
   void set_created_date(const base::Time& created_date) {
     created_date_ = created_date;
+  }
+  void set_modified_date(const base::Time& modified_date) {
+    modified_date_ = modified_date;
   }
   void set_modified_by_me_date(const base::Time& modified_by_me_date) {
     modified_by_me_date_ = modified_by_me_date;
@@ -604,8 +626,10 @@ class FileResource {
   std::string mime_type_;
   FileLabels labels_;
   base::Time created_date_;
+  base::Time modified_date_;
   base::Time modified_by_me_date_;
   base::Time last_viewed_by_me_date_;
+  base::Time shared_with_me_date_;
   GURL download_url_;
   std::string file_extension_;
   std::string md5_checksum_;
@@ -615,6 +639,7 @@ class FileResource {
   ScopedVector<ParentReference> parents_;
   GURL thumbnail_link_;
   GURL web_content_link_;
+  std::vector<OpenWithLink> open_with_links_;
 
   DISALLOW_COPY_AND_ASSIGN(FileResource);
 };
@@ -630,6 +655,9 @@ class FileList {
   // class.
   static void RegisterJSONConverter(
       base::JSONValueConverter<FileList>* converter);
+
+  // Returns true if the |value| has kind field for FileList.
+  static bool HasFileListKind(const base::Value& value);
 
   // Creates file list from parsed JSON.
   static scoped_ptr<FileList> CreateFrom(const base::Value& value);
@@ -703,7 +731,7 @@ class ChangeResource {
   bool is_deleted() const { return deleted_; }
 
   // Returns FileResource of the file which the change refers to.
-  const FileResource& file() const { return file_; }
+  const FileResource* file() const { return file_.get(); }
 
   void set_change_id(int64 change_id) {
     change_id_ = change_id;
@@ -714,8 +742,8 @@ class ChangeResource {
   void set_deleted(bool deleted) {
     deleted_ = deleted;
   }
-  void set_file(const FileResource& file) {
-    file_ = file;
+  void set_file(scoped_ptr<FileResource> file) {
+    file_ = file.Pass();
   }
 
  private:
@@ -729,7 +757,7 @@ class ChangeResource {
   int64 change_id_;
   std::string file_id_;
   bool deleted_;
-  FileResource file_;
+  scoped_ptr<FileResource> file_;
 
   DISALLOW_COPY_AND_ASSIGN(ChangeResource);
 };
@@ -745,6 +773,9 @@ class ChangeList {
   // class.
   static void RegisterJSONConverter(
       base::JSONValueConverter<ChangeList>* converter);
+
+  // Returns true if the |value| has kind field for ChangeList.
+  static bool HasChangeListKind(const base::Value& value);
 
   // Creates change list from parsed JSON.
   static scoped_ptr<ChangeList> CreateFrom(const base::Value& value);

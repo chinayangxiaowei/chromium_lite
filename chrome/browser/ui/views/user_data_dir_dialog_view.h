@@ -8,7 +8,7 @@
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
 #include "base/files/file_path.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "ui/shell_dialogs/select_file_dialog.h"
 #include "ui/views/window/dialog_delegate.h"
 
@@ -19,7 +19,7 @@ class MessageBoxView;
 // A dialog box that tells the user that we can't write to the specified user
 // data directory. Provides the user a chance to pick a different directory.
 class UserDataDirDialogView : public views::DialogDelegate,
-                              public MessageLoopForUI::Dispatcher,
+                              public base::MessageLoopForUI::Dispatcher,
                               public ui::SelectFileDialog::Listener {
  public:
   explicit UserDataDirDialogView(const base::FilePath& user_data_dir);

@@ -11,7 +11,7 @@
 #include "base/logging.h"
 #include "base/metrics/histogram.h"
 #include "base/threading/thread.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "net/base/winsock_init.h"
 #include "net/dns/dns_config_service.h"
 
@@ -55,13 +55,13 @@ NetworkChangeNotifierWin::NetworkChangeNotifierWin()
     : NetworkChangeNotifier(NetworkChangeCalculatorParamsWin()),
       is_watching_(false),
       sequential_failures_(0),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)),
+      weak_factory_(this),
       dns_config_service_thread_(new DnsConfigServiceThread()),
       last_announced_offline_(IsOffline()) {
   memset(&addr_overlapped_, 0, sizeof addr_overlapped_);
   addr_overlapped_.hEvent = WSACreateEvent();
   dns_config_service_thread_->StartWithOptions(
-      base::Thread::Options(MessageLoop::TYPE_IO, 0));
+      base::Thread::Options(base::MessageLoop::TYPE_IO, 0));
 }
 
 NetworkChangeNotifierWin::~NetworkChangeNotifierWin() {
@@ -253,7 +253,7 @@ void NetworkChangeNotifierWin::WatchForAddressChange() {
                                  sequential_failures_);
     }
 
-    MessageLoop::current()->PostDelayedTask(
+    base::MessageLoop::current()->PostDelayedTask(
         FROM_HERE,
         base::Bind(&NetworkChangeNotifierWin::WatchForAddressChange,
                    weak_factory_.GetWeakPtr()),

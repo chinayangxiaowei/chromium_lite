@@ -4,21 +4,21 @@
 
 #include "content/browser/android/surface_texture_peer_browser_impl.h"
 
-#include "content/browser/android/media_player_manager_android.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
-#include "content/common/android/scoped_java_surface.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"
-#include "media/base/android/media_player_bridge.h"
+#include "media/base/android/media_player_android.h"
+#include "media/base/android/media_player_manager.h"
+#include "ui/gl/android/scoped_java_surface.h"
 
 namespace content {
 
 namespace {
 
-// Pass a java surface object to the MediaPlayerBridge object
+// Pass a java surface object to the MediaPlayerAndroid object
 // identified by render process handle, render view ID and player ID.
 static void SetSurfacePeer(
-    scoped_refptr<SurfaceTextureBridge> surface_texture_bridge,
+    scoped_refptr<gfx::SurfaceTextureBridge> surface_texture_bridge,
     base::ProcessHandle render_process_handle,
     int render_view_id,
     int player_id) {
@@ -36,12 +36,12 @@ static void SetSurfacePeer(
     RenderViewHostImpl* host = RenderViewHostImpl::FromID(
         renderer_id, render_view_id);
     if (host) {
-      media::MediaPlayerBridge* player =
+      media::MediaPlayerAndroid* player =
           host->media_player_manager()->GetPlayer(player_id);
       if (player &&
           player != host->media_player_manager()->GetFullscreenPlayer()) {
-        ScopedJavaSurface surface(surface_texture_bridge.get());
-        player->SetVideoSurface(surface.j_surface().obj());
+        gfx::ScopedJavaSurface surface(surface_texture_bridge.get());
+        player->SetVideoSurface(surface.Pass());
       }
     }
   }
@@ -57,10 +57,10 @@ SurfaceTexturePeerBrowserImpl::~SurfaceTexturePeerBrowserImpl() {
 
 void SurfaceTexturePeerBrowserImpl::EstablishSurfaceTexturePeer(
     base::ProcessHandle render_process_handle,
-    scoped_refptr<SurfaceTextureBridge> surface_texture_bridge,
+    scoped_refptr<gfx::SurfaceTextureBridge> surface_texture_bridge,
     int render_view_id,
     int player_id) {
-  if (!surface_texture_bridge)
+  if (!surface_texture_bridge.get())
     return;
 
   BrowserThread::PostTask(BrowserThread::UI, FROM_HERE, base::Bind(

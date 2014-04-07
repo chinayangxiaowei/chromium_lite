@@ -10,16 +10,18 @@
 
 #include "base/basictypes.h"
 #include "base/callback.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/navigation_type.h"
 #include "content/public/common/media_stream_request.h"
 #include "content/public/common/page_transition_types.h"
 #include "content/public/common/window_container_type.h"
+#include "third_party/WebKit/public/web/WebDragOperation.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/gfx/native_widget_types.h"
 #include "ui/gfx/rect_f.h"
+#include "ui/gfx/vector2d.h"
 
 class GURL;
 
@@ -33,12 +35,15 @@ class BrowserContext;
 class ColorChooser;
 class DownloadItem;
 class JavaScriptDialogManager;
+class PageState;
 class RenderViewHost;
 class WebContents;
 class WebContentsImpl;
 struct ContextMenuParams;
+struct DropData;
 struct FileChooserParams;
 struct NativeWebKeyboardEvent;
+struct Referrer;
 struct SSLStatus;
 }
 
@@ -50,13 +55,12 @@ class Size;
 
 namespace WebKit {
 class WebLayer;
+struct WebWindowFeatures;
 }
 
 namespace content {
 
 struct OpenURLParams;
-
-typedef base::Callback< void(const MediaStreamDevices&) > MediaResponseCallback;
 
 // Objects implement this interface to get notified about changes in the
 // WebContents and to provide necessary functionality.
@@ -154,6 +158,10 @@ class CONTENT_EXPORT WebContentsDelegate {
   // gestures.
   virtual bool CanOverscrollContent() const;
 
+  // Callback that allows vertical overscroll activies to be communicated to the
+  // delegate.
+  virtual void OverscrollUpdate(int delta_y) {}
+
   // Check whether this contents is permitted to load data URLs in WebUI mode.
   // This is normally disallowed for security.
   virtual bool CanLoadDataURLsInWebUI() const;
@@ -220,9 +228,11 @@ class CONTENT_EXPORT WebContentsDelegate {
   virtual void WebContentsFocused(WebContents* contents) {}
 
   // Asks the delegate if the given tab can download.
-  virtual bool CanDownload(RenderViewHost* render_view_host,
+  // Invoking the |callback| synchronously is OK.
+  virtual void CanDownload(RenderViewHost* render_view_host,
                            int request_id,
-                           const std::string& request_method);
+                           const std::string& request_method,
+                           const base::Callback<void(bool)>& callback);
 
   // Return much extra vertical space should be allotted to the
   // render view widget during various animations (e.g. infobar closing).
@@ -239,7 +249,7 @@ class CONTENT_EXPORT WebContentsDelegate {
   // Opens source view for the given subframe.
   virtual void ViewSourceForFrame(WebContents* source,
                                   const GURL& url,
-                                  const std::string& content_state);
+                                  const PageState& page_state);
 
   // Allows delegates to handle keyboard events before sending to the renderer.
   // Returns true if the |event| was handled. Otherwise, if the |event| would be
@@ -264,6 +274,13 @@ class CONTENT_EXPORT WebContentsDelegate {
   virtual void HandleGestureBegin() {}
   virtual void HandleGestureEnd() {}
 
+  // Called when an external drag event enters the web contents window. Return
+  // true to allow dragging and dropping on the web contents window or false to
+  // cancel the operation. This method is used by Chromium Embedded Framework.
+  virtual bool CanDragEnter(WebContents* source,
+                            const DropData& data,
+                            WebKit::WebDragOperationsMask operations_allowed);
+
   // Render view drag n drop ended.
   virtual void DragEnded() {}
 
@@ -282,7 +299,12 @@ class CONTENT_EXPORT WebContentsDelegate {
       int route_id,
       WindowContainerType window_container_type,
       const string16& frame_name,
-      const GURL& target_url);
+      const GURL& target_url,
+      const Referrer& referrer,
+      WindowOpenDisposition disposition,
+      const WebKit::WebWindowFeatures& features,
+      bool user_gesture,
+      bool opener_suppressed);
 
   // Notifies the delegate about the creation of a new WebContents. This
   // typically happens when popups are created.
@@ -291,10 +313,6 @@ class CONTENT_EXPORT WebContentsDelegate {
                                   const string16& frame_name,
                                   const GURL& target_url,
                                   WebContents* new_contents) {}
-
-  // Notifies the delegate that the content restrictions for this tab has
-  // changed.
-  virtual void ContentRestrictionsChanged(WebContents* source) {}
 
   // Notification that the tab is hung.
   virtual void RendererUnresponsive(WebContents* source) {}
@@ -319,11 +337,8 @@ class CONTENT_EXPORT WebContentsDelegate {
 
   // Called when color chooser should open. Returns the opened color chooser.
   // Ownership of the returned pointer is transferred to the caller.
-  virtual content::ColorChooser* OpenColorChooser(WebContents* web_contents,
-                                                  int color_chooser_id,
-                                                  SkColor color);
-
-  virtual void DidEndColorChooser() {}
+  virtual ColorChooser* OpenColorChooser(WebContents* web_contents,
+                                         SkColor color);
 
   // Called when a file selection is to be done.
   virtual void RunFileChooser(WebContents* web_contents,
@@ -341,6 +356,10 @@ class CONTENT_EXPORT WebContentsDelegate {
                                           bool enter_fullscreen) {}
   virtual bool IsFullscreenForTabOrPending(
       const WebContents* web_contents) const;
+
+  // Called when the renderer has scrolled programmatically.
+  virtual void DidProgrammaticallyScroll(WebContents* web_contents,
+                                         const gfx::Vector2d& scroll_point) {}
 
   // Called when a Javascript out of memory notification is received.
   virtual void JSOutOfMemory(WebContents* web_contents) {}
@@ -405,7 +424,7 @@ class CONTENT_EXPORT WebContentsDelegate {
   virtual void RequestMediaAccessPermission(
       WebContents* web_contents,
       const MediaStreamRequest& request,
-      const MediaResponseCallback& callback) {}
+      const MediaResponseCallback& callback);
 
   // Requests permission to access the PPAPI broker. The delegate should return
   // true and call the passed in |callback| with the result, or return false

@@ -7,7 +7,7 @@
 
 #import <Cocoa/Cocoa.h>
 
-#include "base/memory/scoped_nsobject.h"
+#include "base/mac/scoped_nsobject.h"
 #import "chrome/browser/ui/cocoa/styled_text_field.h"
 #import "chrome/browser/ui/cocoa/url_drop_target.h"
 
@@ -84,9 +84,6 @@ class AutocompleteTextFieldObserver {
   virtual void OnDidChange() = 0;
   virtual void OnDidEndEditing() = 0;
 
-  // Called before input methods sets composition text in the field.
-  virtual void OnStartingIME() = 0;
-
   // NSResponder translates certain keyboard actions into selectors
   // passed to -doCommandBySelector:.  The selector is forwarded here,
   // return true if |cmd| is handled, false if the caller should
@@ -116,18 +113,18 @@ class AutocompleteTextFieldObserver {
  @private
   // Undo manager for this text field.  We use a specific instance rather than
   // the standard undo manager in order to let us clear the undo stack at will.
-  scoped_nsobject<NSUndoManager> undoManager_;
+  base::scoped_nsobject<NSUndoManager> undoManager_;
 
   AutocompleteTextFieldObserver* observer_;  // weak, owned by location bar.
 
   // Handles being a drag-and-drop target.
-  scoped_nsobject<URLDropTargetHandler> dropHandler_;
+  base::scoped_nsobject<URLDropTargetHandler> dropHandler_;
 
   // Holds current tooltip strings, to keep them from being dealloced.
-  scoped_nsobject<NSMutableArray> currentToolTips_;
+  base::scoped_nsobject<NSMutableArray> currentToolTips_;
 
-  scoped_nsobject<NSString> suggestText_;
-  scoped_nsobject<NSColor> suggestColor_;
+  base::scoped_nsobject<NSString> suggestText_;
+  base::scoped_nsobject<NSColor> suggestColor_;
 }
 
 @property(nonatomic) AutocompleteTextFieldObserver* observer;
@@ -158,8 +155,8 @@ class AutocompleteTextFieldObserver {
 // Sets the suggest text that shows at the end of the field's normal text.
 // This can't be simply appended to the field's text storage because that
 // will end any pending IME session.
-- (void)setInstantSuggestion:(NSString*)suggestText
-                   textColor:(NSColor*)suggestColor;
+- (void)setGrayTextAutocompletion:(NSString*)suggestText
+                        textColor:(NSColor*)suggestColor;
 
 - (NSString*)suggestText;
 - (NSColor*)suggestColor;
@@ -168,12 +165,12 @@ class AutocompleteTextFieldObserver {
 
 namespace autocomplete_text_field {
 
-// Draw instant suggestion text in |controlView|.
-void DrawInstantSuggestion(NSAttributedString* mainText,
-                           NSString* suggestText,
-                           NSColor* suggestColor,
-                           NSView* controlView,
-                           NSRect frame);
+// Draw gray text suggestion in |controlView|.
+void DrawGrayTextAutocompletion(NSAttributedString* mainText,
+                                NSString* suggestText,
+                                NSColor* suggestColor,
+                                NSView* controlView,
+                                NSRect frame);
 
 }  // namespace autocomplete_text_field
 

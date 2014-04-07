@@ -4,15 +4,15 @@
 
 #include "chrome/browser/ui/search_engines/edit_search_engine_controller.h"
 
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
-#include "chrome/browser/net/url_fixer_upper.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url.h"
 #include "chrome/browser/search_engines/template_url_service.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
+#include "chrome/common/net/url_fixer_upper.h"
 #include "content/public/browser/user_metrics.h"
-#include "googleurl/src/gurl.h"
+#include "url/gurl.h"
 
 using content::UserMetricsAction;
 

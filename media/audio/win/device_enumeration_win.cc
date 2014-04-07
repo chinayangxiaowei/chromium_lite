@@ -9,7 +9,7 @@
 #include "media/audio/win/audio_manager_win.h"
 
 #include "base/logging.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/win/scoped_co_mem.h"
 #include "base/win/scoped_comptr.h"
 #include "base/win/scoped_propvariant.h"
@@ -29,11 +29,8 @@ bool GetInputDeviceNamesWin(AudioDeviceNames* device_names) {
   // It is assumed that this method is called from a COM thread, i.e.,
   // CoInitializeEx() is not called here again to avoid STA/MTA conflicts.
   ScopedComPtr<IMMDeviceEnumerator> enumerator;
-  HRESULT hr =  CoCreateInstance(__uuidof(MMDeviceEnumerator),
-                                 NULL,
-                                 CLSCTX_INPROC_SERVER,
-                                 __uuidof(IMMDeviceEnumerator),
-                                 enumerator.ReceiveVoid());
+  HRESULT hr = enumerator.CreateInstance(__uuidof(MMDeviceEnumerator), NULL,
+                                         CLSCTX_INPROC_SERVER);
   DCHECK_NE(CO_E_NOTINITIALIZED, hr);
   if (FAILED(hr)) {
     LOG(WARNING) << "Failed to create IMMDeviceEnumerator: " << std::hex << hr;

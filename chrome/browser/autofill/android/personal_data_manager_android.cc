@@ -6,13 +6,15 @@
 
 #include "base/android/jni_string.h"
 #include "base/format_macros.h"
-#include "base/stringprintf.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/autofill/personal_data_manager_factory.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "components/autofill/browser/field_types.h"
-#include "components/autofill/browser/personal_data_manager.h"
+#include "components/autofill/core/browser/autofill_country.h"
+#include "components/autofill/core/browser/autofill_type.h"
+#include "components/autofill/core/browser/field_types.h"
+#include "components/autofill/core/browser/personal_data_manager.h"
 #include "jni/PersonalDataManager_jni.h"
 
 using base::android::ConvertJavaStringToUTF8;
@@ -20,6 +22,7 @@ using base::android::ConvertUTF16ToJavaString;
 using base::android::ConvertUTF8ToJavaString;
 using base::android::ScopedJavaLocalRef;
 
+namespace autofill {
 namespace {
 
 Profile* GetDefaultProfile() {
@@ -31,7 +34,8 @@ ScopedJavaLocalRef<jobject> CreateJavaProfileFromNative(
     const AutofillProfile& profile) {
   return Java_AutofillProfile_create(
       env,
-      ConvertUTF8ToJavaString(env, profile.GetGUID()).obj(),
+      ConvertUTF8ToJavaString(env, profile.guid()).obj(),
+      ConvertUTF8ToJavaString(env, profile.origin()).obj(),
       ConvertUTF16ToJavaString(env, profile.GetRawInfo(NAME_FULL)).obj(),
       ConvertUTF16ToJavaString(env, profile.GetRawInfo(COMPANY_NAME)).obj(),
       ConvertUTF16ToJavaString(
@@ -51,7 +55,8 @@ ScopedJavaLocalRef<jobject> CreateJavaProfileFromNative(
           profile.GetRawInfo(ADDRESS_HOME_ZIP)).obj(),
       ConvertUTF16ToJavaString(
           env,
-          profile.GetRawInfo(ADDRESS_HOME_COUNTRY)).obj(),
+          profile.GetInfo(AutofillType(ADDRESS_HOME_COUNTRY),
+                          g_browser_process->GetApplicationLocale())).obj(),
       ConvertUTF16ToJavaString(
           env,
           profile.GetRawInfo(PHONE_HOME_WHOLE_NUMBER)).obj(),
@@ -62,6 +67,9 @@ void PopulateNativeProfileFromJava(
     const jobject& jprofile,
     JNIEnv* env,
     AutofillProfile* profile) {
+  profile->set_origin(
+      ConvertJavaStringToUTF8(
+          Java_AutofillProfile_getOrigin(env, jprofile)));
   profile->SetRawInfo(
       NAME_FULL,
       ConvertJavaStringToUTF16(
@@ -90,10 +98,11 @@ void PopulateNativeProfileFromJava(
       ADDRESS_HOME_ZIP,
       ConvertJavaStringToUTF16(
           Java_AutofillProfile_getZip(env, jprofile)));
-  profile->SetRawInfo(
-      ADDRESS_HOME_COUNTRY,
+  profile->SetInfo(
+      AutofillType(ADDRESS_HOME_COUNTRY),
       ConvertJavaStringToUTF16(
-          Java_AutofillProfile_getCountry(env, jprofile)));
+          Java_AutofillProfile_getCountry(env, jprofile)),
+      g_browser_process->GetApplicationLocale());
   profile->SetRawInfo(
       PHONE_HOME_WHOLE_NUMBER,
       ConvertJavaStringToUTF16(
@@ -109,7 +118,8 @@ ScopedJavaLocalRef<jobject> CreateJavaCreditCardFromNative(
     const CreditCard& card) {
   return Java_CreditCard_create(
       env,
-      ConvertUTF8ToJavaString(env, card.GetGUID()).obj(),
+      ConvertUTF8ToJavaString(env, card.guid()).obj(),
+      ConvertUTF8ToJavaString(env, card.origin()).obj(),
       ConvertUTF16ToJavaString(env, card.GetRawInfo(CREDIT_CARD_NAME)).obj(),
       ConvertUTF16ToJavaString(env, card.GetRawInfo(CREDIT_CARD_NUMBER)).obj(),
       ConvertUTF16ToJavaString(env, card.ObfuscatedNumber()).obj(),
@@ -125,6 +135,8 @@ void PopulateNativeCreditCardFromJava(
     const jobject& jcard,
     JNIEnv* env,
     CreditCard* card) {
+  card->set_origin(
+      ConvertJavaStringToUTF8(Java_CreditCard_getOrigin(env, jcard)));
   card->SetRawInfo(
       CREDIT_CARD_NAME,
       ConvertJavaStringToUTF16(Java_CreditCard_getName(env, jcard)));
@@ -200,13 +212,12 @@ ScopedJavaLocalRef<jstring> PersonalDataManagerAndroid::SetProfile(
     personal_data_manager_->UpdateProfile(profile);
   }
 
-  return ConvertUTF8ToJavaString(env, profile.GetGUID());
+  return ConvertUTF8ToJavaString(env, profile.guid());
 }
-
 
 jint PersonalDataManagerAndroid::GetCreditCardCount(JNIEnv* unused_env,
                                                     jobject unused_obj) {
-  return personal_data_manager_->credit_cards().size();
+  return personal_data_manager_->GetCreditCards().size();
 }
 
 ScopedJavaLocalRef<jobject> PersonalDataManagerAndroid::GetCreditCardByIndex(
@@ -214,7 +225,7 @@ ScopedJavaLocalRef<jobject> PersonalDataManagerAndroid::GetCreditCardByIndex(
     jobject unused_obj,
     jint index) {
   const std::vector<CreditCard*>& credit_cards =
-      personal_data_manager_->credit_cards();
+      personal_data_manager_->GetCreditCards();
   size_t index_size_t = static_cast<size_t>(index);
   DCHECK_LT(index_size_t, credit_cards.size());
   return CreateJavaCreditCardFromNative(env, *credit_cards[index_size_t]);
@@ -249,7 +260,7 @@ ScopedJavaLocalRef<jstring> PersonalDataManagerAndroid::SetCreditCard(
     card.set_guid(guid);
     personal_data_manager_->UpdateCreditCard(card);
   }
-  return ConvertUTF8ToJavaString(env, card.GetGUID());
+  return ConvertUTF8ToJavaString(env, card.guid());
 }
 
 void PersonalDataManagerAndroid::RemoveByGUID(JNIEnv* env,
@@ -272,8 +283,20 @@ bool PersonalDataManagerAndroid::Register(JNIEnv* env) {
   return RegisterNativesImpl(env);
 }
 
+// Returns an ISO 3166-1-alpha-2 country code for a |jcountry_name| using
+// the application locale, or an empty string.
+static jstring ToCountryCode(JNIEnv* env, jclass clazz, jstring jcountry_name) {
+  return ConvertUTF8ToJavaString(
+      env,
+      AutofillCountry::GetCountryCode(
+          base::android::ConvertJavaStringToUTF16(env, jcountry_name),
+          g_browser_process->GetApplicationLocale())).Release();
+}
+
 static jint Init(JNIEnv* env, jobject obj) {
   PersonalDataManagerAndroid* personal_data_manager_android =
       new PersonalDataManagerAndroid(env, obj);
   return reinterpret_cast<jint>(personal_data_manager_android);
 }
+
+}  // namespace autofill

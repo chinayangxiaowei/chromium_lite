@@ -12,14 +12,13 @@
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/stl_util.h"
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "base/synchronization/condition_variable.h"
 #include "base/test/values_test_util.h"
 #include "base/threading/platform_thread.h"
 #include "base/values.h"
-#include "sync/internal_api/public/base/node_ordinal.h"
 #include "sync/protocol/bookmark_specifics.pb.h"
 #include "sync/syncable/directory_backing_store.h"
 #include "sync/syncable/directory_change_delegate.h"
@@ -51,8 +50,8 @@ class SyncableKernelTest : public testing::Test {};
 
 TEST_F(SyncableKernelTest, ToValue) {
   EntryKernel kernel;
-  scoped_ptr<DictionaryValue> value(kernel.ToValue(NULL));
-  if (value.get()) {
+  scoped_ptr<base::DictionaryValue> value(kernel.ToValue(NULL));
+  if (value) {
     // Not much to check without repeating the ToValue() code.
     EXPECT_TRUE(value->HasKey("isDirty"));
     // The extra +2 is for "isDirty" and "serverModelType".
@@ -98,7 +97,7 @@ class SyncableGeneralTest : public testing::Test {
   virtual void TearDown() {
   }
  protected:
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
   base::ScopedTempDir temp_dir_;
   NullDirectoryChangeDelegate delegate_;
   FakeEncryptor encryptor_;
@@ -135,7 +134,7 @@ TEST_F(SyncableGeneralTest, General) {
     Entry e(&rtrans, GET_BY_ID, id);
     ASSERT_FALSE(e.good());  // Hasn't been written yet.
 
-    Directory::ChildHandles child_handles;
+    Directory::Metahandles child_handles;
     dir.GetChildHandlesById(&rtrans, rtrans.root_id(), &child_handles);
     EXPECT_TRUE(child_handles.empty());
 
@@ -160,11 +159,11 @@ TEST_F(SyncableGeneralTest, General) {
     Entry e(&rtrans, GET_BY_ID, id);
     ASSERT_TRUE(e.good());
 
-    Directory::ChildHandles child_handles;
+    Directory::Metahandles child_handles;
     dir.GetChildHandlesById(&rtrans, rtrans.root_id(), &child_handles);
     EXPECT_EQ(1u, child_handles.size());
 
-    for (Directory::ChildHandles::iterator i = child_handles.begin();
+    for (Directory::Metahandles::iterator i = child_handles.begin();
          i != child_handles.end(); ++i) {
       EXPECT_EQ(*i, written_metahandle);
     }
@@ -172,7 +171,7 @@ TEST_F(SyncableGeneralTest, General) {
     dir.GetChildHandlesByHandle(&rtrans, root_metahandle, &child_handles);
     EXPECT_EQ(1u, child_handles.size());
 
-    for (Directory::ChildHandles::iterator i = child_handles.begin();
+    for (Directory::Metahandles::iterator i = child_handles.begin();
          i != child_handles.end(); ++i) {
       EXPECT_EQ(*i, written_metahandle);
     }
@@ -230,10 +229,10 @@ TEST_F(SyncableGeneralTest, ChildrenOps) {
     Entry e(&rtrans, GET_BY_ID, id);
     ASSERT_FALSE(e.good());  // Hasn't been written yet.
 
+    Entry root(&rtrans, GET_BY_ID, rtrans.root_id());
+    ASSERT_TRUE(root.good());
     EXPECT_FALSE(dir.HasChildren(&rtrans, rtrans.root_id()));
-    Id child_id;
-    EXPECT_TRUE(dir.GetFirstChildId(&rtrans, rtrans.root_id(), &child_id));
-    EXPECT_TRUE(child_id.IsRoot());
+    EXPECT_TRUE(root.GetFirstChildId().IsRoot());
   }
 
   {
@@ -254,10 +253,10 @@ TEST_F(SyncableGeneralTest, ChildrenOps) {
     Entry child(&rtrans, GET_BY_HANDLE, written_metahandle);
     ASSERT_TRUE(child.good());
 
+    Entry root(&rtrans, GET_BY_ID, rtrans.root_id());
+    ASSERT_TRUE(root.good());
     EXPECT_TRUE(dir.HasChildren(&rtrans, rtrans.root_id()));
-    Id child_id;
-    EXPECT_TRUE(dir.GetFirstChildId(&rtrans, rtrans.root_id(), &child_id));
-    EXPECT_EQ(e.Get(ID), child_id);
+    EXPECT_EQ(e.Get(ID), root.GetFirstChildId());
   }
 
   {
@@ -273,10 +272,10 @@ TEST_F(SyncableGeneralTest, ChildrenOps) {
     Entry e(&rtrans, GET_BY_ID, id);
     ASSERT_TRUE(e.good());
 
+    Entry root(&rtrans, GET_BY_ID, rtrans.root_id());
+    ASSERT_TRUE(root.good());
     EXPECT_FALSE(dir.HasChildren(&rtrans, rtrans.root_id()));
-    Id child_id;
-    EXPECT_TRUE(dir.GetFirstChildId(&rtrans, rtrans.root_id(), &child_id));
-    EXPECT_TRUE(child_id.IsRoot());
+    EXPECT_TRUE(root.GetFirstChildId().IsRoot());
   }
 
   dir.SaveChanges();
@@ -393,7 +392,7 @@ TEST_F(SyncableGeneralTest, ToValue) {
     Entry e(&rtrans, GET_BY_ID, id);
     EXPECT_FALSE(e.good());  // Hasn't been written yet.
 
-    scoped_ptr<DictionaryValue> value(e.ToValue(NULL));
+    scoped_ptr<base::DictionaryValue> value(e.ToValue(NULL));
     ExpectDictBooleanValue(false, *value, "good");
     EXPECT_EQ(1u, value->size());
   }
@@ -406,7 +405,7 @@ TEST_F(SyncableGeneralTest, ToValue) {
     me.Put(ID, id);
     me.Put(BASE_VERSION, 1);
 
-    scoped_ptr<DictionaryValue> value(me.ToValue(NULL));
+    scoped_ptr<base::DictionaryValue> value(me.ToValue(NULL));
     ExpectDictBooleanValue(true, *value, "good");
     EXPECT_TRUE(value->HasKey("kernel"));
     ExpectDictStringValue("Bookmarks", *value, "modelType");
@@ -417,11 +416,37 @@ TEST_F(SyncableGeneralTest, ToValue) {
   dir.SaveChanges();
 }
 
+// Test that the bookmark tag generation algorithm remains unchanged.
+TEST_F(SyncableGeneralTest, BookmarkTagTest) {
+  InMemoryDirectoryBackingStore* store = new InMemoryDirectoryBackingStore("x");
+
+  // The two inputs that form the bookmark tag are the directory's cache_guid
+  // and its next_id value.  We don't need to take any action to ensure
+  // consistent next_id values, but we do need to explicitly request that our
+  // InMemoryDirectoryBackingStore always return the same cache_guid.
+  store->request_consistent_cache_guid();
+
+  Directory dir(store, &handler_, NULL, NULL, NULL);
+  ASSERT_EQ(OPENED, dir.Open("x", &delegate_, NullTransactionObserver()));
+
+  {
+    WriteTransaction wtrans(FROM_HERE, UNITTEST, &dir);
+    MutableEntry bm(&wtrans, CREATE, BOOKMARKS, wtrans.root_id(), "bm");
+    bm.Put(IS_UNSYNCED, true);
+
+    // If this assertion fails, that might indicate that the algorithm used to
+    // generate bookmark tags has been modified.  This could have implications
+    // for bookmark ordering.  Please make sure you know what you're doing if
+    // you intend to make such a change.
+    ASSERT_EQ("6wHRAb3kbnXV5GHrejp4/c1y5tw=", bm.Get(UNIQUE_BOOKMARK_TAG));
+  }
+}
+
 // A test fixture for syncable::Directory.  Uses an in-memory database to keep
 // the unit tests fast.
 class SyncableDirectoryTest : public testing::Test {
  protected:
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
   static const char kName[];
 
   virtual void SetUp() {
@@ -437,7 +462,7 @@ class SyncableDirectoryTest : public testing::Test {
   }
 
   virtual void TearDown() {
-    if (dir_.get())
+    if (dir_)
       dir_->SaveChanges();
     dir_.reset();
   }
@@ -447,11 +472,11 @@ class SyncableDirectoryTest : public testing::Test {
   }
 
   bool IsInDirtyMetahandles(int64 metahandle) {
-    return 1 == dir_->kernel_->dirty_metahandles->count(metahandle);
+    return 1 == dir_->kernel_->dirty_metahandles.count(metahandle);
   }
 
   bool IsInMetahandlesToPurge(int64 metahandle) {
-    return 1 == dir_->kernel_->metahandles_to_purge->count(metahandle);
+    return 1 == dir_->kernel_->metahandles_to_purge.count(metahandle);
   }
 
   void CheckPurgeEntriesWithTypeInSucceeded(ModelTypeSet types_to_purge,
@@ -463,7 +488,7 @@ class SyncableDirectoryTest : public testing::Test {
       dir_->GetAllMetaHandles(&trans, &all_set);
       EXPECT_EQ(4U, all_set.size());
       if (before_reload)
-        EXPECT_EQ(6U, dir_->kernel_->metahandles_to_purge->size());
+        EXPECT_EQ(6U, dir_->kernel_->metahandles_to_purge.size());
       for (MetahandleSet::iterator iter = all_set.begin();
            iter != all_set.end(); ++iter) {
         Entry e(&trans, GET_BY_HANDLE, *iter);
@@ -561,7 +586,7 @@ TEST_F(SyncableDirectoryTest, TakeSnapshotGetsMetahandlesToPurge) {
   }
 
   ModelTypeSet to_purge(BOOKMARKS);
-  dir_->PurgeEntriesWithTypeIn(to_purge, ModelTypeSet());
+  dir_->PurgeEntriesWithTypeIn(to_purge, ModelTypeSet(), ModelTypeSet());
 
   Directory::SaveChangesSnapshot snapshot1;
   base::AutoLock scoped_lock(dir_->kernel_->save_changes_mutex);
@@ -570,7 +595,7 @@ TEST_F(SyncableDirectoryTest, TakeSnapshotGetsMetahandlesToPurge) {
 
   to_purge.Clear();
   to_purge.Put(PREFERENCES);
-  dir_->PurgeEntriesWithTypeIn(to_purge, ModelTypeSet());
+  dir_->PurgeEntriesWithTypeIn(to_purge, ModelTypeSet(), ModelTypeSet());
 
   dir_->HandleSaveChangesFailure(snapshot1);
 
@@ -891,7 +916,7 @@ TEST_F(SyncableDirectoryTest, TestDelete) {
 }
 
 TEST_F(SyncableDirectoryTest, TestGetUnsynced) {
-  Directory::UnsyncedMetaHandles handles;
+  Directory::Metahandles handles;
   int64 handle1, handle2;
   {
     WriteTransaction trans(FROM_HERE, UNITTEST, dir_.get());
@@ -1496,12 +1521,19 @@ TEST_F(SyncableDirectoryTest, OldClientLeftUnsyncedDeletedLocalItem) {
   }
 }
 
-TEST_F(SyncableDirectoryTest, OrdinalWithNullSurvivesSaveAndReload) {
+TEST_F(SyncableDirectoryTest, PositionWithNullSurvivesSaveAndReload) {
   TestIdFactory id_factory;
   Id null_child_id;
   const char null_cstr[] = "\0null\0test";
   std::string null_str(null_cstr, arraysize(null_cstr) - 1);
-  NodeOrdinal null_ord = NodeOrdinal(null_str);
+  // Pad up to the minimum length with 0x7f characters, then add a string that
+  // contains a few NULLs to the end.  This is slightly wrong, since the suffix
+  // part of a UniquePosition shouldn't contain NULLs, but it's good enough for
+  // this test.
+  std::string suffix =
+      std::string(UniquePosition::kSuffixLength - null_str.length(), '\x7f')
+      + null_str;
+  UniquePosition null_pos = UniquePosition::FromInt64(10, suffix);
 
   {
     WriteTransaction trans(FROM_HERE, UNITTEST, dir_.get());
@@ -1512,7 +1544,8 @@ TEST_F(SyncableDirectoryTest, OrdinalWithNullSurvivesSaveAndReload) {
 
     MutableEntry child(&trans, CREATE, BOOKMARKS, parent.Get(ID), "child");
     child.Put(IS_UNSYNCED, true);
-    child.Put(SERVER_ORDINAL_IN_PARENT, null_ord);
+    child.Put(UNIQUE_POSITION, null_pos);
+    child.Put(SERVER_UNIQUE_POSITION, null_pos);
 
     null_child_id = child.Get(ID);
   }
@@ -1524,9 +1557,10 @@ TEST_F(SyncableDirectoryTest, OrdinalWithNullSurvivesSaveAndReload) {
 
     Entry null_ordinal_child(&trans, GET_BY_ID, null_child_id);
     EXPECT_TRUE(
-        null_ord.Equals(null_ordinal_child.Get(SERVER_ORDINAL_IN_PARENT)));
+        null_pos.Equals(null_ordinal_child.Get(UNIQUE_POSITION)));
+    EXPECT_TRUE(
+        null_pos.Equals(null_ordinal_child.Get(SERVER_UNIQUE_POSITION)));
   }
-
 }
 
 // An OnDirectoryBackingStore that can be set to always fail SaveChanges.
@@ -1635,7 +1669,7 @@ class OnDiskSyncableDirectoryTest : public SyncableDirectoryTest {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
     file_path_ = temp_dir_.path().Append(
         FILE_PATH_LITERAL("Test.sqlite3"));
-    file_util::Delete(file_path_, true);
+    base::DeleteFile(file_path_, true);
     CreateDirectory();
   }
 
@@ -1643,7 +1677,7 @@ class OnDiskSyncableDirectoryTest : public SyncableDirectoryTest {
     // This also closes file handles.
     dir_->SaveChanges();
     dir_.reset();
-    file_util::Delete(file_path_, true);
+    base::DeleteFile(file_path_, true);
   }
 
   // Creates a new directory.  Deletes the old directory, if it exists.
@@ -1740,7 +1774,7 @@ TEST_F(OnDiskSyncableDirectoryTest, TestPurgeEntriesWithTypeIn) {
     ASSERT_EQ(10U, all_set.size());
   }
 
-  dir_->PurgeEntriesWithTypeIn(types_to_purge, ModelTypeSet());
+  dir_->PurgeEntriesWithTypeIn(types_to_purge, ModelTypeSet(), ModelTypeSet());
 
   // We first query the in-memory data, and then reload the directory (without
   // saving) to verify that disk does not still have the data.
@@ -1879,13 +1913,13 @@ TEST_F(OnDiskSyncableDirectoryTest,
               update_post_save.ref((ProtoField)i).SerializeAsString())
               << "Blob field #" << i << " changed during save/load";
   }
-  for ( ; i < ORDINAL_FIELDS_END; ++i) {
-    EXPECT_EQ(create_pre_save.ref((OrdinalField)i).ToInternalValue(),
-              create_post_save.ref((OrdinalField)i).ToInternalValue())
-              << "Blob field #" << i << " changed during save/load";
-    EXPECT_EQ(update_pre_save.ref((OrdinalField)i).ToInternalValue(),
-              update_post_save.ref((OrdinalField)i).ToInternalValue())
-              << "Blob field #" << i << " changed during save/load";
+  for ( ; i < UNIQUE_POSITION_FIELDS_END; ++i) {
+    EXPECT_TRUE(create_pre_save.ref((UniquePositionField)i).Equals(
+        create_post_save.ref((UniquePositionField)i)))
+        << "Position field #" << i << " changed during save/load";
+    EXPECT_TRUE(update_pre_save.ref((UniquePositionField)i).Equals(
+        update_post_save.ref((UniquePositionField)i)))
+        << "Position field #" << i << " changed during save/load";
   }
 }
 
@@ -1999,7 +2033,7 @@ TEST_F(OnDiskSyncableDirectoryTest, TestSaveChangesFailureWithPurge) {
   ASSERT_TRUE(dir_->good());
 
   ModelTypeSet set(BOOKMARKS);
-  dir_->PurgeEntriesWithTypeIn(set, ModelTypeSet());
+  dir_->PurgeEntriesWithTypeIn(set, ModelTypeSet(), ModelTypeSet());
   EXPECT_TRUE(IsInMetahandlesToPurge(handle1));
   ASSERT_FALSE(dir_->SaveChanges());
   EXPECT_TRUE(IsInMetahandlesToPurge(handle1));
@@ -2069,7 +2103,7 @@ class SyncableDirectoryManagement : public testing::Test {
   virtual void TearDown() {
   }
  protected:
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
   base::ScopedTempDir temp_dir_;
   FakeEncryptor encryptor_;
   TestUnrecoverableErrorHandler handler_;
@@ -2091,7 +2125,7 @@ TEST_F(SyncableDirectoryManagement, TestFileRelease) {
   dir.Close();
 
   // Closing the directory should have released the backing database file.
-  ASSERT_TRUE(file_util::Delete(path, true));
+  ASSERT_TRUE(base::DeleteFile(path, true));
 }
 
 class StressTransactionsDelegate : public base::PlatformThread::Delegate {
@@ -2138,7 +2172,7 @@ class StressTransactionsDelegate : public base::PlatformThread::Delegate {
 };
 
 TEST(SyncableDirectory, StressTransactions) {
-  MessageLoop message_loop;
+  base::MessageLoop message_loop;
   base::ScopedTempDir temp_dir;
   ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
   FakeEncryptor encryptor;
@@ -2219,7 +2253,7 @@ TEST_F(SyncableClientTagTest, TestClientTagClear) {
     WriteTransaction trans(FROM_HERE, UNITTEST, dir_.get());
     MutableEntry me(&trans, GET_BY_CLIENT_TAG, test_tag_);
     EXPECT_TRUE(me.good());
-    me.Put(UNIQUE_CLIENT_TAG, "");
+    me.Put(UNIQUE_CLIENT_TAG, std::string());
   }
   {
     ReadTransaction trans(FROM_HERE, dir_.get());

@@ -12,34 +12,34 @@
 #include "base/i18n/rtl.h"
 #include "base/i18n/time_formatting.h"
 #include "base/memory/singleton.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/metrics/histogram.h"
 #include "base/prefs/pref_service.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/time.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/bookmarks/bookmark_utils.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/history/history_notifications.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/history/history_types.h"
 #include "chrome/browser/history/web_history_service.h"
 #include "chrome/browser/history/web_history_service_factory.h"
-#include "chrome/browser/managed_mode/managed_mode_url_filter.h"
-#include "chrome/browser/managed_mode/managed_user_service.h"
-#include "chrome/browser/managed_mode/managed_user_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search/search.h"
+#include "chrome/browser/sync/glue/device_info.h"
+#include "chrome/browser/sync/profile_sync_service.h"
+#include "chrome/browser/sync/profile_sync_service_factory.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/webui/favicon_source.h"
-#include "chrome/common/chrome_notification_types.h"
+#include "chrome/browser/ui/webui/metrics_handler.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/common/time_format.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/browser/notification_details.h"
 #include "content/public/browser/notification_source.h"
@@ -52,7 +52,15 @@
 #include "net/base/escape.h"
 #include "sync/protocol/history_delete_directive_specifics.pb.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/l10n/time_format.h"
 #include "ui/base/resource/resource_bundle.h"
+
+#if defined(ENABLE_MANAGED_USERS)
+#include "chrome/browser/managed_mode/managed_mode_navigation_observer.h"
+#include "chrome/browser/managed_mode/managed_mode_url_filter.h"
+#include "chrome/browser/managed_mode/managed_user_service.h"
+#include "chrome/browser/managed_mode/managed_user_service_factory.h"
+#endif
 
 #if defined(OS_ANDROID)
 #include "chrome/browser/ui/android/tab_model/tab_model.h"
@@ -92,11 +100,18 @@ const char kIncognitoModeShortcut[] = "(Ctrl+Shift+N)";
 const char kIncognitoModeShortcut[] = "(Shift+Ctrl+N)";
 #endif
 
+// Identifiers for the type of device from which a history entry originated.
+static const char kDeviceTypeLaptop[] = "laptop";
+static const char kDeviceTypePhone[] = "phone";
+static const char kDeviceTypeTablet[] = "tablet";
+
 content::WebUIDataSource* CreateHistoryUIHTMLSource(Profile* profile) {
+  PrefService* prefs = profile->GetPrefs();
+
   content::WebUIDataSource* source =
       content::WebUIDataSource::Create(chrome::kChromeUIHistoryFrameHost);
   source->AddBoolean("isUserSignedIn",
-      !profile->GetPrefs()->GetString(prefs::kGoogleServicesUsername).empty());
+      !prefs->GetString(prefs::kGoogleServicesUsername).empty());
   source->AddLocalizedString("collapseSessionMenuItemText",
       IDS_NEW_TAB_OTHER_SESSIONS_COLLAPSE_SESSION);
   source->AddLocalizedString("expandSessionMenuItemText",
@@ -143,29 +158,33 @@ content::WebUIDataSource* CreateHistoryUIHTMLSource(Profile* profile) {
   source->AddLocalizedString("allowItems", IDS_HISTORY_FILTER_ALLOW_ITEMS);
   source->AddLocalizedString("blockItems", IDS_HISTORY_FILTER_BLOCK_ITEMS);
   source->AddLocalizedString("lockButton", IDS_HISTORY_LOCK_BUTTON);
+  source->AddLocalizedString("blockedVisitText",
+                             IDS_HISTORY_BLOCKED_VISIT_TEXT);
   source->AddLocalizedString("unlockButton", IDS_HISTORY_UNLOCK_BUTTON);
   source->AddLocalizedString("hasSyncedResults",
                              IDS_HISTORY_HAS_SYNCED_RESULTS);
-  source->AddLocalizedString("noResponseFromServer",
-                             IDS_HISTORY_NO_RESPONSE_FROM_SERVER);
+  source->AddLocalizedString("noSyncedResults", IDS_HISTORY_NO_SYNCED_RESULTS);
+  source->AddLocalizedString("cancel", IDS_CANCEL);
+  source->AddLocalizedString("deleteConfirm",
+                             IDS_HISTORY_DELETE_PRIOR_VISITS_CONFIRM_BUTTON);
   source->AddBoolean("isFullHistorySyncEnabled",
                      WebHistoryServiceFactory::GetForProfile(profile) != NULL);
   source->AddBoolean("groupByDomain",
       CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kHistoryEnableGroupByDomain));
+  source->AddBoolean("allowDeletingHistory",
+                     prefs->GetBoolean(prefs::kAllowDeletingBrowserHistory));
+  source->AddBoolean("isInstantExtendedApiEnabled",
+                     chrome::IsInstantExtendedAPIEnabled());
+
   source->SetJsonPath(kStringsJsFile);
   source->AddResourcePath(kHistoryJsFile, IDR_HISTORY_JS);
   source->AddResourcePath(kOtherDevicesJsFile, IDR_OTHER_DEVICES_JS);
   source->SetDefaultResource(IDR_HISTORY_HTML);
   source->SetUseJsonJSFormatV2();
   source->DisableDenyXFrameOptions();
-
-#if defined(OS_ANDROID) || defined(OS_IOS)
-  source->AddBoolean("isManagedProfile", false);
-#else
-  source->AddBoolean("isManagedProfile",
-      ManagedUserServiceFactory::GetForProfile(profile)->ProfileIsManaged());
-#endif
+  source->AddBoolean("isManagedProfile", profile->IsManaged());
+  source->AddBoolean("showDeleteVisitUI", !profile->IsManaged());
 
   return source;
 }
@@ -174,7 +193,7 @@ content::WebUIDataSource* CreateHistoryUIHTMLSource(Profile* profile) {
 // indicator (e.g. today, yesterday).
 string16 getRelativeDateLocalized(const base::Time& visit_time) {
   base::Time midnight = base::Time::Now().LocalMidnight();
-  string16 date_str = TimeFormat::RelativeDate(visit_time, &midnight);
+  string16 date_str = ui::TimeFormat::RelativeDate(visit_time, &midnight);
   if (date_str.empty()) {
     date_str = base::TimeFormatFriendlyDate(visit_time);
   } else {
@@ -216,6 +235,36 @@ bool IsLocalOnlyResult(const BrowsingHistoryHandler::HistoryEntry& entry) {
   return entry.entry_type == BrowsingHistoryHandler::HistoryEntry::LOCAL_ENTRY;
 }
 
+// Gets the name and type of a device for the given sync client ID.
+// |name| and |type| are out parameters.
+void GetDeviceNameAndType(const ProfileSyncService* sync_service,
+                          const std::string& client_id,
+                          std::string* name,
+                          std::string* type) {
+  if (sync_service && sync_service->sync_initialized()) {
+    scoped_ptr<browser_sync::DeviceInfo> device_info =
+        sync_service->GetDeviceInfo(client_id);
+    if (device_info.get()) {
+      *name = device_info->client_name();
+      switch (device_info->device_type()) {
+        case sync_pb::SyncEnums::TYPE_PHONE:
+          *type = kDeviceTypePhone;
+          break;
+        case sync_pb::SyncEnums::TYPE_TABLET:
+          *type = kDeviceTypeTablet;
+          break;
+        default:
+          *type = kDeviceTypeLaptop;
+      }
+      return;
+    }
+  } else {
+    NOTREACHED() << "Got a remote history entry but no ProfileSyncService.";
+  }
+  *name = l10n_util::GetStringUTF8(IDS_HISTORY_UNKNOWN_DEVICE);
+  *type = kDeviceTypeLaptop;
+}
+
 }  // namespace
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -227,19 +276,21 @@ bool IsLocalOnlyResult(const BrowsingHistoryHandler::HistoryEntry& entry) {
 BrowsingHistoryHandler::HistoryEntry::HistoryEntry(
     BrowsingHistoryHandler::HistoryEntry::EntryType entry_type,
     const GURL& url, const string16& title, base::Time time,
-    const std::set<int64>& timestamps,
-    bool is_search_result, const string16& snippet)
-      : all_timestamps(timestamps) {
+    const std::string& client_id, bool is_search_result,
+    const string16& snippet, bool blocked_visit) {
   this->entry_type = entry_type;
   this->url = url;
   this->title = title;
   this->time = time;
+  this->client_id = client_id;
+  all_timestamps.insert(time.ToInternalValue());
   this->is_search_result = is_search_result;
   this->snippet = snippet;
+  this->blocked_visit = blocked_visit;
 }
 
 BrowsingHistoryHandler::HistoryEntry::HistoryEntry()
-    : entry_type(EMPTY_ENTRY), is_search_result(false) {
+    : entry_type(EMPTY_ENTRY), is_search_result(false), blocked_visit(false) {
 }
 
 BrowsingHistoryHandler::HistoryEntry::~HistoryEntry() {
@@ -271,7 +322,8 @@ void BrowsingHistoryHandler::HistoryEntry::SetUrlAndTitle(
 
 scoped_ptr<DictionaryValue> BrowsingHistoryHandler::HistoryEntry::ToValue(
     BookmarkModel* bookmark_model,
-    ManagedUserService* managed_user_service) const {
+    ManagedUserService* managed_user_service,
+    const ProfileSyncService* sync_service) const {
   scoped_ptr<DictionaryValue> result(new DictionaryValue());
   SetUrlAndTitle(result.get());
   result->SetDouble("time", time.ToJsTime());
@@ -294,7 +346,7 @@ scoped_ptr<DictionaryValue> BrowsingHistoryHandler::HistoryEntry::ToValue(
     result->SetString("snippet", snippet);
   } else {
     base::Time midnight = base::Time::Now().LocalMidnight();
-    string16 date_str = TimeFormat::RelativeDate(time, &midnight);
+    string16 date_str = ui::TimeFormat::RelativeDate(time, &midnight);
     if (date_str.empty()) {
       date_str = base::TimeFormatFriendlyDate(time);
     } else {
@@ -308,25 +360,22 @@ scoped_ptr<DictionaryValue> BrowsingHistoryHandler::HistoryEntry::ToValue(
   }
   result->SetBoolean("starred", bookmark_model->IsBookmarked(url));
 
+  std::string device_name;
+  std::string device_type;
+  if (!client_id.empty())
+    GetDeviceNameAndType(sync_service, client_id, &device_name, &device_type);
+  result->SetString("deviceName", device_name);
+  result->SetString("deviceType", device_type);
+
 #if defined(ENABLE_MANAGED_USERS)
-  DCHECK(managed_user_service);
-  if (managed_user_service->ProfileIsManaged()) {
-    // URL exceptions take precedence over host exceptions.
-    int manual_behavior = managed_user_service->GetManualBehaviorForURL(url);
-    if (manual_behavior == ManagedUserService::MANUAL_NONE) {
-      manual_behavior =
-          managed_user_service->GetManualBehaviorForHost(url.host());
-    }
-    result->SetInteger("urlManualBehavior", manual_behavior);
-    result->SetInteger("hostManualBehavior",
-        managed_user_service->GetManualBehaviorForHost(url.host()));
-    std::vector<ManagedModeSiteList::Site*> sites;
-    managed_user_service->GetURLFilterForUIThread()->GetSites(url, &sites);
-    result->SetBoolean("urlInContentPack", !sites.empty());
-    sites.clear();
-    managed_user_service->GetURLFilterForUIThread()->GetSites(
-        url.GetWithEmptyPath(), &sites);
-    result->SetBoolean("hostInContentPack", !sites.empty());
+  if (managed_user_service) {
+    const ManagedModeURLFilter* url_filter =
+        managed_user_service->GetURLFilterForUIThread();
+    int filtering_behavior =
+        url_filter->GetFilteringBehaviorForURL(url.GetWithEmptyPath());
+    result->SetInteger("hostFilteringBehavior", filtering_behavior);
+
+    result->SetBoolean("blockedVisit", blocked_visit);
   }
 #endif
 
@@ -368,19 +417,6 @@ void BrowsingHistoryHandler::RegisterMessages() {
   web_ui()->RegisterMessageCallback("removeBookmark",
       base::Bind(&BrowsingHistoryHandler::HandleRemoveBookmark,
                  base::Unretained(this)));
-#if !defined(OS_ANDROID) && !defined(OS_IOS)
-  web_ui()->RegisterMessageCallback("processManagedUrls",
-      base::Bind(&BrowsingHistoryHandler::HandleProcessManagedUrls,
-                 base::Unretained(this)));
-#endif
-#if defined(ENABLE_MANAGED_USERS)
-  web_ui()->RegisterMessageCallback("setManagedUserElevated",
-      base::Bind(&BrowsingHistoryHandler::HandleSetElevated,
-                 base::Unretained(this)));
-  web_ui()->RegisterMessageCallback("getManagedUserElevated",
-      base::Bind(&BrowsingHistoryHandler::HandleManagedUserGetElevated,
-                 base::Unretained(this)));
-#endif
 }
 
 bool BrowsingHistoryHandler::ExtractIntegerValueAtIndex(const ListValue* value,
@@ -493,12 +529,13 @@ void BrowsingHistoryHandler::HandleQueryHistory(const ListValue* args) {
 }
 
 void BrowsingHistoryHandler::HandleRemoveVisits(const ListValue* args) {
-  if (delete_task_tracker_.HasTrackedTasks()) {
+  Profile* profile = Profile::FromWebUI(web_ui());
+  if (delete_task_tracker_.HasTrackedTasks() ||
+      !profile->GetPrefs()->GetBoolean(prefs::kAllowDeletingBrowserHistory)) {
     web_ui()->CallJavascriptFunction("deleteFailed");
     return;
   }
 
-  Profile* profile = Profile::FromWebUI(web_ui());
   HistoryService* history_service =
       HistoryServiceFactory::GetForProfile(profile, Profile::EXPLICIT_ACCESS);
   history::WebHistoryService* web_history =
@@ -508,6 +545,7 @@ void BrowsingHistoryHandler::HandleRemoveVisits(const ListValue* args) {
   std::vector<history::ExpireHistoryArgs> expire_list;
   expire_list.reserve(args->GetSize());
 
+  DCHECK(urls_to_be_deleted_.empty());
   for (ListValue::const_iterator it = args->begin(); it != args->end(); ++it) {
     DictionaryValue* deletion = NULL;
     string16 url;
@@ -539,10 +577,12 @@ void BrowsingHistoryHandler::HandleRemoveVisits(const ListValue* args) {
       }
       base::Time visit_time = base::Time::FromJsTime(timestamp);
       if (!expire_args) {
+        GURL gurl(url);
         expire_list.resize(expire_list.size() + 1);
         expire_args = &expire_list.back();
         expire_args->SetTimeRangeForOneDay(visit_time);
-        expire_args->urls.insert(GURL(url));
+        expire_args->urls.insert(gurl);
+        urls_to_be_deleted_.insert(gurl);
       }
       // The local visit time is treated as a global ID for the visit.
       global_id_directive->add_global_id(visit_time.ToInternalValue());
@@ -579,122 +619,6 @@ void BrowsingHistoryHandler::HandleRemoveVisits(const ListValue* args) {
   }
 }
 
-#if !defined(OS_ANDROID) && !defined(OS_IOS)
-void BrowsingHistoryHandler::HandleProcessManagedUrls(const ListValue* args) {
-  bool allow = false;
-  if (!args->GetBoolean(0, &allow)) {
-    LOG(ERROR) << "Unable to extract boolean argument.";
-    web_ui()->CallJavascriptFunction("processingManagedFailed");
-    return;
-  }
-
-  // Check if the managed user is authenticated.
-  ManagedUserService* service = ManagedUserServiceFactory::GetForProfile(
-      Profile::FromWebUI(web_ui()));
-  if (!service->IsElevated())
-    return;
-
-  // Since editing a host can have side effects on other hosts, update all of
-  // them but change the behavior only of the checked ones.
-  std::vector<std::string> hosts_to_be_changed;
-  std::vector<GURL> hosts_to_update;
-  // Get the host information. Currently the layout of this data is as follows:
-  // [[<is the host checked (boolean)>, <host (string)>], ...]
-  const ListValue* host_list;
-  if (!args->GetList(1, &host_list)) {
-    LOG(WARNING) << "Unable to extract list argument.";
-    return;
-  }
-  for (ListValue::const_iterator v = host_list->begin();
-       v != host_list->end(); ++v) {
-    ListValue* element;
-    bool is_checked;
-    std::string value;
-    if (!((*v)->GetAsList(&element) &&
-        element->GetBoolean(0, &is_checked) &&
-        element->GetString(1, &value))) {
-      continue;
-    }
-
-    hosts_to_update.push_back(GURL("http://" + value));
-    if (is_checked)
-      hosts_to_be_changed.push_back(value);
-  }
-
-  std::vector<GURL> urls_to_be_changed;
-  std::vector<GURL> urls_to_update;
-  const ListValue* url_list;
-  // The URL information is received as a list of lists as follows:
-  // [[<is the URL checked (boolean)>, <is the host checked (boolean)>,
-  //   <URL (string)>], ...].
-  if (!args->GetList(2, &url_list)) {
-    LOG(WARNING) << "Unable to extract list argument.";
-    return;
-  }
-  for (ListValue::const_iterator v = url_list->begin();
-       v != url_list->end(); ++v) {
-    ListValue* element;
-    bool url_checked;
-    bool host_checked;
-    string16 string16_value;
-    if (!((*v)->GetAsList(&element) &&
-        element->GetBoolean(0, &url_checked) &&
-        element->GetBoolean(1, &host_checked) &&
-        element->GetString(2, &string16_value))) {
-      continue;
-    }
-
-    urls_to_update.push_back(GURL(string16_value));
-    // Do not update individual entries if the whole domain is checked.
-    if (url_checked && !host_checked)
-      urls_to_be_changed.push_back(GURL(string16_value));
-  }
-
-  // Now that the lists are built apply the changes to those domains and URLs.
-  service->SetManualBehaviorForHosts(hosts_to_be_changed,
-                                     allow ? ManagedUserService::MANUAL_ALLOW :
-                                             ManagedUserService::MANUAL_BLOCK);
-  service->SetManualBehaviorForURLs(urls_to_be_changed,
-                                    allow ? ManagedUserService::MANUAL_ALLOW :
-                                            ManagedUserService::MANUAL_BLOCK);
-
-  // Build the list of updated hosts after the changes have been applied.
-  ListValue results;
-  std::vector<GURL>::iterator it;
-  scoped_ptr<DictionaryValue> result_hosts(new DictionaryValue());
-  for (it = hosts_to_update.begin(); it != hosts_to_update.end(); ++it) {
-    std::vector<ManagedModeSiteList::Site*> sites;
-    service->GetURLFilterForUIThread()->GetSites(
-        it->GetWithEmptyPath(), &sites);
-    scoped_ptr<DictionaryValue> entry(new DictionaryValue());
-    entry->SetInteger("manualBehavior",
-                      service->GetManualBehaviorForHost(it->host()));
-    entry->SetInteger("inContentPack", !sites.empty());
-    result_hosts->SetWithoutPathExpansion(it->host(), entry.release());
-  }
-  results.Append(result_hosts.release());
-
-  // Do the same for URLs.
-  scoped_ptr<DictionaryValue> result_urls(new DictionaryValue());
-  for (it = urls_to_update.begin(); it != urls_to_update.end(); ++it) {
-    std::vector<ManagedModeSiteList::Site*> sites;
-    service->GetURLFilterForUIThread()->GetSites(*it, &sites);
-    scoped_ptr<DictionaryValue> entry(new DictionaryValue());
-    int manual_behavior = service->GetManualBehaviorForURL(*it);
-    if (manual_behavior == ManagedUserService::MANUAL_NONE)
-      manual_behavior = service->GetManualBehaviorForHost(it->host());
-    entry->SetInteger("manualBehavior", manual_behavior);
-    entry->SetInteger("inContentPack", !sites.empty());
-    result_urls->SetWithoutPathExpansion(it->spec(), entry.release());
-  }
-  results.Append(result_urls.release());
-
-  // Notify the Javascript side that the changes have been commited and that it
-  // should update the page.
-  web_ui()->CallJavascriptFunction("updateEntries", results);
-}
-#endif  // !defined(OS_ANDROID) && !defined(OS_IOS)
-
 void BrowsingHistoryHandler::HandleClearBrowsingData(const ListValue* args) {
 #if defined(OS_ANDROID)
   Profile* profile = Profile::FromWebUI(web_ui());
@@ -717,45 +641,6 @@ void BrowsingHistoryHandler::HandleRemoveBookmark(const ListValue* args) {
   BookmarkModel* model = BookmarkModelFactory::GetForProfile(profile);
   bookmark_utils::RemoveAllBookmarks(model, GURL(url));
 }
-
-#if defined(ENABLE_MANAGED_USERS)
-void BrowsingHistoryHandler::HandleSetElevated(const ListValue* elevated_arg) {
-  bool elevated;
-  elevated_arg->GetBoolean(0, &elevated);
-  ManagedUserService* service = ManagedUserServiceFactory::GetForProfile(
-      Profile::FromWebUI(web_ui()));
-  if (elevated) {
-    service->RequestAuthorization(
-        web_ui()->GetWebContents(),
-        base::Bind(&BrowsingHistoryHandler::PassphraseDialogCallback,
-                   base::Unretained(this)));
-  } else {
-    service->SetElevated(elevated);
-    ManagedUserSetElevated();
-  }
-}
-
-void BrowsingHistoryHandler::PassphraseDialogCallback(bool success) {
-  if (success) {
-    ManagedUserService* service = ManagedUserServiceFactory::GetForProfile(
-        Profile::FromWebUI(web_ui()));
-    service->SetElevated(true);
-    ManagedUserSetElevated();
-  }
-}
-
-void BrowsingHistoryHandler::ManagedUserSetElevated() {
-  ManagedUserService* service = ManagedUserServiceFactory::GetForProfile(
-      Profile::FromWebUI(web_ui()));
-  base::FundamentalValue is_elevated(service->IsElevated());
-  web_ui()->CallJavascriptFunction("managedUserElevated", is_elevated);
-}
-
-void BrowsingHistoryHandler::HandleManagedUserGetElevated(
-    const ListValue* args) {
-  ManagedUserSetElevated();
-}
-#endif
 
 // static
 void BrowsingHistoryHandler::MergeDuplicateResults(
@@ -809,8 +694,11 @@ void BrowsingHistoryHandler::ReturnResultsToFrontEnd() {
   BookmarkModel* bookmark_model = BookmarkModelFactory::GetForProfile(profile);
   ManagedUserService* managed_user_service = NULL;
 #if defined(ENABLE_MANAGED_USERS)
-  managed_user_service = ManagedUserServiceFactory::GetForProfile(profile);
+  if (profile->IsManaged())
+    managed_user_service = ManagedUserServiceFactory::GetForProfile(profile);
 #endif
+  ProfileSyncService* sync_service =
+      ProfileSyncServiceFactory::GetInstance()->GetForProfile(profile);
 
   // Combine the local and remote results into |query_results_|, and remove
   // any duplicates.
@@ -836,7 +724,7 @@ void BrowsingHistoryHandler::ReturnResultsToFrontEnd() {
   for (std::vector<BrowsingHistoryHandler::HistoryEntry>::iterator it =
            query_results_.begin(); it != query_results_.end(); ++it) {
     scoped_ptr<base::Value> value(
-        it->ToValue(bookmark_model, managed_user_service));
+        it->ToValue(bookmark_model, managed_user_service, sync_service));
     results_value.Append(value.release());
   }
 
@@ -857,19 +745,17 @@ void BrowsingHistoryHandler::QueryComplete(
 
   for (size_t i = 0; i < results->size(); ++i) {
     history::URLResult const &page = (*results)[i];
-
-    std::set<int64> timestamps;
-    timestamps.insert(page.visit_time().ToInternalValue());
-
+    // TODO(dubroy): Use sane time (crbug.com/146090) here when it's ready.
     query_results_.push_back(
         HistoryEntry(
             HistoryEntry::LOCAL_ENTRY,
             page.url(),
             page.title(),
             page.visit_time(),
-            timestamps,
+            std::string(),
             !search_text.empty(),
-            page.snippet().text()));
+            page.snippet().text(),
+            page.blocked_visit()));
   }
 
   results_info_value_.SetString("term", search_text);
@@ -933,16 +819,14 @@ void BrowsingHistoryHandler::WebHistoryQueryComplete(
         LOG(WARNING) << "Improperly formed JSON response from history server.";
         continue;
       }
-
       // Title is optional, so the return value is ignored here.
       result->GetString("title", &title);
 
       // Extract the timestamps of all the visits to this URL.
       // They are referred to as "IDs" by the server.
-      std::set<int64> timestamps;
       for (int j = 0; j < static_cast<int>(ids->GetSize()); ++j) {
         const DictionaryValue* id = NULL;
-        string16 timestamp_string;
+        std::string timestamp_string;
         int64 timestamp_usec;
 
         if (!(ids->GetDictionary(j, &id) &&
@@ -954,23 +838,22 @@ void BrowsingHistoryHandler::WebHistoryQueryComplete(
         // The timestamp on the server is a Unix time.
         base::Time time = base::Time::UnixEpoch() +
                           base::TimeDelta::FromMicroseconds(timestamp_usec);
-        timestamps.insert(time.ToInternalValue());
 
-        // Use the first timestamp as the visit time for this result.
-        // TODO(dubroy): Use the sane time instead once it is available.
-        if (visit_time.is_null())
-          visit_time = time;
+        // Get the ID of the client that this visit came from.
+        std::string client_id;
+        id->GetString("client_id", &client_id);
+
+        web_history_query_results_.push_back(
+            HistoryEntry(
+                HistoryEntry::REMOTE_ENTRY,
+                GURL(url),
+                title,
+                time,
+                client_id,
+                !search_text.empty(),
+                string16(),
+                /* blocked_visit */ false));
       }
-      GURL gurl(url);
-      web_history_query_results_.push_back(
-          HistoryEntry(
-              HistoryEntry::REMOTE_ENTRY,
-              gurl,
-              title,
-              visit_time,
-              timestamps,
-              !search_text.empty(),
-              string16()));
     }
   } else if (results_value) {
     NOTREACHED() << "Failed to parse JSON response.";
@@ -983,15 +866,20 @@ void BrowsingHistoryHandler::WebHistoryQueryComplete(
 void BrowsingHistoryHandler::RemoveComplete() {
   urls_to_be_deleted_.clear();
 
-  // Notify the page that the deletion request succeeded.
-  web_ui()->CallJavascriptFunction("deleteComplete");
+  // Notify the page that the deletion request is complete, but only if a web
+  // history delete request is not still pending.
+  if (!(web_history_delete_request_.get() &&
+        web_history_delete_request_->is_pending())) {
+    web_ui()->CallJavascriptFunction("deleteComplete");
+  }
 }
 
 void BrowsingHistoryHandler::RemoveWebHistoryComplete(
     history::WebHistoryService::Request* request, bool success) {
-  // Notify the page that the deletion request is complete.
-  base::FundamentalValue success_value(success);
-  web_ui()->CallJavascriptFunction("webHistoryDeleteComplete", success_value);
+  // TODO(dubroy): Should we handle failure somehow? Delete directives will
+  // ensure that the visits are eventually deleted, so maybe it's not necessary.
+  if (!delete_task_tracker_.HasTrackedTasks())
+    RemoveComplete();
 }
 
 void BrowsingHistoryHandler::SetQueryTimeInWeeks(
@@ -1075,10 +963,11 @@ void BrowsingHistoryHandler::Observe(
 
 HistoryUI::HistoryUI(content::WebUI* web_ui) : WebUIController(web_ui) {
   web_ui->AddMessageHandler(new BrowsingHistoryHandler());
+  web_ui->AddMessageHandler(new MetricsHandler());
 
 // On mobile we deal with foreign sessions differently.
 #if !defined(OS_ANDROID) && !defined(OS_IOS)
-  if (chrome::search::IsInstantExtendedAPIEnabled()) {
+  if (chrome::IsInstantExtendedAPIEnabled()) {
     web_ui->AddMessageHandler(new browser_sync::ForeignSessionHandler());
     web_ui->AddMessageHandler(new NTPLoginHandler());
   }

@@ -9,8 +9,8 @@
 #include <string>
 
 #include "base/memory/ref_counted.h"
-#include "base/string16.h"
-#include "net/base/nss_cert_database.h"
+#include "base/strings/string16.h"
+#include "net/cert/nss_cert_database.h"
 
 // CertificateManagerModel provides the data to be displayed in the certificate
 // manager dialog, and processes changes from the view.

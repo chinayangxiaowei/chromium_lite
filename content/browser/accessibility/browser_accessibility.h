@@ -70,7 +70,6 @@ class CONTENT_EXPORT BrowserAccessibility {
   void InitializeTreeStructure(
       BrowserAccessibilityManager* manager,
       BrowserAccessibility* parent,
-      int32 child_id,
       int32 renderer_id,
       int32 index_in_parent);
 
@@ -82,17 +81,20 @@ class CONTENT_EXPORT BrowserAccessibility {
   // Update the parent and index in parent if this node has been moved.
   void UpdateParent(BrowserAccessibility* parent, int index_in_parent);
 
+  // Update this node's location, leaving everything else the same.
+  virtual void SetLocation(const gfx::Rect& new_location);
+
   // Return true if this object is equal to or a descendant of |ancestor|.
   bool IsDescendantOf(BrowserAccessibility* ancestor);
 
   // Returns the parent of this object, or NULL if it's the root.
-  BrowserAccessibility* parent() { return parent_; }
+  BrowserAccessibility* parent() const { return parent_; }
 
   // Returns the number of children of this object.
   uint32 child_count() const { return children_.size(); }
 
   // Return a pointer to the child with the given index.
-  BrowserAccessibility* GetChild(uint32 child_index);
+  BrowserAccessibility* GetChild(uint32 child_index) const;
 
   // Return the previous sibling of this object, or NULL if it's the first
   // child of its parent.
@@ -104,10 +106,10 @@ class CONTENT_EXPORT BrowserAccessibility {
 
   // Returns the bounds of this object in coordinates relative to the
   // top-left corner of the overall web area.
-  gfx::Rect GetLocalBoundsRect();
+  gfx::Rect GetLocalBoundsRect() const;
 
   // Returns the bounds of this object in screen coordinates.
-  gfx::Rect GetGlobalBoundsRect();
+  gfx::Rect GetGlobalBoundsRect() const;
 
   // Returns the deepest descendant that contains the specified point
   // (in global screen coordinates).
@@ -150,7 +152,6 @@ class CONTENT_EXPORT BrowserAccessibility {
     return string_attributes_;
   }
 
-  int32 child_id() const { return child_id_; }
   const std::vector<BrowserAccessibility*>& children() const {
     return children_;
   }
@@ -252,9 +253,6 @@ class CONTENT_EXPORT BrowserAccessibility {
 
   // The parent of this object, may be NULL if we're the root object.
   BrowserAccessibility* parent_;
-
-  // The ID of this object; globally unique within the browser process.
-  int32 child_id_;
 
   // The index of this within its parent object.
   int32 index_in_parent_;

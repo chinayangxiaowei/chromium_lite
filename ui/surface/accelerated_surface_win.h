@@ -12,8 +12,9 @@
 #include "base/single_thread_task_runner.h"
 #include "base/synchronization/lock.h"
 #include "base/synchronization/waitable_event.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "base/win/scoped_comptr.h"
+#include "ui/base/latency_info.h"
 #include "ui/gfx/native_widget_types.h"
 #include "ui/gfx/size.h"
 #include "ui/surface/surface_export.h"
@@ -33,9 +34,12 @@ class SURFACE_EXPORT AcceleratedPresenter
  public:
   typedef base::Callback<void(bool,
                               base::TimeTicks,
-                              base::TimeDelta)> CompletionTask;
+                              base::TimeDelta,
+                              const ui::LatencyInfo&)> CompletionTask;
 
   explicit AcceleratedPresenter(gfx::PluginWindowHandle window);
+
+  static void SetAdapterLUID(uint64 adapter_luid);
 
   // Returns a thread safe reference to the presenter for the given window or
   // null is no such presenter exists. The thread safe refptr ensures the
@@ -50,7 +54,12 @@ class SURFACE_EXPORT AcceleratedPresenter
   void AsyncPresentAndAcknowledge(
       const gfx::Size& size,
       int64 surface_handle,
+      const ui::LatencyInfo& latency_info,
       const CompletionTask& completion_task);
+
+  // Returns true if the swap chain has been created and initialized.  This can
+  // be called on any thread.
+  bool IsSwapChainInitialized() const;
 
   // Schedule the presenter to free all its resources. This can be called on any
   // thread.
@@ -96,6 +105,7 @@ class SURFACE_EXPORT AcceleratedPresenter
   void DoPresentAndAcknowledge(
       const gfx::Size& size,
       int64 surface_handle,
+      const ui::LatencyInfo& latency_info,
       const CompletionTask& completion_task);
   void DoSuspend();
   void DoPresent(const base::Closure& composite_task);
@@ -169,6 +179,8 @@ class SURFACE_EXPORT AcceleratedPresenter
   gfx::Size last_window_size_;
   base::Time last_window_resize_time_;
 
+  ui::LatencyInfo latency_info_;
+
   DISALLOW_COPY_AND_ASSIGN(AcceleratedPresenter);
 };
 
@@ -179,6 +191,10 @@ class SURFACE_EXPORT AcceleratedSurface {
 
   // Synchronously present a frame with no acknowledgement.
   void Present(HDC dc);
+
+  // Returns true if the surface is fully initialized and has been presented to
+  // at least once.
+  bool IsReadyForCopy() const;
 
   // Transfer the contents of the surface to an SkBitmap, and invoke a callback
   // with the result.

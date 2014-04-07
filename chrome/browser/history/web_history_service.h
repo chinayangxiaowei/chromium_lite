@@ -5,9 +5,10 @@
 #ifndef CHROME_BROWSER_HISTORY_WEB_HISTORY_SERVICE_H_
 #define CHROME_BROWSER_HISTORY_WEB_HISTORY_SERVICE_H_
 
+#include "base/memory/weak_ptr.h"
 #include "chrome/browser/history/history_types.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_keyed_service.h"
+#include "components/browser_context_keyed_service/browser_context_keyed_service.h"
 
 namespace base {
 class DictionaryValue;
@@ -22,7 +23,7 @@ namespace history {
 // Provides an API for querying Google servers for a signed-in user's
 // synced history visits. It is roughly analogous to HistoryService, and
 // supports a similar API.
-class WebHistoryService : public ProfileKeyedService {
+class WebHistoryService : public BrowserContextKeyedService {
  public:
   // Handles all the work of making an API request. This class encapsulates
   // the entire state of the request. When an instance is destroyed, all
@@ -30,6 +31,10 @@ class WebHistoryService : public ProfileKeyedService {
   class Request {
    public:
     virtual ~Request();
+
+    // Returns true if the request is "pending" (i.e., it has been started, but
+    // is not yet been complete).
+    virtual bool is_pending() = 0;
 
    protected:
     Request();
@@ -75,7 +80,30 @@ class WebHistoryService : public ProfileKeyedService {
       const ExpireWebHistoryCallback& callback);
 
  private:
+  // Called by |request| when a web history query has completed. Unpacks the
+  // response and calls |callback|, which is the original callback that was
+  // passed to QueryHistory().
+  static void QueryHistoryCompletionCallback(
+      const WebHistoryService::QueryWebHistoryCallback& callback,
+      WebHistoryService::Request* request,
+      bool success);
+
+  // Called by |request| when a request to delete history from the server has
+  // completed. Unpacks the response and calls |callback|, which is the original
+  // callback that was passed to ExpireHistory().
+  void ExpireHistoryCompletionCallback(
+      const WebHistoryService::ExpireWebHistoryCallback& callback,
+      WebHistoryService::Request* request,
+      bool success);
+
   Profile* profile_;
+
+  // Stores the version_info token received from the server in response to
+  // a mutation operation (e.g., deleting history). This is used to ensure that
+  // subsequent reads see a version of the data that includes the mutation.
+  std::string server_version_info_;
+
+  base::WeakPtrFactory<WebHistoryService> weak_ptr_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(WebHistoryService);
 };

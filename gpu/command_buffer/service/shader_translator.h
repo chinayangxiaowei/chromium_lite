@@ -8,12 +8,12 @@
 #include <string>
 
 #include "base/basictypes.h"
-#include "base/hash_tables.h"
+#include "base/containers/hash_tables.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/observer_list.h"
 #include "gpu/gpu_export.h"
-#include "third_party/angle/include/GLSLANG/ShaderLang.h"
+#include "third_party/angle_dx11/include/GLSLANG/ShaderLang.h"
 
 namespace gpu {
 namespace gles2 {
@@ -84,6 +84,10 @@ class ShaderTranslatorInterface {
   virtual const VariableMap& uniform_map() const = 0;
   virtual const NameMap& name_map() const = 0;
 
+  // Return a string that is unique for a specfic set of options that would
+  // possibly effect compilation.
+  virtual std::string GetStringForOptionsThatWouldEffectCompilation() const = 0;
+
  protected:
   virtual ~ShaderTranslatorInterface() {}
 };
@@ -126,6 +130,9 @@ class GPU_EXPORT ShaderTranslator
   virtual const VariableMap& uniform_map() const OVERRIDE;
   virtual const NameMap& name_map() const OVERRIDE;
 
+  virtual std::string GetStringForOptionsThatWouldEffectCompilation() const
+      OVERRIDE;
+
   void AddDestructionObserver(DestructionObserver* observer);
   void RemoveDestructionObserver(DestructionObserver* observer);
 
@@ -134,10 +141,12 @@ class GPU_EXPORT ShaderTranslator
 
   virtual ~ShaderTranslator();
   void ClearResults();
+  int GetCompileOptions() const;
 
   ShHandle compiler_;
-  scoped_array<char> translated_shader_;
-  scoped_array<char> info_log_;
+  ShBuiltInResources compiler_options_;
+  scoped_ptr<char[]> translated_shader_;
+  scoped_ptr<char[]> info_log_;
   VariableMap attrib_map_;
   VariableMap uniform_map_;
   NameMap name_map_;

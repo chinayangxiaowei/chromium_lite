@@ -3,14 +3,14 @@
 // found in the LICENSE file.
 
 #include "base/memory/ref_counted_memory.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "chrome/browser/icon_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/fileicon_source.h"
 #include "chrome/test/base/testing_profile.h"
 #include "content/public/test/test_browser_thread.h"
-#include "testing/gtest/include/gtest/gtest.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "testing/gtest/include/gtest/gtest.h"
 
 using content::BrowserThread;
 
@@ -32,16 +32,16 @@ class TestFileIconSource : public FileIconSource {
 class FileIconSourceTest : public testing::Test {
  public:
   FileIconSourceTest()
-      : loop_(MessageLoop::TYPE_UI),
-        ui_thread_(BrowserThread::UI, MessageLoop::current()),
-        file_thread_(BrowserThread::FILE, MessageLoop::current()) {}
+      : loop_(base::MessageLoop::TYPE_UI),
+        ui_thread_(BrowserThread::UI, base::MessageLoop::current()),
+        file_thread_(BrowserThread::FILE, base::MessageLoop::current()) {}
 
   static TestFileIconSource* CreateFileIconSource() {
     return new TestFileIconSource();
   }
 
  private:
-  MessageLoop loop_;
+  base::MessageLoop loop_;
   content::TestBrowserThread ui_thread_;
   content::TestBrowserThread file_thread_;
 };
@@ -132,7 +132,7 @@ TEST_F(FileIconSourceTest, FileIconSource_Parse) {
                     base::FilePath(kBasicExpectations[i].unescaped_path),
                     kBasicExpectations[i].scale_factor,
                     kBasicExpectations[i].size, CallbackIsNull()));
-    source->StartDataRequest(kBasicExpectations[i].request_path, false,
+    source->StartDataRequest(kBasicExpectations[i].request_path, -1, -1,
                              callback);
   }
 }

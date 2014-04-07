@@ -37,12 +37,7 @@ NetworkLibraryImplStub::NetworkLibraryImplStub()
       pin_required_(false),
       pin_entered_(false),
       network_priority_order_(0),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_pointer_factory_(this)) {
-  // Emulate default setting of the CheckPortalList when OOBE is done.
-  if (IsEthernetEnabled())
-    check_portal_list_ = "ethernet,wifi,cellular";
-  else
-    check_portal_list_ = "wifi,cellular";
+      weak_pointer_factory_(this) {
 }
 
 NetworkLibraryImplStub::~NetworkLibraryImplStub() {
@@ -236,7 +231,6 @@ void NetworkLibraryImplStub::CompleteWifiInit() {
   AddStubNetwork(vpn_cert_pattern, PROFILE_USER);
 
   wifi_scanning_ = false;
-  offline_mode_ = false;
 
   // Ensure our active network is connected and vice versa, otherwise our
   // autotest browser_tests sometimes conclude the device is offline.
@@ -476,10 +470,7 @@ void NetworkLibraryImplStub::ConnectToNetwork(Network* network) {
   }
 
   // Set connected state.
-  if (network->is_behind_portal_for_testing())
-    network->set_behind_portal();
-  else
-    network->set_connected();
+  network->set_connected();
   network->set_user_connect_state(USER_CONNECT_CONNECTED);
 
   // Make the connected network the highest priority network.
@@ -631,18 +622,6 @@ void NetworkLibraryImplStub::CallRemoveNetwork(const Network* network) {}
 /////////////////////////////////////////////////////////////////////////////
 // NetworkLibrary implementation.
 
-void NetworkLibraryImplStub::SetCheckPortalList(const
-    std::string& check_portal_list) {
-  check_portal_list_ = check_portal_list;
-}
-
-void NetworkLibraryImplStub::SetDefaultCheckPortalList() {
-  if (IsEthernetEnabled())
-    SetCheckPortalList("ethernet,wifi,cellular");
-  else
-    SetCheckPortalList("wifi,cellular");
-}
-
 void NetworkLibraryImplStub::ChangePin(const std::string& old_pin,
                                        const std::string& new_pin) {
   sim_operation_ = SIM_OPERATION_CHANGE_PIN;
@@ -701,9 +680,6 @@ void NetworkLibraryImplStub::SetCarrier(
       base::TimeDelta::FromMilliseconds(delay_ms));
 }
 
-void NetworkLibraryImplStub::ResetModem() {
-}
-
 bool NetworkLibraryImplStub::IsCellularAlwaysInRoaming() {
   return false;
 }
@@ -717,9 +693,6 @@ void NetworkLibraryImplStub::RequestNetworkScan() {
       base::Bind(&NetworkLibraryImplStub::ScanCompleted,
                  weak_pointer_factory_.GetWeakPtr()),
       base::TimeDelta::FromMilliseconds(scan_delay_ms));
-}
-
-void NetworkLibraryImplStub::RefreshIPConfig(Network* network) {
 }
 
 void NetworkLibraryImplStub::DisconnectFromNetwork(const Network* network) {
@@ -737,27 +710,11 @@ void NetworkLibraryImplStub::DisconnectFromNetwork(const Network* network) {
   NotifyNetworkChanged(network);
 }
 
-void NetworkLibraryImplStub::EnableOfflineMode(bool enable) {
-  if (enable != offline_mode_) {
-    offline_mode_ = enable;
-    CallEnableNetworkDeviceType(TYPE_WIFI, !enable);
-    CallEnableNetworkDeviceType(TYPE_CELLULAR, !enable);
-  }
-}
-
 void NetworkLibraryImplStub::GetIPConfigs(
     const std::string& device_path,
     HardwareAddressFormat format,
     const NetworkGetIPConfigsCallback& callback) {
   callback.Run(ip_configs_, hardware_address_);
-}
-
-NetworkIPConfigVector NetworkLibraryImplStub::GetIPConfigsAndBlock(
-    const std::string& device_path,
-    std::string* hardware_address,
-    HardwareAddressFormat format) {
-  *hardware_address = hardware_address_;
-  return ip_configs_;
 }
 
 void NetworkLibraryImplStub::SetIPParameters(const std::string& service_path,

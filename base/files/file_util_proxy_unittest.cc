@@ -7,10 +7,11 @@
 #include <map>
 
 #include "base/bind.h"
+#include "base/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/logging.h"
 #include "base/memory/weak_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/platform_file.h"
 #include "base/threading/thread.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -26,7 +27,7 @@ class FileUtilProxyTest : public testing::Test {
         created_(false),
         file_(kInvalidPlatformFileValue),
         bytes_written_(-1),
-        weak_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {}
+        weak_factory_(this) {}
 
   virtual void SetUp() OVERRIDE {
     ASSERT_TRUE(dir_.CreateUniqueTempDir());
@@ -127,13 +128,13 @@ TEST_F(FileUtilProxyTest, CreateOrOpen_Create) {
   EXPECT_EQ(PLATFORM_FILE_OK, error_);
   EXPECT_TRUE(created_);
   EXPECT_NE(kInvalidPlatformFileValue, file_);
-  EXPECT_TRUE(file_util::PathExists(test_path()));
+  EXPECT_TRUE(PathExists(test_path()));
 }
 
 TEST_F(FileUtilProxyTest, CreateOrOpen_Open) {
   // Creates a file.
   file_util::WriteFile(test_path(), NULL, 0);
-  ASSERT_TRUE(file_util::PathExists(test_path()));
+  ASSERT_TRUE(PathExists(test_path()));
 
   // Opens the created file.
   FileUtilProxy::CreateOrOpen(
@@ -158,7 +159,7 @@ TEST_F(FileUtilProxyTest, CreateOrOpen_OpenNonExistent) {
   EXPECT_EQ(PLATFORM_FILE_ERROR_NOT_FOUND, error_);
   EXPECT_FALSE(created_);
   EXPECT_EQ(kInvalidPlatformFileValue, file_);
-  EXPECT_FALSE(file_util::PathExists(test_path()));
+  EXPECT_FALSE(PathExists(test_path()));
 }
 
 TEST_F(FileUtilProxyTest, Close) {
@@ -168,7 +169,7 @@ TEST_F(FileUtilProxyTest, Close) {
 
 #if defined(OS_WIN)
   // This fails on Windows if the file is not closed.
-  EXPECT_FALSE(file_util::Move(test_path(),
+  EXPECT_FALSE(base::Move(test_path(),
                                test_dir_path().AppendASCII("new")));
 #endif
 
@@ -180,7 +181,7 @@ TEST_F(FileUtilProxyTest, Close) {
   EXPECT_EQ(PLATFORM_FILE_OK, error_);
 
   // Now it should pass on all platforms.
-  EXPECT_TRUE(file_util::Move(test_path(), test_dir_path().AppendASCII("new")));
+  EXPECT_TRUE(base::Move(test_path(), test_dir_path().AppendASCII("new")));
 }
 
 TEST_F(FileUtilProxyTest, CreateTemporary) {
@@ -189,22 +190,22 @@ TEST_F(FileUtilProxyTest, CreateTemporary) {
       Bind(&FileUtilProxyTest::DidCreateTemporary, weak_factory_.GetWeakPtr()));
   MessageLoop::current()->Run();
   EXPECT_EQ(PLATFORM_FILE_OK, error_);
-  EXPECT_TRUE(file_util::PathExists(path_));
+  EXPECT_TRUE(PathExists(path_));
   EXPECT_NE(kInvalidPlatformFileValue, file_);
 
   // The file should be writable.
 #if defined(OS_WIN)
-   HANDLE hEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
-   OVERLAPPED overlapped = {0};
-   overlapped.hEvent = hEvent;
-   DWORD bytes_written;
-   if (!::WriteFile(file_, "test", 4, &bytes_written, &overlapped)) {
-     // Temporary file is created with ASYNC flag, so WriteFile may return 0
-     // with ERROR_IO_PENDING.
-     EXPECT_EQ(ERROR_IO_PENDING, GetLastError());
-     GetOverlappedResult(file_, &overlapped, &bytes_written, TRUE);
-   }
-   EXPECT_EQ(4, bytes_written);
+  HANDLE hEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
+  OVERLAPPED overlapped = {0};
+  overlapped.hEvent = hEvent;
+  DWORD bytes_written;
+  if (!::WriteFile(file_, "test", 4, &bytes_written, &overlapped)) {
+    // Temporary file is created with ASYNC flag, so WriteFile may return 0
+    // with ERROR_IO_PENDING.
+    EXPECT_EQ(ERROR_IO_PENDING, GetLastError());
+    GetOverlappedResult(file_, &overlapped, &bytes_written, TRUE);
+  }
+  EXPECT_EQ(4, bytes_written);
 #else
   // On POSIX ASYNC flag does not affect synchronous read/write behavior.
   EXPECT_EQ(4, WritePlatformFile(file_, 0, "test", 4));
@@ -218,7 +219,7 @@ TEST_F(FileUtilProxyTest, CreateTemporary) {
   EXPECT_EQ("test", data);
 
   // Make sure we can & do delete the created file to prevent leaks on the bots.
-  EXPECT_TRUE(file_util::Delete(path_, false));
+  EXPECT_TRUE(base::DeleteFile(path_, false));
 }
 
 TEST_F(FileUtilProxyTest, GetFileInfo_File) {

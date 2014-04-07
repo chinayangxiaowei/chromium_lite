@@ -9,7 +9,12 @@
 #include <string>
 #include <vector>
 
+#include "base/callback_forward.h"
 #include "base/memory/ref_counted.h"
+#include "base/memory/scoped_vector.h"
+#include "chrome/browser/extensions/api/declarative/rules_registry_with_cache.h"
+#include "chrome/browser/extensions/api/profile_keyed_api_factory.h"
+#include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 
@@ -30,21 +35,27 @@ namespace extensions {
 
 // This class owns all RulesRegistries implementations of an ExtensionService.
 // This class lives on the UI thread.
-class RulesRegistryService : public content::NotificationObserver  {
+class RulesRegistryService : public ProfileKeyedAPI,
+                             public content::NotificationObserver {
  public:
   explicit RulesRegistryService(Profile* profile);
   virtual ~RulesRegistryService();
 
   // Unregisters refptrs to concrete RulesRegistries at other objects that were
   // created by us so that the RulesRegistries can be released.
-  void Shutdown();
+  virtual void Shutdown() OVERRIDE;
+
+  // ProfileKeyedAPI implementation.
+  static ProfileKeyedAPIFactory<RulesRegistryService>* GetFactoryInstance();
+
+  // Convenience method to get the RulesRegistryService for a profile.
+  static RulesRegistryService* Get(Profile* profile);
 
   // Registers the default RulesRegistries used in Chromium.
   void RegisterDefaultRulesRegistries();
 
   // Registers a RulesRegistry and wraps it in an InitializingRulesRegistry.
-  void RegisterRulesRegistry(const std::string& event_name,
-                             scoped_refptr<RulesRegistry> rule_registry);
+  void RegisterRulesRegistry(scoped_refptr<RulesRegistry> rule_registry);
 
   // Returns the RulesRegistry for |event_name| or NULL if no such registry
   // has been registered.
@@ -59,6 +70,8 @@ class RulesRegistryService : public content::NotificationObserver  {
   // For testing.
   void SimulateExtensionUnloaded(const std::string& extension_id);
  private:
+  friend class ProfileKeyedAPIFactory<RulesRegistryService>;
+
   // Maps event names to RuleRegistries that handle these events.
   typedef std::map<std::string, scoped_refptr<RulesRegistry> > RulesRegistryMap;
 
@@ -72,11 +85,17 @@ class RulesRegistryService : public content::NotificationObserver  {
                        const content::NotificationSource& source,
                        const content::NotificationDetails& details) OVERRIDE;
 
+  // ProfileKeyedAPI implementation.
+  static const char* service_name() {
+    return "RulesRegistryService";
+  }
+  static const bool kServiceHasOwnInstanceInIncognito = true;
+  static const bool kServiceIsNULLWhileTesting = true;
+
   RulesRegistryMap rule_registries_;
 
-  // These are weak pointers to the delegates owned by the RulesRegistry's. We
-  // keep track of them so we can tell them to do cleanup on shutdown.
-  std::vector<RulesRegistryStorageDelegate*> delegates_;
+  // We own the parts of the registries which need to run on the UI thread.
+  ScopedVector<RulesRegistryWithCache::RuleStorageOnUI> ui_parts_of_registries_;
 
   // Weak pointer into rule_registries_ to make it easier to handle content rule
   // conditions.

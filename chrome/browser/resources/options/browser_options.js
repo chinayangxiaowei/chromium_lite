@@ -22,9 +22,7 @@ cr.define('options', function() {
     __proto__: options.OptionsPage.prototype,
 
     /**
-     * Keeps track of the state of |start-stop-button|. On chrome, the value is
-     * true when the user is signed in, and on chromeos, when sync setup has
-     * been completed.
+     * Keeps track of whether the user is signed in or not.
      * @type {boolean}
      * @private
      */
@@ -89,15 +87,12 @@ cr.define('options', function() {
         if (self.signedIn_)
           SyncSetupOverlay.showStopSyncingUI();
         else if (cr.isChromeOS)
-          SyncSetupOverlay.showSetupUIWithoutLogin();
-        else
           SyncSetupOverlay.showSetupUI();
+        else
+          SyncSetupOverlay.startSignIn();
       };
       $('customize-sync').onclick = function(event) {
-        if (cr.isChromeOS)
-          SyncSetupOverlay.showSetupUIWithoutLogin();
-        else
-          SyncSetupOverlay.showSetupUI();
+        SyncSetupOverlay.showSetupUI();
       };
 
       // Internet connection section (ChromeOS only).
@@ -146,6 +141,16 @@ cr.define('options', function() {
         chrome.send('themesReset');
       };
 
+      if (loadTimeData.getBoolean('profileIsManaged')) {
+        if ($('themes-native-button')) {
+          $('themes-native-button').disabled = true;
+          $('themes-native-button').hidden = true;
+        }
+        // Supervised users have just one default theme, even on Linux. So use
+        // the same button for Linux as for the other platforms.
+        $('themes-reset').textContent = loadTimeData.getString('themesReset');
+      }
+
       // Device section (ChromeOS only).
       if (cr.isChromeOS) {
         $('keyboard-settings-button').onclick = function(evt) {
@@ -164,15 +169,6 @@ cr.define('options', function() {
       };
       $('default-search-engine').addEventListener('change',
           this.setDefaultSearchEngine_);
-      if (loadTimeData.getValue('instant_enabled') ==
-          'instant_extended.enabled') {
-        // We don't want to see the confirm dialog for instant extended.
-        $('instant-enabled-control').removeAttribute('dialog-pref');
-        $('instant-enabled-indicator').removeAttribute('dialog-pref');
-        // And we want to upload a different metric name.
-        $('instant-enabled-control').setAttribute(
-            'metric', 'Options_InstantExtendedEnabled');
-      }
 
       // Users section.
       if (loadTimeData.valueExists('profilesInfo')) {
@@ -182,7 +178,9 @@ cr.define('options', function() {
         options.browser_options.ProfileList.decorate(profilesList);
         profilesList.autoExpands = true;
 
+        // The profiles info data in |loadTimeData| might be stale.
         this.setProfilesInfo_(loadTimeData.getValue('profilesInfo'));
+        chrome.send('requestProfilesInfo');
 
         profilesList.addEventListener('change',
             this.setProfileViewButtonsStatus_);
@@ -238,9 +236,9 @@ cr.define('options', function() {
           chrome.send('coreOptionsUserMetricsAction', ['Import_ShowDlg']);
         };
 
-        if ($('themes-GTK-button')) {
-          $('themes-GTK-button').onclick = function(event) {
-            chrome.send('themesSetGTK');
+        if ($('themes-native-button')) {
+          $('themes-native-button').onclick = function(event) {
+            chrome.send('themesSetNative');
           };
         }
       }
@@ -367,11 +365,16 @@ cr.define('options', function() {
       };
 
       // Languages section.
-      $('language-button').onclick = function(event) {
+      var showLanguageOptions = function(event) {
         OptionsPage.navigateToPage('languages');
         chrome.send('coreOptionsUserMetricsAction',
             ['Options_LanuageAndSpellCheckSettings']);
       };
+      $('language-button').onclick = showLanguageOptions;
+      $('manage-languages').onclick = showLanguageOptions;
+
+      if (!loadTimeData.getBoolean('enableTranslateSettings'))
+        $('manage-languages').hidden = true;
 
       // Downloads section.
       Preferences.getInstance().addEventListener('download.default_directory',
@@ -383,6 +386,9 @@ cr.define('options', function() {
         $('autoOpenFileTypesResetToDefault').onclick = function(event) {
           chrome.send('autoOpenFileTypesAction');
         };
+      } else {
+        $('disable-drive-row').hidden =
+            UIAccountTweaks.loggedInAsLocallyManagedUser();
       }
 
       // HTTPS/SSL section.
@@ -429,6 +435,8 @@ cr.define('options', function() {
           chrome.send('highContrastChange',
                       [$('accessibility-high-contrast-check').checked]);
         };
+        $('accessibility-sticky-keys').hidden =
+            !loadTimeData.getBoolean('enableStickyKeys');
       }
 
       // Display management section (CrOS only).
@@ -447,17 +455,6 @@ cr.define('options', function() {
         };
       }
 
-      // Kiosk section (CrOS only).
-      if (cr.isChromeOS) {
-        if (loadTimeData.getBoolean('enableKioskSection')) {
-          $('kiosk-section').hidden = false;
-
-          $('manage-kiosk-apps-button').onclick = function(event) {
-            OptionsPage.navigateToPage('kioskAppsOverlay');
-          };
-        }
-      }
-
       // System section.
       if (!cr.isChromeOS) {
         var updateGpuRestartButton = function() {
@@ -474,14 +471,12 @@ cr.define('options', function() {
         updateGpuRestartButton();
       }
 
-      if (loadTimeData.getBoolean('managedUsersEnabled') &&
-          loadTimeData.getBoolean('profileIsManaged')) {
-        $('managed-user-settings-section').hidden = false;
-
-        $('open-managed-user-settings-button').onclick = function(event) {
-          OptionsPage.navigateToPage('managedUser');
-        };
-      }
+      // Reset profile settings section.
+      $('reset-profile-settings-section').hidden =
+          !loadTimeData.getValue('enableResetProfileSettingsSection');
+      $('reset-profile-settings').onclick = function(event) {
+        OptionsPage.navigateToPage('resetProfileSettings');
+      };
     },
 
     /** @override */
@@ -557,9 +552,6 @@ cr.define('options', function() {
         } else {
           section.style.height = 'auto';
         }
-        // Force an update of the list of paired Bluetooth devices.
-        if (cr.isChromeOS)
-          $('bluetooth-paired-devices-list').refresh();
       };
 
       // Delay starting the transition if animating so that hidden change will
@@ -709,46 +701,74 @@ cr.define('options', function() {
      * @private
      */
     updateSyncState_: function(syncData) {
-      if (!syncData.signinAllowed) {
+      if (!syncData.signinAllowed &&
+          (!syncData.supervisedUser || !cr.isChromeOS)) {
         $('sync-section').hidden = true;
         return;
       }
 
       $('sync-section').hidden = false;
 
-      if (cr.isChromeOS)
-        this.signedIn_ = syncData.setupCompleted;
-      else
-        this.signedIn_ = syncData.signedIn;
+      var subSection = $('sync-section').firstChild;
+      while (subSection) {
+        if (subSection.nodeType == Node.ELEMENT_NODE)
+          subSection.hidden = syncData.supervisedUser;
+        subSection = subSection.nextSibling;
+      }
 
-      // Display the "setup sync" button if we're signed in and sync is not
-      // managed/disabled.
-      $('customize-sync').hidden = !this.signedIn_ ||
+      if (syncData.supervisedUser) {
+        $('account-picture-wrapper').hidden = false;
+        $('sync-general').hidden = false;
+        $('sync-status').hidden = true;
+        return;
+      }
+
+      // If the user gets signed out while the advanced sync settings dialog is
+      // visible, say, due to a dashboard clear, close the dialog.
+      // Note: SyncSetupOverlay.closeOverlay is a no-op if the overlay is
+      // already hidden.
+      if (this.signedIn_ && !syncData.signedIn)
+        SyncSetupOverlay.closeOverlay();
+
+      this.signedIn_ = syncData.signedIn;
+
+      // Display the "advanced settings" button if we're signed in and sync is
+      // not managed/disabled. If the user is signed in, but sync is disabled,
+      // this button is used to re-enable sync.
+      var customizeSyncButton = $('customize-sync');
+      customizeSyncButton.hidden = !this.signedIn_ ||
                                    syncData.managed ||
                                    !syncData.syncSystemEnabled;
 
-      var startStopButton = $('start-stop-sync');
-      // Disable the "start/stop syncing" button if we're currently signing in,
-      // or if we're already signed in and signout is not allowed.
-      startStopButton.disabled = syncData.setupInProgress ||
-                                 !syncData.signoutAllowed;
+      // Only modify the customize button's text if the new text is different.
+      // Otherwise, it can affect search-highlighting in the settings page.
+      // See http://crbug.com/268265.
+      var customizeSyncButtonNewText = syncData.setupCompleted ?
+          loadTimeData.getString('customizeSync') :
+          loadTimeData.getString('syncButtonTextStart');
+      if (customizeSyncButton.textContent != customizeSyncButtonNewText)
+        customizeSyncButton.textContent = customizeSyncButtonNewText;
+
+      // Disable the "sign in" button if we're currently signing in, or if we're
+      // already signed in and signout is not allowed.
+      var signInButton = $('start-stop-sync');
+      signInButton.disabled = syncData.setupInProgress ||
+                              !syncData.signoutAllowed;
       if (!syncData.signoutAllowed)
         $('start-stop-sync-indicator').setAttribute('controlled-by', 'policy');
       else
         $('start-stop-sync-indicator').removeAttribute('controlled-by');
 
-      // Hide the "start/stop syncing" button on Chrome OS if sync has already
-      // been set up, or if it is managed or disabled.
-      startStopButton.hidden = cr.isChromeOS && (syncData.setupCompleted ||
-                                                 syncData.isManaged ||
-                                                 !syncData.syncSystemEnabled);
-      startStopButton.textContent =
+      // Hide the "sign in" button on Chrome OS, and show it on desktop Chrome.
+      signInButton.hidden = cr.isChromeOS;
+
+      signInButton.textContent =
           this.signedIn_ ?
               loadTimeData.getString('syncButtonTextStop') :
               syncData.setupInProgress ?
                   loadTimeData.getString('syncButtonTextInProgress') :
-                  loadTimeData.getString('syncButtonTextStart');
-      $('start-stop-sync-indicator').hidden = startStopButton.hidden;
+                  loadTimeData.getString('syncButtonTextSignIn');
+      $('start-stop-sync-indicator').hidden = signInButton.hidden;
 
       // TODO(estade): can this just be textContent?
       $('sync-status-text').innerHTML = syncData.statusText;
@@ -768,7 +788,7 @@ cr.define('options', function() {
         if (cr.isChromeOS && syncData.hasError)
           SyncSetupOverlay.doSignOutOnAuthError();
         else
-          SyncSetupOverlay.showErrorUI();
+          SyncSetupOverlay.showSetupUI();
       };
 
       if (syncData.hasError)
@@ -776,7 +796,7 @@ cr.define('options', function() {
       else
         $('sync-status').classList.remove('sync-error');
 
-      $('customize-sync').disabled = syncData.hasUnrecoverableError;
+      customizeSyncButton.disabled = syncData.hasUnrecoverableError;
       // Move #enable-auto-login-checkbox to a different location on CrOS.
       if (cr.isChromeOs) {
         $('sync-general').insertBefore($('sync-status').nextSibling,
@@ -869,7 +889,7 @@ cr.define('options', function() {
         // /home/chronos/user/Downloads with Downloads for local files.
         // Also replace '/' with ' \u203a ' (angled quote sign) everywhere.
         var path = $('downloadLocationPath').value;
-        path = path.replace(/^\/special\/drive/, 'Google Drive');
+        path = path.replace(/^\/special\/drive\/root/, 'Google Drive');
         path = path.replace(/^\/home\/chronos\/user\//, '');
         path = path.replace(/\//g, ' \u203a ');
         $('downloadLocationPath').value = path;
@@ -1053,6 +1073,38 @@ cr.define('options', function() {
     },
 
     /**
+     * Reports a local error (e.g., disk full) to the "create" overlay during
+     * profile creation.
+     * @private
+     */
+    showCreateProfileLocalError_: function() {
+      CreateProfileOverlay.onLocalError();
+    },
+
+    /**
+    * Reports a remote error (e.g., a network error during managed-user
+    * registration) to the "create" overlay during profile creation.
+    * @private
+    */
+    showCreateProfileRemoteError_: function() {
+      CreateProfileOverlay.onRemoteError();
+    },
+
+    /**
+    * Reports successful profile creation to the "create" overlay.
+     * @param {Object} profileInfo An object of the form:
+     *     profileInfo = {
+     *       name: "Profile Name",
+     *       filePath: "/path/to/profile/data/on/disk"
+     *       isManaged: (true|false),
+     *     };
+    * @private
+    */
+    showCreateProfileSuccess_: function(profileInfo) {
+      CreateProfileOverlay.onSuccess(profileInfo);
+    },
+
+    /**
      * Returns the currently active profile for this browser window.
      * @return {Object} A profile info object.
      * @private
@@ -1068,9 +1120,10 @@ cr.define('options', function() {
              'There should always be a current profile, but none found.');
     },
 
-    setGtkThemeButtonEnabled_: function(enabled) {
-      if (!cr.isChromeOS && navigator.platform.match(/linux|BSD/i))
-        $('themes-GTK-button').disabled = !enabled;
+    setNativeThemeButtonEnabled_: function(enabled) {
+      var button = $('themes-native-button');
+      if (button)
+        button.disabled = !enabled;
     },
 
     setThemesResetButtonEnabled_: function(enabled) {
@@ -1094,7 +1147,6 @@ cr.define('options', function() {
      * @private
      */
     handleAddBluetoothDevice_: function() {
-      $('bluetooth-unpaired-devices-list').clear();
       chrome.send('findBluetoothDevices');
       OptionsPage.showPageByName('bluetooth', false);
     },
@@ -1138,13 +1190,31 @@ cr.define('options', function() {
     },
 
     /**
-     * Set the font size selected item.
+     * Set the font size selected item. This item actually reflects two
+     * preferences: the default font size and the default fixed font size.
+     *
+     * @param {Object} pref Information about the font size preferences.
+     * @param {number} pref.value The value of the default font size pref.
+     * @param {boolean} pref.disabled True if either pref not user modifiable.
+     * @param {string} pref.controlledBy The source of the pref value(s) if
+     *     either pref is currently not controlled by the user.
      * @private
      */
-    setFontSize_: function(font_size_value) {
+    setFontSize_: function(pref) {
       var selectCtl = $('defaultFontSize');
+      selectCtl.disabled = pref.disabled;
+      // Create a synthetic pref change event decorated as
+      // CoreOptionsHandler::CreateValueForPref() does.
+      var event = new cr.Event('synthetic-font-size');
+      event.value = {
+        value: pref.value,
+        controlledBy: pref.controlledBy,
+        disabled: pref.disabled
+      };
+      $('font-size-indicator').handlePrefChange(event);
+
       for (var i = 0; i < selectCtl.options.length; i++) {
-        if (selectCtl.options[i].value == font_size_value) {
+        if (selectCtl.options[i].value == pref.value) {
           selectCtl.selectedIndex = i;
           if ($('Custom'))
             selectCtl.remove($('Custom').index);
@@ -1299,14 +1369,6 @@ cr.define('options', function() {
     },
 
     /**
-     * Show/hide the display options button on the System settings page.
-     * @private
-     */
-    showDisplayOptions_: function(show) {
-      $('display-options-section').hidden = !show;
-    },
-
-    /**
      * Activate the Bluetooth settings section on the System settings page.
      * @private
      */
@@ -1349,14 +1411,15 @@ cr.define('options', function() {
      * @param {{name: string,
      *          address: string,
      *          paired: boolean,
-     *          bonded: boolean,
      *          connected: boolean}} device
      *     Decription of the Bluetooth device.
      * @private
      */
     addBluetoothDevice_: function(device) {
       var list = $('bluetooth-unpaired-devices-list');
-      if (device.paired) {
+      // Display the "connecting" (already paired or not yet paired) and the
+      // paired devices in the same list.
+      if (device.paired || device.connecting) {
         // Test to see if the device is currently in the unpaired list, in which
         // case it should be removed from that list.
         var index = $('bluetooth-unpaired-devices-list').find(device.address);
@@ -1409,7 +1472,7 @@ cr.define('options', function() {
     'setAutoOpenFileTypesDisplayed',
     'setBluetoothState',
     'setFontSize',
-    'setGtkThemeButtonEnabled',
+    'setNativeThemeButtonEnabled',
     'setHighContrastCheckboxState',
     'setMetricsReportingCheckboxState',
     'setMetricsReportingSettingVisibility',
@@ -1422,7 +1485,9 @@ cr.define('options', function() {
     'setupPageZoomSelector',
     'setupProxySettingsSection',
     'showBluetoothSettings',
-    'showDisplayOptions',
+    'showCreateProfileLocalError',
+    'showCreateProfileRemoteError',
+    'showCreateProfileSuccess',
     'showMouseControls',
     'showTouchpadControls',
     'updateAccountPicture',

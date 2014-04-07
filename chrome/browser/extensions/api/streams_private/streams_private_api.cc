@@ -9,16 +9,15 @@
 #include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/values.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/event_router.h"
 #include "chrome/browser/extensions/extension_function_registry.h"
-#include "chrome/browser/extensions/extension_input_module_constants.h"
 #include "chrome/browser/extensions/extension_system.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/extensions/mime_types_handler.h"
+#include "content/public/browser/notification_details.h"
+#include "content/public/browser/notification_source.h"
 #include "content/public/browser/stream_handle.h"
-
-namespace keys = extension_input_module_constants;
 
 namespace events {
 
@@ -36,9 +35,7 @@ StreamsPrivateAPI* StreamsPrivateAPI::Get(Profile* profile) {
 
 StreamsPrivateAPI::StreamsPrivateAPI(Profile* profile)
     : profile_(profile),
-      weak_ptr_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {
-  (new MimeTypesHandlerParser)->Register();
-
+      weak_ptr_factory_(this) {
   registrar_.Add(this, chrome::NOTIFICATION_EXTENSION_UNLOADED,
                  content::Source<Profile>(profile));
 }
@@ -49,14 +46,20 @@ StreamsPrivateAPI::~StreamsPrivateAPI() {
 void StreamsPrivateAPI::ExecuteMimeTypeHandler(
     const std::string& extension_id,
     const content::WebContents* web_contents,
-    scoped_ptr<content::StreamHandle> stream) {
+    scoped_ptr<content::StreamHandle> stream,
+    int64 expected_content_size) {
   // Create the event's arguments value.
-  scoped_ptr<ListValue> event_args(new ListValue());
+  scoped_ptr<base::ListValue> event_args(new base::ListValue());
   event_args->Append(new base::StringValue(stream->GetMimeType()));
   event_args->Append(new base::StringValue(stream->GetOriginalURL().spec()));
   event_args->Append(new base::StringValue(stream->GetURL().spec()));
   event_args->Append(
       new base::FundamentalValue(ExtensionTabUtil::GetTabId(web_contents)));
+
+  int size = -1;
+  if (expected_content_size <= INT_MAX)
+    size = expected_content_size;
+  event_args->Append(new base::FundamentalValue(size));
 
   scoped_ptr<Event> event(new Event(events::kOnExecuteMimeTypeHandler,
                                     event_args.Pass()));

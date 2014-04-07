@@ -4,14 +4,17 @@
 
 #include "chrome/browser/lifetime/application_lifetime.h"
 
+#include "ash/shell.h"
 #include "base/command_line.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/prefs/pref_service.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/browser/browser_shutdown.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/download/download_service.h"
 #include "chrome/browser/metrics/thread_watcher.h"
 #include "chrome/browser/profiles/profile.h"
@@ -22,21 +25,12 @@
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "content/public/browser/browser_shutdown.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_details.h"
 #include "content/public/browser/notification_service.h"
-
-#if defined(OS_ANDROID)
-#include "chrome/browser/lifetime/application_lifetime_android.h"
-#endif
-
-#if defined(OS_MACOSX)
-#include "chrome/browser/chrome_browser_application_mac.h"
-#endif
 
 #if defined(OS_CHROMEOS)
 #include "base/chromeos/chromeos_version.h"
@@ -91,18 +85,7 @@ void AttemptExitInternal() {
       content::NotificationService::AllSources(),
       content::NotificationService::NoDetails());
 
-#if defined(OS_ANDROID)
-  // Tell the Java code to finish() the Activity.
-  TerminateAndroid();
-#elif defined(OS_MACOSX)
-  // On the Mac, the application continues to run once all windows are closed.
-  // Terminate will result in a CloseAllBrowsers() call, and once (and if)
-  // that is done, will cause the application to exit cleanly.
-  chrome_browser_application_mac::Terminate();
-#else
-  // On most platforms, closing all windows causes the application to exit.
-  CloseAllBrowsers();
-#endif
+  g_browser_process->platform_part()->AttemptExit();
 }
 
 void CloseAllBrowsers() {
@@ -319,7 +302,7 @@ void EndKeepAlive() {
     // (MessageLoop::current() == null).
     if (chrome::GetTotalBrowserCount() == 0 &&
         !browser_shutdown::IsTryingToQuit() &&
-        MessageLoop::current()) {
+        base::MessageLoop::current()) {
       CloseAllBrowsers();
     }
   }
@@ -382,6 +365,25 @@ void OnAppExiting() {
     return;
   notified = true;
   HandleAppExitingForPlatform();
+}
+
+bool ShouldStartShutdown(Browser* browser) {
+  if (BrowserList::GetInstance(browser->host_desktop_type())->size() > 1)
+    return false;
+#if defined(OS_WIN) && defined(USE_AURA)
+  // On Windows 8 the desktop and ASH environments could be active
+  // at the same time.
+  // We should not start the shutdown process in the following cases:-
+  // 1. If the desktop type of the browser going away is ASH and there
+  //    are browser windows open in the desktop.
+  // 2. If the desktop type of the browser going away is desktop and the ASH
+  //    environment is still active.
+  if (browser->host_desktop_type() == chrome::HOST_DESKTOP_TYPE_NATIVE)
+    return !ash::Shell::HasInstance();
+  else if (browser->host_desktop_type() == chrome::HOST_DESKTOP_TYPE_ASH)
+    return BrowserList::GetInstance(chrome::HOST_DESKTOP_TYPE_NATIVE)->empty();
+#endif
+  return true;
 }
 
 }  // namespace chrome

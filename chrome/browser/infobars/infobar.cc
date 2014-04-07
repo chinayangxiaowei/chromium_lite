@@ -13,37 +13,31 @@
 #include "ui/base/animation/slide_animation.h"
 
 SkColor GetInfoBarTopColor(InfoBarDelegate::Type infobar_type) {
-  // Yellow
   static const SkColor kWarningBackgroundColorTop =
-      SkColorSetRGB(255, 242, 183);
-  // Gray
+      SkColorSetRGB(255, 242, 183);  // Yellow
   static const SkColor kPageActionBackgroundColorTop =
-      SkColorSetRGB(237, 237, 237);
-
+      SkColorSetRGB(237, 237, 237);  // Gray
   return (infobar_type == InfoBarDelegate::WARNING_TYPE) ?
       kWarningBackgroundColorTop : kPageActionBackgroundColorTop;
 }
 
 SkColor GetInfoBarBottomColor(InfoBarDelegate::Type infobar_type) {
-  // Yellow
   static const SkColor kWarningBackgroundColorBottom =
-      SkColorSetRGB(250, 230, 145);
-  // Gray
+      SkColorSetRGB(250, 230, 145);  // Yellow
   static const SkColor kPageActionBackgroundColorBottom =
-      SkColorSetRGB(217, 217, 217);
-
+      SkColorSetRGB(217, 217, 217);  // Gray
   return (infobar_type == InfoBarDelegate::WARNING_TYPE) ?
       kWarningBackgroundColorBottom : kPageActionBackgroundColorBottom;
 }
 
 // TODO(pkasting): Port Mac to use this.
-#if defined(TOOLKIT_VIEWS) || defined(TOOLKIT_GTK)
+#if defined(TOOLKIT_VIEWS) || defined(TOOLKIT_GTK) || defined(OS_ANDROID)
 
 InfoBar::InfoBar(InfoBarService* owner, InfoBarDelegate* delegate)
     : owner_(owner),
       delegate_(delegate),
       container_(NULL),
-      ALLOW_THIS_IN_INITIALIZER_LIST(animation_(this)),
+      animation_(this),
       arrow_height_(0),
       arrow_target_height_(kDefaultArrowTargetHeight),
       arrow_half_width_(0),
@@ -188,4 +182,4 @@ void InfoBar::MaybeDelete() {
   }
 }
 
-#endif  // TOOLKIT_VIEWS || TOOLKIT_GTK
+#endif  // TOOLKIT_VIEWS || TOOLKIT_GTK || OS_ANDROID

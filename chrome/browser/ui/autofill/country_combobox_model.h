@@ -9,12 +9,12 @@
 
 #include "base/compiler_specific.h"
 #include "base/memory/scoped_vector.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "ui/base/models/combobox_model.h"
 
-class AutofillCountry;
-
 namespace autofill {
+
+class AutofillCountry;
 
 // A model for countries to be used to enter addresses.
 class CountryComboboxModel : public ui::ComboboxModel {
@@ -25,6 +25,7 @@ class CountryComboboxModel : public ui::ComboboxModel {
   // ui::Combobox implementation:
   virtual int GetItemCount() const OVERRIDE;
   virtual string16 GetItemAt(int index) OVERRIDE;
+  virtual bool IsItemSeparatorAt(int index) OVERRIDE;
 
   const std::vector<AutofillCountry*>& countries() const {
     return countries_.get();

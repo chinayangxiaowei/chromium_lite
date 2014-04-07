@@ -14,14 +14,14 @@
 #include "base/memory/singleton.h"
 #include "base/metrics/field_trial.h"
 #include "base/path_service.h"
-#include "base/string_util.h"
+#include "base/process/launch.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/time.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "base/version.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/google/google_util.h"
-#include "chrome/browser/metrics/variations/variations_service.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/chrome_version_info.h"
 #include "content/public/browser/browser_thread.h"
@@ -35,7 +35,7 @@
 #elif defined(OS_MACOSX)
 #include "chrome/browser/mac/keystone_glue.h"
 #elif defined(OS_POSIX)
-#include "base/process_util.h"
+#include "base/process/launch.h"
 #endif
 
 using content::BrowserThread;
@@ -133,7 +133,7 @@ void DetectUpdatability(const base::Closure& callback_task,
 }  // namespace
 
 UpgradeDetectorImpl::UpgradeDetectorImpl()
-    : ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)),
+    : weak_factory_(this),
       is_unstable_channel_(false),
       build_date_(base::GetBuildTime()) {
   CommandLine command_line(*CommandLine::ForCurrentProcess());
@@ -206,6 +206,9 @@ UpgradeDetectorImpl::UpgradeDetectorImpl()
                           base::Bind(&CheckForUnstableChannel,
                                      start_upgrade_check_timer_task,
                                      &is_unstable_channel_));
+
+  // Start tracking network time updates.
+  network_time_tracker_.Start();
 }
 
 UpgradeDetectorImpl::~UpgradeDetectorImpl() {
@@ -332,9 +335,9 @@ bool UpgradeDetectorImpl::DetectOutdatedInstall() {
 
   base::Time network_time;
   base::TimeDelta uncertainty;
-  if (!g_browser_process->variations_service() ||
-      !g_browser_process->variations_service()->GetNetworkTime(&network_time,
-                                                               &uncertainty)) {
+  if (!network_time_tracker_.GetNetworkTime(base::TimeTicks::Now(),
+                                            &network_time,
+                                            &uncertainty)) {
     return false;
   }
 
@@ -385,7 +388,7 @@ void UpgradeDetectorImpl::NotifyOnUpgrade() {
   if (is_unstable_channel_) {
     // There's only one threat level for unstable channels like dev and
     // canary, and it hits after one hour. During testing, it hits after one
-    // minute.
+    // second.
     const int kUnstableThreshold = 1;
 
     if (is_critical_or_outdated)
@@ -399,7 +402,7 @@ void UpgradeDetectorImpl::NotifyOnUpgrade() {
       return;  // Not ready to recommend upgrade.
     }
   } else {
-    const int kMultiplier = is_testing ? 1 : 24;
+    const int kMultiplier = is_testing ? 10 : 24;
     // 14 days when not testing, otherwise 14 seconds.
     const int kSevereThreshold = 14 * kMultiplier;
     const int kHighThreshold = 7 * kMultiplier;

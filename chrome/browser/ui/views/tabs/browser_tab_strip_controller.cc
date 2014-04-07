@@ -8,19 +8,21 @@
 #include "base/command_line.h"
 #include "base/prefs/pref_service.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/tab_helper.h"
 #include "chrome/browser/favicon/favicon_tab_helper.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/search/search.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/tabs/tab_menu_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_delegate.h"
 #include "chrome/browser/ui/tabs/tab_utils.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/tabs/tab.h"
 #include "chrome/browser/ui/views/tabs/tab_renderer_data.h"
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
@@ -29,8 +31,8 @@
 #include "content/public/browser/web_contents.h"
 #include "ui/base/layout.h"
 #include "ui/base/models/list_selection_model.h"
+#include "ui/gfx/image/image.h"
 #include "ui/views/controls/menu/menu_item_view.h"
-#include "ui/views/controls/menu/menu_model_adapter.h"
 #include "ui/views/controls/menu/menu_runner.h"
 #include "ui/views/widget/widget.h"
 
@@ -82,9 +84,7 @@ class BrowserTabStripController::TabContextMenuContents
     model_.reset(new TabMenuModel(
         this, controller->model_,
         controller->tabstrip_->GetModelIndexOfTab(tab)));
-    menu_model_adapter_.reset(new views::MenuModelAdapter(model_.get()));
-    menu_runner_.reset(
-        new views::MenuRunner(menu_model_adapter_->CreateMenu()));
+    menu_runner_.reset(new views::MenuRunner(model_.get()));
   }
 
   virtual ~TabContextMenuContents() {
@@ -96,10 +96,11 @@ class BrowserTabStripController::TabContextMenuContents
     controller_ = NULL;
   }
 
-  void RunMenuAt(const gfx::Point& point) {
+  void RunMenuAt(const gfx::Point& point, ui::MenuSourceType source_type) {
     if (menu_runner_->RunMenuAt(
             tab_->GetWidget(), NULL, gfx::Rect(point, gfx::Size()),
-            views::MenuItemView::TOPLEFT, views::MenuRunner::HAS_MNEMONICS |
+            views::MenuItemView::TOPLEFT, source_type,
+            views::MenuRunner::HAS_MNEMONICS |
             views::MenuRunner::CONTEXT_MENU) ==
         views::MenuRunner::MENU_DELETED)
       return;
@@ -145,7 +146,6 @@ class BrowserTabStripController::TabContextMenuContents
 
  private:
   scoped_ptr<TabMenuModel> model_;
-  scoped_ptr<views::MenuModelAdapter> menu_model_adapter_;
   scoped_ptr<views::MenuRunner> menu_runner_;
 
   // The tab we're showing a menu for.
@@ -249,9 +249,12 @@ bool BrowserTabStripController::IsTabPinned(int model_index) const {
 }
 
 bool BrowserTabStripController::IsNewTabPage(int model_index) const {
-  return model_->ContainsIndex(model_index) &&
-      model_->GetWebContentsAt(model_index)->GetURL() ==
-      GURL(chrome::kChromeUINewTabURL);
+  if (!model_->ContainsIndex(model_index))
+    return false;
+
+  const WebContents* contents = model_->GetWebContentsAt(model_index);
+  return contents && (contents->GetURL() == GURL(chrome::kChromeUINewTabURL) ||
+      chrome::IsInstantNTP(contents));
 }
 
 void BrowserTabStripController::SelectTab(int model_index) {
@@ -281,10 +284,12 @@ void BrowserTabStripController::CloseTab(int model_index,
                              TabStripModel::CLOSE_CREATE_HISTORICAL_TAB);
 }
 
-void BrowserTabStripController::ShowContextMenuForTab(Tab* tab,
-                                                      const gfx::Point& p) {
+void BrowserTabStripController::ShowContextMenuForTab(
+    Tab* tab,
+    const gfx::Point& p,
+    ui::MenuSourceType source_type) {
   context_menu_contents_.reset(new TabContextMenuContents(tab, this));
-  context_menu_contents_->RunMenuAt(p);
+  context_menu_contents_->RunMenuAt(p, source_type);
 }
 
 void BrowserTabStripController::UpdateLoadingAnimations() {
@@ -357,6 +362,23 @@ void BrowserTabStripController::LayoutTypeMaybeChanged() {
   g_browser_process->local_state()->SetInteger(
       prefs::kTabStripLayoutType,
       static_cast<int>(tabstrip_->layout_type()));
+}
+
+void BrowserTabStripController::OnStartedDraggingTabs() {
+  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser_);
+  if (browser_view && !immersive_reveal_lock_.get()) {
+    // The top-of-window views should be revealed while the user is dragging
+    // tabs in immersive fullscreen. The top-of-window views may not be already
+    // revealed if the user is attempting to attach a tab to a tabstrip
+    // belonging to an immersive fullscreen window.
+    immersive_reveal_lock_.reset(
+        browser_view->immersive_mode_controller()->GetRevealedLock(
+            ImmersiveModeController::ANIMATE_REVEAL_NO));
+  }
+}
+
+void BrowserTabStripController::OnStoppedDraggingTabs() {
+  immersive_reveal_lock_.reset();
 }
 
 ////////////////////////////////////////////////////////////////////////////////

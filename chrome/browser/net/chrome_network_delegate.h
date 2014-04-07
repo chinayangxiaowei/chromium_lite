@@ -157,6 +157,9 @@ class ChromeNetworkDelegate : public net::NetworkDelegate {
                                const base::FilePath& path) const OVERRIDE;
   virtual bool OnCanThrottleRequest(
       const net::URLRequest& request) const OVERRIDE;
+  virtual bool OnCanEnablePrivacyMode(
+      const GURL& url,
+      const GURL& first_party_for_cookies) const OVERRIDE;
   virtual int OnBeforeSocketStreamConnect(
       net::SocketStream* stream,
       const net::CompletionCallback& callback) OVERRIDE;
@@ -164,7 +167,8 @@ class ChromeNetworkDelegate : public net::NetworkDelegate {
                                         RequestWaitState state) OVERRIDE;
 
   void AccumulateContentLength(
-      int64 received_payload_byte_count, int64 original_payload_byte_count);
+      int64 received_payload_byte_count, int64 original_payload_byte_count,
+      bool data_reduction_proxy_was_used);
 
   scoped_refptr<extensions::EventRouterForwarder> event_router_;
   void* profile_;

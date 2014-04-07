@@ -8,10 +8,11 @@
 #include "base/callback.h"
 #include "base/debug/trace_event.h"
 #include "base/metrics/histogram.h"
-#include "base/string_util.h"
-#include "base/time.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/download/chrome_download_manager_delegate.h"
 #include "chrome/browser/download/download_item_model.h"
 #include "chrome/browser/download/download_util.h"
@@ -23,7 +24,6 @@
 #include "chrome/browser/ui/gtk/gtk_theme_service.h"
 #include "chrome/browser/ui/gtk/gtk_util.h"
 #include "chrome/browser/ui/gtk/nine_box.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "content/public/browser/download_manager.h"
 #include "content/public/browser/notification_source.h"
 #include "grit/generated_resources.h"
@@ -62,7 +62,7 @@ const int kTooltipMaxWidth = 1000;
 // The minimum width we will ever draw the download item. Used as a lower bound
 // during animation. This number comes from the width of the images used to
 // make the download item.
-const int kMinDownloadItemWidth = download_util::kSmallProgressIconSize;
+const int kMinDownloadItemWidth = DownloadShelf::kSmallProgressIconSize;
 
 // New download item animation speed in milliseconds.
 const int kNewItemAnimationDurationMs = 800;
@@ -71,11 +71,11 @@ const int kNewItemAnimationDurationMs = 800;
 const int kCompleteAnimationDurationMs = 2500;
 
 // Height of the body.
-const int kBodyHeight = download_util::kSmallProgressIconSize;
+const int kBodyHeight = DownloadShelf::kSmallProgressIconSize;
 
 // Width of the body area of the download item.
 // TODO(estade): get rid of the fudge factor. http://crbug.com/18692
-const int kBodyWidth = kTextWidth + 50 + download_util::kSmallProgressIconSize;
+const int kBodyWidth = kTextWidth + 50 + DownloadShelf::kSmallProgressIconSize;
 
 // The font size of the text, and that size rounded down to the nearest integer
 // for the size of the arrow in GTK theme mode.
@@ -111,7 +111,7 @@ DownloadItemGtk::DownloadItemGtk(DownloadShelfGtk* parent_shelf,
       menu_showing_(false),
       theme_service_(
           GtkThemeService::GetFrom(parent_shelf->browser()->profile())),
-      progress_angle_(download_util::kStartAngleDegrees),
+      progress_angle_(DownloadShelf::kStartAngleDegrees),
       download_model_(download_item),
       dangerous_prompt_(NULL),
       dangerous_label_(NULL),
@@ -162,8 +162,8 @@ DownloadItemGtk::DownloadItemGtk(DownloadShelfGtk* parent_shelf,
   // This choice of widget is not critically important though.
   progress_area_.Own(gtk_fixed_new());
   gtk_widget_set_size_request(progress_area_.get(),
-      download_util::kSmallProgressIconSize,
-      download_util::kSmallProgressIconSize);
+      DownloadShelf::kSmallProgressIconSize,
+      DownloadShelf::kSmallProgressIconSize);
   gtk_widget_set_app_paintable(progress_area_.get(), TRUE);
   g_signal_connect(progress_area_.get(), "expose-event",
                    G_CALLBACK(OnProgressAreaExposeThunk), this);
@@ -319,12 +319,8 @@ void DownloadItemGtk::OnDownloadUpdated(DownloadItem* download_item) {
     parent_shelf_->MaybeShowMoreDownloadItems();
   }
 
-  if (download()->GetUserVerifiedFilePath() != icon_filepath_) {
-    // Turns out the file path is "Unconfirmed %d.crdownload" for dangerous
-    // downloads. When the download is confirmed, the file is renamed on
-    // another thread, so reload the icon if the download filename changes.
+  if (download()->GetTargetFilePath() != icon_filepath_) {
     LoadIcon();
-
     UpdateTooltip();
   }
 
@@ -433,9 +429,9 @@ void DownloadItemGtk::Observe(int type,
 // Download progress animation functions.
 
 void DownloadItemGtk::UpdateDownloadProgress() {
-  progress_angle_ = (progress_angle_ +
-                     download_util::kUnknownIncrementDegrees) %
-                    download_util::kMaxDegrees;
+  progress_angle_ =
+      (progress_angle_ + DownloadShelf::kUnknownIncrementDegrees) %
+      DownloadShelf::kMaxDegrees;
   gtk_widget_queue_draw(progress_area_.get());
 }
 
@@ -443,7 +439,7 @@ void DownloadItemGtk::StartDownloadProgress() {
   if (progress_timer_.IsRunning())
     return;
   progress_timer_.Start(FROM_HERE,
-      base::TimeDelta::FromMilliseconds(download_util::kProgressRateMs), this,
+      base::TimeDelta::FromMilliseconds(DownloadShelf::kProgressRateMs), this,
       &DownloadItemGtk::UpdateDownloadProgress);
 }
 
@@ -460,16 +456,16 @@ void DownloadItemGtk::OnLoadSmallIconComplete(gfx::Image* image) {
 
 void DownloadItemGtk::OnLoadLargeIconComplete(gfx::Image* image) {
   icon_large_ = image;
-  if (download()->IsComplete())
+  if (download()->GetState() == DownloadItem::COMPLETE)
     DownloadItemDrag::SetSource(body_.get(), download(), icon_large_);
   // Else, the download will be made draggable once an OnDownloadUpdated()
-  // notification is received with download->IsComplete().
+  // notification is received with a download in COMPLETE state.
 }
 
 void DownloadItemGtk::LoadIcon() {
   cancelable_task_tracker_.TryCancelAll();
   IconManager* im = g_browser_process->icon_manager();
-  icon_filepath_ = download()->GetUserVerifiedFilePath();
+  icon_filepath_ = download()->GetTargetFilePath();
   im->LoadIcon(icon_filepath_,
                IconLoader::SMALL,
                base::Bind(&DownloadItemGtk::OnLoadSmallIconComplete,
@@ -820,7 +816,7 @@ void DownloadItemGtk::ReenableHbox() {
 void DownloadItemGtk::OnDownloadOpened(DownloadItem* download) {
   disabled_while_opening_ = true;
   gtk_widget_set_sensitive(hbox_.get(), false);
-  MessageLoop::current()->PostDelayedTask(
+  base::MessageLoop::current()->PostDelayedTask(
       FROM_HERE,
       base::Bind(&DownloadItemGtk::ReenableHbox,
                  weak_ptr_factory_.GetWeakPtr()),
@@ -853,31 +849,37 @@ gboolean DownloadItemGtk::OnProgressAreaExpose(GtkWidget* widget,
 
   // Create a transparent canvas.
   gfx::CanvasSkiaPaint canvas(event, false);
+  DownloadItem::DownloadState state = download()->GetState();
   if (complete_animation_.is_animating()) {
-    if (download()->IsInterrupted()) {
-      download_util::PaintDownloadInterrupted(&canvas,
-          allocation.x, allocation.y,
+    if (state == DownloadItem::INTERRUPTED) {
+      DownloadShelf::PaintDownloadInterrupted(
+          &canvas,
+          allocation.x,
+          allocation.y,
           complete_animation_.GetCurrentValue(),
-          download_util::SMALL);
+          DownloadShelf::SMALL);
     } else {
-      download_util::PaintDownloadComplete(&canvas,
-          allocation.x, allocation.y,
+      DownloadShelf::PaintDownloadComplete(
+          &canvas,
+          allocation.x,
+          allocation.y,
           complete_animation_.GetCurrentValue(),
-          download_util::SMALL);
+          DownloadShelf::SMALL);
     }
-  } else if (download()->IsInProgress()) {
-    download_util::PaintDownloadProgress(&canvas,
-        allocation.x, allocation.y,
-        progress_angle_,
-        download_model_.PercentComplete(),
-        download_util::SMALL);
+  } else if (state == DownloadItem::IN_PROGRESS) {
+    DownloadShelf::PaintDownloadProgress(&canvas,
+                                         allocation.x,
+                                         allocation.y,
+                                         progress_angle_,
+                                         download_model_.PercentComplete(),
+                                         DownloadShelf::SMALL);
   }
 
   // |icon_small_| may be NULL if it is still loading. If the file is an
   // unrecognized type then we will get back a generic system icon. Hence
   // there is no need to use the chromium-specific default download item icon.
   if (icon_small_) {
-    const int offset = download_util::kSmallProgressIconOffset;
+    const int offset = DownloadShelf::kSmallProgressIconOffset;
     canvas.DrawImageInt(icon_small_->AsImageSkia(),
         allocation.x + offset, allocation.y + offset);
   }
@@ -922,13 +924,11 @@ gboolean DownloadItemGtk::OnDangerousPromptExpose(GtkWidget* widget,
 void DownloadItemGtk::OnDangerousAccept(GtkWidget* button) {
   UMA_HISTOGRAM_LONG_TIMES("clickjacking.save_download",
                            base::Time::Now() - creation_time_);
-  download()->DangerousDownloadValidated();
+  download()->ValidateDangerousDownload();
 }
 
 void DownloadItemGtk::OnDangerousDecline(GtkWidget* button) {
   UMA_HISTOGRAM_LONG_TIMES("clickjacking.discard_download",
                            base::Time::Now() - creation_time_);
-  if (download()->IsPartialDownload())
-    download()->Cancel(true);
-  download()->Delete(DownloadItem::DELETE_DUE_TO_USER_DISCARD);
+  download()->Remove();
 }

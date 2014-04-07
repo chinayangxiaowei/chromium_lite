@@ -9,13 +9,13 @@
 
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/string_util.h"
 #include "base/strings/string_tokenizer.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "content/public/browser/browser_thread.h"
 #include "grit/generated_resources.h"
-#include "third_party/icu/public/common/unicode/ucnv.h"
+#include "third_party/icu/source/common/unicode/ucnv.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/l10n/l10n_util_collator.h"
 
@@ -107,10 +107,7 @@ typedef std::map<std::string, const char*> CanonicalNameDisplayNameMapType;
 
 class CanonicalEncodingMap {
  public:
-  CanonicalEncodingMap()
-      : id_to_encoding_name_map_(NULL),
-        encoding_name_to_id_map_(NULL),
-        encoding_name_to_display_name_map_(NULL) { }
+  CanonicalEncodingMap() {}
   const IdToCanonicalEncodingNameMapType* GetIdToCanonicalEncodingNameMapData();
   const CanonicalEncodingNameToIdMapType* GetCanonicalEncodingNameToIdMapData();
   const CanonicalNameDisplayNameMapType* GetCanonicalNameDisplayNameMapData();

@@ -18,13 +18,11 @@
 
 namespace syncer {
 
-class ExtensionsActivityMonitor;
+class ExtensionsActivity;
 class ServerConnectionManager;
 class SyncEngineEventListener;
 class SyncScheduler;
 class TrafficRecorder;
-
-class ThrottledDataTypeTracker;
 
 namespace sessions {
 class DebugInfoGetter;
@@ -52,6 +50,16 @@ class SYNC_EXPORT InternalComponentsFactory {
     BACKOFF_SHORT_INITIAL_RETRY_OVERRIDE
   };
 
+  enum PreCommitUpdatesPolicy {
+    // By default, the server will enable or disable this experiment through the
+    // sync protocol's experiments data type.
+    SERVER_CONTROLLED_PRE_COMMIT_UPDATE_AVOIANCE,
+
+    // This flag overrides the server's decision and enables the pre-commit
+    // update avoidance experiment.
+    FORCE_ENABLE_PRE_COMMIT_UPDATE_AVOIDANCE,
+  };
+
   // Configuration options for internal components. This struct is expected
   // to grow and shrink over time with transient features / experiments,
   // roughly following command line flags in chrome. Implementations of
@@ -60,6 +68,7 @@ class SYNC_EXPORT InternalComponentsFactory {
   struct Switches {
     EncryptionMethod encryption_method;
     BackoffOverride backoff_override;
+    PreCommitUpdatesPolicy pre_commit_updates_policy;
   };
 
   virtual ~InternalComponentsFactory() {}
@@ -71,9 +80,8 @@ class SYNC_EXPORT InternalComponentsFactory {
   virtual scoped_ptr<sessions::SyncSessionContext> BuildContext(
       ServerConnectionManager* connection_manager,
       syncable::Directory* directory,
-      const std::vector<ModelSafeWorker*> workers,
-      ExtensionsActivityMonitor* monitor,
-      ThrottledDataTypeTracker* throttled_data_type_tracker,
+      const std::vector<ModelSafeWorker*>& workers,
+      ExtensionsActivity* extensions_activity,
       const std::vector<SyncEngineEventListener*>& listeners,
       sessions::DebugInfoGetter* debug_info_getter,
       TrafficRecorder* traffic_recorder,

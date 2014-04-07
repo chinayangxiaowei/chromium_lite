@@ -12,12 +12,12 @@
 #include "base/threading/sequenced_worker_pool.h"
 #include "chrome/browser/chromeos/contacts/contact.pb.h"
 #include "content/public/browser/browser_thread.h"
-#include "leveldb/db.h"
-#include "leveldb/iterator.h"
-#include "leveldb/options.h"
-#include "leveldb/slice.h"
-#include "leveldb/status.h"
-#include "leveldb/write_batch.h"
+#include "third_party/leveldatabase/src/include/leveldb/db.h"
+#include "third_party/leveldatabase/src/include/leveldb/iterator.h"
+#include "third_party/leveldatabase/src/include/leveldb/options.h"
+#include "third_party/leveldatabase/src/include/leveldb/slice.h"
+#include "third_party/leveldatabase/src/include/leveldb/status.h"
+#include "third_party/leveldatabase/src/include/leveldb/write_batch.h"
 
 using content::BrowserThread;
 
@@ -55,7 +55,7 @@ const char kUpdateMetadataKey[] = "__chrome_update_metadata__";
 }  // namespace
 
 ContactDatabase::ContactDatabase()
-    : ALLOW_THIS_IN_INITIALIZER_LIST(weak_ptr_factory_(this)) {
+    : weak_ptr_factory_(this) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   base::SequencedWorkerPool* pool = BrowserThread::GetBlockingPool();
   task_runner_ = pool->GetSequencedTaskRunner(pool->GetSequenceToken());
@@ -175,12 +175,13 @@ void ContactDatabase::InitFromTaskRunner(const base::FilePath& database_dir,
 
   VLOG(1) << "Opening " << database_dir.value();
   UMA_HISTOGRAM_MEMORY_KB("Contacts.DatabaseSizeBytes",
-                          file_util::ComputeDirectorySize(database_dir));
+                          base::ComputeDirectorySize(database_dir));
   *success = false;
   HistogramInitResult histogram_result = HISTOGRAM_INIT_RESULT_SUCCESS;
 
   leveldb::Options options;
   options.create_if_missing = true;
+  options.max_open_files = 64;  // Use minimum.
   bool delete_and_retry_on_corruption = true;
 
   while (true) {
@@ -200,7 +201,7 @@ void ContactDatabase::InitFromTaskRunner(const base::FilePath& database_dir,
     // Delete the existing database and try again (just once, though).
     if (status.IsCorruption() && delete_and_retry_on_corruption) {
       LOG(WARNING) << "Deleting possibly-corrupt database";
-      file_util::Delete(database_dir, true);
+      base::DeleteFile(database_dir, true);
       delete_and_retry_on_corruption = false;
       histogram_result = HISTOGRAM_INIT_RESULT_DELETED_CORRUPTED;
     } else {

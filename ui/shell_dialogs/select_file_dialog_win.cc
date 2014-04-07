@@ -15,11 +15,11 @@
 #include "base/file_util.h"
 #include "base/files/file_path.h"
 #include "base/i18n/case_conversion.h"
-#include "base/message_loop.h"
-#include "base/message_loop_proxy.h"
+#include "base/message_loop/message_loop.h"
+#include "base/message_loop/message_loop_proxy.h"
 #include "base/strings/string_split.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread.h"
-#include "base/utf_string_conversions.h"
 #include "base/win/metro.h"
 #include "base/win/registry.h"
 #include "base/win/scoped_comptr.h"
@@ -86,7 +86,7 @@ bool CallGetSaveFileName(OPENFILENAME* ofn) {
 bool IsDirectory(const base::FilePath& path) {
   base::PlatformFileInfo file_info;
   return file_util::GetFileInfo(path, &file_info) ?
-      file_info.is_directory : file_util::EndsWithSeparator(path);
+      file_info.is_directory : path.EndsWithSeparator();
 }
 
 // Get the file type description from the registry. This will be "Text Document"
@@ -421,7 +421,7 @@ class SelectFileDialogImpl : public ui::SelectFileDialog,
   // SelectFileDialog implementation:
   virtual void SelectFileImpl(
       Type type,
-      const string16& title,
+      const base::string16& title,
       const base::FilePath& default_path,
       const FileTypeInfo* file_types,
       int file_type_index,
@@ -449,7 +449,7 @@ class SelectFileDialogImpl : public ui::SelectFileDialog,
           file_type_index(file_type_index),
           default_extension(default_extension),
           run_state(run_state),
-          ui_proxy(MessageLoopForUI::current()->message_loop_proxy()),
+          ui_proxy(base::MessageLoopForUI::current()->message_loop_proxy()),
           owner(owner),
           params(params) {
       if (file_types)
@@ -516,7 +516,7 @@ class SelectFileDialogImpl : public ui::SelectFileDialog,
 
   // Returns the filter to be used while displaying the open/save file dialog.
   // This is computed from the extensions for the file types being opened.
-  string16 GetFilterForFileTypes(const FileTypeInfo& file_types);
+  base::string16 GetFilterForFileTypes(const FileTypeInfo& file_types);
 
   bool has_multiple_file_type_choices_;
 
@@ -535,7 +535,7 @@ SelectFileDialogImpl::~SelectFileDialogImpl() {
 
 void SelectFileDialogImpl::SelectFileImpl(
     Type type,
-    const string16& title,
+    const base::string16& title,
     const base::FilePath& default_path,
     const FileTypeInfo* file_types,
     int file_type_index,
@@ -557,6 +557,8 @@ void SelectFileDialogImpl::SelectFileImpl(
           file_type_index,
           default_extension,
           base::Bind(&ui::SelectFileDialog::Listener::FileSelected,
+                     base::Unretained(listener_)),
+          base::Bind(&ui::SelectFileDialog::Listener::FileSelectionCanceled,
                      base::Unretained(listener_)));
       return;
     } else if (type == SELECT_OPEN_FILE) {
@@ -565,6 +567,8 @@ void SelectFileDialogImpl::SelectFileImpl(
           default_path,
           GetFilterForFileTypes(*file_types),
           base::Bind(&ui::SelectFileDialog::Listener::FileSelected,
+                     base::Unretained(listener_)),
+          base::Bind(&ui::SelectFileDialog::Listener::FileSelectionCanceled,
                      base::Unretained(listener_)));
       return;
     } else if (type == SELECT_OPEN_MULTI_FILE) {
@@ -573,6 +577,23 @@ void SelectFileDialogImpl::SelectFileImpl(
           default_path,
           GetFilterForFileTypes(*file_types),
           base::Bind(&ui::SelectFileDialog::Listener::MultiFilesSelected,
+                     base::Unretained(listener_)),
+          base::Bind(&ui::SelectFileDialog::Listener::FileSelectionCanceled,
+                     base::Unretained(listener_)));
+      return;
+    } else if (type == SELECT_FOLDER || type == SELECT_UPLOAD_FOLDER) {
+      base::string16 title_string = title;
+      if (type == SELECT_UPLOAD_FOLDER && title_string.empty()) {
+        // If it's for uploading don't use default dialog title to
+        // make sure we clearly tell it's for uploading.
+        title_string = l10n_util::GetStringUTF16(
+            IDS_SELECT_UPLOAD_FOLDER_DIALOG_TITLE);
+      }
+      aura::HandleSelectFolder(
+          UTF16ToWide(title_string),
+          base::Bind(&ui::SelectFileDialog::Listener::FileSelected,
+                     base::Unretained(listener_)),
+          base::Bind(&ui::SelectFileDialog::Listener::FileSelectionCanceled,
                      base::Unretained(listener_)));
       return;
     }
@@ -613,13 +634,20 @@ void SelectFileDialogImpl::ListenerDestroyed() {
 
 void SelectFileDialogImpl::ExecuteSelectFile(
     const ExecuteSelectParams& params) {
-  string16 filter = GetFilterForFileTypes(params.file_types);
+  base::string16 filter = GetFilterForFileTypes(params.file_types);
 
   base::FilePath path = params.default_path;
   bool success = false;
   unsigned filter_index = params.file_type_index;
-  if (params.type == SELECT_FOLDER) {
-    success = RunSelectFolderDialog(params.title,
+  if (params.type == SELECT_FOLDER || params.type == SELECT_UPLOAD_FOLDER) {
+    std::wstring title = params.title;
+    if (title.empty() && params.type == SELECT_UPLOAD_FOLDER) {
+      // If it's for uploading don't use default dialog title to
+      // make sure we clearly tell it's for uploading.
+      title = UTF16ToWide(
+          l10n_util::GetStringUTF16(IDS_SELECT_UPLOAD_FOLDER_DIALOG_TITLE));
+    }
+    success = RunSelectFolderDialog(title,
                                     params.run_state.owner,
                                     &path);
   } else if (params.type == SELECT_SAVEAS_FILE) {
@@ -807,7 +835,7 @@ bool SelectFileDialogImpl::RunOpenMultiFileDialog(
   ofn.lStructSize = sizeof(ofn);
   ofn.hwndOwner = owner;
 
-  scoped_array<wchar_t> filename(new wchar_t[UNICODE_STRING_MAX_CHARS]);
+  scoped_ptr<wchar_t[]> filename(new wchar_t[UNICODE_STRING_MAX_CHARS]);
   filename[0] = 0;
 
   ofn.lpstrFile = filename.get();
@@ -849,12 +877,12 @@ bool SelectFileDialogImpl::RunOpenMultiFileDialog(
   return success;
 }
 
-string16 SelectFileDialogImpl::GetFilterForFileTypes(
+base::string16 SelectFileDialogImpl::GetFilterForFileTypes(
     const FileTypeInfo& file_types) {
-  std::vector<string16> exts;
+  std::vector<base::string16> exts;
   for (size_t i = 0; i < file_types.extensions.size(); ++i) {
-    const std::vector<string16>& inner_exts = file_types.extensions[i];
-    string16 ext_string;
+    const std::vector<base::string16>& inner_exts = file_types.extensions[i];
+    base::string16 ext_string;
     for (size_t j = 0; j < inner_exts.size(); ++j) {
       if (!ext_string.empty())
         ext_string.push_back(L';');

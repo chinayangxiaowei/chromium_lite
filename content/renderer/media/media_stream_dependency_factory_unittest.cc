@@ -9,12 +9,12 @@
 #include "content/renderer/media/mock_media_stream_dependency_factory.h"
 #include "content/renderer/media/mock_web_rtc_peer_connection_handler_client.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebMediaConstraints.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebMediaStream.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebMediaStreamSource.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebMediaStreamTrack.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebRTCPeerConnectionHandler.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebVector.h"
+#include "third_party/WebKit/public/platform/WebMediaConstraints.h"
+#include "third_party/WebKit/public/platform/WebMediaStream.h"
+#include "third_party/WebKit/public/platform/WebMediaStreamSource.h"
+#include "third_party/WebKit/public/platform/WebMediaStreamTrack.h"
+#include "third_party/WebKit/public/platform/WebRTCPeerConnectionHandler.h"
+#include "third_party/WebKit/public/platform/WebVector.h"
 #include "third_party/libjingle/source/talk/app/webrtc/videosourceinterface.h"
 
 namespace content {
@@ -49,10 +49,19 @@ class MediaStreamDependencyFactoryTest : public ::testing::Test {
     dependency_factory_.reset(new MockMediaStreamDependencyFactory());
   }
 
-  WebKit::WebMediaStream CreateWebKitMediaStream(bool audio,
-                                                           bool video) {
+  virtual void TearDown() OVERRIDE {
+    // TODO(tommyw): Remove this once WebKit::MediaStreamSource::Owner has been
+    // implemented to fully avoid a circular dependency.
+    for (size_t i = 0; i < audio_sources_.size(); ++i)
+      audio_sources_[i].setExtraData(NULL);
+
+    for (size_t i = 0; i < video_sources_.size(); ++i)
+      video_sources_[i].setExtraData(NULL);
+  }
+
+  WebKit::WebMediaStream CreateWebKitMediaStream(bool audio, bool video) {
     WebKit::WebVector<WebKit::WebMediaStreamSource> audio_sources(
-                      audio ? static_cast<size_t>(1) : 0);
+        audio ? static_cast<size_t>(1) : 0);
     WebKit::WebVector<WebKit::WebMediaStreamSource> video_sources(
         video ? static_cast<size_t>(1) : 0);
 
@@ -67,7 +76,8 @@ class MediaStreamDependencyFactoryTest : public ::testing::Test {
                                   WebKit::WebMediaStreamSource::TypeAudio,
                                   "audio");
       audio_sources[0].setExtraData(
-              new MediaStreamSourceExtraData(info));
+          new MediaStreamSourceExtraData(info, audio_sources[0]));
+      audio_sources_.assign(audio_sources);
     }
     if (video) {
       StreamDeviceInfo info;
@@ -78,18 +88,36 @@ class MediaStreamDependencyFactoryTest : public ::testing::Test {
                                   WebKit::WebMediaStreamSource::TypeVideo,
                                   "video");
       video_sources[0].setExtraData(
-              new MediaStreamSourceExtraData(info));
+          new MediaStreamSourceExtraData(info, video_sources[0]));
+      video_sources_.assign(video_sources);
     }
     WebKit::WebMediaStream stream_desc;
-    stream_desc.initialize("media stream", audio_sources, video_sources);
+    WebKit::WebVector<WebKit::WebMediaStreamTrack> audio_track_vector(
+        audio_sources.size());
+    for (size_t i = 0; i < audio_track_vector.size(); ++i) {
+      audio_track_vector[i].initialize(audio_sources[i].id(),
+                                       audio_sources[i]);
+    }
 
+    WebKit::WebVector<WebKit::WebMediaStreamTrack> video_track_vector(
+        video_sources.size());
+    for (size_t i = 0; i < video_track_vector.size(); ++i) {
+      video_track_vector[i].initialize(video_sources[i].id(),
+                                       video_sources[i]);
+    }
+
+    stream_desc.initialize("media stream", audio_track_vector,
+                           video_track_vector);
     return stream_desc;
   }
 
   void CreateNativeSources(WebKit::WebMediaStream* descriptor) {
+    static const int kRenderViewId = 1;
+
     MediaSourceCreatedObserver observer;
     WebKit::WebMediaConstraints audio_constraints;
     dependency_factory_->CreateNativeMediaSources(
+        kRenderViewId,
         WebKit::WebMediaConstraints(),
         WebKit::WebMediaConstraints(),
         descriptor,
@@ -108,8 +136,21 @@ class MediaStreamDependencyFactoryTest : public ::testing::Test {
     EXPECT_TRUE(observer.description() == descriptor);
   }
 
+  void VerifyMediaStream(const WebKit::WebMediaStream& stream_desc,
+                         size_t num_audio_tracks,
+                         size_t num_video_tracks) {
+    content::MediaStreamExtraData* extra_data =
+        static_cast<content::MediaStreamExtraData*>(stream_desc.extraData());
+    ASSERT_TRUE(extra_data && extra_data->stream().get());
+    EXPECT_TRUE(extra_data->is_local());
+    EXPECT_EQ(num_audio_tracks, extra_data->stream()->GetAudioTracks().size());
+    EXPECT_EQ(num_video_tracks, extra_data->stream()->GetVideoTracks().size());
+  }
+
  protected:
   scoped_ptr<MockMediaStreamDependencyFactory> dependency_factory_;
+  WebKit::WebVector<WebKit::WebMediaStreamSource> audio_sources_;
+  WebKit::WebVector<WebKit::WebMediaStreamSource> video_sources_;
 };
 
 TEST_F(MediaStreamDependencyFactoryTest, CreateRTCPeerConnectionHandler) {
@@ -124,13 +165,7 @@ TEST_F(MediaStreamDependencyFactoryTest, CreateNativeMediaStream) {
   CreateNativeSources(&stream_desc);
 
   dependency_factory_->CreateNativeLocalMediaStream(&stream_desc);
-
-  content::MediaStreamExtraData* extra_data =
-      static_cast<content::MediaStreamExtraData*>(stream_desc.extraData());
-  ASSERT_TRUE(extra_data && extra_data->stream());
-  EXPECT_TRUE(extra_data->is_local());
-  EXPECT_EQ(1u, extra_data->stream()->GetAudioTracks().size());
-  EXPECT_EQ(1u, extra_data->stream()->GetVideoTracks().size());
+  VerifyMediaStream(stream_desc, 1, 1);
 }
 
 // Test that we don't crash if a MediaStream is created in WebKit with unknown
@@ -138,27 +173,56 @@ TEST_F(MediaStreamDependencyFactoryTest, CreateNativeMediaStream) {
 // remote tracks.
 TEST_F(MediaStreamDependencyFactoryTest, CreateNativeMediaStreamWithoutSource) {
   // Create a WebKit MediaStream description.
+  WebKit::WebMediaStreamSource audio_source;
+  audio_source.initialize("audio source",
+                          WebKit::WebMediaStreamSource::TypeAudio,
+                          "something");
+  WebKit::WebMediaStreamSource video_source;
+  video_source.initialize("video source",
+                          WebKit::WebMediaStreamSource::TypeVideo,
+                          "something");
+
+  WebKit::WebVector<WebKit::WebMediaStreamTrack> audio_tracks(
+      static_cast<size_t>(1));
+  audio_tracks[0].initialize(audio_source.id(), audio_source);
+  WebKit::WebVector<WebKit::WebMediaStreamTrack> video_tracks(
+      static_cast<size_t>(1));
+  video_tracks[0].initialize(video_source.id(), video_source);
+
   WebKit::WebMediaStream stream_desc;
-  WebKit::WebVector<WebKit::WebMediaStreamSource> audio_sources(
-      static_cast<size_t>(1));
-  audio_sources[0].initialize("audio source",
-                              WebKit::WebMediaStreamSource::TypeAudio,
-                              "something");
-  WebKit::WebVector<WebKit::WebMediaStreamSource> video_sources(
-      static_cast<size_t>(1));
-  video_sources[0].initialize("video source",
-                              WebKit::WebMediaStreamSource::TypeVideo,
-                              "something");
-  stream_desc.initialize("new stream", audio_sources, video_sources);
+  stream_desc.initialize("new stream", audio_tracks, video_tracks);
 
   EXPECT_TRUE(dependency_factory_->EnsurePeerConnectionFactory());
   dependency_factory_->CreateNativeLocalMediaStream(&stream_desc);
-  MediaStreamExtraData* extra_data = static_cast<MediaStreamExtraData*>(
-      stream_desc.extraData());
-  ASSERT_TRUE(extra_data && extra_data->stream());
-  EXPECT_TRUE(extra_data->is_local());
-  EXPECT_EQ(0u, extra_data->stream()->GetVideoTracks().size());
-  EXPECT_EQ(0u, extra_data->stream()->GetAudioTracks().size());
+  VerifyMediaStream(stream_desc, 0, 0);
+}
+
+TEST_F(MediaStreamDependencyFactoryTest, AddAndRemoveNativeTrack) {
+  WebKit::WebMediaStream stream_desc = CreateWebKitMediaStream(true, true);
+  CreateNativeSources(&stream_desc);
+
+  dependency_factory_->CreateNativeLocalMediaStream(&stream_desc);
+  VerifyMediaStream(stream_desc, 1, 1);
+
+  WebKit::WebVector<WebKit::WebMediaStreamTrack> audio_tracks;
+  stream_desc.audioTracks(audio_tracks);
+  EXPECT_TRUE(dependency_factory_->RemoveNativeMediaStreamTrack(
+      stream_desc, audio_tracks[0]));
+  VerifyMediaStream(stream_desc, 0, 1);
+
+  EXPECT_TRUE(dependency_factory_->AddNativeMediaStreamTrack(
+      stream_desc, audio_tracks[0]));
+  VerifyMediaStream(stream_desc, 1, 1);
+
+  WebKit::WebVector<WebKit::WebMediaStreamTrack> video_tracks;
+  stream_desc.videoTracks(video_tracks);
+  EXPECT_TRUE(dependency_factory_->RemoveNativeMediaStreamTrack(
+      stream_desc, video_tracks[0]));
+  VerifyMediaStream(stream_desc, 1, 0);
+
+  EXPECT_TRUE(dependency_factory_->AddNativeMediaStreamTrack(
+      stream_desc, video_tracks[0]));
+  VerifyMediaStream(stream_desc, 1, 1);
 }
 
 }  // namespace content

@@ -7,8 +7,8 @@
 #include <algorithm>
 
 #include "base/basictypes.h"
-#include "base/string_util.h"
 #include "base/strings/string_tokenizer.h"
+#include "base/strings/string_util.h"
 #include "net/base/net_errors.h"
 #include "net/http/http_auth_handler.h"
 #include "net/http/http_auth_handler_factory.h"
@@ -146,7 +146,7 @@ std::string HttpAuth::GetChallengeHeaderName(Target target) {
       return "WWW-Authenticate";
     default:
       NOTREACHED();
-      return "";
+      return std::string();
   }
 }
 
@@ -159,7 +159,7 @@ std::string HttpAuth::GetAuthorizationHeaderName(Target target) {
       return HttpRequestHeaders::kAuthorization;
     default:
       NOTREACHED();
-      return "";
+      return std::string();
   }
 }
 
@@ -172,7 +172,7 @@ std::string HttpAuth::GetAuthTargetString(Target target) {
       return "server";
     default:
       NOTREACHED();
-      return "";
+      return std::string();
   }
 }
 

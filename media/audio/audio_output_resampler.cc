@@ -6,11 +6,10 @@
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
-#include "base/command_line.h"
 #include "base/compiler_specific.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/metrics/histogram.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "media/audio/audio_io.h"
 #include "media/audio/audio_output_dispatcher_impl.h"
@@ -19,7 +18,6 @@
 #include "media/audio/sample_rates.h"
 #include "media/base/audio_converter.h"
 #include "media/base/limits.h"
-#include "media/base/media_switches.h"
 
 namespace media {
 
@@ -38,7 +36,6 @@ class OnMoreDataConverter
                            AudioBus* dest,
                            AudioBuffersState buffers_state) OVERRIDE;
   virtual void OnError(AudioOutputStream* stream) OVERRIDE;
-  virtual void WaitTillDataReady() OVERRIDE;
 
   // Sets |source_callback_|.  If this is not a new object, then Stop() must be
   // called before Start().
@@ -150,10 +147,12 @@ static AudioParameters SetupFallbackParams(
 AudioOutputResampler::AudioOutputResampler(AudioManager* audio_manager,
                                            const AudioParameters& input_params,
                                            const AudioParameters& output_params,
+                                           const std::string& input_device_id,
                                            const base::TimeDelta& close_delay)
-    : AudioOutputDispatcher(audio_manager, input_params),
+    : AudioOutputDispatcher(audio_manager, input_params, input_device_id),
       close_delay_(close_delay),
       output_params_(output_params),
+      input_device_id_(input_device_id),
       streams_opened_(false) {
   DCHECK(input_params.IsValid());
   DCHECK(output_params.IsValid());
@@ -173,11 +172,11 @@ void AudioOutputResampler::Initialize() {
   DCHECK(!streams_opened_);
   DCHECK(callbacks_.empty());
   dispatcher_ = new AudioOutputDispatcherImpl(
-      audio_manager_, output_params_, close_delay_);
+      audio_manager_, output_params_, input_device_id_, close_delay_);
 }
 
 bool AudioOutputResampler::OpenStream() {
-  DCHECK_EQ(MessageLoop::current(), message_loop_);
+  DCHECK_EQ(base::MessageLoop::current(), message_loop_);
 
   if (dispatcher_->OpenStream()) {
     // Only record the UMA statistic if we didn't fallback during construction
@@ -198,13 +197,6 @@ bool AudioOutputResampler::OpenStream() {
   }
 
   DCHECK_EQ(output_params_.format(), AudioParameters::AUDIO_PCM_LOW_LATENCY);
-
-  if (CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kDisableAudioFallback)) {
-    LOG(ERROR) << "Open failed and automatic fallback to high latency audio "
-               << "path is disabled, aborting.";
-    return false;
-  }
 
   // Record UMA statistics about the hardware which triggered the failure so
   // we can debug and triage later.
@@ -244,7 +236,7 @@ bool AudioOutputResampler::OpenStream() {
 bool AudioOutputResampler::StartStream(
     AudioOutputStream::AudioSourceCallback* callback,
     AudioOutputProxy* stream_proxy) {
-  DCHECK_EQ(MessageLoop::current(), message_loop_);
+  DCHECK_EQ(base::MessageLoop::current(), message_loop_);
 
   OnMoreDataConverter* resampler_callback = NULL;
   CallbackMap::iterator it = callbacks_.find(stream_proxy);
@@ -264,12 +256,12 @@ bool AudioOutputResampler::StartStream(
 
 void AudioOutputResampler::StreamVolumeSet(AudioOutputProxy* stream_proxy,
                                            double volume) {
-  DCHECK_EQ(MessageLoop::current(), message_loop_);
+  DCHECK_EQ(base::MessageLoop::current(), message_loop_);
   dispatcher_->StreamVolumeSet(stream_proxy, volume);
 }
 
 void AudioOutputResampler::StopStream(AudioOutputProxy* stream_proxy) {
-  DCHECK_EQ(MessageLoop::current(), message_loop_);
+  DCHECK_EQ(base::MessageLoop::current(), message_loop_);
   dispatcher_->StopStream(stream_proxy);
 
   // Now that StopStream() has completed the underlying physical stream should
@@ -281,7 +273,7 @@ void AudioOutputResampler::StopStream(AudioOutputProxy* stream_proxy) {
 }
 
 void AudioOutputResampler::CloseStream(AudioOutputProxy* stream_proxy) {
-  DCHECK_EQ(MessageLoop::current(), message_loop_);
+  DCHECK_EQ(base::MessageLoop::current(), message_loop_);
   dispatcher_->CloseStream(stream_proxy);
 
   // We assume that StopStream() is always called prior to CloseStream(), so
@@ -294,7 +286,7 @@ void AudioOutputResampler::CloseStream(AudioOutputProxy* stream_proxy) {
 }
 
 void AudioOutputResampler::Shutdown() {
-  DCHECK_EQ(MessageLoop::current(), message_loop_);
+  DCHECK_EQ(base::MessageLoop::current(), message_loop_);
 
   // No AudioOutputProxy objects should hold a reference to us when we get
   // to this stage.
@@ -398,12 +390,6 @@ void OnMoreDataConverter::OnError(AudioOutputStream* stream) {
   base::AutoLock auto_lock(source_lock_);
   if (source_callback_)
     source_callback_->OnError(stream);
-}
-
-void OnMoreDataConverter::WaitTillDataReady() {
-  base::AutoLock auto_lock(source_lock_);
-  if (source_callback_)
-    source_callback_->WaitTillDataReady();
 }
 
 }  // namespace media

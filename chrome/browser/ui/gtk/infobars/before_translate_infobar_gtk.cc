@@ -4,7 +4,7 @@
 
 #include "chrome/browser/ui/gtk/infobars/before_translate_infobar_gtk.h"
 
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/translate/translate_infobar_delegate.h"
 #include "chrome/browser/ui/gtk/gtk_util.h"
 #include "grit/generated_resources.h"
@@ -21,17 +21,17 @@ BeforeTranslateInfoBar::BeforeTranslateInfoBar(
 BeforeTranslateInfoBar::~BeforeTranslateInfoBar() {
 }
 
-void BeforeTranslateInfoBar::Init() {
-  TranslateInfoBarBase::Init();
+void BeforeTranslateInfoBar::InitWidgets() {
+  TranslateInfoBarBase::InitWidgets();
 
-  GtkWidget* hbox = gtk_hbox_new(FALSE, ui::kControlSpacing);
-  gtk_util::CenterWidgetInHBox(hbox_, hbox, false, 0);
+  GtkWidget* new_hbox = gtk_hbox_new(FALSE, ui::kControlSpacing);
+  gtk_util::CenterWidgetInHBox(hbox(), new_hbox, false, 0);
   size_t offset = 0;
   string16 text =
       l10n_util::GetStringFUTF16(IDS_TRANSLATE_INFOBAR_BEFORE_MESSAGE,
                                  string16(), &offset);
 
-  gtk_box_pack_start(GTK_BOX(hbox),
+  gtk_box_pack_start(GTK_BOX(new_hbox),
                      CreateLabel(UTF16ToUTF8(text.substr(0, offset))),
                      FALSE, FALSE, 0);
   size_t original_language_index = GetDelegate()->original_language_index();
@@ -41,44 +41,44 @@ void BeforeTranslateInfoBar::Init() {
       original_language_index,
       exclude_the_other ? target_language_index :
                           TranslateInfoBarDelegate::kNoIndex);
-  Signals()->Connect(combobox, "changed",
+  signals()->Connect(combobox, "changed",
                      G_CALLBACK(&OnLanguageModifiedThunk), this);
-  gtk_box_pack_start(GTK_BOX(hbox), combobox, FALSE, FALSE, 0);
-  gtk_box_pack_start(GTK_BOX(hbox),
+  gtk_box_pack_start(GTK_BOX(new_hbox), combobox, FALSE, FALSE, 0);
+  gtk_box_pack_start(GTK_BOX(new_hbox),
                      CreateLabel(UTF16ToUTF8(text.substr(offset))),
                      FALSE, FALSE, 0);
 
   GtkWidget* button = gtk_button_new_with_label(
       l10n_util::GetStringUTF8(IDS_TRANSLATE_INFOBAR_ACCEPT).c_str());
-  Signals()->Connect(button, "clicked",
+  signals()->Connect(button, "clicked",
                      G_CALLBACK(&OnAcceptPressedThunk), this);
-  gtk_box_pack_start(GTK_BOX(hbox), button, FALSE, FALSE, 0);
+  gtk_box_pack_start(GTK_BOX(new_hbox), button, FALSE, FALSE, 0);
 
   button = gtk_button_new_with_label(
       l10n_util::GetStringUTF8(IDS_TRANSLATE_INFOBAR_DENY).c_str());
-  Signals()->Connect(button, "clicked",
+  signals()->Connect(button, "clicked",
                      G_CALLBACK(&OnDenyPressedThunk), this);
-  gtk_box_pack_start(GTK_BOX(hbox), button, FALSE, FALSE, 0);
+  gtk_box_pack_start(GTK_BOX(new_hbox), button, FALSE, FALSE, 0);
 
   TranslateInfoBarDelegate* delegate = GetDelegate();
-  if (delegate->ShouldShowNeverTranslateButton()) {
+  if (delegate->ShouldShowNeverTranslateShortcut()) {
     std::string label = l10n_util::GetStringFUTF8(
         IDS_TRANSLATE_INFOBAR_NEVER_TRANSLATE,
         delegate->language_name_at(delegate->original_language_index()));
     button = gtk_button_new_with_label(label.c_str());
-    Signals()->Connect(button, "clicked",
+    signals()->Connect(button, "clicked",
                        G_CALLBACK(&OnNeverTranslatePressedThunk), this);
-    gtk_box_pack_start(GTK_BOX(hbox), button, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(new_hbox), button, FALSE, FALSE, 0);
   }
 
-  if (delegate->ShouldShowAlwaysTranslateButton()) {
+  if (delegate->ShouldShowAlwaysTranslateShortcut()) {
     std::string label = l10n_util::GetStringFUTF8(
         IDS_TRANSLATE_INFOBAR_ALWAYS_TRANSLATE,
         delegate->language_name_at(delegate->original_language_index()));
     button = gtk_button_new_with_label(label.c_str());
-    Signals()->Connect(button, "clicked",
+    signals()->Connect(button, "clicked",
                        G_CALLBACK(&OnAlwaysTranslatePressedThunk), this);
-    gtk_box_pack_start(GTK_BOX(hbox), button, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(new_hbox), button, FALSE, FALSE, 0);
   }
 }
 

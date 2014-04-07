@@ -10,9 +10,9 @@
 #include "base/callback.h"
 #include "google_apis/gaia/gaia_oauth_client.h"
 #include "remoting/base/rsa_key_pair.h"
-#include "remoting/host/service_client.h"
+#include "remoting/base/url_request_context.h"
 #include "remoting/host/setup/daemon_controller.h"
-#include "remoting/host/url_request_context.h"
+#include "remoting/host/setup/service_client.h"
 
 namespace remoting {
 
@@ -33,7 +33,6 @@ class HostStarter : public gaia::GaiaOAuthClient::Delegate,
 
   // Creates a HostStarter.
   static scoped_ptr<HostStarter> Create(
-      const std::string& oauth2_token_url,
       const std::string& chromoting_hosts_url,
       net::URLRequestContextGetter* url_request_context_getter);
 
@@ -53,7 +52,7 @@ class HostStarter : public gaia::GaiaOAuthClient::Delegate,
                                    int expires_in_seconds) OVERRIDE;
   virtual void OnRefreshTokenResponse(const std::string& access_token,
                                       int expires_in_seconds) OVERRIDE;
-  virtual void OnGetUserInfoResponse(const std::string& user_email) OVERRIDE;
+  virtual void OnGetUserEmailResponse(const std::string& user_email) OVERRIDE;
 
   // remoting::ServiceClient::Delegate
   virtual void OnHostRegistered() OVERRIDE;

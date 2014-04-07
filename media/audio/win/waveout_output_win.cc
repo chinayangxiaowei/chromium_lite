@@ -13,7 +13,6 @@
 #include "base/debug/trace_event.h"
 #include "base/logging.h"
 #include "media/audio/audio_io.h"
-#include "media/audio/audio_util.h"
 #include "media/audio/win/audio_manager_win.h"
 
 namespace media {
@@ -168,7 +167,7 @@ void PCMWaveOutAudioOutputStream::FreeBuffers() {
   for (int ix = 0; ix != num_buffers_; ++ix) {
     ::waveOutUnprepareHeader(waveout_, GetBuffer(ix), sizeof(WAVEHDR));
   }
-  buffers_.reset(NULL);
+  buffers_.reset();
 }
 
 // Initially we ask the source to fill up all audio buffers. If we don't do
@@ -205,10 +204,6 @@ void PCMWaveOutAudioOutputStream::Start(AudioSourceCallback* callback) {
   pending_bytes_ = 0;
   for (int ix = 0; ix != num_buffers_; ++ix) {
     WAVEHDR* buffer = GetBuffer(ix);
-    // Caller waits for 1st packet to become available, but not for others,
-    // so we wait for them here.
-    if (ix != 0)
-      callback_->WaitTillDataReady();
     QueueNextPacket(buffer);  // Read more data.
     pending_bytes_ += buffer->dwBufferLength;
   }
@@ -344,13 +339,6 @@ void PCMWaveOutAudioOutputStream::QueueNextPacket(WAVEHDR *buffer) {
   // return to us how many bytes were used.
   // TODO(fbarchard): Handle used 0 by queueing more.
 
-  // HACK: Yield if Read() is called too often.  On older platforms which are
-  // still using the WaveOut backend, we run into synchronization issues where
-  // the renderer has not finished filling the shared memory when Read() is
-  // called.  Reading too early will lead to clicks and pops.  See issues:
-  // http://crbug.com/161307 and http://crbug.com/61022
-  callback_->WaitTillDataReady();
-
   // TODO(sergeyu): Specify correct hardware delay for AudioBuffersState.
   int frames_filled = callback_->OnMoreData(
       audio_bus_.get(), AudioBuffersState(pending_bytes_, 0));
@@ -360,14 +348,11 @@ void PCMWaveOutAudioOutputStream::QueueNextPacket(WAVEHDR *buffer) {
   if (used <= buffer_size_) {
     // Note: If this ever changes to output raw float the data must be clipped
     // and sanitized since it may come from an untrusted source such as NaCl.
+    audio_bus_->Scale(volume_);
     audio_bus_->ToInterleaved(
         frames_filled, format_.Format.wBitsPerSample / 8, buffer->lpData);
 
     buffer->dwBufferLength = used * format_.Format.nChannels / channels_;
-    media::AdjustVolume(buffer->lpData, used,
-                        format_.Format.nChannels,
-                        format_.Format.wBitsPerSample >> 3,
-                        volume_);
   } else {
     HandleError(0);
     return;

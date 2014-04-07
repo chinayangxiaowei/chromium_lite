@@ -8,21 +8,27 @@
 #include <string>
 
 #include "base/command_line.h"
+#include "base/debug/alias.h"
 #include "base/file_util.h"
+#include "base/format_macros.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/metrics/histogram.h"
-#include "base/string_util.h"
+#include "base/rand_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_tokenizer.h"
-#include "base/time.h"
-#include "base/utf_string_conversions.h"
-#include "chrome/browser/diagnostics/sqlite_diagnostics.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "chrome/browser/history/history_publisher.h"
 #include "chrome/browser/history/top_sites.h"
 #include "chrome/browser/history/url_database.h"
+#include "chrome/common/chrome_version_info.h"
+#include "chrome/common/dump_without_crashing.h"
 #include "chrome/common/thumbnail_score.h"
 #include "sql/statement.h"
 #include "sql/transaction.h"
+#include "third_party/sqlite/sqlite3.h"
 #include "ui/gfx/image/image_util.h"
 
 #if defined(OS_MACOSX)
@@ -48,22 +54,13 @@
 //   icon_type        The type of the favicon specified in the rel attribute of
 //                    the link tag. The FAVICON type is used for the default
 //                    favicon.ico favicon.
-//   sizes            Sizes is a listing of all the sizes at which the favicon
-//                    at |url| is available from the web. Note that this may
-//                    include sizes for which a bitmap is not stored in the
-//                    favicon_bitmaps table. Each widthxheight pair is
-//                    separated by a space. Width and height are separated by
-//                    a space as well. For instance, if |icon_id| represents a
-//                    .ico file containing 16x16 and 32x32 bitmaps, |sizes|
-//                    would be "16 16 32 32".
 //
 // favicon_bitmaps    This table contains the PNG encoded bitmap data of the
 //                    favicons. There is a separate row for every size in a
 //                    multi resolution bitmap. The bitmap data is associated
 //                    to the favicon via the |icon_id| field which matches
 //                    the |id| field in the appropriate row in the |favicons|
-//                    table. There is not necessarily a row for each size
-//                    specified in the sizes attribute.
+//                    table.
 //
 //  id                Unique ID.
 //  icon_id           The ID of the favicon that the bitmap is associated to.
@@ -74,22 +71,215 @@
 //  width             Pixel width of |image_data|.
 //  height            Pixel height of |image_data|.
 
-static void FillIconMapping(const sql::Statement& statement,
-                            const GURL& page_url,
-                            history::IconMapping* icon_mapping) {
+namespace {
+
+void FillIconMapping(const sql::Statement& statement,
+                     const GURL& page_url,
+                     history::IconMapping* icon_mapping) {
   icon_mapping->mapping_id = statement.ColumnInt64(0);
   icon_mapping->icon_id = statement.ColumnInt64(1);
   icon_mapping->icon_type =
-      static_cast<history::IconType>(statement.ColumnInt(2));
+      static_cast<chrome::IconType>(statement.ColumnInt(2));
   icon_mapping->icon_url = GURL(statement.ColumnString(3));
   icon_mapping->page_url = page_url;
 }
 
+enum InvalidStructureType {
+  // NOTE(shess): Intentionally skip bucket 0 to account for
+  // conversion from a boolean histogram.
+  STRUCTURE_EVENT_FAVICON = 1,
+  STRUCTURE_EVENT_VERSION4,
+  STRUCTURE_EVENT_VERSION5,
+
+  // Always keep this at the end.
+  STRUCTURE_EVENT_MAX,
+};
+
+void RecordInvalidStructure(InvalidStructureType invalid_type) {
+  UMA_HISTOGRAM_ENUMERATION("History.InvalidFaviconsDBStructure",
+                            invalid_type, STRUCTURE_EVENT_MAX);
+}
+
+// Attempt to pass 2000 bytes of |debug_info| into a crash dump.
+void DumpWithoutCrashing2000(const std::string& debug_info) {
+  char debug_buf[2000];
+  base::strlcpy(debug_buf, debug_info.c_str(), arraysize(debug_buf));
+  base::debug::Alias(&debug_buf);
+
+  logging::DumpWithoutCrashing();
+}
+
+void ReportCorrupt(sql::Connection* db, size_t startup_kb) {
+  // Buffer for accumulating debugging info about the error.  Place
+  // more-relevant information earlier, in case things overflow the
+  // fixed-size buffer.
+  std::string debug_info;
+
+  base::StringAppendF(&debug_info, "SQLITE_CORRUPT, integrity_check:\n");
+
+  // Check files up to 8M to keep things from blocking too long.
+  const size_t kMaxIntegrityCheckSize = 8192;
+  if (startup_kb > kMaxIntegrityCheckSize) {
+    base::StringAppendF(&debug_info, "too big %" PRIuS "\n", startup_kb);
+  } else {
+    std::vector<std::string> messages;
+
+    const base::TimeTicks before = base::TimeTicks::Now();
+    db->IntegrityCheck(&messages);
+    base::StringAppendF(&debug_info, "# %" PRIx64 " ms, %" PRIuS " records\n",
+                        (base::TimeTicks::Now() - before).InMilliseconds(),
+                        messages.size());
+
+    // SQLite returns up to 100 messages by default, trim deeper to
+    // keep close to the 2000-character size limit for dumping.
+    //
+    // TODO(shess): If the first 20 tend to be actionable, test if
+    // passing the count to integrity_check makes it exit earlier.  In
+    // that case it may be possible to greatly ease the size
+    // restriction.
+    const size_t kMaxMessages = 20;
+    for (size_t i = 0; i < kMaxMessages && i < messages.size(); ++i) {
+      base::StringAppendF(&debug_info, "%s\n", messages[i].c_str());
+    }
+  }
+
+  DumpWithoutCrashing2000(debug_info);
+}
+
+void ReportError(sql::Connection* db, int error) {
+  // Buffer for accumulating debugging info about the error.  Place
+  // more-relevant information earlier, in case things overflow the
+  // fixed-size buffer.
+  std::string debug_info;
+
+  // The error message from the failed operation.
+  base::StringAppendF(&debug_info, "db error: %d/%s\n",
+                      db->GetErrorCode(), db->GetErrorMessage());
+
+  // System errno information.
+  base::StringAppendF(&debug_info, "errno: %d\n", db->GetLastErrno());
+
+  // SQLITE_ERROR reports seem to be attempts to upgrade invalid
+  // schema, try to log that info.
+  if (error == SQLITE_ERROR) {
+    const char* kVersionSql = "SELECT value FROM meta WHERE key = 'version'";
+    if (db->IsSQLValid(kVersionSql)) {
+      sql::Statement statement(db->GetUniqueStatement(kVersionSql));
+      if (statement.Step()) {
+        debug_info += "version: ";
+        debug_info += statement.ColumnString(0);
+        debug_info += '\n';
+      } else if (statement.Succeeded()) {
+        debug_info += "version: none\n";
+      } else {
+        debug_info += "version: error\n";
+      }
+    } else {
+      debug_info += "version: invalid\n";
+    }
+
+    debug_info += "schema:\n";
+
+    // sqlite_master has columns:
+    //   type - "index" or "table".
+    //   name - name of created element.
+    //   tbl_name - name of element, or target table in case of index.
+    //   rootpage - root page of the element in database file.
+    //   sql - SQL to create the element.
+    // In general, the |sql| column is sufficient to derive the other
+    // columns.  |rootpage| is not interesting for debugging, without
+    // the contents of the database.  The COALESCE is because certain
+    // automatic elements will have a |name| but no |sql|,
+    const char* kSchemaSql = "SELECT COALESCE(sql, name) FROM sqlite_master";
+    sql::Statement statement(db->GetUniqueStatement(kSchemaSql));
+    while (statement.Step()) {
+      debug_info += statement.ColumnString(0);
+      debug_info += '\n';
+    }
+    if (!statement.Succeeded())
+      debug_info += "error\n";
+  }
+
+  // TODO(shess): Think of other things to log.  Not logging the
+  // statement text because the backtrace should suffice in most
+  // cases.  The database schema is a possibility, but the
+  // likelihood of recursive error callbacks makes that risky (same
+  // reasoning applies to other data fetched from the database).
+
+  DumpWithoutCrashing2000(debug_info);
+}
+
+// TODO(shess): If this proves out, perhaps lift the code out to
+// chrome/browser/diagnostics/sqlite_diagnostics.{h,cc}.
+void DatabaseErrorCallback(sql::Connection* db,
+                           size_t startup_kb,
+                           int error,
+                           sql::Statement* stmt) {
+  // TODO(shess): Assert that this is running on a safe thread.
+  // AFAICT, should be the history thread, but at this level I can't
+  // see how to reach that.
+
+  // Infrequently report information about the error up to the crash
+  // server.
+  static const uint64 kReportsPerMillion = 50000;
+
+  // TODO(shess): For now, don't report on beta or stable so as not to
+  // overwhelm the crash server.  Once the big fish are fried,
+  // consider reporting at a reduced rate on the bigger channels.
+  chrome::VersionInfo::Channel channel = chrome::VersionInfo::GetChannel();
+
+  // Since some/most errors will not resolve themselves, only report
+  // once per Chrome run.
+  static bool reported = false;
+
+  if (channel != chrome::VersionInfo::CHANNEL_STABLE &&
+      channel != chrome::VersionInfo::CHANNEL_BETA &&
+      !reported) {
+    uint64 rand = base::RandGenerator(1000000);
+    if (error == SQLITE_CORRUPT) {
+      // Once the database is known to be corrupt, it will generate a
+      // stream of errors until someone fixes it, so give one chance.
+      // Set first in case of errors in generating the report.
+      reported = true;
+
+      // Corrupt cases currently dominate, report them very infrequently.
+      static const uint64 kCorruptReportsPerMillion = 10000;
+      if (rand < kCorruptReportsPerMillion)
+        ReportCorrupt(db, startup_kb);
+    } else if (error == SQLITE_READONLY) {
+      // SQLITE_READONLY appears similar to SQLITE_CORRUPT - once it
+      // is seen, it is almost guaranteed to be seen again.
+      reported = true;
+
+      if (rand < kReportsPerMillion)
+        ReportError(db, error);
+    } else {
+      // Only set the flag when making a report.  This should allow
+      // later (potentially different) errors in a stream of errors to
+      // be reported.
+      //
+      // TODO(shess): Would it be worthwile to audit for which cases
+      // want once-only handling?  Sqlite.Error.Thumbnail shows
+      // CORRUPT and READONLY as almost 95% of all reports on these
+      // channels, so probably easier to just harvest from the field.
+      if (rand < kReportsPerMillion) {
+        reported = true;
+        ReportError(db, error);
+      }
+    }
+  }
+
+  // The default handling is to assert on debug and to ignore on release.
+  DLOG(FATAL) << db->GetErrorMessage();
+}
+
+}  // namespace
+
 namespace history {
 
 // Version number of the database.
-static const int kCurrentVersionNumber = 6;
-static const int kCompatibleVersionNumber = 6;
+static const int kCurrentVersionNumber = 7;
+static const int kCompatibleVersionNumber = 7;
 
 // Use 90 quality (out of 100) which is pretty high, because we're very
 // sensitive to artifacts for these small sized, highly detailed images.
@@ -177,15 +367,37 @@ sql::InitStatus ThumbnailDatabase::Init(
       return CantUpgradeToVersion(cur_version);
   }
 
+  if (!db_.DoesColumnExist("favicons", "icon_type")) {
+    LOG(ERROR) << "Raze because of missing favicon.icon_type";
+    RecordInvalidStructure(STRUCTURE_EVENT_VERSION4);
+
+    db_.RazeAndClose();
+    return sql::INIT_FAILURE;
+  }
+
   if (cur_version == 4) {
     ++cur_version;
     if (!UpgradeToVersion5())
       return CantUpgradeToVersion(cur_version);
   }
 
+  if (cur_version < 7 && !db_.DoesColumnExist("favicons", "sizes")) {
+    LOG(ERROR) << "Raze because of missing favicon.sizes";
+    RecordInvalidStructure(STRUCTURE_EVENT_VERSION5);
+
+    db_.RazeAndClose();
+    return sql::INIT_FAILURE;
+  }
+
   if (cur_version == 5) {
     ++cur_version;
     if (!UpgradeToVersion6())
+      return CantUpgradeToVersion(cur_version);
+  }
+
+  if (cur_version == 6) {
+    ++cur_version;
+    if (!UpgradeToVersion7())
       return CantUpgradeToVersion(cur_version);
   }
 
@@ -205,9 +417,8 @@ sql::InitStatus ThumbnailDatabase::Init(
   // TODO(pkotwicz): Revisit this in M27 and see if the razing can be removed.
   // (crbug.com/166453)
   if (IsFaviconDBStructureIncorrect()) {
-    LOG(ERROR) << "Raze thumbnail database because of invalid favicon db"
-               << "structure.";
-    UMA_HISTOGRAM_BOOLEAN("History.InvalidFaviconsDBStructure", true);
+    LOG(ERROR) << "Raze because of invalid favicon db structure.";
+    RecordInvalidStructure(STRUCTURE_EVENT_FAVICON);
 
     db_.RazeAndClose();
     return sql::INIT_FAILURE;
@@ -218,7 +429,13 @@ sql::InitStatus ThumbnailDatabase::Init(
 
 sql::InitStatus ThumbnailDatabase::OpenDatabase(sql::Connection* db,
                                                 const base::FilePath& db_name) {
-  db->set_error_histogram_name("Sqlite.Thumbnail.Error");
+  size_t startup_kb = 0;
+  int64 size_64;
+  if (file_util::GetFileSize(db_name, &size_64))
+    startup_kb = static_cast<size_t>(size_64 / 1024);
+
+  db->set_histogram_tag("Thumbnail");
+  db->set_error_callback(base::Bind(&DatabaseErrorCallback, db, startup_kb));
 
   // Thumbnails db now only stores favicons, so we don't need that big a page
   // size or cache.
@@ -302,8 +519,7 @@ bool ThumbnailDatabase::InitFaviconsTable(sql::Connection* db,
                "url LONGVARCHAR NOT NULL,"
                // Set the default icon_type as FAVICON to be consistent with
                // table upgrade in UpgradeToVersion4().
-               "icon_type INTEGER DEFAULT 1,"
-               "sizes LONGVARCHAR)");
+               "icon_type INTEGER DEFAULT 1)");
     if (!db->Execute(sql.c_str()))
       return false;
   }
@@ -345,7 +561,7 @@ bool ThumbnailDatabase::InitFaviconBitmapsIndex() {
 }
 
 bool ThumbnailDatabase::IsFaviconDBStructureIncorrect() {
-  return !db_.IsSQLValid("SELECT id, url, icon_type, sizes FROM favicons");
+  return !db_.IsSQLValid("SELECT id, url, icon_type FROM favicons");
 }
 
 void ThumbnailDatabase::BeginTransaction() {
@@ -364,6 +580,10 @@ void ThumbnailDatabase::Vacuum() {
   DCHECK(db_.transaction_nesting() == 0) <<
       "Can not have a transaction when vacuuming.";
   ignore_result(db_.Execute("VACUUM"));
+}
+
+void ThumbnailDatabase::TrimMemory(bool aggressively) {
+  db_.TrimMemory(aggressively);
 }
 
 bool ThumbnailDatabase::SetPageThumbnail(
@@ -476,7 +696,7 @@ bool ThumbnailDatabase::ThumbnailScoreForId(URLID id,
 }
 
 bool ThumbnailDatabase::GetFaviconBitmapIDSizes(
-    FaviconID icon_id,
+    chrome::FaviconID icon_id,
     std::vector<FaviconBitmapIDSize>* bitmap_id_sizes) {
   DCHECK(icon_id);
   sql::Statement statement(db_.GetCachedStatement(SQL_FROM_HERE,
@@ -499,7 +719,7 @@ bool ThumbnailDatabase::GetFaviconBitmapIDSizes(
 }
 
 bool ThumbnailDatabase::GetFaviconBitmaps(
-    FaviconID icon_id,
+    chrome::FaviconID icon_id,
     std::vector<FaviconBitmap>* favicon_bitmaps) {
   DCHECK(icon_id);
   sql::Statement statement(db_.GetCachedStatement(SQL_FROM_HERE,
@@ -561,7 +781,7 @@ bool ThumbnailDatabase::GetFaviconBitmap(
 }
 
 FaviconBitmapID ThumbnailDatabase::AddFaviconBitmap(
-    FaviconID icon_id,
+    chrome::FaviconID icon_id,
     const scoped_refptr<base::RefCountedMemory>& icon_data,
     base::Time time,
     const gfx::Size& pixel_size) {
@@ -615,7 +835,8 @@ bool ThumbnailDatabase::SetFaviconBitmapLastUpdateTime(
   return statement.Run();
 }
 
-bool ThumbnailDatabase::DeleteFaviconBitmapsForFavicon(FaviconID icon_id) {
+bool ThumbnailDatabase::DeleteFaviconBitmapsForFavicon(
+    chrome::FaviconID icon_id) {
   sql::Statement statement(db_.GetCachedStatement(SQL_FROM_HERE,
       "DELETE FROM favicon_bitmaps WHERE icon_id=?"));
   statement.BindInt64(0, icon_id);
@@ -629,20 +850,7 @@ bool ThumbnailDatabase::DeleteFaviconBitmap(FaviconBitmapID bitmap_id) {
   return statement.Run();
 }
 
-bool ThumbnailDatabase::SetFaviconSizes(FaviconID icon_id,
-                                        const FaviconSizes& favicon_sizes) {
-  std::string favicon_sizes_as_string;
-  FaviconSizesToDatabaseString(favicon_sizes, &favicon_sizes_as_string);
-
-  sql::Statement statement(db_.GetCachedStatement(SQL_FROM_HERE,
-      "UPDATE favicons SET sizes=? WHERE id=?"));
-  statement.BindString(0, favicon_sizes_as_string);
-  statement.BindInt64(1, icon_id);
-
-  return statement.Run();
-}
-
-bool ThumbnailDatabase::SetFaviconOutOfDate(FaviconID icon_id) {
+bool ThumbnailDatabase::SetFaviconOutOfDate(chrome::FaviconID icon_id) {
   sql::Statement statement(db_.GetCachedStatement(SQL_FROM_HERE,
       "UPDATE favicon_bitmaps SET last_updated=? WHERE icon_id=?"));
   statement.BindInt64(0, 0);
@@ -651,9 +859,10 @@ bool ThumbnailDatabase::SetFaviconOutOfDate(FaviconID icon_id) {
   return statement.Run();
 }
 
-FaviconID ThumbnailDatabase::GetFaviconIDForFaviconURL(const GURL& icon_url,
-                                                       int required_icon_type,
-                                                       IconType* icon_type) {
+chrome::FaviconID ThumbnailDatabase::GetFaviconIDForFaviconURL(
+    const GURL& icon_url,
+    int required_icon_type,
+    chrome::IconType* icon_type) {
   sql::Statement statement(db_.GetCachedStatement(SQL_FROM_HERE,
       "SELECT id, icon_type FROM favicons WHERE url=? AND (icon_type & ? > 0) "
       "ORDER BY icon_type DESC"));
@@ -664,19 +873,17 @@ FaviconID ThumbnailDatabase::GetFaviconIDForFaviconURL(const GURL& icon_url,
     return 0;  // not cached
 
   if (icon_type)
-    *icon_type = static_cast<IconType>(statement.ColumnInt(1));
+    *icon_type = static_cast<chrome::IconType>(statement.ColumnInt(1));
   return statement.ColumnInt64(0);
 }
 
-bool ThumbnailDatabase::GetFaviconHeader(
-    FaviconID icon_id,
-    GURL* icon_url,
-    IconType* icon_type,
-    FaviconSizes* favicon_sizes) {
+bool ThumbnailDatabase::GetFaviconHeader(chrome::FaviconID icon_id,
+                                         GURL* icon_url,
+                                         chrome::IconType* icon_type) {
   DCHECK(icon_id);
 
   sql::Statement statement(db_.GetCachedStatement(SQL_FROM_HERE,
-      "SELECT url, icon_type, sizes FROM favicons WHERE id=?"));
+      "SELECT url, icon_type FROM favicons WHERE id=?"));
   statement.BindInt64(0, icon_id);
 
   if (!statement.Step())
@@ -685,45 +892,39 @@ bool ThumbnailDatabase::GetFaviconHeader(
   if (icon_url)
     *icon_url = GURL(statement.ColumnString(0));
   if (icon_type)
-    *icon_type = static_cast<history::IconType>(statement.ColumnInt(1));
-  if (favicon_sizes)
-    DatabaseStringToFaviconSizes(statement.ColumnString(2), favicon_sizes);
+    *icon_type = static_cast<chrome::IconType>(statement.ColumnInt(1));
 
   return true;
 }
 
-FaviconID ThumbnailDatabase::AddFavicon(const GURL& icon_url,
-                                        IconType icon_type,
-                                        const FaviconSizes& favicon_sizes) {
-  std::string favicon_sizes_as_string;
-  FaviconSizesToDatabaseString(favicon_sizes, &favicon_sizes_as_string);
+chrome::FaviconID ThumbnailDatabase::AddFavicon(
+    const GURL& icon_url,
+    chrome::IconType icon_type) {
 
   sql::Statement statement(db_.GetCachedStatement(SQL_FROM_HERE,
-      "INSERT INTO favicons (url, icon_type, sizes) VALUES (?, ?, ?)"));
+      "INSERT INTO favicons (url, icon_type) VALUES (?, ?)"));
   statement.BindString(0, URLDatabase::GURLToDatabaseURL(icon_url));
   statement.BindInt(1, icon_type);
-  statement.BindString(2, favicon_sizes_as_string);
 
   if (!statement.Run())
     return 0;
   return db_.GetLastInsertRowId();
 }
 
-FaviconID ThumbnailDatabase::AddFavicon(
+chrome::FaviconID ThumbnailDatabase::AddFavicon(
     const GURL& icon_url,
-    IconType icon_type,
-    const FaviconSizes& favicon_sizes,
+    chrome::IconType icon_type,
     const scoped_refptr<base::RefCountedMemory>& icon_data,
     base::Time time,
     const gfx::Size& pixel_size) {
-  FaviconID icon_id = AddFavicon(icon_url, icon_type, favicon_sizes);
+  chrome::FaviconID icon_id = AddFavicon(icon_url, icon_type);
   if (!icon_id || !AddFaviconBitmap(icon_id, icon_data, time, pixel_size))
     return 0;
 
   return icon_id;
 }
 
-bool ThumbnailDatabase::DeleteFavicon(FaviconID id) {
+bool ThumbnailDatabase::DeleteFavicon(chrome::FaviconID id) {
   sql::Statement statement;
   statement.Assign(db_.GetCachedStatement(SQL_FROM_HERE,
       "DELETE FROM favicons WHERE id = ?"));
@@ -791,12 +992,12 @@ bool ThumbnailDatabase::GetIconMappingsForPageURL(
 }
 
 IconMappingID ThumbnailDatabase::AddIconMapping(const GURL& page_url,
-                                                FaviconID icon_id) {
+                                                chrome::FaviconID icon_id) {
   return AddIconMapping(page_url, icon_id, false);
 }
 
 bool ThumbnailDatabase::UpdateIconMapping(IconMappingID mapping_id,
-                                          FaviconID icon_id) {
+                                          chrome::FaviconID icon_id) {
   sql::Statement statement(db_.GetCachedStatement(SQL_FROM_HERE,
       "UPDATE icon_mapping SET icon_id=? WHERE id=?"));
   statement.BindInt64(0, icon_id);
@@ -821,7 +1022,7 @@ bool ThumbnailDatabase::DeleteIconMapping(IconMappingID mapping_id) {
   return statement.Run();
 }
 
-bool ThumbnailDatabase::HasMappingFor(FaviconID id) {
+bool ThumbnailDatabase::HasMappingFor(chrome::FaviconID id) {
   sql::Statement statement(db_.GetCachedStatement(SQL_FROM_HERE,
       "SELECT id FROM icon_mapping "
       "WHERE icon_id=?"));
@@ -854,7 +1055,7 @@ bool ThumbnailDatabase::CloneIconMappings(const GURL& old_page_url,
 }
 
 bool ThumbnailDatabase::InitIconMappingEnumerator(
-    IconType type,
+    chrome::IconType type,
     IconMappingEnumerator* enumerator) {
   DCHECK(!enumerator->statement_.is_valid());
   enumerator->statement_.Assign(db_.GetCachedStatement(
@@ -922,22 +1123,24 @@ bool ThumbnailDatabase::CommitTemporaryTables() {
 }
 
 IconMappingID ThumbnailDatabase::AddToTemporaryIconMappingTable(
-    const GURL& page_url, const FaviconID icon_id) {
+    const GURL& page_url,
+    const chrome::FaviconID icon_id) {
   return AddIconMapping(page_url, icon_id, true);
 }
 
-FaviconID ThumbnailDatabase::CopyFaviconAndFaviconBitmapsToTemporaryTables(
-    FaviconID source) {
+chrome::FaviconID
+ThumbnailDatabase::CopyFaviconAndFaviconBitmapsToTemporaryTables(
+    chrome::FaviconID source) {
   sql::Statement statement;
   statement.Assign(db_.GetCachedStatement(SQL_FROM_HERE,
-      "INSERT INTO temp_favicons (url, icon_type, sizes) "
-      "SELECT url, icon_type, sizes FROM favicons WHERE id = ?"));
+      "INSERT INTO temp_favicons (url, icon_type) "
+      "SELECT url, icon_type FROM favicons WHERE id = ?"));
   statement.BindInt64(0, source);
 
   if (!statement.Run())
     return 0;
 
-  FaviconID new_favicon_id = db_.GetLastInsertRowId();
+  chrome::FaviconID new_favicon_id = db_.GetLastInsertRowId();
 
   statement.Assign(db_.GetCachedStatement(SQL_FROM_HERE,
       "INSERT INTO temp_favicon_bitmaps (icon_id, last_updated, image_data, "
@@ -1023,7 +1226,7 @@ bool ThumbnailDatabase::RenameAndDropThumbnails(
   if (OpenDatabase(&db_, new_db_file) != sql::INIT_OK)
     return false;
 
-  file_util::Delete(old_db_file, false);
+  sql::Connection::Delete(old_db_file);
 
   meta_table_.Reset();
   if (!meta_table_.Init(&db_, kCurrentVersionNumber, kCompatibleVersionNumber))
@@ -1065,7 +1268,7 @@ bool ThumbnailDatabase::InitIconMappingIndex() {
 }
 
 IconMappingID ThumbnailDatabase::AddIconMapping(const GURL& page_url,
-                                                FaviconID icon_id,
+                                                chrome::FaviconID icon_id,
                                                 bool is_temporary) {
   const char* name = is_temporary ? "temp_icon_mapping" : "icon_mapping";
   const char* statement_name =
@@ -1135,39 +1338,24 @@ bool ThumbnailDatabase::UpgradeToVersion6() {
   return true;
 }
 
-// static
-void ThumbnailDatabase::FaviconSizesToDatabaseString(
-    const FaviconSizes& favicon_sizes,
-    std::string* favicon_sizes_string) {
-  std::vector<std::string> parts;
-  for (FaviconSizes::const_iterator it = favicon_sizes.begin();
-       it != favicon_sizes.end(); ++it) {
-    parts.push_back(base::IntToString(it->width()));
-    parts.push_back(base::IntToString(it->height()));
-  }
-  *favicon_sizes_string = JoinString(parts, ' ');
-}
+bool ThumbnailDatabase::UpgradeToVersion7() {
+  bool success =
+      db_.Execute("CREATE TABLE temp_favicons ("
+                  "id INTEGER PRIMARY KEY,"
+                  "url LONGVARCHAR NOT NULL,"
+                  "icon_type INTEGER DEFAULT 1)") &&
+      db_.Execute("INSERT INTO temp_favicons (id, url, icon_type) "
+                  "SELECT id, url, icon_type FROM favicons") &&
+      db_.Execute("DROP TABLE favicons") &&
+      db_.Execute("ALTER TABLE temp_favicons RENAME TO favicons") &&
+      db_.Execute("CREATE INDEX IF NOT EXISTS favicons_url ON favicons(url)");
 
-// static
-void ThumbnailDatabase::DatabaseStringToFaviconSizes(
-    const std::string& favicon_sizes_string,
-    FaviconSizes* favicon_sizes) {
-  bool parsing_errors = false;
+  if (!success)
+    return false;
 
-  base::StringTokenizer t(favicon_sizes_string, " ");
-  while (t.GetNext() && !parsing_errors) {
-    int width, height = 0;
-    parsing_errors |= !base::StringToInt(t.token(), &width);
-    if (!t.GetNext()) {
-      parsing_errors = true;
-      break;
-    }
-    parsing_errors |= !base::StringToInt(t.token(), &height);
-    favicon_sizes->push_back(gfx::Size(width, height));
-  }
-
-  if (parsing_errors)
-    favicon_sizes->clear();
+  meta_table_.SetVersionNumber(7);
+  meta_table_.SetCompatibleVersionNumber(std::min(7, kCompatibleVersionNumber));
+  return true;
 }
 
 }  // namespace history

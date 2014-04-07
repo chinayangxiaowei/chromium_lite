@@ -24,7 +24,8 @@ class TouchOmniboxResultView : public OmniboxResultView {
  public:
   TouchOmniboxResultView(OmniboxResultViewModel* model,
                          int model_index,
-                         const gfx::Font& font);
+                         LocationBarView* location_bar_view,
+                         const gfx::FontList& font_list);
 
  private:
   virtual ~TouchOmniboxResultView();
@@ -41,10 +42,10 @@ class TouchOmniboxResultView : public OmniboxResultView {
 class TouchOmniboxPopupContentsView
     : public OmniboxPopupContentsView {
  public:
-  TouchOmniboxPopupContentsView(const gfx::Font& font,
+  TouchOmniboxPopupContentsView(const gfx::FontList& font_list,
                                 OmniboxView* omnibox_view,
                                 OmniboxEditModel* edit_model,
-                                views::View* location_bar);
+                                LocationBarView* location_bar_view);
   virtual ~TouchOmniboxPopupContentsView();
 
   // OmniboxPopupContentsView:
@@ -53,9 +54,10 @@ class TouchOmniboxPopupContentsView
  protected:
   // OmniboxPopupContentsView:
   virtual void PaintResultViews(gfx::Canvas* canvas) OVERRIDE;
-  virtual OmniboxResultView* CreateResultView(OmniboxResultViewModel* model,
-                                              int model_index,
-                                              const gfx::Font& font) OVERRIDE;
+  virtual OmniboxResultView* CreateResultView(
+      OmniboxResultViewModel* model,
+      int model_index,
+      const gfx::FontList& font_list) OVERRIDE;
 
  private:
   std::vector<View*> GetVisibleChildren();

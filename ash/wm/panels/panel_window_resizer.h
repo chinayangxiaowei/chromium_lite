@@ -28,17 +28,15 @@ class ASH_EXPORT PanelWindowResizer : public WindowResizer {
   static PanelWindowResizer* Create(WindowResizer* next_window_resizer,
                                     aura::Window* window,
                                     const gfx::Point& location,
-                                    int window_component);
+                                    int window_component,
+                                    aura::client::WindowMoveSource source);
 
-  // WindowResizer overides:
+  // WindowResizer:
   virtual void Drag(const gfx::Point& location, int event_flags) OVERRIDE;
   virtual void CompleteDrag(int event_flags) OVERRIDE;
   virtual void RevertDrag() OVERRIDE;
   virtual aura::Window* GetTarget() OVERRIDE;
-
-  const gfx::Point& GetInitialLocationInParentForTest() const {
-    return details_.initial_location_in_parent;
-  }
+  virtual const gfx::Point& GetInitialLocation() const OVERRIDE;
 
  private:
   // Creates PanelWindowResizer that adds the ability to attach / detach panel
@@ -65,12 +63,16 @@ class ASH_EXPORT PanelWindowResizer : public WindowResizer {
 
   const Details details_;
 
+  // Last pointer location in screen coordinates.
+  gfx::Point last_location_;
+
   // Wraps a window resizer and adds panel detaching / reattaching and snapping
   // to launcher behavior during drags.
   scoped_ptr<WindowResizer> next_window_resizer_;
 
   // Panel container window.
   aura::Window* panel_container_;
+  aura::Window* initial_panel_container_;
 
   // Set to true once Drag() is invoked and the bounds of the window change.
   bool did_move_or_resize_;
@@ -88,6 +90,6 @@ class ASH_EXPORT PanelWindowResizer : public WindowResizer {
   DISALLOW_COPY_AND_ASSIGN(PanelWindowResizer);
 };
 
-}  // namespace aura
+}  // namespace ash
 
 #endif  // ASH_WM_PANELS_PANEL_WINDOW_RESIZER_H_

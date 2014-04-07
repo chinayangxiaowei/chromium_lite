@@ -11,6 +11,7 @@
 #include "ui/gfx/insets.h"
 #include "ui/views/layout/layout_constants.h"
 #include "ui/views/view.h"
+#include "ui/views/window/dialog_delegate.h"
 
 namespace views {
 
@@ -521,7 +522,9 @@ void ColumnSet::UnifySameSizedColumnSizes() {
 }
 
 void ColumnSet::UpdateRemainingWidth(ViewState* view_state) {
-  for (int i = view_state->start_col; i < view_state->col_span; ++i) {
+  for (int i = view_state->start_col,
+       max_col = view_state->start_col + view_state->col_span;
+       i < max_col; ++i) {
     view_state->remaining_width -= columns_[i]->Size();
   }
 }
@@ -675,8 +678,12 @@ GridLayout::~GridLayout() {
 // static
 GridLayout* GridLayout::CreatePanel(View* host) {
   GridLayout* layout = new GridLayout(host);
-  layout->SetInsets(kPanelVertMargin, kPanelHorizMargin,
-                    kPanelVertMargin, kPanelHorizMargin);
+
+  const int horizontal_margin = DialogDelegate::UseNewStyle() ?
+      kButtonHEdgeMarginNew : kPanelHorizMargin;
+
+  layout->SetInsets(kPanelVertMargin, horizontal_margin,
+                    kPanelVertMargin, horizontal_margin);
   return layout;
 }
 

@@ -20,7 +20,7 @@ SaveFile::SaveFile(const SaveFileCreateInfo* info, bool calculate_hash)
             GURL(),
             0,
             calculate_hash,
-            "",
+            std::string(),
             scoped_ptr<net::FileStream>(),
             net::BoundNetLog()),
       info_(info) {
@@ -60,6 +60,8 @@ void SaveFile::Finish() {
 }
 
 void SaveFile::AnnotateWithSourceInformation() {
+  // TODO(gbillock): If this method is called, it should set the
+  // file_.SetClientGuid() method first.
   file_.AnnotateWithSourceInformation();
 }
 

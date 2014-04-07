@@ -5,6 +5,7 @@
 #include "chrome/common/extensions/features/permission_feature.h"
 
 #include "chrome/common/extensions/permissions/permission_set.h"
+#include "chrome/common/extensions/permissions/permissions_data.h"
 
 namespace extensions {
 
@@ -26,14 +27,26 @@ Feature::Availability PermissionFeature::IsAvailableToContext(
   if (!availability.is_available())
     return availability;
 
-  // Optional permissions need to be checked so an API will not be set to
-  // undefined forever, when it could just need optional permissions.
-  if (extension && !extension->HasAPIPermission(name()) &&
-      !extension->optional_permission_set()->HasAnyAccessToAPI(name())) {
+  if (extension && !PermissionsData::HasAPIPermission(extension, name()))
     return CreateAvailability(NOT_PRESENT, extension->GetType());
-  }
 
   return CreateAvailability(IS_AVAILABLE);
 }
 
-}  // namespace
+std::string PermissionFeature::Parse(const base::DictionaryValue* value) {
+  std::string error = SimpleFeature::Parse(value);
+  if (!error.empty())
+    return error;
+
+  if (extension_types()->empty()) {
+    return name() + ": Permission features must specify at least one " +
+        "value for extension_types.";
+  }
+
+  if (!GetContexts()->empty())
+    return name() + ": Permission features do not support contexts.";
+
+  return std::string();
+}
+
+}  // namespace extensions

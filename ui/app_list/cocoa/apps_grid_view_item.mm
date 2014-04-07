@@ -5,22 +5,62 @@
 #import "ui/app_list/cocoa/apps_grid_view_item.h"
 
 #include "base/mac/foundation_util.h"
-#include "base/memory/scoped_nsobject.h"
+#include "base/mac/mac_util.h"
+#include "base/mac/scoped_nsobject.h"
 #include "base/strings/sys_string_conversions.h"
 #include "skia/ext/skia_utils_mac.h"
 #include "ui/app_list/app_list_constants.h"
 #include "ui/app_list/app_list_item_model.h"
 #include "ui/app_list/app_list_item_model_observer.h"
+#import "ui/app_list/cocoa/apps_grid_controller.h"
+#import "ui/base/cocoa/menu_controller.h"
 #include "ui/base/resource/resource_bundle.h"
-#include "ui/gfx/image/image_skia_util_mac.h"
 #include "ui/gfx/font.h"
+#include "ui/gfx/image/image_skia_operations.h"
+#include "ui/gfx/image/image_skia_util_mac.h"
+#include "ui/gfx/scoped_ns_graphics_context_save_gstate_mac.h"
 
 namespace {
 
 // Padding from the top of the tile to the top of the app icon.
 const CGFloat kTileTopPadding = 10;
 
+const CGFloat kIconSize = 48;
+
+const CGFloat kProgressBarHorizontalPadding = 8;
+const CGFloat kProgressBarVerticalPadding = 13;
+
+// On Mac, fonts of the same enum from ResourceBundle are larger. The smallest
+// enum is already used, so it needs to be reduced further to match Windows.
+const int kMacFontSizeDelta = -1;
+
 }  // namespace
+
+@class AppsGridItemBackgroundView;
+
+@interface AppsGridViewItem ()
+
+// Typed accessor for the root view.
+- (AppsGridItemBackgroundView*)itemBackgroundView;
+
+// Bridged methods from app_list::AppListItemModelObserver:
+// Update the title, correctly setting the color if the button is highlighted.
+- (void)updateButtonTitle;
+
+// Update the button image after ensuring its dimensions are |kIconSize|.
+- (void)updateButtonImage;
+
+// Ensure the page this item is on is the visible page in the grid.
+- (void)ensureVisible;
+
+// Add or remove a progress bar from the view.
+- (void)setItemIsInstalling:(BOOL)isInstalling;
+
+// Update the progress bar to represent |percent|, or make it indeterminate if
+// |percent| is -1, when unpacking begins.
+- (void)setPercentDownloaded:(int)percent;
+
+@end
 
 namespace app_list {
 
@@ -30,6 +70,7 @@ class ItemModelObserverBridge : public app_list::AppListItemModelObserver {
   virtual ~ItemModelObserverBridge();
 
   AppListItemModel* model() { return model_; }
+  NSMenu* GetContextMenu();
 
   virtual void ItemIconChanged() OVERRIDE;
   virtual void ItemTitleChanged() OVERRIDE;
@@ -40,6 +81,7 @@ class ItemModelObserverBridge : public app_list::AppListItemModelObserver {
  private:
   AppsGridViewItem* parent_;  // Weak. Owns us.
   AppListItemModel* model_;  // Weak. Owned by AppListModel::Apps.
+  base::scoped_nsobject<MenuController> context_menu_controller_;
 
   DISALLOW_COPY_AND_ASSIGN(ItemModelObserverBridge);
 };
@@ -55,24 +97,34 @@ ItemModelObserverBridge::~ItemModelObserverBridge() {
   model_->RemoveObserver(this);
 }
 
+NSMenu* ItemModelObserverBridge::GetContextMenu() {
+  if (!context_menu_controller_) {
+    context_menu_controller_.reset(
+        [[MenuController alloc] initWithModel:model_->GetContextMenuModel()
+                       useWithPopUpButtonCell:NO]);
+  }
+  return [context_menu_controller_ menu];
+}
+
 void ItemModelObserverBridge::ItemIconChanged() {
-  [[parent_ button] setImage:gfx::NSImageFromImageSkia(model_->icon())];
+  [parent_ updateButtonImage];
 }
 
 void ItemModelObserverBridge::ItemTitleChanged() {
-  [[parent_ button] setTitle:base::SysUTF8ToNSString(model_->title())];
+  [parent_ updateButtonTitle];
 }
 
 void ItemModelObserverBridge::ItemHighlightedChanged() {
-  //TODO(tapted): Ensure the item view is visible (requires pagination).
+  if (model_->highlighted())
+    [parent_ ensureVisible];
 }
 
 void ItemModelObserverBridge::ItemIsInstallingChanged() {
-  //TODO(tapted): Hide the title while itemModel->is_installing().
+  [parent_ setItemIsInstalling:model_->is_installing()];
 }
 
 void ItemModelObserverBridge::ItemPercentDownloadedChanged() {
-  //TODO(tapted): Update install progress bar for this item.
+  [parent_ setPercentDownloaded:model_->percent_downloaded()];
 }
 
 }  // namespace app_list
@@ -90,25 +142,43 @@ void ItemModelObserverBridge::ItemPercentDownloadedChanged() {
 
 @end
 
+@interface AppsGridItemButtonCell : NSButtonCell {
+ @private
+  BOOL hasShadow_;
+}
+
+@property(assign, nonatomic) BOOL hasShadow;
+
+@end
+
+@interface AppsGridItemButton : NSButton;
+@end
+
 @implementation AppsGridItemBackgroundView
 
 - (NSButton*)button {
+  // These views are part of a prototype NSCollectionViewItem, copied with an
+  // NSCoder. Rather than encoding additional members, the following relies on
+  // the button always being the first item added to AppsGridItemBackgroundView.
   return base::mac::ObjCCastStrict<NSButton>([[self subviews] objectAtIndex:0]);
 }
 
 - (void)setSelected:(BOOL)flag {
-  if (selected_ == flag)
-    return;
-
+  DCHECK(selected_ != flag);
   selected_ = flag;
   [self setNeedsDisplay:YES];
+}
+
+// Ignore all hit tests. The grid controller needs to be the owner of any drags.
+- (NSView*)hitTest:(NSPoint)aPoint {
+  return nil;
 }
 
 - (void)drawRect:(NSRect)dirtyRect {
   if (!selected_)
     return;
 
-  [gfx::SkColorToCalibratedNSColor(app_list::kHoverAndPushedColor) set];
+  [gfx::SkColorToSRGBNSColor(app_list::kSelectedColor) set];
   NSRectFillUsingOperation(dirtyRect, NSCompositeSourceOver);
 }
 
@@ -134,18 +204,12 @@ void ItemModelObserverBridge::ItemPercentDownloadedChanged() {
 
 @end
 
-@interface AppsGridViewItem ()
-
-- (AppsGridItemBackgroundView*)itemBackgroundView;
-
-@end
-
 @implementation AppsGridViewItem
 
 - (id)initWithSize:(NSSize)tileSize {
   if ((self = [super init])) {
-    scoped_nsobject<NSButton> prototypeButton(
-        [[NSButton alloc] initWithFrame:NSMakeRect(
+    base::scoped_nsobject<AppsGridItemButton> prototypeButton(
+        [[AppsGridItemButton alloc] initWithFrame:NSMakeRect(
             0, 0, tileSize.width, tileSize.height - kTileTopPadding)]);
 
     // This NSButton style always positions the icon at the very top of the
@@ -155,17 +219,55 @@ void ItemModelObserverBridge::ItemPercentDownloadedChanged() {
     [prototypeButton setButtonType:NSMomentaryChangeButton];
     [prototypeButton setBordered:NO];
 
-    [[prototypeButton cell]
-        setFont:ui::ResourceBundle::GetSharedInstance().GetFont(
-            app_list::kItemTextFontStyle).GetNativeFont()];
-
-    scoped_nsobject<AppsGridItemBackgroundView> prototypeButtonBackground(
-        [[AppsGridItemBackgroundView alloc] initWithFrame:NSMakeRect(
-            0, 0, tileSize.width, tileSize.height)]);
+    base::scoped_nsobject<AppsGridItemBackgroundView> prototypeButtonBackground(
+        [[AppsGridItemBackgroundView alloc]
+            initWithFrame:NSMakeRect(0, 0, tileSize.width, tileSize.height)]);
     [prototypeButtonBackground addSubview:prototypeButton];
     [self setView:prototypeButtonBackground];
   }
   return self;
+}
+
+- (NSProgressIndicator*)progressIndicator {
+  return progressIndicator_;
+}
+
+- (void)updateButtonTitle {
+  if (progressIndicator_)
+    return;
+
+  base::scoped_nsobject<NSMutableParagraphStyle> paragraphStyle(
+      [[NSMutableParagraphStyle alloc] init]);
+  [paragraphStyle setLineBreakMode:NSLineBreakByTruncatingTail];
+  [paragraphStyle setAlignment:NSCenterTextAlignment];
+  NSDictionary* titleAttributes = @{
+    NSParagraphStyleAttributeName : paragraphStyle,
+    NSFontAttributeName : ui::ResourceBundle::GetSharedInstance()
+        .GetFont(app_list::kItemTextFontStyle)
+        .DeriveFont(kMacFontSizeDelta)
+        .GetNativeFont(),
+    NSForegroundColorAttributeName : [self isSelected] ?
+        gfx::SkColorToSRGBNSColor(app_list::kGridTitleHoverColor) :
+        gfx::SkColorToSRGBNSColor(app_list::kGridTitleColor)
+  };
+  NSString* buttonTitle = base::SysUTF8ToNSString([self model]->title());
+  base::scoped_nsobject<NSAttributedString> attributedTitle(
+      [[NSAttributedString alloc] initWithString:buttonTitle
+                                      attributes:titleAttributes]);
+  [[self button] setAttributedTitle:attributedTitle];
+}
+
+- (void)updateButtonImage {
+  const gfx::Size iconSize = gfx::Size(kIconSize, kIconSize);
+  gfx::ImageSkia icon = [self model]->icon();
+  if (icon.size() != iconSize) {
+    icon = gfx::ImageSkiaOperations::CreateResizedImage(
+        icon, skia::ImageOperations::RESIZE_BEST, iconSize);
+  }
+  NSImage* buttonImage = gfx::NSImageFromImageSkiaWithColorSpace(
+      icon, base::mac::GetSRGBColorSpace());
+  [[self button] setImage:buttonImage];
+  [[[self button] cell] setHasShadow:[self model]->has_shadow()];
 }
 
 - (void)setModel:(app_list::AppListItemModel*)itemModel {
@@ -174,10 +276,9 @@ void ItemModelObserverBridge::ItemPercentDownloadedChanged() {
     return;
   }
 
-  NSButton* button = [self button];
-  [button setTitle:base::SysUTF8ToNSString(itemModel->title())];
-  [button setImage:gfx::NSImageFromImageSkia(itemModel->icon())];
   observerBridge_.reset(new app_list::ItemModelObserverBridge(self, itemModel));
+  [self updateButtonTitle];
+  [self updateButtonImage];
 
   if (trackingArea_.get())
     [[self view] removeTrackingArea:trackingArea_.get()];
@@ -197,9 +298,97 @@ void ItemModelObserverBridge::ItemPercentDownloadedChanged() {
 }
 
 - (NSButton*)button {
-  DCHECK_EQ(1u, [[[self view] subviews] count]);
-  return base::mac::ObjCCastStrict<NSButton>(
-      [[[self view] subviews] objectAtIndex:0]);
+  return [[self itemBackgroundView] button];
+}
+
+- (NSMenu*)contextMenu {
+  [self setSelected:YES];
+  return observerBridge_->GetContextMenu();
+}
+
+- (NSBitmapImageRep*)dragRepresentationForRestore:(BOOL)isRestore {
+  NSButton* button = [self button];
+  NSView* itemView = [self view];
+
+  // The snapshot is never drawn as if it was selected. Also remove the cell
+  // highlight on the button image, added when it was clicked.
+  [button setHidden:NO];
+  [[button cell] setHighlighted:NO];
+  [self setSelected:NO];
+  [progressIndicator_ setHidden:YES];
+  if (isRestore)
+    [self updateButtonTitle];
+  else
+    [button setTitle:@""];
+
+  NSBitmapImageRep* imageRep =
+      [itemView bitmapImageRepForCachingDisplayInRect:[itemView visibleRect]];
+  [itemView cacheDisplayInRect:[itemView visibleRect]
+              toBitmapImageRep:imageRep];
+
+  if (isRestore) {
+    [progressIndicator_ setHidden:NO];
+    [self setSelected:YES];
+  }
+  // Button is always hidden until the drag animation completes.
+  [button setHidden:YES];
+  return imageRep;
+}
+
+- (void)onInitialModelBuilt {
+  if ([self model]->highlighted()) {
+    [self ensureVisible];
+    if (![self model]->is_installing())
+      [self setSelected:YES];
+  }
+}
+
+- (void)ensureVisible {
+  NSCollectionView* collectionView = [self collectionView];
+  AppsGridController* gridController =
+      base::mac::ObjCCastStrict<AppsGridController>([collectionView delegate]);
+  size_t pageIndex = [gridController pageIndexForCollectionView:collectionView];
+  [gridController scrollToPage:pageIndex];
+}
+
+- (void)setItemIsInstalling:(BOOL)isInstalling {
+  if (!isInstalling == !progressIndicator_)
+    return;
+
+  [self ensureVisible];
+  if (!isInstalling) {
+    [progressIndicator_ removeFromSuperview];
+    progressIndicator_.reset();
+    [self updateButtonTitle];
+    [self setSelected:YES];
+    return;
+  }
+
+  NSRect rect = NSMakeRect(
+      kProgressBarHorizontalPadding,
+      kProgressBarVerticalPadding,
+      NSWidth([[self view] bounds]) - 2 * kProgressBarHorizontalPadding,
+      NSProgressIndicatorPreferredAquaThickness);
+  [[self button] setTitle:@""];
+  progressIndicator_.reset([[NSProgressIndicator alloc] initWithFrame:rect]);
+  [progressIndicator_ setIndeterminate:NO];
+  [progressIndicator_ setControlSize:NSSmallControlSize];
+  [[self view] addSubview:progressIndicator_];
+}
+
+- (void)setPercentDownloaded:(int)percent {
+  // In a corner case, items can be installing when they are first added. For
+  // those, the icon will start desaturated. Wait for a progress update before
+  // showing the progress bar.
+  [self setItemIsInstalling:YES];
+  if (percent != -1) {
+    [progressIndicator_ setDoubleValue:percent];
+    return;
+  }
+
+  // Otherwise, fully downloaded and waiting for install to complete.
+  [progressIndicator_ setIndeterminate:YES];
+  [progressIndicator_ startAnimation:self];
 }
 
 - (AppsGridItemBackgroundView*)itemBackgroundView {
@@ -215,8 +404,49 @@ void ItemModelObserverBridge::ItemPercentDownloadedChanged() {
 }
 
 - (void)setSelected:(BOOL)flag {
+  if ([self isSelected] == flag)
+    return;
+
   [[self itemBackgroundView] setSelected:flag];
   [super setSelected:flag];
+  [self updateButtonTitle];
+}
+
+@end
+
+@implementation AppsGridItemButton
+
++ (Class)cellClass {
+  return [AppsGridItemButtonCell class];
+}
+
+@end
+
+@implementation AppsGridItemButtonCell
+
+@synthesize hasShadow = hasShadow_;
+
+- (void)drawImage:(NSImage*)image
+        withFrame:(NSRect)frame
+           inView:(NSView*)controlView {
+  if (!hasShadow_) {
+    [super drawImage:image
+           withFrame:frame
+              inView:controlView];
+    return;
+  }
+
+  base::scoped_nsobject<NSShadow> shadow([[NSShadow alloc] init]);
+  gfx::ScopedNSGraphicsContextSaveGState context;
+  [shadow setShadowOffset:NSMakeSize(0, -2)];
+  [shadow setShadowBlurRadius:2.0];
+  [shadow setShadowColor:[NSColor colorWithCalibratedWhite:0
+                                                     alpha:0.14]];
+  [shadow set];
+
+  [super drawImage:image
+         withFrame:frame
+            inView:controlView];
 }
 
 @end

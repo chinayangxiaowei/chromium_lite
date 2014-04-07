@@ -36,14 +36,9 @@
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
 
-namespace {
-// Size of black border at bottom (or side) of launcher.
-const int kNumBlackPixels = 3;
-// Alpha to paint dimming image with.
-const int kDimAlpha = 96;
-}
-
 namespace ash {
+
+const char Launcher::kNativeViewName[] = "LauncherView";
 
 Launcher::Launcher(LauncherModel* launcher_model,
                    LauncherDelegate* launcher_delegate,
@@ -56,24 +51,26 @@ Launcher::Launcher(LauncherModel* launcher_model,
       launcher_model, delegate_, shelf_widget_->shelf_layout_manager());
   launcher_view_->Init();
   shelf_widget_->GetContentsView()->AddChildView(launcher_view_);
-  shelf_widget_->GetNativeView()->SetName("LauncherView");
-  shelf_widget_->GetNativeView()->SetProperty(
-      internal::kStayInSameRootWindowKey, true);
+  shelf_widget_->GetNativeView()->SetName(kNativeViewName);
+  delegate_->OnLauncherCreated(this);
 }
 
 Launcher::~Launcher() {
+  delegate_->OnLauncherDestroyed(this);
 }
 
 // static
 Launcher* Launcher::ForPrimaryDisplay() {
-  return internal::RootWindowController::ForLauncher(
-      Shell::GetPrimaryRootWindow())->shelf()->launcher();
+  ShelfWidget* shelf_widget = internal::RootWindowController::ForLauncher(
+      Shell::GetPrimaryRootWindow())->shelf();
+  return shelf_widget ? shelf_widget->launcher() : NULL;
 }
 
 // static
 Launcher* Launcher::ForWindow(aura::Window* window) {
-  return internal::RootWindowController::ForLauncher(window)->
-      shelf()->launcher();
+  ShelfWidget* shelf_widget =
+    internal::RootWindowController::ForLauncher(window)->shelf();
+  return shelf_widget ? shelf_widget->launcher() : NULL;
 }
 
 void Launcher::SetAlignment(ShelfAlignment alignment) {
@@ -85,9 +82,6 @@ void Launcher::SetAlignment(ShelfAlignment alignment) {
 gfx::Rect Launcher::GetScreenBoundsOfItemIconForWindow(aura::Window* window) {
   LauncherID id = delegate_->GetIDByWindow(window);
   gfx::Rect bounds(launcher_view_->GetIdealBoundsOfItemIcon(id));
-  if (bounds.IsEmpty())
-    return bounds;
-
   gfx::Point screen_origin;
   views::View::ConvertPointToScreen(launcher_view_, &screen_origin);
   return gfx::Rect(screen_origin.x() + bounds.x(),
@@ -105,13 +99,16 @@ void Launcher::UpdateIconPositionForWindow(aura::Window* window) {
 }
 
 void Launcher::ActivateLauncherItem(int index) {
+  // We pass in a keyboard event which will then trigger a switch to the
+  // next item if the current one is already active.
+  ui::KeyEvent event(ui::ET_KEY_RELEASED,
+                     ui::VKEY_UNKNOWN,  // The actual key gets ignored.
+                     ui::EF_NONE,
+                     false);
+
   const ash::LauncherItems& items =
       launcher_view_->model()->items();
-  ui::MouseEvent event(ui::ET_MOUSE_PRESSED,
-                       gfx::Point(),
-                       gfx::Point(),
-                       ui::EF_NONE);
-  delegate_->ItemClicked(items[index], event);
+  delegate_->ItemSelected(items[index], event);
 }
 
 void Launcher::CycleWindowLinear(CycleDirection direction) {
@@ -133,10 +130,6 @@ bool Launcher::IsShowingMenu() const {
   return launcher_view_->IsShowingMenu();
 }
 
-void Launcher::ShowContextMenu(const gfx::Point& location) {
-  launcher_view_->ShowContextMenu(location, false);
-}
-
 bool Launcher::IsShowingOverflowBubble() const {
   return launcher_view_->IsShowingOverflowBubble();
 }
@@ -149,22 +142,25 @@ bool Launcher::IsVisible() const {
   return launcher_view_->visible();
 }
 
+void Launcher::SchedulePaint() {
+  launcher_view_->SchedulePaintForAllButtons();
+}
+
 views::View* Launcher::GetAppListButtonView() const {
   return launcher_view_->GetAppListButtonView();
 }
 
-void Launcher::SwitchToWindow(int window_index) {
+void Launcher::LaunchAppIndexAt(int item_index) {
   LauncherModel* launcher_model = launcher_view_->model();
   const LauncherItems& items = launcher_model->items();
   int item_count = launcher_model->item_count();
-  int indexes_left = window_index >= 0 ? window_index : item_count;
+  int indexes_left = item_index >= 0 ? item_index : item_count;
   int found_index = -1;
 
   // Iterating until we have hit the index we are interested in which
   // is true once indexes_left becomes negative.
   for (int i = 0; i < item_count && indexes_left >= 0; i++) {
-    if (items[i].type != TYPE_APP_LIST &&
-        items[i].type != TYPE_BROWSER_SHORTCUT) {
+    if (items[i].type != TYPE_APP_LIST) {
       found_index = i;
       indexes_left--;
     }
@@ -173,10 +169,11 @@ void Launcher::SwitchToWindow(int window_index) {
   // There are two ways how found_index can be valid: a.) the nth item was
   // found (which is true when indexes_left is -1) or b.) the last item was
   // requested (which is true when index was passed in as a negative number).
-  if (found_index >= 0 && (indexes_left == -1 || window_index < 0) &&
-      (items[found_index].status == ash::STATUS_RUNNING ||
-       items[found_index].status == ash::STATUS_CLOSED)) {
-    // Then set this one as active.
+  if (found_index >= 0 && (indexes_left == -1 || item_index < 0) &&
+      (delegate_->IsPerAppLauncher() ||
+       (items[found_index].status == ash::STATUS_RUNNING ||
+        items[found_index].status == ash::STATUS_CLOSED))) {
+    // Then set this one as active (or advance to the next item of its kind).
     ActivateLauncherItem(found_index);
   }
 }
@@ -191,6 +188,10 @@ void Launcher::SetLauncherViewBounds(gfx::Rect bounds) {
 
 gfx::Rect Launcher::GetLauncherViewBounds() const {
   return launcher_view_->bounds();
+}
+
+app_list::ApplicationDragAndDropHost* Launcher::GetDragAndDropHostForAppList() {
+  return launcher_view_;
 }
 
 }  // namespace ash

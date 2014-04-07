@@ -11,12 +11,13 @@
 #include "base/compiler_specific.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "cc/animation/animation_events.h"
 #include "cc/animation/layer_animation_event_observer.h"
 #include "cc/base/scoped_ptr_vector.h"
 #include "cc/layers/content_layer_client.h"
 #include "cc/layers/texture_layer_client.h"
+#include "cc/resources/texture_mailbox.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "third_party/skia/include/core/SkRegion.h"
 #include "ui/compositor/compositor.h"
@@ -30,6 +31,7 @@ class SkCanvas;
 
 namespace cc {
 class ContentLayer;
+class CopyOutputRequest;
 class DelegatedFrameData;
 class DelegatedRendererLayer;
 class Layer;
@@ -250,9 +252,18 @@ class COMPOSITOR_EXPORT Layer
   void SetExternalTexture(ui::Texture* texture);
   ui::Texture* external_texture() { return texture_.get(); }
 
+  // Set new TextureMailbox for this layer. Note that |mailbox| may hold a
+  // shared memory resource or an actual mailbox for a texture.
+  void SetTextureMailbox(const cc::TextureMailbox& mailbox, float scale_factor);
+  cc::TextureMailbox GetTextureMailbox(float* scale_factor);
+
   // Sets a delegated frame, coming from a child compositor.
   void SetDelegatedFrame(scoped_ptr<cc::DelegatedFrameData> frame,
                          gfx::Size frame_size_in_dip);
+
+  bool has_external_content() {
+    return texture_layer_.get() || delegated_renderer_layer_.get();
+  }
 
   // Gets unused resources to recycle to the child compositor.
   void TakeUnusedResourcesForChildCompositor(
@@ -296,6 +307,9 @@ class COMPOSITOR_EXPORT Layer
   // (e.g. the GPU process on UI_COMPOSITOR_IMAGE_TRANSPORT).
   bool layer_updated_externally() const { return layer_updated_externally_; }
 
+  // Requets a copy of the layer's output as a texture or bitmap.
+  void RequestCopyOfOutput(scoped_ptr<cc::CopyOutputRequest> request);
+
   // ContentLayerClient
   virtual void PaintContents(
       SkCanvas* canvas, gfx::Rect clip, gfx::RectF* opaque) OVERRIDE;
@@ -304,8 +318,10 @@ class COMPOSITOR_EXPORT Layer
   cc::Layer* cc_layer() { return cc_layer_; }
 
   // TextureLayerClient
-  virtual unsigned PrepareTexture(cc::ResourceUpdateQueue* queue) OVERRIDE;
+  virtual unsigned PrepareTexture() OVERRIDE;
   virtual WebKit::WebGraphicsContext3D* Context3d() OVERRIDE;
+  virtual bool PrepareTextureMailbox(cc::TextureMailbox* mailbox,
+                                     bool use_shared_memory) OVERRIDE;
 
   float device_scale_factor() const { return device_scale_factor_; }
 
@@ -402,9 +418,6 @@ class COMPOSITOR_EXPORT Layer
   // Visibility of this layer. See SetVisible/IsDrawn for more details.
   bool visible_;
 
-  // Computed based on the visibility of this layer and its ancestors.
-  bool is_drawn_;
-
   bool force_render_surface_;
 
   bool fills_bounds_opaquely_;
@@ -463,6 +476,12 @@ class COMPOSITOR_EXPORT Layer
 
   // A cached copy of |Compositor::device_scale_factor()|.
   float device_scale_factor_;
+
+  // A cached copy of the TextureMailbox given texture_layer_.
+  cc::TextureMailbox mailbox_;
+
+  // Device scale factor in which mailbox_ was rendered in.
+  float mailbox_scale_factor_;
 
   // The size of the delegated frame in DIP, set when SetDelegatedFrame was
   // called.

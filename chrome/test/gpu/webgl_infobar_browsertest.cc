@@ -4,19 +4,20 @@
 
 #include "base/command_line.h"
 #include "base/path_service.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/infobars/confirm_infobar_delegate.h"
 #include "chrome/browser/infobars/infobar_service.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/test_launcher_utils.h"
+#include "chrome/test/base/test_switches.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/gpu_data_manager.h"
 #include "content/public/browser/notification_service.h"
@@ -24,7 +25,7 @@
 #include "content/public/common/content_paths.h"
 #include "content/public/common/page_transition_types.h"
 #include "content/public/test/browser_test_utils.h"
-#include "content/test/gpu/gpu_test_config.h"
+#include "gpu/config/gpu_test_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gl/gl_implementation.h"
 
@@ -50,13 +51,6 @@ void SimulateGPUCrash(Browser* browser) {
 
 class WebGLInfobarTest : public InProcessBrowserTest {
  protected:
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
-    // GPU tests require gpu acceleration.
-#if !defined(OS_MACOSX)
-    command_line->AppendSwitchASCII(
-        switches::kUseGL, gfx::kGLImplementationOSMesaName);
-#endif
-  }
   virtual void SetUpInProcessBrowserTestFixture() OVERRIDE {
     base::FilePath test_dir;
     ASSERT_TRUE(PathService::Get(content::DIR_TEST_DATA, &test_dir));
@@ -66,7 +60,13 @@ class WebGLInfobarTest : public InProcessBrowserTest {
 };
 
 IN_PROC_BROWSER_TEST_F(WebGLInfobarTest, ContextLossRaisesInfobar) {
-  if (GPUTestBotConfig::CurrentConfigMatches("XP"))
+#if defined(OS_WIN) && defined(USE_ASH)
+  // Disable this test in Metro+Ash for now (http://crbug.com/262796).
+  if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kAshBrowserTests))
+    return;
+#endif
+
+  if (gpu::GPUTestBotConfig::CurrentConfigMatches("XP"))
     return;
 
   // Load page and wait for it to load.
@@ -87,11 +87,17 @@ IN_PROC_BROWSER_TEST_F(WebGLInfobarTest, ContextLossRaisesInfobar) {
   EXPECT_EQ(1u,
             InfoBarService::FromWebContents(
                 browser()->tab_strip_model()->GetActiveWebContents())->
-                    GetInfoBarCount());
+                    infobar_count());
 }
 
 IN_PROC_BROWSER_TEST_F(WebGLInfobarTest, ContextLossInfobarReload) {
-  if (GPUTestBotConfig::CurrentConfigMatches("XP"))
+#if defined(OS_WIN) && defined(USE_ASH)
+  // Disable this test in Metro+Ash for now (http://crbug.com/262796).
+  if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kAshBrowserTests))
+    return;
+#endif
+
+  if (gpu::GPUTestBotConfig::CurrentConfigMatches("XP"))
     return;
 
   content::DOMMessageQueue message_queue;
@@ -118,20 +124,16 @@ IN_PROC_BROWSER_TEST_F(WebGLInfobarTest, ContextLossInfobarReload) {
         content::NotificationService::AllSources());
   SimulateGPUCrash(browser());
   infobar_added.Wait();
-  EXPECT_EQ(1u,
-            InfoBarService::FromWebContents(
-                browser()->tab_strip_model()->GetActiveWebContents())->
-                    GetInfoBarCount());
-  InfoBarDelegate* delegate = InfoBarService::FromWebContents(
-      browser()->tab_strip_model()->GetActiveWebContents())->
-          GetInfoBarDelegateAt(0);
-  ASSERT_TRUE(delegate);
+  InfoBarService* infobar_service = InfoBarService::FromWebContents(
+      browser()->tab_strip_model()->GetActiveWebContents());
+  ASSERT_EQ(1u, infobar_service->infobar_count());
+  InfoBarDelegate* delegate = infobar_service->infobar_at(0);
   ASSERT_TRUE(delegate->AsThreeDAPIInfoBarDelegate());
   delegate->AsConfirmInfoBarDelegate()->Cancel();
 
   // The page should reload and another message sent to the
   // DomAutomationController.
-  m = "";
+  m.clear();
   ASSERT_TRUE(message_queue.WaitForMessage(&m));
   EXPECT_EQ("\"LOADED\"", m);
 }

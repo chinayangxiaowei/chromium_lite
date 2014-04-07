@@ -11,9 +11,10 @@
 #include "base/command_line.h"
 #include "base/metrics/histogram.h"
 #include "base/stl_util.h"
-#include "base/stringprintf.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/time.h"
+#include "base/strings/stringprintf.h"
+#include "base/time/time.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/history/history_database.h"
 #include "chrome/browser/history/history_db_task.h"
 #include "chrome/browser/history/history_notifications.h"
@@ -23,7 +24,6 @@
 #include "chrome/browser/predictors/predictor_database_factory.h"
 #include "chrome/browser/predictors/resource_prefetcher_manager.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/browser/browser_thread.h"
@@ -208,7 +208,7 @@ bool ResourcePrefetchPredictor::IsHandledSubresource(
     resource_status |= RESOURCE_STATUS_URL_TOO_LONG;
   }
 
-  if (!response->response_info().headers)
+  if (!response->response_info().headers.get())
     resource_status |= RESOURCE_STATUS_HEADERS_MISSING;
 
   if (!IsCacheable(response))
@@ -229,7 +229,7 @@ bool ResourcePrefetchPredictor::IsCacheable(const net::URLRequest* response) {
   // For non cached responses, we will ensure that the freshness lifetime is
   // some sane value.
   const net::HttpResponseInfo& response_info = response->response_info();
-  if (!response_info.headers)
+  if (!response_info.headers.get())
     return false;
   base::Time response_time(response_info.response_time);
   response_time += base::TimeDelta::FromSeconds(1);
@@ -442,7 +442,7 @@ void ResourcePrefetchPredictor::Observe(
 }
 
 void ResourcePrefetchPredictor::Shutdown() {
-  if (prefetch_manager_) {
+  if (prefetch_manager_.get()) {
     prefetch_manager_->ShutdownOnUIThread();
     prefetch_manager_ = NULL;
   }
@@ -1012,7 +1012,8 @@ void ResourcePrefetchPredictor::LearnNavigation(
   } else {
     bool is_host = key_type == PREFETCH_KEY_TYPE_HOST;
     PrefetchData empty_data(
-        !is_host ? PREFETCH_KEY_TYPE_HOST : PREFETCH_KEY_TYPE_URL , "");
+        !is_host ? PREFETCH_KEY_TYPE_HOST : PREFETCH_KEY_TYPE_URL,
+        std::string());
     const PrefetchData& host_data = is_host ? cache_entry->second : empty_data;
     const PrefetchData& url_data = is_host ? empty_data : cache_entry->second;
     BrowserThread::PostTask(

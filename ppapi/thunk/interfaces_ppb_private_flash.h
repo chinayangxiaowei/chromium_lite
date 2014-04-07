@@ -35,8 +35,8 @@ PROXIED_IFACE(NoAPIName,
               PPB_Flash_Clipboard_5_0)
 
 PROXIED_IFACE(NoAPIName,
-              PPB_FLASH_DEVICEID_INTERFACE_1_0,
-              PPB_Flash_DeviceID_1_0)
+              PPB_FLASH_DRM_INTERFACE_1_0,
+              PPB_Flash_DRM_1_0)
 
 PROXIED_IFACE(NoAPIName,
               PPB_FLASH_FONTFILE_INTERFACE_0_1,

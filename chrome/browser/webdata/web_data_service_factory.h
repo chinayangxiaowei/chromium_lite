@@ -9,15 +9,19 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/singleton.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_keyed_service.h"
-#include "chrome/browser/profiles/profile_keyed_service_factory.h"
-#include "chrome/browser/webdata/web_database_service.h"
+#include "components/browser_context_keyed_service/browser_context_keyed_service.h"
+#include "components/browser_context_keyed_service/browser_context_keyed_service_factory.h"
+#include "components/webdata/common/web_database_service.h"
 
-class AutofillWebDataService;
+class TokenWebData;
 class WebDataService;
 
+namespace autofill {
+class AutofillWebDataService;
+}  // namespace autofill
+
 // A wrapper of WebDataService so that we can use it as a profile keyed service.
-class WebDataServiceWrapper : public ProfileKeyedService {
+class WebDataServiceWrapper : public BrowserContextKeyedService {
  public:
   explicit WebDataServiceWrapper(Profile* profile);
 
@@ -26,17 +30,20 @@ class WebDataServiceWrapper : public ProfileKeyedService {
 
   virtual ~WebDataServiceWrapper();
 
-  // ProfileKeyedService:
+  // BrowserContextKeyedService:
   virtual void Shutdown() OVERRIDE;
 
-  virtual scoped_refptr<AutofillWebDataService> GetAutofillWebData();
+  virtual scoped_refptr<autofill::AutofillWebDataService> GetAutofillWebData();
 
   virtual scoped_refptr<WebDataService> GetWebData();
+
+  virtual scoped_refptr<TokenWebData> GetTokenWebData();
 
  private:
   scoped_refptr<WebDatabaseService> web_database_;
 
-  scoped_refptr<AutofillWebDataService> autofill_web_data_;
+  scoped_refptr<autofill::AutofillWebDataService> autofill_web_data_;
+  scoped_refptr<TokenWebData> token_web_data_;
   scoped_refptr<WebDataService> web_data_;
 
   DISALLOW_COPY_AND_ASSIGN(WebDataServiceWrapper);
@@ -44,7 +51,7 @@ class WebDataServiceWrapper : public ProfileKeyedService {
 
 // Singleton that owns all WebDataServiceWrappers and associates them with
 // Profiles.
-class WebDataServiceFactory : public ProfileKeyedServiceFactory {
+class WebDataServiceFactory : public BrowserContextKeyedServiceFactory {
  public:
   // Returns the |WebDataServiceWrapper| associated with the |profile|.
   // |access_type| is either EXPLICIT_ACCESS or IMPLICIT_ACCESS
@@ -63,10 +70,11 @@ class WebDataServiceFactory : public ProfileKeyedServiceFactory {
   WebDataServiceFactory();
   virtual ~WebDataServiceFactory();
 
-  // |ProfileKeyedBaseFactory| methods:
-  virtual bool ServiceRedirectedInIncognito() const OVERRIDE;
-  virtual ProfileKeyedService* BuildServiceInstanceFor(
-      Profile* profile) const OVERRIDE;
+  // |BrowserContextKeyedBaseFactory| methods:
+  virtual content::BrowserContext* GetBrowserContextToUse(
+      content::BrowserContext* context) const OVERRIDE;
+  virtual BrowserContextKeyedService* BuildServiceInstanceFor(
+      content::BrowserContext* profile) const OVERRIDE;
   virtual bool ServiceIsNULLWhileTesting() const OVERRIDE;
 
   DISALLOW_COPY_AND_ASSIGN(WebDataServiceFactory);

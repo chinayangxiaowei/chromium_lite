@@ -9,27 +9,29 @@
 
 #include "base/bind.h"
 #include "base/i18n/rtl.h"
-#include "base/message_loop.h"
-#include "base/utf_string_conversions.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/api/commands/command_service.h"
 #include "chrome/browser/extensions/extension_action.h"
 #include "chrome/browser/extensions/extension_action_manager.h"
 #include "chrome/browser/extensions/extension_install_ui.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/signin/signin_promo.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/singleton_tabs.h"
+#include "chrome/browser/ui/sync/sync_promo_ui.h"
 #include "chrome/browser/ui/views/browser_action_view.h"
 #include "chrome/browser/ui/views/browser_actions_container.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
 #include "chrome/browser/ui/views/toolbar_view.h"
-#include "chrome/browser/ui/webui/sync_promo/sync_promo_ui.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/extensions/api/extension_action/action_info.h"
 #include "chrome/common/extensions/api/omnibox/omnibox_handler.h"
 #include "chrome/common/extensions/extension.h"
+#include "chrome/common/extensions/sync_helper.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/browser/notification_details.h"
 #include "content/public/browser/notification_source.h"
@@ -132,7 +134,7 @@ class InstalledBubbleContent : public views::View,
     bool has_keybinding = GetKeybinding(&command);
     string16 key;  // Keyboard shortcut or keyword to display in the bubble.
 
-    if (extension->GetSyncType() == Extension::SYNC_TYPE_EXTENSION &&
+    if (extensions::sync_helper::IsSyncableExtension(extension) &&
         SyncPromoUI::ShouldShowSyncPromo(browser->profile()))
       flavors_ |= SIGN_IN_PROMO;
 
@@ -236,11 +238,11 @@ class InstalledBubbleContent : public views::View,
     // Add the Close button (for all flavors).
     close_button_ = new views::ImageButton(this);
     close_button_->SetImage(views::CustomButton::STATE_NORMAL,
-        rb.GetImageSkiaNamed(IDR_CLOSE_BAR));
+        rb.GetImageSkiaNamed(IDR_CLOSE_2));
     close_button_->SetImage(views::CustomButton::STATE_HOVERED,
-        rb.GetImageSkiaNamed(IDR_CLOSE_BAR_H));
+        rb.GetImageSkiaNamed(IDR_CLOSE_2_H));
     close_button_->SetImage(views::CustomButton::STATE_PRESSED,
-        rb.GetImageSkiaNamed(IDR_CLOSE_BAR_P));
+        rb.GetImageSkiaNamed(IDR_CLOSE_2_P));
     AddChildView(close_button_);
   }
 
@@ -260,8 +262,8 @@ class InstalledBubbleContent : public views::View,
       configure_url = chrome::kChromeUIExtensionsURL;
       configure_url += chrome::kExtensionConfigureCommandsSubPage;
     } else if (source == sign_in_link_) {
-      configure_url = SyncPromoUI::GetSyncPromoURL(
-          GURL(), SyncPromoUI::SOURCE_EXTENSION_INSTALL_BUBBLE, false).spec();
+      configure_url = signin::GetPromoURL(
+          signin::SOURCE_EXTENSION_INSTALL_BUBBLE, false).spec();
     } else {
       NOTREACHED();
       return;
@@ -539,14 +541,13 @@ ExtensionInstalledBubble::ExtensionInstalledBubble(const Extension* extension,
     : extension_(extension),
       browser_(browser),
       icon_(icon),
-      animation_wait_retries_(0) {
-  extensions::ExtensionActionManager* extension_action_manager =
-      extensions::ExtensionActionManager::Get(browser_->profile());
+      animation_wait_retries_(0),
+      weak_factory_(this) {
   if (!extensions::OmniboxInfo::GetKeyword(extension).empty())
     type_ = OMNIBOX_KEYWORD;
-  else if (extension_action_manager->GetBrowserAction(*extension_))
+  else if (extensions::ActionInfo::GetBrowserActionInfo(extension))
     type_ = BROWSER_ACTION;
-  else if (extension_action_manager->GetPageAction(*extension) &&
+  else if (extensions::ActionInfo::GetPageActionInfo(extension) &&
            extensions::ActionInfo::IsVerboseInstallMessage(extension))
     type_ = PAGE_ACTION;
   else
@@ -561,6 +562,8 @@ ExtensionInstalledBubble::ExtensionInstalledBubble(const Extension* extension,
       content::Source<Profile>(browser->profile()));
   registrar_.Add(this, chrome::NOTIFICATION_EXTENSION_UNLOADED,
       content::Source<Profile>(browser->profile()));
+  registrar_.Add(this, chrome::NOTIFICATION_BROWSER_CLOSING,
+      content::Source<Browser>(browser));
 }
 
 ExtensionInstalledBubble::~ExtensionInstalledBubble() {}
@@ -575,16 +578,21 @@ void ExtensionInstalledBubble::Observe(
     if (extension == extension_) {
       animation_wait_retries_ = 0;
       // PostTask to ourself to allow all EXTENSION_LOADED Observers to run.
-      MessageLoopForUI::current()->PostTask(
+      base::MessageLoopForUI::current()->PostTask(
           FROM_HERE,
           base::Bind(&ExtensionInstalledBubble::ShowInternal,
-                     base::Unretained(this)));
+                     weak_factory_.GetWeakPtr()));
     }
   } else if (type == chrome::NOTIFICATION_EXTENSION_UNLOADED) {
     const Extension* extension =
         content::Details<extensions::UnloadedExtensionInfo>(details)->extension;
-    if (extension == extension_)
+    if (extension == extension_) {
+      // Extension is going away, make sure ShowInternal won't be called.
+      weak_factory_.InvalidateWeakPtrs();
       extension_ = NULL;
+    }
+  } else if (type == chrome::NOTIFICATION_BROWSER_CLOSING) {
+    delete this;
   } else {
     NOTREACHED() << L"Received unexpected notification";
   }
@@ -603,10 +611,10 @@ void ExtensionInstalledBubble::ShowInternal() {
         animation_wait_retries_++ < kAnimationWaitMaxRetry) {
       // We don't know where the view will be until the container has stopped
       // animating, so check back in a little while.
-      MessageLoopForUI::current()->PostDelayedTask(
+      base::MessageLoopForUI::current()->PostDelayedTask(
           FROM_HERE,
           base::Bind(&ExtensionInstalledBubble::ShowInternal,
-                     base::Unretained(this)),
+                     weak_factory_.GetWeakPtr()),
           base::TimeDelta::FromMilliseconds(kAnimationWaitTime));
       return;
     }
@@ -639,12 +647,19 @@ void ExtensionInstalledBubble::ShowInternal() {
     reference_view = browser_view->GetToolbarView()->app_menu();
   set_anchor_view(reference_view);
 
-  set_arrow_location(type_ == OMNIBOX_KEYWORD ? views::BubbleBorder::TOP_LEFT :
-                                                views::BubbleBorder::TOP_RIGHT);
+  set_arrow(type_ == OMNIBOX_KEYWORD ? views::BubbleBorder::TOP_LEFT :
+                                       views::BubbleBorder::TOP_RIGHT);
   SetLayoutManager(new views::FillLayout());
   AddChildView(
       new InstalledBubbleContent(browser_, extension_, type_, &icon_, this));
+
   views::BubbleDelegateView::CreateBubble(this);
+
+  // The bubble widget is now the parent and owner of |this| and takes care of
+  // deletion when the bubble or browser go away.
+  registrar_.Remove(this, chrome::NOTIFICATION_BROWSER_CLOSING,
+      content::Source<Browser>(browser_));
+
   StartFade(true);
 }
 

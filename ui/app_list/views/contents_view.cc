@@ -6,6 +6,7 @@
 
 #include <algorithm>
 
+#include "base/logging.h"
 #include "ui/app_list/app_list_constants.h"
 #include "ui/app_list/pagination_model.h"
 #include "ui/app_list/views/app_list_main_view.h"
@@ -45,41 +46,39 @@ SearchResultListView* GetSearchResultListView(views::ViewModel* model) {
 }  // namespace
 
 ContentsView::ContentsView(AppListMainView* app_list_main_view,
-                           PaginationModel* pagination_model)
+                           PaginationModel* pagination_model,
+                           AppListModel* model)
     : show_state_(SHOW_APPS),
       pagination_model_(pagination_model),
       view_model_(new views::ViewModel),
-      ALLOW_THIS_IN_INITIALIZER_LIST(
-          bounds_animator_(new views::BoundsAnimator(this))) {
+      bounds_animator_(new views::BoundsAnimator(this)) {
+  DCHECK(model);
   pagination_model_->SetTransitionDurations(
       kPageTransitionDurationInMs,
       kOverscrollPageTransitionDurationMs);
 
-  AppsGridView* apps_grid_view = new AppsGridView(app_list_main_view,
-                                                  pagination_model);
-  apps_grid_view->SetLayout(kPreferredIconDimension,
-                            kPreferredCols,
-                            kPreferredRows);
-  AddChildView(apps_grid_view);
-  view_model_->Add(apps_grid_view, kIndexAppsGrid);
+  apps_grid_view_ = new AppsGridView(app_list_main_view, pagination_model);
+  apps_grid_view_->SetLayout(kPreferredIconDimension,
+                             kPreferredCols,
+                             kPreferredRows);
+  AddChildView(apps_grid_view_);
+  view_model_->Add(apps_grid_view_, kIndexAppsGrid);
 
   SearchResultListView* search_results_view = new SearchResultListView(
       app_list_main_view);
   AddChildView(search_results_view);
   view_model_->Add(search_results_view, kIndexSearchResults);
+
+  GetAppsGridView(view_model_.get())->SetModel(model);
+  GetSearchResultListView(view_model_.get())->SetResults(model->results());
 }
 
 ContentsView::~ContentsView() {
 }
 
-void ContentsView::SetModel(AppListModel* model) {
-  if (model) {
-    GetAppsGridView(view_model_.get())->SetModel(model);
-    GetSearchResultListView(view_model_.get())->SetResults(model->results());
-  } else {
-    GetAppsGridView(view_model_.get())->SetModel(NULL);
-    GetSearchResultListView(view_model_.get())->SetResults(NULL);
-  }
+void ContentsView::SetDragAndDropHostOfCurrentAppList(
+    app_list::ApplicationDragAndDropHost* drag_and_drop_host) {
+  apps_grid_view_->SetDragAndDropHostOfCurrentAppList(drag_and_drop_host);
 }
 
 void ContentsView::SetShowState(ShowState show_state) {
@@ -179,9 +178,17 @@ bool ContentsView::OnMouseWheel(const ui::MouseWheelEvent& event) {
   if (show_state_ != SHOW_APPS)
     return false;
 
-  if (abs(event.offset()) > kMinMouseWheelToSwitchPage) {
-    if (!pagination_model_->has_transition())
-      pagination_model_->SelectPageRelative(event.offset() > 0 ? -1 : 1, true);
+  int offset;
+  if (abs(event.x_offset()) > abs(event.y_offset()))
+    offset = event.x_offset();
+  else
+    offset = event.y_offset();
+
+  if (abs(offset) > kMinMouseWheelToSwitchPage) {
+    if (!pagination_model_->has_transition()) {
+      pagination_model_->SelectPageRelative(
+          offset > 0 ? -1 : 1, true);
+    }
     return true;
   }
 
@@ -226,17 +233,24 @@ void ContentsView::OnGestureEvent(ui::GestureEvent* event) {
 
 void ContentsView::OnScrollEvent(ui::ScrollEvent* event) {
   if (show_state_ != SHOW_APPS ||
-      event->type() == ui::ET_SCROLL_FLING_CANCEL ||
-      abs(event->x_offset()) < kMinScrollToSwitchPage) {
+      event->type() == ui::ET_SCROLL_FLING_CANCEL) {
     return;
   }
 
-  if (!pagination_model_->has_transition()) {
-    pagination_model_->SelectPageRelative(event->x_offset() > 0 ? -1 : 1,
-                                          true);
+  float offset;
+  if (abs(event->x_offset()) > abs(event->y_offset()))
+    offset = event->x_offset();
+  else
+    offset = event->y_offset();
+
+  if (abs(offset) > kMinScrollToSwitchPage) {
+    if (!pagination_model_->has_transition()) {
+      pagination_model_->SelectPageRelative(offset > 0 ? -1 : 1,
+                                            true);
+    }
+    event->SetHandled();
+    event->StopPropagation();
   }
-  event->SetHandled();
-  event->StopPropagation();
 }
 
 }  // namespace app_list

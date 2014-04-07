@@ -19,6 +19,7 @@
 // All resource types should be added here. This implements our hand-rolled
 // RTTI system since we don't compile with "real" RTTI.
 #define FOR_ALL_PPAPI_RESOURCE_APIS(F) \
+  F(ExtensionsCommon_API) \
   F(PPB_Audio_API) \
   F(PPB_AudioConfig_API) \
   F(PPB_AudioInput_API) \
@@ -29,14 +30,14 @@
   F(PPB_BrowserFont_Trusted_API) \
   F(PPB_Buffer_API) \
   F(PPB_DeviceRef_API) \
-  F(PPB_DirectoryReader_API) \
+  F(PPB_Ext_CrxFileSystem_Private_API) \
   F(PPB_FileChooser_API) \
   F(PPB_FileIO_API) \
   F(PPB_FileRef_API) \
   F(PPB_FileSystem_API) \
   F(PPB_Find_API) \
   F(PPB_Flash_Clipboard_API) \
-  F(PPB_Flash_DeviceID_API) \
+  F(PPB_Flash_DRM_API) \
   F(PPB_Flash_File_API) \
   F(PPB_Flash_FontFile_API) \
   F(PPB_Flash_Fullscreen_API) \
@@ -46,13 +47,17 @@
   F(PPB_Gamepad_API) \
   F(PPB_Graphics2D_API) \
   F(PPB_Graphics3D_API) \
+  F(PPB_HostResolver_API) \
   F(PPB_HostResolver_Private_API) \
   F(PPB_ImageData_API) \
   F(PPB_InputEvent_API) \
   F(PPB_LayerCompositor_API) \
   F(PPB_MessageLoop_API) \
-  F(PPB_NetworkList_Private_API) \
+  F(PPB_NetAddress_API) \
+  F(PPB_NetworkList_API) \
   F(PPB_NetworkMonitor_Private_API) \
+  F(PPB_NetworkProxy_API) \
+  F(PPB_PDF_API) \
   F(PPB_Printing_API) \
   F(PPB_ResourceArray_API) \
   F(PPB_Scrollbar_API) \
@@ -60,14 +65,18 @@
   F(PPB_TrueTypeFont_API) \
   F(PPB_TrueTypeFont_Singleton_API) \
   F(PPB_TCPServerSocket_Private_API) \
+  F(PPB_TCPSocket_API) \
   F(PPB_TCPSocket_Private_API) \
+  F(PPB_UDPSocket_API) \
   F(PPB_UDPSocket_Private_API) \
   F(PPB_URLLoader_API) \
   F(PPB_URLRequestInfo_API) \
   F(PPB_URLResponseInfo_API) \
   F(PPB_VideoCapture_API) \
   F(PPB_VideoDecoder_API) \
+  F(PPB_VideoDestination_Private_API) \
   F(PPB_VideoLayer_API) \
+  F(PPB_VideoSource_Private_API) \
   F(PPB_View_API) \
   F(PPB_WebSocket_API) \
   F(PPB_Widget_API) \
@@ -186,8 +195,11 @@ class PPAPI_SHARED_EXPORT Resource : public base::RefCounted<Resource> {
   FOR_ALL_PPAPI_RESOURCE_APIS(DEFINE_TYPE_GETTER)
   #undef DEFINE_TYPE_GETTER
 
-  // Template-based dynamic casting. See specializations below.
-  template <typename T> T* GetAs() { return NULL; }
+  // Template-based dynamic casting. See specializations below. This is
+  // unimplemented for the default case. This way, for anything that's not a
+  // resource (or if a developer forgets to add the resource to the list in
+  // this file), the result is a linker error.
+  template <typename T> T* GetAs();
 
   // Called when a PpapiPluginMsg_ResourceReply reply is received for a
   // previous CallRenderer. The message is the nested reply message, which may

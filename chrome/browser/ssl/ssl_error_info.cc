@@ -5,17 +5,16 @@
 #include "chrome/browser/ssl/ssl_error_info.h"
 
 #include "base/i18n/time_formatting.h"
-#include "base/utf_string_conversions.h"
-#include "chrome/common/time_format.h"
+#include "base/strings/utf_string_conversions.h"
 #include "content/public/browser/cert_store.h"
-#include "googleurl/src/gurl.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
-#include "net/base/cert_status_flags.h"
 #include "net/base/escape.h"
 #include "net/base/net_errors.h"
+#include "net/cert/cert_status_flags.h"
 #include "net/ssl/ssl_info.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "url/gurl.h"
 
 SSLErrorInfo::SSLErrorInfo(const string16& title,
                            const string16& details,
@@ -114,8 +113,12 @@ SSLErrorInfo SSLErrorInfo::CreateError(ErrorType error_type,
           IDS_CERT_ERROR_AUTHORITY_INVALID_EXTRA_INFO_2,
           UTF8ToUTF16(request_url.host()),
           UTF8ToUTF16(request_url.host())));
+#if !defined(OS_IOS)
+      // The third paragraph advises users to install a private trust anchor,
+      // but that is not possible in Chrome for iOS at this time.
       extra_info.push_back(l10n_util::GetStringUTF16(
           IDS_CERT_ERROR_AUTHORITY_INVALID_EXTRA_INFO_3));
+#endif
       break;
     case CERT_CONTAINS_ERRORS:
       title = l10n_util::GetStringUTF16(IDS_CERT_ERROR_CONTAINS_ERRORS_TITLE);
@@ -280,7 +283,8 @@ int SSLErrorInfo::GetErrorsForCertStatus(int cert_id,
         DCHECK(r);
       }
       if (errors)
-        errors->push_back(SSLErrorInfo::CreateError(kErrorTypes[i], cert, url));
+        errors->push_back(
+            SSLErrorInfo::CreateError(kErrorTypes[i], cert.get(), url));
     }
   }
   return count;

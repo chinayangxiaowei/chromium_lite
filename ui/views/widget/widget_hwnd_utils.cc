@@ -6,10 +6,16 @@
 
 #include <dwmapi.h>
 
+#include "base/command_line.h"
 #include "base/win/windows_version.h"
 #include "ui/base/l10n/l10n_util_win.h"
+#include "ui/base/ui_base_switches.h"
 #include "ui/views/widget/widget_delegate.h"
 #include "ui/views/win/hwnd_message_handler.h"
+
+#if defined(OS_WIN)
+#include "ui/base/win/shell.h"
+#endif
 
 namespace views {
 
@@ -51,17 +57,14 @@ void CalculateWindowStylesFromInitParams(
   // 1- Use D3D9Ex to create device/swapchain, etc. You need D3DFMT_A8R8G8B8.
   // 2- The window must have WS_EX_COMPOSITED in the extended style.
   // 3- The window must have WS_POPUP in its style.
-  // 4- The windows must not have WM_SIZEBOX  in its style.
+  // 4- The windows must not have WM_SIZEBOX, WS_THICKFRAME or WS_CAPTION in its
+  //    style.
   // 5- When the window is created but before it is presented, call
   //    DwmExtendFrameIntoClientArea passing -1 as the margins.
-  if (params.transparent) {
+  if (params.opacity == Widget::InitParams::TRANSLUCENT_WINDOW) {
 #if defined(USE_AURA)
-    if (base::win::GetVersion() >= base::win::VERSION_VISTA) {
-      BOOL enabled = FALSE;
-      HRESULT hr = DwmIsCompositionEnabled(&enabled);
-      if (SUCCEEDED(hr) && (enabled == TRUE))
-        *ex_style |= WS_EX_COMPOSITED;
-    }
+    if (ui::win::IsAeroGlassEnabled())
+      *ex_style |= WS_EX_COMPOSITED;
 #else
     *ex_style |= WS_EX_LAYERED;
 #endif
@@ -104,6 +107,10 @@ void CalculateWindowStylesFromInitParams(
       }
       *ex_style |=
           native_widget_delegate->IsDialogBox() ? WS_EX_DLGMODALFRAME : 0;
+
+      // See layered window comment above.
+      if (*ex_style & WS_EX_COMPOSITED)
+        *style &= ~(WS_THICKFRAME | WS_CAPTION);
       break;
     }
     case Widget::InitParams::TYPE_CONTROL:

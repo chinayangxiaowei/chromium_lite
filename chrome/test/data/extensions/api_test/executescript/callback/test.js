@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 var relativePath =
-    '/files/extensions/api_test/executescript/callback/test.html';
+    '/extensions/api_test/executescript/callback/test.html';
 var testUrl = 'http://b.com:PORT' + relativePath;
 
 chrome.test.getConfig(function(config) {
@@ -86,7 +86,7 @@ chrome.test.getConfig(function(config) {
         });
       },
 
-      // Non-pure ojbects (like DOM nodes) will get converted as best they can.
+      // Non-pure object (like DOM nodes) will get converted as best they can.
       function executeCallbackDOMObjShouldSucceed() {
         var scriptDetails = {};
         scriptDetails.code = 'var a = document.getElementById("testDiv"); a;';

@@ -6,9 +6,11 @@
 #include "base/bind_helpers.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/scoped_vector.h"
+#include "base/run_loop.h"
 #include "base/synchronization/waitable_event.h"
 #include "components/navigation_interception/intercept_navigation_resource_throttle.h"
 #include "components/navigation_interception/navigation_params.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/resource_context.h"
 #include "content/public/browser/resource_controller.h"
@@ -20,29 +22,26 @@
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/common/page_transition_types.h"
 #include "content/public/test/mock_resource_context.h"
-#include "content/public/test/test_browser_thread.h"
 #include "content/public/test/test_renderer_host.h"
+#include "net/http/http_response_headers.h"
+#include "net/http/http_response_info.h"
 #include "net/url_request/url_request.h"
+#include "net/url_request/url_request_test_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using testing::_;
 using testing::Eq;
-using testing::Property;
 using testing::Ne;
+using testing::Property;
 using testing::Return;
 
-namespace components {
+namespace navigation_interception {
 
 namespace {
 
 const char kTestUrl[] = "http://www.test.com/";
 const char kUnsafeTestUrl[] = "about:crash";
-
-void ContinueTestCase() {
-  content::BrowserThread::PostTask(
-      content::BrowserThread::UI, FROM_HERE, MessageLoop::QuitClosure());
-}
 
 // The MS C++ compiler complains about not being able to resolve which url()
 // method (const or non-const) to use if we use the Property matcher to check
@@ -91,7 +90,6 @@ class MockResourceController : public content::ResourceController {
   }
   virtual void CancelAndIgnore() OVERRIDE {
     status_ = CANCELLED;
-    ContinueTestCase();
   }
   virtual void CancelWithError(int error_code) OVERRIDE {
     NOTREACHED();
@@ -99,7 +97,6 @@ class MockResourceController : public content::ResourceController {
   virtual void Resume() OVERRIDE {
     DCHECK(status_ == UNKNOWN);
     status_ = RESUMED;
-    ContinueTestCase();
   }
 
  private:
@@ -108,14 +105,22 @@ class MockResourceController : public content::ResourceController {
 
 // TestIOThreadState ----------------------------------------------------------
 
+enum RedirectMode {
+  REDIRECT_MODE_NO_REDIRECT,
+  REDIRECT_MODE_302,
+};
+
 class TestIOThreadState {
  public:
-  TestIOThreadState(const GURL& url, int render_process_id, int render_view_id,
+  TestIOThreadState(const GURL& url,
+                    int render_process_id,
+                    int render_view_id,
                     const std::string& request_method,
+                    RedirectMode redirect_mode,
                     MockInterceptCallbackReceiver* callback_receiver)
-      : request_(url, NULL, resource_context_.GetRequestContext()),
-        throttle_(NULL) {
-      DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::IO));
+      : resource_context_(&test_url_request_context_),
+        request_(url, NULL, resource_context_.GetRequestContext()) {
+    DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::IO));
       if (render_process_id != MSG_ROUTING_NONE &&
           render_view_id != MSG_ROUTING_NONE) {
         content::ResourceRequestInfo::AllocateForTesting(
@@ -131,11 +136,23 @@ class TestIOThreadState {
                      base::Unretained(callback_receiver))));
       throttle_->set_controller_for_testing(&throttle_controller_);
       request_.set_method(request_method);
+
+      if (redirect_mode == REDIRECT_MODE_302) {
+        net::HttpResponseInfo& response_info =
+            const_cast<net::HttpResponseInfo&>(request_.response_info());
+        response_info.headers = new net::HttpResponseHeaders(
+            "Status: 302 Found\0\0");
+      }
   }
 
   void ThrottleWillStartRequest(bool* defer) {
     DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::IO));
     throttle_->WillStartRequest(defer);
+  }
+
+  void ThrottleWillRedirectRequest(const GURL& new_url, bool* defer) {
+    DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::IO));
+    throttle_->WillRedirectRequest(new_url, defer);
   }
 
   bool request_resumed() const {
@@ -149,6 +166,7 @@ class TestIOThreadState {
   }
 
  private:
+  net::TestURLRequestContext test_url_request_context_;
   content::MockResourceContext resource_context_;
   net::URLRequest request_;
   scoped_ptr<InterceptNavigationResourceThrottle> throttle_;
@@ -162,15 +180,11 @@ class InterceptNavigationResourceThrottleTest
  public:
   InterceptNavigationResourceThrottleTest()
       : mock_callback_receiver_(new MockInterceptCallbackReceiver()),
-        ui_thread_(content::BrowserThread::UI, &message_loop_),
-        io_thread_(content::BrowserThread::IO),
         io_thread_state_(NULL) {
   }
 
   virtual void SetUp() OVERRIDE {
     RenderViewHostTestHarness::SetUp();
-
-    io_thread_.StartIOThread();
   }
 
   virtual void TearDown() OVERRIDE {
@@ -192,20 +206,22 @@ class InterceptNavigationResourceThrottleTest
   void RunThrottleWillStartRequestOnIOThread(
       const GURL& url,
       const std::string& request_method,
+      RedirectMode redirect_mode,
       int render_process_id,
       int render_view_id,
       bool* defer) {
     DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::IO));
     TestIOThreadState* io_thread_state =
         new TestIOThreadState(url, render_process_id, render_view_id,
-                              request_method, mock_callback_receiver_.get());
+                              request_method, redirect_mode,
+                              mock_callback_receiver_.get());
 
     SetIOThreadState(io_thread_state);
-    io_thread_state->ThrottleWillStartRequest(defer);
 
-    if (!*defer) {
-      ContinueTestCase();
-    }
+    if (redirect_mode == REDIRECT_MODE_NO_REDIRECT)
+      io_thread_state->ThrottleWillStartRequest(defer);
+    else
+      io_thread_state->ThrottleWillRedirectRequest(url, defer);
   }
 
  protected:
@@ -214,7 +230,7 @@ class InterceptNavigationResourceThrottleTest
     DontIgnoreNavigation
   };
 
-  void SetUpWebContentsDelegateAndRunMessageLoop(
+  void SetUpWebContentsDelegateAndDrainRunLoop(
       ShouldIgnoreNavigationCallbackAction callback_action,
       bool* defer) {
 
@@ -233,12 +249,13 @@ class InterceptNavigationResourceThrottleTest
             base::Unretained(this),
             GURL(kTestUrl),
             "GET",
+            REDIRECT_MODE_NO_REDIRECT,
             web_contents()->GetRenderViewHost()->GetProcess()->GetID(),
             web_contents()->GetRenderViewHost()->GetRoutingID(),
             base::Unretained(defer)));
 
     // Wait for the request to finish processing.
-    message_loop_.Run();
+    base::RunLoop().RunUntilIdle();
   }
 
   void WaitForPreviouslyScheduledIoThreadWork() {
@@ -253,15 +270,13 @@ class InterceptNavigationResourceThrottleTest
   }
 
   scoped_ptr<MockInterceptCallbackReceiver> mock_callback_receiver_;
-  content::TestBrowserThread ui_thread_;
-  content::TestBrowserThread io_thread_;
   TestIOThreadState* io_thread_state_;
 };
 
 TEST_F(InterceptNavigationResourceThrottleTest,
        RequestDeferredAndResumedIfNavigationNotIgnored) {
   bool defer = false;
-  SetUpWebContentsDelegateAndRunMessageLoop(DontIgnoreNavigation, &defer);
+  SetUpWebContentsDelegateAndDrainRunLoop(DontIgnoreNavigation, &defer);
 
   EXPECT_TRUE(defer);
   EXPECT_TRUE(io_thread_state_);
@@ -271,7 +286,7 @@ TEST_F(InterceptNavigationResourceThrottleTest,
 TEST_F(InterceptNavigationResourceThrottleTest,
        RequestDeferredAndCancelledIfNavigationIgnored) {
   bool defer = false;
-  SetUpWebContentsDelegateAndRunMessageLoop(IgnoreNavigation, &defer);
+  SetUpWebContentsDelegateAndDrainRunLoop(IgnoreNavigation, &defer);
 
   EXPECT_TRUE(defer);
   EXPECT_TRUE(io_thread_state_);
@@ -284,14 +299,8 @@ TEST_F(InterceptNavigationResourceThrottleTest,
 
   // The tested scenario is when the WebContents is deleted after the
   // ResourceThrottle has finished processing on the IO thread but before the
-  // UI thread callback has been processed.
-  content::BrowserThread::PostTask(
-      content::BrowserThread::UI,
-      FROM_HERE,
-      base::Bind(
-          &RenderViewHostTestHarness::DeleteContents,
-          base::Unretained(this)));
-
+  // UI thread callback has been processed.  Since both threads in this test
+  // are serviced by one message loop, the post order is the execution order.
   EXPECT_CALL(*mock_callback_receiver_,
               ShouldIgnoreNavigation(_, _))
       .Times(0);
@@ -305,15 +314,21 @@ TEST_F(InterceptNavigationResourceThrottleTest,
           base::Unretained(this),
           GURL(kTestUrl),
           "GET",
+          REDIRECT_MODE_NO_REDIRECT,
           web_contents()->GetRenderViewHost()->GetProcess()->GetID(),
           web_contents()->GetRenderViewHost()->GetRoutingID(),
           base::Unretained(&defer)));
 
-  WaitForPreviouslyScheduledIoThreadWork();
+  content::BrowserThread::PostTask(
+      content::BrowserThread::UI,
+      FROM_HERE,
+      base::Bind(
+          &RenderViewHostTestHarness::DeleteContents,
+          base::Unretained(this)));
 
   // The WebContents will now be deleted and only after that will the UI-thread
   // callback posted by the ResourceThrottle be executed.
-  message_loop_.Run();
+  base::RunLoop().RunUntilIdle();
 
   EXPECT_TRUE(defer);
   EXPECT_TRUE(io_thread_state_);
@@ -333,12 +348,13 @@ TEST_F(InterceptNavigationResourceThrottleTest,
           base::Unretained(this),
           GURL(kTestUrl),
           "GET",
+          REDIRECT_MODE_NO_REDIRECT,
           MSG_ROUTING_NONE,
           MSG_ROUTING_NONE,
           base::Unretained(&defer)));
 
   // Wait for the request to finish processing.
-  message_loop_.Run();
+  base::RunLoop().RunUntilIdle();
 
   EXPECT_FALSE(defer);
 }
@@ -363,12 +379,13 @@ TEST_F(InterceptNavigationResourceThrottleTest,
           base::Unretained(this),
           GURL(kUnsafeTestUrl),
           "GET",
+          REDIRECT_MODE_NO_REDIRECT,
           web_contents()->GetRenderViewHost()->GetProcess()->GetID(),
           web_contents()->GetRenderViewHost()->GetRoutingID(),
           base::Unretained(&defer)));
 
   // Wait for the request to finish processing.
-  message_loop_.Run();
+  base::RunLoop().RunUntilIdle();
 }
 
 TEST_F(InterceptNavigationResourceThrottleTest,
@@ -390,12 +407,13 @@ TEST_F(InterceptNavigationResourceThrottleTest,
           base::Unretained(this),
           GURL(kTestUrl),
           "GET",
+          REDIRECT_MODE_NO_REDIRECT,
           web_contents()->GetRenderViewHost()->GetProcess()->GetID(),
           web_contents()->GetRenderViewHost()->GetRoutingID(),
           base::Unretained(&defer)));
 
   // Wait for the request to finish processing.
-  message_loop_.Run();
+  base::RunLoop().RunUntilIdle();
 }
 
 TEST_F(InterceptNavigationResourceThrottleTest,
@@ -417,12 +435,41 @@ TEST_F(InterceptNavigationResourceThrottleTest,
           base::Unretained(this),
           GURL(kTestUrl),
           "POST",
+          REDIRECT_MODE_NO_REDIRECT,
           web_contents()->GetRenderViewHost()->GetProcess()->GetID(),
           web_contents()->GetRenderViewHost()->GetRoutingID(),
           base::Unretained(&defer)));
 
   // Wait for the request to finish processing.
-  message_loop_.Run();
+  base::RunLoop().RunUntilIdle();
 }
 
-}  // namespace components
+TEST_F(InterceptNavigationResourceThrottleTest,
+       CallbackIsPostFalseForPostConvertedToGetBy302) {
+  bool defer = false;
+
+  EXPECT_CALL(*mock_callback_receiver_,
+              ShouldIgnoreNavigation(_, AllOf(
+                  NavigationParamsUrlIsSafe(),
+                  Property(&NavigationParams::is_post, Eq(false)))))
+      .WillOnce(Return(false));
+
+  content::BrowserThread::PostTask(
+      content::BrowserThread::IO,
+      FROM_HERE,
+      base::Bind(
+          &InterceptNavigationResourceThrottleTest::
+              RunThrottleWillStartRequestOnIOThread,
+          base::Unretained(this),
+          GURL(kTestUrl),
+          "POST",
+          REDIRECT_MODE_302,
+          web_contents()->GetRenderViewHost()->GetProcess()->GetID(),
+          web_contents()->GetRenderViewHost()->GetRoutingID(),
+          base::Unretained(&defer)));
+
+  // Wait for the request to finish processing.
+  base::RunLoop().RunUntilIdle();
+}
+
+}  // namespace navigation_interception

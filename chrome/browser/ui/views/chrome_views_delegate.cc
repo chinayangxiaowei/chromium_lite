@@ -4,23 +4,27 @@
 
 #include "chrome/browser/ui/views/chrome_views_delegate.h"
 
-#include "base/command_line.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/prefs/pref_service.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/prefs/scoped_user_pref_update.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/views/accessibility/accessibility_event_router_views.h"
 #include "chrome/common/pref_names.h"
+#include "ui/base/ui_base_switches.h"
 #include "ui/gfx/rect.h"
 #include "ui/gfx/screen.h"
 #include "ui/views/widget/native_widget.h"
 #include "ui/views/widget/widget.h"
 
 #if defined(OS_WIN)
+#include <dwmapi.h>
+#include "base/win/windows_version.h"
 #include "chrome/browser/app_icon_win.h"
+#include "ui/base/win/shell.h"
 #endif
 
 #if defined(USE_AURA)
@@ -80,7 +84,7 @@ void ChromeViewsDelegate::SaveWindowPlacement(const views::Widget* window,
   window_preferences->SetBoolean("maximized",
                                  show_state == ui::SHOW_STATE_MAXIMIZED);
   gfx::Rect work_area(gfx::Screen::GetScreenFor(window->GetNativeView())->
-      GetDisplayMatching(bounds).work_area());
+      GetDisplayNearestWindow(window->GetNativeView()).work_area());
   window_preferences->SetInteger("work_area_left", work_area.x());
   window_preferences->SetInteger("work_area_top", work_area.y());
   window_preferences->SetInteger("work_area_right", work_area.right());
@@ -181,6 +185,51 @@ void ChromeViewsDelegate::OnBeforeWidgetInit(
   if (params->native_widget)
     return;
 
+#if defined(USE_AURA) && !defined(OS_CHROMEOS)
+  bool use_non_toplevel_window =
+      params->parent && params->type != views::Widget::InitParams::TYPE_MENU;
+
+#if defined(OS_WIN)
+  // On desktop Linux Chrome must run in an environment that supports a variety
+  // of window managers, some of which do not play nicely with parts of our UI
+  // that have specific expectations about window sizing and placement. For this
+  // reason windows opened as top level (params.top_level) are always
+  // constrained by the browser frame, so we can position them correctly. This
+  // has some negative side effects, like dialogs being clipped by the browser
+  // frame, but the side effects are not as bad as the poor window manager
+  // interactions. On Windows however these WM interactions are not an issue, so
+  // we open windows requested as top_level as actual top level windows on the
+  // desktop.
+  use_non_toplevel_window = use_non_toplevel_window &&
+      (!params->top_level ||
+       chrome::GetHostDesktopTypeForNativeView(params->parent) !=
+          chrome::HOST_DESKTOP_TYPE_NATIVE);
+
+  if (!ui::win::IsAeroGlassEnabled()) {
+    // If we don't have composition (either because Glass is not enabled or
+    // because it was disabled at the command line), anything that requires
+    // transparency will be broken with a toplevel window, so force the use of
+    // a non toplevel window.
+    if (params->opacity == views::Widget::InitParams::TRANSLUCENT_WINDOW &&
+        params->type != views::Widget::InitParams::TYPE_MENU)
+      use_non_toplevel_window = true;
+  } else {
+    // If we're on Vista+ with composition enabled, then we can use toplevel
+    // windows for most things (they get blended via WS_EX_COMPOSITED, which
+    // allows for animation effects, but also exceeding the bounds of the parent
+    // window).
+    if (chrome::GetActiveDesktop() != chrome::HOST_DESKTOP_TYPE_ASH &&
+        params->parent &&
+        params->type != views::Widget::InitParams::TYPE_CONTROL &&
+        params->type != views::Widget::InitParams::TYPE_WINDOW) {
+      // When we set this to false, we get a DesktopNativeWidgetAura from the
+      // default case (not handled in this function).
+      use_non_toplevel_window = false;
+    }
+  }
+#endif  // OS_WIN
+#endif  // USE_AURA
+
 #if defined(OS_CHROMEOS)
   // When we are doing straight chromeos builds, we still need to handle the
   // toplevel window case.
@@ -214,20 +263,7 @@ void ChromeViewsDelegate::OnBeforeWidgetInit(
       default:
         NOTREACHED();
     }
-#if defined(OS_WIN) && defined(USE_AURA)
-  } else if (chrome::GetActiveDesktop() != chrome::HOST_DESKTOP_TYPE_ASH &&
-             params->parent &&
-             (params->type == views::Widget::InitParams::TYPE_CONTROL ||
-              params->type == views::Widget::InitParams::TYPE_WINDOW)) {
-    // On Aura Desktop, we want most windows (popups, bubbles, regular top
-    // level windows) not to be handled in this function. They'll get a
-    // DesktopNativeWidgetAura created. For controls, and child windows (e.g.
-    // modal dialogs) we want to create a NativeWidgetAura, which will be
-    // inside the parent.
-#else
-  } else if (params->parent &&
-             params->type != views::Widget::InitParams::TYPE_MENU) {
-#endif
+  } else if (use_non_toplevel_window) {
     params->native_widget = new views::NativeWidgetAura(delegate);
   } else if (params->type != views::Widget::InitParams::TYPE_TOOLTIP) {
     // TODO(erg): Once we've threaded context to everywhere that needs it, we
@@ -241,3 +277,10 @@ void ChromeViewsDelegate::OnBeforeWidgetInit(
   }
 #endif
 }
+
+#if !defined(OS_CHROMEOS)
+base::TimeDelta
+ChromeViewsDelegate::GetDefaultTextfieldObscuredRevealDuration() {
+  return base::TimeDelta();
+}
+#endif

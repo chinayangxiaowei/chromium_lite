@@ -12,11 +12,11 @@
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/command_line.h"
-#include "base/file_util.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/metrics/histogram.h"
 #include "base/pickle.h"
 #include "base/threading/thread.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/tab_helper.h"
 #include "chrome/browser/prefs/session_startup_pref.h"
 #include "chrome/browser/profiles/profile.h"
@@ -32,7 +32,6 @@
 #include "chrome/browser/ui/host_desktop.h"
 #include "chrome/browser/ui/startup/startup_browser_creator.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/startup_metric_utils.h"
 #include "content/public/browser/navigation_details.h"
@@ -49,6 +48,7 @@
 using base::Time;
 using content::NavigationEntry;
 using content::WebContents;
+using sessions::SerializedNavigationEntry;
 
 // Identifier for commands written to file.
 static const SessionCommand::id_type kCommandSetTabWindow = 0;
@@ -139,6 +139,7 @@ ui::WindowShowState AdjustShowState(ui::WindowShowState state) {
     case ui::SHOW_STATE_MINIMIZED:
     case ui::SHOW_STATE_MAXIMIZED:
     case ui::SHOW_STATE_FULLSCREEN:
+    case ui::SHOW_STATE_DETACHED:
       return state;
 
     case ui::SHOW_STATE_DEFAULT:
@@ -202,7 +203,7 @@ SessionService::SessionService(const base::FilePath& save_path)
 
 SessionService::~SessionService() {
   // The BrowserList should outlive the SessionService since it's static and
-  // the SessionService is a ProfileKeyedService.
+  // the SessionService is a BrowserContextKeyedService.
   BrowserList::RemoveObserver(this);
   Save();
 }
@@ -414,7 +415,7 @@ void SessionService::TabNavigationPathPrunedFromFront(
 void SessionService::UpdateTabNavigation(
     const SessionID& window_id,
     const SessionID& tab_id,
-    const TabNavigation& navigation) {
+    const SerializedNavigationEntry& navigation) {
   if (!ShouldTrackEntry(navigation.virtual_url()) ||
       !ShouldTrackChangesToWindow(window_id)) {
     return;
@@ -621,8 +622,8 @@ void SessionService::Observe(int type,
       if (!session_tab_helper || web_contents->GetBrowserContext() != profile())
         return;
       content::Details<content::EntryChangedDetails> changed(details);
-      const TabNavigation navigation =
-          TabNavigation::FromNavigationEntry(
+      const SerializedNavigationEntry navigation =
+          SerializedNavigationEntry::FromNavigationEntry(
               changed->index, *changed->changed_entry);
       UpdateTabNavigation(session_tab_helper->window_id(),
                           session_tab_helper->session_id(),
@@ -644,8 +645,8 @@ void SessionService::Observe(int type,
           session_tab_helper->window_id(),
           session_tab_helper->session_id(),
           current_entry_index);
-      const TabNavigation navigation =
-          TabNavigation::FromNavigationEntry(
+      const SerializedNavigationEntry navigation =
+          SerializedNavigationEntry::FromNavigationEntry(
               current_entry_index,
               *web_contents->GetController().GetEntryAtIndex(
                   current_entry_index));
@@ -908,13 +909,13 @@ SessionTab* SessionService::GetTab(
   return i->second;
 }
 
-std::vector<TabNavigation>::iterator
+std::vector<SerializedNavigationEntry>::iterator
   SessionService::FindClosestNavigationWithIndex(
-    std::vector<TabNavigation>* navigations,
+    std::vector<SerializedNavigationEntry>* navigations,
     int index) {
   DCHECK(navigations);
-  for (std::vector<TabNavigation>::iterator i = navigations->begin();
-       i != navigations->end(); ++i) {
+  for (std::vector<SerializedNavigationEntry>::iterator
+           i = navigations->begin(); i != navigations->end(); ++i) {
     if (i->index() >= index)
       return i;
   }
@@ -980,7 +981,7 @@ void SessionService::AddTabsToWindows(std::map<int, SessionTab*>* tabs,
       tabs->erase(i++);
 
       // See note in SessionTab as to why we do this.
-      std::vector<TabNavigation>::iterator j =
+      std::vector<SerializedNavigationEntry>::iterator j =
           FindClosestNavigationWithIndex(&(tab->navigations),
                                          tab->current_navigation_index);
       if (j == tab->navigations.end()) {
@@ -1126,7 +1127,8 @@ bool SessionService::CreateTabsAndWindows(
             std::max(-1, tab->current_navigation_index - payload.index);
 
         // And update the index of existing navigations.
-        for (std::vector<TabNavigation>::iterator i = tab->navigations.begin();
+        for (std::vector<SerializedNavigationEntry>::iterator
+                 i = tab->navigations.begin();
              i != tab->navigations.end();) {
           i->set_index(i->index() - payload.index);
           if (i->index() < 0)
@@ -1138,7 +1140,7 @@ bool SessionService::CreateTabsAndWindows(
       }
 
       case kCommandUpdateTabNavigation: {
-        TabNavigation navigation;
+        SerializedNavigationEntry navigation;
         SessionID::id_type tab_id;
         if (!RestoreUpdateTabNavigationCommand(
                 *command, &navigation, &tab_id)) {
@@ -1146,7 +1148,7 @@ bool SessionService::CreateTabsAndWindows(
           return true;
         }
         SessionTab* tab = GetTab(tab_id, tabs);
-        std::vector<TabNavigation>::iterator i =
+        std::vector<SerializedNavigationEntry>::iterator i =
             FindClosestNavigationWithIndex(&(tab->navigations),
                                            navigation.index());
         if (i != tab->navigations.end() && i->index() == navigation.index())
@@ -1315,8 +1317,8 @@ void SessionService::BuildCommandsForTab(const SessionID& window_id,
         tab->GetController().GetEntryAtIndex(i);
     DCHECK(entry);
     if (ShouldTrackEntry(entry->GetVirtualURL())) {
-      const TabNavigation navigation =
-          TabNavigation::FromNavigationEntry(i, *entry);
+      const SerializedNavigationEntry navigation =
+          SerializedNavigationEntry::FromNavigationEntry(i, *entry);
       commands->push_back(
           CreateUpdateTabNavigationCommand(
               kCommandUpdateTabNavigation, session_id.id(), navigation));
@@ -1346,16 +1348,10 @@ void SessionService::BuildCommandsForBrowser(
   DCHECK(browser && commands);
   DCHECK(browser->session_id().id());
 
-  ui::WindowShowState show_state = ui::SHOW_STATE_NORMAL;
-  if (browser->window()->IsMaximized())
-    show_state = ui::SHOW_STATE_MAXIMIZED;
-  else if (browser->window()->IsMinimized())
-    show_state = ui::SHOW_STATE_MINIMIZED;
-
   commands->push_back(
       CreateSetWindowBoundsCommand(browser->session_id(),
                                    browser->window()->GetRestoredBounds(),
-                                   show_state));
+                                   browser->window()->GetRestoredState()));
 
   commands->push_back(CreateSetWindowTypeCommand(
       browser->session_id(), WindowTypeForBrowserType(browser->type())));

@@ -13,15 +13,17 @@
 
 #include "base/callback.h"
 #include "base/compiler_specific.h"
-#include "base/hash_tables.h"
+#include "base/containers/hash_tables.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
+#include "base/observer_list.h"
 #include "content/common/gpu/gpu_memory_allocation.h"
-#include "content/common/gpu/client/gpu_video_decode_accelerator_host.h"
 #include "content/common/gpu/gpu_memory_allocation.h"
 #include "gpu/command_buffer/common/command_buffer.h"
 #include "gpu/command_buffer/common/command_buffer_shared.h"
 #include "ipc/ipc_listener.h"
+#include "media/video/video_decode_accelerator.h"
+#include "ui/base/latency_info.h"
 
 struct GPUCommandBufferConsoleMessage;
 
@@ -43,6 +45,15 @@ class CommandBufferProxyImpl
       public IPC::Listener,
       public base::SupportsWeakPtr<CommandBufferProxyImpl> {
  public:
+  class DeletionObserver {
+   public:
+    // Called during the destruction of the CommandBufferProxyImpl.
+    virtual void OnWillDeleteImpl() = 0;
+
+   protected:
+    virtual ~DeletionObserver() {}
+  };
+
   typedef base::Callback<void(
       const std::string& msg, int id)> GpuConsoleMessageCallback;
 
@@ -50,12 +61,12 @@ class CommandBufferProxyImpl
   virtual ~CommandBufferProxyImpl();
 
   // Sends an IPC message to create a GpuVideoDecodeAccelerator. Creates and
-  // returns a pointer to a GpuVideoDecodeAcceleratorHost.
-  // Returns NULL on failure to create the GpuVideoDecodeAcceleratorHost.
+  // returns it as an owned pointer to a media::VideoDecodeAccelerator.  Returns
+  // NULL on failure to create the GpuVideoDecodeAcceleratorHost.
   // Note that the GpuVideoDecodeAccelerator may still fail to be created in
   // the GPU process, even if this returns non-NULL. In this case the client is
   // notified of an error later.
-  GpuVideoDecodeAcceleratorHost* CreateVideoDecoder(
+  scoped_ptr<media::VideoDecodeAccelerator> CreateVideoDecoder(
       media::VideoCodecProfile profile,
       media::VideoDecodeAccelerator::Client* client);
 
@@ -66,8 +77,7 @@ class CommandBufferProxyImpl
   // CommandBufferProxy implementation:
   virtual int GetRouteID() const OVERRIDE;
   virtual bool Echo(const base::Closure& callback) OVERRIDE;
-  virtual bool SetParent(CommandBufferProxy* parent_command_buffer,
-                         uint32 parent_texture_id) OVERRIDE;
+  virtual bool ProduceFrontBuffer(const gpu::Mailbox& mailbox) OVERRIDE;
   virtual void SetChannelErrorCallback(const base::Closure& callback) OVERRIDE;
 
   // CommandBuffer implementation:
@@ -93,6 +103,9 @@ class CommandBufferProxyImpl
       const base::Callback<void(const GpuMemoryAllocationForRenderer&)>&
           callback);
 
+  void AddDeletionObserver(DeletionObserver* observer);
+  void RemoveDeletionObserver(DeletionObserver* observer);
+
   bool DiscardBackbuffer();
   bool EnsureBackbuffer();
 
@@ -100,6 +113,11 @@ class CommandBufferProxyImpl
   // the command buffer that inserted that sync point is destroyed.
   bool SignalSyncPoint(uint32 sync_point,
                        const base::Closure& callback);
+
+  // Makes this command buffer invoke a task when a query is completed, or
+  // the command buffer that inserted that sync point is destroyed or the
+  // query was deleted. Should be invoked after endQuery.
+  bool SignalQuery(unsigned query, const base::Closure& callback);
 
   // Generates n unique mailbox names that can be used with
   // GL_texture_mailbox_CHROMIUM. Unlike genMailboxCHROMIUM, this IPC is
@@ -113,6 +131,8 @@ class CommandBufferProxyImpl
   void SetOnConsoleMessageCallback(
       const GpuConsoleMessageCallback& callback);
 
+  void SetLatencyInfo(const ui::LatencyInfo& latency_info);
+
   // TODO(apatrick): this is a temporary optimization while skia is calling
   // ContentGLContext::MakeCurrent prior to every GL call. It saves returning 6
   // ints redundantly when only the error is needed for the
@@ -125,7 +145,6 @@ class CommandBufferProxyImpl
 
  private:
   typedef std::map<int32, gpu::Buffer> TransferBufferMap;
-  typedef std::map<int, base::WeakPtr<GpuVideoDecodeAcceleratorHost> > Decoders;
   typedef base::hash_map<uint32, base::Closure> SignalTaskMap;
 
   // Send an IPC message over the GPU channel. This is private to fully
@@ -154,9 +173,8 @@ class CommandBufferProxyImpl
   // Local cache of id to transfer buffer mapping.
   TransferBufferMap transfer_buffers_;
 
-  // Zero or more (unowned!) video decoder hosts using this proxy, keyed by
-  // their decoder_route_id.
-  Decoders video_decoder_hosts_;
+  // Unowned list of DeletionObservers.
+  ObserverList<DeletionObserver> deletion_observers_;
 
   // The last cached state received from the service.
   State last_state_;

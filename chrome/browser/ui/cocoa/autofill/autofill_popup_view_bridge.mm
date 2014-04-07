@@ -37,7 +37,9 @@ NSBox* CreateBorderView() {
   return border_view;
 }
 
-}
+}  // namespace
+
+namespace autofill {
 
 AutofillPopupViewBridge::AutofillPopupViewBridge(
     AutofillPopupController* controller)
@@ -70,8 +72,6 @@ AutofillPopupViewBridge::~AutofillPopupViewBridge() {
 }
 
 void AutofillPopupViewBridge::Hide() {
-  AutofillPopupView::Hide();
-
   delete this;
 }
 
@@ -90,11 +90,12 @@ void AutofillPopupViewBridge::InvalidateRow(size_t row) {
 void AutofillPopupViewBridge::UpdateBoundsAndRedrawPopup() {
   NSRect frame = NSRectFromCGRect(controller_->popup_bounds().ToCGRect());
 
-  // Flip coordinates back into Cocoa-land.
-  // TODO(isherman): Does this agree with the controller's idea of handling
-  // multi-monitor setups correctly?
-  NSScreen* screen = [[controller_->container_view() window] screen];
-  frame.origin.y = NSHeight([screen frame]) - NSMaxY(frame);
+  // Flip coordinates back into Cocoa-land.  The controller's platform-neutral
+  // coordinate space places the origin at the top-left of the first screen,
+  // whereas Cocoa's coordinate space expects the origin to be at the
+  // bottom-left of this same screen.
+  NSScreen* screen = [[NSScreen screens] objectAtIndex:0];
+  frame.origin.y = NSMaxY([screen frame]) - NSMaxY(frame);
 
   // Leave room for the border.
   frame = NSInsetRect(frame, -kBorderWidth, -kBorderWidth);
@@ -104,6 +105,13 @@ void AutofillPopupViewBridge::UpdateBoundsAndRedrawPopup() {
   } else {
     // Popup is above the element which initiated it.
     frame.origin.y += kBorderWidth;
+  }
+  if (controller_->popup_bounds().x() == controller_->element_bounds().x()) {
+    // Popup is anchored to the left of the element which initiated it.
+    frame.origin.x += kBorderWidth;
+  } else {
+    // Popup is anhored to the right of the element which initiated it.
+    frame.origin.x -= kBorderWidth;
   }
 
   // TODO(isherman): The view should support scrolling if the popup gets too
@@ -115,3 +123,5 @@ AutofillPopupView* AutofillPopupView::Create(
     AutofillPopupController* controller) {
   return new AutofillPopupViewBridge(controller);
 }
+
+}  // namespace autofill

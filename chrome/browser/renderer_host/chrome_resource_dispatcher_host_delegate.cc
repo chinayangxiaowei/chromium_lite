@@ -8,7 +8,9 @@
 
 #include "base/base64.h"
 #include "base/logging.h"
+#include "base/metrics/histogram.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/content_settings/host_content_settings_map.h"
 #include "chrome/browser/download/download_request_limiter.h"
 #include "chrome/browser/download/download_resource_throttle.h"
@@ -19,7 +21,6 @@
 #include "chrome/browser/external_protocol/external_protocol_handler.h"
 #include "chrome/browser/google/google_util.h"
 #include "chrome/browser/metrics/variations/variations_http_header_provider.h"
-#include "chrome/browser/net/load_timing_observer.h"
 #include "chrome/browser/net/resource_prefetch_predictor_observer.h"
 #include "chrome/browser/prerender/prerender_manager.h"
 #include "chrome/browser/prerender/prerender_tracker.h"
@@ -32,9 +33,7 @@
 #include "chrome/browser/ui/auto_login_prompter.h"
 #include "chrome/browser/ui/login/login_prompt.h"
 #include "chrome/browser/ui/sync/one_click_signin_helper.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/extensions/mime_types_handler.h"
-#include "chrome/common/extensions/user_script.h"
 #include "chrome/common/render_messages.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_service.h"
@@ -43,8 +42,11 @@
 #include "content/public/browser/resource_dispatcher_host.h"
 #include "content/public/browser/resource_request_info.h"
 #include "content/public/browser/stream_handle.h"
+#include "content/public/common/resource_response.h"
 #include "extensions/common/constants.h"
+#include "extensions/common/user_script.h"
 #include "net/base/load_flags.h"
+#include "net/base/load_timing_info.h"
 #include "net/http/http_response_headers.h"
 #include "net/ssl/ssl_config_service.h"
 #include "net/url_request/url_request.h"
@@ -60,6 +62,7 @@
 #endif
 
 #if defined(OS_ANDROID)
+#include "chrome/browser/android/intercept_download_resource_throttle.h"
 #include "components/navigation_interception/intercept_navigation_delegate.h"
 #endif
 
@@ -75,6 +78,10 @@ using content::ResourceDispatcherHostLoginDelegate;
 using content::ResourceRequestInfo;
 using extensions::Extension;
 using extensions::StreamsPrivateAPI;
+
+#if defined(OS_ANDROID)
+using navigation_interception::InterceptNavigationDelegate;
+#endif
 
 namespace {
 
@@ -103,6 +110,7 @@ bool ExtensionCanHandleMimeType(const Extension* extension,
 }
 
 void SendExecuteMimeTypeHandlerEvent(scoped_ptr<content::StreamHandle> stream,
+                                     int64 expected_content_size,
                                      int render_process_id,
                                      int render_view_id,
                                      const std::string& extension_id) {
@@ -130,7 +138,54 @@ void SendExecuteMimeTypeHandlerEvent(scoped_ptr<content::StreamHandle> stream,
   if (!streams_private)
     return;
   streams_private->ExecuteMimeTypeHandler(
-      extension_id, web_contents, stream.Pass());
+      extension_id, web_contents, stream.Pass(), expected_content_size);
+}
+
+enum PrerenderSchemeCancelReason {
+  PRERENDER_SCHEME_CANCEL_REASON_EXTERNAL_PROTOCOL,
+  PRERENDER_SCHEME_CANCEL_REASON_DATA,
+  PRERENDER_SCHEME_CANCEL_REASON_BLOB,
+  PRERENDER_SCHEME_CANCEL_REASON_FILE,
+  PRERENDER_SCHEME_CANCEL_REASON_FILESYSTEM,
+  PRERENDER_SCHEME_CANCEL_REASON_WEBSOCKET,
+  PRERENDER_SCHEME_CANCEL_REASON_FTP,
+  PRERENDER_SCHEME_CANCEL_REASON_CHROME,
+  PRERENDER_SCHEME_CANCEL_REASON_CHROME_EXTENSION,
+  PRERENDER_SCHEME_CANCEL_REASON_ABOUT,
+  PRERENDER_SCHEME_CANCEL_REASON_UNKNOWN,
+  PRERENDER_SCHEME_CANCEL_REASON_MAX,
+};
+
+void ReportPrerenderSchemeCancelReason(PrerenderSchemeCancelReason reason) {
+  UMA_HISTOGRAM_ENUMERATION(
+      "Prerender.SchemeCancelReason", reason,
+      PRERENDER_SCHEME_CANCEL_REASON_MAX);
+}
+
+void ReportUnsupportedPrerenderScheme(const GURL& url) {
+  if (url.SchemeIs("data")) {
+    ReportPrerenderSchemeCancelReason(PRERENDER_SCHEME_CANCEL_REASON_DATA);
+  } else if (url.SchemeIs("blob")) {
+    ReportPrerenderSchemeCancelReason(PRERENDER_SCHEME_CANCEL_REASON_BLOB);
+  } else if (url.SchemeIsFile()) {
+    ReportPrerenderSchemeCancelReason(PRERENDER_SCHEME_CANCEL_REASON_FILE);
+  } else if (url.SchemeIsFileSystem()) {
+    ReportPrerenderSchemeCancelReason(
+        PRERENDER_SCHEME_CANCEL_REASON_FILESYSTEM);
+  } else if (url.SchemeIs("ws") || url.SchemeIs("wss")) {
+    ReportPrerenderSchemeCancelReason(PRERENDER_SCHEME_CANCEL_REASON_WEBSOCKET);
+  } else if (url.SchemeIs("ftp")) {
+    ReportPrerenderSchemeCancelReason(PRERENDER_SCHEME_CANCEL_REASON_FTP);
+  } else if (url.SchemeIs("chrome")) {
+    ReportPrerenderSchemeCancelReason(PRERENDER_SCHEME_CANCEL_REASON_CHROME);
+  } else if (url.SchemeIs("chrome-extension")) {
+    ReportPrerenderSchemeCancelReason(
+        PRERENDER_SCHEME_CANCEL_REASON_CHROME_EXTENSION);
+  } else if (url.SchemeIs("about")) {
+    ReportPrerenderSchemeCancelReason(PRERENDER_SCHEME_CANCEL_REASON_ABOUT);
+  } else {
+    ReportPrerenderSchemeCancelReason(PRERENDER_SCHEME_CANCEL_REASON_UNKNOWN);
+  }
 }
 
 }  // end namespace
@@ -152,8 +207,7 @@ bool ChromeResourceDispatcherHostDelegate::ShouldBeginRequest(
     const std::string& method,
     const GURL& url,
     ResourceType::Type resource_type,
-    content::ResourceContext* resource_context,
-    const content::Referrer& referrer) {
+    content::ResourceContext* resource_context) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
 
   // Handle a PREFETCH resource type. If prefetch is disabled, squelch the
@@ -176,7 +230,8 @@ bool ChromeResourceDispatcherHostDelegate::ShouldBeginRequest(
           child_id, route_id, prerender::FINAL_STATUS_INVALID_HTTP_METHOD);
       return false;
     }
-    if (!prerender::PrerenderManager::DoesURLHaveValidScheme(url)) {
+    if (!prerender::PrerenderManager::DoesSubresourceURLHaveValidScheme(url)) {
+      ReportUnsupportedPrerenderScheme(url);
       prerender_tracker_->TryCancelOnIOThread(
           child_id, route_id, prerender::FINAL_STATUS_UNSUPPORTED_SCHEME);
       return false;
@@ -210,7 +265,7 @@ void ChromeResourceDispatcherHostDelegate::RequestBeginning(
 #if defined(OS_ANDROID)
   if (!is_prerendering && resource_type == ResourceType::MAIN_FRAME) {
     throttles->push_back(
-        components::InterceptNavigationDelegate::CreateThrottleFor(request));
+        InterceptNavigationDelegate::CreateThrottleFor(request));
   }
 #endif
 #if defined(OS_CHROMEOS)
@@ -277,9 +332,17 @@ void ChromeResourceDispatcherHostDelegate::DownloadStarting(
 
   // If it's from the web, we don't trust it, so we push the throttle on.
   if (is_content_initiated) {
-    throttles->push_back(new DownloadResourceThrottle(
-        download_request_limiter_, child_id, route_id, request_id,
-        request->method()));
+    throttles->push_back(
+        new DownloadResourceThrottle(download_request_limiter_.get(),
+                                     child_id,
+                                     route_id,
+                                     request_id,
+                                     request->method()));
+#if defined(OS_ANDROID)
+    throttles->push_back(
+        new chrome::InterceptDownloadResourceThrottle(
+            request, child_id, route_id, request_id));
+#endif
   }
 
   // If this isn't a new request, we've seen this before and added the standard
@@ -352,6 +415,8 @@ bool ChromeResourceDispatcherHostDelegate::HandleExternalProtocol(
 #else
 
   if (prerender_tracker_->IsPrerenderingOnIOThread(child_id, route_id)) {
+    ReportPrerenderSchemeCancelReason(
+        PRERENDER_SCHEME_CANCEL_REASON_EXTERNAL_PROTOCOL);
     prerender_tracker_->TryCancel(
         child_id, route_id, prerender::FINAL_STATUS_UNSUPPORTED_SCHEME);
     return false;
@@ -378,8 +443,11 @@ void ChromeResourceDispatcherHostDelegate::AppendStandardResourceThrottles(
   if (io_data->safe_browsing_enabled()->GetValue()) {
     bool is_subresource_request = resource_type != ResourceType::MAIN_FRAME;
     content::ResourceThrottle* throttle =
-        SafeBrowsingResourceThrottleFactory::Create(request, child_id, route_id,
-            is_subresource_request, safe_browsing_);
+        SafeBrowsingResourceThrottleFactory::Create(request,
+                                                    child_id,
+                                                    route_id,
+                                                    is_subresource_request,
+                                                    safe_browsing_.get());
     if (throttle)
       throttles->push_back(throttle);
   }
@@ -431,7 +499,7 @@ bool ChromeResourceDispatcherHostDelegate::ShouldInterceptResourceAsStream(
     content::ResourceContext* resource_context,
     const GURL& url,
     const std::string& mime_type,
-    GURL* security_origin,
+    GURL* origin,
     std::string* target_id) {
 #if !defined(OS_ANDROID)
   ProfileIOData* io_data =
@@ -455,7 +523,7 @@ bool ChromeResourceDispatcherHostDelegate::ShouldInterceptResourceAsStream(
     }
 
     if (ExtensionCanHandleMimeType(extension, mime_type)) {
-      *security_origin = Extension::GetBaseURLFromExtensionId(extension_id);
+      *origin = Extension::GetBaseURLFromExtensionId(extension_id);
       *target_id = extension_id;
       return true;
     }
@@ -469,12 +537,13 @@ void ChromeResourceDispatcherHostDelegate::OnStreamCreated(
     int render_process_id,
     int render_view_id,
     const std::string& target_id,
-    scoped_ptr<content::StreamHandle> stream) {
+    scoped_ptr<content::StreamHandle> stream,
+    int64 expected_content_size) {
 #if !defined(OS_ANDROID)
   content::BrowserThread::PostTask(
       content::BrowserThread::UI, FROM_HERE,
       base::Bind(&SendExecuteMimeTypeHandlerEvent, base::Passed(&stream),
-                 render_process_id, render_view_id,
+                 expected_content_size, render_process_id, render_view_id,
                  target_id));
 #endif
 }
@@ -484,8 +553,6 @@ void ChromeResourceDispatcherHostDelegate::OnResponseStarted(
     content::ResourceContext* resource_context,
     content::ResourceResponse* response,
     IPC::Sender* sender) {
-  LoadTimingObserver::PopulateTimingInfo(request, response);
-
   const ResourceRequestInfo* info = ResourceRequestInfo::ForRequest(request);
 
   if (request->url().SchemeIsSecure()) {
@@ -543,8 +610,6 @@ void ChromeResourceDispatcherHostDelegate::OnRequestRedirected(
     net::URLRequest* request,
     content::ResourceContext* resource_context,
     content::ResourceResponse* response) {
-  LoadTimingObserver::PopulateTimingInfo(request, response);
-
   ProfileIOData* io_data = ProfileIOData::FromResourceContext(resource_context);
 
 #if defined(ENABLE_ONE_CLICK_SIGNIN)
@@ -569,6 +634,7 @@ void ChromeResourceDispatcherHostDelegate::OnRequestRedirected(
       ResourceRequestInfo::ForRequest(request)->GetAssociatedRenderView(
           &child_id, &route_id) &&
       prerender_tracker_->IsPrerenderingOnIOThread(child_id, route_id)) {
+    ReportUnsupportedPrerenderScheme(redirect_url);
     prerender_tracker_->TryCancel(
         child_id, route_id, prerender::FINAL_STATUS_UNSUPPORTED_SCHEME);
     request->Cancel();

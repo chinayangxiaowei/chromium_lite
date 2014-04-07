@@ -11,14 +11,14 @@
 #include "base/bind_helpers.h"
 #include "base/i18n/rtl.h"
 #include "base/prefs/pref_service.h"
-#include "base/string_util.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/character_encoding.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/options/font_settings_utils.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/pref_names.h"
 #include "content/public/browser/font_list_async.h"
 #include "content/public/browser/notification_details.h"
@@ -188,8 +188,8 @@ void FontSettingsHandler::FontsListHasLoaded(
       option->Append(new base::StringValue(has_rtl_chars ? "rtl" : "ltr"));
     } else {
       // Add empty name/value to indicate a separator item.
-      option->Append(new base::StringValue(""));
-      option->Append(new base::StringValue(""));
+      option->Append(new base::StringValue(std::string()));
+      option->Append(new base::StringValue(std::string()));
     }
     encoding_list.Append(option);
   }

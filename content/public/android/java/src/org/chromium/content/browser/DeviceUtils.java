@@ -19,13 +19,24 @@ public class DeviceUtils {
      */
     private static final int MINIMUM_TABLET_WIDTH_DP = 600;
 
+    private static Boolean sIsTv = null;
+    private static Boolean sIsTablet = null;
+
     /**
      * @param context Android's context
      * @return        Whether the app is should treat the device as a tablet for layout.
      */
     public static boolean isTablet(Context context) {
-        int minimumScreenWidthDp = context.getResources().getConfiguration().smallestScreenWidthDp;
-        return minimumScreenWidthDp >= MINIMUM_TABLET_WIDTH_DP;
+        if (sIsTablet == null) {
+            if (isTv(context)) {
+                sIsTablet = true;
+                return sIsTablet;
+            }
+            int minimumScreenWidthDp = context.getResources().getConfiguration().
+                    smallestScreenWidthDp;
+            sIsTablet = minimumScreenWidthDp >= MINIMUM_TABLET_WIDTH_DP;
+        }
+        return sIsTablet;
     }
 
     /**
@@ -37,11 +48,15 @@ public class DeviceUtils {
      * @return {@code true} if the device should be treated as TV.
      */
     public static boolean isTv(Context context) {
-        PackageManager manager = context.getPackageManager();
-        if (manager != null) {
-            return manager.hasSystemFeature(PackageManager.FEATURE_TELEVISION);
+        if (sIsTv == null) {
+            PackageManager manager = context.getPackageManager();
+            if (manager != null) {
+                sIsTv = manager.hasSystemFeature(PackageManager.FEATURE_TELEVISION);
+                return sIsTv;
+            }
+            sIsTv = false;
         }
-        return false;
+        return sIsTv;
     }
 
     /**
@@ -49,7 +64,7 @@ public class DeviceUtils {
      * @param context The context for the caller activity.
      */
     public static void addDeviceSpecificUserAgentSwitch(Context context) {
-        if (isTv(context) || isTablet(context)) {
+        if (isTablet(context)) {
             CommandLine.getInstance().appendSwitch(CommandLine.TABLET_UI);
         } else {
             CommandLine.getInstance().appendSwitch(CommandLine.USE_MOBILE_UA);

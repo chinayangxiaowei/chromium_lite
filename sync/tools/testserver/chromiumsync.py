@@ -31,9 +31,12 @@ import extension_specifics_pb2
 import favicon_image_specifics_pb2
 import favicon_tracking_specifics_pb2
 import history_delete_directive_specifics_pb2
+import managed_user_setting_specifics_pb2
+import managed_user_specifics_pb2
 import nigori_specifics_pb2
 import password_specifics_pb2
 import preference_specifics_pb2
+import priority_preference_specifics_pb2
 import search_engine_specifics_pb2
 import session_specifics_pb2
 import sync_pb2
@@ -59,9 +62,12 @@ ALL_TYPES = (
     EXPERIMENTS,
     EXTENSIONS,
     HISTORY_DELETE_DIRECTIVE,
+    MANAGED_USER_SETTING,
+    MANAGED_USER,
     NIGORI,
     PASSWORD,
     PREFERENCE,
+    PRIORITY_PREFERENCE,
     SEARCH_ENGINE,
     SESSION,
     SYNCED_NOTIFICATION,
@@ -69,7 +75,7 @@ ALL_TYPES = (
     TYPED_URL,
     EXTENSION_SETTINGS,
     FAVICON_IMAGES,
-    FAVICON_TRACKING) = range(23)
+    FAVICON_TRACKING) = range(26)
 
 # An enumeration on the frequency at which the server should send errors
 # to the client. This would be specified by the url that triggers the error.
@@ -100,9 +106,12 @@ SYNC_TYPE_TO_DESCRIPTOR = {
     FAVICON_IMAGES: SYNC_TYPE_FIELDS['favicon_image'],
     FAVICON_TRACKING: SYNC_TYPE_FIELDS['favicon_tracking'],
     HISTORY_DELETE_DIRECTIVE: SYNC_TYPE_FIELDS['history_delete_directive'],
+    MANAGED_USER_SETTING: SYNC_TYPE_FIELDS['managed_user_setting'],
+    MANAGED_USER: SYNC_TYPE_FIELDS['managed_user'],
     NIGORI: SYNC_TYPE_FIELDS['nigori'],
     PASSWORD: SYNC_TYPE_FIELDS['password'],
     PREFERENCE: SYNC_TYPE_FIELDS['preference'],
+    PRIORITY_PREFERENCE: SYNC_TYPE_FIELDS['priority_preference'],
     SEARCH_ENGINE: SYNC_TYPE_FIELDS['search_engine'],
     SESSION: SYNC_TYPE_FIELDS['session'],
     SYNCED_NOTIFICATION: SYNC_TYPE_FIELDS["synced_notification"],
@@ -120,8 +129,9 @@ UNIX_TIME_EPOCH = (1970, 1, 1, 0, 0, 0, 3, 1, 0)
 # The number of characters in the server-generated encryption key.
 KEYSTORE_KEY_LENGTH = 16
 
-# The hashed client tag for the keystore encryption experiment node.
+# The hashed client tags for some experiment nodes.
 KEYSTORE_ENCRYPTION_EXPERIMENT_TAG = "pis8ZRzh98/MKLtVEio2mr42LQA="
+PRE_COMMIT_GU_AVOIDANCE_EXPERIMENT_TAG = "Z1xgeh3QUBa50vdEPd8C/4c7jfE="
 
 class Error(Exception):
   """Error class for this module."""
@@ -488,12 +498,21 @@ class SyncDataModel(object):
                     name='Favicon Tracking',
                     parent_tag=ROOT_ID,
                     sync_type=FAVICON_TRACKING),
+      PermanentItem('google_chrome_managed_user_settings',
+                    name='Managed User Settings',
+                    parent_tag=ROOT_ID, sync_type=MANAGED_USER_SETTING),
+      PermanentItem('google_chrome_managed_users',
+                    name='Managed Users',
+                    parent_tag=ROOT_ID, sync_type=MANAGED_USER),
       PermanentItem('google_chrome_nigori', name='Nigori',
                     parent_tag=ROOT_ID, sync_type=NIGORI),
       PermanentItem('google_chrome_passwords', name='Passwords',
                     parent_tag=ROOT_ID, sync_type=PASSWORD),
       PermanentItem('google_chrome_preferences', name='Preferences',
                     parent_tag=ROOT_ID, sync_type=PREFERENCE),
+      PermanentItem('google_chrome_priority_preferences',
+                    name='Priority Preferences',
+                    parent_tag=ROOT_ID, sync_type=PRIORITY_PREFERENCE),
       PermanentItem('google_chrome_synced_notifications',
                     name='Synced Notifications',
                     parent_tag=ROOT_ID, sync_type=SYNCED_NOTIFICATION),
@@ -519,13 +538,11 @@ class SyncDataModel(object):
     self._entries = {}
 
     self.ResetStoreBirthday()
-
     self.migration_history = MigrationHistory()
-
     self.induced_error = sync_pb2.ClientToServerResponse.Error()
     self.induced_error_frequency = 0
     self.sync_count_before_errors = 0
-
+    self.acknowledge_managed_users = False
     self._keys = [MakeNewKeystoreKey()]
 
   def _SaveEntry(self, entry):
@@ -624,12 +641,14 @@ class SyncDataModel(object):
     was changed and Chrome now sends up the absolute position.  The server
     must store a position_in_parent value and must not maintain
     insert_after_item_id.
+    Starting in Jan 2013, the client will also send up a unique_position field
+    which should be saved and returned on subsequent GetUpdates.
 
     Args:
       entry: The entry for which to write a position.  Its ID field are
-        assumed to be server IDs.  This entry will have its parent_id_string
-        and position_in_parent fields updated; its insert_after_item_id field
-        will be cleared.
+        assumed to be server IDs.  This entry will have its parent_id_string,
+        position_in_parent and unique_position fields updated; its
+        insert_after_item_id field will be cleared.
       parent_id: The ID of the entry intended as the new parent.
     """
 
@@ -711,6 +730,8 @@ class SyncDataModel(object):
     if (sieve.GetCreateMobileBookmarks() and
         first_time_types.count(BOOKMARK) > 0):
       self.TriggerCreateSyncedBookmarks()
+
+    self.TriggerAcknowledgeManagedUsers()
 
     change_log = sorted(self._entries.values(),
                         key=operator.attrgetter('version'))
@@ -944,12 +965,14 @@ class SyncDataModel(object):
       entry = MakeTombstone(entry.id_string)
     else:
       # Comments in sync.proto detail how the representation of positional
-      # ordering works: either the 'insert_after_item_id' field or the
-      # 'position_in_parent' field may determine the sibling order during
-      # Commit operations.  The 'position_in_parent' field provides an absolute
-      # ordering in GetUpdates contexts.  Here we assume the client will
-      # always send a valid position_in_parent (this is the newer style), and
-      # we ignore insert_after_item_id (an older style).
+      # ordering works.
+      #
+      # We've almost fully deprecated the 'insert_after_item_id' field.
+      # The 'position_in_parent' field is also deprecated, but as of Jan 2013
+      # is still in common use.  The 'unique_position' field is the latest
+      # and greatest in positioning technology.
+      #
+      # This server supports 'position_in_parent' and 'unique_position'.
       self._WritePosition(entry, entry.parent_id_string)
 
     # Preserve the originator info, which the client is not required to send
@@ -1063,6 +1086,40 @@ class SyncDataModel(object):
     # send back the keystore keys).
     nigori_tag = "google_chrome_nigori"
     self._SaveEntry(self._entries.get(self._ServerTagToId(nigori_tag)))
+
+  def TriggerAcknowledgeManagedUsers(self):
+    """Set the "acknowledged" flag for any managed user entities that don't have
+       it set already.
+    """
+
+    if not self.acknowledge_managed_users:
+      return
+
+    managed_users = [copy.deepcopy(entry) for entry in self._entries.values()
+                     if entry.specifics.HasField('managed_user')
+                     and not entry.specifics.managed_user.acknowledged]
+    for user in managed_users:
+      user.specifics.managed_user.acknowledged = True
+      self._SaveEntry(user)
+
+  def TriggerEnablePreCommitGetUpdateAvoidance(self):
+    """Sets the experiment to enable pre-commit GetUpdate avoidance."""
+    experiment_id = self._ServerTagToId("google_chrome_experiments")
+    pre_commit_gu_avoidance_id = self._ClientTagToId(
+        EXPERIMENTS,
+        PRE_COMMIT_GU_AVOIDANCE_EXPERIMENT_TAG)
+    entry = self._entries.get(pre_commit_gu_avoidance_id)
+    if entry is None:
+      entry = sync_pb2.SyncEntity()
+      entry.id_string = pre_commit_gu_avoidance_id
+      entry.name = "Pre-commit GU avoidance"
+      entry.client_defined_unique_tag = PRE_COMMIT_GU_AVOIDANCE_EXPERIMENT_TAG
+      entry.folder = False
+      entry.deleted = False
+      entry.specifics.CopyFrom(GetDefaultEntitySpecifics(EXPERIMENTS))
+      self._WritePosition(entry, experiment_id)
+    entry.specifics.experiments.pre_commit_update_avoidance.enabled = True
+    self._SaveEntry(entry)
 
   def SetInducedError(self, error, error_frequency,
                       sync_count_before_errors):
@@ -1235,6 +1292,22 @@ class TestServer(object):
         200,
         '<html><title>Rotate Keystore Keys</title>'
             '<H1>Rotate Keystore Keys</H1></html>')
+
+  def HandleEnableManagedUserAcknowledgement(self):
+    """Enable acknowledging newly created managed users."""
+    self.account.acknowledge_managed_users = True
+    return (
+        200,
+        '<html><title>Enable Managed User Acknowledgement</title>'
+            '<h1>Enable Managed User Acknowledgement</h1></html>')
+
+  def HandleEnablePreCommitGetUpdateAvoidance(self):
+    """Enables the pre-commit GU avoidance experiment."""
+    self.account.TriggerEnablePreCommitGetUpdateAvoidance()
+    return (
+        200,
+        '<html><title>Enable pre-commit GU avoidance</title>'
+            '<H1>Enable pre-commit GU avoidance</H1></html>')
 
   def HandleCommand(self, query, raw_request):
     """Decode and handle a sync command from a raw input of bytes.

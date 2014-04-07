@@ -6,9 +6,9 @@
 
 #include "base/bind.h"
 #include "base/logging.h"
-#include "base/message_loop.h"
-#include "base/string_number_conversions.h"
-#include "base/time.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/time/time.h"
 #include "remoting/base/constants.h"
 #include "remoting/host/host_config.h"
 #include "remoting/jingle_glue/iq_sender.h"
@@ -44,7 +44,7 @@ RegisterSupportHostRequest::RegisterSupportHostRequest(
       directory_bot_jid_(directory_bot_jid),
       callback_(callback) {
   DCHECK(signal_strategy_);
-  DCHECK(key_pair_);
+  DCHECK(key_pair_.get());
   signal_strategy_->AddListener(this);
   iq_sender_.reset(new IqSender(signal_strategy_));
 }

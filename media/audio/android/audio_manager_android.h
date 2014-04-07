@@ -5,6 +5,7 @@
 #ifndef MEDIA_AUDIO_ANDROID_AUDIO_MANAGER_ANDROID_H_
 #define MEDIA_AUDIO_ANDROID_AUDIO_MANAGER_ANDROID_H_
 
+#include "base/android/jni_android.h"
 #include "media/audio/audio_manager_base.h"
 
 namespace media {
@@ -22,15 +23,26 @@ class MEDIA_EXPORT AudioManagerAndroid : public AudioManagerBase {
   virtual AudioParameters GetInputStreamParameters(
       const std::string& device_id) OVERRIDE;
 
+  virtual AudioOutputStream* MakeAudioOutputStream(
+      const AudioParameters& params,
+      const std::string& input_device_id) OVERRIDE;
+  virtual AudioInputStream* MakeAudioInputStream(
+      const AudioParameters& params, const std::string& device_id) OVERRIDE;
+  virtual void ReleaseOutputStream(AudioOutputStream* stream) OVERRIDE;
+  virtual void ReleaseInputStream(AudioInputStream* stream) OVERRIDE;
+
   // Implementation of AudioManagerBase.
   virtual AudioOutputStream* MakeLinearOutputStream(
       const AudioParameters& params) OVERRIDE;
   virtual AudioOutputStream* MakeLowLatencyOutputStream(
-      const AudioParameters& params) OVERRIDE;
+      const AudioParameters& params,
+      const std::string& input_device_id) OVERRIDE;
   virtual AudioInputStream* MakeLinearInputStream(
       const AudioParameters& params, const std::string& device_id) OVERRIDE;
   virtual AudioInputStream* MakeLowLatencyInputStream(
       const AudioParameters& params, const std::string& device_id) OVERRIDE;
+
+  static bool RegisterAudioManager(JNIEnv* env);
 
  protected:
   virtual ~AudioManagerAndroid();
@@ -39,6 +51,17 @@ class MEDIA_EXPORT AudioManagerAndroid : public AudioManagerBase {
       const AudioParameters& input_params) OVERRIDE;
 
  private:
+  void SetAudioMode(int mode);
+  void RegisterHeadsetReceiver();
+  void UnregisterHeadsetReceiver();
+  int GetNativeOutputSampleRate();
+  bool IsAudioLowLatencySupported();
+  int GetAudioLowLatencyOutputFrameSize();
+  int GetOptimalOutputFrameSize(int sample_rate, int channels);
+
+  // Java AudioManager instance.
+  base::android::ScopedJavaGlobalRef<jobject> j_audio_manager_;
+
   DISALLOW_COPY_AND_ASSIGN(AudioManagerAndroid);
 };
 

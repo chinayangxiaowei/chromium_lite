@@ -7,7 +7,6 @@
 
 #include "sync/base/sync_export.h"
 #include "sync/internal_api/public/base/model_type.h"
-#include "sync/internal_api/public/base/node_ordinal.h"
 #include "sync/syncable/entry.h"
 #include "sync/syncable/metahandle_set.h"
 
@@ -52,7 +51,7 @@ class SYNC_EXPORT_PRIVATE MutableEntry : public Entry {
   bool Put(Int64Field field, const int64& value);
   bool Put(TimeField field, const base::Time& value);
   bool Put(IdField field, const Id& value);
-  bool Put(OrdinalField field, const NodeOrdinal& value);
+  bool Put(UniquePositionField field, const UniquePosition& value);
 
   // Do a simple property-only update if the PARENT_ID field.  Use with caution.
   //
@@ -75,6 +74,8 @@ class SYNC_EXPORT_PRIVATE MutableEntry : public Entry {
   }
   bool Put(IndexedBitField field, bool value);
 
+  void PutUniqueBookmarkTag(const std::string& tag);
+
   // Sets the position of this item, and updates the entry kernels of the
   // adjacent siblings so that list invariants are maintained.  Returns false
   // and fails if |predecessor_id| does not identify a sibling.  Pass the root
@@ -82,6 +83,12 @@ class SYNC_EXPORT_PRIVATE MutableEntry : public Entry {
   bool PutPredecessor(const Id& predecessor_id);
 
   bool Put(BitTemp field, bool value);
+
+  // This is similar to what one would expect from Put(TRANSACTION_VERSION),
+  // except that it doesn't bother to invoke 'SaveOriginals'.  Calling that
+  // function is at best unnecessary, since the transaction will have already
+  // used its list of mutations by the time this function is called.
+  void UpdateTransactionVersion(int64 version);
 
  protected:
   syncable::MetahandleSet* GetDirtyIndexHelper();
@@ -97,6 +104,7 @@ class SYNC_EXPORT_PRIVATE MutableEntry : public Entry {
   void* operator new(size_t size) { return (::operator new)(size); }
 
   bool PutUniqueClientTag(const std::string& value);
+  bool PutUniqueServerTag(const std::string& value);
 
   // Adjusts the successor and predecessor entries so that they no longer
   // refer to this entry.

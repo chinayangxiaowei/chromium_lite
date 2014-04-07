@@ -5,7 +5,7 @@
 #include "net/http/http_auth_cache.h"
 
 #include "base/logging.h"
-#include "base/string_util.h"
+#include "base/strings/string_util.h"
 
 namespace {
 
@@ -42,7 +42,9 @@ bool IsEnclosingPath(const std::string& container, const std::string& path) {
 // Debug helper to check that |origin| arguments are properly formed.
 void CheckOriginIsValid(const GURL& origin) {
   DCHECK(origin.is_valid());
-  DCHECK(origin.SchemeIs("http") || origin.SchemeIs("https"));
+  // Note that the scheme may be FTP when we're using a HTTP proxy.
+  DCHECK(origin.SchemeIs("http") || origin.SchemeIs("https") ||
+         origin.SchemeIs("ftp"));
   DCHECK(origin.GetOrigin() == origin);
 }
 

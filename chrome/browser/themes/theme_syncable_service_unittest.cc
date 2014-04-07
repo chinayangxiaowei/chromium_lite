@@ -8,6 +8,7 @@
 #include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/memory/scoped_ptr.h"
+#include "base/time/time.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/test_extension_system.h"
 #include "chrome/browser/profiles/profile.h"
@@ -26,6 +27,12 @@
 #include "sync/protocol/sync.pb.h"
 #include "sync/protocol/theme_specifics.pb.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+#if defined(OS_CHROMEOS)
+#include "chrome/browser/chromeos/login/user_manager.h"
+#include "chrome/browser/chromeos/settings/cros_settings.h"
+#include "chrome/browser/chromeos/settings/device_settings_service.h"
+#endif
 
 using std::string;
 
@@ -101,10 +108,10 @@ class FakeThemeService : public ThemeService {
   }
 
   virtual string GetThemeID() const OVERRIDE {
-    if (theme_extension_)
+    if (theme_extension_.get())
       return theme_extension_->id();
     else
-      return "";
+      return std::string();
   }
 
   const extensions::Extension* theme_extension() const {
@@ -126,7 +133,8 @@ class FakeThemeService : public ThemeService {
   bool is_dirty_;
 };
 
-ProfileKeyedService* BuildMockThemeService(Profile* profile) {
+BrowserContextKeyedService* BuildMockThemeService(
+    content::BrowserContext* profile) {
   return new FakeThemeService;
 }
 
@@ -145,7 +153,7 @@ scoped_refptr<extensions::Extension> MakeThemeExtension(
       extensions::Extension::Create(
           extension_path, location, source,
           extensions::Extension::NO_FLAGS, &error);
-  EXPECT_TRUE(extension);
+  EXPECT_TRUE(extension.get());
   EXPECT_EQ("", error);
   return extension;
 }
@@ -155,9 +163,9 @@ scoped_refptr<extensions::Extension> MakeThemeExtension(
 class ThemeSyncableServiceTest : public testing::Test {
  protected:
   ThemeSyncableServiceTest()
-      : loop_(MessageLoop::TYPE_DEFAULT),
-        ui_thread_(BrowserThread::UI, &loop_),
-        file_thread_(BrowserThread::FILE, &loop_),
+      : loop_(base::MessageLoop::TYPE_DEFAULT),
+        ui_thread_(content::BrowserThread::UI, &loop_),
+        file_thread_(content::BrowserThread::FILE, &loop_),
         fake_theme_service_(NULL) {}
 
   virtual ~ThemeSyncableServiceTest() {}
@@ -199,7 +207,7 @@ class ThemeSyncableServiceTest : public testing::Test {
         new extensions::PermissionSet(empty_set, empty_extent, empty_extent);
     service->extension_prefs()->AddGrantedPermissions(
         theme_extension_->id(), permissions.get());
-    service->AddExtension(theme_extension_);
+    service->AddExtension(theme_extension_.get());
     ASSERT_EQ(1u, service->extensions()->size());
   }
 
@@ -227,9 +235,15 @@ class ThemeSyncableServiceTest : public testing::Test {
   }
 
   // Needed for setting up extension service.
-  MessageLoop loop_;
+  base::MessageLoop loop_;
   content::TestBrowserThread ui_thread_;
   content::TestBrowserThread file_thread_;
+
+#if defined OS_CHROMEOS
+  chromeos::ScopedTestDeviceSettingsService test_device_settings_service_;
+  chromeos::ScopedTestCrosSettings test_cros_settings_;
+  chromeos::ScopedTestUserManager test_user_manager_;
+#endif
 
   scoped_ptr<TestingProfile> profile_;
   FakeThemeService* fake_theme_service_;
@@ -376,8 +390,9 @@ TEST_F(ThemeSyncableServiceTest, UpdateThemeSpecificsFromCurrentTheme) {
   EXPECT_TRUE(theme_specifics.use_custom_theme());
   EXPECT_EQ(theme_extension_->id(), theme_specifics.custom_theme_id());
   EXPECT_EQ(theme_extension_->name(), theme_specifics.custom_theme_name());
-  EXPECT_EQ(extensions::ManifestURL::GetUpdateURL(theme_extension_).spec(),
-            theme_specifics.custom_theme_update_url());
+  EXPECT_EQ(
+      extensions::ManifestURL::GetUpdateURL(theme_extension_.get()).spec(),
+      theme_specifics.custom_theme_update_url());
 }
 
 TEST_F(ThemeSyncableServiceTest, GetAllSyncData) {
@@ -393,8 +408,9 @@ TEST_F(ThemeSyncableServiceTest, GetAllSyncData) {
   EXPECT_TRUE(theme_specifics.use_custom_theme());
   EXPECT_EQ(theme_extension_->id(), theme_specifics.custom_theme_id());
   EXPECT_EQ(theme_extension_->name(), theme_specifics.custom_theme_name());
-  EXPECT_EQ(extensions::ManifestURL::GetUpdateURL(theme_extension_).spec(),
-            theme_specifics.custom_theme_update_url());
+  EXPECT_EQ(
+      extensions::ManifestURL::GetUpdateURL(theme_extension_.get()).spec(),
+      theme_specifics.custom_theme_update_url());
 }
 
 TEST_F(ThemeSyncableServiceTest, ProcessSyncThemeChange) {
@@ -421,10 +437,11 @@ TEST_F(ThemeSyncableServiceTest, ProcessSyncThemeChange) {
   sync_pb::EntitySpecifics entity_specifics;
   entity_specifics.mutable_theme()->CopyFrom(theme_specifics);
   syncer::SyncChangeList change_list;
-  change_list.push_back(syncer::SyncChange(FROM_HERE,
-                                           syncer::SyncChange::ACTION_UPDATE,
-                                           syncer::SyncData::CreateRemoteData(
-                                               1, entity_specifics)));
+  change_list.push_back(syncer::SyncChange(
+      FROM_HERE,
+      syncer::SyncChange::ACTION_UPDATE,
+      syncer::SyncData::CreateRemoteData(
+          1, entity_specifics, base::Time())));
   error = theme_sync_service_->ProcessSyncChanges(FROM_HERE, change_list);
   EXPECT_FALSE(error.IsSet()) << error.message();
   EXPECT_EQ(fake_theme_service_->theme_extension(), theme_extension_.get());
@@ -456,8 +473,9 @@ TEST_F(ThemeSyncableServiceTest, OnThemeChangeByUser) {
   EXPECT_TRUE(change_specifics.use_custom_theme());
   EXPECT_EQ(theme_extension_->id(), change_specifics.custom_theme_id());
   EXPECT_EQ(theme_extension_->name(), change_specifics.custom_theme_name());
-  EXPECT_EQ(extensions::ManifestURL::GetUpdateURL(theme_extension_).spec(),
-            change_specifics.custom_theme_update_url());
+  EXPECT_EQ(
+      extensions::ManifestURL::GetUpdateURL(theme_extension_.get()).spec(),
+      change_specifics.custom_theme_update_url());
 }
 
 TEST_F(ThemeSyncableServiceTest, StopSync) {
@@ -489,8 +507,9 @@ TEST_F(ThemeSyncableServiceTest, StopSync) {
   // ProcessSyncChanges() should return error when sync has stopped.
   error = theme_sync_service_->ProcessSyncChanges(FROM_HERE, change_list);
   EXPECT_TRUE(error.IsSet());
-  EXPECT_EQ(syncer::THEMES, error.type());
-  EXPECT_EQ("Theme syncable service is not started.",
+  EXPECT_EQ(syncer::THEMES, error.model_type());
+  EXPECT_EQ("datatype error was encountered: Theme syncable service is not "
+                "started.",
             error.message());
 }
 

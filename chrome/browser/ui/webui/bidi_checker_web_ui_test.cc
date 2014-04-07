@@ -6,13 +6,13 @@
 
 #include "base/base_paths.h"
 #include "base/i18n/rtl.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/path_service.h"
 #include "base/prefs/pref_service.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/threading/platform_thread.h"
-#include "base/time.h"
-#include "base/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "chrome/browser/autofill/personal_data_manager_factory.h"
 #include "chrome/browser/history/history_service.h"
@@ -20,18 +20,20 @@
 #include "chrome/browser/prefs/session_startup_pref.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/common/chrome_switches.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "components/autofill/browser/autofill_common_test.h"
-#include "components/autofill/browser/autofill_profile.h"
-#include "components/autofill/browser/personal_data_manager.h"
+#include "components/autofill/core/browser/autofill_common_test.h"
+#include "components/autofill/core/browser/autofill_profile.h"
+#include "components/autofill/core/browser/personal_data_manager.h"
 #include "content/public/browser/browser_thread.h"
 #include "ui/base/resource/resource_bundle.h"
 
 #if defined(TOOLKIT_GTK)
 #include <gtk/gtk.h>
 #endif
+
+using autofill::AutofillProfile;
+using autofill::PersonalDataManager;
 
 static const base::FilePath::CharType* kWebUIBidiCheckerLibraryJS =
     FILE_PATH_LITERAL("third_party/bidichecker/bidichecker_packaged.js");
@@ -69,9 +71,10 @@ void ReloadLocaleResourcesOnIOThread(const std::string& new_locale) {
 // crbug.com/95425, crbug.com/132752
 void ReloadLocaleResources(const std::string& new_locale) {
   content::BrowserThread::PostTaskAndReply(
-      content::BrowserThread::IO, FROM_HERE,
+      content::BrowserThread::IO,
+      FROM_HERE,
       base::Bind(&ReloadLocaleResourcesOnIOThread, base::ConstRef(new_locale)),
-      MessageLoop::QuitClosure());
+      base::MessageLoop::QuitClosure());
   content::RunMessageLoop();
 }
 
@@ -82,14 +85,6 @@ static const base::FilePath::CharType* kBidiCheckerTestsJS =
 
 void WebUIBidiCheckerBrowserTest::SetUp() {
   argv_ = CommandLine::ForCurrentProcess()->GetArgs();
-
-  // Sync only uses webui when client login is enabled.  Client login is going
-  // away, but to keep it tested for now, force client login to be used.
-  if (!CommandLine::ForCurrentProcess()->HasSwitch(
-      switches::kUseClientLoginSigninFlow)) {
-    CommandLine::ForCurrentProcess()->AppendSwitch(
-        switches::kUseClientLoginSigninFlow);
-  }
 }
 
 void WebUIBidiCheckerBrowserTest::TearDown() {
@@ -293,23 +288,23 @@ static void SetupSettingsAutofillPageTest(Profile* profile,
                                           const char* zipcode,
                                           const char* country,
                                           const char* phone) {
-  autofill_test::DisableSystemServices(profile);
+  autofill::test::DisableSystemServices(profile);
   AutofillProfile autofill_profile;
-  autofill_test::SetProfileInfo(&autofill_profile,
-                                first_name,
-                                middle_name,
-                                last_name,
-                                email,
-                                company,
-                                address1,
-                                address2,
-                                city,
-                                state,
-                                zipcode,
-                                country,
-                                phone);
+  autofill::test::SetProfileInfo(&autofill_profile,
+                                 first_name,
+                                 middle_name,
+                                 last_name,
+                                 email,
+                                 company,
+                                 address1,
+                                 address2,
+                                 city,
+                                 state,
+                                 zipcode,
+                                 country,
+                                 phone);
   PersonalDataManager* personal_data_manager =
-      PersonalDataManagerFactory::GetForProfile(profile);
+      autofill::PersonalDataManagerFactory::GetForProfile(profile);
   ASSERT_TRUE(personal_data_manager);
   personal_data_manager->AddProfile(autofill_profile);
 }
@@ -434,24 +429,6 @@ IN_PROC_BROWSER_TEST_F(WebUIBidiCheckerBrowserTestRTL,
                        TestSettingsSearchEnginesOptionsPage) {
   std::string url(chrome::kChromeUISettingsFrameURL);
   url += std::string(chrome::kSearchEnginesSubPage);
-  RunBidiCheckerOnPage(url);
-}
-
-//===================================
-// chrome://settings-frame/syncSetup
-//===================================
-
-IN_PROC_BROWSER_TEST_F(WebUIBidiCheckerBrowserTestLTR,
-                       TestSettingsFrameSyncSetup) {
-  std::string url(chrome::kChromeUISettingsFrameURL);
-  url += std::string(chrome::kSyncSetupSubPage);
-  RunBidiCheckerOnPage(url);
-}
-
-IN_PROC_BROWSER_TEST_F(WebUIBidiCheckerBrowserTestRTL,
-                       TestSettingsFrameSyncSetup) {
-  std::string url(chrome::kChromeUISettingsFrameURL);
-  url += std::string(chrome::kSyncSetupSubPage);
   RunBidiCheckerOnPage(url);
 }
 

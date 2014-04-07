@@ -6,7 +6,7 @@
 #include "base/logging.h"
 #include "base/path_service.h"
 #include "base/prefs/pref_service.h"
-#include "base/stringprintf.h"
+#include "base/strings/stringprintf.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/download/download_service.h"
 #include "chrome/browser/download/download_service_factory.h"
@@ -151,7 +151,7 @@ class BrowserCloseTest : public InProcessBrowserTest {
     for (std::vector<Profile*>::const_iterator pit = profiles.begin();
          pit != profiles.end(); ++pit) {
       DownloadService* download_service =
-          DownloadServiceFactory::GetForProfile(*pit);
+          DownloadServiceFactory::GetForBrowserContext(*pit);
       if (download_service->HasCreatedDownloadManager()) {
         DownloadManager *mgr = BrowserContext::GetDownloadManager(*pit);
         scoped_refptr<content::DownloadTestFlushObserver> observer(
@@ -160,7 +160,7 @@ class BrowserCloseTest : public InProcessBrowserTest {
       }
       if ((*pit)->HasOffTheRecordProfile()) {
         DownloadService* incognito_download_service =
-          DownloadServiceFactory::GetForProfile(
+          DownloadServiceFactory::GetForBrowserContext(
               (*pit)->GetOffTheRecordProfile());
         if (incognito_download_service->HasCreatedDownloadManager()) {
           DownloadManager *mgr = BrowserContext::GetDownloadManager(
@@ -178,7 +178,7 @@ class BrowserCloseTest : public InProcessBrowserTest {
                                   chrome::HostDesktopType host_desktop_type) {
     Browser* new_browser =
         new Browser(Browser::CreateParams(profile, host_desktop_type));
-    chrome::AddSelectedTabWithURL(new_browser, GURL(chrome::kAboutBlankURL),
+    chrome::AddSelectedTabWithURL(new_browser, GURL(content::kAboutBlankURL),
                                   content::PAGE_TRANSITION_AUTO_TOPLEVEL);
     content::WaitForLoadStop(
         new_browser->tab_strip_model()->GetActiveWebContents());

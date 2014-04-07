@@ -5,13 +5,13 @@
 #ifndef CONTENT_PUBLIC_RENDERER_RENDERER_PPAPI_HOST_H_
 #define CONTENT_PUBLIC_RENDERER_RENDERER_PPAPI_HOST_H_
 
+#include "base/callback_forward.h"
 #include "base/memory/ref_counted.h"
 #include "base/platform_file.h"
-#include "base/process.h"
+#include "base/process/process.h"
 #include "content/common/content_export.h"
 #include "ipc/ipc_platform_file.h"
 #include "ppapi/c/pp_instance.h"
-#include "webkit/plugins/ppapi/plugin_delegate.h"
 
 namespace base {
 class FilePath;
@@ -22,19 +22,12 @@ class Point;
 }
 
 namespace IPC {
-struct ChannelHandle;
+class Message;
 }
 
 namespace ppapi {
-class PpapiPermissions;
 namespace host {
 class PpapiHost;
-}
-}
-
-namespace webkit {
-namespace ppapi {
-class PluginInstance;
 }
 }
 
@@ -42,15 +35,8 @@ namespace WebKit {
 class WebPluginContainer;
 }
 
-namespace webkit {
-namespace ppapi {
-class PluginInstance;
-class PluginModule;
-}
-}
-
 namespace content {
-
+class PepperPluginInstance;
 class RenderView;
 
 // Interface that allows components in the embedder app to talk to the
@@ -59,20 +45,6 @@ class RenderView;
 // There will be one of these objects in the renderer per plugin module.
 class RendererPpapiHost {
  public:
-  // Creates a host and sets up an out-of-process proxy for an external plugin
-  // module. |file_path| should identify the module. It is only used to report
-  // failures to the renderer.
-  // Returns a host if the external module is proxied successfully, otherwise
-  // returns NULL.
-  CONTENT_EXPORT static RendererPpapiHost* CreateExternalPluginModule(
-      scoped_refptr<webkit::ppapi::PluginModule> plugin_module,
-      webkit::ppapi::PluginInstance* plugin_instance,
-      const base::FilePath& file_path,
-      ppapi::PpapiPermissions permissions,
-      const IPC::ChannelHandle& channel_handle,
-      base::ProcessId plugin_pid,
-      int plugin_child_id);
-
   // Returns the RendererPpapiHost associated with the given PP_Instance,
   // or NULL if the instance is invalid.
   CONTENT_EXPORT static RendererPpapiHost* GetForPPInstance(
@@ -88,7 +60,7 @@ class RendererPpapiHost {
   // Returns the PluginInstance for the given PP_Instance, or NULL if the
   // PP_Instance is invalid (the common case this will be invalid is during
   // plugin teardown when resource hosts are being force-freed).
-  virtual webkit::ppapi::PluginInstance* GetPluginInstance(
+  virtual PepperPluginInstance* GetPluginInstance(
       PP_Instance instance) const = 0;
 
   // Returns the RenderView for the given plugin instance, or NULL if the
@@ -100,10 +72,9 @@ class RendererPpapiHost {
   virtual WebKit::WebPluginContainer* GetContainerForInstance(
       PP_Instance instance) const = 0;
 
-  // Returns the PlatformGraphics2D for the given plugin resource, or NULL if
-  // the resource is invalid.
-  virtual webkit::ppapi::PluginDelegate::PlatformGraphics2D*
-      GetPlatformGraphics2D(PP_Resource resource) = 0;
+  // Returns the PID of the child process containing the plugin. If running
+  // in-process, this returns base::kNullProcessId.
+  virtual base::ProcessId GetPluginPID() const = 0;
 
   // Returns true if the given instance is considered to be currently
   // processing a user gesture or the plugin module has the "override user
@@ -137,6 +108,18 @@ class RendererPpapiHost {
 
   // Returns true if the plugin is running in process.
   virtual bool IsRunningInProcess() const = 0;
+
+  // There are times when the renderer needs to create a ResourceHost in the
+  // browser. This function does so asynchronously. |nested_msg| is the
+  // resource host creation message and |instance| is the PP_Instance which
+  // the resource will belong to. |callback| will be called with the pending
+  // host ID when the ResourceHost has been created. This can be passed back
+  // to the plugin to attach to the ResourceHost. A pending ID of 0 will be
+  // passed to the callback upon error.
+  virtual void CreateBrowserResourceHost(
+      PP_Instance instance,
+      const IPC::Message& nested_msg,
+      const base::Callback<void(int)>& callback) const = 0;
 
  protected:
   virtual ~RendererPpapiHost() {}

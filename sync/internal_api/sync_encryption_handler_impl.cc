@@ -10,17 +10,17 @@
 #include "base/base64.h"
 #include "base/bind.h"
 #include "base/json/json_string_value_serializer.h"
-#include "base/message_loop.h"
-#include "base/time.h"
-#include "base/tracked_objects.h"
+#include "base/message_loop/message_loop.h"
 #include "base/metrics/histogram.h"
+#include "base/time/time.h"
+#include "base/tracked_objects.h"
 #include "sync/internal_api/public/read_node.h"
 #include "sync/internal_api/public/read_transaction.h"
 #include "sync/internal_api/public/user_share.h"
 #include "sync/internal_api/public/util/experiments.h"
+#include "sync/internal_api/public/util/sync_string_conversions.h"
 #include "sync/internal_api/public/write_node.h"
 #include "sync/internal_api/public/write_transaction.h"
-#include "sync/internal_api/public/util/sync_string_conversions.h"
 #include "sync/protocol/encryption.pb.h"
 #include "sync/protocol/nigori_specifics.pb.h"
 #include "sync/protocol/sync.pb.h"
@@ -136,7 +136,7 @@ std::string PackKeystoreBootstrapToken(
     const std::string& current_keystore_key,
     Encryptor* encryptor) {
   if (current_keystore_key.empty())
-    return "";
+    return std::string();
 
   base::ListValue keystore_key_values;
   for (size_t i = 0; i < old_keystore_keys.size(); ++i)
@@ -177,7 +177,7 @@ bool UnpackKeystoreBootstrapToken(
   JSONStringValueSerializer json(&decrypted_keystore_bootstrap);
   scoped_ptr<base::Value> deserialized_keystore_keys(
       json.Deserialize(NULL, NULL));
-  if (!deserialized_keystore_keys.get())
+  if (!deserialized_keystore_keys)
     return false;
   base::ListValue* internal_list_value = NULL;
   if (!deserialized_keystore_keys->GetAsList(&internal_list_value))
@@ -210,7 +210,7 @@ SyncEncryptionHandlerImpl::SyncEncryptionHandlerImpl(
     Encryptor* encryptor,
     const std::string& restored_key_for_bootstrapping,
     const std::string& restored_keystore_key_for_bootstrapping)
-    : weak_ptr_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)),
+    : weak_ptr_factory_(this),
       user_share_(user_share),
       vault_unsafe_(encryptor, SensitiveTypes()),
       encrypt_everything_(false),
@@ -650,7 +650,7 @@ void SyncEncryptionHandlerImpl::ApplyNigoriUpdate(
   DCHECK(thread_checker_.CalledOnValidThread());
   DCHECK(trans);
   if (!ApplyNigoriUpdateImpl(nigori, trans)) {
-    MessageLoop::current()->PostTask(
+    base::MessageLoop::current()->PostTask(
         FROM_HERE,
         base::Bind(&SyncEncryptionHandlerImpl::RewriteNigori,
                    weak_ptr_factory_.GetWeakPtr()));
@@ -739,7 +739,7 @@ bool SyncEncryptionHandlerImpl::SetKeystoreKeys(
   // Note that triggering migration will have no effect if we're already
   // properly migrated with the newest keystore keys.
   if (ShouldTriggerMigration(nigori, *cryptographer)) {
-    MessageLoop::current()->PostTask(
+    base::MessageLoop::current()->PostTask(
         FROM_HERE,
         base::Bind(&SyncEncryptionHandlerImpl::RewriteNigori,
                    weak_ptr_factory_.GetWeakPtr()));
@@ -810,10 +810,8 @@ void SyncEncryptionHandlerImpl::ReEncryptEverything(
         continue;
 
       WriteNode child(trans);
-      if (child.InitByIdLookup(child_id) != BaseNode::INIT_OK) {
-        NOTREACHED();
-        continue;
-      }
+      if (child.InitByIdLookup(child_id) != BaseNode::INIT_OK)
+        continue;  // Possible for locally deleted items.
       if (child.GetIsFolder()) {
         to_visit.push(child.GetFirstChildId());
       }
@@ -1112,7 +1110,7 @@ void SyncEncryptionHandlerImpl::SetCustomPassphrase(
   if (passphrase_type_ != KEYSTORE_PASSPHRASE) {
     DVLOG(1) << "Failing to set a custom passphrase because one has already "
              << "been set.";
-    FinishSetPassphrase(false, "", trans, nigori_node);
+    FinishSetPassphrase(false, std::string(), trans, nigori_node);
     return;
   }
 
@@ -1125,7 +1123,7 @@ void SyncEncryptionHandlerImpl::SetCustomPassphrase(
     // if statement above. For the sake of safety though, we check for it in
     // case a client is misbehaving.
     LOG(ERROR) << "Failing to set custom passphrase because of pending keys.";
-    FinishSetPassphrase(false, "", trans, nigori_node);
+    FinishSetPassphrase(false, std::string(), trans, nigori_node);
     return;
   }
 

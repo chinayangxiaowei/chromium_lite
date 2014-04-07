@@ -6,12 +6,14 @@
 
 #include "base/bind.h"
 #include "base/compiler_specific.h"
-#include "base/message_loop.h"
-#include "base/utf_string_conversions.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/utf_string_conversions.h"
 #include "grit/ui_strings.h"
 #include "ui/base/accessibility/accessible_view_state.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/menu_model.h"
+#include "ui/gfx/display.h"
+#include "ui/gfx/screen.h"
 #include "ui/views/controls/menu/menu_item_view.h"
 #include "ui/views/controls/menu/menu_model_adapter.h"
 #include "ui/views/controls/menu/menu_runner.h"
@@ -37,7 +39,7 @@ ButtonDropDown::ButtonDropDown(ButtonListener* listener, ui::MenuModel* model)
       model_(model),
       menu_showing_(false),
       y_position_on_lbuttondown_(0),
-      ALLOW_THIS_IN_INITIALIZER_LIST(show_menu_factory_(this)) {
+      show_menu_factory_(this) {
   set_context_menu_controller(this);
 }
 
@@ -67,10 +69,11 @@ bool ButtonDropDown::OnMousePressed(const ui::MouseEvent& event) {
     y_position_on_lbuttondown_ = event.y();
 
     // Schedule a task that will show the menu.
-    MessageLoop::current()->PostDelayedTask(
+    base::MessageLoop::current()->PostDelayedTask(
         FROM_HERE,
         base::Bind(&ButtonDropDown::ShowDropDownMenu,
-                   show_menu_factory_.GetWeakPtr()),
+                   show_menu_factory_.GetWeakPtr(),
+                   ui::GetMenuSourceTypeForEvent(event)),
         base::TimeDelta::FromMilliseconds(kMenuTimerDelay));
   }
   return ImageButton::OnMousePressed(event);
@@ -85,7 +88,7 @@ bool ButtonDropDown::OnMouseDragged(const ui::MouseEvent& event) {
     // it immediately.
     if (event.y() > y_position_on_lbuttondown_ + GetHorizontalDragThreshold()) {
       show_menu_factory_.InvalidateWeakPtrs();
-      ShowDropDownMenu();
+      ShowDropDownMenu(ui::GetMenuSourceTypeForEvent(event));
     }
   }
 
@@ -102,7 +105,7 @@ void ButtonDropDown::OnMouseReleased(const ui::MouseEvent& event) {
     show_menu_factory_.InvalidateWeakPtrs();
 }
 
-std::string ButtonDropDown::GetClassName() const {
+const char* ButtonDropDown::GetClassName() const {
   return kViewClassName;
 }
 
@@ -132,12 +135,13 @@ void ButtonDropDown::GetAccessibleState(ui::AccessibleViewState* state) {
 }
 
 void ButtonDropDown::ShowContextMenuForView(View* source,
-                                            const gfx::Point& point) {
+                                            const gfx::Point& point,
+                                            ui::MenuSourceType source_type) {
   if (!enabled())
     return;
 
   show_menu_factory_.InvalidateWeakPtrs();
-  ShowDropDownMenu();
+  ShowDropDownMenu(source_type);
 }
 
 bool ButtonDropDown::ShouldEnterPushedState(const ui::Event& event) {
@@ -153,7 +157,7 @@ bool ButtonDropDown::ShouldShowMenu() {
   return true;
 }
 
-void ButtonDropDown::ShowDropDownMenu() {
+void ButtonDropDown::ShowDropDownMenu(ui::MenuSourceType source_type) {
   if (!ShouldShowMenu())
     return;
 
@@ -170,6 +174,14 @@ void ButtonDropDown::ShowDropDownMenu() {
 
 #if defined(OS_WIN)
   int left_bound = GetSystemMetrics(SM_XVIRTUALSCREEN);
+#elif defined(OS_CHROMEOS)
+  // A window won't overlap between displays on ChromeOS.
+  // Use the left bound of the display on which
+  // the menu button exists.
+  gfx::NativeView view = GetWidget()->GetNativeView();
+  gfx::Display display = gfx::Screen::GetScreenFor(
+      view)->GetDisplayNearestWindow(view);
+  int left_bound = display.bounds().x();
 #else
   int left_bound = 0;
   NOTIMPLEMENTED();
@@ -191,6 +203,7 @@ void ButtonDropDown::ShowDropDownMenu() {
         menu_runner_->RunMenuAt(GetWidget(), NULL,
                                 gfx::Rect(menu_position, gfx::Size(0, 0)),
                                 MenuItemView::TOPLEFT,
+                                source_type,
                                 MenuRunner::HAS_MNEMONICS);
     if (result == MenuRunner::MENU_DELETED)
       return;
@@ -202,6 +215,7 @@ void ButtonDropDown::ShowDropDownMenu() {
         menu_runner_->RunMenuAt(GetWidget(), NULL,
                                 gfx::Rect(menu_position, gfx::Size(0, 0)),
                                 MenuItemView::TOPLEFT,
+                                source_type,
                                 MenuRunner::HAS_MNEMONICS);
     if (result == MenuRunner::MENU_DELETED)
       return;

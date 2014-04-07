@@ -61,24 +61,50 @@ MutationRecord.prototype.type;
 
 /** @constructor
     @param {function(Array.<MutationRecord>):void} callback */
-var WebKitMutationObserver = function(callback) {};
+var MutationObserver = function(callback) {};
 
 /** @param {Element} element
     @param {Object} options */
-WebKitMutationObserver.prototype.observe = function(element, options) {};
-
-// TODO(jamiewalch): Flesh this out with the correct type when we're a v2 app.
-/** @type {remoting.MockStorage} */
-remoting.storage.local = null;
+MutationObserver.prototype.observe = function(element, options) {};
 
 /** @type {Object} */
 chrome.storage = {};
 
-/** @type {remoting.MockStorage} */
+/** @type {chrome.Storage} */
 chrome.storage.local;
 
-/** @type {remoting.MockStorage} */
+/** @type {chrome.Storage} */
 chrome.storage.sync;
+
+/** @constructor */
+chrome.Storage = function() {};
+
+/**
+ * @param {string|Array.<string>|Object.<string>} items
+ * @param {function(Object.<string>):void} callback
+ * @return {void}
+ */
+chrome.Storage.prototype.get = function(items, callback) {};
+
+/**
+ * @param {Object.<string>} items
+ * @param {function():void=} opt_callback
+ * @return {void}
+ */
+chrome.Storage.prototype.set = function(items, opt_callback) {};
+
+/**
+ * @param {string|Array.<string>} items
+ * @param {function():void=} opt_callback
+ * @return {void}
+ */
+chrome.Storage.prototype.remove = function(items, opt_callback) {};
+
+/**
+ * @param {function():void=} opt_callback
+ * @return {void}
+ */
+chrome.Storage.prototype.clear = function(opt_callback) {};
 
 /** @type {Object} */
 chrome.app.runtime = {
@@ -96,15 +122,17 @@ chrome.app.window = {
 };
 
 /** @type {Object} */
-chrome.experimental = {};
-
-/** @type {Object} */
-chrome.experimental.identity = {
+chrome.identity = {
   /**
    * @param {Object.<string>} parameters
    * @param {function(string):void} callback
    */
-  getAuthToken: function(parameters, callback) {}
+  getAuthToken: function(parameters, callback) {},
+  /**
+   * @param {Object.<string>} parameters
+   * @param {function(string):void} callback
+   */
+  launchWebAuthFlow: function(parameters, callback) {}
 };
 
 /** @constructor */
@@ -112,6 +140,9 @@ chrome.Event = function() {};
 
 /** @param {function():void} callback */
 chrome.Event.prototype.addListener = function(callback) {};
+
+/** @param {function():void} callback */
+chrome.Event.prototype.removeListener = function(callback) {};
 
 /** @constructor */
 chrome.extension.Port = function() {};
@@ -134,7 +165,7 @@ chrome.runtime = {
     /** @type {string} */
     message: ''
   },
-  /** @return {{version: string}} */
+  /** @return {{version: string, app: {background: Object}}} */
   getManifest: function() {}
 };
 
@@ -171,4 +202,26 @@ chrome.Window = function() {
   this.state = '';
   /** @type {string} */
   this.type = '';
+};
+
+/**
+ * @param {*} message
+ */
+chrome.extension.sendMessage = function(message) {}
+
+/** @type {chrome.Event} */
+chrome.extension.onMessage;
+
+/** @type {Object} */
+chrome.permissions = {
+  /**
+   * @param {Object.<string>} permissions
+   * @param {function(boolean):void} callback
+   */
+  contains: function(permissions, callback) {},
+/**
+ * @param {Object.<string>} permissions
+ * @param {function(boolean):void} callback
+ */
+  request: function(permissions, callback) {}
 };

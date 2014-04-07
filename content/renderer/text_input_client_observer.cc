@@ -7,12 +7,12 @@
 #include "base/memory/scoped_ptr.h"
 #include "content/common/text_input_client_messages.h"
 #include "content/renderer/render_view_impl.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebPoint.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebRect.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebString.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/mac/WebSubstringUtil.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebFrame.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebView.h"
+#include "third_party/WebKit/public/platform/WebPoint.h"
+#include "third_party/WebKit/public/platform/WebRect.h"
+#include "third_party/WebKit/public/platform/WebString.h"
+#include "third_party/WebKit/public/web/mac/WebSubstringUtil.h"
+#include "third_party/WebKit/public/web/WebFrame.h"
+#include "third_party/WebKit/public/web/WebView.h"
 #include "ui/gfx/rect.h"
 
 namespace content {
@@ -51,20 +51,29 @@ void TextInputClientObserver::OnCharacterIndexForPoint(gfx::Point point) {
 
 void TextInputClientObserver::OnFirstRectForCharacterRange(ui::Range range) {
   gfx::Rect rect;
-  if (!render_view_impl_->GetPpapiPluginCaretBounds(&rect)) {
+#if defined(ENABLE_PLUGINS)
+  if (!render_view_impl_->GetPepperCaretBounds(&rect))
+#endif
+  {
     WebKit::WebFrame* frame = webview()->focusedFrame();
-    WebKit::WebRect web_rect;
-    frame->firstRectForCharacterRange(range.start(), range.length(), web_rect);
-    rect = web_rect;
+    if (frame) {
+      WebKit::WebRect web_rect;
+      frame->firstRectForCharacterRange(range.start(), range.length(),
+                                        web_rect);
+      rect = web_rect;
+    }
   }
   Send(new TextInputClientReplyMsg_GotFirstRectForRange(routing_id(), rect));
 }
 
 void TextInputClientObserver::OnStringForRange(ui::Range range) {
 #if defined(OS_MACOSX)
-  NSAttributedString* string =
-      WebKit::WebSubstringUtil::attributedSubstringInRange(
-          webview()->focusedFrame(), range.start(), range.length());
+  NSAttributedString* string = nil;
+  WebKit::WebFrame* frame = webview()->focusedFrame();
+  if (frame) {
+    string = WebKit::WebSubstringUtil::attributedSubstringInRange(
+        frame, range.start(), range.length());
+  }
   scoped_ptr<const mac::AttributedStringCoder::EncodedString> encoded(
       mac::AttributedStringCoder::Encode(string));
   Send(new TextInputClientReplyMsg_GotStringForRange(routing_id(),

@@ -4,12 +4,15 @@
 
 #include "cc/test/fake_picture_layer_tiling_client.h"
 
+#include <limits>
+
+#include "cc/test/fake_tile_manager.h"
+
 namespace cc {
 
 class FakeInfinitePicturePileImpl : public PicturePileImpl {
  public:
-  FakeInfinitePicturePileImpl()
-      : PicturePileImpl(false) {
+  FakeInfinitePicturePileImpl() {
     gfx::Size size(std::numeric_limits<int>::max(),
                    std::numeric_limits<int>::max());
     Resize(size);
@@ -21,16 +24,10 @@ class FakeInfinitePicturePileImpl : public PicturePileImpl {
 };
 
 FakePictureLayerTilingClient::FakePictureLayerTilingClient()
-    : tile_manager_(&tile_manager_client_,
-                    NULL,
-                    1,
-                    4096,
-                    false,
-                    false,
-                    false,
-                    &stats_instrumentation_),
-      pile_(new FakeInfinitePicturePileImpl()) {
-}
+    : tile_manager_(new FakeTileManager(&tile_manager_client_)),
+      pile_(new FakeInfinitePicturePileImpl()),
+      twin_tiling_(NULL),
+      allow_create_tile_(true) {}
 
 FakePictureLayerTilingClient::~FakePictureLayerTilingClient() {
 }
@@ -38,14 +35,17 @@ FakePictureLayerTilingClient::~FakePictureLayerTilingClient() {
 scoped_refptr<Tile> FakePictureLayerTilingClient::CreateTile(
     PictureLayerTiling*,
     gfx::Rect rect) {
-  return make_scoped_refptr(new Tile(&tile_manager_,
-                                     pile_.get(),
-                                     tile_size_,
-                                     GL_RGBA,
-                                     rect,
-                                     gfx::Rect(),
-                                     1,
-                                     0));
+  if (!allow_create_tile_)
+    return NULL;
+  return new Tile(tile_manager_.get(),
+                  pile_.get(),
+                  tile_size_,
+                  rect,
+                  gfx::Rect(),
+                  1,
+                  0,
+                  0,
+                  true);
 }
 
 void FakePictureLayerTilingClient::SetTileSize(gfx::Size tile_size) {
@@ -53,9 +53,17 @@ void FakePictureLayerTilingClient::SetTileSize(gfx::Size tile_size) {
 }
 
 gfx::Size FakePictureLayerTilingClient::CalculateTileSize(
-    gfx::Size /* current_tile_size */,
-    gfx::Size /* content_bounds */) {
+    gfx::Size /* content_bounds */) const {
   return tile_size_;
+}
+
+const Region* FakePictureLayerTilingClient::GetInvalidation() {
+  return &invalidation_;
+}
+
+const PictureLayerTiling* FakePictureLayerTilingClient::GetTwinTiling(
+      const PictureLayerTiling* tiling) {
+  return twin_tiling_;
 }
 
 }  // namespace cc

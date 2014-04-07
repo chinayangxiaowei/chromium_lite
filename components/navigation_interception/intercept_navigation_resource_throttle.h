@@ -21,7 +21,7 @@ namespace net {
 class URLRequest;
 }
 
-namespace components {
+namespace navigation_interception {
 
 class NavigationParams;
 
@@ -44,7 +44,10 @@ class InterceptNavigationResourceThrottle : public content::ResourceThrottle {
   virtual void WillRedirectRequest(const GURL& new_url, bool* defer) OVERRIDE;
 
  private:
-  bool CheckIfShouldIgnoreNavigation(const GURL& url, bool is_redirect);
+  std::string GetMethodAfterRedirect();
+  bool CheckIfShouldIgnoreNavigation(const GURL& url,
+                                     const std::string& method,
+                                     bool is_redirect);
   void OnResultObtained(bool should_ignore_navigation);
 
   net::URLRequest* request_;
@@ -54,6 +57,6 @@ class InterceptNavigationResourceThrottle : public content::ResourceThrottle {
   DISALLOW_COPY_AND_ASSIGN(InterceptNavigationResourceThrottle);
 };
 
-}  // namespace components
+}  // namespace navigation_interception
 
 #endif  // COMPONENTS_NAVIGATION_INTERCEPTION_INTERCEPT_NAVIGATION_RESOURCE_THROTTLE_H_

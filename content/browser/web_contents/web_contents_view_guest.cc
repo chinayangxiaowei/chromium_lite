@@ -5,18 +5,25 @@
 #include "content/browser/web_contents/web_contents_view_guest.h"
 
 #include "build/build_config.h"
+#include "content/browser/browser_plugin/browser_plugin_embedder.h"
 #include "content/browser/browser_plugin/browser_plugin_guest.h"
 #include "content/browser/renderer_host/render_view_host_factory.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
 #include "content/browser/renderer_host/render_widget_host_view_guest.h"
 #include "content/browser/web_contents/interstitial_page_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
+#include "content/common/drag_messages.h"
 #include "content/public/browser/web_contents_delegate.h"
+#include "content/public/common/context_menu_params.h"
+#include "content/public/common/drop_data.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/point.h"
 #include "ui/gfx/rect.h"
 #include "ui/gfx/size.h"
-#include "webkit/glue/webdropdata.h"
+
+#if defined(USE_AURA)
+#include "ui/aura/window.h"
+#endif
 
 using WebKit::WebDragOperation;
 using WebKit::WebDragOperationsMask;
@@ -26,17 +33,19 @@ namespace content {
 WebContentsViewGuest::WebContentsViewGuest(
     WebContentsImpl* web_contents,
     BrowserPluginGuest* guest,
-    WebContentsViewPort* platform_view)
+    scoped_ptr<WebContentsViewPort> platform_view,
+    RenderViewHostDelegateView* platform_view_delegate_view)
     : web_contents_(web_contents),
       guest_(guest),
-      platform_view_(platform_view) {
+      platform_view_(platform_view.Pass()),
+      platform_view_delegate_view_(platform_view_delegate_view) {
 }
 
 WebContentsViewGuest::~WebContentsViewGuest() {
 }
 
 gfx::NativeView WebContentsViewGuest::GetNativeView() const {
-  return NULL;
+  return platform_view_->GetNativeView();
 }
 
 gfx::NativeView WebContentsViewGuest::GetContentNativeView() const {
@@ -50,12 +59,35 @@ gfx::NativeWindow WebContentsViewGuest::GetTopLevelNativeWindow() const {
   return guest_->embedder_web_contents()->GetView()->GetTopLevelNativeWindow();
 }
 
+void WebContentsViewGuest::OnGuestInitialized(WebContentsView* parent_view) {
+#if defined(USE_AURA) || defined(OS_WIN)
+  // In aura and windows, ScreenPositionClient doesn't work properly if we do
+  // not have the native view associated with this WebContentsViewGuest in the
+  // view hierarchy. We add this view as embedder's child here.
+  // This would go in WebContentsViewGuest::CreateView, but that is too early to
+  // access embedder_web_contents(). Therefore, we do it here.
+#if defined(USE_AURA)
+  // This can be win aura or chromeos.
+  parent_view->GetNativeView()->AddChild(platform_view_->GetNativeView());
+#elif defined(OS_WIN)
+  SetParent(platform_view_->GetNativeView(), parent_view->GetNativeView());
+#endif
+#endif  // defined(USE_AURA) || defined(OS_WIN)
+}
+
 void WebContentsViewGuest::GetContainerBounds(gfx::Rect* out) const {
-  platform_view_->GetContainerBounds(out);
+  // We need embedder container's bounds to calculate our bounds.
+  guest_->embedder_web_contents()->GetView()->GetContainerBounds(out);
+  gfx::Point guest_coordinates = guest_->GetScreenCoordinates(gfx::Point());
+  out->Offset(guest_coordinates.x(), guest_coordinates.y());
+  out->set_size(size_);
 }
 
 void WebContentsViewGuest::SizeContents(const gfx::Size& size) {
-  platform_view_->SizeContents(size);
+  size_ = size;
+  RenderWidgetHostView* rwhv = web_contents_->GetRenderWidgetHostView();
+  if (rwhv)
+    rwhv->SetSize(size);
 }
 
 void WebContentsViewGuest::SetInitialFocus() {
@@ -63,18 +95,23 @@ void WebContentsViewGuest::SetInitialFocus() {
 }
 
 gfx::Rect WebContentsViewGuest::GetViewBounds() const {
-  return platform_view_->GetViewBounds();
+  return gfx::Rect(size_);
 }
 
 #if defined(OS_MACOSX)
 void WebContentsViewGuest::SetAllowOverlappingViews(bool overlapping) {
   platform_view_->SetAllowOverlappingViews(overlapping);
 }
+
+bool WebContentsViewGuest::GetAllowOverlappingViews() const {
+  return platform_view_->GetAllowOverlappingViews();
+}
 #endif
 
 void WebContentsViewGuest::CreateView(const gfx::Size& initial_size,
                                       gfx::NativeView context) {
   platform_view_->CreateView(initial_size, context);
+  size_ = initial_size;
 }
 
 RenderWidgetHostView* WebContentsViewGuest::CreateViewForWidget(
@@ -149,13 +186,20 @@ void WebContentsViewGuest::StoreFocus() {
   platform_view_->StoreFocus();
 }
 
-WebDropData* WebContentsViewGuest::GetDropData() const {
+DropData* WebContentsViewGuest::GetDropData() const {
   NOTIMPLEMENTED();
   return NULL;
 }
 
 void WebContentsViewGuest::UpdateDragCursor(WebDragOperation operation) {
-  NOTIMPLEMENTED();
+  RenderViewHostImpl* embedder_render_view_host =
+      static_cast<RenderViewHostImpl*>(
+          guest_->embedder_web_contents()->GetRenderViewHost());
+  CHECK(embedder_render_view_host);
+  RenderViewHostDelegateView* view =
+      embedder_render_view_host->GetDelegate()->GetDelegateView();
+  if (view)
+    view->UpdateDragCursor(operation);
 }
 
 void WebContentsViewGuest::GotFocus() {
@@ -164,17 +208,34 @@ void WebContentsViewGuest::GotFocus() {
 void WebContentsViewGuest::TakeFocus(bool reverse) {
 }
 
-void WebContentsViewGuest::ShowContextMenu(
-    const ContextMenuParams& params,
-    ContextMenuSourceType type) {
-  NOTIMPLEMENTED();
+void WebContentsViewGuest::ShowContextMenu(const ContextMenuParams& params) {
+#if defined(USE_AURA) || defined(OS_WIN)
+  // Context menu uses ScreenPositionClient::ConvertPointToScreen() in aura and
+  // windows to calculate popup position. Guest's native view
+  // (platform_view_->GetNativeView()) is part of the embedder's view hierarchy,
+  // but is placed at (0, 0) w.r.t. the embedder's position. Therefore, |offset|
+  // is added to |params|.
+  gfx::Rect embedder_bounds;
+  guest_->embedder_web_contents()->GetView()->GetContainerBounds(
+      &embedder_bounds);
+  gfx::Rect guest_bounds;
+  GetContainerBounds(&guest_bounds);
+
+  gfx::Vector2d offset = guest_bounds.origin() - embedder_bounds.origin();
+  ContextMenuParams params_in_embedder = params;
+  params_in_embedder.x += offset.x();
+  params_in_embedder.y += offset.y();
+  platform_view_delegate_view_->ShowContextMenu(params_in_embedder);
+#else
+  platform_view_delegate_view_->ShowContextMenu(params);
+#endif  // defined(USE_AURA) || defined(OS_WIN)
 }
 
 void WebContentsViewGuest::ShowPopupMenu(const gfx::Rect& bounds,
                                          int item_height,
                                          double item_font_size,
                                          int selected_item,
-                                         const std::vector<WebMenuItem>& items,
+                                         const std::vector<MenuItem>& items,
                                          bool right_aligned,
                                          bool allow_multiple_selection) {
   // External popup menus are only used on Mac and Android.
@@ -182,12 +243,23 @@ void WebContentsViewGuest::ShowPopupMenu(const gfx::Rect& bounds,
 }
 
 void WebContentsViewGuest::StartDragging(
-    const WebDropData& drop_data,
+    const DropData& drop_data,
     WebDragOperationsMask ops,
     const gfx::ImageSkia& image,
     const gfx::Vector2d& image_offset,
     const DragEventSourceInfo& event_info) {
-  NOTIMPLEMENTED();
+  WebContentsImpl* embedder_web_contents = guest_->embedder_web_contents();
+  embedder_web_contents->GetBrowserPluginEmbedder()->StartDrag(guest_);
+  RenderViewHostImpl* embedder_render_view_host =
+      static_cast<RenderViewHostImpl*>(
+          embedder_web_contents->GetRenderViewHost());
+  CHECK(embedder_render_view_host);
+  RenderViewHostDelegateView* view =
+      embedder_render_view_host->GetDelegate()->GetDelegateView();
+  if (view)
+    view->StartDragging(drop_data, ops, image, image_offset, event_info);
+  else
+    embedder_web_contents->SystemDragEnded();
 }
 
 }  // namespace content

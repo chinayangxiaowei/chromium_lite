@@ -13,7 +13,7 @@
 #include "base/gtest_prod_util.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "chrome/browser/history/history_types.h"
 
 class BookmarkService;
@@ -25,7 +25,6 @@ namespace history {
 class ArchivedDatabase;
 class HistoryDatabase;
 struct HistoryDetails;
-class TextDatabaseManager;
 class ThumbnailDatabase;
 
 // Delegate used to broadcast notifications to the main thread.
@@ -35,6 +34,11 @@ class BroadcastNotificationDelegate {
   // thread. The details argument will have ownership taken by this function.
   virtual void BroadcastNotifications(int type,
                                       HistoryDetails* details_deleted) = 0;
+
+  // Trigger handling of deleted urls in typed url sync code
+  virtual void NotifySyncURLsDeleted(bool all_history,
+                                     bool archived,
+                                     URLRows* rows) = 0;
 
  protected:
   virtual ~BroadcastNotificationDelegate() {}
@@ -71,8 +75,7 @@ class ExpireHistoryBackend {
   // Completes initialization by setting the databases that this class will use.
   void SetDatabases(HistoryDatabase* main_db,
                     ArchivedDatabase* archived_db,
-                    ThumbnailDatabase* thumb_db,
-                    TextDatabaseManager* text_db);
+                    ThumbnailDatabase* thumb_db);
 
   // Begins periodic expiration of history older than the given threshold. This
   // will continue until the object is deleted.
@@ -123,9 +126,6 @@ class ExpireHistoryBackend {
   // Deletes the visit-related stuff for all the visits in the given list, and
   // adds the rows for unique URLs affected to the affected_urls list in
   // the dependencies structure.
-  //
-  // Deleted information is the visits themselves and the full-text index
-  // entries corresponding to them.
   void DeleteVisitRelatedInfo(const VisitVector& visits,
                               DeleteDependencies* dependencies);
 
@@ -133,8 +133,7 @@ class ExpireHistoryBackend {
   void ArchiveVisits(const VisitVector& visits);
 
   // Finds or deletes dependency information for the given URL. Information that
-  // is specific to this URL (URL row, thumbnails, full text indexed stuff,
-  // etc.) is deleted.
+  // is specific to this URL (URL row, thumbnails, etc.) is deleted.
   //
   // This does not affect the visits! This is used for expiration as well as
   // deleting from the UI, and they handle visits differently.
@@ -199,7 +198,7 @@ class ExpireHistoryBackend {
   // care about favicons so much, so don't want to stop everything if it fails).
   // Fills |expired_favicons| with the set of favicon urls that no longer
   // have associated visits and were therefore expired.
-  void DeleteFaviconsIfPossible(const std::set<FaviconID>& favicon_id,
+  void DeleteFaviconsIfPossible(const std::set<chrome::FaviconID>& favicon_id,
                                 std::set<GURL>* expired_favicons);
 
   // Enum representing what type of action resulted in the history DB deletion.
@@ -235,12 +234,6 @@ class ExpireHistoryBackend {
   // and deletes items. For example, URLs with no visits.
   void ParanoidExpireHistory();
 
-  // Schedules a call to DoExpireHistoryIndexFiles.
-  void ScheduleExpireHistoryIndexFiles();
-
-  // Deletes old history index files.
-  void DoExpireHistoryIndexFiles();
-
   // Returns the BookmarkService, blocking until it is loaded. This may return
   // NULL.
   BookmarkService* GetBookmarkService();
@@ -264,7 +257,6 @@ class ExpireHistoryBackend {
   HistoryDatabase* main_db_;       // Main history database.
   ArchivedDatabase* archived_db_;  // Old history.
   ThumbnailDatabase* thumb_db_;    // Thumbnails and favicons.
-  TextDatabaseManager* text_db_;   // Full text index.
 
   // Used to generate runnable methods to do timers on this class. They will be
   // automatically canceled when this class is deleted.

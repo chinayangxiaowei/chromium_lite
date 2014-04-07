@@ -18,24 +18,19 @@
 #include "base/location.h"
 #include "base/memory/ref_counted.h"
 #include "base/sequenced_task_runner_helpers.h"
-#include "chrome/browser/api/webdata/autofill_web_data_service.h"
-#include "chrome/browser/api/webdata/web_data_results.h"
-#include "chrome/browser/api/webdata/web_data_service_base.h"
-#include "chrome/browser/api/webdata/web_data_service_consumer.h"
 #include "chrome/browser/search_engines/template_url.h"
 #include "chrome/browser/search_engines/template_url_id.h"
 #include "chrome/browser/webdata/keyword_table.h"
-#include "chrome/browser/webdata/web_database.h"
+#include "components/webdata/common/web_data_results.h"
+#include "components/webdata/common/web_data_service_base.h"
+#include "components/webdata/common/web_data_service_consumer.h"
+#include "components/webdata/common/web_database.h"
 
-class AutocompleteSyncableService;
-class AutofillChange;
-class AutofillProfileSyncableService;
 struct DefaultWebIntentService;
 class GURL;
 #if defined(OS_WIN)
 struct IE7PasswordInfo;
 #endif
-class MessageLoop;
 class Profile;
 class SkBitmap;
 class WebDatabaseService;
@@ -68,8 +63,6 @@ struct WebIntentServiceData;
 //
 ////////////////////////////////////////////////////////////////////////////////
 
-typedef std::vector<AutofillChange> AutofillChangeList;
-
 typedef base::Callback<scoped_ptr<WDTypedResult>(void)> ResultTask;
 
 // Result from GetWebAppImages.
@@ -98,9 +91,7 @@ struct WDKeywordsResult {
 
 class WebDataServiceConsumer;
 
-class WebDataService
-    : public WebDataServiceBase,
-      public AutofillWebData {
+class WebDataService : public WebDataServiceBase {
  public:
   // Retrieve a WebDataService for the given context.
   static scoped_refptr<WebDataService> FromBrowserContext(
@@ -108,13 +99,6 @@ class WebDataService
 
   WebDataService(scoped_refptr<WebDatabaseService> wdbs,
                  const ProfileErrorCallback& callback);
-
-  // Notifies listeners on the UI thread that multiple changes have been made to
-  // to Autofill records of the database.
-  // NOTE: This method is intended to be called from the DB thread.  It
-  // it asynchronously notifies listeners on the UI thread.
-  // |web_data_service| may be NULL for testing purposes.
-  static void NotifyOfMultipleAutofillChanges(WebDataService* web_data_service);
 
   //////////////////////////////////////////////////////////////////////////////
   //
@@ -211,22 +195,6 @@ class WebDataService
   Handle GetAllDefaultWebIntentServices(WebDataServiceConsumer* consumer);
 #endif
 
-  //////////////////////////////////////////////////////////////////////////////
-  //
-  // Token Service
-  //
-  //////////////////////////////////////////////////////////////////////////////
-
-  // Set a token to use for a specified service.
-  void SetTokenForService(const std::string& service,
-                          const std::string& token);
-
-  // Remove all tokens stored in the web database.
-  void RemoveAllTokens();
-
-  // Null on failure. Success is WDResult<std::vector<std::string> >
-  virtual Handle GetAllTokens(WebDataServiceConsumer* consumer);
-
 #if defined(OS_WIN)
   //////////////////////////////////////////////////////////////////////////////
   //
@@ -248,48 +216,7 @@ class WebDataService
                      WebDataServiceConsumer* consumer);
 #endif  // defined(OS_WIN)
 
-  //////////////////////////////////////////////////////////////////////////////
-  //
-  // Autofill.
-  //
-  //////////////////////////////////////////////////////////////////////////////
-
-  // AutofillWebData implementation.
-  virtual void AddFormFields(
-      const std::vector<FormFieldData>& fields) OVERRIDE;
-  virtual Handle GetFormValuesForElementName(
-      const string16& name,
-      const string16& prefix,
-      int limit,
-      WebDataServiceConsumer* consumer) OVERRIDE;
-  virtual void RemoveExpiredFormElements() OVERRIDE;
-  virtual void RemoveFormValueForElementName(const string16& name,
-                                             const string16& value) OVERRIDE;
-  virtual void AddAutofillProfile(const AutofillProfile& profile) OVERRIDE;
-  virtual void UpdateAutofillProfile(const AutofillProfile& profile) OVERRIDE;
-  virtual void RemoveAutofillProfile(const std::string& guid) OVERRIDE;
-  virtual Handle GetAutofillProfiles(WebDataServiceConsumer* consumer) OVERRIDE;
-  virtual void AddCreditCard(const CreditCard& credit_card) OVERRIDE;
-  virtual void UpdateCreditCard(const CreditCard& credit_card) OVERRIDE;
-  virtual void RemoveCreditCard(const std::string& guid) OVERRIDE;
-  virtual Handle GetCreditCards(WebDataServiceConsumer* consumer) OVERRIDE;
-
-  // Removes Autofill records from the database.
-  void RemoveAutofillProfilesAndCreditCardsModifiedBetween(
-      const base::Time& delete_begin,
-      const base::Time& delete_end);
-
-  // Removes form elements recorded for Autocomplete from the database.
-  void RemoveFormElementsAddedBetween(const base::Time& delete_begin,
-                                      const base::Time& delete_end);
-
  protected:
-  // TODO(caitkp): We probably don't need these anymore.
-  friend class TemplateURLServiceTest;
-  friend class TemplateURLServiceTestingProfile;
-  friend class WebDataServiceTest;
-  friend class WebDataRequest;
-
   // For unit tests, passes a null callback.
   WebDataService();
 
@@ -357,17 +284,6 @@ class WebDataService
   scoped_ptr<WDTypedResult> GetAllDefaultWebIntentServicesImpl();
 #endif
 
-  //////////////////////////////////////////////////////////////////////////////
-  //
-  // Token Service.
-  //
-  //////////////////////////////////////////////////////////////////////////////
-
-  WebDatabase::State RemoveAllTokensImpl(WebDatabase* db);
-  WebDatabase::State SetTokenForServiceImpl(const std::string& service,
-      const std::string& token, WebDatabase* db);
-  scoped_ptr<WDTypedResult> GetAllTokensImpl(WebDatabase* db);
-
 #if defined(OS_WIN)
   //////////////////////////////////////////////////////////////////////////////
   //
@@ -381,44 +297,6 @@ class WebDataService
   scoped_ptr<WDTypedResult> GetIE7LoginImpl(
       const IE7PasswordInfo& info, WebDatabase* db);
 #endif  // defined(OS_WIN)
-
-  //////////////////////////////////////////////////////////////////////////////
-  //
-  // Autofill.
-  //
-  //////////////////////////////////////////////////////////////////////////////
-  WebDatabase::State AddFormElementsImpl(
-      const std::vector<FormFieldData>& fields, WebDatabase* db);
-  scoped_ptr<WDTypedResult> GetFormValuesForElementNameImpl(
-      const string16& name, const string16& prefix, int limit, WebDatabase* db);
-  WebDatabase::State RemoveFormElementsAddedBetweenImpl(
-      const base::Time& delete_begin, const base::Time& delete_end,
-      WebDatabase* db);
-  WebDatabase::State RemoveExpiredFormElementsImpl(WebDatabase* db);
-  WebDatabase::State RemoveFormValueForElementNameImpl(
-      const string16& name, const string16& value, WebDatabase* db);
-  WebDatabase::State AddAutofillProfileImpl(
-      const AutofillProfile& profile, WebDatabase* db);
-  WebDatabase::State UpdateAutofillProfileImpl(
-      const AutofillProfile& profile, WebDatabase* db);
-  WebDatabase::State RemoveAutofillProfileImpl(
-      const std::string& guid, WebDatabase* db);
-  scoped_ptr<WDTypedResult> GetAutofillProfilesImpl(WebDatabase* db);
-  WebDatabase::State AddCreditCardImpl(
-      const CreditCard& credit_card, WebDatabase* db);
-  WebDatabase::State UpdateCreditCardImpl(
-      const CreditCard& credit_card, WebDatabase* db);
-  WebDatabase::State RemoveCreditCardImpl(
-      const std::string& guid, WebDatabase* db);
-  scoped_ptr<WDTypedResult> GetCreditCardsImpl(WebDatabase* db);
-  WebDatabase::State RemoveAutofillProfilesAndCreditCardsModifiedBetweenImpl(
-      const base::Time& delete_begin, const base::Time& delete_end,
-      WebDatabase* db);
-
-  // Callbacks to ensure that sensitive info is destroyed if request is
-  // cancelled.
-  void DestroyAutofillProfileResult(const WDTypedResult* result);
-  void DestroyAutofillCreditCardResult(const WDTypedResult* result);
 
   DISALLOW_COPY_AND_ASSIGN(WebDataService);
 };

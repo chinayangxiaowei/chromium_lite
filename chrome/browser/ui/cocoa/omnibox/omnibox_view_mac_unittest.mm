@@ -12,6 +12,7 @@
 #include "chrome/browser/ui/toolbar/toolbar_model_delegate.h"
 #include "chrome/browser/ui/toolbar/toolbar_model_impl.h"
 #include "testing/platform_test.h"
+#include "ui/gfx/image/image.h"
 
 namespace {
 
@@ -115,7 +116,7 @@ TEST_F(OmniboxViewMacTest, GetFieldFont) {
 }
 
 TEST_F(OmniboxViewMacTest, TabToAutocomplete) {
-  chrome::search::EnableInstantExtendedAPIForTesting();
+  chrome::EnableInstantExtendedAPIForTesting();
   OmniboxViewMac view(NULL, NULL, profile(), NULL, NULL);
 
   // This is deleted by the omnibox view.
@@ -141,9 +142,9 @@ TEST_F(OmniboxViewMacTest, TabToAutocomplete) {
   EXPECT_EQ(-1, model->up_or_down_count());
 }
 
-TEST_F(OmniboxViewMacTest, SetInstantSuggestion) {
+TEST_F(OmniboxViewMacTest, SetGrayTextAutocompletion) {
   const NSRect frame = NSMakeRect(0, 0, 50, 30);
-  scoped_nsobject<AutocompleteTextField> field(
+  base::scoped_nsobject<AutocompleteTextField> field(
       [[AutocompleteTextField alloc] initWithFrame:frame]);
 
   TestingToolbarModelDelegate delegate;
@@ -161,13 +162,13 @@ TEST_F(OmniboxViewMacTest, SetInstantSuggestion) {
 
   view.SetUserText(ASCIIToUTF16("Alfred"));
   EXPECT_EQ("Alfred", UTF16ToUTF8(view.GetText()));
-  view.SetInstantSuggestion(ASCIIToUTF16(" Hitchcock"));
+  view.SetGrayTextAutocompletion(ASCIIToUTF16(" Hitchcock"));
   EXPECT_EQ("Alfred", UTF16ToUTF8(view.GetText()));
-  EXPECT_EQ(" Hitchcock", UTF16ToUTF8(view.GetInstantSuggestion()));
+  EXPECT_EQ(" Hitchcock", UTF16ToUTF8(view.GetGrayTextAutocompletion()));
 
   view.SetUserText(string16());
   EXPECT_EQ(string16(), view.GetText());
-  EXPECT_EQ(string16(), view.GetInstantSuggestion());
+  EXPECT_EQ(string16(), view.GetGrayTextAutocompletion());
 }
 
 TEST_F(OmniboxViewMacTest, UpDownArrow) {

@@ -24,8 +24,6 @@
         'app/chrome_exe_resource.h',
         'app/client_util.cc',
         'app/client_util.h',
-        'app/crash_analysis_win.cc',
-        'app/crash_analysis_win.h',
         'app/hard_error_handler_win.cc',
         'app/hard_error_handler_win.h',
         'app/metro_driver_win.cc',
@@ -47,10 +45,8 @@
       },
       'conditions': [
         ['component == "shared_library"', {
-          'msvs_settings': {
-            'VCManifestTool': {
-              'EmbedManifest': 'false',
-            },
+          'variables': {
+            'win_use_external_manifest': 1,
           },
         }],
         ['order_profiling!=0 and (chromeos==1 or OS=="linux")', {
@@ -65,6 +61,12 @@
                 '-Wl,-section-ordering-file=<(order_text_section)' ],
             }],
           ]
+        }],
+        ['OS == "win" and use_aura==1', {
+          'sources!': [
+            # We still want the _win entry point for sandbox, etc.
+            'app/chrome_exe_main_aura.cc',
+          ],
         }],
         ['OS == "android"', {
           # Don't put the 'chrome' target in 'all' on android
@@ -144,7 +146,9 @@
               'dependencies': [
                 # On Linux, link the dependencies (libraries) that make up actual
                 # Chromium functionality directly into the executable.
-                '<@(chromium_dependencies)',
+                '<@(chromium_browser_dependencies)',
+                '<@(chromium_child_dependencies)',
+                '../content/content.gyp:content_app_both',
                 # Needed for chrome_main.cc initialization of libraries.
                 '../build/linux/system.gyp:gtk',
                 # Needed to use the master_preferences functions
@@ -154,7 +158,9 @@
               'dependencies': [
                 # On Linux, link the dependencies (libraries) that make up actual
                 # Chromium functionality directly into the executable.
-                '<@(chromium_dependencies)',
+                '<@(chromium_browser_dependencies)',
+                '<@(chromium_child_dependencies)',
+                '../content/content.gyp:content_app_both',
                 # Needed for chrome_main.cc initialization of libraries.
                 '../build/linux/system.gyp:x11',
                 '../build/linux/system.gyp:pangocairo',
@@ -443,11 +449,6 @@
                 'linux_installer_configs',
               ],
             }],
-            ['selinux==0', {
-              'dependencies': [
-                '../sandbox/sandbox.gyp:sandbox',
-              ],
-            }],
             # For now, do not build nacl_helper when disable_nacl=1
             # http://code.google.com/p/gyp/issues/detail?id=239
             ['disable_nacl==0 and coverage==0', {
@@ -457,21 +458,28 @@
                 ],
             }],
           ],
+          'dependencies': [
+            '../sandbox/sandbox.gyp:sandbox',
+          ],
         }],
         ['OS=="win"', {
           'dependencies': [
             'chrome_dll',
             'chrome_nacl_win64',
+            'chrome_process_finder',
             'chrome_version_resources',
             'installer_util',
             'image_pre_reader',
             '../base/base.gyp:base',
             '../breakpad/breakpad.gyp:breakpad_handler',
             '../breakpad/breakpad.gyp:breakpad_sender',
+            '../components/components.gyp:breakpad_component',
             '../sandbox/sandbox.gyp:sandbox',
             'app/policy/cloud_policy_codegen.gyp:policy',
           ],
           'sources': [
+            'app/chrome_breakpad_client.cc',
+            'app/chrome_breakpad_client.h',
             'app/chrome_exe.rc',
             'common/crash_keys.cc',
             'common/crash_keys.h',
@@ -491,7 +499,9 @@
               'SubSystem': '2',
             },
             'VCManifestTool': {
-              'AdditionalManifestFiles': '$(ProjectDir)\\app\\chrome.exe.manifest',
+              'AdditionalManifestFiles': [
+                '$(ProjectDir)\\app\\chrome.exe.manifest',
+              ],
             },
           },
           'actions': [
@@ -549,7 +559,7 @@
               'product_name': 'nacl64',
               'sources': [
                 'app/breakpad_win.cc',
-                'app/crash_analysis_win.cc',
+                'app/chrome_breakpad_client.cc',
                 'app/hard_error_handler_win.cc',
                 'common/crash_keys.cc',
                 'nacl/nacl_exe_win_64.cc',
@@ -563,14 +573,15 @@
                 'app/policy/cloud_policy_codegen.gyp:policy_win64',
                 'chrome_version_resources',
                 'installer_util_nacl_win64',
-                'nacl_win64',
                 '../breakpad/breakpad.gyp:breakpad_handler_win64',
                 '../breakpad/breakpad.gyp:breakpad_sender_win64',
                 '../base/base.gyp:base_i18n_nacl_win64',
                 '../base/base.gyp:base_nacl_win64',
                 '../base/base.gyp:base_static_win64',
                 '../base/third_party/dynamic_annotations/dynamic_annotations.gyp:dynamic_annotations_win64',
+                '../components/components.gyp:breakpad_win64',
                 '../chrome/common_constants.gyp:common_constants_win64',
+                '../components/nacl.gyp:nacl_win64',
                 '../crypto/crypto.gyp:crypto_nacl_win64',
                 '../ipc/ipc.gyp:ipc_win64',
                 '../sandbox/sandbox.gyp:sandbox_win64',
@@ -604,6 +615,31 @@
             },
           ],
         }],
+      ],
+    }],
+    ['test_isolation_mode != "noop"', {
+      'targets': [
+        {
+          'target_name': 'chrome_run',
+          'type': 'none',
+          'dependencies': [
+            'chrome',
+          ],
+          'includes': [
+            '../build/isolate.gypi',
+            'chrome.isolate',
+          ],
+          'sources': [
+            'chrome.isolate',
+          ],
+          'conditions': [
+            ['OS=="win"', {
+              'dependencies': [
+                'chrome_nacl_win64',
+              ],
+            }],
+          ],
+        },
       ],
     }],
   ],

@@ -5,7 +5,7 @@
 #include "remoting/client/plugin/pepper_port_allocator.h"
 
 #include "base/bind.h"
-#include "base/string_number_conversions.h"
+#include "base/strings/string_number_conversions.h"
 #include "net/base/net_util.h"
 #include "ppapi/c/pp_errors.h"
 #include "ppapi/cpp/completion_callback.h"
@@ -82,14 +82,20 @@ PepperPortAllocatorSession::PepperPortAllocatorSession(
     const std::vector<std::string>& relay_hosts,
     const std::string& relay_token,
     const pp::InstanceHandle& instance)
-    : HttpPortAllocatorSessionBase(
-        allocator, content_name, component, ice_username_fragment, ice_password,
-        stun_hosts, relay_hosts, relay_token, ""),
+    : HttpPortAllocatorSessionBase(allocator,
+                                   content_name,
+                                   component,
+                                   ice_username_fragment,
+                                   ice_password,
+                                   stun_hosts,
+                                   relay_hosts,
+                                   relay_token,
+                                   std::string()),
       instance_(instance),
       stun_address_resolver_(instance_),
       stun_port_(0),
       relay_response_received_(false),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {
+      weak_factory_(this) {
   if (stun_hosts.size() > 0) {
     stun_address_ = stun_hosts[0];
   }
@@ -129,7 +135,7 @@ void PepperPortAllocatorSession::GetPortConfigurations() {
   // Add an empty configuration synchronously, so a local connection
   // can be started immediately.
   ConfigReady(new cricket::PortConfiguration(
-      talk_base::SocketAddress(), "", ""));
+      talk_base::SocketAddress(), std::string(), std::string()));
 
   ResolveStunServerAddress();
   TryCreateRelaySession();
@@ -149,7 +155,7 @@ void PepperPortAllocatorSession::ResolveStunServerAddress() {
 
   PP_HostResolver_Private_Hint hint;
   hint.flags = 0;
-  hint.family = PP_NETADDRESSFAMILY_IPV4;
+  hint.family = PP_NETADDRESSFAMILY_PRIVATE_IPV4;
   int result = stun_address_resolver_.Resolve(
       hostname, port, hint,
       PpCompletionCallback(base::Bind(
@@ -195,7 +201,8 @@ void PepperPortAllocatorSession::OnStunAddressResolved(int32_t result) {
     ReceiveSessionResponse(std::string(relay_response_body_.begin(),
                                        relay_response_body_.end()));
   } else {
-    ConfigReady(new cricket::PortConfiguration(stun_address_, "", ""));
+    ConfigReady(new cricket::PortConfiguration(
+        stun_address_, std::string(), std::string()));
   }
 }
 
@@ -304,7 +311,9 @@ PepperPortAllocator::PepperPortAllocator(
     const pp::InstanceHandle& instance,
     scoped_ptr<talk_base::NetworkManager> network_manager,
     scoped_ptr<talk_base::PacketSocketFactory> socket_factory)
-    : HttpPortAllocatorBase(network_manager.get(), socket_factory.get(), ""),
+    : HttpPortAllocatorBase(network_manager.get(),
+                            socket_factory.get(),
+                            std::string()),
       instance_(instance),
       network_manager_(network_manager.Pass()),
       socket_factory_(socket_factory.Pass()) {

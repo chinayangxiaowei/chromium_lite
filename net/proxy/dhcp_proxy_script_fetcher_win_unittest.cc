@@ -8,7 +8,7 @@
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "base/perftimer.h"
 #include "base/rand_util.h"
 #include "base/test/test_timeouts.h"
@@ -99,9 +99,9 @@ class RealFetchTester {
 
   void WaitUntilDone() {
     while (!finished_) {
-      MessageLoop::current()->RunUntilIdle();
+      base::MessageLoop::current()->RunUntilIdle();
     }
-    MessageLoop::current()->RunUntilIdle();
+    base::MessageLoop::current()->RunUntilIdle();
   }
 
   // Attempts to give worker threads time to finish.  This is currently
@@ -117,7 +117,7 @@ class RealFetchTester {
   scoped_ptr<URLRequestContext> context_;
   scoped_ptr<DhcpProxyScriptFetcherWin> fetcher_;
   bool finished_;
-  string16 pac_text_;
+  base::string16 pac_text_;
   base::OneShotTimer<RealFetchTester> timeout_;
   base::OneShotTimer<RealFetchTester> cancel_timer_;
   bool on_completion_is_error_;
@@ -145,7 +145,7 @@ TEST(DhcpProxyScriptFetcherWin, RealFetchWithCancel) {
   // exercises the code without stubbing out dependencies.
   RealFetchTester fetcher;
   fetcher.RunTestWithCancel();
-  MessageLoop::current()->RunUntilIdle();
+  base::MessageLoop::current()->RunUntilIdle();
 
   // Attempt to avoid Valgrind leak reports in case worker thread is
   // still running.
@@ -239,7 +239,7 @@ class DummyDhcpProxyScriptAdapterFetcher
     return result_;
   }
 
-  string16 GetPacScript() const OVERRIDE {
+  base::string16 GetPacScript() const OVERRIDE {
     return pac_script_;
   }
 
@@ -247,8 +247,10 @@ class DummyDhcpProxyScriptAdapterFetcher
     callback_.Run(result_);
   }
 
-  void Configure(
-      bool did_finish, int result, string16 pac_script, int fetch_delay_ms) {
+  void Configure(bool did_finish,
+                 int result,
+                 base::string16 pac_script,
+                 int fetch_delay_ms) {
     did_finish_ = did_finish;
     result_ = result;
     pac_script_ = pac_script;
@@ -258,7 +260,7 @@ class DummyDhcpProxyScriptAdapterFetcher
  private:
   bool did_finish_;
   int result_;
-  string16 pac_script_;
+  base::string16 pac_script_;
   int fetch_delay_ms_;
   CompletionCallback callback_;
   base::OneShotTimer<DummyDhcpProxyScriptAdapterFetcher> timer_;
@@ -307,7 +309,7 @@ class MockDhcpProxyScriptFetcherWin : public DhcpProxyScriptFetcherWin {
   void ConfigureAndPushBackAdapter(const std::string& adapter_name,
                                    bool did_finish,
                                    int result,
-                                   string16 pac_script,
+                                   base::string16 pac_script,
                                    base::TimeDelta fetch_delay) {
     scoped_ptr<DummyDhcpProxyScriptAdapterFetcher> adapter_fetcher(
         new DummyDhcpProxyScriptAdapterFetcher(url_request_context()));
@@ -387,16 +389,16 @@ public:
 
   void RunMessageLoopUntilComplete() {
     while (!finished_) {
-      MessageLoop::current()->RunUntilIdle();
+      base::MessageLoop::current()->RunUntilIdle();
     }
-    MessageLoop::current()->RunUntilIdle();
+    base::MessageLoop::current()->RunUntilIdle();
   }
 
   void RunMessageLoopUntilWorkerDone() {
     DCHECK(fetcher_.adapter_query_.get());
     while (!fetcher_.worker_finished_event_.TimedWait(
         base::TimeDelta::FromMilliseconds(10))) {
-      MessageLoop::current()->RunUntilIdle();
+      base::MessageLoop::current()->RunUntilIdle();
     }
   }
 
@@ -416,7 +418,7 @@ public:
   MockDhcpProxyScriptFetcherWin fetcher_;
   bool finished_;
   int result_;
-  string16 pac_text_;
+  base::string16 pac_text_;
 };
 
 // We separate out each test's logic so that we can easily implement

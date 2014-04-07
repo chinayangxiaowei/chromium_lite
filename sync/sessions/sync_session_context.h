@@ -32,9 +32,8 @@
 
 namespace syncer {
 
-class ExtensionsActivityMonitor;
+class ExtensionsActivity;
 class ServerConnectionManager;
-class ThrottledDataTypeTracker;
 
 namespace syncable {
 class Directory;
@@ -51,12 +50,12 @@ class SYNC_EXPORT_PRIVATE SyncSessionContext {
   SyncSessionContext(ServerConnectionManager* connection_manager,
                      syncable::Directory* directory,
                      const std::vector<ModelSafeWorker*>& workers,
-                     ExtensionsActivityMonitor* extensions_activity_monitor,
-                     ThrottledDataTypeTracker* throttled_data_type_tracker,
+                     ExtensionsActivity* extensions_activity,
                      const std::vector<SyncEngineEventListener*>& listeners,
                      DebugInfoGetter* debug_info_getter,
                      TrafficRecorder* traffic_recorder,
                      bool keystore_encryption_enabled,
+                     bool client_enabled_pre_commit_update_avoidance,
                      const std::string& invalidator_client_id);
 
   ~SyncSessionContext();
@@ -76,16 +75,12 @@ class SYNC_EXPORT_PRIVATE SyncSessionContext {
     routing_info_ = routing_info;
   }
 
-  const std::vector<ModelSafeWorker*> workers() const {
+  const std::vector<scoped_refptr<ModelSafeWorker> >& workers() const {
     return workers_;
   }
 
-  ExtensionsActivityMonitor* extensions_monitor() {
-    return extensions_activity_monitor_;
-  }
-
-  ThrottledDataTypeTracker* throttled_data_type_tracker() {
-    return throttled_data_type_tracker_;
+  ExtensionsActivity* extensions_activity() {
+    return extensions_activity_.get();
   }
 
   DebugInfoGetter* debug_info_getter() {
@@ -135,6 +130,15 @@ class SYNC_EXPORT_PRIVATE SyncSessionContext {
     return invalidator_client_id_;
   }
 
+  bool ShouldFetchUpdatesBeforeCommit() const {
+    return !(server_enabled_pre_commit_update_avoidance_ ||
+             client_enabled_pre_commit_update_avoidance_);
+  }
+
+  void set_server_enabled_pre_commit_update_avoidance(bool value) {
+    server_enabled_pre_commit_update_avoidance_ = value;
+  }
+
  private:
   // Rather than force clients to set and null-out various context members, we
   // extend our encapsulation boundary to scoped helpers that take care of this
@@ -151,11 +155,11 @@ class SYNC_EXPORT_PRIVATE SyncSessionContext {
   ModelSafeRoutingInfo routing_info_;
 
   // The set of ModelSafeWorkers.  Used to execute tasks of various threads.
-  const std::vector<ModelSafeWorker*> workers_;
+  std::vector<scoped_refptr<ModelSafeWorker> > workers_;
 
   // We use this to stuff extensions activity into CommitMessages so the server
   // can correlate commit traffic with extension-related bookmark mutations.
-  ExtensionsActivityMonitor* extensions_activity_monitor_;
+  scoped_refptr<ExtensionsActivity> extensions_activity_;
 
   // Kept up to date with talk events to determine whether notifications are
   // enabled. True only if the notification channel is authorized and open.
@@ -166,8 +170,6 @@ class SYNC_EXPORT_PRIVATE SyncSessionContext {
 
   // The server limits the number of items a client can commit in one batch.
   int max_commit_batch_size_;
-
-  ThrottledDataTypeTracker* throttled_data_type_tracker_;
 
   // We use this to get debug info to send to the server for debugging
   // client behavior on server side.
@@ -188,6 +190,15 @@ class SYNC_EXPORT_PRIVATE SyncSessionContext {
   // provide this to the sync server when we make changes to enable it to
   // prevent us from receiving notifications of changes we make ourselves.
   const std::string invalidator_client_id_;
+
+  // Flag to enable or disable the no pre-commit GetUpdates experiment.  When
+  // this flag is set to false, the syncer has the option of not performing at
+  // GetUpdates request when there is nothing to fetch.
+  bool server_enabled_pre_commit_update_avoidance_;
+
+  // If true, indicates that we've been passed a command-line flag to force
+  // enable the pre-commit update avoidance experiment described above.
+  const bool client_enabled_pre_commit_update_avoidance_;
 
   DISALLOW_COPY_AND_ASSIGN(SyncSessionContext);
 };

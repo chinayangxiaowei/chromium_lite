@@ -6,7 +6,7 @@
 
 #include "base/command_line.h"
 #include "base/files/file_path.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/prefs/session_startup_pref.h"
 #include "chrome/browser/profiles/profile_manager.h"
@@ -17,8 +17,8 @@
 #include "chrome/browser/ui/startup/startup_browser_creator.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "googleurl/src/gurl.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/gurl.h"
 
 typedef InProcessBrowserTest StartupBrowserCreatorTest;
 
@@ -71,7 +71,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, LastUsedProfileActivated) {
                         last_opened_profiles, &return_code);
 
   while (!browser_creator.ActivatedProfile())
-    MessageLoop::current()->RunUntilIdle();
+    base::MessageLoop::current()->RunUntilIdle();
 
   Browser* new_browser = NULL;
 

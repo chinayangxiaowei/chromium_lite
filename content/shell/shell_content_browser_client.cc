@@ -7,24 +7,30 @@
 #include "base/command_line.h"
 #include "base/file_util.h"
 #include "base/path_service.h"
+#include "content/public/browser/notification_service.h"
+#include "content/public/browser/notification_types.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/resource_dispatcher_host.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/common/content_switches.h"
+#include "content/public/common/url_constants.h"
+#include "content/shell/common/shell_messages.h"
+#include "content/shell/common/shell_switches.h"
+#include "content/shell/common/webkit_test_helpers.h"
 #include "content/shell/geolocation/shell_access_token_store.h"
 #include "content/shell/shell.h"
 #include "content/shell/shell_browser_context.h"
 #include "content/shell/shell_browser_main_parts.h"
 #include "content/shell/shell_devtools_delegate.h"
 #include "content/shell/shell_message_filter.h"
-#include "content/shell/shell_messages.h"
+#include "content/shell/shell_net_log.h"
 #include "content/shell/shell_quota_permission_context.h"
 #include "content/shell/shell_resource_dispatcher_host_delegate.h"
-#include "content/shell/shell_switches.h"
 #include "content/shell/shell_web_contents_view_delegate_creator.h"
 #include "content/shell/webkit_test_controller.h"
-#include "googleurl/src/gurl.h"
-#include "webkit/glue/webpreferences.h"
+#include "net/url_request/url_request_context_getter.h"
+#include "url/gurl.h"
+#include "webkit/common/webpreferences.h"
 
 #if defined(OS_ANDROID)
 #include "base/android/path_utils.h"
@@ -37,58 +43,30 @@ namespace content {
 
 namespace {
 
-base::FilePath GetWebKitRootDirFilePath() {
-  base::FilePath base_path;
-  PathService::Get(base::DIR_SOURCE_ROOT, &base_path);
-  if (file_util::PathExists(
-          base_path.Append(FILE_PATH_LITERAL("third_party/WebKit")))) {
-    // We're in a WebKit-in-chrome checkout.
-    return base_path.Append(FILE_PATH_LITERAL("third_party/WebKit"));
-  } else if (file_util::PathExists(
-          base_path.Append(FILE_PATH_LITERAL("chromium")))) {
-    // We're in a WebKit-only checkout on Windows.
-    return base_path.Append(FILE_PATH_LITERAL("../.."));
-  } else if (file_util::PathExists(
-          base_path.Append(FILE_PATH_LITERAL("webkit/support")))) {
-    // We're in a WebKit-only/xcodebuild checkout on Mac
-    return base_path.Append(FILE_PATH_LITERAL("../../.."));
-  }
-  // We're in a WebKit-only, make-build, so the DIR_SOURCE_ROOT is already the
-  // WebKit root. That, or we have no idea where we are.
-  return base_path;
-}
-
-base::FilePath GetChromiumRootDirFilePath() {
-  base::FilePath webkit_path = GetWebKitRootDirFilePath();
-  if (file_util::PathExists(webkit_path.Append(
-          FILE_PATH_LITERAL("Source/WebKit/chromium/webkit/support")))) {
-    // We're in a WebKit-only checkout.
-    return webkit_path.Append(FILE_PATH_LITERAL("Source/WebKit/chromium"));
-  } else {
-    // We're in a Chromium checkout, and WebKit is in third_party/WebKit.
-    return webkit_path.Append(FILE_PATH_LITERAL("../.."));
-  }
-}
+ShellContentBrowserClient* g_browser_client;
+bool g_swap_processes_for_redirect = false;
 
 }  // namespace
 
+ShellContentBrowserClient* ShellContentBrowserClient::Get() {
+  return g_browser_client;
+}
+
+void ShellContentBrowserClient::SetSwapProcessesForRedirect(bool swap) {
+  g_swap_processes_for_redirect = swap;
+}
+
 ShellContentBrowserClient::ShellContentBrowserClient()
-    : hyphen_dictionary_file_(base::kInvalidPlatformFileValue),
-      shell_browser_main_parts_(NULL) {
+    : shell_browser_main_parts_(NULL) {
+  DCHECK(!g_browser_client);
+  g_browser_client = this;
   if (!CommandLine::ForCurrentProcess()->HasSwitch(switches::kDumpRenderTree))
     return;
   webkit_source_dir_ = GetWebKitRootDirFilePath();
-  base::FilePath dictionary_file_path = GetChromiumRootDirFilePath().Append(
-      FILE_PATH_LITERAL("third_party/hyphen/hyph_en_US.dic"));
-  file_util::AbsolutePath(&dictionary_file_path);
-  hyphen_dictionary_file_ = base::CreatePlatformFile(dictionary_file_path,
-                                                     base::PLATFORM_FILE_READ |
-                                                     base::PLATFORM_FILE_OPEN,
-                                                     NULL,
-                                                     NULL);
 }
 
 ShellContentBrowserClient::~ShellContentBrowserClient() {
+  g_browser_client = NULL;
 }
 
 BrowserMainParts* ShellContentBrowserClient::CreateBrowserMainParts(
@@ -106,14 +84,16 @@ void ShellContentBrowserClient::RenderProcessHostCreated(
       BrowserContext::GetDefaultStoragePartition(browser_context())
           ->GetDatabaseTracker(),
       BrowserContext::GetDefaultStoragePartition(browser_context())
-          ->GetQuotaManager()));
+          ->GetQuotaManager(),
+      BrowserContext::GetDefaultStoragePartition(browser_context())
+          ->GetURLRequestContext()));
   host->Send(new ShellViewMsg_SetWebKitSourceDir(webkit_source_dir_));
-
-  if (hyphen_dictionary_file_ != base::kInvalidPlatformFileValue) {
-    IPC::PlatformFileForTransit file = IPC::GetFileHandleForProcess(
-        hyphen_dictionary_file_, host->GetHandle(), false);
-    host->Send(new ShellViewMsg_LoadHyphenDictionary(file));
-  }
+  registrar_.Add(this,
+                 NOTIFICATION_RENDERER_PROCESS_CREATED,
+                 Source<RenderProcessHost>(host));
+  registrar_.Add(this,
+                 NOTIFICATION_RENDERER_PROCESS_TERMINATED,
+                 Source<RenderProcessHost>(host));
 }
 
 net::URLRequestContextGetter* ShellContentBrowserClient::CreateRequestContext(
@@ -136,16 +116,40 @@ ShellContentBrowserClient::CreateRequestContextForStoragePartition(
       partition_path, in_memory, protocol_handlers);
 }
 
+bool ShellContentBrowserClient::IsHandledURL(const GURL& url) {
+  if (!url.is_valid())
+    return false;
+  DCHECK_EQ(url.scheme(), StringToLowerASCII(url.scheme()));
+  // Keep in sync with ProtocolHandlers added by
+  // ShellURLRequestContextGetter::GetURLRequestContext().
+  static const char* const kProtocolList[] = {
+      chrome::kBlobScheme,
+      chrome::kFileSystemScheme,
+      chrome::kChromeUIScheme,
+      chrome::kChromeDevToolsScheme,
+      chrome::kDataScheme,
+      chrome::kFileScheme,
+  };
+  for (size_t i = 0; i < arraysize(kProtocolList); ++i) {
+    if (url.scheme() == kProtocolList[i])
+      return true;
+  }
+  return false;
+}
+
 void ShellContentBrowserClient::AppendExtraCommandLineSwitches(
     CommandLine* command_line, int child_process_id) {
   if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kDumpRenderTree))
     command_line->AppendSwitch(switches::kDumpRenderTree);
+  if (CommandLine::ForCurrentProcess()->HasSwitch(
+      switches::kExposeInternalsForTesting))
+    command_line->AppendSwitch(switches::kExposeInternalsForTesting);
 }
 
 void ShellContentBrowserClient::OverrideWebkitPrefs(
     RenderViewHost* render_view_host,
     const GURL& url,
-    webkit_glue::WebPreferences* prefs) {
+    WebPreferences* prefs) {
   if (!CommandLine::ForCurrentProcess()->HasSwitch(switches::kDumpRenderTree))
     return;
   WebKitTestController::Get()->OverrideWebkitPrefs(prefs);
@@ -182,6 +186,17 @@ ShellContentBrowserClient::CreateQuotaPermissionContext() {
   return new ShellQuotaPermissionContext();
 }
 
+net::NetLog* ShellContentBrowserClient::GetNetLog() {
+  return shell_browser_main_parts_->net_log();
+}
+
+bool ShellContentBrowserClient::ShouldSwapProcessesForRedirect(
+    ResourceContext* resource_context,
+    const GURL& current_url,
+    const GURL& new_url) {
+  return g_swap_processes_for_redirect;
+}
+
 #if defined(OS_ANDROID)
 void ShellContentBrowserClient::GetAdditionalMappedFilesForChildProcess(
     const CommandLine& command_line,
@@ -206,6 +221,35 @@ void ShellContentBrowserClient::GetAdditionalMappedFilesForChildProcess(
 }
 #endif
 
+void ShellContentBrowserClient::Observe(int type,
+                                        const NotificationSource& source,
+                                        const NotificationDetails& details) {
+  switch (type) {
+    case NOTIFICATION_RENDERER_PROCESS_CREATED: {
+      registrar_.Remove(this,
+                        NOTIFICATION_RENDERER_PROCESS_CREATED,
+                        source);
+      registrar_.Remove(this,
+                        NOTIFICATION_RENDERER_PROCESS_TERMINATED,
+                        source);
+      break;
+    }
+
+    case NOTIFICATION_RENDERER_PROCESS_TERMINATED: {
+      registrar_.Remove(this,
+                        NOTIFICATION_RENDERER_PROCESS_CREATED,
+                        source);
+      registrar_.Remove(this,
+                        NOTIFICATION_RENDERER_PROCESS_TERMINATED,
+                        source);
+      break;
+    }
+
+    default:
+      NOTREACHED();
+  }
+}
+
 ShellBrowserContext* ShellContentBrowserClient::browser_context() {
   return shell_browser_main_parts_->browser_context();
 }
@@ -216,7 +260,7 @@ ShellBrowserContext*
 }
 
 AccessTokenStore* ShellContentBrowserClient::CreateAccessTokenStore() {
-  return new ShellAccessTokenStore(browser_context()->GetRequestContext());
+  return new ShellAccessTokenStore(browser_context());
 }
 
 ShellBrowserContext*

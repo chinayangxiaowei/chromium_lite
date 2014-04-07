@@ -6,7 +6,7 @@
 #define CHROME_BROWSER_UI_VIEWS_FIND_BAR_VIEW_H_
 
 #include "base/compiler_specific.h"
-#include "base/string16.h"
+#include "base/strings/string16.h"
 #include "chrome/browser/ui/views/dropdown_bar_view.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/textfield/textfield.h"
@@ -68,9 +68,8 @@ class FindBarView : public DropdownBarView,
   virtual void OnPaint(gfx::Canvas* canvas) OVERRIDE;
   virtual void Layout() OVERRIDE;
   virtual gfx::Size GetPreferredSize() OVERRIDE;
-  virtual void ViewHierarchyChanged(bool is_add,
-                                    views::View* parent,
-                                    views::View* child) OVERRIDE;
+  virtual void ViewHierarchyChanged(
+      const ViewHierarchyChangedDetails& details) OVERRIDE;
 
   // views::ButtonListener:
   virtual void ButtonPressed(views::Button* sender,
@@ -81,13 +80,17 @@ class FindBarView : public DropdownBarView,
                                const string16& new_contents) OVERRIDE;
   virtual bool HandleKeyEvent(views::Textfield* sender,
                               const ui::KeyEvent& key_event) OVERRIDE;
-  virtual void OnAfterCutOrCopy() OVERRIDE;
+  virtual void OnAfterUserAction(views::Textfield* sender) OVERRIDE;
+  virtual void OnAfterPaste() OVERRIDE;
 
  private:
-  // Update the appearance for the match count label.
+  // Starts finding |search_text|.  If the text is empty, stops finding.
+  void Find(const string16& search_text);
+
+  // Updates the appearance for the match count label.
   void UpdateMatchCountAppearance(bool no_match);
 
-  // Overridden from views::View.
+  // views::View:
   virtual void OnThemeChanged() OVERRIDE;
 
   // We use a hidden view to grab mouse clicks and bring focus to the find
@@ -117,15 +120,26 @@ class FindBarView : public DropdownBarView,
     SearchTextfieldView();
     virtual ~SearchTextfieldView();
 
-    virtual void RequestFocus() OVERRIDE;
+    // views::View:
+    virtual bool OnMousePressed(const ui::MouseEvent& event) OVERRIDE;
+    virtual void OnMouseReleased(const ui::MouseEvent& event) OVERRIDE;
+
+    // views::Textfield:
+    virtual void OnFocus() OVERRIDE;
 
    private:
+    bool select_all_on_focus_;
+
     DISALLOW_COPY_AND_ASSIGN(SearchTextfieldView);
   };
 
   // Returns the OS-specific view for the find bar that acts as an intermediary
   // between us and the WebContentsView.
   FindBarHost* find_bar_host() const;
+
+  // Used to detect if the input text, not including the IME composition text,
+  // has changed or not.
+  string16 last_searched_text_;
 
   // The controls in the window.
   SearchTextfieldView* find_text_;

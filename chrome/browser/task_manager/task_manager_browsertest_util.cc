@@ -2,17 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/message_loop.h"
-#include "base/stringprintf.h"
-#include "base/utf_string_conversions.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/task_manager/resource_provider.h"
 #include "chrome/browser/task_manager/task_manager.h"
 #include "chrome/browser/task_manager/task_manager_browsertest_util.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_dialogs.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/notification_source.h"
 #include "content/public/browser/web_contents.h"
@@ -22,15 +23,14 @@ namespace {
 int GetWebResourceCount(const TaskManagerModel* model) {
   int count = 0;
   for (int i = 0; i < model->ResourceCount(); i++) {
-    TaskManager::Resource::Type type = model->GetResourceType(i);
+    task_manager::Resource::Type type = model->GetResourceType(i);
     // Skip system infrastructure resources.
-    if (type == TaskManager::Resource::BROWSER ||
-        type == TaskManager::Resource::NACL ||
-        type == TaskManager::Resource::GPU ||
-        type == TaskManager::Resource::UTILITY ||
-        type == TaskManager::Resource::PROFILE_IMPORT ||
-        type == TaskManager::Resource::ZYGOTE ||
-        type == TaskManager::Resource::SANDBOX_HELPER) {
+    if (type == task_manager::Resource::BROWSER ||
+        type == task_manager::Resource::NACL ||
+        type == task_manager::Resource::GPU ||
+        type == task_manager::Resource::UTILITY ||
+        type == task_manager::Resource::ZYGOTE ||
+        type == task_manager::Resource::SANDBOX_HELPER) {
       continue;
     }
 
@@ -66,7 +66,7 @@ class ResourceChangeObserver : public TaskManagerModelObserver {
  private:
   void OnResourceChange() {
     if (GetWebResourceCount(model_) == target_resource_count_)
-      MessageLoopForUI::current()->Quit();
+      base::MessageLoopForUI::current()->Quit();
   }
 
   const TaskManagerModel* model_;

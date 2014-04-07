@@ -7,9 +7,8 @@
 #include "base/compiler_specific.h"
 #include "base/location.h"
 #include "base/memory/ref_counted.h"
-#include "base/message_loop.h"
+#include "base/message_loop/message_loop.h"
 #include "sync/engine/syncer_types.h"
-#include "sync/engine/throttled_data_type_tracker.h"
 #include "sync/internal_api/public/base/model_type.h"
 #include "sync/internal_api/public/base/model_type_invalidation_map_test_util.h"
 #include "sync/sessions/status_controller.h"
@@ -17,7 +16,7 @@
 #include "sync/syncable/syncable_write_transaction.h"
 #include "sync/test/engine/fake_model_worker.h"
 #include "sync/test/engine/test_directory_setter_upper.h"
-#include "sync/test/fake_extensions_activity_monitor.h"
+#include "sync/util/extensions_activity.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace syncer {
@@ -33,10 +32,12 @@ class SyncSessionTest : public testing::Test,
   SyncSessionTest() : controller_invocations_allowed_(false) {}
 
   SyncSession* MakeSession() {
-    return new SyncSession(context_.get(), this, SyncSourceInfo());
+    return SyncSession::Build(context_.get(), this);
   }
 
   virtual void SetUp() {
+    extensions_activity_ = new ExtensionsActivity();
+
     routes_.clear();
     routes_[BOOKMARKS] = GROUP_UI;
     routes_[AUTOFILL] = GROUP_DB;
@@ -59,27 +60,31 @@ class SyncSessionTest : public testing::Test,
             NULL,
             NULL,
             workers,
-            &extensions_activity_monitor_,
-            throttled_data_type_tracker_.get(),
+            extensions_activity_.get(),
             std::vector<SyncEngineEventListener*>(),
             NULL,
             NULL,
             true,  // enable keystore encryption
+            false,  // force enable pre-commit GU avoidance experiment
             "fake_invalidator_client_id"));
     context_->set_routing_info(routes_);
 
     session_.reset(MakeSession());
-    throttled_data_type_tracker_.reset(new ThrottledDataTypeTracker(NULL));
   }
   virtual void TearDown() {
     session_.reset();
     context_.reset();
   }
 
-  virtual void OnSilencedUntil(const base::TimeTicks& silenced_until) OVERRIDE {
-    FailControllerInvocationIfDisabled("OnSilencedUntil");
+  virtual void OnThrottled(const base::TimeDelta& throttle_duration) OVERRIDE {
+    FailControllerInvocationIfDisabled("OnThrottled");
   }
-  virtual bool IsSyncingCurrentlySilenced() OVERRIDE {
+  virtual void OnTypesThrottled(
+      ModelTypeSet types,
+      const base::TimeDelta& throttle_duration) OVERRIDE {
+    FailControllerInvocationIfDisabled("OnTypesThrottled");
+  }
+  virtual bool IsCurrentlyThrottled() OVERRIDE {
     FailControllerInvocationIfDisabled("IsSyncingCurrentlySilenced");
     return false;
   }
@@ -94,6 +99,11 @@ class SyncSessionTest : public testing::Test,
   virtual void OnReceivedSessionsCommitDelay(
       const base::TimeDelta& new_delay) OVERRIDE {
     FailControllerInvocationIfDisabled("OnReceivedSessionsCommitDelay");
+  }
+  virtual void OnReceivedClientInvalidationHintBufferSize(
+      int size) OVERRIDE {
+    FailControllerInvocationIfDisabled(
+        "OnReceivedClientInvalidationHintBufferSize");
   }
   virtual void OnShouldStopSyncingPermanently() OVERRIDE {
     FailControllerInvocationIfDisabled("OnShouldStopSyncingPermanently");
@@ -130,14 +140,13 @@ class SyncSessionTest : public testing::Test,
     return ModelTypeSet(AUTOFILL);
   }
 
-  MessageLoop message_loop_;
+  base::MessageLoop message_loop_;
   bool controller_invocations_allowed_;
   scoped_ptr<SyncSession> session_;
   scoped_ptr<SyncSessionContext> context_;
   std::vector<scoped_refptr<ModelSafeWorker> > workers_;
   ModelSafeRoutingInfo routes_;
-  FakeExtensionsActivityMonitor extensions_activity_monitor_;
-  scoped_ptr<ThrottledDataTypeTracker> throttled_data_type_tracker_;
+  scoped_refptr<ExtensionsActivity> extensions_activity_;
 };
 
 TEST_F(SyncSessionTest, MoreToDownloadIfDownloadFailed) {
@@ -170,26 +179,6 @@ TEST_F(SyncSessionTest, MoreToDownloadIfGotNoChangesRemaining) {
       ->set_changes_remaining(0);
   EXPECT_TRUE(status()->ServerSaysNothingMoreToDownload());
   EXPECT_TRUE(status()->download_updates_succeeded());
-}
-
-TEST_F(SyncSessionTest, CoalesceSources) {
-  ModelTypeInvalidationMap one_type =
-      ModelTypeSetToInvalidationMap(
-          ParamsMeaningJustOneEnabledType(),
-          std::string());
-  ModelTypeInvalidationMap all_types =
-      ModelTypeSetToInvalidationMap(
-          ParamsMeaningAllEnabledTypes(),
-          std::string());
-  SyncSourceInfo source_one(sync_pb::GetUpdatesCallerInfo::PERIODIC, one_type);
-  SyncSourceInfo source_two(sync_pb::GetUpdatesCallerInfo::LOCAL, all_types);
-
-  SyncSession session(context_.get(), this, source_one);
-
-  session.CoalesceSources(source_two);
-
-  EXPECT_EQ(source_two.updates_source, session.source().updates_source);
-  EXPECT_THAT(all_types, Eq(session.source().types));
 }
 
 TEST_F(SyncSessionTest, MakeTypeInvalidationMapFromBitSet) {

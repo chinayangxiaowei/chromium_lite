@@ -6,8 +6,7 @@
 
 #include <algorithm>
 
-#include "ash/display/display_controller.h"
-#include "ash/display/display_manager.h"
+#include "ash/session_state_delegate.h"
 #include "ash/shell.h"
 #include "ash/shell_window_ids.h"
 #include "ash/test/ash_test_base.h"
@@ -145,14 +144,14 @@ TEST_F(WindowCycleControllerTest, HandleCycleWindow) {
   EXPECT_TRUE(wm::IsActiveWindow(window0.get()));
 
   // When the screen is locked, cycling window does not take effect.
-  Shell::GetInstance()->delegate()->LockScreen();
+  Shell::GetInstance()->session_state_delegate()->LockScreen();
   EXPECT_TRUE(wm::IsActiveWindow(window0.get()));
   controller->HandleCycleWindow(WindowCycleController::FORWARD, false);
   EXPECT_TRUE(wm::IsActiveWindow(window0.get()));
   controller->HandleCycleWindow(WindowCycleController::BACKWARD, false);
   EXPECT_TRUE(wm::IsActiveWindow(window0.get()));
 
-  Shell::GetInstance()->delegate()->UnlockScreen();
+  Shell::GetInstance()->session_state_delegate()->UnlockScreen();
   EXPECT_TRUE(wm::IsActiveWindow(window0.get()));
   controller->HandleCycleWindow(WindowCycleController::FORWARD, false);
   EXPECT_TRUE(wm::IsActiveWindow(window1.get()));
@@ -317,17 +316,10 @@ TEST_F(WindowCycleControllerTest, AlwaysOnTopMultiWindow) {
   EXPECT_TRUE(wm::IsActiveWindow(window0.get()));
 }
 
-#if defined(OS_WIN)
-// Multiple displays are not supported on Windows Ash. http://crbug.com/165962
-#define MAYBE_AlwaysOnTopMultipleRootWindows \
-        DISABLED_AlwaysOnTopMultipleRootWindows
-#else
-#define MAYBE_AlwaysOnTopMultipleRootWindows \
-        AlwaysOnTopMultipleRootWindows
-#endif
+TEST_F(WindowCycleControllerTest, AlwaysOnTopMultipleRootWindows) {
+  if (!SupportsMultipleDisplays())
+    return;
 
-
-TEST_F(WindowCycleControllerTest, MAYBE_AlwaysOnTopMultipleRootWindows) {
   // Set up a second root window
   UpdateDisplay("1000x600,600x400");
   Shell::RootWindowList root_windows = Shell::GetAllRootWindows();

@@ -15,18 +15,21 @@
 #include "base/i18n/string_search.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
+#include "base/prefs/pref_service.h"
 #include "base/stl_util.h"
-#include "base/string16.h"
-#include "base/stringprintf.h"
+#include "base/strings/string16.h"
 #include "base/strings/string_split.h"
-#include "base/time.h"
-#include "base/utf_string_conversions.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "base/values.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/common/pref_names.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/download_item.h"
-#include "googleurl/src/gurl.h"
 #include "net/base/net_util.h"
-#include "third_party/icu/public/i18n/unicode/regex.h"
+#include "third_party/re2/re2/re2.h"
+#include "url/gurl.h"
 
 using content::DownloadDangerType;
 using content::DownloadItem;
@@ -47,37 +50,52 @@ template<> bool GetAs(const base::Value& in, std::string* out) {
 template<> bool GetAs(const base::Value& in, string16* out) {
   return in.GetAsString(out);
 }
+template<> bool GetAs(const base::Value& in, std::vector<string16>* out) {
+  out->clear();
+  const base::ListValue* list = NULL;
+  if (!in.GetAsList(&list))
+    return false;
+  for (size_t i = 0; i < list->GetSize(); ++i) {
+    string16 element;
+    if (!list->GetString(i, &element)) {
+      out->clear();
+      return false;
+    }
+    out->push_back(element);
+  }
+  return true;
+}
 
 // The next several functions are helpers for making Callbacks that access
 // DownloadItem fields.
 
-static bool MatchesQuery(const string16& query, const DownloadItem& item) {
-  if (query.empty())
-    return true;
-
-  DCHECK_EQ(query, base::i18n::ToLower(query));
-
+static bool MatchesQuery(
+    const std::vector<string16>& query_terms,
+    const DownloadItem& item) {
+  DCHECK(!query_terms.empty());
   string16 url_raw(UTF8ToUTF16(item.GetOriginalUrl().spec()));
-  if (base::i18n::StringSearchIgnoringCaseAndAccents(
-          query, url_raw, NULL, NULL)) {
-    return true;
-  }
-
   string16 url_formatted = url_raw;
   if (item.GetBrowserContext()) {
+    Profile* profile = Profile::FromBrowserContext(item.GetBrowserContext());
     url_formatted = net::FormatUrl(
         item.GetOriginalUrl(),
-        content::GetContentClient()->browser()->GetAcceptLangs(
-            item.GetBrowserContext()));
+        profile->GetPrefs()->GetString(prefs::kAcceptLanguages));
   }
-  if (base::i18n::StringSearchIgnoringCaseAndAccents(
-        query, url_formatted, NULL, NULL)) {
-    return true;
-  }
-
   string16 path(item.GetTargetFilePath().LossyDisplayName());
-  return base::i18n::StringSearchIgnoringCaseAndAccents(
-      query, path, NULL, NULL);
+
+  for (std::vector<string16>::const_iterator it = query_terms.begin();
+       it != query_terms.end(); ++it) {
+    string16 term = base::i18n::ToLower(*it);
+    if (!base::i18n::StringSearchIgnoringCaseAndAccents(
+            term, url_raw, NULL, NULL) &&
+        !base::i18n::StringSearchIgnoringCaseAndAccents(
+            term, url_formatted, NULL, NULL) &&
+        !base::i18n::StringSearchIgnoringCaseAndAccents(
+            term, path, NULL, NULL)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 static int64 GetStartTimeMsEpoch(const DownloadItem& item) {
@@ -185,13 +203,10 @@ template <typename ValueType> DownloadQuery::FilterCallback BuildFilter(
 
 // Returns true if |accessor.Run(item)| matches |pattern|.
 static bool FindRegex(
-    icu::RegexPattern* pattern,
+    RE2* pattern,
     const base::Callback<std::string(const DownloadItem&)>& accessor,
     const DownloadItem& item) {
-  icu::UnicodeString input(accessor.Run(item).c_str());
-  UErrorCode status = U_ZERO_ERROR;
-  scoped_ptr<icu::RegexMatcher> matcher(pattern->matcher(input, status));
-  return matcher->find() == TRUE;  // Ugh, VS complains bool != UBool.
+  return RE2::PartialMatch(accessor.Run(item), *pattern);
 }
 
 // Helper for building a Callback to FindRegex().
@@ -200,11 +215,8 @@ DownloadQuery::FilterCallback BuildRegexFilter(
     std::string (*accessor)(const DownloadItem&)) {
   std::string regex_str;
   if (!GetAs(regex_value, &regex_str)) return DownloadQuery::FilterCallback();
-  UParseError re_err;
-  UErrorCode re_status = U_ZERO_ERROR;
-  scoped_ptr<icu::RegexPattern> pattern(icu::RegexPattern::compile(
-      icu::UnicodeString::fromUTF8(regex_str.c_str()), re_err, re_status));
-  if (!U_SUCCESS(re_status)) return DownloadQuery::FilterCallback();
+  scoped_ptr<RE2> pattern(new RE2(regex_str));
+  if (!pattern->ok()) return DownloadQuery::FilterCallback();
   return base::Bind(&FindRegex, base::Owned(pattern.release()),
                     base::Bind(accessor));
 }
@@ -271,9 +283,10 @@ bool DownloadQuery::AddFilter(DownloadQuery::FilterType type,
     case FILTER_PAUSED:
       return AddFilter(BuildFilter<bool>(value, EQ, &IsPaused));
     case FILTER_QUERY: {
-      string16 query;
-      return GetAs(value, &query) &&
-             AddFilter(base::Bind(&MatchesQuery, query));
+      std::vector<string16> query_terms;
+      return GetAs(value, &query_terms) &&
+             (query_terms.empty() ||
+              AddFilter(base::Bind(&MatchesQuery, query_terms)));
     }
     case FILTER_ENDED_AFTER:
       return AddFilter(BuildFilter<std::string>(value, GT, &GetEndTime));

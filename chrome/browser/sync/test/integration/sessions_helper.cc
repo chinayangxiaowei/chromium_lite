@@ -8,9 +8,8 @@
 
 #include "base/stl_util.h"
 #include "base/test/test_timeouts.h"
-#include "base/time.h"
+#include "base/time/time.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/sessions/session_types_test_helper.h"
 #include "chrome/browser/sync/glue/session_model_associator.h"
 #include "chrome/browser/sync/profile_sync_service.h"
 #include "chrome/browser/sync/profile_sync_service_factory.h"
@@ -19,7 +18,7 @@
 #include "chrome/browser/sync/test/integration/sync_test.h"
 #include "chrome/browser/ui/singleton_tabs.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "googleurl/src/gurl.h"
+#include "url/gurl.h"
 
 using sync_datatype_helper::test;
 
@@ -69,7 +68,7 @@ bool ModelAssociatorHasTabWithUrl(int index, const GURL& url) {
   }
 
   int nav_index;
-  TabNavigation nav;
+  sessions::SerializedNavigationEntry nav;
   for (SessionWindowMap::const_iterator it =
            local_session->windows.begin();
        it != local_session->windows.end(); ++it) {
@@ -88,8 +87,7 @@ bool ModelAssociatorHasTabWithUrl(int index, const GURL& url) {
       nav = (*tab_it)->navigations[nav_index];
       if (nav.virtual_url() == url) {
         DVLOG(1) << "Found tab with url " << url.spec();
-        DVLOG(1) << "Timestamp is "
-                 << SessionTypesTestHelper::GetTimestamp(nav).ToInternalValue();
+        DVLOG(1) << "Timestamp is " << nav.timestamp().ToInternalValue();
         if (nav.title().empty()) {
           DVLOG(1) << "Title empty -- tab hasn't finished loading yet";
           continue;
@@ -234,19 +232,18 @@ void SortSyncedSessions(SyncedSessionVector* sessions) {
             CompareSyncedSessions);
 }
 
-bool NavigationEquals(const TabNavigation& expected,
-                      const TabNavigation& actual) {
+bool NavigationEquals(const sessions::SerializedNavigationEntry& expected,
+                      const sessions::SerializedNavigationEntry& actual) {
   if (expected.virtual_url() != actual.virtual_url()) {
     LOG(ERROR) << "Expected url " << expected.virtual_url()
                << ", actual " << actual.virtual_url();
     return false;
   }
-  if (SessionTypesTestHelper::GetReferrer(expected).url !=
-      SessionTypesTestHelper::GetReferrer(actual).url) {
+  if (expected.referrer().url != actual.referrer().url) {
     LOG(ERROR) << "Expected referrer "
-               << SessionTypesTestHelper::GetReferrer(expected).url
+               << expected.referrer().url
                << ", actual "
-               << SessionTypesTestHelper::GetReferrer(actual).url;
+               << actual.referrer().url;
     return false;
   }
   if (expected.title() != actual.title()) {
@@ -254,12 +251,11 @@ bool NavigationEquals(const TabNavigation& expected,
                << ", actual " << actual.title();
     return false;
   }
-  if (SessionTypesTestHelper::GetTransitionType(expected) !=
-      SessionTypesTestHelper::GetTransitionType(actual)) {
+  if (expected.transition_type() != actual.transition_type()) {
     LOG(ERROR) << "Expected transition "
-               << SessionTypesTestHelper::GetTransitionType(expected)
+               << expected.transition_type()
                << ", actual "
-               << SessionTypesTestHelper::GetTransitionType(actual);
+               << actual.transition_type();
     return false;
   }
   return true;
