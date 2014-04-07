@@ -68,18 +68,26 @@ XmppConnectionGenerator::XmppConnectionGenerator(
 }
 
 XmppConnectionGenerator::~XmppConnectionGenerator() {
-  LOG(INFO) << "XmppConnectionGenerator::~XmppConnectionGenerator";
+  VLOG(1) << "XmppConnectionGenerator::~XmppConnectionGenerator";
 }
 
 // Starts resolving proxy information.
 void XmppConnectionGenerator::StartGenerating() {
-  LOG(INFO) << "XmppConnectionGenerator::StartGenerating";
+  VLOG(1) << "XmppConnectionGenerator::StartGenerating";
 
   // TODO(akalin): Detect proxy settings once we use Chrome sockets.
 
   // Start iterating through the connections (which are generated on demand).
   UseNextConnection();
 }
+
+namespace {
+
+const char* const PROTO_NAMES[cricket::PROTO_LAST + 1] = {
+  "udp", "tcp", "ssltcp"
+};
+
+}  // namespace
 
 void XmppConnectionGenerator::UseNextConnection() {
   DCHECK(settings_list_.get());
@@ -91,7 +99,12 @@ void XmppConnectionGenerator::UseNextConnection() {
     if (settings_index_ < settings_list_->GetCount()) {
       // We have more connection settings in the settings_list_ to
       // try, kick off the next one.
-      UseCurrentConnection();
+      ConnectionSettings* settings =
+          settings_list_->GetSettings(settings_index_);
+      VLOG(1) << "*** Attempting " << PROTO_NAMES[settings->protocol()]
+              << " connection to " << settings->server().IPAsString()
+              << ":" << settings->server().port();
+      delegate_->OnNewSettings(*settings);
       return;
     }
 
@@ -131,15 +144,13 @@ void XmppConnectionGenerator::OnServerDNSResolved(int status) {
 
 void XmppConnectionGenerator::HandleServerDNSResolved(int status) {
   DCHECK_NE(status, net::ERR_IO_PENDING);
-  LOG(INFO) << "XmppConnectionGenerator::HandleServerDNSResolved";
+  VLOG(1) << "XmppConnectionGenerator::HandleServerDNSResolved";
   // Print logging info.
-  LOG(INFO) << "  server: "
-            << server_list_[server_index_].server.ToString()
-            << ", error: " << status;
+  VLOG(1) << "  server: " << server_list_[server_index_].server.ToString()
+          << ", error: " << status;
   if (status != net::OK) {
-    if (first_dns_error_ == 0) {
+    if (first_dns_error_ == 0)
       first_dns_error_ = status;
-    }
     return;
   }
 
@@ -155,9 +166,8 @@ void XmppConnectionGenerator::HandleServerDNSResolved(int status) {
   successfully_resolved_dns_ = !ip_list.empty();
 
   for (int i = 0; i < static_cast<int>(ip_list.size()); ++i) {
-    LOG(INFO)
-        << "  ip " << i << " : "
-        << talk_base::SocketAddress::IPToString(ip_list[i]);
+    VLOG(1) << "  ip " << i
+            << " : " << talk_base::SocketAddress::IPToString(ip_list[i]);
   }
 
   // Build the ip list.
@@ -170,26 +180,6 @@ void XmppConnectionGenerator::HandleServerDNSResolved(int status) {
       server_list_[server_index_].server.port(),
       server_list_[server_index_].special_port_magic,
       try_ssltcp_first_);
-}
-
-static const char* const PROTO_NAMES[cricket::PROTO_LAST + 1] = {
-  "udp", "tcp", "ssltcp"
-};
-
-static const char* ProtocolToString(cricket::ProtocolType proto) {
-  return PROTO_NAMES[proto];
-}
-
-void XmppConnectionGenerator::UseCurrentConnection() {
-  LOG(INFO) << "XmppConnectionGenerator::UseCurrentConnection";
-
-  ConnectionSettings* settings = settings_list_->GetSettings(settings_index_);
-  LOG(INFO) << "*** Attempting "
-            << ProtocolToString(settings->protocol()) << " connection to "
-            << settings->server().IPAsString() << ":"
-            << settings->server().port();
-
-  delegate_->OnNewSettings(*settings);
 }
 
 }  // namespace notifier

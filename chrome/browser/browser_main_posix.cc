@@ -16,10 +16,6 @@
 #include "chrome/browser/browser_thread.h"
 #include "chrome/common/chrome_switches.h"
 
-#if defined(OS_CHROMEOS)
-#include "chrome/browser/chromeos/boot_times_loader.h"
-#endif
-
 namespace {
 
 // See comment in |PreEarlyInitialization()|, where sigaction is called.
@@ -112,11 +108,7 @@ void ShutdownDetector::ThreadMain() {
     bytes_read += ret;
   } while (bytes_read < sizeof(signal));
 
-  LOG(INFO) << "Handling shutdown for signal " << signal << ".";
-#if defined(OS_CHROMEOS)
-  chromeos::BootTimesLoader::Get()->AddLogoutTimeMarker("ShutdownDetected",
-                                                        false);
-#endif
+  VLOG(1) << "Handling shutdown for signal " << signal << ".";
 
   if (!BrowserThread::PostTask(
       BrowserThread::UI, FROM_HERE,
@@ -226,12 +218,3 @@ void BrowserMainPartsPosix::PostMainMessageLoopStart() {
     }
   }
 }
-
-// Mac and Chromeos further subclass BrowserMainPartsPosix.
-#if !defined(OS_MACOSX) && !defined(OS_CHROMEOS)
-// static
-BrowserMainParts* BrowserMainParts::CreateBrowserMainParts(
-    const MainFunctionParams& parameters) {
-  return new BrowserMainPartsPosix(parameters);
-}
-#endif  // !defined(OS_MACOSX)

@@ -28,19 +28,6 @@ bool IsDataProtocol(const GURL& url) {
 
 namespace webkit_glue {
 
-bool SimpleDataSource::IsMediaFormatSupported(
-  const media::MediaFormat& media_format) {
-    std::string mime_type;
-    std::string url;
-    if (media_format.GetAsString(media::MediaFormat::kMimeType, &mime_type) &&
-        media_format.GetAsString(media::MediaFormat::kURL, &url)) {
-      GURL gurl(url);
-      if (IsProtocolSupportedForMedia(gurl))
-        return true;
-    }
-    return false;
-}
-
 SimpleDataSource::SimpleDataSource(
     MessageLoop* render_loop,
     webkit_glue::MediaResourceLoaderBridgeFactory* bridge_factory)
@@ -153,9 +140,8 @@ void SimpleDataSource::OnCompletedRequest(const URLRequestStatus& status,
   AutoLock auto_lock(lock_);
   // It's possible this gets called after Stop(), in which case |host_| is no
   // longer valid.
-  if (state_ == STOPPED) {
+  if (state_ == STOPPED)
     return;
-  }
 
   // Otherwise we should be initializing and have created a bridge.
   DCHECK_EQ(state_, INITIALIZING);
@@ -164,16 +150,11 @@ void SimpleDataSource::OnCompletedRequest(const URLRequestStatus& status,
 
   // If we don't get a content length or the request has failed, report it
   // as a network error.
-  DCHECK(size_ == -1 || static_cast<size_t>(size_) == data_.length());
-  if (size_ == -1) {
+  if (size_ == -1)
     size_ = data_.length();
-  }
+  DCHECK(static_cast<size_t>(size_) == data_.length());
 
   DoneInitialization_Locked(status.is_success());
-}
-
-GURL SimpleDataSource::GetURLForDebugging() const {
-  return url_;
 }
 
 bool SimpleDataSource::HasSingleOrigin() {

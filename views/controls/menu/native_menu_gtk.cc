@@ -11,7 +11,6 @@
 #include "app/keyboard_code_conversion_gtk.h"
 #include "app/keyboard_codes.h"
 #include "app/menus/menu_model.h"
-#include "base/gtk_util.h"
 #include "base/i18n/rtl.h"
 #include "base/message_loop.h"
 #include "base/time.h"
@@ -22,6 +21,10 @@
 #include "views/accelerator.h"
 #include "views/controls/menu/menu_2.h"
 #include "views/controls/menu/nested_dispatcher_gtk.h"
+
+#if defined(TOUCH_UI)
+#include "views/focus/accelerator_handler.h"
+#endif
 
 namespace {
 
@@ -121,7 +124,7 @@ void NativeMenuGtk::RunMenuAt(const gfx::Point& point, int alignment) {
                        G_CALLBACK(OnMenuMoveCurrentThunk), this);
 
   // Block until menu is no longer shown by running a nested message loop.
-  nested_dispatcher_ = new NestedDispatcherGtk(this, false);
+  nested_dispatcher_ = new NestedDispatcherGtk(this, true);
   bool deleted = nested_dispatcher_->RunAndSelfDestruct();
   if (deleted) {
     // The menu was destryed while menu is shown, so return immediately.
@@ -223,6 +226,12 @@ void NativeMenuGtk::SetMinimumWidth(int width) {
   gtk_widget_set_size_request(menu_, width, -1);
 }
 
+#if defined(TOUCH_UI)
+bool NativeMenuGtk::Dispatch(XEvent* xevent) {
+  return DispatchXEvent(xevent);
+}
+#endif
+
 bool NativeMenuGtk::Dispatch(GdkEvent* event) {
   if (menu_hidden_) {
     // The menu has been closed but the message loop is still nested. Don't
@@ -317,7 +326,7 @@ GtkWidget* NativeMenuGtk::AddMenuItemAt(int index,
                                         GtkRadioMenuItem* radio_group,
                                         GtkAccelGroup* accel_group) {
   GtkWidget* menu_item = NULL;
-  std::string label = gtk_util::ConvertAcceleratorsFromWindowsStyle(UTF16ToUTF8(
+  std::string label = gfx::ConvertAcceleratorsFromWindowsStyle(UTF16ToUTF8(
       model_->GetLabelAt(index)));
 
   menus::MenuModel::ItemType type = model_->GetTypeAt(index);

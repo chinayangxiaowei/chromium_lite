@@ -5,7 +5,7 @@
 #include "chrome_frame/simple_resource_loader.h"
 
 #include "base/file_path.h"
-#include "base/win_util.h"
+#include "base/win/windows_version.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 TEST(SimpleResourceLoaderTest, LoadLocaleDll) {
@@ -54,29 +54,6 @@ TEST(SimpleResourceLoaderTest, LoadLocaleDll) {
     dll_handle = NULL;
   }
   EXPECT_TRUE(file_path.BaseName() == FilePath(L"en-US.dll"));
-}
-
-TEST(SimpleResourceLoaderTest, GetThreadPreferredUILanguages) {
-  std::vector<std::wstring> language_tags;
-
-  if (win_util::GetWinVersion() >= win_util::WINVERSION_VISTA) {
-    EXPECT_TRUE(
-      SimpleResourceLoader::GetThreadPreferredUILanguages(&language_tags));
-    // Did we find at least one language?
-    EXPECT_NE(static_cast<std::vector<std::wstring>::size_type>(0),
-              language_tags.size());
-  } else {
-    EXPECT_FALSE(
-      SimpleResourceLoader::GetThreadPreferredUILanguages(&language_tags));
-  }
-}
-
-TEST(SimpleResourceLoaderTest, GetICUSystemLanguage) {
-  std::wstring language;
-  std::wstring region;
-
-  SimpleResourceLoader::GetICUSystemLanguage(&language, &region);
-  EXPECT_NE(static_cast<std::wstring::size_type>(0), language.size());
 }
 
 TEST(SimpleResourceLoaderTest, InstanceTest) {

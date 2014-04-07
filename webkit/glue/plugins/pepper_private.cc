@@ -6,15 +6,16 @@
 
 #include "webkit/glue/plugins/pepper_private.h"
 
+#include "unicode/usearch.h"
+
 #include "app/resource_bundle.h"
-#include "base/histogram.h"
+#include "base/metrics/histogram.h"
 #include "base/utf_string_conversions.h"
 #include "grit/webkit_resources.h"
 #include "grit/webkit_strings.h"
 #include "skia/ext/platform_canvas.h"
-#include "third_party/ppapi/c/pp_resource.h"
+#include "ppapi/c/pp_resource.h"
 #include "third_party/skia/include/core/SkBitmap.h"
-#include "third_party/icu/public/i18n/unicode/usearch.h"
 #include "webkit/glue/webkit_glue.h"
 #include "webkit/glue/plugins/pepper_image_data.h"
 #include "webkit/glue/plugins/pepper_plugin_delegate.h"
@@ -93,6 +94,8 @@ PP_Var GetLocalizedString(PP_Module module_id, PP_ResourceString string_id) {
     rv = UTF16ToUTF8(webkit_glue::GetLocalizedString(IDS_PDF_NEED_PASSWORD));
   } else if (string_id == PP_RESOURCESTRING_PDFLOADING) {
     rv = UTF16ToUTF8(webkit_glue::GetLocalizedString(IDS_PDF_PAGE_LOADING));
+  } else if (string_id == PP_RESOURCESTRING_PDFLOAD_FAILED) {
+    rv = UTF16ToUTF8(webkit_glue::GetLocalizedString(IDS_PDF_PAGE_LOAD_FAILED));
   } else {
     NOTREACHED();
   }
@@ -118,7 +121,7 @@ PP_Resource GetResourceImage(PP_Module module_id, PP_ResourceImage image_id) {
   if (!module)
     return 0;
   scoped_refptr<pepper::ImageData> image_data(new pepper::ImageData(module));
-  if (!image_data->Init(PP_IMAGEDATAFORMAT_BGRA_PREMUL,
+  if (!image_data->Init(ImageData::GetNativeImageDataFormat(),
                         res_bitmap->width(), res_bitmap->height(), false)) {
     return 0;
   }

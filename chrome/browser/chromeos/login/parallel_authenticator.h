@@ -23,7 +23,7 @@
 #include "chrome/browser/chromeos/login/online_attempt.h"
 #include "chrome/common/net/gaia/gaia_auth_consumer.h"
 
-class GaiaAuthenticator2;
+class GaiaAuthFetcher;
 class Lock;
 class LoginFailure;
 class Profile;
@@ -31,7 +31,8 @@ class Profile;
 namespace chromeos {
 
 class LoginStatusConsumer;
-class ParallelAuthenticatorTest;
+class ParallelAuthenticator;
+class ResolveChecker;
 
 // Authenticates a Chromium OS user against the Google Accounts ClientLogin API.
 //
@@ -233,7 +234,7 @@ class ParallelAuthenticator : public Authenticator,
   static const int kLocalaccountRetryIntervalMs;
 
   // Handles all net communications with Gaia.
-  scoped_ptr<GaiaAuthenticator2> gaia_authenticator_;
+  scoped_ptr<GaiaAuthFetcher> gaia_authenticator_;
 
   // Used when we need to try online authentication again, after successful
   // mount, but failed online login.
@@ -262,6 +263,7 @@ class ParallelAuthenticator : public Authenticator,
   bool checked_for_localaccount_;  // needed because empty localaccount_ is ok.
   Lock localaccount_lock_;  // a lock around checked_for_localaccount_.
 
+  friend class ResolveChecker;
   friend class ParallelAuthenticatorTest;
   FRIEND_TEST_ALL_PREFIXES(ParallelAuthenticatorTest, SaltToAscii);
   FRIEND_TEST_ALL_PREFIXES(ParallelAuthenticatorTest, ReadLocalaccount);

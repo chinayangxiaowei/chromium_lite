@@ -10,7 +10,7 @@
 
 #include "app/menus/simple_menu_model.h"
 #include "base/command_line.h"
-#include "chrome/app/chrome_dll_resource.h"
+#include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/chromeos/frame/panel_browser_view.h"
 #include "chrome/browser/chromeos/status/input_method_menu_button.h"
 #include "chrome/browser/chromeos/status/network_menu_button.h"
@@ -18,7 +18,6 @@
 #include "chrome/browser/chromeos/status/status_area_view.h"
 #include "chrome/browser/chromeos/view_ids.h"
 #include "chrome/browser/chromeos/wm_ipc.h"
-#include "chrome/browser/views/app_launcher.h"
 #include "chrome/browser/gtk/gtk_util.h"
 #include "chrome/browser/views/frame/browser_frame_gtk.h"
 #include "chrome/browser/views/frame/browser_view.h"
@@ -268,7 +267,7 @@ void BrowserView::Show() {
 
 void BrowserView::FocusChromeOSStatus() {
   SaveFocusedView();
-  status_area_->SetToolbarFocus(last_focused_view_storage_id(), NULL);
+  status_area_->SetPaneFocus(last_focused_view_storage_id(), NULL);
 }
 
 views::LayoutManager* BrowserView::CreateLayoutManager() const {
@@ -364,10 +363,10 @@ bool BrowserView::IsScreenLockerMode() const {
 ////////////////////////////////////////////////////////////////////////////////
 // BrowserView protected:
 
-void BrowserView::GetAccessibleToolbars(
-    std::vector<AccessibleToolbarView*>* toolbars) {
-  ::BrowserView::GetAccessibleToolbars(toolbars);
-  toolbars->push_back(status_area_);
+void BrowserView::GetAccessiblePanes(
+    std::vector<AccessiblePaneView*>* panes) {
+  ::BrowserView::GetAccessiblePanes(panes);
+  panes->push_back(status_area_);
 }
 
 ////////////////////////////////////////////////////////////////////////////////

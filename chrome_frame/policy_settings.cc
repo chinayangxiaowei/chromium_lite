@@ -7,9 +7,9 @@
 #include <algorithm>
 
 #include "base/logging.h"
-#include "base/registry.h"
 #include "base/string_util.h"
 #include "base/utf_string_conversions.h"
+#include "base/win/registry.h"
 #include "chrome/common/policy_constants.h"
 #include "chrome_frame/utils.h"
 
@@ -65,7 +65,7 @@ void PolicySettings::ReadUrlSettings(
   *default_renderer = RENDERER_NOT_SPECIFIED;
   renderer_exclusion_list->clear();
 
-  RegKey config_key;
+  base::win::RegKey config_key;
   DWORD value = RENDERER_NOT_SPECIFIED;
   std::wstring settings_value(
       ASCIIToWide(policy::key::kChromeFrameRendererSettings));
@@ -82,7 +82,7 @@ void PolicySettings::ReadUrlSettings(
       "invalid default renderer setting: " << value;
 
   if (value != RENDER_IN_HOST && value != RENDER_IN_CHROME_FRAME) {
-    DLOG(INFO) << "default renderer not specified via policy";
+    DVLOG(1) << "default renderer not specified via policy";
   } else {
     *default_renderer = static_cast<RendererForUrl>(value);
     const char* exclusion_list_name = (*default_renderer == RENDER_IN_HOST) ?
@@ -92,9 +92,9 @@ void PolicySettings::ReadUrlSettings(
     EnumerateKeyValues(config_key.Handle(),
         ASCIIToWide(exclusion_list_name).c_str(), renderer_exclusion_list);
 
-    DLOG(INFO) << "Default renderer as specified via policy: " <<
-        *default_renderer << " exclusion list size: " <<
-        renderer_exclusion_list->size();
+    DVLOG(1) << "Default renderer as specified via policy: "
+             << *default_renderer
+             << " exclusion list size: " << renderer_exclusion_list->size();
   }
 }
 
@@ -120,7 +120,7 @@ void PolicySettings::ReadApplicationLocaleSetting(
   DCHECK(application_locale);
 
   application_locale->clear();
-  RegKey config_key;
+  base::win::RegKey config_key;
   std::wstring application_locale_value(
       ASCIIToWide(policy::key::kApplicationLocaleValue));
   for (int i = 0; i < arraysize(kRootKeys); ++i) {
@@ -152,3 +152,4 @@ void PolicySettings::RefreshFromRegistry() {
   swap(content_type_list_, content_type_list);
   swap(application_locale_, application_locale);
 }
+

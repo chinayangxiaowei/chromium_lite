@@ -9,18 +9,22 @@
 #include "app/menus/menu_model.h"
 #include "base/message_loop.h"
 #include "base/string_util.h"
-#include "chrome/browser/browser.h"
-#include "chrome/browser/browser_list.h"
-#include "chrome/browser/browser_window.h"
 #include "chrome/browser/chromeos/dom_ui/menu_ui.h"
 #include "chrome/browser/chromeos/views/domui_menu_widget.h"
 #include "chrome/browser/chromeos/views/menu_locator.h"
 #include "chrome/browser/profile_manager.h"
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_window.h"
 #include "chrome/common/url_constants.h"
 #include "gfx/rect.h"
 #include "views/controls/menu/menu_2.h"
 #include "views/controls/menu/native_menu_gtk.h"
 #include "views/controls/menu/nested_dispatcher_gtk.h"
+
+#if defined(TOUCH_UI)
+#include "views/focus/accelerator_handler.h"
+#endif
 
 namespace {
 
@@ -243,6 +247,12 @@ bool NativeMenuDOMUI::Dispatch(GdkEvent* event) {
   gtk_main_do_event(event);
   return true;
 }
+
+#if defined(TOUCH_UI)
+bool NativeMenuDOMUI::Dispatch(XEvent* xevent) {
+  return views::DispatchXEvent(xevent);
+}
+#endif
 
 ////////////////////////////////////////////////////////////////////////////////
 // NativeMenuDOMUI, MenuControl implementation:

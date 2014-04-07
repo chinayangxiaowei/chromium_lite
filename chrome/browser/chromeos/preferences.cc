@@ -48,8 +48,9 @@ void Preferences::RegisterUserPrefs(PrefService* prefs) {
                             language_prefs::kHotkeyPreviousEngine);
   prefs->RegisterStringPref(prefs::kLanguagePreferredLanguages,
                             kFallbackInputMethodLocale);
+  KeyboardLibrary* keyboard_library = CrosLibrary::Get()->GetKeyboardLibrary();
   prefs->RegisterStringPref(prefs::kLanguagePreloadEngines,
-                            kFallbackInputMethodId);  // EN layout
+                            keyboard_library->GetHardwareKeyboardLayoutName());
   for (size_t i = 0; i < language_prefs::kNumChewingBooleanPrefs; ++i) {
     prefs->RegisterBooleanPref(
         language_prefs::kChewingBooleanPrefs[i].pref_name,
@@ -395,11 +396,11 @@ void Preferences::SetLanguageConfigStringList(
 void Preferences::SetLanguageConfigStringListAsCSV(const char* section,
                                                    const char* name,
                                                    const std::string& value) {
-  LOG(INFO) << "Setting " << name << " to '" << value << "'";
+  VLOG(1) << "Setting " << name << " to '" << value << "'";
 
   std::vector<std::string> split_values;
   if (!value.empty())
-    SplitString(value, ',', &split_values);
+    base::SplitString(value, ',', &split_values);
 
   // We should call the cros API even when |value| is empty, to disable default
   // config.

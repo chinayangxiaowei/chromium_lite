@@ -27,6 +27,7 @@
 #include "base/observer_list_threadsafe.h"
 #include "base/ref_counted.h"
 #include "base/scoped_ptr.h"
+#include "base/task.h"
 #include "base/thread.h"
 #include "base/weak_ptr.h"
 #include "jingle/notifier/base/notifier_options.h"
@@ -46,7 +47,11 @@ class HostResolver;
 
 namespace notifier {
 
-class MediatorThreadImpl : public MediatorThread, public Login::Delegate,
+// Workaround for MSVS 2005 bug that fails to handle inheritance from a nested
+// class properly if it comes directly on a base class list.
+typedef Login::Delegate LoginDelegate;
+
+class MediatorThreadImpl : public MediatorThread, public LoginDelegate,
                            public sigslot::has_slots<> {
  public:
   explicit MediatorThreadImpl(const NotifierOptions& notifier_options);
@@ -107,5 +112,8 @@ class MediatorThreadImpl : public MediatorThread, public Login::Delegate,
 };
 
 }  // namespace notifier
+
+// We manage the lifetime of notifier::MediatorThreadImpl ourselves.
+DISABLE_RUNNABLE_METHOD_REFCOUNT(notifier::MediatorThreadImpl);
 
 #endif  // JINGLE_NOTIFIER_LISTENER_MEDIATOR_THREAD_IMPL_H_

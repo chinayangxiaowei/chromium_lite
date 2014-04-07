@@ -85,6 +85,8 @@ OptionsUIHTMLSource::OptionsUIHTMLSource(DictionaryValue* localized_strings)
   localized_strings_.reset(localized_strings);
 }
 
+OptionsUIHTMLSource::~OptionsUIHTMLSource() {}
+
 void OptionsUIHTMLSource::StartDataRequest(const std::string& path,
                                            bool is_off_the_record,
                                            int request_id) {
@@ -101,6 +103,10 @@ void OptionsUIHTMLSource::StartDataRequest(const std::string& path,
   std::copy(full_html.begin(), full_html.end(), html_bytes->data.begin());
 
   SendResponse(request_id, html_bytes);
+}
+
+std::string OptionsUIHTMLSource::GetMimeType(const std::string&) const {
+  return "text/html";
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -225,6 +231,18 @@ void OptionsUI::RenderViewCreated(RenderViewHost* render_view_host) {
   DOMUI::RenderViewCreated(render_view_host);
 }
 
+void OptionsUI::DidBecomeActiveForReusedRenderView() {
+  // When the renderer is re-used (e.g., for back/forward navigation within
+  // options), the handlers are torn down and rebuilt, so are no longer
+  // initialized, but the web page's DOM may remain intact, in which case onload
+  // won't fire to initilize the handlers. To make sure initialization always
+  // happens, call reinitializeCore (which is a no-op unless the DOM was already
+  // initialized).
+  CallJavascriptFunction(L"OptionsPage.reinitializeCore");
+
+  DOMUI::DidBecomeActiveForReusedRenderView();
+}
+
 // static
 RefCountedMemory* OptionsUI::GetFaviconResourceBytes() {
   return ResourceBundle::GetSharedInstance().
@@ -232,6 +250,8 @@ RefCountedMemory* OptionsUI::GetFaviconResourceBytes() {
 }
 
 void OptionsUI::InitializeHandlers() {
+  DCHECK(!GetProfile()->IsOffTheRecord());
+
   std::vector<DOMMessageHandler*>::iterator iter;
   for (iter = handlers_.begin(); iter != handlers_.end(); ++iter) {
     (static_cast<OptionsPageUIHandler*>(*iter))->Initialize();

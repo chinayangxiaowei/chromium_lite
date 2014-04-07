@@ -1,14 +1,14 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/extensions/external_registry_extension_provider_win.h"
 
 #include "base/file_path.h"
-#include "base/registry.h"
 #include "base/string_util.h"
 #include "base/utf_string_conversions.h"
 #include "base/version.h"
+#include "base/win/registry.h"
 
 namespace {
 
@@ -24,7 +24,7 @@ const wchar_t kRegistryExtensionPath[] = L"path";
 // Registry value of that key that defines the current version of the .crx file.
 const wchar_t kRegistryExtensionVersion[] = L"version";
 
-bool OpenKeyById(const std::string& id, RegKey *key) {
+bool OpenKeyById(const std::string& id, base::win::RegKey *key) {
   std::wstring key_path = ASCIIToWide(kRegistryExtensions);
   key_path.append(L"\\");
   key_path.append(ASCIIToWide(id));
@@ -42,10 +42,10 @@ ExternalRegistryExtensionProvider::~ExternalRegistryExtensionProvider() {
 
 void ExternalRegistryExtensionProvider::VisitRegisteredExtension(
     Visitor* visitor, const std::set<std::string>& ids_to_ignore) const {
-  RegistryKeyIterator iterator(kRegRoot,
-                               ASCIIToWide(kRegistryExtensions).c_str());
+  base::win::RegistryKeyIterator iterator(
+      kRegRoot, ASCIIToWide(kRegistryExtensions).c_str());
   while (iterator.Valid()) {
-    RegKey key;
+    base::win::RegKey key;
     std::wstring key_path = ASCIIToWide(kRegistryExtensions);
     key_path.append(L"\\");
     key_path.append(iterator.Name());
@@ -88,9 +88,10 @@ void ExternalRegistryExtensionProvider::VisitRegisteredExtension(
   }
 }
 
+
 bool ExternalRegistryExtensionProvider::HasExtension(
     const std::string& id) const {
-  RegKey key;
+  base::win::RegKey key;
   return OpenKeyById(id, &key);
 }
 
@@ -98,7 +99,7 @@ bool ExternalRegistryExtensionProvider::GetExtensionDetails(
     const std::string& id,
     Extension::Location* location,
     scoped_ptr<Version>* version) const  {
-  RegKey key;
+  base::win::RegKey key;
   if (!OpenKeyById(id, &key))
     return false;
 

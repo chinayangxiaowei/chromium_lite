@@ -16,12 +16,12 @@
 #include "app/resource_bundle.h"
 #include "app/x11_util.h"
 #include "base/command_line.h"
+#include "base/metrics/histogram.h"
 #include "base/message_loop.h"
 #include "base/singleton.h"
 #include "base/string_util.h"
 #include "base/timer.h"
 #include "base/utf_string_conversions.h"
-#include "chrome/browser/browser.h"
 #include "chrome/browser/browser_list.h"
 #include "chrome/browser/browser_thread.h"
 #include "chrome/browser/browser_window.h"
@@ -36,10 +36,12 @@
 #include "chrome/browser/chromeos/login/message_bubble.h"
 #include "chrome/browser/chromeos/login/screen_lock_view.h"
 #include "chrome/browser/chromeos/login/shutdown_button.h"
+#include "chrome/browser/chromeos/system_key_event_listener.h"
 #include "chrome/browser/chromeos/wm_ipc.h"
 #include "chrome/browser/metrics/user_metrics.h"
 #include "chrome/browser/profile_manager.h"
 #include "chrome/browser/sync/profile_sync_service.h"
+#include "chrome/browser/ui/browser.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/notification_service.h"
 #include "cros/chromeos_wm_ipc_enums.h"
@@ -89,7 +91,7 @@ class ScreenLockObserver : public chromeos::ScreenLockLibrary::Observer,
   }
 
   virtual void LockScreen(chromeos::ScreenLockLibrary* obj) {
-    LOG(INFO) << "In: ScreenLockObserver::LockScreen";
+    VLOG(1) << "In: ScreenLockObserver::LockScreen";
     SetupInputMethodsForScreenLocker();
     chromeos::ScreenLocker::Show();
   }
@@ -147,6 +149,9 @@ class ScreenLockObserver : public chromeos::ScreenLockLibrary::Observer,
       if (should_add_hardware_keyboard) {
         value.string_list_value.push_back(hardware_keyboard);
       }
+      // We don't want to shut down the IME, even if the hardware layout is the
+      // only IME left.
+      language->SetEnableAutoImeShutdown(false);
       language->SetImeConfig(
           chromeos::language_prefs::kGeneralSectionName,
           chromeos::language_prefs::kPreloadEnginesConfigName,
@@ -163,6 +168,7 @@ class ScreenLockObserver : public chromeos::ScreenLockLibrary::Observer,
       chromeos::ImeConfigValue value;
       value.type = chromeos::ImeConfigValue::kValueTypeStringList;
       value.string_list_value = saved_active_input_method_list_;
+      language->SetEnableAutoImeShutdown(true);
       language->SetImeConfig(
           chromeos::language_prefs::kGeneralSectionName,
           chromeos::language_prefs::kPreloadEnginesConfigName,
@@ -210,7 +216,7 @@ class LockWindow : public views::WidgetGtk {
   }
 
   virtual void OnDestroy(GtkWidget* object) {
-    LOG(INFO) << "OnDestroy: LockWindow destroyed";
+    VLOG(1) << "OnDestroy: LockWindow destroyed";
     views::WidgetGtk::OnDestroy(object);
   }
 
@@ -370,7 +376,7 @@ void GrabWidget::TryGrabAllInputs() {
         << "Failed to grab keyboard input:" << kbd_grab_status_;
     CHECK_EQ(GDK_GRAB_SUCCESS, mouse_grab_status_)
         << "Failed to grab pointer input:" << mouse_grab_status_;
-    DLOG(INFO) << "Grab Success";
+    DVLOG(1) << "Grab Success";
     screen_locker_->OnGrabInputs();
   }
 }
@@ -614,7 +620,8 @@ ScreenLocker::ScreenLocker(const UserManager::User& user)
       // TODO(oshima): support auto login mode (this is not implemented yet)
       // http://crosbug.com/1881
       unlock_on_input_(user_.email().empty()),
-      locked_(false) {
+      locked_(false),
+      start_time_(base::Time::Now()) {
   DCHECK(!screen_locker_);
   screen_locker_ = this;
 }
@@ -698,10 +705,23 @@ void ScreenLocker::Init() {
   gdk_window_set_back_pixmap(lock_widget_->GetNativeView()->window,
                              NULL, false);
   lock_window->set_toplevel_focus_widget(lock_widget_->window_contents());
+
+  // Create the SystemKeyEventListener so it can listen for system keyboard
+  // messages regardless of focus while screen locked.
+  SystemKeyEventListener::instance();
 }
 
 void ScreenLocker::OnLoginFailure(const LoginFailure& error) {
-  DLOG(INFO) << "OnLoginFailure";
+  DVLOG(1) << "OnLoginFailure";
+  UserMetrics::RecordAction(UserMetricsAction("ScreenLocker_OnLoginFailure"));
+  if (authentication_start_time_.is_null()) {
+    LOG(ERROR) << "authentication_start_time_ is not set";
+  } else {
+    base::TimeDelta delta = base::Time::Now() - authentication_start_time_;
+    VLOG(1) << "Authentication failure time: " << delta.InSecondsF();
+    UMA_HISTOGRAM_TIMES("ScreenLocker.AuthenticationFailureTime", delta);
+  }
+
   EnableInput();
   // Don't enable signout button here as we're showing
   // MessageBubble.
@@ -745,13 +765,21 @@ void ScreenLocker::OnLoginSuccess(
     const std::string& password,
     const GaiaAuthConsumer::ClientLoginResult& unused,
     bool pending_requests) {
-  LOG(INFO) << "OnLoginSuccess: Sending Unlock request.";
+  VLOG(1) << "OnLoginSuccess: Sending Unlock request.";
+  if (authentication_start_time_.is_null()) {
+    LOG(ERROR) << "authentication_start_time_ is not set";
+  } else {
+    base::TimeDelta delta = base::Time::Now() - authentication_start_time_;
+    VLOG(1) << "Authentication success time: " << delta.InSecondsF();
+    UMA_HISTOGRAM_TIMES("ScreenLocker.AuthenticationSuccessTime", delta);
+  }
+
   Profile* profile = ProfileManager::GetDefaultProfile();
   if (profile) {
     ProfileSyncService* service = profile->GetProfileSyncService(username);
     if (service && !service->HasSyncSetupCompleted()) {
       // If sync has failed somehow, try setting the sync passphrase here.
-      service->SetPassphrase(password);
+      service->SetPassphrase(password, false);
     }
   }
 
@@ -770,6 +798,7 @@ void ScreenLocker::InfoBubbleClosing(InfoBubble* info_bubble,
 }
 
 void ScreenLocker::Authenticate(const string16& password) {
+  authentication_start_time_ = base::Time::Now();
   screen_lock_view_->SetEnabled(false);
   screen_lock_view_->SetSignoutEnabled(false);
   BrowserThread::PostTask(
@@ -796,7 +825,7 @@ void ScreenLocker::EnableInput() {
 
 void ScreenLocker::Signout() {
   if (!error_info_) {
-    // TODO(oshima): record this action in user metrics.
+    UserMetrics::RecordAction(UserMetricsAction("ScreenLocker_Signout"));
     if (CrosLibrary::Get()->EnsureLoaded()) {
       CrosLibrary::Get()->GetLoginLibrary()->StopSession("");
     }
@@ -807,7 +836,7 @@ void ScreenLocker::Signout() {
 }
 
 void ScreenLocker::OnGrabInputs() {
-  DLOG(INFO) << "OnGrabInputs";
+  DVLOG(1) << "OnGrabInputs";
   input_grabbed_ = true;
   if (drawn_)
     ScreenLockReady();
@@ -815,7 +844,8 @@ void ScreenLocker::OnGrabInputs() {
 
 // static
 void ScreenLocker::Show() {
-  LOG(INFO) << "In ScreenLocker::Show";
+  VLOG(1) << "In ScreenLocker::Show";
+  UserMetrics::RecordAction(UserMetricsAction("ScreenLocker_Show"));
   DCHECK(MessageLoop::current()->type() == MessageLoop::TYPE_UI);
 
   // Exit fullscreen.
@@ -827,7 +857,7 @@ void ScreenLocker::Show() {
   }
 
   if (!screen_locker_) {
-    LOG(INFO) << "Show: Locking screen";
+    VLOG(1) << "Show: Locking screen";
     ScreenLocker* locker =
         new ScreenLocker(UserManager::Get()->logged_in_user());
     locker->Init();
@@ -835,8 +865,7 @@ void ScreenLocker::Show() {
     // PowerManager re-sends lock screen signal if it doesn't
     // receive the response within timeout. Just send complete
     // signal.
-    LOG(INFO) << "Show: locker already exists. "
-              << "just sending completion event";
+    VLOG(1) << "Show: locker already exists. Just sending completion event.";
     if (CrosLibrary::Get()->EnsureLoaded())
       CrosLibrary::Get()->GetScreenLockLibrary()->NotifyScreenLockCompleted();
   }
@@ -846,7 +875,7 @@ void ScreenLocker::Show() {
 void ScreenLocker::Hide() {
   DCHECK(MessageLoop::current()->type() == MessageLoop::TYPE_UI);
   DCHECK(screen_locker_);
-  LOG(INFO) << "Hide: Deleting ScreenLocker:" << screen_locker_;
+  VLOG(1) << "Hide: Deleting ScreenLocker: " << screen_locker_;
   MessageLoopForUI::current()->DeleteSoon(FROM_HERE, screen_locker_);
 }
 
@@ -857,14 +886,14 @@ void ScreenLocker::UnlockScreenFailed() {
     // Power manager decided no to unlock the screen even if a user
     // typed in password, for example, when a user closed the lid
     // immediately after typing in the password.
-    LOG(INFO) << "UnlockScreenFailed: re-enabling screen locker";
+    VLOG(1) << "UnlockScreenFailed: re-enabling screen locker.";
     screen_locker_->EnableInput();
   } else {
     // This can happen when a user requested unlock, but PowerManager
     // rejected because the computer is closed, then PowerManager unlocked
     // because it's open again and the above failure message arrives.
     // This'd be extremely rare, but may still happen.
-    LOG(INFO) << "UnlockScreenFailed: screen is already unlocked.";
+    VLOG(1) << "UnlockScreenFailed: screen is already unlocked.";
   }
 }
 
@@ -892,7 +921,7 @@ ScreenLocker::~ScreenLocker() {
   gdk_pointer_ungrab(GDK_CURRENT_TIME);
 
   DCHECK(lock_window_);
-  LOG(INFO) << "~ScreenLocker(): Closing ScreenLocker window";
+  VLOG(1) << "~ScreenLocker(): Closing ScreenLocker window.";
   lock_window_->Close();
   // lock_widget_ will be deleted by gtk's destroy signal.
   screen_locker_ = NULL;
@@ -910,8 +939,12 @@ void ScreenLocker::SetAuthenticator(Authenticator* authenticator) {
 }
 
 void ScreenLocker::ScreenLockReady() {
-  LOG(INFO) << "ScreenLockReady: sending completed signal to power manager.";
+  VLOG(1) << "ScreenLockReady: sending completed signal to power manager.";
   locked_ = true;
+  base::TimeDelta delta = base::Time::Now() - start_time_;
+  VLOG(1) << "Screen lock time: " << delta.InSecondsF();
+  UMA_HISTOGRAM_TIMES("ScreenLocker.ScreenLockTime", delta);
+
   if (background_view_->ScreenSaverEnabled()) {
     lock_widget_->GetFocusManager()->RegisterAccelerator(
         views::Accelerator(app::VKEY_ESCAPE, false, false, false), this);
@@ -941,7 +974,7 @@ void ScreenLocker::OnClientEvent(GtkWidget* widge, GdkEventClient* event) {
 }
 
 void ScreenLocker::OnWindowManagerReady() {
-  DLOG(INFO) << "OnClientEvent: drawn for lock";
+  DVLOG(1) << "OnClientEvent: drawn for lock";
   drawn_ = true;
   if (input_grabbed_)
     ScreenLockReady();
@@ -949,7 +982,7 @@ void ScreenLocker::OnWindowManagerReady() {
 
 void ScreenLocker::StopScreenSaver() {
   if (background_view_->IsScreenSaverVisible()) {
-    LOG(INFO) << "StopScreenSaver";
+    VLOG(1) << "StopScreenSaver";
     background_view_->HideScreenSaver();
     if (screen_lock_view_) {
       screen_lock_view_->SetVisible(true);
@@ -961,7 +994,9 @@ void ScreenLocker::StopScreenSaver() {
 
 void ScreenLocker::StartScreenSaver() {
   if (!background_view_->IsScreenSaverVisible()) {
-    LOG(INFO) << "StartScreenSaver";
+    VLOG(1) << "StartScreenSaver";
+    UserMetrics::RecordAction(
+        UserMetricsAction("ScreenLocker_StartScreenSaver"));
     background_view_->ShowScreenSaver();
     if (screen_lock_view_) {
       screen_lock_view_->SetEnabled(false);

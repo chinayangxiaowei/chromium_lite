@@ -20,7 +20,6 @@
 #include "chrome/browser/chromeos/cros/cryptohome_library.h"
 #include "chrome/browser/chromeos/cros/login_library.h"
 #include "chrome/browser/chromeos/cros/network_library.h"
-#include "chrome/browser/chromeos/cros_settings_provider_user.h"
 #include "chrome/browser/chromeos/login/background_view.h"
 #include "chrome/browser/chromeos/login/help_app_launcher.h"
 #include "chrome/browser/chromeos/login/helper.h"
@@ -28,6 +27,7 @@
 #include "chrome/browser/chromeos/login/message_bubble.h"
 #include "chrome/browser/chromeos/login/wizard_controller.h"
 #include "chrome/browser/chromeos/status/status_area_view.h"
+#include "chrome/browser/chromeos/user_cros_settings_provider.h"
 #include "chrome/browser/chromeos/view_ids.h"
 #include "chrome/browser/chromeos/wm_ipc.h"
 #include "chrome/browser/profile_manager.h"
@@ -81,8 +81,8 @@ class RemoveAttempt : public CryptohomeLibrary::Delegate {
   void OnComplete(bool success, int return_code) {
     // Log the error, but there's not much we can do.
     if (!success) {
-      LOG(INFO) << "Removal of cryptohome for " << user_email_
-                << " failed, return code: " << return_code;
+      VLOG(1) << "Removal of cryptohome for " << user_email_
+              << " failed, return code: " << return_code;
     }
     delete this;
   }
@@ -498,6 +498,13 @@ void ExistingUserController::OnLoginSuccess(
   LoginPerformer* performer = login_performer_.release();
   performer = NULL;
   bool known_user = UserManager::Get()->IsKnownUser(username);
+  if (credentials.two_factor && !known_user && !start_url_.is_valid()) {
+    // If we have a two factor error and and this is a new user and we are not
+    // already directing the user to a start url (e.g. a help page),
+    // direct them to the personal settings page.
+    // TODO(stevenjb): direct the user to a lightweight sync login page.
+    start_url_ = GURL(kSettingsSyncLoginUrl);
+  }
   AppendStartUrlToCmdline();
   if (selected_view_index_ + 1 == controllers_.size() && !known_user) {
 #if defined(OFFICIAL_BUILD)
@@ -506,13 +513,6 @@ void ExistingUserController::OnLoginSuccess(
         FilePath(kGetStartedPath));
     CommandLine::ForCurrentProcess()->AppendArg(kGetStartedURL);
 #endif  // OFFICIAL_BUILD
-    if (credentials.two_factor) {
-      // If we have a two factor error and and this is a new user and we are not
-      // already directing the user to a start url (e.g. a help page),
-      // direct them to the personal settings page.
-      // TODO(stevenjb): direct the user to a lightweight sync login page.
-      CommandLine::ForCurrentProcess()->AppendArg(kSettingsSyncLoginUrl);
-    }
     // For new user login don't launch browser until we pass image screen.
     LoginUtils::Get()->EnableBrowserLaunch(false);
     LoginUtils::Get()->CompleteLogin(username, password, credentials);
@@ -544,7 +544,7 @@ void ExistingUserController::OnPasswordChangeDetected(
     const GaiaAuthConsumer::ClientLoginResult& credentials) {
   // When signing in as a "New user" always remove old cryptohome.
   if (selected_view_index_ == controllers_.size() - 1) {
-    login_performer_->ResyncEncryptedData();
+    ResyncEncryptedData();
     return;
   }
 
@@ -593,11 +593,15 @@ void ExistingUserController::OnCaptchaEntered(const std::string& captcha) {
 
 void ExistingUserController::RecoverEncryptedData(
     const std::string& old_password) {
-  login_performer_->RecoverEncryptedData(old_password);
+  // LoginPerformer instance has state of the user so it should exist.
+  if (login_performer_.get())
+    login_performer_->RecoverEncryptedData(old_password);
 }
 
 void ExistingUserController::ResyncEncryptedData() {
-  login_performer_->ResyncEncryptedData();
+  // LoginPerformer instance has state of the user so it should exist.
+  if (login_performer_.get())
+    login_performer_->ResyncEncryptedData();
 }
 
 }  // namespace chromeos

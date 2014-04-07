@@ -60,9 +60,6 @@ const int kPaddingColumnWidth = 55;
 const int kMediumPaddingColumnWidth = 20;
 const int kControlPaddingRow = 15;
 
-// Size to add to the welcome title font.
-const int kWelcomeTitleFontDelta = 5;
-
 // Fixed size for language/keyboard/network controls height.
 const int kSelectionBoxHeight = 29;
 
@@ -431,6 +428,7 @@ bool NetworkSelectionView::IsContinueEnabled() const {
 // views::LinkController implementation:
 
 void NetworkSelectionView::LinkActivated(views::Link* source, int) {
+  delegate_->ClearErrors();
   if (source == proxy_settings_link_) {
     if (!proxy_settings_dialog_.get()) {
       proxy_settings_dialog_.reset(

@@ -7,7 +7,6 @@
 #include "base/message_loop.h"
 #include "base/ref_counted.h"
 #include "base/time.h"
-#include "chrome/browser/browser.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chromeos/cros/mock_cryptohome_library.h"
 #include "chrome/browser/chromeos/cros/mock_input_method_library.h"
@@ -21,6 +20,7 @@
 #include "chrome/browser/chromeos/cros/mock_touchpad_library.h"
 #include "chrome/browser/chromeos/login/wizard_controller.h"
 #include "chrome/browser/chromeos/login/wizard_screen.h"
+#include "chrome/browser/ui/browser.h"
 #include "chrome/test/in_process_browser_test.h"
 #include "chrome/test/ui_test_utils.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -385,17 +385,20 @@ void CrosMock::SetPowerLibraryExpectations() {
 }
 
 void CrosMock::SetSpeechSynthesisLibraryExpectations() {
+  InSequence s;
+  EXPECT_CALL(*mock_speech_synthesis_library_, StopSpeaking())
+      .WillOnce(Return(true))
+      .RetiresOnSaturation();
   EXPECT_CALL(*mock_speech_synthesis_library_, Speak(_))
-      .Times(1)
       .WillOnce(Return(true))
       .RetiresOnSaturation();
   EXPECT_CALL(*mock_speech_synthesis_library_, StopSpeaking())
-      .Times(1)
+      .WillOnce(Return(true))
+      .RetiresOnSaturation();
+  EXPECT_CALL(*mock_speech_synthesis_library_, Speak(_))
       .WillOnce(Return(true))
       .RetiresOnSaturation();
   EXPECT_CALL(*mock_speech_synthesis_library_, IsSpeaking())
-      .Times(4)
-      .WillOnce(Return(true))
       .WillOnce(Return(true))
       .WillOnce(Return(true))
       .WillOnce(Return(false))

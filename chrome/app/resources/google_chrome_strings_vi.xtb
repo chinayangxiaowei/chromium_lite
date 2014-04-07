@@ -3,7 +3,6 @@
 <translationbundle lang="vi">
 <translation id="8000275528373650868">Google Chrome yêu cầu Windows Vista hoặc Windows XP với SP2 trở lên.</translation>
 <translation id="6676384891291319759">Truy cập Internet</translation>
-<translation id="8582091809492103607">Mở Google Chrome khi đăng nhập và khởi chạy ứng dụng web nền</translation>
 <translation id="2383457833405848421">Giới thiệu về Chrome Frame...</translation>
 <translation id="386202838227397562">Vui lòng đóng tất cả cửa sổ của Google Chrome và thử lại.</translation>
 <translation id="2770231113462710648">Thay đổi trình duyệt mặc định thành:</translation>
@@ -40,7 +39,6 @@
 <translation id="8810218179782551669">Ngôn ngữ Google Chrome:</translation>
 <translation id="7001386529596391893">Tạo phím tắt Google Chrome tại các vị trí này:</translation>
 <translation id="7461436095086637522">Trình nhập Tiểu sử của Chrome</translation>
-<translation id="655722166118366450">Bạn có muốn đặt <ph name="HOST"/> làm công cụ tìm kiếm của bạn trên Google Chrome không?</translation>
 <translation id="4357846314885556934">Google Chrome Hoạt động không đúng</translation>
 <translation id="4561681684759837226"><ph name="PAGE_TITLE"/></translation>
 <translation id="1195935957447623558">GoogleChrome không tắt đúng cách. Để mở lại trang bạn đã mở, hãy nhấp vào Khôi phục.</translation>
@@ -55,9 +53,7 @@
 <translation id="3324235665723428530">Không thể sử dụng hồ sơ của bạn vì hồ sơ được tạo từ phiên bản Google Chrome mới.\n\nMột số tính năng có thể không có sẵn. Vui lòng xác định thư mục hồ sơ khác hoặc sử dụng phiên bản Google Chrome mới.</translation>
 <translation id="7214670531148488183">Google Chrome có thể sử dụng các dịch vụ web để cải thiện trải nghiệm duyệt web của bạn. Bạn có thể tuỳ ý vô hiệu hoá các dịch vụ này.</translation>
 <translation id="1759842336958782510">Chrome</translation>
-<translation id="5840402478666768335">Tuỳ chọn: Giúp hoàn thiện Google Chrome bằng các tự động gửi thống kê sử dụng và báo cáo\nsự cố cho Google</translation>
 <translation id="5008136264574452501">Google Chrome Canary Build</translation>
-<translation id="2240501189676193549">Ứng dụng web chỉ hoạt động khi Google Chrome chạy.</translation>
 <translation id="911206726377975832">Bạn cũng muốn xoá dữ liệu duyệt web của mình?</translation>
 <translation id="2044287590254833138">Thanh công cụ Google Chrome</translation>
 <translation id="5074344184765391290">Máy chủ lưu trữ Trình cắm của Chrome</translation>
@@ -73,7 +69,6 @@
 <translation id="6087062680442281307">Google Chrome là một trình duyệt web chạy các trang web và ứng dụng với tốc độ cực nhanh. Trình duyệt này nhanh, ổn định và dễ sử dụng. Duyệt web an toàn hơn với tính năng ngăn chặn phần mềm độc hại và lừa đảo được tích hợp vào Google Chrome.</translation>
 <translation id="2115751172320447278">Bản quyền © 2006-2010 Google Inc. Mọi Quyền được Bảo lưu.</translation>
 <translation id="5941830788786076944">Chọn Google Chrome làm trình duyệt mặc định</translation>
-<translation id="7892675281311705134">Ứng dụng Web của Google Chrome</translation>
 <translation id="5947389362804196214">Không thể đọc tuỳ chọn của bạn.\n\nMột số tính năng có thể không khả dụng và thay đổi cho tuỳ chọn của bạn sẽ không được lưu.</translation>
 <translation id="4127951844153999091">Trong trường hợp này, địa chỉ được liệt kê trong chứng chỉ không phù hợp với địa chỉ của trang web mà trình duyệt của bạn cố truy cập. Một nguyên nhân có thể xảy ra là giao tiếp của bạn đang bị kẻ tấn công, người đang xuất trình chứng chỉ cho trang web khác, chặn lại và gây ra lỗi không khớp. Một nguyên nhân khác có thể là do máy chủ được thiết lập để trả về cùng một chứng chỉ cho nhiều trang web, kể cả trang web mà bạn cố truy cập, mặc dù chứng chỉ đó không có giá trị cho tất cả trang web đó. Google Chrome có thể chắc chắn rằng bạn đã truy cập &lt;strong&gt;<ph name="DOMAIN2"/>&lt;/strong&gt;, nhưng không thể xác minh đó là trang web tương tự như &lt;strong&gt;<ph name="DOMAIN"/>&lt;/strong&gt; mà bạn dự định truy cập. Nếu bạn tiếp tục, Chrome sẽ không kiểm tra thêm bất kỳ sự không phù hợp về tên nào nữa. Nói chung, bạn không nên tiếp tục truy cập trang web.</translation>
 <translation id="2712549016134575851">Đã phát hiện thấy xung đột với một ứng dụng đã cài đặt khác.</translation>
@@ -93,7 +88,6 @@
 <translation id="3335672657969596251">Google Chrome không hỗ trợ <ph name="OS_NAME"/>.</translation>
 <translation id="473183893665420670">Khi bạn đặt lại các tuỳ chọn Google Chrome, tất cả các thay đổi mà bạn đã tạo sẽ được chuyển về cài đặt mặc định. Bạn có muốn đặt lại các tuỳ chọn của Chrome không?</translation>
 <translation id="3636771339108070045">Máy tính này đã cài phiên bản Google Chrome mới hơn. Nếu phần mềm không hoạt động, vui lòng gỡ cài đặt Google Chrome và tải xuống lại phần mềm.</translation>
-<translation id="4407807842708586359">Hệ điều hành Google Chrome</translation>
 <translation id="3360895254066713204">Trình trợ giúp của Chrome</translation>
 <translation id="1001534784610492198">Lưu trữ trình cài đặt bị lỗi hoặc không hợp lệ. Vui lòng tải xuống lại Google Chrome.</translation>
 <translation id="6626317981028933585">Thật đáng tiếc, cài đặt Mozilla Firefox của bạn không có sẵn khi trình duyệt đang chạy. Để nhập những cài đặt đó vào Google Chrome, hãy lưu công việc của bạn và đóng tất cả cửa sổ Firefox. Sau đó, nhấp Tiếp tục.</translation>

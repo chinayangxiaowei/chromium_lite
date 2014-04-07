@@ -10,12 +10,13 @@
 #include "base/command_line.h"
 #include "base/file_path.h"
 #include "base/file_util.h"
-#include "base/histogram.h"
+#include "base/metrics/histogram.h"
 #include "base/path_service.h"
 #include "base/process_util.h"
 #include "base/string_number_conversions.h"
 #include "base/string_util.h"
 #include "base/thread.h"
+#include "base/thread_restrictions.h"
 #include "base/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/about_flags.h"
@@ -108,6 +109,11 @@ void Shutdown() {
   chromeos::BootTimesLoader::Get()->AddLogoutTimeMarker(
       "BrowserShutdownStarted", false);
 #endif
+  // During shutdown we will end up some blocking operations.  But the
+  // work needs to get done and we're going to wait for them no matter
+  // what thread they're on, so don't worry about it slowing down
+  // shutdown.
+  base::ThreadRestrictions::SetIOAllowed(true);
 
   // Unload plugins. This needs to happen on the IO thread.
   BrowserThread::PostTask(

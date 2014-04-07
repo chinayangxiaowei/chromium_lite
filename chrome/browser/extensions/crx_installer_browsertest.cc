@@ -2,13 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/browser.h"
 #include "chrome/browser/extensions/crx_installer.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/extensions/extension_install_ui.h"
 #include "chrome/browser/extensions/extensions_service.h"
 #include "chrome/browser/profile.h"
+#include "chrome/browser/ui/browser.h"
 #include "chrome/test/ui_test_utils.h"
+
+class SkBitmap;
 
 namespace {
 
@@ -25,11 +27,11 @@ class MockInstallUI : public ExtensionInstallUI {
     confirmation_requested_ = true;
     delegate->InstallUIProceed();
   }
-  void OnInstallSuccess(const Extension* extension) {
+  void OnInstallSuccess(const Extension* extension, SkBitmap* icon) {
     MessageLoopForUI::current()->Quit();
   }
   void OnInstallFailure(const std::string& error) {
-    ADD_FAILURE() << "insall failed";
+    ADD_FAILURE() << "install failed";
     MessageLoopForUI::current()->Quit();
   }
 
@@ -50,9 +52,7 @@ class ExtensionCrxInstallerTest : public ExtensionBrowserTest {
     MockInstallUI* mock_install_ui = new MockInstallUI(browser()->profile());
 
     scoped_refptr<CrxInstaller> installer(
-        new CrxInstaller(service->install_directory(),
-                         service,
-                         mock_install_ui /* ownership transferred */));
+        new CrxInstaller(service, mock_install_ui /* ownership transferred */));
 
     installer->set_allow_silent_install(true);
     installer->set_is_gallery_install(true);
@@ -66,7 +66,7 @@ class ExtensionCrxInstallerTest : public ExtensionBrowserTest {
   }
 };
 
-IN_PROC_BROWSER_TEST_F(ExtensionCrxInstallerTest, DISABLED_Whitelisting) {
+IN_PROC_BROWSER_TEST_F(ExtensionCrxInstallerTest, Whitelisting) {
   // A regular extension should give no prompt.
   EXPECT_FALSE(DidWhitelistInstallPrompt("good.crx",
                                          "ldnnhddmnhbkjipkidpdiheffobcpfmf"));

@@ -6,13 +6,12 @@
 
 #include "app/l10n_util.h"
 #include "app/resource_bundle.h"
-#include "base/histogram.h"
 #include "base/i18n/rtl.h"
+#include "base/metrics/histogram.h"
 #include "base/string_piece.h"
 #include "base/stringprintf.h"
 #include "base/utf_string_conversions.h"
 #include "base/values.h"
-#include "chrome/browser/browser.h"
 #include "chrome/browser/browser_list.h"
 #include "chrome/browser/browser_thread.h"
 #include "chrome/browser/extensions/extensions_service.h"
@@ -21,6 +20,7 @@
 #include "chrome/browser/tab_contents/navigation_entry.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/tab_contents/tab_util.h"
+#include "chrome/browser/ui/browser.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/jstemplate_builder.h"
 #include "chrome/common/notification_type.h"
@@ -107,7 +107,7 @@ std::string OfflineLoadPage::GetHTMLContents() {
   // The offline page for app has icons and slightly different message.
   Profile* profile = tab()->profile();
   DCHECK(profile);
-  Extension* extension = NULL;
+  const Extension* extension = NULL;
   ExtensionsService* extensions_service = profile->GetExtensionsService();
   // Extension service does not exist in test.
   if (extensions_service)
@@ -125,7 +125,7 @@ std::string OfflineLoadPage::GetHTMLContents() {
 }
 
 void OfflineLoadPage::GetAppOfflineStrings(
-    Extension* app,
+    const Extension* app,
     const string16& failed_url,
     DictionaryValue* strings) const {
   strings->SetString("title", app->name());
@@ -213,8 +213,8 @@ void OfflineLoadPage::Observe(NotificationType type,
   if (type.value == NotificationType::NETWORK_STATE_CHANGED) {
     chromeos::NetworkStateDetails* state_details =
         Details<chromeos::NetworkStateDetails>(details).ptr();
-    DLOG(INFO) << "NetworkStateChanaged notification received: state="
-               << state_details->state();
+    DVLOG(1) << "NetworkStateChanaged notification received: state="
+             << state_details->state();
     if (state_details->state() ==
         chromeos::NetworkStateDetails::CONNECTED) {
       registrar_.Remove(this, NotificationType::NETWORK_STATE_CHANGED,

@@ -11,10 +11,10 @@
 #include "base/command_line.h"
 #include "base/stringprintf.h"
 #include "base/utf_string_conversions.h"
-#include "chrome/browser/browser.h"
-#include "chrome/browser/browser_list.h"
 #include "chrome/browser/chromeos/cros/cros_library.h"
 #include "chrome/browser/chromeos/dom_ui/network_menu_ui.h"
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_list.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/browser/views/window.h"
@@ -145,6 +145,7 @@ bool NetworkMenu::GetNetworkAt(int index, NetworkInfo* info) const {
       }
       info->ip_address = wifi->ip_address();
       info->remembered = wifi->favorite();
+      info->auto_connect = info->remembered ? wifi->auto_connect() : true;
     } else {
       res = false;  // Network not found, hide entry.
     }
@@ -200,7 +201,7 @@ bool NetworkMenu::GetNetworkAt(int index, NetworkInfo* info) const {
 bool NetworkMenu::ConnectToNetworkAt(int index,
                                      const std::string& passphrase,
                                      const std::string& ssid,
-                                     int remember) const {
+                                     int auto_connect) const {
   int flags = menu_items_[index].flags;
   NetworkLibrary* cros = CrosLibrary::Get()->GetNetworkLibrary();
   if (flags & FLAG_WIFI) {
@@ -208,8 +209,8 @@ bool NetworkMenu::ConnectToNetworkAt(int index,
         menu_items_[index].wireless_path);
     if (wifi) {
       // Connect or reconnect.
-      if (remember >= 0)
-        wifi->set_favorite(remember ? true : false);
+      if (auto_connect >= 0)
+        wifi->set_auto_connect(auto_connect ? true : false);
       if (wifi->connecting() || wifi->connected()) {
         // Show the config settings for the active network.
         ShowWifi(wifi, false);
@@ -278,10 +279,11 @@ bool NetworkMenu::ConnectToNetworkAt(int index,
   } else if (flags & FLAG_OTHER_NETWORK) {
     bool connected = false;
     if (MenuUI::IsEnabled()) {
-      bool favorite = remember == 0 ? false : true;  // default is true
+      // default is true
+      bool auto_connect_bool = auto_connect == 0 ? false : true;
       connected = cros->ConnectToWifiNetwork(
           passphrase.empty() ? SECURITY_NONE : SECURITY_UNKNOWN,
-          ssid, passphrase, std::string(), std::string(), favorite);
+          ssid, passphrase, std::string(), std::string(), auto_connect_bool);
     }
     if (!connected) {
       ShowOther();

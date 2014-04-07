@@ -81,8 +81,8 @@ class BrowserView : public ::BrowserView,
   }
 
  protected:
-  virtual void GetAccessibleToolbars(
-      std::vector<AccessibleToolbarView*>* toolbars);
+  virtual void GetAccessiblePanes(
+      std::vector<AccessiblePaneView*>* panes);
 
  private:
   void InitSystemMenu();

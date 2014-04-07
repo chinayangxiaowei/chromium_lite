@@ -43,6 +43,8 @@ URLRequestJobManager::URLRequestJobManager() : enable_file_access_(false) {
 #endif
 }
 
+URLRequestJobManager::~URLRequestJobManager() {}
+
 URLRequestJob* URLRequestJobManager::CreateJob(URLRequest* request) const {
 #ifndef NDEBUG
   DCHECK(IsAllowedThread());

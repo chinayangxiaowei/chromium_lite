@@ -6,7 +6,6 @@
 
 #include "base/logging.h"
 #include "base/message_loop.h"
-#include "base/task.h"
 #include "jingle/notifier/base/task_pump.h"
 #include "jingle/notifier/communicator/connection_options.h"
 #include "jingle/notifier/communicator/const_communicator.h"
@@ -17,9 +16,6 @@
 #include "net/base/host_port_pair.h"
 #include "net/base/host_resolver.h"
 #include "talk/xmpp/xmppclientsettings.h"
-
-// We manage the lifetime of notifier::MediatorThreadImpl ourselves.
-DISABLE_RUNNABLE_METHOD_REFCOUNT(notifier::MediatorThreadImpl);
 
 namespace notifier {
 
@@ -116,7 +112,7 @@ MessageLoop* MediatorThreadImpl::worker_message_loop() {
 void MediatorThreadImpl::DoLogin(
     const buzz::XmppClientSettings& settings) {
   DCHECK_EQ(MessageLoop::current(), worker_message_loop());
-  LOG(INFO) << "P2P: Thread logging into talk network.";
+  VLOG(1) << "P2P: Thread logging into talk network.";
 
   base_task_.reset();
 
@@ -124,7 +120,7 @@ void MediatorThreadImpl::DoLogin(
   // the IOThread one).
   host_resolver_.reset(
       net::CreateSystemHostResolver(net::HostResolver::kDefaultParallelism,
-                                    NULL));
+                                    NULL, NULL));
 
   notifier::ServerInformation server_list[2];
   int server_list_count = 0;
@@ -161,7 +157,7 @@ void MediatorThreadImpl::DoLogin(
 
 void MediatorThreadImpl::DoDisconnect() {
   DCHECK_EQ(MessageLoop::current(), worker_message_loop());
-  LOG(INFO) << "P2P: Thread logging out of talk network.";
+  VLOG(1) << "P2P: Thread logging out of talk network.";
   login_.reset();
   host_resolver_.reset();
   base_task_.reset();

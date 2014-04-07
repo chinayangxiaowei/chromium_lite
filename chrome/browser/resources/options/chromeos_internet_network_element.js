@@ -268,7 +268,7 @@ cr.define('options.internet', function() {
       this.appendChild(buttonsDiv);
     },
 
-    showPassword: function(password) {
+    showPassword: function() {
       if (this.connecting)
         return;
 

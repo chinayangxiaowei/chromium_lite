@@ -14,7 +14,7 @@
 #include "base/utf_string_conversions.h"
 #include "base/values.h"
 #include "base/version.h"
-#include "chrome/browser/chrome_thread.h"
+#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profile.h"
 #include "chrome/common/chrome_paths.h"
@@ -23,6 +23,10 @@
 #include "chrome/common/pepper_plugin_registry.h"
 #include "chrome/common/pref_names.h"
 #include "webkit/glue/plugins/webplugininfo.h"
+
+// How long to wait to save the plugin enabled information, which might need to
+// go to disk.
+#define kPluginUpdateDelayMs (60 * 1000)
 
 PluginUpdater::PluginUpdater()
     : enable_internal_pdf_(true),
@@ -220,16 +224,20 @@ void PluginUpdater::DisablePluginGroupsFromPrefs(Profile* profile) {
     // See http://crbug.com/50105 for background.
     EnablePluginGroup(false, ASCIIToUTF16(PluginGroup::kAdobeReader8GroupName));
     EnablePluginGroup(false, ASCIIToUTF16(PluginGroup::kAdobeReader9GroupName));
-    UpdatePreferences(profile);
+
+    // We want to save this, but doing so requires loading the list of plugins,
+    // so do it after a minute as to not impact startup performance.  Note that
+    // plugins are loaded after 30s by the metrics service.
+    UpdatePreferences(profile, kPluginUpdateDelayMs);
   }
 }
 
-void PluginUpdater::UpdatePreferences(Profile* profile) {
-  ChromeThread::PostTask(
-    ChromeThread::FILE,
+void PluginUpdater::UpdatePreferences(Profile* profile, int delay_ms) {
+  BrowserThread::PostDelayedTask(
+    BrowserThread::FILE,
     FROM_HERE,
     NewRunnableFunction(
-        &PluginUpdater::GetPreferencesDataOnFileThread, profile));
+        &PluginUpdater::GetPreferencesDataOnFileThread, profile), delay_ms);
 }
 
 void PluginUpdater::GetPreferencesDataOnFileThread(void* profile) {
@@ -239,8 +247,8 @@ void PluginUpdater::GetPreferencesDataOnFileThread(void* profile) {
   NPAPI::PluginList::PluginMap groups;
   NPAPI::PluginList::Singleton()->GetPluginGroups(false, &groups);
 
-  ChromeThread::PostTask(
-    ChromeThread::UI,
+  BrowserThread::PostTask(
+    BrowserThread::UI,
     FROM_HERE,
     NewRunnableFunction(
         &PluginUpdater::OnUpdatePreferences,

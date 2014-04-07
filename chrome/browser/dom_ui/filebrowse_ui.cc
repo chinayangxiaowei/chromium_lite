@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,10 +21,7 @@
 #include "base/values.h"
 #include "base/weak_ptr.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
-#include "chrome/browser/browser.h"
-#include "chrome/browser/browser_list.h"
 #include "chrome/browser/browser_thread.h"
-#include "chrome/browser/browser_window.h"
 #include "chrome/browser/dom_ui/dom_ui_favicon_source.h"
 #include "chrome/browser/dom_ui/mediaplayer_ui.h"
 #include "chrome/browser/download/download_item.h"
@@ -35,6 +32,10 @@
 #include "chrome/browser/profile.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_navigator.h"
+#include "chrome/browser/ui/browser_window.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/jstemplate_builder.h"
@@ -546,8 +547,8 @@ void FilebrowseHandler::OnURLFetchComplete(const URLFetcher* source,
                                            const ResponseCookies& cookies,
                                            const std::string& data) {
   upload_response_code_ = response_code;
-  LOG(INFO) << "Response code:" << response_code;
-  LOG(INFO) << "request url" << url;
+  VLOG(1) << "Response code: " << response_code;
+  VLOG(1) << "Request url: " << url;
   if (StartsWithASCII(url.spec(), kPicasawebUserPrefix, true)) {
     BrowserThread::PostTask(
         BrowserThread::UI, FROM_HERE,
@@ -715,14 +716,16 @@ void FilebrowseHandler::OpenNewWindow(const ListValue* args, bool popup) {
   Browser* browser = popup ?
       Browser::CreateForType(Browser::TYPE_APP_PANEL, profile_) :
       BrowserList::GetLastActive();
-  Browser::AddTabWithURLParams params(GURL(url), PageTransition::LINK);
-  browser->AddTabWithURL(&params);
+  browser::NavigateParams params(browser, GURL(url), PageTransition::LINK);
+  params.disposition = NEW_FOREGROUND_TAB;
+  browser::Navigate(&params);
+  // TODO(beng): The following two calls should be automatic by Navigate().
   if (popup) {
     // TODO(dhg): Remove these from being hardcoded. Allow javascript
     // to specify.
-    params.target->window()->SetBounds(gfx::Rect(0, 0, 400, 300));
+    params.browser->window()->SetBounds(gfx::Rect(0, 0, 400, 300));
   }
-  params.target->window()->Show();
+  params.browser->window()->Show();
 }
 
 void FilebrowseHandler::SendPicasawebRequest() {
@@ -1150,14 +1153,16 @@ Browser* FileBrowseUI::OpenPopup(Profile* profile,
       url.append(hashArgument);
     }
 
-    Browser::AddTabWithURLParams params(GURL(url), PageTransition::LINK);
-    browser->AddTabWithURL(&params);
-    params.target->window()->SetBounds(gfx::Rect(kPopupLeft,
-                                                 kPopupTop,
-                                                 width,
-                                                 height));
+    browser::NavigateParams params(browser, GURL(url), PageTransition::LINK);
+    params.disposition = NEW_FOREGROUND_TAB;
+    browser::Navigate(&params);
+    // TODO(beng): The following two calls should be automatic by Navigate().
+    params.browser->window()->SetBounds(gfx::Rect(kPopupLeft,
+                                                  kPopupTop,
+                                                  width,
+                                                  height));
 
-    params.target->window()->Show();
+    params.browser->window()->Show();
   } else {
     browser->window()->Show();
   }

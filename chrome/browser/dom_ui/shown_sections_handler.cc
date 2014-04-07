@@ -47,6 +47,15 @@ int ShownSectionsHandler::GetShownSections(PrefService* prefs) {
   return prefs->GetInteger(prefs::kNTPShownSections);
 }
 
+// static
+void ShownSectionsHandler::SetShownSection(PrefService* prefs,
+                                           Section section) {
+  int shown_sections = GetShownSections(prefs);
+  shown_sections &= ~ALL_SECTIONS_MASK;
+  shown_sections |= section;
+  prefs->SetInteger(prefs::kNTPShownSections, shown_sections);
+}
+
 ShownSectionsHandler::ShownSectionsHandler(PrefService* pref_service)
     : pref_service_(pref_service) {
   pref_registrar_.Init(pref_service);
@@ -106,12 +115,6 @@ void ShownSectionsHandler::RegisterUserPrefs(PrefService* pref_service) {
 void ShownSectionsHandler::MigrateUserPrefs(PrefService* pref_service,
                                             int old_pref_version,
                                             int new_pref_version) {
-  // Nothing to migrate for default kNTPShownSections value.
-  const PrefService::Preference* shown_sections_pref =
-      pref_service->FindPreference(prefs::kNTPShownSections);
-  if (shown_sections_pref->IsDefaultValue())
-    return;
-
   bool changed = false;
   int shown_sections = pref_service->GetInteger(prefs::kNTPShownSections);
 

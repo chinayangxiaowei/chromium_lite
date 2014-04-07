@@ -3,7 +3,6 @@
 <translationbundle lang="pt-PT">
 <translation id="8000275528373650868">O Google Chrome requer o Windows Vista ou o Windows XP com SP2 ou superior.</translation>
 <translation id="6676384891291319759">Aceder à Internet</translation>
-<translation id="8582091809492103607">Abrir o Google Chrome no início de sessão e iniciar aplicações Web em segundo plano</translation>
 <translation id="2383457833405848421">Acerca do Chrome Frame...</translation>
 <translation id="386202838227397562">Feche todas as janelas do Google Chrome e tente novamente.</translation>
 <translation id="2770231113462710648">Alterar o browser predefinido para:</translation>
@@ -40,7 +39,6 @@
 <translation id="8810218179782551669">Idioma do Google Chrome:</translation>
 <translation id="7001386529596391893">Criar atalhos do Google Chrome nestes locais:</translation>
 <translation id="7461436095086637522">Importador de perfis do Chrome</translation>
-<translation id="655722166118366450">Pretende definir <ph name="HOST"/> como motor de pesquisa no Google Chrome?</translation>
 <translation id="4357846314885556934">O Google Chrome está a portar-se mal</translation>
 <translation id="4561681684759837226"><ph name="PAGE_TITLE"/></translation>
 <translation id="1195935957447623558">O Google Chrome não foi correctamente encerrado. Para abrir novamente as páginas que estavam abertas, clique em Restaurar.</translation>
@@ -55,9 +53,7 @@
 <translation id="3324235665723428530">O seu perfil não pode ser utilizado pois pertence a uma versão mais recente do Google Chrome.\n\n Alguns recursos podem não estar disponíveis. Especifique um directório de perfil diferente ou utilize uma versão mais recente do Google Chrome.</translation>
 <translation id="7214670531148488183">O Google Chrome pode utilizar serviços da Web para optimizar a sua experiência de navegação. Se pretender, pode desactivar estes serviços.</translation>
 <translation id="1759842336958782510">Chrome</translation>
-<translation id="5840402478666768335">Opcional: ajude a melhorar o Google Chrome enviando automaticamente estatísticas de utilização e relatórios\nde falhas para a Google</translation>
 <translation id="5008136264574452501">Compilação Google Chrome Canary</translation>
-<translation id="2240501189676193549">As aplicações Web só estão activas enquanto o Google Chrome estiver a funcionar.</translation>
 <translation id="911206726377975832">Eliminar também os seus dados de navegação?</translation>
 <translation id="2044287590254833138">Barra de ferramentas do Google Chrome</translation>
 <translation id="5074344184765391290">Anfitrião do plug-in do Chrome</translation>
@@ -73,7 +69,6 @@
 <translation id="6087062680442281307">O Google Chrome é um navegador de internet que executa aplicações e páginas Web de forma extremamente rápida. É rápido, estável e fácil de utilizar. Navegue na Web com mais segurança com protecção contra phishing e software malicioso incorporada no Google Chrome.</translation>
 <translation id="2115751172320447278">Copyright © 2006-2010 Google Inc. Todos os direitos reservados.</translation>
 <translation id="5941830788786076944">Tornar o Google Chrome no browser padrão.</translation>
-<translation id="7892675281311705134">Aplicações Web do Google Chrome</translation>
 <translation id="5947389362804196214">Não é possível ler as suas preferências.\n\nAlgumas funcionalidades poderão estar indisponíveis e as alterações efectuadas às preferências não serão guardadas.</translation>
 <translation id="4127951844153999091">Neste caso, o endereço listado no certificado não corresponde ao endereço do Web site a que o browser tentou aceder. Uma explicação possível reside no facto de as suas comunicações estarem a ser interceptadas por um utilizador mal intencionado que está a apresentar um certificado para um Web site diferente, o que causaria uma incompatibilidade. Outra explicação plausível consiste na possibilidade de o servidor estar configurado para devolver o mesmo certificado para vários Web sites, incluindo aquele que está a tentar visitar, apesar de esse certificado não ser válido para todos esses Web sites. O Google Chrome pode afirmar com certeza que acedeu a &lt;strong&gt;<ph name="DOMAIN2"/>&lt;/strong&gt;, mas não consegue verificar que se trata do mesmo site que  &lt;strong&gt;<ph name="DOMAIN"/>&lt;/strong&gt;, ao qual tentou aceder. Se prosseguir, o Chrome deixará de verificar correspondências de nomes. Em geral, o melhor é não prosseguir para além deste ponto.</translation>
 <translation id="2712549016134575851">Foi detectado um conflito com outra aplicação instalada.</translation>
@@ -93,7 +88,6 @@
 <translation id="3335672657969596251">O Google Chrome não suporta o <ph name="OS_NAME"/>.</translation>
 <translation id="473183893665420670">Ao repor as opções do Google Chrome, perderá·todas·as·alterações·que·tenha·efectuado·e·serão·repostos·os·valores·predefinidos. Deseja repor as opções do Chrome?</translation>
 <translation id="3636771339108070045">Este computador já tem uma versão mais recente do Google Chrome. Se o software não estiver a funcionar, desinstale o Google Chrome e transfira-o de novo.</translation>
-<translation id="4407807842708586359">SO do Google Chrome</translation>
 <translation id="3360895254066713204">Ajudante do Chrome</translation>
 <translation id="1001534784610492198">O arquivo do programa de instalação está corrompido ou é inválido. Transfira de novo o Google Chrome.</translation>
 <translation id="6626317981028933585">Infelizmente, as suas definições do Mozilla Firefox não estão disponíveis enquanto esse browser estiver aberto. Para importar essas definições para o Google Chrome, guarde o seu trabalho e feche todas as janelas do Firefox. De seguida clique em Continuar.</translation>

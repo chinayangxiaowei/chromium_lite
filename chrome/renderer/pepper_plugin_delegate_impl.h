@@ -11,8 +11,9 @@
 
 #include "base/basictypes.h"
 #include "base/id_map.h"
+#include "base/ref_counted.h"
 #include "base/weak_ptr.h"
-#include "third_party/ppapi/c/pp_errors.h"
+#include "ppapi/c/pp_errors.h"
 #include "webkit/glue/plugins/pepper_plugin_delegate.h"
 #include "webkit/glue/plugins/pepper_plugin_instance.h"
 
@@ -26,6 +27,7 @@ class Rect;
 namespace pepper {
 class FileIO;
 class PluginInstance;
+class PluginModule;
 }
 
 namespace WebKit {
@@ -40,7 +42,10 @@ class PepperPluginDelegateImpl
       public base::SupportsWeakPtr<PepperPluginDelegateImpl> {
  public:
   explicit PepperPluginDelegateImpl(RenderView* render_view);
-  virtual ~PepperPluginDelegateImpl() {}
+  virtual ~PepperPluginDelegateImpl();
+
+  scoped_refptr<pepper::PluginModule> CreateOutOfProcessPepperPlugin(
+      const FilePath& path);
 
   // Called by RenderView to tell us about painting events, these two functions
   // just correspond to the DidInitiatePaint and DidFlushPaint in R.V..
@@ -85,6 +90,11 @@ class PepperPluginDelegateImpl
   virtual bool AsyncOpenFile(const FilePath& path,
                              int flags,
                              AsyncOpenFileCallback* callback);
+  virtual bool OpenFileSystem(
+      const GURL& url,
+      fileapi::FileSystemType type,
+      long long size,
+      fileapi::FileSystemCallbackDispatcher* dispatcher);
   virtual bool MakeDirectory(const FilePath& path,
                              bool recursive,
                              fileapi::FileSystemCallbackDispatcher* dispatcher);
@@ -99,6 +109,8 @@ class PepperPluginDelegateImpl
   virtual bool Rename(const FilePath& file_path,
                       const FilePath& new_file_path,
                       fileapi::FileSystemCallbackDispatcher* dispatcher);
+  virtual bool ReadDirectory(const FilePath& directory_path,
+                             fileapi::FileSystemCallbackDispatcher* dispatcher);
   virtual base::PlatformFileError OpenModuleLocalFile(
       const std::string& module_name,
       const FilePath& path,

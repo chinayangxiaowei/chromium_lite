@@ -14,6 +14,7 @@
 #include "chrome/browser/browser_thread.h"
 #include "chrome/browser/renderer_host/render_process_host.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
+#include "chrome/browser/tab_contents_wrapper.h"
 #include "chrome/browser/tabs/tab_strip_model.h"
 #include "chrome/browser/zygote_host_linux.h"
 
@@ -103,7 +104,7 @@ void OomPriorityManager::AdjustOomPriorities() {
     Browser* browser = *browser_iterator;
     const TabStripModel* model = browser->tabstrip_model();
     for (int i = 0; i < model->count(); i++) {
-      TabContents* contents = model->GetTabContentsAt(i);
+      TabContents* contents = model->GetTabContentsAt(i)->tab_contents();
       RendererStats stats;
       stats.last_selected = contents->last_selected_time();
       stats.renderer_handle = contents->GetRenderProcessHost()->GetHandle();

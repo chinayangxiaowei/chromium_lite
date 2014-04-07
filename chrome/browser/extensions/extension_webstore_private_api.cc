@@ -30,8 +30,6 @@
 
 namespace {
 
-const char* install_base_url = extension_urls::kGalleryUpdateHttpsUrl;
-const char kAlreadyLoggedInError[] = "User already logged in";
 const char kLoginKey[] = "login";
 const char kTokenKey[] = "token";
 const char kInvalidIdError[] = "Invalid id";
@@ -61,7 +59,7 @@ BrowserSignin* GetBrowserSignin(Profile* profile) {
 
 bool IsWebStoreURL(Profile* profile, const GURL& url) {
   ExtensionsService* service = profile->GetExtensionsService();
-  Extension* store = service->GetWebStoreApp();
+  const Extension* store = service->GetWebStoreApp();
   if (!store) {
     NOTREACHED();
     return false;
@@ -138,12 +136,6 @@ bool BeginInstallFunction::RunImpl() {
   return true;
 }
 
-// static
-void CompleteInstallFunction::SetTestingInstallBaseUrl(
-    const char* testing_install_base_url) {
-  install_base_url = testing_install_base_url;
-}
-
 bool CompleteInstallFunction::RunImpl() {
   if (!IsWebStoreURL(profile_, source_url()))
     return false;
@@ -165,7 +157,7 @@ bool CompleteInstallFunction::RunImpl() {
   params.push_back("id=" + id);
   params.push_back("lang=" + g_browser_process->GetApplicationLocale());
   params.push_back("uc");
-  std::string url_string = install_base_url;
+  std::string url_string = Extension::GalleryUpdateUrl(true).spec();
 
   GURL url(url_string + "?response=redirect&x=" +
       EscapeQueryParamValue(JoinString(params, '&'), true));
@@ -231,13 +223,6 @@ bool PromptBrowserLoginFunction::RunImpl() {
   }
 
   Profile* profile = GetDefaultProfile(profile_);
-
-  // The user should not already be logged in.
-  std::string username = GetBrowserSignin(profile)->GetSignedInUsername();
-  if (!username.empty()) {
-    error_ = kAlreadyLoggedInError;
-    return false;
-  }
 
   // Login can currently only be invoked tab-modal.  Since this is
   // coming from the webstore, we should always have a tab, but check

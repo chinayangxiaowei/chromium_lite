@@ -17,37 +17,41 @@
 #include "base/stringprintf.h"
 #include "base/time.h"
 #include "base/utf_string_conversions.h"
-#include "chrome/browser/browser_init.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_thread.h"
 #include "chrome/browser/chromeos/boot_times_loader.h"
 #include "chrome/browser/chromeos/cros/login_library.h"
 #include "chrome/browser/chromeos/cros/network_library.h"
-#include "chrome/browser/chromeos/external_cookie_handler.h"
 #include "chrome/browser/chromeos/input_method/input_method_util.h"
 #include "chrome/browser/chromeos/login/cookie_fetcher.h"
 #include "chrome/browser/chromeos/login/google_authenticator.h"
+#include "chrome/browser/chromeos/login/language_switch_menu.h"
 #include "chrome/browser/chromeos/login/ownership_service.h"
 #include "chrome/browser/chromeos/login/parallel_authenticator.h"
 #include "chrome/browser/chromeos/login/user_image_downloader.h"
 #include "chrome/browser/chromeos/login/user_manager.h"
+#include "chrome/browser/chromeos/proxy_config_service.h"
 #include "chrome/browser/extensions/extensions_service.h"
+#include "chrome/browser/net/chrome_url_request_context.h"
 #include "chrome/browser/net/gaia/token_service.h"
 #include "chrome/browser/net/preconnect.h"
+#include "chrome/browser/net/pref_proxy_config_service.h"
 #include "chrome/browser/prefs/pref_member.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/profile_manager.h"
 #include "chrome/browser/sync/profile_sync_service.h"
+#include "chrome/browser/ui/browser_init.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/logging_chrome.h"
-#include "chrome/common/net/gaia/gaia_authenticator2.h"
+#include "chrome/common/net/gaia/gaia_auth_fetcher.h"
 #include "chrome/common/net/gaia/gaia_constants.h"
 #include "chrome/common/net/url_request_context_getter.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
 #include "googleurl/src/gurl.h"
 #include "net/base/cookie_store.h"
+#include "net/proxy/proxy_config_service.h"
 #include "net/url_request/url_request_context.h"
 #include "views/widget/widget_gtk.h"
 
@@ -55,9 +59,8 @@ namespace chromeos {
 
 namespace {
 
-// Prefix for Auth token received from ClientLogin request.
+// Affixes for Auth token received from ClientLogin request.
 const char kAuthPrefix[] = "Auth=";
-// Suffix for Auth token received from ClientLogin request.
 const char kAuthSuffix[] = "\n";
 
 // Increase logging level for Guest mode to avoid LOG(INFO) messages in logs.
@@ -65,6 +68,31 @@ const char kGuestModeLoggingLevel[] = "1";
 
 // Format of command line switch.
 const char kSwitchFormatString[] = " --%s=\"%s\"";
+
+// Resets the proxy configuration service for the default request context.
+class ResetDefaultProxyConfigServiceTask : public Task {
+ public:
+  ResetDefaultProxyConfigServiceTask(
+      net::ProxyConfigService* proxy_config_service)
+      : proxy_config_service_(proxy_config_service) {}
+  virtual ~ResetDefaultProxyConfigServiceTask() {}
+
+  // Task override.
+  virtual void Run() {
+    DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
+    URLRequestContextGetter* getter = Profile::GetDefaultRequestContext();
+    DCHECK(getter);
+    if (getter) {
+      getter->GetURLRequestContext()->proxy_service()->ResetConfigService(
+          proxy_config_service_.release());
+    }
+  }
+
+ private:
+  scoped_ptr<net::ProxyConfigService> proxy_config_service_;
+
+  DISALLOW_COPY_AND_ASSIGN(ResetDefaultProxyConfigServiceTask);
+};
 
 }  // namespace
 
@@ -100,6 +128,9 @@ class LoginUtilsImpl : public LoginUtils {
   virtual void PrewarmAuthentication();
 
  private:
+  // Check user's profile for kApplicationLocale setting.
+  void RespectLocalePreference(PrefService* pref);
+
   // Indicates if DoBrowserLaunch will actually launch the browser or not.
   bool browser_launch_enabled_;
 
@@ -134,7 +165,7 @@ void LoginUtilsImpl::CompleteLogin(
     const GaiaAuthConsumer::ClientLoginResult& credentials) {
   BootTimesLoader* btl = BootTimesLoader::Get();
 
-  LOG(INFO) << "Completing login for " << username;
+  VLOG(1) << "Completing login for " << username;
   btl->AddLoginTimeMarker("CompletingLogin", false);
 
   if (CrosLibrary::Get()->EnsureLoaded()) {
@@ -150,16 +181,37 @@ void LoginUtilsImpl::CompleteLogin(
   FilePath user_data_dir;
   PathService::Get(chrome::DIR_USER_DATA, &user_data_dir);
   ProfileManager* profile_manager = g_browser_process->profile_manager();
+
+  // Switch log file as soon as possible.
+  logging::RedirectChromeLogging(*(CommandLine::ForCurrentProcess()));
+  btl->AddLoginTimeMarker("LoggingRedirected", false);
+
   // The default profile will have been changed because the ProfileManager
   // will process the notification that the UserManager sends out.
   Profile* profile = profile_manager->GetDefaultProfile(user_data_dir);
   btl->AddLoginTimeMarker("UserProfileGotten", false);
 
-  logging::RedirectChromeLogging(
-      user_data_dir.Append(profile_manager->GetCurrentProfileDir()),
-      *(CommandLine::ForCurrentProcess()),
-      logging::DELETE_OLD_LOG_FILE);
-  btl->AddLoginTimeMarker("LoggingRedirected", false);
+  // Change the proxy configuration service of the default request context to
+  // use the preference configuration from the logged-in profile. This ensures
+  // that requests done through the default context use the proxy configuration
+  // provided by configuration policy.
+  //
+  // Note: Many of the clients of the default request context should probably be
+  // fixed to use the request context of the profile they are associated with.
+  // This includes preconnect, autofill, metrics service to only name a few;
+  // see http://code.google.com/p/chromium/issues/detail?id=64339 for details.
+  //
+  // TODO(mnissler) Revisit when support for device-specific policy arrives, at
+  // which point the default request context can directly be managed through
+  // device policy.
+  net::ProxyConfigService* proxy_config_service =
+      new PrefProxyConfigService(
+          profile->GetProxyConfigTracker(),
+          new chromeos::ProxyConfigService(
+              profile->GetChromeOSProxyConfigServiceImpl()));
+  BrowserThread::PostTask(BrowserThread::IO, FROM_HERE,
+                          new ResetDefaultProxyConfigServiceTask(
+                              proxy_config_service));
 
   // Take the credentials passed in and try to exchange them for
   // full-fledged Google authentication cookies.  This is
@@ -193,7 +245,7 @@ void LoginUtilsImpl::CompleteLogin(
 
   // Set the CrOS user by getting this constructor run with the
   // user's email on first retrieval.
-  profile->GetProfileSyncService(username)->SetPassphrase(password);
+  profile->GetProfileSyncService(username)->SetPassphrase(password, false);
   btl->AddLoginTimeMarker("SyncStarted", false);
 
   // Attempt to take ownership; this will fail if device is already owned.
@@ -212,6 +264,8 @@ void LoginUtilsImpl::CompleteLogin(
     }
   }
   btl->AddLoginTimeMarker("TPMOwned", false);
+
+  RespectLocalePreference(profile->GetPrefs());
 
   static const char kFallbackInputMethodLocale[] = "en-US";
   if (first_login) {
@@ -260,8 +314,21 @@ void LoginUtilsImpl::CompleteLogin(
   DoBrowserLaunch(profile);
 }
 
+void LoginUtilsImpl::RespectLocalePreference(PrefService* pref) {
+  std::string pref_locale = pref->GetString(prefs::kApplicationLocale);
+  if (pref_locale.empty()) {
+    // TODO(dilmah): current code will clobber existing setting in case
+    // language preference was set via another device
+    // but still not synced yet.  Profile is not synced at this point yet.
+    pref->SetString(prefs::kApplicationLocale,
+                    g_browser_process->GetApplicationLocale());
+  } else {
+    LanguageSwitchMenu::SwitchLanguage(pref_locale);
+  }
+}
+
 void LoginUtilsImpl::CompleteOffTheRecordLogin(const GURL& start_url) {
-  LOG(INFO) << "Completing off the record login";
+  VLOG(1) << "Completing off the record login";
 
   UserManager::Get()->OffTheRecordUserLoggedIn();
 
@@ -349,9 +416,11 @@ class WarmingObserver : public NetworkLibrary::NetworkManagerObserver {
   // If we're now connected, prewarm the auth url.
   void OnNetworkManagerChanged(NetworkLibrary* netlib) {
     if (netlib->Connected()) {
+      const int kConnectionsNeeded = 1;
       chrome_browser_net::Preconnect::PreconnectOnUIThread(
-          GURL(GaiaAuthenticator2::kClientLoginUrl),
-          chrome_browser_net::UrlInfo::EARLY_LOAD_MOTIVATED);
+          GURL(GaiaAuthFetcher::kClientLoginUrl),
+          chrome_browser_net::UrlInfo::EARLY_LOAD_MOTIVATED,
+          kConnectionsNeeded);
       netlib->RemoveNetworkManagerObserver(this);
       delete this;
     }
@@ -362,9 +431,11 @@ void LoginUtilsImpl::PrewarmAuthentication() {
   if (CrosLibrary::Get()->EnsureLoaded()) {
     NetworkLibrary *network = CrosLibrary::Get()->GetNetworkLibrary();
     if (network->Connected()) {
+      const int kConnectionsNeeded = 1;
       chrome_browser_net::Preconnect::PreconnectOnUIThread(
-          GURL(GaiaAuthenticator2::kClientLoginUrl),
-          chrome_browser_net::UrlInfo::EARLY_LOAD_MOTIVATED);
+          GURL(GaiaAuthFetcher::kClientLoginUrl),
+          chrome_browser_net::UrlInfo::EARLY_LOAD_MOTIVATED,
+          kConnectionsNeeded);
     } else {
       new WarmingObserver();
     }
@@ -389,7 +460,7 @@ void LoginUtils::DoBrowserLaunch(Profile* profile) {
   CommandLine::ForCurrentProcess()->InitFromArgv(
       CommandLine::ForCurrentProcess()->argv());
 
-  LOG(INFO) << "Launching browser...";
+  VLOG(1) << "Launching browser...";
   BrowserInit browser_init;
   int return_code;
   browser_init.LaunchBrowser(*CommandLine::ForCurrentProcess(),

@@ -48,11 +48,6 @@ form {
   margin: 10px 15px;
 }
 .sync-config-tabstrip {
-  border-bottom: 1px solid gray;
-  height: 25px;
-  margin-bottom: 10px;
-  padding-top: 10px;
-  background-color: #DDD;
   display: none;
 }
 .sync-config-tab-active {
@@ -193,7 +188,11 @@ html[os='mac'] input[type='submit'] {
   function checkAllDataTypeCheckboxes() {
     var checkboxes = document.getElementsByName("dataTypeCheckbox");
     for (var i = 0; i < checkboxes.length; i++) {
-      checkboxes[i].checked = true;
+      // Only check the visible ones (since there's no way to uncheck
+      // the invisible ones).
+      if (checkboxes[i].parentElement.className == "sync-item-show") {
+        checkboxes[i].checked = true;
+      }
     }
   }
 
@@ -255,6 +254,12 @@ html[os='mac'] input[type='submit'] {
     }
 
     setCheckboxesToKeepEverythingSynced(args.keepEverythingSynced);
+    if (args.sessionsRegistered) {
+      document.getElementById("sessionsCheckbox").checked = args.syncSessions;
+      document.getElementById("sessionsItem").className = "sync-item-show";
+    } else {
+      document.getElementById("sessionsItem").className = "sync-item-hide";
+    }
   }
 
   function setEncryptionCheckboxes(args) {
@@ -297,7 +302,8 @@ html[os='mac'] input[type='submit'] {
     var atLeastOneChecked = false;
     var atLeastOneEnabled = false;
     for (var i = 0; i < checkboxes.length; i++) {
-      if (!checkboxes[i].disabled && checkboxes[i].style.display != 'none') {
+      if (!checkboxes[i].disabled &&
+          checkboxes[i].parentElement.className == "sync-item-show") {
         atLeastOneEnabled = true;
         if (checkboxes[i].checked) {
           atLeastOneChecked = true;
@@ -331,6 +337,7 @@ html[os='mac'] input[type='submit'] {
         "syncExtensions": syncAll || f.extensionsCheckbox.checked,
         "syncTypedUrls": syncAll || f.typedUrlsCheckbox.checked,
         "syncApps": syncAll || f.appsCheckbox.checked,
+        "syncSessions": syncAll || f.sessionsCheckbox.checked,
         "usePassphrase": document.getElementById("usePassphraseCheckbox").checked
     });
     chrome.send("Configure", [result]);
@@ -443,6 +450,13 @@ html[os='mac'] input[type='submit'] {
               <input id="themesCheckbox" name="dataTypeCheckbox" type="checkbox">
               <label id="themesCheckboxLabel" name="dataTypeLabel" for="themesCheckbox"
                      i18n-content="themes" i18n-values="title:themes"></label>
+            </div>
+            <!-- Sessions -->
+            <div class="sync-item-show" id="sessionsItem">
+              <input id="sessionsCheckbox" name="dataTypeCheckbox" type="checkbox">
+              <label id="sessionsCheckboxLabel" name="dataTypeLabel" 
+                     for="sessionsCheckbox" i18n-content="foreignsessions"
+                     il8n-values="title:sessions"></label>
             </div>
           </div>
         </div>

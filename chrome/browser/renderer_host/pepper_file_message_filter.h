@@ -37,13 +37,13 @@ class PepperFileMessageFilter : public IPC::ChannelProxy::MessageFilter {
   virtual void OnChannelError();
   virtual void OnChannelClosing();
   virtual bool OnMessageReceived(const IPC::Message& message);
-  virtual void OnDestruct();
+  virtual void OnDestruct() const;
 
   // Called from the FILE thread.
   void Send(IPC::Message* message);
 
  private:
-  friend class ChromeThread;
+  friend class BrowserThread;
   friend class DeleteTask<PepperFileMessageFilter>;
   virtual ~PepperFileMessageFilter();
   void OnMessageReceivedFileThread(const IPC::Message& message);

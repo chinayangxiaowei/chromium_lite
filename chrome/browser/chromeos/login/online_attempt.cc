@@ -14,7 +14,8 @@
 #include "chrome/browser/chromeos/login/auth_attempt_state_resolver.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/profile_manager.h"
-#include "chrome/common/net/gaia/gaia_authenticator2.h"
+#include "chrome/common/net/gaia/gaia_auth_consumer.h"
+#include "chrome/common/net/gaia/gaia_auth_fetcher.h"
 #include "chrome/common/net/gaia/gaia_constants.h"
 #include "net/base/load_flags.h"
 #include "net/base/net_errors.h"
@@ -44,22 +45,22 @@ OnlineAttempt::~OnlineAttempt() {
 void OnlineAttempt::Initiate(Profile* profile) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
   gaia_authenticator_.reset(
-      new GaiaAuthenticator2(this,
-                             GaiaConstants::kChromeOSSource,
-                             profile->GetRequestContext()));
+      new GaiaAuthFetcher(this,
+                          GaiaConstants::kChromeOSSource,
+                          profile->GetRequestContext()));
   TryClientLogin();
 }
 
 void OnlineAttempt::OnClientLoginSuccess(
     const GaiaAuthConsumer::ClientLoginResult& credentials) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
-  LOG(INFO) << "Online login successful!";
+  VLOG(1) << "Online login successful!";
   if (fetch_canceler_) {
     fetch_canceler_->Cancel();
     fetch_canceler_ = NULL;
   }
 
-  if (attempt_->hosted_policy() == GaiaAuthenticator2::HostedAccountsAllowed &&
+  if (attempt_->hosted_policy() == GaiaAuthFetcher::HostedAccountsAllowed &&
       attempt_->is_first_time_user()) {
     // First time user, and we don't know if the account is HOSTED or not.
     // Since we don't allow HOSTED accounts to log in, we need to try
@@ -95,7 +96,7 @@ void OnlineAttempt::OnClientLoginFailure(
 
   if (error.state() == GoogleServiceAuthError::INVALID_GAIA_CREDENTIALS &&
       attempt_->is_first_time_user() &&
-      attempt_->hosted_policy() != GaiaAuthenticator2::HostedAccountsAllowed) {
+      attempt_->hosted_policy() != GaiaAuthFetcher::HostedAccountsAllowed) {
     // This was a first-time login, we already tried allowing HOSTED accounts
     // and succeeded.  That we've failed with INVALID_GAIA_CREDENTIALS now
     // indicates that the account is HOSTED.

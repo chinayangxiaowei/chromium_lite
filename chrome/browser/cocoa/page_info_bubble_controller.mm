@@ -6,7 +6,9 @@
 
 #include "app/l10n_util.h"
 #include "app/l10n_util_mac.h"
+#include "base/message_loop.h"
 #include "base/sys_string_conversions.h"
+#include "base/task.h"
 #include "chrome/browser/browser_list.h"
 #include "chrome/browser/cert_store.h"
 #include "chrome/browser/certificate_viewer.h"
@@ -15,7 +17,9 @@
 #import "chrome/browser/cocoa/info_bubble_view.h"
 #import "chrome/browser/cocoa/info_bubble_window.h"
 #import "chrome/browser/cocoa/location_bar/location_bar_view_mac.h"
+#include "chrome/browser/google/google_util.h"
 #include "chrome/browser/profile.h"
+#include "chrome/common/url_constants.h"
 #include "grit/generated_resources.h"
 #include "grit/locale_settings.h"
 #include "net/base/cert_status_flags.h"
@@ -68,7 +72,7 @@ const NSInteger kWindowWidth = 380;
 const NSInteger kVerticalSpacing = 10;
 
 // Padding along on the X-axis between the window frame and content.
-const NSInteger kFramePadding = 20;
+const NSInteger kFramePadding = 10;
 
 // Spacing between the optional headline and description text views.
 const NSInteger kHeadlineSpacing = 2;
@@ -88,20 +92,33 @@ const CGFloat kTextXPosition = kTextXPositionNoImage + kImageSize +
 const CGFloat kTextWidth = kWindowWidth - (kImageSize + kImageSpacing +
     kFramePadding * 2);
 
-
 // Bridge that listens for change notifications from the model.
 class PageInfoModelBubbleBridge : public PageInfoModel::PageInfoModelObserver {
  public:
-  PageInfoModelBubbleBridge() : controller_(nil) {}
+  PageInfoModelBubbleBridge()
+      : controller_(nil),
+        ALLOW_THIS_IN_INITIALIZER_LIST(task_factory_(this)) {
+  }
 
   // PageInfoModelObserver implementation.
   virtual void ModelChanged() {
+    // Check to see if a layout has already been scheduled.
+    if (!task_factory_.empty())
+      return;
+
     // Delay performing layout by a second so that all the animations from
     // InfoBubbleWindow and origin updates from BaseBubbleController finish, so
     // that we don't all race trying to change the frame's origin.
-    [controller_ performSelector:@selector(performLayout)
-                      withObject:nil
-                      afterDelay:1.0];
+    //
+    // Using ScopedRunnableMethodFactory is superior here to |-performSelector:|
+    // because it will not retain its target; if the child outlives its parent,
+    // zombies get left behind (http://crbug.com/59619). This will also cancel
+    // the scheduled Tasks if the controller (and thus this bridge) get
+    // destroyed before the message can be delivered.
+    MessageLoop::current()->PostDelayedTask(FROM_HERE,
+        task_factory_.NewRunnableMethod(
+            &PageInfoModelBubbleBridge::PerformLayout),
+        1000 /* milliseconds */);
   }
 
   // Sets the controller.
@@ -110,7 +127,14 @@ class PageInfoModelBubbleBridge : public PageInfoModel::PageInfoModelObserver {
   }
 
  private:
+  void PerformLayout() {
+    [controller_ performLayout];
+  }
+
   PageInfoBubbleController* controller_;  // weak
+
+  // Factory that vends RunnableMethod tasks for scheduling layout.
+  ScopedRunnableMethodFactory<PageInfoModelBubbleBridge> task_factory_;
 };
 
 }  // namespace
@@ -173,7 +197,8 @@ void ShowPageInfoBubble(gfx::NativeWindow parent,
 }
 
 - (IBAction)showHelpPage:(id)sender {
-  GURL url = GURL(l10n_util::GetStringUTF16(IDS_PAGE_INFO_HELP_CENTER));
+  GURL url = google_util::AppendGoogleLocaleParam(
+      GURL(chrome::kPageInfoHelpCenterURL));
   Browser* browser = BrowserList::GetLastActive();
   browser->OpenURL(url, GURL(), NEW_FOREGROUND_TAB, PageTransition::LINK);
 }
@@ -186,7 +211,7 @@ void ShowPageInfoBubble(gfx::NativeWindow parent,
 // not using HTTPS.
 - (void)performLayout {
   // |offset| is the Y position that should be drawn at next.
-  CGFloat offset = kFramePadding;
+  CGFloat offset = kFramePadding + info_bubble::kBubbleArrowHeight;
 
   // Keep the new subviews in an array that gets replaced at the end.
   NSMutableArray* subviews = [NSMutableArray array];
@@ -405,13 +430,15 @@ void ShowPageInfoBubble(gfx::NativeWindow parent,
 // next offset.
 - (CGFloat)addSeparatorToSubviews:(NSMutableArray*)subviews
                          atOffset:(CGFloat)offset {
-  scoped_nsobject<NSBox> spacer(
-      [[NSBox alloc] initWithFrame:NSMakeRect(0, offset, kWindowWidth, 1)]);
+  const CGFloat kSpacerHeight = 1.0;
+  NSRect frame = NSMakeRect(kFramePadding, offset,
+      kWindowWidth - 2 * kFramePadding, kSpacerHeight);
+  scoped_nsobject<NSBox> spacer([[NSBox alloc] initWithFrame:frame]);
   [spacer setBoxType:NSBoxSeparator];
   [spacer setBorderType:NSLineBorder];
   [spacer setAlphaValue:0.2];
   [subviews addObject:spacer.get()];
-  return kVerticalSpacing;
+  return kVerticalSpacing + kSpacerHeight;
 }
 
 // Takes in the bubble's height and the parent window, which should be a

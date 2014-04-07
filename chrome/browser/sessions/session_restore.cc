@@ -11,10 +11,7 @@
 #include "base/scoped_ptr.h"
 #include "base/stl_util-inl.h"
 #include "base/string_util.h"
-#include "chrome/browser/browser.h"
-#include "chrome/browser/browser_list.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_window.h"
 #include "chrome/browser/extensions/extensions_service.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/sessions/session_service.h"
@@ -23,6 +20,10 @@
 #include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/tab_contents/tab_contents_view.h"
 #include "chrome/browser/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_navigator.h"
+#include "chrome/browser/ui/browser_window.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/notification_registrar.h"
 #include "chrome/common/notification_service.h"
@@ -271,8 +272,7 @@ class SessionRestoreImpl : public NotificationObserver {
         synchronous_(synchronous),
         clobber_existing_window_(clobber_existing_window),
         always_create_tabbed_browser_(always_create_tabbed_browser),
-        urls_to_open_(urls_to_open),
-        waiting_for_extension_service_(false) {
+        urls_to_open_(urls_to_open) {
   }
 
   void Restore() {
@@ -321,8 +321,8 @@ class SessionRestoreImpl : public NotificationObserver {
       ShowBrowser(browser, initial_tab_count,
           (*i)->selected_tab_index);
       NotifySessionServiceOfRestoredTabs(browser, initial_tab_count);
-      FinishedTabCreation(true, has_tabbed_browser);
     }
+    FinishedTabCreation(true, has_tabbed_browser);
   }
 
   ~SessionRestoreImpl() {
@@ -337,19 +337,6 @@ class SessionRestoreImpl : public NotificationObserver {
       case NotificationType::BROWSER_CLOSED:
         delete this;
         return;
-
-      case NotificationType::EXTENSIONS_READY: {
-        if (!waiting_for_extension_service_)
-          return;
-
-        waiting_for_extension_service_ = false;
-        if (synchronous_) {
-          MessageLoop::current()->Quit();
-          return;
-        }
-        ProcessSessionWindows(&windows_);
-        return;
-      }
 
       default:
         NOTREACHED();
@@ -395,18 +382,6 @@ class SessionRestoreImpl : public NotificationObserver {
 
   void OnGotSession(SessionService::Handle handle,
                     std::vector<SessionWindow*>* windows) {
-    if (HasExtensionApps(*windows) && profile_->GetExtensionsService() &&
-        !profile_->GetExtensionsService()->is_ready()) {
-      // At least one tab is an app tab and the extension service hasn't
-      // finished loading. Wait to continue processing until the extensions
-      // service finishes loading.
-      registrar_.Add(this, NotificationType::EXTENSIONS_READY,
-                     Source<Profile>(profile_));
-      windows_.swap(*windows);
-      waiting_for_extension_service_ = true;
-      return;
-    }
-
     if (synchronous_) {
       // See comment above windows_ as to why we don't process immediately.
       windows_.swap(*windows);
@@ -415,28 +390,6 @@ class SessionRestoreImpl : public NotificationObserver {
     }
 
     ProcessSessionWindows(windows);
-  }
-
-  // Returns true if any tab in |windows| has an application extension id.
-  bool HasExtensionApps(const std::vector<SessionWindow*>& windows) {
-    for (std::vector<SessionWindow*>::const_iterator i = windows.begin();
-         i != windows.end(); ++i) {
-      if (HasExtensionApps((*i)->tabs))
-        return true;
-    }
-
-    return false;
-  }
-
-  // Returns true if any tab in |tabs| has an application extension id.
-  bool HasExtensionApps(const std::vector<SessionTab*>& tabs) {
-    for (std::vector<SessionTab*>::const_iterator i = tabs.begin();
-         i != tabs.end(); ++i) {
-      if (!(*i)->extension_app_id.empty())
-        return true;
-    }
-
-    return false;
   }
 
   void ProcessSessionWindows(std::vector<SessionWindow*>* windows) {
@@ -550,10 +503,12 @@ class SessionRestoreImpl : public NotificationObserver {
       if (i == 0)
         add_types |= TabStripModel::ADD_SELECTED;
       int index = browser->GetIndexForInsertionDuringRestore(i);
-      Browser::AddTabWithURLParams params(urls[i], PageTransition::START_PAGE);
-      params.index = index;
-      params.add_types = add_types;
-      browser->AddTabWithURL(&params);
+      browser::NavigateParams params(browser, urls[i],
+                                     PageTransition::START_PAGE);
+      params.disposition = i == 0 ? NEW_FOREGROUND_TAB : NEW_BACKGROUND_TAB;
+      params.tabstrip_index = index;
+      params.tabstrip_add_types = add_types;
+      browser::Navigate(&params);
     }
   }
 
@@ -597,10 +552,6 @@ class SessionRestoreImpl : public NotificationObserver {
   // loop take a while) we cache the SessionWindows here and create the actual
   // windows when the nested message loop exits.
   std::vector<SessionWindow*> windows_;
-
-  // If true, indicates at least one tab has an application extension id and
-  // we're waiting for the extension service to finish loading.
-  bool waiting_for_extension_service_;
 
   NotificationRegistrar registrar_;
 };

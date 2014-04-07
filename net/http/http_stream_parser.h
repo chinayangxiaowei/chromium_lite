@@ -20,6 +20,7 @@ class ClientSocketHandle;
 class DrainableIOBuffer;
 class GrowableIOBuffer;
 struct HttpRequestInfo;
+class HttpRequestHeaders;
 class HttpResponseInfo;
 class IOBuffer;
 class SSLCertRequestInfo;
@@ -40,7 +41,9 @@ class HttpStreamParser {
 
   // These functions implement the interface described in HttpStream with
   // some additional functionality
-  int SendRequest(const std::string& headers, UploadDataStream* request_body,
+  int SendRequest(const std::string& request_line,
+                  const HttpRequestHeaders& headers,
+                  UploadDataStream* request_body,
                   HttpResponseInfo* response, CompletionCallback* callback);
 
   int ReadResponseHeaders(CompletionCallback* callback);
@@ -111,14 +114,15 @@ class HttpStreamParser {
   int DoReadBody();
   int DoReadBodyComplete(int result);
 
-  // Examines |read_buf_| to find the start and end of the headers. Return
-  // the offset for the end of the headers, or -1 if the complete headers
-  // were not found. If they are are found, parse them with
-  // DoParseResponseHeaders().
+  // Examines |read_buf_| to find the start and end of the headers. If they are
+  // found, parse them with DoParseResponseHeaders().  Return the offset for
+  // the end of the headers, or -1 if the complete headers were not found, or
+  // with a net::Error if we encountered an error during parsing.
   int ParseResponseHeaders();
 
-  // Parse the headers into response_.
-  void DoParseResponseHeaders(int end_of_header_offset);
+  // Parse the headers into response_.  Returns OK on success or a net::Error on
+  // failure.
+  int DoParseResponseHeaders(int end_of_header_offset);
 
   // Examine the parsed headers to try to determine the response body size.
   void CalculateResponseBodySize();

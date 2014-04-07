@@ -27,7 +27,7 @@
 #include "chrome/browser/profile.h"
 #include "chrome/browser/profile_manager.h"
 #include "chrome/common/chrome_paths.h"
-#include "chrome/common/net/gaia/gaia_authenticator2.h"
+#include "chrome/common/net/gaia/gaia_auth_fetcher.h"
 #include "chrome/common/net/gaia/gaia_constants.h"
 #include "chrome/common/notification_service.h"
 #include "net/base/load_flags.h"
@@ -132,7 +132,7 @@ void ParallelAuthenticator::OnLoginSuccess(
     const GaiaAuthConsumer::ClientLoginResult& credentials,
     bool request_pending) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  LOG(INFO) << "Online login success";
+  VLOG(1) << "Online login success";
   // Send notification of success
   AuthenticationNotificationDetails details(true);
   NotificationService::current()->Notify(
@@ -169,7 +169,7 @@ void ParallelAuthenticator::OnPasswordChangeDetected(
 void ParallelAuthenticator::CheckLocalaccount(const LoginFailure& error) {
   {
     AutoLock for_this_block(localaccount_lock_);
-    LOG(INFO) << "Checking localaccount";
+    VLOG(1) << "Checking localaccount";
     if (!checked_for_localaccount_) {
       BrowserThread::PostDelayedTask(
           BrowserThread::FILE, FROM_HERE,
@@ -357,8 +357,8 @@ void ParallelAuthenticator::Resolve() {
       key_migrator_ =
           CryptohomeOp::CreateMigrateAttempt(reauth_state_.get(),
                                              this,
-                                             false,
-                                             reauth_state_->ascii_hash);
+                                             true,
+                                             current_state_->ascii_hash);
       BrowserThread::PostTask(
           BrowserThread::UI, FROM_HERE,
           NewRunnableMethod(key_migrator_.get(), &CryptohomeOp::Initiate));
@@ -426,10 +426,9 @@ ParallelAuthenticator::AuthState ParallelAuthenticator::ResolveState() {
     if (current_state_->online_outcome().reason() == LoginFailure::NONE) {
       // Online attempt succeeded as well, so combine the results.
       return ResolveOnlineSuccessState(state);
-    } else {
-      // Online login attempt was rejected or failed to occur.
-      return ResolveOnlineFailureState(state);
     }
+    // Online login attempt was rejected or failed to occur.
+    return ResolveOnlineFailureState(state);
   }
   // if online isn't complete yet, just return the offline result.
   return state;
@@ -453,53 +452,49 @@ ParallelAuthenticator::ResolveReauthState() {
     NOTREACHED();  // Shouldn't be here at all, if online reauth isn't done!
     return CONTINUE;
   }
-  if (reauth_state_->online_outcome().reason() == LoginFailure::NONE)
-    return HAVE_NEW_PW;
-  else
-    return NEED_NEW_PW;
+  return (reauth_state_->online_outcome().reason() == LoginFailure::NONE) ?
+      HAVE_NEW_PW : NEED_NEW_PW;
 }
 
 ParallelAuthenticator::AuthState
 ParallelAuthenticator::ResolveCryptohomeFailureState() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
-  if (data_remover_.get()) {
+  if (data_remover_.get())
     return FAILED_REMOVE;
-  } else if (guest_mounter_.get()) {
+  if (guest_mounter_.get())
     return FAILED_TMPFS;
-  } else if (key_migrator_.get()) {
+  if (key_migrator_.get())
     return NEED_OLD_PW;
-  } else if (key_checker_.get()) {
+  if (key_checker_.get())
     return LOGIN_FAILED;
-  } else if (current_state_->cryptohome_code() ==
-             chromeos::kCryptohomeMountErrorKeyFailure) {
+  if (current_state_->cryptohome_code() ==
+      chromeos::kCryptohomeMountErrorKeyFailure) {
     // If we tried a mount but they used the wrong key, we may need to
     // ask the user for her old password.  We'll only know once we've
     // done the online check.
     return POSSIBLE_PW_CHANGE;
-  } else if (current_state_->cryptohome_code() ==
-             chromeos::kCryptohomeMountErrorUserDoesNotExist) {
+  }
+  if (current_state_->cryptohome_code() ==
+      chromeos::kCryptohomeMountErrorUserDoesNotExist) {
     // If we tried a mount but the user did not exist, then we should wait
     // for online login to succeed and try again with the "create" flag set.
     return NO_MOUNT;
-  } else {
-    return FAILED_MOUNT;
   }
+  return FAILED_MOUNT;
 }
 
 ParallelAuthenticator::AuthState
 ParallelAuthenticator::ResolveCryptohomeSuccessState() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
-  if (data_remover_.get()) {
+  if (data_remover_.get())
     return CREATE_NEW;
-  } else if (guest_mounter_.get()) {
+  if (guest_mounter_.get())
     return LOCAL_LOGIN;
-  } else if (key_migrator_.get()) {
+  if (key_migrator_.get())
     return RECOVER_MOUNT;
-  } else if (key_checker_.get()) {
+  if (key_checker_.get())
     return UNLOCK;
-  } else {
-    return OFFLINE_LOGIN;
-  }
+  return OFFLINE_LOGIN;
 }
 
 ParallelAuthenticator::AuthState
@@ -516,9 +511,8 @@ ParallelAuthenticator::ResolveOnlineFailureState(
     if (current_state_->online_outcome().error().state() ==
         GoogleServiceAuthError::INVALID_GAIA_CREDENTIALS) {
       return NEED_NEW_PW;
-    } else {
-      return ONLINE_FAILED;
     }
+    return ONLINE_FAILED;
   }
   return LOGIN_FAILED;
 }
@@ -559,13 +553,13 @@ void ParallelAuthenticator::LoadLocalaccount(const std::string& filename) {
   std::string localaccount;
   if (PathService::Get(base::DIR_EXE, &localaccount_file)) {
     localaccount_file = localaccount_file.Append(filename);
-    LOG(INFO) << "looking for localaccount in " << localaccount_file.value();
+    VLOG(1) << "Looking for localaccount in " << localaccount_file.value();
 
     ReadFileToString(localaccount_file, &localaccount);
     TrimWhitespaceASCII(localaccount, TRIM_TRAILING, &localaccount);
-    LOG(INFO) << "Loading localaccount: " << localaccount;
+    VLOG(1) << "Loading localaccount: " << localaccount;
   } else {
-    LOG(INFO) << "Assuming no localaccount";
+    VLOG(1) << "Assuming no localaccount";
   }
   SetLocalaccount(localaccount);
 }
@@ -618,9 +612,8 @@ std::string ParallelAuthenticator::SaltAsAscii() {
                                        ascii_salt,
                                        sizeof(ascii_salt))) {
     return std::string(ascii_salt, sizeof(ascii_salt) - 1);
-  } else {
-    return std::string();
   }
+  return std::string();
 }
 
 // static

@@ -6,12 +6,27 @@
 
 #include "base/callback.h"
 #include "base/singleton.h"
-#include "chrome/browser/chrome_thread.h"
+#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/renderer_host/resource_message_filter.h"
 #include "chrome/browser/worker_host/worker_process_host.h"
 #include "chrome/common/notification_service.h"
 #include "chrome/common/worker_messages.h"
 
+struct MessagePortDispatcher::MessagePort {
+  // sender and route_id are what we need to send messages to the port.
+  IPC::Message::Sender* sender;
+  int route_id;
+  // A function pointer to generate a new route id for the sender above.
+  // Owned by "sender" above, so don't delete.
+  CallbackWithReturnValue<int>::Type* next_routing_id;
+  // A globally unique id for this message port.
+  int message_port_id;
+  // The globally unique id of the entangled message port.
+  int entangled_message_port_id;
+  // If true, all messages to this message port are queued and not delivered.
+  bool queue_messages;
+  QueuedMessages queued_messages;
+};
 
 MessagePortDispatcher* MessagePortDispatcher::GetInstance() {
   return Singleton<MessagePortDispatcher>::get();

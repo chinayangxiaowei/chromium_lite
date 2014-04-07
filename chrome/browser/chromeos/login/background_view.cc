@@ -29,6 +29,7 @@
 #include "chrome/browser/views/dom_view.h"
 #include "cros/chromeos_wm_ipc_enums.h"
 #include "googleurl/src/gurl.h"
+#include "gfx/gtk_util.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
@@ -48,6 +49,25 @@ namespace {
 
 const SkColor kVersionColor = 0xff5c739f;
 
+// Returns the corresponding step id for step constant.
+int GetStepId(size_t step) {
+  switch (step) {
+    case chromeos::BackgroundView::SELECT_NETWORK:
+      return IDS_OOBE_SELECT_NETWORK;
+    case chromeos::BackgroundView::EULA:
+      return IDS_OOBE_EULA;
+    case chromeos::BackgroundView::SIGNIN:
+      return IDS_OOBE_SIGNIN;
+    case chromeos::BackgroundView::REGISTRATION:
+      return IDS_OOBE_REGISTRATION;
+    case chromeos::BackgroundView::PICTURE:
+      return IDS_OOBE_PICTURE;
+    default:
+      NOTREACHED();
+      return 0;
+  }
+}
+
 // The same as TextButton but switches cursor to hand cursor when mouse
 // is over the button.
 class TextButtonWithHandCursorOver : public views::TextButton {
@@ -65,7 +85,7 @@ class TextButtonWithHandCursorOver : public views::TextButton {
     if (!IsEnabled()) {
       return NULL;
     }
-    return gdk_cursor_new(GDK_HAND2);
+    return gfx::GetCursor(GDK_HAND2);
   }
 
  private:
@@ -183,9 +203,9 @@ bool BackgroundView::IsOobeProgressBarVisible() {
 }
 
 void BackgroundView::SetOobeProgress(LoginStep step) {
-  DCHECK(step <= PICTURE);
+  DCHECK(step < STEPS_COUNT);
   if (progress_bar_)
-    progress_bar_->SetProgress(step);
+    progress_bar_->SetStep(GetStepId(step));
 }
 
 void BackgroundView::ShowScreenSaver() {
@@ -355,16 +375,16 @@ void BackgroundView::InitInfoLabels() {
 
 void BackgroundView::InitProgressBar() {
   std::vector<int> steps;
-  steps.push_back(IDS_OOBE_SELECT_NETWORK);
+  steps.push_back(GetStepId(SELECT_NETWORK));
 #if defined(OFFICIAL_BUILD)
-  steps.push_back(IDS_OOBE_EULA);
+  steps.push_back(GetStepId(EULA));
 #endif
-  steps.push_back(IDS_OOBE_SIGNIN);
+  steps.push_back(GetStepId(SIGNIN));
 #if defined(OFFICIAL_BUILD)
   if (WizardController::IsRegisterScreenDefined())
-    steps.push_back(IDS_OOBE_REGISTRATION);
+    steps.push_back(GetStepId(REGISTRATION));
 #endif
-  steps.push_back(IDS_OOBE_PICTURE);
+  steps.push_back(GetStepId(PICTURE));
   progress_bar_ = new OobeProgressBar(steps);
   AddChildView(progress_bar_);
 }
@@ -396,10 +416,10 @@ void BackgroundView::OnVersion(
 void BackgroundView::OnBootTimes(
     BootTimesLoader::Handle handle, BootTimesLoader::BootTimes boot_times) {
   const char* kBootTimesNoChromeExec =
-      "Boot took %.2f seconds (firmware %.2fs, kernel %.2fs, system %.2fs)";
+      "Non-firmware boot took %.2f seconds (kernel %.2fs, system %.2fs)";
   const char* kBootTimesChromeExec =
-      "Boot took %.2f seconds "
-      "(firmware %.2fs, kernel %.2fs, system %.2fs, chrome %.2fs)";
+      "Non-firmware boot took %.2f seconds "
+      "(kernel %.2fs, system %.2fs, chrome %.2fs)";
   std::string boot_times_text;
 
   if (boot_times.chrome > 0) {
@@ -407,7 +427,6 @@ void BackgroundView::OnBootTimes(
         base::StringPrintf(
             kBootTimesChromeExec,
             boot_times.total,
-            boot_times.firmware,
             boot_times.pre_startup,
             boot_times.system,
             boot_times.chrome);
@@ -416,7 +435,6 @@ void BackgroundView::OnBootTimes(
         base::StringPrintf(
             kBootTimesNoChromeExec,
             boot_times.total,
-            boot_times.firmware,
             boot_times.pre_startup,
             boot_times.system);
   }

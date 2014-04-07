@@ -24,7 +24,7 @@
 #include "base/task.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/chrome_thread.h"
+#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/sync/sync_constants.h"
 #include "chrome/browser/sync/engine/all_status.h"
 #include "chrome/browser/sync/engine/change_reorder_buffer.h"
@@ -83,6 +83,7 @@ using syncable::Directory;
 using syncable::DirectoryManager;
 using syncable::Entry;
 using syncable::SPECIFICS;
+using sync_pb::AutofillProfileSpecifics;
 
 typedef GoogleServiceAuthError AuthError;
 
@@ -158,6 +159,10 @@ static void ServerNameToSyncAPIName(const std::string& server_name,
   }
 }
 
+UserShare::UserShare() {}
+
+UserShare::~UserShare() {}
+
 ////////////////////////////////////
 // BaseNode member definitions.
 
@@ -182,8 +187,8 @@ std::string BaseNode::GenerateSyncableHash(
 
 sync_pb::PasswordSpecificsData* DecryptPasswordSpecifics(
     const sync_pb::EntitySpecifics& specifics, Cryptographer* crypto) {
- if (!specifics.HasExtension(sync_pb::password))
-   return NULL;
+  if (!specifics.HasExtension(sync_pb::password))
+    return NULL;
   const sync_pb::EncryptedData& encrypted =
       specifics.GetExtension(sync_pb::password).encrypted();
   scoped_ptr<sync_pb::PasswordSpecificsData> data(
@@ -275,6 +280,11 @@ const sync_pb::AppSpecifics& BaseNode::GetAppSpecifics() const {
 const sync_pb::AutofillSpecifics& BaseNode::GetAutofillSpecifics() const {
   DCHECK(GetModelType() == syncable::AUTOFILL);
   return GetEntry()->Get(SPECIFICS).GetExtension(sync_pb::autofill);
+}
+
+const AutofillProfileSpecifics& BaseNode::GetAutofillProfileSpecifics() const {
+  DCHECK_EQ(GetModelType(), syncable::AUTOFILL_PROFILE);
+  return GetEntry()->Get(SPECIFICS).GetExtension(sync_pb::autofill_profile);
 }
 
 const sync_pb::BookmarkSpecifics& BaseNode::GetBookmarkSpecifics() const {
@@ -753,6 +763,11 @@ ReadNode::ReadNode(const BaseTransaction* transaction)
   DCHECK(transaction);
 }
 
+ReadNode::ReadNode() {
+  entry_ = NULL;
+  transaction_ = NULL;
+}
+
 ReadNode::~ReadNode() {
   delete entry_;
 }
@@ -890,7 +905,7 @@ class BridgedGaiaAuthenticator : public gaia::GaiaAuthenticator {
     int os_error_code = 0;
     int int_response_code = 0;
     if (!http->MakeSynchronousPost(&os_error_code, &int_response_code)) {
-      LOG(INFO) << "Http POST failed, error returns: " << os_error_code;
+      VLOG(1) << "Http POST failed, error returns: " << os_error_code;
       return false;
     }
     *response_code = static_cast<int>(int_response_code);
@@ -908,6 +923,18 @@ class BridgedGaiaAuthenticator : public gaia::GaiaAuthenticator {
   scoped_ptr<HttpPostProviderFactory> post_factory_;
   DISALLOW_COPY_AND_ASSIGN(BridgedGaiaAuthenticator);
 };
+
+SyncManager::ChangeRecord::ChangeRecord()
+    : id(kInvalidId), action(ACTION_ADD) {}
+
+SyncManager::ChangeRecord::~ChangeRecord() {}
+
+SyncManager::ExtraPasswordChangeRecordData::ExtraPasswordChangeRecordData(
+    const sync_pb::PasswordSpecificsData& data)
+    : unencrypted_(data) {
+}
+
+SyncManager::ExtraPasswordChangeRecordData::~ExtraPasswordChangeRecordData() {}
 
 //////////////////////////////////////////////////////////////////////////
 // SyncManager's implementation: SyncManager::SyncInternal
@@ -960,7 +987,13 @@ class SyncManager::SyncInternal
   // Tell the sync engine to start the syncing process.
   void StartSyncing();
 
-  void SetPassphrase(const std::string& passphrase);
+  // Whether or not the Nigori node is encrypted using an explicit passphrase.
+  bool IsUsingExplicitPassphrase();
+
+  // Try to set the current passphrase to |passphrase|, and record whether
+  // it is an explicit passphrase or implicitly using gaia in the Nigori
+  // node.
+  void SetPassphrase(const std::string& passphrase, bool is_explicit);
 
   // Call periodically from a database-safe thread to persist recent changes
   // to the syncapi model.
@@ -1157,6 +1190,12 @@ class SyncManager::SyncInternal
   // decryption.  Otherwise, the cryptographer is made ready (is_ready()).
   void BootstrapEncryption(const std::string& restored_key_for_bootstrapping);
 
+  // Helper for migration to new nigori proto to set
+  // 'using_explicit_passphrase' in the NigoriSpecifics.
+  // TODO(tim): Bug 62103.  Remove this after it has been pushed out to dev
+  // channel users.
+  void SetUsingExplicitPassphrasePrefForMigration();
+
   // Checks for server reachabilty and requests a nudge.
   void OnIPAddressChangedImpl();
 
@@ -1253,7 +1292,7 @@ bool SyncManager::Init(const FilePath& database_location,
                        const std::string& restored_key_for_bootstrapping,
                        bool setup_for_test_mode) {
   DCHECK(post_factory);
-  LOG(INFO) << "SyncManager starting Init...";
+  VLOG(1) << "SyncManager starting Init...";
   string server_string(sync_server_and_path);
   return data_->Init(database_location,
                      server_string,
@@ -1281,8 +1320,13 @@ void SyncManager::StartSyncing() {
   data_->StartSyncing();
 }
 
-void SyncManager::SetPassphrase(const std::string& passphrase) {
-  data_->SetPassphrase(passphrase);
+void SyncManager::SetPassphrase(const std::string& passphrase,
+     bool is_explicit) {
+  data_->SetPassphrase(passphrase, is_explicit);
+}
+
+bool SyncManager::IsUsingExplicitPassphrase() {
+  return data_ && data_->IsUsingExplicitPassphrase();
 }
 
 bool SyncManager::RequestPause() {
@@ -1325,7 +1369,7 @@ bool SyncManager::SyncInternal::Init(
     const std::string& restored_key_for_bootstrapping,
     bool setup_for_test_mode) {
 
-  LOG(INFO) << "Starting SyncInternal initialization.";
+  VLOG(1) << "Starting SyncInternal initialization.";
 
   core_message_loop_ = MessageLoop::current();
   DCHECK(core_message_loop_);
@@ -1351,7 +1395,7 @@ bool SyncManager::SyncInternal::Init(
   // Test mode does not use a syncer context or syncer thread.
   if (!setup_for_test_mode) {
     // Build a SyncSessionContext and store the worker in it.
-    LOG(INFO) << "Sync is bringing up SyncSessionContext.";
+    VLOG(1) << "Sync is bringing up SyncSessionContext.";
     std::vector<SyncEngineEventListener*> listeners;
     listeners.push_back(&allstatus_);
     listeners.push_back(this);
@@ -1399,7 +1443,7 @@ void SyncManager::SyncInternal::BootstrapEncryption(
       cryptographer->SetKeys(nigori.encrypted());
     } else {
       cryptographer->SetPendingKeys(nigori.encrypted());
-      observer_->OnPassphraseRequired();
+      observer_->OnPassphraseRequired(true);
     }
   }
 }
@@ -1437,40 +1481,30 @@ void SyncManager::SyncInternal::SendPendingXMPPNotification(
             notifier::NOTIFICATION_SERVER);
   notification_pending_ = notification_pending_ || new_pending_notification;
   if (!notification_pending_) {
-    LOG(INFO) << "Not sending notification: no pending notification";
+    VLOG(1) << "Not sending notification: no pending notification";
     return;
   }
   if (!talk_mediator_.get()) {
-    LOG(INFO) << "Not sending notification: shutting down "
-              << "(talk_mediator_ is NULL)";
+    VLOG(1) << "Not sending notification: shutting down (talk_mediator_ is "
+               "NULL)";
     return;
   }
-  LOG(INFO) << "Sending XMPP notification...";
+  VLOG(1) << "Sending XMPP notification...";
   OutgoingNotificationData notification_data;
-  if (notifier_options_.notification_method == notifier::NOTIFICATION_LEGACY) {
-    notification_data.service_id = browser_sync::kSyncLegacyServiceId;
-    notification_data.service_url = browser_sync::kSyncLegacyServiceUrl;
-    notification_data.send_content = false;
-  } else {
-    notification_data.service_id = browser_sync::kSyncServiceId;
-    notification_data.service_url = browser_sync::kSyncServiceUrl;
-    notification_data.send_content = true;
-    notification_data.priority = browser_sync::kSyncPriority;
-    notification_data.write_to_cache_only = true;
-    if (notifier_options_.notification_method == notifier::NOTIFICATION_NEW) {
-      notification_data.service_specific_data =
-          browser_sync::kSyncServiceSpecificData;
-      notification_data.require_subscription = true;
-    } else {
-      notification_data.require_subscription = false;
-    }
-  }
+  notification_data.service_id = browser_sync::kSyncServiceId;
+  notification_data.service_url = browser_sync::kSyncServiceUrl;
+  notification_data.send_content = true;
+  notification_data.priority = browser_sync::kSyncPriority;
+  notification_data.write_to_cache_only = true;
+  notification_data.service_specific_data =
+      browser_sync::kSyncServiceSpecificData;
+  notification_data.require_subscription = true;
   bool success = talk_mediator_->SendNotification(notification_data);
   if (success) {
     notification_pending_ = false;
-    LOG(INFO) << "Sent XMPP notification";
+    VLOG(1) << "Sent XMPP notification";
   } else {
-    LOG(INFO) << "Could not send XMPP notification";
+    VLOG(1) << "Could not send XMPP notification";
   }
 }
 
@@ -1480,9 +1514,8 @@ bool SyncManager::SyncInternal::OpenDirectory() {
   bool share_opened = dir_manager()->Open(username_for_share());
   DCHECK(share_opened);
   if (!share_opened) {
-    if (observer_) {
+    if (observer_)
       observer_->OnStopSyncingPermanently();
-    }
 
     LOG(ERROR) << "Could not open share for:" << username_for_share();
     return false;
@@ -1510,10 +1543,9 @@ bool SyncManager::SyncInternal::SignIn(const SyncCredentials& credentials) {
   DCHECK(share_.name.empty());
   share_.name = credentials.email;
 
-  LOG(INFO) << "Signing in user: " << username_for_share();
-  if (!OpenDirectory()) {
+  VLOG(1) << "Signing in user: " << username_for_share();
+  if (!OpenDirectory())
     return false;
-  }
 
   UpdateCredentials(credentials);
   return true;
@@ -1534,34 +1566,30 @@ void SyncManager::SyncInternal::InitializeTalkMediator() {
       notifier::NOTIFICATION_SERVER) {
     syncable::ScopedDirLookup lookup(dir_manager(), username_for_share());
     std::string state;
-    if (lookup.good()) {
+    if (lookup.good())
       state = lookup->GetAndClearNotificationState();
-    } else {
+    else
       LOG(ERROR) << "Could not read notification state";
-    }
     if (VLOG_IS_ON(1)) {
       std::string encoded_state;
       base::Base64Encode(state, &encoded_state);
-      LOG(INFO) << "Read notification state: " << encoded_state;
+      VLOG(1) << "Read notification state: " << encoded_state;
     }
     sync_notifier::ServerNotifierThread* server_notifier_thread =
         new sync_notifier::ServerNotifierThread(
             notifier_options_, state, this);
     talk_mediator_.reset(
-        new TalkMediatorImpl(server_notifier_thread, false));
+        new TalkMediatorImpl(server_notifier_thread,
+                             notifier_options_.invalidate_xmpp_login,
+                             notifier_options_.allow_insecure_connection));
   } else {
     notifier::MediatorThread* mediator_thread =
         new notifier::MediatorThreadImpl(notifier_options_);
-    talk_mediator_.reset(new TalkMediatorImpl(mediator_thread, false));
-    if (notifier_options_.notification_method !=
-        notifier::NOTIFICATION_LEGACY) {
-      if (notifier_options_.notification_method ==
-          notifier::NOTIFICATION_TRANSITIONAL) {
-        talk_mediator_->AddSubscribedServiceUrl(
-            browser_sync::kSyncLegacyServiceUrl);
-      }
-      talk_mediator_->AddSubscribedServiceUrl(browser_sync::kSyncServiceUrl);
-    }
+    talk_mediator_.reset(
+        new TalkMediatorImpl(mediator_thread,
+                             notifier_options_.invalidate_xmpp_login,
+                             notifier_options_.allow_insecure_connection));
+    talk_mediator_->AddSubscribedServiceUrl(browser_sync::kSyncServiceUrl);
   }
   talk_mediator_->SetDelegate(this);
 }
@@ -1572,15 +1600,35 @@ void SyncManager::SyncInternal::RaiseAuthNeededEvent() {
   }
 }
 
+void SyncManager::SyncInternal::SetUsingExplicitPassphrasePrefForMigration() {
+  WriteTransaction trans(&share_);
+  WriteNode node(&trans);
+  if (!node.InitByTagLookup(kNigoriTag)) {
+    // TODO(albertb): Plumb an UnrecoverableError all the way back to the PSS.
+    NOTREACHED();
+    return;
+  }
+  sync_pb::NigoriSpecifics specifics(node.GetNigoriSpecifics());
+  specifics.set_using_explicit_passphrase(true);
+  node.SetNigoriSpecifics(specifics);
+}
+
 void SyncManager::SyncInternal::SetPassphrase(
-    const std::string& passphrase) {
+    const std::string& passphrase, bool is_explicit) {
   Cryptographer* cryptographer = dir_manager()->cryptographer();
   KeyParams params = {"localhost", "dummy", passphrase};
   if (cryptographer->has_pending_keys()) {
     if (!cryptographer->DecryptPendingKeys(params)) {
-      observer_->OnPassphraseRequired();
+      observer_->OnPassphraseRequired(true);
       return;
     }
+
+    // TODO(tim): If this is the first time the user has entered a passphrase
+    // since the protocol changed to store passphrase preferences in the cloud,
+    // make sure we update this preference. See bug 62103.
+    if (is_explicit)
+      SetUsingExplicitPassphrasePrefForMigration();
+
     // Nudge the syncer so that passwords updates that were waiting for this
     // passphrase get applied as soon as possible.
     sync_manager_->RequestNudge();
@@ -1592,6 +1640,12 @@ void SyncManager::SyncInternal::SetPassphrase(
       NOTREACHED();
       return;
     }
+
+    // Prevent an implicit SetPassphrase request from changing an explicitly
+    // set passphrase.
+    if (!is_explicit && node.GetNigoriSpecifics().using_explicit_passphrase())
+      return;
+
     cryptographer->AddKey(params);
 
     // TODO(tim): Bug 58231. It would be nice if SetPassphrase didn't require
@@ -1600,6 +1654,7 @@ void SyncManager::SyncInternal::SetPassphrase(
     // safe to defer this work.
     sync_pb::NigoriSpecifics specifics;
     cryptographer->GetKeys(specifics.mutable_encrypted());
+    specifics.set_using_explicit_passphrase(is_explicit);
     node.SetNigoriSpecifics(specifics);
     ReEncryptEverything(&trans);
   }
@@ -1607,6 +1662,18 @@ void SyncManager::SyncInternal::SetPassphrase(
   std::string bootstrap_token;
   cryptographer->GetBootstrapToken(&bootstrap_token);
   observer_->OnPassphraseAccepted(bootstrap_token);
+}
+
+bool SyncManager::SyncInternal::IsUsingExplicitPassphrase() {
+  ReadTransaction trans(&share_);
+  ReadNode node(&trans);
+  if (!node.InitByTagLookup(kNigoriTag)) {
+    // TODO(albertb): Plumb an UnrecoverableError all the way back to the PSS.
+    NOTREACHED();
+    return false;
+  }
+
+  return node.GetNigoriSpecifics().using_explicit_passphrase();
 }
 
 void SyncManager::SyncInternal::ReEncryptEverything(WriteTransaction* trans) {
@@ -1667,11 +1734,11 @@ void SyncManager::SyncInternal::Shutdown() {
 
   // Shutdown the xmpp buzz connection.
   if (talk_mediator.get()) {
-    LOG(INFO) << "P2P: Mediator logout started.";
+    VLOG(1) << "P2P: Mediator logout started.";
     talk_mediator->Logout();
-    LOG(INFO) << "P2P: Mediator logout completed.";
+    VLOG(1) << "P2P: Mediator logout completed.";
     talk_mediator.reset();
-    LOG(INFO) << "P2P: Mediator destroyed.";
+    VLOG(1) << "P2P: Mediator destroyed.";
   }
 
   // Pump any messages the auth watcher, syncer thread, or talk
@@ -1706,7 +1773,7 @@ void SyncManager::SyncInternal::Shutdown() {
 }
 
 void SyncManager::SyncInternal::OnIPAddressChanged() {
-  LOG(INFO) << "IP address change detected";
+  VLOG(1) << "IP address change detected";
 #if defined (OS_CHROMEOS)
   // TODO(tim): This is a hack to intentionally lose a race with flimflam at
   // shutdown, so we don't cause shutdown to wait for our http request.
@@ -1828,6 +1895,7 @@ void SyncManager::SyncInternal::HandleCalculateChangesChangeEventFromSyncApi(
 
   bool exists_unsynced_items = false;
   bool only_preference_changes = true;
+  syncable::ModelTypeBitSet model_types;
   for (syncable::OriginalEntries::const_iterator i = event.originals->begin();
        i != event.originals->end() && !exists_unsynced_items;
        ++i) {
@@ -1846,6 +1914,7 @@ void SyncManager::SyncInternal::HandleCalculateChangesChangeEventFromSyncApi(
       // Unsynced items will cause us to nudge the the syncer.
       exists_unsynced_items = true;
 
+      model_types[model_type] = true;
       if (model_type != syncable::PREFERENCES)
         only_preference_changes = false;
     }
@@ -1853,7 +1922,10 @@ void SyncManager::SyncInternal::HandleCalculateChangesChangeEventFromSyncApi(
   if (exists_unsynced_items && syncer_thread()) {
     int nudge_delay = only_preference_changes ?
         kPreferencesNudgeDelayMilliseconds : kDefaultNudgeDelayMilliseconds;
-    syncer_thread()->NudgeSyncer(nudge_delay, SyncerThread::kLocal);
+    syncer_thread()->NudgeSyncerWithDataTypes(
+        nudge_delay,
+        SyncerThread::kLocal,
+        model_types);
   }
 }
 
@@ -1991,8 +2063,10 @@ void SyncManager::SyncInternal::OnSyncEngineEvent(
 
       // If we've completed a sync cycle and the cryptographer isn't ready yet,
       // prompt the user for a passphrase.
-      if (!cryptographer->is_ready() || cryptographer->has_pending_keys()) {
-        observer_->OnPassphraseRequired();
+      if (cryptographer->has_pending_keys()) {
+        observer_->OnPassphraseRequired(true);
+      } else if (!cryptographer->is_ready()) {
+        observer_->OnPassphraseRequired(false);
       }
     }
 
@@ -2051,8 +2125,8 @@ void SyncManager::SyncInternal::OnSyncEngineEvent(
 
 void SyncManager::SyncInternal::OnNotificationStateChange(
     bool notifications_enabled) {
-  LOG(INFO) << "P2P: Notifications enabled = "
-            << (notifications_enabled ? "true" : "false");
+  VLOG(1) << "P2P: Notifications enabled = "
+          << (notifications_enabled ? "true" : "false");
   allstatus_.SetNotificationsEnabled(notifications_enabled);
   if (syncer_thread()) {
     syncer_thread()->SetNotificationsEnabled(notifications_enabled);
@@ -2090,25 +2164,47 @@ void SyncManager::SyncInternal::TalkMediatorLogin(
 
 void SyncManager::SyncInternal::OnIncomingNotification(
     const IncomingNotificationData& notification_data) {
+  syncable::ModelTypeBitSet model_types;
+
   // Check if the service url is a sync URL.  An empty service URL is
   // treated as a legacy sync notification.  If we're listening to
   // server-issued notifications, no need to check the service_url.
-  if ((notifier_options_.notification_method ==
-       notifier::NOTIFICATION_SERVER) ||
-      notification_data.service_url.empty() ||
-      (notification_data.service_url ==
-       browser_sync::kSyncLegacyServiceUrl) ||
-      (notification_data.service_url ==
-       browser_sync::kSyncServiceUrl)) {
-    LOG(INFO) << "P2P: Updates on server, pushing syncer";
-    if (syncer_thread()) {
-      // Introduce a delay to help coalesce initial notifications.
-      syncer_thread()->NudgeSyncer(250, SyncerThread::kNotification);
+  if (notifier_options_.notification_method ==
+      notifier::NOTIFICATION_SERVER) {
+    VLOG(1) << "Sync received server notification: " <<
+        notification_data.service_specific_data;
+
+    if (!syncable::ModelTypeBitSetFromString(
+            notification_data.service_specific_data,
+            &model_types)) {
+      LOG(DFATAL) << "Could not extract model types from server data.";
+      model_types.set();
     }
-    allstatus_.IncrementNotificationsReceived();
+  } else if (notification_data.service_url.empty() ||
+             (notification_data.service_url ==
+              browser_sync::kSyncLegacyServiceUrl) ||
+             (notification_data.service_url ==
+              browser_sync::kSyncServiceUrl)) {
+    VLOG(1) << "Sync received P2P notification.";
+
+    // Catch for sync integration tests (uses p2p). Just set all datatypes.
+    model_types.set();
   } else {
     LOG(WARNING) << "Notification fron unexpected source: "
                  << notification_data.service_url;
+  }
+
+  if (model_types.any()) {
+    if (syncer_thread()) {
+     // Introduce a delay to help coalesce initial notifications.
+     syncer_thread()->NudgeSyncerWithDataTypes(
+         250,
+         SyncerThread::kNotification,
+         model_types);
+    }
+    allstatus_.IncrementNotificationsReceived();
+  } else {
+    LOG(WARNING) << "Sync received notification without any type information.";
   }
 }
 
@@ -2129,7 +2225,7 @@ void SyncManager::SyncInternal::WriteState(const std::string& state) {
   if (VLOG_IS_ON(1)) {
     std::string encoded_state;
     base::Base64Encode(state, &encoded_state);
-    LOG(INFO) << "Writing notification state: " << encoded_state;
+    VLOG(1) << "Writing notification state: " << encoded_state;
   }
   lookup->SetNotificationState(state);
   lookup->SaveChanges();

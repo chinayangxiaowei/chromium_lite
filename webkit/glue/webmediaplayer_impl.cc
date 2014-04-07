@@ -11,6 +11,7 @@
 #include "media/base/limits.h"
 #include "media/base/media_format.h"
 #include "media/base/media_switches.h"
+#include "media/base/pipeline_impl.h"
 #include "media/base/video_frame.h"
 #include "media/filters/ffmpeg_audio_decoder.h"
 #include "media/filters/ffmpeg_demuxer.h"
@@ -88,13 +89,14 @@ void WebMediaPlayerImpl::Proxy::Repaint() {
   }
 }
 
-void WebMediaPlayerImpl::Proxy::SetDataSource(WebDataSource* data_source) {
-  data_source_ = data_source;
+void WebMediaPlayerImpl::Proxy::SetVideoRenderer(
+    scoped_refptr<WebVideoRenderer> video_renderer) {
+  video_renderer_ = video_renderer;
 }
 
-void WebMediaPlayerImpl::Proxy::SetVideoRenderer(
-    WebVideoRenderer* video_renderer) {
-  video_renderer_ = video_renderer;
+void WebMediaPlayerImpl::Proxy::SetDataSource(
+    scoped_refptr<WebDataSource> data_source) {
+  data_source_ = data_source;
 }
 
 void WebMediaPlayerImpl::Proxy::Paint(skia::PlatformCanvas* canvas,
@@ -223,31 +225,32 @@ void WebMediaPlayerImpl::Proxy::PutCurrentFrame(
 
 WebMediaPlayerImpl::WebMediaPlayerImpl(
     WebKit::WebMediaPlayerClient* client,
-    media::FilterFactoryCollection* factory,
-    MediaResourceLoaderBridgeFactory* bridge_factory,
-    bool use_simple_data_source,
-    WebVideoRendererFactoryFactory* video_renderer_factory)
+    media::MediaFilterCollection* collection)
     : network_state_(WebKit::WebMediaPlayer::Empty),
       ready_state_(WebKit::WebMediaPlayer::HaveNothing),
       main_loop_(NULL),
-      filter_factory_(factory),
+      filter_collection_(collection),
+      pipeline_(NULL),
       pipeline_thread_("PipelineThread"),
       paused_(true),
       playback_rate_(0.0f),
       client_(client),
+      proxy_(NULL),
       pipeline_stopped_(false, false) {
   // Saves the current message loop.
   DCHECK(!main_loop_);
   main_loop_ = MessageLoop::current();
+}
 
-  // Make sure this gets deleted.
-  scoped_ptr<WebVideoRendererFactoryFactory>
-      scoped_video_renderer_factory(video_renderer_factory);
-
+bool WebMediaPlayerImpl::Initialize(
+    MediaResourceLoaderBridgeFactory* bridge_factory_simple,
+    MediaResourceLoaderBridgeFactory* bridge_factory_buffered,
+    bool use_simple_data_source,
+    scoped_refptr<WebVideoRenderer> web_video_renderer) {
   // Create the pipeline and its thread.
   if (!pipeline_thread_.Start()) {
     NOTREACHED() << "Could not start PipelineThread";
-    return;
+    return false;
   }
 
   pipeline_ = new media::PipelineImpl(pipeline_thread_.message_loop());
@@ -257,38 +260,42 @@ WebMediaPlayerImpl::WebMediaPlayerImpl(
 
   // Creates the proxy.
   proxy_ = new Proxy(main_loop_, this);
+  web_video_renderer->SetWebMediaPlayerImplProxy(proxy_);
+  proxy_->SetVideoRenderer(web_video_renderer);
 
   // Set our pipeline callbacks.
-  pipeline_->SetPipelineEndedCallback(NewCallback(proxy_.get(),
-      &WebMediaPlayerImpl::Proxy::PipelineEndedCallback));
-  pipeline_->SetPipelineErrorCallback(NewCallback(proxy_.get(),
-      &WebMediaPlayerImpl::Proxy::PipelineErrorCallback));
-  pipeline_->SetNetworkEventCallback(NewCallback(proxy_.get(),
-      &WebMediaPlayerImpl::Proxy::NetworkEventCallback));
+  pipeline_->Init(
+      NewCallback(proxy_.get(),
+                  &WebMediaPlayerImpl::Proxy::PipelineEndedCallback),
+      NewCallback(proxy_.get(),
+                  &WebMediaPlayerImpl::Proxy::PipelineErrorCallback),
+      NewCallback(proxy_.get(),
+                  &WebMediaPlayerImpl::Proxy::NetworkEventCallback));
 
   // A simple data source that keeps all data in memory.
-  media::FilterFactory* simple_data_source_factory =
-      webkit_glue::SimpleDataSource::CreateFactory(MessageLoop::current(),
-                                                   bridge_factory);
+  scoped_refptr<SimpleDataSource> simple_data_source(
+      new SimpleDataSource(MessageLoop::current(), bridge_factory_simple));
+
   // A sophisticated data source that does memory caching.
-  media::FilterFactory* buffered_data_source_factory =
-      webkit_glue::BufferedDataSource::CreateFactory(MessageLoop::current(),
-                                                     bridge_factory,
-                                                     proxy_);
+  scoped_refptr<BufferedDataSource> buffered_data_source(
+      new BufferedDataSource(MessageLoop::current(), bridge_factory_buffered));
+  proxy_->SetDataSource(buffered_data_source);
+
   if (use_simple_data_source) {
-    factory->AddFactory(simple_data_source_factory);
-    factory->AddFactory(buffered_data_source_factory);
+    filter_collection_->AddDataSource(simple_data_source);
+    filter_collection_->AddDataSource(buffered_data_source);
   } else {
-    factory->AddFactory(buffered_data_source_factory);
-    factory->AddFactory(simple_data_source_factory);
+    filter_collection_->AddDataSource(buffered_data_source);
+    filter_collection_->AddDataSource(simple_data_source);
   }
 
   // Add in the default filter factories.
-  filter_factory_->AddFactory(media::FFmpegDemuxer::CreateFilterFactory());
-  filter_factory_->AddFactory(media::FFmpegAudioDecoder::CreateFactory());
-  filter_factory_->AddFactory(media::FFmpegVideoDecoder::CreateFactory());
-  filter_factory_->AddFactory(media::NullAudioRenderer::CreateFilterFactory());
-  filter_factory_->AddFactory(video_renderer_factory->CreateFactory(proxy_));
+  filter_collection_->AddDemuxer(new media::FFmpegDemuxer());
+  filter_collection_->AddAudioDecoder(new media::FFmpegAudioDecoder());
+  filter_collection_->AddVideoDecoder(new media::FFmpegVideoDecoder(NULL));
+  filter_collection_->AddAudioRenderer(new media::NullAudioRenderer());
+
+  return true;
 }
 
 WebMediaPlayerImpl::~WebMediaPlayerImpl() {
@@ -312,7 +319,7 @@ void WebMediaPlayerImpl::load(const WebKit::WebURL& url) {
   SetNetworkState(WebKit::WebMediaPlayer::Loading);
   SetReadyState(WebKit::WebMediaPlayer::HaveNothing);
   pipeline_->Start(
-      filter_factory_.get(),
+      filter_collection_.release(),
       url.spec(),
       NewCallback(proxy_.get(),
                   &WebMediaPlayerImpl::Proxy::PipelineInitializationCallback));
@@ -634,8 +641,8 @@ WebKit::WebVideoFrame* WebMediaPlayerImpl::getCurrentFrame() {
 void WebMediaPlayerImpl::putCurrentFrame(
     WebKit::WebVideoFrame* web_video_frame) {
   if (web_video_frame) {
-    scoped_refptr<media::VideoFrame> video_frame =
-        WebVideoFrameImpl::toVideoFrame(web_video_frame);
+    scoped_refptr<media::VideoFrame> video_frame(
+        WebVideoFrameImpl::toVideoFrame(web_video_frame));
     proxy_->PutCurrentFrame(video_frame);
     delete web_video_frame;
   }
@@ -775,10 +782,12 @@ void WebMediaPlayerImpl::Destroy() {
 
   // Make sure to kill the pipeline so there's no more media threads running.
   // Note: stopping the pipeline might block for a long time.
-  pipeline_->Stop(NewCallback(this,
-      &WebMediaPlayerImpl::PipelineStoppedCallback));
-  pipeline_stopped_.Wait();
-  pipeline_thread_.Stop();
+  if (pipeline_) {
+    pipeline_->Stop(NewCallback(this,
+        &WebMediaPlayerImpl::PipelineStoppedCallback));
+    pipeline_stopped_.Wait();
+    pipeline_thread_.Stop();
+  }
 
   // And then detach the proxy, it may live on the render thread for a little
   // longer until all the tasks are finished.

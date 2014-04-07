@@ -140,6 +140,14 @@ class SpdySession : public base::RefCounted<SpdySession>,
   static void set_flow_control(bool enable) { use_flow_control_ = enable; }
   static bool flow_control() { return use_flow_control_; }
 
+  // Sets the max concurrent streams per session.
+  static void set_max_concurrent_streams(size_t value) {
+    max_concurrent_stream_limit_ = value;
+  }
+  static size_t max_concurrent_streams() {
+      return max_concurrent_stream_limit_;
+  }
+
   // Send WINDOW_UPDATE frame, called by a stream whenever receive window
   // size is increased.
   void SendWindowUpdate(spdy::SpdyStreamId stream_id, int delta_window_size);
@@ -154,6 +162,10 @@ class SpdySession : public base::RefCounted<SpdySession>,
   // |remove_from_pool| indicates whether to also remove the session from the
   // session pool.
   void CloseSessionOnError(net::Error err, bool remove_from_pool);
+
+  // Retrieves information on the current state of the SPDY session as a
+  // Value.  Caller takes possession of the returned value.
+  Value* GetInfoAsValue() const;
 
   // Indicates whether the session is being reused after having successfully
   // used to send/receive data in the past.
@@ -195,7 +207,7 @@ class SpdySession : public base::RefCounted<SpdySession>,
     CLOSED
   };
 
-  enum { kDefaultMaxConcurrentStreams = 100 };  // TODO(mbelshe) remove this
+  enum { kDefaultMaxConcurrentStreams = 6 };  // TODO(mbelshe) remove this
 
   struct PendingCreateStream {
     const GURL* url;
@@ -251,6 +263,8 @@ class SpdySession : public base::RefCounted<SpdySession>,
              const linked_ptr<spdy::SpdyHeaderBlock>& headers);
   void OnSynReply(const spdy::SpdySynReplyControlFrame& frame,
                   const linked_ptr<spdy::SpdyHeaderBlock>& headers);
+  void OnHeaders(const spdy::SpdyHeadersControlFrame& frame,
+                 const linked_ptr<spdy::SpdyHeaderBlock>& headers);
   void OnRst(const spdy::SpdyRstStreamControlFrame& frame);
   void OnGoAway(const spdy::SpdyGoAwayControlFrame& frame);
   void OnSettings(const spdy::SpdySettingsControlFrame& frame);
@@ -413,6 +427,31 @@ class SpdySession : public base::RefCounted<SpdySession>,
 
   static bool use_ssl_;
   static bool use_flow_control_;
+  static size_t max_concurrent_stream_limit_;
+};
+
+class NetLogSpdySynParameter : public NetLog::EventParameters {
+ public:
+  NetLogSpdySynParameter(const linked_ptr<spdy::SpdyHeaderBlock>& headers,
+                         spdy::SpdyControlFlags flags,
+                         spdy::SpdyStreamId id,
+                         spdy::SpdyStreamId associated_stream);
+
+  virtual Value* ToValue() const;
+
+  const linked_ptr<spdy::SpdyHeaderBlock>& GetHeaders() const {
+    return headers_;
+  }
+
+ private:
+  virtual ~NetLogSpdySynParameter();
+
+  const linked_ptr<spdy::SpdyHeaderBlock> headers_;
+  const spdy::SpdyControlFlags flags_;
+  const spdy::SpdyStreamId id_;
+  const spdy::SpdyStreamId associated_stream_;
+
+  DISALLOW_COPY_AND_ASSIGN(NetLogSpdySynParameter);
 };
 
 }  // namespace net

@@ -69,7 +69,7 @@ class OfflineLoadPage : public InterstitialPage {
 
   // Retrieves template strings of the offline page for app and
   // normal site.
-  void GetAppOfflineStrings(Extension* app,
+  void GetAppOfflineStrings(const Extension* app,
                             const string16& faield_url,
                             DictionaryValue* strings) const;
   void GetNormalOfflineStrings(const string16& faield_url,

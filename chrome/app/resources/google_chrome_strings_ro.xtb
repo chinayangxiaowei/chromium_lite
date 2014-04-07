@@ -3,7 +3,6 @@
 <translationbundle lang="ro">
 <translation id="8000275528373650868">Google Chrome necesită Windows Vista sau Windows XP cu SP2 sau o versiune ulterioară.</translation>
 <translation id="6676384891291319759">Accesați Internetul</translation>
-<translation id="8582091809492103607">Deschideți Google Chrome la conectare și lansați aplicațiile web de fundal</translation>
 <translation id="2383457833405848421">Despre Google Chrome Frame...</translation>
 <translation id="386202838227397562">Închideți toate ferestrele Google Chrome și încercați din nou.</translation>
 <translation id="2770231113462710648">Schimbați browserul prestabilit la:</translation>
@@ -40,7 +39,6 @@
 <translation id="8810218179782551669">Limba Google Chrome:</translation>
 <translation id="7001386529596391893">Creați comenzi rapide pentru Google Chrome în aceste locații:</translation>
 <translation id="7461436095086637522">Chrome Profile Importer</translation>
-<translation id="655722166118366450">Doriţi să setaţi <ph name="HOST"/> ca motor de căutare în Google Chrome?</translation>
 <translation id="4357846314885556934">Google Chrome nu funcționează corect</translation>
 <translation id="4561681684759837226"><ph name="PAGE_TITLE"/></translation>
 <translation id="1195935957447623558">Google Chrome nu s-a închis corect. Pentru a redeschide paginile pe care le-ați avut deschise, faceți clic pe Restabiliți.</translation>
@@ -55,9 +53,7 @@
 <translation id="3324235665723428530">Profilul dvs. nu poate fi utilizat, deoarece provine de la o versiune Google Chrome mai recentă.\n\nEste posibil ca unele funcții să nu fie disponibile. Specificați un director de profil diferit sau utilizați o versiune Chrome mai nouă.</translation>
 <translation id="7214670531148488183">Google Chrome poate utiliza servicii web pentru a îmbunătăți experiența dvs. de navigare. Aveți opțiunea de a dezactiva aceste servicii.</translation>
 <translation id="1759842336958782510">Chrome</translation>
-<translation id="5840402478666768335">Opțional: ajutați la îmbunătățirea browserului Google Chrome prin trimiterea automată a statisticilor privind utilizarea și a rapoartelor de\navarie la Google</translation>
 <translation id="5008136264574452501">Versiunea Google Chrome Canary</translation>
-<translation id="2240501189676193549">Aplicațiile web sunt active numai în timp ce Google Chrome rulează.</translation>
 <translation id="911206726377975832">Ștergeți și datele de navigare?</translation>
 <translation id="2044287590254833138">Bara de instrumente Google Chrome</translation>
 <translation id="5074344184765391290">Chrome Plug-In Host</translation>
@@ -73,7 +69,6 @@
 <translation id="6087062680442281307">Google Chrome este un browser web care rulează pagini web și aplicații cu o viteză extraordinară. Este rapid, stabil și ușor de utilizat. Navigați în mai mare siguranță pe web beneficiind de protecția împotriva programelor malware și a phishingului încorporată în Google Chrome.</translation>
 <translation id="2115751172320447278">Copyright © 2006-2010 Google Inc. Toate drepturile rezervate.</translation>
 <translation id="5941830788786076944">Setați Google Chrome ca browser prestabilit</translation>
-<translation id="7892675281311705134">Aplicații web Google Chrome</translation>
 <translation id="5947389362804196214">Preferințele dvs. nu pot fi citite.\n\nEste posibil ca unele funcții să nu fie disponibile, iar modificările aduse preferințelor nu vor fi salvate.</translation>
 <translation id="4127951844153999091">În acest caz, adresa afișată în certificat nu se potrivește cu adresa site-ului la care a încercat să ajungă browser-ul dvs. Un motiv posibil pentru aceasta este interceptarea comunicațiilor dvs. de către un atacator, care prezintă un certificat pentru un alt site Web, ceea ce ar provoca o nepotrivire. Un alt motiv posibil este că serverul este setat să returneze același certificat pentru mai multe site-uri Web, inclusiv cel pe care încercați să-l accesați, chiar dacă acel certificat nu este valabil pentru toate acele site-uri. Google Chrome poate confirma că ați accesat &lt;strong&gt;<ph name="DOMAIN2"/>&lt;/strong&gt;, dar nu poate verifica dacă este același site ca și &lt;strong&gt;<ph name="DOMAIN"/>&lt;/strong&gt; pe care ați intenționat să-l accesați. Dacă mergeți mai departe, Chrome nu va mai verifica nicio altă nepotrivire de nume. În general, cel mai bine este să nu mergeți mai departe.</translation>
 <translation id="2712549016134575851">S-a detectat un conflict cu o altă aplicație instalată.</translation>
@@ -93,7 +88,6 @@
 <translation id="3335672657969596251">Google Chrome nu acceptă <ph name="OS_NAME"/>.</translation>
 <translation id="473183893665420670">Când resetați opțiunile pentru Google Chrome, toate modificările efectuate vor fi anulate, revenind la setările prestabilite. Doriți să resetați opțiunile Chrome?</translation>
 <translation id="3636771339108070045">Acest computer are deja o versiune mai recentă de Google Chrome. Dacă programul nu funcționează, vă rugăm să dezinstalați Google Chrome și să-l descărcați din nou.</translation>
-<translation id="4407807842708586359">Google Chrome OS</translation>
 <translation id="3360895254066713204">Chrome Helper</translation>
 <translation id="1001534784610492198">Arhiva programului de instalare este deteriorată sau nevalidă. Descărcați din nou Google Chrome.</translation>
 <translation id="6626317981028933585">Din păcate, setările dvs. Mozilla Firefox nu sunt disponibile în timp ce browser-ul respectiv rulează. Pentru a importa aceste setări în Google Chrome, salvați ceea ce lucrați și închideți toate ferestrele Firefox. Apoi faceți clic pe Continuați.</translation>

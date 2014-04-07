@@ -19,6 +19,7 @@
 #include "chrome/browser/chromeos/cros/cros_library.h"
 #include "chrome/browser/chromeos/cros_settings.h"
 #include "chrome/browser/chromeos/cros_settings_names.h"
+#include "chrome/browser/chromeos/login/ownership_service.h"
 #include "grit/generated_resources.h"
 #include "unicode/calendar.h"
 #include "unicode/timezone.h"
@@ -194,6 +195,10 @@ SystemSettingsProvider::~SystemSettingsProvider() {
 }
 
 void SystemSettingsProvider::DoSet(const std::string& path, Value* in_value) {
+  // Only the owner can change the time zone.
+  if (!OwnershipService::GetSharedInstance()->CurrentUserIsOwner())
+    return;
+
   if (path == kSystemTimezone) {
     string16 value;
     if (!in_value || !in_value->IsType(Value::TYPE_STRING) ||
@@ -209,8 +214,8 @@ void SystemSettingsProvider::DoSet(const std::string& path, Value* in_value) {
 bool SystemSettingsProvider::Get(const std::string& path,
                                  Value** out_value) const {
   if (path == kSystemTimezone) {
-    *out_value = Value::CreateStringValue(GetKnownTimezoneID(
-        CrosLibrary::Get()->GetSystemLibrary()->GetTimezone()));
+    *out_value = Value::CreateStringValue(
+        GetTimezoneID(CrosLibrary::Get()->GetSystemLibrary()->GetTimezone()));
     return true;
   }
   return false;
@@ -272,9 +277,8 @@ string16 SystemSettingsProvider::GetTimezoneName(
   string16 result(l10n_util::GetStringFUTF16(
       IDS_OPTIONS_SETTINGS_TIMEZONE_DISPLAY_TEMPLATE, ASCIIToUTF16(offset_str),
       string16(name.getBuffer(), name.length()), GetExemplarCity(timezone)));
-  string16 rtl_safe_result = result;
-  base::i18n::AdjustStringForLocaleDirection(result, &rtl_safe_result);
-  return rtl_safe_result;
+  base::i18n::AdjustStringForLocaleDirection(&result);
+  return result;
 }
 
 string16 SystemSettingsProvider::GetTimezoneID(
@@ -294,19 +298,6 @@ const icu::TimeZone* SystemSettingsProvider::GetTimezone(
     }
   }
   return NULL;
-}
-
-string16 SystemSettingsProvider::GetKnownTimezoneID(
-    const icu::TimeZone& timezone) const {
-  for (std::vector<icu::TimeZone*>::const_iterator iter = timezones_.begin();
-       iter != timezones_.end(); ++iter) {
-    const icu::TimeZone* known_timezone = *iter;
-    if (known_timezone->hasSameRules(timezone))
-      return GetTimezoneID(*known_timezone);
-  }
-
-  // Not able to find a matching timezone in our list.
-  return string16();
 }
 
 }  // namespace chromeos

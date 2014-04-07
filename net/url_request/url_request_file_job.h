@@ -7,6 +7,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include "base/file_path.h"
 #include "net/base/completion_callback.h"

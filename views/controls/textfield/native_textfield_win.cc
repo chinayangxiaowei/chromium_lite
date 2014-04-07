@@ -15,7 +15,7 @@
 #include "base/i18n/rtl.h"
 #include "base/string_util.h"
 #include "base/utf_string_conversions.h"
-#include "base/win_util.h"
+#include "base/win/windows_version.h"
 #include "gfx/native_theme_win.h"
 #include "grit/app_strings.h"
 #include "skia/ext/skia_utils_win.h"
@@ -155,13 +155,11 @@ void NativeTextfieldWin::UpdateText() {
   std::wstring text = textfield_->text();
   // Adjusting the string direction before setting the text in order to make
   // sure both RTL and LTR strings are displayed properly.
-  std::wstring text_to_set;
-  if (!base::i18n::AdjustStringForLocaleDirection(text, &text_to_set))
-    text_to_set = text;
+  base::i18n::AdjustStringForLocaleDirection(&text);
   if (textfield_->style() & Textfield::STYLE_LOWERCASE)
-    text_to_set = l10n_util::ToLower(text_to_set);
-  SetWindowText(text_to_set.c_str());
-  UpdateAccessibleValue(text_to_set);
+    text = l10n_util::ToLower(text);
+  SetWindowText(text.c_str());
+  UpdateAccessibleValue(text);
 }
 
 void NativeTextfieldWin::AppendText(const string16& text) {
@@ -778,7 +776,7 @@ void NativeTextfieldWin::OnNCPaint(HRGN region) {
   int part;
   int state;
 
-  if (win_util::GetWinVersion() < win_util::WINVERSION_VISTA) {
+  if (base::win::GetVersion() < base::win::VERSION_VISTA) {
     part = EP_EDITTEXT;
 
     if (!textfield_->IsEnabled())

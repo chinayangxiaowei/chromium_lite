@@ -9,7 +9,6 @@
 #include "base/stl_util-inl.h"
 #include "base/string_number_conversions.h"
 #include "base/utf_string_conversions.h"
-#include "chrome/browser/browser.h"
 #include "chrome/browser/browser_list.h"
 #include "chrome/browser/browser_window.h"
 #include "chrome/browser/chromeos/cros/cros_library.h"
@@ -18,6 +17,7 @@
 #include "chrome/browser/chromeos/options/network_config_view.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profile.h"
+#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/views/window.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/time_format.h"
@@ -101,7 +101,7 @@ void NetworkMessageObserver::OpenMoreInfoPage(const ListValue* args) {
   chromeos::CellularNetwork* cellular = lib->cellular_network();
   if (!cellular)
     return;
-  browser->ShowSingletonTab(GURL(cellular->payment_url()));
+  browser->ShowSingletonTab(GURL(cellular->payment_url()), false);
 }
 
 void NetworkMessageObserver::OnNetworkManagerChanged(NetworkLibrary* obj) {

@@ -127,7 +127,7 @@ void BufferedResourceLoader::Start(net::CompletionCallback* start_callback,
   bridge_.reset(
       bridge_factory_->CreateBridge(
           url_,
-          IsMediaCacheEnabled() ? net::LOAD_NORMAL : net::LOAD_BYPASS_CACHE,
+          net::LOAD_NORMAL,
           first_byte_position_,
           last_byte_position_));
 
@@ -522,29 +522,10 @@ void BufferedResourceLoader::NotifyNetworkEvent() {
 }
 
 /////////////////////////////////////////////////////////////////////////////
-// BufferedDataSource, static methods
-bool BufferedDataSource::IsMediaFormatSupported(
-    const media::MediaFormat& media_format) {
-  std::string mime_type;
-  std::string url;
-  if (media_format.GetAsString(media::MediaFormat::kMimeType, &mime_type) &&
-      media_format.GetAsString(media::MediaFormat::kURL, &url)) {
-    GURL gurl(url);
-
-    // This data source doesn't support data:// protocol, so reject it
-    // explicitly.
-    if (IsProtocolSupportedForMedia(gurl) && !IsDataProtocol(gurl))
-      return true;
-  }
-  return false;
-}
-
-/////////////////////////////////////////////////////////////////////////////
-// BufferedDataSource, protected
+// BufferedDataSource
 BufferedDataSource::BufferedDataSource(
     MessageLoop* render_loop,
-    webkit_glue::MediaResourceLoaderBridgeFactory* bridge_factory,
-    webkit_glue::WebMediaPlayerImpl::Proxy* proxy)
+    webkit_glue::MediaResourceLoaderBridgeFactory* bridge_factory)
     : total_bytes_(kPositionNotSpecified),
       loaded_(false),
       streaming_(false),
@@ -563,9 +544,8 @@ BufferedDataSource::BufferedDataSource(
       render_loop_(render_loop),
       stop_signal_received_(false),
       stopped_on_render_loop_(false),
-      media_is_paused_(true) {
-  if (proxy)
-    proxy->SetDataSource(this);
+      media_is_paused_(true),
+      using_range_request_(true) {
 }
 
 BufferedDataSource::~BufferedDataSource() {
@@ -616,6 +596,13 @@ void BufferedDataSource::Initialize(const std::string& url,
   // Post a task to complete the initialization task.
   render_loop_->PostTask(FROM_HERE,
       NewRunnableMethod(this, &BufferedDataSource::InitializeTask));
+}
+
+bool BufferedDataSource::IsUrlSupported(const std::string& url) {
+  GURL gurl(url);
+
+  // This data source doesn't support data:// protocol so reject it.
+  return IsProtocolSupportedForMedia(gurl) && !IsDataProtocol(gurl);
 }
 
 void BufferedDataSource::Stop(media::FilterCallback* callback) {
@@ -908,6 +895,17 @@ void BufferedDataSource::HttpInitialStartCallback(int error) {
   } else {
     // TODO(hclam): In case of failure, we can retry several times.
     loader_->Stop();
+  }
+
+  if (error == net::ERR_INVALID_RESPONSE && using_range_request_) {
+    // Assuming that the Range header was causing the problem. Retry without
+    // the Range header.
+    using_range_request_ = false;
+    loader_ = CreateResourceLoader(-1, -1);
+    loader_->Start(
+        NewCallback(this, &BufferedDataSource::HttpInitialStartCallback),
+        NewCallback(this, &BufferedDataSource::NetworkEventCallback));
+    return;
   }
 
   // We need to prevent calling to filter host and running the callback if

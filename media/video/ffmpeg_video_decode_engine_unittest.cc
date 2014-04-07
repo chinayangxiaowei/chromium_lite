@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/message_loop.h"
 #include "base/scoped_ptr.h"
 #include "media/base/data_buffer.h"
 #include "media/base/mock_ffmpeg.h"
@@ -75,8 +76,8 @@ class FFmpegVideoDecodeEngineTest : public testing::Test,
     VideoFrame::CreateFrame(VideoFrame::YV12,
                             kWidth,
                             kHeight,
-                            StreamSample::kInvalidTimestamp,
-                            StreamSample::kInvalidTimestamp,
+                            kNoTimestamp,
+                            kNoTimestamp,
                             &video_frame_);
   }
 

@@ -23,7 +23,6 @@
 #include "chrome/common/translate_errors.h"
 #include "chrome/common/view_types.h"
 #include "chrome/common/webkit_param_traits.h"
-#include "gfx/native_widget_types.h"
 #include "ipc/ipc_message_utils.h"
 #include "ipc/ipc_platform_file.h"                     // ifdefed typedef.
 #include "third_party/WebKit/WebKit/chromium/public/WebStorageArea.h"
@@ -47,6 +46,14 @@ class Time;
 namespace net {
 class HttpResponseHeaders;
 class UploadData;
+}
+
+namespace webkit_blob {
+class BlobData;
+}
+
+namespace speech_input {
+struct SpeechInputResultItem;
 }
 
 namespace webkit_glue {
@@ -308,7 +315,7 @@ struct ParamTraits<gfx::NativeView> {
   }
 
   static void Log(const param_type& p, std::string* l) {
-    l->append(StringPrintf("<gfx::NativeView>"));
+    l->append(base::StringPrintf("<gfx::NativeView>"));
   }
 };
 
@@ -587,6 +594,14 @@ struct ParamTraits<webkit_glue::WebAccessibility> {
   static void Log(const param_type& p, std::string* l);
 };
 
+template <>
+struct ParamTraits<scoped_refptr<webkit_blob::BlobData> > {
+  typedef scoped_refptr<webkit_blob::BlobData> param_type;
+  static void Write(Message* m, const param_type& p);
+  static bool Read(const Message* m, void** iter, param_type* r);
+  static void Log(const param_type& p, std::string* l);
+};
+
 // Traits for base::PlatformFileError
 template <>
 struct SimilarTypeTraits<base::PlatformFileError> {
@@ -610,6 +625,14 @@ struct ParamTraits<AudioBuffersState> {
 template <>
 struct ParamTraits<PepperDirEntry> {
   typedef PepperDirEntry param_type;
+  static void Write(Message* m, const param_type& p);
+  static bool Read(const Message* m, void** iter, param_type* p);
+  static void Log(const param_type& p, std::string* l);
+};
+
+template <>
+struct ParamTraits<speech_input::SpeechInputResultItem> {
+  typedef speech_input::SpeechInputResultItem param_type;
   static void Write(Message* m, const param_type& p);
   static bool Read(const Message* m, void** iter, param_type* p);
   static void Log(const param_type& p, std::string* l);

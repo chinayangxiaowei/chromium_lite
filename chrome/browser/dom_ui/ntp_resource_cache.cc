@@ -26,6 +26,7 @@
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/themes/browser_theme_provider.h"
+#include "chrome/browser/web_resource/web_resource_service.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_constants.h"
@@ -44,7 +45,7 @@
 #if defined(OS_WIN) || defined(TOOLKIT_VIEWS)
 #include "chrome/browser/views/bookmark_bar_view.h"
 #elif defined(OS_MACOSX)
-#include "chrome/browser/cocoa/bookmark_bar_constants.h"
+#include "chrome/browser/cocoa/bookmarks/bookmark_bar_constants.h"
 #elif defined(OS_POSIX)
 #include "chrome/browser/gtk/bookmark_bar_gtk.h"
 #endif
@@ -135,12 +136,19 @@ std::string GetNewTabBackgroundTilingCSS(const ThemeProvider* theme_provider) {
   return BrowserThemeProvider::TilingToString(repeat_mode);
 }
 
+// Is the current time within a given date range?
+bool InDateRange(double begin, double end) {
+  Time start_time = Time::FromDoubleT(begin);
+  Time end_time = Time::FromDoubleT(end);
+  return start_time < Time::Now() && end_time > Time::Now();
+}
+
 }  // namespace
 
 NTPResourceCache::NTPResourceCache(Profile* profile) : profile_(profile) {
   registrar_.Add(this, NotificationType::BROWSER_THEME_CHANGED,
                  NotificationService::AllSources());
-  registrar_.Add(this, NotificationType::WEB_RESOURCE_AVAILABLE,
+  registrar_.Add(this, NotificationType::WEB_RESOURCE_STATE_CHANGED,
                  NotificationService::AllSources());
 
   // Watch for pref changes that cause us to need to invalidate the HTML cache.
@@ -148,6 +156,8 @@ NTPResourceCache::NTPResourceCache(Profile* profile) : profile_(profile) {
   pref_change_registrar_.Add(prefs::kShowBookmarkBar, this);
   pref_change_registrar_.Add(prefs::kNTPShownSections, this);
 }
+
+NTPResourceCache::~NTPResourceCache() {}
 
 RefCountedBytes* NTPResourceCache::GetNewTabHTML(bool is_off_the_record) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
@@ -179,7 +189,7 @@ void NTPResourceCache::Observe(NotificationType type,
     const NotificationSource& source, const NotificationDetails& details) {
   // Invalidate the cache.
   if (NotificationType::BROWSER_THEME_CHANGED == type ||
-      NotificationType::WEB_RESOURCE_AVAILABLE == type) {
+      NotificationType::WEB_RESOURCE_STATE_CHANGED == type) {
     new_tab_incognito_html_ = NULL;
     new_tab_html_ = NULL;
     new_tab_incognito_css_ = NULL;
@@ -263,6 +273,8 @@ void NTPResourceCache::CreateNewTabHTML() {
       l10n_util::GetStringUTF16(IDS_NEW_TAB_RECENTLY_CLOSED));
   localized_strings.SetString("closedwindowsingle",
       l10n_util::GetStringUTF16(IDS_NEW_TAB_RECENTLY_CLOSED_WINDOW_SINGLE));
+  localized_strings.SetString("foreignsessions",
+      l10n_util::GetStringUTF16(IDS_SYNC_DATATYPE_SESSIONS));
   localized_strings.SetString("closedwindowmultiple",
       l10n_util::GetStringUTF16(IDS_NEW_TAB_RECENTLY_CLOSED_WINDOW_MULTIPLE));
   localized_strings.SetString("attributionintro",
@@ -287,8 +299,6 @@ void NTPResourceCache::CreateNewTabHTML() {
       l10n_util::GetStringUTF16(IDS_NEW_TAB_FIRST_RUN_NOTIFICATION));
   localized_strings.SetString("closefirstrunnotification",
       l10n_util::GetStringUTF16(IDS_NEW_TAB_CLOSE_FIRST_RUN_NOTIFICATION));
-  localized_strings.SetString("tips",
-      l10n_util::GetStringUTF16(IDS_NEW_TAB_TIPS));
   localized_strings.SetString("close", l10n_util::GetStringUTF16(IDS_CLOSE));
   localized_strings.SetString("history",
       l10n_util::GetStringUTF16(IDS_NEW_TAB_HISTORY));
@@ -304,10 +314,14 @@ void NTPResourceCache::CreateNewTabHTML() {
       l10n_util::GetStringUTF16(IDS_NEW_TAB_APP_UNINSTALL));
   localized_strings.SetString("appoptions",
       l10n_util::GetStringUTF16(IDS_NEW_TAB_APP_OPTIONS));
+  localized_strings.SetString("appcreateshortcut",
+      l10n_util::GetStringUTF16(IDS_NEW_TAB_APP_CREATE_SHORTCUT));
   localized_strings.SetString("applaunchtypepinned",
       l10n_util::GetStringUTF16(IDS_APP_CONTEXT_MENU_OPEN_PINNED));
   localized_strings.SetString("applaunchtyperegular",
       l10n_util::GetStringUTF16(IDS_APP_CONTEXT_MENU_OPEN_REGULAR));
+  localized_strings.SetString("applaunchtypewindow",
+      l10n_util::GetStringUTF16(IDS_APP_CONTEXT_MENU_OPEN_WINDOW));
   localized_strings.SetString("applaunchtypefullscreen",
       l10n_util::GetStringUTF16(IDS_APP_CONTEXT_MENU_OPEN_FULLSCREEN));
   localized_strings.SetString("web_store_title",
@@ -350,15 +364,25 @@ void NTPResourceCache::CreateNewTabHTML() {
   // and the time now is between these two times, show the custom logo.
   if (profile_->GetPrefs()->FindPreference(prefs::kNTPCustomLogoStart) &&
       profile_->GetPrefs()->FindPreference(prefs::kNTPCustomLogoEnd)) {
-    Time start_time = Time::FromDoubleT(
-        profile_->GetPrefs()->GetReal(prefs::kNTPCustomLogoStart));
-    Time end_time = Time::FromDoubleT(
-        profile_->GetPrefs()->GetReal(prefs::kNTPCustomLogoEnd));
     localized_strings.SetString("customlogo",
-        (start_time < Time::Now() && end_time > Time::Now()) ?
+        InDateRange(profile_->GetPrefs()->GetReal(prefs::kNTPCustomLogoStart),
+                    profile_->GetPrefs()->GetReal(prefs::kNTPCustomLogoEnd)) ?
         "true" : "false");
   } else {
     localized_strings.SetString("customlogo", "false");
+  }
+
+  // If the user has preferences for a start and end time for a promo from
+  // the server, and this promo string exists, set the localized string.
+  if (profile_->GetPrefs()->FindPreference(prefs::kNTPPromoStart) &&
+      profile_->GetPrefs()->FindPreference(prefs::kNTPPromoEnd) &&
+      profile_->GetPrefs()->FindPreference(prefs::kNTPPromoLine) &&
+      WebResourceServiceUtil::CanShowPromo(profile_)) {
+    localized_strings.SetString("serverpromo",
+        InDateRange(profile_->GetPrefs()->GetReal(prefs::kNTPPromoStart),
+                    profile_->GetPrefs()->GetReal(prefs::kNTPPromoEnd)) ?
+                    profile_->GetPrefs()->GetString(prefs::kNTPPromoLine) :
+                                                    std::string());
   }
 
   base::StringPiece new_tab_html(ResourceBundle::GetSharedInstance().

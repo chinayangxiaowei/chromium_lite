@@ -7,7 +7,7 @@
 #include "app/l10n_util.h"
 #include "app/l10n_util_mac.h"
 #include "base/nsimage_cache_mac.h"
-#include "chrome/app/chrome_dll_resource.h"
+#include "chrome/app/chrome_command_ids.h"
 #import "chrome/browser/cocoa/gradient_button_cell.h"
 #import "chrome/browser/cocoa/view_id_util.h"
 #include "grit/generated_resources.h"
@@ -60,21 +60,36 @@ NSTimeInterval kPendingReloadTimeout = 1.35;
   [self setIgnoresMultiClick:YES];
 }
 
+- (void)updateTag:(NSInteger)anInt {
+  if ([self tag] == anInt)
+    return;
+
+  // Forcibly remove any stale tooltip which is being displayed.
+  [self removeAllToolTips];
+
+  [self setTag:anInt];
+  if (anInt == IDC_RELOAD) {
+    [self setImage:nsimage_cache::ImageNamed(kReloadImageName)];
+    [self setToolTip:l10n_util::GetNSStringWithFixup(IDS_TOOLTIP_RELOAD)];
+  } else if (anInt == IDC_STOP) {
+    [self setImage:nsimage_cache::ImageNamed(kStopImageName)];
+    [self setToolTip:l10n_util::GetNSStringWithFixup(IDS_TOOLTIP_STOP)];
+  } else {
+    NOTREACHED();
+  }
+}
+
 - (void)setIsLoading:(BOOL)isLoading force:(BOOL)force {
   // Can always transition to stop mode.  Only transition to reload
   // mode if forced or if the mouse isn't hovering.  Otherwise, note
   // that reload mode is desired and disable the button.
   if (isLoading) {
     pendingReloadTimer_.reset();
-    [self setImage:nsimage_cache::ImageNamed(kStopImageName)];
-    [self setTag:IDC_STOP];
-    [self setToolTip:l10n_util::GetNSStringWithFixup(IDS_TOOLTIP_STOP)];
+    [self updateTag:IDC_STOP];
     [self setEnabled:YES];
   } else if (force || ![self isMouseInside]) {
     pendingReloadTimer_.reset();
-    [self setImage:nsimage_cache::ImageNamed(kReloadImageName)];
-    [self setTag:IDC_RELOAD];
-    [self setToolTip:l10n_util::GetNSStringWithFixup(IDS_TOOLTIP_RELOAD)];
+    [self updateTag:IDC_RELOAD];
 
     // This button's cell may not have received a mouseExited event, and
     // therefore it could still think that the mouse is inside the button.  Make

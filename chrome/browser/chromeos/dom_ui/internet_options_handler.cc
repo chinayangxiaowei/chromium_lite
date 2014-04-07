@@ -20,7 +20,6 @@
 #include "base/time.h"
 #include "base/utf_string_conversions.h"
 #include "base/values.h"
-#include "chrome/browser/browser.h"
 #include "chrome/browser/browser_list.h"
 #include "chrome/browser/browser_window.h"
 #include "chrome/browser/chromeos/cros/cros_library.h"
@@ -29,7 +28,8 @@
 #include "chrome/browser/dom_ui/dom_ui_util.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/tab_contents/tab_contents_view.h"
-#include "chrome/browser/views/window.h"
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/views/window.h"
 #include "chrome/common/notification_service.h"
 #include "chrome/common/time_format.h"
 #include "grit/browser_resources.h"
@@ -161,7 +161,7 @@ void InternetOptionsHandler::GetLocalizedValues(
   localized_strings->SetString("inetPassProtected",
       l10n_util::GetStringUTF16(
           IDS_OPTIONS_SETTINGS_INTERNET_OPTIONS_NET_PROTECTED));
-  localized_strings->SetString("inetRememberNetwork",
+  localized_strings->SetString("inetAutoConnectNetwork",
       l10n_util::GetStringUTF16(
           IDS_OPTIONS_SETTINGS_INTERNET_OPTIONS_AUTO_CONNECT));
   localized_strings->SetString("inetCertPkcs",
@@ -467,11 +467,11 @@ DictionaryValue* InternetOptionsHandler::CellularDataPlanToDictionary(
 
 void InternetOptionsHandler::SetDetailsCallback(const ListValue* args) {
   std::string service_path;
-  std::string remember;
+  std::string auto_connect_str;
 
   if (args->GetSize() < 2 ||
       !args->GetString(0, &service_path) ||
-      !args->GetString(1, &remember)) {
+      !args->GetString(1, &auto_connect_str)) {
     NOTREACHED();
     return;
   }
@@ -513,7 +513,7 @@ void InternetOptionsHandler::SetDetailsCallback(const ListValue* args) {
     }
   }
 
-  bool auto_connect = remember == "true";
+  bool auto_connect = auto_connect_str == "true";
   if (auto_connect != network->auto_connect()) {
     network->set_auto_connect(auto_connect);
     changed = true;
@@ -644,21 +644,6 @@ void InternetOptionsHandler::PopulateDictionaryDetails(
       L"options.InternetOptions.showDetailedInfo", dictionary);
 }
 
-void InternetOptionsHandler::PopupWirelessPassword(
-    const chromeos::WifiNetwork* network) {
-  DictionaryValue dictionary;
-  dictionary.SetString("servicePath", network->service_path());
-  if (network->encryption() == chromeos::SECURITY_8021X) {
-    dictionary.SetBoolean("certNeeded", true);
-    dictionary.SetString("ident", network->identity());
-    dictionary.SetString("cert", network->cert_path());
-  } else {
-    dictionary.SetBoolean("certNeeded", false);
-  }
-  dom_ui_->CallJavascriptFunction(
-      L"options.InternetOptions.showPasswordEntry", dictionary);
-}
-
 void InternetOptionsHandler::LoginCallback(const ListValue* args) {
   std::string service_path;
   std::string password;
@@ -785,7 +770,10 @@ void InternetOptionsHandler::ButtonClickCallback(const ListValue* args) {
     } else if (!use_settings_ui_ &&
                service_path == kOtherNetworksFakePath) {
       // Other wifi networks.
-      CreateModalPopup(new chromeos::NetworkConfigView());
+      chromeos::NetworkConfigView* view =
+          new chromeos::NetworkConfigView();
+      CreateModalPopup(view);
+      view->SetLoginTextfieldFocus();
     } else if ((network = cros->FindWifiNetworkByPath(service_path))) {
       if (command == "connect") {
         // Connect to wifi here. Open password page if appropriate.

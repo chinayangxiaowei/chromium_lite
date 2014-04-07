@@ -18,13 +18,13 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chromeos/cros/cros_library.h"
 #include "chrome/browser/chromeos/cros/cryptohome_library.h"
-#include "chrome/browser/chromeos/cros_settings_provider_stats.h"
 #include "chrome/browser/chromeos/customization_document.h"
 #include "chrome/browser/chromeos/login/help_app_launcher.h"
 #include "chrome/browser/chromeos/login/helper.h"
 #include "chrome/browser/chromeos/login/network_screen_delegate.h"
 #include "chrome/browser/chromeos/login/rounded_rect_painter.h"
 #include "chrome/browser/chromeos/login/wizard_controller.h"
+#include "chrome/browser/chromeos/metrics_cros_settings_provider.h"
 #include "chrome/browser/profile_manager.h"
 #include "chrome/browser/renderer_host/site_instance.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
@@ -291,7 +291,7 @@ static GURL GetOemEulaPagePath() {
     std::string locale = g_browser_process->GetApplicationLocale();
     FilePath eula_page_path = customization->GetEULAPagePath(locale);
     if (eula_page_path.empty()) {
-      LOG(INFO) << "No eula found for locale: " << locale;
+      VLOG(1) << "No eula found for locale: " << locale;
       locale = customization->initial_locale();
       eula_page_path = customization->GetEULAPagePath(locale);
     }
@@ -300,7 +300,7 @@ static GURL GetOemEulaPagePath() {
           chrome::kStandardSchemeSeparator + eula_page_path.value();
       return GURL(page_path);
     } else {
-      LOG(INFO) << "No eula found for locale: " << locale;
+      VLOG(1) << "No eula found for locale: " << locale;
     }
   } else {
     LOG(ERROR) << "No manifest found.";
