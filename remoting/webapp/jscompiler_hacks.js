@@ -121,6 +121,15 @@ chrome.app.window = {
   create: function(name, parameters) {}
 };
 
+/**
+ * @type {Object}
+ * @see http://code.google.com/chrome/extensions/dev/contextMenus.html
+ */
+chrome.contextMenus = {
+  /** @type {chrome.Event} */
+  onClicked: null
+};
+
 /** @type {Object} */
 chrome.identity = {
   /**

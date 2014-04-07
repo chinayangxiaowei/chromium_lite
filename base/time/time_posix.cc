@@ -4,16 +4,21 @@
 
 #include "base/time/time.h"
 
+#include <stdint.h>
 #include <sys/time.h>
 #include <time.h>
 #if defined(OS_ANDROID)
 #include <time64.h>
 #endif
+#include <unistd.h>
 
 #include <limits>
+#include <ostream>
 
 #include "base/basictypes.h"
 #include "base/logging.h"
+#include "base/port.h"
+#include "build/build_config.h"
 
 #if defined(OS_ANDROID)
 #include "base/os_compat_android.h"
@@ -119,8 +124,6 @@ struct timespec TimeDelta::ToTimeSpec() const {
 //   irb(main):011:0> Time.at(-11644473600).getutc()
 //   => Mon Jan 01 00:00:00 UTC 1601
 static const int64 kWindowsEpochDeltaSeconds = GG_INT64_C(11644473600);
-static const int64 kWindowsEpochDeltaMilliseconds =
-    kWindowsEpochDeltaSeconds * Time::kMillisecondsPerSecond;
 
 // static
 const int64 Time::kWindowsEpochDeltaMicroseconds =
@@ -299,6 +302,11 @@ TimeTicks TimeTicks::Now() {
 // static
 TimeTicks TimeTicks::HighResNow() {
   return Now();
+}
+
+// static
+bool TimeTicks::IsHighResNowFastAndReliable() {
+  return true;
 }
 
 // static

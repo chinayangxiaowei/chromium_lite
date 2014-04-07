@@ -5,8 +5,8 @@
 #include "content/browser/renderer_host/ui_events_helper.h"
 
 #include "third_party/WebKit/public/web/WebInputEvent.h"
-#include "ui/base/events/event.h"
-#include "ui/base/events/event_constants.h"
+#include "ui/events/event.h"
+#include "ui/events/event_constants.h"
 
 namespace {
 
@@ -164,6 +164,13 @@ WebKit::WebGestureEvent MakeWebGestureEventFromUIEvent(
       gesture_event.data.tapDown.width =
           event.details().bounding_box().width();
       gesture_event.data.tapDown.height =
+          event.details().bounding_box().height();
+      break;
+    case ui::ET_GESTURE_SHOW_PRESS:
+      gesture_event.type = WebKit::WebInputEvent::GestureShowPress;
+      gesture_event.data.showPress.width =
+          event.details().bounding_box().width();
+      gesture_event.data.showPress.height =
           event.details().bounding_box().height();
       break;
     case ui::ET_GESTURE_TAP_CANCEL:

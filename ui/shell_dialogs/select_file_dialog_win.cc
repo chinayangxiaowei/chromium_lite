@@ -414,7 +414,7 @@ class SelectFileDialogImpl : public ui::SelectFileDialog,
                                 ui::SelectFilePolicy* policy);
 
   // BaseShellDialog implementation:
-  virtual bool IsRunning(gfx::NativeWindow owning_hwnd) const OVERRIDE;
+  virtual bool IsRunning(gfx::NativeWindow owning_window) const OVERRIDE;
   virtual void ListenerDestroyed() OVERRIDE;
 
  protected:
@@ -598,8 +598,8 @@ void SelectFileDialogImpl::SelectFileImpl(
       return;
     }
   }
-  HWND owner = owning_window
-               ? owning_window->GetRootWindow()->GetAcceleratedWidget() : NULL;
+  HWND owner = owning_window && owning_window->GetRootWindow()
+               ? owning_window->GetDispatcher()->GetAcceleratedWidget() : NULL;
 #else
   HWND owner = owning_window;
 #endif
@@ -617,11 +617,13 @@ bool SelectFileDialogImpl::HasMultipleFileTypeChoicesImpl() {
   return has_multiple_file_type_choices_;
 }
 
-bool SelectFileDialogImpl::IsRunning(gfx::NativeWindow owning_hwnd) const {
+bool SelectFileDialogImpl::IsRunning(gfx::NativeWindow owning_window) const {
 #if defined(USE_AURA)
-  HWND owner = owning_hwnd->GetRootWindow()->GetAcceleratedWidget();
+  if (!owning_window->GetRootWindow())
+    return false;
+  HWND owner = owning_window->GetDispatcher()->GetAcceleratedWidget();
 #else
-  HWND owner = owning_hwnd;
+  HWND owner = owning_window;
 #endif
   return listener_ && IsRunningDialogForOwner(owner);
 }

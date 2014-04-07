@@ -150,6 +150,7 @@ class CONTENT_EXPORT ContentBrowserClient {
   // the delegate in the content embedder that will service the guest in the
   // content layer. The content layer takes ownership of the |guest_delegate|.
   virtual void GuestWebContentsCreated(
+      SiteInstance* guest_site_instance,
       WebContents* guest_web_contents,
       WebContents* opener_web_contents,
       BrowserPluginGuestDelegate** guest_delegate,
@@ -215,6 +216,10 @@ class CONTENT_EXPORT ContentBrowserClient {
   // navigation has committed to ensure that the process did not exceed its
   // authority.
   virtual bool CanCommitURL(RenderProcessHost* process_host, const GURL& url);
+
+  // Returns whether a URL should be allowed to open from a specific context.
+  // This also applies in cases where the new URL will open in another process.
+  virtual bool ShouldAllowOpenURL(SiteInstance* site_instance, const GURL& url);
 
   // Returns whether a new view for a given |site_url| can be launched in a
   // given |process_host|.
@@ -533,14 +538,16 @@ class CONTENT_EXPORT ContentBrowserClient {
   virtual bool SupportsBrowserPlugin(BrowserContext* browser_context,
                                      const GURL& site_url);
 
-  // Returns true if the socket operation specified by |params| is allowed
-  // from the given |browser_context| and |url|. |private_api| indicates whether
-  // this permission check is for the private Pepper socket API or the public
-  // one.
+  // Returns true if the socket operation specified by |params| is allowed from
+  // the given |browser_context| and |url|. If |params| is NULL, this method
+  // checks the basic "socket" permission, which is for those operations that
+  // don't require a specific socket permission rule.
+  // |private_api| indicates whether this permission check is for the private
+  // Pepper socket API or the public one.
   virtual bool AllowPepperSocketAPI(BrowserContext* browser_context,
                                     const GURL& url,
                                     bool private_api,
-                                    const SocketPermissionRequest& params);
+                                    const SocketPermissionRequest* params);
 
   // Returns an implementation of a file selecition policy. Can return NULL.
   virtual ui::SelectFilePolicy* CreateSelectFilePolicy(
@@ -591,6 +598,12 @@ class CONTENT_EXPORT ContentBrowserClient {
       crypto::CryptoModuleBlockingPasswordDelegate* GetCryptoPasswordDelegate(
           const GURL& url);
 #endif
+
+  // Returns true if plugin referred to by the url can use
+  // pp::FileIO::RequestOSFileHandle.
+  virtual bool IsPluginAllowedToCallRequestOSFileHandle(
+      content::BrowserContext* browser_context,
+      const GURL& url);
 };
 
 }  // namespace content
